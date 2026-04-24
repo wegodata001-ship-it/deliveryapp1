@@ -1,0 +1,306 @@
+// Admin / employee management — data layer only.
+// Uses soft deletes where specified; no hard deletes for critical business rows in app logic (enforced later).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum UserRole {
+  ADMIN
+  EMPLOYEE
+}
+
+enum OrderStatus {
+  OPEN
+  CANCELLED
+  WAITING_FOR_EXECUTION
+  WITHDRAWAL_FROM_SUPPLIER
+  SENT
+  WAITING_FOR_CHINA_EXECUTION
+  COMPLETED
+}
+
+enum PaymentMethod {
+  POINT
+  BANK_TRANSFER
+  BANK_TRANSFER_DONE
+  ORDERED
+  WITHDRAWAL
+  WITHDRAWAL_DONE
+  RECEIVED_AT_POINT
+  WITH_GOODS
+  CHECK
+  CASH
+  OTHER
+}
+
+model User {
+  id           String    @id @default(uuid())
+  fullName     String
+  email        String?   @unique
+  username     String?   @unique
+  passwordHash String
+  role         UserRole
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  permissions     UserPermission[]
+  createdOrders   Order[]          @relation("OrderCreatedBy")
+  createdPayments Payment[]        @relation("PaymentCreatedBy")
+  receiptControls ReceiptControl[] @relation("ReceiptControlCreatedBy")
+  auditLogs       AuditLog[]
+  legacyImports   LegacyRawRow[]    @relation("LegacyImportUser")
+  financialSettingsUpdates FinancialSettings[]
+}
+
+model FinancialSettings {
+  id              String   @id @default(cuid())
+  baseDollarRate  Decimal  @db.Decimal(10, 4)
+  dollarFee       Decimal  @db.Decimal(10, 4) @default(0)
+  finalDollarRate Decimal  @db.Decimal(10, 4)
+  source          String   @default("MANUAL")
+  updatedById     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  updatedBy User? @relation(fields: [updatedById], references: [id])
+}
+
+model Permission {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  name        String
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  userPermissions UserPermission[]
+}
+
+model UserPermission {
+  id           String   @id @default(uuid())
+  userId       String
+  permissionId String
+  createdAt    DateTime @default(now())
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, permissionId])
+  @@index([userId])
+  @@index([permissionId])
+}
+
+model Customer {
+  id              String    @id @default(uuid())
+  oldCustomerCode String?
+  customerCode    String?   @unique
+  nameHe          String?
+  nameAr          String?
+  nameEn          String?
+  displayName     String
+  phone           String?
+  secondPhone     String?
+  email           String?
+  city            String?
+  region          String?
+  address         String?
+  notes           String?
+  /** סוג לקוח (מערכת ישנה): רגיל / סיטונאי / סוכן וכו׳ */
+  customerType    String?
+  isActive        Boolean   @default(true)
+  deletedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  orders          Order[]
+  payments        Payment[]
+  receiptControls ReceiptControl[]
+
+  @@index([customerCode])
+  @@index([displayName])
+  @@index([phone])
+  @@index([oldCustomerCode])
+}
+
+model Order {
+  id                   String         @id @default(uuid())
+  oldOrderNumber       String?
+  orderNumber          String?        @unique
+  customerId           String?
+  customerCodeSnapshot String?
+  customerNameSnapshot String?
+  customerTypeSnapshot String?
+  weekCode             String?
+  orderDate            DateTime?
+  status               OrderStatus    @default(OPEN)
+  paymentMethod        PaymentMethod?
+  paymentPointId       String?
+  amountUsd            Decimal?       @db.Decimal(19, 4)
+  commissionUsd        Decimal?       @db.Decimal(19, 4)
+  totalUsd             Decimal?       @db.Decimal(19, 4)
+  amountIls            Decimal?       @db.Decimal(19, 4)
+  commissionIls        Decimal?       @db.Decimal(19, 4)
+  totalIls             Decimal?       @db.Decimal(19, 4)
+  exchangeRate         Decimal?       @db.Decimal(19, 6)
+  vatRate              Decimal        @default(18) @db.Decimal(7, 4)
+  amountWithoutVat     Decimal?       @db.Decimal(19, 4)
+  /** צילום שערים בעת יצירת ההזמנה — לא משתנה כשמעדכנים הגדרות כספים */
+  snapshotBaseDollarRate   Decimal? @db.Decimal(10, 4)
+  snapshotDollarFee        Decimal? @db.Decimal(10, 4)
+  snapshotFinalDollarRate  Decimal? @db.Decimal(10, 4)
+  totalIlsWithVat          Decimal? @db.Decimal(19, 4)
+  totalIlsWithoutVat       Decimal? @db.Decimal(19, 4)
+  vatAmount                Decimal? @db.Decimal(19, 4)
+  notes                String?
+  isActive             Boolean        @default(true)
+  deletedAt            DateTime?
+  createdById          String?
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  customer     Customer?     @relation(fields: [customerId], references: [id])
+  createdBy    User?         @relation("OrderCreatedBy", fields: [createdById], references: [id])
+  paymentPoint PaymentPoint? @relation(fields: [paymentPointId], references: [id])
+  payments    Payment[]
+
+  @@index([orderNumber])
+  @@index([oldOrderNumber])
+  @@index([weekCode])
+  @@index([orderDate])
+  @@index([status])
+  @@index([customerId])
+  @@index([paymentPointId])
+}
+
+model Payment {
+  id               String         @id @default(uuid())
+  paymentCode      String?        @unique
+  customerId       String?
+  orderId          String?
+  weekCode         String?
+  paymentDate      DateTime?
+  currency         String         @default("ILS")
+  amountUsd        Decimal?       @db.Decimal(19, 4)
+  amountIls        Decimal?       @db.Decimal(19, 4)
+  exchangeRate     Decimal?       @db.Decimal(19, 6)
+  vatRate          Decimal        @default(18) @db.Decimal(7, 4)
+  amountWithoutVat Decimal?       @db.Decimal(19, 4)
+  snapshotBaseDollarRate  Decimal? @db.Decimal(10, 4)
+  snapshotDollarFee       Decimal? @db.Decimal(10, 4)
+  snapshotFinalDollarRate  Decimal? @db.Decimal(10, 4)
+  totalIlsWithVat          Decimal? @db.Decimal(19, 4)
+  totalIlsWithoutVat       Decimal? @db.Decimal(19, 4)
+  vatAmount                Decimal? @db.Decimal(19, 4)
+  manualDateChanged        Boolean  @default(false)
+  paymentMethod    PaymentMethod?
+  paymentPlace     String?
+  isPaid           Boolean        @default(false)
+  proofFileUrl     String?
+  notes            String?
+  createdById      String?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  customer  Customer? @relation(fields: [customerId], references: [id])
+  order     Order?    @relation(fields: [orderId], references: [id])
+  createdBy User?     @relation("PaymentCreatedBy", fields: [createdById], references: [id])
+
+  @@index([customerId])
+  @@index([orderId])
+  @@index([weekCode])
+  @@index([paymentDate])
+  @@index([isPaid])
+}
+
+model ReceiptControl {
+  id                 String    @id @default(uuid())
+  receiptCode        String?   @unique
+  weekCode           String?
+  receiptDate        DateTime?
+  customerId         String?
+  amountUsdExpected  Decimal?  @db.Decimal(19, 4)
+  amountUsdReceived  Decimal?  @db.Decimal(19, 4)
+  amountIlsExpected  Decimal?  @db.Decimal(19, 4)
+  amountIlsReceived  Decimal?  @db.Decimal(19, 4)
+  differenceUsd      Decimal?  @db.Decimal(19, 4)
+  differenceIls      Decimal?  @db.Decimal(19, 4)
+  notes              String?
+  createdById        String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  customer  Customer? @relation(fields: [customerId], references: [id])
+  createdBy User?     @relation("ReceiptControlCreatedBy", fields: [createdById], references: [id])
+
+  @@index([weekCode])
+  @@index([receiptDate])
+  @@index([customerId])
+}
+
+model PaymentPoint {
+  id            String   @id @default(uuid())
+  pointName     String
+  city          String?
+  region        String?
+  address       String?
+  contactName   String?
+  contactPhone  String?
+  notes         String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  orders Order[]
+
+  @@index([pointName])
+  @@index([city])
+  @@index([region])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  actionType String
+  entityType String
+  entityId   String?
+  oldValue   Json?
+  newValue   Json?
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([actionType])
+  @@index([entityType])
+  @@index([entityId])
+  @@index([createdAt])
+}
+
+model LegacyRawRow {
+  id               String   @id @default(uuid())
+  legacyTableName  String
+  legacyRecordId   String?
+  rawData          Json
+  importedById     String?
+  importedAt       DateTime @default(now())
+  createdAt        DateTime @default(now())
+
+  importedBy User? @relation("LegacyImportUser", fields: [importedById], references: [id])
+
+  @@index([legacyTableName])
+  @@index([legacyRecordId])
+  @@index([importedAt])
+}
