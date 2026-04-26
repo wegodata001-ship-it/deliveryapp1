@@ -16,13 +16,13 @@ export function adminHrefWithFilters(
   return qs ? `/admin?${qs}` : "/admin";
 }
 
-/** קישורי `/admin/orders` עם week/from/to/orderWork (לפאנל קליטה). */
+/** קישורי `/admin/orders` עם week/from/to (חלונות קליטה ללא שינוי route). */
 export function adminOrdersHrefWithFilters(
   sp: Record<string, string | string[] | undefined>,
   patch: Record<string, string | null | undefined>,
 ): string {
   const p = new URLSearchParams();
-  for (const key of ["week", "from", "to", "orderWork"] as const) {
+  for (const key of ["week", "from", "to"] as const) {
     const v = sp[key];
     if (typeof v === "string" && v) p.set(key, v);
   }

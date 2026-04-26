@@ -67,15 +67,15 @@ export function FinancialSettingsModal({ open, onClose, initial, onToast }: Prop
       <div className="adm-modal-form">
         {err ? <div className="adm-error">{err}</div> : null}
         <div className="adm-field">
-          <label htmlFor="fs-base">שער דולר (בסיס)</label>
+          <label htmlFor="fs-base">שער בסיס (usd_rate_base)</label>
           <input id="fs-base" type="text" inputMode="decimal" value={base} onChange={(e) => setBase(e.target.value)} />
         </div>
         <div className="adm-field">
-          <label htmlFor="fs-fee">עמלת שער</label>
+          <label htmlFor="fs-fee">עמלת שער (usd_fee)</label>
           <input id="fs-fee" type="text" inputMode="decimal" value={fee} onChange={(e) => setFee(e.target.value)} />
         </div>
         <p className="adm-field-hint" style={{ marginTop: 0 }}>
-          שער לחישוב במערכת: <strong>{finalPreview}</strong>
+          שער סופי מחושב (usd_rate_final): <strong>{finalPreview}</strong> ₪ לדולר
         </p>
         <p className="adm-field-hint">
           מקור נוכחי: {initial?.source ?? "—"} · עודכן לאחרונה:{" "}

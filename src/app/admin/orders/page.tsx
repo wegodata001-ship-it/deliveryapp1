@@ -15,6 +15,7 @@ export default async function OrdersListPage({
   const range = parseDateFilterFromSearchParams(sp);
   const canCreateOrders = userHasAnyPermission(me, ["create_orders"]);
   const canEditOrders = userHasAnyPermission(me, ["edit_orders"]);
+  const canViewCustomerCard = userHasAnyPermission(me, ["view_customer_card"]);
 
   const rows = await prisma.order.findMany({
     where: {
@@ -26,6 +27,7 @@ export default async function OrdersListPage({
     select: {
       id: true,
       orderNumber: true,
+      customerId: true,
       customerNameSnapshot: true,
       orderDate: true,
       status: true,
@@ -36,11 +38,19 @@ export default async function OrdersListPage({
   const orders: OrderListRow[] = rows.map((r) => ({
     id: r.id,
     orderNumber: r.orderNumber,
+    customerId: r.customerId,
     customerName: r.customerNameSnapshot,
     orderDateYmd: r.orderDate ? formatLocalYmd(new Date(r.orderDate)) : null,
     status: r.status,
     totalUsd: r.totalUsd != null ? r.totalUsd.toString() : null,
   }));
 
-  return <OrdersListShell orders={orders} canCreateOrders={canCreateOrders} canEditOrders={canEditOrders} />;
+  return (
+    <OrdersListShell
+      orders={orders}
+      canCreateOrders={canCreateOrders}
+      canEditOrders={canEditOrders}
+      canViewCustomerCard={canViewCustomerCard}
+    />
+  );
 }

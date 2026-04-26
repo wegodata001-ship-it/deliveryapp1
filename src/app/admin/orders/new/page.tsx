@@ -3,5 +3,5 @@ import { requireRoutePermission } from "@/lib/route-access";
 
 export default async function OrderIntakeRedirectPage() {
   await requireRoutePermission(["create_orders"]);
-  redirect("/admin/orders?orderWork=new");
+  redirect("/admin/orders");
 }

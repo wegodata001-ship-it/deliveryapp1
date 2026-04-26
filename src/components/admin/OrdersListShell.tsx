@@ -1,12 +1,12 @@
 "use client";
 
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Plus } from "lucide-react";
-import { withQuery } from "@/lib/admin-url-query";
+import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 
 export type OrderListRow = {
   id: string;
   orderNumber: string | null;
+  customerId: string | null;
   customerName: string | null;
   orderDateYmd: string | null;
   status: string;
@@ -27,23 +27,26 @@ type Props = {
   orders: OrderListRow[];
   canCreateOrders: boolean;
   canEditOrders: boolean;
+  canViewCustomerCard: boolean;
 };
 
-export function OrdersListShell({ orders, canCreateOrders, canEditOrders }: Props) {
-  const router = useRouter();
-  const pathname = usePathname();
-  const sp = useSearchParams();
-  const activeId = sp.get("orderWork");
-  const isRowActive = (id: string) => activeId === id;
+export function OrdersListShell({ orders, canCreateOrders, canEditOrders, canViewCustomerCard }: Props) {
+  const { openWindow } = useAdminWindows();
 
   function openOrder(id: string) {
     if (!canEditOrders) return;
-    router.push(withQuery(pathname, sp, { orderWork: id }));
+    openWindow({ type: "orderCapture", props: { mode: "edit", orderId: id } });
   }
 
   function newOrder() {
     if (!canCreateOrders) return;
-    router.push(withQuery(pathname, sp, { orderWork: "new" }));
+    openWindow({ type: "orderCapture", props: { mode: "create" } });
+  }
+
+  function openCustomerFromCell(e: React.MouseEvent, customerId: string | null) {
+    e.stopPropagation();
+    if (!canViewCustomerCard || !customerId) return;
+    openWindow({ type: "customerCard", props: { customerId } });
   }
 
   return (
@@ -80,7 +83,6 @@ export function OrdersListShell({ orders, canCreateOrders, canEditOrders }: Prop
               orders.map((o) => (
                 <tr
                   key={o.id}
-                  className={isRowActive(o.id) ? "adm-table-row-active" : undefined}
                   onClick={canEditOrders ? () => openOrder(o.id) : undefined}
                   onKeyDown={
                     canEditOrders
@@ -94,11 +96,20 @@ export function OrdersListShell({ orders, canCreateOrders, canEditOrders }: Prop
                   }
                   tabIndex={canEditOrders ? 0 : undefined}
                   role={canEditOrders ? "button" : undefined}
-                  aria-current={isRowActive(o.id) ? "true" : undefined}
                   data-clickable={canEditOrders ? "true" : undefined}
                 >
                   <td dir="ltr">{o.orderNumber ?? "—"}</td>
-                  <td>{o.customerName ?? "—"}</td>
+                  <td
+                    className={canViewCustomerCard && o.customerId ? "adm-table-cell-cust" : undefined}
+                    onClick={
+                      canViewCustomerCard && o.customerId
+                        ? (e) => openCustomerFromCell(e, o.customerId)
+                        : undefined
+                    }
+                    title={canViewCustomerCard && o.customerId ? "לחיצה לכרטסת לקוח" : undefined}
+                  >
+                    {o.customerName ?? "—"}
+                  </td>
                   <td>{o.orderDateYmd ?? "—"}</td>
                   <td>{STATUS_HE[o.status] ?? o.status}</td>
                   <td dir="ltr">{o.totalUsd ?? "—"}</td>

@@ -15,12 +15,15 @@ import {
   PlusCircle,
   ScrollText,
   Settings,
+  UserPlus,
   CircleDollarSign,
   TrendingUp,
   Users,
   Wallet,
 } from "lucide-react";
 import { logoutAction } from "@/app/admin/actions";
+import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
+import type { AdminWindowPayload, AdminWindowType } from "@/lib/admin-windows";
 
 function NavIcon({ id }: { id: NavIconId }) {
   const common = { size: 18 as const };
@@ -33,6 +36,8 @@ function NavIcon({ id }: { id: NavIconId }) {
       return <PlusCircle {...common} />;
     case "orderList":
       return <ListOrdered {...common} />;
+    case "customerNew":
+      return <UserPlus {...common} />;
     case "import":
       return <FileSpreadsheet {...common} />;
     case "payIn":
@@ -83,8 +88,8 @@ function resolveNavHref(item: NavItemDef, sp: URLSearchParams): string {
   return item.href;
 }
 
-function linkActive(pathname: string, itemHref: string, resolvedHref: string, sp: URLSearchParams): boolean {
-  if (itemHref === "/admin") {
+function linkActive(pathname: string, item: NavItemDef, resolvedHref: string, sp: URLSearchParams): boolean {
+  if (item.href === "/admin" && !item.openWindow) {
     return pathname === "/admin" && !sp.get("modal");
   }
 
@@ -104,19 +109,42 @@ function linkActive(pathname: string, itemHref: string, resolvedHref: string, sp
   return true;
 }
 
-function NavBlock({ section, pathname, sp }: { section: NavSectionDef; pathname: string; sp: URLSearchParams }) {
+function NavBlock({
+  section,
+  pathname,
+  sp,
+  isWindowTypeOpen,
+  openWindow,
+}: {
+  section: NavSectionDef;
+  pathname: string;
+  sp: URLSearchParams;
+  isWindowTypeOpen: (t: AdminWindowType) => boolean;
+  openWindow: (p: AdminWindowPayload) => void;
+}) {
   return (
     <div className="adm-nav-section">
       <div className="adm-nav-label">{section.title}</div>
       {section.items.map((item) => {
         const resolved = resolveNavHref(item, sp);
+        const active = item.openWindow ? isWindowTypeOpen(item.openWindow.type) : linkActive(pathname, item, resolved, sp);
+        const key = `${section.title}-${item.label}-${item.openWindow?.type ?? "link"}`;
+        if (item.openWindow) {
+          return (
+            <button
+              key={key}
+              type="button"
+              className="adm-nav-link adm-nav-link--action"
+              data-active={active ? "true" : "false"}
+              onClick={() => openWindow(item.openWindow!)}
+            >
+              <NavIcon id={item.icon} />
+              {item.label}
+            </button>
+          );
+        }
         return (
-          <Link
-            key={resolved}
-            href={resolved}
-            className="adm-nav-link"
-            data-active={linkActive(pathname, item.href, resolved, sp) ? "true" : "false"}
-          >
+          <Link key={key} href={resolved} className="adm-nav-link" data-active={active ? "true" : "false"}>
             <NavIcon id={item.icon} />
             {item.label}
           </Link>
@@ -129,6 +157,7 @@ function NavBlock({ section, pathname, sp }: { section: NavSectionDef; pathname:
 export function AdminSidebar({ sections }: { sections: NavSectionDef[] }) {
   const pathname = usePathname();
   const sp = useSearchParams();
+  const { openWindow, isWindowTypeOpen } = useAdminWindows();
   return (
     <aside className="adm-sidebar">
       <div className="adm-brand">
@@ -137,7 +166,14 @@ export function AdminSidebar({ sections }: { sections: NavSectionDef[] }) {
       </div>
       <nav className="adm-nav">
         {sections.map((section) => (
-          <NavBlock key={section.title} section={section} pathname={pathname} sp={sp} />
+          <NavBlock
+            key={section.title}
+            section={section}
+            pathname={pathname}
+            sp={sp}
+            isWindowTypeOpen={isWindowTypeOpen}
+            openWindow={openWindow}
+          />
         ))}
       </nav>
       <div className="adm-sidebar-foot">

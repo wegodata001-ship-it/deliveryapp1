@@ -1,8 +1,11 @@
+import type { AdminWindowPayload } from "@/lib/admin-windows";
+
 export type NavIconId =
   | "home"
   | "users"
   | "orderIn"
   | "orderList"
+  | "customerNew"
   | "import"
   | "payIn"
   | "receipt"
@@ -20,6 +23,8 @@ export type NavItemDef = {
   icon: NavIconId;
   /** נדרשת לפחות הרשאה אחת מהרשימה. חסר = כל משתמש מחובר */
   anyOf?: string[];
+  /** פותח חלון במקום ניווט (ללא שינוי route) */
+  openWindow?: AdminWindowPayload;
 };
 
 export type NavSectionDef = { title: string; items: NavItemDef[] };
@@ -36,17 +41,42 @@ export const SIDEBAR_SECTIONS: NavSectionDef[] = [
   {
     title: "הזמנות",
     items: [
-      { href: "/admin/orders?orderWork=new", label: "קליטת הזמנה", icon: "orderIn", anyOf: ["create_orders"] },
+      {
+        href: "/admin/orders",
+        label: "קליטת הזמנה",
+        icon: "orderIn",
+        anyOf: ["create_orders"],
+        openWindow: { type: "orderCapture", props: { mode: "create" } },
+      },
       { href: "/admin/orders", label: "רשימת הזמנות", icon: "orderList", anyOf: ["view_orders"] },
+      {
+        href: "/admin/orders",
+        label: "לקוח חדש",
+        icon: "customerNew",
+        anyOf: ["create_orders"],
+        openWindow: { type: "createCustomer" },
+      },
       { href: "/admin/import", label: "ייבוא Excel", icon: "import", anyOf: ["import_excel"] },
     ],
   },
   {
     title: "כספים ותשלומים",
     items: [
-      { href: "/admin?modal=capture-payment", label: "קליטת תשלום", icon: "payIn", anyOf: ["receive_payments"] },
+      {
+        href: "/admin",
+        label: "קליטת תשלום",
+        icon: "payIn",
+        anyOf: ["receive_payments"],
+        openWindow: { type: "payments" },
+      },
       { href: "/admin/receipt-control", label: "בקרת תקבולים", icon: "receipt", anyOf: ["view_payment_control"] },
-      { href: "/admin/customer-card", label: "כרטסת לקוח", icon: "ledger", anyOf: ["view_customer_card"] },
+      {
+        href: "/admin/customer-card",
+        label: "כרטסת לקוח",
+        icon: "ledger",
+        anyOf: ["view_customer_card"],
+        openWindow: { type: "customerCard", props: {} },
+      },
       { href: "/admin/balances", label: "יתרות", icon: "balances", anyOf: ["view_reports"] },
     ],
   },

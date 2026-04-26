@@ -39,6 +39,10 @@ export function AdminTopBar({ displayName, roleLabel, financial, canManageFinanc
 
   const weekCode = sp.get("week") || DEFAULT_WEEK_CODE;
   const rateLabel = financial?.finalDollarRate ?? "—";
+  const rateTitle =
+    financial != null
+      ? `בסיס ${financial.baseDollarRate} + עמלה ${financial.dollarFee} = סופי ${financial.finalDollarRate} ₪/USD`
+      : undefined;
 
   useEffect(() => {
     const tick = () =>
@@ -84,10 +88,10 @@ export function AdminTopBar({ displayName, roleLabel, financial, canManageFinanc
             className={`adm-pill adm-pill--success adm-pill--dense ${canManageFinancial ? "adm-pill--click" : ""}`}
             onClick={openFinancial}
             disabled={!canManageFinancial}
-            title={canManageFinancial ? "הגדרות כספים" : undefined}
+            title={canManageFinancial ? `הגדרות כספים — ${rateTitle ?? ""}` : rateTitle}
           >
-            <span>שער דולר</span>
-            <strong>₪ {rateLabel}</strong>
+            <span>שער סופי (USD)</span>
+            <strong dir="ltr">₪ {rateLabel}</strong>
           </button>
         </div>
       </div>

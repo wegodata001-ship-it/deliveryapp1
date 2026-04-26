@@ -5,8 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AdminTopBar } from "@/components/admin/AdminTopBar";
 import { GlobalFilterBar } from "@/components/admin/GlobalFilterBar";
 import { FinancialSettingsModal } from "@/components/admin/FinancialSettingsModal";
-import { CapturePaymentModal } from "@/components/admin/CapturePaymentModal";
-import { OrderWorkPanel } from "@/components/admin/OrderWorkPanel";
+import { AdminWindowStack } from "@/components/admin/AdminWindowStack";
 import { withoutKeys } from "@/lib/admin-url-query";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 
@@ -19,6 +18,8 @@ type Props = {
   canReceivePayments: boolean;
   canCreateOrders: boolean;
   canEditOrders: boolean;
+  canViewCustomerCard: boolean;
+  canCreateCustomer: boolean;
 };
 
 export function AdminChrome({
@@ -30,6 +31,8 @@ export function AdminChrome({
   canReceivePayments,
   canCreateOrders,
   canEditOrders,
+  canViewCustomerCard,
+  canCreateCustomer,
 }: Props) {
   const router = useRouter();
   const pathname = usePathname();
@@ -48,8 +51,8 @@ export function AdminChrome({
   }, [pathname, router, sp]);
 
   const finOpen = modal === "financial" && canManageFinancial;
-  const payOpen = modal === "capture-payment" && canReceivePayments;
-  const showOrderWork = canCreateOrders || canEditOrders;
+  const showWindowStack =
+    canCreateOrders || canEditOrders || canReceivePayments || canViewCustomerCard || canCreateCustomer;
 
   const finInitial = useMemo(() => financial, [financial]);
 
@@ -65,14 +68,6 @@ export function AdminChrome({
         <div className="adm-chrome-below-header">
           <GlobalFilterBar />
           <div className="adm-chrome-work">
-            {showOrderWork ? (
-              <OrderWorkPanel
-                financial={financial}
-                onToast={onToast}
-                canCreateOrders={canCreateOrders}
-                canEditOrders={canEditOrders}
-              />
-            ) : null}
             <div className="adm-chrome-main adm-content adm-content--chrome">{children}</div>
           </div>
         </div>
@@ -83,7 +78,17 @@ export function AdminChrome({
         </div>
       ) : null}
       <FinancialSettingsModal open={finOpen} onClose={closeModal} initial={finInitial} onToast={onToast} />
-      <CapturePaymentModal open={payOpen} onClose={closeModal} onToast={onToast} />
+      {showWindowStack ? (
+        <AdminWindowStack
+          financial={financial}
+          onToast={onToast}
+          canCreateOrders={canCreateOrders}
+          canEditOrders={canEditOrders}
+          canReceivePayments={canReceivePayments}
+          canViewCustomerCard={canViewCustomerCard}
+          canCreateCustomer={canCreateCustomer}
+        />
+      ) : null}
     </>
   );
 }

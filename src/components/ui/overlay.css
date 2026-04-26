@@ -70,6 +70,11 @@
   flex-direction: column;
 }
 
+.ui-modal.ui-modal--xl.ui-modal--capture {
+  max-width: min(960px, 96vw);
+  max-height: min(88vh, 820px);
+}
+
 .ui-modal.ui-modal--capture .ui-modal-header {
   padding: 0.5rem 0.65rem;
   flex-shrink: 0;

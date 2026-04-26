@@ -467,12 +467,11 @@
   gap: 0.15rem;
 }
 
-/* קליטת הזמנה — פריסה דחוסה ללא גלילה במודל */
+/* קליטת הזמנה — גוף הטופס נשען על גלילת adm-win-order-wrap */
 .adm-capture-order-shell {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  min-height: 0;
+  min-height: min-content;
   gap: 0.2rem;
 }
 
@@ -1310,4 +1309,1945 @@
   margin-top: 1.5rem;
   font-size: 0.85rem;
   color: var(--adm-muted);
+}
+
+/* חלונות גלובליים — ערימה, מרכוז, אנימציה */
+.adm-win-layer {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  pointer-events: none;
+}
+
+.adm-win-layer--top {
+  pointer-events: auto;
+}
+
+.adm-win-layer-backdrop {
+  position: absolute;
+  inset: 0;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  background: rgba(15, 23, 42, 0.42);
+  backdrop-filter: blur(2px);
+  animation: adm-win-fade 0.2s ease-out;
+}
+
+@keyframes adm-win-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.adm-win-panel {
+  position: relative;
+  width: min(760px, 92vw);
+  max-height: min(88vh, 900px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #fff;
+  border-radius: 16px;
+  border: 1px solid var(--adm-border);
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.22);
+  animation: adm-win-pop 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes adm-win-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.adm-win-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.65rem 0.85rem;
+  border-bottom: 1px solid var(--adm-border);
+  flex-shrink: 0;
+  background: #fff;
+}
+
+.adm-win-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--adm-text);
+}
+
+.adm-win-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.5rem 0.65rem 0.65rem;
+}
+
+.adm-win-scroll-body {
+  min-height: 0;
+}
+
+.adm-win-meta {
+  margin: 0 0 0.5rem;
+  font-size: 0.82rem;
+  color: var(--adm-muted);
+}
+
+.adm-win-order-wrap {
+  min-height: 0;
+}
+
+.adm-nav-link--action {
+  width: 100%;
+  text-align: right;
+  font: inherit;
+  cursor: pointer;
+}
+
+.adm-cust-id-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.adm-cust-id-row .adm-input-readonly {
+  flex: 1;
+  min-width: 0;
+}
+
+.adm-btn--xs {
+  padding: 0.15rem 0.45rem;
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+.adm-table-cell-cust {
+  cursor: pointer;
+  color: var(--adm-primary);
+  text-decoration: underline;
+  text-decoration-color: rgba(37, 99, 235, 0.35);
+  text-underline-offset: 3px;
+}
+
+.adm-table-cell-cust:hover {
+  color: #1d4ed8;
+}
+
+.adm-capture-sec--payments {
+  margin-top: 0.15rem;
+}
+
+.adm-capture-sec-hint {
+  margin: 0 0 0.35rem;
+  font-size: 0.68rem;
+  color: var(--adm-muted);
+  line-height: 1.35;
+}
+
+.adm-pay-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.adm-pay-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 0.35rem 0.45rem;
+  align-items: end;
+}
+
+.adm-pay-row-remove {
+  margin-bottom: 0.15rem;
+}
+
+.adm-pay-toolbar {
+  margin-top: 0.35rem;
+}
+
+.adm-pay-summary {
+  margin-top: 0.45rem;
+  padding: 0.35rem 0.45rem;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid var(--adm-border);
+}
+
+.adm-pay-summary-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 0.76rem;
+  margin-top: 0.15rem;
+}
+
+.adm-pay-summary-line:first-child {
+  margin-top: 0;
+}
+
+.adm-pay-summary-line--muted {
+  color: var(--adm-muted);
+  font-size: 0.7rem;
+}
+
+.adm-pay-err {
+  margin-top: 0.35rem;
+}
+
+@media (max-width: 560px) {
+  .adm-pay-row {
+    grid-template-columns: 1fr;
+  }
+  .adm-pay-row-remove {
+    justify-self: end;
+  }
+}
+
+/* מודל קליטת הזמנה — קבוצות ללא גלילה */
+.adm-capture-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.adm-capture-sec {
+  border: 1px solid var(--adm-border);
+  border-radius: 8px;
+  padding: 0.35rem 0.45rem;
+  background: #fafbfc;
+}
+
+.adm-capture-sec-title {
+  margin: 0 0 0.28rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--adm-muted);
+  letter-spacing: 0.02em;
+}
+
+.adm-capture-sec-grid {
+  display: grid;
+  gap: 0.2rem 0.45rem;
+  align-items: end;
+}
+
+.adm-capture-sec-grid--4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.adm-capture-sec-grid--3 {
+  grid-template-columns: minmax(5.5rem, 0.9fr) minmax(0, 2fr) minmax(0, 1fr);
+}
+
+.adm-capture-sec-grid--2 {
+  grid-template-columns: 1fr 1fr;
+}
+
+.adm-field-span-query {
+  grid-column: auto;
+}
+
+@media (max-width: 720px) {
+  .adm-capture-sec-grid--4 {
+    grid-template-columns: 1fr 1fr;
+  }
+  .adm-capture-sec-grid--3 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.adm-field--capture label {
+  font-size: 0.66rem;
+}
+
+.adm-field-span-full {
+  grid-column: 1 / -1;
+}
+
+.adm-field--inline {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.adm-capture-amounts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.adm-capture-amt-col {
+  border: 1px solid var(--adm-border);
+  border-radius: 8px;
+  padding: 0.35rem 0.45rem;
+  background: #fff;
+}
+
+.adm-capture-amt-head {
+  font-size: 0.66rem;
+  font-weight: 700;
+  color: var(--adm-muted);
+  margin-bottom: 0.25rem;
+}
+
+.adm-capture-amt-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.35rem;
+  font-size: 0.74rem;
+  margin-top: 0.18rem;
+}
+
+.adm-capture-amt-line--total {
+  margin-top: 0.35rem;
+  padding-top: 0.25rem;
+  border-top: 1px dashed var(--adm-border);
+  font-weight: 700;
+}
+
+.adm-capture-rate-hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.65rem;
+  color: var(--adm-muted);
+}
+
+.adm-capture-rate-hint-muted {
+  color: #94a3b8;
+}
+
+.adm-capture-notes-line {
+  width: 100%;
+  box-sizing: border-box;
+  height: 36px;
+  padding: 0.25rem 0.45rem;
+  font-size: 0.78rem;
+  border-radius: 6px;
+  border: 1px solid var(--adm-border);
+}
+
+/* מודל קליטת הזמנה — גובה מוגבל ללא גלילה בגוף החלון */
+.adm-win-panel--order-capture {
+  width: 95%;
+  max-width: 1600px;
+  max-height: 90vh;
+}
+
+.adm-win-body--order-capture {
+  overflow: hidden;
+  padding: 12px 18px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.adm-win-panel--order-capture .adm-win-header {
+  padding: 12px 18px;
+}
+
+.adm-win-panel--order-capture .adm-win-title {
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.adm-win-panel--customer-card {
+  width: min(600px, 94vw);
+}
+
+/* קליטת תשלום — רשת כרטיסים (לא משפיע על קליטת הזמנה) */
+.adm-win-panel--payment-capture {
+  width: min(1180px, 96vw);
+  max-height: 92vh;
+}
+
+.adm-win-body--payment-capture {
+  padding: 12px 16px 16px;
+  overflow: auto;
+  max-height: calc(92vh - 52px);
+  -webkit-overflow-scrolling: touch;
+}
+
+/* שמות class כמו המפרט — רק בתוך טופס קליטת תשלום (לא שוברים רכיבים גלובליים בשם .card) */
+.adm-capture-payment-form .payment-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 960px) {
+  .adm-capture-payment-form .payment-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.adm-capture-payment-form .card {
+  background: #fff;
+  border-radius: 12px;
+  padding: 16px;
+  border: 1px solid var(--adm-border);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+
+.adm-capture-payment-form .card h3 {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--adm-text, #0f172a);
+}
+
+.adm-capture-payment-form .payment-line {
+  margin: 0 0 8px;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.adm-capture-payment-form .remaining {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--adm-border);
+  font-weight: 700;
+}
+
+.adm-capture-payment-form .payment-after {
+  font-size: 13px;
+  color: var(--adm-muted);
+}
+
+.adm-capture-payment-form .payment-summary-hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--adm-muted);
+  line-height: 1.4;
+}
+
+.adm-capture-payment-form .order-preview {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid var(--adm-border);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.adm-capture-payment-form .payment-order-err {
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+.adm-capture-payment-form .payment-notes {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 72px;
+  padding: 8px 10px;
+  font-size: 14px;
+  border: 1px solid var(--adm-border);
+  border-radius: 8px;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.adm-capture-payment-form .adm-modal-actions {
+  margin-top: 16px;
+}
+
+.adm-win-body--order-capture .adm-win-order-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 8px;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* טופס קליטה דחוס — 32px, ריווחים קבועים, רשת 2 עמודות */
+.adm-order-capture-compact {
+  gap: 8px;
+  overflow: visible;
+  flex: 0 0 auto;
+  width: 100%;
+}
+
+/* גלילה ב־adm-win-order-wrap: התוכן לא נחתך (ביטול flex:1 + overflow:hidden מהכללי) */
+.adm-order-capture-compact .adm-capture-sections,
+.adm-order-capture-compact .adm-order-layout {
+  gap: 8px;
+  overflow: visible;
+  flex: none;
+  min-height: auto;
+}
+
+.adm-order-capture-compact .adm-capture-sec {
+  padding: 6px 8px;
+}
+
+.adm-order-capture-compact .adm-capture-sec-title {
+  margin: 0 0 4px;
+  font-size: 12px;
+}
+
+.adm-order-capture-compact .adm-field--capture {
+  margin-bottom: 6px;
+}
+
+.adm-order-capture-compact .adm-field--capture:last-child {
+  margin-bottom: 0;
+}
+
+.adm-order-capture-compact .adm-field--capture label {
+  font-size: 11px;
+  margin-bottom: 2px;
+}
+
+.adm-order-capture-compact .adm-field--capture input[type="text"],
+.adm-order-capture-compact .adm-field--capture input[type="date"],
+.adm-order-capture-compact .adm-field--capture input[type="time"],
+.adm-order-capture-compact .adm-field--capture select,
+.adm-order-capture-compact .adm-input-readonly--dense,
+.adm-order-capture-compact .adm-capture-notes-line {
+  height: 32px;
+  padding: 4px 8px;
+  font-size: 13px;
+  box-sizing: border-box;
+  line-height: 1.2;
+  border-radius: 6px;
+}
+
+.adm-order-capture-compact .adm-capture-sec-grid {
+  gap: 8px;
+}
+
+.adm-order-capture-compact .adm-capture-sec-grid--4 {
+  grid-template-columns: 1fr 1fr;
+}
+
+.adm-order-capture-compact .adm-capture-sec-grid--2 {
+  grid-template-columns: 1fr 1fr;
+}
+
+.adm-capture-sec-grid--cust-compact {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  align-items: end;
+}
+
+.adm-capture-sec-grid--cust-compact .adm-field--cust-quick {
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+
+.adm-capture-sec-grid--cust-compact .adm-field--cust-id {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.adm-capture-sec-grid--cust-compact .adm-field--cust-type {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.adm-capture-sec-grid--cust-compact .adm-field-span-query {
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
+
+.adm-order-capture-compact .adm-combo--compact-cap .adm-combo-list {
+  max-height: 88px;
+}
+
+.adm-order-capture-compact .adm-cust-id-row {
+  gap: 6px;
+}
+
+.adm-order-capture-compact .adm-cust-id-row .adm-btn--xs {
+  height: 28px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+.adm-order-capture-compact .adm-modal-actions--capture {
+  margin-top: 4px;
+  padding-top: 6px;
+  gap: 8px;
+}
+
+.adm-order-capture-compact .adm-error--compact {
+  margin-bottom: 6px;
+}
+
+/* קליטת הזמנה — קריאות, ריווח שדות, תשלום בטבלה, sticky לשמירה (מעל «קומפקט») */
+.adm-win-panel--order-capture .adm-capture-order-shell {
+  gap: 12px;
+}
+
+.adm-win-panel--order-capture .adm-order-capture-compact .adm-order-layout {
+  gap: 32px;
+}
+
+.adm-win-panel--order-capture .adm-order-capture-compact .adm-field--capture {
+  margin-bottom: 20px;
+}
+
+.adm-win-panel--order-capture .adm-order-capture-compact .adm-field--capture:last-child {
+  margin-bottom: 0;
+}
+
+.adm-win-panel--order-capture .adm-order-capture-compact .adm-field--capture label {
+  font-size: 16px;
+  margin-bottom: 6px;
+}
+
+.adm-win-panel--order-capture .adm-order-capture-compact .adm-capture-sec-title {
+  font-size: 18px;
+  font-weight: 800;
+  margin: 0 0 10px;
+}
+
+.adm-win-panel--order-capture .adm-order-capture-compact .adm-field--capture input[type="text"],
+.adm-win-panel--order-capture .adm-order-capture-compact .adm-field--capture input[type="date"],
+.adm-win-panel--order-capture .adm-order-capture-compact .adm-field--capture input[type="time"],
+.adm-win-panel--order-capture .adm-order-capture-compact .adm-field--capture select,
+.adm-win-panel--order-capture .adm-order-capture-compact .adm-input-readonly--dense,
+.adm-win-panel--order-capture .adm-order-capture-compact .adm-capture-notes-line {
+  height: auto;
+  min-height: 48px;
+  padding: 14px 16px;
+  font-size: 16px;
+  border-radius: 10px;
+  line-height: 1.35;
+}
+
+.adm-win-panel--order-capture .adm-pay-cell-select,
+.adm-win-panel--order-capture .adm-pay-cell-input {
+  min-height: 48px;
+  height: auto;
+  padding: 14px 12px;
+  font-size: 16px;
+  border-radius: 10px;
+}
+
+.adm-win-panel--order-capture .adm-cap-amounts-lead {
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.adm-win-panel--order-capture .adm-modal-actions--capture {
+  position: sticky;
+  bottom: 20px;
+  margin-top: 12px;
+  padding: 16px 18px;
+  border-radius: 14px;
+  border: 1px solid var(--adm-border);
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 10px 40px rgba(15, 23, 42, 0.14);
+  z-index: 4;
+}
+
+.adm-win-panel--order-capture .adm-modal-actions--capture .adm-btn--dense {
+  padding: 12px 22px;
+  font-size: 16px;
+  min-height: 48px;
+}
+
+.adm-win-panel--order-capture .adm-combo--dense input[type="text"],
+.adm-win-panel--order-capture .adm-combo--compact-cap input[type="text"] {
+  min-height: 48px;
+  height: auto;
+  padding: 14px 16px;
+  font-size: 16px;
+  border-radius: 10px;
+}
+
+.adm-win-panel--order-capture .adm-pay-unified-title {
+  font-size: 22px;
+}
+
+.adm-win-panel--order-capture .adm-fee-legend {
+  font-size: 15px;
+}
+
+.adm-win-panel--order-capture .adm-fee-toggle-opt {
+  font-size: 16px;
+}
+
+.adm-capture-amt-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  table-layout: fixed;
+}
+
+.adm-capture-amt-table thead th {
+  background: #f1f5f9;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--adm-muted);
+  border: 1px solid var(--adm-border);
+  text-align: right;
+}
+
+.adm-capture-amt-table tbody td {
+  padding: 2px 6px;
+  border: 1px solid var(--adm-border);
+  vertical-align: middle;
+}
+
+.adm-cap-td-lbl {
+  width: 22%;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--adm-muted);
+  white-space: nowrap;
+}
+
+.adm-cap-td-inp {
+  width: 28%;
+}
+
+.adm-cap-td-val {
+  font-size: 12px;
+}
+
+.adm-cap-td-input {
+  width: 100%;
+  box-sizing: border-box;
+  height: 32px;
+  padding: 4px 8px;
+  font-size: 13px;
+  border: 1px solid var(--adm-border);
+  border-radius: 6px;
+}
+
+.adm-cap-tr-total td {
+  background: #fafbfc;
+  font-weight: 700;
+}
+
+.adm-capture-rate-hint--compact {
+  margin: 4px 0 0;
+  font-size: 11px;
+}
+
+.adm-order-summary-fallback--compact {
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+
+/* תשלומים — טבלה דחוסה */
+.adm-pay-sec--compact {
+  margin-top: 0;
+}
+
+.adm-pay-compact-hint {
+  margin: 0 0 4px;
+  font-size: 11px;
+  color: var(--adm-muted);
+  line-height: 1.25;
+}
+
+.adm-pay-compact-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  table-layout: fixed;
+}
+
+.adm-pay-compact-table th,
+.adm-pay-compact-table td {
+  padding: 2px 4px;
+  border: 1px solid var(--adm-border);
+  vertical-align: middle;
+}
+
+.adm-pay-compact-table thead th {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--adm-muted);
+  background: #f8fafc;
+  text-align: right;
+}
+
+.adm-pay-col-method {
+  width: 22%;
+}
+
+.adm-pay-col-curr {
+  width: 18%;
+  min-width: 4.75rem;
+}
+
+.adm-pay-col-amt {
+  width: 26%;
+}
+
+.adm-pay-cell-select--curr {
+  padding-inline: 4px;
+  font-size: 12px;
+}
+
+.adm-pay-col-ils {
+  width: 36%;
+  font-size: 10px;
+  line-height: 1.2;
+  font-weight: 700;
+  color: var(--adm-muted);
+}
+
+.adm-pay-col-ils-val {
+  font-size: 11px;
+  color: #334155;
+  white-space: nowrap;
+}
+
+.adm-pay-col-act {
+  width: 12%;
+  text-align: center;
+}
+
+.adm-pay-cell-select,
+.adm-pay-cell-input {
+  width: 100%;
+  box-sizing: border-box;
+  height: 32px;
+  padding: 4px 8px;
+  font-size: 13px;
+  border-radius: 6px;
+  border: 1px solid var(--adm-border);
+}
+
+.adm-pay-remove-icon {
+  padding: 4px;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.adm-pay-compact-table tfoot td {
+  border-top: 1px solid var(--adm-border);
+}
+
+.adm-pay-tfoot-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  padding: 3px 6px !important;
+  background: #f8fafc;
+}
+
+.adm-pay-tfoot-line--muted {
+  color: var(--adm-muted);
+  font-size: 11px;
+}
+
+.adm-pay-compact-toolbar {
+  margin-top: 4px;
+}
+
+.adm-pay-table-scroll {
+  max-height: min(38vh, 260px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--adm-border);
+  border-radius: 8px;
+  margin-top: 6px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.adm-pay-table-scroll .adm-pay-compact-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  box-shadow: 0 1px 0 var(--adm-border);
+}
+
+.adm-pay-summary-block {
+  margin-top: 8px;
+  border: 1px solid var(--adm-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.adm-pay-summary-block .adm-pay-tfoot-line {
+  border-bottom: 1px solid var(--adm-border);
+}
+
+.adm-pay-summary-block .adm-pay-tfoot-line:last-child {
+  border-bottom: none;
+}
+
+.adm-pay-order-head {
+  margin: 0 0 6px;
+  padding: 8px 10px;
+  background: #f8fafc;
+  border: 1px solid var(--adm-border);
+  border-radius: 8px;
+}
+
+.adm-pay-order-head-line {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.adm-pay-order-head-line--muted {
+  color: var(--adm-muted);
+  font-size: 12px;
+}
+
+.adm-pay-order-head-lbl {
+  color: var(--adm-muted);
+  font-size: 12px;
+}
+
+.adm-pay-order-head-val {
+  font-size: 1.05em;
+}
+
+.adm-pay-remaining-line {
+  margin: 6px 0 0;
+  font-size: 14px;
+}
+
+.adm-pay-remaining-strong {
+  color: #b45309;
+}
+
+.adm-pay-underpay {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.45;
+  font-weight: 600;
+  color: #92400e;
+  background: #fffbeb;
+  border: 2px solid #f59e0b;
+  border-radius: 8px;
+}
+
+.adm-pay-underpay-amt {
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.adm-pay-ils-fieldset {
+  margin: 8px 0 0;
+  padding: 8px 10px 10px;
+  border: 1px solid var(--adm-border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.adm-pay-ils-fieldset:disabled {
+  opacity: 0.65;
+}
+
+.adm-pay-ils-legend {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 4px;
+}
+
+.adm-pay-ils-radios {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.adm-pay-ils-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+.adm-pay-ils-radio input {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.adm-pay-ils-muted {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--adm-muted);
+}
+
+.adm-pay-split-fieldset {
+  margin-top: 12px;
+  padding: 12px 12px 14px;
+  border: 2px solid #0f766e;
+  border-radius: 10px;
+  background: #ecfdf5;
+}
+
+.adm-pay-split-fieldset:disabled {
+  opacity: 0.55;
+}
+
+.adm-pay-split-legend {
+  font-size: 15px;
+  font-weight: 800;
+  padding: 0 6px;
+  color: #0f766e;
+}
+
+.adm-pay-split-hint {
+  margin: 6px 0 10px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #134e4a;
+}
+
+.adm-pay-split-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+@media (min-width: 520px) {
+  .adm-pay-split-btns {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .adm-btn.adm-pay-split-btn {
+    flex: 1;
+    min-width: min(100%, 220px);
+  }
+}
+
+.adm-btn.adm-pay-split-btn {
+  min-height: 48px;
+  padding: 0.6rem 1rem;
+  font-size: 15px;
+  font-weight: 700;
+  justify-content: center;
+  border: 2px solid #0d9488;
+  background: #fff;
+  color: #0f766e;
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(15, 118, 110, 0.12);
+}
+
+.adm-btn.adm-pay-split-btn:hover:not(:disabled) {
+  background: #ccfbf1;
+}
+
+.adm-btn.adm-pay-split-btn:focus-visible {
+  outline: 3px solid #14b8a6;
+  outline-offset: 2px;
+}
+
+.adm-btn.adm-pay-split-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.adm-cap-payment-order-total {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--adm-text);
+}
+
+.adm-cap-payment-order-total--muted {
+  color: var(--adm-muted);
+}
+
+.adm-pay-sec--compact .adm-pay-err {
+  margin-top: 4px;
+}
+
+/* קליטת הזמנה — פריסת ERP: 3 כרטיסים בשורה + תשלומים והערות ברוחב מלא */
+.adm-order-layout.adm-capture-desktop {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 32px;
+  width: 100%;
+  align-content: start;
+}
+
+.adm-order-layout__full {
+  grid-column: 1 / -1;
+}
+
+.adm-order-layout.adm-capture-desktop > .adm-cap-sec-customer {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.adm-order-layout.adm-capture-desktop > .adm-cap-sec-order {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.adm-order-layout.adm-capture-desktop > .adm-cap-sec-amounts {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.adm-order-layout.adm-capture-desktop > .adm-pay-unified-section {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  margin-top: 0;
+  border-radius: 20px;
+  padding: 28px;
+  background: linear-gradient(180deg, #ecfdf5 0%, #d1fae5 100%);
+  border: 1px solid #6ee7b7;
+  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.12);
+}
+
+.adm-order-layout.adm-capture-desktop > .adm-pay-unified-section .adm-pay-unified-card {
+  background: #fff;
+  border: 1px solid #a7f3d0;
+  border-radius: 16px;
+  padding: 20px 22px 22px;
+  box-shadow: 0 1px 3px rgba(5, 150, 105, 0.06);
+}
+
+.adm-order-layout.adm-capture-desktop > .adm-cap-sec-customer:not(.adm-pay-unified-section) {
+  border-radius: 20px;
+  padding: 28px;
+  background: #f5f3ff;
+  border: 1px solid rgba(124, 58, 237, 0.2);
+  box-shadow: 0 2px 10px rgba(124, 58, 237, 0.08);
+}
+
+.adm-order-layout.adm-capture-desktop > .adm-cap-sec-order:not(.adm-pay-unified-section) {
+  border-radius: 20px;
+  padding: 28px;
+  background: #f0f9ff;
+  border: 1px solid rgba(14, 165, 233, 0.22);
+  box-shadow: 0 2px 10px rgba(14, 165, 233, 0.08);
+}
+
+.adm-order-layout.adm-capture-desktop > .adm-cap-sec-amounts:not(.adm-pay-unified-section) {
+  border-radius: 20px;
+  padding: 28px;
+  background: #fffbeb;
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  box-shadow: 0 2px 10px rgba(245, 158, 11, 0.1);
+}
+
+.adm-order-layout.adm-capture-desktop > .adm-cap-footer-notes {
+  grid-column: 1 / -1;
+  grid-row: 3;
+  margin-bottom: 0;
+  border-radius: 20px;
+  padding: 28px;
+  background: #f8fafc;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+@media (max-width: 1200px) {
+  .adm-order-layout.adm-capture-desktop {
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+
+  .adm-order-layout.adm-capture-desktop > .adm-cap-sec-customer {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .adm-order-layout.adm-capture-desktop > .adm-cap-sec-order {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .adm-order-layout.adm-capture-desktop > .adm-cap-sec-amounts {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .adm-order-layout.adm-capture-desktop > .adm-pay-unified-section {
+    grid-row: 3;
+  }
+
+  .adm-order-layout.adm-capture-desktop > .adm-cap-footer-notes {
+    grid-row: 4;
+  }
+}
+
+@media (max-width: 768px) {
+  .adm-order-layout.adm-capture-desktop {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+
+  .adm-order-layout.adm-capture-desktop > .adm-cap-sec-customer,
+  .adm-order-layout.adm-capture-desktop > .adm-cap-sec-order,
+  .adm-order-layout.adm-capture-desktop > .adm-cap-sec-amounts {
+    grid-column: 1;
+  }
+
+  .adm-order-layout.adm-capture-desktop > .adm-cap-sec-customer {
+    grid-row: 1;
+  }
+
+  .adm-order-layout.adm-capture-desktop > .adm-cap-sec-order {
+    grid-row: 2;
+  }
+
+  .adm-order-layout.adm-capture-desktop > .adm-cap-sec-amounts {
+    grid-row: 3;
+  }
+
+  .adm-order-layout.adm-capture-desktop > .adm-pay-unified-section {
+    grid-row: 4;
+  }
+
+  .adm-order-layout.adm-capture-desktop > .adm-cap-footer-notes {
+    grid-row: 5;
+  }
+}
+
+.adm-cap-sec-order {
+  background: #f1f5f9;
+}
+
+.adm-cap-sec-customer {
+  background: #eef2ff;
+}
+
+.adm-cap-sec-amounts {
+  background: #fff7ed;
+}
+
+.adm-cap-amounts-lead {
+  margin: -4px 0 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #64748b;
+}
+
+.adm-pay-form-equiv-line {
+  margin: 8px 0 4px;
+  font-size: 13px;
+  color: #334155;
+}
+
+.adm-pay-form-equiv-ils {
+  color: #64748b;
+  font-weight: 500;
+}
+
+.adm-pay-amt-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.adm-pay-row-usd-hint {
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.adm-cap-sec-splitpay {
+  background: transparent;
+}
+
+/* פריסה מלאה לתשלומים — מנוהל ב־.adm-order-layout (למעלה) */
+.adm-capture-sections.adm-capture-desktop > .adm-cap-sec-splitpay {
+  grid-column: 1 / -1;
+}
+
+.adm-cap-amount-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.adm-fee-fieldset {
+  margin: 0;
+  padding: 8px 10px 10px;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  background: #fffefb;
+}
+
+.adm-fee-fieldset:disabled {
+  opacity: 0.65;
+}
+
+.adm-fee-legend {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 4px;
+  color: #92400e;
+}
+
+.adm-fee-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  margin-bottom: 8px;
+}
+
+.adm-fee-toggle-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.adm-fee-toggle-opt input {
+  width: 16px;
+  height: 16px;
+}
+
+.adm-fee-summary {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+/* נתוני עסקה ₪ — תצוגה בלבד */
+.adm-deal-box {
+  background: #f3f4f6;
+  padding: 10px 12px;
+  border-radius: 6px;
+  max-width: 320px;
+  font-size: 13px;
+  color: #374151;
+  border: 1px solid #e5e7eb;
+}
+
+.adm-deal-title {
+  font-weight: 700;
+  margin-bottom: 8px;
+  color: #111827;
+}
+
+.adm-deal-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 0;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.adm-deal-row:last-child {
+  border-bottom: none;
+}
+
+.adm-deal-row--total {
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 2px solid #d1d5db;
+  border-bottom: none;
+  font-weight: 700;
+  color: #111827;
+  background: #e0f2fe;
+  margin-left: -12px;
+  margin-right: -12px;
+  padding-left: 12px;
+  padding-right: 12px;
+  padding-bottom: 6px;
+  border-radius: 0 0 4px 4px;
+}
+
+.adm-deal-val {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.adm-deal-empty {
+  margin: 0;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+/* מודל סיכום אחרי שמירת הזמנה */
+.adm-cap-saved-modal.ui-modal--sm {
+  max-width: 420px;
+}
+
+.adm-cap-saved-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 14px;
+}
+
+.adm-cap-saved-status {
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-weight: 700;
+  font-size: 13px;
+  text-align: center;
+}
+
+.adm-cap-saved-status--paid {
+  background: #dcfce7;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+}
+
+.adm-cap-saved-status--partial {
+  background: #fef9c3;
+  color: #92400e;
+  border: 1px solid #fde047;
+}
+
+.adm-cap-saved-status--neutral {
+  background: #f3f4f6;
+  color: #4b5563;
+  border: 1px solid #e5e7eb;
+}
+
+.adm-cap-saved-summary p {
+  margin: 4px 0;
+  line-height: 1.45;
+}
+
+.adm-cap-saved-payments {
+  border: 1px solid var(--adm-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #fafafa;
+}
+
+.adm-cap-saved-payments-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--adm-muted);
+  margin-bottom: 6px;
+}
+
+.adm-cap-saved-pay-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 0;
+  border-bottom: 1px solid #e5e7eb;
+  font-size: 13px;
+}
+
+.adm-cap-saved-pay-row:last-child {
+  border-bottom: none;
+}
+
+.adm-cap-saved-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+/* תשלום — אזור ירוק אחיד */
+.adm-pay-unified-section {
+  margin-top: 2px;
+}
+
+.adm-pay-unified-card {
+  background: #ecfdf5;
+  border: 2px solid #0d9488;
+  border-radius: 12px;
+  padding: 12px 14px 14px;
+  box-shadow: 0 2px 8px rgba(13, 148, 136, 0.08);
+}
+
+.adm-pay-unified-title {
+  margin: 0 0 10px;
+  font-size: 16px;
+  font-weight: 800;
+  color: #0f766e;
+}
+
+.adm-pay-meta-row {
+  margin-bottom: 8px;
+}
+
+.adm-pay-order-total-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  background: #fff;
+  border: 1px solid #99f6e4;
+  border-radius: 8px;
+}
+
+.adm-pay-order-total-lbl {
+  font-size: 14px;
+  font-weight: 700;
+  color: #115e59;
+}
+
+.adm-pay-order-total-val {
+  font-size: 20px;
+  font-weight: 800;
+  color: #0f766e;
+}
+
+.adm-pay-order-total-muted {
+  font-size: 13px;
+  color: #5c706e;
+}
+
+.adm-pay-progress {
+  height: 6px;
+  background: #e5e7eb;
+  border-radius: 4px;
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+
+.adm-pay-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #22c55e, #4ade80);
+  border-radius: 4px;
+  min-width: 0;
+  transition: width 0.2s ease-out;
+}
+
+.adm-pay-existing-line {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: #134e4a;
+}
+
+.adm-pay-split-heading {
+  margin: 4px 0 4px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f766e;
+}
+
+.adm-pay-split-lead {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: #115e59;
+}
+
+.adm-pay-remaining-block {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: #fff;
+  border-radius: 8px;
+  border: 1px dashed #5eead4;
+}
+
+.adm-pay-remaining-lbl {
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f766e;
+}
+
+.adm-pay-remaining-val {
+  font-size: 18px;
+  font-weight: 800;
+  color: #0f766e;
+}
+
+.adm-pay-remaining-val--warn {
+  color: #b45309;
+}
+
+.adm-pay-warning {
+  margin-top: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+}
+
+.adm-pay-success {
+  margin-top: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #166534;
+  background: #dcfce7;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+}
+
+.adm-pay-toolbar-row {
+  margin-top: 10px;
+}
+
+.adm-pay-split-tools {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #99f6e4;
+}
+
+.adm-pay-split-tools .adm-pay-split-hint {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: #134e4a;
+}
+
+.adm-pay-table-scroll--when-needed {
+  max-height: min(32vh, 220px);
+}
+
+.adm-cap-footer-notes {
+  grid-column: 1 / -1;
+}
+
+.adm-ordnum-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.adm-ordnum-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.adm-ordnum-unlock {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  color: var(--adm-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.adm-cust-smart-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.adm-cust-smart-row .adm-combo-list {
+  grid-column: 1 / -1;
+}
+
+.adm-cust-card-btn {
+  flex-shrink: 0;
+}
+
+.adm-cap-rate-field {
+  margin-bottom: 6px;
+}
+
+.adm-cap-rate-field input {
+  max-width: 8rem;
+}
+
+/* פאנל לקוח בקליטה — dropdown + פרטים + מזהה */
+.adm-cust-panel-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.adm-cust-quick-select {
+  width: 100%;
+  box-sizing: border-box;
+  height: 32px;
+  padding: 4px 8px;
+  font-size: 13px;
+  border-radius: 6px;
+  border: 1px solid var(--adm-border);
+  background: #fff;
+}
+
+.adm-cust-details {
+  margin-top: 2px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.65);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  font-size: 13px;
+}
+
+.adm-cust-details-name {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--adm-text);
+}
+
+.adm-cust-details-id {
+  margin-top: 4px;
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.adm-cust-details-phone,
+.adm-cust-details-city {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--adm-muted);
+}
+
+.adm-cust-details-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--adm-muted);
+}
+
+.adm-cust-type-and-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.adm-cust-type-and-card .adm-field {
+  flex: 1;
+  min-width: 8rem;
+  margin-bottom: 0;
+}
+
+.adm-cust-card-open {
+  margin-bottom: 6px;
+}
+
+.adm-cust-search-adv {
+  margin-top: 2px;
+}
+
+.adm-cust-search-combo .adm-combo-list {
+  max-height: 120px;
+}
+
+/* כרטסת לקוח בחלון — כרטיס מערכתי */
+.adm-cust-card-body {
+  padding: 8px 6px 10px;
+}
+
+.adm-cust-card-shell {
+  position: relative;
+  background: #ffffff;
+  border-radius: 10px;
+  padding: 14px 14px 16px;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+}
+
+.adm-cust-card-shell::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: linear-gradient(90deg, #2563eb, #3b82f6);
+  border-radius: 10px 10px 0 0;
+}
+
+.adm-cust-card-header {
+  border-bottom: 1px solid #e5e7eb;
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+}
+
+.adm-cust-card-name {
+  margin: 0 0 6px;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--adm-text);
+  line-height: 1.25;
+}
+
+.adm-cust-card-detail-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.adm-cust-card-sub {
+  margin: 0;
+  font-size: 13px;
+  color: #6b7280;
+  line-height: 1.45;
+}
+
+.adm-cust-summary-box {
+  background: #eff6ff;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 0 0 14px;
+  text-align: center;
+  border: 1px solid #bfdbfe;
+}
+
+.adm-cust-summary-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e40af;
+  margin-bottom: 4px;
+}
+
+.adm-cust-summary-amount {
+  font-size: 22px;
+  font-weight: 800;
+  color: #2563eb;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+}
+
+.adm-cust-summary-count {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.adm-cust-card-orders-wrap {
+  margin-top: 2px;
+}
+
+.adm-cust-card-orders-title {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--adm-text);
+}
+
+.adm-cust-card-empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--adm-muted);
+}
+
+.adm-cust-card-table-scroll {
+  max-height: min(52vh, 360px);
+  overflow: auto;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.adm-cust-card-orders-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.adm-cust-card-orders-table th {
+  background: #f3f4f6;
+  padding: 8px 6px;
+  text-align: right;
+  font-weight: 700;
+  color: #374151;
+  border-bottom: 1px solid #e5e7eb;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.adm-cust-card-orders-table td {
+  padding: 8px 6px;
+  border-bottom: 1px solid #e5e7eb;
+  text-align: right;
+  vertical-align: middle;
+}
+
+.adm-cust-card-orders-table tbody tr:hover {
+  background: #f9fafb;
+}
+
+.adm-cust-card-orders-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.adm-cust-card-td-usd {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.adm-ord-status {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.adm-ord-status--COMPLETED {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.adm-ord-status--OPEN {
+  background: #fef9c3;
+  color: #92400e;
+}
+
+.adm-ord-status--CANCELLED {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.adm-ord-status--WAITING_FOR_EXECUTION {
+  background: #e0f2fe;
+  color: #075985;
+}
+
+.adm-ord-status--WITHDRAWAL_FROM_SUPPLIER {
+  background: #ede9fe;
+  color: #5b21b6;
+}
+
+.adm-ord-status--SENT {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.adm-ord-status--WAITING_FOR_CHINA_EXECUTION {
+  background: #ffedd5;
+  color: #9a3412;
 }

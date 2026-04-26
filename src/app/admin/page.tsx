@@ -1,19 +1,11 @@
 import Link from "next/link";
-import {
-  Banknote,
-  ClipboardList,
-  FileSpreadsheet,
-  PlusCircle,
-  Settings2,
-  ShoppingCart,
-  UserPlus,
-  Users,
-  Wallet,
-} from "lucide-react";
+import { Banknote, ClipboardList, ShoppingCart, Users } from "lucide-react";
 import { DashboardActivityFeed } from "@/components/admin/DashboardActivityFeed";
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { getDashboardStats } from "@/lib/dashboard-stats";
-import { adminHrefWithFilters, adminOrdersHrefWithFilters } from "@/lib/admin-href";
+import { getCurrentFinancialSettings, serializeFinancialSettings } from "@/lib/financial-settings";
+import { adminHrefWithFilters } from "@/lib/admin-href";
+import { DashboardQuickActions } from "@/components/admin/DashboardQuickActions";
 import { parseDateFilterFromSearchParams } from "@/lib/work-week";
 
 export default async function AdminDashboardPage({
@@ -27,6 +19,7 @@ export default async function AdminDashboardPage({
   const showStaffStats = isAdminUser(me) || me.permissionKeys.includes("manage_users");
 
   const stats = await getDashboardStats({ fromStart: range.fromStart, toEnd: range.toEnd }, me);
+  const finSerialized = serializeFinancialSettings(await getCurrentFinancialSettings());
 
   const hrefModal = (modal: string) => adminHrefWithFilters(sp, { modal });
 
@@ -74,6 +67,27 @@ export default async function AdminDashboardPage({
           <div className="adm-card-value adm-card-value--sm">{stats.pendingPaymentsCount}</div>
           <div className="adm-card-foot">לפי תאריך תשלום · לפי טווח התאריכים שנבחר</div>
         </div>
+        <div className="adm-card adm-card--dense">
+          <div className="adm-card-title adm-card-title--sm">שער דולר (סופי)</div>
+          <div className="adm-card-value adm-card-value--sm" dir="ltr">
+            {finSerialized ? `₪ ${finSerialized.finalDollarRate}` : "—"}
+          </div>
+          <div className="adm-card-foot">
+            {finSerialized ? (
+              <>
+                בסיס {finSerialized.baseDollarRate} + עמלה {finSerialized.dollarFee}
+                {userHasAnyPermission(me, ["manage_settings"]) ? (
+                  <>
+                    {" "}
+                    · <Link href={hrefModal("financial")}>עדכון הגדרות</Link>
+                  </>
+                ) : null}
+              </>
+            ) : (
+              "טען הגדרות כספים"
+            )}
+          </div>
+        </div>
         <div className="adm-card adm-card--dense adm-card--wide adm-card--activity">
           <div className="adm-card-title adm-card-title--sm">פעילות אחרונה</div>
           <div className="adm-card-activity-wrap">
@@ -84,44 +98,15 @@ export default async function AdminDashboardPage({
       </div>
 
       <h2 className="adm-section-title adm-section-title--sm">פעולות מהירות</h2>
-      <div className="adm-quick adm-quick--dense">
-        {userHasAnyPermission(me, ["manage_users"]) ? (
-          <Link href="/admin/users/new">
-            <UserPlus size={18} color="var(--adm-primary)" />
-            הוספת עובד
-          </Link>
-        ) : null}
-        {userHasAnyPermission(me, ["create_orders"]) ? (
-          <Link href={adminOrdersHrefWithFilters(sp, { orderWork: "new" })}>
-            <PlusCircle size={18} color="var(--adm-primary)" />
-            קליטת הזמנה
-          </Link>
-        ) : null}
-        {userHasAnyPermission(me, ["receive_payments"]) ? (
-          <Link href={hrefModal("capture-payment")}>
-            <Wallet size={18} color="var(--adm-primary)" />
-            קליטת תשלום
-          </Link>
-        ) : null}
-        {userHasAnyPermission(me, ["view_orders"]) ? (
-          <Link href={adminOrdersHrefWithFilters(sp, {})}>
-            <ShoppingCart size={18} color="var(--adm-primary)" />
-            רשימת הזמנות
-          </Link>
-        ) : null}
-        {userHasAnyPermission(me, ["import_excel"]) ? (
-          <Link href="/admin/import">
-            <FileSpreadsheet size={18} color="var(--adm-primary)" />
-            ייבוא Excel
-          </Link>
-        ) : null}
-        {userHasAnyPermission(me, ["manage_settings"]) ? (
-          <Link href={hrefModal("financial")}>
-            <Settings2 size={18} color="var(--adm-primary)" />
-            הגדרות כספים
-          </Link>
-        ) : null}
-      </div>
+      <DashboardQuickActions
+        searchParams={sp}
+        canManageUsers={userHasAnyPermission(me, ["manage_users"])}
+        canCreateOrders={userHasAnyPermission(me, ["create_orders"])}
+        canReceivePayments={userHasAnyPermission(me, ["receive_payments"])}
+        canViewOrders={userHasAnyPermission(me, ["view_orders"])}
+        canImportExcel={userHasAnyPermission(me, ["import_excel"])}
+        canManageSettings={userHasAnyPermission(me, ["manage_settings"])}
+      />
 
       <h2 className="adm-section-title adm-section-title--sm">מצב תפעול</h2>
       <div className="adm-card-grid adm-card-grid--dense adm-card-grid--inline">

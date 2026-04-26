@@ -25,9 +25,27 @@ export function formatLocalYmd(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
+export function formatLocalHm(d: Date): string {
+  const h = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  return `${h}:${min}`;
+}
+
 export function parseLocalDate(ymd: string): Date {
   const [y, m, d] = ymd.split("-").map((x) => Number(x));
   return new Date(y, m - 1, d, 0, 0, 0, 0);
+}
+
+/** תאריך מקומי + שעה (HH:mm) לאובייקט Date אחד */
+export function parseLocalDateTime(ymd: string, hm: string): Date {
+  const [y, mo, da] = ymd.split("-").map((x) => Number(x));
+  const t = (hm || "00:00").trim();
+  const [hhRaw, mmRaw] = t.split(":");
+  const hh = Number(hhRaw);
+  const mm = Number(mmRaw);
+  const safeH = Number.isFinite(hh) ? Math.min(23, Math.max(0, Math.floor(hh))) : 0;
+  const safeM = Number.isFinite(mm) ? Math.min(59, Math.max(0, Math.floor(mm))) : 0;
+  return new Date(y, mo - 1, da, safeH, safeM, 0, 0);
 }
 
 export function endOfLocalDay(ymd: string): Date {

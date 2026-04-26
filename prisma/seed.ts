@@ -492,6 +492,28 @@ async function main() {
   }));
   await prisma.customer.createMany({ data: customerRows });
 
+  const captureTestCustomers = [
+    { displayName: "SAMI ATIGA", customerCode: "90001", customerType: "רגיל", phone: "0501234567" },
+    { displayName: "AHMAD KAREEM", customerCode: "90002", customerType: "עסקי", phone: "0529876543" },
+    { displayName: "MOHAMMED SALEH", customerCode: "90003", customerType: "רגיל", phone: "0541112233" },
+    { displayName: "YOUSEF HASSAN", customerCode: "90004", customerType: "עסקי", phone: "0533334444" },
+    { displayName: "OMAR BAZAR", customerCode: "90005", customerType: "רגיל", phone: "0522223333" },
+  ];
+  for (const c of captureTestCustomers) {
+    await prisma.customer.upsert({
+      where: { customerCode: c.customerCode },
+      update: { displayName: c.displayName, phone: c.phone, customerType: c.customerType, isActive: true },
+      create: {
+        displayName: c.displayName,
+        nameEn: c.displayName,
+        customerCode: c.customerCode,
+        customerType: c.customerType,
+        phone: c.phone,
+        isActive: true,
+      },
+    });
+  }
+
   const customers = await prisma.customer.findMany({
     where: { customerCode: { startsWith: CUSTOMER_PREFIX } },
     orderBy: { customerCode: "asc" },
