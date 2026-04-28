@@ -1,3 +1,4 @@
+import { OrderStatus } from "@prisma/client";
 import { OrdersListShell, type OrderListRow } from "@/components/admin/OrdersListShell";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { requireRoutePermission } from "@/lib/route-access";
@@ -16,11 +17,14 @@ export default async function OrdersListPage({
   const canCreateOrders = userHasAnyPermission(me, ["create_orders"]);
   const canEditOrders = userHasAnyPermission(me, ["edit_orders"]);
   const canViewCustomerCard = userHasAnyPermission(me, ["view_customer_card"]);
+  const rawStatus = typeof sp.status === "string" ? sp.status : "";
+  const status = Object.values(OrderStatus).includes(rawStatus as OrderStatus) ? (rawStatus as OrderStatus) : null;
 
   const rows = await prisma.order.findMany({
     where: {
       deletedAt: null,
       orderDate: { gte: range.fromStart, lte: range.toEnd },
+      ...(status ? { status } : {}),
     },
     orderBy: [{ orderDate: "desc" }, { createdAt: "desc" }],
     take: 120,

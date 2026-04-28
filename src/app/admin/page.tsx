@@ -1,10 +1,8 @@
 import Link from "next/link";
-import { Banknote, ClipboardList, ShoppingCart, Users } from "lucide-react";
-import { DashboardActivityFeed } from "@/components/admin/DashboardActivityFeed";
+import { AlertTriangle, Banknote, CheckCircle2, ClipboardList, ShoppingCart, TrendingUp, Users, Wallet } from "lucide-react";
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { getDashboardStats } from "@/lib/dashboard-stats";
-import { getCurrentFinancialSettings, serializeFinancialSettings } from "@/lib/financial-settings";
-import { adminHrefWithFilters } from "@/lib/admin-href";
+import { adminOrdersHrefWithFilters } from "@/lib/admin-href";
 import { DashboardQuickActions } from "@/components/admin/DashboardQuickActions";
 import { parseDateFilterFromSearchParams } from "@/lib/work-week";
 
@@ -19,83 +17,56 @@ export default async function AdminDashboardPage({
   const showStaffStats = isAdminUser(me) || me.permissionKeys.includes("manage_users");
 
   const stats = await getDashboardStats({ fromStart: range.fromStart, toEnd: range.toEnd }, me);
-  const finSerialized = serializeFinancialSettings(await getCurrentFinancialSettings());
-
-  const hrefModal = (modal: string) => adminHrefWithFilters(sp, { modal });
+  const alertsTotal =
+    stats.alerts.pendingPaymentsOlderThan24h + stats.alerts.unpaidOrders + stats.alerts.highBalanceCustomers;
+  const paymentsPaidHref = "/admin/source-tables/payments?search=%D7%9B%D7%9F";
+  const paymentsPendingHref = "/admin/source-tables/payments?search=%D7%9C%D7%90";
 
   return (
     <div className="adm-dashboard">
-      <p className="adm-dashboard-lead">
-        מסך בית תפעולי — סיכום לפי הטווח הנבחר. טווח פעיל:{" "}
-        <strong>
-          {range.weekCode} · {range.fromYmd} – {range.toYmd}
-        </strong>
-      </p>
+      <section className="adm-dashboard-hero">
+        <div>
+          <h1>מה קורה עכשיו במערכת</h1>
+          <p>
+            טווח פעיל: <strong>{range.weekCode} · {range.fromYmd} – {range.toYmd}</strong>
+          </p>
+        </div>
+      </section>
 
-      <div className="adm-card-grid adm-card-grid--dense">
+      <section className="adm-dashboard-kpis">
+        <Link className="adm-dash-kpi adm-dash-kpi--blue" href={adminOrdersHrefWithFilters(sp, {})}>
+          <ShoppingCart size={22} />
+          <span>הזמנות בטווח</span>
+          <strong>{stats.ordersInRange}</strong>
+          <small>מעבר לדף הזמנות</small>
+        </Link>
+        <Link className="adm-dash-kpi adm-dash-kpi--orange" href={adminOrdersHrefWithFilters(sp, { status: "OPEN" })}>
+          <ClipboardList size={22} />
+          <span>הזמנות פתוחות</span>
+          <strong>{stats.openOrdersInRange}</strong>
+          <small>סינון OPEN</small>
+        </Link>
+        <Link className="adm-dash-kpi adm-dash-kpi--green" href={paymentsPaidHref}>
+          <Wallet size={22} />
+          <span>תשלומים שהתקבלו</span>
+          <strong>{stats.paymentsReceivedCount}</strong>
+          <small>תשלומים ששולמו</small>
+        </Link>
+        <Link className="adm-dash-kpi adm-dash-kpi--red" href={paymentsPendingHref}>
+          <Banknote size={22} />
+          <span>תשלומים ממתינים</span>
+          <strong>{stats.pendingPaymentsCount}</strong>
+          <small>דורש טיפול</small>
+        </Link>
         {showStaffStats ? (
-          <>
-            <div className="adm-card adm-card--dense">
-              <div className="adm-card-title adm-card-title--sm">משתמשים רשומים</div>
-              <div className="adm-card-value adm-card-value--sm">{stats.registeredUsers}</div>
-              <div className="adm-card-foot">סה״כ במערכת</div>
-            </div>
-            <div className="adm-card adm-card--dense">
-              <div className="adm-card-title adm-card-title--sm">משתמשים פעילים</div>
-              <div className="adm-card-value adm-card-value--sm">{stats.activeUsers}</div>
-              <div className="adm-card-foot">מתוך הרשאות ניהול</div>
-            </div>
-          </>
+          <Link className="adm-dash-kpi adm-dash-kpi--slate" href="/admin/users">
+            <Users size={22} />
+            <span>משתמשים</span>
+            <strong>{stats.registeredUsers}</strong>
+            <small>מעבר לעובדים</small>
+          </Link>
         ) : null}
-        <div className="adm-card adm-card--dense">
-          <div className="adm-card-title adm-card-title--sm">הזמנות בטווח</div>
-          <div className="adm-card-value adm-card-value--sm">{stats.ordersInRange}</div>
-          <div className="adm-card-foot">לפי תאריך הזמנה · לפי טווח התאריכים שנבחר</div>
-        </div>
-        <div className="adm-card adm-card--dense">
-          <div className="adm-card-title adm-card-title--sm">הזמנות פתוחות</div>
-          <div className="adm-card-value adm-card-value--sm">{stats.openOrdersInRange}</div>
-          <div className="adm-card-foot">בטווח · לפי טווח התאריכים שנבחר</div>
-        </div>
-        <div className="adm-card adm-card--dense">
-          <div className="adm-card-title adm-card-title--sm">תשלומים שהתקבלו</div>
-          <div className="adm-card-value adm-card-value--sm">{stats.paymentsReceivedCount}</div>
-          <div className="adm-card-foot">לפי תאריך תשלום · לפי טווח התאריכים שנבחר</div>
-        </div>
-        <div className="adm-card adm-card--dense">
-          <div className="adm-card-title adm-card-title--sm">תשלומים ממתינים</div>
-          <div className="adm-card-value adm-card-value--sm">{stats.pendingPaymentsCount}</div>
-          <div className="adm-card-foot">לפי תאריך תשלום · לפי טווח התאריכים שנבחר</div>
-        </div>
-        <div className="adm-card adm-card--dense">
-          <div className="adm-card-title adm-card-title--sm">שער דולר (סופי)</div>
-          <div className="adm-card-value adm-card-value--sm" dir="ltr">
-            {finSerialized ? `₪ ${finSerialized.finalDollarRate}` : "—"}
-          </div>
-          <div className="adm-card-foot">
-            {finSerialized ? (
-              <>
-                בסיס {finSerialized.baseDollarRate} + עמלה {finSerialized.dollarFee}
-                {userHasAnyPermission(me, ["manage_settings"]) ? (
-                  <>
-                    {" "}
-                    · <Link href={hrefModal("financial")}>עדכון הגדרות</Link>
-                  </>
-                ) : null}
-              </>
-            ) : (
-              "טען הגדרות כספים"
-            )}
-          </div>
-        </div>
-        <div className="adm-card adm-card--dense adm-card--wide adm-card--activity">
-          <div className="adm-card-title adm-card-title--sm">פעילות אחרונה</div>
-          <div className="adm-card-activity-wrap">
-            <DashboardActivityFeed items={stats.recentActivities} />
-          </div>
-          <div className="adm-card-foot">הזמנות, תשלומים ולקוחות · לפי טווח התאריכים שנבחר</div>
-        </div>
-      </div>
+      </section>
 
       <h2 className="adm-section-title adm-section-title--sm">פעולות מהירות</h2>
       <DashboardQuickActions
@@ -108,39 +79,85 @@ export default async function AdminDashboardPage({
         canManageSettings={userHasAnyPermission(me, ["manage_settings"])}
       />
 
-      <h2 className="adm-section-title adm-section-title--sm">מצב תפעול</h2>
-      <div className="adm-card-grid adm-card-grid--dense adm-card-grid--inline">
-        <div className="adm-card adm-card--dense adm-card--inline">
-          <ShoppingCart size={22} color="var(--adm-warning)" />
-          <div>
-            <div className="adm-card-title adm-card-title--sm">הזמנות בשורה</div>
-            <div className="adm-card-value adm-card-value--sm">{stats.openOrdersInRange}</div>
-          </div>
-        </div>
-        <div className="adm-card adm-card--dense adm-card--inline">
-          <Banknote size={22} color="var(--adm-success)" />
-          <div>
-            <div className="adm-card-title adm-card-title--sm">תשלומים לטיפול</div>
-            <div className="adm-card-value adm-card-value--sm">{stats.pendingPaymentsCount}</div>
-          </div>
-        </div>
-        <div className="adm-card adm-card--dense adm-card--inline">
-          <ClipboardList size={22} color="var(--adm-primary)" />
-          <div>
-            <div className="adm-card-title adm-card-title--sm">שבוע בפילטר</div>
-            <div className="adm-card-value adm-card-value--sm">{range.weekCode}</div>
-          </div>
-        </div>
-        {showStaffStats ? (
-          <div className="adm-card adm-card--dense adm-card--inline">
-            <Users size={22} color="var(--adm-muted)" />
-            <div>
-              <div className="adm-card-title adm-card-title--sm">צוות פעיל</div>
-              <div className="adm-card-value adm-card-value--sm">{stats.activeUsers}</div>
+      <section className="adm-dashboard-bottom-grid">
+        <div className="adm-dash-panel">
+          <h2>מצב תפעול</h2>
+          <div className="adm-ops-grid">
+            <div className={`adm-ops-card ${stats.openOrdersInRange > 20 ? "adm-ops-card--red" : stats.openOrdersInRange > 0 ? "adm-ops-card--orange" : "adm-ops-card--green"}`}>
+              <ShoppingCart size={20} />
+              <span>הזמנות בתהליך</span>
+              <strong>{stats.openOrdersInRange}</strong>
+            </div>
+            <div className={`adm-ops-card ${stats.pendingPaymentsCount > 10 ? "adm-ops-card--red" : stats.pendingPaymentsCount > 0 ? "adm-ops-card--orange" : "adm-ops-card--green"}`}>
+              <Banknote size={20} />
+              <span>תשלומים לטיפול</span>
+              <strong>{stats.pendingPaymentsCount}</strong>
+            </div>
+            {showStaffStats ? (
+              <div className={`adm-ops-card ${stats.activeUsers > 0 ? "adm-ops-card--green" : "adm-ops-card--red"}`}>
+                <Users size={20} />
+                <span>צוות פעיל</span>
+                <strong>{stats.activeUsers}</strong>
+              </div>
+            ) : null}
+            <div className="adm-ops-card adm-ops-card--green">
+              <ClipboardList size={20} />
+              <span>שבוע עבודה</span>
+              <strong>{range.weekCode}</strong>
             </div>
           </div>
-        ) : null}
-      </div>
+        </div>
+
+        <div className="adm-dash-panel">
+          <h2>התראות מערכת</h2>
+          {alertsTotal === 0 ? (
+            <div className="adm-dash-empty">
+              <CheckCircle2 size={22} />
+              <strong>הכל תקין ✅</strong>
+              <Link href="/admin/orders">בצע פעולה</Link>
+            </div>
+          ) : (
+            <div className="adm-alert-list">
+              <Link href={paymentsPendingHref} className="adm-alert-item">
+                <AlertTriangle size={18} />
+                <span>תשלומים ממתינים מעל 24 שעות</span>
+                <strong>{stats.alerts.pendingPaymentsOlderThan24h}</strong>
+              </Link>
+              <Link href={adminOrdersHrefWithFilters(sp, { status: "OPEN" })} className="adm-alert-item">
+                <AlertTriangle size={18} />
+                <span>הזמנות ללא תשלום</span>
+                <strong>{stats.alerts.unpaidOrders}</strong>
+              </Link>
+              <Link href="/admin/balances" className="adm-alert-item">
+                <AlertTriangle size={18} />
+                <span>לקוחות עם יתרה גבוהה</span>
+                <strong>{stats.alerts.highBalanceCustomers}</strong>
+              </Link>
+            </div>
+          )}
+        </div>
+
+        <div className="adm-dash-panel adm-dash-panel--daily">
+          <h2>סיכום יומי</h2>
+          <div className="adm-daily-grid">
+            <div>
+              <Wallet size={18} />
+              <span>תשלומים היום</span>
+              <strong>{stats.daily.paymentsToday}</strong>
+            </div>
+            <div>
+              <ShoppingCart size={18} />
+              <span>הזמנות היום</span>
+              <strong>{stats.daily.ordersToday}</strong>
+            </div>
+            <div>
+              <TrendingUp size={18} />
+              <span>סכום כולל</span>
+              <strong dir="ltr">{stats.daily.totalIls}</strong>
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }

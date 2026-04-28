@@ -6,13 +6,23 @@ export type OrderCaptureWindowProps = { mode: "create" } | { mode: "edit"; order
 
 export type CustomerCardWindowProps = {
   customerId?: string | null;
+  customerName?: string | null;
+  initialTab?: "details" | "ledger";
+};
+
+export type PaymentWindowProps = {
+  customerId?: string | null;
+  customerName?: string | null;
+  orderId?: string | null;
+  orderNumber?: string | null;
+  amountIls?: string | null;
 };
 
 export type AdminWindowPayload =
   | { type: "orderCapture"; props: OrderCaptureWindowProps }
   | { type: "customerCard"; props: CustomerCardWindowProps }
   | { type: "createCustomer" }
-  | { type: "payments" };
+  | { type: "payments"; props?: PaymentWindowProps };
 
 export type AdminWindowEntry = { id: string } & AdminWindowPayload;
 

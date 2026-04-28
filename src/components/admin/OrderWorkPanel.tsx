@@ -504,17 +504,22 @@ export function OrderWorkPanel({ windowId, financial, onToast, canCreateOrders, 
     void listCustomersForOrderQuickPickAction().then(setCustomerPickList);
   }, [canCreateOrders, canEditOrders, panelKey]);
 
-  async function openCustomerCard() {
+  async function openCustomerLedger() {
     let id = selectedCustomer?.id;
+    let name = selectedCustomer?.label ?? "";
     if (!id && customerQuery.trim()) {
       const r = await resolveCustomerForCaptureAction(customerQuery.trim());
       if (r) {
         pickCustomer(r);
         id = r.id;
+        name = r.label;
       }
     }
-    if (!id) return;
-    openWindow({ type: "customerCard", props: { customerId: id } });
+    if (!id) {
+      setErr("יש לבחור לקוח קודם");
+      return;
+    }
+    openWindow({ type: "customerCard", props: { customerId: id, customerName: name, initialTab: "ledger" } });
   }
 
   async function onSubmit(e: React.FormEvent) {
@@ -736,20 +741,33 @@ export function OrderWorkPanel({ windowId, financial, onToast, canCreateOrders, 
               <div className="adm-cust-panel-stack">
                 <div className="adm-field adm-field--capture">
                   <label htmlFor={idp("cust-sel")}>בחר לקוח במערכת</label>
-                  <select
-                    id={idp("cust-sel")}
-                    className="adm-cust-quick-select"
-                    value={selectedCustomer?.id ?? ""}
-                    disabled={busy}
-                    onChange={(e) => handleCustomerDropdownSelect(e.target.value)}
-                  >
-                    <option value="">— בחרו לקוח מהרשימה —</option>
-                    {customerDropdownRows.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.label} ({customerDisplayCode(c)})
-                      </option>
-                    ))}
-                  </select>
+                  <div className="adm-cust-select-with-ledger">
+                    <select
+                      id={idp("cust-sel")}
+                      className="adm-cust-quick-select"
+                      value={selectedCustomer?.id ?? ""}
+                      disabled={busy}
+                      onChange={(e) => handleCustomerDropdownSelect(e.target.value)}
+                    >
+                      <option value="">— בחרו לקוח מהרשימה —</option>
+                      {customerDropdownRows.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.label} ({customerDisplayCode(c)})
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="adm-btn adm-btn--ghost adm-btn--dense adm-btn--xs adm-cust-ledger-open"
+                      disabled={busy}
+                      onClick={() => void openCustomerLedger()}
+                      title={selectedCustomer ? `כרטסת לקוח: ${selectedCustomer.label}` : "יש לבחור לקוח קודם"}
+                      aria-label="פתיחת כרטסת לקוח"
+                    >
+                      <span aria-hidden>📊</span>
+                      <span>כרטסת לקוח</span>
+                    </button>
+                  </div>
                 </div>
 
                 {selectedCustomer ? (
@@ -780,14 +798,6 @@ export function OrderWorkPanel({ windowId, financial, onToast, canCreateOrders, 
                       ))}
                     </select>
                   </div>
-                  <button
-                    type="button"
-                    className="adm-btn adm-btn--ghost adm-btn--dense adm-btn--xs adm-cust-card-open"
-                    disabled={busy || !selectedCustomer?.id}
-                    onClick={() => void openCustomerCard()}
-                  >
-                    כרטסת
-                  </button>
                 </div>
 
                 <div className="adm-field adm-field--capture adm-cust-search-adv">

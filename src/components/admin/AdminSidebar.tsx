@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import { logoutAction } from "@/app/admin/actions";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
-import type { AdminWindowPayload, AdminWindowType } from "@/lib/admin-windows";
+import type { AdminWindowPayload } from "@/lib/admin-windows";
 
 function NavIcon({ id }: { id: NavIconId }) {
   const common = { size: 18 as const };
@@ -98,7 +98,7 @@ function linkActive(pathname: string, item: NavItemDef, resolvedHref: string, sp
   const query = q >= 0 ? resolvedHref.slice(q + 1) : "";
 
   if (!query) {
-    return pathname === resolvedHref || pathname.startsWith(`${resolvedHref}/`);
+    return pathname === path || pathname.startsWith(`${path}/`);
   }
 
   if (pathname !== path) return false;
@@ -113,13 +113,11 @@ function NavBlock({
   section,
   pathname,
   sp,
-  isWindowTypeOpen,
   openWindow,
 }: {
   section: NavSectionDef;
   pathname: string;
   sp: URLSearchParams;
-  isWindowTypeOpen: (t: AdminWindowType) => boolean;
   openWindow: (p: AdminWindowPayload) => void;
 }) {
   return (
@@ -127,7 +125,7 @@ function NavBlock({
       <div className="adm-nav-label">{section.title}</div>
       {section.items.map((item) => {
         const resolved = resolveNavHref(item, sp);
-        const active = item.openWindow ? isWindowTypeOpen(item.openWindow.type) : linkActive(pathname, item, resolved, sp);
+        const active = item.openWindow ? false : linkActive(pathname, item, resolved, sp);
         const key = `${section.title}-${item.label}-${item.openWindow?.type ?? "link"}`;
         if (item.openWindow) {
           return (
@@ -144,7 +142,13 @@ function NavBlock({
           );
         }
         return (
-          <Link key={key} href={resolved} className="adm-nav-link" data-active={active ? "true" : "false"}>
+          <Link
+            key={key}
+            href={resolved}
+            className="adm-nav-link"
+            data-active={active ? "true" : "false"}
+            aria-current={active ? "page" : undefined}
+          >
             <NavIcon id={item.icon} />
             {item.label}
           </Link>
@@ -157,7 +161,7 @@ function NavBlock({
 export function AdminSidebar({ sections }: { sections: NavSectionDef[] }) {
   const pathname = usePathname();
   const sp = useSearchParams();
-  const { openWindow, isWindowTypeOpen } = useAdminWindows();
+  const { openWindow } = useAdminWindows();
   return (
     <aside className="adm-sidebar">
       <div className="adm-brand">
@@ -171,7 +175,6 @@ export function AdminSidebar({ sections }: { sections: NavSectionDef[] }) {
             section={section}
             pathname={pathname}
             sp={sp}
-            isWindowTypeOpen={isWindowTypeOpen}
             openWindow={openWindow}
           />
         ))}

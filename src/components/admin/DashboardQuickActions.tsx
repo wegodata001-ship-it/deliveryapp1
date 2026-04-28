@@ -36,40 +36,40 @@ export function DashboardQuickActions({
 
   return (
     <div className="adm-quick adm-quick--dense">
-      {canManageUsers ? (
-        <Link href="/admin/users/new">
-          <UserPlus size={18} color="var(--adm-primary)" />
-          הוספת עובד
-        </Link>
-      ) : null}
       {canCreateOrders ? (
         <button type="button" onClick={() => openWindow({ type: "orderCapture", props: { mode: "create" } })}>
-          <PlusCircle size={18} color="var(--adm-primary)" />
+          <PlusCircle size={20} />
           קליטת הזמנה
         </button>
       ) : null}
       {canReceivePayments ? (
         <button type="button" onClick={() => openWindow({ type: "payments" })}>
-          <Wallet size={18} color="var(--adm-primary)" />
+          <Wallet size={20} />
           קליטת תשלום
         </button>
       ) : null}
       {canViewOrders ? (
         <Link href={adminOrdersHrefWithFilters(sp, {})}>
-          <ShoppingCart size={18} color="var(--adm-primary)" />
+          <ShoppingCart size={20} />
           רשימת הזמנות
         </Link>
       ) : null}
       {canImportExcel ? (
-        <Link href="/admin/import">
-          <FileSpreadsheet size={18} color="var(--adm-primary)" />
-          ייבוא Excel
+        <Link href="/admin/reports">
+          <FileSpreadsheet size={20} />
+          ייצוא Excel
         </Link>
       ) : null}
       {canManageSettings ? (
         <Link href={hrefModal("financial")}>
-          <Settings2 size={18} color="var(--adm-primary)" />
+          <Settings2 size={20} />
           הגדרות כספים
+        </Link>
+      ) : null}
+      {canManageUsers ? (
+        <Link href="/admin/users">
+          <UserPlus size={20} />
+          עובדים
         </Link>
       ) : null}
     </div>

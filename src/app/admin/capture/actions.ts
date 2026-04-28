@@ -1,11 +1,12 @@
 "use server";
 
+import { randomUUID } from "crypto";
 import { OrderStatus, PaymentMethod, Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { breakdownIlsIncludingVat, computeFromUsdAmount } from "@/lib/financial-calc";
 import { ensureDefaultFinancialSettings, getCurrentFinancialSettings } from "@/lib/financial-settings";
-import { formatLocalHm, formatLocalYmd, parseLocalDate, parseLocalDateTime } from "@/lib/work-week";
+import { formatLocalHm, formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate, parseLocalDateTime } from "@/lib/work-week";
 import { escapeRegExp, orderNumberMatchesWeekFormat } from "@/lib/order-number";
 import { prisma } from "@/lib/prisma";
 import { parseSplitPaymentMethodRaw } from "@/lib/order-capture-payment-methods";
@@ -27,10 +28,61 @@ export type OrderCaptureSavedSummary = {
   payments: { paymentMethod: PaymentMethod; amountUsd: string }[];
 };
 
-export type CaptureState = { ok: true; saved?: OrderCaptureSavedSummary } | { ok: false; error: string };
+export type PaymentCaptureSavedSummary = {
+  paymentId: string;
+  paymentCode: string | null;
+  customerLabel: string;
+  customerCode: string | null;
+  paymentDateYmd: string;
+  paymentTimeHm: string;
+  paymentPlace: string | null;
+  paymentMethod: PaymentMethod;
+  amountDisplay: string;
+  totalIlsWithVat: string;
+  totalIlsWithoutVat: string;
+  vatAmount: string;
+  orderNumber: string | null;
+};
+
+export type CaptureState =
+  | { ok: true; saved?: OrderCaptureSavedSummary }
+  | { ok: false; error: string };
+
+export type PaymentCaptureState =
+  | { ok: true; saved: PaymentCaptureSavedSummary }
+  | { ok: false; error: string };
 
 const PAYMENT_METHODS = new Set<string>(Object.values(PaymentMethod));
 const ORDER_STATUSES = new Set<string>(Object.values(OrderStatus));
+
+const PAYMENT_CODE_PREFIX = "WGP-P-";
+
+function paymentCodeSuffixPattern(): RegExp {
+  return new RegExp(`^${escapeRegExp(PAYMENT_CODE_PREFIX)}(\\d{6})$`);
+}
+
+async function allocateNextPaymentCode(): Promise<string> {
+  const re = paymentCodeSuffixPattern();
+  const rows = await prisma.payment.findMany({
+    where: { paymentCode: { startsWith: PAYMENT_CODE_PREFIX } },
+    select: { paymentCode: true },
+    take: 200,
+  });
+  let maxN = 0;
+  for (const r of rows) {
+    const c = r.paymentCode?.trim();
+    if (!c) continue;
+    const m = c.match(re);
+    if (m?.[1]) maxN = Math.max(maxN, parseInt(m[1], 10));
+  }
+  for (let bump = 0; bump < 200; bump++) {
+    const n = maxN + 1 + bump;
+    const code = `${PAYMENT_CODE_PREFIX}${String(n).padStart(6, "0")}`;
+    const dup = await prisma.payment.findFirst({ where: { paymentCode: code }, select: { id: true } });
+    if (!dup) return code;
+  }
+  return `${PAYMENT_CODE_PREFIX}${Date.now().toString(36).toUpperCase()}`;
+}
 
 export type OrderCapturePaymentLineInput = {
   paymentMethod: string;
@@ -138,11 +190,23 @@ function isSameLocalCalendarDay(a: Date, b: Date): boolean {
 export type OrderPaymentContextPayload = {
   orderId: string;
   orderNumber: string;
+  customerId: string | null;
   customerLabel: string;
   totalUsd: string;
   paidUsd: string;
   remainingUsd: string;
 };
+
+export type CustomerPaymentDetailPayload = {
+  id: string;
+  displayName: string;
+  nameHe: string | null;
+  nameAr: string | null;
+  nameEn: string | null;
+  customerCode: string | null;
+};
+
+export type PaymentLocationOptionRow = { id: string; name: string; code: string | null; label: string };
 
 /** טעינת הקשר הזמנה לקליטת תשלום (מספר הזמנה) — ללא שינוי בקליטת הזמנה */
 export async function fetchOrderForPaymentContextAction(
@@ -161,6 +225,7 @@ export async function fetchOrderForPaymentContextAction(
     select: {
       id: true,
       orderNumber: true,
+      customerId: true,
       customerNameSnapshot: true,
       customer: { select: { displayName: true } },
       totalUsd: true,
@@ -188,6 +253,7 @@ export async function fetchOrderForPaymentContextAction(
     data: {
       orderId: order.id,
       orderNumber: order.orderNumber ?? q,
+      customerId: order.customerId,
       customerLabel: label,
       totalUsd: totalUsdVal.toFixed(2),
       paidUsd: paidUsd.toFixed(2),
@@ -196,16 +262,111 @@ export async function fetchOrderForPaymentContextAction(
   };
 }
 
+export async function previewPaymentCodeForCaptureAction(): Promise<
+  { ok: true; code: string } | { ok: false; error: string }
+> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["receive_payments"])) {
+    return { ok: false, error: "אין הרשאה" };
+  }
+  return { ok: true, code: await allocateNextPaymentCode() };
+}
+
+export async function listPaymentLocationsForPaymentAction(): Promise<PaymentLocationOptionRow[]> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["receive_payments"])) return [];
+
+  const rows = await prisma.$queryRaw<Array<{ id: string; name: string; code: string | null }>>`
+    SELECT "id", "name", "code"
+    FROM "PaymentLocation"
+    WHERE "isActive" = true
+    ORDER BY "name" ASC
+  `;
+  return rows.map((p) => ({
+    id: p.id,
+    name: p.name,
+    code: p.code,
+    label: p.code?.trim() ? `${p.name} (${p.code})` : p.name,
+  }));
+}
+
+export async function createPaymentLocationForPaymentAction(form: {
+  name: string;
+  code?: string | null;
+}): Promise<{ ok: true; data: PaymentLocationOptionRow } | { ok: false; error: string }> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["receive_payments"])) {
+    return { ok: false, error: "אין הרשאה" };
+  }
+
+  const name = form.name.trim();
+  const code = form.code?.trim() || null;
+  if (!name) return { ok: false, error: "יש להזין שם מקום" };
+
+  if (code) {
+    const dup = await prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT "id"
+      FROM "PaymentLocation"
+      WHERE LOWER("code") = LOWER(${code})
+      LIMIT 1
+    `;
+    if (dup.length > 0) return { ok: false, error: "קוד מקום כבר קיים" };
+  }
+
+  const id = randomUUID();
+  await prisma.$executeRaw`
+    INSERT INTO "PaymentLocation" ("id", "name", "code", "isActive", "createdAt", "updatedAt")
+    VALUES (${id}, ${name}, ${code}, true, NOW(), NOW())
+  `;
+
+  return {
+    ok: true,
+    data: {
+      id,
+      name,
+      code,
+      label: code ? `${name} (${code})` : name,
+    },
+  };
+}
+
+export async function getCustomerDetailsForPaymentAction(
+  customerId: string,
+): Promise<CustomerPaymentDetailPayload | null> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["receive_payments"])) return null;
+
+  const id = customerId.trim();
+  if (!id) return null;
+
+  const row = await prisma.customer.findFirst({
+    where: { id, deletedAt: null, isActive: true },
+    select: { id: true, displayName: true, nameHe: true, nameAr: true, nameEn: true, customerCode: true },
+  });
+  if (!row) return null;
+  return {
+    id: row.id,
+    displayName: row.displayName,
+    nameHe: row.nameHe,
+    nameAr: row.nameAr,
+    nameEn: row.nameEn,
+    customerCode: row.customerCode,
+  };
+}
+
 export async function capturePaymentAction(form: {
-  amount: string;
-  currency: "ILS" | "USD";
-  paymentMethod: string;
   paymentDateYmd: string;
   paymentTimeHm?: string;
   receivedToday: boolean;
+  paymentMethod: string;
   notes?: string;
   orderId?: string | null;
-}): Promise<CaptureState> {
+  customerId?: string | null;
+  paymentPlace?: string | null;
+  amountUsd: string;
+  amountIls: string;
+  amountTransferIls: string;
+}): Promise<PaymentCaptureState> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["receive_payments"])) {
     return { ok: false, error: "אין הרשאה" };
@@ -219,31 +380,41 @@ export async function capturePaymentAction(form: {
 
   const snapIn = { baseDollarRate: base, dollarFee: fee, finalDollarRate: final, vatRate };
 
-  let amountDec: Prisma.Decimal;
+  let usdDec: Prisma.Decimal;
+  let ilsDec: Prisma.Decimal;
+  let transferDec: Prisma.Decimal;
   try {
-    amountDec = new Prisma.Decimal(form.amount.trim().replace(",", "."));
+    usdDec = new Prisma.Decimal((form.amountUsd || "").trim().replace(",", ".") || "0");
+    ilsDec = new Prisma.Decimal((form.amountIls || "").trim().replace(",", ".") || "0");
+    transferDec = new Prisma.Decimal((form.amountTransferIls || "").trim().replace(",", ".") || "0");
   } catch {
     return { ok: false, error: "סכום לא תקין" };
   }
-  if (amountDec.lte(0)) return { ok: false, error: "סכום חייב להיות חיובי" };
+  if (usdDec.lt(0) || ilsDec.lt(0) || transferDec.lt(0)) {
+    return { ok: false, error: "סכומים לא יכולים להיות שליליים" };
+  }
 
   if (!PAYMENT_METHODS.has(form.paymentMethod)) {
     return { ok: false, error: "אמצעי תשלום לא תקין" };
   }
 
   const oid = form.orderId?.trim() ?? "";
+  const ilsCashTransfer = ilsDec.add(transferDec);
+  const totalIlsGrossInput = ilsCashTransfer.add(usdDec.mul(final));
+  if (totalIlsGrossInput.lte(0)) {
+    return { ok: false, error: "יש להזין סכום חיובי (דולר ו/או שקל / העברה)" };
+  }
 
-  const payUsdEst =
-    form.currency === "USD"
-      ? amountDec.toDecimalPlaces(4, 4)
-      : amountDec.div(final).toDecimalPlaces(4, 4);
+  const payUsdEst = totalIlsGrossInput.div(final).toDecimalPlaces(4, 4);
 
   let orderCustomerId: string | null = null;
+  let orderWeekCode: string | null = null;
   if (oid) {
     const orderRow = await prisma.order.findFirst({
       where: { id: oid, deletedAt: null },
       select: {
         customerId: true,
+        weekCode: true,
         totalUsd: true,
         amountUsd: true,
         commissionUsd: true,
@@ -251,6 +422,7 @@ export async function capturePaymentAction(form: {
     });
     if (!orderRow) return { ok: false, error: "הזמנה לא נמצאה" };
     orderCustomerId = orderRow.customerId;
+    orderWeekCode = orderRow.weekCode?.trim() || null;
 
     const deal = orderRow.amountUsd ?? new Prisma.Decimal(0);
     const com = orderRow.commissionUsd ?? new Prisma.Decimal(0);
@@ -269,6 +441,17 @@ export async function capturePaymentAction(form: {
     }
   }
 
+  const cid = (form.customerId?.trim() || orderCustomerId || "").trim();
+  if (!cid) {
+    return { ok: false, error: "יש לבחור לקוח" };
+  }
+
+  const custOk = await prisma.customer.findFirst({
+    where: { id: cid, deletedAt: null, isActive: true },
+    select: { id: true, displayName: true, customerCode: true },
+  });
+  if (!custOk) return { ok: false, error: "לקוח לא נמצא" };
+
   const today = new Date();
   const todayYmd = formatLocalYmd(today);
   const hm = (form.paymentTimeHm ?? "").trim();
@@ -285,20 +468,24 @@ export async function capturePaymentAction(form: {
 
   let amountUsd: Prisma.Decimal | null = null;
   let amountIls: Prisma.Decimal | null = null;
+  let currency: "ILS" | "USD";
   let totals: ReturnType<typeof computeFromUsdAmount> | ReturnType<typeof breakdownIlsIncludingVat> & {
     snapshotBaseDollarRate: Prisma.Decimal;
     snapshotDollarFee: Prisma.Decimal;
     snapshotFinalDollarRate: Prisma.Decimal;
   };
 
-  if (form.currency === "USD") {
-    amountUsd = amountDec;
-    totals = computeFromUsdAmount(amountDec, snapIn);
+  const vatFactor = new Prisma.Decimal(1).add(vatRate.div(new Prisma.Decimal(100)));
+
+  if (ilsCashTransfer.isZero() && usdDec.gt(0)) {
+    currency = "USD";
+    amountUsd = usdDec;
+    totals = computeFromUsdAmount(usdDec, snapIn);
     amountIls = totals.totalIlsWithVat;
   } else {
-    amountIls = amountDec;
-    const vatFactor = new Prisma.Decimal(1).add(vatRate.div(new Prisma.Decimal(100)));
-    const br = breakdownIlsIncludingVat(amountDec, vatFactor);
+    currency = "ILS";
+    const totalIlsGross = totalIlsGrossInput.toDecimalPlaces(2, 4);
+    const br = breakdownIlsIncludingVat(totalIlsGross, vatFactor);
     totals = {
       snapshotBaseDollarRate: base,
       snapshotDollarFee: fee,
@@ -307,15 +494,22 @@ export async function capturePaymentAction(form: {
       totalIlsWithoutVat: br.totalIlsWithoutVat,
       vatAmount: br.vatAmount,
     };
-    amountUsd = oid ? payUsdEst : null;
+    amountIls = totals.totalIlsWithVat;
+    amountUsd = payUsdEst;
   }
+
+  const paymentCode = await allocateNextPaymentCode();
+  const weekCode = orderWeekCode ?? getWeekCodeForLocalDate(paymentDate);
 
   const pay = await prisma.payment.create({
     data: {
+      paymentCode,
       orderId: oid || null,
-      customerId: orderCustomerId,
+      customerId: cid,
+      weekCode,
       paymentDate,
-      currency: form.currency,
+      paymentPlace: form.paymentPlace?.trim() || null,
+      currency,
       amountUsd,
       amountIls,
       exchangeRate: final,
@@ -343,8 +537,10 @@ export async function capturePaymentAction(form: {
     });
     orderNumber = o?.orderNumber ?? null;
   }
-  const amtRaw = form.amount.trim().replace(",", ".");
-  const amountDisplay = form.currency === "USD" ? `${amtRaw} USD` : `${amtRaw} ₪`;
+  const uRaw = (form.amountUsd || "").trim().replace(",", ".") || "0";
+  const iRaw = (form.amountIls || "").trim().replace(",", ".") || "0";
+  const tRaw = (form.amountTransferIls || "").trim().replace(",", ".") || "0";
+  const amountDisplay = `USD ${uRaw} · ₪ ${iRaw} · העברה ₪ ${tRaw}`;
   await prisma.auditLog.create({
     data: {
       userId: me.id,
@@ -352,7 +548,7 @@ export async function capturePaymentAction(form: {
       entityType: "Payment",
       entityId: pay.id,
       metadata: {
-        currency: form.currency,
+        currency,
         amountDisplay,
         orderNumber: orderNumber ?? undefined,
         paymentCode: pay.paymentCode ?? undefined,
@@ -362,7 +558,24 @@ export async function capturePaymentAction(form: {
 
   revalidatePath("/admin");
   revalidatePath("/admin/orders");
-  return { ok: true };
+  return {
+    ok: true,
+    saved: {
+      paymentId: pay.id,
+      paymentCode: pay.paymentCode,
+      customerLabel: custOk.displayName,
+      customerCode: custOk.customerCode,
+      paymentDateYmd: formatLocalYmd(paymentDate),
+      paymentTimeHm: formatLocalHm(paymentDate),
+      paymentPlace: form.paymentPlace?.trim() || null,
+      paymentMethod: form.paymentMethod as PaymentMethod,
+      amountDisplay,
+      totalIlsWithVat: totals.totalIlsWithVat.toFixed(2),
+      totalIlsWithoutVat: totals.totalIlsWithoutVat.toFixed(2),
+      vatAmount: totals.vatAmount.toFixed(2),
+      orderNumber,
+    },
+  };
 }
 
 /** מספור רץ לפי שבוע: {weekCode}-0001 — לפי המקסימום הקיים באותו weekCode */
@@ -401,7 +614,7 @@ async function generateNextOrderNumber(weekCode: string): Promise<{ orderNumber:
 
 export async function searchCustomersForOrderAction(query: string): Promise<CustomerSearchRow[]> {
   const me = await requireAuth();
-  if (!userHasAnyPermission(me, ["create_orders", "edit_orders"])) return [];
+  if (!userHasAnyPermission(me, ["create_orders", "edit_orders", "receive_payments"])) return [];
 
   const q = query.trim();
   const where: Prisma.CustomerWhereInput = {
@@ -446,7 +659,7 @@ export async function searchCustomersForOrderAction(query: string): Promise<Cust
 /** זיהוי לקוח לפי מזהה מערכת, קוד לקוח או קוד ישן — התאמה מדויקת בלבד */
 export async function resolveCustomerForCaptureAction(raw: string): Promise<CustomerSearchRow | null> {
   const me = await requireAuth();
-  if (!userHasAnyPermission(me, ["create_orders", "edit_orders"])) return null;
+  if (!userHasAnyPermission(me, ["create_orders", "edit_orders", "receive_payments"])) return null;
 
   const q = raw.trim();
   if (!q) return null;
@@ -477,7 +690,7 @@ export async function resolveCustomerForCaptureAction(raw: string): Promise<Cust
 /** רשימה קצרה לבחירה מהירה בטופס קליטה */
 export async function listCustomersForOrderQuickPickAction(): Promise<CustomerSearchRow[]> {
   const me = await requireAuth();
-  if (!userHasAnyPermission(me, ["create_orders", "edit_orders"])) return [];
+  if (!userHasAnyPermission(me, ["create_orders", "edit_orders", "receive_payments"])) return [];
 
   const rows = await prisma.customer.findMany({
     where: { isActive: true, deletedAt: null },
@@ -504,16 +717,49 @@ export type CustomerCardOrderRow = {
 };
 
 export type CustomerCardSnapshot = {
+  id: string;
   displayName: string;
+  nameHe: string | null;
+  nameEn: string | null;
   customerCode: string | null;
   phone: string | null;
   secondPhone: string | null;
   city: string | null;
+  address: string | null;
   customerType: string | null;
   orderCount: number;
   ordersUsdSum: string;
   recentOrders: CustomerCardOrderRow[];
 };
+
+export type CustomerLedgerRow = {
+  id: string;
+  dateYmd: string;
+  type: "CHARGE" | "PAYMENT";
+  amountUsd: string;
+  paidUsd: string;
+  balanceUsd: string;
+  document: string;
+};
+
+export type CustomerLedgerPayload = {
+  rows: CustomerLedgerRow[];
+  totalChargesUsd: string;
+  totalPaymentsUsd: string;
+  balanceUsd: string;
+};
+
+function paymentUsdEquivalentForLedger(p: {
+  amountUsd: Prisma.Decimal | null;
+  amountIls: Prisma.Decimal | null;
+  exchangeRate: Prisma.Decimal | null;
+}): Prisma.Decimal {
+  if (p.amountUsd) return p.amountUsd;
+  if (p.amountIls && p.exchangeRate && p.exchangeRate.gt(0)) {
+    return p.amountIls.div(p.exchangeRate).toDecimalPlaces(4, 4);
+  }
+  return new Prisma.Decimal(0);
+}
 
 /** כרטסת לקוח בחלון — פרטים + הזמנות אחרונות */
 export async function getCustomerCardSnapshotAction(customerId: string): Promise<CustomerCardSnapshot | null> {
@@ -527,11 +773,15 @@ export async function getCustomerCardSnapshotAction(customerId: string): Promise
   const cust = await prisma.customer.findFirst({
     where: { id, deletedAt: null, isActive: true },
     select: {
+      id: true,
       displayName: true,
+      nameHe: true,
+      nameEn: true,
       customerCode: true,
       phone: true,
       secondPhone: true,
       city: true,
+      address: true,
       customerType: true,
     },
   });
@@ -558,11 +808,15 @@ export async function getCustomerCardSnapshotAction(customerId: string): Promise
 
   const sum = agg._sum.totalUsd ?? new Prisma.Decimal(0);
   return {
+    id: cust.id,
     displayName: cust.displayName,
+    nameHe: cust.nameHe,
+    nameEn: cust.nameEn,
     customerCode: cust.customerCode,
     phone: cust.phone,
     secondPhone: cust.secondPhone,
     city: cust.city,
+    address: cust.address,
     customerType: cust.customerType,
     orderCount: agg._count,
     ordersUsdSum: sum.toFixed(2),
@@ -573,6 +827,138 @@ export async function getCustomerCardSnapshotAction(customerId: string): Promise
       status: o.status,
     })),
   };
+}
+
+export async function updateCustomerCardDetailsAction(form: {
+  customerId: string;
+  displayName: string;
+  nameHe?: string | null;
+  phone?: string | null;
+  customerCode?: string | null;
+  address?: string | null;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["view_customer_card", "view_customers"])) {
+    return { ok: false, error: "אין הרשאה" };
+  }
+
+  const id = form.customerId.trim();
+  if (!id) return { ok: false, error: "לקוח לא נמצא" };
+  const displayName = form.displayName.trim();
+  if (!displayName) return { ok: false, error: "שם לקוח חובה" };
+  const customerCode = form.customerCode?.trim() || null;
+
+  if (customerCode) {
+    const dup = await prisma.customer.findFirst({
+      where: { id: { not: id }, customerCode: { equals: customerCode, mode: "insensitive" }, deletedAt: null },
+      select: { id: true },
+    });
+    if (dup) return { ok: false, error: "מספר לקוח כבר קיים" };
+  }
+
+  await prisma.customer.update({
+    where: { id },
+    data: {
+      displayName,
+      nameHe: form.nameHe?.trim() || null,
+      phone: form.phone?.trim() || null,
+      customerCode,
+      address: form.address?.trim() || null,
+    },
+  });
+
+  revalidatePath("/admin");
+  revalidatePath("/admin/orders");
+  return { ok: true };
+}
+
+export async function getCustomerLedgerAction(params: {
+  customerId: string;
+  fromYmd?: string | null;
+  toYmd?: string | null;
+}): Promise<CustomerLedgerPayload | null> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["view_customer_card", "view_customers", "create_orders", "edit_orders"])) {
+    return null;
+  }
+
+  const id = params.customerId.trim();
+  if (!id) return null;
+
+  const from = params.fromYmd?.trim() ? parseLocalDate(params.fromYmd) : new Date(2000, 0, 1);
+  const to = params.toYmd?.trim() ? endOfLocalDaySafe(params.toYmd) : new Date(2999, 11, 31, 23, 59, 59, 999);
+
+  const [orders, payments] = await Promise.all([
+    prisma.order.findMany({
+      where: { customerId: id, deletedAt: null, orderDate: { gte: from, lte: to } },
+      orderBy: { orderDate: "asc" },
+      select: { id: true, orderNumber: true, orderDate: true, totalUsd: true },
+    }),
+    prisma.payment.findMany({
+      where: { customerId: id, isPaid: true, paymentDate: { gte: from, lte: to } },
+      orderBy: { paymentDate: "asc" },
+      select: { id: true, paymentCode: true, paymentDate: true, amountUsd: true, amountIls: true, exchangeRate: true },
+    }),
+  ]);
+
+  const events = [
+    ...orders.map((o) => ({
+      id: `o-${o.id}`,
+      date: o.orderDate ?? new Date(0),
+      type: "CHARGE" as const,
+      amount: o.totalUsd ?? new Prisma.Decimal(0),
+      document: o.orderNumber ?? "הזמנה",
+    })),
+    ...payments.map((p) => ({
+      id: `p-${p.id}`,
+      date: p.paymentDate ?? new Date(0),
+      type: "PAYMENT" as const,
+      amount: paymentUsdEquivalentForLedger(p),
+      document: p.paymentCode ?? "תשלום",
+    })),
+  ].sort((a, b) => a.date.getTime() - b.date.getTime() || a.id.localeCompare(b.id));
+
+  let balance = new Prisma.Decimal(0);
+  let totalCharges = new Prisma.Decimal(0);
+  let totalPayments = new Prisma.Decimal(0);
+  const rows: CustomerLedgerRow[] = events.map((ev) => {
+    if (ev.type === "CHARGE") {
+      balance = balance.add(ev.amount);
+      totalCharges = totalCharges.add(ev.amount);
+      return {
+        id: ev.id,
+        dateYmd: ev.date.getTime() > 0 ? formatLocalYmd(ev.date) : "—",
+        type: ev.type,
+        amountUsd: ev.amount.toFixed(2),
+        paidUsd: "0.00",
+        balanceUsd: balance.toFixed(2),
+        document: ev.document,
+      };
+    }
+    balance = balance.sub(ev.amount);
+    totalPayments = totalPayments.add(ev.amount);
+    return {
+      id: ev.id,
+      dateYmd: ev.date.getTime() > 0 ? formatLocalYmd(ev.date) : "—",
+      type: ev.type,
+      amountUsd: ev.amount.toFixed(2),
+      paidUsd: ev.amount.toFixed(2),
+      balanceUsd: balance.toFixed(2),
+      document: ev.document,
+    };
+  });
+
+  return {
+    rows,
+    totalChargesUsd: totalCharges.toFixed(2),
+    totalPaymentsUsd: totalPayments.toFixed(2),
+    balanceUsd: balance.toFixed(2),
+  };
+}
+
+function endOfLocalDaySafe(ymd: string): Date {
+  const [y, m, d] = ymd.split("-").map((x) => Number(x));
+  return new Date(y, m - 1, d, 23, 59, 59, 999);
 }
 
 export async function previewOrderNumberAction(weekCode: string): Promise<string> {

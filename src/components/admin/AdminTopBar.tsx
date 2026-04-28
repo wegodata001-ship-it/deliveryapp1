@@ -1,8 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { CalendarClock } from "lucide-react";
 import { DEFAULT_WEEK_CODE } from "@/lib/work-week";
 import { withQuery } from "@/lib/admin-url-query";
 import type { SerializedFinancial } from "@/lib/financial-settings";
@@ -35,7 +33,6 @@ export function AdminTopBar({ displayName, roleLabel, financial, canManageFinanc
   const pathname = usePathname();
   const router = useRouter();
   const sp = useSearchParams();
-  const [now, setNow] = useState<string>("");
 
   const weekCode = sp.get("week") || DEFAULT_WEEK_CODE;
   const rateLabel = financial?.finalDollarRate ?? "—";
@@ -43,22 +40,6 @@ export function AdminTopBar({ displayName, roleLabel, financial, canManageFinanc
     financial != null
       ? `בסיס ${financial.baseDollarRate} + עמלה ${financial.dollarFee} = סופי ${financial.finalDollarRate} ₪/USD`
       : undefined;
-
-  useEffect(() => {
-    const tick = () =>
-      setNow(
-        new Intl.DateTimeFormat("he-IL", {
-          weekday: "short",
-          day: "numeric",
-          month: "short",
-          hour: "2-digit",
-          minute: "2-digit",
-        }).format(new Date()),
-      );
-    tick();
-    const id = setInterval(tick, 30_000);
-    return () => clearInterval(id);
-  }, []);
 
   function openFinancial() {
     if (!canManageFinancial) return;
@@ -68,17 +49,14 @@ export function AdminTopBar({ displayName, roleLabel, financial, canManageFinanc
   return (
     <header className="adm-header adm-header--compact">
       <div className="adm-header-row">
-        <h1 className="adm-page-title adm-page-title--sm">{titleForPath(pathname)}</h1>
+        <div className="adm-brand-mark" title="WEGO PRO">
+          <span className="adm-brand-rocket" aria-hidden>🚀</span>
+          <div>
+            <div className="adm-brand-name">WEGO PRO</div>
+            <div className="adm-brand-subtitle">{titleForPath(pathname)}</div>
+          </div>
+        </div>
         <div className="adm-header-meta adm-header-meta--rtl">
-          <div className="adm-pill adm-pill--muted adm-pill--dense">
-            <CalendarClock size={14} aria-hidden />
-            {now || "—"}
-          </div>
-          <div className="adm-pill adm-pill--dense">
-            <span>מחובר</span>
-            <strong>{displayName}</strong>
-          </div>
-          <div className="adm-pill adm-pill--muted adm-pill--dense">{roleLabel}</div>
           <div className="adm-pill adm-pill--accent adm-pill--dense">
             <span>שבוע עבודה</span>
             <strong>{weekCode}</strong>
@@ -93,6 +71,11 @@ export function AdminTopBar({ displayName, roleLabel, financial, canManageFinanc
             <span>שער סופי (USD)</span>
             <strong dir="ltr">₪ {rateLabel}</strong>
           </button>
+          <div className="adm-pill adm-pill--user adm-pill--dense">
+            <span>משתמש מחובר</span>
+            <strong>{displayName}</strong>
+            <em>{roleLabel}</em>
+          </div>
         </div>
       </div>
     </header>

@@ -1,7 +1,9 @@
-import { SettingsMock } from "@/components/workflows/business-mocks";
+import { getAdminSettingsAction } from "@/app/admin/settings/actions";
+import { AdminSettingsClient } from "@/components/admin/AdminSettingsClient";
 import { requireRoutePermission } from "@/lib/route-access";
 
 export default async function SettingsPage() {
   await requireRoutePermission(["manage_settings"]);
-  return <SettingsMock />;
+  const initial = await getAdminSettingsAction();
+  return <AdminSettingsClient initial={initial} />;
 }

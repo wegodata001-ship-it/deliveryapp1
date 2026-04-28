@@ -15,7 +15,7 @@ function windowTitle(w: AdminWindowEntry): string {
     case "orderCapture":
       return w.props.mode === "edit" ? "עריכת הזמנה" : "קליטת הזמנה";
     case "customerCard":
-      return "כרטסת לקוח";
+      return w.props.initialTab === "ledger" ? "כרטסת לקוח" : "לקוח";
     case "createCustomer":
       return "לקוח חדש";
     case "payments":
@@ -115,10 +115,21 @@ export function AdminWindowStack({
                   />
                 ) : null}
                 {w.type === "payments" && canReceivePayments ? (
-                  <CapturePaymentForm key={w.id} financial={financial} onClose={() => closeWindow(w.id)} onToast={onToast} />
+                  <CapturePaymentForm
+                    key={w.id}
+                    financial={financial}
+                    canViewCustomerCard={canViewCustomerCard}
+                    initialPayment={w.props}
+                    onClose={() => closeWindow(w.id)}
+                    onToast={onToast}
+                  />
                 ) : null}
                 {w.type === "customerCard" && canViewCustomerCard ? (
-                  <CustomerCardWindowBody customerId={w.props.customerId} />
+                  <CustomerCardWindowBody
+                    customerId={w.props.customerId}
+                    customerName={w.props.customerName}
+                    initialTab={w.props.initialTab}
+                  />
                 ) : null}
                 {w.type === "createCustomer" && canCreateCustomer ? <CreateCustomerWindowBody /> : null}
               </div>
