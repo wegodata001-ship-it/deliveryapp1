@@ -304,19 +304,22 @@ export function CapturePaymentForm({
     initialAppliedRef.current = true;
     setSavedPayment(null);
     setErr(null);
-    const amount = initialPayment.amountIls?.trim();
+    const amountIlsInit = initialPayment.amountIls?.trim();
+    const amountUsdInit = initialPayment.amountUsd?.trim();
     const orderNumber = initialPayment.orderNumber?.trim();
     if (orderNumber) {
       setOrderNumberDraft(orderNumber);
       void loadOrder(orderNumber).then(() => {
-        if (amount) {
+        if (amountIlsInit || amountUsdInit) {
           setAmountUsd("");
           setAmountTransferIls("");
-          setAmountIls(amount);
+          setAmountIls(amountIlsInit || "");
+          if (amountUsdInit) setAmountUsd(amountUsdInit);
         }
       });
-    } else if (amount) {
-      setAmountIls(amount);
+    } else if (amountIlsInit || amountUsdInit) {
+      setAmountIls(amountIlsInit || "");
+      if (amountUsdInit) setAmountUsd(amountUsdInit);
     }
     if (initialPayment.customerId?.trim()) {
       void getCustomerDetailsForPaymentAction(initialPayment.customerId).then((d) => {
@@ -416,7 +419,7 @@ export function CapturePaymentForm({
     }
     const saved = res.saved && "paymentId" in res.saved ? res.saved : null;
     setSavedPayment(saved);
-    onToast("נשמר בהצלחה");
+    onToast("התשלום נשמר בהצלחה");
     router.refresh();
   }
 

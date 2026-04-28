@@ -9,6 +9,7 @@ import {
   type CustomerLedgerPayload,
 } from "@/app/admin/capture/actions";
 import type { CustomerCardWindowProps } from "@/lib/admin-windows";
+import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 
 function displayCustomerCode(s: CustomerCardSnapshot): string {
   const c = s.customerCode?.trim();
@@ -35,6 +36,7 @@ function ledgerRowState(r: { type: "CHARGE" | "PAYMENT"; paidUsd: string; balanc
 type TabKey = "details" | "ledger";
 
 export function CustomerCardWindowBody({ customerId, customerName, initialTab = "details" }: CustomerCardWindowProps) {
+  const { openWindow } = useAdminWindows();
   const [snap, setSnap] = useState<CustomerCardSnapshot | null>(null);
   const [ledger, setLedger] = useState<CustomerLedgerPayload | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>(initialTab);
@@ -258,16 +260,31 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
             {ledger ? (
               <div className="adm-cust-ledger-summary">
                 <div className="adm-ledger-summary-card adm-ledger-summary-card--debt">
-                  <span>⚠ totalDebt</span>
+                  <span>סה"כ חיובים</span>
                   <strong dir="ltr">{fmtUsd(ledger.totalChargesUsd)}</strong>
                 </div>
                 <div className="adm-ledger-summary-card adm-ledger-summary-card--paid">
-                  <span>✔ totalPaid</span>
+                  <span>סה"כ תשלומים</span>
                   <strong dir="ltr">{fmtUsd(ledger.totalPaymentsUsd)}</strong>
                 </div>
                 <div className="adm-ledger-summary-card adm-ledger-summary-card--remaining">
-                  <span>◐ totalRemaining</span>
-                  <strong dir="ltr">{fmtUsd(ledger.balanceUsd)}</strong>
+                  <span>יתרה</span>
+                  <button
+                    type="button"
+                    className="adm-balance-amount"
+                    onClick={() =>
+                      openWindow({
+                        type: "payments",
+                        props: {
+                          customerId,
+                          customerName: snap.displayName || customerName || "",
+                          amountUsd: Number(ledger.balanceUsd) > 0 ? ledger.balanceUsd : null,
+                        },
+                      })
+                    }
+                  >
+                    <strong dir="ltr">{fmtUsd(ledger.balanceUsd)}</strong>
+                  </button>
                 </div>
               </div>
             ) : null}

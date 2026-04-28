@@ -1,24 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { listReceiptControlAction, type ReceiptControlPayload, type ReceiptControlRow, type ReceiptControlStatus } from "@/app/admin/receipt-control/actions";
+import { listReceiptControlAction, type ReceiptBalanceFilter, type ReceiptControlPayload, type ReceiptControlRow, type ReceiptControlStatus } from "@/app/admin/receipt-control/actions";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
-import { Modal } from "@/components/ui/Modal";
 
 const LIMIT = 15;
 
 const STATUS_LABELS: Record<ReceiptControlStatus, string> = {
-  PAID: "שולם",
-  PARTIAL: "חלקי",
-  UNPAID: "לא שולם",
-};
-
-type ColumnFilters = {
-  week: string;
-  customerName: string;
-  expectedILS: string;
-  receivedILS: string;
-  remainingILS: string;
+  DEBT: "חוב",
+  CREDIT: "זכות",
+  BALANCED: "מאוזן",
 };
 
 function ils(s: string): string {
@@ -37,29 +28,12 @@ export function ReceiptControlClient() {
   const { openWindow } = useAdminWindows();
   const [payload, setPayload] = useState<ReceiptControlPayload | null>(null);
   const [loading, setLoading] = useState(true);
-  const [showFilters, setShowFilters] = useState(false);
   const [page, setPage] = useState(1);
   const [weekCode, setWeekCode] = useState("");
   const [fromYmd, setFromYmd] = useState("");
   const [toYmd, setToYmd] = useState("");
-  const [status, setStatus] = useState<ReceiptControlStatus | "">("");
-  const [filters, setFilters] = useState<ColumnFilters>({
-    week: "",
-    customerName: "",
-    expectedILS: "",
-    receivedILS: "",
-    remainingILS: "",
-  });
-  const [debouncedFilters, setDebouncedFilters] = useState(filters);
-  const [detailsRow, setDetailsRow] = useState<ReceiptControlRow | null>(null);
-
-  useEffect(() => {
-    const t = window.setTimeout(() => {
-      setDebouncedFilters(filters);
-      setPage(1);
-    }, 300);
-    return () => window.clearTimeout(t);
-  }, [filters]);
+  const [balanceFilter, setBalanceFilter] = useState<ReceiptBalanceFilter>("all");
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -70,8 +44,8 @@ export function ReceiptControlClient() {
       weekCode,
       fromYmd,
       toYmd,
-      status,
-      filters: debouncedFilters,
+      balanceFilter,
+      search,
     }).then((next) => {
       if (cancelled) return;
       setPayload(next);
@@ -80,7 +54,7 @@ export function ReceiptControlClient() {
     return () => {
       cancelled = true;
     };
-  }, [page, weekCode, fromYmd, toYmd, status, debouncedFilters]);
+  }, [page, weekCode, fromYmd, toYmd, balanceFilter, search]);
 
   const pages = useMemo(() => pageNumbers(payload?.page ?? page, payload?.totalPages ?? 1), [payload?.page, payload?.totalPages, page]);
 
@@ -93,9 +67,8 @@ export function ReceiptControlClient() {
     setWeekCode("");
     setFromYmd("");
     setToYmd("");
-    setStatus("");
-    setFilters({ week: "", customerName: "", expectedILS: "", receivedILS: "", remainingILS: "" });
-    setDebouncedFilters({ week: "", customerName: "", expectedILS: "", receivedILS: "", remainingILS: "" });
+    setBalanceFilter("all");
+    setSearch("");
     setPage(1);
   }
 
@@ -106,9 +79,7 @@ export function ReceiptControlClient() {
       props: {
         customerId: row.customerId,
         customerName: row.customerName,
-        orderId: row.orderId,
-        orderNumber: row.orderNumber,
-        amountIls: row.remainingILS,
+        amountIls: row.balance,
       },
     });
   }
@@ -118,12 +89,9 @@ export function ReceiptControlClient() {
       <div className="adm-receipt-head">
         <div>
           <h1>בקרת תקבולים</h1>
-          <p>בקרה פיננסית: מה נכנס, מה חסר ומה צריך לגבות.</p>
+          <p>מרוכז לפי לקוח: חשבוניות, תשלומים ויתרה.</p>
         </div>
         <div className="adm-receipt-actions">
-          <button type="button" className="adm-btn adm-btn--ghost" onClick={() => setShowFilters((v) => !v)}>
-            סינון 🔍
-          </button>
           <button type="button" className="adm-btn adm-btn--ghost" onClick={clearFilters}>
             נקה סינון
           </button>
@@ -145,68 +113,74 @@ export function ReceiptControlClient() {
         </label>
         <label>
           סטטוס
-          <select value={status} onChange={(e) => setTopFilter(() => setStatus(e.target.value as ReceiptControlStatus | ""))}>
-            <option value="">הכל</option>
-            <option value="PAID">שולם</option>
-            <option value="PARTIAL">חלקי</option>
-            <option value="UNPAID">לא שולם</option>
+          <select value={balanceFilter} onChange={(e) => setTopFilter(() => setBalanceFilter(e.target.value as ReceiptBalanceFilter))}>
+            <option value="all">הכל</option>
+            <option value="debt">חוב</option>
+            <option value="credit">זכות</option>
+            <option value="balanced">מאוזן</option>
           </select>
+        </label>
+        <label>
+          חיפוש
+          <input value={search} onChange={(e) => setTopFilter(() => setSearch(e.target.value))} placeholder="שם לקוח..." />
         </label>
       </div>
 
       <div className="adm-receipt-summary">
         <div className="adm-receipt-summary-card adm-receipt-summary-card--expected">
-          <span>סה״כ צפוי</span>
-          <strong dir="ltr">{ils(payload?.totalExpected ?? "0")}</strong>
+          <span>סה״כ חשבוניות</span>
+          <strong dir="ltr">{ils(payload?.totalInvoices ?? "0")}</strong>
         </div>
         <div className="adm-receipt-summary-card adm-receipt-summary-card--received">
-          <span>סה״כ התקבל</span>
-          <strong dir="ltr">{ils(payload?.totalReceived ?? "0")}</strong>
+          <span>סה״כ תשלומים</span>
+          <strong dir="ltr">{ils(payload?.totalPayments ?? "0")}</strong>
         </div>
         <div className="adm-receipt-summary-card adm-receipt-summary-card--remaining">
           <span>סה״כ יתרה</span>
-          <strong dir="ltr">{ils(payload?.totalRemaining ?? "0")}</strong>
+          <strong dir="ltr">{ils(payload?.totalBalance ?? "0")}</strong>
         </div>
       </div>
 
       <div className="adm-receipt-table-wrap" aria-busy={loading}>
-        {loading ? <div className="adm-receipt-loading">טוען…</div> : null}
+        {loading ? <div className="adm-receipt-loading"><span className="adm-spin" /> טוען…</div> : null}
         <table className="adm-table adm-receipt-table">
           <thead>
             <tr>
-              <th>שבוע</th>
               <th>לקוח</th>
-              <th>צפי בשקלים</th>
-              <th>התקבל</th>
-              <th>הפרש</th>
+              <th>סה"כ חשבוניות</th>
+              <th>סה"כ תשלומים</th>
               <th>יתרה</th>
               <th>סטטוס</th>
             </tr>
-            {showFilters ? (
-              <tr className="adm-receipt-filter-row">
-                <th><input value={filters.week} onChange={(e) => setFilters((f) => ({ ...f, week: e.target.value }))} placeholder="week" /></th>
-                <th><input value={filters.customerName} onChange={(e) => setFilters((f) => ({ ...f, customerName: e.target.value }))} placeholder="customerName" /></th>
-                <th><input value={filters.expectedILS} onChange={(e) => setFilters((f) => ({ ...f, expectedILS: e.target.value }))} placeholder="expectedILS" /></th>
-                <th><input value={filters.receivedILS} onChange={(e) => setFilters((f) => ({ ...f, receivedILS: e.target.value }))} placeholder="receivedILS" /></th>
-                <th />
-                <th><input value={filters.remainingILS} onChange={(e) => setFilters((f) => ({ ...f, remainingILS: e.target.value }))} placeholder="remainingILS" /></th>
-                <th />
-              </tr>
-            ) : null}
           </thead>
           <tbody>
             {!payload || payload.rows.length === 0 ? (
               <tr>
-                <td colSpan={7} className="adm-table-empty">לא נמצאו תקבולים להצגה.</td>
+                <td colSpan={5} className="adm-table-empty">לא נמצאו תקבולים להצגה.</td>
               </tr>
             ) : (
               payload.rows.map((row) => (
-                <tr key={row.orderId} className={`adm-receipt-row adm-receipt-row--${row.status.toLowerCase()}`} onClick={() => setDetailsRow(row)}>
-                  <td dir="ltr">{row.week}</td>
-                  <td>{row.customerName}</td>
-                  <td dir="ltr">{ils(row.expectedILS)}</td>
-                  <td dir="ltr">{ils(row.receivedILS)}</td>
-                  <td dir="ltr">{ils(row.difference)}</td>
+                <tr key={row.customerId || row.customerName} className={`adm-receipt-row adm-receipt-row--${row.status.toLowerCase()}`}>
+                  <td>
+                    {row.customerId ? (
+                      <button
+                        type="button"
+                        className="adm-balance-link"
+                        onClick={() =>
+                          openWindow({
+                            type: "customerCard",
+                            props: { customerId: row.customerId, customerName: row.customerName, initialTab: "ledger" },
+                          })
+                        }
+                      >
+                        {row.customerName}
+                      </button>
+                    ) : (
+                      row.customerName
+                    )}
+                  </td>
+                  <td dir="ltr">{ils(row.totalInvoices)}</td>
+                  <td dir="ltr">{ils(row.totalPayments)}</td>
                   <td>
                     <button
                       type="button"
@@ -215,10 +189,10 @@ export function ReceiptControlClient() {
                         e.stopPropagation();
                         openPayment(row);
                       }}
-                      disabled={!row.customerId || Number(row.remainingILS) <= 0}
+                      disabled={!row.customerId || Number(row.balance) <= 0}
                       title="פתיחת קליטת תשלום"
                     >
-                      <span dir="ltr">{ils(row.remainingILS)}</span>
+                      <span dir="ltr">{ils(row.balance)}</span>
                     </button>
                   </td>
                   <td>
@@ -260,45 +234,6 @@ export function ReceiptControlClient() {
         </span>
       </div>
 
-      <Modal open={!!detailsRow} onClose={() => setDetailsRow(null)} title="פירוט תקבולים" size="lg">
-        {detailsRow ? (
-          <div className="adm-receipt-details">
-            <div className="adm-receipt-details-grid">
-              <span>לקוח</span><strong>{detailsRow.customerName}</strong>
-              <span>הזמנה</span><strong dir="ltr">{detailsRow.orderNumber}</strong>
-              <span>שבוע</span><strong dir="ltr">{detailsRow.week}</strong>
-              <span>יתרה</span><strong dir="ltr">{ils(detailsRow.remainingILS)}</strong>
-            </div>
-            <h3>תקבולים מקושרים</h3>
-            {detailsRow.payments.length === 0 ? (
-              <p className="adm-table-empty">אין תשלומים מקושרים להזמנה.</p>
-            ) : (
-              <table className="adm-table adm-table--dense">
-                <thead>
-                  <tr>
-                    <th>תאריך</th>
-                    <th>מספר תשלום</th>
-                    <th>סכום</th>
-                    <th>אמצעי</th>
-                    <th>מקום</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {detailsRow.payments.map((p) => (
-                    <tr key={p.id}>
-                      <td dir="ltr">{p.paymentDateYmd}</td>
-                      <td dir="ltr">{p.paymentCode ?? "—"}</td>
-                      <td dir="ltr">{ils(p.amountIls)}</td>
-                      <td>{p.paymentMethod ?? "—"}</td>
-                      <td>{p.paymentPlace ?? "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        ) : null}
-      </Modal>
     </div>
   );
 }

@@ -4757,7 +4757,7 @@
 
 .adm-receipt-top-filters {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
   padding: 12px;
   border: 1px solid var(--adm-border);
@@ -4854,16 +4854,16 @@
   cursor: pointer;
 }
 
-.adm-receipt-row--paid {
+.adm-receipt-row--balanced {
   background: #f0fdf4;
 }
 
-.adm-receipt-row--partial {
-  background: #fff7ed;
+.adm-receipt-row--debt {
+  background: #fef2f2;
 }
 
-.adm-receipt-row--unpaid {
-  background: #fef2f2;
+.adm-receipt-row--credit {
+  background: #ecfeff;
 }
 
 .adm-receipt-status {
@@ -4877,19 +4877,19 @@
   font-weight: 900;
 }
 
-.adm-receipt-status--paid {
+.adm-receipt-status--balanced {
   background: #dcfce7;
   color: #166534;
 }
 
-.adm-receipt-status--partial {
-  background: #ffedd5;
-  color: #c2410c;
-}
-
-.adm-receipt-status--unpaid {
+.adm-receipt-status--debt {
   background: #fee2e2;
   color: #991b1b;
+}
+
+.adm-receipt-status--credit {
+  background: #dcfce7;
+  color: #166534;
 }
 
 .adm-receipt-remaining-btn {
@@ -4921,6 +4921,9 @@
   color: var(--adm-muted);
   font-size: 12px;
   font-weight: 800;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
 }
 
 .adm-receipt-pagination {

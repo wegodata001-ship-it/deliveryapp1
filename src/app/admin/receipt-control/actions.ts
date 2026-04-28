@@ -3,17 +3,10 @@
 import { Prisma } from "@prisma/client";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
-import { endOfLocalDay, formatLocalYmd, parseLocalDate } from "@/lib/work-week";
+import { endOfLocalDay, parseLocalDate } from "@/lib/work-week";
 
-export type ReceiptControlStatus = "PAID" | "PARTIAL" | "UNPAID";
-
-export type ReceiptControlFilters = {
-  week?: string;
-  customerName?: string;
-  expectedILS?: string;
-  receivedILS?: string;
-  remainingILS?: string;
-};
+export type ReceiptBalanceFilter = "all" | "debt" | "credit" | "balanced";
+export type ReceiptControlStatus = "DEBT" | "CREDIT" | "BALANCED";
 
 export type ReceiptControlQuery = {
   page: number;
@@ -21,32 +14,17 @@ export type ReceiptControlQuery = {
   weekCode?: string;
   fromYmd?: string;
   toYmd?: string;
-  status?: ReceiptControlStatus | "";
-  filters?: ReceiptControlFilters;
-};
-
-export type ReceiptPaymentDetail = {
-  id: string;
-  paymentCode: string | null;
-  paymentDateYmd: string;
-  amountIls: string;
-  paymentMethod: string | null;
-  paymentPlace: string | null;
+  balanceFilter?: ReceiptBalanceFilter;
+  search?: string;
 };
 
 export type ReceiptControlRow = {
-  orderId: string;
-  orderNumber: string;
-  week: string;
-  orderDateYmd: string;
-  customerId: string | null;
+  customerId: string;
   customerName: string;
-  expectedILS: string;
-  receivedILS: string;
-  difference: string;
-  remainingILS: string;
+  totalInvoices: string;
+  totalPayments: string;
+  balance: string;
   status: ReceiptControlStatus;
-  payments: ReceiptPaymentDetail[];
 };
 
 export type ReceiptControlPayload = {
@@ -55,19 +33,13 @@ export type ReceiptControlPayload = {
   page: number;
   limit: number;
   totalPages: number;
-  totalExpected: string;
-  totalReceived: string;
-  totalRemaining: string;
+  totalInvoices: string;
+  totalPayments: string;
+  totalBalance: string;
 };
 
 function money(n: Prisma.Decimal): string {
   return n.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toFixed(2);
-}
-
-function includesFilter(value: string, filter?: string): boolean {
-  const f = filter?.trim().toLowerCase();
-  if (!f) return true;
-  return value.toLowerCase().includes(f);
 }
 
 function paymentIlsValue(p: {
@@ -99,10 +71,10 @@ function orderExpectedIlsValue(o: {
   return rate ? usd.mul(rate) : new Prisma.Decimal(0);
 }
 
-function receiptStatus(remaining: Prisma.Decimal, received: Prisma.Decimal): ReceiptControlStatus {
-  if (remaining.lte(new Prisma.Decimal("0.01"))) return "PAID";
-  if (remaining.gt(0) && received.gt(0)) return "PARTIAL";
-  return "UNPAID";
+function toStatus(balance: Prisma.Decimal): ReceiptControlStatus {
+  if (balance.gt(new Prisma.Decimal("0.01"))) return "DEBT";
+  if (balance.lt(new Prisma.Decimal("-0.01"))) return "CREDIT";
+  return "BALANCED";
 }
 
 export async function listReceiptControlAction(query: ReceiptControlQuery): Promise<ReceiptControlPayload> {
@@ -114,9 +86,9 @@ export async function listReceiptControlAction(query: ReceiptControlQuery): Prom
       page: 1,
       limit: 15,
       totalPages: 1,
-      totalExpected: "0.00",
-      totalReceived: "0.00",
-      totalRemaining: "0.00",
+      totalInvoices: "0.00",
+      totalPayments: "0.00",
+      totalBalance: "0.00",
     };
   }
 
@@ -130,23 +102,16 @@ export async function listReceiptControlAction(query: ReceiptControlQuery): Prom
     if (query.fromYmd?.trim()) where.orderDate.gte = parseLocalDate(query.fromYmd.trim());
     if (query.toYmd?.trim()) where.orderDate.lte = endOfLocalDay(query.toYmd.trim());
   }
-  if (query.filters?.week?.trim()) where.weekCode = { contains: query.filters.week.trim(), mode: "insensitive" };
-  if (query.filters?.customerName?.trim()) {
-    const q = query.filters.customerName.trim();
-    where.OR = [
-      { customerNameSnapshot: { contains: q, mode: "insensitive" } },
-      { customer: { displayName: { contains: q, mode: "insensitive" } } },
-    ];
+  const search = query.search?.trim();
+  if (search) {
+    where.OR = [{ customerNameSnapshot: { contains: search, mode: "insensitive" } }, { customer: { displayName: { contains: search, mode: "insensitive" } } }];
   }
 
   const orders = await prisma.order.findMany({
     where,
-    orderBy: [{ orderDate: "desc" }, { orderNumber: "desc" }],
+    orderBy: [{ orderDate: "desc" }],
     select: {
       id: true,
-      orderNumber: true,
-      weekCode: true,
-      orderDate: true,
       customerId: true,
       customerNameSnapshot: true,
       totalIlsWithVat: true,
@@ -160,72 +125,67 @@ export async function listReceiptControlAction(query: ReceiptControlQuery): Prom
       customer: { select: { displayName: true } },
       payments: {
         where: { isPaid: true },
-        orderBy: { paymentDate: "desc" },
         select: {
-          id: true,
-          paymentCode: true,
-          paymentDate: true,
           amountIls: true,
           amountUsd: true,
           exchangeRate: true,
           totalIlsWithVat: true,
-          paymentMethod: true,
-          paymentPlace: true,
         },
       },
     },
   });
 
-  const rows = orders.map((o): ReceiptControlRow => {
-    const expected = orderExpectedIlsValue(o);
-    const received = o.payments.reduce((sum, p) => sum.add(paymentIlsValue(p)), new Prisma.Decimal(0));
-    const difference = expected.sub(received);
-    const status = receiptStatus(difference, received);
+  const grouped = new Map<
+    string,
+    { customerId: string; customerName: string; invoices: Prisma.Decimal; payments: Prisma.Decimal }
+  >();
+
+  for (const o of orders) {
+    const cid = o.customerId ?? `anon:${o.id}`;
+    const name = o.customer?.displayName ?? o.customerNameSnapshot ?? "—";
+    const current = grouped.get(cid) ?? {
+      customerId: o.customerId ?? "",
+      customerName: name,
+      invoices: new Prisma.Decimal(0),
+      payments: new Prisma.Decimal(0),
+    };
+    current.invoices = current.invoices.add(orderExpectedIlsValue(o));
+    current.payments = current.payments.add(o.payments.reduce((sum, p) => sum.add(paymentIlsValue(p)), new Prisma.Decimal(0)));
+    grouped.set(cid, current);
+  }
+
+  const rows: ReceiptControlRow[] = [...grouped.values()].map((g) => {
+    const balance = g.invoices.sub(g.payments);
     return {
-      orderId: o.id,
-      orderNumber: o.orderNumber ?? "—",
-      week: o.weekCode ?? "—",
-      orderDateYmd: o.orderDate ? formatLocalYmd(o.orderDate) : "—",
-      customerId: o.customerId,
-      customerName: o.customer?.displayName ?? o.customerNameSnapshot ?? "—",
-      expectedILS: money(expected),
-      receivedILS: money(received),
-      difference: money(difference),
-      remainingILS: money(difference),
-      status,
-      payments: o.payments.map((p) => ({
-        id: p.id,
-        paymentCode: p.paymentCode,
-        paymentDateYmd: p.paymentDate ? formatLocalYmd(p.paymentDate) : "—",
-        amountIls: money(paymentIlsValue(p)),
-        paymentMethod: p.paymentMethod,
-        paymentPlace: p.paymentPlace,
-      })),
+      customerId: g.customerId,
+      customerName: g.customerName,
+      totalInvoices: money(g.invoices),
+      totalPayments: money(g.payments),
+      balance: money(balance),
+      status: toStatus(balance),
     };
   });
 
+  const balanceFilter = query.balanceFilter || "all";
   const filtered = rows.filter((r) => {
-    if (query.status && r.status !== query.status) return false;
-    return (
-      includesFilter(r.week, query.filters?.week) &&
-      includesFilter(r.customerName, query.filters?.customerName) &&
-      includesFilter(r.expectedILS, query.filters?.expectedILS) &&
-      includesFilter(r.receivedILS, query.filters?.receivedILS) &&
-      includesFilter(r.remainingILS, query.filters?.remainingILS)
-    );
+    const b = new Prisma.Decimal(r.balance);
+    if (balanceFilter === "debt") return b.gt(0);
+    if (balanceFilter === "credit") return b.lt(0);
+    if (balanceFilter === "balanced") return b.abs().lte(new Prisma.Decimal("0.01"));
+    return true;
   });
 
   const totals = filtered.reduce(
     (acc, r) => {
-      acc.expected = acc.expected.add(new Prisma.Decimal(r.expectedILS));
-      acc.received = acc.received.add(new Prisma.Decimal(r.receivedILS));
-      acc.remaining = acc.remaining.add(new Prisma.Decimal(r.remainingILS));
+      acc.invoices = acc.invoices.add(new Prisma.Decimal(r.totalInvoices));
+      acc.payments = acc.payments.add(new Prisma.Decimal(r.totalPayments));
+      acc.balance = acc.balance.add(new Prisma.Decimal(r.balance));
       return acc;
     },
     {
-      expected: new Prisma.Decimal(0),
-      received: new Prisma.Decimal(0),
-      remaining: new Prisma.Decimal(0),
+      invoices: new Prisma.Decimal(0),
+      payments: new Prisma.Decimal(0),
+      balance: new Prisma.Decimal(0),
     },
   );
 
@@ -240,8 +200,8 @@ export async function listReceiptControlAction(query: ReceiptControlQuery): Prom
     page: safePage,
     limit,
     totalPages,
-    totalExpected: money(totals.expected),
-    totalReceived: money(totals.received),
-    totalRemaining: money(totals.remaining),
+    totalInvoices: money(totals.invoices),
+    totalPayments: money(totals.payments),
+    totalBalance: money(totals.balance),
   };
 }

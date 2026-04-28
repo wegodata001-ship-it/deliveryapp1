@@ -16,6 +16,7 @@ export type PaymentWindowProps = {
   orderId?: string | null;
   orderNumber?: string | null;
   amountIls?: string | null;
+  amountUsd?: string | null;
 };
 
 export type AdminWindowPayload =
