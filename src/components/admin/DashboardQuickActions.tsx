@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   FileSpreadsheet,
   PlusCircle,
@@ -19,8 +20,26 @@ type Props = {
   canReceivePayments: boolean;
   canViewOrders: boolean;
   canImportExcel: boolean;
+  canViewReports: boolean;
   canManageSettings: boolean;
 };
+
+function firstQueryValue(v: string | string[] | undefined): string {
+  if (Array.isArray(v)) return v[0] || "";
+  return v || "";
+}
+
+function buildReportsExportHref(sp: Record<string, string | string[] | undefined>): string {
+  const q = new URLSearchParams();
+  q.set("kind", "customerBalanceReport");
+  const from = firstQueryValue(sp.from);
+  const to = firstQueryValue(sp.to);
+  const week = firstQueryValue(sp.week);
+  if (from) q.set("dateFrom", from);
+  if (to) q.set("dateTo", to);
+  if (week) q.set("workWeek", week);
+  return `/admin/reports/export?${q.toString()}`;
+}
 
 export function DashboardQuickActions({
   searchParams: sp,
@@ -29,10 +48,33 @@ export function DashboardQuickActions({
   canReceivePayments,
   canViewOrders,
   canImportExcel,
+  canViewReports,
   canManageSettings,
 }: Props) {
   const { openWindow } = useAdminWindows();
+  const [exportBusy, setExportBusy] = useState(false);
   const hrefModal = (modal: string) => adminHrefWithFilters(sp, { modal });
+  const exportHref = buildReportsExportHref(sp);
+
+  async function exportFromHome() {
+    if (exportBusy) return;
+    setExportBusy(true);
+    try {
+      const res = await fetch(exportHref);
+      if (!res.ok) throw new Error("export_failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "report.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExportBusy(false);
+    }
+  }
 
   return (
     <div className="adm-quick adm-quick--dense">
@@ -54,11 +96,11 @@ export function DashboardQuickActions({
           רשימת הזמנות
         </Link>
       ) : null}
-      {canImportExcel ? (
-        <Link href="/admin/reports">
+      {canImportExcel && canViewReports ? (
+        <button type="button" onClick={() => void exportFromHome()} disabled={exportBusy}>
           <FileSpreadsheet size={20} />
-          ייצוא Excel
-        </Link>
+          {exportBusy ? "מייצא Excel..." : "ייצוא Excel (דוחות)"}
+        </button>
       ) : null}
       {canManageSettings ? (
         <Link href={hrefModal("financial")}>

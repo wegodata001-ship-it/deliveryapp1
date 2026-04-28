@@ -76,6 +76,7 @@ export default async function AdminDashboardPage({
         canReceivePayments={userHasAnyPermission(me, ["receive_payments"])}
         canViewOrders={userHasAnyPermission(me, ["view_orders"])}
         canImportExcel={userHasAnyPermission(me, ["import_excel"])}
+        canViewReports={userHasAnyPermission(me, ["view_reports"])}
         canManageSettings={userHasAnyPermission(me, ["manage_settings"])}
       />
 

@@ -66,17 +66,16 @@ function buildReportHtml(report: ReportTable, filters: ReportFilters) {
   `;
 }
 
-function downloadExcel(report: ReportTable, filters: ReportFilters) {
-  const html = buildReportHtml(report, filters);
-  const blob = new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `WEGO_Report_${todayYmd()}.xlsx`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+function buildExportHref(kind: ReportKind, filters: ReportFilters): string {
+  const sp = new URLSearchParams();
+  sp.set("kind", kind);
+  if (filters.dateFrom) sp.set("dateFrom", filters.dateFrom);
+  if (filters.dateTo) sp.set("dateTo", filters.dateTo);
+  if (filters.customerId) sp.set("customerId", filters.customerId);
+  if (filters.status) sp.set("status", filters.status);
+  if (filters.paymentMethod) sp.set("paymentMethod", filters.paymentMethod);
+  if (filters.workWeek) sp.set("workWeek", filters.workWeek);
+  return `/admin/reports/export?${sp.toString()}`;
 }
 
 function printPdf(report: ReportTable, filters: ReportFilters) {
@@ -93,6 +92,8 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
   const [filters, setFilters] = useState<ReportFilters>(initialFilters);
   const [activeReport, setActiveReport] = useState<ReportTable | null>(null);
   const [loading, setLoading] = useState(false);
+  const [downloadingExcel, setDownloadingExcel] = useState<ReportKind | null>(null);
+  const [exportErr, setExportErr] = useState<string | null>(null);
   const { runWithLoading, isLoading } = useAdminLoading();
 
   const filterKey = useMemo(() => JSON.stringify(filters), [filters]);
@@ -127,11 +128,29 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
   async function exportReport(kind: ReportKind, format: "excel" | "pdf") {
     if (isLoading) return;
     setLoading(true);
+    setExportErr(null);
     try {
-      const report = await runWithLoading(() => getReportTableAction(kind, filters), "מכין ייצוא...");
-      if (format === "excel") downloadExcel(report, filters);
-      else printPdf(report, filters);
+      if (format === "excel") {
+        setDownloadingExcel(kind);
+        const res = await fetch(buildExportHref(kind, filters));
+        if (!res.ok) throw new Error("export_failed");
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `report_${todayYmd()}.xlsx`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } else {
+        const report = await runWithLoading(() => getReportTableAction(kind, filters), "מכין ייצוא...");
+        printPdf(report, filters);
+      }
+    } catch {
+      setExportErr("Excel export failed");
     } finally {
+      setDownloadingExcel(null);
       setLoading(false);
     }
   }
@@ -184,6 +203,7 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
             <input disabled={isLoading} value={filters.workWeek || ""} onChange={(e) => updateFilter("workWeek", e.target.value)} placeholder="AH-118" />
           </label>
         </div>
+        {exportErr ? <div className="adm-error">{exportErr}</div> : null}
       </section>
 
       <section className="adm-reports-kpis" aria-busy={loading}>
@@ -219,7 +239,7 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
                 {isLoading ? "⏳ מעבד..." : "צפייה בדוח"}
               </button>
               <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" disabled={isLoading} onClick={() => void exportReport(r.id, "excel")}>
-                {isLoading ? "⏳ שומר..." : "Excel"}
+                {downloadingExcel === r.id ? "⏳ מוריד..." : "Excel"}
               </button>
               <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" disabled={isLoading} onClick={() => void exportReport(r.id, "pdf")}>
                 {isLoading ? "⏳ שומר..." : "PDF"}
@@ -233,7 +253,9 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
         {activeReport ? (
           <div className="adm-report-modal">
             <div className="adm-report-modal-actions">
-              <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" onClick={() => downloadExcel(activeReport, filters)}>Excel</button>
+              <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" onClick={() => void exportReport(activeReport.id, "excel")}>
+                {downloadingExcel === activeReport.id ? "⏳ מוריד..." : "Excel"}
+              </button>
               <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" onClick={() => printPdf(activeReport, filters)}>PDF</button>
             </div>
             <div className="adm-report-table-wrap">

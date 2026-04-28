@@ -53,6 +53,24 @@ export function endOfLocalDay(ymd: string): Date {
   return new Date(y, m - 1, d, 23, 59, 59, 999);
 }
 
+export function getCurrentWeekRange(now = new Date()): { start: Date; end: Date } {
+  const day = now.getDay(); // 0=Sunday
+  const start = new Date(now);
+  start.setDate(now.getDate() - day);
+  start.setHours(0, 0, 0, 0);
+
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  end.setHours(23, 59, 59, 999);
+
+  return { start, end };
+}
+
+export function getCurrentWeekYmdRange(now = new Date()): WorkWeekRange {
+  const { start, end } = getCurrentWeekRange(now);
+  return { from: formatLocalYmd(start), to: formatLocalYmd(end) };
+}
+
 export function getWeekCodeForLocalDate(d: Date): string {
   const ymd = formatLocalYmd(d);
   for (const code of WORK_WEEK_CODES_SORTED) {
@@ -95,7 +113,9 @@ export function parseDateFilterFromSearchParams(
 
   const knownWeek = weekParam && WORK_WEEK_RANGES[weekParam] ? weekParam : null;
   const fallbackWeek = DEFAULT_WEEK_CODE;
-  const base = knownWeek ? WORK_WEEK_RANGES[knownWeek] : WORK_WEEK_RANGES[fallbackWeek];
+  const base = knownWeek
+    ? WORK_WEEK_RANGES[knownWeek]
+    : (fromParam || toParam ? WORK_WEEK_RANGES[fallbackWeek] : getCurrentWeekYmdRange(new Date()));
 
   let fromYmd = fromParam && /^\d{4}-\d{2}-\d{2}$/.test(fromParam) ? fromParam : base.from;
   let toYmd = toParam && /^\d{4}-\d{2}-\d{2}$/.test(toParam) ? toParam : base.to;
