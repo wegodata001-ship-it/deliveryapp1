@@ -6,6 +6,7 @@ import { AdminTopBar } from "@/components/admin/AdminTopBar";
 import { GlobalFilterBar } from "@/components/admin/GlobalFilterBar";
 import { FinancialSettingsModal } from "@/components/admin/FinancialSettingsModal";
 import { AdminWindowStack } from "@/components/admin/AdminWindowStack";
+import { AdminLoadingProvider } from "@/components/admin/AdminLoadingProvider";
 import { withoutKeys } from "@/lib/admin-url-query";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 
@@ -57,7 +58,7 @@ export function AdminChrome({
   const finInitial = useMemo(() => financial, [financial]);
 
   return (
-    <>
+    <AdminLoadingProvider>
       <div className="adm-chrome-stack">
         <AdminTopBar
           displayName={displayName}
@@ -89,6 +90,6 @@ export function AdminChrome({
           canCreateCustomer={canCreateCustomer}
         />
       ) : null}
-    </>
+    </AdminLoadingProvider>
   );
 }

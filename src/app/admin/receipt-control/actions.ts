@@ -141,7 +141,7 @@ export async function listReceiptControlAction(query: ReceiptControlQuery): Prom
 
   const orders = await prisma.order.findMany({
     where,
-    orderBy: [{ orderDate: "desc" }, { createdAt: "desc" }],
+    orderBy: [{ orderDate: "desc" }, { orderNumber: "desc" }],
     select: {
       id: true,
       orderNumber: true,
@@ -217,9 +217,9 @@ export async function listReceiptControlAction(query: ReceiptControlQuery): Prom
 
   const totals = filtered.reduce(
     (acc, r) => {
-      acc.expected = acc.expected.add(r.expectedILS);
-      acc.received = acc.received.add(r.receivedILS);
-      acc.remaining = acc.remaining.add(r.remainingILS);
+      acc.expected = acc.expected.add(new Prisma.Decimal(r.expectedILS));
+      acc.received = acc.received.add(new Prisma.Decimal(r.receivedILS));
+      acc.remaining = acc.remaining.add(new Prisma.Decimal(r.remainingILS));
       return acc;
     },
     {

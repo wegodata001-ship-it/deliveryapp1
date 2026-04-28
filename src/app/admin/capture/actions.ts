@@ -31,6 +31,7 @@ export type OrderCaptureSavedSummary = {
 export type PaymentCaptureSavedSummary = {
   paymentId: string;
   paymentCode: string | null;
+  paymentType: "ORDER_PAYMENT" | "GENERAL_PAYMENT";
   customerLabel: string;
   customerCode: string | null;
   paymentDateYmd: string;
@@ -500,6 +501,7 @@ export async function capturePaymentAction(form: {
 
   const paymentCode = await allocateNextPaymentCode();
   const weekCode = orderWeekCode ?? getWeekCodeForLocalDate(paymentDate);
+  const paymentType: "ORDER_PAYMENT" | "GENERAL_PAYMENT" = oid ? "ORDER_PAYMENT" : "GENERAL_PAYMENT";
 
   const pay = await prisma.payment.create({
     data: {
@@ -548,6 +550,7 @@ export async function capturePaymentAction(form: {
       entityType: "Payment",
       entityId: pay.id,
       metadata: {
+        paymentType,
         currency,
         amountDisplay,
         orderNumber: orderNumber ?? undefined,
@@ -563,6 +566,7 @@ export async function capturePaymentAction(form: {
     saved: {
       paymentId: pay.id,
       paymentCode: pay.paymentCode,
+      paymentType,
       customerLabel: custOk.displayName,
       customerCode: custOk.customerCode,
       paymentDateYmd: formatLocalYmd(paymentDate),

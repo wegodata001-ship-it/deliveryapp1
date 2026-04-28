@@ -10,6 +10,7 @@ import {
   type ReportPayload,
   type ReportTable,
 } from "@/app/admin/reports/actions";
+import { useAdminLoading } from "@/components/admin/AdminLoadingProvider";
 import { Modal } from "@/components/ui/Modal";
 
 type Props = {
@@ -92,37 +93,47 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
   const [filters, setFilters] = useState<ReportFilters>(initialFilters);
   const [activeReport, setActiveReport] = useState<ReportTable | null>(null);
   const [loading, setLoading] = useState(false);
+  const { runWithLoading, isLoading } = useAdminLoading();
 
   const filterKey = useMemo(() => JSON.stringify(filters), [filters]);
 
   useEffect(() => {
     const t = window.setTimeout(() => {
       setLoading(true);
-      void getReportsDashboardAction(filters).then((next) => {
-        setPayload(next);
-        setLoading(false);
-      });
+      void runWithLoading(() => getReportsDashboardAction(filters), "מעבד נתוני דוחות...")
+        .then((next) => {
+          setPayload(next);
+        })
+        .finally(() => setLoading(false));
     }, 250);
     return () => window.clearTimeout(t);
-  }, [filterKey, filters]);
+  }, [filterKey, filters, runWithLoading]);
 
   function updateFilter<K extends keyof ReportFilters>(key: K, value: ReportFilters[K]) {
     setFilters((old) => ({ ...old, [key]: value || undefined }));
   }
 
   async function loadReport(card: ReportCard) {
+    if (isLoading) return;
     setLoading(true);
-    const report = await getReportTableAction(card.id, filters);
-    setActiveReport(report);
-    setLoading(false);
+    try {
+      const report = await runWithLoading(() => getReportTableAction(card.id, filters), "טוען דוח...");
+      setActiveReport(report);
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function exportReport(kind: ReportKind, format: "excel" | "pdf") {
+    if (isLoading) return;
     setLoading(true);
-    const report = await getReportTableAction(kind, filters);
-    setLoading(false);
-    if (format === "excel") downloadExcel(report, filters);
-    else printPdf(report, filters);
+    try {
+      const report = await runWithLoading(() => getReportTableAction(kind, filters), "מכין ייצוא...");
+      if (format === "excel") downloadExcel(report, filters);
+      else printPdf(report, filters);
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -135,15 +146,15 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
         <div className="adm-reports-filters">
           <label>
             מתאריך
-            <input type="date" value={filters.dateFrom || ""} onChange={(e) => updateFilter("dateFrom", e.target.value)} />
+            <input disabled={isLoading} type="date" value={filters.dateFrom || ""} onChange={(e) => updateFilter("dateFrom", e.target.value)} />
           </label>
           <label>
             עד תאריך
-            <input type="date" value={filters.dateTo || ""} onChange={(e) => updateFilter("dateTo", e.target.value)} />
+            <input disabled={isLoading} type="date" value={filters.dateTo || ""} onChange={(e) => updateFilter("dateTo", e.target.value)} />
           </label>
           <label>
             לקוח
-            <select value={filters.customerId || ""} onChange={(e) => updateFilter("customerId", e.target.value)}>
+            <select disabled={isLoading} value={filters.customerId || ""} onChange={(e) => updateFilter("customerId", e.target.value)}>
               <option value="">כל הלקוחות</option>
               {payload.customers.map((c) => (
                 <option key={c.id} value={c.id}>{c.label}</option>
@@ -152,7 +163,7 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
           </label>
           <label>
             סטטוס
-            <select value={filters.status || ""} onChange={(e) => updateFilter("status", e.target.value)}>
+            <select disabled={isLoading} value={filters.status || ""} onChange={(e) => updateFilter("status", e.target.value)}>
               <option value="">כל הסטטוסים</option>
               {payload.statusOptions.map((s) => (
                 <option key={s.value} value={s.value}>{s.label}</option>
@@ -161,7 +172,7 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
           </label>
           <label>
             אמצעי תשלום
-            <select value={filters.paymentMethod || ""} onChange={(e) => updateFilter("paymentMethod", e.target.value)}>
+            <select disabled={isLoading} value={filters.paymentMethod || ""} onChange={(e) => updateFilter("paymentMethod", e.target.value)}>
               <option value="">כל האמצעים</option>
               {payload.paymentMethodOptions.map((m) => (
                 <option key={m.value} value={m.value}>{m.label}</option>
@@ -170,7 +181,7 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
           </label>
           <label>
             שבוע עבודה
-            <input value={filters.workWeek || ""} onChange={(e) => updateFilter("workWeek", e.target.value)} placeholder="AH-118" />
+            <input disabled={isLoading} value={filters.workWeek || ""} onChange={(e) => updateFilter("workWeek", e.target.value)} placeholder="AH-118" />
           </label>
         </div>
       </section>
@@ -181,12 +192,16 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
           <strong>{payload.kpis.totalOrders}</strong>
         </div>
         <div className="adm-report-kpi-card adm-report-kpi-card--payments">
-          <span>💳 סה״כ תשלומים</span>
-          <strong>{payload.kpis.totalPayments}</strong>
+          <span>💳 סה״כ תשלומים (קשורים)</span>
+          <strong>{payload.kpis.totalPaymentsLinked}</strong>
         </div>
         <div className="adm-report-kpi-card adm-report-kpi-card--balance">
-          <span>⚖️ יתרה פתוחה</span>
-          <strong>{payload.kpis.openBalance}</strong>
+          <span>🔴 יתרת חוב</span>
+          <strong>{payload.kpis.totalDebt}</strong>
+        </div>
+        <div className="adm-report-kpi-card adm-report-kpi-card--balance">
+          <span>🟢 יתרת זכות</span>
+          <strong>{payload.kpis.totalCredit}</strong>
         </div>
       </section>
 
@@ -200,14 +215,14 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
               <div className="adm-report-preview">{r.preview}</div>
             </div>
             <div className="adm-report-actions">
-              <button type="button" className="adm-btn adm-btn--primary adm-btn--sm" onClick={() => void loadReport(r)}>
-                צפייה בדוח
+              <button type="button" className="adm-btn adm-btn--primary adm-btn--sm" disabled={isLoading} onClick={() => void loadReport(r)}>
+                {isLoading ? "⏳ מעבד..." : "צפייה בדוח"}
               </button>
-              <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" onClick={() => void exportReport(r.id, "excel")}>
-                Excel
+              <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" disabled={isLoading} onClick={() => void exportReport(r.id, "excel")}>
+                {isLoading ? "⏳ שומר..." : "Excel"}
               </button>
-              <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" onClick={() => void exportReport(r.id, "pdf")}>
-                PDF
+              <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" disabled={isLoading} onClick={() => void exportReport(r.id, "pdf")}>
+                {isLoading ? "⏳ שומר..." : "PDF"}
               </button>
             </div>
           </article>
@@ -227,9 +242,17 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
                   <tr>{activeReport.columns.map((c) => <th key={c}>{c}</th>)}</tr>
                 </thead>
                 <tbody>
-                  {activeReport.rows.map((row, idx) => (
-                    <tr key={idx}>{row.map((cell, i) => <td key={i}>{cell}</td>)}</tr>
-                  ))}
+                  {activeReport.rows.length === 0 ? (
+                    <tr>
+                      <td colSpan={activeReport.columns.length} className="adm-table-empty">
+                        אין נתונים לטווח שנבחר
+                      </td>
+                    </tr>
+                  ) : (
+                    activeReport.rows.map((row, idx) => (
+                      <tr key={idx}>{row.map((cell, i) => <td key={i}>{cell}</td>)}</tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>

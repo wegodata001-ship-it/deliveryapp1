@@ -320,3 +320,46 @@ model LegacyRawRow {
   @@index([legacyRecordId])
   @@index([importedAt])
 }
+
+enum ExcelImportRowStatus {
+  PENDING
+  VALID
+  ERROR
+  IMPORTED
+}
+
+model ExcelImportFile {
+  id             String   @id @default(uuid())
+  shipmentNumber String?
+  sendDate       DateTime?
+  arrivalDate    DateTime?
+  totalWeight    Decimal? @db.Decimal(19, 4)
+  totalBoxes     Int?
+  createdAt      DateTime @default(now())
+
+  rows ExcelImportRow[]
+
+  @@index([createdAt])
+}
+
+model ExcelImportRow {
+  id           String             @id @default(uuid())
+  fileId       String
+  rowNumber    Int
+  customerName String?
+  phone        String?
+  city         String?
+  boxesCount   Int?
+  weight       Decimal?           @db.Decimal(19, 4)
+  amountUsd    Decimal?           @db.Decimal(19, 4)
+  notes        String?
+  status       ExcelImportRowStatus @default(PENDING)
+  errorMessage String?
+  createdAt    DateTime           @default(now())
+
+  file ExcelImportFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@index([fileId])
+  @@index([status])
+  @@index([rowNumber])
+}

@@ -19,6 +19,7 @@ import { Modal } from "@/components/ui/Modal";
 import { orderCaptureSplitMethodLabel, parseSplitPaymentMethodRaw } from "@/lib/order-capture-payment-methods";
 import { previewOrderIlsSummary } from "@/lib/order-capture-preview";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
+import { useAdminLoading } from "@/components/admin/AdminLoadingProvider";
 import { DEFAULT_WEEK_CODE, WORK_WEEK_CODES_SORTED, WORK_WEEK_RANGES, formatLocalHm, formatLocalYmd } from "@/lib/work-week";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 import type { OrderCaptureWindowProps } from "@/lib/admin-windows";
@@ -95,6 +96,7 @@ function panelKeyFromTarget(t: OrderCaptureWindowProps): string {
 export function OrderWorkPanel({ windowId, financial, onToast, canCreateOrders, canEditOrders, target, onClose }: Props) {
   const router = useRouter();
   const { openWindow } = useAdminWindows();
+  const { runWithLoading, isLoading } = useAdminLoading();
   const idp = (s: string) => `${windowId}-${s}`;
 
   const panelKey = useMemo(() => panelKeyFromTarget(target), [target]);
@@ -441,7 +443,7 @@ export function OrderWorkPanel({ windowId, financial, onToast, canCreateOrders, 
     (async () => {
       setLoadOrderBusy(true);
       setErr(null);
-      const row = await getOrderForWorkPanelAction(orderId);
+      const row = await runWithLoading(() => getOrderForWorkPanelAction(orderId), "טוען הזמנה...");
       if (cancelled) return;
       if (!row) {
         setErr("לא ניתן לטעון את ההזמנה");
@@ -454,7 +456,7 @@ export function OrderWorkPanel({ windowId, financial, onToast, canCreateOrders, 
     return () => {
       cancelled = true;
     };
-  }, [panelKey, applyLoadedOrder, loadPreviewNumber, canCreateOrders, canEditOrders, financial]);
+  }, [panelKey, applyLoadedOrder, loadPreviewNumber, canCreateOrders, canEditOrders, financial, runWithLoading]);
 
   useEffect(() => {
     if (panelKey !== "create") return;
@@ -524,6 +526,7 @@ export function OrderWorkPanel({ windowId, financial, onToast, canCreateOrders, 
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (isLoading) return;
     if (paymentBlockError) {
       setErr(paymentBlockError);
       return;
@@ -556,20 +559,24 @@ export function OrderWorkPanel({ windowId, financial, onToast, canCreateOrders, 
       }
       setBusy(true);
       setErr(null);
-      const res = await updateOrderWorkPanelAction({
-        orderId: editOrderId,
-        weekCode,
-        orderDateYmd,
-        orderTimeHm,
-        customerId: cust.id,
-        customerTypeSnapshot: customerType,
-        amountUsd,
-        feeUsd: feeUsdStrForSave,
-        paymentMethod: derivePrimaryPaymentMethod(paymentRows),
-        status: orderStatus,
-        notes,
-        paymentLines,
-      });
+      const res = await runWithLoading(
+        () =>
+          updateOrderWorkPanelAction({
+            orderId: editOrderId,
+            weekCode,
+            orderDateYmd,
+            orderTimeHm,
+            customerId: cust.id,
+            customerTypeSnapshot: customerType,
+            amountUsd,
+            feeUsd: feeUsdStrForSave,
+            paymentMethod: derivePrimaryPaymentMethod(paymentRows),
+            status: orderStatus,
+            notes,
+            paymentLines,
+          }),
+        "שומר הזמנה...",
+      );
       setBusy(false);
       if (!res.ok) {
         setErr(res.error);
@@ -589,21 +596,25 @@ export function OrderWorkPanel({ windowId, financial, onToast, canCreateOrders, 
     setErr(null);
     const ord = orderNumberDraft.trim();
     const orderNumberOpt = ord && ord !== "—" ? ord : undefined;
-    const res = await captureOrderAction({
-      weekCode,
-      orderDateYmd,
-      orderTimeHm,
-      orderNumber: orderNumberOpt,
-      finalRateOverride: exchangeRateDraft.trim() || undefined,
-      customerId: cust.id,
-      customerTypeSnapshot: customerType,
-      amountUsd,
-      feeUsd: feeUsdStrForSave,
-      paymentMethod: derivePrimaryPaymentMethod(paymentRows),
-      status: orderStatus,
-      notes,
-      paymentLines,
-    });
+    const res = await runWithLoading(
+      () =>
+        captureOrderAction({
+          weekCode,
+          orderDateYmd,
+          orderTimeHm,
+          orderNumber: orderNumberOpt,
+          finalRateOverride: exchangeRateDraft.trim() || undefined,
+          customerId: cust.id,
+          customerTypeSnapshot: customerType,
+          amountUsd,
+          feeUsd: feeUsdStrForSave,
+          paymentMethod: derivePrimaryPaymentMethod(paymentRows),
+          status: orderStatus,
+          notes,
+          paymentLines,
+        }),
+      "שומר הזמנה...",
+    );
     setBusy(false);
     if (!res.ok) {
       setErr(res.error);
@@ -1028,7 +1039,7 @@ export function OrderWorkPanel({ windowId, financial, onToast, canCreateOrders, 
               className="adm-btn adm-btn--primary adm-btn--dense"
               disabled={busy || !!paymentBlockError || (panelKey.startsWith("edit:") && !canEditOrders)}
             >
-              {panelKey.startsWith("edit:") ? "עדכון" : "שמירה"}
+              {busy ? "⏳ שומר..." : panelKey.startsWith("edit:") ? "עדכון" : "שמירה"}
             </button>
           </div>
         </form>

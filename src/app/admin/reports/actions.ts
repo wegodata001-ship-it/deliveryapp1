@@ -31,8 +31,9 @@ export type ReportCard = {
 
 export type ReportKpis = {
   totalOrders: string;
-  totalPayments: string;
-  openBalance: string;
+  totalPaymentsLinked: string;
+  totalDebt: string;
+  totalCredit: string;
 };
 
 export type ReportPayload = {
@@ -122,7 +123,7 @@ async function computeKpis(filters: ReportFilters): Promise<ReportKpis> {
     ...(filters.status ? { status: filters.status as OrderStatus } : {}),
     ...(filters.workWeek ? { weekCode: filters.workWeek } : {}),
   };
-  const paymentWhere: Prisma.PaymentWhereInput = {
+  const paymentWhereBase: Prisma.PaymentWhereInput = {
     isPaid: true,
     paymentDate: { gte: from, lte: to },
     ...(filters.customerId ? { customerId: filters.customerId } : {}),
@@ -131,14 +132,25 @@ async function computeKpis(filters: ReportFilters): Promise<ReportKpis> {
   };
   const [orders, payments] = await Promise.all([
     prisma.order.findMany({ where: orderWhere, select: { totalIlsWithVat: true, totalIls: true } }),
-    prisma.payment.findMany({ where: paymentWhere, select: { totalIlsWithVat: true, amountIls: true, amountUsd: true, exchangeRate: true } }),
+    prisma.payment.findMany({
+      where: paymentWhereBase,
+      select: { orderId: true, totalIlsWithVat: true, amountIls: true, amountUsd: true, exchangeRate: true },
+    }),
   ]);
   const expected = orders.reduce((sum, o) => sum.add(o.totalIlsWithVat ?? o.totalIls ?? 0), new Prisma.Decimal(0));
-  const paid = payments.reduce((sum, p) => sum.add(paymentIls(p)), new Prisma.Decimal(0));
+  const paidLinked = payments
+    .filter((p) => !!p.orderId)
+    .reduce((sum, p) => sum.add(paymentIls(p)), new Prisma.Decimal(0));
+  const credits = payments
+    .filter((p) => !p.orderId)
+    .reduce((sum, p) => sum.add(paymentIls(p)), new Prisma.Decimal(0));
+  const open = expected.sub(paidLinked);
+  const debt = open.gt(0) ? open : new Prisma.Decimal(0);
   return {
     totalOrders: String(orders.length),
-    totalPayments: moneyIls(paid),
-    openBalance: moneyIls(expected.sub(paid)),
+    totalPaymentsLinked: moneyIls(paidLinked),
+    totalDebt: moneyIls(debt),
+    totalCredit: moneyIls(credits),
   };
 }
 
@@ -155,10 +167,10 @@ export async function getReportsDashboardAction(filters: ReportFilters): Promise
   ]);
   const reports: ReportCard[] = [
     { id: "openOrdersReport", title: "דוח הזמנות פתוחות", description: "הזמנות שעדיין לא נסגרו, לפי לקוח ושבוע.", icon: "📦", preview: `${kpis.totalOrders} הזמנות בטווח` },
-    { id: "paymentsByLocationReport", title: "תשלומים לפי מקום", description: "סיכום תשלומים לפי מקום קליטת התשלום.", icon: "📍", preview: `סה\"כ תשלומים ${kpis.totalPayments}` },
+    { id: "paymentsByLocationReport", title: "תשלומים לפי מקום", description: "סיכום תשלומים לפי מקום קליטת התשלום.", icon: "📍", preview: `תשלומים קשורים ${kpis.totalPaymentsLinked}` },
     { id: "weeklySummaryReport", title: "סיכום שבועי", description: "סיכום הזמנות, תשלומים ויתרות לפי שבוע עבודה.", icon: "📅", preview: filters.workWeek ? `שבוע ${filters.workWeek}` : "כל השבועות בטווח" },
-    { id: "customerBalanceReport", title: "יתרות לקוחות", description: "לקוחות, שולם, יתרה פתוחה וסכומים לתשלום.", icon: "⚖️", preview: `יתרה פתוחה ${kpis.openBalance}` },
-    { id: "paymentsByMethodReport", title: "תשלומים לפי אמצעי", description: "חלוקת תשלומים לפי מזומן, אשראי, העברה ועוד.", icon: "💳", preview: `סה\"כ תשלומים ${kpis.totalPayments}` },
+    { id: "customerBalanceReport", title: "יתרות לקוחות", description: "לקוחות, שולם, יתרה פתוחה וסכומים לתשלום.", icon: "⚖️", preview: `יתרת חוב ${kpis.totalDebt}` },
+    { id: "paymentsByMethodReport", title: "תשלומים לפי אמצעי", description: "חלוקת תשלומים לפי מזומן, אשראי, העברה ועוד.", icon: "💳", preview: `סה\"כ זיכויים ${kpis.totalCredit}` },
   ];
   return {
     kpis,
@@ -197,7 +209,13 @@ export async function getReportTableAction(kind: ReportKind, filters: ReportFilt
 
   if (kind === "paymentsByLocationReport") {
     const rows = await prisma.payment.findMany({
-      where: { isPaid: true, paymentDate: { gte: from, lte: to }, ...(filters.customerId ? { customerId: filters.customerId } : {}), ...(filters.paymentMethod ? { paymentMethod: filters.paymentMethod as PaymentMethod } : {}) },
+      where: {
+        isPaid: true,
+        orderId: { not: null },
+        paymentDate: { gte: from, lte: to },
+        ...(filters.customerId ? { customerId: filters.customerId } : {}),
+        ...(filters.paymentMethod ? { paymentMethod: filters.paymentMethod as PaymentMethod } : {}),
+      },
       select: { paymentPlace: true, totalIlsWithVat: true, amountIls: true, amountUsd: true, exchangeRate: true },
     });
     const map = new Map<string, { count: number; sum: Prisma.Decimal }>();
@@ -219,12 +237,30 @@ export async function getReportTableAction(kind: ReportKind, filters: ReportFilt
   }
 
   if (kind === "paymentsByMethodReport") {
-    const rows = await prisma.payment.findMany({
-      where: { isPaid: true, paymentDate: { gte: from, lte: to }, ...(filters.customerId ? { customerId: filters.customerId } : {}), ...(filters.paymentMethod ? { paymentMethod: filters.paymentMethod as PaymentMethod } : {}) },
-      select: { paymentMethod: true, totalIlsWithVat: true, amountIls: true, amountUsd: true, exchangeRate: true },
-    });
+    const [ordersInRange, rows] = await Promise.all([
+      prisma.order.count({
+        where: {
+          deletedAt: null,
+          orderDate: { gte: from, lte: to },
+          ...(filters.customerId ? { customerId: filters.customerId } : {}),
+          ...(filters.workWeek ? { weekCode: filters.workWeek } : {}),
+        },
+      }),
+      prisma.payment.findMany({
+        where: {
+          isPaid: true,
+          paymentDate: { gte: from, lte: to },
+          ...(filters.customerId ? { customerId: filters.customerId } : {}),
+          ...(filters.paymentMethod ? { paymentMethod: filters.paymentMethod as PaymentMethod } : {}),
+          ...(filters.workWeek ? { weekCode: filters.workWeek } : {}),
+        },
+        select: { orderId: true, paymentMethod: true, totalIlsWithVat: true, amountIls: true, amountUsd: true, exchangeRate: true },
+      }),
+    ]);
+    const linkedRows = rows.filter((r) => !!r.orderId);
+    const generalRows = rows.filter((r) => !r.orderId);
     const map = new Map<string, { count: number; sum: Prisma.Decimal }>();
-    for (const p of rows) {
+    for (const p of linkedRows) {
       const key = p.paymentMethod ? METHOD_HE[p.paymentMethod] ?? p.paymentMethod : "ללא אמצעי";
       const cur = map.get(key) ?? { count: 0, sum: new Prisma.Decimal(0) };
       cur.count += 1;
@@ -232,19 +268,30 @@ export async function getReportTableAction(kind: ReportKind, filters: ReportFilt
       map.set(key, cur);
     }
     const total = [...map.values()].reduce((sum, x) => sum.add(x.sum), new Prisma.Decimal(0));
+    const generalTotal = generalRows.reduce((sum, r) => sum.add(paymentIls(r)), new Prisma.Decimal(0));
     return {
       id: kind,
-      title: "תשלומים לפי אמצעי",
+      title: ordersInRange === 0 ? "תשלומים לפי אמצעי (תשלומים כלליים בלבד)" : "תשלומים לפי אמצעי",
       columns: ["אמצעי תשלום", "כמות תשלומים", "סכום ש\"ח"],
-      rows: [...map.entries()].map(([method, v]) => [method, String(v.count), moneyIls(v.sum)]),
-      totals: { total: moneyIls(total), paid: moneyIls(total), remaining: moneyIls(0) },
+      rows:
+        ordersInRange === 0
+          ? [["תשלומים כלליים בלבד", String(generalRows.length), moneyIls(generalTotal)]]
+          : [...map.entries()].map(([method, v]) => [method, String(v.count), moneyIls(v.sum)]),
+      totals: {
+        total: moneyIls(total),
+        paid: moneyIls(total),
+        remaining: ordersInRange === 0 ? "תשלומים כלליים בלבד" : moneyIls(0),
+      },
     };
   }
 
   if (kind === "weeklySummaryReport") {
     const [orders, payments] = await Promise.all([
       prisma.order.findMany({ where: { deletedAt: null, orderDate: { gte: from, lte: to }, ...(filters.customerId ? { customerId: filters.customerId } : {}) }, select: { weekCode: true, totalIlsWithVat: true, totalIls: true } }),
-      prisma.payment.findMany({ where: { isPaid: true, paymentDate: { gte: from, lte: to }, ...(filters.customerId ? { customerId: filters.customerId } : {}) }, select: { weekCode: true, totalIlsWithVat: true, amountIls: true, amountUsd: true, exchangeRate: true } }),
+      prisma.payment.findMany({
+        where: { isPaid: true, orderId: { not: null }, paymentDate: { gte: from, lte: to }, ...(filters.customerId ? { customerId: filters.customerId } : {}) },
+        select: { weekCode: true, totalIlsWithVat: true, amountIls: true, amountUsd: true, exchangeRate: true },
+      }),
     ]);
     const map = new Map<string, { orders: number; total: Prisma.Decimal; paid: Prisma.Decimal }>();
     for (const o of orders) {
@@ -277,8 +324,25 @@ export async function getReportTableAction(kind: ReportKind, filters: ReportFilt
     select: {
       displayName: true,
       customerCode: true,
-      orders: { where: { deletedAt: null }, select: { totalIlsWithVat: true, totalIls: true } },
-      payments: { where: { isPaid: true }, select: { totalIlsWithVat: true, amountIls: true, amountUsd: true, exchangeRate: true } },
+      orders: {
+        where: {
+          deletedAt: null,
+          orderDate: { gte: from, lte: to },
+          ...(filters.workWeek ? { weekCode: filters.workWeek } : {}),
+          ...(filters.status ? { status: filters.status as OrderStatus } : {}),
+        },
+        select: { totalIlsWithVat: true, totalIls: true },
+      },
+      payments: {
+        where: {
+          isPaid: true,
+          orderId: { not: null },
+          paymentDate: { gte: from, lte: to },
+          ...(filters.workWeek ? { weekCode: filters.workWeek } : {}),
+          ...(filters.paymentMethod ? { paymentMethod: filters.paymentMethod as PaymentMethod } : {}),
+        },
+        select: { totalIlsWithVat: true, amountIls: true, amountUsd: true, exchangeRate: true },
+      },
     },
   });
   let total = new Prisma.Decimal(0);
@@ -293,7 +357,7 @@ export async function getReportTableAction(kind: ReportKind, filters: ReportFilt
   return {
     id: kind,
     title: "יתרות לקוחות",
-    columns: ["לקוח", "קוד לקוח", "סכום לתשלום", "שולם", "יתרה"],
+    columns: ["לקוח", "קוד לקוח", "סה\"כ הזמנות", "סה\"כ תשלומים", "יתרה"],
     rows: tableRows,
     totals: { total: moneyIls(total), paid: moneyIls(paid), remaining: moneyIls(total.sub(paid)) },
   };

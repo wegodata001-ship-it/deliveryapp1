@@ -693,6 +693,113 @@
   color: var(--adm-muted);
 }
 
+.adm-excel-page {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.adm-excel-upload-card,
+.adm-excel-meta-card,
+.adm-excel-table-wrap {
+  background: #fff;
+  border: 1px solid var(--adm-border);
+  border-radius: 14px;
+  box-shadow: var(--adm-shadow);
+  padding: 0.9rem 1rem;
+}
+
+.adm-excel-upload-card h1 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.adm-excel-upload-card p {
+  margin: 0.35rem 0 0.75rem;
+  color: var(--adm-muted);
+  font-size: 0.86rem;
+}
+
+.adm-excel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  align-items: center;
+}
+
+.adm-excel-meta-card h2 {
+  margin: 0 0 0.5rem;
+  font-size: 0.98rem;
+}
+
+.adm-excel-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.45rem 0.75rem;
+  font-size: 0.84rem;
+}
+
+.adm-excel-counters {
+  margin-top: 0.55rem;
+  display: flex;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+  font-weight: 700;
+}
+
+.adm-excel-valid {
+  color: #166534;
+}
+
+.adm-excel-error {
+  color: #991b1b;
+}
+
+.adm-excel-table-wrap {
+  overflow: auto;
+}
+
+.adm-excel-table th,
+.adm-excel-table td {
+  padding: 0.45rem 0.55rem;
+  font-size: 0.82rem;
+}
+
+.adm-excel-row--valid {
+  background: #f0fdf4;
+}
+
+.adm-excel-row--error {
+  background: #fef2f2;
+}
+
+.adm-excel-row--warning {
+  background: #fefce8;
+}
+
+.adm-excel-hint {
+  margin: 0.2rem 0 0;
+  font-size: 0.82rem;
+  color: #4b5563;
+}
+
+.adm-btn--excel-primary {
+  background: #15803d;
+  color: #fff;
+}
+
+.adm-btn--excel-primary:hover:not(:disabled) {
+  background: #166534;
+}
+
+.adm-btn--excel-warning {
+  background: #facc15;
+  color: #1f2937;
+}
+
+.adm-btn--excel-warning:hover:not(:disabled) {
+  background: #eab308;
+}
+
 .adm-header {
   position: sticky;
   top: 0;
@@ -5007,10 +5114,134 @@
   text-underline-offset: 3px;
 }
 
+.adm-balance-amount {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  text-decoration: none;
+  font-weight: 700;
+}
+
 .adm-balance-amount:disabled {
   cursor: default;
   text-decoration: none;
   opacity: 0.75;
+}
+
+.adm-balance-kind {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.adm-balance-kind--debt {
+  background: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #fecaca;
+}
+
+.adm-balance-kind--credit {
+  background: #dcfce7;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+}
+
+.adm-balance-kind--even {
+  background: #e5e7eb;
+  color: #374151;
+  border: 1px solid #d1d5db;
+}
+
+/* Global loading (admin) */
+.adm-app-shell {
+  position: relative;
+}
+
+.adm-app-shell--busy button,
+.adm-app-shell--busy .adm-btn,
+.adm-app-shell--busy input,
+.adm-app-shell--busy select,
+.adm-app-shell--busy textarea {
+  pointer-events: none;
+}
+
+.adm-global-loading {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  background: rgba(15, 23, 42, 0.34);
+  backdrop-filter: blur(3px);
+  display: grid;
+  place-items: center;
+  pointer-events: auto;
+  animation: adm-loader-fade-in 0.2s ease-out;
+}
+
+.adm-global-loading-card {
+  min-width: 220px;
+  max-width: 90vw;
+  padding: 1rem 1.1rem;
+  border-radius: 14px;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.22);
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.adm-global-loading-spinner {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 4px solid #cbd5e1;
+  border-top-color: #2563eb;
+  animation: adm-spin 0.9s linear infinite;
+}
+
+.adm-global-loading-text {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: #334155;
+}
+
+.adm-skeleton-line {
+  width: 100%;
+  height: 14px;
+  border-radius: 8px;
+  background: linear-gradient(90deg, #e2e8f0 25%, #f8fafc 50%, #e2e8f0 75%);
+  background-size: 200% 100%;
+  animation: adm-skeleton 1.2s ease-in-out infinite;
+}
+
+@keyframes adm-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes adm-loader-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes adm-skeleton {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
 }
 
 .adm-balance-status-select {

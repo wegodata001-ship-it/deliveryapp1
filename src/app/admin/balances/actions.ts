@@ -3,6 +3,7 @@
 import { Prisma } from "@prisma/client";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
+import { endOfLocalDay, parseLocalDate } from "@/lib/work-week";
 
 export type CustomerBalanceStatus = "NOT_PAID" | "PARTIAL" | "PAID" | "PROBLEM" | "PAUSED";
 
@@ -15,6 +16,9 @@ export type CustomerBalanceFilters = {
 export type CustomerBalanceQuery = {
   page: number;
   limit: number;
+  fromYmd?: string;
+  toYmd?: string;
+  weekCode?: string;
   filters?: CustomerBalanceFilters;
 };
 
@@ -22,6 +26,10 @@ export type CustomerBalanceRow = {
   customerId: string;
   customerName: string;
   customerCode: string | null;
+  totalOrdersILS: string;
+  totalPaymentsILS: string;
+  totalCreditsILS: string;
+  noOrdersInRange: boolean;
   balanceILS: string;
   balanceUSD: string;
   expectedILS: string;
@@ -90,6 +98,7 @@ function orderExpectedIlsValue(o: {
 }
 
 function autoStatus(expected: Prisma.Decimal, received: Prisma.Decimal): CustomerBalanceStatus {
+  if (expected.lte(new Prisma.Decimal("0.01"))) return "PAID";
   if (received.lte(new Prisma.Decimal("0.01"))) return "NOT_PAID";
   if (received.lt(expected.sub(new Prisma.Decimal("0.01")))) return "PARTIAL";
   return "PAID";
@@ -102,6 +111,21 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   }
 
   await ensureStatusOverrideTable();
+
+  const orderDateWhere: Prisma.DateTimeFilter | undefined =
+    query.fromYmd?.trim() || query.toYmd?.trim()
+      ? {
+          ...(query.fromYmd?.trim() ? { gte: parseLocalDate(query.fromYmd.trim()) } : {}),
+          ...(query.toYmd?.trim() ? { lte: endOfLocalDay(query.toYmd.trim()) } : {}),
+        }
+      : undefined;
+  const paymentDateWhere: Prisma.DateTimeFilter | undefined =
+    query.fromYmd?.trim() || query.toYmd?.trim()
+      ? {
+          ...(query.fromYmd?.trim() ? { gte: parseLocalDate(query.fromYmd.trim()) } : {}),
+          ...(query.toYmd?.trim() ? { lte: endOfLocalDay(query.toYmd.trim()) } : {}),
+        }
+      : undefined;
 
   const customers = await prisma.customer.findMany({
     where: {
@@ -120,7 +144,11 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       displayName: true,
       customerCode: true,
       orders: {
-        where: { deletedAt: null },
+        where: {
+          deletedAt: null,
+          ...(query.weekCode?.trim() ? { weekCode: query.weekCode.trim() } : {}),
+          ...(orderDateWhere ? { orderDate: orderDateWhere } : {}),
+        },
         select: {
           totalIlsWithVat: true,
           totalIls: true,
@@ -133,7 +161,12 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
         },
       },
       payments: {
-        where: { isPaid: true },
+        where: {
+          isPaid: true,
+          orderId: { not: null },
+          ...(query.weekCode?.trim() ? { weekCode: query.weekCode.trim() } : {}),
+          ...(paymentDateWhere ? { paymentDate: paymentDateWhere } : {}),
+        },
         select: {
           totalIlsWithVat: true,
           amountIls: true,
@@ -143,6 +176,34 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       },
     },
   });
+
+  const customerIds = customers.map((c) => c.id);
+  const generalCreditRows =
+    customerIds.length > 0
+      ? await prisma.payment.findMany({
+          where: {
+            isPaid: true,
+            orderId: null,
+            customerId: { in: customerIds },
+            ...(query.weekCode?.trim() ? { weekCode: query.weekCode.trim() } : {}),
+            ...(paymentDateWhere ? { paymentDate: paymentDateWhere } : {}),
+          },
+          select: {
+            customerId: true,
+            totalIlsWithVat: true,
+            amountIls: true,
+            amountUsd: true,
+            exchangeRate: true,
+          },
+        })
+      : [];
+  const creditByCustomer = new Map<string, Prisma.Decimal>();
+  for (const p of generalCreditRows) {
+    const cid = p.customerId ?? "";
+    if (!cid) continue;
+    const cur = creditByCustomer.get(cid) ?? new Prisma.Decimal(0);
+    creditByCustomer.set(cid, cur.add(paymentIlsValue(p)));
+  }
 
   const overrides = await prisma.$queryRaw<Array<{ customerId: string; statusOverride: string | null; note: string | null }>>`
     SELECT "customerId", "statusOverride", "note"
@@ -158,6 +219,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   const rows = customers.map((c): CustomerBalanceRow => {
     const expectedIls = c.orders.reduce((sum, o) => sum.add(orderExpectedIlsValue(o)), new Prisma.Decimal(0));
     const receivedIls = c.payments.reduce((sum, p) => sum.add(paymentIlsValue(p)), new Prisma.Decimal(0));
+    const creditsIls = creditByCustomer.get(c.id) ?? new Prisma.Decimal(0);
     const balanceIls = expectedIls.sub(receivedIls);
     const expectedUsd = c.orders.reduce(
       (sum, o) => sum.add(o.totalUsd ?? (o.amountUsd ?? new Prisma.Decimal(0)).add(o.commissionUsd ?? new Prisma.Decimal(0))),
@@ -170,6 +232,10 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       customerId: c.id,
       customerName: c.displayName,
       customerCode: c.customerCode,
+      totalOrdersILS: money(expectedIls),
+      totalPaymentsILS: money(receivedIls),
+      totalCreditsILS: money(creditsIls),
+      noOrdersInRange: c.orders.length === 0,
       balanceILS: money(balanceIls),
       balanceUSD: money(expectedUsd.sub(receivedUsd)),
       expectedILS: money(expectedIls),
