@@ -74,7 +74,7 @@ export function OrderCapturePaymentsSection({
   onSplitRemainingHalfCashCredit,
   rateNisPerUsd,
 }: Props) {
-  const splitHintId = `${idPrefix}-split-hint`;
+  const splitHintText = "מילוי מהיר של היתרה שנותרה לתשלום.";
 
   const totalPaidAll = existingPaidUsd + formPaymentsUsd;
   const remainingUsd =
@@ -152,10 +152,7 @@ export function OrderCapturePaymentsSection({
           </p>
         ) : null}
 
-        <h4 className="adm-pay-split-heading">תשלומים (פיצול)</h4>
-        <p className="adm-pay-split-lead">
-          כל שורה: אמצעי, מטבע (דולר או שקל), וסכום. סכומים ב-₪ מומרים ל-USD לפי שער ההזמנה; סה״כ השורות לא יעלה על סה״כ ההזמנה בדולר.
-        </p>
+        <h4 className="adm-pay-split-heading">תשלומים</h4>
 
         <div className="adm-pay-table-scroll adm-pay-table-scroll--when-needed">
           <table className="adm-pay-compact-table adm-pay-table--split-currency">
@@ -278,18 +275,15 @@ export function OrderCapturePaymentsSection({
         </div>
 
         <div className="adm-pay-split-tools">
-          <p className="adm-pay-split-hint" id={splitHintId}>
-            מילוי מהיר של הסכום שנותר (אחרי השורות והתשלומים שכבר רשומים). אפשר במזומן בדולר או בשקל לפי שער ההזמנה.
-          </p>
           <div className="adm-pay-split-btns">
             <button
               type="button"
               className="adm-btn adm-btn--dense adm-pay-split-btn"
               disabled={splitDisabled}
               onClick={onFillRemainingCash}
-              aria-describedby={splitHintId}
+              title={splitHintText}
             >
-              מלא נותר במזומן (USD)
+              מלא לפי דולר
             </button>
             {onFillRemainingCashIls ? (
               <button
@@ -297,9 +291,9 @@ export function OrderCapturePaymentsSection({
                 className="adm-btn adm-btn--dense adm-pay-split-btn"
                 disabled={ilsFillDisabled}
                 onClick={onFillRemainingCashIls}
-                aria-describedby={splitHintId}
+                title={splitHintText}
               >
-                מלא נותר במזומן (₪)
+                מלא לפי שקל
               </button>
             ) : null}
             <button
@@ -307,9 +301,9 @@ export function OrderCapturePaymentsSection({
               className="adm-btn adm-btn--dense adm-pay-split-btn"
               disabled={splitDisabled}
               onClick={onSplitRemainingHalfCashCredit}
-              aria-describedby={splitHintId}
+              title={splitHintText}
             >
-              חצי מזומן וחצי אשראי מהנותר
+              חצי חצי
             </button>
           </div>
         </div>

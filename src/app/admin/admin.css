@@ -2634,9 +2634,8 @@
 
 /* מודל קליטת הזמנה — גובה מוגבל ללא גלילה בגוף החלון */
 .adm-win-panel--order-capture {
-  width: 95%;
-  max-width: 1600px;
-  max-height: 90vh;
+  width: min(1000px, 94vw);
+  max-height: 88vh;
 }
 
 .adm-win-body--order-capture {
@@ -2649,11 +2648,11 @@
 }
 
 .adm-win-panel--order-capture .adm-win-header {
-  padding: 12px 18px;
+  padding: 10px 14px;
 }
 
 .adm-win-panel--order-capture .adm-win-title {
-  font-size: 24px;
+  font-size: 18px;
   font-weight: 800;
   letter-spacing: -0.02em;
 }
@@ -3254,15 +3253,22 @@
 
 /* קליטת הזמנה — קריאות, ריווח שדות, תשלום בטבלה, sticky לשמירה (מעל «קומפקט») */
 .adm-win-panel--order-capture .adm-capture-order-shell {
-  gap: 12px;
+  gap: 8px;
 }
 
 .adm-win-panel--order-capture .adm-order-capture-compact .adm-order-layout {
-  gap: 32px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-areas:
+    "amounts order customer"
+    "payments payments payments"
+    "notes notes notes";
+  gap: 8px;
+  align-items: start;
 }
 
 .adm-win-panel--order-capture .adm-order-capture-compact .adm-field--capture {
-  margin-bottom: 20px;
+  margin-bottom: 6px;
 }
 
 .adm-win-panel--order-capture .adm-order-capture-compact .adm-field--capture:last-child {
@@ -3270,14 +3276,14 @@
 }
 
 .adm-win-panel--order-capture .adm-order-capture-compact .adm-field--capture label {
-  font-size: 16px;
-  margin-bottom: 6px;
+  font-size: 11px;
+  margin-bottom: 2px;
 }
 
 .adm-win-panel--order-capture .adm-order-capture-compact .adm-capture-sec-title {
-  font-size: 18px;
+  font-size: 12px;
   font-weight: 800;
-  margin: 0 0 10px;
+  margin: 0 0 4px;
 }
 
 .adm-win-panel--order-capture .adm-order-capture-compact .adm-field--capture input[type="text"],
@@ -3286,66 +3292,205 @@
 .adm-win-panel--order-capture .adm-order-capture-compact .adm-field--capture select,
 .adm-win-panel--order-capture .adm-order-capture-compact .adm-input-readonly--dense,
 .adm-win-panel--order-capture .adm-order-capture-compact .adm-capture-notes-line {
-  height: auto;
-  min-height: 48px;
-  padding: 14px 16px;
-  font-size: 16px;
-  border-radius: 10px;
-  line-height: 1.35;
+  min-height: 34px;
+  height: 34px;
+  padding: 4px 8px;
+  font-size: 13px;
+  border-radius: 7px;
+  line-height: 1.2;
 }
 
 .adm-win-panel--order-capture .adm-pay-cell-select,
 .adm-win-panel--order-capture .adm-pay-cell-input {
-  min-height: 48px;
-  height: auto;
-  padding: 14px 12px;
-  font-size: 16px;
-  border-radius: 10px;
+  min-height: 32px;
+  height: 32px;
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 7px;
 }
 
 .adm-win-panel--order-capture .adm-cap-amounts-lead {
-  font-size: 15px;
-  line-height: 1.55;
+  display: none;
 }
 
 .adm-win-panel--order-capture .adm-modal-actions--capture {
   position: sticky;
-  bottom: 20px;
-  margin-top: 12px;
-  padding: 16px 18px;
-  border-radius: 14px;
+  bottom: 0;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 10px;
   border: 1px solid var(--adm-border);
-  background: rgba(255, 255, 255, 0.96);
+  background: rgba(255, 255, 255, 0.98);
   backdrop-filter: blur(8px);
-  box-shadow: 0 10px 40px rgba(15, 23, 42, 0.14);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.1);
   z-index: 4;
 }
 
 .adm-win-panel--order-capture .adm-modal-actions--capture .adm-btn--dense {
-  padding: 12px 22px;
-  font-size: 16px;
-  min-height: 48px;
+  padding: 6px 14px;
+  font-size: 13px;
+  min-height: 34px;
 }
 
 .adm-win-panel--order-capture .adm-combo--dense input[type="text"],
 .adm-win-panel--order-capture .adm-combo--compact-cap input[type="text"] {
-  min-height: 48px;
-  height: auto;
-  padding: 14px 16px;
-  font-size: 16px;
-  border-radius: 10px;
+  min-height: 34px;
+  height: 34px;
+  padding: 4px 8px;
+  font-size: 13px;
+  border-radius: 7px;
 }
 
 .adm-win-panel--order-capture .adm-pay-unified-title {
-  font-size: 22px;
+  font-size: 12px;
 }
 
 .adm-win-panel--order-capture .adm-fee-legend {
-  font-size: 15px;
+  font-size: 11px;
 }
 
 .adm-win-panel--order-capture .adm-fee-toggle-opt {
-  font-size: 16px;
+  font-size: 12px;
+}
+
+.adm-win-panel--order-capture .adm-cap-sec-amounts {
+  grid-area: amounts;
+}
+
+.adm-win-panel--order-capture .adm-cap-sec-order {
+  grid-area: order;
+}
+
+.adm-win-panel--order-capture .adm-cap-sec-customer {
+  grid-area: customer;
+}
+
+.adm-win-panel--order-capture .adm-cap-sec-splitpay {
+  grid-area: payments;
+}
+
+.adm-win-panel--order-capture .adm-cap-footer-notes {
+  grid-area: notes;
+}
+
+.adm-win-panel--order-capture .adm-capture-sec {
+  padding: 6px 8px;
+  border-radius: 10px;
+}
+
+.adm-win-panel--order-capture .adm-cust-details,
+.adm-win-panel--order-capture .adm-cust-details-empty,
+.adm-win-panel--order-capture .adm-capture-rate-hint,
+.adm-win-panel--order-capture .adm-order-summary-fallback {
+  display: none;
+}
+
+.adm-win-panel--order-capture .adm-pay-split-lead,
+.adm-win-panel--order-capture .adm-pay-split-hint {
+  display: none;
+}
+
+.adm-win-panel--order-capture .adm-pay-split-btns {
+  display: flex;
+  gap: 6px;
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+.adm-win-panel--order-capture .adm-pay-split-btn {
+  min-height: 28px;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 7px;
+}
+
+.adm-win-panel--order-capture .adm-pay-toolbar-row .adm-btn {
+  min-height: 28px;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 7px;
+}
+
+.adm-win-panel--order-capture .adm-ordnum-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.adm-win-panel--order-capture .adm-ordnum-unlock {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.adm-win-panel--order-capture .adm-ordnum-unlock input[type="checkbox"] {
+  margin: 0;
+}
+
+.adm-win-panel--order-capture .adm-pay-unified-card {
+  padding: 6px 8px;
+  border-radius: 10px;
+  gap: 6px;
+}
+
+.adm-win-panel--order-capture .adm-pay-meta-row {
+  margin: 0;
+}
+
+.adm-win-panel--order-capture .adm-pay-order-total-line {
+  padding: 4px 6px;
+  border-radius: 8px;
+}
+
+.adm-win-panel--order-capture .adm-pay-existing-line,
+.adm-win-panel--order-capture .adm-pay-form-equiv-line,
+.adm-win-panel--order-capture .adm-pay-warning,
+.adm-win-panel--order-capture .adm-pay-success {
+  margin: 0;
+  font-size: 11px;
+}
+
+.adm-win-panel--order-capture .adm-pay-split-heading {
+  margin: 0;
+  font-size: 11px;
+}
+
+.adm-win-panel--order-capture .adm-pay-table-scroll--when-needed {
+  max-height: 112px;
+  margin-top: 2px;
+}
+
+.adm-win-panel--order-capture .adm-pay-compact-table th,
+.adm-win-panel--order-capture .adm-pay-compact-table td {
+  padding: 1px 3px;
+}
+
+.adm-win-panel--order-capture .adm-pay-row-usd-hint {
+  font-size: 10px;
+}
+
+.adm-win-panel--order-capture .adm-cap-footer-notes .adm-capture-notes-line {
+  height: 30px;
+  min-height: 30px;
+}
+
+.adm-win-panel--order-capture .adm-modal-actions--capture {
+  justify-content: flex-end;
+}
+
+.adm-win-panel--order-capture .adm-modal-actions--capture .adm-btn--ghost {
+  min-height: 30px;
+  padding: 2px 10px;
+  font-size: 11px;
+}
+
+.adm-win-panel--order-capture .adm-modal-actions--capture .adm-btn--primary {
+  min-height: 34px;
+  padding: 4px 14px;
+  font-size: 12px;
 }
 
 .adm-capture-amt-table {
