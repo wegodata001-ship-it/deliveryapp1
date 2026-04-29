@@ -49,12 +49,8 @@ export function AdminTopBar({ displayName, roleLabel, financial, canManageFinanc
   return (
     <header className="adm-header adm-header--compact">
       <div className="adm-header-row">
-        <div className="adm-brand-mark" title="WEGO PRO">
-          <span className="adm-brand-rocket" aria-hidden>🚀</span>
-          <div>
-            <div className="adm-brand-name">WEGO PRO</div>
-            <div className="adm-brand-subtitle">{titleForPath(pathname)}</div>
-          </div>
+        <div className="adm-page-headline">
+          <div className="adm-page-headline-title">{titleForPath(pathname)}</div>
         </div>
         <div className="adm-header-meta adm-header-meta--rtl">
           <div className="adm-pill adm-pill--accent adm-pill--dense">

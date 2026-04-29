@@ -753,6 +753,131 @@ export type CustomerLedgerPayload = {
   balanceUsd: string;
 };
 
+export type ClientCreateInput = {
+  name: string;
+  phone: string;
+  email?: string | null;
+  notes?: string | null;
+};
+
+export type ClientCreateResult = {
+  id: string;
+  name: string;
+  phone: string;
+  email: string | null;
+  createdAt: string;
+};
+
+export type ClientLedgerRow = {
+  id: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  createdAt: string;
+  isNew: boolean;
+};
+
+export type ClientLedgerPayload = {
+  rows: ClientLedgerRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+};
+
+export async function createClientAction(
+  input: ClientCreateInput,
+): Promise<{ ok: true; client: ClientCreateResult } | { ok: false; error: string }> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["create_orders", "view_customers", "edit_orders"])) {
+    return { ok: false, error: "אין הרשאה" };
+  }
+
+  const name = input.name.trim();
+  const phone = input.phone.trim();
+  const email = input.email?.trim() || null;
+  const notes = input.notes?.trim() || null;
+  if (!name) return { ok: false, error: "שם לקוח חובה" };
+  if (!phone) return { ok: false, error: "טלפון חובה" };
+
+  const created = await prisma.customer.create({
+    data: {
+      displayName: name,
+      phone,
+      email,
+      notes,
+      isActive: true,
+    },
+    select: { id: true, displayName: true, phone: true, email: true, createdAt: true },
+  });
+  return {
+    ok: true,
+    client: {
+      id: created.id,
+      name: created.displayName,
+      phone: created.phone ?? phone,
+      email: created.email,
+      createdAt: created.createdAt.toISOString(),
+    },
+  };
+}
+
+export async function listClientsLedgerAction(params: {
+  query?: string;
+  page?: number;
+  pageSize?: number;
+}): Promise<ClientLedgerPayload> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["view_customer_card", "view_customers", "create_orders", "edit_orders"])) {
+    return { rows: [], total: 0, page: 1, pageSize: 8, totalPages: 1 };
+  }
+
+  const pageSize = Math.min(50, Math.max(1, Math.floor(params.pageSize || 8)));
+  const requestedPage = Math.max(1, Math.floor(params.page || 1));
+  const q = params.query?.trim() || "";
+  const where: Prisma.CustomerWhereInput = {
+    deletedAt: null,
+    isActive: true,
+    ...(q
+      ? {
+          OR: [
+            { displayName: { contains: q, mode: "insensitive" } },
+            { phone: { contains: q } },
+            { email: { contains: q, mode: "insensitive" } },
+          ],
+        }
+      : {}),
+  };
+
+  const total = await prisma.customer.count({ where });
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(requestedPage, totalPages);
+  const skip = (page - 1) * pageSize;
+  const now = Date.now();
+  const rows = await prisma.customer.findMany({
+    where,
+    orderBy: { createdAt: "desc" },
+    skip,
+    take: pageSize,
+    select: { id: true, displayName: true, phone: true, email: true, createdAt: true },
+  });
+
+  return {
+    rows: rows.map((r) => ({
+      id: r.id,
+      name: r.displayName,
+      phone: r.phone,
+      email: r.email,
+      createdAt: r.createdAt.toISOString(),
+      isNew: now - r.createdAt.getTime() <= 1000 * 60 * 60 * 24 * 3,
+    })),
+    total,
+    page,
+    pageSize,
+    totalPages,
+  };
+}
+
 function paymentUsdEquivalentForLedger(p: {
   amountUsd: Prisma.Decimal | null;
   amountIls: Prisma.Decimal | null;

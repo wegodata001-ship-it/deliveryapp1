@@ -165,6 +165,9 @@ export function AdminSidebar({ sections }: { sections: NavSectionDef[] }) {
   return (
     <aside className="adm-sidebar">
       <div className="adm-brand">
+        <div className="adm-brand-logo" aria-hidden>
+          <span>W</span>
+        </div>
         <div className="adm-brand-title">וויגו פרו</div>
         <div className="adm-brand-sub">ניהול משלוחים ותשלומים</div>
       </div>

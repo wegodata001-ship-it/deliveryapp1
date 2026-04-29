@@ -1,10 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
+  createClientAction,
   getCustomerCardSnapshotAction,
   getCustomerLedgerAction,
+  listClientsLedgerAction,
   updateCustomerCardDetailsAction,
+  type ClientCreateResult,
+  type ClientLedgerPayload,
   type CustomerCardSnapshot,
   type CustomerLedgerPayload,
 } from "@/app/admin/capture/actions";
@@ -37,7 +41,70 @@ type TabKey = "details" | "ledger";
 
 export function CustomerCardWindowBody({ customerId, customerName, initialTab = "details" }: CustomerCardWindowProps) {
   const { openWindow } = useAdminWindows();
+  const [listPayload, setListPayload] = useState<ClientLedgerPayload | null>(null);
+  const [listQuery, setListQuery] = useState("");
+  const [listFrom, setListFrom] = useState("");
+  const [listTo, setListTo] = useState("");
+  const [listSort, setListSort] = useState<"new_old" | "old_new" | "name_az">("new_old");
+  const [listPage, setListPage] = useState(1);
+  const [listLoading, setListLoading] = useState(false);
   const [snap, setSnap] = useState<CustomerCardSnapshot | null>(null);
+  useEffect(() => {
+    if (customerId?.trim()) return;
+    let cancelled = false;
+    setListLoading(true);
+    void listClientsLedgerAction({ query: "", page: 1, pageSize: 2000 }).then((res) => {
+      if (cancelled) return;
+      setListPayload(res);
+      setListLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [customerId]);
+
+  const filteredClients = useMemo(() => {
+    const all = listPayload?.rows || [];
+    const q = listQuery.trim().toLowerCase();
+    const searched = q
+      ? all.filter((r) => {
+          const name = r.name.toLowerCase();
+          const phone = (r.phone || "").toLowerCase();
+          const email = (r.email || "").toLowerCase();
+          return name.includes(q) || phone.includes(q) || email.includes(q);
+        })
+      : all;
+
+    const fromTime = listFrom ? new Date(`${listFrom}T00:00:00`).getTime() : null;
+    const toTime = listTo ? new Date(`${listTo}T23:59:59.999`).getTime() : null;
+    const dated = searched.filter((r) => {
+      const t = new Date(r.createdAt).getTime();
+      if (!Number.isFinite(t)) return true;
+      if (fromTime != null && t < fromTime) return false;
+      if (toTime != null && t > toTime) return false;
+      return true;
+    });
+
+    return [...dated].sort((a, b) => {
+      if (listSort === "name_az") return a.name.localeCompare(b.name, "he");
+      const ta = new Date(a.createdAt).getTime();
+      const tb = new Date(b.createdAt).getTime();
+      if (listSort === "old_new") return ta - tb;
+      return tb - ta;
+    });
+  }, [listPayload?.rows, listQuery, listFrom, listTo, listSort]);
+
+  const filteredTotalPages = Math.max(1, Math.ceil(filteredClients.length / 8));
+  const pagedClients = useMemo(() => {
+    const safePage = Math.min(listPage, filteredTotalPages);
+    const start = (safePage - 1) * 8;
+    return filteredClients.slice(start, start + 8);
+  }, [filteredClients, listPage, filteredTotalPages]);
+
+  useEffect(() => {
+    setListPage(1);
+  }, [listQuery, listFrom, listTo, listSort]);
+
   const [ledger, setLedger] = useState<CustomerLedgerPayload | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>(initialTab);
   const [loading, setLoading] = useState(false);
@@ -124,8 +191,84 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
 
   if (!customerId?.trim()) {
     return (
-      <div className="adm-win-scroll-body">
-        <p className="adm-win-meta">בחרו לקוח מהרשימה או מהזמנה.</p>
+      <div className="adm-win-scroll-body adm-client-ledger-modal">
+        <div className="adm-client-ledger-head">
+          <h3>כרטסת לקוחות</h3>
+          <div className="adm-client-ledger-filters-row">
+            <input
+              className="adm-filter-input"
+              placeholder="חיפוש 🔍"
+              value={listQuery}
+              onChange={(e) => setListQuery(e.target.value)}
+            />
+            <input className="adm-filter-input" type="date" value={listFrom} onChange={(e) => setListFrom(e.target.value)} />
+            <input className="adm-filter-input" type="date" value={listTo} onChange={(e) => setListTo(e.target.value)} />
+            <select className="adm-filter-input" value={listSort} onChange={(e) => setListSort(e.target.value as "new_old" | "old_new" | "name_az")}>
+              <option value="new_old">חדש → ישן</option>
+              <option value="old_new">ישן → חדש</option>
+              <option value="name_az">לפי שם (A-Z)</option>
+            </select>
+            <button
+              type="button"
+              className="adm-btn adm-btn--ghost adm-btn--xs"
+              onClick={() => {
+                setListQuery("");
+                setListFrom("");
+                setListTo("");
+                setListSort("new_old");
+              }}
+            >
+              נקה
+            </button>
+          </div>
+          {listQuery || listFrom || listTo || listSort !== "new_old" ? (
+            <small className="adm-muted-keys">מצב מסונן</small>
+          ) : null}
+        </div>
+        <div className="adm-client-ledger-table-wrap" aria-busy={listLoading}>
+          <table className="adm-table adm-table--dense">
+            <thead>
+              <tr>
+                <th>שם</th>
+                <th>טלפון</th>
+                <th>אימייל</th>
+                <th>תאריך יצירה</th>
+              </tr>
+            </thead>
+            <tbody>
+              {listLoading ? (
+                <tr><td colSpan={4}>טוען…</td></tr>
+              ) : pagedClients.length === 0 ? (
+                <tr><td colSpan={4}>לא נמצאו לקוחות</td></tr>
+              ) : (
+                pagedClients.map((r) => (
+                  <tr key={r.id} onClick={() => openWindow({ type: "customerCard", props: { customerId: r.id, customerName: r.name, initialTab: "ledger" } })}>
+                    <td>
+                      {r.name} {r.isNew ? <span className="adm-client-new-tag">חדש</span> : null}
+                    </td>
+                    <td dir="ltr">{r.phone || "—"}</td>
+                    <td dir="ltr">{r.email || "—"}</td>
+                    <td dir="ltr">{new Date(r.createdAt).toLocaleDateString("he-IL")}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className="adm-client-ledger-pager">
+          <button type="button" className="adm-btn adm-btn--ghost adm-btn--xs" disabled={listPage <= 1} onClick={() => setListPage((p) => Math.max(1, p - 1))}>
+            קודם
+          </button>
+          <span>{Math.min(listPage, filteredTotalPages)} / {filteredTotalPages}</span>
+          <button
+            type="button"
+            className="adm-btn adm-btn--ghost adm-btn--xs"
+            disabled={listPage >= filteredTotalPages}
+            onClick={() => setListPage((p) => Math.min(filteredTotalPages, p + 1))}
+          >
+            הבא
+          </button>
+        </div>
       </div>
     );
   }
@@ -334,11 +477,79 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
 }
 
 export function CreateCustomerWindowBody() {
+  const { closeTop } = useAdminWindows();
+  const [form, setForm] = useState({ name: "", phone: "", email: "", notes: "" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [created, setCreated] = useState<ClientCreateResult | null>(null);
+
+  async function onSave() {
+    if (busy) return;
+    setErr(null);
+    if (!form.name.trim() || !form.phone.trim()) {
+      setErr("יש להזין שם וטלפון");
+      return;
+    }
+    setBusy(true);
+    const res = await createClientAction({
+      name: form.name,
+      phone: form.phone,
+      email: form.email || null,
+      notes: form.notes || null,
+    });
+    setBusy(false);
+    if (!res.ok) {
+      setErr(res.error);
+      return;
+    }
+    setCreated(res.client);
+  }
+
   return (
-    <div className="adm-win-scroll-body">
-      <p className="adm-muted-keys" style={{ marginTop: 0 }}>
-        טופס יצירת לקוח יחובר כאן (שמירה, הרשאות, שדות חובה).
-      </p>
+    <div className="adm-win-scroll-body adm-client-create-modal">
+      {!created ? (
+        <>
+          <h3 className="adm-client-create-title">לקוח חדש</h3>
+          {err ? <div className="adm-error">{err}</div> : null}
+          <div className="adm-client-create-grid">
+            <div className="adm-field">
+              <label>שם</label>
+              <input placeholder="שם לקוח" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
+            </div>
+            <div className="adm-field">
+              <label>טלפון</label>
+              <input dir="ltr" placeholder="050-0000000" value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} />
+            </div>
+            <div className="adm-field">
+              <label>אימייל</label>
+              <input dir="ltr" placeholder="name@company.com" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} />
+            </div>
+            <div className="adm-field adm-client-create-notes">
+              <label>הערות</label>
+              <textarea rows={4} placeholder="הערות פנימיות" value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} />
+            </div>
+          </div>
+          <div className="adm-mini-modal-actions adm-client-create-actions">
+            <button type="button" className="adm-btn adm-btn--primary" disabled={busy} onClick={() => void onSave()}>
+              {busy ? "שומר..." : "שמור"}
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="adm-client-create-success">
+          <div className="adm-pay-success">✅ הלקוח נוסף בהצלחה</div>
+          <div className="adm-cust-display-card">
+            <div><strong>שם:</strong> {created.name}</div>
+            <div><strong>טלפון:</strong> {created.phone}</div>
+            <div><strong>אימייל:</strong> {created.email || "—"}</div>
+          </div>
+          <div className="adm-mini-modal-actions">
+            <button type="button" className="adm-btn adm-btn--primary" onClick={closeTop}>
+              סגור
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

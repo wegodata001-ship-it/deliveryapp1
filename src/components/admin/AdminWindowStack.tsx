@@ -81,6 +81,7 @@ export function AdminWindowStack({
                 w.type === "orderCapture" ? "adm-win-panel--order-capture" : "",
                 w.type === "payments" ? "adm-win-panel--payment-capture" : "",
                 w.type === "customerCard" ? "adm-win-panel--customer-card" : "",
+                w.type === "createCustomer" ? "adm-win-panel--create-customer" : "",
               ]
                 .filter(Boolean)
                 .join(" ")}
@@ -99,6 +100,7 @@ export function AdminWindowStack({
                   "adm-win-body",
                   w.type === "orderCapture" ? "adm-win-body--order-capture" : "",
                   w.type === "payments" ? "adm-win-body--payment-capture" : "",
+                  w.type === "createCustomer" ? "adm-win-body--create-customer" : "",
                 ]
                   .filter(Boolean)
                   .join(" ")}
