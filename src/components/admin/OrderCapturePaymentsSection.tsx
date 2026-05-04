@@ -37,6 +37,8 @@ type Props = {
   onSplitRemainingHalfCashCredit: () => void;
   /** שער להצגת שווי USD בשורות ₪ ולחישוב כפתור «נותר ב-₪» */
   rateNisPerUsd?: number | null;
+  /** כאשר מוצג סטטוס הזמנה מחוץ לרכיב (למשל סרגל צד בפריסת legacy) */
+  hideOrderStatus?: boolean;
 };
 
 function fmtUsd(n: number) {
@@ -73,6 +75,7 @@ export function OrderCapturePaymentsSection({
   onFillRemainingCashIls,
   onSplitRemainingHalfCashCredit,
   rateNisPerUsd,
+  hideOrderStatus = false,
 }: Props) {
   const splitHintText = "מילוי מהיר של היתרה שנותרה לתשלום.";
 
@@ -100,23 +103,25 @@ export function OrderCapturePaymentsSection({
           תשלום
         </h3>
 
-        <div className="adm-pay-meta-row">
-          <div className="adm-field adm-field--capture">
-            <label htmlFor={`${idPrefix}-status`}>סטטוס הזמנה</label>
-            <select
-              id={`${idPrefix}-status`}
-              value={orderStatus}
-              disabled={disabled}
-              onChange={(e) => onOrderStatusChange(e.target.value as OrderStatus)}
-            >
-              {Object.values(OrderStatus).map((s) => (
-                <option key={s} value={s}>
-                  {orderStatusLabels[s] ?? s}
-                </option>
-              ))}
-            </select>
+        {!hideOrderStatus ? (
+          <div className="adm-pay-meta-row">
+            <div className="adm-field adm-field--capture">
+              <label htmlFor={`${idPrefix}-status`}>סטטוס הזמנה</label>
+              <select
+                id={`${idPrefix}-status`}
+                value={orderStatus}
+                disabled={disabled}
+                onChange={(e) => onOrderStatusChange(e.target.value as OrderStatus)}
+              >
+                {Object.values(OrderStatus).map((s) => (
+                  <option key={s} value={s}>
+                    {orderStatusLabels[s] ?? s}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
-        </div>
+        ) : null}
 
         <div className="adm-pay-order-total-line" aria-live="polite">
           {hasOrderTotal ? (
@@ -250,7 +255,7 @@ export function OrderCapturePaymentsSection({
         </div>
 
         <div className="adm-pay-remaining-block" aria-live="polite">
-          <span className="adm-pay-remaining-lbl">נשאר לתשלום</span>
+          <span className="adm-pay-remaining-lbl">נשאר לתשלום (USD)</span>
           <strong className={showUnderpay ? "adm-pay-remaining-val adm-pay-remaining-val--warn" : "adm-pay-remaining-val"} dir="ltr">
             {remainingUsd != null ? fmtUsd(remainingUsd) : "—"}
           </strong>

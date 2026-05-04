@@ -26,6 +26,13 @@ enum OrderStatus {
   COMPLETED
 }
 
+/** מקור / יעד רכש להזמנה (ניהול וטבלת הזמנות) */
+enum OrderSourceCountry {
+  TURKEY
+  CHINA
+  UAE
+}
+
 enum PaymentMethod {
   POINT
   BANK_TRANSFER
@@ -143,6 +150,8 @@ model Order {
   customerNameSnapshot String?
   customerTypeSnapshot String?
   weekCode             String?
+  /** מדינת ספק / מקור עסקה — מתוך רשימה מוגדרת בהגדרות */
+  sourceCountry        OrderSourceCountry?
   orderDate            DateTime?
   status               OrderStatus    @default(OPEN)
   paymentMethod        PaymentMethod?

@@ -44,7 +44,7 @@ export function AdminChrome({
 
   const onToast = useCallback((msg: string) => {
     setToast(msg);
-    window.setTimeout(() => setToast(null), 3200);
+    window.setTimeout(() => setToast(null), 3800);
   }, []);
 
   const closeModal = useCallback(() => {

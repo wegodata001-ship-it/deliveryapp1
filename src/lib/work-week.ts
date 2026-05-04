@@ -100,9 +100,13 @@ export type ParsedDateFilter = {
   toEnd: Date;
 };
 
+function isValidYmd(s: string | undefined): s is string {
+  return !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
+}
+
 /**
- * week + from/to מתוך query. אם week ידוע — ממלא טווח ברירת מחדל;
- * from/to מה-URL גוברים אם קיימים (אחרי week).
+ * week + from/to מתוך query. preset=today|this_week|last_week לסינון מהיר.
+ * עדיפות: תאריכים מפורשים → preset → שבוע ידוע → ברירת מחדל.
  */
 export function parseDateFilterFromSearchParams(
   raw: Record<string, string | string[] | undefined>,
@@ -110,15 +114,33 @@ export function parseDateFilterFromSearchParams(
   const weekParam = typeof raw.week === "string" ? raw.week : undefined;
   const fromParam = typeof raw.from === "string" ? raw.from : undefined;
   const toParam = typeof raw.to === "string" ? raw.to : undefined;
+  const preset = typeof raw.preset === "string" ? raw.preset : undefined;
 
   const knownWeek = weekParam && WORK_WEEK_RANGES[weekParam] ? weekParam : null;
   const fallbackWeek = DEFAULT_WEEK_CODE;
-  const base = knownWeek
-    ? WORK_WEEK_RANGES[knownWeek]
-    : (fromParam || toParam ? WORK_WEEK_RANGES[fallbackWeek] : getCurrentWeekYmdRange(new Date()));
+  const now = new Date();
 
-  let fromYmd = fromParam && /^\d{4}-\d{2}-\d{2}$/.test(fromParam) ? fromParam : base.from;
-  let toYmd = toParam && /^\d{4}-\d{2}-\d{2}$/.test(toParam) ? toParam : base.to;
+  let base: WorkWeekRange;
+  if (knownWeek) {
+    base = WORK_WEEK_RANGES[knownWeek];
+  } else if (preset === "today") {
+    const ymd = formatLocalYmd(now);
+    base = { from: ymd, to: ymd };
+  } else if (preset === "this_week") {
+    const code = getWeekCodeForLocalDate(now);
+    base = WORK_WEEK_RANGES[code] ?? getCurrentWeekYmdRange(now);
+  } else if (preset === "last_week") {
+    const code = getWeekCodeForLocalDate(now);
+    const prev = prevWeekCode(code);
+    base = prev && WORK_WEEK_RANGES[prev] ? WORK_WEEK_RANGES[prev] : WORK_WEEK_RANGES[fallbackWeek];
+  } else if (fromParam || toParam) {
+    base = WORK_WEEK_RANGES[fallbackWeek];
+  } else {
+    base = getCurrentWeekYmdRange(now);
+  }
+
+  let fromYmd = isValidYmd(fromParam) ? fromParam : base.from;
+  let toYmd = isValidYmd(toParam) ? toParam : base.to;
 
   if (fromYmd > toYmd) {
     const t = fromYmd;
@@ -126,8 +148,7 @@ export function parseDateFilterFromSearchParams(
     toYmd = t;
   }
 
-  const weekCode =
-    knownWeek ?? (fromParam || toParam ? getWeekCodeForLocalDate(parseLocalDate(fromYmd)) : fallbackWeek);
+  const weekCode = knownWeek ?? getWeekCodeForLocalDate(parseLocalDate(fromYmd));
 
   return {
     weekCode,

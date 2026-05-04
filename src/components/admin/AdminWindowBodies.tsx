@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   createClientAction,
   getCustomerCardSnapshotAction,
@@ -11,6 +12,7 @@ import {
   type ClientLedgerPayload,
   type CustomerCardSnapshot,
   type CustomerLedgerPayload,
+  type CustomerLedgerRow,
 } from "@/app/admin/capture/actions";
 import type { CustomerCardWindowProps } from "@/lib/admin-windows";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
@@ -27,20 +29,15 @@ function fmtUsd(s: string): string {
   return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function ledgerRowState(r: { type: "CHARGE" | "PAYMENT"; paidUsd: string; balanceUsd: string }): "debt" | "paid" | "partial" {
-  const remaining = Number(r.balanceUsd.replace(",", "."));
-  const paid = Number(r.paidUsd.replace(",", "."));
-  if (Number.isFinite(remaining) && Math.abs(remaining) <= 0.01) return "paid";
-  if (r.type === "PAYMENT" && Number.isFinite(paid) && paid > 0 && Number.isFinite(remaining) && remaining > 0) {
-    return "partial";
-  }
-  return "debt";
+function rowBalanceNum(balanceUsd: string): number {
+  return Number(balanceUsd.replace(",", "."));
 }
 
 type TabKey = "details" | "ledger";
 
 export function CustomerCardWindowBody({ customerId, customerName, initialTab = "details" }: CustomerCardWindowProps) {
   const { openWindow } = useAdminWindows();
+  const router = useRouter();
   const [listPayload, setListPayload] = useState<ClientLedgerPayload | null>(null);
   const [listQuery, setListQuery] = useState("");
   const [listFrom, setListFrom] = useState("");
@@ -106,7 +103,7 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
   }, [listQuery, listFrom, listTo, listSort]);
 
   const [ledger, setLedger] = useState<CustomerLedgerPayload | null>(null);
-  const [activeTab, setActiveTab] = useState<TabKey>(initialTab);
+  const [activeTab, setActiveTab] = useState<TabKey>(() => (initialTab === "ledger" ? "ledger" : "details"));
   const [loading, setLoading] = useState(false);
   const [ledgerLoading, setLedgerLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -197,7 +194,7 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
           <div className="adm-client-ledger-filters-row">
             <input
               className="adm-filter-input"
-              placeholder="חיפוש 🔍"
+              placeholder="חיפוש"
               value={listQuery}
               onChange={(e) => setListQuery(e.target.value)}
             />
@@ -281,30 +278,100 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
     );
   }
 
+  function onLedgerTableRowActivate(r: CustomerLedgerRow) {
+    if (r.type === "PAYMENT" && customerId?.trim()) {
+      router.push(`/admin/payments?invoiceId=${encodeURIComponent(r.id)}&customerId=${encodeURIComponent(customerId)}`);
+      return;
+    }
+    if (r.id.startsWith("o-")) {
+      openWindow({ type: "orderCapture", props: { mode: "edit", orderId: r.id.slice(2) } });
+    }
+  }
+
+  const balanceNum = ledger ? Number(ledger.balanceUsd.replace(",", ".")) : 0;
+
+  const ledgerFilters = (
+    <div className="adm-cust-ledger-filters">
+      <div className="adm-field">
+        <label htmlFor="ledger-from">תאריך התחלה</label>
+        <input id="ledger-from" type="date" value={fromYmd} onChange={(e) => setFromYmd(e.target.value)} />
+      </div>
+      <div className="adm-field">
+        <label htmlFor="ledger-to">תאריך סיום</label>
+        <input id="ledger-to" type="date" value={toYmd} onChange={(e) => setToYmd(e.target.value)} />
+      </div>
+    </div>
+  );
+
+  const summaryGrid =
+    ledger ? (
+      <div className="summary-grid">
+        <div className="summary-card red">
+          <div dir="ltr" className="summary-card-amount">
+            {fmtUsd(ledger.totalChargesUsd)}
+          </div>
+          <span>סה״כ חוב</span>
+        </div>
+        <div className="summary-card green">
+          <div dir="ltr" className="summary-card-amount">
+            {fmtUsd(ledger.totalPaymentsUsd)}
+          </div>
+          <span>סה״כ תשלומים</span>
+        </div>
+        <div className="summary-card blue">
+          <button
+            type="button"
+            className="summary-card-amount-btn"
+            onClick={() =>
+              openWindow({
+                type: "payments",
+                props: {
+                  customerId,
+                  customerName: snap.displayName || customerName || "",
+                  amountUsd: balanceNum > 0 ? ledger.balanceUsd : null,
+                },
+              })
+            }
+          >
+            <div dir="ltr" className="summary-card-amount">
+              {fmtUsd(ledger.balanceUsd)}
+            </div>
+          </button>
+          <span>יתרה</span>
+        </div>
+      </div>
+    ) : null;
+
   return (
     <div className="adm-win-scroll-body adm-cust-card-body">
       <div className="adm-cust-card-shell">
-        <header className="adm-cust-card-header">
-          <h2 className="adm-cust-card-name">
-            {snap.displayName || customerName} <span dir="ltr">{displayCustomerCode(snap)}</span>
-          </h2>
-        </header>
+        <div className="client-header">
+          <div className="client-actions">
+            <button type="button" className="btn-outline" onClick={() => setEditOpen(true)}>
+              ערוך לקוח
+            </button>
+          </div>
+          <div className="client-title">
+            <h1>{snap.displayName || customerName || "—"}</h1>
+            <span dir="ltr">{displayCustomerCode(snap)}</span>
+          </div>
+        </div>
 
-        <div className="adm-cust-tabs" role="tablist" aria-label="לקוח">
+        <div className="tabs" role="tablist" aria-label="לקוח">
           <button
             type="button"
             role="tab"
             aria-selected={activeTab === "details"}
-            className={activeTab === "details" ? "adm-cust-tab adm-cust-tab--active" : "adm-cust-tab"}
+            className={activeTab === "details" ? "tab active" : "tab"}
             onClick={() => setActiveTab("details")}
           >
-            כרטיס לקוח
+            פרטי לקוח
           </button>
           <button
             type="button"
             role="tab"
             aria-selected={activeTab === "ledger"}
-            className={activeTab === "ledger" ? "adm-cust-tab adm-cust-tab--active" : "adm-cust-tab"}
+            className={activeTab === "ledger" ? "tab active" : "tab"}
             onClick={() => setActiveTab("ledger")}
           >
             כרטסת לקוח
@@ -316,55 +383,35 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
 
         {activeTab === "details" ? (
           <section className="adm-cust-tab-panel">
-            <div className="adm-cust-display-card">
-              <div className="adm-cust-display-name">{snap.displayName}</div>
-              <div className="adm-cust-display-grid">
-                <div className="adm-cust-display-item">
-                  <span className="adm-cust-display-icon">🆔</span>
-                  <span className="adm-cust-display-label">customerCode</span>
-                  <strong dir="ltr">{displayCustomerCode(snap)}</strong>
-                </div>
-                <div className="adm-cust-display-item">
-                  <span className="adm-cust-display-icon">📞</span>
-                  <span className="adm-cust-display-label">phone</span>
-                  <strong dir="ltr">{snap.phone?.trim() || "—"}</strong>
-                </div>
-                <div className="adm-cust-display-item">
-                  <span className="adm-cust-display-icon">📍</span>
-                  <span className="adm-cust-display-label">address</span>
-                  <strong>{snap.address?.trim() || snap.city?.trim() || "—"}</strong>
-                </div>
-                <div className="adm-cust-display-item">
-                  <span className="adm-cust-display-icon">🆔</span>
-                  <span className="adm-cust-display-label">id</span>
-                  <strong dir="ltr">{snap.id}</strong>
-                </div>
+            <div className="client-info-card">
+              <div className="info-item">
+                <label>כתובת</label>
+                <div>{snap.address?.trim() || snap.city?.trim() || "—"}</div>
               </div>
-            </div>
-            <div className="adm-cust-tab-actions">
-              <button type="button" className="adm-btn adm-btn--primary" onClick={() => setEditOpen(true)}>
-                ערוך לקוח
-              </button>
+              <div className="info-divider" />
+              <div className="info-item">
+                <label>קוד לקוח</label>
+                <div dir="ltr">{displayCustomerCode(snap)}</div>
+              </div>
+              <div className="info-divider" />
+              <div className="info-item">
+                <label>טלפון</label>
+                <div dir="ltr">{snap.phone?.trim() || "—"}</div>
+              </div>
             </div>
           </section>
-        ) : (
+        ) : null}
+
+        {activeTab === "ledger" ? (
           <section className="adm-cust-tab-panel">
-            <div className="adm-cust-ledger-filters">
-              <div className="adm-field">
-                <label htmlFor="ledger-from">תאריך התחלה</label>
-                <input id="ledger-from" type="date" value={fromYmd} onChange={(e) => setFromYmd(e.target.value)} />
-              </div>
-              <div className="adm-field">
-                <label htmlFor="ledger-to">תאריך סיום</label>
-                <input id="ledger-to" type="date" value={toYmd} onChange={(e) => setToYmd(e.target.value)} />
-              </div>
-            </div>
+            {ledgerFilters}
             <div className="adm-cust-card-table-scroll">
-              <table className="adm-cust-card-orders-table">
+              <table className="adm-cust-card-orders-table adm-ledger-table-saas">
                 <thead>
                   <tr>
                     <th>תאריך</th>
                     <th>סוג</th>
+                    <th>סטטוס</th>
                     <th>סכום</th>
                     <th>שולם</th>
                     <th>יתרה</th>
@@ -374,99 +421,85 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
                 <tbody>
                   {ledgerLoading ? (
                     <tr>
-                      <td colSpan={6}>טוען…</td>
+                      <td colSpan={7}>טוען…</td>
                     </tr>
                   ) : !ledger || ledger.rows.length === 0 ? (
                     <tr>
-                      <td colSpan={6}>אין תנועות בטווח.</td>
+                      <td colSpan={7}>אין תנועות בטווח.</td>
                     </tr>
                   ) : (
-                    ledger.rows.map((r) => (
-                      <tr key={r.id} className={`adm-ledger-row adm-ledger-row--${ledgerRowState(r)}`}>
-                        <td dir="ltr">{r.dateYmd}</td>
-                        <td>
-                          <span className="adm-ledger-type-icon">
-                            {ledgerRowState(r) === "paid" ? "✔" : ledgerRowState(r) === "partial" ? "◐" : "⚠"}
-                          </span>{" "}
-                          {r.type === "CHARGE" ? "חיוב" : "תשלום"}
-                        </td>
-                        <td dir="ltr">{fmtUsd(r.amountUsd)}</td>
-                        <td dir="ltr">{fmtUsd(r.paidUsd)}</td>
-                        <td dir="ltr">{fmtUsd(r.balanceUsd)}</td>
-                        <td dir="ltr">{r.document}</td>
-                      </tr>
-                    ))
+                    ledger.rows.map((r) => {
+                      const clickable = r.type === "PAYMENT" || r.id.startsWith("o-");
+                      const bal = rowBalanceNum(r.balanceUsd);
+                      const hasDebt = Number.isFinite(bal) && bal > 0.01;
+                      return (
+                        <tr
+                          key={r.id}
+                          className={clickable ? "clickable" : undefined}
+                          tabIndex={clickable ? 0 : undefined}
+                          role={clickable ? "button" : undefined}
+                          onClick={() => clickable && onLedgerTableRowActivate(r)}
+                          onKeyDown={(e) => {
+                            if (!clickable) return;
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              onLedgerTableRowActivate(r);
+                            }
+                          }}
+                        >
+                          <td dir="ltr">{r.dateYmd}</td>
+                          <td>{r.type === "CHARGE" ? "חיוב" : "תשלום"}</td>
+                          <td>
+                            {hasDebt ? (
+                              <span className="status-debt">חוב</span>
+                            ) : (
+                              <span className="status-paid">שולם</span>
+                            )}
+                          </td>
+                          <td dir="ltr">{fmtUsd(r.amountUsd)}</td>
+                          <td dir="ltr">{fmtUsd(r.paidUsd)}</td>
+                          <td dir="ltr">{fmtUsd(r.balanceUsd)}</td>
+                          <td dir="ltr">{r.document}</td>
+                        </tr>
+                      );
+                    })
                   )}
                 </tbody>
               </table>
             </div>
-            {ledger ? (
-              <div className="adm-cust-ledger-summary">
-                <div className="adm-ledger-summary-card adm-ledger-summary-card--debt">
-                  <span>סה"כ חיובים</span>
-                  <strong dir="ltr">{fmtUsd(ledger.totalChargesUsd)}</strong>
-                </div>
-                <div className="adm-ledger-summary-card adm-ledger-summary-card--paid">
-                  <span>סה"כ תשלומים</span>
-                  <strong dir="ltr">{fmtUsd(ledger.totalPaymentsUsd)}</strong>
-                </div>
-                <div className="adm-ledger-summary-card adm-ledger-summary-card--remaining">
-                  <span>יתרה</span>
-                  <button
-                    type="button"
-                    className="adm-balance-amount"
-                    onClick={() =>
-                      openWindow({
-                        type: "payments",
-                        props: {
-                          customerId,
-                          customerName: snap.displayName || customerName || "",
-                          amountUsd: Number(ledger.balanceUsd) > 0 ? ledger.balanceUsd : null,
-                        },
-                      })
-                    }
-                  >
-                    <strong dir="ltr">{fmtUsd(ledger.balanceUsd)}</strong>
-                  </button>
-                </div>
-              </div>
-            ) : null}
+            {summaryGrid}
           </section>
-        )}
+        ) : null}
       </div>
       {editOpen ? (
         <div className="adm-mini-modal-layer" role="dialog" aria-modal="true" aria-labelledby="cust-edit-title">
           <button type="button" className="adm-mini-modal-backdrop" aria-label="סגירה" onClick={() => setEditOpen(false)} />
-          <div className="adm-mini-modal adm-cust-edit-modal">
-            <h3 id="cust-edit-title">עריכת לקוח</h3>
-            <div className="adm-cust-edit-grid">
-              <div className="adm-field">
-                <label htmlFor="cust-name">name</label>
+          <div className="modal cust-edit-modal-panel">
+            <h2 id="cust-edit-title">עריכת לקוח</h2>
+            <div className="form-grid">
+              <div className="form-field">
+                <label htmlFor="cust-name">שם מלא</label>
                 <input id="cust-name" value={form.displayName} onChange={(e) => setForm((f) => ({ ...f, displayName: e.target.value }))} />
               </div>
-              <div className="adm-field">
-                <label htmlFor="cust-name-he">nameHebrew</label>
-                <input id="cust-name-he" value={form.nameHe} onChange={(e) => setForm((f) => ({ ...f, nameHe: e.target.value }))} />
-              </div>
-              <div className="adm-field">
-                <label htmlFor="cust-phone">phone</label>
+              <div className="form-field">
+                <label htmlFor="cust-phone">טלפון</label>
                 <input id="cust-phone" value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} dir="ltr" />
               </div>
-              <div className="adm-field">
-                <label htmlFor="cust-number">customerNumber</label>
+              <div className="form-field">
+                <label htmlFor="cust-number">קוד לקוח</label>
                 <input id="cust-number" value={form.customerCode} onChange={(e) => setForm((f) => ({ ...f, customerCode: e.target.value }))} dir="ltr" />
               </div>
-              <div className="adm-field adm-cust-edit-address">
-                <label htmlFor="cust-address">address</label>
+              <div className="form-field">
+                <label htmlFor="cust-address">כתובת</label>
                 <input id="cust-address" value={form.address} onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))} />
               </div>
             </div>
-            <div className="adm-mini-modal-actions">
-              <button type="button" className="adm-btn adm-btn--primary" disabled={saving} onClick={() => void saveDetails()}>
-                שמירה
-              </button>
-              <button type="button" className="adm-btn adm-btn--ghost" disabled={saving} onClick={() => setEditOpen(false)}>
+            <div className="modal-actions">
+              <button type="button" className="btn btn-secondary" disabled={saving} onClick={() => setEditOpen(false)}>
                 ביטול
+              </button>
+              <button type="button" className="btn btn-primary" disabled={saving} onClick={() => void saveDetails()}>
+                שמירה
               </button>
             </div>
           </div>

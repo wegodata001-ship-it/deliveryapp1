@@ -1,12 +1,8 @@
 import type { Metadata } from "next";
-import { Heebo } from "next/font/google";
 import "./globals.css";
+import "@/styles/design-system.css";
 
-const heebo = Heebo({
-  subsets: ["latin", "hebrew"],
-  variable: "--font-heebo",
-  display: "swap",
-});
+/** לא משתמשים ב־next/font/google כדי למנוע תלות ברשת/TLS בזמן build (סביבות עם בעיית אישורים). */
 
 export const metadata: Metadata = {
   title: "וויגו פרו",
@@ -19,8 +15,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="he" className={heebo.variable}>
-      <body className={heebo.className}>{children}</body>
+    <html lang="he">
+      <body>{children}</body>
     </html>
   );
 }

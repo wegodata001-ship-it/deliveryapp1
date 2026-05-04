@@ -6,6 +6,7 @@ import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { finalRateFromBaseAndFee } from "@/lib/financial-calc";
 import { ensureDefaultFinancialSettings, getCurrentFinancialSettings } from "@/lib/financial-settings";
 import { prisma } from "@/lib/prisma";
+import { ORDER_COUNTRY_CODES, parseSelectedCountriesJson, type OrderCountryCode } from "@/lib/order-countries";
 import { DEFAULT_WEEK_CODE } from "@/lib/work-week";
 
 export type AdminSettingsPayload = {
@@ -18,11 +19,13 @@ export type AdminSettingsPayload = {
   defaultOrderStatus: string;
   systemName: string;
   systemMode: "ACTIVE" | "MAINTENANCE";
+  /** מדינות זמינות לשיוך הזמנה (TURKEY / CHINA / UAE) */
+  selectedCountries: OrderCountryCode[];
 };
 
 export type AdminSettingsSaveState = { ok: true; payload: AdminSettingsPayload } | { ok: false; error: string };
 
-const DEFAULT_SETTINGS: Omit<AdminSettingsPayload, "baseDollarRate" | "finalDollarRate"> = {
+const DEFAULT_SETTINGS: Omit<AdminSettingsPayload, "baseDollarRate" | "finalDollarRate" | "selectedCountries"> = {
   vatRate: "18",
   defaultPaymentMethod: "CASH",
   currentWorkWeek: DEFAULT_WEEK_CODE,
@@ -31,6 +34,8 @@ const DEFAULT_SETTINGS: Omit<AdminSettingsPayload, "baseDollarRate" | "finalDoll
   systemName: "WEGO MARKETING",
   systemMode: "ACTIVE",
 };
+
+const DEFAULT_SELECTED_COUNTRIES: OrderCountryCode[] = [...ORDER_COUNTRY_CODES];
 
 async function ensureSettingsTable() {
   await prisma.$executeRaw`
@@ -66,6 +71,8 @@ export async function getAdminSettingsAction(): Promise<AdminSettingsPayload> {
   const map = await readSettingsMap();
   const systemMode = map.get("systemMode") === "MAINTENANCE" ? "MAINTENANCE" : "ACTIVE";
 
+  const selectedCountries = parseSelectedCountriesJson(map.get("selectedCountries") ?? undefined);
+
   return {
     baseDollarRate: financial.baseDollarRate.toFixed(4),
     finalDollarRate: financial.finalDollarRate.toFixed(4),
@@ -76,6 +83,7 @@ export async function getAdminSettingsAction(): Promise<AdminSettingsPayload> {
     defaultOrderStatus: value(map, "defaultOrderStatus"),
     systemName: value(map, "systemName"),
     systemMode,
+    selectedCountries: selectedCountries.length > 0 ? selectedCountries : DEFAULT_SELECTED_COUNTRIES,
   };
 }
 
@@ -87,6 +95,16 @@ function dec(raw: string, field: string): Prisma.Decimal {
   } catch {
     throw new Error(`${field} לא תקין`);
   }
+}
+
+/** לטופס קליטת הזמנה — מדינות מופעלות בהגדרות */
+export async function getSelectedCountriesForOrdersAction(): Promise<OrderCountryCode[]> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["create_orders", "view_orders"])) return DEFAULT_SELECTED_COUNTRIES;
+  await ensureSettingsTable();
+  const map = await readSettingsMap();
+  const list = parseSelectedCountriesJson(map.get("selectedCountries") ?? undefined);
+  return list.length > 0 ? list : DEFAULT_SELECTED_COUNTRIES;
 }
 
 export async function saveAdminSettingsAction(input: AdminSettingsPayload): Promise<AdminSettingsSaveState> {
@@ -122,6 +140,12 @@ export async function saveAdminSettingsAction(input: AdminSettingsPayload): Prom
     },
   });
 
+  const allowed = new Set<string>(ORDER_COUNTRY_CODES);
+  const countries = (input.selectedCountries ?? []).filter((c) => allowed.has(c));
+  if (countries.length === 0) {
+    return { ok: false, error: "יש לבחור לפחות מדינה אחת להזמנות" };
+  }
+
   const settings = {
     vatRate: vat.toFixed(2),
     defaultPaymentMethod: input.defaultPaymentMethod,
@@ -130,6 +154,7 @@ export async function saveAdminSettingsAction(input: AdminSettingsPayload): Prom
     defaultOrderStatus: input.defaultOrderStatus,
     systemName: input.systemName.trim() || DEFAULT_SETTINGS.systemName,
     systemMode: input.systemMode === "MAINTENANCE" ? "MAINTENANCE" : "ACTIVE",
+    selectedCountries: JSON.stringify(countries),
   };
 
   for (const [key, val] of Object.entries(settings)) {
@@ -143,5 +168,6 @@ export async function saveAdminSettingsAction(input: AdminSettingsPayload): Prom
 
   revalidatePath("/admin");
   revalidatePath("/admin/settings");
+  revalidatePath("/admin/orders");
   return { ok: true, payload: await getAdminSettingsAction() };
 }

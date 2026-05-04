@@ -29,7 +29,14 @@ body {
 }
 
 body {
-  font-family: var(--font-heebo), system-ui, sans-serif;
+  font-family:
+    system-ui,
+    "Segoe UI",
+    Tahoma,
+    Arial,
+    "Noto Sans Hebrew",
+    "Heebo",
+    sans-serif;
   background: var(--adm-bg);
   color: var(--adm-text);
   -webkit-font-smoothing: antialiased;

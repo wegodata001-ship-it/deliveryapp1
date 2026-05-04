@@ -1,7 +1,7 @@
 "use server";
 
 import { randomUUID } from "crypto";
-import { OrderStatus, PaymentMethod, Prisma } from "@prisma/client";
+import { OrderSourceCountry, OrderStatus, PaymentMethod, Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { breakdownIlsIncludingVat, computeFromUsdAmount } from "@/lib/financial-calc";
@@ -10,6 +10,8 @@ import { formatLocalHm, formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate,
 import { escapeRegExp, orderNumberMatchesWeekFormat } from "@/lib/order-number";
 import { prisma } from "@/lib/prisma";
 import { parseSplitPaymentMethodRaw } from "@/lib/order-capture-payment-methods";
+import { getSelectedCountriesForOrdersAction } from "@/app/admin/settings/actions";
+import { ORDER_COUNTRY_CODES, coerceOrderCountryForForm, normalizeOrderSourceCountry, type OrderCountryCode } from "@/lib/order-countries";
 
 export type CustomerSearchRow = {
   id: string;
@@ -46,7 +48,7 @@ export type PaymentCaptureSavedSummary = {
 };
 
 export type CaptureState =
-  | { ok: true; saved?: OrderCaptureSavedSummary }
+  | { ok: true; saved?: OrderCaptureSavedSummary; orderNumber?: string }
   | { ok: false; error: string };
 
 export type PaymentCaptureState =
@@ -55,6 +57,73 @@ export type PaymentCaptureState =
 
 const PAYMENT_METHODS = new Set<string>(Object.values(PaymentMethod));
 const ORDER_STATUSES = new Set<string>(Object.values(OrderStatus));
+
+const MONEY_VERIFY_EPS = new Prisma.Decimal("0.02");
+
+function decimalCloseEnough(
+  actual: Prisma.Decimal | null | undefined,
+  expected: Prisma.Decimal,
+): boolean {
+  if (actual == null) return false;
+  return actual.sub(expected).abs().lte(MONEY_VERIFY_EPS);
+}
+
+/** קריאה חוזרת מהמסד לאחר create/update — מוודא שהשורה נשמרה בפועל */
+async function verifyOrderRowMatchesAfterSave(
+  orderId: string,
+  expected: {
+    orderNumber: string | null;
+    customerId: string;
+    sourceCountry: OrderSourceCountry;
+    status: OrderStatus;
+    paymentMethod: PaymentMethod;
+    amountUsd: Prisma.Decimal;
+    commissionUsd: Prisma.Decimal;
+    totalUsd: Prisma.Decimal;
+  },
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const row = await prisma.order.findFirst({
+    where: { id: orderId.trim(), deletedAt: null },
+    select: {
+      orderNumber: true,
+      customerId: true,
+      sourceCountry: true,
+      amountUsd: true,
+      commissionUsd: true,
+      totalUsd: true,
+      status: true,
+      paymentMethod: true,
+    },
+  });
+  if (!row) {
+    return { ok: false, error: "ההזמנה לא נמצאה במסד לאחר שמירה" };
+  }
+  if (!row.customerId || row.customerId !== expected.customerId) {
+    return { ok: false, error: "אימות שמירה נכשל: לקוח" };
+  }
+  if ((row.orderNumber ?? "").trim() !== (expected.orderNumber ?? "").trim()) {
+    return { ok: false, error: "אימות שמירה נכשל: מספר הזמנה" };
+  }
+  if (row.sourceCountry !== expected.sourceCountry) {
+    return { ok: false, error: "אימות שמירה נכשל: מדינת מקור" };
+  }
+  if (row.status !== expected.status) {
+    return { ok: false, error: "אימות שמירה נכשל: סטטוס" };
+  }
+  if (row.paymentMethod !== expected.paymentMethod) {
+    return { ok: false, error: "אימות שמירה נכשל: צורת תשלום" };
+  }
+  if (!decimalCloseEnough(row.amountUsd, expected.amountUsd)) {
+    return { ok: false, error: "אימות שמירה נכשל: סכום עסקה" };
+  }
+  if (!decimalCloseEnough(row.commissionUsd, expected.commissionUsd)) {
+    return { ok: false, error: "אימות שמירה נכשל: עמלה" };
+  }
+  if (!decimalCloseEnough(row.totalUsd, expected.totalUsd)) {
+    return { ok: false, error: "אימות שמירה נכשל: סה״כ דולר" };
+  }
+  return { ok: true };
+}
 
 const PAYMENT_CODE_PREFIX = "WGP-P-";
 
@@ -631,6 +700,7 @@ export async function searchCustomersForOrderAction(query: string): Promise<Cust
       { nameHe: { contains: q, mode: "insensitive" } },
       { nameAr: { contains: q, mode: "insensitive" } },
       { customerCode: { contains: q, mode: "insensitive" } },
+      { oldCustomerCode: { contains: q, mode: "insensitive" } },
       { phone: { contains: q } },
       { secondPhone: { contains: q } },
     ];
@@ -711,6 +781,130 @@ export async function listCustomersForOrderQuickPickAction(): Promise<CustomerSe
     city: r.city,
     phone: r.phone,
   }));
+}
+
+/** קליטת הזמנה מינימלית — זיהוי לקוח לפי קוד לקוח בלבד */
+export type CustomerLookupByCodePayload = {
+  id: string;
+  displayName: string;
+  phone: string | null;
+  address: string | null;
+};
+
+export async function lookupCustomerByCodeAction(
+  code: string,
+): Promise<{ ok: true; customer: CustomerLookupByCodePayload | null } | { ok: false; error: string }> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["create_orders"])) {
+    return { ok: false, error: "אין הרשאה" };
+  }
+
+  const q = code.trim();
+  if (!q) return { ok: true, customer: null };
+
+  const row = await prisma.customer.findFirst({
+    where: {
+      deletedAt: null,
+      isActive: true,
+      customerCode: { equals: q, mode: "insensitive" },
+    },
+    select: { id: true, displayName: true, phone: true, address: true },
+  });
+
+  if (!row) return { ok: true, customer: null };
+
+  return {
+    ok: true,
+    customer: {
+      id: row.id,
+      displayName: row.displayName,
+      phone: row.phone,
+      address: row.address,
+    },
+  };
+}
+
+/** יצירת הזמנה מינימלית — ללא תשלומים/מטבע/עמלה (סכום יחיד בשקלים) */
+export async function createMinimalOrderAction(form: {
+  customerId: string;
+  orderDateYmd: string;
+  orderTimeHm: string;
+  totalAmount: string;
+}): Promise<CaptureState> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["create_orders"])) {
+    return { ok: false, error: "אין הרשאה" };
+  }
+
+  const custId = form.customerId.trim();
+  if (!custId) return { ok: false, error: "יש לבחור לקוח לפי קוד" };
+
+  let amt: Prisma.Decimal;
+  try {
+    amt = new Prisma.Decimal(form.totalAmount.trim().replace(",", "."));
+  } catch {
+    return { ok: false, error: "סכום לא תקין" };
+  }
+  if (amt.lte(0)) return { ok: false, error: "יש להזין סכום חיובי" };
+
+  const customer = await prisma.customer.findFirst({
+    where: { id: custId, deletedAt: null, isActive: true },
+  });
+  if (!customer) return { ok: false, error: "לקוח לא נמצא" };
+
+  const orderDate = parseLocalDateTime(form.orderDateYmd, form.orderTimeHm || "00:00");
+  const weekCode = getWeekCodeForLocalDate(orderDate);
+  const { orderNumber, oldOrderNumber } = await generateNextOrderNumber(weekCode);
+
+  const zero = new Prisma.Decimal(0);
+
+  const order = await prisma.order.create({
+    data: {
+      orderNumber,
+      oldOrderNumber,
+      customer: { connect: { id: customer.id } },
+      customerCodeSnapshot: customer.customerCode,
+      customerNameSnapshot: customer.displayName,
+      customerTypeSnapshot: (customer.customerType || "רגיל").trim() || "רגיל",
+      weekCode,
+      orderDate,
+      status: OrderStatus.OPEN,
+      paymentMethod: null,
+      amountUsd: zero,
+      commissionUsd: zero,
+      totalUsd: zero,
+      amountIls: amt,
+      commissionIls: zero,
+      totalIls: amt,
+      exchangeRate: null,
+      vatRate: new Prisma.Decimal("18"),
+      amountWithoutVat: amt,
+      snapshotBaseDollarRate: null,
+      snapshotDollarFee: null,
+      snapshotFinalDollarRate: null,
+      usdRateUsed: null,
+      totalIlsWithVat: amt,
+      totalIlsWithoutVat: amt,
+      vatAmount: zero,
+      notes: null,
+      createdBy: { connect: { id: me.id } },
+    },
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      userId: me.id,
+      actionType: "ORDER_CREATED",
+      entityType: "Order",
+      entityId: order.id,
+      metadata: { minimal: true, source: "minimal_capture" },
+    },
+  });
+
+  revalidatePath("/admin");
+  revalidatePath("/admin/orders");
+
+  return { ok: true };
 }
 
 export type CustomerCardOrderRow = {
@@ -1097,6 +1291,82 @@ export async function previewOrderNumberAction(weekCode: string): Promise<string
   return orderNumber;
 }
 
+/** נקודות תשלום לטופס הזמנה (PaymentPoint) */
+export async function listPaymentPointsForOrderAction(): Promise<{ id: string; label: string }[]> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["create_orders", "edit_orders"])) return [];
+  const rows = await prisma.paymentPoint.findMany({
+    where: { isActive: true },
+    orderBy: { pointName: "asc" },
+    select: { id: true, pointName: true, city: true },
+    take: 200,
+  });
+  return rows.map((r) => ({
+    id: r.id,
+    label: r.city ? `${r.pointName} · ${r.city}` : r.pointName,
+  }));
+}
+
+/** פרטי תצוגה לטופס קליטת הזמנה (שמות, אינדקס, יתרה משוערת) */
+export async function getCustomerOrderFormExtrasAction(customerId: string): Promise<{
+  nameHe: string | null;
+  nameAr: string | null;
+  phone: string | null;
+  indexLabel: string | null;
+  city: string | null;
+  address: string | null;
+  balanceUsdDisplay: string;
+  balanceUsdNegative: boolean;
+} | null> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["create_orders", "edit_orders"])) return null;
+
+  const id = customerId.trim();
+  if (!id) return null;
+
+  const cust = await prisma.customer.findFirst({
+    where: { id, deletedAt: null, isActive: true },
+    select: {
+      nameHe: true,
+      nameAr: true,
+      phone: true,
+      secondPhone: true,
+      oldCustomerCode: true,
+      customerCode: true,
+      city: true,
+      address: true,
+    },
+  });
+  if (!cust) return null;
+
+  const [orderAgg, payAgg] = await Promise.all([
+    prisma.order.aggregate({
+      where: { customerId: id, deletedAt: null },
+      _sum: { totalUsd: true },
+    }),
+    prisma.payment.aggregate({
+      where: { customerId: id, isPaid: true },
+      _sum: { amountUsd: true },
+    }),
+  ]);
+
+  const o = Number(orderAgg._sum.totalUsd ?? 0);
+  const p = Number(payAgg._sum.amountUsd ?? 0);
+  const bal = o - p;
+  const indexLabel = cust.oldCustomerCode?.trim() || cust.customerCode?.trim() || null;
+
+  return {
+    nameHe: cust.nameHe,
+    nameAr: cust.nameAr,
+    phone: cust.phone ?? cust.secondPhone,
+    indexLabel,
+    city: cust.city?.trim() || null,
+    address: cust.address?.trim() || null,
+    balanceUsdDisplay: bal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+    balanceUsdNegative: bal < -0.005,
+  };
+}
+
 export async function captureOrderAction(form: {
   weekCode: string;
   orderDateYmd: string;
@@ -1106,14 +1376,21 @@ export async function captureOrderAction(form: {
   /** שער דולר סופי לחישוב ₪ (עקיפת הגדרות גלובליות) */
   finalRateOverride?: string | null;
   customerId: string;
-  customerTypeSnapshot: string;
+  /** אופציונלי — ברירת מחדל מרשומת הלקוח */
+  customerTypeSnapshot?: string | null;
   amountUsd: string;
   feeUsd: string;
   paymentMethod: string;
   status: string;
   notes?: string;
+  /** נקודת תשלום (אופציונלי) */
+  paymentPointId?: string | null;
   /** שורות תשלום נוספות (USD) — נשמרות אחרי ההזמנה; סכוםן לא יעלה על totalUsd */
   paymentLines?: OrderCapturePaymentLineInput[];
+  /** אחוז מע״מ (ברירת מחדל 18 — תאימות אחורה) */
+  vatPercent?: string | null;
+  /** מקור / מדינת ספק */
+  sourceCountry?: OrderCountryCode | string | null;
 }): Promise<CaptureState> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["create_orders"])) {
@@ -1152,7 +1429,13 @@ export async function captureOrderAction(form: {
       return { ok: false, error: "שער דולר לא תקין" };
     }
   }
-  const vatRate = new Prisma.Decimal("18");
+  let vatPctNum = 18;
+  const rawVatPct = form.vatPercent?.trim().replace(",", ".");
+  if (rawVatPct) {
+    const n = Number(rawVatPct);
+    if (Number.isFinite(n) && n >= 0 && n <= 100) vatPctNum = n;
+  }
+  const vatRate = new Prisma.Decimal(String(vatPctNum));
 
   let deal: Prisma.Decimal;
   try {
@@ -1198,7 +1481,7 @@ export async function captureOrderAction(form: {
   const commissionIlsGross = commissionUsd.mul(finalRate).toDecimalPlaces(2, 4);
 
   const orderDate = parseLocalDateTime(form.orderDateYmd, form.orderTimeHm || "00:00");
-  const typeSnap = (form.customerTypeSnapshot || customer.customerType || "רגיל").trim() || "רגיל";
+  const typeSnap = (form.customerTypeSnapshot?.trim() || customer.customerType || "רגיל").trim() || "רגיל";
 
   const wc = form.weekCode.trim() || "AH-118";
   const requested = form.orderNumber?.trim() || "";
@@ -1223,6 +1506,27 @@ export async function captureOrderAction(form: {
     oldOrderNumber = allocated.oldOrderNumber;
   }
 
+  let paymentPointConnect: { connect: { id: string } } | undefined;
+  const ppId = form.paymentPointId?.trim();
+  if (ppId) {
+    const pp = await prisma.paymentPoint.findFirst({ where: { id: ppId, isActive: true }, select: { id: true } });
+    if (!pp) return { ok: false, error: "נקודת תשלום לא תקינה" };
+    paymentPointConnect = { connect: { id: ppId } };
+  }
+
+  const allowedCountries = await getSelectedCountriesForOrdersAction();
+  const rawCountry = form.sourceCountry?.trim();
+  if (!rawCountry) {
+    return { ok: false, error: "יש לבחור מדינת מקור" };
+  }
+  if (!ORDER_COUNTRY_CODES.includes(rawCountry as OrderCountryCode)) {
+    return { ok: false, error: "מדינת מקור לא תקינה" };
+  }
+  if (!allowedCountries.includes(rawCountry as OrderCountryCode)) {
+    return { ok: false, error: "מדינה זו אינה מופעלת בהגדרות המערכת" };
+  }
+  const sourceCountryCreate = rawCountry as OrderSourceCountry;
+
   const order = await prisma.order.create({
     data: {
       orderNumber,
@@ -1232,9 +1536,11 @@ export async function captureOrderAction(form: {
       customerNameSnapshot: customer.displayName,
       customerTypeSnapshot: typeSnap,
       weekCode: form.weekCode.trim() || null,
+      sourceCountry: sourceCountryCreate,
       orderDate,
       status,
       paymentMethod: form.paymentMethod as PaymentMethod,
+      ...(paymentPointConnect ? { paymentPoint: paymentPointConnect } : {}),
       amountUsd: deal,
       commissionUsd,
       totalUsd,
@@ -1254,6 +1560,18 @@ export async function captureOrderAction(form: {
       createdBy: { connect: { id: me.id } },
     },
   });
+
+  const verifyCreate = await verifyOrderRowMatchesAfterSave(order.id, {
+    orderNumber,
+    customerId: customer.id,
+    sourceCountry: sourceCountryCreate,
+    status,
+    paymentMethod: form.paymentMethod as PaymentMethod,
+    amountUsd: deal,
+    commissionUsd,
+    totalUsd,
+  });
+  if (!verifyCreate.ok) return verifyCreate;
 
   if (payParse.parsed.length > 0) {
     await appendParsedPaymentsForOrder({
@@ -1290,7 +1608,8 @@ export async function captureOrderAction(form: {
   });
 
   revalidatePath("/admin");
-  revalidatePath("/admin/orders");
+  revalidatePath("/admin/orders", "page");
+  revalidatePath(`/admin/orders/${order.id}`, "page");
   return {
     ok: true,
     saved: {
@@ -1315,13 +1634,14 @@ export type OrderWorkPanelPayload = {
   customerId: string;
   customerLabel: string;
   customerCode: string | null;
-  customerType: string;
   amountUsd: string;
   feeUsd: string;
   paymentMethod: PaymentMethod;
+  paymentPointId: string | null;
   status: OrderStatus;
   usdRateUsed: string;
   notes: string;
+  sourceCountry: string | null;
   /** סכום USD שכבר שולם בתשלומים מקושרים */
   existingPaymentsUsdSum: string;
   /** סה״כ USD של ההזמנה (לווידוא תשלומים) */
@@ -1370,16 +1690,55 @@ export async function getOrderForWorkPanelAction(orderId: string): Promise<Order
     customerId: cid,
     customerLabel: label,
     customerCode: order.customer?.customerCode ?? order.customerCodeSnapshot ?? null,
-    customerType: (order.customerTypeSnapshot || order.customer?.customerType || "רגיל").trim() || "רגיל",
     amountUsd: deal.toString(),
     feeUsd: com.toString(),
     paymentMethod: order.paymentMethod ?? PaymentMethod.BANK_TRANSFER,
+    paymentPointId: order.paymentPointId ?? null,
     status: order.status,
     usdRateUsed: rateUsed.toFixed(4),
     notes: order.notes ?? "",
     existingPaymentsUsdSum: existingPayUsd.toFixed(4),
     orderTotalUsd: orderTotalUsdVal.toFixed(4),
+    sourceCountry: coerceOrderCountryForForm(order.sourceCountry) || null,
   };
+}
+
+const QUICK_LIST_STATUS_SET = new Set<OrderStatus>([
+  OrderStatus.OPEN,
+  OrderStatus.WAITING_FOR_EXECUTION,
+  OrderStatus.COMPLETED,
+]);
+
+export async function updateOrderListStatusAction(
+  orderId: string,
+  status: OrderStatus,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["edit_orders"])) {
+    return { ok: false, error: "אין הרשאה" };
+  }
+  const id = orderId.trim();
+  if (!id) return { ok: false, error: "חסר מזהה הזמנה" };
+  if (!QUICK_LIST_STATUS_SET.has(status)) {
+    return { ok: false, error: "סטטוס לא חוקי" };
+  }
+
+  const exists = await prisma.order.findFirst({
+    where: { id, deletedAt: null },
+    select: { id: true },
+  });
+  if (!exists) return { ok: false, error: "הזמנה לא נמצאה" };
+
+  await prisma.order.update({
+    where: { id },
+    data: { status },
+  });
+
+  revalidatePath("/admin");
+  revalidatePath("/admin/orders");
+  revalidatePath(`/admin/orders/${id}`);
+
+  return { ok: true };
 }
 
 export async function updateOrderWorkPanelAction(form: {
@@ -1388,13 +1747,16 @@ export async function updateOrderWorkPanelAction(form: {
   orderDateYmd: string;
   orderTimeHm: string;
   customerId: string;
-  customerTypeSnapshot: string;
+  /** אופציונלי — ברירת מחדל מרשומת הלקוח */
+  customerTypeSnapshot?: string | null;
   amountUsd: string;
   feeUsd: string;
   paymentMethod: string;
   status: string;
   notes?: string;
+  paymentPointId?: string | null;
   paymentLines?: OrderCapturePaymentLineInput[];
+  sourceCountry?: OrderCountryCode | string | null;
 }): Promise<CaptureState> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["edit_orders"])) {
@@ -1403,7 +1765,7 @@ export async function updateOrderWorkPanelAction(form: {
 
   const existing = await prisma.order.findFirst({
     where: { id: form.orderId.trim(), deletedAt: null },
-    select: { id: true, orderNumber: true, weekCode: true },
+    select: { id: true, orderNumber: true, weekCode: true, sourceCountry: true },
   });
   if (!existing) return { ok: false, error: "הזמנה לא נמצאה" };
 
@@ -1477,7 +1839,32 @@ export async function updateOrderWorkPanelAction(form: {
   const dealIlsGross = deal.mul(final).toDecimalPlaces(2, 4);
   const commissionIlsGross = commissionUsd.mul(final).toDecimalPlaces(2, 4);
   const orderDate = parseLocalDateTime(form.orderDateYmd, form.orderTimeHm || "00:00");
-  const typeSnap = (form.customerTypeSnapshot || customer.customerType || "רגיל").trim() || "רגיל";
+  const typeSnap = (form.customerTypeSnapshot?.trim() || customer.customerType || "רגיל").trim() || "רגיל";
+
+  let paymentPointIdUpdate: string | null = null;
+  const ppId = form.paymentPointId?.trim();
+  if (ppId) {
+    const pp = await prisma.paymentPoint.findFirst({ where: { id: ppId, isActive: true }, select: { id: true } });
+    if (!pp) return { ok: false, error: "נקודת תשלום לא תקינה" };
+    paymentPointIdUpdate = ppId;
+  }
+
+  const allowedCountries = await getSelectedCountriesForOrdersAction();
+  const rawCountry = form.sourceCountry?.trim();
+  if (!rawCountry) {
+    return { ok: false, error: "יש לבחור מדינת מקור" };
+  }
+  if (!ORDER_COUNTRY_CODES.includes(rawCountry as OrderCountryCode)) {
+    return { ok: false, error: "מדינת מקור לא תקינה" };
+  }
+  const requestedCode = rawCountry as OrderCountryCode;
+  const existingCountryStr = existing.sourceCountry != null ? String(existing.sourceCountry) : null;
+  const keepExistingCountry =
+    existingCountryStr !== null && existingCountryStr === requestedCode;
+  if (!allowedCountries.includes(requestedCode) && !keepExistingCountry) {
+    return { ok: false, error: "מדינה זו אינה מופעלת בהגדרות המערכת" };
+  }
+  const sourceCountryUpdate = requestedCode as OrderSourceCountry;
 
   await prisma.order.update({
     where: { id: existing.id },
@@ -1487,9 +1874,11 @@ export async function updateOrderWorkPanelAction(form: {
       customerNameSnapshot: customer.displayName,
       customerTypeSnapshot: typeSnap,
       weekCode: form.weekCode.trim() || null,
+      sourceCountry: sourceCountryUpdate,
       orderDate,
       status,
       paymentMethod: form.paymentMethod as PaymentMethod,
+      paymentPointId: paymentPointIdUpdate,
       amountUsd: deal,
       commissionUsd,
       totalUsd,
@@ -1508,6 +1897,18 @@ export async function updateOrderWorkPanelAction(form: {
       notes: form.notes?.trim() || null,
     },
   });
+
+  const verifyUpdate = await verifyOrderRowMatchesAfterSave(existing.id, {
+    orderNumber: existing.orderNumber,
+    customerId: customer.id,
+    sourceCountry: sourceCountryUpdate,
+    status,
+    paymentMethod: form.paymentMethod as PaymentMethod,
+    amountUsd: deal,
+    commissionUsd,
+    totalUsd,
+  });
+  if (!verifyUpdate.ok) return verifyUpdate;
 
   if (payParse.parsed.length > 0) {
     await appendParsedPaymentsForOrder({
@@ -1538,6 +1939,7 @@ export async function updateOrderWorkPanelAction(form: {
   });
 
   revalidatePath("/admin");
-  revalidatePath("/admin/orders");
-  return { ok: true };
+  revalidatePath("/admin/orders", "page");
+  revalidatePath(`/admin/orders/${existing.id}`, "page");
+  return { ok: true, orderNumber: existing.orderNumber ?? "" };
 }

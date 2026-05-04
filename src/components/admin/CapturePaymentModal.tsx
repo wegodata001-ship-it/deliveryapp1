@@ -1,7 +1,7 @@
 "use client";
 
 import { Modal } from "@/components/ui/Modal";
-import { CapturePaymentForm } from "@/components/admin/CapturePaymentForm";
+import { PaymentModal } from "@/components/admin/PaymentModal";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 
 type Props = {
@@ -14,7 +14,9 @@ type Props = {
 export function CapturePaymentModal({ open, onClose, onToast, financial = null }: Props) {
   return (
     <Modal open={open} onClose={onClose} title="קליטת תשלום" size="xl">
-      {open ? <CapturePaymentForm financial={financial} onClose={onClose} onToast={onToast} /> : null}
+      {open ? (
+        <PaymentModal financial={financial} onClose={onClose} onToast={onToast} />
+      ) : null}
     </Modal>
   );
 }

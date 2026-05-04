@@ -2,8 +2,8 @@
 
 import { useEffect } from "react";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
-import { OrderWorkPanel } from "@/components/admin/OrderWorkPanel";
-import { CapturePaymentForm } from "@/components/admin/CapturePaymentForm";
+import { OrderCreatePanel } from "@/components/admin/OrderCreatePanel";
+import { PaymentModal } from "@/components/admin/PaymentModal";
 import { CustomerCardWindowBody, CreateCustomerWindowBody } from "@/components/admin/AdminWindowBodies";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 import type { AdminWindowEntry } from "@/lib/admin-windows";
@@ -49,7 +49,10 @@ export function AdminWindowStack({
   useEffect(() => {
     if (stack.length === 0) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeTop();
+      if (e.key !== "Escape") return;
+      /* עריכת הזמנה מקליטת תשלום — פורטל מחוץ לערימה; אל תסגור את חלון הקליטה */
+      if (document.querySelector(".order-edit-modal-root")) return;
+      closeTop();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -106,7 +109,7 @@ export function AdminWindowStack({
                   .join(" ")}
               >
                 {w.type === "orderCapture" && (canCreateOrders || canEditOrders) ? (
-                  <OrderWorkPanel
+                  <OrderCreatePanel
                     windowId={w.id}
                     financial={financial}
                     onToast={onToast}
@@ -117,13 +120,15 @@ export function AdminWindowStack({
                   />
                 ) : null}
                 {w.type === "payments" && canReceivePayments ? (
-                  <CapturePaymentForm
+                  <PaymentModal
                     key={w.id}
                     financial={financial}
-                    canViewCustomerCard={canViewCustomerCard}
                     initialPayment={w.props}
                     onClose={() => closeWindow(w.id)}
                     onToast={onToast}
+                    canViewCustomerCard={canViewCustomerCard}
+                    canEditOrders={canEditOrders}
+                    canCreateOrders={canCreateOrders}
                   />
                 ) : null}
                 {w.type === "customerCard" && canViewCustomerCard ? (

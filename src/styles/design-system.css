@@ -1,0 +1,609 @@
+/* Global design tokens (import after globals.css in root layout) */
+:root {
+  --primary: #2563eb;
+  --primary-light: #eff6ff;
+
+  --success: #16a34a;
+  --success-bg: #ecfdf5;
+
+  --warning: #f59e0b;
+  --warning-bg: #fef3c7;
+
+  --danger: #dc2626;
+  --danger-bg: #fee2e2;
+
+  --bg: #f8fafc;
+  --card: #ffffff;
+  --border: #e5e7eb;
+
+  --text: #111827;
+  --text-light: #6b7280;
+
+  --radius: 12px;
+}
+
+/* Base UI blocks */
+.card {
+  background: var(--card);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  padding: 16px;
+}
+
+.btn {
+  height: 42px;
+  border-radius: 8px;
+  padding: 0 14px;
+  font-weight: 500;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(0.95);
+}
+
+.btn-secondary {
+  background: #f1f5f9;
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.input {
+  height: 42px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  padding: 0 10px;
+  font-family: inherit;
+  font-size: 0.9375rem;
+  background: #fff;
+  color: var(--text);
+}
+
+.input:focus {
+  outline: 2px solid rgba(37, 99, 235, 0.35);
+  outline-offset: 1px;
+}
+
+/* Order capture — card layout (scoped under form shell) */
+.adm-capture-order-shell .modal-container {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.adm-capture-order-shell .modal-main {
+  flex: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.adm-capture-order-shell .modal-summary {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.adm-capture-order-shell .ds-capture-section-title {
+  margin: 0 0 12px;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.adm-capture-order-shell .card .adm-oc-legacy-side {
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+.summary-info {
+  background: var(--primary-light);
+  border-color: rgba(37, 99, 235, 0.12);
+}
+
+.summary-success {
+  background: var(--success-bg);
+  border-color: rgba(22, 163, 74, 0.12);
+}
+
+.summary-danger {
+  background: var(--danger-bg);
+  border-color: rgba(220, 38, 38, 0.12);
+}
+
+/* Payment modal layout helpers */
+.payment-modal-split.payment-layout {
+  gap: 20px;
+}
+
+.payment-modal-main.payment-table {
+  flex: 2 1 0;
+}
+
+.payment-modal-side.payment-summary {
+  flex: 1 1 0;
+  max-width: 320px;
+}
+
+.payment-summary-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.btn-save {
+  width: 100%;
+}
+
+/* Badges */
+.badge {
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  display: inline-block;
+}
+
+.badge-success {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.badge-warning {
+  background: var(--warning-bg);
+  color: #b45309;
+}
+
+.badge-danger {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.badge-info {
+  background: var(--primary-light);
+  color: var(--primary);
+}
+
+/* Status select in orders table — pill/badge look */
+.adm-table-excel .adm-table-status-sel.adm-badge-sel--success {
+  border-color: rgba(22, 163, 74, 0.35);
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.adm-table-excel .adm-table-status-sel.adm-badge-sel--warning {
+  border-color: rgba(245, 158, 11, 0.4);
+  background: var(--warning-bg);
+  color: #b45309;
+}
+
+.adm-table-excel .adm-table-status-sel.adm-badge-sel--open {
+  border-color: rgba(37, 99, 235, 0.35);
+  background: var(--primary-light);
+  color: #1d4ed8;
+}
+
+/* Loading (save actions) */
+.loading {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* Payment table — align with SaaS table spec */
+.payment-modal-table th,
+.payment-modal-table td {
+  padding: 12px 10px;
+}
+
+.payment-modal-table tbody tr:hover td {
+  background-color: #f1f5f9;
+}
+
+/* Status chips in payment modal — design tokens */
+.pm-st--paid {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.pm-st--partial {
+  background: var(--warning-bg);
+  color: #b45309;
+}
+
+.pm-st--unpaid {
+  background: #f1f5f9;
+  color: var(--text-light);
+}
+
+@media (max-width: 900px) {
+  .adm-capture-order-shell .modal-container {
+    flex-direction: column;
+  }
+
+  .adm-capture-order-shell .modal-summary {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .adm-capture-order-shell .modal-summary .card {
+    flex: 1 1 220px;
+  }
+}
+
+/* קליטת הזמנה — סכומים: עדיפות לרקע מהמערכת מעל סגנונות legacy לכרטיסים כספיים */
+.adm-win-panel--order-capture .adm-capture-order-shell .modal-summary .card.summary-info {
+  background: var(--primary-light);
+}
+
+.adm-win-panel--order-capture .adm-capture-order-shell .modal-summary .card.summary-success {
+  background: var(--success-bg);
+}
+
+.adm-win-panel--order-capture .adm-capture-order-shell .modal-summary .card.summary-info .adm-oc-line--total {
+  color: #1e40af;
+}
+
+.adm-win-panel--order-capture .adm-capture-order-shell .modal-summary .card.summary-success .adm-oc-line--total {
+  color: #15803d;
+}
+
+/* רשימת הזמנות — כרטיסי KPI אחידים */
+.adm-orders-kpi-card--gray {
+  background: var(--bg);
+  border-color: var(--border);
+}
+
+.adm-orders-kpi-card--green {
+  background: var(--success-bg);
+  border-color: rgba(22, 163, 74, 0.22);
+}
+
+.adm-orders-kpi-card--red {
+  background: var(--danger-bg);
+  border-color: rgba(220, 38, 38, 0.2);
+}
+
+/* קליטת תשלום — כפתור שמירה: ירוק (הצלחה) מול מפרט design system */
+.payment-modal-side--compact .payment-modal-side-sticky .btn.btn-primary.payment-modal-save {
+  background: var(--success);
+  color: #fff;
+  font-weight: 800;
+}
+
+.payment-modal-side--compact .payment-modal-side-sticky .btn.btn-primary.payment-modal-save:hover:not(:disabled) {
+  filter: brightness(0.95);
+}
+
+.payment-modal-total-ds.card {
+  padding: 12px;
+}
+
+.pm-status.badge {
+  border-radius: 6px;
+}
+
+/* --- כרטסת לקוח + כרטסת (עיצוב SaaS) --- */
+.adm-payments-deeplink-msg {
+  padding: 1rem;
+}
+
+.adm-win-panel--customer-card .adm-cust-card-shell {
+  border-radius: 12px;
+  box-shadow: none;
+  border: 1px solid #e5e7eb;
+  padding: 16px;
+  background: #fff;
+}
+
+.adm-win-panel--customer-card .adm-cust-card-shell::before {
+  display: none;
+}
+
+.adm-win-panel--customer-card .btn-outline {
+  border: 1px solid #2563eb;
+  color: #2563eb;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: #fff;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.adm-win-panel--customer-card .btn-outline:hover {
+  background: #eff6ff;
+}
+
+.adm-win-panel--customer-card .client-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e5e7eb;
+  gap: 12px;
+}
+
+.adm-win-panel--customer-card .client-title {
+  text-align: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.adm-win-panel--customer-card .client-title h1 {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 700;
+  color: #111827;
+  line-height: 1.2;
+}
+
+.adm-win-panel--customer-card .client-title span {
+  display: block;
+  margin-top: 4px;
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.adm-win-panel--customer-card .client-actions {
+  flex-shrink: 0;
+}
+
+.adm-win-panel--customer-card .client-info-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #f9fafb;
+  border-radius: 12px;
+  padding: 20px;
+  margin-top: 16px;
+  gap: 8px;
+}
+
+.adm-win-panel--customer-card .info-item {
+  flex: 1;
+  text-align: center;
+  min-width: 0;
+}
+
+.adm-win-panel--customer-card .info-item label {
+  display: block;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.adm-win-panel--customer-card .info-item div {
+  font-size: 15px;
+  font-weight: 600;
+  margin-top: 4px;
+  color: #111827;
+}
+
+.adm-win-panel--customer-card .info-divider {
+  width: 1px;
+  height: 40px;
+  flex-shrink: 0;
+  background: #e5e7eb;
+}
+
+.adm-win-panel--customer-card .tabs {
+  display: flex;
+  gap: 20px;
+  border-bottom: 1px solid #e5e7eb;
+  margin-top: 20px;
+  margin-bottom: 16px;
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+  flex-wrap: wrap;
+}
+
+.adm-win-panel--customer-card .tab {
+  padding: 10px;
+  cursor: pointer;
+  background: none;
+  border: none;
+  font: inherit;
+  font-size: 14px;
+  color: #6b7280;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.adm-win-panel--customer-card .tab.active {
+  border-bottom: 2px solid #2563eb;
+  font-weight: 600;
+  color: #111827;
+}
+
+.adm-win-panel--customer-card .summary-grid {
+  display: flex;
+  gap: 16px;
+  margin-top: 20px;
+  flex-wrap: wrap;
+}
+
+.adm-win-panel--customer-card .summary-card {
+  flex: 1;
+  min-width: 140px;
+  padding: 20px;
+  border-radius: 12px;
+  font-weight: 700;
+  background: #f9fafb;
+  border: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.adm-win-panel--customer-card .summary-card-amount {
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.adm-win-panel--customer-card .summary-card.red,
+.adm-win-panel--customer-card .summary-card.red .summary-card-amount {
+  color: #dc2626;
+}
+
+.adm-win-panel--customer-card .summary-card.green,
+.adm-win-panel--customer-card .summary-card.green .summary-card-amount {
+  color: #16a34a;
+}
+
+.adm-win-panel--customer-card .summary-card.blue,
+.adm-win-panel--customer-card .summary-card.blue .summary-card-amount {
+  color: #2563eb;
+}
+
+.adm-win-panel--customer-card .summary-card span {
+  font-size: 13px;
+  font-weight: 600;
+  color: #6b7280;
+}
+
+.adm-win-panel--customer-card .summary-card.blue span {
+  color: #6b7280;
+}
+
+.adm-win-panel--customer-card .summary-card-amount-btn {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  width: 100%;
+}
+
+.adm-win-panel--customer-card .summary-card-amount-btn:hover .summary-card-amount {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.adm-win-panel--customer-card .adm-cust-card-orders-table.adm-ledger-table-saas tbody tr {
+  background: #fff;
+}
+
+.adm-win-panel--customer-card .adm-cust-card-orders-table.adm-ledger-table-saas tbody tr:hover {
+  background: #f1f5f9;
+}
+
+.adm-win-panel--customer-card .adm-cust-card-orders-table.adm-ledger-table-saas tbody tr.clickable {
+  cursor: pointer;
+}
+
+.adm-win-panel--customer-card .status-paid {
+  color: #16a34a;
+  font-weight: 600;
+}
+
+.adm-win-panel--customer-card .status-debt {
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.adm-win-panel--customer-card .adm-mini-modal-layer .modal.cust-edit-modal-panel {
+  width: min(600px, calc(100vw - 32px));
+  max-width: 600px;
+  background: #fff;
+  padding: 24px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.18);
+}
+
+.adm-win-panel--customer-card .adm-mini-modal-layer .modal.cust-edit-modal-panel h2 {
+  margin: 0 0 4px;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #111827;
+}
+
+.adm-win-panel--customer-card .adm-mini-modal-layer .form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 20px;
+}
+
+.adm-win-panel--customer-card .adm-mini-modal-layer .form-field label {
+  display: block;
+  font-size: 12px;
+  color: #6b7280;
+  margin-bottom: 4px;
+}
+
+.adm-win-panel--customer-card .adm-mini-modal-layer .form-field input {
+  width: 100%;
+  box-sizing: border-box;
+  height: 42px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 14px;
+}
+
+.adm-win-panel--customer-card .adm-mini-modal-layer .modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+.adm-win-panel--customer-card .adm-mini-modal-layer .modal-actions .btn.btn-secondary {
+  background: #f1f5f9;
+  color: #334155;
+  border: 1px solid #e5e7eb;
+}
+
+.adm-win-panel--customer-card .adm-mini-modal-layer .modal-actions .btn.btn-primary {
+  min-width: 100px;
+}
+
+@media (max-width: 520px) {
+  .adm-win-panel--customer-card .adm-mini-modal-layer .form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.adm-win-panel--customer-card .adm-cust-card-orders-table.adm-ledger-table-saas th {
+  background: #f9fafb;
+  color: #111827;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  .adm-win-panel--customer-card .client-info-card {
+    flex-direction: column;
+  }
+
+  .adm-win-panel--customer-card .info-divider {
+    width: 100%;
+    height: 1px;
+  }
+}

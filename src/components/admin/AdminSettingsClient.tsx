@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { saveAdminSettingsAction, type AdminSettingsPayload } from "@/app/admin/settings/actions";
+import { orderCountryLabel, type OrderCountryCode } from "@/lib/order-countries";
 import { WORK_WEEK_CODES_SORTED } from "@/lib/work-week";
 
 type Props = {
@@ -40,6 +41,17 @@ export function AdminSettingsClient({ initial }: Props) {
 
   function update<K extends keyof AdminSettingsPayload>(key: K, value: AdminSettingsPayload[K]) {
     setForm((old) => ({ ...old, [key]: value }));
+    setError(null);
+    setToast(null);
+  }
+
+  function toggleSelectedCountry(code: OrderCountryCode) {
+    setForm((f) => {
+      const has = f.selectedCountries.includes(code);
+      const next = has ? f.selectedCountries.filter((c) => c !== code) : [...f.selectedCountries, code];
+      if (next.length === 0) return f;
+      return { ...f, selectedCountries: next };
+    });
     setError(null);
     setToast(null);
   }
@@ -111,6 +123,28 @@ export function AdminSettingsClient({ initial }: Props) {
             </label>
           </div>
           <div className="adm-settings-note">עמלת שער מחושבת: <strong dir="ltr">₪ {dollarFee}</strong></div>
+        </article>
+
+        <article className="adm-settings-card">
+          <div className="adm-settings-card-head">
+            <span className="adm-settings-icon">🌍</span>
+            <div>
+              <h2>מדינות להזמנות</h2>
+              <p>ניתן לשייך לכל הזמנה מדינת מקור — רק המסומנות יופיעו בקליטת הזמנה ובטבלה.</p>
+            </div>
+          </div>
+          <div className="adm-settings-fields adm-settings-countries">
+            {(["TURKEY", "CHINA", "UAE"] as const).map((code) => (
+              <label key={code} className="adm-settings-country-opt">
+                <input
+                  type="checkbox"
+                  checked={form.selectedCountries.includes(code)}
+                  onChange={() => toggleSelectedCountry(code)}
+                />
+                <span>{orderCountryLabel(code)}</span>
+              </label>
+            ))}
+          </div>
         </article>
 
         <article className="adm-settings-card">
