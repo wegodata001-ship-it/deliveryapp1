@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import { OrderSourceCountry, OrderStatus, PaymentMethod, Prisma } from "@prisma/client";
+import { OrderStatus, PaymentMethod, Prisma } from "@prisma/client";
 import { OrdersListShell, type OrderListRow } from "@/components/admin/OrdersListShell";
 import { OrdersListToolbar, type OrdersCreatedByOption } from "@/components/admin/OrdersListToolbar";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";

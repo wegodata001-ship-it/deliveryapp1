@@ -1,7 +1,7 @@
 "use server";
 
 import { randomUUID } from "crypto";
-import { OrderSourceCountry, OrderStatus, PaymentMethod, Prisma } from "@prisma/client";
+import { OrderStatus, PaymentMethod, Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { breakdownIlsIncludingVat, computeFromUsdAmount } from "@/lib/financial-calc";
@@ -74,7 +74,7 @@ async function verifyOrderRowMatchesAfterSave(
   expected: {
     orderNumber: string | null;
     customerId: string;
-    sourceCountry: OrderSourceCountry;
+    sourceCountry: OrderCountryCode;
     status: OrderStatus;
     paymentMethod: PaymentMethod;
     amountUsd: Prisma.Decimal;
@@ -104,7 +104,7 @@ async function verifyOrderRowMatchesAfterSave(
   if ((row.orderNumber ?? "").trim() !== (expected.orderNumber ?? "").trim()) {
     return { ok: false, error: "אימות שמירה נכשל: מספר הזמנה" };
   }
-  if (row.sourceCountry !== expected.sourceCountry) {
+  if (String(row.sourceCountry ?? "") !== expected.sourceCountry) {
     return { ok: false, error: "אימות שמירה נכשל: מדינת מקור" };
   }
   if (row.status !== expected.status) {
@@ -1525,7 +1525,7 @@ export async function captureOrderAction(form: {
   if (!allowedCountries.includes(rawCountry as OrderCountryCode)) {
     return { ok: false, error: "מדינה זו אינה מופעלת בהגדרות המערכת" };
   }
-  const sourceCountryCreate = rawCountry as OrderSourceCountry;
+  const sourceCountryCreate = rawCountry as OrderCountryCode;
 
   const order = await prisma.order.create({
     data: {
@@ -1864,7 +1864,7 @@ export async function updateOrderWorkPanelAction(form: {
   if (!allowedCountries.includes(requestedCode) && !keepExistingCountry) {
     return { ok: false, error: "מדינה זו אינה מופעלת בהגדרות המערכת" };
   }
-  const sourceCountryUpdate = requestedCode as OrderSourceCountry;
+  const sourceCountryUpdate = requestedCode;
 
   await prisma.order.update({
     where: { id: existing.id },
