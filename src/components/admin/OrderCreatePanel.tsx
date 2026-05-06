@@ -9,6 +9,7 @@ import {
   getCustomerOrderFormExtrasAction,
   getOrderForWorkPanelAction,
   listCustomersForOrderQuickPickAction,
+  createPaymentPointForOrderAction,
   listPaymentPointsForOrderAction,
   previewOrderNumberAction,
   resolveCustomerForCaptureAction,
@@ -19,19 +20,48 @@ import {
 import { getSelectedCountriesForOrdersAction } from "@/app/admin/settings/actions";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { useAdminLoading } from "@/components/admin/AdminLoadingProvider";
+import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import Card from "@/components/ui/Card";
 import type { OrderCaptureWindowProps } from "@/lib/admin-windows";
 import { ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS } from "@/lib/order-capture-payment-methods";
 import { orderCountryLabel, ORDER_COUNTRY_CODES, coerceOrderCountryForForm, type OrderCountryCode } from "@/lib/order-countries";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 import {
+  DEFAULT_WEEK_CODE,
   formatLocalHm,
   formatLocalYmd,
   getWeekCodeForLocalDate,
   parseLocalDate,
+  WORK_WEEK_RANGES,
 } from "@/lib/work-week";
 
 const VAT_FRACTION = 0.17;
+
+function addDays(d: Date, days: number): Date {
+  const out = new Date(d);
+  out.setDate(out.getDate() + days);
+  return out;
+}
+
+function toWeekCode(n: number): string {
+  const nn = Math.max(1, Math.floor(n));
+  return `AH-${nn}`;
+}
+
+function parseWeekNumber(raw: string): number | null {
+  const t = raw.trim().toUpperCase();
+  if (!t) return null;
+  const m = t.match(/^AH-(\d{1,4})$/);
+  if (m?.[1]) {
+    const n = Number(m[1]);
+    return Number.isFinite(n) ? n : null;
+  }
+  if (/^\d{1,4}$/.test(t)) {
+    const n = Number(t);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
 
 /** סטטוסים במסך קליטה מהירה — תואם enum במסד */
 const CREATE_ORDER_STATUS_OPTIONS: { value: OrderStatus; label: string }[] = [
@@ -107,6 +137,7 @@ export function OrderCreatePanel({
   const router = useRouter();
   const { openWindow } = useAdminWindows();
   const { runWithLoading } = useAdminLoading();
+  const { globalWeek, globalCountry } = useAdminGlobal();
   const idp = (s: string) => `${windowId}-${s}`;
 
   const isEdit = target.mode === "edit";
@@ -115,16 +146,56 @@ export function OrderCreatePanel({
     const d = new Date();
     return { ymd: formatLocalYmd(d), hm: formatLocalHm(d) };
   }, []);
-  const [orderDateYmd, setOrderDateYmd] = useState(initialDt.ymd);
+
+  const baseWeekNumber = useMemo(() => parseWeekNumber(globalWeek) ?? parseWeekNumber(DEFAULT_WEEK_CODE) ?? 1, [globalWeek]);
+  const baseDate = useMemo(() => {
+    const from = WORK_WEEK_RANGES[globalWeek]?.from;
+    return from ? parseLocalDate(from) : new Date();
+  }, [globalWeek]);
+
+  const [orderDateYmd, setOrderDateYmd] = useState(() => {
+    const now = new Date();
+    const cur = getWeekCodeForLocalDate(now);
+    if (globalWeek === cur) return formatLocalYmd(now);
+    const from = WORK_WEEK_RANGES[globalWeek]?.from;
+    return from ?? initialDt.ymd;
+  });
   const [orderTimeHm, setOrderTimeHm] = useState(initialDt.hm);
   const [editWeekCode, setEditWeekCode] = useState("");
+  const [weekCodeOverride, setWeekCodeOverride] = useState(globalWeek || DEFAULT_WEEK_CODE);
+  const [weekDraft, setWeekDraft] = useState(globalWeek || DEFAULT_WEEK_CODE);
+  const [weekInputErr, setWeekInputErr] = useState<string | null>(null);
   const [feeUsdStr, setFeeUsdStr] = useState("");
   const [loadOrderBusy, setLoadOrderBusy] = useState(false);
   const [loadedSourceCountry, setLoadedSourceCountry] = useState<OrderCountryCode | "">("");
 
   const weekCodeFromDate = useMemo(() => getWeekCodeForLocalDate(parseLocalDate(orderDateYmd)), [orderDateYmd]);
-  const displayWeekCode = isEdit ? editWeekCode : weekCodeFromDate;
-  const weekCodeForSave = isEdit ? editWeekCode : weekCodeFromDate;
+  const displayWeekCode = isEdit ? editWeekCode : weekCodeOverride;
+  const weekCodeForSave = isEdit ? editWeekCode : weekCodeOverride;
+
+  const weekOptions = useMemo(() => {
+    const out: string[] = [];
+    for (let n = 110; n <= 140; n++) out.push(toWeekCode(n));
+    return out;
+  }, []);
+
+  const applyWeekNumber = useCallback(
+    (num: number) => {
+      const nextCode = toWeekCode(num);
+      const diffWeeks = num - baseWeekNumber;
+      const nextDate = addDays(baseDate, diffWeeks * 7);
+      setOrderDateYmd(formatLocalYmd(nextDate));
+      if (isEdit) setEditWeekCode(nextCode);
+      else setWeekCodeOverride(nextCode);
+      if (!isEdit) setWeekDraft(nextCode);
+    },
+    [baseDate, isEdit, baseWeekNumber],
+  );
+
+  useEffect(() => {
+    if (isEdit) return;
+    setWeekDraft(weekCodeOverride);
+  }, [isEdit, weekCodeOverride]);
 
   const finalRate = useMemo(() => {
     const f = financial?.finalDollarRate ? Number(String(financial.finalDollarRate).replace(",", ".")) : NaN;
@@ -154,6 +225,11 @@ export function OrderCreatePanel({
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(PaymentMethod.BANK_TRANSFER);
   const [paymentPointId, setPaymentPointId] = useState("");
   const [paymentPoints, setPaymentPoints] = useState<{ id: string; label: string }[]>([]);
+  const [ppAddOpen, setPpAddOpen] = useState(false);
+  const [ppAddName, setPpAddName] = useState("");
+  const [ppAddBusy, setPpAddBusy] = useState(false);
+  const [ppAddMsg, setPpAddMsg] = useState<string | null>(null);
+  const [ppAddErr, setPpAddErr] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
 
   const [dealUsdStr, setDealUsdStr] = useState("");
@@ -164,7 +240,7 @@ export function OrderCreatePanel({
 
   const [orderCountries, setOrderCountries] = useState<OrderCountryCode[]>([]);
   const [sourceCountry, setSourceCountry] = useState<OrderCountryCode | "">(() =>
-    target.mode === "create" ? (ORDER_COUNTRY_CODES[0] as OrderCountryCode) : "",
+    target.mode === "create" ? (globalCountry as OrderCountryCode) : "",
   );
 
   useEffect(() => {
@@ -174,6 +250,12 @@ export function OrderCreatePanel({
   useEffect(() => {
     void listPaymentPointsForOrderAction().then(setPaymentPoints);
   }, []);
+
+  useEffect(() => {
+    if (!ppAddMsg) return;
+    const t = window.setTimeout(() => setPpAddMsg(null), 2200);
+    return () => window.clearTimeout(t);
+  }, [ppAddMsg]);
 
   const countrySelectOptions = useMemo(() => [...ORDER_COUNTRY_CODES] as OrderCountryCode[], []);
 
@@ -187,8 +269,8 @@ export function OrderCreatePanel({
 
   useEffect(() => {
     if (isEdit) return;
-    void previewOrderNumberAction(weekCodeFromDate).then((n) => setOrderNumberPreview(n || "—"));
-  }, [weekCodeFromDate, isEdit]);
+    void previewOrderNumberAction(weekCodeForSave).then((n) => setOrderNumberPreview(n || "—"));
+  }, [weekCodeForSave, isEdit]);
 
   useEffect(() => {
     if (!isEdit) setLoadedSourceCountry("");
@@ -219,12 +301,7 @@ export function OrderCreatePanel({
       setNotes(row.notes);
       setDealUsdStr(row.amountUsd);
       setFeeUsdStr(row.feeUsd);
-      const deal = parseNum(row.amountUsd);
-      const r = financial?.finalDollarRate ? Number(String(financial.finalDollarRate).replace(",", ".")) : NaN;
-      const rate = Number.isFinite(r) && r > 0 ? r : 3.5;
-      if (Number.isFinite(deal) && deal > 0) {
-        setDealIlsStr(roundMoney2(deal * rate).toFixed(2));
-      }
+      setDealIlsStr("");
       setSelectedCustomer({
         id: row.customerId,
         label: row.customerLabel,
@@ -294,15 +371,27 @@ export function OrderCreatePanel({
   const dealUsdNum = useMemo(() => parseNum(dealUsdStr), [dealUsdStr]);
   const dealIlsNum = useMemo(() => parseNum(dealIlsStr), [dealIlsStr]);
 
+  const safeRate = useMemo(() => (Number.isFinite(finalRate) && finalRate > 0 ? finalRate : 0), [finalRate]);
+  const ilsInput = useMemo(() => (Number.isFinite(dealIlsNum) && dealIlsNum > 0 ? dealIlsNum : 0), [dealIlsNum]);
+  const usdInput = useMemo(() => (Number.isFinite(dealUsdNum) && dealUsdNum > 0 ? dealUsdNum : 0), [dealUsdNum]);
+
+  /** שווי תצוגה בלבד (לא מסנכרן שדות) */
+  const eqUsdFromIls = useMemo(() => (safeRate > 0 ? ilsInput / safeRate : 0), [ilsInput, safeRate]);
+  const eqIlsFromUsd = useMemo(() => (safeRate > 0 ? usdInput * safeRate : 0), [usdInput, safeRate]);
+
+  /** הסכום הכולל (עסקה) לפי שני השדות */
+  const dealUsdTotal = useMemo(() => (safeRate > 0 ? usdInput + ilsInput / safeRate : usdInput), [usdInput, ilsInput, safeRate]);
+  const dealIlsTotal = useMemo(() => (safeRate > 0 ? ilsInput + usdInput * safeRate : ilsInput), [ilsInput, usdInput, safeRate]);
+
   const commissionUsdCalc = useMemo(() => {
-    if (!Number.isFinite(dealUsdNum) || dealUsdNum <= 0) return 0;
-    return roundMoney2(dealUsdNum * (commissionPct / 100));
-  }, [dealUsdNum, commissionPct]);
+    if (!Number.isFinite(dealUsdTotal) || dealUsdTotal <= 0) return 0;
+    return roundMoney2(dealUsdTotal * (commissionPct / 100));
+  }, [dealUsdTotal, commissionPct]);
 
   const commissionIlsCalc = useMemo(() => {
-    if (!Number.isFinite(dealIlsNum) || dealIlsNum <= 0) return 0;
-    return roundMoney2(dealIlsNum * (commissionPct / 100));
-  }, [dealIlsNum, commissionPct]);
+    if (!Number.isFinite(dealIlsTotal) || dealIlsTotal <= 0) return 0;
+    return roundMoney2(dealIlsTotal * (commissionPct / 100));
+  }, [dealIlsTotal, commissionPct]);
 
   const feeUsdNumEdit = useMemo(() => {
     const f = parseNum(feeUsdStr);
@@ -320,42 +409,20 @@ export function OrderCreatePanel({
   );
 
   const totalBeforeVatIls = useMemo(() => {
-    if (!Number.isFinite(dealIlsNum) || dealIlsNum <= 0) return 0;
-    return roundMoney2(dealIlsNum + commissionIlsEffective);
-  }, [dealIlsNum, commissionIlsEffective]);
+    if (!Number.isFinite(dealIlsTotal) || dealIlsTotal <= 0) return 0;
+    return roundMoney2(dealIlsTotal + commissionIlsEffective);
+  }, [dealIlsTotal, commissionIlsEffective]);
 
   const vatAmountIls = useMemo(() => roundMoney2(totalBeforeVatIls * VAT_FRACTION), [totalBeforeVatIls]);
 
   const finalTotalIls = useMemo(() => roundMoney2(totalBeforeVatIls + vatAmountIls), [totalBeforeVatIls, vatAmountIls]);
 
+  const vatAmountUsd = useMemo(() => (safeRate > 0 ? roundMoney2(vatAmountIls / safeRate) : 0), [vatAmountIls, safeRate]);
+
   const totalUsdCalc = useMemo(() => {
-    if (!Number.isFinite(dealUsdNum) || dealUsdNum <= 0) return 0;
-    return roundMoney2(dealUsdNum + commissionUsdEffective);
-  }, [dealUsdNum, commissionUsdEffective]);
-
-  const syncIlsFromUsd = useCallback(
-    (usdRaw: string) => {
-      const u = parseNum(usdRaw);
-      if (!Number.isFinite(u) || u <= 0 || !Number.isFinite(finalRate) || finalRate <= 0) {
-        setDealIlsStr("");
-        return;
-      }
-      setDealIlsStr(roundMoney2(u * finalRate).toFixed(2));
-    },
-    [finalRate],
-  );
-
-  const syncUsdFromIls = useCallback(
-    (ilsRaw: string) => {
-      const ils = parseNum(ilsRaw);
-      if (!Number.isFinite(ils) || ils <= 0 || !Number.isFinite(finalRate) || finalRate <= 0) {
-        setDealUsdStr("");
-        return;
-      }
-      setDealUsdStr(roundMoney2(ils / finalRate).toFixed(2));
-    },
-    [finalRate],
-  );
+    if (!Number.isFinite(dealUsdTotal) || dealUsdTotal <= 0) return 0;
+    return roundMoney2(dealUsdTotal + commissionUsdEffective);
+  }, [dealUsdTotal, commissionUsdEffective]);
 
   const pickCustomer = useCallback((row: CustomerSearchRow) => {
     skipSearchRef.current = true;
@@ -434,9 +501,8 @@ export function OrderCreatePanel({
       return;
     }
 
-    const deal = parseNum(dealUsdStr);
-    if (!Number.isFinite(deal) || deal <= 0) {
-      setErr("יש להזין סכום עסקה בדולר (חיובי)");
+    if (!Number.isFinite(dealUsdTotal) || dealUsdTotal <= 0) {
+      setErr("יש להזין סכום עסקה (₪ או $)");
       return;
     }
     const countryForSave =
@@ -470,7 +536,7 @@ export function OrderCreatePanel({
               orderDateYmd,
               orderTimeHm,
               customerId: cust.id,
-              amountUsd: dealUsdStr.trim(),
+              amountUsd: roundMoney2(dealUsdTotal).toFixed(2),
               feeUsd: feeStr,
               paymentMethod,
               status: orderStatus,
@@ -492,7 +558,7 @@ export function OrderCreatePanel({
               orderDateYmd,
               orderTimeHm,
               customerId: cust.id,
-              amountUsd: dealUsdStr.trim(),
+              amountUsd: roundMoney2(dealUsdTotal).toFixed(2),
               feeUsd: feeStr,
               paymentMethod,
               status: orderStatus,
@@ -535,6 +601,11 @@ export function OrderCreatePanel({
     window.setTimeout(() => setDropdownField(null), 180);
   }
 
+  const closeCustomerDropdown = useCallback(() => {
+    setDropdownField(null);
+    setHits([]);
+  }, []);
+
   if (target.mode === "create" && !canCreateOrders) return null;
   if (target.mode === "edit" && !canEditOrders) return null;
 
@@ -564,7 +635,91 @@ export function OrderCreatePanel({
           </span>
           <span className="adm-oc-legacy-topbar-item">
             <label className="adm-oc-legacy-micro-label">שבוע</label>
-            <input type="text" readOnly className="adm-oc-legacy-top-inp" value={displayWeekCode} dir="ltr" />
+            <div className="adm-oc-week-row" dir="ltr">
+              <button
+                type="button"
+                className="adm-oc-week-arrow"
+                disabled={isSaving}
+                aria-label="שבוע קודם"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  const cur = parseWeekNumber(isEdit ? editWeekCode : weekDraft) ?? baseWeekNumber;
+                  applyWeekNumber(cur - 1);
+                  setWeekInputErr(null);
+                }}
+              >
+                ◀
+              </button>
+              <input
+                id={idp("week-inp")}
+                type="text"
+                className={weekInputErr ? "adm-oc-legacy-top-inp adm-oc-week-inp--err" : "adm-oc-legacy-top-inp"}
+                value={isEdit ? editWeekCode : weekDraft}
+                dir="ltr"
+                list={idp("week-list")}
+                disabled={isSaving}
+                title={weekInputErr || undefined}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  const up = raw.trim().toUpperCase();
+                  if (isEdit) setEditWeekCode(up);
+                  else setWeekDraft(up);
+
+                  const num = parseWeekNumber(up);
+                  if (num == null) {
+                    setWeekInputErr(up ? "שבוע לא תקין" : null);
+                    return;
+                  }
+                  setWeekInputErr(null);
+                  applyWeekNumber(num);
+                }}
+                onBlur={() => {
+                  const curRaw = (isEdit ? editWeekCode : weekDraft).trim().toUpperCase();
+                  const num = parseWeekNumber(curRaw);
+                  if (num == null) {
+                    setWeekInputErr(null);
+                    if (isEdit) setEditWeekCode(editWeekCode.trim() || globalWeek);
+                    else setWeekDraft(weekCodeOverride);
+                    return;
+                  }
+                  const code = toWeekCode(num);
+                  if (isEdit) setEditWeekCode(code);
+                  else setWeekDraft(code);
+                }}
+              />
+              <button
+                type="button"
+                className="adm-oc-week-arrow"
+                disabled={isSaving}
+                aria-label="שבוע הבא"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  const cur = parseWeekNumber(isEdit ? editWeekCode : weekDraft) ?? baseWeekNumber;
+                  applyWeekNumber(cur + 1);
+                  setWeekInputErr(null);
+                }}
+              >
+                ▶
+              </button>
+              <button
+                type="button"
+                className="adm-oc-week-dd"
+                disabled={isSaving}
+                aria-label="רשימת שבועות"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  const el = document.getElementById(idp("week-inp")) as HTMLInputElement | null;
+                  el?.focus();
+                }}
+              >
+                ▼
+              </button>
+              <datalist id={idp("week-list")}>
+                {weekOptions.map((c) => (
+                  <option key={c} value={c} />
+                ))}
+              </datalist>
+            </div>
           </span>
           <span className="adm-oc-legacy-topbar-item">
             <label htmlFor={idp("country")} className="adm-oc-legacy-micro-label">
@@ -575,6 +730,7 @@ export function OrderCreatePanel({
               className="adm-oc-legacy-top-sel"
               value={sourceCountry}
               disabled={isSaving}
+              onFocus={closeCustomerDropdown}
               onChange={(e) => {
                 const v = e.target.value as OrderCountryCode | "";
                 setSourceCountry(v);
@@ -849,7 +1005,7 @@ export function OrderCreatePanel({
           </div>
             </Card>
 
-            <Card>
+            <Card className="adm-oc-pay-card">
               <h3 className="ds-capture-section-title">פרטי תשלום</h3>
               <aside className="adm-oc-legacy-side" aria-label="סטטוס ותשלום">
                 <div className="adm-oc-legacy-side-field">
@@ -859,6 +1015,7 @@ export function OrderCreatePanel({
                     className="adm-oc-legacy-side-sel"
                     disabled={isSaving}
                     value={orderStatus}
+                    onFocus={closeCustomerDropdown}
                     onChange={(e) => setOrderStatus(e.target.value as OrderStatus)}
                   >
                     {statusOptions.map((o) => (
@@ -875,15 +1032,97 @@ export function OrderCreatePanel({
                     className="adm-oc-legacy-side-sel"
                     disabled={isSaving}
                     value={paymentPointId}
-                    onChange={(e) => setPaymentPointId(e.target.value)}
+                    onFocus={closeCustomerDropdown}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === "__ADD__") {
+                        setPpAddErr(null);
+                        setPpAddMsg(null);
+                        setPpAddName("");
+                        setPpAddOpen(true);
+                        return;
+                      }
+                      setPaymentPointId(v);
+                    }}
                   >
-                    <option value="">—</option>
+                    {paymentPoints.length === 0 ? (
+                      <option value="" disabled>
+                        אין מקומות עדיין
+                      </option>
+                    ) : (
+                      <option value="">—</option>
+                    )}
                     {paymentPoints.map((p) => (
                       <option key={p.id} value={p.id}>
                         {p.label}
                       </option>
                     ))}
+                    <option value="__ADD__">+ הוספת מקום</option>
                   </select>
+                  {ppAddMsg ? <div className="adm-oc-inline-msg">{ppAddMsg}</div> : null}
+                  {ppAddErr ? <div className="adm-oc-inline-err">{ppAddErr}</div> : null}
+                  {ppAddOpen ? (
+                    <div className="adm-oc-addpoint">
+                      <label className="adm-oc-addpoint-lbl">
+                        הוספת מקום חדש
+                        <input
+                          type="text"
+                          className="adm-oc-legacy-side-sel"
+                          value={ppAddName}
+                          disabled={ppAddBusy}
+                          onChange={(e) => setPpAddName(e.target.value)}
+                          placeholder="שם מקום..."
+                        />
+                      </label>
+                      <div className="adm-oc-addpoint-actions">
+                        <button
+                          type="button"
+                          className={`adm-btn adm-btn--primary adm-btn--dense${ppAddBusy ? " loading" : ""}`}
+                          disabled={ppAddBusy}
+                          onClick={() => {
+                            if (ppAddBusy) return;
+                            const name = ppAddName.trim();
+                            if (!name) {
+                              setPpAddErr("יש להזין שם מקום");
+                              return;
+                            }
+                            setPpAddBusy(true);
+                            setPpAddErr(null);
+                            void createPaymentPointForOrderAction({ pointName: name }).then((res) => {
+                              setPpAddBusy(false);
+                              if (!res.ok) {
+                                setPpAddErr(res.error);
+                                return;
+                              }
+                              setPaymentPoints((cur) => {
+                                const next = [...cur, res.point];
+                                next.sort((a, b) => a.label.localeCompare(b.label, "he"));
+                                return next;
+                              });
+                              setPaymentPointId(res.point.id);
+                              setPpAddMsg("נוסף מקום בהצלחה");
+                              setPpAddOpen(false);
+                              setPpAddName("");
+                            });
+                          }}
+                        >
+                          {ppAddBusy ? "שומר…" : "שמירה"}
+                        </button>
+                        <button
+                          type="button"
+                          className="adm-btn adm-btn--ghost adm-btn--dense"
+                          disabled={ppAddBusy}
+                          onClick={() => {
+                            setPpAddOpen(false);
+                            setPpAddName("");
+                            setPpAddErr(null);
+                          }}
+                        >
+                          ביטול
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
                 <div className="adm-oc-legacy-side-field">
                   <label htmlFor={idp("pay-m")}>צורת תשלום</label>
@@ -892,6 +1131,7 @@ export function OrderCreatePanel({
                     className="adm-oc-legacy-side-sel"
                     disabled={isSaving}
                     value={paymentMethod}
+                    onFocus={closeCustomerDropdown}
                     onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
                   >
                     {ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS.map((o) => (
@@ -909,7 +1149,7 @@ export function OrderCreatePanel({
             <Card className="summary-info adm-oc-legacy-card">
               <div className="adm-oc-card-title">₪ שקלים</div>
               <div className="adm-field adm-oc-field adm-oc-legacy-fin-field">
-                <label htmlFor={idp("dils")}>עסקה</label>
+                <label htmlFor={idp("dils")}>סכום בשקלים</label>
                 <input
                   id={idp("dils")}
                   type="text"
@@ -918,35 +1158,43 @@ export function OrderCreatePanel({
                   disabled={isSaving}
                   dir="ltr"
                   value={dealIlsStr}
+                  placeholder="הקלד סכום..."
                   onChange={(e) => {
                     const v = e.target.value;
                     setDealIlsStr(v);
-                    syncUsdFromIls(v);
                   }}
                 />
               </div>
+              <div className="adm-oc-xrate" dir="rtl" aria-live="polite">
+                <span className="adm-oc-xrate-lbl">שווי בדולרים</span>
+                <span className="adm-oc-xrate-val" dir="ltr">
+                  ${roundMoney2(eqUsdFromIls).toFixed(2)}
+                </span>
+              </div>
               <div className="adm-oc-line">
                 <span>עמלה</span>
-                <span dir="ltr">{commissionIlsEffective.toFixed(2)}</span>
+                <span dir="ltr">{commissionIlsEffective.toFixed(2)} ₪</span>
               </div>
               <div className="adm-oc-line">
                 <span>סה״כ לפני מע״מ</span>
-                <span dir="ltr">{totalBeforeVatIls.toFixed(2)}</span>
+                <span dir="ltr">{totalBeforeVatIls.toFixed(2)} ₪</span>
               </div>
               <div className="adm-oc-line">
                 <span>מע״מ ({Math.round(VAT_FRACTION * 100)}%)</span>
-                <span dir="ltr">{vatAmountIls.toFixed(2)}</span>
+                <span dir="ltr">
+                  {vatAmountIls.toFixed(2)} ₪ / ${vatAmountUsd.toFixed(2)}
+                </span>
               </div>
               <div className="adm-oc-line adm-oc-line--total">
                 <span>סה״כ סופי</span>
-                <span dir="ltr">{finalTotalIls.toFixed(2)}</span>
+                <span dir="ltr">{finalTotalIls.toFixed(2)} ₪</span>
               </div>
             </Card>
 
             <Card className="summary-success adm-oc-legacy-card">
               <div className="adm-oc-card-title">$ דולרים</div>
               <div className="adm-field adm-oc-field adm-oc-legacy-fin-field">
-                <label htmlFor={idp("dusd")}>עסקה</label>
+                <label htmlFor={idp("dusd")}>סכום בדולר</label>
                 <input
                   id={idp("dusd")}
                   type="text"
@@ -955,20 +1203,26 @@ export function OrderCreatePanel({
                   disabled={isSaving}
                   dir="ltr"
                   value={dealUsdStr}
+                  placeholder="הקלד סכום..."
                   onChange={(e) => {
                     const v = e.target.value;
                     setDealUsdStr(v);
-                    syncIlsFromUsd(v);
                   }}
                 />
               </div>
+              <div className="adm-oc-xrate" dir="rtl" aria-live="polite">
+                <span className="adm-oc-xrate-lbl">שווי בשקלים</span>
+                <span className="adm-oc-xrate-val" dir="ltr">
+                  ₪{roundMoney2(eqIlsFromUsd).toFixed(2)}
+                </span>
+              </div>
               <div className="adm-oc-line">
                 <span>עמלה</span>
-                <span dir="ltr">{commissionUsdEffective.toFixed(2)}</span>
+                <span dir="ltr">{commissionUsdEffective.toFixed(2)} $</span>
               </div>
               <div className="adm-oc-line adm-oc-line--total">
                 <span>סה״כ</span>
-                <span dir="ltr">{totalUsdCalc.toFixed(2)}</span>
+                <span dir="ltr">{totalUsdCalc.toFixed(2)} $</span>
               </div>
             </Card>
           </div>

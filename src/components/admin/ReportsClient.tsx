@@ -11,6 +11,7 @@ import {
   type ReportTable,
 } from "@/app/admin/reports/actions";
 import { useAdminLoading } from "@/components/admin/AdminLoadingProvider";
+import { getAhWeekCodeFromDateRange, getAhWeekRange, normalizeAhWeekCode } from "@/lib/work-week";
 import { Modal } from "@/components/ui/Modal";
 
 type Props = {
@@ -114,6 +115,28 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
     setFilters((old) => ({ ...old, [key]: value || undefined }));
   }
 
+  function setDatesFromWeek(rawWeek: string) {
+    const w = normalizeAhWeekCode(rawWeek);
+    if (!w) return;
+    const r = getAhWeekRange(w);
+    if (!r) return;
+    setFilters((old) => ({
+      ...old,
+      workWeek: w,
+      dateFrom: r.from,
+      dateTo: r.to,
+    }));
+  }
+
+  function setWeekFromDates(nextFrom: string | undefined, nextTo: string | undefined) {
+    if (!nextFrom || !nextTo) {
+      setFilters((old) => ({ ...old, workWeek: undefined }));
+      return;
+    }
+    const wk = getAhWeekCodeFromDateRange(nextFrom, nextTo);
+    setFilters((old) => ({ ...old, workWeek: wk ?? undefined }));
+  }
+
   async function loadReport(card: ReportCard) {
     if (isLoading) return;
     setLoading(true);
@@ -165,11 +188,29 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
         <div className="adm-reports-filters">
           <label>
             מתאריך
-            <input disabled={isLoading} type="date" value={filters.dateFrom || ""} onChange={(e) => updateFilter("dateFrom", e.target.value)} />
+            <input
+              disabled={isLoading}
+              type="date"
+              value={filters.dateFrom || ""}
+              onChange={(e) => {
+                const nextFrom = e.target.value || undefined;
+                setFilters((old) => ({ ...old, dateFrom: nextFrom }));
+                setWeekFromDates(nextFrom, filters.dateTo);
+              }}
+            />
           </label>
           <label>
             עד תאריך
-            <input disabled={isLoading} type="date" value={filters.dateTo || ""} onChange={(e) => updateFilter("dateTo", e.target.value)} />
+            <input
+              disabled={isLoading}
+              type="date"
+              value={filters.dateTo || ""}
+              onChange={(e) => {
+                const nextTo = e.target.value || undefined;
+                setFilters((old) => ({ ...old, dateTo: nextTo }));
+                setWeekFromDates(filters.dateFrom, nextTo);
+              }}
+            />
           </label>
           <label>
             לקוח
@@ -200,7 +241,16 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
           </label>
           <label>
             שבוע עבודה
-            <input disabled={isLoading} value={filters.workWeek || ""} onChange={(e) => updateFilter("workWeek", e.target.value)} placeholder="AH-118" />
+            <input
+              disabled={isLoading}
+              value={filters.workWeek || ""}
+              onChange={(e) => {
+                const raw = e.target.value.toUpperCase();
+                setFilters((old) => ({ ...old, workWeek: raw || undefined }));
+                setDatesFromWeek(raw);
+              }}
+              placeholder="שבוע עבודה"
+            />
           </label>
         </div>
         {exportErr ? <div className="adm-error">{exportErr}</div> : null}

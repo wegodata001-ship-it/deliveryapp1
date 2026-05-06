@@ -6,7 +6,7 @@ import { revalidatePath } from "next/cache";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { breakdownIlsIncludingVat, computeFromUsdAmount } from "@/lib/financial-calc";
 import { ensureDefaultFinancialSettings, getCurrentFinancialSettings } from "@/lib/financial-settings";
-import { formatLocalHm, formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate, parseLocalDateTime } from "@/lib/work-week";
+import { DEFAULT_WEEK_CODE, formatLocalHm, formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate, parseLocalDateTime } from "@/lib/work-week";
 import { escapeRegExp, orderNumberMatchesWeekFormat } from "@/lib/order-number";
 import { prisma } from "@/lib/prisma";
 import { parseSplitPaymentMethodRaw } from "@/lib/order-capture-payment-methods";
@@ -653,7 +653,7 @@ export async function capturePaymentAction(form: {
 
 /** מספור רץ לפי שבוע: {weekCode}-0001 — לפי המקסימום הקיים באותו weekCode */
 async function generateNextOrderNumber(weekCode: string): Promise<{ orderNumber: string; oldOrderNumber: string; sequence: number }> {
-  const wc = weekCode.trim() || "AH-118";
+  const wc = weekCode.trim() || DEFAULT_WEEK_CODE;
   const reSuffix = new RegExp(`^${escapeRegExp(wc)}-(\\d{4})$`);
   const rows = await prisma.order.findMany({
     where: { weekCode: wc, deletedAt: null },
@@ -1307,6 +1307,39 @@ export async function listPaymentPointsForOrderAction(): Promise<{ id: string; l
   }));
 }
 
+/** יצירת נקודת תשלום חדשה מהמסך (ללא רענון) */
+export async function createPaymentPointForOrderAction(input: {
+  pointName: string;
+  city?: string | null;
+}): Promise<{ ok: true; point: { id: string; label: string } } | { ok: false; error: string }> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["create_orders", "edit_orders"])) return { ok: false, error: "אין הרשאה" };
+
+  const name = input.pointName.trim();
+  if (!name) return { ok: false, error: "יש להזין שם מקום" };
+  if (name.length > 80) return { ok: false, error: "שם מקום ארוך מדי" };
+
+  const city = input.city?.trim() || null;
+
+  const created = await prisma.paymentPoint.create({
+    data: {
+      pointName: name,
+      city,
+      isActive: true,
+    },
+    select: { id: true, pointName: true, city: true },
+  });
+
+  revalidatePath("/admin");
+  return {
+    ok: true,
+    point: {
+      id: created.id,
+      label: created.city ? `${created.pointName} · ${created.city}` : created.pointName,
+    },
+  };
+}
+
 /** פרטי תצוגה לטופס קליטת הזמנה (שמות, אינדקס, יתרה משוערת) */
 export async function getCustomerOrderFormExtrasAction(customerId: string): Promise<{
   nameHe: string | null;
@@ -1483,7 +1516,7 @@ export async function captureOrderAction(form: {
   const orderDate = parseLocalDateTime(form.orderDateYmd, form.orderTimeHm || "00:00");
   const typeSnap = (form.customerTypeSnapshot?.trim() || customer.customerType || "רגיל").trim() || "רגיל";
 
-  const wc = form.weekCode.trim() || "AH-118";
+  const wc = form.weekCode.trim() || DEFAULT_WEEK_CODE;
   const requested = form.orderNumber?.trim() || "";
   let orderNumber: string;
   let oldOrderNumber: string;
@@ -1683,7 +1716,7 @@ export async function getOrderForWorkPanelAction(orderId: string): Promise<Order
 
   return {
     id: order.id,
-    weekCode: (order.weekCode ?? "").trim() || "AH-118",
+    weekCode: (order.weekCode ?? "").trim() || DEFAULT_WEEK_CODE,
     orderDateYmd: formatLocalYmd(od),
     orderTimeHm: formatLocalHm(od),
     orderNumber: order.orderNumber ?? "—",

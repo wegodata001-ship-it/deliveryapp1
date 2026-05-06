@@ -102,6 +102,10 @@ function dec(v: Prisma.Decimal | number | string | null | undefined): Prisma.Dec
   return new Prisma.Decimal(v ?? 0);
 }
 
+function isZeroMoney(v: Prisma.Decimal): boolean {
+  return v.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).abs().equals(0);
+}
+
 function paymentIls(p: { totalIlsWithVat: Prisma.Decimal | null; amountIls: Prisma.Decimal | null; amountUsd: Prisma.Decimal | null; exchangeRate: Prisma.Decimal | null }) {
   if (p.totalIlsWithVat) return p.totalIlsWithVat;
   if (p.amountIls) return p.amountIls;
@@ -347,13 +351,19 @@ export async function getReportTableAction(kind: ReportKind, filters: ReportFilt
   });
   let total = new Prisma.Decimal(0);
   let paid = new Prisma.Decimal(0);
-  const tableRows = customers.map((c) => {
+  const tableRows: string[][] = [];
+  for (const c of customers) {
     const expected = c.orders.reduce((sum, o) => sum.add(o.totalIlsWithVat ?? o.totalIls ?? 0), new Prisma.Decimal(0));
     const received = c.payments.reduce((sum, p) => sum.add(paymentIls(p)), new Prisma.Decimal(0));
+    const remaining = expected.sub(received);
+
+    // יתרות לקוחות: מציגים רק לקוחות עם יתרה פתוחה אחרי עיגול ל-2 ספרות.
+    if (isZeroMoney(remaining)) continue;
+
     total = total.add(expected);
     paid = paid.add(received);
-    return [c.displayName, c.customerCode ?? "", moneyIls(expected), moneyIls(received), moneyIls(expected.sub(received))];
-  });
+    tableRows.push([c.displayName, c.customerCode ?? "", moneyIls(expected), moneyIls(received), moneyIls(remaining)]);
+  }
   return {
     id: kind,
     title: "יתרות לקוחות",

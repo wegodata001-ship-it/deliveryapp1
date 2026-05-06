@@ -7,16 +7,80 @@ export const WORK_WEEK_RANGES: Record<string, WorkWeekRange> = {
   "AH-109": { from: "2026-03-10", to: "2026-03-16" },
   "AH-110": { from: "2026-03-17", to: "2026-03-23" },
   "AH-115": { from: "2026-03-24", to: "2026-03-30" },
-  "AH-117": { from: "2026-04-05", to: "2026-04-11" },
-  "AH-118": { from: "2026-04-12", to: "2026-04-18" },
-  "AH-119": { from: "2026-04-19", to: "2026-04-25" },
+  "AH-117": { from: "2026-04-19", to: "2026-04-25" },
+  "AH-118": { from: "2026-04-26", to: "2026-05-02" },
+  "AH-119": { from: "2026-05-03", to: "2026-05-09" },
+  "AH-120": { from: "2026-05-10", to: "2026-05-16" },
 };
 
 export const WORK_WEEK_CODES_SORTED = Object.keys(WORK_WEEK_RANGES).sort(
   (a, b) => WORK_WEEK_RANGES[a].from.localeCompare(WORK_WEEK_RANGES[b].from),
 );
 
-export const DEFAULT_WEEK_CODE = "AH-118";
+export const DEFAULT_WEEK_CODE = "AH-119";
+
+export const AH_WEEK_ANCHOR = {
+  code: "AH-119",
+  number: 119,
+  from: "2026-05-03",
+  to: "2026-05-09",
+} as const;
+
+function isValidYmd(s: string | undefined | null): s is string {
+  return !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
+}
+
+function addDaysYmd(ymd: string, days: number): string {
+  const [y, m, d] = ymd.split("-").map((x) => Number(x));
+  const dt = new Date(y, m - 1, d, 0, 0, 0, 0);
+  dt.setDate(dt.getDate() + days);
+  return formatLocalYmd(dt);
+}
+
+export function normalizeAhWeekCode(raw: string | null | undefined): string | null {
+  const t = (raw || "").trim().toUpperCase();
+  if (!t) return null;
+  const m = /^AH-(\d{1,6})$/.exec(t);
+  if (!m?.[1]) return null;
+  const n = Number(m[1]);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return `AH-${Math.floor(n)}`;
+}
+
+export function getAhWeekRange(code: string | null | undefined): WorkWeekRange | null {
+  const c = normalizeAhWeekCode(code);
+  if (!c) return null;
+  const direct = WORK_WEEK_RANGES[c];
+  if (direct) return direct;
+  const n = Number(c.replace(/^AH-/i, ""));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const deltaWeeks = n - AH_WEEK_ANCHOR.number;
+  const deltaDays = deltaWeeks * 7;
+  return { from: addDaysYmd(AH_WEEK_ANCHOR.from, deltaDays), to: addDaysYmd(AH_WEEK_ANCHOR.to, deltaDays) };
+}
+
+/**
+ * אם הטווח הוא בדיוק שבוע AH (א׳–ש׳, 7 ימים), מחזיר AH-xxx.
+ * אחרת מחזיר null (מצב "—").
+ */
+export function getAhWeekCodeFromDateRange(fromYmd: string | null | undefined, toYmd: string | null | undefined): string | null {
+  if (!isValidYmd(fromYmd) || !isValidYmd(toYmd)) return null;
+  const from = parseLocalDate(fromYmd);
+  const to = parseLocalDate(toYmd);
+  const diffDays = Math.round((to.getTime() - from.getTime()) / (24 * 60 * 60 * 1000));
+  if (diffDays !== 6) return null;
+  if (from.getDay() !== 0) return null; // Sunday
+  const expectTo = addDaysYmd(fromYmd, 6);
+  if (expectTo !== toYmd) return null;
+
+  const anchorFrom = parseLocalDate(AH_WEEK_ANCHOR.from);
+  const deltaDays = Math.round((from.getTime() - anchorFrom.getTime()) / (24 * 60 * 60 * 1000));
+  if (deltaDays % 7 !== 0) return null;
+  const deltaWeeks = deltaDays / 7;
+  const weekN = AH_WEEK_ANCHOR.number + deltaWeeks;
+  if (!Number.isFinite(weekN) || weekN <= 0) return null;
+  return `AH-${Math.floor(weekN)}`;
+}
 
 export function formatLocalYmd(d: Date): string {
   const y = d.getFullYear();
@@ -99,10 +163,6 @@ export type ParsedDateFilter = {
   fromStart: Date;
   toEnd: Date;
 };
-
-function isValidYmd(s: string | undefined): s is string {
-  return !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
-}
 
 /**
  * week + from/to מתוך query. preset=today|this_week|last_week לסינון מהיר.

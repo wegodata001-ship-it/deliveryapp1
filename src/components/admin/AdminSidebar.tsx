@@ -21,7 +21,6 @@ import {
   Users,
   Wallet,
 } from "lucide-react";
-import { logoutAction } from "@/app/admin/actions";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import type { AdminWindowPayload } from "@/lib/admin-windows";
 
@@ -64,25 +63,31 @@ function NavIcon({ id }: { id: NavIconId }) {
 }
 
 function resolveNavHref(item: NavItemDef, sp: URLSearchParams): string {
+  const globals = new URLSearchParams();
+  for (const key of ["week", "from", "to", "country"] as const) {
+    const v = sp.get(key);
+    if (v) globals.set(key, v);
+  }
+
   if (item.href === "/admin") {
-    const p = new URLSearchParams();
-    for (const key of ["week", "from", "to"] as const) {
-      const v = sp.get(key);
-      if (v) p.set(key, v);
-    }
-    const qs = p.toString();
+    const qs = globals.toString();
     return qs ? `/admin?${qs}` : "/admin";
   }
 
   if (item.href.startsWith("/admin?")) {
     const base = new URL(item.href, "http://local.invalid");
     const out = new URLSearchParams(base.search);
-    for (const key of ["week", "from", "to"] as const) {
-      const v = sp.get(key);
-      if (v) out.set(key, v);
-    }
+    for (const [k, v] of globals.entries()) out.set(k, v);
     const qs = out.toString();
     return `/admin?${qs}`;
+  }
+
+  if (item.href.startsWith("/admin/")) {
+    const u = new URL(item.href, "http://local.invalid");
+    const out = new URLSearchParams(u.search);
+    for (const [k, v] of globals.entries()) out.set(k, v);
+    const qs = out.toString();
+    return qs ? `${u.pathname}?${qs}` : u.pathname;
   }
 
   return item.href;
@@ -183,7 +188,7 @@ export function AdminSidebar({ sections }: { sections: NavSectionDef[] }) {
         ))}
       </nav>
       <div className="adm-sidebar-foot">
-        <form action={logoutAction}>
+        <form action="/admin/logout" method="post">
           <button
             type="submit"
             className="adm-nav-link"

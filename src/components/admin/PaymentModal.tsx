@@ -28,6 +28,7 @@ import { OrderEditModal } from "@/components/admin/OrderEditModal";
 import Card from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { normalizeOrderSourceCountry, type OrderCountryCode } from "@/lib/order-countries";
+import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import {
   DEFAULT_WEEK_CODE,
   WORK_WEEK_CODES_SORTED,
@@ -42,6 +43,32 @@ import {
 
 /** סכום העברה בנקאית כולל מע״מ — פירוק נטו לפי 18% */
 const BANK_TRANSFER_INCLUDES_VAT_FACTOR = 1.18;
+
+function addDays(d: Date, days: number): Date {
+  const out = new Date(d);
+  out.setDate(out.getDate() + days);
+  return out;
+}
+
+function toWeekCode(n: number): string {
+  const nn = Math.max(1, Math.floor(n));
+  return `AH-${nn}`;
+}
+
+function parseWeekNumber(raw: string): number | null {
+  const t = raw.trim().toUpperCase();
+  if (!t) return null;
+  const m = t.match(/^AH-(\d{1,4})$/);
+  if (m?.[1]) {
+    const n = Number(m[1]);
+    return Number.isFinite(n) ? n : null;
+  }
+  if (/^\d{1,4}$/.test(t)) {
+    const n = Number(t);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
 
 const COUNTRY_BADGE_SHORT: Record<OrderCountryCode, string> = {
   TURKEY: "טורקיה",
@@ -176,6 +203,7 @@ export function PaymentModal({
   canEditOrders = true,
   canCreateOrders = true,
 }: Props) {
+  const { globalWeek } = useAdminGlobal();
   const defaultRate = useMemo(() => parseFinalRate(financial), [financial]);
   const { openWindow } = useAdminWindows();
 
@@ -201,8 +229,20 @@ export function PaymentModal({
   const [orderEditId, setOrderEditId] = useState<string | null>(null);
 
   const [paymentCodeDisp, setPaymentCodeDisp] = useState("—");
-  const [paymentDateYmd, setPaymentDateYmd] = useState(() => formatLocalYmd(new Date()));
+  const [paymentDateYmd, setPaymentDateYmd] = useState(() => {
+    const today = new Date();
+    const currentCode = getWeekCodeForLocalDate(today);
+    if (globalWeek === currentCode) return formatLocalYmd(today);
+    return WORK_WEEK_RANGES[globalWeek]?.from ?? formatLocalYmd(today);
+  });
   const [paymentTimeHm, setPaymentTimeHm] = useState(() => formatLocalHm(new Date()));
+  const baseWeekNumber = useMemo(() => parseWeekNumber(globalWeek) ?? parseWeekNumber(DEFAULT_WEEK_CODE) ?? 1, [globalWeek]);
+  const baseDate = useMemo(
+    () => new Date(WORK_WEEK_RANGES[globalWeek]?.from ?? WORK_WEEK_RANGES[DEFAULT_WEEK_CODE]?.from ?? formatLocalYmd(new Date())),
+    [globalWeek],
+  );
+  const [weekDraft, setWeekDraft] = useState(() => globalWeek);
+  const [weekInputErr, setWeekInputErr] = useState<string | null>(null);
 
   const [usdPaid, setUsdPaid] = useState("");
   const [ilsPaid, setIlsPaid] = useState("");
@@ -253,6 +293,22 @@ export function PaymentModal({
     const w = weekReadonly !== "—" ? weekReadonly : DEFAULT_WEEK_CODE;
     return WORK_WEEK_RANGES[w] ? w : DEFAULT_WEEK_CODE;
   }, [weekReadonly]);
+
+  const applyWeekNumber = useCallback(
+    (num: number) => {
+      const nextCode = toWeekCode(num);
+      const diffWeeks = num - baseWeekNumber;
+      const nextDate = addDays(baseDate, diffWeeks * 7);
+      setPaymentDateYmd(formatLocalYmd(nextDate));
+      setWeekDraft(nextCode);
+    },
+    [baseDate, baseWeekNumber],
+  );
+
+  useEffect(() => {
+    const c = weekCodeFromYmd(paymentDateYmd);
+    if (c && c !== "—") setWeekDraft(c);
+  }, [paymentDateYmd]);
 
   const ordersCountryBadge = useMemo(() => countryBadgeFromOrders(orders), [orders]);
 
@@ -516,6 +572,27 @@ export function PaymentModal({
   function rowChecked(id: string): boolean {
     if (includedIds === null) return true;
     return includedIds.includes(id);
+  }
+
+  function paySpecificDebt(row: PaymentIntakeMatchResult) {
+    const remUsd = roundMoney2(Math.max(0, row.remainingAmount));
+    if (remUsd <= 0.01) return;
+    // Default: pay in USD (matches allocation currency).
+    // If the order clearly has an ILS representation, allow filling ₪ by current rate.
+    const hasIls = Number.isFinite(row.totalIls) && row.totalIls > 0;
+    const hasRate = Number.isFinite(row.rate) && row.rate > 0;
+    const useIls = hasIls && hasRate && rateN > 0;
+
+    if (useIls) {
+      setIlsPaid((remUsd * rateN).toFixed(2));
+      setUsdPaid("");
+      setTransferPaid("");
+    } else {
+      setUsdPaid(remUsd.toFixed(2));
+      setIlsPaid("");
+      setTransferPaid("");
+    }
+    onToast("נבחר חיוב לתשלום (ניתן לערוך לפני שמירה)");
   }
 
   async function onSave() {
@@ -835,31 +912,80 @@ export function PaymentModal({
                 </button>
               )}
 
-              {editingBadge === "week" ? (
-                <select
-                  className="payment-modal-inline-input"
-                  dir="ltr"
-                  autoFocus
-                  value={weekSelectValue}
-                  onChange={(e) => {
-                    const code = e.target.value;
-                    if (code && WORK_WEEK_RANGES[code]) setPaymentDateYmd(WORK_WEEK_RANGES[code].from);
+              <div className="payment-modal-week-row" dir="ltr" aria-label="שבוע עבודה">
+                <button
+                  type="button"
+                  className="payment-modal-week-arrow"
+                  aria-label="שבוע קודם"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    const cur = parseWeekNumber(weekDraft) ?? parseWeekNumber(weekSelectValue) ?? baseWeekNumber;
+                    applyWeekNumber(cur - 1);
+                    setWeekInputErr(null);
                   }}
-                  onBlur={() => setEditingBadge(null)}
-                  onKeyDown={badgeKeyFinish}
-                  aria-label="שבוע"
                 >
-                  {WORK_WEEK_CODES_SORTED.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <button type="button" className="payment-modal-inline-static" onClick={() => setEditingBadge("week")} aria-label="שבוע — עריכה">
-                  <span dir="ltr">{weekReadonly || "—"}</span>
+                  ◀
                 </button>
-              )}
+                <input
+                  type="text"
+                  className={weekInputErr ? "payment-modal-week-inp payment-modal-week-inp--err" : "payment-modal-week-inp"}
+                  value={weekDraft}
+                  list="pm-week-list"
+                  dir="ltr"
+                  title={weekInputErr || undefined}
+                  onChange={(e) => {
+                    const up = e.target.value.trim().toUpperCase();
+                    setWeekDraft(up);
+                    const num = parseWeekNumber(up);
+                    if (num == null) {
+                      setWeekInputErr(up ? "שבוע לא תקין" : null);
+                      return;
+                    }
+                    setWeekInputErr(null);
+                    applyWeekNumber(num);
+                  }}
+                  onBlur={() => {
+                    const curRaw = weekDraft.trim().toUpperCase();
+                    const num = parseWeekNumber(curRaw);
+                    if (num == null) {
+                      setWeekInputErr(null);
+                      setWeekDraft(weekReadonly !== "—" ? weekReadonly : globalWeek);
+                      return;
+                    }
+                    setWeekDraft(toWeekCode(num));
+                  }}
+                />
+                <button
+                  type="button"
+                  className="payment-modal-week-arrow"
+                  aria-label="שבוע הבא"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    const cur = parseWeekNumber(weekDraft) ?? parseWeekNumber(weekSelectValue) ?? baseWeekNumber;
+                    applyWeekNumber(cur + 1);
+                    setWeekInputErr(null);
+                  }}
+                >
+                  ▶
+                </button>
+                <button
+                  type="button"
+                  className="payment-modal-week-dd"
+                  aria-label="רשימת שבועות"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    const el = document.querySelector<HTMLInputElement>(".payment-modal-week-inp");
+                    el?.focus();
+                  }}
+                >
+                  ▼
+                </button>
+                <datalist id="pm-week-list">
+                  {WORK_WEEK_CODES_SORTED.map((c) => (
+                    <option key={c} value={c} />
+                  ))}
+                </datalist>
+              </div>
             </div>
           </div>
 
@@ -878,12 +1004,13 @@ export function PaymentModal({
                     <th className="pm-num pm-th-total">סה״כ ($)</th>
                     <th>סטטוס</th>
                     <th className="payment-modal-th-check" aria-label="כלול בחישוב" />
+                    <th className="payment-modal-th-check" aria-label="שלם חיוב" />
                   </tr>
                 </thead>
                 <tbody>
                   {matched.length === 0 ? (
                     <tr>
-                      <td colSpan={10} className="payment-modal-empty">
+                      <td colSpan={11} className="payment-modal-empty">
                         {customer ? "אין הזמנות" : "בחרו לקוח"}
                       </td>
                     </tr>
@@ -948,6 +1075,17 @@ export function PaymentModal({
                             onClick={(e) => e.stopPropagation()}
                             aria-label="הזמנה בחישוב"
                           />
+                        </td>
+                        <td className="payment-modal-td-check" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            type="button"
+                            className="pm-close-debt-btn"
+                            title={row.remainingAmount <= 0.01 ? "חיוב זה כבר שולם" : "שלם חיוב זה"}
+                            disabled={row.remainingAmount <= 0.01}
+                            onClick={() => paySpecificDebt(row)}
+                          >
+                            שלם
+                          </button>
                         </td>
                       </tr>
                     ))

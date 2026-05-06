@@ -7,6 +7,7 @@ import { GlobalFilterBar } from "@/components/admin/GlobalFilterBar";
 import { FinancialSettingsModal } from "@/components/admin/FinancialSettingsModal";
 import { AdminWindowStack } from "@/components/admin/AdminWindowStack";
 import { AdminLoadingProvider } from "@/components/admin/AdminLoadingProvider";
+import { AdminGlobalProvider } from "@/components/admin/AdminGlobalContext";
 import { withoutKeys } from "@/lib/admin-url-query";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 
@@ -59,37 +60,39 @@ export function AdminChrome({
 
   return (
     <AdminLoadingProvider>
-      <div className="adm-chrome-stack">
-        <AdminTopBar
-          displayName={displayName}
-          roleLabel={roleLabel}
-          financial={financial}
-          canManageFinancial={canManageFinancial}
-        />
-        <div className="adm-chrome-below-header">
-          <GlobalFilterBar />
-          <div className="adm-chrome-work">
-            <div className="adm-chrome-main adm-content adm-content--chrome">{children}</div>
+      <AdminGlobalProvider>
+        <div className="adm-chrome-stack">
+          <AdminTopBar
+            displayName={displayName}
+            roleLabel={roleLabel}
+            financial={financial}
+            canManageFinancial={canManageFinancial}
+          />
+          <div className="adm-chrome-below-header">
+            <GlobalFilterBar />
+            <div className="adm-chrome-work">
+              <div className="adm-chrome-main adm-content adm-content--chrome">{children}</div>
+            </div>
           </div>
         </div>
-      </div>
-      {toast ? (
-        <div className="adm-toast" role="status" aria-live="polite">
-          {toast}
-        </div>
-      ) : null}
-      <FinancialSettingsModal open={finOpen} onClose={closeModal} initial={finInitial} onToast={onToast} />
-      {showWindowStack ? (
-        <AdminWindowStack
-          financial={financial}
-          onToast={onToast}
-          canCreateOrders={canCreateOrders}
-          canEditOrders={canEditOrders}
-          canReceivePayments={canReceivePayments}
-          canViewCustomerCard={canViewCustomerCard}
-          canCreateCustomer={canCreateCustomer}
-        />
-      ) : null}
+        {toast ? (
+          <div className="adm-toast" role="status" aria-live="polite">
+            {toast}
+          </div>
+        ) : null}
+        <FinancialSettingsModal open={finOpen} onClose={closeModal} initial={finInitial} onToast={onToast} />
+        {showWindowStack ? (
+          <AdminWindowStack
+            financial={financial}
+            onToast={onToast}
+            canCreateOrders={canCreateOrders}
+            canEditOrders={canEditOrders}
+            canReceivePayments={canReceivePayments}
+            canViewCustomerCard={canViewCustomerCard}
+            canCreateCustomer={canCreateCustomer}
+          />
+        ) : null}
+      </AdminGlobalProvider>
     </AdminLoadingProvider>
   );
 }

@@ -6,8 +6,14 @@
  * FinancialSettings: deleteMany מלא ואז שורת ברירת מחדל (3.40+0.10=3.50).
  * אין CREDIT_CARD ב-enum — CASH / BANK_TRANSFER / CHECK וכו׳. PAID→COMPLETED, PARTIAL→OPEN.
  */
+import { config as loadEnv } from "dotenv";
+
+loadEnv({ path: ".env.local" });
+loadEnv();
+
 import { OrderStatus, PaymentMethod, Prisma, PrismaClient, UserRole } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import crypto from "node:crypto";
 
 const prisma = new PrismaClient();
 
@@ -338,6 +344,167 @@ function buildPlannedOrders(): PlannedOrder[] {
   return planned;
 }
 
+/** לקוחות/הזמנות/תשלומים ייעודיים לבדיקת דוח "יתרות לקוחות" (יתרה 0 מסוננת). */
+async function seedCustomerBalanceReportFixtures(adminId: string) {
+  const RM = 4 as const;
+  const VAT_FACTOR = new Prisma.Decimal("1.18");
+  const weekCode = "AH-119";
+  const orderDay = parseYmd("2026-05-05");
+  orderDay.setHours(10, 0, 0, 0);
+  const payDay = new Date(orderDay);
+
+  await prisma.payment.deleteMany({ where: { paymentCode: { startsWith: "QA-RPT-" } } });
+  await prisma.order.deleteMany({ where: { notes: { contains: "QA-RPT-FIXTURE" } } });
+
+  const snapBase = new Prisma.Decimal("3.40");
+  const snapFee = new Prisma.Decimal("0.10");
+  const snapFinal = new Prisma.Decimal("3.50");
+
+  function ilsBreakdown(grossIls: Prisma.Decimal) {
+    const totalIlsWithVat = grossIls.toDecimalPlaces(2, RM);
+    const totalIlsWithoutVat = totalIlsWithVat.div(VAT_FACTOR).toDecimalPlaces(2, RM);
+    const vatAmount = totalIlsWithVat.sub(totalIlsWithoutVat).toDecimalPlaces(2, RM);
+    return { totalIlsWithVat, totalIlsWithoutVat, vatAmount };
+  }
+
+  const zeroCust = await prisma.customer.upsert({
+    where: { customerCode: "QA-ZERO-01" },
+    create: {
+      displayName: "QA-REPORT-ZERO",
+      nameEn: "QA-REPORT-ZERO",
+      customerCode: "QA-ZERO-01",
+      isActive: true,
+    },
+    update: { displayName: "QA-REPORT-ZERO", isActive: true },
+  });
+
+  const openCust = await prisma.customer.upsert({
+    where: { customerCode: "QA-OPEN-01" },
+    create: {
+      displayName: "QA-REPORT-OPEN",
+      nameEn: "QA-REPORT-OPEN",
+      customerCode: "QA-OPEN-01",
+      isActive: true,
+    },
+    update: { displayName: "QA-REPORT-OPEN", isActive: true },
+  });
+
+  const z = ilsBreakdown(new Prisma.Decimal("1000.00"));
+  const usdZero = z.totalIlsWithVat.div(snapFinal).toDecimalPlaces(4, RM);
+
+  const orderZero = await prisma.order.create({
+    data: {
+      orderNumber: "QA-RPT-ORD-ZERO",
+      oldOrderNumber: "9000001",
+      customerId: zeroCust.id,
+      customerCodeSnapshot: zeroCust.customerCode,
+      customerNameSnapshot: zeroCust.displayName,
+      weekCode,
+      orderDate: orderDay,
+      status: OrderStatus.COMPLETED,
+      amountUsd: usdZero,
+      totalUsd: usdZero,
+      exchangeRate: snapFinal,
+      vatRate: new Prisma.Decimal("18"),
+      amountWithoutVat: z.totalIlsWithoutVat,
+      snapshotBaseDollarRate: snapBase,
+      snapshotDollarFee: snapFee,
+      snapshotFinalDollarRate: snapFinal,
+      totalIlsWithVat: z.totalIlsWithVat,
+      totalIlsWithoutVat: z.totalIlsWithoutVat,
+      vatAmount: z.vatAmount,
+      totalIls: z.totalIlsWithVat,
+      amountIls: z.totalIlsWithVat,
+      notes: "QA-RPT-FIXTURE zero balance (expected=received)",
+      createdById: adminId,
+      paymentMethod: PaymentMethod.CASH,
+    },
+  });
+
+  await prisma.payment.create({
+    data: {
+      paymentCode: "QA-RPT-PAY-ZERO",
+      customerId: zeroCust.id,
+      orderId: orderZero.id,
+      weekCode,
+      paymentDate: payDay,
+      currency: "ILS",
+      amountUsd: null,
+      amountIls: z.totalIlsWithVat,
+      exchangeRate: snapFinal,
+      vatRate: new Prisma.Decimal("18"),
+      amountWithoutVat: z.totalIlsWithoutVat,
+      snapshotBaseDollarRate: snapBase,
+      snapshotDollarFee: snapFee,
+      snapshotFinalDollarRate: snapFinal,
+      totalIlsWithVat: z.totalIlsWithVat,
+      totalIlsWithoutVat: z.totalIlsWithoutVat,
+      vatAmount: z.vatAmount,
+      paymentMethod: PaymentMethod.CASH,
+      isPaid: true,
+      createdById: adminId,
+    },
+  });
+
+  const o = ilsBreakdown(new Prisma.Decimal("5000.00"));
+  const p = ilsBreakdown(new Prisma.Decimal("2000.00"));
+  const usdOpen = o.totalIlsWithVat.div(snapFinal).toDecimalPlaces(4, RM);
+
+  const orderOpen = await prisma.order.create({
+    data: {
+      orderNumber: "QA-RPT-ORD-OPEN",
+      oldOrderNumber: "9000002",
+      customerId: openCust.id,
+      customerCodeSnapshot: openCust.customerCode,
+      customerNameSnapshot: openCust.displayName,
+      weekCode,
+      orderDate: orderDay,
+      status: OrderStatus.OPEN,
+      amountUsd: usdOpen,
+      totalUsd: usdOpen,
+      exchangeRate: snapFinal,
+      vatRate: new Prisma.Decimal("18"),
+      amountWithoutVat: o.totalIlsWithoutVat,
+      snapshotBaseDollarRate: snapBase,
+      snapshotDollarFee: snapFee,
+      snapshotFinalDollarRate: snapFinal,
+      totalIlsWithVat: o.totalIlsWithVat,
+      totalIlsWithoutVat: o.totalIlsWithoutVat,
+      vatAmount: o.vatAmount,
+      totalIls: o.totalIlsWithVat,
+      amountIls: o.totalIlsWithVat,
+      notes: "QA-RPT-FIXTURE open balance (partial pay)",
+      createdById: adminId,
+      paymentMethod: PaymentMethod.BANK_TRANSFER,
+    },
+  });
+
+  await prisma.payment.create({
+    data: {
+      paymentCode: "QA-RPT-PAY-OPEN",
+      customerId: openCust.id,
+      orderId: orderOpen.id,
+      weekCode,
+      paymentDate: payDay,
+      currency: "ILS",
+      amountUsd: null,
+      amountIls: p.totalIlsWithVat,
+      exchangeRate: snapFinal,
+      vatRate: new Prisma.Decimal("18"),
+      amountWithoutVat: p.totalIlsWithoutVat,
+      snapshotBaseDollarRate: snapBase,
+      snapshotDollarFee: snapFee,
+      snapshotFinalDollarRate: snapFinal,
+      totalIlsWithVat: p.totalIlsWithVat,
+      totalIlsWithoutVat: p.totalIlsWithoutVat,
+      vatAmount: p.vatAmount,
+      paymentMethod: PaymentMethod.BANK_TRANSFER,
+      isPaid: true,
+      createdById: adminId,
+    },
+  });
+}
+
 async function assertFinancialSettingsTableExists() {
   const rows = await prisma.$queryRaw<{ exists: boolean }[]>`
     SELECT EXISTS (
@@ -402,8 +569,23 @@ async function main() {
     });
   }
 
-  const passwordHash = await bcrypt.hash("Admin123456!", 12);
-  const employeeHash = await bcrypt.hash("Employee123!", 12);
+  const e2eUsername = (process.env.E2E_ADMIN_USERNAME || "qa-admin").trim();
+  const e2ePassword = (process.env.E2E_ADMIN_PASSWORD || "").trim();
+
+  const adminPassword = (process.env.SEED_ADMIN_PASSWORD || "").trim();
+  const employeePassword = (process.env.SEED_EMPLOYEE_PASSWORD || "").trim();
+
+  const generatedAdminPassword = crypto.randomBytes(18).toString("base64url"); // strong temp
+  const generatedEmployeePassword = crypto.randomBytes(18).toString("base64url");
+  const generatedQaPassword = crypto.randomBytes(18).toString("base64url");
+
+  const adminPassToUse = adminPassword || generatedAdminPassword;
+  const employeePassToUse = employeePassword || generatedEmployeePassword;
+  const qaPassToUse = e2ePassword || generatedQaPassword;
+
+  const passwordHash = await bcrypt.hash(adminPassToUse, 12);
+  const employeeHash = await bcrypt.hash(employeePassToUse, 12);
+  const qaHash = await bcrypt.hash(qaPassToUse, 12);
 
   const admin = await prisma.user.upsert({
     where: { username: "admin" },
@@ -425,6 +607,25 @@ async function main() {
   });
 
   await wipeSeedData();
+
+  const qaAdmin = await prisma.user.upsert({
+    where: { username: e2eUsername },
+    create: {
+      fullName: "QA Admin",
+      username: e2eUsername,
+      email: e2eUsername,
+      passwordHash: qaHash,
+      role: UserRole.ADMIN,
+      isActive: true,
+    },
+    update: {
+      fullName: "QA Admin",
+      email: e2eUsername,
+      passwordHash: qaHash,
+      role: UserRole.ADMIN,
+      isActive: true,
+    },
+  });
 
   const emp1 = await prisma.user.create({
     data: {
@@ -851,6 +1052,8 @@ async function main() {
 
   if (auditRows.length) await prisma.auditLog.createMany({ data: auditRows });
 
+  await seedCustomerBalanceReportFixtures(admin.id);
+
   console.log(
     [
       "WGP seed complete.",
@@ -858,7 +1061,10 @@ async function main() {
       `Orders: ${created.length}`,
       `Payments: ${payments.length}`,
       `Audit: ${auditRows.length}`,
-      "Admin: admin / Admin123456!  |  Employees: employee1, employee2 / Employee123!",
+      `Admin: admin / ${adminPassToUse}`,
+      `Employees: employee1, employee2 / ${employeePassToUse}`,
+      `QA Admin (E2E): ${qaAdmin.username} / ${qaPassToUse}`,
+      e2ePassword ? "E2E_ADMIN_PASSWORD was provided via env." : "E2E_ADMIN_PASSWORD was not set — generated a temporary password above. Put it in .env.local to run e2e.",
     ].join("\n"),
   );
 }

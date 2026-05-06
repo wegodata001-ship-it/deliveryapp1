@@ -1,6 +1,6 @@
 /** Discriminated payloads for the admin window manager (no route changes). */
 
-export type AdminWindowType = "orderCapture" | "customerCard" | "createCustomer" | "payments";
+export type AdminWindowType = "orderCapture" | "customerCard" | "createCustomer" | "payments" | "paymentsUpdated";
 
 export type OrderCaptureWindowProps = { mode: "create" } | { mode: "edit"; orderId: string };
 
@@ -23,7 +23,8 @@ export type AdminWindowPayload =
   | { type: "orderCapture"; props: OrderCaptureWindowProps }
   | { type: "customerCard"; props: CustomerCardWindowProps }
   | { type: "createCustomer" }
-  | { type: "payments"; props?: PaymentWindowProps };
+  | { type: "payments"; props?: PaymentWindowProps }
+  | { type: "paymentsUpdated"; props?: PaymentWindowProps };
 
 export type AdminWindowEntry = { id: string } & AdminWindowPayload;
 

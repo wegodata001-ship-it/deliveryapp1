@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { OrderCreatePanel } from "@/components/admin/OrderCreatePanel";
 import { PaymentModal } from "@/components/admin/PaymentModal";
+import { PaymentModalUpdated } from "@/components/admin/PaymentModalUpdated";
 import { CustomerCardWindowBody, CreateCustomerWindowBody } from "@/components/admin/AdminWindowBodies";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 import type { AdminWindowEntry } from "@/lib/admin-windows";
@@ -20,6 +21,8 @@ function windowTitle(w: AdminWindowEntry): string {
       return "לקוח חדש";
     case "payments":
       return "קליטת תשלום";
+    case "paymentsUpdated":
+      return "קליטת תשלום מעודכן";
     default:
       return "חלון";
   }
@@ -83,6 +86,7 @@ export function AdminWindowStack({
                 "adm-win-panel",
                 w.type === "orderCapture" ? "adm-win-panel--order-capture" : "",
                 w.type === "payments" ? "adm-win-panel--payment-capture" : "",
+                w.type === "paymentsUpdated" ? "adm-win-panel--payment-capture-updated" : "",
                 w.type === "customerCard" ? "adm-win-panel--customer-card" : "",
                 w.type === "createCustomer" ? "adm-win-panel--create-customer" : "",
               ]
@@ -103,6 +107,7 @@ export function AdminWindowStack({
                   "adm-win-body",
                   w.type === "orderCapture" ? "adm-win-body--order-capture" : "",
                   w.type === "payments" ? "adm-win-body--payment-capture" : "",
+                  w.type === "paymentsUpdated" ? "adm-win-body--payment-capture" : "",
                   w.type === "createCustomer" ? "adm-win-body--create-customer" : "",
                 ]
                   .filter(Boolean)
@@ -125,6 +130,17 @@ export function AdminWindowStack({
                     financial={financial}
                     initialPayment={w.props}
                     onClose={() => closeWindow(w.id)}
+                    onToast={onToast}
+                    canViewCustomerCard={canViewCustomerCard}
+                    canEditOrders={canEditOrders}
+                    canCreateOrders={canCreateOrders}
+                  />
+                ) : null}
+                {w.type === "paymentsUpdated" && canReceivePayments ? (
+                  <PaymentModalUpdated
+                    key={w.id}
+                    financial={financial}
+                    initialPayment={w.props}
                     onToast={onToast}
                     canViewCustomerCard={canViewCustomerCard}
                     canEditOrders={canEditOrders}

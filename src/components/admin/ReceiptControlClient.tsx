@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { listReceiptControlAction, type ReceiptBalanceFilter, type ReceiptControlPayload, type ReceiptControlRow, type ReceiptControlStatus } from "@/app/admin/receipt-control/actions";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
+import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
+import { getAhWeekCodeFromDateRange, getAhWeekRange, normalizeAhWeekCode } from "@/lib/work-week";
 
 const LIMIT = 15;
 
@@ -26,14 +28,39 @@ function pageNumbers(page: number, totalPages: number): number[] {
 
 export function ReceiptControlClient() {
   const { openWindow } = useAdminWindows();
+  const { globalWeek } = useAdminGlobal();
   const [payload, setPayload] = useState<ReceiptControlPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
-  const [weekCode, setWeekCode] = useState("");
+  const [weekCode, setWeekCode] = useState(globalWeek);
   const [fromYmd, setFromYmd] = useState("");
   const [toYmd, setToYmd] = useState("");
   const [balanceFilter, setBalanceFilter] = useState<ReceiptBalanceFilter>("all");
   const [search, setSearch] = useState("");
+
+  useEffect(() => {
+    setWeekCode(globalWeek);
+    setPage(1);
+  }, [globalWeek]);
+
+  // Sync: week -> dates
+  useEffect(() => {
+    const w = normalizeAhWeekCode(weekCode);
+    if (!w) return;
+    const r = getAhWeekRange(w);
+    if (!r) return;
+    if (fromYmd !== r.from) setFromYmd(r.from);
+    if (toYmd !== r.to) setToYmd(r.to);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [weekCode]);
+
+  // Sync: dates -> week (or "—")
+  useEffect(() => {
+    if (!fromYmd || !toYmd) return;
+    const wk = getAhWeekCodeFromDateRange(fromYmd, toYmd) ?? "—";
+    if (weekCode !== wk) setWeekCode(wk);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromYmd, toYmd]);
 
   useEffect(() => {
     let cancelled = false;
@@ -64,7 +91,7 @@ export function ReceiptControlClient() {
   }
 
   function clearFilters() {
-    setWeekCode("");
+    setWeekCode(globalWeek);
     setFromYmd("");
     setToYmd("");
     setBalanceFilter("all");
@@ -101,15 +128,48 @@ export function ReceiptControlClient() {
       <div className="adm-receipt-top-filters">
         <label>
           שבוע
-          <input value={weekCode} onChange={(e) => setTopFilter(() => setWeekCode(e.target.value))} placeholder="AH-118" />
+          <input
+            value={weekCode}
+            onChange={(e) => {
+              const raw = e.target.value.toUpperCase();
+              setTopFilter(() => setWeekCode(raw));
+              const w = normalizeAhWeekCode(raw);
+              if (w) {
+                const r = getAhWeekRange(w);
+                if (r) {
+                  setFromYmd(r.from);
+                  setToYmd(r.to);
+                }
+              }
+            }}
+            placeholder={globalWeek}
+          />
         </label>
         <label>
           מתאריך
-          <input type="date" value={fromYmd} onChange={(e) => setTopFilter(() => setFromYmd(e.target.value))} />
+          <input
+            type="date"
+            value={fromYmd}
+            onChange={(e) => {
+              const nextFrom = e.target.value;
+              setTopFilter(() => setFromYmd(nextFrom));
+              const wk = getAhWeekCodeFromDateRange(nextFrom, toYmd);
+              setWeekCode(wk ?? "—");
+            }}
+          />
         </label>
         <label>
           עד תאריך
-          <input type="date" value={toYmd} onChange={(e) => setTopFilter(() => setToYmd(e.target.value))} />
+          <input
+            type="date"
+            value={toYmd}
+            onChange={(e) => {
+              const nextTo = e.target.value;
+              setTopFilter(() => setToYmd(nextTo));
+              const wk = getAhWeekCodeFromDateRange(fromYmd, nextTo);
+              setWeekCode(wk ?? "—");
+            }}
+          />
         </label>
         <label>
           סטטוס

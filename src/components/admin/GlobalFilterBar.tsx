@@ -5,14 +5,15 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   DEFAULT_WEEK_CODE,
   WORK_WEEK_CODES_SORTED,
-  WORK_WEEK_RANGES,
   formatLocalYmd,
   getCurrentWeekRange,
   getWeekCodeForLocalDate,
-  nextWeekCode,
-  prevWeekCode,
+  getAhWeekCodeFromDateRange,
+  getAhWeekRange,
+  normalizeAhWeekCode,
 } from "@/lib/work-week";
 import { withQuery } from "@/lib/admin-url-query";
+import { ORDER_COUNTRY_CODES, orderCountryLabel, type OrderCountryCode } from "@/lib/order-countries";
 
 const FILTER_PREFIXES = ["/admin/orders", "/admin/reports", "/admin/balances", "/admin/receipt-control"];
 const WEEK_RE = /^AH-(\d+)$/i;
@@ -30,31 +31,16 @@ function normalizeWeekInput(raw: string): string | null {
   return `AH-${Math.floor(n)}`;
 }
 
-function addDays(ymd: string, days: number): string {
-  const [y, m, d] = ymd.split("-").map((x) => Number(x));
-  const dt = new Date(y, m - 1, d, 0, 0, 0, 0);
-  dt.setDate(dt.getDate() + days);
-  return formatLocalYmd(dt);
+function shiftWeekCode(code: string, delta: number): string {
+  const normalized = normalizeAhWeekCode(code) ?? DEFAULT_WEEK_CODE;
+  const n = Number(normalized.replace(/^AH-/i, ""));
+  const next = Number.isFinite(n) ? Math.max(1, Math.floor(n + delta)) : 1;
+  return `AH-${next}`;
 }
 
 function weekRangeFromCode(code: string): { from: string; to: string } | null {
-  const direct = WORK_WEEK_RANGES[code];
-  if (direct) return direct;
-  const m = /^AH-(\d+)$/i.exec(code.trim());
-  if (!m) return null;
-  const n = Number(m[1]);
-  if (!Number.isFinite(n) || n <= 0) return null;
-
-  // Business anchor required by user: AH-118 => 12/04/2026 - 19/04/2026
-  const anchorWeek = 118;
-  const anchorFrom = "2026-04-12";
-  const anchorTo = "2026-04-19";
-  const deltaWeeks = n - anchorWeek;
-  const deltaDays = deltaWeeks * 7;
-  return {
-    from: addDays(anchorFrom, deltaDays),
-    to: addDays(anchorTo, deltaDays),
-  };
+  const r = getAhWeekRange(code);
+  return r ? { from: r.from, to: r.to } : null;
 }
 
 export function shouldShowGlobalFilter(pathname: string | null): boolean {
@@ -72,11 +58,14 @@ export function GlobalFilterBar() {
     const week = sp.get("week") || "";
     const from = sp.get("from") || "";
     const to = sp.get("to") || "";
-    const base = weekRangeFromCode(week) ?? weekRangeFromCode(DEFAULT_WEEK_CODE) ?? { from: "2026-04-12", to: "2026-04-19" };
+    const country = sp.get("country") || "";
+    const base = weekRangeFromCode(week) ?? weekRangeFromCode(DEFAULT_WEEK_CODE) ?? { from: "2026-05-03", to: "2026-05-09" };
+    const weekFromDates = from && to ? getAhWeekCodeFromDateRange(from, to) : null;
     return {
-      week: week && normalizeWeekInput(week) ? normalizeWeekInput(week)! : DEFAULT_WEEK_CODE,
+      week: week && normalizeWeekInput(week) ? normalizeWeekInput(week)! : weekFromDates ?? "—",
       from: from && /^\d{4}-\d{2}-\d{2}$/.test(from) ? from : base.from,
       to: to && /^\d{4}-\d{2}-\d{2}$/.test(to) ? to : base.to,
+      country: (ORDER_COUNTRY_CODES.includes(country as OrderCountryCode) ? (country as OrderCountryCode) : ORDER_COUNTRY_CODES[0]) as OrderCountryCode,
     };
   }, [sp]);
 
@@ -86,6 +75,7 @@ export function GlobalFilterBar() {
   const [weekOpen, setWeekOpen] = useState(false);
   const [from, setFrom] = useState(initial.from);
   const [to, setTo] = useState(initial.to);
+  const [country, setCountry] = useState<OrderCountryCode>(initial.country);
 
   useEffect(() => {
     setWeek(initial.week);
@@ -93,7 +83,8 @@ export function GlobalFilterBar() {
     setLastValidWeek(initial.week);
     setFrom(initial.from);
     setTo(initial.to);
-  }, [initial.week, initial.from, initial.to]);
+    setCountry(initial.country);
+  }, [initial.week, initial.from, initial.to, initial.country]);
 
   const weekOptions = useMemo(() => {
     const maxKnown = WORK_WEEK_CODES_SORTED.reduce((m, c) => {
@@ -115,10 +106,44 @@ export function GlobalFilterBar() {
     return weekOptions.filter((w) => w.includes(q));
   }, [weekInput, weekOptions]);
 
-  const apply = useCallback(() => {
-    const next = withQuery(pathname, sp, { week, from, to, modal: null });
-    router.push(next);
-  }, [pathname, router, sp, week, from, to]);
+  const apply = useCallback(
+    (mode: "push" | "replace" = "push") => {
+      const next = withQuery(pathname, sp, { week: week === "—" ? "" : week, from, to, country, modal: null });
+      if (mode === "replace") router.replace(next);
+      else router.push(next);
+      try {
+        localStorage.setItem("globalWeek", week === "—" ? "" : week);
+        localStorage.setItem("globalFrom", from);
+        localStorage.setItem("globalTo", to);
+        localStorage.setItem("globalCountry", country);
+      } catch {
+        // ignore
+      }
+    },
+    [pathname, router, sp, week, from, to, country],
+  );
+
+  const applyValues = useCallback(
+    (nextWeek: string, nextFrom: string, nextTo: string, nextCountry: OrderCountryCode = country) => {
+      const next = withQuery(pathname, sp, {
+        week: nextWeek === "—" ? "" : nextWeek,
+        from: nextFrom,
+        to: nextTo,
+        country: nextCountry,
+        modal: null,
+      });
+      router.push(next);
+      try {
+        localStorage.setItem("globalWeek", nextWeek === "—" ? "" : nextWeek);
+        localStorage.setItem("globalFrom", nextFrom);
+        localStorage.setItem("globalTo", nextTo);
+        localStorage.setItem("globalCountry", nextCountry);
+      } catch {
+        // ignore
+      }
+    },
+    [country, pathname, router, sp],
+  );
 
   const reset = useCallback(() => {
     router.push(pathname);
@@ -135,21 +160,46 @@ export function GlobalFilterBar() {
     }
   }, []);
 
-  const commitWeekInput = useCallback(() => {
-    const normalized = normalizeWeekInput(weekInput);
-    if (!normalized) {
-      setWeekInput(lastValidWeek);
+  // Ensure URL has global filters from localStorage (important for server-driven screens)
+  useEffect(() => {
+    const hasWeek = !!sp.get("week");
+    const hasCountry = !!sp.get("country");
+    if (hasWeek && hasCountry) return;
+    try {
+      const w = localStorage.getItem("globalWeek") || "";
+      const f = localStorage.getItem("globalFrom") || "";
+      const t = localStorage.getItem("globalTo") || "";
+      const c = localStorage.getItem("globalCountry") || "";
+      const wNorm = normalizeWeekInput(w) ?? DEFAULT_WEEK_CODE;
+      const r = weekRangeFromCode(wNorm) ?? weekRangeFromCode(DEFAULT_WEEK_CODE);
+      const fromUse = /^\d{4}-\d{2}-\d{2}$/.test(f) ? f : (r?.from ?? from);
+      const toUse = /^\d{4}-\d{2}-\d{2}$/.test(t) ? t : (r?.to ?? to);
+      const cUse = (ORDER_COUNTRY_CODES.includes(c as OrderCountryCode) ? (c as OrderCountryCode) : country) as OrderCountryCode;
+      const next = withQuery(pathname, sp, { week: wNorm || DEFAULT_WEEK_CODE, from: fromUse, to: toUse, country: cUse, modal: null });
+      router.replace(next);
+    } catch {
+      // ignore
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // שינוי תאריכים -> אם זה בדיוק שבוע AH: לעדכן week. אחרת week="—"
+  useEffect(() => {
+    if (!from || !to) return;
+    const wk = getAhWeekCodeFromDateRange(from, to);
+    if (wk) {
+      if (week !== wk) {
+        setWeek(wk);
+        setWeekInput(wk);
+        setLastValidWeek(wk);
+      }
       return;
     }
-    setWeek(normalized);
-    setWeekInput(normalized);
-    setLastValidWeek(normalized);
-    const r = weekRangeFromCode(normalized);
-    if (r) {
-      setFrom(r.from);
-      setTo(r.to);
+    if (week !== "—") {
+      setWeek("—");
+      setWeekInput("—");
     }
-  }, [lastValidWeek, weekInput]);
+  }, [from, to]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const todayYmd = formatLocalYmd(new Date());
 
@@ -160,26 +210,36 @@ export function GlobalFilterBar() {
     setLastValidWeek(code);
     setFrom(todayYmd);
     setTo(todayYmd);
+    applyValues(code, todayYmd, todayYmd);
   };
 
   const quickCurrentWeek = () => {
     const { start, end } = getCurrentWeekRange(new Date());
     const code = getWeekCodeForLocalDate(start);
+    const nextFrom = formatLocalYmd(start);
+    const nextTo = formatLocalYmd(end);
     setWeek(code);
     setWeekInput(code);
     setLastValidWeek(code);
-    setFrom(formatLocalYmd(start));
-    setTo(formatLocalYmd(end));
+    setFrom(nextFrom);
+    setTo(nextTo);
+    applyValues(code, nextFrom, nextTo);
   };
 
   const quickPrevWeek = () => {
-    const code = prevWeekCode(week) ?? prevWeekCode(DEFAULT_WEEK_CODE) ?? DEFAULT_WEEK_CODE;
+    const base = week === "—" ? (getAhWeekCodeFromDateRange(from, to) ?? lastValidWeek ?? DEFAULT_WEEK_CODE) : week;
+    const code = shiftWeekCode(base, -1);
     setRangeFromWeek(code);
+    const r = weekRangeFromCode(code);
+    if (r) applyValues(code, r.from, r.to);
   };
 
   const quickNextWeek = () => {
-    const code = nextWeekCode(week) ?? nextWeekCode(DEFAULT_WEEK_CODE) ?? DEFAULT_WEEK_CODE;
+    const base = week === "—" ? (getAhWeekCodeFromDateRange(from, to) ?? lastValidWeek ?? DEFAULT_WEEK_CODE) : week;
+    const code = shiftWeekCode(base, 1);
     setRangeFromWeek(code);
+    const r = weekRangeFromCode(code);
+    if (r) applyValues(code, r.from, r.to);
   };
 
   if (!shouldShowGlobalFilter(pathname)) return null;
@@ -190,12 +250,27 @@ export function GlobalFilterBar() {
         <label className="adm-filter-field">
           <span className="adm-filter-label">שבוע עבודה</span>
           <div className="adm-combo adm-filter-week-combo">
+            <button
+              type="button"
+              className="adm-filter-week-nav"
+              aria-label="שבוע הבא"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                const base = week === "—" ? (getAhWeekCodeFromDateRange(from, to) ?? lastValidWeek ?? DEFAULT_WEEK_CODE) : week;
+                const code = shiftWeekCode(base, 1);
+                setRangeFromWeek(code);
+                const r = weekRangeFromCode(code);
+                if (r) applyValues(code, r.from, r.to);
+              }}
+            >
+              ▶
+            </button>
             <input
               className="adm-filter-input"
               type="text"
               list="adm-week-options"
               value={weekInput}
-              placeholder="AH-118"
+              placeholder={DEFAULT_WEEK_CODE}
               onFocus={() => setWeekOpen(true)}
               onChange={(e) => {
                 setWeekInput(e.target.value.toUpperCase());
@@ -204,7 +279,20 @@ export function GlobalFilterBar() {
               onBlur={() => {
                 window.setTimeout(() => {
                   setWeekOpen(false);
-                  commitWeekInput();
+                  const normalized = normalizeWeekInput(weekInput);
+                  if (!normalized) {
+                    setWeekInput(week === "—" ? "—" : lastValidWeek);
+                    return;
+                  }
+                  setWeek(normalized);
+                  setWeekInput(normalized);
+                  setLastValidWeek(normalized);
+                  const r = weekRangeFromCode(normalized);
+                  if (r) {
+                    setFrom(r.from);
+                    setTo(r.to);
+                    applyValues(normalized, r.from, r.to);
+                  }
                 }, 120);
               }}
             />
@@ -223,6 +311,21 @@ export function GlobalFilterBar() {
               }}
             >
               ▾
+            </button>
+            <button
+              type="button"
+              className="adm-filter-week-nav"
+              aria-label="שבוע קודם"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                const base = week === "—" ? (getAhWeekCodeFromDateRange(from, to) ?? lastValidWeek ?? DEFAULT_WEEK_CODE) : week;
+                const code = shiftWeekCode(base, -1);
+                setRangeFromWeek(code);
+                const r = weekRangeFromCode(code);
+                if (r) applyValues(code, r.from, r.to);
+              }}
+            >
+              ◀
             </button>
             <button
               type="button"
@@ -247,6 +350,8 @@ export function GlobalFilterBar() {
                         onMouseDown={() => {
                           setRangeFromWeek(code);
                           setWeekOpen(false);
+                          const r = weekRangeFromCode(code);
+                          if (r) applyValues(code, r.from, r.to);
                         }}
                       >
                         <span className="adm-combo-item-title">{code}</span>
@@ -260,11 +365,57 @@ export function GlobalFilterBar() {
         </label>
         <label className="adm-filter-field">
           <span className="adm-filter-label">מתאריך</span>
-          <input className="adm-filter-input" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+          <input
+            className="adm-filter-input"
+            type="date"
+            value={from}
+            onChange={(e) => {
+              const nextFrom = e.target.value;
+              setFrom(nextFrom);
+              const wk = getAhWeekCodeFromDateRange(nextFrom, to);
+              const nextWeek = wk ?? "—";
+              setWeek(nextWeek);
+              setWeekInput(nextWeek);
+              if (wk) setLastValidWeek(wk);
+              applyValues(nextWeek, nextFrom, to, country);
+            }}
+          />
+        </label>
+        <label className="adm-filter-field">
+          <span className="adm-filter-label">מדינה</span>
+          <select
+            className="adm-filter-input"
+            value={country}
+            onChange={(e) => {
+              const nextCountry = e.target.value as OrderCountryCode;
+              setCountry(nextCountry);
+              applyValues(week, from, to, nextCountry);
+            }}
+          >
+            {ORDER_COUNTRY_CODES.map((c) => (
+              <option key={c} value={c}>
+                {orderCountryLabel(c)}
+              </option>
+            ))}
+          </select>
         </label>
         <label className="adm-filter-field">
           <span className="adm-filter-label">עד תאריך</span>
-          <input className="adm-filter-input" type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+          <input
+            className="adm-filter-input"
+            type="date"
+            value={to}
+            onChange={(e) => {
+              const nextTo = e.target.value;
+              setTo(nextTo);
+              const wk = getAhWeekCodeFromDateRange(from, nextTo);
+              const nextWeek = wk ?? "—";
+              setWeek(nextWeek);
+              setWeekInput(nextWeek);
+              if (wk) setLastValidWeek(wk);
+              applyValues(nextWeek, from, nextTo, country);
+            }}
+          />
         </label>
         <div className="adm-filter-quick">
           <button type="button" className="adm-filter-chip" onClick={quickToday}>
@@ -281,7 +432,7 @@ export function GlobalFilterBar() {
           </button>
         </div>
         <div className="adm-filter-actions">
-          <button type="button" className="adm-btn adm-btn--primary adm-btn--sm" onClick={apply}>
+          <button type="button" className="adm-btn adm-btn--primary adm-btn--sm" onClick={() => apply("push")}>
             חיפוש
           </button>
           <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" onClick={reset}>

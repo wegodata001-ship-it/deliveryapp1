@@ -69,6 +69,13 @@ export const SIDEBAR_SECTIONS: NavSectionDef[] = [
         anyOf: ["receive_payments"],
         openWindow: { type: "payments" },
       },
+      {
+        href: "/admin",
+        label: "קליטת תשלום מעודכן",
+        icon: "payIn",
+        anyOf: ["receive_payments"],
+        openWindow: { type: "paymentsUpdated", props: {} },
+      },
       { href: "/admin/receipt-control", label: "בקרת תקבולים", icon: "receipt", anyOf: ["view_payment_control"] },
       {
         href: "/admin/customer-card",
