@@ -3,6 +3,8 @@ import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { ensureExcelImportTables } from "@/lib/excel-import";
 import { prisma } from "@/lib/prisma";
 
+export const runtime = "nodejs";
+
 function asNumber(v: unknown): number | null {
   if (v == null || v === "") return null;
   const n = Number(String(v).replace(",", "."));

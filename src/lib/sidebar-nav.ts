@@ -15,7 +15,8 @@ export type NavIconId =
   | "reports"
   | "activity"
   | "settings"
-  | "finance";
+  | "finance"
+  | "editRequests";
 
 export type NavItemDef = {
   href: string;
@@ -23,6 +24,8 @@ export type NavItemDef = {
   icon: NavIconId;
   /** נדרשת לפחות הרשאה אחת מהרשימה. חסר = כל משתמש מחובר */
   anyOf?: string[];
+  /** רק משתמש עם role ADMIN */
+  adminOnly?: boolean;
   /** פותח חלון במקום ניווט (ללא שינוי route) */
   openWindow?: AdminWindowPayload;
 };
@@ -49,6 +52,12 @@ export const SIDEBAR_SECTIONS: NavSectionDef[] = [
         openWindow: { type: "orderCapture", props: { mode: "create" } },
       },
       { href: "/admin/orders", label: "רשימת הזמנות", icon: "orderList", anyOf: ["view_orders"] },
+      {
+        href: "/admin/order-edit-requests",
+        label: "בקשות עריכת הזמנות",
+        icon: "editRequests",
+        adminOnly: true,
+      },
       {
         href: "/admin/orders",
         label: "לקוח חדש",
@@ -100,6 +109,7 @@ export const SIDEBAR_SECTIONS: NavSectionDef[] = [
 ];
 
 export function navItemVisible(item: NavItemDef, isAdmin: boolean, permissionKeys: string[]): boolean {
+  if (item.adminOnly && !isAdmin) return false;
   if (isAdmin) return true;
   if (!item.anyOf?.length) return true;
   return item.anyOf.some((k) => permissionKeys.includes(k));

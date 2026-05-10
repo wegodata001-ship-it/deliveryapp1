@@ -28,6 +28,10 @@ export type OrderListRow = {
   totalAmountUsd: string | null;
   totalAmountIls: string | null;
   paymentStatus: "unpaid" | "partial" | "paid";
+  /** סימון בקשת עריכה / נעילה — רק הזמנות גמורות */
+  editBadge?: "pending" | "unlock" | "rejected" | "locked" | null;
+  /** מניעת שינוי סטטוס מהיר לעובד בלי אישור */
+  quickStatusLocked?: boolean;
 };
 
 type OrdersSummary = {
@@ -58,6 +62,21 @@ function inlineStatusBadgeClass(sel: OrderStatus): string {
   if (sel === OrderStatus.COMPLETED) return "adm-badge-sel--success";
   if (sel === OrderStatus.OPEN) return "adm-badge-sel--open";
   return "adm-badge-sel--warning";
+}
+
+function orderEditBadgeLabel(b: NonNullable<OrderListRow["editBadge"]>): { emoji: string; text: string; cls: string } {
+  switch (b) {
+    case "pending":
+      return { emoji: "🟠", text: "ממתין לאישור", cls: "adm-order-edit-badge--pending" };
+    case "unlock":
+      return { emoji: "🟢", text: "אושר לעריכה", cls: "adm-order-edit-badge--unlock" };
+    case "rejected":
+      return { emoji: "🔴", text: "נדחה", cls: "adm-order-edit-badge--rejected" };
+    case "locked":
+      return { emoji: "🔒", text: "גמורה נעולה", cls: "adm-order-edit-badge--locked" };
+    default:
+      return { emoji: "", text: "", cls: "" };
+  }
 }
 
 type Props = {
@@ -194,6 +213,7 @@ export function OrdersListShell({
             ) : (
               rows.map((o) => {
                 const selVal = orderStatusToInlineValue(o.status);
+                const editBadgeUi = o.editBadge ? orderEditBadgeLabel(o.editBadge) : null;
                 return (
                   <tr
                     key={o.id}
@@ -218,6 +238,11 @@ export function OrdersListShell({
                         }}
                       >
                         {o.orderNumber ?? "—"}
+                        {editBadgeUi ? (
+                          <span className={`adm-order-edit-badge ${editBadgeUi.cls}`} title={editBadgeUi.text}>
+                            {editBadgeUi.emoji} {editBadgeUi.text}
+                          </span>
+                        ) : null}
                       </button>
                     </td>
                     <td className="adm-table-excel-date" dir="ltr">
@@ -255,7 +280,7 @@ export function OrdersListShell({
                       <select
                         className={`adm-table-status-sel ${inlineStatusBadgeClass(selVal)}`}
                         value={selVal}
-                        disabled={!canEditOrders || busyId === o.id}
+                        disabled={!canEditOrders || busyId === o.id || !!o.quickStatusLocked}
                         aria-label="סטטוס הזמנה"
                         onChange={(e) => void onRowStatusChange(o.id, e.target.value as OrderStatus)}
                       >

@@ -1,15 +1,19 @@
 import { Suspense } from "react";
-import { OrderStatus, PaymentMethod, Prisma } from "@prisma/client";
+import { OrderEditRequestStatus, OrderStatus, PaymentMethod, Prisma } from "@prisma/client";
 import { OrdersListShell, type OrderListRow } from "@/components/admin/OrdersListShell";
 import { OrdersListToolbar, type OrdersCreatedByOption } from "@/components/admin/OrdersListToolbar";
-import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
+import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { requireRoutePermission } from "@/lib/route-access";
 import { prisma } from "@/lib/prisma";
 import { formatLocalYmd, parseDateFilterFromSearchParams } from "@/lib/work-week";
 import { ORDER_COUNTRY_CODES, type OrderCountryCode } from "@/lib/order-countries";
+import { primaryCustomerDisplayName } from "@/lib/customer-names";
+import { hasActiveEditUnlock } from "@/lib/order-edit-lock";
+import { withPerfTimer } from "@/lib/perf-log";
 
 /** רשימת הזמנות חייבת להיבנות מחדש אחרי שמירה — לא מטמון סטטי */
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 const KPI_DEBT_ORDER_CAP = 8000;
 
@@ -136,48 +140,93 @@ export default async function OrdersListPage({
       : {}),
   };
 
-  const [totalOrders, payTotalsAgg, kpiOrders, createdByRows, rows] = await Promise.all([
-    prisma.order.count({ where }),
-    prisma.payment.aggregate({
-      where: { isPaid: true, order: { is: where } },
-      _sum: { amountUsd: true },
-    }),
-    prisma.order.findMany({
-      where,
-      select: { id: true, totalIlsWithVat: true, totalIls: true },
-      take: KPI_DEBT_ORDER_CAP,
-    }),
-    prisma.user.findMany({
-      where: { isActive: true },
-      orderBy: [{ fullName: "asc" }, { username: "asc" }],
-      select: { id: true, fullName: true, username: true },
-      take: 200,
-    }),
-    prisma.order.findMany({
-      where,
-      orderBy: [{ orderDate: "desc" }, { createdAt: "desc" }],
-      take: 500,
-      select: {
-        id: true,
-        orderNumber: true,
-        customerId: true,
-        customerCodeSnapshot: true,
-        customerNameSnapshot: true,
-        orderDate: true,
-        weekCode: true,
-        status: true,
-        sourceCountry: true,
-        paymentMethod: true,
-        amountUsd: true,
-        commissionUsd: true,
-        totalUsd: true,
-        totalIlsWithVat: true,
-        totalIls: true,
-        customer: { select: { phone: true, secondPhone: true } },
-        createdBy: { select: { id: true, fullName: true, username: true } },
-      },
-    }),
-  ]);
+  const [totalOrders, payTotalsAgg, kpiOrders, createdByRows, rows] = await withPerfTimer(
+    "orders.page.fetchOrders",
+    async () =>
+      Promise.all([
+        prisma.order.count({ where }),
+        prisma.payment.aggregate({
+          where: { isPaid: true, order: { is: where } },
+          _sum: { amountUsd: true },
+        }),
+        prisma.order.findMany({
+          where,
+          select: { id: true, totalIlsWithVat: true, totalIls: true },
+          take: KPI_DEBT_ORDER_CAP,
+        }),
+        prisma.user.findMany({
+          where: { isActive: true },
+          orderBy: [{ fullName: "asc" }, { username: "asc" }],
+          select: { id: true, fullName: true, username: true },
+          take: 200,
+        }),
+        prisma.order.findMany({
+          where,
+          orderBy: [{ orderDate: "desc" }, { createdAt: "desc" }],
+          take: 500,
+          select: {
+            id: true,
+            orderNumber: true,
+            customerId: true,
+            customerCodeSnapshot: true,
+            customerNameSnapshot: true,
+            orderDate: true,
+            weekCode: true,
+            status: true,
+            sourceCountry: true,
+            paymentMethod: true,
+            amountUsd: true,
+            commissionUsd: true,
+            totalUsd: true,
+            totalIlsWithVat: true,
+            totalIls: true,
+            customer: {
+              select: {
+                phone: true,
+                secondPhone: true,
+                displayName: true,
+                nameAr: true,
+                nameEn: true,
+                nameHe: true,
+              },
+            },
+            createdBy: { select: { id: true, fullName: true, username: true } },
+            editUnlockedForUserId: true,
+            editUnlockedUntil: true,
+          },
+        }),
+      ]),
+  );
+
+  const completedIds = rows.filter((r) => r.status === OrderStatus.COMPLETED).map((r) => r.id);
+  let pendingEditOrderIds = new Set<string>();
+  const latestEditRequestByOrder = new Map<
+    string,
+    { status: OrderEditRequestStatus; requestedByUserId: string }
+  >();
+  if (completedIds.length > 0) {
+    const [pendingRows, recentRequests] = await Promise.all([
+      prisma.orderEditRequest.findMany({
+        where: { orderId: { in: completedIds }, status: OrderEditRequestStatus.PENDING },
+        select: { orderId: true },
+      }),
+      prisma.orderEditRequest.findMany({
+        where: { orderId: { in: completedIds } },
+        orderBy: { createdAt: "desc" },
+        select: { orderId: true, status: true, requestedByUserId: true },
+        take: 4000,
+      }),
+    ]);
+    pendingEditOrderIds = new Set(pendingRows.map((p) => p.orderId));
+    for (const req of recentRequests) {
+      if (!latestEditRequestByOrder.has(req.orderId)) {
+        latestEditRequestByOrder.set(req.orderId, {
+          status: req.status,
+          requestedByUserId: req.requestedByUserId,
+        });
+      }
+    }
+  }
 
   const debtIds = kpiOrders.map((o) => o.id);
   const payIlsByOrder =
@@ -232,11 +281,48 @@ export default async function OrdersListPage({
       paymentStatus = "partial";
     }
 
+    let editBadge: OrderListRow["editBadge"] = null;
+    if (r.status === OrderStatus.COMPLETED) {
+      if (pendingEditOrderIds.has(r.id)) editBadge = "pending";
+      else if (
+        hasActiveEditUnlock({
+          editUnlockedForUserId: r.editUnlockedForUserId,
+          editUnlockedUntil: r.editUnlockedUntil,
+          viewerUserId: me.id,
+        })
+      )
+        editBadge = "unlock";
+      else {
+        const latest = latestEditRequestByOrder.get(r.id);
+        if (
+          latest?.status === OrderEditRequestStatus.REJECTED &&
+          latest.requestedByUserId === me.id
+        )
+          editBadge = "rejected";
+        else if (!isAdminUser(me)) editBadge = "locked";
+      }
+    }
+
+    const quickStatusLocked =
+      canEditOrders &&
+      !isAdminUser(me) &&
+      r.status === OrderStatus.COMPLETED &&
+      !hasActiveEditUnlock({
+        editUnlockedForUserId: r.editUnlockedForUserId,
+        editUnlockedUntil: r.editUnlockedUntil,
+        viewerUserId: me.id,
+      });
+
     return {
       id: r.id,
       orderNumber: r.orderNumber,
       customerId: r.customerId,
-      customerName: r.customerNameSnapshot,
+      customerName: primaryCustomerDisplayName({
+        nameAr: r.customer?.nameAr ?? null,
+        nameEn: r.customer?.nameEn ?? null,
+        nameHe: r.customer?.nameHe ?? null,
+        displayName: r.customerNameSnapshot ?? r.customer?.displayName ?? "",
+      }),
       customerPhone: r.customer?.phone ?? r.customer?.secondPhone ?? null,
       orderDateYmd: r.orderDate ? formatLocalYmd(new Date(r.orderDate)) : null,
       orderDateTime: fmtDateTime(r.orderDate ? new Date(r.orderDate) : null),
@@ -250,6 +336,8 @@ export default async function OrdersListPage({
       totalAmountUsd: fmtUsd2(r.totalUsd),
       totalAmountIls: fmtIls2(r.totalIlsWithVat ?? r.totalIls),
       paymentStatus,
+      editBadge,
+      quickStatusLocked,
     };
   });
 

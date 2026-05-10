@@ -1,4 +1,5 @@
 import { SignJWT, jwtVerify } from "jose";
+import { perfError, withPerfTimer } from "@/lib/perf-log";
 
 const COOKIE_NAME = "wego_admin_session";
 
@@ -38,31 +39,36 @@ function sessionSecretBytes(): Uint8Array | null {
 }
 
 export async function signSessionToken(payload: SessionPayload): Promise<string> {
-  const secret = sessionSecretBytes();
-  if (!secret) {
-    throw new Error("SESSION_SECRET must be set (min 16 characters) for admin sessions.");
-  }
-  return new SignJWT({ role: payload.role, name: payload.name })
-    .setProtectedHeader({ alg: "HS256" })
-    .setSubject(payload.sub)
-    .setIssuedAt()
-    .setExpirationTime("7d")
-    .sign(secret);
+  return withPerfTimer("auth.signSessionToken", async () => {
+    const secret = sessionSecretBytes();
+    if (!secret) {
+      throw new Error("SESSION_SECRET must be set (min 16 characters) for admin sessions.");
+    }
+    return new SignJWT({ role: payload.role, name: payload.name })
+      .setProtectedHeader({ alg: "HS256" })
+      .setSubject(payload.sub)
+      .setIssuedAt()
+      .setExpirationTime("7d")
+      .sign(secret);
+  });
 }
 
 export async function verifySessionToken(token: string): Promise<SessionPayload | null> {
-  const secret = sessionSecretBytes();
-  if (!secret) return null;
-  try {
-    const { payload } = await jwtVerify(token, secret, { algorithms: ["HS256"] });
-    const sub = payload.sub;
-    const role = payload.role as SessionPayload["role"] | undefined;
-    const name = typeof payload.name === "string" ? payload.name : "";
-    if (!sub || (role !== "ADMIN" && role !== "EMPLOYEE")) return null;
-    return { sub, role, name };
-  } catch {
-    return null;
-  }
+  return withPerfTimer("auth.verifySessionToken", async () => {
+    const secret = sessionSecretBytes();
+    if (!secret) return null;
+    try {
+      const { payload } = await jwtVerify(token, secret, { algorithms: ["HS256"] });
+      const sub = payload.sub;
+      const role = payload.role as SessionPayload["role"] | undefined;
+      const name = typeof payload.name === "string" ? payload.name : "";
+      if (!sub || (role !== "ADMIN" && role !== "EMPLOYEE")) return null;
+      return { sub, role, name };
+    } catch (error) {
+      perfError("auth.verifySessionToken.invalid", error);
+      return null;
+    }
+  });
 }
 
 export const adminSessionCookieName = COOKIE_NAME;

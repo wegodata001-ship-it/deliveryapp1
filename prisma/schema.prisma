@@ -33,6 +33,12 @@ enum OrderSourceCountry {
   UAE
 }
 
+enum OrderEditRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 enum PaymentMethod {
   POINT
   BANK_TRANSFER
@@ -67,6 +73,11 @@ model User {
   auditLogs       AuditLog[]
   legacyImports   LegacyRawRow[]    @relation("LegacyImportUser")
   financialSettingsUpdates FinancialSettings[]
+  orderEditRequestsRequested OrderEditRequest[] @relation("OrderEditRequestRequestedBy")
+  orderEditRequestsApproved  OrderEditRequest[] @relation("OrderEditRequestApprovedBy")
+  orderEditRequestsRejected  OrderEditRequest[] @relation("OrderEditRequestRejectedBy")
+  ordersEditUnlockedFor      Order[]            @relation("OrderEditUnlockFor")
+  notifications              UserNotification[]
 }
 
 /** הגדרות שער דולר גלובליות: בסיס (usd_rate_base), עמלה (usd_fee), שער סופי מחושב (usd_rate_final). */
@@ -137,6 +148,8 @@ model Customer {
 
   @@index([customerCode])
   @@index([displayName])
+  @@index([nameAr])
+  @@index([nameEn])
   @@index([phone])
   @@index([oldCustomerCode])
 }
@@ -185,14 +198,60 @@ model Order {
   createdBy    User?         @relation("OrderCreatedBy", fields: [createdById], references: [id])
   paymentPoint PaymentPoint? @relation(fields: [paymentPointId], references: [id])
   payments    Payment[]
+  /** נפתח זמנית לאחר אישור מנהל לעריכת הזמנה בסטטוס הושלמה */
+  editUnlockedForUserId String?
+  editUnlockedUntil     DateTime?
+  editUnlockedFor       User?              @relation("OrderEditUnlockFor", fields: [editUnlockedForUserId], references: [id])
+  editRequests          OrderEditRequest[]
 
   @@index([orderNumber])
   @@index([oldOrderNumber])
   @@index([weekCode])
   @@index([orderDate])
+  @@index([createdAt])
   @@index([status])
   @@index([customerId])
   @@index([paymentPointId])
+  @@index([editUnlockedForUserId])
+}
+
+model OrderEditRequest {
+  id                String                 @id @default(uuid())
+  orderId           String
+  requestedByUserId String
+  requestReason     String                 @db.Text
+  status            OrderEditRequestStatus @default(PENDING)
+  createdAt         DateTime               @default(now())
+  approvedAt        DateTime?
+  approvedByUserId  String?
+  rejectedAt        DateTime?
+  rejectedByUserId  String?
+
+  order       Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  requestedBy User  @relation("OrderEditRequestRequestedBy", fields: [requestedByUserId], references: [id])
+  approvedBy  User? @relation("OrderEditRequestApprovedBy", fields: [approvedByUserId], references: [id])
+  rejectedBy  User? @relation("OrderEditRequestRejectedBy", fields: [rejectedByUserId], references: [id])
+
+  @@index([orderId])
+  @@index([status])
+  @@index([requestedByUserId])
+  @@index([createdAt])
+}
+
+model UserNotification {
+  id        String    @id @default(cuid())
+  userId    String
+  kind      String
+  title     String
+  body      String?
+  payload   Json?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
 }
 
 model Payment {
@@ -232,6 +291,7 @@ model Payment {
   @@index([orderId])
   @@index([weekCode])
   @@index([paymentDate])
+  @@index([createdAt])
   @@index([isPaid])
 }
 
@@ -371,4 +431,86 @@ model ExcelImportRow {
   @@index([fileId])
   @@index([status])
   @@index([rowNumber])
+}
+
+/// SQL-managed table used by balances workflow (created via raw SQL).
+model CustomerBalanceStatusOverride {
+  customerId     String   @id
+  statusOverride String?
+  note           String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @default(now())
+}
+
+/// SQL-managed table used by source-tables workflow (created via raw SQL).
+model SourcePaymentMethod {
+  id        String   @id
+  nameHe    String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+}
+
+/// SQL-managed table used by source-tables workflow (created via raw SQL).
+model SourceStatus {
+  id        String   @id
+  nameHe    String
+  color     String   @default("info")
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+}
+
+/// SQL-managed table used by settings workflow (created via raw SQL).
+model AdminSystemSettings {
+  settingKey   String   @id @map("setting_key")
+  settingValue String   @map("setting_value")
+  updatedAt    DateTime @default(now()) @map("updated_at") @db.Timestamp(6)
+
+  @@map("admin_system_settings")
+}
+
+/// SQL-managed import table used by Excel API routes (created via raw SQL).
+model ManualImport {
+  id          String            @id
+  fileName    String?
+  importDate  DateTime          @default(now())
+  totalRows   Int               @default(0)
+  validRows   Int               @default(0)
+  errorRows   Int               @default(0)
+  status      String            @default("draft")
+  createdAt   DateTime          @default(now())
+  invalidRows Int               @default(0)
+  fileMeta    Json?
+  previewRows Json?
+  importRows  ManualImportRow[]
+
+  @@index([importDate])
+  @@index([status])
+  @@map("imports")
+}
+
+/// SQL-managed import-rows table used by Excel API routes (created via raw SQL).
+model ManualImportRow {
+  id           String       @id
+  importId     String
+  rowNumber    Int
+  name         String?
+  phone        String?
+  city         String?
+  boxes        Int?
+  weight       Decimal?     @db.Decimal(19, 4)
+  amountLeft   Decimal?     @db.Decimal(19, 4)
+  amountRight  Decimal?     @db.Decimal(19, 4)
+  notes        String?
+  status       String       @default("ERROR")
+  errorMessage String?
+  createdAt    DateTime     @default(now())
+  data         Json?
+  import       ManualImport @relation(fields: [importId], references: [id], onDelete: Cascade, map: "import_rows_import_fk")
+
+  @@index([importId])
+  @@index([rowNumber])
+  @@index([status])
+  @@map("import_rows")
 }

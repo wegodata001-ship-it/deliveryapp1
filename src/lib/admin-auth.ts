@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import type { User } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { perfError, withPerfTimer } from "@/lib/perf-log";
 import {
   adminSessionCookieName,
   adminSessionCookieOptions,
@@ -13,41 +14,60 @@ import {
 export type AppUser = User & { permissionKeys: string[] };
 
 export async function getSessionPayload(): Promise<SessionPayload | null> {
-  const token = (await cookies()).get(adminSessionCookieName)?.value;
-  if (!token) return null;
-  return verifySessionToken(token);
+  return withPerfTimer("auth.getSessionPayload", async () => {
+    const token = (await cookies()).get(adminSessionCookieName)?.value;
+    if (!token) return null;
+    return verifySessionToken(token);
+  });
 }
 
 export async function getCurrentUser(): Promise<AppUser | null> {
-  const session = await getSessionPayload();
-  if (!session || (session.role !== "ADMIN" && session.role !== "EMPLOYEE")) return null;
+  return withPerfTimer("auth.getCurrentUser", async () => {
+    const session = await getSessionPayload();
+    if (!session || (session.role !== "ADMIN" && session.role !== "EMPLOYEE")) return null;
 
-  const user = await prisma.user.findUnique({
-    where: { id: session.sub },
-    include: {
-      permissions: {
-        include: {
-          permission: { select: { key: true, isActive: true } },
+    const user = await prisma.user.findUnique({
+      where: { id: session.sub },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        username: true,
+        passwordHash: true,
+        role: true,
+        isActive: true,
+        lastLoginAt: true,
+        createdAt: true,
+        updatedAt: true,
+        permissions: {
+          select: {
+            permission: { select: { key: true, isActive: true } },
+          },
         },
       },
-    },
+    });
+
+    if (!user || !user.isActive) return null;
+
+    const permissionKeys = user.permissions
+      .map((up) => up.permission)
+      .filter((p) => p.isActive)
+      .map((p) => p.key);
+
+    const { permissions: _p, ...rest } = user;
+    return Object.assign(rest, { permissionKeys }) as AppUser;
   });
-
-  if (!user || !user.isActive) return null;
-
-  const permissionKeys = user.permissions
-    .map((up) => up.permission)
-    .filter((p) => p.isActive)
-    .map((p) => p.key);
-
-  const { permissions: _p, ...rest } = user;
-  return Object.assign(rest, { permissionKeys }) as AppUser;
 }
 
 export async function requireAuth(): Promise<AppUser> {
-  const user = await getCurrentUser();
-  if (!user) redirect("/admin-login");
-  return user;
+  try {
+    const user = await getCurrentUser();
+    if (!user) redirect("/admin-login");
+    return user;
+  } catch (error) {
+    perfError("auth.requireAuth", error);
+    throw error;
+  }
 }
 
 export function isAdminUser(user: Pick<User, "role">): boolean {

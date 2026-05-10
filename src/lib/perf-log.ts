@@ -1,0 +1,37 @@
+const PERF_ENABLED =
+  process.env.DEBUG_PERF_LOGS === "1" ||
+  process.env.DEBUG_PERF_LOGS === "true" ||
+  process.env.NODE_ENV !== "production";
+
+export function perfEnabled(): boolean {
+  return PERF_ENABLED;
+}
+
+export function perfNowLabel(scope: string): string {
+  return `[perf] ${scope}`;
+}
+
+export function perfError(scope: string, error: unknown, extra?: Record<string, unknown>): void {
+  if (!PERF_ENABLED) return;
+  console.error(perfNowLabel(scope), {
+    error: error instanceof Error ? error.message : String(error),
+    ...(extra ?? {}),
+  });
+}
+
+export async function withPerfTimer<T>(scope: string, fn: () => Promise<T>): Promise<T> {
+  if (!PERF_ENABLED) {
+    return fn();
+  }
+  const label = perfNowLabel(scope);
+  console.time(label);
+  try {
+    const out = await fn();
+    return out;
+  } catch (error) {
+    perfError(scope, error);
+    throw error;
+  } finally {
+    console.timeEnd(label);
+  }
+}

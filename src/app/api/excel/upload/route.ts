@@ -6,6 +6,8 @@ import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { ensureExcelImportTables } from "@/lib/excel-import";
 import { prisma } from "@/lib/prisma";
 
+export const runtime = "nodejs";
+
 type SheetCell = string | number | boolean | Date | null | undefined;
 const MAX_DECIMAL_19_4_ABS = 1_000_000_000_000_000; // 10^15 (exclusive in DB)
 const MAX_INT32_ABS = 2_147_483_647;

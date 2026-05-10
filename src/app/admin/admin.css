@@ -9592,3 +9592,161 @@ select.payment-modal-inline-input {
     grid-template-columns: 1fr;
   }
 }
+
+/* עריכת הזמנה נעולה + בקשות מנהל */
+.adm-oc-edit-lock-banner {
+  margin-bottom: 0.75rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 12px;
+  border: 1px solid #fdba74;
+  background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%);
+  color: #9a3412;
+  font-weight: 800;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+
+.adm-oc-edit-lock-banner p {
+  margin: 0;
+}
+
+.adm-oc-edit-lock-actions {
+  margin-top: 0.55rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.adm-oc-edit-request-sent-flash {
+  margin-bottom: 0.65rem;
+}
+
+.adm-oc-edit-unlock-hint {
+  margin-bottom: 0.65rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid #86efac;
+  background: #ecfdf5;
+  color: #047857;
+  font-weight: 700;
+  font-size: 0.88rem;
+}
+
+.adm-oc-edit-request-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.adm-oc-edit-request-modal {
+  width: min(420px, 100%);
+  background: #fff;
+  border-radius: 16px;
+  padding: 1rem 1.1rem;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.18);
+  border: 1px solid #e2e8f0;
+}
+
+.adm-oc-edit-request-modal h4 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+}
+
+.adm-oc-edit-request-modal textarea {
+  width: 100%;
+  min-height: 96px;
+  margin-top: 0.35rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 10px;
+  border: 1px solid #cbd5e1;
+  font: inherit;
+}
+
+.adm-oc-edit-request-modal-actions {
+  margin-top: 0.75rem;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.45rem;
+}
+
+.adm-order-edit-reason-cell {
+  max-width: 220px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.adm-order-edit-actions {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.adm-order-edit-actions-cell {
+  white-space: nowrap;
+}
+
+.adm-order-edit-req-status {
+  display: inline-block;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-weight: 800;
+  font-size: 0.82rem;
+}
+
+.adm-order-edit-req-status--pending {
+  background: #ffedd5;
+  color: #c2410c;
+  border: 1px solid #fdba74;
+}
+
+.adm-order-edit-req-status--approved {
+  background: #d1fae5;
+  color: #047857;
+  border: 1px solid #86efac;
+}
+
+.adm-order-edit-req-status--rejected {
+  background: #fee2e2;
+  color: #b91c1c;
+  border: 1px solid #fca5a5;
+}
+
+.adm-order-edit-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  margin-inline-start: 0.35rem;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.adm-order-edit-badge--pending {
+  background: #ffedd5;
+  color: #c2410c;
+}
+
+.adm-order-edit-badge--unlock {
+  background: #d1fae5;
+  color: #047857;
+}
+
+.adm-order-edit-badge--rejected {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.adm-order-edit-badge--locked {
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+}

@@ -3,6 +3,7 @@
 import { Prisma } from "@prisma/client";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
+import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { endOfLocalDay, parseLocalDate } from "@/lib/work-week";
 
 export type CustomerBalanceStatus = "NOT_PAID" | "PARTIAL" | "PAID" | "PROBLEM" | "PAUSED";
@@ -132,7 +133,14 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       deletedAt: null,
       isActive: true,
       ...(query.filters?.name?.trim()
-        ? { displayName: { contains: query.filters.name.trim(), mode: "insensitive" as const } }
+        ? {
+            OR: [
+              { displayName: { contains: query.filters.name.trim(), mode: "insensitive" as const } },
+              { nameAr: { contains: query.filters.name.trim(), mode: "insensitive" as const } },
+              { nameEn: { contains: query.filters.name.trim(), mode: "insensitive" as const } },
+              { nameHe: { contains: query.filters.name.trim(), mode: "insensitive" as const } },
+            ],
+          }
         : {}),
       ...(query.filters?.code?.trim()
         ? { customerCode: { contains: query.filters.code.trim(), mode: "insensitive" as const } }
@@ -142,6 +150,9 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     select: {
       id: true,
       displayName: true,
+      nameAr: true,
+      nameEn: true,
+      nameHe: true,
       customerCode: true,
       orders: {
         where: {
@@ -230,7 +241,12 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     const override = overrideMap.get(c.id) ?? null;
     return {
       customerId: c.id,
-      customerName: c.displayName,
+      customerName: primaryCustomerDisplayName({
+        nameAr: c.nameAr,
+        nameEn: c.nameEn,
+        nameHe: c.nameHe,
+        displayName: c.displayName,
+      }),
       customerCode: c.customerCode,
       totalOrdersILS: money(expectedIls),
       totalPaymentsILS: money(receivedIls),

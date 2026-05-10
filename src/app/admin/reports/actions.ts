@@ -3,6 +3,7 @@
 import { OrderStatus, PaymentMethod, Prisma } from "@prisma/client";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
+import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { endOfLocalDay, formatLocalYmd, parseLocalDate } from "@/lib/work-week";
 
 export type ReportKind =
@@ -166,7 +167,7 @@ export async function getReportsDashboardAction(filters: ReportFilters): Promise
       where: { deletedAt: null, isActive: true },
       take: 200,
       orderBy: { displayName: "asc" },
-      select: { id: true, displayName: true, customerCode: true },
+      select: { id: true, displayName: true, nameAr: true, nameEn: true, nameHe: true, customerCode: true },
     }),
   ]);
   const reports: ReportCard[] = [
@@ -179,7 +180,15 @@ export async function getReportsDashboardAction(filters: ReportFilters): Promise
   return {
     kpis,
     reports,
-    customers: customers.map((c) => ({ id: c.id, label: c.customerCode ? `${c.displayName} (${c.customerCode})` : c.displayName })),
+    customers: customers.map((c) => {
+      const disp = primaryCustomerDisplayName({
+        nameAr: c.nameAr,
+        nameEn: c.nameEn,
+        nameHe: c.nameHe,
+        displayName: c.displayName,
+      });
+      return { id: c.id, label: c.customerCode ? `${disp} (${c.customerCode})` : disp };
+    }),
     statusOptions: Object.values(OrderStatus).map((value) => ({ value, label: STATUS_HE[value] ?? value })),
     paymentMethodOptions: Object.values(PaymentMethod).map((value) => ({ value, label: METHOD_HE[value] ?? value })),
   };
@@ -327,6 +336,9 @@ export async function getReportTableAction(kind: ReportKind, filters: ReportFilt
     orderBy: { displayName: "asc" },
     select: {
       displayName: true,
+      nameAr: true,
+      nameEn: true,
+      nameHe: true,
       customerCode: true,
       orders: {
         where: {
@@ -362,7 +374,18 @@ export async function getReportTableAction(kind: ReportKind, filters: ReportFilt
 
     total = total.add(expected);
     paid = paid.add(received);
-    tableRows.push([c.displayName, c.customerCode ?? "", moneyIls(expected), moneyIls(received), moneyIls(remaining)]);
+    tableRows.push([
+      primaryCustomerDisplayName({
+        nameAr: c.nameAr,
+        nameEn: c.nameEn,
+        nameHe: c.nameHe,
+        displayName: c.displayName,
+      }),
+      c.customerCode ?? "",
+      moneyIls(expected),
+      moneyIls(received),
+      moneyIls(remaining),
+    ]);
   }
   return {
     id: kind,

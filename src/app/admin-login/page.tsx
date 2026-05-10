@@ -4,6 +4,7 @@ import { LoginForm } from "./LoginForm";
 import "./admin-login.css";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 export default async function AdminLoginPage({
   searchParams,

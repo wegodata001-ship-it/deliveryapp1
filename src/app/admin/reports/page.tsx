@@ -2,6 +2,9 @@ import { getReportsDashboardAction, type ReportFilters } from "@/app/admin/repor
 import { ReportsClient } from "@/components/admin/ReportsClient";
 import { requireRoutePermission } from "@/lib/route-access";
 import { formatLocalYmd } from "@/lib/work-week";
+import { withPerfTimer } from "@/lib/perf-log";
+
+export const runtime = "nodejs";
 
 export default async function ReportsPage({
   searchParams,
@@ -16,6 +19,8 @@ export default async function ReportsPage({
     dateTo: typeof sp.to === "string" ? sp.to : formatLocalYmd(now),
     workWeek: typeof sp.week === "string" ? sp.week : undefined,
   };
-  const initialPayload = await getReportsDashboardAction(initialFilters);
+  const initialPayload = await withPerfTimer("reports.page.fetchDashboard", () =>
+    getReportsDashboardAction(initialFilters),
+  );
   return <ReportsClient initialPayload={initialPayload} initialFilters={initialFilters} />;
 }

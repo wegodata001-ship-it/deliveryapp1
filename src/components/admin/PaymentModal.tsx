@@ -40,10 +40,10 @@ import {
   parseLocalDate,
   prevWeekCode,
 } from "@/lib/work-week";
+import { VAT_GROSS_FACTOR } from "@/lib/vat";
+import { primaryCustomerDisplayName } from "@/lib/customer-names";
 
-/** סכום העברה בנקאית כולל מע״מ — פירוק נטו לפי 18% */
-const BANK_TRANSFER_INCLUDES_VAT_FACTOR = 1.18;
-
+/** סכום העברה בנקאית כולל מע״מ — פירוק נטו לפי גורם VAT_GROSS_FACTOR */
 function addDays(d: Date, days: number): Date {
   const out = new Date(d);
   out.setDate(out.getDate() + days);
@@ -78,7 +78,7 @@ const COUNTRY_BADGE_SHORT: Record<OrderCountryCode, string> = {
 
 type BadgeEditField = "week" | "country" | "date" | "time" | null;
 
-type CustFieldKey = "code" | "displayName" | "nameHe" | "nameAr" | "index";
+type CustFieldKey = "code" | "displayName" | "nameEn" | "nameAr" | "index";
 
 type CustomerApiSearchRow = {
   id: string;
@@ -86,6 +86,7 @@ type CustomerApiSearchRow = {
   oldCustomerCode: string | null;
   displayName: string;
   nameHe: string | null;
+  nameEn: string | null;
   nameAr: string | null;
   phone: string | null;
   city: string | null;
@@ -98,7 +99,7 @@ const UUID_SEARCH_RE =
 const EMPTY_CUSTOMER_DRAFT: Record<CustFieldKey, string> = {
   code: "",
   displayName: "",
-  nameHe: "",
+  nameEn: "",
   nameAr: "",
   index: "",
 };
@@ -332,10 +333,10 @@ export function PaymentModal({
     return { totalTransactions, totalPaidDb, remaining };
   }, [matched]);
 
-  /** העברה ללא מע״מ (₪) — סכום ההעברה כולל מע״מ מפוצל ב־1.18 */
+  /** העברה ללא מע״מ (₪) — סכום ההעברה כולל מע״מ מפוצל ב־VAT_GROSS_FACTOR */
   const transferNoVatIls = useMemo(() => {
     if (!Number.isFinite(tN) || tN <= 0) return 0;
-    return roundMoney2(tN / BANK_TRANSFER_INCLUDES_VAT_FACTOR);
+    return roundMoney2(tN / VAT_GROSS_FACTOR);
   }, [tN]);
 
   useEffect(() => {
@@ -360,7 +361,7 @@ export function PaymentModal({
     setDraftCustomer({
       code: res.customer.customerCode ?? "",
       displayName: res.customer.displayName ?? "",
-      nameHe: res.customer.nameHe ?? "",
+      nameEn: res.customer.nameEn ?? res.customer.nameHe ?? "",
       nameAr: res.customer.nameAr ?? "",
       index: res.customer.customerIndex ?? "",
     });
@@ -483,14 +484,21 @@ export function PaymentModal({
           }
           return;
         }
+        if (!UUID_SEARCH_RE.test(q) && q.length < 2) {
+          setCustomerHits([]);
+          setCustDdOpen(false);
+          setCustSearchNoHits(false);
+          return;
+        }
 
         let rows: CustomerApiSearchRow[] = [];
         try {
-          const res = await fetch(`/api/customers?query=${encodeURIComponent(q)}`);
+          const res = await fetch(`/api/customers?query=${encodeURIComponent(q)}&limit=20&page=1`);
           if (!res.ok) {
             if (!cancelled && gen === custSearchGenRef.current) {
               setCustomerHits([]);
               setCustSearchNoHits(false);
+              setLoadErr("טעינת נתונים נכשלה");
             }
             return;
           }
@@ -500,6 +508,7 @@ export function PaymentModal({
           if (!cancelled && gen === custSearchGenRef.current) {
             setCustomerHits([]);
             setCustSearchNoHits(false);
+            setLoadErr("בעיה בחיבור לשרת");
           }
           return;
         }
@@ -511,7 +520,12 @@ export function PaymentModal({
 
         const hits: CustomerSearchRow[] = rows.map((r) => ({
           id: r.id,
-          label: r.displayName,
+          label: primaryCustomerDisplayName({
+            nameAr: r.nameAr,
+            nameEn: r.nameEn,
+            nameHe: r.nameHe,
+            displayName: r.displayName,
+          }),
           code: r.customerCode,
           customerType: r.customerType,
           city: r.city,
@@ -768,13 +782,15 @@ export function PaymentModal({
                   />
                 </label>
                 <label className="payment-modal-cust-inp-wrap">
-                  <span className="payment-modal-cust-inp-lbl">שם בעברית</span>
+                  <span className="payment-modal-cust-inp-lbl">שם באנגלית</span>
                   <input
                     type="text"
                     autoComplete="off"
                     className="payment-modal-cust-inp"
-                    value={draftCustomer.nameHe}
-                    onChange={(e) => onDraftCustomerChange("nameHe", e.target.value)}
+                    dir="ltr"
+                    placeholder="Enter English name"
+                    value={draftCustomer.nameEn}
+                    onChange={(e) => onDraftCustomerChange("nameEn", e.target.value)}
                   />
                 </label>
                 <label className="payment-modal-cust-inp-wrap">
@@ -793,6 +809,8 @@ export function PaymentModal({
                     type="text"
                     autoComplete="off"
                     className="payment-modal-cust-inp"
+                    dir="rtl"
+                    placeholder="הזן שם בערבית"
                     value={draftCustomer.nameAr}
                     onChange={(e) => onDraftCustomerChange("nameAr", e.target.value)}
                   />

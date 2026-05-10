@@ -245,10 +245,27 @@
   }
 }
 
+.adm-win-panel--order-capture .adm-oc-legacy-topbar-item:has(.adm-oc-week-row) {
+  flex-shrink: 0;
+}
+
 .adm-win-panel--order-capture .adm-oc-week-row {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  flex-shrink: 0;
+}
+
+/* שדה AH בלבד — רוחב מספיק ל־AH-119 / AH-120 בלי חיתוך (ה־topbar הכללי נשאר ללא שינוי) */
+.adm-win-panel--order-capture .adm-oc-week-row .adm-oc-legacy-top-inp {
+  min-width: 90px;
+  width: 90px;
+  max-width: none;
+  flex-shrink: 0;
+  text-align: center;
+  text-overflow: clip;
+  overflow: visible;
+  box-sizing: border-box;
 }
 
 .adm-win-panel--order-capture .adm-oc-week-arrow,

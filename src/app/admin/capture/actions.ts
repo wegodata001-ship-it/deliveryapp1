@@ -1,9 +1,9 @@
 "use server";
 
 import { randomUUID } from "crypto";
-import { OrderStatus, PaymentMethod, Prisma } from "@prisma/client";
+import { OrderEditRequestStatus, OrderStatus, PaymentMethod, Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
-import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
+import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { breakdownIlsIncludingVat, computeFromUsdAmount } from "@/lib/financial-calc";
 import { ensureDefaultFinancialSettings, getCurrentFinancialSettings } from "@/lib/financial-settings";
 import { DEFAULT_WEEK_CODE, formatLocalHm, formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate, parseLocalDateTime } from "@/lib/work-week";
@@ -12,6 +12,30 @@ import { prisma } from "@/lib/prisma";
 import { parseSplitPaymentMethodRaw } from "@/lib/order-capture-payment-methods";
 import { getSelectedCountriesForOrdersAction } from "@/app/admin/settings/actions";
 import { ORDER_COUNTRY_CODES, coerceOrderCountryForForm, normalizeOrderSourceCountry, type OrderCountryCode } from "@/lib/order-countries";
+import { prismaVatRatePercent } from "@/lib/vat-prisma";
+import { computeCustomerNamePatches, primaryCustomerDisplayName } from "@/lib/customer-names";
+import { canUserEditCompletedOrder } from "@/lib/order-edit-lock";
+import { clearExpiredOrderEditUnlockForOrder } from "@/app/admin/order-edit-requests/actions";
+import { perfError, withPerfTimer } from "@/lib/perf-log";
+
+async function applyCustomerNameDraftsIfNeeded(
+  customerId: string,
+  draftAr: string | null | undefined,
+  draftEn: string | null | undefined,
+): Promise<void> {
+  const cust = await prisma.customer.findFirst({
+    where: { id: customerId, deletedAt: null, isActive: true },
+    select: { nameAr: true, nameEn: true },
+  });
+  if (!cust) return;
+  const patches = computeCustomerNamePatches(
+    { nameAr: cust.nameAr, nameEn: cust.nameEn },
+    draftAr ?? "",
+    draftEn ?? "",
+  );
+  if (Object.keys(patches).length === 0) return;
+  await prisma.customer.update({ where: { id: customerId }, data: patches });
+}
 
 export type CustomerSearchRow = {
   id: string;
@@ -446,7 +470,7 @@ export async function capturePaymentAction(form: {
   const base = settings.baseDollarRate;
   const fee = settings.dollarFee;
   const final = settings.finalDollarRate;
-  const vatRate = new Prisma.Decimal("18");
+  const vatRate = prismaVatRatePercent();
 
   const snapIn = { baseDollarRate: base, dollarFee: fee, finalDollarRate: final, vatRate };
 
@@ -686,48 +710,68 @@ async function generateNextOrderNumber(weekCode: string): Promise<{ orderNumber:
 }
 
 export async function searchCustomersForOrderAction(query: string): Promise<CustomerSearchRow[]> {
-  const me = await requireAuth();
-  if (!userHasAnyPermission(me, ["create_orders", "edit_orders", "receive_payments"])) return [];
+  return withPerfTimer("search.customers.capture", async () => {
+    const me = await requireAuth();
+    if (!userHasAnyPermission(me, ["create_orders", "edit_orders", "receive_payments"])) return [];
 
-  const q = query.trim();
-  const where: Prisma.CustomerWhereInput = {
-    isActive: true,
-    deletedAt: null,
-  };
-  if (q.length >= 1) {
+    const q = query.trim();
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(q);
+    if (!isUuid && q.length < 2) return [];
+
+    const where: Prisma.CustomerWhereInput = {
+      isActive: true,
+      deletedAt: null,
+    };
     const or: Prisma.CustomerWhereInput[] = [
       { displayName: { contains: q, mode: "insensitive" } },
       { nameHe: { contains: q, mode: "insensitive" } },
       { nameAr: { contains: q, mode: "insensitive" } },
+      { nameEn: { contains: q, mode: "insensitive" } },
       { customerCode: { contains: q, mode: "insensitive" } },
       { oldCustomerCode: { contains: q, mode: "insensitive" } },
       { phone: { contains: q } },
       { secondPhone: { contains: q } },
+      { customerCode: { equals: q, mode: "insensitive" } },
+      { oldCustomerCode: { equals: q, mode: "insensitive" } },
+      { phone: { equals: q } },
+      { secondPhone: { equals: q } },
     ];
-    if (q.length >= 8) {
+    if (isUuid) {
       or.push({ id: q });
     }
-    if (q.length >= 2) {
-      or.push({ oldCustomerCode: { equals: q, mode: "insensitive" } });
-    }
     where.OR = or;
-  }
 
-  const rows = await prisma.customer.findMany({
-    where,
-    take: 30,
-    orderBy: { displayName: "asc" },
-    select: { id: true, displayName: true, customerCode: true, customerType: true, city: true, phone: true },
+    const rows = await prisma.customer.findMany({
+      where,
+      take: 20,
+      orderBy: { displayName: "asc" },
+      select: {
+        id: true,
+        displayName: true,
+        customerCode: true,
+        customerType: true,
+        city: true,
+        phone: true,
+        nameAr: true,
+        nameEn: true,
+        nameHe: true,
+      },
+    });
+
+    return rows.map((r) => ({
+      id: r.id,
+      label: primaryCustomerDisplayName({
+        nameAr: r.nameAr,
+        nameEn: r.nameEn,
+        nameHe: r.nameHe,
+        displayName: r.displayName,
+      }),
+      code: r.customerCode,
+      customerType: r.customerType,
+      city: r.city,
+      phone: r.phone,
+    }));
   });
-
-  return rows.map((r) => ({
-    id: r.id,
-    label: r.displayName,
-    code: r.customerCode,
-    customerType: r.customerType,
-    city: r.city,
-    phone: r.phone,
-  }));
 }
 
 /** זיהוי לקוח לפי מזהה מערכת, קוד לקוח או קוד ישן — התאמה מדויקת בלבד */
@@ -748,12 +792,27 @@ export async function resolveCustomerForCaptureAction(raw: string): Promise<Cust
         ...(q.length >= 2 ? [{ oldCustomerCode: { equals: q, mode: "insensitive" as const } }] : []),
       ],
     },
-    select: { id: true, displayName: true, customerCode: true, customerType: true, city: true, phone: true },
+    select: {
+      id: true,
+      displayName: true,
+      customerCode: true,
+      customerType: true,
+      city: true,
+      phone: true,
+      nameAr: true,
+      nameEn: true,
+      nameHe: true,
+    },
   });
   if (!row) return null;
   return {
     id: row.id,
-    label: row.displayName,
+    label: primaryCustomerDisplayName({
+      nameAr: row.nameAr,
+      nameEn: row.nameEn,
+      nameHe: row.nameHe,
+      displayName: row.displayName,
+    }),
     code: row.customerCode,
     customerType: row.customerType,
     city: row.city,
@@ -768,14 +827,29 @@ export async function listCustomersForOrderQuickPickAction(): Promise<CustomerSe
 
   const rows = await prisma.customer.findMany({
     where: { isActive: true, deletedAt: null },
-    take: 80,
+    take: 50,
     orderBy: { displayName: "asc" },
-    select: { id: true, displayName: true, customerCode: true, customerType: true, city: true, phone: true },
+    select: {
+      id: true,
+      displayName: true,
+      customerCode: true,
+      customerType: true,
+      city: true,
+      phone: true,
+      nameAr: true,
+      nameEn: true,
+      nameHe: true,
+    },
   });
 
   return rows.map((r) => ({
     id: r.id,
-    label: r.displayName,
+    label: primaryCustomerDisplayName({
+      nameAr: r.nameAr,
+      nameEn: r.nameEn,
+      nameHe: r.nameHe,
+      displayName: r.displayName,
+    }),
     code: r.customerCode,
     customerType: r.customerType,
     city: r.city,
@@ -877,7 +951,7 @@ export async function createMinimalOrderAction(form: {
       commissionIls: zero,
       totalIls: amt,
       exchangeRate: null,
-      vatRate: new Prisma.Decimal("18"),
+      vatRate: prismaVatRatePercent(),
       amountWithoutVat: amt,
       snapshotBaseDollarRate: null,
       snapshotDollarFee: null,
@@ -917,6 +991,7 @@ export type CustomerCardOrderRow = {
 export type CustomerCardSnapshot = {
   id: string;
   displayName: string;
+  nameAr: string | null;
   nameHe: string | null;
   nameEn: string | null;
   customerCode: string | null;
@@ -1036,6 +1111,9 @@ export async function listClientsLedgerAction(params: {
       ? {
           OR: [
             { displayName: { contains: q, mode: "insensitive" } },
+            { nameAr: { contains: q, mode: "insensitive" } },
+            { nameEn: { contains: q, mode: "insensitive" } },
+            { nameHe: { contains: q, mode: "insensitive" } },
             { phone: { contains: q } },
             { email: { contains: q, mode: "insensitive" } },
           ],
@@ -1053,13 +1131,27 @@ export async function listClientsLedgerAction(params: {
     orderBy: { createdAt: "desc" },
     skip,
     take: pageSize,
-    select: { id: true, displayName: true, phone: true, email: true, createdAt: true },
+    select: {
+      id: true,
+      displayName: true,
+      nameAr: true,
+      nameEn: true,
+      nameHe: true,
+      phone: true,
+      email: true,
+      createdAt: true,
+    },
   });
 
   return {
     rows: rows.map((r) => ({
       id: r.id,
-      name: r.displayName,
+      name: primaryCustomerDisplayName({
+        nameAr: r.nameAr,
+        nameEn: r.nameEn,
+        nameHe: r.nameHe,
+        displayName: r.displayName,
+      }),
       phone: r.phone,
       email: r.email,
       createdAt: r.createdAt.toISOString(),
@@ -1098,6 +1190,7 @@ export async function getCustomerCardSnapshotAction(customerId: string): Promise
     select: {
       id: true,
       displayName: true,
+      nameAr: true,
       nameHe: true,
       nameEn: true,
       customerCode: true,
@@ -1133,6 +1226,7 @@ export async function getCustomerCardSnapshotAction(customerId: string): Promise
   return {
     id: cust.id,
     displayName: cust.displayName,
+    nameAr: cust.nameAr,
     nameHe: cust.nameHe,
     nameEn: cust.nameEn,
     customerCode: cust.customerCode,
@@ -1155,6 +1249,8 @@ export async function getCustomerCardSnapshotAction(customerId: string): Promise
 export async function updateCustomerCardDetailsAction(form: {
   customerId: string;
   displayName: string;
+  nameAr?: string | null;
+  nameEn?: string | null;
   nameHe?: string | null;
   phone?: string | null;
   customerCode?: string | null;
@@ -1183,7 +1279,9 @@ export async function updateCustomerCardDetailsAction(form: {
     where: { id },
     data: {
       displayName,
-      nameHe: form.nameHe?.trim() || null,
+      ...(form.nameAr !== undefined ? { nameAr: form.nameAr?.trim() || null } : {}),
+      ...(form.nameEn !== undefined ? { nameEn: form.nameEn?.trim() || null } : {}),
+      ...(form.nameHe !== undefined ? { nameHe: form.nameHe?.trim() || null } : {}),
       phone: form.phone?.trim() || null,
       customerCode,
       address: form.address?.trim() || null,
@@ -1342,7 +1440,8 @@ export async function createPaymentPointForOrderAction(input: {
 
 /** פרטי תצוגה לטופס קליטת הזמנה (שמות, אינדקס, יתרה משוערת) */
 export async function getCustomerOrderFormExtrasAction(customerId: string): Promise<{
-  nameHe: string | null;
+  /** שם באנגלית — כולל תאימות לשדה ישן nameHe */
+  nameEn: string | null;
   nameAr: string | null;
   phone: string | null;
   indexLabel: string | null;
@@ -1361,6 +1460,7 @@ export async function getCustomerOrderFormExtrasAction(customerId: string): Prom
     where: { id, deletedAt: null, isActive: true },
     select: {
       nameHe: true,
+      nameEn: true,
       nameAr: true,
       phone: true,
       secondPhone: true,
@@ -1389,7 +1489,7 @@ export async function getCustomerOrderFormExtrasAction(customerId: string): Prom
   const indexLabel = cust.oldCustomerCode?.trim() || cust.customerCode?.trim() || null;
 
   return {
-    nameHe: cust.nameHe,
+    nameEn: cust.nameEn ?? cust.nameHe ?? null,
     nameAr: cust.nameAr,
     phone: cust.phone ?? cust.secondPhone,
     indexLabel,
@@ -1424,6 +1524,9 @@ export async function captureOrderAction(form: {
   vatPercent?: string | null;
   /** מקור / מדינת ספק */
   sourceCountry?: OrderCountryCode | string | null;
+  /** טיוטת שמות מהטופס — עדכון nameAr/nameEn בלקוח רק כשהשדה ריק במסד */
+  draftNameAr?: string | null;
+  draftNameEn?: string | null;
 }): Promise<CaptureState> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["create_orders"])) {
@@ -1447,6 +1550,8 @@ export async function captureOrderAction(form: {
     where: { id: form.customerId.trim(), deletedAt: null, isActive: true },
   });
   if (!customer) return { ok: false, error: "לקוח לא נמצא" };
+
+  await applyCustomerNameDraftsIfNeeded(customer.id, form.draftNameAr, form.draftNameEn);
 
   const settings = (await getCurrentFinancialSettings()) ?? (await ensureDefaultFinancialSettings());
   const base = settings.baseDollarRate;
@@ -1679,61 +1784,128 @@ export type OrderWorkPanelPayload = {
   existingPaymentsUsdSum: string;
   /** סה״כ USD של ההזמנה (לווידוא תשלומים) */
   orderTotalUsd: string;
+  /** נעילת עריכה להזמנה בהושלמה — עובד צריך אישור מנהל */
+  editGate: {
+    employeeEditBlocked: boolean;
+    hasPendingEditRequest: boolean;
+    pendingEditRequestOwnedByMe: boolean;
+    unlockExpiresAtIso: string | null;
+    viewerIsAdmin: boolean;
+  };
 };
 
 export async function getOrderForWorkPanelAction(orderId: string): Promise<OrderWorkPanelPayload | null> {
-  const me = await requireAuth();
-  if (!userHasAnyPermission(me, ["view_orders", "edit_orders"])) return null;
+  return withPerfTimer("orders.getOrderForWorkPanel", async () => {
+    const me = await requireAuth();
+    if (!userHasAnyPermission(me, ["view_orders", "edit_orders"])) return null;
 
-  const id = orderId.trim();
-  if (!id) return null;
+    const id = orderId.trim();
+    if (!id) return null;
 
-  const order = await prisma.order.findFirst({
-    where: { id, deletedAt: null },
-    include: {
-      customer: {
-        select: { id: true, displayName: true, customerCode: true, customerType: true },
+    const order = await prisma.order.findFirst({
+      where: { id, deletedAt: null },
+      select: {
+        id: true,
+        weekCode: true,
+        orderDate: true,
+        orderNumber: true,
+        customerId: true,
+        customerNameSnapshot: true,
+        customerCodeSnapshot: true,
+        amountUsd: true,
+        commissionUsd: true,
+        paymentMethod: true,
+        paymentPointId: true,
+        status: true,
+        usdRateUsed: true,
+        snapshotFinalDollarRate: true,
+        exchangeRate: true,
+        notes: true,
+        totalUsd: true,
+        sourceCountry: true,
+        customer: {
+          select: { id: true, displayName: true, customerCode: true },
+        },
       },
-    },
+    });
+    if (!order) return null;
+
+    const deal = order.amountUsd ?? new Prisma.Decimal(0);
+    const com = order.commissionUsd ?? new Prisma.Decimal(0);
+    const od = order.orderDate ? new Date(order.orderDate) : new Date();
+    const rateUsed = order.usdRateUsed ?? order.snapshotFinalDollarRate ?? order.exchangeRate ?? new Prisma.Decimal(0);
+
+    const label = order.customer?.displayName ?? order.customerNameSnapshot ?? "";
+    const cid = order.customerId ?? order.customer?.id ?? "";
+    if (!cid) return null;
+
+    const payAgg = await prisma.payment.aggregate({
+      where: { orderId: order.id, amountUsd: { not: null } },
+      _sum: { amountUsd: true },
+    });
+    const existingPayUsd = payAgg._sum.amountUsd ?? new Prisma.Decimal(0);
+    const orderTotalUsdVal = order.totalUsd ?? deal.add(com).toDecimalPlaces(4, 4);
+
+    await clearExpiredOrderEditUnlockForOrder(order.id);
+
+    const gateRow = await prisma.order.findFirst({
+      where: { id: order.id },
+      select: {
+        status: true,
+        editUnlockedForUserId: true,
+        editUnlockedUntil: true,
+      },
+    });
+    const pendingReq = await prisma.orderEditRequest.findFirst({
+      where: { orderId: order.id, status: OrderEditRequestStatus.PENDING },
+      select: { requestedByUserId: true },
+    });
+
+    const viewerIsAdmin = isAdminUser(me);
+    const unlockUntil = gateRow?.editUnlockedUntil ?? null;
+    const unlockForMe =
+      gateRow?.editUnlockedForUserId === me.id &&
+      unlockUntil != null &&
+      unlockUntil.getTime() > Date.now();
+    const unlockExpiresAtIso = unlockForMe ? unlockUntil.toISOString() : null;
+
+    const canEdit = canUserEditCompletedOrder(me, {
+      status: gateRow?.status ?? order.status,
+      editUnlockedForUserId: gateRow?.editUnlockedForUserId ?? null,
+      editUnlockedUntil: gateRow?.editUnlockedUntil ?? null,
+    });
+
+    return {
+      id: order.id,
+      weekCode: (order.weekCode ?? "").trim() || DEFAULT_WEEK_CODE,
+      orderDateYmd: formatLocalYmd(od),
+      orderTimeHm: formatLocalHm(od),
+      orderNumber: order.orderNumber ?? "—",
+      customerId: cid,
+      customerLabel: label,
+      customerCode: order.customer?.customerCode ?? order.customerCodeSnapshot ?? null,
+      amountUsd: deal.toString(),
+      feeUsd: com.toString(),
+      paymentMethod: order.paymentMethod ?? PaymentMethod.BANK_TRANSFER,
+      paymentPointId: order.paymentPointId ?? null,
+      status: order.status,
+      usdRateUsed: rateUsed.toFixed(4),
+      notes: order.notes ?? "",
+      existingPaymentsUsdSum: existingPayUsd.toFixed(4),
+      orderTotalUsd: orderTotalUsdVal.toFixed(4),
+      sourceCountry: coerceOrderCountryForForm(order.sourceCountry) || null,
+      editGate: {
+        employeeEditBlocked: !viewerIsAdmin && !canEdit,
+        hasPendingEditRequest: !!pendingReq,
+        pendingEditRequestOwnedByMe: pendingReq?.requestedByUserId === me.id,
+        unlockExpiresAtIso,
+        viewerIsAdmin,
+      },
+    };
+  }).catch((error) => {
+    perfError("orders.getOrderForWorkPanel.failed", error, { orderId });
+    return null;
   });
-  if (!order) return null;
-
-  const deal = order.amountUsd ?? new Prisma.Decimal(0);
-  const com = order.commissionUsd ?? new Prisma.Decimal(0);
-  const od = order.orderDate ? new Date(order.orderDate) : new Date();
-  const rateUsed = order.usdRateUsed ?? order.snapshotFinalDollarRate ?? order.exchangeRate ?? new Prisma.Decimal(0);
-
-  const label = order.customer?.displayName ?? order.customerNameSnapshot ?? "";
-  const cid = order.customerId ?? order.customer?.id ?? "";
-  if (!cid) return null;
-
-  const payAgg = await prisma.payment.aggregate({
-    where: { orderId: order.id, amountUsd: { not: null } },
-    _sum: { amountUsd: true },
-  });
-  const existingPayUsd = payAgg._sum.amountUsd ?? new Prisma.Decimal(0);
-  const orderTotalUsdVal = order.totalUsd ?? deal.add(com).toDecimalPlaces(4, 4);
-
-  return {
-    id: order.id,
-    weekCode: (order.weekCode ?? "").trim() || DEFAULT_WEEK_CODE,
-    orderDateYmd: formatLocalYmd(od),
-    orderTimeHm: formatLocalHm(od),
-    orderNumber: order.orderNumber ?? "—",
-    customerId: cid,
-    customerLabel: label,
-    customerCode: order.customer?.customerCode ?? order.customerCodeSnapshot ?? null,
-    amountUsd: deal.toString(),
-    feeUsd: com.toString(),
-    paymentMethod: order.paymentMethod ?? PaymentMethod.BANK_TRANSFER,
-    paymentPointId: order.paymentPointId ?? null,
-    status: order.status,
-    usdRateUsed: rateUsed.toFixed(4),
-    notes: order.notes ?? "",
-    existingPaymentsUsdSum: existingPayUsd.toFixed(4),
-    orderTotalUsd: orderTotalUsdVal.toFixed(4),
-    sourceCountry: coerceOrderCountryForForm(order.sourceCountry) || null,
-  };
 }
 
 const QUICK_LIST_STATUS_SET = new Set<OrderStatus>([
@@ -1758,9 +1930,23 @@ export async function updateOrderListStatusAction(
 
   const exists = await prisma.order.findFirst({
     where: { id, deletedAt: null },
-    select: { id: true },
+    select: {
+      id: true,
+      status: true,
+      editUnlockedForUserId: true,
+      editUnlockedUntil: true,
+    },
   });
   if (!exists) return { ok: false, error: "הזמנה לא נמצאה" };
+
+  await clearExpiredOrderEditUnlockForOrder(id);
+  const gate = await prisma.order.findFirst({
+    where: { id },
+    select: { status: true, editUnlockedForUserId: true, editUnlockedUntil: true },
+  });
+  if (!gate || !canUserEditCompletedOrder(me, gate)) {
+    return { ok: false, error: "הזמנה בהושלמה נעולה — שינוי סטטוס דורש אישור מנהל." };
+  }
 
   await prisma.order.update({
     where: { id },
@@ -1790,6 +1976,8 @@ export async function updateOrderWorkPanelAction(form: {
   paymentPointId?: string | null;
   paymentLines?: OrderCapturePaymentLineInput[];
   sourceCountry?: OrderCountryCode | string | null;
+  draftNameAr?: string | null;
+  draftNameEn?: string | null;
 }): Promise<CaptureState> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["edit_orders"])) {
@@ -1798,9 +1986,26 @@ export async function updateOrderWorkPanelAction(form: {
 
   const existing = await prisma.order.findFirst({
     where: { id: form.orderId.trim(), deletedAt: null },
-    select: { id: true, orderNumber: true, weekCode: true, sourceCountry: true },
+    select: {
+      id: true,
+      orderNumber: true,
+      weekCode: true,
+      sourceCountry: true,
+      status: true,
+      editUnlockedForUserId: true,
+      editUnlockedUntil: true,
+    },
   });
   if (!existing) return { ok: false, error: "הזמנה לא נמצאה" };
+
+  await clearExpiredOrderEditUnlockForOrder(existing.id);
+  const gate = await prisma.order.findFirst({
+    where: { id: existing.id },
+    select: { status: true, editUnlockedForUserId: true, editUnlockedUntil: true },
+  });
+  if (!gate || !canUserEditCompletedOrder(me, gate)) {
+    return { ok: false, error: "הזמנה בהושלמה נעולה לעריכה. נדרש אישור מנהל — שלחו בקשת עריכה מהמסך." };
+  }
 
   const paidAgg = await prisma.payment.aggregate({
     where: { orderId: existing.id, amountUsd: { not: null } },
@@ -1826,11 +2031,13 @@ export async function updateOrderWorkPanelAction(form: {
   });
   if (!customer) return { ok: false, error: "לקוח לא נמצא" };
 
+  await applyCustomerNameDraftsIfNeeded(customer.id, form.draftNameAr, form.draftNameEn);
+
   const settings = (await getCurrentFinancialSettings()) ?? (await ensureDefaultFinancialSettings());
   const base = settings.baseDollarRate;
   const fee = settings.dollarFee;
   const final = settings.finalDollarRate;
-  const vatRate = new Prisma.Decimal("18");
+  const vatRate = prismaVatRatePercent();
 
   let deal: Prisma.Decimal;
   try {

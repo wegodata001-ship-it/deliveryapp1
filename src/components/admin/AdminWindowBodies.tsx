@@ -16,6 +16,7 @@ import {
 } from "@/app/admin/capture/actions";
 import type { CustomerCardWindowProps } from "@/lib/admin-windows";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
+import { primaryCustomerDisplayName } from "@/lib/customer-names";
 
 function displayCustomerCode(s: CustomerCardSnapshot): string {
   const c = s.customerCode?.trim();
@@ -114,7 +115,8 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
   const [toYmd, setToYmd] = useState("");
   const [form, setForm] = useState({
     displayName: "",
-    nameHe: "",
+    nameAr: "",
+    nameEn: "",
     phone: "",
     customerCode: "",
     address: "",
@@ -133,7 +135,8 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
         if (row) {
           setForm({
             displayName: row.displayName,
-            nameHe: row.nameHe ?? "",
+            nameAr: row.nameAr ?? "",
+            nameEn: row.nameEn ?? row.nameHe ?? "",
             phone: row.phone ?? "",
             customerCode: row.customerCode ?? "",
             address: row.address ?? "",
@@ -170,7 +173,8 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
     const res = await updateCustomerCardDetailsAction({
       customerId,
       displayName: form.displayName,
-      nameHe: form.nameHe,
+      nameAr: form.nameAr,
+      nameEn: form.nameEn,
       phone: form.phone,
       customerCode: form.customerCode,
       address: form.address,
@@ -480,6 +484,26 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
               <div className="form-field">
                 <label htmlFor="cust-name">שם מלא</label>
                 <input id="cust-name" value={form.displayName} onChange={(e) => setForm((f) => ({ ...f, displayName: e.target.value }))} />
+              </div>
+              <div className="form-field">
+                <label htmlFor="cust-name-ar">שם בערבית</label>
+                <input
+                  id="cust-name-ar"
+                  dir="rtl"
+                  placeholder="הזן שם בערבית"
+                  value={form.nameAr}
+                  onChange={(e) => setForm((f) => ({ ...f, nameAr: e.target.value }))}
+                />
+              </div>
+              <div className="form-field">
+                <label htmlFor="cust-name-en">שם באנגלית</label>
+                <input
+                  id="cust-name-en"
+                  dir="ltr"
+                  placeholder="Enter English name"
+                  value={form.nameEn}
+                  onChange={(e) => setForm((f) => ({ ...f, nameEn: e.target.value }))}
+                />
               </div>
               <div className="form-field">
                 <label htmlFor="cust-phone">טלפון</label>

@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
+import { prismaVatGrossFactor } from "@/lib/vat-prisma";
 
-const VAT_FACTOR_DEFAULT = new Prisma.Decimal("1.18");
+const VAT_FACTOR_DEFAULT = prismaVatGrossFactor();
 
 export type FinancialSnapshotInput = {
   baseDollarRate: Prisma.Decimal;

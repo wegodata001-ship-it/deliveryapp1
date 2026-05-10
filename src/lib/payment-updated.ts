@@ -1,3 +1,5 @@
+import { VAT_RATE } from "./vat";
+
 export type PaymentLineCurrency = "ILS" | "USD";
 
 export type PaymentLineVatMode = "EXEMPT" | "BEFORE_VAT" | "INCLUDING_VAT";
@@ -30,7 +32,7 @@ export type PaymentTotals = {
   totalPaymentsCount: number;
 };
 
-export const DEFAULT_VAT_RATE = 0.18;
+export const DEFAULT_VAT_RATE = VAT_RATE;
 
 function safeNum(n: unknown): number {
   const x = typeof n === "number" ? n : Number(n);

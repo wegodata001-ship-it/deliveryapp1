@@ -5,6 +5,8 @@ import { ensureExcelImportTables } from "@/lib/excel-import";
 import { prisma } from "@/lib/prisma";
 import { getWeekCodeForLocalDate } from "@/lib/work-week";
 
+export const runtime = "nodejs";
+
 type ValidRow = {
   id: string;
   rowNumber: number;

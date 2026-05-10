@@ -11,6 +11,7 @@ import {
   type PaymentIntakeOrderRow,
 } from "@/lib/payment-intake";
 import { prisma } from "@/lib/prisma";
+import { prismaVatRatePercent } from "@/lib/vat-prisma";
 import { escapeRegExp } from "@/lib/order-number";
 import { formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate, parseLocalDateTime } from "@/lib/work-week";
 import {
@@ -55,6 +56,7 @@ export type { PaymentIntakeOrderRow } from "@/lib/payment-intake";
 export type PaymentIntakeCustomerPayload = {
   id: string;
   displayName: string;
+  nameEn: string | null;
   nameHe: string | null;
   nameAr: string | null;
   customerCode: string | null;
@@ -93,6 +95,7 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
     select: {
       id: true,
       displayName: true,
+      nameEn: true,
       nameHe: true,
       nameAr: true,
       customerCode: true,
@@ -194,6 +197,7 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
     customer: {
       id: cust.id,
       displayName: cust.displayName,
+      nameEn: cust.nameEn,
       nameHe: cust.nameHe,
       nameAr: cust.nameAr,
       customerCode: cust.customerCode,
@@ -318,7 +322,7 @@ export async function savePaymentIntakeAction(
   const finalGlobal = settings.finalDollarRate;
   const finalUse = new Prisma.Decimal(String(rateN)).toDecimalPlaces(6, 4);
 
-  const vatRate = new Prisma.Decimal("18");
+  const vatRate = prismaVatRatePercent();
   const snapBase = { baseDollarRate: base, dollarFee: fee, finalDollarRate: finalUse, vatRate };
 
   const today = new Date();

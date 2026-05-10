@@ -3,7 +3,9 @@
 import { randomUUID } from "crypto";
 import { OrderStatus, PaymentMethod, Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
-import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
+import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
+import { clearExpiredOrderEditUnlockForOrder } from "@/app/admin/order-edit-requests/actions";
+import { canUserEditCompletedOrder } from "@/lib/order-edit-lock";
 import { prisma } from "@/lib/prisma";
 
 export type SourceTableId =
@@ -645,10 +647,21 @@ export async function upsertSourceTableRowAction(input: SourceTableMutation): Pr
       },
     });
   } else if (input.table === "orders" && input.id && v.status) {
+    const me = await requireAuth();
     const match = Object.entries(ORDER_STATUS_LABELS).find(([, label]) => label === v.status);
     const status = (match?.[0] ?? v.status) as OrderStatus;
     if (Object.values(OrderStatus).includes(status)) {
-      await prisma.order.update({ where: { id: input.id }, data: { status } });
+      const oid = input.id.trim();
+      await clearExpiredOrderEditUnlockForOrder(oid);
+      const orderRow = await prisma.order.findFirst({
+        where: { id: oid, deletedAt: null },
+        select: { id: true, status: true, editUnlockedForUserId: true, editUnlockedUntil: true },
+      });
+      if (!orderRow) return { ok: false, error: "הזמנה לא נמצאה" };
+      if (!isAdminUser(me) && !canUserEditCompletedOrder(me, orderRow)) {
+        return { ok: false, error: "הזמנה בהושלמה נעולה — שינוי דורש אישור מנהל." };
+      }
+      await prisma.order.update({ where: { id: oid }, data: { status } });
     }
   } else {
     return { ok: false, error: "טבלה זו זמינה לצפייה בלבד בשלב זה" };

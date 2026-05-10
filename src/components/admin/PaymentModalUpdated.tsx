@@ -33,6 +33,7 @@ import {
 import {
   calculatePaymentLine,
   calculateTotals,
+  DEFAULT_VAT_RATE,
   roundMoney2,
   type PaymentLine,
   type PaymentLineCurrency,
@@ -40,6 +41,7 @@ import {
   type PaymentLineVatMode,
 } from "@/lib/payment-updated";
 import { savePaymentUpdatedAction } from "@/app/admin/payments-updated/actions";
+import { primaryCustomerDisplayName } from "@/lib/customer-names";
 
 const COUNTRY_BADGE_SHORT: Record<OrderCountryCode, string> = {
   TURKEY: "טורקיה",
@@ -49,7 +51,7 @@ const COUNTRY_BADGE_SHORT: Record<OrderCountryCode, string> = {
 
 type BadgeEditField = "week" | "country" | "date" | "time" | null;
 
-type CustFieldKey = "code" | "displayName" | "nameHe" | "nameAr" | "index";
+type CustFieldKey = "code" | "displayName" | "nameEn" | "nameAr" | "index";
 
 type CustomerApiSearchRow = {
   id: string;
@@ -57,6 +59,7 @@ type CustomerApiSearchRow = {
   oldCustomerCode: string | null;
   displayName: string;
   nameHe: string | null;
+  nameEn: string | null;
   nameAr: string | null;
   phone: string | null;
   city: string | null;
@@ -69,7 +72,7 @@ const UUID_SEARCH_RE =
 const EMPTY_CUSTOMER_DRAFT: Record<CustFieldKey, string> = {
   code: "",
   displayName: "",
-  nameHe: "",
+  nameEn: "",
   nameAr: "",
   index: "",
 };
@@ -277,7 +280,7 @@ export function PaymentModalUpdated({
 
   const rateN = parseNum(dollarRate);
 
-  const totals = useMemo(() => calculateTotals(payments, rateN, 0.18), [payments, rateN]);
+  const totals = useMemo(() => calculateTotals(payments, rateN, DEFAULT_VAT_RATE), [payments, rateN]);
 
   const bases = useMemo(() => toPaymentIntakeBases(orders), [orders]);
 
@@ -358,7 +361,7 @@ export function PaymentModalUpdated({
     setDraftCustomer({
       code: res.customer.customerCode ?? "",
       displayName: res.customer.displayName ?? "",
-      nameHe: res.customer.nameHe ?? "",
+      nameEn: res.customer.nameEn ?? res.customer.nameHe ?? "",
       nameAr: res.customer.nameAr ?? "",
       index: res.customer.customerIndex ?? "",
     });
@@ -477,14 +480,21 @@ export function PaymentModalUpdated({
           }
           return;
         }
+        if (!UUID_SEARCH_RE.test(q) && q.length < 2) {
+          setCustomerHits([]);
+          setCustDdOpen(false);
+          setCustSearchNoHits(false);
+          return;
+        }
 
         let rows: CustomerApiSearchRow[] = [];
         try {
-          const res = await fetch(`/api/customers?query=${encodeURIComponent(q)}`);
+          const res = await fetch(`/api/customers?query=${encodeURIComponent(q)}&limit=20&page=1`);
           if (!res.ok) {
             if (!cancelled && gen === custSearchGenRef.current) {
               setCustomerHits([]);
               setCustSearchNoHits(false);
+              setLoadErr("טעינת נתונים נכשלה");
             }
             return;
           }
@@ -494,6 +504,7 @@ export function PaymentModalUpdated({
           if (!cancelled && gen === custSearchGenRef.current) {
             setCustomerHits([]);
             setCustSearchNoHits(false);
+            setLoadErr("בעיה בחיבור לשרת");
           }
           return;
         }
@@ -505,7 +516,12 @@ export function PaymentModalUpdated({
 
         const hits: CustomerSearchRow[] = rows.map((r) => ({
           id: r.id,
-          label: r.displayName,
+          label: primaryCustomerDisplayName({
+            nameAr: r.nameAr,
+            nameEn: r.nameEn,
+            nameHe: r.nameHe,
+            displayName: r.displayName,
+          }),
           code: r.customerCode,
           customerType: r.customerType,
           city: r.city,
@@ -760,13 +776,15 @@ export function PaymentModalUpdated({
                     />
                   </label>
                   <label className="payment-modal-cust-inp-wrap">
-                    <span className="payment-modal-cust-inp-lbl">שם בעברית</span>
+                    <span className="payment-modal-cust-inp-lbl">שם באנגלית</span>
                     <input
                       type="text"
                       autoComplete="off"
                       className="payment-modal-cust-inp"
-                      value={draftCustomer.nameHe}
-                      onChange={(e) => onDraftCustomerChange("nameHe", e.target.value)}
+                      dir="ltr"
+                      placeholder="Enter English name"
+                      value={draftCustomer.nameEn}
+                      onChange={(e) => onDraftCustomerChange("nameEn", e.target.value)}
                     />
                   </label>
                   <label className="payment-modal-cust-inp-wrap">
@@ -785,6 +803,8 @@ export function PaymentModalUpdated({
                       type="text"
                       autoComplete="off"
                       className="payment-modal-cust-inp"
+                      dir="rtl"
+                      placeholder="הזן שם בערבית"
                       value={draftCustomer.nameAr}
                       onChange={(e) => onDraftCustomerChange("nameAr", e.target.value)}
                     />
@@ -1128,7 +1148,7 @@ export function PaymentModalUpdated({
 
                 <div className="payment-upd-lines" aria-label="תשלומים שנוספו">
                   {payments.map((p, idx) => {
-                    const calc = calculatePaymentLine(p, rateN, 0.18);
+                    const calc = calculatePaymentLine(p, rateN, DEFAULT_VAT_RATE);
                     const amtStr = p.amount === "" ? "" : String(p.amount);
                     const cur: PaymentLineCurrency = p.currency;
                     const currSym = cur === "USD" ? "$" : "₪";

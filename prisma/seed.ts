@@ -14,6 +14,7 @@ loadEnv();
 import { OrderStatus, PaymentMethod, Prisma, PrismaClient, UserRole } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
+import { prismaVatGrossFactor, prismaVatRatePercent } from "../src/lib/vat-prisma";
 
 const prisma = new PrismaClient();
 
@@ -22,8 +23,8 @@ const SEED_MARKER = ">[WGP-SEED]<";
 const PAYMENT_PREFIX = "WGP-P-";
 const CUSTOMER_PREFIX = "WGP-C-";
 const ORDER_NUM_START = 13561;
-const VAT_RATE = new Prisma.Decimal("18");
-const VAT_FACTOR = new Prisma.Decimal("1.18");
+const VAT_RATE_DEC = prismaVatRatePercent();
+const VAT_FACTOR = prismaVatGrossFactor();
 
 const WORK_WEEK_RANGES: Record<string, { from: string; to: string }> = {
   "AH-108": { from: "2026-03-03", to: "2026-03-09" },
@@ -347,7 +348,6 @@ function buildPlannedOrders(): PlannedOrder[] {
 /** לקוחות/הזמנות/תשלומים ייעודיים לבדיקת דוח "יתרות לקוחות" (יתרה 0 מסוננת). */
 async function seedCustomerBalanceReportFixtures(adminId: string) {
   const RM = 4 as const;
-  const VAT_FACTOR = new Prisma.Decimal("1.18");
   const weekCode = "AH-119";
   const orderDay = parseYmd("2026-05-05");
   orderDay.setHours(10, 0, 0, 0);
@@ -405,7 +405,7 @@ async function seedCustomerBalanceReportFixtures(adminId: string) {
       amountUsd: usdZero,
       totalUsd: usdZero,
       exchangeRate: snapFinal,
-      vatRate: new Prisma.Decimal("18"),
+      vatRate: VAT_RATE_DEC,
       amountWithoutVat: z.totalIlsWithoutVat,
       snapshotBaseDollarRate: snapBase,
       snapshotDollarFee: snapFee,
@@ -432,7 +432,7 @@ async function seedCustomerBalanceReportFixtures(adminId: string) {
       amountUsd: null,
       amountIls: z.totalIlsWithVat,
       exchangeRate: snapFinal,
-      vatRate: new Prisma.Decimal("18"),
+      vatRate: VAT_RATE_DEC,
       amountWithoutVat: z.totalIlsWithoutVat,
       snapshotBaseDollarRate: snapBase,
       snapshotDollarFee: snapFee,
@@ -463,7 +463,7 @@ async function seedCustomerBalanceReportFixtures(adminId: string) {
       amountUsd: usdOpen,
       totalUsd: usdOpen,
       exchangeRate: snapFinal,
-      vatRate: new Prisma.Decimal("18"),
+      vatRate: VAT_RATE_DEC,
       amountWithoutVat: o.totalIlsWithoutVat,
       snapshotBaseDollarRate: snapBase,
       snapshotDollarFee: snapFee,
@@ -490,7 +490,7 @@ async function seedCustomerBalanceReportFixtures(adminId: string) {
       amountUsd: null,
       amountIls: p.totalIlsWithVat,
       exchangeRate: snapFinal,
-      vatRate: new Prisma.Decimal("18"),
+      vatRate: VAT_RATE_DEC,
       amountWithoutVat: p.totalIlsWithoutVat,
       snapshotBaseDollarRate: snapBase,
       snapshotDollarFee: snapFee,
@@ -752,7 +752,7 @@ async function main() {
         amountUsd: p.usd,
         totalUsd: p.usd,
         exchangeRate: fin.exchangeRate,
-        vatRate: VAT_RATE,
+        vatRate: VAT_RATE_DEC,
         amountWithoutVat: fin.totalIlsWithoutVat,
         snapshotBaseDollarRate: fin.snapshotBaseDollarRate,
         snapshotDollarFee: fin.snapshotDollarFee,
@@ -802,7 +802,7 @@ async function main() {
         amountUsd: null,
         amountIls: snap.amountIls,
         exchangeRate: snapshotFinalDollarRate,
-        vatRate: VAT_RATE,
+        vatRate: VAT_RATE_DEC,
         amountWithoutVat: snap.amountWithoutVat,
         snapshotBaseDollarRate: snap.snapshotBaseDollarRate,
         snapshotDollarFee: snap.snapshotDollarFee,
@@ -829,7 +829,7 @@ async function main() {
         amountUsd: null,
         amountIls: snap.amountIls,
         exchangeRate: snapshotFinalDollarRate,
-        vatRate: VAT_RATE,
+        vatRate: VAT_RATE_DEC,
         amountWithoutVat: snap.amountWithoutVat,
         snapshotBaseDollarRate: snap.snapshotBaseDollarRate,
         snapshotDollarFee: snap.snapshotDollarFee,
@@ -857,7 +857,7 @@ async function main() {
         amountUsd: usdPart,
         amountIls: snap.amountIls,
         exchangeRate: snapshotFinalDollarRate,
-        vatRate: VAT_RATE,
+        vatRate: VAT_RATE_DEC,
         amountWithoutVat: snap.amountWithoutVat,
         snapshotBaseDollarRate: snap.snapshotBaseDollarRate,
         snapshotDollarFee: snap.snapshotDollarFee,

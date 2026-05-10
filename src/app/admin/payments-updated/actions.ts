@@ -10,6 +10,8 @@ import { prisma } from "@/lib/prisma";
 import { escapeRegExp } from "@/lib/order-number";
 import { formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate, parseLocalDateTime } from "@/lib/work-week";
 import { calculatePaymentLine, calculateTotals, type PaymentLine } from "@/lib/payment-updated";
+import { VAT_RATE } from "@/lib/vat";
+import { prismaVatRatePercent } from "@/lib/vat-prisma";
 
 const PAYMENT_CODE_PREFIX = "WGP-P-";
 
@@ -87,7 +89,7 @@ export async function savePaymentUpdatedAction(
   }
   if (!Number.isFinite(rateN) || rateN <= 0) return { ok: false, error: "שער דולר חייב להיות חיובי" };
 
-  const totals = calculateTotals(form.payments ?? [], rateN, 0.18);
+  const totals = calculateTotals(form.payments ?? [], rateN, VAT_RATE);
   if (!Number.isFinite(totals.totalUsd) || totals.totalUsd <= 0) return { ok: false, error: "יש להוסיף תשלום" };
 
   const today = new Date();
@@ -167,10 +169,10 @@ export async function savePaymentUpdatedAction(
     distinctMethods.size === 1 ? mapMethodToPrisma(form.payments[0]!.paymentMethod) : PaymentMethod.OTHER;
 
   const finalUse = new Prisma.Decimal(String(rateN)).toDecimalPlaces(6, 4);
-  const vatRate = new Prisma.Decimal("18");
+  const vatRate = prismaVatRatePercent();
 
   const breakdownLines = form.payments.map((p, i) => {
-    const c = calculatePaymentLine(p, rateN, 0.18);
+    const c = calculatePaymentLine(p, rateN, VAT_RATE);
     const cur = p.currency === "USD" ? "$" : "₪";
     const note = (p.note || "").trim();
     return [

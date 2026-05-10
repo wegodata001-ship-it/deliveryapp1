@@ -4,6 +4,8 @@ import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { ensureExcelImportTables } from "@/lib/excel-import";
 import { prisma } from "@/lib/prisma";
 
+export const runtime = "nodejs";
+
 export async function GET(req: Request) {
   try {
     const me = await requireAuth();

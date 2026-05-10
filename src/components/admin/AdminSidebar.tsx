@@ -17,6 +17,7 @@ import {
   Settings,
   UserPlus,
   CircleDollarSign,
+  ClipboardList,
   TrendingUp,
   Users,
   Wallet,
@@ -57,6 +58,8 @@ function NavIcon({ id }: { id: NavIconId }) {
       return <Settings {...common} />;
     case "finance":
       return <CircleDollarSign {...common} />;
+    case "editRequests":
+      return <ClipboardList {...common} />;
     default:
       return <Home {...common} />;
   }

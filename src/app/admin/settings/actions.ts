@@ -8,6 +8,7 @@ import { ensureDefaultFinancialSettings, getCurrentFinancialSettings } from "@/l
 import { prisma } from "@/lib/prisma";
 import { ORDER_COUNTRY_CODES, parseSelectedCountriesJson, type OrderCountryCode } from "@/lib/order-countries";
 import { DEFAULT_WEEK_CODE } from "@/lib/work-week";
+import { VAT_RATE_PERCENT } from "@/lib/vat";
 
 export type AdminSettingsPayload = {
   baseDollarRate: string;
@@ -26,7 +27,7 @@ export type AdminSettingsPayload = {
 export type AdminSettingsSaveState = { ok: true; payload: AdminSettingsPayload } | { ok: false; error: string };
 
 const DEFAULT_SETTINGS: Omit<AdminSettingsPayload, "baseDollarRate" | "finalDollarRate" | "selectedCountries"> = {
-  vatRate: "18",
+  vatRate: String(VAT_RATE_PERCENT),
   defaultPaymentMethod: "CASH",
   currentWorkWeek: DEFAULT_WEEK_CODE,
   dateFormat: "DD/MM/YYYY",

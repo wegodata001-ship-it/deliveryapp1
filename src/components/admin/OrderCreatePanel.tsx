@@ -16,7 +16,9 @@ import {
   searchCustomersForOrderAction,
   updateOrderWorkPanelAction,
   type CustomerSearchRow,
+  type OrderWorkPanelPayload,
 } from "@/app/admin/capture/actions";
+import { createOrderEditRequestAction } from "@/app/admin/order-edit-requests/actions";
 import { getSelectedCountriesForOrdersAction } from "@/app/admin/settings/actions";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { useAdminLoading } from "@/components/admin/AdminLoadingProvider";
@@ -26,6 +28,8 @@ import type { OrderCaptureWindowProps } from "@/lib/admin-windows";
 import { ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS } from "@/lib/order-capture-payment-methods";
 import { orderCountryLabel, ORDER_COUNTRY_CODES, coerceOrderCountryForForm, type OrderCountryCode } from "@/lib/order-countries";
 import type { SerializedFinancial } from "@/lib/financial-settings";
+import { VAT_RATE, VAT_RATE_PERCENT, formatVatPercentLabel } from "@/lib/vat";
+import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import {
   DEFAULT_WEEK_CODE,
   formatLocalHm,
@@ -34,8 +38,6 @@ import {
   parseLocalDate,
   WORK_WEEK_RANGES,
 } from "@/lib/work-week";
-
-const VAT_FRACTION = 0.17;
 
 function addDays(d: Date, days: number): Date {
   const out = new Date(d);
@@ -84,7 +86,7 @@ const EDIT_ORDER_STATUS_OPTIONS: { value: OrderStatus; label: string }[] = (
   Object.keys(ORDER_STATUS_LABELS) as OrderStatus[]
 ).map((value) => ({ value, label: ORDER_STATUS_LABELS[value] }));
 
-type ComboField = "code" | "nameAr" | "nameHe";
+type ComboField = "code" | "nameAr" | "nameEn";
 
 function parseNum(s: string): number {
   const t = s.replace(",", ".").trim();
@@ -168,6 +170,11 @@ export function OrderCreatePanel({
   const [feeUsdStr, setFeeUsdStr] = useState("");
   const [loadOrderBusy, setLoadOrderBusy] = useState(false);
   const [loadedSourceCountry, setLoadedSourceCountry] = useState<OrderCountryCode | "">("");
+  const [editGate, setEditGate] = useState<OrderWorkPanelPayload["editGate"] | null>(null);
+  const [editRequestOpen, setEditRequestOpen] = useState(false);
+  const [editRequestReason, setEditRequestReason] = useState("");
+  const [editRequestBusy, setEditRequestBusy] = useState(false);
+  const [editRequestFlash, setEditRequestFlash] = useState<string | null>(null);
 
   const weekCodeFromDate = useMemo(() => getWeekCodeForLocalDate(parseLocalDate(orderDateYmd)), [orderDateYmd]);
   const displayWeekCode = isEdit ? editWeekCode : weekCodeOverride;
@@ -209,13 +216,14 @@ export function OrderCreatePanel({
   /** שלושת שדות החיפוש + שורה ראשית — קוד משותף */
   const [codeStr, setCodeStr] = useState("");
   const [nameArStr, setNameArStr] = useState("");
-  const [nameHeStr, setNameHeStr] = useState("");
+  const [nameEnStr, setNameEnStr] = useState("");
 
   const [hits, setHits] = useState<CustomerSearchRow[]>([]);
   const [dropdownField, setDropdownField] = useState<ComboField | null>(null);
   const focusedComboRef = useRef<ComboField>("code");
   const skipSearchRef = useRef(false);
   const searchGenRef = useRef(0);
+  const customerExtrasReqRef = useRef(0);
 
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerSearchRow | null>(null);
   const [extras, setExtras] = useState<Awaited<ReturnType<typeof getCustomerOrderFormExtrasAction>>>(null);
@@ -267,13 +275,46 @@ export function OrderCreatePanel({
     );
   }, [orderCountries, isEdit]);
 
+  const refreshOrderNumberPreview = useCallback(async () => {
+    if (isEdit) return;
+    try {
+      const n = await previewOrderNumberAction(weekCodeForSave);
+      setOrderNumberPreview(n || "—");
+    } catch (error) {
+      console.error("order number preview failed", error);
+      setOrderNumberPreview("—");
+    }
+  }, [isEdit, weekCodeForSave]);
+
   useEffect(() => {
     if (isEdit) return;
-    void previewOrderNumberAction(weekCodeForSave).then((n) => setOrderNumberPreview(n || "—"));
-  }, [weekCodeForSave, isEdit]);
+    void refreshOrderNumberPreview();
+  }, [isEdit, weekCodeForSave, refreshOrderNumberPreview]);
+
+  useEffect(() => {
+    if (target.mode !== "create") return;
+    setOrderNumberPreview("…");
+    void refreshOrderNumberPreview();
+  }, [target.mode, refreshOrderNumberPreview]);
+
+  useEffect(() => {
+    if (target.mode !== "create") return;
+    if (orderNumberPreview !== "—") return;
+    const t = window.setTimeout(() => {
+      void refreshOrderNumberPreview();
+    }, 350);
+    return () => window.clearTimeout(t);
+  }, [target.mode, orderNumberPreview, refreshOrderNumberPreview]);
 
   useEffect(() => {
     if (!isEdit) setLoadedSourceCountry("");
+  }, [isEdit]);
+
+  useEffect(() => {
+    if (!isEdit) {
+      setEditGate(null);
+      setEditRequestFlash(null);
+    }
   }, [isEdit]);
 
   const editOrderId = isEdit ? target.orderId : "";
@@ -283,6 +324,7 @@ export function OrderCreatePanel({
     let cancelled = false;
     setLoadOrderBusy(true);
     setErr(null);
+    setEditGate(null);
     void getOrderForWorkPanelAction(editOrderId).then((row) => {
       if (cancelled) return;
       setLoadOrderBusy(false);
@@ -290,6 +332,7 @@ export function OrderCreatePanel({
         setErr("לא ניתן לטעון את ההזמנה");
         return;
       }
+      setEditGate(row.editGate);
       skipSearchRef.current = true;
       setOrderDateYmd(row.orderDateYmd);
       setOrderTimeHm(row.orderTimeHm);
@@ -331,30 +374,45 @@ export function OrderCreatePanel({
     };
   }, [isEdit, editOrderId, financial?.finalDollarRate]);
 
+  const loadCustomerExtras = useCallback(async (customerId: string) => {
+    const req = ++customerExtrasReqRef.current;
+    console.log("customer id", customerId);
+    try {
+      const ex = await getCustomerOrderFormExtrasAction(customerId);
+      if (customerExtrasReqRef.current !== req) return;
+      if (!ex) {
+        setExtras(null);
+        setPhoneStr("");
+        return;
+      }
+      skipSearchRef.current = true;
+      setExtras(ex);
+      setNameArStr(ex.nameAr ?? "");
+      setNameEnStr(ex.nameEn ?? "");
+      setPhoneStr(ex.phone ?? "");
+      console.log("form populate", { customerId, nameAr: ex.nameAr, nameEn: ex.nameEn, phone: ex.phone, code: ex.indexLabel });
+      queueMicrotask(() => {
+        skipSearchRef.current = false;
+      });
+    } catch (error) {
+      console.error("customer extras failed", error);
+      if (customerExtrasReqRef.current !== req) return;
+      setExtras(null);
+      setPhoneStr("");
+      setErr("טעינת נתונים נכשלה");
+    }
+  }, []);
+
   useEffect(() => {
     const id = selectedCustomer?.id;
+    console.log("selected customer", selectedCustomer);
     if (!id) {
       setExtras(null);
       setPhoneStr("");
       return;
     }
-    let cancelled = false;
-    void getCustomerOrderFormExtrasAction(id).then((ex) => {
-      if (!cancelled && ex) {
-        skipSearchRef.current = true;
-        setExtras(ex);
-        setNameArStr(ex.nameAr ?? "");
-        setNameHeStr(ex.nameHe ?? "");
-        setPhoneStr(ex.phone ?? "");
-        queueMicrotask(() => {
-          skipSearchRef.current = false;
-        });
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedCustomer?.id]);
+    void loadCustomerExtras(id);
+  }, [selectedCustomer, loadCustomerExtras]);
 
   const openCustomerCard = useCallback(() => {
     if (!selectedCustomer) return;
@@ -413,7 +471,7 @@ export function OrderCreatePanel({
     return roundMoney2(dealIlsTotal + commissionIlsEffective);
   }, [dealIlsTotal, commissionIlsEffective]);
 
-  const vatAmountIls = useMemo(() => roundMoney2(totalBeforeVatIls * VAT_FRACTION), [totalBeforeVatIls]);
+  const vatAmountIls = useMemo(() => roundMoney2(totalBeforeVatIls * VAT_RATE), [totalBeforeVatIls]);
 
   const finalTotalIls = useMemo(() => roundMoney2(totalBeforeVatIls + vatAmountIls), [totalBeforeVatIls, vatAmountIls]);
 
@@ -426,8 +484,11 @@ export function OrderCreatePanel({
 
   const pickCustomer = useCallback((row: CustomerSearchRow) => {
     skipSearchRef.current = true;
+    console.log("selected customer", row);
+    console.log("customer id", row?.id);
+    setErr(null);
     setSelectedCustomer(row);
-    setCodeStr(customerDisplayCode(row));
+    setCodeStr(row.code?.trim() ? row.code.trim() : row.id);
     setHits([]);
     setDropdownField(null);
     window.setTimeout(() => {
@@ -439,23 +500,30 @@ export function OrderCreatePanel({
   useEffect(() => {
     if (skipSearchRef.current) return;
     const field = focusedComboRef.current;
-    const q = field === "code" ? codeStr : field === "nameAr" ? nameArStr : nameHeStr;
+    const q = field === "code" ? codeStr : field === "nameAr" ? nameArStr : nameEnStr;
     const trimmed = q.trim();
-    if (!trimmed) {
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trimmed);
+    if (!trimmed || (!isUuid && trimmed.length < 2)) {
       setHits([]);
       return;
     }
     const gen = ++searchGenRef.current;
     const t = window.setTimeout(() => {
       void (async () => {
-        const rows = await searchCustomersForOrderAction(trimmed);
-        if (searchGenRef.current !== gen) return;
-        setHits(rows);
-        setDropdownField(field);
+        try {
+          const rows = await searchCustomersForOrderAction(trimmed);
+          if (searchGenRef.current !== gen) return;
+          setHits(rows);
+          setDropdownField(field);
+        } catch {
+          if (searchGenRef.current !== gen) return;
+          setErr("טעינת נתונים נכשלה");
+          setHits([]);
+        }
       })();
-    }, 200);
+    }, 400);
     return () => window.clearTimeout(t);
-  }, [codeStr, nameArStr, nameHeStr]);
+  }, [codeStr, nameArStr, nameEnStr]);
 
   const openFullList = useCallback(async (field: ComboField) => {
     focusedComboRef.current = field;
@@ -487,6 +555,7 @@ export function OrderCreatePanel({
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (isSaving) return;
+    if (isEdit && editGate?.employeeEditBlocked) return;
 
     let cust = selectedCustomer;
     if (!cust && codeStr.trim()) {
@@ -544,6 +613,8 @@ export function OrderCreatePanel({
               paymentPointId: paymentPointId.trim() || null,
               paymentLines: undefined,
               sourceCountry: countryForSave,
+              draftNameAr: nameArStr.trim() || null,
+              draftNameEn: nameEnStr.trim() || null,
             }),
           "שומר נתונים...",
         );
@@ -564,9 +635,11 @@ export function OrderCreatePanel({
               status: orderStatus,
               notes: notes.trim() || undefined,
               paymentPointId: paymentPointId.trim() || null,
-              vatPercent: String(Math.round(VAT_FRACTION * 100)),
+              vatPercent: String(VAT_RATE_PERCENT),
               paymentLines: undefined,
               sourceCountry: countryForSave,
+              draftNameAr: nameArStr.trim() || null,
+              draftNameEn: nameEnStr.trim() || null,
             }),
           "שומר נתונים...",
         );
@@ -590,12 +663,16 @@ export function OrderCreatePanel({
 
   const customerMiniLine = useMemo(() => {
     if (!selectedCustomer || !extras) return "";
-    const name = (nameHeStr || nameArStr || selectedCustomer.label).trim();
+    const name = primaryCustomerDisplayName({
+      nameAr: nameArStr.trim() || null,
+      nameEn: nameEnStr.trim() || null,
+      displayName: selectedCustomer.label,
+    });
     const phone = (phoneStr || extras.phone || "").trim();
     const place = [extras.city, extras.address].filter(Boolean).join(" · ");
     const parts = [`👤 ${name}`, phone, place].filter((p) => p.length > 0);
     return parts.join(" | ");
-  }, [selectedCustomer, extras, nameHeStr, nameArStr, phoneStr]);
+  }, [selectedCustomer, extras, nameEnStr, nameArStr, phoneStr]);
 
   function blurCloseDropdown() {
     window.setTimeout(() => setDropdownField(null), 180);
@@ -617,12 +694,54 @@ export function OrderCreatePanel({
     );
   }
 
+  const formLocked = Boolean(isEdit && editGate?.employeeEditBlocked);
+  const fieldDisabled = isSaving || formLocked;
+
   const statusOptions = isEdit ? EDIT_ORDER_STATUS_OPTIONS : CREATE_ORDER_STATUS_OPTIONS;
 
   return (
     <div className="adm-order-create-legacy-wrap">
       <form className="adm-order-create adm-order-create--legacy adm-capture-order-shell" onSubmit={onSubmit} dir="rtl">
         {err ? <div className="adm-error adm-error--compact adm-oc-legacy-err">{err}</div> : null}
+
+        {isEdit && formLocked ? (
+          <div className="adm-oc-edit-lock-banner" role="status">
+            <p>הזמנה זו סגורה לעריכה. יש לשלוח בקשת אישור מנהל.</p>
+            {editGate?.hasPendingEditRequest ? (
+              <p style={{ marginTop: "0.35rem", fontWeight: 700 }}>
+                {editGate.pendingEditRequestOwnedByMe
+                  ? "הבקשה שלך ממתינה לאישור."
+                  : "קיימת בקשת עריכה ממתינה להזמנה זו."}
+              </p>
+            ) : null}
+            <div className="adm-oc-edit-lock-actions">
+              <button
+                type="button"
+                className="adm-btn adm-btn--primary adm-btn--dense"
+                disabled={editRequestBusy || !!editGate?.hasPendingEditRequest}
+                onClick={() => {
+                  setEditRequestFlash(null);
+                  setEditRequestReason("");
+                  setEditRequestOpen(true);
+                }}
+              >
+                שלח בקשת עריכה
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {isEdit && editRequestFlash ? (
+          <div className="adm-settings-toast adm-oc-edit-request-sent-flash" role="status">
+            {editRequestFlash}
+          </div>
+        ) : null}
+
+        {isEdit && editGate && !editGate.viewerIsAdmin && editGate.unlockExpiresAtIso && !formLocked ? (
+          <div className="adm-oc-edit-unlock-hint" role="status">
+            עריכה זמינה עד {new Date(editGate.unlockExpiresAtIso).toLocaleString("he-IL")}
+          </div>
+        ) : null}
 
         <div className="modal-container">
           <div className="modal-main">
@@ -639,7 +758,7 @@ export function OrderCreatePanel({
               <button
                 type="button"
                 className="adm-oc-week-arrow"
-                disabled={isSaving}
+                disabled={fieldDisabled}
                 aria-label="שבוע קודם"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => {
@@ -657,7 +776,7 @@ export function OrderCreatePanel({
                 value={isEdit ? editWeekCode : weekDraft}
                 dir="ltr"
                 list={idp("week-list")}
-                disabled={isSaving}
+                disabled={fieldDisabled}
                 title={weekInputErr || undefined}
                 onChange={(e) => {
                   const raw = e.target.value;
@@ -690,7 +809,7 @@ export function OrderCreatePanel({
               <button
                 type="button"
                 className="adm-oc-week-arrow"
-                disabled={isSaving}
+                disabled={fieldDisabled}
                 aria-label="שבוע הבא"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => {
@@ -704,7 +823,7 @@ export function OrderCreatePanel({
               <button
                 type="button"
                 className="adm-oc-week-dd"
-                disabled={isSaving}
+                disabled={fieldDisabled}
                 aria-label="רשימת שבועות"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => {
@@ -729,7 +848,7 @@ export function OrderCreatePanel({
               id={idp("country")}
               className="adm-oc-legacy-top-sel"
               value={sourceCountry}
-              disabled={isSaving}
+              disabled={fieldDisabled}
               onFocus={closeCustomerDropdown}
               onChange={(e) => {
                 const v = e.target.value as OrderCountryCode | "";
@@ -778,7 +897,7 @@ export function OrderCreatePanel({
                   type="text"
                   autoComplete="off"
                   className="adm-oc-legacy-main-inp"
-                  disabled={isSaving}
+                  disabled={fieldDisabled}
                   dir="ltr"
                   value={codeStr}
                   onChange={(e) => {
@@ -790,6 +909,7 @@ export function OrderCreatePanel({
                   }}
                   onBlur={() => {
                     blurCloseDropdown();
+                    if (dropdownField === "code" && hits.length > 0) return;
                     void resolveExactCode();
                   }}
                   onKeyDown={(e) => {
@@ -802,7 +922,7 @@ export function OrderCreatePanel({
                 <button
                   type="button"
                   className="adm-oc-legacy-main-arrow"
-                  disabled={isSaving}
+                  disabled={fieldDisabled}
                   aria-label="רשימה מלאה"
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => void openFullList("code")}
@@ -813,7 +933,15 @@ export function OrderCreatePanel({
                   <ul className="adm-oc-legacy-dd adm-oc-legacy-dd--main" role="listbox">
                     {hits.map((row) => (
                       <li key={row.id}>
-                        <button type="button" className="adm-oc-legacy-dd-item" onMouseDown={() => pickCustomer(row)}>
+                        <button
+                          type="button"
+                          className="adm-oc-legacy-dd-item"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            pickCustomer(row);
+                          }}
+                          onClick={() => pickCustomer(row)}
+                        >
                           <span>{row.label}</span>
                           <span dir="ltr" className="adm-oc-legacy-dd-meta">
                             {customerDisplayCode(row)}
@@ -827,7 +955,7 @@ export function OrderCreatePanel({
               <button
                 type="button"
                 className="adm-oc-legacy-customer-card-btn"
-                disabled={isSaving || !selectedCustomer}
+                disabled={fieldDisabled || !selectedCustomer}
                 title="פתח כרטסת לקוח"
                 aria-label="פתח כרטסת לקוח"
                 onClick={openCustomerCard}
@@ -871,9 +999,10 @@ export function OrderCreatePanel({
                     type="text"
                     autoComplete="off"
                     spellCheck={false}
-                    disabled={isSaving}
+                    disabled={fieldDisabled}
                     dir="rtl"
                     className="adm-oc-legacy-combo-inp"
+                    placeholder="הזן שם בערבית"
                     value={nameArStr}
                     onChange={(e) => {
                       setNameArStr(e.target.value);
@@ -888,7 +1017,7 @@ export function OrderCreatePanel({
                     type="button"
                     data-oc-arrow
                     className="adm-oc-legacy-arrow"
-                    disabled={isSaving}
+                    disabled={fieldDisabled}
                     aria-label="רשימה מלאה"
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => void openFullList("nameAr")}
@@ -900,7 +1029,15 @@ export function OrderCreatePanel({
                   <ul className="adm-oc-legacy-dd" role="listbox">
                     {hits.map((row) => (
                       <li key={row.id}>
-                        <button type="button" className="adm-oc-legacy-dd-item" onMouseDown={() => pickCustomer(row)}>
+                        <button
+                          type="button"
+                          className="adm-oc-legacy-dd-item"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            pickCustomer(row);
+                          }}
+                          onClick={() => pickCustomer(row)}
+                        >
                           <span>{row.label}</span>
                           <span dir="ltr" className="adm-oc-legacy-dd-meta">
                             {customerDisplayCode(row)}
@@ -912,14 +1049,14 @@ export function OrderCreatePanel({
                 ) : null}
               </div>
 
-              {/* עברית */}
+              {/* אנגלית */}
               <div className="adm-oc-legacy-field-wrap">
                 <div className="adm-oc-legacy-label-with-action">
-                  <label htmlFor={idp("c-he")}>שם עברית</label>
+                  <label htmlFor={idp("c-en")}>שם באנגלית</label>
                   <button
                     type="button"
                     className="adm-oc-legacy-customer-card-btn adm-oc-legacy-customer-card-btn--inline"
-                    disabled={isSaving || !selectedCustomer}
+                    disabled={fieldDisabled || !selectedCustomer}
                     title="פתח כרטסת לקוח"
                     aria-label="פתח כרטסת לקוח"
                     onClick={openCustomerCard}
@@ -929,20 +1066,21 @@ export function OrderCreatePanel({
                 </div>
                 <div className="adm-oc-legacy-input-row">
                   <input
-                    id={idp("c-he")}
+                    id={idp("c-en")}
                     type="text"
                     autoComplete="off"
                     spellCheck={false}
-                    disabled={isSaving}
-                    dir="rtl"
+                    disabled={fieldDisabled}
+                    dir="ltr"
                     className="adm-oc-legacy-combo-inp"
-                    value={nameHeStr}
+                    placeholder="Enter English name"
+                    value={nameEnStr}
                     onChange={(e) => {
-                      setNameHeStr(e.target.value);
+                      setNameEnStr(e.target.value);
                       setSelectedCustomer(null);
                     }}
                     onFocus={() => {
-                      focusedComboRef.current = "nameHe";
+                      focusedComboRef.current = "nameEn";
                     }}
                     onBlur={blurCloseDropdown}
                   />
@@ -950,19 +1088,27 @@ export function OrderCreatePanel({
                     type="button"
                     data-oc-arrow
                     className="adm-oc-legacy-arrow"
-                    disabled={isSaving}
+                    disabled={fieldDisabled}
                     aria-label="רשימה מלאה"
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => void openFullList("nameHe")}
+                    onClick={() => void openFullList("nameEn")}
                   >
                     ▼
                   </button>
                 </div>
-                {dropdownField === "nameHe" && hits.length > 0 ? (
+                {dropdownField === "nameEn" && hits.length > 0 ? (
                   <ul className="adm-oc-legacy-dd" role="listbox">
                     {hits.map((row) => (
                       <li key={row.id}>
-                        <button type="button" className="adm-oc-legacy-dd-item" onMouseDown={() => pickCustomer(row)}>
+                        <button
+                          type="button"
+                          className="adm-oc-legacy-dd-item"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            pickCustomer(row);
+                          }}
+                          onClick={() => pickCustomer(row)}
+                        >
                           <span>{row.label}</span>
                           <span dir="ltr" className="adm-oc-legacy-dd-meta">
                             {customerDisplayCode(row)}
@@ -996,7 +1142,7 @@ export function OrderCreatePanel({
                 id={idp("notes")}
                 className="adm-oc-legacy-notes-ta"
                 rows={3}
-                disabled={isSaving}
+                disabled={fieldDisabled}
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 placeholder="הערות להזמנה…"
@@ -1013,7 +1159,7 @@ export function OrderCreatePanel({
                   <select
                     id={idp("ord-st")}
                     className="adm-oc-legacy-side-sel"
-                    disabled={isSaving}
+                    disabled={fieldDisabled}
                     value={orderStatus}
                     onFocus={closeCustomerDropdown}
                     onChange={(e) => setOrderStatus(e.target.value as OrderStatus)}
@@ -1030,7 +1176,7 @@ export function OrderCreatePanel({
                   <select
                     id={idp("pay-pt")}
                     className="adm-oc-legacy-side-sel"
-                    disabled={isSaving}
+                    disabled={fieldDisabled}
                     value={paymentPointId}
                     onFocus={closeCustomerDropdown}
                     onChange={(e) => {
@@ -1129,7 +1275,7 @@ export function OrderCreatePanel({
                   <select
                     id={idp("pay-m")}
                     className="adm-oc-legacy-side-sel"
-                    disabled={isSaving}
+                    disabled={fieldDisabled}
                     value={paymentMethod}
                     onFocus={closeCustomerDropdown}
                     onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
@@ -1155,7 +1301,7 @@ export function OrderCreatePanel({
                   type="text"
                   inputMode="decimal"
                   className="adm-oc-inp adm-oc-legacy-fin-inp"
-                  disabled={isSaving}
+                  disabled={fieldDisabled}
                   dir="ltr"
                   value={dealIlsStr}
                   placeholder="הקלד סכום..."
@@ -1180,7 +1326,7 @@ export function OrderCreatePanel({
                 <span dir="ltr">{totalBeforeVatIls.toFixed(2)} ₪</span>
               </div>
               <div className="adm-oc-line">
-                <span>מע״מ ({Math.round(VAT_FRACTION * 100)}%)</span>
+                <span>{formatVatPercentLabel()}</span>
                 <span dir="ltr">
                   {vatAmountIls.toFixed(2)} ₪ / ${vatAmountUsd.toFixed(2)}
                 </span>
@@ -1200,7 +1346,7 @@ export function OrderCreatePanel({
                   type="text"
                   inputMode="decimal"
                   className="adm-oc-inp adm-oc-legacy-fin-inp"
-                  disabled={isSaving}
+                  disabled={fieldDisabled}
                   dir="ltr"
                   value={dealUsdStr}
                   placeholder="הקלד סכום..."
@@ -1235,11 +1381,76 @@ export function OrderCreatePanel({
           <button
             type="submit"
             className={`adm-btn adm-btn--primary adm-btn--dense${isSaving ? " loading" : ""}`}
-            disabled={isSaving || (isEdit ? !canEditOrders : !canCreateOrders)}
+            disabled={isSaving || (isEdit ? !canEditOrders : !canCreateOrders) || formLocked}
           >
             {isSaving ? "שומר…" : isEdit ? "עדכון" : "שמירה"}
           </button>
         </div>
+
+        {editRequestOpen ? (
+          <div
+            className="adm-oc-edit-request-backdrop"
+            role="presentation"
+            onClick={() => {
+              if (!editRequestBusy) setEditRequestOpen(false);
+            }}
+          >
+            <div
+              className="adm-oc-edit-request-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby={idp("edit-req-title")}
+              onClick={(e) => e.stopPropagation()}
+              dir="rtl"
+            >
+              <h4 id={idp("edit-req-title")}>בקשת עריכה</h4>
+              <label className="adm-field" htmlFor={idp("edit-req-reason")}>
+                סיבת עריכה
+                <textarea
+                  id={idp("edit-req-reason")}
+                  value={editRequestReason}
+                  disabled={editRequestBusy}
+                  onChange={(e) => setEditRequestReason(e.target.value)}
+                  placeholder="למשל: תיקון סכום לפי אישור לקוח…"
+                />
+              </label>
+              <div className="adm-oc-edit-request-modal-actions">
+                <button
+                  type="button"
+                  className="adm-btn adm-btn--ghost adm-btn--dense"
+                  disabled={editRequestBusy}
+                  onClick={() => setEditRequestOpen(false)}
+                >
+                  ביטול
+                </button>
+                <button
+                  type="button"
+                  className={`adm-btn adm-btn--primary adm-btn--dense${editRequestBusy ? " loading" : ""}`}
+                  disabled={editRequestBusy}
+                  onClick={() => {
+                    if (editRequestBusy || !editOrderId) return;
+                    setEditRequestBusy(true);
+                    setErr(null);
+                    void createOrderEditRequestAction(editOrderId, editRequestReason).then((res) => {
+                      setEditRequestBusy(false);
+                      if (!res.ok) {
+                        setErr(res.error);
+                        return;
+                      }
+                      setEditRequestOpen(false);
+                      setEditRequestFlash("הבקשה נשלחה למנהלים");
+                      void getOrderForWorkPanelAction(editOrderId).then((row) => {
+                        if (row) setEditGate(row.editGate);
+                      });
+                    });
+                  }}
+                >
+                  {editRequestBusy ? "שולח…" : "שליחה"}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </form>
     </div>
   );
