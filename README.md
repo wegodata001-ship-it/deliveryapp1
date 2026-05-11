@@ -33,7 +33,7 @@ npm run db:push
 npm run db:seed
 ```
 
-This creates default permissions and a **development-only** admin account (`admin` / `Admin123456!`). Change the password immediately in any shared or production environment.
+This creates default permissions and a **development-only** super-admin (defaults: **`wego-super`** / **`WegoDev2026!Aa`**). Override with `SEED_ADMIN_USERNAME` and `SEED_ADMIN_PASSWORD` before seeding. Change the password immediately in any shared or production environment.
 
 ### Warnings
 

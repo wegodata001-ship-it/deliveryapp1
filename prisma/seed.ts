@@ -569,17 +569,22 @@ async function main() {
     });
   }
 
+  /** ברירות מחדל לפיתוח בלבד — בפרודקשן חובה להגדיר env ולשנות סיסמה אחרי seed */
+  const SEED_ADMIN_USERNAME_DEFAULT = "wego-super";
+  const SEED_ADMIN_PASSWORD_DEFAULT = "WegoDev2026!Aa";
+
   const e2eUsername = (process.env.E2E_ADMIN_USERNAME || "qa-admin").trim();
   const e2ePassword = (process.env.E2E_ADMIN_PASSWORD || "").trim();
 
-  const adminPassword = (process.env.SEED_ADMIN_PASSWORD || "").trim();
+  const adminUsername = (process.env.SEED_ADMIN_USERNAME || SEED_ADMIN_USERNAME_DEFAULT).trim();
+  const adminPasswordFromEnv = (process.env.SEED_ADMIN_PASSWORD || "").trim();
+  const adminPassToUse = adminPasswordFromEnv || SEED_ADMIN_PASSWORD_DEFAULT;
+
   const employeePassword = (process.env.SEED_EMPLOYEE_PASSWORD || "").trim();
 
-  const generatedAdminPassword = crypto.randomBytes(18).toString("base64url"); // strong temp
   const generatedEmployeePassword = crypto.randomBytes(18).toString("base64url");
   const generatedQaPassword = crypto.randomBytes(18).toString("base64url");
 
-  const adminPassToUse = adminPassword || generatedAdminPassword;
   const employeePassToUse = employeePassword || generatedEmployeePassword;
   const qaPassToUse = e2ePassword || generatedQaPassword;
 
@@ -587,19 +592,21 @@ async function main() {
   const employeeHash = await bcrypt.hash(employeePassToUse, 12);
   const qaHash = await bcrypt.hash(qaPassToUse, 12);
 
+  const adminEmail = `${adminUsername}@seed.local`;
+
   const admin = await prisma.user.upsert({
-    where: { username: "admin" },
+    where: { username: adminUsername },
     create: {
       fullName: "System Admin",
-      username: "admin",
-      email: "admin@test.com",
+      username: adminUsername,
+      email: adminEmail,
       passwordHash,
       role: UserRole.ADMIN,
       isActive: true,
     },
     update: {
       fullName: "System Admin",
-      email: "admin@test.com",
+      email: adminEmail,
       passwordHash,
       role: UserRole.ADMIN,
       isActive: true,
@@ -1061,7 +1068,7 @@ async function main() {
       `Orders: ${created.length}`,
       `Payments: ${payments.length}`,
       `Audit: ${auditRows.length}`,
-      `Admin: admin / ${adminPassToUse}`,
+      `Super admin: ${adminUsername} / ${adminPassToUse}`,
       `Employees: employee1, employee2 / ${employeePassToUse}`,
       `QA Admin (E2E): ${qaAdmin.username} / ${qaPassToUse}`,
       e2ePassword ? "E2E_ADMIN_PASSWORD was provided via env." : "E2E_ADMIN_PASSWORD was not set — generated a temporary password above. Put it in .env.local to run e2e.",
