@@ -1,17 +1,31 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   listCustomerBalancesAction,
-  updateCustomerBalanceNoteAction,
   updateCustomerBalanceStatusAction,
+  type CustomerBalanceDebtFilter,
   type CustomerBalanceRow,
-  type CustomerBalanceStatus,
+  type CustomerBalanceSort,
   type CustomerBalancesPayload,
+  type CustomerBalanceStatus,
 } from "@/app/admin/balances/actions";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { useAdminLoading } from "@/components/admin/AdminLoadingProvider";
+import { TableSkeleton } from "@/components/ui/loading";
+import { withQuery } from "@/lib/admin-url-query";
+import { ORDER_COUNTRY_CODES, orderCountryLabel, type OrderCountryCode } from "@/lib/order-countries";
+import {
+  DEFAULT_WEEK_CODE,
+  WORK_WEEK_CODES_SORTED,
+  formatLocalYmd,
+  getAhWeekCodeFromDateRange,
+  getAhWeekRange,
+  getCurrentWeekRange,
+  getWeekCodeForLocalDate,
+  normalizeAhWeekCode,
+} from "@/lib/work-week";
 
 const LIMIT = 15;
 
@@ -23,14 +37,32 @@ const STATUS_LABELS: Record<CustomerBalanceStatus, string> = {
   PAUSED: "מושהה",
 };
 
+const DEBT_STATUS_LABELS: Record<CustomerBalanceDebtFilter, string> = {
+  ALL: "הכל",
+  OWES: "חייב",
+  PAID_FULL: "שולם במלואו",
+  PARTIAL: "יתרה חלקית",
+};
+
+const SORT_LABELS: Record<CustomerBalanceSort, string> = {
+  balance_desc: "יתרה: גבוה → נמוך",
+  balance_asc: "יתרה: נמוך → גבוה",
+  name: "שם לקוח",
+  orders_total: "סה\"כ הזמנות (ש\"ח)",
+};
+
+function generateWeeks(max = 300): string[] {
+  return Array.from({ length: max }, (_, i) => `AH-${i + 1}`);
+}
+
 function money(prefix: string, value: string): string {
   const n = Number(value.replace(",", "."));
   if (!Number.isFinite(n)) return `${prefix} ${value}`;
   return `${prefix} ${n.toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function dec(v: string): number {
-  const n = Number(v.replace(",", "."));
+function dec(value: string): number {
+  const n = Number(value.replace(",", "."));
   return Number.isFinite(n) ? n : 0;
 }
 
@@ -53,59 +85,236 @@ function pageNumbers(page: number, totalPages: number): number[] {
   return Array.from({ length: end - start + 1 }, (_, i) => start + i);
 }
 
+export type BalancesFiltersState = {
+  weekCode: string;
+  fromYmd: string;
+  toYmd: string;
+  sourceCountry: OrderCountryCode | "";
+  balanceDebtStatus: CustomerBalanceDebtFilter;
+  sort: CustomerBalanceSort;
+};
+
+export type BalancesSearchDraft = {
+  name: string;
+  code: string;
+  phone: string;
+  minBalanceIls: string;
+  maxBalanceIls: string;
+};
+
+function defaultBalancesFilters(): BalancesFiltersState {
+  const { start, end } = getCurrentWeekRange(new Date());
+  const code = getWeekCodeForLocalDate(start);
+  return {
+    weekCode: normalizeAhWeekCode(code) ?? DEFAULT_WEEK_CODE,
+    fromYmd: formatLocalYmd(start),
+    toYmd: formatLocalYmd(end),
+    sourceCountry: "",
+    balanceDebtStatus: "ALL",
+    sort: "balance_desc",
+  };
+}
+
+function defaultSearchDraft(): BalancesSearchDraft {
+  return { name: "", code: "", phone: "", minBalanceIls: "", maxBalanceIls: "" };
+}
+
+function parseWeekFromUrl(raw: string | null): string | null {
+  return normalizeAhWeekCode(raw);
+}
+
+/** רק שבוע / תאריכים / מדינה מה־URL — לא מחליף חיפוש, מיון או סטטוס יתרה */
+function parseStructuralFromSearchParams(sp: URLSearchParams): Pick<BalancesFiltersState, "weekCode" | "fromYmd" | "toYmd" | "sourceCountry"> {
+  const weekRaw = parseWeekFromUrl(sp.get("week"));
+  const from = sp.get("from") || "";
+  const to = sp.get("to") || "";
+  const countryRaw = sp.get("country") || "";
+  const country = (ORDER_COUNTRY_CODES.includes(countryRaw as OrderCountryCode) ? countryRaw : "") as OrderCountryCode | "";
+
+  if (weekRaw) {
+    const r = getAhWeekRange(weekRaw);
+    if (r) {
+      return {
+        weekCode: weekRaw,
+        fromYmd: from && /^\d{4}-\d{2}-\d{2}$/.test(from) ? from : r.from,
+        toYmd: to && /^\d{4}-\d{2}-\d{2}$/.test(to) ? to : r.to,
+        sourceCountry: country,
+      };
+    }
+  }
+
+  if (from && to && /^\d{4}-\d{2}-\d{2}$/.test(from) && /^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    const wk = getAhWeekCodeFromDateRange(from, to);
+    return {
+      weekCode: wk ?? "—",
+      fromYmd: from,
+      toYmd: to,
+      sourceCountry: country,
+    };
+  }
+
+  const d = defaultBalancesFilters();
+  return { weekCode: d.weekCode, fromYmd: d.fromYmd, toYmd: d.toYmd, sourceCountry: country };
+}
+
 export function CustomerBalancesClient() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const sp = useSearchParams();
   const { openWindow } = useAdminWindows();
   const { runWithLoading, isLoading } = useAdminLoading();
-  const sp = useSearchParams();
+
+  const [urlReady, setUrlReady] = useState(false);
+  const [balancesFilters, setBalancesFilters] = useState<BalancesFiltersState>(defaultBalancesFilters);
+  const [searchDraft, setSearchDraft] = useState<BalancesSearchDraft>(defaultSearchDraft);
+  const [debouncedSearch, setDebouncedSearch] = useState<BalancesSearchDraft>(defaultSearchDraft);
+  const [weekInput, setWeekInput] = useState(() => defaultBalancesFilters().weekCode);
   const [payload, setPayload] = useState<CustomerBalancesPayload | null>(null);
-  const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
-  const [name, setName] = useState("");
-  const [code, setCode] = useState("");
-  const [status, setStatus] = useState<CustomerBalanceStatus | "">("");
-  const [debounced, setDebounced] = useState({ name: "", code: "", status: "" as CustomerBalanceStatus | "" });
   const [err, setErr] = useState<string | null>(null);
-  const fromYmd = sp.get("from") || undefined;
-  const toYmd = sp.get("to") || undefined;
-  const weekCode = sp.get("week") || undefined;
+
+  useEffect(() => {
+    const struct = parseStructuralFromSearchParams(new URLSearchParams(sp.toString()));
+    setBalancesFilters((f) => ({
+      ...f,
+      weekCode: struct.weekCode,
+      fromYmd: struct.fromYmd,
+      toYmd: struct.toYmd,
+      sourceCountry: struct.sourceCountry,
+    }));
+    setWeekInput(struct.weekCode === "—" ? "—" : struct.weekCode);
+    setUrlReady(true);
+  }, [sp]);
 
   useEffect(() => {
     const t = window.setTimeout(() => {
-      setDebounced({ name, code, status });
+      setDebouncedSearch(searchDraft);
       setPage(1);
     }, 300);
     return () => window.clearTimeout(t);
-  }, [name, code, status]);
+  }, [searchDraft]);
+
+  const weekOptions = useMemo(() => {
+    const maxKnown = WORK_WEEK_CODES_SORTED.reduce((m, c) => {
+      const n = Number(c.replace(/^AH-/i, ""));
+      return Number.isFinite(n) ? Math.max(m, n) : m;
+    }, 0);
+    const base = generateWeeks(Math.max(300, maxKnown + 52, 119));
+    const merged = new Set([...base, ...WORK_WEEK_CODES_SORTED, weekInput.trim().toUpperCase()]);
+    return [...merged].filter(Boolean).sort((a, b) => {
+      const na = Number(a.replace(/^AH-/i, "")) || 0;
+      const nb = Number(b.replace(/^AH-/i, "")) || 0;
+      return na - nb;
+    });
+  }, [weekInput]);
+
+  const weekCodeForQuery = balancesFilters.weekCode === "—" || !balancesFilters.weekCode.trim() ? undefined : balancesFilters.weekCode.trim();
 
   useEffect(() => {
+    if (!urlReady) return;
     let cancelled = false;
-    setLoading(true);
     setErr(null);
     void runWithLoading(
       () =>
         listCustomerBalancesAction({
           page,
           limit: LIMIT,
-          fromYmd,
-          toYmd,
-          weekCode,
-          filters: debounced,
+          fromYmd: balancesFilters.fromYmd,
+          toYmd: balancesFilters.toYmd,
+          weekCode: weekCodeForQuery,
+          sourceCountry: balancesFilters.sourceCountry,
+          filters: {
+            name: debouncedSearch.name,
+            code: debouncedSearch.code,
+            phone: debouncedSearch.phone,
+            minBalanceIls: debouncedSearch.minBalanceIls,
+            maxBalanceIls: debouncedSearch.maxBalanceIls,
+            balanceDebtStatus: balancesFilters.balanceDebtStatus,
+            sort: balancesFilters.sort,
+          },
         }),
-      "טוען יתרות...",
-    )
-      .then((next) => {
-        if (cancelled) return;
-        setPayload(next);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+      { message: "טוען יתרות...", mode: "bar" },
+    ).then((next) => {
+      if (cancelled) return;
+      setPayload(next);
+    });
     return () => {
       cancelled = true;
     };
-  }, [page, debounced, fromYmd, toYmd, weekCode, runWithLoading]);
+  }, [urlReady, page, balancesFilters, debouncedSearch, weekCodeForQuery, runWithLoading]);
+
+  const tableBusy = !urlReady || isLoading;
+  const searchPending =
+    searchDraft.name !== debouncedSearch.name ||
+    searchDraft.code !== debouncedSearch.code ||
+    searchDraft.phone !== debouncedSearch.phone ||
+    searchDraft.minBalanceIls !== debouncedSearch.minBalanceIls ||
+    searchDraft.maxBalanceIls !== debouncedSearch.maxBalanceIls;
+
+  const syncUrl = useCallback(() => {
+    if (!urlReady) return;
+    const weekQ = balancesFilters.weekCode === "—" ? "" : balancesFilters.weekCode;
+    const curWeek = sp.get("week") ?? "";
+    const curFrom = sp.get("from") ?? "";
+    const curTo = sp.get("to") ?? "";
+    const curCountry = sp.get("country") ?? "";
+    const nextCountry = balancesFilters.sourceCountry || "";
+    if (curWeek === weekQ && curFrom === balancesFilters.fromYmd && curTo === balancesFilters.toYmd && curCountry === nextCountry) {
+      return;
+    }
+    const nextHref = withQuery(pathname, sp, {
+      week: weekQ,
+      from: balancesFilters.fromYmd,
+      to: balancesFilters.toYmd,
+      country: nextCountry || null,
+      modal: null,
+    });
+    router.replace(nextHref);
+  }, [balancesFilters, pathname, router, sp, urlReady]);
+
+  useEffect(() => {
+    syncUrl();
+  }, [balancesFilters.fromYmd, balancesFilters.toYmd, balancesFilters.weekCode, balancesFilters.sourceCountry, syncUrl]);
 
   const pages = useMemo(() => pageNumbers(payload?.page ?? page, payload?.totalPages ?? 1), [payload?.page, payload?.totalPages, page]);
+
+  function setRangeFromWeek(code: string) {
+    const r = getAhWeekRange(code);
+    if (!r) return;
+    setBalancesFilters((f) => ({ ...f, weekCode: code, fromYmd: r.from, toYmd: r.to }));
+    setWeekInput(code);
+  }
+
+  function onBlurWeekInput() {
+    window.setTimeout(() => {
+      const normalized = normalizeAhWeekCode(weekInput);
+      if (!normalized) {
+        setWeekInput(balancesFilters.weekCode === "—" ? "—" : balancesFilters.weekCode);
+        return;
+      }
+      setRangeFromWeek(normalized);
+    }, 120);
+  }
+
+  function onChangeFromTo(which: "fromYmd" | "toYmd", val: string) {
+    setBalancesFilters((f) => {
+      const next = { ...f, [which]: val };
+      const wk = getAhWeekCodeFromDateRange(next.fromYmd, next.toYmd);
+      const nextWeek = wk ?? "—";
+      setWeekInput(nextWeek);
+      return { ...next, weekCode: nextWeek };
+    });
+    setPage(1);
+  }
+
+  function clearPageFilters() {
+    const d = defaultBalancesFilters();
+    setBalancesFilters(d);
+    setWeekInput(d.weekCode);
+    setSearchDraft(defaultSearchDraft());
+    setDebouncedSearch(defaultSearchDraft());
+    setPage(1);
+  }
 
   function openLedger(row: CustomerBalanceRow) {
     openWindow({
@@ -140,7 +349,7 @@ export function CustomerBalancesClient() {
     );
     const res = await runWithLoading(
       () => updateCustomerBalanceStatusAction(row.customerId, next),
-      "שומר סטטוס יתרה...",
+      { message: "שומר סטטוס יתרה...", mode: "overlay" },
     );
     if (!res.ok) {
       setErr(res.error);
@@ -148,90 +357,212 @@ export function CustomerBalancesClient() {
     }
   }
 
-  async function changeNote(row: CustomerBalanceRow, note: string) {
-    setErr(null);
-    setPayload((old) =>
-      old
-        ? {
-            ...old,
-            rows: old.rows.map((r) => (r.customerId === row.customerId ? { ...r, note } : r)),
-          }
-        : old,
-    );
-  }
-
-  async function saveNote(row: CustomerBalanceRow, note: string) {
-    if (isLoading) return;
-    const res = await runWithLoading(
-      () => updateCustomerBalanceNoteAction(row.customerId, note),
-      "שומר הערה...",
-    );
-    if (!res.ok) setErr(res.error);
-  }
+  const colCount = 10;
 
   return (
     <div className="adm-balances-page">
       <div className="adm-balances-head">
         <div>
           <h1>יתרת לקוחות</h1>
-          <p>תצוגה מודרנית ללקוחות, יתרות וסטטוס גבייה, בלי לשנות את מבנה הנתונים הישן.</p>
+          <p>תצוגה מודרנית ללקוחות, יתרות וסטטוס גבייה. הפילטרים כאן משפיעים רק על דף זה.</p>
         </div>
       </div>
 
       {err ? <div className="adm-error">{err}</div> : null}
+      {searchPending ? (
+        <p className="adm-inline-search-hint" role="status">
+          מחפש…
+        </p>
+      ) : null}
 
-      <div className="adm-balances-filters">
-        <label>
-          חיפוש לפי שם
-          <input disabled={isLoading} value={name} onChange={(e) => setName(e.target.value)} placeholder="customerName" />
-        </label>
-        <label>
-          חיפוש לפי קוד
-          <input disabled={isLoading} value={code} onChange={(e) => setCode(e.target.value)} placeholder="customerCode" dir="ltr" />
-        </label>
-        <label>
-          סינון לפי סטטוס
-          <select disabled={isLoading} value={status} onChange={(e) => setStatus(e.target.value as CustomerBalanceStatus | "")}>
-            <option value="">הכל</option>
-            {Object.entries(STATUS_LABELS).map(([key, label]) => (
-              <option key={key} value={key}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
+      <div className="adm-balances-filters-panel">
+        <div className="adm-balances-filters-row adm-balances-filters-row--primary">
+          <label className="adm-balances-field">
+            <span className="adm-balances-field-label">שבוע AH</span>
+            <div className="adm-balances-week-wrap">
+              <input
+                className="adm-balances-input"
+                type="text"
+                list="adm-balances-week-options"
+                disabled={isLoading}
+                value={weekInput}
+                placeholder={DEFAULT_WEEK_CODE}
+                onChange={(e) => setWeekInput(e.target.value.toUpperCase())}
+                onBlur={onBlurWeekInput}
+              />
+              <datalist id="adm-balances-week-options">
+                {weekOptions.map((w) => (
+                  <option key={w} value={w} />
+                ))}
+              </datalist>
+            </div>
+          </label>
+          <label className="adm-balances-field">
+            <span className="adm-balances-field-label">מתאריך</span>
+            <input
+              className="adm-balances-input"
+              type="date"
+              disabled={isLoading}
+              value={balancesFilters.fromYmd}
+              onChange={(e) => onChangeFromTo("fromYmd", e.target.value)}
+            />
+          </label>
+          <label className="adm-balances-field">
+            <span className="adm-balances-field-label">עד תאריך</span>
+            <input
+              className="adm-balances-input"
+              type="date"
+              disabled={isLoading}
+              value={balancesFilters.toYmd}
+              onChange={(e) => onChangeFromTo("toYmd", e.target.value)}
+            />
+          </label>
+          <label className="adm-balances-field">
+            <span className="adm-balances-field-label">מדינה</span>
+            <select
+              className="adm-balances-input"
+              disabled={isLoading}
+              value={balancesFilters.sourceCountry}
+              onChange={(e) => {
+                setBalancesFilters((f) => ({ ...f, sourceCountry: e.target.value as OrderCountryCode | "" }));
+                setPage(1);
+              }}
+            >
+              <option value="">כל המדינות</option>
+              {ORDER_COUNTRY_CODES.map((c) => (
+                <option key={c} value={c}>
+                  {orderCountryLabel(c)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div className="adm-balances-filters-row adm-balances-filters-row--secondary">
+          <label className="adm-balances-field">
+            <span className="adm-balances-field-label">חיפוש שם</span>
+            <input
+              className="adm-balances-input"
+              disabled={isLoading}
+              value={searchDraft.name}
+              onChange={(e) => setSearchDraft((s) => ({ ...s, name: e.target.value }))}
+              placeholder="שם תצוגה / עברית / אנגלית…"
+              dir="rtl"
+            />
+          </label>
+          <label className="adm-balances-field">
+            <span className="adm-balances-field-label">חיפוש קוד</span>
+            <input
+              className="adm-balances-input"
+              disabled={isLoading}
+              value={searchDraft.code}
+              onChange={(e) => setSearchDraft((s) => ({ ...s, code: e.target.value }))}
+              placeholder="חלקי או מלא"
+              dir="ltr"
+            />
+          </label>
+          <label className="adm-balances-field">
+            <span className="adm-balances-field-label">טלפון</span>
+            <input
+              className="adm-balances-input"
+              disabled={isLoading}
+              value={searchDraft.phone}
+              onChange={(e) => setSearchDraft((s) => ({ ...s, phone: e.target.value }))}
+              placeholder="טלפון / טלפון נוסף"
+              dir="ltr"
+            />
+          </label>
+          <label className="adm-balances-field">
+            <span className="adm-balances-field-label">מינ׳ יתרה ₪</span>
+            <input
+              className="adm-balances-input"
+              disabled={isLoading}
+              value={searchDraft.minBalanceIls}
+              onChange={(e) => setSearchDraft((s) => ({ ...s, minBalanceIls: e.target.value }))}
+              placeholder="מינימום"
+              dir="ltr"
+            />
+          </label>
+          <label className="adm-balances-field">
+            <span className="adm-balances-field-label">מקס׳ יתרה ₪</span>
+            <input
+              className="adm-balances-input"
+              disabled={isLoading}
+              value={searchDraft.maxBalanceIls}
+              onChange={(e) => setSearchDraft((s) => ({ ...s, maxBalanceIls: e.target.value }))}
+              placeholder="מקסימום"
+              dir="ltr"
+            />
+          </label>
+          <label className="adm-balances-field">
+            <span className="adm-balances-field-label">סטטוס יתרה</span>
+            <select
+              className="adm-balances-input"
+              disabled={isLoading}
+              value={balancesFilters.balanceDebtStatus}
+              onChange={(e) => {
+                setBalancesFilters((f) => ({ ...f, balanceDebtStatus: e.target.value as CustomerBalanceDebtFilter }));
+                setPage(1);
+              }}
+            >
+              {(Object.keys(DEBT_STATUS_LABELS) as CustomerBalanceDebtFilter[]).map((k) => (
+                <option key={k} value={k}>
+                  {DEBT_STATUS_LABELS[k]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="adm-balances-field">
+            <span className="adm-balances-field-label">מיון</span>
+            <select
+              className="adm-balances-input"
+              disabled={isLoading}
+              value={balancesFilters.sort}
+              onChange={(e) => {
+                setBalancesFilters((f) => ({ ...f, sort: e.target.value as CustomerBalanceSort }));
+                setPage(1);
+              }}
+            >
+              {(Object.keys(SORT_LABELS) as CustomerBalanceSort[]).map((k) => (
+                <option key={k} value={k}>
+                  {SORT_LABELS[k]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="adm-balances-field adm-balances-field--action">
+            <span className="adm-balances-field-label">&nbsp;</span>
+            <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" disabled={isLoading} onClick={clearPageFilters}>
+              נקה פילטרים
+            </button>
+          </div>
+        </div>
       </div>
 
-      <div className="adm-balances-table-wrap" aria-busy={loading}>
-        {loading ? <div className="adm-balances-loading">טוען…</div> : null}
+      <div className="adm-balances-table-wrap" aria-busy={tableBusy}>
         <table className="adm-table adm-balances-table">
           <thead>
             <tr>
-              <th>שם לקוח</th>
-              <th>קוד לקוח</th>
-              <th>סה"כ הזמנות</th>
-              <th>סה"כ תשלומים (קשורים)</th>
-              <th>סה"כ זיכויים</th>
-              <th>יתרה בשקלים</th>
-              <th>יתרה בדולר</th>
-              <th>סטטוס יתרה</th>
-              <th>סטטוס גבייה</th>
-              <th>הערות</th>
-              <th>פעולות</th>
+              <th className="adm-balances-th-name">שם לקוח</th>
+              <th className="adm-balances-th-code">קוד לקוח</th>
+              <th className="adm-balances-th-num">סה&quot;כ הזמנות</th>
+              <th className="adm-balances-th-num">סה&quot;כ תשלומים (קשורים)</th>
+              <th className="adm-balances-th-num">סה&quot;כ זיכויים</th>
+              <th className="adm-balances-th-balance">יתרה בשקלים</th>
+              <th className="adm-balances-th-num">יתרה בדולר</th>
+              <th className="adm-balances-th-status">סטטוס יתרה</th>
+              <th className="adm-balances-th-status">סטטוס גבייה</th>
+              <th className="adm-balances-th-actions">פעולות</th>
             </tr>
           </thead>
           <tbody>
-            {loading ? (
-              Array.from({ length: 6 }).map((_, i) => (
-                <tr key={`sk-${i}`}>
-                  <td colSpan={11}>
-                    <div className="adm-skeleton-line" />
-                  </td>
-                </tr>
-              ))
+            {tableBusy ? (
+              <TableSkeleton rows={7} columns={colCount} />
             ) : !payload || payload.rows.length === 0 ? (
               <tr>
-                <td colSpan={11} className="adm-table-empty">אין נתונים לטווח שנבחר</td>
+                <td colSpan={colCount} className="adm-table-empty">
+                  אין נתונים לטווח שנבחר
+                </td>
               </tr>
             ) : (
               payload.rows.map((row) => {
@@ -239,89 +570,109 @@ export function CustomerBalancesClient() {
                 const canReceivePayment = dec(row.balanceILS) > 0;
                 const hasCredits = dec(row.totalCreditsILS) > 0;
                 return (
-                <tr key={row.customerId} className={`adm-balance-row adm-balance-row--${row.status.toLowerCase()}`}>
-                  <td>
-                    <button type="button" className="adm-balance-link" onClick={() => openLedger(row)}>
-                      {row.customerName}
-                    </button>
-                  </td>
-                  <td dir="ltr">{row.customerCode ?? "—"}</td>
-                  <td><span dir="ltr">{money("₪", row.totalOrdersILS)}</span></td>
-                  <td><span dir="ltr">{money("₪", row.totalPaymentsILS)}</span></td>
-                  <td>
-                    {hasCredits ? <span className="adm-balance-kind adm-balance-kind--credit">🟩 {renderCreditText(row.totalCreditsILS)}</span> : "—"}
-                  </td>
-                  <td>
-                    <button type="button" className="adm-balance-amount" onClick={() => openPayment(row)} disabled={!canReceivePayment}>
-                      {row.noOrdersInRange ? (
-                        hasCredits ? (
-                          <span className="adm-balance-kind adm-balance-kind--credit">לא קיימות הזמנות בטווח זה · {renderCreditText(row.totalCreditsILS)}</span>
-                        ) : (
-                          <span className="adm-balance-kind adm-balance-kind--even">לא קיימות הזמנות בטווח זה</span>
-                        )
-                      ) : (
-                        <>
-                          <span className={balanceView.className}>{balanceView.badge}</span>
-                          <span>{balanceView.text}</span>
-                        </>
-                      )}
-                    </button>
-                  </td>
-                  <td dir="ltr">{money("$", row.balanceUSD)}</td>
-                  <td>
-                    {row.noOrdersInRange && hasCredits ? (
-                      <span className="adm-balance-kind adm-balance-kind--credit">🟩 זכות</span>
-                    ) : (
-                      <span className={balanceView.className}>{balanceView.badge}</span>
-                    )}
-                  </td>
-                  <td>
-                    <select
-                      disabled={isLoading}
-                      className={`adm-balance-status-select adm-balance-status-select--${row.status.toLowerCase()}`}
-                      value={row.status}
-                      onChange={(e) => void changeStatus(row, e.target.value as CustomerBalanceStatus)}
-                    >
-                      {Object.entries(STATUS_LABELS).map(([key, label]) => (
-                        <option key={key} value={key}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td>
-                    <textarea
-                      disabled={isLoading}
-                      className="adm-balance-note-input"
-                      value={row.note}
-                      onChange={(e) => void changeNote(row, e.target.value)}
-                      onBlur={(e) => void saveNote(row, e.target.value)}
-                      placeholder="הוספת הערה..."
-                      rows={2}
-                    />
-                  </td>
-                  <td>
-                    <div className="adm-balance-actions">
-                      <button type="button" disabled={isLoading} className="adm-btn adm-btn--ghost adm-btn--xs" onClick={() => openLedger(row)} title={`כרטסת: ${row.customerName}`}>
-                        כרטסת 📊
+                  <tr key={row.customerId} className={`adm-balance-row adm-balance-row--${row.status.toLowerCase()}`}>
+                    <td className="adm-balances-td-name">
+                      <button type="button" className="adm-balance-link" onClick={() => openLedger(row)}>
+                        {row.customerName}
                       </button>
-                      {canReceivePayment ? (
-                        <button type="button" disabled={isLoading} className="adm-btn adm-btn--ghost adm-btn--xs adm-balance-pay-btn" onClick={() => openPayment(row)}>
-                          💸 קליטת תשלום
+                    </td>
+                    <td className="adm-balances-td-code" dir="ltr">
+                      {row.customerCode ?? "—"}
+                    </td>
+                    <td className="adm-balances-td-num">
+                      <span dir="ltr">{money("₪", row.totalOrdersILS)}</span>
+                      <span className="adm-balances-order-count"> ({row.ordersCount})</span>
+                    </td>
+                    <td className="adm-balances-td-num">
+                      <span dir="ltr">{money("₪", row.totalPaymentsILS)}</span>
+                    </td>
+                    <td className="adm-balances-td-num">
+                      {hasCredits ? (
+                        <span className="adm-balance-kind adm-balance-kind--credit">🟩 {renderCreditText(row.totalCreditsILS)}</span>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td className="adm-balances-td-balance">
+                      <button type="button" className="adm-balance-amount" onClick={() => openPayment(row)} disabled={!canReceivePayment}>
+                        {row.noOrdersInRange ? (
+                          hasCredits ? (
+                            <span className="adm-balance-kind adm-balance-kind--credit">
+                              לא קיימות הזמנות בטווח זה · {renderCreditText(row.totalCreditsILS)}
+                            </span>
+                          ) : (
+                            <span className="adm-balance-kind adm-balance-kind--even">לא קיימות הזמנות בטווח זה</span>
+                          )
+                        ) : (
+                          <>
+                            <span className={balanceView.className}>{balanceView.badge}</span>
+                            <span>{balanceView.text}</span>
+                          </>
+                        )}
+                      </button>
+                    </td>
+                    <td className="adm-balances-td-num" dir="ltr">
+                      {money("$", row.balanceUSD)}
+                    </td>
+                    <td className="adm-balances-td-status">
+                      {row.noOrdersInRange && hasCredits ? (
+                        <span className="adm-balance-kind adm-balance-kind--credit">🟩 זכות</span>
+                      ) : (
+                        <span className={balanceView.className}>{balanceView.badge}</span>
+                      )}
+                    </td>
+                    <td className="adm-balances-td-status">
+                      <select
+                        disabled={isLoading}
+                        className={`adm-balance-status-select adm-balance-status-select--${row.status.toLowerCase()}`}
+                        value={row.status}
+                        onChange={(e) => void changeStatus(row, e.target.value as CustomerBalanceStatus)}
+                      >
+                        {Object.entries(STATUS_LABELS).map(([key, label]) => (
+                          <option key={key} value={key}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="adm-balances-td-actions">
+                      <div className="adm-balance-actions">
+                        <button
+                          type="button"
+                          disabled={isLoading}
+                          className="adm-btn adm-btn--ghost adm-btn--xs"
+                          onClick={() => openLedger(row)}
+                          title={`כרטסת: ${row.customerName}`}
+                        >
+                          כרטסת 📊
                         </button>
-                      ) : null}
-                    </div>
-                  </td>
-                </tr>
-              );
-            })
+                        {canReceivePayment ? (
+                          <button
+                            type="button"
+                            disabled={isLoading}
+                            className="adm-btn adm-btn--ghost adm-btn--xs adm-balance-pay-btn"
+                            onClick={() => openPayment(row)}
+                          >
+                            💸 קליטת תשלום
+                          </button>
+                        ) : null}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
       </div>
 
       <div className="adm-balances-pagination">
-        <button type="button" className="adm-btn adm-btn--ghost adm-btn--xs" disabled={isLoading || (payload?.page ?? page) <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+        <button
+          type="button"
+          className="adm-btn adm-btn--ghost adm-btn--xs"
+          disabled={isLoading || (payload?.page ?? page) <= 1}
+          onClick={() => setPage((p) => Math.max(1, p - 1))}
+        >
           Prev
         </button>
         {pages.map((p) => (

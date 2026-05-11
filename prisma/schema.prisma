@@ -340,6 +340,13 @@ model PaymentPoint {
   @@index([region])
 }
 
+/** מקומות קליטת הזמנה — רשימה מרכזית; שמירה אוטומטית של שמות חדשים */
+model IntakeLocation {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+}
+
 model PaymentLocation {
   id        String   @id @default(uuid())
   name      String

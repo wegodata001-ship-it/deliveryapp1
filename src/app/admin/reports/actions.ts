@@ -5,6 +5,8 @@ import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { endOfLocalDay, formatLocalYmd, parseLocalDate } from "@/lib/work-week";
+import { getCustomerBalancesReport } from "@/lib/customer-balances-report";
+import { normalizeOrderSourceCountry } from "@/lib/order-countries";
 
 export type ReportKind =
   | "openOrdersReport"
@@ -20,6 +22,8 @@ export type ReportFilters = {
   status?: string;
   paymentMethod?: string;
   workWeek?: string;
+  /** מדינת מקור הזמנה — כמו פרמטר country ב־URL הגלובלי */
+  sourceCountry?: string;
 };
 
 export type ReportCard = {
@@ -103,10 +107,6 @@ function dec(v: Prisma.Decimal | number | string | null | undefined): Prisma.Dec
   return new Prisma.Decimal(v ?? 0);
 }
 
-function isZeroMoney(v: Prisma.Decimal): boolean {
-  return v.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).abs().equals(0);
-}
-
 function paymentIls(p: { totalIlsWithVat: Prisma.Decimal | null; amountIls: Prisma.Decimal | null; amountUsd: Prisma.Decimal | null; exchangeRate: Prisma.Decimal | null }) {
   if (p.totalIlsWithVat) return p.totalIlsWithVat;
   if (p.amountIls) return p.amountIls;
@@ -121,12 +121,16 @@ async function ensureAllowed() {
 
 async function computeKpis(filters: ReportFilters): Promise<ReportKpis> {
   const { from, to } = dateRange(filters);
+  const countryEnum = filters.sourceCountry?.trim()
+    ? normalizeOrderSourceCountry(filters.sourceCountry.trim())
+    : null;
   const orderWhere: Prisma.OrderWhereInput = {
     deletedAt: null,
     orderDate: { gte: from, lte: to },
     ...(filters.customerId ? { customerId: filters.customerId } : {}),
     ...(filters.status ? { status: filters.status as OrderStatus } : {}),
     ...(filters.workWeek ? { weekCode: filters.workWeek } : {}),
+    ...(countryEnum ? { sourceCountry: countryEnum } : {}),
   };
   const paymentWhereBase: Prisma.PaymentWhereInput = {
     isPaid: true,
@@ -135,26 +139,24 @@ async function computeKpis(filters: ReportFilters): Promise<ReportKpis> {
     ...(filters.paymentMethod ? { paymentMethod: filters.paymentMethod as PaymentMethod } : {}),
     ...(filters.workWeek ? { weekCode: filters.workWeek } : {}),
   };
-  const [orders, payments] = await Promise.all([
+  const [orders, payments, balanceReport] = await Promise.all([
     prisma.order.findMany({ where: orderWhere, select: { totalIlsWithVat: true, totalIls: true } }),
     prisma.payment.findMany({
       where: paymentWhereBase,
       select: { orderId: true, totalIlsWithVat: true, amountIls: true, amountUsd: true, exchangeRate: true },
     }),
+    getCustomerBalancesReport(filters),
   ]);
-  const expected = orders.reduce((sum, o) => sum.add(o.totalIlsWithVat ?? o.totalIls ?? 0), new Prisma.Decimal(0));
   const paidLinked = payments
     .filter((p) => !!p.orderId)
     .reduce((sum, p) => sum.add(paymentIls(p)), new Prisma.Decimal(0));
   const credits = payments
     .filter((p) => !p.orderId)
     .reduce((sum, p) => sum.add(paymentIls(p)), new Prisma.Decimal(0));
-  const open = expected.sub(paidLinked);
-  const debt = open.gt(0) ? open : new Prisma.Decimal(0);
   return {
     totalOrders: String(orders.length),
     totalPaymentsLinked: moneyIls(paidLinked),
-    totalDebt: moneyIls(debt),
+    totalDebt: moneyIls(balanceReport.totalDebt),
     totalCredit: moneyIls(credits),
   };
 }
@@ -331,67 +333,21 @@ export async function getReportTableAction(kind: ReportKind, filters: ReportFilt
     };
   }
 
-  const customers = await prisma.customer.findMany({
-    where: { deletedAt: null, isActive: true, ...(filters.customerId ? { id: filters.customerId } : {}) },
-    orderBy: { displayName: "asc" },
-    select: {
-      displayName: true,
-      nameAr: true,
-      nameEn: true,
-      nameHe: true,
-      customerCode: true,
-      orders: {
-        where: {
-          deletedAt: null,
-          orderDate: { gte: from, lte: to },
-          ...(filters.workWeek ? { weekCode: filters.workWeek } : {}),
-          ...(filters.status ? { status: filters.status as OrderStatus } : {}),
-        },
-        select: { totalIlsWithVat: true, totalIls: true },
-      },
-      payments: {
-        where: {
-          isPaid: true,
-          orderId: { not: null },
-          paymentDate: { gte: from, lte: to },
-          ...(filters.workWeek ? { weekCode: filters.workWeek } : {}),
-          ...(filters.paymentMethod ? { paymentMethod: filters.paymentMethod as PaymentMethod } : {}),
-        },
-        select: { totalIlsWithVat: true, amountIls: true, amountUsd: true, exchangeRate: true },
-      },
-    },
-  });
-  let total = new Prisma.Decimal(0);
-  let paid = new Prisma.Decimal(0);
-  const tableRows: string[][] = [];
-  for (const c of customers) {
-    const expected = c.orders.reduce((sum, o) => sum.add(o.totalIlsWithVat ?? o.totalIls ?? 0), new Prisma.Decimal(0));
-    const received = c.payments.reduce((sum, p) => sum.add(paymentIls(p)), new Prisma.Decimal(0));
-    const remaining = expected.sub(received);
-
-    // יתרות לקוחות: מציגים רק לקוחות עם יתרה פתוחה אחרי עיגול ל-2 ספרות.
-    if (isZeroMoney(remaining)) continue;
-
-    total = total.add(expected);
-    paid = paid.add(received);
-    tableRows.push([
-      primaryCustomerDisplayName({
-        nameAr: c.nameAr,
-        nameEn: c.nameEn,
-        nameHe: c.nameHe,
-        displayName: c.displayName,
-      }),
-      c.customerCode ?? "",
-      moneyIls(expected),
-      moneyIls(received),
-      moneyIls(remaining),
-    ]);
+  if (kind !== "customerBalanceReport") {
+    throw new Error(`סוג דוח לא נתמך: ${kind}`);
   }
+
+  const { rows, totalDebt, totalExpectedOnRows, totalReceivedOnRows } = await getCustomerBalancesReport(filters);
+  const tableRows = rows.map((r) => [r.label, r.customerCode ?? "", moneyIls(r.expected), moneyIls(r.received), moneyIls(r.remaining)]);
   return {
     id: kind,
     title: "יתרות לקוחות",
     columns: ["לקוח", "קוד לקוח", "סה\"כ הזמנות", "סה\"כ תשלומים", "יתרה"],
     rows: tableRows,
-    totals: { total: moneyIls(total), paid: moneyIls(paid), remaining: moneyIls(total.sub(paid)) },
+    totals: {
+      total: moneyIls(totalExpectedOnRows),
+      paid: moneyIls(totalReceivedOnRows),
+      remaining: moneyIls(totalDebt),
+    },
   };
 }

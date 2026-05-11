@@ -41,12 +41,18 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
   const router = useRouter();
   const [listPayload, setListPayload] = useState<ClientLedgerPayload | null>(null);
   const [listQuery, setListQuery] = useState("");
+  const [listQueryDebounced, setListQueryDebounced] = useState("");
   const [listFrom, setListFrom] = useState("");
   const [listTo, setListTo] = useState("");
   const [listSort, setListSort] = useState<"new_old" | "old_new" | "name_az">("new_old");
   const [listPage, setListPage] = useState(1);
   const [listLoading, setListLoading] = useState(false);
   const [snap, setSnap] = useState<CustomerCardSnapshot | null>(null);
+  useEffect(() => {
+    const t = window.setTimeout(() => setListQueryDebounced(listQuery), 300);
+    return () => window.clearTimeout(t);
+  }, [listQuery]);
+
   useEffect(() => {
     if (customerId?.trim()) return;
     let cancelled = false;
@@ -63,13 +69,23 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
 
   const filteredClients = useMemo(() => {
     const all = listPayload?.rows || [];
-    const q = listQuery.trim().toLowerCase();
+    const q = listQueryDebounced.trim().toLowerCase();
     const searched = q
       ? all.filter((r) => {
           const name = r.name.toLowerCase();
+          const customerCode = (r.customerCode || "").toLowerCase();
+          const nameEn = (r.nameEn || "").toLowerCase();
+          const nameAr = (r.nameAr || "").toLowerCase();
           const phone = (r.phone || "").toLowerCase();
           const email = (r.email || "").toLowerCase();
-          return name.includes(q) || phone.includes(q) || email.includes(q);
+          return (
+            customerCode.includes(q) ||
+            name.includes(q) ||
+            nameEn.includes(q) ||
+            nameAr.includes(q) ||
+            phone.includes(q) ||
+            email.includes(q)
+          );
         })
       : all;
 
@@ -83,14 +99,22 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
       return true;
     });
 
-    return [...dated].sort((a, b) => {
+    const sorted = [...dated].sort((a, b) => {
+      if (q.startsWith("wgp-")) {
+        const ac = (a.customerCode || "").toLowerCase();
+        const bc = (b.customerCode || "").toLowerCase();
+        const ar = ac.startsWith(q) ? 0 : ac.includes(q) ? 1 : 2;
+        const br = bc.startsWith(q) ? 0 : bc.includes(q) ? 1 : 2;
+        if (ar !== br) return ar - br;
+      }
       if (listSort === "name_az") return a.name.localeCompare(b.name, "he");
       const ta = new Date(a.createdAt).getTime();
       const tb = new Date(b.createdAt).getTime();
       if (listSort === "old_new") return ta - tb;
       return tb - ta;
     });
-  }, [listPayload?.rows, listQuery, listFrom, listTo, listSort]);
+    return q ? sorted.slice(0, 20) : sorted;
+  }, [listPayload?.rows, listQueryDebounced, listFrom, listTo, listSort]);
 
   const filteredTotalPages = Math.max(1, Math.ceil(filteredClients.length / 8));
   const pagedClients = useMemo(() => {
@@ -101,7 +125,7 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
 
   useEffect(() => {
     setListPage(1);
-  }, [listQuery, listFrom, listTo, listSort]);
+  }, [listQueryDebounced, listFrom, listTo, listSort]);
 
   const [ledger, setLedger] = useState<CustomerLedgerPayload | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>(() => (initialTab === "ledger" ? "ledger" : "details"));
@@ -198,7 +222,7 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
           <div className="adm-client-ledger-filters-row">
             <input
               className="adm-filter-input"
-              placeholder="חיפוש"
+              placeholder="חיפוש לפי קוד לקוח / שם / טלפון / אימייל"
               value={listQuery}
               onChange={(e) => setListQuery(e.target.value)}
             />

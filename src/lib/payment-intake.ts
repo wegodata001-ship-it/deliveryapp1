@@ -24,6 +24,8 @@ export type PaymentIntakeMatchResult = PaymentIntakeOrderBase & {
   status: PaymentIntakeOrderStatus;
   /** סכום מהקליטה הנוכחית שיוקצה להזמנה זו */
   allocationUsd: number;
+  /** תוצאת הקצאה מהתשלום הנוכחי — לתצוגת היילייט */
+  allocationOutcome: "none" | "partial" | "paid";
 };
 
 const EPS = 1e-6;
@@ -57,55 +59,77 @@ export function roundMoney2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+function orderRemainingUsd(o: PaymentIntakeOrderBase): number {
+  return roundMoney2(Math.max(0, o.totalAmountUsd - o.dbPaidUsd));
+}
+
 /**
- * Part 7 — מנוע התאמה.
- * eligibleOrderIds:
- *   - null → כל ההזמנות עם יתרה משתתפות
- *   - Set (כולל ריק) → רק מזהים ב-Set (Set ריק = אף הזמנה לא משתתפת)
- * סדר קלט: מהישן לחדש
+ * מנוע הקצאה מרכזי לקליטת תשלום רגילה + מעודכנת.
+ * rules:
+ * - ללא סימון ידני: סגירה מהסכום הקטן לגדול
+ * - עם סימון ידני: קודם מסומנות, ואז קטנות לגדול מהשאר
  */
-export function matchPaymentToOrders(
+export function allocatePaymentAcrossOrders(
   ordersOldestFirst: PaymentIntakeOrderBase[],
   totalUsd: number,
-  eligibleOrderIds: Set<string> | null,
-): PaymentIntakeMatchResult[] {
+  prioritizedOrderIds: Set<string> | null,
+): { byOrderId: Map<string, number>; unallocatedUsd: number } {
   let remainingPayment = roundMoney2(Number.isFinite(totalUsd) ? totalUsd : 0);
   if (remainingPayment < 0) remainingPayment = 0;
 
-  const useFilter = eligibleOrderIds !== null;
+  const debtRows = ordersOldestFirst
+    .map((o, idx) => ({ o, idx, remaining: orderRemainingUsd(o) }))
+    .filter((x) => x.remaining > EPS);
 
+  const hasPriority = prioritizedOrderIds != null && prioritizedOrderIds.size > 0;
+  const priorityRows = hasPriority
+    ? debtRows.filter((x) => prioritizedOrderIds!.has(x.o.id))
+    : [];
+  const restRows = hasPriority
+    ? debtRows.filter((x) => !prioritizedOrderIds!.has(x.o.id))
+    : debtRows;
+
+  const bySmallestThenInput = (a: { remaining: number; idx: number }, b: { remaining: number; idx: number }) =>
+    a.remaining - b.remaining || a.idx - b.idx;
+
+  priorityRows.sort(bySmallestThenInput);
+  restRows.sort(bySmallestThenInput);
+
+  const queue = [...priorityRows, ...restRows];
+  const byOrderId = new Map<string, number>();
+
+  for (const row of queue) {
+    if (remainingPayment <= EPS) break;
+    const alloc = roundMoney2(Math.min(remainingPayment, row.remaining));
+    if (alloc <= EPS) continue;
+    byOrderId.set(row.o.id, alloc);
+    remainingPayment = roundMoney2(remainingPayment - alloc);
+  }
+
+  return { byOrderId, unallocatedUsd: remainingPayment };
+}
+
+export function matchPaymentToOrders(
+  ordersOldestFirst: PaymentIntakeOrderBase[],
+  totalUsd: number,
+  prioritizedOrderIds: Set<string> | null,
+): PaymentIntakeMatchResult[] {
+  const allocated = allocatePaymentAcrossOrders(ordersOldestFirst, totalUsd, prioritizedOrderIds);
   return ordersOldestFirst.map((o) => {
-    const dbRem = roundMoney2(Math.max(0, o.totalAmountUsd - o.dbPaidUsd));
-    let allocationUsd = 0;
-    let previewPaid = o.dbPaidUsd;
-    let previewRem = dbRem;
-    let previewStatus = debtStatus(o.dbPaidUsd, o.totalAmountUsd);
-
-    const inFilter = !useFilter || (eligibleOrderIds?.has(o.id) ?? false);
-    const participates = dbRem > EPS && inFilter;
-
-    if (participates && remainingPayment > EPS) {
-      if (remainingPayment + EPS >= dbRem) {
-        allocationUsd = dbRem;
-        previewPaid = roundMoney2(o.dbPaidUsd + dbRem);
-        previewRem = 0;
-        previewStatus = "paid";
-        remainingPayment = roundMoney2(remainingPayment - dbRem);
-      } else {
-        allocationUsd = remainingPayment;
-        previewPaid = roundMoney2(o.dbPaidUsd + remainingPayment);
-        previewRem = roundMoney2(dbRem - remainingPayment);
-        previewStatus = "partial";
-        remainingPayment = 0;
-      }
-    }
-
+    const dbRem = orderRemainingUsd(o);
+    const allocationUsd = roundMoney2(allocated.byOrderId.get(o.id) ?? 0);
+    const previewPaid = roundMoney2(o.dbPaidUsd + allocationUsd);
+    const previewRem = roundMoney2(Math.max(0, dbRem - allocationUsd));
+    const previewStatus = previewRem <= EPS ? "paid" : previewPaid <= EPS ? "unpaid" : "partial";
+    const allocationOutcome: "none" | "partial" | "paid" =
+      allocationUsd <= EPS ? "none" : previewRem <= EPS ? "paid" : "partial";
     return {
       ...o,
       paidAmount: previewPaid,
       remainingAmount: previewRem,
       status: previewStatus,
       allocationUsd,
+      allocationOutcome,
     };
   });
 }
@@ -153,9 +177,9 @@ const ALLOC_EPS = 0.02;
 export function buildAllocationsFromMatch(
   bases: PaymentIntakeOrderBase[],
   totalUsd: number,
-  eligible: Set<string> | null,
+  prioritized: Set<string> | null,
 ): { orderId: string; amountUsd: string }[] {
-  const m = matchPaymentToOrders(bases, totalUsd, eligible);
+  const m = matchPaymentToOrders(bases, totalUsd, prioritized);
   return m
     .filter((x) => x.allocationUsd > ALLOC_EPS)
     .map((x) => ({ orderId: x.id, amountUsd: roundMoney2(x.allocationUsd).toFixed(2) }));

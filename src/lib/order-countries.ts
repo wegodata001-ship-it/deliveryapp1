@@ -41,6 +41,22 @@ export function orderCountryLabel(code: string | null | undefined): string {
   return LABELS_HE[code as OrderCountryCode] ?? String(code);
 }
 
+/** חיפוש לפי שם בעברית / קוד אנגלי — לסינון רשימת הזמנות */
+export function orderCountryCodesMatchingHeSearch(query: string): OrderCountryCode[] {
+  const t = query.trim();
+  if (!t) return [];
+  const low = t.toLowerCase();
+  const strip = (s: string) => s.replace(/[\s🇹🇷🇨🇳🇦🇪·]/g, "").toLowerCase();
+  const tStrip = strip(t);
+  return ORDER_COUNTRY_CODES.filter((c) => {
+    if (c.toLowerCase().includes(low)) return true;
+    const lab = orderCountryLabel(c);
+    if (lab.toLowerCase().includes(low)) return true;
+    if (tStrip.length >= 2 && strip(lab).includes(tStrip)) return true;
+    return false;
+  });
+}
+
 /** מחלקות תצוגה ל-badge — תכלית אדום / זהב / ירוק */
 export function orderCountryBadgeClass(code: string | null | undefined): string {
   switch (code) {

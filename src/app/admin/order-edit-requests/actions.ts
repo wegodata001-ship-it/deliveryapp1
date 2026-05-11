@@ -6,7 +6,54 @@ import { requireAuth, isAdminUser, userHasAnyPermission } from "@/lib/admin-auth
 import { prisma } from "@/lib/prisma";
 import { ORDER_EDIT_UNLOCK_DURATION_MS, orderStatusRequiresEditApproval } from "@/lib/order-edit-lock";
 
+async function ensureOrderEditRequestTables(): Promise<void> {
+  await prisma.$executeRaw`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'OrderEditRequestStatus') THEN
+        CREATE TYPE "OrderEditRequestStatus" AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
+      END IF;
+    END
+    $$;
+  `;
+
+  await prisma.$executeRaw`
+    CREATE TABLE IF NOT EXISTS "OrderEditRequest" (
+      "id" TEXT PRIMARY KEY,
+      "orderId" TEXT NOT NULL,
+      "requestedByUserId" TEXT NOT NULL,
+      "requestReason" TEXT NOT NULL,
+      "status" "OrderEditRequestStatus" NOT NULL DEFAULT 'PENDING',
+      "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "approvedAt" TIMESTAMP(3),
+      "approvedByUserId" TEXT,
+      "rejectedAt" TIMESTAMP(3),
+      "rejectedByUserId" TEXT
+    )
+  `;
+  await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "OrderEditRequest_orderId_idx" ON "OrderEditRequest" ("orderId")`;
+  await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "OrderEditRequest_status_idx" ON "OrderEditRequest" ("status")`;
+  await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "OrderEditRequest_requestedByUserId_idx" ON "OrderEditRequest" ("requestedByUserId")`;
+  await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "OrderEditRequest_createdAt_idx" ON "OrderEditRequest" ("createdAt")`;
+
+  await prisma.$executeRaw`
+    CREATE TABLE IF NOT EXISTS "UserNotification" (
+      "id" TEXT PRIMARY KEY,
+      "userId" TEXT NOT NULL,
+      "kind" TEXT NOT NULL,
+      "title" TEXT NOT NULL,
+      "body" TEXT,
+      "payload" JSONB,
+      "readAt" TIMESTAMP(3),
+      "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `;
+  await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "UserNotification_userId_createdAt_idx" ON "UserNotification" ("userId", "createdAt")`;
+  await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "UserNotification_userId_readAt_idx" ON "UserNotification" ("userId", "readAt")`;
+}
+
 async function notifyUsers(userIds: string[], title: string, body: string | null, kind: string, payload?: Prisma.InputJsonValue) {
+  await ensureOrderEditRequestTables();
   const base = { title, body, kind };
   for (const userId of userIds) {
     await prisma.userNotification.create({
@@ -51,6 +98,7 @@ export async function createOrderEditRequestAction(orderId: string, requestReaso
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["edit_orders"])) return { ok: false, error: "אין הרשאה" };
   if (isAdminUser(me)) return { ok: false, error: "מנהלים יכולים לערוך ישירות — לא נדרשת בקשה" };
+  await ensureOrderEditRequestTables();
 
   const oid = orderId.trim();
   const reason = requestReason.trim();
@@ -118,6 +166,7 @@ export type OrderEditRequestRow = {
 export async function listOrderEditRequestsAction(): Promise<OrderEditRequestRow[]> {
   const me = await requireAuth();
   if (!isAdminUser(me)) return [];
+  await ensureOrderEditRequestTables();
 
   const rows = await prisma.orderEditRequest.findMany({
     orderBy: { createdAt: "desc" },
@@ -145,6 +194,7 @@ export async function approveOrderEditRequestAction(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const me = await requireAuth();
   if (!isAdminUser(me)) return { ok: false, error: "אין הרשאה — מנהלים בלבד" };
+  await ensureOrderEditRequestTables();
 
   const rid = requestId.trim();
   const req = await prisma.orderEditRequest.findFirst({
@@ -199,6 +249,7 @@ export async function approveOrderEditRequestAction(
 export async function rejectOrderEditRequestAction(requestId: string): Promise<{ ok: true } | { ok: false; error: string }> {
   const me = await requireAuth();
   if (!isAdminUser(me)) return { ok: false, error: "אין הרשאה — מנהלים בלבד" };
+  await ensureOrderEditRequestTables();
 
   const rid = requestId.trim();
   const req = await prisma.orderEditRequest.findFirst({
@@ -241,6 +292,7 @@ export async function rejectOrderEditRequestAction(requestId: string): Promise<{
 
 export async function listUnreadNotificationsAction(): Promise<{ id: string; title: string; body: string | null; createdAtIso: string }[]> {
   const me = await requireAuth();
+  await ensureOrderEditRequestTables();
   const rows = await prisma.userNotification.findMany({
     where: { userId: me.id, readAt: null },
     orderBy: { createdAt: "desc" },
@@ -257,6 +309,7 @@ export async function listUnreadNotificationsAction(): Promise<{ id: string; tit
 
 export async function markNotificationsReadAction(ids: string[]): Promise<void> {
   const me = await requireAuth();
+  await ensureOrderEditRequestTables();
   const clean = ids.map((x) => x.trim()).filter(Boolean);
   if (clean.length === 0) return;
   await prisma.userNotification.updateMany({

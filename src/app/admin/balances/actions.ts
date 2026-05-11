@@ -1,17 +1,27 @@
 "use server";
 
-import { Prisma } from "@prisma/client";
+import { OrderSourceCountry, Prisma } from "@prisma/client";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { endOfLocalDay, parseLocalDate } from "@/lib/work-week";
+import { ORDER_COUNTRY_CODES, normalizeOrderSourceCountry, type OrderCountryCode } from "@/lib/order-countries";
 
 export type CustomerBalanceStatus = "NOT_PAID" | "PARTIAL" | "PAID" | "PROBLEM" | "PAUSED";
+
+/** סינון לפי מצב יתרה (חישוב), לא לפי סטטוס גבייה */
+export type CustomerBalanceDebtFilter = "ALL" | "OWES" | "PAID_FULL" | "PARTIAL";
+
+export type CustomerBalanceSort = "balance_desc" | "balance_asc" | "name" | "orders_total";
 
 export type CustomerBalanceFilters = {
   name?: string;
   code?: string;
-  status?: CustomerBalanceStatus | "";
+  phone?: string;
+  balanceDebtStatus?: CustomerBalanceDebtFilter;
+  minBalanceIls?: string;
+  maxBalanceIls?: string;
+  sort?: CustomerBalanceSort;
 };
 
 export type CustomerBalanceQuery = {
@@ -20,6 +30,8 @@ export type CustomerBalanceQuery = {
   fromYmd?: string;
   toYmd?: string;
   weekCode?: string;
+  /** מדינת מקור הזמנה — ריק = כל המדינות */
+  sourceCountry?: OrderCountryCode | "";
   filters?: CustomerBalanceFilters;
 };
 
@@ -27,6 +39,8 @@ export type CustomerBalanceRow = {
   customerId: string;
   customerName: string;
   customerCode: string | null;
+  /** מספר הזמנות שנכנסו לחישוב בטווח */
+  ordersCount: number;
   totalOrdersILS: string;
   totalPaymentsILS: string;
   totalCreditsILS: string;
@@ -38,7 +52,6 @@ export type CustomerBalanceRow = {
   status: CustomerBalanceStatus;
   autoStatus: CustomerBalanceStatus;
   statusOverride: CustomerBalanceStatus | null;
-  note: string;
 };
 
 export type CustomerBalancesPayload = {
@@ -50,6 +63,10 @@ export type CustomerBalancesPayload = {
 };
 
 const STATUS_VALUES = new Set<CustomerBalanceStatus>(["NOT_PAID", "PARTIAL", "PAID", "PROBLEM", "PAUSED"]);
+
+const DEBT_FILTER_VALUES = new Set<CustomerBalanceDebtFilter>(["ALL", "OWES", "PAID_FULL", "PARTIAL"]);
+
+const SORT_VALUES = new Set<CustomerBalanceSort>(["balance_desc", "balance_asc", "name", "orders_total"]);
 
 async function ensureStatusOverrideTable() {
   await prisma.$executeRaw`
@@ -105,6 +122,34 @@ function autoStatus(expected: Prisma.Decimal, received: Prisma.Decimal): Custome
   return "PAID";
 }
 
+function parseIlsFilter(raw: string | undefined): number | null {
+  const t = raw?.trim().replace(",", ".") ?? "";
+  if (!t) return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+}
+
+function rowBalanceNumber(balanceIls: string): number {
+  const n = Number(balanceIls.replace(",", "."));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function rowOrdersTotalNumber(totalOrdersILS: string): number {
+  const n = Number(totalOrdersILS.replace(",", "."));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function matchesDebtFilter(row: CustomerBalanceRow, filter: CustomerBalanceDebtFilter): boolean {
+  if (filter === "ALL") return true;
+  const bal = rowBalanceNumber(row.balanceILS);
+  const auto = row.autoStatus;
+  const eps = 0.01;
+  if (filter === "OWES") return bal > eps;
+  if (filter === "PAID_FULL") return auto === "PAID" && Math.abs(bal) <= eps;
+  if (filter === "PARTIAL") return auto === "PARTIAL";
+  return true;
+}
+
 export async function listCustomerBalancesAction(query: CustomerBalanceQuery): Promise<CustomerBalancesPayload> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["view_reports"])) {
@@ -128,6 +173,32 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
         }
       : undefined;
 
+  const countryNorm = normalizeOrderSourceCountry(query.sourceCountry || null);
+  const orderCountryPrisma: OrderSourceCountry | undefined =
+    countryNorm && (ORDER_COUNTRY_CODES as readonly string[]).includes(countryNorm) ? (countryNorm as OrderSourceCountry) : undefined;
+
+  const orderNestedWhere: Prisma.OrderWhereInput = {
+    deletedAt: null,
+    ...(query.weekCode?.trim() ? { weekCode: query.weekCode.trim() } : {}),
+    ...(orderDateWhere ? { orderDate: orderDateWhere } : {}),
+    ...(orderCountryPrisma ? { sourceCountry: orderCountryPrisma } : {}),
+  };
+
+  const paymentLinkedWhere: Prisma.PaymentWhereInput = {
+    isPaid: true,
+    orderId: { not: null },
+    ...(query.weekCode?.trim() ? { weekCode: query.weekCode.trim() } : {}),
+    ...(paymentDateWhere ? { paymentDate: paymentDateWhere } : {}),
+    ...(orderCountryPrisma
+      ? {
+          order: {
+            deletedAt: null,
+            sourceCountry: orderCountryPrisma,
+          },
+        }
+      : {}),
+  };
+
   const customers = await prisma.customer.findMany({
     where: {
       deletedAt: null,
@@ -145,6 +216,14 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       ...(query.filters?.code?.trim()
         ? { customerCode: { contains: query.filters.code.trim(), mode: "insensitive" as const } }
         : {}),
+      ...(query.filters?.phone?.trim()
+        ? {
+            OR: [
+              { phone: { contains: query.filters.phone.trim(), mode: "insensitive" as const } },
+              { secondPhone: { contains: query.filters.phone.trim(), mode: "insensitive" as const } },
+            ],
+          }
+        : {}),
     },
     orderBy: { displayName: "asc" },
     select: {
@@ -155,11 +234,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       nameHe: true,
       customerCode: true,
       orders: {
-        where: {
-          deletedAt: null,
-          ...(query.weekCode?.trim() ? { weekCode: query.weekCode.trim() } : {}),
-          ...(orderDateWhere ? { orderDate: orderDateWhere } : {}),
-        },
+        where: orderNestedWhere,
         select: {
           totalIlsWithVat: true,
           totalIls: true,
@@ -172,12 +247,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
         },
       },
       payments: {
-        where: {
-          isPaid: true,
-          orderId: { not: null },
-          ...(query.weekCode?.trim() ? { weekCode: query.weekCode.trim() } : {}),
-          ...(paymentDateWhere ? { paymentDate: paymentDateWhere } : {}),
-        },
+        where: paymentLinkedWhere,
         select: {
           totalIlsWithVat: true,
           amountIls: true,
@@ -216,16 +286,15 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     creditByCustomer.set(cid, cur.add(paymentIlsValue(p)));
   }
 
-  const overrides = await prisma.$queryRaw<Array<{ customerId: string; statusOverride: string | null; note: string | null }>>`
-    SELECT "customerId", "statusOverride", "note"
+  const overrides = await prisma.$queryRaw<Array<{ customerId: string; statusOverride: string | null }>>`
+    SELECT "customerId", "statusOverride"
     FROM "CustomerBalanceStatusOverride"
   `;
   const overrideMap = new Map(
     overrides
-      .filter((r) => STATUS_VALUES.has(r.statusOverride as CustomerBalanceStatus))
+      .filter((r) => r.statusOverride && STATUS_VALUES.has(r.statusOverride as CustomerBalanceStatus))
       .map((r) => [r.customerId, r.statusOverride as CustomerBalanceStatus]),
   );
-  const noteMap = new Map(overrides.map((r) => [r.customerId, r.note ?? ""]));
 
   const rows = customers.map((c): CustomerBalanceRow => {
     const expectedIls = c.orders.reduce((sum, o) => sum.add(orderExpectedIlsValue(o)), new Prisma.Decimal(0));
@@ -248,6 +317,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
         displayName: c.displayName,
       }),
       customerCode: c.customerCode,
+      ordersCount: c.orders.length,
       totalOrdersILS: money(expectedIls),
       totalPaymentsILS: money(receivedIls),
       totalCreditsILS: money(creditsIls),
@@ -259,21 +329,41 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       status: override ?? calculated,
       autoStatus: calculated,
       statusOverride: override,
-      note: noteMap.get(c.id) ?? "",
     };
   });
 
-  const statusFilter = query.filters?.status || "";
-  const filtered = rows.filter((r) => !statusFilter || r.status === statusFilter);
+  const debtFilter: CustomerBalanceDebtFilter =
+    query.filters?.balanceDebtStatus && DEBT_FILTER_VALUES.has(query.filters.balanceDebtStatus)
+      ? query.filters.balanceDebtStatus
+      : "ALL";
+
+  const minB = parseIlsFilter(query.filters?.minBalanceIls);
+  const maxB = parseIlsFilter(query.filters?.maxBalanceIls);
+
+  let filtered = rows.filter((r) => matchesDebtFilter(r, debtFilter));
+
+  if (minB != null) filtered = filtered.filter((r) => rowBalanceNumber(r.balanceILS) >= minB);
+  if (maxB != null) filtered = filtered.filter((r) => rowBalanceNumber(r.balanceILS) <= maxB);
+
+  const sort: CustomerBalanceSort =
+    query.filters?.sort && SORT_VALUES.has(query.filters.sort) ? query.filters.sort : "balance_desc";
+
+  const sorted = [...filtered].sort((a, b) => {
+    if (sort === "balance_desc") return rowBalanceNumber(b.balanceILS) - rowBalanceNumber(a.balanceILS);
+    if (sort === "balance_asc") return rowBalanceNumber(a.balanceILS) - rowBalanceNumber(b.balanceILS);
+    if (sort === "orders_total") return rowOrdersTotalNumber(b.totalOrdersILS) - rowOrdersTotalNumber(a.totalOrdersILS);
+    return a.customerName.localeCompare(b.customerName, "he");
+  });
+
   const limit = Math.min(50, Math.max(1, Math.floor(query.limit || 15)));
   const requestedPage = Math.max(1, Math.floor(query.page || 1));
-  const totalRows = filtered.length;
+  const totalRows = sorted.length;
   const totalPages = Math.max(1, Math.ceil(totalRows / limit));
   const page = Math.min(requestedPage, totalPages);
   const skip = (page - 1) * limit;
 
   return {
-    rows: filtered.slice(skip, skip + limit),
+    rows: sorted.slice(skip, skip + limit),
     page,
     limit,
     totalRows,

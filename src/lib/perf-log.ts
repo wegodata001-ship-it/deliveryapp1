@@ -23,8 +23,7 @@ export async function withPerfTimer<T>(scope: string, fn: () => Promise<T>): Pro
   if (!PERF_ENABLED) {
     return fn();
   }
-  const label = perfNowLabel(scope);
-  console.time(label);
+  const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
   try {
     const out = await fn();
     return out;
@@ -32,6 +31,8 @@ export async function withPerfTimer<T>(scope: string, fn: () => Promise<T>): Pro
     perfError(scope, error);
     throw error;
   } finally {
-    console.timeEnd(label);
+    const endedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const durationMs = Math.max(0, endedAt - startedAt);
+    console.log(perfNowLabel(scope), { durationMs: Number(durationMs.toFixed(2)) });
   }
 }

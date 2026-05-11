@@ -65,6 +65,21 @@ function NavIcon({ id }: { id: NavIconId }) {
   }
 }
 
+const ORDERS_LIST_KEYS = [
+  "ordersWeek",
+  "ordersFrom",
+  "ordersTo",
+  "ordersPreset",
+  "preset",
+  "ordersCountry",
+  "q",
+  "status",
+  "createdBy",
+  "paymentType",
+  "amountMin",
+  "amountMax",
+] as const;
+
 function resolveNavHref(item: NavItemDef, sp: URLSearchParams): string {
   const globals = new URLSearchParams();
   for (const key of ["week", "from", "to", "country"] as const) {
@@ -89,6 +104,12 @@ function resolveNavHref(item: NavItemDef, sp: URLSearchParams): string {
     const u = new URL(item.href, "http://local.invalid");
     const out = new URLSearchParams(u.search);
     for (const [k, v] of globals.entries()) out.set(k, v);
+    if (u.pathname === "/admin/orders" || u.pathname.startsWith("/admin/orders/")) {
+      for (const key of ORDERS_LIST_KEYS) {
+        const v = sp.get(key);
+        if (v) out.set(key, v);
+      }
+    }
     const qs = out.toString();
     return qs ? `${u.pathname}?${qs}` : u.pathname;
   }

@@ -86,7 +86,7 @@ export function MinimalOrderCapturePanel({ onToast, canCreateOrders, onClose }: 
           orderTimeHm,
           totalAmount,
         }),
-      "שומר הזמנה...",
+      { message: "שומר הזמנה...", mode: "overlay" },
     );
     setBusy(false);
 

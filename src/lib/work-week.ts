@@ -158,6 +158,8 @@ export function nextWeekCode(code: string): string | null {
 
 export type ParsedDateFilter = {
   weekCode: string;
+  /** ערך ל־select של שבוע AH כשהטווח תואם בדיוק שבוע אחד; ריק = טווח מותאם / חוצה שבועות */
+  ahWeekSelect: string;
   fromYmd: string;
   toYmd: string;
   fromStart: Date;
@@ -209,9 +211,79 @@ export function parseDateFilterFromSearchParams(
   }
 
   const weekCode = knownWeek ?? getWeekCodeForLocalDate(parseLocalDate(fromYmd));
+  const ahWeekSelect = getAhWeekCodeFromDateRange(fromYmd, toYmd) ?? (knownWeek && WORK_WEEK_RANGES[knownWeek] ? knownWeek : "");
 
   return {
     weekCode,
+    ahWeekSelect,
+    fromYmd,
+    toYmd,
+    fromStart: parseLocalDate(fromYmd),
+    toEnd: endOfLocalDay(toYmd),
+  };
+}
+
+function readSpStr(raw: Record<string, string | string[] | undefined>, key: string): string | undefined {
+  const v = raw[key];
+  return typeof v === "string" ? v.trim() : undefined;
+}
+
+/**
+ * טווח תאריכים לרשימת הזמנות בלבד.
+ * אם קיימים ordersWeek / ordersFrom / ordersTo / ordersPreset — משתמש בהם (לא מערבב עם week/from/to הגלובליים).
+ * אחרת — נופל ל-parseDateFilterFromSearchParams (שבוע ותאריכים מה־URL הגלובלי).
+ */
+export function parseOrdersListDateFilterFromSearchParams(
+  raw: Record<string, string | string[] | undefined>,
+): ParsedDateFilter {
+  const ow = readSpStr(raw, "ordersWeek");
+  const ofrom = readSpStr(raw, "ordersFrom");
+  const oto = readSpStr(raw, "ordersTo");
+  const opreset = readSpStr(raw, "ordersPreset") ?? readSpStr(raw, "preset");
+
+  const hasOrdersScope = !!(ow || ofrom || oto || opreset);
+  if (!hasOrdersScope) {
+    return parseDateFilterFromSearchParams(raw);
+  }
+
+  const knownWeek = ow && WORK_WEEK_RANGES[ow] ? ow : null;
+  const fallbackWeek = DEFAULT_WEEK_CODE;
+  const now = new Date();
+
+  let base: WorkWeekRange;
+  if (knownWeek) {
+    base = WORK_WEEK_RANGES[knownWeek];
+  } else if (opreset === "today") {
+    const ymd = formatLocalYmd(now);
+    base = { from: ymd, to: ymd };
+  } else if (opreset === "this_week") {
+    const code = getWeekCodeForLocalDate(now);
+    base = WORK_WEEK_RANGES[code] ?? getCurrentWeekYmdRange(now);
+  } else if (opreset === "last_week") {
+    const code = getWeekCodeForLocalDate(now);
+    const prev = prevWeekCode(code);
+    base = prev && WORK_WEEK_RANGES[prev] ? WORK_WEEK_RANGES[prev] : WORK_WEEK_RANGES[fallbackWeek];
+  } else if (ofrom || oto) {
+    base = WORK_WEEK_RANGES[fallbackWeek];
+  } else {
+    base = getCurrentWeekYmdRange(now);
+  }
+
+  let fromYmd = isValidYmd(ofrom) ? ofrom : base.from;
+  let toYmd = isValidYmd(oto) ? oto : base.to;
+
+  if (fromYmd > toYmd) {
+    const t = fromYmd;
+    fromYmd = toYmd;
+    toYmd = t;
+  }
+
+  const weekCode = knownWeek ?? getWeekCodeForLocalDate(parseLocalDate(fromYmd));
+  const ahWeekSelect = getAhWeekCodeFromDateRange(fromYmd, toYmd) ?? (knownWeek && WORK_WEEK_RANGES[knownWeek] ? knownWeek : "");
+
+  return {
+    weekCode,
+    ahWeekSelect,
     fromYmd,
     toYmd,
     fromStart: parseLocalDate(fromYmd),

@@ -17,6 +17,12 @@ import { computeCustomerNamePatches, primaryCustomerDisplayName } from "@/lib/cu
 import { canUserEditCompletedOrder } from "@/lib/order-edit-lock";
 import { clearExpiredOrderEditUnlockForOrder } from "@/app/admin/order-edit-requests/actions";
 import { perfError, withPerfTimer } from "@/lib/perf-log";
+import {
+  ensureIntakeLocationTable,
+  findOrCreateIntakeLocationByName,
+  listIntakeLocationsForSelect,
+  resolveOrderIntakeLocationColumnValue,
+} from "@/lib/intake-location";
 
 async function applyCustomerNameDraftsIfNeeded(
   customerId: string,
@@ -98,7 +104,7 @@ async function verifyOrderRowMatchesAfterSave(
   expected: {
     orderNumber: string | null;
     customerId: string;
-    sourceCountry: OrderCountryCode;
+    sourceCountry: OrderCountryCode | null;
     status: OrderStatus;
     paymentMethod: PaymentMethod;
     amountUsd: Prisma.Decimal;
@@ -128,7 +134,7 @@ async function verifyOrderRowMatchesAfterSave(
   if ((row.orderNumber ?? "").trim() !== (expected.orderNumber ?? "").trim()) {
     return { ok: false, error: "אימות שמירה נכשל: מספר הזמנה" };
   }
-  if (String(row.sourceCountry ?? "") !== expected.sourceCountry) {
+  if (String(row.sourceCountry ?? "") !== String(expected.sourceCountry ?? "")) {
     return { ok: false, error: "אימות שמירה נכשל: מדינת מקור" };
   }
   if (row.status !== expected.status) {
@@ -301,6 +307,21 @@ export type CustomerPaymentDetailPayload = {
 };
 
 export type PaymentLocationOptionRow = { id: string; name: string; code: string | null; label: string };
+
+async function ensureOrderGeoTables(): Promise<void> {
+  await prisma.$executeRaw`
+    CREATE TABLE IF NOT EXISTS "OrderLocations" (
+      "id" TEXT PRIMARY KEY,
+      "name" TEXT NOT NULL,
+      "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "createdBy" TEXT
+    )
+  `;
+  await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "OrderLocations_name_idx" ON "OrderLocations" ("name")`;
+  await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "OrderLocations_createdBy_idx" ON "OrderLocations" ("createdBy")`;
+
+  await prisma.$executeRaw`ALTER TABLE "Order" ADD COLUMN IF NOT EXISTS "locationId" TEXT`;
+}
 
 /** טעינת הקשר הזמנה לקליטת תשלום (מספר הזמנה) — ללא שינוי בקליטת הזמנה */
 export async function fetchOrderForPaymentContextAction(
@@ -1040,6 +1061,9 @@ export type ClientCreateResult = {
 export type ClientLedgerRow = {
   id: string;
   name: string;
+  customerCode: string | null;
+  nameAr: string | null;
+  nameEn: string | null;
   phone: string | null;
   email: string | null;
   createdAt: string;
@@ -1110,6 +1134,7 @@ export async function listClientsLedgerAction(params: {
     ...(q
       ? {
           OR: [
+            { customerCode: { contains: q, mode: "insensitive" } },
             { displayName: { contains: q, mode: "insensitive" } },
             { nameAr: { contains: q, mode: "insensitive" } },
             { nameEn: { contains: q, mode: "insensitive" } },
@@ -1134,6 +1159,7 @@ export async function listClientsLedgerAction(params: {
     select: {
       id: true,
       displayName: true,
+      customerCode: true,
       nameAr: true,
       nameEn: true,
       nameHe: true,
@@ -1152,6 +1178,9 @@ export async function listClientsLedgerAction(params: {
         nameHe: r.nameHe,
         displayName: r.displayName,
       }),
+      customerCode: r.customerCode,
+      nameAr: r.nameAr,
+      nameEn: r.nameEn,
       phone: r.phone,
       email: r.email,
       createdAt: r.createdAt.toISOString(),
@@ -1389,53 +1418,33 @@ export async function previewOrderNumberAction(weekCode: string): Promise<string
   return orderNumber;
 }
 
-/** נקודות תשלום לטופס הזמנה (PaymentPoint) */
-export async function listPaymentPointsForOrderAction(): Promise<{ id: string; label: string }[]> {
+/** מקומות קליטת הזמנה (IntakeLocation) לטופס הזמנה */
+export async function listPaymentPointsForOrderAction(query?: string, limit?: number): Promise<{ id: string; label: string }[]> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["create_orders", "edit_orders"])) return [];
-  const rows = await prisma.paymentPoint.findMany({
-    where: { isActive: true },
-    orderBy: { pointName: "asc" },
-    select: { id: true, pointName: true, city: true },
-    take: 200,
-  });
-  return rows.map((r) => ({
-    id: r.id,
-    label: r.city ? `${r.pointName} · ${r.city}` : r.pointName,
-  }));
+  await ensureOrderGeoTables();
+  const take = limit ?? (query?.trim() ? 80 : 500);
+  const rows = await listIntakeLocationsForSelect((query ?? "").trim(), take);
+  return rows.map((r) => ({ id: r.id, label: r.name }));
 }
 
-/** יצירת נקודת תשלום חדשה מהמסך (ללא רענון) */
+/** יצירת / איחוד מקום קליטת הזמנה (ללא כפילויות לפי lowercase+trim) */
 export async function createPaymentPointForOrderAction(input: {
   pointName: string;
   city?: string | null;
 }): Promise<{ ok: true; point: { id: string; label: string } } | { ok: false; error: string }> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["create_orders", "edit_orders"])) return { ok: false, error: "אין הרשאה" };
+  await ensureOrderGeoTables();
 
-  const name = input.pointName.trim();
-  if (!name) return { ok: false, error: "יש להזין שם מקום" };
-  if (name.length > 80) return { ok: false, error: "שם מקום ארוך מדי" };
-
-  const city = input.city?.trim() || null;
-
-  const created = await prisma.paymentPoint.create({
-    data: {
-      pointName: name,
-      city,
-      isActive: true,
-    },
-    select: { id: true, pointName: true, city: true },
-  });
-
-  revalidatePath("/admin");
-  return {
-    ok: true,
-    point: {
-      id: created.id,
-      label: created.city ? `${created.pointName} · ${created.city}` : created.pointName,
-    },
-  };
+  try {
+    const row = await findOrCreateIntakeLocationByName(input.pointName);
+    revalidatePath("/admin");
+    return { ok: true, point: { id: row.id, label: row.name } };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "שגיאה";
+    return { ok: false, error: msg };
+  }
 }
 
 /** פרטי תצוגה לטופס קליטת הזמנה (שמות, אינדקס, יתרה משוערת) */
@@ -1524,6 +1533,9 @@ export async function captureOrderAction(form: {
   vatPercent?: string | null;
   /** מקור / מדינת ספק */
   sourceCountry?: OrderCountryCode | string | null;
+  locationId?: string | null;
+  /** כשאין id נבחר — שם חופשי; בשרת יווצר IntakeLocation בשמירה */
+  intakeLocationDraftName?: string | null;
   /** טיוטת שמות מהטופס — עדכון nameAr/nameEn בלקוח רק כשהשדה ריק במסד */
   draftNameAr?: string | null;
   draftNameEn?: string | null;
@@ -1550,6 +1562,8 @@ export async function captureOrderAction(form: {
     where: { id: form.customerId.trim(), deletedAt: null, isActive: true },
   });
   if (!customer) return { ok: false, error: "לקוח לא נמצא" };
+
+  await ensureOrderGeoTables();
 
   await applyCustomerNameDraftsIfNeeded(customer.id, form.draftNameAr, form.draftNameEn);
 
@@ -1645,11 +1659,14 @@ export async function captureOrderAction(form: {
   }
 
   let paymentPointConnect: { connect: { id: string } } | undefined;
-  const ppId = form.paymentPointId?.trim();
-  if (ppId) {
-    const pp = await prisma.paymentPoint.findFirst({ where: { id: ppId, isActive: true }, select: { id: true } });
-    if (!pp) return { ok: false, error: "נקודת תשלום לא תקינה" };
-    paymentPointConnect = { connect: { id: ppId } };
+  const fieldId = form.paymentPointId?.trim() || form.locationId?.trim() || "";
+  const resolvedLoc = await resolveOrderIntakeLocationColumnValue({
+    fieldId: fieldId || undefined,
+    draftName: form.intakeLocationDraftName,
+  });
+  if (!resolvedLoc.ok) return { ok: false, error: resolvedLoc.error };
+  if (resolvedLoc.paymentPointIdForPrisma) {
+    paymentPointConnect = { connect: { id: resolvedLoc.paymentPointIdForPrisma } };
   }
 
   const allowedCountries = await getSelectedCountriesForOrdersAction();
@@ -1710,6 +1727,8 @@ export async function captureOrderAction(form: {
     totalUsd,
   });
   if (!verifyCreate.ok) return verifyCreate;
+
+  await prisma.$executeRaw`UPDATE "Order" SET "locationId" = ${resolvedLoc.locationId} WHERE "id" = ${order.id}`;
 
   if (payParse.parsed.length > 0) {
     await appendParsedPaymentsForOrder({
@@ -1776,6 +1795,8 @@ export type OrderWorkPanelPayload = {
   feeUsd: string;
   paymentMethod: PaymentMethod;
   paymentPointId: string | null;
+  locationId: string | null;
+  locationName: string | null;
   status: OrderStatus;
   usdRateUsed: string;
   notes: string;
@@ -1801,6 +1822,8 @@ export async function getOrderForWorkPanelAction(orderId: string): Promise<Order
 
     const id = orderId.trim();
     if (!id) return null;
+    await ensureOrderGeoTables();
+    await ensureIntakeLocationTable();
 
     const order = await prisma.order.findFirst({
       where: { id, deletedAt: null },
@@ -1816,6 +1839,9 @@ export async function getOrderForWorkPanelAction(orderId: string): Promise<Order
         commissionUsd: true,
         paymentMethod: true,
         paymentPointId: true,
+        paymentPoint: {
+          select: { pointName: true, city: true },
+        },
         status: true,
         usdRateUsed: true,
         snapshotFinalDollarRate: true,
@@ -1829,6 +1855,18 @@ export async function getOrderForWorkPanelAction(orderId: string): Promise<Order
       },
     });
     if (!order) return null;
+
+    const geoRows = await prisma.$queryRaw<Array<{ locationId: string | null; locationName: string | null }>>`
+      SELECT
+        o."locationId" AS "locationId",
+        COALESCE(il."name", ol."name") AS "locationName"
+      FROM "Order" o
+      LEFT JOIN "IntakeLocation" il ON il."id" = o."locationId"
+      LEFT JOIN "OrderLocations" ol ON ol."id" = o."locationId"
+      WHERE o."id" = ${order.id}
+      LIMIT 1
+    `;
+    const geo = geoRows[0];
 
     const deal = order.amountUsd ?? new Prisma.Decimal(0);
     const com = order.commissionUsd ?? new Prisma.Decimal(0);
@@ -1888,6 +1926,10 @@ export async function getOrderForWorkPanelAction(orderId: string): Promise<Order
       feeUsd: com.toString(),
       paymentMethod: order.paymentMethod ?? PaymentMethod.BANK_TRANSFER,
       paymentPointId: order.paymentPointId ?? null,
+      locationId: geo?.locationId ?? null,
+      locationName:
+        geo?.locationName ??
+        (order.paymentPoint?.city ? `${order.paymentPoint.pointName} · ${order.paymentPoint.city}` : order.paymentPoint?.pointName ?? null),
       status: order.status,
       usdRateUsed: rateUsed.toFixed(4),
       notes: order.notes ?? "",
@@ -1974,6 +2016,8 @@ export async function updateOrderWorkPanelAction(form: {
   status: string;
   notes?: string;
   paymentPointId?: string | null;
+  locationId?: string | null;
+  intakeLocationDraftName?: string | null;
   paymentLines?: OrderCapturePaymentLineInput[];
   sourceCountry?: OrderCountryCode | string | null;
   draftNameAr?: string | null;
@@ -1997,6 +2041,8 @@ export async function updateOrderWorkPanelAction(form: {
     },
   });
   if (!existing) return { ok: false, error: "הזמנה לא נמצאה" };
+
+  await ensureOrderGeoTables();
 
   await clearExpiredOrderEditUnlockForOrder(existing.id);
   const gate = await prisma.order.findFirst({
@@ -2081,13 +2127,13 @@ export async function updateOrderWorkPanelAction(form: {
   const orderDate = parseLocalDateTime(form.orderDateYmd, form.orderTimeHm || "00:00");
   const typeSnap = (form.customerTypeSnapshot?.trim() || customer.customerType || "רגיל").trim() || "רגיל";
 
-  let paymentPointIdUpdate: string | null = null;
-  const ppId = form.paymentPointId?.trim();
-  if (ppId) {
-    const pp = await prisma.paymentPoint.findFirst({ where: { id: ppId, isActive: true }, select: { id: true } });
-    if (!pp) return { ok: false, error: "נקודת תשלום לא תקינה" };
-    paymentPointIdUpdate = ppId;
-  }
+  const fieldIdUp = form.paymentPointId?.trim() || form.locationId?.trim() || "";
+  const resolvedUp = await resolveOrderIntakeLocationColumnValue({
+    fieldId: fieldIdUp || undefined,
+    draftName: form.intakeLocationDraftName,
+  });
+  if (!resolvedUp.ok) return { ok: false, error: resolvedUp.error };
+  const paymentPointIdUpdate = resolvedUp.paymentPointIdForPrisma;
 
   const allowedCountries = await getSelectedCountriesForOrdersAction();
   const rawCountry = form.sourceCountry?.trim();
@@ -2149,6 +2195,8 @@ export async function updateOrderWorkPanelAction(form: {
     totalUsd,
   });
   if (!verifyUpdate.ok) return verifyUpdate;
+
+  await prisma.$executeRaw`UPDATE "Order" SET "locationId" = ${resolvedUp.locationId} WHERE "id" = ${existing.id}`;
 
   if (payParse.parsed.length > 0) {
     await appendParsedPaymentsForOrder({

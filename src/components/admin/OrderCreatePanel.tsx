@@ -9,8 +9,6 @@ import {
   getCustomerOrderFormExtrasAction,
   getOrderForWorkPanelAction,
   listCustomersForOrderQuickPickAction,
-  createPaymentPointForOrderAction,
-  listPaymentPointsForOrderAction,
   previewOrderNumberAction,
   resolveCustomerForCaptureAction,
   searchCustomersForOrderAction,
@@ -25,6 +23,17 @@ import { useAdminLoading } from "@/components/admin/AdminLoadingProvider";
 import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import Card from "@/components/ui/Card";
 import type { OrderCaptureWindowProps } from "@/lib/admin-windows";
+
+async function fetchIntakeLocationsApi(query: string): Promise<{ id: string; label: string }[]> {
+  const sp = new URLSearchParams();
+  const q = query.trim();
+  if (q) sp.set("q", q);
+  sp.set("limit", q ? "120" : "500");
+  const res = await fetch(`/api/intake-locations?${sp.toString()}`, { credentials: "include" });
+  if (!res.ok) throw new Error("intake-locations");
+  const rows = (await res.json()) as { id: string; name: string }[];
+  return rows.map((r) => ({ id: r.id, label: r.name }));
+}
 import { ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS } from "@/lib/order-capture-payment-methods";
 import { orderCountryLabel, ORDER_COUNTRY_CODES, coerceOrderCountryForForm, type OrderCountryCode } from "@/lib/order-countries";
 import type { SerializedFinancial } from "@/lib/financial-settings";
@@ -233,11 +242,13 @@ export function OrderCreatePanel({
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(PaymentMethod.BANK_TRANSFER);
   const [paymentPointId, setPaymentPointId] = useState("");
   const [paymentPoints, setPaymentPoints] = useState<{ id: string; label: string }[]>([]);
-  const [ppAddOpen, setPpAddOpen] = useState(false);
-  const [ppAddName, setPpAddName] = useState("");
-  const [ppAddBusy, setPpAddBusy] = useState(false);
-  const [ppAddMsg, setPpAddMsg] = useState<string | null>(null);
-  const [ppAddErr, setPpAddErr] = useState<string | null>(null);
+  const [paymentPointQuery, setPaymentPointQuery] = useState("");
+  const [paymentPointHits, setPaymentPointHits] = useState<{ id: string; label: string }[]>([]);
+  const [paymentPointOpen, setPaymentPointOpen] = useState(false);
+  const [paymentPointBusy, setPaymentPointBusy] = useState(false);
+  const [paymentPointErr, setPaymentPointErr] = useState<string | null>(null);
+  const paymentPointSearchGenRef = useRef(0);
+  const [intakeActiveIdx, setIntakeActiveIdx] = useState(0);
   const [notes, setNotes] = useState("");
 
   const [dealUsdStr, setDealUsdStr] = useState("");
@@ -252,18 +263,25 @@ export function OrderCreatePanel({
   );
 
   useEffect(() => {
+    let cancelled = false;
+    void fetchIntakeLocationsApi("")
+      .then((rows) => {
+        if (cancelled) return;
+        setPaymentPoints(rows);
+        setPaymentPointHits(rows);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setPaymentPointErr("טעינת מקומות קליטה נכשלה");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     void getSelectedCountriesForOrdersAction().then(setOrderCountries);
   }, []);
-
-  useEffect(() => {
-    void listPaymentPointsForOrderAction().then(setPaymentPoints);
-  }, []);
-
-  useEffect(() => {
-    if (!ppAddMsg) return;
-    const t = window.setTimeout(() => setPpAddMsg(null), 2200);
-    return () => window.clearTimeout(t);
-  }, [ppAddMsg]);
 
   const countrySelectOptions = useMemo(() => [...ORDER_COUNTRY_CODES] as OrderCountryCode[], []);
 
@@ -340,7 +358,9 @@ export function OrderCreatePanel({
       setOrderNumberPreview(row.orderNumber);
       setOrderStatus(row.status);
       setPaymentMethod(row.paymentMethod);
-      setPaymentPointId(row.paymentPointId ?? "");
+      setPaymentPointId(row.locationId ?? row.paymentPointId ?? "");
+      setPaymentPointQuery(row.locationName ?? "");
+      setPaymentPointOpen(false);
       setNotes(row.notes);
       setDealUsdStr(row.amountUsd);
       setFeeUsdStr(row.feeUsd);
@@ -373,6 +393,47 @@ export function OrderCreatePanel({
       cancelled = true;
     };
   }, [isEdit, editOrderId, financial?.finalDollarRate]);
+
+  useEffect(() => {
+    if (!paymentPointId) return;
+    const match = paymentPoints.find((p) => p.id === paymentPointId);
+    if (!match) return;
+    setPaymentPointQuery(match.label);
+  }, [paymentPointId, paymentPoints]);
+
+  useEffect(() => {
+    const q = paymentPointQuery;
+    const gen = ++paymentPointSearchGenRef.current;
+    const delay = q.trim() ? 200 : 0;
+    const t = window.setTimeout(() => {
+      setPaymentPointBusy(true);
+      void fetchIntakeLocationsApi(q)
+        .then((rows) => {
+          if (paymentPointSearchGenRef.current !== gen) return;
+          setPaymentPointBusy(false);
+          setPaymentPointHits(rows);
+        })
+        .catch(() => {
+          if (paymentPointSearchGenRef.current !== gen) return;
+          setPaymentPointBusy(false);
+          setPaymentPointHits([]);
+        });
+    }, delay);
+    return () => window.clearTimeout(t);
+  }, [paymentPointQuery]);
+
+  useEffect(() => {
+    if (paymentPointHits.length === 0) return;
+    setPaymentPoints((cur) => {
+      const map = new Map(cur.map((p) => [p.id, p]));
+      for (const h of paymentPointHits) map.set(h.id, h);
+      return [...map.values()].sort((a, b) => a.label.localeCompare(b.label, "he"));
+    });
+  }, [paymentPointHits]);
+
+  useEffect(() => {
+    setIntakeActiveIdx(0);
+  }, [paymentPointHits]);
 
   const loadCustomerExtras = useCallback(async (customerId: string) => {
     const req = ++customerExtrasReqRef.current;
@@ -574,9 +635,7 @@ export function OrderCreatePanel({
       setErr("יש להזין סכום עסקה (₪ או $)");
       return;
     }
-    const countryForSave =
-      coerceOrderCountryForForm(sourceCountry) ||
-      (isEdit ? coerceOrderCountryForForm(loadedSourceCountry) : "");
+    const countryForSave = coerceOrderCountryForForm(sourceCountry) || (isEdit ? coerceOrderCountryForForm(loadedSourceCountry) : "");
     if (!countryForSave) {
       setErr("יש לבחור מדינת מקור");
       return;
@@ -588,6 +647,12 @@ export function OrderCreatePanel({
     }
     if (!isEdit && !canCreateOrders) {
       setErr("אין הרשאה ליצירת הזמנה");
+      return;
+    }
+
+    const intakeDraft = !paymentPointId.trim() && paymentPointQuery.trim() ? paymentPointQuery.trim() : "";
+    if (intakeDraft && intakeDraft.length < 2) {
+      setErr("מקום קליטה: יש לבחור מהרשימה או להזין לפחות שני תווים");
       return;
     }
 
@@ -611,12 +676,15 @@ export function OrderCreatePanel({
               status: orderStatus,
               notes: notes.trim() || undefined,
               paymentPointId: paymentPointId.trim() || null,
+              locationId: paymentPointId.trim() || null,
+              intakeLocationDraftName:
+                !paymentPointId.trim() && paymentPointQuery.trim() ? paymentPointQuery.trim() : undefined,
               paymentLines: undefined,
               sourceCountry: countryForSave,
               draftNameAr: nameArStr.trim() || null,
               draftNameEn: nameEnStr.trim() || null,
             }),
-          "שומר נתונים...",
+          { message: "שומר נתונים...", mode: "overlay" },
         );
         if (!res.ok) throw new Error(res.error);
         onToast("ההזמנה עודכנה בהצלחה!");
@@ -635,13 +703,16 @@ export function OrderCreatePanel({
               status: orderStatus,
               notes: notes.trim() || undefined,
               paymentPointId: paymentPointId.trim() || null,
+              locationId: paymentPointId.trim() || null,
+              intakeLocationDraftName:
+                !paymentPointId.trim() && paymentPointQuery.trim() ? paymentPointQuery.trim() : undefined,
               vatPercent: String(VAT_RATE_PERCENT),
               paymentLines: undefined,
               sourceCountry: countryForSave,
               draftNameAr: nameArStr.trim() || null,
               draftNameEn: nameEnStr.trim() || null,
             }),
-          "שומר נתונים...",
+          { message: "שומר נתונים...", mode: "overlay" },
         );
         if (!res.ok) throw new Error(res.error);
         onToast("הזמנה נוצרה בהצלחה!");
@@ -682,6 +753,73 @@ export function OrderCreatePanel({
     setDropdownField(null);
     setHits([]);
   }, []);
+
+  const normalizeLookupKey = useCallback((value: string) => value.trim().toLowerCase().replace(/\s+/g, ""), []);
+
+  const selectPaymentPoint = useCallback((row: { id: string; label: string }) => {
+    setPaymentPointId(row.id);
+    setPaymentPointQuery(row.label);
+    setPaymentPointOpen(false);
+    setPaymentPointErr(null);
+  }, []);
+
+  const commitPendingIntakeName = useCallback(() => {
+    const name = paymentPointQuery.trim();
+    if (name.length < 2) return;
+    setPaymentPointId("");
+    setPaymentPointOpen(false);
+    setPaymentPointErr(null);
+  }, [paymentPointQuery]);
+
+  const handleIntakeLocationKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Escape") {
+        if (paymentPointOpen) {
+          e.preventDefault();
+          setPaymentPointOpen(false);
+        }
+        return;
+      }
+      if (e.key === "ArrowDown" && paymentPointOpen && paymentPointHits.length > 0) {
+        e.preventDefault();
+        setIntakeActiveIdx((i) => Math.min(i + 1, paymentPointHits.length - 1));
+        return;
+      }
+      if (e.key === "ArrowUp" && paymentPointOpen && paymentPointHits.length > 0) {
+        e.preventDefault();
+        setIntakeActiveIdx((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if (e.key !== "Enter") return;
+      if (!paymentPointOpen) return;
+      e.preventDefault();
+      const q = paymentPointQuery.trim();
+      if (paymentPointBusy) return;
+      const exact = paymentPointHits.find((p) => normalizeLookupKey(p.label) === normalizeLookupKey(q));
+      if (exact) {
+        selectPaymentPoint(exact);
+        return;
+      }
+      if (paymentPointHits.length > 0) {
+        const idx = Math.min(Math.max(intakeActiveIdx, 0), paymentPointHits.length - 1);
+        selectPaymentPoint(paymentPointHits[idx]);
+        return;
+      }
+      if (q.length >= 2) {
+        commitPendingIntakeName();
+      }
+    },
+    [
+      paymentPointOpen,
+      paymentPointHits,
+      paymentPointBusy,
+      paymentPointQuery,
+      normalizeLookupKey,
+      selectPaymentPoint,
+      intakeActiveIdx,
+      commitPendingIntakeName,
+    ],
+  );
 
   if (target.mode === "create" && !canCreateOrders) return null;
   if (target.mode === "edit" && !canEditOrders) return null;
@@ -859,7 +997,7 @@ export function OrderCreatePanel({
                 —
               </option>
               {countrySelectOptions.map((c) => (
-                <option key={c} value={c}>
+                <option key={c} value={c} disabled={!orderCountries.includes(c)}>
                   {orderCountryLabel(c)}
                 </option>
               ))}
@@ -1172,103 +1310,90 @@ export function OrderCreatePanel({
                   </select>
                 </div>
                 <div className="adm-oc-legacy-side-field">
-                  <label htmlFor={idp("pay-pt")}>מקום תשלום</label>
-                  <select
-                    id={idp("pay-pt")}
-                    className="adm-oc-legacy-side-sel"
-                    disabled={fieldDisabled}
-                    value={paymentPointId}
-                    onFocus={closeCustomerDropdown}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      if (v === "__ADD__") {
-                        setPpAddErr(null);
-                        setPpAddMsg(null);
-                        setPpAddName("");
-                        setPpAddOpen(true);
-                        return;
-                      }
-                      setPaymentPointId(v);
-                    }}
+                  <label htmlFor={idp("pay-pt")}>מקום קליטת הזמנה</label>
+                  <div
+                    className="adm-oc-intake-combobox"
+                    dir="rtl"
+                    onBlur={() => window.setTimeout(() => setPaymentPointOpen(false), 160)}
                   >
-                    {paymentPoints.length === 0 ? (
-                      <option value="" disabled>
-                        אין מקומות עדיין
-                      </option>
-                    ) : (
-                      <option value="">—</option>
-                    )}
-                    {paymentPoints.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.label}
-                      </option>
-                    ))}
-                    <option value="__ADD__">+ הוספת מקום</option>
-                  </select>
-                  {ppAddMsg ? <div className="adm-oc-inline-msg">{ppAddMsg}</div> : null}
-                  {ppAddErr ? <div className="adm-oc-inline-err">{ppAddErr}</div> : null}
-                  {ppAddOpen ? (
-                    <div className="adm-oc-addpoint">
-                      <label className="adm-oc-addpoint-lbl">
-                        הוספת מקום חדש
-                        <input
-                          type="text"
-                          className="adm-oc-legacy-side-sel"
-                          value={ppAddName}
-                          disabled={ppAddBusy}
-                          onChange={(e) => setPpAddName(e.target.value)}
-                          placeholder="שם מקום..."
-                        />
-                      </label>
-                      <div className="adm-oc-addpoint-actions">
-                        <button
-                          type="button"
-                          className={`adm-btn adm-btn--primary adm-btn--dense${ppAddBusy ? " loading" : ""}`}
-                          disabled={ppAddBusy}
-                          onClick={() => {
-                            if (ppAddBusy) return;
-                            const name = ppAddName.trim();
-                            if (!name) {
-                              setPpAddErr("יש להזין שם מקום");
-                              return;
-                            }
-                            setPpAddBusy(true);
-                            setPpAddErr(null);
-                            void createPaymentPointForOrderAction({ pointName: name }).then((res) => {
-                              setPpAddBusy(false);
-                              if (!res.ok) {
-                                setPpAddErr(res.error);
-                                return;
-                              }
-                              setPaymentPoints((cur) => {
-                                const next = [...cur, res.point];
-                                next.sort((a, b) => a.label.localeCompare(b.label, "he"));
-                                return next;
-                              });
-                              setPaymentPointId(res.point.id);
-                              setPpAddMsg("נוסף מקום בהצלחה");
-                              setPpAddOpen(false);
-                              setPpAddName("");
-                            });
-                          }}
-                        >
-                          {ppAddBusy ? "שומר…" : "שמירה"}
-                        </button>
-                        <button
-                          type="button"
-                          className="adm-btn adm-btn--ghost adm-btn--dense"
-                          disabled={ppAddBusy}
-                          onClick={() => {
-                            setPpAddOpen(false);
-                            setPpAddName("");
-                            setPpAddErr(null);
-                          }}
-                        >
-                          ביטול
-                        </button>
-                      </div>
-                    </div>
-                  ) : null}
+                    <input
+                      id={idp("pay-pt")}
+                      type="text"
+                      role="combobox"
+                      aria-expanded={paymentPointOpen}
+                      aria-controls={`${idp("pay-pt")}-listbox`}
+                      aria-autocomplete="list"
+                      className="adm-oc-legacy-side-sel adm-oc-intake-combobox-input"
+                      disabled={fieldDisabled}
+                      value={paymentPointQuery}
+                      placeholder="בחרו או הקלידו מקום קליטה…"
+                      autoComplete="off"
+                      onFocus={() => {
+                        closeCustomerDropdown();
+                        setPaymentPointOpen(true);
+                      }}
+                      onKeyDown={handleIntakeLocationKeyDown}
+                      onChange={(e) => {
+                        setPaymentPointQuery(e.target.value);
+                        setPaymentPointId("");
+                        setPaymentPointOpen(true);
+                        setPaymentPointErr(null);
+                      }}
+                    />
+                    {paymentPointOpen ? (
+                      <ul
+                        id={`${idp("pay-pt")}-listbox`}
+                        className="adm-oc-intake-dd"
+                        role="listbox"
+                        aria-label="מקומות קליטה"
+                      >
+                        {paymentPointBusy ? (
+                          <li className="adm-oc-intake-dd-item adm-oc-intake-dd-item--static">טוען…</li>
+                        ) : null}
+                        {!paymentPointBusy && paymentPointHits.length === 0 && paymentPointQuery.trim().length >= 1 ? (
+                          <li className="adm-oc-intake-dd-item adm-oc-intake-dd-item--static">
+                            <button
+                              type="button"
+                              className="adm-oc-intake-dd-empty-action"
+                              disabled={paymentPointQuery.trim().length < 2}
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                if (paymentPointQuery.trim().length >= 2) commitPendingIntakeName();
+                              }}
+                            >
+                              לא נמצא מקום. לחץ Enter כדי ליצור מקום חדש
+                            </button>
+                          </li>
+                        ) : null}
+                        {!paymentPointBusy && paymentPointHits.length === 0 && paymentPointQuery.trim().length === 0 ? (
+                          <li className="adm-oc-intake-dd-item adm-oc-intake-dd-item--static adm-oc-intake-dd-muted">
+                            אין עדיין מקומות — הקלידו שם ושמרו את ההזמנה
+                          </li>
+                        ) : null}
+                        {!paymentPointBusy
+                          ? paymentPointHits.map((row, i) => (
+                              <li key={row.id} role="presentation">
+                                <button
+                                  type="button"
+                                  role="option"
+                                  aria-selected={intakeActiveIdx === i}
+                                  className={`adm-oc-intake-dd-item${intakeActiveIdx === i ? " adm-oc-intake-dd-item--active" : ""}`}
+                                  onMouseEnter={() => setIntakeActiveIdx(i)}
+                                  onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    selectPaymentPoint(row);
+                                  }}
+                                  onClick={() => selectPaymentPoint(row)}
+                                >
+                                  {row.label}
+                                </button>
+                              </li>
+                            ))
+                          : null}
+                      </ul>
+                    ) : null}
+                  </div>
+                  {paymentPointErr ? <div className="adm-oc-inline-err">{paymentPointErr}</div> : null}
                 </div>
                 <div className="adm-oc-legacy-side-field">
                   <label htmlFor={idp("pay-m")}>צורת תשלום</label>

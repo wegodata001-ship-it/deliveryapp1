@@ -13,6 +13,8 @@ import {
 import { useAdminLoading } from "@/components/admin/AdminLoadingProvider";
 import { getAhWeekCodeFromDateRange, getAhWeekRange, normalizeAhWeekCode } from "@/lib/work-week";
 import { Modal } from "@/components/ui/Modal";
+import { CardSkeleton, LoadingButton, TableSkeleton } from "@/components/ui/loading";
+import { ORDER_COUNTRY_CODES, orderCountryLabel, type OrderCountryCode } from "@/lib/order-countries";
 
 type Props = {
   initialPayload: ReportPayload;
@@ -76,6 +78,7 @@ function buildExportHref(kind: ReportKind, filters: ReportFilters): string {
   if (filters.status) sp.set("status", filters.status);
   if (filters.paymentMethod) sp.set("paymentMethod", filters.paymentMethod);
   if (filters.workWeek) sp.set("workWeek", filters.workWeek);
+  if (filters.sourceCountry) sp.set("sourceCountry", filters.sourceCountry);
   return `/admin/reports/export?${sp.toString()}`;
 }
 
@@ -92,7 +95,11 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
   const [payload, setPayload] = useState(initialPayload);
   const [filters, setFilters] = useState<ReportFilters>(initialFilters);
   const [activeReport, setActiveReport] = useState<ReportTable | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [reportModalOpen, setReportModalOpen] = useState(false);
+  const [modalTitle, setModalTitle] = useState("");
+  const [modalTableLoading, setModalTableLoading] = useState(false);
+  const [loadingReportId, setLoadingReportId] = useState<ReportKind | null>(null);
+  const [pdfLoadingKind, setPdfLoadingKind] = useState<ReportKind | null>(null);
   const [downloadingExcel, setDownloadingExcel] = useState<ReportKind | null>(null);
   const [exportErr, setExportErr] = useState<string | null>(null);
   const { runWithLoading, isLoading } = useAdminLoading();
@@ -101,12 +108,10 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
 
   useEffect(() => {
     const t = window.setTimeout(() => {
-      setLoading(true);
-      void runWithLoading(() => getReportsDashboardAction(filters), "מעבד נתוני דוחות...")
-        .then((next) => {
-          setPayload(next);
-        })
-        .finally(() => setLoading(false));
+      void runWithLoading(() => getReportsDashboardAction(filters), {
+        message: "מעבד נתוני דוחות...",
+        mode: "bar",
+      }).then((next) => setPayload(next));
     }, 250);
     return () => window.clearTimeout(t);
   }, [filterKey, filters, runWithLoading]);
@@ -138,43 +143,70 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
   }
 
   async function loadReport(card: ReportCard) {
-    if (isLoading) return;
-    setLoading(true);
+    if (isLoading || loadingReportId) return;
+    setModalTitle(card.title);
+    setReportModalOpen(true);
+    setActiveReport(null);
+    setModalTableLoading(true);
+    setLoadingReportId(card.id);
+    setExportErr(null);
     try {
-      const report = await runWithLoading(() => getReportTableAction(card.id, filters), "טוען דוח...");
+      const report = await runWithLoading(() => getReportTableAction(card.id, filters), {
+        message: "טוען דוח...",
+        mode: "bar",
+      });
       setActiveReport(report);
+    } catch {
+      setExportErr("טעינת הדוח נכשלה");
+      setReportModalOpen(false);
     } finally {
-      setLoading(false);
+      setModalTableLoading(false);
+      setLoadingReportId(null);
     }
   }
 
+  function closeReportModal() {
+    setReportModalOpen(false);
+    setActiveReport(null);
+    setModalTableLoading(false);
+    setModalTitle("");
+  }
+
   async function exportReport(kind: ReportKind, format: "excel" | "pdf") {
-    if (isLoading) return;
-    setLoading(true);
+    if (isLoading || loadingReportId) return;
     setExportErr(null);
     try {
       if (format === "excel") {
         setDownloadingExcel(kind);
-        const res = await fetch(buildExportHref(kind, filters));
-        if (!res.ok) throw new Error("export_failed");
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `report_${todayYmd()}.xlsx`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
+        await runWithLoading(
+          async () => {
+            const res = await fetch(buildExportHref(kind, filters));
+            if (!res.ok) throw new Error("export_failed");
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `report_${todayYmd()}.xlsx`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+          },
+          { message: "מייצא Excel...", mode: "overlay" },
+        );
       } else {
-        const report = await runWithLoading(() => getReportTableAction(kind, filters), "מכין ייצוא...");
+        setPdfLoadingKind(kind);
+        const report = await runWithLoading(() => getReportTableAction(kind, filters), {
+          message: "מכין PDF...",
+          mode: "bar",
+        });
         printPdf(report, filters);
       }
     } catch {
-      setExportErr("Excel export failed");
+      setExportErr("ייצוא נכשל");
     } finally {
       setDownloadingExcel(null);
-      setLoading(false);
+      setPdfLoadingKind(null);
     }
   }
 
@@ -252,27 +284,48 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
               placeholder="שבוע עבודה"
             />
           </label>
+          <label>
+            מדינת מקור (הזמנות)
+            <select
+              disabled={isLoading}
+              value={filters.sourceCountry || ""}
+              onChange={(e) => updateFilter("sourceCountry", e.target.value || undefined)}
+            >
+              <option value="">כל המדינות</option>
+              {ORDER_COUNTRY_CODES.map((c) => (
+                <option key={c} value={c}>
+                  {orderCountryLabel(c)}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
         {exportErr ? <div className="adm-error">{exportErr}</div> : null}
       </section>
 
-      <section className="adm-reports-kpis" aria-busy={loading}>
-        <div className="adm-report-kpi-card adm-report-kpi-card--orders">
-          <span>📦 סה״כ הזמנות</span>
-          <strong>{payload.kpis.totalOrders}</strong>
-        </div>
-        <div className="adm-report-kpi-card adm-report-kpi-card--payments">
-          <span>💳 סה״כ תשלומים (קשורים)</span>
-          <strong>{payload.kpis.totalPaymentsLinked}</strong>
-        </div>
-        <div className="adm-report-kpi-card adm-report-kpi-card--balance">
-          <span>🔴 יתרת חוב</span>
-          <strong>{payload.kpis.totalDebt}</strong>
-        </div>
-        <div className="adm-report-kpi-card adm-report-kpi-card--balance">
-          <span>🟢 יתרת זכות</span>
-          <strong>{payload.kpis.totalCredit}</strong>
-        </div>
+      <section className="adm-reports-kpis" aria-busy={isLoading}>
+        {isLoading ? (
+          <CardSkeleton count={4} className="adm-reports-kpi-skeleton" />
+        ) : (
+          <>
+            <div className="adm-report-kpi-card adm-report-kpi-card--orders">
+              <span>📦 סה״כ הזמנות</span>
+              <strong>{payload.kpis.totalOrders}</strong>
+            </div>
+            <div className="adm-report-kpi-card adm-report-kpi-card--payments">
+              <span>💳 סה״כ תשלומים (קשורים)</span>
+              <strong>{payload.kpis.totalPaymentsLinked}</strong>
+            </div>
+            <div className="adm-report-kpi-card adm-report-kpi-card--balance">
+              <span>🔴 יתרת חוב</span>
+              <strong>{payload.kpis.totalDebt}</strong>
+            </div>
+            <div className="adm-report-kpi-card adm-report-kpi-card--balance">
+              <span>🟢 יתרת זכות</span>
+              <strong>{payload.kpis.totalCredit}</strong>
+            </div>
+          </>
+        )}
       </section>
 
       <section className="adm-reports-grid">
@@ -285,28 +338,74 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
               <div className="adm-report-preview">{r.preview}</div>
             </div>
             <div className="adm-report-actions">
-              <button type="button" className="adm-btn adm-btn--primary adm-btn--sm" disabled={isLoading} onClick={() => void loadReport(r)}>
-                {isLoading ? "⏳ מעבד..." : "צפייה בדוח"}
-              </button>
-              <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" disabled={isLoading} onClick={() => void exportReport(r.id, "excel")}>
-                {downloadingExcel === r.id ? "⏳ מוריד..." : "Excel"}
-              </button>
-              <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" disabled={isLoading} onClick={() => void exportReport(r.id, "pdf")}>
-                {isLoading ? "⏳ שומר..." : "PDF"}
-              </button>
+              <LoadingButton
+                className="adm-btn adm-btn--primary adm-btn--sm"
+                disabled={isLoading || (loadingReportId != null && loadingReportId !== r.id)}
+                loading={loadingReportId === r.id}
+                loadingLabel="טוען..."
+                onClick={() => void loadReport(r)}
+              >
+                צפייה בדוח
+              </LoadingButton>
+              <LoadingButton
+                className="adm-btn adm-btn--ghost adm-btn--sm"
+                disabled={isLoading}
+                loading={downloadingExcel === r.id}
+                loadingLabel="מייצא..."
+                onClick={() => void exportReport(r.id, "excel")}
+              >
+                Excel
+              </LoadingButton>
+              <LoadingButton
+                className="adm-btn adm-btn--ghost adm-btn--sm"
+                disabled={isLoading}
+                loading={pdfLoadingKind === r.id}
+                loadingLabel="מכין..."
+                onClick={() => void exportReport(r.id, "pdf")}
+              >
+                PDF
+              </LoadingButton>
             </div>
           </article>
         ))}
       </section>
 
-      <Modal open={!!activeReport} onClose={() => setActiveReport(null)} title={activeReport?.title || "דוח"} size="xl">
-        {activeReport ? (
+      <Modal open={reportModalOpen} onClose={closeReportModal} title={modalTitle || "דוח"} size="xl">
+        {modalTableLoading ? (
+          <div className="adm-report-modal adm-report-modal--loading" aria-busy>
+            <p className="adm-report-modal-loading-hint">טוען נתונים…</p>
+            <div className="adm-report-table-wrap">
+              <table className="adm-table adm-report-table">
+                <thead>
+                  <tr>
+                    {Array.from({ length: 8 }).map((_, i) => (
+                      <th key={i}>‎</th>
+                    ))}
+                  </tr>
+                </thead>
+                <TableSkeleton rows={8} columns={8} />
+              </table>
+            </div>
+          </div>
+        ) : activeReport ? (
           <div className="adm-report-modal">
             <div className="adm-report-modal-actions">
-              <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" onClick={() => void exportReport(activeReport.id, "excel")}>
-                {downloadingExcel === activeReport.id ? "⏳ מוריד..." : "Excel"}
-              </button>
-              <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" onClick={() => printPdf(activeReport, filters)}>PDF</button>
+              <LoadingButton
+                className="adm-btn adm-btn--ghost adm-btn--sm"
+                loading={downloadingExcel === activeReport.id}
+                loadingLabel="מייצא..."
+                onClick={() => void exportReport(activeReport.id, "excel")}
+              >
+                Excel
+              </LoadingButton>
+              <LoadingButton
+                className="adm-btn adm-btn--ghost adm-btn--sm"
+                loading={pdfLoadingKind === activeReport.id}
+                loadingLabel="מכין..."
+                onClick={() => void exportReport(activeReport.id, "pdf")}
+              >
+                PDF
+              </LoadingButton>
             </div>
             <div className="adm-report-table-wrap">
               <table className="adm-table adm-report-table">
@@ -317,7 +416,9 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
                   {activeReport.rows.length === 0 ? (
                     <tr>
                       <td colSpan={activeReport.columns.length} className="adm-table-empty">
-                        אין נתונים לטווח שנבחר
+                        {activeReport.id === "customerBalanceReport"
+                          ? "לא נמצאו לקוחות עם יתרה פתוחה בטווח שנבחר"
+                          : "אין נתונים לטווח שנבחר"}
                       </td>
                     </tr>
                   ) : (

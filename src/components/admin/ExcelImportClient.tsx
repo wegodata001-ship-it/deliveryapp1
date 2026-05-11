@@ -111,7 +111,7 @@ export function ExcelImportClient() {
           const res = await fetch("/api/excel/upload", { method: "POST", body: fd });
           return (await res.json()) as UploadResp;
         },
-        "סורק קובץ...",
+        { message: "סורק קובץ...", mode: "overlay" },
       );
       if (!payload.ok || !payload.file) {
         setErr(payload.error || "שגיאה בסריקת קובץ");
@@ -161,7 +161,7 @@ export function ExcelImportClient() {
           const res = await fetch(`/api/excel/history?importId=${encodeURIComponent(importId)}`);
           return (await res.json()) as { ok: boolean; file?: PreviewFile; rows?: PreviewRow[]; error?: string };
         },
-        "טוען נתונים...",
+        { message: "טוען נתונים...", mode: "overlay" },
       );
       if (!payload.ok || !payload.file) {
         setErr(payload.error || "שגיאה בטעינת ייבוא");
@@ -204,7 +204,7 @@ export function ExcelImportClient() {
           });
           return (await res.json()) as { ok: boolean; error?: string; imported?: number; failed?: number; importedRowIds?: string[] };
         },
-        "מבצע ייבוא נתונים...",
+        { message: "מבצע ייבוא נתונים...", mode: "overlay" },
       );
       if (!payload.ok) {
         setErr(payload.error || "שגיאה באישור ייבוא");
@@ -243,7 +243,7 @@ export function ExcelImportClient() {
           });
           return (await res.json()) as { ok: boolean; error?: string };
         },
-        "שומר נתונים...",
+        { message: "שומר נתונים...", mode: "overlay" },
       );
       if (!payload.ok) {
         setErr(payload.error || "שגיאה בשמירת Header");
@@ -283,7 +283,7 @@ export function ExcelImportClient() {
           });
           return (await res.json()) as { ok: boolean; status?: "VALID" | "ERROR"; errorMessage?: string | null; error?: string };
         },
-        "שומר נתונים...",
+        { message: "שומר נתונים...", mode: "overlay" },
       );
       if (!payload.ok) {
         setErr(payload.error || "שגיאה בשמירת שורה");
@@ -313,7 +313,7 @@ export function ExcelImportClient() {
           const res = await fetch(`/api/excel/row?id=${encodeURIComponent(id)}`, { method: "DELETE" });
           return (await res.json()) as { ok: boolean; error?: string };
         },
-        "שומר נתונים...",
+        { message: "שומר נתונים...", mode: "overlay" },
       );
       if (!payload.ok) {
         setErr(payload.error || "שגיאה במחיקת שורה");

@@ -15,6 +15,34 @@ import { prismaVatRatePercent } from "@/lib/vat-prisma";
 
 const PAYMENT_CODE_PREFIX = "WGP-P-";
 
+async function applyPaymentCustomerDraftsIfNeeded(params: {
+  customerId: string;
+  draftNameAr?: string | null;
+  draftNameEn?: string | null;
+  draftPhone?: string | null;
+}): Promise<void> {
+  const current = await prisma.customer.findFirst({
+    where: { id: params.customerId, deletedAt: null, isActive: true },
+    select: { nameAr: true, nameEn: true, phone: true, secondPhone: true },
+  });
+  if (!current) return;
+
+  const nameAr = params.draftNameAr?.trim() || "";
+  const nameEn = params.draftNameEn?.trim() || "";
+  const phone = params.draftPhone?.trim() || "";
+
+  const data: Prisma.CustomerUpdateInput = {};
+  if (nameAr && !(current.nameAr?.trim())) data.nameAr = nameAr;
+  if (nameEn && !(current.nameEn?.trim())) data.nameEn = nameEn;
+  if (phone && !(current.phone?.trim()) && !(current.secondPhone?.trim())) data.phone = phone;
+  if (Object.keys(data).length === 0) return;
+
+  await prisma.customer.update({
+    where: { id: params.customerId },
+    data,
+  });
+}
+
 function paymentCodeSuffixPattern(): RegExp {
   return new RegExp(`^${escapeRegExp(PAYMENT_CODE_PREFIX)}(\\d{6})$`);
 }
@@ -59,6 +87,9 @@ export type PaymentUpdatedSaveInput = {
   dollarRate: string;
   payments: PaymentLine[];
   includedOrderIds: string[] | null;
+  draftNameAr?: string | null;
+  draftNameEn?: string | null;
+  draftPhone?: string | null;
 };
 
 export async function savePaymentUpdatedAction(
@@ -75,6 +106,13 @@ export async function savePaymentUpdatedAction(
     select: { id: true, displayName: true },
   });
   if (!custOk) return { ok: false, error: "לקוח לא נמצא" };
+
+  await applyPaymentCustomerDraftsIfNeeded({
+    customerId: cid,
+    draftNameAr: form.draftNameAr,
+    draftNameEn: form.draftNameEn,
+    draftPhone: form.draftPhone,
+  });
 
   const settings = (await getCurrentFinancialSettings()) ?? (await ensureDefaultFinancialSettings());
   const base = settings.baseDollarRate;
@@ -157,10 +195,10 @@ export async function savePaymentUpdatedAction(
     }),
   );
 
-  const eligible =
+  const prioritized =
     form.includedOrderIds === null ? null : new Set((form.includedOrderIds ?? []).filter(Boolean));
 
-  const allocations = buildAllocationsFromMatch(bases, totals.totalUsd, eligible);
+  const allocations = buildAllocationsFromMatch(bases, totals.totalUsd, prioritized);
   if (allocations.length === 0) return { ok: false, error: "אין יעד להקצאה" };
 
   // Payment method on DB row: if all same -> use it, else OTHER.

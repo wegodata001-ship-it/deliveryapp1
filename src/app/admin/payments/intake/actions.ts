@@ -59,11 +59,40 @@ export type PaymentIntakeCustomerPayload = {
   nameEn: string | null;
   nameHe: string | null;
   nameAr: string | null;
+  phone: string | null;
   customerCode: string | null;
   customerIndex: string | null;
 };
 
 const MONEY_EPS = 0.02;
+
+async function applyPaymentCustomerDraftsIfNeeded(params: {
+  customerId: string;
+  draftNameAr?: string | null;
+  draftNameEn?: string | null;
+  draftPhone?: string | null;
+}): Promise<void> {
+  const current = await prisma.customer.findFirst({
+    where: { id: params.customerId, deletedAt: null, isActive: true },
+    select: { nameAr: true, nameEn: true, phone: true, secondPhone: true },
+  });
+  if (!current) return;
+
+  const nameAr = params.draftNameAr?.trim() || "";
+  const nameEn = params.draftNameEn?.trim() || "";
+  const phone = params.draftPhone?.trim() || "";
+
+  const data: Prisma.CustomerUpdateInput = {};
+  if (nameAr && !(current.nameAr?.trim())) data.nameAr = nameAr;
+  if (nameEn && !(current.nameEn?.trim())) data.nameEn = nameEn;
+  if (phone && !(current.phone?.trim()) && !(current.secondPhone?.trim())) data.phone = phone;
+  if (Object.keys(data).length === 0) return;
+
+  await prisma.customer.update({
+    where: { id: params.customerId },
+    data,
+  });
+}
 
 /** חיפוש לקוח: עדיפות ל-id / קוד מדויק, אחר כך רשימה */
 export async function searchCustomersPaymentIntakeAction(raw: string): Promise<CustomerSearchRow[]> {
@@ -98,6 +127,7 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
       nameEn: true,
       nameHe: true,
       nameAr: true,
+      phone: true,
       customerCode: true,
       oldCustomerCode: true,
     },
@@ -200,6 +230,7 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
       nameEn: cust.nameEn,
       nameHe: cust.nameHe,
       nameAr: cust.nameAr,
+      phone: cust.phone,
       customerCode: cust.customerCode,
       customerIndex: index,
     },
@@ -228,6 +259,9 @@ export type PaymentIntakeSaveInput = {
   transferNoVat: string;
   notes: string | null;
   commissionNote: string | null;
+  draftNameAr?: string | null;
+  draftNameEn?: string | null;
+  draftPhone?: string | null;
   /** הקצאות בפועל */
   allocations: { orderId: string; amountUsd: string }[];
 };
@@ -253,6 +287,13 @@ export async function savePaymentIntakeAction(
     select: { id: true, displayName: true },
   });
   if (!custOk) return { ok: false, error: "לקוח לא נמצא" };
+
+  await applyPaymentCustomerDraftsIfNeeded({
+    customerId: cid,
+    draftNameAr: form.draftNameAr,
+    draftNameEn: form.draftNameEn,
+    draftPhone: form.draftPhone,
+  });
 
   let totalUsdExpect: number;
   let rateN: number;

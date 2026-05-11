@@ -7,6 +7,7 @@ import { GlobalFilterBar } from "@/components/admin/GlobalFilterBar";
 import { FinancialSettingsModal } from "@/components/admin/FinancialSettingsModal";
 import { AdminWindowStack } from "@/components/admin/AdminWindowStack";
 import { AdminLoadingProvider } from "@/components/admin/AdminLoadingProvider";
+import { NavigationProgress } from "@/components/admin/NavigationProgress";
 import { AdminGlobalProvider } from "@/components/admin/AdminGlobalContext";
 import { withoutKeys } from "@/lib/admin-url-query";
 import type { SerializedFinancial } from "@/lib/financial-settings";
@@ -61,6 +62,7 @@ export function AdminChrome({
   return (
     <AdminLoadingProvider>
       <AdminGlobalProvider>
+        <NavigationProgress />
         <div className="adm-chrome-stack">
           <AdminTopBar
             displayName={displayName}

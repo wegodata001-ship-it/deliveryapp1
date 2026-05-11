@@ -26,6 +26,8 @@ export type OrderListRow = {
   dealAmountUsd: string | null;
   commissionAmountUsd: string | null;
   totalAmountUsd: string | null;
+  /** יתרה בדולרים (סה״כ − שולם) */
+  balanceUsd: string | null;
   totalAmountIls: string | null;
   paymentStatus: "unpaid" | "partial" | "paid";
   /** סימון בקשת עריכה / נעילה — רק הזמנות גמורות */
@@ -161,7 +163,8 @@ export function OrdersListShell({
       </div>
 
       <p className="adm-orders-range-hint" dir="rtl">
-        טווח: {dateRange.fromYmd} — {dateRange.toYmd} · שבוע {dateRange.weekCode}
+        טווח רשימה: {dateRange.fromYmd} — {dateRange.toYmd}
+        {dateRange.ahWeekSelect ? ` · שבוע ${dateRange.ahWeekSelect}` : " · טווח מותאם"}
       </p>
 
       {listErr ? (
@@ -185,28 +188,32 @@ export function OrdersListShell({
         </div>
       </div>
 
-      <div className="adm-table-excel-wrap" dir="rtl">
-        <table className="adm-table-excel">
+      <div className="adm-table-excel-wrap adm-table-excel-wrap--orders" dir="rtl">
+        <table className="adm-table-excel adm-table-excel--orders">
           <thead>
             <tr>
-              <th>מזהה הזמנה</th>
-              <th>תאריך</th>
-              <th>שבוע</th>
-              <th>לקוח</th>
-              <th dir="ltr">סכום ($)</th>
-              <th dir="ltr">עמלה ($)</th>
-              <th dir="ltr">כולל עמלה ($)</th>
-              <th dir="ltr">סכום ₪</th>
-              <th>סטטוס</th>
-              <th>צורת תשלום</th>
-              <th>פותח</th>
-              <th>מדינה</th>
+              <th className="adm-ord-col-num">הזמנה</th>
+              <th className="adm-ord-col-date">תאריך</th>
+              <th className="adm-ord-col-cust">לקוח</th>
+              <th className="adm-ord-col-money" dir="ltr">
+                $ כולל
+              </th>
+              <th className="adm-ord-col-money" dir="ltr">
+                $ יתרה
+              </th>
+              <th className="adm-ord-col-money adm-ord-col-ils" dir="ltr">
+                ₪
+              </th>
+              <th className="adm-ord-col-status">סטטוס</th>
+              <th className="adm-ord-col-emp">עובד</th>
+              <th className="adm-ord-col-meta adm-ord-col-country">מדינה</th>
+              <th className="adm-ord-col-meta adm-ord-col-pay">תשלום</th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={12} className="adm-table-empty">
+                <td colSpan={10} className="adm-table-empty">
                   אין הזמנות בטווח הנבחר.
                 </td>
               </tr>
@@ -228,7 +235,7 @@ export function OrdersListShell({
                     tabIndex={0}
                     role="button"
                   >
-                    <td dir="ltr" className="adm-table-excel-num">
+                    <td dir="ltr" className="adm-table-excel-num adm-ord-col-num">
                       <button
                         type="button"
                         className="adm-table-excel-link adm-table-excel-link--btn"
@@ -245,13 +252,10 @@ export function OrdersListShell({
                         ) : null}
                       </button>
                     </td>
-                    <td className="adm-table-excel-date" dir="ltr">
+                    <td className="adm-table-excel-date adm-ord-col-date" dir="ltr" title={o.weekCode ? `שבוע ${o.weekCode}` : undefined}>
                       {o.orderDateTime ?? o.orderDateYmd ?? "—"}
                     </td>
-                    <td dir="ltr" className="adm-table-excel-week">
-                      {o.weekCode ?? "—"}
-                    </td>
-                    <td className="adm-table-excel-cust" title={o.customerPhone ? `טלפון: ${o.customerPhone}` : undefined}>
+                    <td className="adm-table-excel-cust adm-ord-col-cust" title={o.customerPhone ? `טלפון: ${o.customerPhone}` : undefined}>
                       {canViewCustomerCard && o.customerId ? (
                         <button
                           type="button"
@@ -264,19 +268,24 @@ export function OrdersListShell({
                         <strong className="adm-table-excel-cust-strong">{o.customerName ?? "—"}</strong>
                       )}
                     </td>
-                    <td dir="ltr" className="adm-table-excel-money">
-                      {o.dealAmountUsd ?? "—"}
-                    </td>
-                    <td dir="ltr" className="adm-table-excel-money">
-                      {o.commissionAmountUsd ?? "—"}
-                    </td>
-                    <td dir="ltr" className="adm-table-excel-money adm-table-excel-money--strong">
+                    <td
+                      dir="ltr"
+                      className="adm-table-excel-money adm-table-excel-money--strong adm-ord-col-money"
+                      title={
+                        o.dealAmountUsd || o.commissionAmountUsd
+                          ? `עסקה ${o.dealAmountUsd ?? "—"} · עמלה ${o.commissionAmountUsd ?? "—"}`
+                          : undefined
+                      }
+                    >
                       {o.totalAmountUsd ?? "—"}
                     </td>
-                    <td dir="ltr" className="adm-table-excel-money">
+                    <td dir="ltr" className="adm-table-excel-money adm-ord-col-money">
+                      {o.balanceUsd ?? "—"}
+                    </td>
+                    <td dir="ltr" className="adm-table-excel-money adm-ord-col-ils">
                       {o.totalAmountIls ?? "—"}
                     </td>
-                    <td className="adm-table-excel-status-cell" onClick={(e) => e.stopPropagation()}>
+                    <td className="adm-table-excel-status-cell adm-ord-col-status" onClick={(e) => e.stopPropagation()}>
                       <select
                         className={`adm-table-status-sel ${inlineStatusBadgeClass(selVal)}`}
                         value={selVal}
@@ -289,11 +298,11 @@ export function OrdersListShell({
                         <option value={OrderStatus.COMPLETED}>מוכן</option>
                       </select>
                     </td>
-                    <td>{paymentTypeLabel(o.paymentType)}</td>
-                    <td>{o.createdByName ?? "—"}</td>
-                    <td>
+                    <td className="adm-ord-col-emp adm-ord-ellipsis">{o.createdByName ?? "—"}</td>
+                    <td className="adm-ord-col-meta adm-ord-col-country">
                       <span className={orderCountryBadgeClass(o.sourceCountry)}>{orderCountryLabel(o.sourceCountry)}</span>
                     </td>
+                    <td className="adm-ord-col-meta adm-ord-col-pay adm-ord-ellipsis">{paymentTypeLabel(o.paymentType)}</td>
                   </tr>
                 );
               })

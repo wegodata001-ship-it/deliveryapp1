@@ -51,7 +51,7 @@ const COUNTRY_BADGE_SHORT: Record<OrderCountryCode, string> = {
 
 type BadgeEditField = "week" | "country" | "date" | "time" | null;
 
-type CustFieldKey = "code" | "displayName" | "nameEn" | "nameAr" | "index";
+type CustFieldKey = "code" | "displayName" | "nameEn" | "nameAr" | "phone" | "index";
 
 type CustomerApiSearchRow = {
   id: string;
@@ -74,6 +74,7 @@ const EMPTY_CUSTOMER_DRAFT: Record<CustFieldKey, string> = {
   displayName: "",
   nameEn: "",
   nameAr: "",
+  phone: "",
   index: "",
 };
 
@@ -284,14 +285,14 @@ export function PaymentModalUpdated({
 
   const bases = useMemo(() => toPaymentIntakeBases(orders), [orders]);
 
-  const eligibleSet = useMemo(() => {
+  const prioritizedSet = useMemo(() => {
     if (includedIds === null) return null;
     return new Set(includedIds);
   }, [includedIds]);
 
   const matched = useMemo(() => {
-    return matchPaymentToOrders(bases, totals.totalUsd, eligibleSet);
-  }, [bases, totals.totalUsd, eligibleSet]);
+    return matchPaymentToOrders(bases, totals.totalUsd, prioritizedSet);
+  }, [bases, totals.totalUsd, prioritizedSet]);
 
   const weekReadonly = useMemo(() => weekCodeFromYmd(paymentDateYmd), [paymentDateYmd]);
 
@@ -363,6 +364,7 @@ export function PaymentModalUpdated({
       displayName: res.customer.displayName ?? "",
       nameEn: res.customer.nameEn ?? res.customer.nameHe ?? "",
       nameAr: res.customer.nameAr ?? "",
+      phone: res.customer.phone ?? "",
       index: res.customer.customerIndex ?? "",
     });
     setIncludedIds(null);
@@ -384,6 +386,11 @@ export function PaymentModalUpdated({
   const onDraftCustomerChange = useCallback((field: CustFieldKey, value: string) => {
     lastEditedFieldRef.current = field;
     setDraftCustomer((prev) => ({ ...prev, [field]: value }));
+    if (field === "phone") {
+      setCustDdOpen(false);
+      setCustSearchNoHits(false);
+      return;
+    }
     setSearchTick((n) => n + 1);
     setCustDdOpen(true);
   }, []);
@@ -562,22 +569,18 @@ export function PaymentModalUpdated({
     };
   }, [searchTick, loadCustomerOrders]);
 
-  const allOrderIds = useMemo(() => orders.map((o) => o.id), [orders]);
-
   function toggleRow(id: string) {
     setIncludedIds((prev) => {
-      const base = prev ?? [...allOrderIds];
-      const set = new Set(base);
+      const set = new Set(prev ?? []);
       if (set.has(id)) set.delete(id);
       else set.add(id);
       const arr = [...set];
-      if (arr.length === allOrderIds.length && allOrderIds.length > 0) return null;
-      return arr;
+      return arr.length > 0 ? arr : null;
     });
   }
 
   function rowChecked(id: string): boolean {
-    if (includedIds === null) return true;
+    if (includedIds === null) return false;
     return includedIds.includes(id);
   }
 
@@ -622,7 +625,7 @@ export function PaymentModalUpdated({
       return;
     }
 
-    const allocations = buildAllocationsFromMatch(bases, totals.totalUsd, eligibleSet);
+    const allocations = buildAllocationsFromMatch(bases, totals.totalUsd, prioritizedSet);
     if (allocations.length === 0) {
       setSaveErr("אין יעד להקצאה");
       return;
@@ -641,13 +644,20 @@ export function PaymentModalUpdated({
       dollarRate,
       payments,
       includedOrderIds: includedIds,
+      draftNameAr: draftCustomer.nameAr.trim() || null,
+      draftNameEn: draftCustomer.nameEn.trim() || null,
+      draftPhone: draftCustomer.phone.trim() || null,
     });
     setSaveBusy(false);
     if (!res.ok) {
       setSaveErr(res.error);
       return;
     }
-    onToast("התשלום נשמר בהצלחה");
+    const remainingAfter = roundMoney2(
+      matched.reduce((sum, row) => sum + Math.max(0, row.remainingAmount), 0),
+    );
+    if (remainingAfter <= 0.01) onToast("כל החיובים נסגרו בהצלחה");
+    else onToast(`נשארו ${remainingAfter.toFixed(2)}$ פתוחים`);
     setPayments([createDefaultLine()]);
     setPaymentTimeHm(formatLocalHm(new Date()));
     void previewPaymentCodeForCaptureAction().then((r) => {
@@ -809,6 +819,22 @@ export function PaymentModalUpdated({
                       onChange={(e) => onDraftCustomerChange("nameAr", e.target.value)}
                     />
                   </label>
+                <label className="payment-modal-cust-inp-wrap">
+                  <span className="payment-modal-cust-inp-lbl">טלפון</span>
+                  <input
+                    type="text"
+                    autoComplete="off"
+                    className="payment-modal-cust-inp"
+                    dir="ltr"
+                    placeholder="הוסף טלפון אם חסר"
+                    value={draftCustomer.phone}
+                    onChange={(e) => onDraftCustomerChange("phone", e.target.value)}
+                    onFocus={() => {
+                      setCustDdOpen(false);
+                      setCustSearchNoHits(false);
+                    }}
+                  />
+                </label>
                   <label className="payment-modal-cust-inp-wrap">
                     <span className="payment-modal-cust-inp-lbl payment-modal-cust-inp-lbl--row">
                       <span>אינדקס</span>
@@ -1013,9 +1039,9 @@ export function PaymentModalUpdated({
                       <th className="pm-num">שער</th>
                       <th className="pm-num pm-th-amt">$ סכום</th>
                       <th className="pm-num">עמלה</th>
-                      <th className="pm-num pm-th-total">סה״כ ($)</th>
+                      <th className="pm-num pm-th-total">יתרה ($)</th>
                       <th>סטטוס</th>
-                      <th className="payment-modal-th-check" aria-label="כלול בחישוב" />
+                      <th className="payment-modal-th-check" aria-label="עדיפות לסגירה" />
                       <th className="payment-modal-th-check" aria-label="סגור בתשלום" />
                     </tr>
                   </thead>
@@ -1032,6 +1058,8 @@ export function PaymentModalUpdated({
                           key={row.id}
                           className={[
                             row.allocationUsd > 0.01 ? "payment-modal-tr--hit" : "",
+                            row.allocationOutcome === "paid" ? "payment-modal-tr--alloc-paid" : "",
+                            row.allocationOutcome === "partial" ? "payment-modal-tr--alloc-partial" : "",
                             rowStatusClass(row.status),
                           ]
                             .filter(Boolean)
@@ -1072,7 +1100,13 @@ export function PaymentModalUpdated({
                             {fmtUsdDisplay(row.commissionUsd)}
                           </td>
                           <td dir="ltr" className="pm-num pm-num--total-usd">
-                            {fmtUsdDisplay(row.totalAmountUsd)}
+                            <span
+                              title={`מקורי: ${fmtUsdDisplay(row.totalAmountUsd)}\nשולם: ${fmtUsdDisplay(
+                                roundMoney2(Math.max(0, row.paidAmount)),
+                              )}`}
+                            >
+                              {fmtUsdDisplay(roundMoney2(Math.max(0, row.remainingAmount)))}
+                            </span>
                           </td>
                           <td className="payment-modal-td-status">
                             <span className={`pm-status badge ${statusClass(row.status)}`}>
@@ -1085,7 +1119,7 @@ export function PaymentModalUpdated({
                               checked={rowChecked(row.id)}
                               onChange={() => toggleRow(row.id)}
                               onClick={(e) => e.stopPropagation()}
-                              aria-label="הזמנה בחישוב"
+                              aria-label="עדיפות לסגירה"
                             />
                           </td>
                           <td className="payment-modal-td-check" onClick={(e) => e.stopPropagation()}>

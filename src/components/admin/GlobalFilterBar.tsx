@@ -15,7 +15,8 @@ import {
 import { withQuery } from "@/lib/admin-url-query";
 import { ORDER_COUNTRY_CODES, orderCountryLabel, type OrderCountryCode } from "@/lib/order-countries";
 
-const FILTER_PREFIXES = ["/admin/orders", "/admin/reports", "/admin/balances", "/admin/receipt-control"];
+/** יתרות לקוחות: פילטרים מקומיים לדף בלבד — לא מציגים כאן את סרגל השבוע/תאריכים הגלובלי */
+const FILTER_PREFIXES = ["/admin/orders", "/admin/reports", "/admin/receipt-control"];
 const WEEK_RE = /^AH-(\d+)$/i;
 
 function generateWeeks(max = 300): string[] {

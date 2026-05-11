@@ -42,7 +42,7 @@ export function OrderEditRequestsClient({ initialRows }: Props) {
   async function onApprove(id: string) {
     setListErr(null);
     setBusyId(id);
-    const res = await runWithLoading(() => approveOrderEditRequestAction(id), "מאשר…");
+    const res = await runWithLoading(() => approveOrderEditRequestAction(id), { message: "מאשר…", mode: "overlay" });
     setBusyId(null);
     if (!res.ok) {
       setListErr(res.error);
@@ -54,7 +54,7 @@ export function OrderEditRequestsClient({ initialRows }: Props) {
   async function onReject(id: string) {
     setListErr(null);
     setBusyId(id);
-    const res = await runWithLoading(() => rejectOrderEditRequestAction(id), "דוחה…");
+    const res = await runWithLoading(() => rejectOrderEditRequestAction(id), { message: "דוחה…", mode: "overlay" });
     setBusyId(null);
     if (!res.ok) {
       setListErr(res.error);

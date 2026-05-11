@@ -21,6 +21,7 @@ function readFilters(sp: URLSearchParams): ReportFilters {
     status: sp.get("status") || undefined,
     paymentMethod: sp.get("paymentMethod") || undefined,
     workWeek: sp.get("workWeek") || undefined,
+    sourceCountry: sp.get("sourceCountry") || sp.get("country") || undefined,
   };
 }
 

@@ -5,8 +5,12 @@ import { OrdersListToolbar, type OrdersCreatedByOption } from "@/components/admi
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { requireRoutePermission } from "@/lib/route-access";
 import { prisma } from "@/lib/prisma";
-import { formatLocalYmd, parseDateFilterFromSearchParams } from "@/lib/work-week";
-import { ORDER_COUNTRY_CODES, type OrderCountryCode } from "@/lib/order-countries";
+import {
+  formatLocalYmd,
+  normalizeAhWeekCode,
+  parseOrdersListDateFilterFromSearchParams,
+} from "@/lib/work-week";
+import { ORDER_COUNTRY_CODES, orderCountryCodesMatchingHeSearch, type OrderCountryCode } from "@/lib/order-countries";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { hasActiveEditUnlock } from "@/lib/order-edit-lock";
 import { withPerfTimer } from "@/lib/perf-log";
@@ -58,6 +62,41 @@ const TABLE_STATUS_SET = new Set<OrderStatus>([
   OrderStatus.COMPLETED,
 ]);
 
+function buildOrdersListSearchWhere(q: string): Prisma.OrderWhereInput | undefined {
+  const t = q.trim();
+  if (!t) return undefined;
+  const amt = parseAmount(t);
+  const countryHits = orderCountryCodesMatchingHeSearch(t);
+  const compactAh = t.replace(/\s+/g, "").toUpperCase();
+  const bareWeek = /^AH-\d{1,6}$/i.test(compactAh) ? normalizeAhWeekCode(compactAh) : null;
+
+  const ors: Prisma.OrderWhereInput[] = [
+    { orderNumber: { contains: t, mode: "insensitive" } },
+    { customerCodeSnapshot: { contains: t, mode: "insensitive" } },
+    { customerNameSnapshot: { contains: t, mode: "insensitive" } },
+    { createdBy: { fullName: { contains: t, mode: "insensitive" } } },
+    { createdBy: { username: { contains: t, mode: "insensitive" } } },
+    { weekCode: { contains: t, mode: "insensitive" } },
+    { customer: { phone: { contains: t, mode: "insensitive" } } },
+    { customer: { secondPhone: { contains: t, mode: "insensitive" } } },
+  ];
+  if (countryHits.length > 0) {
+    ors.push({ sourceCountry: { in: countryHits } });
+  }
+  if (bareWeek) {
+    ors.push({ weekCode: { equals: bareWeek, mode: "insensitive" } });
+  }
+  if (amt != null) {
+    const d = new Prisma.Decimal(amt);
+    ors.push(
+      { amountUsd: { equals: d } },
+      { commissionUsd: { equals: d } },
+      { totalUsd: { equals: d } },
+    );
+  }
+  return { OR: ors };
+}
+
 export default async function OrdersListPage({
   searchParams,
 }: {
@@ -66,13 +105,14 @@ export default async function OrdersListPage({
   await requireRoutePermission(["view_orders"]);
   const me = await requireAuth();
   const sp = await searchParams;
-  const range = parseDateFilterFromSearchParams(sp);
-  const presetParam = typeof sp.preset === "string" ? sp.preset : null;
+  const range = parseOrdersListDateFilterFromSearchParams(sp);
+  const presetParam =
+    (typeof sp.ordersPreset === "string" ? sp.ordersPreset : null) ??
+    (typeof sp.preset === "string" ? sp.preset : null);
 
   const canCreateOrders = userHasAnyPermission(me, ["create_orders"]);
   const canEditOrders = userHasAnyPermission(me, ["edit_orders"]);
   const canViewCustomerCard = userHasAnyPermission(me, ["view_customer_card"]);
-  const explicitWeek = readTextParam(sp, "week");
   const q = readTextParam(sp, "q");
 
   const statusSingleRaw = readTextParam(sp, "status");
@@ -81,10 +121,10 @@ export default async function OrdersListPage({
       ? (statusSingleRaw as OrderStatus)
       : null;
 
-  const countrySingleRaw = readTextParam(sp, "country");
+  const ordersCountryRaw = readTextParam(sp, "ordersCountry");
   const countrySingle =
-    countrySingleRaw && ORDER_COUNTRY_CODES.includes(countrySingleRaw as OrderCountryCode)
-      ? (countrySingleRaw as OrderCountryCode)
+    ordersCountryRaw && ORDER_COUNTRY_CODES.includes(ordersCountryRaw as OrderCountryCode)
+      ? (ordersCountryRaw as OrderCountryCode)
       : null;
 
   const createdById = readTextParam(sp, "createdBy");
@@ -100,10 +140,11 @@ export default async function OrdersListPage({
   const amountMin = parseAmount(amountMinRaw);
   const amountMax = parseAmount(amountMaxRaw);
 
+  const searchWhere = buildOrdersListSearchWhere(q);
+
   const where: Prisma.OrderWhereInput = {
     deletedAt: null,
     orderDate: { gte: range.fromStart, lte: range.toEnd },
-    ...(explicitWeek && explicitWeek === range.weekCode ? { weekCode: range.weekCode } : {}),
     ...(statusSingle ? { status: statusSingle } : {}),
     ...(countrySingle ? { sourceCountry: countrySingle } : {}),
     ...(createdById ? { createdById } : {}),
@@ -120,24 +161,7 @@ export default async function OrdersListPage({
           },
         }
       : {}),
-    ...(q
-      ? {
-          OR: [
-            { orderNumber: { contains: q, mode: "insensitive" } },
-            { customerCodeSnapshot: { contains: q, mode: "insensitive" } },
-            { customerNameSnapshot: { contains: q, mode: "insensitive" } },
-            { createdBy: { fullName: { contains: q, mode: "insensitive" } } },
-            { createdBy: { username: { contains: q, mode: "insensitive" } } },
-            ...(parseAmount(q) != null
-              ? [
-                  { amountUsd: { equals: new Prisma.Decimal(parseAmount(q) ?? 0) } },
-                  { commissionUsd: { equals: new Prisma.Decimal(parseAmount(q) ?? 0) } },
-                  { totalUsd: { equals: new Prisma.Decimal(parseAmount(q) ?? 0) } },
-                ]
-              : []),
-          ],
-        }
-      : {}),
+    ...(searchWhere ? searchWhere : {}),
   };
 
   const [totalOrders, payTotalsAgg, kpiOrders, createdByRows, rows] = await withPerfTimer(
@@ -273,6 +297,7 @@ export default async function OrdersListPage({
   const orders: OrderListRow[] = rows.map((r) => {
     const total = r.totalUsd != null ? Number(r.totalUsd) : 0;
     const paid = paidByOrder.get(r.id) ?? 0;
+    const balanceUsd = total - paid;
     let paymentStatus: OrderListRow["paymentStatus"] = "unpaid";
     if (total > 0.01) {
       if (paid >= total - 0.02) paymentStatus = "paid";
@@ -334,6 +359,7 @@ export default async function OrdersListPage({
       dealAmountUsd: fmtUsd2(r.amountUsd),
       commissionAmountUsd: fmtUsd2(r.commissionUsd),
       totalAmountUsd: fmtUsd2(r.totalUsd),
+      balanceUsd: fmtUsd2(balanceUsd),
       totalAmountIls: fmtIls2(r.totalIlsWithVat ?? r.totalIls),
       paymentStatus,
       editBadge,
@@ -352,11 +378,11 @@ export default async function OrdersListPage({
         <OrdersListToolbar
           fromYmd={range.fromYmd}
           toYmd={range.toYmd}
-          weekCode={range.weekCode}
+          ahWeekSelect={range.ahWeekSelect}
           activePreset={presetParam}
           search={q}
           statusFilter={statusSingle ?? ""}
-          countryFilter={countrySingle ?? ""}
+          countryFilter={ordersCountryRaw}
           createdById={createdById}
           createdByOptions={createdByOptions}
           paymentType={paymentType}

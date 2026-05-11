@@ -2,16 +2,16 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { OrderStatus, PaymentMethod } from "@prisma/client";
 import { ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS } from "@/lib/order-capture-payment-methods";
 import { ORDER_COUNTRY_CODES, orderCountryLabel, type OrderCountryCode } from "@/lib/order-countries";
 import {
   WORK_WEEK_CODES_SORTED,
   WORK_WEEK_RANGES,
-  getCurrentWeekYmdRange,
-  getWeekCodeForLocalDate,
-  parseLocalDate,
+  getAhWeekCodeFromDateRange,
+  getAhWeekRange,
+  normalizeAhWeekCode,
 } from "@/lib/work-week";
 
 export type OrdersCreatedByOption = {
@@ -22,7 +22,8 @@ export type OrdersCreatedByOption = {
 type Props = {
   fromYmd: string;
   toYmd: string;
-  weekCode: string;
+  /** ערך לבחירת שבוע AH פנימי (ריק = טווח מותאם) */
+  ahWeekSelect: string;
   activePreset: string | null;
   search: string;
   statusFilter: string;
@@ -33,6 +34,23 @@ type Props = {
   amountMin: string;
   amountMax: string;
 };
+
+const ORDERS_KEYS = [
+  "ordersWeek",
+  "ordersFrom",
+  "ordersTo",
+  "ordersPreset",
+  "preset",
+  "q",
+  "status",
+  "ordersCountry",
+  "createdBy",
+  "paymentType",
+  "amountMin",
+  "amountMax",
+] as const;
+
+const GLOBAL_KEYS = ["week", "from", "to", "country"] as const;
 
 function buildSearch(sp: URLSearchParams, patch: Record<string, string | undefined>) {
   const n = new URLSearchParams(sp.toString());
@@ -53,7 +71,7 @@ const STATUS_OPTIONS: { value: OrderStatus; label: string }[] = [
 export function OrdersListToolbar({
   fromYmd,
   toYmd,
-  weekCode,
+  ahWeekSelect,
   activePreset,
   search,
   statusFilter,
@@ -68,104 +86,203 @@ export function OrdersListToolbar({
   const searchParams = useSearchParams();
   const [from, setFrom] = useState(fromYmd);
   const [to, setTo] = useState(toYmd);
-  const [week, setWeek] = useState(WORK_WEEK_RANGES[weekCode] ? weekCode : "");
-  const [q, setQ] = useState(search);
+  const [week, setWeek] = useState(() => (ahWeekSelect ? ahWeekSelect : ""));
+  const [qDraft, setQDraft] = useState(search);
   const [statusSel, setStatusSel] = useState(statusFilter);
   const [countrySel, setCountrySel] = useState(countryFilter);
   const [createdBy, setCreatedBy] = useState(createdById);
   const [payType, setPayType] = useState(paymentType);
   const [minAmount, setMinAmount] = useState(amountMin);
   const [maxAmount, setMaxAmount] = useState(amountMax);
+  const searchDebounceRef = useRef<number | undefined>(undefined);
+
+  useEffect(() => {
+    setFrom(fromYmd);
+    setTo(toYmd);
+    setWeek(ahWeekSelect ? ahWeekSelect : "");
+  }, [fromYmd, toYmd, ahWeekSelect]);
+
+  useEffect(() => {
+    setQDraft(search);
+  }, [search]);
+
+  useEffect(() => {
+    setStatusSel(statusFilter);
+    setCountrySel(countryFilter);
+    setCreatedBy(createdById);
+    setPayType(paymentType);
+    setMinAmount(amountMin);
+    setMaxAmount(amountMax);
+  }, [statusFilter, countryFilter, createdById, paymentType, amountMin, amountMax]);
+
+  const setRangeFromWeekCode = useCallback((code: string) => {
+    const norm = normalizeAhWeekCode(code);
+    if (!norm) return;
+    const r = getAhWeekRange(norm);
+    if (!r) return;
+    setWeek(norm);
+    setFrom(r.from);
+    setTo(r.to);
+  }, []);
+
+  const flushSearchToUrl = useCallback(
+    (value: string) => {
+      const base = new URLSearchParams(searchParams.toString());
+      const t = value.trim();
+      if (t) base.set("q", t);
+      else base.delete("q");
+      const qs = base.toString();
+      router.replace(qs ? `/admin/orders?${qs}` : "/admin/orders");
+    },
+    [router, searchParams],
+  );
+
+  const scheduleSearchUrl = useCallback(
+    (value: string) => {
+      if (searchDebounceRef.current !== undefined) window.clearTimeout(searchDebounceRef.current);
+      searchDebounceRef.current = window.setTimeout(() => {
+        searchDebounceRef.current = undefined;
+        flushSearchToUrl(value);
+      }, 300);
+    },
+    [flushSearchToUrl],
+  );
+
+  useEffect(
+    () => () => {
+      if (searchDebounceRef.current !== undefined) window.clearTimeout(searchDebounceRef.current);
+    },
+    [],
+  );
 
   const applyFilters = useCallback(() => {
     const base = new URLSearchParams(searchParams.toString());
-    base.delete("preset");
-    const patch: Record<string, string> = {
-      from: from.trim(),
-      to: to.trim(),
-      week: week.trim(),
-      q: q.trim(),
-      status: statusSel.trim(),
-      country: countrySel.trim(),
-      createdBy: createdBy.trim(),
-      paymentType: payType.trim(),
-      amountMin: minAmount.trim(),
-      amountMax: maxAmount.trim(),
-    };
-    for (const [key, value] of Object.entries(patch)) {
-      if (value) base.set(key, value);
-      else base.delete(key);
+    for (const k of ORDERS_KEYS) base.delete(k);
+
+    const ow = week.trim();
+    if (ow && getAhWeekRange(ow)) {
+      const r = getAhWeekRange(ow)!;
+      base.set("ordersWeek", ow);
+      base.set("ordersFrom", (from.trim() || r.from).slice(0, 10));
+      base.set("ordersTo", (to.trim() || r.to).slice(0, 10));
+    } else {
+      if (from.trim()) base.set("ordersFrom", from.trim());
+      if (to.trim()) base.set("ordersTo", to.trim());
     }
-    base.delete("statuses");
-    base.delete("countries");
-    const queryString = base.toString();
-    router.push(queryString ? `/admin/orders?${queryString}` : "/admin/orders");
-  }, [createdBy, countrySel, from, maxAmount, minAmount, payType, q, router, searchParams, statusSel, to, week]);
+
+    if (qDraft.trim()) base.set("q", qDraft.trim());
+    if (statusSel.trim()) base.set("status", statusSel.trim());
+    if (countrySel.trim()) base.set("ordersCountry", countrySel.trim());
+    if (createdBy.trim()) base.set("createdBy", createdBy.trim());
+    if (payType.trim()) base.set("paymentType", payType.trim());
+    if (minAmount.trim()) base.set("amountMin", minAmount.trim());
+    if (maxAmount.trim()) base.set("amountMax", maxAmount.trim());
+
+    const qs = base.toString();
+    router.push(qs ? `/admin/orders?${qs}` : "/admin/orders");
+  }, [
+    countrySel,
+    createdBy,
+    from,
+    maxAmount,
+    minAmount,
+    payType,
+    qDraft,
+    router,
+    searchParams,
+    statusSel,
+    to,
+    week,
+  ]);
 
   const clearFilters = useCallback(() => {
-    const range = getCurrentWeekYmdRange();
-    const defaultWeekCode = getWeekCodeForLocalDate(parseLocalDate(range.from));
-    setFrom(range.from);
-    setTo(range.to);
-    setWeek(WORK_WEEK_RANGES[defaultWeekCode] ? defaultWeekCode : "");
-    setQ("");
-    setStatusSel("");
-    setCountrySel("");
-    setCreatedBy("");
-    setPayType("");
-    setMinAmount("");
-    setMaxAmount("");
-    router.replace("/admin/orders");
+    const base = new URLSearchParams();
+    for (const k of GLOBAL_KEYS) {
+      const v = searchParams.get(k);
+      if (v) base.set(k, v);
+    }
+    const qs = base.toString();
+    router.replace(qs ? `/admin/orders?${qs}` : "/admin/orders");
     router.refresh();
-  }, [router]);
+  }, [router, searchParams]);
 
   const presetHref = (preset: string) => {
-    const q = buildSearch(new URLSearchParams(searchParams.toString()), {
-      preset,
-      from: undefined,
-      to: undefined,
-      week: undefined,
-      q: undefined,
-      status: undefined,
-      country: undefined,
-      createdBy: undefined,
-      paymentType: undefined,
-      amountMin: undefined,
-      amountMax: undefined,
-      statuses: undefined,
-      countries: undefined,
-    });
-    return q ? `/admin/orders?${q}` : "/admin/orders";
+    const n = new URLSearchParams(searchParams.toString());
+    for (const k of ORDERS_KEYS) n.delete(k);
+    n.set("ordersPreset", preset);
+    const qs = n.toString();
+    return qs ? `/admin/orders?${qs}` : "/admin/orders";
   };
 
   return (
     <div className="adm-orders-excel-toolbar">
       <div className="adm-orders-excel-filters">
+        <p className="adm-orders-toolbar-scope-hint" dir="rtl">
+          סינון זה משפיע רק על רשימת ההזמנות (לא משנה את שבוע המערכת הגלובלי למעלה).
+        </p>
         <label className="adm-orders-filter-field adm-orders-filter-field--search">
           <span className="adm-orders-filter-label">חיפוש</span>
           <input
             type="search"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
+            value={qDraft}
+            onChange={(e) => {
+              const v = e.target.value;
+              setQDraft(v);
+              scheduleSearchUrl(v);
+            }}
             onKeyDown={(e) => {
-              if (e.key === "Enter") applyFilters();
+              if (e.key === "Enter") {
+                if (searchDebounceRef.current !== undefined) window.clearTimeout(searchDebounceRef.current);
+                flushSearchToUrl(qDraft);
+              }
             }}
             className="adm-orders-filter-inp"
-            placeholder="קוד / לקוח / סכום / עובד"
+            placeholder="מספר הזמנה · קוד לקוח · שם · עובד · טלפון · מדינה · AH-119"
           />
         </label>
         <label className="adm-orders-filter-field">
           <span className="adm-orders-filter-label">מתאריך</span>
-          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="adm-orders-date-inp" />
+          <input
+            type="date"
+            value={from}
+            onChange={(e) => {
+              const nextFrom = e.target.value;
+              setFrom(nextFrom);
+              const wk = getAhWeekCodeFromDateRange(nextFrom, to);
+              setWeek(wk ?? "");
+            }}
+            className="adm-orders-date-inp"
+          />
         </label>
         <label className="adm-orders-filter-field">
           <span className="adm-orders-filter-label">עד תאריך</span>
-          <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="adm-orders-date-inp" />
+          <input
+            type="date"
+            value={to}
+            onChange={(e) => {
+              const nextTo = e.target.value;
+              setTo(nextTo);
+              const wk = getAhWeekCodeFromDateRange(from, nextTo);
+              setWeek(wk ?? "");
+            }}
+            className="adm-orders-date-inp"
+          />
         </label>
         <label className="adm-orders-filter-field">
-          <span className="adm-orders-filter-label">שבוע עבודה</span>
-          <select value={week} onChange={(e) => setWeek(e.target.value)} className="adm-orders-week-sel adm-orders-sel-arrow">
-            <option value="">— לפי תאריכים —</option>
+          <span className="adm-orders-filter-label">שבוע (רשימה)</span>
+          <select
+            value={week}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (!v) {
+                setWeek("");
+                return;
+              }
+              setRangeFromWeekCode(v);
+            }}
+            className="adm-orders-week-sel adm-orders-sel-arrow"
+          >
+            <option value="">{weekSelectEmptyLabel(from, to)}</option>
             {WORK_WEEK_CODES_SORTED.map((w) => (
               <option key={w} value={w}>
                 {w}
@@ -282,4 +399,10 @@ export function OrdersListToolbar({
       </div>
     </div>
   );
+}
+
+function weekSelectEmptyLabel(fromYmd: string, toYmd: string): string {
+  if (!fromYmd || !toYmd) return "— לפי תאריכים —";
+  const wk = getAhWeekCodeFromDateRange(fromYmd, toYmd);
+  return wk ? "— לפי תאריכים —" : "טווח מותאם";
 }
