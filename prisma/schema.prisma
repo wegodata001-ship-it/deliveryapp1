@@ -37,6 +37,8 @@ enum OrderEditRequestStatus {
   PENDING
   APPROVED
   REJECTED
+  /** נוצלה לאחר עריכה בפועל לאחר אישור */
+  USED
 }
 
 enum PaymentMethod {
@@ -146,11 +148,12 @@ model Customer {
   payments        Payment[]
   receiptControls ReceiptControl[]
 
-  @@index([customerCode])
   @@index([displayName])
+  @@index([nameHe])
   @@index([nameAr])
   @@index([nameEn])
   @@index([phone])
+  @@index([secondPhone])
   @@index([oldCustomerCode])
 }
 
@@ -191,6 +194,8 @@ model Order {
   isActive             Boolean        @default(true)
   deletedAt            DateTime?
   createdById          String?
+  /** מקום קליטת הזמנה (FK ל-IntakeLocation). נשמר כעמודה רגילה לאחר ALTER TABLE היסטורי. */
+  locationId           String?
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
 
@@ -204,7 +209,6 @@ model Order {
   editUnlockedFor       User?              @relation("OrderEditUnlockFor", fields: [editUnlockedForUserId], references: [id])
   editRequests          OrderEditRequest[]
 
-  @@index([orderNumber])
   @@index([oldOrderNumber])
   @@index([weekCode])
   @@index([orderDate])
@@ -345,6 +349,18 @@ model IntakeLocation {
   id        String   @id @default(cuid())
   name      String   @unique
   createdAt DateTime @default(now())
+}
+
+/** טבלת מיקומי הזמנה היסטורית — נשמרת כדי ש-prisma db push לא ימחק אותה */
+model OrderLocation {
+  id        String   @id
+  name      String
+  createdAt DateTime @default(now())
+  createdBy String?
+
+  @@index([name], map: "OrderLocations_name_idx")
+  @@index([createdBy], map: "OrderLocations_createdBy_idx")
+  @@map("OrderLocations")
 }
 
 model PaymentLocation {

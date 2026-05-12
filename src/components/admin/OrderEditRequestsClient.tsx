@@ -14,7 +14,23 @@ const STATUS_LABEL: Record<OrderEditRequestStatus, string> = {
   PENDING: "ממתין",
   APPROVED: "אושר",
   REJECTED: "נדחה",
+  USED: "נוצלה",
 };
+
+function statusChipClass(s: OrderEditRequestStatus): string {
+  switch (s) {
+    case OrderEditRequestStatus.PENDING:
+      return "adm-order-edit-req-status adm-order-edit-req-status--pending";
+    case OrderEditRequestStatus.APPROVED:
+      return "adm-order-edit-req-status adm-order-edit-req-status--approved";
+    case OrderEditRequestStatus.REJECTED:
+      return "adm-order-edit-req-status adm-order-edit-req-status--rejected";
+    case OrderEditRequestStatus.USED:
+      return "adm-order-edit-req-status adm-order-edit-req-status--used";
+    default:
+      return "adm-order-edit-req-status";
+  }
+}
 
 function formatWhen(iso: string) {
   try {
@@ -110,17 +126,7 @@ export function OrderEditRequestsClient({ initialRows }: Props) {
                   </td>
                   <td className="adm-order-edit-reason-cell">{r.requestReason}</td>
                   <td>
-                    <span
-                      className={
-                        r.status === OrderEditRequestStatus.PENDING
-                          ? "adm-order-edit-req-status adm-order-edit-req-status--pending"
-                          : r.status === OrderEditRequestStatus.APPROVED
-                            ? "adm-order-edit-req-status adm-order-edit-req-status--approved"
-                            : "adm-order-edit-req-status adm-order-edit-req-status--rejected"
-                      }
-                    >
-                      {STATUS_LABEL[r.status]}
-                    </span>
+                    <span className={statusChipClass(r.status)}>{STATUS_LABEL[r.status]}</span>
                   </td>
                   <td className="adm-order-edit-actions-cell" onClick={(e) => e.stopPropagation()}>
                     {r.status === OrderEditRequestStatus.PENDING ? (
@@ -131,7 +137,7 @@ export function OrderEditRequestsClient({ initialRows }: Props) {
                           disabled={blocked}
                           onClick={() => void onApprove(r.id)}
                         >
-                          אישור
+                          אשר עריכה
                         </button>
                         <button
                           type="button"

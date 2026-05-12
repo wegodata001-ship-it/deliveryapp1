@@ -1,23 +1,30 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import { OrderStatus, PaymentMethod } from "@prisma/client";
-import { User } from "lucide-react";
 import {
-  captureOrderAction,
-  getCustomerOrderFormExtrasAction,
+  CalendarDays,
+  DollarSign,
+  FileText,
+  Globe2,
+  Hash,
+  Lock,
+  Percent,
+  Phone,
+  Plus,
+  Save,
+  Search,
+  User,
+} from "lucide-react";
+import {
   getOrderForWorkPanelAction,
   listCustomersForOrderQuickPickAction,
-  previewOrderNumberAction,
-  resolveCustomerForCaptureAction,
-  searchCustomersForOrderAction,
-  updateOrderWorkPanelAction,
+  type CaptureState,
   type CustomerSearchRow,
   type OrderWorkPanelPayload,
 } from "@/app/admin/capture/actions";
+import type { CustomerExtrasPayload } from "@/app/api/customers/extras/route";
 import { createOrderEditRequestAction } from "@/app/admin/order-edit-requests/actions";
-import { getSelectedCountriesForOrdersAction } from "@/app/admin/settings/actions";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { useAdminLoading } from "@/components/admin/AdminLoadingProvider";
 import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
@@ -109,6 +116,73 @@ function roundMoney2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+async function loadCustomerExtrasFast(customerId: string): Promise<CustomerExtrasPayload | null> {
+  const res = await fetch(`/api/customers/extras?id=${encodeURIComponent(customerId)}`, {
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error("טעינת פרטי לקוח נכשלה");
+  return (await res.json()) as CustomerExtrasPayload | null;
+}
+
+async function loadCustomerBalanceFast(
+  customerId: string,
+): Promise<{ balanceUsdDisplay: string; balanceUsdNegative: boolean } | null> {
+  const res = await fetch(`/api/customers/balance?id=${encodeURIComponent(customerId)}`, {
+    credentials: "include",
+  });
+  if (!res.ok) return null;
+  return (await res.json()) as { balanceUsdDisplay: string; balanceUsdNegative: boolean } | null;
+}
+
+function extrasFromCustomerRow(row: CustomerSearchRow): CustomerExtrasPayload | null {
+  if (row.nameAr === undefined || row.nameEn === undefined) return null;
+  const phone = row.phone ?? row.secondPhone ?? null;
+  const indexLabel = row.oldCustomerCode?.trim() || row.code?.trim() || null;
+  return {
+    nameEn: row.nameEn ?? row.nameHe ?? null,
+    nameAr: row.nameAr ?? null,
+    phone,
+    indexLabel,
+    city: row.city?.trim() || null,
+    address: row.address?.trim() || null,
+    balanceUsdDisplay: "0.00",
+    balanceUsdNegative: false,
+  };
+}
+
+async function searchCustomersFast(query: string): Promise<CustomerSearchRow[]> {
+  const res = await fetch(`/api/customers/search-fast?q=${encodeURIComponent(query)}`, { credentials: "include" });
+  if (!res.ok) throw new Error("טעינת נתונים נכשלה");
+  return (await res.json()) as CustomerSearchRow[];
+}
+
+async function resolveCustomerFast(query: string): Promise<CustomerSearchRow | null> {
+  const res = await fetch(`/api/customers/search-fast?q=${encodeURIComponent(query)}&exact=1`, { credentials: "include" });
+  if (!res.ok) throw new Error("טעינת נתונים נכשלה");
+  return (await res.json()) as CustomerSearchRow | null;
+}
+
+type OrderBootPayload = { countries: string[]; orderNumberPreview: string | null };
+
+async function fetchOrderBoot(weekCode: string): Promise<OrderBootPayload | null> {
+  const res = await fetch(`/api/orders/boot?weekCode=${encodeURIComponent(weekCode)}`, {
+    credentials: "include",
+  });
+  if (!res.ok) return null;
+  return (await res.json()) as OrderBootPayload;
+}
+
+async function saveCaptureFast(payload: Record<string, unknown>): Promise<CaptureState> {
+  const res = await fetch("/api/orders/capture", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(payload),
+  });
+  const data = (await res.json().catch(() => null)) as CaptureState | null;
+  return data ?? { ok: false, error: "שגיאה בשמירה" };
+}
+
 function commissionPercentFromFinancial(f: SerializedFinancial | null): number {
   if (!f) return 0;
   const base = Number(String(f.baseDollarRate).replace(",", "."));
@@ -145,7 +219,6 @@ export function OrderCreatePanel({
   onClose,
   onSaved,
 }: Props) {
-  const router = useRouter();
   const { openWindow } = useAdminWindows();
   const { runWithLoading } = useAdminLoading();
   const { globalWeek, globalCountry } = useAdminGlobal();
@@ -235,11 +308,16 @@ export function OrderCreatePanel({
   const customerExtrasReqRef = useRef(0);
 
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerSearchRow | null>(null);
-  const [extras, setExtras] = useState<Awaited<ReturnType<typeof getCustomerOrderFormExtrasAction>>>(null);
+  const [extras, setExtras] = useState<CustomerExtrasPayload | null>(null);
 
   const [phoneStr, setPhoneStr] = useState("");
   const [orderStatus, setOrderStatus] = useState<OrderStatus>(OrderStatus.OPEN);
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(PaymentMethod.BANK_TRANSFER);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(PaymentMethod.CASH);
+  const [isSearching, setIsSearching] = useState(false);
+
+  const customerCodeInputRef = useRef<HTMLInputElement | null>(null);
+  const usdInputRef = useRef<HTMLInputElement | null>(null);
+  const paymentMethodRef = useRef<HTMLSelectElement | null>(null);
   const [paymentPointId, setPaymentPointId] = useState("");
   const [paymentPoints, setPaymentPoints] = useState<{ id: string; label: string }[]>([]);
   const [paymentPointQuery, setPaymentPointQuery] = useState("");
@@ -279,10 +357,6 @@ export function OrderCreatePanel({
     };
   }, []);
 
-  useEffect(() => {
-    void getSelectedCountriesForOrdersAction().then(setOrderCountries);
-  }, []);
-
   const countrySelectOptions = useMemo(() => [...ORDER_COUNTRY_CODES] as OrderCountryCode[], []);
 
   useEffect(() => {
@@ -296,24 +370,53 @@ export function OrderCreatePanel({
   const refreshOrderNumberPreview = useCallback(async () => {
     if (isEdit) return;
     try {
-      const n = await previewOrderNumberAction(weekCodeForSave);
-      setOrderNumberPreview(n || "—");
+      const boot = await fetchOrderBoot(weekCodeForSave);
+      setOrderNumberPreview(boot?.orderNumberPreview || "—");
     } catch (error) {
       console.error("order number preview failed", error);
       setOrderNumberPreview("—");
     }
   }, [isEdit, weekCodeForSave]);
 
+  // Single bootstrap request: countries + order-number preview in one round-trip
+  // (replaces two server actions that each hit POST /admin and re-rendered the page).
   useEffect(() => {
     if (isEdit) return;
-    void refreshOrderNumberPreview();
-  }, [isEdit, weekCodeForSave, refreshOrderNumberPreview]);
+    let cancelled = false;
+    void fetchOrderBoot(weekCodeForSave).then((boot) => {
+      if (cancelled || !boot) return;
+      if (Array.isArray(boot.countries) && boot.countries.length > 0) {
+        setOrderCountries(boot.countries as OrderCountryCode[]);
+      }
+      if (boot.orderNumberPreview) {
+        setOrderNumberPreview(boot.orderNumberPreview);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isEdit, weekCodeForSave]);
+
+  // Edit mode: still need countries (no order-number preview).
+  useEffect(() => {
+    if (!isEdit) return;
+    let cancelled = false;
+    void fetchOrderBoot("").then((boot) => {
+      if (cancelled || !boot) return;
+      if (Array.isArray(boot.countries) && boot.countries.length > 0) {
+        setOrderCountries(boot.countries as OrderCountryCode[]);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isEdit]);
 
   useEffect(() => {
     if (target.mode !== "create") return;
     setOrderNumberPreview("…");
-    void refreshOrderNumberPreview();
-  }, [target.mode, refreshOrderNumberPreview]);
+    // boot effect above will refresh it
+  }, [target.mode]);
 
   useEffect(() => {
     if (target.mode !== "create") return;
@@ -435,44 +538,59 @@ export function OrderCreatePanel({
     setIntakeActiveIdx(0);
   }, [paymentPointHits]);
 
-  const loadCustomerExtras = useCallback(async (customerId: string) => {
-    const req = ++customerExtrasReqRef.current;
-    console.log("customer id", customerId);
-    try {
-      const ex = await getCustomerOrderFormExtrasAction(customerId);
-      if (customerExtrasReqRef.current !== req) return;
-      if (!ex) {
-        setExtras(null);
-        setPhoneStr("");
-        return;
-      }
-      skipSearchRef.current = true;
-      setExtras(ex);
-      setNameArStr(ex.nameAr ?? "");
-      setNameEnStr(ex.nameEn ?? "");
-      setPhoneStr(ex.phone ?? "");
-      console.log("form populate", { customerId, nameAr: ex.nameAr, nameEn: ex.nameEn, phone: ex.phone, code: ex.indexLabel });
-      queueMicrotask(() => {
-        skipSearchRef.current = false;
-      });
-    } catch (error) {
-      console.error("customer extras failed", error);
-      if (customerExtrasReqRef.current !== req) return;
-      setExtras(null);
-      setPhoneStr("");
-      setErr("טעינת נתונים נכשלה");
-    }
+  const applyExtras = useCallback((ex: CustomerExtrasPayload) => {
+    skipSearchRef.current = true;
+    setExtras(ex);
+    setNameArStr(ex.nameAr ?? "");
+    setNameEnStr(ex.nameEn ?? "");
+    setPhoneStr(ex.phone ?? "");
+    queueMicrotask(() => {
+      skipSearchRef.current = false;
+    });
   }, []);
 
+  const loadCustomerExtras = useCallback(
+    async (customerId: string, prefillFromRow: CustomerExtrasPayload | null) => {
+      const req = ++customerExtrasReqRef.current;
+      try {
+        // Path A — already have the cheap text fields (from search-fast row): apply them
+        // synchronously and only fetch the balance (slow aggregate) in the background.
+        if (prefillFromRow) {
+          applyExtras(prefillFromRow);
+          const bal = await loadCustomerBalanceFast(customerId);
+          if (customerExtrasReqRef.current !== req) return;
+          if (bal) {
+            setExtras((cur) => (cur ? { ...cur, ...bal } : cur));
+          }
+          return;
+        }
+        // Path B — fallback (e.g. edit-mode where we only have id/label/code).
+        const ex = await loadCustomerExtrasFast(customerId);
+        if (customerExtrasReqRef.current !== req) return;
+        if (!ex) {
+          setExtras(null);
+          setPhoneStr("");
+          return;
+        }
+        applyExtras(ex);
+      } catch (error) {
+        if (customerExtrasReqRef.current !== req) return;
+        setExtras(null);
+        setPhoneStr("");
+        setErr("טעינת נתונים נכשלה");
+      }
+    },
+    [applyExtras],
+  );
+
   useEffect(() => {
-    const id = selectedCustomer?.id;
-    console.log("selected customer", selectedCustomer);
-    if (!id) {
+    if (!selectedCustomer) {
       setExtras(null);
       setPhoneStr("");
       return;
     }
-    void loadCustomerExtras(id);
+    const prefill = extrasFromCustomerRow(selectedCustomer);
+    void loadCustomerExtras(selectedCustomer.id, prefill);
   }, [selectedCustomer, loadCustomerExtras]);
 
   const openCustomerCard = useCallback(() => {
@@ -545,15 +663,23 @@ export function OrderCreatePanel({
 
   const pickCustomer = useCallback((row: CustomerSearchRow) => {
     skipSearchRef.current = true;
-    console.log("selected customer", row);
-    console.log("customer id", row?.id);
     setErr(null);
     setSelectedCustomer(row);
     setCodeStr(row.code?.trim() ? row.code.trim() : row.id);
     setHits([]);
     setDropdownField(null);
+    setIsSearching(false);
     window.setTimeout(() => {
       skipSearchRef.current = false;
+      const el = usdInputRef.current;
+      if (el) {
+        el.focus();
+        try {
+          el.select();
+        } catch {
+          /* noop */
+        }
+      }
     }, 0);
   }, []);
 
@@ -566,13 +692,15 @@ export function OrderCreatePanel({
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trimmed);
     if (!trimmed || (!isUuid && trimmed.length < 2)) {
       setHits([]);
+      setIsSearching(false);
       return;
     }
     const gen = ++searchGenRef.current;
+    setIsSearching(true);
     const t = window.setTimeout(() => {
       void (async () => {
         try {
-          const rows = await searchCustomersForOrderAction(trimmed);
+          const rows = await searchCustomersFast(trimmed);
           if (searchGenRef.current !== gen) return;
           setHits(rows);
           setDropdownField(field);
@@ -580,9 +708,11 @@ export function OrderCreatePanel({
           if (searchGenRef.current !== gen) return;
           setErr("טעינת נתונים נכשלה");
           setHits([]);
+        } finally {
+          if (searchGenRef.current === gen) setIsSearching(false);
         }
       })();
-    }, 400);
+    }, 120);
     return () => window.clearTimeout(t);
   }, [codeStr, nameArStr, nameEnStr]);
 
@@ -593,142 +723,280 @@ export function OrderCreatePanel({
     setDropdownField(field);
   }, []);
 
-  async function resolveExactCode() {
+  const resolveExactCode = useCallback(async () => {
     setErr(null);
     const raw = codeStr.trim();
     if (!raw) {
       setErr("הזינו קוד לקוח");
       return;
     }
-    const row = await resolveCustomerForCaptureAction(raw);
-    if (row) {
-      pickCustomer(row);
-      return;
-    }
-    const found = await searchCustomersForOrderAction(raw);
-    const exact =
-      found.find((h) => (h.code || "").trim().toLowerCase() === raw.toLowerCase()) ??
-      found.find((h) => h.label.trim().toLowerCase() === raw.toLowerCase());
-    if (exact) pickCustomer(exact);
-    else setErr("לקוח לא נמצא");
-  }
-
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (isSaving) return;
-    if (isEdit && editGate?.employeeEditBlocked) return;
-
-    let cust = selectedCustomer;
-    if (!cust && codeStr.trim()) {
-      const row = await resolveCustomerForCaptureAction(codeStr.trim());
+    setIsSearching(true);
+    try {
+      const row = await resolveCustomerFast(raw);
       if (row) {
         pickCustomer(row);
-        cust = row;
+        return;
       }
-    }
-    if (!cust) {
-      setErr("יש לבחור לקוח באחד משדות החיפוש");
-      return;
-    }
-
-    if (!Number.isFinite(dealUsdTotal) || dealUsdTotal <= 0) {
-      setErr("יש להזין סכום עסקה (₪ או $)");
-      return;
-    }
-    const countryForSave = coerceOrderCountryForForm(sourceCountry) || (isEdit ? coerceOrderCountryForForm(loadedSourceCountry) : "");
-    if (!countryForSave) {
-      setErr("יש לבחור מדינת מקור");
-      return;
-    }
-
-    if (isEdit && (!canEditOrders || !editOrderId)) {
-      setErr("אין הרשאה לעריכה");
-      return;
-    }
-    if (!isEdit && !canCreateOrders) {
-      setErr("אין הרשאה ליצירת הזמנה");
-      return;
-    }
-
-    const intakeDraft = !paymentPointId.trim() && paymentPointQuery.trim() ? paymentPointQuery.trim() : "";
-    if (intakeDraft && intakeDraft.length < 2) {
-      setErr("מקום קליטה: יש לבחור מהרשימה או להזין לפחות שני תווים");
-      return;
-    }
-
-    try {
-      setIsSaving(true);
-      setErr(null);
-
-      if (isEdit) {
-        const feeStr = commissionUsdEffective.toFixed(2);
-        const res = await runWithLoading(
-          () =>
-            updateOrderWorkPanelAction({
-              orderId: editOrderId,
-              weekCode: weekCodeForSave,
-              orderDateYmd,
-              orderTimeHm,
-              customerId: cust.id,
-              amountUsd: roundMoney2(dealUsdTotal).toFixed(2),
-              feeUsd: feeStr,
-              paymentMethod,
-              status: orderStatus,
-              notes: notes.trim() || undefined,
-              paymentPointId: paymentPointId.trim() || null,
-              locationId: paymentPointId.trim() || null,
-              intakeLocationDraftName:
-                !paymentPointId.trim() && paymentPointQuery.trim() ? paymentPointQuery.trim() : undefined,
-              paymentLines: undefined,
-              sourceCountry: countryForSave,
-              draftNameAr: nameArStr.trim() || null,
-              draftNameEn: nameEnStr.trim() || null,
-            }),
-          { message: "שומר נתונים...", mode: "overlay" },
-        );
-        if (!res.ok) throw new Error(res.error);
-        onToast("ההזמנה עודכנה בהצלחה!");
-      } else {
-        const feeStr = commissionUsdCalc.toFixed(2);
-        const res = await runWithLoading(
-          () =>
-            captureOrderAction({
-              weekCode: weekCodeForSave,
-              orderDateYmd,
-              orderTimeHm,
-              customerId: cust.id,
-              amountUsd: roundMoney2(dealUsdTotal).toFixed(2),
-              feeUsd: feeStr,
-              paymentMethod,
-              status: orderStatus,
-              notes: notes.trim() || undefined,
-              paymentPointId: paymentPointId.trim() || null,
-              locationId: paymentPointId.trim() || null,
-              intakeLocationDraftName:
-                !paymentPointId.trim() && paymentPointQuery.trim() ? paymentPointQuery.trim() : undefined,
-              vatPercent: String(VAT_RATE_PERCENT),
-              paymentLines: undefined,
-              sourceCountry: countryForSave,
-              draftNameAr: nameArStr.trim() || null,
-              draftNameEn: nameEnStr.trim() || null,
-            }),
-          { message: "שומר נתונים...", mode: "overlay" },
-        );
-        if (!res.ok) throw new Error(res.error);
-        onToast("הזמנה נוצרה בהצלחה!");
-      }
-
-      await router.refresh();
-      onSaved?.();
-      onClose();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "שגיאה בשמירה";
-      setErr(msg);
-      onToast("שגיאה בשמירה");
+      const found = await searchCustomersFast(raw);
+      const exact =
+        found.find((h) => (h.code || "").trim().toLowerCase() === raw.toLowerCase()) ??
+        found.find((h) => h.label.trim().toLowerCase() === raw.toLowerCase());
+      if (exact) pickCustomer(exact);
+      else setErr("לקוח לא נמצא");
     } finally {
-      setIsSaving(false);
+      setIsSearching(false);
     }
-  }
+  }, [codeStr, pickCustomer]);
+
+  const resetFormForNew = useCallback(() => {
+    skipSearchRef.current = true;
+    setSelectedCustomer(null);
+    setExtras(null);
+    setCodeStr("");
+    setNameArStr("");
+    setNameEnStr("");
+    setPhoneStr("");
+    setNotes("");
+    setDealUsdStr("");
+    setDealIlsStr("");
+    setFeeUsdStr("");
+    setHits([]);
+    setDropdownField(null);
+    setIsSearching(false);
+    setErr(null);
+    setPaymentMethod(PaymentMethod.CASH);
+    setOrderStatus(OrderStatus.OPEN);
+    window.setTimeout(() => {
+      skipSearchRef.current = false;
+      const el = customerCodeInputRef.current;
+      if (el) {
+        el.focus();
+        try {
+          el.select();
+        } catch {
+          /* noop */
+        }
+      }
+    }, 0);
+  }, []);
+
+  // Latest state ref — read at save time only. Lets performSave stay stable
+  // across renders so the global keydown listener (Ctrl+Enter / Ctrl+N) doesn't
+  // unbind/rebind on every keystroke in money/notes/customer fields.
+  const performSaveStateRef = useRef({
+    isSaving,
+    isEdit,
+    editGate,
+    selectedCustomer,
+    codeStr,
+    dealUsdTotal,
+    sourceCountry,
+    loadedSourceCountry,
+    canEditOrders,
+    canCreateOrders,
+    editOrderId,
+    paymentPointId,
+    paymentPointQuery,
+    commissionUsdEffective,
+    commissionUsdCalc,
+    weekCodeForSave,
+    orderDateYmd,
+    orderTimeHm,
+    paymentMethod,
+    orderStatus,
+    notes,
+    nameArStr,
+    nameEnStr,
+  });
+  performSaveStateRef.current = {
+    isSaving,
+    isEdit,
+    editGate,
+    selectedCustomer,
+    codeStr,
+    dealUsdTotal,
+    sourceCountry,
+    loadedSourceCountry,
+    canEditOrders,
+    canCreateOrders,
+    editOrderId,
+    paymentPointId,
+    paymentPointQuery,
+    commissionUsdEffective,
+    commissionUsdCalc,
+    weekCodeForSave,
+    orderDateYmd,
+    orderTimeHm,
+    paymentMethod,
+    orderStatus,
+    notes,
+    nameArStr,
+    nameEnStr,
+  };
+
+  const performSave = useCallback(
+    async (keepOpen: boolean) => {
+      const s = performSaveStateRef.current;
+      if (s.isSaving) return;
+      if (s.isEdit && s.editGate?.employeeEditBlocked) return;
+
+      let cust = s.selectedCustomer;
+      if (!cust && s.codeStr.trim()) {
+        const row = await resolveCustomerFast(s.codeStr.trim());
+        if (row) {
+          pickCustomer(row);
+          cust = row;
+        }
+      }
+      if (!cust) {
+        setErr("יש לבחור לקוח באחד משדות החיפוש");
+        return;
+      }
+
+      if (!Number.isFinite(s.dealUsdTotal) || s.dealUsdTotal <= 0) {
+        setErr("יש להזין סכום עסקה (₪ או $)");
+        return;
+      }
+      const countryForSave =
+        coerceOrderCountryForForm(s.sourceCountry) ||
+        (s.isEdit ? coerceOrderCountryForForm(s.loadedSourceCountry) : "");
+      if (!countryForSave) {
+        setErr("יש לבחור מדינת מקור");
+        return;
+      }
+
+      if (s.isEdit && (!s.canEditOrders || !s.editOrderId)) {
+        setErr("אין הרשאה לעריכה");
+        return;
+      }
+      if (!s.isEdit && !s.canCreateOrders) {
+        setErr("אין הרשאה ליצירת הזמנה");
+        return;
+      }
+
+      const intakeDraft =
+        !s.paymentPointId.trim() && s.paymentPointQuery.trim() ? s.paymentPointQuery.trim() : "";
+      if (intakeDraft && intakeDraft.length < 2) {
+        setErr("מקום קליטה: יש לבחור מהרשימה או להזין לפחות שני תווים");
+        return;
+      }
+
+      try {
+        setIsSaving(true);
+        setErr(null);
+
+        if (s.isEdit) {
+          const feeStr = s.commissionUsdEffective.toFixed(2);
+          const res = await runWithLoading(
+            () =>
+              saveCaptureFast({
+                mode: "update",
+                orderId: s.editOrderId,
+                weekCode: s.weekCodeForSave,
+                orderDateYmd: s.orderDateYmd,
+                orderTimeHm: s.orderTimeHm,
+                customerId: cust.id,
+                amountUsd: roundMoney2(s.dealUsdTotal).toFixed(2),
+                feeUsd: feeStr,
+                paymentMethod: s.paymentMethod,
+                status: s.orderStatus,
+                notes: s.notes.trim() || undefined,
+                paymentPointId: s.paymentPointId.trim() || null,
+                locationId: s.paymentPointId.trim() || null,
+                intakeLocationDraftName:
+                  !s.paymentPointId.trim() && s.paymentPointQuery.trim() ? s.paymentPointQuery.trim() : undefined,
+                paymentLines: undefined,
+                sourceCountry: countryForSave,
+                draftNameAr: s.nameArStr.trim() || null,
+                draftNameEn: s.nameEnStr.trim() || null,
+              }),
+            { message: "שומר נתונים...", mode: "bar" },
+          );
+          if (!res.ok) throw new Error(res.error);
+          onToast("ההזמנה עודכנה בהצלחה!");
+        } else {
+          const feeStr = s.commissionUsdCalc.toFixed(2);
+          const res = await runWithLoading(
+            () =>
+              saveCaptureFast({
+                mode: "create",
+                weekCode: s.weekCodeForSave,
+                orderDateYmd: s.orderDateYmd,
+                orderTimeHm: s.orderTimeHm,
+                customerId: cust.id,
+                amountUsd: roundMoney2(s.dealUsdTotal).toFixed(2),
+                feeUsd: feeStr,
+                paymentMethod: s.paymentMethod,
+                status: s.orderStatus,
+                notes: s.notes.trim() || undefined,
+                paymentPointId: s.paymentPointId.trim() || null,
+                locationId: s.paymentPointId.trim() || null,
+                intakeLocationDraftName:
+                  !s.paymentPointId.trim() && s.paymentPointQuery.trim() ? s.paymentPointQuery.trim() : undefined,
+                vatPercent: String(VAT_RATE_PERCENT),
+                paymentLines: undefined,
+                sourceCountry: countryForSave,
+                draftNameAr: s.nameArStr.trim() || null,
+                draftNameEn: s.nameEnStr.trim() || null,
+              }),
+            { message: "שומר נתונים...", mode: "bar" },
+          );
+          if (!res.ok) throw new Error(res.error);
+          onToast("הזמנה נוצרה בהצלחה!");
+        }
+
+        onSaved?.();
+        if (keepOpen && !s.isEdit) {
+          resetFormForNew();
+          void refreshOrderNumberPreview();
+        } else {
+          onClose();
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "שגיאה בשמירה";
+        setErr(msg);
+        onToast("שגיאה בשמירה");
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    [pickCustomer, runWithLoading, onToast, onSaved, onClose, resetFormForNew, refreshOrderNumberPreview],
+  );
+
+  const onSubmit = useCallback(
+    (e: React.FormEvent) => {
+      e.preventDefault();
+      void performSave(false);
+    },
+    [performSave],
+  );
+
+  /** Initial focus on customer code input (create mode) + keyboard shortcuts */
+  useEffect(() => {
+    if (target.mode !== "create") return;
+    const t = window.setTimeout(() => {
+      customerCodeInputRef.current?.focus();
+    }, 30);
+    return () => window.clearTimeout(t);
+  }, [target.mode]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (isSaving) return;
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        void performSave(false);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === "n" || e.key === "N")) {
+        if (isEdit) return;
+        e.preventDefault();
+        void performSave(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [performSave, isSaving, isEdit]);
 
   const dateTimeDisplay = `${orderDateYmd.replace(/-/g, "/")} ${orderTimeHm}`;
 
@@ -838,8 +1106,33 @@ export function OrderCreatePanel({
   const statusOptions = isEdit ? EDIT_ORDER_STATUS_OPTIONS : CREATE_ORDER_STATUS_OPTIONS;
 
   return (
-    <div className="adm-order-create-legacy-wrap">
-      <form className="adm-order-create adm-order-create--legacy adm-capture-order-shell" onSubmit={onSubmit} dir="rtl">
+    <div className="adm-order-create-legacy-wrap adm-oc-pro-wrap">
+      <form
+        className="adm-order-create adm-order-create--legacy adm-capture-order-shell adm-oc-pro"
+        onSubmit={onSubmit}
+        dir="rtl"
+      >
+        <header className="adm-oc-pro-header" dir="rtl">
+          <div className="adm-oc-pro-header__title">
+            <span className="adm-oc-pro-header__icon" aria-hidden>
+              <FileText size={18} strokeWidth={2.2} />
+            </span>
+            <h2>{isEdit ? "עריכת הזמנה" : "קליטת הזמנה"}</h2>
+          </div>
+          {!isEdit ? (
+            <button
+              type="button"
+              className="adm-oc-pro-new"
+              disabled={isSaving || !canCreateOrders || formLocked}
+              title="שמירה ופתיחת קליטה חדשה (Ctrl+N)"
+              onClick={() => void performSave(true)}
+            >
+              <Plus size={15} strokeWidth={2.4} aria-hidden />
+              <span>חדש</span>
+            </button>
+          ) : null}
+        </header>
+
         {err ? <div className="adm-error adm-error--compact adm-oc-legacy-err">{err}</div> : null}
 
         {isEdit && formLocked ? (
@@ -881,18 +1174,21 @@ export function OrderCreatePanel({
           </div>
         ) : null}
 
-        <div className="modal-container">
-          <div className="modal-main">
-            <Card>
-              <h3 className="ds-capture-section-title">פרטים כלליים</h3>
+        <div className="modal-container adm-oc-pro-grid">
+          <div className="modal-main adm-oc-pro-main">
+            <Card className="adm-oc-pro-card adm-oc-pro-card--general">
+              <div className="adm-oc-pro-section adm-oc-pro-section--top">
+                <h3 className="adm-oc-pro-section-title">
+                  <FileText size={12} strokeWidth={2.4} aria-hidden />
+                  <span>פרטי הזמנה</span>
+                </h3>
         {/* שורת עליונה — קטנה, מימין */}
-        <div className="adm-oc-legacy-topbar">
-          <span className="adm-oc-legacy-topbar-item">
-            <label className="adm-oc-legacy-micro-label">{dateTimeDisplay}</label>
-          </span>
-          <span className="adm-oc-legacy-topbar-item">
-            <label className="adm-oc-legacy-micro-label">שבוע</label>
-            <div className="adm-oc-week-row" dir="ltr">
+        <div className="adm-oc-legacy-topbar adm-oc-pro-topbar">
+          <span className="adm-oc-legacy-topbar-item adm-oc-pro-item">
+            <label htmlFor={idp("week-inp")} className="adm-oc-legacy-micro-label adm-oc-pro-mlbl">
+              <CalendarDays size={12} strokeWidth={2.2} aria-hidden /> שבוע
+            </label>
+            <div className="adm-oc-week-row adm-oc-pro-week" dir="ltr">
               <button
                 type="button"
                 className="adm-oc-week-arrow"
@@ -978,9 +1274,35 @@ export function OrderCreatePanel({
               </datalist>
             </div>
           </span>
-          <span className="adm-oc-legacy-topbar-item">
-            <label htmlFor={idp("country")} className="adm-oc-legacy-micro-label">
-              מדינה
+          <span className="adm-oc-legacy-topbar-item adm-oc-pro-item">
+            <label htmlFor={idp("ordnum-top")} className="adm-oc-legacy-micro-label adm-oc-pro-mlbl">
+              <Hash size={12} strokeWidth={2.2} aria-hidden /> מספר הזמנה
+            </label>
+            <input
+              id={idp("ordnum-top")}
+              type="text"
+              readOnly
+              className="adm-oc-legacy-top-inp adm-oc-pro-inp--ro"
+              value={orderNumberPreview}
+              dir="ltr"
+            />
+          </span>
+          <span className="adm-oc-legacy-topbar-item adm-oc-pro-item">
+            <label className="adm-oc-legacy-micro-label adm-oc-pro-mlbl">
+              <CalendarDays size={12} strokeWidth={2.2} aria-hidden /> תאריך
+            </label>
+            <input
+              type="text"
+              readOnly
+              className="adm-oc-legacy-top-inp adm-oc-pro-inp--ro"
+              value={dateTimeDisplay}
+              dir="ltr"
+              title="תאריך ושעת ההזמנה"
+            />
+          </span>
+          <span className="adm-oc-legacy-topbar-item adm-oc-pro-item">
+            <label htmlFor={idp("country")} className="adm-oc-legacy-micro-label adm-oc-pro-mlbl">
+              <Globe2 size={12} strokeWidth={2.2} aria-hidden /> מדינה
             </label>
             <select
               id={idp("country")}
@@ -1003,41 +1325,76 @@ export function OrderCreatePanel({
               ))}
             </select>
           </span>
-          <span className="adm-oc-legacy-topbar-item">
-            <label className="adm-oc-legacy-micro-label">שער דולר</label>
-            <input type="text" readOnly className="adm-oc-legacy-top-inp" value={finalRate.toFixed(2)} dir="ltr" title="שער דולר סופי מהגדרות" />
-          </span>
-          <span className="adm-oc-legacy-topbar-item">
-            <label className="adm-oc-legacy-micro-label">עמלה %</label>
+          <span className="adm-oc-legacy-topbar-item adm-oc-pro-item">
+            <label className="adm-oc-legacy-micro-label adm-oc-pro-mlbl">
+              <DollarSign size={12} strokeWidth={2.2} aria-hidden /> שער דולר
+            </label>
             <input
               type="text"
               readOnly
-              className="adm-oc-legacy-top-inp"
+              className="adm-oc-legacy-top-inp adm-oc-pro-inp--ro"
+              value={finalRate.toFixed(2)}
+              dir="ltr"
+              title="שער דולר סופי מהגדרות"
+            />
+          </span>
+          <span className="adm-oc-legacy-topbar-item adm-oc-pro-item">
+            <label className="adm-oc-legacy-micro-label adm-oc-pro-mlbl">
+              <Percent size={12} strokeWidth={2.2} aria-hidden /> עמלה %
+            </label>
+            <input
+              type="text"
+              readOnly
+              className="adm-oc-legacy-top-inp adm-oc-pro-inp--ro"
               value={commissionPct.toFixed(2)}
               dir="ltr"
               title="אחוז עמלה מהגדרות כספים"
             />
           </span>
+          <span className="adm-oc-legacy-topbar-item adm-oc-pro-item">
+            <label htmlFor={idp("phone-top")} className="adm-oc-legacy-micro-label adm-oc-pro-mlbl">
+              <Phone size={12} strokeWidth={2.2} aria-hidden /> טלפון
+            </label>
+            <input
+              id={idp("phone-top")}
+              type="text"
+              readOnly
+              className="adm-oc-legacy-top-inp adm-oc-pro-inp--ro"
+              value={phoneStr}
+              dir="ltr"
+              placeholder="—"
+              title="מתמלא אוטומטית לפי הלקוח"
+            />
+          </span>
         </div>
+              </div>
 
+              <div className="adm-oc-pro-section adm-oc-pro-section--customer">
+                <h3 className="adm-oc-pro-section-title adm-oc-pro-section-title--customer">
+                  <Search size={12} strokeWidth={2.4} aria-hidden />
+                  <span>לקוח</span>
+                </h3>
         {/* שורה ראשית — גדולה */}
-        <div className="adm-oc-legacy-mainrow">
-          <div className="adm-oc-legacy-main-field">
-            <label htmlFor={idp("ordnum")}>מספר הזמנה</label>
-            <input id={idp("ordnum")} type="text" readOnly className="adm-oc-legacy-main-ro" value={orderNumberPreview} dir="ltr" />
-          </div>
-          <div className={`adm-oc-legacy-main-field${dropdownField === "code" && hits.length > 0 ? " adm-oc-legacy-main-field--open" : ""}`}>
-            <label htmlFor={idp("code-main")}>קוד לקוח</label>
+        <div className="adm-oc-legacy-mainrow adm-oc-pro-mainrow">
+          <div className={`adm-oc-legacy-main-field adm-oc-pro-field--code${dropdownField === "code" && hits.length > 0 ? " adm-oc-legacy-main-field--open" : ""}`}>
+            <label htmlFor={idp("code-main")} className="adm-oc-pro-lbl adm-oc-pro-lbl--code">
+              <Search size={12} strokeWidth={2.4} aria-hidden /> קוד לקוח
+            </label>
             <div className="adm-oc-legacy-main-code-with-icon">
-              <div className="adm-oc-legacy-main-code-wrap">
+              <div className="adm-oc-legacy-main-code-wrap adm-oc-pro-code-wrap">
+                <span className="adm-oc-pro-code-search" aria-hidden>
+                  <Search size={14} strokeWidth={2.4} />
+                </span>
                 <input
                   id={idp("code-main")}
+                  ref={customerCodeInputRef}
                   type="text"
                   autoComplete="off"
-                  className="adm-oc-legacy-main-inp"
+                  className="adm-oc-legacy-main-inp adm-oc-pro-code-inp"
                   disabled={fieldDisabled}
                   dir="ltr"
                   value={codeStr}
+                  placeholder="קוד / שם / טלפון"
                   onChange={(e) => {
                     setCodeStr(e.target.value);
                     setSelectedCustomer(null);
@@ -1057,6 +1414,7 @@ export function OrderCreatePanel({
                     }
                   }}
                 />
+                {isSearching ? <span className="adm-oc-inline-spinner" aria-hidden /> : null}
                 <button
                   type="button"
                   className="adm-oc-legacy-main-arrow"
@@ -1102,20 +1460,9 @@ export function OrderCreatePanel({
               </button>
             </div>
           </div>
-          <div className="adm-oc-legacy-main-field">
-            <label htmlFor={idp("idx")}>אינדקס</label>
-            <input
-              id={idp("idx")}
-              type="text"
-              readOnly
-              className="adm-oc-legacy-main-ro"
-              value={extras?.indexLabel ?? ""}
-              dir="ltr"
-            />
-          </div>
         </div>
 
-            <div className="adm-oc-legacy-center">
+            <div className="adm-oc-legacy-center adm-oc-pro-customer-center">
             {customerMiniLine ? (
               <div className="adm-oc-legacy-customer-mini" dir="rtl">
                 <span className="adm-oc-legacy-customer-mini-text">{customerMiniLine}</span>
@@ -1258,40 +1605,29 @@ export function OrderCreatePanel({
                 ) : null}
               </div>
 
-              {/* טלפון */}
-              <div className="adm-oc-legacy-field-wrap">
-                <label htmlFor={idp("phone-ro")}>טלפון</label>
-                <input
-                  id={idp("phone-ro")}
-                  type="text"
-                  readOnly
-                  className="adm-oc-legacy-phone-ro"
-                  value={phoneStr}
-                  dir="ltr"
-                  placeholder="—"
-                  title="מתמלא אוטומטית לפי הלקוח"
-                />
-              </div>
             </div>
 
-            <div className="adm-oc-legacy-notes">
-              <label htmlFor={idp("notes")}>הערות</label>
+            <div className="adm-oc-legacy-notes adm-oc-pro-notes-wrap">
+              <label htmlFor={idp("notes")} className="adm-oc-pro-lbl">
+                <FileText size={12} strokeWidth={2.2} aria-hidden /> הערות קצרות
+              </label>
               <textarea
                 id={idp("notes")}
-                className="adm-oc-legacy-notes-ta"
-                rows={3}
+                className="adm-oc-legacy-notes-ta adm-oc-pro-notes-ta"
+                rows={1}
                 disabled={fieldDisabled}
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                placeholder="הערות להזמנה…"
+                placeholder="הערות קצרות…"
               />
             </div>
           </div>
+              </div>
             </Card>
 
-            <Card className="adm-oc-pay-card">
-              <h3 className="ds-capture-section-title">פרטי תשלום</h3>
-              <aside className="adm-oc-legacy-side" aria-label="סטטוס ותשלום">
+            <Card className="adm-oc-pay-card adm-oc-pro-card adm-oc-pro-card--payment">
+              <h3 className="adm-oc-pro-card-title adm-oc-pro-card-title--payment">פרטי תשלום</h3>
+              <aside className="adm-oc-legacy-side adm-oc-pro-pay" aria-label="סטטוס ותשלום">
                 <div className="adm-oc-legacy-side-field">
                   <label htmlFor={idp("ord-st")}>סטטוס הזמנה</label>
                   <select
@@ -1399,11 +1735,18 @@ export function OrderCreatePanel({
                   <label htmlFor={idp("pay-m")}>צורת תשלום</label>
                   <select
                     id={idp("pay-m")}
+                    ref={paymentMethodRef}
                     className="adm-oc-legacy-side-sel"
                     disabled={fieldDisabled}
                     value={paymentMethod}
                     onFocus={closeCustomerDropdown}
                     onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void performSave(false);
+                      }
+                    }}
                   >
                     {ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS.map((o) => (
                       <option key={o.value} value={o.value}>
@@ -1416,9 +1759,9 @@ export function OrderCreatePanel({
             </Card>
           </div>
 
-          <div className="modal-summary" dir="ltr">
-            <Card className="summary-info adm-oc-legacy-card">
-              <div className="adm-oc-card-title">₪ שקלים</div>
+          <div className="modal-summary adm-oc-pro-money" dir="ltr">
+            <Card className="summary-info adm-oc-legacy-card adm-oc-card--ils adm-oc-pro-card adm-oc-pro-card--ils">
+              <div className="adm-oc-card-title adm-oc-pro-card-title adm-oc-pro-card-title--ils">₪ שקלים</div>
               <div className="adm-field adm-oc-field adm-oc-legacy-fin-field">
                 <label htmlFor={idp("dils")}>סכום בשקלים</label>
                 <input
@@ -1447,6 +1790,10 @@ export function OrderCreatePanel({
                 <span dir="ltr">{commissionIlsEffective.toFixed(2)} ₪</span>
               </div>
               <div className="adm-oc-line">
+                <span>סה״כ לפני עמלה</span>
+                <span dir="ltr">{roundMoney2(dealIlsTotal).toFixed(2)} ₪</span>
+              </div>
+              <div className="adm-oc-line">
                 <span>סה״כ לפני מע״מ</span>
                 <span dir="ltr">{totalBeforeVatIls.toFixed(2)} ₪</span>
               </div>
@@ -1456,18 +1803,19 @@ export function OrderCreatePanel({
                   {vatAmountIls.toFixed(2)} ₪ / ${vatAmountUsd.toFixed(2)}
                 </span>
               </div>
-              <div className="adm-oc-line adm-oc-line--total">
+              <div className="adm-oc-line adm-oc-line--total adm-oc-pro-final">
                 <span>סה״כ סופי</span>
                 <span dir="ltr">{finalTotalIls.toFixed(2)} ₪</span>
               </div>
             </Card>
 
-            <Card className="summary-success adm-oc-legacy-card">
-              <div className="adm-oc-card-title">$ דולרים</div>
+            <Card className="summary-success adm-oc-legacy-card adm-oc-card--usd adm-oc-pro-card adm-oc-pro-card--usd">
+              <div className="adm-oc-card-title adm-oc-pro-card-title adm-oc-pro-card-title--usd">$ דולרים</div>
               <div className="adm-field adm-oc-field adm-oc-legacy-fin-field">
                 <label htmlFor={idp("dusd")}>סכום בדולר</label>
                 <input
                   id={idp("dusd")}
+                  ref={usdInputRef}
                   type="text"
                   inputMode="decimal"
                   className="adm-oc-inp adm-oc-legacy-fin-inp"
@@ -1479,13 +1827,13 @@ export function OrderCreatePanel({
                     const v = e.target.value;
                     setDealUsdStr(v);
                   }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      paymentMethodRef.current?.focus();
+                    }
+                  }}
                 />
-              </div>
-              <div className="adm-oc-xrate" dir="rtl" aria-live="polite">
-                <span className="adm-oc-xrate-lbl">שווי בשקלים</span>
-                <span className="adm-oc-xrate-val" dir="ltr">
-                  ₪{roundMoney2(eqIlsFromUsd).toFixed(2)}
-                </span>
               </div>
               <div className="adm-oc-line">
                 <span>עמלה</span>
@@ -1499,16 +1847,30 @@ export function OrderCreatePanel({
           </div>
         </div>
 
-        <div className="adm-modal-actions adm-modal-actions--capture adm-oc-legacy-actions">
-          <button type="button" className="adm-btn adm-btn--ghost adm-btn--dense" disabled={isSaving} onClick={onClose}>
-            ביטול
-          </button>
+        <div className="adm-modal-actions adm-modal-actions--capture adm-oc-legacy-actions adm-oc-pro-actions">
           <button
             type="submit"
-            className={`adm-btn adm-btn--primary adm-btn--dense${isSaving ? " loading" : ""}`}
+            className={`adm-oc-pro-save${isSaving ? " is-loading" : ""}`}
             disabled={isSaving || (isEdit ? !canEditOrders : !canCreateOrders) || formLocked}
+            title="שמירה (Ctrl+Enter)"
           >
-            {isSaving ? "שומר…" : isEdit ? "עדכון" : "שמירה"}
+            <Save size={15} strokeWidth={2.2} aria-hidden />
+            <span>{isSaving ? "שומר…" : isEdit ? "עדכון" : "שמור"}</span>
+          </button>
+          <span className="adm-oc-pro-shortcut-hint" aria-hidden>
+            <kbd>Ctrl</kbd>
+            <span>+</span>
+            <kbd>Enter</kbd>
+            <span>לשמירה מהירה</span>
+          </span>
+          <span className="adm-oc-pro-actions__spacer" />
+          <button
+            type="button"
+            className="adm-btn adm-btn--ghost adm-btn--dense adm-oc-pro-cancel"
+            disabled={isSaving}
+            onClick={onClose}
+          >
+            ביטול
           </button>
         </div>
 

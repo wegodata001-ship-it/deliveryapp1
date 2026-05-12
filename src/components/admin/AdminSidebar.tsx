@@ -143,11 +143,13 @@ function NavBlock({
   pathname,
   sp,
   openWindow,
+  navBadges,
 }: {
   section: NavSectionDef;
   pathname: string;
   sp: URLSearchParams;
   openWindow: (p: AdminWindowPayload) => void;
+  navBadges?: { pendingOrderEditRequests?: number };
 }) {
   return (
     <div className="adm-nav-section">
@@ -170,6 +172,10 @@ function NavBlock({
             </button>
           );
         }
+        const editReqBadge =
+          item.href === "/admin/order-edit-requests" && navBadges?.pendingOrderEditRequests
+            ? navBadges.pendingOrderEditRequests
+            : 0;
         return (
           <Link
             key={key}
@@ -179,7 +185,12 @@ function NavBlock({
             aria-current={active ? "page" : undefined}
           >
             <NavIcon id={item.icon} />
-            {item.label}
+            <span className="adm-nav-link__label">{item.label}</span>
+            {editReqBadge > 0 ? (
+              <span className="adm-nav-badge" title={`${editReqBadge} בקשות ממתינות`}>
+                {editReqBadge > 99 ? "99+" : editReqBadge}
+              </span>
+            ) : null}
           </Link>
         );
       })}
@@ -187,7 +198,13 @@ function NavBlock({
   );
 }
 
-export function AdminSidebar({ sections }: { sections: NavSectionDef[] }) {
+export function AdminSidebar({
+  sections,
+  navBadges,
+}: {
+  sections: NavSectionDef[];
+  navBadges?: { pendingOrderEditRequests?: number };
+}) {
   const pathname = usePathname();
   const sp = useSearchParams();
   const { openWindow } = useAdminWindows();
@@ -208,6 +225,7 @@ export function AdminSidebar({ sections }: { sections: NavSectionDef[] }) {
             pathname={pathname}
             sp={sp}
             openWindow={openWindow}
+            navBadges={navBadges}
           />
         ))}
       </nav>

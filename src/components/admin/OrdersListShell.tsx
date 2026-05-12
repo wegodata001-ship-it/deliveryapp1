@@ -69,13 +69,13 @@ function inlineStatusBadgeClass(sel: OrderStatus): string {
 function orderEditBadgeLabel(b: NonNullable<OrderListRow["editBadge"]>): { emoji: string; text: string; cls: string } {
   switch (b) {
     case "pending":
-      return { emoji: "🟠", text: "ממתין לאישור", cls: "adm-order-edit-badge--pending" };
+      return { emoji: "🟠", text: "ממתין לאישור מנהל", cls: "adm-order-edit-badge--pending" };
     case "unlock":
       return { emoji: "🟢", text: "אושר לעריכה", cls: "adm-order-edit-badge--unlock" };
     case "rejected":
       return { emoji: "🔴", text: "נדחה", cls: "adm-order-edit-badge--rejected" };
     case "locked":
-      return { emoji: "🔒", text: "גמורה נעולה", cls: "adm-order-edit-badge--locked" };
+      return { emoji: "🔒", text: "מוכן — נעולה לעריכה", cls: "adm-order-edit-badge--locked" };
     default:
       return { emoji: "", text: "", cls: "" };
   }
@@ -124,9 +124,13 @@ export function OrdersListShell({
   );
 
   const openOrderOverlay = useCallback(
-    (orderId: string) => {
+    (orderId: string, row?: OrderListRow) => {
       if (canEditOrders) {
-        openWindow({ type: "orderCapture", props: { mode: "edit", orderId } });
+        const startWithEditRequest = row?.editBadge === "locked";
+        openWindow({
+          type: "orderCapture",
+          props: { mode: "edit", orderId, ...(startWithEditRequest ? { startWithEditRequest: true } : {}) },
+        });
       } else {
         router.push(`/admin/orders/${orderId}`);
       }
@@ -225,11 +229,11 @@ export function OrdersListShell({
                   <tr
                     key={o.id}
                     className="adm-table-excel-row"
-                    onClick={() => openOrderOverlay(o.id)}
+                    onClick={() => openOrderOverlay(o.id, o)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
-                        openOrderOverlay(o.id);
+                        openOrderOverlay(o.id, o);
                       }
                     }}
                     tabIndex={0}
@@ -241,7 +245,7 @@ export function OrdersListShell({
                         className="adm-table-excel-link adm-table-excel-link--btn"
                         onClick={(e) => {
                           e.stopPropagation();
-                          openOrderOverlay(o.id);
+                          openOrderOverlay(o.id, o);
                         }}
                       >
                         {o.orderNumber ?? "—"}

@@ -4,52 +4,69 @@ import { OrderEditRequestStatus, OrderStatus, Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { requireAuth, isAdminUser, userHasAnyPermission } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
+import { ensureOnce } from "@/lib/ensure-tables-once";
 import { ORDER_EDIT_UNLOCK_DURATION_MS, orderStatusRequiresEditApproval } from "@/lib/order-edit-lock";
 
 async function ensureOrderEditRequestTables(): Promise<void> {
-  await prisma.$executeRaw`
-    DO $$
-    BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'OrderEditRequestStatus') THEN
-        CREATE TYPE "OrderEditRequestStatus" AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
-      END IF;
-    END
-    $$;
-  `;
+  await ensureOnce("order-edit-request-tables", async () => {
+    await prisma.$executeRaw`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'OrderEditRequestStatus') THEN
+          CREATE TYPE "OrderEditRequestStatus" AS ENUM ('PENDING', 'APPROVED', 'REJECTED', 'USED');
+        END IF;
+      END
+      $$;
+    `;
 
-  await prisma.$executeRaw`
-    CREATE TABLE IF NOT EXISTS "OrderEditRequest" (
-      "id" TEXT PRIMARY KEY,
-      "orderId" TEXT NOT NULL,
-      "requestedByUserId" TEXT NOT NULL,
-      "requestReason" TEXT NOT NULL,
-      "status" "OrderEditRequestStatus" NOT NULL DEFAULT 'PENDING',
-      "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      "approvedAt" TIMESTAMP(3),
-      "approvedByUserId" TEXT,
-      "rejectedAt" TIMESTAMP(3),
-      "rejectedByUserId" TEXT
-    )
-  `;
-  await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "OrderEditRequest_orderId_idx" ON "OrderEditRequest" ("orderId")`;
-  await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "OrderEditRequest_status_idx" ON "OrderEditRequest" ("status")`;
-  await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "OrderEditRequest_requestedByUserId_idx" ON "OrderEditRequest" ("requestedByUserId")`;
-  await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "OrderEditRequest_createdAt_idx" ON "OrderEditRequest" ("createdAt")`;
+    await prisma.$executeRaw`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_enum e
+          JOIN pg_type t ON e.enumtypid = t.oid
+          WHERE t.typname = 'OrderEditRequestStatus' AND e.enumlabel = 'USED'
+        ) THEN
+          ALTER TYPE "OrderEditRequestStatus" ADD VALUE 'USED';
+        END IF;
+      END
+      $$;
+    `;
 
-  await prisma.$executeRaw`
-    CREATE TABLE IF NOT EXISTS "UserNotification" (
-      "id" TEXT PRIMARY KEY,
-      "userId" TEXT NOT NULL,
-      "kind" TEXT NOT NULL,
-      "title" TEXT NOT NULL,
-      "body" TEXT,
-      "payload" JSONB,
-      "readAt" TIMESTAMP(3),
-      "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-  `;
-  await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "UserNotification_userId_createdAt_idx" ON "UserNotification" ("userId", "createdAt")`;
-  await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "UserNotification_userId_readAt_idx" ON "UserNotification" ("userId", "readAt")`;
+    await prisma.$executeRaw`
+      CREATE TABLE IF NOT EXISTS "OrderEditRequest" (
+        "id" TEXT PRIMARY KEY,
+        "orderId" TEXT NOT NULL,
+        "requestedByUserId" TEXT NOT NULL,
+        "requestReason" TEXT NOT NULL,
+        "status" "OrderEditRequestStatus" NOT NULL DEFAULT 'PENDING',
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "approvedAt" TIMESTAMP(3),
+        "approvedByUserId" TEXT,
+        "rejectedAt" TIMESTAMP(3),
+        "rejectedByUserId" TEXT
+      )
+    `;
+    await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "OrderEditRequest_orderId_idx" ON "OrderEditRequest" ("orderId")`;
+    await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "OrderEditRequest_status_idx" ON "OrderEditRequest" ("status")`;
+    await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "OrderEditRequest_requestedByUserId_idx" ON "OrderEditRequest" ("requestedByUserId")`;
+    await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "OrderEditRequest_createdAt_idx" ON "OrderEditRequest" ("createdAt")`;
+
+    await prisma.$executeRaw`
+      CREATE TABLE IF NOT EXISTS "UserNotification" (
+        "id" TEXT PRIMARY KEY,
+        "userId" TEXT NOT NULL,
+        "kind" TEXT NOT NULL,
+        "title" TEXT NOT NULL,
+        "body" TEXT,
+        "payload" JSONB,
+        "readAt" TIMESTAMP(3),
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+    await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "UserNotification_userId_createdAt_idx" ON "UserNotification" ("userId", "createdAt")`;
+    await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "UserNotification_userId_readAt_idx" ON "UserNotification" ("userId", "readAt")`;
+  });
 }
 
 async function notifyUsers(userIds: string[], title: string, body: string | null, kind: string, payload?: Prisma.InputJsonValue) {
@@ -111,7 +128,7 @@ export async function createOrderEditRequestAction(orderId: string, requestReaso
   });
   if (!order) return { ok: false, error: "הזמנה לא נמצאה" };
   if (!orderStatusRequiresEditApproval(order.status)) {
-    return { ok: false, error: "בקשת אישור נדרשת רק להזמנה בהושלמה" };
+    return { ok: false, error: "בקשת אישור נדרשת רק להזמנה במצב ״מוכן״ (הושלמה)" };
   }
 
   const pending = await prisma.orderEditRequest.findFirst({
@@ -136,7 +153,7 @@ export async function createOrderEditRequestAction(orderId: string, requestReaso
       actionType: "ORDER_EDIT_REQUEST_CREATED",
       entityType: "OrderEditRequest",
       entityId: req.id,
-      metadata: { orderId: oid, orderNumber: order.orderNumber } as Prisma.InputJsonValue,
+      metadata: { orderId: oid, orderNumber: order.orderNumber, requestReason: reason } as Prisma.InputJsonValue,
     },
   });
 
@@ -162,6 +179,13 @@ export type OrderEditRequestRow = {
   requestReason: string;
   status: OrderEditRequestStatus;
 };
+
+export async function countPendingOrderEditRequestsForAdmin(): Promise<number> {
+  const me = await requireAuth();
+  if (!isAdminUser(me)) return 0;
+  await ensureOrderEditRequestTables();
+  return prisma.orderEditRequest.count({ where: { status: OrderEditRequestStatus.PENDING } });
+}
 
 export async function listOrderEditRequestsAction(): Promise<OrderEditRequestRow[]> {
   const me = await requireAuth();
@@ -199,13 +223,21 @@ export async function approveOrderEditRequestAction(
   const rid = requestId.trim();
   const req = await prisma.orderEditRequest.findFirst({
     where: { id: rid, status: OrderEditRequestStatus.PENDING },
-    select: { id: true, orderId: true, requestedByUserId: true },
+    select: { id: true, orderId: true, requestedByUserId: true, requestReason: true },
   });
   if (!req) return { ok: false, error: "בקשה לא נמצאה או שכבר טופלה" };
 
   const until = new Date(Date.now() + ORDER_EDIT_UNLOCK_DURATION_MS);
 
   await prisma.$transaction([
+    prisma.orderEditRequest.updateMany({
+      where: {
+        orderId: req.orderId,
+        status: OrderEditRequestStatus.APPROVED,
+        id: { not: req.id },
+      },
+      data: { status: OrderEditRequestStatus.USED },
+    }),
     prisma.orderEditRequest.update({
       where: { id: req.id },
       data: {
@@ -229,7 +261,11 @@ export async function approveOrderEditRequestAction(
       actionType: "ORDER_EDIT_REQUEST_APPROVED",
       entityType: "OrderEditRequest",
       entityId: req.id,
-      metadata: { orderId: req.orderId, unlockedUntil: until.toISOString() } as Prisma.InputJsonValue,
+      metadata: {
+        orderId: req.orderId,
+        unlockedUntil: until.toISOString(),
+        requestReason: req.requestReason,
+      } as Prisma.InputJsonValue,
     },
   });
 
@@ -254,7 +290,7 @@ export async function rejectOrderEditRequestAction(requestId: string): Promise<{
   const rid = requestId.trim();
   const req = await prisma.orderEditRequest.findFirst({
     where: { id: rid, status: OrderEditRequestStatus.PENDING },
-    select: { id: true, orderId: true, requestedByUserId: true },
+    select: { id: true, orderId: true, requestedByUserId: true, requestReason: true },
   });
   if (!req) return { ok: false, error: "בקשה לא נמצאה או שכבר טופלה" };
 
@@ -273,7 +309,7 @@ export async function rejectOrderEditRequestAction(requestId: string): Promise<{
       actionType: "ORDER_EDIT_REQUEST_REJECTED",
       entityType: "OrderEditRequest",
       entityId: req.id,
-      metadata: { orderId: req.orderId } as Prisma.InputJsonValue,
+      metadata: { orderId: req.orderId, requestReason: req.requestReason } as Prisma.InputJsonValue,
     },
   });
 
@@ -316,4 +352,69 @@ export async function markNotificationsReadAction(ids: string[]): Promise<void> 
     where: { userId: me.id, id: { in: clean }, readAt: null },
     data: { readAt: new Date() },
   });
+}
+
+/**
+ * לאחר שמירת עריכה מוצלחת — מסמן את אישור העריכה האחרון (אם קיים) כנוצל,
+ * ומנקה תמיד את שדות פתיחת הנעילה בהזמנה.
+ *
+ * שיפור ביצועים: רוב השמירות הן של הזמנות רגילות ללא APPROVED edit-request
+ * וללא unlock פעיל — במקרים אלו אנחנו יוצאים מוקדם ללא עבודה.
+ */
+export async function markApprovedEditRequestUsedAndClearUnlock(orderId: string, editorUserId: string): Promise<void> {
+  const oid = orderId.trim();
+  if (!oid) return;
+
+  await ensureOrderEditRequestTables();
+
+  // קריאה מקבילית: גם ה-APPROVED האחרון, גם מצב הנעילה של ההזמנה.
+  const [latest, orderState] = await Promise.all([
+    prisma.orderEditRequest.findFirst({
+      where: { orderId: oid, status: OrderEditRequestStatus.APPROVED },
+      orderBy: [{ approvedAt: "desc" }, { createdAt: "desc" }],
+      select: { id: true },
+    }),
+    prisma.order.findFirst({
+      where: { id: oid },
+      select: { editUnlockedForUserId: true, editUnlockedUntil: true },
+    }),
+  ]);
+
+  const hasUnlock = Boolean(orderState?.editUnlockedForUserId || orderState?.editUnlockedUntil);
+  // Short-circuit: אין מה לעדכן ואין מה לסמן כנוצל.
+  if (!latest && !hasUnlock) return;
+
+  const ops: Prisma.PrismaPromise<unknown>[] = [];
+  if (latest) {
+    ops.push(
+      prisma.orderEditRequest.update({
+        where: { id: latest.id },
+        data: { status: OrderEditRequestStatus.USED },
+      }),
+    );
+  }
+  if (hasUnlock) {
+    ops.push(
+      prisma.order.update({
+        where: { id: oid },
+        data: { editUnlockedForUserId: null, editUnlockedUntil: null },
+      }),
+    );
+  }
+
+  if (ops.length > 0) {
+    await prisma.$transaction(ops);
+  }
+
+  if (latest) {
+    await prisma.auditLog.create({
+      data: {
+        userId: editorUserId,
+        actionType: "ORDER_EDIT_REQUEST_USED",
+        entityType: "OrderEditRequest",
+        entityId: latest.id,
+        metadata: { orderId: oid } as Prisma.InputJsonValue,
+      },
+    });
+  }
 }

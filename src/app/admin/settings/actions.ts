@@ -6,6 +6,7 @@ import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { finalRateFromBaseAndFee } from "@/lib/financial-calc";
 import { ensureDefaultFinancialSettings, getCurrentFinancialSettings } from "@/lib/financial-settings";
 import { prisma } from "@/lib/prisma";
+import { ensureOnce } from "@/lib/ensure-tables-once";
 import { ORDER_COUNTRY_CODES, parseSelectedCountriesJson, type OrderCountryCode } from "@/lib/order-countries";
 import { DEFAULT_WEEK_CODE } from "@/lib/work-week";
 import { VAT_RATE_PERCENT } from "@/lib/vat";
@@ -39,13 +40,15 @@ const DEFAULT_SETTINGS: Omit<AdminSettingsPayload, "baseDollarRate" | "finalDoll
 const DEFAULT_SELECTED_COUNTRIES: OrderCountryCode[] = [...ORDER_COUNTRY_CODES];
 
 async function ensureSettingsTable() {
-  await prisma.$executeRaw`
-    CREATE TABLE IF NOT EXISTS admin_system_settings (
-      setting_key TEXT PRIMARY KEY,
-      setting_value TEXT NOT NULL,
-      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-  `;
+  await ensureOnce("admin-settings-table", async () => {
+    await prisma.$executeRaw`
+      CREATE TABLE IF NOT EXISTS admin_system_settings (
+        setting_key TEXT PRIMARY KEY,
+        setting_value TEXT NOT NULL,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+  });
 }
 
 async function ensureAllowed() {
@@ -99,13 +102,18 @@ function dec(raw: string, field: string): Prisma.Decimal {
 }
 
 /** לטופס קליטת הזמנה — מדינות מופעלות בהגדרות */
-export async function getSelectedCountriesForOrdersAction(): Promise<OrderCountryCode[]> {
-  const me = await requireAuth();
-  if (!userHasAnyPermission(me, ["create_orders", "view_orders"])) return DEFAULT_SELECTED_COUNTRIES;
+export async function getSelectedCountriesForOrdersInternal(): Promise<OrderCountryCode[]> {
   await ensureSettingsTable();
   const map = await readSettingsMap();
   const list = parseSelectedCountriesJson(map.get("selectedCountries") ?? undefined);
   return list.length > 0 ? list : DEFAULT_SELECTED_COUNTRIES;
+}
+
+/** לטופס קליטת הזמנה — מדינות מופעלות בהגדרות */
+export async function getSelectedCountriesForOrdersAction(): Promise<OrderCountryCode[]> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["create_orders", "view_orders"])) return DEFAULT_SELECTED_COUNTRIES;
+  return getSelectedCountriesForOrdersInternal();
 }
 
 export async function saveAdminSettingsAction(input: AdminSettingsPayload): Promise<AdminSettingsSaveState> {

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getCurrentUser, userHasAnyPermission } from "@/lib/admin-auth";
+import { getSessionPayload } from "@/lib/admin-auth";
 import { findOrCreateIntakeLocationByName, listIntakeLocationsForSelect } from "@/lib/intake-location";
 import { perfError, withPerfTimer } from "@/lib/perf-log";
 import { warnIfMissingCriticalEnv } from "@/lib/env-check";
@@ -10,8 +10,8 @@ export async function GET(req: Request) {
   return withPerfTimer("api.intake-locations.GET", async () => {
     try {
       warnIfMissingCriticalEnv();
-      const me = await getCurrentUser();
-      if (!me || !userHasAnyPermission(me, ["create_orders", "edit_orders"])) {
+      const session = await getSessionPayload();
+      if (!session || (session.role !== "ADMIN" && session.role !== "EMPLOYEE")) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
       }
 
@@ -33,8 +33,8 @@ export async function POST(req: Request) {
   return withPerfTimer("api.intake-locations.POST", async () => {
     try {
       warnIfMissingCriticalEnv();
-      const me = await getCurrentUser();
-      if (!me || !userHasAnyPermission(me, ["create_orders", "edit_orders"])) {
+      const session = await getSessionPayload();
+      if (!session || (session.role !== "ADMIN" && session.role !== "EMPLOYEE")) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
       }
 

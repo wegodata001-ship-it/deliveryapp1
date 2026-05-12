@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { ensureOnce } from "@/lib/ensure-tables-once";
 
 /** התאמה לחיפוש/דה-דופ — lowercase + ללא רווחים */
 export function normalizeIntakeLocationLookupKey(input: string): string {
@@ -6,18 +7,20 @@ export function normalizeIntakeLocationLookupKey(input: string): string {
 }
 
 export async function ensureIntakeLocationTable(): Promise<void> {
-  await prisma.$executeRaw`
-    CREATE TABLE IF NOT EXISTS "IntakeLocation" (
-      "id" TEXT NOT NULL,
-      "name" TEXT NOT NULL,
-      "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      CONSTRAINT "IntakeLocation_pkey" PRIMARY KEY ("id")
-    )
-  `;
-  await prisma.$executeRaw`
-    CREATE UNIQUE INDEX IF NOT EXISTS "IntakeLocation_name_key" ON "IntakeLocation" ("name")
-  `;
-  await tryMigrateOrderLocationsIntoIntake();
+  await ensureOnce("intake-location-table", async () => {
+    await prisma.$executeRaw`
+      CREATE TABLE IF NOT EXISTS "IntakeLocation" (
+        "id" TEXT NOT NULL,
+        "name" TEXT NOT NULL,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "IntakeLocation_pkey" PRIMARY KEY ("id")
+      )
+    `;
+    await prisma.$executeRaw`
+      CREATE UNIQUE INDEX IF NOT EXISTS "IntakeLocation_name_key" ON "IntakeLocation" ("name")
+    `;
+    await tryMigrateOrderLocationsIntoIntake();
+  });
 }
 
 async function tryMigrateOrderLocationsIntoIntake(): Promise<void> {

@@ -2,7 +2,9 @@
 
 export type AdminWindowType = "orderCapture" | "customerCard" | "createCustomer" | "payments" | "paymentsUpdated";
 
-export type OrderCaptureWindowProps = { mode: "create" } | { mode: "edit"; orderId: string };
+export type OrderCaptureWindowProps =
+  | { mode: "create" }
+  | { mode: "edit"; orderId: string; /** נפתח מיד מודל בקשת אישור (הזמנה נעולה) */ startWithEditRequest?: boolean };
 
 export type CustomerCardWindowProps = {
   customerId?: string | null;

@@ -2,10 +2,13 @@ import type { OrderStatus } from "@prisma/client";
 import type { AppUser } from "@/lib/admin-auth";
 import { isAdminUser } from "@/lib/admin-auth";
 
-/** משך פתיחת נעילה לאחר אישור מנהל (ברירת מחדל: שעה) */
-export const ORDER_EDIT_UNLOCK_DURATION_MS = 60 * 60 * 1000;
+/** משך פתיחת נעילה לאחר אישור מנהל (ברירת מחדל: 30 דקות) */
+export const ORDER_EDIT_UNLOCK_DURATION_MS = 30 * 60 * 1000;
 
-/** הזמנות בסטטוס הושלמה דורשות אישור מנהל לעריכה (לעובדים שאינם אדמין) */
+/**
+ * הזמנות שדורשות אישור מנהל לפני עריכה (לעובדים שאינם אדמין).
+ * ב־UI רשימת ההזמנות סטטוס זה מוצג כ״מוכן״ — ב־DB זה `COMPLETED`.
+ */
 export function orderStatusRequiresEditApproval(status: OrderStatus): boolean {
   return status === "COMPLETED";
 }

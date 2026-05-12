@@ -9,13 +9,17 @@ import { ensureDefaultFinancialSettings, getCurrentFinancialSettings } from "@/l
 import { DEFAULT_WEEK_CODE, formatLocalHm, formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate, parseLocalDateTime } from "@/lib/work-week";
 import { escapeRegExp, orderNumberMatchesWeekFormat } from "@/lib/order-number";
 import { prisma } from "@/lib/prisma";
+import { ensureOnce } from "@/lib/ensure-tables-once";
 import { parseSplitPaymentMethodRaw } from "@/lib/order-capture-payment-methods";
-import { getSelectedCountriesForOrdersAction } from "@/app/admin/settings/actions";
+import { getSelectedCountriesForOrdersInternal } from "@/app/admin/settings/actions";
 import { ORDER_COUNTRY_CODES, coerceOrderCountryForForm, normalizeOrderSourceCountry, type OrderCountryCode } from "@/lib/order-countries";
 import { prismaVatRatePercent } from "@/lib/vat-prisma";
 import { computeCustomerNamePatches, primaryCustomerDisplayName } from "@/lib/customer-names";
 import { canUserEditCompletedOrder } from "@/lib/order-edit-lock";
-import { clearExpiredOrderEditUnlockForOrder } from "@/app/admin/order-edit-requests/actions";
+import {
+  clearExpiredOrderEditUnlockForOrder,
+  markApprovedEditRequestUsedAndClearUnlock,
+} from "@/app/admin/order-edit-requests/actions";
 import { perfError, withPerfTimer } from "@/lib/perf-log";
 import {
   ensureIntakeLocationTable,
@@ -24,25 +28,6 @@ import {
   resolveOrderIntakeLocationColumnValue,
 } from "@/lib/intake-location";
 
-async function applyCustomerNameDraftsIfNeeded(
-  customerId: string,
-  draftAr: string | null | undefined,
-  draftEn: string | null | undefined,
-): Promise<void> {
-  const cust = await prisma.customer.findFirst({
-    where: { id: customerId, deletedAt: null, isActive: true },
-    select: { nameAr: true, nameEn: true },
-  });
-  if (!cust) return;
-  const patches = computeCustomerNamePatches(
-    { nameAr: cust.nameAr, nameEn: cust.nameEn },
-    draftAr ?? "",
-    draftEn ?? "",
-  );
-  if (Object.keys(patches).length === 0) return;
-  await prisma.customer.update({ where: { id: customerId }, data: patches });
-}
-
 export type CustomerSearchRow = {
   id: string;
   label: string;
@@ -50,6 +35,13 @@ export type CustomerSearchRow = {
   customerType: string | null;
   city: string | null;
   phone: string | null;
+  /** שדות מורחבים — מאוכלסים על־ידי /api/customers/search-fast כדי לחסוך fetch שני אחרי בחירה */
+  nameAr?: string | null;
+  nameEn?: string | null;
+  nameHe?: string | null;
+  secondPhone?: string | null;
+  oldCustomerCode?: string | null;
+  address?: string | null;
 };
 
 export type OrderCaptureSavedSummary = {
@@ -88,72 +80,6 @@ export type PaymentCaptureState =
 const PAYMENT_METHODS = new Set<string>(Object.values(PaymentMethod));
 const ORDER_STATUSES = new Set<string>(Object.values(OrderStatus));
 
-const MONEY_VERIFY_EPS = new Prisma.Decimal("0.02");
-
-function decimalCloseEnough(
-  actual: Prisma.Decimal | null | undefined,
-  expected: Prisma.Decimal,
-): boolean {
-  if (actual == null) return false;
-  return actual.sub(expected).abs().lte(MONEY_VERIFY_EPS);
-}
-
-/** קריאה חוזרת מהמסד לאחר create/update — מוודא שהשורה נשמרה בפועל */
-async function verifyOrderRowMatchesAfterSave(
-  orderId: string,
-  expected: {
-    orderNumber: string | null;
-    customerId: string;
-    sourceCountry: OrderCountryCode | null;
-    status: OrderStatus;
-    paymentMethod: PaymentMethod;
-    amountUsd: Prisma.Decimal;
-    commissionUsd: Prisma.Decimal;
-    totalUsd: Prisma.Decimal;
-  },
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const row = await prisma.order.findFirst({
-    where: { id: orderId.trim(), deletedAt: null },
-    select: {
-      orderNumber: true,
-      customerId: true,
-      sourceCountry: true,
-      amountUsd: true,
-      commissionUsd: true,
-      totalUsd: true,
-      status: true,
-      paymentMethod: true,
-    },
-  });
-  if (!row) {
-    return { ok: false, error: "ההזמנה לא נמצאה במסד לאחר שמירה" };
-  }
-  if (!row.customerId || row.customerId !== expected.customerId) {
-    return { ok: false, error: "אימות שמירה נכשל: לקוח" };
-  }
-  if ((row.orderNumber ?? "").trim() !== (expected.orderNumber ?? "").trim()) {
-    return { ok: false, error: "אימות שמירה נכשל: מספר הזמנה" };
-  }
-  if (String(row.sourceCountry ?? "") !== String(expected.sourceCountry ?? "")) {
-    return { ok: false, error: "אימות שמירה נכשל: מדינת מקור" };
-  }
-  if (row.status !== expected.status) {
-    return { ok: false, error: "אימות שמירה נכשל: סטטוס" };
-  }
-  if (row.paymentMethod !== expected.paymentMethod) {
-    return { ok: false, error: "אימות שמירה נכשל: צורת תשלום" };
-  }
-  if (!decimalCloseEnough(row.amountUsd, expected.amountUsd)) {
-    return { ok: false, error: "אימות שמירה נכשל: סכום עסקה" };
-  }
-  if (!decimalCloseEnough(row.commissionUsd, expected.commissionUsd)) {
-    return { ok: false, error: "אימות שמירה נכשל: עמלה" };
-  }
-  if (!decimalCloseEnough(row.totalUsd, expected.totalUsd)) {
-    return { ok: false, error: "אימות שמירה נכשל: סה״כ דולר" };
-  }
-  return { ok: true };
-}
 
 const PAYMENT_CODE_PREFIX = "WGP-P-";
 
@@ -244,39 +170,39 @@ async function appendParsedPaymentsForOrder(params: {
   final: Prisma.Decimal;
   vatRate: Prisma.Decimal;
 }): Promise<void> {
+  if (params.parsed.length === 0) return;
   const snapIn = {
     baseDollarRate: params.base,
     dollarFee: params.fee,
     finalDollarRate: params.final,
     vatRate: params.vatRate,
   };
-  for (const row of params.parsed) {
+  const data = params.parsed.map((row) => {
     const totals = computeFromUsdAmount(row.amount, snapIn);
-    await prisma.payment.create({
-      data: {
-        order: { connect: { id: params.orderId } },
-        customer: { connect: { id: params.customerId } },
-        weekCode: params.weekCode,
-        paymentDate: params.paymentDate,
-        currency: "USD",
-        amountUsd: row.amount,
-        amountIls: totals.totalIlsWithVat,
-        exchangeRate: params.final,
-        vatRate: params.vatRate,
-        amountWithoutVat: totals.totalIlsWithoutVat,
-        snapshotBaseDollarRate: totals.snapshotBaseDollarRate,
-        snapshotDollarFee: totals.snapshotDollarFee,
-        snapshotFinalDollarRate: totals.snapshotFinalDollarRate,
-        totalIlsWithVat: totals.totalIlsWithVat,
-        totalIlsWithoutVat: totals.totalIlsWithoutVat,
-        vatAmount: totals.vatAmount,
-        manualDateChanged: false,
-        paymentMethod: row.method,
-        isPaid: true,
-        createdBy: { connect: { id: params.meId } },
-      },
-    });
-  }
+    return {
+      orderId: params.orderId,
+      customerId: params.customerId,
+      weekCode: params.weekCode,
+      paymentDate: params.paymentDate,
+      currency: "USD" as const,
+      amountUsd: row.amount,
+      amountIls: totals.totalIlsWithVat,
+      exchangeRate: params.final,
+      vatRate: params.vatRate,
+      amountWithoutVat: totals.totalIlsWithoutVat,
+      snapshotBaseDollarRate: totals.snapshotBaseDollarRate,
+      snapshotDollarFee: totals.snapshotDollarFee,
+      snapshotFinalDollarRate: totals.snapshotFinalDollarRate,
+      totalIlsWithVat: totals.totalIlsWithVat,
+      totalIlsWithoutVat: totals.totalIlsWithoutVat,
+      vatAmount: totals.vatAmount,
+      manualDateChanged: false,
+      paymentMethod: row.method,
+      isPaid: true,
+      createdById: params.meId,
+    };
+  });
+  await prisma.payment.createMany({ data });
 }
 
 function isSameLocalCalendarDay(a: Date, b: Date): boolean {
@@ -309,18 +235,20 @@ export type CustomerPaymentDetailPayload = {
 export type PaymentLocationOptionRow = { id: string; name: string; code: string | null; label: string };
 
 async function ensureOrderGeoTables(): Promise<void> {
-  await prisma.$executeRaw`
-    CREATE TABLE IF NOT EXISTS "OrderLocations" (
-      "id" TEXT PRIMARY KEY,
-      "name" TEXT NOT NULL,
-      "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      "createdBy" TEXT
-    )
-  `;
-  await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "OrderLocations_name_idx" ON "OrderLocations" ("name")`;
-  await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "OrderLocations_createdBy_idx" ON "OrderLocations" ("createdBy")`;
+  await ensureOnce("order-geo-tables", async () => {
+    await prisma.$executeRaw`
+      CREATE TABLE IF NOT EXISTS "OrderLocations" (
+        "id" TEXT PRIMARY KEY,
+        "name" TEXT NOT NULL,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "createdBy" TEXT
+      )
+    `;
+    await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "OrderLocations_name_idx" ON "OrderLocations" ("name")`;
+    await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "OrderLocations_createdBy_idx" ON "OrderLocations" ("createdBy")`;
 
-  await prisma.$executeRaw`ALTER TABLE "Order" ADD COLUMN IF NOT EXISTS "locationId" TEXT`;
+    await prisma.$executeRaw`ALTER TABLE "Order" ADD COLUMN IF NOT EXISTS "locationId" TEXT`;
+  });
 }
 
 /** טעינת הקשר הזמנה לקליטת תשלום (מספר הזמנה) — ללא שינוי בקליטת הזמנה */
@@ -699,24 +627,31 @@ export async function capturePaymentAction(form: {
 /** מספור רץ לפי שבוע: {weekCode}-0001 — לפי המקסימום הקיים באותו weekCode */
 async function generateNextOrderNumber(weekCode: string): Promise<{ orderNumber: string; oldOrderNumber: string; sequence: number }> {
   const wc = weekCode.trim() || DEFAULT_WEEK_CODE;
-  const reSuffix = new RegExp(`^${escapeRegExp(wc)}-(\\d{4})$`);
-  const rows = await prisma.order.findMany({
-    where: { weekCode: wc, deletedAt: null },
-    select: { orderNumber: true, oldOrderNumber: true },
-  });
+  const prefix = `${wc}-`;
+  const [latestOrderNumber, latestOldNumbers] = await Promise.all([
+    prisma.order.findFirst({
+      where: { weekCode: wc, deletedAt: null, orderNumber: { startsWith: prefix } },
+      orderBy: { orderNumber: "desc" },
+      select: { orderNumber: true },
+    }),
+    prisma.order.findMany({
+      where: { weekCode: wc, deletedAt: null, oldOrderNumber: { not: null } },
+      orderBy: { oldOrderNumber: "desc" },
+      take: 20,
+      select: { oldOrderNumber: true },
+    }),
+  ]);
+
   let maxSeq = 0;
-  for (const r of rows) {
-    const on = r.orderNumber?.trim();
-    if (on) {
-      const m = on.match(reSuffix);
-      if (m?.[1]) {
-        const n = parseInt(m[1], 10);
-        if (!Number.isNaN(n)) maxSeq = Math.max(maxSeq, n);
-      }
-    }
-    const old = r.oldOrderNumber?.trim();
+  const latestSuffix = latestOrderNumber?.orderNumber?.slice(prefix.length);
+  if (latestSuffix && /^\d{4}$/.test(latestSuffix)) {
+    maxSeq = Math.max(maxSeq, parseInt(latestSuffix, 10));
+  }
+  for (const row of latestOldNumbers) {
+    const old = row.oldOrderNumber?.trim();
     if (old && /^\d{4}$/.test(old)) {
       maxSeq = Math.max(maxSeq, parseInt(old, 10));
+      break;
     }
   }
   for (let bump = 0; bump < 20; bump++) {
@@ -739,45 +674,65 @@ export async function searchCustomersForOrderAction(query: string): Promise<Cust
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(q);
     if (!isUuid && q.length < 2) return [];
 
-    const where: Prisma.CustomerWhereInput = {
+    const baseWhere: Prisma.CustomerWhereInput = {
       isActive: true,
       deletedAt: null,
     };
-    const or: Prisma.CustomerWhereInput[] = [
-      { displayName: { contains: q, mode: "insensitive" } },
-      { nameHe: { contains: q, mode: "insensitive" } },
-      { nameAr: { contains: q, mode: "insensitive" } },
-      { nameEn: { contains: q, mode: "insensitive" } },
-      { customerCode: { contains: q, mode: "insensitive" } },
-      { oldCustomerCode: { contains: q, mode: "insensitive" } },
-      { phone: { contains: q } },
-      { secondPhone: { contains: q } },
+    const selectFields = {
+      id: true,
+      displayName: true,
+      customerCode: true,
+      customerType: true,
+      city: true,
+      phone: true,
+      nameAr: true,
+      nameEn: true,
+      nameHe: true,
+    } as const;
+
+    // Stage 1: exact match — fast path using unique/indexed columns.
+    // Most "search by code" or "search by full phone" hits resolve here in <10ms.
+    const exactOr: Prisma.CustomerWhereInput[] = [
       { customerCode: { equals: q, mode: "insensitive" } },
       { oldCustomerCode: { equals: q, mode: "insensitive" } },
       { phone: { equals: q } },
       { secondPhone: { equals: q } },
     ];
     if (isUuid) {
-      or.push({ id: q });
+      exactOr.push({ id: q });
     }
-    where.OR = or;
 
-    const rows = await prisma.customer.findMany({
-      where,
+    const exactHits = await prisma.customer.findMany({
+      where: { ...baseWhere, OR: exactOr },
       take: 20,
       orderBy: { displayName: "asc" },
-      select: {
-        id: true,
-        displayName: true,
-        customerCode: true,
-        customerType: true,
-        city: true,
-        phone: true,
-        nameAr: true,
-        nameEn: true,
-        nameHe: true,
-      },
+      select: selectFields,
     });
+
+    let rows = exactHits;
+
+    // Stage 2: substring fallback — only when exact found nothing.
+    // Relies on pg_trgm GIN indexes (see prisma/sql/add_customer_search_indexes.sql).
+    if (rows.length === 0) {
+      rows = await prisma.customer.findMany({
+        where: {
+          ...baseWhere,
+          OR: [
+            { displayName: { contains: q, mode: "insensitive" } },
+            { nameHe: { contains: q, mode: "insensitive" } },
+            { nameAr: { contains: q, mode: "insensitive" } },
+            { nameEn: { contains: q, mode: "insensitive" } },
+            { customerCode: { contains: q, mode: "insensitive" } },
+            { oldCustomerCode: { contains: q, mode: "insensitive" } },
+            { phone: { contains: q } },
+            { secondPhone: { contains: q } },
+          ],
+        },
+        take: 20,
+        orderBy: { displayName: "asc" },
+        select: selectFields,
+      });
+    }
 
     return rows.map((r) => ({
       id: r.id,
@@ -1465,23 +1420,22 @@ export async function getCustomerOrderFormExtrasAction(customerId: string): Prom
   const id = customerId.trim();
   if (!id) return null;
 
-  const cust = await prisma.customer.findFirst({
-    where: { id, deletedAt: null, isActive: true },
-    select: {
-      nameHe: true,
-      nameEn: true,
-      nameAr: true,
-      phone: true,
-      secondPhone: true,
-      oldCustomerCode: true,
-      customerCode: true,
-      city: true,
-      address: true,
-    },
-  });
-  if (!cust) return null;
-
-  const [orderAgg, payAgg] = await Promise.all([
+  // All 3 reads are independent (only depend on the function param `id`) — run in parallel.
+  const [cust, orderAgg, payAgg] = await Promise.all([
+    prisma.customer.findFirst({
+      where: { id, deletedAt: null, isActive: true },
+      select: {
+        nameHe: true,
+        nameEn: true,
+        nameAr: true,
+        phone: true,
+        secondPhone: true,
+        oldCustomerCode: true,
+        customerCode: true,
+        city: true,
+        address: true,
+      },
+    }),
     prisma.order.aggregate({
       where: { customerId: id, deletedAt: null },
       _sum: { totalUsd: true },
@@ -1491,6 +1445,7 @@ export async function getCustomerOrderFormExtrasAction(customerId: string): Prom
       _sum: { amountUsd: true },
     }),
   ]);
+  if (!cust) return null;
 
   const o = Number(orderAgg._sum.totalUsd ?? 0);
   const p = Number(payAgg._sum.amountUsd ?? 0);
@@ -1540,6 +1495,10 @@ export async function captureOrderAction(form: {
   draftNameAr?: string | null;
   draftNameEn?: string | null;
 }): Promise<CaptureState> {
+  return withPerfTimer("orders.capture.create", () => captureOrderActionInner(form));
+}
+
+async function captureOrderActionInner(form: Parameters<typeof captureOrderAction>[0]): Promise<CaptureState> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["create_orders"])) {
     return { ok: false, error: "אין הרשאה" };
@@ -1558,16 +1517,67 @@ export async function captureOrderAction(form: {
     return { ok: false, error: "סטטוס הזמנה לא תקין" };
   }
 
-  const customer = await prisma.customer.findFirst({
-    where: { id: form.customerId.trim(), deletedAt: null, isActive: true },
-  });
+  const wcEarly = form.weekCode.trim() || DEFAULT_WEEK_CODE;
+  const requestedOrderNumber = form.orderNumber?.trim() || "";
+
+  // Phase 1 — every independent read + DDL ensure + order-number allocation +
+  // intake-location resolution runs in parallel (one network round-trip group).
+  const [
+    customer,
+    settingsInitial,
+    allowedCountriesPre,
+    _geo,
+    allocated,
+    requestedExists,
+    resolvedLoc,
+  ] = await withPerfTimer("orders.capture.create.phase1", () =>
+    Promise.all([
+      prisma.customer.findFirst({
+        where: { id: form.customerId.trim(), deletedAt: null, isActive: true },
+        select: {
+          id: true,
+          customerCode: true,
+          displayName: true,
+          customerType: true,
+          nameAr: true,
+          nameEn: true,
+          nameHe: true,
+        },
+      }),
+      getCurrentFinancialSettings(),
+      getSelectedCountriesForOrdersInternal(),
+      ensureOrderGeoTables(),
+      requestedOrderNumber && requestedOrderNumber !== "—"
+        ? Promise.resolve(null)
+        : generateNextOrderNumber(wcEarly),
+      requestedOrderNumber && requestedOrderNumber !== "—"
+        ? prisma.order.findFirst({
+            where: { orderNumber: requestedOrderNumber, deletedAt: null },
+            select: { id: true },
+          })
+        : Promise.resolve(null),
+      resolveOrderIntakeLocationColumnValue({
+        fieldId: (form.paymentPointId?.trim() || form.locationId?.trim() || "") || undefined,
+        draftName: form.intakeLocationDraftName,
+      }),
+    ]),
+  );
   if (!customer) return { ok: false, error: "לקוח לא נמצא" };
+  if (!resolvedLoc.ok) return { ok: false, error: resolvedLoc.error };
 
-  await ensureOrderGeoTables();
+  // Apply Ar/En name drafts only if needed — fire-and-forget; result already known locally.
+  const namePatchesCreate = computeCustomerNamePatches(
+    { nameAr: customer.nameAr, nameEn: customer.nameEn },
+    form.draftNameAr ?? "",
+    form.draftNameEn ?? "",
+  );
+  if (Object.keys(namePatchesCreate).length > 0) {
+    void prisma.customer
+      .update({ where: { id: customer.id }, data: namePatchesCreate })
+      .catch(() => {});
+  }
 
-  await applyCustomerNameDraftsIfNeeded(customer.id, form.draftNameAr, form.draftNameEn);
-
-  const settings = (await getCurrentFinancialSettings()) ?? (await ensureDefaultFinancialSettings());
+  const settings = settingsInitial ?? (await ensureDefaultFinancialSettings());
   const base = settings.baseDollarRate;
   const fee = settings.dollarFee;
   let finalRate = settings.finalDollarRate;
@@ -1635,41 +1645,33 @@ export async function captureOrderAction(form: {
   const orderDate = parseLocalDateTime(form.orderDateYmd, form.orderTimeHm || "00:00");
   const typeSnap = (form.customerTypeSnapshot?.trim() || customer.customerType || "רגיל").trim() || "רגיל";
 
-  const wc = form.weekCode.trim() || DEFAULT_WEEK_CODE;
-  const requested = form.orderNumber?.trim() || "";
   let orderNumber: string;
   let oldOrderNumber: string;
 
-  if (requested && requested !== "—") {
-    const normalized = requested.trim();
-    if (!orderNumberMatchesWeekFormat(normalized, wc)) {
+  if (requestedOrderNumber && requestedOrderNumber !== "—") {
+    const normalized = requestedOrderNumber.trim();
+    if (!orderNumberMatchesWeekFormat(normalized, wcEarly)) {
       return { ok: false, error: "פורמט מספר הזמנה לא תקין (נדרש: קודשבוע-0001)" };
     }
-    const exists = await prisma.order.findFirst({
-      where: { orderNumber: normalized, deletedAt: null },
-      select: { id: true },
-    });
-    if (exists) return { ok: false, error: "מספר הזמנה זה כבר קיים במערכת" };
+    if (requestedExists) return { ok: false, error: "מספר הזמנה זה כבר קיים במערכת" };
     orderNumber = normalized;
-    oldOrderNumber = normalized.slice(wc.length + 1);
+    oldOrderNumber = normalized.slice(wcEarly.length + 1);
   } else {
-    const allocated = await generateNextOrderNumber(form.weekCode);
-    orderNumber = allocated.orderNumber;
-    oldOrderNumber = allocated.oldOrderNumber;
+    if (!allocated) {
+      const fresh = await generateNextOrderNumber(form.weekCode);
+      orderNumber = fresh.orderNumber;
+      oldOrderNumber = fresh.oldOrderNumber;
+    } else {
+      orderNumber = allocated.orderNumber;
+      oldOrderNumber = allocated.oldOrderNumber;
+    }
   }
 
   let paymentPointConnect: { connect: { id: string } } | undefined;
-  const fieldId = form.paymentPointId?.trim() || form.locationId?.trim() || "";
-  const resolvedLoc = await resolveOrderIntakeLocationColumnValue({
-    fieldId: fieldId || undefined,
-    draftName: form.intakeLocationDraftName,
-  });
-  if (!resolvedLoc.ok) return { ok: false, error: resolvedLoc.error };
   if (resolvedLoc.paymentPointIdForPrisma) {
     paymentPointConnect = { connect: { id: resolvedLoc.paymentPointIdForPrisma } };
   }
 
-  const allowedCountries = await getSelectedCountriesForOrdersAction();
   const rawCountry = form.sourceCountry?.trim();
   if (!rawCountry) {
     return { ok: false, error: "יש לבחור מדינת מקור" };
@@ -1677,96 +1679,81 @@ export async function captureOrderAction(form: {
   if (!ORDER_COUNTRY_CODES.includes(rawCountry as OrderCountryCode)) {
     return { ok: false, error: "מדינת מקור לא תקינה" };
   }
-  if (!allowedCountries.includes(rawCountry as OrderCountryCode)) {
+  if (!allowedCountriesPre.includes(rawCountry as OrderCountryCode)) {
     return { ok: false, error: "מדינה זו אינה מופעלת בהגדרות המערכת" };
   }
   const sourceCountryCreate = rawCountry as OrderCountryCode;
 
-  const order = await prisma.order.create({
-    data: {
-      orderNumber,
-      oldOrderNumber,
-      customer: { connect: { id: customer.id } },
-      customerCodeSnapshot: customer.customerCode,
-      customerNameSnapshot: customer.displayName,
-      customerTypeSnapshot: typeSnap,
-      weekCode: form.weekCode.trim() || null,
-      sourceCountry: sourceCountryCreate,
-      orderDate,
-      status,
-      paymentMethod: form.paymentMethod as PaymentMethod,
-      ...(paymentPointConnect ? { paymentPoint: paymentPointConnect } : {}),
-      amountUsd: deal,
-      commissionUsd,
-      totalUsd,
-      exchangeRate: finalRate,
-      vatRate,
-      amountWithoutVat: totals.totalIlsWithoutVat,
-      snapshotBaseDollarRate: totals.snapshotBaseDollarRate,
-      snapshotDollarFee: totals.snapshotDollarFee,
-      snapshotFinalDollarRate: totals.snapshotFinalDollarRate,
-      totalIlsWithVat: totals.totalIlsWithVat,
-      totalIlsWithoutVat: totals.totalIlsWithoutVat,
-      vatAmount: totals.vatAmount,
-      totalIls: totals.totalIlsWithVat,
-      amountIls: dealIlsGross,
-      commissionIls: commissionIlsGross,
-      notes: form.notes?.trim() || null,
-      createdBy: { connect: { id: me.id } },
-    },
-  });
-
-  const verifyCreate = await verifyOrderRowMatchesAfterSave(order.id, {
-    orderNumber,
-    customerId: customer.id,
-    sourceCountry: sourceCountryCreate,
-    status,
-    paymentMethod: form.paymentMethod as PaymentMethod,
-    amountUsd: deal,
-    commissionUsd,
-    totalUsd,
-  });
-  if (!verifyCreate.ok) return verifyCreate;
-
-  await prisma.$executeRaw`UPDATE "Order" SET "locationId" = ${resolvedLoc.locationId} WHERE "id" = ${order.id}`;
+  const order = await withPerfTimer("orders.capture.create.orderInsert", () =>
+    prisma.order.create({
+      data: {
+        orderNumber,
+        oldOrderNumber,
+        customer: { connect: { id: customer.id } },
+        customerCodeSnapshot: customer.customerCode,
+        customerNameSnapshot: customer.displayName,
+        customerTypeSnapshot: typeSnap,
+        weekCode: form.weekCode.trim() || null,
+        sourceCountry: sourceCountryCreate,
+        orderDate,
+        status,
+        paymentMethod: form.paymentMethod as PaymentMethod,
+        ...(paymentPointConnect ? { paymentPoint: paymentPointConnect } : {}),
+        amountUsd: deal,
+        commissionUsd,
+        totalUsd,
+        exchangeRate: finalRate,
+        vatRate,
+        amountWithoutVat: totals.totalIlsWithoutVat,
+        snapshotBaseDollarRate: totals.snapshotBaseDollarRate,
+        snapshotDollarFee: totals.snapshotDollarFee,
+        snapshotFinalDollarRate: totals.snapshotFinalDollarRate,
+        totalIlsWithVat: totals.totalIlsWithVat,
+        totalIlsWithoutVat: totals.totalIlsWithoutVat,
+        vatAmount: totals.vatAmount,
+        totalIls: totals.totalIlsWithVat,
+        amountIls: dealIlsGross,
+        commissionIls: commissionIlsGross,
+        notes: form.notes?.trim() || null,
+        locationId: resolvedLoc.locationId ?? null,
+        createdBy: { connect: { id: me.id } },
+      },
+    }),
+  );
 
   if (payParse.parsed.length > 0) {
-    await appendParsedPaymentsForOrder({
-      meId: me.id,
-      orderId: order.id,
-      customerId: customer.id,
-      weekCode: form.weekCode.trim() || null,
-      paymentDate: orderDate,
-      parsed: payParse.parsed,
-      base,
-      fee,
-      final: finalRate,
-      vatRate,
-    });
+    await withPerfTimer("orders.capture.create.paymentsInsert", () =>
+      appendParsedPaymentsForOrder({
+        meId: me.id,
+        orderId: order.id,
+        customerId: customer.id,
+        weekCode: form.weekCode.trim() || null,
+        paymentDate: orderDate,
+        parsed: payParse.parsed,
+        base,
+        fee,
+        final: finalRate,
+        vatRate,
+      }),
+    );
   }
 
-  await prisma.auditLog.create({
-    data: {
-      userId: me.id,
-      actionType: "ORDER_CREATED",
-      entityType: "Order",
-      entityId: order.id,
-      metadata: {
-        orderNumber,
-        customerName: customer.displayName,
-      } as Prisma.InputJsonValue,
-    },
-  });
+  // Audit log runs asynchronously — not part of the user-visible success path.
+  void prisma.auditLog
+    .create({
+      data: {
+        userId: me.id,
+        actionType: "ORDER_CREATED",
+        entityType: "Order",
+        entityId: order.id,
+        metadata: {
+          orderNumber,
+          customerName: customer.displayName,
+        } as Prisma.InputJsonValue,
+      },
+    })
+    .catch(() => {});
 
-  const payRows = await prisma.payment.findMany({
-    where: { orderId: order.id },
-    select: { paymentMethod: true, amountUsd: true },
-    orderBy: { createdAt: "asc" },
-  });
-
-  revalidatePath("/admin");
-  revalidatePath("/admin/orders", "page");
-  revalidatePath(`/admin/orders/${order.id}`, "page");
   return {
     ok: true,
     saved: {
@@ -1774,9 +1761,9 @@ export async function captureOrderAction(form: {
       orderNumber: order.orderNumber ?? "",
       customerLabel: customer.displayName,
       totalUsd: totalUsd.toFixed(2),
-      payments: payRows.map((p) => ({
-        paymentMethod: p.paymentMethod ?? PaymentMethod.CASH,
-        amountUsd: (p.amountUsd ?? new Prisma.Decimal(0)).toFixed(2),
+      payments: payParse.parsed.map((p) => ({
+        paymentMethod: p.method,
+        amountUsd: p.amount.toFixed(2),
       })),
     },
   };
@@ -1987,7 +1974,7 @@ export async function updateOrderListStatusAction(
     select: { status: true, editUnlockedForUserId: true, editUnlockedUntil: true },
   });
   if (!gate || !canUserEditCompletedOrder(me, gate)) {
-    return { ok: false, error: "הזמנה בהושלמה נעולה — שינוי סטטוס דורש אישור מנהל." };
+    return { ok: false, error: "הזמנה במצב ״מוכן״ נעולה — שינוי סטטוס דורש אישור מנהל." };
   }
 
   await prisma.order.update({
@@ -2023,41 +2010,16 @@ export async function updateOrderWorkPanelAction(form: {
   draftNameAr?: string | null;
   draftNameEn?: string | null;
 }): Promise<CaptureState> {
+  return withPerfTimer("orders.capture.update", () => updateOrderWorkPanelActionInner(form));
+}
+
+async function updateOrderWorkPanelActionInner(
+  form: Parameters<typeof updateOrderWorkPanelAction>[0],
+): Promise<CaptureState> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["edit_orders"])) {
     return { ok: false, error: "אין הרשאה" };
   }
-
-  const existing = await prisma.order.findFirst({
-    where: { id: form.orderId.trim(), deletedAt: null },
-    select: {
-      id: true,
-      orderNumber: true,
-      weekCode: true,
-      sourceCountry: true,
-      status: true,
-      editUnlockedForUserId: true,
-      editUnlockedUntil: true,
-    },
-  });
-  if (!existing) return { ok: false, error: "הזמנה לא נמצאה" };
-
-  await ensureOrderGeoTables();
-
-  await clearExpiredOrderEditUnlockForOrder(existing.id);
-  const gate = await prisma.order.findFirst({
-    where: { id: existing.id },
-    select: { status: true, editUnlockedForUserId: true, editUnlockedUntil: true },
-  });
-  if (!gate || !canUserEditCompletedOrder(me, gate)) {
-    return { ok: false, error: "הזמנה בהושלמה נעולה לעריכה. נדרש אישור מנהל — שלחו בקשת עריכה מהמסך." };
-  }
-
-  const paidAgg = await prisma.payment.aggregate({
-    where: { orderId: existing.id, amountUsd: { not: null } },
-    _sum: { amountUsd: true },
-  });
-  const existingPaidUsd = paidAgg._sum.amountUsd ?? new Prisma.Decimal(0);
 
   if (!form.customerId?.trim()) {
     return { ok: false, error: "יש לבחור לקוח" };
@@ -2072,14 +2034,90 @@ export async function updateOrderWorkPanelAction(form: {
     return { ok: false, error: "סטטוס הזמנה לא תקין" };
   }
 
-  const customer = await prisma.customer.findFirst({
-    where: { id: form.customerId.trim(), deletedAt: null, isActive: true },
-  });
+  // Phase 1 — all independent reads + DDL + intake-location lookup in parallel.
+  const [
+    existing,
+    paidAgg,
+    customer,
+    settingsInitial,
+    allowedCountriesPre,
+    _geo,
+    resolvedUp,
+  ] = await withPerfTimer("orders.capture.update.phase1", () =>
+    Promise.all([
+      prisma.order.findFirst({
+        where: { id: form.orderId.trim(), deletedAt: null },
+        select: {
+          id: true,
+          orderNumber: true,
+          weekCode: true,
+          sourceCountry: true,
+          status: true,
+          editUnlockedForUserId: true,
+          editUnlockedUntil: true,
+        },
+      }),
+      prisma.payment.aggregate({
+        where: { orderId: form.orderId.trim(), amountUsd: { not: null } },
+        _sum: { amountUsd: true },
+      }),
+      prisma.customer.findFirst({
+        where: { id: form.customerId.trim(), deletedAt: null, isActive: true },
+        select: {
+          id: true,
+          customerCode: true,
+          displayName: true,
+          customerType: true,
+          nameAr: true,
+          nameEn: true,
+          nameHe: true,
+        },
+      }),
+      getCurrentFinancialSettings(),
+      getSelectedCountriesForOrdersInternal(),
+      ensureOrderGeoTables(),
+      resolveOrderIntakeLocationColumnValue({
+        fieldId: (form.paymentPointId?.trim() || form.locationId?.trim() || "") || undefined,
+        draftName: form.intakeLocationDraftName,
+      }),
+    ]),
+  );
+  if (!existing) return { ok: false, error: "הזמנה לא נמצאה" };
   if (!customer) return { ok: false, error: "לקוח לא נמצא" };
 
-  await applyCustomerNameDraftsIfNeeded(customer.id, form.draftNameAr, form.draftNameEn);
+  // Edit-gate check — compute locally; only issue the "clear expired unlock" write
+  // when the unlock is actually expired (avoids an unconditional updateMany round-trip).
+  const unlockExpired =
+    existing.editUnlockedUntil != null && existing.editUnlockedUntil.getTime() < Date.now();
+  const effectiveGate = unlockExpired
+    ? { status: existing.status, editUnlockedForUserId: null, editUnlockedUntil: null }
+    : { status: existing.status, editUnlockedForUserId: existing.editUnlockedForUserId, editUnlockedUntil: existing.editUnlockedUntil };
+  if (!canUserEditCompletedOrder(me, effectiveGate)) {
+    return {
+      ok: false,
+      error: "הזמנה במצב ״מוכן״ נעולה לעריכה. נדרש אישור מנהל — שלחו בקשת עריכה מהמסך.",
+    };
+  }
+  if (unlockExpired) {
+    // Fire-and-forget; result already incorporated in effectiveGate.
+    void clearExpiredOrderEditUnlockForOrder(existing.id).catch(() => {});
+  }
 
-  const settings = (await getCurrentFinancialSettings()) ?? (await ensureDefaultFinancialSettings());
+  const existingPaidUsd = paidAgg._sum.amountUsd ?? new Prisma.Decimal(0);
+
+  // Apply Ar/En name drafts only if needed; merge with the customer fetch we already did.
+  const namePatches = computeCustomerNamePatches(
+    { nameAr: customer.nameAr, nameEn: customer.nameEn },
+    form.draftNameAr ?? "",
+    form.draftNameEn ?? "",
+  );
+  if (Object.keys(namePatches).length > 0) {
+    void prisma.customer
+      .update({ where: { id: customer.id }, data: namePatches })
+      .catch(() => {});
+  }
+
+  const settings = settingsInitial ?? (await ensureDefaultFinancialSettings());
   const base = settings.baseDollarRate;
   const fee = settings.dollarFee;
   const final = settings.finalDollarRate;
@@ -2127,15 +2165,9 @@ export async function updateOrderWorkPanelAction(form: {
   const orderDate = parseLocalDateTime(form.orderDateYmd, form.orderTimeHm || "00:00");
   const typeSnap = (form.customerTypeSnapshot?.trim() || customer.customerType || "רגיל").trim() || "רגיל";
 
-  const fieldIdUp = form.paymentPointId?.trim() || form.locationId?.trim() || "";
-  const resolvedUp = await resolveOrderIntakeLocationColumnValue({
-    fieldId: fieldIdUp || undefined,
-    draftName: form.intakeLocationDraftName,
-  });
   if (!resolvedUp.ok) return { ok: false, error: resolvedUp.error };
   const paymentPointIdUpdate = resolvedUp.paymentPointIdForPrisma;
 
-  const allowedCountries = await getSelectedCountriesForOrdersAction();
   const rawCountry = form.sourceCountry?.trim();
   if (!rawCountry) {
     return { ok: false, error: "יש לבחור מדינת מקור" };
@@ -2147,87 +2179,80 @@ export async function updateOrderWorkPanelAction(form: {
   const existingCountryStr = existing.sourceCountry != null ? String(existing.sourceCountry) : null;
   const keepExistingCountry =
     existingCountryStr !== null && existingCountryStr === requestedCode;
-  if (!allowedCountries.includes(requestedCode) && !keepExistingCountry) {
+  if (!allowedCountriesPre.includes(requestedCode) && !keepExistingCountry) {
     return { ok: false, error: "מדינה זו אינה מופעלת בהגדרות המערכת" };
   }
   const sourceCountryUpdate = requestedCode;
 
-  await prisma.order.update({
-    where: { id: existing.id },
-    data: {
-      customerId: customer.id,
-      customerCodeSnapshot: customer.customerCode,
-      customerNameSnapshot: customer.displayName,
-      customerTypeSnapshot: typeSnap,
-      weekCode: form.weekCode.trim() || null,
-      sourceCountry: sourceCountryUpdate,
-      orderDate,
-      status,
-      paymentMethod: form.paymentMethod as PaymentMethod,
-      paymentPointId: paymentPointIdUpdate,
-      amountUsd: deal,
-      commissionUsd,
-      totalUsd,
-      exchangeRate: final,
-      vatRate,
-      amountWithoutVat: totals.totalIlsWithoutVat,
-      snapshotBaseDollarRate: totals.snapshotBaseDollarRate,
-      snapshotDollarFee: totals.snapshotDollarFee,
-      snapshotFinalDollarRate: totals.snapshotFinalDollarRate,
-      totalIlsWithVat: totals.totalIlsWithVat,
-      totalIlsWithoutVat: totals.totalIlsWithoutVat,
-      vatAmount: totals.vatAmount,
-      totalIls: totals.totalIlsWithVat,
-      amountIls: dealIlsGross,
-      commissionIls: commissionIlsGross,
-      notes: form.notes?.trim() || null,
-    },
-  });
-
-  const verifyUpdate = await verifyOrderRowMatchesAfterSave(existing.id, {
-    orderNumber: existing.orderNumber,
-    customerId: customer.id,
-    sourceCountry: sourceCountryUpdate,
-    status,
-    paymentMethod: form.paymentMethod as PaymentMethod,
-    amountUsd: deal,
-    commissionUsd,
-    totalUsd,
-  });
-  if (!verifyUpdate.ok) return verifyUpdate;
-
-  await prisma.$executeRaw`UPDATE "Order" SET "locationId" = ${resolvedUp.locationId} WHERE "id" = ${existing.id}`;
+  await withPerfTimer("orders.capture.update.orderUpdate", () =>
+    prisma.order.update({
+      where: { id: existing.id },
+      data: {
+        customerId: customer.id,
+        customerCodeSnapshot: customer.customerCode,
+        customerNameSnapshot: customer.displayName,
+        customerTypeSnapshot: typeSnap,
+        weekCode: form.weekCode.trim() || null,
+        sourceCountry: sourceCountryUpdate,
+        orderDate,
+        status,
+        paymentMethod: form.paymentMethod as PaymentMethod,
+        paymentPointId: paymentPointIdUpdate,
+        amountUsd: deal,
+        commissionUsd,
+        totalUsd,
+        exchangeRate: final,
+        vatRate,
+        amountWithoutVat: totals.totalIlsWithoutVat,
+        snapshotBaseDollarRate: totals.snapshotBaseDollarRate,
+        snapshotDollarFee: totals.snapshotDollarFee,
+        snapshotFinalDollarRate: totals.snapshotFinalDollarRate,
+        totalIlsWithVat: totals.totalIlsWithVat,
+        totalIlsWithoutVat: totals.totalIlsWithoutVat,
+        vatAmount: totals.vatAmount,
+        totalIls: totals.totalIlsWithVat,
+        amountIls: dealIlsGross,
+        commissionIls: commissionIlsGross,
+        notes: form.notes?.trim() || null,
+        locationId: resolvedUp.locationId ?? null,
+      },
+    }),
+  );
 
   if (payParse.parsed.length > 0) {
-    await appendParsedPaymentsForOrder({
-      meId: me.id,
-      orderId: existing.id,
-      customerId: customer.id,
-      weekCode: form.weekCode.trim() || existing.weekCode || null,
-      paymentDate: orderDate,
-      parsed: payParse.parsed,
-      base,
-      fee,
-      final,
-      vatRate,
-    });
+    await withPerfTimer("orders.capture.update.paymentsInsert", () =>
+      appendParsedPaymentsForOrder({
+        meId: me.id,
+        orderId: existing.id,
+        customerId: customer.id,
+        weekCode: form.weekCode.trim() || existing.weekCode || null,
+        paymentDate: orderDate,
+        parsed: payParse.parsed,
+        base,
+        fee,
+        final,
+        vatRate,
+      }),
+    );
   }
 
-  await prisma.auditLog.create({
-    data: {
-      userId: me.id,
-      actionType: "ORDER_UPDATED",
-      entityType: "Order",
-      entityId: existing.id,
-      metadata: {
-        orderNumber: existing.orderNumber,
-        customerName: customer.displayName,
-      } as Prisma.InputJsonValue,
-    },
-  });
+  // Audit log + edit-request bookkeeping run asynchronously after we return —
+  // they are not part of the user-visible success path and don't change the response.
+  void prisma.auditLog
+    .create({
+      data: {
+        userId: me.id,
+        actionType: "ORDER_UPDATED",
+        entityType: "Order",
+        entityId: existing.id,
+        metadata: {
+          orderNumber: existing.orderNumber,
+          customerName: customer.displayName,
+        } as Prisma.InputJsonValue,
+      },
+    })
+    .catch(() => {});
+  void markApprovedEditRequestUsedAndClearUnlock(existing.id, me.id).catch(() => {});
 
-  revalidatePath("/admin");
-  revalidatePath("/admin/orders", "page");
-  revalidatePath(`/admin/orders/${existing.id}`, "page");
   return { ok: true, orderNumber: existing.orderNumber ?? "" };
 }
