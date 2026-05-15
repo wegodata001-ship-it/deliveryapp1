@@ -13,6 +13,7 @@ export function Modal({
   size = "md",
   modalClassName,
   bodyClassName,
+  hideHeader,
 }: {
   open: boolean;
   onClose: () => void;
@@ -22,6 +23,8 @@ export function Modal({
   /** Appended to `ui-modal--{size}` (e.g. compact capture forms). */
   modalClassName?: string;
   bodyClassName?: string;
+  /** כותרת ברירת המחדל מוסתרת — התוכן אחראי על כותרת ופעולות (מודאל ERP). */
+  hideHeader?: boolean;
 }) {
   useEffect(() => {
     if (!open) return;
@@ -45,16 +48,19 @@ export function Modal({
         className={["ui-modal", `ui-modal--${size}`, modalClassName].filter(Boolean).join(" ")}
         role="dialog"
         aria-modal="true"
-        aria-labelledby="ui-modal-title"
+        aria-labelledby={hideHeader ? undefined : "ui-modal-title"}
+        aria-label={hideHeader ? title : undefined}
         dir="rtl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="ui-modal-header">
-          <h2 id="ui-modal-title">{title}</h2>
-          <button type="button" className="ui-close" onClick={onClose} aria-label="סגירה">
-            ×
-          </button>
-        </div>
+        {hideHeader ? null : (
+          <div className="ui-modal-header">
+            <h2 id="ui-modal-title">{title}</h2>
+            <button type="button" className="ui-close" onClick={onClose} aria-label="סגירה">
+              ×
+            </button>
+          </div>
+        )}
         <div className={["ui-modal-body", bodyClassName].filter(Boolean).join(" ")}>{children}</div>
       </div>
     </div>

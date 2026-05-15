@@ -14,6 +14,9 @@ import {
   type CustomerLedgerPayload,
   type CustomerLedgerRow,
 } from "@/app/admin/capture/actions";
+import { getOrderEditEntryHintAction } from "@/app/admin/order-edit-requests/actions";
+import type { OrderEditLockGatePayload } from "@/components/admin/OrderEditLockGateModal";
+import { OrderEditLockGateModal } from "@/components/admin/OrderEditLockGateModal";
 import type { CustomerCardWindowProps } from "@/lib/admin-windows";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
@@ -135,6 +138,8 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [editOpen, setEditOpen] = useState(false);
+  const [ledgerOrderLock, setLedgerOrderLock] = useState<OrderEditLockGatePayload | null>(null);
+  const [ledgerGateToast, setLedgerGateToast] = useState<string | null>(null);
   const [fromYmd, setFromYmd] = useState("");
   const [toYmd, setToYmd] = useState("");
   const [form, setForm] = useState({
@@ -306,13 +311,19 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
     );
   }
 
-  function onLedgerTableRowActivate(r: CustomerLedgerRow) {
+  async function onLedgerTableRowActivate(r: CustomerLedgerRow) {
     if (r.type === "PAYMENT" && customerId?.trim()) {
       router.push(`/admin/payments?invoiceId=${encodeURIComponent(r.id)}&customerId=${encodeURIComponent(customerId)}`);
       return;
     }
     if (r.id.startsWith("o-")) {
-      openWindow({ type: "orderCapture", props: { mode: "edit", orderId: r.id.slice(2) } });
+      const oid = r.id.slice(2);
+      const hint = await getOrderEditEntryHintAction(oid);
+      if (hint.kind === "prelock") {
+        setLedgerOrderLock(hint);
+        return;
+      }
+      openWindow({ type: "orderCapture", props: { mode: "edit", orderId: oid } });
     }
   }
 
@@ -352,7 +363,7 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
             className="summary-card-amount-btn"
             onClick={() =>
               openWindow({
-                type: "payments",
+                type: "paymentsUpdated",
                 props: {
                   customerId,
                   customerName: snap.displayName || customerName || "",
@@ -466,12 +477,12 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
                           className={clickable ? "clickable" : undefined}
                           tabIndex={clickable ? 0 : undefined}
                           role={clickable ? "button" : undefined}
-                          onClick={() => clickable && onLedgerTableRowActivate(r)}
+                          onClick={() => clickable && void onLedgerTableRowActivate(r)}
                           onKeyDown={(e) => {
                             if (!clickable) return;
                             if (e.key === "Enter" || e.key === " ") {
                               e.preventDefault();
-                              onLedgerTableRowActivate(r);
+                              void onLedgerTableRowActivate(r);
                             }
                           }}
                         >
@@ -551,6 +562,22 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
               </button>
             </div>
           </div>
+        </div>
+      ) : null}
+
+      <OrderEditLockGateModal
+        open={!!ledgerOrderLock}
+        payload={ledgerOrderLock}
+        onClose={() => setLedgerOrderLock(null)}
+        onToast={(m) => {
+          setLedgerGateToast(m);
+          window.setTimeout(() => setLedgerGateToast(null), 3800);
+        }}
+        onAfterRequestSent={() => router.refresh()}
+      />
+      {ledgerGateToast ? (
+        <div className="adm-toast" role="status" aria-live="polite">
+          {ledgerGateToast}
         </div>
       ) : null}
     </div>

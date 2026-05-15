@@ -19,8 +19,15 @@ export function AdminWindowProvider({ children }: { children: ReactNode }) {
   const [stack, setStack] = useState<AdminWindowEntry[]>([]);
 
   const openWindow = useCallback((payload: AdminWindowPayload) => {
+    // Unification step: the legacy "קליטת תשלום" (payments) is fully retired in
+    // favor of "קליטת תשלום מעודכן" (paymentsUpdated). Any caller still emitting
+    // the old type is silently routed to the updated screen — keeps every existing
+    // wiring (balances table, receipt control, deep links, dashboard, customer
+    // card, etc.) functional without touching each call-site.
+    const normalized: AdminWindowPayload =
+      payload.type === "payments" ? { type: "paymentsUpdated", props: payload.props } : payload;
     const id = newWindowId();
-    setStack((s) => [...s, { id, ...payload }]);
+    setStack((s) => [...s, { id, ...normalized }]);
     return id;
   }, []);
 

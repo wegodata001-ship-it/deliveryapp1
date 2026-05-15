@@ -16,6 +16,7 @@ import { getDashboardStats } from "@/lib/dashboard-stats";
 import { getCurrentFinancialSettings } from "@/lib/financial-settings";
 import { adminOrdersHrefWithFilters } from "@/lib/admin-href";
 import { parseDateFilterFromSearchParams } from "@/lib/work-week";
+import { countPendingOrderEditRequestsForAdmin } from "@/app/admin/order-edit-requests/actions";
 import { DashboardQuickActions } from "@/components/admin/DashboardQuickActions";
 import { DashboardAnimatedNumber } from "@/components/admin/DashboardAnimatedNumber";
 import { DashboardSparkline } from "@/components/admin/DashboardSparkline";
@@ -30,9 +31,10 @@ export default async function AdminDashboardPage({
   const range = parseDateFilterFromSearchParams(sp);
   const showStaffStats = isAdminUser(me) || me.permissionKeys.includes("manage_users");
 
-  const [stats, finRow] = await Promise.all([
+  const [stats, finRow, pendingEditReq] = await Promise.all([
     getDashboardStats({ fromStart: range.fromStart, toEnd: range.toEnd }, me),
     getCurrentFinancialSettings(),
+    isAdminUser(me) ? countPendingOrderEditRequestsForAdmin() : Promise.resolve(0),
   ]);
 
   const displayName = me.fullName?.trim() || me.username || "משתמש";
@@ -177,6 +179,20 @@ export default async function AdminDashboardPage({
             <span className="adm-dash-kpi-xl__sub">סטטוס OPEN בטווח</span>
             <DashboardSparkline seed={stats.openOrdersInRange * 3001 + 4} tone="orange" className="adm-dash-kpi-xl__spark" />
           </Link>
+
+          {isAdminUser(me) && pendingEditReq > 0 ? (
+            <Link className="adm-dash-kpi-xl adm-dash-kpi-xl--red" href="/admin/order-edit-requests">
+              <div className="adm-dash-kpi-xl__top">
+                <span className="adm-dash-kpi-xl__icon" aria-hidden>
+                  <ClipboardList size={18} strokeWidth={2} />
+                </span>
+                <span className="adm-dash-kpi-xl__label">בקשות עריכת הזמנות</span>
+              </div>
+              <DashboardAnimatedNumber className="adm-dash-kpi-xl__num" value={pendingEditReq} />
+              <span className="adm-dash-kpi-xl__sub">ממתינות לאישור מנהל</span>
+              <DashboardSparkline seed={pendingEditReq * 9001 + 9} tone="orange" className="adm-dash-kpi-xl__spark" />
+            </Link>
+          ) : null}
         </div>
       </section>
 

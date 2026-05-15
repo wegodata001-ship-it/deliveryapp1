@@ -13,6 +13,7 @@ export type CustomerCardWindowProps = {
 };
 
 export type PaymentWindowProps = {
+  paymentId?: string | null;
   customerId?: string | null;
   customerName?: string | null;
   orderId?: string | null;

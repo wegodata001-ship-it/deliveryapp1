@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import { OrderEditRequestStatus, OrderStatus, PaymentMethod, Prisma } from "@prisma/client";
+import { OrderEditRequestStatus, OrderStatus, PaymentMethod } from "@prisma/client";
 import { OrdersListShell, type OrderListRow } from "@/components/admin/OrdersListShell";
 import { OrdersListToolbar, type OrdersCreatedByOption } from "@/components/admin/OrdersListToolbar";
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
@@ -7,19 +7,17 @@ import { requireRoutePermission } from "@/lib/route-access";
 import { prisma } from "@/lib/prisma";
 import {
   formatLocalYmd,
-  normalizeAhWeekCode,
   parseOrdersListDateFilterFromSearchParams,
 } from "@/lib/work-week";
-import { ORDER_COUNTRY_CODES, orderCountryCodesMatchingHeSearch, type OrderCountryCode } from "@/lib/order-countries";
+import { ORDER_COUNTRY_CODES, type OrderCountryCode } from "@/lib/order-countries";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { hasActiveEditUnlock } from "@/lib/order-edit-lock";
 import { withPerfTimer } from "@/lib/perf-log";
+import { buildOrdersListWhereFromSearchParams } from "@/app/admin/orders/orders-list-where";
 
 /** רשימת הזמנות חייבת להיבנות מחדש אחרי שמירה — לא מטמון סטטי */
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-
-const KPI_DEBT_ORDER_CAP = 8000;
 
 function fmtUsd2(n: unknown): string | null {
   if (n == null) return null;
@@ -62,41 +60,6 @@ const TABLE_STATUS_SET = new Set<OrderStatus>([
   OrderStatus.COMPLETED,
 ]);
 
-function buildOrdersListSearchWhere(q: string): Prisma.OrderWhereInput | undefined {
-  const t = q.trim();
-  if (!t) return undefined;
-  const amt = parseAmount(t);
-  const countryHits = orderCountryCodesMatchingHeSearch(t);
-  const compactAh = t.replace(/\s+/g, "").toUpperCase();
-  const bareWeek = /^AH-\d{1,6}$/i.test(compactAh) ? normalizeAhWeekCode(compactAh) : null;
-
-  const ors: Prisma.OrderWhereInput[] = [
-    { orderNumber: { contains: t, mode: "insensitive" } },
-    { customerCodeSnapshot: { contains: t, mode: "insensitive" } },
-    { customerNameSnapshot: { contains: t, mode: "insensitive" } },
-    { createdBy: { fullName: { contains: t, mode: "insensitive" } } },
-    { createdBy: { username: { contains: t, mode: "insensitive" } } },
-    { weekCode: { contains: t, mode: "insensitive" } },
-    { customer: { phone: { contains: t, mode: "insensitive" } } },
-    { customer: { secondPhone: { contains: t, mode: "insensitive" } } },
-  ];
-  if (countryHits.length > 0) {
-    ors.push({ sourceCountry: { in: countryHits } });
-  }
-  if (bareWeek) {
-    ors.push({ weekCode: { equals: bareWeek, mode: "insensitive" } });
-  }
-  if (amt != null) {
-    const d = new Prisma.Decimal(amt);
-    ors.push(
-      { amountUsd: { equals: d } },
-      { commissionUsd: { equals: d } },
-      { totalUsd: { equals: d } },
-    );
-  }
-  return { OR: ors };
-}
-
 export default async function OrdersListPage({
   searchParams,
 }: {
@@ -135,54 +98,41 @@ export default async function OrdersListPage({
       : Object.values(PaymentMethod).includes(rawPaymentType as PaymentMethod)
         ? (rawPaymentType as PaymentMethod)
         : "";
+  const paymentLocationRaw = readTextParam(sp, "paymentLocation");
   const amountMinRaw = readTextParam(sp, "amountMin");
   const amountMaxRaw = readTextParam(sp, "amountMax");
   const amountMin = parseAmount(amountMinRaw);
   const amountMax = parseAmount(amountMaxRaw);
 
-  const searchWhere = buildOrdersListSearchWhere(q);
+  const where = buildOrdersListWhereFromSearchParams(sp);
 
-  const where: Prisma.OrderWhereInput = {
-    deletedAt: null,
-    orderDate: { gte: range.fromStart, lte: range.toEnd },
-    ...(statusSingle ? { status: statusSingle } : {}),
-    ...(countrySingle ? { sourceCountry: countrySingle } : {}),
-    ...(createdById ? { createdById } : {}),
-    ...(paymentType === "NONE"
-      ? { paymentMethod: null }
-      : paymentType
-        ? { paymentMethod: paymentType as PaymentMethod }
-        : {}),
-    ...(amountMin != null || amountMax != null
-      ? {
-          amountUsd: {
-            ...(amountMin != null ? { gte: new Prisma.Decimal(amountMin) } : {}),
-            ...(amountMax != null ? { lte: new Prisma.Decimal(amountMax) } : {}),
-          },
-        }
-      : {}),
-    ...(searchWhere ? searchWhere : {}),
-  };
+  /**
+   * KPI לפי סטטוס — קלט יחיד ל־DB:
+   * groupBy על כל ההזמנות בטווח (כולל CANCELLED) — סופרים ומסכמים totalUsd.
+   * כך אפשר להציג 4 cards (פתוחות / בטיפול / מוכנות / מבוטלות)
+   * בלי לשבור את ה־totals של הסיכומים האחרים שעדיין מסננים את CANCELLED.
+   */
 
-  const [totalOrders, payTotalsAgg, kpiOrders, createdByRows, rows] = await withPerfTimer(
+  const [statusGroups, createdByRows, intakeLocationRows, rows] = await withPerfTimer(
     "orders.page.fetchOrders",
     async () =>
       Promise.all([
-        prisma.order.count({ where }),
-        prisma.payment.aggregate({
-          where: { isPaid: true, order: { is: where } },
-          _sum: { amountUsd: true },
-        }),
-        prisma.order.findMany({
+        prisma.order.groupBy({
+          by: ["status"],
           where,
-          select: { id: true, totalIlsWithVat: true, totalIls: true },
-          take: KPI_DEBT_ORDER_CAP,
+          _count: { _all: true },
+          _sum: { totalUsd: true },
         }),
         prisma.user.findMany({
           where: { isActive: true },
           orderBy: [{ fullName: "asc" }, { username: "asc" }],
           select: { id: true, fullName: true, username: true },
           take: 200,
+        }),
+        prisma.intakeLocation.findMany({
+          select: { id: true, name: true },
+          orderBy: { name: "asc" },
+          take: 500,
         }),
         prisma.order.findMany({
           where,
@@ -199,9 +149,13 @@ export default async function OrdersListPage({
             status: true,
             sourceCountry: true,
             paymentMethod: true,
+            paymentPointId: true,
+            locationId: true,
+            paymentPoint: { select: { id: true, pointName: true } },
             amountUsd: true,
             commissionUsd: true,
             totalUsd: true,
+            debtWithdrawalUsd: true,
             totalIlsWithVat: true,
             totalIls: true,
             customer: {
@@ -222,26 +176,33 @@ export default async function OrdersListPage({
       ]),
   );
 
-  const completedIds = rows.filter((r) => r.status === OrderStatus.COMPLETED).map((r) => r.id);
+  const sensitiveIds = rows
+    .filter((r) => r.status === OrderStatus.COMPLETED || r.status === OrderStatus.CANCELLED)
+    .map((r) => r.id);
   let pendingEditOrderIds = new Set<string>();
+  /** לכל הזמנה עם בקשה ממתינה — מי שלח (לבדיקת "שלי" מול "אחר") */
+  const pendingRequestedByUserId = new Map<string, string>();
   const latestEditRequestByOrder = new Map<
     string,
     { status: OrderEditRequestStatus; requestedByUserId: string }
   >();
-  if (completedIds.length > 0) {
+  if (sensitiveIds.length > 0) {
     const [pendingRows, recentRequests] = await Promise.all([
       prisma.orderEditRequest.findMany({
-        where: { orderId: { in: completedIds }, status: OrderEditRequestStatus.PENDING },
-        select: { orderId: true },
+        where: { orderId: { in: sensitiveIds }, status: OrderEditRequestStatus.PENDING },
+        select: { orderId: true, requestedByUserId: true },
       }),
       prisma.orderEditRequest.findMany({
-        where: { orderId: { in: completedIds } },
+        where: { orderId: { in: sensitiveIds } },
         orderBy: { createdAt: "desc" },
         select: { orderId: true, status: true, requestedByUserId: true },
         take: 4000,
       }),
     ]);
     pendingEditOrderIds = new Set(pendingRows.map((p) => p.orderId));
+    for (const p of pendingRows) {
+      pendingRequestedByUserId.set(p.orderId, p.requestedByUserId);
+    }
     for (const req of recentRequests) {
       if (!latestEditRequestByOrder.has(req.orderId)) {
         latestEditRequestByOrder.set(req.orderId, {
@@ -252,31 +213,75 @@ export default async function OrdersListPage({
     }
   }
 
-  const debtIds = kpiOrders.map((o) => o.id);
-  const payIlsByOrder =
-    debtIds.length > 0
-      ? await prisma.payment.groupBy({
-          by: ["orderId"],
-          where: { orderId: { in: debtIds }, isPaid: true },
-          _sum: { totalIlsWithVat: true, amountIls: true },
-        })
-      : [];
-  const paidIlsMap = new Map<string, number>();
-  for (const p of payIlsByOrder) {
-    if (!p.orderId) continue;
-    const raw = p._sum.totalIlsWithVat ?? p._sum.amountIls;
-    paidIlsMap.set(p.orderId, Number(raw ?? 0));
+  /**
+   * חלוקת groupBy ל־4 דליים סטטיסטיים:
+   *   open       — OPEN
+   *   inProgress — WAITING_FOR_EXECUTION | SENT | WITHDRAWAL_FROM_SUPPLIER | WAITING_FOR_CHINA_EXECUTION
+   *   completed  — COMPLETED
+   *   cancelled  — CANCELLED  (מוצג ב־card נפרד; לא משתתף ב־totals של האחרים)
+   */
+  const statusSummaryAcc = {
+    open: { count: 0, totalUsd: 0 },
+    inProgress: { count: 0, totalUsd: 0 },
+    completed: { count: 0, totalUsd: 0 },
+    cancelled: { count: 0, totalUsd: 0 },
+    debtWithdrawal: { count: 0, totalUsd: 0 },
+  };
+  for (const g of statusGroups) {
+    const count = g._count?._all ?? 0;
+    const totalUsd = Number(g._sum?.totalUsd ?? 0);
+    switch (g.status) {
+      case OrderStatus.OPEN:
+        statusSummaryAcc.open.count += count;
+        statusSummaryAcc.open.totalUsd += totalUsd;
+        break;
+      case OrderStatus.COMPLETED:
+        statusSummaryAcc.completed.count += count;
+        statusSummaryAcc.completed.totalUsd += totalUsd;
+        break;
+      case OrderStatus.CANCELLED:
+        statusSummaryAcc.cancelled.count += count;
+        statusSummaryAcc.cancelled.totalUsd += totalUsd;
+        break;
+      case OrderStatus.DEBT_WITHDRAWAL:
+        statusSummaryAcc.debtWithdrawal.count += count;
+        statusSummaryAcc.debtWithdrawal.totalUsd += totalUsd;
+        break;
+      case OrderStatus.WAITING_FOR_EXECUTION:
+      case OrderStatus.WITHDRAWAL_FROM_SUPPLIER:
+      case OrderStatus.SENT:
+      case OrderStatus.WAITING_FOR_CHINA_EXECUTION:
+        statusSummaryAcc.inProgress.count += count;
+        statusSummaryAcc.inProgress.totalUsd += totalUsd;
+        break;
+      default:
+        break;
+    }
   }
-
-  let totalDebtIls = 0;
-  for (const o of kpiOrders) {
-    const orderIls = Number(o.totalIlsWithVat ?? o.totalIls ?? 0);
-    const paidIls = paidIlsMap.get(o.id) ?? 0;
-    const debt = orderIls - paidIls;
-    if (debt > 0.01) totalDebtIls += debt;
-  }
-
-  const totalPaymentsUsd = Number(payTotalsAgg._sum.amountUsd ?? 0);
+  const fmtUsdCompact = (n: number) =>
+    n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const statusSummary = {
+    open: {
+      count: statusSummaryAcc.open.count.toLocaleString("he-IL"),
+      totalUsd: fmtUsdCompact(statusSummaryAcc.open.totalUsd),
+    },
+    inProgress: {
+      count: statusSummaryAcc.inProgress.count.toLocaleString("he-IL"),
+      totalUsd: fmtUsdCompact(statusSummaryAcc.inProgress.totalUsd),
+    },
+    completed: {
+      count: statusSummaryAcc.completed.count.toLocaleString("he-IL"),
+      totalUsd: fmtUsdCompact(statusSummaryAcc.completed.totalUsd),
+    },
+    cancelled: {
+      count: statusSummaryAcc.cancelled.count.toLocaleString("he-IL"),
+      totalUsd: fmtUsdCompact(statusSummaryAcc.cancelled.totalUsd),
+    },
+    debtWithdrawal: {
+      count: statusSummaryAcc.debtWithdrawal.count.toLocaleString("he-IL"),
+      totalUsd: fmtUsdCompact(statusSummaryAcc.debtWithdrawal.totalUsd),
+    },
+  };
 
   const ids = rows.map((r) => r.id);
   const paySums =
@@ -296,7 +301,13 @@ export default async function OrdersListPage({
 
   const orders: OrderListRow[] = rows.map((r) => {
     const total = r.totalUsd != null ? Number(r.totalUsd) : 0;
-    const paid = paidByOrder.get(r.id) ?? 0;
+    const rawPaid = paidByOrder.get(r.id) ?? 0;
+    /**
+     * "משיכה מהחוב" — סכום שקוזז מקרדיט הלקוח נחשב כשולם
+     * עבור ההזמנה (לא נוצר Payment record כדי לא לזהם דוחות הכנסה).
+     */
+    const debtWithdrawal = r.debtWithdrawalUsd != null ? Number(r.debtWithdrawalUsd) : 0;
+    const paid = rawPaid + debtWithdrawal;
     const balanceUsd = total - paid;
     let paymentStatus: OrderListRow["paymentStatus"] = "unpaid";
     if (total > 0.01) {
@@ -307,9 +318,13 @@ export default async function OrdersListPage({
     }
 
     let editBadge: OrderListRow["editBadge"] = null;
-    if (r.status === OrderStatus.COMPLETED) {
-      if (pendingEditOrderIds.has(r.id)) editBadge = "pending";
-      else if (
+    let pendingEditOwnedByMe = false;
+    const sensitiveForEditLock = r.status === OrderStatus.COMPLETED || r.status === OrderStatus.CANCELLED;
+    if (sensitiveForEditLock) {
+      if (pendingEditOrderIds.has(r.id)) {
+        editBadge = "pending";
+        pendingEditOwnedByMe = pendingRequestedByUserId.get(r.id) === me.id;
+      } else if (
         hasActiveEditUnlock({
           editUnlockedForUserId: r.editUnlockedForUserId,
           editUnlockedUntil: r.editUnlockedUntil,
@@ -331,17 +346,27 @@ export default async function OrdersListPage({
     const quickStatusLocked =
       canEditOrders &&
       !isAdminUser(me) &&
-      r.status === OrderStatus.COMPLETED &&
+      sensitiveForEditLock &&
       !hasActiveEditUnlock({
         editUnlockedForUserId: r.editUnlockedForUserId,
         editUnlockedUntil: r.editUnlockedUntil,
         viewerUserId: me.id,
       });
 
+    const intakeLocationNameById = (id: string | null | undefined): string | null => {
+      if (!id) return null;
+      const hit = intakeLocationRows.find((x) => x.id === id);
+      return hit?.name?.trim() || null;
+    };
+    const paymentLocationId = r.paymentPointId ?? r.locationId ?? null;
+    const paymentLocationName =
+      r.paymentPoint?.pointName?.trim() || intakeLocationNameById(r.locationId) || null;
+
     return {
       id: r.id,
       orderNumber: r.orderNumber,
       customerId: r.customerId,
+      customerCode: r.customerCodeSnapshot?.trim() || null,
       customerName: primaryCustomerDisplayName({
         nameAr: r.customer?.nameAr ?? null,
         nameEn: r.customer?.nameEn ?? null,
@@ -355,6 +380,8 @@ export default async function OrdersListPage({
       status: r.status,
       sourceCountry: r.sourceCountry,
       paymentType: r.paymentMethod,
+      paymentLocationId,
+      paymentLocationName,
       createdByName: r.createdBy?.fullName || r.createdBy?.username || null,
       dealAmountUsd: fmtUsd2(r.amountUsd),
       commissionAmountUsd: fmtUsd2(r.commissionUsd),
@@ -363,6 +390,7 @@ export default async function OrdersListPage({
       totalAmountIls: fmtIls2(r.totalIlsWithVat ?? r.totalIls),
       paymentStatus,
       editBadge,
+      pendingEditOwnedByMe: editBadge === "pending" ? pendingEditOwnedByMe : undefined,
       quickStatusLocked,
     };
   });
@@ -371,6 +399,8 @@ export default async function OrdersListPage({
     id: u.id,
     label: u.fullName || u.username || u.id,
   }));
+
+  const paymentLocationOptions = intakeLocationRows.map((l) => ({ id: l.id, label: l.name }));
 
   return (
     <div className="adm-orders-excel-page">
@@ -386,24 +416,21 @@ export default async function OrdersListPage({
           createdById={createdById}
           createdByOptions={createdByOptions}
           paymentType={paymentType}
+          paymentLocation={paymentLocationRaw}
+          paymentLocationOptions={paymentLocationOptions}
           amountMin={amountMinRaw}
           amountMax={amountMaxRaw}
         />
       </Suspense>
       <OrdersListShell
         orders={orders}
-        summary={{
-          totalOrders: totalOrders.toLocaleString("he-IL"),
-          totalPaymentsUsd: totalPaymentsUsd.toLocaleString("en-US", {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-          }),
-          totalDebtIls: totalDebtIls.toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
-        }}
+        statusSummary={statusSummary}
+        viewerIsAdmin={isAdminUser(me)}
         canCreateOrders={canCreateOrders}
         canEditOrders={canEditOrders}
         canViewCustomerCard={canViewCustomerCard}
         dateRange={range}
+        paymentLocationOptions={paymentLocationOptions}
       />
     </div>
   );

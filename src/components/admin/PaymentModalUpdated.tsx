@@ -10,13 +10,16 @@ import {
   type PaymentIntakeOrderRow,
 } from "@/lib/payment-intake";
 import { fetchPaymentIntakeCustomerOrdersAction, type PaymentIntakeCustomerPayload } from "@/app/admin/payments/intake/actions";
-import { fetchOrderForPaymentContextAction, previewPaymentCodeForCaptureAction, type CustomerSearchRow } from "@/app/admin/capture/actions";
+import {
+  fetchOrderForPaymentContextAction,
+  previewPaymentCodeForCaptureAction,
+  type CustomerSearchRow,
+} from "@/app/admin/capture/actions";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 import type { PaymentWindowProps } from "@/lib/admin-windows";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import { OrderEditModal } from "@/components/admin/OrderEditModal";
-import Card from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { normalizeOrderSourceCountry, type OrderCountryCode } from "@/lib/order-countries";
 import {
@@ -25,22 +28,27 @@ import {
   WORK_WEEK_RANGES,
   formatLocalHm,
   formatLocalYmd,
+  getAhWeekRange,
   getWeekCodeForLocalDate,
-  nextWeekCode,
+  normalizeAhWeekCode,
   parseLocalDate,
-  prevWeekCode,
 } from "@/lib/work-week";
 import {
   calculatePaymentLine,
+  calculateTotalBaseIls,
+  calculateTotalBaseUsd,
   calculateTotals,
   DEFAULT_VAT_RATE,
   roundMoney2,
   type PaymentLine,
+  type PaymentLineCheck,
   type PaymentLineCurrency,
   type PaymentLineMethod,
   type PaymentLineVatMode,
 } from "@/lib/payment-updated";
-import { savePaymentUpdatedAction } from "@/app/admin/payments-updated/actions";
+import { validatePaymentCheckLines } from "@/lib/payment-checks";
+import { resetCustomerOutstandingBalancesAction, savePaymentUpdatedAction } from "@/app/admin/payments-updated/actions";
+import { formatVatPercentLabel } from "@/lib/vat";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 
 const COUNTRY_BADGE_SHORT: Record<OrderCountryCode, string> = {
@@ -108,6 +116,31 @@ function sanitizeMoneyInput(raw: string): string {
   const parts = t.split(".");
   if (parts.length > 2) t = parts[0] + "." + parts.slice(1).join("");
   return t;
+}
+
+/**
+ * סניטיזציה של "אחוז עמלה": ספרות + נקודה עשרונית בודדת, ללא סימן %,
+ * נחתך ל-100% (0..100) שכן אחוז עמלה גבוה יותר אינו הגיוני כאן.
+ */
+function sanitizePercentInput(raw: string): string {
+  let t = raw.replace(/[^\d.]/g, "");
+  const parts = t.split(".");
+  if (parts.length > 2) t = parts[0] + "." + parts.slice(1).join("");
+  if (t === "" || t === ".") return t;
+  const n = Number(t);
+  if (Number.isFinite(n) && n > 100) return "100";
+  return t;
+}
+
+/**
+ * מכפיל את סכום ההזמנה באחוז העמלה לתצוגה בלבד.
+ * amountUsd * (1 + pct/100). אחוז שלילי או לא תקין → אין שינוי.
+ * שימוש בעמודת "$ סכום" בטבלת ההזמנות.
+ */
+function applyCommissionPercentDisplay(amountUsd: number, pct: number): number {
+  if (!Number.isFinite(amountUsd)) return amountUsd;
+  if (!Number.isFinite(pct) || pct <= 0) return amountUsd;
+  return amountUsd + (amountUsd * pct) / 100;
 }
 
 /** תצוגת סכומי USD: אלפים, 2 ספרות, תווית $ */
@@ -181,13 +214,52 @@ function newLineId(): string {
   return `pl_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`.toUpperCase();
 }
 
+function newCheckLineId(): string {
+  return `chk_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`.toUpperCase();
+}
+
+function emptyCheckRow(): PaymentLineCheck {
+  return { id: newCheckLineId(), checkNumber: "", dueDateYmd: "", amount: "" };
+}
+
+/** מספר צ׳יק — ספרות בלבד */
+function sanitizeCheckNumberInput(raw: string): string {
+  return raw.replace(/\D/g, "").slice(0, 24);
+}
+
+function checkFieldMissingNumber(ch: PaymentLineCheck): boolean {
+  return !String(ch.checkNumber ?? "").trim();
+}
+
+function checkFieldMissingDue(ch: PaymentLineCheck): boolean {
+  const y = (ch.dueDateYmd ?? "").trim();
+  return !y || !/^\d{4}-\d{2}-\d{2}$/.test(y);
+}
+
+function checkFieldMissingAmount(ch: PaymentLineCheck): boolean {
+  const a = typeof ch.amount === "number" && Number.isFinite(ch.amount) ? ch.amount : NaN;
+  return !Number.isFinite(a) || a <= 0;
+}
+
+/**
+ * ברירת מחדל ל-vatMode לפי צורת תשלום:
+ * - מזומן / העברה בנקאית → BEFORE_VAT (הסכום שהוזן הוא ללא מע״מ)
+ * - אשראי / צ׳ק / אחר   → INCLUDING_VAT (הסכום שהוזן הוא כולל מע״מ)
+ * המשתמש יכול עדיין לשנות ידנית את ה-select של המע״מ.
+ */
+function defaultVatModeForMethod(method: PaymentLineMethod): PaymentLineVatMode {
+  if (method === "CASH" || method === "BANK_TRANSFER") return "BEFORE_VAT";
+  return "INCLUDING_VAT";
+}
+
 function createDefaultLine(): PaymentLine {
+  const paymentMethod: PaymentLineMethod = "CASH";
   return {
     id: newLineId(),
     amount: "",
     currency: "USD",
-    vatMode: "EXEMPT",
-    paymentMethod: "BANK_TRANSFER",
+    vatMode: defaultVatModeForMethod(paymentMethod),
+    paymentMethod,
     note: "",
   };
 }
@@ -214,7 +286,71 @@ type Props = {
   canViewCustomerCard?: boolean;
   canEditOrders?: boolean;
   canCreateOrders?: boolean;
+  /** רק מנהל יכול לאפס יתרה ולמחוק חוב כנגד עמלות */
+  viewerIsAdmin?: boolean;
 };
+
+type PaymentNavDirection = "prev" | "next";
+
+type PaymentNavigationResponse =
+  | { success: true; paymentId: string; paymentCode: string | null }
+  | { success: false; edge: "first" | "last" };
+
+type PaymentEntryResponse = {
+  id: string;
+  paymentCode: string | null;
+  paymentNumber?: number | null;
+  paymentDateYmd: string;
+  paymentTimeHm: string;
+  dollarRate: string | null;
+  /** אחוז עמלה שנשמר בקליטה — לתצוגה בטבלה; אופציונלי בטעינה ישנה */
+  commissionPercent?: string | null;
+  customer: {
+    id: string;
+    displayName: string;
+    customerCode: string;
+    customerIndex: string;
+    nameEn: string;
+    nameAr: string;
+    phone: string;
+  };
+  lines: PaymentLine[];
+};
+
+/** קליטה חדשה — עדיין אין שורת DB; השרת מקצה קוד מספרי לפני שמירה */
+const NEW_CAPTURE_ROW_ID = "";
+
+function createNewCaptureLoadedPayment(paymentCode: string): PaymentEntryResponse {
+  const now = new Date();
+  return {
+    id: NEW_CAPTURE_ROW_ID,
+    paymentCode,
+    paymentDateYmd: formatLocalYmd(now),
+    paymentTimeHm: formatLocalHm(now),
+    dollarRate: null,
+    customer: {
+      id: "",
+      displayName: "",
+      customerCode: "",
+      customerIndex: "",
+      nameEn: "",
+      nameAr: "",
+      phone: "",
+    },
+    lines: [],
+  };
+}
+
+function clonePaymentEntry(e: PaymentEntryResponse): PaymentEntryResponse {
+  return {
+    ...e,
+    customer: { ...e.customer },
+    lines: e.lines.map((l) => ({
+      ...l,
+      checks: l.checks?.map((c) => ({ ...c })),
+    })),
+  };
+}
 
 export function PaymentModalUpdated({
   financial,
@@ -224,10 +360,18 @@ export function PaymentModalUpdated({
   canViewCustomerCard = true,
   canEditOrders = true,
   canCreateOrders = true,
+  viewerIsAdmin = false,
 }: Props) {
   const { globalWeek } = useAdminGlobal();
   const defaultRate = useMemo(() => parseFinalRate(financial), [financial]);
-  const { openWindow } = useAdminWindows();
+  const { openWindow, closeTop } = useAdminWindows();
+
+  /**
+   * פוקוס מהיר: קוד לקוח → Enter (חיפוש + בחירה) → סכום → Enter → שמור וחדש → Enter
+   */
+  const customerCodeInputRef = useRef<HTMLInputElement | null>(null);
+  const firstAmountInputRef = useRef<HTMLInputElement | null>(null);
+  const saveAndNewButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const [draftCustomer, setDraftCustomer] = useState<Record<CustFieldKey, string>>(() => ({
     ...EMPTY_CUSTOMER_DRAFT,
@@ -248,9 +392,11 @@ export function PaymentModalUpdated({
   const [orders, setOrders] = useState<PaymentIntakeOrderRow[]>([]);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [loadingCustomer, setLoadingCustomer] = useState(false);
+  const [customerCodeEnterBusy, setCustomerCodeEnterBusy] = useState(false);
   const [orderEditId, setOrderEditId] = useState<string | null>(null);
 
-  const [paymentCodeDisp, setPaymentCodeDisp] = useState("—");
+  /** קליטה שנטענה מ־GET /api/payments/entry או מעטפת קליטה חדשה עם קוד מהשרת — מקור אמת לקוד תשלום */
+  const [loadedPayment, setLoadedPayment] = useState<PaymentEntryResponse | null>(null);
   const [paymentDateYmd, setPaymentDateYmd] = useState(() => {
     const today = new Date();
     const currentCode = getWeekCodeForLocalDate(today);
@@ -267,12 +413,39 @@ export function PaymentModalUpdated({
   const [weekInputErr, setWeekInputErr] = useState<string | null>(null);
 
   const [dollarRate, setDollarRate] = useState(() => defaultRate.toFixed(4));
+  /**
+   * אחוז עמלה כללי לקליטה.
+   * תצוגתי בטבלה: משפיע על עמודת "$ סכום" (לא על יתרה, לא על הקצאה, לא על מע״מ).
+   * נשמר ב־Payment.commissionPercent בעת שמירת הקליטה.
+   * ברירת מחדל "0".
+   */
+  const [commissionPercent, setCommissionPercent] = useState<string>("0");
+  const commissionPercentN = useMemo(() => {
+    const n = parseNum(commissionPercent);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }, [commissionPercent]);
 
   const [payments, setPayments] = useState<PaymentLine[]>(() => [createDefaultLine()]);
 
   const [includedIds, setIncludedIds] = useState<string[] | null>(null);
   const [saveBusy, setSaveBusy] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
+  /** אחרי ניסיון שמירה שנכשל באימות צ׳יקים — מסמן שדות חסרים */
+  const [highlightInvalidCheckFields, setHighlightInvalidCheckFields] = useState(false);
+  const [resetCustomerConfirmOpen, setResetCustomerConfirmOpen] = useState(false);
+  const [resetCustomerBusy, setResetCustomerBusy] = useState(false);
+  const baselineSigRef = useRef<string>("");
+  const currentSigRef = useRef<string>("");
+  const tableScrollRef = useRef<HTMLDivElement | null>(null);
+  /** מטמון immutable לפי id — עותק עמוק בלבד, ללא שיתוף הפניות בין ניווטים */
+  const entryCacheRef = useRef<Map<string, PaymentEntryResponse>>(new Map());
+  const [isNavigating, setIsNavigating] = useState(false);
+  const [navSpinDirection, setNavSpinDirection] = useState<PaymentNavDirection | null>(null);
+  const [navUnsavedOpen, setNavUnsavedOpen] = useState<PaymentNavDirection | null>(null);
+  const [paymentNavAvailable, setPaymentNavAvailable] = useState<Record<PaymentNavDirection, boolean | null>>({
+    prev: null,
+    next: null,
+  });
 
   const customerIdRef = useRef<string | null>(null);
   customerIdRef.current = customer?.id ?? null;
@@ -282,6 +455,31 @@ export function PaymentModalUpdated({
   const rateN = parseNum(dollarRate);
 
   const totals = useMemo(() => calculateTotals(payments, rateN, DEFAULT_VAT_RATE), [payments, rateN]);
+
+  /** כרטיס ירוק: מספר ראשי = בסיס לפני מע״מ (נטו), לא סכום ברוטו אחרי מע״מ */
+  const stickyBaseTotals = useMemo(
+    () => ({
+      usd: calculateTotalBaseUsd(payments, rateN, DEFAULT_VAT_RATE),
+      ils: calculateTotalBaseIls(payments, rateN, DEFAULT_VAT_RATE),
+    }),
+    [payments, rateN],
+  );
+  const currentDraftSig = useMemo(
+    () =>
+      JSON.stringify({
+        customerId: customer?.id ?? "",
+        paymentDateYmd,
+        paymentTimeHm,
+        dollarRate,
+        commissionPercent,
+        includedIds: includedIds ?? [],
+        nameEn: draftCustomer.nameEn.trim(),
+        nameAr: draftCustomer.nameAr.trim(),
+        phone: draftCustomer.phone.trim(),
+        payments,
+      }),
+    [customer?.id, paymentDateYmd, paymentTimeHm, dollarRate, commissionPercent, includedIds, draftCustomer.nameEn, draftCustomer.nameAr, draftCustomer.phone, payments],
+  );
 
   const bases = useMemo(() => toPaymentIntakeBases(orders), [orders]);
 
@@ -296,10 +494,76 @@ export function PaymentModalUpdated({
 
   const weekReadonly = useMemo(() => weekCodeFromYmd(paymentDateYmd), [paymentDateYmd]);
 
+  /** קליטה שמורה ב־DB — מקור הניווט היחיד לרשומות Payment Entry */
+  const savedCapturePaymentId = useMemo(() => {
+    const id = loadedPayment?.id?.trim();
+    if (!id || id === NEW_CAPTURE_ROW_ID) return null;
+    return id;
+  }, [loadedPayment?.id]);
+
+  const currentPaymentNavigationQuery = useMemo(() => {
+    const code = loadedPayment?.paymentCode?.trim();
+    if (code) {
+      return `currentPaymentCode=${encodeURIComponent(code)}`;
+    }
+    return null;
+  }, [loadedPayment?.paymentCode]);
+
+  useEffect(() => {
+    if (!currentPaymentNavigationQuery) {
+      setPaymentNavAvailable({ prev: null, next: null });
+      return;
+    }
+
+    let cancelled = false;
+    setPaymentNavAvailable({ prev: null, next: null });
+    void (async () => {
+      const [prev, next] = await Promise.all([
+        fetch(`/api/payments/navigation?${currentPaymentNavigationQuery}&direction=prev`),
+        fetch(`/api/payments/navigation?${currentPaymentNavigationQuery}&direction=next`),
+      ]);
+      if (cancelled) return;
+      const prevJson = prev.ok ? ((await prev.json()) as PaymentNavigationResponse) : null;
+      const nextJson = next.ok ? ((await next.json()) as PaymentNavigationResponse) : null;
+      if (cancelled) return;
+      setPaymentNavAvailable({
+        prev: prevJson == null ? null : prevJson.success,
+        next: nextJson == null ? null : nextJson.success,
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentPaymentNavigationQuery]);
+
+  useEffect(() => {
+    currentSigRef.current = currentDraftSig;
+    if (!baselineSigRef.current) baselineSigRef.current = currentDraftSig;
+  }, [currentDraftSig]);
+
   const weekSelectValue = useMemo(() => {
     const w = weekReadonly !== "—" ? weekReadonly : DEFAULT_WEEK_CODE;
     return WORK_WEEK_RANGES[w] ? w : DEFAULT_WEEK_CODE;
   }, [weekReadonly]);
+
+  /** שבוע AH לסינון יתרות בטבלה: שדה השבוע במסך (כולל עריכה), לא רק תאריך התשלום */
+  const intakeWeekCode = useMemo(() => {
+    const d = normalizeAhWeekCode(weekDraft.trim());
+    if (d) return d;
+    if (weekReadonly !== "—") {
+      const wr = normalizeAhWeekCode(weekReadonly);
+      return wr ?? weekReadonly;
+    }
+    return normalizeAhWeekCode(globalWeek) ?? DEFAULT_WEEK_CODE;
+  }, [weekDraft, weekReadonly, globalWeek]);
+
+  const intakeWeekCutoffYmd = useMemo(() => getAhWeekRange(intakeWeekCode)?.to ?? null, [intakeWeekCode]);
+
+  const intakeWeekTableHint = useMemo(() => {
+    if (!intakeWeekCutoffYmd) return null;
+    return `מציג יתרות פתוחות עד סוף שבוע ${intakeWeekCode} (${formatSlashDate(intakeWeekCutoffYmd)})`;
+  }, [intakeWeekCode, intakeWeekCutoffYmd]);
 
   const applyWeekNumber = useCallback(
     (num: number) => {
@@ -340,37 +604,44 @@ export function PaymentModalUpdated({
     return { totalTransactions, totalPaidDb, remaining };
   }, [matched]);
 
-  useEffect(() => {
-    void previewPaymentCodeForCaptureAction().then((r) => {
-      if (r.ok) setPaymentCodeDisp(r.code);
-    });
-  }, []);
+  const loadCustomerOrders = useCallback(
+    async (customerId: string, opts?: { silent?: boolean; focusAmount?: boolean; weekCode?: string }): Promise<boolean> => {
+      if (!opts?.silent) setLoadingCustomer(true);
+      setLoadErr(null);
+      const res = await fetchPaymentIntakeCustomerOrdersAction(customerId, opts?.weekCode ?? intakeWeekCode);
+      if (!opts?.silent) setLoadingCustomer(false);
+      if (!res.ok) {
+        setCustomer(null);
+        setOrders([]);
+        setLoadErr(res.error);
+        return false;
+      }
+      setCustomer(res.customer);
+      setOrders(res.orders);
+      setDraftCustomer({
+        code: res.customer.customerCode ?? "",
+        displayName: res.customer.displayName ?? "",
+        nameEn: res.customer.nameEn ?? res.customer.nameHe ?? "",
+        nameAr: res.customer.nameAr ?? "",
+        phone: res.customer.phone ?? "",
+        index: res.customer.customerIndex ?? "",
+      });
+      setIncludedIds(null);
+      setSaveErr(null);
+      setCustSearchNoHits(false);
+      const shouldFocusAmount = opts?.focusAmount === true || opts?.silent !== true;
+      if (shouldFocusAmount) {
+        window.setTimeout(() => firstAmountInputRef.current?.focus(), 60);
+      }
+      return true;
+    },
+    [intakeWeekCode],
+  );
 
-  const loadCustomerOrders = useCallback(async (customerId: string) => {
-    setLoadingCustomer(true);
-    setLoadErr(null);
-    const res = await fetchPaymentIntakeCustomerOrdersAction(customerId);
-    setLoadingCustomer(false);
-    if (!res.ok) {
-      setCustomer(null);
-      setOrders([]);
-      setLoadErr(res.error);
-      return;
-    }
-    setCustomer(res.customer);
-    setOrders(res.orders);
-    setDraftCustomer({
-      code: res.customer.customerCode ?? "",
-      displayName: res.customer.displayName ?? "",
-      nameEn: res.customer.nameEn ?? res.customer.nameHe ?? "",
-      nameAr: res.customer.nameAr ?? "",
-      phone: res.customer.phone ?? "",
-      index: res.customer.customerIndex ?? "",
-    });
-    setIncludedIds(null);
-    setSaveErr(null);
-    setCustSearchNoHits(false);
-  }, []);
+  useEffect(() => {
+    if (!customer?.id) return;
+    void loadCustomerOrders(customer.id, { silent: true });
+  }, [customer?.id, intakeWeekCode, loadCustomerOrders]);
 
   const pickCustHit = useCallback(
     async (row: CustomerSearchRow) => {
@@ -401,20 +672,306 @@ export function PaymentModalUpdated({
     setCustDdOpen(true);
   }, []);
 
-  function navPaymentWeek(dir: "prev" | "next") {
-    let code = weekCodeFromYmd(paymentDateYmd);
-    if (code === "—") code = DEFAULT_WEEK_CODE;
-    const target = dir === "prev" ? prevWeekCode(code) : nextWeekCode(code);
-    if (!target || !WORK_WEEK_RANGES[target]) return;
-    setPaymentDateYmd(WORK_WEEK_RANGES[target].from);
+  useEffect(() => {
+    const t = window.setTimeout(() => customerCodeInputRef.current?.focus(), 0);
+    return () => window.clearTimeout(t);
+  }, []);
+
+  async function resolveCustomerFromCodeFieldEnter() {
+    const q = draftCustomerRef.current.code.trim();
+    if (!q) return;
+    if (!UUID_SEARCH_RE.test(q) && q.length < 2) {
+      onToast("הזן לפחות 2 תווים לחיפוש");
+      return;
+    }
+    custSearchGenRef.current += 1;
+    lastEditedFieldRef.current = "code";
+    setCustomerCodeEnterBusy(true);
+    setCustSearchNoHits(false);
+    try {
+      const res = await fetch(`/api/customers?query=${encodeURIComponent(q)}&limit=20&page=1`);
+      if (!res.ok) {
+        setLoadErr("טעינת נתונים נכשלה");
+        return;
+      }
+      const data = (await res.json()) as { customers?: CustomerApiSearchRow[] };
+      const rows = data.customers ?? [];
+      if (rows.length === 0) {
+        setCustomerHits([]);
+        setCustDdOpen(false);
+        setCustSearchNoHits(true);
+        return;
+      }
+      const hits: CustomerSearchRow[] = rows.map((r) => ({
+        id: r.id,
+        label: primaryCustomerDisplayName({
+          nameAr: r.nameAr,
+          nameEn: r.nameEn,
+          nameHe: r.nameHe,
+          displayName: r.displayName,
+        }),
+        code: r.customerCode,
+        customerType: r.customerType,
+        city: r.city,
+        phone: r.phone,
+      }));
+
+      const uuidQuick = rows.length === 1 && UUID_SEARCH_RE.test(q.trim()) && rows[0]!.id === q.trim();
+      const codeOrIndexQuick = rows.length === 1 && q.length >= 1 && q.length < 2;
+      const lenOk = rows.length === 1 && q.length >= 2;
+
+      if (rows.length === 1 && (lenOk || uuidQuick || codeOrIndexQuick)) {
+        if (customerIdRef.current === hits[0]!.id) {
+          setCustomerHits([]);
+          setCustDdOpen(false);
+          setCustSearchNoHits(false);
+          window.setTimeout(() => firstAmountInputRef.current?.focus(), 40);
+          return;
+        }
+        await loadCustomerOrders(hits[0]!.id, { silent: true, focusAmount: true });
+        setCustomerHits([]);
+        setCustDdOpen(false);
+        setCustSearchNoHits(false);
+        return;
+      }
+
+      const exactCode = rows.find((r) => (r.customerCode ?? "").trim().toLowerCase() === q.toLowerCase());
+      if (exactCode) {
+        if (customerIdRef.current !== exactCode.id) {
+          await loadCustomerOrders(exactCode.id, { silent: true, focusAmount: true });
+          setCustomerHits([]);
+          setCustDdOpen(false);
+          setCustSearchNoHits(false);
+          return;
+        }
+        setCustomerHits([]);
+        setCustDdOpen(false);
+        window.setTimeout(() => firstAmountInputRef.current?.focus(), 40);
+        return;
+      }
+
+      setCustomerHits(hits);
+      setCustDdOpen(hits.length > 0);
+    } catch {
+      setLoadErr("בעיה בחיבור לשרת");
+    } finally {
+      setCustomerCodeEnterBusy(false);
+    }
+  }
+
+  function syncBaselineSoon() {
+    window.setTimeout(() => {
+      baselineSigRef.current = currentSigRef.current;
+    }, 0);
+  }
+
+  const clearCurrentPaymentState = useCallback(() => {
+    custSearchGenRef.current += 1;
+    setEditingBadge(null);
+    setCountryOverride("AUTO");
+    setCustomer(null);
+    setOrders([]);
+    setDraftCustomer({ ...EMPTY_CUSTOMER_DRAFT });
+    setCustomerHits([]);
+    setCustDdOpen(false);
+    setIncludedIds(null);
+    setCustSearchNoHits(false);
+    setOrderEditId(null);
+    setPayments([createDefaultLine()]);
+    setDollarRate(parseFinalRate(financial).toFixed(4));
+    setCommissionPercent("0");
+    setLoadErr(null);
+    setSaveErr(null);
+    setHighlightInvalidCheckFields(false);
+    setLoadedPayment(null);
+    setPaymentNavAvailable({ prev: null, next: null });
+    baselineSigRef.current = "";
+  }, [financial]);
+
+  async function loadPaymentEntrySnapshot(id: string): Promise<PaymentEntryResponse | null> {
+    const cached = entryCacheRef.current.get(id);
+    if (cached) {
+      return clonePaymentEntry(cached);
+    }
+    const res = await fetch(`/api/payments/entry?id=${encodeURIComponent(id)}`);
+    if (!res.ok) return null;
+    const raw = (await res.json()) as PaymentEntryResponse;
+    const immutable = clonePaymentEntry(raw);
+    entryCacheRef.current.set(id, clonePaymentEntry(immutable));
+    return clonePaymentEntry(immutable);
+  }
+
+  async function applyPaymentEntry(snapshot: PaymentEntryResponse): Promise<boolean> {
+    const pageScrollY = window.scrollY;
+    const tableScroll = tableScrollRef.current?.scrollTop ?? 0;
+    const snap = clonePaymentEntry(snapshot);
+    const snapshotWeek = normalizeAhWeekCode(weekCodeFromYmd(snap.paymentDateYmd)) ?? DEFAULT_WEEK_CODE;
+    setPaymentDateYmd(snap.paymentDateYmd);
+    setWeekDraft(snapshotWeek);
+    const loaded = await loadCustomerOrders(snap.customer.id, { silent: true, weekCode: snapshotWeek });
+    if (!loaded) {
+      setSaveErr("טעינת הלקוח נכשלה");
+      return false;
+    }
+
+    setLoadedPayment(snap);
+    setPaymentTimeHm(snap.paymentTimeHm);
+    if (snap.dollarRate?.trim()) setDollarRate(snap.dollarRate.trim());
+    {
+      const raw = (snap.commissionPercent ?? "").trim().replace(",", ".");
+      const n = raw === "" ? 0 : Number(raw);
+      setCommissionPercent(Number.isFinite(n) && n > 0 ? String(n) : "0");
+    }
+    setPayments(
+      snap.lines.length > 0
+        ? snap.lines.map((l) => ({
+            ...l,
+            checks: l.checks?.map((ch) => ({ ...ch })),
+          }))
+        : [createDefaultLine()],
+    );
+    setIncludedIds(null);
+
+    window.setTimeout(() => {
+      window.scrollTo({ top: pageScrollY });
+      if (tableScrollRef.current) tableScrollRef.current.scrollTop = tableScroll;
+      syncBaselineSoon();
+    }, 0);
+    return true;
+  }
+
+  async function loadPaymentFromSavedId(id: string): Promise<boolean> {
+    setSaveErr(null);
+    const entry = await loadPaymentEntrySnapshot(id);
+    if (!entry) {
+      setSaveErr("לא ניתן לטעון קליטת תשלום");
+      return false;
+    }
+    clearCurrentPaymentState();
+    return applyPaymentEntry(entry);
+  }
+
+  function paymentCaptureIsDirty(): boolean {
+    return baselineSigRef.current !== "" && baselineSigRef.current !== currentDraftSig;
+  }
+
+  async function fetchPaymentNavigationNeighbor(
+    direction: PaymentNavDirection,
+  ): Promise<PaymentNavigationResponse | null> {
+    if (!currentPaymentNavigationQuery) return null;
+    const res = await fetch(
+      `/api/payments/navigation?${currentPaymentNavigationQuery}&direction=${direction}`,
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as PaymentNavigationResponse;
+  }
+
+  async function runNavigateToPaymentId(targetId: string): Promise<boolean> {
+    setSaveErr(null);
+    const restoreId = savedCapturePaymentId;
+    const entry = await loadPaymentEntrySnapshot(targetId);
+    if (!entry) {
+      onToast("לא ניתן לטעון קליטה");
+      return false;
+    }
+    clearCurrentPaymentState();
+    const ok = await applyPaymentEntry(entry);
+    if (!ok && restoreId && restoreId !== targetId) {
+      const prevEntry = await loadPaymentEntrySnapshot(restoreId);
+      if (prevEntry) {
+        clearCurrentPaymentState();
+        await applyPaymentEntry(prevEntry);
+      }
+      onToast("טעינה נכשלה — חזרה לקליטה הקודמת");
+    }
+    return ok;
+  }
+
+  async function executePaymentCaptureNavigation(direction: PaymentNavDirection): Promise<void> {
+    if (!currentPaymentNavigationQuery) return;
+    const nav = await fetchPaymentNavigationNeighbor(direction);
+    if (!nav) {
+      onToast("שגיאת ניווט");
+      return;
+    }
+    if (!nav.success) {
+      if (nav.edge === "first") onToast("זוהי הקליטה הראשונה");
+      else onToast("זוהי הקליטה האחרונה");
+      return;
+    }
+    await runNavigateToPaymentId(nav.paymentId);
+  }
+
+  function requestPaymentCaptureNavigation(direction: PaymentNavDirection) {
+    if (!currentPaymentNavigationQuery || isNavigating || saveBusy) return;
+    if (paymentNavAvailable[direction] === false) {
+      onToast(direction === "prev" ? "זוהי הקליטה הראשונה" : "זוהי הקליטה האחרונה");
+      return;
+    }
+    if (paymentCaptureIsDirty()) {
+      setNavUnsavedOpen(direction);
+      return;
+    }
+    void (async () => {
+      setIsNavigating(true);
+      setNavSpinDirection(direction);
+      try {
+        await executePaymentCaptureNavigation(direction);
+      } finally {
+        setIsNavigating(false);
+        setNavSpinDirection(null);
+      }
+    })();
+  }
+
+  function goToPreviousPayment() {
+    console.log("PREV CLICK");
+    requestPaymentCaptureNavigation("prev");
+  }
+
+  function goToNextPayment() {
+    console.log("NEXT CLICK");
+    requestPaymentCaptureNavigation("next");
+  }
+
+  function confirmNavUnsavedAndProceed() {
+    const direction = navUnsavedOpen;
+    if (!direction) return;
+    setNavUnsavedOpen(null);
+    void (async () => {
+      setIsNavigating(true);
+      setNavSpinDirection(direction);
+      try {
+        await executePaymentCaptureNavigation(direction);
+      } finally {
+        setIsNavigating(false);
+        setNavSpinDirection(null);
+      }
+    })();
   }
 
   useEffect(() => {
-    if (!initialPayment || initialAppliedRef.current) return;
+    if (initialAppliedRef.current) return;
     initialAppliedRef.current = true;
+    const init = initialPayment ?? {};
     void (async () => {
-      const onum = initialPayment.orderNumber?.trim();
-      const cid = initialPayment.customerId?.trim();
+      const pid = init.paymentId?.trim();
+      if (pid) {
+        await loadPaymentFromSavedId(pid);
+        return;
+      }
+
+      const pr = await previewPaymentCodeForCaptureAction();
+      if (pr.ok) {
+        setLoadedPayment(createNewCaptureLoadedPayment(pr.code));
+        setSaveErr(null);
+      } else {
+        setSaveErr(pr.error);
+        setLoadedPayment(createNewCaptureLoadedPayment(""));
+      }
+
+      const onum = init.orderNumber?.trim();
+      const cid = init.customerId?.trim();
       if (onum) {
         const ctx = await fetchOrderForPaymentContextAction(onum);
         if (ctx.ok && ctx.data.customerId) {
@@ -427,9 +984,9 @@ export function PaymentModalUpdated({
         }
       } else if (cid) {
         await loadCustomerOrders(cid);
-      } else if (initialPayment.customerName?.trim()) {
+      } else if (init.customerName?.trim()) {
         lastEditedFieldRef.current = "displayName";
-        setDraftCustomer((p) => ({ ...p, displayName: initialPayment.customerName!.trim() }));
+        setDraftCustomer((p) => ({ ...p, displayName: init.customerName!.trim() }));
         setSearchTick((n) => n + 1);
         setCustDdOpen(true);
       }
@@ -453,12 +1010,24 @@ export function PaymentModalUpdated({
     setOrderEditId(null);
     setPayments([createDefaultLine()]);
     setDollarRate(parseFinalRate(financial).toFixed(4));
+    setCommissionPercent("0");
     setPaymentDateYmd(formatLocalYmd(new Date()));
     setPaymentTimeHm(formatLocalHm(new Date()));
-    void previewPaymentCodeForCaptureAction().then((r) => {
-      if (r.ok) setPaymentCodeDisp(r.code);
-    });
     setSaveErr(null);
+    setIsNavigating(false);
+    setNavSpinDirection(null);
+    setNavUnsavedOpen(null);
+    setPaymentNavAvailable({ prev: null, next: null });
+    void (async () => {
+      const pr = await previewPaymentCodeForCaptureAction();
+      if (pr.ok) {
+        setLoadedPayment(createNewCaptureLoadedPayment(pr.code));
+      } else {
+        setSaveErr(pr.error);
+        setLoadedPayment(createNewCaptureLoadedPayment(""));
+      }
+    })();
+    syncBaselineSoon();
   }, [resetOnKey, financial]);
 
   useEffect(() => {
@@ -585,7 +1154,8 @@ export function PaymentModalUpdated({
   }
 
   function addPaymentLine(preset?: Partial<PaymentLine>) {
-    setPayments((cur) => [...cur, { ...createDefaultLine(), ...preset, id: newLineId() }]);
+    // newest first — תשלום חדש מופיע ראשון, ישנים נדחפים למטה.
+    setPayments((cur) => [{ ...createDefaultLine(), ...preset, id: newLineId() }, ...cur]);
   }
 
   function removePaymentLine(id: string) {
@@ -593,7 +1163,91 @@ export function PaymentModalUpdated({
   }
 
   function updatePaymentLine(id: string, patch: Partial<PaymentLine>) {
+    setHighlightInvalidCheckFields(false);
     setPayments((cur) => cur.map((x) => (x.id === id ? { ...x, ...patch } : x)));
+  }
+
+  function updatePaymentLineCheck(lineId: string, checkId: string, patch: Partial<PaymentLineCheck>) {
+    setHighlightInvalidCheckFields(false);
+    setPayments((cur) =>
+      cur.map((line) => {
+        if (line.id !== lineId) return line;
+        const checks = [...(line.checks ?? [])];
+        const ix = checks.findIndex((c) => c.id === checkId);
+        if (ix < 0) return line;
+        checks[ix] = { ...checks[ix]!, ...patch };
+        return { ...line, checks };
+      }),
+    );
+  }
+
+  function addPaymentLineCheck(lineId: string) {
+    setHighlightInvalidCheckFields(false);
+    setPayments((cur) =>
+      cur.map((line) => {
+        if (line.id !== lineId) return line;
+        const checks = [...(line.checks ?? []), emptyCheckRow()];
+        return { ...line, checks };
+      }),
+    );
+  }
+
+  function removePaymentLineCheck(lineId: string, checkId: string) {
+    setHighlightInvalidCheckFields(false);
+    setPayments((cur) =>
+      cur.map((line) => {
+        if (line.id !== lineId) return line;
+        const checks = (line.checks ?? []).filter((c) => c.id !== checkId);
+        if (checks.length === 0) return { ...line, checks: [emptyCheckRow()] };
+        return { ...line, checks };
+      }),
+    );
+  }
+
+  /**
+   * "איפוס יתרה" ברמת לקוח — מנהל בלבד.
+   * סוגר את כל היתרות הפתוחות לכל הזמנות הלקוח ע״י הורדה מהעמלות מהחדש לישן.
+   * מעדכן את הטבלה המקומית מיידית בלי refresh.
+   */
+  async function applyResetCustomerBalances(): Promise<void> {
+    if (!viewerIsAdmin) return;
+    if (!customer) return;
+    setResetCustomerBusy(true);
+    setSaveErr(null);
+    const res = await resetCustomerOutstandingBalancesAction({ customerId: customer.id });
+    setResetCustomerBusy(false);
+    if (!res.ok) {
+      setSaveErr(res.error);
+      onToast(res.error);
+      return;
+    }
+    const updatesById = new Map(
+      res.affectedOrderUpdates.map((u) => [
+        u.orderId,
+        { commissionUsd: u.newCommissionUsd, totalAmountUsd: u.newTotalUsd },
+      ]),
+    );
+    const closedSet = new Set(res.closedOrderIds);
+    setOrders((prev) =>
+      prev.map((row) => {
+        const upd = updatesById.get(row.id);
+        const isClosed = closedSet.has(row.id);
+        if (!upd && !isClosed) return row;
+        const next = { ...row };
+        if (upd) {
+          next.commissionUsd = upd.commissionUsd;
+          next.totalAmountUsd = upd.totalAmountUsd;
+        }
+        if (isClosed) {
+          next.dbPaidUsd = next.totalAmountUsd;
+          next.dbRemainingUsd = "0.00";
+          next.status = "paid" as const;
+        }
+        return next;
+      }),
+    );
+    setIncludedIds(null);
+    onToast(`יתרת הלקוח אופסה (${res.totalResetUsd}$)`);
   }
 
   function addLineFromOrder(row: PaymentIntakeMatchResult) {
@@ -603,38 +1257,48 @@ export function PaymentModalUpdated({
     addPaymentLine({
       amount: remUsd,
       currency: "USD",
-      vatMode: "EXEMPT",
-      paymentMethod: "BANK_TRANSFER",
+      paymentMethod: "CASH",
+      vatMode: defaultVatModeForMethod("CASH"),
       note: `סגירת חיוב הזמנה ${onum}`,
     });
     onToast("נוסף תשלום מסגירת חיוב (ללא שמירה)");
   }
 
-  async function onSave() {
+  /**
+   * Helper פנימי: ביצוע השמירה בלבד (validations + server action).
+   * מחזיר true אם השמירה הצליחה.
+   * אין כאן side-effects של reset/reload — את זה מנהלים `onSaveAndNew` / `onSaveAndClose`.
+   */
+  async function performSave(): Promise<boolean> {
     setSaveErr(null);
+    setHighlightInvalidCheckFields(false);
     if (!customer) {
       setSaveErr("יש לבחור לקוח");
-      return;
+      return false;
     }
     if (totals.totalUsd <= 0) {
       setSaveErr("יש להוסיף תשלום");
-      return;
+      return false;
     }
     if (rateN <= 0) {
       setSaveErr("שער דולר חייב להיות חיובי");
-      return;
+      return false;
     }
-
+    const checkErr = validatePaymentCheckLines(payments);
+    if (checkErr) {
+      setSaveErr(checkErr);
+      setHighlightInvalidCheckFields(true);
+      return false;
+    }
     const allocations = buildAllocationsFromMatch(bases, totals.totalUsd, prioritizedSet);
     if (allocations.length === 0) {
       setSaveErr("אין יעד להקצאה");
-      return;
+      return false;
     }
-
     setSaveBusy(true);
     const receivedTodaySave = isTodayYmd(paymentDateYmd);
     const hm = (paymentTimeHm || "").trim() || formatLocalHm(new Date());
-    const weekForSave = weekReadonly !== "—" ? weekReadonly : null;
+    const weekForSave = intakeWeekCode;
     const res = await savePaymentUpdatedAction({
       customerId: customer.id,
       receivedToday: receivedTodaySave,
@@ -642,6 +1306,7 @@ export function PaymentModalUpdated({
       paymentTimeHm: hm,
       weekCode: weekForSave,
       dollarRate,
+      commissionPercent: commissionPercent || "0",
       payments,
       includedOrderIds: includedIds,
       draftNameAr: draftCustomer.nameAr.trim() || null,
@@ -651,23 +1316,48 @@ export function PaymentModalUpdated({
     setSaveBusy(false);
     if (!res.ok) {
       setSaveErr(res.error);
-      return;
+      return false;
     }
     const remainingAfter = roundMoney2(
       matched.reduce((sum, row) => sum + Math.max(0, row.remainingAmount), 0),
     );
     if (remainingAfter <= 0.01) onToast("כל החיובים נסגרו בהצלחה");
     else onToast(`נשארו ${remainingAfter.toFixed(2)}$ פתוחים`);
+    entryCacheRef.current.clear();
+    return true;
+  }
+
+  /**
+   * "שמור וחדש" — שומר את התשלום הנוכחי, מאפס את הטופס,
+   * וטוען מחדש את ההזמנות של הלקוח כדי שיתרת ההזמנות תתעדכן —
+   * אך המודאל נשאר פתוח, מוכן לתשלום חדש.
+   */
+  async function onSaveAndNew() {
+    const ok = await performSave();
+    if (!ok || !customer) return;
     setPayments([createDefaultLine()]);
     setPaymentTimeHm(formatLocalHm(new Date()));
-    void previewPaymentCodeForCaptureAction().then((r) => {
-      if (r.ok) setPaymentCodeDisp(r.code);
-    });
-    const reload = await fetchPaymentIntakeCustomerOrdersAction(customer.id);
-    if (reload.ok) {
-      setOrders(reload.orders);
-      setIncludedIds(null);
+    const pr = await previewPaymentCodeForCaptureAction();
+    if (pr.ok) {
+      setLoadedPayment(createNewCaptureLoadedPayment(pr.code));
+      setSaveErr(null);
+    } else {
+      setSaveErr(pr.error);
+      setLoadedPayment(createNewCaptureLoadedPayment(""));
     }
+    await loadCustomerOrders(customer.id, { silent: true });
+    window.setTimeout(() => customerCodeInputRef.current?.focus(), 30);
+    syncBaselineSoon();
+  }
+
+  /**
+   * "שמור תשלום" — שומר את התשלום וסוגר את המודאל.
+   * זהו ה־flow הסופי / רגיל.
+   */
+  async function onSaveAndClose() {
+    const ok = await performSave();
+    if (!ok) return;
+    closeTop();
   }
 
   function openCustomerLedger() {
@@ -698,6 +1388,11 @@ export function PaymentModalUpdated({
     return "payment-modal-tr--status-unpaid";
   }
 
+  const paymentCaptureNavLabel = (loadedPayment?.paymentCode ?? "").trim();
+  const navArrowsDisabled = saveBusy || isNavigating || !currentPaymentNavigationQuery;
+  const prevPaymentNavDisabled = navArrowsDisabled || paymentNavAvailable.prev === false;
+  const nextPaymentNavDisabled = navArrowsDisabled || paymentNavAvailable.next === false;
+
   function badgeKeyFinish(e: KeyboardEvent<HTMLInputElement | HTMLSelectElement>) {
     if (e.key === "Enter") {
       e.preventDefault();
@@ -709,15 +1404,15 @@ export function PaymentModalUpdated({
     <>
       <div className="payment-modal">
         <div className="payment-modal-split payment-layout">
-          <div className="payment-modal-main payment-table" dir="rtl">
-            <div className="payment-modal-topnav" dir="ltr" aria-label="ניווט שבוע עבודה">
-              <button type="button" className="payment-modal-nav-arrow" onClick={() => navPaymentWeek("prev")} aria-label="שבוע קודם">
-                ‹
-              </button>
-              <button type="button" className="payment-modal-nav-arrow" onClick={() => navPaymentWeek("next")} aria-label="שבוע הבא">
-                ›
-              </button>
-            </div>
+          <div
+            key={
+              loadedPayment
+                ? `${loadedPayment.id || NEW_CAPTURE_ROW_ID}:${loadedPayment.paymentCode ?? ""}`
+                : "pending"
+            }
+            className="payment-modal-main payment-table"
+            dir="rtl"
+          >
             <div className="payment-modal-rate-strip" dir="rtl">
               <span className="payment-modal-rate-strip-lead">שער דולר:</span>
               <input
@@ -728,6 +1423,23 @@ export function PaymentModalUpdated({
                 value={dollarRate}
                 onChange={(e) => setDollarRate(sanitizeMoneyInput(e.target.value))}
                 aria-label="שער דולר"
+              />
+              <span className="payment-modal-rate-strip-lead payment-modal-rate-strip-lead--pct">
+                אחוז עמלה:
+              </span>
+              <input
+                type="text"
+                inputMode="decimal"
+                dir="ltr"
+                className="payment-modal-rate-strip-inp payment-modal-rate-strip-inp--pct"
+                value={commissionPercent}
+                placeholder="%"
+                onChange={(e) => setCommissionPercent(sanitizePercentInput(e.target.value))}
+                onFocus={(e) => {
+                  if (e.target.value === "0") e.target.select();
+                }}
+                aria-label="אחוז עמלה"
+                title="מוסיף אחוז על סכומי ההזמנה בטבלה (תצוגה בלבד) — לא משנה יתרה/הקצאה/מע״מ"
               />
             </div>
             {loadingCustomer ? <p className="payment-modal-hint payment-modal-hint--top">טוען…</p> : null}
@@ -756,14 +1468,28 @@ export function PaymentModalUpdated({
                         🔍
                       </button>
                     </span>
-                    <input
-                      type="text"
-                      autoComplete="off"
-                      className="payment-modal-cust-inp"
-                      dir="ltr"
-                      value={draftCustomer.code}
-                      onChange={(e) => onDraftCustomerChange("code", e.target.value)}
-                    />
+                    <div className="payment-modal-cust-code-field">
+                      <input
+                        ref={customerCodeInputRef}
+                        type="text"
+                        autoComplete="off"
+                        className={`payment-modal-cust-inp payment-modal-cust-inp--code${customerCodeEnterBusy ? " payment-modal-cust-inp--code-busy" : ""}`}
+                        dir="ltr"
+                        value={draftCustomer.code}
+                        onChange={(e) => onDraftCustomerChange("code", e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            void resolveCustomerFromCodeFieldEnter();
+                          }
+                        }}
+                      />
+                      {customerCodeEnterBusy ? (
+                        <span className="payment-modal-cust-code-busy-spin" aria-hidden>
+                          <span className="payment-modal-save-spinner" />
+                        </span>
+                      ) : null}
+                    </div>
                   </label>
                   <label className="payment-modal-cust-inp-wrap">
                     <span className="payment-modal-cust-inp-lbl payment-modal-cust-inp-lbl--row">
@@ -780,9 +1506,16 @@ export function PaymentModalUpdated({
                     <input
                       type="text"
                       autoComplete="off"
-                      className="payment-modal-cust-inp"
+                      className="payment-modal-cust-inp payment-modal-cust-inp--name"
                       value={draftCustomer.displayName}
                       onChange={(e) => onDraftCustomerChange("displayName", e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          triggerFieldSearch("displayName");
+                          window.setTimeout(() => firstAmountInputRef.current?.focus(), 80);
+                        }
+                      }}
                     />
                   </label>
                   <label className="payment-modal-cust-inp-wrap">
@@ -1024,11 +1757,17 @@ export function PaymentModalUpdated({
                     ))}
                   </datalist>
                 </div>
+
               </div>
             </div>
 
             <div className="payment-modal-table-wrap">
-              <div className="payment-modal-table-scroll">
+              {customer && intakeWeekTableHint ? (
+                <p className="payment-modal-intake-week-hint" dir="rtl">
+                  {intakeWeekTableHint}
+                </p>
+              ) : null}
+              <div className="payment-modal-table-scroll" ref={tableScrollRef}>
                 <table className="payment-modal-table" dir="rtl">
                   <thead>
                     <tr>
@@ -1093,8 +1832,18 @@ export function PaymentModalUpdated({
                           <td dir="ltr" className="pm-num">
                             {fmtRate(row.rate)}
                           </td>
-                          <td dir="ltr" className="pm-num pm-num--usd">
-                            {fmtUsdDisplay(row.amountUsd)}
+                          <td
+                            dir="ltr"
+                            className="pm-num pm-num--usd"
+                            title={
+                              commissionPercentN > 0
+                                ? `סכום מקורי: ${fmtUsdDisplay(row.amountUsd)} · אחוז עמלה: ${commissionPercentN}%`
+                                : undefined
+                            }
+                          >
+                            {fmtUsdDisplay(
+                              roundMoney2(applyCommissionPercentDisplay(row.amountUsd, commissionPercentN)),
+                            )}
                           </td>
                           <td dir="ltr" className="pm-num">
                             {fmtUsdDisplay(row.commissionUsd)}
@@ -1139,24 +1888,69 @@ export function PaymentModalUpdated({
                 </table>
               </div>
 
-              <div className="payment-modal-orders-summary" role="region" aria-label="סיכום עסקאות לקוח" dir="rtl">
+              {/**
+               * אזור totals — Cards צבעוניים בסגנון POS / ERP פיננסי.
+               * "סכום לא שולם" מציג LIVE PREVIEW: היתרה האמיתית פחות הסכום
+               * שהמשתמש כרגע מקליד (לפני שמירה). זה preview בלבד —
+               * הנתונים האמיתיים ב־DB נשארים ללא שינוי עד לחיצה על "שמור".
+               */}
+              <div className="payment-modal-orders-summary payment-modal-orders-summary--v2" role="region" aria-label="סיכום עסקאות לקוח" dir="rtl">
                 <div className="payment-modal-orders-summary-card payment-modal-orders-summary-card--txn">
+                  <div className="payment-modal-orders-summary-lbl">סך הכל עסקאות</div>
                   <div className="payment-modal-orders-summary-val" dir="ltr">
                     {fmtFooterAmount(ordersTableFooterTotals.totalTransactions)}
                   </div>
-                  <div className="payment-modal-orders-summary-lbl">סך הכל עסקאות</div>
+                  <div className="payment-modal-orders-summary-ex-vat" dir="ltr">
+                    ללא מע״מ: {fmtFooterAmount(roundMoney2(ordersTableFooterTotals.totalTransactions / (1 + DEFAULT_VAT_RATE)))}
+                  </div>
                 </div>
                 <div className="payment-modal-orders-summary-card payment-modal-orders-summary-card--paid">
+                  <div className="payment-modal-orders-summary-lbl">סכום שולם</div>
                   <div className="payment-modal-orders-summary-val" dir="ltr">
                     {fmtFooterAmount(ordersTableFooterTotals.totalPaidDb)}
                   </div>
-                  <div className="payment-modal-orders-summary-lbl">סכום ששולם</div>
                 </div>
                 <div className="payment-modal-orders-summary-card payment-modal-orders-summary-card--rem">
-                  <div className="payment-modal-orders-summary-val" dir="ltr">
-                    {fmtFooterAmount(ordersTableFooterTotals.remaining)}
+                  <div className="payment-modal-orders-summary-lbl payment-modal-orders-summary-lbl--with-action">
+                    <span className="payment-modal-orders-summary-lbl-text">
+                      סכום לא שולם
+                      {totals.totalUsd > 0 ? <span className="payment-modal-preview-tag">תצוגה מקדימה</span> : null}
+                    </span>
+                    {viewerIsAdmin && customer && ordersTableFooterTotals.remaining > 0.01 ? (
+                      <button
+                        type="button"
+                        className="pm-reset-balance-btn"
+                        disabled={resetCustomerBusy}
+                        onClick={() => setResetCustomerConfirmOpen(true)}
+                        title="איפוס יתרה — סוגר את כל היתרות הפתוחות של הלקוח ומוריד את ההפרש מהעמלות (מהחדש לישן)"
+                      >
+                        <svg
+                          className="pm-reset-balance-icon"
+                          width="13"
+                          height="13"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          aria-hidden
+                        >
+                          <polyline points="1 4 1 10 7 10" />
+                          <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+                        </svg>
+                        {resetCustomerBusy ? "מאפס…" : "איפוס יתרה"}
+                      </button>
+                    ) : null}
                   </div>
-                  <div className="payment-modal-orders-summary-lbl">סכום לא שולם</div>
+                  <div className="payment-modal-orders-summary-val" dir="ltr">
+                    {fmtFooterAmount(roundMoney2(Math.max(0, ordersTableFooterTotals.remaining - totals.totalUsd)))}
+                  </div>
+                  {totals.totalUsd > 0 ? (
+                    <div className="payment-modal-preview-delta" dir="ltr">
+                      − {fmtFooterAmount(roundMoney2(totals.totalUsd))} (תשלום נוכחי)
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -1167,12 +1961,74 @@ export function PaymentModalUpdated({
               <div className="payment-modal-side-inner payment-modal-side-inner--payment-only">
                 <label className="payment-modal-lbl payment-modal-lbl--micro">
                   קוד תשלום
-                  <input type="text" readOnly className="payment-modal-inp payment-modal-inp--ro" dir="ltr" value={paymentCodeDisp} />
+                  <div className="payment-navigation-row" dir="ltr" aria-label="ניווט בין קליטות תשלום">
+                    <button
+                      type="button"
+                      className={[
+                        "payment-nav-arrow",
+                        navSpinDirection === "prev" ? "payment-nav-arrow--busy" : "",
+                        paymentNavAvailable.prev === false ? "payment-nav-arrow--edge" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                      aria-label="קליטת תשלום קודמת"
+                      disabled={prevPaymentNavDisabled}
+                      onClick={goToPreviousPayment}
+                    >
+                      {navSpinDirection === "prev" ? <span className="payment-modal-save-spinner" aria-hidden /> : "◀"}
+                    </button>
+                    {loadedPayment?.paymentCode?.trim() ? (
+                      <div className="payment-nav-code" dir="ltr" aria-label="קוד קליטת תשלום">
+                        {paymentCaptureNavLabel}
+                      </div>
+                    ) : (
+                      <div className="payment-nav-code payment-modal-code-pending" dir="ltr" aria-busy="true">
+                        <span className="payment-modal-save-spinner" aria-hidden />
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      className={[
+                        "payment-nav-arrow",
+                        navSpinDirection === "next" ? "payment-nav-arrow--busy" : "",
+                        paymentNavAvailable.next === false ? "payment-nav-arrow--edge" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                      aria-label="קליטת תשלום הבאה"
+                      disabled={nextPaymentNavDisabled}
+                      onClick={goToNextPayment}
+                    >
+                      {navSpinDirection === "next" ? <span className="payment-modal-save-spinner" aria-hidden /> : "▶"}
+                    </button>
+                  </div>
                 </label>
 
                 <div className="payment-upd-addrow">
                   <button type="button" className="payment-upd-add-btn" onClick={() => addPaymentLine()} disabled={saveBusy}>
                     + הוסף תשלום
+                  </button>
+                  <button
+                    type="button"
+                    ref={saveAndNewButtonRef}
+                    className={`payment-upd-save-new-btn${saveBusy ? " is-loading" : ""}`}
+                    onClick={() => void onSaveAndNew()}
+                    onKeyDown={(e) => {
+                      if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
+                      e.preventDefault();
+                      if (!saveBusy && customer) void onSaveAndNew();
+                    }}
+                    disabled={saveBusy || !customer}
+                    title="שומר את התשלום ומיד פותח טופס ריק לתשלום הבא — בלי לסגור את החלון"
+                  >
+                    {saveBusy ? (
+                      <>
+                        <span className="payment-modal-save-spinner" aria-hidden />
+                        שומר…
+                      </>
+                    ) : (
+                      "שמור וחדש"
+                    )}
                   </button>
                   <div className="payment-upd-addrow-meta">
                     <span>מס׳ תשלומים: </span>
@@ -1186,11 +2042,22 @@ export function PaymentModalUpdated({
                     const amtStr = p.amount === "" ? "" : String(p.amount);
                     const cur: PaymentLineCurrency = p.currency;
                     const currSym = cur === "USD" ? "$" : "₪";
+                    /**
+                     * "תשלום N" — מספר הסידור משקף את סדר ההוספה
+                     * (התשלום החדש מוצג ראשון אך מסומן בערך הגבוה ביותר).
+                     * idx=0 (החדש ביותר) = payments.length, ידוע ככזה.
+                     */
+                    const ordinal = payments.length - idx;
+                    const isLatest = idx === 0;
                     return (
-                      <div key={p.id} className="payment-upd-linecard">
+                      <div
+                        key={p.id}
+                        className={`payment-upd-linecard${isLatest ? " payment-upd-linecard--latest" : ""}`}
+                      >
                         <div className="payment-upd-linecard-head">
                           <div className="payment-upd-linecard-title">
-                            תשלום {idx + 1}
+                            תשלום {ordinal}
+                            {isLatest ? <span className="payment-upd-linecard-tag">חדש</span> : null}
                           </div>
                           <button type="button" className="payment-upd-del" aria-label="מחיקת תשלום" onClick={() => removePaymentLine(p.id)}>
                             ✕
@@ -1201,14 +2068,26 @@ export function PaymentModalUpdated({
                           <label className="payment-modal-lbl payment-upd-lbl">
                             סכום
                             <input
+                              ref={idx === 0 ? firstAmountInputRef : undefined}
                               inputMode="decimal"
                               dir="ltr"
-                              className="payment-modal-inp payment-modal-inp--num"
+                              className="payment-modal-inp payment-modal-inp--num payment-modal-inp--amount"
                               value={amtStr}
                               onChange={(e) => {
                                 const raw = sanitizeMoneyInput(e.target.value);
                                 if (!raw) updatePaymentLine(p.id, { amount: "" });
                                 else updatePaymentLine(p.id, { amount: Number(raw) });
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
+                                e.preventDefault();
+                                if (idx !== 0) return;
+                                if (saveBusy) return;
+                                if (!customer) {
+                                  customerCodeInputRef.current?.focus();
+                                  return;
+                                }
+                                window.setTimeout(() => saveAndNewButtonRef.current?.focus(), 0);
                               }}
                             />
                           </label>
@@ -1240,7 +2119,20 @@ export function PaymentModalUpdated({
                             <select
                               className="payment-modal-inp"
                               value={p.paymentMethod}
-                              onChange={(e) => updatePaymentLine(p.id, { paymentMethod: e.target.value as PaymentLineMethod })}
+                              onChange={(e) => {
+                                const nextMethod = e.target.value as PaymentLineMethod;
+                                const patch: Partial<PaymentLine> = {
+                                  paymentMethod: nextMethod,
+                                  vatMode: defaultVatModeForMethod(nextMethod),
+                                };
+                                if (nextMethod === "CHECK") {
+                                  patch.checks =
+                                    p.checks && p.checks.length > 0 ? p.checks : [emptyCheckRow()];
+                                } else {
+                                  patch.checks = undefined;
+                                }
+                                updatePaymentLine(p.id, patch);
+                              }}
                             >
                               <option value="CREDIT">{paymentMethodLabel("CREDIT")}</option>
                               <option value="BANK_TRANSFER">{paymentMethodLabel("BANK_TRANSFER")}</option>
@@ -1249,6 +2141,136 @@ export function PaymentModalUpdated({
                               <option value="OTHER">{paymentMethodLabel("OTHER")}</option>
                             </select>
                           </label>
+                          {p.paymentMethod === "CHECK" ? (
+                            <div className="payment-upd-checks" dir="rtl">
+                              <div className="payment-upd-checks-header">
+                                <span className="payment-upd-checks-header-icon" aria-hidden>
+                                  💳
+                                </span>
+                                <span className="payment-upd-checks-header-title">פרטי צ׳יקים</span>
+                              </div>
+                              {(p.checks?.length ?? 0) === 0 ? (
+                                <button
+                                  type="button"
+                                  className="payment-upd-check-add-row"
+                                  onClick={() => updatePaymentLine(p.id, { checks: [emptyCheckRow()] })}
+                                >
+                                  + הוסף צ׳יק נוסף
+                                </button>
+                              ) : (
+                                <>
+                                  <div className="payment-upd-check-cards">
+                                    {p.checks!.map((ch, chi) => (
+                                      <div className="payment-upd-check-card" key={ch.id}>
+                                        <div className="payment-upd-check-card-head">
+                                          <span className="payment-upd-check-card-title">צ׳יק #{chi + 1}</span>
+                                          {p.checks!.length > 1 ? (
+                                            <button
+                                              type="button"
+                                              className="payment-upd-check-card-remove"
+                                              aria-label="הסר צ׳יק"
+                                              onClick={() => removePaymentLineCheck(p.id, ch.id)}
+                                            >
+                                              ✕
+                                            </button>
+                                          ) : null}
+                                        </div>
+                                        <div className="payment-upd-check-card-body">
+                                          <label className="payment-upd-check-field">
+                                            <span className="payment-upd-check-field-lbl">מס׳ צ׳יק</span>
+                                            <input
+                                              type="text"
+                                              inputMode="numeric"
+                                              dir="ltr"
+                                              className={[
+                                                "payment-upd-check-inp",
+                                                highlightInvalidCheckFields && checkFieldMissingNumber(ch)
+                                                  ? "payment-upd-check-inp--err"
+                                                  : "",
+                                              ]
+                                                .filter(Boolean)
+                                                .join(" ")}
+                                              value={ch.checkNumber}
+                                              onChange={(e) =>
+                                                updatePaymentLineCheck(p.id, ch.id, {
+                                                  checkNumber: sanitizeCheckNumberInput(e.target.value),
+                                                })
+                                              }
+                                              autoComplete="off"
+                                            />
+                                          </label>
+                                          <label className="payment-upd-check-field">
+                                            <span className="payment-upd-check-field-lbl">תאריך פרעון</span>
+                                            <input
+                                              type="date"
+                                              dir="ltr"
+                                              className={[
+                                                "payment-upd-check-inp payment-upd-check-inp--date",
+                                                highlightInvalidCheckFields && checkFieldMissingDue(ch)
+                                                  ? "payment-upd-check-inp--err"
+                                                  : "",
+                                              ]
+                                                .filter(Boolean)
+                                                .join(" ")}
+                                              value={ch.dueDateYmd}
+                                              onChange={(e) =>
+                                                updatePaymentLineCheck(p.id, ch.id, { dueDateYmd: e.target.value })
+                                              }
+                                            />
+                                          </label>
+                                          <label className="payment-upd-check-field">
+                                            <span className="payment-upd-check-field-lbl">סכום צ׳יק</span>
+                                            <input
+                                              type="text"
+                                              inputMode="decimal"
+                                              dir="ltr"
+                                              className={[
+                                                "payment-upd-check-inp",
+                                                highlightInvalidCheckFields && checkFieldMissingAmount(ch)
+                                                  ? "payment-upd-check-inp--err"
+                                                  : "",
+                                              ]
+                                                .filter(Boolean)
+                                                .join(" ")}
+                                              value={ch.amount === "" ? "" : String(ch.amount)}
+                                              onChange={(e) => {
+                                                const raw = sanitizeMoneyInput(e.target.value);
+                                                if (!raw) updatePaymentLineCheck(p.id, ch.id, { amount: "" });
+                                                else updatePaymentLineCheck(p.id, ch.id, { amount: Number(raw) });
+                                              }}
+                                            />
+                                          </label>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className="payment-upd-check-add-row"
+                                    onClick={() => addPaymentLineCheck(p.id)}
+                                  >
+                                    + הוסף צ׳יק נוסף
+                                  </button>
+                                  <div className="payment-upd-checks-summary" dir="rtl">
+                                    <span className="payment-upd-checks-summary-lbl">סה״כ צ׳יקים</span>
+                                    <span className="payment-upd-checks-summary-val" dir="ltr">
+                                      {currSym} {fmtFooterAmount(
+                                        roundMoney2(
+                                          p.checks!.reduce((acc, c) => {
+                                            const n =
+                                              typeof c.amount === "number" && Number.isFinite(c.amount)
+                                                ? c.amount
+                                                : 0;
+                                            return acc + n;
+                                          }, 0),
+                                        ),
+                                      )}
+                                    </span>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          ) : null}
                           <label className="payment-modal-lbl payment-upd-lbl payment-upd-lbl--full">
                             הערה
                             <input
@@ -1263,7 +2285,7 @@ export function PaymentModalUpdated({
 
                         <div className="payment-upd-calc" dir="rtl" aria-live="polite">
                           <div className="payment-upd-calc-row">
-                            <span>הוזן</span>
+                            <span>הזן</span>
                             <span dir="ltr">
                               {currSym} {fmtFooterAmount(typeof p.amount === "number" ? p.amount : 0)}
                             </span>
@@ -1275,13 +2297,16 @@ export function PaymentModalUpdated({
                             </span>
                           </div>
                           <div className="payment-upd-calc-row">
-                            <span>מע״מ</span>
+                            <span>{formatVatPercentLabel()}</span>
                             <span dir="ltr">
                               {currSym} {fmtFooterAmount(calc.vatAmount)}
                             </span>
                           </div>
-                          <div className="payment-upd-calc-row payment-upd-calc-row--final">
-                            <span>סכום סופי</span>
+                          <div
+                            className="payment-upd-calc-row payment-upd-calc-row--net"
+                            title="סכום לתשלום אחרי מע״מ (במטבע השורה)"
+                          >
+                            <span>סכום סופי לתשלום</span>
                             <span dir="ltr">
                               {currSym} {fmtFooterAmount(calc.finalAmount)}
                             </span>
@@ -1296,32 +2321,37 @@ export function PaymentModalUpdated({
                   })}
                 </div>
 
-                <div className="payment-upd-totals">
-                  <Card className="payment-modal-total-ds">
-                    <div className="payment-modal-total payment-modal-total--compact payment-modal-total--pay-only" aria-live="polite">
-                      <div className="payment-modal-total-lbl">סה״כ לתשלום (USD)</div>
-                      <div className="payment-modal-total-val" dir="ltr">
-                        {fmtUsdDisplay(totals.totalUsd)}
-                      </div>
-                      <div className="payment-upd-total-ils" dir="ltr">
-                        {fmtIlsDisplay(totals.totalIls)}
-                      </div>
-                    </div>
-                  </Card>
-                </div>
               </div>
             </div>
 
-            <div className="payment-modal-side-sticky payment-summary-stack">
+            <div className="payment-modal-side-sticky payment-summary-stack payment-summary-stack--v2">
+              <div className="payment-upd-sticky-total payment-upd-sticky-total--basis-led" aria-live="polite">
+                <div className="payment-upd-sticky-total-amounts">
+                  <span className="payment-upd-sticky-total-usd" dir="ltr">
+                    {fmtUsdDisplay(stickyBaseTotals.usd)}
+                  </span>
+                  <div className="payment-upd-sticky-total-lbl">סה״כ לתשלום</div>
+                  <span className="payment-upd-sticky-total-ils" dir="ltr">
+                    {fmtIlsDisplay(stickyBaseTotals.ils)}
+                  </span>
+                </div>
+              </div>
               {saveErr ? <div className="payment-modal-err payment-modal-err--sm">{saveErr}</div> : null}
               <Button
                 type="button"
                 variant="primary"
-                className={`btn-save payment-modal-save${saveBusy ? " loading" : ""}`}
+                className={`btn-save payment-modal-save payment-modal-save--v2${saveBusy ? " loading" : ""}`}
                 disabled={saveBusy || !customer}
-                onClick={() => void onSave()}
+                onClick={() => void onSaveAndClose()}
               >
-                {saveBusy ? "שומר…" : "שמור תשלום"}
+                {saveBusy ? (
+                  <>
+                    <span className="payment-modal-save-spinner" aria-hidden />
+                    שומר…
+                  </>
+                ) : (
+                  "שמור תשלום"
+                )}
               </Button>
             </div>
           </aside>
@@ -1339,6 +2369,94 @@ export function PaymentModalUpdated({
           if (customer?.id) void loadCustomerOrders(customer.id);
         }}
       />
+      {resetCustomerConfirmOpen ? (
+        <div
+          className="adm-oc-edit-request-backdrop"
+          role="presentation"
+          onClick={() => {
+            if (resetCustomerBusy) return;
+            setResetCustomerConfirmOpen(false);
+          }}
+        >
+          <div
+            className="payment-nav-confirm-modal payment-reset-confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+            dir="rtl"
+          >
+            <h4>האם לאפס יתרה זו?</h4>
+            <p>
+              סך יתרה פתוחה{" "}
+              <strong dir="ltr">
+                {fmtUsdDisplay(roundMoney2(Math.max(0, ordersTableFooterTotals.remaining - totals.totalUsd)))}
+              </strong>
+              <br />
+              הפעולה תוריד את ההפרש מהעמלות (מהחדש לישן) ותסגור את כל ההזמנות הפתוחות של הלקוח.
+            </p>
+            <div className="payment-nav-confirm-actions">
+              <button
+                type="button"
+                className="adm-btn adm-btn--ghost adm-btn--dense"
+                disabled={resetCustomerBusy}
+                onClick={() => setResetCustomerConfirmOpen(false)}
+              >
+                ביטול
+              </button>
+              <button
+                type="button"
+                className="adm-btn adm-btn--primary adm-btn--dense"
+                disabled={resetCustomerBusy}
+                onClick={async () => {
+                  setResetCustomerConfirmOpen(false);
+                  await applyResetCustomerBalances();
+                }}
+              >
+                אשר איפוס
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {navUnsavedOpen ? (
+        <div
+          className="adm-oc-edit-request-backdrop"
+          role="presentation"
+          onClick={() => {
+            if (isNavigating) return;
+            setNavUnsavedOpen(null);
+          }}
+        >
+          <div
+            className="payment-nav-confirm-modal payment-reset-confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+            dir="rtl"
+          >
+            <h4>יש שינויים שלא נשמרו</h4>
+            <p>לעבור קליטה אחרת? השינויים הנוכחיים לא יישמרו.</p>
+            <div className="payment-nav-confirm-actions">
+              <button
+                type="button"
+                className="adm-btn adm-btn--ghost adm-btn--dense"
+                disabled={isNavigating}
+                onClick={() => setNavUnsavedOpen(null)}
+              >
+                ביטול
+              </button>
+              <button
+                type="button"
+                className="adm-btn adm-btn--primary adm-btn--dense"
+                disabled={isNavigating}
+                onClick={() => confirmNavUnsavedAndProceed()}
+              >
+                כן
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }

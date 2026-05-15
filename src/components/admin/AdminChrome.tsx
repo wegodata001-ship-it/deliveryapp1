@@ -23,6 +23,7 @@ type Props = {
   canEditOrders: boolean;
   canViewCustomerCard: boolean;
   canCreateCustomer: boolean;
+  viewerIsAdmin: boolean;
 };
 
 export function AdminChrome({
@@ -36,6 +37,7 @@ export function AdminChrome({
   canEditOrders,
   canViewCustomerCard,
   canCreateCustomer,
+  viewerIsAdmin,
 }: Props) {
   const router = useRouter();
   const pathname = usePathname();
@@ -92,6 +94,7 @@ export function AdminChrome({
             canReceivePayments={canReceivePayments}
             canViewCustomerCard={canViewCustomerCard}
             canCreateCustomer={canCreateCustomer}
+            viewerIsAdmin={viewerIsAdmin}
           />
         ) : null}
       </AdminGlobalProvider>

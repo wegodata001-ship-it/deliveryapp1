@@ -66,8 +66,9 @@ function orderRemainingUsd(o: PaymentIntakeOrderBase): number {
 /**
  * מנוע הקצאה מרכזי לקליטת תשלום רגילה + מעודכנת.
  * rules:
- * - ללא סימון ידני: סגירה מהסכום הקטן לגדול
- * - עם סימון ידני: קודם מסומנות, ואז קטנות לגדול מהשאר
+ * - המערך `ordersOldestFirst` חייב להיות ממוין מהישן לחדש (למשל orderDate asc).
+ * - ללא סימון ידני: סגירת חובות לפי סדר כרונולוגי — קודם ההזמנה הישנה ביותר עם יתרה.
+ * - עם סימון ידני: קודם כל ההזמנות המסומנות (בתוכן — מהישן לחדש), ואז שאר החובות (מהישן לחדש).
  */
 export function allocatePaymentAcrossOrders(
   ordersOldestFirst: PaymentIntakeOrderBase[],
@@ -89,11 +90,11 @@ export function allocatePaymentAcrossOrders(
     ? debtRows.filter((x) => !prioritizedOrderIds!.has(x.o.id))
     : debtRows;
 
-  const bySmallestThenInput = (a: { remaining: number; idx: number }, b: { remaining: number; idx: number }) =>
-    a.remaining - b.remaining || a.idx - b.idx;
+  /** סדר כרונולוגי: אינדקס נמוך = הזמנה ישנה יותר ב־ordersOldestFirst */
+  const byOldestFirst = (a: { idx: number }, b: { idx: number }) => a.idx - b.idx;
 
-  priorityRows.sort(bySmallestThenInput);
-  restRows.sort(bySmallestThenInput);
+  priorityRows.sort(byOldestFirst);
+  restRows.sort(byOldestFirst);
 
   const queue = [...priorityRows, ...restRows];
   const byOrderId = new Map<string, number>();

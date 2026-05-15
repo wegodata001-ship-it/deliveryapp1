@@ -24,6 +24,7 @@ enum OrderStatus {
   SENT
   WAITING_FOR_CHINA_EXECUTION
   COMPLETED
+  DEBT_WITHDRAWAL
 }
 
 /** מקור / יעד רכש להזמנה (ניהול וטבלת הזמנות) */
@@ -54,6 +55,13 @@ enum PaymentMethod {
   CASH
   CREDIT
   OTHER
+}
+
+/** סטטוס צ׳יק בקליטה ובטבלת מקור */
+enum PaymentCheckStatus {
+  PENDING
+  DEPOSITED
+  BOUNCED
 }
 
 model User {
@@ -199,6 +207,16 @@ model Order {
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
 
+  /**
+   * סכום שנמשך אוטומטית מקרדיט הלקוח ("משיכה מהחוב").
+   * זה NULL לכל הזמנה רגילה. עבור הזמנה עם status=DEBT_WITHDRAWAL
+   * מאוחסן הסכום שנקזז בפועל מיתרת הזכות של הלקוח
+   * (≤ totalUsd וגם ≤ הקרדיט הזמין בעת השמירה).
+   * לא נוצר Payment עבור הסכום הזה — הוא משפיע על "שולם" של
+   * ההזמנה ישירות, ועל יתרת הלקוח דרך orders − payments הקיים.
+   */
+  debtWithdrawalUsd     Decimal?       @db.Decimal(19, 4)
+
   customer     Customer?     @relation(fields: [customerId], references: [id])
   createdBy    User?         @relation("OrderCreatedBy", fields: [createdById], references: [id])
   paymentPoint PaymentPoint? @relation(fields: [paymentPointId], references: [id])
@@ -217,6 +235,7 @@ model Order {
   @@index([customerId])
   @@index([paymentPointId])
   @@index([editUnlockedForUserId])
+  @@index([weekCode, deletedAt])
 }
 
 model OrderEditRequest {
@@ -261,6 +280,8 @@ model UserNotification {
 model Payment {
   id               String         @id @default(uuid())
   paymentCode      String?        @unique
+  /** מספר קליטה רציף (למשל 92 עבור WGP-P-000092) — ניווט וסדר ERP */
+  paymentNumber    Int?
   customerId       String?
   orderId          String?
   weekCode         String?
@@ -270,6 +291,8 @@ model Payment {
   amountIls        Decimal?       @db.Decimal(19, 4)
   exchangeRate     Decimal?       @db.Decimal(19, 6)
   vatRate          Decimal        @default(18) @db.Decimal(7, 4)
+  /** אחוז עמלה ששמרנו ברגע הקליטה — תצוגתי/תיעודי, אין לו השפעה על amountUsd ואינו שובר חישובים קיימים */
+  commissionPercent Decimal       @default(0) @db.Decimal(7, 4)
   amountWithoutVat Decimal?       @db.Decimal(19, 4)
   snapshotBaseDollarRate  Decimal? @db.Decimal(10, 4)
   snapshotDollarFee       Decimal? @db.Decimal(10, 4)
@@ -290,6 +313,7 @@ model Payment {
   customer  Customer? @relation(fields: [customerId], references: [id])
   order     Order?    @relation(fields: [orderId], references: [id])
   createdBy User?     @relation("PaymentCreatedBy", fields: [createdById], references: [id])
+  checks    PaymentCheck[]
 
   @@index([customerId])
   @@index([orderId])
@@ -297,6 +321,30 @@ model Payment {
   @@index([paymentDate])
   @@index([createdAt])
   @@index([isPaid])
+  @@index([paymentNumber])
+  @@index([paymentDate, isPaid])
+  @@index([weekCode, isPaid])
+}
+
+/** פירוט צ׳קים לקליטת תשלום בצ׳ק — משויך לשורת Payment (בדרך כלל לתשלום הראשי בפיצול להזמנות) */
+model PaymentCheck {
+  id          String   @id @default(cuid())
+  paymentId   String
+  checkNumber String
+  dueDate     DateTime
+  amount      Decimal  @db.Decimal(19, 4)
+  /** ממתין / הופקד / חזר — ברירת מחדל לרשומות חדשות: ממתין */
+  status      PaymentCheckStatus @default(PENDING)
+  /** תשלום הפוכה (שלילי) שנוצר בעת סימון ״חזר״ — למניעת כפילות */
+  reversalPaymentId String? @unique
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([paymentId])
+  @@index([status])
+  @@index([dueDate])
 }
 
 model ReceiptControl {

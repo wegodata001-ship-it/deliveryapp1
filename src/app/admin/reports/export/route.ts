@@ -42,15 +42,16 @@ export async function GET(req: Request) {
       const filters = readFilters(searchParams);
       const report = await getReportTableAction(kind, filters);
 
-      const bodyRows = report.rows.length
-        ? report.rows
-        : [];
-      const summaryRow = new Array(report.columns.length).fill("");
+      const bodyRows = report.rows.length ? report.rows : [];
+      const colCount = report.columns.length;
+      const summaryRow = new Array(colCount).fill("");
       summaryRow[0] = "סה\"כ";
-      if (report.columns.length > 1) summaryRow[1] = report.totals.total;
-      if (report.columns.length > 2) summaryRow[2] = report.totals.paid;
-      if (report.columns.length > 3) summaryRow[3] = report.totals.remaining;
-      const buffer = generateExcel(report.columns, [...bodyRows, summaryRow]);
+      if (colCount > 1) summaryRow[1] = report.totals.total;
+      if (colCount > 2) summaryRow[2] = report.totals.paid;
+      if (colCount > 3) summaryRow[3] = report.totals.remaining;
+      const padLine = (text: string) => [text, ...new Array(Math.max(0, colCount - 1)).fill("")];
+      const prefixRows = [...(report.exportHeaderLines?.map(padLine) ?? [])];
+      const buffer = generateExcel(report.columns, [...bodyRows, summaryRow], prefixRows.length ? prefixRows : undefined);
       return new Response(new Uint8Array(buffer), {
         headers: {
           "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

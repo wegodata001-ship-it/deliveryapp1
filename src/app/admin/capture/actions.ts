@@ -7,8 +7,9 @@ import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth
 import { breakdownIlsIncludingVat, computeFromUsdAmount } from "@/lib/financial-calc";
 import { ensureDefaultFinancialSettings, getCurrentFinancialSettings } from "@/lib/financial-settings";
 import { DEFAULT_WEEK_CODE, formatLocalHm, formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate, parseLocalDateTime } from "@/lib/work-week";
-import { escapeRegExp, orderNumberMatchesWeekFormat } from "@/lib/order-number";
+import { orderNumberMatchesWeekFormat } from "@/lib/order-number";
 import { prisma } from "@/lib/prisma";
+import { allocateNextPaymentCapture } from "@/lib/payment-capture-code";
 import { ensureOnce } from "@/lib/ensure-tables-once";
 import { parseSplitPaymentMethodRaw } from "@/lib/order-capture-payment-methods";
 import { getSelectedCountriesForOrdersInternal } from "@/app/admin/settings/actions";
@@ -79,36 +80,6 @@ export type PaymentCaptureState =
 
 const PAYMENT_METHODS = new Set<string>(Object.values(PaymentMethod));
 const ORDER_STATUSES = new Set<string>(Object.values(OrderStatus));
-
-
-const PAYMENT_CODE_PREFIX = "WGP-P-";
-
-function paymentCodeSuffixPattern(): RegExp {
-  return new RegExp(`^${escapeRegExp(PAYMENT_CODE_PREFIX)}(\\d{6})$`);
-}
-
-async function allocateNextPaymentCode(): Promise<string> {
-  const re = paymentCodeSuffixPattern();
-  const rows = await prisma.payment.findMany({
-    where: { paymentCode: { startsWith: PAYMENT_CODE_PREFIX } },
-    select: { paymentCode: true },
-    take: 200,
-  });
-  let maxN = 0;
-  for (const r of rows) {
-    const c = r.paymentCode?.trim();
-    if (!c) continue;
-    const m = c.match(re);
-    if (m?.[1]) maxN = Math.max(maxN, parseInt(m[1], 10));
-  }
-  for (let bump = 0; bump < 200; bump++) {
-    const n = maxN + 1 + bump;
-    const code = `${PAYMENT_CODE_PREFIX}${String(n).padStart(6, "0")}`;
-    const dup = await prisma.payment.findFirst({ where: { paymentCode: code }, select: { id: true } });
-    if (!dup) return code;
-  }
-  return `${PAYMENT_CODE_PREFIX}${Date.now().toString(36).toUpperCase()}`;
-}
 
 export type OrderCapturePaymentLineInput = {
   paymentMethod: string;
@@ -312,7 +283,7 @@ export async function previewPaymentCodeForCaptureAction(): Promise<
   if (!userHasAnyPermission(me, ["receive_payments"])) {
     return { ok: false, error: "אין הרשאה" };
   }
-  return { ok: true, code: await allocateNextPaymentCode() };
+  return { ok: true, code: (await allocateNextPaymentCapture()).code };
 }
 
 export async function listPaymentLocationsForPaymentAction(): Promise<PaymentLocationOptionRow[]> {
@@ -541,13 +512,15 @@ export async function capturePaymentAction(form: {
     amountUsd = payUsdEst;
   }
 
-  const paymentCode = await allocateNextPaymentCode();
+  const allocated = await allocateNextPaymentCapture();
+  const paymentCode = allocated.code;
   const weekCode = orderWeekCode ?? getWeekCodeForLocalDate(paymentDate);
   const paymentType: "ORDER_PAYMENT" | "GENERAL_PAYMENT" = oid ? "ORDER_PAYMENT" : "GENERAL_PAYMENT";
 
   const pay = await prisma.payment.create({
     data: {
       paymentCode,
+      paymentNumber: allocated.paymentNumber,
       orderId: oid || null,
       customerId: cid,
       weekCode,
@@ -1941,12 +1914,41 @@ const QUICK_LIST_STATUS_SET = new Set<OrderStatus>([
   OrderStatus.OPEN,
   OrderStatus.WAITING_FOR_EXECUTION,
   OrderStatus.COMPLETED,
+  OrderStatus.CANCELLED,
+  OrderStatus.DEBT_WITHDRAWAL,
 ]);
+
+/**
+ * חישוב הסכום הזמין לקיזוז מקרדיט הלקוח (USD), לפי הנוסחה
+ * הקיימת של customer balance: payments − orders.
+ * מחזיר 0 אם ללקוח אין יתרת זכות.
+ */
+async function computeAvailableCustomerCreditUsd(
+  customerId: string,
+  excludeOrderDebtWithdrawalUsd: number,
+): Promise<number> {
+  const [orderAgg, payAgg] = await Promise.all([
+    prisma.order.aggregate({
+      where: { customerId, deletedAt: null },
+      _sum: { totalUsd: true },
+    }),
+    prisma.payment.aggregate({
+      where: { customerId, isPaid: true },
+      _sum: { amountUsd: true },
+    }),
+  ]);
+  const orders = Number(orderAgg._sum.totalUsd ?? 0);
+  const payments = Number(payAgg._sum.amountUsd ?? 0);
+  // creditAvailable = payments - orders + (debt already applied to *this* order)
+  // — כך שאם ההזמנה כבר התקזזה חלקית, אנחנו לא סופרים את אותה משיכה פעמיים.
+  const credit = payments - orders + Math.max(0, excludeOrderDebtWithdrawalUsd);
+  return Math.max(0, credit);
+}
 
 export async function updateOrderListStatusAction(
   orderId: string,
   status: OrderStatus,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{ ok: true; debtWithdrawalUsd?: number } | { ok: false; error: string }> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["edit_orders"])) {
     return { ok: false, error: "אין הרשאה" };
@@ -1962,6 +1964,9 @@ export async function updateOrderListStatusAction(
     select: {
       id: true,
       status: true,
+      customerId: true,
+      totalUsd: true,
+      debtWithdrawalUsd: true,
       editUnlockedForUserId: true,
       editUnlockedUntil: true,
     },
@@ -1974,18 +1979,144 @@ export async function updateOrderListStatusAction(
     select: { status: true, editUnlockedForUserId: true, editUnlockedUntil: true },
   });
   if (!gate || !canUserEditCompletedOrder(me, gate)) {
-    return { ok: false, error: "הזמנה במצב ״מוכן״ נעולה — שינוי סטטוס דורש אישור מנהל." };
+    return { ok: false, error: "הזמנה במצב ״מוכן״ או ״מבוטל״ נעולה — שינוי סטטוס דורש אישור מנהל." };
   }
+
+  /**
+   * משיכה מהחוב — לוגיקה ייעודית:
+   * 1) מחשבים את היתרה הפנויה של הלקוח (payments − orders).
+   * 2) הסכום שנמשך = min(totalUsd של ההזמנה, היתרה הפנויה).
+   * 3) שומרים על העמודה החדשה debtWithdrawalUsd; לא יוצרים Payment record
+   *    כדי לא לזהם את "סה״כ תשלומים" / דוחות הכנסה. יתרת הלקוח
+   *    תמשיך להיות נכונה דרך orders − payments הקיים.
+   */
+  if (status === OrderStatus.DEBT_WITHDRAWAL) {
+    if (!exists.customerId) {
+      return { ok: false, error: "אי אפשר למשוך מהחוב — להזמנה אין לקוח משויך" };
+    }
+    const orderTotal = Number(exists.totalUsd ?? 0);
+    if (!(orderTotal > 0)) {
+      return { ok: false, error: "אי אפשר למשוך מהחוב — סכום ההזמנה לא תקין" };
+    }
+    const alreadyApplied = Number(exists.debtWithdrawalUsd ?? 0);
+    const availableCredit = await computeAvailableCustomerCreditUsd(
+      exists.customerId,
+      alreadyApplied,
+    );
+    const toWithdraw = Math.min(orderTotal, availableCredit);
+    const toWithdrawDec = new Prisma.Decimal(toWithdraw.toFixed(4));
+
+    await prisma.order.update({
+      where: { id },
+      data: { status, debtWithdrawalUsd: toWithdrawDec },
+    });
+
+    void prisma.auditLog
+      .create({
+        data: {
+          userId: me.id,
+          actionType: "ORDER_DEBT_WITHDRAWAL_APPLIED",
+          entityType: "Order",
+          entityId: id,
+          metadata: {
+            orderTotalUsd: orderTotal,
+            availableCreditUsd: availableCredit,
+            withdrawnUsd: toWithdraw,
+            remainingPayableUsd: Math.max(0, orderTotal - toWithdraw),
+          } as Prisma.InputJsonValue,
+        },
+      })
+      .catch(() => {});
+
+    return { ok: true, debtWithdrawalUsd: toWithdraw };
+  }
+
+  /**
+   * מעבר משינוי "משיכה מהחוב" לכל סטטוס אחר — מאפסים את
+   * debtWithdrawalUsd כדי שיתרת הלקוח לא תיוותר עם קיזוז שגוי.
+   */
+  const shouldClearDebtWithdrawal =
+    (exists.status as OrderStatus) === OrderStatus.DEBT_WITHDRAWAL &&
+    (status as OrderStatus) !== OrderStatus.DEBT_WITHDRAWAL &&
+    exists.debtWithdrawalUsd != null;
 
   await prisma.order.update({
     where: { id },
-    data: { status },
+    data: {
+      status,
+      ...(shouldClearDebtWithdrawal ? { debtWithdrawalUsd: null } : {}),
+    },
   });
 
   revalidatePath("/admin");
   revalidatePath("/admin/orders");
   revalidatePath(`/admin/orders/${id}`);
 
+  return { ok: true };
+}
+
+/** עדכון inline מהטבלה — אמצעי תשלום בלבד (ללא שינויי DB structure / חישובים) */
+export async function updateOrderListPaymentMethodAction(
+  orderId: string,
+  method: PaymentMethod | null,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["edit_orders"])) {
+    return { ok: false, error: "אין הרשאה" };
+  }
+  const id = orderId.trim();
+  if (!id) return { ok: false, error: "חסר מזהה הזמנה" };
+  if (method !== null && !PAYMENT_METHODS.has(method)) {
+    return { ok: false, error: "אמצעי תשלום לא תקין" };
+  }
+
+  const existing = await prisma.order.findFirst({
+    where: { id, deletedAt: null },
+    select: { id: true, status: true, editUnlockedForUserId: true, editUnlockedUntil: true },
+  });
+  if (!existing) return { ok: false, error: "הזמנה לא נמצאה" };
+  if (!canUserEditCompletedOrder(me, existing)) {
+    return { ok: false, error: "הזמנה במצב ״מוכן״ או ״מבוטל״ נעולה — שינוי דורש אישור מנהל." };
+  }
+
+  await prisma.order.update({ where: { id }, data: { paymentMethod: method } });
+  return { ok: true };
+}
+
+/** עדכון inline מהטבלה — מקום תשלום (IntakeLocation id) בלבד */
+export async function updateOrderListPaymentLocationAction(
+  orderId: string,
+  locationId: string | null,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["edit_orders"])) {
+    return { ok: false, error: "אין הרשאה" };
+  }
+  const id = orderId.trim();
+  if (!id) return { ok: false, error: "חסר מזהה הזמנה" };
+
+  const existing = await prisma.order.findFirst({
+    where: { id, deletedAt: null },
+    select: { id: true, status: true, editUnlockedForUserId: true, editUnlockedUntil: true },
+  });
+  if (!existing) return { ok: false, error: "הזמנה לא נמצאה" };
+  if (!canUserEditCompletedOrder(me, existing)) {
+    return { ok: false, error: "הזמנה במצב ״מוכן״ או ״מבוטל״ נעולה — שינוי דורש אישור מנהל." };
+  }
+
+  const trimmedLoc = locationId?.trim() || null;
+  if (trimmedLoc) {
+    const exists = await prisma.intakeLocation.findFirst({
+      where: { id: trimmedLoc },
+      select: { id: true },
+    });
+    if (!exists) return { ok: false, error: "מקום תשלום לא קיים" };
+  }
+
+  await prisma.order.update({
+    where: { id },
+    data: { locationId: trimmedLoc, paymentPointId: null },
+  });
   return { ok: true };
 }
 
@@ -2095,7 +2226,7 @@ async function updateOrderWorkPanelActionInner(
   if (!canUserEditCompletedOrder(me, effectiveGate)) {
     return {
       ok: false,
-      error: "הזמנה במצב ״מוכן״ נעולה לעריכה. נדרש אישור מנהל — שלחו בקשת עריכה מהמסך.",
+      error: "הזמנה במצב ״מוכן״ או ״מבוטל״ נעולה לעריכה. נדרש אישור מנהל — שלחו בקשת עריכה מהמסך.",
     };
   }
   if (unlockExpired) {

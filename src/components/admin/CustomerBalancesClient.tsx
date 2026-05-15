@@ -6,6 +6,7 @@ import {
   listCustomerBalancesAction,
   updateCustomerBalanceStatusAction,
   type CustomerBalanceDebtFilter,
+  type CustomerBalancePaymentFlow,
   type CustomerBalanceRow,
   type CustomerBalanceSort,
   type CustomerBalancesPayload,
@@ -41,7 +42,16 @@ const DEBT_STATUS_LABELS: Record<CustomerBalanceDebtFilter, string> = {
   ALL: "הכל",
   OWES: "חייב",
   PAID_FULL: "שולם במלואו",
-  PARTIAL: "יתרה חלקית",
+  PARTIAL: "שולם חלקית",
+  NOT_PAID: "ללא תשלום",
+  LOW_BALANCE: "יתרה נמוכה",
+};
+
+const PAYMENT_FLOW_LABELS: Record<CustomerBalancePaymentFlow, string> = {
+  PAID: "שולם במלואו",
+  PARTIAL: "שולם חלקית",
+  NOT_PAID: "ללא תשלום",
+  LOW_DEBT: "יתרה נמוכה",
 };
 
 const SORT_LABELS: Record<CustomerBalanceSort, string> = {
@@ -49,6 +59,10 @@ const SORT_LABELS: Record<CustomerBalanceSort, string> = {
   balance_asc: "יתרה: נמוך → גבוה",
   name: "שם לקוח",
   orders_total: "סה\"כ הזמנות (ש\"ח)",
+  week_desc: "שבוע AH: גבוה → נמוך",
+  week_asc: "שבוע AH: נמוך → גבוה",
+  last_order_desc: "תאריך הזמנה אחרונה: חדש → ישן",
+  last_order_asc: "תאריך הזמנה אחרונה: ישן → חדש",
 };
 
 function generateWeeks(max = 300): string[] {
@@ -85,19 +99,52 @@ function pageNumbers(page: number, totalPages: number): number[] {
   return Array.from({ length: end - start + 1 }, (_, i) => start + i);
 }
 
+function formatHeDate(ymd: string): string {
+  const t = (ymd || "").trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t);
+  if (!m) return t;
+  return `${m[3]}/${m[2]}/${m[1]}`;
+}
+
+function balancesScopeSubtitle(f: BalancesFiltersState): string | null {
+  const upto = normalizeAhWeekCode(f.uptoWeekCode.trim());
+  if (upto) return `מציג יתרות עד ${upto}`;
+  const to = (f.toYmd || "").trim();
+  if (to && /^\d{4}-\d{2}-\d{2}$/.test(to)) return `מציג יתרות עד ${formatHeDate(to)}`;
+  const wk = (f.weekCode || "").trim();
+  if (wk && wk !== "—") return `מציג יתרות עבור שבוע ${wk}`;
+  return null;
+}
+
+function paymentFlowBadgeClass(flow: CustomerBalancePaymentFlow): string {
+  if (flow === "PAID") return "adm-balance-flow adm-balance-flow--paid";
+  if (flow === "PARTIAL") return "adm-balance-flow adm-balance-flow--partial";
+  if (flow === "NOT_PAID") return "adm-balance-flow adm-balance-flow--none";
+  return "adm-balance-flow adm-balance-flow--low";
+}
+
+function rowPaymentFlowHighlight(flow: CustomerBalancePaymentFlow): string {
+  if (flow === "PARTIAL") return "adm-balance-tr--flow-partial";
+  if (flow === "NOT_PAID") return "adm-balance-tr--flow-none";
+  if (flow === "LOW_DEBT") return "adm-balance-tr--flow-low";
+  return "";
+}
+
 export type BalancesFiltersState = {
   weekCode: string;
+  /** צבירה עד סוף שבוע AH (אופציונלי) */
+  uptoWeekCode: string;
   fromYmd: string;
   toYmd: string;
   sourceCountry: OrderCountryCode | "";
   balanceDebtStatus: CustomerBalanceDebtFilter;
   sort: CustomerBalanceSort;
+  /** סינון תצוגה לפי מטבע חוב (לא משנה חישוב) */
+  currencyView: "" | "ILS" | "USD";
 };
 
 export type BalancesSearchDraft = {
-  name: string;
-  code: string;
-  phone: string;
+  smart: string;
   minBalanceIls: string;
   maxBalanceIls: string;
 };
@@ -107,25 +154,28 @@ function defaultBalancesFilters(): BalancesFiltersState {
   const code = getWeekCodeForLocalDate(start);
   return {
     weekCode: normalizeAhWeekCode(code) ?? DEFAULT_WEEK_CODE,
+    uptoWeekCode: "",
     fromYmd: formatLocalYmd(start),
     toYmd: formatLocalYmd(end),
     sourceCountry: "",
     balanceDebtStatus: "ALL",
     sort: "balance_desc",
+    currencyView: "",
   };
 }
 
 function defaultSearchDraft(): BalancesSearchDraft {
-  return { name: "", code: "", phone: "", minBalanceIls: "", maxBalanceIls: "" };
+  return { smart: "", minBalanceIls: "", maxBalanceIls: "" };
 }
 
 function parseWeekFromUrl(raw: string | null): string | null {
   return normalizeAhWeekCode(raw);
 }
 
-/** רק שבוע / תאריכים / מדינה מה־URL — לא מחליף חיפוש, מיון או סטטוס יתרה */
-function parseStructuralFromSearchParams(sp: URLSearchParams): Pick<BalancesFiltersState, "weekCode" | "fromYmd" | "toYmd" | "sourceCountry"> {
+/** רק שבוע / תאריכים / מדינה / עד-שבוע מה־URL — לא מחליף חיפוש, מיון או סטטוס יתרה */
+function parseStructuralFromSearchParams(sp: URLSearchParams): Pick<BalancesFiltersState, "weekCode" | "uptoWeekCode" | "fromYmd" | "toYmd" | "sourceCountry"> {
   const weekRaw = parseWeekFromUrl(sp.get("week"));
+  const uptoRaw = parseWeekFromUrl(sp.get("upto"));
   const from = sp.get("from") || "";
   const to = sp.get("to") || "";
   const countryRaw = sp.get("country") || "";
@@ -136,6 +186,7 @@ function parseStructuralFromSearchParams(sp: URLSearchParams): Pick<BalancesFilt
     if (r) {
       return {
         weekCode: weekRaw,
+        uptoWeekCode: uptoRaw ?? "",
         fromYmd: from && /^\d{4}-\d{2}-\d{2}$/.test(from) ? from : r.from,
         toYmd: to && /^\d{4}-\d{2}-\d{2}$/.test(to) ? to : r.to,
         sourceCountry: country,
@@ -147,6 +198,7 @@ function parseStructuralFromSearchParams(sp: URLSearchParams): Pick<BalancesFilt
     const wk = getAhWeekCodeFromDateRange(from, to);
     return {
       weekCode: wk ?? "—",
+      uptoWeekCode: uptoRaw ?? "",
       fromYmd: from,
       toYmd: to,
       sourceCountry: country,
@@ -154,7 +206,7 @@ function parseStructuralFromSearchParams(sp: URLSearchParams): Pick<BalancesFilt
   }
 
   const d = defaultBalancesFilters();
-  return { weekCode: d.weekCode, fromYmd: d.fromYmd, toYmd: d.toYmd, sourceCountry: country };
+  return { weekCode: d.weekCode, uptoWeekCode: uptoRaw ?? "", fromYmd: d.fromYmd, toYmd: d.toYmd, sourceCountry: country };
 }
 
 export function CustomerBalancesClient() {
@@ -169,6 +221,7 @@ export function CustomerBalancesClient() {
   const [searchDraft, setSearchDraft] = useState<BalancesSearchDraft>(defaultSearchDraft);
   const [debouncedSearch, setDebouncedSearch] = useState<BalancesSearchDraft>(defaultSearchDraft);
   const [weekInput, setWeekInput] = useState(() => defaultBalancesFilters().weekCode);
+  const [uptoWeekInput, setUptoWeekInput] = useState("");
   const [payload, setPayload] = useState<CustomerBalancesPayload | null>(null);
   const [page, setPage] = useState(1);
   const [err, setErr] = useState<string | null>(null);
@@ -178,11 +231,13 @@ export function CustomerBalancesClient() {
     setBalancesFilters((f) => ({
       ...f,
       weekCode: struct.weekCode,
+      uptoWeekCode: struct.uptoWeekCode,
       fromYmd: struct.fromYmd,
       toYmd: struct.toYmd,
       sourceCountry: struct.sourceCountry,
     }));
     setWeekInput(struct.weekCode === "—" ? "—" : struct.weekCode);
+    setUptoWeekInput(struct.uptoWeekCode || "");
     setUrlReady(true);
   }, [sp]);
 
@@ -190,7 +245,7 @@ export function CustomerBalancesClient() {
     const t = window.setTimeout(() => {
       setDebouncedSearch(searchDraft);
       setPage(1);
-    }, 300);
+    }, 400);
     return () => window.clearTimeout(t);
   }, [searchDraft]);
 
@@ -222,15 +277,15 @@ export function CustomerBalancesClient() {
           fromYmd: balancesFilters.fromYmd,
           toYmd: balancesFilters.toYmd,
           weekCode: weekCodeForQuery,
+          uptoWeekCode: balancesFilters.uptoWeekCode.trim() || undefined,
           sourceCountry: balancesFilters.sourceCountry,
           filters: {
-            name: debouncedSearch.name,
-            code: debouncedSearch.code,
-            phone: debouncedSearch.phone,
+            smart: debouncedSearch.smart.trim() || undefined,
             minBalanceIls: debouncedSearch.minBalanceIls,
             maxBalanceIls: debouncedSearch.maxBalanceIls,
             balanceDebtStatus: balancesFilters.balanceDebtStatus,
             sort: balancesFilters.sort,
+            currencyView: balancesFilters.currencyView || undefined,
           },
         }),
       { message: "טוען יתרות...", mode: "bar" },
@@ -243,13 +298,11 @@ export function CustomerBalancesClient() {
     };
   }, [urlReady, page, balancesFilters, debouncedSearch, weekCodeForQuery, runWithLoading]);
 
-  const tableBusy = !urlReady || isLoading;
-  const searchPending =
-    searchDraft.name !== debouncedSearch.name ||
-    searchDraft.code !== debouncedSearch.code ||
-    searchDraft.phone !== debouncedSearch.phone ||
+  const searchPending = searchDraft.smart !== debouncedSearch.smart ||
     searchDraft.minBalanceIls !== debouncedSearch.minBalanceIls ||
     searchDraft.maxBalanceIls !== debouncedSearch.maxBalanceIls;
+
+  const tableBusy = !urlReady || isLoading;
 
   const syncUrl = useCallback(() => {
     if (!urlReady) return;
@@ -259,11 +312,20 @@ export function CustomerBalancesClient() {
     const curTo = sp.get("to") ?? "";
     const curCountry = sp.get("country") ?? "";
     const nextCountry = balancesFilters.sourceCountry || "";
-    if (curWeek === weekQ && curFrom === balancesFilters.fromYmd && curTo === balancesFilters.toYmd && curCountry === nextCountry) {
+    const curUpto = sp.get("upto") ?? "";
+    const nextUpto = balancesFilters.uptoWeekCode.trim();
+    if (
+      curWeek === weekQ &&
+      curFrom === balancesFilters.fromYmd &&
+      curTo === balancesFilters.toYmd &&
+      curCountry === nextCountry &&
+      curUpto === nextUpto
+    ) {
       return;
     }
     const nextHref = withQuery(pathname, sp, {
       week: weekQ,
+      upto: nextUpto || null,
       from: balancesFilters.fromYmd,
       to: balancesFilters.toYmd,
       country: nextCountry || null,
@@ -274,7 +336,7 @@ export function CustomerBalancesClient() {
 
   useEffect(() => {
     syncUrl();
-  }, [balancesFilters.fromYmd, balancesFilters.toYmd, balancesFilters.weekCode, balancesFilters.sourceCountry, syncUrl]);
+  }, [balancesFilters.fromYmd, balancesFilters.toYmd, balancesFilters.weekCode, balancesFilters.uptoWeekCode, balancesFilters.sourceCountry, syncUrl]);
 
   const pages = useMemo(() => pageNumbers(payload?.page ?? page, payload?.totalPages ?? 1), [payload?.page, payload?.totalPages, page]);
 
@@ -307,10 +369,24 @@ export function CustomerBalancesClient() {
     setPage(1);
   }
 
+  function onBlurUptoWeekInput() {
+    window.setTimeout(() => {
+      const normalized = normalizeAhWeekCode(uptoWeekInput);
+      if (!normalized) {
+        setUptoWeekInput(balancesFilters.uptoWeekCode || "");
+        return;
+      }
+      setUptoWeekInput(normalized);
+      setBalancesFilters((f) => ({ ...f, uptoWeekCode: normalized }));
+      setPage(1);
+    }, 120);
+  }
+
   function clearPageFilters() {
     const d = defaultBalancesFilters();
     setBalancesFilters(d);
     setWeekInput(d.weekCode);
+    setUptoWeekInput("");
     setSearchDraft(defaultSearchDraft());
     setDebouncedSearch(defaultSearchDraft());
     setPage(1);
@@ -325,7 +401,7 @@ export function CustomerBalancesClient() {
 
   function openPayment(row: CustomerBalanceRow) {
     openWindow({
-      type: "payments",
+      type: "paymentsUpdated",
       props: {
         customerId: row.customerId,
         customerName: row.customerName,
@@ -368,6 +444,44 @@ export function CustomerBalancesClient() {
         </div>
       </div>
 
+      {payload?.stats ? (
+        <div className="adm-balances-kpi-grid" dir="rtl">
+          <div className="adm-balances-kpi-card">
+            <span className="adm-balances-kpi-lbl">סה״כ חייבים (₪)</span>
+            <span className="adm-balances-kpi-val" dir="ltr">
+              {payload.stats.totalDebtIls}
+            </span>
+          </div>
+          <div className="adm-balances-kpi-card">
+            <span className="adm-balances-kpi-lbl">סה״כ זכות (₪)</span>
+            <span className="adm-balances-kpi-val" dir="ltr">
+              {payload.stats.totalCreditIls}
+            </span>
+          </div>
+          <div className="adm-balances-kpi-card">
+            <span className="adm-balances-kpi-lbl">לקוחות עם חוב</span>
+            <span className="adm-balances-kpi-val">{payload.stats.withDebtCount}</span>
+          </div>
+          <div className="adm-balances-kpi-card">
+            <span className="adm-balances-kpi-lbl">לקוחות ללא חוב</span>
+            <span className="adm-balances-kpi-val">{payload.stats.noDebtCount}</span>
+          </div>
+          <div className="adm-balances-kpi-card">
+            <span className="adm-balances-kpi-lbl">שולם חלקית</span>
+            <span className="adm-balances-kpi-val">{payload.stats.partialCount}</span>
+          </div>
+          <div className="adm-balances-kpi-card">
+            <span className="adm-balances-kpi-lbl">ללא תשלום</span>
+            <span className="adm-balances-kpi-val">{payload.stats.notPaidCount}</span>
+          </div>
+          <div className="adm-balances-kpi-card">
+            <span className="adm-balances-kpi-lbl">לקוחות עם יתרה גבוהה</span>
+            <span className="adm-balances-kpi-val">{payload.stats.highDebtCount}</span>
+            <span className="adm-balances-kpi-hint">מעל ‎₪15,000</span>
+          </div>
+        </div>
+      ) : null}
+
       {err ? <div className="adm-error">{err}</div> : null}
       {searchPending ? (
         <p className="adm-inline-search-hint" role="status">
@@ -375,7 +489,7 @@ export function CustomerBalancesClient() {
         </p>
       ) : null}
 
-      <div className="adm-balances-filters-panel">
+      <div className="adm-balances-filters-panel adm-balances-filters-panel--sticky">
         <div className="adm-balances-filters-row adm-balances-filters-row--primary">
           <label className="adm-balances-field">
             <span className="adm-balances-field-label">שבוע AH</span>
@@ -436,40 +550,33 @@ export function CustomerBalancesClient() {
               ))}
             </select>
           </label>
+          <label className="adm-balances-field">
+            <span className="adm-balances-field-label">עד שבוע AH (צבירה)</span>
+            <div className="adm-balances-week-wrap">
+              <input
+                className="adm-balances-input"
+                type="text"
+                list="adm-balances-week-options"
+                disabled={isLoading}
+                value={uptoWeekInput}
+                placeholder="למשל AH-118"
+                onChange={(e) => setUptoWeekInput(e.target.value.toUpperCase())}
+                onBlur={onBlurUptoWeekInput}
+              />
+            </div>
+          </label>
         </div>
 
         <div className="adm-balances-filters-row adm-balances-filters-row--secondary">
-          <label className="adm-balances-field">
-            <span className="adm-balances-field-label">חיפוש שם</span>
+          <label className="adm-balances-field adm-balances-field--smart">
+            <span className="adm-balances-field-label">חיפוש חכם</span>
             <input
               className="adm-balances-input"
               disabled={isLoading}
-              value={searchDraft.name}
-              onChange={(e) => setSearchDraft((s) => ({ ...s, name: e.target.value }))}
-              placeholder="שם תצוגה / עברית / אנגלית…"
+              value={searchDraft.smart}
+              onChange={(e) => setSearchDraft((s) => ({ ...s, smart: e.target.value }))}
+              placeholder="חיפוש לקוח / קוד / טלפון / הערות…"
               dir="rtl"
-            />
-          </label>
-          <label className="adm-balances-field">
-            <span className="adm-balances-field-label">חיפוש קוד</span>
-            <input
-              className="adm-balances-input"
-              disabled={isLoading}
-              value={searchDraft.code}
-              onChange={(e) => setSearchDraft((s) => ({ ...s, code: e.target.value }))}
-              placeholder="חלקי או מלא"
-              dir="ltr"
-            />
-          </label>
-          <label className="adm-balances-field">
-            <span className="adm-balances-field-label">טלפון</span>
-            <input
-              className="adm-balances-input"
-              disabled={isLoading}
-              value={searchDraft.phone}
-              onChange={(e) => setSearchDraft((s) => ({ ...s, phone: e.target.value }))}
-              placeholder="טלפון / טלפון נוסף"
-              dir="ltr"
             />
           </label>
           <label className="adm-balances-field">
@@ -495,7 +602,23 @@ export function CustomerBalancesClient() {
             />
           </label>
           <label className="adm-balances-field">
-            <span className="adm-balances-field-label">סטטוס יתרה</span>
+            <span className="adm-balances-field-label">מטבע חוב (תצוגה)</span>
+            <select
+              className="adm-balances-input"
+              disabled={isLoading}
+              value={balancesFilters.currencyView}
+              onChange={(e) => {
+                setBalancesFilters((f) => ({ ...f, currencyView: e.target.value as "" | "ILS" | "USD" }));
+                setPage(1);
+              }}
+            >
+              <option value="">הכל</option>
+              <option value="ILS">חוב בש״ח בלבד</option>
+              <option value="USD">חוב בדולר בלבד</option>
+            </select>
+          </label>
+          <label className="adm-balances-field">
+            <span className="adm-balances-field-label">סטטוס</span>
             <select
               className="adm-balances-input"
               disabled={isLoading}
@@ -539,7 +662,13 @@ export function CustomerBalancesClient() {
         </div>
       </div>
 
-      <div className="adm-balances-table-wrap" aria-busy={tableBusy}>
+      {balancesScopeSubtitle(balancesFilters) ? (
+        <p className="adm-balances-scope-line" role="note">
+          {balancesScopeSubtitle(balancesFilters)}
+        </p>
+      ) : null}
+
+      <div className="adm-balances-table-wrap" aria-busy={isLoading}>
         <table className="adm-table adm-balances-table">
           <thead>
             <tr>
@@ -550,14 +679,14 @@ export function CustomerBalancesClient() {
               <th className="adm-balances-th-num">סה&quot;כ זיכויים</th>
               <th className="adm-balances-th-balance">יתרה בשקלים</th>
               <th className="adm-balances-th-num">יתרה בדולר</th>
-              <th className="adm-balances-th-status">סטטוס יתרה</th>
+              <th className="adm-balances-th-status">סטטוס</th>
               <th className="adm-balances-th-status">סטטוס גבייה</th>
               <th className="adm-balances-th-actions">פעולות</th>
             </tr>
           </thead>
           <tbody>
-            {tableBusy ? (
-              <TableSkeleton rows={7} columns={colCount} />
+            {!urlReady || isLoading ? (
+              <TableSkeleton rows={8} columns={colCount} />
             ) : !payload || payload.rows.length === 0 ? (
               <tr>
                 <td colSpan={colCount} className="adm-table-empty">
@@ -570,7 +699,16 @@ export function CustomerBalancesClient() {
                 const canReceivePayment = dec(row.balanceILS) > 0;
                 const hasCredits = dec(row.totalCreditsILS) > 0;
                 return (
-                  <tr key={row.customerId} className={`adm-balance-row adm-balance-row--${row.status.toLowerCase()}`}>
+                  <tr
+                    key={row.customerId}
+                    className={[
+                      "adm-balance-row",
+                      `adm-balance-row--${row.status.toLowerCase()}`,
+                      rowPaymentFlowHighlight(row.paymentFlow),
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                  >
                     <td className="adm-balances-td-name">
                       <button type="button" className="adm-balance-link" onClick={() => openLedger(row)}>
                         {row.customerName}
@@ -615,11 +753,7 @@ export function CustomerBalancesClient() {
                       {money("$", row.balanceUSD)}
                     </td>
                     <td className="adm-balances-td-status">
-                      {row.noOrdersInRange && hasCredits ? (
-                        <span className="adm-balance-kind adm-balance-kind--credit">🟩 זכות</span>
-                      ) : (
-                        <span className={balanceView.className}>{balanceView.badge}</span>
-                      )}
+                      <span className={paymentFlowBadgeClass(row.paymentFlow)}>{PAYMENT_FLOW_LABELS[row.paymentFlow]}</span>
                     </td>
                     <td className="adm-balances-td-status">
                       <select

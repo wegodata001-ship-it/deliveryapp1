@@ -1,16 +1,15 @@
 import type { OrderStatus } from "@prisma/client";
-import type { AppUser } from "@/lib/admin-auth";
-import { isAdminUser } from "@/lib/admin-auth";
 
 /** משך פתיחת נעילה לאחר אישור מנהל (ברירת מחדל: 30 דקות) */
 export const ORDER_EDIT_UNLOCK_DURATION_MS = 30 * 60 * 1000;
 
 /**
  * הזמנות שדורשות אישור מנהל לפני עריכה (לעובדים שאינם אדמין).
- * ב־UI רשימת ההזמנות סטטוס זה מוצג כ״מוכן״ — ב־DB זה `COMPLETED`.
+ * - `COMPLETED` — ב־UI מוצג לרוב כ״מוכן״ / הושלמה.
+ * - `CANCELLED` — הזמנה מבוטלת, עריכה רגישה לאותה שכבת הרשאות.
  */
 export function orderStatusRequiresEditApproval(status: OrderStatus): boolean {
-  return status === "COMPLETED";
+  return status === "COMPLETED" || status === "CANCELLED";
 }
 
 export function hasActiveEditUnlock(params: {
@@ -23,10 +22,15 @@ export function hasActiveEditUnlock(params: {
   return params.editUnlockedUntil.getTime() > Date.now();
 }
 
-/** האם המשתמש הנוכחי רשאי לערוך הזמנה שסטטוסה הושלמה */
-export function canUserEditCompletedOrder(user: AppUser, order: OrderEditUnlockFields): boolean {
+type EditGateUser = {
+  id: string;
+  role: "ADMIN" | "EMPLOYEE";
+};
+
+/** האם המשתמש הנוכחי רשאי לערוך הזמנה בסטטוס רגיש (מוכן / מבוטל) */
+export function canUserEditCompletedOrder(user: EditGateUser, order: OrderEditUnlockFields): boolean {
   if (!orderStatusRequiresEditApproval(order.status)) return true;
-  if (isAdminUser(user)) return true;
+  if (user.role === "ADMIN") return true;
   return hasActiveEditUnlock({
     editUnlockedForUserId: order.editUnlockedForUserId,
     editUnlockedUntil: order.editUnlockedUntil,
@@ -39,3 +43,10 @@ export type OrderEditUnlockFields = {
   editUnlockedForUserId: string | null;
   editUnlockedUntil: Date | null;
 };
+
+/** תווית קצרה לתוכן (התראות / מודלים) */
+export function orderSensitiveStatusHe(status: OrderStatus): string {
+  if (status === "CANCELLED") return "מבוטלת";
+  if (status === "COMPLETED") return "מוכנה";
+  return status;
+}

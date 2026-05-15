@@ -96,6 +96,7 @@ const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   SENT: "נשלחה",
   WAITING_FOR_CHINA_EXECUTION: "ממתינה לביצוע סין",
   COMPLETED: "הושלמה",
+  DEBT_WITHDRAWAL: "משיכה מהחוב",
 };
 
 const EDIT_ORDER_STATUS_OPTIONS: { value: OrderStatus; label: string }[] = (
@@ -1137,7 +1138,7 @@ export function OrderCreatePanel({
 
         {isEdit && formLocked ? (
           <div className="adm-oc-edit-lock-banner" role="status">
-            <p>הזמנה זו סגורה לעריכה. יש לשלוח בקשת אישור מנהל.</p>
+            <p>הזמנה זו נעולה לעריכה (מוכנה או מבוטלת). יש לשלוח בקשת אישור מנהל.</p>
             {editGate?.hasPendingEditRequest ? (
               <p style={{ marginTop: "0.35rem", fontWeight: 700 }}>
                 {editGate.pendingEditRequestOwnedByMe

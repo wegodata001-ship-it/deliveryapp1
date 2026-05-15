@@ -2,7 +2,10 @@
 
 import { useEffect, useId, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import { getOrderEditEntryHintAction } from "@/app/admin/order-edit-requests/actions";
+import type { OrderEditEntryHint } from "@/app/admin/order-edit-requests/actions";
 import { OrderCreatePanel } from "@/components/admin/OrderCreatePanel";
+import { OrderEditLockGateModal } from "@/components/admin/OrderEditLockGateModal";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 
 type Props = {
@@ -31,6 +34,7 @@ export function OrderEditModal({
   const titleId = useId();
   const [mounted, setMounted] = useState(false);
   const windowId = useMemo(() => `pm-order-edit-${orderId ?? "x"}`, [orderId]);
+  const [entryHint, setEntryHint] = useState<OrderEditEntryHint | "loading" | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -54,7 +58,55 @@ export function OrderEditModal({
     return () => document.removeEventListener("keydown", onKey);
   }, [orderId, onClose]);
 
+  useEffect(() => {
+    if (!orderId) {
+      setEntryHint(null);
+      return;
+    }
+    setEntryHint("loading");
+    let cancelled = false;
+    void getOrderEditEntryHintAction(orderId).then((h) => {
+      if (cancelled) return;
+      setEntryHint(h);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [orderId]);
+
   if (!orderId || !mounted || typeof document === "undefined") return null;
+
+  if (entryHint === "loading") {
+    return createPortal(
+      <div className="adm-win-layer adm-win-layer--top order-edit-modal-root" style={{ zIndex: 12000 }} role="status">
+        <div className="adm-win-layer-backdrop" aria-hidden />
+        <div className="adm-order-edit-modal-loading" dir="rtl">
+          <p>בודק הרשאות עריכה…</p>
+        </div>
+      </div>,
+      document.body,
+    );
+  }
+
+  if (entryHint?.kind === "prelock") {
+    return createPortal(
+      <div className="adm-win-layer adm-win-layer--top order-edit-modal-root" style={{ zIndex: 12000 }} role="presentation">
+        <button type="button" className="adm-win-layer-backdrop" aria-label="סגירה" onClick={onClose} />
+        <OrderEditLockGateModal
+          open
+          payload={entryHint}
+          onClose={onClose}
+          onToast={onToast}
+          onAfterRequestSent={() => {
+            void getOrderEditEntryHintAction(orderId).then((h) => {
+              setEntryHint(h);
+            });
+          }}
+        />
+      </div>,
+      document.body,
+    );
+  }
 
   const panel = (
     <div

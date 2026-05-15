@@ -8,12 +8,14 @@ import { clearExpiredOrderEditUnlockForOrder } from "@/app/admin/order-edit-requ
 import { canUserEditCompletedOrder } from "@/lib/order-edit-lock";
 import { prisma } from "@/lib/prisma";
 import { ensureOnce } from "@/lib/ensure-tables-once";
+import { formatLocalYmd } from "@/lib/work-week";
 
 export type SourceTableId =
   | "customers"
   | "orders"
   | "payments"
   | "receivables"
+  | "payment-checks"
   | "customer-ledger"
   | "customer-balances"
   | "users"
@@ -29,8 +31,10 @@ export type SourceTableCard = {
   titleHe: string;
   description: string;
   icon: string;
-  group: "running" | "system";
+  group: "running" | "system" | "finance";
   count: number | null;
+  /** תווית משנה מעל המונה (למשל ״סה״כ צ׳יקים״) */
+  countLabel?: string | null;
 };
 
 export type SourceTableData = {
@@ -90,12 +94,20 @@ export type SourceTableMutation = {
   values: Record<string, string>;
 };
 
-const DEFINITIONS: Array<Omit<SourceTableCard, "count">> = [
+const DEFINITIONS: Array<Omit<SourceTableCard, "count" | "countLabel">> = [
   { id: "customers", title: "Customers", titleHe: "לקוחות", description: "טבלת לקוחות, קודים ופרטי קשר.", icon: "👥", group: "running" },
   { id: "orders", title: "Orders", titleHe: "הזמנות", description: "כל ההזמנות, שבועות, סכומים וסטטוסים.", icon: "📦", group: "running" },
-  { id: "payments", title: "Payments", titleHe: "תשלומים", description: "תשלומים שנקלטו וקישור להזמנות.", icon: "💳", group: "running" },
-  { id: "receivables", title: "Receivables", titleHe: "תקבולים", description: "בקרת תקבולים וצפי מול התקבל.", icon: "🧾", group: "running" },
   { id: "customer-balances", title: "CustomerBalances", titleHe: "יתרות", description: "יתרות לקוחות וסטטוס גבייה.", icon: "⚖️", group: "running" },
+  { id: "payments", title: "Payments", titleHe: "תשלומים", description: "תשלומים שנקלטו וקישור להזמנות.", icon: "💵", group: "finance" },
+  { id: "receivables", title: "Receivables", titleHe: "תקבולים", description: "בקרת תקבולים וצפי מול התקבל.", icon: "🧾", group: "finance" },
+  {
+    id: "payment-checks",
+    title: "PaymentChecks",
+    titleHe: "טבלת צ׳יקים",
+    description: "ניהול צ׳יקים, תאריכי פרעון וסטטוס הפקדה.",
+    icon: "💳",
+    group: "finance",
+  },
   { id: "employees", title: "Employees", titleHe: "עובדים", description: "עובדי מערכת פעילים.", icon: "🪪", group: "system" },
   { id: "payment-methods", title: "PaymentMethods", titleHe: "אמצעי תשלום", description: "ערכי אמצעי תשלום במערכת.", icon: "💰", group: "system" },
   { id: "statuses", title: "Statuses", titleHe: "סטטוסים", description: "סטטוסי הזמנות וגבייה.", icon: "🏷️", group: "system" },
@@ -108,6 +120,13 @@ function stringifyValue(v: unknown): string {
   if (v instanceof Date) return v.toISOString().slice(0, 10);
   if (typeof v === "object" && "toString" in v) return String(v);
   return String(v);
+}
+
+function formatSlashDateFromYmd(ymd: string): string {
+  const t = (ymd || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}/.test(t)) return t || "—";
+  const [y, m, d] = t.slice(0, 10).split("-");
+  return `${d}/${m}/${y}`;
 }
 
 const PAYMENT_METHOD_LABELS: Record<string, string> = {
@@ -274,11 +293,12 @@ export async function listSourceTableCardsAction(): Promise<SourceTableCard[]> {
   await ensureAllowed();
   await ensureSourceManagementTables();
   await seedReceivablesIfEmpty();
-  const [customers, orders, payments, receivables, users, activeUsers, locations, rates] = await Promise.all([
+  const [customers, orders, payments, receivables, paymentChecks, users, activeUsers, locations, rates] = await Promise.all([
     prisma.customer.count({ where: { deletedAt: null } }),
     prisma.order.count({ where: { deletedAt: null } }),
     prisma.payment.count(),
     prisma.receiptControl.count(),
+    prisma.paymentCheck.count(),
     prisma.user.count(),
     prisma.user.count({ where: { isActive: true } }),
     prisma.$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS "count" FROM "PaymentLocation"`,
@@ -290,6 +310,7 @@ export async function listSourceTableCardsAction(): Promise<SourceTableCard[]> {
     orders,
     payments,
     receivables,
+    "payment-checks": paymentChecks,
     "customer-ledger": orders + payments,
     "customer-balances": customers,
     users,
@@ -299,7 +320,11 @@ export async function listSourceTableCardsAction(): Promise<SourceTableCard[]> {
     "payment-locations": paymentLocationCount,
     "exchange-rates": rates,
   };
-  return DEFINITIONS.map((d) => ({ ...d, count: counts[d.id] }));
+  return DEFINITIONS.map((d) => ({
+    ...d,
+    count: counts[d.id] ?? null,
+    countLabel: d.id === "payment-checks" ? "סה״כ צ׳יקים" : null,
+  }));
 }
 
 export async function getSourceTableDataAction(id: SourceTableId): Promise<SourceTableData | null> {
@@ -320,6 +345,7 @@ export async function listSourceTableDataAction(id: SourceTableId, query: Source
   await ensureSourceManagementTables();
   const def = DEFINITIONS.find((d) => d.id === id);
   if (!def) return null;
+  if (id === "payment-checks") return null;
   const search = query.search?.trim() ?? "";
   const statusFilter = query.filters?.status?.trim() ?? "";
   const customerFilter = query.filters?.customer?.trim().toLowerCase() ?? "";
@@ -335,8 +361,15 @@ export async function listSourceTableDataAction(id: SourceTableId, query: Source
             OR: [
               { displayName: { contains: q, mode: "insensitive" } },
               { customerCode: { contains: q, mode: "insensitive" } },
+              { oldCustomerCode: { contains: q, mode: "insensitive" } },
               { phone: { contains: q, mode: "insensitive" } },
+              { secondPhone: { contains: q, mode: "insensitive" } },
+              { email: { contains: q, mode: "insensitive" } },
               { city: { contains: q, mode: "insensitive" } },
+              { notes: { contains: q, mode: "insensitive" } },
+              { nameHe: { contains: q, mode: "insensitive" } },
+              { nameAr: { contains: q, mode: "insensitive" } },
+              { nameEn: { contains: q, mode: "insensitive" } },
             ],
           }
         : {}),
@@ -404,8 +437,11 @@ export async function listSourceTableDataAction(id: SourceTableId, query: Source
         ? {
             OR: [
               { orderNumber: { contains: q, mode: "insensitive" } },
+              { oldOrderNumber: { contains: q, mode: "insensitive" } },
               { weekCode: { contains: q, mode: "insensitive" } },
               { customerNameSnapshot: { contains: q, mode: "insensitive" } },
+              { customerCodeSnapshot: { contains: q, mode: "insensitive" } },
+              { notes: { contains: q, mode: "insensitive" } },
             ],
           }
         : {}),
@@ -446,16 +482,66 @@ export async function listSourceTableDataAction(id: SourceTableId, query: Source
         totalIlsWithVat: true,
         status: true,
         paymentMethod: true,
-        payments: {
-          where: { isPaid: true },
-          orderBy: { paymentDate: "desc" },
-          take: 1,
-          select: { id: true, paymentCode: true, paymentMethod: true, amountIls: true, amountUsd: true, paymentDate: true, paymentPlace: true },
-        },
       },
     });
+    const orderIds = rows.map((r) => r.id);
+    const payMap = new Map<
+      string,
+      {
+        id: string;
+        paymentCode: string | null;
+        paymentMethod: PaymentMethod | null;
+        amountIls: Prisma.Decimal | null;
+        amountUsd: Prisma.Decimal | null;
+        paymentDate: Date | null;
+        paymentPlace: string | null;
+      }
+    >();
+    if (orderIds.length > 0) {
+      const pays = await prisma.payment.findMany({
+        where: { orderId: { in: orderIds }, isPaid: true },
+        select: {
+          orderId: true,
+          id: true,
+          paymentCode: true,
+          paymentMethod: true,
+          amountIls: true,
+          amountUsd: true,
+          paymentDate: true,
+          paymentPlace: true,
+        },
+      });
+      for (const p of pays) {
+        const oid = p.orderId;
+        if (!oid) continue;
+        const prev = payMap.get(oid);
+        const pDate = p.paymentDate;
+        const prevDate = prev?.paymentDate;
+        if (!prev) {
+          payMap.set(oid, {
+            id: p.id,
+            paymentCode: p.paymentCode,
+            paymentMethod: p.paymentMethod,
+            amountIls: p.amountIls,
+            amountUsd: p.amountUsd,
+            paymentDate: p.paymentDate,
+            paymentPlace: p.paymentPlace,
+          });
+        } else if (pDate && (!prevDate || pDate > prevDate)) {
+          payMap.set(oid, {
+            id: p.id,
+            paymentCode: p.paymentCode,
+            paymentMethod: p.paymentMethod,
+            amountIls: p.amountIls,
+            amountUsd: p.amountUsd,
+            paymentDate: p.paymentDate,
+            paymentPlace: p.paymentPlace,
+          });
+        }
+      }
+    }
     const mapped = rows.map((r) => {
-      const pay = r.payments[0];
+      const pay = payMap.get(r.id);
       return row(
         r.id,
         {
@@ -509,6 +595,25 @@ export async function listSourceTableDataAction(id: SourceTableId, query: Source
     if (q) {
       orParts.push({ paymentCode: { contains: q, mode: "insensitive" } });
       orParts.push({ weekCode: { contains: q, mode: "insensitive" } });
+      orParts.push({ notes: { contains: q, mode: "insensitive" } });
+      orParts.push({ checks: { some: { checkNumber: { contains: q, mode: "insensitive" } } } });
+      orParts.push({
+        customer: {
+          OR: [
+            { displayName: { contains: q, mode: "insensitive" } },
+            { customerCode: { contains: q, mode: "insensitive" } },
+            { phone: { contains: q, mode: "insensitive" } },
+          ],
+        },
+      });
+      orParts.push({
+        order: {
+          OR: [
+            { orderNumber: { contains: q, mode: "insensitive" } },
+            { customerNameSnapshot: { contains: q, mode: "insensitive" } },
+          ],
+        },
+      });
       if (q === paidYes || q.toLowerCase() === paidYes.toLowerCase()) orParts.push({ isPaid: true });
       if (q === paidNo || q.toLowerCase() === paidNo.toLowerCase()) orParts.push({ isPaid: false });
     }
@@ -539,10 +644,38 @@ export async function listSourceTableDataAction(id: SourceTableId, query: Source
       orderBy,
       skip,
       take: limit,
-      select: { id: true, paymentCode: true, weekCode: true, paymentDate: true, amountUsd: true, amountIls: true, paymentMethod: true, isPaid: true },
+      select: {
+        id: true,
+        paymentCode: true,
+        weekCode: true,
+        paymentDate: true,
+        amountUsd: true,
+        amountIls: true,
+        paymentMethod: true,
+        isPaid: true,
+        checks: {
+          orderBy: { dueDate: "asc" },
+          select: { checkNumber: true, dueDate: true, amount: true },
+        },
+      },
     });
-    const mapped = rows.map((r) =>
-      row(
+    const mapped = rows.map((r) => {
+      const checks = r.checks ?? [];
+      const hasChecks = checks.length > 0;
+      const checkNums = hasChecks ? checks.map((c) => c.checkNumber).join(", ") : "";
+      const checkDues = hasChecks
+        ? checks.map((c) => formatSlashDateFromYmd(formatLocalYmd(new Date(c.dueDate)))).join(", ")
+        : "";
+      const checkAmts = hasChecks
+        ? checks
+            .map((c) => {
+              const n = Number(c.amount);
+              return Number.isFinite(n) ? n.toFixed(2) : stringifyValue(c.amount);
+            })
+            .join(", ")
+        : "";
+      const checkBadge = r.paymentMethod === PaymentMethod.CHECK && hasChecks ? "צ׳יק" : "";
+      return row(
         r.id,
         {
           code: r.paymentCode,
@@ -551,11 +684,15 @@ export async function listSourceTableDataAction(id: SourceTableId, query: Source
           usd: r.amountUsd,
           ils: r.amountIls,
           method: r.paymentMethod ? PAYMENT_METHOD_LABELS[r.paymentMethod] ?? r.paymentMethod : "—",
+          checkBadge,
+          checkNum: checkNums || "—",
+          checkDue: checkDues || "—",
+          checkAmt: checkAmts || "—",
           paid: r.isPaid ? "כן" : "לא",
         },
         r.isPaid ? "success" : "warning",
-      ),
-    );
+      );
+    });
     return {
       ...def,
       columns: [
@@ -565,6 +702,10 @@ export async function listSourceTableDataAction(id: SourceTableId, query: Source
         { key: "usd", label: "סכום דולר", kind: "money", sortable: true },
         { key: "ils", label: "סכום שקלים", kind: "money", sortable: true },
         { key: "method", label: "אמצעי תשלום" },
+        { key: "checkBadge", label: "סוג" },
+        { key: "checkNum", label: "מס׳ צ׳יק" },
+        { key: "checkDue", label: "תאריך פרעון" },
+        { key: "checkAmt", label: "סכום צ׳יק" },
         { key: "paid", label: "שולם", kind: "boolean" },
       ],
       rows: mapped,

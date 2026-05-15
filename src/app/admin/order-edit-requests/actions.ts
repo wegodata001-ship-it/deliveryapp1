@@ -2,10 +2,15 @@
 
 import { OrderEditRequestStatus, OrderStatus, Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
-import { requireAuth, isAdminUser, userHasAnyPermission } from "@/lib/admin-auth";
+import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
 import { ensureOnce } from "@/lib/ensure-tables-once";
-import { ORDER_EDIT_UNLOCK_DURATION_MS, orderStatusRequiresEditApproval } from "@/lib/order-edit-lock";
+import {
+  ORDER_EDIT_UNLOCK_DURATION_MS,
+  canUserEditCompletedOrder,
+  orderSensitiveStatusHe,
+  orderStatusRequiresEditApproval,
+} from "@/lib/order-edit-lock";
 
 async function ensureOrderEditRequestTables(): Promise<void> {
   await ensureOnce("order-edit-request-tables", async () => {
@@ -97,7 +102,7 @@ async function notifyAllAdmins(title: string, body: string | null, kind: string,
   );
 }
 
-/** מנקה פתיחת נעילה שפגה — לקרוא לפני בדיקת הרשאות עריכה */
+/** ניקוי נעילה שפגה — לפני בדיקת הרשאות */
 export async function clearExpiredOrderEditUnlockForOrder(orderId: string): Promise<void> {
   await prisma.order.updateMany({
     where: {
@@ -109,6 +114,90 @@ export async function clearExpiredOrderEditUnlockForOrder(orderId: string): Prom
       editUnlockedUntil: null,
     },
   });
+}
+
+export type OrderEditEntryHint =
+  | { kind: "direct" }
+  | {
+      kind: "prelock";
+      variant: "locked" | "rejected" | "pending_mine" | "pending_other";
+      orderId: string;
+      orderNumber: string | null;
+      status: OrderStatus;
+    };
+
+/**
+ * לפני פתיחת UI עריכת הזמנה — קובע האם עובד צריך מודל נעילה במקום לפתוח את הטופס.
+ * אדמינים תמיד `direct`.
+ */
+export async function getOrderEditEntryHintAction(orderId: string): Promise<OrderEditEntryHint> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["edit_orders"])) return { kind: "direct" };
+
+  const oid = orderId.trim();
+  if (!oid) return { kind: "direct" };
+
+  await ensureOrderEditRequestTables();
+  await clearExpiredOrderEditUnlockForOrder(oid);
+
+  const order = await prisma.order.findFirst({
+    where: { id: oid, deletedAt: null },
+    select: {
+      id: true,
+      status: true,
+      orderNumber: true,
+      editUnlockedForUserId: true,
+      editUnlockedUntil: true,
+    },
+  });
+  if (!order) return { kind: "direct" };
+
+  if (isAdminUser(me)) return { kind: "direct" };
+  if (!orderStatusRequiresEditApproval(order.status)) return { kind: "direct" };
+
+  const gate = {
+    status: order.status,
+    editUnlockedForUserId: order.editUnlockedForUserId,
+    editUnlockedUntil: order.editUnlockedUntil,
+  };
+  if (canUserEditCompletedOrder(me, gate)) return { kind: "direct" };
+
+  const pending = await prisma.orderEditRequest.findFirst({
+    where: { orderId: oid, status: OrderEditRequestStatus.PENDING },
+    select: { requestedByUserId: true },
+  });
+  if (pending) {
+    return {
+      kind: "prelock",
+      variant: pending.requestedByUserId === me.id ? "pending_mine" : "pending_other",
+      orderId: oid,
+      orderNumber: order.orderNumber,
+      status: order.status,
+    };
+  }
+
+  const latest = await prisma.orderEditRequest.findFirst({
+    where: { orderId: oid },
+    orderBy: { createdAt: "desc" },
+    select: { status: true, requestedByUserId: true },
+  });
+  if (latest?.status === OrderEditRequestStatus.REJECTED && latest.requestedByUserId === me.id) {
+    return {
+      kind: "prelock",
+      variant: "rejected",
+      orderId: oid,
+      orderNumber: order.orderNumber,
+      status: order.status,
+    };
+  }
+
+  return {
+    kind: "prelock",
+    variant: "locked",
+    orderId: oid,
+    orderNumber: order.orderNumber,
+    status: order.status,
+  };
 }
 
 export async function createOrderEditRequestAction(orderId: string, requestReason: string): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -128,7 +217,7 @@ export async function createOrderEditRequestAction(orderId: string, requestReaso
   });
   if (!order) return { ok: false, error: "הזמנה לא נמצאה" };
   if (!orderStatusRequiresEditApproval(order.status)) {
-    return { ok: false, error: "בקשת אישור נדרשת רק להזמנה במצב ״מוכן״ (הושלמה)" };
+    return { ok: false, error: "בקשת אישור נדרשת רק להזמנה במצב ״מוכן״ (הושלמה) או ״מבוטל״" };
   }
 
   const pending = await prisma.orderEditRequest.findFirst({
@@ -157,9 +246,11 @@ export async function createOrderEditRequestAction(orderId: string, requestReaso
     },
   });
 
+  const statusHe = orderSensitiveStatusHe(order.status);
+  const timeHe = new Date().toLocaleString("he-IL", { dateStyle: "short", timeStyle: "short" });
   await notifyAllAdmins(
     "בקשת עריכת הזמנה",
-    `הזמנה ${order.orderNumber ?? oid} — ${me.fullName}`,
+    `הזמנה ${order.orderNumber ?? oid} (${statusHe}) — ${me.fullName} — ${timeHe}`,
     "ORDER_EDIT_REQUEST",
     { orderEditRequestId: req.id, orderId: oid } as Prisma.InputJsonValue,
   );
@@ -174,6 +265,8 @@ export type OrderEditRequestRow = {
   orderId: string;
   orderNumber: string | null;
   customerLabel: string | null;
+  /** סטטוס ההזמנה ב־DB (מוכן / מבוטל וכו׳) */
+  orderStatus: OrderStatus;
   requestedByName: string;
   createdAtIso: string;
   requestReason: string;
@@ -196,7 +289,7 @@ export async function listOrderEditRequestsAction(): Promise<OrderEditRequestRow
     orderBy: { createdAt: "desc" },
     take: 200,
     include: {
-      order: { select: { orderNumber: true, customerNameSnapshot: true } },
+      order: { select: { orderNumber: true, customerNameSnapshot: true, status: true } },
       requestedBy: { select: { fullName: true } },
     },
   });
@@ -206,6 +299,7 @@ export async function listOrderEditRequestsAction(): Promise<OrderEditRequestRow
     orderId: r.orderId,
     orderNumber: r.order.orderNumber,
     customerLabel: r.order.customerNameSnapshot,
+    orderStatus: r.order.status,
     requestedByName: r.requestedBy.fullName,
     createdAtIso: r.createdAt.toISOString(),
     requestReason: r.requestReason,

@@ -10,10 +10,12 @@ import {
   type SourceTableRow,
 } from "@/app/admin/source-tables/actions";
 import { Modal } from "@/components/ui/Modal";
-import { TableEmpty, TableError, TableLoading, TableSkeleton } from "@/components/ui/data-table";
+import { TableEmpty, TableError, TableSkeleton } from "@/components/ui/data-table";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 
 const PAGE_LIMIT = 20;
+const SEARCH_DEBOUNCE_MS = 400;
+const CACHE_TTL_MS = 45_000;
 
 type Props = {
   tableId: SourceTableId;
@@ -45,9 +47,10 @@ export function SourceTableProClient({ tableId, initialData = null, initialSearc
   const [loadError, setLoadError] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const fetchGen = useRef(0);
+  const cacheRef = useRef(new Map<string, { ts: number; data: SourceTableData }>());
 
   useEffect(() => {
-    const t = window.setTimeout(() => setDebouncedSearch(searchInput), 200);
+    const t = window.setTimeout(() => setDebouncedSearch(searchInput), SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(t);
   }, [searchInput]);
 
@@ -68,8 +71,32 @@ export function SourceTableProClient({ tableId, initialData = null, initialSearc
     setLoading(!initialData);
   }, [tableId, initialData]);
 
+  const buildFetchKey = useCallback(
+    (p: number) =>
+      JSON.stringify({
+        tableId,
+        page: p,
+        limit: PAGE_LIMIT,
+        search: debouncedSearch,
+        sortKey,
+        sortDir,
+        status,
+        customer,
+      }),
+    [tableId, debouncedSearch, sortKey, sortDir, status, customer],
+  );
+
   const runFetch = useCallback(() => {
     const seq = ++fetchGen.current;
+    const key = buildFetchKey(page);
+    const cached = cacheRef.current.get(key);
+    if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
+      setData(cached.data);
+      setPage((p) => Math.min(p, cached.data.totalPages));
+      setLoadError(null);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setLoadError(null);
     void listSourceTableDataAction(tableId, {
@@ -83,8 +110,26 @@ export function SourceTableProClient({ tableId, initialData = null, initialSearc
       .then((next) => {
         if (fetchGen.current !== seq) return;
         if (next) {
+          cacheRef.current.set(key, { ts: Date.now(), data: next });
           setData(next);
           setPage((p) => Math.min(p, next.totalPages));
+          if (next.page < next.totalPages) {
+            const nextKey = buildFetchKey(next.page + 1);
+            if (!cacheRef.current.has(nextKey)) {
+              window.setTimeout(() => {
+                void listSourceTableDataAction(tableId, {
+                  page: next.page + 1,
+                  limit: PAGE_LIMIT,
+                  search: debouncedSearch,
+                  sortKey,
+                  sortDir,
+                  filters: { status, customer },
+                }).then((pref) => {
+                  if (pref) cacheRef.current.set(nextKey, { ts: Date.now(), data: pref });
+                });
+              }, 0);
+            }
+          }
         } else {
           setLoadError("לא ניתן לטעון את הנתונים");
         }
@@ -97,7 +142,7 @@ export function SourceTableProClient({ tableId, initialData = null, initialSearc
         if (fetchGen.current !== seq) return;
         setLoading(false);
       });
-  }, [tableId, page, debouncedSearch, sortKey, sortDir, status, customer]);
+  }, [tableId, page, debouncedSearch, sortKey, sortDir, status, customer, buildFetchKey]);
 
   useEffect(() => {
     runFetch();
@@ -115,7 +160,10 @@ export function SourceTableProClient({ tableId, initialData = null, initialSearc
         sortDir,
         filters: { status, customer },
       }).then((next) => {
-        if (next) setData(next);
+        if (next) {
+          cacheRef.current.set(buildFetchKey(page), { ts: Date.now(), data: next });
+          setData(next);
+        }
       });
     }, 45000);
     return () => window.clearInterval(t);
@@ -155,6 +203,7 @@ export function SourceTableProClient({ tableId, initialData = null, initialSearc
       return;
     }
     startModal(null);
+    cacheRef.current.clear();
     runFetch();
   }
 
@@ -167,6 +216,7 @@ export function SourceTableProClient({ tableId, initialData = null, initialSearc
       return;
     }
     setSelected([]);
+    cacheRef.current.clear();
     runFetch();
   }
 
@@ -209,14 +259,14 @@ export function SourceTableProClient({ tableId, initialData = null, initialSearc
 
   return (
     <div className="adm-source-pro">
-      <div className="adm-source-pro-toolbar">
+      <div className="adm-source-pro-toolbar adm-source-pro-toolbar--sticky">
         <input
           value={searchInput}
           onChange={(e) => {
             setSearchInput(e.target.value);
             setPage(1);
           }}
-          placeholder="חיפוש חכם: שם, קוד, טלפון, סכום..."
+          placeholder="חיפוש חכם: שם, קוד, טלפון, הזמנה, תשלום, צ׳יק, שבוע, הערות…"
           disabled={loading && !data}
         />
         <button type="button" className="adm-btn adm-btn--ghost" onClick={() => setFilterOpen((v) => !v)} disabled={!data}>
@@ -275,7 +325,6 @@ export function SourceTableProClient({ tableId, initialData = null, initialSearc
       ) : null}
 
       <div className={["adm-source-pro-table-wrap", "adm-dt-wrap", loading ? "adm-dt-wrap--busy" : ""].filter(Boolean).join(" ")}>
-        {loading ? <TableLoading /> : null}
         {!data ? (
           <table className="adm-table adm-source-pro-table" aria-busy="true">
             <thead>
@@ -369,6 +418,12 @@ export function SourceTableProClient({ tableId, initialData = null, initialSearc
                             >
                               {r.cells[c.key] || "אין תשלום"}
                             </button>
+                          ) : tableId === "payments" && c.key === "checkBadge" ? (
+                            r.cells.checkBadge && r.cells.checkBadge.trim() && r.cells.checkBadge !== "—" ? (
+                              <span className="adm-source-check-badge">{r.cells.checkBadge}</span>
+                            ) : (
+                              <span>—</span>
+                            )
                           ) : idx === 0 ? (
                             <button type="button" className="adm-source-primary-link" onClick={() => openLinked(r)} disabled={loading}>
                               {r.cells[c.key] || "—"}

@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { getOrderEditEntryHintAction, type OrderEditEntryHint } from "@/app/admin/order-edit-requests/actions";
 import { requireRoutePermission } from "@/lib/route-access";
 import { prisma } from "@/lib/prisma";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
@@ -50,9 +51,16 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
       commissionUsd: true,
       totalUsd: true,
       notes: true,
+      editUnlockedForUserId: true,
+      editUnlockedUntil: true,
     },
   });
   if (!order) notFound();
+
+  let editEntryHint: OrderEditEntryHint = { kind: "direct" };
+  if (userHasAnyPermission(me, ["edit_orders"])) {
+    editEntryHint = await getOrderEditEntryHintAction(order.id);
+  }
 
   const paidAgg = await prisma.payment.aggregate({
     where: { orderId: order.id, amountUsd: { not: null } },
@@ -72,7 +80,7 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
           <h1 className="adm-page-title adm-page-title--sm">הזמנה {order.orderNumber ?? "—"}</h1>
           <p className="adm-order-detail-sub">דף הזמנה · תצוגה בלבד</p>
         </div>
-        <OrderDetailActions orderId={order.id} canEdit={canEdit} />
+        <OrderDetailActions orderId={order.id} canEdit={canEdit} editEntryHint={editEntryHint} />
       </div>
 
       <div className="adm-order-detail-grid">

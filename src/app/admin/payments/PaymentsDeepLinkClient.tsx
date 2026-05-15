@@ -12,14 +12,16 @@ function PaymentsDeepLinkInner() {
 
   useEffect(() => {
     if (done.current) return;
+    const paymentId = sp.get("invoiceId")?.trim();
     const customerId = sp.get("customerId")?.trim();
     const amountUsd = sp.get("amountUsd")?.trim();
-    if (customerId) {
+    if (customerId || paymentId) {
       done.current = true;
       openWindow({
-        type: "payments",
+        type: "paymentsUpdated",
         props: {
-          customerId,
+          ...(paymentId ? { paymentId } : {}),
+          ...(customerId ? { customerId } : {}),
           customerName: "",
           ...(amountUsd ? { amountUsd } : {}),
         },

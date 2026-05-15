@@ -102,7 +102,7 @@ export function ReceiptControlClient() {
   function openPayment(row: ReceiptControlRow) {
     if (!row.customerId) return;
     openWindow({
-      type: "payments",
+      type: "paymentsUpdated",
       props: {
         customerId: row.customerId,
         customerName: row.customerName,

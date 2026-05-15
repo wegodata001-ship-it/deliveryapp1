@@ -8,6 +8,7 @@ import {
   type OrderEditRequestRow,
   rejectOrderEditRequestAction,
 } from "@/app/admin/order-edit-requests/actions";
+import { orderSensitiveStatusHe } from "@/lib/order-edit-lock";
 import { useAdminLoading } from "@/components/admin/AdminLoadingProvider";
 
 const STATUS_LABEL: Record<OrderEditRequestStatus, string> = {
@@ -98,6 +99,7 @@ export function OrderEditRequestsClient({ initialRows }: Props) {
           <thead>
             <tr>
               <th>מספר הזמנה</th>
+              <th>סטטוס הזמנה</th>
               <th>לקוח</th>
               <th>מי ביקש</th>
               <th>תאריך</th>
@@ -109,7 +111,7 @@ export function OrderEditRequestsClient({ initialRows }: Props) {
           <tbody>
             {initialRows.length === 0 ? (
               <tr>
-                <td colSpan={7} className="adm-table-empty">
+                <td colSpan={8} className="adm-table-empty">
                   אין בקשות עדיין.
                 </td>
               </tr>
@@ -119,6 +121,7 @@ export function OrderEditRequestsClient({ initialRows }: Props) {
                   <td dir="ltr" className="adm-table-excel-num">
                     {r.orderNumber ?? "—"}
                   </td>
+                  <td>{orderSensitiveStatusHe(r.orderStatus)}</td>
                   <td className="adm-table-excel-cust">{r.customerLabel ?? "—"}</td>
                   <td>{r.requestedByName}</td>
                   <td dir="ltr" className="adm-table-excel-date">

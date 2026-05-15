@@ -6,6 +6,14 @@ export type PaymentLineVatMode = "EXEMPT" | "BEFORE_VAT" | "INCLUDING_VAT";
 
 export type PaymentLineMethod = "CREDIT" | "BANK_TRANSFER" | "CASH" | "CHECK" | "OTHER";
 
+export type PaymentLineCheck = {
+  id: string;
+  checkNumber: string;
+  /** YYYY-MM-DD */
+  dueDateYmd: string;
+  amount: number | "";
+};
+
 export type PaymentLine = {
   id: string;
   amount: number | "";
@@ -13,6 +21,8 @@ export type PaymentLine = {
   vatMode: PaymentLineVatMode;
   paymentMethod: PaymentLineMethod;
   note?: string;
+  /** מילוי כאשר paymentMethod = CHECK */
+  checks?: PaymentLineCheck[];
 };
 
 export type VatCalc = {
@@ -104,5 +114,37 @@ export function calculateTotals(lines: PaymentLine[], usdRate: number, vatRate: 
     totalIls: roundMoney2(totalIls),
     totalPaymentsCount: count,
   };
+}
+
+/** סכום בסיס לפני מע״מ בדולרים — לתצוגת כרטיס סיכום (לא מחליף totalUsd לשימוש בהקצאות). */
+export function calculateTotalBaseUsd(
+  lines: PaymentLine[],
+  usdRate: number,
+  vatRate: number = DEFAULT_VAT_RATE,
+): number {
+  let total = 0;
+  for (const l of lines) {
+    const c = calculatePaymentLine(l, usdRate, vatRate);
+    if (c.finalAmount <= 0) continue;
+    if (l.currency === "USD") total += c.baseAmount;
+    else total += usdRate > 0 ? c.baseAmount / usdRate : 0;
+  }
+  return roundMoney2(total);
+}
+
+/** סכום בסיס לפני מע״מ בשקלים — לתצוגת כרטיס סיכום. */
+export function calculateTotalBaseIls(
+  lines: PaymentLine[],
+  usdRate: number,
+  vatRate: number = DEFAULT_VAT_RATE,
+): number {
+  let total = 0;
+  for (const l of lines) {
+    const c = calculatePaymentLine(l, usdRate, vatRate);
+    if (c.finalAmount <= 0) continue;
+    if (l.currency === "ILS") total += c.baseAmount;
+    else total += usdRate > 0 ? c.baseAmount * usdRate : 0;
+  }
+  return roundMoney2(total);
 }
 

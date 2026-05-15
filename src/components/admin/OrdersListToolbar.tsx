@@ -4,17 +4,21 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { OrderStatus, PaymentMethod } from "@prisma/client";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS } from "@/lib/order-capture-payment-methods";
 import { ORDER_COUNTRY_CODES, orderCountryLabel, type OrderCountryCode } from "@/lib/order-countries";
 import {
-  WORK_WEEK_CODES_SORTED,
-  WORK_WEEK_RANGES,
   getAhWeekCodeFromDateRange,
   getAhWeekRange,
   normalizeAhWeekCode,
 } from "@/lib/work-week";
 
 export type OrdersCreatedByOption = {
+  id: string;
+  label: string;
+};
+
+export type OrdersPaymentLocationOption = {
   id: string;
   label: string;
 };
@@ -28,9 +32,13 @@ type Props = {
   search: string;
   statusFilter: string;
   countryFilter: string;
+  /** נשמר ב־props לתאימות עם page.tsx, אך לא מוצג ב־UI אחרי הניקוי */
   createdById: string;
   createdByOptions: OrdersCreatedByOption[];
   paymentType: string;
+  paymentLocation: string;
+  paymentLocationOptions: OrdersPaymentLocationOption[];
+  /** נשמרים ב־props לתאימות עם page.tsx, אך לא מוצגים ב־UI אחרי הניקוי */
   amountMin: string;
   amountMax: string;
 };
@@ -46,9 +54,20 @@ const ORDERS_KEYS = [
   "ordersCountry",
   "createdBy",
   "paymentType",
+  "paymentLocation",
   "amountMin",
   "amountMax",
 ] as const;
+
+/** הזזת קוד שבוע ב־±1 (AH-119 ↔ AH-120). מחזיר null אם הקלט לא תקין. */
+function shiftAhWeek(code: string, delta: number): string | null {
+  const norm = normalizeAhWeekCode(code) ?? code.trim().toUpperCase();
+  const m = /^AH-(\d+)$/i.exec(norm);
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return `AH-${Math.max(1, Math.floor(n + delta))}`;
+}
 
 const GLOBAL_KEYS = ["week", "from", "to", "country"] as const;
 
@@ -66,6 +85,8 @@ const STATUS_OPTIONS: { value: OrderStatus; label: string }[] = [
   { value: OrderStatus.OPEN, label: "פתוחה" },
   { value: OrderStatus.WAITING_FOR_EXECUTION, label: "בטיפול" },
   { value: OrderStatus.COMPLETED, label: "הושלמה" },
+  { value: OrderStatus.CANCELLED, label: "מבוטל" },
+  { value: OrderStatus.DEBT_WITHDRAWAL, label: "משיכה מהחוב" },
 ];
 
 export function OrdersListToolbar({
@@ -76,9 +97,11 @@ export function OrdersListToolbar({
   search,
   statusFilter,
   countryFilter,
+  // createdById / createdByOptions / amountMin / amountMax — נשמרים בחוזה אך לא מוצגים יותר
   createdById,
-  createdByOptions,
   paymentType,
+  paymentLocation,
+  paymentLocationOptions,
   amountMin,
   amountMax,
 }: Props) {
@@ -90,10 +113,13 @@ export function OrdersListToolbar({
   const [qDraft, setQDraft] = useState(search);
   const [statusSel, setStatusSel] = useState(statusFilter);
   const [countrySel, setCountrySel] = useState(countryFilter);
-  const [createdBy, setCreatedBy] = useState(createdById);
   const [payType, setPayType] = useState(paymentType);
-  const [minAmount, setMinAmount] = useState(amountMin);
-  const [maxAmount, setMaxAmount] = useState(amountMax);
+  const [payLoc, setPayLoc] = useState(paymentLocation);
+  // createdBy / סכום מ-עד — נשמרים ב־state רק כדי שלא לאבד פרמטרי URL קיימים אם
+  // נכנסים לדף עם URL ישן; אין UI שמגדיר אותם יותר.
+  const [createdBy] = useState(createdById);
+  const [minAmount] = useState(amountMin);
+  const [maxAmount] = useState(amountMax);
   const searchDebounceRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
@@ -109,11 +135,9 @@ export function OrdersListToolbar({
   useEffect(() => {
     setStatusSel(statusFilter);
     setCountrySel(countryFilter);
-    setCreatedBy(createdById);
     setPayType(paymentType);
-    setMinAmount(amountMin);
-    setMaxAmount(amountMax);
-  }, [statusFilter, countryFilter, createdById, paymentType, amountMin, amountMax]);
+    setPayLoc(paymentLocation);
+  }, [statusFilter, countryFilter, paymentType, paymentLocation]);
 
   const setRangeFromWeekCode = useCallback((code: string) => {
     const norm = normalizeAhWeekCode(code);
@@ -124,6 +148,17 @@ export function OrdersListToolbar({
     setFrom(r.from);
     setTo(r.to);
   }, []);
+
+  /** שינוי שבוע ב־±1 (החצים ליד הקלט). */
+  const shiftWeek = useCallback(
+    (delta: number) => {
+      const base = week || ahWeekSelect || "AH-1";
+      const next = shiftAhWeek(base, delta);
+      if (!next) return;
+      setRangeFromWeekCode(next);
+    },
+    [week, ahWeekSelect, setRangeFromWeekCode],
+  );
 
   const flushSearchToUrl = useCallback(
     (value: string) => {
@@ -175,6 +210,7 @@ export function OrdersListToolbar({
     if (countrySel.trim()) base.set("ordersCountry", countrySel.trim());
     if (createdBy.trim()) base.set("createdBy", createdBy.trim());
     if (payType.trim()) base.set("paymentType", payType.trim());
+    if (payLoc.trim()) base.set("paymentLocation", payLoc.trim());
     if (minAmount.trim()) base.set("amountMin", minAmount.trim());
     if (maxAmount.trim()) base.set("amountMax", maxAmount.trim());
 
@@ -186,6 +222,7 @@ export function OrdersListToolbar({
     from,
     maxAmount,
     minAmount,
+    payLoc,
     payType,
     qDraft,
     router,
@@ -216,10 +253,150 @@ export function OrdersListToolbar({
 
   return (
     <div className="adm-orders-excel-toolbar">
-      <div className="adm-orders-excel-filters">
-        <p className="adm-orders-toolbar-scope-hint" dir="rtl">
-          סינון זה משפיע רק על רשימת ההזמנות (לא משנה את שבוע המערכת הגלובלי למעלה).
-        </p>
+      <div className="adm-orders-excel-filters adm-orders-excel-filters--v2">
+        <label className="adm-orders-filter-field adm-orders-filter-field--week">
+          <span className="adm-orders-filter-label">שבוע</span>
+          <div className="adm-week-control">
+            <button
+              type="button"
+              className="adm-week-step"
+              aria-label="שבוע קודם"
+              title="שבוע קודם"
+              onClick={() => shiftWeek(-1)}
+            >
+              <ChevronRight size={14} strokeWidth={2.4} aria-hidden />
+            </button>
+            <input
+              type="text"
+              inputMode="text"
+              value={week}
+              dir="ltr"
+              onChange={(e) => setWeek(e.target.value.toUpperCase())}
+              onBlur={(e) => {
+                const norm = normalizeAhWeekCode(e.target.value);
+                if (norm) setRangeFromWeekCode(norm);
+                else setWeek("");
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  const norm = normalizeAhWeekCode((e.target as HTMLInputElement).value);
+                  if (norm) setRangeFromWeekCode(norm);
+                  else setWeek("");
+                }
+              }}
+              className="adm-week-inp"
+              placeholder="AH-119"
+              spellCheck={false}
+              autoComplete="off"
+            />
+            <button
+              type="button"
+              className="adm-week-step"
+              aria-label="שבוע הבא"
+              title="שבוע הבא"
+              onClick={() => shiftWeek(1)}
+            >
+              <ChevronLeft size={14} strokeWidth={2.4} aria-hidden />
+            </button>
+          </div>
+        </label>
+
+        <label className="adm-orders-filter-field">
+          <span className="adm-orders-filter-label">מתאריך</span>
+          <input
+            type="date"
+            value={from}
+            onChange={(e) => {
+              const nextFrom = e.target.value;
+              setFrom(nextFrom);
+              const wk = getAhWeekCodeFromDateRange(nextFrom, to);
+              setWeek(wk ?? "");
+            }}
+            className="adm-orders-date-inp"
+          />
+        </label>
+
+        <label className="adm-orders-filter-field">
+          <span className="adm-orders-filter-label">עד תאריך</span>
+          <input
+            type="date"
+            value={to}
+            onChange={(e) => {
+              const nextTo = e.target.value;
+              setTo(nextTo);
+              const wk = getAhWeekCodeFromDateRange(from, nextTo);
+              setWeek(wk ?? "");
+            }}
+            className="adm-orders-date-inp"
+          />
+        </label>
+
+        <label className="adm-orders-filter-field">
+          <span className="adm-orders-filter-label">מדינה</span>
+          <select
+            value={countrySel}
+            onChange={(e) => setCountrySel(e.target.value as OrderCountryCode | "")}
+            className="adm-orders-week-sel adm-orders-sel-arrow"
+          >
+            <option value="">כל המדינות</option>
+            {ORDER_COUNTRY_CODES.map((c) => (
+              <option key={c} value={c}>
+                {orderCountryLabel(c)}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="adm-orders-filter-field">
+          <span className="adm-orders-filter-label">סטטוס</span>
+          <select
+            value={statusSel}
+            onChange={(e) => setStatusSel(e.target.value)}
+            className="adm-orders-week-sel adm-orders-sel-arrow"
+          >
+            <option value="">הכל</option>
+            {STATUS_OPTIONS.map((s) => (
+              <option key={s.value} value={s.value}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="adm-orders-filter-field">
+          <span className="adm-orders-filter-label">צורת תשלום</span>
+          <select
+            value={payType}
+            onChange={(e) => setPayType(e.target.value)}
+            className="adm-orders-week-sel adm-orders-sel-arrow"
+          >
+            <option value="">הכל</option>
+            {ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS.map((p) => (
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
+            ))}
+            <option value="NONE">ללא</option>
+          </select>
+        </label>
+
+        <label className="adm-orders-filter-field">
+          <span className="adm-orders-filter-label">מקום תשלום</span>
+          <select
+            value={payLoc}
+            onChange={(e) => setPayLoc(e.target.value)}
+            className="adm-orders-week-sel adm-orders-sel-arrow"
+          >
+            <option value="">הכל</option>
+            {paymentLocationOptions.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+            <option value="NONE">ללא</option>
+          </select>
+        </label>
+
         <label className="adm-orders-filter-field adm-orders-filter-field--search">
           <span className="adm-orders-filter-label">חיפוש</span>
           <input
@@ -236,145 +413,27 @@ export function OrdersListToolbar({
                 flushSearchToUrl(qDraft);
               }
             }}
-            className="adm-orders-filter-inp"
-            placeholder="מספר הזמנה · קוד לקוח · שם · עובד · טלפון · מדינה · AH-119"
+            className="adm-orders-filter-inp adm-orders-filter-inp--search"
+            placeholder="מספר הזמנה · קוד לקוח · שם · טלפון"
           />
         </label>
-        <label className="adm-orders-filter-field">
-          <span className="adm-orders-filter-label">מתאריך</span>
-          <input
-            type="date"
-            value={from}
-            onChange={(e) => {
-              const nextFrom = e.target.value;
-              setFrom(nextFrom);
-              const wk = getAhWeekCodeFromDateRange(nextFrom, to);
-              setWeek(wk ?? "");
-            }}
-            className="adm-orders-date-inp"
-          />
-        </label>
-        <label className="adm-orders-filter-field">
-          <span className="adm-orders-filter-label">עד תאריך</span>
-          <input
-            type="date"
-            value={to}
-            onChange={(e) => {
-              const nextTo = e.target.value;
-              setTo(nextTo);
-              const wk = getAhWeekCodeFromDateRange(from, nextTo);
-              setWeek(wk ?? "");
-            }}
-            className="adm-orders-date-inp"
-          />
-        </label>
-        <label className="adm-orders-filter-field">
-          <span className="adm-orders-filter-label">שבוע (רשימה)</span>
-          <select
-            value={week}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (!v) {
-                setWeek("");
-                return;
-              }
-              setRangeFromWeekCode(v);
-            }}
-            className="adm-orders-week-sel adm-orders-sel-arrow"
+
+        <div className="adm-orders-filter-actions">
+          <button
+            type="button"
+            className="adm-orders-btn adm-orders-btn--apply"
+            onClick={applyFilters}
           >
-            <option value="">{weekSelectEmptyLabel(from, to)}</option>
-            {WORK_WEEK_CODES_SORTED.map((w) => (
-              <option key={w} value={w}>
-                {w}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="adm-orders-filter-field">
-          <span className="adm-orders-filter-label">סטטוס</span>
-          <select
-            value={statusSel}
-            onChange={(e) => setStatusSel(e.target.value)}
-            className="adm-orders-week-sel adm-orders-sel-arrow"
+            חפש
+          </button>
+          <button
+            type="button"
+            className="adm-orders-btn adm-orders-btn--clear"
+            onClick={clearFilters}
           >
-            <option value="">הכל</option>
-            {STATUS_OPTIONS.map((s) => (
-              <option key={s.value} value={s.value}>
-                {s.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="adm-orders-filter-field">
-          <span className="adm-orders-filter-label">מדינה</span>
-          <select
-            value={countrySel}
-            onChange={(e) => setCountrySel(e.target.value as OrderCountryCode | "")}
-            className="adm-orders-week-sel adm-orders-sel-arrow"
-          >
-            <option value="">כל המדינות</option>
-            {ORDER_COUNTRY_CODES.map((c) => (
-              <option key={c} value={c}>
-                {orderCountryLabel(c)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="adm-orders-filter-field">
-          <span className="adm-orders-filter-label">פותח</span>
-          <select
-            value={createdBy}
-            onChange={(e) => setCreatedBy(e.target.value)}
-            className="adm-orders-week-sel adm-orders-sel-arrow"
-          >
-            <option value="">כל העובדים</option>
-            {createdByOptions.map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="adm-orders-filter-field">
-          <span className="adm-orders-filter-label">צורת תשלום</span>
-          <select value={payType} onChange={(e) => setPayType(e.target.value)} className="adm-orders-week-sel adm-orders-sel-arrow">
-            <option value="">הכל</option>
-            {ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS.map((p) => (
-              <option key={p.value} value={p.value}>
-                {p.label}
-              </option>
-            ))}
-            <option value="NONE">ללא</option>
-          </select>
-        </label>
-        <label className="adm-orders-filter-field adm-orders-filter-field--amount">
-          <span className="adm-orders-filter-label">סכום מ־</span>
-          <input
-            type="number"
-            inputMode="decimal"
-            value={minAmount}
-            onChange={(e) => setMinAmount(e.target.value)}
-            className="adm-orders-filter-inp"
-            placeholder="0"
-          />
-        </label>
-        <label className="adm-orders-filter-field adm-orders-filter-field--amount">
-          <span className="adm-orders-filter-label">עד</span>
-          <input
-            type="number"
-            inputMode="decimal"
-            value={maxAmount}
-            onChange={(e) => setMaxAmount(e.target.value)}
-            className="adm-orders-filter-inp"
-            placeholder="99999"
-          />
-        </label>
-        <button type="button" className="adm-btn adm-btn--primary adm-btn--dense" onClick={applyFilters}>
-          החל
-        </button>
-        <button type="button" className="adm-btn adm-btn--ghost adm-btn--dense" onClick={clearFilters}>
-          ניקוי
-        </button>
+            ניקוי
+          </button>
+        </div>
       </div>
 
       <div className="adm-orders-quick-presets" role="group" aria-label="סינון מהיר">
@@ -399,10 +458,4 @@ export function OrdersListToolbar({
       </div>
     </div>
   );
-}
-
-function weekSelectEmptyLabel(fromYmd: string, toYmd: string): string {
-  if (!fromYmd || !toYmd) return "— לפי תאריכים —";
-  const wk = getAhWeekCodeFromDateRange(fromYmd, toYmd);
-  return wk ? "— לפי תאריכים —" : "טווח מותאם";
 }

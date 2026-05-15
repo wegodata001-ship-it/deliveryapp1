@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getSourceTableShellMeta } from "@/app/admin/source-tables/actions";
+import { PaymentChecksTableClient } from "@/components/admin/PaymentChecksTableClient";
 import { SourceTableProClient } from "@/components/admin/SourceTableProClient";
 import { requireRoutePermission } from "@/lib/route-access";
 
@@ -18,6 +19,8 @@ export default async function SourceTableDetailPage({
   const shell = await getSourceTableShellMeta(table);
   if (!shell) notFound();
 
+  const isPaymentChecks = shell.id === "payment-checks";
+
   return (
     <div className="adm-source-page">
       <header className="adm-source-detail-head">
@@ -26,10 +29,15 @@ export default async function SourceTableDetailPage({
             ← חזרה לטבלאות מקור
           </Link>
           <h1>{shell.titleHe}</h1>
-          <p>ניהול נתונים, חיפוש, סינון, עריכה ופעולות.</p>
+          <p>{isPaymentChecks ? "ניהול צ׳יקים, סינון מתקדם וסטטוס הפקדה." : "ניהול נתונים, חיפוש, סינון, עריכה ופעולות."}</p>
         </div>
       </header>
-      <SourceTableProClient tableId={shell.id} initialData={null} initialSearch={initialSearch} />
+      {isPaymentChecks ? (
+        <PaymentChecksTableClient />
+      ) : (
+        <SourceTableProClient tableId={shell.id} initialData={null} initialSearch={initialSearch} />
+      )}
     </div>
   );
 }
+

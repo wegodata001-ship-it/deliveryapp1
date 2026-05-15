@@ -6,9 +6,10 @@ import { PaymentModalUpdated } from "@/components/admin/PaymentModalUpdated";
 
 type Props = {
   financial: SerializedFinancial | null;
+  viewerIsAdmin?: boolean;
 };
 
-export function PaymentsUpdatedClient({ financial }: Props) {
+export function PaymentsUpdatedClient({ financial, viewerIsAdmin = false }: Props) {
   const [toast, setToast] = useState<string | null>(null);
   const onToast = useCallback((msg: string) => {
     setToast(msg);
@@ -20,7 +21,7 @@ export function PaymentsUpdatedClient({ financial }: Props) {
       <div className="adm-page-head">
         <h1 className="adm-page-title">קליטת תשלום מעודכן</h1>
       </div>
-      <PaymentModalUpdated financial={financial} onToast={onToast} />
+      <PaymentModalUpdated financial={financial} onToast={onToast} viewerIsAdmin={viewerIsAdmin} />
       {toast ? (
         <div className="adm-toast" role="status" aria-live="polite">
           {toast}

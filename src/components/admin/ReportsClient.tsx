@@ -11,10 +11,14 @@ import {
   type ReportTable,
 } from "@/app/admin/reports/actions";
 import { useAdminLoading } from "@/components/admin/AdminLoadingProvider";
+import { ReportWeekNav } from "@/components/admin/ReportWeekNav";
 import { getAhWeekCodeFromDateRange, getAhWeekRange, normalizeAhWeekCode } from "@/lib/work-week";
 import { Modal } from "@/components/ui/Modal";
 import { CardSkeleton, LoadingButton, TableSkeleton } from "@/components/ui/loading";
 import { ORDER_COUNTRY_CODES, orderCountryLabel, type OrderCountryCode } from "@/lib/order-countries";
+import { CustomerBalancesReportModal } from "@/components/admin/CustomerBalancesReportModal";
+import { OpenOrdersReportModal } from "@/components/admin/OpenOrdersReportModal";
+import { PaymentsByLocationReportModal } from "@/components/admin/PaymentsByLocationReportModal";
 
 type Props = {
   initialPayload: ReportPayload;
@@ -34,6 +38,7 @@ function buildReportHtml(report: ReportTable, filters: ReportFilters) {
   const headerRows = [
     "WEGO BUSINESS REPORT",
     report.title,
+    ...(report.exportHeaderLines ?? []),
     `טווח תאריכים: ${dateRange}`,
     `תאריך יצירה: ${todayYmd()}`,
   ];
@@ -151,6 +156,42 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
     setLoadingReportId(card.id);
     setExportErr(null);
     try {
+      if (card.id === "customerBalanceReport") {
+        setActiveReport({
+          id: "customerBalanceReport",
+          title: card.title,
+          columns: [],
+          rows: [],
+          totals: { total: "—", paid: "—", remaining: "—" },
+        });
+        setModalTableLoading(false);
+        setLoadingReportId(null);
+        return;
+      }
+      if (card.id === "openOrdersReport") {
+        setActiveReport({
+          id: "openOrdersReport",
+          title: card.title,
+          columns: [],
+          rows: [],
+          totals: { total: "—", paid: "—", remaining: "—" },
+        });
+        setModalTableLoading(false);
+        setLoadingReportId(null);
+        return;
+      }
+      if (card.id === "paymentsByLocationReport") {
+        setActiveReport({
+          id: "paymentsByLocationReport",
+          title: card.title,
+          columns: [],
+          rows: [],
+          totals: { total: "—", paid: "—", remaining: "—" },
+        });
+        setModalTableLoading(false);
+        setLoadingReportId(null);
+        return;
+      }
       const report = await runWithLoading(() => getReportTableAction(card.id, filters), {
         message: "טוען דוח...",
         mode: "bar",
@@ -217,6 +258,11 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
           <h1>דוחות</h1>
           <p>בחר פילטרים, בדוק KPI, פתח דוח והורד קובץ מקצועי.</p>
         </div>
+        <p className="adm-reports-data-context" role="status">
+          {filters.workWeek
+            ? `מציג נתונים עבור שבוע ${normalizeAhWeekCode(filters.workWeek) ?? filters.workWeek}`
+            : `מציג נתונים עבור טווח ${filters.dateFrom ?? "—"} – ${filters.dateTo ?? "—"}`}
+        </p>
         <div className="adm-reports-filters">
           <label>
             מתאריך
@@ -271,17 +317,14 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
               ))}
             </select>
           </label>
-          <label>
-            שבוע עבודה
-            <input
+          <label className="adm-reports-field adm-reports-field--week">
+            <span>שבוע עבודה</span>
+            <ReportWeekNav
+              weekCode={filters.workWeek}
               disabled={isLoading}
-              value={filters.workWeek || ""}
-              onChange={(e) => {
-                const raw = e.target.value.toUpperCase();
-                setFilters((old) => ({ ...old, workWeek: raw || undefined }));
-                setDatesFromWeek(raw);
+              onWeekChange={(wk, from, to) => {
+                setFilters((old) => ({ ...old, workWeek: wk, dateFrom: from, dateTo: to }));
               }}
-              placeholder="שבוע עבודה"
             />
           </label>
           <label>
@@ -370,7 +413,36 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
         ))}
       </section>
 
-      <Modal open={reportModalOpen} onClose={closeReportModal} title={modalTitle || "דוח"} size="xl">
+      <Modal
+        open={reportModalOpen}
+        onClose={closeReportModal}
+        title={modalTitle || "דוח"}
+        size="xl"
+        hideHeader={
+          !!activeReport &&
+          (activeReport.id === "customerBalanceReport" ||
+            activeReport.id === "openOrdersReport" ||
+            activeReport.id === "paymentsByLocationReport")
+        }
+        modalClassName={
+          activeReport?.id === "customerBalanceReport" ?
+            "ui-modal--balances-erp"
+          : activeReport?.id === "openOrdersReport" ?
+            "ui-modal--open-orders-erp"
+          : activeReport?.id === "paymentsByLocationReport" ?
+            "ui-modal--payments-location-erp"
+          : undefined
+        }
+        bodyClassName={
+          activeReport?.id === "customerBalanceReport" ?
+            "ui-modal-body--balances-erp"
+          : activeReport?.id === "openOrdersReport" ?
+            "ui-modal-body--open-orders-erp"
+          : activeReport?.id === "paymentsByLocationReport" ?
+            "ui-modal-body--payments-location-erp"
+          : undefined
+        }
+      >
         {modalTableLoading ? (
           <div className="adm-report-modal adm-report-modal--loading" aria-busy>
             <p className="adm-report-modal-loading-hint">טוען נתונים…</p>
@@ -388,53 +460,86 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
             </div>
           </div>
         ) : activeReport ? (
-          <div className="adm-report-modal">
-            <div className="adm-report-modal-actions">
-              <LoadingButton
-                className="adm-btn adm-btn--ghost adm-btn--sm"
-                loading={downloadingExcel === activeReport.id}
-                loadingLabel="מייצא..."
-                onClick={() => void exportReport(activeReport.id, "excel")}
-              >
-                Excel
-              </LoadingButton>
-              <LoadingButton
-                className="adm-btn adm-btn--ghost adm-btn--sm"
-                loading={pdfLoadingKind === activeReport.id}
-                loadingLabel="מכין..."
-                onClick={() => void exportReport(activeReport.id, "pdf")}
-              >
-                PDF
-              </LoadingButton>
+          activeReport.id === "customerBalanceReport" ? (
+            <CustomerBalancesReportModal
+              key={filterKey}
+              reportFilters={filters}
+              title={modalTitle || "יתרות לקוחות"}
+              onClose={closeReportModal}
+              onExportPdf={() => void exportReport("customerBalanceReport", "pdf")}
+              onExportExcel={() => void exportReport("customerBalanceReport", "excel")}
+              exportingPdf={pdfLoadingKind === "customerBalanceReport"}
+              exportingExcel={downloadingExcel === "customerBalanceReport"}
+            />
+          ) : activeReport.id === "openOrdersReport" ? (
+            <OpenOrdersReportModal
+              key={filterKey}
+              reportFilters={filters}
+              title={modalTitle || "דוח הזמנות פתוחות"}
+              onClose={closeReportModal}
+              onExportPdf={() => void exportReport("openOrdersReport", "pdf")}
+              onExportExcel={() => void exportReport("openOrdersReport", "excel")}
+              exportingPdf={pdfLoadingKind === "openOrdersReport"}
+              exportingExcel={downloadingExcel === "openOrdersReport"}
+            />
+          ) : activeReport.id === "paymentsByLocationReport" ? (
+            <PaymentsByLocationReportModal
+              key={filterKey}
+              reportFilters={filters}
+              title={modalTitle || "תשלומים לפי מקום"}
+              onClose={closeReportModal}
+              onExportPdf={() => void exportReport("paymentsByLocationReport", "pdf")}
+              onExportExcel={() => void exportReport("paymentsByLocationReport", "excel")}
+              exportingPdf={pdfLoadingKind === "paymentsByLocationReport"}
+              exportingExcel={downloadingExcel === "paymentsByLocationReport"}
+            />
+          ) : (
+            <div className="adm-report-modal">
+              <div className="adm-report-modal-actions">
+                <LoadingButton
+                  className="adm-btn adm-btn--ghost adm-btn--sm"
+                  loading={downloadingExcel === activeReport.id}
+                  loadingLabel="מייצא..."
+                  onClick={() => void exportReport(activeReport.id, "excel")}
+                >
+                  Excel
+                </LoadingButton>
+                <LoadingButton
+                  className="adm-btn adm-btn--ghost adm-btn--sm"
+                  loading={pdfLoadingKind === activeReport.id}
+                  loadingLabel="מכין..."
+                  onClick={() => void exportReport(activeReport.id, "pdf")}
+                >
+                  PDF
+                </LoadingButton>
+              </div>
+              <div className="adm-report-table-wrap">
+                <table className="adm-table adm-report-table">
+                  <thead>
+                    <tr>{activeReport.columns.map((c) => <th key={c}>{c}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {activeReport.rows.length === 0 ? (
+                      <tr>
+                        <td colSpan={activeReport.columns.length} className="adm-table-empty">
+                          אין נתונים לטווח שנבחר
+                        </td>
+                      </tr>
+                    ) : (
+                      activeReport.rows.map((row, idx) => (
+                        <tr key={idx}>{row.map((cell, i) => <td key={i}>{cell}</td>)}</tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <div className="adm-report-summary">
+                <span>סה"כ: <strong>{activeReport.totals.total}</strong></span>
+                <span>שולם: <strong>{activeReport.totals.paid}</strong></span>
+                <span>פתוח: <strong>{activeReport.totals.remaining}</strong></span>
+              </div>
             </div>
-            <div className="adm-report-table-wrap">
-              <table className="adm-table adm-report-table">
-                <thead>
-                  <tr>{activeReport.columns.map((c) => <th key={c}>{c}</th>)}</tr>
-                </thead>
-                <tbody>
-                  {activeReport.rows.length === 0 ? (
-                    <tr>
-                      <td colSpan={activeReport.columns.length} className="adm-table-empty">
-                        {activeReport.id === "customerBalanceReport"
-                          ? "לא נמצאו לקוחות עם יתרה פתוחה בטווח שנבחר"
-                          : "אין נתונים לטווח שנבחר"}
-                      </td>
-                    </tr>
-                  ) : (
-                    activeReport.rows.map((row, idx) => (
-                      <tr key={idx}>{row.map((cell, i) => <td key={i}>{cell}</td>)}</tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-            <div className="adm-report-summary">
-              <span>סה"כ: <strong>{activeReport.totals.total}</strong></span>
-              <span>שולם: <strong>{activeReport.totals.paid}</strong></span>
-              <span>פתוח: <strong>{activeReport.totals.remaining}</strong></span>
-            </div>
-          </div>
+          )
         ) : null}
       </Modal>
     </div>

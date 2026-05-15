@@ -22,7 +22,7 @@ export function DashboardQuickActions({ canCreateOrders, canReceivePayments, can
         </button>
       ) : null}
       {canReceivePayments ? (
-        <button type="button" className="adm-dash-dock__btn" onClick={() => openWindow({ type: "payments" })}>
+        <button type="button" className="adm-dash-dock__btn" onClick={() => openWindow({ type: "paymentsUpdated", props: {} })}>
           <Wallet size={18} strokeWidth={2} aria-hidden />
           <span>קליטת תשלום</span>
         </button>

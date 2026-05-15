@@ -11,8 +11,9 @@ import {
   type PaymentIntakeOrderRow,
 } from "@/lib/payment-intake";
 import { prisma } from "@/lib/prisma";
+import { allocateNextPaymentCapture } from "@/lib/payment-capture-code";
 import { prismaVatRatePercent } from "@/lib/vat-prisma";
-import { escapeRegExp } from "@/lib/order-number";
+import { paymentIntakeOrderDateThroughAhWeekEnd } from "@/lib/payment-intake-order-filter";
 import { formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate, parseLocalDateTime } from "@/lib/work-week";
 import {
   searchCustomersForOrderAction,
@@ -21,35 +22,6 @@ import {
   type CustomerSearchRow,
   type PaymentLocationOptionRow,
 } from "@/app/admin/capture/actions";
-
-const PAYMENT_CODE_PREFIX = "WGP-P-";
-
-function paymentCodeSuffixPattern(): RegExp {
-  return new RegExp(`^${escapeRegExp(PAYMENT_CODE_PREFIX)}(\\d{6})$`);
-}
-
-async function allocateNextPaymentCode(): Promise<string> {
-  const re = paymentCodeSuffixPattern();
-  const rows = await prisma.payment.findMany({
-    where: { paymentCode: { startsWith: PAYMENT_CODE_PREFIX } },
-    select: { paymentCode: true },
-    take: 200,
-  });
-  let maxN = 0;
-  for (const r of rows) {
-    const c = r.paymentCode?.trim();
-    if (!c) continue;
-    const m = c.match(re);
-    if (m?.[1]) maxN = Math.max(maxN, parseInt(m[1], 10));
-  }
-  for (let bump = 0; bump < 200; bump++) {
-    const n = maxN + 1 + bump;
-    const code = `${PAYMENT_CODE_PREFIX}${String(n).padStart(6, "0")}`;
-    const dup = await prisma.payment.findFirst({ where: { paymentCode: code }, select: { id: true } });
-    if (!dup) return code;
-  }
-  return `${PAYMENT_CODE_PREFIX}${Date.now().toString(36).toUpperCase()}`;
-}
 
 export type { PaymentIntakeOrderRow } from "@/lib/payment-intake";
 
@@ -110,6 +82,8 @@ export async function searchCustomersPaymentIntakeAction(raw: string): Promise<C
 
 export async function fetchPaymentIntakeCustomerOrdersAction(
   customerId: string,
+  /** קוד שבוע AH — יתרות פתוחות עד סוף שבוע זה (שבת) כולל שבועות קודמים; undefined = ללא סינון תאריך */
+  weekCodeForOpenBalances?: string | null,
 ): Promise<{ ok: true; customer: PaymentIntakeCustomerPayload; orders: PaymentIntakeOrderRow[] } | { ok: false; error: string }> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["receive_payments"])) {
@@ -134,8 +108,14 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
   });
   if (!cust) return { ok: false, error: "לקוח לא נמצא" };
 
+  const weekDateWhere = paymentIntakeOrderDateThroughAhWeekEnd(weekCodeForOpenBalances);
+
   const orders = await prisma.order.findMany({
-    where: { customerId: cid, deletedAt: null },
+    where: {
+      customerId: cid,
+      deletedAt: null,
+      ...(weekDateWhere ?? {}),
+    },
     orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],
     select: {
       id: true,
@@ -181,7 +161,14 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
     }
   }
 
-  const rows: PaymentIntakeOrderRow[] = orders.map((o) => {
+  /**
+   * סדר סגירת חובות בקליטת תשלום:
+   * 1. Prisma מחזיר הזמנות לפי orderDate asc (מהישן לחדש).
+   * 2. allocatePaymentAcrossOrders סוגר חובות באותו סדר כרונולוגי (ולא לפי גודל יתרה).
+   * 3. תצוגת הטבלה שומרת על אותו סדר כדי שיתאים להקצאה.
+   * 4. הזמנות ששולמו במלואן (יתרה 0) לא מוחזרות.
+   */
+  const rowsWithRem = orders.map((o) => {
     const deal = o.amountUsd ?? new Prisma.Decimal(0);
     const com = o.commissionUsd ?? new Prisma.Decimal(0);
     const totalUsdVal = o.totalUsd ?? deal.add(com).toDecimalPlaces(4, 4);
@@ -201,12 +188,13 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
     const ilsDec = o.totalIlsWithVat ?? o.totalIls ?? new Prisma.Decimal(0);
 
     const latestCode = latestCodeByOrder.get(o.id) ?? null;
+    const dateYmd = o.orderDate ? formatLocalYmd(new Date(o.orderDate)) : "—";
 
-    return {
+    const row: PaymentIntakeOrderRow = {
       id: o.id,
       orderNumber: o.orderNumber,
       paymentCode: latestCode,
-      dateYmd: o.orderDate ? formatLocalYmd(new Date(o.orderDate)) : "—",
+      dateYmd,
       week: o.weekCode?.trim() || null,
       rate: rateN > 0 ? rateN.toFixed(4) : "—",
       amountUsd: deal.toFixed(2),
@@ -218,7 +206,10 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
       status,
       sourceCountry: o.sourceCountry != null ? String(o.sourceCountry) : null,
     };
+    return { row, rem, status, dateYmd };
   });
+
+  const rows: PaymentIntakeOrderRow[] = rowsWithRem.filter((x) => x.status !== "paid" && x.rem > MONEY_EPS).map((x) => x.row);
 
   const index = cust.oldCustomerCode?.trim() || cust.customerCode?.trim() || null;
 
@@ -395,9 +386,11 @@ export async function savePaymentIntakeAction(
   noteParts.push(`קליטה: USD ${uRaw || "0"} · ₪ ${iRaw || "0"} · העברה ₪ ${tRaw || "0"} · ללא מע״מ ₪ ${nRaw || "0"}`);
   if (form.commissionNote?.trim()) noteParts.push(`עמלה: ${form.commissionNote.trim()}`);
   noteParts.push(`שער הקליטה: ${finalUse.toFixed(4)} (גלובלי ${finalGlobal.toFixed(4)})`);
+  noteParts.push("נסגר אוטומטית לפי סדר הזמנות מהישן לחדש");
   const combinedNotes = noteParts.join("\n");
 
-  const primaryCode = await allocateNextPaymentCode();
+  const allocated = await allocateNextPaymentCapture();
+  const primaryCode = allocated.code;
 
   try {
     await prisma.$transaction(async (tx) => {
@@ -440,6 +433,7 @@ export async function savePaymentIntakeAction(
         await tx.payment.create({
           data: {
             paymentCode: code,
+            paymentNumber: allocated.paymentNumber,
             orderId: row.orderId,
             customerId: cid,
             weekCode,

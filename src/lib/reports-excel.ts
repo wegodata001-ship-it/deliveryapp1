@@ -1,7 +1,13 @@
 import * as XLSX from "xlsx";
 
-export function generateExcel(columns: string[], rows: string[][]): Buffer {
-  const aoa: unknown[][] = [columns];
+export function generateExcel(columns: string[], rows: string[][], prefixRows?: string[][]): Buffer {
+  const aoa: unknown[][] = [];
+  if (prefixRows?.length) {
+    for (const pr of prefixRows) {
+      aoa.push(pr);
+    }
+  }
+  aoa.push(columns);
   if (rows.length) {
     for (const row of rows) aoa.push(row);
   }

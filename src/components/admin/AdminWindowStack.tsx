@@ -3,7 +3,6 @@
 import { useEffect } from "react";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { OrderCreatePanel } from "@/components/admin/OrderCreatePanel";
-import { PaymentModal } from "@/components/admin/PaymentModal";
 import { PaymentModalUpdated } from "@/components/admin/PaymentModalUpdated";
 import { CustomerCardWindowBody, CreateCustomerWindowBody } from "@/components/admin/AdminWindowBodies";
 import type { SerializedFinancial } from "@/lib/financial-settings";
@@ -20,9 +19,8 @@ function windowTitle(w: AdminWindowEntry): string {
     case "createCustomer":
       return "לקוח חדש";
     case "payments":
-      return "קליטת תשלום";
     case "paymentsUpdated":
-      return "קליטת תשלום מעודכן";
+      return "קליטת תשלום";
     default:
       return "חלון";
   }
@@ -36,6 +34,7 @@ type Props = {
   canReceivePayments: boolean;
   canViewCustomerCard: boolean;
   canCreateCustomer: boolean;
+  viewerIsAdmin: boolean;
 };
 
 export function AdminWindowStack({
@@ -46,6 +45,7 @@ export function AdminWindowStack({
   canReceivePayments,
   canViewCustomerCard,
   canCreateCustomer,
+  viewerIsAdmin,
 }: Props) {
   const { stack, closeWindow, closeTop } = useAdminWindows();
 
@@ -124,19 +124,7 @@ export function AdminWindowStack({
                     onClose={() => closeWindow(w.id)}
                   />
                 ) : null}
-                {w.type === "payments" && canReceivePayments ? (
-                  <PaymentModal
-                    key={w.id}
-                    financial={financial}
-                    initialPayment={w.props}
-                    onClose={() => closeWindow(w.id)}
-                    onToast={onToast}
-                    canViewCustomerCard={canViewCustomerCard}
-                    canEditOrders={canEditOrders}
-                    canCreateOrders={canCreateOrders}
-                  />
-                ) : null}
-                {w.type === "paymentsUpdated" && canReceivePayments ? (
+                {(w.type === "payments" || w.type === "paymentsUpdated") && canReceivePayments ? (
                   <PaymentModalUpdated
                     key={w.id}
                     financial={financial}
@@ -145,6 +133,7 @@ export function AdminWindowStack({
                     canViewCustomerCard={canViewCustomerCard}
                     canEditOrders={canEditOrders}
                     canCreateOrders={canCreateOrders}
+                    viewerIsAdmin={viewerIsAdmin}
                   />
                 ) : null}
                 {w.type === "customerCard" && canViewCustomerCard ? (

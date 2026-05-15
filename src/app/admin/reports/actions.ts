@@ -5,7 +5,8 @@ import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { endOfLocalDay, formatLocalYmd, parseLocalDate } from "@/lib/work-week";
-import { getCustomerBalancesReport } from "@/lib/customer-balances-report";
+import { getCustomerBalancesReport, getCustomerBalancesReportWhereClauses } from "@/lib/customer-balances-report";
+import { fetchCustomerOpenOrderEnrichment } from "@/lib/customer-balance-order-status";
 import { normalizeOrderSourceCountry } from "@/lib/order-countries";
 
 export type ReportKind =
@@ -59,6 +60,8 @@ export type ReportTable = {
     paid: string;
     remaining: string;
   };
+  /** שורות טקסט מעל הטבלה בייצוא PDF/Excel */
+  exportHeaderLines?: string[];
 };
 
 const STATUS_HE: Record<string, string> = {
@@ -338,16 +341,46 @@ export async function getReportTableAction(kind: ReportKind, filters: ReportFilt
   }
 
   const { rows, totalDebt, totalExpectedOnRows, totalReceivedOnRows } = await getCustomerBalancesReport(filters);
-  const tableRows = rows.map((r) => [r.label, r.customerCode ?? "", moneyIls(r.expected), moneyIls(r.received), moneyIls(r.remaining)]);
+  const { orderWhere, paymentWhereLinked } = getCustomerBalancesReportWhereClauses(filters);
+  const balanceCustomerIds = rows.map((r) => r.customerId).filter(Boolean) as string[];
+  const orderStatusByCustomer = await fetchCustomerOpenOrderEnrichment({
+    prisma,
+    customerIds: balanceCustomerIds,
+    orderWhere,
+    paymentWhereLinked,
+  });
+  const filterParts = [
+    filters.dateFrom ? `מתאריך ${filters.dateFrom}` : null,
+    filters.dateTo ? `עד תאריך ${filters.dateTo}` : null,
+    filters.workWeek ? `שבוע ${filters.workWeek}` : null,
+    filters.customerId ? "לקוח נבחר" : null,
+    filters.status ? `סטטוס הזמנה ${filters.status}` : null,
+    filters.paymentMethod ? `אמצעי תשלום ${filters.paymentMethod}` : null,
+    filters.sourceCountry ? `מדינה ${filters.sourceCountry}` : null,
+  ].filter(Boolean);
+  const tableRows = rows.map((r) => [
+    r.label,
+    r.customerCode ?? "",
+    moneyIls(r.expected),
+    moneyIls(r.received),
+    moneyIls(r.remaining),
+    moneyUsd(r.remainingUsd),
+    r.paymentStatus,
+    r.customerId ? (orderStatusByCustomer.get(r.customerId)?.summary ?? "—") : "—",
+  ]);
   return {
     id: kind,
     title: "יתרות לקוחות",
-    columns: ["לקוח", "קוד לקוח", "סה\"כ הזמנות", "סה\"כ תשלומים", "יתרה"],
+    columns: ["לקוח", "קוד לקוח", "סה\"כ הזמנות", "סה\"כ תשלומים", "יתרה", "יתרה (דולר)", "סטטוס תשלום", "סטטוס הזמנות"],
     rows: tableRows,
     totals: {
       total: moneyIls(totalExpectedOnRows),
       paid: moneyIls(totalReceivedOnRows),
       remaining: moneyIls(totalDebt),
     },
+    exportHeaderLines: [
+      `תאריך הפקה (ייצוא): ${formatLocalYmd(new Date())}`,
+      `פילטרים: ${filterParts.length ? filterParts.join(" · ") : "ללא סינון מיוחד"}`,
+    ],
   };
 }

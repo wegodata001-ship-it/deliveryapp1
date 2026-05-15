@@ -53,6 +53,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
               canEditOrders={userHasAnyPermission(user, ["edit_orders"])}
               canViewCustomerCard={userHasAnyPermission(user, ["view_customer_card"])}
               canCreateCustomer={userHasAnyPermission(user, ["create_orders"])}
+              viewerIsAdmin={isAdmin}
             >
               {children}
             </AdminChrome>
