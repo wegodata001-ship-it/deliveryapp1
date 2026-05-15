@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 import type { PaymentMethod } from "@prisma/client";
 import {
   buildAllocationsFromMatch,
+  computeCustomerResetBalanceMetrics,
   matchPaymentToOrders,
   toPaymentIntakeBases,
   type PaymentIntakeMatchResult,
@@ -241,25 +242,20 @@ function checkFieldMissingAmount(ch: PaymentLineCheck): boolean {
   return !Number.isFinite(a) || a <= 0;
 }
 
-/**
- * ברירת מחדל ל-vatMode לפי צורת תשלום:
- * - מזומן / העברה בנקאית → BEFORE_VAT (הסכום שהוזן הוא ללא מע״מ)
- * - אשראי / צ׳ק / אחר   → INCLUDING_VAT (הסכום שהוזן הוא כולל מע״מ)
- * המשתמש יכול עדיין לשנות ידנית את ה-select של המע״מ.
- */
-function defaultVatModeForMethod(method: PaymentLineMethod): PaymentLineVatMode {
-  if (method === "CASH" || method === "BANK_TRANSFER") return "BEFORE_VAT";
-  return "INCLUDING_VAT";
+/** ברירת מחדל לשורת תשלום חדשה — סכום כולל מע״מ (לא משנה קליטות שמורות). */
+const DEFAULT_PAYMENT_VAT_MODE: PaymentLineVatMode = "INCLUDING_VAT";
+
+function defaultVatModeForNewLine(): PaymentLineVatMode {
+  return DEFAULT_PAYMENT_VAT_MODE;
 }
 
 function createDefaultLine(): PaymentLine {
-  const paymentMethod: PaymentLineMethod = "CASH";
   return {
     id: newLineId(),
     amount: "",
     currency: "USD",
-    vatMode: defaultVatModeForMethod(paymentMethod),
-    paymentMethod,
+    vatMode: defaultVatModeForNewLine(),
+    paymentMethod: "CASH",
     note: "",
   };
 }
@@ -274,7 +270,7 @@ function paymentMethodLabel(m: PaymentLineMethod): string {
 
 function vatModeLabel(v: PaymentLineVatMode): string {
   if (v === "EXEMPT") return "פטור ממע״מ";
-  if (v === "BEFORE_VAT") return "ללא מע״מ";
+  if (v === "BEFORE_VAT") return "לפני מע״מ (לא כולל)";
   return "כולל מע״מ";
 }
 
@@ -439,6 +435,8 @@ export function PaymentModalUpdated({
   const tableScrollRef = useRef<HTMLDivElement | null>(null);
   /** מטמון immutable לפי id — עותק עמוק בלבד, ללא שיתוף הפניות בין ניווטים */
   const entryCacheRef = useRef<Map<string, PaymentEntryResponse>>(new Map());
+  /** איפוס יתרה לאחר שמירת תשלום (כשיש תשלום בטופס) */
+  const resetAfterSaveRef = useRef(false);
   const [isNavigating, setIsNavigating] = useState(false);
   const [navSpinDirection, setNavSpinDirection] = useState<PaymentNavDirection | null>(null);
   const [navUnsavedOpen, setNavUnsavedOpen] = useState<PaymentNavDirection | null>(null);
@@ -603,6 +601,39 @@ export function PaymentModalUpdated({
     const remaining = roundMoney2(Math.max(0, totalTransactions - totalPaidDb));
     return { totalTransactions, totalPaidDb, remaining };
   }, [matched]);
+
+  /** עמלות זמינות ויתרה פתוחה לפי שורות הטבלה (DB) — לא לפי סיכום שגוי */
+  const resetBalanceMetrics = useMemo(() => {
+    const paymentRows = bases;
+    const { availableCommission, remainingAmount } = computeCustomerResetBalanceMetrics(
+      paymentRows,
+      commissionPercentN,
+    );
+    const remainingToReset = roundMoney2(Math.max(0, remainingAmount - totals.totalUsd));
+    return { availableCommission, remainingAmount, remainingToReset, paymentRows };
+  }, [bases, commissionPercentN, totals.totalUsd]);
+
+  const canResetCustomerBalance = useMemo(() => {
+    if (!viewerIsAdmin) return false;
+    if (resetBalanceMetrics.remainingToReset <= 0.01) return false;
+    return resetBalanceMetrics.availableCommission >= resetBalanceMetrics.remainingToReset - 0.01;
+  }, [viewerIsAdmin, resetBalanceMetrics]);
+
+  useEffect(() => {
+    if (!customer?.id || resetBalanceMetrics.remainingAmount <= 0.01) return;
+    console.log({
+      availableCommission: resetBalanceMetrics.availableCommission,
+      remainingAmount: resetBalanceMetrics.remainingAmount,
+      remainingToReset: resetBalanceMetrics.remainingToReset,
+      paymentRows: resetBalanceMetrics.paymentRows.map((row) => ({
+        id: row.id,
+        commissionUsd: row.commissionUsd,
+        totalAmountUsd: row.totalAmountUsd,
+        dbPaidUsd: row.dbPaidUsd,
+        remaining: roundMoney2(Math.max(0, row.totalAmountUsd - row.dbPaidUsd)),
+      })),
+    });
+  }, [customer?.id, resetBalanceMetrics]);
 
   const loadCustomerOrders = useCallback(
     async (customerId: string, opts?: { silent?: boolean; focusAmount?: boolean; weekCode?: string }): Promise<boolean> => {
@@ -1214,7 +1245,11 @@ export function PaymentModalUpdated({
     if (!customer) return;
     setResetCustomerBusy(true);
     setSaveErr(null);
-    const res = await resetCustomerOutstandingBalancesAction({ customerId: customer.id });
+    const res = await resetCustomerOutstandingBalancesAction({
+      customerId: customer.id,
+      weekCode: intakeWeekCode,
+      commissionPercent: commissionPercent || "0",
+    });
     setResetCustomerBusy(false);
     if (!res.ok) {
       setSaveErr(res.error);
@@ -1258,7 +1293,6 @@ export function PaymentModalUpdated({
       amount: remUsd,
       currency: "USD",
       paymentMethod: "CASH",
-      vatMode: defaultVatModeForMethod("CASH"),
       note: `סגירת חיוב הזמנה ${onum}`,
     });
     onToast("נוסף תשלום מסגירת חיוב (ללא שמירה)");
@@ -1324,6 +1358,10 @@ export function PaymentModalUpdated({
     if (remainingAfter <= 0.01) onToast("כל החיובים נסגרו בהצלחה");
     else onToast(`נשארו ${remainingAfter.toFixed(2)}$ פתוחים`);
     entryCacheRef.current.clear();
+    if (resetAfterSaveRef.current) {
+      resetAfterSaveRef.current = false;
+      await applyResetCustomerBalances();
+    }
     return true;
   }
 
@@ -1916,13 +1954,24 @@ export function PaymentModalUpdated({
                       סכום לא שולם
                       {totals.totalUsd > 0 ? <span className="payment-modal-preview-tag">תצוגה מקדימה</span> : null}
                     </span>
-                    {viewerIsAdmin && customer && ordersTableFooterTotals.remaining > 0.01 ? (
+                    {viewerIsAdmin && customer && resetBalanceMetrics.remainingToReset > 0.01 ? (
                       <button
                         type="button"
-                        className="pm-reset-balance-btn"
+                        className={[
+                          "pm-reset-balance-btn",
+                          canResetCustomerBalance ? "pm-reset-balance-btn--ready" : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" ")}
                         disabled={resetCustomerBusy}
                         onClick={() => setResetCustomerConfirmOpen(true)}
-                        title="איפוס יתרה — סוגר את כל היתרות הפתוחות של הלקוח ומוריד את ההפרש מהעמלות (מהחדש לישן)"
+                        title={
+                          canResetCustomerBalance
+                            ? totals.totalUsd > 0.01
+                              ? "איפוס יתרה — לאחר שמירת התשלום ייסגר היתרה הנותרת מהעמלות"
+                              : "איפוס יתרה — סוגר את כל היתרות הפתוחות של הלקוח ומוריד את ההפרש מהעמלות (מהחדש לישן)"
+                            : "אין מספיק עמלה זמינה לאיפוס — ניתן לנסות לאחר שמירת תשלום"
+                        }
                       >
                         <svg
                           className="pm-reset-balance-icon"
@@ -2109,9 +2158,9 @@ export function PaymentModalUpdated({
                               value={p.vatMode}
                               onChange={(e) => updatePaymentLine(p.id, { vatMode: e.target.value as PaymentLineVatMode })}
                             >
-                              <option value="EXEMPT">{vatModeLabel("EXEMPT")}</option>
-                              <option value="BEFORE_VAT">{vatModeLabel("BEFORE_VAT")}</option>
                               <option value="INCLUDING_VAT">{vatModeLabel("INCLUDING_VAT")}</option>
+                              <option value="BEFORE_VAT">{vatModeLabel("BEFORE_VAT")}</option>
+                              <option value="EXEMPT">{vatModeLabel("EXEMPT")}</option>
                             </select>
                           </label>
                           <label className="payment-modal-lbl payment-upd-lbl">
@@ -2123,7 +2172,6 @@ export function PaymentModalUpdated({
                                 const nextMethod = e.target.value as PaymentLineMethod;
                                 const patch: Partial<PaymentLine> = {
                                   paymentMethod: nextMethod,
-                                  vatMode: defaultVatModeForMethod(nextMethod),
                                 };
                                 if (nextMethod === "CHECK") {
                                   patch.checks =
@@ -2387,10 +2435,18 @@ export function PaymentModalUpdated({
           >
             <h4>האם לאפס יתרה זו?</h4>
             <p>
-              סך יתרה פתוחה{" "}
-              <strong dir="ltr">
-                {fmtUsdDisplay(roundMoney2(Math.max(0, ordersTableFooterTotals.remaining - totals.totalUsd)))}
-              </strong>
+              יתרה לאיפוס{" "}
+              <strong dir="ltr">{fmtUsdDisplay(resetBalanceMetrics.remainingToReset)}</strong>
+              {totals.totalUsd > 0.01 ? (
+                <>
+                  <br />
+                  <span className="adm-muted-keys">
+                    יש תשלום בטופס — האיפוס יבוצע לאחר שמירת התשלום (יתרה לאחר הקליטה).
+                  </span>
+                </>
+              ) : null}
+              <br />
+              עמלה זמינה: <strong dir="ltr">{fmtUsdDisplay(resetBalanceMetrics.availableCommission)}</strong>
               <br />
               הפעולה תוריד את ההפרש מהעמלות (מהחדש לישן) ותסגור את כל ההזמנות הפתוחות של הלקוח.
             </p>
@@ -2409,6 +2465,11 @@ export function PaymentModalUpdated({
                 disabled={resetCustomerBusy}
                 onClick={async () => {
                   setResetCustomerConfirmOpen(false);
+                  if (totals.totalUsd > 0.01) {
+                    resetAfterSaveRef.current = true;
+                    onToast("לאחר שמירת התשלום תבוצע איפוס יתרה");
+                    return;
+                  }
                   await applyResetCustomerBalances();
                 }}
               >

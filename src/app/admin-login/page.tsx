@@ -21,10 +21,13 @@ export default async function AdminLoginPage({
   return (
     <div className="al-page" dir="rtl" lang="he">
       <div className="al-card">
-        <div className="al-brand">
+        <header className="al-header">
+          <div className="al-logo" aria-hidden>
+            W
+          </div>
           <h1>וויגו פרו</h1>
-          <p>מערכת ניהול משלוחים, תשלומים ולקוחות</p>
-        </div>
+          <p className="al-subtitle">מערכת ניהול תשלומים, הזמנות ולקוחות</p>
+        </header>
         <LoginForm nextPath={nextPath} />
       </div>
     </div>

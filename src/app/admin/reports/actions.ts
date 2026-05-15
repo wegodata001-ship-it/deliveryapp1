@@ -8,6 +8,7 @@ import { endOfLocalDay, formatLocalYmd, parseLocalDate } from "@/lib/work-week";
 import { getCustomerBalancesReport, getCustomerBalancesReportWhereClauses } from "@/lib/customer-balances-report";
 import { fetchCustomerOpenOrderEnrichment } from "@/lib/customer-balance-order-status";
 import { normalizeOrderSourceCountry } from "@/lib/order-countries";
+import { getOrderStatusLabel } from "@/constants/order-status";
 
 export type ReportKind =
   | "openOrdersReport"
@@ -64,15 +65,9 @@ export type ReportTable = {
   exportHeaderLines?: string[];
 };
 
-const STATUS_HE: Record<string, string> = {
-  OPEN: "פתוח",
-  CANCELLED: "בוטל",
-  WAITING_FOR_EXECUTION: "ממתין",
-  WITHDRAWAL_FROM_SUPPLIER: "משיכה מספק",
-  SENT: "נשלח",
-  WAITING_FOR_CHINA_EXECUTION: "ממתין לסין",
-  COMPLETED: "הושלם",
-};
+const STATUS_HE: Record<string, string> = Object.fromEntries(
+  Object.values(OrderStatus).map((value) => [value, getOrderStatusLabel(value)]),
+) as Record<string, string>;
 
 const METHOD_HE: Record<string, string> = {
   POINT: "נקודת תשלום",

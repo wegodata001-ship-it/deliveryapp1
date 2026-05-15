@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   createClientAction,
+  suggestNextCustomerCodeAction,
   getCustomerCardSnapshotAction,
   getCustomerLedgerAction,
   listClientsLedgerAction,
@@ -259,6 +260,7 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
           <table className="adm-table adm-table--dense">
             <thead>
               <tr>
+                <th>קוד לקוח</th>
                 <th>שם</th>
                 <th>טלפון</th>
                 <th>אימייל</th>
@@ -267,12 +269,13 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
             </thead>
             <tbody>
               {listLoading ? (
-                <tr><td colSpan={4}>טוען…</td></tr>
+                <tr><td colSpan={5}>טוען…</td></tr>
               ) : pagedClients.length === 0 ? (
-                <tr><td colSpan={4}>לא נמצאו לקוחות</td></tr>
+                <tr><td colSpan={5}>לא נמצאו לקוחות</td></tr>
               ) : (
                 pagedClients.map((r) => (
                   <tr key={r.id} onClick={() => openWindow({ type: "customerCard", props: { customerId: r.id, customerName: r.name, initialTab: "ledger" } })}>
+                    <td dir="ltr">{r.customerCode || "—"}</td>
                     <td>
                       {r.name} {r.isNew ? <span className="adm-client-new-tag">חדש</span> : null}
                     </td>
@@ -586,20 +589,47 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
 
 export function CreateCustomerWindowBody() {
   const { closeTop } = useAdminWindows();
-  const [form, setForm] = useState({ name: "", phone: "", email: "", notes: "" });
+  const customerCodeRef = useRef<HTMLInputElement>(null);
+  const [form, setForm] = useState({ customerCode: "", name: "", phone: "", email: "", notes: "" });
   const [busy, setBusy] = useState(false);
+  const [codeBusy, setCodeBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [created, setCreated] = useState<ClientCreateResult | null>(null);
+
+  useEffect(() => {
+    const t = window.setTimeout(() => customerCodeRef.current?.focus(), 0);
+    return () => window.clearTimeout(t);
+  }, []);
+
+  async function onSuggestCode() {
+    if (codeBusy) return;
+    setCodeBusy(true);
+    setErr(null);
+    const res = await suggestNextCustomerCodeAction();
+    setCodeBusy(false);
+    if (!res.ok) {
+      setErr(res.error);
+      return;
+    }
+    setForm((f) => ({ ...f, customerCode: res.code }));
+    customerCodeRef.current?.focus();
+  }
 
   async function onSave() {
     if (busy) return;
     setErr(null);
+    if (!form.customerCode.trim()) {
+      setErr("יש להזין קוד לקוח");
+      customerCodeRef.current?.focus();
+      return;
+    }
     if (!form.name.trim() || !form.phone.trim()) {
       setErr("יש להזין שם וטלפון");
       return;
     }
     setBusy(true);
     const res = await createClientAction({
+      customerCode: form.customerCode,
       name: form.name,
       phone: form.phone,
       email: form.email || null,
@@ -608,6 +638,7 @@ export function CreateCustomerWindowBody() {
     setBusy(false);
     if (!res.ok) {
       setErr(res.error);
+      if (res.error.includes("קוד לקוח")) customerCodeRef.current?.focus();
       return;
     }
     setCreated(res.client);
@@ -621,20 +652,68 @@ export function CreateCustomerWindowBody() {
           {err ? <div className="adm-error">{err}</div> : null}
           <div className="adm-client-create-grid">
             <div className="adm-field">
-              <label>שם</label>
-              <input placeholder="שם לקוח" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
+              <div className="adm-client-create-label-row">
+                <label htmlFor="new-customer-code">קוד לקוח</label>
+                <button
+                  type="button"
+                  className="adm-client-create-auto-code"
+                  disabled={codeBusy || busy}
+                  onClick={() => void onSuggestCode()}
+                >
+                  {codeBusy ? "…" : "צור אוטומטי"}
+                </button>
+              </div>
+              <input
+                ref={customerCodeRef}
+                id="new-customer-code"
+                dir="ltr"
+                placeholder="WGP-C-24001"
+                value={form.customerCode}
+                onChange={(e) => setForm((f) => ({ ...f, customerCode: e.target.value }))}
+                required
+                autoComplete="off"
+              />
             </div>
             <div className="adm-field">
-              <label>טלפון</label>
-              <input dir="ltr" placeholder="050-0000000" value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} />
+              <label htmlFor="new-customer-name">שם לקוח</label>
+              <input
+                id="new-customer-name"
+                placeholder="שם לקוח"
+                value={form.name}
+                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                required
+              />
             </div>
             <div className="adm-field">
-              <label>אימייל</label>
-              <input dir="ltr" placeholder="name@company.com" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} />
+              <label htmlFor="new-customer-phone">טלפון</label>
+              <input
+                id="new-customer-phone"
+                dir="ltr"
+                placeholder="050-0000000"
+                value={form.phone}
+                onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
+                required
+              />
+            </div>
+            <div className="adm-field">
+              <label htmlFor="new-customer-email">אימייל</label>
+              <input
+                id="new-customer-email"
+                dir="ltr"
+                placeholder="name@company.com"
+                value={form.email}
+                onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+              />
             </div>
             <div className="adm-field adm-client-create-notes">
-              <label>הערות</label>
-              <textarea rows={4} placeholder="הערות פנימיות" value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} />
+              <label htmlFor="new-customer-notes">הערות</label>
+              <textarea
+                id="new-customer-notes"
+                rows={4}
+                placeholder="הערות פנימיות"
+                value={form.notes}
+                onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+              />
             </div>
           </div>
           <div className="adm-mini-modal-actions adm-client-create-actions">
@@ -647,6 +726,7 @@ export function CreateCustomerWindowBody() {
         <div className="adm-client-create-success">
           <div className="adm-pay-success">✅ הלקוח נוסף בהצלחה</div>
           <div className="adm-cust-display-card">
+            <div><strong>קוד לקוח:</strong> <span dir="ltr">{created.customerCode}</span></div>
             <div><strong>שם:</strong> {created.name}</div>
             <div><strong>טלפון:</strong> {created.phone}</div>
             <div><strong>אימייל:</strong> {created.email || "—"}</div>

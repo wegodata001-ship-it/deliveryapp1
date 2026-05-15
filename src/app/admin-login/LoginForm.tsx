@@ -16,14 +16,18 @@ export function LoginForm({ nextPath }: { nextPath: string }) {
       <div className="al-field">
         <label htmlFor="username">שם משתמש</label>
         <div className="al-input-wrap">
-          <User size={18} aria-hidden />
+          <span className="al-input-icon" aria-hidden>
+            <User size={20} strokeWidth={2} />
+          </span>
           <input id="username" name="username" type="text" autoComplete="username" required />
         </div>
       </div>
       <div className="al-field">
         <label htmlFor="password">סיסמה</label>
         <div className="al-input-wrap">
-          <Lock size={18} aria-hidden />
+          <span className="al-input-icon" aria-hidden>
+            <Lock size={20} strokeWidth={2} />
+          </span>
           <input id="password" name="password" type="password" autoComplete="current-password" required />
         </div>
       </div>

@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { endOfLocalDay, formatLocalYmd, parseLocalDate } from "@/lib/work-week";
 import { normalizeOrderSourceCountry } from "@/lib/order-countries";
 import type { ReportFilters } from "@/app/admin/reports/actions";
+import { getOrderStatusLabel } from "@/constants/order-status";
 
 /** ערכי סינון UI */
 export type OpenOrdersModalStatusBucket =
@@ -65,16 +66,9 @@ const IN_CARE_STATUSES: OrderStatus[] = [
 
 const IN_CARE_SQL_LIST = IN_CARE_STATUSES.map((s) => `'${s}'`).join(", ");
 
-const STATUS_LABEL: Record<OrderStatus, string> = {
-  [OrderStatus.OPEN]: "פתוח",
-  [OrderStatus.CANCELLED]: "מבוטל",
-  [OrderStatus.WAITING_FOR_EXECUTION]: "ממתין",
-  [OrderStatus.WITHDRAWAL_FROM_SUPPLIER]: "משיכה מספק",
-  [OrderStatus.SENT]: "נשלח",
-  [OrderStatus.WAITING_FOR_CHINA_EXECUTION]: "ממתין לסין",
-  [OrderStatus.COMPLETED]: "מוכן",
-  [OrderStatus.DEBT_WITHDRAWAL]: "משיכת חוב",
-};
+const STATUS_LABEL: Record<OrderStatus, string> = Object.fromEntries(
+  Object.values(OrderStatus).map((value) => [value, getOrderStatusLabel(value)]),
+) as Record<OrderStatus, string>;
 
 function moneyIls(v: Prisma.Decimal | number | null | undefined): string {
   const n = v instanceof Prisma.Decimal ? Number(v.toString()) : Number(v ?? 0);

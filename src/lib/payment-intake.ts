@@ -59,6 +59,45 @@ export function roundMoney2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/** עמלה לשורה: מהזמנה, או משוערת מאחוז העמלה בקליטה אם אין עמלה שמורה */
+export function computeEffectiveRowCommissionUsd(
+  amountUsd: number,
+  commissionUsd: number,
+  commissionPercent = 0,
+): number {
+  const dbCom = Number(commissionUsd);
+  if (Number.isFinite(dbCom) && dbCom > 0) return dbCom;
+  const amt = Number(amountUsd);
+  const pct = Number(commissionPercent);
+  if (!Number.isFinite(amt) || amt <= 0 || !Number.isFinite(pct) || pct <= 0) return 0;
+  return roundMoney2((amt * pct) / 100);
+}
+
+/** סכום עמלות זמינות ויתרה פתוחה לפי שורות טבלת הקליטה (לא סיכום גלובלי שגוי). */
+export function computeCustomerResetBalanceMetrics(
+  rows: Pick<PaymentIntakeOrderBase, "commissionUsd" | "amountUsd" | "totalAmountUsd" | "dbPaidUsd">[],
+  commissionPercent = 0,
+): { availableCommission: number; remainingAmount: number } {
+  let availableCommission = 0;
+  let remainingAmount = 0;
+  for (const row of rows) {
+    availableCommission += computeEffectiveRowCommissionUsd(
+      row.amountUsd,
+      row.commissionUsd,
+      commissionPercent,
+    );
+    const total = Number(row.totalAmountUsd);
+    const paid = Number(row.dbPaidUsd);
+    if (Number.isFinite(total) && Number.isFinite(paid)) {
+      remainingAmount += Math.max(0, total - paid);
+    }
+  }
+  return {
+    availableCommission: roundMoney2(availableCommission),
+    remainingAmount: roundMoney2(remainingAmount),
+  };
+}
+
 function orderRemainingUsd(o: PaymentIntakeOrderBase): number {
   return roundMoney2(Math.max(0, o.totalAmountUsd - o.dbPaidUsd));
 }

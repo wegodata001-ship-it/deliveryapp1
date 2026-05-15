@@ -54,6 +54,10 @@ import {
   parseLocalDate,
   WORK_WEEK_RANGES,
 } from "@/lib/work-week";
+import {
+  ORDER_STATUS_EDIT_SELECT_OPTIONS,
+  ORDER_STATUS_QUICK_SELECT_OPTIONS,
+} from "@/constants/order-status";
 
 function addDays(d: Date, days: number): Date {
   const out = new Date(d);
@@ -80,28 +84,6 @@ function parseWeekNumber(raw: string): number | null {
   }
   return null;
 }
-
-/** סטטוסים במסך קליטה מהירה — תואם enum במסד */
-const CREATE_ORDER_STATUS_OPTIONS: { value: OrderStatus; label: string }[] = [
-  { value: OrderStatus.OPEN, label: "פתוחה" },
-  { value: OrderStatus.WAITING_FOR_EXECUTION, label: "בטיפול" },
-  { value: OrderStatus.COMPLETED, label: "הושלמה" },
-];
-
-const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
-  OPEN: "פתוחה",
-  CANCELLED: "מבוטלת",
-  WAITING_FOR_EXECUTION: "ממתינה לביצוע",
-  WITHDRAWAL_FROM_SUPPLIER: "משיכה מספק",
-  SENT: "נשלחה",
-  WAITING_FOR_CHINA_EXECUTION: "ממתינה לביצוע סין",
-  COMPLETED: "הושלמה",
-  DEBT_WITHDRAWAL: "משיכה מהחוב",
-};
-
-const EDIT_ORDER_STATUS_OPTIONS: { value: OrderStatus; label: string }[] = (
-  Object.keys(ORDER_STATUS_LABELS) as OrderStatus[]
-).map((value) => ({ value, label: ORDER_STATUS_LABELS[value] }));
 
 type ComboField = "code" | "nameAr" | "nameEn";
 
@@ -1104,7 +1086,7 @@ export function OrderCreatePanel({
   const formLocked = Boolean(isEdit && editGate?.employeeEditBlocked);
   const fieldDisabled = isSaving || formLocked;
 
-  const statusOptions = isEdit ? EDIT_ORDER_STATUS_OPTIONS : CREATE_ORDER_STATUS_OPTIONS;
+  const statusOptions = isEdit ? ORDER_STATUS_EDIT_SELECT_OPTIONS : ORDER_STATUS_QUICK_SELECT_OPTIONS;
 
   return (
     <div className="adm-order-create-legacy-wrap adm-oc-pro-wrap">

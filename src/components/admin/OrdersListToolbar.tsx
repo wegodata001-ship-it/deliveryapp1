@@ -12,6 +12,7 @@ import {
   getAhWeekRange,
   normalizeAhWeekCode,
 } from "@/lib/work-week";
+import { ORDER_STATUS_QUICK_SELECT_OPTIONS } from "@/constants/order-status";
 
 export type OrdersCreatedByOption = {
   id: string;
@@ -81,13 +82,7 @@ function buildSearch(sp: URLSearchParams, patch: Record<string, string | undefin
   return q;
 }
 
-const STATUS_OPTIONS: { value: OrderStatus; label: string }[] = [
-  { value: OrderStatus.OPEN, label: "פתוחה" },
-  { value: OrderStatus.WAITING_FOR_EXECUTION, label: "בטיפול" },
-  { value: OrderStatus.COMPLETED, label: "הושלמה" },
-  { value: OrderStatus.CANCELLED, label: "מבוטל" },
-  { value: OrderStatus.DEBT_WITHDRAWAL, label: "משיכה מהחוב" },
-];
+const STATUS_OPTIONS = ORDER_STATUS_QUICK_SELECT_OPTIONS;
 
 export function OrdersListToolbar({
   fromYmd,

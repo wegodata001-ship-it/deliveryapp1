@@ -542,8 +542,22 @@ export async function resetOrderBalanceAction(input: {
  *
  * הרשאות: מנהל (ADMIN) בלבד.
  */
+function effectiveOrderCommissionUsd(
+  amount: Prisma.Decimal,
+  commission: Prisma.Decimal,
+  commissionPercent: Prisma.Decimal,
+): Prisma.Decimal {
+  if (commission.gt(0)) return commission;
+  if (commissionPercent.lte(0)) return new Prisma.Decimal(0);
+  return amount.mul(commissionPercent).div(100).toDecimalPlaces(4, 4);
+}
+
 export async function resetCustomerOutstandingBalancesAction(input: {
   customerId: string;
+  /** אותו סינון שבוע AH כמו בטבלת הקליטה — יתרות עד סוף השבוע */
+  weekCode?: string | null;
+  /** אחוז עמלה מהקליטה — לחישוב עמלה משוערת כשאין commissionUsd בהזמנה */
+  commissionPercent?: string | null;
 }): Promise<
   | {
       ok: true;
@@ -561,12 +575,22 @@ export async function resetCustomerOutstandingBalancesAction(input: {
   const cid = (input.customerId || "").trim();
   if (!cid) return { ok: false, error: "חסר מזהה לקוח" };
 
+  const weekCode = input.weekCode?.trim() || null;
+  const weekDateWhere = paymentIntakeOrderDateThroughAhWeekEnd(weekCode);
+  const pctRaw = (input.commissionPercent ?? "").trim().replace(",", ".");
+  const pctN = Number(pctRaw);
+  const commissionPercentDec = new Prisma.Decimal(Number.isFinite(pctN) && pctN > 0 ? pctN : 0);
+
   const EPS = new Prisma.Decimal("0.01");
 
   try {
     const result = await prisma.$transaction(async (tx) => {
       const orders = await tx.order.findMany({
-        where: { customerId: cid, deletedAt: null },
+        where: {
+          customerId: cid,
+          deletedAt: null,
+          ...(weekDateWhere ?? {}),
+        },
         orderBy: [{ orderDate: "desc" }, { createdAt: "desc" }],
         select: {
           id: true,
@@ -591,11 +615,12 @@ export async function resetCustomerOutstandingBalancesAction(input: {
 
       const enriched = orders.map((o) => {
         const amount = o.amountUsd ?? new Prisma.Decimal(0);
-        const commission = o.commissionUsd ?? new Prisma.Decimal(0);
-        const total = o.totalUsd ?? amount.add(commission).toDecimalPlaces(4, 4);
+        const commissionStored = o.commissionUsd ?? new Prisma.Decimal(0);
+        const commission = effectiveOrderCommissionUsd(amount, commissionStored, commissionPercentDec);
+        const total = o.totalUsd ?? amount.add(commissionStored).toDecimalPlaces(4, 4);
         const paid = paidByOrder.get(o.id) ?? new Prisma.Decimal(0);
         const remaining = total.sub(paid);
-        return { id: o.id, orderNumber: o.orderNumber, amount, commission, total, remaining };
+        return { id: o.id, orderNumber: o.orderNumber, amount, commission, commissionStored, total, remaining };
       });
 
       const remainingRows = enriched.filter((x) => x.remaining.gt(EPS));
@@ -604,13 +629,40 @@ export async function resetCustomerOutstandingBalancesAction(input: {
       }
 
       const totalRemaining = remainingRows.reduce((acc, x) => acc.add(x.remaining), new Prisma.Decimal(0));
-      const totalCommission = enriched.reduce((acc, x) => acc.add(x.commission), new Prisma.Decimal(0));
-      if (totalCommission.lt(totalRemaining.sub(EPS))) {
-        throw new Error("אין עמלה מספיקה להורדת ההפרש");
+      const availableCommission = enriched.reduce((acc, x) => {
+        if (x.commission.lte(0)) return acc;
+        return acc.add(x.commission);
+      }, new Prisma.Decimal(0));
+
+      if (process.env.NODE_ENV !== "production") {
+        console.log({
+          resetBalanceDebug: true,
+          weekCode,
+          availableCommission: availableCommission.toString(),
+          remainingAmount: totalRemaining.toString(),
+          paymentRows: enriched.map((x) => ({
+            orderId: x.id,
+            commission: x.commission.toString(),
+            remaining: x.remaining.toString(),
+          })),
+        });
+      }
+
+      if (availableCommission.lt(totalRemaining.sub(EPS))) {
+        throw new Error("אין מספיק עמלה זמינה לאיפוס");
       }
 
       const adjustState = new Map(
-        enriched.map((x) => [x.id, { commission: x.commission, total: x.total, amount: x.amount, orderNumber: x.orderNumber }]),
+        enriched.map((x) => [
+          x.id,
+          {
+            commission: x.commission,
+            commissionStored: x.commissionStored,
+            total: x.total,
+            amount: x.amount,
+            orderNumber: x.orderNumber,
+          },
+        ]),
       );
 
       let leftover = totalRemaining;
@@ -626,24 +678,31 @@ export async function resetCustomerOutstandingBalancesAction(input: {
       for (const row of enriched) {
         if (leftover.lte(EPS)) break;
         const state = adjustState.get(row.id)!;
-        if (state.commission.lte(0)) continue;
-        const take = Prisma.Decimal.min(state.commission, leftover);
-        const afterCommission = state.commission.sub(take).toDecimalPlaces(4, 4);
+        const pool = state.commission.gt(0) ? state.commission : state.commissionStored;
+        if (pool.lte(0)) continue;
+        const take = Prisma.Decimal.min(pool, leftover);
+        const afterCommission = pool.sub(take).toDecimalPlaces(4, 4);
         const afterTotal = state.amount.add(afterCommission).toDecimalPlaces(4, 4);
         adjustments.push({
           orderId: row.id,
-          beforeCommission: state.commission,
+          beforeCommission: pool,
           beforeTotal: state.total,
           afterCommission,
           afterTotal,
           delta: take,
         });
-        adjustState.set(row.id, { commission: afterCommission, total: afterTotal, amount: state.amount, orderNumber: state.orderNumber });
+        adjustState.set(row.id, {
+          commission: afterCommission,
+          commissionStored: afterCommission,
+          total: afterTotal,
+          amount: state.amount,
+          orderNumber: state.orderNumber,
+        });
         leftover = leftover.sub(take);
       }
 
       if (leftover.gt(EPS)) {
-        throw new Error("אין עמלה מספיקה להורדת ההפרש");
+        throw new Error("אין מספיק עמלה זמינה לאיפוס");
       }
 
       for (const a of adjustments) {
@@ -669,7 +728,8 @@ export async function resetCustomerOutstandingBalancesAction(input: {
           entityId: cid,
           oldValue: {
             totalRemainingUsd: totalRemaining.toString(),
-            totalCommissionUsd: totalCommission.toString(),
+            availableCommissionUsd: availableCommission.toString(),
+            weekCode,
           } as Prisma.InputJsonValue,
           newValue: {
             closedOrderIds: closedIds,

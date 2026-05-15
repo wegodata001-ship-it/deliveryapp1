@@ -3,6 +3,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { OrderStatus, PaymentMethod } from "@prisma/client";
+import {
+  inlineStatusBadgeClass,
+  ORDER_STATUS_QUICK_SELECT_OPTIONS,
+  orderStatusToQuickSelectValue,
+} from "@/constants/order-status";
 import { ChevronDown, FileText, Plus, Sheet } from "lucide-react";
 import {
   updateOrderListPaymentLocationAction,
@@ -96,33 +101,6 @@ function paymentMethodTone(m: string | null): string {
     default:
       return "adm-pay-sel--none";
   }
-}
-
-/** ערך ל־select בשורה — מצבי עבודה + מבוטל + משיכה מהחוב */
-function orderStatusToInlineValue(status: string): OrderStatus {
-  if (
-    status === OrderStatus.OPEN ||
-    status === OrderStatus.COMPLETED ||
-    status === OrderStatus.CANCELLED ||
-    status === OrderStatus.DEBT_WITHDRAWAL
-  )
-    return status;
-  if (
-    status === OrderStatus.WAITING_FOR_EXECUTION ||
-    status === OrderStatus.SENT ||
-    status === OrderStatus.WAITING_FOR_CHINA_EXECUTION ||
-    status === OrderStatus.WITHDRAWAL_FROM_SUPPLIER
-  )
-    return OrderStatus.WAITING_FOR_EXECUTION;
-  return OrderStatus.WAITING_FOR_EXECUTION;
-}
-
-function inlineStatusBadgeClass(sel: OrderStatus): string {
-  if (sel === OrderStatus.COMPLETED) return "adm-badge-sel--success";
-  if (sel === OrderStatus.OPEN) return "adm-badge-sel--open";
-  if (sel === OrderStatus.CANCELLED) return "adm-badge-sel--cancelled";
-  if (sel === OrderStatus.DEBT_WITHDRAWAL) return "adm-badge-sel--withdrawal";
-  return "adm-badge-sel--warning";
 }
 
 function orderEditBadgeLabel(
@@ -630,7 +608,7 @@ export function OrdersListShell({
               </tr>
             ) : (
               rows.map((o) => {
-                const selVal = orderStatusToInlineValue(o.status);
+                const selVal = orderStatusToQuickSelectValue(o.status);
                 const editBadgeUi = o.editBadge ? orderEditBadgeLabel(o.editBadge, o.status) : null;
                 const isCancelled = o.status === OrderStatus.CANCELLED;
                 return (
@@ -715,11 +693,11 @@ export function OrdersListShell({
                         aria-label="סטטוס הזמנה"
                         onChange={(e) => void onRowStatusChange(o.id, e.target.value as OrderStatus)}
                       >
-                        <option value={OrderStatus.OPEN}>פתוחה</option>
-                        <option value={OrderStatus.WAITING_FOR_EXECUTION}>בטיפול</option>
-                        <option value={OrderStatus.COMPLETED}>מוכן</option>
-                        <option value={OrderStatus.CANCELLED}>מבוטל</option>
-                        <option value={OrderStatus.DEBT_WITHDRAWAL}>משיכה מהחוב</option>
+                        {ORDER_STATUS_QUICK_SELECT_OPTIONS.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
                       </select>
                     </td>
                     <td className="adm-ord-col-meta adm-ord-col-pay" onClick={(e) => e.stopPropagation()}>

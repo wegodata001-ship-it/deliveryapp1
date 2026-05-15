@@ -44,9 +44,4 @@ export type OrderEditUnlockFields = {
   editUnlockedUntil: Date | null;
 };
 
-/** תווית קצרה לתוכן (התראות / מודלים) */
-export function orderSensitiveStatusHe(status: OrderStatus): string {
-  if (status === "CANCELLED") return "מבוטלת";
-  if (status === "COMPLETED") return "מוכנה";
-  return status;
-}
+export { orderSensitiveStatusHe } from "@/constants/order-status";

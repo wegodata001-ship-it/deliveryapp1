@@ -16,6 +16,7 @@ import { getSelectedCountriesForOrdersInternal } from "@/app/admin/settings/acti
 import { ORDER_COUNTRY_CODES, coerceOrderCountryForForm, normalizeOrderSourceCountry, type OrderCountryCode } from "@/lib/order-countries";
 import { prismaVatRatePercent } from "@/lib/vat-prisma";
 import { computeCustomerNamePatches, primaryCustomerDisplayName } from "@/lib/customer-names";
+import { isCustomerCodeTaken, normalizeCustomerCodeInput, suggestNextCustomerCode } from "@/lib/customer-code";
 import { canUserEditCompletedOrder } from "@/lib/order-edit-lock";
 import {
   clearExpiredOrderEditUnlockForOrder,
@@ -972,6 +973,7 @@ export type CustomerLedgerPayload = {
 };
 
 export type ClientCreateInput = {
+  customerCode: string;
   name: string;
   phone: string;
   email?: string | null;
@@ -980,6 +982,7 @@ export type ClientCreateInput = {
 
 export type ClientCreateResult = {
   id: string;
+  customerCode: string;
   name: string;
   phone: string;
   email: string | null;
@@ -1006,6 +1009,15 @@ export type ClientLedgerPayload = {
   totalPages: number;
 };
 
+export async function suggestNextCustomerCodeAction(): Promise<{ ok: true; code: string } | { ok: false; error: string }> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["create_orders", "view_customers", "edit_orders"])) {
+    return { ok: false, error: "אין הרשאה" };
+  }
+  const code = await suggestNextCustomerCode();
+  return { ok: true, code };
+}
+
 export async function createClientAction(
   input: ClientCreateInput,
 ): Promise<{ ok: true; client: ClientCreateResult } | { ok: false; error: string }> {
@@ -1014,27 +1026,42 @@ export async function createClientAction(
     return { ok: false, error: "אין הרשאה" };
   }
 
+  const customerCode = normalizeCustomerCodeInput(input.customerCode);
   const name = input.name.trim();
   const phone = input.phone.trim();
   const email = input.email?.trim() || null;
   const notes = input.notes?.trim() || null;
+  if (!customerCode) return { ok: false, error: "יש להזין קוד לקוח" };
   if (!name) return { ok: false, error: "שם לקוח חובה" };
   if (!phone) return { ok: false, error: "טלפון חובה" };
 
+  if (await isCustomerCodeTaken(customerCode)) {
+    return { ok: false, error: "קוד לקוח כבר קיים במערכת" };
+  }
+
   const created = await prisma.customer.create({
     data: {
+      customerCode,
       displayName: name,
       phone,
       email,
       notes,
       isActive: true,
     },
-    select: { id: true, displayName: true, phone: true, email: true, createdAt: true },
+    select: {
+      id: true,
+      customerCode: true,
+      displayName: true,
+      phone: true,
+      email: true,
+      createdAt: true,
+    },
   });
   return {
     ok: true,
     client: {
       id: created.id,
+      customerCode: created.customerCode ?? customerCode,
       name: created.displayName,
       phone: created.phone ?? phone,
       email: created.email,

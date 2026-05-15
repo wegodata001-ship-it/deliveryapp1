@@ -9,6 +9,11 @@ import { canUserEditCompletedOrder } from "@/lib/order-edit-lock";
 import { prisma } from "@/lib/prisma";
 import { ensureOnce } from "@/lib/ensure-tables-once";
 import { formatLocalYmd } from "@/lib/work-week";
+import {
+  getOrderStatusLabel,
+  ORDER_STATUS_EDIT_SELECT_OPTIONS,
+  orderStatusLabelByEditText,
+} from "@/constants/order-status";
 
 export type SourceTableId =
   | "customers"
@@ -144,20 +149,11 @@ const PAYMENT_METHOD_LABELS: Record<string, string> = {
   OTHER: "אחר",
 };
 
-const ORDER_STATUS_LABELS: Record<string, string> = {
-  OPEN: "פתוח",
-  CANCELLED: "בוטל",
-  WAITING_FOR_EXECUTION: "ממתין",
-  WITHDRAWAL_FROM_SUPPLIER: "משיכה מספק",
-  SENT: "נשלח",
-  WAITING_FOR_CHINA_EXECUTION: "ממתין לסין",
-  COMPLETED: "הושלם",
-};
+const ORDER_STATUS_LABELS: Record<string, string> = Object.fromEntries(
+  (Object.values(OrderStatus) as OrderStatus[]).map((value) => [value, getOrderStatusLabel(value)]),
+) as Record<string, string>;
 
-const ORDER_STATUS_OPTIONS = Object.values(OrderStatus).map((value) => ({
-  value,
-  label: ORDER_STATUS_LABELS[value] ?? value,
-}));
+const ORDER_STATUS_OPTIONS = ORDER_STATUS_EDIT_SELECT_OPTIONS;
 
 const YES_NO_OPTIONS = [
   { value: "true", label: "כן" },
@@ -924,8 +920,8 @@ export async function upsertSourceTableRowAction(input: SourceTableMutation): Pr
     });
   } else if (input.table === "orders" && input.id && v.status) {
     const me = await requireAuth();
-    const match = Object.entries(ORDER_STATUS_LABELS).find(([, label]) => label === v.status);
-    const status = (match?.[0] ?? v.status) as OrderStatus;
+    const resolved = orderStatusLabelByEditText(v.status);
+    const status = (resolved ?? v.status) as OrderStatus;
     if (Object.values(OrderStatus).includes(status)) {
       const oid = input.id.trim();
       await clearExpiredOrderEditUnlockForOrder(oid);

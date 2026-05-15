@@ -7,21 +7,15 @@ import { formatLocalYmd, parseOrdersListDateFilterFromSearchParams } from "@/lib
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { orderCaptureSplitMethodLabel } from "@/lib/order-capture-payment-methods";
 import { buildOrdersListWhereFromSearchParams } from "@/app/admin/orders/orders-list-where";
+import { getOrderStatusLabel } from "@/constants/order-status";
 
 export type OrdersPdfExportMode = "regular" | "by_place" | "by_status" | "by_week";
 
 const PDF_EXPORT_MAX_ROWS = 15_000;
 
-const STATUS_HE: Record<OrderStatus, string> = {
-  [OrderStatus.OPEN]: "פתוח",
-  [OrderStatus.CANCELLED]: "מבוטל",
-  [OrderStatus.WAITING_FOR_EXECUTION]: "ממתין",
-  [OrderStatus.WITHDRAWAL_FROM_SUPPLIER]: "משיכה מספק",
-  [OrderStatus.SENT]: "נשלח",
-  [OrderStatus.WAITING_FOR_CHINA_EXECUTION]: "ממתין לסין",
-  [OrderStatus.COMPLETED]: "מוכן",
-  [OrderStatus.DEBT_WITHDRAWAL]: "משיכת חוב",
-};
+const STATUS_HE: Record<OrderStatus, string> = Object.fromEntries(
+  Object.values(OrderStatus).map((value) => [value, getOrderStatusLabel(value)]),
+) as Record<OrderStatus, string>;
 
 const STATUS_GROUP_ORDER: OrderStatus[] = [
   OrderStatus.OPEN,
