@@ -1,14 +1,9 @@
 import { prisma } from "@/lib/prisma";
-import { uniqueManagedKeys } from "@/lib/employee-permission-groups";
+import { managedPermissionIdMap } from "@/lib/permissions";
 import { CreateUserForm } from "@/components/admin/CreateUserForm";
 
 export default async function NewUserPage() {
-  const keys = uniqueManagedKeys();
-  const rows = await prisma.permission.findMany({
-    where: { key: { in: [...keys] }, isActive: true },
-    select: { id: true, key: true },
-  });
-  const permissionByKey = Object.fromEntries(rows.map((r) => [r.key, r.id]));
+  const permissionByKey = await managedPermissionIdMap(prisma);
 
   return (
     <>

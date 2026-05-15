@@ -22,6 +22,7 @@ export function EditUserForm({ user, permissionByKey }: { user: EditUserSafe; pe
   const boundUpdate = updateUserAction.bind(null, user.id);
   const [state, formAction, pending] = useActionState(boundUpdate, initial);
   const [roleUi, setRoleUi] = useState<"EMPLOYEE" | "ADMIN">(user.role);
+  const missingPermissionRows = Object.keys(permissionByKey).length === 0;
 
   return (
     <form className="adm-form" action={formAction}>
@@ -78,6 +79,17 @@ export function EditUserForm({ user, permissionByKey }: { user: EditUserSafe; pe
       ) : (
         <div className="adm-field" style={{ marginTop: "1rem" }}>
           <span style={{ fontWeight: 600, fontSize: "0.95rem" }}>הרשאות לעובד</span>
+          {missingPermissionRows ? (
+            <div className="adm-error" style={{ marginTop: "0.5rem" }}>
+              לא נטענו מפתחות הרשאה מהמסד. רענן את הדף; אם הבעיה נמשכת הרץ{" "}
+              <code dir="ltr">npx tsx scripts/ensure-permissions.ts</code>.
+            </div>
+          ) : null}
+          {user.role === "EMPLOYEE" && user.permissionIds.length === 0 ? (
+            <div className="wf-note" style={{ marginTop: "0.5rem" }}>
+              לעובד זה אין הרשאות פעילות — סמן את התיבות הנדרשות ושמור.
+            </div>
+          ) : null}
           {EMPLOYEE_PERMISSION_GROUPS.map((group) => (
             <div key={group.title} style={{ marginTop: "1rem" }}>
               <div style={{ fontWeight: 700, fontSize: "0.88rem", marginBottom: "0.5rem", color: "var(--adm-text)" }}>

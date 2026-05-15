@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
-import { uniqueManagedKeys } from "@/lib/employee-permission-groups";
+import { managedPermissionIdMap } from "@/lib/permissions";
 import { EditUserForm, type EditUserSafe } from "@/components/admin/EditUserForm";
 
 export default async function EditUserPage({ params }: { params: Promise<{ id: string }> }) {
@@ -20,12 +20,7 @@ export default async function EditUserPage({ params }: { params: Promise<{ id: s
 
   if (!user) notFound();
 
-  const keys = uniqueManagedKeys();
-  const rows = await prisma.permission.findMany({
-    where: { key: { in: [...keys] }, isActive: true },
-    select: { id: true, key: true },
-  });
-  const permissionByKey = Object.fromEntries(rows.map((r) => [r.key, r.id]));
+  const permissionByKey = await managedPermissionIdMap(prisma);
 
   const safe: EditUserSafe = {
     id: user.id,

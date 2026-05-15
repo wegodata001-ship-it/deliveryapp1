@@ -5,6 +5,8 @@ import { AdminChrome } from "@/components/admin/AdminChrome";
 import { AdminWindowProvider } from "@/components/admin/AdminWindowProvider";
 import { filterSidebarSections } from "@/lib/sidebar-nav";
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
+import { prisma } from "@/lib/prisma";
+import { ensureAppPermissions } from "@/lib/permissions";
 import { countPendingOrderEditRequestsForAdmin } from "@/app/admin/order-edit-requests/actions";
 import { ensureDefaultFinancialSettings, getCurrentFinancialSettings, serializeFinancialSettings } from "@/lib/financial-settings";
 import "./admin.css";
@@ -17,6 +19,7 @@ export const metadata: Metadata = {
 };
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
+  await ensureAppPermissions(prisma);
   const user = await requireAuth();
   const isAdmin = isAdminUser(user);
   const sections = filterSidebarSections(isAdmin, user.permissionKeys);

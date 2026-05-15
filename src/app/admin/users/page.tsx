@@ -53,12 +53,15 @@ export default async function AdminUsersPage() {
           <tbody>
             {users.map((u) => {
               const names = u.permissions.map((x) => x.permission.name);
+              const employeeMissingPerms = u.role === "EMPLOYEE" && u.permissions.length === 0;
               const permPreview =
-                names.length === 0
-                  ? "—"
-                  : names.length <= 2
-                    ? names.join(" · ")
-                    : `${names.slice(0, 2).join(" · ")} +${names.length - 2}`;
+                employeeMissingPerms
+                  ? "אין הרשאות — יש לערוך ולסמן"
+                  : names.length === 0
+                    ? "—"
+                    : names.length <= 2
+                      ? names.join(" · ")
+                      : `${names.slice(0, 2).join(" · ")} +${names.length - 2}`;
               const isSelf = u.id === current.id;
               return (
                 <tr key={u.id} style={{ opacity: u.isActive ? 1 : 0.65 }}>

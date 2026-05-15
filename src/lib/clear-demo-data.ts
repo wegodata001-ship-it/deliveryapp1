@@ -43,8 +43,8 @@ export function isClearDemoConfirmationValid(input: string): boolean {
 type Db = PrismaClient;
 
 const PRESERVED_TABLES = [
-  "User: ADMIN users and SUPER_ADMIN_EMAIL account",
-  "Permission / UserPermission for preserved users",
+  "User: כל משתמשי ADMIN ו-EMPLOYEE (כולל SUPER_ADMIN_EMAIL)",
+  "Permission / UserPermission — לא נמחקים",
   "FinancialSettings",
   "AdminSystemSettings",
   "SourcePaymentMethod",
@@ -69,7 +69,6 @@ export function canClearDemoData(user: { role: string; email?: string | null }):
 }
 
 export async function getClearDemoDataPlan(prisma: Db): Promise<ClearDemoDataPlan> {
-  const employeeDeleteWhere = { role: "EMPLOYEE" as const };
   const [
     paymentChecks,
     payments,
@@ -85,7 +84,6 @@ export async function getClearDemoDataPlan(prisma: Db): Promise<ClearDemoDataPla
     userNotifications,
     auditLogs,
     legacyRawRows,
-    employeeUsers,
   ] = await Promise.all([
     prisma.paymentCheck.count(),
     prisma.payment.count(),
@@ -101,7 +99,6 @@ export async function getClearDemoDataPlan(prisma: Db): Promise<ClearDemoDataPla
     prisma.userNotification.count(),
     prisma.auditLog.count(),
     prisma.legacyRawRow.count(),
-    prisma.user.count({ where: employeeDeleteWhere }),
   ]);
 
   return {
@@ -120,7 +117,7 @@ export async function getClearDemoDataPlan(prisma: Db): Promise<ClearDemoDataPla
       userNotifications,
       auditLogs,
       legacyRawRows,
-      employeeUsers,
+      employeeUsers: 0,
     },
     preserved: PRESERVED_TABLES,
     resetNotes: resetNumberCounters(),
@@ -137,11 +134,6 @@ export function resetNumberCounters(): string[] {
 
 export async function clearDemoData(prisma: Db): Promise<ClearDemoDataResult> {
   const before = await getClearDemoDataPlan(prisma);
-  const employeeUsers = await prisma.user.findMany({
-    where: { role: "EMPLOYEE" },
-    select: { id: true },
-  });
-  const employeeUserIds = employeeUsers.map((u) => u.id);
 
   const deleted = await prisma.$transaction(
     async (tx) => {
@@ -164,19 +156,6 @@ export async function clearDemoData(prisma: Db): Promise<ClearDemoDataResult> {
       const auditLogs = (await tx.auditLog.deleteMany()).count;
       const legacyRawRows = (await tx.legacyRawRow.deleteMany()).count;
 
-      let employeeUsersDeleted = 0;
-      if (employeeUserIds.length > 0) {
-        await tx.financialSettings.updateMany({
-          where: { updatedById: { in: employeeUserIds } },
-          data: { updatedById: null },
-        });
-        employeeUsersDeleted = (
-          await tx.user.deleteMany({
-            where: { id: { in: employeeUserIds } },
-          })
-        ).count;
-      }
-
       return {
         paymentChecks,
         payments,
@@ -192,7 +171,7 @@ export async function clearDemoData(prisma: Db): Promise<ClearDemoDataResult> {
         userNotifications,
         auditLogs,
         legacyRawRows,
-        employeeUsers: employeeUsersDeleted,
+        employeeUsers: 0,
       } satisfies ClearDemoDataCounts;
     },
     { maxWait: 10_000, timeout: 120_000 },

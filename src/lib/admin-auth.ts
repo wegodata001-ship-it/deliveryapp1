@@ -120,6 +120,11 @@ export async function setAdminSession(user: User): Promise<void> {
   (await cookies()).set(adminSessionCookieName, token, adminSessionCookieOptions);
 }
 
+/** לאחר שינוי הרשאות/תפקיד — מבטל cache בזיכרון כדי לטעון permissionKeys מחדש */
+export function invalidateAuthUserCache(userId: string): void {
+  currentUserCache.delete(userId);
+}
+
 export async function clearAdminSession(): Promise<void> {
   const payload = await getSessionPayload();
   if (payload?.sub) currentUserCache.delete(payload.sub);

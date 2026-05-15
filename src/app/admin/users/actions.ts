@@ -5,8 +5,8 @@ import bcrypt from "bcryptjs";
 import { redirect } from "next/navigation";
 import { UserRole } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { canManageEmployees, requireAuth } from "@/lib/admin-auth";
-import { uniqueManagedKeys } from "@/lib/employee-permission-groups";
+import { canManageEmployees, invalidateAuthUserCache, requireAuth, setAdminSession } from "@/lib/admin-auth";
+import { managedPermissionIdMap } from "@/lib/permissions";
 
 export type FormState = { error: string | null };
 
@@ -21,11 +21,8 @@ function parsePermissionIds(formData: FormData): string[] {
 }
 
 async function managedPermissionIds(): Promise<{ id: string; key: string }[]> {
-  const keys = uniqueManagedKeys();
-  return prisma.permission.findMany({
-    where: { key: { in: [...keys] }, isActive: true },
-    select: { id: true, key: true },
-  });
+  const byKey = await managedPermissionIdMap(prisma);
+  return Object.entries(byKey).map(([key, id]) => ({ id, key }));
 }
 
 export async function createUserAction(_prev: FormState, formData: FormData): Promise<FormState> {
@@ -50,6 +47,7 @@ export async function createUserAction(_prev: FormState, formData: FormData): Pr
   const managedSet = new Set(managed.map((m) => m.id));
   const filteredIds = permissionIds.filter((id) => managedSet.has(id));
 
+  let createdUserId: string | null = null;
   try {
     await prisma.$transaction(async (tx) => {
       const user = await tx.user.create({
@@ -61,6 +59,7 @@ export async function createUserAction(_prev: FormState, formData: FormData): Pr
           isActive,
         },
       });
+      createdUserId = user.id;
 
       if (roleRaw === UserRole.EMPLOYEE && filteredIds.length) {
         await tx.userPermission.createMany({
@@ -77,6 +76,7 @@ export async function createUserAction(_prev: FormState, formData: FormData): Pr
     return { error: "שגיאה בשמירת המשתמש" };
   }
 
+  if (createdUserId) invalidateAuthUserCache(createdUserId);
   revalidatePath("/admin/users");
   redirect("/admin/users");
 }
@@ -150,6 +150,12 @@ export async function updateUserAction(userId: string, _prev: FormState, formDat
     return { error: "שגיאה בעדכון המשתמש" };
   }
 
+  invalidateAuthUserCache(userId);
+  if (me.id === userId) {
+    const refreshed = await prisma.user.findUnique({ where: { id: userId } });
+    if (refreshed) await setAdminSession(refreshed);
+  }
+
   revalidatePath("/admin/users");
   revalidatePath(`/admin/users/${userId}/edit`);
   redirect("/admin/users");
@@ -174,5 +180,6 @@ export async function toggleUserActiveAction(formData: FormData): Promise<void> 
     data: { isActive: !user.isActive },
   });
 
+  invalidateAuthUserCache(userId);
   revalidatePath("/admin/users");
 }

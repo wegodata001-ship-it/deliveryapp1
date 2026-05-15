@@ -31,7 +31,7 @@ const COUNT_LABELS: Record<keyof ClearDemoDataPlan["counts"], string> = {
   userNotifications: "התראות משתמשים",
   auditLogs: "יומן פעילות",
   legacyRawRows: "נתוני legacy/raw",
-  employeeUsers: "משתמשי עובד (ADMIN נשמרים)",
+  employeeUsers: "משתמשי עובד",
 };
 
 export function ClearDemoDataClient({ plan: initialPlan }: Props) {
@@ -71,7 +71,7 @@ export function ClearDemoDataClient({ plan: initialPlan }: Props) {
         <div>
           <h1>ניקוי נתוני מערכת</h1>
           <p>
-            מוחק נתוני עבודה בלבד ומשאיר את מבנה המערכת, הרשאות, הגדרות, טבלאות מקור ומשתמשי ADMIN.
+            מוחק נתוני עבודה בלבד ומשאיר את מבנה המערכת, הרשאות, הגדרות, טבלאות מקור וכל המשתמשים (ADMIN + עובדים).
             יש להקליד בדיוק <code dir="ltr">{CLEAR_DEMO_DATA_CONFIRMATION}</code> באישור.
             מהטרמינל: <code dir="ltr">npx tsx scripts/clear-demo-data.ts --confirm &quot;{CLEAR_DEMO_DATA_CONFIRMATION}&quot;</code> (ללא{" "}
             <code dir="ltr">--confirm</code> זו רק תצוגה מקדימה).
@@ -85,12 +85,14 @@ export function ClearDemoDataClient({ plan: initialPlan }: Props) {
           סך רשומות למחיקה: <strong>{totalRows.toLocaleString("he-IL")}</strong>
         </p>
         <div className="clear-demo-grid">
-          {(Object.entries(plan.counts) as Array<[keyof ClearDemoDataPlan["counts"], number]>).map(([key, value]) => (
-            <div className="clear-demo-count" key={key}>
-              <span>{COUNT_LABELS[key]}</span>
-              <strong>{value.toLocaleString("he-IL")}</strong>
-            </div>
-          ))}
+          {(Object.entries(plan.counts) as Array<[keyof ClearDemoDataPlan["counts"], number]>)
+            .filter(([key, value]) => !(key === "employeeUsers" && value === 0))
+            .map(([key, value]) => (
+              <div className="clear-demo-count" key={key}>
+                <span>{COUNT_LABELS[key]}</span>
+                <strong>{value.toLocaleString("he-IL")}</strong>
+              </div>
+            ))}
         </div>
       </section>
 
