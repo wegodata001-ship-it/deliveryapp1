@@ -16,7 +16,8 @@
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:seed": "tsx prisma/seed.ts",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "brand:icons": "node scripts/generate-brand-icons.mjs"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -39,6 +40,7 @@
     "@types/react-dom": "^19.0.0",
     "dotenv": "^17.4.2",
     "prisma": "^6.19.3",
+    "sharp": "^0.34.5",
     "tsx": "^4.19.3",
     "typescript": "^5.8.0"
   }

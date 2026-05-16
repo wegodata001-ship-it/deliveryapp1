@@ -1,0 +1,671 @@
+/* =============================================================================
+   Order capture — fluid responsive system (adm-oc-pro)
+   Loaded after admin.css.
+   Shrink → wrap → scroll (local). No transform/zoom hacks.
+   Scales with panel width (split screen, resized window) + viewport (OS zoom).
+   ============================================================================= */
+
+html:has(.adm-win-layer--top .adm-win-panel--order-capture),
+body:has(.adm-win-layer--top .adm-win-panel--order-capture) {
+  overflow: hidden;
+}
+
+/* —— Modal shell: header fixed, footer pinned, body scrolls inside panel only —— */
+.adm-win-panel--order-capture {
+  container-type: inline-size;
+  container-name: oc-panel;
+  display: flex;
+  flex-direction: column;
+  width: min(96vw, 100%);
+  max-width: min(96vw, 96rem);
+  max-height: 90vh;
+  height: min(90vh, 100%);
+  overflow: hidden;
+}
+
+.adm-win-panel--order-capture .adm-win-header {
+  flex-shrink: 0;
+  z-index: 30;
+  background: #fff;
+}
+
+.adm-win-body--order-capture {
+  container-type: inline-size;
+  container-name: oc-panel;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.adm-win-panel--order-capture .adm-order-create-legacy-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.adm-win-panel--order-capture .adm-order-create--legacy.adm-capture-order-shell.adm-oc-pro {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden !important;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro-header,
+.adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar {
+  flex-shrink: 0;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro-scroll .modal-container.adm-oc-pro-grid {
+  overflow: visible !important;
+  flex: none !important;
+  min-height: unset;
+  width: 100%;
+  max-width: 100%;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-actions {
+  flex-shrink: 0;
+  position: relative;
+  z-index: 25;
+  margin-top: 0 !important;
+  background: #fff;
+  border-top: 1px solid rgba(226, 232, 240, 0.92) !important;
+  box-shadow: 0 -6px 20px rgba(15, 23, 42, 0.07);
+}
+
+.adm-win-panel--order-capture .adm-oc-pro-wrap {
+  container-type: inline-size;
+  container-name: oc-form;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+
+  /* —— Fluid tokens (cqw = panel/form width; fallback below) —— */
+  --oc-gap: clamp(8px, 1.15cqw, 14px);
+  --oc-gap-sm: clamp(4px, 0.65cqw, 6px);
+  --oc-gap-xs: clamp(3px, 0.45cqw, 4px);
+  --oc-pad-shell-y: clamp(6px, 0.85cqw, 10px);
+  --oc-pad-shell-x: clamp(8px, 1.25cqw, 14px);
+  --oc-pad-card-y: clamp(7px, 0.9cqw, 10px);
+  --oc-pad-card-x: clamp(8px, 1cqw, 12px);
+  --oc-pad-sec-y: clamp(6px, 0.75cqw, 8px);
+  --oc-pad-sec-x: clamp(8px, 1cqw, 12px);
+  --oc-pad-total-y: clamp(6px, 0.8cqw, 8px);
+  --oc-pad-total-x: clamp(8px, 1cqw, 12px);
+  --oc-radius: clamp(12px, 1.35cqw, 18px);
+  --oc-radius-sm: clamp(7px, 0.85cqw, 10px);
+  --oc-inp-h: clamp(34px, 4.2cqw, 42px);
+  --oc-inp-h-sm: clamp(24px, 2.8cqw, 28px);
+  --oc-inp-h-fin: clamp(28px, 3.5cqw, 36px);
+  --oc-inp-h-side: clamp(26px, 3cqw, 30px);
+  --oc-font-h2: clamp(14px, 1.1cqw + 12px, 16px);
+  --oc-font-section: clamp(10px, 0.55cqw + 9px, 11px);
+  --oc-font-label: clamp(10px, 0.45cqw + 9px, 11px);
+  --oc-font-micro: clamp(10px, 0.4cqw + 9px, 10.5px);
+  --oc-font-body: clamp(11px, 0.65cqw + 10px, 13px);
+  --oc-font-toolbar: clamp(11px, 0.5cqw + 10px, 12px);
+  --oc-font-line: clamp(11px, 0.6cqw + 10px, 12px);
+  --oc-font-fin: clamp(14px, 1.1cqw + 11px, 17px);
+  --oc-font-total-usd: clamp(18px, 2.2cqw + 12px, 24px);
+  --oc-font-total-ils: clamp(20px, 2.5cqw + 13px, 26px);
+  --oc-btn-toolbar: clamp(28px, 3.2cqw, 34px);
+  --oc-btn-action: clamp(34px, 4cqw, 42px);
+  --oc-btn-save: clamp(30px, 3.5cqw, 36px);
+  --oc-btn-cancel: clamp(28px, 3cqw, 32px);
+  --oc-toolbar-pad-y: clamp(8px, 1cqw, 12px);
+  --oc-toolbar-pad-x: clamp(10px, 1.5cqw, 18px);
+  --oc-col-money-min: clamp(9rem, 24cqw, 14rem);
+  --oc-field-min: clamp(4.5rem, 12cqw, 7rem);
+  --oc-customer-row-min: clamp(4.75rem, 14cqw, 6.5rem);
+}
+
+@supports not (width: 1cqw) {
+  .adm-win-panel--order-capture .adm-oc-pro-header__icon {
+    width: clamp(26px, 2vw, 30px);
+    height: clamp(26px, 2vw, 30px);
+  }
+
+  .adm-win-panel--order-capture .adm-oc-pro-wrap {
+    --oc-gap: clamp(8px, 0.72vw, 14px);
+    --oc-gap-sm: clamp(4px, 0.38vw, 6px);
+    --oc-gap-xs: clamp(3px, 0.28vw, 4px);
+    --oc-pad-shell-y: clamp(6px, 0.55vw, 10px);
+    --oc-pad-shell-x: clamp(8px, 0.85vw, 14px);
+    --oc-pad-card-y: clamp(7px, 0.62vw, 10px);
+    --oc-pad-card-x: clamp(8px, 0.72vw, 12px);
+    --oc-pad-sec-y: clamp(6px, 0.5vw, 8px);
+    --oc-pad-sec-x: clamp(8px, 0.68vw, 12px);
+    --oc-pad-total-y: clamp(6px, 0.55vw, 8px);
+    --oc-pad-total-x: clamp(8px, 0.68vw, 12px);
+    --oc-radius: clamp(12px, 1vw, 18px);
+    --oc-radius-sm: clamp(7px, 0.55vw, 10px);
+    --oc-inp-h: clamp(34px, 2.65vw, 42px);
+    --oc-inp-h-sm: clamp(24px, 1.75vw, 28px);
+    --oc-inp-h-fin: clamp(28px, 2.15vw, 36px);
+    --oc-inp-h-side: clamp(26px, 1.9vw, 30px);
+    --oc-font-h2: clamp(14px, 0.55vw + 12px, 16px);
+    --oc-font-section: clamp(10px, 0.28vw + 9px, 11px);
+    --oc-font-label: clamp(10px, 0.22vw + 9px, 11px);
+    --oc-font-micro: clamp(10px, 0.2vw + 9px, 10.5px);
+    --oc-font-body: clamp(11px, 0.32vw + 10px, 13px);
+    --oc-font-toolbar: clamp(11px, 0.25vw + 10px, 12px);
+    --oc-font-line: clamp(11px, 0.3vw + 10px, 12px);
+    --oc-font-fin: clamp(14px, 0.55vw + 11px, 17px);
+    --oc-font-total-usd: clamp(18px, 1.35vw + 14px, 24px);
+    --oc-font-total-ils: clamp(20px, 1.55vw + 15px, 26px);
+    --oc-btn-toolbar: clamp(28px, 2.15vw, 34px);
+    --oc-btn-action: clamp(34px, 2.65vw, 42px);
+    --oc-btn-save: clamp(30px, 2.35vw, 36px);
+    --oc-btn-cancel: clamp(28px, 2vw, 32px);
+    --oc-toolbar-pad-y: clamp(8px, 0.75vw, 12px);
+    --oc-toolbar-pad-x: clamp(10px, 1.05vw, 18px);
+    --oc-col-money-min: clamp(9rem, 18vw, 14rem);
+    --oc-field-min: clamp(4.5rem, 10vw, 7rem);
+    --oc-customer-row-min: clamp(4.75rem, 12vw, 6.5rem);
+  }
+}
+
+/* —— Shell —— */
+.adm-win-panel--order-capture .adm-order-create--legacy.adm-capture-order-shell.adm-oc-pro {
+  gap: var(--oc-gap-sm) !important;
+  padding: var(--oc-pad-shell-y) var(--oc-pad-shell-x) 0 !important;
+}
+
+/* —— Header —— */
+.adm-win-panel--order-capture .adm-oc-pro-header {
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro-header__title h2 {
+  font-size: var(--oc-font-h2);
+}
+
+.adm-win-panel--order-capture .adm-oc-pro-header__icon {
+  width: clamp(26px, 3.2cqw, 30px);
+  height: clamp(26px, 3.2cqw, 30px);
+  border-radius: var(--oc-radius-sm);
+  flex-shrink: 0;
+}
+
+/* —— Top toolbar: shrink → wrap —— */
+.adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--oc-gap);
+  padding: var(--oc-toolbar-pad-y) var(--oc-toolbar-pad-x);
+  margin-bottom: var(--oc-gap);
+  border-radius: var(--oc-radius);
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar__actions {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--oc-gap-sm);
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--oc-gap-xs);
+  min-width: min(100%, var(--oc-field-min));
+  flex: 1 1 var(--oc-field-min);
+  flex-shrink: 1;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar__lbl {
+  font-size: var(--oc-font-micro);
+  flex-shrink: 0;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar__inp {
+  width: 100%;
+  min-width: 5rem;
+  max-width: 9.25rem;
+  flex: 1 1 5.5rem;
+  height: var(--oc-btn-toolbar);
+  padding: 0 clamp(6px, 0.65cqw, 8px);
+  box-sizing: border-box;
+  font-size: var(--oc-font-toolbar);
+  border-radius: var(--oc-radius-sm);
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar__inp--time {
+  max-width: 7rem;
+  flex-basis: 5rem;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar__range {
+  flex: 1 1 auto;
+  flex-shrink: 1;
+  min-width: min(100%, 10rem);
+  font-size: var(--oc-font-toolbar);
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar__range-lbl {
+  font-size: var(--oc-font-micro);
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar__range-code {
+  font-size: var(--oc-font-toolbar);
+}
+
+.adm-win-panel--order-capture .adm-oc-pro-new,
+.adm-win-panel--order-capture .adm-oc-pro-new-customer {
+  height: var(--oc-btn-action);
+  min-height: var(--oc-btn-action);
+  padding: 0 clamp(10px, 1.2cqw, 16px);
+  font-size: var(--oc-font-body);
+  flex-shrink: 0;
+}
+
+/* —— Main grid: fluid columns (USD | ILS | payment) —— */
+.adm-win-panel--order-capture .adm-oc-pro .modal-container.adm-oc-pro-grid {
+  width: 100%;
+  min-width: 0;
+  grid-template-columns:
+    minmax(0, 2fr)
+    minmax(0, 2fr)
+    minmax(min(100%, var(--oc-col-money-min)), 1fr) !important;
+  column-gap: var(--oc-gap) !important;
+  row-gap: var(--oc-gap) !important;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--usd,
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--ils,
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--payment,
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--general {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* —— Cards & sections —— */
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--general,
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--ils,
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--usd,
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--payment {
+  border-radius: var(--oc-radius) !important;
+  padding: var(--oc-pad-card-y) var(--oc-pad-card-x) !important;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--general {
+  gap: var(--oc-gap-sm) !important;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-section {
+  padding: var(--oc-pad-sec-y) var(--oc-pad-sec-x);
+  border-radius: var(--oc-radius);
+  min-width: 0;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-section-title {
+  font-size: var(--oc-font-section);
+  margin-bottom: var(--oc-gap-xs);
+}
+
+/* Meta topbar inside general card */
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-topbar {
+  grid-template-columns: repeat(7, minmax(min(100%, var(--oc-field-min)), 1fr)) !important;
+  gap: var(--oc-gap-sm) var(--oc-gap) !important;
+  width: 100%;
+  min-width: 0;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-topbar .adm-oc-pro-item {
+  gap: var(--oc-gap-xs);
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-mlbl {
+  font-size: var(--oc-font-micro);
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-topbar input,
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-topbar select {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  height: var(--oc-inp-h-sm) !important;
+  padding: 2px clamp(6px, 0.65cqw, 8px) !important;
+  font-size: clamp(11px, 0.65cqw + 10px, 12.5px) !important;
+  border-radius: var(--oc-radius-sm) !important;
+  flex-shrink: 1;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-week {
+  width: 100%;
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-week .adm-oc-week-arrow {
+  width: clamp(18px, 2.2cqw, 22px) !important;
+  height: clamp(18px, 2.2cqw, 22px) !important;
+  min-width: clamp(18px, 2.2cqw, 22px) !important;
+  flex-shrink: 0;
+}
+
+/* Customer row */
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-section--customer {
+  grid-template-columns: repeat(4, minmax(min(100%, var(--oc-customer-row-min)), 1fr)) !important;
+  column-gap: var(--oc-gap) !important;
+  row-gap: var(--oc-gap-xs) !important;
+  min-height: clamp(72px, 10cqw, 90px);
+  max-height: none;
+  padding: var(--oc-pad-sec-y) var(--oc-pad-sec-x) !important;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-section--customer label {
+  font-size: var(--oc-font-label);
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-section--customer .adm-oc-legacy-main-field,
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-section--customer .adm-oc-legacy-field-wrap,
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-section--customer .adm-oc-pro-notes-wrap {
+  min-width: min(100%, var(--oc-customer-row-min));
+  flex-shrink: 1;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-section--customer .adm-oc-legacy-main-code-with-icon,
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-section--customer .adm-oc-legacy-main-code-wrap,
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-section--customer .adm-oc-legacy-input-row {
+  width: 100%;
+  min-width: 0;
+  height: var(--oc-inp-h) !important;
+  min-height: var(--oc-inp-h) !important;
+  border-radius: var(--oc-radius-sm);
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-section--customer .adm-oc-pro-code-inp,
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-section--customer .adm-oc-legacy-combo-inp {
+  width: 100%;
+  font-size: var(--oc-font-body) !important;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-section--customer .adm-oc-pro-code-inp {
+  font-size: clamp(12px, 0.85cqw + 11px, 14px) !important;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-notes-ta {
+  width: 100%;
+  min-width: 0;
+  height: var(--oc-inp-h) !important;
+  min-height: var(--oc-inp-h) !important;
+  max-height: var(--oc-inp-h) !important;
+  padding: clamp(8px, 1cqw, 12px) clamp(8px, 0.9cqw, 10px) !important;
+  font-size: clamp(11px, 0.65cqw + 10px, 12.5px) !important;
+  border-radius: var(--oc-radius-sm) !important;
+}
+
+/* Money cards */
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card-title {
+  font-size: var(--oc-font-body);
+  margin-bottom: var(--oc-gap-xs);
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card-title--payment {
+  font-size: clamp(11px, 0.6cqw + 10px, 12.5px);
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--ils .adm-oc-line,
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--usd .adm-oc-line {
+  padding: 1px 0 !important;
+  font-size: var(--oc-font-line) !important;
+  min-width: 0;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-legacy-fin-inp,
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--ils .adm-oc-legacy-fin-inp,
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--usd .adm-oc-legacy-fin-inp {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  height: var(--oc-inp-h-fin) !important;
+  min-height: var(--oc-inp-h-fin) !important;
+  font-size: var(--oc-font-fin) !important;
+  padding: clamp(3px, 0.35cqw, 4px) clamp(8px, 0.9cqw, 10px) !important;
+  box-sizing: border-box;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--usd .adm-oc-line--total {
+  padding: var(--oc-pad-total-y) var(--oc-pad-total-x) !important;
+  border-radius: var(--oc-radius-sm) !important;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--usd .adm-oc-line--total > span:last-child {
+  font-size: var(--oc-font-total-usd) !important;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--ils .adm-oc-pro-final {
+  padding: var(--oc-pad-total-y) var(--oc-pad-total-x) !important;
+  border-radius: var(--oc-radius-sm) !important;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-final > span:last-child {
+  font-size: var(--oc-font-total-ils) !important;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-xrate {
+  font-size: var(--oc-font-micro);
+}
+
+/* Payment */
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--payment .adm-oc-legacy-side {
+  gap: var(--oc-gap-xs) !important;
+  padding: var(--oc-gap-xs) !important;
+  width: 100%;
+  min-width: 0;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--payment .adm-oc-legacy-side-field {
+  min-width: 0;
+  width: 100%;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--payment .adm-oc-legacy-side-sel,
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--payment .adm-oc-intake-combobox-input,
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-legacy-side-sel,
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-intake-combobox-input {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  height: var(--oc-inp-h-sm) !important;
+  font-size: var(--oc-font-line) !important;
+  box-sizing: border-box;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-intake-combobox {
+  width: 100%;
+  min-width: 0;
+}
+
+/* Footer actions */
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--oc-gap);
+  padding: var(--oc-gap) 4px 4px;
+  width: 100%;
+  min-width: 0;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro-save {
+  height: var(--oc-btn-save);
+  min-height: var(--oc-btn-save);
+  padding: 0 clamp(12px, 1.2cqw, 18px);
+  font-size: var(--oc-font-body);
+  border-radius: var(--oc-radius-sm);
+  flex-shrink: 0;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro-cancel {
+  height: var(--oc-btn-cancel);
+  min-height: var(--oc-btn-cancel);
+  padding: 0 clamp(10px, 1cqw, 14px);
+  font-size: clamp(11px, 0.5cqw + 10px, 12px);
+  border-radius: var(--oc-radius-sm);
+  flex-shrink: 0;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro-shortcut-hint {
+  font-size: clamp(10px, 0.4cqw + 9px, 11px);
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+/* Global field typography inside capture form */
+.adm-win-panel--order-capture .adm-oc-pro label,
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-legacy-micro-label {
+  font-size: var(--oc-font-label);
+}
+
+.adm-win-panel--order-capture .adm-oc-pro input,
+.adm-win-panel--order-capture .adm-oc-pro select,
+.adm-win-panel--order-capture .adm-oc-pro textarea {
+  font-size: var(--oc-font-body);
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-line {
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+/* Scroll last: payment + totals only */
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--payment,
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--ils,
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--usd {
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--payment .adm-oc-pro-pay {
+  min-width: min(100%, max-content);
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--ils .adm-oc-line,
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--usd .adm-oc-line {
+  min-width: min(100%, max-content);
+}
+
+/* —— Container: wrap meta topbar —— */
+@container oc-form (max-width: 62rem) {
+  .adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-topbar {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--oc-field-min)), 1fr)) !important;
+  }
+}
+
+@container oc-form (max-width: 48rem) {
+  .adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-section--customer {
+    grid-template-columns: repeat(2, minmax(min(100%, var(--oc-customer-row-min)), 1fr)) !important;
+  }
+}
+
+@container oc-form (max-width: 30rem) {
+  .adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-section--customer {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar__item {
+    flex-basis: 100%;
+  }
+}
+
+/* —— Container: stack cards (split screen / narrow panel) —— */
+@container oc-panel (max-width: 68.75rem) {
+  .adm-win-panel--order-capture .adm-oc-pro .modal-container.adm-oc-pro-grid {
+    display: flex !important;
+    flex-direction: column;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .adm-win-panel--order-capture .adm-oc-pro .modal-container.adm-oc-pro-grid > .modal-main,
+  .adm-win-panel--order-capture .adm-oc-pro .modal-container.adm-oc-pro-grid > .modal-summary {
+    display: flex !important;
+    flex-direction: column;
+    gap: var(--oc-gap);
+    width: 100%;
+    min-width: 0;
+  }
+
+  .adm-win-panel--order-capture .adm-oc-pro .modal-summary {
+    flex: 1 1 auto;
+    max-width: none;
+    width: 100%;
+  }
+}
+
+/* Narrow panel: money row side-by-side when stacked layout has room */
+@container oc-panel (min-width: 36rem) and (max-width: 68.75rem) {
+  .adm-win-panel--order-capture .adm-oc-pro .modal-summary.adm-oc-pro-money {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--oc-gap);
+    width: 100%;
+  }
+}
+
+@container oc-panel (max-width: 36rem) {
+  .adm-win-panel--order-capture .adm-oc-pro .modal-summary.adm-oc-pro-money {
+    display: flex !important;
+    flex-direction: column;
+    gap: var(--oc-gap);
+  }
+}
+
+/* Viewport fallback when container queries unsupported (still fluid via clamp) */
+@supports not (container-type: inline-size) {
+  @media (max-width: 1100px) {
+    .adm-win-panel--order-capture .adm-oc-pro .modal-container.adm-oc-pro-grid {
+      display: flex !important;
+      flex-direction: column;
+    }
+
+    .adm-win-panel--order-capture .adm-oc-pro .modal-container.adm-oc-pro-grid > .modal-main,
+    .adm-win-panel--order-capture .adm-oc-pro .modal-container.adm-oc-pro-grid > .modal-summary {
+      display: flex !important;
+      flex-direction: column;
+      gap: var(--oc-gap);
+    }
+  }
+
+  @media (max-width: 48rem) {
+    .adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-section--customer {
+      grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+  }
+}

@@ -3,6 +3,7 @@
 import { PaymentMethod, OrderStatus } from "@prisma/client";
 import { Plus, Trash2 } from "lucide-react";
 import { ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS } from "@/lib/order-capture-payment-methods";
+import { formatIlsDisplay, formatUsdDisplay } from "@/lib/money-format";
 
 export type OrderCapturePaymentLineCurrency = "USD" | "ILS";
 
@@ -42,12 +43,12 @@ type Props = {
 };
 
 function fmtUsd(n: number) {
-  return `$ ${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return formatUsdDisplay(n);
 }
 
 function fmtIlsPlain(n: number) {
   if (!Number.isFinite(n)) return "—";
-  return `${n.toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₪`;
+  return formatIlsDisplay(n);
 }
 
 function parseDec(s: string): number {

@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { PaymentMethod } from "@prisma/client";
 import {
+  allocatePaymentAcrossOrders,
   buildAllocationsFromMatch,
   computeCustomerResetBalanceMetrics,
   matchPaymentToOrders,
@@ -10,6 +11,7 @@ import {
   type PaymentIntakeMatchResult,
   type PaymentIntakeOrderRow,
 } from "@/lib/payment-intake";
+import type { PaymentOveragePreview } from "@/lib/customer-balance";
 import { fetchPaymentIntakeCustomerOrdersAction, type PaymentIntakeCustomerPayload } from "@/app/admin/payments/intake/actions";
 import {
   fetchOrderForPaymentContextAction,
@@ -34,6 +36,8 @@ import {
   normalizeAhWeekCode,
   parseLocalDate,
 } from "@/lib/work-week";
+import { AhWeekNavNextButton, AhWeekNavPrevButton } from "@/components/admin/AhWeekNavButtons";
+import { goToNextWeekNumber, goToPrevWeekNumber } from "@/lib/weeks/ah-week-nav";
 import {
   calculatePaymentLine,
   calculateTotalBaseIls,
@@ -48,9 +52,23 @@ import {
   type PaymentLineVatMode,
 } from "@/lib/payment-updated";
 import { validatePaymentCheckLines } from "@/lib/payment-checks";
-import { resetCustomerOutstandingBalancesAction, savePaymentUpdatedAction } from "@/app/admin/payments-updated/actions";
+import {
+  previewCustomerPaymentOverageAction,
+  resetCustomerOutstandingBalancesAction,
+  savePaymentUpdatedAction,
+} from "@/app/admin/payments-updated/actions";
+import { CustomerPaymentOverageModal } from "@/components/admin/CustomerPaymentOverageModal";
 import { formatVatPercentLabel } from "@/lib/vat";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
+import {
+  formatIlsDisplay,
+  formatMoneyAmount,
+  formatMoneyRate,
+  formatUsdDisplay,
+  parseMoneyStringOrZero,
+  sanitizeMoneyInput,
+} from "@/lib/money-format";
+import { MoneyInput } from "@/components/ui/MoneyInput";
 
 const COUNTRY_BADGE_SHORT: Record<OrderCountryCode, string> = {
   TURKEY: "טורקיה",
@@ -106,17 +124,7 @@ function parseFinalRate(financial: SerializedFinancial | null | undefined): numb
 }
 
 function parseNum(s: string): number {
-  const t = s.replace(/,/g, "").replace(/\s/g, "").trim();
-  if (t === "") return 0;
-  const n = Number(t);
-  return Number.isFinite(n) ? n : 0;
-}
-
-function sanitizeMoneyInput(raw: string): string {
-  let t = raw.replace(/[^\d.]/g, "");
-  const parts = t.split(".");
-  if (parts.length > 2) t = parts[0] + "." + parts.slice(1).join("");
-  return t;
+  return parseMoneyStringOrZero(s);
 }
 
 /**
@@ -144,27 +152,10 @@ function applyCommissionPercentDisplay(amountUsd: number, pct: number): number {
   return amountUsd + (amountUsd * pct) / 100;
 }
 
-/** תצוגת סכומי USD: אלפים, 2 ספרות, תווית $ */
-function fmtUsdDisplay(n: number): string {
-  if (!Number.isFinite(n)) return "—";
-  return `$ ${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-function fmtIlsDisplay(n: number): string {
-  if (!Number.isFinite(n)) return "—";
-  return `₪ ${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-/** סיכום תחתון — מספרים בלבד (אלפים + 2 עשרוניות), יישור LTR */
-function fmtFooterAmount(n: number): string {
-  if (!Number.isFinite(n)) return "—";
-  return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-function fmtRate(n: number): string {
-  if (!Number.isFinite(n) || n <= 0) return "—";
-  return n.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 });
-}
+const fmtUsdDisplay = formatUsdDisplay;
+const fmtIlsDisplay = formatIlsDisplay;
+const fmtFooterAmount = formatMoneyAmount;
+const fmtRate = formatMoneyRate;
 
 function formatSlashDate(ymd: string): string {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return "—";
@@ -368,6 +359,7 @@ export function PaymentModalUpdated({
   const customerCodeInputRef = useRef<HTMLInputElement | null>(null);
   const firstAmountInputRef = useRef<HTMLInputElement | null>(null);
   const saveAndNewButtonRef = useRef<HTMLButtonElement | null>(null);
+  const savePrimaryButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const [draftCustomer, setDraftCustomer] = useState<Record<CustFieldKey, string>>(() => ({
     ...EMPTY_CUSTOMER_DRAFT,
@@ -391,8 +383,9 @@ export function PaymentModalUpdated({
   const [customerCodeEnterBusy, setCustomerCodeEnterBusy] = useState(false);
   const [orderEditId, setOrderEditId] = useState<string | null>(null);
 
-  /** קליטה שנטענה מ־GET /api/payments/entry או מעטפת קליטה חדשה עם קוד מהשרת — מקור אמת לקוד תשלום */
-  const [loadedPayment, setLoadedPayment] = useState<PaymentEntryResponse | null>(null);
+  /** קליטה שנטענה מ־GET /api/payments/entry או מעטפת קליטה חדשה — קוד מוצג מיד, עדכון מהשרת ברקע */
+  const [loadedPayment, setLoadedPayment] = useState<PaymentEntryResponse>(() => createNewCaptureLoadedPayment(""));
+  const [paymentCodePreviewPending, setPaymentCodePreviewPending] = useState(true);
   const [paymentDateYmd, setPaymentDateYmd] = useState(() => {
     const today = new Date();
     const currentCode = getWeekCodeForLocalDate(today);
@@ -426,6 +419,9 @@ export function PaymentModalUpdated({
   const [includedIds, setIncludedIds] = useState<string[] | null>(null);
   const [saveBusy, setSaveBusy] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
+  const [overageModalOpen, setOverageModalOpen] = useState(false);
+  const [overagePreview, setOveragePreview] = useState<PaymentOveragePreview | null>(null);
+  const saveAfterOverageRef = useRef<"new" | "close" | null>(null);
   /** אחרי ניסיון שמירה שנכשל באימות צ׳יקים — מסמן שדות חסרים */
   const [highlightInvalidCheckFields, setHighlightInvalidCheckFields] = useState(false);
   const [resetCustomerConfirmOpen, setResetCustomerConfirmOpen] = useState(false);
@@ -507,6 +503,7 @@ export function PaymentModalUpdated({
     return null;
   }, [loadedPayment?.paymentCode]);
 
+  /** ניווט prev/next — טעינה ברקע בלבד, לא חוסם את הטופס */
   useEffect(() => {
     if (!currentPaymentNavigationQuery) {
       setPaymentNavAvailable({ prev: null, next: null });
@@ -514,24 +511,41 @@ export function PaymentModalUpdated({
     }
 
     let cancelled = false;
-    setPaymentNavAvailable({ prev: null, next: null });
-    void (async () => {
-      const [prev, next] = await Promise.all([
-        fetch(`/api/payments/navigation?${currentPaymentNavigationQuery}&direction=prev`),
-        fetch(`/api/payments/navigation?${currentPaymentNavigationQuery}&direction=next`),
-      ]);
+    let idleId: number | undefined;
+
+    const runPrefetch = () => {
       if (cancelled) return;
-      const prevJson = prev.ok ? ((await prev.json()) as PaymentNavigationResponse) : null;
-      const nextJson = next.ok ? ((await next.json()) as PaymentNavigationResponse) : null;
+      void (async () => {
+        const [prev, next] = await Promise.all([
+          fetch(`/api/payments/navigation?${currentPaymentNavigationQuery}&direction=prev`),
+          fetch(`/api/payments/navigation?${currentPaymentNavigationQuery}&direction=next`),
+        ]);
+        if (cancelled) return;
+        const prevJson = prev.ok ? ((await prev.json()) as PaymentNavigationResponse) : null;
+        const nextJson = next.ok ? ((await next.json()) as PaymentNavigationResponse) : null;
+        if (cancelled) return;
+        setPaymentNavAvailable({
+          prev: prevJson == null ? null : prevJson.success,
+          next: nextJson == null ? null : nextJson.success,
+        });
+      })();
+    };
+
+    const timer = window.setTimeout(() => {
       if (cancelled) return;
-      setPaymentNavAvailable({
-        prev: prevJson == null ? null : prevJson.success,
-        next: nextJson == null ? null : nextJson.success,
-      });
-    })();
+      if (typeof window.requestIdleCallback === "function") {
+        idleId = window.requestIdleCallback(() => runPrefetch(), { timeout: 4000 });
+      } else {
+        runPrefetch();
+      }
+    }, 500);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
+      if (idleId != null && typeof window.cancelIdleCallback === "function") {
+        window.cancelIdleCallback(idleId);
+      }
     };
   }, [currentPaymentNavigationQuery]);
 
@@ -619,21 +633,29 @@ export function PaymentModalUpdated({
     return resetBalanceMetrics.availableCommission >= resetBalanceMetrics.remainingToReset - 0.01;
   }, [viewerIsAdmin, resetBalanceMetrics]);
 
-  useEffect(() => {
-    if (!customer?.id || resetBalanceMetrics.remainingAmount <= 0.01) return;
-    console.log({
-      availableCommission: resetBalanceMetrics.availableCommission,
-      remainingAmount: resetBalanceMetrics.remainingAmount,
-      remainingToReset: resetBalanceMetrics.remainingToReset,
-      paymentRows: resetBalanceMetrics.paymentRows.map((row) => ({
-        id: row.id,
-        commissionUsd: row.commissionUsd,
-        totalAmountUsd: row.totalAmountUsd,
-        dbPaidUsd: row.dbPaidUsd,
-        remaining: roundMoney2(Math.max(0, row.totalAmountUsd - row.dbPaidUsd)),
-      })),
+  const refreshPaymentCodePreview = useCallback(() => {
+    setPaymentCodePreviewPending(true);
+    void previewPaymentCodeForCaptureAction().then((pr) => {
+      setPaymentCodePreviewPending(false);
+      if (pr.ok) {
+        setLoadedPayment((prev) => {
+          const base = prev?.id === NEW_CAPTURE_ROW_ID ? prev : createNewCaptureLoadedPayment("");
+          return { ...base, paymentCode: pr.code };
+        });
+        setSaveErr(null);
+      } else {
+        setSaveErr(pr.error);
+      }
     });
-  }, [customer?.id, resetBalanceMetrics]);
+  }, []);
+
+  const focusCustomerCodeInput = useCallback(() => {
+    customerCodeInputRef.current?.focus();
+  }, []);
+
+  const focusFirstAmountInput = useCallback(() => {
+    window.setTimeout(() => firstAmountInputRef.current?.focus(), 0);
+  }, []);
 
   const loadCustomerOrders = useCallback(
     async (customerId: string, opts?: { silent?: boolean; focusAmount?: boolean; weekCode?: string }): Promise<boolean> => {
@@ -660,13 +682,46 @@ export function PaymentModalUpdated({
       setIncludedIds(null);
       setSaveErr(null);
       setCustSearchNoHits(false);
-      const shouldFocusAmount = opts?.focusAmount === true || opts?.silent !== true;
-      if (shouldFocusAmount) {
-        window.setTimeout(() => firstAmountInputRef.current?.focus(), 60);
+      if (opts?.focusAmount === true) {
+        focusFirstAmountInput();
       }
       return true;
     },
-    [intakeWeekCode],
+    [intakeWeekCode, focusFirstAmountInput],
+  );
+
+  /** בחירת לקוח מיידית — פוקוס לסכום בלי להמתין לטעינת הזמנות */
+  const selectCustomerQuick = useCallback(
+    (row: CustomerSearchRow, opts?: { focusAmount?: boolean }) => {
+      setCustomer({
+        id: row.id,
+        displayName: row.label,
+        customerCode: row.code,
+        nameEn: null,
+        nameHe: null,
+        nameAr: null,
+        phone: row.phone ?? null,
+        customerIndex: null,
+      });
+      setDraftCustomer({
+        code: row.code ?? "",
+        displayName: row.label,
+        nameEn: "",
+        nameAr: "",
+        phone: row.phone ?? "",
+        index: "",
+      });
+      setIncludedIds(null);
+      setSaveErr(null);
+      setCustSearchNoHits(false);
+      setCustomerHits([]);
+      setCustDdOpen(false);
+      if (opts?.focusAmount !== false) {
+        focusFirstAmountInput();
+      }
+      void loadCustomerOrders(row.id, { silent: true });
+    },
+    [loadCustomerOrders, focusFirstAmountInput],
   );
 
   useEffect(() => {
@@ -675,14 +730,11 @@ export function PaymentModalUpdated({
   }, [customer?.id, intakeWeekCode, loadCustomerOrders]);
 
   const pickCustHit = useCallback(
-    async (row: CustomerSearchRow) => {
+    (row: CustomerSearchRow) => {
       custSearchGenRef.current += 1;
-      setCustDdOpen(false);
-      setCustomerHits([]);
-      setCustSearchNoHits(false);
-      await loadCustomerOrders(row.id);
+      selectCustomerQuick(row, { focusAmount: true });
     },
-    [loadCustomerOrders],
+    [selectCustomerQuick],
   );
 
   const onDraftCustomerChange = useCallback((field: CustFieldKey, value: string) => {
@@ -703,10 +755,9 @@ export function PaymentModalUpdated({
     setCustDdOpen(true);
   }, []);
 
-  useEffect(() => {
-    const t = window.setTimeout(() => customerCodeInputRef.current?.focus(), 0);
-    return () => window.clearTimeout(t);
-  }, []);
+  useLayoutEffect(() => {
+    focusCustomerCodeInput();
+  }, [focusCustomerCodeInput]);
 
   async function resolveCustomerFromCodeFieldEnter() {
     const q = draftCustomerRef.current.code.trim();
@@ -752,33 +803,17 @@ export function PaymentModalUpdated({
       const lenOk = rows.length === 1 && q.length >= 2;
 
       if (rows.length === 1 && (lenOk || uuidQuick || codeOrIndexQuick)) {
-        if (customerIdRef.current === hits[0]!.id) {
-          setCustomerHits([]);
-          setCustDdOpen(false);
-          setCustSearchNoHits(false);
-          window.setTimeout(() => firstAmountInputRef.current?.focus(), 40);
-          return;
-        }
-        await loadCustomerOrders(hits[0]!.id, { silent: true, focusAmount: true });
-        setCustomerHits([]);
-        setCustDdOpen(false);
-        setCustSearchNoHits(false);
+        selectCustomerQuick(hits[0]!, { focusAmount: true });
         return;
       }
 
       const exactCode = rows.find((r) => (r.customerCode ?? "").trim().toLowerCase() === q.toLowerCase());
       if (exactCode) {
-        if (customerIdRef.current !== exactCode.id) {
-          await loadCustomerOrders(exactCode.id, { silent: true, focusAmount: true });
-          setCustomerHits([]);
-          setCustDdOpen(false);
-          setCustSearchNoHits(false);
+        const hit = hits.find((h) => h.id === exactCode.id) ?? hits[0];
+        if (hit) {
+          selectCustomerQuick(hit, { focusAmount: true });
           return;
         }
-        setCustomerHits([]);
-        setCustDdOpen(false);
-        window.setTimeout(() => firstAmountInputRef.current?.focus(), 40);
-        return;
       }
 
       setCustomerHits(hits);
@@ -814,10 +849,12 @@ export function PaymentModalUpdated({
     setLoadErr(null);
     setSaveErr(null);
     setHighlightInvalidCheckFields(false);
-    setLoadedPayment(null);
+    setLoadedPayment(createNewCaptureLoadedPayment(""));
+    setPaymentCodePreviewPending(true);
     setPaymentNavAvailable({ prev: null, next: null });
     baselineSigRef.current = "";
-  }, [financial]);
+    refreshPaymentCodePreview();
+  }, [financial, refreshPaymentCodePreview]);
 
   async function loadPaymentEntrySnapshot(id: string): Promise<PaymentEntryResponse | null> {
     const cached = entryCacheRef.current.get(id);
@@ -846,6 +883,7 @@ export function PaymentModalUpdated({
     }
 
     setLoadedPayment(snap);
+    setPaymentCodePreviewPending(false);
     setPaymentTimeHm(snap.paymentTimeHm);
     if (snap.dollarRate?.trim()) setDollarRate(snap.dollarRate.trim());
     {
@@ -956,12 +994,10 @@ export function PaymentModalUpdated({
   }
 
   function goToPreviousPayment() {
-    console.log("PREV CLICK");
     requestPaymentCaptureNavigation("prev");
   }
 
   function goToNextPayment() {
-    console.log("NEXT CLICK");
     requestPaymentCaptureNavigation("next");
   }
 
@@ -988,18 +1024,12 @@ export function PaymentModalUpdated({
     void (async () => {
       const pid = init.paymentId?.trim();
       if (pid) {
+        setPaymentCodePreviewPending(false);
         await loadPaymentFromSavedId(pid);
         return;
       }
 
-      const pr = await previewPaymentCodeForCaptureAction();
-      if (pr.ok) {
-        setLoadedPayment(createNewCaptureLoadedPayment(pr.code));
-        setSaveErr(null);
-      } else {
-        setSaveErr(pr.error);
-        setLoadedPayment(createNewCaptureLoadedPayment(""));
-      }
+      refreshPaymentCodePreview();
 
       const onum = init.orderNumber?.trim();
       const cid = init.customerId?.trim();
@@ -1049,17 +1079,11 @@ export function PaymentModalUpdated({
     setNavSpinDirection(null);
     setNavUnsavedOpen(null);
     setPaymentNavAvailable({ prev: null, next: null });
-    void (async () => {
-      const pr = await previewPaymentCodeForCaptureAction();
-      if (pr.ok) {
-        setLoadedPayment(createNewCaptureLoadedPayment(pr.code));
-      } else {
-        setSaveErr(pr.error);
-        setLoadedPayment(createNewCaptureLoadedPayment(""));
-      }
-    })();
+    setLoadedPayment(createNewCaptureLoadedPayment(""));
+    refreshPaymentCodePreview();
     syncBaselineSoon();
-  }, [resetOnKey, financial]);
+    focusCustomerCodeInput();
+  }, [resetOnKey, financial, refreshPaymentCodePreview, focusCustomerCodeInput]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1143,17 +1167,8 @@ export function PaymentModalUpdated({
         const lenOk = rows.length === 1 && q.length >= 2;
 
         if (rows.length === 1 && (lenOk || uuidQuick || codeOrIndexQuick)) {
-          if (customerIdRef.current === hits[0]!.id) {
-            setCustomerHits([]);
-            setCustDdOpen(false);
-            setCustSearchNoHits(false);
-            return;
-          }
-          await loadCustomerOrders(hits[0]!.id);
           if (!cancelled && gen === custSearchGenRef.current) {
-            setCustomerHits([]);
-            setCustDdOpen(false);
-            setCustSearchNoHits(false);
+            selectCustomerQuick(hits[0]!, { focusAmount: false });
           }
           return;
         }
@@ -1167,7 +1182,7 @@ export function PaymentModalUpdated({
       cancelled = true;
       window.clearTimeout(t);
     };
-  }, [searchTick, loadCustomerOrders]);
+  }, [searchTick, loadCustomerOrders, selectCustomerQuick]);
 
   function toggleRow(id: string) {
     setIncludedIds((prev) => {
@@ -1303,31 +1318,45 @@ export function PaymentModalUpdated({
    * מחזיר true אם השמירה הצליחה.
    * אין כאן side-effects של reset/reload — את זה מנהלים `onSaveAndNew` / `onSaveAndClose`.
    */
-  async function performSave(): Promise<boolean> {
+  async function performSave(saveSurplusAsCredit = false): Promise<{ ok: true; primaryPaymentCode: string } | { ok: false }> {
     setSaveErr(null);
     setHighlightInvalidCheckFields(false);
     if (!customer) {
       setSaveErr("יש לבחור לקוח");
-      return false;
+      return { ok: false };
     }
     if (totals.totalUsd <= 0) {
       setSaveErr("יש להוסיף תשלום");
-      return false;
+      return { ok: false };
     }
     if (rateN <= 0) {
-      setSaveErr("שער דולר חייב להיות חיובי");
-      return false;
+      setSaveErr("שער דולר חיובי");
+      return { ok: false };
     }
     const checkErr = validatePaymentCheckLines(payments);
     if (checkErr) {
       setSaveErr(checkErr);
       setHighlightInvalidCheckFields(true);
-      return false;
+      return { ok: false };
     }
-    const allocations = buildAllocationsFromMatch(bases, totals.totalUsd, prioritizedSet);
-    if (allocations.length === 0) {
+    const { byOrderId, unallocatedUsd } = allocatePaymentAcrossOrders(bases, totals.totalUsd, prioritizedSet);
+    const hasAlloc = [...byOrderId.values()].some((v) => v > 0.02);
+    if (!hasAlloc && !(saveSurplusAsCredit && unallocatedUsd > 0.02)) {
       setSaveErr("אין יעד להקצאה");
-      return false;
+      return { ok: false };
+    }
+    if (unallocatedUsd > 0.02 && !saveSurplusAsCredit) {
+      const prev = await previewCustomerPaymentOverageAction({
+        customerId: customer.id,
+        totalPaymentUsd: totals.totalUsd,
+        dollarRate,
+        weekCode: intakeWeekCode,
+      });
+      if (prev.ok && prev.preview.hasOverage) {
+        setOveragePreview(prev.preview);
+        setOverageModalOpen(true);
+        return { ok: false };
+      }
     }
     setSaveBusy(true);
     const receivedTodaySave = isTodayYmd(paymentDateYmd);
@@ -1346,23 +1375,50 @@ export function PaymentModalUpdated({
       draftNameAr: draftCustomer.nameAr.trim() || null,
       draftNameEn: draftCustomer.nameEn.trim() || null,
       draftPhone: draftCustomer.phone.trim() || null,
+      saveSurplusAsCredit,
     });
     setSaveBusy(false);
     if (!res.ok) {
       setSaveErr(res.error);
-      return false;
+      return { ok: false };
     }
+    const primaryPaymentCode = res.saved.primaryPaymentCode?.trim() ?? "";
     const remainingAfter = roundMoney2(
       matched.reduce((sum, row) => sum + Math.max(0, row.remainingAmount), 0),
     );
-    if (remainingAfter <= 0.01) onToast("כל החיובים נסגרו בהצלחה");
+    if (saveSurplusAsCredit && unallocatedUsd > 0.02) {
+      onToast(`נשמרה יתרת זכות של ${unallocatedUsd.toFixed(2)}$ ללקוח`);
+    } else if (remainingAfter <= 0.01) onToast("כל החיובים נסגרו בהצלחה");
     else onToast(`נשארו ${remainingAfter.toFixed(2)}$ פתוחים`);
     entryCacheRef.current.clear();
     if (resetAfterSaveRef.current) {
       resetAfterSaveRef.current = false;
       await applyResetCustomerBalances();
     }
-    return true;
+    if (!primaryPaymentCode) {
+      setSaveErr("שמירה הצליחה אך חסר קוד תשלום");
+      return { ok: false };
+    }
+    return { ok: true, primaryPaymentCode };
+  }
+
+  function finishSaveAndNewOptimistic(savedCode: string) {
+    const cid = customer?.id;
+    if (!cid) return;
+    setPayments([createDefaultLine()]);
+    setPaymentTimeHm(formatLocalHm(new Date()));
+    setIncludedIds(null);
+    setSaveErr(null);
+    setLoadedPayment(createNewCaptureLoadedPayment(savedCode));
+    setPaymentNavAvailable({ prev: null, next: null });
+    syncBaselineSoon();
+    focusFirstAmountInput();
+    void loadCustomerOrders(cid, { silent: true });
+    refreshPaymentCodePreview();
+  }
+
+  async function finishSaveAndNew(savedCode: string) {
+    finishSaveAndNewOptimistic(savedCode);
   }
 
   /**
@@ -1371,21 +1427,11 @@ export function PaymentModalUpdated({
    * אך המודאל נשאר פתוח, מוכן לתשלום חדש.
    */
   async function onSaveAndNew() {
-    const ok = await performSave();
-    if (!ok || !customer) return;
-    setPayments([createDefaultLine()]);
-    setPaymentTimeHm(formatLocalHm(new Date()));
-    const pr = await previewPaymentCodeForCaptureAction();
-    if (pr.ok) {
-      setLoadedPayment(createNewCaptureLoadedPayment(pr.code));
-      setSaveErr(null);
-    } else {
-      setSaveErr(pr.error);
-      setLoadedPayment(createNewCaptureLoadedPayment(""));
-    }
-    await loadCustomerOrders(customer.id, { silent: true });
-    window.setTimeout(() => customerCodeInputRef.current?.focus(), 30);
-    syncBaselineSoon();
+    saveAfterOverageRef.current = "new";
+    const res = await performSave(false);
+    if (!res.ok) return;
+    saveAfterOverageRef.current = null;
+    await finishSaveAndNew(res.primaryPaymentCode);
   }
 
   /**
@@ -1393,9 +1439,27 @@ export function PaymentModalUpdated({
    * זהו ה־flow הסופי / רגיל.
    */
   async function onSaveAndClose() {
-    const ok = await performSave();
-    if (!ok) return;
+    saveAfterOverageRef.current = "close";
+    const res = await performSave(false);
+    if (!res.ok) return;
+    saveAfterOverageRef.current = null;
     closeTop();
+  }
+
+  async function onOverageConfirm() {
+    setOverageModalOpen(false);
+    const mode = saveAfterOverageRef.current;
+    const res = await performSave(true);
+    if (!res.ok) return;
+    saveAfterOverageRef.current = null;
+    if (mode === "new") await finishSaveAndNew(res.primaryPaymentCode);
+    else if (mode === "close") closeTop();
+  }
+
+  function onOverageCancel() {
+    setOverageModalOpen(false);
+    saveAfterOverageRef.current = null;
+    setOveragePreview(null);
   }
 
   function openCustomerLedger() {
@@ -1722,19 +1786,16 @@ export function PaymentModalUpdated({
                 )}
 
                 <div className="payment-modal-week-row" dir="ltr" aria-label="שבוע עבודה">
-                  <button
-                    type="button"
+                  <AhWeekNavPrevButton
                     className="payment-modal-week-arrow"
-                    aria-label="שבוע קודם"
+                    variant="angle"
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {
                       const cur = parseWeekNumber(weekDraft) ?? parseWeekNumber(weekSelectValue) ?? baseWeekNumber;
-                      applyWeekNumber(cur - 1);
+                      applyWeekNumber(goToPrevWeekNumber(cur));
                       setWeekInputErr(null);
                     }}
-                  >
-                    ◀
-                  </button>
+                  />
                   <input
                     type="text"
                     className={weekInputErr ? "payment-modal-week-inp payment-modal-week-inp--err" : "payment-modal-week-inp"}
@@ -1764,19 +1825,16 @@ export function PaymentModalUpdated({
                       setWeekDraft(toWeekCode(num));
                     }}
                   />
-                  <button
-                    type="button"
+                  <AhWeekNavNextButton
                     className="payment-modal-week-arrow"
-                    aria-label="שבוע הבא"
+                    variant="angle"
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {
                       const cur = parseWeekNumber(weekDraft) ?? parseWeekNumber(weekSelectValue) ?? baseWeekNumber;
-                      applyWeekNumber(cur + 1);
+                      applyWeekNumber(goToNextWeekNumber(cur));
                       setWeekInputErr(null);
                     }}
-                  >
-                    ▶
-                  </button>
+                  />
                   <button
                     type="button"
                     className="payment-modal-week-dd"
@@ -2026,13 +2084,17 @@ export function PaymentModalUpdated({
                     >
                       {navSpinDirection === "prev" ? <span className="payment-modal-save-spinner" aria-hidden /> : "◀"}
                     </button>
-                    {loadedPayment?.paymentCode?.trim() ? (
+                    {paymentCaptureNavLabel ? (
                       <div className="payment-nav-code" dir="ltr" aria-label="קוד קליטת תשלום">
                         {paymentCaptureNavLabel}
                       </div>
-                    ) : (
+                    ) : paymentCodePreviewPending ? (
                       <div className="payment-nav-code payment-modal-code-pending" dir="ltr" aria-busy="true">
-                        <span className="payment-modal-save-spinner" aria-hidden />
+                        …
+                      </div>
+                    ) : (
+                      <div className="payment-nav-code" dir="ltr">
+                        —
                       </div>
                     )}
                     <button
@@ -2088,7 +2150,7 @@ export function PaymentModalUpdated({
                 <div className="payment-upd-lines" aria-label="תשלומים שנוספו">
                   {payments.map((p, idx) => {
                     const calc = calculatePaymentLine(p, rateN, DEFAULT_VAT_RATE);
-                    const amtStr = p.amount === "" ? "" : String(p.amount);
+                    const amountNum = p.amount === "" ? null : p.amount;
                     const cur: PaymentLineCurrency = p.currency;
                     const currSym = cur === "USD" ? "$" : "₪";
                     /**
@@ -2116,16 +2178,13 @@ export function PaymentModalUpdated({
                         <div className="payment-upd-grid">
                           <label className="payment-modal-lbl payment-upd-lbl">
                             סכום
-                            <input
+                            <MoneyInput
                               ref={idx === 0 ? firstAmountInputRef : undefined}
-                              inputMode="decimal"
-                              dir="ltr"
                               className="payment-modal-inp payment-modal-inp--num payment-modal-inp--amount"
-                              value={amtStr}
-                              onChange={(e) => {
-                                const raw = sanitizeMoneyInput(e.target.value);
-                                if (!raw) updatePaymentLine(p.id, { amount: "" });
-                                else updatePaymentLine(p.id, { amount: Number(raw) });
+                              value={amountNum}
+                              onChange={(n) => {
+                                if (n == null) updatePaymentLine(p.id, { amount: "" });
+                                else updatePaymentLine(p.id, { amount: n });
                               }}
                               onKeyDown={(e) => {
                                 if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
@@ -2136,7 +2195,9 @@ export function PaymentModalUpdated({
                                   customerCodeInputRef.current?.focus();
                                   return;
                                 }
-                                window.setTimeout(() => saveAndNewButtonRef.current?.focus(), 0);
+                                window.setTimeout(() => {
+                                  (saveAndNewButtonRef.current ?? savePrimaryButtonRef.current)?.focus();
+                                }, 0);
                               }}
                             />
                           </label>
@@ -2385,12 +2446,17 @@ export function PaymentModalUpdated({
                 </div>
               </div>
               {saveErr ? <div className="payment-modal-err payment-modal-err--sm">{saveErr}</div> : null}
-              <Button
+              <button
                 type="button"
-                variant="primary"
-                className={`btn-save payment-modal-save payment-modal-save--v2${saveBusy ? " loading" : ""}`}
+                ref={savePrimaryButtonRef}
+                className={`btn btn-primary btn-save payment-modal-save payment-modal-save--v2${saveBusy ? " loading" : ""}`}
                 disabled={saveBusy || !customer}
                 onClick={() => void onSaveAndClose()}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
+                  e.preventDefault();
+                  if (!saveBusy && customer) void onSaveAndClose();
+                }}
               >
                 {saveBusy ? (
                   <>
@@ -2400,7 +2466,7 @@ export function PaymentModalUpdated({
                 ) : (
                   "שמור תשלום"
                 )}
-              </Button>
+              </button>
             </div>
           </aside>
         </div>
@@ -2518,6 +2584,13 @@ export function PaymentModalUpdated({
           </div>
         </div>
       ) : null}
+      <CustomerPaymentOverageModal
+        open={overageModalOpen}
+        preview={overagePreview}
+        busy={saveBusy}
+        onConfirm={() => void onOverageConfirm()}
+        onCancel={onOverageCancel}
+      />
     </>
   );
 }

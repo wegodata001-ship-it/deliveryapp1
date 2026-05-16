@@ -5,7 +5,16 @@ import { revalidatePath } from "next/cache";
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { computeFromUsdAmount } from "@/lib/financial-calc";
 import { ensureDefaultFinancialSettings, getCurrentFinancialSettings } from "@/lib/financial-settings";
-import { buildAllocationsFromMatch, roundMoney2, toPaymentIntakeBases } from "@/lib/payment-intake";
+import { allocatePaymentAcrossOrders, roundMoney2, toPaymentIntakeBases } from "@/lib/payment-intake";
+import {
+  computePaymentOveragePreview,
+  orderExpectedIlsValue,
+  orderUsdTotal,
+  paymentIlsValue,
+  paymentUsdValue,
+  sumOpenDebtIlsFromOrders,
+} from "@/lib/customer-balance";
+import type { PaymentOveragePreview } from "@/lib/customer-balance";
 import { paymentIntakeOrderDateThroughAhWeekEnd } from "@/lib/payment-intake-order-filter";
 import { validatePaymentCheckLines } from "@/lib/payment-checks";
 import { prisma } from "@/lib/prisma";
@@ -89,7 +98,115 @@ export type PaymentUpdatedSaveInput = {
   draftNameAr?: string | null;
   draftNameEn?: string | null;
   draftPhone?: string | null;
+  /** כאשר true — עודף מעל החוב הפתוח נשמר כתשלום כללי (יתרת זכות) */
+  saveSurplusAsCredit?: boolean;
 };
+
+const ALLOC_EPS = 0.02;
+
+async function loadOrdersForPaymentAllocation(
+  customerId: string,
+  weekCode: string | null,
+): Promise<
+  Array<{
+    id: string;
+    totalUsd: Prisma.Decimal | null;
+    amountUsd: Prisma.Decimal | null;
+    commissionUsd: Prisma.Decimal | null;
+    totalIlsWithVat: Prisma.Decimal | null;
+    totalIls: Prisma.Decimal | null;
+    paidUsd: Prisma.Decimal;
+    paidIls: Prisma.Decimal;
+  }>
+> {
+  const weekDateWhere = paymentIntakeOrderDateThroughAhWeekEnd(weekCode);
+  const orders = await prisma.order.findMany({
+    where: {
+      customerId,
+      deletedAt: null,
+      ...(weekDateWhere ?? {}),
+    },
+    orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],
+    select: {
+      id: true,
+      totalUsd: true,
+      amountUsd: true,
+      commissionUsd: true,
+      totalIlsWithVat: true,
+      totalIls: true,
+    },
+  });
+  const orderIds = orders.map((o) => o.id);
+  const paidByOrder = new Map<string, { usd: Prisma.Decimal; ils: Prisma.Decimal }>();
+  if (orderIds.length > 0) {
+    const payments = await prisma.payment.findMany({
+      where: { orderId: { in: orderIds }, isPaid: true },
+      select: {
+        orderId: true,
+        amountUsd: true,
+        totalIlsWithVat: true,
+        amountIls: true,
+        exchangeRate: true,
+      },
+    });
+    for (const p of payments) {
+      if (!p.orderId) continue;
+      const cur = paidByOrder.get(p.orderId) ?? { usd: new Prisma.Decimal(0), ils: new Prisma.Decimal(0) };
+      cur.usd = cur.usd.add(paymentUsdValue(p));
+      cur.ils = cur.ils.add(paymentIlsValue(p));
+      paidByOrder.set(p.orderId, cur);
+    }
+  }
+  return orders.map((o) => {
+    const paid = paidByOrder.get(o.id) ?? { usd: new Prisma.Decimal(0), ils: new Prisma.Decimal(0) };
+    return { ...o, paidUsd: paid.usd, paidIls: paid.ils };
+  });
+}
+
+export async function previewCustomerPaymentOverageAction(input: {
+  customerId: string;
+  totalPaymentUsd: number;
+  dollarRate: string;
+  weekCode?: string | null;
+}): Promise<{ ok: true; preview: PaymentOveragePreview } | { ok: false; error: string }> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["receive_payments"])) return { ok: false, error: "אין הרשאה" };
+
+  const cid = input.customerId.trim();
+  if (!cid) return { ok: false, error: "חסר לקוח" };
+
+  let rateN = Number(String(input.dollarRate).trim().replace(",", "."));
+  if (!Number.isFinite(rateN) || rateN <= 0) return { ok: false, error: "שער דולר לא תקין" };
+
+  const paymentUsd = roundMoney2(input.totalPaymentUsd);
+  if (paymentUsd <= 0) return { ok: false, error: "סכום תשלום לא תקין" };
+
+  const orders = await loadOrdersForPaymentAllocation(cid, input.weekCode?.trim() || null);
+  const openDebtIls = sumOpenDebtIlsFromOrders(
+    orders.map((o) => ({
+      totalIlsWithVat: o.totalIlsWithVat,
+      totalIls: o.totalIls,
+      paidIls: o.paidIls,
+    })),
+  );
+  let openDebtUsd = 0;
+  for (const o of orders) {
+    const total = Number(orderUsdTotal(o).toFixed(4));
+    const paid = Number(o.paidUsd.toFixed(4));
+    openDebtUsd += Math.max(0, total - paid);
+  }
+  openDebtUsd = roundMoney2(openDebtUsd);
+
+  const paymentIls = roundMoney2(paymentUsd * rateN);
+  const preview = computePaymentOveragePreview({
+    openDebtIls,
+    openDebtUsd,
+    paymentIls,
+    paymentUsd,
+  });
+
+  return { ok: true, preview };
+}
 
 export async function savePaymentUpdatedAction(
   form: PaymentUpdatedSaveInput,
@@ -208,8 +325,18 @@ export async function savePaymentUpdatedAction(
   const prioritized =
     form.includedOrderIds === null ? null : new Set((form.includedOrderIds ?? []).filter(Boolean));
 
-  const allocations = buildAllocationsFromMatch(bases, totals.totalUsd, prioritized);
-  if (allocations.length === 0) return { ok: false, error: "אין יעד להקצאה" };
+  const { byOrderId, unallocatedUsd } = allocatePaymentAcrossOrders(bases, totals.totalUsd, prioritized);
+  const allocationEntries = [...byOrderId.entries()].filter(([, amt]) => amt > ALLOC_EPS);
+
+  if (allocationEntries.length === 0 && !(form.saveSurplusAsCredit && unallocatedUsd > ALLOC_EPS)) {
+    return { ok: false, error: "אין יעד להקצאה" };
+  }
+  if (unallocatedUsd > ALLOC_EPS && !form.saveSurplusAsCredit) {
+    return {
+      ok: false,
+      error: `התשלום גבוה ב־${unallocatedUsd.toFixed(2)}$ מהחוב הפתוח — אשרו שמירת עודף כיתרת זכות או הפחיתו את הסכום`,
+    };
+  }
 
   // Payment method on DB row: if all same -> use it, else OTHER.
   const distinctMethods = new Set(form.payments.map((p) => p.paymentMethod));
@@ -263,17 +390,18 @@ export async function savePaymentUpdatedAction(
 
   const allocated = await allocateNextPaymentCapture();
   const primaryCode = allocated.code;
+  let savedCount = 0;
 
   try {
     let primaryPaymentId: string | null = null;
     await prisma.$transaction(async (tx) => {
-      for (let i = 0; i < allocations.length; i++) {
-        const a = allocations[i]!;
-        const amt = new Prisma.Decimal((a.amountUsd || "").trim().replace(",", ".") || "0");
+      let allocIndex = 0;
+      for (const [orderId, allocUsd] of allocationEntries) {
+        const amt = new Prisma.Decimal(allocUsd.toFixed(4));
         if (amt.lte(0)) continue;
 
         const order = await tx.order.findFirst({
-          where: { id: a.orderId, customerId: cid, deletedAt: null },
+          where: { id: orderId, customerId: cid, deletedAt: null },
           select: { id: true },
         });
         if (!order) throw new Error("הזמנה לא נמצאה או שאינה של הלקוח");
@@ -285,13 +413,13 @@ export async function savePaymentUpdatedAction(
           vatRate,
         });
 
-        const code = i === 0 ? primaryCode : null;
+        const code = allocIndex === 0 ? primaryCode : null;
 
         const created = await tx.payment.create({
           data: {
             paymentCode: code,
             paymentNumber: allocated.paymentNumber,
-            orderId: a.orderId,
+            orderId,
             customerId: cid,
             weekCode,
             paymentDate,
@@ -316,7 +444,54 @@ export async function savePaymentUpdatedAction(
             createdById: me.id,
           },
         });
-        if (i === 0) primaryPaymentId = created.id;
+        if (allocIndex === 0) primaryPaymentId = created.id;
+        allocIndex += 1;
+        savedCount += 1;
+      }
+
+      if (form.saveSurplusAsCredit && unallocatedUsd > ALLOC_EPS) {
+        const creditUsd = new Prisma.Decimal(unallocatedUsd.toFixed(4));
+        const creditTotals = computeFromUsdAmount(creditUsd, {
+          baseDollarRate: base,
+          dollarFee: fee,
+          finalDollarRate: finalUse,
+          vatRate,
+        });
+        const creditNotes = [
+          "יתרת זכות ללקוח — עודף מתשלום",
+          `קשור לקליטה ${primaryCode}`,
+          `עודף: $${unallocatedUsd.toFixed(2)} (≈ ₪${Number(creditTotals.totalIlsWithVat).toFixed(2)})`,
+        ].join("\n");
+        await tx.payment.create({
+          data: {
+            paymentCode: null,
+            paymentNumber: allocated.paymentNumber,
+            orderId: null,
+            customerId: cid,
+            weekCode,
+            paymentDate,
+            paymentPlace: null,
+            currency: "USD",
+            amountUsd: creditUsd,
+            amountIls: creditTotals.totalIlsWithVat,
+            exchangeRate: finalUse,
+            vatRate,
+            commissionPercent: commissionPctDec,
+            amountWithoutVat: creditTotals.totalIlsWithoutVat,
+            snapshotBaseDollarRate: creditTotals.snapshotBaseDollarRate,
+            snapshotDollarFee: creditTotals.snapshotDollarFee,
+            snapshotFinalDollarRate: creditTotals.snapshotFinalDollarRate,
+            totalIlsWithVat: creditTotals.totalIlsWithVat,
+            totalIlsWithoutVat: creditTotals.totalIlsWithoutVat,
+            vatAmount: creditTotals.vatAmount,
+            manualDateChanged,
+            paymentMethod: payMethodDb,
+            isPaid: true,
+            notes: creditNotes,
+            createdById: me.id,
+          },
+        });
+        savedCount += 1;
       }
 
       if (primaryPaymentId && flatChecksForPrimary.length > 0) {
@@ -335,10 +510,9 @@ export async function savePaymentUpdatedAction(
     return { ok: false, error: msg };
   }
 
-  revalidatePath("/admin");
   revalidatePath("/admin/orders");
   revalidatePath("/admin/source-tables/payments");
-  return { ok: true, saved: { primaryPaymentCode: primaryCode, count: allocations.length } };
+  return { ok: true, saved: { primaryPaymentCode: primaryCode, count: savedCount } };
 }
 
 /**
@@ -514,7 +688,6 @@ export async function resetOrderBalanceAction(input: {
       };
     });
 
-    revalidatePath("/admin");
     revalidatePath("/admin/orders");
 
     return {
@@ -764,7 +937,6 @@ export async function resetCustomerOutstandingBalancesAction(input: {
       };
     });
 
-    revalidatePath("/admin");
     revalidatePath("/admin/orders");
 
     return {

@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/admin-auth";
 import { LoginForm } from "./LoginForm";
+import { WegoBrandLogo } from "@/components/admin/WegoBrandLogo";
 import "./admin-login.css";
 
 export const dynamic = "force-dynamic";
@@ -22,11 +23,8 @@ export default async function AdminLoginPage({
     <div className="al-page" dir="rtl" lang="he">
       <div className="al-card">
         <header className="al-header">
-          <div className="al-logo" aria-hidden>
-            W
-          </div>
-          <h1>וויגו פרו</h1>
-          <p className="al-subtitle">מערכת ניהול תשלומים, הזמנות ולקוחות</p>
+          <WegoBrandLogo size={72} className="al-logo-wrap" />
+          <h1>וויגו פרו — מערכת לוגיסטיקה</h1>
         </header>
         <LoginForm nextPath={nextPath} />
       </div>

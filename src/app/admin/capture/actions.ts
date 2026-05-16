@@ -7,6 +7,8 @@ import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth
 import { breakdownIlsIncludingVat, computeFromUsdAmount } from "@/lib/financial-calc";
 import { ensureDefaultFinancialSettings, getCurrentFinancialSettings } from "@/lib/financial-settings";
 import { DEFAULT_WEEK_CODE, formatLocalHm, formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate, parseLocalDateTime } from "@/lib/work-week";
+import { deriveAhWeekCodeFromOrderDateYmd } from "@/lib/weeks/order-week-dates";
+import { isValidYmd } from "@/lib/weeks/ah-week";
 import { orderNumberMatchesWeekFormat } from "@/lib/order-number";
 import { prisma } from "@/lib/prisma";
 import { allocateNextPaymentCapture } from "@/lib/payment-capture-code";
@@ -16,7 +18,12 @@ import { getSelectedCountriesForOrdersInternal } from "@/app/admin/settings/acti
 import { ORDER_COUNTRY_CODES, coerceOrderCountryForForm, normalizeOrderSourceCountry, type OrderCountryCode } from "@/lib/order-countries";
 import { prismaVatRatePercent } from "@/lib/vat-prisma";
 import { computeCustomerNamePatches, primaryCustomerDisplayName } from "@/lib/customer-names";
-import { isCustomerCodeTaken, normalizeCustomerCodeInput, suggestNextCustomerCode } from "@/lib/customer-code";
+import {
+  isCustomerCodeTaken,
+  isNumericCustomerCode,
+  normalizeCustomerCodeInput,
+  suggestNextCustomerCode,
+} from "@/lib/customer-code";
 import { canUserEditCompletedOrder } from "@/lib/order-edit-lock";
 import {
   clearExpiredOrderEditUnlockForOrder,
@@ -29,6 +36,41 @@ import {
   listIntakeLocationsForSelect,
   resolveOrderIntakeLocationColumnValue,
 } from "@/lib/intake-location";
+
+type OrderCaptureDatesInput = {
+  /** תאימות אחורה — לא משמש לחישוב שבוע */
+  weekCode?: string;
+  /** תאריך עסקי ראשי → orderDate + weekCode */
+  orderExecutionDateYmd?: string;
+  /** תאריך/שעת הזנה למערכת → intakeDateTime (לא משפיע על שבוע) */
+  intakeDateYmd?: string;
+  intakeTimeHm?: string;
+  /** תאימות אחורה */
+  orderDateYmd?: string;
+  orderTimeHm?: string;
+};
+
+function resolveOrderCaptureDates(
+  form: OrderCaptureDatesInput,
+):
+  | { ok: true; orderExecutionDate: Date; intakeDateTime: Date; orderDate: Date; weekCode: string }
+  | { ok: false; error: string } {
+  const orderDateYmd = (form.orderExecutionDateYmd ?? form.orderDateYmd ?? "").trim();
+  const intakeYmd = (form.intakeDateYmd ?? "").trim();
+  const intakeHm = (form.intakeTimeHm ?? form.orderTimeHm ?? "00:00").trim();
+
+  if (!orderDateYmd) return { ok: false, error: "יש להזין תאריך הזמנה" };
+  if (!isValidYmd(orderDateYmd)) return { ok: false, error: "תאריך הזמנה לא תקין" };
+  if (!intakeYmd) return { ok: false, error: "יש להזין תאריך הזנה" };
+  if (!isValidYmd(intakeYmd)) return { ok: false, error: "תאריך הזנה לא תקין" };
+
+  const orderDate = parseLocalDate(orderDateYmd);
+  const weekCode = deriveAhWeekCodeFromOrderDateYmd(orderDateYmd) ?? DEFAULT_WEEK_CODE;
+  const orderExecutionDate = orderDate;
+  const intakeDateTime = parseLocalDateTime(intakeYmd, intakeHm);
+
+  return { ok: true, orderExecutionDate, intakeDateTime, orderDate, weekCode };
+}
 
 export type CustomerSearchRow = {
   id: string;
@@ -958,7 +1000,7 @@ export type CustomerCardSnapshot = {
 export type CustomerLedgerRow = {
   id: string;
   dateYmd: string;
-  type: "CHARGE" | "PAYMENT";
+  type: "CHARGE" | "PAYMENT" | "CREDIT_STORED" | "CREDIT_APPLIED";
   amountUsd: string;
   paidUsd: string;
   balanceUsd: string;
@@ -974,15 +1016,21 @@ export type CustomerLedgerPayload = {
 
 export type ClientCreateInput = {
   customerCode: string;
-  name: string;
+  /** שם ערבית — שדה ראשי */
+  nameAr: string;
+  nameEn?: string | null;
   phone: string;
   email?: string | null;
   notes?: string | null;
 };
 
 export type ClientCreateResult = {
+  customerId: string;
   id: string;
   customerCode: string;
+  customerNameAr: string;
+  customerNameEn: string | null;
+  /** תאימות — שם תצוגה (= nameAr) */
   name: string;
   phone: string;
   email: string | null;
@@ -1027,12 +1075,16 @@ export async function createClientAction(
   }
 
   const customerCode = normalizeCustomerCodeInput(input.customerCode);
-  const name = input.name.trim();
+  const nameAr = input.nameAr.trim();
+  const nameEn = input.nameEn?.trim() || null;
   const phone = input.phone.trim();
   const email = input.email?.trim() || null;
   const notes = input.notes?.trim() || null;
   if (!customerCode) return { ok: false, error: "יש להזין קוד לקוח" };
-  if (!name) return { ok: false, error: "שם לקוח חובה" };
+  if (!isNumericCustomerCode(customerCode)) {
+    return { ok: false, error: "קוד לקוח חייב להיות מספר בלבד (למשל 24001)" };
+  }
+  if (!nameAr) return { ok: false, error: "שם ערבית חובה" };
   if (!phone) return { ok: false, error: "טלפון חובה" };
 
   if (await isCustomerCodeTaken(customerCode)) {
@@ -1042,7 +1094,9 @@ export async function createClientAction(
   const created = await prisma.customer.create({
     data: {
       customerCode,
-      displayName: name,
+      displayName: nameAr,
+      nameAr,
+      nameEn,
       phone,
       email,
       notes,
@@ -1052,17 +1106,24 @@ export async function createClientAction(
       id: true,
       customerCode: true,
       displayName: true,
+      nameAr: true,
+      nameEn: true,
       phone: true,
       email: true,
       createdAt: true,
     },
   });
+  const ar = created.nameAr ?? created.displayName ?? nameAr;
+  const en = created.nameEn ?? nameEn;
   return {
     ok: true,
     client: {
+      customerId: created.id,
       id: created.id,
       customerCode: created.customerCode ?? customerCode,
-      name: created.displayName,
+      customerNameAr: ar,
+      customerNameEn: en,
+      name: ar,
       phone: created.phone ?? phone,
       email: created.email,
       createdAt: created.createdAt.toISOString(),
@@ -1297,16 +1358,37 @@ export async function getCustomerLedgerAction(params: {
     prisma.order.findMany({
       where: { customerId: id, deletedAt: null, orderDate: { gte: from, lte: to } },
       orderBy: { orderDate: "asc" },
-      select: { id: true, orderNumber: true, orderDate: true, totalUsd: true },
+      select: {
+        id: true,
+        orderNumber: true,
+        orderDate: true,
+        totalUsd: true,
+        debtWithdrawalUsd: true,
+      },
     }),
     prisma.payment.findMany({
       where: { customerId: id, isPaid: true, paymentDate: { gte: from, lte: to } },
       orderBy: { paymentDate: "asc" },
-      select: { id: true, paymentCode: true, paymentDate: true, amountUsd: true, amountIls: true, exchangeRate: true },
+      select: {
+        id: true,
+        orderId: true,
+        paymentCode: true,
+        paymentDate: true,
+        amountUsd: true,
+        amountIls: true,
+        exchangeRate: true,
+        notes: true,
+      },
     }),
   ]);
 
-  const events = [
+  const events: Array<{
+    id: string;
+    date: Date;
+    type: CustomerLedgerRow["type"];
+    amount: Prisma.Decimal;
+    document: string;
+  }> = [
     ...orders.map((o) => ({
       id: `o-${o.id}`,
       date: o.orderDate ?? new Date(0),
@@ -1314,13 +1396,26 @@ export async function getCustomerLedgerAction(params: {
       amount: o.totalUsd ?? new Prisma.Decimal(0),
       document: o.orderNumber ?? "הזמנה",
     })),
-    ...payments.map((p) => ({
-      id: `p-${p.id}`,
-      date: p.paymentDate ?? new Date(0),
-      type: "PAYMENT" as const,
-      amount: paymentUsdEquivalentForLedger(p),
-      document: p.paymentCode ?? "תשלום",
-    })),
+    ...orders
+      .filter((o) => o.debtWithdrawalUsd != null && o.debtWithdrawalUsd.gt(0))
+      .map((o) => ({
+        id: `dw-${o.id}`,
+        date: o.orderDate ?? new Date(0),
+        type: "CREDIT_APPLIED" as const,
+        amount: o.debtWithdrawalUsd!,
+        document: `קיזוז זכות · ${o.orderNumber ?? "הזמנה"}`,
+      })),
+    ...payments.map((p) => {
+      const isCredit = p.orderId == null;
+      const payType: CustomerLedgerRow["type"] = isCredit ? "CREDIT_STORED" : "PAYMENT";
+      return {
+        id: `p-${p.id}`,
+        date: p.paymentDate ?? new Date(0),
+        type: payType,
+        amount: paymentUsdEquivalentForLedger(p),
+        document: isCredit ? "יתרת זכות ללקוח" : p.paymentCode ?? "תשלום",
+      };
+    }),
   ].sort((a, b) => a.date.getTime() - b.date.getTime() || a.id.localeCompare(b.id));
 
   let balance = new Prisma.Decimal(0);
@@ -1341,13 +1436,15 @@ export async function getCustomerLedgerAction(params: {
       };
     }
     balance = balance.sub(ev.amount);
-    totalPayments = totalPayments.add(ev.amount);
+    if (ev.type === "PAYMENT" || ev.type === "CREDIT_STORED") {
+      totalPayments = totalPayments.add(ev.amount);
+    }
     return {
       id: ev.id,
       dateYmd: ev.date.getTime() > 0 ? formatLocalYmd(ev.date) : "—",
       type: ev.type,
       amountUsd: ev.amount.toFixed(2),
-      paidUsd: ev.amount.toFixed(2),
+      paidUsd: ev.type === "CREDIT_APPLIED" ? "0.00" : ev.amount.toFixed(2),
       balanceUsd: balance.toFixed(2),
       document: ev.document,
     };
@@ -1466,8 +1563,11 @@ export async function getCustomerOrderFormExtrasAction(customerId: string): Prom
 
 export async function captureOrderAction(form: {
   weekCode: string;
-  orderDateYmd: string;
-  orderTimeHm: string;
+  orderExecutionDateYmd?: string;
+  intakeDateYmd?: string;
+  intakeTimeHm?: string;
+  orderDateYmd?: string;
+  orderTimeHm?: string;
   /** אופציונלי: מספר הזמנה מלא בפורמט {weekCode}-#### — חייב להיות ייחודי */
   orderNumber?: string | null;
   /** שער דולר סופי לחישוב ₪ (עקיפת הגדרות גלובליות) */
@@ -1517,7 +1617,11 @@ async function captureOrderActionInner(form: Parameters<typeof captureOrderActio
     return { ok: false, error: "סטטוס הזמנה לא תקין" };
   }
 
-  const wcEarly = form.weekCode.trim() || DEFAULT_WEEK_CODE;
+  const orderDateYmdEarly = (form.orderExecutionDateYmd ?? form.orderDateYmd ?? "").trim();
+  if (!orderDateYmdEarly || !isValidYmd(orderDateYmdEarly)) {
+    return { ok: false, error: "יש להזין תאריך הזמנה תקין" };
+  }
+  const wcEarly = deriveAhWeekCodeFromOrderDateYmd(orderDateYmdEarly) ?? DEFAULT_WEEK_CODE;
   const requestedOrderNumber = form.orderNumber?.trim() || "";
 
   // Phase 1 — every independent read + DDL ensure + order-number allocation +
@@ -1642,7 +1746,9 @@ async function captureOrderActionInner(form: Parameters<typeof captureOrderActio
   const dealIlsGross = deal.mul(finalRate).toDecimalPlaces(2, 4);
   const commissionIlsGross = commissionUsd.mul(finalRate).toDecimalPlaces(2, 4);
 
-  const orderDate = parseLocalDateTime(form.orderDateYmd, form.orderTimeHm || "00:00");
+  const datesResolved = resolveOrderCaptureDates(form);
+  if (!datesResolved.ok) return datesResolved;
+  const { orderExecutionDate, intakeDateTime, orderDate, weekCode } = datesResolved;
   const typeSnap = (form.customerTypeSnapshot?.trim() || customer.customerType || "רגיל").trim() || "רגיל";
 
   let orderNumber: string;
@@ -1658,7 +1764,7 @@ async function captureOrderActionInner(form: Parameters<typeof captureOrderActio
     oldOrderNumber = normalized.slice(wcEarly.length + 1);
   } else {
     if (!allocated) {
-      const fresh = await generateNextOrderNumber(form.weekCode);
+      const fresh = await generateNextOrderNumber(weekCode);
       orderNumber = fresh.orderNumber;
       oldOrderNumber = fresh.oldOrderNumber;
     } else {
@@ -1693,9 +1799,11 @@ async function captureOrderActionInner(form: Parameters<typeof captureOrderActio
         customerCodeSnapshot: customer.customerCode,
         customerNameSnapshot: customer.displayName,
         customerTypeSnapshot: typeSnap,
-        weekCode: form.weekCode.trim() || null,
+        weekCode,
         sourceCountry: sourceCountryCreate,
         orderDate,
+        orderExecutionDate,
+        intakeDateTime,
         status,
         paymentMethod: form.paymentMethod as PaymentMethod,
         ...(paymentPointConnect ? { paymentPoint: paymentPointConnect } : {}),
@@ -1727,7 +1835,7 @@ async function captureOrderActionInner(form: Parameters<typeof captureOrderActio
         meId: me.id,
         orderId: order.id,
         customerId: customer.id,
-        weekCode: form.weekCode.trim() || null,
+        weekCode,
         paymentDate: orderDate,
         parsed: payParse.parsed,
         base,
@@ -1772,6 +1880,10 @@ async function captureOrderActionInner(form: Parameters<typeof captureOrderActio
 export type OrderWorkPanelPayload = {
   id: string;
   weekCode: string;
+  orderExecutionDateYmd: string;
+  intakeDateYmd: string;
+  intakeTimeHm: string;
+  /** תאימות — תאריך עסקי (orderDate) */
   orderDateYmd: string;
   orderTimeHm: string;
   orderNumber: string;
@@ -1818,6 +1930,9 @@ export async function getOrderForWorkPanelAction(orderId: string): Promise<Order
         id: true,
         weekCode: true,
         orderDate: true,
+        orderExecutionDate: true,
+        intakeDateTime: true,
+        createdAt: true,
         orderNumber: true,
         customerId: true,
         customerNameSnapshot: true,
@@ -1857,7 +1972,9 @@ export async function getOrderForWorkPanelAction(orderId: string): Promise<Order
 
     const deal = order.amountUsd ?? new Prisma.Decimal(0);
     const com = order.commissionUsd ?? new Prisma.Decimal(0);
-    const od = order.orderDate ? new Date(order.orderDate) : new Date();
+    const od = order.orderDate ?? order.orderExecutionDate ?? new Date();
+    const intakeDt = order.intakeDateTime ?? order.createdAt ?? od;
+    const intakeParsed = intakeDt ? new Date(intakeDt) : od;
     const rateUsed = order.usdRateUsed ?? order.snapshotFinalDollarRate ?? order.exchangeRate ?? new Prisma.Decimal(0);
 
     const label = order.customer?.displayName ?? order.customerNameSnapshot ?? "";
@@ -1902,9 +2019,14 @@ export async function getOrderForWorkPanelAction(orderId: string): Promise<Order
 
     return {
       id: order.id,
-      weekCode: (order.weekCode ?? "").trim() || DEFAULT_WEEK_CODE,
+      weekCode:
+        deriveAhWeekCodeFromOrderDateYmd(formatLocalYmd(od)) ??
+        ((order.weekCode ?? "").trim() || DEFAULT_WEEK_CODE),
+      orderExecutionDateYmd: formatLocalYmd(od),
+      intakeDateYmd: formatLocalYmd(intakeParsed),
+      intakeTimeHm: formatLocalHm(intakeParsed),
       orderDateYmd: formatLocalYmd(od),
-      orderTimeHm: formatLocalHm(od),
+      orderTimeHm: formatLocalHm(intakeParsed),
       orderNumber: order.orderNumber ?? "—",
       customerId: cid,
       customerLabel: label,
@@ -2150,8 +2272,11 @@ export async function updateOrderListPaymentLocationAction(
 export async function updateOrderWorkPanelAction(form: {
   orderId: string;
   weekCode: string;
-  orderDateYmd: string;
-  orderTimeHm: string;
+  orderExecutionDateYmd?: string;
+  intakeDateYmd?: string;
+  intakeTimeHm?: string;
+  orderDateYmd?: string;
+  orderTimeHm?: string;
   customerId: string;
   /** אופציונלי — ברירת מחדל מרשומת הלקוח */
   customerTypeSnapshot?: string | null;
@@ -2320,7 +2445,9 @@ async function updateOrderWorkPanelActionInner(
 
   const dealIlsGross = deal.mul(final).toDecimalPlaces(2, 4);
   const commissionIlsGross = commissionUsd.mul(final).toDecimalPlaces(2, 4);
-  const orderDate = parseLocalDateTime(form.orderDateYmd, form.orderTimeHm || "00:00");
+  const datesResolvedUp = resolveOrderCaptureDates(form);
+  if (!datesResolvedUp.ok) return datesResolvedUp;
+  const { orderExecutionDate, intakeDateTime, orderDate, weekCode } = datesResolvedUp;
   const typeSnap = (form.customerTypeSnapshot?.trim() || customer.customerType || "רגיל").trim() || "רגיל";
 
   if (!resolvedUp.ok) return { ok: false, error: resolvedUp.error };
@@ -2350,9 +2477,11 @@ async function updateOrderWorkPanelActionInner(
         customerCodeSnapshot: customer.customerCode,
         customerNameSnapshot: customer.displayName,
         customerTypeSnapshot: typeSnap,
-        weekCode: form.weekCode.trim() || null,
+        weekCode,
         sourceCountry: sourceCountryUpdate,
         orderDate,
+        orderExecutionDate,
+        intakeDateTime,
         status,
         paymentMethod: form.paymentMethod as PaymentMethod,
         paymentPointId: paymentPointIdUpdate,
@@ -2383,7 +2512,7 @@ async function updateOrderWorkPanelActionInner(
         meId: me.id,
         orderId: existing.id,
         customerId: customer.id,
-        weekCode: form.weekCode.trim() || existing.weekCode || null,
+        weekCode,
         paymentDate: orderDate,
         parsed: payParse.parsed,
         base,

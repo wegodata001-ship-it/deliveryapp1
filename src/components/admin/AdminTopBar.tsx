@@ -1,9 +1,14 @@
 "use client";
 
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
+import { Menu } from "lucide-react";
 import { DEFAULT_WEEK_CODE } from "@/lib/work-week";
-import { withQuery } from "@/lib/admin-url-query";
 import type { SerializedFinancial } from "@/lib/financial-settings";
+import { useAdminNavLayout } from "@/components/admin/AdminNavLayoutContext";
+import { shouldShowGlobalFilter } from "@/components/admin/GlobalFilterBar";
+import { useAdminFinancialModal } from "@/components/admin/AdminFinancialModalContext";
+import { AdminLiveClock } from "@/components/admin/AdminLiveClock";
+import { WegoBrandLogo } from "@/components/admin/WegoBrandLogo";
 
 function titleForPath(pathname: string): string {
   if (pathname === "/admin") return "מסך הבית";
@@ -31,9 +36,11 @@ type Props = {
 
 export function AdminTopBar({ displayName, roleLabel, financial, canManageFinancial }: Props) {
   const pathname = usePathname();
-  const router = useRouter();
   const sp = useSearchParams();
+  const navLayout = useAdminNavLayout();
+  const { openFinancialModal } = useAdminFinancialModal();
 
+  const showGlobalFilters = shouldShowGlobalFilter(pathname);
   const weekCode = sp.get("week") || DEFAULT_WEEK_CODE;
   const rateLabel = financial?.finalDollarRate ?? "—";
   const rateTitle =
@@ -41,32 +48,47 @@ export function AdminTopBar({ displayName, roleLabel, financial, canManageFinanc
       ? `בסיס ${financial.baseDollarRate} + עמלה ${financial.dollarFee} = סופי ${financial.finalDollarRate} ₪/USD`
       : undefined;
 
-  function openFinancial() {
-    if (!canManageFinancial) return;
-    router.push(withQuery(pathname, sp, { modal: "financial" }));
-  }
-
   return (
-    <header className="adm-header adm-header--compact">
+    <header className="adm-header adm-header--erp">
       <div className="adm-header-row">
-        <div className="adm-page-headline">
-          <div className="adm-page-headline-title">{titleForPath(pathname)}</div>
+        <div className="adm-header-lead">
+          {navLayout ? (
+            <button
+              type="button"
+              className="adm-header-menu-btn"
+              aria-label="פתיחת תפריט ניווט"
+              aria-expanded={navLayout.navOpen ? "true" : "false"}
+              onClick={() => navLayout.toggleNav()}
+            >
+              <Menu size={22} strokeWidth={2.2} aria-hidden />
+            </button>
+          ) : null}
+          <WegoBrandLogo size={36} className="adm-header-mark" />
+          <div className="adm-page-headline">
+            <div className="adm-page-headline-title">{titleForPath(pathname)}</div>
+            <div className="adm-page-headline-brand">וויגו פרו — מערכת לוגיסטיקה</div>
+          </div>
         </div>
         <div className="adm-header-meta adm-header-meta--rtl">
-          <div className="adm-pill adm-pill--accent adm-pill--dense">
-            <span>שבוע עבודה</span>
-            <strong>{weekCode}</strong>
-          </div>
-          <button
-            type="button"
-            className={`adm-pill adm-pill--success adm-pill--dense ${canManageFinancial ? "adm-pill--click" : ""}`}
-            onClick={openFinancial}
-            disabled={!canManageFinancial}
-            title={canManageFinancial ? `הגדרות כספים — ${rateTitle ?? ""}` : rateTitle}
-          >
-            <span>שער סופי (USD)</span>
-            <strong dir="ltr">₪ {rateLabel}</strong>
-          </button>
+          <AdminLiveClock className="adm-live-clock--header" />
+          {!showGlobalFilters ? (
+            <>
+              <div className="adm-pill adm-pill--accent adm-pill--dense">
+                <span>שבוע עבודה</span>
+                <strong>{weekCode}</strong>
+              </div>
+              <button
+                type="button"
+                className={`adm-pill adm-pill--success adm-pill--dense ${canManageFinancial ? "adm-pill--click" : ""}`}
+                onClick={openFinancialModal}
+                disabled={!canManageFinancial}
+                title={canManageFinancial ? `הגדרות כספים — ${rateTitle ?? ""}` : rateTitle}
+              >
+                <span>שער דולר</span>
+                <strong dir="ltr">₪ {rateLabel}</strong>
+              </button>
+            </>
+          ) : null}
           <div className="adm-pill adm-pill--user adm-pill--dense">
             <span>משתמש מחובר</span>
             <strong>{displayName}</strong>

@@ -303,41 +303,7 @@
   outline-offset: 1px;
 }
 
-/* Order capture scroll: keep header fixed, content scrollable, footer sticky */
-.adm-win-panel--order-capture .adm-win-body--order-capture {
-  overflow: hidden;
-}
-
-.adm-win-panel--order-capture .adm-order-create-legacy-wrap {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.adm-win-panel--order-capture .adm-order-create--legacy.adm-capture-order-shell {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.adm-win-panel--order-capture .adm-order-create--legacy.adm-capture-order-shell .modal-container {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  padding-bottom: 90px; /* room for sticky footer */
-}
-
-.adm-win-panel--order-capture .adm-order-create--legacy.adm-capture-order-shell .adm-oc-legacy-actions.adm-modal-actions--capture {
-  position: sticky;
-  bottom: 0;
-  z-index: 20;
-  background: #fff;
-  border-top: 1px solid #e5e7eb;
-  margin-top: 0;
-}
+/* Order capture scroll — implemented in wego-order-capture-fluid.css (.adm-oc-pro-scroll) */
 
 /* Keep dropdowns above sticky footer */
 .adm-win-panel--order-capture .adm-order-create--legacy.adm-capture-order-shell .adm-oc-legacy-dd {
@@ -654,6 +620,93 @@
 
 .adm-win-panel--customer-card .client-actions {
   flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.adm-win-panel--customer-card .adm-cust-card-shell--edit {
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
+}
+
+.adm-win-panel--customer-card .client-header--edit {
+  border-bottom-color: #bfdbfe;
+}
+
+.adm-win-panel--customer-card .adm-cust-inline-edit-panel {
+  margin-top: 4px;
+}
+
+.adm-win-panel--customer-card .adm-cust-inline-edit-form.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px 16px;
+  margin-top: 8px;
+}
+
+.adm-win-panel--customer-card .adm-cust-inline-edit-form .form-field--wide {
+  grid-column: 1 / -1;
+}
+
+.adm-win-panel--customer-card .adm-cust-inline-edit-form .form-field label {
+  display: block;
+  font-size: 12px;
+  color: #6b7280;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+.adm-win-panel--customer-card .adm-cust-inline-edit-form .form-field input {
+  width: 100%;
+  box-sizing: border-box;
+  height: 42px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 14px;
+  background: #fff;
+}
+
+.adm-win-panel--customer-card .adm-cust-inline-edit-form .form-field input:focus {
+  outline: none;
+  border-color: #93c5fd;
+  box-shadow: 0 0 0 2px rgba(147, 197, 253, 0.25);
+}
+
+.adm-win-panel--customer-card .client-actions .btn.btn-primary,
+.adm-win-panel--customer-card .client-actions .btn.btn-secondary {
+  min-height: 36px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.adm-win-panel--customer-card .client-actions .btn.btn-secondary {
+  background: #f1f5f9;
+  color: #334155;
+  border: 1px solid #e5e7eb;
+}
+
+.adm-win-panel--customer-card .client-actions .btn.btn-primary {
+  background: #2563eb;
+  color: #fff;
+  border: 1px solid #2563eb;
+}
+
+.adm-win-panel--customer-card .client-actions .btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@media (max-width: 520px) {
+  .adm-win-panel--customer-card .adm-cust-inline-edit-form.form-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .adm-win-panel--customer-card .client-info-card {
@@ -808,6 +861,16 @@
 
 .adm-win-panel--customer-card .status-debt {
   color: #dc2626;
+  font-weight: 600;
+}
+
+.adm-win-panel--customer-card .status-credit {
+  color: #15803d;
+  font-weight: 600;
+}
+
+.adm-win-panel--customer-card .status-even {
+  color: #64748b;
   font-weight: 600;
 }
 

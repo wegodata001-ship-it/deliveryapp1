@@ -4,7 +4,8 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { OrderStatus, PaymentMethod } from "@prisma/client";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { AhWeekNavNextButton, AhWeekNavPrevButton } from "@/components/admin/AhWeekNavButtons";
+import { shiftAhWeekCode } from "@/lib/weeks/ah-week-nav";
 import { ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS } from "@/lib/order-capture-payment-methods";
 import { ORDER_COUNTRY_CODES, orderCountryLabel, type OrderCountryCode } from "@/lib/order-countries";
 import {
@@ -58,17 +59,8 @@ const ORDERS_KEYS = [
   "paymentLocation",
   "amountMin",
   "amountMax",
+  "page",
 ] as const;
-
-/** הזזת קוד שבוע ב־±1 (AH-119 ↔ AH-120). מחזיר null אם הקלט לא תקין. */
-function shiftAhWeek(code: string, delta: number): string | null {
-  const norm = normalizeAhWeekCode(code) ?? code.trim().toUpperCase();
-  const m = /^AH-(\d+)$/i.exec(norm);
-  if (!m) return null;
-  const n = Number(m[1]);
-  if (!Number.isFinite(n) || n <= 0) return null;
-  return `AH-${Math.max(1, Math.floor(n + delta))}`;
-}
 
 const GLOBAL_KEYS = ["week", "from", "to", "country"] as const;
 
@@ -146,9 +138,9 @@ export function OrdersListToolbar({
 
   /** שינוי שבוע ב־±1 (החצים ליד הקלט). */
   const shiftWeek = useCallback(
-    (delta: number) => {
+    (delta: -1 | 1) => {
       const base = week || ahWeekSelect || "AH-1";
-      const next = shiftAhWeek(base, delta);
+      const next = shiftAhWeekCode(base, delta);
       if (!next) return;
       setRangeFromWeekCode(next);
     },
@@ -161,6 +153,7 @@ export function OrdersListToolbar({
       const t = value.trim();
       if (t) base.set("q", t);
       else base.delete("q");
+      base.delete("page");
       const qs = base.toString();
       router.replace(qs ? `/admin/orders?${qs}` : "/admin/orders");
     },
@@ -208,6 +201,7 @@ export function OrdersListToolbar({
     if (payLoc.trim()) base.set("paymentLocation", payLoc.trim());
     if (minAmount.trim()) base.set("amountMin", minAmount.trim());
     if (maxAmount.trim()) base.set("amountMax", maxAmount.trim());
+    base.delete("page");
 
     const qs = base.toString();
     router.push(qs ? `/admin/orders?${qs}` : "/admin/orders");
@@ -235,7 +229,6 @@ export function OrdersListToolbar({
     }
     const qs = base.toString();
     router.replace(qs ? `/admin/orders?${qs}` : "/admin/orders");
-    router.refresh();
   }, [router, searchParams]);
 
   const presetHref = (preset: string) => {
@@ -251,16 +244,8 @@ export function OrdersListToolbar({
       <div className="adm-orders-excel-filters adm-orders-excel-filters--v2">
         <label className="adm-orders-filter-field adm-orders-filter-field--week">
           <span className="adm-orders-filter-label">שבוע</span>
-          <div className="adm-week-control">
-            <button
-              type="button"
-              className="adm-week-step"
-              aria-label="שבוע קודם"
-              title="שבוע קודם"
-              onClick={() => shiftWeek(-1)}
-            >
-              <ChevronRight size={14} strokeWidth={2.4} aria-hidden />
-            </button>
+          <div className="adm-week-control" dir="ltr">
+            <AhWeekNavPrevButton className="adm-week-step" onClick={() => shiftWeek(-1)} />
             <input
               type="text"
               inputMode="text"
@@ -284,15 +269,7 @@ export function OrdersListToolbar({
               spellCheck={false}
               autoComplete="off"
             />
-            <button
-              type="button"
-              className="adm-week-step"
-              aria-label="שבוע הבא"
-              title="שבוע הבא"
-              onClick={() => shiftWeek(1)}
-            >
-              <ChevronLeft size={14} strokeWidth={2.4} aria-hidden />
-            </button>
+            <AhWeekNavNextButton className="adm-week-step" onClick={() => shiftWeek(1)} />
           </div>
         </label>
 

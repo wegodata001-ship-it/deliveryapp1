@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { formatMoneyAmount } from "@/lib/money-format";
 
 type Props = { value: number; className?: string };
 
@@ -38,5 +39,5 @@ export function DashboardAnimatedNumber({ value, className }: Props) {
     return () => cancelAnimationFrame(raf);
   }, [value, reduced]);
 
-  return <span className={className}>{display.toLocaleString("he-IL")}</span>;
+  return <span className={className}>{formatMoneyAmount(display, 0)}</span>;
 }

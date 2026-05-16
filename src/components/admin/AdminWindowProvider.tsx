@@ -1,6 +1,7 @@
 "use client";
 
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
+import type { ClientCreateResult } from "@/app/admin/capture/actions";
 import type { AdminWindowEntry, AdminWindowPayload, AdminWindowType } from "@/lib/admin-windows";
 import { newWindowId } from "@/lib/admin-windows";
 
@@ -11,12 +12,17 @@ type AdminWindowContextValue = {
   closeTop: () => void;
   /** True if any stacked window matches (for nav highlight). */
   isWindowTypeOpen: (type: AdminWindowType) => boolean;
+  /** פותח "לקוח חדש" ומחזיר את הנתונים לקליטת הזמנה אחרי שמירה */
+  openCreateCustomerForOrder: (onCreated: (client: ClientCreateResult) => void) => string;
+  /** מחזיר true אם הוחל על קליטת הזמנה (המודאל נסגר) */
+  completeCustomerCreate: (client: ClientCreateResult) => boolean;
 };
 
 const AdminWindowContext = createContext<AdminWindowContextValue | null>(null);
 
 export function AdminWindowProvider({ children }: { children: ReactNode }) {
   const [stack, setStack] = useState<AdminWindowEntry[]>([]);
+  const customerCreatedListenerRef = useRef<((client: ClientCreateResult) => void) | null>(null);
 
   const openWindow = useCallback((payload: AdminWindowPayload) => {
     // Unification step: the legacy "קליטת תשלום" (payments) is fully retired in
@@ -44,9 +50,38 @@ export function AdminWindowProvider({ children }: { children: ReactNode }) {
     [stack],
   );
 
+  const openCreateCustomerForOrder = useCallback(
+    (onCreated: (client: ClientCreateResult) => void) => {
+      customerCreatedListenerRef.current = onCreated;
+      const id = newWindowId();
+      setStack((s) => [...s, { id, type: "createCustomer" }]);
+      return id;
+    },
+    [],
+  );
+
+  const completeCustomerCreate = useCallback((client: ClientCreateResult): boolean => {
+    const listener = customerCreatedListenerRef.current;
+    customerCreatedListenerRef.current = null;
+    setStack((s) => (s.length && s[s.length - 1]?.type === "createCustomer" ? s.slice(0, -1) : s));
+    if (listener) {
+      listener(client);
+      return true;
+    }
+    return false;
+  }, []);
+
   const value = useMemo(
-    () => ({ stack, openWindow, closeWindow, closeTop, isWindowTypeOpen }),
-    [stack, openWindow, closeWindow, closeTop, isWindowTypeOpen],
+    () => ({
+      stack,
+      openWindow,
+      closeWindow,
+      closeTop,
+      isWindowTypeOpen,
+      openCreateCustomerForOrder,
+      completeCustomerCreate,
+    }),
+    [stack, openWindow, closeWindow, closeTop, isWindowTypeOpen, openCreateCustomerForOrder, completeCustomerCreate],
   );
 
   return <AdminWindowContext.Provider value={value}>{children}</AdminWindowContext.Provider>;

@@ -1,0 +1,306 @@
+/* =============================================================================
+   WEGO PRO — Responsive system layer
+   - Breakpoints (max-width): 1600 / 1400 / 1200 / 992 / 768 / 576
+   - Fluide gaps, min-width:0 on flex children, tables scroll, nav drawer (≤992)
+   - Load after design-system.css (root layout), admin.css may override specifics
+   ============================================================================= */
+
+:root {
+  --wego-r-gap: clamp(8px, 1.5vw, 14px);
+  --wego-r-pad-inline: clamp(10px, 2vw, 22px);
+  --wego-r-pad-block: clamp(8px, 1.8vw, 20px);
+  --wego-r-font-base: clamp(12px, 0.35vw + 11px, 15px);
+}
+
+/* ---- Global overflow (step 17) — avoid horizontal scroll from wide children ---- */
+html {
+  overflow-x: hidden;
+}
+
+body {
+  overflow-x: hidden;
+}
+
+.adm-root {
+  font-size: var(--wego-r-font-base);
+}
+
+body.adm-nav-scroll-lock {
+  overflow: hidden;
+}
+
+/* ---- Scope: fluid padding in main admin content ---- */
+@media (max-width: 1600px) {
+  .adm-content,
+  .adm-content--chrome {
+    padding-inline: var(--wego-r-pad-inline);
+  }
+}
+
+@media (max-width: 1200px) {
+  .adm-chrome-main.adm-content--chrome {
+    padding-block: var(--wego-r-pad-block);
+  }
+}
+
+@media (max-width: 1400px) {
+  .adm-header--compact {
+    padding-inline: clamp(0.45rem, 2vw, 1.25rem);
+  }
+
+  .adm-pill {
+    font-size: clamp(0.72rem, 0.9vw, 0.9rem);
+  }
+}
+
+@media (max-width: 1200px) {
+  .adm-pill--dense {
+    padding: 0.4rem 0.55rem;
+  }
+}
+
+@media (max-width: 992px) {
+  .adm-header,
+  .adm-header--compact,
+  .adm-header--erp {
+    padding-inline: 0.65rem;
+  }
+
+  .adm-header-meta--rtl {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 768px) {
+  .adm-page-headline-title {
+    font-size: 0.88rem;
+  }
+}
+
+@media (max-width: 576px) {
+  .adm-pill {
+    flex-wrap: wrap;
+  }
+
+  .adm-live-clock--header {
+    width: 100%;
+    align-items: flex-start;
+    text-align: start;
+  }
+
+  .adm-page-headline-brand {
+    display: none;
+  }
+
+  .adm-dash-home-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .adm-filter-rate-wrap {
+    width: 100%;
+    margin-inline-start: 0;
+  }
+
+  .adm-filter-rate-pill {
+    width: 100%;
+  }
+}
+
+/* ---- Header lead + hamburger (show only ≤992) ---- */
+.adm-header-lead {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.adm-header-menu-btn {
+  display: none;
+}
+
+@media (max-width: 992px) {
+  .adm-header-menu-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    border: 1px solid rgba(148, 163, 184, 0.38);
+    background: #fff;
+    color: #0f172a;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+}
+
+/* ---- Sidebar — tablet/mobile drawer — desktop unchanged in admin.css ---- */
+.adm-sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 34;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+  background: rgba(15, 23, 42, 0.47);
+  display: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@keyframes wego-backdrop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (min-width: 993px) {
+  .adm-sidebar-backdrop {
+    display: none !important;
+    visibility: hidden;
+    pointer-events: none !important;
+  }
+}
+
+@media (max-width: 992px) {
+  .adm-root--nav-open .adm-sidebar-backdrop {
+    display: block;
+    animation: wego-backdrop-in 0.2s ease-out;
+  }
+
+  .adm-root {
+    min-height: 100vh;
+  }
+
+  .adm-main {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .adm-sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    z-index: 40;
+    width: min(288px, 88vw) !important;
+    max-width: none;
+    height: 100vh !important;
+    flex-shrink: 0;
+    align-self: stretch;
+    transform: translateX(100%);
+    transition: transform 0.22s ease;
+  }
+
+  html[dir="rtl"] .adm-sidebar {
+    right: 0;
+    left: auto;
+  }
+
+  .adm-root--nav-open .adm-sidebar {
+    transform: translateX(0);
+  }
+}
+
+/* ---- Modal / window stack — viewport caps; preserve pointer model from admin.css ---- */
+.adm-win-layer {
+  padding: clamp(0.35rem, 2vw, 1rem);
+}
+
+.adm-win-panel {
+  width: min(95vw, 1800px);
+  max-width: 100%;
+  max-height: min(95vh, 920px);
+}
+
+.adm-win-panel--order-capture.adm-win-panel {
+  width: min(96vw, 1800px);
+  max-height: min(94vh, 980px);
+  height: auto;
+}
+
+.adm-win-body {
+  min-width: 0;
+}
+
+.adm-modal-actions,
+.adm-modal-actions--capture {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+/* ---- Tables (step 5) ---- */
+.adm-table-excel-wrap {
+  overflow-x: auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+}
+
+@media (max-width: 992px) {
+  .adm-table-excel:not(.adm-table-excel--orders),
+  .adm-table-excel--legacy-broad {
+    font-size: 0.72rem;
+  }
+
+  .adm-table-excel:not(.adm-table-excel--orders) thead th,
+  .adm-table-excel:not(.adm-table-excel--orders) tbody td {
+    padding: 5px 4px;
+  }
+
+  .adm-table-excel--orders thead th,
+  .adm-table-excel--orders tbody td {
+    padding: 5px 4px !important;
+    font-size: 0.74rem !important;
+  }
+}
+
+/* ---- KPI grids (step 6) ---- */
+.adm-orders-kpi-row {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.adm-reports-kpis {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+@media (max-width: 992px) {
+  .adm-orders-kpi-card strong {
+    font-size: 0.95rem;
+  }
+}
+
+@media (max-width: 576px) {
+  .adm-report-kpi-card strong {
+    font-size: clamp(1.25rem, 8vw, 28px);
+  }
+}
+
+/* ---- Forms: inputs min-width 0 (step 8) ---- */
+.adm-root input:not([type="radio"]):not([type="checkbox"]),
+.adm-root textarea,
+.adm-root select {
+  min-width: 0;
+}
+
+/* ---- Utilities ---- */
+.wego-fluid-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--wego-r-gap);
+  align-items: flex-start;
+}
+
+.wego-table-scroll {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}

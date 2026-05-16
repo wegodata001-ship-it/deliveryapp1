@@ -14,6 +14,10 @@ import {
 } from "@/lib/work-week";
 import { withQuery } from "@/lib/admin-url-query";
 import { ORDER_COUNTRY_CODES, orderCountryLabel, type OrderCountryCode } from "@/lib/order-countries";
+import { AhWeekNavNextButton, AhWeekNavPrevButton } from "@/components/admin/AhWeekNavButtons";
+import { shiftAhWeekCode } from "@/lib/weeks/ah-week-nav";
+import type { SerializedFinancial } from "@/lib/financial-settings";
+import { useAdminFinancialModal } from "@/components/admin/AdminFinancialModalContext";
 
 /**
  * דפים נוספים שמציגים את סרגל הסינון הגלובלי (כיום: בקרת קבלות).
@@ -35,13 +39,6 @@ function normalizeWeekInput(raw: string): string | null {
   return `AH-${Math.floor(n)}`;
 }
 
-function shiftWeekCode(code: string, delta: number): string {
-  const normalized = normalizeAhWeekCode(code) ?? DEFAULT_WEEK_CODE;
-  const n = Number(normalized.replace(/^AH-/i, ""));
-  const next = Number.isFinite(n) ? Math.max(1, Math.floor(n + delta)) : 1;
-  return `AH-${next}`;
-}
-
 function weekRangeFromCode(code: string): { from: string; to: string } | null {
   const r = getAhWeekRange(code);
   return r ? { from: r.from, to: r.to } : null;
@@ -53,10 +50,22 @@ export function shouldShowGlobalFilter(pathname: string | null): boolean {
   return FILTER_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 }
 
-export function GlobalFilterBar() {
+type GlobalFilterBarProps = {
+  financial?: SerializedFinancial | null;
+  canManageFinancial?: boolean;
+};
+
+export function GlobalFilterBar({ financial = null, canManageFinancial = false }: GlobalFilterBarProps) {
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
+  const rateLabel = financial?.finalDollarRate ?? "—";
+  const rateTitle =
+    financial != null
+      ? `בסיס ${financial.baseDollarRate} + עמלה ${financial.dollarFee} = סופי ${financial.finalDollarRate} ₪/USD`
+      : undefined;
+
+  const { openFinancialModal } = useAdminFinancialModal();
 
   const initial = useMemo(() => {
     const week = sp.get("week") || "";
@@ -230,21 +239,19 @@ export function GlobalFilterBar() {
     applyValues(code, nextFrom, nextTo);
   };
 
-  const quickPrevWeek = () => {
-    const base = week === "—" ? (getAhWeekCodeFromDateRange(from, to) ?? lastValidWeek ?? DEFAULT_WEEK_CODE) : week;
-    const code = shiftWeekCode(base, -1);
-    setRangeFromWeek(code);
-    const r = weekRangeFromCode(code);
-    if (r) applyValues(code, r.from, r.to);
-  };
+  const navWeek = useCallback(
+    (delta: -1 | 1) => {
+      const base = week === "—" ? (getAhWeekCodeFromDateRange(from, to) ?? lastValidWeek ?? DEFAULT_WEEK_CODE) : week;
+      const code = shiftAhWeekCode(base, delta) ?? DEFAULT_WEEK_CODE;
+      setRangeFromWeek(code);
+      const r = weekRangeFromCode(code);
+      if (r) applyValues(code, r.from, r.to);
+    },
+    [week, from, to, lastValidWeek, setRangeFromWeek, applyValues],
+  );
 
-  const quickNextWeek = () => {
-    const base = week === "—" ? (getAhWeekCodeFromDateRange(from, to) ?? lastValidWeek ?? DEFAULT_WEEK_CODE) : week;
-    const code = shiftWeekCode(base, 1);
-    setRangeFromWeek(code);
-    const r = weekRangeFromCode(code);
-    if (r) applyValues(code, r.from, r.to);
-  };
+  const quickPrevWeek = () => navWeek(-1);
+  const quickNextWeek = () => navWeek(1);
 
   if (!shouldShowGlobalFilter(pathname)) return null;
 
@@ -253,22 +260,13 @@ export function GlobalFilterBar() {
       <div className="adm-filter-bar__row">
         <label className="adm-filter-field">
           <span className="adm-filter-label">שבוע עבודה</span>
-          <div className="adm-combo adm-filter-week-combo">
-            <button
-              type="button"
+          <div className="adm-combo adm-filter-week-combo" dir="ltr">
+            <AhWeekNavPrevButton
               className="adm-filter-week-nav"
-              aria-label="שבוע הבא"
+              variant="angle"
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => {
-                const base = week === "—" ? (getAhWeekCodeFromDateRange(from, to) ?? lastValidWeek ?? DEFAULT_WEEK_CODE) : week;
-                const code = shiftWeekCode(base, 1);
-                setRangeFromWeek(code);
-                const r = weekRangeFromCode(code);
-                if (r) applyValues(code, r.from, r.to);
-              }}
-            >
-              ▶
-            </button>
+              onClick={() => navWeek(-1)}
+            />
             <input
               className="adm-filter-input"
               type="text"
@@ -316,21 +314,12 @@ export function GlobalFilterBar() {
             >
               ▾
             </button>
-            <button
-              type="button"
+            <AhWeekNavNextButton
               className="adm-filter-week-nav"
-              aria-label="שבוע קודם"
+              variant="angle"
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => {
-                const base = week === "—" ? (getAhWeekCodeFromDateRange(from, to) ?? lastValidWeek ?? DEFAULT_WEEK_CODE) : week;
-                const code = shiftWeekCode(base, -1);
-                setRangeFromWeek(code);
-                const r = weekRangeFromCode(code);
-                if (r) applyValues(code, r.from, r.to);
-              }}
-            >
-              ◀
-            </button>
+              onClick={() => navWeek(1)}
+            />
             <button
               type="button"
               className="adm-filter-week-pick-btn"
@@ -433,6 +422,20 @@ export function GlobalFilterBar() {
           </button>
           <button type="button" className="adm-filter-chip" onClick={quickNextWeek}>
             שבוע הבא
+          </button>
+        </div>
+        <div className="adm-filter-rate-wrap">
+          <button
+            type="button"
+            className={`adm-filter-rate-pill ${canManageFinancial ? "adm-filter-rate-pill--click" : ""}`}
+            onClick={openFinancialModal}
+            disabled={!canManageFinancial && !rateTitle}
+            title={canManageFinancial ? `הגדרות כספים — ${rateTitle ?? ""}` : rateTitle}
+          >
+            <span className="adm-filter-rate-pill__label">שער דולר</span>
+            <strong dir="ltr" className="adm-filter-rate-pill__value">
+              ₪ {rateLabel}
+            </strong>
           </button>
         </div>
         <div className="adm-filter-actions">

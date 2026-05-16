@@ -2,10 +2,8 @@ import Link from "next/link";
 import {
   AlertTriangle,
   Banknote,
-  CalendarRange,
   CheckCircle2,
   ClipboardList,
-  DollarSign,
   ShoppingCart,
   TrendingUp,
   Users,
@@ -13,7 +11,6 @@ import {
 } from "lucide-react";
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { getDashboardStats } from "@/lib/dashboard-stats";
-import { getCurrentFinancialSettings } from "@/lib/financial-settings";
 import { adminOrdersHrefWithFilters } from "@/lib/admin-href";
 import { parseDateFilterFromSearchParams } from "@/lib/work-week";
 import { countPendingOrderEditRequestsForAdmin } from "@/app/admin/order-edit-requests/actions";
@@ -31,14 +28,12 @@ export default async function AdminDashboardPage({
   const range = parseDateFilterFromSearchParams(sp);
   const showStaffStats = isAdminUser(me) || me.permissionKeys.includes("manage_users");
 
-  const [stats, finRow, pendingEditReq] = await Promise.all([
+  const [stats, pendingEditReq] = await Promise.all([
     getDashboardStats({ fromStart: range.fromStart, toEnd: range.toEnd }, me),
-    getCurrentFinancialSettings(),
     isAdminUser(me) ? countPendingOrderEditRequestsForAdmin() : Promise.resolve(0),
   ]);
 
   const displayName = me.fullName?.trim() || me.username || "משתמש";
-  const rateLabel = finRow ? `₪${finRow.finalDollarRate.toFixed(2)} / $` : "—";
 
   const alertsTotal =
     stats.alerts.pendingPaymentsOlderThan24h + stats.alerts.unpaidOrders + stats.alerts.highBalanceCustomers;
@@ -50,37 +45,16 @@ export default async function AdminDashboardPage({
 
   return (
     <div className="adm-dashboard adm-dashboard--compact" dir="rtl">
-      <header className="adm-dash-hero adm-dash-reveal">
-        <div className="adm-dash-hero__intro">
-          <p className="adm-dash-hero__greet">
-            שלום, <strong>{displayName}</strong>
+      <header className="adm-dash-home-bar adm-dash-reveal">
+        <p className="adm-dash-home-bar__greet">
+          שלום, <strong>{displayName}</strong>
+        </p>
+        {showStaffStats ? (
+          <p className="adm-dash-home-bar__meta">
+            <Users size={14} aria-hidden />
+            <span>{stats.activeUsers} משתמשים פעילים</span>
           </p>
-          <h1 className="adm-dash-hero__title">סקירה כללית של המערכת</h1>
-        </div>
-        <ul className="adm-dash-hero__chips" aria-label="סיכום טווח ושער">
-          <li className="adm-dash-chip">
-            <CalendarRange size={18} aria-hidden />
-            <span>שבוע {range.weekCode}</span>
-          </li>
-          <li className="adm-dash-chip">
-            <span className="adm-dash-chip__muted">טווח</span>
-            <span dir="ltr">
-              {range.fromYmd} – {range.toYmd}
-            </span>
-          </li>
-          <li className="adm-dash-chip">
-            <DollarSign size={18} aria-hidden />
-            <span>שער דולר</span>
-            <span dir="ltr">{rateLabel}</span>
-          </li>
-          {showStaffStats ? (
-            <li className="adm-dash-chip">
-              <Users size={18} aria-hidden />
-              <span>משתמשים פעילים</span>
-              <strong>{stats.activeUsers}</strong>
-            </li>
-          ) : null}
-        </ul>
+        ) : null}
       </header>
 
       <section className="adm-dash-alerts-band adm-dash-reveal adm-dash-reveal--2" aria-label="התראות מערכת">
@@ -228,10 +202,10 @@ export default async function AdminDashboardPage({
               </div>
             )}
             <div className="adm-dash-mini-tile adm-dash-mini-tile--lavender">
-              <ClipboardList size={17} aria-hidden />
-              <span className="adm-dash-mini-tile__title">שבוע עבודה</span>
-              <span className="adm-dash-mini-tile__value adm-dash-mini-tile__value--sm">{range.weekCode}</span>
-              <span className="adm-dash-mini-tile__sub">קוד שבוע נוכחי</span>
+              <AlertTriangle size={17} aria-hidden />
+              <span className="adm-dash-mini-tile__title">התראות פתוחות</span>
+              <span className="adm-dash-mini-tile__value">{alertsTotal}</span>
+              <span className="adm-dash-mini-tile__sub">במערכת כרגע</span>
             </div>
           </div>
         </div>

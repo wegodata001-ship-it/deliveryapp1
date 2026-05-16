@@ -39,37 +39,18 @@
   margin-bottom: 2.25rem;
 }
 
-.al-logo {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 72px;
-  height: 72px;
-  border-radius: 50%;
-  margin-bottom: 1.35rem;
-  background: linear-gradient(135deg, #2563eb, #0ea5e9);
-  color: #fff;
-  font-size: 2rem;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  box-shadow: 0 12px 28px rgba(37, 99, 235, 0.28);
+.al-logo-wrap {
+  margin: 0 auto 1.25rem !important;
 }
 
 .al-header h1 {
   margin: 0;
-  font-size: 38px;
+  font-size: 1.35rem;
   font-weight: 800;
-  line-height: 1.15;
-  letter-spacing: -0.02em;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
   color: #0f172a;
-}
-
-.al-subtitle {
-  margin: 0.75rem 0 0;
-  max-width: 22rem;
-  font-size: 1rem;
-  line-height: 1.55;
-  color: #64748b;
+  max-width: 20rem;
 }
 
 .al-form {

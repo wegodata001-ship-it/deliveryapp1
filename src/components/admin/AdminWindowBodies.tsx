@@ -21,6 +21,9 @@ import { OrderEditLockGateModal } from "@/components/admin/OrderEditLockGateModa
 import type { CustomerCardWindowProps } from "@/lib/admin-windows";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
+import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
+import { CustomerBalanceView } from "@/components/ui/CustomerBalanceView";
+import { formatCustomerBalanceDisplay, parseBalanceAmountString } from "@/lib/customer-balance";
 
 function displayCustomerCode(s: CustomerCardSnapshot): string {
   const c = s.customerCode?.trim();
@@ -29,13 +32,11 @@ function displayCustomerCode(s: CustomerCardSnapshot): string {
 }
 
 function fmtUsd(s: string): string {
-  const n = Number(s.replace(",", ".").trim());
-  if (!Number.isFinite(n)) return s;
-  return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return formatUsdDisplay(parseMoneyStringOrZero(s));
 }
 
 function rowBalanceNum(balanceUsd: string): number {
-  return Number(balanceUsd.replace(",", "."));
+  return parseMoneyStringOrZero(balanceUsd);
 }
 
 type TabKey = "details" | "ledger";
@@ -138,7 +139,7 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [editOpen, setEditOpen] = useState(false);
+  const [editMode, setEditMode] = useState(false);
   const [ledgerOrderLock, setLedgerOrderLock] = useState<OrderEditLockGatePayload | null>(null);
   const [ledgerGateToast, setLedgerGateToast] = useState<string | null>(null);
   const [fromYmd, setFromYmd] = useState("");
@@ -195,6 +196,32 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
     };
   }, [customerId, activeTab, fromYmd, toYmd]);
 
+  function resetFormFromSnap(row: CustomerCardSnapshot) {
+    setForm({
+      displayName: row.displayName,
+      nameAr: row.nameAr ?? "",
+      nameEn: row.nameEn ?? row.nameHe ?? "",
+      phone: row.phone ?? "",
+      customerCode: row.customerCode ?? "",
+      address: row.address ?? "",
+    });
+  }
+
+  function startEdit() {
+    if (!snap) return;
+    resetFormFromSnap(snap);
+    setErr(null);
+    setMsg(null);
+    setEditMode(true);
+    setActiveTab("details");
+  }
+
+  function cancelEdit() {
+    if (snap) resetFormFromSnap(snap);
+    setErr(null);
+    setEditMode(false);
+  }
+
   async function saveDetails() {
     if (!customerId?.trim()) return;
     setSaving(true);
@@ -217,7 +244,8 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
     setMsg("פרטי לקוח נשמרו");
     const fresh = await getCustomerCardSnapshotAction(customerId);
     setSnap(fresh);
-    setEditOpen(false);
+    if (fresh) resetFormFromSnap(fresh);
+    setEditMode(false);
   }
 
   if (!customerId?.trim()) {
@@ -330,7 +358,8 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
     }
   }
 
-  const balanceNum = ledger ? Number(ledger.balanceUsd.replace(",", ".")) : 0;
+  const balanceNum = ledger ? parseBalanceAmountString(ledger.balanceUsd) : 0;
+  const balanceSummaryView = formatCustomerBalanceDisplay(balanceNum, "USD");
 
   const ledgerFilters = (
     <div className="adm-cust-ledger-filters">
@@ -360,7 +389,12 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
           </div>
           <span>סה״כ תשלומים</span>
         </div>
-        <div className="summary-card blue">
+        <div
+          className={[
+            "summary-card",
+            balanceSummaryView.kind === "debt" ? "red" : balanceSummaryView.kind === "credit" ? "green" : "blue",
+          ].join(" ")}
+        >
           <button
             type="button"
             className="summary-card-amount-btn"
@@ -370,32 +404,52 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
                 props: {
                   customerId,
                   customerName: snap.displayName || customerName || "",
-                  amountUsd: balanceNum > 0 ? ledger.balanceUsd : null,
+                  amountUsd: balanceNum > 0.01 ? Math.abs(balanceNum).toFixed(2) : null,
                 },
               })
             }
           >
-            <div dir="ltr" className="summary-card-amount">
-              {fmtUsd(ledger.balanceUsd)}
+            <div className="summary-card-amount">
+              <CustomerBalanceView businessSigned={balanceNum} currency="USD" />
             </div>
           </button>
-          <span>יתרה</span>
+          <span>{balanceSummaryView.label}</span>
         </div>
       </div>
     ) : null;
 
   return (
     <div className="adm-win-scroll-body adm-cust-card-body">
-      <div className="adm-cust-card-shell">
-        <div className="client-header">
+      <div className={["adm-cust-card-shell", editMode ? "adm-cust-card-shell--edit" : ""].filter(Boolean).join(" ")}>
+        <div className={["client-header", editMode ? "client-header--edit" : ""].filter(Boolean).join(" ")}>
           <div className="client-actions">
-            <button type="button" className="btn-outline" onClick={() => setEditOpen(true)}>
-              ערוך לקוח
-            </button>
+            {editMode ? (
+              <>
+                <button type="button" className="btn btn-secondary" disabled={saving} onClick={cancelEdit}>
+                  ביטול
+                </button>
+                <button type="button" className="btn btn-primary" disabled={saving} onClick={() => void saveDetails()}>
+                  {saving ? "שומר…" : "שמור"}
+                </button>
+              </>
+            ) : (
+              <button type="button" className="btn-outline" onClick={startEdit}>
+                ערוך לקוח
+              </button>
+            )}
           </div>
           <div className="client-title">
-            <h1>{snap.displayName || customerName || "—"}</h1>
-            <span dir="ltr">{displayCustomerCode(snap)}</span>
+            {editMode ? (
+              <>
+                <h1>עריכת פרטי לקוח</h1>
+                <span dir="ltr">{form.customerCode.trim() || displayCustomerCode(snap)}</span>
+              </>
+            ) : (
+              <>
+                <h1>{snap.displayName || customerName || "—"}</h1>
+                <span dir="ltr">{displayCustomerCode(snap)}</span>
+              </>
+            )}
           </div>
         </div>
 
@@ -425,6 +479,48 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
 
         {activeTab === "details" ? (
           <section className="adm-cust-tab-panel">
+            {editMode ? (
+              <div className="adm-cust-inline-edit-panel">
+                <div className="adm-cust-inline-edit-form form-grid">
+                  <div className="form-field">
+                    <label htmlFor="cust-name">שם מלא</label>
+                    <input id="cust-name" value={form.displayName} onChange={(e) => setForm((f) => ({ ...f, displayName: e.target.value }))} />
+                  </div>
+                  <div className="form-field">
+                    <label htmlFor="cust-name-ar">שם בערבית</label>
+                    <input
+                      id="cust-name-ar"
+                      dir="rtl"
+                      placeholder="הזן שם בערבית"
+                      value={form.nameAr}
+                      onChange={(e) => setForm((f) => ({ ...f, nameAr: e.target.value }))}
+                    />
+                  </div>
+                  <div className="form-field">
+                    <label htmlFor="cust-name-en">שם באנגלית</label>
+                    <input
+                      id="cust-name-en"
+                      dir="ltr"
+                      placeholder="Enter English name"
+                      value={form.nameEn}
+                      onChange={(e) => setForm((f) => ({ ...f, nameEn: e.target.value }))}
+                    />
+                  </div>
+                  <div className="form-field">
+                    <label htmlFor="cust-phone">טלפון</label>
+                    <input id="cust-phone" value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} dir="ltr" />
+                  </div>
+                  <div className="form-field">
+                    <label htmlFor="cust-number">קוד לקוח</label>
+                    <input id="cust-number" value={form.customerCode} onChange={(e) => setForm((f) => ({ ...f, customerCode: e.target.value }))} dir="ltr" />
+                  </div>
+                  <div className="form-field form-field--wide">
+                    <label htmlFor="cust-address">כתובת</label>
+                    <input id="cust-address" value={form.address} onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))} />
+                  </div>
+                </div>
+              </div>
+            ) : (
             <div className="client-info-card">
               <div className="info-item">
                 <label>כתובת</label>
@@ -441,6 +537,7 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
                 <div dir="ltr">{snap.phone?.trim() || "—"}</div>
               </div>
             </div>
+            )}
           </section>
         ) : null}
 
@@ -471,9 +568,9 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
                     </tr>
                   ) : (
                     ledger.rows.map((r) => {
-                      const clickable = r.type === "PAYMENT" || r.id.startsWith("o-");
+                      const clickable = r.type === "PAYMENT" || r.type === "CREDIT_STORED" || r.id.startsWith("o-");
                       const bal = rowBalanceNum(r.balanceUsd);
-                      const hasDebt = Number.isFinite(bal) && bal > 0.01;
+                      const rowBalView = formatCustomerBalanceDisplay(bal, "USD");
                       return (
                         <tr
                           key={r.id}
@@ -490,17 +587,29 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
                           }}
                         >
                           <td dir="ltr">{r.dateYmd}</td>
-                          <td>{r.type === "CHARGE" ? "חיוב" : "תשלום"}</td>
                           <td>
-                            {hasDebt ? (
-                              <span className="status-debt">חוב</span>
+                            {r.type === "CHARGE"
+                              ? "חיוב"
+                              : r.type === "CREDIT_STORED"
+                                ? "יתרת זכות"
+                                : r.type === "CREDIT_APPLIED"
+                                  ? "קיזוז זכות"
+                                  : "תשלום"}
+                          </td>
+                          <td>
+                            {rowBalView.kind === "debt" ? (
+                              <span className="status-debt">{rowBalView.label}</span>
+                            ) : rowBalView.kind === "credit" ? (
+                              <span className="status-credit">{rowBalView.label}</span>
                             ) : (
-                              <span className="status-paid">שולם</span>
+                              <span className="status-even">{rowBalView.label}</span>
                             )}
                           </td>
                           <td dir="ltr">{fmtUsd(r.amountUsd)}</td>
                           <td dir="ltr">{fmtUsd(r.paidUsd)}</td>
-                          <td dir="ltr">{fmtUsd(r.balanceUsd)}</td>
+                          <td dir="ltr">
+                            <CustomerBalanceView businessSigned={bal} currency="USD" />
+                          </td>
                           <td dir="ltr">{r.document}</td>
                         </tr>
                       );
@@ -513,61 +622,6 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
           </section>
         ) : null}
       </div>
-      {editOpen ? (
-        <div className="adm-mini-modal-layer" role="dialog" aria-modal="true" aria-labelledby="cust-edit-title">
-          <button type="button" className="adm-mini-modal-backdrop" aria-label="סגירה" onClick={() => setEditOpen(false)} />
-          <div className="modal cust-edit-modal-panel">
-            <h2 id="cust-edit-title">עריכת לקוח</h2>
-            <div className="form-grid">
-              <div className="form-field">
-                <label htmlFor="cust-name">שם מלא</label>
-                <input id="cust-name" value={form.displayName} onChange={(e) => setForm((f) => ({ ...f, displayName: e.target.value }))} />
-              </div>
-              <div className="form-field">
-                <label htmlFor="cust-name-ar">שם בערבית</label>
-                <input
-                  id="cust-name-ar"
-                  dir="rtl"
-                  placeholder="הזן שם בערבית"
-                  value={form.nameAr}
-                  onChange={(e) => setForm((f) => ({ ...f, nameAr: e.target.value }))}
-                />
-              </div>
-              <div className="form-field">
-                <label htmlFor="cust-name-en">שם באנגלית</label>
-                <input
-                  id="cust-name-en"
-                  dir="ltr"
-                  placeholder="Enter English name"
-                  value={form.nameEn}
-                  onChange={(e) => setForm((f) => ({ ...f, nameEn: e.target.value }))}
-                />
-              </div>
-              <div className="form-field">
-                <label htmlFor="cust-phone">טלפון</label>
-                <input id="cust-phone" value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} dir="ltr" />
-              </div>
-              <div className="form-field">
-                <label htmlFor="cust-number">קוד לקוח</label>
-                <input id="cust-number" value={form.customerCode} onChange={(e) => setForm((f) => ({ ...f, customerCode: e.target.value }))} dir="ltr" />
-              </div>
-              <div className="form-field">
-                <label htmlFor="cust-address">כתובת</label>
-                <input id="cust-address" value={form.address} onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))} />
-              </div>
-            </div>
-            <div className="modal-actions">
-              <button type="button" className="btn btn-secondary" disabled={saving} onClick={() => setEditOpen(false)}>
-                ביטול
-              </button>
-              <button type="button" className="btn btn-primary" disabled={saving} onClick={() => void saveDetails()}>
-                שמירה
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
       <OrderEditLockGateModal
         open={!!ledgerOrderLock}
         payload={ledgerOrderLock}
@@ -588,20 +642,22 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
 }
 
 export function CreateCustomerWindowBody() {
-  const { closeTop } = useAdminWindows();
-  const customerCodeRef = useRef<HTMLInputElement>(null);
-  const [form, setForm] = useState({ customerCode: "", name: "", phone: "", email: "", notes: "" });
+  const { closeTop, completeCustomerCreate } = useAdminWindows();
+  const nameArRef = useRef<HTMLInputElement>(null);
+  const [form, setForm] = useState({
+    customerCode: "",
+    nameAr: "",
+    nameEn: "",
+    phone: "",
+    email: "",
+    notes: "",
+  });
   const [busy, setBusy] = useState(false);
   const [codeBusy, setCodeBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [created, setCreated] = useState<ClientCreateResult | null>(null);
+  const [standaloneDone, setStandaloneDone] = useState<ClientCreateResult | null>(null);
 
-  useEffect(() => {
-    const t = window.setTimeout(() => customerCodeRef.current?.focus(), 0);
-    return () => window.clearTimeout(t);
-  }, []);
-
-  async function onSuggestCode() {
+  async function loadSuggestedCode() {
     if (codeBusy) return;
     setCodeBusy(true);
     setErr(null);
@@ -612,25 +668,32 @@ export function CreateCustomerWindowBody() {
       return;
     }
     setForm((f) => ({ ...f, customerCode: res.code }));
-    customerCodeRef.current?.focus();
   }
+
+  useEffect(() => {
+    void loadSuggestedCode();
+    const t = window.setTimeout(() => nameArRef.current?.focus(), 0);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount
+  }, []);
 
   async function onSave() {
     if (busy) return;
     setErr(null);
     if (!form.customerCode.trim()) {
       setErr("יש להזין קוד לקוח");
-      customerCodeRef.current?.focus();
       return;
     }
-    if (!form.name.trim() || !form.phone.trim()) {
-      setErr("יש להזין שם וטלפון");
+    if (!form.nameAr.trim() || !form.phone.trim()) {
+      setErr("יש להזין שם ערבית וטלפון");
+      nameArRef.current?.focus();
       return;
     }
     setBusy(true);
     const res = await createClientAction({
       customerCode: form.customerCode,
-      name: form.name,
+      nameAr: form.nameAr,
+      nameEn: form.nameEn || null,
       phone: form.phone,
       email: form.email || null,
       notes: form.notes || null,
@@ -638,15 +701,15 @@ export function CreateCustomerWindowBody() {
     setBusy(false);
     if (!res.ok) {
       setErr(res.error);
-      if (res.error.includes("קוד לקוח")) customerCodeRef.current?.focus();
       return;
     }
-    setCreated(res.client);
+    const appliedToOrder = completeCustomerCreate(res.client);
+    if (!appliedToOrder) setStandaloneDone(res.client);
   }
 
   return (
     <div className="adm-win-scroll-body adm-client-create-modal">
-      {!created ? (
+      {!standaloneDone ? (
         <>
           <h3 className="adm-client-create-title">לקוח חדש</h3>
           {err ? <div className="adm-error">{err}</div> : null}
@@ -658,30 +721,41 @@ export function CreateCustomerWindowBody() {
                   type="button"
                   className="adm-client-create-auto-code"
                   disabled={codeBusy || busy}
-                  onClick={() => void onSuggestCode()}
+                  onClick={() => void loadSuggestedCode()}
                 >
-                  {codeBusy ? "…" : "צור אוטומטי"}
+                  {codeBusy ? "…" : "רענן מספר"}
                 </button>
               </div>
               <input
-                ref={customerCodeRef}
                 id="new-customer-code"
                 dir="ltr"
-                placeholder="WGP-C-24001"
+                placeholder="24001"
                 value={form.customerCode}
-                onChange={(e) => setForm((f) => ({ ...f, customerCode: e.target.value }))}
-                required
+                readOnly
+                className="adm-oc-pro-inp--ro"
                 autoComplete="off"
+                aria-readonly
               />
             </div>
             <div className="adm-field">
-              <label htmlFor="new-customer-name">שם לקוח</label>
+              <label htmlFor="new-customer-name-ar">שם ערבית</label>
               <input
-                id="new-customer-name"
-                placeholder="שם לקוח"
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                ref={nameArRef}
+                id="new-customer-name-ar"
+                placeholder="محمد"
+                value={form.nameAr}
+                onChange={(e) => setForm((f) => ({ ...f, nameAr: e.target.value }))}
                 required
+              />
+            </div>
+            <div className="adm-field">
+              <label htmlFor="new-customer-name-en">שם אנגלית</label>
+              <input
+                id="new-customer-name-en"
+                dir="ltr"
+                placeholder="MOHAMMAD"
+                value={form.nameEn}
+                onChange={(e) => setForm((f) => ({ ...f, nameEn: e.target.value }))}
               />
             </div>
             <div className="adm-field">
@@ -726,10 +800,15 @@ export function CreateCustomerWindowBody() {
         <div className="adm-client-create-success">
           <div className="adm-pay-success">✅ הלקוח נוסף בהצלחה</div>
           <div className="adm-cust-display-card">
-            <div><strong>קוד לקוח:</strong> <span dir="ltr">{created.customerCode}</span></div>
-            <div><strong>שם:</strong> {created.name}</div>
-            <div><strong>טלפון:</strong> {created.phone}</div>
-            <div><strong>אימייל:</strong> {created.email || "—"}</div>
+            <div><strong>קוד לקוח:</strong> <span dir="ltr">{standaloneDone.customerCode}</span></div>
+            <div>
+              <strong>שם ערבית:</strong> {standaloneDone.customerNameAr}
+            </div>
+            <div>
+              <strong>שם אנגלית:</strong> {standaloneDone.customerNameEn || "—"}
+            </div>
+            <div><strong>טלפון:</strong> {standaloneDone.phone}</div>
+            <div><strong>אימייל:</strong> {standaloneDone.email || "—"}</div>
           </div>
           <div className="adm-mini-modal-actions">
             <button type="button" className="adm-btn adm-btn--primary" onClick={closeTop}>

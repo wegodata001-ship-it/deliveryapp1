@@ -12,6 +12,8 @@ import type { ReportFilters } from "@/app/admin/reports/actions";
 import { useAdminLoading } from "@/components/admin/AdminLoadingProvider";
 import { LoadingButton, TableSkeleton } from "@/components/ui/loading";
 import type { OrderPhaseUi } from "@/lib/customer-balance-order-status";
+import { CustomerBalanceView } from "@/components/ui/CustomerBalanceView";
+import { internalSignedToBusiness, parseBalanceAmountString } from "@/lib/customer-balance";
 import { DEFAULT_WEEK_CODE, WORK_WEEK_CODES_SORTED, getAhWeekRange, normalizeAhWeekCode } from "@/lib/work-week";
 
 const PAGE_SIZE = 15;
@@ -79,10 +81,17 @@ function rowBalanceIlsNumber(balanceIls: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function rowSignedIlsNumber(signedIls: string): number {
+  const n = Number(signedIls.replace(",", "."));
+  return Number.isFinite(n) ? n : 0;
+}
+
 function dataRowClass(row: CustomerBalanceRow): string {
   const base = "adm-cbr-erp-data-row";
-  const debt = rowBalanceIlsNumber(row.balanceILS) > 0.01;
-  return debt ? `${base} adm-cbr-erp-data-row--debt` : base;
+  const business = internalSignedToBusiness(rowSignedIlsNumber(row.signedIls));
+  if (business > 0.01) return `${base} adm-cbr-erp-data-row--debt`;
+  if (business < -0.01) return `${base} adm-cbr-erp-data-row--credit`;
+  return base;
 }
 
 function paymentBadgeClass(flow: CustomerBalanceRow["paymentFlow"]): string {
@@ -176,8 +185,12 @@ const BalancesErpTable = memo(function BalancesErpTable({ rows, expandedId, onTo
               <div className="adm-cbr-erp-cust-name">{row.customerName}</div>
               {row.customerCode ? <div className="adm-cbr-erp-cust-code">{row.customerCode}</div> : null}
             </td>
-            <td className="adm-cbr-erp-num adm-cbr-erp-num--strong">{row.balanceILS}</td>
-            <td className="adm-cbr-erp-num adm-cbr-erp-num--strong">{row.balanceUSD}</td>
+            <td className="adm-cbr-erp-num adm-cbr-erp-num--strong">
+              <CustomerBalanceView internalSignedRaw={row.signedIls} currency="ILS" />
+            </td>
+            <td className="adm-cbr-erp-num adm-cbr-erp-num--strong">
+              <CustomerBalanceView internalSignedRaw={row.signedUsd} currency="USD" />
+            </td>
             <td>
               <span className={paymentBadgeClass(row.paymentFlow)}>{paymentLabel(row.paymentFlow)}</span>
             </td>
@@ -371,11 +384,11 @@ export function CustomerBalancesReportModal({
           <button
             type="button"
             className="adm-cbr-erp-ah-arrow"
-            aria-label="שבוע הבא"
+            aria-label="שבוע קודם"
             disabled={isLoading || loading}
-            onClick={() => setModalWeekCode(shiftWeekCode(effectiveWeek, 1))}
+            onClick={() => setModalWeekCode(shiftWeekCode(effectiveWeek, -1))}
           >
-            &gt;
+            &lt;
           </button>
           <select
             className="adm-cbr-erp-ah-chip"
@@ -393,11 +406,11 @@ export function CustomerBalancesReportModal({
           <button
             type="button"
             className="adm-cbr-erp-ah-arrow"
-            aria-label="שבוע קודם"
+            aria-label="שבוע הבא"
             disabled={isLoading || loading}
-            onClick={() => setModalWeekCode(shiftWeekCode(effectiveWeek, -1))}
+            onClick={() => setModalWeekCode(shiftWeekCode(effectiveWeek, 1))}
           >
-            &lt;
+            &gt;
           </button>
         </div>
         <p className="adm-cbr-erp-week-dates">{weekRangeLabel}</p>

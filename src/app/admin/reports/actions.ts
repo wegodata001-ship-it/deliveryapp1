@@ -9,6 +9,7 @@ import { getCustomerBalancesReport, getCustomerBalancesReportWhereClauses } from
 import { fetchCustomerOpenOrderEnrichment } from "@/lib/customer-balance-order-status";
 import { normalizeOrderSourceCountry } from "@/lib/order-countries";
 import { getOrderStatusLabel } from "@/constants/order-status";
+import { formatIlsDisplay, formatUsdDisplay } from "@/lib/money-format";
 
 export type ReportKind =
   | "openOrdersReport"
@@ -92,12 +93,12 @@ function dateRange(filters: ReportFilters) {
 
 function moneyIls(v: Prisma.Decimal | number | string | null | undefined): string {
   const n = v instanceof Prisma.Decimal ? Number(v.toString()) : Number(v ?? 0);
-  return `₪ ${n.toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return Number.isFinite(n) ? formatIlsDisplay(n) : formatIlsDisplay(0);
 }
 
 function moneyUsd(v: Prisma.Decimal | number | string | null | undefined): string {
   const n = v instanceof Prisma.Decimal ? Number(v.toString()) : Number(v ?? 0);
-  return `${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $`;
+  return Number.isFinite(n) ? formatUsdDisplay(n) : formatUsdDisplay(0);
 }
 
 function dec(v: Prisma.Decimal | number | string | null | undefined): Prisma.Decimal {

@@ -8,18 +8,22 @@ export const runtime = "nodejs";
 
 type NavDirection = "prev" | "next";
 
+const navSelect = {
+  id: true,
+  paymentCode: true,
+  paymentNumber: true,
+} as const;
+
 type NavPaymentRow = {
   id: string;
   paymentCode: string | null;
   paymentNumber: number | null;
-  customerId: string | null;
 };
 
 type NavPaymentCursor = NavPaymentRow | {
   id: string | null;
   paymentCode: string;
   paymentNumber: number;
-  customerId: string | null;
 };
 
 async function findCurrentPaymentEntry(paymentCode: string): Promise<NavPaymentRow | null> {
@@ -28,7 +32,7 @@ async function findCurrentPaymentEntry(paymentCode: string): Promise<NavPaymentR
       paymentCode,
       customerId: { not: null },
     },
-    select: { id: true, paymentCode: true, paymentNumber: true, customerId: true },
+    select: navSelect,
   });
   if (exact) return exact;
 
@@ -41,7 +45,7 @@ async function findCurrentPaymentEntry(paymentCode: string): Promise<NavPaymentR
       customerId: { not: null },
     },
     orderBy: { id: "asc" },
-    select: { id: true, paymentCode: true, paymentNumber: true, customerId: true },
+    select: navSelect,
   });
 }
 
@@ -57,7 +61,7 @@ async function findNeighborPaymentEntry(
         paymentNumber: direction === "prev" ? { lt: current.paymentNumber } : { gt: current.paymentNumber },
       },
       orderBy: { paymentNumber: direction === "prev" ? "desc" : "asc" },
-      select: { id: true, paymentCode: true, paymentNumber: true, customerId: true },
+      select: navSelect,
     });
   }
 
@@ -70,7 +74,7 @@ async function findNeighborPaymentEntry(
       id: direction === "prev" ? { lt: current.id } : { gt: current.id },
     },
     orderBy: { id: direction === "prev" ? "desc" : "asc" },
-    select: { id: true, paymentCode: true, paymentNumber: true, customerId: true },
+    select: navSelect,
   });
 }
 
@@ -104,70 +108,25 @@ export async function GET(req: Request) {
               id: null,
               paymentCode: currentPaymentCode,
               paymentNumber: requestedPaymentNumber,
-              customerId: null,
             });
-      const anyPayments = await prisma.payment.findMany({
-        where: { paymentCode: { not: null } },
-        take: 5,
-        orderBy: { createdAt: "desc" },
-        select: {
-          id: true,
-          paymentCode: true,
-          paymentNumber: true,
-          customerId: true,
-          createdAt: true,
-        },
-      });
-      if (!current) {
-        console.log({
-          currentPaymentCode,
-          currentPayment: null,
-          anyPayments,
-          prevPayment: null,
-          nextPayment: null,
-        });
-        if (!currentCursor) {
-          return NextResponse.json(
-            { success: false as const, error: "Payment not found" },
-            { status: 404 },
-          );
-        }
+
+      if (!currentCursor) {
+        return NextResponse.json({ success: false as const, error: "Payment not found" }, { status: 404 });
       }
 
-      if (direction === "prev") {
-        const row = await findNeighborPaymentEntry(currentCursor!, "prev");
-        console.log({
-          currentPaymentCode,
-          currentPayment: currentCursor,
-          anyPayments,
-          prevPayment: row,
-          nextPayment: null,
-        });
-        if (!row) {
-          return NextResponse.json({ success: false as const, edge: "first" as const });
-        }
-        return NextResponse.json({
-          success: true as const,
-          paymentId: row.id,
-          paymentCode: row.paymentCode ?? null,
-        });
-      }
-
-      const row = await findNeighborPaymentEntry(currentCursor!, "next");
-      console.log({
-        currentPaymentCode,
-        currentPayment: currentCursor,
-        anyPayments,
-        prevPayment: null,
-        nextPayment: row,
-      });
+      const row = await findNeighborPaymentEntry(currentCursor, direction);
       if (!row) {
-        return NextResponse.json({ success: false as const, edge: "last" as const });
+        return NextResponse.json({
+          success: false as const,
+          edge: direction === "prev" ? ("first" as const) : ("last" as const),
+        });
       }
+
       return NextResponse.json({
         success: true as const,
         paymentId: row.id,
         paymentCode: row.paymentCode ?? null,
+        paymentNumber: row.paymentNumber ?? null,
       });
     } catch (error) {
       perfError("api.payments.navigation.GET.failed", error);

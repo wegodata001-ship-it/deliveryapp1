@@ -2,6 +2,8 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { DEFAULT_WEEK_CODE, WORK_WEEK_CODES_SORTED, getAhWeekRange, normalizeAhWeekCode } from "@/lib/work-week";
+import { AhWeekNavNextButton, AhWeekNavPrevButton } from "@/components/admin/AhWeekNavButtons";
+import { goToNextWeek, goToPrevWeek } from "@/lib/weeks/ah-week-nav";
 
 const WEEK_RE = /^AH-(\d+)$/i;
 
@@ -14,13 +16,6 @@ function weekNumber(code: string): number {
   if (!m?.[1]) return 0;
   const n = Number(m[1]);
   return Number.isFinite(n) ? n : 0;
-}
-
-function shiftWeekCode(code: string, delta: number): string {
-  const base = normalizeAhWeekCode(code) ?? DEFAULT_WEEK_CODE;
-  const n = weekNumber(base);
-  const next = Number.isFinite(n) ? Math.max(1, Math.floor(n + delta)) : 1;
-  return `AH-${next}`;
 }
 
 export type ReportWeekNavProps = {
@@ -80,16 +75,15 @@ export function ReportWeekNav({ weekCode, disabled, onWeekChange }: ReportWeekNa
   }
 
   return (
-    <div className="adm-report-week-nav" ref={wrapRef}>
-      <button
-        type="button"
+    <div className="adm-report-week-nav" ref={wrapRef} dir="ltr">
+      <AhWeekNavPrevButton
         className="adm-report-week-nav__arrow"
-        aria-label="שבוע קודם"
         disabled={disabled}
-        onClick={() => apply(shiftWeekCode(code, -1))}
-      >
-        ←
-      </button>
+        onClick={() => {
+          const prev = goToPrevWeek(code);
+          if (prev) apply(prev);
+        }}
+      />
       <button
         type="button"
         className="adm-report-week-nav__chip"
@@ -100,15 +94,14 @@ export function ReportWeekNav({ weekCode, disabled, onWeekChange }: ReportWeekNa
       >
         {code}
       </button>
-      <button
-        type="button"
+      <AhWeekNavNextButton
         className="adm-report-week-nav__arrow"
-        aria-label="שבוע הבא"
         disabled={disabled}
-        onClick={() => apply(shiftWeekCode(code, 1))}
-      >
-        →
-      </button>
+        onClick={() => {
+          const next = goToNextWeek(code);
+          if (next) apply(next);
+        }}
+      />
       {open ? (
         <ul className="adm-report-week-nav__dropdown" role="listbox">
           {visibleWindow.map((w) => (

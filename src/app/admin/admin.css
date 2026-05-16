@@ -448,12 +448,15 @@
   top: 0;
   align-self: flex-start;
   height: 100vh;
-  background: linear-gradient(180deg, var(--adm-navy) 0%, #0b1220 100%);
+  background:
+    radial-gradient(ellipse 120% 80% at 100% 0%, rgba(37, 99, 235, 0.18), transparent 55%),
+    linear-gradient(180deg, #0a1628 0%, #060d18 48%, #0b1220 100%);
   color: #e2e8f0;
   display: flex;
   flex-direction: column;
   padding: 1.25rem 0;
-  box-shadow: -6px 0 32px rgba(15, 23, 42, 0.12);
+  box-shadow: -8px 0 40px rgba(2, 6, 23, 0.45);
+  border-inline-start: 1px solid rgba(96, 165, 250, 0.08);
   z-index: 20;
 }
 
@@ -471,32 +474,35 @@
 .adm-brand-logo {
   width: 56px;
   height: 56px;
-  margin: 0 auto 0.5rem;
-  border-radius: 16px;
-  display: grid;
-  place-items: center;
-  color: #fff;
-  font-weight: 900;
-  font-size: 1.35rem;
-  background: linear-gradient(145deg, #2563eb 0%, #14b8a6 100%);
-  box-shadow: 0 10px 24px rgba(20, 184, 166, 0.2);
+  margin: 0 auto 0.65rem;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  box-shadow:
+    0 12px 28px rgba(29, 78, 216, 0.4),
+    0 0 0 1px rgba(255, 255, 255, 0.1),
+    0 0 24px rgba(56, 189, 248, 0.15);
 }
 
-.adm-brand-logo span {
-  line-height: 1;
+.adm-brand-logo--erp {
+  border-radius: 14px;
+}
+
+.adm-brand-logo svg {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .adm-brand-title {
-  font-size: 1.1rem;
-  font-weight: 800;
-  color: #fff;
-}
-
-.adm-brand-sub {
-  font-size: 0.76rem;
-  color: #cbd5e1;
-  margin-top: 0.2rem;
-  line-height: 1.4;
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #f1f5f9;
+  line-height: 1.45;
+  letter-spacing: 0.01em;
 }
 
 .adm-nav {
@@ -535,14 +541,18 @@
 }
 
 .adm-nav-link:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(59, 130, 246, 0.12);
   color: #fff;
+  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.2);
 }
 
 .adm-nav-link[data-active="true"] {
-  background: linear-gradient(135deg, #2563eb 0%, #0891b2 100%);
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.95) 0%, rgba(14, 165, 233, 0.85) 100%);
   color: #fff;
-  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.24);
+  box-shadow:
+    0 8px 22px rgba(37, 99, 235, 0.35),
+    0 0 20px rgba(56, 189, 248, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
 .adm-nav-link svg {
@@ -760,6 +770,51 @@
   animation: adm-shimmer 1.2s ease-in-out infinite;
 }
 
+.adm-orders-status-kpi--skel .adm-status-card--skel {
+  min-height: 5.5rem;
+  background: linear-gradient(90deg, #f1f5f9, #e2e8f0, #f1f5f9);
+  background-size: 200% 100%;
+  animation: adm-shimmer 1.2s ease-in-out infinite;
+}
+
+.adm-table-excel-wrap--skel {
+  min-height: 280px;
+  border-radius: 12px;
+  border: 1px solid var(--adm-border);
+  overflow: hidden;
+}
+
+.adm-orders-table-skel {
+  min-height: 280px;
+  background: linear-gradient(90deg, #f8fafc, #f1f5f9, #f8fafc);
+  background-size: 200% 100%;
+  animation: adm-shimmer 1.2s ease-in-out infinite;
+}
+
+.adm-orders-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin: 0.5rem 0 0;
+  padding: 0.45rem 0.15rem;
+  font-size: 0.82rem;
+  color: var(--adm-muted);
+}
+
+.adm-orders-pagination__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.adm-orders-pagination__page {
+  font-weight: 700;
+  color: var(--adm-text);
+  padding-inline: 0.35rem;
+}
+
 @keyframes adm-shimmer {
   0% {
     background-position: 0% 0;
@@ -908,6 +963,14 @@
   display: inline-flex;
   align-items: stretch;
   gap: 6px;
+  direction: ltr;
+}
+
+.ah-week-nav-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  direction: ltr;
 }
 .adm-week-inp {
   width: 110px;
@@ -2193,17 +2256,89 @@
   box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
 }
 
+.adm-header--erp {
+  padding: 0.5rem 1.25rem;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 250, 252, 0.96) 100%);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+  box-shadow: 0 4px 18px rgba(15, 23, 42, 0.04);
+}
+
+.adm-header-lead {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.adm-header-mark {
+  flex-shrink: 0;
+  margin: 0 !important;
+  box-shadow: 0 6px 16px rgba(29, 78, 216, 0.28);
+}
+
+.adm-page-headline {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  min-width: 0;
+}
+
+.adm-page-headline-brand {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #64748b;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 14rem;
+}
+
+.adm-live-clock {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.05rem;
+  padding: 0.28rem 0.6rem;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+  border: 1px solid #e2e8f0;
+  min-width: 6.75rem;
+  text-align: end;
+}
+
+.adm-live-clock--header {
+  flex-shrink: 0;
+}
+
+.adm-live-clock__date {
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+  font-variant-numeric: tabular-nums;
+}
+
+.adm-live-clock__time {
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: #0f172a;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.adm-live-clock__day {
+  font-size: 10px;
+  font-weight: 600;
+  color: #64748b;
+}
+
 .adm-header-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 1rem;
   justify-content: space-between;
-}
-
-.adm-page-headline {
-  display: flex;
-  align-items: center;
 }
 
 .adm-page-headline-title {
@@ -2316,8 +2451,8 @@
 }
 
 .adm-filter-bar {
-  border-bottom: 1px solid var(--adm-border);
-  background: #fafbfc;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+  background: linear-gradient(180deg, #fff 0%, #f8fafc 100%);
   padding: 0.45rem 1.25rem;
 }
 
@@ -2356,6 +2491,7 @@
   align-items: center;
   gap: 6px;
   position: relative;
+  direction: ltr;
 }
 
 .adm-filter-week-combo .adm-filter-input {
@@ -2399,14 +2535,6 @@
 .adm-filter-week-nav:active {
   border-color: rgba(37, 99, 235, 0.42);
   background: #dbeafe;
-}
-
-.adm-filter-week-combo .adm-filter-week-nav:first-child {
-  order: 1;
-}
-
-.adm-filter-week-combo .adm-filter-week-nav:nth-of-type(3) {
-  order: 3;
 }
 
 .adm-filter-week-toggle {
@@ -2967,7 +3095,115 @@
   animation-delay: 0.16s;
 }
 
-/* Hero — compact ops header */
+/* Dashboard home — compact greet (week/rate/clock in top header only) */
+.adm-dashboard--compact .adm-dash-home-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 1.25rem;
+  padding: 0.45rem 0;
+  margin-bottom: 0.15rem;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
+
+.adm-dashboard--compact .adm-dash-home-bar__greet {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--dash-sub);
+  line-height: 1.35;
+}
+
+.adm-dashboard--compact .adm-dash-home-bar__greet strong {
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.adm-dashboard--compact .adm-dash-home-bar__meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0.25rem 0 0;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.adm-dash-live-clock {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.1rem;
+  padding: 0.35rem 0.65rem;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+  border: 1px solid #e2e8f0;
+  min-width: 7.5rem;
+  text-align: end;
+}
+
+.adm-dash-live-clock__date {
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+  letter-spacing: 0.01em;
+}
+
+.adm-dash-live-clock__time {
+  font-size: 22px;
+  font-weight: 800;
+  color: #0f172a;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.adm-dash-live-clock__day {
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: capitalize;
+}
+
+.adm-filter-rate-wrap {
+  display: flex;
+  align-items: flex-end;
+  margin-inline-start: auto;
+}
+
+.adm-filter-rate-pill {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  min-height: 40px;
+  justify-content: center;
+  padding: 0.35rem 0.65rem;
+  border-radius: 10px;
+  border: 1px solid rgba(22, 163, 74, 0.22);
+  background: linear-gradient(135deg, #fff 0%, #f0fdf4 100%);
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: default;
+}
+
+.adm-filter-rate-pill--click {
+  cursor: pointer;
+}
+
+.adm-filter-rate-pill--click:hover {
+  border-color: rgba(22, 163, 74, 0.45);
+  box-shadow: 0 2px 8px rgba(22, 163, 74, 0.12);
+}
+
+.adm-filter-rate-pill__value {
+  font-size: 14px;
+  font-weight: 800;
+  color: #047857;
+}
+
+/* Hero — legacy (unused on home) */
 .adm-dashboard--compact .adm-dash-hero {
   display: flex;
   flex-wrap: wrap;
@@ -3550,8 +3786,12 @@
     grid-template-columns: 1fr;
   }
 
-  .adm-dashboard--compact .adm-dash-hero {
-    padding: 20px;
+  .adm-dashboard--compact .adm-dash-home-bar {
+    padding: 0.55rem 0.65rem;
+  }
+
+  .adm-dash-live-clock__time {
+    font-size: 18px;
   }
 }
 
@@ -4828,6 +5068,10 @@
 }
 
 .adm-oc-legacy-customer-mini-bal--neg {
+  color: #15803d;
+}
+
+.adm-oc-legacy-customer-mini-bal--debt {
   color: #b91c1c;
 }
 
@@ -8141,6 +8385,42 @@ select.payment-modal-inline-input {
   margin-top: 10px;
 }
 
+.adm-payment-overage-modal .adm-mini-modal-title {
+  margin: 0 0 8px;
+  font-size: 1.05rem;
+}
+
+.adm-payment-overage-lead {
+  margin: 0 0 12px;
+  color: var(--adm-text-muted, #64748b);
+}
+
+.adm-payment-overage-stats {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.adm-payment-overage-stats > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--adm-surface-2, #f8fafc);
+}
+
+.adm-payment-overage-stats--surplus dd {
+  color: var(--adm-success, #15803d);
+  font-weight: 700;
+}
+
+.adm-payment-overage-note {
+  margin: 0 0 12px;
+  font-size: 0.88rem;
+  color: var(--adm-text-muted, #64748b);
+}
+
 @media (max-width: 900px) {
   .adm-payment-full-shell {
     grid-template-columns: 1fr;
@@ -10739,14 +11019,15 @@ select.payment-modal-inline-input {
   font-variant-numeric: tabular-nums;
 }
 
-.adm-balances-field--smart {
+.adm-balances-field--search-row {
+  width: 100%;
   min-width: 0;
 }
 
-@media (min-width: 960px) {
-  .adm-balances-filters-row--secondary {
-    grid-template-columns: minmax(220px, 2.2fr) repeat(auto-fit, minmax(120px, 1fr));
-  }
+.adm-balances-input--search {
+  min-height: 38px;
+  height: 38px;
+  font-size: 14px;
 }
 
 .adm-balances-filters-row {
@@ -10757,11 +11038,89 @@ select.payment-modal-inline-input {
 }
 
 .adm-balances-filters-row--primary {
-  grid-template-columns: minmax(140px, 1.1fr) repeat(2, minmax(120px, 1fr)) minmax(140px, 1fr);
+  grid-template-columns: minmax(200px, 1.35fr) repeat(2, minmax(118px, 1fr)) minmax(130px, 1fr);
 }
 
-.adm-balances-filters-row--secondary {
-  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+.adm-balances-filters-row--tertiary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 12px;
+}
+
+.adm-balances-filters-tertiary-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+  align-items: flex-end;
+  flex: 1 1 280px;
+  min-width: 0;
+}
+
+.adm-balances-filters-tertiary-fields .adm-balances-field {
+  flex: 1 1 112px;
+  min-width: 100px;
+  max-width: 180px;
+}
+
+.adm-balances-filters-tertiary-fields .adm-balances-field--upto {
+  flex: 1 1 150px;
+  max-width: 200px;
+}
+
+.adm-balances-filters-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-inline-start: auto;
+  flex: 0 0 auto;
+}
+
+.adm-balances-field--week-nav {
+  min-width: 0;
+}
+
+.adm-balances-week-control {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.adm-balances-week-control .adm-balances-input--week {
+  flex: 1 1 auto;
+  min-width: 72px;
+  text-align: center;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.adm-balances-week-step {
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--adm-border);
+  border-radius: 10px;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.adm-balances-week-step:hover:not(:disabled) {
+  background: #eff6ff;
+  border-color: #93c5fd;
+}
+
+.adm-balances-week-step:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .adm-balances-field {
@@ -10817,6 +11176,38 @@ select.adm-balances-input {
   border-radius: 12px;
   box-shadow: var(--adm-shadow);
   overflow: hidden;
+}
+
+.adm-balances-table-wrap--loading .adm-balances-table tbody {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.adm-balances-table-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 48px;
+  background: rgba(255, 255, 255, 0.35);
+  pointer-events: none;
+}
+
+.adm-balances-table-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid rgba(148, 163, 184, 0.35);
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: adm-balances-spin 0.7s linear infinite;
+}
+
+@keyframes adm-balances-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .adm-balances-table {
@@ -11187,6 +11578,14 @@ select.adm-balances-input {
 @media (max-width: 1100px) {
   .adm-balances-filters-row--primary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .adm-balances-field--week-nav {
+    grid-column: 1 / -1;
+  }
+
+  .adm-balances-filters-tertiary-fields .adm-balances-field {
+    max-width: none;
   }
 }
 
@@ -12620,6 +13019,10 @@ select.adm-balances-input {
 
 .adm-cbr-erp-data-row--debt {
   background: #fff5f7;
+}
+
+.adm-cbr-erp-data-row--credit {
+  background: #f0fdf4;
 }
 
 .adm-cbr-erp-data-row:hover {
@@ -14381,11 +14784,11 @@ select.adm-balances-input {
     #fff;
 }
 
-/* === Header (title + green NEW button) === */
+/* === Header (כותרת בלבד; כפתורים בשורת order-top-toolbar) === */
 .adm-oc-pro-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 10px;
   padding: 2px 2px 0;
   flex-shrink: 0;
@@ -14417,22 +14820,43 @@ select.adm-balances-input {
   box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.16);
 }
 
-.adm-oc-pro-new {
+.adm-oc-pro-header__actions {
   display: inline-flex;
   align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.adm-oc-pro-new,
+.adm-oc-pro-new-customer {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   gap: 6px;
-  height: 32px;
-  padding: 0 14px;
-  border: 0;
+  height: 42px;
+  padding: 0 16px;
   border-radius: 999px;
   font: inherit;
   font-size: 13px;
   font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.14s ease, box-shadow 0.14s ease, filter 0.14s ease, border-color 0.14s ease;
+  white-space: nowrap;
+}
+
+.adm-oc-pro-new {
+  border: 0;
   color: #fff;
   background: linear-gradient(135deg, #16a34a 0%, #1db954 55%, #22c55e 100%);
   box-shadow: 0 4px 14px rgba(29, 185, 84, 0.28), inset 0 -1px 0 rgba(0, 0, 0, 0.08);
-  cursor: pointer;
-  transition: transform 0.14s ease, box-shadow 0.14s ease, filter 0.14s ease;
+}
+
+.adm-oc-pro-new-customer {
+  color: #1d4ed8;
+  background: linear-gradient(180deg, #f8fbff 0%, #eff6ff 100%);
+  border: 1.5px solid rgba(37, 99, 235, 0.45);
+  box-shadow: 0 2px 10px rgba(37, 99, 235, 0.12);
 }
 
 .adm-oc-pro-new:hover:not(:disabled) {
@@ -14445,9 +14869,172 @@ select.adm-balances-input {
   transform: translateY(0);
 }
 
-.adm-oc-pro-new:disabled {
+.adm-oc-pro-new:disabled,
+.adm-oc-pro-new-customer:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+.adm-oc-pro-new-customer:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(37, 99, 235, 0.65);
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.18);
+  filter: brightness(1.02);
+}
+
+.adm-oc-pro-new-customer:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+@media (max-width: 520px) {
+  .adm-oc-pro-header {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+}
+
+/* שורת כלים עליונה: חדש / לקוח חדש + תאריכים — מעל meta grid, לא בתוך הכרטיס */
+.adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 12px;
+  padding: 12px 18px;
+  margin-bottom: 12px;
+  border: 1px solid #e5edf8;
+  border-radius: 18px;
+  background: #f8fbff;
+  box-sizing: border-box;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar__lbl {
+  font-size: 11px;
+  font-weight: 700;
+  color: #64748b;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar__inp {
+  width: auto;
+  min-width: 0;
+  max-width: 148px;
+  height: 34px;
+  padding: 0 8px;
+  box-sizing: border-box;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 10px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #0f172a;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar__inp--time {
+  max-width: 110px;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar__inp.is-err {
+  border-color: #dc2626;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar__range {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar__range-lbl {
+  font-size: 11px;
+  font-weight: 700;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar__range-dates {
+  font-variant-numeric: tabular-nums;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar__range-sep {
+  color: #94a3b8;
+  font-weight: 700;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar__range-code {
+  font-size: 12px;
+  font-weight: 800;
+  color: #2563eb;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar__errs {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: #dc2626;
+}
+
+/* Laptop קטן — עד ~2 שורות טבעיות */
+@media (max-width: 1320px) {
+  .adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar {
+    flex-wrap: wrap;
+  }
+}
+
+/* Tablet */
+@media (max-width: 900px) {
+  .adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar {
+    flex-wrap: wrap;
+  }
+}
+
+/* Mobile — עמודה */
+@media (max-width: 520px) {
+  .adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar__actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar__item {
+    width: 100%;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar__inp {
+    max-width: none;
+    flex: 1 1 auto;
+  }
+
+  .adm-win-panel--order-capture .adm-oc-pro .order-top-toolbar__range {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }
 
 /* === Container layout === */
@@ -14579,6 +15166,145 @@ select.adm-balances-input {
   height: 26px;
   border-radius: 8px;
   font-size: 12px;
+}
+
+/* Week AH + טווח תאריכים בשורת הכותרת */
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-week-cell {
+  align-items: flex-start;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-week-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  width: 100%;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-week-range-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  min-height: 28px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid rgba(148, 163, 184, 0.38);
+  font-size: 11px;
+  font-weight: 700;
+  color: #475569;
+  letter-spacing: 0.01em;
+  box-sizing: border-box;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-week-range-chip__dates {
+  white-space: nowrap;
+}
+
+/* טווח שבוע · תאריך הזמנה · תאריך הזנה — קליטת הזמנה */
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-week-dates-section {
+  margin-top: 14px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(139, 92, 246, 0.12) 0%, rgba(167, 139, 250, 0.065) 100%);
+  border: 1px solid rgba(139, 92, 246, 0.24);
+  box-sizing: border-box;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-week-dates-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px 20px;
+  direction: rtl;
+  width: 100%;
+}
+
+.adm-oc-week-dates-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.adm-oc-week-dates-lbl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #5b21b6;
+}
+
+.adm-oc-week-dates-lbl--static {
+  margin: 0;
+}
+
+.adm-oc-week-dates-range-val {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+  color: #1e1b4b;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.adm-oc-week-dates-range-code {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #6d28d9;
+}
+
+.adm-oc-week-dates-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(96px, 120px);
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-week-dates-inp {
+  width: 100%;
+  box-sizing: border-box;
+  height: 46px;
+  padding: 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.42);
+  background: #fff;
+  color: #0f172a;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-week-dates-inp--time {
+  padding: 0 10px;
+  min-width: 0;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-week-dates-inp:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-week-dates-inp.is-err {
+  border-color: #dc2626;
+}
+
+.adm-oc-week-dates-err {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #dc2626;
+}
+
+@media (max-width: 900px) {
+  .adm-win-panel--order-capture .adm-oc-pro .adm-oc-week-dates-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .adm-oc-week-dates-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* === Main row (order # / customer code / index) === */

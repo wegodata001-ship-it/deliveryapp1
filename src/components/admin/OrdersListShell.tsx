@@ -22,6 +22,8 @@ import {
   orderCaptureSplitMethodLabel,
 } from "@/lib/order-capture-payment-methods";
 import type { ParsedDateFilter } from "@/lib/work-week";
+import { OrdersListPaginationBar } from "@/components/admin/OrdersListPaginationBar";
+import { formatMoneyAmount } from "@/lib/money-format";
 
 export type OrderListRow = {
   id: string;
@@ -72,6 +74,13 @@ export type OrdersStatusSummary = {
   debtWithdrawal: OrdersStatusBucket;
 };
 
+export type OrdersListPagination = {
+  page: number;
+  pageSize: number;
+  totalCount: number;
+  totalPages: number;
+};
+
 function paymentTypeLabel(paymentType: string | null): string {
   if (!paymentType) return "—";
   return orderCaptureSplitMethodLabel(paymentType as PaymentMethod);
@@ -85,7 +94,7 @@ function parseNumeric(s: string | null | undefined): number | null {
 }
 
 function fmtUsd(n: number): string {
-  return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return formatMoneyAmount(n);
 }
 
 function paymentMethodTone(m: string | null): string {
@@ -135,6 +144,7 @@ function orderEditBadgeLabel(
 type Props = {
   orders: OrderListRow[];
   statusSummary: OrdersStatusSummary;
+  pagination: OrdersListPagination;
   /** ADMIN במערכת = מנהל/אחראי — עוקף נעילת עריכה */
   viewerIsAdmin: boolean;
   canCreateOrders: boolean;
@@ -147,6 +157,7 @@ type Props = {
 export function OrdersListShell({
   orders,
   statusSummary,
+  pagination,
   viewerIsAdmin,
   canCreateOrders,
   canEditOrders,
@@ -170,6 +181,16 @@ export function OrdersListShell({
     for (const p of paymentLocationOptions) m.set(p.id, p.label);
     return m;
   }, [paymentLocationOptions]);
+
+  const tableRows = useMemo(() => rows, [rows]);
+
+  const paginationLabel = useMemo(() => {
+    const { page, pageSize, totalCount } = pagination;
+    if (totalCount === 0) return "אין הזמנות בתצוגה";
+    const from = (page - 1) * pageSize + 1;
+    const to = Math.min(page * pageSize, totalCount);
+    return `מציג ${from.toLocaleString("he-IL")}–${to.toLocaleString("he-IL")} מתוך ${totalCount.toLocaleString("he-IL")}`;
+  }, [pagination]);
 
   useEffect(() => {
     setRows(orders);
@@ -607,7 +628,7 @@ export function OrdersListShell({
                 </td>
               </tr>
             ) : (
-              rows.map((o) => {
+              tableRows.map((o) => {
                 const selVal = orderStatusToQuickSelectValue(o.status);
                 const editBadgeUi = o.editBadge ? orderEditBadgeLabel(o.editBadge, o.status) : null;
                 const isCancelled = o.status === OrderStatus.CANCELLED;
@@ -743,6 +764,8 @@ export function OrdersListShell({
           </tbody>
         </table>
       </div>
+
+      <OrdersListPaginationBar pagination={pagination} label={paginationLabel} />
 
       <p className="adm-orders-hint">
         {canEditOrders

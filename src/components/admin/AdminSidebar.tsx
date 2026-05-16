@@ -23,6 +23,9 @@ import {
   Wallet,
 } from "lucide-react";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
+import { WegoBrandLogo } from "@/components/admin/WegoBrandLogo";
+import { useAdminFinancialModal } from "@/components/admin/AdminFinancialModalContext";
+import { useAdminNavLayout } from "@/components/admin/AdminNavLayoutContext";
 import type { AdminWindowPayload } from "@/lib/admin-windows";
 
 function NavIcon({ id }: { id: NavIconId }) {
@@ -144,20 +147,42 @@ function NavBlock({
   sp,
   openWindow,
   navBadges,
+  onNavigate,
 }: {
   section: NavSectionDef;
   pathname: string;
   sp: URLSearchParams;
   openWindow: (p: AdminWindowPayload) => void;
   navBadges?: { pendingOrderEditRequests?: number };
+  onNavigate?: () => void;
 }) {
+  const { openFinancialModal } = useAdminFinancialModal();
+
   return (
     <div className="adm-nav-section">
       <div className="adm-nav-label">{section.title}</div>
       {section.items.map((item) => {
         const resolved = resolveNavHref(item, sp);
-        const active = item.openWindow ? false : linkActive(pathname, item, resolved, sp);
-        const key = `${section.title}-${item.label}-${item.openWindow?.type ?? "link"}`;
+        const active =
+          item.openWindow || item.openFinancialModal ? false : linkActive(pathname, item, resolved, sp);
+        const key = `${section.title}-${item.label}-${item.openWindow?.type ?? item.openFinancialModal ? "fin" : "link"}`;
+        if (item.openFinancialModal) {
+          return (
+            <button
+              key={key}
+              type="button"
+              className="adm-nav-link adm-nav-link--action"
+              data-active={active ? "true" : "false"}
+              onClick={() => {
+                openFinancialModal();
+                onNavigate?.();
+              }}
+            >
+              <NavIcon id={item.icon} />
+              {item.label}
+            </button>
+          );
+        }
         if (item.openWindow) {
           return (
             <button
@@ -165,7 +190,10 @@ function NavBlock({
               type="button"
               className="adm-nav-link adm-nav-link--action"
               data-active={active ? "true" : "false"}
-              onClick={() => openWindow(item.openWindow!)}
+              onClick={() => {
+                openWindow(item.openWindow!);
+                onNavigate?.();
+              }}
             >
               <NavIcon id={item.icon} />
               {item.label}
@@ -183,6 +211,7 @@ function NavBlock({
             className="adm-nav-link"
             data-active={active ? "true" : "false"}
             aria-current={active ? "page" : undefined}
+            onClick={() => onNavigate?.()}
           >
             <NavIcon id={item.icon} />
             <span className="adm-nav-link__label">{item.label}</span>
@@ -208,14 +237,13 @@ export function AdminSidebar({
   const pathname = usePathname();
   const sp = useSearchParams();
   const { openWindow } = useAdminWindows();
+  const closeNav = useAdminNavLayout()?.closeNav;
+
   return (
     <aside className="adm-sidebar">
       <div className="adm-brand">
-        <div className="adm-brand-logo" aria-hidden>
-          <span>W</span>
-        </div>
-        <div className="adm-brand-title">וויגו פרו</div>
-        <div className="adm-brand-sub">ניהול משלוחים ותשלומים</div>
+        <WegoBrandLogo />
+        <p className="adm-brand-title">וויגו פרו — מערכת לוגיסטיקה</p>
       </div>
       <nav className="adm-nav">
         {sections.map((section) => (
@@ -226,6 +254,7 @@ export function AdminSidebar({
             sp={sp}
             openWindow={openWindow}
             navBadges={navBadges}
+            onNavigate={closeNav}
           />
         ))}
       </nav>
@@ -235,6 +264,7 @@ export function AdminSidebar({
             type="submit"
             className="adm-nav-link"
             style={{ width: "100%", border: "none", background: "transparent", cursor: "pointer" }}
+            onClick={() => closeNav?.()}
           >
             <LogOut size={18} />
             יציאה

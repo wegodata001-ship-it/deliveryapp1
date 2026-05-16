@@ -177,6 +177,10 @@ model Order {
   /** מדינת ספק / מקור עסקה — מתוך רשימה מוגדרת בהגדרות */
   sourceCountry        OrderSourceCountry?
   orderDate            DateTime?
+  /** תאריך ביצוע ההזמנה בפועל (בתוך טווח השבוע) */
+  orderExecutionDate   DateTime?
+  /** תאריך ושעת קליטת ההזמנה במערכת */
+  intakeDateTime       DateTime?
   status               OrderStatus    @default(OPEN)
   paymentMethod        PaymentMethod?
   paymentPointId       String?
@@ -230,12 +234,16 @@ model Order {
   @@index([oldOrderNumber])
   @@index([weekCode])
   @@index([orderDate])
+  @@index([orderExecutionDate])
+  @@index([intakeDateTime])
   @@index([createdAt])
   @@index([status])
   @@index([customerId])
   @@index([paymentPointId])
   @@index([editUnlockedForUserId])
   @@index([weekCode, deletedAt])
+  @@index([sourceCountry])
+  @@index([status, orderDate])
 }
 
 model OrderEditRequest {

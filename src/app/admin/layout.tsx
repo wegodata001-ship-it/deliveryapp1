@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import { AdminSidebar } from "@/components/admin/AdminSidebar";
 import { AdminChrome } from "@/components/admin/AdminChrome";
 import { AdminWindowProvider } from "@/components/admin/AdminWindowProvider";
+import { AdminNavShell } from "@/components/admin/AdminNavShell";
 import { filterSidebarSections } from "@/lib/sidebar-nav";
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
@@ -10,11 +11,11 @@ import { ensureAppPermissions } from "@/lib/permissions";
 import { countPendingOrderEditRequestsForAdmin } from "@/app/admin/order-edit-requests/actions";
 import { ensureDefaultFinancialSettings, getCurrentFinancialSettings, serializeFinancialSettings } from "@/lib/financial-settings";
 import "./admin.css";
+import "@/styles/wego-order-capture-fluid.css";
 
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "וויגו פרו — מערכת ניהול",
   robots: "noindex, nofollow",
 };
 
@@ -37,14 +38,18 @@ export default async function AdminLayout({ children }: { children: React.ReactN
 
   return (
     <AdminWindowProvider>
-      <div className="adm-root" dir="rtl" lang="he">
-        <Suspense fallback={<aside className="adm-sidebar" aria-hidden />}>
-          <AdminSidebar
-            sections={sections}
-            navBadges={pendingOrderEditRequests > 0 ? { pendingOrderEditRequests } : undefined}
-          />
-        </Suspense>
-        <div className="adm-main">
+      <AdminNavShell
+        financial={financial}
+        canManageFinancial={userHasAnyPermission(user, ["manage_settings"])}
+        sidebar={
+          <Suspense fallback={<aside className="adm-sidebar" aria-hidden />}>
+            <AdminSidebar
+              sections={sections}
+              navBadges={pendingOrderEditRequests > 0 ? { pendingOrderEditRequests } : undefined}
+            />
+          </Suspense>
+        }
+        main={
           <Suspense fallback={<div className="adm-content adm-content--chrome">{children}</div>}>
             <AdminChrome
               displayName={user.fullName}
@@ -61,8 +66,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
               {children}
             </AdminChrome>
           </Suspense>
-        </div>
-      </div>
+        }
+      />
     </AdminWindowProvider>
   );
 }

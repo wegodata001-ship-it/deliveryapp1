@@ -42,6 +42,16 @@ import {
 } from "@/lib/work-week";
 import { VAT_GROSS_FACTOR } from "@/lib/vat";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
+import { AhWeekNavNextButton, AhWeekNavPrevButton } from "@/components/admin/AhWeekNavButtons";
+import { goToNextWeekNumber, goToPrevWeekNumber } from "@/lib/weeks/ah-week-nav";
+import {
+  formatMoneyAmount,
+  formatMoneyRate,
+  formatUsdDisplay,
+  parseMoneyStringOrZero,
+  sanitizeMoneyInput,
+} from "@/lib/money-format";
+import { MoneyInput } from "@/components/ui/MoneyInput";
 
 /** סכום העברה בנקאית כולל מע״מ — פירוק נטו לפי גורם VAT_GROSS_FACTOR */
 function addDays(d: Date, days: number): Date {
@@ -124,30 +134,11 @@ function parseFinalRate(financial: SerializedFinancial | null | undefined): numb
 }
 
 function parseNum(s: string): number {
-  const t = s.replace(/,/g, "").replace(/\s/g, "").trim();
-  if (t === "") return 0;
-  const n = Number(t);
-  return Number.isFinite(n) ? n : 0;
+  return parseMoneyStringOrZero(s);
 }
 
-function sanitizeMoneyInput(raw: string): string {
-  let t = raw.replace(/[^\d.]/g, "");
-  const parts = t.split(".");
-  if (parts.length > 2) t = parts[0] + "." + parts.slice(1).join("");
-  return t;
-}
-
-/** תצוגת סכומי USD: אלפים, 2 ספרות, תווית $ */
-function fmtUsdDisplay(n: number): string {
-  if (!Number.isFinite(n)) return "—";
-  return `$ ${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-/** סיכום תחתון — מספרים בלבד (אלפים + 2 עשרוניות), יישור LTR */
-function fmtFooterAmount(n: number): string {
-  if (!Number.isFinite(n)) return "—";
-  return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
+const fmtUsdDisplay = formatUsdDisplay;
+const fmtFooterAmount = formatMoneyAmount;
 
 /** סה״כ שורה ב-USD: עדיפות לערך מהשרת; אם חסר — המרה מ-₪ לפי שער השורה */
 function orderRowTotalUsd(row: PaymentIntakeMatchResult): number {
@@ -169,10 +160,7 @@ function rowAmountTooltip(row: PaymentIntakeMatchResult): string {
   return `מקורי: ${original}\nשולם: ${paid}`;
 }
 
-function fmtRate(n: number): string {
-  if (!Number.isFinite(n) || n <= 0) return "—";
-  return n.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 });
-}
+const fmtRate = formatMoneyRate;
 
 function formatSlashDate(ymd: string): string {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return "—";
@@ -727,12 +715,18 @@ export function PaymentModal({
       <div className="payment-modal-split payment-layout">
         <div className="payment-modal-main payment-table" dir="rtl">
           <div className="payment-modal-topnav" dir="ltr" aria-label="ניווט שבוע עבודה">
-            <button type="button" className="payment-modal-nav-arrow" onClick={() => navPaymentWeek("prev")} aria-label="שבוע קודם">
-              ‹
-            </button>
-            <button type="button" className="payment-modal-nav-arrow" onClick={() => navPaymentWeek("next")} aria-label="שבוע הבא">
-              ›
-            </button>
+            <AhWeekNavPrevButton
+              className="payment-modal-nav-arrow"
+              variant="angle"
+              iconSize={16}
+              onClick={() => navPaymentWeek("prev")}
+            />
+            <AhWeekNavNextButton
+              className="payment-modal-nav-arrow"
+              variant="angle"
+              iconSize={16}
+              onClick={() => navPaymentWeek("next")}
+            />
           </div>
           <div className="payment-modal-rate-strip" dir="rtl">
             <span className="payment-modal-rate-strip-lead">שער דולר:</span>
@@ -967,19 +961,16 @@ export function PaymentModal({
               )}
 
               <div className="payment-modal-week-row" dir="ltr" aria-label="שבוע עבודה">
-                <button
-                  type="button"
+                <AhWeekNavPrevButton
                   className="payment-modal-week-arrow"
-                  aria-label="שבוע קודם"
+                  variant="angle"
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => {
                     const cur = parseWeekNumber(weekDraft) ?? parseWeekNumber(weekSelectValue) ?? baseWeekNumber;
-                    applyWeekNumber(cur - 1);
+                    applyWeekNumber(goToPrevWeekNumber(cur));
                     setWeekInputErr(null);
                   }}
-                >
-                  ◀
-                </button>
+                />
                 <input
                   type="text"
                   className={weekInputErr ? "payment-modal-week-inp payment-modal-week-inp--err" : "payment-modal-week-inp"}
@@ -1009,19 +1000,16 @@ export function PaymentModal({
                     setWeekDraft(toWeekCode(num));
                   }}
                 />
-                <button
-                  type="button"
+                <AhWeekNavNextButton
                   className="payment-modal-week-arrow"
-                  aria-label="שבוע הבא"
+                  variant="angle"
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => {
                     const cur = parseWeekNumber(weekDraft) ?? parseWeekNumber(weekSelectValue) ?? baseWeekNumber;
-                    applyWeekNumber(cur + 1);
+                    applyWeekNumber(goToNextWeekNumber(cur));
                     setWeekInputErr(null);
                   }}
-                >
-                  ▶
-                </button>
+                />
                 <button
                   type="button"
                   className="payment-modal-week-dd"

@@ -2,6 +2,7 @@ import { OrderStatus } from "@prisma/client";
 import type { AppUser } from "@/lib/admin-auth";
 import { isAdminUser } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
+import { formatIlsDisplay } from "@/lib/money-format";
 
 export type DashboardStatsRange = { fromStart: Date; toEnd: Date };
 
@@ -44,7 +45,7 @@ function endOfLocalDay(d: Date): Date {
 
 function moneyIls(n: unknown): string {
   const v = Number(String(n ?? "0"));
-  return `₪ ${v.toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return Number.isFinite(v) ? formatIlsDisplay(v) : formatIlsDisplay(0);
 }
 
 export async function getDashboardStats(

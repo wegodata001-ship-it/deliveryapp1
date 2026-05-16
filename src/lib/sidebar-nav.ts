@@ -28,6 +28,8 @@ export type NavItemDef = {
   adminOnly?: boolean;
   /** פותח חלון במקום ניווט (ללא שינוי route) */
   openWindow?: AdminWindowPayload;
+  /** פותח מודאל הגדרות כספים (state מקומי, בלי query) */
+  openFinancialModal?: boolean;
 };
 
 export type NavSectionDef = { title: string; items: NavItemDef[] };
@@ -92,7 +94,7 @@ export const SIDEBAR_SECTIONS: NavSectionDef[] = [
   {
     title: "מערכת",
     items: [
-      { href: "/admin?modal=financial", label: "הגדרות כספים", icon: "finance", anyOf: ["manage_settings"] },
+      { href: "/admin", label: "הגדרות כספים", icon: "finance", anyOf: ["manage_settings"], openFinancialModal: true },
       { href: "/admin/source-tables", label: "טבלאות מקור", icon: "sourceTables", anyOf: ["manage_settings"] },
       { href: "/admin/reports", label: "דוחות", icon: "reports", anyOf: ["view_reports"] },
       { href: "/admin/activity", label: "יומן פעילות", icon: "activity", anyOf: ["manage_users"] },
