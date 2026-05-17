@@ -21,6 +21,7 @@ export async function ensureDefaultFinancialSettings(): Promise<FinancialSetting
       baseDollarRate: base,
       dollarFee: fee,
       finalDollarRate: final,
+      defaultCommissionPercent: new Prisma.Decimal(0),
       source: "MANUAL",
     },
   });
@@ -30,6 +31,7 @@ export type SerializedFinancial = {
   baseDollarRate: string;
   dollarFee: string;
   finalDollarRate: string;
+  defaultCommissionPercent: string;
   source: string;
   updatedAt: string | null;
 };
@@ -40,6 +42,7 @@ export function serializeFinancialSettings(row: FinancialSettings | null): Seria
     baseDollarRate: row.baseDollarRate.toFixed(4),
     dollarFee: row.dollarFee.toFixed(4),
     finalDollarRate: row.finalDollarRate.toFixed(4),
+    defaultCommissionPercent: row.defaultCommissionPercent.toFixed(4),
     source: row.source,
     updatedAt: row.updatedAt.toISOString(),
   };

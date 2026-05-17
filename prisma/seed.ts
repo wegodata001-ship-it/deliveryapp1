@@ -682,6 +682,7 @@ async function main() {
       baseDollarRate: new Prisma.Decimal("3.40"),
       dollarFee: new Prisma.Decimal("0.10"),
       finalDollarRate: new Prisma.Decimal("3.50"),
+      defaultCommissionPercent: new Prisma.Decimal("3.45"),
       source: "MANUAL",
       updatedById: admin.id,
     },

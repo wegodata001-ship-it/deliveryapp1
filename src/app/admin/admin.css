@@ -6447,6 +6447,22 @@ select.payment-modal-inline-input {
   font-weight: 600;
 }
 
+.payment-modal-rate-strip-inp--ro {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #f1f5f9;
+  color: #334155;
+  cursor: default;
+  user-select: none;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-inp--commission-override {
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.35);
+  background: #fffbeb;
+}
+
 .payment-modal-pay-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

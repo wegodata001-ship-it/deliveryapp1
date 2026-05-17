@@ -92,11 +92,13 @@ model User {
 
 /** הגדרות שער דולר גלובליות: בסיס (usd_rate_base), עמלה (usd_fee), שער סופי מחושב (usd_rate_final). */
 model FinancialSettings {
-  id              String   @id @default(cuid())
-  baseDollarRate  Decimal  @db.Decimal(10, 4)
-  dollarFee       Decimal  @db.Decimal(10, 4) @default(0)
-  finalDollarRate Decimal  @db.Decimal(10, 4)
-  source          String   @default("MANUAL")
+  id                       String   @id @default(cuid())
+  baseDollarRate           Decimal  @db.Decimal(10, 4)
+  dollarFee                Decimal  @db.Decimal(10, 4) @default(0)
+  finalDollarRate          Decimal  @db.Decimal(10, 4)
+  /** אחוז עמלה ברירת מחדל לקליטת הזמנה חדשה (למשל 3.45) */
+  defaultCommissionPercent Decimal  @default(0) @db.Decimal(7, 4)
+  source                   String   @default("MANUAL")
   updatedById     String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt

@@ -3,15 +3,25 @@
 import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
+import { parseCommissionPercentString, sanitizeCommissionPercentInput } from "@/lib/commission-percent";
 import { finalRateFromBaseAndFee } from "@/lib/financial-calc";
 import { getCurrentFinancialSettings } from "@/lib/financial-settings";
 import { prisma } from "@/lib/prisma";
 
 export type FinancialSaveState = { ok: true } | { ok: false; error: string };
 
+function parseCommissionPercentField(raw: string): { ok: true; value: Prisma.Decimal } | { ok: false; error: string } {
+  const cleaned = sanitizeCommissionPercentInput(raw.trim());
+  const n = parseCommissionPercentString(cleaned);
+  if (!Number.isFinite(n) || n < 0) return { ok: false, error: "אחוז עמלה לא תקין" };
+  if (n > 100) return { ok: false, error: "אחוז עמלה לא יכול לעלות על 100" };
+  return { ok: true, value: new Prisma.Decimal(n.toString()).toDecimalPlaces(4, 4) };
+}
+
 export async function saveManualFinancialSettings(input: {
   baseDollarRate: string;
   dollarFee: string;
+  defaultCommissionPercent: string;
 }): Promise<FinancialSaveState> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["manage_settings"])) {
@@ -30,6 +40,9 @@ export async function saveManualFinancialSettings(input: {
   if (base.lte(0)) return { ok: false, error: "שער בסיס חייב להיות חיובי" };
   if (fee.lt(0)) return { ok: false, error: "עמלה לא יכולה להיות שלילית" };
 
+  const pctParsed = parseCommissionPercentField(input.defaultCommissionPercent ?? "0");
+  if (!pctParsed.ok) return { ok: false, error: pctParsed.error };
+
   const final = finalRateFromBaseAndFee(base, fee);
 
   await prisma.financialSettings.create({
@@ -37,6 +50,7 @@ export async function saveManualFinancialSettings(input: {
       baseDollarRate: base,
       dollarFee: fee,
       finalDollarRate: final,
+      defaultCommissionPercent: pctParsed.value,
       source: "MANUAL",
       updatedById: me.id,
     },
@@ -55,6 +69,7 @@ export async function refreshAutomaticDollarRate(): Promise<FinancialSaveState> 
 
   const latest = await getCurrentFinancialSettings();
   const fee = latest?.dollarFee ?? new Prisma.Decimal(0);
+  const defaultPct = latest?.defaultCommissionPercent ?? new Prisma.Decimal(0);
   const mockBase = new Prisma.Decimal("3.40");
   const final = finalRateFromBaseAndFee(mockBase, fee);
 
@@ -63,6 +78,7 @@ export async function refreshAutomaticDollarRate(): Promise<FinancialSaveState> 
       baseDollarRate: mockBase,
       dollarFee: fee,
       finalDollarRate: final,
+      defaultCommissionPercent: defaultPct,
       source: "AUTO",
       updatedById: me.id,
     },

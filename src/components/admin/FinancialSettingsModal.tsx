@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Modal } from "@/components/ui/Modal";
 import { refreshAutomaticDollarRate, saveManualFinancialSettings } from "@/app/admin/financial/actions";
+import { sanitizeCommissionPercentInput } from "@/lib/commission-percent";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 
 type Props = {
@@ -17,6 +18,9 @@ export function FinancialSettingsModal({ open, onClose, initial, onToast }: Prop
   const router = useRouter();
   const [base, setBase] = useState(initial?.baseDollarRate ?? "3.40");
   const [fee, setFee] = useState(initial?.dollarFee ?? "0.10");
+  const [defaultCommissionPercent, setDefaultCommissionPercent] = useState(
+    initial?.defaultCommissionPercent ?? "0",
+  );
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -24,6 +28,7 @@ export function FinancialSettingsModal({ open, onClose, initial, onToast }: Prop
     if (!open) return;
     setBase(initial?.baseDollarRate ?? "3.40");
     setFee(initial?.dollarFee ?? "0.10");
+    setDefaultCommissionPercent(initial?.defaultCommissionPercent ?? "0");
     setErr(null);
   }, [open, initial]);
 
@@ -37,7 +42,11 @@ export function FinancialSettingsModal({ open, onClose, initial, onToast }: Prop
   async function onSaveManual() {
     setBusy(true);
     setErr(null);
-    const res = await saveManualFinancialSettings({ baseDollarRate: base, dollarFee: fee });
+    const res = await saveManualFinancialSettings({
+      baseDollarRate: base,
+      dollarFee: fee,
+      defaultCommissionPercent,
+    });
     setBusy(false);
     if (!res.ok) {
       setErr(res.error);
@@ -73,6 +82,21 @@ export function FinancialSettingsModal({ open, onClose, initial, onToast }: Prop
         <div className="adm-field">
           <label htmlFor="fs-fee">עמלת שער (usd_fee)</label>
           <input id="fs-fee" type="text" inputMode="decimal" value={fee} onChange={(e) => setFee(e.target.value)} />
+        </div>
+        <div className="adm-field">
+          <label htmlFor="fs-commission-pct">אחוז עמלה ברירת מחדל</label>
+          <input
+            id="fs-commission-pct"
+            type="text"
+            inputMode="decimal"
+            dir="ltr"
+            value={defaultCommissionPercent}
+            placeholder="3.45"
+            onChange={(e) => setDefaultCommissionPercent(sanitizeCommissionPercentInput(e.target.value))}
+          />
+          <p className="adm-field-hint" style={{ marginTop: "0.35rem" }}>
+            יוחל אוטומטית בקליטת הזמנה חדשה. ניתן לשנות ידנית בהזמנה בודדת.
+          </p>
         </div>
         <p className="adm-field-hint" style={{ marginTop: 0 }}>
           שער סופי מחושב (usd_rate_final): <strong>{finalPreview}</strong> ₪ לדולר

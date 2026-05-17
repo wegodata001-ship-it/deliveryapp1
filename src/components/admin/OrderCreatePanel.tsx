@@ -50,6 +50,12 @@ import { ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS } from "@/lib/order-capture-payment
 import { orderCountryLabel, ORDER_COUNTRY_CODES, coerceOrderCountryForForm, type OrderCountryCode } from "@/lib/order-countries";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 import { VAT_RATE, VAT_RATE_PERCENT, formatVatPercentLabel } from "@/lib/vat";
+import {
+  commissionPercentFromOrderAmounts,
+  formatCommissionPercentValue,
+  parseCommissionPercentString,
+  sanitizeCommissionPercentInput,
+} from "@/lib/commission-percent";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import {
   DEFAULT_WEEK_CODE,
@@ -169,12 +175,8 @@ async function saveCaptureFast(payload: Record<string, unknown>): Promise<Captur
   return data ?? { ok: false, error: "שגיאה בשמירה" };
 }
 
-function commissionPercentFromFinancial(f: SerializedFinancial | null): number {
-  if (!f) return 0;
-  const base = Number(String(f.baseDollarRate).replace(",", "."));
-  const fee = Number(String(f.dollarFee).replace(",", "."));
-  if (!Number.isFinite(base) || base <= 0) return 0;
-  return roundMoney2((fee / base) * 100);
+function defaultCommissionPercentStr(f: SerializedFinancial | null): string {
+  return formatCommissionPercentValue(parseCommissionPercentString(f?.defaultCommissionPercent ?? "0"));
 }
 
 function customerDisplayCode(c: CustomerSearchRow): string {
@@ -228,7 +230,8 @@ export function OrderCreatePanel({
   const [intakeDateErr, setIntakeDateErr] = useState<string | null>(null);
   const [weekDraft, setWeekDraft] = useState(globalWeek || DEFAULT_WEEK_CODE);
   const [weekInputErr, setWeekInputErr] = useState<string | null>(null);
-  const [feeUsdStr, setFeeUsdStr] = useState("");
+  const [commissionPercentStr, setCommissionPercentStr] = useState(() => defaultCommissionPercentStr(financial));
+  const commissionPercentTouchedRef = useRef(false);
   const [loadOrderBusy, setLoadOrderBusy] = useState(false);
   const [loadedSourceCountry, setLoadedSourceCountry] = useState<OrderCountryCode | "">("");
   const [editGate, setEditGate] = useState<OrderWorkPanelPayload["editGate"] | null>(null);
@@ -291,7 +294,22 @@ export function OrderCreatePanel({
     return Number.isFinite(f) && f > 0 ? f : 3.5;
   }, [financial]);
 
-  const commissionPct = useMemo(() => commissionPercentFromFinancial(financial), [financial]);
+  const systemDefaultCommissionStr = useMemo(() => defaultCommissionPercentStr(financial), [financial]);
+
+  const commissionPct = useMemo(
+    () => parseCommissionPercentString(commissionPercentStr),
+    [commissionPercentStr],
+  );
+
+  const commissionPercentCustomized = useMemo(() => {
+    const cur = formatCommissionPercentValue(commissionPct);
+    return cur !== systemDefaultCommissionStr;
+  }, [commissionPct, systemDefaultCommissionStr]);
+
+  useEffect(() => {
+    if (isEdit || commissionPercentTouchedRef.current) return;
+    setCommissionPercentStr(systemDefaultCommissionStr);
+  }, [isEdit, systemDefaultCommissionStr]);
 
   const [orderNumberPreview, setOrderNumberPreview] = useState("…");
 
@@ -365,7 +383,7 @@ export function OrderCreatePanel({
     setSourceCountry((cur) =>
       cur && orderCountries.includes(cur) ? cur : orderCountries[0] ?? (ORDER_COUNTRY_CODES[0] as OrderCountryCode),
     );
-  }, [orderCountries, isEdit]);
+  }, [orderCountries, isEdit, globalWeek]);
 
   const refreshOrderNumberPreview = useCallback(async () => {
     if (isEdit) return;
@@ -472,8 +490,14 @@ export function OrderCreatePanel({
       setPaymentPointOpen(false);
       setNotes(row.notes);
       setDealUsdStr(row.amountUsd);
-      setFeeUsdStr(row.feeUsd);
       setDealIlsStr("");
+      const orderPct = commissionPercentFromOrderAmounts(row.feeUsd, row.amountUsd);
+      const pctStr =
+        orderPct > 0
+          ? formatCommissionPercentValue(orderPct)
+          : systemDefaultCommissionStr;
+      setCommissionPercentStr(pctStr);
+      commissionPercentTouchedRef.current = true;
       setSelectedCustomer({
         id: row.customerId,
         label: row.customerLabel,
@@ -501,7 +525,7 @@ export function OrderCreatePanel({
     return () => {
       cancelled = true;
     };
-  }, [isEdit, editOrderId, financial?.finalDollarRate]);
+  }, [isEdit, editOrderId, systemDefaultCommissionStr]);
 
   useEffect(() => {
     if (!paymentPointId) return;
@@ -636,20 +660,9 @@ export function OrderCreatePanel({
     return roundMoney2(dealIlsTotal * (commissionPct / 100));
   }, [dealIlsTotal, commissionPct]);
 
-  const feeUsdNumEdit = useMemo(() => {
-    const f = parseNum(feeUsdStr);
-    return Number.isFinite(f) && f >= 0 ? f : 0;
-  }, [feeUsdStr]);
+  const commissionUsdEffective = useMemo(() => commissionUsdCalc, [commissionUsdCalc]);
 
-  const commissionUsdEffective = useMemo(
-    () => (isEdit ? feeUsdNumEdit : commissionUsdCalc),
-    [isEdit, feeUsdNumEdit, commissionUsdCalc],
-  );
-
-  const commissionIlsEffective = useMemo(
-    () => (isEdit ? roundMoney2(feeUsdNumEdit * finalRate) : commissionIlsCalc),
-    [isEdit, feeUsdNumEdit, finalRate, commissionIlsCalc],
-  );
+  const commissionIlsEffective = useMemo(() => commissionIlsCalc, [commissionIlsCalc]);
 
   const totalBeforeVatIls = useMemo(() => {
     if (!Number.isFinite(dealIlsTotal) || dealIlsTotal <= 0) return 0;
@@ -815,7 +828,8 @@ export function OrderCreatePanel({
     setNotes("");
     setDealUsdStr("");
     setDealIlsStr("");
-    setFeeUsdStr("");
+    setCommissionPercentStr(systemDefaultCommissionStr);
+    commissionPercentTouchedRef.current = false;
     setHits([]);
     setDropdownField(null);
     setIsSearching(false);
@@ -846,7 +860,7 @@ export function OrderCreatePanel({
         }
       }
     }, 0);
-  }, []);
+  }, [systemDefaultCommissionStr]);
 
   // Latest state ref — read at save time only. Lets performSave stay stable
   // across renders so the global keydown listener (Ctrl+Enter / Ctrl+N) doesn't
@@ -1489,11 +1503,24 @@ export function OrderCreatePanel({
             </label>
             <input
               type="text"
-              readOnly
-              className="adm-oc-legacy-top-inp adm-oc-pro-inp--ro"
-              value={commissionPct.toFixed(2)}
+              inputMode="decimal"
+              className={
+                commissionPercentCustomized
+                  ? "adm-oc-legacy-top-inp adm-oc-pro-inp adm-oc-pro-inp--commission-override"
+                  : "adm-oc-legacy-top-inp adm-oc-pro-inp"
+              }
+              value={commissionPercentStr}
               dir="ltr"
-              title="אחוז עמלה מהגדרות כספים"
+              disabled={fieldDisabled}
+              title={
+                commissionPercentCustomized
+                  ? "עמלה מותאמת להזמנה זו (ברירת מחדל מערכת: " + systemDefaultCommissionStr + "%)"
+                  : "אחוז עמלה — ברירת מחדל מערכת: " + systemDefaultCommissionStr + "%"
+              }
+              onChange={(e) => {
+                commissionPercentTouchedRef.current = true;
+                setCommissionPercentStr(sanitizeCommissionPercentInput(e.target.value));
+              }}
             />
           </span>
           <span className="adm-oc-legacy-topbar-item adm-oc-pro-item">

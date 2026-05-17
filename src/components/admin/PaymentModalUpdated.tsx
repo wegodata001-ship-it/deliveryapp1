@@ -52,6 +52,7 @@ import {
   type PaymentLineVatMode,
 } from "@/lib/payment-updated";
 import { validatePaymentCheckLines } from "@/lib/payment-checks";
+import { formatCommissionPercentValue, parseCommissionPercentString } from "@/lib/commission-percent";
 import {
   previewCustomerPaymentOverageAction,
   resetCustomerOutstandingBalancesAction,
@@ -402,17 +403,15 @@ export function PaymentModalUpdated({
   const [weekInputErr, setWeekInputErr] = useState<string | null>(null);
 
   const [dollarRate, setDollarRate] = useState(() => defaultRate.toFixed(4));
-  /**
-   * אחוז עמלה כללי לקליטה.
-   * תצוגתי בטבלה: משפיע על עמודת "$ סכום" (לא על יתרה, לא על הקצאה, לא על מע״מ).
-   * נשמר ב־Payment.commissionPercent בעת שמירת הקליטה.
-   * ברירת מחדל "0".
-   */
-  const [commissionPercent, setCommissionPercent] = useState<string>("0");
-  const commissionPercentN = useMemo(() => {
-    const n = parseNum(commissionPercent);
-    return Number.isFinite(n) && n > 0 ? n : 0;
-  }, [commissionPercent]);
+  /** אחוז עמלה גלובלי — תצוגה בלבד; נשמר בקליטה לפי הגדרות מערכת */
+  const systemCommissionPercentStr = useMemo(
+    () => formatCommissionPercentValue(parseCommissionPercentString(financial?.defaultCommissionPercent ?? "0")),
+    [financial?.defaultCommissionPercent],
+  );
+  const commissionPercentN = useMemo(
+    () => parseCommissionPercentString(systemCommissionPercentStr),
+    [systemCommissionPercentStr],
+  );
 
   const [payments, setPayments] = useState<PaymentLine[]>(() => [createDefaultLine()]);
 
@@ -465,14 +464,13 @@ export function PaymentModalUpdated({
         paymentDateYmd,
         paymentTimeHm,
         dollarRate,
-        commissionPercent,
         includedIds: includedIds ?? [],
         nameEn: draftCustomer.nameEn.trim(),
         nameAr: draftCustomer.nameAr.trim(),
         phone: draftCustomer.phone.trim(),
         payments,
       }),
-    [customer?.id, paymentDateYmd, paymentTimeHm, dollarRate, commissionPercent, includedIds, draftCustomer.nameEn, draftCustomer.nameAr, draftCustomer.phone, payments],
+    [customer?.id, paymentDateYmd, paymentTimeHm, dollarRate, includedIds, draftCustomer.nameEn, draftCustomer.nameAr, draftCustomer.phone, payments],
   );
 
   const bases = useMemo(() => toPaymentIntakeBases(orders), [orders]);
@@ -845,7 +843,6 @@ export function PaymentModalUpdated({
     setOrderEditId(null);
     setPayments([createDefaultLine()]);
     setDollarRate(parseFinalRate(financial).toFixed(4));
-    setCommissionPercent("0");
     setLoadErr(null);
     setSaveErr(null);
     setHighlightInvalidCheckFields(false);
@@ -886,11 +883,6 @@ export function PaymentModalUpdated({
     setPaymentCodePreviewPending(false);
     setPaymentTimeHm(snap.paymentTimeHm);
     if (snap.dollarRate?.trim()) setDollarRate(snap.dollarRate.trim());
-    {
-      const raw = (snap.commissionPercent ?? "").trim().replace(",", ".");
-      const n = raw === "" ? 0 : Number(raw);
-      setCommissionPercent(Number.isFinite(n) && n > 0 ? String(n) : "0");
-    }
     setPayments(
       snap.lines.length > 0
         ? snap.lines.map((l) => ({
@@ -1071,7 +1063,6 @@ export function PaymentModalUpdated({
     setOrderEditId(null);
     setPayments([createDefaultLine()]);
     setDollarRate(parseFinalRate(financial).toFixed(4));
-    setCommissionPercent("0");
     setPaymentDateYmd(formatLocalYmd(new Date()));
     setPaymentTimeHm(formatLocalHm(new Date()));
     setSaveErr(null);
@@ -1263,7 +1254,7 @@ export function PaymentModalUpdated({
     const res = await resetCustomerOutstandingBalancesAction({
       customerId: customer.id,
       weekCode: intakeWeekCode,
-      commissionPercent: commissionPercent || "0",
+      commissionPercent: systemCommissionPercentStr,
     });
     setResetCustomerBusy(false);
     if (!res.ok) {
@@ -1369,7 +1360,7 @@ export function PaymentModalUpdated({
       paymentTimeHm: hm,
       weekCode: weekForSave,
       dollarRate,
-      commissionPercent: commissionPercent || "0",
+      commissionPercent: systemCommissionPercentStr,
       payments,
       includedOrderIds: includedIds,
       draftNameAr: draftCustomer.nameAr.trim() || null,
@@ -1529,20 +1520,14 @@ export function PaymentModalUpdated({
               <span className="payment-modal-rate-strip-lead payment-modal-rate-strip-lead--pct">
                 אחוז עמלה:
               </span>
-              <input
-                type="text"
-                inputMode="decimal"
+              <span
+                className="payment-modal-rate-strip-inp payment-modal-rate-strip-inp--pct payment-modal-rate-strip-inp--ro"
                 dir="ltr"
-                className="payment-modal-rate-strip-inp payment-modal-rate-strip-inp--pct"
-                value={commissionPercent}
-                placeholder="%"
-                onChange={(e) => setCommissionPercent(sanitizePercentInput(e.target.value))}
-                onFocus={(e) => {
-                  if (e.target.value === "0") e.target.select();
-                }}
-                aria-label="אחוז עמלה"
-                title="מוסיף אחוז על סכומי ההזמנה בטבלה (תצוגה בלבד) — לא משנה יתרה/הקצאה/מע״מ"
-              />
+                aria-label="אחוז עמלה במערכת"
+                title="אחוז עמלה גלובלי מהגדרות כספים — לקריאה בלבד"
+              >
+                {systemCommissionPercentStr}%
+              </span>
             </div>
             {loadingCustomer ? <p className="payment-modal-hint payment-modal-hint--top">טוען…</p> : null}
             {loadErr ? <div className="payment-modal-err payment-modal-err--top">{loadErr}</div> : null}
