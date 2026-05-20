@@ -20,29 +20,80 @@ import { validatePaymentCheckLines } from "@/lib/payment-checks";
 import { prisma } from "@/lib/prisma";
 import { allocateNextPaymentCapture } from "@/lib/payment-capture-code";
 import { formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate, parseLocalDateTime } from "@/lib/work-week";
-import { calculatePaymentLine, calculateTotals, type PaymentLine } from "@/lib/payment-updated";
+import {
+  calculatePaymentLine,
+  calculateTotals,
+  normalizePaymentLine,
+  type PaymentLine,
+  type PaymentLineMethod,
+} from "@/lib/payment-updated";
 import { VAT_RATE } from "@/lib/vat";
 import { prismaVatRatePercent } from "@/lib/vat-prisma";
 
 type FlatCheckInsert = { checkNumber: string; dueDate: Date; amount: Prisma.Decimal };
 
+function pushChecks(out: FlatCheckInsert[], checks: PaymentLine["usdChecks"]) {
+  for (const c of checks ?? []) {
+    const ymd = (c.dueDateYmd || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) continue;
+    const n = typeof c.amount === "number" && Number.isFinite(c.amount) ? c.amount : 0;
+    if (n <= 0) continue;
+    out.push({
+      checkNumber: String(c.checkNumber ?? "").trim(),
+      dueDate: parseLocalDate(ymd),
+      amount: new Prisma.Decimal(String(n)).toDecimalPlaces(4, 4),
+    });
+  }
+}
+
 function flattenChecksFromPayments(payments: PaymentLine[]): FlatCheckInsert[] {
   const out: FlatCheckInsert[] = [];
-  for (const p of payments) {
-    if (p.paymentMethod !== "CHECK") continue;
-    for (const c of p.checks ?? []) {
-      const ymd = (c.dueDateYmd || "").trim();
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) continue;
-      const n = typeof c.amount === "number" && Number.isFinite(c.amount) ? c.amount : 0;
-      if (n <= 0) continue;
-      out.push({
-        checkNumber: String(c.checkNumber ?? "").trim(),
-        dueDate: parseLocalDate(ymd),
-        amount: new Prisma.Decimal(String(n)).toDecimalPlaces(4, 4),
-      });
-    }
+  for (const raw of payments) {
+    const p = normalizePaymentLine(raw);
+    if (p.usdPaymentMethod === "CHECK") pushChecks(out, p.usdChecks);
+    if (p.ilsPaymentMethod === "CHECK") pushChecks(out, p.ilsChecks);
+    if (p.paymentMethod === "CHECK") pushChecks(out, p.checks);
   }
   return out;
+}
+
+function mapMethodToPrismaFromLine(method: PaymentLineMethod): PaymentMethod {
+  if (method === "CREDIT") return PaymentMethod.CREDIT;
+  if (method === "BANK_TRANSFER") return PaymentMethod.BANK_TRANSFER;
+  if (method === "CASH") return PaymentMethod.CASH;
+  if (method === "CHECK") return PaymentMethod.CHECK;
+  return PaymentMethod.OTHER;
+}
+
+function summarizeDualMethods(payments: PaymentLine[]): {
+  usdMethod: PaymentMethod | null;
+  ilsMethod: PaymentMethod | null;
+  primaryMethod: PaymentMethod;
+} {
+  const usdMethods = new Set<PaymentMethod>();
+  const ilsMethods = new Set<PaymentMethod>();
+  for (const raw of payments) {
+    const p = normalizePaymentLine(raw);
+    const calc = calculatePaymentLine(p, 1, VAT_RATE);
+    if (calc.finalUsd > 0) usdMethods.add(mapMethodToPrismaFromLine(p.usdPaymentMethod));
+    if (calc.finalIls > 0) ilsMethods.add(mapMethodToPrismaFromLine(p.ilsPaymentMethod));
+  }
+  const usdMethod = usdMethods.size === 1 ? [...usdMethods][0]! : usdMethods.size > 1 ? PaymentMethod.OTHER : null;
+  const ilsMethod = ilsMethods.size === 1 ? [...ilsMethods][0]! : ilsMethods.size > 1 ? PaymentMethod.OTHER : null;
+  const all = new Set([...usdMethods, ...ilsMethods]);
+  const primaryMethod =
+    all.size === 1 ? [...all][0]! : all.size === 0 ? PaymentMethod.CASH : PaymentMethod.OTHER;
+  return { usdMethod, ilsMethod, primaryMethod };
+}
+
+function collectLineNotes(payments: PaymentLine[]): string | null {
+  const notes: string[] = [];
+  for (const raw of payments) {
+    const p = normalizePaymentLine(raw);
+    const t = (p.note ?? p.usdNote ?? p.ilsNote ?? "").trim();
+    if (t) notes.push(t);
+  }
+  return notes.length ? notes.join(" · ") : null;
 }
 
 async function applyPaymentCustomerDraftsIfNeeded(params: {
@@ -71,14 +122,6 @@ async function applyPaymentCustomerDraftsIfNeeded(params: {
     where: { id: params.customerId },
     data,
   });
-}
-
-function mapMethodToPrisma(method: PaymentLine["paymentMethod"]): PaymentMethod {
-  if (method === "CREDIT") return PaymentMethod.CREDIT;
-  if (method === "BANK_TRANSFER") return PaymentMethod.BANK_TRANSFER;
-  if (method === "CASH") return PaymentMethod.CASH;
-  if (method === "CHECK") return PaymentMethod.CHECK;
-  return PaymentMethod.OTHER;
 }
 
 export type PaymentUpdatedSaveInput = {
@@ -244,7 +287,7 @@ export async function savePaymentUpdatedAction(
   if (!Number.isFinite(rateN) || rateN <= 0) return { ok: false, error: "שער דולר חייב להיות חיובי" };
 
   const totals = calculateTotals(form.payments ?? [], rateN, VAT_RATE);
-  if (!Number.isFinite(totals.totalUsd) || totals.totalUsd <= 0) return { ok: false, error: "יש להוסיף תשלום" };
+  if (totals.totalUsd <= 0 && totals.totalIls <= 0) return { ok: false, error: "יש להוסיף סכום בדולר ו/או בשקל" };
 
   const checkValidationErr = validatePaymentCheckLines(form.payments ?? []);
   if (checkValidationErr) return { ok: false, error: checkValidationErr };
@@ -325,23 +368,31 @@ export async function savePaymentUpdatedAction(
   const prioritized =
     form.includedOrderIds === null ? null : new Set((form.includedOrderIds ?? []).filter(Boolean));
 
-  const { byOrderId, unallocatedUsd } = allocatePaymentAcrossOrders(bases, totals.totalUsd, prioritized);
-  const allocationEntries = [...byOrderId.entries()].filter(([, amt]) => amt > ALLOC_EPS);
+  const totalIlsEntered = totals.totalIls;
+  const totalIlsDec =
+    totalIlsEntered > 0 ? new Prisma.Decimal(totalIlsEntered.toFixed(4)) : null;
 
-  if (allocationEntries.length === 0 && !(form.saveSurplusAsCredit && unallocatedUsd > ALLOC_EPS)) {
+  let allocationEntries: [string, number][] = [];
+  let unallocatedUsd = 0;
+  if (totals.totalUsd > ALLOC_EPS) {
+    const alloc = allocatePaymentAcrossOrders(bases, totals.totalUsd, prioritized);
+    unallocatedUsd = alloc.unallocatedUsd;
+    allocationEntries = [...alloc.byOrderId.entries()].filter(([, amt]) => amt > ALLOC_EPS);
+    if (allocationEntries.length === 0 && !(form.saveSurplusAsCredit && unallocatedUsd > ALLOC_EPS)) {
+      return { ok: false, error: "אין יעד להקצאה לסכום הדולר" };
+    }
+    if (unallocatedUsd > ALLOC_EPS && !form.saveSurplusAsCredit) {
+      return {
+        ok: false,
+        error: `התשלום בדולר גבוה ב־${unallocatedUsd.toFixed(2)}$ מהחוב הפתוח — אשרו שמירת עודף כיתרת זכות או הפחיתו את הסכום`,
+      };
+    }
+  } else if (totalIlsEntered <= ALLOC_EPS) {
     return { ok: false, error: "אין יעד להקצאה" };
   }
-  if (unallocatedUsd > ALLOC_EPS && !form.saveSurplusAsCredit) {
-    return {
-      ok: false,
-      error: `התשלום גבוה ב־${unallocatedUsd.toFixed(2)}$ מהחוב הפתוח — אשרו שמירת עודף כיתרת זכות או הפחיתו את הסכום`,
-    };
-  }
 
-  // Payment method on DB row: if all same -> use it, else OTHER.
-  const distinctMethods = new Set(form.payments.map((p) => p.paymentMethod));
-  const payMethodDb =
-    distinctMethods.size === 1 ? mapMethodToPrisma(form.payments[0]!.paymentMethod) : PaymentMethod.OTHER;
+  const { usdMethod, ilsMethod, primaryMethod: payMethodDb } = summarizeDualMethods(form.payments ?? []);
+  const lineNotes = collectLineNotes(form.payments ?? []);
 
   const finalUse = new Prisma.Decimal(String(rateN)).toDecimalPlaces(6, 4);
   const vatRate = prismaVatRatePercent();
@@ -362,24 +413,35 @@ export async function savePaymentUpdatedAction(
   }
 
   const breakdownLines = form.payments.map((p, i) => {
-    const c = calculatePaymentLine(p, rateN, VAT_RATE);
-    const cur = p.currency === "USD" ? "$" : "₪";
-    const note = (p.note || "").trim();
-    return [
-      `#${i + 1} ${cur}${roundMoney2(typeof p.amount === "number" ? p.amount : 0).toFixed(2)} · ${p.vatMode} · ${p.paymentMethod}`,
-      `base=${cur}${c.baseAmount.toFixed(2)} vat=${cur}${c.vatAmount.toFixed(2)} final=${cur}${c.finalAmount.toFixed(2)} → USD=${c.finalUsd.toFixed(2)}`,
-      note ? `note=${note}` : null,
-    ]
-      .filter(Boolean)
-      .join(" | ");
+    const n = normalizePaymentLine(p);
+    const c = calculatePaymentLine(n, rateN, VAT_RATE);
+    const parts: string[] = [`#${i + 1}`];
+    const method = n.paymentMethod ?? n.usdPaymentMethod ?? n.ilsPaymentMethod ?? "CASH";
+    if (c.finalUsd > 0) {
+      parts.push(
+        `USD $${c.finalUsd.toFixed(2)} · ${method}`,
+        `usdBase=$${c.usd.baseAmount.toFixed(2)} usdVat=$${c.usd.vatAmount.toFixed(2)}`,
+      );
+    }
+    if (c.finalIls > 0) {
+      parts.push(
+        `ILS ₪${c.finalIls.toFixed(2)} · ${method}`,
+        `ilsBase=₪${c.ils.baseAmount.toFixed(2)} ilsVat=₪${c.ils.vatAmount.toFixed(2)}`,
+      );
+    }
+    const noteT = (n.note ?? n.usdNote ?? n.ilsNote ?? "").trim();
+    if (noteT) parts.push(`note=${noteT}`);
+    parts.push(`vatMode=${n.vatMode}`);
+    return parts.join(" | ");
   });
 
   const commissionPctLine =
     commissionPctDec.gt(0) ? `אחוז עמלה כללי: ${commissionPctDec.toFixed(2)}%` : null;
 
   const combinedNotes = [
-    "קליטת תשלום מעודכן",
-    `סה״כ USD: ${totals.totalUsd.toFixed(2)} · ₪: ${totals.totalIls.toFixed(2)} · שער: ${finalUse.toFixed(4)} (גלובלי ${finalGlobal.toFixed(4)})`,
+    "קליטת תשלום מעודכן (דו-מטבעי)",
+    lineNotes ? `הערה: ${lineNotes}` : null,
+    `סה״כ דולר: $${totals.totalUsd.toFixed(2)} · סה״כ שקל: ₪${totals.totalIls.toFixed(2)} · שער: ${finalUse.toFixed(4)} (גלובלי ${finalGlobal.toFixed(4)})`,
     `בסיס: ${base.toFixed(4)} · עמלה: ${fee.toFixed(4)}`,
     commissionPctLine,
     ...breakdownLines,
@@ -414,6 +476,8 @@ export async function savePaymentUpdatedAction(
         });
 
         const code = allocIndex === 0 ? primaryCode : null;
+        const isPrimary = allocIndex === 0;
+        const ilsOnRow = isPrimary ? totalIlsDec : null;
 
         const created = await tx.payment.create({
           data: {
@@ -424,21 +488,25 @@ export async function savePaymentUpdatedAction(
             weekCode,
             paymentDate,
             paymentPlace: null,
-            currency: "USD",
+            currency: ilsOnRow && totalIlsEntered > ALLOC_EPS ? "MIXED" : "USD",
             amountUsd: amt,
-            amountIls: totalsRow.totalIlsWithVat,
+            amountIls: ilsOnRow,
             exchangeRate: finalUse,
             vatRate,
             commissionPercent: commissionPctDec,
-            amountWithoutVat: totalsRow.totalIlsWithoutVat,
+            amountWithoutVat: ilsOnRow ? ilsOnRow : totalsRow.totalIlsWithoutVat,
             snapshotBaseDollarRate: totalsRow.snapshotBaseDollarRate,
             snapshotDollarFee: totalsRow.snapshotDollarFee,
             snapshotFinalDollarRate: totalsRow.snapshotFinalDollarRate,
-            totalIlsWithVat: totalsRow.totalIlsWithVat,
-            totalIlsWithoutVat: totalsRow.totalIlsWithoutVat,
-            vatAmount: totalsRow.vatAmount,
+            totalIlsWithVat: ilsOnRow ?? totalsRow.totalIlsWithVat,
+            totalIlsWithoutVat: ilsOnRow ?? totalsRow.totalIlsWithoutVat,
+            vatAmount: ilsOnRow ? null : totalsRow.vatAmount,
             manualDateChanged,
             paymentMethod: payMethodDb,
+            usdPaymentMethod: usdMethod,
+            ilsPaymentMethod: ilsMethod,
+            usdNote: null,
+            ilsNote: null,
             isPaid: true,
             notes: combinedNotes,
             createdById: me.id,
@@ -473,7 +541,7 @@ export async function savePaymentUpdatedAction(
             paymentPlace: null,
             currency: "USD",
             amountUsd: creditUsd,
-            amountIls: creditTotals.totalIlsWithVat,
+            amountIls: null,
             exchangeRate: finalUse,
             vatRate,
             commissionPercent: commissionPctDec,
@@ -486,11 +554,48 @@ export async function savePaymentUpdatedAction(
             vatAmount: creditTotals.vatAmount,
             manualDateChanged,
             paymentMethod: payMethodDb,
+            usdPaymentMethod: usdMethod,
+            ilsPaymentMethod: ilsMethod,
+            usdNote: null,
+            ilsNote: null,
             isPaid: true,
             notes: creditNotes,
             createdById: me.id,
           },
         });
+        savedCount += 1;
+      }
+
+      if (allocationEntries.length === 0 && totalIlsDec && totalIlsEntered > ALLOC_EPS) {
+        const created = await tx.payment.create({
+          data: {
+            paymentCode: primaryCode,
+            paymentNumber: allocated.paymentNumber,
+            orderId: null,
+            customerId: cid,
+            weekCode,
+            paymentDate,
+            paymentPlace: null,
+            currency: "ILS",
+            amountUsd: null,
+            amountIls: totalIlsDec,
+            exchangeRate: finalUse,
+            vatRate,
+            commissionPercent: commissionPctDec,
+            totalIlsWithVat: totalIlsDec,
+            totalIlsWithoutVat: totalIlsDec,
+            manualDateChanged,
+            paymentMethod: payMethodDb,
+            usdPaymentMethod: usdMethod,
+            ilsPaymentMethod: ilsMethod,
+            usdNote: null,
+            ilsNote: null,
+            isPaid: true,
+            notes: combinedNotes,
+            createdById: me.id,
+          },
+        });
+        primaryPaymentId = created.id;
         savedCount += 1;
       }
 

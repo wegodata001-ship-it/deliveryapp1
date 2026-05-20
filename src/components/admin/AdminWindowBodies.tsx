@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
   createClientAction,
@@ -24,6 +25,13 @@ import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
 import { CustomerBalanceView } from "@/components/ui/CustomerBalanceView";
 import { formatCustomerBalanceDisplay, parseBalanceAmountString } from "@/lib/customer-balance";
+import {
+  buildLedgerExportFilename,
+  exportCustomerLedgerExcel,
+  exportCustomerLedgerPdf,
+  ledgerHasExportRows,
+  type CustomerLedgerExportMeta,
+} from "@/lib/customer-ledger-export";
 
 function displayCustomerCode(s: CustomerCardSnapshot): string {
   const c = s.customerCode?.trim();
@@ -142,6 +150,7 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
   const [editMode, setEditMode] = useState(false);
   const [ledgerOrderLock, setLedgerOrderLock] = useState<OrderEditLockGatePayload | null>(null);
   const [ledgerGateToast, setLedgerGateToast] = useState<string | null>(null);
+  const [exportBusy, setExportBusy] = useState<"pdf" | "excel" | null>(null);
   const [fromYmd, setFromYmd] = useState("");
   const [toYmd, setToYmd] = useState("");
   const [form, setForm] = useState({
@@ -361,15 +370,92 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
   const balanceNum = ledger ? parseBalanceAmountString(ledger.balanceUsd) : 0;
   const balanceSummaryView = formatCustomerBalanceDisplay(balanceNum, "USD");
 
+  const exportMeta: CustomerLedgerExportMeta | null = snap
+    ? {
+        displayName: snap.displayName || customerName || "",
+        customerCode: displayCustomerCode(snap),
+        phone: snap.phone,
+        email: snap.email,
+        fromYmd,
+        toYmd,
+      }
+    : null;
+
+  async function runLedgerExport(kind: "pdf" | "excel") {
+    if (exportBusy || ledgerLoading) return;
+    if (!ledger || !exportMeta || !ledgerHasExportRows(ledger)) {
+      setLedgerGateToast("אין נתונים לייצוא");
+      window.setTimeout(() => setLedgerGateToast(null), 3200);
+      return;
+    }
+    setExportBusy(kind);
+    setLedgerGateToast(kind === "pdf" ? "מייצא PDF…" : "מייצא Excel…");
+    try {
+      if (kind === "pdf") await exportCustomerLedgerPdf(exportMeta, ledger);
+      else await exportCustomerLedgerExcel(exportMeta, ledger);
+      setLedgerGateToast(kind === "pdf" ? "PDF הורד בהצלחה" : "Excel הורד בהצלחה");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "ייצוא נכשל";
+      setLedgerGateToast(msg);
+    } finally {
+      setExportBusy(null);
+      window.setTimeout(() => setLedgerGateToast(null), 3200);
+    }
+  }
+
   const ledgerFilters = (
-    <div className="adm-cust-ledger-filters">
-      <div className="adm-field">
-        <label htmlFor="ledger-from">תאריך התחלה</label>
-        <input id="ledger-from" type="date" value={fromYmd} onChange={(e) => setFromYmd(e.target.value)} />
+    <div className="adm-cust-ledger-toolbar">
+      <div className="adm-cust-ledger-filters">
+        <div className="adm-field">
+          <label htmlFor="ledger-from">תאריך התחלה</label>
+          <input id="ledger-from" type="date" value={fromYmd} onChange={(e) => setFromYmd(e.target.value)} />
+        </div>
+        <div className="adm-field">
+          <label htmlFor="ledger-to">תאריך סיום</label>
+          <input id="ledger-to" type="date" value={toYmd} onChange={(e) => setToYmd(e.target.value)} />
+        </div>
       </div>
-      <div className="adm-field">
-        <label htmlFor="ledger-to">תאריך סיום</label>
-        <input id="ledger-to" type="date" value={toYmd} onChange={(e) => setToYmd(e.target.value)} />
+      <div className="adm-cust-ledger-export-actions" role="group" aria-label="ייצוא כרטסת">
+        <button
+          type="button"
+          className="adm-export-btn adm-export-btn--pdf adm-cust-ledger-export-btn"
+          disabled={!!exportBusy || ledgerLoading || !ledgerHasExportRows(ledger)}
+          title={
+            ledgerHasExportRows(ledger)
+              ? `ייצוא PDF · ${buildLedgerExportFilename(exportMeta?.customerCode ?? "customer", "pdf")}`
+              : "אין נתונים לייצוא"
+          }
+          onClick={() => void runLedgerExport("pdf")}
+        >
+          {exportBusy === "pdf" ? (
+            <>
+              <span className="payment-modal-save-spinner" aria-hidden />
+              מייצא PDF…
+            </>
+          ) : (
+            <>PDF · ייצוא PDF</>
+          )}
+        </button>
+        <button
+          type="button"
+          className="adm-export-btn adm-export-btn--excel adm-cust-ledger-export-btn"
+          disabled={!!exportBusy || ledgerLoading || !ledgerHasExportRows(ledger)}
+          title={
+            ledgerHasExportRows(ledger)
+              ? `ייצוא Excel · ${buildLedgerExportFilename(exportMeta?.customerCode ?? "customer", "xlsx")}`
+              : "אין נתונים לייצוא"
+          }
+          onClick={() => void runLedgerExport("excel")}
+        >
+          {exportBusy === "excel" ? (
+            <>
+              <span className="payment-modal-save-spinner" aria-hidden />
+              מייצא Excel…
+            </>
+          ) : (
+            <>Excel · ייצוא Excel</>
+          )}
+        </button>
       </div>
     </div>
   );
@@ -606,7 +692,19 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
                             )}
                           </td>
                           <td dir="ltr">{fmtUsd(r.amountUsd)}</td>
-                          <td dir="ltr">{fmtUsd(r.paidUsd)}</td>
+                          <td dir="ltr">
+                            {r.type === "CHARGE" || r.type === "CREDIT_APPLIED" ? (
+                              fmtUsd(r.paidUsd)
+                            ) : (
+                              <span className="adm-ledger-paid-dual">
+                                {Number(r.paidUsd) > 0 ? <span>{fmtUsd(r.paidUsd)}</span> : null}
+                                {r.paidIls && Number(r.paidIls) > 0 ? (
+                                  <span className="adm-ledger-paid-ils">₪{r.paidIls}</span>
+                                ) : null}
+                                {Number(r.paidUsd) <= 0 && !(r.paidIls && Number(r.paidIls) > 0) ? "—" : null}
+                              </span>
+                            )}
+                          </td>
                           <td dir="ltr">
                             <CustomerBalanceView businessSigned={bal} currency="USD" />
                           </td>
@@ -641,24 +739,31 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
   );
 }
 
+const EMPTY_NEW_CUSTOMER_FORM = {
+  customerCode: "",
+  nameAr: "",
+  nameEn: "",
+  phone: "",
+  email: "",
+  notes: "",
+};
+
 export function CreateCustomerWindowBody() {
   const { closeTop, completeCustomerCreate } = useAdminWindows();
   const nameArRef = useRef<HTMLInputElement>(null);
-  const [form, setForm] = useState({
-    customerCode: "",
-    nameAr: "",
-    nameEn: "",
-    phone: "",
-    email: "",
-    notes: "",
-  });
+  const notesRef = useRef<HTMLTextAreaElement>(null);
+  /** true אחרי שהמשתמש ערך את קוד הלקוח ידנית — לא לדרוס באוטומט */
+  const customerCodeTouchedRef = useRef(false);
+  const [form, setForm] = useState({ ...EMPTY_NEW_CUSTOMER_FORM });
   const [busy, setBusy] = useState(false);
   const [codeBusy, setCodeBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
   const [standaloneDone, setStandaloneDone] = useState<ClientCreateResult | null>(null);
 
-  async function loadSuggestedCode() {
+  async function loadSuggestedCode(opts?: { force?: boolean }) {
     if (codeBusy) return;
+    if (!opts?.force && customerCodeTouchedRef.current) return;
     setCodeBusy(true);
     setErr(null);
     const res = await suggestNextCustomerCodeAction();
@@ -674,37 +779,60 @@ export function CreateCustomerWindowBody() {
     void loadSuggestedCode();
     const t = window.setTimeout(() => nameArRef.current?.focus(), 0);
     return () => window.clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount בלבד
   }, []);
 
-  async function onSave() {
-    if (busy) return;
+  function resetFormForNext() {
+    customerCodeTouchedRef.current = false;
+    setForm({ ...EMPTY_NEW_CUSTOMER_FORM });
     setErr(null);
+  }
+
+  async function performSave(): Promise<ClientCreateResult | null> {
+    if (busy) return null;
+    setErr(null);
+    setSaveSuccessMsg(null);
     if (!form.customerCode.trim()) {
       setErr("יש להזין קוד לקוח");
-      return;
+      return null;
     }
-    if (!form.nameAr.trim() || !form.phone.trim()) {
-      setErr("יש להזין שם ערבית וטלפון");
+    if (!form.nameAr.trim()) {
+      setErr("יש להזין שם ערבית");
       nameArRef.current?.focus();
-      return;
+      return null;
     }
     setBusy(true);
     const res = await createClientAction({
       customerCode: form.customerCode,
       nameAr: form.nameAr,
       nameEn: form.nameEn || null,
-      phone: form.phone,
+      phone: form.phone.trim() || null,
       email: form.email || null,
       notes: form.notes || null,
     });
     setBusy(false);
     if (!res.ok) {
       setErr(res.error);
-      return;
+      return null;
     }
-    const appliedToOrder = completeCustomerCreate(res.client);
-    if (!appliedToOrder) setStandaloneDone(res.client);
+    return res.client;
+  }
+
+  async function onSave() {
+    const client = await performSave();
+    if (!client) return;
+    const appliedToOrder = completeCustomerCreate(client);
+    if (!appliedToOrder) setStandaloneDone(client);
+  }
+
+  async function onSaveAndNew() {
+    const client = await performSave();
+    if (!client) return;
+    setSaveSuccessMsg("לקוח נשמר בהצלחה");
+    resetFormForNext();
+    await loadSuggestedCode({ force: true });
+    window.setTimeout(() => nameArRef.current?.focus(), 0);
+    window.setTimeout(() => setSaveSuccessMsg(null), 3200);
   }
 
   return (
@@ -712,29 +840,38 @@ export function CreateCustomerWindowBody() {
       {!standaloneDone ? (
         <>
           <h3 className="adm-client-create-title">לקוח חדש</h3>
+          {saveSuccessMsg ? <div className="adm-pay-success">{saveSuccessMsg}</div> : null}
           {err ? <div className="adm-error">{err}</div> : null}
           <div className="adm-client-create-grid">
             <div className="adm-field">
               <div className="adm-client-create-label-row">
-                <label htmlFor="new-customer-code">קוד לקוח</label>
+                <label htmlFor="new-customer-code" title="ניתן לשנות ידנית או להשתמש במספר האוטומטי">
+                  קוד לקוח
+                </label>
                 <button
                   type="button"
                   className="adm-client-create-auto-code"
                   disabled={codeBusy || busy}
-                  onClick={() => void loadSuggestedCode()}
+                  title="מייצר מספר פנוי חדש (רק בלחיצה)"
+                  onClick={() => void loadSuggestedCode({ force: true })}
                 >
                   {codeBusy ? "…" : "רענן מספר"}
                 </button>
               </div>
+              <p className="adm-client-create-code-hint" title="ניתן לשנות ידנית או להשתמש במספר האוטומטי">
+                ניתן לשנות ידנית או להשתמש במספר האוטומטי
+              </p>
               <input
                 id="new-customer-code"
                 dir="ltr"
-                placeholder="24001"
+                placeholder="24008"
                 value={form.customerCode}
-                readOnly
-                className="adm-oc-pro-inp--ro"
+                disabled={busy}
                 autoComplete="off"
-                aria-readonly
+                onChange={(e) => {
+                  customerCodeTouchedRef.current = true;
+                  setForm((f) => ({ ...f, customerCode: e.target.value }));
+                }}
               />
             </div>
             <div className="adm-field">
@@ -759,14 +896,14 @@ export function CreateCustomerWindowBody() {
               />
             </div>
             <div className="adm-field">
-              <label htmlFor="new-customer-phone">טלפון</label>
+              <label htmlFor="new-customer-phone">טלפון (אופציונלי)</label>
               <input
                 id="new-customer-phone"
                 dir="ltr"
-                placeholder="050-0000000"
+                placeholder="050-0000000 (אופציונלי)"
                 value={form.phone}
+                disabled={busy}
                 onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
-                required
               />
             </div>
             <div className="adm-field">
@@ -782,17 +919,42 @@ export function CreateCustomerWindowBody() {
             <div className="adm-field adm-client-create-notes">
               <label htmlFor="new-customer-notes">הערות</label>
               <textarea
+                ref={notesRef}
                 id="new-customer-notes"
                 rows={4}
                 placeholder="הערות פנימיות"
                 value={form.notes}
+                disabled={busy}
                 onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter" || e.nativeEvent.isComposing || e.shiftKey) return;
+                  e.preventDefault();
+                  if (!busy) void onSaveAndNew();
+                }}
               />
             </div>
           </div>
           <div className="adm-mini-modal-actions adm-client-create-actions">
-            <button type="button" className="adm-btn adm-btn--primary" disabled={busy} onClick={() => void onSave()}>
-              {busy ? "שומר..." : "שמור"}
+            <button
+              type="button"
+              className="adm-btn adm-btn--primary adm-client-create-save-new"
+              disabled={busy || codeBusy}
+              onClick={() => void onSaveAndNew()}
+            >
+              {busy ? (
+                <>
+                  <span className="payment-modal-save-spinner" aria-hidden />
+                  שומר לקוח…
+                </>
+              ) : (
+                <>
+                  <Plus size={16} strokeWidth={2.5} aria-hidden />
+                  שמור וחדש
+                </>
+              )}
+            </button>
+            <button type="button" className="adm-btn adm-btn--primary" disabled={busy || codeBusy} onClick={() => void onSave()}>
+              {busy ? "שומר לקוח…" : "שמור"}
             </button>
           </div>
         </>
@@ -807,7 +969,9 @@ export function CreateCustomerWindowBody() {
             <div>
               <strong>שם אנגלית:</strong> {standaloneDone.customerNameEn || "—"}
             </div>
-            <div><strong>טלפון:</strong> {standaloneDone.phone}</div>
+            <div>
+              <strong>טלפון:</strong> {standaloneDone.phone?.trim() || "—"}
+            </div>
             <div><strong>אימייל:</strong> {standaloneDone.email || "—"}</div>
           </div>
           <div className="adm-mini-modal-actions">

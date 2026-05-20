@@ -17,7 +17,8 @@
     "db:migrate": "prisma migrate dev",
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
-    "brand:icons": "node scripts/generate-brand-icons.mjs"
+    "brand:icons": "node scripts/generate-brand-icons.mjs",
+    "embed-pdf-fonts": "node scripts/embed-pdf-fonts.mjs"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -26,11 +27,14 @@
     "@prisma/client": "^6.19.3",
     "bcryptjs": "^2.4.3",
     "jose": "^6.2.2",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
     "lucide-react": "^1.9.0",
     "next": "^15.3.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "xlsx-js-style": "^1.2.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",

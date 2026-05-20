@@ -39,18 +39,16 @@ import {
 import { AhWeekNavNextButton, AhWeekNavPrevButton } from "@/components/admin/AhWeekNavButtons";
 import { goToNextWeekNumber, goToPrevWeekNumber } from "@/lib/weeks/ah-week-nav";
 import {
-  calculatePaymentLine,
   calculateTotalBaseIls,
   calculateTotalBaseUsd,
   calculateTotals,
+  createDefaultPaymentLine,
   DEFAULT_VAT_RATE,
   roundMoney2,
   type PaymentLine,
   type PaymentLineCheck,
-  type PaymentLineCurrency,
-  type PaymentLineMethod,
-  type PaymentLineVatMode,
 } from "@/lib/payment-updated";
+import { PaymentLineDualCard } from "@/components/admin/PaymentLineDualCard";
 import { validatePaymentCheckLines } from "@/lib/payment-checks";
 import { formatCommissionPercentValue, parseCommissionPercentString } from "@/lib/commission-percent";
 import {
@@ -59,7 +57,6 @@ import {
   savePaymentUpdatedAction,
 } from "@/app/admin/payments-updated/actions";
 import { CustomerPaymentOverageModal } from "@/components/admin/CustomerPaymentOverageModal";
-import { formatVatPercentLabel } from "@/lib/vat";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import {
   formatIlsDisplay,
@@ -69,7 +66,7 @@ import {
   parseMoneyStringOrZero,
   sanitizeMoneyInput,
 } from "@/lib/money-format";
-import { MoneyInput } from "@/components/ui/MoneyInput";
+import { AnimatedMoneyValue } from "@/components/ui/AnimatedMoneyValue";
 
 const COUNTRY_BADGE_SHORT: Record<OrderCountryCode, string> = {
   TURKEY: "טורקיה",
@@ -234,36 +231,8 @@ function checkFieldMissingAmount(ch: PaymentLineCheck): boolean {
   return !Number.isFinite(a) || a <= 0;
 }
 
-/** ברירת מחדל לשורת תשלום חדשה — סכום כולל מע״מ (לא משנה קליטות שמורות). */
-const DEFAULT_PAYMENT_VAT_MODE: PaymentLineVatMode = "INCLUDING_VAT";
-
-function defaultVatModeForNewLine(): PaymentLineVatMode {
-  return DEFAULT_PAYMENT_VAT_MODE;
-}
-
 function createDefaultLine(): PaymentLine {
-  return {
-    id: newLineId(),
-    amount: "",
-    currency: "USD",
-    vatMode: defaultVatModeForNewLine(),
-    paymentMethod: "CASH",
-    note: "",
-  };
-}
-
-function paymentMethodLabel(m: PaymentLineMethod): string {
-  if (m === "CREDIT") return "אשראי";
-  if (m === "BANK_TRANSFER") return "העברה בנקאית";
-  if (m === "CASH") return "מזומן";
-  if (m === "CHECK") return "צ׳ק";
-  return "אחר";
-}
-
-function vatModeLabel(v: PaymentLineVatMode): string {
-  if (v === "EXEMPT") return "פטור ממע״מ";
-  if (v === "BEFORE_VAT") return "לפני מע״מ (לא כולל)";
-  return "כולל מע״מ";
+  return createDefaultPaymentLine(newLineId());
 }
 
 type Props = {
@@ -384,8 +353,10 @@ export function PaymentModalUpdated({
   const [customerCodeEnterBusy, setCustomerCodeEnterBusy] = useState(false);
   const [orderEditId, setOrderEditId] = useState<string | null>(null);
 
-  /** קליטה שנטענה מ־GET /api/payments/entry או מעטפת קליטה חדשה — קוד מוצג מיד, עדכון מהשרת ברקע */
+  /** קליטה שנטענה מ־GET /api/payments/entry או מעטפת קליטה חדשה */
   const [loadedPayment, setLoadedPayment] = useState<PaymentEntryResponse>(() => createNewCaptureLoadedPayment(""));
+  /** קוד תשלום לתצוגה בלבד — נטען ברקע, לא מעדכן את loadedPayment (מונע remount / איבוד פוקוס) */
+  const [previewPaymentCode, setPreviewPaymentCode] = useState<string | null>(null);
   const [paymentCodePreviewPending, setPaymentCodePreviewPending] = useState(true);
   const [paymentDateYmd, setPaymentDateYmd] = useState(() => {
     const today = new Date();
@@ -449,7 +420,6 @@ export function PaymentModalUpdated({
 
   const totals = useMemo(() => calculateTotals(payments, rateN, DEFAULT_VAT_RATE), [payments, rateN]);
 
-  /** כרטיס ירוק: מספר ראשי = בסיס לפני מע״מ (נטו), לא סכום ברוטו אחרי מע״מ */
   const stickyBaseTotals = useMemo(
     () => ({
       usd: calculateTotalBaseUsd(payments, rateN, DEFAULT_VAT_RATE),
@@ -457,6 +427,7 @@ export function PaymentModalUpdated({
     }),
     [payments, rateN],
   );
+
   const currentDraftSig = useMemo(
     () =>
       JSON.stringify({
@@ -493,13 +464,20 @@ export function PaymentModalUpdated({
     return id;
   }, [loadedPayment?.id]);
 
+  const displayedPaymentCode = useMemo(() => {
+    const id = loadedPayment?.id?.trim();
+    if (id && id !== NEW_CAPTURE_ROW_ID) {
+      return (loadedPayment?.paymentCode ?? "").trim();
+    }
+    return (previewPaymentCode ?? "").trim();
+  }, [loadedPayment?.id, loadedPayment?.paymentCode, previewPaymentCode]);
+
   const currentPaymentNavigationQuery = useMemo(() => {
-    const code = loadedPayment?.paymentCode?.trim();
-    if (code) {
-      return `currentPaymentCode=${encodeURIComponent(code)}`;
+    if (displayedPaymentCode) {
+      return `currentPaymentCode=${encodeURIComponent(displayedPaymentCode)}`;
     }
     return null;
-  }, [loadedPayment?.paymentCode]);
+  }, [displayedPaymentCode]);
 
   /** ניווט prev/next — טעינה ברקע בלבד, לא חוסם את הטופס */
   useEffect(() => {
@@ -636,23 +614,38 @@ export function PaymentModalUpdated({
     void previewPaymentCodeForCaptureAction().then((pr) => {
       setPaymentCodePreviewPending(false);
       if (pr.ok) {
-        setLoadedPayment((prev) => {
-          const base = prev?.id === NEW_CAPTURE_ROW_ID ? prev : createNewCaptureLoadedPayment("");
-          return { ...base, paymentCode: pr.code };
-        });
+        setPreviewPaymentCode(pr.code);
         setSaveErr(null);
       } else {
+        setPreviewPaymentCode(null);
         setSaveErr(pr.error);
       }
     });
   }, []);
 
   const focusCustomerCodeInput = useCallback(() => {
-    customerCodeInputRef.current?.focus();
+    const el = customerCodeInputRef.current;
+    if (!el) return;
+    el.focus();
   }, []);
 
   const focusFirstAmountInput = useCallback(() => {
-    window.setTimeout(() => firstAmountInputRef.current?.focus(), 0);
+    window.setTimeout(() => {
+      const el = firstAmountInputRef.current;
+      if (!el) return;
+      el.focus();
+      try {
+        el.select();
+      } catch {
+        /* ignore */
+      }
+    }, 0);
+  }, []);
+
+  const focusSavePrimaryButton = useCallback(() => {
+    window.setTimeout(() => {
+      (savePrimaryButtonRef.current ?? saveAndNewButtonRef.current)?.focus();
+    }, 0);
   }, []);
 
   const loadCustomerOrders = useCallback(
@@ -753,9 +746,11 @@ export function PaymentModalUpdated({
     setCustDdOpen(true);
   }, []);
 
+  /** פוקוס לקוד לקוח בפתיחה — פעם אחת; לא חוזר אחרי טעינת קוד תשלום ברקע */
   useLayoutEffect(() => {
     focusCustomerCodeInput();
-  }, [focusCustomerCodeInput]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional mount-only
+  }, []);
 
   async function resolveCustomerFromCodeFieldEnter() {
     const q = draftCustomerRef.current.code.trim();
@@ -847,6 +842,7 @@ export function PaymentModalUpdated({
     setSaveErr(null);
     setHighlightInvalidCheckFields(false);
     setLoadedPayment(createNewCaptureLoadedPayment(""));
+    setPreviewPaymentCode(null);
     setPaymentCodePreviewPending(true);
     setPaymentNavAvailable({ prev: null, next: null });
     baselineSigRef.current = "";
@@ -880,6 +876,7 @@ export function PaymentModalUpdated({
     }
 
     setLoadedPayment(snap);
+    setPreviewPaymentCode(snap.paymentCode?.trim() || null);
     setPaymentCodePreviewPending(false);
     setPaymentTimeHm(snap.paymentTimeHm);
     if (snap.dollarRate?.trim()) setDollarRate(snap.dollarRate.trim());
@@ -1032,7 +1029,14 @@ export function PaymentModalUpdated({
           const rem = Number(ctx.data.remainingUsd.replace(",", "."));
           const empty = payments.length === 1 && payments[0] && payments[0].amount === "";
           if (Number.isFinite(rem) && rem > 0.01 && empty) {
-            setPayments([{ ...createDefaultLine(), amount: rem, currency: "USD", note: `סגירת חיוב הזמנה ${onum}` }]);
+            setPayments([
+              {
+                ...createDefaultLine(),
+                usdAmount: rem,
+                usdPaymentMethod: "CASH",
+                usdNote: `סגירת חיוב הזמנה ${onum}`,
+              },
+            ]);
           }
         }
       } else if (cid) {
@@ -1070,10 +1074,11 @@ export function PaymentModalUpdated({
     setNavSpinDirection(null);
     setNavUnsavedOpen(null);
     setPaymentNavAvailable({ prev: null, next: null });
+    setPreviewPaymentCode(null);
     setLoadedPayment(createNewCaptureLoadedPayment(""));
     refreshPaymentCodePreview();
     syncBaselineSoon();
-    focusCustomerCodeInput();
+    window.setTimeout(() => focusCustomerCodeInput(), 0);
   }, [resetOnKey, financial, refreshPaymentCodePreview, focusCustomerCodeInput]);
 
   useEffect(() => {
@@ -1296,10 +1301,9 @@ export function PaymentModalUpdated({
     if (remUsd <= 0.01) return;
     const onum = row.orderNumber ?? row.id.slice(0, 8);
     addPaymentLine({
-      amount: remUsd,
-      currency: "USD",
-      paymentMethod: "CASH",
-      note: `סגירת חיוב הזמנה ${onum}`,
+      usdAmount: remUsd,
+      usdPaymentMethod: "CASH",
+      usdNote: `סגירת חיוב הזמנה ${onum}`,
     });
     onToast("נוסף תשלום מסגירת חיוב (ללא שמירה)");
   }
@@ -1316,8 +1320,8 @@ export function PaymentModalUpdated({
       setSaveErr("יש לבחור לקוח");
       return { ok: false };
     }
-    if (totals.totalUsd <= 0) {
-      setSaveErr("יש להוסיף תשלום");
+    if (totals.totalUsd <= 0 && totals.totalIls <= 0) {
+      setSaveErr("יש להוסיף סכום בדולר ו/או בשקל");
       return { ok: false };
     }
     if (rateN <= 0) {
@@ -1332,11 +1336,12 @@ export function PaymentModalUpdated({
     }
     const { byOrderId, unallocatedUsd } = allocatePaymentAcrossOrders(bases, totals.totalUsd, prioritizedSet);
     const hasAlloc = [...byOrderId.values()].some((v) => v > 0.02);
-    if (!hasAlloc && !(saveSurplusAsCredit && unallocatedUsd > 0.02)) {
+    const ilsOnly = totals.totalUsd <= 0.02 && totals.totalIls > 0.02;
+    if (!hasAlloc && !ilsOnly && !(saveSurplusAsCredit && unallocatedUsd > 0.02)) {
       setSaveErr("אין יעד להקצאה");
       return { ok: false };
     }
-    if (unallocatedUsd > 0.02 && !saveSurplusAsCredit) {
+    if (totals.totalUsd > 0.02 && unallocatedUsd > 0.02 && !saveSurplusAsCredit) {
       const prev = await previewCustomerPaymentOverageAction({
         customerId: customer.id,
         totalPaymentUsd: totals.totalUsd,
@@ -1481,7 +1486,7 @@ export function PaymentModalUpdated({
     return "payment-modal-tr--status-unpaid";
   }
 
-  const paymentCaptureNavLabel = (loadedPayment?.paymentCode ?? "").trim();
+  const paymentCaptureNavLabel = displayedPaymentCode;
   const navArrowsDisabled = saveBusy || isNavigating || !currentPaymentNavigationQuery;
   const prevPaymentNavDisabled = navArrowsDisabled || paymentNavAvailable.prev === false;
   const nextPaymentNavDisabled = navArrowsDisabled || paymentNavAvailable.next === false;
@@ -1497,15 +1502,7 @@ export function PaymentModalUpdated({
     <>
       <div className="payment-modal">
         <div className="payment-modal-split payment-layout">
-          <div
-            key={
-              loadedPayment
-                ? `${loadedPayment.id || NEW_CAPTURE_ROW_ID}:${loadedPayment.paymentCode ?? ""}`
-                : "pending"
-            }
-            className="payment-modal-main payment-table"
-            dir="rtl"
-          >
+          <div className="payment-modal-main payment-table" dir="rtl">
             <div className="payment-modal-rate-strip" dir="rtl">
               <span className="payment-modal-rate-strip-lead">שער דולר:</span>
               <input
@@ -1978,18 +1975,22 @@ export function PaymentModalUpdated({
               <div className="payment-modal-orders-summary payment-modal-orders-summary--v2" role="region" aria-label="סיכום עסקאות לקוח" dir="rtl">
                 <div className="payment-modal-orders-summary-card payment-modal-orders-summary-card--txn">
                   <div className="payment-modal-orders-summary-lbl">סך הכל עסקאות</div>
-                  <div className="payment-modal-orders-summary-val" dir="ltr">
-                    {fmtFooterAmount(ordersTableFooterTotals.totalTransactions)}
-                  </div>
+                  <AnimatedMoneyValue
+                    className="payment-modal-orders-summary-val"
+                    dir="ltr"
+                    value={fmtFooterAmount(ordersTableFooterTotals.totalTransactions)}
+                  />
                   <div className="payment-modal-orders-summary-ex-vat" dir="ltr">
                     ללא מע״מ: {fmtFooterAmount(roundMoney2(ordersTableFooterTotals.totalTransactions / (1 + DEFAULT_VAT_RATE)))}
                   </div>
                 </div>
                 <div className="payment-modal-orders-summary-card payment-modal-orders-summary-card--paid">
                   <div className="payment-modal-orders-summary-lbl">סכום שולם</div>
-                  <div className="payment-modal-orders-summary-val" dir="ltr">
-                    {fmtFooterAmount(ordersTableFooterTotals.totalPaidDb)}
-                  </div>
+                  <AnimatedMoneyValue
+                    className="payment-modal-orders-summary-val"
+                    dir="ltr"
+                    value={fmtFooterAmount(ordersTableFooterTotals.totalPaidDb)}
+                  />
                 </div>
                 <div className="payment-modal-orders-summary-card payment-modal-orders-summary-card--rem">
                   <div className="payment-modal-orders-summary-lbl payment-modal-orders-summary-lbl--with-action">
@@ -2035,9 +2036,13 @@ export function PaymentModalUpdated({
                       </button>
                     ) : null}
                   </div>
-                  <div className="payment-modal-orders-summary-val" dir="ltr">
-                    {fmtFooterAmount(roundMoney2(Math.max(0, ordersTableFooterTotals.remaining - totals.totalUsd)))}
-                  </div>
+                  <AnimatedMoneyValue
+                    className="payment-modal-orders-summary-val"
+                    dir="ltr"
+                    value={fmtFooterAmount(
+                      roundMoney2(Math.max(0, ordersTableFooterTotals.remaining - totals.totalUsd)),
+                    )}
+                  />
                   {totals.totalUsd > 0 ? (
                     <div className="payment-modal-preview-delta" dir="ltr">
                       − {fmtFooterAmount(roundMoney2(totals.totalUsd))} (תשלום נוכחי)
@@ -2074,8 +2079,13 @@ export function PaymentModalUpdated({
                         {paymentCaptureNavLabel}
                       </div>
                     ) : paymentCodePreviewPending ? (
-                      <div className="payment-nav-code payment-modal-code-pending" dir="ltr" aria-busy="true">
-                        …
+                      <div
+                        className="payment-nav-code payment-modal-code-pending"
+                        dir="ltr"
+                        aria-busy="true"
+                        title="טוען קוד תשלום"
+                      >
+                        טוען קוד תשלום…
                       </div>
                     ) : (
                       <div className="payment-nav-code" dir="ltr">
@@ -2134,283 +2144,32 @@ export function PaymentModalUpdated({
 
                 <div className="payment-upd-lines" aria-label="תשלומים שנוספו">
                   {payments.map((p, idx) => {
-                    const calc = calculatePaymentLine(p, rateN, DEFAULT_VAT_RATE);
-                    const amountNum = p.amount === "" ? null : p.amount;
-                    const cur: PaymentLineCurrency = p.currency;
-                    const currSym = cur === "USD" ? "$" : "₪";
-                    /**
-                     * "תשלום N" — מספר הסידור משקף את סדר ההוספה
-                     * (התשלום החדש מוצג ראשון אך מסומן בערך הגבוה ביותר).
-                     * idx=0 (החדש ביותר) = payments.length, ידוע ככזה.
-                     */
                     const ordinal = payments.length - idx;
                     const isLatest = idx === 0;
                     return (
-                      <div
+                      <PaymentLineDualCard
                         key={p.id}
-                        className={`payment-upd-linecard${isLatest ? " payment-upd-linecard--latest" : ""}`}
-                      >
-                        <div className="payment-upd-linecard-head">
-                          <div className="payment-upd-linecard-title">
-                            תשלום {ordinal}
-                            {isLatest ? <span className="payment-upd-linecard-tag">חדש</span> : null}
-                          </div>
-                          <button type="button" className="payment-upd-del" aria-label="מחיקת תשלום" onClick={() => removePaymentLine(p.id)}>
-                            ✕
-                          </button>
-                        </div>
-
-                        <div className="payment-upd-grid">
-                          <label className="payment-modal-lbl payment-upd-lbl">
-                            סכום
-                            <MoneyInput
-                              ref={idx === 0 ? firstAmountInputRef : undefined}
-                              className="payment-modal-inp payment-modal-inp--num payment-modal-inp--amount"
-                              value={amountNum}
-                              onChange={(n) => {
-                                if (n == null) updatePaymentLine(p.id, { amount: "" });
-                                else updatePaymentLine(p.id, { amount: n });
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
-                                e.preventDefault();
-                                if (idx !== 0) return;
+                        line={p}
+                        ordinal={ordinal}
+                        isLatest={isLatest}
+                        rateN={rateN}
+                        highlightInvalidChecks={highlightInvalidCheckFields}
+                        firstAmountInputRef={idx === 0 ? firstAmountInputRef : undefined}
+                        onUpdate={(patch) => updatePaymentLine(p.id, patch)}
+                        onRemove={() => removePaymentLine(p.id)}
+                        onEnterInFirstAmount={
+                          idx === 0
+                            ? () => {
                                 if (saveBusy) return;
                                 if (!customer) {
-                                  customerCodeInputRef.current?.focus();
+                                  focusCustomerCodeInput();
                                   return;
                                 }
-                                window.setTimeout(() => {
-                                  (saveAndNewButtonRef.current ?? savePrimaryButtonRef.current)?.focus();
-                                }, 0);
-                              }}
-                            />
-                          </label>
-                          <label className="payment-modal-lbl payment-upd-lbl">
-                            מטבע
-                            <select
-                              className="payment-modal-inp"
-                              value={p.currency}
-                              onChange={(e) => updatePaymentLine(p.id, { currency: e.target.value as PaymentLineCurrency })}
-                            >
-                              <option value="ILS">₪ שקלים</option>
-                              <option value="USD">$ דולרים</option>
-                            </select>
-                          </label>
-                          <label className="payment-modal-lbl payment-upd-lbl">
-                            מע״מ
-                            <select
-                              className="payment-modal-inp"
-                              value={p.vatMode}
-                              onChange={(e) => updatePaymentLine(p.id, { vatMode: e.target.value as PaymentLineVatMode })}
-                            >
-                              <option value="INCLUDING_VAT">{vatModeLabel("INCLUDING_VAT")}</option>
-                              <option value="BEFORE_VAT">{vatModeLabel("BEFORE_VAT")}</option>
-                              <option value="EXEMPT">{vatModeLabel("EXEMPT")}</option>
-                            </select>
-                          </label>
-                          <label className="payment-modal-lbl payment-upd-lbl">
-                            צורת תשלום
-                            <select
-                              className="payment-modal-inp"
-                              value={p.paymentMethod}
-                              onChange={(e) => {
-                                const nextMethod = e.target.value as PaymentLineMethod;
-                                const patch: Partial<PaymentLine> = {
-                                  paymentMethod: nextMethod,
-                                };
-                                if (nextMethod === "CHECK") {
-                                  patch.checks =
-                                    p.checks && p.checks.length > 0 ? p.checks : [emptyCheckRow()];
-                                } else {
-                                  patch.checks = undefined;
-                                }
-                                updatePaymentLine(p.id, patch);
-                              }}
-                            >
-                              <option value="CREDIT">{paymentMethodLabel("CREDIT")}</option>
-                              <option value="BANK_TRANSFER">{paymentMethodLabel("BANK_TRANSFER")}</option>
-                              <option value="CASH">{paymentMethodLabel("CASH")}</option>
-                              <option value="CHECK">{paymentMethodLabel("CHECK")}</option>
-                              <option value="OTHER">{paymentMethodLabel("OTHER")}</option>
-                            </select>
-                          </label>
-                          {p.paymentMethod === "CHECK" ? (
-                            <div className="payment-upd-checks" dir="rtl">
-                              <div className="payment-upd-checks-header">
-                                <span className="payment-upd-checks-header-icon" aria-hidden>
-                                  💳
-                                </span>
-                                <span className="payment-upd-checks-header-title">פרטי צ׳יקים</span>
-                              </div>
-                              {(p.checks?.length ?? 0) === 0 ? (
-                                <button
-                                  type="button"
-                                  className="payment-upd-check-add-row"
-                                  onClick={() => updatePaymentLine(p.id, { checks: [emptyCheckRow()] })}
-                                >
-                                  + הוסף צ׳יק נוסף
-                                </button>
-                              ) : (
-                                <>
-                                  <div className="payment-upd-check-cards">
-                                    {p.checks!.map((ch, chi) => (
-                                      <div className="payment-upd-check-card" key={ch.id}>
-                                        <div className="payment-upd-check-card-head">
-                                          <span className="payment-upd-check-card-title">צ׳יק #{chi + 1}</span>
-                                          {p.checks!.length > 1 ? (
-                                            <button
-                                              type="button"
-                                              className="payment-upd-check-card-remove"
-                                              aria-label="הסר צ׳יק"
-                                              onClick={() => removePaymentLineCheck(p.id, ch.id)}
-                                            >
-                                              ✕
-                                            </button>
-                                          ) : null}
-                                        </div>
-                                        <div className="payment-upd-check-card-body">
-                                          <label className="payment-upd-check-field">
-                                            <span className="payment-upd-check-field-lbl">מס׳ צ׳יק</span>
-                                            <input
-                                              type="text"
-                                              inputMode="numeric"
-                                              dir="ltr"
-                                              className={[
-                                                "payment-upd-check-inp",
-                                                highlightInvalidCheckFields && checkFieldMissingNumber(ch)
-                                                  ? "payment-upd-check-inp--err"
-                                                  : "",
-                                              ]
-                                                .filter(Boolean)
-                                                .join(" ")}
-                                              value={ch.checkNumber}
-                                              onChange={(e) =>
-                                                updatePaymentLineCheck(p.id, ch.id, {
-                                                  checkNumber: sanitizeCheckNumberInput(e.target.value),
-                                                })
-                                              }
-                                              autoComplete="off"
-                                            />
-                                          </label>
-                                          <label className="payment-upd-check-field">
-                                            <span className="payment-upd-check-field-lbl">תאריך פרעון</span>
-                                            <input
-                                              type="date"
-                                              dir="ltr"
-                                              className={[
-                                                "payment-upd-check-inp payment-upd-check-inp--date",
-                                                highlightInvalidCheckFields && checkFieldMissingDue(ch)
-                                                  ? "payment-upd-check-inp--err"
-                                                  : "",
-                                              ]
-                                                .filter(Boolean)
-                                                .join(" ")}
-                                              value={ch.dueDateYmd}
-                                              onChange={(e) =>
-                                                updatePaymentLineCheck(p.id, ch.id, { dueDateYmd: e.target.value })
-                                              }
-                                            />
-                                          </label>
-                                          <label className="payment-upd-check-field">
-                                            <span className="payment-upd-check-field-lbl">סכום צ׳יק</span>
-                                            <input
-                                              type="text"
-                                              inputMode="decimal"
-                                              dir="ltr"
-                                              className={[
-                                                "payment-upd-check-inp",
-                                                highlightInvalidCheckFields && checkFieldMissingAmount(ch)
-                                                  ? "payment-upd-check-inp--err"
-                                                  : "",
-                                              ]
-                                                .filter(Boolean)
-                                                .join(" ")}
-                                              value={ch.amount === "" ? "" : String(ch.amount)}
-                                              onChange={(e) => {
-                                                const raw = sanitizeMoneyInput(e.target.value);
-                                                if (!raw) updatePaymentLineCheck(p.id, ch.id, { amount: "" });
-                                                else updatePaymentLineCheck(p.id, ch.id, { amount: Number(raw) });
-                                              }}
-                                            />
-                                          </label>
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                  <button
-                                    type="button"
-                                    className="payment-upd-check-add-row"
-                                    onClick={() => addPaymentLineCheck(p.id)}
-                                  >
-                                    + הוסף צ׳יק נוסף
-                                  </button>
-                                  <div className="payment-upd-checks-summary" dir="rtl">
-                                    <span className="payment-upd-checks-summary-lbl">סה״כ צ׳יקים</span>
-                                    <span className="payment-upd-checks-summary-val" dir="ltr">
-                                      {currSym} {fmtFooterAmount(
-                                        roundMoney2(
-                                          p.checks!.reduce((acc, c) => {
-                                            const n =
-                                              typeof c.amount === "number" && Number.isFinite(c.amount)
-                                                ? c.amount
-                                                : 0;
-                                            return acc + n;
-                                          }, 0),
-                                        ),
-                                      )}
-                                    </span>
-                                  </div>
-                                </>
-                              )}
-                            </div>
-                          ) : null}
-                          <label className="payment-modal-lbl payment-upd-lbl payment-upd-lbl--full">
-                            הערה
-                            <input
-                              type="text"
-                              className="payment-modal-inp"
-                              value={p.note ?? ""}
-                              onChange={(e) => updatePaymentLine(p.id, { note: e.target.value })}
-                              placeholder="הערה קצרה…"
-                            />
-                          </label>
-                        </div>
-
-                        <div className="payment-upd-calc" dir="rtl" aria-live="polite">
-                          <div className="payment-upd-calc-row">
-                            <span>הזן</span>
-                            <span dir="ltr">
-                              {currSym} {fmtFooterAmount(typeof p.amount === "number" ? p.amount : 0)}
-                            </span>
-                          </div>
-                          <div className="payment-upd-calc-row">
-                            <span>בסיס לפני מע״מ</span>
-                            <span dir="ltr">
-                              {currSym} {fmtFooterAmount(calc.baseAmount)}
-                            </span>
-                          </div>
-                          <div className="payment-upd-calc-row">
-                            <span>{formatVatPercentLabel()}</span>
-                            <span dir="ltr">
-                              {currSym} {fmtFooterAmount(calc.vatAmount)}
-                            </span>
-                          </div>
-                          <div
-                            className="payment-upd-calc-row payment-upd-calc-row--net"
-                            title="סכום לתשלום אחרי מע״מ (במטבע השורה)"
-                          >
-                            <span>סכום סופי לתשלום</span>
-                            <span dir="ltr">
-                              {currSym} {fmtFooterAmount(calc.finalAmount)}
-                            </span>
-                          </div>
-                          <div className="payment-upd-calc-row payment-upd-calc-row--usd">
-                            <span>סכום סופי בדולר</span>
-                            <span dir="ltr">{fmtUsdDisplay(calc.finalUsd)}</span>
-                          </div>
-                        </div>
-                      </div>
+                                focusSavePrimaryButton();
+                              }
+                            : undefined
+                        }
+                      />
                     );
                   })}
                 </div>

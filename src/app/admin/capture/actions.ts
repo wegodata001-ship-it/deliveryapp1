@@ -20,7 +20,6 @@ import { prismaVatRatePercent } from "@/lib/vat-prisma";
 import { computeCustomerNamePatches, primaryCustomerDisplayName } from "@/lib/customer-names";
 import {
   isCustomerCodeTaken,
-  isNumericCustomerCode,
   normalizeCustomerCodeInput,
   suggestNextCustomerCode,
 } from "@/lib/customer-code";
@@ -988,6 +987,7 @@ export type CustomerCardSnapshot = {
   nameEn: string | null;
   customerCode: string | null;
   phone: string | null;
+  email: string | null;
   secondPhone: string | null;
   city: string | null;
   address: string | null;
@@ -1003,6 +1003,8 @@ export type CustomerLedgerRow = {
   type: "CHARGE" | "PAYMENT" | "CREDIT_STORED" | "CREDIT_APPLIED";
   amountUsd: string;
   paidUsd: string;
+  /** תשלום בשקל — נפרד מדולר */
+  paidIls?: string | null;
   balanceUsd: string;
   document: string;
 };
@@ -1019,7 +1021,8 @@ export type ClientCreateInput = {
   /** שם ערבית — שדה ראשי */
   nameAr: string;
   nameEn?: string | null;
-  phone: string;
+  /** אופציונלי */
+  phone?: string | null;
   email?: string | null;
   notes?: string | null;
 };
@@ -1032,7 +1035,7 @@ export type ClientCreateResult = {
   customerNameEn: string | null;
   /** תאימות — שם תצוגה (= nameAr) */
   name: string;
-  phone: string;
+  phone: string | null;
   email: string | null;
   createdAt: string;
 };
@@ -1077,15 +1080,11 @@ export async function createClientAction(
   const customerCode = normalizeCustomerCodeInput(input.customerCode);
   const nameAr = input.nameAr.trim();
   const nameEn = input.nameEn?.trim() || null;
-  const phone = input.phone.trim();
+  const phone = input.phone?.trim() || null;
   const email = input.email?.trim() || null;
   const notes = input.notes?.trim() || null;
   if (!customerCode) return { ok: false, error: "יש להזין קוד לקוח" };
-  if (!isNumericCustomerCode(customerCode)) {
-    return { ok: false, error: "קוד לקוח חייב להיות מספר בלבד (למשל 24001)" };
-  }
   if (!nameAr) return { ok: false, error: "שם ערבית חובה" };
-  if (!phone) return { ok: false, error: "טלפון חובה" };
 
   if (await isCustomerCodeTaken(customerCode)) {
     return { ok: false, error: "קוד לקוח כבר קיים במערכת" };
@@ -1124,7 +1123,7 @@ export async function createClientAction(
       customerNameAr: ar,
       customerNameEn: en,
       name: ar,
-      phone: created.phone ?? phone,
+      phone: created.phone ?? phone ?? null,
       email: created.email,
       createdAt: created.createdAt.toISOString(),
     },
@@ -1240,6 +1239,7 @@ export async function getCustomerCardSnapshotAction(customerId: string): Promise
       nameEn: true,
       customerCode: true,
       phone: true,
+      email: true,
       secondPhone: true,
       city: true,
       address: true,
@@ -1276,6 +1276,7 @@ export async function getCustomerCardSnapshotAction(customerId: string): Promise
     nameEn: cust.nameEn,
     customerCode: cust.customerCode,
     phone: cust.phone,
+    email: cust.email,
     secondPhone: cust.secondPhone,
     city: cust.city,
     address: cust.address,
@@ -1387,6 +1388,7 @@ export async function getCustomerLedgerAction(params: {
     date: Date;
     type: CustomerLedgerRow["type"];
     amount: Prisma.Decimal;
+    ilsAmount: Prisma.Decimal | null;
     document: string;
   }> = [
     ...orders.map((o) => ({
@@ -1394,6 +1396,7 @@ export async function getCustomerLedgerAction(params: {
       date: o.orderDate ?? new Date(0),
       type: "CHARGE" as const,
       amount: o.totalUsd ?? new Prisma.Decimal(0),
+      ilsAmount: null,
       document: o.orderNumber ?? "הזמנה",
     })),
     ...orders
@@ -1403,17 +1406,23 @@ export async function getCustomerLedgerAction(params: {
         date: o.orderDate ?? new Date(0),
         type: "CREDIT_APPLIED" as const,
         amount: o.debtWithdrawalUsd!,
+        ilsAmount: null,
         document: `קיזוז זכות · ${o.orderNumber ?? "הזמנה"}`,
       })),
     ...payments.map((p) => {
       const isCredit = p.orderId == null;
       const payType: CustomerLedgerRow["type"] = isCredit ? "CREDIT_STORED" : "PAYMENT";
+      const ilsAmt = p.amountIls && p.amountIls.gt(0) ? p.amountIls : null;
+      const docParts = [isCredit ? "יתרת זכות ללקוח" : p.paymentCode ?? "תשלום"];
+      if (p.amountUsd && p.amountUsd.gt(0)) docParts.push(`$${p.amountUsd.toFixed(2)}`);
+      if (ilsAmt) docParts.push(`₪${ilsAmt.toFixed(2)}`);
       return {
         id: `p-${p.id}`,
         date: p.paymentDate ?? new Date(0),
         type: payType,
         amount: paymentUsdEquivalentForLedger(p),
-        document: isCredit ? "יתרת זכות ללקוח" : p.paymentCode ?? "תשלום",
+        ilsAmount: ilsAmt,
+        document: docParts.join(" · "),
       };
     }),
   ].sort((a, b) => a.date.getTime() - b.date.getTime() || a.id.localeCompare(b.id));
@@ -1431,6 +1440,7 @@ export async function getCustomerLedgerAction(params: {
         type: ev.type,
         amountUsd: ev.amount.toFixed(2),
         paidUsd: "0.00",
+        paidIls: null,
         balanceUsd: balance.toFixed(2),
         document: ev.document,
       };
@@ -1439,12 +1449,17 @@ export async function getCustomerLedgerAction(params: {
     if (ev.type === "PAYMENT" || ev.type === "CREDIT_STORED") {
       totalPayments = totalPayments.add(ev.amount);
     }
+    const paidIls =
+      ev.ilsAmount && ev.ilsAmount.gt(0) && (ev.type === "PAYMENT" || ev.type === "CREDIT_STORED")
+        ? ev.ilsAmount.toFixed(2)
+        : null;
     return {
       id: ev.id,
       dateYmd: ev.date.getTime() > 0 ? formatLocalYmd(ev.date) : "—",
       type: ev.type,
       amountUsd: ev.amount.toFixed(2),
       paidUsd: ev.type === "CREDIT_APPLIED" ? "0.00" : ev.amount.toFixed(2),
+      paidIls,
       balanceUsd: balance.toFixed(2),
       document: ev.document,
     };

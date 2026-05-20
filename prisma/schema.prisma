@@ -312,6 +312,12 @@ model Payment {
   vatAmount                Decimal? @db.Decimal(19, 4)
   manualDateChanged        Boolean  @default(false)
   paymentMethod    PaymentMethod?
+  /** צורת תשלום בדולר (כאשר יש amountUsd) — תאימות לקליטה דו-מטבעית */
+  usdPaymentMethod PaymentMethod?
+  /** צורת תשלום בשקל (כאשר יש amountIls) */
+  ilsPaymentMethod PaymentMethod?
+  usdNote          String?
+  ilsNote          String?
   paymentPlace     String?
   isPaid           Boolean        @default(false)
   proofFileUrl     String?

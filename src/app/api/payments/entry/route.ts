@@ -1,5 +1,12 @@
 import { NextResponse } from "next/server";
-import type { PaymentLine, PaymentLineCurrency, PaymentLineMethod, PaymentLineVatMode } from "@/lib/payment-updated";
+import type { PaymentMethod } from "@prisma/client";
+import {
+  createDefaultPaymentLine,
+  type PaymentLine,
+  type PaymentLineCurrency,
+  type PaymentLineMethod,
+  type PaymentLineVatMode,
+} from "@/lib/payment-updated";
 import { getSessionPayload } from "@/lib/admin-auth";
 import { formatLocalHm, formatLocalYmd } from "@/lib/work-week";
 import { prisma } from "@/lib/prisma";
@@ -22,9 +29,17 @@ function mapMethodToken(token: string): PaymentLineMethod {
   return "CASH";
 }
 
-function parseAmountToken(raw: string): number {
+function mapPrismaMethod(m: PaymentMethod | null | undefined): PaymentLineMethod {
+  if (m === "CREDIT") return "CREDIT";
+  if (m === "BANK_TRANSFER") return "BANK_TRANSFER";
+  if (m === "CASH") return "CASH";
+  if (m === "CHECK") return "CHECK";
+  return "OTHER";
+}
+
+function parseAmountToken(raw: string): number | "" {
   const n = Number(raw.replace(/,/g, "").trim());
-  return Number.isFinite(n) ? n : 0;
+  return Number.isFinite(n) && n > 0 ? n : "";
 }
 
 function parseLinesFromNotes(notes: string | null | undefined): PaymentLine[] {
@@ -37,19 +52,63 @@ function parseLinesFromNotes(notes: string | null | undefined): PaymentLine[] {
 
   const parsed: PaymentLine[] = [];
   for (const line of lines) {
+    const dualUsd = line.match(/USD\s+\$([\d.,]+)/i);
+    const dualIls = line.match(/ILS\s+₪([\d.,]+)/i);
+    if (dualUsd || dualIls) {
+      const usdMethod = line.match(/USD\s+\$[\d.,]+\s·\s([A-Z_]+)/)?.[1];
+      const ilsMethod = line.match(/ILS\s+₪[\d.,]+\s·\s([A-Z_]+)/)?.[1];
+      const vatMatch = line.match(/vatMode=([A-Z_]+)/)?.[1];
+      parsed.push({
+        ...createDefaultPaymentLine(`hist_${parsed.length + 1}`),
+        usdAmount: dualUsd ? parseAmountToken(dualUsd[1] ?? "0") : "",
+        ilsAmount: dualIls ? parseAmountToken(dualIls[1] ?? "0") : "",
+        usdPaymentMethod: mapMethodToken(usdMethod ?? "CASH"),
+        ilsPaymentMethod: mapMethodToken(ilsMethod ?? "CASH"),
+        vatMode: mapVatModeToken(vatMatch ?? "INCLUDING_VAT"),
+        usdNote: line.match(/usdNote=([^|]+)/)?.[1]?.trim() ?? "",
+        ilsNote: line.match(/ilsNote=([^|]+)/)?.[1]?.trim() ?? "",
+      });
+      continue;
+    }
+
     const m = line.match(/^#\d+\s+([$₪])\s?([\d.,]+)\s·\s([A-Z_]+)\s·\s([A-Z_]+)(?:\s\|\s.*)?$/);
     if (!m) continue;
     const noteMatch = line.match(/\|\s*note=(.*)$/);
+    const cur = mapCurrencyToken(m[1] ?? "$");
+    const amt = parseAmountToken(m[2] ?? "0");
+    const base = createDefaultPaymentLine(`hist_${parsed.length + 1}`);
     parsed.push({
-      id: `hist_${parsed.length + 1}`,
-      amount: parseAmountToken(m[2] ?? "0"),
-      currency: mapCurrencyToken(m[1] ?? "$"),
+      ...base,
       vatMode: mapVatModeToken(m[3] ?? "INCLUDING_VAT"),
-      paymentMethod: mapMethodToken(m[4] ?? "CASH"),
-      note: noteMatch?.[1]?.trim() ?? "",
+      ...(cur === "USD"
+        ? { usdAmount: amt, usdPaymentMethod: mapMethodToken(m[4] ?? "CASH"), usdNote: noteMatch?.[1]?.trim() ?? "" }
+        : { ilsAmount: amt, ilsPaymentMethod: mapMethodToken(m[4] ?? "CASH"), ilsNote: noteMatch?.[1]?.trim() ?? "" }),
     });
   }
   return parsed;
+}
+
+function lineFromDbRow(row: {
+  amountUsd: { toString(): string } | null;
+  amountIls: { toString(): string } | null;
+  usdPaymentMethod: PaymentMethod | null;
+  ilsPaymentMethod: PaymentMethod | null;
+  paymentMethod: PaymentMethod | null;
+  usdNote: string | null;
+  ilsNote: string | null;
+}): PaymentLine {
+  const usdN = Number(row.amountUsd ?? 0);
+  const ilsN = Number(row.amountIls ?? 0);
+  const line = createDefaultPaymentLine("hist_1");
+  return {
+    ...line,
+    usdAmount: Number.isFinite(usdN) && usdN > 0 ? usdN : "",
+    ilsAmount: Number.isFinite(ilsN) && ilsN > 0 ? ilsN : "",
+    usdPaymentMethod: mapPrismaMethod(row.usdPaymentMethod ?? row.paymentMethod),
+    ilsPaymentMethod: mapPrismaMethod(row.ilsPaymentMethod ?? row.paymentMethod),
+    usdNote: row.usdNote ?? "",
+    ilsNote: row.ilsNote ?? "",
+  };
 }
 
 export async function GET(req: Request) {
@@ -74,6 +133,12 @@ export async function GET(req: Request) {
           exchangeRate: true,
           commissionPercent: true,
           amountUsd: true,
+          amountIls: true,
+          paymentMethod: true,
+          usdPaymentMethod: true,
+          ilsPaymentMethod: true,
+          usdNote: true,
+          ilsNote: true,
           notes: true,
           customerId: true,
         },
@@ -96,11 +161,15 @@ export async function GET(req: Request) {
       });
 
       const parsedLines = parseLinesFromNotes(row.notes);
-      const fallbackUsd = Number(row.amountUsd ?? 0);
       const paymentDate = row.paymentDate ?? new Date();
       const cpNum = Number(row.commissionPercent ?? 0);
       const commissionPercentStr =
         Number.isFinite(cpNum) && cpNum > 0 ? String(cpNum) : "0";
+
+      const lines =
+        parsedLines.length > 0
+          ? parsedLines
+          : [lineFromDbRow(row)];
 
       return NextResponse.json({
         id: row.id,
@@ -119,19 +188,7 @@ export async function GET(req: Request) {
           nameAr: customer?.nameAr ?? "",
           phone: customer?.phone ?? "",
         },
-        lines:
-          parsedLines.length > 0
-            ? parsedLines
-            : [
-                {
-                  id: "hist_1",
-                  amount: fallbackUsd > 0 ? fallbackUsd : "",
-                  currency: "USD",
-                  vatMode: "INCLUDING_VAT",
-                  paymentMethod: "CASH",
-                  note: "",
-                },
-              ],
+        lines,
       });
     } catch (error) {
       perfError("api.payments.entry.GET.failed", error);

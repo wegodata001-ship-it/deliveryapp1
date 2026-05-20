@@ -16,12 +16,22 @@ export type PaymentLineCheck = {
 
 export type PaymentLine = {
   id: string;
-  amount: number | "";
-  currency: PaymentLineCurrency;
   vatMode: PaymentLineVatMode;
-  paymentMethod: PaymentLineMethod;
+  /** סכום בדולר — ללא המרה לשקל */
+  usdAmount: number | "";
+  /** סכום בשקל — ללא המרה לדולר */
+  ilsAmount: number | "";
+  usdPaymentMethod: PaymentLineMethod;
+  ilsPaymentMethod: PaymentLineMethod;
+  usdNote?: string;
+  ilsNote?: string;
+  usdChecks?: PaymentLineCheck[];
+  ilsChecks?: PaymentLineCheck[];
+  /** @deprecated — תאימות לאחור; ממופה ל-usdAmount / ilsAmount */
+  amount?: number | "";
+  currency?: PaymentLineCurrency;
+  paymentMethod?: PaymentLineMethod;
   note?: string;
-  /** מילוי כאשר paymentMethod = CHECK */
   checks?: PaymentLineCheck[];
 };
 
@@ -31,8 +41,17 @@ export type VatCalc = {
   finalAmount: number;
 };
 
-export type PaymentLineCalc = VatCalc & {
+export type PaymentLineSectionCalc = VatCalc & {
+  currency: PaymentLineCurrency;
+  hasAmount: boolean;
+};
+
+export type PaymentLineCalc = {
+  usd: PaymentLineSectionCalc;
+  ils: PaymentLineSectionCalc;
+  /** סכום סופי בדולר (רק ממדד USD) */
   finalUsd: number;
+  /** סכום סופי בשקל (רק ממדד ILS) */
   finalIls: number;
 };
 
@@ -54,6 +73,113 @@ export function roundMoney2(n: number): number {
   return Math.round(x * 100) / 100;
 }
 
+function sanitizeLineAmount(raw: number | "" | undefined): number | "" {
+  if (raw === "" || raw == null) return "";
+  if (!Number.isFinite(raw) || raw < 0) return "";
+  return raw;
+}
+
+/** ממפה שורות ישנות (מטבע יחיד) לשדות דו-מטבעיים */
+export function normalizePaymentLine(line: PaymentLine): PaymentLine {
+  let usdAmount = sanitizeLineAmount(line.usdAmount);
+  let ilsAmount = sanitizeLineAmount(line.ilsAmount);
+
+  const legacyAmt = sanitizeLineAmount(line.amount);
+  const legacyCur = line.currency;
+  if (legacyAmt !== "" && legacyCur === "USD" && usdAmount === "") usdAmount = legacyAmt;
+  if (legacyAmt !== "" && legacyCur === "ILS" && ilsAmount === "") ilsAmount = legacyAmt;
+  if (legacyAmt !== "" && !legacyCur && usdAmount === "" && ilsAmount === "") {
+    usdAmount = legacyAmt;
+  }
+
+  const paymentMethod =
+    line.paymentMethod ??
+    line.usdPaymentMethod ??
+    line.ilsPaymentMethod ??
+    (legacyCur === "USD" || legacyCur === "ILS" ? line.paymentMethod : undefined) ??
+    "CASH";
+  const usdPaymentMethod = paymentMethod;
+  const ilsPaymentMethod = paymentMethod;
+
+  const note = (
+    line.note ??
+    line.usdNote ??
+    line.ilsNote ??
+    (legacyCur === "USD" || legacyCur === "ILS" ? line.note : undefined) ??
+    ""
+  ).trim();
+
+  const usdChecks =
+    line.usdChecks ?? (legacyCur === "USD" && line.paymentMethod === "CHECK" ? line.checks : undefined);
+  const ilsChecks =
+    line.ilsChecks ?? (legacyCur === "ILS" && line.paymentMethod === "CHECK" ? line.checks : undefined);
+
+  return {
+    ...line,
+    usdAmount,
+    ilsAmount,
+    paymentMethod,
+    usdPaymentMethod,
+    ilsPaymentMethod,
+    note,
+    usdChecks,
+    ilsChecks,
+  };
+}
+
+export function paymentLineHasAmount(line: PaymentLine): boolean {
+  const n = normalizePaymentLine(line);
+  const u = typeof n.usdAmount === "number" && n.usdAmount > 0;
+  const i = typeof n.ilsAmount === "number" && n.ilsAmount > 0;
+  return u || i;
+}
+
+export function createDefaultPaymentLine(id: string): PaymentLine {
+  return {
+    id,
+    vatMode: "INCLUDING_VAT",
+    usdAmount: "",
+    ilsAmount: "",
+    paymentMethod: "CASH",
+    usdPaymentMethod: "CASH",
+    ilsPaymentMethod: "CASH",
+    note: "",
+  };
+}
+
+export type PaymentAmountSlot = {
+  amount: number | "";
+  currency: PaymentLineCurrency;
+};
+
+/** שורה 1 = דולר, שורה 2 = שקל (ברירת מחדל לתצוגה) */
+export function derivePaymentAmountSlots(line: PaymentLine): [PaymentAmountSlot, PaymentAmountSlot] {
+  const p = normalizePaymentLine(line);
+  return [
+    { amount: p.usdAmount, currency: "USD" },
+    { amount: p.ilsAmount, currency: "ILS" },
+  ];
+}
+
+export function paymentSlotsToAmounts(
+  slot1: PaymentAmountSlot,
+  slot2: PaymentAmountSlot,
+): Pick<PaymentLine, "usdAmount" | "ilsAmount"> {
+  let usdAmount: number | "" = "";
+  let ilsAmount: number | "" = "";
+  for (const slot of [slot1, slot2]) {
+    if (slot.amount === "" || slot.amount == null) continue;
+    if (slot.currency === "USD") usdAmount = slot.amount;
+    else ilsAmount = slot.amount;
+  }
+  return { usdAmount, ilsAmount };
+}
+
+export function linePaymentMethod(line: PaymentLine): PaymentLineMethod {
+  const p = normalizePaymentLine(line);
+  return p.paymentMethod ?? p.usdPaymentMethod ?? "CASH";
+}
+
 export function calculateVat(amount: number | "", vatMode: PaymentLineVatMode, vatRate: number = DEFAULT_VAT_RATE): VatCalc {
   const a = typeof amount === "number" && Number.isFinite(amount) ? amount : 0;
   const r = Number.isFinite(vatRate) && vatRate >= 0 ? vatRate : DEFAULT_VAT_RATE;
@@ -72,38 +198,47 @@ export function calculateVat(amount: number | "", vatMode: PaymentLineVatMode, v
     return { baseAmount: roundMoney2(base), vatAmount: roundMoney2(vat), finalAmount: roundMoney2(fin) };
   }
 
-  // INCLUDING_VAT
   const final = a;
   const base = final / f;
   const vat = final - base;
   return { baseAmount: roundMoney2(base), vatAmount: roundMoney2(vat), finalAmount: roundMoney2(final) };
 }
 
-export function calculatePaymentLine(line: PaymentLine, usdRate: number, vatRate: number = DEFAULT_VAT_RATE): PaymentLineCalc {
-  const vat = calculateVat(line.amount, line.vatMode, vatRate);
-  const r = Number.isFinite(usdRate) && usdRate > 0 ? usdRate : 0;
-
-  if (vat.finalAmount <= 0) return { ...vat, finalUsd: 0, finalIls: 0 };
-
-  if (line.currency === "USD") {
-    const finalUsd = vat.finalAmount;
-    const finalIls = r > 0 ? finalUsd * r : 0;
-    return { ...vat, finalUsd: roundMoney2(finalUsd), finalIls: roundMoney2(finalIls) };
-  }
-
-  // ILS
-  const finalIls = vat.finalAmount;
-  const finalUsd = r > 0 ? finalIls / r : 0;
-  return { ...vat, finalUsd: roundMoney2(finalUsd), finalIls: roundMoney2(finalIls) };
+function sectionCalc(
+  amount: number | "",
+  currency: PaymentLineCurrency,
+  vatMode: PaymentLineVatMode,
+  vatRate: number,
+): PaymentLineSectionCalc {
+  const vat = calculateVat(amount, vatMode, vatRate);
+  return {
+    ...vat,
+    currency,
+    hasAmount: vat.finalAmount > 0,
+  };
 }
 
-export function calculateTotals(lines: PaymentLine[], usdRate: number, vatRate: number = DEFAULT_VAT_RATE): PaymentTotals {
+/** חישוב שורת תשלום — דולר ושקל בנפרד, ללא המרה ביניהם */
+export function calculatePaymentLine(line: PaymentLine, _usdRate: number, vatRate: number = DEFAULT_VAT_RATE): PaymentLineCalc {
+  const n = normalizePaymentLine(line);
+  const usd = sectionCalc(n.usdAmount, "USD", n.vatMode, vatRate);
+  const ils = sectionCalc(n.ilsAmount, "ILS", n.vatMode, vatRate);
+  return {
+    usd,
+    ils,
+    finalUsd: usd.hasAmount ? usd.finalAmount : 0,
+    finalIls: ils.hasAmount ? ils.finalAmount : 0,
+  };
+}
+
+export function calculateTotals(lines: PaymentLine[], _usdRate: number, vatRate: number = DEFAULT_VAT_RATE): PaymentTotals {
   let totalUsd = 0;
   let totalIls = 0;
   let count = 0;
 
   for (const l of lines) {
-    const calc = calculatePaymentLine(l, usdRate, vatRate);
+    const calc = calculatePaymentLine(l, _usdRate, vatRate);
+    if (!paymentLineHasAmount(l)) continue;
     totalUsd += calc.finalUsd;
     totalIls += calc.finalIls;
     count += 1;
@@ -116,35 +251,30 @@ export function calculateTotals(lines: PaymentLine[], usdRate: number, vatRate: 
   };
 }
 
-/** סכום בסיס לפני מע״מ בדולרים — לתצוגת כרטיס סיכום (לא מחליף totalUsd לשימוש בהקצאות). */
+/** סכום בסיס לפני מע״מ בדולרים — רק ממדד דולר */
 export function calculateTotalBaseUsd(
   lines: PaymentLine[],
-  usdRate: number,
+  _usdRate: number,
   vatRate: number = DEFAULT_VAT_RATE,
 ): number {
   let total = 0;
   for (const l of lines) {
-    const c = calculatePaymentLine(l, usdRate, vatRate);
-    if (c.finalAmount <= 0) continue;
-    if (l.currency === "USD") total += c.baseAmount;
-    else total += usdRate > 0 ? c.baseAmount / usdRate : 0;
+    const c = calculatePaymentLine(l, _usdRate, vatRate);
+    if (c.usd.hasAmount) total += c.usd.baseAmount;
   }
   return roundMoney2(total);
 }
 
-/** סכום בסיס לפני מע״מ בשקלים — לתצוגת כרטיס סיכום. */
+/** סכום בסיס לפני מע״מ בשקלים — רק ממדד שקל */
 export function calculateTotalBaseIls(
   lines: PaymentLine[],
-  usdRate: number,
+  _usdRate: number,
   vatRate: number = DEFAULT_VAT_RATE,
 ): number {
   let total = 0;
   for (const l of lines) {
-    const c = calculatePaymentLine(l, usdRate, vatRate);
-    if (c.finalAmount <= 0) continue;
-    if (l.currency === "ILS") total += c.baseAmount;
-    else total += usdRate > 0 ? c.baseAmount * usdRate : 0;
+    const c = calculatePaymentLine(l, _usdRate, vatRate);
+    if (c.ils.hasAmount) total += c.ils.baseAmount;
   }
   return roundMoney2(total);
 }
-

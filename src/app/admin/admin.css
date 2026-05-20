@@ -6950,9 +6950,28 @@ select.payment-modal-inline-input {
   border: 1px solid #e5e7eb;
   border-radius: 12px;
   background: #fff;
-  padding: 12px 12px;
+  padding: 14px 14px;
   box-shadow: 0 1px 10px rgba(15, 23, 42, 0.05);
   transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+/* סכום 2 — מפריד עדין בתוך אותו grid (בלי קופסה נפרדת) */
+.payment-upd-lbl--slot2 {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px dashed #dbeafe;
+}
+
+.adm-ledger-paid-dual {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+}
+
+.adm-ledger-paid-ils {
+  color: #047857;
+  font-weight: 700;
 }
 
 /* התשלום החדש ביותר — מודגש כפעיל ב־UI */
@@ -10258,11 +10277,42 @@ select.payment-modal-inline-input {
   width: min(620px, 94vw);
 }
 
+.adm-cust-ledger-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
 .adm-cust-ledger-filters {
   display: grid;
   grid-template-columns: repeat(2, minmax(160px, 220px));
   gap: 10px;
-  margin-bottom: 10px;
+  margin-bottom: 0;
+}
+
+.adm-cust-ledger-export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.adm-cust-ledger-export-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 8px 14px;
+  white-space: nowrap;
+}
+
+.adm-cust-ledger-export-btn .payment-modal-save-spinner {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
 }
 
 .adm-cust-ledger-summary {
@@ -10427,6 +10477,20 @@ select.payment-modal-inline-input {
     grid-template-columns: 1fr;
   }
 
+  .adm-cust-ledger-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .adm-cust-ledger-export-actions {
+    width: 100%;
+  }
+
+  .adm-cust-ledger-export-btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
   .adm-cust-edit-address {
     grid-column: auto;
   }
@@ -10563,6 +10627,15 @@ select.payment-modal-inline-input {
 
 .adm-client-create-label-row label {
   margin: 0;
+  cursor: help;
+}
+
+.adm-client-create-code-hint {
+  margin: 0 0 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #64748b;
+  line-height: 1.35;
 }
 
 .adm-client-create-auto-code {
@@ -10624,11 +10697,41 @@ select.payment-modal-inline-input {
 
 .adm-client-create-actions {
   justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .adm-client-create-actions .adm-btn--primary {
   border-radius: 12px;
   padding: 0.5rem 1.1rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.adm-client-create-save-new {
+  background: linear-gradient(180deg, #22c55e 0%, #15803d 100%) !important;
+  border: 1px solid #15803d !important;
+  color: #fff !important;
+  font-weight: 800;
+  box-shadow: 0 4px 14px rgba(21, 128, 61, 0.28);
+}
+
+.adm-client-create-save-new:hover:not(:disabled) {
+  background: linear-gradient(180deg, #16a34a 0%, #166534 100%) !important;
+  border-color: #166534 !important;
+}
+
+.adm-client-create-save-new:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.adm-client-create-save-new .payment-modal-save-spinner {
+  width: 14px;
+  height: 14px;
+  border-color: rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
 }
 
 .adm-client-create-success {
@@ -16417,4 +16520,312 @@ select.adm-balances-input {
   justify-content: flex-end;
   gap: 0.5rem;
   flex-wrap: wrap;
+}
+
+/* =============================================================================
+   Money amounts — קליטת הזמנה + קליטת תשלום (typography / hierarchy בלבד)
+   ============================================================================= */
+
+@keyframes money-amount-pulse {
+  0% {
+    opacity: 0.72;
+    transform: scale(0.97);
+  }
+  45% {
+    opacity: 1;
+    transform: scale(1.03);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes money-amount-fade {
+  from {
+    opacity: 0.55;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.money-amount {
+  display: inline-block;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  text-align: right;
+  transition: color 0.2s ease;
+}
+
+.money-amount--pulse {
+  animation: money-amount-pulse 0.48s ease, money-amount-fade 0.32s ease;
+}
+
+/* —— קליטת הזמנה: כרטיסי כסף —— */
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-money .card {
+  border-radius: 18px !important;
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.08) !important;
+  padding: 18px !important;
+  border-width: 2px !important;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-money .card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.1) !important;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--usd {
+  background: #eff6ff !important;
+  border-color: rgba(37, 99, 235, 0.35) !important;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--ils {
+  background: #ecfdf5 !important;
+  border-color: rgba(5, 150, 105, 0.35) !important;
+}
+
+.adm-oc-money-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0 !important;
+  border-bottom: none !important;
+}
+
+.adm-oc-money-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #64748b;
+  flex-shrink: 0;
+}
+
+.adm-oc-money-line--tier-2 .money-amount {
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.adm-oc-money-value--usd {
+  color: #2563eb;
+}
+
+.adm-oc-money-value--ils {
+  color: #059669;
+}
+
+.adm-oc-money-line--hero {
+  margin-top: 10px !important;
+  padding: 14px 14px !important;
+  border-radius: 14px;
+  border: 2px solid transparent;
+  background: rgba(255, 255, 255, 0.55);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--usd .adm-oc-money-line--hero {
+  border-color: rgba(37, 99, 235, 0.28);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.92) 0%, rgba(239, 246, 255, 0.95) 100%);
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--ils .adm-oc-money-line--hero {
+  border-color: rgba(5, 150, 105, 0.28);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.92) 0%, rgba(236, 253, 245, 0.95) 100%);
+}
+
+.adm-oc-money-line--hero .adm-oc-money-label {
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: #334155;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.adm-oc-money-line--hero {
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.adm-oc-money-line--hero .money-amount {
+  font-size: 42px;
+  font-weight: 800;
+  line-height: 1;
+  width: 100%;
+  text-align: right;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--usd .adm-oc-money-line--hero .money-amount {
+  color: #2563eb;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--ils .adm-oc-money-line--hero .money-amount {
+  color: #059669;
+}
+
+.adm-oc-xrate-val.money-amount {
+  font-size: 18px;
+  font-weight: 700;
+  color: #2563eb;
+}
+
+@media (max-width: 720px) {
+  .adm-oc-money-line--hero .money-amount {
+    font-size: 34px;
+  }
+
+  .adm-oc-money-line--tier-2 .money-amount {
+    font-size: 18px;
+  }
+}
+
+.payment-upd-calc-row--hero .money-amount {
+  font-size: 28px;
+  font-weight: 800;
+}
+
+.payment-upd-line-total {
+  font-size: 0.88rem;
+}
+
+.payment-upd-line-total .money-amount {
+  font-size: 20px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+/* סיכום דביק — קליטת תשלום */
+.payment-upd-sticky-total--v3 {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  padding: 18px;
+  border-radius: 18px;
+  border: 2px solid rgba(37, 99, 235, 0.22);
+  background: linear-gradient(145deg, #ffffff 0%, #eff6ff 42%, #ecfdf5 100%);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.08);
+}
+
+.payment-upd-sticky-total-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  width: 100%;
+}
+
+.payment-upd-sticky-total-block {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 2px solid transparent;
+  min-height: 88px;
+  justify-content: flex-end;
+}
+
+.payment-upd-sticky-total-block--usd {
+  background: #eff6ff;
+  border-color: rgba(37, 99, 235, 0.28);
+}
+
+.payment-upd-sticky-total-block--ils {
+  background: #ecfdf5;
+  border-color: rgba(5, 150, 105, 0.28);
+}
+
+.payment-upd-sticky-total-block .payment-upd-sticky-total-lbl {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #64748b;
+  letter-spacing: 0.02em;
+  margin: 0;
+}
+
+.payment-upd-sticky-total-block--usd .payment-upd-sticky-total-hero {
+  color: #2563eb;
+}
+
+.payment-upd-sticky-total-block--ils .payment-upd-sticky-total-hero {
+  color: #059669;
+}
+
+.payment-upd-sticky-total-hero {
+  font-size: 42px;
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  text-align: right;
+  width: 100%;
+}
+
+.payment-upd-sticky-total-block--debt {
+  background: linear-gradient(180deg, #fef2f2 0%, #fff5f5 100%);
+  border-color: rgba(220, 38, 38, 0.35);
+}
+
+.payment-upd-sticky-total-block--debt .payment-upd-sticky-total-hero {
+  color: #dc2626;
+}
+
+@media (max-width: 720px) {
+  .payment-upd-sticky-total-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .payment-upd-sticky-total-hero {
+    font-size: 34px;
+  }
+
+  .payment-upd-calc-row--hero .money-amount {
+    font-size: 24px;
+  }
+}
+
+/* סיכום טבלת הזמנות בתשלום */
+.payment-modal-orders-summary--v2 .payment-modal-orders-summary-card {
+  border-radius: 14px;
+  padding: 14px 16px;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.06);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.payment-modal-orders-summary--v2 .payment-modal-orders-summary-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.1);
+}
+
+.payment-modal-orders-summary--v2 .payment-modal-orders-summary-val {
+  font-size: 28px;
+  font-weight: 800;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+.payment-modal-orders-summary--v2 .payment-modal-orders-summary-card--txn .payment-modal-orders-summary-val {
+  color: #854d0e;
+}
+
+.payment-modal-orders-summary--v2 .payment-modal-orders-summary-card--paid .payment-modal-orders-summary-val {
+  color: #2563eb;
+}
+
+.payment-modal-orders-summary--v2 .payment-modal-orders-summary-card--rem .payment-modal-orders-summary-val {
+  color: #dc2626;
+}
+
+.payment-modal-orders-summary--v2 .payment-modal-orders-summary-lbl {
+  font-size: 0.72rem;
+  font-weight: 700;
+  opacity: 1;
+}
+
+@media (max-width: 720px) {
+  .payment-modal-orders-summary--v2 .payment-modal-orders-summary-val {
+    font-size: 22px;
+  }
 }

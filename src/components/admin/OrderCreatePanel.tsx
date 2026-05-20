@@ -31,6 +31,7 @@ import { useAdminLoading } from "@/components/admin/AdminLoadingProvider";
 import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import Card from "@/components/ui/Card";
 import { MoneyInput } from "@/components/ui/MoneyInput";
+import { AnimatedMoneyValue } from "@/components/ui/AnimatedMoneyValue";
 import { CustomerBalanceView } from "@/components/ui/CustomerBalanceView";
 import { parseBalanceAmountString } from "@/lib/customer-balance";
 import { formatMoneyAmount, parseMoneyString } from "@/lib/money-format";
@@ -722,7 +723,7 @@ export function OrderCreatePanel({
       setCodeStr(client.customerCode);
       setNameArStr(client.customerNameAr);
       setNameEnStr(client.customerNameEn ?? "");
-      setPhoneStr(client.phone);
+      setPhoneStr(client.phone ?? "");
       setHits([]);
       setDropdownField(null);
       applyExtras({
@@ -1954,31 +1955,51 @@ export function OrderCreatePanel({
               </div>
               <div className="adm-oc-xrate" dir="rtl" aria-live="polite">
                 <span className="adm-oc-xrate-lbl">שווי בדולרים</span>
-                <span className="adm-oc-xrate-val" dir="ltr">
-                  ${formatMoneyAmount(roundMoney2(eqUsdFromIls))}
-                </span>
+                <AnimatedMoneyValue
+                  className="adm-oc-xrate-val money-amount"
+                  dir="ltr"
+                  value={`$${formatMoneyAmount(roundMoney2(eqUsdFromIls))}`}
+                />
               </div>
-              <div className="adm-oc-line">
-                <span>עמלה</span>
-                <span dir="ltr">{formatMoneyAmount(commissionIlsEffective)} ₪</span>
+              <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2">
+                <span className="adm-oc-money-label">עמלה</span>
+                <AnimatedMoneyValue
+                  className="adm-oc-money-value adm-oc-money-value--ils"
+                  dir="ltr"
+                  value={`${formatMoneyAmount(commissionIlsEffective)} ₪`}
+                />
               </div>
-              <div className="adm-oc-line">
-                <span>סה״כ לפני עמלה</span>
-                <span dir="ltr">{formatMoneyAmount(roundMoney2(dealIlsTotal))} ₪</span>
+              <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2">
+                <span className="adm-oc-money-label">סה״כ לפני עמלה</span>
+                <AnimatedMoneyValue
+                  className="adm-oc-money-value adm-oc-money-value--ils"
+                  dir="ltr"
+                  value={`${formatMoneyAmount(roundMoney2(dealIlsTotal))} ₪`}
+                />
               </div>
-              <div className="adm-oc-line">
-                <span>סה״כ לפני מע״מ</span>
-                <span dir="ltr">{formatMoneyAmount(totalBeforeVatIls)} ₪</span>
+              <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2">
+                <span className="adm-oc-money-label">סה״כ לפני מע״מ</span>
+                <AnimatedMoneyValue
+                  className="adm-oc-money-value adm-oc-money-value--ils"
+                  dir="ltr"
+                  value={`${formatMoneyAmount(totalBeforeVatIls)} ₪`}
+                />
               </div>
-              <div className="adm-oc-line">
-                <span>{formatVatPercentLabel()}</span>
-                <span dir="ltr">
-                  {formatMoneyAmount(vatAmountIls)} ₪ / ${formatMoneyAmount(vatAmountUsd)}
-                </span>
+              <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2">
+                <span className="adm-oc-money-label">{formatVatPercentLabel()}</span>
+                <AnimatedMoneyValue
+                  className="adm-oc-money-value adm-oc-money-value--ils"
+                  dir="ltr"
+                  value={`${formatMoneyAmount(vatAmountIls)} ₪ / $${formatMoneyAmount(vatAmountUsd)}`}
+                />
               </div>
-              <div className="adm-oc-line adm-oc-line--total adm-oc-pro-final">
-                <span>סה״כ סופי</span>
-                <span dir="ltr">{formatMoneyAmount(finalTotalIls)} ₪</span>
+              <div className="adm-oc-line adm-oc-line--total adm-oc-pro-final adm-oc-money-line adm-oc-money-line--hero">
+                <span className="adm-oc-money-label">סה״כ סופי</span>
+                <AnimatedMoneyValue
+                  className="adm-oc-money-value adm-oc-money-value--ils"
+                  dir="ltr"
+                  value={`${formatMoneyAmount(finalTotalIls)} ₪`}
+                />
               </div>
             </Card>
 
@@ -2005,13 +2026,21 @@ export function OrderCreatePanel({
                   }}
                 />
               </div>
-              <div className="adm-oc-line">
-                <span>עמלה</span>
-                <span dir="ltr">{formatMoneyAmount(commissionUsdEffective)} $</span>
+              <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2">
+                <span className="adm-oc-money-label">עמלה</span>
+                <AnimatedMoneyValue
+                  className="adm-oc-money-value adm-oc-money-value--usd"
+                  dir="ltr"
+                  value={`${formatMoneyAmount(commissionUsdEffective)} $`}
+                />
               </div>
-              <div className="adm-oc-line adm-oc-line--total">
-                <span>סה״כ</span>
-                <span dir="ltr">{formatMoneyAmount(totalUsdCalc)} $</span>
+              <div className="adm-oc-line adm-oc-line--total adm-oc-money-line adm-oc-money-line--hero">
+                <span className="adm-oc-money-label">סה״כ</span>
+                <AnimatedMoneyValue
+                  className="adm-oc-money-value adm-oc-money-value--usd"
+                  dir="ltr"
+                  value={`${formatMoneyAmount(totalUsdCalc)} $`}
+                />
               </div>
             </Card>
           </div>
