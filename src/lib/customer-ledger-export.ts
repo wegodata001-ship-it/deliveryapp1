@@ -1,7 +1,10 @@
 import type { CustomerLedgerPayload, CustomerLedgerRow } from "@/app/admin/capture/actions";
 import { formatCustomerBalanceDisplay, parseBalanceAmountString } from "@/lib/customer-balance";
+import { getLedgerPdfMake, ledgerPdfDefaultStyle } from "@/lib/ledger-pdfmake";
+import { ledgerPdfFontFamily } from "@/lib/pdfFonts";
 import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
 import { formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate } from "@/lib/work-week";
+import type { Content, TDocumentDefinitions } from "pdfmake/interfaces";
 
 export type CustomerLedgerExportMeta = {
   displayName: string;
@@ -22,10 +25,13 @@ export type LedgerExportTableRow = {
   document: string;
 };
 
-const LRM = "\u200E";
+/** pdfmake columns are LTR: מסמך (left) … תאריך (right) — matches on-screen RTL table. */
+const LEDGER_PDF_TABLE_HEADERS = ["מסמך", "יתרה", "שולם", "סכום", "סטטוס", "סוג", "תאריך"] as const;
 
-/** Screen RTL: תאריך (right) … מסמך (left). autoTable is LTR — reverse column order. */
-const LEDGER_TABLE_HEADERS_RTL = ["מסמך", "יתרה", "שולם", "סכום", "סטטוס", "סוג", "תאריך"] as const;
+/** pdfmake runtime supports direction; @types/pdfmake omits it on ContentText */
+function pdfContent<T extends object>(node: T): Content {
+  return node as Content;
+}
 
 function todayYmd(): string {
   return formatLocalYmd(new Date());
@@ -118,232 +124,170 @@ function triggerBlobDownload(blob: Blob, filename: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
-/** Keep amounts, dates, and LTR codes readable (never use jsPDF setR2L — it reverses characters). */
-function pdfPreserveLtr(text: string): string {
-  const t = text.trim();
-  if (!t || t === "—") return text;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return LRM + text;
-  if (/^[\d$₪€£.,\s\-—·%]+$/.test(t)) return LRM + text;
-  if (/^[\$₪]?\d/.test(t) || /^-?[\$₪]?\d/.test(t)) return LRM + text;
-  if (/^[A-Z0-9][A-Z0-9\-_/]*$/i.test(t)) return LRM + text;
-  return text;
+function pdfMetaLine(label: string, value: string, ltrValue = false): Content {
+  const display = value || "—";
+  return {
+    text: [
+      { text: `${label}: ` },
+      ltrValue
+        ? pdfContent({ text: display, direction: "ltr" })
+        : { text: display, font: ledgerPdfFontFamily(display) },
+    ],
+    style: "meta",
+  };
 }
 
-function pdfCell(value: string, opts?: { ltr?: boolean }): string {
-  const v = value ?? "";
-  if (opts?.ltr !== false && (opts?.ltr === true || /[\d$₪]/.test(v) || /^\d{4}-\d{2}-\d{2}$/.test(v.trim()))) {
-    return pdfPreserveLtr(v);
-  }
-  return v;
+type LedgerTableCell = {
+  text: string;
+  font: ReturnType<typeof ledgerPdfFontFamily>;
+  alignment: "right";
+  fontSize: number;
+  direction?: "ltr";
+  fillColor?: string;
+};
+
+function ledgerPdfCell(value: string, opts?: { ltr?: boolean }): LedgerTableCell {
+  const text = value ?? "";
+  const font = ledgerPdfFontFamily(text);
+  const ltr =
+    opts?.ltr === true ||
+    /^\d{4}-\d{2}-\d{2}$/.test(text.trim()) ||
+    /^[\d$₪€£.,\s\-—·%]+$/.test(text.trim()) ||
+    /^[\$₪]?\d/.test(text.trim());
+  return ltr
+    ? { text, font, alignment: "right", direction: "ltr", fontSize: 8.5 }
+    : { text, font, alignment: "right", fontSize: 8.5 };
 }
 
-function ledgerRowToPdfCells(r: LedgerExportTableRow): string[] {
+function ledgerRowToPdfCells(r: LedgerExportTableRow, zebra: boolean): LedgerTableCell[] {
+  const fillColor = zebra ? "#f8fafc" : undefined;
   return [
-    pdfCell(r.document),
-    pdfCell(r.balance),
-    pdfCell(r.paid),
-    pdfCell(r.amountUsd, { ltr: true }),
-    pdfCell(r.statusLabel),
-    pdfCell(r.typeLabel),
-    pdfCell(r.dateYmd, { ltr: true }),
+    { ...ledgerPdfCell(r.document), fillColor },
+    { ...ledgerPdfCell(r.balance), fillColor },
+    { ...ledgerPdfCell(r.paid), fillColor },
+    { ...ledgerPdfCell(r.amountUsd, { ltr: true }), fillColor },
+    { ...ledgerPdfCell(r.statusLabel), fillColor },
+    { ...ledgerPdfCell(r.typeLabel), fillColor },
+    { ...ledgerPdfCell(r.dateYmd, { ltr: true }), fillColor },
   ];
 }
 
-function drawSummaryBox(
-  doc: import("jspdf").jsPDF,
-  applyFont: (text: string) => void,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
+function ledgerSummaryBox(
   title: string,
   value: string,
-  fill: [number, number, number],
-  border: [number, number, number],
-  text: [number, number, number],
-) {
-  doc.setFillColor(fill[0], fill[1], fill[2]);
-  doc.setDrawColor(border[0], border[1], border[2]);
-  doc.setLineWidth(1);
-  doc.roundedRect(x, y, w, h, 6, 6, "FD");
-  applyFont(title);
-  doc.setFontSize(9);
-  doc.setTextColor(71, 85, 105);
-  doc.text(title, x + w - 10, y + 16, { align: "right" });
-  applyFont(value);
-  doc.setFontSize(14);
-  doc.setTextColor(text[0], text[1], text[2]);
-  doc.text(pdfPreserveLtr(value), x + w - 10, y + 38, { align: "right" });
+  colors: { fill: string; text: string },
+): Content {
+  return {
+    stack: [
+      { text: title, fontSize: 9, color: "#475569", alignment: "right", margin: [10, 10, 10, 2] },
+      pdfContent({
+        text: value,
+        fontSize: 14,
+        bold: true,
+        color: colors.text,
+        alignment: "right",
+        direction: "ltr",
+        margin: [10, 0, 10, 10],
+      }),
+    ],
+    fillColor: colors.fill,
+  };
 }
 
 export async function exportCustomerLedgerPdf(
   meta: CustomerLedgerExportMeta,
   ledger: CustomerLedgerPayload,
 ): Promise<void> {
-  const [{ default: jsPDF }, autoTableMod, pdfFonts] = await Promise.all([
-    import("jspdf"),
-    import("jspdf-autotable"),
-    import("@/lib/pdfFonts"),
-  ]);
-  const autoTable = autoTableMod.default;
-  const {
-    LEDGER_PDF_FONT,
-    ledgerPdfFontStyle,
-    registerLedgerPdfFonts,
-    setLedgerPdfFont,
-  } = pdfFonts;
-
-  const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
-  registerLedgerPdfFonts(doc);
-  const applyFont = (text: string) => setLedgerPdfFont(doc, text);
-
-  const pageW = doc.internal.pageSize.getWidth();
-  const margin = 22;
-  const contentW = pageW - margin * 2;
-  const right = pageW - margin;
-  let y = 36;
-
-  const writeLine = (text: string, size: number, color: [number, number, number], gap = 1.4) => {
-    applyFont(text);
-    doc.setFontSize(size);
-    doc.setTextColor(color[0], color[1], color[2]);
-    doc.text(text, right, y, { align: "right" });
-    y += size * gap;
-  };
-
-  writeLine("כרטסת לקוח", 20, [15, 23, 42], 1.5);
-  writeLine("פרטי לקוח", 11, [71, 85, 105], 1.3);
-  writeLine(`שם לקוח: ${meta.displayName || "—"}`, 10, [30, 41, 59]);
-  writeLine(`קוד לקוח: ${pdfPreserveLtr(meta.customerCode || "—")}`, 10, [30, 41, 59]);
-  writeLine(`טלפון: ${pdfPreserveLtr(meta.phone?.trim() || "—")}`, 10, [30, 41, 59]);
-  writeLine(`אימייל: ${pdfPreserveLtr(meta.email?.trim() || "—")}`, 10, [30, 41, 59]);
-  writeLine(`טווח תאריכים: ${formatDateRangeLabel(meta.fromYmd, meta.toYmd)}`, 10, [30, 41, 59]);
-  writeLine(`שבוע AH: ${pdfPreserveLtr(resolveAhWeekLabel(meta.fromYmd, meta.toYmd))}`, 10, [30, 41, 59]);
-  y += 6;
-
-  const boxW = (contentW - 24) / 3;
-  const boxH = 52;
-  const boxY = y;
-  const boxGap = 12;
-  const boxRight0 = pageW - margin - boxW;
-  const boxRight1 = boxRight0 - boxW - boxGap;
-  const boxRight2 = boxRight1 - boxW - boxGap;
-
-  drawSummaryBox(
-    doc,
-    applyFont,
-    boxRight0,
-    boxY,
-    boxW,
-    boxH,
-    'סה"כ חוב',
-    fmtUsd(ledger.totalChargesUsd),
-    [254, 242, 242],
-    [254, 202, 202],
-    [185, 28, 28],
-  );
-  drawSummaryBox(
-    doc,
-    applyFont,
-    boxRight1,
-    boxY,
-    boxW,
-    boxH,
-    'סה"כ תשלומים',
-    fmtUsd(ledger.totalPaymentsUsd),
-    [236, 253, 245],
-    [167, 243, 208],
-    [5, 150, 105],
-  );
+  const pdfMake = await getLedgerPdfMake();
+  const tableRows = buildLedgerExportTableRows(ledger);
   const bal = parseBalanceAmountString(ledger.balanceUsd);
   const balView = formatCustomerBalanceDisplay(bal, "USD");
-  const balFill: [number, number, number] =
-    balView.kind === "debt" ? [254, 242, 242] : balView.kind === "credit" ? [236, 253, 245] : [239, 246, 255];
-  const balBorder: [number, number, number] =
-    balView.kind === "debt" ? [254, 202, 202] : balView.kind === "credit" ? [167, 243, 208] : [191, 219, 254];
-  const balText: [number, number, number] =
-    balView.kind === "debt" ? [185, 28, 28] : balView.kind === "credit" ? [5, 150, 105] : [37, 99, 235];
-  drawSummaryBox(
-    doc,
-    applyFont,
-    boxRight2,
-    boxY,
-    boxW,
-    boxH,
-    "יתרה סופית",
-    balView.primaryText,
-    balFill,
-    balBorder,
-    balText,
-  );
-  y = boxY + boxH + 14;
+  const balColor =
+    balView.kind === "debt" ? "#b91c1c" : balView.kind === "credit" ? "#059669" : "#2563eb";
+  const balFill =
+    balView.kind === "debt" ? "#fef2f2" : balView.kind === "credit" ? "#ecfdf5" : "#eff6ff";
 
-  const tableRows = buildLedgerExportTableRows(ledger);
-  autoTable(doc, {
-    startY: y,
-    margin: { left: margin, right: margin },
-    tableWidth: contentW,
-    head: [Array.from(LEDGER_TABLE_HEADERS_RTL)],
-    body: tableRows.map(ledgerRowToPdfCells),
+  const tableBody: Content[][] = [
+    LEDGER_PDF_TABLE_HEADERS.map((h) => ({
+      text: h,
+      style: "tableHeader",
+      alignment: "right",
+    })),
+    ...tableRows.map((r, i) => ledgerRowToPdfCells(r, i % 2 === 1)),
+  ];
+
+  const docDefinition: TDocumentDefinitions = {
+    pageSize: "A4",
+    pageOrientation: "landscape",
+    pageMargins: [22, 28, 22, 28],
+    defaultStyle: ledgerPdfDefaultStyle,
+    content: [
+      { text: "כרטסת לקוח", style: "title" },
+      { text: "פרטי לקוח", style: "section" },
+      pdfMetaLine("שם לקוח", meta.displayName || "—"),
+      pdfMetaLine("קוד לקוח", meta.customerCode || "—", true),
+      pdfMetaLine("טלפון", meta.phone?.trim() || "—", true),
+      pdfMetaLine("אימייל", meta.email?.trim() || "—", true),
+      pdfMetaLine("טווח תאריכים", formatDateRangeLabel(meta.fromYmd, meta.toYmd)),
+      pdfMetaLine("שבוע AH", resolveAhWeekLabel(meta.fromYmd, meta.toYmd), true),
+      { text: "", margin: [0, 4, 0, 0] },
+      {
+        columns: [
+          ledgerSummaryBox("יתרה סופית", balView.primaryText, { fill: balFill, text: balColor }),
+          ledgerSummaryBox('סה"כ תשלומים', fmtUsd(ledger.totalPaymentsUsd), {
+            fill: "#ecfdf5",
+            text: "#059669",
+          }),
+          ledgerSummaryBox('סה"כ חוב', fmtUsd(ledger.totalChargesUsd), {
+            fill: "#fef2f2",
+            text: "#b91c1c",
+          }),
+        ],
+        columnGap: 12,
+        margin: [0, 0, 0, 14],
+      },
+      {
+        table: {
+          headerRows: 1,
+          widths: ["*", "*", "*", "*", "*", "*", "*"],
+          body: tableBody,
+        },
+        layout: {
+          hLineWidth: () => 0.5,
+          vLineWidth: () => 0.5,
+          hLineColor: () => "#e2e8f0",
+          vLineColor: () => "#e2e8f0",
+          paddingLeft: () => 4,
+          paddingRight: () => 4,
+          paddingTop: () => 4,
+          paddingBottom: () => 4,
+        },
+      },
+      {
+        text: [
+          { text: "וויגו פרו · " },
+          pdfContent({ text: formatLocalYmd(new Date()), direction: "ltr" }),
+        ],
+        style: "footer",
+        margin: [0, 16, 0, 0],
+      },
+    ],
     styles: {
-      font: LEDGER_PDF_FONT,
-      fontStyle: "normal",
-      fontSize: 8.5,
-      halign: "right",
-      valign: "middle",
-      cellPadding: 4,
-      lineColor: [226, 232, 240],
-      lineWidth: 0.5,
-      textColor: [30, 41, 59],
-      overflow: "linebreak",
+      title: { fontSize: 20, bold: true, color: "#0f172a", margin: [0, 0, 0, 6] },
+      section: { fontSize: 11, color: "#475569", margin: [0, 0, 0, 4] },
+      meta: { fontSize: 10, color: "#1e293b", margin: [0, 0, 0, 2] },
+      tableHeader: {
+        fontSize: 9,
+        bold: true,
+        color: "#ffffff",
+        fillColor: "#2563eb",
+        margin: [4, 4, 4, 4],
+      },
+      footer: { fontSize: 8, color: "#64748b" },
     },
-    headStyles: {
-      fillColor: [37, 99, 235],
-      textColor: [255, 255, 255],
-      font: LEDGER_PDF_FONT,
-      fontStyle: "normal",
-      halign: "right",
-      fontSize: 9,
-    },
-    bodyStyles: {
-      fillColor: [255, 255, 255],
-      halign: "right",
-      font: LEDGER_PDF_FONT,
-      fontStyle: "normal",
-    },
-    alternateRowStyles: { fillColor: [248, 250, 252] },
-    columnStyles: {
-      0: { cellWidth: "auto" },
-      1: { cellWidth: "auto" },
-      2: { cellWidth: "auto" },
-      3: { cellWidth: "auto" },
-      4: { cellWidth: "auto" },
-      5: { cellWidth: "auto" },
-      6: { cellWidth: "auto" },
-    },
-    didParseCell: (data) => {
-      const raw = data.cell.raw;
-      const text = raw == null ? "" : String(raw);
-      const style = ledgerPdfFontStyle(text);
-      data.cell.styles.font = LEDGER_PDF_FONT;
-      data.cell.styles.fontStyle = style;
-      data.cell.styles.halign = "right";
-    },
-    didDrawCell: (data) => {
-      const raw = data.cell.raw;
-      const text = raw == null ? "" : String(raw);
-      applyFont(text);
-    },
-    theme: "grid",
-  });
+  };
 
-  const footerY = doc.internal.pageSize.getHeight() - 20;
-  applyFont("וויגו פרו");
-  doc.setFontSize(8);
-  doc.setTextColor(100, 116, 139);
-  doc.text(`וויגו פרו · ${pdfPreserveLtr(formatLocalYmd(new Date()))}`, right, footerY, { align: "right" });
-
-  doc.save(buildLedgerExportFilename(meta.customerCode, "pdf"));
+  pdfMake.createPdf(docDefinition).download(buildLedgerExportFilename(meta.customerCode, "pdf"));
 }
 
 export async function exportCustomerLedgerExcel(

@@ -2180,13 +2180,17 @@ export function PaymentModalUpdated({
             <div className="payment-modal-side-sticky payment-summary-stack payment-summary-stack--v2">
               <div className="payment-upd-sticky-total payment-upd-sticky-total--basis-led" aria-live="polite">
                 <div className="payment-upd-sticky-total-amounts">
-                  <span className="payment-upd-sticky-total-usd" dir="ltr">
-                    {fmtUsdDisplay(stickyBaseTotals.usd)}
-                  </span>
+                  <AnimatedMoneyValue
+                    className="payment-upd-sticky-total-usd money-amount"
+                    dir="ltr"
+                    value={fmtUsdDisplay(stickyBaseTotals.usd)}
+                  />
                   <div className="payment-upd-sticky-total-lbl">סה״כ לתשלום</div>
-                  <span className="payment-upd-sticky-total-ils" dir="ltr">
-                    {fmtIlsDisplay(stickyBaseTotals.ils)}
-                  </span>
+                  <AnimatedMoneyValue
+                    className="payment-upd-sticky-total-ils money-amount"
+                    dir="ltr"
+                    value={fmtIlsDisplay(stickyBaseTotals.ils)}
+                  />
                 </div>
               </div>
               {saveErr ? <div className="payment-modal-err payment-modal-err--sm">{saveErr}</div> : null}

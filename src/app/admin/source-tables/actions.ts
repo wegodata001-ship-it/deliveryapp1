@@ -1,7 +1,7 @@
 "use server";
 
 import { randomUUID } from "crypto";
-import { OrderStatus, PaymentMethod, Prisma } from "@prisma/client";
+import { PaymentMethod, Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { clearExpiredOrderEditUnlockForOrder } from "@/app/admin/order-edit-requests/actions";
@@ -10,10 +10,13 @@ import { prisma } from "@/lib/prisma";
 import { ensureOnce } from "@/lib/ensure-tables-once";
 import { formatLocalYmd } from "@/lib/work-week";
 import {
-  getOrderStatusLabel,
-  ORDER_STATUS_EDIT_SELECT_OPTIONS,
-  orderStatusLabelByEditText,
-} from "@/constants/order-status";
+  buildEditSelectOptions,
+  ensureOrderStatusSourceTable,
+  getOrderStatusLabelMap,
+  isValidOrderStatusId,
+  listOrderStatusSourceRows,
+  resolveOrderStatusFromDisplayText,
+} from "@/lib/order-status-registry";
 
 export type SourceTableId =
   | "customers"
@@ -149,11 +152,14 @@ const PAYMENT_METHOD_LABELS: Record<string, string> = {
   OTHER: "אחר",
 };
 
-const ORDER_STATUS_LABELS: Record<string, string> = Object.fromEntries(
-  (Object.values(OrderStatus) as OrderStatus[]).map((value) => [value, getOrderStatusLabel(value)]),
-) as Record<string, string>;
-
-const ORDER_STATUS_OPTIONS = ORDER_STATUS_EDIT_SELECT_OPTIONS;
+async function orderStatusLabelsAndOptions() {
+  const rows = await listOrderStatusSourceRows();
+  const labelMap = await getOrderStatusLabelMap();
+  return {
+    labels: labelMap,
+    options: buildEditSelectOptions(rows),
+  };
+}
 
 const YES_NO_OPTIONS = [
   { value: "true", label: "כן" },
@@ -216,28 +222,11 @@ async function ensureSourceManagementTables() {
         "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `;
-    await prisma.$executeRaw`
-      CREATE TABLE IF NOT EXISTS "SourceStatus" (
-        "id" TEXT PRIMARY KEY,
-        "nameHe" TEXT NOT NULL,
-        "color" TEXT NOT NULL DEFAULT 'info',
-        "isActive" BOOLEAN NOT NULL DEFAULT true,
-        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
-      )
-    `;
+    await ensureOrderStatusSourceTable();
     for (const method of Object.values(PaymentMethod)) {
       await prisma.$executeRaw`
         INSERT INTO "SourcePaymentMethod" ("id", "nameHe")
         VALUES (${method}, ${PAYMENT_METHOD_LABELS[method] ?? method})
-        ON CONFLICT ("id") DO NOTHING
-      `;
-    }
-    for (const status of Object.values(OrderStatus)) {
-      const color = status === "COMPLETED" ? "success" : status === "CANCELLED" ? "danger" : status.startsWith("WAITING") ? "warning" : "info";
-      await prisma.$executeRaw`
-        INSERT INTO "SourceStatus" ("id", "nameHe", "color")
-        VALUES (${status}, ${ORDER_STATUS_LABELS[status] ?? status}, ${color})
         ON CONFLICT ("id") DO NOTHING
       `;
     }
@@ -289,7 +278,7 @@ export async function listSourceTableCardsAction(): Promise<SourceTableCard[]> {
   await ensureAllowed();
   await ensureSourceManagementTables();
   await seedReceivablesIfEmpty();
-  const [customers, orders, payments, receivables, paymentChecks, users, activeUsers, locations, rates] = await Promise.all([
+  const [customers, orders, payments, receivables, paymentChecks, users, activeUsers, locations, rates, statusRows] = await Promise.all([
     prisma.customer.count({ where: { deletedAt: null } }),
     prisma.order.count({ where: { deletedAt: null } }),
     prisma.payment.count(),
@@ -299,6 +288,7 @@ export async function listSourceTableCardsAction(): Promise<SourceTableCard[]> {
     prisma.user.count({ where: { isActive: true } }),
     prisma.$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS "count" FROM "PaymentLocation"`,
     prisma.financialSettings.count(),
+    listOrderStatusSourceRows(),
   ]);
   const paymentLocationCount = Number(locations[0]?.count ?? 0);
   const counts: Record<SourceTableId, number | null> = {
@@ -312,7 +302,7 @@ export async function listSourceTableCardsAction(): Promise<SourceTableCard[]> {
     users,
     employees: activeUsers,
     "payment-methods": Object.keys(PaymentMethod).length,
-    statuses: Object.keys(OrderStatus).length,
+    statuses: statusRows.length,
     "payment-locations": paymentLocationCount,
     "exchange-rates": rates,
   };
@@ -359,7 +349,8 @@ export async function listSourceTableDataAction(id: SourceTableId, query: Source
               { customerCode: { contains: q, mode: "insensitive" } },
               { oldCustomerCode: { contains: q, mode: "insensitive" } },
               { phone: { contains: q, mode: "insensitive" } },
-              { secondPhone: { contains: q, mode: "insensitive" } },
+              { phone2: { contains: q, mode: "insensitive" } },
+              { country: { contains: q, mode: "insensitive" } },
               { email: { contains: q, mode: "insensitive" } },
               { city: { contains: q, mode: "insensitive" } },
               { notes: { contains: q, mode: "insensitive" } },
@@ -420,11 +411,13 @@ export async function listSourceTableDataAction(id: SourceTableId, query: Source
     };
   }
   if (id === "orders") {
+    const { labels: orderStatusLabels, options: orderStatusOptions } = await orderStatusLabelsAndOptions();
     const limit = Math.min(50, Math.max(1, Math.floor(query?.limit || 20)));
     const page = Math.max(1, Math.floor(query?.page || 1));
     const q = search.trim();
+    const statusMap = await getOrderStatusLabelMap();
     const statusEnum =
-      statusFilter && (Object.values(OrderStatus) as string[]).includes(statusFilter) ? (statusFilter as OrderStatus) : undefined;
+      statusFilter?.trim() && statusMap[statusFilter.trim()] ? statusFilter.trim() : undefined;
     const where: Prisma.OrderWhereInput = {
       deletedAt: null,
       ...(statusEnum ? { status: statusEnum } : {}),
@@ -547,10 +540,11 @@ export async function listSourceTableDataAction(id: SourceTableId, query: Source
           usd: r.totalUsd,
           ils: r.totalIlsWithVat,
           payment: pay?.paymentCode ?? (r.paymentMethod ? PAYMENT_METHOD_LABELS[r.paymentMethod] ?? r.paymentMethod : "אין תשלום"),
-          status: ORDER_STATUS_LABELS[r.status] ?? r.status,
+          status: orderStatusLabels[r.status] ?? r.status,
         },
         r.status === "COMPLETED" ? "success" : r.status === "CANCELLED" ? "danger" : r.status.startsWith("WAITING") ? "warning" : "info",
         {
+          statusEnum: r.status,
           customerId: r.customerId ?? "",
           paymentId: pay?.id ?? "",
           paymentCode: pay?.paymentCode ?? "",
@@ -571,7 +565,7 @@ export async function listSourceTableDataAction(id: SourceTableId, query: Source
         { key: "usd", label: "סכום דולר", kind: "money", sortable: true },
         { key: "ils", label: "סכום כולל מע\"מ", kind: "money", sortable: true },
         { key: "payment", label: "תשלום" },
-        { key: "status", label: "סטטוס", kind: "status", editable: true, options: ORDER_STATUS_OPTIONS },
+        { key: "status", label: "סטטוס", kind: "status", editable: true, options: orderStatusOptions },
       ],
       rows: mapped,
       page: safePage,
@@ -830,23 +824,31 @@ export async function listSourceTableDataAction(id: SourceTableId, query: Source
     };
   }
   if (id === "statuses") {
+    await ensureOrderStatusSourceTable();
     const rows = await prisma.$queryRaw<Array<{ id: string; nameHe: string; color: string; isActive: boolean }>>`
       SELECT "id", "nameHe", "color", "isActive"
       FROM "SourceStatus"
       ORDER BY "nameHe" ASC
     `;
     const all = rows
-      .filter((r) => containsAny([r.nameHe], search))
-      .map((r) => row(r.id, { name: r.nameHe, active: r.isActive ? "כן" : "לא" }, r.color === "success" ? "success" : r.color === "danger" ? "danger" : r.color === "warning" ? "warning" : "info"));
+      .filter((r) => containsAny([r.id, r.nameHe], search))
+      .map((r) =>
+        row(
+          r.id,
+          { code: r.id, name: r.nameHe, active: r.isActive ? "כן" : "לא" },
+          r.color === "success" ? "success" : r.color === "danger" ? "danger" : r.color === "warning" ? "warning" : "info",
+        ),
+      );
     return {
       ...def,
       columns: [
+        { key: "code", label: "קוד", sortable: true },
         { key: "name", label: "שם סטטוס", editable: true, sortable: true },
         { key: "active", label: "פעיל", kind: "boolean", editable: true, options: YES_NO_OPTIONS },
       ],
       ...paginateRows(all, query),
       summary: { total: String(all.length) },
-      canAdd: true,
+      canAdd: false,
     };
   }
 
@@ -886,14 +888,21 @@ export async function upsertSourceTableRowAction(input: SourceTableMutation): Pr
         "updatedAt" = CURRENT_TIMESTAMP
     `;
   } else if (input.table === "statuses") {
+    const statusId = (input.id?.trim() || v.code?.trim() || "").toUpperCase();
+    if (!(await isValidOrderStatusId(statusId))) {
+      return { ok: false, error: "סטטוס לא מוכר — הוסף אותו בניהול סטטוסים" };
+    }
+    const nameHe = (v.name || "").trim();
+    if (!nameHe) return { ok: false, error: "שם סטטוס חובה" };
     await prisma.$executeRaw`
       INSERT INTO "SourceStatus" ("id", "nameHe", "isActive", "updatedAt")
-      VALUES (${id}, ${v.name || ""}, ${v.active !== "לא" && v.active !== "false"}, CURRENT_TIMESTAMP)
+      VALUES (${statusId}, ${nameHe}, ${v.active !== "לא" && v.active !== "false"}, CURRENT_TIMESTAMP)
       ON CONFLICT ("id") DO UPDATE SET
         "nameHe" = EXCLUDED."nameHe",
         "isActive" = EXCLUDED."isActive",
         "updatedAt" = CURRENT_TIMESTAMP
     `;
+    revalidatePath("/admin/orders");
   } else if (input.table === "exchange-rates") {
     const base = Number((v.base || "0").replace(",", "."));
     const fee = Number((v.fee || "0").replace(",", "."));
@@ -920,9 +929,9 @@ export async function upsertSourceTableRowAction(input: SourceTableMutation): Pr
     });
   } else if (input.table === "orders" && input.id && v.status) {
     const me = await requireAuth();
-    const resolved = orderStatusLabelByEditText(v.status);
-    const status = (resolved ?? v.status) as OrderStatus;
-    if (Object.values(OrderStatus).includes(status)) {
+    const resolved = await resolveOrderStatusFromDisplayText(v.status);
+    const status = (resolved ?? v.status?.trim()) || "";
+    if (status && (await isValidOrderStatusId(status))) {
       const oid = input.id.trim();
       await clearExpiredOrderEditUnlockForOrder(oid);
       const orderRow = await prisma.order.findFirst({
@@ -955,6 +964,12 @@ export async function deleteSourceTableRowsAction(table: SourceTableId, ids: str
   } else if (table === "payment-methods") {
     for (const id of clean) await prisma.$executeRaw`DELETE FROM "SourcePaymentMethod" WHERE "id" = ${id}`;
   } else if (table === "statuses") {
+    const blocked = (await Promise.all(clean.map(async (id) => ((await isValidOrderStatusId(id)) ? id : null)))).filter(
+      Boolean,
+    ) as string[];
+    if (blocked.length > 0) {
+      return { ok: false, error: "לא ניתן למחוק סטטוסי הזמנה מוגדרים — ניתן לסמן כלא פעיל" };
+    }
     for (const id of clean) await prisma.$executeRaw`DELETE FROM "SourceStatus" WHERE "id" = ${id}`;
   } else {
     return { ok: false, error: "מחיקה זמינה רק לטבלאות מערכת ניתנות לעריכה" };

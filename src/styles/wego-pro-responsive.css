@@ -1,8 +1,7 @@
 /* =============================================================================
-   WEGO PRO — Responsive system layer
-   - Breakpoints (max-width): 1600 / 1400 / 1200 / 992 / 768 / 576
-   - Fluide gaps, min-width:0 on flex children, tables scroll, nav drawer (≤992)
-   - Load after design-system.css (root layout), admin.css may override specifics
+   WEGO PRO — Mobile / tablet responsive master layer
+   Breakpoints (max-width): 1400 / 1200 / 992 / 768 / 576
+   Load after admin.css + wego-order-capture-fluid.css — overrides layout only
    ============================================================================= */
 
 :root {
@@ -10,105 +9,74 @@
   --wego-r-pad-inline: clamp(10px, 2vw, 22px);
   --wego-r-pad-block: clamp(8px, 1.8vw, 20px);
   --wego-r-font-base: clamp(12px, 0.35vw + 11px, 15px);
+  --wego-r-input-h: clamp(36px, 9vw, 42px);
+  --wego-r-input-fs: clamp(14px, 3.6vw, 16px);
+  --wego-r-modal-radius: 20px;
+  --wego-r-floating-pad: 120px;
 }
 
-/* ---- Global overflow (step 17) — avoid horizontal scroll from wide children ---- */
-html {
+/* ---- PART 1: Prevent horizontal scroll ---- */
+html,
+body,
+#__next {
   overflow-x: hidden;
-}
-
-body {
-  overflow-x: hidden;
+  max-width: 100vw;
 }
 
 .adm-root {
   font-size: var(--wego-r-font-base);
+  min-width: 0;
+  max-width: 100%;
 }
 
 body.adm-nav-scroll-lock {
   overflow: hidden;
 }
 
-/* ---- Scope: fluid padding in main admin content ---- */
-@media (max-width: 1600px) {
-  .adm-content,
-  .adm-content--chrome {
-    padding-inline: var(--wego-r-pad-inline);
-  }
+.adm-root,
+.adm-root .adm-main,
+.adm-root .adm-chrome-stack,
+.adm-root .adm-chrome-below-header,
+.adm-root .adm-chrome-work,
+.adm-root .adm-chrome-main,
+.adm-root .adm-content,
+.adm-root .adm-content--chrome,
+.adm-root .adm-dashboard--compact,
+.adm-root .adm-win-body,
+.adm-root .adm-win-scroll-body {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
-@media (max-width: 1200px) {
-  .adm-chrome-main.adm-content--chrome {
-    padding-block: var(--wego-r-pad-block);
-  }
+.adm-root .adm-main,
+.adm-root .adm-chrome-stack {
+  overflow-x: clip;
 }
 
-@media (max-width: 1400px) {
-  .adm-header--compact {
-    padding-inline: clamp(0.45rem, 2vw, 1.25rem);
-  }
-
-  .adm-pill {
-    font-size: clamp(0.72rem, 0.9vw, 0.9rem);
-  }
+.adm-root img,
+.adm-root svg,
+.adm-root video,
+.adm-root canvas {
+  max-width: 100%;
 }
 
-@media (max-width: 1200px) {
-  .adm-pill--dense {
-    padding: 0.4rem 0.55rem;
-  }
+/* Flex/grid children — stop min-content blowout */
+.adm-root .adm-header,
+.adm-root .adm-header-lead,
+.adm-root .adm-header-meta,
+.adm-root .adm-toolbar,
+.adm-root .adm-filter-bar__row,
+.adm-root .adm-orders-toolbar,
+.adm-root .adm-page-headline,
+.adm-root .adm-card,
+.adm-root .adm-win-panel,
+.adm-root [class*="-grid"],
+.adm-root [class*="-row"]:not(.adm-table-excel thead tr) {
+  min-width: 0;
 }
 
-@media (max-width: 992px) {
-  .adm-header,
-  .adm-header--compact,
-  .adm-header--erp {
-    padding-inline: 0.65rem;
-  }
-
-  .adm-header-meta--rtl {
-    width: 100%;
-    justify-content: flex-start;
-  }
-}
-
-@media (max-width: 768px) {
-  .adm-page-headline-title {
-    font-size: 0.88rem;
-  }
-}
-
-@media (max-width: 576px) {
-  .adm-pill {
-    flex-wrap: wrap;
-  }
-
-  .adm-live-clock--header {
-    width: 100%;
-    align-items: flex-start;
-    text-align: start;
-  }
-
-  .adm-page-headline-brand {
-    display: none;
-  }
-
-  .adm-dash-home-bar {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .adm-filter-rate-wrap {
-    width: 100%;
-    margin-inline-start: 0;
-  }
-
-  .adm-filter-rate-pill {
-    width: 100%;
-  }
-}
-
-/* ---- Header lead + hamburger (show only ≤992) ---- */
+/* ---- Header / nav drawer ---- */
 .adm-header-lead {
   display: inline-flex;
   align-items: center;
@@ -121,23 +89,6 @@ body.adm-nav-scroll-lock {
   display: none;
 }
 
-@media (max-width: 992px) {
-  .adm-header-menu-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 40px;
-    height: 40px;
-    border-radius: 10px;
-    border: 1px solid rgba(148, 163, 184, 0.38);
-    background: #fff;
-    color: #0f172a;
-    cursor: pointer;
-    flex-shrink: 0;
-  }
-}
-
-/* ---- Sidebar — tablet/mobile drawer — desktop unchanged in admin.css ---- */
 .adm-sidebar-backdrop {
   position: fixed;
   inset: 0;
@@ -168,7 +119,84 @@ body.adm-nav-scroll-lock {
   }
 }
 
+/* ---- Scope: fluid padding in main admin content ---- */
+@media (max-width: 1600px) {
+  .adm-content,
+  .adm-content--chrome {
+    padding-inline: var(--wego-r-pad-inline);
+  }
+}
+
+@media (max-width: 1400px) {
+  .adm-header--compact {
+    padding-inline: clamp(0.45rem, 2vw, 1.25rem);
+  }
+
+  .adm-pill {
+    font-size: clamp(0.72rem, 0.9vw, 0.9rem);
+  }
+
+  .adm-win-panel--order-capture.adm-win-panel,
+  .adm-win-panel--payment-capture,
+  .adm-win-panel--payment-capture-updated {
+    width: min(96vw, 1600px);
+  }
+}
+
+@media (max-width: 1200px) {
+  .adm-chrome-main.adm-content--chrome {
+    padding-block: var(--wego-r-pad-block);
+  }
+
+  .adm-pill--dense {
+    padding: 0.4rem 0.55rem;
+  }
+
+  .adm-dashboard--compact .adm-dash-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .adm-orders-status-kpi {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .adm-activity-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .adm-balances-filters-row--primary {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
 @media (max-width: 992px) {
+  .adm-header,
+  .adm-header--compact,
+  .adm-header--erp {
+    padding-inline: 0.65rem;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .adm-header-meta--rtl {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .adm-header-menu-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    border: 1px solid rgba(148, 163, 184, 0.38);
+    background: #fff;
+    color: #0f172a;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
   .adm-root--nav-open .adm-sidebar-backdrop {
     display: block;
     animation: wego-backdrop-in 0.2s ease-out;
@@ -205,9 +233,348 @@ body.adm-nav-scroll-lock {
   .adm-root--nav-open .adm-sidebar {
     transform: translateX(0);
   }
+
+  /* PART 2 — card / KPI grids */
+  .adm-dashboard--compact .adm-dash-kpi-grid,
+  .adm-dashboard--compact .adm-dash-mini-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .adm-dashboard--compact .adm-dash-widgets {
+    grid-template-columns: 1fr;
+  }
+
+  .adm-orders-status-kpi {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .adm-orders-kpi-row,
+  .adm-reports-kpis {
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  }
+
+  .adm-activity-filters {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .adm-client-create-grid,
+  .adm-modal-grid-2,
+  .adm-payment-compact-grid,
+  .adm-payment-saved-grid,
+  .adm-payment-full-shell {
+    grid-template-columns: 1fr !important;
+  }
+
+  .adm-capture-sec-grid--4 {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .adm-capture-sec-grid--3 {
+    grid-template-columns: 1fr;
+  }
+
+  .adm-capture-amounts,
+  .payment-upd-grid,
+  .payment-upd-sticky-total-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .adm-card--wide {
+    grid-column: span 1;
+  }
+
+  /* PART 6 — filter / toolbar headers */
+  .adm-filter-bar__row,
+  .adm-filter-quick,
+  .adm-filter-actions,
+  .adm-balances-head,
+  .adm-balances-filters-row--primary,
+  .adm-balances-filters-tertiary-fields,
+  .adm-balances-filters-actions,
+  .adm-source-head,
+  .adm-source-detail-head,
+  .adm-receipt-top-filters,
+  .adm-page-headline,
+  .adm-orders-toolbar,
+  .adm-orders-toolbar-actions,
+  .adm-report-toolbar,
+  .payment-modal-meta-fields,
+  .payment-modal-cust-toolbar,
+  .payment-modal-topnav {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .adm-filter-bar__row {
+    gap: 0.55rem;
+  }
+
+  .adm-filter-field,
+  .adm-filter-rate-wrap,
+  .adm-filter-rate-pill {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .adm-filter-rate-wrap {
+    margin-inline-start: 0;
+  }
+
+  .adm-balances-filters-row--primary {
+    grid-template-columns: 1fr;
+  }
+
+  .adm-balances-filters-actions {
+    width: 100%;
+  }
+
+  .adm-balances-filters-actions .adm-btn {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
 }
 
-/* ---- Modal / window stack — viewport caps; preserve pointer model from admin.css ---- */
+@media (max-width: 768px) {
+  .adm-page-headline-title {
+    font-size: clamp(0.88rem, 3.5vw, 1rem);
+  }
+
+  .adm-balances-head h1,
+  .adm-source-head h1,
+  .adm-source-detail-head h1,
+  .adm-receipt-head h1 {
+    font-size: clamp(1.1rem, 5vw, 1.5rem);
+  }
+
+  .adm-balances-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  /* PART 3 — modals / window stack */
+  .adm-win-layer {
+    padding: 12px;
+    align-items: center;
+  }
+
+  .adm-win-panel,
+  .adm-win-panel--order-capture.adm-win-panel,
+  .adm-win-panel--payment-capture,
+  .adm-win-panel--payment-capture-updated,
+  .adm-win-panel--create-customer,
+  .adm-win-panel--customer-card {
+    width: calc(100vw - 24px) !important;
+    max-width: 100% !important;
+    height: auto !important;
+    max-height: 90vh !important;
+    max-height: 90dvh !important;
+    border-radius: var(--wego-r-modal-radius);
+    overflow: hidden;
+  }
+
+  .adm-win-body,
+  .adm-win-scroll-body {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .adm-win-header {
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+
+  .adm-win-title {
+    font-size: clamp(0.9rem, 3.8vw, 1rem);
+  }
+
+  /* PART 2 — single column cards */
+  .adm-dashboard--compact .adm-dash-kpi-grid,
+  .adm-dashboard--compact .adm-dash-mini-grid,
+  .adm-orders-status-kpi,
+  .adm-orders-kpi-row {
+    grid-template-columns: 1fr !important;
+  }
+
+  .adm-dashboard--compact .adm-dash-kpi-xl {
+    min-height: auto;
+    height: auto;
+  }
+
+  .adm-dashboard--compact .adm-dash-kpi-xl__icon {
+    width: 34px;
+    height: 34px;
+  }
+
+  .adm-dashboard--compact .adm-dash-kpi-xl__icon svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .adm-dashboard--compact .adm-dash-kpi-xl__num {
+    font-size: clamp(24px, 5vw, 38px);
+    text-align: center;
+    width: 100%;
+  }
+
+  .adm-dashboard--compact .adm-dash-kpi-xl__label,
+  .adm-dashboard--compact .adm-dash-kpi-xl__sub {
+    text-align: center;
+    width: 100%;
+  }
+
+  .adm-dashboard--compact .adm-dash-kpi-xl__top {
+    justify-content: center;
+  }
+
+  .adm-activity-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .adm-client-create-grid,
+  .adm-capture-sec-grid--4,
+  .adm-capture-sec-grid--2,
+  .adm-capture-amounts {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* PART 9 — dashboard dock + content clearance */
+  .adm-dashboard--compact:has(.adm-dash-dock) {
+    padding-bottom: var(--wego-r-floating-pad);
+  }
+
+  .adm-dash-dock {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    width: auto;
+    max-width: none;
+    transform: none;
+    justify-content: center;
+    border-radius: 18px;
+    padding: 10px 12px;
+    gap: 8px;
+  }
+
+  .adm-dash-dock__btn {
+    flex: 1 1 calc(50% - 8px);
+    min-width: 0;
+    justify-content: center;
+    font-size: 12px;
+    padding: 0.45rem 0.55rem;
+  }
+
+  /* PART 12 — finance / capture stacks */
+  .payment-modal-split {
+    flex-direction: column !important;
+  }
+
+  .payment-modal-main,
+  .payment-modal-side {
+    flex: 1 1 auto !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .adm-order-capture-compact .adm-order-layout,
+  .adm-win-panel--order-capture .adm-order-capture-compact .adm-order-layout,
+  .adm-oc-pro-summary-grid,
+  .adm-oc-pro-money-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .adm-oc-card,
+  .adm-oc-legacy-card,
+  .payment-upd-linecard,
+  .payment-modal-orders-summary--v2 {
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .payment-upd-sticky-total-hero {
+    font-size: clamp(24px, 5vw, 42px);
+  }
+
+  .payment-modal-orders-summary--v2 .payment-modal-orders-summary-val {
+    font-size: clamp(20px, 4.5vw, 28px);
+  }
+
+  /* PART 7 — inputs */
+  .adm-root input:not([type="radio"]):not([type="checkbox"]):not([type="hidden"]),
+  .adm-root textarea,
+  .adm-root select,
+  .adm-filter-input,
+  .adm-balances-input,
+  .payment-modal-inline-input,
+  .payment-upd-check-inp {
+    min-height: var(--wego-r-input-h);
+    font-size: var(--wego-r-input-fs);
+    max-width: 100%;
+  }
+
+  .adm-client-create-grid input,
+  .adm-client-create-grid textarea {
+    min-height: var(--wego-r-input-h);
+    font-size: var(--wego-r-input-fs);
+  }
+}
+
+@media (max-width: 576px) {
+  .adm-pill {
+    flex-wrap: wrap;
+  }
+
+  .adm-live-clock--header {
+    width: 100%;
+    align-items: flex-start;
+    text-align: start;
+  }
+
+  .adm-page-headline-brand {
+    display: none;
+  }
+
+  .adm-dash-home-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .adm-filter-rate-wrap {
+    width: 100%;
+    margin-inline-start: 0;
+  }
+
+  .adm-filter-rate-pill {
+    width: 100%;
+  }
+
+  .adm-dash-dock__btn {
+    flex: 1 1 100%;
+  }
+
+  .adm-report-kpi-card strong {
+    font-size: clamp(1.25rem, 8vw, 28px);
+  }
+
+  .adm-orders-kpi-card strong {
+    font-size: clamp(0.95rem, 4vw, 1.1rem);
+  }
+
+  .adm-status-card-count {
+    font-size: clamp(1.2rem, 6vw, 1.6rem);
+  }
+
+  .adm-win-layer {
+    padding: 8px;
+  }
+
+  .adm-win-panel,
+  .adm-win-panel--order-capture.adm-win-panel {
+    width: calc(100vw - 16px) !important;
+    border-radius: 16px;
+  }
+}
+
+/* ---- PART 3 base (all viewports) — viewport caps ---- */
 .adm-win-layer {
   padding: clamp(0.35rem, 2vw, 1rem);
 }
@@ -228,30 +595,55 @@ body.adm-nav-scroll-lock {
   min-width: 0;
 }
 
-.adm-modal-actions,
-.adm-modal-actions--capture {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-}
-
-/* ---- Tables (step 5) ---- */
-.adm-table-excel-wrap {
-  overflow-x: auto;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
+/* ---- PART 4 — tables scroll ---- */
+.table-scroll-wrapper,
+.wego-table-scroll,
+.adm-table-excel-wrap,
+.adm-table-excel-wrap--orders,
+.adm-report-table-wrap,
+.adm-cust-card-table-scroll,
+.adm-pay-table-scroll,
+.adm-pay-table-scroll--when-needed,
+.payment-modal-table-scroll,
+.payment-modal-table-wrap,
+.adm-excel-table-wrap,
+.adm-receipt-table-wrap,
+.adm-activity-table-wrap,
+.adm-source-pro-table-wrap,
+.adm-dt-wrap,
+.adm-oor-erp-table-wrap,
+.adm-pbl-erp-table-wrap,
+.adm-balances-table-wrap {
+  display: block;
+  width: 100%;
   max-width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+  -webkit-overflow-scrolling: touch;
 }
 
 @media (max-width: 992px) {
   .adm-table-excel:not(.adm-table-excel--orders),
-  .adm-table-excel--legacy-broad {
+  .adm-table-excel--legacy-broad,
+  .adm-table.adm-balances-table,
+  .adm-table.adm-report-table,
+  .adm-table.adm-source-pro-table,
+  .adm-table.adm-receipt-table,
+  .adm-table.adm-activity-table,
+  .adm-table.adm-excel-table,
+  .adm-pay-compact-table,
+  .payment-modal-table,
+  .adm-oor-erp-table,
+  .adm-pbl-erp-table {
     font-size: 0.72rem;
   }
 
   .adm-table-excel:not(.adm-table-excel--orders) thead th,
-  .adm-table-excel:not(.adm-table-excel--orders) tbody td {
+  .adm-table-excel:not(.adm-table-excel--orders) tbody td,
+  .adm-table.adm-balances-table th,
+  .adm-table.adm-balances-table td,
+  .adm-table.adm-report-table th,
+  .adm-table.adm-report-table td {
     padding: 5px 4px;
   }
 
@@ -259,6 +651,110 @@ body.adm-nav-scroll-lock {
   .adm-table-excel--orders tbody td {
     padding: 5px 4px !important;
     font-size: 0.74rem !important;
+  }
+
+  .adm-balances-table {
+    min-width: 680px;
+  }
+
+  .adm-table-excel-wrap {
+    max-height: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .adm-table-excel-wrap--orders {
+    overflow-x: auto;
+  }
+}
+
+/* ---- PART 5 — buttons / actions ---- */
+.adm-modal-actions,
+.adm-modal-actions--capture,
+.adm-oc-legacy-actions,
+.adm-oc-pro-actions,
+.adm-client-create-actions,
+.adm-balances-filters-actions,
+.adm-orders-toolbar-actions,
+.adm-toolbar,
+.adm-filter-actions,
+.adm-filter-quick,
+.adm-win-header-actions,
+.payment-modal-topnav,
+.adm-report-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+@media (max-width: 768px) {
+  .adm-modal-actions .adm-btn,
+  .adm-modal-actions--capture .adm-btn,
+  .adm-client-create-actions .adm-btn,
+  .adm-balances-filters-actions .adm-btn,
+  .adm-orders-toolbar .adm-btn,
+  .adm-toolbar .adm-btn {
+    flex: 1 1 auto;
+    min-width: min(100%, 9rem);
+    justify-content: center;
+  }
+
+  .adm-modal-actions--capture,
+  .adm-win-panel--order-capture .adm-modal-actions--capture {
+    position: sticky;
+    bottom: 0;
+    z-index: 6;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.92) 0%, #fff 35%);
+    padding-top: 8px;
+    margin-top: 4px;
+    border-top: 1px solid rgba(226, 232, 240, 0.9);
+  }
+}
+
+/* ---- PART 8 — pages with bottom floating UI (utility class) ---- */
+.adm-page--floating-actions,
+.adm-dashboard--compact.adm-page--floating-actions {
+  padding-bottom: var(--wego-r-floating-pad);
+}
+
+@media (min-width: 769px) {
+  .adm-page--floating-actions {
+    padding-bottom: 72px;
+  }
+}
+
+  .adm-report-kpi-card strong {
+    font-size: clamp(1.25rem, 8vw, 28px);
+  }
+
+  .adm-orders-kpi-card strong {
+    font-size: clamp(0.95rem, 4vw, 1.1rem);
+  }
+
+  .adm-dash-live-clock__time {
+    font-size: clamp(1rem, 3vw + 0.4rem, 1.35rem);
+  }
+
+/* ---- PART 11 — forms single column ---- */
+@media (max-width: 768px) {
+  .adm-form,
+  .adm-modal-form,
+  .adm-field--capture,
+  .adm-cust-inline-edit-form .adm-client-create-grid {
+    max-width: 100%;
+  }
+
+  .adm-form .adm-field,
+  .adm-modal-form .adm-field,
+  .adm-client-create-grid .adm-field {
+    margin-bottom: 0.85rem;
+  }
+
+  .adm-field label,
+  .adm-client-create-grid .adm-field label {
+    display: block;
+    margin-bottom: 0.35rem;
   }
 }
 
@@ -277,12 +773,6 @@ body.adm-nav-scroll-lock {
   }
 }
 
-@media (max-width: 576px) {
-  .adm-report-kpi-card strong {
-    font-size: clamp(1.25rem, 8vw, 28px);
-  }
-}
-
 /* ---- Forms: inputs min-width 0 (step 8) ---- */
 .adm-root input:not([type="radio"]):not([type="checkbox"]),
 .adm-root textarea,
@@ -290,7 +780,6 @@ body.adm-nav-scroll-lock {
   min-width: 0;
 }
 
-/* ---- Utilities ---- */
 .wego-fluid-form-row {
   display: flex;
   flex-wrap: wrap;
@@ -298,9 +787,293 @@ body.adm-nav-scroll-lock {
   align-items: flex-start;
 }
 
-.wego-table-scroll {
-  display: block;
-  width: 100%;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
+/* =============================================================================
+   Mobile admin shell — sidebar rail, tooltips, content (≤768px)
+   ============================================================================= */
+
+.adm-mobile-fin-hint {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  /* PART 9 — global overflow */
+  html,
+  body,
+  #__next,
+  #adm-root.adm-root {
+    overflow-x: hidden;
+    max-width: 100vw;
+  }
+
+  /* PART 1 + 10 — sidebar icon rail / expanded drawer */
+  .adm-sidebar {
+    position: sticky !important;
+    top: 0;
+    align-self: flex-start;
+    transform: none !important;
+    width: 82px !important;
+    min-width: 82px !important;
+    max-width: 82px !important;
+    flex: 0 0 82px !important;
+    height: 100vh !important;
+    height: 100dvh !important;
+    z-index: 45;
+    padding: 0.65rem 0 !important;
+    overflow-x: hidden;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .adm-root--nav-open .adm-sidebar {
+    position: fixed !important;
+    inset-block: 0;
+    inset-inline-end: 0;
+    width: min(240px, 85vw) !important;
+    min-width: min(240px, 85vw) !important;
+    max-width: 85vw !important;
+    flex: none !important;
+    box-shadow: -16px 0 48px rgba(2, 6, 23, 0.55);
+  }
+
+  html[dir="rtl"] .adm-root--nav-open .adm-sidebar {
+    right: 0;
+    left: auto;
+  }
+
+  .adm-root--nav-open .adm-sidebar-backdrop {
+    display: block;
+    z-index: 44;
+  }
+
+  /* collapsed: icons only */
+  .adm-root:not(.adm-root--nav-open) .adm-sidebar .adm-nav-link__label,
+  .adm-root:not(.adm-root--nav-open) .adm-sidebar .adm-nav-label,
+  .adm-root:not(.adm-root--nav-open) .adm-sidebar .adm-brand-title,
+  .adm-root:not(.adm-root--nav-open) .adm-sidebar .adm-nav-badge {
+    display: none !important;
+  }
+
+  .adm-root:not(.adm-root--nav-open) .adm-sidebar .adm-nav-link {
+    justify-content: center;
+    padding: 0.6rem 0.35rem;
+    gap: 0;
+  }
+
+  .adm-root:not(.adm-root--nav-open) .adm-sidebar .adm-brand {
+    padding: 0.45rem 0.3rem 0.55rem;
+  }
+
+  .adm-root:not(.adm-root--nav-open) .adm-sidebar .adm-brand-logo {
+    width: 42px;
+    height: 42px;
+    margin: 0 auto 0.25rem;
+  }
+
+  .adm-root:not(.adm-root--nav-open) .adm-sidebar .adm-nav {
+    padding-inline: 0.35rem;
+  }
+
+  .adm-root:not(.adm-root--nav-open) .adm-sidebar-foot {
+    padding-inline: 0.35rem;
+  }
+
+  /* PART 3 — main content */
+  .adm-main {
+    flex: 1 1 auto;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  .adm-chrome-stack,
+  .adm-chrome-below-header,
+  .adm-chrome-work {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  .adm-content,
+  .adm-content--chrome,
+  .adm-chrome-main {
+    width: 100%;
+    max-width: 100%;
+    padding-inline: 10px !important;
+    overflow-x: hidden;
+  }
+
+  /* PART 11 — section padding */
+  .adm-dashboard--compact,
+  .adm-balances-page,
+  .adm-source-page,
+  .adm-receipt-page,
+  .adm-orders-page {
+    padding: 12px;
+    box-sizing: border-box;
+  }
+
+  /* PART 4 — dashboard centered stacked cards */
+  .adm-dashboard--compact {
+    margin-inline: auto;
+    width: 100%;
+  }
+
+  .adm-dashboard--compact .adm-dash-home-bar,
+  .adm-dashboard--compact .adm-dash-kpi-band,
+  .adm-dashboard--compact .adm-dash-alerts-band,
+  .adm-dashboard--compact .adm-dash-widgets {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .adm-dashboard--compact .adm-dash-kpi-grid,
+  .adm-dashboard--compact .adm-dash-mini-grid {
+    display: grid;
+    grid-template-columns: 1fr !important;
+    gap: 12px;
+  }
+
+  /* PART 5 — header / filter / toolbar stacks */
+  .adm-header-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .adm-header-meta--rtl {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    width: 100%;
+  }
+
+  .adm-header-meta--rtl .adm-pill,
+  .adm-header-meta--rtl .adm-pill--rate {
+    width: 100%;
+    max-width: 100%;
+    flex-wrap: wrap;
+    justify-content: space-between;
+  }
+
+  .adm-filter-bar {
+    padding: 12px 10px;
+  }
+
+  .adm-filter-bar__row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .adm-filter-quick,
+  .adm-filter-actions,
+  .adm-filter-rate-wrap {
+    width: 100%;
+    margin-inline-start: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .adm-filter-rate-pill,
+  .adm-filter-chip,
+  .adm-filter-actions .adm-btn {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .adm-orders-toolbar,
+  .adm-orders-toolbar-actions,
+  .adm-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  /* PART 7 — typography */
+  .adm-page-headline-title,
+  .adm-dashboard--compact .adm-dash-section-title,
+  .adm-balances-head h1,
+  .adm-source-head h1 {
+    font-size: clamp(14px, 3vw, 18px);
+  }
+
+  .adm-dashboard--compact .adm-dash-kpi-xl__num {
+    font-size: clamp(22px, 5vw, 34px);
+  }
+
+  .adm-pill strong,
+  .adm-filter-rate-pill__value {
+    font-size: clamp(14px, 3vw, 16px);
+  }
+
+  /* PART 2 — financial hint (no native title tooltip) */
+  .adm-mobile-fin-hint {
+    display: block;
+    width: 100%;
+    margin-top: 2px;
+    font-size: 10px;
+    font-weight: 700;
+    color: #047857;
+    line-height: 1.25;
+    overflow-wrap: break-word;
+    white-space: normal;
+    max-width: 180px;
+    text-align: start;
+  }
+
+  .adm-pill--rate {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+
+  /* PART 8 — floating UI caps */
+  .adm-combo-list,
+  .adm-filter-week-list,
+  .adm-win-layer,
+  .adm-win-panel,
+  .adm-toast,
+  .adm-dash-dock {
+    z-index: 9999;
+  }
+
+  .adm-combo-list,
+  .adm-filter-week-list {
+    max-width: calc(100vw - 24px);
+    overflow-wrap: break-word;
+    white-space: normal;
+  }
+
+  /* PART 6 — tables */
+  .mobile-table-wrapper,
+  .table-scroll-wrapper,
+  .wego-table-scroll,
+  .adm-table-excel-wrap,
+  .adm-report-table-wrap,
+  .adm-balances-table-wrap,
+  .adm-source-pro-table-wrap,
+  .adm-cust-card-table-scroll,
+  .adm-pay-table-scroll,
+  .payment-modal-table-scroll {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .adm-table-excel,
+  .adm-table {
+    font-size: clamp(11px, 2.8vw, 13px);
+  }
+
+  .adm-table-excel thead th,
+  .adm-table-excel tbody td,
+  .adm-table th,
+  .adm-table td {
+    padding: 5px 4px;
+  }
 }

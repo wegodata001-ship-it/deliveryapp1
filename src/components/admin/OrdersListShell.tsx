@@ -2,12 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { OrderStatus, PaymentMethod } from "@prisma/client";
-import {
-  inlineStatusBadgeClass,
-  ORDER_STATUS_QUICK_SELECT_OPTIONS,
-  orderStatusToQuickSelectValue,
-} from "@/constants/order-status";
+import { PaymentMethod } from "@prisma/client";
+import { OS } from "@/lib/order-status-slugs";
+import { inlineStatusBadgeClass, orderStatusToQuickSelectValue } from "@/constants/order-status";
+import { useOrderStatusCatalog } from "@/components/admin/OrderStatusCatalogProvider";
 import { ChevronDown, FileText, Plus, Sheet } from "lucide-react";
 import {
   updateOrderListPaymentLocationAction,
@@ -116,7 +114,7 @@ function orderEditBadgeLabel(
   b: NonNullable<OrderListRow["editBadge"]>,
   orderStatus: string,
 ): { emoji: string; text: string; cls: string } {
-  const isCancelled = orderStatus === OrderStatus.CANCELLED;
+  const isCancelled = orderStatus === OS.CANCELLED;
   switch (b) {
     case "pending":
       return { emoji: "🟠", text: "ממתין לאישור מנהל", cls: "adm-order-edit-badge--pending" };
@@ -167,6 +165,7 @@ export function OrdersListShell({
 }: Props) {
   const router = useRouter();
   const { openWindow } = useAdminWindows();
+  const { quickOptions: statusQuickOptions } = useOrderStatusCatalog();
   const [rows, setRows] = useState<OrderListRow[]>(orders);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [listErr, setListErr] = useState<string | null>(null);
@@ -234,7 +233,7 @@ export function OrdersListShell({
         return;
       }
       if (row && !viewerIsAdmin) {
-        const sens = row.status === OrderStatus.COMPLETED || row.status === OrderStatus.CANCELLED;
+        const sens = row.status === OS.COMPLETED || row.status === OS.CANCELLED;
         if (sens) {
           if (row.editBadge === "unlock") {
             openWindow({ type: "orderCapture", props: { mode: "edit", orderId } });
@@ -246,7 +245,7 @@ export function OrdersListShell({
               variant: row.pendingEditOwnedByMe ? "pending_mine" : "pending_other",
               orderId,
               orderNumber: row.orderNumber,
-              status: row.status as OrderStatus,
+              status: row.status,
             });
             return;
           }
@@ -256,7 +255,7 @@ export function OrdersListShell({
               variant: row.editBadge === "rejected" ? "rejected" : "locked",
               orderId,
               orderNumber: row.orderNumber,
-              status: row.status as OrderStatus,
+              status: row.status,
             });
             return;
           }
@@ -268,7 +267,7 @@ export function OrdersListShell({
   );
 
   const onRowStatusChange = useCallback(
-    async (orderId: string, next: OrderStatus) => {
+    async (orderId: string, next: string) => {
       setListErr(null);
       const prevSnapshot = rows;
       setRows((cur) => cur.map((r) => (r.id === orderId ? { ...r, status: next } : r)));
@@ -281,7 +280,7 @@ export function OrdersListShell({
         return;
       }
       // משיכה מהחוב — מעדכנים גם את "שולם" ויתרת ההזמנה לפי הסכום שנמשך בפועל
-      if (next === OrderStatus.DEBT_WITHDRAWAL && typeof res.debtWithdrawalUsd === "number") {
+      if (next === OS.DEBT_WITHDRAWAL && typeof res.debtWithdrawalUsd === "number") {
         const withdrawn = res.debtWithdrawalUsd;
         setRows((cur) =>
           cur.map((r) => {
@@ -597,7 +596,7 @@ export function OrdersListShell({
         </div>
       </div>
 
-      <div className="adm-table-excel-wrap adm-table-excel-wrap--orders" dir="rtl">
+      <div className="mobile-table-wrapper adm-table-excel-wrap adm-table-excel-wrap--orders" dir="rtl">
         <table className="adm-table-excel adm-table-excel--orders adm-table-excel--orders-v2">
           <thead>
             <tr>
@@ -631,7 +630,7 @@ export function OrdersListShell({
               tableRows.map((o) => {
                 const selVal = orderStatusToQuickSelectValue(o.status);
                 const editBadgeUi = o.editBadge ? orderEditBadgeLabel(o.editBadge, o.status) : null;
-                const isCancelled = o.status === OrderStatus.CANCELLED;
+                const isCancelled = o.status === OS.CANCELLED;
                 return (
                   <tr
                     key={o.id}
@@ -712,9 +711,9 @@ export function OrdersListShell({
                         value={selVal}
                         disabled={!canEditOrders || busyId === o.id || !!o.quickStatusLocked}
                         aria-label="סטטוס הזמנה"
-                        onChange={(e) => void onRowStatusChange(o.id, e.target.value as OrderStatus)}
+                        onChange={(e) => void onRowStatusChange(o.id, e.target.value)}
                       >
-                        {ORDER_STATUS_QUICK_SELECT_OPTIONS.map((opt) => (
+                        {statusQuickOptions.map((opt) => (
                           <option key={opt.value} value={opt.value}>
                             {opt.label}
                           </option>

@@ -430,12 +430,21 @@ export function GlobalFilterBar({ financial = null, canManageFinancial = false }
             className={`adm-filter-rate-pill ${canManageFinancial ? "adm-filter-rate-pill--click" : ""}`}
             onClick={openFinancialModal}
             disabled={!canManageFinancial && !rateTitle}
-            title={canManageFinancial ? `הגדרות כספים — ${rateTitle ?? ""}` : rateTitle}
+            aria-label={
+              canManageFinancial
+                ? `הגדרות כספים, שער דולר ${rateLabel}. ${rateTitle ?? ""}`
+                : rateTitle
+                  ? `שער דולר ${rateLabel}. ${rateTitle}`
+                  : `שער דולר ${rateLabel}`
+            }
           >
             <span className="adm-filter-rate-pill__label">שער דולר</span>
             <strong dir="ltr" className="adm-filter-rate-pill__value">
               ₪ {rateLabel}
             </strong>
+            {canManageFinancial ? (
+              <span className="adm-mobile-fin-hint">הגדרות כספים</span>
+            ) : null}
           </button>
         </div>
         <div className="adm-filter-actions">

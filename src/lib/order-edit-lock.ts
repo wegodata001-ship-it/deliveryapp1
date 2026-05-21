@@ -1,4 +1,4 @@
-import type { OrderStatus } from "@prisma/client";
+import { OS } from "@/lib/order-status-slugs";
 
 /** משך פתיחת נעילה לאחר אישור מנהל (ברירת מחדל: 30 דקות) */
 export const ORDER_EDIT_UNLOCK_DURATION_MS = 30 * 60 * 1000;
@@ -8,8 +8,8 @@ export const ORDER_EDIT_UNLOCK_DURATION_MS = 30 * 60 * 1000;
  * - `COMPLETED` — ב־UI מוצג לרוב כ״מוכן״ / הושלמה.
  * - `CANCELLED` — הזמנה מבוטלת, עריכה רגישה לאותה שכבת הרשאות.
  */
-export function orderStatusRequiresEditApproval(status: OrderStatus): boolean {
-  return status === "COMPLETED" || status === "CANCELLED";
+export function orderStatusRequiresEditApproval(status: string): boolean {
+  return status === OS.COMPLETED || status === OS.CANCELLED;
 }
 
 export function hasActiveEditUnlock(params: {
@@ -39,7 +39,7 @@ export function canUserEditCompletedOrder(user: EditGateUser, order: OrderEditUn
 }
 
 export type OrderEditUnlockFields = {
-  status: OrderStatus;
+  status: string;
   editUnlockedForUserId: string | null;
   editUnlockedUntil: Date | null;
 };

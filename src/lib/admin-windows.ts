@@ -12,6 +12,11 @@ export type CustomerCardWindowProps = {
   initialTab?: "details" | "ledger";
 };
 
+export type CreateCustomerWindowProps = {
+  /** קוד שהוקלד בקליטת הזמנה לפני פתיחת החלון */
+  initialCustomerCode?: string;
+};
+
 export type PaymentWindowProps = {
   paymentId?: string | null;
   customerId?: string | null;
@@ -25,7 +30,7 @@ export type PaymentWindowProps = {
 export type AdminWindowPayload =
   | { type: "orderCapture"; props: OrderCaptureWindowProps }
   | { type: "customerCard"; props: CustomerCardWindowProps }
-  | { type: "createCustomer" }
+  | { type: "createCustomer"; props?: CreateCustomerWindowProps }
   | { type: "payments"; props?: PaymentWindowProps }
   | { type: "paymentsUpdated"; props?: PaymentWindowProps };
 

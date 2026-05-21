@@ -179,7 +179,7 @@ function NavBlock({
               }}
             >
               <NavIcon id={item.icon} />
-              {item.label}
+              <span className="adm-nav-link__label">{item.label}</span>
             </button>
           );
         }
@@ -196,7 +196,7 @@ function NavBlock({
               }}
             >
               <NavIcon id={item.icon} />
-              {item.label}
+              <span className="adm-nav-link__label">{item.label}</span>
             </button>
           );
         }
@@ -216,7 +216,7 @@ function NavBlock({
             <NavIcon id={item.icon} />
             <span className="adm-nav-link__label">{item.label}</span>
             {editReqBadge > 0 ? (
-              <span className="adm-nav-badge" title={`${editReqBadge} בקשות ממתינות`}>
+              <span className="adm-nav-badge" aria-label={`${editReqBadge} בקשות ממתינות`}>
                 {editReqBadge > 99 ? "99+" : editReqBadge}
               </span>
             ) : null}
@@ -267,7 +267,7 @@ export function AdminSidebar({
             onClick={() => closeNav?.()}
           >
             <LogOut size={18} />
-            יציאה
+            <span className="adm-nav-link__label">יציאה</span>
           </button>
         </form>
       </div>

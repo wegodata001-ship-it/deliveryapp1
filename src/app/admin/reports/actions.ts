@@ -1,6 +1,7 @@
 "use server";
 
-import { OrderStatus, PaymentMethod, Prisma } from "@prisma/client";
+import { PaymentMethod, Prisma } from "@prisma/client";
+import { OS } from "@/lib/order-status-slugs";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
@@ -8,7 +9,7 @@ import { endOfLocalDay, formatLocalYmd, parseLocalDate } from "@/lib/work-week";
 import { getCustomerBalancesReport, getCustomerBalancesReportWhereClauses } from "@/lib/customer-balances-report";
 import { fetchCustomerOpenOrderEnrichment } from "@/lib/customer-balance-order-status";
 import { normalizeOrderSourceCountry } from "@/lib/order-countries";
-import { getOrderStatusLabel } from "@/constants/order-status";
+import { getOrderStatusLabelMap, labelFromMap } from "@/lib/order-status-registry";
 import { formatIlsDisplay, formatUsdDisplay } from "@/lib/money-format";
 
 export type ReportKind =
@@ -66,9 +67,6 @@ export type ReportTable = {
   exportHeaderLines?: string[];
 };
 
-const STATUS_HE: Record<string, string> = Object.fromEntries(
-  Object.values(OrderStatus).map((value) => [value, getOrderStatusLabel(value)]),
-) as Record<string, string>;
 
 const METHOD_HE: Record<string, string> = {
   POINT: "נקודת תשלום",
@@ -127,7 +125,7 @@ async function computeKpis(filters: ReportFilters): Promise<ReportKpis> {
     deletedAt: null,
     orderDate: { gte: from, lte: to },
     ...(filters.customerId ? { customerId: filters.customerId } : {}),
-    ...(filters.status ? { status: filters.status as OrderStatus } : {}),
+    ...(filters.status ? { status: filters.status } : {}),
     ...(filters.workWeek ? { weekCode: filters.workWeek } : {}),
     ...(countryEnum ? { sourceCountry: countryEnum } : {}),
   };
@@ -162,7 +160,7 @@ async function computeKpis(filters: ReportFilters): Promise<ReportKpis> {
 
 export async function getReportsDashboardAction(filters: ReportFilters): Promise<ReportPayload> {
   await ensureAllowed();
-  const [kpis, customers] = await Promise.all([
+  const [kpis, customers, statusMap] = await Promise.all([
     computeKpis(filters),
     prisma.customer.findMany({
       where: { deletedAt: null, isActive: true },
@@ -170,6 +168,7 @@ export async function getReportsDashboardAction(filters: ReportFilters): Promise
       orderBy: { displayName: "asc" },
       select: { id: true, displayName: true, nameAr: true, nameEn: true, nameHe: true, customerCode: true },
     }),
+    getOrderStatusLabelMap(),
   ]);
   const reports: ReportCard[] = [
     { id: "openOrdersReport", title: "דוח הזמנות פתוחות", description: "הזמנות שעדיין לא נסגרו, לפי לקוח ושבוע.", icon: "📦", preview: `${kpis.totalOrders} הזמנות בטווח` },
@@ -190,7 +189,10 @@ export async function getReportsDashboardAction(filters: ReportFilters): Promise
       });
       return { id: c.id, label: c.customerCode ? `${disp} (${c.customerCode})` : disp };
     }),
-    statusOptions: Object.values(OrderStatus).map((value) => ({ value, label: STATUS_HE[value] ?? value })),
+    statusOptions: Object.keys(statusMap).map((value) => ({
+      value,
+      label: labelFromMap(statusMap, value),
+    })),
     paymentMethodOptions: Object.values(PaymentMethod).map((value) => ({ value, label: METHOD_HE[value] ?? value })),
   };
 }
@@ -198,13 +200,14 @@ export async function getReportsDashboardAction(filters: ReportFilters): Promise
 export async function getReportTableAction(kind: ReportKind, filters: ReportFilters): Promise<ReportTable> {
   await ensureAllowed();
   const { from, to } = dateRange(filters);
+  const statusMap = await getOrderStatusLabelMap();
 
   if (kind === "openOrdersReport") {
     const rows = await prisma.order.findMany({
       where: {
         deletedAt: null,
         orderDate: { gte: from, lte: to },
-        status: filters.status ? (filters.status as OrderStatus) : { notIn: [OrderStatus.COMPLETED, OrderStatus.CANCELLED] },
+        status: filters.status ? filters.status : { notIn: [OS.COMPLETED, OS.CANCELLED] },
         ...(filters.customerId ? { customerId: filters.customerId } : {}),
         ...(filters.workWeek ? { weekCode: filters.workWeek } : {}),
       },
@@ -216,7 +219,14 @@ export async function getReportTableAction(kind: ReportKind, filters: ReportFilt
       id: kind,
       title: "דוח הזמנות פתוחות",
       columns: ["מספר הזמנה", "לקוח", "שבוע", "סכום דולר", "סכום ש\"ח", "סטטוס"],
-      rows: rows.map((r) => [r.orderNumber ?? "", r.customerNameSnapshot ?? "", r.weekCode ?? "", moneyUsd(r.totalUsd), moneyIls(r.totalIlsWithVat), STATUS_HE[r.status] ?? r.status]),
+      rows: rows.map((r) => [
+        r.orderNumber ?? "",
+        r.customerNameSnapshot ?? "",
+        r.weekCode ?? "",
+        moneyUsd(r.totalUsd),
+        moneyIls(r.totalIlsWithVat),
+        labelFromMap(statusMap, r.status),
+      ]),
       totals: { total: moneyIls(total), paid: moneyIls(0), remaining: moneyIls(total) },
     };
   }

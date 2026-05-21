@@ -46,7 +46,7 @@ async function applyPaymentCustomerDraftsIfNeeded(params: {
 }): Promise<void> {
   const current = await prisma.customer.findFirst({
     where: { id: params.customerId, deletedAt: null, isActive: true },
-    select: { nameAr: true, nameEn: true, phone: true, secondPhone: true },
+    select: { nameAr: true, nameEn: true, phone: true, phone2: true },
   });
   if (!current) return;
 
@@ -57,7 +57,7 @@ async function applyPaymentCustomerDraftsIfNeeded(params: {
   const data: Prisma.CustomerUpdateInput = {};
   if (nameAr && !(current.nameAr?.trim())) data.nameAr = nameAr;
   if (nameEn && !(current.nameEn?.trim())) data.nameEn = nameEn;
-  if (phone && !(current.phone?.trim()) && !(current.secondPhone?.trim())) data.phone = phone;
+  if (phone && !(current.phone?.trim()) && !(current.phone2?.trim())) data.phone = phone;
   if (Object.keys(data).length === 0) return;
 
   await prisma.customer.update({

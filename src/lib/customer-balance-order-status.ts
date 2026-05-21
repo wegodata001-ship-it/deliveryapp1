@@ -1,4 +1,5 @@
-import { OrderStatus, Prisma, type PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
+import { OS } from "@/lib/order-status-slugs";
 import type { Prisma as PrismaTypes } from "@prisma/client";
 
 const EPS = new Prisma.Decimal("0.02");
@@ -93,14 +94,14 @@ export function formatUsdAmount(v: Prisma.Decimal): string {
 
 /** סיווג הזמנה "פתוחה" לתצוגת ניהול — לא מבטלים; COMPLETED ללא יתרה לא מוצגים ברשימה */
 export function classifyOrderPhase(
-  status: OrderStatus,
+  status: string,
   paidIls: Prisma.Decimal,
   expectedIls: Prisma.Decimal,
 ): OrderPhaseUi {
   const hasPartialPayment = paidIls.gt(EPS) && paidIls.lt(expectedIls.sub(EPS)) && expectedIls.gt(EPS);
   if (hasPartialPayment) return "PARTIAL";
-  if (status === OrderStatus.COMPLETED) return "READY";
-  if (status === OrderStatus.OPEN) return "DELAYED";
+  if (status === OS.COMPLETED) return "READY";
+  if (status === OS.OPEN) return "DELAYED";
   return "IN_PROGRESS";
 }
 
@@ -155,7 +156,7 @@ export async function fetchCustomerOpenOrderEnrichment(params: {
       where: {
         ...orderWhere,
         customerId: { in: chunk },
-        status: { not: OrderStatus.CANCELLED },
+        status: { not: OS.CANCELLED },
       },
       select: {
         id: true,
@@ -213,7 +214,7 @@ export async function fetchCustomerOpenOrderEnrichment(params: {
       remUsd = orderTotalUsd;
     }
 
-    const isClosedCompleted = o.status === OrderStatus.COMPLETED && balanceIls.lte(EPS);
+    const isClosedCompleted = o.status === OS.COMPLETED && balanceIls.lte(EPS);
     if (isClosedCompleted) continue;
 
     const phase = classifyOrderPhase(o.status, paidIls, expectedIls);

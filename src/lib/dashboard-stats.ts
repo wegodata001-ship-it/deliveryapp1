@@ -1,4 +1,4 @@
-import { OrderStatus } from "@prisma/client";
+import { OS } from "@/lib/order-status-slugs";
 import type { AppUser } from "@/lib/admin-auth";
 import { isAdminUser } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
@@ -112,7 +112,7 @@ export async function getDashboardStats(
     prisma.order.count({
       where: {
         deletedAt: null,
-        status: { notIn: [OrderStatus.COMPLETED, OrderStatus.CANCELLED] },
+        status: { notIn: [OS.COMPLETED, OS.CANCELLED] },
         payments: { none: { isPaid: true } },
       },
     }),

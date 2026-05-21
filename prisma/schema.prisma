@@ -141,7 +141,8 @@ model Customer {
   nameEn          String?
   displayName     String
   phone           String?
-  secondPhone     String?
+  phone2          String?   @map("secondPhone")
+  country         String?
   email           String?
   city            String?
   region          String?
@@ -163,7 +164,8 @@ model Customer {
   @@index([nameAr])
   @@index([nameEn])
   @@index([phone])
-  @@index([secondPhone])
+  @@index([phone2])
+  @@index([country])
   @@index([oldCustomerCode])
 }
 
@@ -183,7 +185,8 @@ model Order {
   orderExecutionDate   DateTime?
   /** תאריך ושעת קליטת ההזמנה במערכת */
   intakeDateTime       DateTime?
-  status               OrderStatus    @default(OPEN)
+  /** מזהה סטטוס — ערך מ-SourceStatus.id (למשל OPEN או מזהה מותאם) */
+  status               String         @default("OPEN")
   paymentMethod        PaymentMethod?
   paymentPointId       String?
   amountUsd            Decimal?       @db.Decimal(19, 4)

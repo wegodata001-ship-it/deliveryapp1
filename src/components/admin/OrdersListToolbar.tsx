@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { OrderStatus, PaymentMethod } from "@prisma/client";
+import { PaymentMethod } from "@prisma/client";
 import { AhWeekNavNextButton, AhWeekNavPrevButton } from "@/components/admin/AhWeekNavButtons";
 import { shiftAhWeekCode } from "@/lib/weeks/ah-week-nav";
 import { ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS } from "@/lib/order-capture-payment-methods";
@@ -13,7 +13,7 @@ import {
   getAhWeekRange,
   normalizeAhWeekCode,
 } from "@/lib/work-week";
-import { ORDER_STATUS_QUICK_SELECT_OPTIONS } from "@/constants/order-status";
+import { useOrderStatusCatalog } from "@/components/admin/OrderStatusCatalogProvider";
 
 export type OrdersCreatedByOption = {
   id: string;
@@ -74,8 +74,6 @@ function buildSearch(sp: URLSearchParams, patch: Record<string, string | undefin
   return q;
 }
 
-const STATUS_OPTIONS = ORDER_STATUS_QUICK_SELECT_OPTIONS;
-
 export function OrdersListToolbar({
   fromYmd,
   toYmd,
@@ -94,6 +92,7 @@ export function OrdersListToolbar({
 }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { quickOptions: STATUS_OPTIONS } = useOrderStatusCatalog();
   const [from, setFrom] = useState(fromYmd);
   const [to, setTo] = useState(toYmd);
   const [week, setWeek] = useState(() => (ahWeekSelect ? ahWeekSelect : ""));

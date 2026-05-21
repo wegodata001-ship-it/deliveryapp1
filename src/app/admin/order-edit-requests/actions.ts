@@ -1,6 +1,6 @@
 "use server";
 
-import { OrderEditRequestStatus, OrderStatus, Prisma } from "@prisma/client";
+import { OrderEditRequestStatus, Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
@@ -123,7 +123,7 @@ export type OrderEditEntryHint =
       variant: "locked" | "rejected" | "pending_mine" | "pending_other";
       orderId: string;
       orderNumber: string | null;
-      status: OrderStatus;
+      status: string;
     };
 
 /**
@@ -266,7 +266,7 @@ export type OrderEditRequestRow = {
   orderNumber: string | null;
   customerLabel: string | null;
   /** סטטוס ההזמנה ב־DB (מוכן / מבוטל וכו׳) */
-  orderStatus: OrderStatus;
+  orderStatus: string;
   requestedByName: string;
   createdAtIso: string;
   requestReason: string;

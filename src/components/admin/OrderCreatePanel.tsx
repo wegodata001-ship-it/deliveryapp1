@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { OrderStatus, PaymentMethod } from "@prisma/client";
+import { PaymentMethod } from "@prisma/client";
+import { OS } from "@/lib/order-status-slugs";
 import {
   CalendarDays,
   DollarSign,
@@ -27,6 +28,7 @@ import {
 import type { CustomerExtrasPayload } from "@/app/api/customers/extras/route";
 import { createOrderEditRequestAction } from "@/app/admin/order-edit-requests/actions";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
+import type { AdminToastFn } from "@/components/admin/AdminNavShell";
 import { useAdminLoading } from "@/components/admin/AdminLoadingProvider";
 import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import Card from "@/components/ui/Card";
@@ -72,10 +74,8 @@ import {
 } from "@/lib/weeks/order-week-dates";
 import { goToNextWeekNumber, goToPrevWeekNumber } from "@/lib/weeks/ah-week-nav";
 import { AhWeekNavNextButton, AhWeekNavPrevButton } from "@/components/admin/AhWeekNavButtons";
-import {
-  ORDER_STATUS_EDIT_SELECT_OPTIONS,
-  ORDER_STATUS_QUICK_SELECT_OPTIONS,
-} from "@/constants/order-status";
+import { getOrderStatusMeta } from "@/constants/order-status";
+import { useOrderStatusCatalog } from "@/components/admin/OrderStatusCatalogProvider";
 
 function toWeekCode(n: number): string {
   const nn = Math.max(1, Math.floor(n));
@@ -129,7 +129,7 @@ async function loadCustomerBalanceFast(
 
 function extrasFromCustomerRow(row: CustomerSearchRow): CustomerExtrasPayload | null {
   if (row.nameAr === undefined || row.nameEn === undefined) return null;
-  const phone = row.phone ?? row.secondPhone ?? null;
+  const phone = row.phone ?? row.phone2 ?? null;
   const indexLabel = row.oldCustomerCode?.trim() || row.code?.trim() || null;
   return {
     nameEn: row.nameEn ?? row.nameHe ?? null,
@@ -189,7 +189,7 @@ function customerDisplayCode(c: CustomerSearchRow): string {
 type Props = {
   windowId: string;
   financial: SerializedFinancial | null;
-  onToast: (msg: string) => void;
+  onToast: AdminToastFn;
   canCreateOrders: boolean;
   canEditOrders: boolean;
   target: OrderCaptureWindowProps;
@@ -211,6 +211,7 @@ export function OrderCreatePanel({
   const { openWindow, openCreateCustomerForOrder } = useAdminWindows();
   const { runWithLoading } = useAdminLoading();
   const { globalWeek, globalCountry } = useAdminGlobal();
+  const { quickOptions, editOptions } = useOrderStatusCatalog();
   const idp = (s: string) => `${windowId}-${s}`;
 
   const isEdit = target.mode === "edit";
@@ -330,9 +331,11 @@ export function OrderCreatePanel({
   const [extras, setExtras] = useState<CustomerExtrasPayload | null>(null);
 
   const [phoneStr, setPhoneStr] = useState("");
-  const [orderStatus, setOrderStatus] = useState<OrderStatus>(OrderStatus.OPEN);
+  const [orderStatus, setOrderStatus] = useState<string>(OS.OPEN);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(PaymentMethod.CASH);
   const [isSearching, setIsSearching] = useState(false);
+  /** אחרי חיפוש קוד שלא נמצא — הצעה להוספת לקוח */
+  const [customerCodeMissing, setCustomerCodeMissing] = useState(false);
 
   const customerCodeInputRef = useRef<HTMLInputElement | null>(null);
   const usdInputRef = useRef<HTMLInputElement | null>(null);
@@ -674,8 +677,6 @@ export function OrderCreatePanel({
 
   const finalTotalIls = useMemo(() => roundMoney2(totalBeforeVatIls + vatAmountIls), [totalBeforeVatIls, vatAmountIls]);
 
-  const vatAmountUsd = useMemo(() => (safeRate > 0 ? roundMoney2(vatAmountIls / safeRate) : 0), [vatAmountIls, safeRate]);
-
   const totalUsdCalc = useMemo(() => {
     if (!Number.isFinite(dealUsdTotal) || dealUsdTotal <= 0) return 0;
     return roundMoney2(dealUsdTotal + commissionUsdEffective);
@@ -684,6 +685,7 @@ export function OrderCreatePanel({
   const pickCustomer = useCallback((row: CustomerSearchRow) => {
     skipSearchRef.current = true;
     setErr(null);
+    setCustomerCodeMissing(false);
     setSelectedCustomer(row);
     setCodeStr(row.code?.trim() ? row.code.trim() : row.id);
     if (row.nameAr != null) setNameArStr(row.nameAr);
@@ -719,6 +721,7 @@ export function OrderCreatePanel({
       };
       skipSearchRef.current = true;
       setErr(null);
+      setCustomerCodeMissing(false);
       setSelectedCustomer(row);
       setCodeStr(client.customerCode);
       setNameArStr(client.customerNameAr);
@@ -742,16 +745,31 @@ export function OrderCreatePanel({
       queueMicrotask(() => {
         skipSearchRef.current = false;
       });
-      onToast(`לקוח ${client.customerNameAr} נוסף ונבחר`);
-      window.setTimeout(() => usdInputRef.current?.focus(), 0);
+      onToast("הלקוח נוסף וחובר להזמנה בהצלחה", { variant: "success" });
+      window.setTimeout(() => {
+        const el = usdInputRef.current;
+        if (el) {
+          el.focus();
+          try {
+            el.select();
+          } catch {
+            /* noop */
+          }
+        }
+      }, 0);
     },
     [applyExtras, onToast],
   );
 
-  const openNewCustomerModal = useCallback(() => {
-    if (!canCreateOrders) return;
-    openCreateCustomerForOrder(applyCreatedCustomer);
-  }, [canCreateOrders, openCreateCustomerForOrder, applyCreatedCustomer]);
+  const openNewCustomerModal = useCallback(
+    (presetCode?: string) => {
+      if (!canCreateOrders) return;
+      const code = (presetCode ?? codeStr).trim();
+      setErr(null);
+      openCreateCustomerForOrder(applyCreatedCustomer, code ? { initialCustomerCode: code } : undefined);
+    },
+    [canCreateOrders, codeStr, openCreateCustomerForOrder, applyCreatedCustomer],
+  );
 
   /** חיפוש כשמשנים קלט באחד משלושת השדות — לפי השדה במיקוד */
   useEffect(() => {
@@ -793,30 +811,40 @@ export function OrderCreatePanel({
     setDropdownField(field);
   }, []);
 
-  const resolveExactCode = useCallback(async () => {
-    setErr(null);
-    const raw = codeStr.trim();
-    if (!raw) {
-      setErr("הזינו קוד לקוח");
-      return;
-    }
-    setIsSearching(true);
-    try {
-      const row = await resolveCustomerFast(raw);
-      if (row) {
-        pickCustomer(row);
+  const resolveExactCode = useCallback(
+    async (opts?: { openCreateIfMissing?: boolean }) => {
+      setErr(null);
+      const raw = codeStr.trim();
+      if (!raw) {
+        setCustomerCodeMissing(false);
+        setErr("הזינו קוד לקוח");
         return;
       }
-      const found = await searchCustomersFast(raw);
-      const exact =
-        found.find((h) => (h.code || "").trim().toLowerCase() === raw.toLowerCase()) ??
-        found.find((h) => h.label.trim().toLowerCase() === raw.toLowerCase());
-      if (exact) pickCustomer(exact);
-      else setErr("לקוח לא נמצא");
-    } finally {
-      setIsSearching(false);
-    }
-  }, [codeStr, pickCustomer]);
+      setIsSearching(true);
+      try {
+        const row = await resolveCustomerFast(raw);
+        if (row) {
+          pickCustomer(row);
+          return;
+        }
+        const found = await searchCustomersFast(raw);
+        const exact =
+          found.find((h) => (h.code || "").trim().toLowerCase() === raw.toLowerCase()) ??
+          found.find((h) => h.label.trim().toLowerCase() === raw.toLowerCase());
+        if (exact) {
+          pickCustomer(exact);
+          return;
+        }
+        setCustomerCodeMissing(true);
+        if (opts?.openCreateIfMissing && canCreateOrders) {
+          openNewCustomerModal(raw);
+        }
+      } finally {
+        setIsSearching(false);
+      }
+    },
+    [codeStr, pickCustomer, canCreateOrders, openNewCustomerModal],
+  );
 
   const resetFormForNew = useCallback(() => {
     skipSearchRef.current = true;
@@ -836,7 +864,7 @@ export function OrderCreatePanel({
     setIsSearching(false);
     setErr(null);
     setPaymentMethod(PaymentMethod.CASH);
-    setOrderStatus(OrderStatus.OPEN);
+    setOrderStatus(OS.OPEN);
     {
       const code = globalWeek || DEFAULT_WEEK_CODE;
       const range = getAhWeekRange(code);
@@ -1195,7 +1223,7 @@ export function OrderCreatePanel({
   const formLocked = Boolean(isEdit && editGate?.employeeEditBlocked);
   const fieldDisabled = isSaving || formLocked;
 
-  const statusOptions = isEdit ? ORDER_STATUS_EDIT_SELECT_OPTIONS : ORDER_STATUS_QUICK_SELECT_OPTIONS;
+  const statusOptions = isEdit ? editOptions : quickOptions;
 
   return (
     <div className="adm-order-create-legacy-wrap adm-oc-pro-wrap">
@@ -1236,7 +1264,7 @@ export function OrderCreatePanel({
                   className="adm-oc-pro-new-customer"
                   disabled={fieldDisabled}
                   title="יצירת לקוח חדש ומילוי אוטומטי בטופס"
-                  onClick={openNewCustomerModal}
+                  onClick={() => openNewCustomerModal()}
                 >
                   <Plus size={15} strokeWidth={2.4} aria-hidden />
                   <span>לקוח חדש</span>
@@ -1571,6 +1599,7 @@ export function OrderCreatePanel({
                   onChange={(e) => {
                     setCodeStr(e.target.value);
                     setSelectedCustomer(null);
+                    setCustomerCodeMissing(false);
                   }}
                   onFocus={() => {
                     focusedComboRef.current = "code";
@@ -1583,7 +1612,7 @@ export function OrderCreatePanel({
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       e.preventDefault();
-                      void resolveExactCode();
+                      void resolveExactCode({ openCreateIfMissing: true });
                     }
                   }}
                 />
@@ -1632,6 +1661,20 @@ export function OrderCreatePanel({
                 <User size={16} strokeWidth={2} aria-hidden />
               </button>
             </div>
+            {!isEdit && customerCodeMissing && codeStr.trim() && !selectedCustomer && canCreateOrders ? (
+              <div className="adm-oc-missing-customer" role="status" aria-live="polite">
+                <p className="adm-oc-missing-customer__msg">הלקוח לא קיים — להוסיף לקוח חדש?</p>
+                <button
+                  type="button"
+                  className="adm-oc-missing-customer__btn"
+                  disabled={fieldDisabled}
+                  onClick={() => openNewCustomerModal()}
+                >
+                  <Plus size={15} strokeWidth={2.4} aria-hidden />
+                  <span>לקוח חדש</span>
+                </button>
+              </div>
+            ) : null}
           </div>
         </div>
 
@@ -1813,7 +1856,7 @@ export function OrderCreatePanel({
                     disabled={fieldDisabled}
                     value={orderStatus}
                     onFocus={closeCustomerDropdown}
-                    onChange={(e) => setOrderStatus(e.target.value as OrderStatus)}
+                    onChange={(e) => setOrderStatus(e.target.value)}
                   >
                     {statusOptions.map((o) => (
                       <option key={o.value} value={o.value}>
@@ -1961,15 +2004,15 @@ export function OrderCreatePanel({
                   value={`$${formatMoneyAmount(roundMoney2(eqUsdFromIls))}`}
                 />
               </div>
-              <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2">
-                <span className="adm-oc-money-label">עמלה</span>
+              <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2 adm-oc-money-line--commission">
+                <span className="adm-oc-money-label commission-label">עמלה</span>
                 <AnimatedMoneyValue
-                  className="adm-oc-money-value adm-oc-money-value--ils"
+                  className="adm-oc-money-value adm-oc-money-value--ils commission-value"
                   dir="ltr"
                   value={`${formatMoneyAmount(commissionIlsEffective)} ₪`}
                 />
               </div>
-              <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2">
+              <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2 adm-oc-money-line--neutral">
                 <span className="adm-oc-money-label">סה״כ לפני עמלה</span>
                 <AnimatedMoneyValue
                   className="adm-oc-money-value adm-oc-money-value--ils"
@@ -1977,26 +2020,26 @@ export function OrderCreatePanel({
                   value={`${formatMoneyAmount(roundMoney2(dealIlsTotal))} ₪`}
                 />
               </div>
-              <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2">
-                <span className="adm-oc-money-label">סה״כ לפני מע״מ</span>
+              <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2 adm-oc-money-line--primary">
+                <span className="adm-oc-money-label summary-primary-label">סה״כ לפני מע״מ</span>
                 <AnimatedMoneyValue
-                  className="adm-oc-money-value adm-oc-money-value--ils"
+                  className="adm-oc-money-value adm-oc-money-value--ils summary-primary-value"
                   dir="ltr"
                   value={`${formatMoneyAmount(totalBeforeVatIls)} ₪`}
                 />
               </div>
-              <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2">
+              <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2 adm-oc-money-line--vat">
                 <span className="adm-oc-money-label">{formatVatPercentLabel()}</span>
                 <AnimatedMoneyValue
                   className="adm-oc-money-value adm-oc-money-value--ils"
                   dir="ltr"
-                  value={`${formatMoneyAmount(vatAmountIls)} ₪ / $${formatMoneyAmount(vatAmountUsd)}`}
+                  value={`${formatMoneyAmount(vatAmountIls)} ₪`}
                 />
               </div>
-              <div className="adm-oc-line adm-oc-line--total adm-oc-pro-final adm-oc-money-line adm-oc-money-line--hero">
-                <span className="adm-oc-money-label">סה״כ סופי</span>
+              <div className="adm-oc-line adm-oc-line--total adm-oc-pro-final adm-oc-money-line adm-oc-money-line--hero summary-total">
+                <span className="adm-oc-money-label summary-total-label">סה״כ סופי</span>
                 <AnimatedMoneyValue
-                  className="adm-oc-money-value adm-oc-money-value--ils"
+                  className="adm-oc-money-value adm-oc-money-value--ils summary-total-value"
                   dir="ltr"
                   value={`${formatMoneyAmount(finalTotalIls)} ₪`}
                 />
@@ -2026,18 +2069,18 @@ export function OrderCreatePanel({
                   }}
                 />
               </div>
-              <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2">
-                <span className="adm-oc-money-label">עמלה</span>
+              <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2 adm-oc-money-line--commission">
+                <span className="adm-oc-money-label commission-label">עמלה</span>
                 <AnimatedMoneyValue
-                  className="adm-oc-money-value adm-oc-money-value--usd"
+                  className="adm-oc-money-value adm-oc-money-value--usd commission-value"
                   dir="ltr"
                   value={`${formatMoneyAmount(commissionUsdEffective)} $`}
                 />
               </div>
-              <div className="adm-oc-line adm-oc-line--total adm-oc-money-line adm-oc-money-line--hero">
-                <span className="adm-oc-money-label">סה״כ</span>
+              <div className="adm-oc-line adm-oc-line--total adm-oc-money-line adm-oc-money-line--hero summary-total">
+                <span className="adm-oc-money-label summary-total-label">סה״כ</span>
                 <AnimatedMoneyValue
-                  className="adm-oc-money-value adm-oc-money-value--usd"
+                  className="adm-oc-money-value adm-oc-money-value--usd summary-total-value"
                   dir="ltr"
                   value={`${formatMoneyAmount(totalUsdCalc)} $`}
                 />

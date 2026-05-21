@@ -1,12 +1,13 @@
 "use server";
 
-import { OrderStatus, Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
+import { OS } from "@/lib/order-status-slugs";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
 import { endOfLocalDay, formatLocalYmd, parseLocalDate } from "@/lib/work-week";
 import { normalizeOrderSourceCountry } from "@/lib/order-countries";
 import type { ReportFilters } from "@/app/admin/reports/actions";
-import { getOrderStatusLabel } from "@/constants/order-status";
+import { getOrderStatusLabelMap, labelFromMap } from "@/lib/order-status-registry";
 
 /** ערכי סינון UI */
 export type OpenOrdersModalStatusBucket =
@@ -36,7 +37,7 @@ export type OpenOrderModalRow = {
   weekCode: string;
   totalUsd: string;
   totalIls: string;
-  status: OrderStatus;
+  status: string;
   statusLabel: string;
   paymentLabel: "ללא תשלום" | "חלקי" | "שולם";
   orderDateYmd: string;
@@ -56,19 +57,15 @@ export type OpenOrdersModalPayload = {
   };
 };
 
-const IN_CARE_STATUSES: OrderStatus[] = [
-  OrderStatus.WAITING_FOR_EXECUTION,
-  OrderStatus.WITHDRAWAL_FROM_SUPPLIER,
-  OrderStatus.SENT,
-  OrderStatus.WAITING_FOR_CHINA_EXECUTION,
-  OrderStatus.DEBT_WITHDRAWAL,
+const IN_CARE_STATUSES: string[] = [
+  OS.WAITING_FOR_EXECUTION,
+  OS.WITHDRAWAL_FROM_SUPPLIER,
+  OS.SENT,
+  OS.WAITING_FOR_CHINA_EXECUTION,
+  OS.DEBT_WITHDRAWAL,
 ];
 
 const IN_CARE_SQL_LIST = IN_CARE_STATUSES.map((s) => `'${s}'`).join(", ");
-
-const STATUS_LABEL: Record<OrderStatus, string> = Object.fromEntries(
-  Object.values(OrderStatus).map((value) => [value, getOrderStatusLabel(value)]),
-) as Record<OrderStatus, string>;
 
 function moneyIls(v: Prisma.Decimal | number | null | undefined): string {
   const n = v instanceof Prisma.Decimal ? Number(v.toString()) : Number(v ?? 0);
@@ -163,7 +160,7 @@ function buildOpenOrdersModalSqlParts(report: ReportFilters, modal: OpenOrdersMo
   const bucket = modal.statusBucket ?? "ALL";
 
   if (parentStatus) {
-    parts.push(Prisma.sql`o."status" = ${parentStatus}::"OrderStatus"`);
+    parts.push(Prisma.sql`o."status"::text = ${parentStatus}`);
   } else if (bucket === "PARTIAL_PAY") {
     const paidSum = Prisma.sql`
       COALESCE((
@@ -181,20 +178,20 @@ function buildOpenOrdersModalSqlParts(report: ReportFilters, modal: OpenOrdersMo
         (COALESCE(o."totalUsd", COALESCE(o."amountUsd", 0::numeric) + COALESCE(o."commissionUsd", 0::numeric)))
         * COALESCE(o."usd_rate_used", o."snapshotFinalDollarRate", o."exchangeRate", 0::numeric)
       )`;
-    parts.push(Prisma.sql`o."status" <> ${OrderStatus.CANCELLED}::"OrderStatus"`);
+    parts.push(Prisma.sql`o."status"::text <> ${OS.CANCELLED}`);
     parts.push(Prisma.sql`EXISTS (SELECT 1 FROM "Payment" p0 WHERE p0."orderId" = o.id AND p0."isPaid" = true)`);
     parts.push(Prisma.sql`${paidSum} > 0.01::numeric`);
     parts.push(Prisma.sql`${paidSum} < (${expectedIls} - 0.01::numeric)`);
   } else if (bucket === "ALL") {
     parts.push(
-      Prisma.sql`o."status" NOT IN (${OrderStatus.COMPLETED}::"OrderStatus", ${OrderStatus.CANCELLED}::"OrderStatus")`,
+      Prisma.sql`o."status"::text NOT IN (${OS.COMPLETED}, ${OS.CANCELLED})`,
     );
   } else if (bucket === "OPEN") {
-    parts.push(Prisma.sql`o."status" = ${OrderStatus.OPEN}::"OrderStatus"`);
+    parts.push(Prisma.sql`o."status"::text = ${OS.OPEN}`);
   } else if (bucket === "COMPLETED") {
-    parts.push(Prisma.sql`o."status" = ${OrderStatus.COMPLETED}::"OrderStatus"`);
+    parts.push(Prisma.sql`o."status"::text = ${OS.COMPLETED}`);
   } else if (bucket === "CANCELLED") {
-    parts.push(Prisma.sql`o."status" = ${OrderStatus.CANCELLED}::"OrderStatus"`);
+    parts.push(Prisma.sql`o."status"::text = ${OS.CANCELLED}`);
   } else if (bucket === "IN_CARE") {
     parts.push(Prisma.raw(`o."status"::text IN (${IN_CARE_SQL_LIST})`));
   }
@@ -229,6 +226,7 @@ export async function listOpenOrdersReportModalAction(
   }
 
   const limit = Math.min(50, Math.max(1, Math.floor(modal.limit ?? 15)));
+  const statusMap = await getOrderStatusLabelMap();
 
   const sqlParts = buildOpenOrdersModalSqlParts(report, modal);
   const whereSql = Prisma.join(sqlParts, " AND ");
@@ -308,7 +306,7 @@ export async function listOpenOrdersReportModalAction(
       totalUsd: moneyUsd(orderUsd(o)),
       totalIls: moneyIls(o.totalIlsWithVat ?? o.totalIls ?? 0),
       status: o.status,
-      statusLabel: STATUS_LABEL[o.status] ?? o.status,
+      statusLabel: labelFromMap(statusMap, o.status),
       paymentLabel,
       orderDateYmd: od,
     };

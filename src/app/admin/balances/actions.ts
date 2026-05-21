@@ -364,7 +364,8 @@ function buildCustomerWhere(query: CustomerBalanceQuery): Prisma.CustomerWhereIn
         { customerCode: { contains: smart, mode: "insensitive" } },
         { oldCustomerCode: { contains: smart, mode: "insensitive" } },
         { phone: { contains: smart, mode: "insensitive" } },
-        { secondPhone: { contains: smart, mode: "insensitive" } },
+        { phone2: { contains: smart, mode: "insensitive" } },
+        { country: { contains: smart, mode: "insensitive" } },
         ...(smart.length >= 2 ? [{ notes: { contains: smart, mode: "insensitive" as const } }] : []),
       ],
     };
@@ -388,7 +389,7 @@ function buildCustomerWhere(query: CustomerBalanceQuery): Prisma.CustomerWhereIn
       ? {
           OR: [
             { phone: { contains: f.phone.trim(), mode: "insensitive" as const } },
-            { secondPhone: { contains: f.phone.trim(), mode: "insensitive" as const } },
+            { phone2: { contains: f.phone.trim(), mode: "insensitive" as const } },
           ],
         }
       : {}),

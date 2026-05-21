@@ -6,6 +6,7 @@ import { AdminWindowStack } from "@/components/admin/AdminWindowStack";
 import { AdminLoadingProvider } from "@/components/admin/AdminLoadingProvider";
 import { NavigationProgress } from "@/components/admin/NavigationProgress";
 import { AdminGlobalProvider } from "@/components/admin/AdminGlobalContext";
+import { OrderStatusCatalogProvider } from "@/components/admin/OrderStatusCatalogProvider";
 import { useAdminToast } from "@/components/admin/AdminNavShell";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 
@@ -44,6 +45,7 @@ export function AdminChrome({
   return (
     <AdminLoadingProvider>
       <AdminGlobalProvider>
+        <OrderStatusCatalogProvider>
         <NavigationProgress />
         <div className="adm-chrome-stack">
           <AdminTopBar
@@ -71,6 +73,7 @@ export function AdminChrome({
             viewerIsAdmin={viewerIsAdmin}
           />
         ) : null}
+        </OrderStatusCatalogProvider>
       </AdminGlobalProvider>
     </AdminLoadingProvider>
   );

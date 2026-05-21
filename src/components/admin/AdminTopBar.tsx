@@ -79,13 +79,20 @@ export function AdminTopBar({ displayName, roleLabel, financial, canManageFinanc
               </div>
               <button
                 type="button"
-                className={`adm-pill adm-pill--success adm-pill--dense ${canManageFinancial ? "adm-pill--click" : ""}`}
+                className={`adm-pill adm-pill--success adm-pill--dense adm-pill--rate ${canManageFinancial ? "adm-pill--click" : ""}`}
                 onClick={openFinancialModal}
                 disabled={!canManageFinancial}
-                title={canManageFinancial ? `הגדרות כספים — ${rateTitle ?? ""}` : rateTitle}
+                aria-label={
+                  canManageFinancial
+                    ? `הגדרות כספים, שער דולר ${rateLabel}. ${rateTitle ?? ""}`
+                    : rateTitle
+                      ? `שער דולר ${rateLabel}. ${rateTitle}`
+                      : `שער דולר ${rateLabel}`
+                }
               >
                 <span>שער דולר</span>
                 <strong dir="ltr">₪ {rateLabel}</strong>
+                {canManageFinancial ? <span className="adm-mobile-fin-hint">הגדרות כספים</span> : null}
               </button>
             </>
           ) : null}

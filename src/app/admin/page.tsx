@@ -44,7 +44,7 @@ export default async function AdminDashboardPage({
   const canViewReports = userHasAnyPermission(me, ["view_reports"]);
 
   return (
-    <div className="adm-dashboard adm-dashboard--compact" dir="rtl">
+    <div className="adm-dashboard adm-dashboard--compact adm-page--floating-actions" dir="rtl">
       <header className="adm-dash-home-bar adm-dash-reveal">
         <p className="adm-dash-home-bar__greet">
           שלום, <strong>{displayName}</strong>

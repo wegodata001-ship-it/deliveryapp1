@@ -1,7 +1,9 @@
 "use server";
 
 import { randomUUID } from "crypto";
-import { OrderEditRequestStatus, OrderStatus, PaymentMethod, Prisma } from "@prisma/client";
+import { OrderEditRequestStatus, PaymentMethod, Prisma } from "@prisma/client";
+import { listOrderStatusTags } from "@/lib/order-status-registry";
+import { OS } from "@/lib/order-status-slugs";
 import { revalidatePath } from "next/cache";
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { breakdownIlsIncludingVat, computeFromUsdAmount } from "@/lib/financial-calc";
@@ -23,6 +25,7 @@ import {
   normalizeCustomerCodeInput,
   suggestNextCustomerCode,
 } from "@/lib/customer-code";
+import { normalizeCustomerPlaceInput } from "@/lib/customer-place";
 import { canUserEditCompletedOrder } from "@/lib/order-edit-lock";
 import {
   clearExpiredOrderEditUnlockForOrder,
@@ -82,7 +85,7 @@ export type CustomerSearchRow = {
   nameAr?: string | null;
   nameEn?: string | null;
   nameHe?: string | null;
-  secondPhone?: string | null;
+  phone2?: string | null;
   oldCustomerCode?: string | null;
   address?: string | null;
 };
@@ -121,7 +124,11 @@ export type PaymentCaptureState =
   | { ok: false; error: string };
 
 const PAYMENT_METHODS = new Set<string>(Object.values(PaymentMethod));
-const ORDER_STATUSES = new Set<string>(Object.values(OrderStatus));
+
+async function activeOrderStatusIdSet(): Promise<Set<string>> {
+  const rows = await listOrderStatusTags(false);
+  return new Set(rows.map((r) => r.id));
+}
 
 export type OrderCapturePaymentLineInput = {
   paymentMethod: string;
@@ -711,7 +718,7 @@ export async function searchCustomersForOrderAction(query: string): Promise<Cust
       { customerCode: { equals: q, mode: "insensitive" } },
       { oldCustomerCode: { equals: q, mode: "insensitive" } },
       { phone: { equals: q } },
-      { secondPhone: { equals: q } },
+      { phone2: { equals: q } },
     ];
     if (isUuid) {
       exactOr.push({ id: q });
@@ -740,7 +747,8 @@ export async function searchCustomersForOrderAction(query: string): Promise<Cust
             { customerCode: { contains: q, mode: "insensitive" } },
             { oldCustomerCode: { contains: q, mode: "insensitive" } },
             { phone: { contains: q } },
-            { secondPhone: { contains: q } },
+            { phone2: { contains: q } },
+            { country: { contains: q, mode: "insensitive" } },
           ],
         },
         take: 20,
@@ -933,7 +941,7 @@ export async function createMinimalOrderAction(form: {
       customerTypeSnapshot: (customer.customerType || "רגיל").trim() || "רגיל",
       weekCode,
       orderDate,
-      status: OrderStatus.OPEN,
+      status: OS.OPEN,
       paymentMethod: null,
       amountUsd: zero,
       commissionUsd: zero,
@@ -976,7 +984,7 @@ export type CustomerCardOrderRow = {
   orderNumber: string | null;
   orderDateYmd: string;
   totalUsd: string;
-  status: OrderStatus;
+  status: string;
 };
 
 export type CustomerCardSnapshot = {
@@ -987,8 +995,9 @@ export type CustomerCardSnapshot = {
   nameEn: string | null;
   customerCode: string | null;
   phone: string | null;
+  phone2: string | null;
+  country: string | null;
   email: string | null;
-  secondPhone: string | null;
   city: string | null;
   address: string | null;
   customerType: string | null;
@@ -1023,6 +1032,8 @@ export type ClientCreateInput = {
   nameEn?: string | null;
   /** אופציונלי */
   phone?: string | null;
+  phone2?: string | null;
+  country?: string | null;
   email?: string | null;
   notes?: string | null;
 };
@@ -1036,6 +1047,8 @@ export type ClientCreateResult = {
   /** תאימות — שם תצוגה (= nameAr) */
   name: string;
   phone: string | null;
+  phone2: string | null;
+  country: string | null;
   email: string | null;
   createdAt: string;
 };
@@ -1081,6 +1094,8 @@ export async function createClientAction(
   const nameAr = input.nameAr.trim();
   const nameEn = input.nameEn?.trim() || null;
   const phone = input.phone?.trim() || null;
+  const phone2 = input.phone2?.trim() || null;
+  const country = normalizeCustomerPlaceInput(input.country);
   const email = input.email?.trim() || null;
   const notes = input.notes?.trim() || null;
   if (!customerCode) return { ok: false, error: "יש להזין קוד לקוח" };
@@ -1097,6 +1112,8 @@ export async function createClientAction(
       nameAr,
       nameEn,
       phone,
+      phone2,
+      country,
       email,
       notes,
       isActive: true,
@@ -1108,6 +1125,8 @@ export async function createClientAction(
       nameAr: true,
       nameEn: true,
       phone: true,
+      phone2: true,
+      country: true,
       email: true,
       createdAt: true,
     },
@@ -1124,6 +1143,8 @@ export async function createClientAction(
       customerNameEn: en,
       name: ar,
       phone: created.phone ?? phone ?? null,
+      phone2: created.phone2 ?? phone2 ?? null,
+      country: created.country ?? country ?? null,
       email: created.email,
       createdAt: created.createdAt.toISOString(),
     },
@@ -1155,6 +1176,8 @@ export async function listClientsLedgerAction(params: {
             { nameEn: { contains: q, mode: "insensitive" } },
             { nameHe: { contains: q, mode: "insensitive" } },
             { phone: { contains: q } },
+            { phone2: { contains: q } },
+            { country: { contains: q, mode: "insensitive" } },
             { email: { contains: q, mode: "insensitive" } },
           ],
         }
@@ -1239,8 +1262,9 @@ export async function getCustomerCardSnapshotAction(customerId: string): Promise
       nameEn: true,
       customerCode: true,
       phone: true,
+      phone2: true,
+      country: true,
       email: true,
-      secondPhone: true,
       city: true,
       address: true,
       customerType: true,
@@ -1276,8 +1300,9 @@ export async function getCustomerCardSnapshotAction(customerId: string): Promise
     nameEn: cust.nameEn,
     customerCode: cust.customerCode,
     phone: cust.phone,
+    phone2: cust.phone2,
+    country: cust.country,
     email: cust.email,
-    secondPhone: cust.secondPhone,
     city: cust.city,
     address: cust.address,
     customerType: cust.customerType,
@@ -1299,6 +1324,8 @@ export async function updateCustomerCardDetailsAction(form: {
   nameEn?: string | null;
   nameHe?: string | null;
   phone?: string | null;
+  phone2?: string | null;
+  country?: string | null;
   customerCode?: string | null;
   address?: string | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -1329,6 +1356,10 @@ export async function updateCustomerCardDetailsAction(form: {
       ...(form.nameEn !== undefined ? { nameEn: form.nameEn?.trim() || null } : {}),
       ...(form.nameHe !== undefined ? { nameHe: form.nameHe?.trim() || null } : {}),
       phone: form.phone?.trim() || null,
+      ...(form.phone2 !== undefined ? { phone2: form.phone2?.trim() || null } : {}),
+      ...(form.country !== undefined
+        ? { country: normalizeCustomerPlaceInput(form.country) }
+        : {}),
       customerCode,
       address: form.address?.trim() || null,
     },
@@ -1541,7 +1572,7 @@ export async function getCustomerOrderFormExtrasAction(customerId: string): Prom
         nameEn: true,
         nameAr: true,
         phone: true,
-        secondPhone: true,
+        phone2: true,
         oldCustomerCode: true,
         customerCode: true,
         city: true,
@@ -1567,7 +1598,7 @@ export async function getCustomerOrderFormExtrasAction(customerId: string): Prom
   return {
     nameEn: cust.nameEn ?? cust.nameHe ?? null,
     nameAr: cust.nameAr,
-    phone: cust.phone ?? cust.secondPhone,
+    phone: cust.phone ?? cust.phone2,
     indexLabel,
     city: cust.city?.trim() || null,
     address: cust.address?.trim() || null,
@@ -1627,8 +1658,9 @@ async function captureOrderActionInner(form: Parameters<typeof captureOrderActio
     return { ok: false, error: "אמצעי תשלום לא תקין" };
   }
 
-  const status = form.status?.trim() as OrderStatus;
-  if (!ORDER_STATUSES.has(status)) {
+  const status = form.status?.trim() ?? "";
+  const allowed = await activeOrderStatusIdSet();
+  if (!status || !allowed.has(status)) {
     return { ok: false, error: "סטטוס הזמנה לא תקין" };
   }
 
@@ -1911,7 +1943,7 @@ export type OrderWorkPanelPayload = {
   paymentPointId: string | null;
   locationId: string | null;
   locationName: string | null;
-  status: OrderStatus;
+  status: string;
   usdRateUsed: string;
   notes: string;
   sourceCountry: string | null;
@@ -2074,13 +2106,10 @@ export async function getOrderForWorkPanelAction(orderId: string): Promise<Order
   });
 }
 
-const QUICK_LIST_STATUS_SET = new Set<OrderStatus>([
-  OrderStatus.OPEN,
-  OrderStatus.WAITING_FOR_EXECUTION,
-  OrderStatus.COMPLETED,
-  OrderStatus.CANCELLED,
-  OrderStatus.DEBT_WITHDRAWAL,
-]);
+async function isAllowedListStatus(status: string): Promise<boolean> {
+  const allowed = await activeOrderStatusIdSet();
+  return allowed.has(status);
+}
 
 /**
  * חישוב הסכום הזמין לקיזוז מקרדיט הלקוח (USD), לפי הנוסחה
@@ -2111,7 +2140,7 @@ async function computeAvailableCustomerCreditUsd(
 
 export async function updateOrderListStatusAction(
   orderId: string,
-  status: OrderStatus,
+  status: string,
 ): Promise<{ ok: true; debtWithdrawalUsd?: number } | { ok: false; error: string }> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["edit_orders"])) {
@@ -2119,7 +2148,7 @@ export async function updateOrderListStatusAction(
   }
   const id = orderId.trim();
   if (!id) return { ok: false, error: "חסר מזהה הזמנה" };
-  if (!QUICK_LIST_STATUS_SET.has(status)) {
+  if (!(await isAllowedListStatus(status))) {
     return { ok: false, error: "סטטוס לא חוקי" };
   }
 
@@ -2154,7 +2183,7 @@ export async function updateOrderListStatusAction(
    *    כדי לא לזהם את "סה״כ תשלומים" / דוחות הכנסה. יתרת הלקוח
    *    תמשיך להיות נכונה דרך orders − payments הקיים.
    */
-  if (status === OrderStatus.DEBT_WITHDRAWAL) {
+  if (status === OS.DEBT_WITHDRAWAL) {
     if (!exists.customerId) {
       return { ok: false, error: "אי אפשר למשוך מהחוב — להזמנה אין לקוח משויך" };
     }
@@ -2200,8 +2229,8 @@ export async function updateOrderListStatusAction(
    * debtWithdrawalUsd כדי שיתרת הלקוח לא תיוותר עם קיזוז שגוי.
    */
   const shouldClearDebtWithdrawal =
-    (exists.status as OrderStatus) === OrderStatus.DEBT_WITHDRAWAL &&
-    (status as OrderStatus) !== OrderStatus.DEBT_WITHDRAWAL &&
+    exists.status === OS.DEBT_WITHDRAWAL &&
+    status !== OS.DEBT_WITHDRAWAL &&
     exists.debtWithdrawalUsd != null;
 
   await prisma.order.update({
@@ -2327,8 +2356,9 @@ async function updateOrderWorkPanelActionInner(
     return { ok: false, error: "אמצעי תשלום לא תקין" };
   }
 
-  const status = form.status?.trim() as OrderStatus;
-  if (!ORDER_STATUSES.has(status)) {
+  const status = form.status?.trim() ?? "";
+  const allowed = await activeOrderStatusIdSet();
+  if (!status || !allowed.has(status)) {
     return { ok: false, error: "סטטוס הזמנה לא תקין" };
   }
 

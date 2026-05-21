@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { saveAdminSettingsAction, type AdminSettingsPayload } from "@/app/admin/settings/actions";
 import { orderCountryLabel, type OrderCountryCode } from "@/lib/order-countries";
 import { WORK_WEEK_CODES_SORTED } from "@/lib/work-week";
-import { ORDER_STATUS_EDIT_SELECT_OPTIONS } from "@/constants/order-status";
+import { useOrderStatusCatalog } from "@/components/admin/OrderStatusCatalogProvider";
 
 type Props = {
   initial: AdminSettingsPayload;
@@ -18,9 +18,8 @@ const PAYMENT_METHODS = [
   { value: "OTHER", label: "אחר" },
 ];
 
-const ORDER_STATUSES = ORDER_STATUS_EDIT_SELECT_OPTIONS;
-
 export function AdminSettingsClient({ initial }: Props) {
+  const { editOptions: ORDER_STATUSES } = useOrderStatusCatalog();
   const [form, setForm] = useState(initial);
   const [saved, setSaved] = useState(initial);
   const [saving, setSaving] = useState(false);

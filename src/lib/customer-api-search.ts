@@ -11,6 +11,8 @@ export type CustomerApiSearchRow = {
   nameEn: string | null;
   nameAr: string | null;
   phone: string | null;
+  phone2: string | null;
+  country: string | null;
   city: string | null;
   customerType: string | null;
 };
@@ -30,6 +32,8 @@ const selectApi = {
   nameEn: true,
   nameAr: true,
   phone: true,
+  phone2: true,
+  country: true,
   city: true,
   customerType: true,
 } as const;
@@ -43,6 +47,8 @@ function toRow(r: {
   nameEn: string | null;
   nameAr: string | null;
   phone: string | null;
+  phone2: string | null;
+  country: string | null;
   city: string | null;
   customerType: string | null;
 }): CustomerApiSearchRow {
@@ -55,6 +61,8 @@ function toRow(r: {
     nameEn: r.nameEn,
     nameAr: r.nameAr,
     phone: r.phone,
+    phone2: r.phone2,
+    country: r.country,
     city: r.city,
     customerType: r.customerType,
   };
@@ -91,7 +99,7 @@ export async function searchCustomersByQueryPaged(params: CustomerApiSearchParam
     exactOr.push({ customerCode: { equals: q, mode: "insensitive" } });
     exactOr.push({ oldCustomerCode: { equals: q, mode: "insensitive" } });
     exactOr.push({ phone: { equals: q } });
-    exactOr.push({ secondPhone: { equals: q } });
+    exactOr.push({ phone2: { equals: q } });
 
     const exactHits = await prisma.customer.findMany({
       where: { ...base, OR: exactOr },
@@ -116,7 +124,8 @@ export async function searchCustomersByQueryPaged(params: CustomerApiSearchParam
           { customerCode: { contains: q, mode: "insensitive" } },
           { oldCustomerCode: { contains: q, mode: "insensitive" } },
           { phone: { contains: q } },
-          { secondPhone: { contains: q } },
+          { phone2: { contains: q } },
+          { country: { contains: q, mode: "insensitive" } },
         ],
       },
       skip,

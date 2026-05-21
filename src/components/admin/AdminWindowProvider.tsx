@@ -13,7 +13,10 @@ type AdminWindowContextValue = {
   /** True if any stacked window matches (for nav highlight). */
   isWindowTypeOpen: (type: AdminWindowType) => boolean;
   /** פותח "לקוח חדש" ומחזיר את הנתונים לקליטת הזמנה אחרי שמירה */
-  openCreateCustomerForOrder: (onCreated: (client: ClientCreateResult) => void) => string;
+  openCreateCustomerForOrder: (
+    onCreated: (client: ClientCreateResult) => void,
+    opts?: { initialCustomerCode?: string },
+  ) => string;
   /** מחזיר true אם הוחל על קליטת הזמנה (המודאל נסגר) */
   completeCustomerCreate: (client: ClientCreateResult) => boolean;
 };
@@ -51,10 +54,18 @@ export function AdminWindowProvider({ children }: { children: ReactNode }) {
   );
 
   const openCreateCustomerForOrder = useCallback(
-    (onCreated: (client: ClientCreateResult) => void) => {
+    (onCreated: (client: ClientCreateResult) => void, opts?: { initialCustomerCode?: string }) => {
       customerCreatedListenerRef.current = onCreated;
       const id = newWindowId();
-      setStack((s) => [...s, { id, type: "createCustomer" }]);
+      const code = opts?.initialCustomerCode?.trim();
+      setStack((s) => [
+        ...s,
+        {
+          id,
+          type: "createCustomer",
+          ...(code ? { props: { initialCustomerCode: code } } : {}),
+        },
+      ]);
       return id;
     },
     [],

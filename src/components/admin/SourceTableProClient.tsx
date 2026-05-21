@@ -239,8 +239,8 @@ export function SourceTableProClient({ tableId, initialData = null, initialSearc
     startModal({ type: "payment", row });
   }
 
-  async function changeOrderStatus(row: SourceTableRow, statusLabel: string) {
-    const values = { ...row.cells, status: statusLabel };
+  async function changeOrderStatus(row: SourceTableRow, statusCode: string) {
+    const values = { ...row.cells, status: statusCode };
     setData((old) =>
       old
         ? {
@@ -389,13 +389,13 @@ export function SourceTableProClient({ tableId, initialData = null, initialSearc
                           {tableId === "orders" && c.key === "status" && c.options ? (
                             <select
                               className="adm-source-status-inline"
-                              value={r.cells.status || ""}
+                              value={r.meta?.statusEnum || r.cells.status || ""}
                               onChange={(e) => void changeOrderStatus(r, e.target.value)}
                               aria-label="שינוי סטטוס הזמנה"
                               disabled={loading}
                             >
                               {c.options.map((o) => (
-                                <option key={o.value} value={o.label}>
+                                <option key={o.value} value={o.value}>
                                   {o.label}
                                 </option>
                               ))}

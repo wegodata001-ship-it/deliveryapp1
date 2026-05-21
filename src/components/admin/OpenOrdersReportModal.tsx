@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { OrderStatus } from "@prisma/client";
+import { OS } from "@/lib/order-status-slugs";
 import {
   listOpenOrdersReportModalAction,
   type OpenOrderModalRow,
@@ -33,12 +33,12 @@ function shiftWeekCode(code: string, delta: number): string {
   return `AH-${next}`;
 }
 
-const IN_CARE: OrderStatus[] = [
-  OrderStatus.WAITING_FOR_EXECUTION,
-  OrderStatus.WITHDRAWAL_FROM_SUPPLIER,
-  OrderStatus.SENT,
-  OrderStatus.WAITING_FOR_CHINA_EXECUTION,
-  OrderStatus.DEBT_WITHDRAWAL,
+const IN_CARE: string[] = [
+  OS.WAITING_FOR_EXECUTION,
+  OS.WITHDRAWAL_FROM_SUPPLIER,
+  OS.SENT,
+  OS.WAITING_FOR_CHINA_EXECUTION,
+  OS.DEBT_WITHDRAWAL,
 ];
 
 const STATUS_OPTIONS: Array<{ value: OpenOrdersModalStatusBucket; label: string }> = [
@@ -63,20 +63,20 @@ function toModalQuery(page: number, opts: Omit<OpenOrdersModalQuery, "page">): O
   return { page, ...opts };
 }
 
-function statusBadgeClass(status: OrderStatus): string {
-  if (status === OrderStatus.COMPLETED) return "adm-oor-erp-badge adm-oor-erp-badge--ready";
-  if (status === OrderStatus.CANCELLED) return "adm-oor-erp-badge adm-oor-erp-badge--cancel";
+function statusBadgeClass(status: string): string {
+  if (status === OS.COMPLETED) return "adm-oor-erp-badge adm-oor-erp-badge--ready";
+  if (status === OS.CANCELLED) return "adm-oor-erp-badge adm-oor-erp-badge--cancel";
   if (IN_CARE.includes(status)) return "adm-oor-erp-badge adm-oor-erp-badge--care";
-  if (status === OrderStatus.OPEN) return "adm-oor-erp-badge adm-oor-erp-badge--open";
+  if (status === OS.OPEN) return "adm-oor-erp-badge adm-oor-erp-badge--open";
   return "adm-oor-erp-badge";
 }
 
 function rowClass(row: OpenOrderModalRow): string {
   const base = "adm-oor-erp-data-row";
   if (row.paymentLabel === "חלקי") return `${base} adm-oor-erp-data-row--partial`;
-  if (row.status === OrderStatus.COMPLETED) return `${base} adm-oor-erp-data-row--ready`;
+  if (row.status === OS.COMPLETED) return `${base} adm-oor-erp-data-row--ready`;
   if (IN_CARE.includes(row.status)) return `${base} adm-oor-erp-data-row--care`;
-  if (row.status === OrderStatus.CANCELLED) return `${base} adm-oor-erp-data-row--cancel`;
+  if (row.status === OS.CANCELLED) return `${base} adm-oor-erp-data-row--cancel`;
   return `${base} adm-oor-erp-data-row--open`;
 }
 

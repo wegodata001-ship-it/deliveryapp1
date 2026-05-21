@@ -16,7 +16,8 @@ const CUSTOMER_SELECT = {
   city: true,
   address: true,
   phone: true,
-  secondPhone: true,
+  phone2: true,
+  country: true,
   nameAr: true,
   nameEn: true,
   nameHe: true,
@@ -31,7 +32,8 @@ function toRow(r: {
   city: string | null;
   address: string | null;
   phone: string | null;
-  secondPhone: string | null;
+  phone2: string | null;
+  country: string | null;
   nameAr: string | null;
   nameEn: string | null;
   nameHe: string | null;
@@ -51,7 +53,7 @@ function toRow(r: {
     nameAr: r.nameAr,
     nameEn: r.nameEn,
     nameHe: r.nameHe,
-    secondPhone: r.secondPhone,
+    phone2: r.phone2,
     oldCustomerCode: r.oldCustomerCode,
     address: r.address,
   };
@@ -87,7 +89,7 @@ export async function GET(req: Request) {
       const exactOr: Prisma.CustomerWhereInput[] = [
         { oldCustomerCode: { equals: q, mode: "insensitive" } },
         { phone: { equals: q } },
-        { secondPhone: { equals: q } },
+        { phone2: { equals: q } },
       ];
       if (isUuid) exactOr.push({ id: q });
 
@@ -114,7 +116,8 @@ export async function GET(req: Request) {
             { customerCode: { contains: q, mode: "insensitive" } },
             { oldCustomerCode: { contains: q, mode: "insensitive" } },
             { phone: { contains: q } },
-            { secondPhone: { contains: q } },
+            { phone2: { contains: q } },
+            { country: { contains: q, mode: "insensitive" } },
           ],
         },
         take: 20,

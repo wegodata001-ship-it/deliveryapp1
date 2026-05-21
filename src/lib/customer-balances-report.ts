@@ -1,4 +1,4 @@
-import { OrderStatus, PaymentMethod, Prisma } from "@prisma/client";
+import { PaymentMethod, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { normalizeOrderSourceCountry } from "@/lib/order-countries";
@@ -50,7 +50,7 @@ export function getCustomerBalancesReportWhereClauses(filters: CustomerBalancesR
     deletedAt: null,
     orderDate: { gte: from, lte: to },
     ...(filters.customerId ? { customerId: filters.customerId } : {}),
-    ...(filters.status ? { status: filters.status as OrderStatus } : {}),
+    ...(filters.status ? { status: filters.status } : {}),
     ...(filters.workWeek ? { weekCode: filters.workWeek } : {}),
     ...(countryEnum ? { sourceCountry: countryEnum } : {}),
   };

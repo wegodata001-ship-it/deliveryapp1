@@ -18,6 +18,7 @@ import {
 import { DEFAULT_VAT_RATE } from "@/lib/payment-updated";
 import { formatVatPercentLabel } from "@/lib/vat";
 import { formatMoneyAmount, formatIlsDisplay, formatUsdDisplay, sanitizeMoneyInput } from "@/lib/money-format";
+import { AnimatedMoneyValue } from "@/components/ui/AnimatedMoneyValue";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 
 const fmtFooterAmount = formatMoneyAmount;
@@ -404,38 +405,57 @@ export function PaymentLineDualCard({
         <div className="payment-upd-calc" dir="rtl" aria-live="polite">
           {hasUsd ? (
             <>
-              <div className="payment-upd-calc-row">
+              <div className="payment-upd-calc-row payment-upd-calc-row--tier">
                 <span>הוזן</span>
-                <span dir="ltr">
-                  ${" "}
-                  {fmtFooterAmount(typeof p.usdAmount === "number" ? p.usdAmount : 0)}
-                </span>
+                <AnimatedMoneyValue
+                  className="payment-upd-calc-val payment-upd-calc-val--tier"
+                  dir="ltr"
+                  value={`$${fmtFooterAmount(typeof p.usdAmount === "number" ? p.usdAmount : 0)}`}
+                />
               </div>
-              <div className="payment-upd-calc-row">
+              <div className="payment-upd-calc-row payment-upd-calc-row--tier">
                 <span>בסיס לפני מע״מ</span>
-                <span dir="ltr">${fmtFooterAmount(calc.usd.baseAmount)}</span>
+                <AnimatedMoneyValue
+                  className="payment-upd-calc-val payment-upd-calc-val--tier"
+                  dir="ltr"
+                  value={`$${fmtFooterAmount(calc.usd.baseAmount)}`}
+                />
               </div>
-              <div className="payment-upd-calc-row">
+              <div className="payment-upd-calc-row payment-upd-calc-row--tier">
                 <span>{formatVatPercentLabel()}</span>
-                <span dir="ltr">${fmtFooterAmount(calc.usd.vatAmount)}</span>
+                <AnimatedMoneyValue
+                  className="payment-upd-calc-val payment-upd-calc-val--tier"
+                  dir="ltr"
+                  value={`$${fmtFooterAmount(calc.usd.vatAmount)}`}
+                />
               </div>
             </>
           ) : null}
           {hasIls ? (
             <>
-              <div className="payment-upd-calc-row">
+              <div className="payment-upd-calc-row payment-upd-calc-row--tier">
                 <span>הוזן (שקל)</span>
-                <span dir="ltr">
-                  ₪{fmtFooterAmount(typeof p.ilsAmount === "number" ? p.ilsAmount : 0)}
-                </span>
+                <AnimatedMoneyValue
+                  className="payment-upd-calc-val payment-upd-calc-val--tier"
+                  dir="ltr"
+                  value={`₪${fmtFooterAmount(typeof p.ilsAmount === "number" ? p.ilsAmount : 0)}`}
+                />
               </div>
-              <div className="payment-upd-calc-row">
+              <div className="payment-upd-calc-row payment-upd-calc-row--tier">
                 <span>בסיס לפני מע״מ (שקל)</span>
-                <span dir="ltr">₪{fmtFooterAmount(calc.ils.baseAmount)}</span>
+                <AnimatedMoneyValue
+                  className="payment-upd-calc-val payment-upd-calc-val--tier"
+                  dir="ltr"
+                  value={`₪${fmtFooterAmount(calc.ils.baseAmount)}`}
+                />
               </div>
-              <div className="payment-upd-calc-row">
+              <div className="payment-upd-calc-row payment-upd-calc-row--tier">
                 <span>{formatVatPercentLabel()} (שקל)</span>
-                <span dir="ltr">₪{fmtFooterAmount(calc.ils.vatAmount)}</span>
+                <AnimatedMoneyValue
+                  className="payment-upd-calc-val payment-upd-calc-val--tier"
+                  dir="ltr"
+                  value={`₪${fmtFooterAmount(calc.ils.vatAmount)}`}
+                />
               </div>
             </>
           ) : null}
@@ -444,22 +464,30 @@ export function PaymentLineDualCard({
             title="סכום לתשלום אחרי מע״מ"
           >
             <span>סכום סופי לתשלום</span>
-            <span dir="ltr">
+            <span dir="ltr" className="payment-upd-calc-val payment-upd-calc-val--net">
               {hasUsd ? formatUsdDisplay(calc.finalUsd) : null}
               {hasUsd && hasIls ? " · " : null}
               {hasIls ? formatIlsDisplay(calc.finalIls) : null}
             </span>
           </div>
           {calc.finalUsd > 0 ? (
-            <div className="payment-upd-calc-row payment-upd-calc-row--usd">
+            <div className="payment-upd-calc-row payment-upd-calc-row--usd payment-upd-calc-row--hero">
               <span>סכום סופי בדולר</span>
-              <span dir="ltr">{formatUsdDisplay(calc.finalUsd)}</span>
+              <AnimatedMoneyValue
+                className="payment-upd-calc-val payment-upd-calc-val--usd money-amount"
+                dir="ltr"
+                value={formatUsdDisplay(calc.finalUsd)}
+              />
             </div>
           ) : null}
           {calc.finalIls > 0 ? (
-            <div className="payment-upd-calc-row payment-upd-calc-row--ils">
+            <div className="payment-upd-calc-row payment-upd-calc-row--ils payment-upd-calc-row--hero">
               <span>סכום סופי בשקל</span>
-              <span dir="ltr">{formatIlsDisplay(calc.finalIls)}</span>
+              <AnimatedMoneyValue
+                className="payment-upd-calc-val payment-upd-calc-val--ils money-amount"
+                dir="ltr"
+                value={formatIlsDisplay(calc.finalIls)}
+              />
             </div>
           ) : null}
         </div>

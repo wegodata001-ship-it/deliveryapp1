@@ -5,6 +5,7 @@ import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { OrderCreatePanel } from "@/components/admin/OrderCreatePanel";
 import { PaymentModalUpdated } from "@/components/admin/PaymentModalUpdated";
 import { CustomerCardWindowBody, CreateCustomerWindowBody } from "@/components/admin/AdminWindowBodies";
+import type { AdminToastFn } from "@/components/admin/AdminNavShell";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 import type { AdminWindowEntry } from "@/lib/admin-windows";
 
@@ -28,7 +29,7 @@ function windowTitle(w: AdminWindowEntry): string {
 
 type Props = {
   financial: SerializedFinancial | null;
-  onToast: (msg: string) => void;
+  onToast: AdminToastFn;
   canCreateOrders: boolean;
   canEditOrders: boolean;
   canReceivePayments: boolean;
@@ -143,7 +144,9 @@ export function AdminWindowStack({
                     initialTab={w.props.initialTab}
                   />
                 ) : null}
-                {w.type === "createCustomer" && canCreateCustomer ? <CreateCustomerWindowBody /> : null}
+                {w.type === "createCustomer" && canCreateCustomer ? (
+                  <CreateCustomerWindowBody initialCustomerCode={w.props?.initialCustomerCode} />
+                ) : null}
               </div>
             </div>
           </div>

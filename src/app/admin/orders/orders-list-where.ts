@@ -1,12 +1,7 @@
-import { OrderStatus, PaymentMethod, Prisma } from "@prisma/client";
+import { PaymentMethod, Prisma } from "@prisma/client";
 import { ORDER_COUNTRY_CODES, orderCountryCodesMatchingHeSearch, type OrderCountryCode } from "@/lib/order-countries";
 import { normalizeAhWeekCode, parseOrdersListDateFilterFromSearchParams } from "@/lib/work-week";
 
-const TABLE_STATUS_SET = new Set<OrderStatus>([
-  OrderStatus.OPEN,
-  OrderStatus.WAITING_FOR_EXECUTION,
-  OrderStatus.COMPLETED,
-]);
 
 function readTextParam(sp: Record<string, string | string[] | undefined>, key: string): string {
   const v = sp[key];
@@ -35,7 +30,8 @@ export function buildOrdersListSearchWhere(q: string): Prisma.OrderWhereInput | 
     { createdBy: { username: { contains: t, mode: "insensitive" } } },
     { weekCode: { contains: t, mode: "insensitive" } },
     { customer: { phone: { contains: t, mode: "insensitive" } } },
-    { customer: { secondPhone: { contains: t, mode: "insensitive" } } },
+    { customer: { phone2: { contains: t, mode: "insensitive" } } },
+    { customer: { country: { contains: t, mode: "insensitive" } } },
   ];
   if (countryHits.length > 0) {
     ors.push({ sourceCountry: { in: countryHits } });
@@ -64,10 +60,7 @@ export function buildOrdersListWhereFromSearchParams(
 
   const q = readTextParam(sp, "q");
   const statusSingleRaw = readTextParam(sp, "status");
-  const statusSingle =
-    statusSingleRaw && TABLE_STATUS_SET.has(statusSingleRaw as OrderStatus)
-      ? (statusSingleRaw as OrderStatus)
-      : null;
+  const statusSingle = statusSingleRaw || null;
 
   const ordersCountryRaw = readTextParam(sp, "ordersCountry");
   const countrySingle =

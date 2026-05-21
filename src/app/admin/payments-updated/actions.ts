@@ -1,6 +1,7 @@
 "use server";
 
-import { OrderStatus, PaymentMethod, Prisma } from "@prisma/client";
+import { PaymentMethod, Prisma } from "@prisma/client";
+import { OS } from "@/lib/order-status-slugs";
 import { revalidatePath } from "next/cache";
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { computeFromUsdAmount } from "@/lib/financial-calc";
@@ -104,7 +105,7 @@ async function applyPaymentCustomerDraftsIfNeeded(params: {
 }): Promise<void> {
   const current = await prisma.customer.findFirst({
     where: { id: params.customerId, deletedAt: null, isActive: true },
-    select: { nameAr: true, nameEn: true, phone: true, secondPhone: true },
+    select: { nameAr: true, nameEn: true, phone: true, phone2: true },
   });
   if (!current) return;
 
@@ -115,7 +116,7 @@ async function applyPaymentCustomerDraftsIfNeeded(params: {
   const data: Prisma.CustomerUpdateInput = {};
   if (nameAr && !(current.nameAr?.trim())) data.nameAr = nameAr;
   if (nameEn && !(current.nameEn?.trim())) data.nameEn = nameEn;
-  if (phone && !(current.phone?.trim()) && !(current.secondPhone?.trim())) data.phone = phone;
+  if (phone && !(current.phone?.trim()) && !(current.phone2?.trim())) data.phone = phone;
   if (Object.keys(data).length === 0) return;
 
   await prisma.customer.update({
@@ -748,7 +749,7 @@ export async function resetOrderBalanceAction(input: {
 
       await tx.order.update({
         where: { id: oid },
-        data: { status: OrderStatus.COMPLETED },
+        data: { status: OS.COMPLETED },
       });
 
       await tx.auditLog.create({
@@ -763,7 +764,7 @@ export async function resetOrderBalanceAction(input: {
             remainingUsd: remaining.toString(),
           } as Prisma.InputJsonValue,
           newValue: {
-            status: OrderStatus.COMPLETED,
+            status: OS.COMPLETED,
             commissionUsd: updates[0]?.afterCommission.toString() ?? com.toString(),
             totalUsd: updates[0]?.afterTotal.toString() ?? totalOrd.toString(),
           } as Prisma.InputJsonValue,
@@ -994,7 +995,7 @@ export async function resetCustomerOutstandingBalancesAction(input: {
       if (closedIds.length > 0) {
         await tx.order.updateMany({
           where: { id: { in: closedIds } },
-          data: { status: OrderStatus.COMPLETED },
+          data: { status: OS.COMPLETED },
         });
       }
 

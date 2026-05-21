@@ -1,14 +1,16 @@
-import { OrderStatus } from "@prisma/client";
+/**
+ * מטא-דאטה לסטטוסי הזמנה (צבעים, KPI, מחלקות CSS).
+ * שמות תצוגה — מטבלת SourceStatus (ראו order-status-registry.ts).
+ */
+import { LEGACY_ORDER_STATUS_SLUGS, OS } from "@/lib/order-status-slugs";
 
 export type OrderStatusColor = "blue" | "orange" | "green" | "red" | "purple" | "muted";
 
 export type OrderStatusKpiBucket = "open" | "in_progress" | "ready" | "cancelled" | "debt_withdrawal";
 
 export type OrderStatusMeta = {
-  value: OrderStatus;
-  /** תצוגה אחידה — רשימה, badges, PDF, דוחות */
+  value: string;
   label: string;
-  /** תווית ב-dropdown עריכה (כל ערכי ה-enum) */
   editLabel: string;
   color: OrderStatusColor;
   badgeClass: string;
@@ -16,9 +18,9 @@ export type OrderStatusMeta = {
   kpiBucket: OrderStatusKpiBucket;
 };
 
-export const ORDER_STATUS_META: Record<OrderStatus, OrderStatusMeta> = {
-  [OrderStatus.OPEN]: {
-    value: OrderStatus.OPEN,
+export const ORDER_STATUS_META: Record<string, OrderStatusMeta> = {
+  [OS.OPEN]: {
+    value: OS.OPEN,
     label: "פתוחה",
     editLabel: "פתוחה",
     color: "blue",
@@ -26,8 +28,8 @@ export const ORDER_STATUS_META: Record<OrderStatus, OrderStatusMeta> = {
     tableClass: "adm-ord-st adm-ord-st--open",
     kpiBucket: "open",
   },
-  [OrderStatus.WAITING_FOR_EXECUTION]: {
-    value: OrderStatus.WAITING_FOR_EXECUTION,
+  [OS.WAITING_FOR_EXECUTION]: {
+    value: OS.WAITING_FOR_EXECUTION,
     label: "בטיפול",
     editLabel: "בטיפול",
     color: "orange",
@@ -35,8 +37,8 @@ export const ORDER_STATUS_META: Record<OrderStatus, OrderStatusMeta> = {
     tableClass: "adm-ord-st adm-ord-st--progress",
     kpiBucket: "in_progress",
   },
-  [OrderStatus.WITHDRAWAL_FROM_SUPPLIER]: {
-    value: OrderStatus.WITHDRAWAL_FROM_SUPPLIER,
+  [OS.WITHDRAWAL_FROM_SUPPLIER]: {
+    value: OS.WITHDRAWAL_FROM_SUPPLIER,
     label: "בטיפול",
     editLabel: "משיכה מספק",
     color: "orange",
@@ -44,8 +46,8 @@ export const ORDER_STATUS_META: Record<OrderStatus, OrderStatusMeta> = {
     tableClass: "adm-ord-st adm-ord-st--progress",
     kpiBucket: "in_progress",
   },
-  [OrderStatus.SENT]: {
-    value: OrderStatus.SENT,
+  [OS.SENT]: {
+    value: OS.SENT,
     label: "בטיפול",
     editLabel: "נשלחה",
     color: "orange",
@@ -53,8 +55,8 @@ export const ORDER_STATUS_META: Record<OrderStatus, OrderStatusMeta> = {
     tableClass: "adm-ord-st adm-ord-st--progress",
     kpiBucket: "in_progress",
   },
-  [OrderStatus.WAITING_FOR_CHINA_EXECUTION]: {
-    value: OrderStatus.WAITING_FOR_CHINA_EXECUTION,
+  [OS.WAITING_FOR_CHINA_EXECUTION]: {
+    value: OS.WAITING_FOR_CHINA_EXECUTION,
     label: "בטיפול",
     editLabel: "ממתין לסין",
     color: "orange",
@@ -62,8 +64,8 @@ export const ORDER_STATUS_META: Record<OrderStatus, OrderStatusMeta> = {
     tableClass: "adm-ord-st adm-ord-st--progress",
     kpiBucket: "in_progress",
   },
-  [OrderStatus.COMPLETED]: {
-    value: OrderStatus.COMPLETED,
+  [OS.COMPLETED]: {
+    value: OS.COMPLETED,
     label: "מוכן",
     editLabel: "מוכן",
     color: "green",
@@ -71,8 +73,8 @@ export const ORDER_STATUS_META: Record<OrderStatus, OrderStatusMeta> = {
     tableClass: "adm-ord-st adm-ord-st--done",
     kpiBucket: "ready",
   },
-  [OrderStatus.CANCELLED]: {
-    value: OrderStatus.CANCELLED,
+  [OS.CANCELLED]: {
+    value: OS.CANCELLED,
     label: "מבוטל",
     editLabel: "מבוטל",
     color: "red",
@@ -80,8 +82,8 @@ export const ORDER_STATUS_META: Record<OrderStatus, OrderStatusMeta> = {
     tableClass: "adm-ord-st adm-ord-st--muted",
     kpiBucket: "cancelled",
   },
-  [OrderStatus.DEBT_WITHDRAWAL]: {
-    value: OrderStatus.DEBT_WITHDRAWAL,
+  [OS.DEBT_WITHDRAWAL]: {
+    value: OS.DEBT_WITHDRAWAL,
     label: "משיכה מהחוב",
     editLabel: "משיכה מהחוב",
     color: "purple",
@@ -91,37 +93,24 @@ export const ORDER_STATUS_META: Record<OrderStatus, OrderStatusMeta> = {
   },
 };
 
-/** כל הסטטוסים — מקור יחיד לתצוגה */
-export const ORDER_STATUSES: OrderStatusMeta[] = (Object.values(OrderStatus) as OrderStatus[]).map(
-  (value) => ORDER_STATUS_META[value],
-);
+export const ORDER_STATUSES: OrderStatusMeta[] = LEGACY_ORDER_STATUS_SLUGS.map((value) => ORDER_STATUS_META[value]);
 
-/** Dropdown מהיר: רשימת הזמנות + קליטת הזמנה (יצירה) */
 export const ORDER_STATUS_QUICK_SELECT_OPTIONS = (
-  [
-    OrderStatus.OPEN,
-    OrderStatus.WAITING_FOR_EXECUTION,
-    OrderStatus.COMPLETED,
-    OrderStatus.CANCELLED,
-    OrderStatus.DEBT_WITHDRAWAL,
-  ] as const
+  [OS.OPEN, OS.WAITING_FOR_EXECUTION, OS.COMPLETED, OS.CANCELLED, OS.DEBT_WITHDRAWAL] as const
 ).map((value) => ({
   value,
   label: ORDER_STATUS_META[value].label,
 }));
 
-/** Dropdown מלא — עריכת הזמנה (כל ערכי DB) */
-export const ORDER_STATUS_EDIT_SELECT_OPTIONS = (Object.values(OrderStatus) as OrderStatus[]).map(
-  (value) => ({
-    value,
-    label: ORDER_STATUS_META[value].editLabel,
-  }),
-);
+export const ORDER_STATUS_EDIT_SELECT_OPTIONS = LEGACY_ORDER_STATUS_SLUGS.map((value) => ({
+  value,
+  label: ORDER_STATUS_META[value].editLabel,
+}));
 
 export function getOrderStatusMeta(status: string): OrderStatusMeta {
-  if (status in ORDER_STATUS_META) return ORDER_STATUS_META[status as OrderStatus];
+  if (status in ORDER_STATUS_META) return ORDER_STATUS_META[status];
   return {
-    value: OrderStatus.OPEN,
+    value: status,
     label: status,
     editLabel: status,
     color: "muted",
@@ -135,28 +124,27 @@ export function getOrderStatusLabel(status: string): string {
   return getOrderStatusMeta(status).label;
 }
 
-/** ערך ל-select בשורה / סינון — ממפה מצבי ביניים ל"בטיפול" */
-export function orderStatusToQuickSelectValue(status: string): OrderStatus {
+export function orderStatusToQuickSelectValue(status: string): string {
   if (
-    status === OrderStatus.OPEN ||
-    status === OrderStatus.COMPLETED ||
-    status === OrderStatus.CANCELLED ||
-    status === OrderStatus.DEBT_WITHDRAWAL
+    status === OS.OPEN ||
+    status === OS.COMPLETED ||
+    status === OS.CANCELLED ||
+    status === OS.DEBT_WITHDRAWAL
   ) {
     return status;
   }
   if (
-    status === OrderStatus.WAITING_FOR_EXECUTION ||
-    status === OrderStatus.SENT ||
-    status === OrderStatus.WAITING_FOR_CHINA_EXECUTION ||
-    status === OrderStatus.WITHDRAWAL_FROM_SUPPLIER
+    status === OS.WAITING_FOR_EXECUTION ||
+    status === OS.SENT ||
+    status === OS.WAITING_FOR_CHINA_EXECUTION ||
+    status === OS.WITHDRAWAL_FROM_SUPPLIER
   ) {
-    return OrderStatus.WAITING_FOR_EXECUTION;
+    return OS.WAITING_FOR_EXECUTION;
   }
-  return OrderStatus.WAITING_FOR_EXECUTION;
+  return status;
 }
 
-export function inlineStatusBadgeClass(sel: OrderStatus): string {
+export function inlineStatusBadgeClass(sel: string): string {
   return getOrderStatusMeta(sel).badgeClass;
 }
 
@@ -165,20 +153,27 @@ export function orderBusinessStatusDisplay(status: string): { label: string; cla
   return { label: m.label, className: m.tableClass };
 }
 
-export function orderSensitiveStatusHe(status: OrderStatus): string {
+export function orderSensitiveStatusHe(status: string): string {
   return getOrderStatusLabel(status);
 }
 
-export function orderStatusLabelByEditText(editLabel: string): OrderStatus | null {
+export function orderStatusLabelByEditText(editLabel: string): string | null {
   const t = editLabel.trim();
-  const hit = (Object.values(OrderStatus) as OrderStatus[]).find(
+  const hit = LEGACY_ORDER_STATUS_SLUGS.find(
     (s) => ORDER_STATUS_META[s].editLabel === t || ORDER_STATUS_META[s].label === t,
   );
   return hit ?? null;
 }
 
-export function buildOrderStatusLabelRecord(): Record<OrderStatus, string> {
-  return Object.fromEntries(
-    (Object.values(OrderStatus) as OrderStatus[]).map((s) => [s, ORDER_STATUS_META[s].label]),
-  ) as Record<OrderStatus, string>;
+export function buildOrderStatusLabelRecord(): Record<string, string> {
+  return Object.fromEntries(LEGACY_ORDER_STATUS_SLUGS.map((s) => [s, ORDER_STATUS_META[s].label]));
+}
+
+/** סטטוסים שדורשים אישור מנהל לעריכה */
+export function isLockedOrderStatus(status: string): boolean {
+  return status === OS.COMPLETED || status === OS.CANCELLED;
+}
+
+export function isDebtWithdrawalStatus(status: string): boolean {
+  return status === OS.DEBT_WITHDRAWAL;
 }

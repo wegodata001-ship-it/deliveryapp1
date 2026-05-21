@@ -1,4 +1,5 @@
-import { OrderEditRequestStatus, OrderStatus } from "@prisma/client";
+import { OrderEditRequestStatus } from "@prisma/client";
+import { isLegacyOrderStatusSlug, OS } from "@/lib/order-status-slugs";
 import type { OrderListRow, OrdersStatusSummary } from "@/components/admin/OrdersListShell";
 import type { OrdersCreatedByOption, OrdersPaymentLocationOption } from "@/components/admin/OrdersListToolbar";
 import type { AppUser } from "@/lib/admin-auth";
@@ -78,7 +79,7 @@ const orderListSelect = {
   editUnlockedUntil: true,
   paymentPoint: { select: { pointName: true } },
   createdBy: { select: { fullName: true, username: true } },
-  customer: { select: { phone: true, secondPhone: true } },
+  customer: { select: { phone: true, phone2: true } },
 } as const;
 
 /**
@@ -126,7 +127,7 @@ export async function fetchOrdersListPageData(
   const intakeById = new Map(intakeLocationRows.map((l) => [l.id, l.name.trim()]));
 
   const sensitiveIds = rows
-    .filter((r) => r.status === OrderStatus.COMPLETED || r.status === OrderStatus.CANCELLED)
+    .filter((r) => r.status === OS.COMPLETED || r.status === OS.CANCELLED)
     .map((r) => r.id);
 
   let pendingEditOrderIds = new Set<string>();
@@ -175,30 +176,34 @@ export async function fetchOrdersListPageData(
     const count = g._count?._all ?? 0;
     const totalUsd = Number(g._sum?.totalUsd ?? 0);
     switch (g.status) {
-      case OrderStatus.OPEN:
+      case OS.OPEN:
         statusSummaryAcc.open.count += count;
         statusSummaryAcc.open.totalUsd += totalUsd;
         break;
-      case OrderStatus.COMPLETED:
+      case OS.COMPLETED:
         statusSummaryAcc.completed.count += count;
         statusSummaryAcc.completed.totalUsd += totalUsd;
         break;
-      case OrderStatus.CANCELLED:
+      case OS.CANCELLED:
         statusSummaryAcc.cancelled.count += count;
         statusSummaryAcc.cancelled.totalUsd += totalUsd;
         break;
-      case OrderStatus.DEBT_WITHDRAWAL:
+      case OS.DEBT_WITHDRAWAL:
         statusSummaryAcc.debtWithdrawal.count += count;
         statusSummaryAcc.debtWithdrawal.totalUsd += totalUsd;
         break;
-      case OrderStatus.WAITING_FOR_EXECUTION:
-      case OrderStatus.WITHDRAWAL_FROM_SUPPLIER:
-      case OrderStatus.SENT:
-      case OrderStatus.WAITING_FOR_CHINA_EXECUTION:
+      case OS.WAITING_FOR_EXECUTION:
+      case OS.WITHDRAWAL_FROM_SUPPLIER:
+      case OS.SENT:
+      case OS.WAITING_FOR_CHINA_EXECUTION:
         statusSummaryAcc.inProgress.count += count;
         statusSummaryAcc.inProgress.totalUsd += totalUsd;
         break;
       default:
+        if (!isLegacyOrderStatusSlug(g.status)) {
+          statusSummaryAcc.inProgress.count += count;
+          statusSummaryAcc.inProgress.totalUsd += totalUsd;
+        }
         break;
     }
   }
@@ -261,7 +266,7 @@ export async function fetchOrdersListPageData(
 
     let editBadge: OrderListRow["editBadge"] = null;
     let pendingEditOwnedByMe = false;
-    const sensitiveForEditLock = r.status === OrderStatus.COMPLETED || r.status === OrderStatus.CANCELLED;
+    const sensitiveForEditLock = r.status === OS.COMPLETED || r.status === OS.CANCELLED;
     if (sensitiveForEditLock) {
       if (pendingEditOrderIds.has(r.id)) {
         editBadge = "pending";
@@ -309,7 +314,7 @@ export async function fetchOrdersListPageData(
       customerId: r.customerId,
       customerCode: r.customerCodeSnapshot?.trim() || null,
       customerName: r.customerNameSnapshot?.trim() || null,
-      customerPhone: r.customer?.phone ?? r.customer?.secondPhone ?? null,
+      customerPhone: r.customer?.phone ?? r.customer?.phone2 ?? null,
       orderDateYmd: r.orderDate ? formatLocalYmd(new Date(r.orderDate)) : null,
       orderDateTime: fmtDateTime(r.orderDate ? new Date(r.orderDate) : null),
       weekCode: r.weekCode,

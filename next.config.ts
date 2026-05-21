@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  transpilePackages: ["pdfmake"],
   /** מפחית שגיאות SegmentViewNode / manifest של כלי הפיתוח בפיתוח מקומי */
   devIndicators: false,
   webpack: (config, { dev }) => {

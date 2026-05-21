@@ -12,6 +12,8 @@ import { countPendingOrderEditRequestsForAdmin } from "@/app/admin/order-edit-re
 import { ensureDefaultFinancialSettings, getCurrentFinancialSettings, serializeFinancialSettings } from "@/lib/financial-settings";
 import "./admin.css";
 import "@/styles/wego-order-capture-fluid.css";
+import "@/styles/wego-pro-responsive.css";
+import "@/styles/wego-status-tags.css";
 
 export const dynamic = "force-dynamic";
 

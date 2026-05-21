@@ -1,34 +1,22 @@
 "use server";
 
-import { OrderStatus, PaymentMethod } from "@prisma/client";
+import { PaymentMethod } from "@prisma/client";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
 import { formatLocalYmd, parseOrdersListDateFilterFromSearchParams } from "@/lib/work-week";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { orderCaptureSplitMethodLabel } from "@/lib/order-capture-payment-methods";
 import { buildOrdersListWhereFromSearchParams } from "@/app/admin/orders/orders-list-where";
-import { getOrderStatusLabel } from "@/constants/order-status";
+import { getOrderStatusLabelMap, labelFromMap } from "@/lib/order-status-registry";
+import { LEGACY_ORDER_STATUS_SLUGS } from "@/lib/order-status-slugs";
 
 export type OrdersPdfExportMode = "regular" | "by_place" | "by_status" | "by_week";
 
 const PDF_EXPORT_MAX_ROWS = 15_000;
 
-const STATUS_HE: Record<OrderStatus, string> = Object.fromEntries(
-  Object.values(OrderStatus).map((value) => [value, getOrderStatusLabel(value)]),
-) as Record<OrderStatus, string>;
+const STATUS_GROUP_ORDER: string[] = [...LEGACY_ORDER_STATUS_SLUGS];
 
-const STATUS_GROUP_ORDER: OrderStatus[] = [
-  OrderStatus.OPEN,
-  OrderStatus.WAITING_FOR_EXECUTION,
-  OrderStatus.WITHDRAWAL_FROM_SUPPLIER,
-  OrderStatus.SENT,
-  OrderStatus.WAITING_FOR_CHINA_EXECUTION,
-  OrderStatus.COMPLETED,
-  OrderStatus.DEBT_WITHDRAWAL,
-  OrderStatus.CANCELLED,
-];
-
-function statusRank(s: OrderStatus): number {
+function statusRank(s: string): number {
   const i = STATUS_GROUP_ORDER.indexOf(s);
   return i === -1 ? 999 : i;
 }
@@ -96,7 +84,7 @@ type PdfRow = {
   totalUsdNum: number;
   totalIlsNum: number;
   statusHe: string;
-  status: OrderStatus;
+  status: string;
   paymentType: string;
   paymentLocation: string;
   orderDate: Date | null;
@@ -219,7 +207,7 @@ function groupKeyForMode(row: PdfRow, mode: OrdersPdfExportMode): string {
   return "";
 }
 
-function sortKeys(keys: string[], mode: OrdersPdfExportMode): string[] {
+function sortKeys(keys: string[], mode: OrdersPdfExportMode, statusMap: Record<string, string>): string[] {
   const k = [...keys];
   if (mode === "by_place") {
     k.sort((a, b) => a.localeCompare(b, "he", { sensitivity: "base" }));
@@ -241,8 +229,8 @@ function sortKeys(keys: string[], mode: OrdersPdfExportMode): string[] {
   }
   if (mode === "by_status") {
     k.sort((a, b) => {
-      const sa = STATUS_GROUP_ORDER.find((x) => STATUS_HE[x] === a);
-      const sb = STATUS_GROUP_ORDER.find((x) => STATUS_HE[x] === b);
+      const sa = STATUS_GROUP_ORDER.find((x) => labelFromMap(statusMap, x) === a);
+      const sb = STATUS_GROUP_ORDER.find((x) => labelFromMap(statusMap, x) === b);
       const ra = sa != null ? statusRank(sa) : 999;
       const rb = sb != null ? statusRank(sb) : 999;
       if (ra !== rb) return ra - rb;
@@ -265,7 +253,7 @@ export async function exportOrdersListPdfHtmlAction(
   const range = parseOrdersListDateFilterFromSearchParams(sp);
   const where = buildOrdersListWhereFromSearchParams(sp);
 
-  const [intakeLocationRows, raw] = await Promise.all([
+  const [intakeLocationRows, raw, statusMap] = await Promise.all([
     prisma.intakeLocation.findMany({
       select: { id: true, name: true },
       orderBy: { name: "asc" },
@@ -301,6 +289,7 @@ export async function exportOrdersListPdfHtmlAction(
         },
       },
     }),
+    getOrderStatusLabelMap(),
   ]);
 
   const truncated = raw.length > PDF_EXPORT_MAX_ROWS;
@@ -338,7 +327,7 @@ export async function exportOrdersListPdfHtmlAction(
       totalIls: fmtIls2(r.totalIlsWithVat ?? r.totalIls) ?? "—",
       totalUsdNum,
       totalIlsNum,
-      statusHe: STATUS_HE[r.status] ?? r.status,
+      statusHe: labelFromMap(statusMap, r.status),
       status: r.status,
       paymentType: paymentTypeLabel(r.paymentMethod),
       paymentLocation: paymentLocationName ?? "—",
@@ -376,7 +365,7 @@ export async function exportOrdersListPdfHtmlAction(
     for (const arr of map.values()) {
       arr.sort(cmpDateAscNumAsc);
     }
-    const keys = sortKeys([...map.keys()], mode);
+    const keys = sortKeys([...map.keys()], mode, statusMap);
     const parts: string[] = [];
     for (const key of keys) {
       const groupRows = map.get(key) ?? [];

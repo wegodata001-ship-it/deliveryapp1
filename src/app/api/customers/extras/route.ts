@@ -36,7 +36,7 @@ export async function GET(req: Request) {
             nameEn: true,
             nameAr: true,
             phone: true,
-            secondPhone: true,
+            phone2: true,
             oldCustomerCode: true,
             customerCode: true,
             city: true,
@@ -62,7 +62,7 @@ export async function GET(req: Request) {
       const payload: CustomerExtrasPayload = {
         nameEn: cust.nameEn ?? cust.nameHe ?? null,
         nameAr: cust.nameAr,
-        phone: cust.phone ?? cust.secondPhone,
+        phone: cust.phone ?? cust.phone2,
         indexLabel,
         city: cust.city?.trim() || null,
         address: cust.address?.trim() || null,

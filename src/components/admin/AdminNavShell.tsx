@@ -5,9 +5,13 @@ import { AdminNavLayoutProvider } from "@/components/admin/AdminNavLayoutContext
 import { AdminFinancialModalProvider } from "@/components/admin/AdminFinancialModalContext";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 
-const AdminToastContext = createContext<(msg: string) => void>(() => {});
+export type AdminToastOptions = { variant?: "success" };
 
-export function useAdminToast(): (msg: string) => void {
+export type AdminToastFn = (msg: string, opts?: AdminToastOptions) => void;
+
+const AdminToastContext = createContext<AdminToastFn>(() => {});
+
+export function useAdminToast(): AdminToastFn {
   return useContext(AdminToastContext);
 }
 
@@ -23,10 +27,10 @@ export function AdminNavShell({
   canManageFinancial: boolean;
 }) {
   const [navOpen, setNavOpen] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ msg: string; variant?: AdminToastOptions["variant"] } | null>(null);
 
-  const onToast = useCallback((msg: string) => {
-    setToast(msg);
+  const onToast = useCallback<AdminToastFn>((msg, opts) => {
+    setToast({ msg, variant: opts?.variant });
     window.setTimeout(() => setToast(null), 3800);
   }, []);
 
@@ -55,8 +59,14 @@ export function AdminNavShell({
           {sidebar}
           <div className="adm-main">{main}</div>
           {toast ? (
-            <div className="adm-toast" role="status" aria-live="polite">
-              {toast}
+            <div
+              className={["adm-toast", toast.variant === "success" ? "adm-toast--success" : ""]
+                .filter(Boolean)
+                .join(" ")}
+              role="status"
+              aria-live="polite"
+            >
+              {toast.msg}
             </div>
           ) : null}
         </div>

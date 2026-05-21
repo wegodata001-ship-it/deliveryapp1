@@ -21,6 +21,7 @@ import type { OrderEditLockGatePayload } from "@/components/admin/OrderEditLockG
 import { OrderEditLockGateModal } from "@/components/admin/OrderEditLockGateModal";
 import type { CustomerCardWindowProps } from "@/lib/admin-windows";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
+import { CustomerPlaceCombo } from "@/components/admin/CustomerPlaceCombo";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
 import { CustomerBalanceView } from "@/components/ui/CustomerBalanceView";
@@ -158,6 +159,8 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
     nameAr: "",
     nameEn: "",
     phone: "",
+    phone2: "",
+    country: "",
     customerCode: "",
     address: "",
   });
@@ -178,6 +181,8 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
             nameAr: row.nameAr ?? "",
             nameEn: row.nameEn ?? row.nameHe ?? "",
             phone: row.phone ?? "",
+            phone2: row.phone2 ?? "",
+            country: row.country ?? "",
             customerCode: row.customerCode ?? "",
             address: row.address ?? "",
           });
@@ -211,6 +216,8 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
       nameAr: row.nameAr ?? "",
       nameEn: row.nameEn ?? row.nameHe ?? "",
       phone: row.phone ?? "",
+      phone2: row.phone2 ?? "",
+      country: row.country ?? "",
       customerCode: row.customerCode ?? "",
       address: row.address ?? "",
     });
@@ -242,6 +249,8 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
       nameAr: form.nameAr,
       nameEn: form.nameEn,
       phone: form.phone,
+      phone2: form.phone2,
+      country: form.country || null,
       customerCode: form.customerCode,
       address: form.address,
     });
@@ -597,6 +606,24 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
                     <input id="cust-phone" value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} dir="ltr" />
                   </div>
                   <div className="form-field">
+                    <label htmlFor="cust-phone2">טלפון נוסף (אופציונלי)</label>
+                    <input
+                      id="cust-phone2"
+                      dir="ltr"
+                      placeholder="050-0000000 (אופציונלי)"
+                      value={form.phone2}
+                      onChange={(e) => setForm((f) => ({ ...f, phone2: e.target.value }))}
+                    />
+                  </div>
+                  <div className="form-field">
+                    <label htmlFor="cust-place">מקום</label>
+                    <CustomerPlaceCombo
+                      id="cust-place"
+                      value={form.country}
+                      onChange={(place) => setForm((f) => ({ ...f, country: place }))}
+                    />
+                  </div>
+                  <div className="form-field">
                     <label htmlFor="cust-number">קוד לקוח</label>
                     <input id="cust-number" value={form.customerCode} onChange={(e) => setForm((f) => ({ ...f, customerCode: e.target.value }))} dir="ltr" />
                   </div>
@@ -621,6 +648,16 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
               <div className="info-item">
                 <label>טלפון</label>
                 <div dir="ltr">{snap.phone?.trim() || "—"}</div>
+              </div>
+              <div className="info-divider" />
+              <div className="info-item">
+                <label>טלפון נוסף</label>
+                <div dir="ltr">{snap.phone2?.trim() || "—"}</div>
+              </div>
+              <div className="info-divider" />
+              <div className="info-item">
+                <label>מקום</label>
+                <div>{snap.country?.trim() || "—"}</div>
               </div>
             </div>
             )}
@@ -744,11 +781,13 @@ const EMPTY_NEW_CUSTOMER_FORM = {
   nameAr: "",
   nameEn: "",
   phone: "",
+  phone2: "",
+  country: "",
   email: "",
   notes: "",
 };
 
-export function CreateCustomerWindowBody() {
+export function CreateCustomerWindowBody({ initialCustomerCode }: { initialCustomerCode?: string }) {
   const { closeTop, completeCustomerCreate } = useAdminWindows();
   const nameArRef = useRef<HTMLInputElement>(null);
   const notesRef = useRef<HTMLTextAreaElement>(null);
@@ -776,11 +815,18 @@ export function CreateCustomerWindowBody() {
   }
 
   useEffect(() => {
+    const seed = initialCustomerCode?.trim() ?? "";
+    if (seed) {
+      customerCodeTouchedRef.current = true;
+      setForm((f) => ({ ...f, customerCode: seed }));
+      const t = window.setTimeout(() => nameArRef.current?.focus(), 0);
+      return () => window.clearTimeout(t);
+    }
     void loadSuggestedCode();
     const t = window.setTimeout(() => nameArRef.current?.focus(), 0);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount בלבד
-  }, []);
+  }, [initialCustomerCode]);
 
   function resetFormForNext() {
     customerCodeTouchedRef.current = false;
@@ -807,6 +853,8 @@ export function CreateCustomerWindowBody() {
       nameAr: form.nameAr,
       nameEn: form.nameEn || null,
       phone: form.phone.trim() || null,
+      phone2: form.phone2.trim() || null,
+      country: form.country || null,
       email: form.email || null,
       notes: form.notes || null,
     });
@@ -907,6 +955,17 @@ export function CreateCustomerWindowBody() {
               />
             </div>
             <div className="adm-field">
+              <label htmlFor="new-customer-phone2">טלפון נוסף (אופציונלי)</label>
+              <input
+                id="new-customer-phone2"
+                dir="ltr"
+                placeholder="050-0000000 (אופציונלי)"
+                value={form.phone2}
+                disabled={busy}
+                onChange={(e) => setForm((f) => ({ ...f, phone2: e.target.value }))}
+              />
+            </div>
+            <div className="adm-field">
               <label htmlFor="new-customer-email">אימייל</label>
               <input
                 id="new-customer-email"
@@ -914,6 +973,15 @@ export function CreateCustomerWindowBody() {
                 placeholder="name@company.com"
                 value={form.email}
                 onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+              />
+            </div>
+            <div className="adm-field">
+              <label htmlFor="new-customer-place">מקום</label>
+              <CustomerPlaceCombo
+                id="new-customer-place"
+                value={form.country}
+                disabled={busy}
+                onChange={(place) => setForm((f) => ({ ...f, country: place }))}
               />
             </div>
             <div className="adm-field adm-client-create-notes">
@@ -971,6 +1039,12 @@ export function CreateCustomerWindowBody() {
             </div>
             <div>
               <strong>טלפון:</strong> {standaloneDone.phone?.trim() || "—"}
+            </div>
+            <div>
+              <strong>טלפון נוסף:</strong> {standaloneDone.phone2?.trim() || "—"}
+            </div>
+            <div>
+              <strong>מקום:</strong> {standaloneDone.country?.trim() || "—"}
             </div>
             <div><strong>אימייל:</strong> {standaloneDone.email || "—"}</div>
           </div>
