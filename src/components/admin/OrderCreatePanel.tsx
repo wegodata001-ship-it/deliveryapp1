@@ -74,8 +74,8 @@ import {
 } from "@/lib/weeks/order-week-dates";
 import { goToNextWeekNumber, goToPrevWeekNumber } from "@/lib/weeks/ah-week-nav";
 import { AhWeekNavNextButton, AhWeekNavPrevButton } from "@/components/admin/AhWeekNavButtons";
-import { getOrderStatusMeta } from "@/constants/order-status";
 import { useOrderStatusCatalog } from "@/components/admin/OrderStatusCatalogProvider";
+import { OrderStatusSelect } from "@/components/admin/OrderStatusSelect";
 
 function toWeekCode(n: number): string {
   const nn = Math.max(1, Math.floor(n));
@@ -143,17 +143,10 @@ function extrasFromCustomerRow(row: CustomerSearchRow): CustomerExtrasPayload | 
   };
 }
 
-async function searchCustomersFast(query: string): Promise<CustomerSearchRow[]> {
-  const res = await fetch(`/api/customers/search-fast?q=${encodeURIComponent(query)}`, { credentials: "include" });
-  if (!res.ok) throw new Error("טעינת נתונים נכשלה");
-  return (await res.json()) as CustomerSearchRow[];
-}
-
-async function resolveCustomerFast(query: string): Promise<CustomerSearchRow | null> {
-  const res = await fetch(`/api/customers/search-fast?q=${encodeURIComponent(query)}&exact=1`, { credentials: "include" });
-  if (!res.ok) throw new Error("טעינת נתונים נכשלה");
-  return (await res.json()) as CustomerSearchRow | null;
-}
+import {
+  resolveCustomerFastClient,
+  searchCustomersFastClient,
+} from "@/lib/customer-search-client";
 
 type OrderBootPayload = { countries: string[]; orderNumberPreview: string | null };
 
@@ -211,7 +204,7 @@ export function OrderCreatePanel({
   const { openWindow, openCreateCustomerForOrder } = useAdminWindows();
   const { runWithLoading } = useAdminLoading();
   const { globalWeek, globalCountry } = useAdminGlobal();
-  const { quickOptions, editOptions } = useOrderStatusCatalog();
+  useOrderStatusCatalog();
   const idp = (s: string) => `${windowId}-${s}`;
 
   const isEdit = target.mode === "edit";
@@ -788,7 +781,7 @@ export function OrderCreatePanel({
     const t = window.setTimeout(() => {
       void (async () => {
         try {
-          const rows = await searchCustomersFast(trimmed);
+          const rows = await searchCustomersFastClient(trimmed);
           if (searchGenRef.current !== gen) return;
           setHits(rows);
           setDropdownField(field);
@@ -822,12 +815,12 @@ export function OrderCreatePanel({
       }
       setIsSearching(true);
       try {
-        const row = await resolveCustomerFast(raw);
+        const row = await resolveCustomerFastClient(raw);
         if (row) {
           pickCustomer(row);
           return;
         }
-        const found = await searchCustomersFast(raw);
+        const found = await searchCustomersFastClient(raw);
         const exact =
           found.find((h) => (h.code || "").trim().toLowerCase() === raw.toLowerCase()) ??
           found.find((h) => h.label.trim().toLowerCase() === raw.toLowerCase());
@@ -953,7 +946,7 @@ export function OrderCreatePanel({
 
       let cust = s.selectedCustomer;
       if (!cust && s.codeStr.trim()) {
-        const row = await resolveCustomerFast(s.codeStr.trim());
+        const row = await resolveCustomerFastClient(s.codeStr.trim());
         if (row) {
           pickCustomer(row);
           cust = row;
@@ -1223,7 +1216,6 @@ export function OrderCreatePanel({
   const formLocked = Boolean(isEdit && editGate?.employeeEditBlocked);
   const fieldDisabled = isSaving || formLocked;
 
-  const statusOptions = isEdit ? editOptions : quickOptions;
 
   return (
     <div className="adm-order-create-legacy-wrap adm-oc-pro-wrap">
@@ -1850,20 +1842,17 @@ export function OrderCreatePanel({
               <aside className="adm-oc-legacy-side adm-oc-pro-pay" aria-label="סטטוס ותשלום">
                 <div className="adm-oc-legacy-side-field">
                   <label htmlFor={idp("ord-st")}>סטטוס הזמנה</label>
-                  <select
+                  <OrderStatusSelect
                     id={idp("ord-st")}
                     className="adm-oc-legacy-side-sel"
                     disabled={fieldDisabled}
                     value={orderStatus}
-                    onFocus={closeCustomerDropdown}
-                    onChange={(e) => setOrderStatus(e.target.value)}
-                  >
-                    {statusOptions.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
+                    includeCurrentValue
+                    onChange={(v) => {
+                      closeCustomerDropdown();
+                      setOrderStatus(v);
+                    }}
+                  />
                 </div>
                 <div className="adm-oc-legacy-side-field">
                   <label htmlFor={idp("pay-pt")}>מקום קליטת הזמנה</label>

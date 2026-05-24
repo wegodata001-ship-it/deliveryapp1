@@ -4,7 +4,7 @@ import { randomUUID } from "crypto";
 import { OrderEditRequestStatus, PaymentMethod, Prisma } from "@prisma/client";
 import { listOrderStatusTags } from "@/lib/order-status-registry";
 import { OS } from "@/lib/order-status-slugs";
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { breakdownIlsIncludingVat, computeFromUsdAmount } from "@/lib/financial-calc";
 import { ensureDefaultFinancialSettings, getCurrentFinancialSettings } from "@/lib/financial-settings";
@@ -27,6 +27,7 @@ import {
 } from "@/lib/customer-code";
 import { normalizeCustomerPlaceInput } from "@/lib/customer-place";
 import { canUserEditCompletedOrder } from "@/lib/order-edit-lock";
+import { searchCustomersPrisma } from "@/lib/customer-search-prisma";
 import {
   clearExpiredOrderEditUnlockForOrder,
   markApprovedEditRequestUsedAndClearUnlock,
@@ -691,85 +692,7 @@ export async function searchCustomersForOrderAction(query: string): Promise<Cust
   return withPerfTimer("search.customers.capture", async () => {
     const me = await requireAuth();
     if (!userHasAnyPermission(me, ["create_orders", "edit_orders", "receive_payments"])) return [];
-
-    const q = query.trim();
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(q);
-    if (!isUuid && q.length < 2) return [];
-
-    const baseWhere: Prisma.CustomerWhereInput = {
-      isActive: true,
-      deletedAt: null,
-    };
-    const selectFields = {
-      id: true,
-      displayName: true,
-      customerCode: true,
-      customerType: true,
-      city: true,
-      phone: true,
-      nameAr: true,
-      nameEn: true,
-      nameHe: true,
-    } as const;
-
-    // Stage 1: exact match — fast path using unique/indexed columns.
-    // Most "search by code" or "search by full phone" hits resolve here in <10ms.
-    const exactOr: Prisma.CustomerWhereInput[] = [
-      { customerCode: { equals: q, mode: "insensitive" } },
-      { oldCustomerCode: { equals: q, mode: "insensitive" } },
-      { phone: { equals: q } },
-      { phone2: { equals: q } },
-    ];
-    if (isUuid) {
-      exactOr.push({ id: q });
-    }
-
-    const exactHits = await prisma.customer.findMany({
-      where: { ...baseWhere, OR: exactOr },
-      take: 20,
-      orderBy: { displayName: "asc" },
-      select: selectFields,
-    });
-
-    let rows = exactHits;
-
-    // Stage 2: substring fallback — only when exact found nothing.
-    // Relies on pg_trgm GIN indexes (see prisma/sql/add_customer_search_indexes.sql).
-    if (rows.length === 0) {
-      rows = await prisma.customer.findMany({
-        where: {
-          ...baseWhere,
-          OR: [
-            { displayName: { contains: q, mode: "insensitive" } },
-            { nameHe: { contains: q, mode: "insensitive" } },
-            { nameAr: { contains: q, mode: "insensitive" } },
-            { nameEn: { contains: q, mode: "insensitive" } },
-            { customerCode: { contains: q, mode: "insensitive" } },
-            { oldCustomerCode: { contains: q, mode: "insensitive" } },
-            { phone: { contains: q } },
-            { phone2: { contains: q } },
-            { country: { contains: q, mode: "insensitive" } },
-          ],
-        },
-        take: 20,
-        orderBy: { displayName: "asc" },
-        select: selectFields,
-      });
-    }
-
-    return rows.map((r) => ({
-      id: r.id,
-      label: primaryCustomerDisplayName({
-        nameAr: r.nameAr,
-        nameEn: r.nameEn,
-        nameHe: r.nameHe,
-        displayName: r.displayName,
-      }),
-      code: r.customerCode,
-      customerType: r.customerType,
-      city: r.city,
-      phone: r.phone,
-    }));
+    return searchCustomersPrisma(query, { limit: 20 });
   });
 }
 
@@ -778,45 +701,8 @@ export async function resolveCustomerForCaptureAction(raw: string): Promise<Cust
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["create_orders", "edit_orders", "receive_payments"])) return null;
 
-  const q = raw.trim();
-  if (!q) return null;
-
-  const row = await prisma.customer.findFirst({
-    where: {
-      deletedAt: null,
-      isActive: true,
-      OR: [
-        { id: q },
-        { customerCode: { equals: q, mode: "insensitive" } },
-        ...(q.length >= 2 ? [{ oldCustomerCode: { equals: q, mode: "insensitive" as const } }] : []),
-      ],
-    },
-    select: {
-      id: true,
-      displayName: true,
-      customerCode: true,
-      customerType: true,
-      city: true,
-      phone: true,
-      nameAr: true,
-      nameEn: true,
-      nameHe: true,
-    },
-  });
-  if (!row) return null;
-  return {
-    id: row.id,
-    label: primaryCustomerDisplayName({
-      nameAr: row.nameAr,
-      nameEn: row.nameEn,
-      nameHe: row.nameHe,
-      displayName: row.displayName,
-    }),
-    code: row.customerCode,
-    customerType: row.customerType,
-    city: row.city,
-    phone: row.phone,
-  };
+  const rows = await searchCustomersPrisma(raw, { limit: 1, exactOnly: true });
+  return rows[0] ?? null;
 }
 
 /** רשימה קצרה לבחירה מהירה בטופס קליטה */
@@ -1155,6 +1041,9 @@ export async function listClientsLedgerAction(params: {
   query?: string;
   page?: number;
   pageSize?: number;
+  fromYmd?: string;
+  toYmd?: string;
+  sort?: "new_old" | "old_new" | "name_az";
 }): Promise<ClientLedgerPayload> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["view_customer_card", "view_customers", "create_orders", "edit_orders"])) {
@@ -1164,9 +1053,22 @@ export async function listClientsLedgerAction(params: {
   const pageSize = Math.min(50, Math.max(1, Math.floor(params.pageSize || 8)));
   const requestedPage = Math.max(1, Math.floor(params.page || 1));
   const q = params.query?.trim() || "";
+  const fromYmd = params.fromYmd?.trim() || "";
+  const toYmd = params.toYmd?.trim() || "";
+  const sort = params.sort ?? "new_old";
+
+  const createdAtFilter =
+    fromYmd || toYmd
+      ? {
+          ...(fromYmd ? { gte: new Date(`${fromYmd}T00:00:00`) } : {}),
+          ...(toYmd ? { lte: new Date(`${toYmd}T23:59:59.999`) } : {}),
+        }
+      : undefined;
+
   const where: Prisma.CustomerWhereInput = {
     deletedAt: null,
     isActive: true,
+    ...(createdAtFilter ? { createdAt: createdAtFilter } : {}),
     ...(q
       ? {
           OR: [
@@ -1189,9 +1091,16 @@ export async function listClientsLedgerAction(params: {
   const page = Math.min(requestedPage, totalPages);
   const skip = (page - 1) * pageSize;
   const now = Date.now();
+  const orderBy: Prisma.CustomerOrderByWithRelationInput[] =
+    sort === "name_az"
+      ? [{ displayName: "asc" }]
+      : sort === "old_new"
+        ? [{ createdAt: "asc" }]
+        : [{ createdAt: "desc" }];
+
   const rows = await prisma.customer.findMany({
     where,
-    orderBy: { createdAt: "desc" },
+    orderBy,
     skip,
     take: pageSize,
     select: {
@@ -1251,70 +1160,8 @@ export async function getCustomerCardSnapshotAction(customerId: string): Promise
   }
   const id = customerId.trim();
   if (!id) return null;
-
-  const cust = await prisma.customer.findFirst({
-    where: { id, deletedAt: null, isActive: true },
-    select: {
-      id: true,
-      displayName: true,
-      nameAr: true,
-      nameHe: true,
-      nameEn: true,
-      customerCode: true,
-      phone: true,
-      phone2: true,
-      country: true,
-      email: true,
-      city: true,
-      address: true,
-      customerType: true,
-    },
-  });
-  if (!cust) return null;
-
-  const [agg, recent] = await Promise.all([
-    prisma.order.aggregate({
-      where: { customerId: id, deletedAt: null },
-      _count: true,
-      _sum: { totalUsd: true },
-    }),
-    prisma.order.findMany({
-      where: { customerId: id, deletedAt: null },
-      orderBy: { orderDate: "desc" },
-      take: 12,
-      select: {
-        orderNumber: true,
-        orderDate: true,
-        totalUsd: true,
-        status: true,
-      },
-    }),
-  ]);
-
-  const sum = agg._sum.totalUsd ?? new Prisma.Decimal(0);
-  return {
-    id: cust.id,
-    displayName: cust.displayName,
-    nameAr: cust.nameAr,
-    nameHe: cust.nameHe,
-    nameEn: cust.nameEn,
-    customerCode: cust.customerCode,
-    phone: cust.phone,
-    phone2: cust.phone2,
-    country: cust.country,
-    email: cust.email,
-    city: cust.city,
-    address: cust.address,
-    customerType: cust.customerType,
-    orderCount: agg._count,
-    ordersUsdSum: sum.toFixed(2),
-    recentOrders: recent.map((o) => ({
-      orderNumber: o.orderNumber,
-      orderDateYmd: o.orderDate ? formatLocalYmd(new Date(o.orderDate)) : "—",
-      totalUsd: (o.totalUsd ?? new Prisma.Decimal(0)).toFixed(2),
-      status: o.status,
-    })),
-  };
+  const { getCachedCustomerCardSnapshot } = await import("@/lib/customer-card-snapshot-cache");
+  return getCachedCustomerCardSnapshot(id);
 }
 
 export async function updateCustomerCardDetailsAction(form: {
@@ -1367,6 +1214,8 @@ export async function updateCustomerCardDetailsAction(form: {
 
   revalidatePath("/admin");
   revalidatePath("/admin/orders");
+  const { customerCardSnapshotTag } = await import("@/lib/customer-card-snapshot-cache");
+  revalidateTag(customerCardSnapshotTag(id));
   return { ok: true };
 }
 

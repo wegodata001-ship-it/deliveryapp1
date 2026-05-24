@@ -19,10 +19,25 @@ export function perfError(scope: string, error: unknown, extra?: Record<string, 
   });
 }
 
+let perfTimerSeq = 0;
+
+export function perfTimeStart(scope: string): string {
+  if (!PERF_ENABLED) return "";
+  const label = perfNowLabel(`${scope}#${++perfTimerSeq}`);
+  console.time(label);
+  return label;
+}
+
+export function perfTimeEnd(label: string): void {
+  if (!PERF_ENABLED || !label) return;
+  console.timeEnd(label);
+}
+
 export async function withPerfTimer<T>(scope: string, fn: () => Promise<T>): Promise<T> {
   if (!PERF_ENABLED) {
     return fn();
   }
+  const label = perfTimeStart(scope);
   const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
   try {
     const out = await fn();
@@ -31,6 +46,7 @@ export async function withPerfTimer<T>(scope: string, fn: () => Promise<T>): Pro
     perfError(scope, error);
     throw error;
   } finally {
+    perfTimeEnd(label);
     const endedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
     const durationMs = Math.max(0, endedAt - startedAt);
     console.log(perfNowLabel(scope), { durationMs: Number(durationMs.toFixed(2)) });

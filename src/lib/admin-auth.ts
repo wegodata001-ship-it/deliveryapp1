@@ -14,9 +14,22 @@ import {
 
 export type AppUser = User & { permissionKeys: string[] };
 
-const USER_CACHE_TTL_MS = 60_000;
+const USER_CACHE_TTL_MS = 120_000;
 const currentUserCache = new Map<string, { expiresAt: number; user: AppUser }>();
 const currentUserInFlight = new Map<string, Promise<AppUser | null>>();
+
+const userSelectCore = {
+  id: true,
+  fullName: true,
+  email: true,
+  username: true,
+  passwordHash: true,
+  role: true,
+  isActive: true,
+  lastLoginAt: true,
+  createdAt: true,
+  updatedAt: true,
+} as const;
 
 /**
  * Wrapped with React.cache so that within a single RSC render / server-action
@@ -31,20 +44,27 @@ export const getSessionPayload = cache(async (): Promise<SessionPayload | null> 
   });
 });
 
-async function fetchAndCacheUser(sub: string): Promise<AppUser | null> {
+/** טוען מפתחות הרשאה לעובד; מנהל מקבל מערך ריק (גישה מלאה דרך role). */
+export async function loadPermissionKeysForUser(
+  userId: string,
+  role: User["role"],
+): Promise<string[]> {
+  if (role === "ADMIN") return [];
+  const rows = await prisma.userPermission.findMany({
+    where: { userId },
+    select: { permission: { select: { key: true, isActive: true } } },
+  });
+  return rows
+    .map((up) => up.permission)
+    .filter((p) => p.isActive)
+    .map((p) => p.key);
+}
+
+async function fetchUserWithPermissionsJoin(sub: string): Promise<AppUser | null> {
   const user = await prisma.user.findUnique({
     where: { id: sub },
     select: {
-      id: true,
-      fullName: true,
-      email: true,
-      username: true,
-      passwordHash: true,
-      role: true,
-      isActive: true,
-      lastLoginAt: true,
-      createdAt: true,
-      updatedAt: true,
+      ...userSelectCore,
       permissions: {
         select: {
           permission: { select: { key: true, isActive: true } },
@@ -61,8 +81,37 @@ async function fetchAndCacheUser(sub: string): Promise<AppUser | null> {
     .map((p) => p.key);
 
   const { permissions: _p, ...rest } = user;
-  const appUser = Object.assign(rest, { permissionKeys }) as AppUser;
-  currentUserCache.set(sub, { user: appUser, expiresAt: Date.now() + USER_CACHE_TTL_MS });
+  return Object.assign(rest, { permissionKeys }) as AppUser;
+}
+
+function appUserFromSession(session: SessionPayload): AppUser {
+  const permissionKeys = session.role === "ADMIN" ? [] : (session.perms ?? []);
+  return {
+    id: session.sub,
+    fullName: session.name,
+    email: null,
+    username: null,
+    passwordHash: "",
+    role: session.role,
+    isActive: true,
+    lastLoginAt: null,
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+    permissionKeys,
+  };
+}
+
+async function fetchAndCacheUser(session: SessionPayload): Promise<AppUser | null> {
+  /** JWT עם perms (או ADMIN) — ללא round-trip ל-DB */
+  if (session.role === "ADMIN" || session.perms !== undefined) {
+    const appUser = appUserFromSession(session);
+    currentUserCache.set(session.sub, { user: appUser, expiresAt: Date.now() + USER_CACHE_TTL_MS });
+    return appUser;
+  }
+
+  const appUser = await fetchUserWithPermissionsJoin(session.sub);
+  if (!appUser) return null;
+  currentUserCache.set(session.sub, { expiresAt: Date.now() + USER_CACHE_TTL_MS, user: appUser });
   return appUser;
 }
 
@@ -75,11 +124,10 @@ export const getCurrentUser = cache(async (): Promise<AppUser | null> => {
     const cached = currentUserCache.get(session.sub);
     if (cached && cached.expiresAt > now) return cached.user;
 
-    // In-flight dedup: parallel callers for the same session share one DB round-trip.
     const existing = currentUserInFlight.get(session.sub);
     if (existing) return existing;
 
-    const promise = fetchAndCacheUser(session.sub).finally(() => {
+    const promise = fetchAndCacheUser(session).finally(() => {
       currentUserInFlight.delete(session.sub);
     });
     currentUserInFlight.set(session.sub, promise);
@@ -112,12 +160,18 @@ export function userHasAnyPermission(user: AppUser, keys: string[]): boolean {
 }
 
 export async function setAdminSession(user: User): Promise<void> {
+  const perms = await loadPermissionKeysForUser(user.id, user.role);
   const token = await signSessionToken({
     sub: user.id,
     role: user.role,
     name: user.fullName,
+    perms,
   });
   (await cookies()).set(adminSessionCookieName, token, adminSessionCookieOptions);
+  currentUserCache.set(user.id, {
+    user: Object.assign(user, { permissionKeys: perms }) as AppUser,
+    expiresAt: Date.now() + USER_CACHE_TTL_MS,
+  });
 }
 
 /** לאחר שינוי הרשאות/תפקיד — מבטל cache בזיכרון כדי לטעון permissionKeys מחדש */

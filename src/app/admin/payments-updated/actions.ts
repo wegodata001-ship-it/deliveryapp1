@@ -361,6 +361,7 @@ export async function savePaymentUpdatedAction(
         dbPaidUsd: paidSum.toFixed(2),
         dbRemainingUsd: remDec.toFixed(2),
         status: "unpaid" as const,
+        lastPaymentDateYmd: null,
         sourceCountry: null,
       };
     }),

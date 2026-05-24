@@ -1,24 +1,26 @@
 "use server";
 
 import {
-  buildEditSelectOptions,
-  buildQuickSelectOptions,
-  getOrderStatusLabelMap,
-  listOrderStatusSourceRows,
+  fetchOrderStatusCatalogData,
+  type OrderStatusSelectOption,
+  type OrderStatusTag,
 } from "@/lib/order-status-registry";
 
 export type OrderStatusCatalog = {
+  statuses: OrderStatusTag[];
   labelById: Record<string, string>;
-  quickOptions: Array<{ value: string; label: string }>;
-  editOptions: Array<{ value: string; label: string }>;
+  options: OrderStatusSelectOption[];
+  /** @deprecated use options */
+  quickOptions: OrderStatusSelectOption[];
+  /** @deprecated use options */
+  editOptions: OrderStatusSelectOption[];
 };
 
 export async function getOrderStatusCatalogAction(): Promise<OrderStatusCatalog> {
-  const rows = await listOrderStatusSourceRows();
-  const labelById = await getOrderStatusLabelMap();
+  const data = await fetchOrderStatusCatalogData();
   return {
-    labelById,
-    quickOptions: buildQuickSelectOptions(rows).map((o) => ({ value: o.value, label: o.label })),
-    editOptions: buildEditSelectOptions(rows).map((o) => ({ value: o.value, label: o.label })),
+    ...data,
+    quickOptions: data.options,
+    editOptions: data.options,
   };
 }

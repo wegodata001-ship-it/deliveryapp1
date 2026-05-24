@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { AdminNavLayoutProvider } from "@/components/admin/AdminNavLayoutContext";
 import { AdminFinancialModalProvider } from "@/components/admin/AdminFinancialModalContext";
 import type { SerializedFinancial } from "@/lib/financial-settings";
@@ -32,6 +32,12 @@ export function AdminNavShell({
   const onToast = useCallback<AdminToastFn>((msg, opts) => {
     setToast({ msg, variant: opts?.variant });
     window.setTimeout(() => setToast(null), 3800);
+  }, []);
+
+  useEffect(() => {
+    const html = document.documentElement;
+    html.classList.add("adm-app-shell");
+    return () => html.classList.remove("adm-app-shell");
   }, []);
 
   return (

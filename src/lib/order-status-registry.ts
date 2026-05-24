@@ -1,11 +1,8 @@
 import { randomUUID } from "crypto";
+import { unstable_cache } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { ensureOnce } from "@/lib/ensure-tables-once";
-import {
-  ORDER_STATUS_META,
-  ORDER_STATUS_QUICK_SELECT_OPTIONS,
-  orderStatusLabelByEditText,
-} from "@/constants/order-status";
+import { ORDER_STATUS_META } from "@/constants/order-status";
 import { isLegacyOrderStatusSlug, LEGACY_ORDER_STATUS_SLUGS, OS } from "@/lib/order-status-slugs";
 
 export type OrderStatusTag = {
@@ -16,7 +13,13 @@ export type OrderStatusTag = {
   sortOrder: number;
 };
 
-export type OrderStatusSelectOption = { value: string; label: string };
+export type OrderStatusSelectOption = { value: string; label: string; colorHex?: string };
+
+export type OrderStatusCatalogData = {
+  statuses: OrderStatusTag[];
+  labelById: Record<string, string>;
+  options: OrderStatusSelectOption[];
+};
 
 const PRESET_HEX: Record<string, string> = {
   success: "#22c55e",
@@ -72,7 +75,7 @@ function legacyDefaultHex(id: string): string {
 
 /** טבלת SourceStatus — מקור יחיד לכל הסטטוסים */
 export async function ensureOrderStatusSourceTable(): Promise<void> {
-  await ensureOnce("order-status-source-table-v3", async () => {
+  await ensureOnce("order-status-source-table-v4", async () => {
     await prisma.$executeRaw`
       CREATE TABLE IF NOT EXISTS "SourceStatus" (
         "id" TEXT PRIMARY KEY,
@@ -110,10 +113,25 @@ export async function ensureOrderStatusSourceTable(): Promise<void> {
       await prisma.$executeRaw`
         INSERT INTO "SourceStatus" ("id", "nameHe", "color", "colorHex", "sortOrder")
         VALUES (${slug}, ${legacyDefaultName(slug)}, ${color}, ${hex}, ${LEGACY_SORT[slug] ?? sort})
-        ON CONFLICT ("id") DO NOTHING
+        ON CONFLICT ("id") DO UPDATE SET
+          "nameHe" = CASE
+            WHEN "SourceStatus"."nameHe" = "SourceStatus"."id"
+              OR "SourceStatus"."nameHe" ~ '^[A-Z][A-Z0-9_]*$'
+            THEN EXCLUDED."nameHe"
+            ELSE "SourceStatus"."nameHe"
+          END,
+          "colorHex" = COALESCE("SourceStatus"."colorHex", EXCLUDED."colorHex"),
+          "sortOrder" = CASE WHEN "SourceStatus"."sortOrder" = 0 THEN EXCLUDED."sortOrder" ELSE "SourceStatus"."sortOrder" END
       `;
       sort += 10;
     }
+
+    await prisma.$executeRaw`
+      UPDATE "Order" o SET "status" = ${OS.OPEN}
+      WHERE o."deletedAt" IS NULL
+        AND o."status" ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+        AND NOT EXISTS (SELECT 1 FROM "SourceStatus" s WHERE s."id" = o."status")
+    `;
 
     await prisma.$executeRaw`
       DELETE FROM "SourceStatus" s
@@ -147,37 +165,40 @@ export async function listOrderStatusTags(includeInactive = false): Promise<Orde
 
 export async function getOrderStatusLabelMap(): Promise<Record<string, string>> {
   const rows = await listOrderStatusTags(true);
-  const map: Record<string, string> = {};
-  for (const r of rows) map[r.id] = r.nameHe;
-  for (const slug of LEGACY_ORDER_STATUS_SLUGS) {
-    if (!map[slug]) map[slug] = legacyDefaultName(slug);
-  }
-  return map;
+  return Object.fromEntries(rows.map((r) => [r.id, r.nameHe]));
 }
 
 export function labelFromMap(map: Record<string, string>, status: string): string {
-  if (map[status]) return map[status];
-  if (status in ORDER_STATUS_META) return ORDER_STATUS_META[status as keyof typeof ORDER_STATUS_META].label;
-  return status;
+  return map[status] ?? "סטטוס לא ידוע";
 }
 
-export function buildEditSelectOptions(rows: OrderStatusTag[]): OrderStatusSelectOption[] {
-  return rows.filter((r) => r.isActive).map((r) => ({ value: r.id, label: r.nameHe }));
+/** כל הסטטוסים הפעילים מהטבלה — מקור יחיד ל-dropdowns */
+export function buildStatusSelectOptions(rows: OrderStatusTag[]): OrderStatusSelectOption[] {
+  return rows
+    .filter((r) => r.isActive)
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.nameHe.localeCompare(b.nameHe, "he"))
+    .map((r) => ({ value: r.id, label: r.nameHe, colorHex: r.colorHex }));
 }
 
-export function buildQuickSelectOptions(rows: OrderStatusTag[]): OrderStatusSelectOption[] {
-  const nameById = Object.fromEntries(rows.map((r) => [r.id, r.nameHe]));
-  const quickIds = ORDER_STATUS_QUICK_SELECT_OPTIONS.map((o) => o.value as string);
-  const activeQuick = quickIds.filter((id) => rows.some((r) => r.id === id && r.isActive));
-  const ids = activeQuick.length > 0 ? activeQuick : rows.slice(0, 5).map((r) => r.id);
-  return ids.map((id) => {
-    const meta = ORDER_STATUS_META[id as keyof typeof ORDER_STATUS_META];
-    const label =
-      meta?.label && (id === OS.WAITING_FOR_EXECUTION || !nameById[id])
-        ? meta.label
-        : nameById[id] || legacyDefaultName(id);
-    return { value: id, label };
-  });
+/** @deprecated — use buildStatusSelectOptions */
+export const buildEditSelectOptions = buildStatusSelectOptions;
+
+const fetchOrderStatusCatalogDataCached = unstable_cache(
+  async (): Promise<OrderStatusCatalogData> => {
+    const statuses = await listOrderStatusTags(false);
+    const labelById = await getOrderStatusLabelMap();
+    return {
+      statuses,
+      labelById,
+      options: buildStatusSelectOptions(statuses),
+    };
+  },
+  ["wego-order-status-catalog"],
+  { revalidate: 120 },
+);
+
+export async function fetchOrderStatusCatalogData(): Promise<OrderStatusCatalogData> {
+  return fetchOrderStatusCatalogDataCached();
 }
 
 export async function isValidOrderStatusId(id: string): Promise<boolean> {
@@ -194,11 +215,30 @@ export async function resolveOrderStatusFromDisplayText(text: string): Promise<s
   const byName = rows.find((r) => r.nameHe === t);
   if (byName) return byName.id;
   if (isLegacyOrderStatusSlug(t)) return t;
-  return orderStatusLabelByEditText(t);
+  return null;
 }
 
 export async function countOrdersWithStatus(statusId: string): Promise<number> {
   return prisma.order.count({ where: { deletedAt: null, status: statusId } });
+}
+
+export async function getOrderStatusUsageMap(): Promise<Record<string, number>> {
+  const groups = await prisma.order.groupBy({
+    by: ["status"],
+    where: { deletedAt: null },
+    _count: { _all: true },
+  });
+  const map: Record<string, number> = {};
+  for (const g of groups) {
+    map[g.status] = g._count._all ?? 0;
+  }
+  return map;
+}
+
+/** קוד מערכת לתצוגה — בלי UUID */
+export function displayStatusCode(id: string): string {
+  if (id.startsWith("st_")) return "מותאם";
+  return id;
 }
 
 export async function createOrderStatusTag(input: {

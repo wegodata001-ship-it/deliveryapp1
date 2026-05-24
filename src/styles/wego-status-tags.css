@@ -1,126 +1,345 @@
-/* ניהול סטטוסים — תגיות (טבלאות מקור → סטטוסים) */
-.adm-status-tags-page {
+/* dropdown אחיד לסטטוסי הזמנה — מקור: SourceStatus */
+.adm-order-status-select {
+  width: 100%;
+  min-height: 36px;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--adm-border, #cbd5e1);
+  border-radius: 8px;
+  font: inherit;
+  font-size: inherit;
+  background: var(--adm-surface, #fff);
+  color: inherit;
+}
+
+.adm-order-status-select--table {
+  min-height: 32px;
+  font-size: 0.8125rem;
+}
+
+.adm-order-status-select:disabled {
+  opacity: 0.65;
+}
+
+/* ניהול סטטוסים — טבלת ERP (טבלאות מקור → סטטוסים) */
+.adm-status-erp {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 12px;
+  gap: 12px;
+  padding: 0;
   max-width: 100%;
 }
 
-.adm-status-tags-toolbar {
+.adm-status-erp-toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
+  padding: 12px 14px;
+  background: #f8fafc;
+  border: 1px solid var(--adm-border, #e2e8f0);
+  border-radius: 12px;
 }
 
-.adm-status-tags-search {
-  flex: 1 1 200px;
+.adm-status-erp-search {
+  flex: 1 1 220px;
   min-width: 0;
-  min-height: 40px;
-  padding: 0.5rem 0.75rem;
-  border: 1px solid var(--adm-border);
-  border-radius: 10px;
+  min-height: 38px;
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--adm-border, #cbd5e1);
+  border-radius: 8px;
   font: inherit;
-  font-size: clamp(14px, 3vw, 16px);
-}
-
-.adm-status-tags-grid {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 12px;
-}
-
-.adm-status-tag-card {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 10px 10px 10px 6px;
-  border-radius: 14px;
-  border: 1px solid var(--adm-border);
+  font-size: 14px;
   background: #fff;
-  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.06);
 }
 
-.adm-status-tag-card--off {
-  opacity: 0.55;
+.adm-status-erp-filter {
+  min-height: 38px;
+  padding: 0.35rem 0.65rem;
+  border: 1px solid var(--adm-border, #cbd5e1);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 14px;
+  background: #fff;
+}
+
+.adm-status-erp-err {
+  color: #dc2626;
+  font-weight: 600;
+  margin: 0 4px;
+  font-size: 14px;
+}
+
+.adm-status-erp-table-wrap {
+  overflow: auto;
+  border: 1px solid var(--adm-border, #e2e8f0);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+}
+
+.adm-status-erp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.adm-status-erp-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #f1f5f9;
+  box-shadow: 0 1px 0 #e2e8f0;
+}
+
+.adm-status-erp-table thead th {
+  padding: 10px 12px;
+  text-align: start;
+  font-weight: 800;
+  font-size: 12px;
+  color: #475569;
+  white-space: nowrap;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.adm-status-erp-th-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-weight: 800;
+  font-size: 12px;
+  color: #475569;
+  cursor: pointer;
+  padding: 0;
+}
+
+.adm-status-erp-th-btn svg.is-active {
+  color: #2563eb;
+}
+
+.adm-status-erp-table tbody td {
+  padding: 8px 12px;
+  vertical-align: middle;
+  border-bottom: 1px solid #f1f5f9;
+  color: #0f172a;
+}
+
+.adm-status-erp-row {
+  height: 44px;
+  transition: background 0.12s ease;
+}
+
+.adm-status-erp-row:hover {
   background: #f8fafc;
 }
 
-.adm-status-tag-card--drag {
-  opacity: 0.72;
-  outline: 2px dashed #93c5fd;
+.adm-status-erp-row--alt {
+  background: #fafbfc;
 }
 
-.adm-status-tag-card__grip {
+.adm-status-erp-row--alt:hover {
+  background: #f1f5f9;
+}
+
+.adm-status-erp-row--off {
+  opacity: 0.72;
+}
+
+.adm-status-erp-row--off .adm-status-erp-col-name strong {
+  color: #64748b;
+}
+
+.adm-status-erp-row--drag {
+  outline: 2px dashed #93c5fd;
+  background: #eff6ff !important;
+}
+
+.adm-status-erp-col-grip {
+  width: 36px;
+  text-align: center;
+}
+
+.adm-status-erp-grip {
+  display: inline-flex;
   color: #94a3b8;
   cursor: grab;
-  flex-shrink: 0;
 }
 
-.adm-status-tag-card__main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  border: none;
-  background: transparent;
-  text-align: start;
+.adm-status-erp-col-active {
+  width: 52px;
+  text-align: center;
+}
+
+.adm-status-erp-col-active input {
+  width: 18px;
+  height: 18px;
   cursor: pointer;
-  padding: 0;
-  font: inherit;
 }
 
-.adm-status-tag-card__dot {
-  width: 12px;
-  height: 12px;
+.adm-status-erp-col-name strong {
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.adm-status-erp-col-code {
+  width: 140px;
+}
+
+.adm-status-erp-code {
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+  background: #f1f5f9;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-family: ui-monospace, monospace;
+}
+
+.adm-status-erp-col-color {
+  min-width: 100px;
+}
+
+.adm-status-erp-color {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.adm-status-erp-color__dot {
+  width: 14px;
+  height: 14px;
   border-radius: 999px;
   flex-shrink: 0;
   box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.12);
 }
 
-.adm-status-tag-card__name {
-  font-size: clamp(14px, 3vw, 16px);
-  font-weight: 800;
-  color: #0f172a;
-  line-height: 1.25;
+.adm-status-erp-color__lbl {
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
 }
 
-.adm-status-tag-card__state {
-  font-size: 11px;
-  font-weight: 600;
+.adm-status-erp-col-sort {
+  width: 56px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
   color: #64748b;
 }
 
-.adm-status-tag-card__actions {
-  display: flex;
-  gap: 4px;
-  flex-shrink: 0;
+.adm-status-erp-col-usage {
+  width: 72px;
+  text-align: end;
 }
 
-.adm-status-tag-card__icon-btn {
+.adm-status-erp-usage {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.adm-status-erp-col-actions {
+  width: 140px;
+}
+
+.adm-status-erp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.adm-status-erp-act {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border: 1px solid var(--adm-border);
-  border-radius: 8px;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
   background: #fff;
+  font-size: 12px;
+  font-weight: 600;
   color: #475569;
   cursor: pointer;
 }
 
-.adm-status-tag-card__icon-btn--danger {
+.adm-status-erp-act:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+}
+
+.adm-status-erp-act--danger {
   color: #dc2626;
   border-color: #fecaca;
 }
 
+.adm-status-erp-act--danger:hover {
+  background: #fef2f2;
+}
+
+.adm-status-erp-empty {
+  text-align: center;
+  padding: 28px 16px !important;
+  color: #64748b;
+}
+
+.adm-status-erp-row--add td {
+  padding: 12px;
+  background: #f0f9ff;
+  border-bottom: 1px solid #bae6fd;
+}
+
+.adm-status-erp-inline-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 16px;
+}
+
+.adm-status-erp-inline-add label {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #64748b;
+}
+
+.adm-status-erp-inline-add label input[type="text"] {
+  min-width: 200px;
+  min-height: 36px;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--adm-border, #cbd5e1);
+  border-radius: 8px;
+  font: inherit;
+}
+
+.adm-status-erp-inline-add__color {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #64748b;
+}
+
+.adm-status-erp-inline-add__active {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  padding-bottom: 6px;
+}
+
+.adm-status-erp-inline-add__btns {
+  display: flex;
+  gap: 8px;
+  margin-inline-start: auto;
+}
+
+.adm-status-color-pick--compact .adm-status-color-pick__btn {
+  width: 24px;
+  height: 24px;
+}
+
+/* מודלים קטנים */
 .adm-status-pop-overlay {
   position: fixed;
   inset: 0;
@@ -138,7 +357,7 @@
   max-height: 90dvh;
   overflow-y: auto;
   padding: 16px;
-  border-radius: 16px;
+  border-radius: 12px;
   background: #fff;
   box-shadow: 0 24px 60px rgba(15, 23, 42, 0.22);
 }
@@ -186,8 +405,8 @@
   width: 100%;
   min-height: 40px;
   padding: 0.5rem 0.65rem;
-  border: 1px solid var(--adm-border);
-  border-radius: 10px;
+  border: 1px solid var(--adm-border, #cbd5e1);
+  border-radius: 8px;
   font: inherit;
   box-sizing: border-box;
 }
@@ -227,30 +446,85 @@
   gap: 8px;
 }
 
-.adm-status-tags-err {
-  color: #dc2626;
-  font-weight: 600;
-  margin: 0;
-}
-
-.adm-status-tags-loading,
-.adm-status-tags-empty {
-  color: #64748b;
-  margin: 0;
-}
-
 @media (max-width: 768px) {
-  .adm-status-tags-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .adm-status-tags-toolbar {
+  .adm-status-erp-toolbar {
     flex-direction: column;
     align-items: stretch;
   }
 
-  .adm-status-tags-toolbar .adm-btn {
+  .adm-status-erp-toolbar .adm-btn {
     width: 100%;
     justify-content: center;
+  }
+
+  .adm-status-erp-table-wrap {
+    max-height: none;
+    border: none;
+    box-shadow: none;
+  }
+
+  .adm-status-erp-table thead {
+    display: none;
+  }
+
+  .adm-status-erp-table tbody tr {
+    display: block;
+    margin-bottom: 10px;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    background: #fff;
+    box-shadow: 0 1px 4px rgba(15, 23, 42, 0.05);
+  }
+
+  .adm-status-erp-table tbody tr.adm-status-erp-row--alt {
+    background: #fff;
+  }
+
+  .adm-status-erp-table tbody td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 12px;
+    border-bottom: 1px solid #f1f5f9;
+    text-align: start;
+  }
+
+  .adm-status-erp-table tbody td:last-child {
+    border-bottom: none;
+  }
+
+  .adm-status-erp-table tbody td::before {
+    content: attr(data-label);
+    font-size: 11px;
+    font-weight: 800;
+    color: #64748b;
+    flex-shrink: 0;
+  }
+
+  .adm-status-erp-col-grip::before {
+    content: none !important;
+  }
+
+  .adm-status-erp-col-grip {
+    justify-content: flex-end;
+    background: #f8fafc;
+  }
+
+  .adm-status-erp-row--add td {
+    display: block;
+  }
+
+  .adm-status-erp-row--add td::before {
+    content: none;
+  }
+
+  .adm-status-erp-inline-add {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .adm-status-erp-inline-add__btns {
+    margin-inline-start: 0;
   }
 }

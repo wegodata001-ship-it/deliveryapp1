@@ -1,11 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { PaymentMethod } from "@prisma/client";
 import { OS } from "@/lib/order-status-slugs";
-import { inlineStatusBadgeClass, orderStatusToQuickSelectValue } from "@/constants/order-status";
 import { useOrderStatusCatalog } from "@/components/admin/OrderStatusCatalogProvider";
+import { OrderStatusSelect } from "@/components/admin/OrderStatusSelect";
 import { ChevronDown, FileText, Plus, Sheet } from "lucide-react";
 import {
   updateOrderListPaymentLocationAction,
@@ -22,6 +22,11 @@ import {
 import type { ParsedDateFilter } from "@/lib/work-week";
 import { OrdersListPaginationBar } from "@/components/admin/OrdersListPaginationBar";
 import { formatMoneyAmount } from "@/lib/money-format";
+import {
+  orderMatchesStatusKpiFilters,
+  toggleStatusKpiFilter,
+  type OrderStatusKpiKey,
+} from "@/lib/orders-status-kpi-filter";
 
 export type OrderListRow = {
   id: string;
@@ -150,6 +155,8 @@ type Props = {
   canViewCustomerCard: boolean;
   dateRange: ParsedDateFilter;
   paymentLocationOptions: { id: string; label: string }[];
+  /** שורת פילטרים (שבוע, חיפוש וכו׳) — מתחת לשורת הפעולות + KPI */
+  filters?: ReactNode;
 };
 
 export function OrdersListShell({
@@ -162,10 +169,11 @@ export function OrdersListShell({
   canViewCustomerCard,
   dateRange,
   paymentLocationOptions,
+  filters,
 }: Props) {
   const router = useRouter();
   const { openWindow } = useAdminWindows();
-  const { quickOptions: statusQuickOptions } = useOrderStatusCatalog();
+  useOrderStatusCatalog();
   const [rows, setRows] = useState<OrderListRow[]>(orders);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [listErr, setListErr] = useState<string | null>(null);
@@ -173,7 +181,12 @@ export function OrdersListShell({
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [pdfMenuOpen, setPdfMenuOpen] = useState(false);
   const [pdfLoading, setPdfLoading] = useState(false);
+  const [activeStatusFilters, setActiveStatusFilters] = useState<OrderStatusKpiKey[]>([]);
   const pdfWrapRef = useRef<HTMLDivElement>(null);
+
+  const toggleStatusFilter = useCallback((key: OrderStatusKpiKey) => {
+    setActiveStatusFilters((prev) => toggleStatusKpiFilter(prev, key));
+  }, []);
 
   const paymentLocationLabelById = useMemo(() => {
     const m = new Map<string, string>();
@@ -181,15 +194,42 @@ export function OrdersListShell({
     return m;
   }, [paymentLocationOptions]);
 
-  const tableRows = useMemo(() => rows, [rows]);
+  const tableRows = useMemo(
+    () => rows.filter((o) => orderMatchesStatusKpiFilters(o.status, activeStatusFilters)),
+    [rows, activeStatusFilters],
+  );
+
+  const statusKpiCards = useMemo(
+    () =>
+      [
+        { key: "open" as const, tone: "adm-status-card--open", title: "פתוחות", bucket: statusSummary.open },
+        { key: "completed" as const, tone: "adm-status-card--completed", title: "מוכנות", bucket: statusSummary.completed },
+        { key: "cancelled" as const, tone: "adm-status-card--cancelled", title: "מבוטלות", bucket: statusSummary.cancelled },
+        { key: "inProgress" as const, tone: "adm-status-card--progress", title: "בטיפול", bucket: statusSummary.inProgress },
+        {
+          key: "debtWithdrawal" as const,
+          tone: "adm-status-card--withdrawal",
+          title: "משיכה מהחוב",
+          bucket: statusSummary.debtWithdrawal,
+        },
+      ] satisfies {
+        key: OrderStatusKpiKey;
+        tone: string;
+        title: string;
+        bucket: OrdersStatusSummary["open"];
+      }[],
+    [statusSummary],
+  );
 
   const paginationLabel = useMemo(() => {
     const { page, pageSize, totalCount } = pagination;
     if (totalCount === 0) return "אין הזמנות בתצוגה";
     const from = (page - 1) * pageSize + 1;
     const to = Math.min(page * pageSize, totalCount);
-    return `מציג ${from.toLocaleString("he-IL")}–${to.toLocaleString("he-IL")} מתוך ${totalCount.toLocaleString("he-IL")}`;
-  }, [pagination]);
+    const base = `מציג ${from.toLocaleString("he-IL")}–${to.toLocaleString("he-IL")} מתוך ${totalCount.toLocaleString("he-IL")}`;
+    if (activeStatusFilters.length === 0) return base;
+    return `${base} · ${tableRows.length.toLocaleString("he-IL")} לאחר סינון ריבועים בעמוד`;
+  }, [pagination, activeStatusFilters.length, tableRows.length]);
 
   useEffect(() => {
     setRows(orders);
@@ -481,13 +521,53 @@ export function OrdersListShell({
 
   return (
     <div className="adm-orders-work">
-      <div className="adm-orders-toolbar">
-        <h1 className="adm-page-title adm-page-title--sm">הזמנות</h1>
-        <div className="adm-orders-toolbar-actions">
+      {filters ? <div className="adm-orders-filters-row">{filters}</div> : null}
+
+      <div className="adm-orders-action-kpi-row" dir="rtl">
+        <div className="adm-orders-status-kpi adm-orders-status-kpi--strip" aria-label="סיכומים לפי סטטוס — לחיצה מסננת את הטבלה">
+          {statusKpiCards.map((card) => {
+            const active = activeStatusFilters.includes(card.key);
+            return (
+              <button
+                key={card.key}
+                type="button"
+                className={[
+                  "adm-status-card",
+                  "adm-status-card--compact",
+                  card.tone,
+                  active ? "adm-status-card--active" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                aria-pressed={active}
+                aria-label={`${card.title} — ${active ? "סינון פעיל, לחיצה לביטול" : "לחיצה לסינון לפי סטטוס זה"}`}
+                onClick={() => toggleStatusFilter(card.key)}
+              >
+                <span className="adm-status-card-title">{card.title}</span>
+                <strong className="adm-status-card-count">{card.bucket.count}</strong>
+                <span className="adm-status-card-amount" dir="ltr">
+                  ${card.bucket.totalUsd}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="adm-orders-action-kpi-row__actions">
+          <button
+            type="button"
+            className="adm-export-btn adm-export-btn--excel adm-orders-top-btn"
+            onClick={exportToExcel}
+            title="ייצוא Excel לפי הסינון הנוכחי"
+            aria-label="ייצוא Excel"
+          >
+            <Sheet size={14} strokeWidth={2.2} aria-hidden />
+            EXCEL
+          </button>
           <div className="adm-orders-pdf-wrap" ref={pdfWrapRef}>
             <button
               type="button"
-              className="adm-export-btn adm-export-btn--pdf adm-export-btn--pdf-split"
+              className="adm-export-btn adm-export-btn--pdf adm-export-btn--pdf-split adm-orders-top-btn"
               onClick={() => setPdfMenuOpen((o) => !o)}
               disabled={pdfLoading}
               aria-expanded={pdfMenuOpen}
@@ -523,29 +603,14 @@ export function OrdersListShell({
               </ul>
             ) : null}
           </div>
-          <button
-            type="button"
-            className="adm-export-btn adm-export-btn--excel"
-            onClick={exportToExcel}
-            title="ייצוא Excel לפי הסינון הנוכחי"
-            aria-label="ייצוא Excel"
-          >
-            <Sheet size={14} strokeWidth={2.2} aria-hidden />
-            EXCEL
-          </button>
           {canCreateOrders ? (
-            <button type="button" className="adm-btn adm-btn--primary adm-btn--dense" onClick={newOrder}>
-              <Plus size={16} strokeWidth={2.2} aria-hidden />
+            <button type="button" className="adm-btn adm-btn--primary adm-btn--dense adm-orders-top-btn adm-orders-top-btn--new" onClick={newOrder}>
+              <Plus size={15} strokeWidth={2.2} aria-hidden />
               הזמנה חדשה
             </button>
           ) : null}
         </div>
       </div>
-
-      <p className="adm-orders-range-hint" dir="rtl">
-        טווח רשימה: {dateRange.fromYmd} — {dateRange.toYmd}
-        {dateRange.ahWeekSelect ? ` · שבוע ${dateRange.ahWeekSelect}` : " · טווח מותאם"}
-      </p>
 
       {listErr ? (
         <p className="adm-orders-inline-err" role="alert">
@@ -553,50 +618,7 @@ export function OrdersListShell({
         </p>
       ) : null}
 
-      <div className="adm-orders-status-kpi" aria-label="סיכומים לפי סטטוס">
-        <div className="adm-status-card adm-status-card--open">
-          <span className="adm-status-card-title">פתוחות</span>
-          <strong className="adm-status-card-count">{statusSummary.open.count}</strong>
-          <span className="adm-status-card-sub">הזמנות</span>
-          <span className="adm-status-card-amount" dir="ltr">
-            ${statusSummary.open.totalUsd}
-          </span>
-        </div>
-        <div className="adm-status-card adm-status-card--progress">
-          <span className="adm-status-card-title">בטיפול</span>
-          <strong className="adm-status-card-count">{statusSummary.inProgress.count}</strong>
-          <span className="adm-status-card-sub">הזמנות</span>
-          <span className="adm-status-card-amount" dir="ltr">
-            ${statusSummary.inProgress.totalUsd}
-          </span>
-        </div>
-        <div className="adm-status-card adm-status-card--completed">
-          <span className="adm-status-card-title">מוכנות</span>
-          <strong className="adm-status-card-count">{statusSummary.completed.count}</strong>
-          <span className="adm-status-card-sub">הזמנות</span>
-          <span className="adm-status-card-amount" dir="ltr">
-            ${statusSummary.completed.totalUsd}
-          </span>
-        </div>
-        <div className="adm-status-card adm-status-card--cancelled">
-          <span className="adm-status-card-title">מבוטלות</span>
-          <strong className="adm-status-card-count">{statusSummary.cancelled.count}</strong>
-          <span className="adm-status-card-sub">הזמנות</span>
-          <span className="adm-status-card-amount" dir="ltr">
-            ${statusSummary.cancelled.totalUsd}
-          </span>
-        </div>
-        <div className="adm-status-card adm-status-card--withdrawal">
-          <span className="adm-status-card-title">משיכה מהחוב</span>
-          <strong className="adm-status-card-count">{statusSummary.debtWithdrawal.count}</strong>
-          <span className="adm-status-card-sub">הזמנות</span>
-          <span className="adm-status-card-amount" dir="ltr">
-            ${statusSummary.debtWithdrawal.totalUsd}
-          </span>
-        </div>
-      </div>
-
-      <div className="mobile-table-wrapper adm-table-excel-wrap adm-table-excel-wrap--orders" dir="rtl">
+      <div className="adm-orders-table-host mobile-table-wrapper adm-table-excel-wrap adm-table-excel-wrap--orders" dir="rtl">
         <table className="adm-table-excel adm-table-excel--orders adm-table-excel--orders-v2">
           <thead>
             <tr>
@@ -620,15 +642,17 @@ export function OrdersListShell({
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 ? (
+            {tableRows.length === 0 ? (
               <tr>
                 <td colSpan={11} className="adm-table-empty">
-                  אין הזמנות בטווח הנבחר.
+                  {rows.length === 0
+                    ? "אין הזמנות בטווח הנבחר."
+                    : "אין הזמנות בעמוד הנוכחי לפי ריבועי הסטטוס שנבחרו."}
                 </td>
               </tr>
             ) : (
               tableRows.map((o) => {
-                const selVal = orderStatusToQuickSelectValue(o.status);
+                const selVal = o.status;
                 const editBadgeUi = o.editBadge ? orderEditBadgeLabel(o.editBadge, o.status) : null;
                 const isCancelled = o.status === OS.CANCELLED;
                 return (
@@ -706,19 +730,15 @@ export function OrdersListShell({
                       {o.totalAmountIls ?? "—"}
                     </td>
                     <td className="adm-table-excel-status-cell adm-ord-col-status" onClick={(e) => e.stopPropagation()}>
-                      <select
-                        className={`adm-table-status-sel ${inlineStatusBadgeClass(selVal)}`}
+                      <OrderStatusSelect
+                        variant="table"
+                        className="adm-table-status-sel"
                         value={selVal}
+                        includeCurrentValue
                         disabled={!canEditOrders || busyId === o.id || !!o.quickStatusLocked}
                         aria-label="סטטוס הזמנה"
-                        onChange={(e) => void onRowStatusChange(o.id, e.target.value)}
-                      >
-                        {statusQuickOptions.map((opt) => (
-                          <option key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={(v) => void onRowStatusChange(o.id, v)}
+                      />
                     </td>
                     <td className="adm-ord-col-meta adm-ord-col-pay" onClick={(e) => e.stopPropagation()}>
                       <select

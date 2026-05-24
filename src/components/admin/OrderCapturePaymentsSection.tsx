@@ -4,6 +4,7 @@ import { PaymentMethod } from "@prisma/client";
 import { Plus, Trash2 } from "lucide-react";
 import { ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS } from "@/lib/order-capture-payment-methods";
 import { formatIlsDisplay, formatUsdDisplay } from "@/lib/money-format";
+import { OrderStatusSelect } from "@/components/admin/OrderStatusSelect";
 
 export type OrderCapturePaymentLineCurrency = "USD" | "ILS";
 
@@ -31,7 +32,6 @@ type Props = {
   validationError: string | null;
   orderStatus: string;
   onOrderStatusChange: (s: string) => void;
-  orderStatusLabels: Record<string, string>;
   onFillRemainingCash: () => void;
   /** מילוי היתרה במזומן בשקלים (לפי שער ₪/USD) */
   onFillRemainingCashIls?: () => void;
@@ -71,7 +71,6 @@ export function OrderCapturePaymentsSection({
   validationError,
   orderStatus,
   onOrderStatusChange,
-  orderStatusLabels,
   onFillRemainingCash,
   onFillRemainingCashIls,
   onSplitRemainingHalfCashCredit,
@@ -108,18 +107,13 @@ export function OrderCapturePaymentsSection({
           <div className="adm-pay-meta-row">
             <div className="adm-field adm-field--capture">
               <label htmlFor={`${idPrefix}-status`}>סטטוס הזמנה</label>
-              <select
+              <OrderStatusSelect
                 id={`${idPrefix}-status`}
                 value={orderStatus}
                 disabled={disabled}
-                onChange={(e) => onOrderStatusChange(e.target.value)}
-              >
-                {Object.keys(orderStatusLabels).map((s) => (
-                  <option key={s} value={s}>
-                    {orderStatusLabels[s] ?? s}
-                  </option>
-                ))}
-              </select>
+                includeCurrentValue
+                onChange={onOrderStatusChange}
+              />
             </div>
           </div>
         ) : null}

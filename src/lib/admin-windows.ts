@@ -1,5 +1,7 @@
 /** Discriminated payloads for the admin window manager (no route changes). */
 
+import type { CustomerCardSnapshot } from "@/app/admin/capture/actions";
+
 export type AdminWindowType = "orderCapture" | "customerCard" | "createCustomer" | "payments" | "paymentsUpdated";
 
 export type OrderCaptureWindowProps =
@@ -10,6 +12,8 @@ export type CustomerCardWindowProps = {
   customerId?: string | null;
   customerName?: string | null;
   initialTab?: "details" | "ledger";
+  /** נתונים שנטענו בשרת — מונע POST /admin בכניסה לדף */
+  initialSnap?: CustomerCardSnapshot | null;
 };
 
 export type CreateCustomerWindowProps = {

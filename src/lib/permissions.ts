@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
+import { ensureOnce } from "@/lib/ensure-tables-once";
 
 /** כל מפתחות ההרשאות במערכת — מקור יחיד ל-DB, sidebar, routes וטופס עובד */
 export type AppPermissionKey =
@@ -110,26 +111,28 @@ export function uniqueManagedKeys(): ManagedEmployeePermissionKey[] {
 
 type Db = Pick<PrismaClient, "permission">;
 
-/** מוודא שכל מפתחות ההרשאות קיימים ופעילים ב-DB (לטופס עובדים ו-sidebar) */
+/** מוודא שכל מפתחות ההרשאות קיימים ב-DB — להרצה ב-seed/deploy בלבד (ראה scripts/ensure-permissions.ts), לא ב-hot path */
 export async function ensureAppPermissions(prisma: Db): Promise<void> {
-  await Promise.all(
-    APP_PERMISSION_DEFINITIONS.map((p) =>
-      prisma.permission.upsert({
-        where: { key: p.key },
-        create: {
-          key: p.key,
-          name: p.name,
-          description: p.description ?? null,
-          isActive: true,
-        },
-        update: {
-          name: p.name,
-          description: p.description ?? null,
-          isActive: true,
-        },
-      }),
-    ),
-  );
+  await ensureOnce("app-permissions-seed", async () => {
+    await Promise.all(
+      APP_PERMISSION_DEFINITIONS.map((p) =>
+        prisma.permission.upsert({
+          where: { key: p.key },
+          create: {
+            key: p.key,
+            name: p.name,
+            description: p.description ?? null,
+            isActive: true,
+          },
+          update: {
+            name: p.name,
+            description: p.description ?? null,
+            isActive: true,
+          },
+        }),
+      ),
+    );
+  });
 }
 
 export async function managedPermissionIdMap(prisma: Db): Promise<Record<string, string>> {

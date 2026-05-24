@@ -14,7 +14,7 @@ export const prisma =
       : ["error"],
   });
 
-if (perfEnabled() && !globalForPrisma.prismaPerfSubscribed) {
+if (typeof window === "undefined" && perfEnabled() && !globalForPrisma.prismaPerfSubscribed) {
   globalForPrisma.prismaPerfSubscribed = true;
   (prisma as PrismaClient & {
     $on: (eventType: "query", callback: (event: { duration: number; target: string; query: string }) => void) => void;

@@ -1,0 +1,263 @@
+/* =============================================================================
+   Admin scroll shell — body locked; sidebar + main scroll areas separated
+   Requires html.adm-app-shell (set by AdminNavShell)
+   Load after wego-pro-responsive.css
+   ============================================================================= */
+
+html.adm-app-shell,
+html.adm-app-shell body,
+html.adm-app-shell #__next {
+  height: 100%;
+  overflow: hidden;
+  max-width: 100vw;
+}
+
+html.adm-app-shell .adm-root {
+  display: flex;
+  flex-direction: row;
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--adm-bg);
+}
+
+/* Control panel (sidebar) — גלילה רק בתוך הניווט */
+html.adm-app-shell .adm-sidebar {
+  position: relative;
+  top: auto;
+  align-self: stretch;
+  flex-shrink: 0;
+  height: 100%;
+  max-height: 100dvh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  z-index: 25;
+}
+
+html.adm-app-shell .adm-brand {
+  flex-shrink: 0;
+}
+
+html.adm-app-shell .adm-nav {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+html.adm-app-shell .adm-sidebar-foot {
+  flex-shrink: 0;
+}
+
+/* Main column */
+html.adm-app-shell .adm-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* AdminLoadingProvider — גשר flex בין adm-main ל-chrome (בלי זה התוכן נחתך) */
+html.adm-app-shell .adm-main > .adm-app-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+html.adm-app-shell .adm-chrome-stack {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+html.adm-app-shell .adm-chrome-below-header {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+html.adm-app-shell .adm-chrome-work {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+}
+
+/* אזור התוכן המרכזי — גלילה רגילה של הדף */
+html.adm-app-shell .adm-chrome-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+html.adm-app-shell .adm-header--compact,
+html.adm-app-shell .adm-header--erp,
+html.adm-app-shell .adm-filter-bar {
+  flex-shrink: 0;
+}
+
+/* דפים עם טבלה גדולה — מעטפת flex; גלילה בטבלה + fallback ב-chrome-main */
+html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page),
+html.adm-app-shell .adm-chrome-main:has(.adm-source-page),
+html.adm-app-shell .adm-chrome-main:has(.adm-balances-page),
+html.adm-app-shell .adm-chrome-main:has(.adm-balances-excel-page),
+html.adm-app-shell .adm-chrome-main:has(.adm-receipt-control) {
+  overflow-x: hidden;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+html.adm-app-shell .adm-orders-excel-page,
+html.adm-app-shell .adm-source-page,
+html.adm-app-shell .adm-balances-page,
+html.adm-app-shell .adm-receipt-control {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+html.adm-app-shell .adm-orders-action-kpi-row,
+html.adm-app-shell .adm-orders-filters-row,
+html.adm-app-shell .adm-orders-filters-bar,
+html.adm-app-shell .adm-orders-status-kpi,
+html.adm-app-shell .adm-source-detail-head,
+html.adm-app-shell .adm-status-erp-toolbar {
+  flex-shrink: 0;
+}
+
+html.adm-app-shell .adm-orders-excel-page .adm-orders-work,
+html.adm-app-shell .adm-orders-work,
+html.adm-app-shell .adm-balances-work {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+html.adm-app-shell .adm-balances-head,
+html.adm-app-shell .adm-balances-kpi-strip,
+html.adm-app-shell .adm-balances-filters-bar,
+html.adm-app-shell .adm-balances-scope-line,
+html.adm-app-shell .adm-balances-pagination {
+  flex-shrink: 0;
+}
+
+/* טבלאות מקור — שרשרת flex עד ל-wrap */
+html.adm-app-shell .adm-source-page > .adm-source-pro,
+html.adm-app-shell .adm-source-pro {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  gap: 10px;
+}
+
+html.adm-app-shell .adm-source-pro-toolbar,
+html.adm-app-shell .adm-source-pro-filters,
+html.adm-app-shell .adm-source-bulk-bar,
+html.adm-app-shell .adm-source-pro-pagination {
+  flex-shrink: 0;
+}
+
+html.adm-app-shell .adm-table-excel-wrap--orders,
+html.adm-app-shell .adm-status-erp-table-wrap,
+html.adm-app-shell .adm-source-pro-table-wrap,
+html.adm-app-shell .adm-balances-table-wrap,
+html.adm-app-shell .adm-receipt-table-wrap,
+html.adm-app-shell .adm-dt-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  max-height: none;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* דשבורד ודפים רגילים */
+html.adm-app-shell .adm-dashboard--compact {
+  min-height: min-content;
+  flex: 0 0 auto;
+}
+
+html.adm-app-shell .adm-dash-dock {
+  position: fixed;
+  z-index: 48;
+  pointer-events: none;
+}
+
+html.adm-app-shell .adm-dash-dock__btn,
+html.adm-app-shell .adm-dash-dock a {
+  pointer-events: auto;
+}
+
+html.adm-app-shell .adm-page--floating-actions {
+  padding-bottom: 88px;
+}
+
+html.adm-app-shell .adm-win-layer {
+  position: fixed;
+  inset: 0;
+}
+
+html.adm-app-shell .adm-win-body,
+html.adm-app-shell .adm-win-scroll-body {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+@media (max-width: 768px) {
+  html.adm-app-shell .adm-sidebar {
+    position: fixed !important;
+    top: 0;
+    bottom: 0;
+    height: 100dvh !important;
+    max-height: 100dvh;
+    z-index: 41;
+    overflow: hidden;
+  }
+
+  html[dir="rtl"] html.adm-app-shell .adm-sidebar {
+    right: 0;
+    left: auto;
+  }
+
+  html.adm-app-shell .adm-main {
+    width: 100%;
+    flex: 1 1 auto;
+  }
+
+  html.adm-app-shell .adm-chrome-main {
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+}

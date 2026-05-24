@@ -72,6 +72,8 @@ export type CustomerBalanceQuery = {
   sourceCountry?: OrderCountryCode | "";
   /** טעינת סיכום/פירוט הזמנות פתוחות + KPI למודאל דוחות */
   enrichOpenOrders?: boolean;
+  /** צבירה מצטברת לכל חיי הלקוח (לא לפי שבוע בלבד) */
+  lifetime?: boolean;
   filters?: CustomerBalanceFilters;
 };
 
@@ -83,6 +85,14 @@ export type CustomerBalanceRow = {
   ordersCount: number;
   totalOrdersILS: string;
   totalPaymentsILS: string;
+  /** סכום עסקאות מקורי (לפני עמלה) בש״ח */
+  totalDealsILS: string;
+  /** סה״כ עמלות בש״ח */
+  totalCommissionsILS: string;
+  /** סה״כ תקבולים בפועל (תשלומים + זיכויים כלליים) */
+  totalReceiptsILS: string;
+  /** יתרה = הזמנות − תשלומים (ללא זיכויים נפרדים) */
+  totalBalanceILS: string;
   totalCreditsILS: string;
   noOrdersInRange: boolean;
   balanceILS: string;
@@ -238,21 +248,43 @@ function paymentIlsValue(p: {
   return new Prisma.Decimal(0);
 }
 
-function orderExpectedIlsValue(o: {
+type OrderMoneyFields = {
   totalIlsWithVat: Prisma.Decimal | null;
   totalIls: Prisma.Decimal | null;
   totalUsd: Prisma.Decimal | null;
   amountUsd: Prisma.Decimal | null;
+  amountIls: Prisma.Decimal | null;
   commissionUsd: Prisma.Decimal | null;
+  commissionIls: Prisma.Decimal | null;
   usdRateUsed: Prisma.Decimal | null;
   snapshotFinalDollarRate: Prisma.Decimal | null;
   exchangeRate: Prisma.Decimal | null;
-}): Prisma.Decimal {
+};
+
+function orderRate(o: OrderMoneyFields): Prisma.Decimal | null {
+  return o.usdRateUsed ?? o.snapshotFinalDollarRate ?? o.exchangeRate;
+}
+
+function orderExpectedIlsValue(o: OrderMoneyFields): Prisma.Decimal {
   if (o.totalIlsWithVat) return o.totalIlsWithVat;
   if (o.totalIls) return o.totalIls;
   const usd = o.totalUsd ?? (o.amountUsd ?? new Prisma.Decimal(0)).add(o.commissionUsd ?? new Prisma.Decimal(0));
-  const rate = o.usdRateUsed ?? o.snapshotFinalDollarRate ?? o.exchangeRate;
+  const rate = orderRate(o);
   return rate ? usd.mul(rate) : new Prisma.Decimal(0);
+}
+
+function orderDealIlsValue(o: OrderMoneyFields): Prisma.Decimal {
+  if (o.amountIls) return o.amountIls;
+  const rate = orderRate(o);
+  if (!rate) return new Prisma.Decimal(0);
+  return (o.amountUsd ?? new Prisma.Decimal(0)).mul(rate);
+}
+
+function orderCommissionIlsValue(o: OrderMoneyFields): Prisma.Decimal {
+  if (o.commissionIls) return o.commissionIls;
+  const rate = orderRate(o);
+  if (!rate) return new Prisma.Decimal(0);
+  return (o.commissionUsd ?? new Prisma.Decimal(0)).mul(rate);
 }
 
 function autoStatus(expected: Prisma.Decimal, received: Prisma.Decimal): CustomerBalanceStatus {
@@ -460,6 +492,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
 
   await ensureStatusOverrideTable();
 
+  const lifetime = query.lifetime === true;
   const uptoNorm = normalizeAhWeekCode(query.uptoWeekCode?.trim() || null);
   const uptoRange = uptoNorm ? getAhWeekRange(uptoNorm) : null;
   const cumulativeThrough = uptoRange?.to ? endOfLocalDay(uptoRange.to) : null;
@@ -468,7 +501,18 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   let orderDateFilter: Prisma.DateTimeFilter | undefined;
   let paymentDateFilter: Prisma.DateTimeFilter | undefined;
 
-  if (cumulativeThrough) {
+  if (lifetime) {
+    const lteBound =
+      cumulativeThrough && userToEnd
+        ? userToEnd.getTime() < cumulativeThrough.getTime()
+          ? userToEnd
+          : cumulativeThrough
+        : cumulativeThrough ?? userToEnd;
+    if (lteBound) {
+      orderDateFilter = { lte: lteBound };
+      paymentDateFilter = { lte: lteBound };
+    }
+  } else if (cumulativeThrough) {
     const lteBound = userToEnd != null && userToEnd.getTime() < cumulativeThrough.getTime() ? userToEnd : cumulativeThrough;
     orderDateFilter = {
       ...(query.fromYmd?.trim() ? { gte: parseLocalDate(query.fromYmd.trim()) } : {}),
@@ -495,7 +539,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
 
   const orderNestedWhere: Prisma.OrderWhereInput = {
     deletedAt: null,
-    ...(!cumulativeThrough && query.weekCode?.trim() ? { weekCode: query.weekCode.trim() } : {}),
+    ...(!lifetime && !cumulativeThrough && query.weekCode?.trim() ? { weekCode: query.weekCode.trim() } : {}),
     ...(orderDateFilter ? { orderDate: orderDateFilter } : {}),
     ...(orderCountryPrisma ? { sourceCountry: orderCountryPrisma } : {}),
   };
@@ -503,7 +547,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   const paymentLinkedWhere: Prisma.PaymentWhereInput = {
     isPaid: true,
     orderId: { not: null },
-    ...(!cumulativeThrough && query.weekCode?.trim() ? { weekCode: query.weekCode.trim() } : {}),
+    ...(!lifetime && !cumulativeThrough && query.weekCode?.trim() ? { weekCode: query.weekCode.trim() } : {}),
     ...(paymentDateFilter ? { paymentDate: paymentDateFilter } : {}),
     ...(orderCountryPrisma
       ? {
@@ -518,8 +562,22 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   const customerWhere = buildCustomerWhere(query);
   const smartTrim = query.filters?.smart?.trim();
   const scopeToActivity = !query.customerId?.trim() && !smartTrim;
+  const activityOrderWhere: Prisma.OrderWhereInput = lifetime
+    ? { deletedAt: null, ...(orderCountryPrisma ? { sourceCountry: orderCountryPrisma } : {}) }
+    : orderNestedWhere;
   const customerWhereFinal: Prisma.CustomerWhereInput = scopeToActivity
-    ? { AND: [customerWhere, buildCustomerActivityScope(orderNestedWhere, paymentDateFilter, query.weekCode?.trim(), !!cumulativeThrough, orderCountryPrisma)] }
+    ? {
+        AND: [
+          customerWhere,
+          buildCustomerActivityScope(
+            activityOrderWhere,
+            paymentDateFilter,
+            lifetime ? undefined : query.weekCode?.trim(),
+            lifetime || !!cumulativeThrough,
+            orderCountryPrisma,
+          ),
+        ],
+      }
     : customerWhere;
 
   const customers = await prisma.customer.findMany({
@@ -548,7 +606,9 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     totalIls: true,
     totalUsd: true,
     amountUsd: true,
+    amountIls: true,
     commissionUsd: true,
+    commissionIls: true,
     usdRateUsed: true,
     snapshotFinalDollarRate: true,
     exchangeRate: true,
@@ -581,7 +641,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
           isPaid: true,
           orderId: null,
           customerId: { in: chunk },
-          ...(!cumulativeThrough && query.weekCode?.trim() ? { weekCode: query.weekCode.trim() } : {}),
+          ...(!lifetime && !cumulativeThrough && query.weekCode?.trim() ? { weekCode: query.weekCode.trim() } : {}),
           ...(paymentDateFilter ? { paymentDate: paymentDateFilter } : {}),
         },
         select: {
@@ -604,6 +664,8 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   ]);
 
   const expectedIlsByCustomer = new Map<string, Prisma.Decimal>();
+  const dealIlsByCustomer = new Map<string, Prisma.Decimal>();
+  const commissionIlsByCustomer = new Map<string, Prisma.Decimal>();
   const orderCountByCustomer = new Map<string, number>();
   const expectedUsdByCustomer = new Map<string, Prisma.Decimal>();
   const maxAhByCustomer = new Map<string, number>();
@@ -614,6 +676,8 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     if (!cid) continue;
     const v = orderExpectedIlsValue(o);
     expectedIlsByCustomer.set(cid, (expectedIlsByCustomer.get(cid) ?? new Prisma.Decimal(0)).add(v));
+    dealIlsByCustomer.set(cid, (dealIlsByCustomer.get(cid) ?? new Prisma.Decimal(0)).add(orderDealIlsValue(o)));
+    commissionIlsByCustomer.set(cid, (commissionIlsByCustomer.get(cid) ?? new Prisma.Decimal(0)).add(orderCommissionIlsValue(o)));
     orderCountByCustomer.set(cid, (orderCountByCustomer.get(cid) ?? 0) + 1);
     const usd = o.totalUsd ?? (o.amountUsd ?? new Prisma.Decimal(0)).add(o.commissionUsd ?? new Prisma.Decimal(0));
     expectedUsdByCustomer.set(cid, (expectedUsdByCustomer.get(cid) ?? new Prisma.Decimal(0)).add(usd));
@@ -658,6 +722,9 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     const receivedIls = receivedIlsByCustomer.get(c.id) ?? new Prisma.Decimal(0);
     const creditsIls = creditByCustomer.get(c.id) ?? new Prisma.Decimal(0);
     const balanceIls = expectedIls.sub(receivedIls);
+    const dealsIls = dealIlsByCustomer.get(c.id) ?? new Prisma.Decimal(0);
+    const commissionsIls = commissionIlsByCustomer.get(c.id) ?? new Prisma.Decimal(0);
+    const receiptsIls = receivedIls.add(creditsIls);
     const creditsUsd = creditUsdByCustomer.get(c.id) ?? new Prisma.Decimal(0);
     const expectedUsd = expectedUsdByCustomer.get(c.id) ?? new Prisma.Decimal(0);
     const receivedUsd = receivedUsdByCustomer.get(c.id) ?? new Prisma.Decimal(0);
@@ -691,6 +758,10 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       ordersCount: oc,
       totalOrdersILS: money(expectedIls),
       totalPaymentsILS: money(receivedIls),
+      totalDealsILS: money(dealsIls),
+      totalCommissionsILS: money(commissionsIls),
+      totalReceiptsILS: money(receiptsIls),
+      totalBalanceILS: money(balanceIls),
       totalCreditsILS: money(creditsIls),
       noOrdersInRange: oc === 0,
       balanceILS: money(balanceIls),

@@ -36,14 +36,37 @@ export type SerializedFinancial = {
   updatedAt: string | null;
 };
 
-export function serializeFinancialSettings(row: FinancialSettings | null): SerializedFinancial | null {
+/** Prisma Decimal נהרס ל-string/number אחרי unstable_cache — פורמט אחיד */
+export function formatDecimalField(value: unknown, decimals = 4): string {
+  if (value == null) return (0).toFixed(decimals);
+  if (value instanceof Prisma.Decimal) return value.toFixed(decimals);
+  if (typeof value === "number" && Number.isFinite(value)) return value.toFixed(decimals);
+  if (typeof value === "string") {
+    const n = Number(value);
+    return Number.isFinite(n) ? n.toFixed(decimals) : value;
+  }
+  const n = Number(String(value));
+  return Number.isFinite(n) ? n.toFixed(decimals) : (0).toFixed(decimals);
+}
+
+function formatUpdatedAt(value: unknown): string | null {
+  if (value == null) return null;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "string") return value;
+  return null;
+}
+
+export function serializeFinancialSettings(
+  row: FinancialSettings | null | Record<string, unknown>,
+): SerializedFinancial | null {
   if (!row) return null;
+  const r = row as FinancialSettings;
   return {
-    baseDollarRate: row.baseDollarRate.toFixed(4),
-    dollarFee: row.dollarFee.toFixed(4),
-    finalDollarRate: row.finalDollarRate.toFixed(4),
-    defaultCommissionPercent: row.defaultCommissionPercent.toFixed(4),
-    source: row.source,
-    updatedAt: row.updatedAt.toISOString(),
+    baseDollarRate: formatDecimalField(r.baseDollarRate),
+    dollarFee: formatDecimalField(r.dollarFee),
+    finalDollarRate: formatDecimalField(r.finalDollarRate),
+    defaultCommissionPercent: formatDecimalField(r.defaultCommissionPercent),
+    source: String(r.source ?? ""),
+    updatedAt: formatUpdatedAt(r.updatedAt),
   };
 }

@@ -167,6 +167,10 @@ body.adm-nav-scroll-lock {
   .adm-balances-filters-row--primary {
     grid-template-columns: 1fr 1fr;
   }
+
+  .adm-balances-excel-page .adm-balances-filters-bar__inner {
+    flex-wrap: wrap;
+  }
 }
 
 @media (max-width: 992px) {
@@ -202,8 +206,9 @@ body.adm-nav-scroll-lock {
     animation: wego-backdrop-in 0.2s ease-out;
   }
 
-  .adm-root {
-    min-height: 100vh;
+  html.adm-app-shell .adm-root {
+    min-height: 0;
+    height: 100dvh;
   }
 
   .adm-main {
@@ -896,12 +901,19 @@ body.adm-nav-scroll-lock {
   }
 
   .adm-content,
-  .adm-content--chrome,
-  .adm-chrome-main {
+  .adm-content--chrome {
     width: 100%;
     max-width: 100%;
     padding-inline: 10px !important;
     overflow-x: hidden;
+  }
+
+  html.adm-app-shell .adm-chrome-main {
+    width: 100%;
+    max-width: 100%;
+    padding-inline: 10px !important;
+    overflow-x: hidden;
+    overflow-y: auto;
   }
 
   /* PART 11 — section padding */

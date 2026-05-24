@@ -1,9 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getSourceTableShellMeta } from "@/app/admin/source-tables/actions";
-import { PaymentChecksTableClient } from "@/components/admin/PaymentChecksTableClient";
-import { OrderStatusesManager } from "@/components/admin/OrderStatusesManager";
-import { SourceTableProClient } from "@/components/admin/SourceTableProClient";
+import { SourceTableDetailBody } from "@/components/admin/SourceTableDetailBody";
 import { requireRoutePermission } from "@/lib/route-access";
 
 export default async function SourceTableDetailPage({
@@ -35,19 +33,12 @@ export default async function SourceTableDetailPage({
             {isPaymentChecks
               ? "ניהול צ׳יקים, סינון מתקדם וסטטוס הפקדה."
               : isStatuses
-                ? "תגיות סטטוס להזמנות — הוספה, צבע, סידור ומחיקה בלי קודים טכניים."
+                ? "טבלת סטטוסי הזמנה — מקור הנתונים לכל dropdown במערכת."
                 : "ניהול נתונים, חיפוש, סינון, עריכה ופעולות."}
           </p>
         </div>
       </header>
-      {isPaymentChecks ? (
-        <PaymentChecksTableClient />
-      ) : isStatuses ? (
-        <OrderStatusesManager initialSearch={initialSearch} />
-      ) : (
-        <SourceTableProClient tableId={shell.id} initialData={null} initialSearch={initialSearch} />
-      )}
+      <SourceTableDetailBody tableId={shell.id} initialSearch={initialSearch} />
     </div>
   );
 }
-

@@ -12,6 +12,8 @@ export type SessionPayload = {
   sub: string;
   role: "ADMIN" | "EMPLOYEE";
   name: string;
+  /** מפתחות הרשאה מוטמעים ב-JWT — מונע join בכל בקשת layout */
+  perms?: string[];
 };
 
 /**
@@ -44,7 +46,9 @@ export async function signSessionToken(payload: SessionPayload): Promise<string>
     if (!secret) {
       throw new Error("SESSION_SECRET must be set (min 16 characters) for admin sessions.");
     }
-    return new SignJWT({ role: payload.role, name: payload.name })
+    const claims: Record<string, unknown> = { role: payload.role, name: payload.name };
+    if (payload.perms !== undefined) claims.perms = payload.perms;
+    return new SignJWT(claims)
       .setProtectedHeader({ alg: "HS256" })
       .setSubject(payload.sub)
       .setIssuedAt()
@@ -62,8 +66,12 @@ export async function verifySessionToken(token: string): Promise<SessionPayload 
       const sub = payload.sub;
       const role = payload.role as SessionPayload["role"] | undefined;
       const name = typeof payload.name === "string" ? payload.name : "";
+      const permsRaw = payload.perms;
+      const perms = Array.isArray(permsRaw)
+        ? permsRaw.filter((k): k is string => typeof k === "string")
+        : undefined;
       if (!sub || (role !== "ADMIN" && role !== "EMPLOYEE")) return null;
-      return { sub, role, name };
+      return { sub, role, name, perms };
     } catch (error) {
       perfError("auth.verifySessionToken.invalid", error);
       return null;

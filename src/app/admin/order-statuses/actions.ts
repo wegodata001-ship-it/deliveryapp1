@@ -5,25 +5,36 @@ import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import {
   createOrderStatusTag,
   deleteOrderStatusTag,
+  displayStatusCode,
+  getOrderStatusUsageMap,
   listOrderStatusTags,
   reorderOrderStatusTags,
   updateOrderStatusTag,
   type OrderStatusTag,
 } from "@/lib/order-status-registry";
 
+export type OrderStatusManagerRow = OrderStatusTag & { usageCount: number; code: string };
+
 async function ensureAllowed() {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["manage_settings"])) throw new Error("אין הרשאה");
 }
 
-export async function listOrderStatusesManagerAction(search = ""): Promise<OrderStatusTag[]> {
+export async function listOrderStatusesManagerAction(search = ""): Promise<OrderStatusManagerRow[]> {
   await ensureAllowed();
-  const rows = await listOrderStatusTags(true);
+  const [rows, usage] = await Promise.all([listOrderStatusTags(true), getOrderStatusUsageMap()]);
   const q = search.trim().toLowerCase();
-  if (!q) return rows;
-  return rows.filter(
+  const mapped: OrderStatusManagerRow[] = rows.map((r) => ({
+    ...r,
+    code: displayStatusCode(r.id),
+    usageCount: usage[r.id] ?? 0,
+  }));
+  if (!q) return mapped;
+  return mapped.filter(
     (r) =>
       r.nameHe.toLowerCase().includes(q) ||
+      r.code.toLowerCase().includes(q) ||
+      r.id.toLowerCase().includes(q) ||
       r.colorHex.toLowerCase().includes(q) ||
       (r.isActive ? "פעיל" : "לא פעיל").includes(q),
   );
@@ -68,5 +79,6 @@ function revalidateStatusPaths() {
   revalidatePath("/admin/source-tables/statuses");
   revalidatePath("/admin/source-tables");
   revalidatePath("/admin/orders");
+  revalidatePath("/admin/capture");
   revalidatePath("/admin");
 }

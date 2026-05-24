@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PaymentMethod } from "@prisma/client";
@@ -78,7 +77,7 @@ export function OrdersListToolbar({
   fromYmd,
   toYmd,
   ahWeekSelect,
-  activePreset,
+  activePreset: _activePreset,
   search,
   statusFilter,
   countryFilter,
@@ -92,7 +91,7 @@ export function OrdersListToolbar({
 }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { quickOptions: STATUS_OPTIONS } = useOrderStatusCatalog();
+  const { options: STATUS_OPTIONS } = useOrderStatusCatalog();
   const [from, setFrom] = useState(fromYmd);
   const [to, setTo] = useState(toYmd);
   const [week, setWeek] = useState(() => (ahWeekSelect ? ahWeekSelect : ""));
@@ -230,17 +229,9 @@ export function OrdersListToolbar({
     router.replace(qs ? `/admin/orders?${qs}` : "/admin/orders");
   }, [router, searchParams]);
 
-  const presetHref = (preset: string) => {
-    const n = new URLSearchParams(searchParams.toString());
-    for (const k of ORDERS_KEYS) n.delete(k);
-    n.set("ordersPreset", preset);
-    const qs = n.toString();
-    return qs ? `/admin/orders?${qs}` : "/admin/orders";
-  };
-
   return (
-    <div className="adm-orders-excel-toolbar">
-      <div className="adm-orders-excel-filters adm-orders-excel-filters--v2">
+    <div className="adm-orders-filters-bar">
+      <div className="adm-orders-filters-bar__inner adm-orders-excel-filters adm-orders-excel-filters--v2">
         <label className="adm-orders-filter-field adm-orders-filter-field--week">
           <span className="adm-orders-filter-label">שבוע</span>
           <div className="adm-week-control" dir="ltr">
@@ -272,7 +263,7 @@ export function OrdersListToolbar({
           </div>
         </label>
 
-        <label className="adm-orders-filter-field">
+        <label className="adm-orders-filter-field adm-orders-filter-field--date">
           <span className="adm-orders-filter-label">מתאריך</span>
           <input
             type="date"
@@ -287,7 +278,7 @@ export function OrdersListToolbar({
           />
         </label>
 
-        <label className="adm-orders-filter-field">
+        <label className="adm-orders-filter-field adm-orders-filter-field--date">
           <span className="adm-orders-filter-label">עד תאריך</span>
           <input
             type="date"
@@ -302,7 +293,7 @@ export function OrdersListToolbar({
           />
         </label>
 
-        <label className="adm-orders-filter-field">
+        <label className="adm-orders-filter-field adm-orders-filter-field--country">
           <span className="adm-orders-filter-label">מדינה</span>
           <select
             value={countrySel}
@@ -318,7 +309,7 @@ export function OrdersListToolbar({
           </select>
         </label>
 
-        <label className="adm-orders-filter-field">
+        <label className="adm-orders-filter-field adm-orders-filter-field--status">
           <span className="adm-orders-filter-label">סטטוס</span>
           <select
             value={statusSel}
@@ -334,7 +325,7 @@ export function OrdersListToolbar({
           </select>
         </label>
 
-        <label className="adm-orders-filter-field">
+        <label className="adm-orders-filter-field adm-orders-filter-field--pay-type">
           <span className="adm-orders-filter-label">צורת תשלום</span>
           <select
             value={payType}
@@ -351,7 +342,7 @@ export function OrdersListToolbar({
           </select>
         </label>
 
-        <label className="adm-orders-filter-field">
+        <label className="adm-orders-filter-field adm-orders-filter-field--pay-loc">
           <span className="adm-orders-filter-label">מקום תשלום</span>
           <select
             value={payLoc}
@@ -405,27 +396,6 @@ export function OrdersListToolbar({
             ניקוי
           </button>
         </div>
-      </div>
-
-      <div className="adm-orders-quick-presets" role="group" aria-label="סינון מהיר">
-        <Link
-          href={presetHref("today")}
-          className={`adm-orders-preset${activePreset === "today" ? " adm-orders-preset--active" : ""}`}
-        >
-          היום
-        </Link>
-        <Link
-          href={presetHref("this_week")}
-          className={`adm-orders-preset${activePreset === "this_week" ? " adm-orders-preset--active" : ""}`}
-        >
-          השבוע
-        </Link>
-        <Link
-          href={presetHref("last_week")}
-          className={`adm-orders-preset${activePreset === "last_week" ? " adm-orders-preset--active" : ""}`}
-        >
-          שבוע קודם
-        </Link>
       </div>
     </div>
   );

@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname } from "next/navigation";
+import { useHydratedSearchParams } from "@/lib/use-hydrated-search-params";
 import type { NavIconId, NavItemDef, NavSectionDef } from "@/lib/sidebar-nav";
 import {
   BarChart3,
@@ -204,10 +205,12 @@ function NavBlock({
           item.href === "/admin/order-edit-requests" && navBadges?.pendingOrderEditRequests
             ? navBadges.pendingOrderEditRequests
             : 0;
+        const disablePrefetch = item.href === "/admin" || item.href === "/admin/";
         return (
           <Link
             key={key}
             href={resolved}
+            prefetch={disablePrefetch ? false : undefined}
             className="adm-nav-link"
             data-active={active ? "true" : "false"}
             aria-current={active ? "page" : undefined}
@@ -235,7 +238,7 @@ export function AdminSidebar({
   navBadges?: { pendingOrderEditRequests?: number };
 }) {
   const pathname = usePathname();
-  const sp = useSearchParams();
+  const sp = useHydratedSearchParams();
   const { openWindow } = useAdminWindows();
   const closeNav = useAdminNavLayout()?.closeNav;
 

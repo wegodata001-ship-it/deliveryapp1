@@ -2,7 +2,7 @@
 
 import { randomUUID } from "crypto";
 import { PaymentMethod, Prisma } from "@prisma/client";
-import { revalidatePath } from "next/cache";
+import { revalidatePath, unstable_cache } from "next/cache";
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { clearExpiredOrderEditUnlockForOrder } from "@/app/admin/order-edit-requests/actions";
 import { canUserEditCompletedOrder } from "@/lib/order-edit-lock";
@@ -10,7 +10,12 @@ import { prisma } from "@/lib/prisma";
 import { ensureOnce } from "@/lib/ensure-tables-once";
 import { formatLocalYmd } from "@/lib/work-week";
 import {
-  buildEditSelectOptions,
+  SOURCE_TABLE_DEFINITIONS,
+  getSourceTableDefinition,
+  type SourceTableId,
+} from "@/lib/source-table-definitions";
+import {
+  buildStatusSelectOptions,
   ensureOrderStatusSourceTable,
   getOrderStatusLabelMap,
   isValidOrderStatusId,
@@ -18,20 +23,7 @@ import {
   resolveOrderStatusFromDisplayText,
 } from "@/lib/order-status-registry";
 
-export type SourceTableId =
-  | "customers"
-  | "orders"
-  | "payments"
-  | "receivables"
-  | "payment-checks"
-  | "customer-ledger"
-  | "customer-balances"
-  | "users"
-  | "employees"
-  | "payment-methods"
-  | "statuses"
-  | "payment-locations"
-  | "exchange-rates";
+export type { SourceTableId } from "@/lib/source-table-definitions";
 
 export type SourceTableCard = {
   id: SourceTableId;
@@ -102,26 +94,7 @@ export type SourceTableMutation = {
   values: Record<string, string>;
 };
 
-const DEFINITIONS: Array<Omit<SourceTableCard, "count" | "countLabel">> = [
-  { id: "customers", title: "Customers", titleHe: "לקוחות", description: "טבלת לקוחות, קודים ופרטי קשר.", icon: "👥", group: "running" },
-  { id: "orders", title: "Orders", titleHe: "הזמנות", description: "כל ההזמנות, שבועות, סכומים וסטטוסים.", icon: "📦", group: "running" },
-  { id: "customer-balances", title: "CustomerBalances", titleHe: "יתרות", description: "יתרות לקוחות וסטטוס גבייה.", icon: "⚖️", group: "running" },
-  { id: "payments", title: "Payments", titleHe: "תשלומים", description: "תשלומים שנקלטו וקישור להזמנות.", icon: "💵", group: "finance" },
-  { id: "receivables", title: "Receivables", titleHe: "תקבולים", description: "בקרת תקבולים וצפי מול התקבל.", icon: "🧾", group: "finance" },
-  {
-    id: "payment-checks",
-    title: "PaymentChecks",
-    titleHe: "טבלת צ׳יקים",
-    description: "ניהול צ׳יקים, תאריכי פרעון וסטטוס הפקדה.",
-    icon: "💳",
-    group: "finance",
-  },
-  { id: "employees", title: "Employees", titleHe: "עובדים", description: "עובדי מערכת פעילים.", icon: "🪪", group: "system" },
-  { id: "payment-methods", title: "PaymentMethods", titleHe: "אמצעי תשלום", description: "ערכי אמצעי תשלום במערכת.", icon: "💰", group: "system" },
-  { id: "statuses", title: "Statuses", titleHe: "סטטוסים", description: "סטטוסי הזמנות וגבייה.", icon: "🏷️", group: "system" },
-  { id: "payment-locations", title: "PaymentLocations", titleHe: "מקומות תשלום", description: "מקומות/נקודות לקליטת תשלום.", icon: "📍", group: "system" },
-  { id: "exchange-rates", title: "ExchangeRates", titleHe: "שערי מטבע", description: "הגדרות שער דולר ושער סופי.", icon: "💱", group: "system" },
-];
+const DEFINITIONS = SOURCE_TABLE_DEFINITIONS;
 
 function stringifyValue(v: unknown): string {
   if (v == null) return "";
@@ -157,7 +130,7 @@ async function orderStatusLabelsAndOptions() {
   const labelMap = await getOrderStatusLabelMap();
   return {
     labels: labelMap,
-    options: buildEditSelectOptions(rows),
+    options: buildStatusSelectOptions(rows),
   };
 }
 
@@ -274,24 +247,21 @@ async function seedReceivablesIfEmpty() {
   }
 }
 
-export async function listSourceTableCardsAction(): Promise<SourceTableCard[]> {
-  await ensureAllowed();
-  await ensureSourceManagementTables();
-  await seedReceivablesIfEmpty();
-  const [customers, orders, payments, receivables, paymentChecks, users, activeUsers, locations, rates, statusRows] = await Promise.all([
-    prisma.customer.count({ where: { deletedAt: null } }),
-    prisma.order.count({ where: { deletedAt: null } }),
-    prisma.payment.count(),
-    prisma.receiptControl.count(),
-    prisma.paymentCheck.count(),
-    prisma.user.count(),
-    prisma.user.count({ where: { isActive: true } }),
-    prisma.$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS "count" FROM "PaymentLocation"`,
-    prisma.financialSettings.count(),
-    listOrderStatusSourceRows(),
-  ]);
-  const paymentLocationCount = Number(locations[0]?.count ?? 0);
-  const counts: Record<SourceTableId, number | null> = {
+async function loadSourceTableCardCounts(): Promise<Record<SourceTableId, number | null>> {
+  const [customers, orders, payments, receivables, paymentChecks, activeUsers, paymentLocations, rates, statuses] =
+    await Promise.all([
+      prisma.customer.count({ where: { deletedAt: null } }),
+      prisma.order.count({ where: { deletedAt: null } }),
+      prisma.payment.count(),
+      prisma.receiptControl.count(),
+      prisma.paymentCheck.count(),
+      prisma.user.count({ where: { isActive: true } }),
+      prisma.paymentLocation.count({ where: { isActive: true } }),
+      prisma.financialSettings.count(),
+      prisma.sourceStatus.count({ where: { isActive: true } }),
+    ]);
+
+  return {
     customers,
     orders,
     payments,
@@ -299,17 +269,32 @@ export async function listSourceTableCardsAction(): Promise<SourceTableCard[]> {
     "payment-checks": paymentChecks,
     "customer-ledger": orders + payments,
     "customer-balances": customers,
-    users,
+    users: activeUsers,
     employees: activeUsers,
     "payment-methods": Object.keys(PaymentMethod).length,
-    statuses: statusRows.length,
-    "payment-locations": paymentLocationCount,
+    statuses,
+    "payment-locations": paymentLocations,
     "exchange-rates": rates,
   };
+}
+
+const getCachedSourceTableCardCounts = unstable_cache(
+  loadSourceTableCardCounts,
+  ["wego-source-table-card-counts"],
+  { revalidate: 60 },
+);
+
+/** מונים לכרטיסי טבלאות מקור — cache 60 שניות, ללא bootstrap/seed */
+export async function listSourceTableCardCountsAction(): Promise<Record<SourceTableId, number | null>> {
+  await ensureAllowed();
+  return getCachedSourceTableCardCounts();
+}
+
+export async function listSourceTableCardsAction(): Promise<SourceTableCard[]> {
+  const counts = await listSourceTableCardCountsAction();
   return DEFINITIONS.map((d) => ({
     ...d,
     count: counts[d.id] ?? null,
-    countLabel: d.id === "payment-checks" ? "סה״כ צ׳יקים" : null,
   }));
 }
 
@@ -321,7 +306,7 @@ export async function getSourceTableDataAction(id: SourceTableId): Promise<Sourc
 export async function getSourceTableShellMeta(
   id: string,
 ): Promise<Pick<SourceTableData, "id" | "title" | "titleHe"> | null> {
-  const def = DEFINITIONS.find((d) => d.id === (id as SourceTableId));
+  const def = getSourceTableDefinition(id);
   if (!def) return null;
   return { id: def.id, title: def.title, titleHe: def.titleHe };
 }

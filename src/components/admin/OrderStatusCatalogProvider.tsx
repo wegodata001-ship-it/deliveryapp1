@@ -1,70 +1,73 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { usePathname } from "next/navigation";
 import {
   getOrderStatusCatalogAction,
   type OrderStatusCatalog,
 } from "@/app/admin/order-status/actions";
-import {
-  ORDER_STATUS_EDIT_SELECT_OPTIONS,
-  ORDER_STATUS_QUICK_SELECT_OPTIONS,
-  getOrderStatusLabel,
-} from "@/constants/order-status";
+import type { OrderStatusTag } from "@/lib/order-status-registry";
+import type { OrderStatusSelectOption } from "@/lib/order-status-registry";
+import { statusColorById, statusOptionsIncludingValue } from "@/lib/order-status-catalog";
 
 type OrderStatusCatalogContextValue = {
   catalog: OrderStatusCatalog;
   loading: boolean;
   refresh: () => void;
-  getLabel: (status: string) => string;
-  quickOptions: Array<{ value: string; label: string }>;
-  editOptions: Array<{ value: string; label: string }>;
+  getLabel: (statusId: string) => string;
+  getColorHex: (statusId: string) => string | undefined;
+  /** כל הסטטוסים הפעילים — מקור יחיד */
+  options: OrderStatusSelectOption[];
+  statuses: OrderStatusTag[];
+  optionsForValue: (currentValue?: string) => OrderStatusSelectOption[];
+  /** @deprecated use options */
+  quickOptions: OrderStatusSelectOption[];
+  /** @deprecated use options */
+  editOptions: OrderStatusSelectOption[];
 };
 
-const FALLBACK: OrderStatusCatalog = {
-  labelById: Object.fromEntries(
-    ORDER_STATUS_EDIT_SELECT_OPTIONS.map((o) => [o.value, o.label]),
-  ),
-  quickOptions: ORDER_STATUS_QUICK_SELECT_OPTIONS.map((o) => ({
-    value: o.value,
-    label: o.label,
-  })),
-  editOptions: ORDER_STATUS_EDIT_SELECT_OPTIONS.map((o) => ({
-    value: o.value,
-    label: o.label,
-  })),
+const EMPTY: OrderStatusCatalog = {
+  statuses: [],
+  labelById: {},
+  options: [],
+  quickOptions: [],
+  editOptions: [],
 };
 
 const Ctx = createContext<OrderStatusCatalogContextValue | null>(null);
 
 export function OrderStatusCatalogProvider({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname();
-  const [catalog, setCatalog] = useState<OrderStatusCatalog>(FALLBACK);
+  const [catalog, setCatalog] = useState<OrderStatusCatalog>(EMPTY);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(() => {
     setLoading(true);
     void getOrderStatusCatalogAction()
       .then((next) => setCatalog(next))
-      .catch(() => setCatalog(FALLBACK))
+      .catch(() => setCatalog(EMPTY))
       .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
     load();
-  }, [load, pathname]);
+  }, [load]);
 
   const value = useMemo<OrderStatusCatalogContextValue>(() => {
-    const getLabel = (status: string) =>
-      catalog.labelById[status] ?? getOrderStatusLabel(status);
+    const getLabel = (statusId: string) => catalog.labelById[statusId] ?? "סטטוס לא ידוע";
+    const getColorHex = (statusId: string) => statusColorById(catalog.statuses, statusId);
+    const optionsForValue = (currentValue?: string) =>
+      statusOptionsIncludingValue(catalog.options, catalog.labelById, currentValue);
 
     return {
       catalog,
       loading,
       refresh: load,
       getLabel,
-      quickOptions: catalog.quickOptions,
-      editOptions: catalog.editOptions,
+      getColorHex,
+      options: catalog.options,
+      statuses: catalog.statuses,
+      optionsForValue,
+      quickOptions: catalog.options,
+      editOptions: catalog.options,
     };
   }, [catalog, loading, load]);
 
@@ -75,12 +78,16 @@ export function useOrderStatusCatalog(): OrderStatusCatalogContextValue {
   const v = useContext(Ctx);
   if (!v) {
     return {
-      catalog: FALLBACK,
+      catalog: EMPTY,
       loading: false,
       refresh: () => {},
-      getLabel: getOrderStatusLabel,
-      quickOptions: ORDER_STATUS_QUICK_SELECT_OPTIONS,
-      editOptions: ORDER_STATUS_EDIT_SELECT_OPTIONS,
+      getLabel: (id) => id,
+      getColorHex: () => undefined,
+      options: [],
+      statuses: [],
+      optionsForValue: () => [],
+      quickOptions: [],
+      editOptions: [],
     };
   }
   return v;

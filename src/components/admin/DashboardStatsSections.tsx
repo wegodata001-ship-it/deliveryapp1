@@ -9,54 +9,31 @@ import {
   Users,
   Wallet,
 } from "lucide-react";
-import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
-import { getDashboardStats } from "@/lib/dashboard-stats";
+import type { AppUser } from "@/lib/admin-auth";
+import { getDashboardStats, type DashboardStatsRange } from "@/lib/dashboard-stats";
+import { withPerfTimer } from "@/lib/perf-log";
 import { adminOrdersHrefWithFilters } from "@/lib/admin-href";
-import { parseDateFilterFromSearchParams } from "@/lib/work-week";
-import { countPendingOrderEditRequestsForAdmin } from "@/app/admin/order-edit-requests/actions";
-import { DashboardQuickActions } from "@/components/admin/DashboardQuickActions";
 import { DashboardAnimatedNumber } from "@/components/admin/DashboardAnimatedNumber";
 import { DashboardSparkline } from "@/components/admin/DashboardSparkline";
 
-export default async function AdminDashboardPage({
-  searchParams,
-}: {
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
-}) {
-  const me = await requireAuth();
-  const sp = await searchParams;
-  const range = parseDateFilterFromSearchParams(sp);
-  const showStaffStats = isAdminUser(me) || me.permissionKeys.includes("manage_users");
+type Props = {
+  me: AppUser;
+  range: DashboardStatsRange & { weekCode: string };
+  searchParams: Record<string, string | string[] | undefined>;
+  showStaffStats: boolean;
+};
 
-  const [stats, pendingEditReq] = await Promise.all([
+export async function DashboardStatsSections({ me, range, searchParams, showStaffStats }: Props) {
+  const stats = await withPerfTimer("admin.route.dashboard.stats", () =>
     getDashboardStats({ fromStart: range.fromStart, toEnd: range.toEnd }, me),
-    isAdminUser(me) ? countPendingOrderEditRequestsForAdmin() : Promise.resolve(0),
-  ]);
-
-  const displayName = me.fullName?.trim() || me.username || "משתמש";
+  );
 
   const alertsTotal =
     stats.alerts.pendingPaymentsOlderThan24h + stats.alerts.unpaidOrders + stats.alerts.highBalanceCustomers;
   const paymentsPendingHref = "/admin/source-tables/payments?search=%D7%9C%D7%90";
 
-  const canCreateOrders = userHasAnyPermission(me, ["create_orders"]);
-  const canReceivePayments = userHasAnyPermission(me, ["receive_payments"]);
-  const canViewReports = userHasAnyPermission(me, ["view_reports"]);
-
   return (
-    <div className="adm-dashboard adm-dashboard--compact adm-page--floating-actions" dir="rtl">
-      <header className="adm-dash-home-bar adm-dash-reveal">
-        <p className="adm-dash-home-bar__greet">
-          שלום, <strong>{displayName}</strong>
-        </p>
-        {showStaffStats ? (
-          <p className="adm-dash-home-bar__meta">
-            <Users size={14} aria-hidden />
-            <span>{stats.activeUsers} משתמשים פעילים</span>
-          </p>
-        ) : null}
-      </header>
-
+    <>
       <section className="adm-dash-alerts-band adm-dash-reveal adm-dash-reveal--2" aria-label="התראות מערכת">
         <h2 className="adm-dash-section-title">התראות</h2>
         {alertsTotal === 0 ? (
@@ -85,7 +62,7 @@ export default async function AdminDashboardPage({
                 <span className="adm-dash-alert-tile__label">הזמנות ללא תשלום</span>
               </div>
               <span className="adm-dash-alert-tile__badge">{stats.alerts.unpaidOrders}</span>
-              <Link href={adminOrdersHrefWithFilters(sp, { status: "OPEN" })} className="adm-dash-alert-tile__cta">
+              <Link href={adminOrdersHrefWithFilters(searchParams, { status: "OPEN" })} className="adm-dash-alert-tile__cta">
                 צפה
               </Link>
             </article>
@@ -106,7 +83,7 @@ export default async function AdminDashboardPage({
       <section className="adm-dash-kpi-band adm-dash-reveal adm-dash-reveal--3" aria-label="מדדי פעילות">
         <h2 className="adm-dash-section-title">מדדים</h2>
         <div className="adm-dash-kpi-grid">
-          <Link className="adm-dash-kpi-xl adm-dash-kpi-xl--blue" href={adminOrdersHrefWithFilters(sp, {})}>
+          <Link className="adm-dash-kpi-xl adm-dash-kpi-xl--blue" href={adminOrdersHrefWithFilters(searchParams, {})}>
             <div className="adm-dash-kpi-xl__top">
               <span className="adm-dash-kpi-xl__icon" aria-hidden>
                 <ShoppingCart size={18} strokeWidth={2} />
@@ -142,7 +119,7 @@ export default async function AdminDashboardPage({
             <DashboardSparkline seed={stats.paymentsReceivedCount * 6151 + 3} tone="green" className="adm-dash-kpi-xl__spark" />
           </Link>
 
-          <Link className="adm-dash-kpi-xl adm-dash-kpi-xl--orange" href={adminOrdersHrefWithFilters(sp, { status: "OPEN" })}>
+          <Link className="adm-dash-kpi-xl adm-dash-kpi-xl--orange" href={adminOrdersHrefWithFilters(searchParams, { status: "OPEN" })}>
             <div className="adm-dash-kpi-xl__top">
               <span className="adm-dash-kpi-xl__icon" aria-hidden>
                 <ClipboardList size={18} strokeWidth={2} />
@@ -153,20 +130,6 @@ export default async function AdminDashboardPage({
             <span className="adm-dash-kpi-xl__sub">סטטוס OPEN בטווח</span>
             <DashboardSparkline seed={stats.openOrdersInRange * 3001 + 4} tone="orange" className="adm-dash-kpi-xl__spark" />
           </Link>
-
-          {isAdminUser(me) && pendingEditReq > 0 ? (
-            <Link className="adm-dash-kpi-xl adm-dash-kpi-xl--red" href="/admin/order-edit-requests">
-              <div className="adm-dash-kpi-xl__top">
-                <span className="adm-dash-kpi-xl__icon" aria-hidden>
-                  <ClipboardList size={18} strokeWidth={2} />
-                </span>
-                <span className="adm-dash-kpi-xl__label">בקשות עריכת הזמנות</span>
-              </div>
-              <DashboardAnimatedNumber className="adm-dash-kpi-xl__num" value={pendingEditReq} />
-              <span className="adm-dash-kpi-xl__sub">ממתינות לאישור מנהל</span>
-              <DashboardSparkline seed={pendingEditReq * 9001 + 9} tone="orange" className="adm-dash-kpi-xl__spark" />
-            </Link>
-          ) : null}
         </div>
       </section>
 
@@ -242,14 +205,16 @@ export default async function AdminDashboardPage({
           </div>
         </div>
       </section>
+    </>
+  );
+}
 
-      {(canCreateOrders || canReceivePayments || canViewReports) && (
-        <DashboardQuickActions
-          canCreateOrders={canCreateOrders}
-          canReceivePayments={canReceivePayments}
-          canViewReports={canViewReports}
-        />
-      )}
+export function DashboardStatsSkeleton() {
+  return (
+    <div className="adm-dash-stats-skeleton" aria-busy="true" aria-label="טוען נתוני לוח בקרה">
+      <div className="adm-skeleton-line" style={{ height: 72, marginBottom: 16 }} />
+      <div className="adm-skeleton-line" style={{ height: 120, marginBottom: 16 }} />
+      <div className="adm-skeleton-line" style={{ height: 200 }} />
     </div>
   );
 }

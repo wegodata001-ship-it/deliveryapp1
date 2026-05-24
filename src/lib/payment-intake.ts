@@ -16,6 +16,7 @@ export type PaymentIntakeOrderBase = {
   totalAmountUsd: number;
   /** שולם עד כה (DB) ב-USD */
   dbPaidUsd: number;
+  lastPaymentDateYmd: string | null;
 };
 
 export type PaymentIntakeMatchResult = PaymentIntakeOrderBase & {
@@ -189,6 +190,8 @@ export type PaymentIntakeOrderRow = {
   dbPaidUsd: string;
   dbRemainingUsd: string;
   status: PaymentIntakeOrderStatus;
+  /** תאריך תשלום אחרון (אם קיים) */
+  lastPaymentDateYmd: string | null;
   /** מדינת מקור מהזמנה (תצוגה בלבד) */
   sourceCountry: string | null;
 };
@@ -208,6 +211,7 @@ export function toPaymentIntakeBases(rows: PaymentIntakeOrderRow[]): PaymentInta
       totalIls: Number(r.totalIls),
       totalAmountUsd: Number(r.totalAmountUsd),
       dbPaidUsd: Number(r.dbPaidUsd),
+      lastPaymentDateYmd: r.lastPaymentDateYmd,
     };
   });
 }

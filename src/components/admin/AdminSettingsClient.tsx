@@ -19,7 +19,7 @@ const PAYMENT_METHODS = [
 ];
 
 export function AdminSettingsClient({ initial }: Props) {
-  const { editOptions: ORDER_STATUSES } = useOrderStatusCatalog();
+  const { options: ORDER_STATUSES } = useOrderStatusCatalog();
   const [form, setForm] = useState(initial);
   const [saved, setSaved] = useState(initial);
   const [saving, setSaving] = useState(false);

@@ -7,16 +7,56 @@ import {
   listOrderStatusesManagerAction,
   reorderOrderStatusesAction,
   updateOrderStatusAction,
+  type OrderStatusManagerRow,
 } from "@/app/admin/order-statuses/actions";
-import { STATUS_COLOR_PRESETS, type OrderStatusTag } from "@/lib/order-status-registry";
-import { GripVertical, Pencil, Plus, Trash2, X } from "lucide-react";
+import { useOrderStatusCatalog } from "@/components/admin/OrderStatusCatalogProvider";
+import { STATUS_COLOR_PRESETS } from "@/lib/order-status-registry";
+import { ArrowDown, ArrowUp, ArrowUpDown, GripVertical, Pencil, Plus, Trash2, X } from "lucide-react";
 
 type EditState = { id: string; nameHe: string; colorHex: string; isActive: boolean } | null;
 type DeleteState = { id: string; name: string; usageCount: number } | null;
+type ActiveFilter = "all" | "active" | "inactive";
+type SortKey = "sortOrder" | "nameHe" | "code" | "usageCount" | "isActive";
+
+function colorLabel(hex: string): string {
+  const hit = STATUS_COLOR_PRESETS.find((p) => p.hex === hex);
+  return hit?.label ?? "צבע";
+}
+
+function ColorPreview({ hex }: { hex: string }) {
+  return (
+    <span className="adm-status-erp-color">
+      <span className="adm-status-erp-color__dot" style={{ background: hex }} aria-hidden />
+      <span className="adm-status-erp-color__lbl">{colorLabel(hex)}</span>
+    </span>
+  );
+}
+
+function ColorPicker({ value, onChange }: { value: string; onChange: (hex: string) => void }) {
+  return (
+    <div className="adm-status-color-pick adm-status-color-pick--compact">
+      {STATUS_COLOR_PRESETS.map((p) => (
+        <button
+          key={p.hex}
+          type="button"
+          className={value === p.hex ? "adm-status-color-pick__btn is-on" : "adm-status-color-pick__btn"}
+          style={{ background: p.hex }}
+          title={p.label}
+          aria-label={p.label}
+          onClick={() => onChange(p.hex)}
+        />
+      ))}
+    </div>
+  );
+}
 
 export function OrderStatusesManager({ initialSearch = "" }: { initialSearch?: string }) {
-  const [tags, setTags] = useState<OrderStatusTag[]>([]);
+  const { refresh: refreshStatusCatalog } = useOrderStatusCatalog();
+  const [rows, setRows] = useState<OrderStatusManagerRow[]>([]);
   const [search, setSearch] = useState(initialSearch);
+  const [activeFilter, setActiveFilter] = useState<ActiveFilter>("all");
+  const [sortKey, setSortKey] = useState<SortKey>("sortOrder");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
@@ -33,8 +73,8 @@ export function OrderStatusesManager({ initialSearch = "" }: { initialSearch?: s
     setLoading(true);
     setErr(null);
     try {
-      const rows = await listOrderStatusesManagerAction(search);
-      setTags(rows);
+      const data = await listOrderStatusesManagerAction(search);
+      setRows(data);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "שגיאה בטעינה");
     } finally {
@@ -47,7 +87,53 @@ export function OrderStatusesManager({ initialSearch = "" }: { initialSearch?: s
     return () => window.clearTimeout(t);
   }, [load]);
 
-  const activeTags = useMemo(() => tags.filter((t) => t.isActive), [tags]);
+  const activeTags = useMemo(() => rows.filter((t) => t.isActive), [rows]);
+
+  const displayed = useMemo(() => {
+    let list = [...rows];
+    if (activeFilter === "active") list = list.filter((r) => r.isActive);
+    if (activeFilter === "inactive") list = list.filter((r) => !r.isActive);
+    list.sort((a, b) => {
+      let cmp = 0;
+      switch (sortKey) {
+        case "nameHe":
+          cmp = a.nameHe.localeCompare(b.nameHe, "he");
+          break;
+        case "code":
+          cmp = a.code.localeCompare(b.code, "he");
+          break;
+        case "usageCount":
+          cmp = a.usageCount - b.usageCount;
+          break;
+        case "isActive":
+          cmp = Number(a.isActive) - Number(b.isActive);
+          break;
+        default:
+          cmp = a.sortOrder - b.sortOrder;
+      }
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return list;
+  }, [rows, activeFilter, sortKey, sortDir]);
+
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else {
+      setSortKey(key);
+      setSortDir(key === "usageCount" ? "desc" : "asc");
+    }
+  }
+
+  function SortBtn({ col, label }: { col: SortKey; label: string }) {
+    const active = sortKey === col;
+    const Icon = active ? (sortDir === "asc" ? ArrowUp : ArrowDown) : ArrowUpDown;
+    return (
+      <button type="button" className="adm-status-erp-th-btn" onClick={() => toggleSort(col)}>
+        {label}
+        <Icon size={14} aria-hidden className={active ? "is-active" : ""} />
+      </button>
+    );
+  }
 
   async function handleCreate() {
     if (!addName.trim()) return;
@@ -67,6 +153,7 @@ export function OrderStatusesManager({ initialSearch = "" }: { initialSearch?: s
     setAddColor(STATUS_COLOR_PRESETS[0].hex);
     setAddActive(true);
     void load();
+    refreshStatusCatalog();
   }
 
   async function handleSaveEdit() {
@@ -84,6 +171,19 @@ export function OrderStatusesManager({ initialSearch = "" }: { initialSearch?: s
     }
     setEdit(null);
     void load();
+    refreshStatusCatalog();
+  }
+
+  async function toggleActive(row: OrderStatusManagerRow) {
+    setBusy(true);
+    const res = await updateOrderStatusAction(row.id, { isActive: !row.isActive });
+    setBusy(false);
+    if (!res.ok) {
+      setErr(res.error);
+      return;
+    }
+    void load();
+    refreshStatusCatalog();
   }
 
   async function tryDelete() {
@@ -102,181 +202,225 @@ export function OrderStatusesManager({ initialSearch = "" }: { initialSearch?: s
     setDeleteState(null);
     setReplaceId("");
     void load();
+    refreshStatusCatalog();
   }
 
   async function onDrop(targetId: string) {
     if (!dragId || dragId === targetId) return;
-    const ids = tags.map((t) => t.id);
+    const ids = displayed.map((t) => t.id);
     const from = ids.indexOf(dragId);
     const to = ids.indexOf(targetId);
     if (from < 0 || to < 0) return;
     const next = [...ids];
     next.splice(from, 1);
     next.splice(to, 0, dragId);
-    setTags((prev) => {
-      const byId = Object.fromEntries(prev.map((t) => [t.id, t]));
-      return next.map((id, i) => ({ ...byId[id], sortOrder: i * 10 }));
-    });
     setDragId(null);
     await reorderOrderStatusesAction(next);
     void load();
+    refreshStatusCatalog();
+  }
+
+  async function requestDelete(row: OrderStatusManagerRow) {
+    setBusy(true);
+    const res = await deleteOrderStatusAction(row.id);
+    setBusy(false);
+    if (!res.ok && "usageCount" in res && res.usageCount) {
+      setDeleteState({ id: row.id, name: row.nameHe, usageCount: res.usageCount });
+      setReplaceId(activeTags.find((t) => t.id !== row.id)?.id ?? "");
+    } else if (!res.ok) {
+      setErr(res.error);
+    } else {
+      void load();
+      refreshStatusCatalog();
+    }
   }
 
   return (
-    <div className="adm-status-tags-page" dir="rtl">
-      <div className="adm-status-tags-toolbar">
+    <div className="adm-status-erp" dir="rtl">
+      <header className="adm-status-erp-toolbar">
         <input
           type="search"
-          className="adm-status-tags-search"
-          placeholder="חיפוש לפי שם, צבע, פעיל..."
+          className="adm-status-erp-search"
+          placeholder="חיפוש לפי שם, קוד, צבע..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           aria-label="חיפוש סטטוסים"
         />
+        <select
+          className="adm-status-erp-filter"
+          value={activeFilter}
+          aria-label="סינון פעיל"
+          onChange={(e) => setActiveFilter(e.target.value as ActiveFilter)}
+        >
+          <option value="all">הכל</option>
+          <option value="active">פעיל בלבד</option>
+          <option value="inactive">לא פעיל</option>
+        </select>
         <button type="button" className="adm-btn adm-btn--primary adm-btn--sm" onClick={() => setAddOpen(true)}>
           <Plus size={16} aria-hidden />
           סטטוס חדש
         </button>
-      </div>
+      </header>
 
       {err ? (
-        <p className="adm-status-tags-err" role="alert">
+        <p className="adm-status-erp-err" role="alert">
           {err}
         </p>
       ) : null}
 
-      {loading ? (
-        <p className="adm-status-tags-loading">טוען סטטוסים…</p>
-      ) : tags.length === 0 ? (
-        <p className="adm-status-tags-empty">אין סטטוסים — לחץ «סטטוס חדש» להוספה.</p>
-      ) : (
-        <ul className="adm-status-tags-grid" aria-label="רשימת סטטוסים">
-          {tags.map((tag) => (
-            <li
-              key={tag.id}
-              className={`adm-status-tag-card${!tag.isActive ? " adm-status-tag-card--off" : ""}${dragId === tag.id ? " adm-status-tag-card--drag" : ""}`}
-              draggable
-              onDragStart={() => setDragId(tag.id)}
-              onDragEnd={() => setDragId(null)}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={() => void onDrop(tag.id)}
-            >
-              <span className="adm-status-tag-card__grip" aria-hidden>
-                <GripVertical size={14} />
-              </span>
-              <button
-                type="button"
-                className="adm-status-tag-card__main"
-                onClick={() =>
-                  setEdit({
-                    id: tag.id,
-                    nameHe: tag.nameHe,
-                    colorHex: tag.colorHex,
-                    isActive: tag.isActive,
-                  })
-                }
-              >
-                <span className="adm-status-tag-card__dot" style={{ background: tag.colorHex }} aria-hidden />
-                <span className="adm-status-tag-card__name">{tag.nameHe}</span>
-                <span className="adm-status-tag-card__state">{tag.isActive ? "פעיל" : "כבוי"}</span>
-              </button>
-              <div className="adm-status-tag-card__actions">
-                <button
-                  type="button"
-                  className="adm-status-tag-card__icon-btn"
-                  aria-label={`עריכה ${tag.nameHe}`}
-                  onClick={() =>
-                    setEdit({
-                      id: tag.id,
-                      nameHe: tag.nameHe,
-                      colorHex: tag.colorHex,
-                      isActive: tag.isActive,
-                    })
-                  }
+      <div className="adm-status-erp-table-wrap mobile-table-wrapper">
+        <table className="adm-status-erp-table">
+          <thead>
+            <tr>
+              <th className="adm-status-erp-col-grip" aria-label="סדר" />
+              <th className="adm-status-erp-col-active">
+                <SortBtn col="isActive" label="פעיל" />
+              </th>
+              <th className="adm-status-erp-col-name">
+                <SortBtn col="nameHe" label="שם סטטוס" />
+              </th>
+              <th className="adm-status-erp-col-code">
+                <SortBtn col="code" label="קוד מערכת" />
+              </th>
+              <th className="adm-status-erp-col-color">צבע</th>
+              <th className="adm-status-erp-col-sort">
+                <SortBtn col="sortOrder" label="סדר" />
+              </th>
+              <th className="adm-status-erp-col-usage">
+                <SortBtn col="usageCount" label="שימושים" />
+              </th>
+              <th className="adm-status-erp-col-actions">פעולות</th>
+            </tr>
+          </thead>
+          <tbody>
+            {addOpen ? (
+              <tr className="adm-status-erp-row adm-status-erp-row--add">
+                <td colSpan={8}>
+                  <div className="adm-status-erp-inline-add">
+                    <label>
+                      <span>שם סטטוס</span>
+                      <input
+                        type="text"
+                        value={addName}
+                        placeholder="לדוגמה: ממתין, בדרך"
+                        autoFocus
+                        onChange={(e) => setAddName(e.target.value)}
+                      />
+                    </label>
+                    <div className="adm-status-erp-inline-add__color">
+                      <span>צבע</span>
+                      <ColorPicker value={addColor} onChange={setAddColor} />
+                    </div>
+                    <label className="adm-status-erp-inline-add__active">
+                      <input type="checkbox" checked={addActive} onChange={(e) => setAddActive(e.target.checked)} />
+                      <span>פעיל</span>
+                    </label>
+                    <div className="adm-status-erp-inline-add__btns">
+                      <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" onClick={() => setAddOpen(false)}>
+                        ביטול
+                      </button>
+                      <button
+                        type="button"
+                        className="adm-btn adm-btn--primary adm-btn--sm"
+                        disabled={busy || !addName.trim()}
+                        onClick={() => void handleCreate()}
+                      >
+                        שמור
+                      </button>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            ) : null}
+            {loading ? (
+              <tr>
+                <td colSpan={8} className="adm-status-erp-empty">
+                  טוען סטטוסים…
+                </td>
+              </tr>
+            ) : displayed.length === 0 ? (
+              <tr>
+                <td colSpan={8} className="adm-status-erp-empty">
+                  אין סטטוסים — לחץ «סטטוס חדש» להוספה.
+                </td>
+              </tr>
+            ) : (
+              displayed.map((row, idx) => (
+                <tr
+                  key={row.id}
+                  className={`adm-status-erp-row${!row.isActive ? " adm-status-erp-row--off" : ""}${idx % 2 === 1 ? " adm-status-erp-row--alt" : ""}${dragId === row.id ? " adm-status-erp-row--drag" : ""}`}
+                  draggable
+                  onDragStart={() => setDragId(row.id)}
+                  onDragEnd={() => setDragId(null)}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={() => void onDrop(row.id)}
                 >
-                  <Pencil size={14} />
-                </button>
-                <button
-                  type="button"
-                  className="adm-status-tag-card__icon-btn adm-status-tag-card__icon-btn--danger"
-                  aria-label={`מחק ${tag.nameHe}`}
-                  onClick={async () => {
-                    setBusy(true);
-                    const res = await deleteOrderStatusAction(tag.id);
-                    setBusy(false);
-                    if (!res.ok && "usageCount" in res && res.usageCount) {
-                      setDeleteState({ id: tag.id, name: tag.nameHe, usageCount: res.usageCount });
-                      setReplaceId(activeTags.find((t) => t.id !== tag.id)?.id ?? "");
-                    } else if (!res.ok) {
-                      setErr(res.error);
-                    } else {
-                      void load();
-                    }
-                  }}
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {addOpen ? (
-        <div className="adm-status-pop-overlay" role="presentation" onClick={() => setAddOpen(false)}>
-          <div
-            className="adm-status-pop"
-            role="dialog"
-            aria-labelledby="add-status-title"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <header className="adm-status-pop__head">
-              <h2 id="add-status-title">סטטוס חדש</h2>
-              <button type="button" className="adm-status-pop__close" aria-label="סגור" onClick={() => setAddOpen(false)}>
-                <X size={18} />
-              </button>
-            </header>
-            <label className="adm-status-pop__field">
-              <span>שם סטטוס</span>
-              <input
-                type="text"
-                value={addName}
-                onChange={(e) => setAddName(e.target.value)}
-                placeholder="לדוגמה: ממתין, בדרך, נשלח"
-                autoFocus
-              />
-            </label>
-            <div className="adm-status-pop__field">
-              <span>צבע</span>
-              <div className="adm-status-color-pick">
-                {STATUS_COLOR_PRESETS.map((p) => (
-                  <button
-                    key={p.hex}
-                    type="button"
-                    className={addColor === p.hex ? "adm-status-color-pick__btn is-on" : "adm-status-color-pick__btn"}
-                    style={{ background: p.hex }}
-                    title={p.label}
-                    aria-label={p.label}
-                    onClick={() => setAddColor(p.hex)}
-                  />
-                ))}
-              </div>
-            </div>
-            <label className="adm-status-pop__toggle">
-              <input type="checkbox" checked={addActive} onChange={(e) => setAddActive(e.target.checked)} />
-              <span>פעיל</span>
-            </label>
-            <div className="adm-status-pop__actions">
-              <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" onClick={() => setAddOpen(false)}>
-                ביטול
-              </button>
-              <button type="button" className="adm-btn adm-btn--primary adm-btn--sm" disabled={busy} onClick={() => void handleCreate()}>
-                שמור
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+                  <td className="adm-status-erp-col-grip" data-label="">
+                    <span className="adm-status-erp-grip" aria-hidden>
+                      <GripVertical size={14} />
+                    </span>
+                  </td>
+                  <td className="adm-status-erp-col-active" data-label="פעיל">
+                    <input
+                      type="checkbox"
+                      checked={row.isActive}
+                      disabled={busy}
+                      aria-label={`${row.isActive ? "כבה" : "הפעל"} ${row.nameHe}`}
+                      onChange={() => void toggleActive(row)}
+                    />
+                  </td>
+                  <td className="adm-status-erp-col-name" data-label="שם סטטוס">
+                    <strong>{row.nameHe}</strong>
+                  </td>
+                  <td className="adm-status-erp-col-code" data-label="קוד מערכת">
+                    <code className="adm-status-erp-code">{row.code}</code>
+                  </td>
+                  <td className="adm-status-erp-col-color" data-label="צבע">
+                    <ColorPreview hex={row.colorHex} />
+                  </td>
+                  <td className="adm-status-erp-col-sort" data-label="סדר">
+                    {row.sortOrder}
+                  </td>
+                  <td className="adm-status-erp-col-usage" data-label="שימושים">
+                    <span className="adm-status-erp-usage">{row.usageCount.toLocaleString("he-IL")}</span>
+                  </td>
+                  <td className="adm-status-erp-col-actions" data-label="פעולות">
+                    <div className="adm-status-erp-actions">
+                      <button
+                        type="button"
+                        className="adm-status-erp-act"
+                        aria-label={`ערוך ${row.nameHe}`}
+                        disabled={busy}
+                        onClick={() =>
+                          setEdit({
+                            id: row.id,
+                            nameHe: row.nameHe,
+                            colorHex: row.colorHex,
+                            isActive: row.isActive,
+                          })
+                        }
+                      >
+                        <Pencil size={15} />
+                        <span>ערוך</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="adm-status-erp-act adm-status-erp-act--danger"
+                        aria-label={`מחק ${row.nameHe}`}
+                        disabled={busy}
+                        onClick={() => void requestDelete(row)}
+                      >
+                        <Trash2 size={15} />
+                        <span>מחק</span>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
 
       {edit ? (
         <div className="adm-status-pop-overlay" role="presentation" onClick={() => setEdit(null)}>
@@ -293,19 +437,7 @@ export function OrderStatusesManager({ initialSearch = "" }: { initialSearch?: s
             </label>
             <div className="adm-status-pop__field">
               <span>צבע</span>
-              <div className="adm-status-color-pick">
-                {STATUS_COLOR_PRESETS.map((p) => (
-                  <button
-                    key={p.hex}
-                    type="button"
-                    className={edit.colorHex === p.hex ? "adm-status-color-pick__btn is-on" : "adm-status-color-pick__btn"}
-                    style={{ background: p.hex }}
-                    title={p.label}
-                    aria-label={p.label}
-                    onClick={() => setEdit({ ...edit, colorHex: p.hex })}
-                  />
-                ))}
-              </div>
+              <ColorPicker value={edit.colorHex} onChange={(hex) => setEdit({ ...edit, colorHex: hex })} />
             </div>
             <label className="adm-status-pop__toggle">
               <input

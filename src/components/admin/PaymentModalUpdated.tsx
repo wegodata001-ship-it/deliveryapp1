@@ -12,7 +12,7 @@ import {
   type PaymentIntakeOrderRow,
 } from "@/lib/payment-intake";
 import type { PaymentOveragePreview } from "@/lib/customer-balance";
-import { fetchPaymentIntakeCustomerOrdersAction, type PaymentIntakeCustomerPayload } from "@/app/admin/payments/intake/actions";
+import { fetchPaymentIntakeCustomerOrdersAction, fetchOrderPaymentHistoryAction, type OrderPaymentHistoryRow, type PaymentIntakeCustomerPayload } from "@/app/admin/payments/intake/actions";
 import {
   fetchOrderForPaymentContextAction,
   previewPaymentCodeForCaptureAction,
@@ -57,7 +57,6 @@ import {
   savePaymentUpdatedAction,
 } from "@/app/admin/payments-updated/actions";
 import { CustomerPaymentOverageModal } from "@/components/admin/CustomerPaymentOverageModal";
-import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import {
   formatIlsDisplay,
   formatMoneyAmount,
@@ -67,6 +66,14 @@ import {
   sanitizeMoneyInput,
 } from "@/lib/money-format";
 import { AnimatedMoneyValue } from "@/components/ui/AnimatedMoneyValue";
+import {
+  cancelCustomerSearch,
+  CUSTOMER_SEARCH_DEBOUNCE_MS,
+  customerSearchMinQueryLength,
+  pickAutoCustomerHit,
+  resolveCustomerFastClient,
+  searchCustomersFastClient,
+} from "@/lib/customer-search-client";
 
 const COUNTRY_BADGE_SHORT: Record<OrderCountryCode, string> = {
   TURKEY: "טורקיה",
@@ -77,22 +84,6 @@ const COUNTRY_BADGE_SHORT: Record<OrderCountryCode, string> = {
 type BadgeEditField = "week" | "country" | "date" | "time" | null;
 
 type CustFieldKey = "code" | "displayName" | "nameEn" | "nameAr" | "phone" | "index";
-
-type CustomerApiSearchRow = {
-  id: string;
-  customerCode: string | null;
-  oldCustomerCode: string | null;
-  displayName: string;
-  nameHe: string | null;
-  nameEn: string | null;
-  nameAr: string | null;
-  phone: string | null;
-  city: string | null;
-  customerType: string | null;
-};
-
-const UUID_SEARCH_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const EMPTY_CUSTOMER_DRAFT: Record<CustFieldKey, string> = {
   code: "",
@@ -344,14 +335,21 @@ export function PaymentModalUpdated({
 
   const [custDdOpen, setCustDdOpen] = useState(false);
   const [custSearchNoHits, setCustSearchNoHits] = useState(false);
+  const [custSearching, setCustSearching] = useState(false);
+  const [custSearchField, setCustSearchField] = useState<CustFieldKey | null>(null);
   const [searchTick, setSearchTick] = useState(0);
   const [customerHits, setCustomerHits] = useState<CustomerSearchRow[]>([]);
   const [customer, setCustomer] = useState<PaymentIntakeCustomerPayload | null>(null);
   const [orders, setOrders] = useState<PaymentIntakeOrderRow[]>([]);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [loadingCustomer, setLoadingCustomer] = useState(false);
+  const [ordersLoading, setOrdersLoading] = useState(false);
   const [customerCodeEnterBusy, setCustomerCodeEnterBusy] = useState(false);
   const [orderEditId, setOrderEditId] = useState<string | null>(null);
+  const [paymentHistoryOrderId, setPaymentHistoryOrderId] = useState<string | null>(null);
+  const [paymentHistoryRows, setPaymentHistoryRows] = useState<OrderPaymentHistoryRow[]>([]);
+  const [paymentHistoryBusy, setPaymentHistoryBusy] = useState(false);
+  const [paymentHistoryErr, setPaymentHistoryErr] = useState<string | null>(null);
 
   /** קליטה שנטענה מ־GET /api/payments/entry או מעטפת קליטה חדשה */
   const [loadedPayment, setLoadedPayment] = useState<PaymentEntryResponse>(() => createNewCaptureLoadedPayment(""));
@@ -401,6 +399,8 @@ export function PaymentModalUpdated({
   const tableScrollRef = useRef<HTMLDivElement | null>(null);
   /** מטמון immutable לפי id — עותק עמוק בלבד, ללא שיתוף הפניות בין ניווטים */
   const entryCacheRef = useRef<Map<string, PaymentEntryResponse>>(new Map());
+  /** מטמון שכני prev/next מה-prefetch — מונע קריאה חוזרת ל-API בניווט */
+  const paymentNavNeighborsRef = useRef<Partial<Record<PaymentNavDirection, PaymentNavigationResponse>>>({});
   /** איפוס יתרה לאחר שמירת תשלום (כשיש תשלום בטופס) */
   const resetAfterSaveRef = useRef(false);
   const [isNavigating, setIsNavigating] = useState(false);
@@ -479,15 +479,29 @@ export function PaymentModalUpdated({
     return null;
   }, [displayedPaymentCode]);
 
-  /** ניווט prev/next — טעינה ברקע בלבד, לא חוסם את הטופס */
+  /** ניווט prev/next — prefetch + מטמון entry לשכנים */
   useEffect(() => {
     if (!currentPaymentNavigationQuery) {
       setPaymentNavAvailable({ prev: null, next: null });
+      paymentNavNeighborsRef.current = {};
       return;
     }
 
+    paymentNavNeighborsRef.current = {};
+
     let cancelled = false;
     let idleId: number | undefined;
+
+    const warmNeighborEntry = (nav: PaymentNavigationResponse | null) => {
+      if (!nav || !nav.success || entryCacheRef.current.has(nav.paymentId)) return;
+      void fetch(`/api/payments/entry?id=${encodeURIComponent(nav.paymentId)}`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((raw: PaymentEntryResponse | null) => {
+          if (!raw || cancelled) return;
+          entryCacheRef.current.set(raw.id, clonePaymentEntry(raw));
+        })
+        .catch(() => {});
+    };
 
     const runPrefetch = () => {
       if (cancelled) return;
@@ -500,10 +514,16 @@ export function PaymentModalUpdated({
         const prevJson = prev.ok ? ((await prev.json()) as PaymentNavigationResponse) : null;
         const nextJson = next.ok ? ((await next.json()) as PaymentNavigationResponse) : null;
         if (cancelled) return;
+        paymentNavNeighborsRef.current = {
+          ...(prevJson ? { prev: prevJson } : {}),
+          ...(nextJson ? { next: nextJson } : {}),
+        };
         setPaymentNavAvailable({
           prev: prevJson == null ? null : prevJson.success,
           next: nextJson == null ? null : nextJson.success,
         });
+        warmNeighborEntry(prevJson);
+        warmNeighborEntry(nextJson);
       })();
     };
 
@@ -552,6 +572,8 @@ export function PaymentModalUpdated({
     if (!intakeWeekCutoffYmd) return null;
     return `מציג יתרות פתוחות עד סוף שבוע ${intakeWeekCode} (${formatSlashDate(intakeWeekCutoffYmd)})`;
   }, [intakeWeekCode, intakeWeekCutoffYmd]);
+
+  const intakeWeekRef = useRef(intakeWeekCode);
 
   const applyWeekNumber = useCallback(
     (num: number) => {
@@ -650,10 +672,12 @@ export function PaymentModalUpdated({
 
   const loadCustomerOrders = useCallback(
     async (customerId: string, opts?: { silent?: boolean; focusAmount?: boolean; weekCode?: string }): Promise<boolean> => {
-      if (!opts?.silent) setLoadingCustomer(true);
+      if (opts?.silent) setOrdersLoading(true);
+      else setLoadingCustomer(true);
       setLoadErr(null);
       const res = await fetchPaymentIntakeCustomerOrdersAction(customerId, opts?.weekCode ?? intakeWeekCode);
-      if (!opts?.silent) setLoadingCustomer(false);
+      if (opts?.silent) setOrdersLoading(false);
+      else setLoadingCustomer(false);
       if (!res.ok) {
         setCustomer(null);
         setOrders([]);
@@ -684,29 +708,31 @@ export function PaymentModalUpdated({
   /** בחירת לקוח מיידית — פוקוס לסכום בלי להמתין לטעינת הזמנות */
   const selectCustomerQuick = useCallback(
     (row: CustomerSearchRow, opts?: { focusAmount?: boolean }) => {
+      setOrders([]);
       setCustomer({
         id: row.id,
         displayName: row.label,
         customerCode: row.code,
-        nameEn: null,
-        nameHe: null,
-        nameAr: null,
+        nameEn: row.nameEn ?? null,
+        nameHe: row.nameHe ?? null,
+        nameAr: row.nameAr ?? null,
         phone: row.phone ?? null,
-        customerIndex: null,
+        customerIndex: row.oldCustomerCode ?? null,
       });
       setDraftCustomer({
         code: row.code ?? "",
         displayName: row.label,
-        nameEn: "",
-        nameAr: "",
+        nameEn: row.nameEn ?? row.nameHe ?? "",
+        nameAr: row.nameAr ?? "",
         phone: row.phone ?? "",
-        index: "",
+        index: row.oldCustomerCode ?? "",
       });
       setIncludedIds(null);
       setSaveErr(null);
       setCustSearchNoHits(false);
       setCustomerHits([]);
       setCustDdOpen(false);
+      setCustSearching(false);
       if (opts?.focusAmount !== false) {
         focusFirstAmountInput();
       }
@@ -715,10 +741,16 @@ export function PaymentModalUpdated({
     [loadCustomerOrders, focusFirstAmountInput],
   );
 
+  /** רענון הזמנות רק כשמשנים שבוע — לא בכל בחירת לקוח (מונע כפילות fetch) */
   useEffect(() => {
-    if (!customer?.id) return;
+    if (!customer?.id) {
+      intakeWeekRef.current = intakeWeekCode;
+      return;
+    }
+    if (intakeWeekRef.current === intakeWeekCode) return;
+    intakeWeekRef.current = intakeWeekCode;
     void loadCustomerOrders(customer.id, { silent: true });
-  }, [customer?.id, intakeWeekCode, loadCustomerOrders]);
+  }, [intakeWeekCode, customer?.id, loadCustomerOrders]);
 
   const pickCustHit = useCallback(
     (row: CustomerSearchRow) => {
@@ -731,13 +763,8 @@ export function PaymentModalUpdated({
   const onDraftCustomerChange = useCallback((field: CustFieldKey, value: string) => {
     lastEditedFieldRef.current = field;
     setDraftCustomer((prev) => ({ ...prev, [field]: value }));
-    if (field === "phone") {
-      setCustDdOpen(false);
-      setCustSearchNoHits(false);
-      return;
-    }
     setSearchTick((n) => n + 1);
-    setCustDdOpen(true);
+    setCustDdOpen(field !== "phone");
   }, []);
 
   const triggerFieldSearch = useCallback((field: CustFieldKey) => {
@@ -752,66 +779,41 @@ export function PaymentModalUpdated({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional mount-only
   }, []);
 
-  async function resolveCustomerFromCodeFieldEnter() {
-    const q = draftCustomerRef.current.code.trim();
+  async function resolveCustomerFromFieldEnter(field: CustFieldKey = "code") {
+    const q = draftCustomerRef.current[field].trim();
     if (!q) return;
-    if (!UUID_SEARCH_RE.test(q) && q.length < 2) {
-      onToast("הזן לפחות 2 תווים לחיפוש");
+    if (!customerSearchMinQueryLength(q, true)) {
+      if (field === "code") onToast("הזן לפחות 2 תווים לחיפוש");
       return;
     }
     custSearchGenRef.current += 1;
-    lastEditedFieldRef.current = "code";
+    cancelCustomerSearch();
+    lastEditedFieldRef.current = field;
     setCustomerCodeEnterBusy(true);
     setCustSearchNoHits(false);
+    setLoadErr(null);
     try {
-      const res = await fetch(`/api/customers?query=${encodeURIComponent(q)}&limit=20&page=1`);
-      if (!res.ok) {
-        setLoadErr("טעינת נתונים נכשלה");
+      const row = await resolveCustomerFastClient(q);
+      if (row) {
+        selectCustomerQuick(row, { focusAmount: true });
         return;
       }
-      const data = (await res.json()) as { customers?: CustomerApiSearchRow[] };
-      const rows = data.customers ?? [];
+      const rows = await searchCustomersFastClient(q);
+      const auto = pickAutoCustomerHit(rows, q);
+      if (auto) {
+        selectCustomerQuick(auto, { focusAmount: true });
+        return;
+      }
       if (rows.length === 0) {
         setCustomerHits([]);
         setCustDdOpen(false);
         setCustSearchNoHits(true);
         return;
       }
-      const hits: CustomerSearchRow[] = rows.map((r) => ({
-        id: r.id,
-        label: primaryCustomerDisplayName({
-          nameAr: r.nameAr,
-          nameEn: r.nameEn,
-          nameHe: r.nameHe,
-          displayName: r.displayName,
-        }),
-        code: r.customerCode,
-        customerType: r.customerType,
-        city: r.city,
-        phone: r.phone,
-      }));
-
-      const uuidQuick = rows.length === 1 && UUID_SEARCH_RE.test(q.trim()) && rows[0]!.id === q.trim();
-      const codeOrIndexQuick = rows.length === 1 && q.length >= 1 && q.length < 2;
-      const lenOk = rows.length === 1 && q.length >= 2;
-
-      if (rows.length === 1 && (lenOk || uuidQuick || codeOrIndexQuick)) {
-        selectCustomerQuick(hits[0]!, { focusAmount: true });
-        return;
-      }
-
-      const exactCode = rows.find((r) => (r.customerCode ?? "").trim().toLowerCase() === q.toLowerCase());
-      if (exactCode) {
-        const hit = hits.find((h) => h.id === exactCode.id) ?? hits[0];
-        if (hit) {
-          selectCustomerQuick(hit, { focusAmount: true });
-          return;
-        }
-      }
-
-      setCustomerHits(hits);
-      setCustDdOpen(hits.length > 0);
-    } catch {
+      setCustomerHits(rows);
+      setCustDdOpen(true);
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
       setLoadErr("בעיה בחיבור לשרת");
     } finally {
       setCustomerCodeEnterBusy(false);
@@ -916,12 +918,16 @@ export function PaymentModalUpdated({
   async function fetchPaymentNavigationNeighbor(
     direction: PaymentNavDirection,
   ): Promise<PaymentNavigationResponse | null> {
+    const cached = paymentNavNeighborsRef.current[direction];
+    if (cached) return cached;
     if (!currentPaymentNavigationQuery) return null;
     const res = await fetch(
       `/api/payments/navigation?${currentPaymentNavigationQuery}&direction=${direction}`,
     );
     if (!res.ok) return null;
-    return (await res.json()) as PaymentNavigationResponse;
+    const json = (await res.json()) as PaymentNavigationResponse;
+    paymentNavNeighborsRef.current[direction] = json;
+    return json;
   }
 
   async function runNavigateToPaymentId(targetId: string): Promise<boolean> {
@@ -1084,6 +1090,8 @@ export function PaymentModalUpdated({
   useEffect(() => {
     let cancelled = false;
     const gen = ++custSearchGenRef.current;
+    const abort = new AbortController();
+
     const t = window.setTimeout(() => {
       void (async () => {
         if (cancelled || gen !== custSearchGenRef.current) return;
@@ -1099,6 +1107,7 @@ export function PaymentModalUpdated({
             setCustomerHits([]);
             setCustDdOpen(false);
             setCustSearchNoHits(false);
+            setCustSearching(false);
             if (allEmpty) {
               setCustomer(null);
               setOrders([]);
@@ -1107,78 +1116,57 @@ export function PaymentModalUpdated({
           }
           return;
         }
-        if (!UUID_SEARCH_RE.test(q) && q.length < 2) {
+        if (!customerSearchMinQueryLength(q)) {
           setCustomerHits([]);
           setCustDdOpen(false);
           setCustSearchNoHits(false);
+          setCustSearching(false);
           return;
         }
 
-        let rows: CustomerApiSearchRow[] = [];
+        setCustSearching(true);
+        setCustSearchField(field);
+        setCustSearchNoHits(false);
         try {
-          const res = await fetch(`/api/customers?query=${encodeURIComponent(q)}&limit=20&page=1`);
-          if (!res.ok) {
-            if (!cancelled && gen === custSearchGenRef.current) {
-              setCustomerHits([]);
-              setCustSearchNoHits(false);
-              setLoadErr("טעינת נתונים נכשלה");
-            }
+          const rows = await searchCustomersFastClient(q, { signal: abort.signal });
+          if (cancelled || gen !== custSearchGenRef.current) return;
+
+          const still = draftCustomerRef.current[lastEditedFieldRef.current].trim() === q;
+          if (!still) return;
+
+          const auto = pickAutoCustomerHit(rows, q);
+          if (auto) {
+            selectCustomerQuick(auto, { focusAmount: false });
             return;
           }
-          const data = (await res.json()) as { customers?: CustomerApiSearchRow[] };
-          rows = data.customers ?? [];
-        } catch {
+
+          setCustSearchNoHits(rows.length === 0);
+          setCustomerHits(rows);
+          setCustDdOpen(rows.length > 0 && field !== "phone");
+        } catch (e) {
+          if (e instanceof DOMException && e.name === "AbortError") return;
           if (!cancelled && gen === custSearchGenRef.current) {
             setCustomerHits([]);
             setCustSearchNoHits(false);
             setLoadErr("בעיה בחיבור לשרת");
           }
-          return;
-        }
-
-        if (cancelled || gen !== custSearchGenRef.current) return;
-
-        const still = draftCustomerRef.current[lastEditedFieldRef.current].trim() === q;
-        if (!still) return;
-
-        const hits: CustomerSearchRow[] = rows.map((r) => ({
-          id: r.id,
-          label: primaryCustomerDisplayName({
-            nameAr: r.nameAr,
-            nameEn: r.nameEn,
-            nameHe: r.nameHe,
-            displayName: r.displayName,
-          }),
-          code: r.customerCode,
-          customerType: r.customerType,
-          city: r.city,
-          phone: r.phone,
-        }));
-
-        setCustSearchNoHits(rows.length === 0);
-
-        const uuidQuick = rows.length === 1 && UUID_SEARCH_RE.test(q.trim()) && rows[0]!.id === q.trim();
-        const codeOrIndexQuick =
-          rows.length === 1 && (field === "code" || field === "index") && q.length >= 1 && q.length < 2;
-        const lenOk = rows.length === 1 && q.length >= 2;
-
-        if (rows.length === 1 && (lenOk || uuidQuick || codeOrIndexQuick)) {
+        } finally {
           if (!cancelled && gen === custSearchGenRef.current) {
-            selectCustomerQuick(hits[0]!, { focusAmount: false });
+            setCustSearching(false);
+            setCustSearchField(null);
           }
-          return;
         }
-
-        setCustomerHits(hits);
-        setCustDdOpen(hits.length > 0);
       })();
-    }, 300);
+    }, CUSTOMER_SEARCH_DEBOUNCE_MS);
 
     return () => {
       cancelled = true;
+      abort.abort();
       window.clearTimeout(t);
     };
-  }, [searchTick, loadCustomerOrders, selectCustomerQuick]);
+  }, [searchTick, selectCustomerQuick]);
+
+  useEffect(() => () => cancelCustomerSearch(), []);
 
   function toggleRow(id: string) {
     setIncludedIds((prev) => {
@@ -1474,16 +1462,39 @@ export function PaymentModalUpdated({
     setOrderEditId(orderId);
   }
 
-  function statusClass(s: string): string {
-    if (s === "paid") return "pm-st--paid";
-    if (s === "partial") return "pm-st--partial";
-    return "pm-st--unpaid";
+  function statusClass(remaining: number): string {
+    if (remaining <= 0.01) return "pm-st--paid";
+    return "pm-st--open";
   }
 
-  function rowStatusClass(s: string): string {
-    if (s === "paid") return "payment-modal-tr--status-paid";
-    if (s === "partial") return "payment-modal-tr--status-partial";
-    return "payment-modal-tr--status-unpaid";
+  function rowStatusClass(remaining: number): string {
+    if (remaining <= 0.01) return "payment-modal-tr--status-paid";
+    return "payment-modal-tr--status-open";
+  }
+
+  function statusLabel(remaining: number): string {
+    if (remaining <= 0.01) return "שולם מלא";
+    return "פתוח";
+  }
+
+  async function openPaymentHistory(orderId: string) {
+    setPaymentHistoryOrderId(orderId);
+    setPaymentHistoryRows([]);
+    setPaymentHistoryErr(null);
+    setPaymentHistoryBusy(true);
+    const res = await fetchOrderPaymentHistoryAction(orderId);
+    setPaymentHistoryBusy(false);
+    if (!res.ok) {
+      setPaymentHistoryErr(res.error);
+      return;
+    }
+    setPaymentHistoryRows(res.rows);
+  }
+
+  function closePaymentHistory() {
+    setPaymentHistoryOrderId(null);
+    setPaymentHistoryRows([]);
+    setPaymentHistoryErr(null);
   }
 
   const paymentCaptureNavLabel = displayedPaymentCode;
@@ -1557,18 +1568,18 @@ export function PaymentModalUpdated({
                         ref={customerCodeInputRef}
                         type="text"
                         autoComplete="off"
-                        className={`payment-modal-cust-inp payment-modal-cust-inp--code${customerCodeEnterBusy ? " payment-modal-cust-inp--code-busy" : ""}`}
+                        className={`payment-modal-cust-inp payment-modal-cust-inp--code${customerCodeEnterBusy || custSearching ? " payment-modal-cust-inp--code-busy" : ""}`}
                         dir="ltr"
                         value={draftCustomer.code}
                         onChange={(e) => onDraftCustomerChange("code", e.target.value)}
                         onKeyDown={(e) => {
                           if (e.key === "Enter") {
                             e.preventDefault();
-                            void resolveCustomerFromCodeFieldEnter();
+                            void resolveCustomerFromFieldEnter("code");
                           }
                         }}
                       />
-                      {customerCodeEnterBusy ? (
+                      {customerCodeEnterBusy || (custSearching && custSearchField === "code") ? (
                         <span className="payment-modal-cust-code-busy-spin" aria-hidden>
                           <span className="payment-modal-save-spinner" />
                         </span>
@@ -1596,8 +1607,7 @@ export function PaymentModalUpdated({
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
                           e.preventDefault();
-                          triggerFieldSearch("displayName");
-                          window.setTimeout(() => firstAmountInputRef.current?.focus(), 80);
+                          void resolveCustomerFromFieldEnter("displayName");
                         }
                       }}
                     />
@@ -1612,6 +1622,12 @@ export function PaymentModalUpdated({
                       placeholder="Enter English name"
                       value={draftCustomer.nameEn}
                       onChange={(e) => onDraftCustomerChange("nameEn", e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void resolveCustomerFromFieldEnter("nameEn");
+                        }
+                      }}
                     />
                   </label>
                   <label className="payment-modal-cust-inp-wrap">
@@ -1634,6 +1650,12 @@ export function PaymentModalUpdated({
                       placeholder="הזן שם בערבית"
                       value={draftCustomer.nameAr}
                       onChange={(e) => onDraftCustomerChange("nameAr", e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void resolveCustomerFromFieldEnter("nameAr");
+                        }
+                      }}
                     />
                   </label>
                 <label className="payment-modal-cust-inp-wrap">
@@ -1646,9 +1668,11 @@ export function PaymentModalUpdated({
                     placeholder="הוסף טלפון אם חסר"
                     value={draftCustomer.phone}
                     onChange={(e) => onDraftCustomerChange("phone", e.target.value)}
-                    onFocus={() => {
-                      setCustDdOpen(false);
-                      setCustSearchNoHits(false);
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void resolveCustomerFromFieldEnter("phone");
+                      }
                     }}
                   />
                 </label>
@@ -1671,6 +1695,12 @@ export function PaymentModalUpdated({
                       dir="ltr"
                       value={draftCustomer.index}
                       onChange={(e) => onDraftCustomerChange("index", e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void resolveCustomerFromFieldEnter("index");
+                        }
+                      }}
                     />
                   </label>
                   <button
@@ -1699,10 +1729,28 @@ export function PaymentModalUpdated({
                     ))}
                   </ul>
                 ) : null}
-                {custSearchNoHits && !loadingCustomer ? (
+                {custSearchNoHits && !loadingCustomer && !custSearching ? (
                   <p className="payment-modal-cust-notfound" role="status">
                     לקוח לא נמצא
                   </p>
+                ) : null}
+                {customer ? (
+                  <div className="payment-modal-cust-summary" role="status" aria-live="polite">
+                    <span className="payment-modal-cust-name">{customer.displayName}</span>
+                    <span className="payment-modal-cust-ids" dir="ltr">
+                      {customer.customerCode ? `#${customer.customerCode}` : null}
+                      {loadingCustomer || ordersLoading ? (
+                        <span className="payment-modal-cust-summary-loading"> · טוען…</span>
+                      ) : (
+                        <>
+                          {" · "}
+                          {orders.length} הזמנות פתוחות
+                          {" · "}
+                          יתרה ${fmtUsdDisplay(ordersTableFooterTotals.remaining)}
+                        </>
+                      )}
+                    </span>
+                  </div>
                 ) : null}
               </div>
               <div className="payment-modal-meta-fields" dir="rtl" aria-label="תאריך ושעה">
@@ -1854,9 +1902,10 @@ export function PaymentModalUpdated({
                       <th>תאריך</th>
                       <th>שבוע</th>
                       <th className="pm-num">שער</th>
-                      <th className="pm-num pm-th-amt">$ סכום</th>
-                      <th className="pm-num">עמלה</th>
-                      <th className="pm-num pm-th-total">יתרה ($)</th>
+                      <th className="pm-num pm-th-amt">סכום מקורי ($)</th>
+                      <th className="pm-num">שולם ($)</th>
+                      <th className="pm-num pm-th-total">נשאר ($)</th>
+                      <th>תשלום אחרון</th>
                       <th>סטטוס</th>
                       <th className="payment-modal-th-check" aria-label="עדיפות לסגירה" />
                       <th className="payment-modal-th-check" aria-label="סגור בתשלום" />
@@ -1865,7 +1914,7 @@ export function PaymentModalUpdated({
                   <tbody>
                     {matched.length === 0 ? (
                       <tr>
-                        <td colSpan={11} className="payment-modal-empty">
+                        <td colSpan={12} className="payment-modal-empty">
                           {customer ? "אין הזמנות" : "בחרו לקוח"}
                         </td>
                       </tr>
@@ -1874,13 +1923,16 @@ export function PaymentModalUpdated({
                         <tr
                           key={row.id}
                           className={[
+                            "payment-modal-tr--clickable",
                             row.allocationUsd > 0.01 ? "payment-modal-tr--hit" : "",
                             row.allocationOutcome === "paid" ? "payment-modal-tr--alloc-paid" : "",
                             row.allocationOutcome === "partial" ? "payment-modal-tr--alloc-partial" : "",
-                            rowStatusClass(row.status),
+                            rowStatusClass(row.remainingAmount),
                           ]
                             .filter(Boolean)
                             .join(" ")}
+                          onClick={() => void openPaymentHistory(row.id)}
+                          title="לחץ לצפייה בהיסטוריית תשלומים"
                         >
                           <td dir="ltr" className="pm-mono payment-modal-td-code">
                             {row.paymentCode ?? "—"}
@@ -1910,40 +1962,28 @@ export function PaymentModalUpdated({
                           <td dir="ltr" className="pm-num">
                             {fmtRate(row.rate)}
                           </td>
-                          <td
-                            dir="ltr"
-                            className="pm-num pm-num--usd"
-                            title={
-                              commissionPercentN > 0
-                                ? `סכום מקורי: ${fmtUsdDisplay(row.amountUsd)} · אחוז עמלה: ${commissionPercentN}%`
-                                : undefined
-                            }
-                          >
-                            {fmtUsdDisplay(
-                              roundMoney2(applyCommissionPercentDisplay(row.amountUsd, commissionPercentN)),
-                            )}
+                          <td dir="ltr" className="pm-num pm-num--usd">
+                            {fmtUsdDisplay(row.totalAmountUsd)}
                           </td>
-                          <td dir="ltr" className="pm-num">
-                            {fmtUsdDisplay(row.commissionUsd)}
+                          <td dir="ltr" className="pm-num pm-num--paid-usd">
+                            {fmtUsdDisplay(roundMoney2(Math.max(0, row.paidAmount)))}
                           </td>
                           <td dir="ltr" className="pm-num pm-num--total-usd">
-                            <span
-                              title={`מקורי: ${fmtUsdDisplay(row.totalAmountUsd)}\nשולם: ${fmtUsdDisplay(
-                                roundMoney2(Math.max(0, row.paidAmount)),
-                              )}`}
-                            >
-                              {fmtUsdDisplay(roundMoney2(Math.max(0, row.remainingAmount)))}
-                            </span>
+                            {fmtUsdDisplay(roundMoney2(Math.max(0, row.remainingAmount)))}
+                          </td>
+                          <td dir="ltr" className="payment-modal-td-date">
+                            {row.lastPaymentDateYmd ?? "—"}
                           </td>
                           <td className="payment-modal-td-status">
-                            <span className={`pm-status badge ${statusClass(row.status)}`}>
-                              {row.status === "paid" ? "שולם" : row.status === "partial" ? "חלקי" : "לא שולם"}
+                            <span className={`pm-status badge ${statusClass(row.remainingAmount)}`}>
+                              {statusLabel(row.remainingAmount)}
                             </span>
                           </td>
                           <td className="payment-modal-td-check" onClick={(e) => e.stopPropagation()}>
                             <input
                               type="checkbox"
                               checked={rowChecked(row.id)}
+                              disabled={row.remainingAmount <= 0.01}
                               onChange={() => toggleRow(row.id)}
                               onClick={(e) => e.stopPropagation()}
                               aria-label="עדיפות לסגירה"
@@ -2329,6 +2369,58 @@ export function PaymentModalUpdated({
                 כן
               </button>
             </div>
+          </div>
+        </div>
+      ) : null}
+      {paymentHistoryOrderId ? (
+        <div
+          className="adm-oc-edit-request-backdrop"
+          role="presentation"
+          onClick={closePaymentHistory}
+        >
+          <div
+            className="payment-nav-confirm-modal pm-order-payments-popover"
+            role="dialog"
+            aria-modal="true"
+            aria-label="היסטוריית תשלומים"
+            onClick={(e) => e.stopPropagation()}
+            dir="rtl"
+          >
+            <div className="pm-order-payments-popover-head">
+              <h4>היסטוריית תשלומים</h4>
+              <button type="button" className="adm-btn adm-btn--ghost adm-btn--dense" onClick={closePaymentHistory}>
+                סגור
+              </button>
+            </div>
+            {paymentHistoryBusy ? <p className="payment-modal-hint">טוען…</p> : null}
+            {paymentHistoryErr ? <p className="payment-modal-err">{paymentHistoryErr}</p> : null}
+            {!paymentHistoryBusy && !paymentHistoryErr && paymentHistoryRows.length === 0 ? (
+              <p className="payment-modal-hint">אין תשלומים רשומים להזמנה זו</p>
+            ) : null}
+            {paymentHistoryRows.length > 0 ? (
+              <table className="pm-order-payments-table" dir="rtl">
+                <thead>
+                  <tr>
+                    <th>קוד תשלום</th>
+                    <th>תאריך</th>
+                    <th className="pm-num">סכום ($)</th>
+                    <th className="pm-num">סכום (₪)</th>
+                    <th>בוצע על ידי</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paymentHistoryRows.map((p) => (
+                    <tr key={p.id}>
+                      <td dir="ltr" className="pm-mono">{p.paymentCode ?? "—"}</td>
+                      <td dir="ltr">{p.paymentDateYmd}</td>
+                      <td dir="ltr" className="pm-num">{fmtUsdDisplay(Number(p.amountUsd))}</td>
+                      <td dir="ltr" className="pm-num">{p.amountIls ? fmtIlsDisplay(Number(p.amountIls)) : "—"}</td>
+                      <td>{p.createdByName ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : null}
           </div>
         </div>
       ) : null}

@@ -137,6 +137,7 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
   const orderIds = orders.map((o) => o.id);
   const paidByOrder = new Map<string, Prisma.Decimal>();
   const latestCodeByOrder = new Map<string, string | null>();
+  const latestPaymentDateByOrder = new Map<string, string | null>();
   if (orderIds.length > 0) {
     const [sums, payRows] = await Promise.all([
       prisma.payment.groupBy({
@@ -146,8 +147,8 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
       }),
       prisma.payment.findMany({
         where: { orderId: { in: orderIds } },
-        orderBy: { createdAt: "desc" },
-        select: { orderId: true, paymentCode: true },
+        orderBy: [{ paymentDate: "desc" }, { createdAt: "desc" }],
+        select: { orderId: true, paymentCode: true, paymentDate: true, createdAt: true },
       }),
     ]);
     for (const s of sums) {
@@ -157,6 +158,8 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
       if (!p.orderId) continue;
       if (!latestCodeByOrder.has(p.orderId)) {
         latestCodeByOrder.set(p.orderId, p.paymentCode?.trim() || null);
+        const dt = p.paymentDate ?? p.createdAt;
+        latestPaymentDateByOrder.set(p.orderId, dt ? formatLocalYmd(new Date(dt)) : null);
       }
     }
   }
@@ -166,7 +169,7 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
    * 1. Prisma מחזיר הזמנות לפי orderDate asc (מהישן לחדש).
    * 2. allocatePaymentAcrossOrders סוגר חובות באותו סדר כרונולוגי (ולא לפי גודל יתרה).
    * 3. תצוגת הטבלה שומרת על אותו סדר כדי שיתאים להקצאה.
-   * 4. הזמנות ששולמו במלואן (יתרה 0) לא מוחזרות.
+   * 4. כל ההזמנות מוצגות — גם ששולמו במלואן (יתרה 0).
    */
   const rowsWithRem = orders.map((o) => {
     const deal = o.amountUsd ?? new Prisma.Decimal(0);
@@ -204,12 +207,13 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
       dbPaidUsd: paidSum.toFixed(2),
       dbRemainingUsd: remDec.toFixed(2),
       status,
+      lastPaymentDateYmd: latestPaymentDateByOrder.get(o.id) ?? null,
       sourceCountry: o.sourceCountry != null ? String(o.sourceCountry) : null,
     };
     return { row, rem, status, dateYmd };
   });
 
-  const rows: PaymentIntakeOrderRow[] = rowsWithRem.filter((x) => x.status !== "paid" && x.rem > MONEY_EPS).map((x) => x.row);
+  const rows: PaymentIntakeOrderRow[] = rowsWithRem.map((x) => x.row);
 
   const index = cust.oldCustomerCode?.trim() || cust.customerCode?.trim() || null;
 
@@ -227,6 +231,56 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
     },
     orders: rows,
   };
+}
+
+export type OrderPaymentHistoryRow = {
+  id: string;
+  paymentCode: string | null;
+  paymentDateYmd: string;
+  amountUsd: string;
+  amountIls: string | null;
+  createdByName: string | null;
+};
+
+/** היסטוריית תשלומים להזמנה — popup בקליטת תשלום */
+export async function fetchOrderPaymentHistoryAction(
+  orderId: string,
+): Promise<{ ok: true; rows: OrderPaymentHistoryRow[] } | { ok: false; error: string }> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["receive_payments"])) {
+    return { ok: false, error: "אין הרשאה" };
+  }
+
+  const oid = orderId.trim();
+  if (!oid) return { ok: false, error: "חסרה הזמנה" };
+
+  const payments = await prisma.payment.findMany({
+    where: { orderId: oid, amountUsd: { not: null } },
+    orderBy: [{ paymentDate: "desc" }, { createdAt: "desc" }],
+    select: {
+      id: true,
+      paymentCode: true,
+      paymentDate: true,
+      createdAt: true,
+      amountUsd: true,
+      amountIls: true,
+      createdBy: { select: { fullName: true } },
+    },
+  });
+
+  const rows: OrderPaymentHistoryRow[] = payments.map((p) => {
+    const dt = p.paymentDate ?? p.createdAt;
+    return {
+      id: p.id,
+      paymentCode: p.paymentCode?.trim() || null,
+      paymentDateYmd: dt ? formatLocalYmd(new Date(dt)) : "—",
+      amountUsd: (p.amountUsd ?? new Prisma.Decimal(0)).toFixed(2),
+      amountIls: p.amountIls != null ? p.amountIls.toFixed(2) : null,
+      createdByName: p.createdBy?.fullName?.trim() || null,
+    };
+  });
+
+  return { ok: true, rows };
 }
 
 export async function listPaymentIntakeLocationsAction(): Promise<PaymentLocationOptionRow[]> {

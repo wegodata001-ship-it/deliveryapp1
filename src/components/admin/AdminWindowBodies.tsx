@@ -1,12 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
   createClientAction,
   suggestNextCustomerCodeAction,
-  getCustomerCardSnapshotAction,
   getCustomerLedgerAction,
   listClientsLedgerAction,
   updateCustomerCardDetailsAction,
@@ -16,6 +15,10 @@ import {
   type CustomerLedgerPayload,
   type CustomerLedgerRow,
 } from "@/app/admin/capture/actions";
+import {
+  fetchCustomerCardSnapshotClient,
+  invalidateCustomerCardSnapshotClient,
+} from "@/lib/customer-card-snapshot-client";
 import { getOrderEditEntryHintAction } from "@/app/admin/order-edit-requests/actions";
 import type { OrderEditLockGatePayload } from "@/components/admin/OrderEditLockGateModal";
 import { OrderEditLockGateModal } from "@/components/admin/OrderEditLockGateModal";
@@ -50,7 +53,25 @@ function rowBalanceNum(balanceUsd: string): number {
 
 type TabKey = "details" | "ledger";
 
-export function CustomerCardWindowBody({ customerId, customerName, initialTab = "details" }: CustomerCardWindowProps) {
+function formFromSnap(row: CustomerCardSnapshot) {
+  return {
+    displayName: row.displayName,
+    nameAr: row.nameAr ?? "",
+    nameEn: row.nameEn ?? row.nameHe ?? "",
+    phone: row.phone ?? "",
+    phone2: row.phone2 ?? "",
+    country: row.country ?? "",
+    customerCode: row.customerCode ?? "",
+    address: row.address ?? "",
+  };
+}
+
+export function CustomerCardWindowBody({
+  customerId,
+  customerName,
+  initialTab = "details",
+  initialSnap = null,
+}: CustomerCardWindowProps) {
   const { openWindow } = useAdminWindows();
   const router = useRouter();
   const [listPayload, setListPayload] = useState<ClientLedgerPayload | null>(null);
@@ -61,7 +82,9 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
   const [listSort, setListSort] = useState<"new_old" | "old_new" | "name_az">("new_old");
   const [listPage, setListPage] = useState(1);
   const [listLoading, setListLoading] = useState(false);
-  const [snap, setSnap] = useState<CustomerCardSnapshot | null>(null);
+  const [snap, setSnap] = useState<CustomerCardSnapshot | null>(() =>
+    customerId?.trim() && initialSnap ? initialSnap : null,
+  );
   useEffect(() => {
     const t = window.setTimeout(() => setListQueryDebounced(listQuery), 300);
     return () => window.clearTimeout(t);
@@ -71,7 +94,14 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
     if (customerId?.trim()) return;
     let cancelled = false;
     setListLoading(true);
-    void listClientsLedgerAction({ query: "", page: 1, pageSize: 2000 }).then((res) => {
+    void listClientsLedgerAction({
+      query: listQueryDebounced,
+      page: listPage,
+      pageSize: 8,
+      fromYmd: listFrom || undefined,
+      toYmd: listTo || undefined,
+      sort: listSort,
+    }).then((res) => {
       if (cancelled) return;
       setListPayload(res);
       setListLoading(false);
@@ -79,63 +109,10 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
     return () => {
       cancelled = true;
     };
-  }, [customerId]);
+  }, [customerId, listQueryDebounced, listPage, listFrom, listTo, listSort]);
 
-  const filteredClients = useMemo(() => {
-    const all = listPayload?.rows || [];
-    const q = listQueryDebounced.trim().toLowerCase();
-    const searched = q
-      ? all.filter((r) => {
-          const name = r.name.toLowerCase();
-          const customerCode = (r.customerCode || "").toLowerCase();
-          const nameEn = (r.nameEn || "").toLowerCase();
-          const nameAr = (r.nameAr || "").toLowerCase();
-          const phone = (r.phone || "").toLowerCase();
-          const email = (r.email || "").toLowerCase();
-          return (
-            customerCode.includes(q) ||
-            name.includes(q) ||
-            nameEn.includes(q) ||
-            nameAr.includes(q) ||
-            phone.includes(q) ||
-            email.includes(q)
-          );
-        })
-      : all;
-
-    const fromTime = listFrom ? new Date(`${listFrom}T00:00:00`).getTime() : null;
-    const toTime = listTo ? new Date(`${listTo}T23:59:59.999`).getTime() : null;
-    const dated = searched.filter((r) => {
-      const t = new Date(r.createdAt).getTime();
-      if (!Number.isFinite(t)) return true;
-      if (fromTime != null && t < fromTime) return false;
-      if (toTime != null && t > toTime) return false;
-      return true;
-    });
-
-    const sorted = [...dated].sort((a, b) => {
-      if (q.startsWith("wgp-")) {
-        const ac = (a.customerCode || "").toLowerCase();
-        const bc = (b.customerCode || "").toLowerCase();
-        const ar = ac.startsWith(q) ? 0 : ac.includes(q) ? 1 : 2;
-        const br = bc.startsWith(q) ? 0 : bc.includes(q) ? 1 : 2;
-        if (ar !== br) return ar - br;
-      }
-      if (listSort === "name_az") return a.name.localeCompare(b.name, "he");
-      const ta = new Date(a.createdAt).getTime();
-      const tb = new Date(b.createdAt).getTime();
-      if (listSort === "old_new") return ta - tb;
-      return tb - ta;
-    });
-    return q ? sorted.slice(0, 20) : sorted;
-  }, [listPayload?.rows, listQueryDebounced, listFrom, listTo, listSort]);
-
-  const filteredTotalPages = Math.max(1, Math.ceil(filteredClients.length / 8));
-  const pagedClients = useMemo(() => {
-    const safePage = Math.min(listPage, filteredTotalPages);
-    const start = (safePage - 1) * 8;
-    return filteredClients.slice(start, start + 8);
-  }, [filteredClients, listPage, filteredTotalPages]);
+  const pagedClients = listPayload?.rows ?? [];
+  const filteredTotalPages = listPayload?.totalPages ?? 1;
 
   useEffect(() => {
     setListPage(1);
@@ -143,7 +120,7 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
 
   const [ledger, setLedger] = useState<CustomerLedgerPayload | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>(() => (initialTab === "ledger" ? "ledger" : "details"));
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(() => !!(customerId?.trim() && !initialSnap));
   const [ledgerLoading, setLedgerLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -154,7 +131,7 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
   const [exportBusy, setExportBusy] = useState<"pdf" | "excel" | null>(null);
   const [fromYmd, setFromYmd] = useState("");
   const [toYmd, setToYmd] = useState("");
-  const [form, setForm] = useState({
+  const [form, setForm] = useState(() => (initialSnap ? formFromSnap(initialSnap) : {
     displayName: "",
     nameAr: "",
     nameEn: "",
@@ -163,37 +140,32 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
     country: "",
     customerCode: "",
     address: "",
-  });
+  }));
 
   useEffect(() => {
     if (!customerId?.trim()) {
       setSnap(null);
       return;
     }
+    if (initialSnap && initialSnap.id === customerId.trim()) {
+      setSnap(initialSnap);
+      setForm(formFromSnap(initialSnap));
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
-    void getCustomerCardSnapshotAction(customerId).then((row) => {
+    void fetchCustomerCardSnapshotClient(customerId).then((row) => {
       if (!cancelled) {
         setSnap(row);
-        if (row) {
-          setForm({
-            displayName: row.displayName,
-            nameAr: row.nameAr ?? "",
-            nameEn: row.nameEn ?? row.nameHe ?? "",
-            phone: row.phone ?? "",
-            phone2: row.phone2 ?? "",
-            country: row.country ?? "",
-            customerCode: row.customerCode ?? "",
-            address: row.address ?? "",
-          });
-        }
+        if (row) setForm(formFromSnap(row));
         setLoading(false);
       }
     });
     return () => {
       cancelled = true;
     };
-  }, [customerId]);
+  }, [customerId, initialSnap]);
 
   useEffect(() => {
     if (!customerId?.trim() || activeTab !== "ledger") return;
@@ -211,16 +183,7 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
   }, [customerId, activeTab, fromYmd, toYmd]);
 
   function resetFormFromSnap(row: CustomerCardSnapshot) {
-    setForm({
-      displayName: row.displayName,
-      nameAr: row.nameAr ?? "",
-      nameEn: row.nameEn ?? row.nameHe ?? "",
-      phone: row.phone ?? "",
-      phone2: row.phone2 ?? "",
-      country: row.country ?? "",
-      customerCode: row.customerCode ?? "",
-      address: row.address ?? "",
-    });
+    setForm(formFromSnap(row));
   }
 
   function startEdit() {
@@ -260,7 +223,8 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
       return;
     }
     setMsg("פרטי לקוח נשמרו");
-    const fresh = await getCustomerCardSnapshotAction(customerId);
+    invalidateCustomerCardSnapshotClient(customerId);
+    const fresh = await fetchCustomerCardSnapshotClient(customerId);
     setSnap(fresh);
     if (fresh) resetFormFromSnap(fresh);
     setEditMode(false);
@@ -338,7 +302,7 @@ export function CustomerCardWindowBody({ customerId, customerName, initialTab = 
           <button type="button" className="adm-btn adm-btn--ghost adm-btn--xs" disabled={listPage <= 1} onClick={() => setListPage((p) => Math.max(1, p - 1))}>
             קודם
           </button>
-          <span>{Math.min(listPage, filteredTotalPages)} / {filteredTotalPages}</span>
+          <span>{listPayload?.page ?? listPage} / {filteredTotalPages}</span>
           <button
             type="button"
             className="adm-btn adm-btn--ghost adm-btn--xs"
