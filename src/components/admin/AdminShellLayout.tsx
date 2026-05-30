@@ -8,6 +8,8 @@ import { filterSidebarSections } from "@/lib/sidebar-nav";
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { getLayoutFinancialSettings } from "@/lib/admin-layout-cache";
 import type { AdminRouteMode } from "@/lib/admin-route-mode";
+import { getLoginTraceFromCookies } from "@/lib/login-trace-server";
+import { loginTraceMark, loginTraceTimed } from "@/lib/login-trace";
 import { withPerfTimer } from "@/lib/perf-log";
 
 type Props = {
@@ -17,11 +19,17 @@ type Props = {
 
 /** Shared admin shell — full mode loads financial + sidebar badges; light mode skips heavy layout fetches. */
 export async function AdminShellLayout({ mode, children }: Props) {
-  return withPerfTimer(`adminDomain.layout.${mode}`, async () => {
+  const trace = await getLoginTraceFromCookies();
+
+  const render = async () => {
     const user = await withPerfTimer("admin.auth.requireAuth", () => requireAuth());
     const isAdmin = isAdminUser(user);
     const sections = filterSidebarSections(isAdmin, user.permissionKeys);
     const isLight = mode === "light";
+
+    if (trace) {
+      loginTraceMark(trace, "7.adminLayout", { mode, isLight });
+    }
 
     const financial = isLight
       ? null
@@ -63,5 +71,12 @@ export async function AdminShellLayout({ mode, children }: Props) {
         />
       </AdminWindowProvider>
     );
-  });
+  };
+
+  if (trace) {
+    return loginTraceTimed(trace.traceId, "adminLayout", () =>
+      withPerfTimer(`adminDomain.layout.${mode}`, render),
+    );
+  }
+  return withPerfTimer(`adminDomain.layout.${mode}`, render);
 }

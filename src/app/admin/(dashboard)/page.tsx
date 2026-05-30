@@ -1,49 +1,36 @@
 import { Suspense } from "react";
-import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
-import { parseDateFilterFromSearchParams } from "@/lib/work-week";
-import { DashboardQuickActions } from "@/components/admin/DashboardQuickActions";
-import {
-  DashboardStatsSections,
-  DashboardStatsSkeleton,
-} from "@/components/admin/DashboardStatsSections";
-import { withPerfTimer } from "@/lib/perf-log";
+import { DashboardGreeting } from "@/components/admin/DashboardGreeting";
+import { DashboardQuickActionsServer } from "@/components/admin/DashboardQuickActionsServer";
+import { DashboardStatsLoader } from "@/components/admin/DashboardStatsLoader";
+import { DashboardStatsSkeleton } from "@/components/admin/DashboardStatsSections";
 
-export default async function AdminDashboardPage({
+function GreetSkeleton() {
+  return (
+    <header className="adm-dash-home-bar" aria-busy="true">
+      <div className="adm-skeleton-line" style={{ height: 28, width: 220, maxWidth: "55%" }} />
+    </header>
+  );
+}
+
+/** דף הבית — shell מיידי; סטטיסטיקות ב-Suspense נפרד */
+export default function AdminDashboardPage({
   searchParams,
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  return withPerfTimer("admin.route.dashboard.page", async () => {
-    const me = await requireAuth();
-    const sp = await searchParams;
-    const range = parseDateFilterFromSearchParams(sp);
-    const showStaffStats = isAdminUser(me) || me.permissionKeys.includes("manage_users");
-    const displayName = me.fullName?.trim() || me.username || "משתמש";
+  return (
+    <div className="adm-dashboard adm-dashboard--compact adm-page--floating-actions" dir="rtl">
+      <Suspense fallback={<GreetSkeleton />}>
+        <DashboardGreeting />
+      </Suspense>
 
-    const canCreateOrders = userHasAnyPermission(me, ["create_orders"]);
-    const canReceivePayments = userHasAnyPermission(me, ["receive_payments"]);
-    const canViewReports = userHasAnyPermission(me, ["view_reports"]);
+      <Suspense fallback={<DashboardStatsSkeleton />}>
+        <DashboardStatsLoader searchParams={searchParams} />
+      </Suspense>
 
-    return (
-      <div className="adm-dashboard adm-dashboard--compact adm-page--floating-actions" dir="rtl">
-        <header className="adm-dash-home-bar adm-dash-reveal">
-          <p className="adm-dash-home-bar__greet">
-            שלום, <strong>{displayName}</strong>
-          </p>
-        </header>
-
-        <Suspense fallback={<DashboardStatsSkeleton />}>
-          <DashboardStatsSections me={me} range={range} searchParams={sp} showStaffStats={showStaffStats} />
-        </Suspense>
-
-        {(canCreateOrders || canReceivePayments || canViewReports) && (
-          <DashboardQuickActions
-            canCreateOrders={canCreateOrders}
-            canReceivePayments={canReceivePayments}
-            canViewReports={canViewReports}
-          />
-        )}
-      </div>
-    );
-  });
+      <Suspense fallback={null}>
+        <DashboardQuickActionsServer />
+      </Suspense>
+    </div>
+  );
 }

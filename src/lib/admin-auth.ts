@@ -11,6 +11,14 @@ import {
   verifySessionToken,
   type SessionPayload,
 } from "@/lib/session";
+import { getLoginTraceFromCookies } from "@/lib/login-trace-server";
+import {
+  loginTraceMark,
+  loginTraceTimed,
+  loginTraceTimeEnd,
+  loginTraceTimeStart,
+  type LoginTraceContext,
+} from "@/lib/login-trace";
 
 export type AppUser = User & { permissionKeys: string[] };
 
@@ -136,9 +144,26 @@ export const getCurrentUser = cache(async (): Promise<AppUser | null> => {
 });
 
 export async function requireAuth(): Promise<AppUser> {
+  const trace = await getLoginTraceFromCookies();
   try {
-    const user = await getCurrentUser();
-    if (!user) redirect("/admin-login");
+    const load = async () => {
+      const user = await getCurrentUser();
+      if (!user) redirect("/admin-login");
+      return user;
+    };
+    const user = trace
+      ? await loginTraceTimed(trace.traceId, "requireAuth", async () => {
+          loginTraceMark(trace, "6.requireAuth", { started: true });
+          return load();
+        })
+      : await load();
+    if (trace) {
+      loginTraceMark(trace, "6.requireAuth", {
+        ok: true,
+        permissionKeys: user.permissionKeys.length,
+        role: user.role,
+      });
+    }
     return user;
   } catch (error) {
     perfError("auth.requireAuth", error);
@@ -159,15 +184,47 @@ export function userHasAnyPermission(user: AppUser, keys: string[]): boolean {
   return isAdminUser(user) || keys.some((k) => user.permissionKeys.includes(k));
 }
 
-export async function setAdminSession(user: User): Promise<void> {
-  const perms = await loadPermissionKeysForUser(user.id, user.role);
-  const token = await signSessionToken({
-    sub: user.id,
-    role: user.role,
-    name: user.fullName,
-    perms,
-  });
-  (await cookies()).set(adminSessionCookieName, token, adminSessionCookieOptions);
+export async function setAdminSession(user: User, trace?: LoginTraceContext): Promise<void> {
+  const traceId = trace?.traceId;
+
+  const loadPermsAndSign = async () => {
+    const perms = await loadPermissionKeysForUser(user.id, user.role);
+    const token = await signSessionToken({
+      sub: user.id,
+      role: user.role,
+      name: user.fullName,
+      perms,
+    });
+    return { perms, token };
+  };
+
+  let perms: string[];
+  let token: string;
+
+  if (traceId) {
+    loginTraceTimeStart(traceId, "2.createSession");
+    try {
+      ({ perms, token } = await loadPermsAndSign());
+    } finally {
+      loginTraceTimeEnd(traceId, "2.createSession");
+    }
+    if (trace) loginTraceMark(trace, "2.createSession", { permsCount: perms.length });
+  } else {
+    ({ perms, token } = await loadPermsAndSign());
+  }
+
+  if (traceId) {
+    loginTraceTimeStart(traceId, "3.setCookie");
+    try {
+      (await cookies()).set(adminSessionCookieName, token, adminSessionCookieOptions);
+    } finally {
+      loginTraceTimeEnd(traceId, "3.setCookie");
+    }
+    if (trace) loginTraceMark(trace, "3.setCookie", { cookie: adminSessionCookieName });
+  } else {
+    (await cookies()).set(adminSessionCookieName, token, adminSessionCookieOptions);
+  }
+
   currentUserCache.set(user.id, {
     user: Object.assign(user, { permissionKeys: perms }) as AppUser,
     expiresAt: Date.now() + USER_CACHE_TTL_MS,

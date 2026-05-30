@@ -1,4 +1,5 @@
 import { SignJWT, jwtVerify } from "jose";
+import { cookies } from "next/headers";
 import { perfError, withPerfTimer } from "@/lib/perf-log";
 
 const COOKIE_NAME = "wego_admin_session";
@@ -80,6 +81,16 @@ export async function verifySessionToken(token: string): Promise<SessionPayload 
 }
 
 export const adminSessionCookieName = COOKIE_NAME;
+
+/** מסך login בלבד — JWT בלבד, ללא Prisma / admin-auth */
+export async function hasValidAdminSession(): Promise<boolean> {
+  return withPerfTimer("login.session", async () => {
+    const token = (await cookies()).get(COOKIE_NAME)?.value;
+    if (!token) return false;
+    const session = await verifySessionToken(token);
+    return !!(session && (session.role === "ADMIN" || session.role === "EMPLOYEE"));
+  });
+}
 
 export const adminSessionCookieOptions = {
   httpOnly: true,

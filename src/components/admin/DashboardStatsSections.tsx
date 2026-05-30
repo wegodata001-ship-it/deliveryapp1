@@ -1,8 +1,8 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import {
   AlertTriangle,
   Banknote,
-  CheckCircle2,
   ClipboardList,
   ShoppingCart,
   TrendingUp,
@@ -10,11 +10,16 @@ import {
   Wallet,
 } from "lucide-react";
 import type { AppUser } from "@/lib/admin-auth";
-import { getDashboardStats, type DashboardStatsRange } from "@/lib/dashboard-stats";
+import { getDashboardStatsCore, type DashboardStatsRange } from "@/lib/dashboard-stats";
 import { withPerfTimer } from "@/lib/perf-log";
 import { adminOrdersHrefWithFilters } from "@/lib/admin-href";
 import { DashboardAnimatedNumber } from "@/components/admin/DashboardAnimatedNumber";
 import { DashboardSparkline } from "@/components/admin/DashboardSparkline";
+import {
+  DashboardHighBalanceAlert,
+  DashboardHighBalanceAlertSkeleton,
+} from "@/components/admin/DashboardHighBalanceAlert";
+import { DashboardHighBalanceKpi, DashboardHighBalanceKpiSkeleton } from "@/components/admin/DashboardHighBalanceKpi";
 
 type Props = {
   me: AppUser;
@@ -24,60 +29,46 @@ type Props = {
 };
 
 export async function DashboardStatsSections({ me, range, searchParams, showStaffStats }: Props) {
-  const stats = await withPerfTimer("admin.route.dashboard.stats", () =>
-    getDashboardStats({ fromStart: range.fromStart, toEnd: range.toEnd }, me),
+  const stats = await withPerfTimer("dashboard.stream.stats", () =>
+    getDashboardStatsCore({ fromStart: range.fromStart, toEnd: range.toEnd }, me),
   );
 
-  const alertsTotal =
-    stats.alerts.pendingPaymentsOlderThan24h + stats.alerts.unpaidOrders + stats.alerts.highBalanceCustomers;
+  const alertsTotalFast =
+    stats.alerts.pendingPaymentsOlderThan24h + stats.alerts.unpaidOrders;
   const paymentsPendingHref = "/admin/source-tables/payments?search=%D7%9C%D7%90";
 
   return (
     <>
       <section className="adm-dash-alerts-band adm-dash-reveal adm-dash-reveal--2" aria-label="התראות מערכת">
         <h2 className="adm-dash-section-title">התראות</h2>
-        {alertsTotal === 0 ? (
-          <div className="adm-dash-alerts-empty-row">
-            <CheckCircle2 size={18} strokeWidth={2} aria-hidden />
-            <span className="adm-dash-alerts-empty-row__text">הכל תקין — אין התראות פתוחות</span>
-            <Link href="/admin/orders" className="adm-dash-alerts-empty-row__link">
-              הזמנות
+        <div className="adm-dash-alerts-row">
+          <article className="adm-dash-alert-tile adm-dash-alert-tile--danger">
+            <AlertTriangle size={18} strokeWidth={2} aria-hidden />
+            <div className="adm-dash-alert-tile__body">
+              <span className="adm-dash-alert-tile__label">תשלומים ממתינים (24h+)</span>
+            </div>
+            <span className="adm-dash-alert-tile__badge">{stats.alerts.pendingPaymentsOlderThan24h}</span>
+            <Link href={paymentsPendingHref} className="adm-dash-alert-tile__cta">
+              צפה
             </Link>
-          </div>
-        ) : (
-          <div className="adm-dash-alerts-row">
-            <article className="adm-dash-alert-tile adm-dash-alert-tile--danger">
-              <AlertTriangle size={18} strokeWidth={2} aria-hidden />
-              <div className="adm-dash-alert-tile__body">
-                <span className="adm-dash-alert-tile__label">תשלומים ממתינים (24h+)</span>
-              </div>
-              <span className="adm-dash-alert-tile__badge">{stats.alerts.pendingPaymentsOlderThan24h}</span>
-              <Link href={paymentsPendingHref} className="adm-dash-alert-tile__cta">
-                צפה
-              </Link>
-            </article>
-            <article className="adm-dash-alert-tile adm-dash-alert-tile--warning">
-              <AlertTriangle size={18} strokeWidth={2} aria-hidden />
-              <div className="adm-dash-alert-tile__body">
-                <span className="adm-dash-alert-tile__label">הזמנות ללא תשלום</span>
-              </div>
-              <span className="adm-dash-alert-tile__badge">{stats.alerts.unpaidOrders}</span>
-              <Link href={adminOrdersHrefWithFilters(searchParams, { status: "OPEN" })} className="adm-dash-alert-tile__cta">
-                צפה
-              </Link>
-            </article>
-            <article className="adm-dash-alert-tile adm-dash-alert-tile--info">
-              <AlertTriangle size={18} strokeWidth={2} aria-hidden />
-              <div className="adm-dash-alert-tile__body">
-                <span className="adm-dash-alert-tile__label">לקוחות עם יתרה גבוהה</span>
-              </div>
-              <span className="adm-dash-alert-tile__badge">{stats.alerts.highBalanceCustomers}</span>
-              <Link href="/admin/balances" className="adm-dash-alert-tile__cta">
-                צפה
-              </Link>
-            </article>
-          </div>
-        )}
+          </article>
+          <article className="adm-dash-alert-tile adm-dash-alert-tile--warning">
+            <AlertTriangle size={18} strokeWidth={2} aria-hidden />
+            <div className="adm-dash-alert-tile__body">
+              <span className="adm-dash-alert-tile__label">הזמנות ללא תשלום</span>
+            </div>
+            <span className="adm-dash-alert-tile__badge">{stats.alerts.unpaidOrders}</span>
+            <Link href={adminOrdersHrefWithFilters(searchParams, { status: "OPEN" })} className="adm-dash-alert-tile__cta">
+              צפה
+            </Link>
+          </article>
+          <Suspense fallback={<DashboardHighBalanceAlertSkeleton />}>
+            <DashboardHighBalanceAlert />
+          </Suspense>
+        </div>
+        {alertsTotalFast === 0 ? (
+          <p className="adm-dash-alerts-hint adm-muted-keys">אין התראות דחופות מלבד בדיקת יתרות גבוהות</p>
+        ) : null}
       </section>
 
       <section className="adm-dash-kpi-band adm-dash-reveal adm-dash-reveal--3" aria-label="מדדי פעילות">
@@ -95,17 +86,9 @@ export async function DashboardStatsSections({ me, range, searchParams, showStaf
             <DashboardSparkline seed={stats.ordersInRange * 7919 + 1} tone="blue" className="adm-dash-kpi-xl__spark" />
           </Link>
 
-          <Link className="adm-dash-kpi-xl adm-dash-kpi-xl--red" href="/admin/balances">
-            <div className="adm-dash-kpi-xl__top">
-              <span className="adm-dash-kpi-xl__icon" aria-hidden>
-                <Banknote size={18} strokeWidth={2} />
-              </span>
-              <span className="adm-dash-kpi-xl__label">יתרות פתוחות</span>
-            </div>
-            <DashboardAnimatedNumber className="adm-dash-kpi-xl__num" value={stats.alerts.highBalanceCustomers} />
-            <span className="adm-dash-kpi-xl__sub">לקוחות מעל סף ₪10,000</span>
-            <DashboardSparkline seed={stats.alerts.highBalanceCustomers * 4243 + 2} tone="red" className="adm-dash-kpi-xl__spark" />
-          </Link>
+          <Suspense fallback={<DashboardHighBalanceKpiSkeleton />}>
+            <DashboardHighBalanceKpi />
+          </Suspense>
 
           <Link className="adm-dash-kpi-xl adm-dash-kpi-xl--green" href="/admin/source-tables/payments?search=%D7%9B%D7%9F">
             <div className="adm-dash-kpi-xl__top">
@@ -167,8 +150,8 @@ export async function DashboardStatsSections({ me, range, searchParams, showStaf
             <div className="adm-dash-mini-tile adm-dash-mini-tile--lavender">
               <AlertTriangle size={17} aria-hidden />
               <span className="adm-dash-mini-tile__title">התראות פתוחות</span>
-              <span className="adm-dash-mini-tile__value">{alertsTotal}</span>
-              <span className="adm-dash-mini-tile__sub">במערכת כרגע</span>
+              <span className="adm-dash-mini-tile__value">{alertsTotalFast}</span>
+              <span className="adm-dash-mini-tile__sub">התראות מהירות (ללא יתרות גבוהות)</span>
             </div>
           </div>
         </div>

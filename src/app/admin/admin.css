@@ -17533,6 +17533,17 @@ select.adm-balances-input {
   color: #059669;
 }
 
+/* קליטת הזמנה — הדגשות צבע בלבד (לא משנה מבנה/גדלים) */
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--usd .adm-oc-money-line--commission .commission-label,
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--usd .adm-oc-money-line--commission .commission-value {
+  color: #dc2626 !important;
+}
+
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--ils .adm-oc-money-line--primary .summary-primary-label,
+.adm-win-panel--order-capture .adm-oc-pro .adm-oc-pro-card--ils .adm-oc-money-line--primary .summary-primary-value {
+  color: #2563eb !important;
+}
+
 .adm-oc-money-line--hero {
   margin-top: 10px !important;
   padding: 14px 14px !important;

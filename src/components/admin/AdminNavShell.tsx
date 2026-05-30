@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { AdminNavLayoutProvider } from "@/components/admin/AdminNavLayoutContext";
 import { AdminFinancialModalProvider } from "@/components/admin/AdminFinancialModalContext";
+import { LoginTraceReporter } from "@/components/admin/LoginTraceReporter";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 
 export type AdminToastOptions = { variant?: "success" };
@@ -48,6 +49,7 @@ export function AdminNavShell({
     >
       <AdminNavLayoutProvider navOpen={navOpen} onNavOpenChange={setNavOpen}>
         <AdminToastContext.Provider value={onToast}>
+        <LoginTraceReporter />
         <div
           id="adm-root"
           className={`adm-root${navOpen ? " adm-root--nav-open" : ""}`}

@@ -13,12 +13,12 @@ export function isCustomerCardPath(pathname: string): boolean {
   return pathname === "/admin/customer-card" || pathname.startsWith("/admin/customer-card/");
 }
 
-export function isLightAdminPath(pathname: string): boolean {
-  return isSourceTablesPath(pathname) || isCustomerCardPath(pathname);
-}
-
 export function isDashboardPath(pathname: string): boolean {
   return pathname === "/admin" || pathname === "/admin/";
+}
+
+export function isLightAdminPath(pathname: string): boolean {
+  return isSourceTablesPath(pathname) || isCustomerCardPath(pathname) || isDashboardPath(pathname);
 }
 
 export async function getAdminRouteMode(): Promise<AdminRouteMode> {
