@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PaymentMethod } from "@prisma/client";
+import { isDebtWithdrawalOrderStatus } from "@/lib/debt-withdrawal-order";
 import { OS } from "@/lib/order-status-slugs";
 import {
   CalendarDays,
@@ -21,15 +22,14 @@ import {
   getOrderForWorkPanelAction,
   listCustomersForOrderQuickPickAction,
   type CaptureState,
-  type ClientCreateResult,
   type CustomerSearchRow,
   type OrderWorkPanelPayload,
 } from "@/app/admin/capture/actions";
+import type { ClientCreateResult } from "@/app/admin/customers/ledger-types";
 import type { CustomerExtrasPayload } from "@/app/api/customers/extras/route";
 import { createOrderEditRequestAction } from "@/app/admin/order-edit-requests/actions";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import type { AdminToastFn } from "@/components/admin/AdminNavShell";
-import { useAdminLoading } from "@/components/admin/AdminLoadingProvider";
 import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import Card from "@/components/ui/Card";
 import { MoneyInput } from "@/components/ui/MoneyInput";
@@ -39,18 +39,11 @@ import { parseBalanceAmountString } from "@/lib/customer-balance";
 import { formatMoneyAmount, parseMoneyString } from "@/lib/money-format";
 import type { OrderCaptureWindowProps } from "@/lib/admin-windows";
 
-async function fetchIntakeLocationsApi(query: string): Promise<{ id: string; label: string }[]> {
-  const sp = new URLSearchParams();
-  const q = query.trim();
-  if (q) sp.set("q", q);
-  sp.set("limit", q ? "120" : "500");
-  const res = await fetch(`/api/intake-locations?${sp.toString()}`, { credentials: "include" });
-  if (!res.ok) throw new Error("intake-locations");
-  const rows = (await res.json()) as { id: string; name: string }[];
-  return rows.map((r) => ({ id: r.id, label: r.name }));
-}
 import { ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS } from "@/lib/order-capture-payment-methods";
 import { orderCountryLabel, ORDER_COUNTRY_CODES, coerceOrderCountryForForm, type OrderCountryCode } from "@/lib/order-countries";
+import { buildCaptureFinancialSnapshot } from "@/lib/capture-form-snapshot";
+import { IntakeLocationCombobox } from "@/components/admin/IntakeLocationCombobox";
+import { ErpSearchCombobox } from "@/components/admin/ErpCreatableCombobox";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 import { VAT_RATE, VAT_RATE_PERCENT, formatVatPercentLabel } from "@/lib/vat";
 import {
@@ -148,24 +141,91 @@ import {
   searchCustomersFastClient,
 } from "@/lib/customer-search-client";
 
-type OrderBootPayload = { countries: string[]; orderNumberPreview: string | null };
+type OrderBootPayload = { countries: string[] };
 
-async function fetchOrderBoot(weekCode: string): Promise<OrderBootPayload | null> {
-  const res = await fetch(`/api/orders/boot?weekCode=${encodeURIComponent(weekCode)}`, {
-    credentials: "include",
+type NextOrderNumberPayload = { weekCode: string; nextOrderNumber: string };
+
+/** placeholder מיידי — המשתמש יכול להמשיך להזין בלי להמתין ל-API */
+export function formatOrderNumberPlaceholder(weekCode: string): string {
+  const wc = weekCode.trim() || DEFAULT_WEEK_CODE;
+  const m = wc.match(/^AH-(\d{1,4})$/i);
+  if (m) return `AH-${m[1]}-XXXX`;
+  return `${wc}-XXXX`;
+}
+
+async function fetchOrderBootCountries(): Promise<OrderCountryCode[]> {
+  const res = await fetch("/api/orders/boot", { credentials: "include" });
+  if (!res.ok) return [];
+  const data = (await res.json()) as OrderBootPayload;
+  return Array.isArray(data.countries) ? (data.countries as OrderCountryCode[]) : [];
+}
+
+const nextNumberInflight = new Map<string, Promise<NextOrderNumberPayload | null>>();
+
+async function fetchNextOrderNumber(weekCode: string): Promise<NextOrderNumberPayload | null> {
+  const wc = weekCode.trim() || DEFAULT_WEEK_CODE;
+  const existing = nextNumberInflight.get(wc);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    const res = await fetch(`/api/orders/next-number?weekCode=${encodeURIComponent(wc)}`, {
+      credentials: "include",
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as NextOrderNumberPayload;
+  })().finally(() => {
+    nextNumberInflight.delete(wc);
   });
-  if (!res.ok) return null;
-  return (await res.json()) as OrderBootPayload;
+
+  nextNumberInflight.set(wc, promise);
+  return promise;
+}
+
+function captureExtrasFromPanel(
+  financial: SerializedFinancial | null,
+  displayFinalRate: number,
+  cust: CustomerSearchRow,
+  enabledCountries: OrderCountryCode[],
+) {
+  return {
+    financialSnapshot: buildCaptureFinancialSnapshot(financial, displayFinalRate),
+    customerSnapshot: {
+      id: cust.id,
+      customerCode: cust.code,
+      displayName: cust.label,
+      customerType: cust.customerType,
+      nameAr: cust.nameAr ?? null,
+      nameEn: cust.nameEn ?? null,
+    },
+    enabledCountries: enabledCountries.length > 0 ? enabledCountries : undefined,
+  };
 }
 
 async function saveCaptureFast(payload: Record<string, unknown>): Promise<CaptureState> {
+  const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
+  const t0 = now();
   const res = await fetch("/api/orders/capture", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
     body: JSON.stringify(payload),
   });
+  const fetchMs = Math.round(now() - t0);
+  const jsonT0 = now();
   const data = (await res.json().catch(() => null)) as CaptureState | null;
+  const jsonMs = Math.round(now() - jsonT0);
+  const totalMs = Math.round(now() - t0);
+  if (process.env.NODE_ENV === "development" || totalMs > 500) {
+    console.log("[capture.client]", {
+      mode: payload.mode,
+      status: res.status,
+      fetchMs,
+      jsonMs,
+      totalMs,
+      afterFetchMs: totalMs - fetchMs,
+      hint: "afterFetchMs ≈ JSON parse + React; compare fetchMs to server apiMs",
+    });
+  }
   return data ?? { ok: false, error: "שגיאה בשמירה" };
 }
 
@@ -202,7 +262,6 @@ export function OrderCreatePanel({
   onSaved,
 }: Props) {
   const { openWindow, openCreateCustomerForOrder } = useAdminWindows();
-  const { runWithLoading } = useAdminLoading();
   const { globalWeek, globalCountry } = useAdminGlobal();
   useOrderStatusCatalog();
   const idp = (s: string) => `${windowId}-${s}`;
@@ -306,7 +365,9 @@ export function OrderCreatePanel({
     setCommissionPercentStr(systemDefaultCommissionStr);
   }, [isEdit, systemDefaultCommissionStr]);
 
-  const [orderNumberPreview, setOrderNumberPreview] = useState("…");
+  const [orderNumberPreview, setOrderNumberPreview] = useState(() =>
+    formatOrderNumberPlaceholder(globalWeek || DEFAULT_WEEK_CODE),
+  );
 
   /** שלושת שדות החיפוש + שורה ראשית — קוד משותף */
   const [codeStr, setCodeStr] = useState("");
@@ -334,14 +395,7 @@ export function OrderCreatePanel({
   const usdInputRef = useRef<HTMLInputElement | null>(null);
   const paymentMethodRef = useRef<HTMLSelectElement | null>(null);
   const [paymentPointId, setPaymentPointId] = useState("");
-  const [paymentPoints, setPaymentPoints] = useState<{ id: string; label: string }[]>([]);
   const [paymentPointQuery, setPaymentPointQuery] = useState("");
-  const [paymentPointHits, setPaymentPointHits] = useState<{ id: string; label: string }[]>([]);
-  const [paymentPointOpen, setPaymentPointOpen] = useState(false);
-  const [paymentPointBusy, setPaymentPointBusy] = useState(false);
-  const [paymentPointErr, setPaymentPointErr] = useState<string | null>(null);
-  const paymentPointSearchGenRef = useRef(0);
-  const [intakeActiveIdx, setIntakeActiveIdx] = useState(0);
   const [notes, setNotes] = useState("");
 
   const [dealUsdStr, setDealUsdStr] = useState("");
@@ -355,24 +409,15 @@ export function OrderCreatePanel({
     target.mode === "create" ? (globalCountry as OrderCountryCode) : "",
   );
 
-  useEffect(() => {
-    let cancelled = false;
-    void fetchIntakeLocationsApi("")
-      .then((rows) => {
-        if (cancelled) return;
-        setPaymentPoints(rows);
-        setPaymentPointHits(rows);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setPaymentPointErr("טעינת מקומות קליטה נכשלה");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   const countrySelectOptions = useMemo(() => [...ORDER_COUNTRY_CODES] as OrderCountryCode[], []);
+
+  const countryComboboxOptions = useMemo(
+    () =>
+      countrySelectOptions
+        .filter((c) => orderCountries.length === 0 || orderCountries.includes(c))
+        .map((c) => ({ id: c, label: orderCountryLabel(c) })),
+    [countrySelectOptions, orderCountries],
+  );
 
   useEffect(() => {
     if (orderCountries.length === 0) return;
@@ -382,65 +427,31 @@ export function OrderCreatePanel({
     );
   }, [orderCountries, isEdit, globalWeek]);
 
-  const refreshOrderNumberPreview = useCallback(async () => {
-    if (isEdit) return;
-    try {
-      const boot = await fetchOrderBoot(displayWeekCode);
-      setOrderNumberPreview(boot?.orderNumberPreview || "—");
-    } catch (error) {
-      console.error("order number preview failed", error);
-      setOrderNumberPreview("—");
-    }
-  }, [isEdit, displayWeekCode]);
+  // מדינות — פעם אחת בפתיחה (לא תלוי בלקוח / שבוע)
+  useEffect(() => {
+    let cancelled = false;
+    void fetchOrderBootCountries().then((countries) => {
+      if (cancelled || countries.length === 0) return;
+      setOrderCountries(countries);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-  // Single bootstrap request: countries + order-number preview in one round-trip
-  // (replaces two server actions that each hit POST /admin and re-rendered the page).
+  // מספר הזמנה — placeholder מיידי, עדכון ברקע (לא קשור לבחירת לקוח)
   useEffect(() => {
     if (isEdit) return;
+    setOrderNumberPreview(formatOrderNumberPlaceholder(displayWeekCode));
     let cancelled = false;
-    void fetchOrderBoot(displayWeekCode).then((boot) => {
-      if (cancelled || !boot) return;
-      if (Array.isArray(boot.countries) && boot.countries.length > 0) {
-        setOrderCountries(boot.countries as OrderCountryCode[]);
-      }
-      if (boot.orderNumberPreview) {
-        setOrderNumberPreview(boot.orderNumberPreview);
-      }
+    void fetchNextOrderNumber(displayWeekCode).then((payload) => {
+      if (cancelled || !payload?.nextOrderNumber) return;
+      setOrderNumberPreview(payload.nextOrderNumber);
     });
     return () => {
       cancelled = true;
     };
   }, [isEdit, displayWeekCode]);
-
-  // Edit mode: still need countries (no order-number preview).
-  useEffect(() => {
-    if (!isEdit) return;
-    let cancelled = false;
-    void fetchOrderBoot("").then((boot) => {
-      if (cancelled || !boot) return;
-      if (Array.isArray(boot.countries) && boot.countries.length > 0) {
-        setOrderCountries(boot.countries as OrderCountryCode[]);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [isEdit]);
-
-  useEffect(() => {
-    if (target.mode !== "create") return;
-    setOrderNumberPreview("…");
-    // boot effect above will refresh it
-  }, [target.mode]);
-
-  useEffect(() => {
-    if (target.mode !== "create") return;
-    if (orderNumberPreview !== "—") return;
-    const t = window.setTimeout(() => {
-      void refreshOrderNumberPreview();
-    }, 350);
-    return () => window.clearTimeout(t);
-  }, [target.mode, orderNumberPreview, refreshOrderNumberPreview]);
 
   useEffect(() => {
     if (!isEdit) setLoadedSourceCountry("");
@@ -484,7 +495,6 @@ export function OrderCreatePanel({
       setPaymentMethod(row.paymentMethod);
       setPaymentPointId(row.locationId ?? row.paymentPointId ?? "");
       setPaymentPointQuery(row.locationName ?? "");
-      setPaymentPointOpen(false);
       setNotes(row.notes);
       setDealUsdStr(row.amountUsd);
       setDealIlsStr("");
@@ -523,47 +533,6 @@ export function OrderCreatePanel({
       cancelled = true;
     };
   }, [isEdit, editOrderId, systemDefaultCommissionStr]);
-
-  useEffect(() => {
-    if (!paymentPointId) return;
-    const match = paymentPoints.find((p) => p.id === paymentPointId);
-    if (!match) return;
-    setPaymentPointQuery(match.label);
-  }, [paymentPointId, paymentPoints]);
-
-  useEffect(() => {
-    const q = paymentPointQuery;
-    const gen = ++paymentPointSearchGenRef.current;
-    const delay = q.trim() ? 200 : 0;
-    const t = window.setTimeout(() => {
-      setPaymentPointBusy(true);
-      void fetchIntakeLocationsApi(q)
-        .then((rows) => {
-          if (paymentPointSearchGenRef.current !== gen) return;
-          setPaymentPointBusy(false);
-          setPaymentPointHits(rows);
-        })
-        .catch(() => {
-          if (paymentPointSearchGenRef.current !== gen) return;
-          setPaymentPointBusy(false);
-          setPaymentPointHits([]);
-        });
-    }, delay);
-    return () => window.clearTimeout(t);
-  }, [paymentPointQuery]);
-
-  useEffect(() => {
-    if (paymentPointHits.length === 0) return;
-    setPaymentPoints((cur) => {
-      const map = new Map(cur.map((p) => [p.id, p]));
-      for (const h of paymentPointHits) map.set(h.id, h);
-      return [...map.values()].sort((a, b) => a.label.localeCompare(b.label, "he"));
-    });
-  }, [paymentPointHits]);
-
-  useEffect(() => {
-    setIntakeActiveIdx(0);
-  }, [paymentPointHits]);
 
   const applyExtras = useCallback((ex: CustomerExtrasPayload) => {
     skipSearchRef.current = true;
@@ -674,6 +643,9 @@ export function OrderCreatePanel({
     if (!Number.isFinite(dealUsdTotal) || dealUsdTotal <= 0) return 0;
     return roundMoney2(dealUsdTotal + commissionUsdEffective);
   }, [dealUsdTotal, commissionUsdEffective]);
+
+  const isDebtWithdrawalCapture = isDebtWithdrawalOrderStatus(orderStatus);
+  const displayTotalUsd = isDebtWithdrawalCapture ? -Math.abs(totalUsdCalc) : totalUsdCalc;
 
   const pickCustomer = useCallback((row: CustomerSearchRow) => {
     skipSearchRef.current = true;
@@ -911,6 +883,9 @@ export function OrderCreatePanel({
     notes,
     nameArStr,
     nameEnStr,
+    financial,
+    orderCountries,
+    finalRate,
   });
   performSaveStateRef.current = {
     isSaving,
@@ -936,6 +911,9 @@ export function OrderCreatePanel({
     notes,
     nameArStr,
     nameEnStr,
+    financial,
+    orderCountries,
+    finalRate,
   };
 
   const performSave = useCallback(
@@ -981,7 +959,7 @@ export function OrderCreatePanel({
       const intakeDraft =
         !s.paymentPointId.trim() && s.paymentPointQuery.trim() ? s.paymentPointQuery.trim() : "";
       if (intakeDraft && intakeDraft.length < 2) {
-        setErr("מקום קליטה: יש לבחור מהרשימה או להזין לפחות שני תווים");
+        setErr("מקום תשלום: יש לבחור מהרשימה או להזין לפחות שני תווים");
         return;
       }
 
@@ -1000,13 +978,14 @@ export function OrderCreatePanel({
         setIsSaving(true);
         setErr(null);
 
-        if (s.isEdit) {
-          const feeStr = s.commissionUsdEffective.toFixed(2);
-          const res = await runWithLoading(
-            () =>
-              saveCaptureFast({
-                mode: "update",
+        const extras = captureExtrasFromPanel(s.financial, s.finalRate, cust, s.orderCountries);
+
+        const savePayload = (feeStr: string) =>
+          s.isEdit
+            ? {
+                mode: "update" as const,
                 orderId: s.editOrderId,
+                ...extras,
                 orderExecutionDateYmd: s.orderExecutionDateYmd,
                 intakeDateYmd: s.intakeDateYmd,
                 intakeTimeHm: s.intakeTimeHm,
@@ -1024,17 +1003,10 @@ export function OrderCreatePanel({
                 sourceCountry: countryForSave,
                 draftNameAr: s.nameArStr.trim() || null,
                 draftNameEn: s.nameEnStr.trim() || null,
-              }),
-            { message: "שומר נתונים...", mode: "bar" },
-          );
-          if (!res.ok) throw new Error(res.error);
-          onToast("ההזמנה עודכנה בהצלחה!");
-        } else {
-          const feeStr = s.commissionUsdCalc.toFixed(2);
-          const res = await runWithLoading(
-            () =>
-              saveCaptureFast({
-                mode: "create",
+              }
+            : {
+                mode: "create" as const,
+                ...extras,
                 orderExecutionDateYmd: s.orderExecutionDateYmd,
                 intakeDateYmd: s.intakeDateYmd,
                 intakeTimeHm: s.intakeTimeHm,
@@ -1053,20 +1025,41 @@ export function OrderCreatePanel({
                 sourceCountry: countryForSave,
                 draftNameAr: s.nameArStr.trim() || null,
                 draftNameEn: s.nameEnStr.trim() || null,
-              }),
-            { message: "שומר נתונים...", mode: "bar" },
-          );
-          if (!res.ok) throw new Error(res.error);
-          onToast("הזמנה נוצרה בהצלחה!");
-        }
+              };
 
-        onSaved?.();
-        if (keepOpen && !s.isEdit) {
-          resetFormForNew();
-          void refreshOrderNumberPreview();
+        if (s.isEdit) {
+          const feeStr = s.commissionUsdEffective.toFixed(2);
+          const res = await saveCaptureFast(savePayload(feeStr));
+          if (!res.ok) throw new Error(res.error);
+          setIsSaving(false);
+          onToast("ההזמנה עודכנה בהצלחה!");
+          if (keepOpen) {
+            /* stay open */
+          } else {
+            onClose();
+          }
+          queueMicrotask(() => {
+            onSaved?.();
+          });
         } else {
-          onClose();
+          const feeStr = s.commissionUsdCalc.toFixed(2);
+          const res = await saveCaptureFast(savePayload(feeStr));
+          if (!res.ok) throw new Error(res.error);
+          setIsSaving(false);
+          onToast("הזמנה נשמרה בהצלחה");
+          if (res.nextOrderNumberPreview) {
+            setOrderNumberPreview(res.nextOrderNumberPreview);
+          }
+          if (keepOpen) {
+            resetFormForNew();
+          } else {
+            onClose();
+          }
+          queueMicrotask(() => {
+            onSaved?.();
+          });
         }
+        return;
       } catch (err) {
         const msg = err instanceof Error ? err.message : "שגיאה בשמירה";
         setErr(msg);
@@ -1075,7 +1068,7 @@ export function OrderCreatePanel({
         setIsSaving(false);
       }
     },
-    [pickCustomer, runWithLoading, onToast, onSaved, onClose, resetFormForNew, refreshOrderNumberPreview],
+    [pickCustomer, onToast, onSaved, onClose, resetFormForNew],
   );
 
   const onSubmit = useCallback(
@@ -1134,73 +1127,6 @@ export function OrderCreatePanel({
     setDropdownField(null);
     setHits([]);
   }, []);
-
-  const normalizeLookupKey = useCallback((value: string) => value.trim().toLowerCase().replace(/\s+/g, ""), []);
-
-  const selectPaymentPoint = useCallback((row: { id: string; label: string }) => {
-    setPaymentPointId(row.id);
-    setPaymentPointQuery(row.label);
-    setPaymentPointOpen(false);
-    setPaymentPointErr(null);
-  }, []);
-
-  const commitPendingIntakeName = useCallback(() => {
-    const name = paymentPointQuery.trim();
-    if (name.length < 2) return;
-    setPaymentPointId("");
-    setPaymentPointOpen(false);
-    setPaymentPointErr(null);
-  }, [paymentPointQuery]);
-
-  const handleIntakeLocationKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === "Escape") {
-        if (paymentPointOpen) {
-          e.preventDefault();
-          setPaymentPointOpen(false);
-        }
-        return;
-      }
-      if (e.key === "ArrowDown" && paymentPointOpen && paymentPointHits.length > 0) {
-        e.preventDefault();
-        setIntakeActiveIdx((i) => Math.min(i + 1, paymentPointHits.length - 1));
-        return;
-      }
-      if (e.key === "ArrowUp" && paymentPointOpen && paymentPointHits.length > 0) {
-        e.preventDefault();
-        setIntakeActiveIdx((i) => Math.max(i - 1, 0));
-        return;
-      }
-      if (e.key !== "Enter") return;
-      if (!paymentPointOpen) return;
-      e.preventDefault();
-      const q = paymentPointQuery.trim();
-      if (paymentPointBusy) return;
-      const exact = paymentPointHits.find((p) => normalizeLookupKey(p.label) === normalizeLookupKey(q));
-      if (exact) {
-        selectPaymentPoint(exact);
-        return;
-      }
-      if (paymentPointHits.length > 0) {
-        const idx = Math.min(Math.max(intakeActiveIdx, 0), paymentPointHits.length - 1);
-        selectPaymentPoint(paymentPointHits[idx]);
-        return;
-      }
-      if (q.length >= 2) {
-        commitPendingIntakeName();
-      }
-    },
-    [
-      paymentPointOpen,
-      paymentPointHits,
-      paymentPointBusy,
-      paymentPointQuery,
-      normalizeLookupKey,
-      selectPaymentPoint,
-      intakeActiveIdx,
-      commitPendingIntakeName,
-    ],
-  );
 
   if (target.mode === "create" && !canCreateOrders) return null;
   if (target.mode === "edit" && !canEditOrders) return null;
@@ -1484,26 +1410,21 @@ export function OrderCreatePanel({
             <label htmlFor={idp("country")} className="adm-oc-legacy-micro-label adm-oc-pro-mlbl">
               <Globe2 size={12} strokeWidth={2.2} aria-hidden /> מדינה
             </label>
-            <select
+            <ErpSearchCombobox
               id={idp("country")}
-              className="adm-oc-legacy-top-sel"
+              className="adm-oc-country-combo"
+              inputClassName="adm-oc-legacy-top-sel"
               value={sourceCountry}
+              label={sourceCountry ? orderCountryLabel(sourceCountry) : ""}
               disabled={fieldDisabled}
-              onFocus={closeCustomerDropdown}
-              onChange={(e) => {
-                const v = e.target.value as OrderCountryCode | "";
-                setSourceCountry(v);
+              entityName="מדינה"
+              placeholder="בחרו או חפשו מדינה…"
+              options={countryComboboxOptions}
+              onChange={(id) => {
+                closeCustomerDropdown();
+                setSourceCountry(id as OrderCountryCode);
               }}
-            >
-              <option value="" disabled>
-                —
-              </option>
-              {countrySelectOptions.map((c) => (
-                <option key={c} value={c} disabled={!orderCountries.includes(c)}>
-                  {orderCountryLabel(c)}
-                </option>
-              ))}
-            </select>
+            />
           </span>
           <span className="adm-oc-legacy-topbar-item adm-oc-pro-item">
             <label className="adm-oc-legacy-micro-label adm-oc-pro-mlbl">
@@ -1853,92 +1774,27 @@ export function OrderCreatePanel({
                       setOrderStatus(v);
                     }}
                   />
+                  {isDebtWithdrawalCapture ? (
+                    <p className="adm-oc-debt-withdrawal-hint" role="note">
+                      משיכה מחוב — הסכום יירשם כזיכוי ויקטין את חוב הלקוח (לא כחיוב).
+                    </p>
+                  ) : null}
                 </div>
                 <div className="adm-oc-legacy-side-field">
-                  <label htmlFor={idp("pay-pt")}>מקום קליטת הזמנה</label>
-                  <div
+                  <label htmlFor={idp("pay-pt")}>מקום תשלום</label>
+                  <IntakeLocationCombobox
+                    id={idp("pay-pt")}
                     className="adm-oc-intake-combobox"
-                    dir="rtl"
-                    onBlur={() => window.setTimeout(() => setPaymentPointOpen(false), 160)}
-                  >
-                    <input
-                      id={idp("pay-pt")}
-                      type="text"
-                      role="combobox"
-                      aria-expanded={paymentPointOpen}
-                      aria-controls={`${idp("pay-pt")}-listbox`}
-                      aria-autocomplete="list"
-                      className="adm-oc-legacy-side-sel adm-oc-intake-combobox-input"
-                      disabled={fieldDisabled}
-                      value={paymentPointQuery}
-                      placeholder="בחרו או הקלידו מקום קליטה…"
-                      autoComplete="off"
-                      onFocus={() => {
-                        closeCustomerDropdown();
-                        setPaymentPointOpen(true);
-                      }}
-                      onKeyDown={handleIntakeLocationKeyDown}
-                      onChange={(e) => {
-                        setPaymentPointQuery(e.target.value);
-                        setPaymentPointId("");
-                        setPaymentPointOpen(true);
-                        setPaymentPointErr(null);
-                      }}
-                    />
-                    {paymentPointOpen ? (
-                      <ul
-                        id={`${idp("pay-pt")}-listbox`}
-                        className="adm-oc-intake-dd"
-                        role="listbox"
-                        aria-label="מקומות קליטה"
-                      >
-                        {paymentPointBusy ? (
-                          <li className="adm-oc-intake-dd-item adm-oc-intake-dd-item--static">טוען…</li>
-                        ) : null}
-                        {!paymentPointBusy && paymentPointHits.length === 0 && paymentPointQuery.trim().length >= 1 ? (
-                          <li className="adm-oc-intake-dd-item adm-oc-intake-dd-item--static">
-                            <button
-                              type="button"
-                              className="adm-oc-intake-dd-empty-action"
-                              disabled={paymentPointQuery.trim().length < 2}
-                              onMouseDown={(e) => {
-                                e.preventDefault();
-                                if (paymentPointQuery.trim().length >= 2) commitPendingIntakeName();
-                              }}
-                            >
-                              לא נמצא מקום. לחץ Enter כדי ליצור מקום חדש
-                            </button>
-                          </li>
-                        ) : null}
-                        {!paymentPointBusy && paymentPointHits.length === 0 && paymentPointQuery.trim().length === 0 ? (
-                          <li className="adm-oc-intake-dd-item adm-oc-intake-dd-item--static adm-oc-intake-dd-muted">
-                            אין עדיין מקומות — הקלידו שם ושמרו את ההזמנה
-                          </li>
-                        ) : null}
-                        {!paymentPointBusy
-                          ? paymentPointHits.map((row, i) => (
-                              <li key={row.id} role="presentation">
-                                <button
-                                  type="button"
-                                  role="option"
-                                  aria-selected={intakeActiveIdx === i}
-                                  className={`adm-oc-intake-dd-item${intakeActiveIdx === i ? " adm-oc-intake-dd-item--active" : ""}`}
-                                  onMouseEnter={() => setIntakeActiveIdx(i)}
-                                  onMouseDown={(e) => {
-                                    e.preventDefault();
-                                    selectPaymentPoint(row);
-                                  }}
-                                  onClick={() => selectPaymentPoint(row)}
-                                >
-                                  {row.label}
-                                </button>
-                              </li>
-                            ))
-                          : null}
-                      </ul>
-                    ) : null}
-                  </div>
-                  {paymentPointErr ? <div className="adm-oc-inline-err">{paymentPointErr}</div> : null}
+                    inputClassName="adm-oc-legacy-side-sel adm-oc-intake-combobox-input"
+                    disabled={fieldDisabled}
+                    value={paymentPointId}
+                    label={paymentPointQuery}
+                    onChange={(id, locLabel) => {
+                      closeCustomerDropdown();
+                      setPaymentPointId(id);
+                      setPaymentPointQuery(locLabel);
+                    }}
+                  />
                 </div>
                 <div className="adm-oc-legacy-side-field">
                   <label htmlFor={idp("pay-m")}>צורת תשלום</label>
@@ -2069,9 +1925,16 @@ export function OrderCreatePanel({
               <div className="adm-oc-line adm-oc-line--total adm-oc-money-line adm-oc-money-line--hero summary-total">
                 <span className="adm-oc-money-label summary-total-label">סה״כ</span>
                 <AnimatedMoneyValue
-                  className="adm-oc-money-value adm-oc-money-value--usd summary-total-value"
+                  className={[
+                    "adm-oc-money-value",
+                    "adm-oc-money-value--usd",
+                    "summary-total-value",
+                    isDebtWithdrawalCapture ? "adm-oc-money-value--debt-withdrawal" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
                   dir="ltr"
-                  value={`${formatMoneyAmount(totalUsdCalc)} $`}
+                  value={`${formatMoneyAmount(displayTotalUsd)} $`}
                 />
               </div>
             </Card>

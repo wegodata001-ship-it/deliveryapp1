@@ -8,6 +8,11 @@ import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { orderCaptureSplitMethodLabel } from "@/lib/order-capture-payment-methods";
 import { buildOrdersListWhereFromSearchParams } from "@/app/admin/orders/orders-list-where";
 import { getOrderStatusLabelMap, labelFromMap } from "@/lib/order-status-registry";
+import {
+  formatSignedUsdDisplay,
+  isDebtWithdrawalOrderStatus,
+  orderDisplayUsdSigned,
+} from "@/lib/debt-withdrawal-order";
 import { LEGACY_ORDER_STATUS_SLUGS } from "@/lib/order-status-slugs";
 
 export type OrdersPdfExportMode = "regular" | "by_place" | "by_status" | "by_week";
@@ -277,6 +282,7 @@ export async function exportOrdersListPdfHtmlAction(
         amountUsd: true,
         commissionUsd: true,
         totalUsd: true,
+        debtWithdrawalUsd: true,
         totalIlsWithVat: true,
         totalIls: true,
         customer: {
@@ -314,17 +320,32 @@ export async function exportOrdersListPdfHtmlAction(
     });
     const placeKey = paymentLocationGroupKey(paymentLocationName);
     const od = r.orderDate ? new Date(r.orderDate) : null;
-    const totalUsdNum = r.totalUsd != null ? Number(r.totalUsd) : 0;
-    const totalIlsNum = Number(r.totalIlsWithVat ?? r.totalIls ?? 0);
+    const isWithdrawal = isDebtWithdrawalOrderStatus(r.status);
+    const totalUsdNum = orderDisplayUsdSigned({
+      status: r.status,
+      totalUsd: r.totalUsd,
+      amountUsd: r.amountUsd,
+      commissionUsd: r.commissionUsd,
+      debtWithdrawalUsd: r.debtWithdrawalUsd,
+    });
+    const dealNum = r.amountUsd != null ? Number(r.amountUsd) : 0;
+    const totalIlsRaw = Number(r.totalIlsWithVat ?? r.totalIls ?? 0);
+    const totalIlsNum = isWithdrawal && totalIlsRaw > 0 ? -Math.abs(totalIlsRaw) : totalIlsRaw;
     return {
       orderNumber: r.orderNumber ?? "—",
       orderDateTime: fmtDateTime(od) ?? "—",
       weekCode: r.weekCode ?? "—",
       customerCode: r.customerCodeSnapshot?.trim() || "—",
       customerName,
-      dealUsd: fmtUsd2(r.amountUsd) ?? "—",
-      totalUsd: fmtUsd2(r.totalUsd) ?? "—",
-      totalIls: fmtIls2(r.totalIlsWithVat ?? r.totalIls) ?? "—",
+      dealUsd: isWithdrawal
+        ? formatSignedUsdDisplay(-Math.abs(dealNum))
+        : fmtUsd2(r.amountUsd) ?? "—",
+      totalUsd: isWithdrawal
+        ? formatSignedUsdDisplay(totalUsdNum)
+        : fmtUsd2(r.totalUsd) ?? "—",
+      totalIls: isWithdrawal
+        ? `-${fmtIls2(Math.abs(totalIlsRaw)) ?? "0.00"}`
+        : fmtIls2(r.totalIlsWithVat ?? r.totalIls) ?? "—",
       totalUsdNum,
       totalIlsNum,
       statusHe: labelFromMap(statusMap, r.status),

@@ -119,31 +119,33 @@ export async function resolveOrderIntakeLocationColumnValue(opts: {
   | { ok: true; locationId: string | null; paymentPointIdForPrisma: string | null }
   | { ok: false; error: string }
 > {
-  await ensureIntakeLocationTable();
   const id = opts.fieldId?.trim() || "";
   const draft = opts.draftName?.trim() || "";
 
-  if (id) {
-    const intake = await prisma.intakeLocation.findFirst({ where: { id }, select: { id: true } });
-    if (intake) return { ok: true, locationId: intake.id, paymentPointIdForPrisma: null };
+  if (!id && !draft) {
+    return { ok: true, locationId: null, paymentPointIdForPrisma: null };
+  }
 
-    let legacyHit: Array<{ id: string }> = [];
+  if (id) {
+    const [intake, pp] = await Promise.all([
+      prisma.intakeLocation.findFirst({ where: { id }, select: { id: true } }),
+      prisma.paymentPoint.findFirst({ where: { id, isActive: true }, select: { id: true } }),
+    ]);
+    if (intake) return { ok: true, locationId: intake.id, paymentPointIdForPrisma: null };
+    if (pp) return { ok: true, locationId: id, paymentPointIdForPrisma: id };
+
     try {
-      legacyHit = await prisma.$queryRaw<Array<{ id: string }>>`
+      const legacyHit = await prisma.$queryRaw<Array<{ id: string }>>`
         SELECT "id" FROM "OrderLocations" WHERE "id" = ${id} LIMIT 1
       `;
+      if (legacyHit[0]) return { ok: true, locationId: legacyHit[0].id, paymentPointIdForPrisma: null };
     } catch {
-      legacyHit = [];
+      /* legacy table may not exist */
     }
-    if (legacyHit[0]) return { ok: true, locationId: legacyHit[0].id, paymentPointIdForPrisma: null };
-
-    const pp = await prisma.paymentPoint.findFirst({ where: { id, isActive: true }, select: { id: true } });
-    if (pp) return { ok: true, locationId: id, paymentPointIdForPrisma: id };
 
     return { ok: false, error: "מקום קליטה לא תקין" };
   }
 
-  if (!draft) return { ok: true, locationId: null, paymentPointIdForPrisma: null };
   if (draft.length < 2) {
     return {
       ok: false,

@@ -203,6 +203,7 @@ export async function fetchCustomerOpenOrderEnrichment(params: {
   for (const o of orders) {
     const cid = o.customerId;
     if (!cid) continue;
+    if (o.status === OS.DEBT_WITHDRAWAL) continue;
     const expectedIls = orderExpectedIlsValue(o);
     const paidIls = paidByOrder.get(o.id) ?? new Prisma.Decimal(0);
     const balanceIls = expectedIls.sub(paidIls);

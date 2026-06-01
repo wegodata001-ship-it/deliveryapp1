@@ -1,10 +1,20 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useEffect } from "react";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { OrderCreatePanel } from "@/components/admin/OrderCreatePanel";
 import { PaymentModalUpdated } from "@/components/admin/PaymentModalUpdated";
-import { CustomerCardWindowBody, CreateCustomerWindowBody } from "@/components/admin/AdminWindowBodies";
+
+const CustomerCardWindowBody = dynamic(
+  () => import("@/components/admin/AdminWindowBodies").then((m) => ({ default: m.CustomerCardWindowBody })),
+  { ssr: false },
+);
+
+const CreateCustomerWindowBody = dynamic(
+  () => import("@/components/admin/AdminWindowBodies").then((m) => ({ default: m.CreateCustomerWindowBody })),
+  { ssr: false },
+);
 import type { AdminToastFn } from "@/components/admin/AdminNavShell";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 import type { AdminWindowEntry } from "@/lib/admin-windows";

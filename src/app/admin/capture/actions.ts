@@ -5,13 +5,48 @@ import { OrderEditRequestStatus, PaymentMethod, Prisma } from "@prisma/client";
 import { listOrderStatusTags } from "@/lib/order-status-registry";
 import { OS } from "@/lib/order-status-slugs";
 import { revalidatePath, revalidateTag } from "next/cache";
-import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
+import {
+  appUserFromSessionPayload,
+  getCurrentUser,
+  isAdminUser,
+  requireAuth,
+  userHasAnyPermission,
+} from "@/lib/admin-auth";
+import {
+  type CaptureCustomerSnapshotInput,
+  type CaptureFinancialResolved,
+  type CaptureFinancialSnapshotInput,
+  parseEnabledCountriesFromForm,
+  resolveCaptureFinancialFromForm,
+} from "@/lib/capture-form-snapshot";
+import {
+  getActiveOrderStatusIdsCached,
+  getActiveOrderStatusIdsSync,
+  getCaptureFinancialSettingsCached,
+  loadCaptureSettingsCountries,
+  warmCaptureHotPathCaches,
+} from "@/lib/capture-hot-path";
+import type { SessionPayload } from "@/lib/session";
+import {
+  capturePerfLog,
+  capturePerfTimeEnd,
+  capturePerfTimeStart,
+  capturePerfTimed,
+  scheduleCaptureAuditInsert,
+} from "@/lib/capture-perf";
+import { CaptureSavePerf } from "@/lib/capture-save-perf";
 import { breakdownIlsIncludingVat, computeFromUsdAmount } from "@/lib/financial-calc";
 import { ensureDefaultFinancialSettings, getCurrentFinancialSettings } from "@/lib/financial-settings";
 import { DEFAULT_WEEK_CODE, formatLocalHm, formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate, parseLocalDateTime } from "@/lib/work-week";
 import { deriveAhWeekCodeFromOrderDateYmd } from "@/lib/weeks/order-week-dates";
 import { isValidYmd } from "@/lib/weeks/ah-week";
 import { orderNumberMatchesWeekFormat } from "@/lib/order-number";
+import {
+  generateNextOrderNumber,
+  previewOrderNumberAfter,
+  previewNextOrderNumberForWeek,
+} from "@/lib/orders-next-number";
+import { isDebtWithdrawalOrderStatus } from "@/lib/debt-withdrawal-order";
 import { prisma } from "@/lib/prisma";
 import { allocateNextPaymentCapture } from "@/lib/payment-capture-code";
 import { ensureOnce } from "@/lib/ensure-tables-once";
@@ -39,6 +74,10 @@ import {
   listIntakeLocationsForSelect,
   resolveOrderIntakeLocationColumnValue,
 } from "@/lib/intake-location";
+import {
+  resolveCustomerForCapture,
+  type CaptureCustomerRow,
+} from "@/lib/ensure-customer-for-capture";
 
 type OrderCaptureDatesInput = {
   /** תאימות אחורה — לא משמש לחישוב שבוע */
@@ -117,7 +156,7 @@ export type PaymentCaptureSavedSummary = {
 };
 
 export type CaptureState =
-  | { ok: true; saved?: OrderCaptureSavedSummary; orderNumber?: string }
+  | { ok: true; saved?: OrderCaptureSavedSummary; orderNumber?: string; nextOrderNumberPreview?: string | null }
   | { ok: false; error: string };
 
 export type PaymentCaptureState =
@@ -126,10 +165,43 @@ export type PaymentCaptureState =
 
 const PAYMENT_METHODS = new Set<string>(Object.values(PaymentMethod));
 
-async function activeOrderStatusIdSet(): Promise<Set<string>> {
-  const rows = await listOrderStatusTags(false);
-  return new Set(rows.map((r) => r.id));
+async function loadCustomerForCapture(
+  customerId: string,
+  snapshot: CaptureCustomerSnapshotInput | null | undefined,
+  drafts?: { draftNameAr?: string | null; draftNameEn?: string | null },
+): Promise<{ customer: CaptureCustomerRow; created: boolean } | null> {
+  return capturePerfTimed("capture.customer", () =>
+    resolveCustomerForCapture({
+      customerId,
+      snapshot,
+      draftNameAr: drafts?.draftNameAr,
+      draftNameEn: drafts?.draftNameEn,
+    }),
+  );
 }
+
+async function resolveCaptureRatesForSave(
+  form: CaptureOrderFormExtras & { finalRateOverride?: string | null },
+): Promise<{ ok: true; rates: CaptureFinancialResolved } | { ok: false; error: string }> {
+  const fromClient = resolveCaptureFinancialFromForm(form.financialSnapshot, form.finalRateOverride);
+  if (fromClient.ok) {
+    capturePerfLog({ exchangeRateSource: "client" });
+    return fromClient;
+  }
+
+  capturePerfLog({ exchangeRateSource: "db", reason: fromClient.error });
+  const s = await capturePerfTimed("capture.exchangeRate", () => getCaptureFinancialSettingsCached());
+  return {
+    ok: true,
+    rates: { base: s.baseDollarRate, fee: s.dollarFee, final: s.finalDollarRate },
+  };
+}
+
+export type CaptureOrderFormExtras = {
+  financialSnapshot?: CaptureFinancialSnapshotInput | null;
+  customerSnapshot?: CaptureCustomerSnapshotInput | null;
+  enabledCountries?: OrderCountryCode[] | null;
+};
 
 export type OrderCapturePaymentLineInput = {
   paymentMethod: string;
@@ -179,18 +251,23 @@ function parseOrderPaymentLines(
   return { ok: true, parsed, sum };
 }
 
-async function appendParsedPaymentsForOrder(params: {
-  meId: string;
-  orderId: string;
-  customerId: string;
-  weekCode: string | null;
-  paymentDate: Date;
-  parsed: { method: PaymentMethod; amount: Prisma.Decimal }[];
-  base: Prisma.Decimal;
-  fee: Prisma.Decimal;
-  final: Prisma.Decimal;
-  vatRate: Prisma.Decimal;
-}): Promise<void> {
+type CaptureDbClient = typeof prisma | Prisma.TransactionClient;
+
+async function appendParsedPaymentsForOrder(
+  params: {
+    meId: string;
+    orderId: string;
+    customerId: string;
+    weekCode: string | null;
+    paymentDate: Date;
+    parsed: { method: PaymentMethod; amount: Prisma.Decimal }[];
+    base: Prisma.Decimal;
+    fee: Prisma.Decimal;
+    final: Prisma.Decimal;
+    vatRate: Prisma.Decimal;
+  },
+  db: CaptureDbClient = prisma,
+): Promise<void> {
   if (params.parsed.length === 0) return;
   const snapIn = {
     baseDollarRate: params.base,
@@ -223,7 +300,7 @@ async function appendParsedPaymentsForOrder(params: {
       createdById: params.meId,
     };
   });
-  await prisma.payment.createMany({ data });
+  await db.payment.createMany({ data });
 }
 
 function isSameLocalCalendarDay(a: Date, b: Date): boolean {
@@ -647,47 +724,6 @@ export async function capturePaymentAction(form: {
   };
 }
 
-/** מספור רץ לפי שבוע: {weekCode}-0001 — לפי המקסימום הקיים באותו weekCode */
-async function generateNextOrderNumber(weekCode: string): Promise<{ orderNumber: string; oldOrderNumber: string; sequence: number }> {
-  const wc = weekCode.trim() || DEFAULT_WEEK_CODE;
-  const prefix = `${wc}-`;
-  const [latestOrderNumber, latestOldNumbers] = await Promise.all([
-    prisma.order.findFirst({
-      where: { weekCode: wc, deletedAt: null, orderNumber: { startsWith: prefix } },
-      orderBy: { orderNumber: "desc" },
-      select: { orderNumber: true },
-    }),
-    prisma.order.findMany({
-      where: { weekCode: wc, deletedAt: null, oldOrderNumber: { not: null } },
-      orderBy: { oldOrderNumber: "desc" },
-      take: 20,
-      select: { oldOrderNumber: true },
-    }),
-  ]);
-
-  let maxSeq = 0;
-  const latestSuffix = latestOrderNumber?.orderNumber?.slice(prefix.length);
-  if (latestSuffix && /^\d{4}$/.test(latestSuffix)) {
-    maxSeq = Math.max(maxSeq, parseInt(latestSuffix, 10));
-  }
-  for (const row of latestOldNumbers) {
-    const old = row.oldOrderNumber?.trim();
-    if (old && /^\d{4}$/.test(old)) {
-      maxSeq = Math.max(maxSeq, parseInt(old, 10));
-      break;
-    }
-  }
-  for (let bump = 0; bump < 20; bump++) {
-    const sequence = maxSeq + 1 + bump;
-    const suffix = String(sequence).padStart(4, "0");
-    const orderNumber = `${wc}-${suffix}`;
-    const dup = await prisma.order.findFirst({ where: { orderNumber, deletedAt: null }, select: { id: true } });
-    if (!dup) return { orderNumber, oldOrderNumber: suffix, sequence };
-  }
-  const fallback = `${wc}-${Date.now().toString(36).toUpperCase()}`;
-  return { orderNumber: fallback, oldOrderNumber: fallback.slice(-4), sequence: maxSeq + 1 };
-}
-
 export async function searchCustomersForOrderAction(query: string): Promise<CustomerSearchRow[]> {
   return withPerfTimer("search.customers.capture", async () => {
     const me = await requireAuth();
@@ -892,265 +928,13 @@ export type CustomerCardSnapshot = {
   recentOrders: CustomerCardOrderRow[];
 };
 
-export type CustomerLedgerRow = {
-  id: string;
-  dateYmd: string;
-  type: "CHARGE" | "PAYMENT" | "CREDIT_STORED" | "CREDIT_APPLIED";
-  amountUsd: string;
-  paidUsd: string;
-  /** תשלום בשקל — נפרד מדולר */
-  paidIls?: string | null;
-  balanceUsd: string;
-  document: string;
-};
+import type { CustomerLedgerPayload } from "@/lib/customer-account-ledger";
 
-export type CustomerLedgerPayload = {
-  rows: CustomerLedgerRow[];
-  totalChargesUsd: string;
-  totalPaymentsUsd: string;
-  balanceUsd: string;
-};
-
-export type ClientCreateInput = {
-  customerCode: string;
-  /** שם ערבית — שדה ראשי */
-  nameAr: string;
-  nameEn?: string | null;
-  /** אופציונלי */
-  phone?: string | null;
-  phone2?: string | null;
-  country?: string | null;
-  email?: string | null;
-  notes?: string | null;
-};
-
-export type ClientCreateResult = {
-  customerId: string;
-  id: string;
-  customerCode: string;
-  customerNameAr: string;
-  customerNameEn: string | null;
-  /** תאימות — שם תצוגה (= nameAr) */
-  name: string;
-  phone: string | null;
-  phone2: string | null;
-  country: string | null;
-  email: string | null;
-  createdAt: string;
-};
-
-export type ClientLedgerRow = {
-  id: string;
-  name: string;
-  customerCode: string | null;
-  nameAr: string | null;
-  nameEn: string | null;
-  phone: string | null;
-  email: string | null;
-  createdAt: string;
-  isNew: boolean;
-};
-
-export type ClientLedgerPayload = {
-  rows: ClientLedgerRow[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-};
-
-export async function suggestNextCustomerCodeAction(): Promise<{ ok: true; code: string } | { ok: false; error: string }> {
-  const me = await requireAuth();
-  if (!userHasAnyPermission(me, ["create_orders", "view_customers", "edit_orders"])) {
-    return { ok: false, error: "אין הרשאה" };
-  }
-  const code = await suggestNextCustomerCode();
-  return { ok: true, code };
-}
-
-export async function createClientAction(
-  input: ClientCreateInput,
-): Promise<{ ok: true; client: ClientCreateResult } | { ok: false; error: string }> {
-  const me = await requireAuth();
-  if (!userHasAnyPermission(me, ["create_orders", "view_customers", "edit_orders"])) {
-    return { ok: false, error: "אין הרשאה" };
-  }
-
-  const customerCode = normalizeCustomerCodeInput(input.customerCode);
-  const nameAr = input.nameAr.trim();
-  const nameEn = input.nameEn?.trim() || null;
-  const phone = input.phone?.trim() || null;
-  const phone2 = input.phone2?.trim() || null;
-  const country = normalizeCustomerPlaceInput(input.country);
-  const email = input.email?.trim() || null;
-  const notes = input.notes?.trim() || null;
-  if (!customerCode) return { ok: false, error: "יש להזין קוד לקוח" };
-  if (!nameAr) return { ok: false, error: "שם ערבית חובה" };
-
-  if (await isCustomerCodeTaken(customerCode)) {
-    return { ok: false, error: "קוד לקוח כבר קיים במערכת" };
-  }
-
-  const created = await prisma.customer.create({
-    data: {
-      customerCode,
-      displayName: nameAr,
-      nameAr,
-      nameEn,
-      phone,
-      phone2,
-      country,
-      email,
-      notes,
-      isActive: true,
-    },
-    select: {
-      id: true,
-      customerCode: true,
-      displayName: true,
-      nameAr: true,
-      nameEn: true,
-      phone: true,
-      phone2: true,
-      country: true,
-      email: true,
-      createdAt: true,
-    },
-  });
-  const ar = created.nameAr ?? created.displayName ?? nameAr;
-  const en = created.nameEn ?? nameEn;
-  return {
-    ok: true,
-    client: {
-      customerId: created.id,
-      id: created.id,
-      customerCode: created.customerCode ?? customerCode,
-      customerNameAr: ar,
-      customerNameEn: en,
-      name: ar,
-      phone: created.phone ?? phone ?? null,
-      phone2: created.phone2 ?? phone2 ?? null,
-      country: created.country ?? country ?? null,
-      email: created.email,
-      createdAt: created.createdAt.toISOString(),
-    },
-  };
-}
-
-export async function listClientsLedgerAction(params: {
-  query?: string;
-  page?: number;
-  pageSize?: number;
-  fromYmd?: string;
-  toYmd?: string;
-  sort?: "new_old" | "old_new" | "name_az";
-}): Promise<ClientLedgerPayload> {
-  const me = await requireAuth();
-  if (!userHasAnyPermission(me, ["view_customer_card", "view_customers", "create_orders", "edit_orders"])) {
-    return { rows: [], total: 0, page: 1, pageSize: 8, totalPages: 1 };
-  }
-
-  const pageSize = Math.min(50, Math.max(1, Math.floor(params.pageSize || 8)));
-  const requestedPage = Math.max(1, Math.floor(params.page || 1));
-  const q = params.query?.trim() || "";
-  const fromYmd = params.fromYmd?.trim() || "";
-  const toYmd = params.toYmd?.trim() || "";
-  const sort = params.sort ?? "new_old";
-
-  const createdAtFilter =
-    fromYmd || toYmd
-      ? {
-          ...(fromYmd ? { gte: new Date(`${fromYmd}T00:00:00`) } : {}),
-          ...(toYmd ? { lte: new Date(`${toYmd}T23:59:59.999`) } : {}),
-        }
-      : undefined;
-
-  const where: Prisma.CustomerWhereInput = {
-    deletedAt: null,
-    isActive: true,
-    ...(createdAtFilter ? { createdAt: createdAtFilter } : {}),
-    ...(q
-      ? {
-          OR: [
-            { customerCode: { contains: q, mode: "insensitive" } },
-            { displayName: { contains: q, mode: "insensitive" } },
-            { nameAr: { contains: q, mode: "insensitive" } },
-            { nameEn: { contains: q, mode: "insensitive" } },
-            { nameHe: { contains: q, mode: "insensitive" } },
-            { phone: { contains: q } },
-            { phone2: { contains: q } },
-            { country: { contains: q, mode: "insensitive" } },
-            { email: { contains: q, mode: "insensitive" } },
-          ],
-        }
-      : {}),
-  };
-
-  const total = await prisma.customer.count({ where });
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const page = Math.min(requestedPage, totalPages);
-  const skip = (page - 1) * pageSize;
-  const now = Date.now();
-  const orderBy: Prisma.CustomerOrderByWithRelationInput[] =
-    sort === "name_az"
-      ? [{ displayName: "asc" }]
-      : sort === "old_new"
-        ? [{ createdAt: "asc" }]
-        : [{ createdAt: "desc" }];
-
-  const rows = await prisma.customer.findMany({
-    where,
-    orderBy,
-    skip,
-    take: pageSize,
-    select: {
-      id: true,
-      displayName: true,
-      customerCode: true,
-      nameAr: true,
-      nameEn: true,
-      nameHe: true,
-      phone: true,
-      email: true,
-      createdAt: true,
-    },
-  });
-
-  return {
-    rows: rows.map((r) => ({
-      id: r.id,
-      name: primaryCustomerDisplayName({
-        nameAr: r.nameAr,
-        nameEn: r.nameEn,
-        nameHe: r.nameHe,
-        displayName: r.displayName,
-      }),
-      customerCode: r.customerCode,
-      nameAr: r.nameAr,
-      nameEn: r.nameEn,
-      phone: r.phone,
-      email: r.email,
-      createdAt: r.createdAt.toISOString(),
-      isNew: now - r.createdAt.getTime() <= 1000 * 60 * 60 * 24 * 3,
-    })),
-    total,
-    page,
-    pageSize,
-    totalPages,
-  };
-}
-
-function paymentUsdEquivalentForLedger(p: {
-  amountUsd: Prisma.Decimal | null;
-  amountIls: Prisma.Decimal | null;
-  exchangeRate: Prisma.Decimal | null;
-}): Prisma.Decimal {
-  if (p.amountUsd) return p.amountUsd;
-  if (p.amountIls && p.exchangeRate && p.exchangeRate.gt(0)) {
-    return p.amountIls.div(p.exchangeRate).toDecimalPlaces(4, 4);
-  }
-  return new Prisma.Decimal(0);
-}
+export type {
+  CustomerLedgerPayload,
+  CustomerLedgerRow,
+  CustomerLedgerRowKind,
+} from "@/lib/customer-account-ledger";
 
 /** כרטסת לקוח בחלון — פרטים + הזמנות אחרונות */
 export async function getCustomerCardSnapshotAction(customerId: string): Promise<CustomerCardSnapshot | null> {
@@ -1212,10 +996,10 @@ export async function updateCustomerCardDetailsAction(form: {
     },
   });
 
+  const { revalidateAfterCustomerCreate } = await import("@/lib/revalidate-customer-create");
+  revalidateAfterCustomerCreate(id);
   revalidatePath("/admin");
   revalidatePath("/admin/orders");
-  const { customerCardSnapshotTag } = await import("@/lib/customer-card-snapshot-cache");
-  revalidateTag(customerCardSnapshotTag(id));
   return { ok: true };
 }
 
@@ -1232,137 +1016,15 @@ export async function getCustomerLedgerAction(params: {
   const id = params.customerId.trim();
   if (!id) return null;
 
-  const from = params.fromYmd?.trim() ? parseLocalDate(params.fromYmd) : new Date(2000, 0, 1);
-  const to = params.toYmd?.trim() ? endOfLocalDaySafe(params.toYmd) : new Date(2999, 11, 31, 23, 59, 59, 999);
-
-  const [orders, payments] = await Promise.all([
-    prisma.order.findMany({
-      where: { customerId: id, deletedAt: null, orderDate: { gte: from, lte: to } },
-      orderBy: { orderDate: "asc" },
-      select: {
-        id: true,
-        orderNumber: true,
-        orderDate: true,
-        totalUsd: true,
-        debtWithdrawalUsd: true,
-      },
-    }),
-    prisma.payment.findMany({
-      where: { customerId: id, isPaid: true, paymentDate: { gte: from, lte: to } },
-      orderBy: { paymentDate: "asc" },
-      select: {
-        id: true,
-        orderId: true,
-        paymentCode: true,
-        paymentDate: true,
-        amountUsd: true,
-        amountIls: true,
-        exchangeRate: true,
-        notes: true,
-      },
-    }),
-  ]);
-
-  const events: Array<{
-    id: string;
-    date: Date;
-    type: CustomerLedgerRow["type"];
-    amount: Prisma.Decimal;
-    ilsAmount: Prisma.Decimal | null;
-    document: string;
-  }> = [
-    ...orders.map((o) => ({
-      id: `o-${o.id}`,
-      date: o.orderDate ?? new Date(0),
-      type: "CHARGE" as const,
-      amount: o.totalUsd ?? new Prisma.Decimal(0),
-      ilsAmount: null,
-      document: o.orderNumber ?? "הזמנה",
-    })),
-    ...orders
-      .filter((o) => o.debtWithdrawalUsd != null && o.debtWithdrawalUsd.gt(0))
-      .map((o) => ({
-        id: `dw-${o.id}`,
-        date: o.orderDate ?? new Date(0),
-        type: "CREDIT_APPLIED" as const,
-        amount: o.debtWithdrawalUsd!,
-        ilsAmount: null,
-        document: `קיזוז זכות · ${o.orderNumber ?? "הזמנה"}`,
-      })),
-    ...payments.map((p) => {
-      const isCredit = p.orderId == null;
-      const payType: CustomerLedgerRow["type"] = isCredit ? "CREDIT_STORED" : "PAYMENT";
-      const ilsAmt = p.amountIls && p.amountIls.gt(0) ? p.amountIls : null;
-      const docParts = [isCredit ? "יתרת זכות ללקוח" : p.paymentCode ?? "תשלום"];
-      if (p.amountUsd && p.amountUsd.gt(0)) docParts.push(`$${p.amountUsd.toFixed(2)}`);
-      if (ilsAmt) docParts.push(`₪${ilsAmt.toFixed(2)}`);
-      return {
-        id: `p-${p.id}`,
-        date: p.paymentDate ?? new Date(0),
-        type: payType,
-        amount: paymentUsdEquivalentForLedger(p),
-        ilsAmount: ilsAmt,
-        document: docParts.join(" · "),
-      };
-    }),
-  ].sort((a, b) => a.date.getTime() - b.date.getTime() || a.id.localeCompare(b.id));
-
-  let balance = new Prisma.Decimal(0);
-  let totalCharges = new Prisma.Decimal(0);
-  let totalPayments = new Prisma.Decimal(0);
-  const rows: CustomerLedgerRow[] = events.map((ev) => {
-    if (ev.type === "CHARGE") {
-      balance = balance.add(ev.amount);
-      totalCharges = totalCharges.add(ev.amount);
-      return {
-        id: ev.id,
-        dateYmd: ev.date.getTime() > 0 ? formatLocalYmd(ev.date) : "—",
-        type: ev.type,
-        amountUsd: ev.amount.toFixed(2),
-        paidUsd: "0.00",
-        paidIls: null,
-        balanceUsd: balance.toFixed(2),
-        document: ev.document,
-      };
-    }
-    balance = balance.sub(ev.amount);
-    if (ev.type === "PAYMENT" || ev.type === "CREDIT_STORED") {
-      totalPayments = totalPayments.add(ev.amount);
-    }
-    const paidIls =
-      ev.ilsAmount && ev.ilsAmount.gt(0) && (ev.type === "PAYMENT" || ev.type === "CREDIT_STORED")
-        ? ev.ilsAmount.toFixed(2)
-        : null;
-    return {
-      id: ev.id,
-      dateYmd: ev.date.getTime() > 0 ? formatLocalYmd(ev.date) : "—",
-      type: ev.type,
-      amountUsd: ev.amount.toFixed(2),
-      paidUsd: ev.type === "CREDIT_APPLIED" ? "0.00" : ev.amount.toFixed(2),
-      paidIls,
-      balanceUsd: balance.toFixed(2),
-      document: ev.document,
-    };
-  });
-
-  return {
-    rows,
-    totalChargesUsd: totalCharges.toFixed(2),
-    totalPaymentsUsd: totalPayments.toFixed(2),
-    balanceUsd: balance.toFixed(2),
-  };
-}
-
-function endOfLocalDaySafe(ymd: string): Date {
-  const [y, m, d] = ymd.split("-").map((x) => Number(x));
-  return new Date(y, m - 1, d, 23, 59, 59, 999);
+  const { buildCustomerAccountLedger } = await import("@/lib/customer-account-ledger");
+  return buildCustomerAccountLedger(params);
 }
 
 export async function previewOrderNumberAction(weekCode: string): Promise<string> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["create_orders"])) return "";
-  const { orderNumber } = await generateNextOrderNumber(weekCode);
-  return orderNumber;
+  const { nextOrderNumber } = await previewNextOrderNumberForWeek(weekCode);
+  return nextOrderNumber;
 }
 
 /** מקומות קליטת הזמנה (IntakeLocation) לטופס הזמנה */
@@ -1489,80 +1151,134 @@ export async function captureOrderAction(form: {
   /** טיוטת שמות מהטופס — עדכון nameAr/nameEn בלקוח רק כשהשדה ריק במסד */
   draftNameAr?: string | null;
   draftNameEn?: string | null;
-}): Promise<CaptureState> {
-  return withPerfTimer("orders.capture.create", () => captureOrderActionInner(form));
+} & CaptureOrderFormExtras): Promise<CaptureState> {
+  return captureOrderActionInner(form, null);
 }
 
-async function captureOrderActionInner(form: Parameters<typeof captureOrderAction>[0]): Promise<CaptureState> {
-  const me = await requireAuth();
+export async function captureOrderActionForApi(
+  form: Parameters<typeof captureOrderAction>[0],
+  session: SessionPayload,
+): Promise<CaptureState> {
+  return captureOrderActionInner(form, session);
+}
+
+async function captureOrderActionInner(
+  form: Parameters<typeof captureOrderAction>[0],
+  apiSession: SessionPayload | null,
+): Promise<CaptureState> {
+  const perf = new CaptureSavePerf();
+  const cacheT0 = Date.now();
+  warmCaptureHotPathCaches();
+  perf.cacheRefreshMs = Date.now() - cacheT0;
+
+  let me;
+  if (apiSession) {
+    me = appUserFromSessionPayload(apiSession);
+  } else {
+    const u = await perf.time("authMs", () => getCurrentUser());
+    if (!u) return { ok: false, error: "לא מחובר" };
+    me = u;
+  }
+
+  const validationT0 = Date.now();
+  capturePerfTimeStart("capture.validation");
   if (!userHasAnyPermission(me, ["create_orders"])) {
+    capturePerfTimeEnd("capture.validation");
+    perf.validateInputMs = Date.now() - validationT0;
     return { ok: false, error: "אין הרשאה" };
   }
 
   if (!form.customerId?.trim()) {
+    capturePerfTimeEnd("capture.validation");
+    perf.validateInputMs = Date.now() - validationT0;
     return { ok: false, error: "יש לבחור לקוח" };
   }
 
   if (!PAYMENT_METHODS.has(form.paymentMethod)) {
+    capturePerfTimeEnd("capture.validation");
+    perf.validateInputMs = Date.now() - validationT0;
     return { ok: false, error: "אמצעי תשלום לא תקין" };
   }
 
   const status = form.status?.trim() ?? "";
-  const allowed = await activeOrderStatusIdSet();
+  const allowed = getActiveOrderStatusIdsSync();
   if (!status || !allowed.has(status)) {
+    capturePerfTimeEnd("capture.validation");
+    perf.validateInputMs = Date.now() - validationT0;
     return { ok: false, error: "סטטוס הזמנה לא תקין" };
   }
 
   const orderDateYmdEarly = (form.orderExecutionDateYmd ?? form.orderDateYmd ?? "").trim();
   if (!orderDateYmdEarly || !isValidYmd(orderDateYmdEarly)) {
+    capturePerfTimeEnd("capture.validation");
+    perf.validateInputMs = Date.now() - validationT0;
     return { ok: false, error: "יש להזין תאריך הזמנה תקין" };
   }
+  capturePerfTimeEnd("capture.validation");
+  perf.validateInputMs = Date.now() - validationT0;
+  void getActiveOrderStatusIdsCached();
+
   const wcEarly = deriveAhWeekCodeFromOrderDateYmd(orderDateYmdEarly) ?? DEFAULT_WEEK_CODE;
   const requestedOrderNumber = form.orderNumber?.trim() || "";
+  const ratesResult = await perf.time("exchangeRateMs", () => resolveCaptureRatesForSave(form));
+  if (!ratesResult.ok) return { ok: false, error: ratesResult.error };
+  const ratesResolved = ratesResult.rates;
 
-  // Phase 1 — every independent read + DDL ensure + order-number allocation +
-  // intake-location resolution runs in parallel (one network round-trip group).
+  const countriesFromClient = parseEnabledCountriesFromForm(form.enabledCountries);
+
   const [
-    customer,
-    settingsInitial,
+    customerResolved,
     allowedCountriesPre,
-    _geo,
     allocated,
     requestedExists,
     resolvedLoc,
-  ] = await withPerfTimer("orders.capture.create.phase1", () =>
-    Promise.all([
-      prisma.customer.findFirst({
-        where: { id: form.customerId.trim(), deletedAt: null, isActive: true },
-        select: {
-          id: true,
-          customerCode: true,
-          displayName: true,
-          customerType: true,
-          nameAr: true,
-          nameEn: true,
-          nameHe: true,
+  ] = await perf.time("phase1Ms", () =>
+    capturePerfTimed("capture.phase1", () =>
+      Promise.all([
+        loadCustomerForCapture(form.customerId, form.customerSnapshot, {
+          draftNameAr: form.draftNameAr,
+          draftNameEn: form.draftNameEn,
+        }),
+        countriesFromClient
+          ? Promise.resolve(countriesFromClient)
+          : loadCaptureSettingsCountries(),
+        requestedOrderNumber && requestedOrderNumber !== "—"
+          ? Promise.resolve(null)
+          : capturePerfTimed("capture.generateOrderNumber", () => generateNextOrderNumber(wcEarly)),
+        requestedOrderNumber && requestedOrderNumber !== "—"
+          ? prisma.order.findUnique({
+              where: { orderNumber: requestedOrderNumber },
+              select: { id: true, isActive: true },
+            }).then((o) => (o?.isActive ? o : null))
+          : Promise.resolve(null),
+        resolveOrderIntakeLocationColumnValue({
+          fieldId: (form.paymentPointId?.trim() || form.locationId?.trim() || "") || undefined,
+          draftName: form.intakeLocationDraftName,
+        }),
+      ]),
+    ),
+  );
+  if (!customerResolved) return { ok: false, error: "לקוח לא נמצא" };
+  const customer = customerResolved.customer;
+  if (customerResolved.created) {
+    capturePerfLog({
+      customerCreatedOnOrderSave: true,
+      customerId: customer.id,
+      customerCode: customer.customerCode,
+      customerName: customer.displayName,
+    });
+    scheduleCaptureAuditInsert(() =>
+      prisma.auditLog.create({
+        data: {
+          userId: me.id,
+          actionType: "CUSTOMER_CREATED",
+          entityType: "Customer",
+          entityId: customer.id,
+          metadata: { source: "order_capture_ensure" } as Prisma.InputJsonValue,
         },
       }),
-      getCurrentFinancialSettings(),
-      getSelectedCountriesForOrdersInternal(),
-      ensureOrderGeoTables(),
-      requestedOrderNumber && requestedOrderNumber !== "—"
-        ? Promise.resolve(null)
-        : generateNextOrderNumber(wcEarly),
-      requestedOrderNumber && requestedOrderNumber !== "—"
-        ? prisma.order.findFirst({
-            where: { orderNumber: requestedOrderNumber, deletedAt: null },
-            select: { id: true },
-          })
-        : Promise.resolve(null),
-      resolveOrderIntakeLocationColumnValue({
-        fieldId: (form.paymentPointId?.trim() || form.locationId?.trim() || "") || undefined,
-        draftName: form.intakeLocationDraftName,
-      }),
-    ]),
-  );
-  if (!customer) return { ok: false, error: "לקוח לא נמצא" };
+    );
+  }
   if (!resolvedLoc.ok) return { ok: false, error: resolvedLoc.error };
 
   // Apply Ar/En name drafts only if needed — fire-and-forget; result already known locally.
@@ -1572,25 +1288,14 @@ async function captureOrderActionInner(form: Parameters<typeof captureOrderActio
     form.draftNameEn ?? "",
   );
   if (Object.keys(namePatchesCreate).length > 0) {
-    void prisma.customer
-      .update({ where: { id: customer.id }, data: namePatchesCreate })
-      .catch(() => {});
+    await perf.time("updateCustomerMs", () =>
+      prisma.customer.update({ where: { id: customer.id }, data: namePatchesCreate }).catch(() => {}),
+    );
   }
 
-  const settings = settingsInitial ?? (await ensureDefaultFinancialSettings());
-  const base = settings.baseDollarRate;
-  const fee = settings.dollarFee;
-  let finalRate = settings.finalDollarRate;
-  const rateOv = form.finalRateOverride?.trim().replace(",", ".");
-  if (rateOv) {
-    try {
-      const d = new Prisma.Decimal(rateOv);
-      if (d.lte(0)) return { ok: false, error: "שער דולר חייב להיות חיובי" };
-      finalRate = d.toDecimalPlaces(6, 4);
-    } catch {
-      return { ok: false, error: "שער דולר לא תקין" };
-    }
-  }
+  const base = ratesResolved.base;
+  const fee = ratesResolved.fee;
+  const finalRate = ratesResolved.final;
   let vatPctNum = 18;
   const rawVatPct = form.vatPercent?.trim().replace(",", ".");
   if (rawVatPct) {
@@ -1622,7 +1327,11 @@ async function captureOrderActionInner(form: Parameters<typeof captureOrderActio
   const totalUsd = deal.add(commissionUsd).toDecimalPlaces(4, 4);
   const payParse = parseOrderPaymentLines(form.paymentLines, finalRate);
   if (!payParse.ok) return payParse;
-  if (payParse.parsed.length > 0) {
+  if (isDebtWithdrawalOrderStatus(status)) {
+    if (payParse.parsed.length > 0) {
+      return { ok: false, error: "הזמנת משיכה מחוב אינה כוללת שורות תשלום — הסכום מקטין חוב בלבד" };
+    }
+  } else if (payParse.parsed.length > 0) {
     const diff = payParse.sum.sub(totalUsd).abs();
     if (diff.gt(new Prisma.Decimal("0.01"))) {
       return {
@@ -1649,6 +1358,7 @@ async function captureOrderActionInner(form: Parameters<typeof captureOrderActio
 
   let orderNumber: string;
   let oldOrderNumber: string;
+  let sequenceForPreview = 0;
 
   if (requestedOrderNumber && requestedOrderNumber !== "—") {
     const normalized = requestedOrderNumber.trim();
@@ -1658,20 +1368,21 @@ async function captureOrderActionInner(form: Parameters<typeof captureOrderActio
     if (requestedExists) return { ok: false, error: "מספר הזמנה זה כבר קיים במערכת" };
     orderNumber = normalized;
     oldOrderNumber = normalized.slice(wcEarly.length + 1);
+    const m = oldOrderNumber.match(/^\d{4}$/);
+    if (m) sequenceForPreview = parseInt(oldOrderNumber, 10);
   } else {
     if (!allocated) {
-      const fresh = await generateNextOrderNumber(weekCode);
+      const fresh = await capturePerfTimed("capture.generateOrderNumber", () =>
+        generateNextOrderNumber(weekCode),
+      );
       orderNumber = fresh.orderNumber;
       oldOrderNumber = fresh.oldOrderNumber;
+      sequenceForPreview = fresh.sequence;
     } else {
       orderNumber = allocated.orderNumber;
       oldOrderNumber = allocated.oldOrderNumber;
+      sequenceForPreview = allocated.sequence;
     }
-  }
-
-  let paymentPointConnect: { connect: { id: string } } | undefined;
-  if (resolvedLoc.paymentPointIdForPrisma) {
-    paymentPointConnect = { connect: { id: resolvedLoc.paymentPointIdForPrisma } };
   }
 
   const rawCountry = form.sourceCountry?.trim();
@@ -1686,65 +1397,103 @@ async function captureOrderActionInner(form: Parameters<typeof captureOrderActio
   }
   const sourceCountryCreate = rawCountry as OrderCountryCode;
 
-  const order = await withPerfTimer("orders.capture.create.orderInsert", () =>
-    prisma.order.create({
-      data: {
-        orderNumber,
-        oldOrderNumber,
-        customer: { connect: { id: customer.id } },
-        customerCodeSnapshot: customer.customerCode,
-        customerNameSnapshot: customer.displayName,
-        customerTypeSnapshot: typeSnap,
-        weekCode,
-        sourceCountry: sourceCountryCreate,
-        orderDate,
-        orderExecutionDate,
-        intakeDateTime,
-        status,
-        paymentMethod: form.paymentMethod as PaymentMethod,
-        ...(paymentPointConnect ? { paymentPoint: paymentPointConnect } : {}),
-        amountUsd: deal,
-        commissionUsd,
-        totalUsd,
-        exchangeRate: finalRate,
-        vatRate,
-        amountWithoutVat: totals.totalIlsWithoutVat,
-        snapshotBaseDollarRate: totals.snapshotBaseDollarRate,
-        snapshotDollarFee: totals.snapshotDollarFee,
-        snapshotFinalDollarRate: totals.snapshotFinalDollarRate,
-        totalIlsWithVat: totals.totalIlsWithVat,
-        totalIlsWithoutVat: totals.totalIlsWithoutVat,
-        vatAmount: totals.vatAmount,
-        totalIls: totals.totalIlsWithVat,
-        amountIls: dealIlsGross,
-        commissionIls: commissionIlsGross,
-        notes: form.notes?.trim() || null,
-        locationId: resolvedLoc.locationId ?? null,
-        createdBy: { connect: { id: me.id } },
-      },
+  capturePerfTimeStart("capture.insertOrder");
+  const order = await capturePerfTimed("capture.insertOrderRow", () =>
+    prisma.$transaction(async (tx) => {
+      const tOrder = Date.now();
+      const created = await tx.order.create({
+        data: {
+          orderNumber,
+          oldOrderNumber,
+          customerId: customer.id,
+          customerCodeSnapshot: customer.customerCode,
+          customerNameSnapshot: customer.displayName,
+          customerTypeSnapshot: typeSnap,
+          weekCode,
+          sourceCountry: sourceCountryCreate,
+          orderDate,
+          orderExecutionDate,
+          intakeDateTime,
+          status,
+          paymentMethod: form.paymentMethod as PaymentMethod,
+          paymentPointId: resolvedLoc.paymentPointIdForPrisma,
+          amountUsd: deal,
+          commissionUsd,
+          totalUsd,
+          exchangeRate: finalRate,
+          vatRate,
+          amountWithoutVat: totals.totalIlsWithoutVat,
+          snapshotBaseDollarRate: totals.snapshotBaseDollarRate,
+          snapshotDollarFee: totals.snapshotDollarFee,
+          snapshotFinalDollarRate: totals.snapshotFinalDollarRate,
+          totalIlsWithVat: totals.totalIlsWithVat,
+          totalIlsWithoutVat: totals.totalIlsWithoutVat,
+          vatAmount: totals.vatAmount,
+          totalIls: totals.totalIlsWithVat,
+          amountIls: dealIlsGross,
+          commissionIls: commissionIlsGross,
+          notes: form.notes?.trim() || null,
+          locationId: resolvedLoc.locationId ?? null,
+          createdById: me.id,
+        },
+        select: { id: true, orderNumber: true },
+      });
+      perf.add("createOrderMs", Date.now() - tOrder);
+
+      if (payParse.parsed.length > 0) {
+        const tItems = Date.now();
+        await capturePerfTimed("capture.insertItems", () =>
+          appendParsedPaymentsForOrder(
+            {
+              meId: me.id,
+              orderId: created.id,
+              customerId: customer.id,
+              weekCode,
+              paymentDate: orderDate,
+              parsed: payParse.parsed,
+              base,
+              fee,
+              final: finalRate,
+              vatRate,
+            },
+            tx,
+          ),
+        );
+        perf.add("createItemsMs", Date.now() - tItems);
+      }
+
+      return created;
     }),
   );
+  capturePerfTimeEnd("capture.insertOrder");
 
-  if (payParse.parsed.length > 0) {
-    await withPerfTimer("orders.capture.create.paymentsInsert", () =>
-      appendParsedPaymentsForOrder({
-        meId: me.id,
-        orderId: order.id,
-        customerId: customer.id,
-        weekCode,
-        paymentDate: orderDate,
-        parsed: payParse.parsed,
-        base,
-        fee,
-        final: finalRate,
-        vatRate,
-      }),
-    );
+  if (isDebtWithdrawalOrderStatus(status)) {
+    const dw = await applyDebtWithdrawalForOrder({
+      orderId: order.id,
+      customerId: customer.id,
+      orderTotalUsd: Number(totalUsd),
+    });
+    if (!dw.ok) return { ok: false, error: dw.error };
+    void prisma.auditLog
+      .create({
+        data: {
+          userId: me.id,
+          actionType: "ORDER_DEBT_WITHDRAWAL_APPLIED",
+          entityType: "Order",
+          entityId: order.id,
+          metadata: {
+            orderTotalUsd: Number(totalUsd),
+            withdrawnUsd: dw.debtWithdrawalUsd,
+            source: "order_capture_create",
+          } as Prisma.InputJsonValue,
+        },
+      })
+      .catch(() => {});
   }
 
-  // Audit log runs asynchronously — not part of the user-visible success path.
-  void prisma.auditLog
-    .create({
+  const auditT0 = Date.now();
+  scheduleCaptureAuditInsert(() =>
+    prisma.auditLog.create({
       data: {
         userId: me.id,
         actionType: "ORDER_CREATED",
@@ -1755,11 +1504,18 @@ async function captureOrderActionInner(form: Parameters<typeof captureOrderActio
           customerName: customer.displayName,
         } as Prisma.InputJsonValue,
       },
-    })
-    .catch(() => {});
+    }),
+  );
+  perf.auditMs = Date.now() - auditT0;
 
-  return {
-    ok: true,
+  const nextPreview =
+    !requestedOrderNumber || requestedOrderNumber === "—"
+      ? previewOrderNumberAfter({ orderNumber, sequence: sequenceForPreview })
+      : null;
+
+  capturePerfTimeStart("capture.response");
+  const out: CaptureState = await perf.time("responseSerializationMs", async () => ({
+    ok: true as const,
     saved: {
       orderId: order.id,
       orderNumber: order.orderNumber ?? "",
@@ -1770,7 +1526,12 @@ async function captureOrderActionInner(form: Parameters<typeof captureOrderActio
         amountUsd: p.amount.toFixed(2),
       })),
     },
-  };
+    orderNumber: order.orderNumber ?? orderNumber,
+    nextOrderNumberPreview: nextPreview,
+  }));
+  capturePerfTimeEnd("capture.response");
+  perf.logSummary({ mode: "create", orderId: order.id, orderNumber });
+  return out;
 }
 
 export type OrderWorkPanelPayload = {
@@ -1956,8 +1717,7 @@ export async function getOrderForWorkPanelAction(orderId: string): Promise<Order
 }
 
 async function isAllowedListStatus(status: string): Promise<boolean> {
-  const allowed = await activeOrderStatusIdSet();
-  return allowed.has(status);
+  return getActiveOrderStatusIdsSync().has(status);
 }
 
 /**
@@ -1969,22 +1729,53 @@ async function computeAvailableCustomerCreditUsd(
   customerId: string,
   excludeOrderDebtWithdrawalUsd: number,
 ): Promise<number> {
-  const [orderAgg, payAgg] = await Promise.all([
+  const [regularOrderAgg, withdrawalAgg, payAgg] = await Promise.all([
     prisma.order.aggregate({
-      where: { customerId, deletedAt: null },
+      where: { customerId, deletedAt: null, status: { not: OS.DEBT_WITHDRAWAL } },
       _sum: { totalUsd: true },
+    }),
+    prisma.order.aggregate({
+      where: { customerId, deletedAt: null, status: OS.DEBT_WITHDRAWAL },
+      _sum: { debtWithdrawalUsd: true },
     }),
     prisma.payment.aggregate({
       where: { customerId, isPaid: true },
       _sum: { amountUsd: true },
     }),
   ]);
-  const orders = Number(orderAgg._sum.totalUsd ?? 0);
+  const regularOrders = Number(regularOrderAgg._sum.totalUsd ?? 0);
+  const withdrawals = Number(withdrawalAgg._sum.debtWithdrawalUsd ?? 0);
   const payments = Number(payAgg._sum.amountUsd ?? 0);
-  // creditAvailable = payments - orders + (debt already applied to *this* order)
-  // — כך שאם ההזמנה כבר התקזזה חלקית, אנחנו לא סופרים את אותה משיכה פעמיים.
-  const credit = payments - orders + Math.max(0, excludeOrderDebtWithdrawalUsd);
+  const credit =
+    payments - regularOrders + withdrawals + Math.max(0, excludeOrderDebtWithdrawalUsd);
   return Math.max(0, credit);
+}
+
+async function applyDebtWithdrawalForOrder(params: {
+  orderId: string;
+  customerId: string;
+  orderTotalUsd: number;
+  alreadyAppliedUsd?: number;
+}): Promise<{ ok: true; debtWithdrawalUsd: number } | { ok: false; error: string }> {
+  const { orderId, customerId, orderTotalUsd } = params;
+  if (!(orderTotalUsd > 0)) {
+    return { ok: false, error: "אי אפשר למשוך מהחוב — סכום ההזמנה לא תקין" };
+  }
+  const alreadyApplied = Math.max(0, params.alreadyAppliedUsd ?? 0);
+  const availableCredit = await computeAvailableCustomerCreditUsd(customerId, alreadyApplied);
+  const toWithdraw = Math.min(orderTotalUsd, availableCredit);
+  if (!(toWithdraw > 0)) {
+    return {
+      ok: false,
+      error: "אין יתרת זכות פתוחה ללקוח — לא ניתן לבצע משיכה מחוב",
+    };
+  }
+  const toWithdrawDec = new Prisma.Decimal(toWithdraw.toFixed(4));
+  await prisma.order.update({
+    where: { id: orderId },
+    data: { status: OS.DEBT_WITHDRAWAL, debtWithdrawalUsd: toWithdrawDec },
+  });
+  return { ok: true, debtWithdrawalUsd: toWithdraw };
 }
 
 export async function updateOrderListStatusAction(
@@ -2037,21 +1828,14 @@ export async function updateOrderListStatusAction(
       return { ok: false, error: "אי אפשר למשוך מהחוב — להזמנה אין לקוח משויך" };
     }
     const orderTotal = Number(exists.totalUsd ?? 0);
-    if (!(orderTotal > 0)) {
-      return { ok: false, error: "אי אפשר למשוך מהחוב — סכום ההזמנה לא תקין" };
-    }
     const alreadyApplied = Number(exists.debtWithdrawalUsd ?? 0);
-    const availableCredit = await computeAvailableCustomerCreditUsd(
-      exists.customerId,
-      alreadyApplied,
-    );
-    const toWithdraw = Math.min(orderTotal, availableCredit);
-    const toWithdrawDec = new Prisma.Decimal(toWithdraw.toFixed(4));
-
-    await prisma.order.update({
-      where: { id },
-      data: { status, debtWithdrawalUsd: toWithdrawDec },
+    const dw = await applyDebtWithdrawalForOrder({
+      orderId: id,
+      customerId: exists.customerId,
+      orderTotalUsd: orderTotal,
+      alreadyAppliedUsd: alreadyApplied,
     });
+    if (!dw.ok) return dw;
 
     void prisma.auditLog
       .create({
@@ -2062,15 +1846,17 @@ export async function updateOrderListStatusAction(
           entityId: id,
           metadata: {
             orderTotalUsd: orderTotal,
-            availableCreditUsd: availableCredit,
-            withdrawnUsd: toWithdraw,
-            remainingPayableUsd: Math.max(0, orderTotal - toWithdraw),
+            withdrawnUsd: dw.debtWithdrawalUsd,
+            source: "orders_list_status",
           } as Prisma.InputJsonValue,
         },
       })
       .catch(() => {});
 
-    return { ok: true, debtWithdrawalUsd: toWithdraw };
+    revalidatePath("/admin");
+    revalidatePath("/admin/orders");
+    revalidatePath(`/admin/orders/${id}`);
+    return { ok: true, debtWithdrawalUsd: dw.debtWithdrawalUsd };
   }
 
   /**
@@ -2165,6 +1951,7 @@ export async function updateOrderListPaymentLocationAction(
 export async function updateOrderWorkPanelAction(form: {
   orderId: string;
   weekCode: string;
+  finalRateOverride?: string | null;
   orderExecutionDateYmd?: string;
   intakeDateYmd?: string;
   intakeTimeHm?: string;
@@ -2185,82 +1972,114 @@ export async function updateOrderWorkPanelAction(form: {
   sourceCountry?: OrderCountryCode | string | null;
   draftNameAr?: string | null;
   draftNameEn?: string | null;
-}): Promise<CaptureState> {
-  return withPerfTimer("orders.capture.update", () => updateOrderWorkPanelActionInner(form));
+} & CaptureOrderFormExtras): Promise<CaptureState> {
+  return updateOrderWorkPanelActionInner(form, null);
+}
+
+export async function updateOrderWorkPanelActionForApi(
+  form: Parameters<typeof updateOrderWorkPanelAction>[0],
+  session: SessionPayload,
+): Promise<CaptureState> {
+  return updateOrderWorkPanelActionInner(form, session);
 }
 
 async function updateOrderWorkPanelActionInner(
   form: Parameters<typeof updateOrderWorkPanelAction>[0],
+  apiSession: SessionPayload | null,
 ): Promise<CaptureState> {
-  const me = await requireAuth();
+  const perf = new CaptureSavePerf();
+  const cacheT0 = Date.now();
+  warmCaptureHotPathCaches();
+  perf.cacheRefreshMs = Date.now() - cacheT0;
+
+  let me;
+  if (apiSession) {
+    me = appUserFromSessionPayload(apiSession);
+  } else {
+    const u = await perf.time("authMs", () => getCurrentUser());
+    if (!u) return { ok: false, error: "לא מחובר" };
+    me = u;
+  }
+
+  const validationT0 = Date.now();
+  capturePerfTimeStart("capture.validation");
   if (!userHasAnyPermission(me, ["edit_orders"])) {
+    capturePerfTimeEnd("capture.validation");
+    perf.validateInputMs = Date.now() - validationT0;
     return { ok: false, error: "אין הרשאה" };
   }
 
   if (!form.customerId?.trim()) {
+    capturePerfTimeEnd("capture.validation");
+    perf.validateInputMs = Date.now() - validationT0;
     return { ok: false, error: "יש לבחור לקוח" };
   }
 
   if (!PAYMENT_METHODS.has(form.paymentMethod)) {
+    capturePerfTimeEnd("capture.validation");
+    perf.validateInputMs = Date.now() - validationT0;
     return { ok: false, error: "אמצעי תשלום לא תקין" };
   }
 
   const status = form.status?.trim() ?? "";
-  const allowed = await activeOrderStatusIdSet();
+  const allowed = getActiveOrderStatusIdsSync();
   if (!status || !allowed.has(status)) {
+    capturePerfTimeEnd("capture.validation");
+    perf.validateInputMs = Date.now() - validationT0;
     return { ok: false, error: "סטטוס הזמנה לא תקין" };
   }
+  capturePerfTimeEnd("capture.validation");
+  perf.validateInputMs = Date.now() - validationT0;
+  void getActiveOrderStatusIdsCached();
 
-  // Phase 1 — all independent reads + DDL + intake-location lookup in parallel.
+  const ratesResultUp = await perf.time("exchangeRateMs", () => resolveCaptureRatesForSave(form));
+  if (!ratesResultUp.ok) return { ok: false, error: ratesResultUp.error };
+  const ratesResolved = ratesResultUp.rates;
+
+  const countriesFromClient = parseEnabledCountriesFromForm(form.enabledCountries);
+
   const [
     existing,
     paidAgg,
-    customer,
-    settingsInitial,
+    customerResolved,
     allowedCountriesPre,
-    _geo,
     resolvedUp,
-  ] = await withPerfTimer("orders.capture.update.phase1", () =>
-    Promise.all([
-      prisma.order.findFirst({
-        where: { id: form.orderId.trim(), deletedAt: null },
-        select: {
-          id: true,
-          orderNumber: true,
-          weekCode: true,
-          sourceCountry: true,
-          status: true,
-          editUnlockedForUserId: true,
-          editUnlockedUntil: true,
-        },
-      }),
-      prisma.payment.aggregate({
-        where: { orderId: form.orderId.trim(), amountUsd: { not: null } },
-        _sum: { amountUsd: true },
-      }),
-      prisma.customer.findFirst({
-        where: { id: form.customerId.trim(), deletedAt: null, isActive: true },
-        select: {
-          id: true,
-          customerCode: true,
-          displayName: true,
-          customerType: true,
-          nameAr: true,
-          nameEn: true,
-          nameHe: true,
-        },
-      }),
-      getCurrentFinancialSettings(),
-      getSelectedCountriesForOrdersInternal(),
-      ensureOrderGeoTables(),
-      resolveOrderIntakeLocationColumnValue({
-        fieldId: (form.paymentPointId?.trim() || form.locationId?.trim() || "") || undefined,
-        draftName: form.intakeLocationDraftName,
-      }),
-    ]),
+  ] = await perf.time("phase1Ms", () =>
+    capturePerfTimed("capture.phase1", () =>
+      Promise.all([
+        prisma.order.findFirst({
+          where: { id: form.orderId.trim(), isActive: true },
+          select: {
+            id: true,
+            orderNumber: true,
+            weekCode: true,
+            sourceCountry: true,
+            status: true,
+            editUnlockedForUserId: true,
+            editUnlockedUntil: true,
+          },
+        }),
+        prisma.payment.aggregate({
+          where: { orderId: form.orderId.trim(), amountUsd: { not: null } },
+          _sum: { amountUsd: true },
+        }),
+        loadCustomerForCapture(form.customerId, form.customerSnapshot, {
+          draftNameAr: form.draftNameAr,
+          draftNameEn: form.draftNameEn,
+        }),
+        countriesFromClient
+          ? Promise.resolve(countriesFromClient)
+          : loadCaptureSettingsCountries(),
+        resolveOrderIntakeLocationColumnValue({
+          fieldId: (form.paymentPointId?.trim() || form.locationId?.trim() || "") || undefined,
+          draftName: form.intakeLocationDraftName,
+        }),
+      ]),
+    ),
   );
   if (!existing) return { ok: false, error: "הזמנה לא נמצאה" };
-  if (!customer) return { ok: false, error: "לקוח לא נמצא" };
+  if (!customerResolved) return { ok: false, error: "לקוח לא נמצא" };
+  const customer = customerResolved.customer;
 
   // Edit-gate check — compute locally; only issue the "clear expired unlock" write
   // when the unlock is actually expired (avoids an unconditional updateMany round-trip).
@@ -2289,15 +2108,14 @@ async function updateOrderWorkPanelActionInner(
     form.draftNameEn ?? "",
   );
   if (Object.keys(namePatches).length > 0) {
-    void prisma.customer
-      .update({ where: { id: customer.id }, data: namePatches })
-      .catch(() => {});
+    await perf.time("updateCustomerMs", () =>
+      prisma.customer.update({ where: { id: customer.id }, data: namePatches }).catch(() => {}),
+    );
   }
 
-  const settings = settingsInitial ?? (await ensureDefaultFinancialSettings());
-  const base = settings.baseDollarRate;
-  const fee = settings.dollarFee;
-  const final = settings.finalDollarRate;
+  const base = ratesResolved.base;
+  const fee = ratesResolved.fee;
+  const final = ratesResolved.final;
   const vatRate = prismaVatRatePercent();
 
   let deal: Prisma.Decimal;
@@ -2323,7 +2141,11 @@ async function updateOrderWorkPanelActionInner(
   const totalUsd = deal.add(commissionUsd).toDecimalPlaces(4, 4);
   const payParse = parseOrderPaymentLines(form.paymentLines, final);
   if (!payParse.ok) return payParse;
-  if (payParse.parsed.length > 0) {
+  if (isDebtWithdrawalOrderStatus(status)) {
+    if (payParse.parsed.length > 0) {
+      return { ok: false, error: "הזמנת משיכה מחוב אינה כוללת שורות תשלום — הסכום מקטין חוב בלבד" };
+    }
+  } else if (payParse.parsed.length > 0) {
     const combined = existingPaidUsd.add(payParse.sum);
     if (combined.gt(totalUsd)) {
       return { ok: false, error: "סכום התשלומים (קיים + חדש) חורג מסה״כ ההזמנה בדולר" };
@@ -2363,64 +2185,115 @@ async function updateOrderWorkPanelActionInner(
   }
   const sourceCountryUpdate = requestedCode;
 
-  await withPerfTimer("orders.capture.update.orderUpdate", () =>
-    prisma.order.update({
-      where: { id: existing.id },
-      data: {
-        customerId: customer.id,
-        customerCodeSnapshot: customer.customerCode,
-        customerNameSnapshot: customer.displayName,
-        customerTypeSnapshot: typeSnap,
-        weekCode,
-        sourceCountry: sourceCountryUpdate,
-        orderDate,
-        orderExecutionDate,
-        intakeDateTime,
-        status,
-        paymentMethod: form.paymentMethod as PaymentMethod,
-        paymentPointId: paymentPointIdUpdate,
-        amountUsd: deal,
-        commissionUsd,
-        totalUsd,
-        exchangeRate: final,
-        vatRate,
-        amountWithoutVat: totals.totalIlsWithoutVat,
-        snapshotBaseDollarRate: totals.snapshotBaseDollarRate,
-        snapshotDollarFee: totals.snapshotDollarFee,
-        snapshotFinalDollarRate: totals.snapshotFinalDollarRate,
-        totalIlsWithVat: totals.totalIlsWithVat,
-        totalIlsWithoutVat: totals.totalIlsWithoutVat,
-        vatAmount: totals.vatAmount,
-        totalIls: totals.totalIlsWithVat,
-        amountIls: dealIlsGross,
-        commissionIls: commissionIlsGross,
-        notes: form.notes?.trim() || null,
-        locationId: resolvedUp.locationId ?? null,
-      },
+  capturePerfTimeStart("capture.insertOrder");
+  await capturePerfTimed("capture.insertOrderRow", () =>
+    prisma.$transaction(async (tx) => {
+      const tOrder = Date.now();
+      await tx.order.update({
+        where: { id: existing.id },
+        data: {
+          customerId: customer.id,
+          customerCodeSnapshot: customer.customerCode,
+          customerNameSnapshot: customer.displayName,
+          customerTypeSnapshot: typeSnap,
+          weekCode,
+          sourceCountry: sourceCountryUpdate,
+          orderDate,
+          orderExecutionDate,
+          intakeDateTime,
+          status,
+          paymentMethod: form.paymentMethod as PaymentMethod,
+          paymentPointId: paymentPointIdUpdate,
+          amountUsd: deal,
+          commissionUsd,
+          totalUsd,
+          exchangeRate: final,
+          vatRate,
+          amountWithoutVat: totals.totalIlsWithoutVat,
+          snapshotBaseDollarRate: totals.snapshotBaseDollarRate,
+          snapshotDollarFee: totals.snapshotDollarFee,
+          snapshotFinalDollarRate: totals.snapshotFinalDollarRate,
+          totalIlsWithVat: totals.totalIlsWithVat,
+          totalIlsWithoutVat: totals.totalIlsWithoutVat,
+          vatAmount: totals.vatAmount,
+          totalIls: totals.totalIlsWithVat,
+          amountIls: dealIlsGross,
+          commissionIls: commissionIlsGross,
+          notes: form.notes?.trim() || null,
+          locationId: resolvedUp.locationId ?? null,
+        },
+        select: { id: true },
+      });
+      perf.add("createOrderMs", Date.now() - tOrder);
+
+      if (payParse.parsed.length > 0) {
+        const tItems = Date.now();
+        await capturePerfTimed("capture.insertItems", () =>
+          appendParsedPaymentsForOrder(
+            {
+              meId: me.id,
+              orderId: existing.id,
+              customerId: customer.id,
+              weekCode,
+              paymentDate: orderDate,
+              parsed: payParse.parsed,
+              base,
+              fee,
+              final,
+              vatRate,
+            },
+            tx,
+          ),
+        );
+        perf.add("createItemsMs", Date.now() - tItems);
+      }
     }),
   );
+  capturePerfTimeEnd("capture.insertOrder");
 
-  if (payParse.parsed.length > 0) {
-    await withPerfTimer("orders.capture.update.paymentsInsert", () =>
-      appendParsedPaymentsForOrder({
-        meId: me.id,
-        orderId: existing.id,
-        customerId: customer.id,
-        weekCode,
-        paymentDate: orderDate,
-        parsed: payParse.parsed,
-        base,
-        fee,
-        final,
-        vatRate,
-      }),
-    );
+  if (isDebtWithdrawalOrderStatus(status)) {
+    const dw = await applyDebtWithdrawalForOrder({
+      orderId: existing.id,
+      customerId: customer.id,
+      orderTotalUsd: Number(totalUsd),
+      alreadyAppliedUsd: Number(
+        (
+          await prisma.order.findFirst({
+            where: { id: existing.id },
+            select: { debtWithdrawalUsd: true },
+          })
+        )?.debtWithdrawalUsd ?? 0,
+      ),
+    });
+    if (!dw.ok) return { ok: false, error: dw.error };
+    void prisma.auditLog
+      .create({
+        data: {
+          userId: me.id,
+          actionType: "ORDER_DEBT_WITHDRAWAL_APPLIED",
+          entityType: "Order",
+          entityId: existing.id,
+          metadata: {
+            orderTotalUsd: Number(totalUsd),
+            withdrawnUsd: dw.debtWithdrawalUsd,
+            source: "order_capture_update",
+          } as Prisma.InputJsonValue,
+        },
+      })
+      .catch(() => {});
+  } else if (
+    isDebtWithdrawalOrderStatus(existing.status) &&
+    !isDebtWithdrawalOrderStatus(status)
+  ) {
+    await prisma.order.update({
+      where: { id: existing.id },
+      data: { debtWithdrawalUsd: null },
+    });
   }
 
-  // Audit log + edit-request bookkeeping run asynchronously after we return —
-  // they are not part of the user-visible success path and don't change the response.
-  void prisma.auditLog
-    .create({
+  const auditT0 = Date.now();
+  scheduleCaptureAuditInsert(() =>
+    prisma.auditLog.create({
       data: {
         userId: me.id,
         actionType: "ORDER_UPDATED",
@@ -2431,9 +2304,17 @@ async function updateOrderWorkPanelActionInner(
           customerName: customer.displayName,
         } as Prisma.InputJsonValue,
       },
-    })
-    .catch(() => {});
+    }),
+  );
+  perf.auditMs = Date.now() - auditT0;
   void markApprovedEditRequestUsedAndClearUnlock(existing.id, me.id).catch(() => {});
 
-  return { ok: true, orderNumber: existing.orderNumber ?? "" };
+  capturePerfTimeStart("capture.response");
+  const out: CaptureState = await perf.time("responseSerializationMs", async () => ({
+    ok: true as const,
+    orderNumber: existing.orderNumber ?? "",
+  }));
+  capturePerfTimeEnd("capture.response");
+  perf.logSummary({ mode: "update", orderId: existing.id, orderNumber: existing.orderNumber });
+  return out;
 }

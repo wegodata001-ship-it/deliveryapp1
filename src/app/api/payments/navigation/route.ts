@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSessionPayload } from "@/lib/admin-auth";
+import { loadPaymentEntryPayload } from "@/lib/payment-entry-payload";
 import { resolvePaymentNavigation } from "@/lib/payment-navigation";
 import { perfError, withPerfTimer } from "@/lib/perf-log";
 
@@ -16,6 +17,7 @@ export async function GET(req: Request) {
       const { searchParams } = new URL(req.url);
       const currentPaymentCode = (searchParams.get("currentPaymentCode") ?? "").trim();
       const directionRaw = (searchParams.get("direction") ?? "").trim().toLowerCase();
+      const includeEntry = searchParams.get("includeEntry") === "1";
 
       if (!currentPaymentCode) {
         return NextResponse.json({ success: false, error: "Missing currentPaymentCode" }, { status: 400 });
@@ -33,11 +35,14 @@ export async function GET(req: Request) {
         return NextResponse.json(result);
       }
 
+      const entry = includeEntry ? await loadPaymentEntryPayload(result.paymentId) : null;
+
       return NextResponse.json({
         success: true as const,
         paymentId: result.paymentId,
         paymentCode: result.paymentCode,
         paymentNumber: result.paymentNumber,
+        ...(entry ? { entry } : {}),
       });
     } catch (error) {
       perfError("api.payments.navigation.GET.failed", error);

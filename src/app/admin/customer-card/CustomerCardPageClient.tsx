@@ -4,7 +4,10 @@ import dynamic from "next/dynamic";
 import type { CustomerCardSnapshot } from "@/app/admin/capture/actions";
 
 const CustomerCardWindowBody = dynamic(
-  () => import("@/components/admin/AdminWindowBodies").then((m) => ({ default: m.CustomerCardWindowBody })),
+  () =>
+    import("@/components/admin/AdminWindowBodies").then((m) => ({
+      default: m.CustomerCardWindowBody,
+    })),
   {
     loading: () => (
       <div className="adm-customer-card-page" aria-busy="true">

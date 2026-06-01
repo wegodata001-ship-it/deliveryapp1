@@ -14,6 +14,11 @@ import {
   type OrderPhaseUi,
 } from "@/lib/customer-balance-order-status";
 import { computeSignedFromTotals } from "@/lib/customer-balance";
+import {
+  isDebtWithdrawalOrderStatus,
+  orderCustomerChargeUsd,
+  orderCustomerCreditUsd,
+} from "@/lib/debt-withdrawal-order";
 
 export type CustomerBalanceStatus = "NOT_PAID" | "PARTIAL" | "PAID" | "PROBLEM" | "PAUSED";
 
@@ -21,7 +26,15 @@ export type CustomerBalanceStatus = "NOT_PAID" | "PARTIAL" | "PAID" | "PROBLEM" 
 export type CustomerBalanceOrderPhaseFilter = "ALL" | OrderPhaseUi;
 
 /** סינון לפי מצב יתרה (חישוב), לא לפי סטטוס גבייה */
-export type CustomerBalanceDebtFilter = "ALL" | "OWES" | "CREDIT" | "PAID_FULL" | "PARTIAL" | "NOT_PAID" | "LOW_BALANCE";
+export type CustomerBalanceDebtFilter =
+  | "ALL"
+  | "OWES"
+  | "CREDIT"
+  | "BALANCED"
+  | "PAID_FULL"
+  | "PARTIAL"
+  | "NOT_PAID"
+  | "LOW_BALANCE";
 
 /** סטטוס תשלום לתצוגה (עמודת סטטוס + ייצוא) */
 export type CustomerBalancePaymentFlow = "PAID" | "PARTIAL" | "NOT_PAID" | "LOW_DEBT";
@@ -127,7 +140,10 @@ export type CustomerBalancesPayload = {
   stats: {
     totalDebtIls: string;
     totalCreditIls: string;
+    /** סה״כ תשלומים (ש״ח) בקבוצה המסוננת */
+    totalPaymentsIls: string;
     withDebtCount: number;
+    withCreditCount: number;
     noDebtCount: number;
     partialCount: number;
     notPaidCount: number;
@@ -149,6 +165,7 @@ const DEBT_FILTER_VALUES = new Set<CustomerBalanceDebtFilter>([
   "ALL",
   "OWES",
   "CREDIT",
+  "BALANCED",
   "PAID_FULL",
   "PARTIAL",
   "NOT_PAID",
@@ -347,13 +364,20 @@ function rowOrdersTotalNumber(totalOrdersILS: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function rowPaymentsTotalNumber(totalPaymentsILS: string): number {
+  const n = Number(totalPaymentsILS.replace(",", "."));
+  return Number.isFinite(n) ? n : 0;
+}
+
 function matchesDebtFilter(row: CustomerBalanceRow, filter: CustomerBalanceDebtFilter): boolean {
   if (filter === "ALL") return true;
   const signed = rowSignedIlsNumber(row);
   const auto = row.autoStatus;
   const eps = 0.01;
-  if (filter === "OWES") return signed < -eps;
-  if (filter === "CREDIT") return signed > eps;
+  const businessBal = rowBalanceNumber(row.totalBalanceILS);
+  if (filter === "OWES") return businessBal > eps;
+  if (filter === "CREDIT") return businessBal < -eps;
+  if (filter === "BALANCED") return Math.abs(businessBal) <= eps;
   if (filter === "PAID_FULL") return auto === "PAID" && Math.abs(signed) <= eps;
   if (filter === "PARTIAL") return auto === "PARTIAL";
   if (filter === "NOT_PAID") return auto === "NOT_PAID";
@@ -439,7 +463,9 @@ function emptyBalancesPayload(limit: number): CustomerBalancesPayload {
     stats: {
       totalDebtIls: z,
       totalCreditIls: z,
+      totalPaymentsIls: z,
       withDebtCount: 0,
+      withCreditCount: 0,
       noDebtCount: 0,
       partialCount: 0,
       notPaidCount: 0,
@@ -451,31 +477,37 @@ function emptyBalancesPayload(limit: number): CustomerBalancesPayload {
 function computeBalanceStats(rows: CustomerBalanceRow[]): CustomerBalancesPayload["stats"] {
   let totalDebt = new Prisma.Decimal(0);
   let totalCredit = new Prisma.Decimal(0);
+  let totalPayments = new Prisma.Decimal(0);
   let withDebt = 0;
+  let withCredit = 0;
   let noDebt = 0;
   let partial = 0;
   let notPaid = 0;
   let highDebt = 0;
   const eps = 0.01;
   for (const r of rows) {
+    const businessBal = rowBalanceNumber(r.totalBalanceILS);
     const signed = rowSignedIlsNumber(r);
-    if (signed < -eps) {
-      totalDebt = totalDebt.add(new Prisma.Decimal(Math.abs(signed).toFixed(4)));
+    totalPayments = totalPayments.add(new Prisma.Decimal(rowPaymentsTotalNumber(r.totalPaymentsILS).toFixed(4)));
+    if (businessBal > eps) {
+      totalDebt = totalDebt.add(new Prisma.Decimal(businessBal.toFixed(4)));
       withDebt++;
-      if (Math.abs(signed) > HIGH_DEBT_ILS) highDebt++;
+      if (businessBal > HIGH_DEBT_ILS) highDebt++;
+    } else if (businessBal < -eps) {
+      totalCredit = totalCredit.add(new Prisma.Decimal(Math.abs(businessBal).toFixed(4)));
+      withCredit++;
     } else {
       noDebt++;
     }
-    if (signed > eps) {
-      totalCredit = totalCredit.add(new Prisma.Decimal(signed.toFixed(4)));
-    }
     if (r.autoStatus === "PARTIAL") partial++;
-    if (r.autoStatus === "NOT_PAID" && signed < -eps) notPaid++;
+    if (r.autoStatus === "NOT_PAID" && businessBal > eps) notPaid++;
   }
   return {
     totalDebtIls: money(totalDebt),
     totalCreditIls: money(totalCredit),
+    totalPaymentsIls: money(totalPayments),
     withDebtCount: withDebt,
+    withCreditCount: withCredit,
     noDebtCount: noDebt,
     partialCount: partial,
     notPaidCount: notPaid,
@@ -565,17 +597,24 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   const activityOrderWhere: Prisma.OrderWhereInput = lifetime
     ? { deletedAt: null, ...(orderCountryPrisma ? { sourceCountry: orderCountryPrisma } : {}) }
     : orderNestedWhere;
+  /** לקוחות חדשים (7 ימים) — גם בלי הזמנה/תשלום בתחום */
+  const recentSignupCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const customerWhereFinal: Prisma.CustomerWhereInput = scopeToActivity
     ? {
         AND: [
           customerWhere,
-          buildCustomerActivityScope(
-            activityOrderWhere,
-            paymentDateFilter,
-            lifetime ? undefined : query.weekCode?.trim(),
-            lifetime || !!cumulativeThrough,
-            orderCountryPrisma,
-          ),
+          {
+            OR: [
+              buildCustomerActivityScope(
+                activityOrderWhere,
+                paymentDateFilter,
+                lifetime ? undefined : query.weekCode?.trim(),
+                lifetime || !!cumulativeThrough,
+                orderCountryPrisma,
+              ),
+              { createdAt: { gte: recentSignupCutoff } },
+            ],
+          },
         ],
       }
     : customerWhere;
@@ -602,6 +641,8 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     customerId: true,
     orderDate: true,
     weekCode: true,
+    status: true,
+    debtWithdrawalUsd: true,
     totalIlsWithVat: true,
     totalIls: true,
     totalUsd: true,
@@ -668,19 +709,49 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   const commissionIlsByCustomer = new Map<string, Prisma.Decimal>();
   const orderCountByCustomer = new Map<string, number>();
   const expectedUsdByCustomer = new Map<string, Prisma.Decimal>();
+  const receivedIlsByCustomer = new Map<string, Prisma.Decimal>();
+  const receivedUsdByCustomer = new Map<string, Prisma.Decimal>();
   const maxAhByCustomer = new Map<string, number>();
   const lastOrderDateByCustomer = new Map<string, Date>();
 
   for (const o of orderRows) {
     const cid = o.customerId;
     if (!cid) continue;
-    const v = orderExpectedIlsValue(o);
+    const isWithdrawal = isDebtWithdrawalOrderStatus(o.status);
+    const chargeUsd = orderCustomerChargeUsd(o);
+    const creditUsd = orderCustomerCreditUsd(o);
+    const v = isWithdrawal
+      ? new Prisma.Decimal(0)
+      : orderExpectedIlsValue(o);
     expectedIlsByCustomer.set(cid, (expectedIlsByCustomer.get(cid) ?? new Prisma.Decimal(0)).add(v));
-    dealIlsByCustomer.set(cid, (dealIlsByCustomer.get(cid) ?? new Prisma.Decimal(0)).add(orderDealIlsValue(o)));
-    commissionIlsByCustomer.set(cid, (commissionIlsByCustomer.get(cid) ?? new Prisma.Decimal(0)).add(orderCommissionIlsValue(o)));
+    if (!isWithdrawal) {
+      dealIlsByCustomer.set(cid, (dealIlsByCustomer.get(cid) ?? new Prisma.Decimal(0)).add(orderDealIlsValue(o)));
+      commissionIlsByCustomer.set(
+        cid,
+        (commissionIlsByCustomer.get(cid) ?? new Prisma.Decimal(0)).add(orderCommissionIlsValue(o)),
+      );
+    }
     orderCountByCustomer.set(cid, (orderCountByCustomer.get(cid) ?? 0) + 1);
-    const usd = o.totalUsd ?? (o.amountUsd ?? new Prisma.Decimal(0)).add(o.commissionUsd ?? new Prisma.Decimal(0));
-    expectedUsdByCustomer.set(cid, (expectedUsdByCustomer.get(cid) ?? new Prisma.Decimal(0)).add(usd));
+    if (chargeUsd > 0) {
+      expectedUsdByCustomer.set(
+        cid,
+        (expectedUsdByCustomer.get(cid) ?? new Prisma.Decimal(0)).add(new Prisma.Decimal(chargeUsd.toFixed(4))),
+      );
+    }
+    if (creditUsd > 0) {
+      receivedUsdByCustomer.set(
+        cid,
+        (receivedUsdByCustomer.get(cid) ?? new Prisma.Decimal(0)).add(new Prisma.Decimal(creditUsd.toFixed(4))),
+      );
+      const rate = orderRate(o);
+      if (rate) {
+        const creditIls = new Prisma.Decimal(creditUsd).mul(rate).toDecimalPlaces(2, 4);
+        receivedIlsByCustomer.set(
+          cid,
+          (receivedIlsByCustomer.get(cid) ?? new Prisma.Decimal(0)).add(creditIls),
+        );
+      }
+    }
     const wn = ahWeekNumFromCode(o.weekCode);
     if (wn > 0) maxAhByCustomer.set(cid, Math.max(maxAhByCustomer.get(cid) ?? 0, wn));
     if (o.orderDate) {
@@ -690,8 +761,6 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     }
   }
 
-  const receivedIlsByCustomer = new Map<string, Prisma.Decimal>();
-  const receivedUsdByCustomer = new Map<string, Prisma.Decimal>();
   for (const p of paymentRows) {
     const cid = p.customerId;
     if (!cid) continue;
@@ -789,8 +858,8 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
 
   let filtered = rows.filter((r) => matchesDebtFilter(r, debtFilter));
 
-  if (minB != null) filtered = filtered.filter((r) => rowSignedIlsNumber(r) >= minB);
-  if (maxB != null) filtered = filtered.filter((r) => rowSignedIlsNumber(r) <= maxB);
+  if (minB != null) filtered = filtered.filter((r) => rowBalanceNumber(r.totalBalanceILS) >= minB);
+  if (maxB != null) filtered = filtered.filter((r) => rowBalanceNumber(r.totalBalanceILS) <= maxB);
 
   const curView = query.filters?.currencyView;
   if (curView === "ILS") {
@@ -999,4 +1068,117 @@ export async function updateCustomerBalanceNoteAction(
   `;
 
   return { ok: true };
+}
+
+export type CustomerBalancePreview = {
+  phone: string;
+  city: string;
+  ordersCount: number;
+  lastPaymentLabel: string;
+  balanceIls: string;
+};
+
+export async function getCustomerBalancePreviewAction(
+  customerId: string,
+  balanceIls: string,
+  ordersCount: number,
+): Promise<CustomerBalancePreview | null> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["view_reports"])) return null;
+
+  const id = customerId.trim();
+  if (!id) return null;
+
+  const [customer, lastPay] = await Promise.all([
+    prisma.customer.findFirst({
+      where: { id, deletedAt: null },
+      select: { phone: true, phone2: true, city: true },
+    }),
+    prisma.payment.findFirst({
+      where: { customerId: id, isPaid: true },
+      orderBy: { paymentDate: "desc" },
+      select: {
+        paymentCode: true,
+        paymentDate: true,
+        totalIlsWithVat: true,
+        amountIls: true,
+        amountUsd: true,
+        exchangeRate: true,
+      },
+    }),
+  ]);
+
+  if (!customer) return null;
+
+  const phone = [customer.phone, customer.phone2].filter(Boolean).join(" · ") || "—";
+  let lastPaymentLabel = "—";
+  if (lastPay) {
+    const amt = money(paymentIlsValue(lastPay));
+    const code = lastPay.paymentCode?.trim() || "—";
+    const dt = lastPay.paymentDate ? formatLocalYmd(lastPay.paymentDate) : "";
+    lastPaymentLabel = dt ? `${code} · ${dt} · ₪${amt}` : `${code} · ₪${amt}`;
+  }
+
+  return {
+    phone,
+    city: customer.city?.trim() || "—",
+    ordersCount,
+    lastPaymentLabel,
+    balanceIls,
+  };
+}
+
+export type CustomerBalancesExportKind = "excel" | "pdf";
+
+export async function exportCustomerBalancesAction(
+  query: CustomerBalanceQuery,
+  kind: CustomerBalancesExportKind,
+): Promise<{ ok: true; base64: string; filename: string; mime: string } | { ok: false; error: string }> {
+  try {
+    const me = await requireAuth();
+    if (!userHasAnyPermission(me, ["view_reports"])) {
+      return { ok: false, error: "אין הרשאה" };
+    }
+
+    const payload = await listCustomerBalancesAction({ ...query, page: 1, limit: 10000 });
+    if (payload.rows.length === 0) return { ok: false, error: "אין שורות לייצוא" };
+
+    const headers = ["קוד לקוח", "שם לקוח", "סה\"כ הזמנות", "סה\"כ תשלומים", "יתרה", "סטטוס"];
+    const data = payload.rows.map((r) => {
+      const b = rowBalanceNumber(r.totalBalanceILS);
+      const status = b > 0.01 ? "חייב" : b < -0.01 ? "זכות" : "מאוזן";
+      return [
+        r.customerCode ?? "—",
+        r.customerName,
+        r.totalOrdersILS,
+        r.totalPaymentsILS,
+        r.totalBalanceILS,
+        status,
+      ];
+    });
+
+    const stamp = new Date().toISOString().slice(0, 10);
+
+    if (kind === "excel") {
+      const { generateExcel } = await import("@/lib/reports-excel");
+      const buf = generateExcel(headers, data, [[`דוח יתרות לקוחות · ${stamp}`]]);
+      return {
+        ok: true,
+        base64: Buffer.from(buf).toString("base64"),
+        filename: `balances_${stamp}.xlsx`,
+        mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      };
+    }
+
+    const { buildCustomersExportHtml } = await import("@/lib/customers-source-export-pdf");
+    const html = buildCustomersExportHtml(headers, data, stamp);
+    return {
+      ok: true,
+      base64: Buffer.from(html, "utf-8").toString("base64"),
+      filename: `balances_${stamp}.html`,
+      mime: "text/html; charset=utf-8",
+    };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "ייצוא נכשל" };
+  }
 }

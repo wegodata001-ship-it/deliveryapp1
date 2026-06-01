@@ -4,10 +4,13 @@ import type { Ref } from "react";
 import {
   calculatePaymentLine,
   derivePaymentAmountSlots,
+  effectiveVatModeForLine,
   linePaymentMethod,
   normalizePaymentLine,
+  paymentMethodUsesCommissionCloaking,
   paymentSlotsToAmounts,
   roundMoney2,
+  vatModeForPaymentMethodChange,
   type PaymentAmountSlot,
   type PaymentLine,
   type PaymentLineCheck,
@@ -213,9 +216,11 @@ export function PaymentLineDualCard({
   onEnterInFirstAmount,
 }: PaymentLineDualCardProps) {
   const p = normalizePaymentLine(line);
+  const payMethod = linePaymentMethod(p);
+  const usesCloaking = paymentMethodUsesCommissionCloaking(payMethod);
+  const effectiveVatMode = effectiveVatModeForLine(p);
   const calc = calculatePaymentLine(p, rateN, DEFAULT_VAT_RATE);
   const sharedNote = lineNote(p);
-  const payMethod = linePaymentMethod(p);
   const [slot1, slot2] = derivePaymentAmountSlots(p);
 
   const applySlots = (s1: PaymentAmountSlot, s2: PaymentAmountSlot) => {
@@ -336,12 +341,24 @@ export function PaymentLineDualCard({
           מע״מ
           <select
             className="payment-modal-inp"
-            value={p.vatMode}
+            value={effectiveVatMode}
+            disabled={!usesCloaking}
+            title={
+              usesCloaking
+                ? "גילום עמלה — פירוק כולל מע״מ (העברה בנקאית)"
+                : "מזומן/אשראי/אחר — הסכום שהוקלד הוא הסכום הסופי"
+            }
             onChange={(e) => onUpdate({ vatMode: e.target.value as PaymentLineVatMode })}
           >
             <option value="INCLUDING_VAT">{vatModeLabel("INCLUDING_VAT")}</option>
-            <option value="BEFORE_VAT">{vatModeLabel("BEFORE_VAT")}</option>
-            <option value="EXEMPT">{vatModeLabel("EXEMPT")}</option>
+            {usesCloaking ? (
+              <>
+                <option value="BEFORE_VAT">{vatModeLabel("BEFORE_VAT")}</option>
+                <option value="EXEMPT">{vatModeLabel("EXEMPT")}</option>
+              </>
+            ) : (
+              <option value="EXEMPT">{vatModeLabel("EXEMPT")}</option>
+            )}
           </select>
         </label>
         <label className="payment-modal-lbl payment-upd-lbl">
@@ -413,22 +430,26 @@ export function PaymentLineDualCard({
                   value={`$${fmtFooterAmount(typeof p.usdAmount === "number" ? p.usdAmount : 0)}`}
                 />
               </div>
-              <div className="payment-upd-calc-row payment-upd-calc-row--tier">
-                <span>בסיס לפני מע״מ</span>
-                <AnimatedMoneyValue
-                  className="payment-upd-calc-val payment-upd-calc-val--tier"
-                  dir="ltr"
-                  value={`$${fmtFooterAmount(calc.usd.baseAmount)}`}
-                />
-              </div>
-              <div className="payment-upd-calc-row payment-upd-calc-row--tier">
-                <span>{formatVatPercentLabel()}</span>
-                <AnimatedMoneyValue
-                  className="payment-upd-calc-val payment-upd-calc-val--tier"
-                  dir="ltr"
-                  value={`$${fmtFooterAmount(calc.usd.vatAmount)}`}
-                />
-              </div>
+              {usesCloaking ? (
+                <>
+                  <div className="payment-upd-calc-row payment-upd-calc-row--tier">
+                    <span>בסיס לפני מע״מ</span>
+                    <AnimatedMoneyValue
+                      className="payment-upd-calc-val payment-upd-calc-val--tier"
+                      dir="ltr"
+                      value={`$${fmtFooterAmount(calc.usd.baseAmount)}`}
+                    />
+                  </div>
+                  <div className="payment-upd-calc-row payment-upd-calc-row--tier">
+                    <span>{formatVatPercentLabel()}</span>
+                    <AnimatedMoneyValue
+                      className="payment-upd-calc-val payment-upd-calc-val--tier"
+                      dir="ltr"
+                      value={`$${fmtFooterAmount(calc.usd.vatAmount)}`}
+                    />
+                  </div>
+                </>
+              ) : null}
             </>
           ) : null}
           {hasIls ? (
@@ -441,22 +462,26 @@ export function PaymentLineDualCard({
                   value={`₪${fmtFooterAmount(typeof p.ilsAmount === "number" ? p.ilsAmount : 0)}`}
                 />
               </div>
-              <div className="payment-upd-calc-row payment-upd-calc-row--tier">
-                <span>בסיס לפני מע״מ (שקל)</span>
-                <AnimatedMoneyValue
-                  className="payment-upd-calc-val payment-upd-calc-val--tier"
-                  dir="ltr"
-                  value={`₪${fmtFooterAmount(calc.ils.baseAmount)}`}
-                />
-              </div>
-              <div className="payment-upd-calc-row payment-upd-calc-row--tier">
-                <span>{formatVatPercentLabel()} (שקל)</span>
-                <AnimatedMoneyValue
-                  className="payment-upd-calc-val payment-upd-calc-val--tier"
-                  dir="ltr"
-                  value={`₪${fmtFooterAmount(calc.ils.vatAmount)}`}
-                />
-              </div>
+              {usesCloaking ? (
+                <>
+                  <div className="payment-upd-calc-row payment-upd-calc-row--tier">
+                    <span>בסיס לפני מע״מ (שקל)</span>
+                    <AnimatedMoneyValue
+                      className="payment-upd-calc-val payment-upd-calc-val--tier"
+                      dir="ltr"
+                      value={`₪${fmtFooterAmount(calc.ils.baseAmount)}`}
+                    />
+                  </div>
+                  <div className="payment-upd-calc-row payment-upd-calc-row--tier">
+                    <span>{formatVatPercentLabel()} (שקל)</span>
+                    <AnimatedMoneyValue
+                      className="payment-upd-calc-val payment-upd-calc-val--tier"
+                      dir="ltr"
+                      value={`₪${fmtFooterAmount(calc.ils.vatAmount)}`}
+                    />
+                  </div>
+                </>
+              ) : null}
             </>
           ) : null}
           <div

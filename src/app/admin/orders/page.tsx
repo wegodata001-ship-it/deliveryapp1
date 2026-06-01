@@ -1,6 +1,4 @@
-import { Suspense } from "react";
 import { OrdersListShell } from "@/components/admin/OrdersListShell";
-import { OrdersListToolbar } from "@/components/admin/OrdersListToolbar";
 import { isAdminUser, userHasAnyPermission } from "@/lib/admin-auth";
 import { fetchOrdersListPageData } from "@/lib/orders-list-data";
 import { requireRoutePermission } from "@/lib/route-access";
@@ -36,26 +34,28 @@ export default async function OrdersListPage({
   const canEditOrders = userHasAnyPermission(me, ["edit_orders"]);
   const canViewCustomerCard = userHasAnyPermission(me, ["view_customer_card"]);
 
-  const filters = (
-    <Suspense fallback={<div className="adm-orders-toolbar-skel" aria-hidden />}>
-      <OrdersListToolbar
-        fromYmd={range.fromYmd}
-        toYmd={range.toYmd}
-        ahWeekSelect={range.ahWeekSelect}
-        activePreset={presetParam}
-        search={readTextParam(sp, "q")}
-        statusFilter={readTextParam(sp, "status")}
-        countryFilter={readTextParam(sp, "ordersCountry")}
-        createdById={readTextParam(sp, "createdBy")}
-        createdByOptions={createdByOptions}
-        paymentType={readTextParam(sp, "paymentType")}
-        paymentLocation={readTextParam(sp, "paymentLocation")}
-        paymentLocationOptions={paymentLocationOptions}
-        amountMin={readTextParam(sp, "amountMin")}
-        amountMax={readTextParam(sp, "amountMax")}
-      />
-    </Suspense>
-  );
+  const toolbarProps = {
+    fromYmd: range.fromYmd,
+    toYmd: range.toYmd,
+    ahWeekSelect: range.ahWeekSelect,
+    activePreset: presetParam,
+    search: readTextParam(sp, "q"),
+    customerCode: readTextParam(sp, "ordersCode"),
+    customerName: readTextParam(sp, "ordersName"),
+    ordersOrderNum: readTextParam(sp, "ordersOrderNum"),
+    customerPhone: readTextParam(sp, "ordersPhone"),
+    statusFilter: readTextParam(sp, "status"),
+    countryFilter: readTextParam(sp, "ordersCountry"),
+    createdById: readTextParam(sp, "createdBy"),
+    createdByOptions,
+    paymentType: readTextParam(sp, "paymentType"),
+    paymentLocation: readTextParam(sp, "paymentLocation"),
+    paymentLocationOptions,
+    amountMin: readTextParam(sp, "amountMin"),
+    amountMax: readTextParam(sp, "amountMax"),
+    ordersOpenOnly: readTextParam(sp, "ordersOpenOnly") === "1",
+    ordersReadyOnly: readTextParam(sp, "ordersReadyOnly") === "1",
+  };
 
   return (
     <div className="adm-orders-excel-page">
@@ -69,7 +69,7 @@ export default async function OrdersListPage({
         canViewCustomerCard={canViewCustomerCard}
         dateRange={range}
         paymentLocationOptions={paymentLocationOptions}
-        filters={filters}
+        toolbarProps={toolbarProps}
       />
     </div>
   );

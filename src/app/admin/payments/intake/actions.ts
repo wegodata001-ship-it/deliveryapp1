@@ -82,7 +82,7 @@ export async function searchCustomersPaymentIntakeAction(raw: string): Promise<C
 
 export async function fetchPaymentIntakeCustomerOrdersAction(
   customerId: string,
-  /** קוד שבוע AH — יתרות פתוחות עד סוף שבוע זה (שבת) כולל שבועות קודמים; undefined = ללא סינון תאריך */
+  /** אופציונלי: סינון תאריך עד סוף שבוע AH. null = כל היסטוריית ההזמנות */
   weekCodeForOpenBalances?: string | null,
 ): Promise<{ ok: true; customer: PaymentIntakeCustomerPayload; orders: PaymentIntakeOrderRow[] } | { ok: false; error: string }> {
   const me = await requireAuth();
@@ -165,11 +165,7 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
   }
 
   /**
-   * סדר סגירת חובות בקליטת תשלום:
-   * 1. Prisma מחזיר הזמנות לפי orderDate asc (מהישן לחדש).
-   * 2. allocatePaymentAcrossOrders סוגר חובות באותו סדר כרונולוגי (ולא לפי גודל יתרה).
-   * 3. תצוגת הטבלה שומרת על אותו סדר כדי שיתאים להקצאה.
-   * 4. כל ההזמנות מוצגות — גם ששולמו במלואן (יתרה 0).
+   * כל ההזמנות של הלקוח (או עד סוף שבוע אם הועבר weekCode) — כולל שולמו במלואן וזכות.
    */
   const rowsWithRem = orders.map((o) => {
     const deal = o.amountUsd ?? new Prisma.Decimal(0);

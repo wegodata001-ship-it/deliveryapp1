@@ -78,6 +78,7 @@ const orderListSelect = {
   editUnlockedForUserId: true,
   editUnlockedUntil: true,
   paymentPoint: { select: { pointName: true } },
+  createdById: true,
   createdBy: { select: { fullName: true, username: true } },
   customer: { select: { phone: true, phone2: true } },
 } as const;
@@ -323,6 +324,7 @@ export async function fetchOrdersListPageData(
       paymentType: r.paymentMethod,
       paymentLocationId,
       paymentLocationName,
+      createdById: r.createdById,
       createdByName: r.createdBy?.fullName || r.createdBy?.username || null,
       dealAmountUsd: fmtUsd2(r.amountUsd),
       commissionAmountUsd: fmtUsd2(r.commissionUsd),

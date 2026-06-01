@@ -180,6 +180,29 @@ export function linePaymentMethod(line: PaymentLine): PaymentLineMethod {
   return p.paymentMethod ?? p.usdPaymentMethod ?? "CASH";
 }
 
+/** גילום עמלה — רק העברה בנקאית: פירוק «כולל מע״מ». שאר הצורות: הסכום שהוקלד = סופי. */
+export function paymentMethodUsesCommissionCloaking(method: PaymentLineMethod): boolean {
+  return method === "BANK_TRANSFER";
+}
+
+export function effectiveVatModeForPaymentMethod(method: PaymentLineMethod): PaymentLineVatMode {
+  return paymentMethodUsesCommissionCloaking(method) ? "INCLUDING_VAT" : "EXEMPT";
+}
+
+export function effectiveVatModeForLine(line: PaymentLine): PaymentLineVatMode {
+  const p = normalizePaymentLine(line);
+  const method = linePaymentMethod(p);
+  if (!paymentMethodUsesCommissionCloaking(method)) {
+    return "EXEMPT";
+  }
+  if (p.vatMode === "BEFORE_VAT" || p.vatMode === "INCLUDING_VAT") return p.vatMode;
+  return "INCLUDING_VAT";
+}
+
+export function vatModeForPaymentMethodChange(method: PaymentLineMethod): PaymentLineVatMode {
+  return effectiveVatModeForPaymentMethod(method);
+}
+
 export function calculateVat(amount: number | "", vatMode: PaymentLineVatMode, vatRate: number = DEFAULT_VAT_RATE): VatCalc {
   const a = typeof amount === "number" && Number.isFinite(amount) ? amount : 0;
   const r = Number.isFinite(vatRate) && vatRate >= 0 ? vatRate : DEFAULT_VAT_RATE;
@@ -221,8 +244,9 @@ function sectionCalc(
 /** חישוב שורת תשלום — דולר ושקל בנפרד, ללא המרה ביניהם */
 export function calculatePaymentLine(line: PaymentLine, _usdRate: number, vatRate: number = DEFAULT_VAT_RATE): PaymentLineCalc {
   const n = normalizePaymentLine(line);
-  const usd = sectionCalc(n.usdAmount, "USD", n.vatMode, vatRate);
-  const ils = sectionCalc(n.ilsAmount, "ILS", n.vatMode, vatRate);
+  const vatMode = effectiveVatModeForLine(n);
+  const usd = sectionCalc(n.usdAmount, "USD", vatMode, vatRate);
+  const ils = sectionCalc(n.ilsAmount, "ILS", vatMode, vatRate);
   return {
     usd,
     ils,

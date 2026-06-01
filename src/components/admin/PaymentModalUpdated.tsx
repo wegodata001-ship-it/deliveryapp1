@@ -7,9 +7,13 @@ import {
   buildAllocationsFromMatch,
   computeCustomerResetBalanceMetrics,
   matchPaymentToOrders,
+  orderLedgerBalanceUsd,
+  paymentLedgerStatus,
+  paymentLedgerStatusLabel,
   toPaymentIntakeBases,
   type PaymentIntakeMatchResult,
   type PaymentIntakeOrderRow,
+  type PaymentLedgerStatus,
 } from "@/lib/payment-intake";
 import type { PaymentOveragePreview } from "@/lib/customer-balance";
 import { fetchPaymentIntakeCustomerOrdersAction, fetchOrderPaymentHistoryAction, type OrderPaymentHistoryRow, type PaymentIntakeCustomerPayload } from "@/app/admin/payments/intake/actions";
@@ -72,6 +76,7 @@ import {
   customerSearchMinQueryLength,
   pickAutoCustomerHit,
   resolveCustomerFastClient,
+  searchCustomerCodeExactClient,
   searchCustomersFastClient,
 } from "@/lib/customer-search-client";
 
@@ -241,7 +246,13 @@ type Props = {
 type PaymentNavDirection = "prev" | "next";
 
 type PaymentNavigationResponse =
-  | { success: true; paymentId: string; paymentCode: string | null }
+  | {
+      success: true;
+      paymentId: string;
+      paymentCode: string | null;
+      paymentNumber?: number | null;
+      entry?: PaymentEntryResponse;
+    }
   | { success: false; edge: "first" | "last" };
 
 type PaymentEntryResponse = {
@@ -399,7 +410,7 @@ export function PaymentModalUpdated({
   const tableScrollRef = useRef<HTMLDivElement | null>(null);
   /** מטמון immutable לפי id — עותק עמוק בלבד, ללא שיתוף הפניות בין ניווטים */
   const entryCacheRef = useRef<Map<string, PaymentEntryResponse>>(new Map());
-  /** מטמון שכני prev/next מה-prefetch — מונע קריאה חוזרת ל-API בניווט */
+  /** מטמון תוצאת ניווט אחרונה לכל כיוון — אחרי לחיצה על חץ */
   const paymentNavNeighborsRef = useRef<Partial<Record<PaymentNavDirection, PaymentNavigationResponse>>>({});
   /** איפוס יתרה לאחר שמירת תשלום (כשיש תשלום בטופס) */
   const resetAfterSaveRef = useRef(false);
@@ -566,14 +577,9 @@ export function PaymentModalUpdated({
     return normalizeAhWeekCode(globalWeek) ?? DEFAULT_WEEK_CODE;
   }, [weekDraft, weekReadonly, globalWeek]);
 
-  const intakeWeekCutoffYmd = useMemo(() => getAhWeekRange(intakeWeekCode)?.to ?? null, [intakeWeekCode]);
-
   const intakeWeekTableHint = useMemo(() => {
-    if (!intakeWeekCutoffYmd) return null;
-    return `מציג יתרות פתוחות עד סוף שבוע ${intakeWeekCode} (${formatSlashDate(intakeWeekCutoffYmd)})`;
-  }, [intakeWeekCode, intakeWeekCutoffYmd]);
-
-  const intakeWeekRef = useRef(intakeWeekCode);
+    return "מציג את כל היסטוריית ההזמנות של הלקוח";
+  }, []);
 
   const applyWeekNumber = useCallback(
     (num: number) => {
@@ -598,7 +604,23 @@ export function PaymentModalUpdated({
     return ordersCountryBadge;
   }, [countryOverride, ordersCountryBadge]);
 
-  /** סיכום מתחת לטבלה: סך עסקאות (USD), סך ששולם בפועל (DB), יתרה */
+  /** סיכום כרטסת לקוח — יתרות פתוחות וזכות (מ-DB, חתום) */
+  const customerLedgerSummary = useMemo(() => {
+    let openTotal = 0;
+    let creditTotal = 0;
+    for (const row of matched) {
+      const bal = orderLedgerBalanceUsd(row);
+      if (bal > 0.01) openTotal += bal;
+      else if (bal < -0.01) creditTotal += Math.abs(bal);
+    }
+    return {
+      orderCount: matched.length,
+      openTotal: roundMoney2(openTotal),
+      creditTotal: roundMoney2(creditTotal),
+    };
+  }, [matched]);
+
+  /** סיכום מתחת לטבלה: סך עסקאות (USD), סך ששולם בפועל (DB), יתרה פתוחה */
   const ordersTableFooterTotals = useMemo(() => {
     let tx = 0;
     let paidSum = 0;
@@ -610,7 +632,12 @@ export function PaymentModalUpdated({
     }
     const totalTransactions = roundMoney2(tx);
     const totalPaidDb = roundMoney2(paidSum);
-    const remaining = roundMoney2(Math.max(0, totalTransactions - totalPaidDb));
+    const remaining = roundMoney2(
+      matched.reduce((sum, row) => {
+        const bal = orderLedgerBalanceUsd(row);
+        return bal > 0.01 ? sum + bal : sum;
+      }, 0),
+    );
     return { totalTransactions, totalPaidDb, remaining };
   }, [matched]);
 
@@ -675,7 +702,7 @@ export function PaymentModalUpdated({
       if (opts?.silent) setOrdersLoading(true);
       else setLoadingCustomer(true);
       setLoadErr(null);
-      const res = await fetchPaymentIntakeCustomerOrdersAction(customerId, opts?.weekCode ?? intakeWeekCode);
+      const res = await fetchPaymentIntakeCustomerOrdersAction(customerId, null);
       if (opts?.silent) setOrdersLoading(false);
       else setLoadingCustomer(false);
       if (!res.ok) {
@@ -702,7 +729,7 @@ export function PaymentModalUpdated({
       }
       return true;
     },
-    [intakeWeekCode, focusFirstAmountInput],
+    [focusFirstAmountInput],
   );
 
   /** בחירת לקוח מיידית — פוקוס לסכום בלי להמתין לטעינת הזמנות */
@@ -740,17 +767,6 @@ export function PaymentModalUpdated({
     },
     [loadCustomerOrders, focusFirstAmountInput],
   );
-
-  /** רענון הזמנות רק כשמשנים שבוע — לא בכל בחירת לקוח (מונע כפילות fetch) */
-  useEffect(() => {
-    if (!customer?.id) {
-      intakeWeekRef.current = intakeWeekCode;
-      return;
-    }
-    if (intakeWeekRef.current === intakeWeekCode) return;
-    intakeWeekRef.current = intakeWeekCode;
-    void loadCustomerOrders(customer.id, { silent: true });
-  }, [intakeWeekCode, customer?.id, loadCustomerOrders]);
 
   const pickCustHit = useCallback(
     (row: CustomerSearchRow) => {
@@ -796,6 +812,12 @@ export function PaymentModalUpdated({
       const row = await resolveCustomerFastClient(q);
       if (row) {
         selectCustomerQuick(row, { focusAmount: true });
+        return;
+      }
+      if (field === "code" && /^\d+$/.test(q)) {
+        setCustomerHits([]);
+        setCustDdOpen(false);
+        setCustSearchNoHits(true);
         return;
       }
       const rows = await searchCustomersFastClient(q);
@@ -917,12 +939,16 @@ export function PaymentModalUpdated({
 
   async function fetchPaymentNavigationNeighbor(
     direction: PaymentNavDirection,
+    opts?: { includeEntry?: boolean; skipCache?: boolean },
   ): Promise<PaymentNavigationResponse | null> {
-    const cached = paymentNavNeighborsRef.current[direction];
-    if (cached) return cached;
+    if (!opts?.skipCache) {
+      const cached = paymentNavNeighborsRef.current[direction];
+      if (cached && (!opts?.includeEntry || (cached.success && cached.entry))) return cached;
+    }
     if (!currentPaymentNavigationQuery) return null;
+    const includeEntry = opts?.includeEntry ? "&includeEntry=1" : "";
     const res = await fetch(
-      `/api/payments/navigation?${currentPaymentNavigationQuery}&direction=${direction}`,
+      `/api/payments/navigation?${currentPaymentNavigationQuery}&direction=${direction}${includeEntry}`,
     );
     if (!res.ok) return null;
     const json = (await res.json()) as PaymentNavigationResponse;
@@ -953,14 +979,23 @@ export function PaymentModalUpdated({
 
   async function executePaymentCaptureNavigation(direction: PaymentNavDirection): Promise<void> {
     if (!currentPaymentNavigationQuery) return;
-    const nav = await fetchPaymentNavigationNeighbor(direction);
+    paymentNavNeighborsRef.current = {};
+    const nav = await fetchPaymentNavigationNeighbor(direction, { includeEntry: true, skipCache: true });
     if (!nav) {
       onToast("שגיאת ניווט");
       return;
     }
     if (!nav.success) {
+      setPaymentNavAvailable((s) => ({ ...s, [direction]: false }));
       if (nav.edge === "first") onToast("זוהי הקליטה הראשונה");
       else onToast("זוהי הקליטה האחרונה");
+      return;
+    }
+    if (nav.entry) {
+      entryCacheRef.current.set(nav.entry.id, clonePaymentEntry(nav.entry));
+      clearCurrentPaymentState();
+      const ok = await applyPaymentEntry(nav.entry);
+      if (!ok) onToast("לא ניתן לטעון קליטה");
       return;
     }
     await runNavigateToPaymentId(nav.paymentId);
@@ -1128,7 +1163,10 @@ export function PaymentModalUpdated({
         setCustSearchField(field);
         setCustSearchNoHits(false);
         try {
-          const rows = await searchCustomersFastClient(q, { signal: abort.signal });
+          const rows =
+            field === "code" && /^\d+$/.test(q)
+              ? await searchCustomerCodeExactClient(q, { signal: abort.signal })
+              : await searchCustomersFastClient(q, { signal: abort.signal });
           if (cancelled || gen !== custSearchGenRef.current) return;
 
           const still = draftCustomerRef.current[lastEditedFieldRef.current].trim() === q;
@@ -1285,7 +1323,7 @@ export function PaymentModalUpdated({
   }
 
   function addLineFromOrder(row: PaymentIntakeMatchResult) {
-    const remUsd = roundMoney2(Math.max(0, row.remainingAmount));
+    const remUsd = roundMoney2(Math.max(0, orderRowLedgerBalance(row)));
     if (remUsd <= 0.01) return;
     const onum = row.orderNumber ?? row.id.slice(0, 8);
     addPaymentLine({
@@ -1462,19 +1500,24 @@ export function PaymentModalUpdated({
     setOrderEditId(orderId);
   }
 
-  function statusClass(remaining: number): string {
-    if (remaining <= 0.01) return "pm-st--paid";
-    return "pm-st--open";
+  function ledgerStatusClass(status: PaymentLedgerStatus): string {
+    if (status === "open") return "pm-st--open";
+    if (status === "credit") return "pm-st--credit";
+    return "pm-st--paid";
   }
 
-  function rowStatusClass(remaining: number): string {
-    if (remaining <= 0.01) return "payment-modal-tr--status-paid";
-    return "payment-modal-tr--status-open";
+  function ledgerRowClass(status: PaymentLedgerStatus): string {
+    if (status === "open") return "payment-modal-tr--status-open";
+    if (status === "credit") return "payment-modal-tr--status-credit";
+    return "payment-modal-tr--status-paid";
   }
 
-  function statusLabel(remaining: number): string {
-    if (remaining <= 0.01) return "שולם מלא";
-    return "פתוח";
+  function orderRowLedgerBalance(row: PaymentIntakeMatchResult): number {
+    return orderLedgerBalanceUsd(row);
+  }
+
+  function canCloseDebtForRow(row: PaymentIntakeMatchResult): boolean {
+    return orderRowLedgerBalance(row) > 0.01;
   }
 
   async function openPaymentHistory(orderId: string) {
@@ -1744,9 +1787,15 @@ export function PaymentModalUpdated({
                       ) : (
                         <>
                           {" · "}
-                          {orders.length} הזמנות פתוחות
+                          {customerLedgerSummary.orderCount} הזמנות
                           {" · "}
-                          יתרה ${fmtUsdDisplay(ordersTableFooterTotals.remaining)}
+                          יתרה פתוחה ${fmtUsdDisplay(customerLedgerSummary.openTotal)}
+                          {customerLedgerSummary.creditTotal > 0.01 ? (
+                            <>
+                              {" · "}
+                              זכות ${fmtUsdDisplay(customerLedgerSummary.creditTotal)}
+                            </>
+                          ) : null}
                         </>
                       )}
                     </span>
@@ -1888,6 +1937,22 @@ export function PaymentModalUpdated({
             </div>
 
             <div className="payment-modal-table-wrap">
+              {customer ? (
+                <div className="payment-modal-ledger-head" dir="rtl" role="status" aria-live="polite">
+                  <div className="payment-modal-ledger-head-item payment-modal-ledger-head-item--open">
+                    <span className="payment-modal-ledger-head-lbl">סה״כ יתרה פתוחה</span>
+                    <span className="payment-modal-ledger-head-val" dir="ltr">
+                      ${fmtUsdDisplay(customerLedgerSummary.openTotal)}
+                    </span>
+                  </div>
+                  <div className="payment-modal-ledger-head-item payment-modal-ledger-head-item--credit">
+                    <span className="payment-modal-ledger-head-lbl">סה״כ זכות לקוח</span>
+                    <span className="payment-modal-ledger-head-val" dir="ltr">
+                      ${fmtUsdDisplay(customerLedgerSummary.creditTotal)}
+                    </span>
+                  </div>
+                </div>
+              ) : null}
               {customer && intakeWeekTableHint ? (
                 <p className="payment-modal-intake-week-hint" dir="rtl">
                   {intakeWeekTableHint}
@@ -1897,14 +1962,13 @@ export function PaymentModalUpdated({
                 <table className="payment-modal-table" dir="rtl">
                   <thead>
                     <tr>
-                      <th className="pm-mono payment-modal-th-code">קוד תשלום</th>
                       <th className="pm-mono payment-modal-th-code">הזמנה</th>
                       <th>תאריך</th>
                       <th>שבוע</th>
                       <th className="pm-num">שער</th>
-                      <th className="pm-num pm-th-amt">סכום מקורי ($)</th>
+                      <th className="pm-num pm-th-amt">סכום מקור ($)</th>
                       <th className="pm-num">שולם ($)</th>
-                      <th className="pm-num pm-th-total">נשאר ($)</th>
+                      <th className="pm-num pm-th-total">יתרה ($)</th>
                       <th>תשלום אחרון</th>
                       <th>סטטוס</th>
                       <th className="payment-modal-th-check" aria-label="עדיפות לסגירה" />
@@ -1914,12 +1978,15 @@ export function PaymentModalUpdated({
                   <tbody>
                     {matched.length === 0 ? (
                       <tr>
-                        <td colSpan={12} className="payment-modal-empty">
-                          {customer ? "אין הזמנות" : "בחרו לקוח"}
+                        <td colSpan={11} className="payment-modal-empty">
+                          {customer ? "אין הזמנות ללקוח זה" : "בחרו לקוח"}
                         </td>
                       </tr>
                     ) : (
-                      matched.map((row) => (
+                      matched.map((row) => {
+                        const ledgerBal = orderRowLedgerBalance(row);
+                        const ledgerSt = paymentLedgerStatus(ledgerBal);
+                        return (
                         <tr
                           key={row.id}
                           className={[
@@ -1927,16 +1994,13 @@ export function PaymentModalUpdated({
                             row.allocationUsd > 0.01 ? "payment-modal-tr--hit" : "",
                             row.allocationOutcome === "paid" ? "payment-modal-tr--alloc-paid" : "",
                             row.allocationOutcome === "partial" ? "payment-modal-tr--alloc-partial" : "",
-                            rowStatusClass(row.remainingAmount),
+                            ledgerRowClass(ledgerSt),
                           ]
                             .filter(Boolean)
                             .join(" ")}
                           onClick={() => void openPaymentHistory(row.id)}
                           title="לחץ לצפייה בהיסטוריית תשלומים"
                         >
-                          <td dir="ltr" className="pm-mono payment-modal-td-code">
-                            {row.paymentCode ?? "—"}
-                          </td>
                           <td dir="ltr" className="pm-mono payment-modal-td-code payment-modal-td-order-num">
                             {canEditOrders ? (
                               <button
@@ -1963,27 +2027,27 @@ export function PaymentModalUpdated({
                             {fmtRate(row.rate)}
                           </td>
                           <td dir="ltr" className="pm-num pm-num--usd">
-                            {fmtUsdDisplay(row.totalAmountUsd)}
+                            {fmtUsdDisplay(row.amountUsd)}
                           </td>
                           <td dir="ltr" className="pm-num pm-num--paid-usd">
-                            {fmtUsdDisplay(roundMoney2(Math.max(0, row.paidAmount)))}
+                            {fmtUsdDisplay(roundMoney2(Math.max(0, row.dbPaidUsd)))}
                           </td>
-                          <td dir="ltr" className="pm-num pm-num--total-usd">
-                            {fmtUsdDisplay(roundMoney2(Math.max(0, row.remainingAmount)))}
+                          <td dir="ltr" className={`pm-num pm-num--total-usd pm-num--bal-${ledgerSt}`}>
+                            {fmtUsdDisplay(ledgerBal)}
                           </td>
                           <td dir="ltr" className="payment-modal-td-date">
                             {row.lastPaymentDateYmd ?? "—"}
                           </td>
                           <td className="payment-modal-td-status">
-                            <span className={`pm-status badge ${statusClass(row.remainingAmount)}`}>
-                              {statusLabel(row.remainingAmount)}
+                            <span className={`pm-status badge ${ledgerStatusClass(ledgerSt)}`}>
+                              {paymentLedgerStatusLabel(ledgerSt)}
                             </span>
                           </td>
                           <td className="payment-modal-td-check" onClick={(e) => e.stopPropagation()}>
                             <input
                               type="checkbox"
                               checked={rowChecked(row.id)}
-                              disabled={row.remainingAmount <= 0.01}
+                              disabled={!canCloseDebtForRow(row)}
                               onChange={() => toggleRow(row.id)}
                               onClick={(e) => e.stopPropagation()}
                               aria-label="עדיפות לסגירה"
@@ -1993,14 +2057,15 @@ export function PaymentModalUpdated({
                             <button
                               type="button"
                               className="pm-close-debt-btn"
-                              disabled={row.remainingAmount <= 0.01}
+                              disabled={!canCloseDebtForRow(row)}
                               onClick={() => addLineFromOrder(row)}
                             >
                               סגור בתשלום
                             </button>
                           </td>
                         </tr>
-                      ))
+                        );
+                      })
                     )}
                   </tbody>
                 </table>

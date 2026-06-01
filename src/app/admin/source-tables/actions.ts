@@ -311,386 +311,34 @@ export async function getSourceTableShellMeta(
   return { id: def.id, title: def.title, titleHe: def.titleHe };
 }
 
+const TABLES_NEEDING_SOURCE_DDL = new Set<SourceTableId>([
+  "payment-methods",
+  "statuses",
+  "payments",
+  "receivables",
+  "exchange-rates",
+]);
+
 export async function listSourceTableDataAction(id: SourceTableId, query: SourceTableQuery = {}): Promise<SourceTableData | null> {
   await ensureAllowed();
-  await ensureSourceManagementTables();
+  if (
+    id === "customers" ||
+    id === "orders" ||
+    id === "payments" ||
+    id === "employees" ||
+    id === "payment-methods" ||
+    id === "statuses"
+  )
+    return null;
+  if (TABLES_NEEDING_SOURCE_DDL.has(id)) {
+    await ensureSourceManagementTables();
+  }
   const def = DEFINITIONS.find((d) => d.id === id);
   if (!def) return null;
   if (id === "payment-checks") return null;
   const search = query.search?.trim() ?? "";
   const statusFilter = query.filters?.status?.trim() ?? "";
   const customerFilter = query.filters?.customer?.trim().toLowerCase() ?? "";
-
-  if (id === "customers") {
-    const limit = Math.min(50, Math.max(1, Math.floor(query?.limit || 20)));
-    const page = Math.max(1, Math.floor(query?.page || 1));
-    const q = search.trim();
-    const where: Prisma.CustomerWhereInput = {
-      deletedAt: null,
-      ...(q
-        ? {
-            OR: [
-              { displayName: { contains: q, mode: "insensitive" } },
-              { customerCode: { contains: q, mode: "insensitive" } },
-              { oldCustomerCode: { contains: q, mode: "insensitive" } },
-              { phone: { contains: q, mode: "insensitive" } },
-              { phone2: { contains: q, mode: "insensitive" } },
-              { country: { contains: q, mode: "insensitive" } },
-              { email: { contains: q, mode: "insensitive" } },
-              { city: { contains: q, mode: "insensitive" } },
-              { notes: { contains: q, mode: "insensitive" } },
-              { nameHe: { contains: q, mode: "insensitive" } },
-              { nameAr: { contains: q, mode: "insensitive" } },
-              { nameEn: { contains: q, mode: "insensitive" } },
-            ],
-          }
-        : {}),
-    };
-    const sortKey = query.sortKey?.trim();
-    const sortDir = query.sortDir === "desc" ? "desc" : "asc";
-    const orderBy: Prisma.CustomerOrderByWithRelationInput =
-      sortKey === "name"
-        ? { displayName: sortDir }
-        : sortKey === "code"
-          ? { customerCode: sortDir }
-          : sortKey === "phone"
-            ? { phone: sortDir }
-            : sortKey === "city"
-              ? { city: sortDir }
-              : sortKey === "type"
-                ? { customerType: sortDir }
-                : sortKey === "created"
-                  ? { createdAt: sortDir }
-                  : { createdAt: "desc" };
-
-    const totalRows = await prisma.customer.count({ where });
-    const totalPages = Math.max(1, Math.ceil(totalRows / limit));
-    const safePage = Math.min(page, totalPages);
-    const skip = (safePage - 1) * limit;
-    const rows = await prisma.customer.findMany({
-      where,
-      orderBy,
-      skip,
-      take: limit,
-      select: { id: true, customerCode: true, displayName: true, phone: true, city: true, customerType: true, createdAt: true },
-    });
-    const mapped = rows.map((r) =>
-      row(r.id, { name: r.displayName, code: r.customerCode, phone: r.phone, city: r.city, type: r.customerType, created: r.createdAt }),
-    );
-    return {
-      ...def,
-      columns: [
-        { key: "name", label: "שם", editable: true, sortable: true },
-        { key: "code", label: "קוד לקוח", editable: true, sortable: true },
-        { key: "phone", label: "טלפון", editable: true },
-        { key: "city", label: "עיר", editable: true, sortable: true },
-        { key: "type", label: "סוג לקוח", editable: true },
-        { key: "created", label: "תאריך יצירה", kind: "date", sortable: true },
-      ],
-      rows: mapped,
-      page: safePage,
-      totalPages,
-      totalRows,
-      summary: { total: String(totalRows) },
-      canAdd: true,
-    };
-  }
-  if (id === "orders") {
-    const { labels: orderStatusLabels, options: orderStatusOptions } = await orderStatusLabelsAndOptions();
-    const limit = Math.min(50, Math.max(1, Math.floor(query?.limit || 20)));
-    const page = Math.max(1, Math.floor(query?.page || 1));
-    const q = search.trim();
-    const statusMap = await getOrderStatusLabelMap();
-    const statusEnum =
-      statusFilter?.trim() && statusMap[statusFilter.trim()] ? statusFilter.trim() : undefined;
-    const where: Prisma.OrderWhereInput = {
-      deletedAt: null,
-      ...(statusEnum ? { status: statusEnum } : {}),
-      ...(customerFilter ? { customerNameSnapshot: { contains: customerFilter, mode: "insensitive" } } : {}),
-      ...(q
-        ? {
-            OR: [
-              { orderNumber: { contains: q, mode: "insensitive" } },
-              { oldOrderNumber: { contains: q, mode: "insensitive" } },
-              { weekCode: { contains: q, mode: "insensitive" } },
-              { customerNameSnapshot: { contains: q, mode: "insensitive" } },
-              { customerCodeSnapshot: { contains: q, mode: "insensitive" } },
-              { notes: { contains: q, mode: "insensitive" } },
-            ],
-          }
-        : {}),
-    };
-    const sortKey = query.sortKey?.trim();
-    const sortDir = query.sortDir === "desc" ? "desc" : "asc";
-    const orderBy: Prisma.OrderOrderByWithRelationInput =
-      sortKey === "order"
-        ? { orderNumber: sortDir }
-        : sortKey === "week"
-          ? { weekCode: sortDir }
-          : sortKey === "customer"
-            ? { customerNameSnapshot: sortDir }
-            : sortKey === "usd"
-              ? { totalUsd: sortDir }
-              : sortKey === "ils"
-                ? { totalIlsWithVat: sortDir }
-                : sortKey === "status"
-                  ? { status: sortDir }
-                  : { createdAt: "desc" };
-
-    const totalRows = await prisma.order.count({ where });
-    const totalPages = Math.max(1, Math.ceil(totalRows / limit));
-    const safePage = Math.min(page, totalPages);
-    const skip = (safePage - 1) * limit;
-    const rows = await prisma.order.findMany({
-      where,
-      orderBy,
-      skip,
-      take: limit,
-      select: {
-        id: true,
-        orderNumber: true,
-        weekCode: true,
-        customerId: true,
-        customerNameSnapshot: true,
-        totalUsd: true,
-        totalIlsWithVat: true,
-        status: true,
-        paymentMethod: true,
-      },
-    });
-    const orderIds = rows.map((r) => r.id);
-    const payMap = new Map<
-      string,
-      {
-        id: string;
-        paymentCode: string | null;
-        paymentMethod: PaymentMethod | null;
-        amountIls: Prisma.Decimal | null;
-        amountUsd: Prisma.Decimal | null;
-        paymentDate: Date | null;
-        paymentPlace: string | null;
-      }
-    >();
-    if (orderIds.length > 0) {
-      const pays = await prisma.payment.findMany({
-        where: { orderId: { in: orderIds }, isPaid: true },
-        select: {
-          orderId: true,
-          id: true,
-          paymentCode: true,
-          paymentMethod: true,
-          amountIls: true,
-          amountUsd: true,
-          paymentDate: true,
-          paymentPlace: true,
-        },
-      });
-      for (const p of pays) {
-        const oid = p.orderId;
-        if (!oid) continue;
-        const prev = payMap.get(oid);
-        const pDate = p.paymentDate;
-        const prevDate = prev?.paymentDate;
-        if (!prev) {
-          payMap.set(oid, {
-            id: p.id,
-            paymentCode: p.paymentCode,
-            paymentMethod: p.paymentMethod,
-            amountIls: p.amountIls,
-            amountUsd: p.amountUsd,
-            paymentDate: p.paymentDate,
-            paymentPlace: p.paymentPlace,
-          });
-        } else if (pDate && (!prevDate || pDate > prevDate)) {
-          payMap.set(oid, {
-            id: p.id,
-            paymentCode: p.paymentCode,
-            paymentMethod: p.paymentMethod,
-            amountIls: p.amountIls,
-            amountUsd: p.amountUsd,
-            paymentDate: p.paymentDate,
-            paymentPlace: p.paymentPlace,
-          });
-        }
-      }
-    }
-    const mapped = rows.map((r) => {
-      const pay = payMap.get(r.id);
-      return row(
-        r.id,
-        {
-          order: r.orderNumber,
-          week: r.weekCode,
-          customer: r.customerNameSnapshot,
-          usd: r.totalUsd,
-          ils: r.totalIlsWithVat,
-          payment: pay?.paymentCode ?? (r.paymentMethod ? PAYMENT_METHOD_LABELS[r.paymentMethod] ?? r.paymentMethod : "אין תשלום"),
-          status: orderStatusLabels[r.status] ?? r.status,
-        },
-        r.status === "COMPLETED" ? "success" : r.status === "CANCELLED" ? "danger" : r.status.startsWith("WAITING") ? "warning" : "info",
-        {
-          statusEnum: r.status,
-          customerId: r.customerId ?? "",
-          paymentId: pay?.id ?? "",
-          paymentCode: pay?.paymentCode ?? "",
-          paymentMethod: pay?.paymentMethod ? PAYMENT_METHOD_LABELS[pay.paymentMethod] ?? pay.paymentMethod : "",
-          paymentAmountIls: stringifyValue(pay?.amountIls),
-          paymentAmountUsd: stringifyValue(pay?.amountUsd),
-          paymentDate: stringifyValue(pay?.paymentDate),
-          paymentPlace: pay?.paymentPlace ?? "",
-        },
-      );
-    });
-    return {
-      ...def,
-      columns: [
-        { key: "order", label: "מספר הזמנה", sortable: true },
-        { key: "week", label: "שבוע", sortable: true },
-        { key: "customer", label: "שם לקוח", sortable: true },
-        { key: "usd", label: "סכום דולר", kind: "money", sortable: true },
-        { key: "ils", label: "סכום כולל מע\"מ", kind: "money", sortable: true },
-        { key: "payment", label: "תשלום" },
-        { key: "status", label: "סטטוס", kind: "status", editable: true, options: orderStatusOptions },
-      ],
-      rows: mapped,
-      page: safePage,
-      totalPages,
-      totalRows,
-      summary: { total: String(totalRows) },
-      canAdd: false,
-    };
-  }
-  if (id === "payments") {
-    const limit = Math.min(50, Math.max(1, Math.floor(query?.limit || 20)));
-    const page = Math.max(1, Math.floor(query?.page || 1));
-    const q = search.trim();
-    const paidYes = "כן";
-    const paidNo = "לא";
-    const orParts: Prisma.PaymentWhereInput[] = [];
-    if (q) {
-      orParts.push({ paymentCode: { contains: q, mode: "insensitive" } });
-      orParts.push({ weekCode: { contains: q, mode: "insensitive" } });
-      orParts.push({ notes: { contains: q, mode: "insensitive" } });
-      orParts.push({ checks: { some: { checkNumber: { contains: q, mode: "insensitive" } } } });
-      orParts.push({
-        customer: {
-          OR: [
-            { displayName: { contains: q, mode: "insensitive" } },
-            { customerCode: { contains: q, mode: "insensitive" } },
-            { phone: { contains: q, mode: "insensitive" } },
-          ],
-        },
-      });
-      orParts.push({
-        order: {
-          OR: [
-            { orderNumber: { contains: q, mode: "insensitive" } },
-            { customerNameSnapshot: { contains: q, mode: "insensitive" } },
-          ],
-        },
-      });
-      if (q === paidYes || q.toLowerCase() === paidYes.toLowerCase()) orParts.push({ isPaid: true });
-      if (q === paidNo || q.toLowerCase() === paidNo.toLowerCase()) orParts.push({ isPaid: false });
-    }
-    const where: Prisma.PaymentWhereInput = orParts.length ? { OR: orParts } : {};
-    const sortKey = query.sortKey?.trim();
-    const sortDir = query.sortDir === "desc" ? "desc" : "asc";
-    const orderBy: Prisma.PaymentOrderByWithRelationInput =
-      sortKey === "code"
-        ? { paymentCode: sortDir }
-        : sortKey === "week"
-          ? { weekCode: sortDir }
-          : sortKey === "date"
-            ? { paymentDate: sortDir }
-            : sortKey === "usd"
-              ? { amountUsd: sortDir }
-              : sortKey === "ils"
-                ? { amountIls: sortDir }
-                : sortKey === "method"
-                  ? { paymentMethod: sortDir }
-                  : { createdAt: "desc" };
-
-    const totalRows = await prisma.payment.count({ where });
-    const totalPages = Math.max(1, Math.ceil(totalRows / limit));
-    const safePage = Math.min(page, totalPages);
-    const skip = (safePage - 1) * limit;
-    const rows = await prisma.payment.findMany({
-      where,
-      orderBy,
-      skip,
-      take: limit,
-      select: {
-        id: true,
-        paymentCode: true,
-        weekCode: true,
-        paymentDate: true,
-        amountUsd: true,
-        amountIls: true,
-        paymentMethod: true,
-        isPaid: true,
-        checks: {
-          orderBy: { dueDate: "asc" },
-          select: { checkNumber: true, dueDate: true, amount: true },
-        },
-      },
-    });
-    const mapped = rows.map((r) => {
-      const checks = r.checks ?? [];
-      const hasChecks = checks.length > 0;
-      const checkNums = hasChecks ? checks.map((c) => c.checkNumber).join(", ") : "";
-      const checkDues = hasChecks
-        ? checks.map((c) => formatSlashDateFromYmd(formatLocalYmd(new Date(c.dueDate)))).join(", ")
-        : "";
-      const checkAmts = hasChecks
-        ? checks
-            .map((c) => {
-              const n = Number(c.amount);
-              return Number.isFinite(n) ? n.toFixed(2) : stringifyValue(c.amount);
-            })
-            .join(", ")
-        : "";
-      const checkBadge = r.paymentMethod === PaymentMethod.CHECK && hasChecks ? "צ׳יק" : "";
-      return row(
-        r.id,
-        {
-          code: r.paymentCode,
-          week: r.weekCode,
-          date: r.paymentDate,
-          usd: r.amountUsd,
-          ils: r.amountIls,
-          method: r.paymentMethod ? PAYMENT_METHOD_LABELS[r.paymentMethod] ?? r.paymentMethod : "—",
-          checkBadge,
-          checkNum: checkNums || "—",
-          checkDue: checkDues || "—",
-          checkAmt: checkAmts || "—",
-          paid: r.isPaid ? "כן" : "לא",
-        },
-        r.isPaid ? "success" : "warning",
-      );
-    });
-    return {
-      ...def,
-      columns: [
-        { key: "code", label: "מספר תשלום", sortable: true },
-        { key: "week", label: "שבוע", sortable: true },
-        { key: "date", label: "תאריך", kind: "date", sortable: true },
-        { key: "usd", label: "סכום דולר", kind: "money", sortable: true },
-        { key: "ils", label: "סכום שקלים", kind: "money", sortable: true },
-        { key: "method", label: "אמצעי תשלום" },
-        { key: "checkBadge", label: "סוג" },
-        { key: "checkNum", label: "מס׳ צ׳יק" },
-        { key: "checkDue", label: "תאריך פרעון" },
-        { key: "checkAmt", label: "סכום צ׳יק" },
-        { key: "paid", label: "שולם", kind: "boolean" },
-      ],
-      rows: mapped,
-      page: safePage,
-      totalPages,
-      totalRows,
-      summary: { total: String(totalRows) },
-      canAdd: false,
-    };
-  }
   if (id === "receivables") {
     await seedReceivablesIfEmpty();
     const rows = await prisma.receiptControl.findMany({
@@ -723,9 +371,9 @@ export async function listSourceTableDataAction(id: SourceTableId, query: Source
       canAdd: false,
     };
   }
-  if (id === "users" || id === "employees") {
+  if (id === "users") {
     const rows = await prisma.user.findMany({
-      where: id === "employees" ? { isActive: true } : {},
+      where: {},
       orderBy: { createdAt: "desc" },
       select: { id: true, fullName: true, username: true, email: true, role: true, isActive: true, lastLoginAt: true },
     });
@@ -790,53 +438,6 @@ export async function listSourceTableDataAction(id: SourceTableId, query: Source
       canAdd: true,
     };
   }
-  if (id === "payment-methods") {
-    const rows = await prisma.$queryRaw<Array<{ id: string; nameHe: string; isActive: boolean }>>`
-      SELECT "id", "nameHe", "isActive"
-      FROM "SourcePaymentMethod"
-      ORDER BY "nameHe" ASC
-    `;
-    const all = rows.filter((r) => containsAny([r.nameHe], search)).map((r) => row(r.id, { name: r.nameHe, active: r.isActive ? "כן" : "לא" }, r.isActive ? "success" : "neutral"));
-    return {
-      ...def,
-      columns: [
-        { key: "name", label: "שם אמצעי תשלום", editable: true, sortable: true },
-        { key: "active", label: "פעיל", kind: "boolean", editable: true, options: YES_NO_OPTIONS },
-      ],
-      ...paginateRows(all, query),
-      summary: { total: String(all.length) },
-      canAdd: true,
-    };
-  }
-  if (id === "statuses") {
-    await ensureOrderStatusSourceTable();
-    const rows = await prisma.$queryRaw<Array<{ id: string; nameHe: string; color: string; isActive: boolean }>>`
-      SELECT "id", "nameHe", "color", "isActive"
-      FROM "SourceStatus"
-      ORDER BY "nameHe" ASC
-    `;
-    const all = rows
-      .filter((r) => containsAny([r.id, r.nameHe], search))
-      .map((r) =>
-        row(
-          r.id,
-          { code: r.id, name: r.nameHe, active: r.isActive ? "כן" : "לא" },
-          r.color === "success" ? "success" : r.color === "danger" ? "danger" : r.color === "warning" ? "warning" : "info",
-        ),
-      );
-    return {
-      ...def,
-      columns: [
-        { key: "code", label: "קוד", sortable: true },
-        { key: "name", label: "שם סטטוס", editable: true, sortable: true },
-        { key: "active", label: "פעיל", kind: "boolean", editable: true, options: YES_NO_OPTIONS },
-      ],
-      ...paginateRows(all, query),
-      summary: { total: String(all.length) },
-      canAdd: false,
-    };
-  }
-
   const empty = [row(id, { note: "כרטסת מוצגת מתוך כרטיס הלקוח בלבד." }, "info")];
   return {
     ...def,

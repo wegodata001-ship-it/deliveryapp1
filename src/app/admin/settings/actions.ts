@@ -3,6 +3,7 @@
 import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
+import { invalidateCaptureHotPathCache } from "@/lib/capture-hot-path";
 import { finalRateFromBaseAndFee } from "@/lib/financial-calc";
 import { ensureDefaultFinancialSettings, getCurrentFinancialSettings } from "@/lib/financial-settings";
 import { prisma } from "@/lib/prisma";
@@ -174,6 +175,8 @@ export async function saveAdminSettingsAction(input: AdminSettingsPayload): Prom
       DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = CURRENT_TIMESTAMP
     `;
   }
+
+  invalidateCaptureHotPathCache();
 
   revalidatePath("/admin");
   revalidatePath("/admin/settings");

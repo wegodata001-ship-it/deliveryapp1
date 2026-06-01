@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { OrdersListToolbar, type OrdersListToolbarProps } from "@/components/admin/OrdersListToolbar";
 import { useRouter } from "next/navigation";
 import { PaymentMethod } from "@prisma/client";
 import { OS } from "@/lib/order-status-slugs";
 import { useOrderStatusCatalog } from "@/components/admin/OrderStatusCatalogProvider";
 import { OrderStatusSelect } from "@/components/admin/OrderStatusSelect";
-import { ChevronDown, FileText, Plus, Sheet } from "lucide-react";
+import { ChevronDown, Plus } from "lucide-react";
 import {
   updateOrderListPaymentLocationAction,
   updateOrderListPaymentMethodAction,
@@ -20,7 +21,12 @@ import {
   orderCaptureSplitMethodLabel,
 } from "@/lib/order-capture-payment-methods";
 import type { ParsedDateFilter } from "@/lib/work-week";
+import { IntakeLocationCombobox } from "@/components/admin/IntakeLocationCombobox";
 import { OrdersListPaginationBar } from "@/components/admin/OrdersListPaginationBar";
+import {
+  formatSignedUsdDisplay,
+  isDebtWithdrawalOrderStatus,
+} from "@/lib/debt-withdrawal-order";
 import { formatMoneyAmount } from "@/lib/money-format";
 import {
   orderMatchesStatusKpiFilters,
@@ -46,6 +52,7 @@ export type OrderListRow = {
   paymentLocationId: string | null;
   /** מקום תשלום — שם להצגה */
   paymentLocationName: string | null;
+  createdById: string | null;
   createdByName: string | null;
   dealAmountUsd: string | null;
   commissionAmountUsd: string | null;
@@ -98,6 +105,29 @@ function parseNumeric(s: string | null | undefined): number | null {
 
 function fmtUsd(n: number): string {
   return formatMoneyAmount(n);
+}
+
+function formatOrdersListMoney(
+  o: OrderListRow,
+  field: "deal" | "total" | "ils",
+): { text: string; debtWithdrawal: boolean } {
+  const debtWithdrawal = isDebtWithdrawalOrderStatus(o.status);
+  if (field === "ils") {
+    const raw = parseNumeric(o.totalAmountIls);
+    if (raw == null) return { text: "—", debtWithdrawal };
+    if (!debtWithdrawal) return { text: o.totalAmountIls ?? "—", debtWithdrawal: false };
+    return { text: `-${formatMoneyAmount(Math.abs(raw))}`, debtWithdrawal: true };
+  }
+  const rawStr = field === "deal" ? o.dealAmountUsd : o.totalAmountUsd;
+  const raw = parseNumeric(rawStr);
+  if (raw == null) return { text: "—", debtWithdrawal };
+  if (!debtWithdrawal) return { text: rawStr ?? "—", debtWithdrawal: false };
+  return { text: `$${formatSignedUsdDisplay(-Math.abs(raw))}`, debtWithdrawal: true };
+}
+
+function signedExportMoney(o: OrderListRow, field: "deal" | "total" | "ils"): string {
+  const { text } = formatOrdersListMoney(o, field);
+  return text === "—" ? "" : text;
 }
 
 function paymentMethodTone(m: string | null): string {
@@ -155,8 +185,7 @@ type Props = {
   canViewCustomerCard: boolean;
   dateRange: ParsedDateFilter;
   paymentLocationOptions: { id: string; label: string }[];
-  /** שורת פילטרים (שבוע, חיפוש וכו׳) — מתחת לשורת הפעולות + KPI */
-  filters?: ReactNode;
+  toolbarProps: OrdersListToolbarProps;
 };
 
 export function OrdersListShell({
@@ -169,7 +198,7 @@ export function OrdersListShell({
   canViewCustomerCard,
   dateRange,
   paymentLocationOptions,
-  filters,
+  toolbarProps,
 }: Props) {
   const router = useRouter();
   const { openWindow } = useAdminWindows();
@@ -182,17 +211,27 @@ export function OrdersListShell({
   const [pdfMenuOpen, setPdfMenuOpen] = useState(false);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [activeStatusFilters, setActiveStatusFilters] = useState<OrderStatusKpiKey[]>([]);
+  const [extraPaymentLocationOptions, setExtraPaymentLocationOptions] = useState<
+    { id: string; label: string }[]
+  >([]);
   const pdfWrapRef = useRef<HTMLDivElement>(null);
 
   const toggleStatusFilter = useCallback((key: OrderStatusKpiKey) => {
     setActiveStatusFilters((prev) => toggleStatusKpiFilter(prev, key));
   }, []);
 
-  const paymentLocationLabelById = useMemo(() => {
+  const mergedPaymentLocationOptions = useMemo(() => {
     const m = new Map<string, string>();
     for (const p of paymentLocationOptions) m.set(p.id, p.label);
+    for (const p of extraPaymentLocationOptions) m.set(p.id, p.label);
+    return [...m.entries()].map(([id, label]) => ({ id, label }));
+  }, [paymentLocationOptions, extraPaymentLocationOptions]);
+
+  const paymentLocationLabelById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of mergedPaymentLocationOptions) m.set(p.id, p.label);
     return m;
-  }, [paymentLocationOptions]);
+  }, [mergedPaymentLocationOptions]);
 
   const tableRows = useMemo(
     () => rows.filter((o) => orderMatchesStatusKpiFilters(o.status, activeStatusFilters)),
@@ -418,9 +457,9 @@ export function OrdersListShell({
           r.weekCode,
           r.customerCode,
           r.customerName,
-          r.dealAmountUsd,
-          r.totalAmountUsd,
-          r.totalAmountIls,
+          signedExportMoney(r, "deal"),
+          signedExportMoney(r, "total"),
+          signedExportMoney(r, "ils"),
           r.status,
           paymentTypeLabel(r.paymentType),
           r.paymentLocationName,
@@ -519,9 +558,112 @@ export function OrdersListShell({
     [printOrdersPdfHtml],
   );
 
+  const createdByOptionsMerged = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const opt of toolbarProps.createdByOptions) {
+      map.set(opt.id, opt.label);
+    }
+    for (const o of orders) {
+      if (o.createdById) {
+        map.set(o.createdById, o.createdByName?.trim() || o.createdById);
+      }
+    }
+    if (toolbarProps.createdById && !map.has(toolbarProps.createdById)) {
+      map.set(toolbarProps.createdById, "עובד נבחר");
+    }
+    return [...map.entries()]
+      .map(([id, label]) => ({ id, label }))
+      .sort((a, b) => a.label.localeCompare(b.label, "he"));
+  }, [orders, toolbarProps.createdById, toolbarProps.createdByOptions]);
+
+  const filterLeadingActions = (
+    <>
+      {canCreateOrders ? (
+        <button
+          type="button"
+          className="adm-btn adm-btn--primary adm-btn--dense adm-orders-top-btn adm-orders-top-btn--new"
+          onClick={newOrder}
+        >
+          <Plus size={15} strokeWidth={2.2} aria-hidden />
+          הזמנה חדשה
+        </button>
+      ) : null}
+      <button
+        type="button"
+        className="adm-orders-btn adm-orders-btn--refresh"
+        onClick={() => router.refresh()}
+        title="רענון רשימה"
+      >
+        רענון
+      </button>
+    </>
+  );
+
+  const kpiExportActions = (
+    <div className="adm-orders-kpi-export-actions" role="group" aria-label="ייצוא רשימה">
+      <div className="adm-orders-pdf-wrap adm-orders-pdf-wrap--kpi" ref={pdfWrapRef}>
+        <button
+          type="button"
+          className="adm-export-btn adm-export-btn--pdf adm-export-btn--pdf-split adm-orders-kpi-export-btn"
+          onClick={() => setPdfMenuOpen((o) => !o)}
+          disabled={pdfLoading}
+          aria-expanded={pdfMenuOpen}
+          aria-haspopup="menu"
+          title="ייצוא PDF"
+          aria-label="ייצוא PDF"
+        >
+          <span className="adm-orders-kpi-export-btn__label">PDF</span>
+          <ChevronDown size={14} strokeWidth={2.2} className="adm-orders-pdf-chev" aria-hidden />
+        </button>
+        {pdfMenuOpen ? (
+          <ul className="adm-orders-pdf-menu" role="menu" dir="rtl">
+            <li role="none">
+              <button type="button" role="menuitem" className="adm-orders-pdf-menu__btn" onClick={() => void runPdfExport("regular")}>
+                PDF רגיל
+              </button>
+            </li>
+            <li role="none">
+              <button type="button" role="menuitem" className="adm-orders-pdf-menu__btn" onClick={() => void runPdfExport("by_place")}>
+                PDF לפי מקום
+              </button>
+            </li>
+            <li role="none">
+              <button type="button" role="menuitem" className="adm-orders-pdf-menu__btn" onClick={() => void runPdfExport("by_status")}>
+                PDF לפי סטטוס
+              </button>
+            </li>
+            <li role="none">
+              <button type="button" role="menuitem" className="adm-orders-pdf-menu__btn" onClick={() => void runPdfExport("by_week")}>
+                PDF לפי שבוע
+              </button>
+            </li>
+          </ul>
+        ) : null}
+      </div>
+      <button
+        type="button"
+        className="adm-export-btn adm-export-btn--excel adm-orders-kpi-export-btn"
+        onClick={exportToExcel}
+        title="ייצוא Excel"
+        aria-label="ייצוא Excel"
+      >
+        <span className="adm-orders-kpi-export-btn__label">EXCEL</span>
+      </button>
+    </div>
+  );
+
   return (
     <div className="adm-orders-work">
-      {filters ? <div className="adm-orders-filters-row">{filters}</div> : null}
+      <div className="adm-orders-filters-row">
+        <Suspense fallback={<div className="adm-orders-toolbar-skel" aria-hidden />}>
+          <OrdersListToolbar
+            {...toolbarProps}
+            createdByOptions={createdByOptionsMerged}
+            leadingActions={filterLeadingActions}
+            exportActions={kpiExportActions}
+          />
+        </Suspense>
+      </div>
 
       <div className="adm-orders-action-kpi-row" dir="rtl">
         <div className="adm-orders-status-kpi adm-orders-status-kpi--strip" aria-label="סיכומים לפי סטטוס — לחיצה מסננת את הטבלה">
@@ -551,64 +693,6 @@ export function OrdersListShell({
               </button>
             );
           })}
-        </div>
-
-        <div className="adm-orders-action-kpi-row__actions">
-          <button
-            type="button"
-            className="adm-export-btn adm-export-btn--excel adm-orders-top-btn"
-            onClick={exportToExcel}
-            title="ייצוא Excel לפי הסינון הנוכחי"
-            aria-label="ייצוא Excel"
-          >
-            <Sheet size={14} strokeWidth={2.2} aria-hidden />
-            EXCEL
-          </button>
-          <div className="adm-orders-pdf-wrap" ref={pdfWrapRef}>
-            <button
-              type="button"
-              className="adm-export-btn adm-export-btn--pdf adm-export-btn--pdf-split adm-orders-top-btn"
-              onClick={() => setPdfMenuOpen((o) => !o)}
-              disabled={pdfLoading}
-              aria-expanded={pdfMenuOpen}
-              aria-haspopup="menu"
-              title="ייצוא PDF"
-            >
-              <FileText size={14} strokeWidth={2.2} aria-hidden />
-              PDF
-              <ChevronDown size={14} strokeWidth={2.2} className="adm-orders-pdf-chev" aria-hidden />
-            </button>
-            {pdfMenuOpen ? (
-              <ul className="adm-orders-pdf-menu" role="menu" dir="rtl">
-                <li role="none">
-                  <button type="button" role="menuitem" className="adm-orders-pdf-menu__btn" onClick={() => void runPdfExport("regular")}>
-                    PDF רגיל
-                  </button>
-                </li>
-                <li role="none">
-                  <button type="button" role="menuitem" className="adm-orders-pdf-menu__btn" onClick={() => void runPdfExport("by_place")}>
-                    PDF לפי מקום
-                  </button>
-                </li>
-                <li role="none">
-                  <button type="button" role="menuitem" className="adm-orders-pdf-menu__btn" onClick={() => void runPdfExport("by_status")}>
-                    PDF לפי סטטוס
-                  </button>
-                </li>
-                <li role="none">
-                  <button type="button" role="menuitem" className="adm-orders-pdf-menu__btn" onClick={() => void runPdfExport("by_week")}>
-                    PDF לפי שבוע
-                  </button>
-                </li>
-              </ul>
-            ) : null}
-          </div>
-          {canCreateOrders ? (
-            <button type="button" className="adm-btn adm-btn--primary adm-btn--dense adm-orders-top-btn adm-orders-top-btn--new" onClick={newOrder}>
-              <Plus size={15} strokeWidth={2.2} aria-hidden />
-              הזמנה חדשה
-            </button>
-          ) : null}
         </div>
       </div>
 
@@ -710,24 +794,51 @@ export function OrdersListShell({
                     </td>
                     <td
                       dir="ltr"
-                      className="adm-table-excel-money adm-table-excel-money--usd adm-ord-col-money adm-ord-col-money--deal"
+                      className={[
+                        "adm-table-excel-money",
+                        "adm-table-excel-money--usd",
+                        "adm-ord-col-money",
+                        "adm-ord-col-money--deal",
+                        formatOrdersListMoney(o, "deal").debtWithdrawal ? "adm-ord-money--debt-withdrawal" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
                       title={
                         o.commissionAmountUsd ? `עמלה: ${o.commissionAmountUsd}` : undefined
                       }
                     >
-                      {o.dealAmountUsd ?? "—"}
+                      {formatOrdersListMoney(o, "deal").text}
                     </td>
                     <td
                       dir="ltr"
-                      className="adm-table-excel-money adm-table-excel-money--usd adm-table-excel-money--strong adm-ord-col-money adm-ord-col-money--total"
+                      className={[
+                        "adm-table-excel-money",
+                        "adm-table-excel-money--usd",
+                        "adm-table-excel-money--strong",
+                        "adm-ord-col-money",
+                        "adm-ord-col-money--total",
+                        formatOrdersListMoney(o, "total").debtWithdrawal ? "adm-ord-money--debt-withdrawal" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
                       title={
                         o.commissionAmountUsd ? `כולל עמלה: ${o.commissionAmountUsd}` : undefined
                       }
                     >
-                      {o.totalAmountUsd ?? "—"}
+                      {formatOrdersListMoney(o, "total").text}
                     </td>
-                    <td dir="ltr" className="adm-table-excel-money adm-table-excel-money--ils adm-ord-col-ils">
-                      {o.totalAmountIls ?? "—"}
+                    <td
+                      dir="ltr"
+                      className={[
+                        "adm-table-excel-money",
+                        "adm-table-excel-money--ils",
+                        "adm-ord-col-ils",
+                        formatOrdersListMoney(o, "ils").debtWithdrawal ? "adm-ord-money--debt-withdrawal" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                    >
+                      {formatOrdersListMoney(o, "ils").text}
                     </td>
                     <td className="adm-table-excel-status-cell adm-ord-col-status" onClick={(e) => e.stopPropagation()}>
                       <OrderStatusSelect
@@ -757,24 +868,27 @@ export function OrdersListShell({
                       </select>
                     </td>
                     <td className="adm-ord-col-meta adm-ord-col-payloc" onClick={(e) => e.stopPropagation()}>
-                      <select
-                        className="adm-payloc-sel"
+                      <IntakeLocationCombobox
+                        variant="table"
                         value={o.paymentLocationId ?? ""}
+                        label={o.paymentLocationName ?? paymentLocationLabelById.get(o.paymentLocationId ?? "") ?? ""}
                         disabled={!canEditOrders || busyId === o.id || !!o.quickStatusLocked}
-                        aria-label="מקום תשלום"
-                        title={o.paymentLocationName ?? undefined}
-                        onChange={(e) => void onRowPaymentLocationChange(o.id, e.target.value)}
-                      >
-                        <option value="">—</option>
-                        {paymentLocationOptions.map((opt) => (
-                          <option key={opt.id} value={opt.id}>
-                            {opt.label}
-                          </option>
-                        ))}
-                        {o.paymentLocationId && !paymentLocationLabelById.has(o.paymentLocationId) ? (
-                          <option value={o.paymentLocationId}>{o.paymentLocationName ?? "—"}</option>
-                        ) : null}
-                      </select>
+                        onChange={(id, label) => {
+                          if (id && !paymentLocationLabelById.has(id)) {
+                            setExtraPaymentLocationOptions((prev) => {
+                              if (prev.some((p) => p.id === id)) return prev;
+                              return [...prev, { id, label }];
+                            });
+                          }
+                          void onRowPaymentLocationChange(o.id, id);
+                        }}
+                        onOptionCreated={(opt) => {
+                          setExtraPaymentLocationOptions((prev) => {
+                            if (prev.some((p) => p.id === opt.id)) return prev;
+                            return [...prev, opt];
+                          });
+                        }}
+                      />
                     </td>
                   </tr>
                 );

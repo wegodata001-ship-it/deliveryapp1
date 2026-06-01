@@ -32,6 +32,11 @@ export function cancelCustomerSearch(): void {
   activeAbort = null;
 }
 
+/** אחרי יצירת לקוח — מנע תוצאות חיפוש ישנות בלי הלקוח החדש */
+export function invalidateCustomerSearchClientCache(): void {
+  cache.clear();
+}
+
 export function customerSearchMinQueryLength(q: string, exact = false): boolean {
   const t = q.trim();
   if (!t) return false;
@@ -59,10 +64,24 @@ async function fetchSearchFast(
   const params = new URLSearchParams({ q });
   if (opts.exact) params.set("exact", "1");
 
+  const t0 = typeof performance !== "undefined" ? performance.now() : Date.now();
   const res = await fetch(`/api/customers/search-fast?${params.toString()}`, {
     credentials: "include",
     signal,
   });
+  const fetchMs = Math.round(
+    (typeof performance !== "undefined" ? performance.now() : Date.now()) - t0,
+  );
+
+  if (typeof window !== "undefined" && (process.env.NODE_ENV === "development" || fetchMs > 300)) {
+    console.log("[searchFast.client]", {
+      q,
+      exact: !!opts.exact,
+      status: res.status,
+      fetchMs,
+      hint: fetchMs > 300 ? "Check Network: waiting=TTFB/server; content=JSON parse" : undefined,
+    });
+  }
 
   if (res.status === 401) throw new Error("Unauthorized");
   if (!res.ok) throw new Error("טעינת נתונים נכשלה");
@@ -88,6 +107,16 @@ export async function searchCustomersFastClient(
   return fetchSearchFast(q, { signal: opts?.signal });
 }
 
+/** חיפוש מדויק לפי קוד — exact=1 בלבד (שדה קוד במסך קליטת תשלום) */
+export async function searchCustomerCodeExactClient(
+  query: string,
+  opts?: { signal?: AbortSignal },
+): Promise<CustomerSearchRow[]> {
+  const q = query.trim();
+  if (!customerSearchMinQueryLength(q, true)) return [];
+  return fetchSearchFast(q, { exact: true, signal: opts?.signal });
+}
+
 export async function resolveCustomerFastClient(
   query: string,
   opts?: { signal?: AbortSignal },
@@ -96,6 +125,8 @@ export async function resolveCustomerFastClient(
   if (!customerSearchMinQueryLength(q, true)) return null;
   const rows = await fetchSearchFast(q, { exact: true, signal: opts?.signal });
   if (rows.length > 0) return rows[0]!;
+  /** קוד מספרי / UUID — רק exact=1, בלי חיפוש חלקי (חוסך round-trip שני) */
+  if (/^\d+$/.test(q) || CUSTOMER_SEARCH_UUID_RE.test(q)) return null;
   const partial = await fetchSearchFast(q, { signal: opts?.signal });
   if (partial.length === 0) return null;
   const lower = q.toLowerCase();

@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { parsePaymentNumberFromCode } from "@/lib/payment-capture-code";
+import { paymentsPerfTimeEnd, paymentsPerfTimeStart } from "@/lib/payments-perf";
 
 export type PaymentNavDirection = "prev" | "next";
 
@@ -7,12 +8,14 @@ const navSelect = {
   id: true,
   paymentCode: true,
   paymentNumber: true,
+  customerId: true,
 } as const;
 
 export type PaymentNavRow = {
   id: string;
   paymentCode: string | null;
   paymentNumber: number | null;
+  customerId: string | null;
 };
 
 export type PaymentNavResult =
@@ -37,11 +40,11 @@ async function findNeighborByPaymentNumber(
 }
 
 async function findCurrentByCode(paymentCode: string): Promise<PaymentNavRow | null> {
-  const exact = await prisma.payment.findFirst({
-    where: { paymentCode, customerId: { not: null } },
+  const exact = await prisma.payment.findUnique({
+    where: { paymentCode },
     select: navSelect,
   });
-  if (exact) return exact;
+  if (exact?.customerId) return exact;
 
   const paymentNumber = parsePaymentNumberFromCode(paymentCode);
   if (paymentNumber == null) return null;
@@ -53,7 +56,7 @@ async function findCurrentByCode(paymentCode: string): Promise<PaymentNavRow | n
   });
 }
 
-export async function resolvePaymentNavigation(
+async function resolveNeighbor(
   currentPaymentCode: string,
   direction: PaymentNavDirection,
 ): Promise<PaymentNavResult> {
@@ -112,4 +115,16 @@ export async function resolvePaymentNavigation(
     paymentCode: row.paymentCode ?? null,
     paymentNumber: row.paymentNumber ?? null,
   };
+}
+
+export async function resolvePaymentNavigation(
+  currentPaymentCode: string,
+  direction: PaymentNavDirection,
+): Promise<PaymentNavResult> {
+  paymentsPerfTimeStart("payments.navigation.db");
+  try {
+    return await resolveNeighbor(currentPaymentCode, direction);
+  } finally {
+    paymentsPerfTimeEnd("payments.navigation.db");
+  }
 }

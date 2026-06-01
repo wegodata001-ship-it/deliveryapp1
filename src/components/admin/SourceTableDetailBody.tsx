@@ -18,6 +18,46 @@ const SourceTableProClient = dynamic(
   { loading: () => <div className="adm-source-pro adm-source-pro--shell" aria-busy="true" /> },
 );
 
+const CustomersSourceTableClient = dynamic(
+  () =>
+    import("@/components/admin/CustomersSourceTableClient").then((m) => ({
+      default: m.CustomersSourceTableClient,
+    })),
+  { loading: () => <div className="adm-source-pro adm-source-pro--shell" aria-busy="true" /> },
+);
+
+const OrdersSourceTableClient = dynamic(
+  () =>
+    import("@/components/admin/OrdersSourceTableClient").then((m) => ({
+      default: m.OrdersSourceTableClient,
+    })),
+  { loading: () => <div className="adm-source-pro adm-source-pro--shell" aria-busy="true" /> },
+);
+
+const PaymentsSourceTableClient = dynamic(
+  () =>
+    import("@/components/admin/PaymentsSourceTableClient").then((m) => ({
+      default: m.PaymentsSourceTableClient,
+    })),
+  { loading: () => <div className="adm-source-pro adm-source-pro--shell" aria-busy="true" /> },
+);
+
+const EmployeesSourceTableClient = dynamic(
+  () =>
+    import("@/components/admin/EmployeesSourceTableClient").then((m) => ({
+      default: m.EmployeesSourceTableClient,
+    })),
+  { loading: () => <div className="adm-source-pro adm-source-pro--shell" aria-busy="true" /> },
+);
+
+const PaymentMethodsSourceTableClient = dynamic(
+  () =>
+    import("@/components/admin/PaymentMethodsSourceTableClient").then((m) => ({
+      default: m.PaymentMethodsSourceTableClient,
+    })),
+  { loading: () => <div className="adm-source-pro adm-source-pro--shell" aria-busy="true" /> },
+);
+
 type Props = {
   tableId: SourceTableId;
   initialSearch: string;
@@ -29,6 +69,21 @@ export function SourceTableDetailBody({ tableId, initialSearch }: Props) {
   }
   if (tableId === "statuses") {
     return <OrderStatusesManager initialSearch={initialSearch} />;
+  }
+  if (tableId === "customers") {
+    return <CustomersSourceTableClient initialSearch={initialSearch} />;
+  }
+  if (tableId === "orders") {
+    return <OrdersSourceTableClient initialSearch={initialSearch} />;
+  }
+  if (tableId === "payments") {
+    return <PaymentsSourceTableClient initialSearch={initialSearch} />;
+  }
+  if (tableId === "employees") {
+    return <EmployeesSourceTableClient initialSearch={initialSearch} />;
+  }
+  if (tableId === "payment-methods") {
+    return <PaymentMethodsSourceTableClient initialSearch={initialSearch} />;
   }
   return <SourceTableProClient tableId={tableId} initialData={null} initialSearch={initialSearch} />;
 }

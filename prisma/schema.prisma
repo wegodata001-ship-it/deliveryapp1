@@ -167,6 +167,9 @@ model Customer {
   @@index([phone2])
   @@index([country])
   @@index([oldCustomerCode])
+  @@index([isActive, createdAt])
+  @@index([createdAt])
+  @@index([city])
 }
 
 model Order {
@@ -247,8 +250,19 @@ model Order {
   @@index([paymentPointId])
   @@index([editUnlockedForUserId])
   @@index([weekCode, deletedAt])
+  @@index([weekCode, orderNumber])
+  @@index([weekCode, oldOrderNumber])
   @@index([sourceCountry])
   @@index([status, orderDate])
+}
+
+/// מונה רץ למספור הזמנות לפי שבוע — UPDATE+RETURNING במקום MAX על Order
+model OrderWeekCounter {
+  weekCode   String   @id @map("week_code")
+  nextNumber Int      @default(0) @map("next_number")
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@map("order_week_counter")
 }
 
 model OrderEditRequest {
@@ -462,6 +476,7 @@ model AuditLog {
   @@index([entityType])
   @@index([entityId])
   @@index([createdAt])
+  @@index([entityType, entityId, createdAt])
 }
 
 model LegacyRawRow {

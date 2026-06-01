@@ -10,6 +10,11 @@ import { getCustomerBalancesReport, getCustomerBalancesReportWhereClauses } from
 import { fetchCustomerOpenOrderEnrichment } from "@/lib/customer-balance-order-status";
 import { normalizeOrderSourceCountry } from "@/lib/order-countries";
 import { getOrderStatusLabelMap, labelFromMap } from "@/lib/order-status-registry";
+import {
+  formatSignedUsdDisplay,
+  isDebtWithdrawalOrderStatus,
+  orderDisplayUsdSigned,
+} from "@/lib/debt-withdrawal-order";
 import { formatIlsDisplay, formatUsdDisplay } from "@/lib/money-format";
 
 export type ReportKind =
@@ -212,21 +217,38 @@ export async function getReportTableAction(kind: ReportKind, filters: ReportFilt
         ...(filters.workWeek ? { weekCode: filters.workWeek } : {}),
       },
       orderBy: { orderDate: "desc" },
-      select: { orderNumber: true, customerNameSnapshot: true, weekCode: true, totalUsd: true, totalIlsWithVat: true, status: true },
+      select: {
+        orderNumber: true,
+        customerNameSnapshot: true,
+        weekCode: true,
+        totalUsd: true,
+        amountUsd: true,
+        commissionUsd: true,
+        debtWithdrawalUsd: true,
+        totalIlsWithVat: true,
+        status: true,
+      },
     });
-    const total = rows.reduce((sum, r) => sum.add(r.totalIlsWithVat ?? 0), new Prisma.Decimal(0));
+    const total = rows.reduce((sum, r) => {
+      if (isDebtWithdrawalOrderStatus(r.status)) return sum;
+      return sum.add(r.totalIlsWithVat ?? 0);
+    }, new Prisma.Decimal(0));
     return {
       id: kind,
       title: "דוח הזמנות פתוחות",
       columns: ["מספר הזמנה", "לקוח", "שבוע", "סכום דולר", "סכום ש\"ח", "סטטוס"],
-      rows: rows.map((r) => [
-        r.orderNumber ?? "",
-        r.customerNameSnapshot ?? "",
-        r.weekCode ?? "",
-        moneyUsd(r.totalUsd),
-        moneyIls(r.totalIlsWithVat),
-        labelFromMap(statusMap, r.status),
-      ]),
+      rows: rows.map((r) => {
+        const isWithdrawal = isDebtWithdrawalOrderStatus(r.status);
+        const usdSigned = orderDisplayUsdSigned(r);
+        return [
+          r.orderNumber ?? "",
+          r.customerNameSnapshot ?? "",
+          r.weekCode ?? "",
+          isWithdrawal ? formatSignedUsdDisplay(usdSigned) : moneyUsd(r.totalUsd),
+          isWithdrawal ? "—" : moneyIls(r.totalIlsWithVat),
+          labelFromMap(statusMap, r.status),
+        ];
+      }),
       totals: { total: moneyIls(total), paid: moneyIls(0), remaining: moneyIls(total) },
     };
   }
@@ -311,7 +333,10 @@ export async function getReportTableAction(kind: ReportKind, filters: ReportFilt
 
   if (kind === "weeklySummaryReport") {
     const [orders, payments] = await Promise.all([
-      prisma.order.findMany({ where: { deletedAt: null, orderDate: { gte: from, lte: to }, ...(filters.customerId ? { customerId: filters.customerId } : {}) }, select: { weekCode: true, totalIlsWithVat: true, totalIls: true } }),
+      prisma.order.findMany({
+        where: { deletedAt: null, orderDate: { gte: from, lte: to }, ...(filters.customerId ? { customerId: filters.customerId } : {}) },
+        select: { weekCode: true, status: true, totalIlsWithVat: true, totalIls: true },
+      }),
       prisma.payment.findMany({
         where: { isPaid: true, orderId: { not: null }, paymentDate: { gte: from, lte: to }, ...(filters.customerId ? { customerId: filters.customerId } : {}) },
         select: { weekCode: true, totalIlsWithVat: true, amountIls: true, amountUsd: true, exchangeRate: true },
@@ -319,6 +344,7 @@ export async function getReportTableAction(kind: ReportKind, filters: ReportFilt
     ]);
     const map = new Map<string, { orders: number; total: Prisma.Decimal; paid: Prisma.Decimal }>();
     for (const o of orders) {
+      if (isDebtWithdrawalOrderStatus(o.status)) continue;
       const key = o.weekCode || "ללא שבוע";
       const cur = map.get(key) ?? { orders: 0, total: new Prisma.Decimal(0), paid: new Prisma.Decimal(0) };
       cur.orders += 1;

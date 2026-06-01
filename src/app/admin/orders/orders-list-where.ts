@@ -1,5 +1,6 @@
 import { PaymentMethod, Prisma } from "@prisma/client";
 import { ORDER_COUNTRY_CODES, orderCountryCodesMatchingHeSearch, type OrderCountryCode } from "@/lib/order-countries";
+import { OS } from "@/lib/order-status-slugs";
 import { normalizeAhWeekCode, parseOrdersListDateFilterFromSearchParams } from "@/lib/work-week";
 
 
@@ -12,6 +13,19 @@ function parseAmount(raw: string): number | null {
   if (!raw) return null;
   const n = Number(raw.replace(",", "."));
   return Number.isFinite(n) ? n : null;
+}
+
+/** מרכיב מחרוזת חיפוש אחת מ־q + שדות סינון UI נפרדים (אותה לוגיקת contains כמו q). */
+export function resolveOrdersListSearchQuery(
+  sp: Record<string, string | string[] | undefined>,
+): string {
+  const q = readTextParam(sp, "q");
+  const orderNum = readTextParam(sp, "ordersOrderNum");
+  if (orderNum) return orderNum;
+  const code = readTextParam(sp, "ordersCode");
+  const name = readTextParam(sp, "ordersName");
+  const phone = readTextParam(sp, "ordersPhone");
+  return [code, name, phone, q].filter(Boolean).join(" ").trim();
 }
 
 export function buildOrdersListSearchWhere(q: string): Prisma.OrderWhereInput | undefined {
@@ -58,9 +72,15 @@ export function buildOrdersListWhereFromSearchParams(
 ): Prisma.OrderWhereInput {
   const range = parseOrdersListDateFilterFromSearchParams(sp);
 
-  const q = readTextParam(sp, "q");
+  const q = resolveOrdersListSearchQuery(sp);
   const statusSingleRaw = readTextParam(sp, "status");
-  const statusSingle = statusSingleRaw || null;
+  const openOnly = readTextParam(sp, "ordersOpenOnly") === "1";
+  const readyOnly = readTextParam(sp, "ordersReadyOnly") === "1";
+  const statusSingle = openOnly
+    ? OS.OPEN
+    : readyOnly
+      ? OS.COMPLETED
+      : statusSingleRaw || null;
 
   const ordersCountryRaw = readTextParam(sp, "ordersCountry");
   const countrySingle =

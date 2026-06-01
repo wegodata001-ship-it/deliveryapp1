@@ -5,8 +5,7 @@ import {
   getOrderStatusCatalogAction,
   type OrderStatusCatalog,
 } from "@/app/admin/order-status/actions";
-import type { OrderStatusTag } from "@/lib/order-status-registry";
-import type { OrderStatusSelectOption } from "@/lib/order-status-registry";
+import type { OrderStatusSelectOption, OrderStatusTag } from "@/lib/order-status-shared";
 import { statusColorById, statusOptionsIncludingValue } from "@/lib/order-status-catalog";
 
 type OrderStatusCatalogContextValue = {

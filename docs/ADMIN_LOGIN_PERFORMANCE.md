@@ -144,3 +144,42 @@ npm run start
 בהצלחה, `setAdminSession` קורא `loadPermissionKeysForUser` (EMPLOYEE) + `lastLoginAt` update — שניהם לפני ה-redirect.
 אם `6.requireAuth` מופיע פעמיים עם זמן גבוה — `DashboardGreeting` + `DashboardStatsLoader` קוראים `requireAuth` בנפרד (צפוי עם React `cache` באותו request).
 
+---
+
+## שמירת הזמנה (`POST /api/orders/capture`)
+
+### מדידה
+
+הגדר `CAPTURE_PERF=1` (או dev — פעיל כברירת מחדל). בלוגים:
+
+| Scope | משמעות |
+|-------|---------|
+| `capture.total` | כל ה-API (כולל JSON) |
+| `capture.auth` | `getCurrentUser` (JWT + cache, ללא redirect) |
+| `capture.validation` | הרשאות + סטטוס + תאריכים |
+| `capture.phase1` | קריאות מקבילות: לקוח, שער, מדינות, מספור, מיקום |
+| `capture.customer` / `capture.exchangeRate` | בתוך phase1 |
+| `capture.insertOrder` / `capture.insertItems` | create/update + תשלומים (`createMany`) |
+| `capture.audit` | fire-and-forget (סגירה מיידית) |
+| `capture.notifications` / `capture.refresh` | אמור להיות ~0 — אין revalidate בנתיב שמירה |
+| `capture.response` | בניית תשובה |
+
+שורת `[capture]` כוללת `apiMs` — פער גדול מול `capture.total` = קומפילציה/cold start ב-dev.
+
+### מה לא רץ בשמירה (UI)
+
+- אין `GET /api/orders/boot` אחרי create (מספר הבא מ-`nextOrderNumberPreview`).
+- אין `runWithLoading` גלובלי בשמירה.
+- `GET /api/intake-locations` — לא ב-POST capture; רשימה מלאה נטענת פעם אחת (cache שרת 5 דק׳ + sessionStorage בדפדפן).
+
+### צווארי בקבוק אחרונים
+
+- **שער:** `buildCaptureFinancialSnapshot()` תמיד נשלח מהמסך (`financial` + `finalRate` המוצג). `capture.exchangeRate` לא אמור לרוץ — בלוג `[capture] exchangeRateSource: "client"`.
+- **לקוח:** עם `customerSnapshot` — אין query ב-save (אימות `isActive` ברקע בלבד).
+- **intake-locations:** cache בזיכרון שרת + client; ביטול fetch כפול כש-`paymentPointQuery` ריק ויש כבר רשימה.
+
+### יעד
+
+- חם: **&lt; 500ms** `capture.total`
+- מקסימום: **&lt; 1s**
+

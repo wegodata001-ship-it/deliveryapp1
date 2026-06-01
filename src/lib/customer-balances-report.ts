@@ -1,6 +1,7 @@
 import { PaymentMethod, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
+import { isDebtWithdrawalOrderStatus, orderCustomerCreditUsd } from "@/lib/debt-withdrawal-order";
 import { normalizeOrderSourceCountry } from "@/lib/order-countries";
 import { endOfLocalDay, parseLocalDate } from "@/lib/work-week";
 
@@ -135,7 +136,18 @@ export async function getCustomerBalancesReport(filters: CustomerBalancesReportF
       customerCode: true,
       orders: {
         where: orderWhere,
-        select: { totalIlsWithVat: true, totalIls: true, totalUsd: true, amountUsd: true, commissionUsd: true },
+        select: {
+          status: true,
+          debtWithdrawalUsd: true,
+          totalIlsWithVat: true,
+          totalIls: true,
+          totalUsd: true,
+          amountUsd: true,
+          commissionUsd: true,
+          exchangeRate: true,
+          usdRateUsed: true,
+          snapshotFinalDollarRate: true,
+        },
       },
       payments: {
         where: paymentWhereLinked,
@@ -147,11 +159,34 @@ export async function getCustomerBalancesReport(filters: CustomerBalancesReportF
   const rows: CustomerBalanceReportRow[] = [];
 
   for (const c of customers) {
-    const expected = c.orders.reduce((sum, o) => sum.add(orderIls(o)), new Prisma.Decimal(0));
-    const received = c.payments.reduce((sum, p) => sum.add(paymentIls(p)), new Prisma.Decimal(0));
+    let expected = new Prisma.Decimal(0);
+    let expectedUsd = new Prisma.Decimal(0);
+    let withdrawalReceived = new Prisma.Decimal(0);
+    let withdrawalReceivedUsd = new Prisma.Decimal(0);
+    for (const o of c.orders) {
+      if (isDebtWithdrawalOrderStatus(o.status)) {
+        const creditUsd = orderCustomerCreditUsd(o);
+        if (creditUsd > 0) {
+          withdrawalReceivedUsd = withdrawalReceivedUsd.add(new Prisma.Decimal(creditUsd.toFixed(4)));
+          const rate = o.exchangeRate ?? o.snapshotFinalDollarRate ?? o.usdRateUsed;
+          if (rate) {
+            withdrawalReceived = withdrawalReceived.add(
+              new Prisma.Decimal(creditUsd).mul(rate).toDecimalPlaces(2, 4),
+            );
+          }
+        }
+        continue;
+      }
+      expected = expected.add(orderIls(o));
+      expectedUsd = expectedUsd.add(orderUsd(o));
+    }
+    const received = c.payments
+      .reduce((sum, p) => sum.add(paymentIls(p)), new Prisma.Decimal(0))
+      .add(withdrawalReceived);
     const remaining = expected.sub(received);
-    const expectedUsd = c.orders.reduce((sum, o) => sum.add(orderUsd(o)), new Prisma.Decimal(0));
-    const receivedUsd = c.payments.reduce((sum, p) => sum.add(paymentUsd(p)), new Prisma.Decimal(0));
+    const receivedUsd = c.payments
+      .reduce((sum, p) => sum.add(paymentUsd(p)), new Prisma.Decimal(0))
+      .add(withdrawalReceivedUsd);
     const remainingUsd = expectedUsd.sub(receivedUsd);
     const auto = autoPayStatus(expected, received);
     const paymentStatus = paymentStatusLabel(auto, remainingUsd.gt(0) ? remainingUsd : new Prisma.Decimal(0));
@@ -181,7 +216,19 @@ export async function getCustomerBalancesReport(filters: CustomerBalancesReportF
 
   const orphanOrders = await prisma.order.findMany({
     where: orphanOrderWhere,
-    select: { id: true, totalIlsWithVat: true, totalIls: true, totalUsd: true, amountUsd: true, commissionUsd: true },
+    select: {
+      id: true,
+      status: true,
+      debtWithdrawalUsd: true,
+      totalIlsWithVat: true,
+      totalIls: true,
+      totalUsd: true,
+      amountUsd: true,
+      commissionUsd: true,
+      exchangeRate: true,
+      usdRateUsed: true,
+      snapshotFinalDollarRate: true,
+    },
   });
 
   if (orphanOrders.length > 0) {
@@ -194,11 +241,34 @@ export async function getCustomerBalancesReport(filters: CustomerBalancesReportF
       select: { totalIlsWithVat: true, amountIls: true, amountUsd: true, exchangeRate: true },
     });
 
-    const expectedOrphan = orphanOrders.reduce((s, o) => s.add(orderIls(o)), new Prisma.Decimal(0));
-    const receivedOrphan = orphanPayments.reduce((s, p) => s.add(paymentIls(p)), new Prisma.Decimal(0));
+    let expectedOrphan = new Prisma.Decimal(0);
+    let expectedOrphanUsd = new Prisma.Decimal(0);
+    let withdrawalOrphanIls = new Prisma.Decimal(0);
+    let withdrawalOrphanUsd = new Prisma.Decimal(0);
+    for (const o of orphanOrders) {
+      if (isDebtWithdrawalOrderStatus(o.status)) {
+        const creditUsd = orderCustomerCreditUsd(o);
+        if (creditUsd > 0) {
+          withdrawalOrphanUsd = withdrawalOrphanUsd.add(new Prisma.Decimal(creditUsd.toFixed(4)));
+          const rate = o.exchangeRate ?? o.snapshotFinalDollarRate ?? o.usdRateUsed;
+          if (rate) {
+            withdrawalOrphanIls = withdrawalOrphanIls.add(
+              new Prisma.Decimal(creditUsd).mul(rate).toDecimalPlaces(2, 4),
+            );
+          }
+        }
+        continue;
+      }
+      expectedOrphan = expectedOrphan.add(orderIls(o));
+      expectedOrphanUsd = expectedOrphanUsd.add(orderUsd(o));
+    }
+    const receivedOrphan = orphanPayments
+      .reduce((s, p) => s.add(paymentIls(p)), new Prisma.Decimal(0))
+      .add(withdrawalOrphanIls);
     const remainingOrphan = expectedOrphan.sub(receivedOrphan);
-    const expectedOrphanUsd = orphanOrders.reduce((s, o) => s.add(orderUsd(o)), new Prisma.Decimal(0));
-    const receivedOrphanUsd = orphanPayments.reduce((s, p) => s.add(paymentUsd(p)), new Prisma.Decimal(0));
+    const receivedOrphanUsd = orphanPayments
+      .reduce((s, p) => s.add(paymentUsd(p)), new Prisma.Decimal(0))
+      .add(withdrawalOrphanUsd);
     const remainingOrphanUsd = expectedOrphanUsd.sub(receivedOrphanUsd);
     const autoOrphan = autoPayStatus(expectedOrphan, receivedOrphan);
     const paymentStatusOrphan = paymentStatusLabel(autoOrphan, remainingOrphanUsd.gt(0) ? remainingOrphanUsd : new Prisma.Decimal(0));

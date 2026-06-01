@@ -1,4 +1,4 @@
-import type { OrderStatusSelectOption, OrderStatusTag } from "@/lib/order-status-registry";
+import type { OrderStatusSelectOption, OrderStatusTag } from "@/lib/order-status-shared";
 
 /** אפשרויות ל-dropdown — כולל ערך נוכחי אם כבוי/לא ברשימה הפעילה */
 export function statusOptionsIncludingValue(

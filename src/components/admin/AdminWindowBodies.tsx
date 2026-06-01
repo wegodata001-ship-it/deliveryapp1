@@ -5,16 +5,22 @@ import { Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
   createClientAction,
-  suggestNextCustomerCodeAction,
-  getCustomerLedgerAction,
   listClientsLedgerAction,
+  suggestNextCustomerCodeAction,
+} from "@/app/admin/customers/ledger-actions";
+import type { ClientCreateResult, ClientLedgerPayload } from "@/app/admin/customers/ledger-types";
+import {
+  getCustomerLedgerAction,
   updateCustomerCardDetailsAction,
-  type ClientCreateResult,
-  type ClientLedgerPayload,
   type CustomerCardSnapshot,
   type CustomerLedgerPayload,
   type CustomerLedgerRow,
 } from "@/app/admin/capture/actions";
+import {
+  dispatchCustomerCreated,
+  WEGO_CUSTOMER_CREATED_EVENT,
+  type CustomerCreatedDetail,
+} from "@/lib/customer-created-bus";
 import {
   fetchCustomerCardSnapshotClient,
   invalidateCustomerCardSnapshotClient,
@@ -33,6 +39,7 @@ import {
   buildLedgerExportFilename,
   exportCustomerLedgerExcel,
   exportCustomerLedgerPdf,
+  formatLedgerRunningBalance,
   ledgerHasExportRows,
   type CustomerLedgerExportMeta,
 } from "@/lib/customer-ledger-export";
@@ -110,6 +117,30 @@ export function CustomerCardWindowBody({
       cancelled = true;
     };
   }, [customerId, listQueryDebounced, listPage, listFrom, listTo, listSort]);
+
+  useEffect(() => {
+    if (customerId?.trim()) return;
+    const onCreated = (e: Event) => {
+      const client = (e as CustomEvent<CustomerCreatedDetail>).detail;
+      if (!client?.id) return;
+      setListPage(1);
+      setListLoading(true);
+      void listClientsLedgerAction({
+        query: listQueryDebounced,
+        page: 1,
+        pageSize: 8,
+        fromYmd: listFrom || undefined,
+        toYmd: listTo || undefined,
+        sort: listSort,
+      }).then((res) => {
+        setListPayload(res);
+        setListLoading(false);
+      });
+      void router.refresh();
+    };
+    window.addEventListener(WEGO_CUSTOMER_CREATED_EVENT, onCreated);
+    return () => window.removeEventListener(WEGO_CUSTOMER_CREATED_EVENT, onCreated);
+  }, [customerId, listQueryDebounced, listFrom, listTo, listSort, router]);
 
   const pagedClients = listPayload?.rows ?? [];
   const filteredTotalPages = listPayload?.totalPages ?? 1;
@@ -325,18 +356,18 @@ export function CustomerCardWindowBody({
   }
 
   async function onLedgerTableRowActivate(r: CustomerLedgerRow) {
-    if (r.type === "PAYMENT" && customerId?.trim()) {
-      router.push(`/admin/payments?invoiceId=${encodeURIComponent(r.id)}&customerId=${encodeURIComponent(customerId)}`);
+    if (r.kind === "OPENING_BALANCE") return;
+    if (r.paymentId) {
+      openWindow({ type: "paymentsUpdated", props: { paymentId: r.paymentId } });
       return;
     }
-    if (r.id.startsWith("o-")) {
-      const oid = r.id.slice(2);
-      const hint = await getOrderEditEntryHintAction(oid);
+    if (r.orderId) {
+      const hint = await getOrderEditEntryHintAction(r.orderId);
       if (hint.kind === "prelock") {
         setLedgerOrderLock(hint);
         return;
       }
-      openWindow({ type: "orderCapture", props: { mode: "edit", orderId: oid } });
+      openWindow({ type: "orderCapture", props: { mode: "edit", orderId: r.orderId } });
     }
   }
 
@@ -440,7 +471,7 @@ export function CustomerCardWindowBody({
           <div dir="ltr" className="summary-card-amount">
             {fmtUsd(ledger.totalChargesUsd)}
           </div>
-          <span>סה״כ חוב</span>
+          <span>סה״כ חיובים</span>
         </div>
         <div className="summary-card green">
           <div dir="ltr" className="summary-card-amount">
@@ -468,11 +499,11 @@ export function CustomerCardWindowBody({
               })
             }
           >
-            <div className="summary-card-amount">
-              <CustomerBalanceView businessSigned={balanceNum} currency="USD" />
+            <div className="summary-card-amount" dir="ltr">
+              {formatLedgerRunningBalance(ledger.balanceUsd)}
             </div>
           </button>
-          <span>{balanceSummaryView.label}</span>
+          <span>יתרה נוכחית</span>
         </div>
       </div>
     ) : null;
@@ -636,32 +667,37 @@ export function CustomerCardWindowBody({
                 <thead>
                   <tr>
                     <th>תאריך</th>
-                    <th>סוג</th>
-                    <th>סטטוס</th>
-                    <th>סכום</th>
-                    <th>שולם</th>
-                    <th>יתרה</th>
                     <th>מסמך</th>
+                    <th>סוג</th>
+                    <th>חיוב</th>
+                    <th>תשלום</th>
+                    <th>יתרה</th>
                   </tr>
                 </thead>
                 <tbody>
                   {ledgerLoading ? (
                     <tr>
-                      <td colSpan={7}>טוען…</td>
+                      <td colSpan={6}>טוען…</td>
                     </tr>
                   ) : !ledger || ledger.rows.length === 0 ? (
                     <tr>
-                      <td colSpan={7}>אין תנועות בטווח.</td>
+                      <td colSpan={6}>אין תנועות בטווח.</td>
                     </tr>
                   ) : (
                     ledger.rows.map((r) => {
-                      const clickable = r.type === "PAYMENT" || r.type === "CREDIT_STORED" || r.id.startsWith("o-");
-                      const bal = rowBalanceNum(r.balanceUsd);
-                      const rowBalView = formatCustomerBalanceDisplay(bal, "USD");
+                      const clickable =
+                        r.kind !== "OPENING_BALANCE" && !!(r.orderId || r.paymentId);
+                      const chargeNum = parseMoneyStringOrZero(r.chargeUsd);
+                      const paymentNum = parseMoneyStringOrZero(r.paymentUsd);
                       return (
                         <tr
                           key={r.id}
-                          className={clickable ? "clickable" : undefined}
+                          className={[
+                            r.kind === "OPENING_BALANCE" ? "adm-ledger-row--opening" : "",
+                            clickable ? "clickable" : "",
+                          ]
+                            .filter(Boolean)
+                            .join(" ")}
                           tabIndex={clickable ? 0 : undefined}
                           role={clickable ? "button" : undefined}
                           onClick={() => clickable && void onLedgerTableRowActivate(r)}
@@ -674,42 +710,35 @@ export function CustomerCardWindowBody({
                           }}
                         >
                           <td dir="ltr">{r.dateYmd}</td>
-                          <td>
-                            {r.type === "CHARGE"
-                              ? "חיוב"
-                              : r.type === "CREDIT_STORED"
-                                ? "יתרת זכות"
-                                : r.type === "CREDIT_APPLIED"
-                                  ? "קיזוז זכות"
-                                  : "תשלום"}
-                          </td>
-                          <td>
-                            {rowBalView.kind === "debt" ? (
-                              <span className="status-debt">{rowBalView.label}</span>
-                            ) : rowBalView.kind === "credit" ? (
-                              <span className="status-credit">{rowBalView.label}</span>
+                          <td dir="ltr" className="adm-ledger-doc-cell">
+                            {clickable ? (
+                              <button
+                                type="button"
+                                className="adm-ledger-doc-link"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void onLedgerTableRowActivate(r);
+                                }}
+                              >
+                                {r.document}
+                              </button>
                             ) : (
-                              <span className="status-even">{rowBalView.label}</span>
+                              r.document
                             )}
                           </td>
-                          <td dir="ltr">{fmtUsd(r.amountUsd)}</td>
-                          <td dir="ltr">
-                            {r.type === "CHARGE" || r.type === "CREDIT_APPLIED" ? (
-                              fmtUsd(r.paidUsd)
-                            ) : (
-                              <span className="adm-ledger-paid-dual">
-                                {Number(r.paidUsd) > 0 ? <span>{fmtUsd(r.paidUsd)}</span> : null}
-                                {r.paidIls && Number(r.paidIls) > 0 ? (
-                                  <span className="adm-ledger-paid-ils">₪{r.paidIls}</span>
-                                ) : null}
-                                {Number(r.paidUsd) <= 0 && !(r.paidIls && Number(r.paidIls) > 0) ? "—" : null}
-                              </span>
-                            )}
+                          <td>{r.typeLabel}</td>
+                          <td
+                            dir="ltr"
+                            className={r.isDebtWithdrawal || chargeNum < 0 ? "adm-ledger-charge--debt-withdrawal" : ""}
+                          >
+                            {r.isDebtWithdrawal || chargeNum < -0.005
+                              ? fmtUsd(r.chargeUsd)
+                              : chargeNum > 0
+                                ? fmtUsd(r.chargeUsd)
+                                : "—"}
                           </td>
-                          <td dir="ltr">
-                            <CustomerBalanceView businessSigned={bal} currency="USD" />
-                          </td>
-                          <td dir="ltr">{r.document}</td>
+                          <td dir="ltr">{paymentNum > 0 ? fmtUsd(r.paymentUsd) : "—"}</td>
+                          <td dir="ltr">{formatLedgerRunningBalance(r.balanceUsd)}</td>
                         </tr>
                       );
                     })
@@ -753,6 +782,7 @@ const EMPTY_NEW_CUSTOMER_FORM = {
 
 export function CreateCustomerWindowBody({ initialCustomerCode }: { initialCustomerCode?: string }) {
   const { closeTop, completeCustomerCreate } = useAdminWindows();
+  const router = useRouter();
   const nameArRef = useRef<HTMLInputElement>(null);
   const notesRef = useRef<HTMLTextAreaElement>(null);
   /** true אחרי שהמשתמש ערך את קוד הלקוח ידנית — לא לדרוס באוטומט */
@@ -834,12 +864,16 @@ export function CreateCustomerWindowBody({ initialCustomerCode }: { initialCusto
     const client = await performSave();
     if (!client) return;
     const appliedToOrder = completeCustomerCreate(client);
-    if (!appliedToOrder) setStandaloneDone(client);
+    if (!appliedToOrder) {
+      setStandaloneDone(client);
+      router.refresh();
+    }
   }
 
   async function onSaveAndNew() {
     const client = await performSave();
     if (!client) return;
+    dispatchCustomerCreated(client);
     setSaveSuccessMsg("לקוח נשמר בהצלחה");
     resetFormForNext();
     await loadSuggestedCode({ force: true });

@@ -60,6 +60,27 @@ export function roundMoney2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/** יתרת הזמנה ב-USD (חתום: שלילי = זכות לקוח / תשלום עודף) */
+export function orderLedgerBalanceUsd(
+  o: Pick<PaymentIntakeOrderBase, "totalAmountUsd" | "dbPaidUsd">,
+): number {
+  return roundMoney2(o.totalAmountUsd - o.dbPaidUsd);
+}
+
+export type PaymentLedgerStatus = "paid" | "open" | "credit";
+
+export function paymentLedgerStatus(balanceUsd: number): PaymentLedgerStatus {
+  if (balanceUsd > 0.02) return "open";
+  if (balanceUsd < -0.02) return "credit";
+  return "paid";
+}
+
+export function paymentLedgerStatusLabel(status: PaymentLedgerStatus): string {
+  if (status === "open") return "יתרה פתוחה";
+  if (status === "credit") return "זכות לקוח";
+  return "שולם";
+}
+
 /** עמלה לשורה: מהזמנה, או משוערת מאחוז העמלה בקליטה אם אין עמלה שמורה */
 export function computeEffectiveRowCommissionUsd(
   amountUsd: number,

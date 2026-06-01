@@ -1,7 +1,8 @@
 "use client";
 
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
-import type { ClientCreateResult } from "@/app/admin/capture/actions";
+import type { ClientCreateResult } from "@/app/admin/customers/ledger-types";
+import { dispatchCustomerCreated } from "@/lib/customer-created-bus";
 import type { AdminWindowEntry, AdminWindowPayload, AdminWindowType } from "@/lib/admin-windows";
 import { newWindowId } from "@/lib/admin-windows";
 
@@ -75,6 +76,7 @@ export function AdminWindowProvider({ children }: { children: ReactNode }) {
     const listener = customerCreatedListenerRef.current;
     customerCreatedListenerRef.current = null;
     setStack((s) => (s.length && s[s.length - 1]?.type === "createCustomer" ? s.slice(0, -1) : s));
+    dispatchCustomerCreated(client);
     if (listener) {
       listener(client);
       return true;

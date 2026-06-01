@@ -22,6 +22,8 @@ export const CUSTOMER_SEARCH_SELECT = {
   nameAr: true,
   nameEn: true,
   nameHe: true,
+  isActive: true,
+  deletedAt: true,
 } as const;
 
 type CustomerSearchDbRow = Prisma.CustomerGetPayload<{ select: typeof CUSTOMER_SEARCH_SELECT }>;
@@ -49,23 +51,6 @@ function toSearchRow(r: CustomerSearchDbRow): CustomerSearchRow {
 
 function baseWhere(): Prisma.CustomerWhereInput {
   return { isActive: true, deletedAt: null };
-}
-
-function exactOrConditions(q: string): Prisma.CustomerWhereInput[] {
-  const isUuid = CUSTOMER_SEARCH_UUID_RE.test(q);
-  const or: Prisma.CustomerWhereInput[] = [
-    { customerCode: { equals: q, mode: "insensitive" } },
-    { oldCustomerCode: { equals: q, mode: "insensitive" } },
-    { phone: { equals: q } },
-    { phone2: { equals: q } },
-  ];
-  if (isUuid) or.push({ id: q });
-  const digits = q.replace(/\D/g, "");
-  if (digits.length >= 2 && digits !== q) {
-    or.push({ phone: { equals: digits } });
-    or.push({ phone2: { equals: digits } });
-  }
-  return or;
 }
 
 function partialOrConditions(q: string): Prisma.CustomerWhereInput[] {
@@ -98,7 +83,7 @@ async function fetchByIdList(ids: string[]): Promise<CustomerSearchRow[]> {
   return ids.map((id) => byId.get(id)).filter(Boolean).map((r) => toSearchRow(r!));
 }
 
-/** חיפוש קוד לקוח עם התעלמות מאפסים מובילים (17856 ↔ 017856) */
+/** חיפוש קוד מספרי עם אפסים מובילים — רק במצב חלקי (לא exact=1) */
 async function searchByNormalizedCodeDigits(q: string, limit: number): Promise<CustomerSearchRow[]> {
   if (!/^\d+$/.test(q)) return [];
   const stripped = q.replace(/^0+/, "") || "0";
@@ -117,14 +102,51 @@ async function searchByNormalizedCodeDigits(q: string, limit: number): Promise<C
   return fetchByIdList(ids.map((r) => r.id));
 }
 
+/**
+ * exact=1 — קוד לקוח / קוד ישן / UUID בלבד.
+ * ללא contains, ILIKE, טלפון, או סריקת טבלה.
+ */
+function isActiveCustomer(row: { deletedAt: Date | null; isActive: boolean }): boolean {
+  return row.isActive && row.deletedAt == null;
+}
+
+async function searchCustomersExact(q: string): Promise<CustomerSearchRow[]> {
+  if (CUSTOMER_SEARCH_UUID_RE.test(q)) {
+    const byId = await prisma.customer.findUnique({
+      where: { id: q },
+      select: CUSTOMER_SEARCH_SELECT,
+    });
+    return byId && isActiveCustomer(byId) ? [toSearchRow(byId)] : [];
+  }
+
+  const byCode = await prisma.customer.findUnique({
+    where: { customerCode: q },
+    select: CUSTOMER_SEARCH_SELECT,
+  });
+  if (byCode && isActiveCustomer(byCode)) return [toSearchRow(byCode)];
+
+  const byCodeCi = await prisma.customer.findFirst({
+    where: { ...baseWhere(), customerCode: { equals: q, mode: "insensitive" } },
+    select: CUSTOMER_SEARCH_SELECT,
+  });
+  if (byCodeCi) return [toSearchRow(byCodeCi)];
+
+  const byOld = await prisma.customer.findFirst({
+    where: { ...baseWhere(), oldCustomerCode: { equals: q, mode: "insensitive" } },
+    select: CUSTOMER_SEARCH_SELECT,
+  });
+  if (byOld) return [toSearchRow(byOld)];
+
+  return [];
+}
+
 export type CustomerPrismaSearchOptions = {
   limit?: number;
   exactOnly?: boolean;
 };
 
 /**
- * חיפוש לקוחות — התאמה מדויקת (קוד / טלפון / UUID) ואז חלקית.
- * כולל fallback לקודים מספריים עם אפסים מובילים.
+ * חיפוש לקוחות — exact=1: findFirst לפי קוד בלבד; אחרת התאמת קוד ואז חלקי.
  */
 export async function searchCustomersPrisma(
   raw: string,
@@ -136,31 +158,17 @@ export async function searchCustomersPrisma(
 
   if (!customerSearchQueryAllowed(q, exactOnly)) return [];
 
-  const codeHit = await prisma.customer.findFirst({
-    where: { ...baseWhere(), customerCode: { equals: q, mode: "insensitive" } },
-    select: CUSTOMER_SEARCH_SELECT,
-  });
-  if (codeHit) {
-    const row = toSearchRow(codeHit);
-    return exactOnly ? [row] : [row];
-  }
-
-  const exactHits = await prisma.customer.findMany({
-    where: { ...baseWhere(), OR: exactOrConditions(q) },
-    take: exactOnly ? 1 : limit,
-    orderBy: { displayName: "asc" },
-    select: CUSTOMER_SEARCH_SELECT,
-  });
-
-  if (exactHits.length > 0) {
-    return exactHits.map(toSearchRow);
-  }
-
   if (exactOnly) {
-    const normalized = await searchByNormalizedCodeDigits(q, 1);
-    if (normalized.length > 0) return normalized;
-    return [];
+    return searchCustomersExact(q);
   }
+
+  const codeHit =
+    (await prisma.customer.findUnique({ where: { customerCode: q }, select: CUSTOMER_SEARCH_SELECT })) ??
+    (await prisma.customer.findFirst({
+      where: { ...baseWhere(), customerCode: { equals: q, mode: "insensitive" } },
+      select: CUSTOMER_SEARCH_SELECT,
+    }));
+  if (codeHit && isActiveCustomer(codeHit)) return [toSearchRow(codeHit)];
 
   const partialHits = await prisma.customer.findMany({
     where: { ...baseWhere(), OR: partialOrConditions(q) },

@@ -92,6 +92,11 @@ async function fetchUserWithPermissionsJoin(sub: string): Promise<AppUser | null
   return Object.assign(rest, { permissionKeys }) as AppUser;
 }
 
+/** JWT בלבד — ל-API routes שכבר אימתו session (ללא cookies/DB) */
+export function appUserFromSessionPayload(session: SessionPayload): AppUser {
+  return appUserFromSession(session);
+}
+
 function appUserFromSession(session: SessionPayload): AppUser {
   const permissionKeys = session.role === "ADMIN" ? [] : (session.perms ?? []);
   return {

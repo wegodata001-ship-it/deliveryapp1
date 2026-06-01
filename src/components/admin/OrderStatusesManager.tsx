@@ -10,7 +10,7 @@ import {
   type OrderStatusManagerRow,
 } from "@/app/admin/order-statuses/actions";
 import { useOrderStatusCatalog } from "@/components/admin/OrderStatusCatalogProvider";
-import { STATUS_COLOR_PRESETS } from "@/lib/order-status-registry";
+import { STATUS_COLOR_PRESETS } from "@/lib/order-status-shared";
 import { ArrowDown, ArrowUp, ArrowUpDown, GripVertical, Pencil, Plus, Trash2, X } from "lucide-react";
 
 type EditState = { id: string; nameHe: string; colorHex: string; isActive: boolean } | null;

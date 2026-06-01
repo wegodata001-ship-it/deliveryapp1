@@ -1,37 +1,50 @@
+import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { getSessionPayload } from "@/lib/admin-auth";
-import { perfError, withPerfTimer } from "@/lib/perf-log";
-import { previewOrderNumberAction } from "@/app/admin/capture/actions";
-import { getSelectedCountriesForOrdersInternal } from "@/app/admin/settings/actions";
+import { getSelectedCountriesForCaptureCached } from "@/lib/capture-hot-path";
+import { bootPerfLog, bootPerfTimed, bootPerfTimeEnd, bootPerfTimeStart } from "@/lib/orders-boot-perf";
+import { perfError } from "@/lib/perf-log";
+import { adminSessionCookieName, verifySessionToken } from "@/lib/session";
 
 export const runtime = "nodejs";
 
 /**
- * Bootstrap endpoint for the order capture screen.
- * Returns selected countries + next order-number preview in a single round-trip
- * — replaces two server-action POSTs to /admin (each one triggered a full RSC
- * re-render of the admin route).
+ * Bootstrap קל לטופס קליטה — מדינות מופעלות בלבד.
+ * מספר הזמנה: GET /api/orders/next-number?weekCode=…
  */
-export async function GET(req: Request) {
-  return withPerfTimer("api.orders.boot.GET", async () => {
-    try {
-      const session = await getSessionPayload();
-      if (!session || (session.role !== "ADMIN" && session.role !== "EMPLOYEE")) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-      }
-
-      const { searchParams } = new URL(req.url);
-      const weekCode = (searchParams.get("weekCode") ?? "").trim();
-
-      const [countries, preview] = await Promise.all([
-        getSelectedCountriesForOrdersInternal(),
-        weekCode ? previewOrderNumberAction(weekCode) : Promise.resolve(""),
-      ]);
-
-      return NextResponse.json({ countries, orderNumberPreview: preview || null });
-    } catch (error) {
-      perfError("api.orders.boot.GET.failed", error);
-      return NextResponse.json({ error: "טעינת נתונים נכשלה" }, { status: 500 });
+export async function GET() {
+  bootPerfTimeStart("boot.total");
+  const t0 = Date.now();
+  try {
+    bootPerfTimeStart("boot.week");
+    const token = (await cookies()).get(adminSessionCookieName)?.value;
+    const session = token ? await verifySessionToken(token) : null;
+    bootPerfTimeEnd("boot.week");
+    if (!session || (session.role !== "ADMIN" && session.role !== "EMPLOYEE")) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-  });
+
+    bootPerfTimeStart("boot.exchangeRate");
+    bootPerfTimeEnd("boot.exchangeRate");
+
+    const countries = await bootPerfTimed("boot.locations", () =>
+      getSelectedCountriesForCaptureCached(),
+    );
+
+    bootPerfLog({
+      route: "boot",
+      apiMs: Date.now() - t0,
+      countriesCount: countries.length,
+      note: "exchangeRate from layout financial prop, not boot",
+    });
+
+    return NextResponse.json(
+      { countries },
+      { headers: { "Cache-Control": "private, max-age=120" } },
+    );
+  } catch (error) {
+    perfError("api.orders.boot.GET.failed", error);
+    return NextResponse.json({ error: "טעינת נתונים נכשלה" }, { status: 500 });
+  } finally {
+    bootPerfTimeEnd("boot.total");
+  }
 }

@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { getSessionPayload } from "@/lib/admin-auth";
-import { findOrCreateIntakeLocationByName, listIntakeLocationsForSelect } from "@/lib/intake-location";
+import { findOrCreateIntakeLocationByName } from "@/lib/intake-location";
+import {
+  invalidateIntakeLocationsListCache,
+  listIntakeLocationsForSelectCached,
+} from "@/lib/intake-locations-cache";
 import { perfError, withPerfTimer } from "@/lib/perf-log";
 import { warnIfMissingCriticalEnv } from "@/lib/env-check";
 
@@ -20,8 +24,10 @@ export async function GET(req: Request) {
       const limitRaw = Number(searchParams.get("limit") ?? (q ? "120" : "500"));
       const limit = Number.isFinite(limitRaw) ? limitRaw : 500;
 
-      const rows = await listIntakeLocationsForSelect(q, limit);
-      return NextResponse.json(rows);
+      const rows = await listIntakeLocationsForSelectCached(q, limit);
+      return NextResponse.json(rows, {
+        headers: !q ? { "Cache-Control": "private, max-age=300" } : undefined,
+      });
     } catch (error) {
       perfError("api.intake-locations.GET.failed", error);
       return NextResponse.json({ error: "טעינת מקומות נכשלה" }, { status: 500 });
@@ -49,6 +55,7 @@ export async function POST(req: Request) {
       }
 
       const row = await findOrCreateIntakeLocationByName(trimmed);
+      invalidateIntakeLocationsListCache();
       return NextResponse.json(row);
     } catch (error) {
       perfError("api.intake-locations.POST.failed", error);
