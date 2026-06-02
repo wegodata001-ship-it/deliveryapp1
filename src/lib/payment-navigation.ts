@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
-import { parsePaymentNumberFromCode } from "@/lib/payment-capture-code";
 import { paymentsPerfTimeEnd, paymentsPerfTimeStart } from "@/lib/payments-perf";
+import type { Prisma } from "@prisma/client";
 
 export type PaymentNavDirection = "prev" | "next";
 
@@ -23,107 +23,109 @@ export type PaymentNavResult =
   | { success: false; edge: "first" | "last" }
   | { success: false; error: "not_found" };
 
-/** שכן לפי מספר רציף — query בודד עם אינדקס paymentNumber */
-async function findNeighborByPaymentNumber(
-  paymentNumber: number,
+export type PreviousPaymentResult = {
+  previousPaymentId: string | null;
+  previousPaymentCode: string | null;
+  previousPaymentNumber: number | null;
+};
+
+export type NextPaymentResult = {
+  nextPaymentId: string | null;
+  nextPaymentCode: string | null;
+  nextPaymentNumber: number | null;
+};
+
+const paymentNavigationOrder = [{ createdAt: "desc" as const }, { id: "desc" as const }];
+
+async function findCurrentById(currentPaymentId: string) {
+  const id = currentPaymentId.trim();
+  if (!id) return null;
+  return prisma.payment.findFirst({
+    where: { id, customerId: { not: null }, paymentCode: { not: null } },
+    select: { ...navSelect, createdAt: true },
+  });
+}
+
+async function findNeighborByCreatedAt(
+  current: NonNullable<Awaited<ReturnType<typeof findCurrentById>>>,
   direction: PaymentNavDirection,
 ): Promise<PaymentNavRow | null> {
+  const createdAtTie =
+    direction === "prev"
+      ? ({ lt: current.id } satisfies Prisma.StringFilter<"Payment">)
+      : ({ gt: current.id } satisfies Prisma.StringFilter<"Payment">);
+  const createdAtWhere =
+    direction === "prev"
+      ? ({ lt: current.createdAt } satisfies Prisma.DateTimeFilter<"Payment">)
+      : ({ gt: current.createdAt } satisfies Prisma.DateTimeFilter<"Payment">);
+
   return prisma.payment.findFirst({
     where: {
       customerId: { not: null },
       paymentCode: { not: null },
-      paymentNumber: direction === "prev" ? { lt: paymentNumber } : { gt: paymentNumber },
+      OR: [{ createdAt: createdAtWhere }, { createdAt: current.createdAt, id: createdAtTie }],
     },
-    orderBy: { paymentNumber: direction === "prev" ? "desc" : "asc" },
+    orderBy: direction === "prev" ? paymentNavigationOrder : [{ createdAt: "asc" }, { id: "asc" }],
     select: navSelect,
   });
 }
 
-async function findCurrentByCode(paymentCode: string): Promise<PaymentNavRow | null> {
-  const exact = await prisma.payment.findUnique({
-    where: { paymentCode },
-    select: navSelect,
-  });
-  if (exact?.customerId) return exact;
-
-  const paymentNumber = parsePaymentNumberFromCode(paymentCode);
-  if (paymentNumber == null) return null;
-
-  return prisma.payment.findFirst({
-    where: { paymentNumber, customerId: { not: null } },
-    orderBy: { id: "asc" },
-    select: navSelect,
-  });
-}
-
-async function resolveNeighbor(
-  currentPaymentCode: string,
-  direction: PaymentNavDirection,
-): Promise<PaymentNavResult> {
-  const code = currentPaymentCode.trim();
-  if (!code) return { success: false, error: "not_found" };
-
-  const parsedNumber = parsePaymentNumberFromCode(code);
-  if (parsedNumber != null) {
-    const row = await findNeighborByPaymentNumber(parsedNumber, direction);
-    if (!row) {
-      return { success: false, edge: direction === "prev" ? "first" : "last" };
-    }
-    return {
-      success: true,
-      paymentId: row.id,
-      paymentCode: row.paymentCode ?? null,
-      paymentNumber: row.paymentNumber ?? null,
-    };
+export async function getPreviousPayment(currentPaymentId: string): Promise<PreviousPaymentResult> {
+  const current = await findCurrentById(currentPaymentId);
+  if (!current) {
+    return { previousPaymentId: null, previousPaymentCode: null, previousPaymentNumber: null };
   }
 
-  const current = await findCurrentByCode(code);
-  if (!current) return { success: false, error: "not_found" };
-
-  if (current.paymentNumber != null) {
-    const row = await findNeighborByPaymentNumber(current.paymentNumber, direction);
-    if (!row) {
-      return { success: false, edge: direction === "prev" ? "first" : "last" };
-    }
-    return {
-      success: true,
-      paymentId: row.id,
-      paymentCode: row.paymentCode ?? null,
-      paymentNumber: row.paymentNumber ?? null,
-    };
-  }
-
-  if (!current.id) return { success: false, error: "not_found" };
-
-  const row = await prisma.payment.findFirst({
-    where: {
-      customerId: { not: null },
-      paymentCode: { not: null },
-      id: direction === "prev" ? { lt: current.id } : { gt: current.id },
-    },
-    orderBy: { id: direction === "prev" ? "desc" : "asc" },
-    select: navSelect,
-  });
-
-  if (!row) {
-    return { success: false, edge: direction === "prev" ? "first" : "last" };
-  }
-
+  const row = await findNeighborByCreatedAt(current, "prev");
   return {
-    success: true,
-    paymentId: row.id,
-    paymentCode: row.paymentCode ?? null,
-    paymentNumber: row.paymentNumber ?? null,
+    previousPaymentId: row?.id ?? null,
+    previousPaymentCode: row?.paymentCode ?? null,
+    previousPaymentNumber: row?.paymentNumber ?? null,
+  };
+}
+
+export async function getNextPayment(currentPaymentId: string): Promise<NextPaymentResult> {
+  const current = await findCurrentById(currentPaymentId);
+  if (!current) {
+    return { nextPaymentId: null, nextPaymentCode: null, nextPaymentNumber: null };
+  }
+
+  const row = await findNeighborByCreatedAt(current, "next");
+  return {
+    nextPaymentId: row?.id ?? null,
+    nextPaymentCode: row?.paymentCode ?? null,
+    nextPaymentNumber: row?.paymentNumber ?? null,
   };
 }
 
 export async function resolvePaymentNavigation(
-  currentPaymentCode: string,
+  currentPaymentId: string,
   direction: PaymentNavDirection,
 ): Promise<PaymentNavResult> {
   paymentsPerfTimeStart("payments.navigation.db");
   try {
-    return await resolveNeighbor(currentPaymentCode, direction);
+    const current = await findCurrentById(currentPaymentId);
+    if (!current) return { success: false, error: "not_found" };
+
+    if (direction === "prev") {
+      const result = await getPreviousPayment(currentPaymentId);
+      if (!result.previousPaymentId) return { success: false, edge: "first" };
+      return {
+        success: true,
+        paymentId: result.previousPaymentId,
+        paymentCode: result.previousPaymentCode,
+        paymentNumber: result.previousPaymentNumber,
+      };
+    }
+
+    const result = await getNextPayment(currentPaymentId);
+    if (!result.nextPaymentId) return { success: false, edge: "last" };
+    return {
+      success: true,
+      paymentId: result.nextPaymentId,
+      paymentCode: result.nextPaymentCode,
+      paymentNumber: result.nextPaymentNumber,
+    };
   } finally {
     paymentsPerfTimeEnd("payments.navigation.db");
   }

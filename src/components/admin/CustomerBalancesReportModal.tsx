@@ -76,19 +76,14 @@ function phaseBadgeClass(phase: OrderPhaseUi): string {
   }
 }
 
-function rowBalanceIlsNumber(balanceIls: string): number {
-  const n = Number(balanceIls.replace(",", "."));
-  return Number.isFinite(n) ? n : 0;
-}
-
-function rowSignedIlsNumber(signedIls: string): number {
-  const n = Number(signedIls.replace(",", "."));
+function rowSignedUsdNumber(signedUsd: string): number {
+  const n = Number(signedUsd.replace(",", "."));
   return Number.isFinite(n) ? n : 0;
 }
 
 function dataRowClass(row: CustomerBalanceRow): string {
   const base = "adm-cbr-erp-data-row";
-  const business = internalSignedToBusiness(rowSignedIlsNumber(row.signedIls));
+  const business = internalSignedToBusiness(rowSignedUsdNumber(row.signedUsd));
   if (business > 0.01) return `${base} adm-cbr-erp-data-row--debt`;
   if (business < -0.01) return `${base} adm-cbr-erp-data-row--credit`;
   return base;
@@ -132,8 +127,6 @@ function toModalInput(
   opts: {
     smart: string;
     orderPhase: CustomerBalanceOrderPhaseFilter;
-    minBalanceIls: string;
-    maxBalanceIls: string;
     minBalanceUsd: string;
     maxBalanceUsd: string;
     modalWeekCode: string;
@@ -145,8 +138,6 @@ function toModalInput(
     limit: PAGE_SIZE,
     smart: opts.smart.trim() || undefined,
     orderPhase: opts.orderPhase,
-    minBalanceIls: opts.minBalanceIls.trim() || undefined,
-    maxBalanceIls: opts.maxBalanceIls.trim() || undefined,
     minBalanceUsd: opts.minBalanceUsd.trim() || undefined,
     maxBalanceUsd: opts.maxBalanceUsd.trim() || undefined,
     modalWeekCode: opts.modalWeekCode.trim() || undefined,
@@ -165,7 +156,7 @@ const BalancesErpTable = memo(function BalancesErpTable({ rows, expandedId, onTo
     return (
       <tbody>
         <tr>
-          <td colSpan={5} className="adm-cbr-erp-empty">
+          <td colSpan={4} className="adm-cbr-erp-empty">
             לא נמצאו לקוחות עם יתרה פתוחה בטווח והפילטרים שנבחרו
           </td>
         </tr>
@@ -186,9 +177,6 @@ const BalancesErpTable = memo(function BalancesErpTable({ rows, expandedId, onTo
               {row.customerCode ? <div className="adm-cbr-erp-cust-code">{row.customerCode}</div> : null}
             </td>
             <td className="adm-cbr-erp-num adm-cbr-erp-num--strong">
-              <CustomerBalanceView internalSignedRaw={row.signedIls} currency="ILS" />
-            </td>
-            <td className="adm-cbr-erp-num adm-cbr-erp-num--strong">
               <CustomerBalanceView internalSignedRaw={row.signedUsd} currency="USD" />
             </td>
             <td>
@@ -200,7 +188,7 @@ const BalancesErpTable = memo(function BalancesErpTable({ rows, expandedId, onTo
           </tr>
           {expandedId === row.customerId && (row.ordersOpenLines?.length ?? 0) > 0 ? (
             <tr className="adm-cbr-erp-detail-row">
-              <td colSpan={5}>
+              <td colSpan={4}>
                 <div className="adm-cbr-erp-detail-box">
                   {row.ordersOpenLines?.map((line, i) => (
                     <div key={i} className="adm-cbr-erp-detail-line">
@@ -232,8 +220,6 @@ export function CustomerBalancesReportModal({
   const [payload, setPayload] = useState<CustomerBalancesPayload | null>(null);
   const [page, setPage] = useState(1);
   const [orderPhase, setOrderPhase] = useState<CustomerBalanceOrderPhaseFilter>("ALL");
-  const [minBalanceIls, setMinBalanceIls] = useState("");
-  const [maxBalanceIls, setMaxBalanceIls] = useState("");
   const [minBalanceUsd, setMinBalanceUsd] = useState("");
   const [maxBalanceUsd, setMaxBalanceUsd] = useState("");
   const [modalWeekCode, setModalWeekCode] = useState("");
@@ -281,14 +267,12 @@ export function CustomerBalancesReportModal({
     () => ({
       smart: smartDebounced,
       orderPhase,
-      minBalanceIls,
-      maxBalanceIls,
       minBalanceUsd,
       maxBalanceUsd,
       modalWeekCode,
       modalToYmd,
     }),
-    [smartDebounced, orderPhase, minBalanceIls, maxBalanceIls, minBalanceUsd, maxBalanceUsd, modalWeekCode, modalToYmd],
+    [smartDebounced, orderPhase, minBalanceUsd, maxBalanceUsd, modalWeekCode, modalToYmd],
   );
 
   useEffect(() => {
@@ -343,7 +327,6 @@ export function CustomerBalancesReportModal({
     if (!payload) return null;
     return {
       customers: payload.totalRows,
-      ils: payload.stats.totalDebtIls,
       usd: stats?.totalDebtUsd ?? "—",
     };
   }, [payload, stats]);
@@ -455,28 +438,6 @@ export function CustomerBalancesReportModal({
             </select>
           </label>
           <label className="adm-cbr-erp-field adm-cbr-erp-field--tight">
-            <span className="adm-cbr-erp-field__label">מינ׳ ₪</span>
-            <input
-              className="adm-cbr-erp-input"
-              type="text"
-              inputMode="decimal"
-              disabled={isLoading || loading}
-              value={minBalanceIls}
-              onChange={(e) => setMinBalanceIls(e.target.value)}
-            />
-          </label>
-          <label className="adm-cbr-erp-field adm-cbr-erp-field--tight">
-            <span className="adm-cbr-erp-field__label">מקס׳ ₪</span>
-            <input
-              className="adm-cbr-erp-input"
-              type="text"
-              inputMode="decimal"
-              disabled={isLoading || loading}
-              value={maxBalanceIls}
-              onChange={(e) => setMaxBalanceIls(e.target.value)}
-            />
-          </label>
-          <label className="adm-cbr-erp-field adm-cbr-erp-field--tight">
             <span className="adm-cbr-erp-field__label">מינ׳ $</span>
             <input
               className="adm-cbr-erp-input"
@@ -543,12 +504,12 @@ export function CustomerBalancesReportModal({
             <table className="adm-cbr-erp-table">
               <thead>
                 <tr>
-                  {Array.from({ length: 5 }).map((_, i) => (
+                  {Array.from({ length: 4 }).map((_, i) => (
                     <th key={i}>‎</th>
                   ))}
                 </tr>
               </thead>
-              <TableSkeleton rows={8} columns={5} />
+              <TableSkeleton rows={8} columns={4} />
             </table>
           </div>
         ) : (
@@ -557,8 +518,7 @@ export function CustomerBalancesReportModal({
               <thead>
                 <tr>
                   <th>לקוח</th>
-                  <th>יתרה ₪</th>
-                  <th>יתרה $</th>
+                  <th>יתרה ($)</th>
                   <th>תשלומים</th>
                   <th>סטטוס הזמנות</th>
                 </tr>
@@ -576,12 +536,8 @@ export function CustomerBalancesReportModal({
               <span className="adm-cbr-erp-footer__k">סה״כ לקוחות</span>
               <strong className="adm-cbr-erp-footer__v">{footerTotals.customers}</strong>
             </div>
-            <div className="adm-cbr-erp-footer__cell adm-cbr-erp-footer__cell--center">
-              <span className="adm-cbr-erp-footer__k">סה״כ ₪</span>
-              <strong className="adm-cbr-erp-footer__v">{footerTotals.ils}</strong>
-            </div>
             <div className="adm-cbr-erp-footer__cell adm-cbr-erp-footer__cell--left">
-              <span className="adm-cbr-erp-footer__k">סה״כ $</span>
+              <span className="adm-cbr-erp-footer__k">סה״כ יתרה ($)</span>
               <strong className="adm-cbr-erp-footer__v">{footerTotals.usd}</strong>
             </div>
           </div>

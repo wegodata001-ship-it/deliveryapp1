@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useRouter } from "next/navigation";
 import type { PaymentMethod } from "@prisma/client";
 import {
   allocatePaymentAcrossOrders,
@@ -321,6 +322,7 @@ export function PaymentModalUpdated({
   canCreateOrders = true,
   viewerIsAdmin = false,
 }: Props) {
+  const router = useRouter();
   const { globalWeek } = useAdminGlobal();
   const defaultRate = useMemo(() => parseFinalRate(financial), [financial]);
   const { openWindow, closeTop } = useAdminWindows();
@@ -484,11 +486,11 @@ export function PaymentModalUpdated({
   }, [loadedPayment?.id, loadedPayment?.paymentCode, previewPaymentCode]);
 
   const currentPaymentNavigationQuery = useMemo(() => {
-    if (displayedPaymentCode) {
-      return `currentPaymentCode=${encodeURIComponent(displayedPaymentCode)}`;
+    if (savedCapturePaymentId) {
+      return `currentPaymentId=${encodeURIComponent(savedCapturePaymentId)}`;
     }
     return null;
-  }, [displayedPaymentCode]);
+  }, [savedCapturePaymentId]);
 
   /** ניווט prev/next — prefetch + מטמון entry לשכנים */
   useEffect(() => {
@@ -518,8 +520,8 @@ export function PaymentModalUpdated({
       if (cancelled) return;
       void (async () => {
         const [prev, next] = await Promise.all([
-          fetch(`/api/payments/navigation?${currentPaymentNavigationQuery}&direction=prev`),
-          fetch(`/api/payments/navigation?${currentPaymentNavigationQuery}&direction=next`),
+          fetch(`/api/payments/navigation?${currentPaymentNavigationQuery}&direction=prev`, { cache: "no-store" }),
+          fetch(`/api/payments/navigation?${currentPaymentNavigationQuery}&direction=next`, { cache: "no-store" }),
         ]);
         if (cancelled) return;
         const prevJson = prev.ok ? ((await prev.json()) as PaymentNavigationResponse) : null;
@@ -949,6 +951,7 @@ export function PaymentModalUpdated({
     const includeEntry = opts?.includeEntry ? "&includeEntry=1" : "";
     const res = await fetch(
       `/api/payments/navigation?${currentPaymentNavigationQuery}&direction=${direction}${includeEntry}`,
+      { cache: "no-store" },
     );
     if (!res.ok) return null;
     const json = (await res.json()) as PaymentNavigationResponse;
@@ -996,9 +999,19 @@ export function PaymentModalUpdated({
       clearCurrentPaymentState();
       const ok = await applyPaymentEntry(nav.entry);
       if (!ok) onToast("לא ניתן לטעון קליטה");
+      else {
+        paymentNavNeighborsRef.current = {};
+        setPaymentNavAvailable({ prev: null, next: null });
+        router.refresh();
+      }
       return;
     }
-    await runNavigateToPaymentId(nav.paymentId);
+    const ok = await runNavigateToPaymentId(nav.paymentId);
+    if (ok) {
+      paymentNavNeighborsRef.current = {};
+      setPaymentNavAvailable({ prev: null, next: null });
+      router.refresh();
+    }
   }
 
   function requestPaymentCaptureNavigation(direction: PaymentNavDirection) {
