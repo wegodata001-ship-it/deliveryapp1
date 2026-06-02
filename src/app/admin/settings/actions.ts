@@ -1,7 +1,7 @@
 "use server";
 
 import { Prisma } from "@prisma/client";
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { invalidateCaptureHotPathCache } from "@/lib/capture-hot-path";
 import { finalRateFromBaseAndFee } from "@/lib/financial-calc";
@@ -11,10 +11,17 @@ import { ensureOnce } from "@/lib/ensure-tables-once";
 import { ORDER_COUNTRY_CODES, parseSelectedCountriesJson, type OrderCountryCode } from "@/lib/order-countries";
 import { DEFAULT_WEEK_CODE } from "@/lib/work-week";
 import { VAT_RATE_PERCENT } from "@/lib/vat";
+import { FINANCIAL_LAYOUT_CACHE_TAG } from "@/lib/admin-layout-cache";
+import { recordActivityAudit } from "@/lib/activity-audit";
+import { parseCommissionPercentString, sanitizeCommissionPercentInput } from "@/lib/commission-percent";
 
 export type AdminSettingsPayload = {
   baseDollarRate: string;
   finalDollarRate: string;
+  /** עמלת שער = finalDollarRate - baseDollarRate */
+  dollarFee?: string;
+  /** אחוז עמלה ברירת מחדל לקליטת הזמנה (למשל 3.45) */
+  defaultCommissionPercent: string;
   vatRate: string;
   defaultPaymentMethod: string;
   currentWorkWeek: string;
@@ -28,7 +35,7 @@ export type AdminSettingsPayload = {
 
 export type AdminSettingsSaveState = { ok: true; payload: AdminSettingsPayload } | { ok: false; error: string };
 
-const DEFAULT_SETTINGS: Omit<AdminSettingsPayload, "baseDollarRate" | "finalDollarRate" | "selectedCountries"> = {
+const DEFAULT_SETTINGS: Omit<AdminSettingsPayload, "baseDollarRate" | "finalDollarRate" | "dollarFee" | "defaultCommissionPercent" | "selectedCountries"> = {
   vatRate: String(VAT_RATE_PERCENT),
   defaultPaymentMethod: "CASH",
   currentWorkWeek: DEFAULT_WEEK_CODE,
@@ -67,7 +74,7 @@ async function readSettingsMap(): Promise<Map<string, string>> {
 }
 
 function value(map: Map<string, string>, key: keyof typeof DEFAULT_SETTINGS): string {
-  return map.get(key) ?? DEFAULT_SETTINGS[key];
+  return map.get(key) ?? (DEFAULT_SETTINGS[key] as string);
 }
 
 export async function getAdminSettingsAction(): Promise<AdminSettingsPayload> {
@@ -81,6 +88,8 @@ export async function getAdminSettingsAction(): Promise<AdminSettingsPayload> {
   return {
     baseDollarRate: financial.baseDollarRate.toFixed(4),
     finalDollarRate: financial.finalDollarRate.toFixed(4),
+    dollarFee: financial.dollarFee.toFixed(4),
+    defaultCommissionPercent: financial.defaultCommissionPercent.toFixed(4),
     vatRate: value(map, "vatRate"),
     defaultPaymentMethod: value(map, "defaultPaymentMethod"),
     currentWorkWeek: value(map, "currentWorkWeek"),
@@ -136,15 +145,25 @@ export async function saveAdminSettingsAction(input: AdminSettingsPayload): Prom
   if (final.lt(base)) return { ok: false, error: "שער דולר סופי לא יכול להיות נמוך משער בסיסי" };
   if (vat.lt(0) || vat.gt(100)) return { ok: false, error: "מע״מ חייב להיות בין 0 ל־100" };
 
+  const commissionRaw = sanitizeCommissionPercentInput((input.defaultCommissionPercent ?? "0").trim());
+  const commissionN = parseCommissionPercentString(commissionRaw);
+  if (!Number.isFinite(commissionN) || commissionN < 0 || commissionN > 100) {
+    return { ok: false, error: "אחוז עמלה לא תקין" };
+  }
+  const commissionDec = new Prisma.Decimal(commissionN.toString()).toDecimalPlaces(4, 4);
+
   await ensureSettingsTable();
   const dollarFee = final.sub(base).toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP);
   const finalRate = finalRateFromBaseAndFee(base, dollarFee);
+
+  const oldSettings = await getCurrentFinancialSettings();
 
   await prisma.financialSettings.create({
     data: {
       baseDollarRate: base,
       dollarFee,
       finalDollarRate: finalRate,
+      defaultCommissionPercent: commissionDec,
       source: "MANUAL",
       updatedById: me.id,
     },
@@ -177,9 +196,28 @@ export async function saveAdminSettingsAction(input: AdminSettingsPayload): Prom
   }
 
   invalidateCaptureHotPathCache();
-
+  revalidateTag(FINANCIAL_LAYOUT_CACHE_TAG);
+  revalidatePath("/admin", "layout");
   revalidatePath("/admin");
   revalidatePath("/admin/settings");
   revalidatePath("/admin/orders");
+
+  recordActivityAudit({
+    userId: me.id,
+    actionType: "FINANCE_SETTINGS_UPDATED",
+    entityType: "FinancialSettings",
+    metadata: {
+      oldBaseDollarRate: oldSettings?.baseDollarRate?.toString() ?? null,
+      oldDollarFee: oldSettings?.dollarFee?.toString() ?? null,
+      oldDefaultCommissionPercent: oldSettings?.defaultCommissionPercent?.toString() ?? null,
+      newBaseDollarRate: base.toString(),
+      newDollarFee: dollarFee.toString(),
+      newFinalDollarRate: finalRate.toString(),
+      newDefaultCommissionPercent: commissionDec.toString(),
+      vatRate: vat.toFixed(2),
+      defaultPaymentMethod: input.defaultPaymentMethod,
+    },
+  });
+
   return { ok: true, payload: await getAdminSettingsAction() };
 }

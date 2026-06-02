@@ -1471,6 +1471,10 @@ export function PaymentModalUpdated({
       setSaveErr("שמירה הצליחה אך חסר קוד תשלום");
       return { ok: false };
     }
+    // Signal the balances report to re-fetch (if it's open behind this modal)
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
+    }
     return { ok: true, primaryPaymentCode };
   }
 

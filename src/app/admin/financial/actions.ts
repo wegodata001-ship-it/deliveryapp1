@@ -1,12 +1,15 @@
 "use server";
 
 import { Prisma } from "@prisma/client";
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { parseCommissionPercentString, sanitizeCommissionPercentInput } from "@/lib/commission-percent";
 import { finalRateFromBaseAndFee } from "@/lib/financial-calc";
 import { getCurrentFinancialSettings } from "@/lib/financial-settings";
 import { prisma } from "@/lib/prisma";
+import { invalidateCaptureHotPathCache } from "@/lib/capture-hot-path";
+import { FINANCIAL_LAYOUT_CACHE_TAG } from "@/lib/admin-layout-cache";
+import { recordActivityAudit } from "@/lib/activity-audit";
 
 export type FinancialSaveState = { ok: true } | { ok: false; error: string };
 
@@ -43,6 +46,7 @@ export async function saveManualFinancialSettings(input: {
   const pctParsed = parseCommissionPercentField(input.defaultCommissionPercent ?? "0");
   if (!pctParsed.ok) return { ok: false, error: pctParsed.error };
 
+  const oldSettings = await getCurrentFinancialSettings();
   const final = finalRateFromBaseAndFee(base, fee);
 
   await prisma.financialSettings.create({
@@ -56,7 +60,26 @@ export async function saveManualFinancialSettings(input: {
     },
   });
 
-  revalidatePath("/admin");
+  invalidateCaptureHotPathCache();
+  revalidateTag(FINANCIAL_LAYOUT_CACHE_TAG);
+  revalidatePath("/admin", "layout");
+  revalidatePath("/admin/settings");
+
+  recordActivityAudit({
+    userId: me.id,
+    actionType: "FINANCE_SETTINGS_UPDATED",
+    entityType: "FinancialSettings",
+    metadata: {
+      oldBaseDollarRate: oldSettings?.baseDollarRate?.toString() ?? null,
+      oldDollarFee: oldSettings?.dollarFee?.toString() ?? null,
+      oldDefaultCommissionPercent: oldSettings?.defaultCommissionPercent?.toString() ?? null,
+      newBaseDollarRate: base.toString(),
+      newDollarFee: fee.toString(),
+      newFinalDollarRate: final.toString(),
+      newDefaultCommissionPercent: pctParsed.value.toString(),
+    },
+  });
+
   return { ok: true };
 }
 
@@ -84,6 +107,20 @@ export async function refreshAutomaticDollarRate(): Promise<FinancialSaveState> 
     },
   });
 
-  revalidatePath("/admin");
+  invalidateCaptureHotPathCache();
+  revalidateTag(FINANCIAL_LAYOUT_CACHE_TAG);
+  revalidatePath("/admin", "layout");
+
+  recordActivityAudit({
+    userId: me.id,
+    actionType: "FINANCE_SETTINGS_UPDATED",
+    entityType: "FinancialSettings",
+    metadata: {
+      oldBaseDollarRate: latest?.baseDollarRate?.toString() ?? null,
+      newBaseDollarRate: mockBase.toString(),
+      source: "AUTO",
+    },
+  });
+
   return { ok: true };
 }

@@ -716,6 +716,7 @@ export async function capturePaymentAction(form: {
 
   revalidatePath("/admin");
   revalidatePath("/admin/orders");
+  revalidatePath("/admin/balances");
   return {
     ok: true,
     saved: {
@@ -911,6 +912,7 @@ export async function createMinimalOrderAction(form: {
 
   revalidatePath("/admin");
   revalidatePath("/admin/orders");
+  revalidatePath("/admin/balances");
 
   return { ok: true };
 }
@@ -1013,6 +1015,7 @@ export async function updateCustomerCardDetailsAction(form: {
   revalidateAfterCustomerCreate(id);
   revalidatePath("/admin");
   revalidatePath("/admin/orders");
+  revalidatePath("/admin/balances");
 
   recordActivityAudit({
     userId: me.id,
@@ -1895,6 +1898,7 @@ export async function updateOrderListStatusAction(
       .catch(() => {});
     revalidatePath("/admin");
     revalidatePath("/admin/orders");
+    revalidatePath("/admin/balances");
     revalidatePath(`/admin/orders/${id}`);
     return { ok: true, debtWithdrawalUsd: dw.debtWithdrawalUsd };
   }
@@ -1918,6 +1922,7 @@ export async function updateOrderListStatusAction(
 
   revalidatePath("/admin");
   revalidatePath("/admin/orders");
+  revalidatePath("/admin/balances");
   revalidatePath(`/admin/orders/${id}`);
 
   return { ok: true };

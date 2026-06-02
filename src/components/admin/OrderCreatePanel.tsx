@@ -1039,6 +1039,7 @@ export function OrderCreatePanel({
           if (!res.ok) throw new Error(res.error);
           setIsSaving(false);
           onToast("ההזמנה עודכנה בהצלחה!");
+          window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
           if (keepOpen) {
             /* stay open */
           } else {
@@ -1053,6 +1054,7 @@ export function OrderCreatePanel({
           if (!res.ok) throw new Error(res.error);
           setIsSaving(false);
           onToast("הזמנה נשמרה בהצלחה");
+          window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
           if (res.nextOrderNumberPreview) {
             setOrderNumberPreview(res.nextOrderNumberPreview);
           }

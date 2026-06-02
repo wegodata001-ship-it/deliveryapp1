@@ -188,6 +188,8 @@ export function CustomerBalancesClient() {
   const previewGen = useRef(0);
   const hoverTimerRef = useRef<number | null>(null);
   const hoverIdRef = useRef<string | null>(null);
+  /** incrementing this triggers a re-fetch without changing filters */
+  const [refreshSig, setRefreshSig] = useState(0);
 
   useEffect(() => {
     const struct = parseStructuralFromSearchParams(new URLSearchParams(sp.toString()));
@@ -206,6 +208,30 @@ export function CustomerBalancesClient() {
     }, FILTER_DEBOUNCE_MS);
     return () => window.clearTimeout(t);
   }, [searchDraft]);
+
+  /** רענון אחרי שמירת תשלום / הזמנה — גם כאשר המסך כבר פתוח */
+  useEffect(() => {
+    function onBalancesRefresh() {
+      setRefreshSig((s) => s + 1);
+    }
+    window.addEventListener("wego:balances-refresh", onBalancesRefresh);
+    return () => window.removeEventListener("wego:balances-refresh", onBalancesRefresh);
+  }, []);
+
+  /** רענון כאשר הטאב חוזר לפוקוס אחרי שהיה מוסתר */
+  useEffect(() => {
+    let hiddenAt: number | null = null;
+    function onVisibilityChange() {
+      if (document.hidden) {
+        hiddenAt = Date.now();
+      } else if (hiddenAt !== null && Date.now() - hiddenAt > 10_000) {
+        setRefreshSig((s) => s + 1);
+        hiddenAt = null;
+      }
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, []);
 
   const buildListQuery = useCallback(
     (p: number) => ({
@@ -257,7 +283,7 @@ export function CustomerBalancesClient() {
         }
         setTableLoading(false);
       });
-  }, [urlReady, page, buildListQuery]);
+  }, [urlReady, page, buildListQuery, refreshSig]);
 
   const searchPending = JSON.stringify(searchDraft) !== JSON.stringify(debouncedSearch);
   const tableBusy = !urlReady || (tableLoading && !payload);

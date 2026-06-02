@@ -668,6 +668,7 @@ export async function savePaymentUpdatedAction(
   }
 
   revalidatePath("/admin/orders");
+  revalidatePath("/admin/balances");
   revalidatePath("/admin/source-tables/payments");
   return { ok: true, saved: { primaryPaymentCode: primaryCode, count: savedCount } };
 }
@@ -846,6 +847,7 @@ export async function resetOrderBalanceAction(input: {
     });
 
     revalidatePath("/admin/orders");
+    revalidatePath("/admin/balances");
 
     return {
       ok: true,
@@ -1095,6 +1097,7 @@ export async function resetCustomerOutstandingBalancesAction(input: {
     });
 
     revalidatePath("/admin/orders");
+    revalidatePath("/admin/balances");
 
     return {
       ok: true,

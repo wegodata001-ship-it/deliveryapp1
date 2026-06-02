@@ -5,6 +5,7 @@ import { saveAdminSettingsAction, type AdminSettingsPayload } from "@/app/admin/
 import { orderCountryLabel, type OrderCountryCode } from "@/lib/order-countries";
 import { WORK_WEEK_CODES_SORTED } from "@/lib/work-week";
 import { useOrderStatusCatalog } from "@/components/admin/OrderStatusCatalogProvider";
+import { sanitizeCommissionPercentInput } from "@/lib/commission-percent";
 
 type Props = {
   initial: AdminSettingsPayload;
@@ -104,6 +105,16 @@ export function AdminSettingsClient({ initial }: Props) {
             <label>
               שער דולר סופי
               <input inputMode="decimal" value={form.finalDollarRate} onChange={(e) => update("finalDollarRate", e.target.value)} />
+            </label>
+            <label>
+              אחוז עמלה ברירת מחדל (%)
+              <input
+                inputMode="decimal"
+                dir="ltr"
+                value={form.defaultCommissionPercent}
+                placeholder="3.45"
+                onChange={(e) => update("defaultCommissionPercent", sanitizeCommissionPercentInput(e.target.value))}
+              />
             </label>
             <label>
               מע״מ (%)

@@ -7,14 +7,16 @@ import {
 } from "@/lib/financial-settings";
 import { OrderEditRequestStatus } from "@prisma/client";
 
+export const FINANCIAL_LAYOUT_CACHE_TAG = "wego-admin-financial-layout";
+
 /** הגדרות כספים ל-layout — cache 5 דקות, ללא ensure/insert ב-hot path */
 export const getLayoutFinancialSettings = unstable_cache(
   async (): Promise<SerializedFinancial | null> => {
     const row = await getCurrentFinancialSettings();
     return serializeFinancialSettings(row);
   },
-  ["wego-admin-financial-layout"],
-  { revalidate: 300 },
+  [FINANCIAL_LAYOUT_CACHE_TAG],
+  { revalidate: 300, tags: [FINANCIAL_LAYOUT_CACHE_TAG] },
 );
 
 /** ספירת בקשות עריכה ממתינות — cache 45 שניות, ללא DDL bootstrap */

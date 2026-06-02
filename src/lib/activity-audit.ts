@@ -13,6 +13,7 @@ export const ACTIVITY_PRESENCE_ACTION_TYPES = [
   "CUSTOMER_UPDATED",
   "USER_LOGIN",
   "USER_LOGOUT",
+  "FINANCE_SETTINGS_UPDATED",
 ] as const;
 
 export type ActivityPresenceActionType = (typeof ACTIVITY_PRESENCE_ACTION_TYPES)[number];
@@ -43,6 +44,8 @@ export function activityActionLabelHe(actionType: string): string {
       return "כניסה למערכת";
     case "USER_LOGOUT":
       return "יציאה מהמערכת";
+    case "FINANCE_SETTINGS_UPDATED":
+      return "עדכן הגדרות כספים";
     default:
       return "פעולה";
   }

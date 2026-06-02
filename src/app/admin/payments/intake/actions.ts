@@ -531,6 +531,7 @@ export async function savePaymentIntakeAction(
 
   revalidatePath("/admin");
   revalidatePath("/admin/orders");
+  revalidatePath("/admin/balances");
 
   return {
     ok: true,
