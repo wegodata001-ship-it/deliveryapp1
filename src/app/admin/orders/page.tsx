@@ -1,10 +1,10 @@
 import { OrdersListShell } from "@/components/admin/OrdersListShell";
 import { isAdminUser, userHasAnyPermission } from "@/lib/admin-auth";
 import { fetchOrdersListPageData } from "@/lib/orders-list-data";
+import { perfEnabled } from "@/lib/perf-log";
 import { requireRoutePermission } from "@/lib/route-access";
-import {
-  parseOrdersListDateFilterFromSearchParams,
-} from "@/lib/work-week";
+import { resolveOrdersListCustomerQuery } from "@/app/admin/orders/orders-list-where";
+import { parseOrdersListDateFilterFromSearchParams } from "@/lib/work-week";
 
 /** רשימת הזמנות חייבת להיבנות מחדש אחרי שמירה — לא מטמון סטטי */
 export const dynamic = "force-dynamic";
@@ -20,6 +20,7 @@ export default async function OrdersListPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  const t0 = Date.now();
   const me = await requireRoutePermission(["view_orders"]);
   const sp = await searchParams;
   const range = parseOrdersListDateFilterFromSearchParams(sp);
@@ -27,8 +28,10 @@ export default async function OrdersListPage({
     (typeof sp.ordersPreset === "string" ? sp.ordersPreset : null) ??
     (typeof sp.preset === "string" ? sp.preset : null);
 
+  const fetchT0 = Date.now();
   const { orders, statusSummary, createdByOptions, paymentLocationOptions, pagination } =
     await fetchOrdersListPageData(sp, me);
+  const fetchMs = Date.now() - fetchT0;
 
   const canCreateOrders = userHasAnyPermission(me, ["create_orders"]);
   const canEditOrders = userHasAnyPermission(me, ["edit_orders"]);
@@ -39,9 +42,7 @@ export default async function OrdersListPage({
     toYmd: range.toYmd,
     ahWeekSelect: range.ahWeekSelect,
     activePreset: presetParam,
-    search: readTextParam(sp, "q"),
-    customerCode: readTextParam(sp, "ordersCode"),
-    customerName: readTextParam(sp, "ordersName"),
+    customerQuery: resolveOrdersListCustomerQuery(sp),
     ordersOrderNum: readTextParam(sp, "ordersOrderNum"),
     customerPhone: readTextParam(sp, "ordersPhone"),
     statusFilter: readTextParam(sp, "status"),
@@ -57,8 +58,9 @@ export default async function OrdersListPage({
     ordersReadyOnly: readTextParam(sp, "ordersReadyOnly") === "1",
   };
 
-  return (
-    <div className="adm-orders-excel-page">
+  const renderT0 = Date.now();
+  const node = (
+    <div className="adm-orders-excel-page adm-page--page-scroll">
       <OrdersListShell
         orders={orders}
         statusSummary={statusSummary}
@@ -73,4 +75,18 @@ export default async function OrdersListPage({
       />
     </div>
   );
+  const renderMs = Date.now() - renderT0;
+
+  if (perfEnabled()) {
+    const totalMs = Date.now() - t0;
+    const serializationMs = 0;
+    console.table({
+      fetchMs,
+      renderMs,
+      serializationMs,
+      totalMs,
+    });
+  }
+
+  return node;
 }

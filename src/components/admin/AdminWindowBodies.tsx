@@ -32,7 +32,7 @@ import type { CustomerCardWindowProps } from "@/lib/admin-windows";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { CustomerPlaceCombo } from "@/components/admin/CustomerPlaceCombo";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
-import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
+import { formatMoneyAmount, formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
 import { CustomerBalanceView } from "@/components/ui/CustomerBalanceView";
 import { formatCustomerBalanceDisplay, parseBalanceAmountString } from "@/lib/customer-balance";
 import {
@@ -52,6 +52,13 @@ function displayCustomerCode(s: CustomerCardSnapshot): string {
 
 function fmtUsd(s: string): string {
   return formatUsdDisplay(parseMoneyStringOrZero(s));
+}
+
+function fmtUsdSignedPrefix(s: string): string {
+  const n = parseMoneyStringOrZero(s);
+  const abs = formatMoneyAmount(Math.abs(n), 2);
+  if (n < -0.005) return `-$${abs}`;
+  return `$${abs}`;
 }
 
 function rowBalanceNum(balanceUsd: string): number {
@@ -79,6 +86,7 @@ export function CustomerCardWindowBody({
   initialTab = "details",
   initialSnap = null,
 }: CustomerCardWindowProps) {
+  const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
   const { openWindow } = useAdminWindows();
   const router = useRouter();
   const [listPayload, setListPayload] = useState<ClientLedgerPayload | null>(null);
@@ -184,13 +192,37 @@ export function CustomerCardWindowBody({
       setLoading(false);
       return;
     }
+    const perf = (window as any).__WEGO_CUSTCARD_PERF;
+    if (perf?.startedAt && perf.customerId === customerId.trim()) {
+      perf.hydrateMs = Math.round(now() - perf.startedAt);
+    }
     let cancelled = false;
     setLoading(true);
+    const fetchT0 = now();
     void fetchCustomerCardSnapshotClient(customerId).then((row) => {
       if (!cancelled) {
         setSnap(row);
         if (row) setForm(formFromSnap(row));
         setLoading(false);
+        const perf2 = (window as any).__WEGO_CUSTCARD_PERF;
+        if (perf2?.startedAt && perf2.customerId === customerId.trim()) {
+          perf2.fetchCardMs = Math.round(now() - fetchT0);
+          requestAnimationFrame(() => {
+            const perf3 = (window as any).__WEGO_CUSTCARD_PERF;
+            if (!perf3?.startedAt || perf3.customerId !== customerId.trim()) return;
+            perf3.renderCardMs = Math.round(now() - fetchT0);
+            const totalMs = Math.round(now() - perf3.startedAt);
+            console.table({
+              openModalMs: perf3.openModalMs ?? 0,
+              fetchCardMs: perf3.fetchCardMs ?? 0,
+              renderCardMs: perf3.renderCardMs ?? 0,
+              refreshBalancesMs: perf3.refreshBalancesMs ?? 0,
+              refreshKpiMs: perf3.refreshKpiMs ?? 0,
+              hydrateMs: perf3.hydrateMs ?? 0,
+              totalMs,
+            });
+          });
+        }
       }
     });
     return () => {
@@ -471,7 +503,13 @@ export function CustomerCardWindowBody({
           <div dir="ltr" className="summary-card-amount">
             {fmtUsd(ledger.totalChargesUsd)}
           </div>
-          <span>סה״כ חיובים</span>
+          <span>סה״כ הזמנות</span>
+        </div>
+        <div className="summary-card purple">
+          <div dir="ltr" className="summary-card-amount">
+            {fmtUsd((ledger as any).totalWithdrawalsUsd ?? "0")}
+          </div>
+          <span>סה״כ משיכות מחוב</span>
         </div>
         <div className="summary-card green">
           <div dir="ltr" className="summary-card-amount">
@@ -503,7 +541,7 @@ export function CustomerCardWindowBody({
               {formatLedgerRunningBalance(ledger.balanceUsd)}
             </div>
           </button>
-          <span>יתרה נוכחית</span>
+          <span>יתרה סופית</span>
         </div>
       </div>
     ) : null;
@@ -669,8 +707,8 @@ export function CustomerCardWindowBody({
                     <th>תאריך</th>
                     <th>מסמך</th>
                     <th>סוג</th>
-                    <th>חיוב</th>
-                    <th>תשלום</th>
+                    <th>חיוב לקוח</th>
+                    <th>תשלום/זיכוי</th>
                     <th>יתרה</th>
                   </tr>
                 </thead>
@@ -689,11 +727,15 @@ export function CustomerCardWindowBody({
                         r.kind !== "OPENING_BALANCE" && !!(r.orderId || r.paymentId);
                       const chargeNum = parseMoneyStringOrZero(r.chargeUsd);
                       const paymentNum = parseMoneyStringOrZero(r.paymentUsd);
+                      const isPayment = r.kind === "PAYMENT";
+                      const isWithdrawal = !!r.isDebtWithdrawal;
                       return (
                         <tr
                           key={r.id}
                           className={[
                             r.kind === "OPENING_BALANCE" ? "adm-ledger-row--opening" : "",
+                            isPayment ? "adm-ledger-row--payment" : "",
+                            isWithdrawal ? "adm-ledger-row--withdrawal" : "",
                             clickable ? "clickable" : "",
                           ]
                             .filter(Boolean)
@@ -732,7 +774,7 @@ export function CustomerCardWindowBody({
                             className={r.isDebtWithdrawal || chargeNum < 0 ? "adm-ledger-charge--debt-withdrawal" : ""}
                           >
                             {r.isDebtWithdrawal || chargeNum < -0.005
-                              ? fmtUsd(r.chargeUsd)
+                              ? fmtUsdSignedPrefix(r.chargeUsd)
                               : chargeNum > 0
                                 ? fmtUsd(r.chargeUsd)
                                 : "—"}

@@ -7,7 +7,7 @@ export default async function SourceTablesPage() {
   await requireRoutePermission(["manage_settings"]);
 
   return (
-    <div className="adm-source-page">
+    <div className="adm-source-page adm-page--page-scroll">
       <header className="adm-source-head">
         <h1>טבלאות מקור</h1>
         <p>גישה ברורה לטבלאות השוטפות וטבלאות המערכת, בעיצוב מודרני ונוח.</p>

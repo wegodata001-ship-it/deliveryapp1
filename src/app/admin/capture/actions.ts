@@ -5,6 +5,7 @@ import { OrderEditRequestStatus, PaymentMethod, Prisma } from "@prisma/client";
 import { listOrderStatusTags } from "@/lib/order-status-registry";
 import { OS } from "@/lib/order-status-slugs";
 import { revalidatePath, revalidateTag } from "next/cache";
+import { recordActivityAudit } from "@/lib/activity-audit";
 import {
   appUserFromSessionPayload,
   getCurrentUser,
@@ -169,6 +170,7 @@ async function loadCustomerForCapture(
   customerId: string,
   snapshot: CaptureCustomerSnapshotInput | null | undefined,
   drafts?: { draftNameAr?: string | null; draftNameEn?: string | null },
+  actorUserId?: string | null,
 ): Promise<{ customer: CaptureCustomerRow; created: boolean } | null> {
   return capturePerfTimed("capture.customer", () =>
     resolveCustomerForCapture({
@@ -176,6 +178,7 @@ async function loadCustomerForCapture(
       snapshot,
       draftNameAr: drafts?.draftNameAr,
       draftNameEn: drafts?.draftNameEn,
+      actorUserId,
     }),
   );
 }
@@ -1000,6 +1003,15 @@ export async function updateCustomerCardDetailsAction(form: {
   revalidateAfterCustomerCreate(id);
   revalidatePath("/admin");
   revalidatePath("/admin/orders");
+
+  recordActivityAudit({
+    userId: me.id,
+    actionType: "CUSTOMER_UPDATED",
+    entityType: "Customer",
+    entityId: id,
+    metadata: { customerName: displayName, customerCode: customerCode ?? undefined },
+  });
+
   return { ok: true };
 }
 
@@ -1200,7 +1212,7 @@ async function captureOrderActionInner(
     return { ok: false, error: "אמצעי תשלום לא תקין" };
   }
 
-  const status = form.status?.trim() ?? "";
+  const status = (form.status?.trim() || OS.OPEN).trim();
   const allowed = getActiveOrderStatusIdsSync();
   if (!status || !allowed.has(status)) {
     capturePerfTimeEnd("capture.validation");
@@ -1238,7 +1250,7 @@ async function captureOrderActionInner(
         loadCustomerForCapture(form.customerId, form.customerSnapshot, {
           draftNameAr: form.draftNameAr,
           draftNameEn: form.draftNameEn,
-        }),
+        }, me.id),
         countriesFromClient
           ? Promise.resolve(countriesFromClient)
           : loadCaptureSettingsCountries(),
@@ -1757,19 +1769,13 @@ async function applyDebtWithdrawalForOrder(params: {
   orderTotalUsd: number;
   alreadyAppliedUsd?: number;
 }): Promise<{ ok: true; debtWithdrawalUsd: number } | { ok: false; error: string }> {
-  const { orderId, customerId, orderTotalUsd } = params;
+  const { orderId, orderTotalUsd } = params;
   if (!(orderTotalUsd > 0)) {
     return { ok: false, error: "אי אפשר למשוך מהחוב — סכום ההזמנה לא תקין" };
   }
-  const alreadyApplied = Math.max(0, params.alreadyAppliedUsd ?? 0);
-  const availableCredit = await computeAvailableCustomerCreditUsd(customerId, alreadyApplied);
-  const toWithdraw = Math.min(orderTotalUsd, availableCredit);
-  if (!(toWithdraw > 0)) {
-    return {
-      ok: false,
-      error: "אין יתרת זכות פתוחה ללקוח — לא ניתן לבצע משיכה מחוב",
-    };
-  }
+  // Business rule (WEGO): משיכה מחוב אינה תלויה ביתרת זכות.
+  // משיכה מחוב מתנהגת כמו תשלום (מורידה יתרה), ולכן ניישם את מלוא סכום ההזמנה.
+  const toWithdraw = orderTotalUsd;
   const toWithdrawDec = new Prisma.Decimal(toWithdraw.toFixed(4));
   await prisma.order.update({
     where: { id: orderId },
@@ -1852,7 +1858,6 @@ export async function updateOrderListStatusAction(
         },
       })
       .catch(() => {});
-
     revalidatePath("/admin");
     revalidatePath("/admin/orders");
     revalidatePath(`/admin/orders/${id}`);
@@ -1883,6 +1888,105 @@ export async function updateOrderListStatusAction(
   return { ok: true };
 }
 
+export type UpdateOrderListStatusApiResult =
+  | { ok: true; debtWithdrawalUsd?: number }
+  | { ok: false; error: string };
+
+/**
+ * Fast API-path update for orders list status.
+ * - Uses session payload (no requireAuth / RSC refresh)
+ * - Does NOT revalidate routes (caller updates UI locally)
+ */
+export async function updateOrderListStatusActionForApi(
+  orderId: string,
+  statusRaw: string,
+  session: SessionPayload,
+): Promise<UpdateOrderListStatusApiResult> {
+  const me = appUserFromSessionPayload(session);
+  if (!userHasAnyPermission(me, ["edit_orders"])) {
+    return { ok: false, error: "אין הרשאה" };
+  }
+  const id = orderId.trim();
+  if (!id) return { ok: false, error: "חסר מזהה הזמנה" };
+  const status = statusRaw.trim();
+  if (!status || !(await isAllowedListStatus(status))) {
+    return { ok: false, error: "סטטוס לא חוקי" };
+  }
+
+  const exists = await prisma.order.findFirst({
+    where: { id, deletedAt: null },
+    select: {
+      id: true,
+      status: true,
+      customerId: true,
+      totalUsd: true,
+      debtWithdrawalUsd: true,
+      editUnlockedForUserId: true,
+      editUnlockedUntil: true,
+    },
+  });
+  if (!exists) return { ok: false, error: "הזמנה לא נמצאה" };
+
+  // Avoid a second DB round-trip: determine gate from the row we already fetched.
+  const unlockExpired =
+    exists.editUnlockedUntil != null && exists.editUnlockedUntil.getTime() < Date.now();
+  const effectiveGate = unlockExpired
+    ? { status: exists.status, editUnlockedForUserId: null, editUnlockedUntil: null }
+    : {
+        status: exists.status,
+        editUnlockedForUserId: exists.editUnlockedForUserId,
+        editUnlockedUntil: exists.editUnlockedUntil,
+      };
+  if (!canUserEditCompletedOrder(me, effectiveGate)) {
+    return { ok: false, error: "הזמנה במצב ״מוכן״ או ״מבוטל״ נעולה — שינוי סטטוס דורש אישור מנהל." };
+  }
+  if (unlockExpired) {
+    void clearExpiredOrderEditUnlockForOrder(id).catch(() => {});
+  }
+
+  if (status === OS.DEBT_WITHDRAWAL) {
+    if (!exists.customerId) {
+      return { ok: false, error: "אי אפשר למשוך מהחוב — להזמנה אין לקוח משויך" };
+    }
+    const orderTotal = Number(exists.totalUsd ?? 0);
+    const alreadyApplied = Number(exists.debtWithdrawalUsd ?? 0);
+    const dw = await applyDebtWithdrawalForOrder({
+      orderId: id,
+      customerId: exists.customerId,
+      orderTotalUsd: orderTotal,
+      alreadyAppliedUsd: alreadyApplied,
+    });
+    if (!dw.ok) return dw;
+    // audit insert is async already; keep it fire-and-forget
+    void prisma.auditLog
+      .create({
+        data: {
+          userId: me.id,
+          actionType: "ORDER_DEBT_WITHDRAWAL_APPLIED",
+          entityType: "Order",
+          entityId: id,
+          metadata: {
+            orderTotalUsd: orderTotal,
+            withdrawnUsd: dw.debtWithdrawalUsd,
+            source: "orders_list_status_api",
+          } as Prisma.InputJsonValue,
+        },
+      })
+      .catch(() => {});
+    return { ok: true, debtWithdrawalUsd: dw.debtWithdrawalUsd };
+  }
+
+  const shouldClearDebtWithdrawal =
+    exists.status === OS.DEBT_WITHDRAWAL && status !== OS.DEBT_WITHDRAWAL && exists.debtWithdrawalUsd != null;
+
+  await prisma.order.update({
+    where: { id },
+    data: { status, ...(shouldClearDebtWithdrawal ? { debtWithdrawalUsd: null } : {}) },
+  });
+
+  return { ok: true };
+}
+
 /** עדכון inline מהטבלה — אמצעי תשלום בלבד (ללא שינויי DB structure / חישובים) */
 export async function updateOrderListPaymentMethodAction(
   orderId: string,
@@ -1908,6 +2012,51 @@ export async function updateOrderListPaymentMethodAction(
   }
 
   await prisma.order.update({ where: { id }, data: { paymentMethod: method } });
+  return { ok: true };
+}
+
+export type UpdateOrderPaymentMethodApiResult =
+  | { ok: true }
+  | { ok: false; error: string };
+
+/** Fast API-path update for payment method — no revalidate/refresh. */
+export async function updateOrderListPaymentMethodActionForApi(
+  orderId: string,
+  methodRaw: string | null,
+  session: SessionPayload,
+): Promise<UpdateOrderPaymentMethodApiResult> {
+  const me = appUserFromSessionPayload(session);
+  if (!userHasAnyPermission(me, ["edit_orders"])) {
+    return { ok: false, error: "אין הרשאה" };
+  }
+  const id = orderId.trim();
+  if (!id) return { ok: false, error: "חסר מזהה הזמנה" };
+  const method = (methodRaw?.trim() || "") as string;
+  const next = method ? (method as PaymentMethod) : null;
+  if (next !== null && !PAYMENT_METHODS.has(next)) {
+    return { ok: false, error: "אמצעי תשלום לא תקין" };
+  }
+
+  const existing = await prisma.order.findFirst({
+    where: { id, deletedAt: null },
+    select: { id: true, status: true, editUnlockedForUserId: true, editUnlockedUntil: true },
+  });
+  if (!existing) return { ok: false, error: "הזמנה לא נמצאה" };
+
+  // Same lock-gate behavior as the server action, but without extra refresh.
+  const unlockExpired =
+    existing.editUnlockedUntil != null && existing.editUnlockedUntil.getTime() < Date.now();
+  const effectiveGate = unlockExpired
+    ? { status: existing.status, editUnlockedForUserId: null, editUnlockedUntil: null }
+    : existing;
+  if (!canUserEditCompletedOrder(me, effectiveGate)) {
+    return { ok: false, error: "הזמנה במצב ״מוכן״ או ״מבוטל״ נעולה — שינוי דורש אישור מנהל." };
+  }
+  if (unlockExpired) {
+    void clearExpiredOrderEditUnlockForOrder(id).catch(() => {});
+  }
+
+  await prisma.order.update({ where: { id }, data: { paymentMethod: next } });
   return { ok: true };
 }
 
@@ -2021,7 +2170,7 @@ async function updateOrderWorkPanelActionInner(
     return { ok: false, error: "אמצעי תשלום לא תקין" };
   }
 
-  const status = form.status?.trim() ?? "";
+  const status = (form.status?.trim() || OS.OPEN).trim();
   const allowed = getActiveOrderStatusIdsSync();
   if (!status || !allowed.has(status)) {
     capturePerfTimeEnd("capture.validation");
@@ -2066,7 +2215,7 @@ async function updateOrderWorkPanelActionInner(
         loadCustomerForCapture(form.customerId, form.customerSnapshot, {
           draftNameAr: form.draftNameAr,
           draftNameEn: form.draftNameEn,
-        }),
+        }, me.id),
         countriesFromClient
           ? Promise.resolve(countriesFromClient)
           : loadCaptureSettingsCountries(),

@@ -6,7 +6,7 @@ import type { AppUser } from "@/lib/admin-auth";
 import { isAdminUser, userHasAnyPermission } from "@/lib/admin-auth";
 import { hasActiveEditUnlock } from "@/lib/order-edit-lock";
 import { ORDERS_LIST_MAX_PAGE_SIZE, ORDERS_LIST_PAGE_SIZE } from "@/lib/orders-list-constants";
-import { withPerfTimer } from "@/lib/perf-log";
+import { perfEnabled, withPerfTimer } from "@/lib/perf-log";
 import { prisma } from "@/lib/prisma";
 import { formatLocalYmd } from "@/lib/work-week";
 import { buildOrdersListWhereFromSearchParams } from "@/app/admin/orders/orders-list-where";
@@ -90,40 +90,70 @@ export async function fetchOrdersListPageData(
   sp: Record<string, string | string[] | undefined>,
   me: AppUser,
 ): Promise<OrdersListPageData> {
+  const perfT0 = Date.now();
+  let ordersQueryMs = 0;
+  let ordersCountMs = 0;
+  let statsMs = 0;
+  let kpiMs = 0;
+  let summaryMs = 0;
+  let renderMs = 0;
+  let serializationMs = 0;
+
+  const perfTimed = async <T>(
+    setter: (ms: number) => void,
+    work: () => Promise<T>,
+  ): Promise<T> => {
+    if (!perfEnabled()) return work();
+    const t0 = Date.now();
+    try {
+      return await work();
+    } finally {
+      setter(Date.now() - t0);
+    }
+  };
+
   const where = buildOrdersListWhereFromSearchParams(sp);
   const page = readPageParam(sp);
   const pageSize = ORDERS_LIST_PAGE_SIZE;
 
   const [statusGroups, intakeLocationRows, totalCount] = await withPerfTimer(
     "orders.page.fetchOrders",
-    async () =>
-      Promise.all([
+    async () => {
+      const statusP = perfTimed((ms) => (kpiMs += ms), () =>
         prisma.order.groupBy({
           by: ["status"],
           where,
           _count: { _all: true },
           _sum: { totalUsd: true },
         }),
+      );
+      const locationsP = perfTimed((ms) => (statsMs += ms), () =>
         prisma.intakeLocation.findMany({
           select: { id: true, name: true },
           orderBy: { name: "asc" },
           take: 500,
         }),
+      );
+      const countP = perfTimed((ms) => (ordersCountMs += ms), () =>
         prisma.order.count({ where }),
-      ]),
+      );
+      return Promise.all([statusP, locationsP, countP]);
+    },
   );
 
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const safePage = Math.min(page, totalPages);
   const skip = (safePage - 1) * pageSize;
 
-  const rows = await prisma.order.findMany({
-    where,
-    orderBy: [{ orderDate: "desc" }, { createdAt: "desc" }],
-    skip,
-    take: Math.min(pageSize, ORDERS_LIST_MAX_PAGE_SIZE),
-    select: orderListSelect,
-  });
+  const rows = await perfTimed((ms) => (ordersQueryMs += ms), () =>
+    prisma.order.findMany({
+      where,
+      orderBy: [{ orderDate: "desc" }, { createdAt: "desc" }],
+      skip,
+      take: Math.min(pageSize, ORDERS_LIST_MAX_PAGE_SIZE),
+      select: orderListSelect,
+    }),
+  );
 
   const intakeById = new Map(intakeLocationRows.map((l) => [l.id, l.name.trim()]));
 
@@ -140,18 +170,20 @@ export async function fetchOrdersListPageData(
 
   if (sensitiveIds.length > 0) {
     const editTake = Math.min(sensitiveIds.length * 4, 400);
-    const [pendingRows, recentRequests] = await Promise.all([
-      prisma.orderEditRequest.findMany({
-        where: { orderId: { in: sensitiveIds }, status: OrderEditRequestStatus.PENDING },
-        select: { orderId: true, requestedByUserId: true },
-      }),
-      prisma.orderEditRequest.findMany({
-        where: { orderId: { in: sensitiveIds } },
-        orderBy: { createdAt: "desc" },
-        select: { orderId: true, status: true, requestedByUserId: true },
-        take: editTake,
-      }),
-    ]);
+    const [pendingRows, recentRequests] = await perfTimed((ms) => (statsMs += ms), () =>
+      Promise.all([
+        prisma.orderEditRequest.findMany({
+          where: { orderId: { in: sensitiveIds }, status: OrderEditRequestStatus.PENDING },
+          select: { orderId: true, requestedByUserId: true },
+        }),
+        prisma.orderEditRequest.findMany({
+          where: { orderId: { in: sensitiveIds } },
+          orderBy: { createdAt: "desc" },
+          select: { orderId: true, status: true, requestedByUserId: true },
+          take: editTake,
+        }),
+      ]),
+    );
     pendingEditOrderIds = new Set(pendingRows.map((p) => p.orderId));
     for (const p of pendingRows) {
       pendingRequestedByUserId.set(p.orderId, p.requestedByUserId);
@@ -236,11 +268,13 @@ export async function fetchOrdersListPageData(
   const ids = rows.map((r) => r.id);
   const paySums =
     ids.length > 0
-      ? await prisma.payment.groupBy({
-          by: ["orderId"],
-          where: { orderId: { in: ids } },
-          _sum: { amountUsd: true },
-        })
+      ? await perfTimed((ms) => (statsMs += ms), () =>
+          prisma.payment.groupBy({
+            by: ["orderId"],
+            where: { orderId: { in: ids } },
+            _sum: { amountUsd: true },
+          }),
+        )
       : [];
   const paidByOrder = new Map<string, number>();
   for (const p of paySums) {
@@ -251,92 +285,108 @@ export async function fetchOrdersListPageData(
 
   const canEditOrders = userHasAnyPermission(me, ["edit_orders"]);
 
-  const orders: OrderListRow[] = rows.map((r) => {
-    const total = r.totalUsd != null ? Number(r.totalUsd) : 0;
+  const orders: OrderListRow[] = await perfTimed((ms) => (summaryMs += ms), async () =>
+    rows.map((r) => {
+      const total = r.totalUsd != null ? Number(r.totalUsd) : 0;
     const rawPaid = paidByOrder.get(r.id) ?? 0;
     const debtWithdrawal = r.debtWithdrawalUsd != null ? Number(r.debtWithdrawalUsd) : 0;
     const paid = rawPaid + debtWithdrawal;
-    const balanceUsd = total - paid;
-    let paymentStatus: OrderListRow["paymentStatus"] = "unpaid";
-    if (total > 0.01) {
-      if (paid >= total - 0.02) paymentStatus = "paid";
-      else if (paid > 0.01) paymentStatus = "partial";
-    } else if (paid > 0.01) {
-      paymentStatus = "partial";
-    }
+      const balanceUsd = total - paid;
+      let paymentStatus: OrderListRow["paymentStatus"] = "unpaid";
+      if (total > 0.01) {
+        if (paid >= total - 0.02) paymentStatus = "paid";
+        else if (paid > 0.01) paymentStatus = "partial";
+      } else if (paid > 0.01) {
+        paymentStatus = "partial";
+      }
 
-    let editBadge: OrderListRow["editBadge"] = null;
-    let pendingEditOwnedByMe = false;
-    const sensitiveForEditLock = r.status === OS.COMPLETED || r.status === OS.CANCELLED;
-    if (sensitiveForEditLock) {
-      if (pendingEditOrderIds.has(r.id)) {
-        editBadge = "pending";
-        pendingEditOwnedByMe = pendingRequestedByUserId.get(r.id) === me.id;
-      } else if (
-        hasActiveEditUnlock({
+      let editBadge: OrderListRow["editBadge"] = null;
+      let pendingEditOwnedByMe = false;
+      const sensitiveForEditLock = r.status === OS.COMPLETED || r.status === OS.CANCELLED;
+      if (sensitiveForEditLock) {
+        if (pendingEditOrderIds.has(r.id)) {
+          editBadge = "pending";
+          pendingEditOwnedByMe = pendingRequestedByUserId.get(r.id) === me.id;
+        } else if (
+          hasActiveEditUnlock({
+            editUnlockedForUserId: r.editUnlockedForUserId,
+            editUnlockedUntil: r.editUnlockedUntil,
+            viewerUserId: me.id,
+          })
+        ) {
+          editBadge = "unlock";
+        } else {
+          const latest = latestEditRequestByOrder.get(r.id);
+          if (
+            latest?.status === OrderEditRequestStatus.REJECTED &&
+            latest.requestedByUserId === me.id
+          ) {
+            editBadge = "rejected";
+          } else if (!isAdminUser(me)) {
+            editBadge = "locked";
+          }
+        }
+      }
+
+      const quickStatusLocked =
+        canEditOrders &&
+        !isAdminUser(me) &&
+        sensitiveForEditLock &&
+        !hasActiveEditUnlock({
           editUnlockedForUserId: r.editUnlockedForUserId,
           editUnlockedUntil: r.editUnlockedUntil,
           viewerUserId: me.id,
-        })
-      ) {
-        editBadge = "unlock";
-      } else {
-        const latest = latestEditRequestByOrder.get(r.id);
-        if (
-          latest?.status === OrderEditRequestStatus.REJECTED &&
-          latest.requestedByUserId === me.id
-        ) {
-          editBadge = "rejected";
-        } else if (!isAdminUser(me)) {
-          editBadge = "locked";
-        }
-      }
-    }
+        });
 
-    const quickStatusLocked =
-      canEditOrders &&
-      !isAdminUser(me) &&
-      sensitiveForEditLock &&
-      !hasActiveEditUnlock({
-        editUnlockedForUserId: r.editUnlockedForUserId,
-        editUnlockedUntil: r.editUnlockedUntil,
-        viewerUserId: me.id,
-      });
+      const paymentLocationId = r.paymentPointId ?? r.locationId ?? null;
+      const paymentLocationName =
+        r.paymentPoint?.pointName?.trim() ||
+        (r.locationId ? intakeById.get(r.locationId) ?? null : null) ||
+        null;
 
-    const paymentLocationId = r.paymentPointId ?? r.locationId ?? null;
-    const paymentLocationName =
-      r.paymentPoint?.pointName?.trim() ||
-      (r.locationId ? intakeById.get(r.locationId) ?? null : null) ||
-      null;
+      return {
+        id: r.id,
+        orderNumber: r.orderNumber,
+        customerId: r.customerId,
+        customerCode: r.customerCodeSnapshot?.trim() || null,
+        customerName: r.customerNameSnapshot?.trim() || null,
+        customerPhone: r.customer?.phone ?? r.customer?.phone2 ?? null,
+        orderDateYmd: r.orderDate ? formatLocalYmd(new Date(r.orderDate)) : null,
+        orderDateTime: fmtDateTime(r.orderDate ? new Date(r.orderDate) : null),
+        weekCode: r.weekCode,
+        status: (r.status as unknown as string | null | undefined)?.trim() || OS.OPEN,
+        sourceCountry: r.sourceCountry,
+        paymentType: r.paymentMethod,
+        paymentLocationId,
+        paymentLocationName,
+        createdById: r.createdById,
+        createdByName: r.createdBy?.fullName || r.createdBy?.username || null,
+        dealAmountUsd: fmtUsd2(r.amountUsd),
+        commissionAmountUsd: fmtUsd2(r.commissionUsd),
+        totalAmountUsd: fmtUsd2(r.totalUsd),
+        balanceUsd: fmtUsd2(balanceUsd),
+        totalAmountIls: fmtIls2(r.totalIlsWithVat ?? r.totalIls),
+        paymentStatus,
+        editBadge,
+        pendingEditOwnedByMe: editBadge === "pending" ? pendingEditOwnedByMe : undefined,
+        quickStatusLocked,
+      };
+    }),
+  );
 
-    return {
-      id: r.id,
-      orderNumber: r.orderNumber,
-      customerId: r.customerId,
-      customerCode: r.customerCodeSnapshot?.trim() || null,
-      customerName: r.customerNameSnapshot?.trim() || null,
-      customerPhone: r.customer?.phone ?? r.customer?.phone2 ?? null,
-      orderDateYmd: r.orderDate ? formatLocalYmd(new Date(r.orderDate)) : null,
-      orderDateTime: fmtDateTime(r.orderDate ? new Date(r.orderDate) : null),
-      weekCode: r.weekCode,
-      status: r.status,
-      sourceCountry: r.sourceCountry,
-      paymentType: r.paymentMethod,
-      paymentLocationId,
-      paymentLocationName,
-      createdById: r.createdById,
-      createdByName: r.createdBy?.fullName || r.createdBy?.username || null,
-      dealAmountUsd: fmtUsd2(r.amountUsd),
-      commissionAmountUsd: fmtUsd2(r.commissionUsd),
-      totalAmountUsd: fmtUsd2(r.totalUsd),
-      balanceUsd: fmtUsd2(balanceUsd),
-      totalAmountIls: fmtIls2(r.totalIlsWithVat ?? r.totalIls),
-      paymentStatus,
-      editBadge,
-      pendingEditOwnedByMe: editBadge === "pending" ? pendingEditOwnedByMe : undefined,
-      quickStatusLocked,
-    };
-  });
+  if (perfEnabled()) {
+    const totalMs = Date.now() - perfT0;
+    console.table({
+      ordersQueryMs,
+      ordersCountMs,
+      statsMs,
+      kpiMs,
+      summaryMs,
+      renderMs,
+      serializationMs,
+      totalMs,
+    });
+  }
 
   return {
     orders,

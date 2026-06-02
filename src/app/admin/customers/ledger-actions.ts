@@ -10,6 +10,7 @@ import {
 } from "@/lib/customer-code";
 import { normalizeCustomerPlaceInput } from "@/lib/customer-place";
 import { prisma } from "@/lib/prisma";
+import { recordActivityAudit } from "@/lib/activity-audit";
 import { revalidateAfterCustomerCreate } from "@/lib/revalidate-customer-create";
 import { perfEnabled } from "@/lib/perf-log";
 import type { ClientCreateInput, ClientCreateResult, ClientLedgerPayload } from "@/app/admin/customers/ledger-types";
@@ -85,6 +86,17 @@ export async function createClientAction(
   });
 
   revalidateAfterCustomerCreate(created.id);
+
+  recordActivityAudit({
+    userId: me.id,
+    actionType: "CUSTOMER_CREATED",
+    entityType: "Customer",
+    entityId: created.id,
+    metadata: {
+      customerName: created.displayName,
+      customerCode: created.customerCode ?? customerCode,
+    },
+  });
 
   const ar = created.nameAr ?? created.displayName ?? nameAr;
   const en = created.nameEn ?? nameEn;

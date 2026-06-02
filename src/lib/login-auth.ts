@@ -1,3 +1,4 @@
+import { recordActivityAudit } from "@/lib/activity-audit";
 import { prisma } from "@/lib/prisma";
 import { setAdminSession } from "@/lib/admin-auth";
 import { perfError } from "@/lib/perf-log";
@@ -101,6 +102,14 @@ export async function attemptLogin(
     } else {
       await runSession();
     }
+
+    recordActivityAudit({
+      userId: user.id,
+      actionType: "USER_LOGIN",
+      entityType: "User",
+      entityId: user.id,
+      metadata: { username: u },
+    });
 
     return { ok: true, redirectTo: nextPath };
   } catch (error) {

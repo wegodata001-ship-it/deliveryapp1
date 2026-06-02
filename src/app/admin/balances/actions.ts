@@ -2,6 +2,7 @@
 
 import { OrderSourceCountry, Prisma } from "@prisma/client";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
+import { perfEnabled } from "@/lib/perf-log";
 import { prisma } from "@/lib/prisma";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { endOfLocalDay, formatLocalYmd, getAhWeekRange, normalizeAhWeekCode, parseLocalDate } from "@/lib/work-week";
@@ -94,6 +95,8 @@ export type CustomerBalanceRow = {
   customerId: string;
   customerName: string;
   customerCode: string | null;
+  /** מידע עסקי בלבד: סה"כ הזמנות מצטבר ב-USD מאז היום הראשון (ללא משיכות מחוב). */
+  lifetimeOrdersUSD: string;
   /** מספר הזמנות שנכנסו לחישוב בטווח */
   ordersCount: number;
   totalOrdersILS: string;
@@ -516,6 +519,25 @@ function computeBalanceStats(rows: CustomerBalanceRow[]): CustomerBalancesPayloa
 }
 
 export async function listCustomerBalancesAction(query: CustomerBalanceQuery): Promise<CustomerBalancesPayload> {
+  const perfT0 = Date.now();
+  let fetchCustomersMs = 0;
+  let fetchOrdersMs = 0;
+  let fetchPaymentsMs = 0;
+  let calculateBalancesMs = 0;
+  let calculateTotalsMs = 0;
+  let renderMs = 0;
+  let serializeMs = 0;
+
+  const perfTimed = async <T>(setter: (ms: number) => void, work: () => Promise<T>): Promise<T> => {
+    if (!perfEnabled()) return work();
+    const t0 = Date.now();
+    try {
+      return await work();
+    } finally {
+      setter(Date.now() - t0);
+    }
+  };
+
   const me = await requireAuth();
   const limit = Math.min(50, Math.max(1, Math.floor(query.limit || 15)));
   if (!userHasAnyPermission(me, ["view_reports"])) {
@@ -619,23 +641,41 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       }
     : customerWhere;
 
-  const customers = await prisma.customer.findMany({
-    where: customerWhereFinal,
-    orderBy: { displayName: "asc" },
-    select: {
-      id: true,
-      displayName: true,
-      nameAr: true,
-      nameEn: true,
-      nameHe: true,
-      customerCode: true,
-    },
-  });
+  const customers = await perfTimed((ms) => (fetchCustomersMs += ms), () =>
+    prisma.customer.findMany({
+      where: customerWhereFinal,
+      orderBy: { displayName: "asc" },
+      select: {
+        id: true,
+        displayName: true,
+        nameAr: true,
+        nameEn: true,
+        nameHe: true,
+        customerCode: true,
+      },
+    }),
+  );
 
   const customerIds = customers.map((c) => c.id);
   if (customerIds.length === 0) {
     return emptyBalancesPayload(limit);
   }
+
+  // Business-only metric: lifetime (since day 1) sum of orders in USD, excluding debt withdrawals.
+  const lifetimeAgg = await perfTimed((ms) => (fetchOrdersMs += ms), () =>
+    prisma.order.groupBy({
+      by: ["customerId"],
+      where: {
+        deletedAt: null,
+        customerId: { in: customerIds },
+        status: { not: OS.DEBT_WITHDRAWAL },
+      },
+      _sum: { totalUsd: true },
+    }),
+  );
+  const lifetimeOrdersUsdByCustomer = new Map(
+    lifetimeAgg.map((r) => [r.customerId, (r._sum.totalUsd ?? new Prisma.Decimal(0)) as Prisma.Decimal]),
+  );
 
   const orderSelect = {
     customerId: true,
@@ -664,46 +704,55 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   } as const;
 
   const [orderRows, paymentRows, generalCreditRows, overrides] = await Promise.all([
-    findManyInChunks(customerIds, (chunk) =>
-      prisma.order.findMany({
-        where: { ...orderNestedWhere, customerId: { in: chunk } },
-        select: orderSelect,
-      }),
+    perfTimed((ms) => (fetchOrdersMs += ms), () =>
+      findManyInChunks(customerIds, (chunk) =>
+        prisma.order.findMany({
+          where: { ...orderNestedWhere, customerId: { in: chunk } },
+          select: orderSelect,
+        }),
+      ),
     ),
-    findManyInChunks(customerIds, (chunk) =>
-      prisma.payment.findMany({
-        where: { ...paymentLinkedWhere, customerId: { in: chunk } },
-        select: paymentSelect,
-      }),
+    perfTimed((ms) => (fetchPaymentsMs += ms), () =>
+      findManyInChunks(customerIds, (chunk) =>
+        prisma.payment.findMany({
+          where: { ...paymentLinkedWhere, customerId: { in: chunk } },
+          select: paymentSelect,
+        }),
+      ),
     ),
-    findManyInChunks(customerIds, (chunk) =>
-      prisma.payment.findMany({
-        where: {
-          isPaid: true,
-          orderId: null,
-          customerId: { in: chunk },
-          ...(!lifetime && !cumulativeThrough && query.weekCode?.trim() ? { weekCode: query.weekCode.trim() } : {}),
-          ...(paymentDateFilter ? { paymentDate: paymentDateFilter } : {}),
-        },
-        select: {
-          customerId: true,
-          totalIlsWithVat: true,
-          amountIls: true,
-          amountUsd: true,
-          exchangeRate: true,
-        },
-      }),
+    perfTimed((ms) => (fetchPaymentsMs += ms), () =>
+      findManyInChunks(customerIds, (chunk) =>
+        prisma.payment.findMany({
+          where: {
+            isPaid: true,
+            orderId: null,
+            customerId: { in: chunk },
+            ...(!lifetime && !cumulativeThrough && query.weekCode?.trim() ? { weekCode: query.weekCode.trim() } : {}),
+            ...(paymentDateFilter ? { paymentDate: paymentDateFilter } : {}),
+          },
+          select: {
+            customerId: true,
+            totalIlsWithVat: true,
+            amountIls: true,
+            amountUsd: true,
+            exchangeRate: true,
+          },
+        }),
+      ),
     ),
-    customerIds.length > 0
-      ? findManyInChunks(customerIds, (chunk) =>
-          prisma.customerBalanceStatusOverride.findMany({
-            where: { customerId: { in: chunk } },
-            select: { customerId: true, statusOverride: true },
-          }),
-        )
-      : Promise.resolve([] as Array<{ customerId: string; statusOverride: string | null }>),
+    perfTimed((ms) => (fetchCustomersMs += ms), () =>
+      customerIds.length > 0
+        ? findManyInChunks(customerIds, (chunk) =>
+            prisma.customerBalanceStatusOverride.findMany({
+              where: { customerId: { in: chunk } },
+              select: { customerId: true, statusOverride: true },
+            }),
+          )
+        : Promise.resolve([] as Array<{ customerId: string; statusOverride: string | null }>),
+    ),
   ]);
 
+  const calcT0 = Date.now();
   const expectedIlsByCustomer = new Map<string, Prisma.Decimal>();
   const dealIlsByCustomer = new Map<string, Prisma.Decimal>();
   const commissionIlsByCustomer = new Map<string, Prisma.Decimal>();
@@ -815,6 +864,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     const paymentFlow = computePaymentFlow(calculated, debtUsdPos);
     const lastDt = lastOrderDateByCustomer.get(c.id);
     const maxN = maxAhByCustomer.get(c.id) ?? 0;
+    const lifetimeUsd = lifetimeOrdersUsdByCustomer.get(c.id) ?? new Prisma.Decimal(0);
     return {
       customerId: c.id,
       customerName: primaryCustomerDisplayName({
@@ -824,6 +874,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
         displayName: c.displayName,
       }),
       customerCode: c.customerCode,
+      lifetimeOrdersUSD: money(lifetimeUsd),
       ordersCount: oc,
       totalOrdersILS: money(expectedIls),
       totalPaymentsILS: money(receivedIls),
@@ -847,6 +898,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       maxAhWeekNum: maxN,
     };
   });
+  calculateBalancesMs += Date.now() - calcT0;
 
   const debtFilter: CustomerBalanceDebtFilter =
     query.filters?.balanceDebtStatus && DEBT_FILTER_VALUES.has(query.filters.balanceDebtStatus)
@@ -916,6 +968,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   const sort: CustomerBalanceSort =
     query.filters?.sort && SORT_VALUES.has(query.filters.sort) ? query.filters.sort : "balance_desc";
 
+  const totalsT0 = Date.now();
   const sorted = [...working].sort((a, b) => {
     if (sort === "balance_desc") return rowSignedIlsNumber(b) - rowSignedIlsNumber(a);
     if (sort === "balance_asc") return rowSignedIlsNumber(a) - rowSignedIlsNumber(b);
@@ -936,6 +989,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   });
 
   const stats = computeBalanceStats(sorted);
+  calculateTotalsMs += Date.now() - totalsT0;
 
   let reportModalStats: CustomerBalancesPayload["reportModalStats"] = undefined;
   if (query.enrichOpenOrders && enrichMap) {
@@ -966,7 +1020,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   const page = Math.min(requestedPage, totalPages);
   const skip = (page - 1) * limit;
 
-  return {
+  const out = {
     rows: sorted.slice(skip, skip + limit),
     page,
     limit,
@@ -975,6 +1029,22 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     stats,
     ...(reportModalStats ? { reportModalStats } : {}),
   };
+
+  if (perfEnabled()) {
+    const totalMs = Date.now() - perfT0;
+    console.table({
+      fetchCustomersMs,
+      fetchOrdersMs,
+      fetchPaymentsMs,
+      calculateBalancesMs,
+      calculateTotalsMs,
+      renderMs,
+      serializeMs,
+      totalMs,
+    });
+  }
+
+  return out;
 }
 
 export type CustomerBalanceReportModalInput = {
@@ -1143,13 +1213,14 @@ export async function exportCustomerBalancesAction(
     const payload = await listCustomerBalancesAction({ ...query, page: 1, limit: 10000 });
     if (payload.rows.length === 0) return { ok: false, error: "אין שורות לייצוא" };
 
-    const headers = ["קוד לקוח", "שם לקוח", "סה\"כ הזמנות", "סה\"כ תשלומים", "יתרה", "סטטוס"];
+    const headers = ["קוד לקוח", "שם לקוח", "סה\"כ הזמנות מצטבר", "סה\"כ הזמנות", "סה\"כ תשלומים", "יתרה", "סטטוס"];
     const data = payload.rows.map((r) => {
       const b = rowBalanceNumber(r.totalBalanceILS);
       const status = b > 0.01 ? "חייב" : b < -0.01 ? "זכות" : "מאוזן";
       return [
         r.customerCode ?? "—",
         r.customerName,
+        r.lifetimeOrdersUSD,
         r.totalOrdersILS,
         r.totalPaymentsILS,
         r.totalBalanceILS,

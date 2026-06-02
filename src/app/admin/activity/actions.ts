@@ -1,10 +1,23 @@
 "use server";
 
-import { UserRole } from "@prisma/client";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
+import {
+  ACTIVITY_PRESENCE_ACTION_TYPES,
+  activityActionLabelHe,
+} from "@/lib/activity-audit";
+import {
+  ACTIVITY_ACTIVE_WINDOW_MINUTES,
+  activityDashboardUserWhere,
+  activityPresenceStatus,
+  activityPresenceStatusLabel,
+  activityRoleLabelHe,
+  formatActivityClockHe,
+  formatLastActivityHe,
+  type ActivityPresenceStatus,
+} from "@/lib/activity-dashboard";
 import { prisma } from "@/lib/prisma";
 
-export type ActivityStatus = "ACTIVE" | "INACTIVE";
+export type ActivityStatus = ActivityPresenceStatus;
 
 export type ActivityUserRow = {
   id: string;
@@ -12,30 +25,29 @@ export type ActivityUserRow = {
   role: string;
   status: ActivityStatus;
   statusLabel: string;
+  lastActivityAt: string | null;
+  lastActivityLabel: string;
+};
+
+export type ActivityLogRow = {
+  id: string;
+  timeLabel: string;
+  userName: string;
+  actionLabel: string;
+  createdAt: string;
 };
 
 export type ActivityPayload = {
   users: ActivityUserRow[];
+  logs: ActivityLogRow[];
   kpis: {
-    active: number;
-    inactive: number;
     total: number;
+    activeNow: number;
+    inactive: number;
   };
 };
 
-function roleLabel(role: UserRole | string | null | undefined): string {
-  return role === "ADMIN" ? "מנהל" : "עובד";
-}
-
-function activityStatus(lastAt: Date | null, now: Date): ActivityStatus {
-  if (!lastAt) return "INACTIVE";
-  const diffMin = (now.getTime() - lastAt.getTime()) / 60000;
-  return diffMin < 5 ? "ACTIVE" : "INACTIVE";
-}
-
-function statusLabel(status: ActivityStatus): string {
-  return status === "ACTIVE" ? "פעיל עכשיו" : "לא פעיל";
-}
+const LOG_LIMIT = 80;
 
 async function ensureAllowed() {
   const me = await requireAuth();
@@ -45,38 +57,78 @@ async function ensureAllowed() {
 export async function getActivityDashboardAction(): Promise<ActivityPayload> {
   await ensureAllowed();
   const now = new Date();
+  const userWhere = activityDashboardUserWhere();
+  const presenceActions = [...ACTIVITY_PRESENCE_ACTION_TYPES];
 
-  const [users, latestByUser] = await Promise.all([
+  const [users, latestByUser, recentLogs] = await Promise.all([
     prisma.user.findMany({
-      where: { isActive: true },
+      where: userWhere,
       orderBy: { fullName: "asc" },
-      select: { id: true, fullName: true, role: true, lastLoginAt: true },
+      select: { id: true, fullName: true, role: true, isActive: true },
     }),
     prisma.auditLog.groupBy({
       by: ["userId"],
-      where: { userId: { not: null } },
+      where: {
+        userId: { not: null },
+        actionType: { in: presenceActions },
+        user: userWhere,
+      },
       _max: { createdAt: true },
+    }),
+    prisma.auditLog.findMany({
+      where: {
+        userId: { not: null },
+        actionType: { in: presenceActions },
+        user: userWhere,
+      },
+      orderBy: { createdAt: "desc" },
+      take: LOG_LIMIT,
+      select: {
+        id: true,
+        createdAt: true,
+        actionType: true,
+        user: { select: { fullName: true } },
+      },
     }),
   ]);
 
-  const latestMap = new Map(latestByUser.map((r) => [r.userId, r._max.createdAt]));
-  const rows = users.map((u): ActivityUserRow => {
-    const latestAuditAt = latestMap.get(u.id) ?? null;
-    const lastSeenAt =
-      latestAuditAt && u.lastLoginAt ? (latestAuditAt > u.lastLoginAt ? latestAuditAt : u.lastLoginAt) : latestAuditAt ?? u.lastLoginAt;
-    const status = activityStatus(lastSeenAt, now);
+  const latestMap = new Map(
+    latestByUser.map((r) => [r.userId, r._max.createdAt] as const),
+  );
+
+  const rows: ActivityUserRow[] = users.map((u) => {
+    const lastAt = latestMap.get(u.id) ?? null;
+    const status = activityPresenceStatus(lastAt, now);
     return {
       id: u.id,
       userName: u.fullName,
-      role: roleLabel(u.role),
+      role: activityRoleLabelHe(u.role),
       status,
-      statusLabel: statusLabel(status),
+      statusLabel: activityPresenceStatusLabel(status),
+      lastActivityAt: lastAt?.toISOString() ?? null,
+      lastActivityLabel: formatLastActivityHe(lastAt, now),
     };
   });
-  const active = rows.filter((u) => u.status === "ACTIVE").length;
+
+  const activeNow = rows.filter((u) => u.status === "ACTIVE").length;
+
+  const logs: ActivityLogRow[] = recentLogs.map((log) => ({
+    id: log.id,
+    timeLabel: formatActivityClockHe(log.createdAt),
+    userName: log.user?.fullName ?? "—",
+    actionLabel: activityActionLabelHe(log.actionType),
+    createdAt: log.createdAt.toISOString(),
+  }));
 
   return {
     users: rows,
-    kpis: { active, inactive: rows.length - active, total: rows.length },
+    logs,
+    kpis: {
+      total: rows.length,
+      activeNow,
+      inactive: rows.length - activeNow,
+    },
   };
 }
+
+export { ACTIVITY_ACTIVE_WINDOW_MINUTES };

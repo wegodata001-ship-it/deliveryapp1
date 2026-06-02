@@ -11,6 +11,7 @@ import type { CustomersSourcePreview } from "@/lib/customers-source-table";
 import { WEGO_CUSTOMER_CREATED_EVENT } from "@/lib/customer-created-bus";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { TableEmpty, TableError, TableSkeleton } from "@/components/ui/data-table";
+import { formatMoneyAmount } from "@/lib/money-format";
 
 const PAGE_LIMIT = 25;
 const SEARCH_DEBOUNCE_MS = 350;
@@ -22,6 +23,7 @@ type AdvancedFilters = {
   phone: string;
   city: string;
   isActive: "" | "true" | "false";
+  balanceSign: "" | "owes" | "credit" | "zero";
   fromYmd: string;
   toYmd: string;
 };
@@ -32,9 +34,24 @@ const EMPTY_FILTERS: AdvancedFilters = {
   phone: "",
   city: "",
   isActive: "",
+  balanceSign: "",
   fromYmd: "",
   toYmd: "",
 };
+
+function parseNumber(raw: string | null | undefined): number {
+  if (!raw) return 0;
+  const n = Number(String(raw).replace(/,/g, "").trim());
+  return Number.isFinite(n) ? n : 0;
+}
+
+function balanceUi(balanceUsd: string): { cls: string; badge: string; text: string } {
+  const n = parseNumber(balanceUsd);
+  const abs = formatMoneyAmount(Math.abs(n), 2);
+  if (n > 0.005) return { cls: "adm-custbal adm-custbal--debt", badge: "🔴 חייב", text: `$${abs}` };
+  if (n < -0.005) return { cls: "adm-custbal adm-custbal--credit", badge: "🟢 זכות", text: `-$${abs}` };
+  return { cls: "adm-custbal adm-custbal--zero", badge: "אפס", text: "$0.00" };
+}
 
 function downloadBase64(base64: string, filename: string, mime: string) {
   const bin = atob(base64);
@@ -101,6 +118,7 @@ export function CustomersSourceTableClient({ initialSearch = "" }: { initialSear
         phone: filters.phone || undefined,
         city: filters.city || undefined,
         isActive: filters.isActive || undefined,
+        balanceSign: filters.balanceSign || undefined,
         fromYmd: filters.fromYmd || undefined,
         toYmd: filters.toYmd || undefined,
       },
@@ -293,6 +311,18 @@ export function CustomersSourceTableClient({ initialSearch = "" }: { initialSear
             </select>
           </label>
           <label>
+            יתרה
+            <select
+              value={filters.balanceSign}
+              onChange={(e) => setFilters((f) => ({ ...f, balanceSign: e.target.value as AdvancedFilters["balanceSign"] }))}
+            >
+              <option value="">הכל</option>
+              <option value="owes">לקוחות חייבים</option>
+              <option value="credit">לקוחות בזכות</option>
+              <option value="zero">מאוזנים</option>
+            </select>
+          </label>
+          <label>
             הצטרפות מ-
             <input type="date" value={filters.fromYmd} onChange={(e) => setFilters((f) => ({ ...f, fromYmd: e.target.value }))} />
           </label>
@@ -317,12 +347,11 @@ export function CustomersSourceTableClient({ initialSearch = "" }: { initialSear
           <thead>
             <tr>
               {[
+                { key: "code", label: "קוד לקוח", sortable: true },
                 { key: "name", label: "שם", sortable: true },
-                { key: "code", label: "קוד", sortable: true },
                 { key: "phone", label: "טלפון", sortable: true },
-                { key: "city", label: "עיר", sortable: true },
-                { key: "type", label: "סוג", sortable: true },
-                { key: "active", label: "פעיל", sortable: true },
+                { key: "email", label: "אימייל", sortable: false },
+                { key: "balance", label: "יתרת לקוח", sortable: true },
                 { key: "created", label: "הצטרפות", sortable: true },
               ].map((col) => (
                 <th key={col.key}>
@@ -344,12 +373,12 @@ export function CustomersSourceTableClient({ initialSearch = "" }: { initialSear
             </tr>
           </thead>
           {loading && !payload ? (
-            <TableSkeleton columnCount={7} rowCount={8} />
+            <TableSkeleton columnCount={6} rowCount={8} />
           ) : (
             <tbody>
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={7}>
+                  <td colSpan={6}>
                     <TableEmpty />
                   </td>
                 </tr>
@@ -367,6 +396,7 @@ export function CustomersSourceTableClient({ initialSearch = "" }: { initialSear
                       })
                     }
                   >
+                    <td dir="ltr">{r.code || "—"}</td>
                     <td>
                       <button
                         type="button"
@@ -381,11 +411,21 @@ export function CustomersSourceTableClient({ initialSearch = "" }: { initialSear
                         {r.name || "—"}
                       </button>
                     </td>
-                    <td dir="ltr">{r.code || "—"}</td>
                     <td dir="ltr">{r.phone || "—"}</td>
-                    <td>{r.city || "—"}</td>
-                    <td>{r.type || "—"}</td>
-                    <td>{r.isActive ? "כן" : "לא"}</td>
+                    <td dir="ltr">{r.email || "—"}</td>
+                    <td dir="rtl">
+                      {(() => {
+                        const ui = balanceUi(r.balanceUsd);
+                        return (
+                          <span className={ui.cls} dir="rtl">
+                            <span className="adm-custbal__badge">{ui.badge}</span>{" "}
+                            <span className="adm-custbal__amt" dir="ltr">
+                              {ui.text}
+                            </span>
+                          </span>
+                        );
+                      })()}
+                    </td>
                     <td dir="ltr">{r.created}</td>
                   </tr>
                 ))

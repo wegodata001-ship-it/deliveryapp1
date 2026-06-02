@@ -24,7 +24,7 @@ import {
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { TableSkeleton } from "@/components/ui/loading";
 import { MoneyInput } from "@/components/ui/MoneyInput";
-import { formatIlsDisplay, parseMoneyString, parseMoneyStringOrZero } from "@/lib/money-format";
+import { formatIlsDisplay, formatUsdDisplay, parseMoneyString, parseMoneyStringOrZero } from "@/lib/money-format";
 import { withQuery } from "@/lib/admin-url-query";
 import { ReportWeekNav } from "@/components/admin/ReportWeekNav";
 import { ORDER_COUNTRY_CODES, orderCountryLabel, type OrderCountryCode } from "@/lib/order-countries";
@@ -60,6 +60,10 @@ function dec(value: string): number {
 
 function moneyIlsCell(value: string): string {
   return formatIlsDisplay(parseMoneyStringOrZero(value));
+}
+
+function moneyUsdCell(value: string): string {
+  return formatUsdDisplay(parseMoneyStringOrZero(value));
 }
 
 function balanceUi(balanceIls: string): { label: string; tone: BalanceUiTone } {
@@ -232,6 +236,11 @@ export function CustomerBalancesClient() {
     const gen = ++fetchGenRef.current;
     setTableLoading(true);
     setErr(null);
+    const perf = (window as any).__WEGO_CUSTCARD_PERF;
+    if (perf?.startedAt && typeof perf.refreshBalancesMs === "number") {
+      const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+      if (now - perf.startedAt < 2000) perf.refreshBalancesMs += 1;
+    }
     void listCustomerBalancesAction(buildListQuery(page))
       .then((next) => {
         if (gen !== fetchGenRef.current) return;
@@ -296,6 +305,18 @@ export function CustomerBalancesClient() {
 
   const openCustomerCard = useCallback(
     (row: CustomerBalanceRow) => {
+      const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
+      const t0 = now();
+      (window as any).__WEGO_CUSTCARD_PERF = {
+        startedAt: t0,
+        customerId: row.customerId,
+        openModalMs: 0,
+        fetchCardMs: 0,
+        renderCardMs: 0,
+        refreshBalancesMs: 0,
+        refreshKpiMs: 0,
+        hydrateMs: 0,
+      };
       openWindow({
         type: "customerCard",
         props: {
@@ -303,6 +324,11 @@ export function CustomerBalancesClient() {
           customerName: row.customerName,
           initialTab: "ledger",
         },
+      });
+      requestAnimationFrame(() => {
+        const perf = (window as any).__WEGO_CUSTCARD_PERF;
+        if (!perf || perf.customerId !== row.customerId) return;
+        perf.openModalMs = Math.round(now() - t0);
       });
     },
     [openWindow],
@@ -353,7 +379,7 @@ export function CustomerBalancesClient() {
     }
   }
 
-  const colCount = 7;
+  const colCount = 8;
   const stats = payload?.stats;
 
   const kpiCompact = stats ? (
@@ -445,7 +471,7 @@ export function CustomerBalancesClient() {
   ) : null;
 
   return (
-    <div className="adm-balances-page adm-balances-excel-page adm-balances-page--v2 adm-balances-page--page-scroll">
+    <div className="adm-balances-page adm-balances-excel-page adm-balances-page--v2 adm-balances-page--page-scroll adm-page--page-scroll">
       <header className="adm-balances-head">
         <h1>יתרות לקוחות</h1>
         <p>לחיצה על שורה פותחת את כרטסת הלקוח במערכת.</p>
@@ -647,6 +673,7 @@ export function CustomerBalancesClient() {
               <tr>
                 <th className="adm-balances-th-code">קוד לקוח</th>
                 <th className="adm-balances-th-name">שם לקוח</th>
+                <th className="adm-balances-th-num">סה&quot;כ הזמנות מצטבר</th>
                 <th className="adm-balances-th-num">סה&quot;כ הזמנות</th>
                 <th className="adm-balances-th-num">סה&quot;כ תשלומים</th>
                 <th className="adm-balances-th-balance">יתרה</th>
@@ -678,6 +705,9 @@ export function CustomerBalancesClient() {
                         {row.customerCode ?? "—"}
                       </td>
                       <td className="adm-balances-td-name">{row.customerName}</td>
+                      <td className="adm-balances-td-num">
+                        <span dir="ltr">{moneyUsdCell(row.lifetimeOrdersUSD)}</span>
+                      </td>
                       <td className="adm-balances-td-num">
                         <span dir="ltr">{moneyIlsCell(row.totalOrdersILS)}</span>
                       </td>

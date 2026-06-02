@@ -15,6 +15,8 @@ export type CustomersSourceFilters = {
   isActive?: string;
   fromYmd?: string;
   toYmd?: string;
+  /** "" | "owes" | "credit" | "zero" — סינון לפי סימן יתרה (USD) */
+  balanceSign?: string;
 };
 
 export type CustomersSourceListQuery = {
@@ -30,6 +32,9 @@ export type CustomersSourceRow = {
   code: string;
   name: string;
   phone: string;
+  email: string;
+  /** יתרת לקוח (USD): חיובי=חוב, שלילי=זכות */
+  balanceUsd: string;
   city: string;
   type: string;
   created: string;
@@ -178,11 +183,14 @@ function mapRow(r: {
   nameEn: string | null;
   nameHe: string | null;
   phone: string | null;
+  email: string | null;
   city: string | null;
   customerType: string | null;
   createdAt: Date;
   isActive: boolean;
-}): CustomersSourceRow {
+} & { balanceUsd?: Prisma.Decimal | number | string | null }): CustomersSourceRow {
+  const balNum = r.balanceUsd != null ? Number(r.balanceUsd) : 0;
+  const bal = Number.isFinite(balNum) ? balNum : 0;
   return {
     id: r.id,
     code: r.customerCode ?? "",
@@ -193,6 +201,8 @@ function mapRow(r: {
       displayName: r.displayName,
     }),
     phone: r.phone ?? "",
+    email: r.email ?? "",
+    balanceUsd: new Prisma.Decimal(bal).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toFixed(2),
     city: r.city ?? "",
     type: r.customerType ?? "",
     created: formatLocalYmd(r.createdAt),
@@ -208,11 +218,67 @@ const customerListSelect = {
   nameEn: true,
   nameHe: true,
   phone: true,
+  email: true,
   city: true,
   customerType: true,
   createdAt: true,
   isActive: true,
 } as const;
+
+type CustomerBalanceAggRow = {
+  customerId: string | null;
+  ordersUsd: Prisma.Decimal;
+  withdrawalsUsd: Prisma.Decimal;
+  paymentsUsd: Prisma.Decimal;
+  balanceUsd: Prisma.Decimal;
+};
+
+async function fetchBalancesUsdForCustomers(customerIds: string[]): Promise<Map<string, Prisma.Decimal>> {
+  if (customerIds.length === 0) return new Map();
+  const ids = customerIds;
+  const [ordersAgg, withdrawalsAgg, paymentsAgg] = await Promise.all([
+    prisma.order.groupBy({
+      by: ["customerId"],
+      where: { deletedAt: null, customerId: { in: ids }, status: { not: "DEBT_WITHDRAWAL" } },
+      _sum: { totalUsd: true },
+    }),
+    prisma.order.groupBy({
+      by: ["customerId"],
+      where: { deletedAt: null, customerId: { in: ids }, status: "DEBT_WITHDRAWAL" },
+      _sum: { debtWithdrawalUsd: true },
+    }),
+    prisma.payment.groupBy({
+      by: ["customerId"],
+      where: { isPaid: true, customerId: { in: ids } },
+      _sum: { amountUsd: true },
+    }),
+  ]);
+
+  const ordersMap = new Map(ordersAgg.map((r) => [r.customerId ?? "", (r._sum.totalUsd ?? new Prisma.Decimal(0)) as Prisma.Decimal]));
+  const withdrawalsMap = new Map(
+    withdrawalsAgg.map((r) => [r.customerId ?? "", (r._sum.debtWithdrawalUsd ?? new Prisma.Decimal(0)) as Prisma.Decimal]),
+  );
+  const paymentsMap = new Map(
+    paymentsAgg.map((r) => [r.customerId ?? "", (r._sum.amountUsd ?? new Prisma.Decimal(0)) as Prisma.Decimal]),
+  );
+
+  const out = new Map<string, Prisma.Decimal>();
+  for (const id of ids) {
+    const orders = ordersMap.get(id) ?? new Prisma.Decimal(0);
+    const withdrawals = withdrawalsMap.get(id) ?? new Prisma.Decimal(0);
+    const payments = paymentsMap.get(id) ?? new Prisma.Decimal(0);
+    out.set(id, orders.sub(payments).sub(withdrawals));
+  }
+  return out;
+}
+
+function balanceFilterSql(sign: string | null): Prisma.Sql {
+  const s = (sign ?? "").trim();
+  if (s === "owes") return Prisma.sql`(COALESCE(o.orders_usd,0) - COALESCE(p.payments_usd,0) - COALESCE(w.withdrawals_usd,0)) > 0.0001`;
+  if (s === "credit") return Prisma.sql`(COALESCE(o.orders_usd,0) - COALESCE(p.payments_usd,0) - COALESCE(w.withdrawals_usd,0)) < -0.0001`;
+  if (s === "zero") return Prisma.sql`ABS(COALESCE(o.orders_usd,0) - COALESCE(p.payments_usd,0) - COALESCE(w.withdrawals_usd,0)) <= 0.0001`;
+  return Prisma.sql`TRUE`;
+}
 
 /** רשימה עם offset/limit — ללא count מלא */
 export async function listCustomersSourceTable(
@@ -223,6 +289,60 @@ export async function listCustomersSourceTable(
     const page = Math.max(1, Math.floor(query.page || 1));
     const skip = (page - 1) * limit;
     const where = buildCustomersSourceWhere(query.filters ?? {});
+    const sortKey = query.sortKey?.trim() || "created";
+    const sortDir = query.sortDir === "asc" ? "asc" : "desc";
+
+    // If user sorts/filters by balance, use a single SQL query with aggregates + ordering.
+    if (sortKey === "balance" || (query.filters?.balanceSign ?? "").trim()) {
+      customersPerfStart("customers.query");
+      const rowsSql = await prisma.$queryRaw<CustomerBalanceAggRow[]>(Prisma.sql`
+        SELECT
+          c.id AS "customerId",
+          COALESCE(o.orders_usd, 0) AS "ordersUsd",
+          COALESCE(w.withdrawals_usd, 0) AS "withdrawalsUsd",
+          COALESCE(p.payments_usd, 0) AS "paymentsUsd",
+          (COALESCE(o.orders_usd,0) - COALESCE(p.payments_usd,0) - COALESCE(w.withdrawals_usd,0)) AS "balanceUsd"
+        FROM "Customer" c
+        LEFT JOIN (
+          SELECT "customerId", SUM(COALESCE("totalUsd",0)) AS orders_usd
+          FROM "Order"
+          WHERE "deletedAt" IS NULL AND "status" <> 'DEBT_WITHDRAWAL'
+          GROUP BY "customerId"
+        ) o ON o."customerId" = c.id
+        LEFT JOIN (
+          SELECT "customerId", SUM(COALESCE("debtWithdrawalUsd",0)) AS withdrawals_usd
+          FROM "Order"
+          WHERE "deletedAt" IS NULL AND "status" = 'DEBT_WITHDRAWAL'
+          GROUP BY "customerId"
+        ) w ON w."customerId" = c.id
+        LEFT JOIN (
+          SELECT "customerId", SUM(COALESCE("amountUsd",0)) AS payments_usd
+          FROM "Payment"
+          WHERE "isPaid" = TRUE
+          GROUP BY "customerId"
+        ) p ON p."customerId" = c.id
+        WHERE c."deletedAt" IS NULL
+        AND c.id IN (SELECT id FROM "Customer" WHERE ${where})
+        AND ${balanceFilterSql(query.filters?.balanceSign ?? null)}
+        ORDER BY "balanceUsd" ${Prisma.raw(sortDir)}
+        OFFSET ${skip}
+        LIMIT ${limit + 1}
+      `);
+      customersPerfEnd("customers.query");
+
+      const hasMore = rowsSql.length > limit;
+      const sliceAgg = hasMore ? rowsSql.slice(0, limit) : rowsSql;
+      const balMap = new Map(sliceAgg.map((r) => [r.customerId ?? "", r.balanceUsd ?? new Prisma.Decimal(0)]));
+
+      const ids = sliceAgg.map((r) => r.customerId!).filter(Boolean);
+      const rawCustomers = await prisma.customer.findMany({
+        where: { id: { in: ids } },
+        select: customerListSelect,
+      });
+      const rawById = new Map(rawCustomers.map((c) => [c.id, c]));
+      const rows = ids.map((id) => mapRow({ ...rawById.get(id)!, balanceUsd: balMap.get(id) ?? 0 }));
+      return { rows, page, limit, hasMore };
+    }
 
     customersPerfStart("customers.query");
     const raw = await prisma.customer.findMany({
@@ -239,8 +359,10 @@ export async function listCustomersSourceTable(
     const slice = hasMore ? raw.slice(0, limit) : raw;
     customersPerfEnd("customers.pagination");
 
+    const balancesMap = await fetchBalancesUsdForCustomers(slice.map((c) => c.id));
+
     customersPerfStart("customers.response");
-    const rows = slice.map(mapRow);
+    const rows = slice.map((c) => mapRow({ ...c, balanceUsd: balancesMap.get(c.id) ?? 0 }));
     customersPerfEnd("customers.response");
 
     return { rows, page, limit, hasMore };

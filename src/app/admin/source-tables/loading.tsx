@@ -2,7 +2,7 @@ import { SourceTablesCardsSkeleton } from "@/components/admin/SourceTablesCardsS
 
 export default function SourceTablesLoading() {
   return (
-    <div className="adm-source-page">
+    <div className="adm-source-page adm-page--page-scroll">
       <header className="adm-source-head">
         <h1>טבלאות מקור</h1>
         <p>גישה ברורה לטבלאות השוטפות וטבלאות המערכת, בעיצוב מודרני ונוח.</p>

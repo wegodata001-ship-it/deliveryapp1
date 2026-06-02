@@ -10,8 +10,6 @@ import { OrderStatusSelect } from "@/components/admin/OrderStatusSelect";
 import { ChevronDown, Plus } from "lucide-react";
 import {
   updateOrderListPaymentLocationAction,
-  updateOrderListPaymentMethodAction,
-  updateOrderListStatusAction,
 } from "@/app/admin/capture/actions";
 import { exportOrdersListPdfHtmlAction, type OrdersPdfExportMode } from "@/app/admin/orders/export-orders-pdf-action";
 import { OrderEditLockGateModal, type OrderEditLockGatePayload } from "@/components/admin/OrderEditLockGateModal";
@@ -20,6 +18,7 @@ import {
   ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS,
   orderCaptureSplitMethodLabel,
 } from "@/lib/order-capture-payment-methods";
+import { orderListRowToneClass } from "@/constants/order-status";
 import type { ParsedDateFilter } from "@/lib/work-week";
 import { IntakeLocationCombobox } from "@/components/admin/IntakeLocationCombobox";
 import { OrdersListPaginationBar } from "@/components/admin/OrdersListPaginationBar";
@@ -128,21 +127,6 @@ function formatOrdersListMoney(
 function signedExportMoney(o: OrderListRow, field: "deal" | "total" | "ils"): string {
   const { text } = formatOrdersListMoney(o, field);
   return text === "—" ? "" : text;
-}
-
-function paymentMethodTone(m: string | null): string {
-  switch (m) {
-    case PaymentMethod.CASH:
-      return "adm-pay-sel--cash";
-    case PaymentMethod.CREDIT:
-      return "adm-pay-sel--credit";
-    case PaymentMethod.BANK_TRANSFER:
-      return "adm-pay-sel--bank";
-    case PaymentMethod.CHECK:
-      return "adm-pay-sel--check";
-    default:
-      return "adm-pay-sel--none";
-  }
 }
 
 function orderEditBadgeLabel(
@@ -347,20 +331,48 @@ export function OrdersListShell({
 
   const onRowStatusChange = useCallback(
     async (orderId: string, next: string) => {
+      const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
+      const t0 = now();
+      let statusUpdateDbMs = 0;
+      let statusUpdateUiMs = 0;
+      let statusRefreshMs = 0;
       setListErr(null);
       const prevSnapshot = rows;
+      const uiT0 = now();
       setRows((cur) => cur.map((r) => (r.id === orderId ? { ...r, status: next } : r)));
+      statusUpdateUiMs += now() - uiT0;
       setBusyId(orderId);
-      const res = await updateOrderListStatusAction(orderId, next);
+      const dbT0 = now();
+      const res = await fetch("/api/orders/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ orderId, status: next }),
+      })
+        .then(async (r) => ((await r.json().catch(() => null)) as any) ?? { ok: false, error: "שגיאה" })
+        .catch(() => ({ ok: false, error: "שגיאה בשמירה" }));
+      statusUpdateDbMs += now() - dbT0;
       setBusyId(null);
       if (!res.ok) {
+        const uiRollbackT0 = now();
         setRows(prevSnapshot);
+        statusUpdateUiMs += now() - uiRollbackT0;
         setListErr(res.error);
+        const totalMs = Math.round(now() - t0);
+        if (process.env.NODE_ENV === "development" || totalMs > 300) {
+          console.table({
+            statusUpdateDbMs: Math.round(statusUpdateDbMs),
+            statusUpdateUiMs: Math.round(statusUpdateUiMs),
+            statusRefreshMs: Math.round(statusRefreshMs),
+            totalMs,
+          });
+        }
         return;
       }
-      // משיכה מהחוב — מעדכנים גם את "שולם" ויתרת ההזמנה לפי הסכום שנמשך בפועל
+      // משיכה מחוב: מקזזים חוב בדיוק כמו תשלום (paid += withdrawn).
       if (next === OS.DEBT_WITHDRAWAL && typeof res.debtWithdrawalUsd === "number") {
         const withdrawn = res.debtWithdrawalUsd;
+        const uiDwT0 = now();
         setRows((cur) =>
           cur.map((r) => {
             if (r.id !== orderId) return r;
@@ -378,6 +390,17 @@ export function OrdersListShell({
             };
           }),
         );
+        statusUpdateUiMs += now() - uiDwT0;
+      }
+
+      const totalMs = Math.round(now() - t0);
+      if (process.env.NODE_ENV === "development" || totalMs > 300) {
+        console.table({
+          statusUpdateDbMs: Math.round(statusUpdateDbMs),
+          statusUpdateUiMs: Math.round(statusUpdateUiMs),
+          statusRefreshMs: Math.round(statusRefreshMs),
+          totalMs,
+        });
       }
     },
     [rows],
@@ -385,17 +408,60 @@ export function OrdersListShell({
 
   const onRowPaymentMethodChange = useCallback(
     async (orderId: string, raw: string) => {
+      const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
+      const t0 = now();
+      let paymentMethodUpdateMs = 0;
+      let tableRefreshMs = 0;
+      let kpiRefreshMs = 0;
+      let renderMs = 0;
       setListErr(null);
       const next = raw ? (raw as PaymentMethod) : null;
       const prevSnapshot = rows;
+      const uiT0 = now();
       setRows((cur) => cur.map((r) => (r.id === orderId ? { ...r, paymentType: next } : r)));
+      renderMs += now() - uiT0;
       setBusyId(orderId);
-      const res = await updateOrderListPaymentMethodAction(orderId, next);
+      const reqT0 = now();
+      const res = await fetch("/api/orders/payment-method", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ orderId, paymentMethod: next }),
+      })
+        .then(async (r) => ((await r.json().catch(() => null)) as any) ?? { ok: false, error: "שגיאה" })
+        .catch(() => ({ ok: false, error: "שגיאה בשמירה" }));
+      paymentMethodUpdateMs += now() - reqT0;
       setBusyId(null);
       if (!res.ok) {
+        const uiRollbackT0 = now();
         setRows(prevSnapshot);
+        renderMs += now() - uiRollbackT0;
         setListErr(res.error);
+        const totalMs = Math.round(now() - t0);
+        if (process.env.NODE_ENV === "development" || totalMs > 500) {
+          console.table({
+            paymentMethodUpdateMs: Math.round(paymentMethodUpdateMs),
+            tableRefreshMs: Math.round(tableRefreshMs),
+            kpiRefreshMs: Math.round(kpiRefreshMs),
+            renderMs: Math.round(renderMs),
+            totalMs,
+          });
+        }
+        return;
       }
+
+      requestAnimationFrame(() => {
+        const totalMs = Math.round(now() - t0);
+        if (process.env.NODE_ENV === "development" || totalMs > 500) {
+          console.table({
+            paymentMethodUpdateMs: Math.round(paymentMethodUpdateMs),
+            tableRefreshMs: Math.round(tableRefreshMs),
+            kpiRefreshMs: Math.round(kpiRefreshMs),
+            renderMs: Math.round(renderMs),
+            totalMs,
+          });
+        }
+      });
     },
     [rows],
   );
@@ -736,13 +802,12 @@ export function OrdersListShell({
               </tr>
             ) : (
               tableRows.map((o) => {
-                const selVal = o.status;
+                const selVal = o.status?.trim() ? o.status : OS.OPEN;
                 const editBadgeUi = o.editBadge ? orderEditBadgeLabel(o.editBadge, o.status) : null;
-                const isCancelled = o.status === OS.CANCELLED;
                 return (
                   <tr
                     key={o.id}
-                    className={`adm-table-excel-row${isCancelled ? " adm-order-row--cancelled" : ""}`}
+                    className={`adm-table-excel-row ${orderListRowToneClass(o.status)}`}
                     onClick={() => openOrderOverlay(o.id, o)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
@@ -853,7 +918,7 @@ export function OrdersListShell({
                     </td>
                     <td className="adm-ord-col-meta adm-ord-col-pay" onClick={(e) => e.stopPropagation()}>
                       <select
-                        className={`adm-pay-sel ${paymentMethodTone(o.paymentType)}`}
+                        className="adm-pay-sel adm-pay-sel--neutral"
                         value={(o.paymentType as string | null) ?? ""}
                         disabled={!canEditOrders || busyId === o.id || !!o.quickStatusLocked}
                         aria-label="צורת תשלום"

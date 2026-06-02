@@ -153,6 +153,22 @@ export function orderBusinessStatusDisplay(status: string): { label: string; cla
   return { label: m.label, className: m.tableClass };
 }
 
+/** Full-row background in orders list — keyed by KPI bucket, not payment method. */
+export function orderListRowToneClass(status: string): string {
+  switch (getOrderStatusMeta(status).kpiBucket) {
+    case "in_progress":
+      return "adm-order-row--progress";
+    case "ready":
+      return "adm-order-row--ready";
+    case "cancelled":
+      return "adm-order-row--cancelled";
+    case "debt_withdrawal":
+      return "adm-order-row--withdrawal";
+    default:
+      return "adm-order-row--open";
+  }
+}
+
 export function orderSensitiveStatusHe(status: string): string {
   return getOrderStatusLabel(status);
 }

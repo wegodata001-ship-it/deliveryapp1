@@ -817,6 +817,11 @@
   color: #2563eb;
 }
 
+.adm-win-panel--customer-card .summary-card.purple,
+.adm-win-panel--customer-card .summary-card.purple .summary-card-amount {
+  color: #7c3aed;
+}
+
 .adm-win-panel--customer-card .summary-card span {
   font-size: 13px;
   font-weight: 600;
@@ -861,6 +866,15 @@
 
 .adm-win-panel--customer-card .adm-cust-card-orders-table.adm-ledger-table-saas tbody tr.adm-ledger-row--opening:hover {
   background: #fef3c7;
+}
+
+.adm-win-panel--customer-card .adm-cust-card-orders-table.adm-ledger-table-saas tbody tr.adm-ledger-row--payment {
+  background: #f0fff4;
+}
+
+.adm-win-panel--customer-card .adm-cust-card-orders-table.adm-ledger-table-saas tbody tr.adm-ledger-row--withdrawal {
+  background: #f3e8ff;
+  border-right: 4px solid #8b5cf6;
 }
 
 .adm-win-panel--customer-card .adm-ledger-doc-link,

@@ -8,12 +8,26 @@ import { PaymentModalUpdated } from "@/components/admin/PaymentModalUpdated";
 
 const CustomerCardWindowBody = dynamic(
   () => import("@/components/admin/AdminWindowBodies").then((m) => ({ default: m.CustomerCardWindowBody })),
-  { ssr: false },
+  {
+    ssr: false,
+    loading: () => (
+      <div className="adm-win-scroll-body" aria-busy="true">
+        <p className="adm-win-meta">טוען כרטסת…</p>
+      </div>
+    ),
+  },
 );
 
 const CreateCustomerWindowBody = dynamic(
   () => import("@/components/admin/AdminWindowBodies").then((m) => ({ default: m.CreateCustomerWindowBody })),
-  { ssr: false },
+  {
+    ssr: false,
+    loading: () => (
+      <div className="adm-win-scroll-body" aria-busy="true">
+        <p className="adm-win-meta">טוען…</p>
+      </div>
+    ),
+  },
 );
 import type { AdminToastFn } from "@/components/admin/AdminNavShell";
 import type { SerializedFinancial } from "@/lib/financial-settings";

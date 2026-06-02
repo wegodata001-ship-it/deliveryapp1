@@ -252,7 +252,7 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
   }
 
   return (
-    <div className="adm-reports-page">
+    <div className="adm-reports-page adm-page--page-scroll">
       <section className="adm-reports-filter-card">
         <div className="adm-reports-filter-head">
           <h1>דוחות</h1>

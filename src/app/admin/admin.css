@@ -281,6 +281,20 @@
 
 .adm-activity-table-wrap {
   overflow: hidden;
+  padding: 0 0 0.25rem;
+}
+
+.adm-activity-section-title {
+  margin: 0;
+  padding: 1rem 1rem 0.5rem;
+  font-size: 1.05rem;
+  font-weight: 900;
+  color: #0f172a;
+}
+
+.adm-activity-log-table td:first-child {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .adm-activity-table th,
@@ -717,11 +731,11 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
 
 .adm-orders-filters-row {
   flex-shrink: 0;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
 }
 
 .adm-orders-filters-bar {
-  padding: 6px 8px;
+  padding: 4px 6px;
   min-height: 0;
   box-sizing: border-box;
   background: #fff;
@@ -857,13 +871,56 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
 
 .adm-orders-filters-bar--split .adm-orders-toolbar-row--primary {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: flex-end;
-  gap: 8px 10px;
-  padding: 6px 10px;
+  gap: 6px;
+  padding: 4px 6px;
   width: 100%;
   box-sizing: border-box;
-  overflow: visible;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+.adm-orders-filters-bar--compact .adm-orders-toolbar-row--primary .adm-orders-filter-label {
+  font-size: 10px;
+  margin-bottom: 2px;
+}
+
+.adm-orders-filters-bar--compact .adm-orders-toolbar-row--primary .adm-orders-filter-inp,
+.adm-orders-filters-bar--compact .adm-orders-toolbar-row--primary .adm-orders-week-sel,
+.adm-orders-filters-bar--compact .adm-orders-toolbar-row--primary .adm-week-inp,
+.adm-orders-filters-bar--compact .adm-orders-toolbar-row--primary select,
+.adm-orders-filters-bar--compact .adm-orders-toolbar-row--primary .adm-orders-date-inp,
+.adm-orders-filters-bar--compact .adm-orders-toolbar-row--primary .adm-erp-combo__input,
+.adm-orders-filters-bar--compact .adm-orders-advanced-filters .adm-orders-filter-inp,
+.adm-orders-filters-bar--compact .adm-orders-advanced-filters .adm-orders-date-inp,
+.adm-orders-filters-bar--compact .adm-orders-advanced-filters .adm-orders-week-sel,
+.adm-orders-filters-bar--compact .adm-orders-advanced-filters select,
+.adm-orders-filters-bar--compact .adm-orders-advanced-filters .adm-erp-combo__input {
+  height: 42px;
+  min-height: 42px;
+  max-height: 42px;
+  font-size: 13px;
+  border-radius: 8px;
+  padding: 4px 10px;
+  box-sizing: border-box;
+}
+
+.adm-orders-filters-bar--compact .adm-orders-advanced-filters {
+  gap: 6px;
+  padding: 6px 8px 8px;
+}
+
+.adm-orders-filters-bar--compact .adm-orders-filter-check {
+  min-height: 42px;
+}
+
+.adm-orders-filters-bar--compact .adm-orders-filter-actions .adm-btn--xs,
+.adm-orders-filters-bar--compact .adm-orders-filter-actions .adm-orders-kpi-export-btn {
+  height: 42px;
+  min-height: 42px;
+  max-height: 42px;
 }
 
 .adm-orders-toolbar-row--primary .adm-orders-filter-actions {
@@ -871,11 +928,20 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
   flex-wrap: wrap;
 }
 
-.adm-orders-filter-field--cust-code .adm-orders-filter-inp--compact,
-.adm-orders-filter-field--cust-name .adm-orders-filter-inp--compact {
-  width: 108px;
-  min-width: 108px;
-  max-width: 108px;
+.adm-orders-filter-field--customer {
+  flex: 1 1 200px;
+  min-width: 168px;
+  max-width: 280px;
+}
+
+.adm-orders-filter-field--customer .adm-orders-filter-inp--customer {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+}
+
+.adm-orders-filter-field--customer .adm-orders-filter-inp--customer::placeholder {
+  font-size: 13px;
 }
 
 .adm-orders-excel-page .adm-orders-filter-field--created-by .adm-orders-week-sel,
@@ -885,24 +951,12 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
   max-width: 148px;
 }
 
-.adm-orders-filter-field--search-main {
-  flex: 1 1 200px;
-  min-width: 180px;
-  max-width: 320px;
-}
-
-.adm-orders-filter-field--search-main .adm-orders-filter-inp--search {
-  width: 100%;
-  min-width: 0;
-  max-width: none;
-}
-
 .adm-orders-advanced-filters {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 6px;
   align-items: end;
-  padding: 8px 10px 10px;
+  padding: 6px 8px 8px;
   border-top: 1px solid var(--adm-border, #e2e8f0);
   background: #f8fafc;
   border-radius: 0 0 10px 10px;
@@ -1793,12 +1847,11 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
   padding: 10px 8px;
 }
 
-/* gentle row hover */
-.adm-table-excel--orders-v2 tbody tr.adm-table-excel-row:hover {
-  background: #f8fbff;
+/* gentle row hover — open orders only (status-toned rows use rules below) */
+.adm-table-excel--orders-v2 tbody tr.adm-table-excel-row.adm-order-row--open:hover {
+  background: #f8fafc;
 }
 .adm-table-excel--orders-v2 tbody tr.adm-table-excel-row:focus-visible {
-  background: #eef5ff;
   outline: 1.5px solid #94c5fc;
   outline-offset: -1.5px;
 }
@@ -1847,6 +1900,11 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
 .adm-pay-sel--bank    { background-color: #ede9fe; color: #6d28d9; border-color: #ddd6fe; }
 .adm-pay-sel--check   { background-color: #ffedd5; color: #9a3412; border-color: #fed7aa; }
 .adm-pay-sel--none    { background-color: #f1f5f9; color: #475569; border-color: #e2e8f0; }
+.adm-pay-sel--neutral {
+  background-color: #ffffff;
+  color: #111827;
+  border-color: #d1d5db;
+}
 
 /* === Inline payment-location dropdown === */
 .adm-payloc-sel {
@@ -2019,18 +2077,7 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
   color: #ffffff;
 }
 
-/* zebra rows — body */
-.adm-table-excel--orders-v2 tbody tr.adm-table-excel-row:nth-of-type(odd) {
-  background: #f8fbff;
-}
-.adm-table-excel--orders-v2 tbody tr.adm-table-excel-row:nth-of-type(even) {
-  background: #ffffff;
-}
-
-/* hover (overrides zebra) */
-.adm-table-excel--orders-v2 tbody tr.adm-table-excel-row:hover {
-  background: #eef5ff;
-}
+/* zebra — superseded by status row tones (adm-order-row--*) */
 
 /* === Money cells — vivid finance feel === */
 .adm-table-excel--orders-v2 tbody td.adm-ord-col-money--deal {
@@ -2077,17 +2124,59 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
   border-color: #c4b5fd;
 }
 
-/* === Cancelled row — soft gray, slightly faded === */
+/* === Orders list — full-row tone by order status (not payment method) === */
+.adm-table-excel--orders-v2 tbody tr.adm-table-excel-row.adm-order-row--open,
+.adm-table-excel--orders-v2 tbody tr.adm-table-excel-row.adm-order-row--open:nth-of-type(odd),
+.adm-table-excel--orders-v2 tbody tr.adm-table-excel-row.adm-order-row--open:nth-of-type(even) {
+  background: #ffffff;
+}
+
+.adm-table-excel--orders-v2 tbody tr.adm-table-excel-row.adm-order-row--progress,
+.adm-table-excel--orders-v2 tbody tr.adm-table-excel-row.adm-order-row--progress:nth-of-type(odd),
+.adm-table-excel--orders-v2 tbody tr.adm-table-excel-row.adm-order-row--progress:nth-of-type(even) {
+  background: #fff7ed;
+  border-right: 4px solid #f59e0b;
+}
+
+.adm-table-excel--orders-v2 tbody tr.adm-table-excel-row.adm-order-row--ready,
+.adm-table-excel--orders-v2 tbody tr.adm-table-excel-row.adm-order-row--ready:nth-of-type(odd),
+.adm-table-excel--orders-v2 tbody tr.adm-table-excel-row.adm-order-row--ready:nth-of-type(even) {
+  background: #ecfdf5;
+  border-right: 4px solid #10b981;
+}
+
 .adm-table-excel--orders-v2 tbody tr.adm-table-excel-row.adm-order-row--cancelled,
 .adm-table-excel--orders-v2 tbody tr.adm-table-excel-row.adm-order-row--cancelled:nth-of-type(odd),
 .adm-table-excel--orders-v2 tbody tr.adm-table-excel-row.adm-order-row--cancelled:nth-of-type(even) {
-  background: #f7f8fa;
+  background: #f3f4f6;
+  border-right: 4px solid #6b7280;
   opacity: 0.85;
 }
-.adm-table-excel--orders-v2 tbody tr.adm-table-excel-row.adm-order-row--cancelled:hover {
-  background: #eef1f5;
-  opacity: 1;
+
+.adm-table-excel--orders-v2 tbody tr.adm-table-excel-row.adm-order-row--withdrawal,
+.adm-table-excel--orders-v2 tbody tr.adm-table-excel-row.adm-order-row--withdrawal:nth-of-type(odd),
+.adm-table-excel--orders-v2 tbody tr.adm-table-excel-row.adm-order-row--withdrawal:nth-of-type(even) {
+  background: #f3e8ff;
+  border-right: 4px solid #7c3aed;
 }
+
+.adm-table-excel--orders-v2 tbody tr.adm-table-excel-row.adm-order-row--progress:hover {
+  background: #ffedd5;
+}
+
+.adm-table-excel--orders-v2 tbody tr.adm-table-excel-row.adm-order-row--ready:hover {
+  background: #d1fae5;
+}
+
+.adm-table-excel--orders-v2 tbody tr.adm-table-excel-row.adm-order-row--cancelled:hover {
+  background: #e5e7eb;
+  opacity: 0.92;
+}
+
+.adm-table-excel--orders-v2 tbody tr.adm-table-excel-row.adm-order-row--withdrawal:hover {
+  background: #ede9fe;
+}
+
 .adm-table-excel--orders-v2 tbody tr.adm-table-excel-row.adm-order-row--cancelled td.adm-ord-col-money--deal,
 .adm-table-excel--orders-v2 tbody tr.adm-table-excel-row.adm-order-row--cancelled td.adm-ord-col-money--total,
 .adm-table-excel--orders-v2 tbody tr.adm-table-excel-row.adm-order-row--cancelled td.adm-ord-col-ils {
@@ -2095,12 +2184,6 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
   color: #94a3b8;
   text-shadow: none;
 }
-
-/* === Inline dropdowns: gradient hover for that "ERP" feel === */
-.adm-pay-sel--cash    { background: linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%); }
-.adm-pay-sel--credit  { background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%); }
-.adm-pay-sel--bank    { background: linear-gradient(135deg, #ede9fe 0%, #ddd6fe 100%); }
-.adm-pay-sel--check   { background: linear-gradient(135deg, #ffedd5 0%, #fed7aa 100%); }
 
 /* === KPI top cards — finance glow === */
 .adm-orders-kpi-card {
@@ -2470,7 +2553,13 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
   max-width: 100%;
 }
 
-.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-pay-sel {
+.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-pay-sel,
+.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-pay-sel.adm-pay-sel--neutral,
+.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-pay-sel.adm-pay-sel--cash,
+.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-pay-sel.adm-pay-sel--credit,
+.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-pay-sel.adm-pay-sel--bank,
+.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-pay-sel.adm-pay-sel--check,
+.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-pay-sel.adm-pay-sel--none {
   height: 30px;
   min-height: 30px;
   padding: 0 18px 0 8px;
@@ -2478,6 +2567,9 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
   font-weight: 600;
   border-radius: 10px;
   min-width: 0;
+  background-color: #ffffff;
+  border: 1px solid #d1d5db;
+  color: #111827;
   background-position: calc(100% - 10px) 11px, calc(100% - 6px) 11px;
 }
 
@@ -12135,6 +12227,51 @@ select.payment-modal-inline-input {
   overflow: visible;
 }
 
+/* גלילת דף אחידה — הזמנות, טבלאות מקור, דוחות (מחלקת adm-page--page-scroll) */
+.adm-page--page-scroll.adm-orders-excel-page,
+.adm-page--page-scroll.adm-source-page,
+.adm-page--page-scroll.adm-reports-page {
+  gap: 10px;
+  height: auto;
+  min-height: min-content;
+  overflow: visible;
+}
+
+html.adm-app-shell .adm-chrome-main:has(.adm-page--page-scroll) {
+  padding: 0.2rem 0.35rem 0.3rem;
+}
+
+.adm-page--page-scroll .adm-orders-work {
+  flex: none;
+  min-height: min-content;
+  overflow: visible;
+}
+
+.adm-page--page-scroll .adm-table-excel-wrap,
+.adm-page--page-scroll .adm-table-excel-wrap--orders {
+  flex: none;
+  min-height: 0;
+  max-height: none;
+  height: auto;
+  overflow-x: auto;
+  overflow-y: visible;
+}
+
+.adm-page--page-scroll .adm-source-pro-table-wrap,
+.adm-page--page-scroll .adm-status-erp-table-wrap {
+  flex: none;
+  max-height: none;
+  height: auto;
+  overflow-x: auto;
+  overflow-y: visible;
+}
+
+.adm-page--page-scroll .adm-status-erp {
+  flex: none;
+  min-height: min-content;
+  overflow: visible;
+}
+
 .adm-balances-page--page-scroll .adm-balances-table--erp thead th {
   box-shadow: inset 0 -2px 0 rgba(255, 255, 255, 0.08), 0 2px 0 0 #050a18;
 }
@@ -12496,15 +12633,15 @@ html.adm-app-shell .adm-chrome-main:has(.adm-balances-excel-page) {
 }
 
 .adm-bal-status-badge--balanced {
-  color: #15803d;
-  background: #f0fdf4;
-  border: 1px solid #86efac;
+  color: #475569;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
 }
 
 .adm-bal-status-badge--credit {
-  color: #1d4ed8;
-  background: #eff6ff;
-  border: 1px solid #93c5fd;
+  color: #15803d;
+  background: #f0fdf4;
+  border: 1px solid #86efac;
 }
 
 .adm-balances-td-balance {
@@ -12947,12 +13084,12 @@ select.adm-balances-input {
 }
 
 .adm-bal-amt--credit {
-  color: #1d4ed8;
+  color: #15803d;
 }
 
 .adm-bal-amt--balanced,
 .adm-bal-amt--neutral {
-  color: #15803d;
+  color: #475569;
 }
 
 .adm-balances-td-balance .adm-balance-flow {
@@ -14070,6 +14207,60 @@ select.adm-balances-input {
 
 .adm-customers-source-table tbody tr.adm-customers-source-row {
   cursor: default;
+}
+
+.adm-custbal {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.adm-custbal__badge {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.adm-custbal__amt {
+  font-weight: 800;
+}
+
+.adm-custbal--debt .adm-custbal__badge {
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+}
+
+.adm-custbal--debt .adm-custbal__amt {
+  color: #dc2626;
+}
+
+.adm-custbal--credit .adm-custbal__badge {
+  color: #15803d;
+  background: #f0fdf4;
+  border: 1px solid #86efac;
+}
+
+.adm-custbal--credit .adm-custbal__amt {
+  color: #15803d;
+}
+
+.adm-custbal--zero .adm-custbal__badge {
+  color: #475569;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.adm-custbal--zero .adm-custbal__amt {
+  color: #64748b;
 }
 
 .adm-customers-preview-popover {

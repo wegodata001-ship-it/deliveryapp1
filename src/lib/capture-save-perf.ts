@@ -10,9 +10,15 @@ export class CaptureSavePerf {
   createOrderMs = 0;
   createItemsMs = 0;
   updateCustomerMs = 0;
+  /** אופציונלי: עדכון יתרות/דוחות במודל נפרד (כרגע לרוב 0) */
+  updateBalancesMs = 0;
   /** זמן תזמון audit ברקע (לא כולל INSERT) */
   auditMs = 0;
   revalidateMs = 0;
+  /** אופציונלי: מדידת רענון מסכים (UI/cache) — כרגע לרוב 0 */
+  refreshOrdersMs = 0;
+  /** אופציונלי: מדידת רענון דשבורד — כרגע לרוב 0 */
+  refreshDashboardMs = 0;
   cacheRefreshMs = 0;
   responseSerializationMs = 0;
   authMs = 0;
@@ -41,29 +47,36 @@ export class CaptureSavePerf {
       this.createOrderMs +
       this.createItemsMs +
       this.updateCustomerMs +
+      this.updateBalancesMs +
       this.auditMs +
       this.revalidateMs +
+      this.refreshOrdersMs +
+      this.refreshDashboardMs +
       this.cacheRefreshMs +
       this.responseSerializationMs +
       this.authMs;
     const unaccountedMs = Math.max(0, totalMs - accounted);
 
-    const core = {
+    const table = {
       createOrderMs: this.createOrderMs,
-      createItemsMs: this.createItemsMs,
+      createOrderItemsMs: this.createItemsMs,
       updateCustomerMs: this.updateCustomerMs,
-      auditMs: this.auditMs,
+      updateBalancesMs: this.updateBalancesMs,
+      exchangeRateMs: this.exchangeRateMs,
+      saveAuditMs: this.auditMs,
       revalidateMs: this.revalidateMs,
+      refreshOrdersMs: this.refreshOrdersMs,
+      refreshDashboardMs: this.refreshDashboardMs,
       totalMs,
     };
 
-    console.log(core);
+    // requested diagnostic output
+    console.table(table);
 
     capturePerfLog({
-      ...core,
+      ...table,
       validateInputMs: this.validateInputMs,
       phase1Ms: this.phase1Ms,
-      exchangeRateMs: this.exchangeRateMs,
       cacheRefreshMs: this.cacheRefreshMs,
       responseSerializationMs: this.responseSerializationMs,
       authMs: this.authMs,
@@ -82,8 +95,11 @@ type CaptureSavePerfTimings = Pick<
   | "createOrderMs"
   | "createItemsMs"
   | "updateCustomerMs"
+  | "updateBalancesMs"
   | "auditMs"
   | "revalidateMs"
+  | "refreshOrdersMs"
+  | "refreshDashboardMs"
   | "cacheRefreshMs"
   | "responseSerializationMs"
   | "authMs"

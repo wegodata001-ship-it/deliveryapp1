@@ -2,7 +2,7 @@ import { TableSkeleton } from "@/components/ui/data-table";
 
 export default function SourceTableLoading() {
   return (
-    <div className="adm-source-page">
+    <div className="adm-source-page adm-page--page-scroll">
       <header className="adm-source-detail-head">
         <div className="adm-source-detail-head__skeleton">
           <span className="adm-source-shim adm-source-shim--back" />

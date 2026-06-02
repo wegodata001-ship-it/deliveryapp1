@@ -1,6 +1,7 @@
 import type { CaptureCustomerSnapshotInput } from "@/lib/capture-form-snapshot";
 import { capturePerfLog } from "@/lib/capture-perf";
 import { isCustomerCodeTaken, normalizeCustomerCodeInput } from "@/lib/customer-code";
+import { recordActivityAudit } from "@/lib/activity-audit";
 import { prisma } from "@/lib/prisma";
 import { scheduleRevalidateAfterCustomerCreate } from "@/lib/revalidate-customer-create";
 
@@ -76,6 +77,7 @@ export async function resolveCustomerForCapture(params: {
   snapshot?: CaptureCustomerSnapshotInput | null;
   draftNameAr?: string | null;
   draftNameEn?: string | null;
+  actorUserId?: string | null;
 }): Promise<ResolveCustomerForCaptureResult | null> {
   const id = params.customerId.trim();
   if (!id) return null;
@@ -150,6 +152,20 @@ export async function resolveCustomerForCapture(params: {
   });
 
   scheduleRevalidateAfterCustomerCreate(created.id);
+
+  if (params.actorUserId) {
+    recordActivityAudit({
+      userId: params.actorUserId,
+      actionType: "CUSTOMER_CREATED",
+      entityType: "Customer",
+      entityId: created.id,
+      metadata: {
+        customerName: created.displayName,
+        customerCode: created.customerCode ?? code,
+        source: "order_capture",
+      },
+    });
+  }
 
   console.info("Customer created:", {
     id: created.id,

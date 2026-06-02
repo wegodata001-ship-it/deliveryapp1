@@ -119,9 +119,18 @@ html.adm-app-shell .adm-filter-bar {
   flex-shrink: 0;
 }
 
-/* דפים עם טבלה גדולה — מעטפת flex; גלילה בטבלה + fallback ב-chrome-main */
-html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page),
-html.adm-app-shell .adm-chrome-main:has(.adm-source-page),
+/* דפי ניהול — גלילה אחת ב-adm-chrome-main (יתרות, הזמנות, טבלאות מקור, דוחות) */
+html.adm-app-shell .adm-chrome-main:has(.adm-page--page-scroll),
+html.adm-app-shell .adm-chrome-main:has(.adm-balances-page--page-scroll) {
+  overflow-x: hidden;
+  overflow-y: auto;
+  display: block;
+  min-height: 0;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* בקרת קבלות — מעטפת flex + גלילה בטבלה */
 html.adm-app-shell .adm-chrome-main:has(.adm-receipt-control) {
   overflow-x: hidden;
   overflow-y: auto;
@@ -130,16 +139,6 @@ html.adm-app-shell .adm-chrome-main:has(.adm-receipt-control) {
   min-height: 0;
 }
 
-/* יתרות לקוחות — גלילה אחת של אזור התוכן (ללא scroll פנימי בטבלה) */
-html.adm-app-shell .adm-chrome-main:has(.adm-balances-page--page-scroll) {
-  overflow-x: hidden;
-  overflow-y: auto;
-  display: block;
-  min-height: 0;
-}
-
-html.adm-app-shell .adm-orders-excel-page,
-html.adm-app-shell .adm-source-page,
 html.adm-app-shell .adm-receipt-control {
   flex: 1 1 auto;
   min-height: 0;
@@ -148,7 +147,9 @@ html.adm-app-shell .adm-receipt-control {
   overflow: hidden;
 }
 
-html.adm-app-shell .adm-balances-page--page-scroll {
+/* שורש דף — תוכן גדל; הגלילה ב-chrome-main בלבד */
+html.adm-app-shell .adm-page--page-scroll,
+html.adm-app-shell .adm-balances-page.adm-balances-page--page-scroll {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -169,67 +170,68 @@ html.adm-app-shell .adm-status-erp-toolbar {
   flex-shrink: 0;
 }
 
-html.adm-app-shell .adm-orders-excel-page .adm-orders-work,
-html.adm-app-shell .adm-orders-work {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
+html.adm-app-shell .adm-page--page-scroll .adm-orders-work,
 html.adm-app-shell .adm-balances-page--page-scroll .adm-balances-work {
   flex: none;
-  min-height: 0;
+  min-height: min-content;
   display: flex;
   flex-direction: column;
   gap: 10px;
   overflow: visible;
 }
 
-html.adm-app-shell .adm-balances-head,
-html.adm-app-shell .adm-balances-kpi-strip,
-html.adm-app-shell .adm-balances-kpi-zone,
-html.adm-app-shell .adm-balances-toolbar-row,
-html.adm-app-shell .adm-balances-advanced-filters,
-html.adm-app-shell .adm-balances-filters-bar,
-html.adm-app-shell .adm-balances-scope-line,
-html.adm-app-shell .adm-balances-pagination {
-  flex-shrink: 0;
-}
-
-/* טבלאות מקור — שרשרת flex עד ל-wrap */
-html.adm-app-shell .adm-source-page > .adm-source-pro,
-html.adm-app-shell .adm-source-pro {
-  flex: 1;
-  min-height: 0;
+html.adm-app-shell .adm-page--page-scroll .adm-source-pro,
+html.adm-app-shell .adm-page--page-scroll > .adm-source-pro {
+  flex: none;
+  min-height: min-content;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
   gap: 10px;
+  overflow: visible;
 }
 
-html.adm-app-shell .adm-source-pro-toolbar,
-html.adm-app-shell .adm-source-pro-filters,
-html.adm-app-shell .adm-source-bulk-bar,
-html.adm-app-shell .adm-source-pro-pagination {
+html.adm-app-shell .adm-page--page-scroll .adm-balances-head,
+html.adm-app-shell .adm-page--page-scroll .adm-balances-kpi-strip,
+html.adm-app-shell .adm-page--page-scroll .adm-balances-kpi-zone,
+html.adm-app-shell .adm-page--page-scroll .adm-balances-toolbar-row,
+html.adm-app-shell .adm-page--page-scroll .adm-balances-advanced-filters,
+html.adm-app-shell .adm-page--page-scroll .adm-balances-filters-bar,
+html.adm-app-shell .adm-page--page-scroll .adm-balances-scope-line,
+html.adm-app-shell .adm-page--page-scroll .adm-balances-pagination,
+html.adm-app-shell .adm-page--page-scroll .adm-orders-filters-row,
+html.adm-app-shell .adm-page--page-scroll .adm-orders-action-kpi-row,
+html.adm-app-shell .adm-page--page-scroll .adm-orders-filters-bar,
+html.adm-app-shell .adm-page--page-scroll .adm-orders-status-kpi,
+html.adm-app-shell .adm-page--page-scroll .adm-source-head,
+html.adm-app-shell .adm-page--page-scroll .adm-source-detail-head,
+html.adm-app-shell .adm-page--page-scroll .adm-source-section,
+html.adm-app-shell .adm-page--page-scroll .adm-source-section-head,
+html.adm-app-shell .adm-page--page-scroll .adm-source-pro-toolbar,
+html.adm-app-shell .adm-page--page-scroll .adm-source-pro-filters,
+html.adm-app-shell .adm-page--page-scroll .adm-source-bulk-bar,
+html.adm-app-shell .adm-page--page-scroll .adm-source-pro-pagination,
+html.adm-app-shell .adm-page--page-scroll .adm-customers-kpi-row,
+html.adm-app-shell .adm-page--page-scroll .adm-reports-filter-card,
+html.adm-app-shell .adm-page--page-scroll .adm-reports-kpis,
+html.adm-app-shell .adm-page--page-scroll .adm-reports-grid,
+html.adm-app-shell .adm-page--page-scroll .adm-status-erp-toolbar,
+html.adm-app-shell .adm-page--page-scroll .adm-activity-hero,
+html.adm-app-shell .adm-page--page-scroll .adm-activity-kpis,
+html.adm-app-shell .adm-page--page-scroll .adm-activity-table-wrap {
   flex-shrink: 0;
 }
 
-html.adm-app-shell .adm-table-excel-wrap--orders,
-html.adm-app-shell .adm-status-erp-table-wrap,
-html.adm-app-shell .adm-source-pro-table-wrap,
-html.adm-app-shell .adm-receipt-table-wrap,
-html.adm-app-shell .adm-dt-wrap {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-  max-height: none;
-  overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
-}
-
-html.adm-app-shell .adm-balances-page--page-scroll .adm-balances-table-wrap {
+/* טבלאות רחבות — גלילה אופקית בלבד; אנכית עם הדף */
+html.adm-app-shell .adm-page--page-scroll .adm-table-excel-wrap--orders,
+html.adm-app-shell .adm-page--page-scroll .adm-balances-table-wrap,
+html.adm-app-shell .adm-page--page-scroll .adm-source-pro-table-wrap,
+html.adm-app-shell .adm-page--page-scroll .adm-status-erp-table-wrap,
+html.adm-app-shell .adm-page--page-scroll .adm-dt-wrap,
+html.adm-app-shell .adm-page--page-scroll .adm-customers-source-table-wrap,
+html.adm-app-shell .adm-page--page-scroll .adm-orders-source-table-wrap,
+html.adm-app-shell .adm-page--page-scroll .adm-payments-source-table-wrap,
+html.adm-app-shell .adm-page--page-scroll .adm-employees-source-table-wrap,
+html.adm-app-shell .adm-page--page-scroll .adm-pm-source-table-wrap {
   flex: none;
   min-height: 0;
   max-height: none;
@@ -237,6 +239,17 @@ html.adm-app-shell .adm-balances-page--page-scroll .adm-balances-table-wrap {
   overflow-x: auto;
   overflow-y: visible;
   overscroll-behavior: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* בקרת קבלות — גלילה פנימית בטבלה */
+html.adm-app-shell .adm-receipt-table-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  max-height: none;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* דשבורד ודפים רגילים */

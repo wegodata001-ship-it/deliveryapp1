@@ -22,7 +22,7 @@ export default async function SourceTableDetailPage({
   const isStatuses = shell.id === "statuses";
 
   return (
-    <div className="adm-source-page">
+    <div className="adm-source-page adm-page--page-scroll">
       <header className="adm-source-detail-head">
         <div>
           <Link href="/admin/source-tables" className="adm-source-back">

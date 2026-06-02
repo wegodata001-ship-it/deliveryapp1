@@ -32,8 +32,12 @@ export type CustomerLedgerRow = {
 
 export type CustomerLedgerPayload = {
   rows: CustomerLedgerRow[];
+  /** סה"כ הזמנות (USD) — ללא משיכות מחוב */
   totalChargesUsd: string;
+  /** סה"כ תשלומים (USD) — Payments בלבד */
   totalPaymentsUsd: string;
+  /** סה"כ משיכות מחוב (USD) */
+  totalWithdrawalsUsd: string;
   balanceUsd: string;
 };
 
@@ -197,6 +201,7 @@ export async function buildCustomerAccountLedger(params: {
   let balance = openingBalance;
   let totalCharges = new Prisma.Decimal(0);
   let totalPayments = new Prisma.Decimal(0);
+  let totalWithdrawals = new Prisma.Decimal(0);
 
   if (fromFilterSet) {
     rows.push({
@@ -215,8 +220,14 @@ export async function buildCustomerAccountLedger(params: {
 
   for (const ev of events) {
     balance = balance.add(ev.charge).sub(ev.payment);
-    totalCharges = totalCharges.add(ev.charge);
-    totalPayments = totalPayments.add(ev.payment);
+    if (ev.isDebtWithdrawal) {
+      // charge is negative here: sum as absolute withdrawal amount
+      totalWithdrawals = totalWithdrawals.add(new Prisma.Decimal(Math.abs(Number(ev.charge.toFixed(4))).toFixed(4)));
+    } else if (ev.kind === "ORDER") {
+      totalCharges = totalCharges.add(ev.charge);
+    } else if (ev.kind === "PAYMENT") {
+      totalPayments = totalPayments.add(ev.payment);
+    }
     rows.push({
       id: ev.id,
       dateYmd: ev.date.getTime() > 0 ? formatLocalYmd(ev.date) : "—",
@@ -236,6 +247,7 @@ export async function buildCustomerAccountLedger(params: {
     rows,
     totalChargesUsd: totalCharges.toFixed(2),
     totalPaymentsUsd: totalPayments.toFixed(2),
+    totalWithdrawalsUsd: totalWithdrawals.toFixed(2),
     balanceUsd: balance.toFixed(2),
   };
 }

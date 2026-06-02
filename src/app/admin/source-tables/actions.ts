@@ -3,6 +3,7 @@
 import { randomUUID } from "crypto";
 import { PaymentMethod, Prisma } from "@prisma/client";
 import { revalidatePath, unstable_cache } from "next/cache";
+import { recordActivityAudit } from "@/lib/activity-audit";
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { clearExpiredOrderEditUnlockForOrder } from "@/app/admin/order-edit-requests/actions";
 import { canUserEditCompletedOrder } from "@/lib/order-edit-lock";
@@ -449,7 +450,8 @@ export async function listSourceTableDataAction(id: SourceTableId, query: Source
 }
 
 export async function upsertSourceTableRowAction(input: SourceTableMutation): Promise<{ ok: true } | { ok: false; error: string }> {
-  await ensureAllowed();
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["manage_settings"])) throw new Error("אין הרשאה");
   await ensureSourceManagementTables();
   const v = input.values;
   const id = input.id?.trim() || randomUUID();
@@ -503,8 +505,9 @@ export async function upsertSourceTableRowAction(input: SourceTableMutation): Pr
       },
     });
   } else if (input.table === "customers" && input.id) {
+    const customerId = input.id.trim();
     await prisma.customer.update({
-      where: { id: input.id },
+      where: { id: customerId },
       data: {
         displayName: v.name,
         customerCode: v.code || null,
@@ -513,8 +516,14 @@ export async function upsertSourceTableRowAction(input: SourceTableMutation): Pr
         customerType: v.type || null,
       },
     });
+    recordActivityAudit({
+      userId: me.id,
+      actionType: "CUSTOMER_UPDATED",
+      entityType: "Customer",
+      entityId: customerId,
+      metadata: { customerName: v.name, customerCode: v.code || undefined, source: "source_table" },
+    });
   } else if (input.table === "orders" && input.id && v.status) {
-    const me = await requireAuth();
     const resolved = await resolveOrderStatusFromDisplayText(v.status);
     const status = (resolved ?? v.status?.trim()) || "";
     if (status && (await isValidOrderStatusId(status))) {
@@ -528,7 +537,22 @@ export async function upsertSourceTableRowAction(input: SourceTableMutation): Pr
       if (!isAdminUser(me) && !canUserEditCompletedOrder(me, orderRow)) {
         return { ok: false, error: "הזמנה בהושלמה נעולה — שינוי דורש אישור מנהל." };
       }
-      await prisma.order.update({ where: { id: oid }, data: { status } });
+      const updated = await prisma.order.update({
+        where: { id: oid },
+        data: { status },
+        select: { orderNumber: true, customer: { select: { displayName: true } } },
+      });
+      recordActivityAudit({
+        userId: me.id,
+        actionType: "ORDER_UPDATED",
+        entityType: "Order",
+        entityId: oid,
+        metadata: {
+          orderNumber: updated.orderNumber,
+          customerName: updated.customer?.displayName,
+          source: "source_table",
+        },
+      });
     }
   } else {
     return { ok: false, error: "טבלה זו זמינה לצפייה בלבד בשלב זה" };
