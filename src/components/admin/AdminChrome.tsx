@@ -24,8 +24,6 @@ type Props = {
   canViewCustomerCard: boolean;
   canCreateCustomer: boolean;
   viewerIsAdmin: boolean;
-  /** Skip order-status catalog fetch on lightweight routes (e.g. source tables). */
-  loadOrderStatusCatalog?: boolean;
 };
 
 export function AdminChrome({
@@ -40,7 +38,6 @@ export function AdminChrome({
   canViewCustomerCard,
   canCreateCustomer,
   viewerIsAdmin,
-  loadOrderStatusCatalog = true,
 }: Props) {
   const onToast = useAdminToast();
 
@@ -82,11 +79,7 @@ export function AdminChrome({
   return (
     <AdminLoadingProvider>
       <AdminGlobalProvider>
-        {loadOrderStatusCatalog ? (
-          <OrderStatusCatalogProvider>{chromeBody}</OrderStatusCatalogProvider>
-        ) : (
-          chromeBody
-        )}
+        <OrderStatusCatalogProvider>{chromeBody}</OrderStatusCatalogProvider>
       </AdminGlobalProvider>
     </AdminLoadingProvider>
   );

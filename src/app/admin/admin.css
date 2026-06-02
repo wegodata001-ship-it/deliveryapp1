@@ -13130,9 +13130,55 @@ select.adm-balances-input {
 
 .adm-balances-th-actions,
 .adm-balances-td-actions {
-  width: 130px;
-  min-width: 120px;
+  width: 190px;
+  min-width: 170px;
   white-space: nowrap;
+}
+
+.adm-balances-td-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.adm-balances-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
+}
+
+.adm-balances-action-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.12);
+}
+
+.adm-balances-action-btn--ledger {
+  color: #1d4ed8;
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
+.adm-balances-action-btn--payment {
+  color: #15803d;
+  background: #f0fdf4;
+  border-color: #86efac;
+}
+
+.adm-balances-action-warn {
+  font-size: 12px;
+  line-height: 1;
 }
 
 .adm-balances-th-num,
@@ -13665,6 +13711,33 @@ select.adm-balances-input {
 
   .adm-balances-table--erp {
     min-width: 900px;
+  }
+
+  .adm-balances-th-actions,
+  .adm-balances-td-actions {
+    width: 112px;
+    min-width: 112px;
+  }
+
+  .adm-balances-action-btn {
+    width: 38px;
+    min-width: 38px;
+    padding: 5px 0;
+    gap: 0;
+  }
+
+  .adm-balances-action-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .adm-balances-action-warn {
+    margin-inline-start: -3px;
+    font-size: 10px;
   }
 }
 

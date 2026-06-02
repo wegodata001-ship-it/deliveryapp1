@@ -334,6 +334,21 @@ export function CustomerBalancesClient() {
     [openWindow],
   );
 
+  const openCustomerPayment = useCallback(
+    (row: CustomerBalanceRow) => {
+      const balanceUsd = parseMoneyStringOrZero(row.balanceUSD);
+      openWindow({
+        type: "paymentsUpdated",
+        props: {
+          customerId: row.customerId,
+          customerName: row.customerName,
+          amountUsd: balanceUsd > 0.01 ? balanceUsd.toFixed(2) : null,
+        },
+      });
+    },
+    [openWindow],
+  );
+
   const schedulePreview = useCallback((row: CustomerBalanceRow | null) => {
     if (hoverTimerRef.current != null) {
       window.clearTimeout(hoverTimerRef.current);
@@ -725,13 +740,30 @@ export function CustomerBalancesClient() {
                       <td className="adm-balances-td-actions">
                         <button
                           type="button"
-                          className="adm-btn adm-btn--ghost adm-btn--xs"
+                          className="adm-balances-action-btn adm-balances-action-btn--ledger"
                           onClick={(e) => {
                             e.stopPropagation();
                             openCustomerCard(row);
                           }}
                         >
-                          כרטסת
+                          <span aria-hidden>📄</span>
+                          <span className="adm-balances-action-text">כרטסת</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="adm-balances-action-btn adm-balances-action-btn--payment"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openCustomerPayment(row);
+                          }}
+                        >
+                          <span aria-hidden>💰</span>
+                          <span className="adm-balances-action-text">תשלום</span>
+                          {parseMoneyStringOrZero(row.balanceUSD) > 1000 ? (
+                            <span className="adm-balances-action-warn" title="חוב מעל $1,000" aria-label="חוב גבוה">
+                              ⚠️
+                            </span>
+                          ) : null}
                         </button>
                       </td>
                     </tr>

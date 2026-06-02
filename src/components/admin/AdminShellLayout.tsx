@@ -63,7 +63,6 @@ export async function AdminShellLayout({ mode, children }: Props) {
               canViewCustomerCard={userHasAnyPermission(user, ["view_customer_card"])}
               canCreateCustomer={userHasAnyPermission(user, ["create_orders"])}
               viewerIsAdmin={isAdmin}
-              loadOrderStatusCatalog={!isLight}
             >
               {children}
             </AdminChrome>
