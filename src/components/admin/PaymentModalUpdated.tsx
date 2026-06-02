@@ -384,6 +384,7 @@ export function PaymentModalUpdated({
   const [weekDraft, setWeekDraft] = useState(() => globalWeek);
   const [weekInputErr, setWeekInputErr] = useState<string | null>(null);
 
+  const dollarRateTouchedRef = useRef(false);
   const [dollarRate, setDollarRate] = useState(() => defaultRate.toFixed(4));
   /** אחוז עמלה ברירת מחדל מהמערכת */
   const systemCommissionPercentStr = useMemo(
@@ -524,6 +525,15 @@ export function PaymentModalUpdated({
     }
     return null;
   }, [savedCapturePaymentId]);
+
+  /** עדכון שער דולר + עמלה כשהגדרות כספים מתעדכנות (router.refresh אחרי שמירת הגדרות) */
+  useEffect(() => {
+    if (dollarRateTouchedRef.current) return;
+    const raw = financial?.finalDollarRate?.replace(",", ".");
+    if (!raw) return;
+    const f = Number(raw);
+    if (Number.isFinite(f) && f > 0) setDollarRate(f.toFixed(4));
+  }, [financial?.finalDollarRate]);
 
   /** ניווט prev/next — prefetch + מטמון entry לשכנים */
   useEffect(() => {
@@ -940,7 +950,7 @@ export function PaymentModalUpdated({
     setPreviewPaymentCode(snap.paymentCode?.trim() || null);
     setPaymentCodePreviewPending(false);
     setPaymentTimeHm(snap.paymentTimeHm);
-    if (snap.dollarRate?.trim()) setDollarRate(snap.dollarRate.trim());
+    if (snap.dollarRate?.trim()) { dollarRateTouchedRef.current = true; setDollarRate(snap.dollarRate.trim()); }
     setCommissionPercentStr(snap.commissionPercent?.trim() ? snap.commissionPercent.trim() : systemCommissionPercentStr);
     setPayments(
       snap.lines.length > 0
@@ -1156,6 +1166,7 @@ export function PaymentModalUpdated({
     setCustSearchNoHits(false);
     setOrderEditId(null);
     setPayments([createDefaultLine()]);
+    dollarRateTouchedRef.current = false;
     setDollarRate(parseFinalRate(financial).toFixed(4));
     setPaymentDateYmd(formatLocalYmd(new Date()));
     setPaymentTimeHm(formatLocalHm(new Date()));
@@ -1619,7 +1630,7 @@ export function PaymentModalUpdated({
                 dir="ltr"
                 className="payment-modal-rate-strip-inp"
                 value={dollarRate}
-                onChange={(e) => setDollarRate(sanitizeMoneyInput(e.target.value))}
+                onChange={(e) => { dollarRateTouchedRef.current = true; setDollarRate(sanitizeMoneyInput(e.target.value)); }}
                 aria-label="שער דולר"
               />
               <span className="payment-modal-rate-strip-lead payment-modal-rate-strip-lead--pct">

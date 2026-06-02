@@ -1,7 +1,7 @@
 import { unstable_cache } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import {
-  getCurrentFinancialSettings,
+  getCurrentFinancialSettingsWithUser,
   serializeFinancialSettings,
   type SerializedFinancial,
 } from "@/lib/financial-settings";
@@ -12,7 +12,7 @@ export const FINANCIAL_LAYOUT_CACHE_TAG = "wego-admin-financial-layout";
 /** הגדרות כספים ל-layout — cache 5 דקות, ללא ensure/insert ב-hot path */
 export const getLayoutFinancialSettings = unstable_cache(
   async (): Promise<SerializedFinancial | null> => {
-    const row = await getCurrentFinancialSettings();
+    const row = await getCurrentFinancialSettingsWithUser();
     return serializeFinancialSettings(row);
   },
   [FINANCIAL_LAYOUT_CACHE_TAG],

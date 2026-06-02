@@ -49,7 +49,7 @@ export async function saveManualFinancialSettings(input: {
   const oldSettings = await getCurrentFinancialSettings();
   const final = finalRateFromBaseAndFee(base, fee);
 
-  await prisma.financialSettings.create({
+  const saved = await prisma.financialSettings.create({
     data: {
       baseDollarRate: base,
       dollarFee: fee,
@@ -58,6 +58,16 @@ export async function saveManualFinancialSettings(input: {
       source: "MANUAL",
       updatedById: me.id,
     },
+  });
+
+  console.log("Finance settings saved", {
+    id: saved.id,
+    baseDollarRate: saved.baseDollarRate.toString(),
+    dollarFee: saved.dollarFee.toString(),
+    finalDollarRate: saved.finalDollarRate.toString(),
+    defaultCommissionPercent: saved.defaultCommissionPercent?.toString() ?? null,
+    updatedById: saved.updatedById,
+    updatedAt: saved.updatedAt,
   });
 
   invalidateCaptureHotPathCache();

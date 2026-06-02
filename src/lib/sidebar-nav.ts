@@ -98,7 +98,6 @@ export const SIDEBAR_SECTIONS: NavSectionDef[] = [
       { href: "/admin/source-tables", label: "טבלאות מקור", icon: "sourceTables", anyOf: ["manage_settings"] },
       { href: "/admin/reports", label: "דוחות", icon: "reports", anyOf: ["view_reports"] },
       { href: "/admin/activity", label: "יומן פעילות", icon: "activity", anyOf: ["manage_users"] },
-      { href: "/admin/settings", label: "הגדרות", icon: "settings", anyOf: ["manage_settings"] },
     ],
   },
 ];

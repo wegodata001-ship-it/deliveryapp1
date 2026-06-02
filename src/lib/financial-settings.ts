@@ -8,6 +8,15 @@ export async function getCurrentFinancialSettings(): Promise<FinancialSettings |
   });
 }
 
+export async function getCurrentFinancialSettingsWithUser(): Promise<
+  (FinancialSettings & { updatedBy: { fullName: string } | null }) | null
+> {
+  return prisma.financialSettings.findFirst({
+    orderBy: { updatedAt: "desc" },
+    include: { updatedBy: { select: { fullName: true } } },
+  });
+}
+
 export async function ensureDefaultFinancialSettings(): Promise<FinancialSettings> {
   const existing = await getCurrentFinancialSettings();
   if (existing) return existing;
@@ -34,6 +43,7 @@ export type SerializedFinancial = {
   defaultCommissionPercent: string;
   source: string;
   updatedAt: string | null;
+  updatedByName: string | null;
 };
 
 /** Prisma Decimal נהרס ל-string/number אחרי unstable_cache — פורמט אחיד */
@@ -57,10 +67,10 @@ function formatUpdatedAt(value: unknown): string | null {
 }
 
 export function serializeFinancialSettings(
-  row: FinancialSettings | null | Record<string, unknown>,
+  row: (FinancialSettings & { updatedBy?: { fullName: string } | null }) | null | Record<string, unknown>,
 ): SerializedFinancial | null {
   if (!row) return null;
-  const r = row as FinancialSettings;
+  const r = row as FinancialSettings & { updatedBy?: { fullName: string } | null };
   return {
     baseDollarRate: formatDecimalField(r.baseDollarRate),
     dollarFee: formatDecimalField(r.dollarFee),
@@ -68,5 +78,6 @@ export function serializeFinancialSettings(
     defaultCommissionPercent: formatDecimalField(r.defaultCommissionPercent),
     source: String(r.source ?? ""),
     updatedAt: formatUpdatedAt(r.updatedAt),
+    updatedByName: r.updatedBy?.fullName ?? null,
   };
 }

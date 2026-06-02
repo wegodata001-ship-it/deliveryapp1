@@ -101,12 +101,31 @@ export function FinancialSettingsModal({ open, onClose, initial, onToast }: Prop
         <p className="adm-field-hint" style={{ marginTop: 0 }}>
           שער סופי מחושב (usd_rate_final): <strong>{finalPreview}</strong> ₪ לדולר
         </p>
-        <p className="adm-field-hint">
-          מקור נוכחי: {initial?.source ?? "—"} · עודכן לאחרונה:{" "}
-          {initial?.updatedAt
-            ? new Intl.DateTimeFormat("he-IL", { dateStyle: "short", timeStyle: "short" }).format(new Date(initial.updatedAt))
-            : "—"}
-        </p>
+        <div
+          style={{
+            background: "var(--color-surface-2, #f5f5f5)",
+            borderRadius: "6px",
+            padding: "0.6rem 0.8rem",
+            fontSize: "0.8rem",
+            color: "var(--color-text-muted, #666)",
+            display: "grid",
+            gridTemplateColumns: "auto 1fr",
+            gap: "0.2rem 0.6rem",
+          }}
+        >
+          <span style={{ fontWeight: 600 }}>מקור:</span>
+          <span>{initial?.source ?? "—"}</span>
+          <span style={{ fontWeight: 600 }}>עודכן לאחרונה:</span>
+          <span>
+            {initial?.updatedAt
+              ? new Intl.DateTimeFormat("he-IL", { dateStyle: "short", timeStyle: "short" }).format(
+                  new Date(initial.updatedAt),
+                )
+              : "—"}
+          </span>
+          <span style={{ fontWeight: 600 }}>עודכן על ידי:</span>
+          <span>{initial?.updatedByName ?? "—"}</span>
+        </div>
         <div className="adm-modal-actions">
           <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" disabled={busy} onClick={onRefreshAuto}>
             רענון שער אוטומטי

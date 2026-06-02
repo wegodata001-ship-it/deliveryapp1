@@ -31,9 +31,7 @@ export async function AdminShellLayout({ mode, children }: Props) {
       loginTraceMark(trace, "7.adminLayout", { mode, isLight });
     }
 
-    const financial = isLight
-      ? null
-      : await withPerfTimer("admin.layout.financial", () => getLayoutFinancialSettings());
+    const financial = await withPerfTimer("admin.layout.financial", () => getLayoutFinancialSettings());
 
     const sidebar = isLight ? (
       <AdminSidebar sections={sections} />

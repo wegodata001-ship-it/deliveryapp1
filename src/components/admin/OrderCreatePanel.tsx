@@ -286,6 +286,7 @@ export function OrderCreatePanel({
   const [weekInputErr, setWeekInputErr] = useState<string | null>(null);
   const [commissionPercentStr, setCommissionPercentStr] = useState(() => defaultCommissionPercentStr(financial));
   const commissionPercentTouchedRef = useRef(false);
+  const finalRateTouchedRef = useRef(false);
   const [loadOrderBusy, setLoadOrderBusy] = useState(false);
   const [loadedSourceCountry, setLoadedSourceCountry] = useState<OrderCountryCode | "">("");
   const [editGate, setEditGate] = useState<OrderWorkPanelPayload["editGate"] | null>(null);
@@ -368,6 +369,15 @@ export function OrderCreatePanel({
     if (isEdit || commissionPercentTouchedRef.current) return;
     setCommissionPercentStr(systemDefaultCommissionStr);
   }, [isEdit, systemDefaultCommissionStr]);
+
+  /** עדכון שער דולר כשהגדרות כספים משתנות — רק אם המשתמש לא ערך ידנית */
+  useEffect(() => {
+    if (isEdit || finalRateTouchedRef.current) return;
+    const raw = financial?.finalDollarRate;
+    if (!raw) return;
+    const f = Number(String(raw).replace(",", "."));
+    if (Number.isFinite(f) && f > 0) setFinalRateStr(f.toFixed(4));
+  }, [isEdit, financial?.finalDollarRate]);
 
   const [orderNumberPreview, setOrderNumberPreview] = useState(() =>
     formatOrderNumberPlaceholder(globalWeek || DEFAULT_WEEK_CODE),
@@ -824,6 +834,7 @@ export function OrderCreatePanel({
     setDealIlsStr("");
     setCommissionPercentStr(systemDefaultCommissionStr);
     commissionPercentTouchedRef.current = false;
+    finalRateTouchedRef.current = false;
     setHits([]);
     setDropdownField(null);
     setIsSearching(false);
@@ -1446,7 +1457,7 @@ export function OrderCreatePanel({
               dir="ltr"
               disabled={fieldDisabled}
               title="שער דולר להזמנה זו (ננעל לאחר שמירה)"
-              onChange={(e) => setFinalRateStr(e.target.value)}
+              onChange={(e) => { finalRateTouchedRef.current = true; setFinalRateStr(e.target.value); }}
             />
           </span>
           <span className="adm-oc-legacy-topbar-item adm-oc-pro-item">

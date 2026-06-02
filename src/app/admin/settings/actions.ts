@@ -31,6 +31,26 @@ export type AdminSettingsPayload = {
   systemMode: "ACTIVE" | "MAINTENANCE";
   /** מדינות זמינות לשיוך הזמנה (TURKEY / CHINA / UAE) */
   selectedCountries: OrderCountryCode[];
+  /** פרטי העסק */
+  businessPhone: string;
+  businessEmail: string;
+  businessAddress: string;
+  contactPerson: string;
+  businessLogoUrl: string;
+  businessWebsite: string;
+  businessWhatsapp: string;
+  businessInstagram: string;
+  businessFacebook: string;
+  businessNotes: string;
+};
+
+export type SystemStats = {
+  customersTotal: number;
+  ordersThisMonth: number;
+  paymentsThisMonthUsd: number;
+  openBalancesUsd: number;
+  ordersTotalYearUsd: number;
+  paymentsTotalYearUsd: number;
 };
 
 export type AdminSettingsSaveState = { ok: true; payload: AdminSettingsPayload } | { ok: false; error: string };
@@ -43,6 +63,16 @@ const DEFAULT_SETTINGS: Omit<AdminSettingsPayload, "baseDollarRate" | "finalDoll
   defaultOrderStatus: "OPEN",
   systemName: "WEGO MARKETING",
   systemMode: "ACTIVE",
+  businessPhone: "",
+  businessEmail: "",
+  businessAddress: "",
+  contactPerson: "",
+  businessLogoUrl: "",
+  businessWebsite: "",
+  businessWhatsapp: "",
+  businessInstagram: "",
+  businessFacebook: "",
+  businessNotes: "",
 };
 
 const DEFAULT_SELECTED_COUNTRIES: OrderCountryCode[] = [...ORDER_COUNTRY_CODES];
@@ -98,6 +128,16 @@ export async function getAdminSettingsAction(): Promise<AdminSettingsPayload> {
     systemName: value(map, "systemName"),
     systemMode,
     selectedCountries: selectedCountries.length > 0 ? selectedCountries : DEFAULT_SELECTED_COUNTRIES,
+    businessPhone: map.get("businessPhone") ?? "",
+    businessEmail: map.get("businessEmail") ?? "",
+    businessAddress: map.get("businessAddress") ?? "",
+    contactPerson: map.get("contactPerson") ?? "",
+    businessLogoUrl: map.get("businessLogoUrl") ?? "",
+    businessWebsite: map.get("businessWebsite") ?? "",
+    businessWhatsapp: map.get("businessWhatsapp") ?? "",
+    businessInstagram: map.get("businessInstagram") ?? "",
+    businessFacebook: map.get("businessFacebook") ?? "",
+    businessNotes: map.get("businessNotes") ?? "",
   };
 }
 
@@ -184,6 +224,16 @@ export async function saveAdminSettingsAction(input: AdminSettingsPayload): Prom
     systemName: input.systemName.trim() || DEFAULT_SETTINGS.systemName,
     systemMode: input.systemMode === "MAINTENANCE" ? "MAINTENANCE" : "ACTIVE",
     selectedCountries: JSON.stringify(countries),
+    businessPhone: (input.businessPhone ?? "").trim(),
+    businessEmail: (input.businessEmail ?? "").trim(),
+    businessAddress: (input.businessAddress ?? "").trim(),
+    contactPerson: (input.contactPerson ?? "").trim(),
+    businessLogoUrl: (input.businessLogoUrl ?? "").trim(),
+    businessWebsite: (input.businessWebsite ?? "").trim(),
+    businessWhatsapp: (input.businessWhatsapp ?? "").trim(),
+    businessInstagram: (input.businessInstagram ?? "").trim(),
+    businessFacebook: (input.businessFacebook ?? "").trim(),
+    businessNotes: (input.businessNotes ?? "").trim(),
   };
 
   for (const [key, val] of Object.entries(settings)) {
@@ -220,4 +270,134 @@ export async function saveAdminSettingsAction(input: AdminSettingsPayload): Prom
   });
 
   return { ok: true, payload: await getAdminSettingsAction() };
+}
+
+/** שמירת פרטי עסק בלבד — ללא נגיעה בהגדרות כספיות/טכניות */
+export type BusinessProfilePayload = {
+  systemName: string;
+  businessPhone: string;
+  businessEmail: string;
+  businessAddress: string;
+  contactPerson: string;
+  businessLogoUrl: string;
+  businessWebsite: string;
+  businessWhatsapp: string;
+  businessInstagram: string;
+  businessFacebook: string;
+  businessNotes: string;
+};
+
+export type BusinessProfileSaveState = { ok: true; payload: BusinessProfilePayload } | { ok: false; error: string };
+
+export async function saveBusinessProfileAction(input: BusinessProfilePayload): Promise<BusinessProfileSaveState> {
+  await ensureAllowed();
+  await ensureSettingsTable();
+
+  const fields: Record<string, string> = {
+    systemName: input.systemName.trim() || DEFAULT_SETTINGS.systemName,
+    businessPhone: input.businessPhone.trim(),
+    businessEmail: input.businessEmail.trim(),
+    businessAddress: input.businessAddress.trim(),
+    contactPerson: input.contactPerson.trim(),
+    businessLogoUrl: input.businessLogoUrl.trim(),
+    businessWebsite: input.businessWebsite.trim(),
+    businessWhatsapp: input.businessWhatsapp.trim(),
+    businessInstagram: input.businessInstagram.trim(),
+    businessFacebook: input.businessFacebook.trim(),
+    businessNotes: input.businessNotes.trim(),
+  };
+
+  for (const [key, val] of Object.entries(fields)) {
+    await prisma.$executeRaw`
+      INSERT INTO admin_system_settings (setting_key, setting_value, updated_at)
+      VALUES (${key}, ${val}, CURRENT_TIMESTAMP)
+      ON CONFLICT (setting_key)
+      DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = CURRENT_TIMESTAMP
+    `;
+  }
+
+  revalidatePath("/admin", "layout");
+  revalidatePath("/admin/settings");
+
+  return { ok: true, payload: { ...fields } as BusinessProfilePayload };
+}
+
+export async function getBusinessProfileAction(): Promise<BusinessProfilePayload> {
+  await ensureAllowed();
+  const map = await readSettingsMap();
+  return {
+    systemName: map.get("systemName") ?? DEFAULT_SETTINGS.systemName,
+    businessPhone: map.get("businessPhone") ?? "",
+    businessEmail: map.get("businessEmail") ?? "",
+    businessAddress: map.get("businessAddress") ?? "",
+    contactPerson: map.get("contactPerson") ?? "",
+    businessLogoUrl: map.get("businessLogoUrl") ?? "",
+    businessWebsite: map.get("businessWebsite") ?? "",
+    businessWhatsapp: map.get("businessWhatsapp") ?? "",
+    businessInstagram: map.get("businessInstagram") ?? "",
+    businessFacebook: map.get("businessFacebook") ?? "",
+    businessNotes: map.get("businessNotes") ?? "",
+  };
+}
+
+export async function getSystemStatsAction(): Promise<SystemStats> {
+  await requireAuth();
+
+  const now = new Date();
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const startOfYear = new Date(now.getFullYear(), 0, 1);
+
+  const [
+    customersTotal,
+    ordersThisMonth,
+    paymentsThisMonthAgg,
+    ordersTotalYearAgg,
+    paymentsTotalYearAgg,
+    openOrdersAgg,
+    paidOrdersAgg,
+  ] = await Promise.all([
+    prisma.customer.count({ where: { deletedAt: null } }),
+    prisma.order.count({
+      where: {
+        createdAt: { gte: startOfMonth },
+        status: { not: "DEBT_WITHDRAWAL" },
+      },
+    }),
+    prisma.payment.aggregate({
+      _sum: { amountUsd: true },
+      where: { isPaid: true, createdAt: { gte: startOfMonth } },
+    }),
+    prisma.order.aggregate({
+      _sum: { totalUsd: true },
+      where: {
+        createdAt: { gte: startOfYear },
+        status: { not: "DEBT_WITHDRAWAL" },
+      },
+    }),
+    prisma.payment.aggregate({
+      _sum: { amountUsd: true },
+      where: { isPaid: true, createdAt: { gte: startOfYear } },
+    }),
+    prisma.order.aggregate({
+      _sum: { totalUsd: true },
+      where: { status: { not: "DEBT_WITHDRAWAL" } },
+    }),
+    prisma.payment.aggregate({
+      _sum: { amountUsd: true },
+      where: { isPaid: true },
+    }),
+  ]);
+
+  const totalOrdersUsd = Number(openOrdersAgg._sum?.totalUsd ?? 0);
+  const totalPaidUsd = Number(paidOrdersAgg._sum?.amountUsd ?? 0);
+  const openBalancesUsd = Math.max(0, totalOrdersUsd - totalPaidUsd);
+
+  return {
+    customersTotal,
+    ordersThisMonth,
+    paymentsThisMonthUsd: Number(paymentsThisMonthAgg._sum?.amountUsd ?? 0),
+    openBalancesUsd,
+    ordersTotalYearUsd: Number(ordersTotalYearAgg._sum?.totalUsd ?? 0),
+    paymentsTotalYearUsd: Number(paymentsTotalYearAgg._sum?.amountUsd ?? 0),
+  };
 }
