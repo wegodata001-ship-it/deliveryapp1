@@ -3,6 +3,7 @@
 import { randomUUID } from "crypto";
 import { PaymentMethod, Prisma } from "@prisma/client";
 import { revalidatePath, unstable_cache } from "next/cache";
+import { SOURCE_TABLE_CARD_COUNTS_TAG } from "@/lib/kpi-cache-tags";
 import { recordActivityAudit } from "@/lib/activity-audit";
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { clearExpiredOrderEditUnlockForOrder } from "@/app/admin/order-edit-requests/actions";
@@ -253,7 +254,7 @@ async function loadSourceTableCardCounts(): Promise<Record<SourceTableId, number
     await Promise.all([
       prisma.customer.count({ where: { deletedAt: null } }),
       prisma.order.count({ where: { deletedAt: null } }),
-      prisma.payment.count(),
+      prisma.payment.count({ where: { isPaid: true } }),
       prisma.receiptControl.count(),
       prisma.paymentCheck.count(),
       prisma.user.count({ where: { isActive: true } }),
@@ -261,6 +262,18 @@ async function loadSourceTableCardCounts(): Promise<Record<SourceTableId, number
       prisma.financialSettings.count(),
       prisma.sourceStatus.count({ where: { isActive: true } }),
     ]);
+
+  console.table({
+    customersCount: customers,
+    ordersCount: orders,
+    paymentsCount: payments,
+    balancesCount: customers,
+    suppliersCount: null,
+    receivablesCount: receivables,
+    paymentChecksCount: paymentChecks,
+    activeUsersCount: activeUsers,
+    statusesCount: statuses,
+  });
 
   return {
     customers,
@@ -282,7 +295,7 @@ async function loadSourceTableCardCounts(): Promise<Record<SourceTableId, number
 const getCachedSourceTableCardCounts = unstable_cache(
   loadSourceTableCardCounts,
   ["wego-source-table-card-counts"],
-  { revalidate: 60 },
+  { revalidate: 60, tags: [SOURCE_TABLE_CARD_COUNTS_TAG] },
 );
 
 /** מונים לכרטיסי טבלאות מקור — cache 60 שניות, ללא bootstrap/seed */

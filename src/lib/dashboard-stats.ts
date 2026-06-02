@@ -6,6 +6,7 @@ import { isAdminUser } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
 import { formatIlsDisplay } from "@/lib/money-format";
 import { perfError, perfTimeEnd, perfTimeStart, withPerfTimer } from "@/lib/perf-log";
+import { DASHBOARD_HIGH_BALANCE_TAG, DASHBOARD_STATS_TAG } from "@/lib/kpi-cache-tags";
 
 export type DashboardStatsRange = { fromStart: Date; toEnd: Date };
 
@@ -212,7 +213,7 @@ const getHighBalanceCached = unstable_cache(
     }
   },
   ["wego-dashboard-high-balance-v2"],
-  { revalidate: DASHBOARD_CACHE_SECONDS },
+  { revalidate: DASHBOARD_CACHE_SECONDS, tags: [DASHBOARD_HIGH_BALANCE_TAG] },
 );
 
 export const getDashboardHighBalanceCount = cache(async (): Promise<number> => {
@@ -301,5 +302,5 @@ const getDashboardStatsCached = unstable_cache(
     }
   },
   ["wego-dashboard-stats-v3"],
-  { revalidate: DASHBOARD_CACHE_SECONDS },
+  { revalidate: DASHBOARD_CACHE_SECONDS, tags: [DASHBOARD_STATS_TAG] },
 );

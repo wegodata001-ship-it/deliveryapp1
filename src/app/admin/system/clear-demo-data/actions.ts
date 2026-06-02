@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { revalidateAllKpiCaches } from "@/lib/kpi-cache-tags";
 import {
   CLEAR_DEMO_DATA_CONFIRMATION,
   canClearDemoData,
@@ -30,6 +31,7 @@ export async function clearDemoDataAction(confirmation: string): Promise<ClearDe
     const result = await clearDemoData(prisma);
     const plan = await getClearDemoDataPlan(prisma);
 
+    revalidateAllKpiCaches();
     revalidatePath("/");
     revalidatePath("/admin");
     revalidatePath("/admin/orders");

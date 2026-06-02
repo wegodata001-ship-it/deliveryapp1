@@ -5,6 +5,7 @@ import { OrderEditRequestStatus, PaymentMethod, Prisma } from "@prisma/client";
 import { listOrderStatusTags } from "@/lib/order-status-registry";
 import { OS } from "@/lib/order-status-slugs";
 import { revalidatePath, revalidateTag } from "next/cache";
+import { revalidateAllKpiCaches } from "@/lib/kpi-cache-tags";
 import { recordActivityAudit } from "@/lib/activity-audit";
 import {
   appUserFromSessionPayload,
@@ -714,6 +715,7 @@ export async function capturePaymentAction(form: {
     },
   });
 
+  revalidateAllKpiCaches();
   revalidatePath("/admin");
   revalidatePath("/admin/orders");
   revalidatePath("/admin/balances");
@@ -910,6 +912,7 @@ export async function createMinimalOrderAction(form: {
     },
   });
 
+  revalidateAllKpiCaches();
   revalidatePath("/admin");
   revalidatePath("/admin/orders");
   revalidatePath("/admin/balances");
@@ -1013,6 +1016,7 @@ export async function updateCustomerCardDetailsAction(form: {
 
   const { revalidateAfterCustomerCreate } = await import("@/lib/revalidate-customer-create");
   revalidateAfterCustomerCreate(id);
+  revalidateAllKpiCaches();
   revalidatePath("/admin");
   revalidatePath("/admin/orders");
   revalidatePath("/admin/balances");
@@ -1896,6 +1900,7 @@ export async function updateOrderListStatusAction(
         },
       })
       .catch(() => {});
+    revalidateAllKpiCaches();
     revalidatePath("/admin");
     revalidatePath("/admin/orders");
     revalidatePath("/admin/balances");
@@ -1920,6 +1925,7 @@ export async function updateOrderListStatusAction(
     },
   });
 
+  revalidateAllKpiCaches();
   revalidatePath("/admin");
   revalidatePath("/admin/orders");
   revalidatePath("/admin/balances");

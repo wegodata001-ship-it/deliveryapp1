@@ -2,6 +2,7 @@
 
 import { PaymentMethod, Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
+import { revalidateAllKpiCaches } from "@/lib/kpi-cache-tags";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { computeFromUsdAmount } from "@/lib/financial-calc";
 import { ensureDefaultFinancialSettings, getCurrentFinancialSettings } from "@/lib/financial-settings";
@@ -529,6 +530,7 @@ export async function savePaymentIntakeAction(
     return { ok: false, error: msg };
   }
 
+  revalidateAllKpiCaches();
   revalidatePath("/admin");
   revalidatePath("/admin/orders");
   revalidatePath("/admin/balances");
