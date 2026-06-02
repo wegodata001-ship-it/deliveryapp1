@@ -199,6 +199,8 @@ model Order {
   commissionIls        Decimal?       @db.Decimal(19, 4)
   totalIls             Decimal?       @db.Decimal(19, 4)
   exchangeRate         Decimal?       @db.Decimal(19, 6)
+  /** אחוז עמלה שנשמר ברגע קליטת ההזמנה (מסמך היסטורי) */
+  commissionPercent    Decimal        @default(0) @db.Decimal(7, 4)
   vatRate              Decimal        @default(18) @db.Decimal(7, 4)
   amountWithoutVat     Decimal?       @db.Decimal(19, 4)
   /** צילום שערים בעת יצירת ההזמנה — לא משתנה כשמעדכנים הגדרות כספים */

@@ -139,6 +139,8 @@ export type PaymentUpdatedSaveInput = {
   commissionPercent?: string | null;
   payments: PaymentLine[];
   includedOrderIds: string[] | null;
+  /** Preview only in UI; applied only when saving payment */
+  commissionResetOrderIds?: string[] | null;
   draftNameAr?: string | null;
   draftNameEn?: string | null;
   draftPhone?: string | null;
@@ -289,6 +291,11 @@ export async function savePaymentUpdatedAction(
 
   const totals = calculateTotals(form.payments ?? [], rateN, VAT_RATE);
   if (totals.totalUsd <= 0 && totals.totalIls <= 0) return { ok: false, error: "יש להוסיף סכום בדולר ו/או בשקל" };
+  console.log("[payment.save]", {
+    customerId: cid,
+    exchangeRate: rateN,
+    commissionPercent: String(form.commissionPercent ?? ""),
+  });
 
   const checkValidationErr = validatePaymentCheckLines(form.payments ?? []);
   if (checkValidationErr) return { ok: false, error: checkValidationErr };
@@ -325,7 +332,7 @@ export async function savePaymentUpdatedAction(
       ...(weekDateWhere ?? {}),
     },
     orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],
-    select: { id: true, totalUsd: true, amountUsd: true, commissionUsd: true },
+    select: { id: true, orderNumber: true, totalUsd: true, amountUsd: true, commissionUsd: true },
   });
   const orderIds = orders.map((o) => o.id);
   const paidByOrder = new Map<string, Prisma.Decimal>();
@@ -610,6 +617,49 @@ export async function savePaymentUpdatedAction(
             amount: c.amount,
           })),
         });
+      }
+
+      const resetIds = (form.commissionResetOrderIds ?? []).map((x) => x.trim()).filter(Boolean);
+      if (resetIds.length > 0) {
+        const resetOrders = await tx.order.findMany({
+          where: { id: { in: resetIds }, customerId: cid, deletedAt: null },
+          select: { id: true, orderNumber: true, amountUsd: true, commissionUsd: true, totalUsd: true },
+        });
+
+        for (const o of resetOrders) {
+          const oldCom = o.commissionUsd ?? new Prisma.Decimal(0);
+          if (oldCom.lte(0)) continue;
+          const deal = o.amountUsd ?? new Prisma.Decimal(0);
+          const newCom = new Prisma.Decimal(0);
+          const newTotal = deal.add(newCom).toDecimalPlaces(4, 4);
+          const oldTotal = o.totalUsd ?? deal.add(oldCom).toDecimalPlaces(4, 4);
+
+          await tx.order.update({
+            where: { id: o.id },
+            data: { commissionUsd: newCom, totalUsd: newTotal },
+          });
+
+          await tx.auditLog.create({
+            data: {
+              userId: me.id,
+              actionType: "ORDER_COMMISSION_RESET",
+              entityType: "Order",
+              entityId: o.id,
+              oldValue: {
+                commissionUsd: oldCom.toString(),
+                totalUsd: oldTotal.toString(),
+              } as Prisma.InputJsonValue,
+              newValue: {
+                commissionUsd: newCom.toString(),
+                totalUsd: newTotal.toString(),
+              } as Prisma.InputJsonValue,
+              metadata: {
+                orderNumber: o.orderNumber ?? null,
+                paymentPrimaryCode: primaryCode,
+              } as Prisma.InputJsonValue,
+            },
+          });
+        }
       }
     });
   } catch (e) {

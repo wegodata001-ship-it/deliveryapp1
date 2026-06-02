@@ -343,10 +343,14 @@ export function OrderCreatePanel({
     setWeekDraft(displayWeekCode);
   }, [displayWeekCode]);
 
-  const finalRate = useMemo(() => {
+  const [finalRateStr, setFinalRateStr] = useState(() => {
     const f = financial?.finalDollarRate ? Number(String(financial.finalDollarRate).replace(",", ".")) : NaN;
-    return Number.isFinite(f) && f > 0 ? f : 3.5;
-  }, [financial]);
+    return Number.isFinite(f) && f > 0 ? f.toFixed(4) : "3.5000";
+  });
+  const finalRate = useMemo(() => {
+    const n = Number(String(finalRateStr).trim().replace(",", "."));
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }, [finalRateStr]);
 
   const systemDefaultCommissionStr = useMemo(() => defaultCommissionPercentStr(financial), [financial]);
 
@@ -498,12 +502,8 @@ export function OrderCreatePanel({
       setNotes(row.notes);
       setDealUsdStr(row.amountUsd);
       setDealIlsStr("");
-      const orderPct = commissionPercentFromOrderAmounts(row.feeUsd, row.amountUsd);
-      const pctStr =
-        orderPct > 0
-          ? formatCommissionPercentValue(orderPct)
-          : systemDefaultCommissionStr;
-      setCommissionPercentStr(pctStr);
+      setFinalRateStr(row.usdRateUsed?.trim() ? row.usdRateUsed.trim() : finalRateStr);
+      setCommissionPercentStr(row.commissionPercent?.trim() ? row.commissionPercent.trim() : systemDefaultCommissionStr);
       commissionPercentTouchedRef.current = true;
       setSelectedCustomer({
         id: row.customerId,
@@ -875,6 +875,7 @@ export function OrderCreatePanel({
     paymentPointQuery,
     commissionUsdEffective,
     commissionUsdCalc,
+    commissionPercentStr,
     orderExecutionDateYmd,
     intakeDateYmd,
     intakeTimeHm,
@@ -903,6 +904,7 @@ export function OrderCreatePanel({
     paymentPointQuery,
     commissionUsdEffective,
     commissionUsdCalc,
+    commissionPercentStr,
     orderExecutionDateYmd,
     intakeDateYmd,
     intakeTimeHm,
@@ -992,6 +994,8 @@ export function OrderCreatePanel({
                 customerId: cust.id,
                 amountUsd: roundMoney2(s.dealUsdTotal).toFixed(2),
                 feeUsd: feeStr,
+                commissionPercent: s.commissionPercentStr,
+                finalRateOverride: s.finalRate > 0 ? String(s.finalRate) : null,
                 paymentMethod: s.paymentMethod,
                 status: s.orderStatus,
                 notes: s.notes.trim() || undefined,
@@ -1013,6 +1017,8 @@ export function OrderCreatePanel({
                 customerId: cust.id,
                 amountUsd: roundMoney2(s.dealUsdTotal).toFixed(2),
                 feeUsd: feeStr,
+                commissionPercent: s.commissionPercentStr,
+                finalRateOverride: s.finalRate > 0 ? String(s.finalRate) : null,
                 paymentMethod: s.paymentMethod,
                 status: s.orderStatus,
                 notes: s.notes.trim() || undefined,
@@ -1432,11 +1438,13 @@ export function OrderCreatePanel({
             </label>
             <input
               type="text"
-              readOnly
-              className="adm-oc-legacy-top-inp adm-oc-pro-inp--ro"
-              value={finalRate.toFixed(2)}
+              inputMode="decimal"
+              className="adm-oc-legacy-top-inp adm-oc-pro-inp"
+              value={finalRateStr}
               dir="ltr"
-              title="שער דולר סופי מהגדרות"
+              disabled={fieldDisabled}
+              title="שער דולר להזמנה זו (ננעל לאחר שמירה)"
+              onChange={(e) => setFinalRateStr(e.target.value)}
             />
           </span>
           <span className="adm-oc-legacy-topbar-item adm-oc-pro-item">

@@ -385,14 +385,16 @@ export function PaymentModalUpdated({
   const [weekInputErr, setWeekInputErr] = useState<string | null>(null);
 
   const [dollarRate, setDollarRate] = useState(() => defaultRate.toFixed(4));
-  /** אחוז עמלה גלובלי — תצוגה בלבד; נשמר בקליטה לפי הגדרות מערכת */
+  /** אחוז עמלה ברירת מחדל מהמערכת */
   const systemCommissionPercentStr = useMemo(
     () => formatCommissionPercentValue(parseCommissionPercentString(financial?.defaultCommissionPercent ?? "0")),
     [financial?.defaultCommissionPercent],
   );
+  /** אחוז עמלה לקליטה הנוכחית (נשמר על Payment) */
+  const [commissionPercentStr, setCommissionPercentStr] = useState(() => systemCommissionPercentStr);
   const commissionPercentN = useMemo(
-    () => parseCommissionPercentString(systemCommissionPercentStr),
-    [systemCommissionPercentStr],
+    () => parseCommissionPercentString(commissionPercentStr),
+    [commissionPercentStr],
   );
 
   const [payments, setPayments] = useState<PaymentLine[]>(() => [createDefaultLine()]);
@@ -423,6 +425,12 @@ export function PaymentModalUpdated({
     prev: null,
     next: null,
   });
+  const [commissionResetIds, setCommissionResetIds] = useState<string[]>([]);
+  const [commissionResetTarget, setCommissionResetTarget] = useState<{
+    orderId: string;
+    orderNumber: string | null;
+    oldCommissionUsd: number;
+  } | null>(null);
 
   const customerIdRef = useRef<string | null>(null);
   customerIdRef.current = customer?.id ?? null;
@@ -457,7 +465,32 @@ export function PaymentModalUpdated({
     [customer?.id, paymentDateYmd, paymentTimeHm, dollarRate, includedIds, draftCustomer.nameEn, draftCustomer.nameAr, draftCustomer.phone, payments],
   );
 
-  const bases = useMemo(() => toPaymentIntakeBases(orders), [orders]);
+  const bases = useMemo(() => {
+    if (commissionResetIds.length === 0) return toPaymentIntakeBases(orders);
+    const reset = new Set(commissionResetIds);
+    return toPaymentIntakeBases(
+      orders.map((o) => {
+        if (!reset.has(o.id)) return o;
+        return {
+          ...o,
+          commissionUsd: "0",
+          totalAmountUsd: o.amountUsd,
+        };
+      }),
+    );
+  }, [commissionResetIds, orders]);
+
+  const commissionResetPreviewUsd = useMemo(() => {
+    if (commissionResetIds.length === 0) return 0;
+    const reset = new Set(commissionResetIds);
+    let sum = 0;
+    for (const o of orders) {
+      if (!reset.has(o.id)) continue;
+      const c = Number((o.commissionUsd || "").replace(",", "."));
+      if (Number.isFinite(c) && c > 0) sum += c;
+    }
+    return roundMoney2(sum);
+  }, [commissionResetIds, orders]);
 
   const prioritizedSet = useMemo(() => {
     if (includedIds === null) return null;
@@ -710,11 +743,13 @@ export function PaymentModalUpdated({
       if (!res.ok) {
         setCustomer(null);
         setOrders([]);
+        setCommissionResetIds([]);
         setLoadErr(res.error);
         return false;
       }
       setCustomer(res.customer);
       setOrders(res.orders);
+      setCommissionResetIds([]);
       setDraftCustomer({
         code: res.customer.customerCode ?? "",
         displayName: res.customer.displayName ?? "",
@@ -906,6 +941,7 @@ export function PaymentModalUpdated({
     setPaymentCodePreviewPending(false);
     setPaymentTimeHm(snap.paymentTimeHm);
     if (snap.dollarRate?.trim()) setDollarRate(snap.dollarRate.trim());
+    setCommissionPercentStr(snap.commissionPercent?.trim() ? snap.commissionPercent.trim() : systemCommissionPercentStr);
     setPayments(
       snap.lines.length > 0
         ? snap.lines.map((l) => ({
@@ -1404,9 +1440,10 @@ export function PaymentModalUpdated({
       paymentTimeHm: hm,
       weekCode: weekForSave,
       dollarRate,
-      commissionPercent: systemCommissionPercentStr,
+      commissionPercent: commissionPercentStr,
       payments,
       includedOrderIds: includedIds,
+      commissionResetOrderIds: commissionResetIds.length > 0 ? commissionResetIds : null,
       draftNameAr: draftCustomer.nameAr.trim() || null,
       draftNameEn: draftCustomer.nameEn.trim() || null,
       draftPhone: draftCustomer.phone.trim() || null,
@@ -1584,14 +1621,16 @@ export function PaymentModalUpdated({
               <span className="payment-modal-rate-strip-lead payment-modal-rate-strip-lead--pct">
                 אחוז עמלה:
               </span>
-              <span
-                className="payment-modal-rate-strip-inp payment-modal-rate-strip-inp--pct payment-modal-rate-strip-inp--ro"
+              <input
+                type="text"
+                inputMode="decimal"
                 dir="ltr"
-                aria-label="אחוז עמלה במערכת"
-                title="אחוז עמלה גלובלי מהגדרות כספים — לקריאה בלבד"
-              >
-                {systemCommissionPercentStr}%
-              </span>
+                className="payment-modal-rate-strip-inp payment-modal-rate-strip-inp--pct"
+                aria-label="אחוז עמלה"
+                title={`ברירת מחדל מערכת: ${systemCommissionPercentStr}%`}
+                value={commissionPercentStr}
+                onChange={(e) => setCommissionPercentStr(sanitizePercentInput(e.target.value))}
+              />
             </div>
             {loadingCustomer ? <p className="payment-modal-hint payment-modal-hint--top">טוען…</p> : null}
             {loadErr ? <div className="payment-modal-err payment-modal-err--top">{loadErr}</div> : null}
@@ -1971,6 +2010,33 @@ export function PaymentModalUpdated({
                   {intakeWeekTableHint}
                 </p>
               ) : null}
+              {customer ? (
+                <div className="pm-commission-totals" dir="rtl" role="group" aria-label="סיכום חיובים ועמלות">
+                  <div className="pm-commission-totals__item">
+                    <span className="pm-commission-totals__k">סה&quot;כ חיובים</span>
+                    <strong className="pm-commission-totals__v pm-commission-totals__v--charge" dir="ltr">
+                      {fmtUsdDisplay(ordersTableFooterTotals.totalTransactions)}
+                    </strong>
+                  </div>
+                  <div className="pm-commission-totals__item">
+                    <span className="pm-commission-totals__k">סה&quot;כ עמלות</span>
+                    <strong className="pm-commission-totals__v pm-commission-totals__v--commission" dir="ltr">
+                      {fmtUsdDisplay(resetBalanceMetrics.availableCommission)}
+                    </strong>
+                  </div>
+                  <div className="pm-commission-totals__item">
+                    <span className="pm-commission-totals__k">סה&quot;כ יתרה</span>
+                    <strong className="pm-commission-totals__v pm-commission-totals__v--balance" dir="ltr">
+                      {fmtUsdDisplay(ordersTableFooterTotals.remaining)}
+                    </strong>
+                  </div>
+                  {commissionResetPreviewUsd > 0.01 ? (
+                    <div className="pm-commission-totals__note" dir="rtl">
+                      עמלה שתאופס באישור התשלום: <strong dir="ltr">{fmtUsdDisplay(commissionResetPreviewUsd)}</strong>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               <div className="payment-modal-table-scroll" ref={tableScrollRef}>
                 <table className="payment-modal-table" dir="rtl">
                   <thead>
@@ -1980,6 +2046,7 @@ export function PaymentModalUpdated({
                       <th>שבוע</th>
                       <th className="pm-num">שער</th>
                       <th className="pm-num pm-th-amt">סכום מקור ($)</th>
+                      <th className="pm-num pm-th-commission">עמלה ($)</th>
                       <th className="pm-num">שולם ($)</th>
                       <th className="pm-num pm-th-total">יתרה ($)</th>
                       <th>תשלום אחרון</th>
@@ -1991,12 +2058,14 @@ export function PaymentModalUpdated({
                   <tbody>
                     {matched.length === 0 ? (
                       <tr>
-                        <td colSpan={11} className="payment-modal-empty">
+                        <td colSpan={12} className="payment-modal-empty">
                           {customer ? "אין הזמנות ללקוח זה" : "בחרו לקוח"}
                         </td>
                       </tr>
                     ) : (
                       matched.map((row) => {
+                        const isCommissionResetPreview = commissionResetIds.includes(row.id);
+                        const commissionUsd = isCommissionResetPreview ? 0 : Number(row.commissionUsd);
                         const ledgerBal = orderRowLedgerBalance(row);
                         const ledgerSt = paymentLedgerStatus(ledgerBal);
                         return (
@@ -2041,6 +2110,32 @@ export function PaymentModalUpdated({
                           </td>
                           <td dir="ltr" className="pm-num pm-num--usd">
                             {fmtUsdDisplay(row.amountUsd)}
+                          </td>
+                          <td dir="ltr" className="pm-num pm-num--commission" onClick={(e) => e.stopPropagation()}>
+                            <div className="pm-commission-cell">
+                              <span className={isCommissionResetPreview ? "pm-commission-preview" : ""}>
+                                {fmtUsdDisplay(commissionUsd)}
+                              </span>
+                              {customer && viewerIsAdmin && commissionUsd > 0.01 ? (
+                                <button
+                                  type="button"
+                                  className="pm-commission-reset-btn"
+                                  onClick={() =>
+                                    setCommissionResetTarget({
+                                      orderId: row.id,
+                                      orderNumber: row.orderNumber ?? null,
+                                      oldCommissionUsd: commissionUsd,
+                                    })
+                                  }
+                                  title="איפוס עמלה (תצוגה מקדימה עד שמירת התשלום)"
+                                >
+                                  איפוס
+                                </button>
+                              ) : null}
+                              {isCommissionResetPreview ? (
+                                <span className="payment-modal-preview-tag pm-commission-preview-tag">תצוגה מקדימה</span>
+                              ) : null}
+                            </div>
                           </td>
                           <td dir="ltr" className="pm-num pm-num--paid-usd">
                             {fmtUsdDisplay(roundMoney2(Math.max(0, row.dbPaidUsd)))}
@@ -2445,6 +2540,61 @@ export function PaymentModalUpdated({
                 onClick={() => confirmNavUnsavedAndProceed()}
               >
                 כן
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {commissionResetTarget ? (
+        <div
+          className="adm-oc-edit-request-backdrop"
+          role="presentation"
+          onClick={() => setCommissionResetTarget(null)}
+        >
+          <div
+            className="payment-nav-confirm-modal payment-reset-confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+            dir="rtl"
+          >
+            <h4>האם לאפס את העמלה להזמנה זו?</h4>
+            <p>
+              הזמנה:{" "}
+              <strong dir="ltr">{commissionResetTarget.orderNumber ?? commissionResetTarget.orderId}</strong>
+              <br />
+              עמלה נוכחית:{" "}
+              <strong dir="ltr">{fmtUsdDisplay(commissionResetTarget.oldCommissionUsd)}</strong>
+              <br />
+              הפעולה היא <strong>תצוגה מקדימה בלבד</strong> עד שמירת התשלום.
+            </p>
+            <div className="payment-nav-confirm-actions">
+              <button
+                type="button"
+                className="adm-btn adm-btn--ghost adm-btn--dense"
+                onClick={() => setCommissionResetTarget(null)}
+              >
+                ביטול
+              </button>
+              <button
+                type="button"
+                className="adm-btn adm-btn--primary adm-btn--dense"
+                onClick={() => {
+                  setCommissionResetIds((prev) => {
+                    if (prev.includes(commissionResetTarget.orderId)) return prev;
+                    return [...prev, commissionResetTarget.orderId];
+                  });
+                  console.log("[commission.reset.preview]", {
+                    orderNumber: commissionResetTarget.orderNumber,
+                    exchangeRate: dollarRate,
+                    commissionPercent: commissionPercentStr,
+                    oldCommissionUsd: commissionResetTarget.oldCommissionUsd,
+                    newCommissionUsd: 0,
+                  });
+                  setCommissionResetTarget(null);
+                }}
+              >
+                אישור
               </button>
             </div>
           </div>

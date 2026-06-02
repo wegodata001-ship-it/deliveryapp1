@@ -6,6 +6,7 @@ export const ACTIVITY_PRESENCE_ACTION_TYPES = [
   "ORDER_CREATED",
   "ORDER_UPDATED",
   "ORDER_DELETED",
+  "ORDER_COMMISSION_RESET",
   "PAYMENT_RECEIVED",
   "PAYMENT_INTAKE_BATCH",
   "CUSTOMER_CREATED",
@@ -29,6 +30,8 @@ export function activityActionLabelHe(actionType: string): string {
       return "ערך הזמנה";
     case "ORDER_DELETED":
       return "מחק הזמנה";
+    case "ORDER_COMMISSION_RESET":
+      return "איפס עמלה";
     case "PAYMENT_RECEIVED":
     case "PAYMENT_INTAKE_BATCH":
       return "קלט תשלום";

@@ -352,6 +352,16 @@ async function ensureOrderGeoTables(): Promise<void> {
   });
 }
 
+async function ensureOrderCommissionPercentColumn(): Promise<void> {
+  await ensureOnce("order-commission-percent", async () => {
+    // Historical document: store commission percent on the order itself.
+    await prisma.$executeRaw`
+      ALTER TABLE "Order"
+      ADD COLUMN IF NOT EXISTS "commissionPercent" DECIMAL(7,4) NOT NULL DEFAULT 0
+    `;
+  });
+}
+
 /** טעינת הקשר הזמנה לקליטת תשלום (מספר הזמנה) — ללא שינוי בקליטת הזמנה */
 export async function fetchOrderForPaymentContextAction(
   orderNumberRaw: string,
@@ -1147,6 +1157,8 @@ export async function captureOrderAction(form: {
   customerTypeSnapshot?: string | null;
   amountUsd: string;
   feeUsd: string;
+  /** אחוז עמלה שנבחר בקליטה — נשמר על ההזמנה */
+  commissionPercent?: string | null;
   paymentMethod: string;
   status: string;
   notes?: string;
@@ -1230,6 +1242,7 @@ async function captureOrderActionInner(
   capturePerfTimeEnd("capture.validation");
   perf.validateInputMs = Date.now() - validationT0;
   void getActiveOrderStatusIdsCached();
+  await ensureOrderCommissionPercentColumn();
 
   const wcEarly = deriveAhWeekCodeFromOrderDateYmd(orderDateYmdEarly) ?? DEFAULT_WEEK_CODE;
   const requestedOrderNumber = form.orderNumber?.trim() || "";
@@ -1309,6 +1322,11 @@ async function captureOrderActionInner(
   const base = ratesResolved.base;
   const fee = ratesResolved.fee;
   const finalRate = ratesResolved.final;
+  const commissionPercentRaw = (form.commissionPercent ?? "").trim().replace(",", ".");
+  const commissionPercentNum = Number(commissionPercentRaw || "0");
+  const commissionPercentDec = new Prisma.Decimal(
+    Number.isFinite(commissionPercentNum) && commissionPercentNum > 0 ? commissionPercentNum.toString() : "0",
+  ).toDecimalPlaces(4, 4);
   let vatPctNum = 18;
   const rawVatPct = form.vatPercent?.trim().replace(",", ".");
   if (rawVatPct) {
@@ -1434,6 +1452,7 @@ async function captureOrderActionInner(
           commissionUsd,
           totalUsd,
           exchangeRate: finalRate,
+          commissionPercent: commissionPercentDec,
           vatRate,
           amountWithoutVat: totals.totalIlsWithoutVat,
           snapshotBaseDollarRate: totals.snapshotBaseDollarRate,
@@ -1450,6 +1469,11 @@ async function captureOrderActionInner(
           createdById: me.id,
         },
         select: { id: true, orderNumber: true },
+      });
+      console.log("[order.save]", {
+        orderNumber,
+        exchangeRate: finalRate.toFixed(4),
+        commissionPercent: commissionPercentDec.toFixed(2),
       });
       perf.add("createOrderMs", Date.now() - tOrder);
 
@@ -1568,6 +1592,7 @@ export type OrderWorkPanelPayload = {
   locationName: string | null;
   status: string;
   usdRateUsed: string;
+  commissionPercent: string;
   notes: string;
   sourceCountry: string | null;
   /** סכום USD שכבר שולם בתשלומים מקושרים */
@@ -1593,6 +1618,7 @@ export async function getOrderForWorkPanelAction(orderId: string): Promise<Order
     if (!id) return null;
     await ensureOrderGeoTables();
     await ensureIntakeLocationTable();
+    await ensureOrderCommissionPercentColumn();
 
     const order = await prisma.order.findFirst({
       where: { id, deletedAt: null },
@@ -1618,6 +1644,7 @@ export async function getOrderForWorkPanelAction(orderId: string): Promise<Order
         usdRateUsed: true,
         snapshotFinalDollarRate: true,
         exchangeRate: true,
+        commissionPercent: true,
         notes: true,
         totalUsd: true,
         sourceCountry: true,
@@ -1646,6 +1673,12 @@ export async function getOrderForWorkPanelAction(orderId: string): Promise<Order
     const intakeDt = order.intakeDateTime ?? order.createdAt ?? od;
     const intakeParsed = intakeDt ? new Date(intakeDt) : od;
     const rateUsed = order.usdRateUsed ?? order.snapshotFinalDollarRate ?? order.exchangeRate ?? new Prisma.Decimal(0);
+    const commissionPct = order.commissionPercent ?? new Prisma.Decimal(0);
+    console.log("[order.open]", {
+      orderNumber: order.orderNumber ?? null,
+      exchangeRate: rateUsed.toFixed(4),
+      commissionPercent: commissionPct.toFixed(2),
+    });
 
     const label = order.customer?.displayName ?? order.customerNameSnapshot ?? "";
     const cid = order.customerId ?? order.customer?.id ?? "";
@@ -1711,6 +1744,7 @@ export async function getOrderForWorkPanelAction(orderId: string): Promise<Order
         (order.paymentPoint?.city ? `${order.paymentPoint.pointName} · ${order.paymentPoint.city}` : order.paymentPoint?.pointName ?? null),
       status: order.status,
       usdRateUsed: rateUsed.toFixed(4),
+      commissionPercent: commissionPct.toFixed(2),
       notes: order.notes ?? "",
       existingPaymentsUsdSum: existingPayUsd.toFixed(4),
       orderTotalUsd: orderTotalUsdVal.toFixed(4),
@@ -2112,6 +2146,8 @@ export async function updateOrderWorkPanelAction(form: {
   customerTypeSnapshot?: string | null;
   amountUsd: string;
   feeUsd: string;
+  /** אחוז עמלה שנבחר בקליטה — נשמר על ההזמנה */
+  commissionPercent?: string | null;
   paymentMethod: string;
   status: string;
   notes?: string;
@@ -2181,6 +2217,7 @@ async function updateOrderWorkPanelActionInner(
   capturePerfTimeEnd("capture.validation");
   perf.validateInputMs = Date.now() - validationT0;
   void getActiveOrderStatusIdsCached();
+  await ensureOrderCommissionPercentColumn();
 
   const ratesResultUp = await perf.time("exchangeRateMs", () => resolveCaptureRatesForSave(form));
   if (!ratesResultUp.ok) return { ok: false, error: ratesResultUp.error };
@@ -2266,6 +2303,11 @@ async function updateOrderWorkPanelActionInner(
   const base = ratesResolved.base;
   const fee = ratesResolved.fee;
   const final = ratesResolved.final;
+  const commissionPercentRaw = (form.commissionPercent ?? "").trim().replace(",", ".");
+  const commissionPercentNum = Number(commissionPercentRaw || "0");
+  const commissionPercentDec = new Prisma.Decimal(
+    Number.isFinite(commissionPercentNum) && commissionPercentNum > 0 ? commissionPercentNum.toString() : "0",
+  ).toDecimalPlaces(4, 4);
   const vatRate = prismaVatRatePercent();
 
   let deal: Prisma.Decimal;
@@ -2358,6 +2400,7 @@ async function updateOrderWorkPanelActionInner(
           commissionUsd,
           totalUsd,
           exchangeRate: final,
+          commissionPercent: commissionPercentDec,
           vatRate,
           amountWithoutVat: totals.totalIlsWithoutVat,
           snapshotBaseDollarRate: totals.snapshotBaseDollarRate,
