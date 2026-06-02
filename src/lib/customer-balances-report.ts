@@ -1,5 +1,6 @@
 import { PaymentMethod, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { calculateCustomerBalances } from "@/lib/customer-balance-calculator";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { isDebtWithdrawalOrderStatus, orderCustomerCreditUsd } from "@/lib/debt-withdrawal-order";
 import { normalizeOrderSourceCountry } from "@/lib/order-countries";
@@ -122,7 +123,7 @@ export async function getCustomerBalancesReport(filters: CustomerBalancesReportF
   totalExpectedOnRows: Prisma.Decimal;
   totalReceivedOnRows: Prisma.Decimal;
 }> {
-  const { orderWhere, paymentWhereLinked } = getCustomerBalancesReportWhereClauses(filters);
+  const { from, to, orderWhere, paymentWhereLinked } = getCustomerBalancesReportWhereClauses(filters);
 
   const customers = await prisma.customer.findMany({
     where: { deletedAt: null, isActive: true, ...(filters.customerId ? { id: filters.customerId } : {}) },
@@ -155,12 +156,22 @@ export async function getCustomerBalancesReport(filters: CustomerBalancesReportF
       },
     },
   });
+  const customerIds = customers.map((c) => c.id);
+  const countryEnum = filters.sourceCountry?.trim()
+    ? normalizeOrderSourceCountry(filters.sourceCountry.trim())
+    : null;
+  const sharedBalances = await calculateCustomerBalances(customerIds, {
+    from,
+    to,
+    sourceCountry: countryEnum,
+  });
 
   const rows: CustomerBalanceReportRow[] = [];
 
   for (const c of customers) {
+    const shared = sharedBalances.get(c.id);
     let expected = new Prisma.Decimal(0);
-    let expectedUsd = new Prisma.Decimal(0);
+    let expectedUsd = shared?.totalOrders ?? new Prisma.Decimal(0);
     let withdrawalReceived = new Prisma.Decimal(0);
     let withdrawalReceivedUsd = new Prisma.Decimal(0);
     for (const o of c.orders) {
@@ -178,16 +189,32 @@ export async function getCustomerBalancesReport(filters: CustomerBalancesReportF
         continue;
       }
       expected = expected.add(orderIls(o));
-      expectedUsd = expectedUsd.add(orderUsd(o));
+      if (!shared) expectedUsd = expectedUsd.add(orderUsd(o));
     }
     const received = c.payments
       .reduce((sum, p) => sum.add(paymentIls(p)), new Prisma.Decimal(0))
       .add(withdrawalReceived);
     const remaining = expected.sub(received);
-    const receivedUsd = c.payments
-      .reduce((sum, p) => sum.add(paymentUsd(p)), new Prisma.Decimal(0))
-      .add(withdrawalReceivedUsd);
-    const remainingUsd = expectedUsd.sub(receivedUsd);
+    const receivedUsd = shared
+      ? shared.totalPayments.add(shared.totalWithdrawals)
+      : c.payments
+          .reduce((sum, p) => sum.add(paymentUsd(p)), new Prisma.Decimal(0))
+          .add(withdrawalReceivedUsd);
+    const remainingUsd = shared?.balance ?? expectedUsd.sub(receivedUsd);
+    if (c.customerCode === "90006") {
+      console.info("[getCustomerBalancesReport.balance]", {
+        customerId: c.id,
+        customerCode: c.customerCode,
+        sourceCountry: countryEnum ?? null,
+        fromYmd: filters.dateFrom || null,
+        toYmd: filters.dateTo || null,
+        ordersCount: shared?.ordersCount ?? c.orders.filter((o) => !isDebtWithdrawalOrderStatus(o.status)).length,
+        ordersTotal: expectedUsd.toFixed(2),
+        withdrawalsTotal: (shared?.totalWithdrawals ?? withdrawalReceivedUsd).toFixed(2),
+        paymentsTotal: (shared?.totalPayments ?? receivedUsd).toFixed(2),
+        balance: remainingUsd.toFixed(2),
+      });
+    }
     const auto = autoPayStatus(expected, received);
     const paymentStatus = paymentStatusLabel(auto, remainingUsd.gt(0) ? remainingUsd : new Prisma.Decimal(0));
     if (remaining.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).lte(0)) continue;

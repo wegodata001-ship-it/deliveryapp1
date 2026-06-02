@@ -1,11 +1,13 @@
-import { Prisma } from "@prisma/client";
+import { Prisma, type OrderSourceCountry } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { calculateCustomerBalance } from "@/lib/customer-balance-calculator";
 import {
   DEBT_WITHDRAWAL_LEDGER_LABEL,
   isDebtWithdrawalOrderStatus,
   orderCustomerChargeUsd,
   orderCustomerCreditUsd,
 } from "@/lib/debt-withdrawal-order";
+import { normalizeOrderSourceCountry } from "@/lib/order-countries";
 import { formatLocalYmd, parseLocalDate } from "@/lib/work-week";
 
 export type CustomerLedgerRowKind =
@@ -91,6 +93,7 @@ export async function buildCustomerAccountLedger(params: {
   customerId: string;
   fromYmd?: string | null;
   toYmd?: string | null;
+  sourceCountry?: string | null;
 }): Promise<CustomerLedgerPayload> {
   const totalT0 = Date.now();
   let fetchOrdersMs = 0;
@@ -100,12 +103,34 @@ export async function buildCustomerAccountLedger(params: {
   const fromFilterSet = Boolean(params.fromYmd?.trim());
   const from = fromFilterSet ? parseLocalDate(params.fromYmd!.trim()) : new Date(2000, 0, 1);
   const to = params.toYmd?.trim() ? endOfLocalDay(params.toYmd.trim()) : new Date(2999, 11, 31, 23, 59, 59, 999);
+  const countryNorm = normalizeOrderSourceCountry(params.sourceCountry?.trim() || null);
+  const sourceCountry = countryNorm ? (countryNorm as OrderSourceCountry) : null;
+  const orderScopeWhere = {
+    customerId: id,
+    deletedAt: null,
+    ...(sourceCountry ? { sourceCountry } : {}),
+  } satisfies Prisma.OrderWhereInput;
+  const paymentScopeWhere = sourceCountry
+    ? ({
+        customerId: id,
+        isPaid: true,
+        order: { deletedAt: null, sourceCountry },
+      } satisfies Prisma.PaymentWhereInput)
+    : ({
+        customerId: id,
+        isPaid: true,
+      } satisfies Prisma.PaymentWhereInput);
+  const sharedBalancePromise = calculateCustomerBalance(id, {
+    from: fromFilterSet ? from : null,
+    to,
+    sourceCountry,
+  });
 
   const [preOrders, prePayments, orders, payments] = await Promise.all([
     fromFilterSet
       ? timed((ms) => (fetchOrdersMs += ms), () =>
           prisma.order.findMany({
-            where: { customerId: id, deletedAt: null, orderDate: { lt: from } },
+            where: { ...orderScopeWhere, orderDate: { lt: from } },
             select: {
               status: true,
               totalUsd: true,
@@ -119,7 +144,7 @@ export async function buildCustomerAccountLedger(params: {
     fromFilterSet
       ? timed((ms) => (fetchPaymentsMs += ms), () =>
           prisma.payment.findMany({
-            where: { customerId: id, isPaid: true, paymentDate: { lt: from } },
+            where: { ...paymentScopeWhere, paymentDate: { lt: from } },
             select: {
               amountUsd: true,
               amountIls: true,
@@ -130,7 +155,7 @@ export async function buildCustomerAccountLedger(params: {
       : Promise.resolve([]),
     timed((ms) => (fetchOrdersMs += ms), () =>
       prisma.order.findMany({
-        where: { customerId: id, deletedAt: null, orderDate: { gte: from, lte: to } },
+        where: { ...orderScopeWhere, orderDate: { gte: from, lte: to } },
         orderBy: { orderDate: "asc" },
         select: {
           id: true,
@@ -146,7 +171,7 @@ export async function buildCustomerAccountLedger(params: {
     ),
     timed((ms) => (fetchPaymentsMs += ms), () =>
       prisma.payment.findMany({
-        where: { customerId: id, isPaid: true, paymentDate: { gte: from, lte: to } },
+        where: { ...paymentScopeWhere, paymentDate: { gte: from, lte: to } },
         orderBy: { paymentDate: "asc" },
         select: {
           id: true,
@@ -159,6 +184,7 @@ export async function buildCustomerAccountLedger(params: {
       }),
     ),
   ]);
+  const sharedBalance = await sharedBalancePromise;
 
   const calcT0 = Date.now();
   let openingBalance = new Prisma.Decimal(0);
@@ -278,6 +304,17 @@ export async function buildCustomerAccountLedger(params: {
     calculateBalanceMs,
     totalMs: Date.now() - totalT0,
   };
+  console.info("[customer-card.balance]", {
+    customerId: id,
+    sourceCountry: sourceCountry ?? null,
+    fromYmd: params.fromYmd?.trim() || null,
+    toYmd: params.toYmd?.trim() || null,
+    ordersCount: sharedBalance.ordersCount,
+    ordersTotal: sharedBalance.totalOrders.toFixed(2),
+    withdrawalsTotal: sharedBalance.totalWithdrawals.toFixed(2),
+    paymentsTotal: sharedBalance.totalPayments.toFixed(2),
+    balance: sharedBalance.balance.toFixed(2),
+  });
   if (perf.totalMs > 500) {
     console.table({
       fetchCustomerMs: 0,
@@ -293,10 +330,10 @@ export async function buildCustomerAccountLedger(params: {
 
   return {
     rows,
-    totalChargesUsd: totalCharges.toFixed(2),
-    totalPaymentsUsd: totalPayments.toFixed(2),
-    totalWithdrawalsUsd: totalWithdrawals.toFixed(2),
-    balanceUsd: balance.toFixed(2),
+    totalChargesUsd: sharedBalance.totalOrders.toFixed(2),
+    totalPaymentsUsd: sharedBalance.totalPayments.toFixed(2),
+    totalWithdrawalsUsd: sharedBalance.totalWithdrawals.toFixed(2),
+    balanceUsd: sharedBalance.balance.toFixed(2),
     perf,
   };
 }

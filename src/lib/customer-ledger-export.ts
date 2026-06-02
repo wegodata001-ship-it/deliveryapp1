@@ -25,8 +25,8 @@ export type LedgerExportTableRow = {
   isOpening: boolean;
 };
 
-/** סדר עמודות בגיליון Excel (ימין→שמאל): תאריך | מסמך | סוג | חיוב | תשלום | יתרה */
-export const LEDGER_EXPORT_HEADERS = ["תאריך", "מסמך", "סוג", "חיוב", "תשלום", "יתרה"] as const;
+/** סדר עמודות בגיליון Excel (ימין→שמאל): תאריך | מסמך | סוג | חיוב לקוח | תשלום/זיכוי | יתרה */
+export const LEDGER_EXPORT_HEADERS = ["תאריך", "מסמך", "סוג", "חיוב לקוח ($)", "תשלום/זיכוי ($)", "יתרה ($)"] as const;
 
 /** pdfmake LTR — מערך הפוך כדי שהתצוגה תהיה תאריך→יתרה מימין לשמאל */
 const LEDGER_PDF_HEADERS_LTR = [...LEDGER_EXPORT_HEADERS].reverse() as readonly string[];
@@ -152,8 +152,8 @@ function ledgerPdfCell(
   const ltr =
     opts?.ltr === true ||
     /^\d{4}-\d{2}-\d{2}$/.test(text.trim()) ||
-    /^[\d$₪€£.,\s\-—·()%]+$/.test(text.trim()) ||
-    /^[\$₪]?\d/.test(text.trim()) ||
+    /^[\d$€£.,\s\-—·()%]+$/.test(text.trim()) ||
+    /^[\$]?\d/.test(text.trim()) ||
     text.startsWith("(");
   return {
     text,

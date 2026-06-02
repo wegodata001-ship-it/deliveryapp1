@@ -84,6 +84,9 @@ export function CustomerCardWindowBody({
   customerId,
   customerName,
   initialTab = "details",
+  ledgerFromYmd = null,
+  ledgerToYmd = null,
+  ledgerSourceCountry = null,
   initialSnap = null,
 }: CustomerCardWindowProps) {
   const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
@@ -168,8 +171,8 @@ export function CustomerCardWindowBody({
   const [ledgerOrderLock, setLedgerOrderLock] = useState<OrderEditLockGatePayload | null>(null);
   const [ledgerGateToast, setLedgerGateToast] = useState<string | null>(null);
   const [exportBusy, setExportBusy] = useState<"pdf" | "excel" | null>(null);
-  const [fromYmd, setFromYmd] = useState("");
-  const [toYmd, setToYmd] = useState("");
+  const [fromYmd, setFromYmd] = useState(ledgerFromYmd?.trim() ?? "");
+  const [toYmd, setToYmd] = useState(ledgerToYmd?.trim() ?? "");
   const [form, setForm] = useState(() => (initialSnap ? formFromSnap(initialSnap) : {
     displayName: "",
     nameAr: "",
@@ -225,7 +228,7 @@ export function CustomerCardWindowBody({
     let cancelled = false;
     setLedgerLoading(true);
     const ledgerT0 = now();
-    void getCustomerLedgerAction({ customerId, fromYmd, toYmd }).then((row) => {
+    void getCustomerLedgerAction({ customerId, fromYmd, toYmd, sourceCountry: ledgerSourceCountry }).then((row) => {
       if (!cancelled) {
         setLedger(row);
         setLedgerLoading(false);
@@ -258,7 +261,7 @@ export function CustomerCardWindowBody({
     return () => {
       cancelled = true;
     };
-  }, [customerId, activeTab, fromYmd, toYmd]);
+  }, [customerId, activeTab, fromYmd, toYmd, ledgerSourceCountry]);
 
   function resetFormFromSnap(row: CustomerCardSnapshot) {
     setForm(formFromSnap(row));

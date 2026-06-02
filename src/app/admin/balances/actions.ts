@@ -15,6 +15,7 @@ import {
   type OrderPhaseUi,
 } from "@/lib/customer-balance-order-status";
 import { computeSignedFromTotals } from "@/lib/customer-balance";
+import { calculateCustomerBalances } from "@/lib/customer-balance-calculator";
 import {
   isDebtWithdrawalOrderStatus,
   orderCustomerChargeUsd,
@@ -100,6 +101,9 @@ export type CustomerBalanceRow = {
   lifetimeOrdersUSD: string;
   /** מספר הזמנות שנכנסו לחישוב בטווח */
   ordersCount: number;
+  totalOrdersUSD: string;
+  totalPaymentsUSD: string;
+  totalBalanceUSD: string;
   totalOrdersILS: string;
   totalPaymentsILS: string;
   /** סכום עסקאות מקורי (לפני עמלה) בש״ח */
@@ -146,6 +150,9 @@ export type CustomerBalancesPayload = {
     totalCreditIls: string;
     /** סה״כ תשלומים (ש״ח) בקבוצה המסוננת */
     totalPaymentsIls: string;
+    totalDebtUsd: string;
+    totalCreditUsd: string;
+    totalPaymentsUsd: string;
     withDebtCount: number;
     withCreditCount: number;
     noDebtCount: number;
@@ -363,13 +370,13 @@ function rowBalanceUsdNumber(balanceUsd: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-function rowOrdersTotalNumber(totalOrdersILS: string): number {
-  const n = Number(totalOrdersILS.replace(",", "."));
+function rowOrdersTotalNumber(totalOrdersUSD: string): number {
+  const n = Number(totalOrdersUSD.replace(",", "."));
   return Number.isFinite(n) ? n : 0;
 }
 
-function rowPaymentsTotalNumber(totalPaymentsILS: string): number {
-  const n = Number(totalPaymentsILS.replace(",", "."));
+function rowPaymentsTotalNumber(totalPaymentsUSD: string): number {
+  const n = Number(totalPaymentsUSD.replace(",", "."));
   return Number.isFinite(n) ? n : 0;
 }
 
@@ -378,7 +385,7 @@ function matchesDebtFilter(row: CustomerBalanceRow, filter: CustomerBalanceDebtF
   const signed = rowSignedIlsNumber(row);
   const auto = row.autoStatus;
   const eps = 0.01;
-  const businessBal = rowBalanceNumber(row.totalBalanceILS);
+  const businessBal = rowBalanceUsdNumber(row.totalBalanceUSD);
   if (filter === "OWES") return businessBal > eps;
   if (filter === "CREDIT") return businessBal < -eps;
   if (filter === "BALANCED") return Math.abs(businessBal) <= eps;
@@ -468,6 +475,9 @@ function emptyBalancesPayload(limit: number): CustomerBalancesPayload {
       totalDebtIls: z,
       totalCreditIls: z,
       totalPaymentsIls: z,
+      totalDebtUsd: z,
+      totalCreditUsd: z,
+      totalPaymentsUsd: z,
       withDebtCount: 0,
       withCreditCount: 0,
       noDebtCount: 0,
@@ -482,6 +492,9 @@ function computeBalanceStats(rows: CustomerBalanceRow[]): CustomerBalancesPayloa
   let totalDebt = new Prisma.Decimal(0);
   let totalCredit = new Prisma.Decimal(0);
   let totalPayments = new Prisma.Decimal(0);
+  let totalDebtUsd = new Prisma.Decimal(0);
+  let totalCreditUsd = new Prisma.Decimal(0);
+  let totalPaymentsUsd = new Prisma.Decimal(0);
   let withDebt = 0;
   let withCredit = 0;
   let noDebt = 0;
@@ -490,9 +503,11 @@ function computeBalanceStats(rows: CustomerBalanceRow[]): CustomerBalancesPayloa
   let highDebt = 0;
   const eps = 0.01;
   for (const r of rows) {
-    const businessBal = rowBalanceNumber(r.totalBalanceILS);
+    const businessBal = rowBalanceUsdNumber(r.totalBalanceUSD);
+    const businessBalUsd = rowBalanceUsdNumber(r.totalBalanceUSD);
     const signed = rowSignedIlsNumber(r);
-    totalPayments = totalPayments.add(new Prisma.Decimal(rowPaymentsTotalNumber(r.totalPaymentsILS).toFixed(4)));
+    totalPayments = totalPayments.add(new Prisma.Decimal(rowPaymentsTotalNumber(r.totalPaymentsUSD).toFixed(4)));
+    totalPaymentsUsd = totalPaymentsUsd.add(new Prisma.Decimal(rowBalanceUsdNumber(r.totalPaymentsUSD).toFixed(4)));
     if (businessBal > eps) {
       totalDebt = totalDebt.add(new Prisma.Decimal(businessBal.toFixed(4)));
       withDebt++;
@@ -503,6 +518,8 @@ function computeBalanceStats(rows: CustomerBalanceRow[]): CustomerBalancesPayloa
     } else {
       noDebt++;
     }
+    if (businessBalUsd > eps) totalDebtUsd = totalDebtUsd.add(new Prisma.Decimal(businessBalUsd.toFixed(4)));
+    else if (businessBalUsd < -eps) totalCreditUsd = totalCreditUsd.add(new Prisma.Decimal(Math.abs(businessBalUsd).toFixed(4)));
     if (r.autoStatus === "PARTIAL") partial++;
     if (r.autoStatus === "NOT_PAID" && businessBal > eps) notPaid++;
   }
@@ -510,6 +527,9 @@ function computeBalanceStats(rows: CustomerBalanceRow[]): CustomerBalancesPayloa
     totalDebtIls: money(totalDebt),
     totalCreditIls: money(totalCredit),
     totalPaymentsIls: money(totalPayments),
+    totalDebtUsd: money(totalDebtUsd),
+    totalCreditUsd: money(totalCreditUsd),
+    totalPaymentsUsd: money(totalPaymentsUsd),
     withDebtCount: withDebt,
     withCreditCount: withCredit,
     noDebtCount: noDebt,
@@ -661,6 +681,15 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   if (customerIds.length === 0) {
     return emptyBalancesPayload(limit);
   }
+  const scopeFrom = orderDateFilter && "gte" in orderDateFilter ? (orderDateFilter.gte as Date | undefined) : undefined;
+  const scopeTo = orderDateFilter && "lte" in orderDateFilter ? (orderDateFilter.lte as Date | undefined) : undefined;
+  const sharedBalances = await perfTimed((ms) => (fetchOrdersMs += ms), () =>
+    calculateCustomerBalances(customerIds, {
+      from: scopeFrom ?? null,
+      to: scopeTo ?? null,
+      sourceCountry: orderCountryPrisma ?? null,
+    }),
+  );
 
   // Business-only metric: lifetime (since day 1) sum of orders in USD, excluding debt withdrawals.
   const lifetimeAgg = await perfTimed((ms) => (fetchOrdersMs += ms), () =>
@@ -837,6 +866,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   );
 
   const rows: CustomerBalanceRow[] = customers.map((c): CustomerBalanceRow => {
+    const shared = sharedBalances.get(c.id);
     const expectedIls = expectedIlsByCustomer.get(c.id) ?? new Prisma.Decimal(0);
     const receivedIls = receivedIlsByCustomer.get(c.id) ?? new Prisma.Decimal(0);
     const creditsIls = creditByCustomer.get(c.id) ?? new Prisma.Decimal(0);
@@ -845,8 +875,10 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     const commissionsIls = commissionIlsByCustomer.get(c.id) ?? new Prisma.Decimal(0);
     const receiptsIls = receivedIls.add(creditsIls);
     const creditsUsd = creditUsdByCustomer.get(c.id) ?? new Prisma.Decimal(0);
-    const expectedUsd = expectedUsdByCustomer.get(c.id) ?? new Prisma.Decimal(0);
-    const receivedUsd = receivedUsdByCustomer.get(c.id) ?? new Prisma.Decimal(0);
+    const expectedUsd = shared?.totalOrders ?? expectedUsdByCustomer.get(c.id) ?? new Prisma.Decimal(0);
+    const receivedUsd = shared
+      ? shared.totalPayments.add(shared.totalWithdrawals)
+      : receivedUsdByCustomer.get(c.id) ?? new Prisma.Decimal(0);
     const signedIlsN = computeSignedFromTotals(
       Number(expectedIls.toFixed(4)),
       Number(receivedIls.toFixed(4)),
@@ -859,13 +891,27 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     );
     const calculated = autoStatus(expectedIls, receivedIls);
     const override = overrideMap.get(c.id) ?? null;
-    const oc = orderCountByCustomer.get(c.id) ?? 0;
-    const balUsdDec = expectedUsd.sub(receivedUsd);
+    const oc = shared?.ordersCount ?? orderCountByCustomer.get(c.id) ?? 0;
+    const balUsdDec = shared?.balance ?? expectedUsd.sub(receivedUsd);
     const debtUsdPos = balUsdDec.gt(0) ? Number(balUsdDec.toFixed(4)) : 0;
     const paymentFlow = computePaymentFlow(calculated, debtUsdPos);
     const lastDt = lastOrderDateByCustomer.get(c.id);
     const maxN = maxAhByCustomer.get(c.id) ?? 0;
     const lifetimeUsd = lifetimeOrdersUsdByCustomer.get(c.id) ?? new Prisma.Decimal(0);
+    if (c.customerCode === "90006") {
+      console.info("[getCustomerBalanceReport.balance]", {
+        customerId: c.id,
+        customerCode: c.customerCode,
+        sourceCountry: orderCountryPrisma ?? null,
+        fromYmd: query.fromYmd?.trim() || null,
+        toYmd: query.toYmd?.trim() || null,
+        ordersCount: shared?.ordersCount ?? oc,
+        ordersTotal: (shared?.totalOrders ?? expectedUsd).toFixed(2),
+        withdrawalsTotal: (shared?.totalWithdrawals ?? new Prisma.Decimal(0)).toFixed(2),
+        paymentsTotal: (shared?.totalPayments ?? receivedUsd).toFixed(2),
+        balance: balUsdDec.toFixed(2),
+      });
+    }
     return {
       customerId: c.id,
       customerName: primaryCustomerDisplayName({
@@ -877,6 +923,9 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       customerCode: c.customerCode,
       lifetimeOrdersUSD: money(lifetimeUsd),
       ordersCount: oc,
+      totalOrdersUSD: money(expectedUsd),
+      totalPaymentsUSD: money(receivedUsd),
+      totalBalanceUSD: money(balUsdDec),
       totalOrdersILS: money(expectedIls),
       totalPaymentsILS: money(receivedIls),
       totalDealsILS: money(dealsIls),
@@ -887,7 +936,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       noOrdersInRange: oc === 0,
       balanceILS: money(balanceIls),
       signedIls: money(new Prisma.Decimal(String(signedIlsN))),
-      balanceUSD: money(expectedUsd.sub(receivedUsd)),
+      balanceUSD: money(balUsdDec),
       signedUsd: money(new Prisma.Decimal(String(signedUsdN))),
       expectedILS: money(expectedIls),
       receivedILS: money(receivedIls),
@@ -911,8 +960,8 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
 
   let filtered = rows.filter((r) => matchesDebtFilter(r, debtFilter));
 
-  if (minB != null) filtered = filtered.filter((r) => rowBalanceNumber(r.totalBalanceILS) >= minB);
-  if (maxB != null) filtered = filtered.filter((r) => rowBalanceNumber(r.totalBalanceILS) <= maxB);
+  if (minB != null) filtered = filtered.filter((r) => rowBalanceUsdNumber(r.totalBalanceUSD) >= minB);
+  if (maxB != null) filtered = filtered.filter((r) => rowBalanceUsdNumber(r.totalBalanceUSD) <= maxB);
 
   const curView = query.filters?.currencyView;
   if (curView === "ILS") {
@@ -973,7 +1022,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   const sorted = [...working].sort((a, b) => {
     if (sort === "balance_desc") return rowSignedIlsNumber(b) - rowSignedIlsNumber(a);
     if (sort === "balance_asc") return rowSignedIlsNumber(a) - rowSignedIlsNumber(b);
-    if (sort === "orders_total") return rowOrdersTotalNumber(b.totalOrdersILS) - rowOrdersTotalNumber(a.totalOrdersILS);
+    if (sort === "orders_total") return rowOrdersTotalNumber(b.totalOrdersUSD) - rowOrdersTotalNumber(a.totalOrdersUSD);
     if (sort === "week_desc") return (b.maxAhWeekNum || 0) - (a.maxAhWeekNum || 0) || a.customerName.localeCompare(b.customerName, "he");
     if (sort === "week_asc") return (a.maxAhWeekNum || 0) - (b.maxAhWeekNum || 0) || a.customerName.localeCompare(b.customerName, "he");
     if (sort === "last_order_desc") {
@@ -1184,10 +1233,10 @@ export async function getCustomerBalancePreviewAction(
   const phone = [customer.phone, customer.phone2].filter(Boolean).join(" · ") || "—";
   let lastPaymentLabel = "—";
   if (lastPay) {
-    const amt = money(paymentIlsValue(lastPay));
+    const amt = money(lastPay.amountUsd ?? new Prisma.Decimal(0));
     const code = lastPay.paymentCode?.trim() || "—";
     const dt = lastPay.paymentDate ? formatLocalYmd(lastPay.paymentDate) : "";
-    lastPaymentLabel = dt ? `${code} · ${dt} · ₪${amt}` : `${code} · ₪${amt}`;
+    lastPaymentLabel = dt ? `${code} · ${dt} · $${amt}` : `${code} · $${amt}`;
   }
 
   return {
@@ -1214,17 +1263,17 @@ export async function exportCustomerBalancesAction(
     const payload = await listCustomerBalancesAction({ ...query, page: 1, limit: 10000 });
     if (payload.rows.length === 0) return { ok: false, error: "אין שורות לייצוא" };
 
-    const headers = ["קוד לקוח", "שם לקוח", "סה\"כ הזמנות מצטבר", "סה\"כ הזמנות", "סה\"כ תשלומים", "יתרה", "סטטוס"];
+    const headers = ["קוד לקוח", "שם לקוח", "סה\"כ הזמנות מצטבר ($)", "סה\"כ הזמנות ($)", "סה\"כ תשלומים ($)", "יתרה ($)", "סטטוס"];
     const data = payload.rows.map((r) => {
-      const b = rowBalanceNumber(r.totalBalanceILS);
+      const b = rowBalanceUsdNumber(r.totalBalanceUSD);
       const status = b > 0.01 ? "חייב" : b < -0.01 ? "זכות" : "מאוזן";
       return [
         r.customerCode ?? "—",
         r.customerName,
         r.lifetimeOrdersUSD,
-        r.totalOrdersILS,
-        r.totalPaymentsILS,
-        r.totalBalanceILS,
+        r.totalOrdersUSD,
+        r.totalPaymentsUSD,
+        r.totalBalanceUSD,
         status,
       ];
     });

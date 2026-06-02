@@ -166,6 +166,9 @@ export function AdminWindowStack({
                     customerId={w.props.customerId}
                     customerName={w.props.customerName}
                     initialTab={w.props.initialTab}
+                    ledgerFromYmd={w.props.ledgerFromYmd}
+                    ledgerToYmd={w.props.ledgerToYmd}
+                    ledgerSourceCountry={w.props.ledgerSourceCountry}
                   />
                 ) : null}
                 {w.type === "createCustomer" && canCreateCustomer ? (

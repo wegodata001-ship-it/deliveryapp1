@@ -1019,6 +1019,7 @@ export async function getCustomerLedgerAction(params: {
   customerId: string;
   fromYmd?: string | null;
   toYmd?: string | null;
+  sourceCountry?: string | null;
 }): Promise<CustomerLedgerPayload | null> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["view_customer_card", "view_customers", "create_orders", "edit_orders"])) {

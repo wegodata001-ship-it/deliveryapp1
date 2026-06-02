@@ -24,7 +24,7 @@ import {
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { TableSkeleton } from "@/components/ui/loading";
 import { MoneyInput } from "@/components/ui/MoneyInput";
-import { formatIlsDisplay, formatUsdDisplay, parseMoneyString, parseMoneyStringOrZero } from "@/lib/money-format";
+import { formatUsdDisplay, parseMoneyString, parseMoneyStringOrZero } from "@/lib/money-format";
 import { withQuery } from "@/lib/admin-url-query";
 import { ReportWeekNav } from "@/components/admin/ReportWeekNav";
 import { ORDER_COUNTRY_CODES, orderCountryLabel, type OrderCountryCode } from "@/lib/order-countries";
@@ -45,7 +45,7 @@ const SORT_LABELS: Record<CustomerBalanceSort, string> = {
   balance_desc: "יתרה: גבוה → נמוך",
   balance_asc: "יתרה: נמוך → גבוה",
   name: "שם לקוח",
-  orders_total: 'סה"כ הזמנות (ש"ח)',
+  orders_total: 'סה"כ הזמנות ($)',
   week_desc: "שבוע AH: גבוה → נמוך",
   week_asc: "שבוע AH: נמוך → גבוה",
   last_order_desc: "תאריך הזמנה אחרונה: חדש → ישן",
@@ -56,10 +56,6 @@ type BalanceUiTone = "debt" | "balanced" | "credit";
 
 function dec(value: string): number {
   return parseMoneyStringOrZero(value);
-}
-
-function moneyIlsCell(value: string): string {
-  return formatIlsDisplay(parseMoneyStringOrZero(value));
 }
 
 function moneyUsdCell(value: string): string {
@@ -341,6 +337,8 @@ export function CustomerBalancesClient() {
           customerId: row.customerId,
           customerName: row.customerName,
           initialTab: "ledger",
+          ledgerToYmd: balancesFilters.toYmd.trim() || null,
+          ledgerSourceCountry: balancesFilters.sourceCountry || null,
         },
       });
       requestAnimationFrame(() => {
@@ -349,7 +347,7 @@ export function CustomerBalancesClient() {
         perf.openModalMs = Math.round(now() - t0);
       });
     },
-    [openWindow],
+    [balancesFilters.sourceCountry, balancesFilters.toYmd, openWindow],
   );
 
   const openCustomerPayment = useCallback(
@@ -391,7 +389,7 @@ export function CustomerBalancesClient() {
     hoverTimerRef.current = window.setTimeout(() => {
       const seq = ++previewGen.current;
       setPreviewBusy(true);
-      void getCustomerBalancePreviewAction(row.customerId, row.totalBalanceILS, row.ordersCount)
+      void getCustomerBalancePreviewAction(row.customerId, row.totalBalanceUSD, row.ordersCount)
         .then((p) => {
           if (previewGen.current !== seq || hoverIdRef.current !== row.customerId) return;
           setPreview(p);
@@ -442,7 +440,7 @@ export function CustomerBalancesClient() {
             <Wallet className="adm-balances-kpi-compact__icon" size={15} strokeWidth={2.35} aria-hidden />
             <span className="adm-balances-kpi-compact__text">
               סה״כ תשלומים:{" "}
-              <strong dir="ltr">₪{formatIlsDisplay(parseMoneyStringOrZero(stats.totalPaymentsIls))}</strong>
+              <strong dir="ltr">{formatUsdDisplay(parseMoneyStringOrZero(stats.totalPaymentsUsd))}</strong>
             </span>
           </span>
           <span className="adm-balances-kpi-compact__divider" aria-hidden />
@@ -450,7 +448,7 @@ export function CustomerBalancesClient() {
             <FileText className="adm-balances-kpi-compact__icon" size={15} strokeWidth={2.35} aria-hidden />
             <span className="adm-balances-kpi-compact__text">
               סה״כ יתרות פתוחות:{" "}
-              <strong dir="ltr">₪{formatIlsDisplay(parseMoneyStringOrZero(stats.totalDebtIls))}</strong>
+              <strong dir="ltr">{formatUsdDisplay(parseMoneyStringOrZero(stats.totalDebtUsd))}</strong>
             </span>
           </span>
         </div>
@@ -492,7 +490,7 @@ export function CustomerBalancesClient() {
               <Wallet size={14} strokeWidth={2.25} aria-hidden /> סה״כ תשלומים
             </span>
             <span className="adm-balances-kpi-val" dir="ltr">
-              ₪{formatIlsDisplay(parseMoneyStringOrZero(stats.totalPaymentsIls))}
+              {formatUsdDisplay(parseMoneyStringOrZero(stats.totalPaymentsUsd))}
             </span>
           </div>
           <div className="adm-balances-kpi-card adm-balances-kpi-card--open adm-balances-kpi-card--wide">
@@ -500,7 +498,7 @@ export function CustomerBalancesClient() {
               <Banknote size={14} strokeWidth={2.25} aria-hidden /> סה״כ יתרות פתוחות
             </span>
             <span className="adm-balances-kpi-val" dir="ltr">
-              ₪{formatIlsDisplay(parseMoneyStringOrZero(stats.totalDebtIls))}
+              {formatUsdDisplay(parseMoneyStringOrZero(stats.totalDebtUsd))}
             </span>
           </div>
         </div>
@@ -667,7 +665,7 @@ export function CustomerBalancesClient() {
             />
           </label>
           <label>
-            יתרה מינ׳
+            יתרה מינ׳ ($)
             <MoneyInput
               placeholder="מינימום"
               value={parseMoneyString(searchDraft.minBalanceIls)}
@@ -675,7 +673,7 @@ export function CustomerBalancesClient() {
             />
           </label>
           <label>
-            יתרה מקס׳
+            יתרה מקס׳ ($)
             <MoneyInput
               placeholder="מקסימום"
               value={parseMoneyString(searchDraft.maxBalanceIls)}
@@ -711,10 +709,10 @@ export function CustomerBalancesClient() {
               <tr>
                 <th className="adm-balances-th-code">קוד לקוח</th>
                 <th className="adm-balances-th-name">שם לקוח</th>
-                <th className="adm-balances-th-num">סה&quot;כ הזמנות מצטבר</th>
-                <th className="adm-balances-th-num">סה&quot;כ הזמנות</th>
-                <th className="adm-balances-th-num">סה&quot;כ תשלומים</th>
-                <th className="adm-balances-th-balance">יתרה</th>
+                <th className="adm-balances-th-num">סה&quot;כ הזמנות מצטבר ($)</th>
+                <th className="adm-balances-th-num">סה&quot;כ הזמנות ($)</th>
+                <th className="adm-balances-th-num">סה&quot;כ תשלומים ($)</th>
+                <th className="adm-balances-th-balance">יתרה ($)</th>
                 <th className="adm-balances-th-status">סטטוס</th>
                 <th className="adm-balances-th-actions">פעולות</th>
               </tr>
@@ -730,7 +728,7 @@ export function CustomerBalancesClient() {
                 </tr>
               ) : (
                 payload.rows.map((row) => {
-                  const ui = balanceUi(row.totalBalanceILS);
+                  const ui = balanceUi(row.totalBalanceUSD);
                   return (
                     <tr
                       key={row.customerId}
@@ -747,14 +745,14 @@ export function CustomerBalancesClient() {
                         <span dir="ltr">{moneyUsdCell(row.lifetimeOrdersUSD)}</span>
                       </td>
                       <td className="adm-balances-td-num">
-                        <span dir="ltr">{moneyIlsCell(row.totalOrdersILS)}</span>
+                        <span dir="ltr">{moneyUsdCell(row.totalOrdersUSD)}</span>
                       </td>
                       <td className="adm-balances-td-num">
-                        <span dir="ltr">{moneyIlsCell(row.totalPaymentsILS)}</span>
+                        <span dir="ltr">{moneyUsdCell(row.totalPaymentsUSD)}</span>
                       </td>
                       <td className={`adm-balances-td-balance ${balanceToneClass(ui.tone)}`}>
                         <span dir="ltr" className={`adm-bal-amt ${balanceToneClass(ui.tone)}`}>
-                          {moneyIlsCell(row.totalBalanceILS)}
+                          {moneyUsdCell(row.totalBalanceUSD)}
                         </span>
                       </td>
                       <td className="adm-balances-td-status">
@@ -821,7 +819,7 @@ export function CustomerBalancesClient() {
                 <p>
                   <span>יתרה</span>{" "}
                   <span dir="ltr" className={balanceToneClass(balanceUi(preview.balanceIls).tone)}>
-                    ₪{moneyIlsCell(preview.balanceIls)}
+                    {moneyUsdCell(hoverRow.balanceUSD)}
                   </span>
                 </p>
               </>

@@ -12,6 +12,9 @@ export type CustomerCardWindowProps = {
   customerId?: string | null;
   customerName?: string | null;
   initialTab?: "details" | "ledger";
+  ledgerFromYmd?: string | null;
+  ledgerToYmd?: string | null;
+  ledgerSourceCountry?: string | null;
   /** נתונים שנטענו בשרת — מונע POST /admin בכניסה לדף */
   initialSnap?: CustomerCardSnapshot | null;
 };
