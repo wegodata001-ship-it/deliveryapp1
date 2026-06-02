@@ -20,6 +20,7 @@ import {
   orderCustomerChargeUsd,
   orderCustomerCreditUsd,
 } from "@/lib/debt-withdrawal-order";
+import { OS } from "@/lib/order-status-slugs";
 
 export type CustomerBalanceStatus = "NOT_PAID" | "PARTIAL" | "PAID" | "PROBLEM" | "PAUSED";
 

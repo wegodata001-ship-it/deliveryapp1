@@ -6,7 +6,6 @@ import {
   activityActionLabelHe,
 } from "@/lib/activity-audit";
 import {
-  ACTIVITY_ACTIVE_WINDOW_MINUTES,
   activityDashboardUserWhere,
   activityPresenceStatus,
   activityPresenceStatusLabel,
@@ -130,5 +129,3 @@ export async function getActivityDashboardAction(): Promise<ActivityPayload> {
     },
   };
 }
-
-export { ACTIVITY_ACTIVE_WINDOW_MINUTES };
