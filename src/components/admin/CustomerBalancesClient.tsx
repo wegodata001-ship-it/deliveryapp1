@@ -237,9 +237,10 @@ export function CustomerBalancesClient() {
     setTableLoading(true);
     setErr(null);
     const perf = (window as any).__WEGO_CUSTCARD_PERF;
+    let refreshT0: number | null = null;
     if (perf?.startedAt && typeof perf.refreshBalancesMs === "number") {
       const now = typeof performance !== "undefined" ? performance.now() : Date.now();
-      if (now - perf.startedAt < 2000) perf.refreshBalancesMs += 1;
+      if (now - perf.startedAt < 5000) refreshT0 = now;
     }
     void listCustomerBalancesAction(buildListQuery(page))
       .then((next) => {
@@ -253,6 +254,11 @@ export function CustomerBalancesClient() {
       })
       .finally(() => {
         if (gen !== fetchGenRef.current) return;
+        if (refreshT0 != null) {
+          const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+          const perf2 = (window as any).__WEGO_CUSTCARD_PERF;
+          if (perf2?.startedAt) perf2.refreshBalancesMs = Math.round((perf2.refreshBalancesMs ?? 0) + (now - refreshT0));
+        }
         setTableLoading(false);
       });
   }, [urlReady, page, buildListQuery]);
@@ -307,14 +313,26 @@ export function CustomerBalancesClient() {
     (row: CustomerBalanceRow) => {
       const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
       const t0 = now();
+      if (hoverTimerRef.current != null) {
+        window.clearTimeout(hoverTimerRef.current);
+        hoverTimerRef.current = null;
+      }
+      hoverIdRef.current = null;
+      setHoverId(null);
+      setHoverRow(null);
+      setPreview(null);
+      setPreviewBusy(false);
       (window as any).__WEGO_CUSTCARD_PERF = {
         startedAt: t0,
         customerId: row.customerId,
         openModalMs: 0,
-        fetchCardMs: 0,
-        renderCardMs: 0,
+        fetchCustomerMs: 0,
+        fetchOrdersMs: 0,
+        fetchPaymentsMs: 0,
+        calculateBalanceMs: 0,
+        renderModalMs: 0,
         refreshBalancesMs: 0,
-        refreshKpiMs: 0,
+        refreshStatsMs: 0,
         hydrateMs: 0,
       };
       openWindow({
@@ -361,6 +379,11 @@ export function CustomerBalancesClient() {
       setPreview(null);
       setPreviewBusy(false);
       return;
+    }
+    const perf = (window as any).__WEGO_CUSTCARD_PERF;
+    if (perf?.startedAt) {
+      const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+      if (now - perf.startedAt < 5000) return;
     }
     hoverIdRef.current = row.customerId;
     setHoverId(row.customerId);

@@ -39,7 +39,22 @@ export type CustomerLedgerPayload = {
   /** סה"כ משיכות מחוב (USD) */
   totalWithdrawalsUsd: string;
   balanceUsd: string;
+  perf?: {
+    fetchOrdersMs: number;
+    fetchPaymentsMs: number;
+    calculateBalanceMs: number;
+    totalMs: number;
+  };
 };
+
+async function timed<T>(add: (ms: number) => void, fn: () => Promise<T>): Promise<T> {
+  const t0 = Date.now();
+  try {
+    return await fn();
+  } finally {
+    add(Date.now() - t0);
+  }
+}
 
 function paymentUsdEquivalent(p: {
   amountUsd: Prisma.Decimal | null;
@@ -77,6 +92,10 @@ export async function buildCustomerAccountLedger(params: {
   fromYmd?: string | null;
   toYmd?: string | null;
 }): Promise<CustomerLedgerPayload> {
+  const totalT0 = Date.now();
+  let fetchOrdersMs = 0;
+  let fetchPaymentsMs = 0;
+  let calculateBalanceMs = 0;
   const id = params.customerId.trim();
   const fromFilterSet = Boolean(params.fromYmd?.trim());
   const from = fromFilterSet ? parseLocalDate(params.fromYmd!.trim()) : new Date(2000, 0, 1);
@@ -84,55 +103,64 @@ export async function buildCustomerAccountLedger(params: {
 
   const [preOrders, prePayments, orders, payments] = await Promise.all([
     fromFilterSet
-      ? prisma.order.findMany({
-          where: { customerId: id, deletedAt: null, orderDate: { lt: from } },
-          select: {
-            status: true,
-            totalUsd: true,
-            amountUsd: true,
-            commissionUsd: true,
-            debtWithdrawalUsd: true,
-          },
-        })
+      ? timed((ms) => (fetchOrdersMs += ms), () =>
+          prisma.order.findMany({
+            where: { customerId: id, deletedAt: null, orderDate: { lt: from } },
+            select: {
+              status: true,
+              totalUsd: true,
+              amountUsd: true,
+              commissionUsd: true,
+              debtWithdrawalUsd: true,
+            },
+          }),
+        )
       : Promise.resolve([]),
     fromFilterSet
-      ? prisma.payment.findMany({
-          where: { customerId: id, isPaid: true, paymentDate: { lt: from } },
-          select: {
-            amountUsd: true,
-            amountIls: true,
-            exchangeRate: true,
-          },
-        })
+      ? timed((ms) => (fetchPaymentsMs += ms), () =>
+          prisma.payment.findMany({
+            where: { customerId: id, isPaid: true, paymentDate: { lt: from } },
+            select: {
+              amountUsd: true,
+              amountIls: true,
+              exchangeRate: true,
+            },
+          }),
+        )
       : Promise.resolve([]),
-    prisma.order.findMany({
-      where: { customerId: id, deletedAt: null, orderDate: { gte: from, lte: to } },
-      orderBy: { orderDate: "asc" },
-      select: {
-        id: true,
-        orderNumber: true,
-        orderDate: true,
-        status: true,
-        totalUsd: true,
-        amountUsd: true,
-        commissionUsd: true,
-        debtWithdrawalUsd: true,
-      },
-    }),
-    prisma.payment.findMany({
-      where: { customerId: id, isPaid: true, paymentDate: { gte: from, lte: to } },
-      orderBy: { paymentDate: "asc" },
-      select: {
-        id: true,
-        paymentCode: true,
-        paymentDate: true,
-        amountUsd: true,
-        amountIls: true,
-        exchangeRate: true,
-      },
-    }),
+    timed((ms) => (fetchOrdersMs += ms), () =>
+      prisma.order.findMany({
+        where: { customerId: id, deletedAt: null, orderDate: { gte: from, lte: to } },
+        orderBy: { orderDate: "asc" },
+        select: {
+          id: true,
+          orderNumber: true,
+          orderDate: true,
+          status: true,
+          totalUsd: true,
+          amountUsd: true,
+          commissionUsd: true,
+          debtWithdrawalUsd: true,
+        },
+      }),
+    ),
+    timed((ms) => (fetchPaymentsMs += ms), () =>
+      prisma.payment.findMany({
+        where: { customerId: id, isPaid: true, paymentDate: { gte: from, lte: to } },
+        orderBy: { paymentDate: "asc" },
+        select: {
+          id: true,
+          paymentCode: true,
+          paymentDate: true,
+          amountUsd: true,
+          amountIls: true,
+          exchangeRate: true,
+        },
+      }),
+    ),
   ]);
 
+  const calcT0 = Date.now();
   let openingBalance = new Prisma.Decimal(0);
   if (fromFilterSet) {
     let preCharges = new Prisma.Decimal(0);
@@ -242,6 +270,26 @@ export async function buildCustomerAccountLedger(params: {
       isDebtWithdrawal: ev.isDebtWithdrawal,
     });
   }
+  calculateBalanceMs += Date.now() - calcT0;
+
+  const perf = {
+    fetchOrdersMs,
+    fetchPaymentsMs,
+    calculateBalanceMs,
+    totalMs: Date.now() - totalT0,
+  };
+  if (perf.totalMs > 500) {
+    console.table({
+      fetchCustomerMs: 0,
+      fetchOrdersMs: Math.round(perf.fetchOrdersMs),
+      fetchPaymentsMs: Math.round(perf.fetchPaymentsMs),
+      calculateBalanceMs: Math.round(perf.calculateBalanceMs),
+      refreshBalancesMs: 0,
+      refreshStatsMs: 0,
+      renderModalMs: 0,
+      totalMs: Math.round(perf.totalMs),
+    });
+  }
 
   return {
     rows,
@@ -249,5 +297,6 @@ export async function buildCustomerAccountLedger(params: {
     totalPaymentsUsd: totalPayments.toFixed(2),
     totalWithdrawalsUsd: totalWithdrawals.toFixed(2),
     balanceUsd: balance.toFixed(2),
+    perf,
   };
 }

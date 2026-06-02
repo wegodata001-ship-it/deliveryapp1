@@ -121,8 +121,9 @@ export async function ensureOrderStatusSourceTable(): Promise<void> {
   });
 }
 
-/** קריאה מהירה — ללא ensure / מיגרציה */
+/** קריאה מהירה לקטלוג; מוודאת schema כי סביבות קיימות יכולות להיות בלי עמודות חדשות. */
 export async function readOrderStatusTagsFromDb(includeInactive: boolean): Promise<OrderStatusTag[]> {
+  await ensureOrderStatusSourceTable();
   statusesPerfStart("statuses.query");
   try {
     const rows = await prisma.$queryRaw<

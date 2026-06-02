@@ -206,21 +206,11 @@ export function CustomerCardWindowBody({
         setLoading(false);
         const perf2 = (window as any).__WEGO_CUSTCARD_PERF;
         if (perf2?.startedAt && perf2.customerId === customerId.trim()) {
-          perf2.fetchCardMs = Math.round(now() - fetchT0);
+          perf2.fetchCustomerMs = Math.round(now() - fetchT0);
           requestAnimationFrame(() => {
             const perf3 = (window as any).__WEGO_CUSTCARD_PERF;
             if (!perf3?.startedAt || perf3.customerId !== customerId.trim()) return;
-            perf3.renderCardMs = Math.round(now() - fetchT0);
-            const totalMs = Math.round(now() - perf3.startedAt);
-            console.table({
-              openModalMs: perf3.openModalMs ?? 0,
-              fetchCardMs: perf3.fetchCardMs ?? 0,
-              renderCardMs: perf3.renderCardMs ?? 0,
-              refreshBalancesMs: perf3.refreshBalancesMs ?? 0,
-              refreshKpiMs: perf3.refreshKpiMs ?? 0,
-              hydrateMs: perf3.hydrateMs ?? 0,
-              totalMs,
-            });
+            perf3.renderModalMs = Math.round(now() - perf3.startedAt);
           });
         }
       }
@@ -234,10 +224,35 @@ export function CustomerCardWindowBody({
     if (!customerId?.trim() || activeTab !== "ledger") return;
     let cancelled = false;
     setLedgerLoading(true);
+    const ledgerT0 = now();
     void getCustomerLedgerAction({ customerId, fromYmd, toYmd }).then((row) => {
       if (!cancelled) {
         setLedger(row);
         setLedgerLoading(false);
+        const perf = (window as any).__WEGO_CUSTCARD_PERF;
+        if (perf?.startedAt && perf.customerId === customerId.trim()) {
+          const ledgerPerf = row?.perf;
+          perf.fetchOrdersMs = Math.round(ledgerPerf?.fetchOrdersMs ?? 0);
+          perf.fetchPaymentsMs = Math.round(ledgerPerf?.fetchPaymentsMs ?? 0);
+          perf.calculateBalanceMs = Math.round(ledgerPerf?.calculateBalanceMs ?? 0);
+          perf.fetchLedgerTotalMs = Math.round(now() - ledgerT0);
+          requestAnimationFrame(() => {
+            const perf2 = (window as any).__WEGO_CUSTCARD_PERF;
+            if (!perf2?.startedAt || perf2.customerId !== customerId.trim()) return;
+            if (!perf2.renderModalMs) perf2.renderModalMs = Math.round(now() - perf2.startedAt);
+            const totalMs = Math.round(now() - perf2.startedAt);
+            console.table({
+              fetchCustomerMs: perf2.fetchCustomerMs ?? 0,
+              fetchOrdersMs: perf2.fetchOrdersMs ?? 0,
+              fetchPaymentsMs: perf2.fetchPaymentsMs ?? 0,
+              calculateBalanceMs: perf2.calculateBalanceMs ?? 0,
+              refreshBalancesMs: perf2.refreshBalancesMs ?? 0,
+              refreshStatsMs: perf2.refreshStatsMs ?? 0,
+              renderModalMs: perf2.renderModalMs ?? 0,
+              totalMs,
+            });
+          });
+        }
       }
     });
     return () => {
