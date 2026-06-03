@@ -6,16 +6,23 @@ import { prisma } from "@/lib/prisma";
 import { formatLocalYmd, parseOrdersListDateFilterFromSearchParams } from "@/lib/work-week";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { orderCaptureSplitMethodLabel } from "@/lib/order-capture-payment-methods";
-import { buildOrdersListWhereFromSearchParams } from "@/app/admin/orders/orders-list-where";
 import { getOrderStatusLabelMap, labelFromMap } from "@/lib/order-status-registry";
+import {
+  buildOrdersExportWhereFromPreset,
+  orderMatchesExportKpiAfterFetch,
+  ORDERS_EXPORT_NO_DATA_MSG,
+  ordersExportPresetLabel,
+  pdfLayoutModeForPreset,
+  type OrdersListExportPreset,
+  type OrdersPdfLayoutMode,
+} from "@/lib/orders-list-export-presets";
+import type { OrderStatusKpiKey } from "@/lib/orders-status-kpi-filter";
 import {
   formatSignedUsdDisplay,
   isDebtWithdrawalOrderStatus,
   orderDisplayUsdSigned,
 } from "@/lib/debt-withdrawal-order";
 import { LEGACY_ORDER_STATUS_SLUGS } from "@/lib/order-status-slugs";
-
-export type OrdersPdfExportMode = "regular" | "by_place" | "by_status" | "by_week";
 
 const PDF_EXPORT_MAX_ROWS = 15_000;
 
@@ -96,6 +103,7 @@ type PdfRow = {
   /** ל־by_place: קיבוץ לפי מקום תשלום (לא לפי כתובת לקוח) */
   placeKey: string;
   weekKey: string;
+  customerKey: string;
 };
 
 function cmpDateAscNumAsc(a: PdfRow, b: PdfRow): number {
@@ -205,14 +213,15 @@ function footerBlock(t: { n: number; usd: number; ils: number }): string {
   </div>`;
 }
 
-function groupKeyForMode(row: PdfRow, mode: OrdersPdfExportMode): string {
+function groupKeyForMode(row: PdfRow, mode: OrdersPdfLayoutMode): string {
   if (mode === "by_place") return row.placeKey;
   if (mode === "by_status") return row.statusHe;
   if (mode === "by_week") return row.weekKey?.trim() || "ללא שבוע";
+  if (mode === "by_customer") return row.customerKey;
   return "";
 }
 
-function sortKeys(keys: string[], mode: OrdersPdfExportMode, statusMap: Record<string, string>): string[] {
+function sortKeys(keys: string[], mode: OrdersPdfLayoutMode, statusMap: Record<string, string>): string[] {
   const k = [...keys];
   if (mode === "by_place") {
     k.sort((a, b) => a.localeCompare(b, "he", { sensitivity: "base" }));
@@ -232,6 +241,10 @@ function sortKeys(keys: string[], mode: OrdersPdfExportMode, statusMap: Record<s
     }
     return k;
   }
+  if (mode === "by_customer") {
+    k.sort((a, b) => a.localeCompare(b, "he", { sensitivity: "base" }));
+    return k;
+  }
   if (mode === "by_status") {
     k.sort((a, b) => {
       const sa = STATUS_GROUP_ORDER.find((x) => labelFromMap(statusMap, x) === a);
@@ -248,7 +261,8 @@ function sortKeys(keys: string[], mode: OrdersPdfExportMode, statusMap: Record<s
 
 export async function exportOrdersListPdfHtmlAction(
   sp: Record<string, string | string[] | undefined>,
-  mode: OrdersPdfExportMode,
+  preset: OrdersListExportPreset,
+  kpiStatusFilters: OrderStatusKpiKey[] = [],
 ): Promise<{ ok: true; html: string } | { ok: false; error: string }> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["view_orders"])) {
@@ -256,7 +270,8 @@ export async function exportOrdersListPdfHtmlAction(
   }
 
   const range = parseOrdersListDateFilterFromSearchParams(sp);
-  const where = buildOrdersListWhereFromSearchParams(sp);
+  const where = buildOrdersExportWhereFromPreset(sp, preset, kpiStatusFilters);
+  const layoutMode = pdfLayoutModeForPreset(preset);
 
   const [intakeLocationRows, raw, statusMap] = await Promise.all([
     prisma.intakeLocation.findMany({
@@ -299,7 +314,14 @@ export async function exportOrdersListPdfHtmlAction(
   ]);
 
   const truncated = raw.length > PDF_EXPORT_MAX_ROWS;
-  const rowsRaw = truncated ? raw.slice(0, PDF_EXPORT_MAX_ROWS) : raw;
+  let rowsRaw = truncated ? raw.slice(0, PDF_EXPORT_MAX_ROWS) : raw;
+  rowsRaw = rowsRaw.filter((r) =>
+    orderMatchesExportKpiAfterFetch(r.status, preset, kpiStatusFilters),
+  );
+
+  if (rowsRaw.length === 0) {
+    return { ok: false, error: ORDERS_EXPORT_NO_DATA_MSG };
+  }
 
   const intakeLocationNameById = (id: string | null | undefined): string | null => {
     if (!id) return null;
@@ -355,30 +377,25 @@ export async function exportOrdersListPdfHtmlAction(
       orderDate: od,
       placeKey,
       weekKey: r.weekCode?.trim() || "ללא שבוע",
+      customerKey: `${r.customerCodeSnapshot?.trim() || "—"} · ${customerName}`,
     };
   });
 
-  if (mode === "regular") {
+  if (layoutMode === "flat") {
     pdfRows.sort(cmpDateDescNumDesc);
   }
 
-  const modeTitle: Record<OrdersPdfExportMode, string> = {
-    regular: "רגיל",
-    by_place: "לפי מקום",
-    by_status: "לפי סטטוס",
-    by_week: "לפי שבוע",
-  };
-
-  const meta = `טווח: ${range.fromYmd} — ${range.toYmd} · מצב ייצוא: ${modeTitle[mode]} · סה״כ שורות: ${pdfRows.length}${truncated ? " (מוגבל לייצוא)" : ""}`;
+  const presetLabel = ordersExportPresetLabel(preset);
+  const meta = `טווח: ${range.fromYmd} — ${range.toYmd} · ייצוא: ${presetLabel} · סה״כ שורות: ${pdfRows.length}${truncated ? " (מוגבל לייצוא)" : ""}`;
   const warn = truncated ? `<div class="warn">הוצגו עד ${PDF_EXPORT_MAX_ROWS.toLocaleString("he-IL")} הזמנות בלבד בייצוא זה.</div>` : "";
 
   let body: string;
-  if (mode === "regular") {
+  if (layoutMode === "flat") {
     body = tableHtml(pdfRows) + footerBlock(sumTotals(pdfRows));
   } else {
     const map = new Map<string, PdfRow[]>();
     for (const row of pdfRows) {
-      const gk = groupKeyForMode(row, mode);
+      const gk = groupKeyForMode(row, layoutMode);
       const arr = map.get(gk) ?? [];
       arr.push(row);
       map.set(gk, arr);
@@ -386,7 +403,7 @@ export async function exportOrdersListPdfHtmlAction(
     for (const arr of map.values()) {
       arr.sort(cmpDateAscNumAsc);
     }
-    const keys = sortKeys([...map.keys()], mode, statusMap);
+    const keys = sortKeys([...map.keys()], layoutMode, statusMap);
     const parts: string[] = [];
     for (const key of keys) {
       const groupRows = map.get(key) ?? [];

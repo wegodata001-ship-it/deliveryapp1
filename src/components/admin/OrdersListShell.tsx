@@ -1,17 +1,20 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { OrdersListToolbar, type OrdersListToolbarProps } from "@/components/admin/OrdersListToolbar";
 import { useRouter } from "next/navigation";
 import { PaymentMethod } from "@prisma/client";
 import { OS } from "@/lib/order-status-slugs";
 import { useOrderStatusCatalog } from "@/components/admin/OrderStatusCatalogProvider";
 import { OrderStatusSelect } from "@/components/admin/OrderStatusSelect";
-import { ChevronDown, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import {
   updateOrderListPaymentLocationAction,
 } from "@/app/admin/capture/actions";
-import { exportOrdersListPdfHtmlAction, type OrdersPdfExportMode } from "@/app/admin/orders/export-orders-pdf-action";
+import { exportOrdersListPdfHtmlAction } from "@/app/admin/orders/export-orders-pdf-action";
+import { exportOrdersListExcelCsvAction } from "@/app/admin/orders/export-orders-excel-action";
+import { OrdersListExportSplitButton } from "@/components/admin/OrdersListExportSplitButton";
+import type { OrdersListExportPreset } from "@/lib/orders-list-export-presets";
 import { OrderEditLockGateModal, type OrderEditLockGatePayload } from "@/components/admin/OrderEditLockGateModal";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import {
@@ -192,14 +195,12 @@ export function OrdersListShell({
   const [listErr, setListErr] = useState<string | null>(null);
   const [lockModal, setLockModal] = useState<OrderEditLockGatePayload | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
-  const [pdfMenuOpen, setPdfMenuOpen] = useState(false);
   const [pdfLoading, setPdfLoading] = useState(false);
+  const [excelLoading, setExcelLoading] = useState(false);
   const [activeStatusFilters, setActiveStatusFilters] = useState<OrderStatusKpiKey[]>([]);
   const [extraPaymentLocationOptions, setExtraPaymentLocationOptions] = useState<
     { id: string; label: string }[]
   >([]);
-  const pdfWrapRef = useRef<HTMLDivElement>(null);
-
   const toggleStatusFilter = useCallback((key: OrderStatusKpiKey) => {
     setActiveStatusFilters((prev) => toggleStatusKpiFilter(prev, key));
   }, []);
@@ -258,16 +259,14 @@ export function OrdersListShell({
     setRows(orders);
   }, [orders]);
 
-  useEffect(() => {
-    if (!pdfMenuOpen) return;
-    const onDoc = (e: MouseEvent) => {
-      if (pdfWrapRef.current && !pdfWrapRef.current.contains(e.target as Node)) {
-        setPdfMenuOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [pdfMenuOpen]);
+  const readExportSearchParams = useCallback((): Record<string, string | string[] | undefined> => {
+    const sp = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
+    const raw: Record<string, string | string[] | undefined> = {};
+    sp.forEach((v, k) => {
+      raw[k] = v;
+    });
+    return raw;
+  }, []);
 
   const newOrder = useCallback(() => {
     if (!canCreateOrders) return;
@@ -496,55 +495,20 @@ export function OrdersListShell({
     return `orders_${range}_${stamp}`;
   }, [dateRange.fromYmd, dateRange.toYmd]);
 
-  const exportToExcel = useCallback(() => {
-    const headers = [
-      "מזהה הזמנה",
-      "תאריך",
-      "שבוע",
-      "קוד לקוח",
-      "שם לקוח",
-      "סכום לפני עמלה ($)",
-      "סכום כולל עמלה ($)",
-      "סכום בשקל (₪)",
-      "סטטוס הזמנה",
-      "צורת תשלום",
-      "מקום תשלום",
-    ];
-    const escape = (v: string | null | undefined) => {
-      const s = (v ?? "").toString().replace(/"/g, '""');
-      return /[",\n\r]/.test(s) ? `"${s}"` : s;
-    };
-    const lines: string[] = [headers.map(escape).join(",")];
-    for (const r of rows) {
-      lines.push(
-        [
-          r.orderNumber,
-          r.orderDateTime ?? r.orderDateYmd,
-          r.weekCode,
-          r.customerCode,
-          r.customerName,
-          signedExportMoney(r, "deal"),
-          signedExportMoney(r, "total"),
-          signedExportMoney(r, "ils"),
-          r.status,
-          paymentTypeLabel(r.paymentType),
-          r.paymentLocationName,
-        ]
-          .map(escape)
-          .join(","),
-      );
-    }
-    const BOM = "\uFEFF";
-    const blob = new Blob([BOM + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${exportFilenameBase}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }, [rows, exportFilenameBase]);
+  const downloadCsv = useCallback(
+    (csv: string, suffix: string) => {
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${exportFilenameBase}_${suffix}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    },
+    [exportFilenameBase],
+  );
 
   const printOrdersPdfHtml = useCallback((html: string) => {
     const iframe = document.createElement("iframe");
@@ -599,17 +563,15 @@ export function OrdersListShell({
   }, []);
 
   const runPdfExport = useCallback(
-    async (mode: OrdersPdfExportMode) => {
-      setPdfMenuOpen(false);
+    async (preset: OrdersListExportPreset) => {
       setListErr(null);
       setPdfLoading(true);
       try {
-        const sp = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
-        const raw: Record<string, string | string[] | undefined> = {};
-        sp.forEach((v, k) => {
-          raw[k] = v;
-        });
-        const res = await exportOrdersListPdfHtmlAction(raw, mode);
+        const res = await exportOrdersListPdfHtmlAction(
+          readExportSearchParams(),
+          preset,
+          activeStatusFilters,
+        );
         if (!res.ok) {
           setListErr(res.error);
           return;
@@ -621,7 +583,31 @@ export function OrdersListShell({
         setPdfLoading(false);
       }
     },
-    [printOrdersPdfHtml],
+    [printOrdersPdfHtml, readExportSearchParams, activeStatusFilters],
+  );
+
+  const runExcelExport = useCallback(
+    async (preset: OrdersListExportPreset) => {
+      setListErr(null);
+      setExcelLoading(true);
+      try {
+        const res = await exportOrdersListExcelCsvAction(
+          readExportSearchParams(),
+          preset,
+          activeStatusFilters,
+        );
+        if (!res.ok) {
+          setListErr(res.error);
+          return;
+        }
+        downloadCsv(res.csv, res.filenameHint);
+      } catch {
+        setListErr("לא ניתן להפיק Excel — אנא נסו שוב.");
+      } finally {
+        setExcelLoading(false);
+      }
+    },
+    [downloadCsv, readExportSearchParams, activeStatusFilters],
   );
 
   const createdByOptionsMerged = useMemo(() => {
@@ -667,54 +653,16 @@ export function OrdersListShell({
 
   const kpiExportActions = (
     <div className="adm-orders-kpi-export-actions" role="group" aria-label="ייצוא רשימה">
-      <div className="adm-orders-pdf-wrap adm-orders-pdf-wrap--kpi" ref={pdfWrapRef}>
-        <button
-          type="button"
-          className="adm-export-btn adm-export-btn--pdf adm-export-btn--pdf-split adm-orders-kpi-export-btn"
-          onClick={() => setPdfMenuOpen((o) => !o)}
-          disabled={pdfLoading}
-          aria-expanded={pdfMenuOpen}
-          aria-haspopup="menu"
-          title="ייצוא PDF"
-          aria-label="ייצוא PDF"
-        >
-          <span className="adm-orders-kpi-export-btn__label">PDF</span>
-          <ChevronDown size={14} strokeWidth={2.2} className="adm-orders-pdf-chev" aria-hidden />
-        </button>
-        {pdfMenuOpen ? (
-          <ul className="adm-orders-pdf-menu" role="menu" dir="rtl">
-            <li role="none">
-              <button type="button" role="menuitem" className="adm-orders-pdf-menu__btn" onClick={() => void runPdfExport("regular")}>
-                PDF רגיל
-              </button>
-            </li>
-            <li role="none">
-              <button type="button" role="menuitem" className="adm-orders-pdf-menu__btn" onClick={() => void runPdfExport("by_place")}>
-                PDF לפי מקום
-              </button>
-            </li>
-            <li role="none">
-              <button type="button" role="menuitem" className="adm-orders-pdf-menu__btn" onClick={() => void runPdfExport("by_status")}>
-                PDF לפי סטטוס
-              </button>
-            </li>
-            <li role="none">
-              <button type="button" role="menuitem" className="adm-orders-pdf-menu__btn" onClick={() => void runPdfExport("by_week")}>
-                PDF לפי שבוע
-              </button>
-            </li>
-          </ul>
-        ) : null}
-      </div>
-      <button
-        type="button"
-        className="adm-export-btn adm-export-btn--excel adm-orders-kpi-export-btn"
-        onClick={exportToExcel}
-        title="ייצוא Excel"
-        aria-label="ייצוא Excel"
-      >
-        <span className="adm-orders-kpi-export-btn__label">EXCEL</span>
-      </button>
+      <OrdersListExportSplitButton
+        variant="pdf"
+        disabled={pdfLoading}
+        onSelect={(preset) => void runPdfExport(preset)}
+      />
+      <OrdersListExportSplitButton
+        variant="excel"
+        disabled={excelLoading}
+        onSelect={(preset) => void runExcelExport(preset)}
+      />
     </div>
   );
 
