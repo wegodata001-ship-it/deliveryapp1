@@ -5,7 +5,12 @@ import { revalidatePath, revalidateTag } from "next/cache";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { invalidateCaptureHotPathCache } from "@/lib/capture-hot-path";
 import { finalRateFromBaseAndFee } from "@/lib/financial-calc";
-import { ensureDefaultFinancialSettings, getCurrentFinancialSettings } from "@/lib/financial-settings";
+import {
+  ensureDefaultFinancialSettings,
+  getCurrentFinancialSettings,
+  loadFinanceSettingsSerialized,
+  persistFinanceSettingsRow,
+} from "@/lib/financial-settings";
 import { prisma } from "@/lib/prisma";
 import { ensureOnce } from "@/lib/ensure-tables-once";
 import { ORDER_COUNTRY_CODES, parseSelectedCountriesJson, type OrderCountryCode } from "@/lib/order-countries";
@@ -109,17 +114,17 @@ function value(map: Map<string, string>, key: keyof typeof DEFAULT_SETTINGS): st
 
 export async function getAdminSettingsAction(): Promise<AdminSettingsPayload> {
   await ensureAllowed();
-  const financial = (await getCurrentFinancialSettings()) ?? (await ensureDefaultFinancialSettings());
+  const fin = await loadFinanceSettingsSerialized("admin-settings");
   const map = await readSettingsMap();
   const systemMode = map.get("systemMode") === "MAINTENANCE" ? "MAINTENANCE" : "ACTIVE";
 
   const selectedCountries = parseSelectedCountriesJson(map.get("selectedCountries") ?? undefined);
 
   return {
-    baseDollarRate: financial.baseDollarRate.toFixed(4),
-    finalDollarRate: financial.finalDollarRate.toFixed(4),
-    dollarFee: financial.dollarFee.toFixed(4),
-    defaultCommissionPercent: financial.defaultCommissionPercent.toFixed(4),
+    baseDollarRate: fin.baseDollarRate,
+    finalDollarRate: fin.finalDollarRate,
+    dollarFee: fin.dollarFee,
+    defaultCommissionPercent: fin.defaultCommissionPercent,
     vatRate: value(map, "vatRate"),
     defaultPaymentMethod: value(map, "defaultPaymentMethod"),
     currentWorkWeek: value(map, "currentWorkWeek"),
@@ -198,15 +203,13 @@ export async function saveAdminSettingsAction(input: AdminSettingsPayload): Prom
 
   const oldSettings = await getCurrentFinancialSettings();
 
-  await prisma.financialSettings.create({
-    data: {
-      baseDollarRate: base,
-      dollarFee,
-      finalDollarRate: finalRate,
-      defaultCommissionPercent: commissionDec,
-      source: "MANUAL",
-      updatedById: me.id,
-    },
+  await persistFinanceSettingsRow({
+    consumer: "admin-settings-legacy-save",
+    baseDollarRate: base,
+    dollarFee,
+    defaultCommissionPercent: commissionDec,
+    source: "MANUAL",
+    updatedById: me.id,
   });
 
   const allowed = new Set<string>(ORDER_COUNTRY_CODES);

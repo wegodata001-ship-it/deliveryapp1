@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import type { User } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { adminLayoutPerfRun } from "@/lib/admin-layout-perf";
 import { perfError, withPerfTimer } from "@/lib/perf-log";
 import {
   adminSessionCookieName,
@@ -22,9 +23,25 @@ import {
 
 export type AppUser = User & { permissionKeys: string[] };
 
-const USER_CACHE_TTL_MS = 120_000;
-const currentUserCache = new Map<string, { expiresAt: number; user: AppUser }>();
-const currentUserInFlight = new Map<string, Promise<AppUser | null>>();
+const USER_CACHE_TTL_MS = 300_000;
+const AUTH_CACHE_GLOBAL_KEY = "__wegoAuthUserCache";
+
+type AuthUserCacheState = {
+  map: Map<string, { expiresAt: number; user: AppUser }>;
+  inFlight: Map<string, Promise<AppUser | null>>;
+};
+
+function getAuthUserCacheState(): AuthUserCacheState {
+  const g = globalThis as typeof globalThis & { [AUTH_CACHE_GLOBAL_KEY]?: AuthUserCacheState };
+  if (!g[AUTH_CACHE_GLOBAL_KEY]) {
+    g[AUTH_CACHE_GLOBAL_KEY] = { map: new Map(), inFlight: new Map() };
+  }
+  return g[AUTH_CACHE_GLOBAL_KEY];
+}
+
+function sessionHasEmbeddedAuth(session: SessionPayload): boolean {
+  return session.role === "ADMIN" || Array.isArray(session.perms);
+}
 
 const userSelectCore = {
   id: true,
@@ -128,7 +145,15 @@ function appUserFromSession(session: SessionPayload): AppUser {
   };
 }
 
-async function fetchAndCacheUser(session: SessionPayload): Promise<AppUser | null> {
+function cacheAppUser(sessionSub: string, user: AppUser): AppUser {
+  getAuthUserCacheState().map.set(sessionSub, {
+    expiresAt: Date.now() + USER_CACHE_TTL_MS,
+    user,
+  });
+  return user;
+}
+
+async function fetchAndCacheUserFromDb(session: SessionPayload): Promise<AppUser | null> {
   const appUser = await fetchUserWithPermissionsJoin(session.sub);
   if (!appUser) {
     console.warn("[SESSION] JWT user not in DB — session invalid", {
@@ -136,11 +161,10 @@ async function fetchAndCacheUser(session: SessionPayload): Promise<AppUser | nul
       name: session.name,
       role: session.role,
     });
-    currentUserCache.delete(session.sub);
+    getAuthUserCacheState().map.delete(session.sub);
     return null;
   }
-  currentUserCache.set(session.sub, { expiresAt: Date.now() + USER_CACHE_TTL_MS, user: appUser });
-  return appUser;
+  return cacheAppUser(session.sub, appUser);
 }
 
 export const getCurrentUser = cache(async (): Promise<AppUser | null> => {
@@ -148,17 +172,22 @@ export const getCurrentUser = cache(async (): Promise<AppUser | null> => {
     const session = await getSessionPayload();
     if (!session || (session.role !== "ADMIN" && session.role !== "EMPLOYEE")) return null;
 
+    const { map, inFlight } = getAuthUserCacheState();
     const now = Date.now();
-    const cached = currentUserCache.get(session.sub);
+    const cached = map.get(session.sub);
     if (cached && cached.expiresAt > now) return cached.user;
 
-    const existing = currentUserInFlight.get(session.sub);
+    if (sessionHasEmbeddedAuth(session)) {
+      return cacheAppUser(session.sub, appUserFromSessionPayload(session));
+    }
+
+    const existing = inFlight.get(session.sub);
     if (existing) return existing;
 
-    const promise = fetchAndCacheUser(session).finally(() => {
-      currentUserInFlight.delete(session.sub);
+    const promise = fetchAndCacheUserFromDb(session).finally(() => {
+      inFlight.delete(session.sub);
     });
-    currentUserInFlight.set(session.sub, promise);
+    inFlight.set(session.sub, promise);
     return promise;
   });
 });
@@ -167,12 +196,12 @@ export async function requireAuth(): Promise<AppUser> {
   const trace = await getLoginTraceFromCookies();
   try {
     const load = async () => {
-      const session = await getSessionPayload();
+      const session = await adminLayoutPerfRun("layout.auth", getSessionPayload);
       logSessionPayload(session);
-      const user = await getCurrentUser();
+      const user = await adminLayoutPerfRun("layout.user", getCurrentUser);
       if (!user) {
         if (session) {
-          currentUserCache.delete(session.sub);
+          getAuthUserCacheState().map.delete(session.sub);
           // מחיקת cookie רק ב-Route Handler (לא ב-Server Component)
           redirect("/admin/logout?reason=session_invalid");
         }
@@ -254,19 +283,16 @@ export async function setAdminSession(user: User, trace?: LoginTraceContext): Pr
     (await cookies()).set(adminSessionCookieName, token, adminSessionCookieOptions);
   }
 
-  currentUserCache.set(user.id, {
-    user: Object.assign(user, { permissionKeys: perms }) as AppUser,
-    expiresAt: Date.now() + USER_CACHE_TTL_MS,
-  });
+  cacheAppUser(user.id, Object.assign(user, { permissionKeys: perms }) as AppUser);
 }
 
 /** לאחר שינוי הרשאות/תפקיד — מבטל cache בזיכרון כדי לטעון permissionKeys מחדש */
 export function invalidateAuthUserCache(userId: string): void {
-  currentUserCache.delete(userId);
+  getAuthUserCacheState().map.delete(userId);
 }
 
 export async function clearAdminSession(): Promise<void> {
   const payload = await getSessionPayload();
-  if (payload?.sub) currentUserCache.delete(payload.sub);
+  if (payload?.sub) getAuthUserCacheState().map.delete(payload.sub);
   (await cookies()).delete(adminSessionCookieName);
 }

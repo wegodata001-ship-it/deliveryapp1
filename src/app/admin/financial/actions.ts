@@ -3,15 +3,26 @@
 import { Prisma } from "@prisma/client";
 import { revalidatePath, revalidateTag } from "next/cache";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
-import { parseCommissionPercentString, sanitizeCommissionPercentInput } from "@/lib/commission-percent";
-import { finalRateFromBaseAndFee } from "@/lib/financial-calc";
-import { getCurrentFinancialSettings } from "@/lib/financial-settings";
-import { prisma } from "@/lib/prisma";
-import { invalidateCaptureHotPathCache } from "@/lib/capture-hot-path";
 import { FINANCIAL_LAYOUT_CACHE_TAG } from "@/lib/admin-layout-cache";
+import { parseCommissionPercentString, sanitizeCommissionPercentInput } from "@/lib/commission-percent";
+import {
+  FINANCIAL_SETTINGS_DEFAULTS,
+  loadFinanceSettingsSerialized,
+  loadLatestFinancialSettingsRow,
+  persistFinanceSettingsRow,
+  serializeFinancialRowFromDb,
+  type SerializedFinancial,
+} from "@/lib/financial-settings";
+import { invalidateCaptureHotPathCache } from "@/lib/capture-hot-path";
 import { recordActivityAudit } from "@/lib/activity-audit";
 
-export type FinancialSaveState = { ok: true } | { ok: false; error: string };
+export type FinancialSaveState =
+  | { ok: true; settings: SerializedFinancial }
+  | { ok: false; error: string };
+
+function logFinance(event: string, data?: Record<string, unknown>): void {
+  console.log(`[finance-settings] ${event}`, data ?? "");
+}
 
 function parseCommissionPercentField(raw: string): { ok: true; value: Prisma.Decimal } | { ok: false; error: string } {
   const cleaned = sanitizeCommissionPercentInput(raw.trim());
@@ -19,6 +30,46 @@ function parseCommissionPercentField(raw: string): { ok: true; value: Prisma.Dec
   if (!Number.isFinite(n) || n < 0) return { ok: false, error: "אחוז עמלה לא תקין" };
   if (n > 100) return { ok: false, error: "אחוז עמלה לא יכול לעלות על 100" };
   return { ok: true, value: new Prisma.Decimal(n.toString()).toDecimalPlaces(4, 4) };
+}
+
+function afterFinancialSettingsChanged(): void {
+  invalidateCaptureHotPathCache();
+  revalidateTag(FINANCIAL_LAYOUT_CACHE_TAG);
+  revalidatePath("/admin", "layout");
+  revalidatePath("/admin/settings");
+}
+
+/** טעינת הגדרות למודאל — query אחד, ללא cache */
+export async function loadFinancialSettingsAction(): Promise<SerializedFinancial> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["manage_settings"])) {
+    logFinance("loaded", { denied: true });
+    return serializeFinancialRowFromDb(null);
+  }
+  return loadFinanceSettingsSerialized("admin-settings");
+}
+
+function captureFinancePermissions(me: Awaited<ReturnType<typeof requireAuth>>): boolean {
+  return userHasAnyPermission(me, [
+    "create_orders",
+    "edit_orders",
+    "receive_payments",
+    "manage_settings",
+  ]);
+}
+
+/** טעינה לקליטת הזמנה — FinancialSettings בלבד */
+export async function loadFinancialSettingsForCaptureAction(): Promise<SerializedFinancial> {
+  const me = await requireAuth();
+  if (!captureFinancePermissions(me)) return serializeFinancialRowFromDb(null);
+  return loadFinanceSettingsSerialized("order-capture");
+}
+
+/** טעינה לקליטת תשלום — אותו מקור כמו הזמנה */
+export async function loadFinancialSettingsForPaymentCaptureAction(): Promise<SerializedFinancial> {
+  const me = await requireAuth();
+  if (!captureFinancePermissions(me)) return serializeFinancialRowFromDb(null);
+  return loadFinanceSettingsSerialized("payment-capture");
 }
 
 export async function saveManualFinancialSettings(input: {
@@ -31,13 +82,20 @@ export async function saveManualFinancialSettings(input: {
     return { ok: false, error: "אין הרשאה" };
   }
 
+  logFinance("save request", {
+    baseDollarRate: input.baseDollarRate,
+    dollarFee: input.dollarFee,
+    defaultCommissionPercent: input.defaultCommissionPercent,
+    userId: me.id,
+  });
+
   let base: Prisma.Decimal;
   let fee: Prisma.Decimal;
   try {
     base = new Prisma.Decimal(input.baseDollarRate.trim().replace(",", "."));
     fee = new Prisma.Decimal((input.dollarFee || "0").trim().replace(",", "."));
   } catch {
-    return { ok: false, error: "ערכי שער לא תקינים" };
+    return { ok: false, error: "שגיאה בשמירה" };
   }
 
   if (base.lte(0)) return { ok: false, error: "שער בסיס חייב להיות חיובי" };
@@ -46,91 +104,87 @@ export async function saveManualFinancialSettings(input: {
   const pctParsed = parseCommissionPercentField(input.defaultCommissionPercent ?? "0");
   if (!pctParsed.ok) return { ok: false, error: pctParsed.error };
 
-  const oldSettings = await getCurrentFinancialSettings();
-  const final = finalRateFromBaseAndFee(base, fee);
+  const oldRow = await loadLatestFinancialSettingsRow();
 
-  const saved = await prisma.financialSettings.create({
-    data: {
-      baseDollarRate: base,
-      dollarFee: fee,
-      finalDollarRate: final,
-      defaultCommissionPercent: pctParsed.value,
-      source: "MANUAL",
-      updatedById: me.id,
-    },
+  const saved = await persistFinanceSettingsRow({
+    consumer: "financial-modal-save",
+    baseDollarRate: base,
+    dollarFee: fee,
+    defaultCommissionPercent: pctParsed.value,
+    source: "MANUAL",
+    updatedById: me.id,
   });
 
-  console.log("Finance settings saved", {
+  const settings = serializeFinancialRowFromDb(
+    { ...saved, updatedBy: { fullName: me.fullName } },
+    me.fullName,
+  );
+
+  logFinance("saved", {
     id: saved.id,
-    baseDollarRate: saved.baseDollarRate.toString(),
-    dollarFee: saved.dollarFee.toString(),
-    finalDollarRate: saved.finalDollarRate.toString(),
-    defaultCommissionPercent: saved.defaultCommissionPercent?.toString() ?? null,
-    updatedById: saved.updatedById,
-    updatedAt: saved.updatedAt,
+    baseDollarRate: settings.baseDollarRate,
+    dollarFee: settings.dollarFee,
+    defaultCommissionPercent: settings.defaultCommissionPercent,
+    finalDollarRate: settings.finalDollarRate,
+    updatedById: me.id,
   });
 
-  invalidateCaptureHotPathCache();
-  revalidateTag(FINANCIAL_LAYOUT_CACHE_TAG);
-  revalidatePath("/admin", "layout");
-  revalidatePath("/admin/settings");
+  afterFinancialSettingsChanged();
 
   recordActivityAudit({
     userId: me.id,
     actionType: "FINANCE_SETTINGS_UPDATED",
     entityType: "FinancialSettings",
     metadata: {
-      oldBaseDollarRate: oldSettings?.baseDollarRate?.toString() ?? null,
-      oldDollarFee: oldSettings?.dollarFee?.toString() ?? null,
-      oldDefaultCommissionPercent: oldSettings?.defaultCommissionPercent?.toString() ?? null,
+      oldBaseDollarRate: oldRow?.baseDollarRate?.toString() ?? null,
+      oldDollarFee: oldRow?.dollarFee?.toString() ?? null,
+      oldDefaultCommissionPercent: oldRow?.defaultCommissionPercent?.toString() ?? null,
       newBaseDollarRate: base.toString(),
       newDollarFee: fee.toString(),
-      newFinalDollarRate: final.toString(),
+      newFinalDollarRate: settings.finalDollarRate,
       newDefaultCommissionPercent: pctParsed.value.toString(),
     },
   });
 
-  return { ok: true };
+  return { ok: true, settings };
 }
 
-/** דמו: שער אוטומטי קבוע; ניתן לחבר ספק חיצוני */
-export async function refreshAutomaticDollarRate(): Promise<FinancialSaveState> {
+/** איפוס לברירת מחדל מערכת (3.40 + 0.10 + 0% עמלה) */
+export async function resetFinancialSettingsToDefaultsAction(): Promise<FinancialSaveState> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["manage_settings"])) {
     return { ok: false, error: "אין הרשאה" };
   }
 
-  const latest = await getCurrentFinancialSettings();
-  const fee = latest?.dollarFee ?? new Prisma.Decimal(0);
-  const defaultPct = latest?.defaultCommissionPercent ?? new Prisma.Decimal(0);
-  const mockBase = new Prisma.Decimal("3.40");
-  const final = finalRateFromBaseAndFee(mockBase, fee);
+  logFinance("save request", { reset: true, userId: me.id });
 
-  await prisma.financialSettings.create({
-    data: {
-      baseDollarRate: mockBase,
-      dollarFee: fee,
-      finalDollarRate: final,
-      defaultCommissionPercent: defaultPct,
-      source: "AUTO",
-      updatedById: me.id,
-    },
+  const base = new Prisma.Decimal(FINANCIAL_SETTINGS_DEFAULTS.baseDollarRate);
+  const fee = new Prisma.Decimal(FINANCIAL_SETTINGS_DEFAULTS.dollarFee);
+
+  const saved = await persistFinanceSettingsRow({
+    consumer: "financial-modal-reset",
+    baseDollarRate: base,
+    dollarFee: fee,
+    defaultCommissionPercent: new Prisma.Decimal(0),
+    source: "MANUAL",
+    updatedById: me.id,
   });
 
-  invalidateCaptureHotPathCache();
-  revalidateTag(FINANCIAL_LAYOUT_CACHE_TAG);
-  revalidatePath("/admin", "layout");
+  const settings = serializeFinancialRowFromDb(
+    { ...saved, updatedBy: { fullName: me.fullName } },
+    me.fullName,
+  );
+
+  logFinance("saved", { reset: true, id: saved.id, ...settings });
+
+  afterFinancialSettingsChanged();
 
   recordActivityAudit({
     userId: me.id,
     actionType: "FINANCE_SETTINGS_UPDATED",
     entityType: "FinancialSettings",
-    metadata: {
-      oldBaseDollarRate: latest?.baseDollarRate?.toString() ?? null,
-      newBaseDollarRate: mockBase.toString(),
-      source: "AUTO",
-    },
+    metadata: { resetToDefaults: true },
   });
 
-  return { ok: true };
+  return { ok: true, settings };
 }

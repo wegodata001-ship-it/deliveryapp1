@@ -10,9 +10,11 @@ import { getOrderStatusLabelMap, labelFromMap } from "@/lib/order-status-registr
 import {
   buildOrdersExportWhereFromPreset,
   orderMatchesExportKpiAfterFetch,
-  ORDERS_EXPORT_NO_DATA_MSG,
+  ordersExportNoDataMessage,
   ordersExportPresetLabel,
+  paymentPlaceReportGroupKey,
   pdfLayoutModeForPreset,
+  sortPaymentPlaceReportGroupKeys,
   type OrdersListExportPreset,
   type OrdersPdfLayoutMode,
 } from "@/lib/orders-list-export-presets";
@@ -22,16 +24,7 @@ import {
   isDebtWithdrawalOrderStatus,
   orderDisplayUsdSigned,
 } from "@/lib/debt-withdrawal-order";
-import { LEGACY_ORDER_STATUS_SLUGS } from "@/lib/order-status-slugs";
-
 const PDF_EXPORT_MAX_ROWS = 15_000;
-
-const STATUS_GROUP_ORDER: string[] = [...LEGACY_ORDER_STATUS_SLUGS];
-
-function statusRank(s: string): number {
-  const i = STATUS_GROUP_ORDER.indexOf(s);
-  return i === -1 ? 999 : i;
-}
 
 function fmtUsd2(n: unknown): string | null {
   if (n == null) return null;
@@ -57,6 +50,14 @@ function fmtDateTime(d: Date | null): string | null {
   return `${dd}/${mm}/${yy} ${hh}:${min}`;
 }
 
+function fmtDateOnly(d: Date | null): string | null {
+  if (!d) return null;
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yy = d.getFullYear();
+  return `${dd}/${mm}/${yy}`;
+}
+
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, "&amp;")
@@ -78,12 +79,6 @@ function paymentLocationGroupKey(displayName: string | null | undefined): string
   return raw || EMPTY_PAYMENT_LOCATION_GROUP;
 }
 
-function ahWeekRank(code: string | null): number {
-  if (!code?.trim()) return 999_999;
-  const m = /^AH-(\d+)$/i.exec(code.trim());
-  return m?.[1] ? Number(m[1]) : 999_999;
-}
-
 type PdfRow = {
   orderNumber: string;
   orderDateTime: string;
@@ -95,15 +90,16 @@ type PdfRow = {
   totalIls: string;
   totalUsdNum: number;
   totalIlsNum: number;
+  sourceUsdNum: number;
+  commissionUsdNum: number;
   statusHe: string;
   status: string;
   paymentType: string;
   paymentLocation: string;
   orderDate: Date | null;
-  /** ל־by_place: קיבוץ לפי מקום תשלום (לא לפי כתובת לקוח) */
+  /** קיבוץ לפי שם מקום קליטה (IntakeLocation / PaymentPoint) */
   placeKey: string;
-  weekKey: string;
-  customerKey: string;
+  customerGroupId: string;
 };
 
 function cmpDateAscNumAsc(a: PdfRow, b: PdfRow): number {
@@ -118,6 +114,145 @@ function cmpDateDescNumDesc(a: PdfRow, b: PdfRow): number {
   const tb = b.orderDate?.getTime() ?? 0;
   if (ta !== tb) return tb - ta;
   return (b.orderNumber || "").localeCompare(a.orderNumber || "", undefined, { numeric: true });
+}
+
+function groupedPdfStyles(): string {
+  return `
+  .pdf-group-section{page-break-inside:avoid;break-inside:avoid-page;margin-bottom:18px}
+  .place-sep{text-align:center;color:#94a3b8;font-size:11px;letter-spacing:0.12em;margin:0 0 10px}
+  .cust-head-name{font-size:15px;font-weight:800}
+  .cust-head-code{font-size:12px;font-weight:600;color:#475569;margin-top:4px}
+  .pay-place-grand{
+    margin-top:28px;padding:14px 16px;
+    background:#1e293b;color:#fff;border-radius:10px;
+    page-break-inside:avoid;break-inside:avoid-page;
+  }
+  .pay-place-grand h2{font-size:15px;margin:0 0 10px;font-weight:800;color:#fff}
+  .pay-place-grand .grp-foot{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.25);color:#f8fafc}
+  .pay-place-grand .grp-foot strong{color:#fff}
+  .grp-foot--place-title{margin:0 0 4px;font-size:13px;font-weight:800;color:#334155}
+`;
+}
+
+type PaymentPlacesReportRow = {
+  orderNumber: string;
+  orderDate: string;
+  customerName: string;
+  weekCode: string;
+  sourceUsd: string;
+  commissionUsd: string;
+  totalIls: string;
+  sourceUsdNum: number;
+  commissionUsdNum: number;
+  totalIlsNum: number;
+  paymentPlaceKey: string;
+  orderDateSort: Date | null;
+};
+
+const PAYMENT_PLACES_TABLE_HEADERS = [
+  "מספר הזמנה",
+  "תאריך",
+  "לקוח",
+  "שבוע עבודה",
+  "סכום מקור",
+  "עמלה",
+  'סכום בשקל',
+];
+
+function sumPaymentPlaceTotals(rows: PaymentPlacesReportRow[]): {
+  n: number;
+  sourceUsd: number;
+  commissionUsd: number;
+  ils: number;
+} {
+  let sourceUsd = 0;
+  let commissionUsd = 0;
+  let ils = 0;
+  for (const r of rows) {
+    sourceUsd += r.sourceUsdNum;
+    commissionUsd += r.commissionUsdNum;
+    ils += r.totalIlsNum;
+  }
+  return { n: rows.length, sourceUsd, commissionUsd, ils };
+}
+
+function paymentPlaceGroupFooter(
+  t: { n: number; sourceUsd: number; commissionUsd: number; ils: number },
+  title = "סה״כ לאמצעי תשלום",
+): string {
+  const ilsStr = `₪ ${t.ils.toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const sourceStr = `${t.sourceUsd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $`;
+  const commStr = `${t.commissionUsd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $`;
+  return `<div class="grp-foot--place-title">${escapeHtml(title)}</div>
+  <div class="grp-foot" dir="rtl">
+    <span>סה״כ הזמנות: <strong>${t.n.toLocaleString("he-IL")}</strong></span>
+    <span>סכום מקור: <strong>${sourceStr}</strong></span>
+    <span>עמלה: <strong>${commStr}</strong></span>
+    <span>סכום בשקל: <strong>${ilsStr}</strong></span>
+  </div>`;
+}
+
+function renderPaymentPlacesTable(rows: PaymentPlacesReportRow[]): string {
+  const body = rows
+    .map((r) => {
+      const cells = [
+        escapeHtml(r.orderNumber),
+        escapeHtml(r.orderDate),
+        escapeHtml(r.customerName),
+        escapeHtml(r.weekCode),
+        escapeHtml(r.sourceUsd),
+        escapeHtml(r.commissionUsd),
+        escapeHtml(r.totalIls),
+      ];
+      return `<tr>${cells
+        .map((c, i) => `<td class="${i === 2 ? "cust" : i === 6 ? "ils" : i === 4 || i === 5 ? "usd" : ""}">${c}</td>`)
+        .join("")}</tr>`;
+    })
+    .join("");
+  return `<table><thead><tr>${PAYMENT_PLACES_TABLE_HEADERS.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function renderPaymentPlacesReportBody(rows: PaymentPlacesReportRow[]): string {
+  const map = new Map<string, PaymentPlacesReportRow[]>();
+  for (const row of rows) {
+    const arr = map.get(row.paymentPlaceKey) ?? [];
+    arr.push(row);
+    map.set(row.paymentPlaceKey, arr);
+  }
+  for (const arr of map.values()) {
+    arr.sort(cmpPaymentPlaceRowAsc);
+  }
+  const keys = sortPaymentPlaceReportGroupKeys([...map.keys()]);
+  const parts: string[] = [];
+  let grand = { n: 0, sourceUsd: 0, commissionUsd: 0, ils: 0 };
+
+  for (const key of keys) {
+    const groupRows = map.get(key) ?? [];
+    if (groupRows.length === 0) continue;
+    const t = sumPaymentPlaceTotals(groupRows);
+    grand.n += t.n;
+    grand.sourceUsd += t.sourceUsd;
+    grand.commissionUsd += t.commissionUsd;
+    grand.ils += t.ils;
+    parts.push(`<section class="pdf-group-section">`);
+    parts.push(`<div class="place-head">${escapeHtml(key)}</div>`);
+    parts.push(renderPaymentPlacesTable(groupRows));
+    parts.push(paymentPlaceGroupFooter(t, "סה״כ לאמצעי תשלום"));
+    parts.push(`</section>`);
+  }
+
+  parts.push(`<div class="pay-place-grand">`);
+  parts.push(`<h2>סיכום כללי — כל אמצעי התשלום</h2>`);
+  parts.push(paymentPlaceGroupFooter(grand, "סיכום כולל"));
+  parts.push(`</div>`);
+  return parts.join("");
+}
+
+function cmpPaymentPlaceRowAsc(a: PaymentPlacesReportRow, b: PaymentPlacesReportRow): number {
+  const ta = a.orderDateSort?.getTime() ?? 0;
+  const tb = b.orderDateSort?.getTime() ?? 0;
+  if (ta !== tb) return ta - tb;
+  return (a.orderNumber || "").localeCompare(b.orderNumber || "", undefined, { numeric: true });
 }
 
 function basePdfStyles(): string {
@@ -203,60 +338,128 @@ function sumTotals(rows: PdfRow[]): { n: number; usd: number; ils: number } {
   return { n: rows.length, usd, ils };
 }
 
-function footerBlock(t: { n: number; usd: number; ils: number }): string {
+function sumCustomerTotals(rows: PdfRow[]): {
+  n: number;
+  sourceUsd: number;
+  commissionUsd: number;
+} {
+  let sourceUsd = 0;
+  let commissionUsd = 0;
+  for (const r of rows) {
+    sourceUsd += r.sourceUsdNum;
+    commissionUsd += r.commissionUsdNum;
+  }
+  return { n: rows.length, sourceUsd, commissionUsd };
+}
+
+function footerBlock(t: { n: number; usd: number; ils: number }, title = "סה״כ למקום"): string {
   const ilsStr = `₪ ${t.ils.toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const usdStr = `${t.usd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $`;
-  return `<div class="grp-foot" dir="rtl">
+  return `<div class="grp-foot--place-title">${escapeHtml(title)}</div>
+  <div class="grp-foot" dir="rtl">
     <span>סה״כ הזמנות: <strong>${t.n.toLocaleString("he-IL")}</strong></span>
     <span>סה״כ $: <strong>${usdStr}</strong></span>
     <span>סה״כ ₪: <strong>${ilsStr}</strong></span>
   </div>`;
 }
 
-function groupKeyForMode(row: PdfRow, mode: OrdersPdfLayoutMode): string {
-  if (mode === "by_place") return row.placeKey;
-  if (mode === "by_status") return row.statusHe;
-  if (mode === "by_week") return row.weekKey?.trim() || "ללא שבוע";
-  if (mode === "by_customer") return row.customerKey;
-  return "";
+function customerGroupFooter(t: { n: number; sourceUsd: number; commissionUsd: number }): string {
+  const sourceStr = `${t.sourceUsd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $`;
+  const commStr = `${t.commissionUsd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $`;
+  return `<div class="grp-foot" dir="rtl">
+    <span>סה״כ הזמנות: <strong>${t.n.toLocaleString("he-IL")}</strong></span>
+    <span>סה״כ עמלה: <strong>${commStr}</strong></span>
+    <span>סה״כ סכום מקור: <strong>${sourceStr}</strong></span>
+  </div>`;
 }
 
-function sortKeys(keys: string[], mode: OrdersPdfLayoutMode, statusMap: Record<string, string>): string[] {
-  const k = [...keys];
-  if (mode === "by_place") {
-    k.sort((a, b) => a.localeCompare(b, "he", { sensitivity: "base" }));
-    const noIdx = k.indexOf(EMPTY_PAYMENT_LOCATION_GROUP);
-    if (noIdx >= 0) {
-      k.splice(noIdx, 1);
-      k.push(EMPTY_PAYMENT_LOCATION_GROUP);
-    }
-    return k;
-  }
-  if (mode === "by_week") {
-    k.sort((a, b) => ahWeekRank(a) - ahWeekRank(b));
-    const noW = k.indexOf("ללא שבוע");
-    if (noW >= 0) {
-      k.splice(noW, 1);
-      k.push("ללא שבוע");
-    }
-    return k;
-  }
-  if (mode === "by_customer") {
-    k.sort((a, b) => a.localeCompare(b, "he", { sensitivity: "base" }));
-    return k;
-  }
-  if (mode === "by_status") {
-    k.sort((a, b) => {
-      const sa = STATUS_GROUP_ORDER.find((x) => labelFromMap(statusMap, x) === a);
-      const sb = STATUS_GROUP_ORDER.find((x) => labelFromMap(statusMap, x) === b);
-      const ra = sa != null ? statusRank(sa) : 999;
-      const rb = sb != null ? statusRank(sb) : 999;
-      if (ra !== rb) return ra - rb;
-      return a.localeCompare(b, "he");
-    });
-    return k;
+function sortIntakePlaceKeys(keys: string[]): string[] {
+  const k = [...keys].sort((a, b) => a.localeCompare(b, "he", { sensitivity: "base" }));
+  const noIdx = k.indexOf(EMPTY_PAYMENT_LOCATION_GROUP);
+  if (noIdx >= 0) {
+    k.splice(noIdx, 1);
+    k.push(EMPTY_PAYMENT_LOCATION_GROUP);
   }
   return k;
+}
+
+function renderByIntakePlaceBody(rows: PdfRow[]): string {
+  const map = new Map<string, PdfRow[]>();
+  for (const row of rows) {
+    const arr = map.get(row.placeKey) ?? [];
+    arr.push(row);
+    map.set(row.placeKey, arr);
+  }
+  for (const arr of map.values()) arr.sort(cmpDateAscNumAsc);
+
+  const keys = sortIntakePlaceKeys([...map.keys()]);
+  const parts: string[] = [];
+  let grand = { n: 0, usd: 0, ils: 0 };
+
+  for (const key of keys) {
+    const groupRows = map.get(key) ?? [];
+    if (groupRows.length === 0) continue;
+    const t = sumTotals(groupRows);
+    grand.n += t.n;
+    grand.usd += t.usd;
+    grand.ils += t.ils;
+    parts.push(`<section class="pdf-group-section">`);
+    parts.push(`<div class="place-head">${escapeHtml(key)}</div>`);
+    parts.push(`<div class="place-sep">————————————————</div>`);
+    parts.push(tableHtml(groupRows));
+    parts.push(footerBlock(t, "סה״כ למקום"));
+    parts.push(`</section>`);
+  }
+
+  parts.push(`<div class="pay-place-grand">`);
+  parts.push(`<h2>סיכום כללי — כל המקומות</h2>`);
+  parts.push(footerBlock(grand, "סיכום כולל"));
+  parts.push(`</div>`);
+  return parts.join("");
+}
+
+function renderByCustomerBody(rows: PdfRow[]): string {
+  const map = new Map<string, PdfRow[]>();
+  for (const row of rows) {
+    const arr = map.get(row.customerGroupId) ?? [];
+    arr.push(row);
+    map.set(row.customerGroupId, arr);
+  }
+  for (const arr of map.values()) arr.sort(cmpDateAscNumAsc);
+
+  const keys = [...map.keys()].sort((a, b) => {
+    const na = map.get(a)?.[0]?.customerName ?? a;
+    const nb = map.get(b)?.[0]?.customerName ?? b;
+    return na.localeCompare(nb, "he", { sensitivity: "base" });
+  });
+
+  const parts: string[] = [];
+  let grand = { n: 0, sourceUsd: 0, commissionUsd: 0 };
+
+  for (const key of keys) {
+    const groupRows = map.get(key) ?? [];
+    if (groupRows.length === 0) continue;
+    const sample = groupRows[0]!;
+    const t = sumCustomerTotals(groupRows);
+    grand.n += t.n;
+    grand.sourceUsd += t.sourceUsd;
+    grand.commissionUsd += t.commissionUsd;
+    parts.push(`<section class="pdf-group-section">`);
+    parts.push(`<div class="place-head">
+      <div class="cust-head-name">${escapeHtml(sample.customerName)}</div>
+      <div class="cust-head-code">קוד לקוח: ${escapeHtml(sample.customerCode)}</div>
+    </div>`);
+    parts.push(`<div class="place-sep">————————————————</div>`);
+    parts.push(tableHtml(groupRows));
+    parts.push(customerGroupFooter(t));
+    parts.push(`</section>`);
+  }
+
+  parts.push(`<div class="pay-place-grand">`);
+  parts.push(`<h2>סיכום כללי — כל הלקוחות</h2>`);
+  parts.push(customerGroupFooter(grand));
+  parts.push(`</div>`);
+  return parts.join("");
 }
 
 export async function exportOrdersListPdfHtmlAction(
@@ -273,12 +476,16 @@ export async function exportOrdersListPdfHtmlAction(
   const where = buildOrdersExportWhereFromPreset(sp, preset, kpiStatusFilters);
   const layoutMode = pdfLayoutModeForPreset(preset);
 
+  const needsIntakeNames = layoutMode === "by_place";
+
   const [intakeLocationRows, raw, statusMap] = await Promise.all([
-    prisma.intakeLocation.findMany({
-      select: { id: true, name: true },
-      orderBy: { name: "asc" },
-      take: 500,
-    }),
+    needsIntakeNames
+      ? prisma.intakeLocation.findMany({
+          select: { id: true, name: true },
+          orderBy: { name: "asc" },
+          take: 500,
+        })
+      : Promise.resolve([] as { id: string; name: string }[]),
     prisma.order.findMany({
       where,
       orderBy: [{ orderDate: "desc" }, { createdAt: "desc" }],
@@ -320,19 +527,73 @@ export async function exportOrdersListPdfHtmlAction(
   );
 
   if (rowsRaw.length === 0) {
-    return { ok: false, error: ORDERS_EXPORT_NO_DATA_MSG };
+    return { ok: false, error: ordersExportNoDataMessage(preset, "pdf") };
   }
 
-  const intakeLocationNameById = (id: string | null | undefined): string | null => {
-    if (!id) return null;
-    const hit = intakeLocationRows.find((x) => x.id === id);
-    return hit?.name?.trim() || null;
-  };
+  const presetLabel = ordersExportPresetLabel(preset);
+  const metaBase = `טווח: ${range.fromYmd} — ${range.toYmd} · ייצוא: ${presetLabel} · סה״כ שורות: ${rowsRaw.length}${truncated ? " (מוגבל לייצוא)" : ""}`;
+  const warn = truncated ? `<div class="warn">הוצגו עד ${PDF_EXPORT_MAX_ROWS.toLocaleString("he-IL")} הזמנות בלבד בייצוא זה.</div>` : "";
+
+  if (layoutMode === "by_payment_places") {
+    const paymentRows: PaymentPlacesReportRow[] = rowsRaw.map((r) => {
+      const cust = r.customer;
+      const customerName = primaryCustomerDisplayName({
+        nameAr: cust?.nameAr ?? null,
+        nameEn: cust?.nameEn ?? null,
+        nameHe: cust?.nameHe ?? null,
+        displayName: r.customerNameSnapshot ?? cust?.displayName ?? "",
+      });
+      const od = r.orderDate ? new Date(r.orderDate) : null;
+      const isWithdrawal = isDebtWithdrawalOrderStatus(r.status);
+      const sourceNum = r.amountUsd != null ? Number(r.amountUsd) : 0;
+      const commNum = r.commissionUsd != null ? Number(r.commissionUsd) : 0;
+      const sourceSigned = isWithdrawal ? -Math.abs(sourceNum) : sourceNum;
+      const commSigned = isWithdrawal ? -Math.abs(commNum) : commNum;
+      const totalIlsRaw = Number(r.totalIlsWithVat ?? r.totalIls ?? 0);
+      const totalIlsNum = isWithdrawal && totalIlsRaw > 0 ? -Math.abs(totalIlsRaw) : totalIlsRaw;
+      return {
+        orderNumber: r.orderNumber ?? "—",
+        orderDate: fmtDateOnly(od) ?? "—",
+        customerName,
+        weekCode: r.weekCode ?? "—",
+        sourceUsd: isWithdrawal
+          ? formatSignedUsdDisplay(sourceSigned)
+          : fmtUsd2(r.amountUsd) ?? "—",
+        commissionUsd: isWithdrawal
+          ? formatSignedUsdDisplay(commSigned)
+          : fmtUsd2(r.commissionUsd) ?? "—",
+        totalIls: isWithdrawal
+          ? `-${fmtIls2(Math.abs(totalIlsRaw)) ?? "0.00"}`
+          : fmtIls2(r.totalIlsWithVat ?? r.totalIls) ?? "—",
+        sourceUsdNum: sourceSigned,
+        commissionUsdNum: commSigned,
+        totalIlsNum,
+        paymentPlaceKey: paymentPlaceReportGroupKey(r.status, r.paymentMethod),
+        orderDateSort: od,
+      };
+    });
+
+    const html = `<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"/><title>דוח לפי אמצעי תשלום — ${escapeHtml(
+      range.fromYmd,
+    )}–${escapeHtml(range.toYmd)}</title><style>${basePdfStyles()}${groupedPdfStyles()}</style></head><body>
+<h1>דוח לפי אמצעי תשלום</h1>
+<div class="meta">${escapeHtml(metaBase)}</div>
+${warn}
+${renderPaymentPlacesReportBody(paymentRows)}
+</body></html>`;
+    return { ok: true, html };
+  }
+
+  const intakeLocationNameById = new Map(
+    intakeLocationRows.map((x) => [x.id, x.name.trim()] as const),
+  );
 
   const pdfRows: PdfRow[] = rowsRaw.map((r) => {
     const paymentLocationId = r.paymentPointId ?? r.locationId ?? null;
     const paymentLocationName =
-      r.paymentPoint?.pointName?.trim() || intakeLocationNameById(r.locationId) || null;
+      r.paymentPoint?.pointName?.trim() ||
+      (r.locationId ? intakeLocationNameById.get(r.locationId) : null) ||
+      null;
     const cust = r.customer;
     const customerName = primaryCustomerDisplayName({
       nameAr: cust?.nameAr ?? null,
@@ -351,13 +612,17 @@ export async function exportOrdersListPdfHtmlAction(
       debtWithdrawalUsd: r.debtWithdrawalUsd,
     });
     const dealNum = r.amountUsd != null ? Number(r.amountUsd) : 0;
+    const commNum = r.commissionUsd != null ? Number(r.commissionUsd) : 0;
+    const sourceSigned = isWithdrawal ? -Math.abs(dealNum) : dealNum;
+    const commSigned = isWithdrawal ? -Math.abs(commNum) : commNum;
     const totalIlsRaw = Number(r.totalIlsWithVat ?? r.totalIls ?? 0);
     const totalIlsNum = isWithdrawal && totalIlsRaw > 0 ? -Math.abs(totalIlsRaw) : totalIlsRaw;
+    const customerCode = r.customerCodeSnapshot?.trim() || "—";
     return {
       orderNumber: r.orderNumber ?? "—",
       orderDateTime: fmtDateTime(od) ?? "—",
       weekCode: r.weekCode ?? "—",
-      customerCode: r.customerCodeSnapshot?.trim() || "—",
+      customerCode,
       customerName,
       dealUsd: isWithdrawal
         ? formatSignedUsdDisplay(-Math.abs(dealNum))
@@ -370,60 +635,55 @@ export async function exportOrdersListPdfHtmlAction(
         : fmtIls2(r.totalIlsWithVat ?? r.totalIls) ?? "—",
       totalUsdNum,
       totalIlsNum,
+      sourceUsdNum: sourceSigned,
+      commissionUsdNum: commSigned,
       statusHe: labelFromMap(statusMap, r.status),
       status: r.status,
       paymentType: paymentTypeLabel(r.paymentMethod),
       paymentLocation: paymentLocationName ?? "—",
       orderDate: od,
       placeKey,
-      weekKey: r.weekCode?.trim() || "ללא שבוע",
-      customerKey: `${r.customerCodeSnapshot?.trim() || "—"} · ${customerName}`,
+      customerGroupId: `${customerCode}\u0000${customerName}`,
     };
   });
 
-  if (layoutMode === "flat") {
-    pdfRows.sort(cmpDateDescNumDesc);
+  const meta = metaBase.replace(
+    `סה״כ שורות: ${rowsRaw.length}`,
+    `סה״כ שורות: ${pdfRows.length}`,
+  );
+
+  if (layoutMode === "by_place") {
+    const html = `<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"/><title>דוח לפי מקום — ${escapeHtml(
+      range.fromYmd,
+    )}–${escapeHtml(range.toYmd)}</title><style>${basePdfStyles()}${groupedPdfStyles()}</style></head><body>
+<h1>דוח לפי מקום</h1>
+<div class="meta">${escapeHtml(meta)}</div>
+${warn}
+${renderByIntakePlaceBody(pdfRows)}
+</body></html>`;
+    return { ok: true, html };
   }
 
-  const presetLabel = ordersExportPresetLabel(preset);
-  const meta = `טווח: ${range.fromYmd} — ${range.toYmd} · ייצוא: ${presetLabel} · סה״כ שורות: ${pdfRows.length}${truncated ? " (מוגבל לייצוא)" : ""}`;
-  const warn = truncated ? `<div class="warn">הוצגו עד ${PDF_EXPORT_MAX_ROWS.toLocaleString("he-IL")} הזמנות בלבד בייצוא זה.</div>` : "";
-
-  let body: string;
-  if (layoutMode === "flat") {
-    body = tableHtml(pdfRows) + footerBlock(sumTotals(pdfRows));
-  } else {
-    const map = new Map<string, PdfRow[]>();
-    for (const row of pdfRows) {
-      const gk = groupKeyForMode(row, layoutMode);
-      const arr = map.get(gk) ?? [];
-      arr.push(row);
-      map.set(gk, arr);
-    }
-    for (const arr of map.values()) {
-      arr.sort(cmpDateAscNumAsc);
-    }
-    const keys = sortKeys([...map.keys()], layoutMode, statusMap);
-    const parts: string[] = [];
-    for (const key of keys) {
-      const groupRows = map.get(key) ?? [];
-      if (groupRows.length === 0) continue;
-      parts.push(`<div class="place-rule">================================</div>`);
-      parts.push(`<div class="place-head">${escapeHtml(key)}</div>`);
-      parts.push(`<div class="place-rule">================================</div>`);
-      parts.push(tableHtml(groupRows));
-      parts.push(footerBlock(sumTotals(groupRows)));
-    }
-    body = parts.join("");
+  if (layoutMode === "by_customer") {
+    const html = `<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"/><title>דוח לפי לקוח — ${escapeHtml(
+      range.fromYmd,
+    )}–${escapeHtml(range.toYmd)}</title><style>${basePdfStyles()}${groupedPdfStyles()}</style></head><body>
+<h1>דוח לפי לקוח</h1>
+<div class="meta">${escapeHtml(meta)}</div>
+${warn}
+${renderByCustomerBody(pdfRows)}
+</body></html>`;
+    return { ok: true, html };
   }
 
+  pdfRows.sort(cmpDateDescNumDesc);
   const html = `<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"/><title>הזמנות — ${escapeHtml(
     range.fromYmd,
   )}–${escapeHtml(range.toYmd)}</title><style>${basePdfStyles()}</style></head><body>
 <h1>רשימת הזמנות</h1>
 <div class="meta">${escapeHtml(meta)}</div>
 ${warn}
-${body}
+${tableHtml(pdfRows) + footerBlock(sumTotals(pdfRows), "סה״כ כללי")}
 </body></html>`;
 
   return { ok: true, html };

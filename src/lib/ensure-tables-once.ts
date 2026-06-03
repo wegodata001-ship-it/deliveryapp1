@@ -11,16 +11,32 @@
  * After a successful run, subsequent calls become a synchronous in-memory
  * `Set.has` check (sub-microsecond).
  *
+ * Uses `globalThis` so Next.js dev HMR does not re-run heavy DDL on every
+ * hot reload (module-level Sets would reset).
+ *
  * Trade-off: if someone manually drops the table while the Node process is
  * still running, the helper won't re-create it. In practice, schema changes
  * are followed by a deploy / restart, so this is acceptable.
  */
 
-const ensuredOnce = new Set<string>();
-const inFlight = new Map<string, Promise<void>>();
+type EnsureOnceGlobal = {
+  ensured: Set<string>;
+  inFlight: Map<string, Promise<void>>;
+};
+
+const GLOBAL_KEY = "__wegoEnsureOnce";
+
+function getEnsureState(): EnsureOnceGlobal {
+  const g = globalThis as typeof globalThis & { [GLOBAL_KEY]?: EnsureOnceGlobal };
+  if (!g[GLOBAL_KEY]) {
+    g[GLOBAL_KEY] = { ensured: new Set(), inFlight: new Map() };
+  }
+  return g[GLOBAL_KEY];
+}
 
 export async function ensureOnce(key: string, fn: () => Promise<void>): Promise<void> {
-  if (ensuredOnce.has(key)) return;
+  const { ensured, inFlight } = getEnsureState();
+  if (ensured.has(key)) return;
 
   const existing = inFlight.get(key);
   if (existing) {
@@ -31,7 +47,7 @@ export async function ensureOnce(key: string, fn: () => Promise<void>): Promise<
   const promise = (async () => {
     try {
       await fn();
-      ensuredOnce.add(key);
+      ensured.add(key);
     } finally {
       inFlight.delete(key);
     }
@@ -42,6 +58,6 @@ export async function ensureOnce(key: string, fn: () => Promise<void>): Promise<
 
 /** For tests only — reset the cache. */
 export function __resetEnsureOnceForTests(): void {
-  ensuredOnce.clear();
-  inFlight.clear();
+  const g = globalThis as typeof globalThis & { [GLOBAL_KEY]?: EnsureOnceGlobal };
+  g[GLOBAL_KEY] = { ensured: new Set(), inFlight: new Map() };
 }

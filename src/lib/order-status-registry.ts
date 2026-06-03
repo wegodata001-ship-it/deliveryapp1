@@ -20,6 +20,7 @@ export {
   createOrderStatusTag,
   deleteOrderStatusTag,
   ensureOrderStatusSourceTable,
+  ensureOrderStatusSourceTableSchema,
   getOrderStatusLabelMap,
   isKnownOrderStatusId,
   isValidOrderStatusId,

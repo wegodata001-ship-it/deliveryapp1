@@ -40,7 +40,12 @@ import {
 } from "@/lib/capture-perf";
 import { CaptureSavePerf } from "@/lib/capture-save-perf";
 import { breakdownIlsIncludingVat, computeFromUsdAmount } from "@/lib/financial-calc";
-import { ensureDefaultFinancialSettings, getCurrentFinancialSettings } from "@/lib/financial-settings";
+import {
+  ensureDefaultFinancialSettings,
+  getCurrentFinancialSettings,
+  loadFinanceSettingsSerialized,
+} from "@/lib/financial-settings";
+import { logFinanceSaveTarget, logFinanceSourceTable } from "@/lib/finance-log";
 import { DEFAULT_WEEK_CODE, formatLocalHm, formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate, parseLocalDateTime } from "@/lib/work-week";
 import { deriveAhWeekCodeFromOrderDateYmd } from "@/lib/weeks/order-week-dates";
 import { isValidYmd } from "@/lib/weeks/ah-week";
@@ -192,11 +197,24 @@ async function resolveCaptureRatesForSave(
   const fromClient = resolveCaptureFinancialFromForm(form.financialSnapshot, form.finalRateOverride);
   if (fromClient.ok) {
     capturePerfLog({ exchangeRateSource: "client" });
+    logFinanceSaveTarget("order-capture-save", "Order", {
+      base: fromClient.rates.base.toString(),
+      fee: fromClient.rates.fee.toString(),
+      final: fromClient.rates.final.toString(),
+      note: "per-order snapshot only — FinancialSettings unchanged",
+    });
     return fromClient;
   }
 
   capturePerfLog({ exchangeRateSource: "db", reason: fromClient.error });
   const s = await capturePerfTimed("capture.exchangeRate", () => getCaptureFinancialSettingsCached());
+  logFinanceSourceTable("order-capture-save-fallback");
+  logFinanceSaveTarget("order-capture-save", "Order", {
+    base: s.baseDollarRate.toString(),
+    fee: s.dollarFee.toString(),
+    final: s.finalDollarRate.toString(),
+    note: "rates from FinancialSettings fallback",
+  });
   return {
     ok: true,
     rates: { base: s.baseDollarRate, fee: s.dollarFee, final: s.finalDollarRate },
@@ -547,10 +565,11 @@ export async function capturePaymentAction(form: {
     return { ok: false, error: "אין הרשאה" };
   }
 
-  const settings = (await getCurrentFinancialSettings()) ?? (await ensureDefaultFinancialSettings());
-  const base = settings.baseDollarRate;
-  const fee = settings.dollarFee;
-  const final = settings.finalDollarRate;
+  const fin = await loadFinanceSettingsSerialized("payment-capture");
+  const base = new Prisma.Decimal(fin.baseDollarRate);
+  const fee = new Prisma.Decimal(fin.dollarFee);
+  const final = new Prisma.Decimal(fin.finalDollarRate);
+  logFinanceSaveTarget("payment-capture", "Payment", { final: fin.finalDollarRate });
   const vatRate = prismaVatRatePercent();
 
   const snapIn = { baseDollarRate: base, dollarFee: fee, finalDollarRate: final, vatRate };

@@ -23,19 +23,21 @@ async function ensureAllowed() {
 }
 
 export async function listOrderStatusesManagerAction(search = ""): Promise<OrderStatusManagerRow[]> {
-  statusesPerfStart("statuses.load");
+  statusesPerfStart("statuses.total");
   try {
-    await ensureAllowed();
+    statusesPerfStart("statuses.auth");
+    const me = await requireAuth();
+    if (!userHasAnyPermission(me, ["manage_settings"])) throw new Error("אין הרשאה");
+    statusesPerfEnd("statuses.auth");
+
     const q = search.trim().toLowerCase();
-    statusesPerfStart("statuses.filters");
-    statusesPerfLog("filters applied", { searchLen: q.length, hasSearch: q.length > 0 });
-    statusesPerfEnd("statuses.filters");
 
     const [rows, usage] = await Promise.all([
       listOrderStatusTagsForManager(),
       getOrderStatusUsageMapForManager(),
     ]);
 
+    statusesPerfStart("statuses.map");
     const mapped: OrderStatusManagerRow[] = rows.map((r) => ({
       ...r,
       code: displayStatusCode(r.id),
@@ -51,19 +53,22 @@ export async function listOrderStatusesManagerAction(search = ""): Promise<Order
             r.colorHex.toLowerCase().includes(q) ||
             (r.isActive ? "פעיל" : "לא פעיל").includes(q),
         );
+    statusesPerfEnd("statuses.map");
 
-    statusesPerfStart("statuses.response");
+    statusesPerfStart("statuses.serialize");
+    JSON.stringify(result);
+    statusesPerfEnd("statuses.serialize");
+
     statusesPerfLog("rows returned", {
       rowCount: result.length,
       tagCount: rows.length,
       filtered: q.length > 0,
       usageDistinct: Object.keys(usage).length,
     });
-    statusesPerfEnd("statuses.response");
 
     return result;
   } finally {
-    statusesPerfEnd("statuses.load");
+    statusesPerfEnd("statuses.total");
   }
 }
 

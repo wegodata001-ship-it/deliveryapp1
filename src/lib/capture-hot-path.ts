@@ -1,5 +1,10 @@
 import type { FinancialSettings } from "@prisma/client";
-import { ensureDefaultFinancialSettings, getCurrentFinancialSettings } from "@/lib/financial-settings";
+import {
+  ensureDefaultFinancialSettings,
+  getCurrentFinancialSettings,
+  serializeFinancialRowFromDb,
+} from "@/lib/financial-settings";
+import { logFinanceLoadedValues, logFinanceSourceTable } from "@/lib/finance-log";
 import {
   ORDER_COUNTRY_CODES,
   parseSelectedCountriesJson,
@@ -52,7 +57,23 @@ export async function getCaptureFinancialSettingsCached(): Promise<FinancialSett
   const now = Date.now();
   if (financialCache && financialCache.expires > now) return financialCache.row;
 
+  logFinanceSourceTable("capture-cache");
   const row = (await getCurrentFinancialSettings()) ?? (await ensureDefaultFinancialSettings());
+  const serialized = serializeFinancialRowFromDb(
+    row
+      ? {
+          ...row,
+          updatedBy: null,
+        }
+      : null,
+  );
+  logFinanceLoadedValues("capture-cache", {
+    id: row.id,
+    baseDollarRate: serialized.baseDollarRate,
+    dollarFee: serialized.dollarFee,
+    finalDollarRate: serialized.finalDollarRate,
+    defaultCommissionPercent: serialized.defaultCommissionPercent,
+  });
   financialCache = { row, expires: now + TTL_MS };
   return row;
 }

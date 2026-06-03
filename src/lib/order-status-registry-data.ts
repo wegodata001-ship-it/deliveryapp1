@@ -52,24 +52,34 @@ function legacyDefaultHex(id: string): string {
   return "#64748b";
 }
 
-/** טבלת SourceStatus — מקור יחיד לכל הסטטוסים */
-export async function ensureOrderStatusSourceTable(): Promise<void> {
-  await ensureOnce("order-status-source-table-v4", async () => {
-    await prisma.$executeRaw`
-      CREATE TABLE IF NOT EXISTS "SourceStatus" (
-        "id" TEXT PRIMARY KEY,
-        "nameHe" TEXT NOT NULL,
-        "color" TEXT NOT NULL DEFAULT 'info',
-        "colorHex" TEXT,
-        "isActive" BOOLEAN NOT NULL DEFAULT true,
-        "sortOrder" INTEGER NOT NULL DEFAULT 0,
-        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
-      )
-    `;
-    await prisma.$executeRaw`ALTER TABLE "SourceStatus" ADD COLUMN IF NOT EXISTS "sortOrder" INTEGER NOT NULL DEFAULT 0`;
-    await prisma.$executeRaw`ALTER TABLE "SourceStatus" ADD COLUMN IF NOT EXISTS "colorHex" TEXT`;
+/** DDL קל בלבד — בטוח לנתיב קריאה (מסך סטטוסים). */
+export async function ensureOrderStatusSourceTableSchema(): Promise<void> {
+  statusesPerfStart("statuses.ensure");
+  try {
+    await ensureOnce("order-status-source-schema-v1", async () => {
+      await prisma.$executeRaw`
+        CREATE TABLE IF NOT EXISTS "SourceStatus" (
+          "id" TEXT PRIMARY KEY,
+          "nameHe" TEXT NOT NULL,
+          "color" TEXT NOT NULL DEFAULT 'info',
+          "colorHex" TEXT,
+          "isActive" BOOLEAN NOT NULL DEFAULT true,
+          "sortOrder" INTEGER NOT NULL DEFAULT 0,
+          "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+      `;
+      await prisma.$executeRaw`ALTER TABLE "SourceStatus" ADD COLUMN IF NOT EXISTS "sortOrder" INTEGER NOT NULL DEFAULT 0`;
+      await prisma.$executeRaw`ALTER TABLE "SourceStatus" ADD COLUMN IF NOT EXISTS "colorHex" TEXT`;
+    });
+  } finally {
+    statusesPerfEnd("statuses.ensure");
+  }
+}
 
+/** מיגרציה כבדה (enum, seed, סריקת Order) — רק בכתיבה / bootstrap מלא. */
+async function runOrderStatusSourceTableMigration(): Promise<void> {
+  await ensureOnce("order-status-source-migration-v4", async () => {
     await prisma.$executeRaw`
       DO $$
       BEGIN
@@ -121,9 +131,15 @@ export async function ensureOrderStatusSourceTable(): Promise<void> {
   });
 }
 
+/** טבלת SourceStatus — schema + מיגרציה (לכתיבה). */
+export async function ensureOrderStatusSourceTable(): Promise<void> {
+  await ensureOrderStatusSourceTableSchema();
+  await runOrderStatusSourceTableMigration();
+}
+
 /** קריאה מהירה לקטלוג; מוודאת schema כי סביבות קיימות יכולות להיות בלי עמודות חדשות. */
 export async function readOrderStatusTagsFromDb(includeInactive: boolean): Promise<OrderStatusTag[]> {
-  await ensureOrderStatusSourceTable();
+  await ensureOrderStatusSourceTableSchema();
   statusesPerfStart("statuses.query");
   try {
     const rows = await prisma.$queryRaw<
@@ -150,14 +166,15 @@ export async function readOrderStatusTagsFromDb(includeInactive: boolean): Promi
 export async function loadOrderStatusUsageMapUncached(): Promise<Record<string, number>> {
   statusesPerfStart("statuses.count");
   try {
-    const groups = await prisma.order.groupBy({
-      by: ["status"],
-      where: { deletedAt: null },
-      _count: { _all: true },
-    });
+    const groups = await prisma.$queryRaw<Array<{ status: string; c: number }>>`
+      SELECT "status", COUNT(*)::int AS c
+      FROM "Order"
+      WHERE "deletedAt" IS NULL
+      GROUP BY "status"
+    `;
     const map: Record<string, number> = {};
     for (const g of groups) {
-      map[g.status] = g._count._all ?? 0;
+      map[g.status] = g.c;
     }
     statusesPerfLog("usage map built", { distinctStatuses: groups.length });
     return map;
@@ -192,7 +209,10 @@ export async function resolveOrderStatusFromDisplayText(text: string): Promise<s
 }
 
 export async function countOrdersWithStatus(statusId: string): Promise<number> {
-  return prisma.order.count({ where: { deletedAt: null, status: statusId } });
+  const rows = await prisma.$queryRaw<[{ c: number }]>`
+    SELECT COUNT(*)::int AS c FROM "Order" WHERE "deletedAt" IS NULL AND "status" = ${statusId}
+  `;
+  return rows[0]?.c ?? 0;
 }
 
 export async function createOrderStatusTag(input: {

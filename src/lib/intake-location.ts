@@ -1,13 +1,15 @@
 import { prisma } from "@/lib/prisma";
 import { ensureOnce } from "@/lib/ensure-tables-once";
+export type IntakeLocationListRow = { id: string; name: string; active: boolean };
 
 /** התאמה לחיפוש/דה-דופ — lowercase + ללא רווחים */
 export function normalizeIntakeLocationLookupKey(input: string): string {
   return input.trim().toLowerCase().replace(/\s+/g, "");
 }
 
-export async function ensureIntakeLocationTable(): Promise<void> {
-  await ensureOnce("intake-location-table", async () => {
+/** DDL קל — בטוח לנתיב קריאה (רשימת מקומות). */
+export async function ensureIntakeLocationTableSchema(): Promise<void> {
+  await ensureOnce("intake-location-schema-v1", async () => {
     await prisma.$executeRaw`
       CREATE TABLE IF NOT EXISTS "IntakeLocation" (
         "id" TEXT NOT NULL,
@@ -19,6 +21,12 @@ export async function ensureIntakeLocationTable(): Promise<void> {
     await prisma.$executeRaw`
       CREATE UNIQUE INDEX IF NOT EXISTS "IntakeLocation_name_key" ON "IntakeLocation" ("name")
     `;
+  });
+}
+
+export async function ensureIntakeLocationTable(): Promise<void> {
+  await ensureIntakeLocationTableSchema();
+  await ensureOnce("intake-location-migration-v1", async () => {
     await tryMigrateOrderLocationsIntoIntake();
   });
 }
@@ -41,19 +49,25 @@ async function tryMigrateOrderLocationsIntoIntake(): Promise<void> {
   }
 }
 
+export async function getIntakeLocationRowCount(): Promise<number> {
+  await ensureIntakeLocationTableSchema();
+  return prisma.intakeLocation.count();
+}
+
 export async function listIntakeLocationsForSelect(
   query: string,
   limit: number,
-): Promise<{ id: string; name: string }[]> {
-  await ensureIntakeLocationTable();
+): Promise<IntakeLocationListRow[]> {
+  await ensureIntakeLocationTableSchema();
   const q = query.trim();
   const take = Math.min(500, Math.max(1, Math.floor(limit)));
-  return prisma.intakeLocation.findMany({
+  const rows = await prisma.intakeLocation.findMany({
     where: q ? { name: { contains: q, mode: "insensitive" } } : undefined,
     select: { id: true, name: true },
     orderBy: { name: "asc" },
     take,
   });
+  return rows.map((r) => ({ id: r.id, name: r.name, active: true }));
 }
 
 export async function findOrCreateIntakeLocationByName(rawName: string): Promise<{ id: string; name: string }> {

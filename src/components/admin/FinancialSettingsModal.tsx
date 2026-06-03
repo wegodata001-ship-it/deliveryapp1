@@ -1,137 +1,228 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Modal } from "@/components/ui/Modal";
-import { refreshAutomaticDollarRate, saveManualFinancialSettings } from "@/app/admin/financial/actions";
+import {
+  loadFinancialSettingsAction,
+  resetFinancialSettingsToDefaultsAction,
+  saveManualFinancialSettings,
+} from "@/app/admin/financial/actions";
 import { sanitizeCommissionPercentInput } from "@/lib/commission-percent";
-import type { SerializedFinancial } from "@/lib/financial-settings";
+import { FINANCIAL_SETTINGS_DEFAULTS, type SerializedFinancial } from "@/lib/financial-settings";
 
 type Props = {
   open: boolean;
   onClose: () => void;
+  /** ערכי layout (עשויים להיות null ב-light) — לא משמשים לטעינה */
   initial: SerializedFinancial | null;
-  onToast: (msg: string) => void;
+  onToast: (msg: string, opts?: { variant?: "success" | "error" }) => void;
 };
 
-export function FinancialSettingsModal({ open, onClose, initial, onToast }: Props) {
+function applySerialized(
+  data: SerializedFinancial,
+  setters: {
+    setBase: (v: string) => void;
+    setFee: (v: string) => void;
+    setDefaultCommissionPercent: (v: string) => void;
+    setMeta: (v: SerializedFinancial) => void;
+  },
+): void {
+  setters.setBase(data.baseDollarRate);
+  setters.setFee(data.dollarFee);
+  setters.setDefaultCommissionPercent(data.defaultCommissionPercent);
+  setters.setMeta(data);
+}
+
+export function FinancialSettingsModal({ open, onClose, onToast }: Props) {
   const router = useRouter();
-  const [base, setBase] = useState(initial?.baseDollarRate ?? "3.40");
-  const [fee, setFee] = useState(initial?.dollarFee ?? "0.10");
-  const [defaultCommissionPercent, setDefaultCommissionPercent] = useState(
-    initial?.defaultCommissionPercent ?? "0",
+  const [base, setBase] = useState<string>(FINANCIAL_SETTINGS_DEFAULTS.baseDollarRate);
+  const [fee, setFee] = useState<string>(FINANCIAL_SETTINGS_DEFAULTS.dollarFee);
+  const [defaultCommissionPercent, setDefaultCommissionPercent] = useState<string>(
+    FINANCIAL_SETTINGS_DEFAULTS.defaultCommissionPercent,
   );
+  const [meta, setMeta] = useState<SerializedFinancial | null>(null);
+  const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  const loadFromServer = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const data = await loadFinancialSettingsAction();
+      applySerialized(data, { setBase, setFee, setDefaultCommissionPercent, setMeta });
+    } catch {
+      setErr("שגיאה בטעינת הגדרות");
+      onToast("שגיאה בטעינת הגדרות", { variant: "error" });
+    } finally {
+      setLoading(false);
+    }
+  }, [onToast]);
+
   useEffect(() => {
     if (!open) return;
-    setBase(initial?.baseDollarRate ?? "3.40");
-    setFee(initial?.dollarFee ?? "0.10");
-    setDefaultCommissionPercent(initial?.defaultCommissionPercent ?? "0");
-    setErr(null);
-  }, [open, initial]);
+    void loadFromServer();
+  }, [open, loadFromServer]);
 
   const finalPreview = useMemo(() => {
     const b = Number(base.replace(",", "."));
     const f = Number((fee || "0").replace(",", "."));
-    if (Number.isFinite(b) && Number.isFinite(f)) return (b + f).toFixed(4);
+    if (Number.isFinite(b) && Number.isFinite(f)) return (b + f).toFixed(2);
     return "—";
   }, [base, fee]);
+
+  const calcLine = useMemo(() => {
+    const b = base.replace(",", ".");
+    const f = (fee || "0").replace(",", ".");
+    return `${b} + ${f} = ${finalPreview}`;
+  }, [base, fee, finalPreview]);
 
   async function onSaveManual() {
     setBusy(true);
     setErr(null);
-    const res = await saveManualFinancialSettings({
-      baseDollarRate: base,
-      dollarFee: fee,
-      defaultCommissionPercent,
-    });
-    setBusy(false);
-    if (!res.ok) {
-      setErr(res.error);
-      return;
+    try {
+      const res = await saveManualFinancialSettings({
+        baseDollarRate: base,
+        dollarFee: fee,
+        defaultCommissionPercent,
+      });
+      if (!res.ok) {
+        setErr(res.error);
+        onToast("שגיאה בשמירה", { variant: "error" });
+        return;
+      }
+      applySerialized(res.settings, { setBase, setFee, setDefaultCommissionPercent, setMeta });
+      onToast("הגדרות נשמרו בהצלחה", { variant: "success" });
+      router.refresh();
+    } catch {
+      setErr("שגיאה בשמירה");
+      onToast("שגיאה בשמירה", { variant: "error" });
+    } finally {
+      setBusy(false);
     }
-    onToast("הגדרות נשמרו");
-    router.refresh();
-    onClose();
   }
 
-  async function onRefreshAuto() {
+  async function onResetDefaults() {
+    if (!window.confirm("לאפס את הגדרות ברירת המחדל להזמנות?")) return;
     setBusy(true);
     setErr(null);
-    const res = await refreshAutomaticDollarRate();
-    setBusy(false);
-    if (!res.ok) {
-      setErr(res.error);
-      return;
+    try {
+      const res = await resetFinancialSettingsToDefaultsAction();
+      if (!res.ok) {
+        setErr(res.error);
+        onToast("שגיאה בשמירה", { variant: "error" });
+        return;
+      }
+      applySerialized(res.settings, { setBase, setFee, setDefaultCommissionPercent, setMeta });
+      onToast("הגדרות נשמרו בהצלחה", { variant: "success" });
+      router.refresh();
+    } catch {
+      setErr("שגיאה בשמירה");
+      onToast("שגיאה בשמירה", { variant: "error" });
+    } finally {
+      setBusy(false);
     }
-    onToast("שער אוטומטי עודכן");
-    router.refresh();
-    onClose();
   }
 
   return (
     <Modal open={open} onClose={onClose} title="הגדרות כספים" size="md">
-      <div className="adm-modal-form">
-        {err ? <div className="adm-error">{err}</div> : null}
-        <div className="adm-field">
-          <label htmlFor="fs-base">שער בסיס (usd_rate_base)</label>
-          <input id="fs-base" type="text" inputMode="decimal" value={base} onChange={(e) => setBase(e.target.value)} />
+      <div className="adm-fin-settings" aria-busy={loading || busy}>
+        {loading ? (
+          <p className="adm-fin-settings__loading">טוען הגדרות…</p>
+        ) : null}
+
+        {err ? <div className="adm-error adm-fin-settings__err">{err}</div> : null}
+
+        <h2 className="adm-fin-settings__section-title">הגדרות ברירת מחדל להזמנות</h2>
+
+        <div className="adm-fin-settings__fields">
+          <div className="adm-field">
+            <label htmlFor="fs-base">שער דולר בסיסי</label>
+            <input
+              id="fs-base"
+              type="text"
+              inputMode="decimal"
+              dir="ltr"
+              value={base}
+              disabled={loading || busy}
+              onChange={(e) => setBase(e.target.value)}
+            />
+          </div>
+          <div className="adm-field">
+            <label htmlFor="fs-fee">עלות שער</label>
+            <input
+              id="fs-fee"
+              type="text"
+              inputMode="decimal"
+              dir="ltr"
+              value={fee}
+              disabled={loading || busy}
+              onChange={(e) => setFee(e.target.value)}
+            />
+          </div>
+          <div className="adm-field">
+            <label htmlFor="fs-commission-pct">אחוז עמלה ברירת מחדל</label>
+            <input
+              id="fs-commission-pct"
+              type="text"
+              inputMode="decimal"
+              dir="ltr"
+              value={defaultCommissionPercent}
+              disabled={loading || busy}
+              placeholder="0"
+              onChange={(e) => setDefaultCommissionPercent(sanitizeCommissionPercentInput(e.target.value))}
+            />
+          </div>
         </div>
-        <div className="adm-field">
-          <label htmlFor="fs-fee">עמלת שער (usd_fee)</label>
-          <input id="fs-fee" type="text" inputMode="decimal" value={fee} onChange={(e) => setFee(e.target.value)} />
-        </div>
-        <div className="adm-field">
-          <label htmlFor="fs-commission-pct">אחוז עמלה ברירת מחדל</label>
-          <input
-            id="fs-commission-pct"
-            type="text"
-            inputMode="decimal"
-            dir="ltr"
-            value={defaultCommissionPercent}
-            placeholder="3.45"
-            onChange={(e) => setDefaultCommissionPercent(sanitizeCommissionPercentInput(e.target.value))}
-          />
-          <p className="adm-field-hint" style={{ marginTop: "0.35rem" }}>
-            יוחל אוטומטית בקליטת הזמנה חדשה. ניתן לשנות ידנית בהזמנה בודדת.
+
+        <div className="adm-fin-settings__live">
+          <p className="adm-fin-settings__live-label">שער סופי להזמנה:</p>
+          <p className="adm-fin-settings__live-value">
+            {finalPreview} <span>₪</span>
           </p>
+          <p className="adm-fin-settings__live-calc">חישוב: {calcLine}</p>
         </div>
-        <p className="adm-field-hint" style={{ marginTop: 0 }}>
-          שער סופי מחושב (usd_rate_final): <strong>{finalPreview}</strong> ₪ לדולר
-        </p>
-        <div
-          style={{
-            background: "var(--color-surface-2, #f5f5f5)",
-            borderRadius: "6px",
-            padding: "0.6rem 0.8rem",
-            fontSize: "0.8rem",
-            color: "var(--color-text-muted, #666)",
-            display: "grid",
-            gridTemplateColumns: "auto 1fr",
-            gap: "0.2rem 0.6rem",
-          }}
-        >
-          <span style={{ fontWeight: 600 }}>מקור:</span>
-          <span>{initial?.source ?? "—"}</span>
-          <span style={{ fontWeight: 600 }}>עודכן לאחרונה:</span>
-          <span>
-            {initial?.updatedAt
-              ? new Intl.DateTimeFormat("he-IL", { dateStyle: "short", timeStyle: "short" }).format(
-                  new Date(initial.updatedAt),
-                )
-              : "—"}
-          </span>
-          <span style={{ fontWeight: 600 }}>עודכן על ידי:</span>
-          <span>{initial?.updatedByName ?? "—"}</span>
+
+        <div className="adm-fin-settings__impact" role="note">
+          <p className="adm-fin-settings__impact-title">משפיע על:</p>
+          <ul className="adm-fin-settings__impact-list adm-fin-settings__impact-list--yes">
+            <li>הזמנות חדשות</li>
+            <li>חישובי עמלה</li>
+            <li>קליטת תשלום</li>
+          </ul>
+          <p className="adm-fin-settings__impact-title">לא משפיע על:</p>
+          <ul className="adm-fin-settings__impact-list adm-fin-settings__impact-list--no">
+            <li>הזמנות ישנות</li>
+          </ul>
         </div>
-        <div className="adm-modal-actions">
-          <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" disabled={busy} onClick={onRefreshAuto}>
-            רענון שער אוטומטי
+
+        {meta?.updatedAt ? (
+          <p className="adm-fin-settings__meta">
+            עודכן לאחרונה:{" "}
+            {new Intl.DateTimeFormat("he-IL", { dateStyle: "short", timeStyle: "short" }).format(
+              new Date(meta.updatedAt),
+            )}
+            {meta.updatedByName ? ` · ${meta.updatedByName}` : ""}
+          </p>
+        ) : null}
+
+        <div className="adm-fin-settings__actions">
+          <button
+            type="button"
+            className="adm-btn adm-btn--primary"
+            disabled={loading || busy}
+            onClick={() => void onSaveManual()}
+          >
+            שמירת הגדרות
           </button>
-          <button type="button" className="adm-btn adm-btn--primary" disabled={busy} onClick={onSaveManual}>
-            שמירה
+          <button
+            type="button"
+            className="adm-btn adm-btn--ghost"
+            disabled={loading || busy}
+            onClick={() => void onResetDefaults()}
+          >
+            איפוס לברירת מחדל
           </button>
         </div>
       </div>

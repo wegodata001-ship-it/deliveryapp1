@@ -20,8 +20,13 @@ function formatAdminLoadError(error: unknown): Record<string, unknown> {
   return { raw: String(error) };
 }
 
-/** לוג אבחון לפני /admin — לא זורק */
+function adminLoadDiagnosticsEnabled(): boolean {
+  return process.env.DEBUG_ADMIN_LOAD === "1" || process.env.DEBUG_ADMIN_LOAD === "true";
+}
+
+/** לוג אבחון — רק כש-DEBUG_ADMIN_LOAD=1 (לא ב-hot path) */
 export async function logAdminLoadDiagnostics(phase: string): Promise<void> {
+  if (!adminLoadDiagnosticsEnabled()) return;
   try {
     const session = await getSessionPayload();
     let userRow: { id: string; username: string | null; role: string; isActive: boolean } | null = null;

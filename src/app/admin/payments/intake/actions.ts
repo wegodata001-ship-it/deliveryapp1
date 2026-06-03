@@ -6,7 +6,8 @@ import { revalidateAllKpiCaches } from "@/lib/kpi-cache-tags";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { assertCreatedByUserExists, SessionUserInvalidError } from "@/lib/session-user-guard";
 import { computeFromUsdAmount } from "@/lib/financial-calc";
-import { ensureDefaultFinancialSettings, getCurrentFinancialSettings } from "@/lib/financial-settings";
+import { loadFinanceSettingsSerialized } from "@/lib/financial-settings";
+import { logFinanceSaveTarget } from "@/lib/finance-log";
 import {
   roundMoney2,
   verifyTotalUsdAgainstInputs,
@@ -406,11 +407,15 @@ export async function savePaymentIntakeAction(
     return { ok: false, error: "סכום ההקצאות אינו תואם לסה״כ USD" };
   }
 
-  const settings = (await getCurrentFinancialSettings()) ?? (await ensureDefaultFinancialSettings());
-  const base = settings.baseDollarRate;
-  const fee = settings.dollarFee;
-  const finalGlobal = settings.finalDollarRate;
+  const fin = await loadFinanceSettingsSerialized("payment-intake-save");
+  const base = new Prisma.Decimal(fin.baseDollarRate);
+  const fee = new Prisma.Decimal(fin.dollarFee);
+  const finalGlobal = new Prisma.Decimal(fin.finalDollarRate);
   const finalUse = new Prisma.Decimal(String(rateN)).toDecimalPlaces(6, 4);
+  logFinanceSaveTarget("payment-intake-save", "Payment", {
+    rateFromForm: finalUse.toString(),
+    globalFinal: fin.finalDollarRate,
+  });
 
   const vatRate = prismaVatRatePercent();
   const snapBase = { baseDollarRate: base, dollarFee: fee, finalDollarRate: finalUse, vatRate };

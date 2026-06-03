@@ -23,6 +23,7 @@ import {
   previewPaymentCodeForCaptureAction,
   type CustomerSearchRow,
 } from "@/app/admin/capture/actions";
+import { loadFinancialSettingsForPaymentCaptureAction } from "@/app/admin/financial/actions";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 import type { PaymentWindowProps } from "@/lib/admin-windows";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
@@ -324,7 +325,20 @@ export function PaymentModalUpdated({
 }: Props) {
   const router = useRouter();
   const { globalWeek } = useAdminGlobal();
-  const defaultRate = useMemo(() => parseFinalRate(financial), [financial]);
+  const [financeLive, setFinanceLive] = useState<SerializedFinancial | null>(null);
+  const financeEffective = financeLive ?? financial;
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadFinancialSettingsForPaymentCaptureAction().then((data) => {
+      if (!cancelled) setFinanceLive(data);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const defaultRate = useMemo(() => parseFinalRate(financeEffective), [financeEffective]);
   const { openWindow, closeTop } = useAdminWindows();
 
   /**
@@ -388,8 +402,11 @@ export function PaymentModalUpdated({
   const [dollarRate, setDollarRate] = useState(() => defaultRate.toFixed(4));
   /** אחוז עמלה ברירת מחדל מהמערכת */
   const systemCommissionPercentStr = useMemo(
-    () => formatCommissionPercentValue(parseCommissionPercentString(financial?.defaultCommissionPercent ?? "0")),
-    [financial?.defaultCommissionPercent],
+    () =>
+      formatCommissionPercentValue(
+        parseCommissionPercentString(financeEffective?.defaultCommissionPercent ?? "0"),
+      ),
+    [financeEffective?.defaultCommissionPercent],
   );
   /** אחוז עמלה לקליטה הנוכחית (נשמר על Payment) */
   const [commissionPercentStr, setCommissionPercentStr] = useState(() => systemCommissionPercentStr);
@@ -526,14 +543,23 @@ export function PaymentModalUpdated({
     return null;
   }, [savedCapturePaymentId]);
 
-  /** עדכון שער דולר + עמלה כשהגדרות כספים מתעדכנות (router.refresh אחרי שמירת הגדרות) */
+  /** עדכון שער דולר + עמלה כשנטענו FinancialSettings מהשרת */
   useEffect(() => {
-    if (dollarRateTouchedRef.current) return;
-    const raw = financial?.finalDollarRate?.replace(",", ".");
+    if (dollarRateTouchedRef.current || !financeLive) return;
+    const raw = financeLive.finalDollarRate?.replace(",", ".");
     if (!raw) return;
     const f = Number(raw);
     if (Number.isFinite(f) && f > 0) setDollarRate(f.toFixed(4));
-  }, [financial?.finalDollarRate]);
+  }, [financeLive]);
+
+  useEffect(() => {
+    if (!financeLive) return;
+    setCommissionPercentStr(
+      formatCommissionPercentValue(
+        parseCommissionPercentString(financeLive.defaultCommissionPercent ?? "0"),
+      ),
+    );
+  }, [financeLive]);
 
   /** ניווט prev/next — prefetch + מטמון entry לשכנים */
   useEffect(() => {

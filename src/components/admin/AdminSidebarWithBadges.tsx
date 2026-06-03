@@ -1,5 +1,6 @@
 import { AdminSidebar } from "@/components/admin/AdminSidebar";
 import { getPendingOrderEditRequestCount } from "@/lib/admin-layout-cache";
+import { adminLayoutPerfRun } from "@/lib/admin-layout-perf";
 import type { NavSectionDef } from "@/lib/sidebar-nav";
 
 type Props = {
@@ -12,7 +13,9 @@ export async function AdminSidebarWithBadges({ sections, showPendingBadge }: Pro
   if (!showPendingBadge) {
     return <AdminSidebar sections={sections} />;
   }
-  const pending = await getPendingOrderEditRequestCount().catch(() => 0);
+  const pending = await adminLayoutPerfRun("layout.kpi", () =>
+    getPendingOrderEditRequestCount().catch(() => 0),
+  );
   return (
     <AdminSidebar
       sections={sections}

@@ -11,6 +11,12 @@ import type { AdminRouteMode } from "@/lib/admin-route-mode";
 import { getLoginTraceFromCookies } from "@/lib/login-trace-server";
 import { loginTraceMark, loginTraceTimed } from "@/lib/login-trace";
 import { logAdminLoadDiagnostics, runAdminLoadSafe } from "@/lib/admin-load-safe";
+import {
+  adminLayoutPerfEnd,
+  adminLayoutPerfLog,
+  adminLayoutPerfRun,
+  adminLayoutPerfStart,
+} from "@/lib/admin-layout-perf";
 import { withPerfTimer } from "@/lib/perf-log";
 
 type Props = {
@@ -18,58 +24,76 @@ type Props = {
   children: React.ReactNode;
 };
 
-/** Shared admin shell — full mode loads financial + sidebar badges; light mode skips heavy layout fetches. */
+/** Shared admin shell — light mode skips financial + sidebar badge queries. */
 export async function AdminShellLayout({ mode, children }: Props) {
   const trace = await getLoginTraceFromCookies();
 
   const render = async () => {
-    await logAdminLoadDiagnostics("AdminShellLayout.start");
-    const user = await withPerfTimer("admin.auth.requireAuth", () => requireAuth());
-    const isAdmin = isAdminUser(user);
-    const sections = filterSidebarSections(isAdmin, user.permissionKeys);
-    const isLight = mode === "light";
+    adminLayoutPerfStart("layout.total");
+    try {
+      await logAdminLoadDiagnostics("AdminShellLayout.start");
 
-    if (trace) {
-      loginTraceMark(trace, "7.adminLayout", { mode, isLight });
+      await adminLayoutPerfRun("layout.counts", async () => {
+        adminLayoutPerfLog("layout.counts skipped — no global table counts on shell");
+      });
+
+      const user = await adminLayoutPerfRun("layout.auth", () => requireAuth());
+      const isAdmin = isAdminUser(user);
+      const sections = filterSidebarSections(isAdmin, user.permissionKeys);
+      const isLight = mode === "light";
+
+      if (trace) {
+        loginTraceMark(trace, "7.adminLayout", { mode, isLight });
+      }
+
+      adminLayoutPerfLog("shell", { mode, isLight, isAdmin });
+
+      const financial = isLight
+        ? null
+        : await adminLayoutPerfRun("layout.financial", () => getLayoutFinancialSettings());
+
+      adminLayoutPerfStart("layout.render");
+      const sidebar = isLight ? (
+        <AdminSidebar sections={sections} />
+      ) : (
+        <Suspense fallback={<AdminSidebar sections={sections} />}>
+          <AdminSidebarWithBadges sections={sections} showPendingBadge={isAdmin} />
+        </Suspense>
+      );
+
+      const canManageFinancial = userHasAnyPermission(user, ["manage_settings"]);
+
+      const tree = (
+        <AdminWindowProvider>
+          <AdminNavShell
+            financial={financial}
+            canManageFinancial={canManageFinancial}
+            sidebar={sidebar}
+            main={
+              <AdminChrome
+                displayName={user.fullName}
+                roleLabel={isAdmin ? "מנהל מערכת" : "עובד"}
+                financial={financial}
+                canManageFinancial={canManageFinancial}
+                canReceivePayments={userHasAnyPermission(user, ["receive_payments"])}
+                canCreateOrders={userHasAnyPermission(user, ["create_orders"])}
+                canEditOrders={userHasAnyPermission(user, ["edit_orders"])}
+                canViewCustomerCard={userHasAnyPermission(user, ["view_customer_card"])}
+                canCreateCustomer={userHasAnyPermission(user, ["create_orders"])}
+                viewerIsAdmin={isAdmin}
+              >
+                {children}
+              </AdminChrome>
+            }
+          />
+        </AdminWindowProvider>
+      );
+      adminLayoutPerfEnd("layout.render");
+
+      return tree;
+    } finally {
+      adminLayoutPerfEnd("layout.total");
     }
-
-    const financial = await withPerfTimer("admin.layout.financial", () => getLayoutFinancialSettings());
-
-    const sidebar = isLight ? (
-      <AdminSidebar sections={sections} />
-    ) : (
-      <Suspense fallback={<AdminSidebar sections={sections} />}>
-        <AdminSidebarWithBadges sections={sections} showPendingBadge={isAdmin} />
-      </Suspense>
-    );
-
-    const canManageFinancial = userHasAnyPermission(user, ["manage_settings"]);
-
-    return (
-      <AdminWindowProvider>
-        <AdminNavShell
-          financial={financial}
-          canManageFinancial={canManageFinancial}
-          sidebar={sidebar}
-          main={
-            <AdminChrome
-              displayName={user.fullName}
-              roleLabel={isAdmin ? "מנהל מערכת" : "עובד"}
-              financial={financial}
-              canManageFinancial={canManageFinancial}
-              canReceivePayments={userHasAnyPermission(user, ["receive_payments"])}
-              canCreateOrders={userHasAnyPermission(user, ["create_orders"])}
-              canEditOrders={userHasAnyPermission(user, ["edit_orders"])}
-              canViewCustomerCard={userHasAnyPermission(user, ["view_customer_card"])}
-              canCreateCustomer={userHasAnyPermission(user, ["create_orders"])}
-              viewerIsAdmin={isAdmin}
-            >
-              {children}
-            </AdminChrome>
-          }
-        />
-      </AdminWindowProvider>
-    );
   };
 
   const run = () => runAdminLoadSafe(`AdminShellLayout.${mode}`, render);

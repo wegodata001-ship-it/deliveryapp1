@@ -7,7 +7,8 @@ import { revalidateAllKpiCaches } from "@/lib/kpi-cache-tags";
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { assertCreatedByUserExists, SessionUserInvalidError } from "@/lib/session-user-guard";
 import { computeFromUsdAmount } from "@/lib/financial-calc";
-import { ensureDefaultFinancialSettings, getCurrentFinancialSettings } from "@/lib/financial-settings";
+import { loadFinanceSettingsSerialized } from "@/lib/financial-settings";
+import { logFinanceSaveTarget } from "@/lib/finance-log";
 import { allocatePaymentAcrossOrders, roundMoney2, toPaymentIntakeBases } from "@/lib/payment-intake";
 import {
   computePaymentOveragePreview,
@@ -284,10 +285,9 @@ export async function savePaymentUpdatedAction(
     draftPhone: form.draftPhone,
   });
 
-  const settings = (await getCurrentFinancialSettings()) ?? (await ensureDefaultFinancialSettings());
-  const base = settings.baseDollarRate;
-  const fee = settings.dollarFee;
-  const finalGlobal = settings.finalDollarRate;
+  const fin = await loadFinanceSettingsSerialized("payment-capture");
+  const base = new Prisma.Decimal(fin.baseDollarRate);
+  const fee = new Prisma.Decimal(fin.dollarFee);
 
   let rateN = 0;
   try {
@@ -412,6 +412,11 @@ export async function savePaymentUpdatedAction(
   const lineNotes = collectLineNotes(form.payments ?? []);
 
   const finalUse = new Prisma.Decimal(String(rateN)).toDecimalPlaces(6, 4);
+  const finalGlobal = new Prisma.Decimal(fin.finalDollarRate);
+  logFinanceSaveTarget("payment-updated-save", "Payment", {
+    rateFromForm: finalUse.toString(),
+    globalFinal: finalGlobal.toString(),
+  });
   const vatRate = prismaVatRatePercent();
 
   /**

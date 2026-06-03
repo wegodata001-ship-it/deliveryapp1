@@ -44,7 +44,9 @@ import { orderCountryLabel, ORDER_COUNTRY_CODES, coerceOrderCountryForForm, type
 import { buildCaptureFinancialSnapshot } from "@/lib/capture-form-snapshot";
 import { IntakeLocationCombobox } from "@/components/admin/IntakeLocationCombobox";
 import { ErpSearchCombobox } from "@/components/admin/ErpCreatableCombobox";
+import { loadFinancialSettingsForCaptureAction } from "@/app/admin/financial/actions";
 import type { SerializedFinancial } from "@/lib/financial-settings";
+import { FINANCE_DEFAULTS_CLIENT } from "@/lib/finance-settings-client";
 import { VAT_RATE, VAT_RATE_PERCENT, formatVatPercentLabel } from "@/lib/vat";
 import {
   commissionPercentFromOrderAmounts,
@@ -268,6 +270,20 @@ export function OrderCreatePanel({
 
   const isEdit = target.mode === "edit";
 
+  /** מקור אמת: FinancialSettings מהשרת — לא layout/cache */
+  const [financeLive, setFinanceLive] = useState<SerializedFinancial | null>(null);
+  const financeEffective = financeLive ?? financial;
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadFinancialSettingsForCaptureAction().then((data) => {
+      if (!cancelled) setFinanceLive(data);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const initialHm = useMemo(() => formatLocalHm(new Date()), []);
 
   const initialWeekCode = globalWeek || DEFAULT_WEEK_CODE;
@@ -284,7 +300,9 @@ export function OrderCreatePanel({
   const [intakeDateErr, setIntakeDateErr] = useState<string | null>(null);
   const [weekDraft, setWeekDraft] = useState(globalWeek || DEFAULT_WEEK_CODE);
   const [weekInputErr, setWeekInputErr] = useState<string | null>(null);
-  const [commissionPercentStr, setCommissionPercentStr] = useState(() => defaultCommissionPercentStr(financial));
+  const [commissionPercentStr, setCommissionPercentStr] = useState(() =>
+    defaultCommissionPercentStr(financial),
+  );
   const commissionPercentTouchedRef = useRef(false);
   const finalRateTouchedRef = useRef(false);
   const [loadOrderBusy, setLoadOrderBusy] = useState(false);
@@ -345,15 +363,20 @@ export function OrderCreatePanel({
   }, [displayWeekCode]);
 
   const [finalRateStr, setFinalRateStr] = useState(() => {
-    const f = financial?.finalDollarRate ? Number(String(financial.finalDollarRate).replace(",", ".")) : NaN;
-    return Number.isFinite(f) && f > 0 ? f.toFixed(4) : "3.5000";
+    const f = financial?.finalDollarRate
+      ? Number(String(financial.finalDollarRate).replace(",", "."))
+      : NaN;
+    return Number.isFinite(f) && f > 0 ? f.toFixed(4) : FINANCE_DEFAULTS_CLIENT.finalDollarRate;
   });
   const finalRate = useMemo(() => {
     const n = Number(String(finalRateStr).trim().replace(",", "."));
     return Number.isFinite(n) && n > 0 ? n : 0;
   }, [finalRateStr]);
 
-  const systemDefaultCommissionStr = useMemo(() => defaultCommissionPercentStr(financial), [financial]);
+  const systemDefaultCommissionStr = useMemo(
+    () => defaultCommissionPercentStr(financeEffective),
+    [financeEffective],
+  );
 
   const commissionPct = useMemo(
     () => parseCommissionPercentString(commissionPercentStr),
@@ -370,14 +393,13 @@ export function OrderCreatePanel({
     setCommissionPercentStr(systemDefaultCommissionStr);
   }, [isEdit, systemDefaultCommissionStr]);
 
-  /** עדכון שער דולר כשהגדרות כספים משתנות — רק אם המשתמש לא ערך ידנית */
+  /** עדכון שער דולר כשנטענו FinancialSettings — רק אם המשתמש לא ערך ידנית */
   useEffect(() => {
-    if (isEdit || finalRateTouchedRef.current) return;
-    const raw = financial?.finalDollarRate;
-    if (!raw) return;
+    if (isEdit || finalRateTouchedRef.current || !financeLive) return;
+    const raw = financeLive.finalDollarRate;
     const f = Number(String(raw).replace(",", "."));
     if (Number.isFinite(f) && f > 0) setFinalRateStr(f.toFixed(4));
-  }, [isEdit, financial?.finalDollarRate]);
+  }, [isEdit, financeLive]);
 
   const [orderNumberPreview, setOrderNumberPreview] = useState(() =>
     formatOrderNumberPlaceholder(globalWeek || DEFAULT_WEEK_CODE),
@@ -895,7 +917,7 @@ export function OrderCreatePanel({
     notes,
     nameArStr,
     nameEnStr,
-    financial,
+    financial: financeEffective,
     orderCountries,
     finalRate,
   });
@@ -924,7 +946,7 @@ export function OrderCreatePanel({
     notes,
     nameArStr,
     nameEnStr,
-    financial,
+    financial: financeEffective,
     orderCountries,
     finalRate,
   };

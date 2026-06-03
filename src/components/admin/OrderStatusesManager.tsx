@@ -72,9 +72,13 @@ export function OrderStatusesManager({ initialSearch = "" }: { initialSearch?: s
   const load = useCallback(async () => {
     setLoading(true);
     setErr(null);
+    const t0 = performance.now();
     try {
       const data = await listOrderStatusesManagerAction(search);
       setRows(data);
+      if (process.env.NODE_ENV === "development") {
+        console.log(`[statuses] statuses.render: ${Math.round(performance.now() - t0)}ms (client round-trip)`);
+      }
     } catch (e) {
       setErr(e instanceof Error ? e.message : "שגיאה בטעינה");
     } finally {

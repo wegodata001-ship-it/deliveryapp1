@@ -8,7 +8,7 @@ import { orderCaptureSplitMethodLabel } from "@/lib/order-capture-payment-method
 import {
   buildOrdersExportWhereFromPreset,
   orderMatchesExportKpiAfterFetch,
-  ORDERS_EXPORT_NO_DATA_EXCEL_MSG,
+  ordersExportNoDataMessage,
   type OrdersListExportPreset,
 } from "@/lib/orders-list-export-presets";
 import type { OrderStatusKpiKey } from "@/lib/orders-status-kpi-filter";
@@ -82,7 +82,7 @@ export async function exportOrdersListExcelCsvAction(
   rows = rows.filter((r) => orderMatchesExportKpiAfterFetch(r.status, preset, kpiStatusFilters));
 
   if (rows.length === 0) {
-    return { ok: false, error: ORDERS_EXPORT_NO_DATA_EXCEL_MSG };
+    return { ok: false, error: ordersExportNoDataMessage(preset, "excel") };
   }
 
   const intakeLocationNameById = (id: string | null | undefined): string | null => {

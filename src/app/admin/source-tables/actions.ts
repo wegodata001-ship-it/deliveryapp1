@@ -2,13 +2,16 @@
 
 import { randomUUID } from "crypto";
 import { PaymentMethod, Prisma } from "@prisma/client";
-import { revalidatePath, unstable_cache } from "next/cache";
+import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
 import { SOURCE_TABLE_CARD_COUNTS_TAG } from "@/lib/kpi-cache-tags";
 import { recordActivityAudit } from "@/lib/activity-audit";
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { clearExpiredOrderEditUnlockForOrder } from "@/app/admin/order-edit-requests/actions";
 import { canUserEditCompletedOrder } from "@/lib/order-edit-lock";
 import { prisma } from "@/lib/prisma";
+import { persistFinanceSettingsRow } from "@/lib/financial-settings";
+import { invalidateCaptureHotPathCache } from "@/lib/capture-hot-path";
+import { FINANCIAL_LAYOUT_CACHE_TAG } from "@/lib/admin-layout-cache";
 import { ensureOnce } from "@/lib/ensure-tables-once";
 import { formatLocalYmd } from "@/lib/work-week";
 import {
@@ -18,7 +21,7 @@ import {
 } from "@/lib/source-table-definitions";
 import {
   buildStatusSelectOptions,
-  ensureOrderStatusSourceTable,
+  ensureOrderStatusSourceTableSchema,
   getOrderStatusLabelMap,
   isValidOrderStatusId,
   listOrderStatusSourceRows,
@@ -197,7 +200,7 @@ async function ensureSourceManagementTables() {
         "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `;
-    await ensureOrderStatusSourceTable();
+    await ensureOrderStatusSourceTableSchema();
     for (const method of Object.values(PaymentMethod)) {
       await prisma.$executeRaw`
         INSERT INTO "SourcePaymentMethod" ("id", "nameHe")
@@ -508,15 +511,15 @@ export async function upsertSourceTableRowAction(input: SourceTableMutation): Pr
     const base = Number((v.base || "0").replace(",", "."));
     const fee = Number((v.fee || "0").replace(",", "."));
     if (!Number.isFinite(base) || base <= 0) return { ok: false, error: "שער בסיס לא תקין" };
-    const final = base + (Number.isFinite(fee) ? fee : 0);
-    await prisma.financialSettings.create({
-      data: {
-        baseDollarRate: String(base),
-        dollarFee: String(Number.isFinite(fee) ? fee : 0),
-        finalDollarRate: String(final),
-        source: v.source || "MANUAL",
-      },
+    await persistFinanceSettingsRow({
+      consumer: "source-tables-exchange-rates",
+      baseDollarRate: new Prisma.Decimal(String(base)),
+      dollarFee: new Prisma.Decimal(String(Number.isFinite(fee) ? fee : 0)),
+      defaultCommissionPercent: new Prisma.Decimal(0),
+      source: v.source || "MANUAL",
     });
+    invalidateCaptureHotPathCache();
+    revalidateTag(FINANCIAL_LAYOUT_CACHE_TAG);
   } else if (input.table === "customers" && input.id) {
     const customerId = input.id.trim();
     await prisma.customer.update({

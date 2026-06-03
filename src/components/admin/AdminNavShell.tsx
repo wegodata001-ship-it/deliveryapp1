@@ -6,7 +6,7 @@ import { AdminFinancialModalProvider } from "@/components/admin/AdminFinancialMo
 import { LoginTraceReporter } from "@/components/admin/LoginTraceReporter";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 
-export type AdminToastOptions = { variant?: "success" };
+export type AdminToastOptions = { variant?: "success" | "error" };
 
 export type AdminToastFn = (msg: string, opts?: AdminToastOptions) => void;
 
@@ -68,7 +68,11 @@ export function AdminNavShell({
           <div className="adm-main">{main}</div>
           {toast ? (
             <div
-              className={["adm-toast", toast.variant === "success" ? "adm-toast--success" : ""]
+              className={[
+                "adm-toast",
+                toast.variant === "success" ? "adm-toast--success" : "",
+                toast.variant === "error" ? "adm-toast--error" : "",
+              ]
                 .filter(Boolean)
                 .join(" ")}
               role="status"

@@ -656,11 +656,13 @@ export function OrdersListShell({
       <OrdersListExportSplitButton
         variant="pdf"
         disabled={pdfLoading}
+        onQuickExport={() => void runPdfExport("screen_filter")}
         onSelect={(preset) => void runPdfExport(preset)}
       />
       <OrdersListExportSplitButton
         variant="excel"
         disabled={excelLoading}
+        onQuickExport={() => void runExcelExport("screen_filter")}
         onSelect={(preset) => void runExcelExport(preset)}
       />
     </div>
