@@ -1435,6 +1435,16 @@ async function captureOrderActionInner(
   }
   const sourceCountryCreate = rawCountry as OrderCountryCode;
 
+  const createdById = me.id;
+  const userExists = await prisma.user.findUnique({
+    where: { id: createdById },
+    select: { id: true, fullName: true, isActive: true },
+  });
+  console.log({
+    createdById,
+    userExists,
+  });
+
   capturePerfTimeStart("capture.insertOrder");
   const order = await capturePerfTimed("capture.insertOrderRow", () =>
     prisma.$transaction(async (tx) => {
