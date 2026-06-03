@@ -10,6 +10,7 @@ import { getLayoutFinancialSettings } from "@/lib/admin-layout-cache";
 import type { AdminRouteMode } from "@/lib/admin-route-mode";
 import { getLoginTraceFromCookies } from "@/lib/login-trace-server";
 import { loginTraceMark, loginTraceTimed } from "@/lib/login-trace";
+import { logAdminLoadDiagnostics, runAdminLoadSafe } from "@/lib/admin-load-safe";
 import { withPerfTimer } from "@/lib/perf-log";
 
 type Props = {
@@ -22,6 +23,7 @@ export async function AdminShellLayout({ mode, children }: Props) {
   const trace = await getLoginTraceFromCookies();
 
   const render = async () => {
+    await logAdminLoadDiagnostics("AdminShellLayout.start");
     const user = await withPerfTimer("admin.auth.requireAuth", () => requireAuth());
     const isAdmin = isAdminUser(user);
     const sections = filterSidebarSections(isAdmin, user.permissionKeys);
@@ -70,10 +72,12 @@ export async function AdminShellLayout({ mode, children }: Props) {
     );
   };
 
+  const run = () => runAdminLoadSafe(`AdminShellLayout.${mode}`, render);
+
   if (trace) {
     return loginTraceTimed(trace.traceId, "adminLayout", () =>
-      withPerfTimer(`adminDomain.layout.${mode}`, render),
+      withPerfTimer(`adminDomain.layout.${mode}`, run),
     );
   }
-  return withPerfTimer(`adminDomain.layout.${mode}`, render);
+  return withPerfTimer(`adminDomain.layout.${mode}`, run);
 }

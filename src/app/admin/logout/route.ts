@@ -5,6 +5,18 @@ import { perfError, withPerfTimer } from "@/lib/perf-log";
 
 export const runtime = "nodejs";
 
+/** ניקוי session ישן / JWT ללא User ב-DB — נקרא מ-requireAuth */
+export async function GET(request: Request) {
+  return withPerfTimer("auth.logout.GET", async () => {
+    try {
+      await clearAdminSession();
+    } catch (error) {
+      perfError("auth.logout.GET.clearSession", error);
+    }
+    return NextResponse.redirect(new URL("/admin-login", request.url));
+  });
+}
+
 export async function POST(request: Request) {
   return withPerfTimer("auth.logout.POST", async () => {
     try {

@@ -45,7 +45,11 @@ export async function signSessionToken(payload: SessionPayload): Promise<string>
   return withPerfTimer("auth.signSessionToken", async () => {
     const secret = sessionSecretBytes();
     if (!secret) {
-      throw new Error("SESSION_SECRET must be set (min 16 characters) for admin sessions.");
+      const msg =
+        "SESSION_SECRET must be set (min 16 characters) for admin sessions. " +
+        "Add it in Vercel → Project → Settings → Environment Variables, then redeploy.";
+      console.error("[SESSION]", msg);
+      throw new Error(msg);
     }
     const claims: Record<string, unknown> = { role: payload.role, name: payload.name };
     if (payload.perms !== undefined) claims.perms = payload.perms;

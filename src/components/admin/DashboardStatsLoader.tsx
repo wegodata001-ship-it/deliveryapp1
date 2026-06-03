@@ -2,6 +2,7 @@ import { isAdminUser, requireAuth } from "@/lib/admin-auth";
 import { parseDateFilterFromSearchParams } from "@/lib/work-week";
 import { DashboardStatsSections } from "@/components/admin/DashboardStatsSections";
 import { getLoginTraceFromCookies } from "@/lib/login-trace-server";
+import { runAdminLoadSafe } from "@/lib/admin-load-safe";
 import { loginTraceMark, loginTraceTimed } from "@/lib/login-trace";
 
 type Props = {
@@ -11,7 +12,8 @@ type Props = {
 export async function DashboardStatsLoader({ searchParams }: Props) {
   const trace = await getLoginTraceFromCookies();
 
-  const load = async () => {
+  const load = async () =>
+    runAdminLoadSafe("DashboardStatsLoader", async () => {
     if (trace) loginTraceMark(trace, "9.dashboardStream", { started: true });
     const me = await requireAuth();
     const sp = await searchParams;
@@ -21,7 +23,7 @@ export async function DashboardStatsLoader({ searchParams }: Props) {
     return (
       <DashboardStatsSections me={me} range={range} searchParams={sp} showStaffStats={showStaffStats} />
     );
-  };
+  });
 
   if (trace) {
     const out = await loginTraceTimed(trace.traceId, "dashboardStream", load);

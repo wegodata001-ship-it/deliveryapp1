@@ -171,7 +171,11 @@ export async function requireAuth(): Promise<AppUser> {
       logSessionPayload(session);
       const user = await getCurrentUser();
       if (!user) {
-        if (session) await clearAdminSession();
+        if (session) {
+          currentUserCache.delete(session.sub);
+          // מחיקת cookie רק ב-Route Handler (לא ב-Server Component)
+          redirect("/admin/logout?reason=session_invalid");
+        }
         redirect("/admin-login");
       }
       return user;
