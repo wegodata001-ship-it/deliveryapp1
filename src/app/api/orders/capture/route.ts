@@ -1,5 +1,5 @@
-import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
+import { logDbEnvDiagnostics } from "@/lib/db-env-diagnostics";
 import {
   captureOrderActionForApi,
   updateOrderWorkPanelActionForApi,
@@ -7,21 +7,25 @@ import {
 } from "@/app/admin/capture/actions";
 import { capturePerfLog, capturePerfTimeEnd, capturePerfTimeStart } from "@/lib/capture-perf";
 import { perfError } from "@/lib/perf-log";
-import { adminSessionCookieName, verifySessionToken } from "@/lib/session";
+import { requireApiAuth } from "@/lib/session-user-guard";
 
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
+  logDbEnvDiagnostics("POST /api/orders/capture");
   capturePerfTimeStart("capture.total");
   const t0 = Date.now();
   try {
     const sessionT0 = Date.now();
-    const token = (await cookies()).get(adminSessionCookieName)?.value;
-    const session = token ? await verifySessionToken(token) : null;
+    const auth = await requireApiAuth();
     const sessionMs = Date.now() - sessionT0;
-    if (!session || (session.role !== "ADMIN" && session.role !== "EMPLOYEE")) {
-      return NextResponse.json({ ok: false, error: "Unauthorized" } satisfies CaptureState, { status: 401 });
+    if (!auth.ok) {
+      return NextResponse.json(
+        { ok: false, error: auth.error } satisfies CaptureState,
+        { status: auth.status },
+      );
     }
+    const { session } = auth;
 
     const bodyT0 = Date.now();
     const body = (await req.json().catch(() => null)) as

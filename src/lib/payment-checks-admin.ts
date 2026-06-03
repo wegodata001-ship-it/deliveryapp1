@@ -1,6 +1,7 @@
 import { Prisma, PaymentCheckStatus } from "@prisma/client";
 import { computeFromUsdAmount } from "@/lib/financial-calc";
 import { prisma } from "@/lib/prisma";
+import { assertCreatedByUserExists } from "@/lib/session-user-guard";
 import { PAYMENT_CODE_PREFIX, parsePaymentNumberFromCode } from "@/lib/payment-capture-code";
 import { endOfLocalDay, formatLocalYmd, getCurrentWeekRange, parseLocalDate } from "@/lib/work-week";
 
@@ -356,6 +357,8 @@ export async function updatePaymentCheckStatus(params: {
 
   try {
     await prisma.$transaction(async (tx) => {
+      await assertCreatedByUserExists(params.userId, tx);
+
       const row = await tx.paymentCheck.findFirst({
         where: { id },
         select: {

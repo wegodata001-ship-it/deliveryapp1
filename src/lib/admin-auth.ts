@@ -92,9 +92,23 @@ async function fetchUserWithPermissionsJoin(sub: string): Promise<AppUser | null
   return Object.assign(rest, { permissionKeys }) as AppUser;
 }
 
-/** JWT בלבד — ל-API routes שכבר אימתו session (ללא cookies/DB) */
+/** @deprecated השתמש ב-resolveSessionToAppUser — מאמת מול DB */
 export function appUserFromSessionPayload(session: SessionPayload): AppUser {
   return appUserFromSession(session);
+}
+
+export function logSessionPayload(session: SessionPayload | null | undefined): void {
+  if (!session) {
+    console.log("[SESSION]", null, null);
+    return;
+  }
+  console.log("[SESSION]", session.sub, session.name);
+}
+
+/** מאמת ש-session.sub קיים ופעיל ב-User — מונע FK אחרי RESET / JWT ישן */
+export async function resolveSessionToAppUser(session: SessionPayload): Promise<AppUser | null> {
+  logSessionPayload(session);
+  return fetchUserWithPermissionsJoin(session.sub);
 }
 
 function appUserFromSession(session: SessionPayload): AppUser {
@@ -115,15 +129,16 @@ function appUserFromSession(session: SessionPayload): AppUser {
 }
 
 async function fetchAndCacheUser(session: SessionPayload): Promise<AppUser | null> {
-  /** JWT עם perms (או ADMIN) — ללא round-trip ל-DB */
-  if (session.role === "ADMIN" || session.perms !== undefined) {
-    const appUser = appUserFromSession(session);
-    currentUserCache.set(session.sub, { user: appUser, expiresAt: Date.now() + USER_CACHE_TTL_MS });
-    return appUser;
-  }
-
   const appUser = await fetchUserWithPermissionsJoin(session.sub);
-  if (!appUser) return null;
+  if (!appUser) {
+    console.warn("[SESSION] JWT user not in DB — session invalid", {
+      sub: session.sub,
+      name: session.name,
+      role: session.role,
+    });
+    currentUserCache.delete(session.sub);
+    return null;
+  }
   currentUserCache.set(session.sub, { expiresAt: Date.now() + USER_CACHE_TTL_MS, user: appUser });
   return appUser;
 }
@@ -152,8 +167,13 @@ export async function requireAuth(): Promise<AppUser> {
   const trace = await getLoginTraceFromCookies();
   try {
     const load = async () => {
+      const session = await getSessionPayload();
+      logSessionPayload(session);
       const user = await getCurrentUser();
-      if (!user) redirect("/admin-login");
+      if (!user) {
+        if (session) await clearAdminSession();
+        redirect("/admin-login");
+      }
       return user;
     };
     const user = trace

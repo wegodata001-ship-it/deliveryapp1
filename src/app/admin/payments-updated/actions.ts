@@ -5,6 +5,7 @@ import { OS } from "@/lib/order-status-slugs";
 import { revalidatePath } from "next/cache";
 import { revalidateAllKpiCaches } from "@/lib/kpi-cache-tags";
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
+import { assertCreatedByUserExists, SessionUserInvalidError } from "@/lib/session-user-guard";
 import { computeFromUsdAmount } from "@/lib/financial-calc";
 import { ensureDefaultFinancialSettings, getCurrentFinancialSettings } from "@/lib/financial-settings";
 import { allocatePaymentAcrossOrders, roundMoney2, toPaymentIntakeBases } from "@/lib/payment-intake";
@@ -260,6 +261,12 @@ export async function savePaymentUpdatedAction(
 ): Promise<{ ok: true; saved: { primaryPaymentCode: string | null; count: number } } | { ok: false; error: string }> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["receive_payments"])) return { ok: false, error: "אין הרשאה" };
+  try {
+    await assertCreatedByUserExists(me.id);
+  } catch (e) {
+    if (e instanceof SessionUserInvalidError) return { ok: false, error: "User Session Invalid" };
+    throw e;
+  }
 
   const cid = form.customerId.trim();
   if (!cid) return { ok: false, error: "חסר לקוח" };

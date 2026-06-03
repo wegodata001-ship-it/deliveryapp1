@@ -1,10 +1,13 @@
 import { PrismaClient } from "@prisma/client";
+import { logDbEnvDiagnostics } from "@/lib/db-env-diagnostics";
 import { perfEnabled } from "@/lib/perf-log";
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
   prismaPerfSubscribed?: boolean;
 };
+
+const PRISMA_INSTANCE_ID = "wego-app-singleton";
 
 export const prisma =
   globalForPrisma.prisma ??
@@ -13,6 +16,10 @@ export const prisma =
       ? [{ level: "query", emit: "event" }, { level: "error", emit: "stdout" }, { level: "warn", emit: "stdout" }]
       : ["error"],
   });
+
+if (typeof window === "undefined") {
+  logDbEnvDiagnostics("prisma:init", PRISMA_INSTANCE_ID);
+}
 
 if (typeof window === "undefined" && perfEnabled() && !globalForPrisma.prismaPerfSubscribed) {
   globalForPrisma.prismaPerfSubscribed = true;

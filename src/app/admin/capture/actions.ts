@@ -8,12 +8,14 @@ import { revalidatePath, revalidateTag } from "next/cache";
 import { revalidateAllKpiCaches } from "@/lib/kpi-cache-tags";
 import { recordActivityAudit } from "@/lib/activity-audit";
 import {
-  appUserFromSessionPayload,
   getCurrentUser,
   isAdminUser,
   requireAuth,
+  resolveSessionToAppUser,
   userHasAnyPermission,
+  type AppUser,
 } from "@/lib/admin-auth";
+import { assertCreatedByUserExists, SessionUserInvalidError } from "@/lib/session-user-guard";
 import {
   type CaptureCustomerSnapshotInput,
   type CaptureFinancialResolved,
@@ -257,6 +259,23 @@ function parseOrderPaymentLines(
 
 type CaptureDbClient = typeof prisma | Prisma.TransactionClient;
 
+type CaptureActorResult = AppUser | { error: string };
+
+/** מאמת session + User ב-DB לפני create/update — מונע FK על createdById */
+async function resolveCaptureActor(apiSession: SessionPayload | null): Promise<CaptureActorResult> {
+  const user = apiSession ? await resolveSessionToAppUser(apiSession) : await getCurrentUser();
+  if (!user) {
+    return { error: apiSession ? "User Session Invalid" : "לא מחובר" };
+  }
+  try {
+    await assertCreatedByUserExists(user.id);
+  } catch (e) {
+    if (e instanceof SessionUserInvalidError) return { error: "User Session Invalid" };
+    throw e;
+  }
+  return user;
+}
+
 async function appendParsedPaymentsForOrder(
   params: {
     meId: string;
@@ -273,6 +292,7 @@ async function appendParsedPaymentsForOrder(
   db: CaptureDbClient = prisma,
 ): Promise<void> {
   if (params.parsed.length === 0) return;
+  await assertCreatedByUserExists(params.meId, db);
   const snapIn = {
     baseDollarRate: params.base,
     dollarFee: params.fee,
@@ -658,6 +678,8 @@ export async function capturePaymentAction(form: {
   const weekCode = orderWeekCode ?? getWeekCodeForLocalDate(paymentDate);
   const paymentType: "ORDER_PAYMENT" | "GENERAL_PAYMENT" = oid ? "ORDER_PAYMENT" : "GENERAL_PAYMENT";
 
+  await assertCreatedByUserExists(me.id);
+
   const pay = await prisma.payment.create({
     data: {
       paymentCode,
@@ -868,6 +890,8 @@ export async function createMinimalOrderAction(form: {
   const { orderNumber, oldOrderNumber } = await generateNextOrderNumber(weekCode);
 
   const zero = new Prisma.Decimal(0);
+
+  await assertCreatedByUserExists(me.id);
 
   const order = await prisma.order.create({
     data: {
@@ -1203,14 +1227,9 @@ async function captureOrderActionInner(
   warmCaptureHotPathCaches();
   perf.cacheRefreshMs = Date.now() - cacheT0;
 
-  let me;
-  if (apiSession) {
-    me = appUserFromSessionPayload(apiSession);
-  } else {
-    const u = await perf.time("authMs", () => getCurrentUser());
-    if (!u) return { ok: false, error: "לא מחובר" };
-    me = u;
-  }
+  const actor = await perf.time("authMs", () => resolveCaptureActor(apiSession));
+  if ("error" in actor) return { ok: false, error: actor.error };
+  const me = actor;
 
   const validationT0 = Date.now();
   capturePerfTimeStart("capture.validation");
@@ -1434,16 +1453,6 @@ async function captureOrderActionInner(
     return { ok: false, error: "מדינה זו אינה מופעלת בהגדרות המערכת" };
   }
   const sourceCountryCreate = rawCountry as OrderCountryCode;
-
-  const createdById = me.id;
-  const userExists = await prisma.user.findUnique({
-    where: { id: createdById },
-    select: { id: true, fullName: true, isActive: true },
-  });
-  console.log({
-    createdById,
-    userExists,
-  });
 
   capturePerfTimeStart("capture.insertOrder");
   const order = await capturePerfTimed("capture.insertOrderRow", () =>
@@ -1958,7 +1967,9 @@ export async function updateOrderListStatusActionForApi(
   statusRaw: string,
   session: SessionPayload,
 ): Promise<UpdateOrderListStatusApiResult> {
-  const me = appUserFromSessionPayload(session);
+  const actor = await resolveCaptureActor(session);
+  if ("error" in actor) return { ok: false, error: actor.error };
+  const me = actor;
   if (!userHasAnyPermission(me, ["edit_orders"])) {
     return { ok: false, error: "אין הרשאה" };
   }
@@ -2081,7 +2092,9 @@ export async function updateOrderListPaymentMethodActionForApi(
   methodRaw: string | null,
   session: SessionPayload,
 ): Promise<UpdateOrderPaymentMethodApiResult> {
-  const me = appUserFromSessionPayload(session);
+  const actor = await resolveCaptureActor(session);
+  if ("error" in actor) return { ok: false, error: actor.error };
+  const me = actor;
   if (!userHasAnyPermission(me, ["edit_orders"])) {
     return { ok: false, error: "אין הרשאה" };
   }
@@ -2199,14 +2212,9 @@ async function updateOrderWorkPanelActionInner(
   warmCaptureHotPathCaches();
   perf.cacheRefreshMs = Date.now() - cacheT0;
 
-  let me;
-  if (apiSession) {
-    me = appUserFromSessionPayload(apiSession);
-  } else {
-    const u = await perf.time("authMs", () => getCurrentUser());
-    if (!u) return { ok: false, error: "לא מחובר" };
-    me = u;
-  }
+  const actor = await perf.time("authMs", () => resolveCaptureActor(apiSession));
+  if ("error" in actor) return { ok: false, error: actor.error };
+  const me = actor;
 
   const validationT0 = Date.now();
   capturePerfTimeStart("capture.validation");

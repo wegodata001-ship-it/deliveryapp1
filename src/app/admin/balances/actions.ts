@@ -3,6 +3,7 @@
 import { OrderSourceCountry, Prisma } from "@prisma/client";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { perfEnabled } from "@/lib/perf-log";
+import { logDbEnvDiagnostics } from "@/lib/db-env-diagnostics";
 import { prisma } from "@/lib/prisma";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { endOfLocalDay, formatLocalYmd, getAhWeekRange, normalizeAhWeekCode, parseLocalDate } from "@/lib/work-week";
@@ -540,6 +541,7 @@ function computeBalanceStats(rows: CustomerBalanceRow[]): CustomerBalancesPayloa
 }
 
 export async function listCustomerBalancesAction(query: CustomerBalanceQuery): Promise<CustomerBalancesPayload> {
+  logDbEnvDiagnostics("server /admin/balances listCustomerBalancesAction");
   const perfT0 = Date.now();
   let fetchCustomersMs = 0;
   let fetchOrdersMs = 0;

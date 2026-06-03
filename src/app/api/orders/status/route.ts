@@ -1,9 +1,8 @@
-import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { updateOrderListStatusActionForApi, type UpdateOrderListStatusApiResult } from "@/app/admin/capture/actions";
 import { capturePerfLog } from "@/lib/capture-perf";
 import { perfError } from "@/lib/perf-log";
-import { adminSessionCookieName, verifySessionToken } from "@/lib/session";
+import { requireApiAuth } from "@/lib/session-user-guard";
 
 export const runtime = "nodejs";
 
@@ -15,11 +14,14 @@ type Body = {
 export async function POST(req: Request) {
   const t0 = Date.now();
   try {
-    const token = (await cookies()).get(adminSessionCookieName)?.value;
-    const session = token ? await verifySessionToken(token) : null;
-    if (!session || (session.role !== "ADMIN" && session.role !== "EMPLOYEE")) {
-      return NextResponse.json({ ok: false, error: "Unauthorized" } satisfies UpdateOrderListStatusApiResult, { status: 401 });
+    const auth = await requireApiAuth();
+    if (!auth.ok) {
+      return NextResponse.json(
+        { ok: false, error: auth.error } satisfies UpdateOrderListStatusApiResult,
+        { status: auth.status },
+      );
     }
+    const { session } = auth;
     const body = (await req.json().catch(() => null)) as Body | null;
     if (!body) {
       return NextResponse.json({ ok: false, error: "בקשה לא תקינה" } satisfies UpdateOrderListStatusApiResult, { status: 400 });

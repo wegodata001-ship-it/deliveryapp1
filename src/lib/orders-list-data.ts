@@ -7,6 +7,7 @@ import { isAdminUser, userHasAnyPermission } from "@/lib/admin-auth";
 import { hasActiveEditUnlock } from "@/lib/order-edit-lock";
 import { ORDERS_LIST_MAX_PAGE_SIZE, ORDERS_LIST_PAGE_SIZE } from "@/lib/orders-list-constants";
 import { perfEnabled, withPerfTimer } from "@/lib/perf-log";
+import { logDbEnvDiagnostics } from "@/lib/db-env-diagnostics";
 import { prisma } from "@/lib/prisma";
 import { formatLocalYmd } from "@/lib/work-week";
 import { buildOrdersListWhereFromSearchParams } from "@/app/admin/orders/orders-list-where";
@@ -90,6 +91,7 @@ export async function fetchOrdersListPageData(
   sp: Record<string, string | string[] | undefined>,
   me: AppUser,
 ): Promise<OrdersListPageData> {
+  logDbEnvDiagnostics("server /admin/orders fetchOrdersListPageData");
   const perfT0 = Date.now();
   let ordersQueryMs = 0;
   let ordersCountMs = 0;

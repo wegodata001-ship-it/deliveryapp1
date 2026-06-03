@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
+import { assertCreatedByUserExists } from "@/lib/session-user-guard";
 import { ensureExcelImportTables } from "@/lib/excel-import";
 import { prisma } from "@/lib/prisma";
 import { getWeekCodeForLocalDate } from "@/lib/work-week";
@@ -76,6 +77,8 @@ export async function POST(req: Request) {
     if (!rows.length) {
       return NextResponse.json({ ok: false, error: "אין שורות לייבוא" }, { status: 400 });
     }
+
+    await assertCreatedByUserExists(me.id);
 
     let imported = 0;
     const importedRowIds: string[] = [];

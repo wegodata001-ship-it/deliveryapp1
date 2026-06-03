@@ -4,6 +4,7 @@ import { PaymentMethod, Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { revalidateAllKpiCaches } from "@/lib/kpi-cache-tags";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
+import { assertCreatedByUserExists, SessionUserInvalidError } from "@/lib/session-user-guard";
 import { computeFromUsdAmount } from "@/lib/financial-calc";
 import { ensureDefaultFinancialSettings, getCurrentFinancialSettings } from "@/lib/financial-settings";
 import {
@@ -319,6 +320,12 @@ export async function savePaymentIntakeAction(
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["receive_payments"])) {
     return { ok: false, error: "אין הרשאה" };
+  }
+  try {
+    await assertCreatedByUserExists(me.id);
+  } catch (e) {
+    if (e instanceof SessionUserInvalidError) return { ok: false, error: "User Session Invalid" };
+    throw e;
   }
 
   const cid = form.customerId.trim();

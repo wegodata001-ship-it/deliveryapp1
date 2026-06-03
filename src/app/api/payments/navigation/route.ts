@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { logDbEnvDiagnostics } from "@/lib/db-env-diagnostics";
 import { getSessionPayload } from "@/lib/admin-auth";
 import { loadPaymentEntryPayload } from "@/lib/payment-entry-payload";
 import { resolvePaymentNavigation } from "@/lib/payment-navigation";
@@ -12,6 +13,7 @@ const NO_STORE_HEADERS = {
 };
 
 export async function GET(req: Request) {
+  logDbEnvDiagnostics("GET /api/payments/navigation");
   return withPerfTimer("api.payments.navigation.GET", async () => {
     try {
       const session = await getSessionPayload();

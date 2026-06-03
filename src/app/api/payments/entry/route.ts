@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { logDbEnvDiagnostics } from "@/lib/db-env-diagnostics";
 import { getSessionPayload } from "@/lib/admin-auth";
 import { loadPaymentEntryPayload } from "@/lib/payment-entry-payload";
 import { perfError, withPerfTimer } from "@/lib/perf-log";
@@ -6,6 +7,7 @@ import { perfError, withPerfTimer } from "@/lib/perf-log";
 export const runtime = "nodejs";
 
 export async function GET(req: Request) {
+  logDbEnvDiagnostics("GET /api/payments/entry");
   return withPerfTimer("api.payments.entry.GET", async () => {
     try {
       const session = await getSessionPayload();

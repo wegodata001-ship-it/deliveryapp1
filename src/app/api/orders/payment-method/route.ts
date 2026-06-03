@@ -1,4 +1,3 @@
-import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import {
   updateOrderListPaymentMethodActionForApi,
@@ -6,7 +5,7 @@ import {
 } from "@/app/admin/capture/actions";
 import { capturePerfLog } from "@/lib/capture-perf";
 import { perfError } from "@/lib/perf-log";
-import { adminSessionCookieName, verifySessionToken } from "@/lib/session";
+import { requireApiAuth } from "@/lib/session-user-guard";
 
 export const runtime = "nodejs";
 
@@ -18,14 +17,14 @@ type Body = {
 export async function POST(req: Request) {
   const t0 = Date.now();
   try {
-    const token = (await cookies()).get(adminSessionCookieName)?.value;
-    const session = token ? await verifySessionToken(token) : null;
-    if (!session || (session.role !== "ADMIN" && session.role !== "EMPLOYEE")) {
+    const auth = await requireApiAuth();
+    if (!auth.ok) {
       return NextResponse.json(
-        { ok: false, error: "Unauthorized" } satisfies UpdateOrderPaymentMethodApiResult,
-        { status: 401 },
+        { ok: false, error: auth.error } satisfies UpdateOrderPaymentMethodApiResult,
+        { status: auth.status },
       );
     }
+    const { session } = auth;
     const body = (await req.json().catch(() => null)) as Body | null;
     if (!body) {
       return NextResponse.json(
