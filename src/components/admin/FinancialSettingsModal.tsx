@@ -9,6 +9,7 @@ import {
   saveManualFinancialSettings,
 } from "@/app/admin/financial/actions";
 import { sanitizeCommissionPercentInput } from "@/lib/commission-percent";
+import { dispatchFinancialSettingsSaved } from "@/lib/financial-settings-bus";
 import { FINANCIAL_SETTINGS_DEFAULTS, type SerializedFinancial } from "@/lib/financial-settings";
 
 type Props = {
@@ -43,7 +44,8 @@ export function FinancialSettingsModal({ open, onClose, onToast }: Props) {
   );
   const [meta, setMeta] = useState<SerializedFinancial | null>(null);
   const [loading, setLoading] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const loadFromServer = useCallback(async () => {
@@ -79,7 +81,7 @@ export function FinancialSettingsModal({ open, onClose, onToast }: Props) {
   }, [base, fee, finalPreview]);
 
   async function onSaveManual() {
-    setBusy(true);
+    setSaving(true);
     setErr(null);
     try {
       const res = await saveManualFinancialSettings({
@@ -89,45 +91,48 @@ export function FinancialSettingsModal({ open, onClose, onToast }: Props) {
       });
       if (!res.ok) {
         setErr(res.error);
-        onToast("שגיאה בשמירה", { variant: "error" });
+        onToast("✗ שמירת ההגדרות נכשלה", { variant: "error" });
         return;
       }
-      applySerialized(res.settings, { setBase, setFee, setDefaultCommissionPercent, setMeta });
-      onToast("הגדרות נשמרו בהצלחה", { variant: "success" });
+      dispatchFinancialSettingsSaved(res.settings);
+      onToast("✓ הגדרות כספיות נשמרו בהצלחה", { variant: "success" });
       router.refresh();
+      onClose();
     } catch {
       setErr("שגיאה בשמירה");
-      onToast("שגיאה בשמירה", { variant: "error" });
+      onToast("✗ שמירת ההגדרות נכשלה", { variant: "error" });
     } finally {
-      setBusy(false);
+      setSaving(false);
     }
   }
 
   async function onResetDefaults() {
     if (!window.confirm("לאפס את הגדרות ברירת המחדל להזמנות?")) return;
-    setBusy(true);
+    setResetting(true);
     setErr(null);
     try {
       const res = await resetFinancialSettingsToDefaultsAction();
       if (!res.ok) {
         setErr(res.error);
-        onToast("שגיאה בשמירה", { variant: "error" });
+        onToast("✗ שמירת ההגדרות נכשלה", { variant: "error" });
         return;
       }
       applySerialized(res.settings, { setBase, setFee, setDefaultCommissionPercent, setMeta });
-      onToast("הגדרות נשמרו בהצלחה", { variant: "success" });
+      dispatchFinancialSettingsSaved(res.settings);
+      onToast("✓ הגדרות כספיות נשמרו בהצלחה", { variant: "success" });
       router.refresh();
+      onClose();
     } catch {
       setErr("שגיאה בשמירה");
-      onToast("שגיאה בשמירה", { variant: "error" });
+      onToast("✗ שמירת ההגדרות נכשלה", { variant: "error" });
     } finally {
-      setBusy(false);
+      setResetting(false);
     }
   }
 
   return (
     <Modal open={open} onClose={onClose} title="הגדרות כספים" size="md">
-      <div className="adm-fin-settings" aria-busy={loading || busy}>
+      <div className="adm-fin-settings" aria-busy={loading || saving || resetting}>
         {loading ? (
           <p className="adm-fin-settings__loading">טוען הגדרות…</p>
         ) : null}
@@ -145,7 +150,7 @@ export function FinancialSettingsModal({ open, onClose, onToast }: Props) {
               inputMode="decimal"
               dir="ltr"
               value={base}
-              disabled={loading || busy}
+              disabled={loading || saving || resetting}
               onChange={(e) => setBase(e.target.value)}
             />
           </div>
@@ -157,7 +162,7 @@ export function FinancialSettingsModal({ open, onClose, onToast }: Props) {
               inputMode="decimal"
               dir="ltr"
               value={fee}
-              disabled={loading || busy}
+              disabled={loading || saving || resetting}
               onChange={(e) => setFee(e.target.value)}
             />
           </div>
@@ -169,7 +174,7 @@ export function FinancialSettingsModal({ open, onClose, onToast }: Props) {
               inputMode="decimal"
               dir="ltr"
               value={defaultCommissionPercent}
-              disabled={loading || busy}
+              disabled={loading || saving || resetting}
               placeholder="0"
               onChange={(e) => setDefaultCommissionPercent(sanitizeCommissionPercentInput(e.target.value))}
             />
@@ -210,16 +215,23 @@ export function FinancialSettingsModal({ open, onClose, onToast }: Props) {
         <div className="adm-fin-settings__actions">
           <button
             type="button"
-            className="adm-btn adm-btn--primary"
-            disabled={loading || busy}
+            className="adm-btn adm-btn--primary adm-fin-settings__save-btn"
+            disabled={loading || saving || resetting}
             onClick={() => void onSaveManual()}
           >
-            שמירת הגדרות
+            {saving ? (
+              <>
+                <span className="adm-fin-settings__spinner" aria-hidden />
+                שומר...
+              </>
+            ) : (
+              "שמירת הגדרות"
+            )}
           </button>
           <button
             type="button"
             className="adm-btn adm-btn--ghost"
-            disabled={loading || busy}
+            disabled={loading || saving || resetting}
             onClick={() => void onResetDefaults()}
           >
             איפוס לברירת מחדל

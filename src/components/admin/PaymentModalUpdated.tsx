@@ -24,6 +24,7 @@ import {
   type CustomerSearchRow,
 } from "@/app/admin/capture/actions";
 import { loadFinancialSettingsForPaymentCaptureAction } from "@/app/admin/financial/actions";
+import { WEGO_FINANCIAL_SETTINGS_SAVED } from "@/lib/financial-settings-bus";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 import type { PaymentWindowProps } from "@/lib/admin-windows";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
@@ -399,6 +400,7 @@ export function PaymentModalUpdated({
   const [weekInputErr, setWeekInputErr] = useState<string | null>(null);
 
   const dollarRateTouchedRef = useRef(false);
+  const commissionPercentTouchedRef = useRef(false);
   const [dollarRate, setDollarRate] = useState(() => defaultRate.toFixed(4));
   /** אחוז עמלה ברירת מחדל מהמערכת */
   const systemCommissionPercentStr = useMemo(
@@ -553,13 +555,33 @@ export function PaymentModalUpdated({
   }, [financeLive]);
 
   useEffect(() => {
-    if (!financeLive) return;
+    if (!financeLive || commissionPercentTouchedRef.current) return;
     setCommissionPercentStr(
       formatCommissionPercentValue(
         parseCommissionPercentString(financeLive.defaultCommissionPercent ?? "0"),
       ),
     );
   }, [financeLive]);
+
+  useEffect(() => {
+    const onSaved = (ev: Event) => {
+      const data = (ev as CustomEvent<SerializedFinancial>).detail;
+      if (!data) return;
+      setFinanceLive(data);
+      if (!dollarRateTouchedRef.current) {
+        const raw = data.finalDollarRate?.replace(",", ".");
+        const f = raw ? Number(raw) : NaN;
+        if (Number.isFinite(f) && f > 0) setDollarRate(f.toFixed(4));
+      }
+      if (!commissionPercentTouchedRef.current) {
+        setCommissionPercentStr(
+          formatCommissionPercentValue(parseCommissionPercentString(data.defaultCommissionPercent ?? "0")),
+        );
+      }
+    };
+    window.addEventListener(WEGO_FINANCIAL_SETTINGS_SAVED, onSaved);
+    return () => window.removeEventListener(WEGO_FINANCIAL_SETTINGS_SAVED, onSaved);
+  }, []);
 
   /** ניווט prev/next — prefetch + מטמון entry לשכנים */
   useEffect(() => {
@@ -691,6 +713,20 @@ export function PaymentModalUpdated({
     };
   }, [matched]);
 
+  const customerBalanceUsd = useMemo(
+    () => parseMoneyStringOrZero(customer?.customerBalanceUsd ?? "0"),
+    [customer?.customerBalanceUsd],
+  );
+  const customerHasCredit = customerBalanceUsd > 0.01;
+  const customerHasDebt = customerBalanceUsd < -0.01;
+  const customerBalanceLabel = customerHasCredit ? "יתרת זכות ללקוח" : "חוב פתוח";
+  const customerBalanceIcon = customerHasCredit ? "🟢" : "🔴";
+  const customerBalanceAbs = roundMoney2(Math.abs(customerBalanceUsd));
+  const customerBalanceAfterSave = useMemo(
+    () => roundMoney2(customerBalanceUsd + totals.totalUsd),
+    [customerBalanceUsd, totals.totalUsd],
+  );
+
   /** סיכום מתחת לטבלה: סך עסקאות (USD), סך ששולם בפועל (DB), יתרה פתוחה */
   const ordersTableFooterTotals = useMemo(() => {
     let tx = 0;
@@ -818,6 +854,7 @@ export function PaymentModalUpdated({
         nameAr: row.nameAr ?? null,
         phone: row.phone ?? null,
         customerIndex: row.oldCustomerCode ?? null,
+        customerBalanceUsd: "0.00",
       });
       setDraftCustomer({
         code: row.code ?? "",
@@ -1425,7 +1462,9 @@ export function PaymentModalUpdated({
    * מחזיר true אם השמירה הצליחה.
    * אין כאן side-effects של reset/reload — את זה מנהלים `onSaveAndNew` / `onSaveAndClose`.
    */
-  async function performSave(saveSurplusAsCredit = false): Promise<{ ok: true; primaryPaymentCode: string } | { ok: false }> {
+  async function performSave(
+    saveSurplusAsCredit = false,
+  ): Promise<{ ok: true; primaryPaymentCode: string; customerBalanceUsd: string } | { ok: false }> {
     setSaveErr(null);
     setHighlightInvalidCheckFields(false);
     if (!customer) {
@@ -1446,14 +1485,18 @@ export function PaymentModalUpdated({
       setHighlightInvalidCheckFields(true);
       return { ok: false };
     }
-    const { byOrderId, unallocatedUsd } = allocatePaymentAcrossOrders(bases, totals.totalUsd, prioritizedSet);
+    const forceCustomerCreditPayment = customerHasCredit;
+    const { byOrderId, unallocatedUsd } =
+      forceCustomerCreditPayment && totals.totalUsd > 0.02
+        ? { byOrderId: new Map<string, number>(), unallocatedUsd: totals.totalUsd }
+        : allocatePaymentAcrossOrders(bases, totals.totalUsd, prioritizedSet);
     const hasAlloc = [...byOrderId.values()].some((v) => v > 0.02);
     const ilsOnly = totals.totalUsd <= 0.02 && totals.totalIls > 0.02;
-    if (!hasAlloc && !ilsOnly && !(saveSurplusAsCredit && unallocatedUsd > 0.02)) {
+    if (!hasAlloc && !ilsOnly && !((saveSurplusAsCredit || forceCustomerCreditPayment) && unallocatedUsd > 0.02)) {
       setSaveErr("אין יעד להקצאה");
       return { ok: false };
     }
-    if (totals.totalUsd > 0.02 && unallocatedUsd > 0.02 && !saveSurplusAsCredit) {
+    if (totals.totalUsd > 0.02 && unallocatedUsd > 0.02 && !saveSurplusAsCredit && !forceCustomerCreditPayment) {
       const prev = await previewCustomerPaymentOverageAction({
         customerId: customer.id,
         totalPaymentUsd: totals.totalUsd,
@@ -1479,12 +1522,12 @@ export function PaymentModalUpdated({
       dollarRate,
       commissionPercent: commissionPercentStr,
       payments,
-      includedOrderIds: includedIds,
+      includedOrderIds: forceCustomerCreditPayment ? [] : includedIds,
       commissionResetOrderIds: commissionResetIds.length > 0 ? commissionResetIds : null,
       draftNameAr: draftCustomer.nameAr.trim() || null,
       draftNameEn: draftCustomer.nameEn.trim() || null,
       draftPhone: draftCustomer.phone.trim() || null,
-      saveSurplusAsCredit,
+      saveSurplusAsCredit: saveSurplusAsCredit || forceCustomerCreditPayment,
     });
     setSaveBusy(false);
     if (!res.ok) {
@@ -1495,8 +1538,11 @@ export function PaymentModalUpdated({
     const remainingAfter = roundMoney2(
       matched.reduce((sum, row) => sum + Math.max(0, row.remainingAmount), 0),
     );
-    if (saveSurplusAsCredit && unallocatedUsd > 0.02) {
+    setCustomer((cur) => (cur ? { ...cur, customerBalanceUsd: res.saved.customerBalanceUsd } : cur));
+    if ((saveSurplusAsCredit || forceCustomerCreditPayment) && unallocatedUsd > 0.02) {
       onToast(`נשמרה יתרת זכות של ${unallocatedUsd.toFixed(2)}$ ללקוח`);
+    } else if (Number(res.saved.customerBalanceUsd) > 0.01) {
+      onToast(`יתרת זכות לאחר שמירה: ${Number(res.saved.customerBalanceUsd).toFixed(2)}$`);
     } else if (remainingAfter <= 0.01) onToast("כל החיובים נסגרו בהצלחה");
     else onToast(`נשארו ${remainingAfter.toFixed(2)}$ פתוחים`);
     entryCacheRef.current.clear();
@@ -1512,7 +1558,7 @@ export function PaymentModalUpdated({
     if (typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
     }
-    return { ok: true, primaryPaymentCode };
+    return { ok: true, primaryPaymentCode, customerBalanceUsd: res.saved.customerBalanceUsd };
   }
 
   function finishSaveAndNewOptimistic(savedCode: string) {
@@ -1597,6 +1643,16 @@ export function PaymentModalUpdated({
     return "pm-st--paid";
   }
 
+  function displayedLedgerStatus(balanceUsd: number): PaymentLedgerStatus {
+    if (customerHasCredit && balanceUsd > 0.01) return "paid";
+    return paymentLedgerStatus(balanceUsd);
+  }
+
+  function displayedLedgerStatusLabel(balanceUsd: number): string {
+    if (customerHasCredit && balanceUsd > 0.01) return "מכוסה ביתרת זכות";
+    return paymentLedgerStatusLabel(paymentLedgerStatus(balanceUsd));
+  }
+
   function ledgerRowClass(status: PaymentLedgerStatus): string {
     if (status === "open") return "payment-modal-tr--status-open";
     if (status === "credit") return "payment-modal-tr--status-credit";
@@ -1608,6 +1664,7 @@ export function PaymentModalUpdated({
   }
 
   function canCloseDebtForRow(row: PaymentIntakeMatchResult): boolean {
+    if (customerHasCredit) return false;
     return orderRowLedgerBalance(row) > 0.01;
   }
 
@@ -1670,7 +1727,10 @@ export function PaymentModalUpdated({
                 aria-label="אחוז עמלה"
                 title={`ברירת מחדל מערכת: ${systemCommissionPercentStr}%`}
                 value={commissionPercentStr}
-                onChange={(e) => setCommissionPercentStr(sanitizePercentInput(e.target.value))}
+                onChange={(e) => {
+                  commissionPercentTouchedRef.current = true;
+                  setCommissionPercentStr(sanitizePercentInput(e.target.value));
+                }}
               />
             </div>
             {loadingCustomer ? <p className="payment-modal-hint payment-modal-hint--top">טוען…</p> : null}
@@ -1882,13 +1942,9 @@ export function PaymentModalUpdated({
                           {" · "}
                           {customerLedgerSummary.orderCount} הזמנות
                           {" · "}
-                          יתרה פתוחה ${fmtUsdDisplay(customerLedgerSummary.openTotal)}
-                          {customerLedgerSummary.creditTotal > 0.01 ? (
-                            <>
-                              {" · "}
-                              זכות ${fmtUsdDisplay(customerLedgerSummary.creditTotal)}
-                            </>
-                          ) : null}
+                          {`${customerBalanceIcon} ${customerBalanceLabel}: $${fmtUsdDisplay(
+                            customerHasDebt || customerHasCredit ? customerBalanceAbs : 0,
+                          )}`}
                         </>
                       )}
                     </span>
@@ -2032,17 +2088,27 @@ export function PaymentModalUpdated({
             <div className="payment-modal-table-wrap">
               {customer ? (
                 <div className="payment-modal-ledger-head" dir="rtl" role="status" aria-live="polite">
-                  <div className="payment-modal-ledger-head-item payment-modal-ledger-head-item--open">
-                    <span className="payment-modal-ledger-head-lbl">סה״כ יתרה פתוחה</span>
-                    <span className="payment-modal-ledger-head-val" dir="ltr">
-                      ${fmtUsdDisplay(customerLedgerSummary.openTotal)}
+                  <div
+                    className={[
+                      "payment-modal-ledger-head-item",
+                      customerHasCredit
+                        ? "payment-modal-ledger-head-item--credit"
+                        : "payment-modal-ledger-head-item--open",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                  >
+                    <span className="payment-modal-ledger-head-lbl">
+                      {customerHasCredit ? "יתרת זכות קיימת" : "חוב פתוח"}
                     </span>
-                  </div>
-                  <div className="payment-modal-ledger-head-item payment-modal-ledger-head-item--credit">
-                    <span className="payment-modal-ledger-head-lbl">סה״כ זכות לקוח</span>
                     <span className="payment-modal-ledger-head-val" dir="ltr">
-                      ${fmtUsdDisplay(customerLedgerSummary.creditTotal)}
+                      ${fmtUsdDisplay(customerBalanceAbs)}
                     </span>
+                    {customerHasCredit && totals.totalUsd > 0.01 ? (
+                      <span className="payment-modal-ledger-head-lbl">
+                        לאחר שמירה: ${fmtUsdDisplay(Math.max(0, customerBalanceAfterSave))}
+                      </span>
+                    ) : null}
                   </div>
                 </div>
               ) : null}
@@ -2066,9 +2132,11 @@ export function PaymentModalUpdated({
                     </strong>
                   </div>
                   <div className="pm-commission-totals__item">
-                    <span className="pm-commission-totals__k">סה&quot;כ יתרה</span>
+                    <span className="pm-commission-totals__k">
+                      {customerHasCredit ? "יתרת זכות קיימת" : "סה\"כ יתרה"}
+                    </span>
                     <strong className="pm-commission-totals__v pm-commission-totals__v--balance" dir="ltr">
-                      {fmtUsdDisplay(ordersTableFooterTotals.remaining)}
+                      {fmtUsdDisplay(customerHasCredit ? customerBalanceAbs : ordersTableFooterTotals.remaining)}
                     </strong>
                   </div>
                   {commissionResetPreviewUsd > 0.01 ? (
@@ -2108,7 +2176,7 @@ export function PaymentModalUpdated({
                         const isCommissionResetPreview = commissionResetIds.includes(row.id);
                         const commissionUsd = isCommissionResetPreview ? 0 : Number(row.commissionUsd);
                         const ledgerBal = orderRowLedgerBalance(row);
-                        const ledgerSt = paymentLedgerStatus(ledgerBal);
+                        const ledgerSt = displayedLedgerStatus(ledgerBal);
                         return (
                         <tr
                           key={row.id}
@@ -2189,7 +2257,7 @@ export function PaymentModalUpdated({
                           </td>
                           <td className="payment-modal-td-status">
                             <span className={`pm-status badge ${ledgerStatusClass(ledgerSt)}`}>
-                              {paymentLedgerStatusLabel(ledgerSt)}
+                              {displayedLedgerStatusLabel(ledgerBal)}
                             </span>
                           </td>
                           <td className="payment-modal-td-check" onClick={(e) => e.stopPropagation()}>
@@ -2227,82 +2295,100 @@ export function PaymentModalUpdated({
                * הנתונים האמיתיים ב־DB נשארים ללא שינוי עד לחיצה על "שמור".
                */}
               <div className="payment-modal-orders-summary payment-modal-orders-summary--v2" role="region" aria-label="סיכום עסקאות לקוח" dir="rtl">
-                <div className="payment-modal-orders-summary-card payment-modal-orders-summary-card--txn">
-                  <div className="payment-modal-orders-summary-lbl">סך הכל עסקאות</div>
-                  <AnimatedMoneyValue
-                    className="payment-modal-orders-summary-val"
-                    dir="ltr"
-                    value={fmtFooterAmount(ordersTableFooterTotals.totalTransactions)}
-                  />
-                  <div className="payment-modal-orders-summary-ex-vat" dir="ltr">
-                    ללא מע״מ: {fmtFooterAmount(roundMoney2(ordersTableFooterTotals.totalTransactions / (1 + DEFAULT_VAT_RATE)))}
-                  </div>
-                </div>
-                <div className="payment-modal-orders-summary-card payment-modal-orders-summary-card--paid">
-                  <div className="payment-modal-orders-summary-lbl">סכום שולם</div>
-                  <AnimatedMoneyValue
-                    className="payment-modal-orders-summary-val"
-                    dir="ltr"
-                    value={fmtFooterAmount(ordersTableFooterTotals.totalPaidDb)}
-                  />
-                </div>
-                <div className="payment-modal-orders-summary-card payment-modal-orders-summary-card--rem">
-                  <div className="payment-modal-orders-summary-lbl payment-modal-orders-summary-lbl--with-action">
-                    <span className="payment-modal-orders-summary-lbl-text">
-                      סכום לא שולם
-                      {totals.totalUsd > 0 ? <span className="payment-modal-preview-tag">תצוגה מקדימה</span> : null}
-                    </span>
-                    {viewerIsAdmin && customer && resetBalanceMetrics.remainingToReset > 0.01 ? (
-                      <button
-                        type="button"
-                        className={[
-                          "pm-reset-balance-btn",
-                          canResetCustomerBalance ? "pm-reset-balance-btn--ready" : "",
-                        ]
-                          .filter(Boolean)
-                          .join(" ")}
-                        disabled={resetCustomerBusy}
-                        onClick={() => setResetCustomerConfirmOpen(true)}
-                        title={
-                          canResetCustomerBalance
-                            ? totals.totalUsd > 0.01
-                              ? "איפוס יתרה — לאחר שמירת התשלום ייסגר היתרה הנותרת מהעמלות"
-                              : "איפוס יתרה — סוגר את כל היתרות הפתוחות של הלקוח ומוריד את ההפרש מהעמלות (מהחדש לישן)"
-                            : "אין מספיק עמלה זמינה לאיפוס — ניתן לנסות לאחר שמירת תשלום"
-                        }
-                      >
-                        <svg
-                          className="pm-reset-balance-icon"
-                          width="13"
-                          height="13"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2.2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          aria-hidden
-                        >
-                          <polyline points="1 4 1 10 7 10" />
-                          <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
-                        </svg>
-                        {resetCustomerBusy ? "מאפס…" : "איפוס יתרה"}
-                      </button>
+                {customerHasCredit ? (
+                  <div className="payment-modal-orders-summary-card payment-modal-orders-summary-card--paid">
+                    <div className="payment-modal-orders-summary-lbl">יתרת זכות ללקוח</div>
+                    <AnimatedMoneyValue
+                      className="payment-modal-orders-summary-val"
+                      dir="ltr"
+                      value={fmtFooterAmount(customerBalanceAbs)}
+                    />
+                    {totals.totalUsd > 0.01 ? (
+                      <div className="payment-modal-preview-delta" dir="ltr">
+                        לאחר שמירה: {fmtFooterAmount(Math.max(0, customerBalanceAfterSave))}
+                      </div>
                     ) : null}
                   </div>
-                  <AnimatedMoneyValue
-                    className="payment-modal-orders-summary-val"
-                    dir="ltr"
-                    value={fmtFooterAmount(
-                      roundMoney2(Math.max(0, ordersTableFooterTotals.remaining - totals.totalUsd)),
-                    )}
-                  />
-                  {totals.totalUsd > 0 ? (
-                    <div className="payment-modal-preview-delta" dir="ltr">
-                      − {fmtFooterAmount(roundMoney2(totals.totalUsd))} (תשלום נוכחי)
+                ) : (
+                  <>
+                    <div className="payment-modal-orders-summary-card payment-modal-orders-summary-card--txn">
+                      <div className="payment-modal-orders-summary-lbl">סך הכל עסקאות</div>
+                      <AnimatedMoneyValue
+                        className="payment-modal-orders-summary-val"
+                        dir="ltr"
+                        value={fmtFooterAmount(ordersTableFooterTotals.totalTransactions)}
+                      />
+                      <div className="payment-modal-orders-summary-ex-vat" dir="ltr">
+                        ללא מע״מ: {fmtFooterAmount(roundMoney2(ordersTableFooterTotals.totalTransactions / (1 + DEFAULT_VAT_RATE)))}
+                      </div>
                     </div>
-                  ) : null}
-                </div>
+                    <div className="payment-modal-orders-summary-card payment-modal-orders-summary-card--paid">
+                      <div className="payment-modal-orders-summary-lbl">סכום שולם</div>
+                      <AnimatedMoneyValue
+                        className="payment-modal-orders-summary-val"
+                        dir="ltr"
+                        value={fmtFooterAmount(ordersTableFooterTotals.totalPaidDb)}
+                      />
+                    </div>
+                    <div className="payment-modal-orders-summary-card payment-modal-orders-summary-card--rem">
+                      <div className="payment-modal-orders-summary-lbl payment-modal-orders-summary-lbl--with-action">
+                        <span className="payment-modal-orders-summary-lbl-text">
+                          סכום לא שולם
+                          {totals.totalUsd > 0 ? <span className="payment-modal-preview-tag">תצוגה מקדימה</span> : null}
+                        </span>
+                        {viewerIsAdmin && customer && resetBalanceMetrics.remainingToReset > 0.01 ? (
+                          <button
+                            type="button"
+                            className={[
+                              "pm-reset-balance-btn",
+                              canResetCustomerBalance ? "pm-reset-balance-btn--ready" : "",
+                            ]
+                              .filter(Boolean)
+                              .join(" ")}
+                            disabled={resetCustomerBusy}
+                            onClick={() => setResetCustomerConfirmOpen(true)}
+                            title={
+                              canResetCustomerBalance
+                                ? totals.totalUsd > 0.01
+                                  ? "איפוס יתרה — לאחר שמירת התשלום ייסגר היתרה הנותרת מהעמלות"
+                                  : "איפוס יתרה — סוגר את כל היתרות הפתוחות של הלקוח ומוריד את ההפרש מהעמלות (מהחדש לישן)"
+                                : "אין מספיק עמלה זמינה לאיפוס — ניתן לנסות לאחר שמירת תשלום"
+                            }
+                          >
+                            <svg
+                              className="pm-reset-balance-icon"
+                              width="13"
+                              height="13"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2.2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              aria-hidden
+                            >
+                              <polyline points="1 4 1 10 7 10" />
+                              <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+                            </svg>
+                            {resetCustomerBusy ? "מאפס…" : "איפוס יתרה"}
+                          </button>
+                        ) : null}
+                      </div>
+                      <AnimatedMoneyValue
+                        className="payment-modal-orders-summary-val"
+                        dir="ltr"
+                        value={fmtFooterAmount(
+                          roundMoney2(Math.max(0, ordersTableFooterTotals.remaining - totals.totalUsd)),
+                        )}
+                      />
+                      {totals.totalUsd > 0 ? (
+                        <div className="payment-modal-preview-delta" dir="ltr">
+                          − {fmtFooterAmount(roundMoney2(totals.totalUsd))} (תשלום נוכחי)
+                        </div>
+                      ) : null}
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           </div>

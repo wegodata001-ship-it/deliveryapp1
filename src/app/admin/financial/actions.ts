@@ -129,6 +129,12 @@ export async function saveManualFinancialSettings(input: {
     updatedById: me.id,
   });
 
+  console.log("[FINANCE SETTINGS SAVED]", {
+    baseRate: settings.baseDollarRate,
+    fee: settings.dollarFee,
+    commission: settings.defaultCommissionPercent,
+  });
+
   afterFinancialSettingsChanged();
 
   recordActivityAudit({
@@ -176,6 +182,12 @@ export async function resetFinancialSettingsToDefaultsAction(): Promise<Financia
   );
 
   logFinance("saved", { reset: true, id: saved.id, ...settings });
+
+  console.log("[FINANCE SETTINGS SAVED]", {
+    baseRate: settings.baseDollarRate,
+    fee: settings.dollarFee,
+    commission: settings.defaultCommissionPercent,
+  });
 
   afterFinancialSettingsChanged();
 

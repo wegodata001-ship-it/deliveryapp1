@@ -33,8 +33,24 @@ import {
 } from "@/lib/payment-updated";
 import { VAT_RATE } from "@/lib/vat";
 import { prismaVatRatePercent } from "@/lib/vat-prisma";
+import { calculatePaymentCaptureCustomerBalanceUsd } from "@/app/admin/payments/intake/actions";
+import { ensureOnce } from "@/lib/ensure-tables-once";
 
 type FlatCheckInsert = { checkNumber: string; dueDate: Date; amount: Prisma.Decimal };
+
+async function persistCustomerBalanceSnapshot(customerId: string, balanceUsd: Prisma.Decimal): Promise<void> {
+  await ensureOnce("customer-balance-usd-column", async () => {
+    await prisma.$executeRaw`
+      ALTER TABLE "Customer"
+      ADD COLUMN IF NOT EXISTS "balanceUsd" DECIMAL(19,4) NOT NULL DEFAULT 0
+    `;
+  });
+  await prisma.$executeRaw`
+    UPDATE "Customer"
+    SET "balanceUsd" = ${balanceUsd}
+    WHERE "id" = ${customerId}
+  `;
+}
 
 function pushChecks(out: FlatCheckInsert[], checks: PaymentLine["usdChecks"]) {
   for (const c of checks ?? []) {
@@ -259,7 +275,10 @@ export async function previewCustomerPaymentOverageAction(input: {
 
 export async function savePaymentUpdatedAction(
   form: PaymentUpdatedSaveInput,
-): Promise<{ ok: true; saved: { primaryPaymentCode: string | null; count: number } } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; saved: { primaryPaymentCode: string | null; count: number; customerBalanceUsd: string } }
+  | { ok: false; error: string }
+> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["receive_payments"])) return { ok: false, error: "אין הרשאה" };
   try {
@@ -331,6 +350,8 @@ export async function savePaymentUpdatedAction(
   const weekCode = (form.weekCode?.trim() || getWeekCodeForLocalDate(paymentDate)).trim() || null;
 
   const weekDateWhere = paymentIntakeOrderDateThroughAhWeekEnd(weekCode);
+  const existingCustomerBalanceUsd = await calculatePaymentCaptureCustomerBalanceUsd(cid);
+  const forceCreditPayment = existingCustomerBalanceUsd.gt(new Prisma.Decimal("0.01"));
 
   // Load orders for allocations (same engine as intake + אותו חלון שבוע AH כמו במסך)
   const orders = await prisma.order.findMany({
@@ -383,7 +404,11 @@ export async function savePaymentUpdatedAction(
   );
 
   const prioritized =
-    form.includedOrderIds === null ? null : new Set((form.includedOrderIds ?? []).filter(Boolean));
+    forceCreditPayment
+      ? new Set<string>()
+      : form.includedOrderIds === null
+        ? null
+        : new Set((form.includedOrderIds ?? []).filter(Boolean));
 
   const totalIlsEntered = totals.totalIls;
   const totalIlsDec =
@@ -392,13 +417,18 @@ export async function savePaymentUpdatedAction(
   let allocationEntries: [string, number][] = [];
   let unallocatedUsd = 0;
   if (totals.totalUsd > ALLOC_EPS) {
-    const alloc = allocatePaymentAcrossOrders(bases, totals.totalUsd, prioritized);
-    unallocatedUsd = alloc.unallocatedUsd;
-    allocationEntries = [...alloc.byOrderId.entries()].filter(([, amt]) => amt > ALLOC_EPS);
-    if (allocationEntries.length === 0 && !(form.saveSurplusAsCredit && unallocatedUsd > ALLOC_EPS)) {
+    if (forceCreditPayment) {
+      unallocatedUsd = totals.totalUsd;
+      allocationEntries = [];
+    } else {
+      const alloc = allocatePaymentAcrossOrders(bases, totals.totalUsd, prioritized);
+      unallocatedUsd = alloc.unallocatedUsd;
+      allocationEntries = [...alloc.byOrderId.entries()].filter(([, amt]) => amt > ALLOC_EPS);
+    }
+    if (allocationEntries.length === 0 && !((form.saveSurplusAsCredit || forceCreditPayment) && unallocatedUsd > ALLOC_EPS)) {
       return { ok: false, error: "אין יעד להקצאה לסכום הדולר" };
     }
-    if (unallocatedUsd > ALLOC_EPS && !form.saveSurplusAsCredit) {
+    if (unallocatedUsd > ALLOC_EPS && !form.saveSurplusAsCredit && !forceCreditPayment) {
       return {
         ok: false,
         error: `התשלום בדולר גבוה ב־${unallocatedUsd.toFixed(2)}$ מהחוב הפתוח — אשרו שמירת עודף כיתרת זכות או הפחיתו את הסכום`,
@@ -539,7 +569,7 @@ export async function savePaymentUpdatedAction(
         savedCount += 1;
       }
 
-      if (form.saveSurplusAsCredit && unallocatedUsd > ALLOC_EPS) {
+      if ((form.saveSurplusAsCredit || forceCreditPayment) && unallocatedUsd > ALLOC_EPS) {
         const creditUsd = new Prisma.Decimal(unallocatedUsd.toFixed(4));
         const creditTotals = computeFromUsdAmount(creditUsd, {
           baseDollarRate: base,
@@ -684,7 +714,12 @@ export async function savePaymentUpdatedAction(
   revalidatePath("/admin/orders");
   revalidatePath("/admin/balances");
   revalidatePath("/admin/source-tables/payments");
-  return { ok: true, saved: { primaryPaymentCode: primaryCode, count: savedCount } };
+  const customerBalanceUsd = await calculatePaymentCaptureCustomerBalanceUsd(cid);
+  await persistCustomerBalanceSnapshot(cid, customerBalanceUsd);
+  return {
+    ok: true,
+    saved: { primaryPaymentCode: primaryCode, count: savedCount, customerBalanceUsd: customerBalanceUsd.toFixed(2) },
+  };
 }
 
 /**

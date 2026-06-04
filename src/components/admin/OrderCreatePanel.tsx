@@ -45,6 +45,10 @@ import { buildCaptureFinancialSnapshot } from "@/lib/capture-form-snapshot";
 import { IntakeLocationCombobox } from "@/components/admin/IntakeLocationCombobox";
 import { ErpSearchCombobox } from "@/components/admin/ErpCreatableCombobox";
 import { loadFinancialSettingsForCaptureAction } from "@/app/admin/financial/actions";
+import {
+  WEGO_FINANCIAL_SETTINGS_SAVED,
+  applyFinancialSettingsToCaptureUi,
+} from "@/lib/financial-settings-bus";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 import { FINANCE_DEFAULTS_CLIENT } from "@/lib/finance-settings-client";
 import { VAT_RATE, VAT_RATE_PERCENT, formatVatPercentLabel } from "@/lib/vat";
@@ -283,6 +287,24 @@ export function OrderCreatePanel({
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    const onSaved = (ev: Event) => {
+      const data = (ev as CustomEvent<SerializedFinancial>).detail;
+      if (!data) return;
+      applyFinancialSettingsToCaptureUi(data, {
+        isEdit,
+        finalRateTouched: finalRateTouchedRef.current,
+        commissionTouched: commissionPercentTouchedRef.current,
+        setFinanceLive,
+        setFinalRateStr,
+        setCommissionPercentStr,
+        formatCommission: defaultCommissionPercentStr,
+      });
+    };
+    window.addEventListener(WEGO_FINANCIAL_SETTINGS_SAVED, onSaved);
+    return () => window.removeEventListener(WEGO_FINANCIAL_SETTINGS_SAVED, onSaved);
+  }, [isEdit]);
 
   const initialHm = useMemo(() => formatLocalHm(new Date()), []);
 

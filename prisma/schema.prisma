@@ -150,6 +150,8 @@ model Customer {
   notes           String?
   /** סוג לקוח (מערכת ישנה): רגיל / סיטונאי / סוכן וכו׳ */
   customerType    String?
+  /** Snapshot יתרת לקוח ב-USD: totalPayments - totalOrders. חיובי = זכות, שלילי = חוב */
+  balanceUsd      Decimal   @default(0) @db.Decimal(19, 4)
   isActive        Boolean   @default(true)
   deletedAt       DateTime?
   createdAt       DateTime  @default(now())
