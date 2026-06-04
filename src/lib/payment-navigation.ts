@@ -1,130 +1,169 @@
 import { prisma } from "@/lib/prisma";
 import { paymentsPerfTimeEnd, paymentsPerfTimeStart } from "@/lib/payments-perf";
-import type { Prisma } from "@prisma/client";
-
-export type PaymentNavDirection = "prev" | "next";
 
 const navSelect = {
   id: true,
   paymentCode: true,
   paymentNumber: true,
-  customerId: true,
 } as const;
 
-export type PaymentNavRow = {
+/** קליטה ראשית — שורה עם paymentCode */
+const PRIMARY_CAPTURE_WHERE = {
+  paymentCode: { not: null },
+  customerId: { not: null },
+  paymentNumber: { not: null },
+} as const;
+
+/** מפתח מיון ERP: paymentDate → createdAt → paymentNumber → id */
+type PaymentNavAnchor = {
   id: string;
-  paymentCode: string | null;
-  paymentNumber: number | null;
-  customerId: string | null;
+  paymentDate: Date;
+  createdAt: Date;
+  paymentNumber: number;
 };
 
-export type PaymentNavResult =
-  | { success: true; paymentId: string; paymentCode: string | null; paymentNumber: number | null }
-  | { success: false; edge: "first" | "last" }
-  | { success: false; error: "not_found" };
-
-export type PreviousPaymentResult = {
+export type PaymentNavigationLinks = {
+  currentPaymentId: string;
+  currentPaymentCode: string | null;
+  currentPaymentNumber: number | null;
   previousPaymentId: string | null;
-  previousPaymentCode: string | null;
-  previousPaymentNumber: number | null;
-};
-
-export type NextPaymentResult = {
   nextPaymentId: string | null;
-  nextPaymentCode: string | null;
-  nextPaymentNumber: number | null;
 };
 
-const paymentNavigationOrder = [{ createdAt: "desc" as const }, { id: "desc" as const }];
-
-async function findCurrentById(currentPaymentId: string) {
-  const id = currentPaymentId.trim();
-  if (!id) return null;
-  return prisma.payment.findFirst({
-    where: { id, customerId: { not: null }, paymentCode: { not: null } },
-    select: { ...navSelect, createdAt: true },
-  });
+function anchorFromRow(row: {
+  id: string;
+  paymentDate: Date | null;
+  createdAt: Date;
+  paymentNumber: number | null;
+  paymentCode?: string | null;
+}): PaymentNavAnchor | null {
+  const n = row.paymentNumber;
+  if (typeof n !== "number" || !Number.isFinite(n) || n < 1) return null;
+  return {
+    id: row.id,
+    paymentDate: row.paymentDate ?? row.createdAt,
+    createdAt: row.createdAt,
+    paymentNumber: n,
+  };
 }
 
-async function findNeighborByCreatedAt(
-  current: NonNullable<Awaited<ReturnType<typeof findCurrentById>>>,
-  direction: PaymentNavDirection,
-): Promise<PaymentNavRow | null> {
-  const createdAtTie =
-    direction === "prev"
-      ? ({ lt: current.id } satisfies Prisma.StringFilter<"Payment">)
-      : ({ gt: current.id } satisfies Prisma.StringFilter<"Payment">);
-  const createdAtWhere =
-    direction === "prev"
-      ? ({ lt: current.createdAt } satisfies Prisma.DateTimeFilter<"Payment">)
-      : ({ gt: current.createdAt } satisfies Prisma.DateTimeFilter<"Payment">);
+function whereBeforeAnchor(anchor: PaymentNavAnchor) {
+  const { paymentDate: pd, createdAt: ca, paymentNumber: pn, id } = anchor;
+  return {
+    OR: [
+      { paymentDate: { lt: pd } },
+      { paymentDate: pd, createdAt: { lt: ca } },
+      { paymentDate: pd, createdAt: ca, paymentNumber: { lt: pn } },
+      { paymentDate: pd, createdAt: ca, paymentNumber: pn, id: { lt: id } },
+    ],
+  };
+}
 
-  return prisma.payment.findFirst({
-    where: {
-      customerId: { not: null },
-      paymentCode: { not: null },
-      OR: [{ createdAt: createdAtWhere }, { createdAt: current.createdAt, id: createdAtTie }],
+function whereAfterAnchor(anchor: PaymentNavAnchor) {
+  const { paymentDate: pd, createdAt: ca, paymentNumber: pn, id } = anchor;
+  return {
+    OR: [
+      { paymentDate: { gt: pd } },
+      { paymentDate: pd, createdAt: { gt: ca } },
+      { paymentDate: pd, createdAt: ca, paymentNumber: { gt: pn } },
+      { paymentDate: pd, createdAt: ca, paymentNumber: pn, id: { gt: id } },
+    ],
+  };
+}
+
+async function resolveNavigationAnchor(currentPaymentId: string): Promise<PaymentNavAnchor | null> {
+  const trimmed = currentPaymentId.trim();
+  if (!trimmed) return null;
+
+  const current = await prisma.payment.findFirst({
+    where: { id: trimmed },
+    select: {
+      id: true,
+      paymentNumber: true,
+      paymentCode: true,
+      customerId: true,
+      paymentDate: true,
+      createdAt: true,
     },
-    orderBy: direction === "prev" ? paymentNavigationOrder : [{ createdAt: "asc" }, { id: "asc" }],
-    select: navSelect,
   });
-}
+  if (!current?.customerId) return null;
 
-export async function getPreviousPayment(currentPaymentId: string): Promise<PreviousPaymentResult> {
-  const current = await findCurrentById(currentPaymentId);
-  if (!current) {
-    return { previousPaymentId: null, previousPaymentCode: null, previousPaymentNumber: null };
+  if (current.paymentCode) {
+    return anchorFromRow(current);
   }
 
-  const row = await findNeighborByCreatedAt(current, "prev");
-  return {
-    previousPaymentId: row?.id ?? null,
-    previousPaymentCode: row?.paymentCode ?? null,
-    previousPaymentNumber: row?.paymentNumber ?? null,
-  };
+  const n = current.paymentNumber;
+  if (typeof n !== "number" || !Number.isFinite(n) || n < 1) return null;
+
+  const primary = await prisma.payment.findFirst({
+    where: {
+      ...PRIMARY_CAPTURE_WHERE,
+      paymentNumber: n,
+    },
+    select: {
+      id: true,
+      paymentNumber: true,
+      paymentDate: true,
+      createdAt: true,
+      paymentCode: true,
+    },
+    orderBy: [{ paymentDate: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+  });
+  if (!primary) return null;
+  return anchorFromRow(primary);
 }
 
-export async function getNextPayment(currentPaymentId: string): Promise<NextPaymentResult> {
-  const current = await findCurrentById(currentPaymentId);
-  if (!current) {
-    return { nextPaymentId: null, nextPaymentCode: null, nextPaymentNumber: null };
-  }
-
-  const row = await findNeighborByCreatedAt(current, "next");
-  return {
-    nextPaymentId: row?.id ?? null,
-    nextPaymentCode: row?.paymentCode ?? null,
-    nextPaymentNumber: row?.paymentNumber ?? null,
-  };
-}
-
-export async function resolvePaymentNavigation(
+/**
+ * שכנות ניווט לקליטה נוכחית — שאילתות prev/next ייעודיות (paymentDate, createdAt, paymentNumber).
+ */
+export async function getPaymentNavigationLinks(
   currentPaymentId: string,
-  direction: PaymentNavDirection,
-): Promise<PaymentNavResult> {
+): Promise<PaymentNavigationLinks | null> {
   paymentsPerfTimeStart("payments.navigation.db");
   try {
-    const current = await findCurrentById(currentPaymentId);
-    if (!current) return { success: false, error: "not_found" };
+    const anchor = await resolveNavigationAnchor(currentPaymentId);
+    if (!anchor) return null;
 
-    if (direction === "prev") {
-      const result = await getPreviousPayment(currentPaymentId);
-      if (!result.previousPaymentId) return { success: false, edge: "first" };
-      return {
-        success: true,
-        paymentId: result.previousPaymentId,
-        paymentCode: result.previousPaymentCode,
-        paymentNumber: result.previousPaymentNumber,
-      };
-    }
+    const currentRow = await prisma.payment.findFirst({
+      where: { id: anchor.id },
+      select: navSelect,
+    });
 
-    const result = await getNextPayment(currentPaymentId);
-    if (!result.nextPaymentId) return { success: false, edge: "last" };
+    const [prevRow, nextRow] = await Promise.all([
+      prisma.payment.findFirst({
+        where: {
+          ...PRIMARY_CAPTURE_WHERE,
+          ...whereBeforeAnchor(anchor),
+        },
+        orderBy: [
+          { paymentDate: "desc" },
+          { createdAt: "desc" },
+          { paymentNumber: "desc" },
+          { id: "desc" },
+        ],
+        select: navSelect,
+      }),
+      prisma.payment.findFirst({
+        where: {
+          ...PRIMARY_CAPTURE_WHERE,
+          ...whereAfterAnchor(anchor),
+        },
+        orderBy: [
+          { paymentDate: "asc" },
+          { createdAt: "asc" },
+          { paymentNumber: "asc" },
+          { id: "asc" },
+        ],
+        select: navSelect,
+      }),
+    ]);
+
     return {
-      success: true,
-      paymentId: result.nextPaymentId,
-      paymentCode: result.nextPaymentCode,
-      paymentNumber: result.nextPaymentNumber,
+      currentPaymentId: anchor.id,
+      currentPaymentCode: currentRow?.paymentCode ?? null,
+      currentPaymentNumber: currentRow?.paymentNumber ?? anchor.paymentNumber,
+      previousPaymentId: prevRow?.id ?? null,
+      nextPaymentId: nextRow?.id ?? null,
     };
   } finally {
     paymentsPerfTimeEnd("payments.navigation.db");

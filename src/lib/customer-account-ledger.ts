@@ -2,19 +2,36 @@ import { Prisma, type OrderSourceCountry } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { calculateCustomerBalance } from "@/lib/customer-balance-calculator";
 import {
+  BALANCE_RESET_LEDGER_LABEL,
+  COMMISSION_DEBT_CLOSURE_LEDGER_LABEL,
+} from "@/lib/commission-debt-closure";
+import {
   DEBT_WITHDRAWAL_LEDGER_LABEL,
   isDebtWithdrawalOrderStatus,
   orderCustomerChargeUsd,
   orderCustomerCreditUsd,
 } from "@/lib/debt-withdrawal-order";
 import { normalizeOrderSourceCountry } from "@/lib/order-countries";
+import { workCountryFromOrderSourceCountry, type WorkCountryCode } from "@/lib/work-country";
+import {
+  activePaidPaymentWhere,
+  PAYMENT_RECORD_STATUS_CANCELLED,
+} from "@/lib/payment-record-status";
+import { paymentRecordUsdEquivalent as paymentUsdEquivalent } from "@/lib/payment-usd-equivalent";
+import {
+  buildLedgerPaymentDetail,
+  paymentBatchGroupKey,
+  type LedgerPaymentBatchRow,
+  type LedgerPaymentDetail,
+} from "@/lib/ledger-payment-detail";
 import { formatLocalYmd, parseLocalDate } from "@/lib/work-week";
 
 export type CustomerLedgerRowKind =
   | "OPENING_BALANCE"
   | "ORDER"
   | "PAYMENT"
-  | "CREDIT_APPLIED";
+  | "CREDIT_APPLIED"
+  | "COMMISSION_DEBT_CLOSURE";
 
 export type CustomerLedgerRow = {
   id: string;
@@ -30,6 +47,18 @@ export type CustomerLedgerRow = {
   paymentId: string | null;
   /** שורת משיכה מחוב — לעיצוב שלילי באדום */
   isDebtWithdrawal?: boolean;
+  /** תשלום שבוטל — מוצג בכרטסת, לא נספר ביתרה */
+  isPaymentCancelled?: boolean;
+  /** סגירת חוב באמצעות עמלה — לא תשלום */
+  isCommissionDebtClosure?: boolean;
+  /** תצוגה: יתרת עמלה לאחר הפעולה */
+  commissionBeforeUsd?: string;
+  commissionAfterUsd?: string;
+  /** תצוגה: יתרת הזמנה לאחר הפעולה */
+  orderBalanceBeforeUsd?: string;
+  orderBalanceAfterUsd?: string;
+  /** פירוט תשלום — אמצעי תשלום והקצאות להזמנות */
+  paymentDetail?: LedgerPaymentDetail;
 };
 
 export type CustomerLedgerPayload = {
@@ -58,18 +87,6 @@ async function timed<T>(add: (ms: number) => void, fn: () => Promise<T>): Promis
   }
 }
 
-function paymentUsdEquivalent(p: {
-  amountUsd: Prisma.Decimal | null;
-  amountIls: Prisma.Decimal | null;
-  exchangeRate: Prisma.Decimal | null;
-}): Prisma.Decimal {
-  if (p.amountUsd && p.amountUsd.gt(0)) return p.amountUsd;
-  if (p.amountIls && p.exchangeRate && p.exchangeRate.gt(0)) {
-    return p.amountIls.div(p.exchangeRate).toDecimalPlaces(4, 4);
-  }
-  return new Prisma.Decimal(0);
-}
-
 function endOfLocalDay(ymd: string): Date {
   const [y, m, d] = ymd.split("-").map((x) => Number(x));
   return new Date(y, m - 1, d, 23, 59, 59, 999);
@@ -86,7 +103,46 @@ type LedgerEvent = {
   orderId: string | null;
   paymentId: string | null;
   isDebtWithdrawal?: boolean;
+  isPaymentCancelled?: boolean;
+  isCommissionDebtClosure?: boolean;
+  commissionBeforeUsd?: string;
+  commissionAfterUsd?: string;
+  orderBalanceBeforeUsd?: string;
+  orderBalanceAfterUsd?: string;
+  paymentDetail?: LedgerPaymentDetail;
+  /** סכום לתצוגה (גם כשבוטל) */
+  displayPaymentUsd?: Prisma.Decimal;
 };
+
+const COMMISSION_CLOSURE_AUDIT_TYPES = ["ORDER_COMMISSION_RESET", "ORDER_BALANCE_RESET"] as const;
+
+function ledgerLabelForClosureAudit(actionType: string, meta: Record<string, unknown> | null): string {
+  const fromMeta = decStr(meta?.ledgerLabel);
+  if (fromMeta) return fromMeta;
+  if (actionType === "ORDER_COMMISSION_RESET") return COMMISSION_DEBT_CLOSURE_LEDGER_LABEL;
+  return BALANCE_RESET_LEDGER_LABEL;
+}
+
+type ClosureAuditMeta = {
+  orderId: string;
+  date: Date;
+  orderNumber: string | null;
+  remainingUsd: Prisma.Decimal;
+  beforeCommissionUsd: string;
+  afterCommissionUsd: string;
+  beforeTotalUsd: string;
+};
+
+function parseJsonRecord(v: unknown): Record<string, unknown> | null {
+  if (v && typeof v === "object" && !Array.isArray(v)) return v as Record<string, unknown>;
+  return null;
+}
+
+function decStr(v: unknown): string | null {
+  if (v == null) return null;
+  const s = String(v).trim();
+  return s || null;
+}
 
 /** חשבון לקוח — חיובים (הזמנות), תשלומים, יתרה רצה ויתרת פתיחה */
 export async function buildCustomerAccountLedger(params: {
@@ -105,16 +161,29 @@ export async function buildCustomerAccountLedger(params: {
   const to = params.toYmd?.trim() ? endOfLocalDay(params.toYmd.trim()) : new Date(2999, 11, 31, 23, 59, 59, 999);
   const countryNorm = normalizeOrderSourceCountry(params.sourceCountry?.trim() || null);
   const sourceCountry = countryNorm ? (countryNorm as OrderSourceCountry) : null;
+  const workCountry: WorkCountryCode | null = sourceCountry
+    ? workCountryFromOrderSourceCountry(sourceCountry)
+    : null;
   const orderScopeWhere = {
     customerId: id,
     deletedAt: null,
-    ...(sourceCountry ? { sourceCountry } : {}),
+    ...(sourceCountry ? { sourceCountry, countryCode: workCountry! } : {}),
   } satisfies Prisma.OrderWhereInput;
-  const paymentScopeWhere = sourceCountry
+  const paymentActiveScopeWhere = workCountry
+    ? ({
+        customerId: id,
+        ...activePaidPaymentWhere,
+        countryCode: workCountry,
+      } satisfies Prisma.PaymentWhereInput)
+    : ({
+        customerId: id,
+        ...activePaidPaymentWhere,
+      } satisfies Prisma.PaymentWhereInput);
+  const paymentLedgerScopeWhere = workCountry
     ? ({
         customerId: id,
         isPaid: true,
-        order: { deletedAt: null, sourceCountry },
+        countryCode: workCountry,
       } satisfies Prisma.PaymentWhereInput)
     : ({
         customerId: id,
@@ -126,7 +195,7 @@ export async function buildCustomerAccountLedger(params: {
     sourceCountry,
   });
 
-  const [preOrders, prePayments, orders, payments] = await Promise.all([
+  const [preOrders, prePayments, orders, payments, closureAuditLogs, customerBulkResets] = await Promise.all([
     fromFilterSet
       ? timed((ms) => (fetchOrdersMs += ms), () =>
           prisma.order.findMany({
@@ -144,7 +213,7 @@ export async function buildCustomerAccountLedger(params: {
     fromFilterSet
       ? timed((ms) => (fetchPaymentsMs += ms), () =>
           prisma.payment.findMany({
-            where: { ...paymentScopeWhere, paymentDate: { lt: from } },
+            where: { ...paymentActiveScopeWhere, paymentDate: { lt: from } },
             select: {
               amountUsd: true,
               amountIls: true,
@@ -171,20 +240,211 @@ export async function buildCustomerAccountLedger(params: {
     ),
     timed((ms) => (fetchPaymentsMs += ms), () =>
       prisma.payment.findMany({
-        where: { ...paymentScopeWhere, paymentDate: { gte: from, lte: to } },
+        where: { ...paymentLedgerScopeWhere, paymentDate: { gte: from, lte: to } },
         orderBy: { paymentDate: "asc" },
         select: {
           id: true,
           paymentCode: true,
+          paymentNumber: true,
           paymentDate: true,
+          orderId: true,
           amountUsd: true,
           amountIls: true,
           exchangeRate: true,
+          paymentMethod: true,
+          usdPaymentMethod: true,
+          ilsPaymentMethod: true,
+          notes: true,
+          status: true,
+        },
+      }),
+    ),
+    timed((ms) => (fetchPaymentsMs += ms), () =>
+      prisma.auditLog.findMany({
+        where: {
+          actionType: { in: [...COMMISSION_CLOSURE_AUDIT_TYPES] },
+          entityType: "Order",
+          createdAt: { gte: from, lte: to },
+        },
+        orderBy: { createdAt: "asc" },
+        select: {
+          id: true,
+          actionType: true,
+          entityId: true,
+          createdAt: true,
+          oldValue: true,
+          newValue: true,
+          metadata: true,
+        },
+      }),
+    ),
+    timed((ms) => (fetchPaymentsMs += ms), () =>
+      prisma.auditLog.findMany({
+        where: {
+          actionType: "CUSTOMER_BALANCES_RESET",
+          entityType: "Customer",
+          entityId: id,
+          createdAt: { gte: from, lte: to },
+        },
+        orderBy: { createdAt: "asc" },
+        select: {
+          id: true,
+          createdAt: true,
+          metadata: true,
         },
       }),
     ),
   ]);
   const sharedBalance = await sharedBalancePromise;
+
+  const orderIdSet = new Set(orders.map((o) => o.id));
+  const orderNumberById = new Map(
+    orders.map((o) => [o.id, o.orderNumber?.trim() || o.id] as const),
+  );
+  const paymentOrderIds = [
+    ...new Set(
+      payments.map((p) => p.orderId?.trim()).filter((oid): oid is string => !!oid && !orderNumberById.has(oid)),
+    ),
+  ];
+  if (paymentOrderIds.length > 0) {
+    const extraOrders = await prisma.order.findMany({
+      where: { id: { in: paymentOrderIds }, customerId: id, deletedAt: null },
+      select: { id: true, orderNumber: true },
+    });
+    for (const o of extraOrders) {
+      orderNumberById.set(o.id, o.orderNumber?.trim() || o.id);
+      orderIdSet.add(o.id);
+    }
+  }
+
+  const primaryPaymentIds = payments
+    .filter((p) => p.paymentCode?.trim())
+    .map((p) => p.id);
+  const paymentChecks =
+    primaryPaymentIds.length > 0
+      ? await prisma.paymentCheck.findMany({
+          where: { paymentId: { in: primaryPaymentIds } },
+          select: { paymentId: true, amount: true },
+        })
+      : [];
+  const checkAmountUsdByPaymentId = new Map<string, number>();
+  for (const ch of paymentChecks) {
+    const prev = checkAmountUsdByPaymentId.get(ch.paymentId) ?? 0;
+    checkAmountUsdByPaymentId.set(ch.paymentId, prev + Number(ch.amount));
+  }
+
+  const paymentBatches = new Map<string, LedgerPaymentBatchRow[]>();
+  for (const p of payments) {
+    const key = paymentBatchGroupKey(p);
+    const list = paymentBatches.get(key) ?? [];
+    list.push(p);
+    paymentBatches.set(key, list);
+  }
+  const closureByOrderId = new Map<string, ClosureAuditMeta>();
+  const closureEvents: LedgerEvent[] = [];
+
+  for (const log of closureAuditLogs) {
+    const oid = log.entityId?.trim();
+    if (!oid || !orderIdSet.has(oid)) continue;
+    const oldV = parseJsonRecord(log.oldValue);
+    const newV = parseJsonRecord(log.newValue);
+    const meta = parseJsonRecord(log.metadata);
+    const typeLabel = ledgerLabelForClosureAudit(log.actionType, meta);
+    const remainingRaw =
+      decStr(meta?.beforeRemainingUsd) ??
+      decStr(meta?.remainingUsd) ??
+      decStr(oldV?.remainingUsd) ??
+      decStr(newV?.remainingUsd);
+    const remaining = remainingRaw ? new Prisma.Decimal(remainingRaw) : new Prisma.Decimal(0);
+    if (remaining.lte(0)) continue;
+
+    const beforeCom =
+      decStr(meta?.beforeCommissionUsd) ?? decStr(oldV?.commissionUsd) ?? "0";
+    const afterCom =
+      decStr(meta?.afterCommissionUsd) ?? decStr(newV?.commissionUsd) ?? "0";
+    const afterRemaining =
+      decStr(meta?.afterRemainingUsd) ??
+      decStr(newV?.remainingUsd) ??
+      "0.00";
+    const beforeTotal = decStr(oldV?.totalUsd) ?? "0";
+    const orderNumber = decStr(meta?.orderNumber);
+
+    const closureMeta: ClosureAuditMeta = {
+      orderId: oid,
+      date: log.createdAt,
+      orderNumber,
+      remainingUsd: remaining,
+      beforeCommissionUsd: beforeCom,
+      afterCommissionUsd: afterCom,
+      beforeTotalUsd: beforeTotal,
+    };
+    closureByOrderId.set(oid, closureMeta);
+
+    closureEvents.push({
+      id: `cc-${log.id}`,
+      date: log.createdAt,
+      kind: "COMMISSION_DEBT_CLOSURE",
+      typeLabel,
+      charge: new Prisma.Decimal(0),
+      payment: remaining,
+      document: orderNumber ?? typeLabel,
+      orderId: oid,
+      paymentId: null,
+      isCommissionDebtClosure: true,
+      commissionBeforeUsd: beforeCom,
+      commissionAfterUsd: afterCom,
+      orderBalanceBeforeUsd: remaining.toFixed(2),
+      orderBalanceAfterUsd: afterRemaining,
+    });
+  }
+
+  for (const log of customerBulkResets) {
+    const meta = parseJsonRecord(log.metadata);
+    const closed = meta?.closedOrders;
+    if (!Array.isArray(closed)) continue;
+    for (let i = 0; i < closed.length; i++) {
+      const row = closed[i];
+      if (!row || typeof row !== "object") continue;
+      const co = row as Record<string, unknown>;
+      const oid = decStr(co.orderId);
+      if (!oid || !orderIdSet.has(oid) || closureByOrderId.has(oid)) continue;
+      const remainingRaw = decStr(co.remainingUsd);
+      if (!remainingRaw) continue;
+      const remaining = new Prisma.Decimal(remainingRaw);
+      if (remaining.lte(0)) continue;
+      const beforeCom = decStr(co.beforeCommissionUsd) ?? "0";
+      const afterCom = decStr(co.afterCommissionUsd) ?? "0";
+      const afterRemaining = decStr(co.afterRemainingUsd) ?? "0.00";
+      const beforeTotal = decStr(co.beforeTotalUsd) ?? "0";
+      const orderNumber = decStr(co.orderNumber);
+      const bulkLabel = decStr(co.ledgerLabel) ?? decStr(meta?.ledgerLabel) ?? BALANCE_RESET_LEDGER_LABEL;
+      closureByOrderId.set(oid, {
+        orderId: oid,
+        date: log.createdAt,
+        orderNumber,
+        remainingUsd: remaining,
+        beforeCommissionUsd: beforeCom,
+        afterCommissionUsd: afterCom,
+        beforeTotalUsd: beforeTotal,
+      });
+      closureEvents.push({
+        id: `ccb-${log.id}-${i}`,
+        date: log.createdAt,
+        kind: "COMMISSION_DEBT_CLOSURE",
+        typeLabel: bulkLabel,
+        charge: new Prisma.Decimal(0),
+        payment: remaining,
+        document: orderNumber ?? bulkLabel,
+        orderId: oid,
+        paymentId: null,
+        isCommissionDebtClosure: true,
+        commissionBeforeUsd: beforeCom,
+        commissionAfterUsd: afterCom,
+        orderBalanceBeforeUsd: remaining.toFixed(2),
+        orderBalanceAfterUsd: afterRemaining,
+      });
+    }
+  }
 
   const calcT0 = Date.now();
   let openingBalance = new Prisma.Decimal(0);
@@ -222,7 +482,10 @@ export async function buildCustomerAccountLedger(params: {
           isDebtWithdrawal: true,
         };
       }
-      const chargeUsd = orderCustomerChargeUsd(o);
+      const closure = closureByOrderId.get(o.id);
+      const chargeUsd = closure
+        ? Math.max(0, Number(closure.beforeTotalUsd) || orderCustomerChargeUsd(o))
+        : orderCustomerChargeUsd(o);
       return {
         id: `o-${o.id}`,
         date: o.orderDate ?? new Date(0),
@@ -235,20 +498,34 @@ export async function buildCustomerAccountLedger(params: {
         paymentId: null,
       };
     }),
-    ...payments.map((p) => {
-      const payUsd = paymentUsdEquivalent(p);
+    ...[...paymentBatches.entries()].map(([batchKey, batchRows]) => {
+      const primary = batchRows.find((r) => r.paymentCode?.trim()) ?? batchRows[0];
+      const payUsd = batchRows.reduce((sum, row) => {
+        if (row.status === PAYMENT_RECORD_STATUS_CANCELLED) return sum;
+        return sum.add(paymentUsdEquivalent(row));
+      }, new Prisma.Decimal(0));
+      const isCancelled = batchRows.every((r) => r.status === PAYMENT_RECORD_STATUS_CANCELLED);
+      const detail = buildLedgerPaymentDetail({
+        batchRows,
+        orderNumberById,
+        checkAmountUsdByPaymentId,
+      });
       return {
-        id: `p-${p.id}`,
-        date: p.paymentDate ?? new Date(0),
+        id: `pb-${batchKey}`,
+        date: primary.paymentDate ?? new Date(0),
         kind: "PAYMENT" as const,
-        typeLabel: "תשלום",
+        typeLabel: isCancelled ? "תשלום מבוטל" : "תשלום",
         charge: new Prisma.Decimal(0),
-        payment: payUsd,
-        document: p.paymentCode?.trim() || "תשלום",
+        payment: isCancelled ? new Prisma.Decimal(0) : payUsd,
+        displayPaymentUsd: payUsd,
+        document: (detail?.paymentCode ?? primary.paymentCode?.trim()) || "תשלום",
         orderId: null,
-        paymentId: p.id,
+        paymentId: primary.id,
+        isPaymentCancelled: isCancelled,
+        paymentDetail: detail ?? undefined,
       };
     }),
+    ...closureEvents,
   ].sort((a, b) => a.date.getTime() - b.date.getTime() || a.id.localeCompare(b.id));
 
   const rows: CustomerLedgerRow[] = [];
@@ -279,7 +556,7 @@ export async function buildCustomerAccountLedger(params: {
       totalWithdrawals = totalWithdrawals.add(new Prisma.Decimal(Math.abs(Number(ev.charge.toFixed(4))).toFixed(4)));
     } else if (ev.kind === "ORDER") {
       totalCharges = totalCharges.add(ev.charge);
-    } else if (ev.kind === "PAYMENT") {
+    } else if (ev.kind === "PAYMENT" && !ev.isCommissionDebtClosure) {
       totalPayments = totalPayments.add(ev.payment);
     }
     rows.push({
@@ -288,12 +565,19 @@ export async function buildCustomerAccountLedger(params: {
       kind: ev.kind,
       typeLabel: ev.typeLabel,
       chargeUsd: ev.charge.toFixed(2),
-      paymentUsd: ev.payment.toFixed(2),
+      paymentUsd: (ev.displayPaymentUsd ?? ev.payment).toFixed(2),
       balanceUsd: balance.toFixed(2),
       document: ev.document,
       orderId: ev.orderId,
       paymentId: ev.paymentId,
       isDebtWithdrawal: ev.isDebtWithdrawal,
+      isPaymentCancelled: ev.isPaymentCancelled,
+      isCommissionDebtClosure: ev.isCommissionDebtClosure,
+      commissionBeforeUsd: ev.commissionBeforeUsd,
+      commissionAfterUsd: ev.commissionAfterUsd,
+      orderBalanceBeforeUsd: ev.orderBalanceBeforeUsd,
+      orderBalanceAfterUsd: ev.orderBalanceAfterUsd,
+      paymentDetail: ev.paymentDetail,
     });
   }
   calculateBalanceMs += Date.now() - calcT0;

@@ -1,24 +1,23 @@
 import { PaymentMethod, Prisma } from "@prisma/client";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { prisma } from "@/lib/prisma";
+import { activePaidPaymentWhere } from "@/lib/payment-record-status";
+import {
+  PAYMENT_METHOD_LABELS,
+  paymentMethodTone,
+  type PaymentMethodTone,
+  type PaymentsSourcePreview,
+} from "@/lib/payments-source-shared";
+import { paymentWhereForCountryScope, resolveCountryScopeFromCode } from "@/lib/country-data-scope";
+import { DEFAULT_WORK_COUNTRY, type WorkCountryCode } from "@/lib/work-country";
 import { DEFAULT_WEEK_CODE, formatLocalYmd } from "@/lib/work-week";
 
-export const PAYMENT_METHOD_LABELS: Record<string, string> = {
-  POINT: "נקודת תשלום",
-  BANK_TRANSFER: "העברה בנקאית",
-  BANK_TRANSFER_DONE: "העברה בוצעה",
-  ORDERED: "הוזמן",
-  WITHDRAWAL: "משיכה",
-  WITHDRAWAL_DONE: "משיכה בוצעה",
-  RECEIVED_AT_POINT: "התקבל בנקודה",
-  WITH_GOODS: "עם הסחורה",
-  CHECK: "צ׳ק",
-  CASH: "מזומן",
-  CREDIT: "אשראי",
-  OTHER: "אחר",
-};
-
-export type PaymentMethodTone = "cash" | "bank" | "credit" | "check" | "neutral";
+export {
+  PAYMENT_METHOD_LABELS,
+  paymentMethodTone,
+  type PaymentMethodTone,
+  type PaymentsSourcePreview,
+} from "@/lib/payments-source-shared";
 
 export type PaymentsSourceFilters = {
   search?: string;
@@ -26,6 +25,7 @@ export type PaymentsSourceFilters = {
   customerCode?: string;
   customerName?: string;
   paymentMethod?: string;
+  workCountry?: WorkCountryCode;
   fromYmd?: string;
   toYmd?: string;
 };
@@ -69,14 +69,6 @@ export type PaymentsSourceKpis = {
   weekCode: string;
 };
 
-export type PaymentsSourcePreview = {
-  customerCode: string;
-  customerName: string;
-  phone: string;
-  lastPaymentLabel: string;
-  ordersCount: number;
-};
-
 function parseYmdStart(ymd: string): Date {
   return new Date(`${ymd.trim()}T00:00:00`);
 }
@@ -98,17 +90,12 @@ function decNum(n: unknown): number {
   return Number.isFinite(v) ? v : 0;
 }
 
-export function paymentMethodTone(method: string | null | undefined): PaymentMethodTone {
-  if (!method) return "neutral";
-  if (method === PaymentMethod.CASH) return "cash";
-  if (method === PaymentMethod.BANK_TRANSFER || method === PaymentMethod.BANK_TRANSFER_DONE) return "bank";
-  if (method === PaymentMethod.CREDIT) return "credit";
-  if (method === PaymentMethod.CHECK) return "check";
-  return "neutral";
-}
-
 export function buildPaymentsSourceWhere(filters: PaymentsSourceFilters = {}): Prisma.PaymentWhereInput {
-  const and: Prisma.PaymentWhereInput[] = [];
+  const and: Prisma.PaymentWhereInput[] = [
+    paymentWhereForCountryScope(
+      resolveCountryScopeFromCode(filters.workCountry ?? DEFAULT_WORK_COUNTRY),
+    ),
+  ];
 
   const code = filters.paymentCode?.trim();
   if (code) and.push({ paymentCode: { contains: code, mode: "insensitive" } });
@@ -295,15 +282,16 @@ export async function getPaymentsSourceKpis(
   filters: PaymentsSourceFilters = {},
 ): Promise<PaymentsSourceKpis> {
   const where = buildPaymentsSourceWhere(filters);
+  const activeWhere: Prisma.PaymentWhereInput = { AND: [where, activePaidPaymentWhere] };
   const weekCode = DEFAULT_WEEK_CODE;
 
   const [totalPayments, agg, weekPayments] = await Promise.all([
-    prisma.payment.count({ where }),
+    prisma.payment.count({ where: activeWhere }),
     prisma.payment.aggregate({
-      where,
+      where: activeWhere,
       _sum: { amountUsd: true, amountIls: true },
     }),
-    prisma.payment.count({ where: { ...where, weekCode } }),
+    prisma.payment.count({ where: { AND: [activeWhere, { weekCode }] } }),
   ]);
 
   return {

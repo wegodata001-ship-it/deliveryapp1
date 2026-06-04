@@ -49,10 +49,14 @@ export type PaymentLineSectionCalc = VatCalc & {
 export type PaymentLineCalc = {
   usd: PaymentLineSectionCalc;
   ils: PaymentLineSectionCalc;
-  /** סכום סופי בדולר (רק ממדד USD) */
+  /** סכום סופי בדולר אחרי המרת רכיב שקלי לפי שער */
   finalUsd: number;
   /** סכום סופי בשקל (רק ממדד ILS) */
   finalIls: number;
+  /** הסכום השקלי שמשמש להמרה לדולר: ברוטו במזומן/אשראי, נטו בהעברה בנקאית */
+  ilsUsdBaseAmount: number;
+  /** רכיב שקלי שהומר לדולר לצורך הקצאה/יתרה */
+  convertedIlsUsd: number;
 };
 
 export type PaymentTotals = {
@@ -241,37 +245,61 @@ function sectionCalc(
   };
 }
 
-/** חישוב שורת תשלום — דולר ושקל בנפרד, ללא המרה ביניהם */
-export function calculatePaymentLine(line: PaymentLine, _usdRate: number, vatRate: number = DEFAULT_VAT_RATE): PaymentLineCalc {
+/** סכום דולר גולמי (סכום 1) + שקל מומר (סכום 2 / שער) — לתצוגה, הקצאה ושמירה */
+export function calculateLineTotalPaymentUsd(
+  line: PaymentLine,
+  usdRate: number,
+  vatRate: number = DEFAULT_VAT_RATE,
+): number {
+  const n = normalizePaymentLine(line);
+  const method = linePaymentMethod(n);
+  const vatMode = effectiveVatModeForLine(n);
+  const usdRaw = typeof n.usdAmount === "number" && n.usdAmount > 0 ? n.usdAmount : 0;
+  const ils = sectionCalc(n.ilsAmount, "ILS", vatMode, vatRate);
+  const rate = Number.isFinite(usdRate) && usdRate > 0 ? usdRate : 0;
+  const ilsUsdBaseAmount = method === "BANK_TRANSFER" ? ils.baseAmount : ils.finalAmount;
+  const convertedIlsUsd = rate > 0 && ils.hasAmount ? roundMoney2(ilsUsdBaseAmount / rate) : 0;
+  return roundMoney2(usdRaw + convertedIlsUsd);
+}
+
+/** חישוב שורת תשלום — כל חישובי החוב/הקצאה נעשים בדולר; שקלים מומרים לפי שער */
+export function calculatePaymentLine(line: PaymentLine, usdRate: number, vatRate: number = DEFAULT_VAT_RATE): PaymentLineCalc {
   const n = normalizePaymentLine(line);
   const vatMode = effectiveVatModeForLine(n);
+  const method = linePaymentMethod(n);
   const usd = sectionCalc(n.usdAmount, "USD", vatMode, vatRate);
   const ils = sectionCalc(n.ilsAmount, "ILS", vatMode, vatRate);
+  const rate = Number.isFinite(usdRate) && usdRate > 0 ? usdRate : 0;
+  const ilsUsdBaseAmount = method === "BANK_TRANSFER" ? ils.baseAmount : ils.finalAmount;
+  const convertedIlsUsd = rate > 0 && ils.hasAmount ? roundMoney2(ilsUsdBaseAmount / rate) : 0;
+  const totalPaymentUsd = calculateLineTotalPaymentUsd(line, usdRate, vatRate);
   return {
     usd,
     ils,
-    finalUsd: usd.hasAmount ? usd.finalAmount : 0,
+    finalUsd: totalPaymentUsd,
     finalIls: ils.hasAmount ? ils.finalAmount : 0,
+    ilsUsdBaseAmount: ils.hasAmount ? ilsUsdBaseAmount : 0,
+    convertedIlsUsd,
   };
 }
 
-export function calculateTotals(lines: PaymentLine[], _usdRate: number, vatRate: number = DEFAULT_VAT_RATE): PaymentTotals {
+/** סיכום כל שורות התשלום — totalUsd = Σ(דולר גולמי + שקל/שער) */
+export function calculateTotals(lines: PaymentLine[], usdRate: number, vatRate: number = DEFAULT_VAT_RATE): PaymentTotals {
   let totalUsd = 0;
   let totalIls = 0;
-  let count = 0;
 
   for (const l of lines) {
-    const calc = calculatePaymentLine(l, _usdRate, vatRate);
     if (!paymentLineHasAmount(l)) continue;
+    const calc = calculatePaymentLine(l, usdRate, vatRate);
     totalUsd += calc.finalUsd;
     totalIls += calc.finalIls;
-    count += 1;
   }
 
   return {
     totalUsd: roundMoney2(totalUsd),
     totalIls: roundMoney2(totalIls),
-    totalPaymentsCount: count,
+    /** מספר שורות תשלום פעילות בטופס (לא תשלומים שמורים ב-DB) */
+    totalPaymentsCount: lines.length,
   };
 }
 

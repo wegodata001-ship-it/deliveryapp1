@@ -7,7 +7,13 @@ import { logDbEnvDiagnostics } from "@/lib/db-env-diagnostics";
 import { prisma } from "@/lib/prisma";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { endOfLocalDay, formatLocalYmd, getAhWeekRange, normalizeAhWeekCode, parseLocalDate } from "@/lib/work-week";
+import { resolveCountryScopeFromCode } from "@/lib/country-data-scope";
 import { ORDER_COUNTRY_CODES, normalizeOrderSourceCountry, type OrderCountryCode } from "@/lib/order-countries";
+import {
+  DEFAULT_WORK_COUNTRY,
+  workCountryFromOrderSourceCountry,
+  type WorkCountryCode,
+} from "@/lib/work-country";
 import {
   fetchCustomerOpenOrderEnrichment,
   resolveOrderRowHighlight,
@@ -18,11 +24,19 @@ import {
 import { computeSignedFromTotals } from "@/lib/customer-balance";
 import { calculateCustomerBalances } from "@/lib/customer-balance-calculator";
 import {
+  orderStatusesForBalanceFilter,
+  parseCustomerBalanceOrderStatusFilter,
+  STATUS_BALANCE_KPI_SPECS,
+  type CustomerBalanceOrderStatusFilter,
+  type StatusBalanceKpiKey,
+} from "@/lib/customer-balance-order-status-filter";
+import {
   isDebtWithdrawalOrderStatus,
   orderCustomerChargeUsd,
   orderCustomerCreditUsd,
 } from "@/lib/debt-withdrawal-order";
 import { OS } from "@/lib/order-status-slugs";
+import { activePaidPaymentWhere } from "@/lib/payment-record-status";
 
 export type CustomerBalanceStatus = "NOT_PAID" | "PARTIAL" | "PAID" | "PROBLEM" | "PAUSED";
 
@@ -67,6 +81,10 @@ export type CustomerBalanceFilters = {
   maxBalanceUsd?: string;
   /** כאשר enrichOpenOrders — סינון לפי סטטוס הזמנה פתוחה */
   orderPhase?: CustomerBalanceOrderPhaseFilter;
+  /** סינון חישוב יתרה לפי סטטוס הזמנה (DB) */
+  orderStatus?: CustomerBalanceOrderStatusFilter;
+  /** true = רק לקוחות עם תשלומים בטווח */
+  hasPayments?: boolean;
   sort?: CustomerBalanceSort;
   /** סינון תצוגה: כל / חוב בש״ח בלבד / חוב בדולר בלבד */
   currencyView?: "" | "ILS" | "USD";
@@ -161,6 +179,8 @@ export type CustomerBalancesPayload = {
     notPaidCount: number;
     /** חוב בש״ח מעל סף (תצוגה בלבד) */
     highDebtCount: number;
+    /** לקוחות עם תשלומים בטווח */
+    withPaymentsCount: number;
   };
   /** KPI נוספים למודאל דוח יתרות (לפי אותה קבוצה מסוננת לפני pagination) */
   reportModalStats?: {
@@ -169,6 +189,10 @@ export type CustomerBalancesPayload = {
     customersNoPayment: number;
     readyUnpaidOrdersCount: number;
   };
+  /** סה״כ יתרות לגבייה (USD) לפי סטטוס הזמנה — לפני סינון סטטוס בטבלה */
+  statusBalanceKpis: Record<StatusBalanceKpiKey, string>;
+  /** סטטוס הזמנה הפעיל בחישוב השורות */
+  activeOrderStatusFilter: CustomerBalanceOrderStatusFilter;
 };
 
 const STATUS_VALUES = new Set<CustomerBalanceStatus>(["NOT_PAID", "PARTIAL", "PAID", "PROBLEM", "PAUSED"]);
@@ -234,11 +258,13 @@ function buildCustomerActivityScope(
   weekCode: string | undefined,
   cumulativeThrough: boolean,
   orderCountryPrisma: OrderSourceCountry | undefined,
+  paymentCountryCode?: WorkCountryCode,
 ): Prisma.CustomerWhereInput {
   const paymentBase: Prisma.PaymentWhereInput = {
-    isPaid: true,
+    ...activePaidPaymentWhere,
     ...(paymentDateFilter ? { paymentDate: paymentDateFilter } : {}),
     ...(!cumulativeThrough && weekCode ? { weekCode } : {}),
+    ...(paymentCountryCode ? { countryCode: paymentCountryCode } : {}),
   };
   const paymentLinked: Prisma.PaymentWhereInput = {
     ...paymentBase,
@@ -246,6 +272,7 @@ function buildCustomerActivityScope(
     order: {
       deletedAt: null,
       ...(orderCountryPrisma ? { sourceCountry: orderCountryPrisma } : {}),
+      ...(paymentCountryCode ? { countryCode: paymentCountryCode } : {}),
     },
   };
   const paymentGeneral: Prisma.PaymentWhereInput = {
@@ -464,6 +491,11 @@ function buildCustomerWhere(query: CustomerBalanceQuery): Prisma.CustomerWhereIn
   };
 }
 
+function emptyStatusBalanceKpis(): Record<StatusBalanceKpiKey, string> {
+  const z = money(new Prisma.Decimal(0));
+  return { open: z, ready: z, inProgress: z, debtWithdrawal: z };
+}
+
 function emptyBalancesPayload(limit: number): CustomerBalancesPayload {
   const z = money(new Prisma.Decimal(0));
   return {
@@ -485,8 +517,61 @@ function emptyBalancesPayload(limit: number): CustomerBalancesPayload {
       partialCount: 0,
       notPaidCount: 0,
       highDebtCount: 0,
+      withPaymentsCount: 0,
     },
+    statusBalanceKpis: emptyStatusBalanceKpis(),
+    activeOrderStatusFilter: "ALL",
   };
+}
+
+function orderMatchesStatusFilter(status: string, statuses: string[] | null): boolean {
+  return statuses == null || statuses.includes(status);
+}
+
+type OrderRowForStatusBalance = {
+  customerId: string | null;
+  status: string;
+  debtWithdrawalUsd: Prisma.Decimal | null;
+  totalUsd: Prisma.Decimal | null;
+  amountUsd: Prisma.Decimal | null;
+  commissionUsd: Prisma.Decimal | null;
+};
+
+function computeStatusBalanceKpis(params: {
+  customerIds: string[];
+  orderRows: OrderRowForStatusBalance[];
+  receivedUsdByCustomer: Map<string, Prisma.Decimal>;
+  creditUsdByCustomer: Map<string, Prisma.Decimal>;
+}): Record<StatusBalanceKpiKey, string> {
+  const paidUsd = (cid: string) => {
+    const r = params.receivedUsdByCustomer.get(cid) ?? new Prisma.Decimal(0);
+    const c = params.creditUsdByCustomer.get(cid) ?? new Prisma.Decimal(0);
+    return r.add(c);
+  };
+  const out: Record<StatusBalanceKpiKey, string> = emptyStatusBalanceKpis();
+  for (const spec of STATUS_BALANCE_KPI_SPECS) {
+    const statuses = orderStatusesForBalanceFilter(spec.filter);
+    if (!statuses) continue;
+    let sum = new Prisma.Decimal(0);
+    for (const cid of params.customerIds) {
+      let orders = new Prisma.Decimal(0);
+      let withdrawals = new Prisma.Decimal(0);
+      for (const o of params.orderRows) {
+        if (o.customerId !== cid || !orderMatchesStatusFilter(o.status, statuses)) continue;
+        if (isDebtWithdrawalOrderStatus(o.status)) {
+          withdrawals = withdrawals.add(
+            new Prisma.Decimal(orderCustomerCreditUsd(o).toFixed(4)),
+          );
+        } else {
+          orders = orders.add(new Prisma.Decimal(orderCustomerChargeUsd(o).toFixed(4)));
+        }
+      }
+      const bal = orders.sub(withdrawals).sub(paidUsd(cid));
+      if (bal.gt(new Prisma.Decimal("0.01"))) sum = sum.add(bal);
+    }
+    out[spec.key] = money(sum);
+  }
+  return out;
 }
 
 function computeBalanceStats(rows: CustomerBalanceRow[]): CustomerBalancesPayload["stats"] {
@@ -502,6 +587,7 @@ function computeBalanceStats(rows: CustomerBalanceRow[]): CustomerBalancesPayloa
   let partial = 0;
   let notPaid = 0;
   let highDebt = 0;
+  let withPayments = 0;
   const eps = 0.01;
   for (const r of rows) {
     const businessBal = rowBalanceUsdNumber(r.totalBalanceUSD);
@@ -523,6 +609,7 @@ function computeBalanceStats(rows: CustomerBalanceRow[]): CustomerBalancesPayloa
     else if (businessBalUsd < -eps) totalCreditUsd = totalCreditUsd.add(new Prisma.Decimal(Math.abs(businessBalUsd).toFixed(4)));
     if (r.autoStatus === "PARTIAL") partial++;
     if (r.autoStatus === "NOT_PAID" && businessBal > eps) notPaid++;
+    if (rowPaymentsTotalNumber(r.totalPaymentsUSD) > eps) withPayments++;
   }
   return {
     totalDebtIls: money(totalDebt),
@@ -537,6 +624,7 @@ function computeBalanceStats(rows: CustomerBalanceRow[]): CustomerBalancesPayloa
     partialCount: partial,
     notPaidCount: notPaid,
     highDebtCount: highDebt,
+    withPaymentsCount: withPayments,
   };
 }
 
@@ -612,35 +700,48 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
 
   const countryNorm = normalizeOrderSourceCountry(query.sourceCountry || null);
   const orderCountryPrisma: OrderSourceCountry | undefined =
-    countryNorm && (ORDER_COUNTRY_CODES as readonly string[]).includes(countryNorm) ? (countryNorm as OrderSourceCountry) : undefined;
+    countryNorm && (ORDER_COUNTRY_CODES as readonly string[]).includes(countryNorm)
+      ? (countryNorm as OrderSourceCountry)
+      : undefined;
+  const countryScope = resolveCountryScopeFromCode(
+    orderCountryPrisma
+      ? workCountryFromOrderSourceCountry(orderCountryPrisma)
+      : DEFAULT_WORK_COUNTRY,
+  );
+
+  const activeOrderStatusFilter = parseCustomerBalanceOrderStatusFilter(query.filters?.orderStatus);
+  const orderStatusList = orderStatusesForBalanceFilter(activeOrderStatusFilter);
 
   const orderNestedWhere: Prisma.OrderWhereInput = {
     deletedAt: null,
+    countryCode: countryScope.workCountry,
+    sourceCountry: countryScope.sourceCountry,
     ...(!lifetime && !cumulativeThrough && query.weekCode?.trim() ? { weekCode: query.weekCode.trim() } : {}),
     ...(orderDateFilter ? { orderDate: orderDateFilter } : {}),
-    ...(orderCountryPrisma ? { sourceCountry: orderCountryPrisma } : {}),
   };
 
   const paymentLinkedWhere: Prisma.PaymentWhereInput = {
-    isPaid: true,
+    ...activePaidPaymentWhere,
+    countryCode: countryScope.workCountry,
     orderId: { not: null },
     ...(!lifetime && !cumulativeThrough && query.weekCode?.trim() ? { weekCode: query.weekCode.trim() } : {}),
     ...(paymentDateFilter ? { paymentDate: paymentDateFilter } : {}),
-    ...(orderCountryPrisma
-      ? {
-          order: {
-            deletedAt: null,
-            sourceCountry: orderCountryPrisma,
-          },
-        }
-      : {}),
+    order: {
+      deletedAt: null,
+      countryCode: countryScope.workCountry,
+      sourceCountry: countryScope.sourceCountry,
+    },
   };
 
   const customerWhere = buildCustomerWhere(query);
   const smartTrim = query.filters?.smart?.trim();
   const scopeToActivity = !query.customerId?.trim() && !smartTrim;
   const activityOrderWhere: Prisma.OrderWhereInput = lifetime
-    ? { deletedAt: null, ...(orderCountryPrisma ? { sourceCountry: orderCountryPrisma } : {}) }
+    ? {
+        deletedAt: null,
+        countryCode: countryScope.workCountry,
+        sourceCountry: countryScope.sourceCountry,
+      }
     : orderNestedWhere;
   /** לקוחות חדשים (7 ימים) — גם בלי הזמנה/תשלום בתחום */
   const recentSignupCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
@@ -656,6 +757,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
                 lifetime ? undefined : query.weekCode?.trim(),
                 lifetime || !!cumulativeThrough,
                 orderCountryPrisma,
+                countryScope.workCountry,
               ),
               { createdAt: { gte: recentSignupCutoff } },
             ],
@@ -690,6 +792,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       from: scopeFrom ?? null,
       to: scopeTo ?? null,
       sourceCountry: orderCountryPrisma ?? null,
+      orderStatuses: orderStatusList,
     }),
   );
 
@@ -756,7 +859,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       findManyInChunks(customerIds, (chunk) =>
         prisma.payment.findMany({
           where: {
-            isPaid: true,
+            ...activePaidPaymentWhere,
             orderId: null,
             customerId: { in: chunk },
             ...(!lifetime && !cumulativeThrough && query.weekCode?.trim() ? { weekCode: query.weekCode.trim() } : {}),
@@ -798,6 +901,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   for (const o of orderRows) {
     const cid = o.customerId;
     if (!cid) continue;
+    if (!orderMatchesStatusFilter(o.status, orderStatusList)) continue;
     const isWithdrawal = isDebtWithdrawalOrderStatus(o.status);
     const chargeUsd = orderCustomerChargeUsd(o);
     const creditUsd = orderCustomerCreditUsd(o);
@@ -962,6 +1066,11 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
 
   let filtered = rows.filter((r) => matchesDebtFilter(r, debtFilter));
 
+  if (query.filters?.hasPayments) {
+    const epsPay = 0.01;
+    filtered = filtered.filter((r) => rowPaymentsTotalNumber(r.totalPaymentsUSD) > epsPay);
+  }
+
   if (minB != null) filtered = filtered.filter((r) => rowBalanceUsdNumber(r.totalBalanceUSD) >= minB);
   if (maxB != null) filtered = filtered.filter((r) => rowBalanceUsdNumber(r.totalBalanceUSD) <= maxB);
 
@@ -1019,6 +1128,13 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
 
   const sort: CustomerBalanceSort =
     query.filters?.sort && SORT_VALUES.has(query.filters.sort) ? query.filters.sort : "balance_desc";
+
+  const statusBalanceKpis = computeStatusBalanceKpis({
+    customerIds,
+    orderRows,
+    receivedUsdByCustomer,
+    creditUsdByCustomer,
+  });
 
   const totalsT0 = Date.now();
   const sorted = [...working].sort((a, b) => {
@@ -1079,6 +1195,8 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     totalRows,
     totalPages,
     stats,
+    statusBalanceKpis,
+    activeOrderStatusFilter,
     ...(reportModalStats ? { reportModalStats } : {}),
   };
 
@@ -1217,7 +1335,7 @@ export async function getCustomerBalancePreviewAction(
       select: { phone: true, phone2: true, city: true },
     }),
     prisma.payment.findFirst({
-      where: { customerId: id, isPaid: true },
+      where: { customerId: id, ...activePaidPaymentWhere },
       orderBy: { paymentDate: "desc" },
       select: {
         paymentCode: true,
@@ -1293,8 +1411,27 @@ export async function exportCustomerBalancesAction(
       };
     }
 
-    const { buildCustomersExportHtml } = await import("@/lib/customers-source-export-pdf");
-    const html = buildCustomersExportHtml(headers, data, stamp);
+    const { buildAtlasExportHtml } = await import("@/lib/atlas-export-html");
+    let ordersSum = 0;
+    let paymentsSum = 0;
+    let balanceSum = 0;
+    for (const r of payload.rows) {
+      ordersSum += rowOrdersTotalNumber(r.totalOrdersUSD);
+      paymentsSum += rowPaymentsTotalNumber(r.totalPaymentsUSD);
+      balanceSum += Math.max(0, rowBalanceUsdNumber(r.totalBalanceUSD));
+    }
+    const html = buildAtlasExportHtml({
+      title: `דוח יתרות לקוחות · ${stamp}`,
+      reportKind: "balances",
+      headers,
+      rows: data,
+      meta: { extraMeta: `הופק: ${stamp} · ${payload.rows.length} לקוחות` },
+      footer: {
+        ordersTotalUsd: money(new Prisma.Decimal(ordersSum.toFixed(4))),
+        paymentsTotalUsd: money(new Prisma.Decimal(paymentsSum.toFixed(4))),
+        balanceUsd: money(new Prisma.Decimal(balanceSum.toFixed(4))),
+      },
+    });
     return {
       ok: true,
       base64: Buffer.from(html, "utf-8").toString("base64"),

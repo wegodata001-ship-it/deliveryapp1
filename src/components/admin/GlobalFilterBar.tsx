@@ -16,6 +16,9 @@ import { withQuery } from "@/lib/admin-url-query";
 import { ORDER_COUNTRY_CODES, orderCountryLabel, type OrderCountryCode } from "@/lib/order-countries";
 import { AhWeekNavNextButton, AhWeekNavPrevButton } from "@/components/admin/AhWeekNavButtons";
 import { shiftAhWeekCode } from "@/lib/weeks/ah-week-nav";
+import { dispatchCountryChanged } from "@/lib/country-switch-bus";
+import { revalidateAllKpiCachesAction } from "@/lib/kpi-cache-revalidate-action";
+import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 import { useAdminFinancialModal } from "@/components/admin/AdminFinancialModalContext";
 
@@ -382,7 +385,10 @@ export function GlobalFilterBar({ financial = null, canManageFinancial = false }
             onChange={(e) => {
               const nextCountry = e.target.value as OrderCountryCode;
               setCountry(nextCountry);
+              dispatchCountryChanged(workCountryFromOrderSourceCountry(nextCountry));
+              void revalidateAllKpiCachesAction();
               applyValues(week, from, to, nextCountry);
+              router.refresh();
             }}
           >
             {ORDER_COUNTRY_CODES.map((c) => (

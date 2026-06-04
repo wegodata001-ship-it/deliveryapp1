@@ -25,7 +25,7 @@ export type PaymentIntakeMatchResult = PaymentIntakeOrderBase & {
   status: PaymentIntakeOrderStatus;
   /** סכום מהקליטה הנוכחית שיוקצה להזמנה זו */
   allocationUsd: number;
-  /** תוצאת הקצאה מהתשלום הנוכחי — לתצוגת היילייט */
+  /** תוצאת הקצאה מהתשלום הנוכחי */
   allocationOutcome: "none" | "partial" | "paid";
 };
 

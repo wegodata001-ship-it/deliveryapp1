@@ -4,6 +4,7 @@ import { calculateCustomerBalances } from "@/lib/customer-balance-calculator";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { isDebtWithdrawalOrderStatus, orderCustomerCreditUsd } from "@/lib/debt-withdrawal-order";
 import { normalizeOrderSourceCountry } from "@/lib/order-countries";
+import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
 import { endOfLocalDay, parseLocalDate } from "@/lib/work-week";
 
 /** פילטרים משותפים ל־KPI דוחות + דוח יתרות לקוחות + ייצוא */
@@ -48,13 +49,15 @@ export function getCustomerBalancesReportWhereClauses(filters: CustomerBalancesR
     ? normalizeOrderSourceCountry(filters.sourceCountry.trim())
     : null;
 
+  const wc = countryEnum ? workCountryFromOrderSourceCountry(countryEnum) : null;
+
   const orderWhere: Prisma.OrderWhereInput = {
     deletedAt: null,
     orderDate: { gte: from, lte: to },
     ...(filters.customerId ? { customerId: filters.customerId } : {}),
     ...(filters.status ? { status: filters.status } : {}),
     ...(filters.workWeek ? { weekCode: filters.workWeek } : {}),
-    ...(countryEnum ? { sourceCountry: countryEnum } : {}),
+    ...(countryEnum ? { sourceCountry: countryEnum, countryCode: wc! } : {}),
   };
 
   const paymentWhereLinked: Prisma.PaymentWhereInput = {
@@ -64,6 +67,7 @@ export function getCustomerBalancesReportWhereClauses(filters: CustomerBalancesR
     ...(filters.customerId ? { customerId: filters.customerId } : {}),
     ...(filters.workWeek ? { weekCode: filters.workWeek } : {}),
     ...(filters.paymentMethod ? { paymentMethod: filters.paymentMethod as PaymentMethod } : {}),
+    ...(wc ? { countryCode: wc } : {}),
   };
 
   return { from, to, orderWhere, paymentWhereLinked };

@@ -6,10 +6,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { PaymentMethod } from "@prisma/client";
 import { IntakeLocationCombobox } from "@/components/admin/IntakeLocationCombobox";
 import { AhWeekNavNextButton, AhWeekNavPrevButton } from "@/components/admin/AhWeekNavButtons";
-import { shiftAhWeekCode } from "@/lib/weeks/ah-week-nav";
+import {
+  goToNextWeekNumber,
+  goToPrevWeekNumber,
+  parseAhWeekNumber,
+  toAhWeekCode,
+} from "@/lib/weeks/ah-week-nav";
 import { ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS } from "@/lib/order-capture-payment-methods";
 import { ORDER_COUNTRY_CODES, orderCountryLabel, type OrderCountryCode } from "@/lib/order-countries";
 import { OS } from "@/lib/order-status-slugs";
+import { ACTIVE_WORK_WEEK_CODE } from "@/lib/active-work-week";
+import { CurrentWorkWeekButton } from "@/components/admin/CurrentWorkWeekButton";
 import {
   getAhWeekCodeFromDateRange,
   getAhWeekRange,
@@ -103,10 +110,14 @@ export function OrdersListToolbar({
   const router = useRouter();
   const searchParams = useSearchParams();
   const { options: STATUS_OPTIONS } = useOrderStatusCatalog();
+  const ordersWeekFromUrl = (() => {
+    const raw = searchParams.get("ordersWeek")?.trim() ?? "";
+    return normalizeAhWeekCode(raw) ?? raw;
+  })();
   const [filterOpen, setFilterOpen] = useState(false);
   const [from, setFrom] = useState(fromYmd);
   const [to, setTo] = useState(toYmd);
-  const [week, setWeek] = useState(() => (ahWeekSelect ? ahWeekSelect : ""));
+  const [week, setWeek] = useState(() => ordersWeekFromUrl || ahWeekSelect || "");
   const [customerDraft, setCustomerDraft] = useState(customerQuery);
   const [orderNumDraft, setOrderNumDraft] = useState(ordersOrderNum);
   const [phoneDraft, setPhoneDraft] = useState(customerPhone);
@@ -124,8 +135,8 @@ export function OrdersListToolbar({
   useEffect(() => {
     setFrom(fromYmd);
     setTo(toYmd);
-    setWeek(ahWeekSelect ? ahWeekSelect : "");
-  }, [fromYmd, toYmd, ahWeekSelect]);
+    setWeek(ordersWeekFromUrl || ahWeekSelect || "");
+  }, [fromYmd, toYmd, ahWeekSelect, ordersWeekFromUrl]);
 
   useEffect(() => {
     setCustomerDraft(customerQuery);
@@ -168,23 +179,26 @@ export function OrdersListToolbar({
   }, []);
 
   const pushFilters = useCallback(
-    (overrides?: Partial<{
-      from: string;
-      to: string;
-      week: string;
-      customerDraft: string;
-      orderNumDraft: string;
-      phoneDraft: string;
-      statusSel: string;
-      countrySel: string;
-      createdBySel: string;
-      payType: string;
-      payLoc: string;
-      minAmount: string;
-      maxAmount: string;
-      openOnly: boolean;
-      readyOnly: boolean;
-    }>) => {
+    (
+      overrides?: Partial<{
+        from: string;
+        to: string;
+        week: string;
+        customerDraft: string;
+        orderNumDraft: string;
+        phoneDraft: string;
+        statusSel: string;
+        countrySel: string;
+        createdBySel: string;
+        payType: string;
+        payLoc: string;
+        minAmount: string;
+        maxAmount: string;
+        openOnly: boolean;
+        readyOnly: boolean;
+      }>,
+      opts?: { refresh?: boolean },
+    ) => {
       const s = {
         from,
         to,
@@ -240,7 +254,9 @@ export function OrdersListToolbar({
       if (s.maxAmount.trim()) base.set("amountMax", s.maxAmount.trim());
 
       const qs = base.toString();
-      router.push(qs ? `/admin/orders?${qs}` : "/admin/orders");
+      const path = qs ? `/admin/orders?${qs}` : "/admin/orders";
+      router.replace(path, { scroll: false });
+      if (opts?.refresh) router.refresh();
     },
     [
       countrySel,
@@ -297,14 +313,40 @@ export function OrdersListToolbar({
       if (norm) {
         setRangeFromWeekCode(norm);
         const r = getAhWeekRange(norm)!;
-        pushFilters({ week: norm, from: r.from, to: r.to });
+        pushFilters({ week: norm, from: r.from, to: r.to }, { refresh: true });
       } else {
         setWeek("");
-        pushFilters({ week: "" });
+        pushFilters({ week: "" }, { refresh: true });
       }
     },
     [pushFilters, setRangeFromWeekCode],
   );
+
+  const shiftWeekNav = useCallback(
+    (delta: -1 | 1) => {
+      const baseCode =
+        ordersWeekFromUrl ||
+        normalizeAhWeekCode(week) ||
+        normalizeAhWeekCode(ahWeekSelect) ||
+        ahWeekSelect ||
+        "AH-1";
+      const n = parseAhWeekNumber(baseCode);
+      if (n == null) return;
+      const next = toAhWeekCode(delta === -1 ? goToPrevWeekNumber(n) : goToNextWeekNumber(n));
+      const r = getAhWeekRange(next);
+      if (!r) return;
+      setRangeFromWeekCode(next);
+      pushFilters({ week: next, from: r.from, to: r.to }, { refresh: true });
+    },
+    [ahWeekSelect, ordersWeekFromUrl, pushFilters, setRangeFromWeekCode, week],
+  );
+
+  const goToActiveWeek = useCallback(() => {
+    const r = getAhWeekRange(ACTIVE_WORK_WEEK_CODE);
+    if (!r) return;
+    setRangeFromWeekCode(ACTIVE_WORK_WEEK_CODE);
+    pushFilters({ week: ACTIVE_WORK_WEEK_CODE, from: r.from, to: r.to }, { refresh: true });
+  }, [pushFilters, setRangeFromWeekCode]);
 
   return (
     <div className="adm-orders-filters-bar adm-orders-filters-bar--split adm-orders-filters-bar--compact">
@@ -314,14 +356,7 @@ export function OrdersListToolbar({
           <div className="adm-week-control" dir="ltr">
             <AhWeekNavPrevButton
               className="adm-week-step"
-              onClick={() => {
-                const base = week || ahWeekSelect || "AH-1";
-                const next = shiftAhWeekCode(base, -1);
-                if (!next) return;
-                setRangeFromWeekCode(next);
-                const r = getAhWeekRange(next)!;
-                pushFilters({ week: next, from: r.from, to: r.to });
-              }}
+              onClick={() => shiftWeekNav(-1)}
             />
             <input
               type="text"
@@ -340,15 +375,9 @@ export function OrdersListToolbar({
             />
             <AhWeekNavNextButton
               className="adm-week-step"
-              onClick={() => {
-                const base = week || ahWeekSelect || "AH-1";
-                const next = shiftAhWeekCode(base, 1);
-                if (!next) return;
-                setRangeFromWeekCode(next);
-                const r = getAhWeekRange(next)!;
-                pushFilters({ week: next, from: r.from, to: r.to });
-              }}
+              onClick={() => shiftWeekNav(1)}
             />
+            <CurrentWorkWeekButton className="adm-week-current" weekCode={week} onClick={goToActiveWeek} />
           </div>
         </label>
 

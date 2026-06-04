@@ -12,8 +12,10 @@ import {
   PAYMENT_METHOD_LABELS,
   type PaymentMethodTone,
   type PaymentsSourcePreview,
-} from "@/lib/payments-source-table";
+} from "@/lib/payments-source-shared";
+import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
+import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
 import { TableEmpty, TableError, TableSkeleton } from "@/components/ui/data-table";
 
 const PAGE_LIMIT = 25;
@@ -77,6 +79,8 @@ function openPdfHtml(base64: string) {
 }
 
 export function PaymentsSourceTableClient({ initialSearch = "" }: { initialSearch?: string }) {
+  const { globalCountry } = useAdminGlobal();
+  const workCountry = workCountryFromOrderSourceCountry(globalCountry);
   const { openWindow } = useAdminWindows();
   const [searchInput, setSearchInput] = useState(initialSearch);
   const [debouncedSearch, setDebouncedSearch] = useState(initialSearch);
@@ -106,6 +110,7 @@ export function PaymentsSourceTableClient({ initialSearch = "" }: { initialSearc
     (p: number) => ({
       page: p,
       limit: PAGE_LIMIT,
+      workCountry,
       search: debouncedSearch,
       sortKey,
       sortDir,
@@ -119,7 +124,7 @@ export function PaymentsSourceTableClient({ initialSearch = "" }: { initialSearc
         toYmd: filters.toYmd || undefined,
       },
     }),
-    [debouncedSearch, sortKey, sortDir, filters],
+    [debouncedSearch, sortKey, sortDir, filters, workCountry],
   );
 
   const runFetch = useCallback(() => {

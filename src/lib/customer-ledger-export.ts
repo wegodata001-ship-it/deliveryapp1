@@ -1,7 +1,17 @@
 import type { CustomerLedgerPayload, CustomerLedgerRow } from "@/app/admin/capture/actions";
 import { parseBalanceAmountString } from "@/lib/customer-balance";
+import type { LedgerPaymentDetail } from "@/lib/ledger-payment-detail";
+import {
+  atlasFmtUsd,
+  atlasHeadersRtl,
+  atlasPdfCell,
+  atlasPdfPageDefaults,
+  ATLAS_PDF_STYLES,
+  ATLAS_PDF_TABLE_LAYOUT,
+  buildAtlasPdfFooter,
+  buildAtlasPdfHeader,
+} from "@/lib/atlas-pdf-template";
 import { getLedgerPdfMake, ledgerPdfDefaultStyle } from "@/lib/ledger-pdfmake";
-import { ledgerPdfFontFamily } from "@/lib/pdfFonts";
 import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
 import { formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate } from "@/lib/work-week";
 import type { Content, TDocumentDefinitions } from "pdfmake/interfaces";
@@ -11,6 +21,12 @@ export type CustomerLedgerExportMeta = {
   customerCode: string;
   phone: string | null;
   email: string | null;
+  /** מדינת מגורים/כתובת לקוח (לא סביבת עבודה) */
+  country?: string | null;
+  /** TURKEY | CHINA — לסינון כרטסת */
+  sourceCountry?: string | null;
+  /** טורקיה | סין — לכותרת PDF */
+  workEnvironmentLabel?: string | null;
   fromYmd: string;
   toYmd: string;
 };
@@ -23,17 +39,16 @@ export type LedgerExportTableRow = {
   paymentUsd: string;
   balance: string;
   isOpening: boolean;
+  /** שורת פירוט תשלום (PDF/Excel) — לא משנה יתרה מצטברת */
+  isPaymentDetailRow?: boolean;
+  isPaymentDetailSection?: boolean;
 };
 
 /** סדר עמודות בגיליון Excel (ימין→שמאל): תאריך | מסמך | סוג | חיוב לקוח | תשלום/זיכוי | יתרה */
 export const LEDGER_EXPORT_HEADERS = ["תאריך", "מסמך", "סוג", "חיוב לקוח ($)", "תשלום/זיכוי ($)", "יתרה ($)"] as const;
 
-/** pdfmake LTR — מערך הפוך כדי שהתצוגה תהיה תאריך→יתרה מימין לשמאל */
-const LEDGER_PDF_HEADERS_LTR = [...LEDGER_EXPORT_HEADERS].reverse() as readonly string[];
-
-function pdfContent<T extends object>(node: T): Content {
-  return node as Content;
-}
+/** סדר עמודות מימין לשמאל (תאריך → יתרה) */
+const LEDGER_HEADERS_RTL = [...LEDGER_EXPORT_HEADERS] as readonly string[];
 
 function todayYmd(): string {
   return formatLocalYmd(new Date());
@@ -58,6 +73,9 @@ function fmtUsd(s: string): string {
 
 function formatChargeCell(row: CustomerLedgerRow): string {
   if (row.kind === "OPENING_BALANCE") return "—";
+  if (row.isCommissionDebtClosure) {
+    return `יתרת הזמנה: ${fmtUsd(row.orderBalanceAfterUsd ?? "0")}`;
+  }
   const n = parseMoneyStringOrZero(row.chargeUsd);
   if (row.isDebtWithdrawal || n < -0.005) return fmtUsd(row.chargeUsd);
   return n > 0 ? fmtUsd(row.chargeUsd) : "—";
@@ -65,8 +83,66 @@ function formatChargeCell(row: CustomerLedgerRow): string {
 
 function formatPaymentCell(row: CustomerLedgerRow): string {
   if (row.kind === "OPENING_BALANCE") return "—";
+  if (row.isCommissionDebtClosure) {
+    return `יתרת עמלה: ${fmtUsd(row.commissionAfterUsd ?? "0")}`;
+  }
   const n = parseMoneyStringOrZero(row.paymentUsd);
   return n > 0 ? fmtUsd(row.paymentUsd) : "—";
+}
+
+function pushPaymentDetailExportRows(out: LedgerExportTableRow[], row: CustomerLedgerRow): void {
+  const detail = row.paymentDetail;
+  if (!detail || row.isPaymentCancelled) return;
+
+  if (detail.methods.length > 0) {
+    out.push({
+      dateYmd: "",
+      document: "",
+      typeLabel: "פירוט אמצעי תשלום",
+      chargeUsd: "—",
+      paymentUsd: "—",
+      balance: "—",
+      isOpening: false,
+      isPaymentDetailSection: true,
+    });
+    for (const m of detail.methods) {
+      out.push({
+        dateYmd: "",
+        document: m.label,
+        typeLabel: "אמצעי תשלום",
+        chargeUsd: "—",
+        paymentUsd: fmtUsd(m.amountUsd),
+        balance: "—",
+        isOpening: false,
+        isPaymentDetailRow: true,
+      });
+    }
+  }
+
+  if (detail.orders.length > 0) {
+    out.push({
+      dateYmd: "",
+      document: "",
+      typeLabel: "הזמנות ששולמו",
+      chargeUsd: "—",
+      paymentUsd: "—",
+      balance: "—",
+      isOpening: false,
+      isPaymentDetailSection: true,
+    });
+    for (const o of detail.orders) {
+      out.push({
+        dateYmd: "",
+        document: `${o.orderNumber} → ${fmtUsd(o.amountUsd)}`,
+        typeLabel: "הקצאה להזמנה",
+        chargeUsd: "—",
+        paymentUsd: fmtUsd(o.amountUsd),
+        balance: "—",
+        isOpening: false,
+        isPaymentDetailRow: true,
+      });
+    }
+  }
 }
 
 /** יתרה מצטברת — סכום בלבד, בלי תגית «חוב פתוח» */
@@ -78,15 +154,22 @@ export function formatLedgerRunningBalance(balanceUsd: string): string {
 }
 
 export function buildLedgerExportTableRows(ledger: CustomerLedgerPayload): LedgerExportTableRow[] {
-  return ledger.rows.map((r) => ({
-    dateYmd: r.dateYmd,
-    document: r.document,
-    typeLabel: r.typeLabel,
-    chargeUsd: formatChargeCell(r),
-    paymentUsd: formatPaymentCell(r),
-    balance: formatLedgerRunningBalance(r.balanceUsd),
-    isOpening: r.kind === "OPENING_BALANCE",
-  }));
+  const out: LedgerExportTableRow[] = [];
+  for (const r of ledger.rows) {
+    out.push({
+      dateYmd: r.dateYmd,
+      document: r.document,
+      typeLabel: r.typeLabel,
+      chargeUsd: formatChargeCell(r),
+      paymentUsd: formatPaymentCell(r),
+      balance: formatLedgerRunningBalance(r.balanceUsd),
+      isOpening: r.kind === "OPENING_BALANCE",
+    });
+    if (r.kind === "PAYMENT" && r.paymentDetail) {
+      pushPaymentDetailExportRows(out, r);
+    }
+  }
+  return out;
 }
 
 function formatDateRangeLabel(fromYmd: string, toYmd: string): string {
@@ -120,122 +203,28 @@ function triggerBlobDownload(blob: Blob, filename: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
-function pdfMetaLine(label: string, value: string, ltrValue = false): Content {
-  const display = value || "—";
-  return {
-    text: [
-      { text: `${label}: `, bold: true, color: "#475569" },
-      ltrValue
-        ? pdfContent({ text: display, direction: "ltr" })
-        : { text: display, font: ledgerPdfFontFamily(display) },
-    ],
-    style: "meta",
-  };
-}
-
-type LedgerTableCell = {
-  text: string;
-  font: ReturnType<typeof ledgerPdfFontFamily>;
-  alignment: "right";
-  fontSize: number;
-  bold?: boolean;
-  direction?: "ltr";
-  fillColor?: string;
-};
-
-function ledgerPdfCell(
-  value: string,
-  opts?: { ltr?: boolean; fillColor?: string; bold?: boolean },
-): LedgerTableCell {
-  const text = value ?? "";
-  const font = ledgerPdfFontFamily(text);
-  const ltr =
-    opts?.ltr === true ||
-    /^\d{4}-\d{2}-\d{2}$/.test(text.trim()) ||
-    /^[\d$€£.,\s\-—·()%]+$/.test(text.trim()) ||
-    /^[\$]?\d/.test(text.trim()) ||
-    text.startsWith("(");
-  return {
-    text,
-    font,
-    alignment: "right",
-    fontSize: opts?.bold ? 9 : 8.5,
-    bold: opts?.bold,
-    direction: ltr ? "ltr" : undefined,
-    fillColor: opts?.fillColor,
-  };
-}
-
-function ledgerRowToPdfCells(r: LedgerExportTableRow, zebra: boolean): LedgerTableCell[] {
-  const fillColor = r.isOpening ? "#fffbeb" : zebra ? "#f8fafc" : undefined;
-  const bold = r.isOpening;
-  return [
-    ledgerPdfCell(r.balance, { ltr: true, fillColor, bold }),
-    ledgerPdfCell(r.paymentUsd, { ltr: true, fillColor, bold }),
-    ledgerPdfCell(r.chargeUsd, { ltr: true, fillColor, bold }),
-    ledgerPdfCell(r.typeLabel, { fillColor, bold }),
-    ledgerPdfCell(r.document, { fillColor, bold }),
-    ledgerPdfCell(r.dateYmd, { ltr: true, fillColor, bold }),
+function ledgerRowToPdfCells(r: LedgerExportTableRow, zebra: boolean): Content[] {
+  const fillColor = r.isOpening
+    ? "#fffbeb"
+    : r.isPaymentDetailSection
+      ? "#f1f5f9"
+      : r.isPaymentDetailRow
+        ? "#fafbfc"
+        : zebra
+          ? "#f8fafc"
+          : undefined;
+  const bold = r.isOpening || r.isPaymentDetailSection;
+  const fontSize = r.isPaymentDetailRow ? 8 : undefined;
+  const logical = [
+    atlasPdfCell(r.dateYmd, { ltr: true, fillColor, bold, fontSize }),
+    atlasPdfCell(r.document, { fillColor, bold, fontSize }),
+    atlasPdfCell(r.typeLabel, { fillColor, bold, fontSize }),
+    atlasPdfCell(r.chargeUsd, { ltr: true, fillColor, bold, fontSize }),
+    atlasPdfCell(r.paymentUsd, { ltr: true, fillColor, bold, fontSize }),
+    atlasPdfCell(r.balance, { ltr: true, fillColor, bold, fontSize }),
   ];
+  return [...logical].reverse();
 }
-
-function ledgerKpiBox(
-  title: string,
-  value: string,
-  colors: { fill: string; border: string; text: string },
-): Content {
-  return {
-    table: {
-      widths: ["*"],
-      body: [
-        [
-          {
-            stack: [
-              { text: title, fontSize: 9, color: "#64748b", alignment: "right", margin: [8, 8, 8, 2] },
-              pdfContent({
-                text: value,
-                fontSize: 15,
-                bold: true,
-                color: colors.text,
-                alignment: "right",
-                direction: "ltr",
-                margin: [8, 0, 8, 8],
-              }),
-            ],
-            fillColor: colors.fill,
-            border: [false, false, false, false],
-          },
-        ],
-      ],
-    },
-    layout: {
-      hLineWidth: () => 1,
-      vLineWidth: () => 1,
-      hLineColor: () => colors.border,
-      vLineColor: () => colors.border,
-      paddingLeft: () => 0,
-      paddingRight: () => 0,
-      paddingTop: () => 0,
-      paddingBottom: () => 0,
-    },
-  };
-}
-
-const ERP_TABLE_LAYOUT = {
-  hLineWidth: (i: number, node: { table: { body: unknown[][] } }) =>
-    i === 0 || i === node.table.body.length ? 1 : 0.4,
-  vLineWidth: () => 0.4,
-  hLineColor: (i: number) => (i === 1 ? "#94a3b8" : "#e2e8f0"),
-  vLineColor: () => "#e2e8f0",
-  paddingLeft: () => 6,
-  paddingRight: () => 6,
-  paddingTop: () => 5,
-  paddingBottom: () => 5,
-  fillColor: (rowIndex: number) => {
-    if (rowIndex === 0) return "#334155";
-    return null;
-  },
-};
 
 export async function exportCustomerLedgerPdf(
   meta: CustomerLedgerExportMeta,
@@ -246,103 +235,35 @@ export async function exportCustomerLedgerPdf(
   const currentBalance = formatLedgerRunningBalance(ledger.balanceUsd);
 
   const tableBody: Content[][] = [
-    LEDGER_PDF_HEADERS_LTR.map((h) => ({
-      text: h,
-      style: "tableHeader",
-      alignment: "right",
-    })),
+    atlasHeadersRtl([...LEDGER_HEADERS_RTL]),
     ...tableRows.map((r, i) => ledgerRowToPdfCells(r, i % 2 === 1)),
   ];
 
   const docDefinition: TDocumentDefinitions = {
-    pageSize: "A4",
-    pageOrientation: "landscape",
-    pageMargins: [28, 32, 28, 32],
+    ...atlasPdfPageDefaults(),
     defaultStyle: ledgerPdfDefaultStyle,
     content: [
-      {
-        columns: [
-          {
-            width: "*",
-            stack: [
-              { text: "וויגו פרו", style: "brand" },
-              { text: "כרטסת לקוח", style: "title" },
-            ],
-          },
-          {
-            width: "auto",
-            alignment: "left",
-            stack: [
-              pdfContent({ text: `הופק: ${formatLocalYmd(new Date())}`, style: "metaMuted", direction: "ltr" }),
-              { text: `שבוע: ${resolveAhWeekLabel(meta.fromYmd, meta.toYmd)}`, style: "metaMuted" },
-            ],
-          },
-        ],
-        margin: [0, 0, 0, 10],
-      },
-      {
-        table: {
-          widths: ["*", "*"],
-          body: [
-            [pdfMetaLine("שם לקוח", meta.displayName || "—"), pdfMetaLine("קוד לקוח", meta.customerCode || "—", true)],
-            [pdfMetaLine("טלפון", meta.phone?.trim() || "—", true), pdfMetaLine("אימייל", meta.email?.trim() || "—", true)],
-            [
-              pdfMetaLine("טווח תאריכים", formatDateRangeLabel(meta.fromYmd, meta.toYmd)),
-              { text: "", border: [false, false, false, false] },
-            ],
-          ],
-        },
-        layout: "noBorders",
-        margin: [0, 0, 0, 12],
-      },
-      {
-        columns: [
-          ledgerKpiBox('סה"כ חיובים', fmtUsd(ledger.totalChargesUsd), {
-            fill: "#fef2f2",
-            border: "#fecaca",
-            text: "#b91c1c",
-          }),
-          ledgerKpiBox('סה"כ תשלומים', fmtUsd(ledger.totalPaymentsUsd), {
-            fill: "#ecfdf5",
-            border: "#bbf7d0",
-            text: "#047857",
-          }),
-          ledgerKpiBox("יתרה נוכחית", currentBalance, {
-            fill: "#eff6ff",
-            border: "#bfdbfe",
-            text: "#1d4ed8",
-          }),
-        ],
-        columnGap: 10,
-        margin: [0, 0, 0, 14],
-      },
+      ...buildAtlasPdfHeader(meta, "ledger"),
       {
         table: {
           headerRows: 1,
           widths: ["*", "*", "*", "*", "*", "*"],
           body: tableBody,
         },
-        layout: ERP_TABLE_LAYOUT,
+        layout: ATLAS_PDF_TABLE_LAYOUT,
       },
+      buildAtlasPdfFooter({
+        ordersTotalUsd: atlasFmtUsd(ledger.totalChargesUsd),
+        paymentsTotalUsd: atlasFmtUsd(ledger.totalPaymentsUsd),
+        balanceUsd: currentBalance,
+      }),
       {
-        text: "יתרת פתיחה מוצגת כשורה ראשונה כאשר מוגדר טווח תאריכים · יתרה = יתרה מצטברת לאחר כל תנועה",
-        style: "footerNote",
-        margin: [0, 10, 0, 0],
+        text: "יתרת פתיחה · פירוט אמצעי תשלום והקצאות להזמנות · יתרה מצטברת לאחר כל תנועה",
+        style: "atlasFooterNote",
+        margin: [0, 8, 0, 0],
       },
     ],
-    styles: {
-      brand: { fontSize: 9, color: "#64748b", margin: [0, 0, 0, 2] },
-      title: { fontSize: 18, bold: true, color: "#0f172a", margin: [0, 0, 0, 0] },
-      meta: { fontSize: 9.5, color: "#1e293b", margin: [0, 2, 0, 2] },
-      metaMuted: { fontSize: 8.5, color: "#64748b" },
-      tableHeader: {
-        fontSize: 9,
-        bold: true,
-        color: "#ffffff",
-        margin: [4, 4, 4, 4],
-      },
-      footerNote: { fontSize: 8, color: "#64748b", italics: true },
-    },
+    styles: ATLAS_PDF_STYLES,
   };
 
   pdfMake.createPdf(docDefinition).download(buildLedgerExportFilename(meta.customerCode, "pdf"));
@@ -405,7 +326,7 @@ export async function exportCustomerLedgerExcel(
   };
 
   const aoa: (string | number)[][] = [
-    ["וויגו פרו — כרטסת לקוח"],
+    ["ATLAS IMPORT & EXPORT — דוח כרטסת לקוח"],
     ["שם לקוח", meta.displayName || "—"],
     ["קוד לקוח", meta.customerCode || "—"],
     ["טלפון", meta.phone?.trim() || "—"],
@@ -451,8 +372,28 @@ export async function exportCustomerLedgerExcel(
   setCellStyle(10, 1, { ...kpiValueStyle, font: { bold: true, sz: 11, color: { rgb: "1D4ED8" } } });
 
   for (let c = 0; c < 6; c++) setCellStyle(headRow, c, tableHeadStyle);
+  const detailSectionStyle = {
+    ...tableCellStyle,
+    font: { bold: true, sz: 9, color: { rgb: "475569" } },
+    fill: { fgColor: { rgb: "F1F5F9" } },
+  };
+  const detailRowStyle = {
+    ...tableCellStyle,
+    font: { sz: 9, color: { rgb: "64748B" } },
+    fill: { fgColor: { rgb: "FAFBFC" } },
+  };
+
   for (let i = 0; i < tableRows.length; i++) {
-    const style = tableRows[i].isOpening ? openingStyle : i % 2 === 1 ? zebraStyle : tableCellStyle;
+    const r = tableRows[i];
+    const style = r.isOpening
+      ? openingStyle
+      : r.isPaymentDetailSection
+        ? detailSectionStyle
+        : r.isPaymentDetailRow
+          ? detailRowStyle
+          : i % 2 === 1
+            ? zebraStyle
+            : tableCellStyle;
     for (let c = 0; c < 6; c++) setCellStyle(dataStart + i, c, style);
   }
 

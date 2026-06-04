@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { ACTIVE_WORK_WEEK_CODE } from "@/lib/active-work-week";
+import { CurrentWorkWeekButton } from "@/components/admin/CurrentWorkWeekButton";
 import { DEFAULT_WEEK_CODE, WORK_WEEK_CODES_SORTED, getAhWeekRange, normalizeAhWeekCode } from "@/lib/work-week";
 import { AhWeekNavNextButton, AhWeekNavPrevButton } from "@/components/admin/AhWeekNavButtons";
 import { goToNextWeek, goToPrevWeek } from "@/lib/weeks/ah-week-nav";
@@ -74,6 +76,13 @@ export function ReportWeekNav({ weekCode, disabled, onWeekChange }: ReportWeekNa
     setOpen(false);
   }
 
+  function goToActiveWeek() {
+    const r = getAhWeekRange(ACTIVE_WORK_WEEK_CODE);
+    if (!r) return;
+    onWeekChange(ACTIVE_WORK_WEEK_CODE, r.from, r.to);
+    setOpen(false);
+  }
+
   return (
     <div className="adm-report-week-nav" ref={wrapRef} dir="ltr">
       <AhWeekNavPrevButton
@@ -102,6 +111,7 @@ export function ReportWeekNav({ weekCode, disabled, onWeekChange }: ReportWeekNa
           if (next) apply(next);
         }}
       />
+      <CurrentWorkWeekButton disabled={disabled} weekCode={code} onClick={goToActiveWeek} />
       {open ? (
         <ul className="adm-report-week-nav__dropdown" role="listbox">
           {visibleWindow.map((w) => (

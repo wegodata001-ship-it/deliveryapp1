@@ -244,7 +244,15 @@ export async function fetchOrdersListPageData(
   }
   const fmtUsdCompact = (n: number) =>
     n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  let allTotalUsd = 0;
+  for (const g of statusGroups) {
+    allTotalUsd += Number(g._sum?.totalUsd ?? 0);
+  }
   const statusSummary: OrdersStatusSummary = {
+    all: {
+      count: totalCount.toLocaleString("he-IL"),
+      totalUsd: fmtUsdCompact(allTotalUsd),
+    },
     open: {
       count: statusSummaryAcc.open.count.toLocaleString("he-IL"),
       totalUsd: fmtUsdCompact(statusSummaryAcc.open.totalUsd),

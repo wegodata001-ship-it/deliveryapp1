@@ -4,7 +4,7 @@ import { revalidatePath, revalidateTag } from "next/cache";
 import { requireAuth } from "@/lib/admin-auth";
 import { FINANCIAL_LAYOUT_CACHE_TAG } from "@/lib/admin-layout-cache";
 import { invalidateCaptureHotPathCache } from "@/lib/capture-hot-path";
-import { revalidateAllKpiCaches } from "@/lib/kpi-cache-tags";
+import { revalidateAllKpiCaches } from "@/lib/kpi-cache-revalidate";
 import { prisma } from "@/lib/prisma";
 import { canClearDemoData } from "@/lib/clear-demo-data";
 import {

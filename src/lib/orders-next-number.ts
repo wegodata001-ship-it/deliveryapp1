@@ -3,13 +3,17 @@ import {
   peekNextOrderNumberFromCounter,
   type OrderNumberAllocation,
 } from "@/lib/order-week-counter";
+import { DEFAULT_WORK_COUNTRY, type WorkCountryCode } from "@/lib/work-country";
 import { DEFAULT_WEEK_CODE } from "@/lib/work-week";
 
 export type { OrderNumberAllocation };
 
-/** מספור רץ לפי שבוע — counter table (לא SELECT MAX על Order) */
-export async function generateNextOrderNumber(weekCode: string): Promise<OrderNumberAllocation> {
-  return allocateNextOrderNumberFromCounter(weekCode);
+/** מספור רץ לפי מדינה+שבוע — counter table */
+export async function generateNextOrderNumber(
+  weekCode: string,
+  workCountry: WorkCountryCode = DEFAULT_WORK_COUNTRY,
+): Promise<OrderNumberAllocation> {
+  return allocateNextOrderNumberFromCounter(weekCode, workCountry);
 }
 
 export function previewOrderNumberAfter(allocation: { orderNumber: string; sequence: number }): string {
@@ -22,8 +26,9 @@ export function previewOrderNumberAfter(allocation: { orderNumber: string; seque
 
 export async function previewNextOrderNumberForWeek(
   weekCode: string,
+  workCountry: WorkCountryCode = DEFAULT_WORK_COUNTRY,
 ): Promise<{ weekCode: string; nextOrderNumber: string }> {
   const wc = weekCode.trim() || DEFAULT_WEEK_CODE;
-  const peek = await peekNextOrderNumberFromCounter(wc);
+  const peek = await peekNextOrderNumberFromCounter(wc, workCountry);
   return { weekCode: wc, nextOrderNumber: peek.orderNumber };
 }

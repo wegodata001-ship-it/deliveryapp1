@@ -1,10 +1,15 @@
 import Link from "next/link";
 import { AlertTriangle } from "lucide-react";
 import { getDashboardHighBalanceCount } from "@/lib/dashboard-stats";
+import type { WorkCountryCode } from "@/lib/work-country";
 
 /** נטען ב-Suspense — לא חוסם KPI מהירים */
-export async function DashboardHighBalanceAlert() {
-  const count = await getDashboardHighBalanceCount();
+export async function DashboardHighBalanceAlert({
+  workCountry,
+}: {
+  workCountry: WorkCountryCode;
+}) {
+  const count = await getDashboardHighBalanceCount(workCountry);
   return (
     <article className="adm-dash-alert-tile adm-dash-alert-tile--info">
       <AlertTriangle size={18} strokeWidth={2} aria-hidden />

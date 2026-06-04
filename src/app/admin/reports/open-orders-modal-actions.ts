@@ -179,7 +179,9 @@ function buildOpenOrdersModalSqlParts(report: ReportFilters, modal: OpenOrdersMo
         * COALESCE(o."usd_rate_used", o."snapshotFinalDollarRate", o."exchangeRate", 0::numeric)
       )`;
     parts.push(Prisma.sql`o."status"::text <> ${OS.CANCELLED}`);
-    parts.push(Prisma.sql`EXISTS (SELECT 1 FROM "Payment" p0 WHERE p0."orderId" = o.id AND p0."isPaid" = true)`);
+    parts.push(
+      Prisma.sql`EXISTS (SELECT 1 FROM "Payment" p0 WHERE p0."orderId" = o.id AND p0."isPaid" = true AND (p0."status" IS NULL OR p0."status" <> 'CANCELLED'))`,
+    );
     parts.push(Prisma.sql`${paidSum} > 0.01::numeric`);
     parts.push(Prisma.sql`${paidSum} < (${expectedIls} - 0.01::numeric)`);
   } else if (bucket === "ALL") {

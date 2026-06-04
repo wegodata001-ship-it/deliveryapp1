@@ -10,7 +10,9 @@ import {
 } from "@/app/admin/source-tables/orders-actions";
 import type { OrdersSourcePreview, OrderSourceRowTone } from "@/lib/orders-source-table";
 import { ORDER_COUNTRY_CODES, orderCountryLabel } from "@/lib/order-countries";
+import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
+import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
 import { TableEmpty, TableError, TableSkeleton } from "@/components/ui/data-table";
 
 const PAGE_LIMIT = 25;
@@ -76,6 +78,8 @@ function openPdfHtml(base64: string) {
 }
 
 export function OrdersSourceTableClient({ initialSearch = "" }: { initialSearch?: string }) {
+  const { globalCountry } = useAdminGlobal();
+  const workCountry = workCountryFromOrderSourceCountry(globalCountry);
   const { openWindow } = useAdminWindows();
   const [searchInput, setSearchInput] = useState(initialSearch);
   const [debouncedSearch, setDebouncedSearch] = useState(initialSearch);
@@ -106,6 +110,7 @@ export function OrdersSourceTableClient({ initialSearch = "" }: { initialSearch?
     (p: number) => ({
       page: p,
       limit: PAGE_LIMIT,
+      workCountry,
       search: debouncedSearch,
       sortKey,
       sortDir,
@@ -120,7 +125,7 @@ export function OrdersSourceTableClient({ initialSearch = "" }: { initialSearch?
         toYmd: filters.toYmd || undefined,
       },
     }),
-    [debouncedSearch, sortKey, sortDir, filters],
+    [debouncedSearch, sortKey, sortDir, filters, workCountry],
   );
 
   const runFetch = useCallback(() => {

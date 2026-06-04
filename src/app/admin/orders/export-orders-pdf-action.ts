@@ -19,6 +19,7 @@ import {
   type OrdersPdfLayoutMode,
 } from "@/lib/orders-list-export-presets";
 import type { OrderStatusKpiKey } from "@/lib/orders-status-kpi-filter";
+import { atlasExportHtmlStyles, atlasHtmlHeadBlock } from "@/lib/atlas-export-html";
 import {
   formatSignedUsdDisplay,
   isDebtWithdrawalOrderStatus,
@@ -256,10 +257,7 @@ function cmpPaymentPlaceRowAsc(a: PaymentPlacesReportRow, b: PaymentPlacesReport
 }
 
 function basePdfStyles(): string {
-  return `
-  *{box-sizing:border-box}
-  body{font-family:"Segoe UI", "Heebo", system-ui, sans-serif; color:#0f172a; margin:18px; direction:rtl}
-  h1{font-size:18px;margin:0 0 6px;font-weight:800}
+  return `${atlasExportHtmlStyles()}
   .meta{font-size:12px;color:#475569;margin-bottom:14px}
   .warn{font-size:12px;color:#b45309;margin-bottom:10px}
   .place-head{
@@ -290,10 +288,10 @@ function basePdfStyles(): string {
   }
   .grp-foot strong{font-weight:900;color:#0f172a}
   table{width:100%;border-collapse:collapse;font-size:11px;direction:rtl}
-  th,td{border:1px solid #cbd5e1;padding:6px 8px;text-align:center;vertical-align:middle}
-  thead th{background:#1e293b;color:#fff;font-weight:800;letter-spacing:.02em}
-  tbody tr{background:#fff}
-  tbody tr:hover{background:#f8fbff}
+  th,td{border:1px solid #cbd5e1;padding:10px 12px;text-align:right;vertical-align:middle}
+  thead th{background:#1e3a5f;color:#fff;font-weight:800;letter-spacing:.02em}
+  tbody tr:nth-child(even){background:#f8fafc}
+  tbody tr:hover{background:#f1f5f9}
   td.cust{text-align:right;font-weight:700}
   td.ils{color:#0f9f55;font-weight:700}
   td.usd{color:#1d4ed8;font-weight:700}
@@ -576,8 +574,7 @@ export async function exportOrdersListPdfHtmlAction(
     const html = `<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"/><title>דוח לפי אמצעי תשלום — ${escapeHtml(
       range.fromYmd,
     )}–${escapeHtml(range.toYmd)}</title><style>${basePdfStyles()}${groupedPdfStyles()}</style></head><body>
-<h1>דוח לפי אמצעי תשלום</h1>
-<div class="meta">${escapeHtml(metaBase)}</div>
+${atlasHtmlHeadBlock(null, "דוח הזמנות לפי אמצעי תשלום", { extraMeta: metaBase })}
 ${warn}
 ${renderPaymentPlacesReportBody(paymentRows)}
 </body></html>`;
@@ -656,8 +653,7 @@ ${renderPaymentPlacesReportBody(paymentRows)}
     const html = `<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"/><title>דוח לפי מקום — ${escapeHtml(
       range.fromYmd,
     )}–${escapeHtml(range.toYmd)}</title><style>${basePdfStyles()}${groupedPdfStyles()}</style></head><body>
-<h1>דוח לפי מקום</h1>
-<div class="meta">${escapeHtml(meta)}</div>
+${atlasHtmlHeadBlock(null, "דוח הזמנות לפי מקום", { extraMeta: meta })}
 ${warn}
 ${renderByIntakePlaceBody(pdfRows)}
 </body></html>`;
@@ -668,8 +664,7 @@ ${renderByIntakePlaceBody(pdfRows)}
     const html = `<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"/><title>דוח לפי לקוח — ${escapeHtml(
       range.fromYmd,
     )}–${escapeHtml(range.toYmd)}</title><style>${basePdfStyles()}${groupedPdfStyles()}</style></head><body>
-<h1>דוח לפי לקוח</h1>
-<div class="meta">${escapeHtml(meta)}</div>
+${atlasHtmlHeadBlock(null, "דוח הזמנות לפי לקוח", { extraMeta: meta })}
 ${warn}
 ${renderByCustomerBody(pdfRows)}
 </body></html>`;
@@ -680,8 +675,7 @@ ${renderByCustomerBody(pdfRows)}
   const html = `<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"/><title>הזמנות — ${escapeHtml(
     range.fromYmd,
   )}–${escapeHtml(range.toYmd)}</title><style>${basePdfStyles()}</style></head><body>
-<h1>רשימת הזמנות</h1>
-<div class="meta">${escapeHtml(meta)}</div>
+${atlasHtmlHeadBlock("orders", "דוח הזמנות", { extraMeta: meta })}
 ${warn}
 ${tableHtml(pdfRows) + footerBlock(sumTotals(pdfRows), "סה״כ כללי")}
 </body></html>`;

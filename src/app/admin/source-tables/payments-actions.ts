@@ -9,6 +9,7 @@ import {
   type PaymentsSourceFilters,
   type PaymentsSourceListQuery,
 } from "@/lib/payments-source-table";
+import { DEFAULT_WORK_COUNTRY, type WorkCountryCode } from "@/lib/work-country";
 
 async function ensurePaymentsTableAccess() {
   const me = await requireAuth();
@@ -23,12 +24,13 @@ export type PaymentsSourceListPayload = Awaited<ReturnType<typeof listPaymentsSo
 };
 
 export async function listPaymentsSourceTableAction(
-  query: PaymentsSourceListQuery & { search?: string },
+  query: PaymentsSourceListQuery & { search?: string; workCountry?: WorkCountryCode },
 ): Promise<PaymentsSourceListPayload> {
   await ensurePaymentsTableAccess();
-  const { search, ...rest } = query;
+  const { search, workCountry = DEFAULT_WORK_COUNTRY, ...rest } = query;
   const filters: PaymentsSourceFilters = {
     ...(rest.filters ?? {}),
+    workCountry,
     ...(search?.trim() ? { search: search.trim() } : {}),
   };
   const [list, kpis] = await Promise.all([
@@ -48,14 +50,15 @@ export async function getPaymentSourcePreviewAction(
 export type PaymentsExportKind = "excel" | "pdf";
 
 export async function exportPaymentsSourceAction(
-  query: PaymentsSourceListQuery & { search?: string },
+  query: PaymentsSourceListQuery & { search?: string; workCountry?: WorkCountryCode },
   kind: PaymentsExportKind,
 ): Promise<{ ok: true; base64: string; filename: string; mime: string } | { ok: false; error: string }> {
   try {
     await ensurePaymentsTableAccess();
-    const { search, ...rest } = query;
+    const { search, workCountry = DEFAULT_WORK_COUNTRY, ...rest } = query;
     const filters: PaymentsSourceFilters = {
       ...(rest.filters ?? {}),
+      workCountry,
       ...(search?.trim() ? { search: search.trim() } : {}),
     };
     const { page: _page, limit: _limit, ...exportQuery } = rest;

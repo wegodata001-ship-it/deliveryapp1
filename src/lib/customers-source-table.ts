@@ -318,7 +318,7 @@ export async function listCustomersSourceTable(
         LEFT JOIN (
           SELECT "customerId", SUM(COALESCE("amountUsd",0)) AS payments_usd
           FROM "Payment"
-          WHERE "isPaid" = TRUE
+          WHERE "isPaid" = TRUE AND ("status" IS NULL OR "status" <> 'CANCELLED')
           GROUP BY "customerId"
         ) p ON p."customerId" = c.id
         WHERE c."deletedAt" IS NULL

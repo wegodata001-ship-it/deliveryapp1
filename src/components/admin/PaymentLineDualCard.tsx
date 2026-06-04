@@ -484,24 +484,33 @@ export function PaymentLineDualCard({
               ) : null}
             </>
           ) : null}
-          <div
-            className="payment-upd-calc-row payment-upd-calc-row--net"
-            title="סכום לתשלום אחרי מע״מ"
-          >
-            <span>סכום סופי לתשלום</span>
-            <span dir="ltr" className="payment-upd-calc-val payment-upd-calc-val--net">
-              {hasUsd ? formatUsdDisplay(calc.finalUsd) : null}
-              {hasUsd && hasIls ? " · " : null}
-              {hasIls ? formatIlsDisplay(calc.finalIls) : null}
-            </span>
-          </div>
           {calc.finalUsd > 0 ? (
-            <div className="payment-upd-calc-row payment-upd-calc-row--usd payment-upd-calc-row--hero">
-              <span>סכום סופי בדולר</span>
+            <div className="payment-upd-calc-row payment-upd-calc-row--net payment-upd-calc-row--hero">
+              <span>סה״כ לתשלום</span>
+              <AnimatedMoneyValue
+                className="payment-upd-calc-val payment-upd-calc-val--net money-amount"
+                dir="ltr"
+                value={formatUsdDisplay(calc.finalUsd)}
+              />
+            </div>
+          ) : null}
+          {calc.convertedIlsUsd > 0 ? (
+            <div className="payment-upd-calc-row payment-upd-calc-row--usd">
+              <span>שקל מומר לדולר</span>
               <AnimatedMoneyValue
                 className="payment-upd-calc-val payment-upd-calc-val--usd money-amount"
                 dir="ltr"
-                value={formatUsdDisplay(calc.finalUsd)}
+                value={formatUsdDisplay(calc.convertedIlsUsd)}
+              />
+            </div>
+          ) : null}
+          {calc.finalUsd > 0 && hasUsd ? (
+            <div className="payment-upd-calc-row payment-upd-calc-row--usd">
+              <span>רכיב דולר</span>
+              <AnimatedMoneyValue
+                className="payment-upd-calc-val payment-upd-calc-val--usd money-amount"
+                dir="ltr"
+                value={formatUsdDisplay(typeof p.usdAmount === "number" ? p.usdAmount : 0)}
               />
             </div>
           ) : null}

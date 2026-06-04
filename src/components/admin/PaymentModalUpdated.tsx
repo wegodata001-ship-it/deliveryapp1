@@ -6,7 +6,6 @@ import type { PaymentMethod } from "@prisma/client";
 import {
   allocatePaymentAcrossOrders,
   buildAllocationsFromMatch,
-  computeCustomerResetBalanceMetrics,
   matchPaymentToOrders,
   orderLedgerBalanceUsd,
   paymentLedgerStatus,
@@ -17,7 +16,23 @@ import {
   type PaymentLedgerStatus,
 } from "@/lib/payment-intake";
 import type { PaymentOveragePreview } from "@/lib/customer-balance";
-import { fetchPaymentIntakeCustomerOrdersAction, fetchOrderPaymentHistoryAction, type OrderPaymentHistoryRow, type PaymentIntakeCustomerPayload } from "@/app/admin/payments/intake/actions";
+import {
+  fetchPaymentIntakeCustomerOrdersAction,
+  fetchOrderPaymentHistoryAction,
+  type OrderPaymentHistoryRow,
+  type PaymentIntakeCustomerPayload,
+  type PaymentIntakeCustomerPaymentRow,
+} from "@/app/admin/payments/intake/actions";
+import { sumCustomerPaymentsUsd } from "@/lib/payment-intake-customer-kpi";
+import { aggregateLivePaymentFormKpis } from "@/lib/payment-intake-live-kpi";
+import { PaymentLiveSummaryCards } from "@/components/admin/PaymentLiveSummaryCards";
+import { PaymentOpenDebtDetailModal } from "@/components/admin/PaymentOpenDebtDetailModal";
+import {
+  computePaymentIntakeLiveTotals,
+  formatIntakeLiveBalanceDisplay,
+  type CommissionResetOrderPreview,
+} from "@/lib/payment-intake-live-calculator";
+import { planCommissionDebtClosureFromNumbers } from "@/lib/commission-debt-closure";
 import {
   fetchOrderForPaymentContextAction,
   previewPaymentCodeForCaptureAction,
@@ -47,7 +62,6 @@ import { AhWeekNavNextButton, AhWeekNavPrevButton } from "@/components/admin/AhW
 import { goToNextWeekNumber, goToPrevWeekNumber } from "@/lib/weeks/ah-week-nav";
 import {
   calculateTotalBaseIls,
-  calculateTotalBaseUsd,
   calculateTotals,
   createDefaultPaymentLine,
   DEFAULT_VAT_RATE,
@@ -60,7 +74,7 @@ import { validatePaymentCheckLines } from "@/lib/payment-checks";
 import { formatCommissionPercentValue, parseCommissionPercentString } from "@/lib/commission-percent";
 import {
   previewCustomerPaymentOverageAction,
-  resetCustomerOutstandingBalancesAction,
+  cancelPaymentAction,
   savePaymentUpdatedAction,
 } from "@/app/admin/payments-updated/actions";
 import { CustomerPaymentOverageModal } from "@/components/admin/CustomerPaymentOverageModal";
@@ -87,6 +101,7 @@ const COUNTRY_BADGE_SHORT: Record<OrderCountryCode, string> = {
   TURKEY: "טורקיה",
   CHINA: "סין",
   UAE: "אמירויות",
+  JORDAN: "ירדן",
 };
 
 type BadgeEditField = "week" | "country" | "date" | "time" | null;
@@ -246,17 +261,19 @@ type Props = {
   viewerIsAdmin?: boolean;
 };
 
-type PaymentNavDirection = "prev" | "next";
+type PaymentNavUnsavedDirection = "prev" | "next";
 
-type PaymentNavigationResponse =
-  | {
-      success: true;
-      paymentId: string;
-      paymentCode: string | null;
-      paymentNumber?: number | null;
-      entry?: PaymentEntryResponse;
-    }
-  | { success: false; edge: "first" | "last" };
+type PaymentEntryNavigation = {
+  currentPaymentId: string;
+  currentPaymentCode: string | null;
+  currentPaymentNumber: number | null;
+  previousPaymentId: string | null;
+  nextPaymentId: string | null;
+};
+
+type PaymentEntryLoadResponse = PaymentEntryResponse & {
+  navigation: PaymentEntryNavigation;
+};
 
 type PaymentEntryResponse = {
   id: string;
@@ -267,6 +284,8 @@ type PaymentEntryResponse = {
   dollarRate: string | null;
   /** אחוז עמלה שנשמר בקליטה — לתצוגה בטבלה; אופציונלי בטעינה ישנה */
   commissionPercent?: string | null;
+  status?: "ACTIVE" | "CANCELLED";
+  cancelReason?: string | null;
   customer: {
     id: string;
     displayName: string;
@@ -368,6 +387,7 @@ export function PaymentModalUpdated({
   const [searchTick, setSearchTick] = useState(0);
   const [customerHits, setCustomerHits] = useState<CustomerSearchRow[]>([]);
   const [customer, setCustomer] = useState<PaymentIntakeCustomerPayload | null>(null);
+  const [customerPayments, setCustomerPayments] = useState<PaymentIntakeCustomerPaymentRow[]>([]);
   const [orders, setOrders] = useState<PaymentIntakeOrderRow[]>([]);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [loadingCustomer, setLoadingCustomer] = useState(false);
@@ -428,28 +448,26 @@ export function PaymentModalUpdated({
   /** אחרי ניסיון שמירה שנכשל באימות צ׳יקים — מסמן שדות חסרים */
   const [highlightInvalidCheckFields, setHighlightInvalidCheckFields] = useState(false);
   const [resetCustomerConfirmOpen, setResetCustomerConfirmOpen] = useState(false);
-  const [resetCustomerBusy, setResetCustomerBusy] = useState(false);
   const baselineSigRef = useRef<string>("");
   const currentSigRef = useRef<string>("");
   const tableScrollRef = useRef<HTMLDivElement | null>(null);
-  /** מטמון immutable לפי id — עותק עמוק בלבד, ללא שיתוף הפניות בין ניווטים */
-  const entryCacheRef = useRef<Map<string, PaymentEntryResponse>>(new Map());
-  /** מטמון תוצאת ניווט אחרונה לכל כיוון — אחרי לחיצה על חץ */
-  const paymentNavNeighborsRef = useRef<Partial<Record<PaymentNavDirection, PaymentNavigationResponse>>>({});
-  /** איפוס יתרה לאחר שמירת תשלום (כשיש תשלום בטופס) */
-  const resetAfterSaveRef = useRef(false);
-  const [isNavigating, setIsNavigating] = useState(false);
-  const [navSpinDirection, setNavSpinDirection] = useState<PaymentNavDirection | null>(null);
-  const [navUnsavedOpen, setNavUnsavedOpen] = useState<PaymentNavDirection | null>(null);
-  const [paymentNavAvailable, setPaymentNavAvailable] = useState<Record<PaymentNavDirection, boolean | null>>({
-    prev: null,
-    next: null,
-  });
+  /** תצוגת "איפוס יתרה" — ללא שינוי DB/טבלה עד שמירת תשלום */
+  const [customerBalanceResetPending, setCustomerBalanceResetPending] = useState(false);
+  const [previousPaymentId, setPreviousPaymentId] = useState<string | null>(null);
+  const [nextPaymentId, setNextPaymentId] = useState<string | null>(null);
+  const [paymentNavLoading, setPaymentNavLoading] = useState(false);
+  const [navUnsavedOpen, setNavUnsavedOpen] = useState<PaymentNavUnsavedDirection | null>(null);
   const [commissionResetIds, setCommissionResetIds] = useState<string[]>([]);
+  const [cancelPaymentOpen, setCancelPaymentOpen] = useState(false);
+  const [cancelPaymentBusy, setCancelPaymentBusy] = useState(false);
+  const [cancelReasonDraft, setCancelReasonDraft] = useState("");
+  const [openDebtDetailOpen, setOpenDebtDetailOpen] = useState(false);
   const [commissionResetTarget, setCommissionResetTarget] = useState<{
     orderId: string;
     orderNumber: string | null;
     oldCommissionUsd: number;
+    remainingUsd: number;
+    newCommissionUsd: number;
   } | null>(null);
 
   const customerIdRef = useRef<string | null>(null);
@@ -461,11 +479,8 @@ export function PaymentModalUpdated({
 
   const totals = useMemo(() => calculateTotals(payments, rateN, DEFAULT_VAT_RATE), [payments, rateN]);
 
-  const stickyBaseTotals = useMemo(
-    () => ({
-      usd: calculateTotalBaseUsd(payments, rateN, DEFAULT_VAT_RATE),
-      ils: calculateTotalBaseIls(payments, rateN, DEFAULT_VAT_RATE),
-    }),
+  const stickyIlsEntered = useMemo(
+    () => calculateTotalBaseIls(payments, rateN, DEFAULT_VAT_RATE),
     [payments, rateN],
   );
 
@@ -485,31 +500,52 @@ export function PaymentModalUpdated({
     [customer?.id, paymentDateYmd, paymentTimeHm, dollarRate, includedIds, draftCustomer.nameEn, draftCustomer.nameAr, draftCustomer.phone, payments],
   );
 
+  const commissionResetPreview = useMemo((): CommissionResetOrderPreview[] => {
+    if (commissionResetIds.length === 0) return [];
+    const reset = new Set(commissionResetIds);
+    return orders
+      .filter((o) => reset.has(o.id))
+      .map((o) => ({
+        id: o.id,
+        totalAmountUsd: Number(o.totalAmountUsd) || 0,
+        dbPaidUsd: Number(o.dbPaidUsd) || 0,
+        commissionUsd: Number(o.commissionUsd) || 0,
+      }));
+  }, [commissionResetIds, orders]);
+
+  const customerBalanceResetPreview = useMemo((): CommissionResetOrderPreview[] => {
+    if (!customerBalanceResetPending) return [];
+    return orders
+      .filter((o) => {
+        const rem = Math.max(0, Number(o.totalAmountUsd) - Number(o.dbPaidUsd));
+        return rem > 0.01;
+      })
+      .map((o) => ({
+        id: o.id,
+        totalAmountUsd: Number(o.totalAmountUsd) || 0,
+        dbPaidUsd: Number(o.dbPaidUsd) || 0,
+        commissionUsd: Number(o.commissionUsd) || 0,
+      }));
+  }, [customerBalanceResetPending, orders]);
+
   const bases = useMemo(() => {
     if (commissionResetIds.length === 0) return toPaymentIntakeBases(orders);
     const reset = new Set(commissionResetIds);
     return toPaymentIntakeBases(
       orders.map((o) => {
         if (!reset.has(o.id)) return o;
+        const plan = planCommissionDebtClosureFromNumbers({
+          commissionUsd: Number(o.commissionUsd) || 0,
+          totalUsd: Number(o.totalAmountUsd) || 0,
+          paidUsd: Number(o.dbPaidUsd) || 0,
+        });
         return {
           ...o,
-          commissionUsd: "0",
-          totalAmountUsd: o.amountUsd,
+          commissionUsd: plan.afterCommissionUsd.toFixed(2),
+          totalAmountUsd: plan.afterTotalUsd.toFixed(2),
         };
       }),
     );
-  }, [commissionResetIds, orders]);
-
-  const commissionResetPreviewUsd = useMemo(() => {
-    if (commissionResetIds.length === 0) return 0;
-    const reset = new Set(commissionResetIds);
-    let sum = 0;
-    for (const o of orders) {
-      if (!reset.has(o.id)) continue;
-      const c = Number((o.commissionUsd || "").replace(",", "."));
-      if (Number.isFinite(c) && c > 0) sum += c;
-    }
-    return roundMoney2(sum);
   }, [commissionResetIds, orders]);
 
   const prioritizedSet = useMemo(() => {
@@ -537,13 +573,6 @@ export function PaymentModalUpdated({
     }
     return (previewPaymentCode ?? "").trim();
   }, [loadedPayment?.id, loadedPayment?.paymentCode, previewPaymentCode]);
-
-  const currentPaymentNavigationQuery = useMemo(() => {
-    if (savedCapturePaymentId) {
-      return `currentPaymentId=${encodeURIComponent(savedCapturePaymentId)}`;
-    }
-    return null;
-  }, [savedCapturePaymentId]);
 
   /** עדכון שער דולר + עמלה כשנטענו FinancialSettings מהשרת */
   useEffect(() => {
@@ -582,72 +611,6 @@ export function PaymentModalUpdated({
     window.addEventListener(WEGO_FINANCIAL_SETTINGS_SAVED, onSaved);
     return () => window.removeEventListener(WEGO_FINANCIAL_SETTINGS_SAVED, onSaved);
   }, []);
-
-  /** ניווט prev/next — prefetch + מטמון entry לשכנים */
-  useEffect(() => {
-    if (!currentPaymentNavigationQuery) {
-      setPaymentNavAvailable({ prev: null, next: null });
-      paymentNavNeighborsRef.current = {};
-      return;
-    }
-
-    paymentNavNeighborsRef.current = {};
-
-    let cancelled = false;
-    let idleId: number | undefined;
-
-    const warmNeighborEntry = (nav: PaymentNavigationResponse | null) => {
-      if (!nav || !nav.success || entryCacheRef.current.has(nav.paymentId)) return;
-      void fetch(`/api/payments/entry?id=${encodeURIComponent(nav.paymentId)}`)
-        .then((res) => (res.ok ? res.json() : null))
-        .then((raw: PaymentEntryResponse | null) => {
-          if (!raw || cancelled) return;
-          entryCacheRef.current.set(raw.id, clonePaymentEntry(raw));
-        })
-        .catch(() => {});
-    };
-
-    const runPrefetch = () => {
-      if (cancelled) return;
-      void (async () => {
-        const [prev, next] = await Promise.all([
-          fetch(`/api/payments/navigation?${currentPaymentNavigationQuery}&direction=prev`, { cache: "no-store" }),
-          fetch(`/api/payments/navigation?${currentPaymentNavigationQuery}&direction=next`, { cache: "no-store" }),
-        ]);
-        if (cancelled) return;
-        const prevJson = prev.ok ? ((await prev.json()) as PaymentNavigationResponse) : null;
-        const nextJson = next.ok ? ((await next.json()) as PaymentNavigationResponse) : null;
-        if (cancelled) return;
-        paymentNavNeighborsRef.current = {
-          ...(prevJson ? { prev: prevJson } : {}),
-          ...(nextJson ? { next: nextJson } : {}),
-        };
-        setPaymentNavAvailable({
-          prev: prevJson == null ? null : prevJson.success,
-          next: nextJson == null ? null : nextJson.success,
-        });
-        warmNeighborEntry(prevJson);
-        warmNeighborEntry(nextJson);
-      })();
-    };
-
-    const timer = window.setTimeout(() => {
-      if (cancelled) return;
-      if (typeof window.requestIdleCallback === "function") {
-        idleId = window.requestIdleCallback(() => runPrefetch(), { timeout: 4000 });
-      } else {
-        runPrefetch();
-      }
-    }, 500);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-      if (idleId != null && typeof window.cancelIdleCallback === "function") {
-        window.cancelIdleCallback(idleId);
-      }
-    };
-  }, [currentPaymentNavigationQuery]);
 
   useEffect(() => {
     currentSigRef.current = currentDraftSig;
@@ -718,52 +681,76 @@ export function PaymentModalUpdated({
     [customer?.customerBalanceUsd],
   );
   const customerHasCredit = customerBalanceUsd > 0.01;
-  const customerHasDebt = customerBalanceUsd < -0.01;
-  const customerBalanceLabel = customerHasCredit ? "יתרת זכות ללקוח" : "חוב פתוח";
-  const customerBalanceIcon = customerHasCredit ? "🟢" : "🔴";
-  const customerBalanceAbs = roundMoney2(Math.abs(customerBalanceUsd));
-  const customerBalanceAfterSave = useMemo(
-    () => roundMoney2(customerBalanceUsd + totals.totalUsd),
-    [customerBalanceUsd, totals.totalUsd],
+  /** מחשבון עסקי חי — חיובים / עמלות / תשלומים / יתרה (כולל תשלום בטופס + איפוס עמלה) */
+  const liveIntakeTotals = useMemo(
+    () =>
+      computePaymentIntakeLiveTotals({
+        orders: toPaymentIntakeBases(orders),
+        commissionResetOrderIds: commissionResetIds,
+        commissionResetPreview,
+        customerBalanceResetPreview,
+        customerPaymentsUsd: sumCustomerPaymentsUsd(customerPayments),
+        formPaymentUsd: totals.totalUsd,
+      }),
+    [
+      orders,
+      commissionResetIds,
+      commissionResetPreview,
+      customerBalanceResetPreview,
+      customerPayments,
+      totals.totalUsd,
+    ],
   );
 
-  /** סיכום מתחת לטבלה: סך עסקאות (USD), סך ששולם בפועל (DB), יתרה פתוחה */
-  const ordersTableFooterTotals = useMemo(() => {
-    let tx = 0;
-    let paidSum = 0;
-    for (const row of matched) {
-      const usd = row.totalAmountUsd;
-      tx += Number.isFinite(usd) ? usd : 0;
-      const p = row.dbPaidUsd;
-      paidSum += Number.isFinite(p) ? p : 0;
+  /** מחשבון חי — רק שורות התשלום בטופס (onChange) */
+  const liveFormKpis = useMemo(
+    () => aggregateLivePaymentFormKpis(payments, rateN),
+    [payments, rateN],
+  );
+
+  /** חוב פתוח בטבלה (DB) + סכום עמלות על הזמנות פתוחות — לחלון אישור איפוס יתרה */
+  const resetBalanceConfirm = useMemo(() => {
+    let openDebtUsd = 0;
+    let openCommissionUsd = 0;
+    for (const o of orders) {
+      const rem = Math.max(0, Number(o.totalAmountUsd) - Number(o.dbPaidUsd));
+      if (rem <= 0.01) continue;
+      openDebtUsd += rem;
+      openCommissionUsd += Number(o.commissionUsd) || 0;
     }
-    const totalTransactions = roundMoney2(tx);
-    const totalPaidDb = roundMoney2(paidSum);
-    const remaining = roundMoney2(
-      matched.reduce((sum, row) => {
-        const bal = orderLedgerBalanceUsd(row);
-        return bal > 0.01 ? sum + bal : sum;
-      }, 0),
-    );
-    return { totalTransactions, totalPaidDb, remaining };
-  }, [matched]);
+    openDebtUsd = roundMoney2(openDebtUsd);
+    openCommissionUsd = roundMoney2(openCommissionUsd);
+    const afterCommissionUsd = roundMoney2(openCommissionUsd - openDebtUsd);
+    return { openDebtUsd, openCommissionUsd, afterCommissionUsd };
+  }, [orders]);
 
-  /** עמלות זמינות ויתרה פתוחה לפי שורות הטבלה (DB) — לא לפי סיכום שגוי */
-  const resetBalanceMetrics = useMemo(() => {
-    const paymentRows = bases;
-    const { availableCommission, remainingAmount } = computeCustomerResetBalanceMetrics(
-      paymentRows,
-      commissionPercentN,
-    );
-    const remainingToReset = roundMoney2(Math.max(0, remainingAmount - totals.totalUsd));
-    return { availableCommission, remainingAmount, remainingToReset, paymentRows };
-  }, [bases, commissionPercentN, totals.totalUsd]);
+  const intakeStripOpenDebtUsd = customerBalanceResetPending
+    ? 0
+    : resetBalanceConfirm.openDebtUsd > 0.01
+      ? resetBalanceConfirm.openDebtUsd
+      : liveIntakeTotals.hasDebt
+        ? liveIntakeTotals.balanceUsd
+        : 0;
 
-  const canResetCustomerBalance = useMemo(() => {
-    if (!viewerIsAdmin) return false;
-    if (resetBalanceMetrics.remainingToReset <= 0.01) return false;
-    return resetBalanceMetrics.availableCommission >= resetBalanceMetrics.remainingToReset - 0.01;
-  }, [viewerIsAdmin, resetBalanceMetrics]);
+  const showIntakeStripOpenDebt =
+    customerBalanceResetPending || intakeStripOpenDebtUsd > 0.01;
+
+  const showResetBalanceBtn = useMemo(() => {
+    if (!viewerIsAdmin || !customer) return false;
+    return (
+      resetBalanceConfirm.openDebtUsd > 0.01 ||
+      liveIntakeTotals.balanceUsd > 0.01 ||
+      liveIntakeTotals.hasDebt
+    );
+  }, [
+    viewerIsAdmin,
+    customer,
+    resetBalanceConfirm.openDebtUsd,
+    liveIntakeTotals.balanceUsd,
+    liveIntakeTotals.hasDebt,
+  ]);
+
+  const canApplyResetCustomerBalance = resetBalanceConfirm.openDebtUsd > 0.01;
 
   const refreshPaymentCodePreview = useCallback(() => {
     setPaymentCodePreviewPending(true);
@@ -814,14 +801,18 @@ export function PaymentModalUpdated({
       else setLoadingCustomer(false);
       if (!res.ok) {
         setCustomer(null);
+        setCustomerPayments([]);
         setOrders([]);
         setCommissionResetIds([]);
+        setCustomerBalanceResetPending(false);
         setLoadErr(res.error);
         return false;
       }
       setCustomer(res.customer);
+      setCustomerPayments(res.customerPayments);
       setOrders(res.orders);
       setCommissionResetIds([]);
+      setCustomerBalanceResetPending(false);
       setDraftCustomer({
         code: res.customer.customerCode ?? "",
         displayName: res.customer.displayName ?? "",
@@ -845,6 +836,9 @@ export function PaymentModalUpdated({
   const selectCustomerQuick = useCallback(
     (row: CustomerSearchRow, opts?: { focusAmount?: boolean }) => {
       setOrders([]);
+      setCustomerPayments([]);
+      setCommissionResetIds([]);
+      setCustomerBalanceResetPending(false);
       setCustomer({
         id: row.id,
         displayName: row.label,
@@ -978,25 +972,27 @@ export function PaymentModalUpdated({
     setLoadedPayment(createNewCaptureLoadedPayment(""));
     setPreviewPaymentCode(null);
     setPaymentCodePreviewPending(true);
-    setPaymentNavAvailable({ prev: null, next: null });
+    setPreviousPaymentId(null);
+    setNextPaymentId(null);
+    setCustomerBalanceResetPending(false);
     baselineSigRef.current = "";
     refreshPaymentCodePreview();
   }, [financial, refreshPaymentCodePreview]);
 
-  async function loadPaymentEntrySnapshot(id: string): Promise<PaymentEntryResponse | null> {
-    const cached = entryCacheRef.current.get(id);
-    if (cached) {
-      return clonePaymentEntry(cached);
-    }
-    const res = await fetch(`/api/payments/entry?id=${encodeURIComponent(id)}`);
-    if (!res.ok) return null;
-    const raw = (await res.json()) as PaymentEntryResponse;
-    const immutable = clonePaymentEntry(raw);
-    entryCacheRef.current.set(id, clonePaymentEntry(immutable));
-    return clonePaymentEntry(immutable);
+  function applyNavigationLinks(nav: PaymentEntryNavigation) {
+    setPreviousPaymentId(nav.previousPaymentId);
+    setNextPaymentId(nav.nextPaymentId);
+    console.log("[payment-nav] currentPayment", {
+      id: nav.currentPaymentId,
+      code: nav.currentPaymentCode,
+      number: nav.currentPaymentNumber,
+    });
+    console.log("[payment-nav] previousPayment", nav.previousPaymentId);
+    console.log("[payment-nav] nextPayment", nav.nextPaymentId);
   }
 
   async function applyPaymentEntry(snapshot: PaymentEntryResponse): Promise<boolean> {
+    custSearchGenRef.current += 1;
     const pageScrollY = window.scrollY;
     const tableScroll = tableScrollRef.current?.scrollTop ?? 0;
     const snap = clonePaymentEntry(snapshot);
@@ -1033,140 +1029,75 @@ export function PaymentModalUpdated({
     return true;
   }
 
-  async function loadPaymentFromSavedId(id: string): Promise<boolean> {
+  /** טעינת קליטה שמורה + שכנות ניווט מהשרת — מרענן את כל המסך */
+  async function loadPayment(paymentId: string): Promise<boolean> {
+    const trimmed = paymentId.trim();
+    if (!trimmed) return false;
+
+    setPaymentNavLoading(true);
     setSaveErr(null);
-    const entry = await loadPaymentEntrySnapshot(id);
-    if (!entry) {
-      setSaveErr("לא ניתן לטעון קליטת תשלום");
+    setLoadErr(null);
+
+    try {
+      const res = await fetch(`/api/payments/entry?id=${encodeURIComponent(trimmed)}`, {
+        cache: "no-store",
+      });
+      if (!res.ok) {
+        setSaveErr("לא ניתן לטעון קליטת תשלום");
+        return false;
+      }
+
+      const raw = (await res.json()) as PaymentEntryLoadResponse;
+      const { navigation, ...entryFields } = raw;
+      const entry = clonePaymentEntry(entryFields);
+
+      setCommissionResetIds([]);
+      setCustomerBalanceResetPending(false);
+      setIncludedIds(null);
+      baselineSigRef.current = "";
+
+      const ok = await applyPaymentEntry(entry);
+      if (!ok) return false;
+
+      applyNavigationLinks(navigation);
+      return true;
+    } catch {
+      setSaveErr("שגיאת רשת בטעינת תשלום");
       return false;
+    } finally {
+      setPaymentNavLoading(false);
     }
-    clearCurrentPaymentState();
-    return applyPaymentEntry(entry);
   }
 
   function paymentCaptureIsDirty(): boolean {
     return baselineSigRef.current !== "" && baselineSigRef.current !== currentDraftSig;
   }
 
-  async function fetchPaymentNavigationNeighbor(
-    direction: PaymentNavDirection,
-    opts?: { includeEntry?: boolean; skipCache?: boolean },
-  ): Promise<PaymentNavigationResponse | null> {
-    if (!opts?.skipCache) {
-      const cached = paymentNavNeighborsRef.current[direction];
-      if (cached && (!opts?.includeEntry || (cached.success && cached.entry))) return cached;
-    }
-    if (!currentPaymentNavigationQuery) return null;
-    const includeEntry = opts?.includeEntry ? "&includeEntry=1" : "";
-    const res = await fetch(
-      `/api/payments/navigation?${currentPaymentNavigationQuery}&direction=${direction}${includeEntry}`,
-      { cache: "no-store" },
-    );
-    if (!res.ok) return null;
-    const json = (await res.json()) as PaymentNavigationResponse;
-    paymentNavNeighborsRef.current[direction] = json;
-    return json;
-  }
-
-  async function runNavigateToPaymentId(targetId: string): Promise<boolean> {
-    setSaveErr(null);
-    const restoreId = savedCapturePaymentId;
-    const entry = await loadPaymentEntrySnapshot(targetId);
-    if (!entry) {
-      onToast("לא ניתן לטעון קליטה");
-      return false;
-    }
-    clearCurrentPaymentState();
-    const ok = await applyPaymentEntry(entry);
-    if (!ok && restoreId && restoreId !== targetId) {
-      const prevEntry = await loadPaymentEntrySnapshot(restoreId);
-      if (prevEntry) {
-        clearCurrentPaymentState();
-        await applyPaymentEntry(prevEntry);
-      }
-      onToast("טעינה נכשלה — חזרה לקליטה הקודמת");
-    }
-    return ok;
-  }
-
-  async function executePaymentCaptureNavigation(direction: PaymentNavDirection): Promise<void> {
-    if (!currentPaymentNavigationQuery) return;
-    paymentNavNeighborsRef.current = {};
-    const nav = await fetchPaymentNavigationNeighbor(direction, { includeEntry: true, skipCache: true });
-    if (!nav) {
-      onToast("שגיאת ניווט");
-      return;
-    }
-    if (!nav.success) {
-      setPaymentNavAvailable((s) => ({ ...s, [direction]: false }));
-      if (nav.edge === "first") onToast("זוהי הקליטה הראשונה");
-      else onToast("זוהי הקליטה האחרונה");
-      return;
-    }
-    if (nav.entry) {
-      entryCacheRef.current.set(nav.entry.id, clonePaymentEntry(nav.entry));
-      clearCurrentPaymentState();
-      const ok = await applyPaymentEntry(nav.entry);
-      if (!ok) onToast("לא ניתן לטעון קליטה");
-      else {
-        paymentNavNeighborsRef.current = {};
-        setPaymentNavAvailable({ prev: null, next: null });
-        router.refresh();
-      }
-      return;
-    }
-    const ok = await runNavigateToPaymentId(nav.paymentId);
-    if (ok) {
-      paymentNavNeighborsRef.current = {};
-      setPaymentNavAvailable({ prev: null, next: null });
-      router.refresh();
-    }
-  }
-
-  function requestPaymentCaptureNavigation(direction: PaymentNavDirection) {
-    if (!currentPaymentNavigationQuery || isNavigating || saveBusy) return;
-    if (paymentNavAvailable[direction] === false) {
-      onToast(direction === "prev" ? "זוהי הקליטה הראשונה" : "זוהי הקליטה האחרונה");
-      return;
-    }
-    if (paymentCaptureIsDirty()) {
-      setNavUnsavedOpen(direction);
-      return;
-    }
-    void (async () => {
-      setIsNavigating(true);
-      setNavSpinDirection(direction);
-      try {
-        await executePaymentCaptureNavigation(direction);
-      } finally {
-        setIsNavigating(false);
-        setNavSpinDirection(null);
-      }
-    })();
-  }
-
   function goToPreviousPayment() {
-    requestPaymentCaptureNavigation("prev");
+    if (!previousPaymentId || paymentNavLoading || saveBusy) return;
+    if (paymentCaptureIsDirty()) {
+      setNavUnsavedOpen("prev");
+      return;
+    }
+    void loadPayment(previousPaymentId);
   }
 
   function goToNextPayment() {
-    requestPaymentCaptureNavigation("next");
+    if (!nextPaymentId || paymentNavLoading || saveBusy) return;
+    if (paymentCaptureIsDirty()) {
+      setNavUnsavedOpen("next");
+      return;
+    }
+    void loadPayment(nextPaymentId);
   }
 
   function confirmNavUnsavedAndProceed() {
     const direction = navUnsavedOpen;
     if (!direction) return;
     setNavUnsavedOpen(null);
-    void (async () => {
-      setIsNavigating(true);
-      setNavSpinDirection(direction);
-      try {
-        await executePaymentCaptureNavigation(direction);
-      } finally {
-        setIsNavigating(false);
-        setNavSpinDirection(null);
-      }
-    })();
+    const targetId = direction === "prev" ? previousPaymentId : nextPaymentId;
+    if (!targetId) return;
+    void loadPayment(targetId);
   }
 
   useEffect(() => {
@@ -1177,7 +1108,7 @@ export function PaymentModalUpdated({
       const pid = init.paymentId?.trim();
       if (pid) {
         setPaymentCodePreviewPending(false);
-        await loadPaymentFromSavedId(pid);
+        await loadPayment(pid);
         return;
       }
 
@@ -1234,10 +1165,11 @@ export function PaymentModalUpdated({
     setPaymentDateYmd(formatLocalYmd(new Date()));
     setPaymentTimeHm(formatLocalHm(new Date()));
     setSaveErr(null);
-    setIsNavigating(false);
-    setNavSpinDirection(null);
+    setPaymentNavLoading(false);
     setNavUnsavedOpen(null);
-    setPaymentNavAvailable({ prev: null, next: null });
+    setPreviousPaymentId(null);
+    setNextPaymentId(null);
+    setCustomerBalanceResetPending(false);
     setPreviewPaymentCode(null);
     setLoadedPayment(createNewCaptureLoadedPayment(""));
     refreshPaymentCodePreview();
@@ -1395,56 +1327,6 @@ export function PaymentModalUpdated({
     );
   }
 
-  /**
-   * "איפוס יתרה" ברמת לקוח — מנהל בלבד.
-   * סוגר את כל היתרות הפתוחות לכל הזמנות הלקוח ע״י הורדה מהעמלות מהחדש לישן.
-   * מעדכן את הטבלה המקומית מיידית בלי refresh.
-   */
-  async function applyResetCustomerBalances(): Promise<void> {
-    if (!viewerIsAdmin) return;
-    if (!customer) return;
-    setResetCustomerBusy(true);
-    setSaveErr(null);
-    const res = await resetCustomerOutstandingBalancesAction({
-      customerId: customer.id,
-      weekCode: intakeWeekCode,
-      commissionPercent: systemCommissionPercentStr,
-    });
-    setResetCustomerBusy(false);
-    if (!res.ok) {
-      setSaveErr(res.error);
-      onToast(res.error);
-      return;
-    }
-    const updatesById = new Map(
-      res.affectedOrderUpdates.map((u) => [
-        u.orderId,
-        { commissionUsd: u.newCommissionUsd, totalAmountUsd: u.newTotalUsd },
-      ]),
-    );
-    const closedSet = new Set(res.closedOrderIds);
-    setOrders((prev) =>
-      prev.map((row) => {
-        const upd = updatesById.get(row.id);
-        const isClosed = closedSet.has(row.id);
-        if (!upd && !isClosed) return row;
-        const next = { ...row };
-        if (upd) {
-          next.commissionUsd = upd.commissionUsd;
-          next.totalAmountUsd = upd.totalAmountUsd;
-        }
-        if (isClosed) {
-          next.dbPaidUsd = next.totalAmountUsd;
-          next.dbRemainingUsd = "0.00";
-          next.status = "paid" as const;
-        }
-        return next;
-      }),
-    );
-    setIncludedIds(null);
-    onToast(`יתרת הלקוח אופסה (${res.totalResetUsd}$)`);
-  }
-
   function addLineFromOrder(row: PaymentIntakeMatchResult) {
     const remUsd = roundMoney2(Math.max(0, orderRowLedgerBalance(row)));
     if (remUsd <= 0.01) return;
@@ -1471,8 +1353,8 @@ export function PaymentModalUpdated({
       setSaveErr("יש לבחור לקוח");
       return { ok: false };
     }
-    if (totals.totalUsd <= 0 && totals.totalIls <= 0) {
-      setSaveErr("יש להוסיף סכום בדולר ו/או בשקל");
+    if (totals.totalUsd <= 0) {
+      setSaveErr("יש להוסיף סכום בדולר ו/או בשקל (נדרש שער דולר להמרת שקל)");
       return { ok: false };
     }
     if (rateN <= 0) {
@@ -1491,8 +1373,7 @@ export function PaymentModalUpdated({
         ? { byOrderId: new Map<string, number>(), unallocatedUsd: totals.totalUsd }
         : allocatePaymentAcrossOrders(bases, totals.totalUsd, prioritizedSet);
     const hasAlloc = [...byOrderId.values()].some((v) => v > 0.02);
-    const ilsOnly = totals.totalUsd <= 0.02 && totals.totalIls > 0.02;
-    if (!hasAlloc && !ilsOnly && !((saveSurplusAsCredit || forceCustomerCreditPayment) && unallocatedUsd > 0.02)) {
+    if (!hasAlloc && !((saveSurplusAsCredit || forceCustomerCreditPayment) && unallocatedUsd > 0.02)) {
       setSaveErr("אין יעד להקצאה");
       return { ok: false };
     }
@@ -1524,6 +1405,7 @@ export function PaymentModalUpdated({
       payments,
       includedOrderIds: forceCustomerCreditPayment ? [] : includedIds,
       commissionResetOrderIds: commissionResetIds.length > 0 ? commissionResetIds : null,
+      applyCustomerBalanceReset: customerBalanceResetPending,
       draftNameAr: draftCustomer.nameAr.trim() || null,
       draftNameEn: draftCustomer.nameEn.trim() || null,
       draftPhone: draftCustomer.phone.trim() || null,
@@ -1545,10 +1427,9 @@ export function PaymentModalUpdated({
       onToast(`יתרת זכות לאחר שמירה: ${Number(res.saved.customerBalanceUsd).toFixed(2)}$`);
     } else if (remainingAfter <= 0.01) onToast("כל החיובים נסגרו בהצלחה");
     else onToast(`נשארו ${remainingAfter.toFixed(2)}$ פתוחים`);
-    entryCacheRef.current.clear();
-    if (resetAfterSaveRef.current) {
-      resetAfterSaveRef.current = false;
-      await applyResetCustomerBalances();
+    if (customerBalanceResetPending) {
+      setCustomerBalanceResetPending(false);
+      onToast("איפוס יתרה בוצע עם שמירת התשלום");
     }
     if (!primaryPaymentCode) {
       setSaveErr("שמירה הצליחה אך חסר קוד תשלום");
@@ -1567,9 +1448,12 @@ export function PaymentModalUpdated({
     setPayments([createDefaultLine()]);
     setPaymentTimeHm(formatLocalHm(new Date()));
     setIncludedIds(null);
+    setCustomerBalanceResetPending(false);
+    setCommissionResetIds([]);
     setSaveErr(null);
     setLoadedPayment(createNewCaptureLoadedPayment(savedCode));
-    setPaymentNavAvailable({ prev: null, next: null });
+    setPreviousPaymentId(null);
+    setNextPaymentId(null);
     syncBaselineSoon();
     focusFirstAmountInput();
     void loadCustomerOrders(cid, { silent: true });
@@ -1689,9 +1573,40 @@ export function PaymentModalUpdated({
   }
 
   const paymentCaptureNavLabel = displayedPaymentCode;
-  const navArrowsDisabled = saveBusy || isNavigating || !currentPaymentNavigationQuery;
-  const prevPaymentNavDisabled = navArrowsDisabled || paymentNavAvailable.prev === false;
-  const nextPaymentNavDisabled = navArrowsDisabled || paymentNavAvailable.next === false;
+  const paymentIsCancelled = loadedPayment?.status === "CANCELLED";
+  const canCancelSavedPayment = Boolean(savedCapturePaymentId) && !paymentIsCancelled;
+  const canNavigateSavedPayments = Boolean(savedCapturePaymentId);
+  const prevPaymentNavDisabled =
+    saveBusy || paymentNavLoading || !canNavigateSavedPayments || !previousPaymentId;
+  const nextPaymentNavDisabled =
+    saveBusy || paymentNavLoading || !canNavigateSavedPayments || !nextPaymentId;
+
+  async function executeCancelPayment() {
+    if (!savedCapturePaymentId || cancelPaymentBusy) return;
+    setCancelPaymentBusy(true);
+    setSaveErr(null);
+    try {
+      const res = await cancelPaymentAction({
+        paymentId: savedCapturePaymentId,
+        reason: cancelReasonDraft.trim() || null,
+      });
+      if (!res.ok) {
+        setSaveErr(res.error);
+        onToast(res.error);
+        return;
+      }
+      setCancelPaymentOpen(false);
+      setCancelReasonDraft("");
+      onToast(`תשלום ${res.paymentCode ?? ""} בוטל — היתרה עודכנה`);
+      await loadPayment(savedCapturePaymentId);
+      if (customer?.id) {
+        await loadCustomerOrders(customer.id, { silent: true });
+      }
+      router.refresh();
+    } finally {
+      setCancelPaymentBusy(false);
+    }
+  }
 
   function badgeKeyFinish(e: KeyboardEvent<HTMLInputElement | HTMLSelectElement>) {
     if (e.key === "Enter") {
@@ -1941,10 +1856,18 @@ export function PaymentModalUpdated({
                         <>
                           {" · "}
                           {customerLedgerSummary.orderCount} הזמנות
-                          {" · "}
-                          {`${customerBalanceIcon} ${customerBalanceLabel}: $${fmtUsdDisplay(
-                            customerHasDebt || customerHasCredit ? customerBalanceAbs : 0,
-                          )}`}
+                          {customerLedgerSummary.openTotal > 0.01 ? (
+                            <>
+                              {" · "}
+                              <button
+                                type="button"
+                                className="payment-modal-cust-open-debt-link"
+                                onClick={() => setOpenDebtDetailOpen(true)}
+                              >
+                                חוב פתוח: ${fmtUsdDisplay(customerLedgerSummary.openTotal)}
+                              </button>
+                            </>
+                          ) : null}
                         </>
                       )}
                     </span>
@@ -2086,63 +2009,118 @@ export function PaymentModalUpdated({
             </div>
 
             <div className="payment-modal-table-wrap">
-              {customer ? (
-                <div className="payment-modal-ledger-head" dir="rtl" role="status" aria-live="polite">
-                  <div
-                    className={[
-                      "payment-modal-ledger-head-item",
-                      customerHasCredit
-                        ? "payment-modal-ledger-head-item--credit"
-                        : "payment-modal-ledger-head-item--open",
-                    ]
-                      .filter(Boolean)
-                      .join(" ")}
-                  >
-                    <span className="payment-modal-ledger-head-lbl">
-                      {customerHasCredit ? "יתרת זכות קיימת" : "חוב פתוח"}
-                    </span>
-                    <span className="payment-modal-ledger-head-val" dir="ltr">
-                      ${fmtUsdDisplay(customerBalanceAbs)}
-                    </span>
-                    {customerHasCredit && totals.totalUsd > 0.01 ? (
-                      <span className="payment-modal-ledger-head-lbl">
-                        לאחר שמירה: ${fmtUsdDisplay(Math.max(0, customerBalanceAfterSave))}
-                      </span>
-                    ) : null}
-                  </div>
-                </div>
-              ) : null}
               {customer && intakeWeekTableHint ? (
                 <p className="payment-modal-intake-week-hint" dir="rtl">
                   {intakeWeekTableHint}
                 </p>
               ) : null}
               {customer ? (
-                <div className="pm-commission-totals" dir="rtl" role="group" aria-label="סיכום חיובים ועמלות">
-                  <div className="pm-commission-totals__item">
-                    <span className="pm-commission-totals__k">סה&quot;כ חיובים</span>
-                    <strong className="pm-commission-totals__v pm-commission-totals__v--charge" dir="ltr">
-                      {fmtUsdDisplay(ordersTableFooterTotals.totalTransactions)}
+                <div className="payment-modal-summary-row payment-modal-summary-row--top" dir="rtl">
+                  <PaymentLiveSummaryCards
+                    kpis={liveFormKpis}
+                    openDebtUsd={customerLedgerSummary.openTotal}
+                    onOpenDebtClick={() => setOpenDebtDetailOpen(true)}
+                  />
+                </div>
+              ) : null}
+              {customer ? (
+                <div
+                  className="pm-intake-head-totals pm-intake-head-totals--live"
+                  dir="rtl"
+                  role="status"
+                  aria-live="polite"
+                  aria-label="מחשבון לקוח"
+                >
+                  <span className="pm-intake-head-totals__item">
+                    <span className="pm-intake-head-totals__k">חיובים:</span>
+                    <strong className="pm-intake-head-totals__v pm-intake-head-totals__v--charge" dir="ltr">
+                      {fmtUsdDisplay(liveIntakeTotals.chargesUsd)}
                     </strong>
-                  </div>
-                  <div className="pm-commission-totals__item">
-                    <span className="pm-commission-totals__k">סה&quot;כ עמלות</span>
-                    <strong className="pm-commission-totals__v pm-commission-totals__v--commission" dir="ltr">
-                      {fmtUsdDisplay(resetBalanceMetrics.availableCommission)}
+                  </span>
+                  <span className="pm-intake-head-totals__sep" aria-hidden>
+                    ·
+                  </span>
+                  <span className="pm-intake-head-totals__item">
+                    <span className="pm-intake-head-totals__k">עמלות:</span>
+                    <strong
+                      className={[
+                        "pm-intake-head-totals__v",
+                        "pm-intake-head-totals__v--commission",
+                        liveIntakeTotals.commissionsUsd < -0.01 ? "pm-intake-head-totals__v--commission-neg" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                      dir="ltr"
+                    >
+                      {liveIntakeTotals.commissionsUsd < -0.01
+                        ? `${fmtUsdDisplay(Math.abs(liveIntakeTotals.commissionsUsd))}-`
+                        : fmtUsdDisplay(liveIntakeTotals.commissionsUsd)}
                     </strong>
-                  </div>
-                  <div className="pm-commission-totals__item">
-                    <span className="pm-commission-totals__k">
-                      {customerHasCredit ? "יתרת זכות קיימת" : "סה\"כ יתרה"}
-                    </span>
-                    <strong className="pm-commission-totals__v pm-commission-totals__v--balance" dir="ltr">
-                      {fmtUsdDisplay(customerHasCredit ? customerBalanceAbs : ordersTableFooterTotals.remaining)}
+                  </span>
+                  <span className="pm-intake-head-totals__sep" aria-hidden>
+                    ·
+                  </span>
+                  <span className="pm-intake-head-totals__item">
+                    <span className="pm-intake-head-totals__k">תשלומים:</span>
+                    <strong className="pm-intake-head-totals__v pm-intake-head-totals__v--payments" dir="ltr">
+                      {fmtUsdDisplay(liveIntakeTotals.paymentsUsd)}
                     </strong>
-                  </div>
-                  {commissionResetPreviewUsd > 0.01 ? (
-                    <div className="pm-commission-totals__note" dir="rtl">
-                      עמלה שתאופס באישור התשלום: <strong dir="ltr">{fmtUsdDisplay(commissionResetPreviewUsd)}</strong>
-                    </div>
+                  </span>
+                  {showIntakeStripOpenDebt ? (
+                    <>
+                      <span className="pm-intake-head-totals__sep" aria-hidden>
+                        ·
+                      </span>
+                      <span className="pm-intake-head-totals__item pm-intake-head-totals__item--balance">
+                        <span className="pm-intake-head-totals__k">
+                          {customerBalanceResetPending ? "חוב פתוח לאחר איפוס" : "חוב פתוח"}:
+                        </span>
+                        <strong
+                          className={[
+                            "pm-intake-head-totals__v",
+                            intakeStripOpenDebtUsd > 0.01
+                              ? "pm-intake-head-totals__v--debt"
+                              : "pm-intake-head-totals__v--payments",
+                          ].join(" ")}
+                          dir="ltr"
+                        >
+                          {fmtUsdDisplay(intakeStripOpenDebtUsd)}
+                        </strong>
+                      </span>
+                    </>
+                  ) : null}
+                  {showResetBalanceBtn ? (
+                    <>
+                      <span className="pm-intake-head-totals__sep" aria-hidden>
+                        ·
+                      </span>
+                      <button
+                        type="button"
+                        className={[
+                          "pm-reset-balance-btn",
+                          "pm-reset-balance-btn--inline",
+                          canApplyResetCustomerBalance ? "pm-reset-balance-btn--ready" : "",
+                          customerBalanceResetPending ? "pm-reset-balance-btn--preview" : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" ")}
+                        disabled={!canApplyResetCustomerBalance && !customerBalanceResetPending}
+                        onClick={() => {
+                          if (customerBalanceResetPending) {
+                            setCustomerBalanceResetPending(false);
+                            onToast("תצוגת איפוס יתרה בוטלה");
+                            return;
+                          }
+                          setResetCustomerConfirmOpen(true);
+                        }}
+                        title="איפוס יתרה — תצוגה בלבד עד שמירת תשלום"
+                      >
+                        {customerBalanceResetPending ? "ביטול תצוגת איפוס" : "איפוס יתרה"}
+                      </button>
+                    </>
+                  ) : null}
+                  {customerBalanceResetPending ? (
+                    <span className="pm-intake-head-totals__note">תצוגת איפוס — יוחל בשמירת התשלום</span>
                   ) : null}
                 </div>
               ) : null}
@@ -2174,18 +2152,33 @@ export function PaymentModalUpdated({
                     ) : (
                       matched.map((row) => {
                         const isCommissionResetPreview = commissionResetIds.includes(row.id);
-                        const commissionUsd = isCommissionResetPreview ? 0 : Number(row.commissionUsd);
-                        const ledgerBal = orderRowLedgerBalance(row);
+                        const commissionUsd = Number(row.commissionUsd);
+                        const ledgerBal = isCommissionResetPreview ? 0 : orderRowLedgerBalance(row);
+                        const commissionPreviewPlan = isCommissionResetPreview
+                          ? planCommissionDebtClosureFromNumbers({
+                              commissionUsd: Number(
+                                orders.find((o) => o.id === row.id)?.commissionUsd ?? commissionUsd,
+                              ),
+                              totalUsd: Number(
+                                orders.find((o) => o.id === row.id)?.totalAmountUsd ?? row.totalAmountUsd,
+                              ),
+                              paidUsd: Number(row.dbPaidUsd) || 0,
+                            })
+                          : null;
+                        const displayCommissionUsd = isCommissionResetPreview
+                          ? (commissionPreviewPlan?.afterCommissionUsd ?? commissionUsd)
+                          : commissionUsd;
+                        const displayCommissionBefore = isCommissionResetPreview
+                          ? (commissionPreviewPlan?.beforeCommissionUsd ?? commissionUsd)
+                          : null;
                         const ledgerSt = displayedLedgerStatus(ledgerBal);
                         return (
                         <tr
                           key={row.id}
                           className={[
                             "payment-modal-tr--clickable",
-                            row.allocationUsd > 0.01 ? "payment-modal-tr--hit" : "",
-                            row.allocationOutcome === "paid" ? "payment-modal-tr--alloc-paid" : "",
-                            row.allocationOutcome === "partial" ? "payment-modal-tr--alloc-partial" : "",
                             ledgerRowClass(ledgerSt),
+                            isCommissionResetPreview ? "payment-modal-tr--commission-closure" : "",
                           ]
                             .filter(Boolean)
                             .join(" ")}
@@ -2222,27 +2215,54 @@ export function PaymentModalUpdated({
                           </td>
                           <td dir="ltr" className="pm-num pm-num--commission" onClick={(e) => e.stopPropagation()}>
                             <div className="pm-commission-cell">
-                              <span className={isCommissionResetPreview ? "pm-commission-preview" : ""}>
-                                {fmtUsdDisplay(commissionUsd)}
+                              <span
+                                className={isCommissionResetPreview ? "pm-commission-preview pm-commission-preview--closure" : ""}
+                              >
+                                {isCommissionResetPreview && displayCommissionBefore != null ? (
+                                  <>
+                                    <span className="pm-commission-delta-old" dir="ltr">
+                                      {fmtUsdDisplay(displayCommissionBefore)}
+                                    </span>
+                                    <span className="pm-commission-delta-arrow" aria-hidden>
+                                      →
+                                    </span>
+                                    <span className="pm-commission-delta-new" dir="ltr">
+                                      {fmtUsdDisplay(displayCommissionUsd)}
+                                    </span>
+                                  </>
+                                ) : (
+                                  fmtUsdDisplay(displayCommissionUsd)
+                                )}
                               </span>
-                              {customer && viewerIsAdmin && commissionUsd > 0.01 ? (
+                              {customer && viewerIsAdmin && orderRowLedgerBalance(row) > 0.01 && !isCommissionResetPreview ? (
                                 <button
                                   type="button"
                                   className="pm-commission-reset-btn"
-                                  onClick={() =>
+                                  onClick={() => {
+                                    const rem = roundMoney2(Math.max(0, orderRowLedgerBalance(row)));
+                                    const oldCom = Number(row.commissionUsd) || 0;
+                                    const plan = planCommissionDebtClosureFromNumbers({
+                                      commissionUsd: oldCom,
+                                      totalUsd: Number(row.totalAmountUsd) || 0,
+                                      paidUsd: Number(row.dbPaidUsd) || 0,
+                                    });
                                     setCommissionResetTarget({
                                       orderId: row.id,
                                       orderNumber: row.orderNumber ?? null,
-                                      oldCommissionUsd: commissionUsd,
-                                    })
-                                  }
-                                  title="איפוס עמלה (תצוגה מקדימה עד שמירת התשלום)"
+                                      oldCommissionUsd: oldCom,
+                                      remainingUsd: rem,
+                                      newCommissionUsd: plan.afterCommissionUsd,
+                                    });
+                                  }}
+                                  title="איפוס עמלה — סגירת יתרה (Y−X)"
                                 >
                                   איפוס
                                 </button>
                               ) : null}
                               {isCommissionResetPreview ? (
-                                <span className="payment-modal-preview-tag pm-commission-preview-tag">תצוגה מקדימה</span>
+                                <span className="payment-modal-preview-tag pm-commission-preview-tag">
+                                  סגירת חוב בעמלה
+                                </span>
                               ) : null}
                             </div>
                           </td>
@@ -2287,109 +2307,6 @@ export function PaymentModalUpdated({
                   </tbody>
                 </table>
               </div>
-
-              {/**
-               * אזור totals — Cards צבעוניים בסגנון POS / ERP פיננסי.
-               * "סכום לא שולם" מציג LIVE PREVIEW: היתרה האמיתית פחות הסכום
-               * שהמשתמש כרגע מקליד (לפני שמירה). זה preview בלבד —
-               * הנתונים האמיתיים ב־DB נשארים ללא שינוי עד לחיצה על "שמור".
-               */}
-              <div className="payment-modal-orders-summary payment-modal-orders-summary--v2" role="region" aria-label="סיכום עסקאות לקוח" dir="rtl">
-                {customerHasCredit ? (
-                  <div className="payment-modal-orders-summary-card payment-modal-orders-summary-card--paid">
-                    <div className="payment-modal-orders-summary-lbl">יתרת זכות ללקוח</div>
-                    <AnimatedMoneyValue
-                      className="payment-modal-orders-summary-val"
-                      dir="ltr"
-                      value={fmtFooterAmount(customerBalanceAbs)}
-                    />
-                    {totals.totalUsd > 0.01 ? (
-                      <div className="payment-modal-preview-delta" dir="ltr">
-                        לאחר שמירה: {fmtFooterAmount(Math.max(0, customerBalanceAfterSave))}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : (
-                  <>
-                    <div className="payment-modal-orders-summary-card payment-modal-orders-summary-card--txn">
-                      <div className="payment-modal-orders-summary-lbl">סך הכל עסקאות</div>
-                      <AnimatedMoneyValue
-                        className="payment-modal-orders-summary-val"
-                        dir="ltr"
-                        value={fmtFooterAmount(ordersTableFooterTotals.totalTransactions)}
-                      />
-                      <div className="payment-modal-orders-summary-ex-vat" dir="ltr">
-                        ללא מע״מ: {fmtFooterAmount(roundMoney2(ordersTableFooterTotals.totalTransactions / (1 + DEFAULT_VAT_RATE)))}
-                      </div>
-                    </div>
-                    <div className="payment-modal-orders-summary-card payment-modal-orders-summary-card--paid">
-                      <div className="payment-modal-orders-summary-lbl">סכום שולם</div>
-                      <AnimatedMoneyValue
-                        className="payment-modal-orders-summary-val"
-                        dir="ltr"
-                        value={fmtFooterAmount(ordersTableFooterTotals.totalPaidDb)}
-                      />
-                    </div>
-                    <div className="payment-modal-orders-summary-card payment-modal-orders-summary-card--rem">
-                      <div className="payment-modal-orders-summary-lbl payment-modal-orders-summary-lbl--with-action">
-                        <span className="payment-modal-orders-summary-lbl-text">
-                          סכום לא שולם
-                          {totals.totalUsd > 0 ? <span className="payment-modal-preview-tag">תצוגה מקדימה</span> : null}
-                        </span>
-                        {viewerIsAdmin && customer && resetBalanceMetrics.remainingToReset > 0.01 ? (
-                          <button
-                            type="button"
-                            className={[
-                              "pm-reset-balance-btn",
-                              canResetCustomerBalance ? "pm-reset-balance-btn--ready" : "",
-                            ]
-                              .filter(Boolean)
-                              .join(" ")}
-                            disabled={resetCustomerBusy}
-                            onClick={() => setResetCustomerConfirmOpen(true)}
-                            title={
-                              canResetCustomerBalance
-                                ? totals.totalUsd > 0.01
-                                  ? "איפוס יתרה — לאחר שמירת התשלום ייסגר היתרה הנותרת מהעמלות"
-                                  : "איפוס יתרה — סוגר את כל היתרות הפתוחות של הלקוח ומוריד את ההפרש מהעמלות (מהחדש לישן)"
-                                : "אין מספיק עמלה זמינה לאיפוס — ניתן לנסות לאחר שמירת תשלום"
-                            }
-                          >
-                            <svg
-                              className="pm-reset-balance-icon"
-                              width="13"
-                              height="13"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2.2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              aria-hidden
-                            >
-                              <polyline points="1 4 1 10 7 10" />
-                              <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
-                            </svg>
-                            {resetCustomerBusy ? "מאפס…" : "איפוס יתרה"}
-                          </button>
-                        ) : null}
-                      </div>
-                      <AnimatedMoneyValue
-                        className="payment-modal-orders-summary-val"
-                        dir="ltr"
-                        value={fmtFooterAmount(
-                          roundMoney2(Math.max(0, ordersTableFooterTotals.remaining - totals.totalUsd)),
-                        )}
-                      />
-                      {totals.totalUsd > 0 ? (
-                        <div className="payment-modal-preview-delta" dir="ltr">
-                          − {fmtFooterAmount(roundMoney2(totals.totalUsd))} (תשלום נוכחי)
-                        </div>
-                      ) : null}
-                    </div>
-                  </>
-                )}
-              </div>
             </div>
           </div>
 
@@ -2403,8 +2320,8 @@ export function PaymentModalUpdated({
                       type="button"
                       className={[
                         "payment-nav-arrow",
-                        navSpinDirection === "prev" ? "payment-nav-arrow--busy" : "",
-                        paymentNavAvailable.prev === false ? "payment-nav-arrow--edge" : "",
+                        paymentNavLoading ? "payment-nav-arrow--busy" : "",
+                        !previousPaymentId && canNavigateSavedPayments ? "payment-nav-arrow--edge" : "",
                       ]
                         .filter(Boolean)
                         .join(" ")}
@@ -2412,7 +2329,7 @@ export function PaymentModalUpdated({
                       disabled={prevPaymentNavDisabled}
                       onClick={goToPreviousPayment}
                     >
-                      {navSpinDirection === "prev" ? <span className="payment-modal-save-spinner" aria-hidden /> : "◀"}
+                      {paymentNavLoading ? <span className="payment-modal-save-spinner" aria-hidden /> : "◀"}
                     </button>
                     {paymentCaptureNavLabel ? (
                       <div className="payment-nav-code" dir="ltr" aria-label="קוד קליטת תשלום">
@@ -2436,8 +2353,8 @@ export function PaymentModalUpdated({
                       type="button"
                       className={[
                         "payment-nav-arrow",
-                        navSpinDirection === "next" ? "payment-nav-arrow--busy" : "",
-                        paymentNavAvailable.next === false ? "payment-nav-arrow--edge" : "",
+                        paymentNavLoading ? "payment-nav-arrow--busy" : "",
+                        !nextPaymentId && canNavigateSavedPayments ? "payment-nav-arrow--edge" : "",
                       ]
                         .filter(Boolean)
                         .join(" ")}
@@ -2445,7 +2362,7 @@ export function PaymentModalUpdated({
                       disabled={nextPaymentNavDisabled}
                       onClick={goToNextPayment}
                     >
-                      {navSpinDirection === "next" ? <span className="payment-modal-save-spinner" aria-hidden /> : "▶"}
+                      {paymentNavLoading ? <span className="payment-modal-save-spinner" aria-hidden /> : "▶"}
                     </button>
                   </div>
                 </label>
@@ -2464,7 +2381,7 @@ export function PaymentModalUpdated({
                       e.preventDefault();
                       if (!saveBusy && customer) void onSaveAndNew();
                     }}
-                    disabled={saveBusy || !customer}
+                    disabled={saveBusy || !customer || paymentIsCancelled}
                     title="שומר את התשלום ומיד פותח טופס ריק לתשלום הבא — בלי לסגור את החלון"
                   >
                     {saveBusy ? (
@@ -2478,7 +2395,7 @@ export function PaymentModalUpdated({
                   </button>
                   <div className="payment-upd-addrow-meta">
                     <span>מס׳ תשלומים: </span>
-                    <strong>{totals.totalPaymentsCount}</strong>
+                    <strong>{payments.length}</strong>
                   </div>
                 </div>
 
@@ -2523,38 +2440,60 @@ export function PaymentModalUpdated({
                   <AnimatedMoneyValue
                     className="payment-upd-sticky-total-usd money-amount"
                     dir="ltr"
-                    value={fmtUsdDisplay(stickyBaseTotals.usd)}
+                    value={fmtUsdDisplay(totals.totalUsd)}
                   />
                   <div className="payment-upd-sticky-total-lbl">סה״כ לתשלום</div>
-                  <AnimatedMoneyValue
-                    className="payment-upd-sticky-total-ils money-amount"
-                    dir="ltr"
-                    value={fmtIlsDisplay(stickyBaseTotals.ils)}
-                  />
+                  {stickyIlsEntered > 0.005 ? (
+                    <AnimatedMoneyValue
+                      className="payment-upd-sticky-total-ils money-amount payment-upd-sticky-total-ils--hint"
+                      dir="ltr"
+                      value={`₪${fmtFooterAmount(stickyIlsEntered)} נקלט`}
+                    />
+                  ) : null}
                 </div>
               </div>
+              {paymentIsCancelled ? (
+                <div className="payment-modal-cancelled-banner" role="status">
+                  תשלום זה בוטל
+                  {loadedPayment?.cancelReason ? (
+                    <span className="payment-modal-cancelled-reason"> — {loadedPayment.cancelReason}</span>
+                  ) : null}
+                </div>
+              ) : null}
               {saveErr ? <div className="payment-modal-err payment-modal-err--sm">{saveErr}</div> : null}
-              <button
-                type="button"
-                ref={savePrimaryButtonRef}
-                className={`btn btn-primary btn-save payment-modal-save payment-modal-save--v2${saveBusy ? " loading" : ""}`}
-                disabled={saveBusy || !customer}
-                onClick={() => void onSaveAndClose()}
-                onKeyDown={(e) => {
-                  if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
-                  e.preventDefault();
-                  if (!saveBusy && customer) void onSaveAndClose();
-                }}
-              >
-                {saveBusy ? (
-                  <>
-                    <span className="payment-modal-save-spinner" aria-hidden />
-                    שומר…
-                  </>
-                ) : (
-                  "שמור תשלום"
-                )}
-              </button>
+              <div className="payment-modal-save-actions">
+                {canCancelSavedPayment ? (
+                  <button
+                    type="button"
+                    className="payment-cancel-payment-btn"
+                    disabled={saveBusy || cancelPaymentBusy || paymentNavLoading}
+                    onClick={() => setCancelPaymentOpen(true)}
+                  >
+                    בטל תשלום
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  ref={savePrimaryButtonRef}
+                  className={`btn btn-primary btn-save payment-modal-save payment-modal-save--v2${saveBusy ? " loading" : ""}`}
+                  disabled={saveBusy || !customer || paymentIsCancelled}
+                  onClick={() => void onSaveAndClose()}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
+                    e.preventDefault();
+                    if (!saveBusy && customer) void onSaveAndClose();
+                  }}
+                >
+                  {saveBusy ? (
+                    <>
+                      <span className="payment-modal-save-spinner" aria-hidden />
+                      שומר…
+                    </>
+                  ) : (
+                    "שמור תשלום"
+                  )}
+                </button>
+              </div>
             </div>
           </aside>
         </div>
@@ -2571,14 +2510,17 @@ export function PaymentModalUpdated({
           if (customer?.id) void loadCustomerOrders(customer.id);
         }}
       />
+      <PaymentOpenDebtDetailModal
+        open={openDebtDetailOpen}
+        rows={matched}
+        onClose={() => setOpenDebtDetailOpen(false)}
+        onOrderClick={(orderId) => openWindow({ type: "orderCapture", props: { mode: "edit", orderId } })}
+      />
       {resetCustomerConfirmOpen ? (
         <div
           className="adm-oc-edit-request-backdrop"
           role="presentation"
-          onClick={() => {
-            if (resetCustomerBusy) return;
-            setResetCustomerConfirmOpen(false);
-          }}
+          onClick={() => setResetCustomerConfirmOpen(false)}
         >
           <div
             className="payment-nav-confirm-modal payment-reset-confirm-modal"
@@ -2587,28 +2529,44 @@ export function PaymentModalUpdated({
             onClick={(e) => e.stopPropagation()}
             dir="rtl"
           >
-            <h4>האם לאפס יתרה זו?</h4>
-            <p>
-              יתרה לאיפוס{" "}
-              <strong dir="ltr">{fmtUsdDisplay(resetBalanceMetrics.remainingToReset)}</strong>
-              {totals.totalUsd > 0.01 ? (
-                <>
-                  <br />
-                  <span className="adm-muted-keys">
-                    יש תשלום בטופס — האיפוס יבוצע לאחר שמירת התשלום (יתרה לאחר הקליטה).
-                  </span>
-                </>
-              ) : null}
-              <br />
-              עמלה זמינה: <strong dir="ltr">{fmtUsdDisplay(resetBalanceMetrics.availableCommission)}</strong>
-              <br />
-              הפעולה תוריד את ההפרש מהעמלות (מהחדש לישן) ותסגור את כל ההזמנות הפתוחות של הלקוח.
+            <h4>האם לבצע איפוס יתרה?</h4>
+            <ul className="payment-reset-confirm-deltas">
+              <li>
+                חוב נוכחי:{" "}
+                <strong dir="ltr">${fmtUsdDisplay(resetBalanceConfirm.openDebtUsd)}</strong>
+              </li>
+              <li>
+                עמלה נוכחית:{" "}
+                <strong dir="ltr">${fmtUsdDisplay(resetBalanceConfirm.openCommissionUsd)}</strong>
+              </li>
+            </ul>
+            <p className="payment-reset-confirm-note">בפס הסיכומים העליון (בלבד) יוצג:</p>
+            <ul className="payment-reset-confirm-deltas payment-reset-confirm-deltas--after">
+              <li>
+                חוב פתוח לאחר איפוס: <strong dir="ltr">$0.00</strong>
+              </li>
+              <li>
+                עמלות מצטברות:{" "}
+                <strong dir="ltr">
+                  {resetBalanceConfirm.afterCommissionUsd < -0.01
+                    ? `${fmtUsdDisplay(Math.abs(resetBalanceConfirm.afterCommissionUsd))}-`
+                    : fmtUsdDisplay(resetBalanceConfirm.afterCommissionUsd)}
+                </strong>
+                <span className="adm-muted-keys"> (עמלה − יתרה)</span>
+              </li>
+            </ul>
+            <p className="adm-muted-keys payment-reset-confirm-note">
+              טבלת ההזמנות לא תשתנה. האיפוס במסד הנתונים יבוצע רק בלחיצה על שמור תשלום.
             </p>
+            {totals.totalUsd <= 0.01 ? (
+              <p className="adm-muted-keys payment-reset-confirm-note">
+                יש להוסיף תשלום ולשמור כדי ליישם את האיפוס במערכת.
+              </p>
+            ) : null}
             <div className="payment-nav-confirm-actions">
               <button
                 type="button"
                 className="adm-btn adm-btn--ghost adm-btn--dense"
-                disabled={resetCustomerBusy}
                 onClick={() => setResetCustomerConfirmOpen(false)}
               >
                 ביטול
@@ -2616,18 +2574,18 @@ export function PaymentModalUpdated({
               <button
                 type="button"
                 className="adm-btn adm-btn--primary adm-btn--dense"
-                disabled={resetCustomerBusy}
-                onClick={async () => {
+                disabled={!canApplyResetCustomerBalance}
+                onClick={() => {
                   setResetCustomerConfirmOpen(false);
-                  if (totals.totalUsd > 0.01) {
-                    resetAfterSaveRef.current = true;
-                    onToast("לאחר שמירת התשלום תבוצע איפוס יתרה");
-                    return;
-                  }
-                  await applyResetCustomerBalances();
+                  setCustomerBalanceResetPending(true);
+                  onToast(
+                    totals.totalUsd > 0.01
+                      ? "תצוגת איפוס יתרה — יוחל בשמירת התשלום"
+                      : "תצוגת איפוס יתרה — הוסיפו תשלום ושמרו כדי ליישם",
+                  );
                 }}
               >
-                אשר איפוס
+                הצג בתצוגה
               </button>
             </div>
           </div>
@@ -2638,7 +2596,7 @@ export function PaymentModalUpdated({
           className="adm-oc-edit-request-backdrop"
           role="presentation"
           onClick={() => {
-            if (isNavigating) return;
+            if (paymentNavLoading) return;
             setNavUnsavedOpen(null);
           }}
         >
@@ -2655,7 +2613,7 @@ export function PaymentModalUpdated({
               <button
                 type="button"
                 className="adm-btn adm-btn--ghost adm-btn--dense"
-                disabled={isNavigating}
+                disabled={paymentNavLoading}
                 onClick={() => setNavUnsavedOpen(null)}
               >
                 ביטול
@@ -2663,10 +2621,62 @@ export function PaymentModalUpdated({
               <button
                 type="button"
                 className="adm-btn adm-btn--primary adm-btn--dense"
-                disabled={isNavigating}
+                disabled={paymentNavLoading}
                 onClick={() => confirmNavUnsavedAndProceed()}
               >
                 כן
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {cancelPaymentOpen ? (
+        <div
+          className="adm-oc-edit-request-backdrop"
+          role="presentation"
+          onClick={() => {
+            if (cancelPaymentBusy) return;
+            setCancelPaymentOpen(false);
+          }}
+        >
+          <div
+            className="payment-nav-confirm-modal payment-reset-confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+            dir="rtl"
+          >
+            <h4>ביטול תשלום</h4>
+            <p>
+              לבטל את <strong dir="ltr">{displayedPaymentCode || "קליטה זו"}</strong>? החוב יחזור אוטומטית. התשלום לא
+              יימחק מהמערכת.
+            </p>
+            <label className="payment-cancel-reason-lbl">
+              סיבת ביטול (אופציונלי)
+              <textarea
+                className="payment-cancel-reason-input"
+                rows={2}
+                value={cancelReasonDraft}
+                onChange={(e) => setCancelReasonDraft(e.target.value)}
+                disabled={cancelPaymentBusy}
+              />
+            </label>
+            <div className="payment-nav-confirm-actions">
+              <button
+                type="button"
+                className="adm-btn adm-btn--ghost adm-btn--dense"
+                disabled={cancelPaymentBusy}
+                onClick={() => setCancelPaymentOpen(false)}
+              >
+                חזרה
+              </button>
+              <button
+                type="button"
+                className="adm-btn payment-cancel-confirm-btn adm-btn--dense"
+                disabled={cancelPaymentBusy}
+                onClick={() => void executeCancelPayment()}
+              >
+                {cancelPaymentBusy ? "מבטל…" : "בטל תשלום"}
               </button>
             </div>
           </div>
@@ -2685,15 +2695,28 @@ export function PaymentModalUpdated({
             onClick={(e) => e.stopPropagation()}
             dir="rtl"
           >
-            <h4>האם לאפס את העמלה להזמנה זו?</h4>
-            <p>
+            <h4>אישור איפוס עמלה — סגירת חוב</h4>
+            <p className="payment-reset-confirm-copy">
               הזמנה:{" "}
               <strong dir="ltr">{commissionResetTarget.orderNumber ?? commissionResetTarget.orderId}</strong>
-              <br />
-              עמלה נוכחית:{" "}
-              <strong dir="ltr">{fmtUsdDisplay(commissionResetTarget.oldCommissionUsd)}</strong>
-              <br />
-              הפעולה היא <strong>תצוגה מקדימה בלבד</strong> עד שמירת התשלום.
+            </p>
+            <ul className="payment-reset-confirm-deltas">
+              <li>
+                יתרה:{" "}
+                <strong dir="ltr">
+                  {fmtUsdDisplay(commissionResetTarget.remainingUsd)} → 0.00
+                </strong>
+              </li>
+              <li>
+                עמלה:{" "}
+                <strong dir="ltr">
+                  {fmtUsdDisplay(commissionResetTarget.oldCommissionUsd)} →{" "}
+                  {fmtUsdDisplay(commissionResetTarget.newCommissionUsd)}
+                </strong>
+              </li>
+            </ul>
+            <p className="payment-reset-confirm-note">
+              החוב ייסגר בהתאמת עמלה (לא תשלום). יוחל בשמירת קליטת התשלום.
             </p>
             <div className="payment-nav-confirm-actions">
               <button
@@ -2713,10 +2736,9 @@ export function PaymentModalUpdated({
                   });
                   console.log("[commission.reset.preview]", {
                     orderNumber: commissionResetTarget.orderNumber,
-                    exchangeRate: dollarRate,
-                    commissionPercent: commissionPercentStr,
+                    remainingUsd: commissionResetTarget.remainingUsd,
                     oldCommissionUsd: commissionResetTarget.oldCommissionUsd,
-                    newCommissionUsd: 0,
+                    newCommissionUsd: commissionResetTarget.newCommissionUsd,
                   });
                   setCommissionResetTarget(null);
                 }}

@@ -32,6 +32,15 @@ enum OrderSourceCountry {
   TURKEY
   CHINA
   UAE
+  JORDAN
+}
+
+/** סביבת עבודה לפי מדינה — TR/CN/AE/JO */
+enum WorkCountryCode {
+  TR
+  CN
+  AE
+  JO
 }
 
 enum OrderEditRequestStatus {
@@ -64,6 +73,12 @@ enum PaymentCheckStatus {
   BOUNCED
 }
 
+/** סטטוס קליטת תשלום — ביטול ללא מחיקה */
+enum PaymentRecordStatus {
+  ACTIVE
+  CANCELLED
+}
+
 model User {
   id           String    @id @default(uuid())
   fullName     String
@@ -78,7 +93,8 @@ model User {
 
   permissions     UserPermission[]
   createdOrders   Order[]          @relation("OrderCreatedBy")
-  createdPayments Payment[]        @relation("PaymentCreatedBy")
+  createdPayments   Payment[] @relation("PaymentCreatedBy")
+  cancelledPayments Payment[] @relation("PaymentCancelledBy")
   receiptControls ReceiptControl[] @relation("ReceiptControlCreatedBy")
   auditLogs       AuditLog[]
   legacyImports   LegacyRawRow[]    @relation("LegacyImportUser")
@@ -152,6 +168,8 @@ model Customer {
   customerType    String?
   /** Snapshot יתרת לקוח ב-USD: totalPayments - totalOrders. חיובי = זכות, שלילי = חוב */
   balanceUsd      Decimal   @default(0) @db.Decimal(19, 4)
+  /** הפרדת סביבות — ברירת מחדל TR לנתונים קיימים */
+  countryCode     WorkCountryCode @default(TR)
   isActive        Boolean   @default(true)
   deletedAt       DateTime?
   createdAt       DateTime  @default(now())
@@ -161,6 +179,7 @@ model Customer {
   payments        Payment[]
   receiptControls ReceiptControl[]
 
+  @@index([countryCode])
   @@index([displayName])
   @@index([nameHe])
   @@index([nameAr])
@@ -185,6 +204,8 @@ model Order {
   weekCode             String?
   /** מדינת ספק / מקור עסקה — מתוך רשימה מוגדרת בהגדרות */
   sourceCountry        OrderSourceCountry?
+  /** סביבת עבודה — מסנן וממוספר לפי מדינה */
+  countryCode          WorkCountryCode @default(TR)
   orderDate            DateTime?
   /** תאריך ביצוע ההזמנה בפועל (בתוך טווח השבוע) */
   orderExecutionDate   DateTime?
@@ -257,6 +278,8 @@ model Order {
   @@index([weekCode, orderNumber])
   @@index([weekCode, oldOrderNumber])
   @@index([sourceCountry])
+  @@index([countryCode])
+  @@index([countryCode, weekCode])
   @@index([status, orderDate])
 }
 
@@ -315,6 +338,7 @@ model Payment {
   paymentNumber    Int?
   customerId       String?
   orderId          String?
+  countryCode      WorkCountryCode @default(TR)
   weekCode         String?
   paymentDate      DateTime?
   currency         String         @default("ILS")
@@ -341,24 +365,32 @@ model Payment {
   ilsNote          String?
   paymentPlace     String?
   isPaid           Boolean        @default(false)
+  /** ACTIVE = תשלום תקף; CANCELLED = בוטל — לא נספר ביתרות/דוחות */
+  status           PaymentRecordStatus @default(ACTIVE)
+  cancelledAt      DateTime?
+  cancelledById    String?
+  cancelReason     String?
   proofFileUrl     String?
   notes            String?
   createdById      String?
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
 
-  customer  Customer? @relation(fields: [customerId], references: [id])
-  order     Order?    @relation(fields: [orderId], references: [id])
-  createdBy User?     @relation("PaymentCreatedBy", fields: [createdById], references: [id])
-  checks    PaymentCheck[]
+  customer    Customer? @relation(fields: [customerId], references: [id])
+  order       Order?    @relation(fields: [orderId], references: [id])
+  createdBy   User?     @relation("PaymentCreatedBy", fields: [createdById], references: [id])
+  cancelledBy User?     @relation("PaymentCancelledBy", fields: [cancelledById], references: [id])
+  checks      PaymentCheck[]
 
   @@index([customerId])
   @@index([orderId])
+  @@index([countryCode])
   @@index([weekCode])
   @@index([paymentDate])
   @@index([createdAt])
   @@index([isPaid])
   @@index([paymentNumber])
+  @@index([status])
   @@index([paymentDate, isPaid])
   @@index([weekCode, isPaid])
 }
@@ -367,6 +399,7 @@ model Payment {
 model PaymentCheck {
   id          String   @id @default(cuid())
   paymentId   String
+  countryCode WorkCountryCode @default(TR)
   checkNumber String
   dueDate     DateTime
   amount      Decimal  @db.Decimal(19, 4)
@@ -380,6 +413,7 @@ model PaymentCheck {
   createdAt DateTime @default(now())
 
   @@index([paymentId])
+  @@index([countryCode])
   @@index([status])
   @@index([dueDate])
 }
@@ -388,6 +422,7 @@ model ReceiptControl {
   id                 String    @id @default(uuid())
   receiptCode        String?   @unique
   weekCode           String?
+  countryCode        WorkCountryCode @default(TR)
   receiptDate        DateTime?
   customerId         String?
   amountUsdExpected  Decimal?  @db.Decimal(19, 4)
@@ -405,6 +440,7 @@ model ReceiptControl {
   createdBy User?     @relation("ReceiptControlCreatedBy", fields: [createdById], references: [id])
 
   @@index([weekCode])
+  @@index([countryCode])
   @@index([receiptDate])
   @@index([customerId])
 }

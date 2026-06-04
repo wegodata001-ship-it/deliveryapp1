@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
@@ -29,7 +29,9 @@ import { getOrderEditEntryHintAction } from "@/app/admin/order-edit-requests/act
 import type { OrderEditLockGatePayload } from "@/components/admin/OrderEditLockGateModal";
 import { OrderEditLockGateModal } from "@/components/admin/OrderEditLockGateModal";
 import type { CustomerCardWindowProps } from "@/lib/admin-windows";
+import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
+import { workCountryFromOrderSourceCountry, workEnvironmentLabelHe } from "@/lib/work-country";
 import { CustomerPlaceCombo } from "@/components/admin/CustomerPlaceCombo";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { formatMoneyAmount, formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
@@ -43,6 +45,8 @@ import {
   ledgerHasExportRows,
   type CustomerLedgerExportMeta,
 } from "@/lib/customer-ledger-export";
+import { LedgerPaymentDetailBlock } from "@/components/admin/LedgerPaymentDetailBlock";
+import { LedgerPaymentExpandButton } from "@/components/admin/LedgerPaymentExpandButton";
 
 function displayCustomerCode(s: CustomerCardSnapshot): string {
   const c = s.customerCode?.trim();
@@ -90,6 +94,11 @@ export function CustomerCardWindowBody({
   initialSnap = null,
 }: CustomerCardWindowProps) {
   const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
+  const { globalCountry } = useAdminGlobal();
+  const effectiveLedgerCountry = ledgerSourceCountry ?? globalCountry;
+  const ledgerWorkEnvLabel = workEnvironmentLabelHe(
+    workCountryFromOrderSourceCountry(ledgerSourceCountry ?? globalCountry),
+  );
   const { openWindow } = useAdminWindows();
   const router = useRouter();
   const [listPayload, setListPayload] = useState<ClientLedgerPayload | null>(null);
@@ -171,6 +180,7 @@ export function CustomerCardWindowBody({
   const [ledgerOrderLock, setLedgerOrderLock] = useState<OrderEditLockGatePayload | null>(null);
   const [ledgerGateToast, setLedgerGateToast] = useState<string | null>(null);
   const [exportBusy, setExportBusy] = useState<"pdf" | "excel" | null>(null);
+  const [expandedLedgerPayments, setExpandedLedgerPayments] = useState<Set<string>>(() => new Set());
   const [fromYmd, setFromYmd] = useState(ledgerFromYmd?.trim() ?? "");
   const [toYmd, setToYmd] = useState(ledgerToYmd?.trim() ?? "");
   const [form, setForm] = useState(() => (initialSnap ? formFromSnap(initialSnap) : {
@@ -228,7 +238,12 @@ export function CustomerCardWindowBody({
     let cancelled = false;
     setLedgerLoading(true);
     const ledgerT0 = now();
-    void getCustomerLedgerAction({ customerId, fromYmd, toYmd, sourceCountry: ledgerSourceCountry }).then((row) => {
+    void getCustomerLedgerAction({
+      customerId,
+      fromYmd,
+      toYmd,
+      sourceCountry: effectiveLedgerCountry,
+    }).then((row) => {
       if (!cancelled) {
         setLedger(row);
         setLedgerLoading(false);
@@ -261,7 +276,7 @@ export function CustomerCardWindowBody({
     return () => {
       cancelled = true;
     };
-  }, [customerId, activeTab, fromYmd, toYmd, ledgerSourceCountry]);
+  }, [customerId, activeTab, fromYmd, toYmd, effectiveLedgerCountry]);
 
   function resetFormFromSnap(row: CustomerCardSnapshot) {
     setForm(formFromSnap(row));
@@ -430,6 +445,9 @@ export function CustomerCardWindowBody({
         customerCode: displayCustomerCode(snap),
         phone: snap.phone,
         email: snap.email,
+        country: snap.country,
+        sourceCountry: effectiveLedgerCountry,
+        workEnvironmentLabel: ledgerWorkEnvLabel,
         fromYmd,
         toYmd,
       }
@@ -741,19 +759,26 @@ export function CustomerCardWindowBody({
                     </tr>
                   ) : (
                     ledger.rows.map((r) => {
+                      const isCommissionClosure = !!r.isCommissionDebtClosure;
                       const clickable =
                         r.kind !== "OPENING_BALANCE" && !!(r.orderId || r.paymentId);
                       const chargeNum = parseMoneyStringOrZero(r.chargeUsd);
                       const paymentNum = parseMoneyStringOrZero(r.paymentUsd);
                       const isPayment = r.kind === "PAYMENT";
                       const isWithdrawal = !!r.isDebtWithdrawal;
+                      const isCancelledPayment = !!r.isPaymentCancelled;
+                      const canExpandPayment =
+                        isPayment && !isCancelledPayment && (!!r.paymentDetail || paymentNum > 0);
+                      const paymentExpanded = canExpandPayment && expandedLedgerPayments.has(r.id);
                       return (
+                        <Fragment key={r.id}>
                         <tr
-                          key={r.id}
                           className={[
                             r.kind === "OPENING_BALANCE" ? "adm-ledger-row--opening" : "",
                             isPayment ? "adm-ledger-row--payment" : "",
+                            isCancelledPayment ? "adm-ledger-row--payment-cancelled" : "",
                             isWithdrawal ? "adm-ledger-row--withdrawal" : "",
+                            isCommissionClosure ? "adm-ledger-row--commission-closure" : "",
                             clickable ? "clickable" : "",
                           ]
                             .filter(Boolean)
@@ -771,35 +796,84 @@ export function CustomerCardWindowBody({
                         >
                           <td dir="ltr">{r.dateYmd}</td>
                           <td dir="ltr" className="adm-ledger-doc-cell">
-                            {clickable ? (
-                              <button
-                                type="button"
-                                className="adm-ledger-doc-link"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  void onLedgerTableRowActivate(r);
-                                }}
-                              >
-                                {r.document}
-                              </button>
-                            ) : (
-                              r.document
-                            )}
+                            <span className="adm-ledger-doc-cell-inner">
+                              {canExpandPayment ? (
+                                <LedgerPaymentExpandButton
+                                  expanded={paymentExpanded}
+                                  onToggle={() => {
+                                    setExpandedLedgerPayments((prev) => {
+                                      const next = new Set(prev);
+                                      if (next.has(r.id)) next.delete(r.id);
+                                      else next.add(r.id);
+                                      return next;
+                                    });
+                                  }}
+                                />
+                              ) : null}
+                              {clickable ? (
+                                <button
+                                  type="button"
+                                  className="adm-ledger-doc-link"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void onLedgerTableRowActivate(r);
+                                  }}
+                                >
+                                  {r.document}
+                                </button>
+                              ) : (
+                                r.document
+                              )}
+                            </span>
                           </td>
                           <td>{r.typeLabel}</td>
                           <td
                             dir="ltr"
-                            className={r.isDebtWithdrawal || chargeNum < 0 ? "adm-ledger-charge--debt-withdrawal" : ""}
+                            className={[
+                              r.isDebtWithdrawal || chargeNum < 0 ? "adm-ledger-charge--debt-withdrawal" : "",
+                              isCommissionClosure ? "adm-ledger-closure-cell" : "",
+                            ]
+                              .filter(Boolean)
+                              .join(" ")}
                           >
-                            {r.isDebtWithdrawal || chargeNum < -0.005
-                              ? fmtUsdSignedPrefix(r.chargeUsd)
-                              : chargeNum > 0
-                                ? fmtUsd(r.chargeUsd)
-                                : "—"}
+                            {isCommissionClosure ? (
+                              <span className="adm-ledger-closure-delta">
+                                <span className="adm-ledger-closure-delta-lbl">יתרת הזמנה</span>
+                                {fmtUsd(r.orderBalanceAfterUsd ?? "0")}
+                              </span>
+                            ) : r.isDebtWithdrawal || chargeNum < -0.005 ? (
+                              fmtUsdSignedPrefix(r.chargeUsd)
+                            ) : chargeNum > 0 ? (
+                              fmtUsd(r.chargeUsd)
+                            ) : (
+                              "—"
+                            )}
                           </td>
-                          <td dir="ltr">{paymentNum > 0 ? fmtUsd(r.paymentUsd) : "—"}</td>
+                          <td
+                            dir="ltr"
+                            className={isCommissionClosure ? "adm-ledger-closure-cell" : ""}
+                          >
+                            {isCommissionClosure ? (
+                              <span className="adm-ledger-closure-delta">
+                                <span className="adm-ledger-closure-delta-lbl">יתרת עמלה</span>
+                                {fmtUsd(r.commissionAfterUsd ?? "0")}
+                              </span>
+                            ) : paymentNum > 0 ? (
+                              fmtUsd(r.paymentUsd)
+                            ) : (
+                              "—"
+                            )}
+                          </td>
                           <td dir="ltr">{formatLedgerRunningBalance(r.balanceUsd)}</td>
                         </tr>
+                        {paymentExpanded && r.paymentDetail ? (
+                          <tr className="adm-ledger-payment-detail-row">
+                            <td colSpan={6}>
+                              <LedgerPaymentDetailBlock detail={r.paymentDetail} />
+                            </td>
+                          </tr>
+                        ) : null}
+                        </Fragment>
                       );
                     })
                   )}

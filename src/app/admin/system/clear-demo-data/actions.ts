@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { revalidateAllKpiCaches } from "@/lib/kpi-cache-tags";
+import { revalidateAllKpiCaches } from "@/lib/kpi-cache-revalidate";
 import {
   CLEAR_DEMO_DATA_CONFIRMATION,
   canClearDemoData,

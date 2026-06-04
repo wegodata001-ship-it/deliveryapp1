@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import type { AppUser } from "@/lib/admin-auth";
 import { getDashboardStatsCore, type DashboardStatsRange } from "@/lib/dashboard-stats";
+import { resolveWorkCountryFromSearchParams } from "@/lib/work-country";
 import { withPerfTimer } from "@/lib/perf-log";
 import { adminOrdersHrefWithFilters } from "@/lib/admin-href";
 import { DashboardAnimatedNumber } from "@/components/admin/DashboardAnimatedNumber";
@@ -29,8 +30,9 @@ type Props = {
 };
 
 export async function DashboardStatsSections({ me, range, searchParams, showStaffStats }: Props) {
+  const workCountry = resolveWorkCountryFromSearchParams(searchParams);
   const stats = await withPerfTimer("dashboard.stream.stats", () =>
-    getDashboardStatsCore({ fromStart: range.fromStart, toEnd: range.toEnd }, me),
+    getDashboardStatsCore({ fromStart: range.fromStart, toEnd: range.toEnd }, me, workCountry),
   );
 
   const alertsTotalFast =
@@ -63,7 +65,7 @@ export async function DashboardStatsSections({ me, range, searchParams, showStaf
             </Link>
           </article>
           <Suspense fallback={<DashboardHighBalanceAlertSkeleton />}>
-            <DashboardHighBalanceAlert />
+            <DashboardHighBalanceAlert workCountry={workCountry} />
           </Suspense>
         </div>
         {alertsTotalFast === 0 ? (
@@ -87,7 +89,7 @@ export async function DashboardStatsSections({ me, range, searchParams, showStaf
           </Link>
 
           <Suspense fallback={<DashboardHighBalanceKpiSkeleton />}>
-            <DashboardHighBalanceKpi />
+            <DashboardHighBalanceKpi workCountry={workCountry} />
           </Suspense>
 
           <Link className="adm-dash-kpi-xl adm-dash-kpi-xl--green" href="/admin/source-tables/payments?search=%D7%9B%D7%9F">

@@ -82,6 +82,12 @@ export const SIDEBAR_SECTIONS: NavSectionDef[] = [
       },
       { href: "/admin/receipt-control", label: "בקרת תקבולים", icon: "receipt", anyOf: ["view_payment_control"] },
       {
+        href: "/admin/customers",
+        label: "לקוחות",
+        icon: "users",
+        anyOf: ["view_customers", "view_customer_card", "view_reports"],
+      },
+      {
         href: "/admin/customer-card",
         label: "כרטסת לקוח",
         icon: "ledger",

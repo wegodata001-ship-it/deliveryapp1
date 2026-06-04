@@ -2,7 +2,7 @@
 
 import { PaymentMethod, Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
-import { revalidateAllKpiCaches } from "@/lib/kpi-cache-tags";
+import { revalidateAllKpiCaches } from "@/lib/kpi-cache-revalidate";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { assertCreatedByUserExists, SessionUserInvalidError } from "@/lib/session-user-guard";
 import { computeFromUsdAmount } from "@/lib/financial-calc";
@@ -14,11 +14,20 @@ import {
   type PaymentIntakeOrderRow,
 } from "@/lib/payment-intake";
 import { prisma } from "@/lib/prisma";
-import { allocateNextPaymentCapture } from "@/lib/payment-capture-code";
+import { allocateNextPaymentCapture, resolvePaymentWorkCountry } from "@/lib/payment-capture-code";
 import { prismaVatRatePercent } from "@/lib/vat-prisma";
 import { paymentIntakeOrderDateThroughAhWeekEnd } from "@/lib/payment-intake-order-filter";
 import { formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate, parseLocalDateTime } from "@/lib/work-week";
 import { isDebtWithdrawalOrderStatus } from "@/lib/debt-withdrawal-order";
+import {
+  ensurePaymentRecordStatusColumns,
+  findActiveCustomerPayments,
+  groupByActivePayments,
+} from "@/lib/payment-record-status";
+import { paymentRecordUsdEquivalent } from "@/lib/payment-usd-equivalent";
+import type { PaymentIntakeCustomerPaymentRow } from "@/lib/payment-intake-customer-kpi";
+
+export type { PaymentIntakeCustomerPaymentRow } from "@/lib/payment-intake-customer-kpi";
 import {
   searchCustomersForOrderAction,
   resolveCustomerForCaptureAction,
@@ -44,26 +53,14 @@ export type PaymentIntakeCustomerPayload = {
 
 const MONEY_EPS = 0.02;
 
-function paymentUsdEquivalent(p: {
-  amountUsd: Prisma.Decimal | null;
-  amountIls: Prisma.Decimal | null;
-  exchangeRate: Prisma.Decimal | null;
-}): Prisma.Decimal {
-  if (p.amountUsd && p.amountUsd.gt(0)) return p.amountUsd;
-  if (p.amountIls && p.exchangeRate && p.exchangeRate.gt(0)) {
-    return p.amountIls.div(p.exchangeRate).toDecimalPlaces(4, 4);
-  }
-  return new Prisma.Decimal(0);
-}
-
 export async function calculatePaymentCaptureCustomerBalanceUsd(customerId: string): Promise<Prisma.Decimal> {
   const [orders, payments] = await Promise.all([
     prisma.order.findMany({
       where: { customerId, deletedAt: null },
       select: { status: true, totalUsd: true, amountUsd: true, commissionUsd: true, debtWithdrawalUsd: true },
     }),
-    prisma.payment.findMany({
-      where: { customerId, isPaid: true },
+    findActiveCustomerPayments({
+      where: { customerId },
       select: { amountUsd: true, amountIls: true, exchangeRate: true },
     }),
   ]);
@@ -81,7 +78,7 @@ export async function calculatePaymentCaptureCustomerBalanceUsd(customerId: stri
     return sum.add(o.totalUsd ?? (o.amountUsd ?? new Prisma.Decimal(0)).add(o.commissionUsd ?? new Prisma.Decimal(0)));
   }, new Prisma.Decimal(0));
 
-  const totalPayments = payments.reduce((sum, p) => sum.add(paymentUsdEquivalent(p)), new Prisma.Decimal(0));
+  const totalPayments = payments.reduce((sum, p) => sum.add(paymentRecordUsdEquivalent(p)), new Prisma.Decimal(0));
   return totalPayments.add(totalDebtWithdrawals).sub(totalOrders).toDecimalPlaces(2, 4);
 }
 
@@ -131,7 +128,10 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
   customerId: string,
   /** אופציונלי: סינון תאריך עד סוף שבוע AH. null = כל היסטוריית ההזמנות */
   weekCodeForOpenBalances?: string | null,
-): Promise<{ ok: true; customer: PaymentIntakeCustomerPayload; orders: PaymentIntakeOrderRow[] } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; customer: PaymentIntakeCustomerPayload; orders: PaymentIntakeOrderRow[]; customerPayments: PaymentIntakeCustomerPaymentRow[] }
+  | { ok: false; error: string }
+> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["receive_payments"])) {
     return { ok: false, error: "אין הרשאה" };
@@ -139,6 +139,8 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
 
   const cid = customerId.trim();
   if (!cid) return { ok: false, error: "חסר לקוח" };
+
+  await ensurePaymentRecordStatusColumns();
 
   const cust = await prisma.customer.findFirst({
     where: { id: cid, deletedAt: null, isActive: true },
@@ -157,30 +159,43 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
 
   const weekDateWhere = paymentIntakeOrderDateThroughAhWeekEnd(weekCodeForOpenBalances);
 
-  const orders = await prisma.order.findMany({
-    where: {
-      customerId: cid,
-      deletedAt: null,
-      status: { not: "DEBT_WITHDRAWAL" },
-      ...(weekDateWhere ?? {}),
-    },
-    orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],
-    select: {
-      id: true,
-      orderNumber: true,
-      orderDate: true,
-      weekCode: true,
-      amountUsd: true,
-      commissionUsd: true,
-      totalUsd: true,
-      exchangeRate: true,
-      usdRateUsed: true,
-      snapshotFinalDollarRate: true,
-      totalIlsWithVat: true,
-      totalIls: true,
-      sourceCountry: true,
-    },
-  });
+  const [orders, customerPaymentRows] = await Promise.all([
+    prisma.order.findMany({
+      where: {
+        customerId: cid,
+        deletedAt: null,
+        status: { not: "DEBT_WITHDRAWAL" },
+        ...(weekDateWhere ?? {}),
+      },
+      orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],
+      select: {
+        id: true,
+        orderNumber: true,
+        orderDate: true,
+        weekCode: true,
+        amountUsd: true,
+        commissionUsd: true,
+        totalUsd: true,
+        exchangeRate: true,
+        usdRateUsed: true,
+        snapshotFinalDollarRate: true,
+        totalIlsWithVat: true,
+        totalIls: true,
+        sourceCountry: true,
+      },
+    }),
+    findActiveCustomerPayments({
+      where: { customerId: cid },
+      select: {
+        amountUsd: true,
+        amountIls: true,
+        exchangeRate: true,
+        paymentMethod: true,
+        usdPaymentMethod: true,
+        ilsPaymentMethod: true,
+      },
+    }),
+  ]);
 
   const orderIds = orders.map((o) => o.id);
   const paidByOrder = new Map<string, Prisma.Decimal>();
@@ -188,11 +203,7 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
   const latestPaymentDateByOrder = new Map<string, string | null>();
   if (orderIds.length > 0) {
     const [sums, payRows] = await Promise.all([
-      prisma.payment.groupBy({
-        by: ["orderId"],
-        where: { orderId: { in: orderIds }, amountUsd: { not: null } },
-        _sum: { amountUsd: true },
-      }),
+      groupByActivePayments("orderId", { orderId: { in: orderIds }, amountUsd: { not: null } }, { amountUsd: true }),
       prisma.payment.findMany({
         where: { orderId: { in: orderIds } },
         orderBy: [{ paymentDate: "desc" }, { createdAt: "desc" }],
@@ -200,7 +211,7 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
       }),
     ]);
     for (const s of sums) {
-      if (s.orderId) paidByOrder.set(s.orderId, s._sum.amountUsd ?? new Prisma.Decimal(0));
+      if (s.orderId) paidByOrder.set(s.orderId, s._sum?.amountUsd ?? new Prisma.Decimal(0));
     }
     for (const p of payRows) {
       if (!p.orderId) continue;
@@ -262,6 +273,15 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
   const index = cust.oldCustomerCode?.trim() || cust.customerCode?.trim() || null;
   const customerBalanceUsd = await calculatePaymentCaptureCustomerBalanceUsd(cid);
 
+  const customerPayments: PaymentIntakeCustomerPaymentRow[] = customerPaymentRows.map((p) => ({
+    amountUsd: p.amountUsd != null ? p.amountUsd.toFixed(4) : null,
+    amountIls: p.amountIls != null ? p.amountIls.toFixed(4) : null,
+    exchangeRate: p.exchangeRate != null ? p.exchangeRate.toFixed(6) : null,
+    paymentMethod: p.paymentMethod,
+    usdPaymentMethod: p.usdPaymentMethod,
+    ilsPaymentMethod: p.ilsPaymentMethod,
+  }));
+
   return {
     ok: true,
     customer: {
@@ -276,6 +296,7 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
       customerBalanceUsd: customerBalanceUsd.toFixed(2),
     },
     orders: rows,
+    customerPayments,
   };
 }
 
@@ -300,7 +321,7 @@ export async function fetchOrderPaymentHistoryAction(
   const oid = orderId.trim();
   if (!oid) return { ok: false, error: "חסרה הזמנה" };
 
-  const payments = await prisma.payment.findMany({
+  const payments = await findActiveCustomerPayments({
     where: { orderId: oid, amountUsd: { not: null } },
     orderBy: [{ paymentDate: "desc" }, { createdAt: "desc" }],
     select: {
@@ -499,7 +520,9 @@ export async function savePaymentIntakeAction(
   noteParts.push("נסגר אוטומטית לפי סדר הזמנות מהישן לחדש");
   const combinedNotes = noteParts.join("\n");
 
-  const allocated = await allocateNextPaymentCapture();
+  const firstOrderId = parsedAlloc[0]?.orderId ?? null;
+  const payWorkCountry = await resolvePaymentWorkCountry({ orderId: firstOrderId, customerId: cid });
+  const allocated = await allocateNextPaymentCapture(payWorkCountry);
   const primaryCode = allocated.code;
 
   try {
@@ -542,6 +565,7 @@ export async function savePaymentIntakeAction(
 
         await tx.payment.create({
           data: {
+            countryCode: payWorkCountry,
             paymentCode: code,
             paymentNumber: allocated.paymentNumber,
             orderId: row.orderId,

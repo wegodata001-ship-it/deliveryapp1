@@ -5,6 +5,8 @@ import { getOrderStatusLabelMap } from "@/lib/order-status-registry";
 import { OS } from "@/lib/order-status-slugs";
 import { prisma } from "@/lib/prisma";
 import { ordersPerfEnd, ordersPerfRun, ordersPerfStart } from "@/lib/orders-source-perf";
+import { orderWhereForCountryScope, resolveCountryScopeFromCode } from "@/lib/country-data-scope";
+import { DEFAULT_WORK_COUNTRY, type WorkCountryCode } from "@/lib/work-country";
 import { DEFAULT_WEEK_CODE, formatLocalYmd } from "@/lib/work-week";
 
 const PAYMENT_METHOD_LABELS: Record<string, string> = {
@@ -28,6 +30,8 @@ export type OrdersSourceFilters = {
   orderNumber?: string;
   customer?: string;
   country?: string;
+  /** סביבת עבודה — אין ערבוב בין מדינות */
+  workCountry?: WorkCountryCode;
   weekCode?: string;
   status?: string;
   fromYmd?: string;
@@ -127,6 +131,9 @@ export function buildOrdersSourceWhere(filters: OrdersSourceFilters = {}): Prism
   ordersPerfStart("orders.filters");
   try {
     const and: Prisma.OrderWhereInput[] = [{ deletedAt: null }];
+
+    const wc = filters.workCountry ?? DEFAULT_WORK_COUNTRY;
+    and.push(orderWhereForCountryScope(resolveCountryScopeFromCode(wc)));
 
     const status = filters.status?.trim();
     if (status) and.push({ status });
@@ -315,9 +322,14 @@ export async function listOrdersSourceForExport(
   return raw.map((r) => mapOrderRow(r, labelMap));
 }
 
-async function loadOrdersSourceKpisUncached(): Promise<OrdersSourceKpis> {
+async function loadOrdersSourceKpisUncached(
+  workCountry: WorkCountryCode = DEFAULT_WORK_COUNTRY,
+): Promise<OrdersSourceKpis> {
   return ordersPerfRun("orders.kpis", async () => {
-    const base = { deletedAt: null } satisfies Prisma.OrderWhereInput;
+    const base = {
+      deletedAt: null,
+      ...orderWhereForCountryScope(resolveCountryScopeFromCode(workCountry)),
+    } satisfies Prisma.OrderWhereInput;
     const weekCode = DEFAULT_WEEK_CODE;
 
     const [totalOrders, sumAgg, countryGroups, weekOrders] = await Promise.all([
@@ -340,11 +352,15 @@ async function loadOrdersSourceKpisUncached(): Promise<OrdersSourceKpis> {
   });
 }
 
-export const getOrdersSourceKpisCached = unstable_cache(
-  () => loadOrdersSourceKpisUncached(),
-  ["orders-source-kpis-v1", DEFAULT_WEEK_CODE],
-  { revalidate: 120, tags: ["orders-source-kpis"] },
-);
+export async function getOrdersSourceKpisCached(
+  workCountry: WorkCountryCode = DEFAULT_WORK_COUNTRY,
+): Promise<OrdersSourceKpis> {
+  return unstable_cache(
+    () => loadOrdersSourceKpisUncached(workCountry),
+    ["orders-source-kpis-v2", workCountry, DEFAULT_WEEK_CODE],
+    { revalidate: 120, tags: ["orders-source-kpis"] },
+  )();
+}
 
 export async function getOrderSourcePreview(orderId: string): Promise<OrdersSourcePreview | null> {
   return ordersPerfRun("orders.preview", async () => {

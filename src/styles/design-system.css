@@ -439,21 +439,33 @@
 
 /* Status select in orders table — pill/badge look */
 .adm-table-excel .adm-table-status-sel.adm-badge-sel--success {
-  border-color: rgba(22, 163, 74, 0.35);
-  background: var(--success-bg);
-  color: var(--success);
+  border-color: #16a34a;
+  background: #c8efd4;
+  color: #14532d;
 }
 
 .adm-table-excel .adm-table-status-sel.adm-badge-sel--warning {
-  border-color: rgba(245, 158, 11, 0.4);
-  background: var(--warning-bg);
-  color: #b45309;
+  border-color: #ea580c;
+  background: #ffd9a8;
+  color: #9a3412;
 }
 
 .adm-table-excel .adm-table-status-sel.adm-badge-sel--open {
-  border-color: rgba(37, 99, 235, 0.35);
-  background: var(--primary-light);
-  color: #1d4ed8;
+  border-color: #94a3b8;
+  background: #f1f5f9;
+  color: #334155;
+}
+
+.adm-table-excel .adm-table-status-sel.adm-badge-sel--cancelled {
+  border-color: #dc2626;
+  background: #ffc4c4;
+  color: #991b1b;
+}
+
+.adm-table-excel .adm-table-status-sel.adm-badge-sel--withdrawal {
+  border-color: #7c3aed;
+  background: #dcc8f5;
+  color: #5b21b6;
 }
 
 /* Loading (save actions) */
@@ -872,9 +884,149 @@
   background: #f0fff4;
 }
 
+.adm-win-panel--customer-card .adm-cust-card-orders-table.adm-ledger-table-saas tbody tr.adm-ledger-row--payment-cancelled,
+.adm-customer-card-page .adm-cust-card-orders-table.adm-ledger-table-saas tbody tr.adm-ledger-row--payment-cancelled {
+  background: #fde8e8;
+  color: #991b1b;
+}
+
 .adm-win-panel--customer-card .adm-cust-card-orders-table.adm-ledger-table-saas tbody tr.adm-ledger-row--withdrawal {
   background: #f3e8ff;
   border-right: 4px solid #8b5cf6;
+}
+
+.adm-win-panel--customer-card .adm-cust-card-orders-table.adm-ledger-table-saas tbody tr.adm-ledger-row--commission-closure,
+.adm-customer-card-page .adm-cust-card-orders-table.adm-ledger-table-saas tbody tr.adm-ledger-row--commission-closure {
+  background: linear-gradient(90deg, rgba(255, 237, 213, 0.55), rgba(237, 233, 254, 0.65));
+  border-right: 4px solid #ea580c;
+  box-shadow: inset 0 0 0 1px rgba(124, 58, 237, 0.12);
+}
+
+.adm-ledger-closure-cell .adm-ledger-closure-delta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+  font-weight: 700;
+  font-size: 0.88rem;
+}
+
+.adm-ledger-closure-delta-lbl {
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: #7c2d12;
+  margin-left: 2px;
+}
+
+.adm-ledger-row--commission-closure .adm-ledger-closure-delta {
+  color: #5b21b6;
+}
+
+.adm-ledger-doc-cell-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.adm-ledger-payment-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  padding: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: #f8fafc;
+  color: #334155;
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 0.65rem;
+  line-height: 1;
+}
+
+.adm-ledger-payment-expand-icon {
+  display: block;
+  font-size: 0.62rem;
+  line-height: 1;
+}
+
+.adm-ledger-payment-expand:hover {
+  background: #e2e8f0;
+  border-color: #94a3b8;
+}
+
+.adm-ledger-payment-detail-row td {
+  padding: 0 !important;
+  background: #f8fafc;
+  border-top: none !important;
+}
+
+.adm-ledger-payment-detail {
+  padding: 10px 14px 12px 2.25rem;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.adm-ledger-payment-detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 16px;
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: 10px;
+}
+
+.adm-ledger-payment-detail-section {
+  margin-top: 8px;
+}
+
+.adm-ledger-payment-detail-section:first-of-type {
+  margin-top: 0;
+}
+
+.adm-ledger-payment-detail-section-title {
+  margin: 0 0 6px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: #475569;
+  letter-spacing: 0.02em;
+}
+
+.adm-ledger-payment-detail-empty {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #94a3b8;
+  font-style: italic;
+}
+
+.adm-ledger-payment-detail-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.adm-ledger-payment-detail-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  max-width: 280px;
+  color: #334155;
+}
+
+.adm-ledger-payment-detail-list--orders {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.adm-ledger-payment-detail-list--orders li {
+  max-width: 100%;
+  font-weight: 600;
+  color: #1e40af;
 }
 
 .adm-win-panel--customer-card .adm-ledger-doc-link,

@@ -1,11 +1,16 @@
 import { Prisma, type OrderSourceCountry } from "@prisma/client";
 import { OS } from "@/lib/order-status-slugs";
 import { prisma } from "@/lib/prisma";
+import { activePaidPaymentWhere } from "@/lib/payment-record-status";
+import { paymentRecordUsdEquivalent as paymentUsd } from "@/lib/payment-usd-equivalent";
+import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
 
 export type CustomerBalanceScope = {
   from?: Date | null;
   to?: Date | null;
   sourceCountry?: OrderSourceCountry | null;
+  /** כשמוגדר — רק הזמנות בסטטוסים אלה נספרות בחיוב/משיכה */
+  orderStatuses?: string[] | null;
 };
 
 export type CustomerBalanceCalculation = {
@@ -47,18 +52,6 @@ function withdrawalUsd(o: {
   return orderUsd(o);
 }
 
-function paymentUsd(p: {
-  amountUsd: Prisma.Decimal | null;
-  amountIls: Prisma.Decimal | null;
-  exchangeRate: Prisma.Decimal | null;
-}): Prisma.Decimal {
-  if (p.amountUsd && p.amountUsd.gt(0)) return p.amountUsd;
-  if (p.amountIls && p.exchangeRate && p.exchangeRate.gt(0)) {
-    return p.amountIls.div(p.exchangeRate).toDecimalPlaces(4, 4);
-  }
-  return new Prisma.Decimal(0);
-}
-
 export async function calculateCustomerBalances(
   customerIds: string[],
   scope: CustomerBalanceScope = {},
@@ -77,25 +70,21 @@ export async function calculateCustomerBalances(
   }
   if (ids.length === 0) return out;
 
+  const wc = scope.sourceCountry ? workCountryFromOrderSourceCountry(scope.sourceCountry) : null;
+
   const orderWhere = {
     customerId: { in: ids },
     deletedAt: null,
     ...dateWhere("orderDate", scope),
-    ...(scope.sourceCountry ? { sourceCountry: scope.sourceCountry } : {}),
+    ...(scope.sourceCountry ? { sourceCountry: scope.sourceCountry, countryCode: wc! } : {}),
+    ...(scope.orderStatuses?.length ? { status: { in: scope.orderStatuses } } : {}),
   } satisfies Prisma.OrderWhereInput;
 
   const paymentWhere = {
     customerId: { in: ids },
-    isPaid: true,
+    ...activePaidPaymentWhere,
     ...dateWhere("paymentDate", scope),
-    ...(scope.sourceCountry
-      ? {
-          order: {
-            deletedAt: null,
-            sourceCountry: scope.sourceCountry,
-          },
-        }
-      : {}),
+    ...(wc ? { countryCode: wc } : {}),
   } satisfies Prisma.PaymentWhereInput;
 
   const [orders, payments] = await Promise.all([

@@ -1,4 +1,5 @@
 import { PaymentMethod, Prisma } from "@prisma/client";
+import { mergeOrderWhere, resolveCountryScope } from "@/lib/country-data-scope";
 import { ORDER_COUNTRY_CODES, type OrderCountryCode } from "@/lib/order-countries";
 import { OS } from "@/lib/order-status-slugs";
 import { parseOrdersListDateFilterFromSearchParams } from "@/lib/work-week";
@@ -91,6 +92,7 @@ export function buildOrdersListWhereFromSearchParams(
   sp: Record<string, string | string[] | undefined>,
 ): Prisma.OrderWhereInput {
   const range = parseOrdersListDateFilterFromSearchParams(sp);
+  const countryScope = resolveCountryScope(sp);
 
   const statusSingleRaw = readTextParam(sp, "status");
   const openOnly = readTextParam(sp, "ordersOpenOnly") === "1";
@@ -129,11 +131,11 @@ export function buildOrdersListWhereFromSearchParams(
   const phoneWhere = buildOrdersListPhoneWhere(readTextParam(sp, "ordersPhone"));
   if (phoneWhere) filterParts.push(phoneWhere);
 
-  return {
+  const base: Prisma.OrderWhereInput = {
     deletedAt: null,
     orderDate: { gte: range.fromStart, lte: range.toEnd },
     ...(statusSingle ? { status: statusSingle } : {}),
-    ...(countrySingle ? { sourceCountry: countrySingle } : {}),
+    ...(countrySingle ? { sourceCountry: countrySingle, countryCode: countryScope.workCountry } : {}),
     ...(createdById ? { createdById } : {}),
     ...(paymentType === "NONE"
       ? { paymentMethod: null }
@@ -155,4 +157,6 @@ export function buildOrdersListWhereFromSearchParams(
       : {}),
     ...(filterParts.length > 0 ? { AND: filterParts } : {}),
   };
+
+  return mergeOrderWhere(base, countryScope);
 }

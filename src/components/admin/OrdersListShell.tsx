@@ -7,7 +7,16 @@ import { PaymentMethod } from "@prisma/client";
 import { OS } from "@/lib/order-status-slugs";
 import { useOrderStatusCatalog } from "@/components/admin/OrderStatusCatalogProvider";
 import { OrderStatusSelect } from "@/components/admin/OrderStatusSelect";
-import { Plus } from "lucide-react";
+import {
+  CircleCheck,
+  CircleX,
+  FolderOpen,
+  Globe2,
+  Hourglass,
+  LayoutGrid,
+  Plus,
+  type LucideIcon,
+} from "lucide-react";
 import {
   updateOrderListPaymentLocationAction,
 } from "@/app/admin/capture/actions";
@@ -22,6 +31,7 @@ import {
   orderCaptureSplitMethodLabel,
 } from "@/lib/order-capture-payment-methods";
 import { orderListRowToneClass } from "@/constants/order-status";
+import { useEnsureActiveWorkWeekOnEnter } from "@/hooks/useEnsureActiveWorkWeekOnEnter";
 import type { ParsedDateFilter } from "@/lib/work-week";
 import { IntakeLocationCombobox } from "@/components/admin/IntakeLocationCombobox";
 import { OrdersListPaginationBar } from "@/components/admin/OrdersListPaginationBar";
@@ -79,6 +89,8 @@ type OrdersStatusBucket = {
 };
 
 export type OrdersStatusSummary = {
+  /** כל ההזמנות בטווח/פילטרים הנוכחיים (ללא סינון ריבועי סטטוס) */
+  all: OrdersStatusBucket;
   open: OrdersStatusBucket;
   inProgress: OrdersStatusBucket;
   completed: OrdersStatusBucket;
@@ -96,6 +108,55 @@ export type OrdersListPagination = {
 function paymentTypeLabel(paymentType: string | null): string {
   if (!paymentType) return "—";
   return orderCaptureSplitMethodLabel(paymentType as PaymentMethod);
+}
+
+function OrderStatusKpiButton({
+  title,
+  toneClass,
+  count,
+  totalUsd,
+  active,
+  isAll,
+  icon: Icon,
+  onClick,
+  ariaLabel,
+}: {
+  title: string;
+  toneClass: string;
+  count: string;
+  totalUsd: string;
+  active: boolean;
+  isAll?: boolean;
+  icon: LucideIcon;
+  onClick: () => void;
+  ariaLabel: string;
+}) {
+  return (
+    <button
+      type="button"
+      className={[
+        "adm-status-card",
+        "adm-status-card--erp",
+        toneClass,
+        isAll ? "adm-status-card--all" : "",
+        active ? "adm-status-card--active" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      aria-pressed={active}
+      aria-label={ariaLabel}
+      onClick={onClick}
+    >
+      <span className="adm-status-card__head">
+        <Icon className="adm-status-card__icon" size={17} strokeWidth={2.25} aria-hidden />
+        <span className="adm-status-card-title">{title}</span>
+      </span>
+      <strong className="adm-status-card-count">{count}</strong>
+      <span className="adm-status-card-amount" dir="ltr">
+        ${totalUsd}
+      </span>
+    </button>
+  );
 }
 
 /** המרה זהירה ממחרוזת מפורמטת (לדוגמה "1,234.50") למספר; null אם לא ניתן. */
@@ -187,6 +248,7 @@ export function OrdersListShell({
   paymentLocationOptions,
   toolbarProps,
 }: Props) {
+  useEnsureActiveWorkWeekOnEnter("orders");
   const router = useRouter();
   const { openWindow } = useAdminWindows();
   useOrderStatusCatalog();
@@ -204,6 +266,12 @@ export function OrdersListShell({
   const toggleStatusFilter = useCallback((key: OrderStatusKpiKey) => {
     setActiveStatusFilters((prev) => toggleStatusKpiFilter(prev, key));
   }, []);
+
+  const clearStatusKpiFilters = useCallback(() => {
+    setActiveStatusFilters([]);
+  }, []);
+
+  const statusKpiAllActive = activeStatusFilters.length === 0;
 
   const mergedPaymentLocationOptions = useMemo(() => {
     const m = new Map<string, string>();
@@ -226,21 +294,47 @@ export function OrdersListShell({
   const statusKpiCards = useMemo(
     () =>
       [
-        { key: "open" as const, tone: "adm-status-card--open", title: "פתוחות", bucket: statusSummary.open },
-        { key: "completed" as const, tone: "adm-status-card--completed", title: "מוכנות", bucket: statusSummary.completed },
-        { key: "cancelled" as const, tone: "adm-status-card--cancelled", title: "מבוטלות", bucket: statusSummary.cancelled },
-        { key: "inProgress" as const, tone: "adm-status-card--progress", title: "בטיפול", bucket: statusSummary.inProgress },
+        {
+          key: "open" as const,
+          tone: "adm-status-card--open",
+          title: "פתוחות",
+          icon: FolderOpen,
+          bucket: statusSummary.open,
+        },
+        {
+          key: "completed" as const,
+          tone: "adm-status-card--completed",
+          title: "מוכנות",
+          icon: CircleCheck,
+          bucket: statusSummary.completed,
+        },
+        {
+          key: "cancelled" as const,
+          tone: "adm-status-card--cancelled",
+          title: "מבוטלות",
+          icon: CircleX,
+          bucket: statusSummary.cancelled,
+        },
+        {
+          key: "inProgress" as const,
+          tone: "adm-status-card--progress",
+          title: "בטיפול",
+          icon: Hourglass,
+          bucket: statusSummary.inProgress,
+        },
         {
           key: "debtWithdrawal" as const,
           tone: "adm-status-card--withdrawal",
-          title: "משיכה מהחוב",
+          title: "משיכה מחו״ב",
+          icon: Globe2,
           bucket: statusSummary.debtWithdrawal,
         },
       ] satisfies {
         key: OrderStatusKpiKey;
         tone: string;
         title: string;
-        bucket: OrdersStatusSummary["open"];
+        icon: LucideIcon;
+        bucket: OrdersStatusBucket;
       }[],
     [statusSummary],
   );
@@ -673,6 +767,7 @@ export function OrdersListShell({
       <div className="adm-orders-filters-row">
         <Suspense fallback={<div className="adm-orders-toolbar-skel" aria-hidden />}>
           <OrdersListToolbar
+            key={`${toolbarProps.ahWeekSelect}|${toolbarProps.fromYmd}|${toolbarProps.toYmd}`}
             {...toolbarProps}
             createdByOptions={createdByOptionsMerged}
             leadingActions={filterLeadingActions}
@@ -681,44 +776,49 @@ export function OrdersListShell({
         </Suspense>
       </div>
 
-      <div className="adm-orders-action-kpi-row" dir="rtl">
-        <div className="adm-orders-status-kpi adm-orders-status-kpi--strip" aria-label="סיכומים לפי סטטוס — לחיצה מסננת את הטבלה">
-          {statusKpiCards.map((card) => {
-            const active = activeStatusFilters.includes(card.key);
-            return (
-              <button
-                key={card.key}
-                type="button"
-                className={[
-                  "adm-status-card",
-                  "adm-status-card--compact",
-                  card.tone,
-                  active ? "adm-status-card--active" : "",
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-                aria-pressed={active}
-                aria-label={`${card.title} — ${active ? "סינון פעיל, לחיצה לביטול" : "לחיצה לסינון לפי סטטוס זה"}`}
-                onClick={() => toggleStatusFilter(card.key)}
-              >
-                <span className="adm-status-card-title">{card.title}</span>
-                <strong className="adm-status-card-count">{card.bucket.count}</strong>
-                <span className="adm-status-card-amount" dir="ltr">
-                  ${card.bucket.totalUsd}
-                </span>
-              </button>
-            );
-          })}
+      <div className="adm-orders-main-panel" dir="rtl">
+        <div className="adm-orders-action-kpi-row">
+          <div
+            className="adm-orders-status-kpi adm-orders-status-kpi--board"
+            aria-label="סיכומים לפי סטטוס — לחיצה מסננת את הטבלה"
+          >
+            <OrderStatusKpiButton
+              title="הכל"
+              toneClass="adm-status-card--all"
+              count={statusSummary.all.count}
+              totalUsd={statusSummary.all.totalUsd}
+              active={statusKpiAllActive}
+              isAll
+              icon={LayoutGrid}
+              onClick={clearStatusKpiFilters}
+              ariaLabel={`הכל — ${statusKpiAllActive ? "מציג את כל ההזמנות" : "לחיצה לאיפוס סינון סטטוס והצגת כל ההזמנות"}`}
+            />
+            {statusKpiCards.map((card) => {
+              const active = activeStatusFilters.includes(card.key);
+              return (
+                <OrderStatusKpiButton
+                  key={card.key}
+                  title={card.title}
+                  toneClass={card.tone}
+                  count={card.bucket.count}
+                  totalUsd={card.bucket.totalUsd}
+                  active={active}
+                  icon={card.icon}
+                  onClick={() => toggleStatusFilter(card.key)}
+                  ariaLabel={`${card.title} — ${active ? "סינון פעיל, לחיצה לביטול" : "לחיצה לסינון לפי סטטוס זה"}`}
+                />
+              );
+            })}
+          </div>
         </div>
-      </div>
 
-      {listErr ? (
-        <p className="adm-orders-inline-err" role="alert">
-          {listErr}
-        </p>
-      ) : null}
+        {listErr ? (
+          <p className="adm-orders-inline-err" role="alert">
+            {listErr}
+          </p>
+        ) : null}
 
-      <div className="adm-orders-table-host mobile-table-wrapper adm-table-excel-wrap adm-table-excel-wrap--orders" dir="rtl">
+        <div className="adm-orders-table-host mobile-table-wrapper adm-table-excel-wrap adm-table-excel-wrap--orders">
         <table className="adm-table-excel adm-table-excel--orders adm-table-excel--orders-v2">
           <thead>
             <tr>
@@ -913,15 +1013,16 @@ export function OrdersListShell({
         </table>
       </div>
 
-      <OrdersListPaginationBar pagination={pagination} label={paginationLabel} />
+        <OrdersListPaginationBar pagination={pagination} label={paginationLabel} />
 
-      <p className="adm-orders-hint">
-        {canEditOrders
-          ? viewerIsAdmin
-            ? "לחיצה על שורה פותחת עריכת הזמנה (חלון)."
-            : "לחיצה על שורה פותחת עריכה, או מודל בקשת אישור להזמנות מוכנות/מבוטלות לפי הרשאות."
-          : "לחיצה על שורה פותחת את דף ההזמנה."}
-      </p>
+        <p className="adm-orders-hint">
+          {canEditOrders
+            ? viewerIsAdmin
+              ? "לחיצה על שורה פותחת עריכת הזמנה (חלון)."
+              : "לחיצה על שורה פותחת עריכה, או מודל בקשת אישור להזמנות מוכנות/מבוטלות לפי הרשאות."
+            : "לחיצה על שורה פותחת את דף ההזמנה."}
+        </p>
+      </div>
 
       <OrderEditLockGateModal
         open={!!lockModal}

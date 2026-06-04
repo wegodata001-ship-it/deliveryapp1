@@ -1,5 +1,4 @@
 import { unstable_cache } from "next/cache";
-import { cache } from "react";
 import { OS } from "@/lib/order-status-slugs";
 import type { AppUser } from "@/lib/admin-auth";
 import { isAdminUser } from "@/lib/admin-auth";
@@ -7,6 +6,9 @@ import { prisma } from "@/lib/prisma";
 import { formatIlsDisplay } from "@/lib/money-format";
 import { perfError, perfTimeEnd, perfTimeStart, withPerfTimer } from "@/lib/perf-log";
 import { DASHBOARD_HIGH_BALANCE_TAG, DASHBOARD_STATS_TAG } from "@/lib/kpi-cache-tags";
+import { resolveCountryScopeFromCode } from "@/lib/country-data-scope";
+import { DEFAULT_WORK_COUNTRY, type WorkCountryCode } from "@/lib/work-country";
+import type { CountryScope } from "@/lib/country-data-scope";
 
 export type DashboardStatsRange = { fromStart: Date; toEnd: Date };
 
@@ -76,6 +78,7 @@ async function queryOrderDashboardAggregates(
   toEnd: Date,
   todayStart: Date,
   todayEnd: Date,
+  scope: CountryScope,
 ): Promise<{
   ordersInRange: number;
   openOrdersInRange: number;
@@ -86,19 +89,24 @@ async function queryOrderDashboardAggregates(
     const orderDateFilter = { gte: fromStart, lte: toEnd };
     const todayFilter = { gte: todayStart, lte: todayEnd };
 
+    const countryWhere = {
+      countryCode: scope.workCountry,
+      sourceCountry: scope.sourceCountry,
+    };
     const [ordersInRange, openOrdersInRange, ordersToday, unpaidOrders] = await Promise.all([
       prisma.order.count({
-        where: { ...orderActiveWhere, orderDate: orderDateFilter },
+        where: { ...orderActiveWhere, ...countryWhere, orderDate: orderDateFilter },
       }),
       prisma.order.count({
-        where: { ...orderActiveWhere, status: OS.OPEN, orderDate: orderDateFilter },
+        where: { ...orderActiveWhere, ...countryWhere, status: OS.OPEN, orderDate: orderDateFilter },
       }),
       prisma.order.count({
-        where: { ...orderActiveWhere, orderDate: todayFilter },
+        where: { ...orderActiveWhere, ...countryWhere, orderDate: todayFilter },
       }),
       prisma.order.count({
         where: {
           ...orderActiveWhere,
+          ...countryWhere,
           status: { notIn: [OS.COMPLETED, OS.CANCELLED] },
           payments: { none: { isPaid: true } },
         },
@@ -120,6 +128,7 @@ async function queryPaymentDashboardAggregates(
   todayStart: Date,
   todayEnd: Date,
   olderThan24h: Date,
+  scope: CountryScope,
 ): Promise<{
   paymentsReceivedCount: number;
   pendingPaymentsCount: number;
@@ -130,23 +139,24 @@ async function queryPaymentDashboardAggregates(
     const paymentDateFilter = { gte: fromStart, lte: toEnd };
     const todayFilter = { gte: todayStart, lte: todayEnd };
 
+    const payCountry = { countryCode: scope.workCountry };
     const [paymentsReceivedCount, pendingPaymentsCount, paymentsToday, paymentsTodaySum, pendingPaymentsOlderThan24h] =
       await Promise.all([
         prisma.payment.count({
-          where: { isPaid: true, paymentDate: paymentDateFilter },
+          where: { ...payCountry, isPaid: true, paymentDate: paymentDateFilter },
         }),
         prisma.payment.count({
-          where: { isPaid: false, paymentDate: paymentDateFilter },
+          where: { ...payCountry, isPaid: false, paymentDate: paymentDateFilter },
         }),
         prisma.payment.count({
-          where: { isPaid: true, paymentDate: todayFilter },
+          where: { ...payCountry, isPaid: true, paymentDate: todayFilter },
         }),
         prisma.payment.aggregate({
-          where: { isPaid: true, paymentDate: todayFilter },
+          where: { ...payCountry, isPaid: true, paymentDate: todayFilter },
           _sum: { totalIlsWithVat: true, amountIls: true },
         }),
         prisma.payment.count({
-          where: { isPaid: false, createdAt: { lt: olderThan24h } },
+          where: { ...payCountry, isPaid: false, createdAt: { lt: olderThan24h } },
         }),
       ]);
 
@@ -174,8 +184,10 @@ async function queryUserDashboardAggregates(): Promise<{ registeredUsers: number
   });
 }
 
-/** שאילתה כבדה — Suspense נפרד; ללא deletedAt על Order */
-export async function countHighBalanceCustomers(): Promise<number> {
+/** שאילתה כבדה — Suspense נפרד; לפי מדינת עבודה בלבד */
+export async function countHighBalanceCustomers(
+  workCountry: WorkCountryCode = DEFAULT_WORK_COUNTRY,
+): Promise<number> {
   return withPerfTimer("dashboard.query.highBalance", async () => {
     const rows = await prisma.$queryRaw<[{ count: bigint }]>`
       SELECT COUNT(*)::bigint AS count
@@ -188,13 +200,13 @@ export async function countHighBalanceCustomers(): Promise<number> {
           COALESCE((
             SELECT SUM(COALESCE(o."totalIlsWithVat", o."totalIls", 0)::numeric)
             FROM "Order" o
-            WHERE o."customerId" = c.id AND o."isActive" = true
+            WHERE o."customerId" = c.id AND o."isActive" = true AND o."countryCode" = ${workCountry}::"WorkCountryCode"
           ), 0)
           -
           COALESCE((
             SELECT SUM(COALESCE(p."totalIlsWithVat", p."amountIls", 0)::numeric)
             FROM "Payment" p
-            WHERE p."customerId" = c.id AND p."isPaid" = true
+            WHERE p."customerId" = c.id AND p."isPaid" = true AND p."countryCode" = ${workCountry}::"WorkCountryCode"
           ), 0)
         ) > ${HIGH_BALANCE_THRESHOLD_ILS}
       ) AS sub
@@ -203,26 +215,27 @@ export async function countHighBalanceCustomers(): Promise<number> {
   });
 }
 
-const getHighBalanceCached = unstable_cache(
-  async () => {
-    try {
-      return await countHighBalanceCustomers();
-    } catch (error) {
-      perfError("dashboard.query.highBalance.failed", error);
-      return 0;
-    }
-  },
-  ["wego-dashboard-high-balance-v2"],
-  { revalidate: DASHBOARD_CACHE_SECONDS, tags: [DASHBOARD_HIGH_BALANCE_TAG] },
-);
-
-export const getDashboardHighBalanceCount = cache(async (): Promise<number> => {
-  return getHighBalanceCached();
-});
+export async function getDashboardHighBalanceCount(
+  workCountry: WorkCountryCode = DEFAULT_WORK_COUNTRY,
+): Promise<number> {
+  return unstable_cache(
+    async () => {
+      try {
+        return await countHighBalanceCustomers(workCountry);
+      } catch (error) {
+        perfError("dashboard.query.highBalance.failed", error);
+        return 0;
+      }
+    },
+    ["wego-dashboard-high-balance-v3", workCountry],
+    { revalidate: DASHBOARD_CACHE_SECONDS, tags: [DASHBOARD_HIGH_BALANCE_TAG] },
+  )();
+}
 
 async function loadDashboardStatsCore(
   range: DashboardStatsRange,
   showStaff: boolean,
+  scope: CountryScope,
 ): Promise<Omit<DashboardStats, "alerts"> & { alerts: Omit<DashboardStats["alerts"], "highBalanceCustomers"> }> {
   const label = perfTimeStart("dashboard.total");
   try {
@@ -233,8 +246,8 @@ async function loadDashboardStatsCore(
     const olderThan24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
     const [orders, payments, users] = await Promise.all([
-      queryOrderDashboardAggregates(fromStart, toEnd, todayStart, todayEnd),
-      queryPaymentDashboardAggregates(fromStart, toEnd, todayStart, todayEnd, olderThan24h),
+      queryOrderDashboardAggregates(fromStart, toEnd, todayStart, todayEnd, scope),
+      queryPaymentDashboardAggregates(fromStart, toEnd, todayStart, todayEnd, olderThan24h, scope),
       showStaff ? queryUserDashboardAggregates() : Promise.resolve({ registeredUsers: 0, activeUsers: 0 }),
     ]);
 
@@ -263,9 +276,10 @@ async function loadDashboardStatsCore(
 export async function getDashboardStats(
   range: DashboardStatsRange,
   me: AppUser,
+  workCountry: WorkCountryCode = DEFAULT_WORK_COUNTRY,
 ): Promise<DashboardStats> {
-  const core = await getDashboardStatsCore(range, me);
-  const highBalanceCustomers = await getDashboardHighBalanceCount();
+  const core = await getDashboardStatsCore(range, me, workCountry);
+  const highBalanceCustomers = await getDashboardHighBalanceCount(workCountry);
   return {
     ...core,
     alerts: { ...core.alerts, highBalanceCustomers },
@@ -275,6 +289,7 @@ export async function getDashboardStats(
 export async function getDashboardStatsCore(
   range: DashboardStatsRange,
   me: AppUser,
+  workCountry: WorkCountryCode = DEFAULT_WORK_COUNTRY,
 ): Promise<
   Omit<DashboardStats, "alerts"> & { alerts: Omit<DashboardStats["alerts"], "highBalanceCustomers"> }
 > {
@@ -282,7 +297,7 @@ export async function getDashboardStatsCore(
   const toIso = range.toEnd.toISOString();
   const showStaff = isAdminUser(me) || me.permissionKeys.includes("manage_users");
   try {
-    return await getDashboardStatsCached(fromIso, toIso, showStaff);
+    return await getDashboardStatsCached(fromIso, toIso, showStaff, workCountry);
   } catch (error) {
     perfError("dashboard.getDashboardStatsCore.failed", error);
     return { ...EMPTY_CORE };
@@ -290,17 +305,18 @@ export async function getDashboardStatsCore(
 }
 
 const getDashboardStatsCached = unstable_cache(
-  async (fromIso: string, toIso: string, showStaff: boolean) => {
+  async (fromIso: string, toIso: string, showStaff: boolean, workCountry: WorkCountryCode) => {
     try {
       return await loadDashboardStatsCore(
         { fromStart: new Date(fromIso), toEnd: new Date(toIso) },
         showStaff,
+        resolveCountryScopeFromCode(workCountry),
       );
     } catch (error) {
       perfError("dashboard.cache.load.failed", error);
       return { ...EMPTY_CORE };
     }
   },
-  ["wego-dashboard-stats-v3"],
+  ["wego-dashboard-stats-v4"],
   { revalidate: DASHBOARD_CACHE_SECONDS, tags: [DASHBOARD_STATS_TAG] },
 );

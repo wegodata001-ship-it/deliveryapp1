@@ -119,6 +119,17 @@ export function prevWeekCode(code: string): string | null {
   return getPrevAhWeek(code)?.code ?? null;
 }
 
+/**
+ * דוח יתרות: כשבוחרים שבוע AH-N — ה-snapshot הוא סוף שבוע AH-(N-1), לא תנועות של N.
+ */
+export function balancesSnapshotToYmd(selectedWeekCode: string | null | undefined): string {
+  const norm = normalizeAhWeekCode(selectedWeekCode);
+  if (!norm) return "";
+  const prev = getPrevAhWeek(norm);
+  if (prev) return prev.to;
+  return getAhWeekRange(norm)?.to ?? "";
+}
+
 export function nextWeekCode(code: string): string | null {
   return getNextAhWeek(code)?.code ?? null;
 }
@@ -179,8 +190,15 @@ export function parseDateFilterFromSearchParams(
     toYmd = t;
   }
 
+  if (knownWeek) {
+    const wr = resolveBaseWeek(knownWeek);
+    fromYmd = wr.from;
+    toYmd = wr.to;
+  }
+
   const weekCode = knownWeek ?? getWeekCodeForLocalDate(parseLocalDate(fromYmd));
-  const ahWeekSelect = getAhWeekCodeFromDateRange(fromYmd, toYmd) ?? (knownWeek ? knownWeek : "");
+  const ahWeekSelect =
+    knownWeek ?? getAhWeekCodeFromDateRange(fromYmd, toYmd) ?? "";
 
   return {
     weekCode,
@@ -241,8 +259,15 @@ export function parseOrdersListDateFilterFromSearchParams(
     toYmd = t;
   }
 
+  if (knownWeek) {
+    const wr = resolveBaseWeek(knownWeek);
+    fromYmd = wr.from;
+    toYmd = wr.to;
+  }
+
   const weekCode = knownWeek ?? getWeekCodeForLocalDate(parseLocalDate(fromYmd));
-  const ahWeekSelect = getAhWeekCodeFromDateRange(fromYmd, toYmd) ?? (knownWeek ? knownWeek : "");
+  const ahWeekSelect =
+    knownWeek ?? getAhWeekCodeFromDateRange(fromYmd, toYmd) ?? "";
 
   return {
     weekCode,

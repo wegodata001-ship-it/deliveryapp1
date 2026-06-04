@@ -12,6 +12,7 @@ import {
   type OrdersSourceFilters,
   type OrdersSourceListQuery,
 } from "@/lib/orders-source-table";
+import { DEFAULT_WORK_COUNTRY, type WorkCountryCode } from "@/lib/work-country";
 import { isValidOrderStatusId, resolveOrderStatusFromDisplayText } from "@/lib/order-status-registry";
 import { prisma } from "@/lib/prisma";
 
@@ -28,17 +29,18 @@ export type OrdersSourceListPayload = Awaited<ReturnType<typeof listOrdersSource
 };
 
 export async function listOrdersSourceTableAction(
-  query: OrdersSourceListQuery & { search?: string },
+  query: OrdersSourceListQuery & { search?: string; workCountry?: WorkCountryCode },
 ): Promise<OrdersSourceListPayload> {
   await ensureOrdersTableAccess();
-  const { search, ...rest } = query;
+  const { search, workCountry = DEFAULT_WORK_COUNTRY, ...rest } = query;
   const filters: OrdersSourceFilters = {
     ...(rest.filters ?? {}),
+    workCountry,
     ...(search?.trim() ? { search: search.trim() } : {}),
   };
   const [list, kpis] = await Promise.all([
     listOrdersSourceTable({ ...rest, filters }),
-    getOrdersSourceKpisCached(),
+    getOrdersSourceKpisCached(workCountry),
   ]);
   return { ...list, kpis };
 }
@@ -81,14 +83,15 @@ export async function updateOrderStatusSourceAction(
 export type OrdersExportKind = "excel" | "pdf";
 
 export async function exportOrdersSourceAction(
-  query: OrdersSourceListQuery & { search?: string },
+  query: OrdersSourceListQuery & { search?: string; workCountry?: WorkCountryCode },
   kind: OrdersExportKind,
 ): Promise<{ ok: true; base64: string; filename: string; mime: string } | { ok: false; error: string }> {
   try {
     await ensureOrdersTableAccess();
-    const { search, ...rest } = query;
+    const { search, workCountry = DEFAULT_WORK_COUNTRY, ...rest } = query;
     const filters: OrdersSourceFilters = {
       ...(rest.filters ?? {}),
+      workCountry,
       ...(search?.trim() ? { search: search.trim() } : {}),
     };
     const { page: _page, limit: _limit, ...exportQuery } = rest;

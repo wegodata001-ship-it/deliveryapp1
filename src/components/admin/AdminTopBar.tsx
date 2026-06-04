@@ -18,6 +18,7 @@ function titleForPath(pathname: string): string {
   if (pathname === "/admin/import") return "ייבוא Excel";
   if (pathname === "/admin/payments/new") return "קליטת תשלום";
   if (pathname === "/admin/receipt-control") return "בקרת תקבולים";
+  if (pathname === "/admin/customers" || pathname.startsWith("/admin/customers/")) return "לקוחות";
   if (pathname === "/admin/customer-card") return "כרטסת לקוח";
   if (pathname === "/admin/balances") return "יתרות";
   if (pathname === "/admin/source-tables") return "טבלאות מקור";

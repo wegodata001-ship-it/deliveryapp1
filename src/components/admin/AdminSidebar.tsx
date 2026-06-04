@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { getActiveWorkWeekRange } from "@/lib/active-work-week";
+import { balancesSnapshotToYmd } from "@/lib/work-week";
 import { useHydratedSearchParams } from "@/lib/use-hydrated-search-params";
 import type { NavIconId, NavItemDef, NavSectionDef } from "@/lib/sidebar-nav";
 import {
@@ -84,6 +86,26 @@ const ORDERS_LIST_KEYS = [
   "amountMax",
 ] as const;
 
+const ACTIVE_WEEK_NAV_PATHS = new Set(["/admin/orders", "/admin/balances"]);
+
+function applyActiveWorkWeekToParams(out: URLSearchParams, pathname: string): void {
+  const active = getActiveWorkWeekRange();
+  out.set("week", active.weekCode);
+  out.set("from", active.fromYmd);
+  out.set("to", active.toYmd);
+  if (pathname === "/admin/orders") {
+    out.set("ordersWeek", active.weekCode);
+    out.set("ordersFrom", active.fromYmd);
+    out.set("ordersTo", active.toYmd);
+    out.delete("ordersPreset");
+    out.delete("preset");
+  }
+  if (pathname === "/admin/balances") {
+    out.set("to", balancesSnapshotToYmd(active.weekCode));
+    out.delete("upto");
+  }
+}
+
 function resolveNavHref(item: NavItemDef, sp: URLSearchParams): string {
   const globals = new URLSearchParams();
   for (const key of ["week", "from", "to", "country"] as const) {
@@ -107,11 +129,17 @@ function resolveNavHref(item: NavItemDef, sp: URLSearchParams): string {
   if (item.href.startsWith("/admin/")) {
     const u = new URL(item.href, "http://local.invalid");
     const out = new URLSearchParams(u.search);
-    for (const [k, v] of globals.entries()) out.set(k, v);
-    if (u.pathname === "/admin/orders" || u.pathname.startsWith("/admin/orders/")) {
-      for (const key of ORDERS_LIST_KEYS) {
-        const v = sp.get(key);
-        if (v) out.set(key, v);
+    if (ACTIVE_WEEK_NAV_PATHS.has(u.pathname)) {
+      applyActiveWorkWeekToParams(out, u.pathname);
+      const country = sp.get("country");
+      if (country) out.set("country", country);
+    } else {
+      for (const [k, v] of globals.entries()) out.set(k, v);
+      if (u.pathname === "/admin/orders" || u.pathname.startsWith("/admin/orders/")) {
+        for (const key of ORDERS_LIST_KEYS) {
+          const v = sp.get(key);
+          if (v) out.set(key, v);
+        }
       }
     }
     const qs = out.toString();

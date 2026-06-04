@@ -1,10 +1,9 @@
-import type { PaymentMethod } from "@prisma/client";
+import type { PaymentMethod, PaymentRecordStatus } from "@prisma/client";
+import { parsePaymentLinesFromNotes } from "@/lib/ledger-payment-detail";
 import {
   createDefaultPaymentLine,
   type PaymentLine,
-  type PaymentLineCurrency,
   type PaymentLineMethod,
-  type PaymentLineVatMode,
 } from "@/lib/payment-updated";
 import { formatLocalHm, formatLocalYmd } from "@/lib/work-week";
 import { prisma } from "@/lib/prisma";
@@ -18,6 +17,8 @@ export type PaymentEntryPayload = {
   paymentTimeHm: string;
   dollarRate: string | null;
   commissionPercent: string;
+  status: PaymentRecordStatus;
+  cancelReason: string | null;
   customer: {
     id: string;
     displayName: string;
@@ -30,78 +31,12 @@ export type PaymentEntryPayload = {
   lines: PaymentLine[];
 };
 
-function mapCurrencyToken(token: string): PaymentLineCurrency {
-  return token === "$" ? "USD" : "ILS";
-}
-
-function mapVatModeToken(token: string): PaymentLineVatMode {
-  if (token === "EXEMPT" || token === "BEFORE_VAT" || token === "INCLUDING_VAT") return token;
-  return "INCLUDING_VAT";
-}
-
-function mapMethodToken(token: string): PaymentLineMethod {
-  if (token === "CREDIT" || token === "BANK_TRANSFER" || token === "CASH" || token === "CHECK" || token === "OTHER")
-    return token;
-  return "CASH";
-}
-
 function mapPrismaMethod(m: PaymentMethod | null | undefined): PaymentLineMethod {
   if (m === "CREDIT") return "CREDIT";
-  if (m === "BANK_TRANSFER") return "BANK_TRANSFER";
+  if (m === "BANK_TRANSFER" || m === "BANK_TRANSFER_DONE") return "BANK_TRANSFER";
   if (m === "CASH") return "CASH";
   if (m === "CHECK") return "CHECK";
   return "OTHER";
-}
-
-function parseAmountToken(raw: string): number | "" {
-  const n = Number(raw.replace(/,/g, "").trim());
-  return Number.isFinite(n) && n > 0 ? n : "";
-}
-
-function parseLinesFromNotes(notes: string | null | undefined): PaymentLine[] {
-  const txt = (notes ?? "").trim();
-  if (!txt) return [];
-  const lines = txt
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l.startsWith("#"));
-
-  const parsed: PaymentLine[] = [];
-  for (const line of lines) {
-    const dualUsd = line.match(/USD\s+\$([\d.,]+)/i);
-    const dualIls = line.match(/ILS\s+₪([\d.,]+)/i);
-    if (dualUsd || dualIls) {
-      const usdMethod = line.match(/USD\s+\$[\d.,]+\s·\s([A-Z_]+)/)?.[1];
-      const ilsMethod = line.match(/ILS\s+₪[\d.,]+\s·\s([A-Z_]+)/)?.[1];
-      const vatMatch = line.match(/vatMode=([A-Z_]+)/)?.[1];
-      parsed.push({
-        ...createDefaultPaymentLine(`hist_${parsed.length + 1}`),
-        usdAmount: dualUsd ? parseAmountToken(dualUsd[1] ?? "0") : "",
-        ilsAmount: dualIls ? parseAmountToken(dualIls[1] ?? "0") : "",
-        usdPaymentMethod: mapMethodToken(usdMethod ?? "CASH"),
-        ilsPaymentMethod: mapMethodToken(ilsMethod ?? "CASH"),
-        vatMode: mapVatModeToken(vatMatch ?? "INCLUDING_VAT"),
-        usdNote: line.match(/usdNote=([^|]+)/)?.[1]?.trim() ?? "",
-        ilsNote: line.match(/ilsNote=([^|]+)/)?.[1]?.trim() ?? "",
-      });
-      continue;
-    }
-
-    const m = line.match(/^#\d+\s+([$₪])\s?([\d.,]+)\s·\s([A-Z_]+)\s·\s([A-Z_]+)(?:\s\|\s.*)?$/);
-    if (!m) continue;
-    const noteMatch = line.match(/\|\s*note=(.*)$/);
-    const cur = mapCurrencyToken(m[1] ?? "$");
-    const amt = parseAmountToken(m[2] ?? "0");
-    const base = createDefaultPaymentLine(`hist_${parsed.length + 1}`);
-    parsed.push({
-      ...base,
-      vatMode: mapVatModeToken(m[3] ?? "INCLUDING_VAT"),
-      ...(cur === "USD"
-        ? { usdAmount: amt, usdPaymentMethod: mapMethodToken(m[4] ?? "CASH"), usdNote: noteMatch?.[1]?.trim() ?? "" }
-        : { ilsAmount: amt, ilsPaymentMethod: mapMethodToken(m[4] ?? "CASH"), ilsNote: noteMatch?.[1]?.trim() ?? "" }),
-    });
-  }
-  return parsed;
 }
 
 function lineFromDbRow(row: {
@@ -142,6 +77,8 @@ function transformPaymentEntryRow(row: {
   usdNote: string | null;
   ilsNote: string | null;
   notes: string | null;
+  status: PaymentRecordStatus;
+  cancelReason: string | null;
   customerId: string | null;
   customer: {
     id: string;
@@ -161,7 +98,7 @@ function transformPaymentEntryRow(row: {
     const cust = row.customer;
     if (!cust || cust.deletedAt != null) return null;
 
-    const parsedLines = parseLinesFromNotes(row.notes);
+    const parsedLines = parsePaymentLinesFromNotes(row.notes);
     const paymentDate = row.paymentDate ?? new Date();
     const cpNum = Number(row.commissionPercent ?? 0);
     const commissionPercentStr = Number.isFinite(cpNum) && cpNum > 0 ? String(cpNum) : "0";
@@ -175,6 +112,8 @@ function transformPaymentEntryRow(row: {
       paymentTimeHm: formatLocalHm(paymentDate),
       dollarRate: Number(row.exchangeRate ?? 0) > 0 ? Number(row.exchangeRate).toFixed(4) : null,
       commissionPercent: commissionPercentStr,
+      status: row.status,
+      cancelReason: row.cancelReason?.trim() || null,
       customer: {
         id: row.customerId,
         displayName: cust.displayName ?? "",
@@ -206,6 +145,8 @@ const paymentEntrySelect = {
   usdNote: true,
   ilsNote: true,
   notes: true,
+  status: true,
+  cancelReason: true,
   customerId: true,
   customer: {
     select: {
@@ -234,6 +175,18 @@ export async function loadPaymentEntryPayload(id: string): Promise<PaymentEntryP
       where: { id: trimmed, customerId: { not: null } },
       select: paymentEntrySelect,
     });
+    if (row && !row.paymentCode && row.paymentNumber != null) {
+      const primary = await prisma.payment.findFirst({
+        where: {
+          paymentNumber: row.paymentNumber,
+          paymentCode: { not: null },
+          customerId: { not: null },
+        },
+        select: paymentEntrySelect,
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      });
+      if (primary) row = primary;
+    }
   } finally {
     paymentsPerfTimeEnd("payments.entry.db");
   }

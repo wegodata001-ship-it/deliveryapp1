@@ -5,7 +5,7 @@ import { OrderEditRequestStatus, PaymentMethod, Prisma } from "@prisma/client";
 import { listOrderStatusTags } from "@/lib/order-status-registry";
 import { OS } from "@/lib/order-status-slugs";
 import { revalidatePath, revalidateTag } from "next/cache";
-import { revalidateAllKpiCaches } from "@/lib/kpi-cache-tags";
+import { revalidateAllKpiCaches } from "@/lib/kpi-cache-revalidate";
 import { recordActivityAudit } from "@/lib/activity-audit";
 import {
   getCurrentUser,
@@ -57,11 +57,12 @@ import {
 } from "@/lib/orders-next-number";
 import { isDebtWithdrawalOrderStatus } from "@/lib/debt-withdrawal-order";
 import { prisma } from "@/lib/prisma";
-import { allocateNextPaymentCapture } from "@/lib/payment-capture-code";
+import { allocateNextPaymentCapture, resolvePaymentWorkCountry } from "@/lib/payment-capture-code";
 import { ensureOnce } from "@/lib/ensure-tables-once";
 import { parseSplitPaymentMethodRaw } from "@/lib/order-capture-payment-methods";
 import { getSelectedCountriesForOrdersInternal } from "@/app/admin/settings/actions";
 import { ORDER_COUNTRY_CODES, coerceOrderCountryForForm, normalizeOrderSourceCountry, type OrderCountryCode } from "@/lib/order-countries";
+import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
 import { prismaVatRatePercent } from "@/lib/vat-prisma";
 import { computeCustomerNamePatches, primaryCustomerDisplayName } from "@/lib/customer-names";
 import {
@@ -455,14 +456,19 @@ export async function fetchOrderForPaymentContextAction(
   };
 }
 
-export async function previewPaymentCodeForCaptureAction(): Promise<
-  { ok: true; code: string } | { ok: false; error: string }
-> {
+export async function previewPaymentCodeForCaptureAction(input?: {
+  orderId?: string | null;
+  customerId?: string | null;
+}): Promise<{ ok: true; code: string } | { ok: false; error: string }> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["receive_payments"])) {
     return { ok: false, error: "אין הרשאה" };
   }
-  return { ok: true, code: (await allocateNextPaymentCapture()).code };
+  const wc = await resolvePaymentWorkCountry({
+    orderId: input?.orderId,
+    customerId: input?.customerId,
+  });
+  return { ok: true, code: (await allocateNextPaymentCapture(wc)).code };
 }
 
 export async function listPaymentLocationsForPaymentAction(): Promise<PaymentLocationOptionRow[]> {
@@ -692,7 +698,8 @@ export async function capturePaymentAction(form: {
     amountUsd = payUsdEst;
   }
 
-  const allocated = await allocateNextPaymentCapture();
+  const payWorkCountry = await resolvePaymentWorkCountry({ orderId: oid || null, customerId: cid });
+  const allocated = await allocateNextPaymentCapture(payWorkCountry);
   const paymentCode = allocated.code;
   const weekCode = orderWeekCode ?? getWeekCodeForLocalDate(paymentDate);
   const paymentType: "ORDER_PAYMENT" | "GENERAL_PAYMENT" = oid ? "ORDER_PAYMENT" : "GENERAL_PAYMENT";
@@ -701,6 +708,7 @@ export async function capturePaymentAction(form: {
 
   const pay = await prisma.payment.create({
     data: {
+      countryCode: payWorkCountry,
       paymentCode,
       paymentNumber: allocated.paymentNumber,
       orderId: oid || null,
@@ -1315,7 +1323,12 @@ async function captureOrderActionInner(
           : loadCaptureSettingsCountries(),
         requestedOrderNumber && requestedOrderNumber !== "—"
           ? Promise.resolve(null)
-          : capturePerfTimed("capture.generateOrderNumber", () => generateNextOrderNumber(wcEarly)),
+          : capturePerfTimed("capture.generateOrderNumber", () =>
+              generateNextOrderNumber(
+                wcEarly,
+                workCountryFromOrderSourceCountry(form.sourceCountry),
+              ),
+            ),
         requestedOrderNumber && requestedOrderNumber !== "—"
           ? prisma.order.findUnique({
               where: { orderNumber: requestedOrderNumber },
@@ -1487,6 +1500,7 @@ async function captureOrderActionInner(
           customerTypeSnapshot: typeSnap,
           weekCode,
           sourceCountry: sourceCountryCreate,
+          countryCode: workCountryFromOrderSourceCountry(sourceCountryCreate),
           orderDate,
           orderExecutionDate,
           intakeDateTime,

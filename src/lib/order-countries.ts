@@ -1,4 +1,4 @@
-export const ORDER_COUNTRY_CODES = ["TURKEY", "CHINA", "UAE"] as const;
+export const ORDER_COUNTRY_CODES = ["TURKEY", "CHINA", "UAE", "JORDAN"] as const;
 
 export type OrderCountryCode = (typeof ORDER_COUNTRY_CODES)[number];
 
@@ -17,6 +17,7 @@ export function normalizeOrderSourceCountry(raw: string | null | undefined): Ord
   if (alnum === "TURKEY" || alnum === "TURKIYE") return "TURKEY";
   if (alnum === "CHINA" || alnum === "CN") return "CHINA";
   if (alnum === "UAE" || alnum === "ARE" || alnum === "EMIRATES") return "UAE";
+  if (alnum === "JORDAN" || alnum === "JO") return "JORDAN";
   return null;
 }
 
@@ -34,6 +35,7 @@ const LABELS_HE: Record<OrderCountryCode, string> = {
   TURKEY: "🇹🇷 טורקיה",
   CHINA: "🇨🇳 סין",
   UAE: "🇦🇪 אמירויות",
+  JORDAN: "🇯🇴 ירדן",
 };
 
 export function orderCountryLabel(code: string | null | undefined): string {
@@ -66,6 +68,8 @@ export function orderCountryBadgeClass(code: string | null | undefined): string 
       return "adm-oc-badge adm-oc-badge--china";
     case "UAE":
       return "adm-oc-badge adm-oc-badge--uae";
+    case "JORDAN":
+      return "adm-oc-badge adm-oc-badge--jordan";
     default:
       return "adm-oc-badge adm-oc-badge--muted";
   }
