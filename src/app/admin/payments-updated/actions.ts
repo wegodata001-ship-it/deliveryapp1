@@ -9,6 +9,7 @@ import { assertCreatedByUserExists, SessionUserInvalidError } from "@/lib/sessio
 import { computeFromUsdAmount } from "@/lib/financial-calc";
 import { loadFinanceSettingsSerialized } from "@/lib/financial-settings";
 import { logFinanceSaveTarget } from "@/lib/finance-log";
+import { logPaymentAllocationPreSave } from "@/lib/payment-allocation-debug";
 import { allocatePaymentAcrossOrders, roundMoney2, toPaymentIntakeBases } from "@/lib/payment-intake";
 import {
   computePaymentOveragePreview,
@@ -23,6 +24,7 @@ import { paymentIntakeOrderDateThroughAhWeekEnd } from "@/lib/payment-intake-ord
 import { validatePaymentCheckLines } from "@/lib/payment-checks";
 import { prisma } from "@/lib/prisma";
 import { allocateNextPaymentCapture, resolvePaymentWorkCountry } from "@/lib/payment-capture-code";
+import { normalizeWorkCountryCode } from "@/lib/work-country";
 import { formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate, parseLocalDateTime } from "@/lib/work-week";
 import {
   calculatePaymentLine,
@@ -179,6 +181,8 @@ export type PaymentUpdatedSaveInput = {
   draftPhone?: string | null;
   /** כאשר true — עודף מעל החוב הפתוח נשמר כתשלום כללי (יתרת זכות) */
   saveSurplusAsCredit?: boolean;
+  /** מדינת קליטה מהמסך — מקצה TR-P / CN-P / AE-P נפרד */
+  workCountry?: string | null;
 };
 
 const ALLOC_EPS = 0.02;
@@ -437,10 +441,33 @@ export async function savePaymentUpdatedAction(
     if (forceCreditPayment) {
       unallocatedUsd = totals.totalUsd;
       allocationEntries = [];
+      logPaymentAllocationPreSave({
+        source: "payment-save-server",
+        customerId: cid,
+        customerLoaded: true,
+        ordersCount: orders.length,
+        paymentAmountUsd: totals.totalUsd,
+        selectedOrderIds: form.includedOrderIds ?? null,
+        weekCode: weekCode,
+        bases,
+        prioritizedOrderIds: prioritized,
+        forceCustomerCreditPayment: true,
+      });
     } else {
-      const alloc = allocatePaymentAcrossOrders(bases, totals.totalUsd, prioritized);
-      unallocatedUsd = alloc.unallocatedUsd;
-      allocationEntries = [...alloc.byOrderId.entries()].filter(([, amt]) => amt > ALLOC_EPS);
+      const allocDiag = logPaymentAllocationPreSave({
+        source: "payment-save-server",
+        customerId: cid,
+        customerLoaded: true,
+        ordersCount: orders.length,
+        paymentAmountUsd: totals.totalUsd,
+        selectedOrderIds: form.includedOrderIds ?? null,
+        weekCode: weekCode,
+        bases,
+        prioritizedOrderIds: prioritized,
+        forceCustomerCreditPayment: false,
+      });
+      unallocatedUsd = allocDiag.unallocatedUsd;
+      allocationEntries = allocDiag.allocationTargets.map((t) => [t.orderId, t.amountUsd] as [string, number]);
     }
     if (allocationEntries.length === 0 && !((form.saveSurplusAsCredit || forceCreditPayment) && unallocatedUsd > ALLOC_EPS)) {
       return { ok: false, error: "אין יעד להקצאה לסכום הדולר" };
@@ -522,7 +549,9 @@ export async function savePaymentUpdatedAction(
     .join("\n");
 
   const firstOrderId = allocationEntries[0]?.[0] ?? null;
-  const payWorkCountry = await resolvePaymentWorkCountry({ orderId: firstOrderId, customerId: cid });
+  const payWorkCountry =
+    normalizeWorkCountryCode(form.workCountry) ??
+    (await resolvePaymentWorkCountry({ orderId: firstOrderId, customerId: cid }));
   const allocated = await allocateNextPaymentCapture(payWorkCountry);
   const primaryCode = allocated.code;
   let savedCount = 0;

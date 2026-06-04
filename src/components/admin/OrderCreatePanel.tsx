@@ -116,36 +116,51 @@ async function loadCustomerExtrasFast(customerId: string): Promise<CustomerExtra
   return (await res.json()) as CustomerExtrasPayload | null;
 }
 
-async function loadCustomerBalanceFast(
-  customerId: string,
-): Promise<{ balanceUsdDisplay: string; balanceUsdNegative: boolean } | null> {
-  const res = await fetch(`/api/customers/balance?id=${encodeURIComponent(customerId)}`, {
-    credentials: "include",
-  });
-  if (!res.ok) return null;
-  return (await res.json()) as { balanceUsdDisplay: string; balanceUsdNegative: boolean } | null;
+function balanceUiFromSnapshot(balanceUsd: number | undefined): {
+  balanceUsdDisplay: string;
+  balanceUsdNegative: boolean;
+} {
+  const n = balanceUsd ?? 0;
+  return {
+    balanceUsdDisplay: n.toLocaleString("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }),
+    balanceUsdNegative: n < -0.005,
+  };
 }
 
 function extrasFromCustomerRow(row: CustomerSearchRow): CustomerExtrasPayload | null {
-  if (row.nameAr === undefined || row.nameEn === undefined) return null;
   const phone = row.phone ?? row.phone2 ?? null;
   const indexLabel = row.oldCustomerCode?.trim() || row.code?.trim() || null;
+  const bal = balanceUiFromSnapshot(row.balanceUsd);
   return {
-    nameEn: row.nameEn ?? row.nameHe ?? null,
+    nameEn: row.nameEn ?? row.nameHe ?? row.label ?? null,
     nameAr: row.nameAr ?? null,
     phone,
     indexLabel,
     city: row.city?.trim() || null,
     address: row.address?.trim() || null,
-    balanceUsdDisplay: "0.00",
-    balanceUsdNegative: false,
+    ...bal,
   };
 }
 
 import {
+  findCustomerCaptureIndexExact,
+  invalidateCustomerCaptureIndex,
+  preloadCustomerCaptureIndex,
+  searchCustomerCaptureIndexLocal,
+} from "@/lib/customer-capture-index";
+import { invalidateCustomerSearchClientCache } from "@/lib/customer-search-client";
+import {
+  CUSTOMER_CODE_SEARCH_DEBOUNCE_MS,
+  CUSTOMER_NAME_SEARCH_DEBOUNCE_MS,
+  pickAutoCustomerHit,
   resolveCustomerFastClient,
+  searchCustomerCodeExactClient,
   searchCustomersFastClient,
 } from "@/lib/customer-search-client";
+import { CUSTOMER_SEARCH_UUID_RE } from "@/lib/customer-search-shared";
 
 type OrderBootPayload = { countries: string[] };
 
@@ -485,13 +500,14 @@ export function OrderCreatePanel({
     );
   }, [orderCountries, isEdit, globalWeek]);
 
-  // מדינות — פעם אחת בפתיחה (לא תלוי בלקוח / שבוע)
+  // מדינות + אינדקס לקוחות — פעם אחת בפתיחה (לא תלוי בלקוח / שבוע)
   useEffect(() => {
     let cancelled = false;
     void fetchOrderBootCountries().then((countries) => {
       if (cancelled || countries.length === 0) return;
       setOrderCountries(countries);
     });
+    void preloadCustomerCaptureIndex();
     return () => {
       cancelled = true;
     };
@@ -603,18 +619,10 @@ export function OrderCreatePanel({
     async (customerId: string, prefillFromRow: CustomerExtrasPayload | null) => {
       const req = ++customerExtrasReqRef.current;
       try {
-        // Path A — already have the cheap text fields (from search-fast row): apply them
-        // synchronously and only fetch the balance (slow aggregate) in the background.
         if (prefillFromRow) {
           applyExtras(prefillFromRow);
-          const bal = await loadCustomerBalanceFast(customerId);
-          if (customerExtrasReqRef.current !== req) return;
-          if (bal) {
-            setExtras((cur) => (cur ? { ...cur, ...bal } : cur));
-          }
           return;
         }
-        // Path B — fallback (e.g. edit-mode where we only have id/label/code).
         const ex = await loadCustomerExtrasFast(customerId);
         if (customerExtrasReqRef.current !== req) return;
         if (!ex) {
@@ -623,7 +631,7 @@ export function OrderCreatePanel({
           return;
         }
         applyExtras(ex);
-      } catch (error) {
+      } catch {
         if (customerExtrasReqRef.current !== req) return;
         setExtras(null);
         setPhoneStr("");
@@ -709,6 +717,8 @@ export function OrderCreatePanel({
     setCodeStr(row.code?.trim() ? row.code.trim() : row.id);
     if (row.nameAr != null) setNameArStr(row.nameAr);
     if (row.nameEn != null) setNameEnStr(row.nameEn);
+    const prefill = extrasFromCustomerRow(row);
+    if (prefill) applyExtras(prefill);
     setHits([]);
     setDropdownField(null);
     setIsSearching(false);
@@ -724,7 +734,7 @@ export function OrderCreatePanel({
         }
       }
     }, 0);
-  }, []);
+  }, [applyExtras]);
 
   const applyCreatedCustomer = useCallback(
     (client: ClientCreateResult) => {
@@ -758,9 +768,8 @@ export function OrderCreatePanel({
         balanceUsdDisplay: "0.00",
         balanceUsdNegative: false,
       });
-      void loadCustomerBalanceFast(client.customerId).then((bal) => {
-        if (bal) setExtras((cur) => (cur ? { ...cur, ...bal } : cur));
-      });
+      invalidateCustomerSearchClientCache();
+      invalidateCustomerCaptureIndex();
       queueMicrotask(() => {
         skipSearchRef.current = false;
       });
@@ -790,25 +799,53 @@ export function OrderCreatePanel({
     [canCreateOrders, codeStr, openCreateCustomerForOrder, applyCreatedCustomer],
   );
 
-  /** חיפוש כשמשנים קלט באחד משלושת השדות — לפי השדה במיקוד */
+  /** חיפוש לקוח בלבד — לא טוען הזמנות / יתרות מחושבות / דוחות */
   useEffect(() => {
     if (skipSearchRef.current) return;
     const field = focusedComboRef.current;
     const q = field === "code" ? codeStr : field === "nameAr" ? nameArStr : nameEnStr;
     const trimmed = q.trim();
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trimmed);
-    if (!trimmed || (!isUuid && trimmed.length < 2)) {
+    const isUuid = CUSTOMER_SEARCH_UUID_RE.test(trimmed);
+    const isNumericCode = field === "code" && /^\d+$/.test(trimmed);
+    if (!trimmed || (!isUuid && !isNumericCode && trimmed.length < 2)) {
       setHits([]);
       setIsSearching(false);
       return;
     }
+
+    const debounceMs =
+      field === "code" ? CUSTOMER_CODE_SEARCH_DEBOUNCE_MS : CUSTOMER_NAME_SEARCH_DEBOUNCE_MS;
     const gen = ++searchGenRef.current;
     setIsSearching(true);
+
     const t = window.setTimeout(() => {
       void (async () => {
+        const useConsoleTimer = typeof console !== "undefined" && typeof console.time === "function";
+        if (useConsoleTimer) console.time("customer-search");
         try {
-          const rows = await searchCustomersFastClient(trimmed);
+          let rows: CustomerSearchRow[] = searchCustomerCaptureIndexLocal(trimmed, field);
+
+          if (field === "code" && (isNumericCode || isUuid)) {
+            if (rows.length === 0) {
+              rows = await searchCustomerCodeExactClient(trimmed);
+            }
+          } else if (rows.length === 0) {
+            if (field === "code") {
+              const exact = await searchCustomerCodeExactClient(trimmed);
+              rows = exact.length > 0 ? exact : await searchCustomersFastClient(trimmed);
+            } else {
+              rows = await searchCustomersFastClient(trimmed);
+            }
+          }
+
           if (searchGenRef.current !== gen) return;
+
+          const auto = pickAutoCustomerHit(rows, trimmed);
+          if (auto && field === "code" && (isNumericCode || isUuid || rows.length === 1)) {
+            pickCustomer(auto);
+            return;
+          }
+
           setHits(rows);
           setDropdownField(field);
         } catch {
@@ -816,12 +853,14 @@ export function OrderCreatePanel({
           setErr("טעינת נתונים נכשלה");
           setHits([]);
         } finally {
+          if (useConsoleTimer) console.timeEnd("customer-search");
           if (searchGenRef.current === gen) setIsSearching(false);
         }
       })();
-    }, 120);
+    }, debounceMs);
+
     return () => window.clearTimeout(t);
-  }, [codeStr, nameArStr, nameEnStr]);
+  }, [codeStr, nameArStr, nameEnStr, pickCustomer]);
 
   const openFullList = useCallback(async (field: ComboField) => {
     focusedComboRef.current = field;
@@ -841,17 +880,14 @@ export function OrderCreatePanel({
       }
       setIsSearching(true);
       try {
+        const local = findCustomerCaptureIndexExact(raw);
+        if (local) {
+          pickCustomer(local);
+          return;
+        }
         const row = await resolveCustomerFastClient(raw);
         if (row) {
           pickCustomer(row);
-          return;
-        }
-        const found = await searchCustomersFastClient(raw);
-        const exact =
-          found.find((h) => (h.code || "").trim().toLowerCase() === raw.toLowerCase()) ??
-          found.find((h) => h.label.trim().toLowerCase() === raw.toLowerCase());
-        if (exact) {
-          pickCustomer(exact);
           return;
         }
         setCustomerCodeMissing(true);
@@ -1575,9 +1611,15 @@ export function OrderCreatePanel({
                   value={codeStr}
                   placeholder="קוד / שם / טלפון"
                   onChange={(e) => {
-                    setCodeStr(e.target.value);
-                    setSelectedCustomer(null);
+                    const v = e.target.value;
+                    setCodeStr(v);
                     setCustomerCodeMissing(false);
+                    const curCode = selectedCustomer?.code?.trim() || "";
+                    if (selectedCustomer && v.trim() !== curCode && v.trim() !== selectedCustomer.id) {
+                      setSelectedCustomer(null);
+                      setExtras(null);
+                      setPhoneStr("");
+                    }
                   }}
                   onFocus={() => {
                     focusedComboRef.current = "code";

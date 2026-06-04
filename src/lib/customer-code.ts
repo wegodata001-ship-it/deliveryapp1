@@ -4,8 +4,18 @@ import { escapeRegExp } from "@/lib/order-number";
 /** קידומת לקוחות ישנים — נשמרים כפי שהם, לא נוצרים חדשים */
 export const LEGACY_CUSTOMER_CODE_PREFIX = "WGP-C-";
 
-/** מספר ראשון כשאין עדיין קודים מספריים */
-const DEFAULT_FIRST_CUSTOMER_NUMBER = 24001;
+/** מספר ראשון כשאין עדיין קודים מספריים (פרודקשן / seed) */
+export const DEFAULT_FIRST_CUSTOMER_NUMBER = 24001;
+
+/** מספר התחלה ללקוח ראשון — לדוגמה 100 ב-DEMO: CUSTOMER_CODE_FIRST_NUMBER=100 */
+export function getFirstCustomerNumber(): number {
+  const raw = process.env.CUSTOMER_CODE_FIRST_NUMBER?.trim();
+  if (raw) {
+    const n = parseInt(raw, 10);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return DEFAULT_FIRST_CUSTOMER_NUMBER;
+}
 
 function legacyCustomerCodePattern(): RegExp {
   return new RegExp(`^${escapeRegExp(LEGACY_CUSTOMER_CODE_PREFIX)}(\\d+)$`, "i");
@@ -50,7 +60,7 @@ export async function suggestNextCustomerCode(): Promise<string> {
     take: 5000,
   });
 
-  let maxN = DEFAULT_FIRST_CUSTOMER_NUMBER - 1;
+  let maxN = getFirstCustomerNumber() - 1;
   for (const r of rows) {
     const n = parseCustomerNumberFromCode(r.customerCode);
     if (n != null) maxN = Math.max(maxN, n);

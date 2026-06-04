@@ -1,7 +1,9 @@
 import type { CustomerSearchRow } from "@/app/admin/capture/actions";
 import { CUSTOMER_SEARCH_UUID_RE } from "@/lib/customer-search-shared";
 
-export const CUSTOMER_SEARCH_DEBOUNCE_MS = 280;
+export const CUSTOMER_SEARCH_DEBOUNCE_MS = 200;
+export const CUSTOMER_CODE_SEARCH_DEBOUNCE_MS = 150;
+export const CUSTOMER_NAME_SEARCH_DEBOUNCE_MS = 220;
 export const CUSTOMER_SEARCH_CACHE_TTL_MS = 30_000;
 
 type CacheEntry = { expires: number; data: CustomerSearchRow[] };
@@ -64,38 +66,45 @@ async function fetchSearchFast(
   const params = new URLSearchParams({ q });
   if (opts.exact) params.set("exact", "1");
 
-  const t0 = typeof performance !== "undefined" ? performance.now() : Date.now();
-  const res = await fetch(`/api/customers/search-fast?${params.toString()}`, {
-    credentials: "include",
-    signal,
-  });
-  const fetchMs = Math.round(
-    (typeof performance !== "undefined" ? performance.now() : Date.now()) - t0,
-  );
+  const useConsoleTimer = typeof console !== "undefined" && typeof console.time === "function";
+  if (useConsoleTimer) console.time("customer-search");
 
-  if (typeof window !== "undefined" && (process.env.NODE_ENV === "development" || fetchMs > 300)) {
-    console.log("[searchFast.client]", {
-      q,
-      exact: !!opts.exact,
-      status: res.status,
-      fetchMs,
-      hint: fetchMs > 300 ? "Check Network: waiting=TTFB/server; content=JSON parse" : undefined,
+  try {
+    const t0 = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const res = await fetch(`/api/customers/search-fast?${params.toString()}`, {
+      credentials: "include",
+      signal,
     });
-  }
+    const fetchMs = Math.round(
+      (typeof performance !== "undefined" ? performance.now() : Date.now()) - t0,
+    );
 
-  if (res.status === 401) throw new Error("Unauthorized");
-  if (!res.ok) throw new Error("טעינת נתונים נכשלה");
+    if (typeof window !== "undefined" && (process.env.NODE_ENV === "development" || fetchMs > 300)) {
+      console.log("[searchFast.client]", {
+        q,
+        exact: !!opts.exact,
+        status: res.status,
+        fetchMs,
+        hint: fetchMs > 300 ? "Check Network: waiting=TTFB/server; content=JSON parse" : undefined,
+      });
+    }
 
-  if (opts.exact) {
-    const row = (await res.json()) as CustomerSearchRow | null;
-    const rows = row ? [row] : [];
+    if (res.status === 401) throw new Error("Unauthorized");
+    if (!res.ok) throw new Error("טעינת נתונים נכשלה");
+
+    let rows: CustomerSearchRow[];
+    if (opts.exact) {
+      const row = (await res.json()) as CustomerSearchRow | null;
+      rows = row ? [row] : [];
+    } else {
+      rows = (await res.json()) as CustomerSearchRow[];
+    }
+
     if (rows.length > 0) writeCache(key, rows);
     return rows;
+  } finally {
+    if (useConsoleTimer) console.timeEnd("customer-search");
   }
-
-  const rows = (await res.json()) as CustomerSearchRow[];
-  writeCache(key, rows);
-  return rows;
 }
 
 export async function searchCustomersFastClient(

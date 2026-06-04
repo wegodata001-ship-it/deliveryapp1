@@ -1,9 +1,11 @@
 import { PrismaClient } from "@prisma/client";
 import {
   CLEAR_DEMO_DATA_CONFIRMATION,
+  assertClearDemoDataEnvironment,
   clearDemoData,
   getClearDemoDataPlan,
   isClearDemoConfirmationValid,
+  isClearDemoDataEnvironmentAllowed,
 } from "../src/lib/clear-demo-data";
 
 const prisma = new PrismaClient();
@@ -15,6 +17,13 @@ function readConfirmArg(): string {
 }
 
 async function main() {
+  const envCheck = isClearDemoDataEnvironmentAllowed();
+  if (!envCheck.allowed) {
+    console.error(envCheck.reason ?? "Clear demo data is not allowed in this environment.");
+    process.exitCode = 1;
+    return;
+  }
+
   const plan = await getClearDemoDataPlan(prisma);
 
   console.log("Clear demo data plan:");
@@ -33,6 +42,7 @@ async function main() {
     return;
   }
 
+  assertClearDemoDataEnvironment();
   const result = await clearDemoData(prisma);
   const deletedTotal = Object.values(result.deleted).reduce((sum, n) => sum + n, 0);
   console.log("");

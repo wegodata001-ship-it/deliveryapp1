@@ -58,6 +58,13 @@ import {
 import { isDebtWithdrawalOrderStatus } from "@/lib/debt-withdrawal-order";
 import { prisma } from "@/lib/prisma";
 import { allocateNextPaymentCapture, resolvePaymentWorkCountry } from "@/lib/payment-capture-code";
+import {
+  findCapturePaymentIdByCode,
+  resolveCapturePaymentCodeNeighbors,
+  workCountryFromCapturePaymentCode,
+} from "@/lib/payment-code-navigation";
+import { loadPaymentEntryPayload, type PaymentEntryPayload } from "@/lib/payment-entry-payload";
+import { normalizeWorkCountryCode, type WorkCountryCode } from "@/lib/work-country";
 import { ensureOnce } from "@/lib/ensure-tables-once";
 import { parseSplitPaymentMethodRaw } from "@/lib/order-capture-payment-methods";
 import { getSelectedCountriesForOrdersInternal } from "@/app/admin/settings/actions";
@@ -138,6 +145,9 @@ export type CustomerSearchRow = {
   phone2?: string | null;
   oldCustomerCode?: string | null;
   address?: string | null;
+  countryCode?: string | null;
+  /** יתרה מ-snapshot ב-Customer — ללא aggregate בהזמנה */
+  balanceUsd?: number;
 };
 
 export type OrderCaptureSavedSummary = {
@@ -459,16 +469,67 @@ export async function fetchOrderForPaymentContextAction(
 export async function previewPaymentCodeForCaptureAction(input?: {
   orderId?: string | null;
   customerId?: string | null;
+  /** מדינה מהמסך (טורקיה/סין/אמירויות) — מונה נפרד לכל מדינה */
+  workCountry?: WorkCountryCode | string | null;
 }): Promise<{ ok: true; code: string } | { ok: false; error: string }> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["receive_payments"])) {
     return { ok: false, error: "אין הרשאה" };
   }
-  const wc = await resolvePaymentWorkCountry({
-    orderId: input?.orderId,
-    customerId: input?.customerId,
-  });
+  const fromUi = normalizeWorkCountryCode(input?.workCountry ?? null);
+  const wc =
+    fromUi ??
+    (await resolvePaymentWorkCountry({
+      orderId: input?.orderId,
+      customerId: input?.customerId,
+    }));
   return { ok: true, code: (await allocateNextPaymentCapture(wc)).code };
+}
+
+export async function getCapturePaymentCodeNeighborsAction(input: {
+  code: string;
+  workCountry: string;
+}): Promise<
+  | {
+      ok: true;
+      prevCode: string | null;
+      nextCode: string | null;
+      isFirstInCountry: boolean;
+      isLastInCountry: boolean;
+      inCountryList: boolean;
+    }
+  | { ok: false; error: string }
+> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["receive_payments"])) {
+    return { ok: false, error: "אין הרשאה" };
+  }
+  const code = input.code.trim();
+  if (!code) return { ok: false, error: "חסר קוד תשלום" };
+  const wc = workCountryFromCapturePaymentCode(code);
+  if (!wc) return { ok: false, error: "קוד התשלום לא מזוהה למדינה (TR-P / CN-P / CH-P / AE-P)" };
+  const neighbors = await resolveCapturePaymentCodeNeighbors(code);
+  return { ok: true, ...neighbors };
+}
+
+/** טעינת קליטה שמורה לפי קוד תשלום + מדינה (TR-P-… / CN-P-… / AE-P-…) */
+export async function loadPaymentCaptureByCodeAction(input: {
+  code: string;
+  workCountry: string;
+}): Promise<{ ok: true; entry: PaymentEntryPayload } | { ok: false; error: string }> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["receive_payments"])) {
+    return { ok: false, error: "אין הרשאה" };
+  }
+  const code = input.code.trim();
+  if (!code) return { ok: false, error: "חסר קוד תשלום" };
+  const wc = workCountryFromCapturePaymentCode(code);
+  if (!wc) return { ok: false, error: "קוד התשלום לא מזוהה למדינה (TR-P / CN-P / CH-P / AE-P)" };
+  const id = await findCapturePaymentIdByCode(code, wc);
+  if (!id) return { ok: false, error: "קליטת תשלום לא נמצאה" };
+  const entry = await loadPaymentEntryPayload(id);
+  if (!entry) return { ok: false, error: "לא ניתן לטעון קליטת תשלום" };
+  return { ok: true, entry };
 }
 
 export async function listPaymentLocationsForPaymentAction(): Promise<PaymentLocationOptionRow[]> {

@@ -36,6 +36,9 @@ export async function resolvePaymentWorkCountry(opts: {
 /** תאימות לאחור — תשלומי טורקיה ישנים */
 export const PAYMENT_CODE_PREFIX = "WGP-P-";
 
+/** תאימות לאחור — קודי סין ישנים (CH-P- במקום CN-P-) */
+export const CHINA_CAPTURE_LEGACY_PREFIX = "CH-P-";
+
 function paymentCodeSuffixPattern(prefix: string): RegExp {
   return new RegExp(`^${escapeRegExp(prefix)}(\\d{6})$`);
 }
@@ -49,7 +52,9 @@ export function parsePaymentNumberFromCode(
   const prefixes =
     workCountry === "TR"
       ? [paymentCodePrefix("TR"), PAYMENT_CODE_PREFIX]
-      : [paymentCodePrefix(workCountry)];
+      : workCountry === "CN"
+        ? [paymentCodePrefix("CN"), CHINA_CAPTURE_LEGACY_PREFIX]
+        : [paymentCodePrefix(workCountry)];
   for (const p of prefixes) {
     const m = c.match(paymentCodeSuffixPattern(p));
     if (m?.[1]) {
@@ -68,7 +73,11 @@ export async function allocateNextPaymentCapture(
 ): Promise<{ code: string; paymentNumber: number }> {
   const prefix = paymentCodePrefix(workCountry);
   const legacyPrefixes =
-    workCountry === "TR" ? [prefix, PAYMENT_CODE_PREFIX] : [prefix];
+    workCountry === "TR"
+      ? [prefix, PAYMENT_CODE_PREFIX]
+      : workCountry === "CN"
+        ? [prefix, CHINA_CAPTURE_LEGACY_PREFIX]
+        : [prefix];
 
   const startsWithOr = legacyPrefixes.map((p) => ({ paymentCode: { startsWith: p } }));
 

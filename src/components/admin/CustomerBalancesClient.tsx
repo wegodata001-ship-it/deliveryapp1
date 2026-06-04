@@ -1,15 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  CircleCheck,
-  FileSpreadsheet,
-  FileText,
-  Globe2,
-  Hourglass,
-  TrendingDown,
-  TrendingUp,
-} from "lucide-react";
+import { FileSpreadsheet, FileText } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   exportCustomerBalancesAction,
@@ -29,6 +21,7 @@ import { TableSkeleton } from "@/components/ui/loading";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { formatUsdDisplay, parseMoneyString, parseMoneyStringOrZero } from "@/lib/money-format";
 import { withQuery } from "@/lib/admin-url-query";
+import { CustomerBalancesInsightsBar } from "@/components/admin/CustomerBalancesInsightsBar";
 import { ReportWeekNav } from "@/components/admin/ReportWeekNav";
 import { ORDER_COUNTRY_CODES, orderCountryLabel, type OrderCountryCode } from "@/lib/order-countries";
 import { ACTIVE_WORK_WEEK_CODE } from "@/lib/active-work-week";
@@ -42,6 +35,7 @@ import {
   balancesSnapshotToYmd,
   DEFAULT_WEEK_CODE,
   normalizeAhWeekCode,
+  normalizeYmdRangePair,
   prevWeekCode,
 } from "@/lib/work-week";
 
@@ -55,15 +49,14 @@ const BALANCE_STATUS_OPTIONS: { value: CustomerBalanceDebtFilter; label: string 
   { value: "CREDIT", label: "זכות" },
 ];
 
-type BalancesKpiKey = "OWES" | "CREDIT" | "READY" | "IN_PROGRESS" | "DEBT_WITHDRAWAL";
-
-const KPI_TONE: Record<BalancesKpiKey, string> = {
-  OWES: "adm-balances-kpi-item--debt",
-  CREDIT: "adm-balances-kpi-item--credit",
-  READY: "adm-balances-kpi-item--ready",
-  IN_PROGRESS: "adm-balances-kpi-item--progress",
-  DEBT_WITHDRAWAL: "adm-balances-kpi-item--withdrawal",
-};
+type BalancesKpiKey =
+  | "OWES"
+  | "CREDIT"
+  | "OPEN"
+  | "READY"
+  | "IN_PROGRESS"
+  | "CANCELLED"
+  | "DEBT_WITHDRAWAL";
 
 const SORT_LABELS: Record<CustomerBalanceSort, string> = {
   balance_desc: "יתרה: גבוה → נמוך",
@@ -88,9 +81,9 @@ function moneyUsdCell(value: string): string {
 
 function balanceUi(balanceIls: string): { label: string; tone: BalanceUiTone } {
   const n = dec(balanceIls);
-  if (n > 0.01) return { label: "חייב", tone: "debt" };
-  if (n < -0.01) return { label: "זכות", tone: "credit" };
-  return { label: "מאוזן", tone: "balanced" };
+  if (n > 0.01) return { label: "🔴 חייב", tone: "debt" };
+  if (n < -0.01) return { label: "🟢 זכאי", tone: "credit" };
+  return { label: "⚪ מאוזן", tone: "balanced" };
 }
 
 function balanceToneClass(tone: BalanceUiTone): string {
@@ -99,10 +92,14 @@ function balanceToneClass(tone: BalanceUiTone): string {
   return "adm-bal-amt--balanced";
 }
 
-function statusBadgeClass(tone: BalanceUiTone): string {
-  if (tone === "debt") return "adm-bal-status-badge adm-bal-status-badge--debt";
-  if (tone === "credit") return "adm-bal-status-badge adm-bal-status-badge--credit";
-  return "adm-bal-status-badge adm-bal-status-badge--balanced";
+function statusChipClass(tone: BalanceUiTone): string {
+  if (tone === "debt") return "adm-bal-chip adm-bal-chip--debt";
+  if (tone === "credit") return "adm-bal-chip adm-bal-chip--credit";
+  return "adm-bal-chip adm-bal-chip--balanced";
+}
+
+function balanceRowClass(tone: BalanceUiTone): string {
+  return `adm-balances-row-click adm-balances-row--${tone}`;
 }
 
 function pageNumbers(page: number, totalPages: number): number[] {
@@ -176,8 +173,13 @@ function parseStructuralFromSearchParams(sp: URLSearchParams): BalancesFiltersSt
   const weekRaw = sp.get("week") || "";
   const weekCode = normalizeAhWeekCode(weekRaw) ?? ACTIVE_WORK_WEEK_CODE;
   const toParam = sp.get("to") || "";
-  const toYmd =
+  const fromParam = sp.get("from") || "";
+  let toYmd =
     toParam && /^\d{4}-\d{2}-\d{2}$/.test(toParam) ? toParam : balancesSnapshotToYmd(weekCode);
+  if (fromParam && toParam && /^\d{4}-\d{2}-\d{2}$/.test(fromParam) && /^\d{4}-\d{2}-\d{2}$/.test(toParam)) {
+    const { to } = normalizeYmdRangePair(fromParam, toParam);
+    toYmd = to;
+  }
   const workCountry = resolveWorkCountryFromSearchParams(sp);
   const country = orderCountryCodeForWorkCountry(workCountry);
   return {
@@ -214,8 +216,10 @@ function openPdfHtml(base64: string) {
 function isKpiActive(key: BalancesKpiKey, draft: BalancesSearchDraft): boolean {
   if (key === "OWES") return draft.balanceStatus === "OWES";
   if (key === "CREDIT") return draft.balanceStatus === "CREDIT";
+  if (key === "OPEN") return draft.orderStatus === "OPEN";
   if (key === "READY") return draft.orderStatus === "COMPLETED";
   if (key === "IN_PROGRESS") return draft.orderStatus === "IN_PROGRESS";
+  if (key === "CANCELLED") return draft.orderStatus === "CANCELLED";
   return draft.orderStatus === "DEBT_WITHDRAWAL";
 }
 
@@ -245,6 +249,7 @@ export function CustomerBalancesClient() {
   const hoverTimerRef = useRef<number | null>(null);
   const hoverIdRef = useRef<string | null>(null);
   const [refreshSig, setRefreshSig] = useState(0);
+  const [insightsExpanded, setInsightsExpanded] = useState(false);
 
   useEffect(() => {
     setBalancesFilters(parseStructuralFromSearchParams(new URLSearchParams(sp.toString())));
@@ -318,10 +323,14 @@ export function CustomerBalancesClient() {
         applySearchPatch({ balanceStatus: active ? "ALL" : "OWES" });
       } else if (key === "CREDIT") {
         applySearchPatch({ balanceStatus: active ? "ALL" : "CREDIT" });
+      } else if (key === "OPEN") {
+        applySearchPatch({ orderStatus: active ? "ALL" : "OPEN" });
       } else if (key === "READY") {
         applySearchPatch({ orderStatus: active ? "ALL" : "COMPLETED" });
       } else if (key === "IN_PROGRESS") {
         applySearchPatch({ orderStatus: active ? "ALL" : "IN_PROGRESS" });
+      } else if (key === "CANCELLED") {
+        applySearchPatch({ orderStatus: active ? "ALL" : "CANCELLED" });
       } else {
         applySearchPatch({ orderStatus: active ? "ALL" : "DEBT_WITHDRAWAL" });
       }
@@ -358,11 +367,13 @@ export function CustomerBalancesClient() {
     const curTo = sp.get("to") ?? "";
     const curWeek = sp.get("week") ?? "";
     const curCountry = sp.get("country") ?? "";
+    const staleFrom = sp.get("from");
     const nextCountry = balancesFilters.sourceCountry || "";
     if (
       curTo === balancesFilters.toYmd &&
       curWeek === balancesFilters.weekCode &&
-      curCountry === nextCountry
+      curCountry === nextCountry &&
+      !staleFrom
     ) {
       return;
     }
@@ -468,89 +479,24 @@ export function CustomerBalancesClient() {
   const stats = payload?.stats;
   const statusKpis = payload?.statusBalanceKpis;
 
-  const kpiRow = stats ? (
-    <div className="adm-balances-kpi-row" dir="rtl" role="region" aria-label="סיכום יתרות">
-      <button
-        type="button"
-        className={["adm-balances-kpi-item", KPI_TONE.OWES, isKpiActive("OWES", debouncedSearch) ? "is-active" : ""]
-          .filter(Boolean)
-          .join(" ")}
-        aria-pressed={isKpiActive("OWES", debouncedSearch)}
-        onClick={() => toggleKpi("OWES")}
-      >
-        <span className="adm-balances-kpi-item__lbl">
-          <TrendingDown size={14} strokeWidth={2.25} aria-hidden /> לקוחות בחוב
-        </span>
-        <span className="adm-balances-kpi-item__val">{stats.withDebtCount.toLocaleString("he-IL")}</span>
-      </button>
-      <button
-        type="button"
-        className={["adm-balances-kpi-item", KPI_TONE.CREDIT, isKpiActive("CREDIT", debouncedSearch) ? "is-active" : ""]
-          .filter(Boolean)
-          .join(" ")}
-        aria-pressed={isKpiActive("CREDIT", debouncedSearch)}
-        onClick={() => toggleKpi("CREDIT")}
-      >
-        <span className="adm-balances-kpi-item__lbl">
-          <TrendingUp size={14} strokeWidth={2.25} aria-hidden /> לקוחות בזכות
-        </span>
-        <span className="adm-balances-kpi-item__val">{stats.withCreditCount.toLocaleString("he-IL")}</span>
-      </button>
-      <button
-        type="button"
-        className={["adm-balances-kpi-item", KPI_TONE.READY, isKpiActive("READY", debouncedSearch) ? "is-active" : ""]
-          .filter(Boolean)
-          .join(" ")}
-        aria-pressed={isKpiActive("READY", debouncedSearch)}
-        onClick={() => toggleKpi("READY")}
-      >
-        <span className="adm-balances-kpi-item__lbl">
-          <CircleCheck size={14} strokeWidth={2.25} aria-hidden /> יתרות מוכן
-        </span>
-        <span className="adm-balances-kpi-item__val" dir="ltr">
-          {statusKpis ? formatUsdDisplay(parseMoneyStringOrZero(statusKpis.ready)) : "—"}
-        </span>
-      </button>
-      <button
-        type="button"
-        className={[
-          "adm-balances-kpi-item",
-          KPI_TONE.IN_PROGRESS,
-          isKpiActive("IN_PROGRESS", debouncedSearch) ? "is-active" : "",
-        ]
-          .filter(Boolean)
-          .join(" ")}
-        aria-pressed={isKpiActive("IN_PROGRESS", debouncedSearch)}
-        onClick={() => toggleKpi("IN_PROGRESS")}
-      >
-        <span className="adm-balances-kpi-item__lbl">
-          <Hourglass size={14} strokeWidth={2.25} aria-hidden /> יתרות בטיפול
-        </span>
-        <span className="adm-balances-kpi-item__val" dir="ltr">
-          {statusKpis ? formatUsdDisplay(parseMoneyStringOrZero(statusKpis.inProgress)) : "—"}
-        </span>
-      </button>
-      <button
-        type="button"
-        className={[
-          "adm-balances-kpi-item",
-          KPI_TONE.DEBT_WITHDRAWAL,
-          isKpiActive("DEBT_WITHDRAWAL", debouncedSearch) ? "is-active" : "",
-        ]
-          .filter(Boolean)
-          .join(" ")}
-        aria-pressed={isKpiActive("DEBT_WITHDRAWAL", debouncedSearch)}
-        onClick={() => toggleKpi("DEBT_WITHDRAWAL")}
-      >
-        <span className="adm-balances-kpi-item__lbl">
-          <Globe2 size={14} strokeWidth={2.25} aria-hidden /> משיכה מחו&quot;ל
-        </span>
-        <span className="adm-balances-kpi-item__val" dir="ltr">
-          {statusKpis ? formatUsdDisplay(parseMoneyStringOrZero(statusKpis.debtWithdrawal)) : "—"}
-        </span>
-      </button>
-    </div>
-  ) : null;
+  const debtFilterActive = isKpiActive("OWES", debouncedSearch);
+  const creditFilterActive = isKpiActive("CREDIT", debouncedSearch);
+
+  const insightsProps =
+    stats != null
+      ? {
+          stats,
+          statusKpis,
+          totalRows: payload?.totalRows ?? 0,
+          pageRows: payload?.rows ?? [],
+          debtFilterActive,
+          creditFilterActive,
+          onToggleDebtFilter: () => toggleKpi("OWES"),
+          onToggleCreditFilter: () => toggleKpi("CREDIT"),
+          onToggleOrderKpi: (key: BalancesKpiKey) => toggleKpi(key),
+          orderKpiActive: (key: BalancesKpiKey) => isKpiActive(key, debouncedSearch),
+        }
+      : null;
 
   return (
     <div className="adm-balances-page adm-balances-excel-page adm-balances-page--v2 adm-balances-page--page-scroll adm-page--page-scroll">
@@ -559,7 +505,14 @@ export function CustomerBalancesClient() {
         <p>לחיצה על שורה פותחת את כרטסת הלקוח במערכת.</p>
       </header>
 
-      {kpiRow}
+      {insightsProps ? (
+        <CustomerBalancesInsightsBar
+          {...insightsProps}
+          part="strip"
+          expanded={insightsExpanded}
+          onExpandedChange={setInsightsExpanded}
+        />
+      ) : null}
 
       {err ? <div className="adm-error adm-balances-error">{err}</div> : null}
       {searchPending ? (
@@ -760,6 +713,8 @@ export function CustomerBalancesClient() {
           </p>
         ) : null}
 
+        {insightsProps ? <CustomerBalancesInsightsBar {...insightsProps} part="tableLead" /> : null}
+
         <div
           className={[
             "adm-balances-table-wrap",
@@ -800,7 +755,7 @@ export function CustomerBalancesClient() {
                   return (
                     <tr
                       key={r.customerId}
-                      className="adm-balances-row-click"
+                      className={balanceRowClass(ui.tone)}
                       tabIndex={0}
                       role="button"
                       onClick={() => openCustomerCard(r)}
@@ -824,11 +779,14 @@ export function CustomerBalancesClient() {
                       <td className="adm-balances-td-num" dir="ltr">
                         {moneyUsdCell(r.totalPaymentsUSD)}
                       </td>
-                      <td className={`adm-balances-td-num ${balanceToneClass(ui.tone)}`} dir="ltr">
+                      <td
+                        className={`adm-balances-td-num adm-balances-td-num--hero ${balanceToneClass(ui.tone)}`}
+                        dir="ltr"
+                      >
                         {moneyUsdCell(r.totalBalanceUSD)}
                       </td>
-                      <td>
-                        <span className={statusBadgeClass(ui.tone)}>{ui.label}</span>
+                      <td className="adm-balances-td-status">
+                        <span className={statusChipClass(ui.tone)}>{ui.label}</span>
                       </td>
                       <td>{r.customerName}</td>
                       <td dir="ltr">{r.customerCode ?? "—"}</td>

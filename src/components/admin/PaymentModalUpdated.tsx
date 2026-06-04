@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useRouter } from "next/navigation";
 import type { PaymentMethod } from "@prisma/client";
+import { logPaymentAllocationPreSave } from "@/lib/payment-allocation-debug";
 import {
   allocatePaymentAcrossOrders,
   buildAllocationsFromMatch,
@@ -35,9 +36,12 @@ import {
 import { planCommissionDebtClosureFromNumbers } from "@/lib/commission-debt-closure";
 import {
   fetchOrderForPaymentContextAction,
+  getCapturePaymentCodeNeighborsAction,
+  loadPaymentCaptureByCodeAction,
   previewPaymentCodeForCaptureAction,
   type CustomerSearchRow,
 } from "@/app/admin/capture/actions";
+import { workCountryFromCapturePaymentCode } from "@/lib/payment-code-navigation";
 import { loadFinancialSettingsForPaymentCaptureAction } from "@/app/admin/financial/actions";
 import { WEGO_FINANCIAL_SETTINGS_SAVED } from "@/lib/financial-settings-bus";
 import type { SerializedFinancial } from "@/lib/financial-settings";
@@ -47,6 +51,11 @@ import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import { OrderEditModal } from "@/components/admin/OrderEditModal";
 import { Button } from "@/components/ui/Button";
 import { normalizeOrderSourceCountry, type OrderCountryCode } from "@/lib/order-countries";
+import {
+  DEFAULT_WORK_COUNTRY,
+  workCountryFromOrderSourceCountry,
+  type WorkCountryCode,
+} from "@/lib/work-country";
 import {
   DEFAULT_WEEK_CODE,
   WORK_WEEK_CODES_SORTED,
@@ -59,6 +68,7 @@ import {
   parseLocalDate,
 } from "@/lib/work-week";
 import { AhWeekNavNextButton, AhWeekNavPrevButton } from "@/components/admin/AhWeekNavButtons";
+import { isActiveWorkWeekCode } from "@/lib/active-work-week";
 import { goToNextWeekNumber, goToPrevWeekNumber } from "@/lib/weeks/ah-week-nav";
 import {
   calculateTotalBaseIls,
@@ -175,15 +185,18 @@ function formatSlashDate(ymd: string): string {
   return `${d}/${m}/${y}`;
 }
 
-function addDays(d: Date, days: number): Date {
-  const out = new Date(d);
-  out.setDate(out.getDate() + days);
-  return out;
-}
-
 function toWeekCode(n: number): string {
   const nn = Math.max(1, Math.floor(n));
   return `AH-${nn}`;
+}
+
+/** תאריך תשלום לפי שבוע AH — היום בשבוע הנוכחי, אחרת תחילת השבוע */
+function paymentDateYmdForWeekCode(code: string): string {
+  const norm = normalizeAhWeekCode(code.trim()) ?? code.trim().toUpperCase();
+  const today = new Date();
+  if (norm === getWeekCodeForLocalDate(today)) return formatLocalYmd(today);
+  const from = getAhWeekRange(norm)?.from ?? WORK_WEEK_RANGES[norm]?.from;
+  return from ?? formatLocalYmd(today);
 }
 
 function parseWeekNumber(raw: string): number | null {
@@ -259,20 +272,6 @@ type Props = {
   canCreateOrders?: boolean;
   /** רק מנהל יכול לאפס יתרה ולמחוק חוב כנגד עמלות */
   viewerIsAdmin?: boolean;
-};
-
-type PaymentNavUnsavedDirection = "prev" | "next";
-
-type PaymentEntryNavigation = {
-  currentPaymentId: string;
-  currentPaymentCode: string | null;
-  currentPaymentNumber: number | null;
-  previousPaymentId: string | null;
-  nextPaymentId: string | null;
-};
-
-type PaymentEntryLoadResponse = PaymentEntryResponse & {
-  navigation: PaymentEntryNavigation;
 };
 
 type PaymentEntryResponse = {
@@ -411,11 +410,6 @@ export function PaymentModalUpdated({
     return WORK_WEEK_RANGES[globalWeek]?.from ?? formatLocalYmd(today);
   });
   const [paymentTimeHm, setPaymentTimeHm] = useState(() => formatLocalHm(new Date()));
-  const baseWeekNumber = useMemo(() => parseWeekNumber(globalWeek) ?? parseWeekNumber(DEFAULT_WEEK_CODE) ?? 1, [globalWeek]);
-  const baseDate = useMemo(
-    () => new Date(WORK_WEEK_RANGES[globalWeek]?.from ?? WORK_WEEK_RANGES[DEFAULT_WEEK_CODE]?.from ?? formatLocalYmd(new Date())),
-    [globalWeek],
-  );
   const [weekDraft, setWeekDraft] = useState(() => globalWeek);
   const [weekInputErr, setWeekInputErr] = useState<string | null>(null);
 
@@ -453,10 +447,13 @@ export function PaymentModalUpdated({
   const tableScrollRef = useRef<HTMLDivElement | null>(null);
   /** תצוגת "איפוס יתרה" — ללא שינוי DB/טבלה עד שמירת תשלום */
   const [customerBalanceResetPending, setCustomerBalanceResetPending] = useState(false);
-  const [previousPaymentId, setPreviousPaymentId] = useState<string | null>(null);
-  const [nextPaymentId, setNextPaymentId] = useState<string | null>(null);
+  const [paymentNavPrevCode, setPaymentNavPrevCode] = useState<string | null>(null);
+  const [paymentNavNextCode, setPaymentNavNextCode] = useState<string | null>(null);
+  const [paymentNavFirstInCountry, setPaymentNavFirstInCountry] = useState(false);
+  const [paymentNavLastInCountry, setPaymentNavLastInCountry] = useState(false);
+  const [paymentNavInCountryList, setPaymentNavInCountryList] = useState(false);
   const [paymentNavLoading, setPaymentNavLoading] = useState(false);
-  const [navUnsavedOpen, setNavUnsavedOpen] = useState<PaymentNavUnsavedDirection | null>(null);
+  const [navUnsavedPendingCode, setNavUnsavedPendingCode] = useState<string | null>(null);
   const [commissionResetIds, setCommissionResetIds] = useState<string[]>([]);
   const [cancelPaymentOpen, setCancelPaymentOpen] = useState(false);
   const [cancelPaymentBusy, setCancelPaymentBusy] = useState(false);
@@ -637,17 +634,6 @@ export function PaymentModalUpdated({
     return "מציג את כל היסטוריית ההזמנות של הלקוח";
   }, []);
 
-  const applyWeekNumber = useCallback(
-    (num: number) => {
-      const nextCode = toWeekCode(num);
-      const diffWeeks = num - baseWeekNumber;
-      const nextDate = addDays(baseDate, diffWeeks * 7);
-      setPaymentDateYmd(formatLocalYmd(nextDate));
-      setWeekDraft(nextCode);
-    },
-    [baseDate, baseWeekNumber],
-  );
-
   useEffect(() => {
     const c = weekCodeFromYmd(paymentDateYmd);
     if (c && c !== "—") setWeekDraft(c);
@@ -659,6 +645,15 @@ export function PaymentModalUpdated({
     if (countryOverride !== "AUTO") return COUNTRY_BADGE_SHORT[countryOverride];
     return ordersCountryBadge;
   }, [countryOverride, ordersCountryBadge]);
+
+  /** מדינת קליטה להקצאת קוד חדש — מהזמנות / בורר מדינה */
+  const captureWorkCountry = useMemo((): WorkCountryCode => {
+    if (countryOverride !== "AUTO") return workCountryFromOrderSourceCountry(countryOverride);
+    for (const o of orders) {
+      if (o.sourceCountry) return workCountryFromOrderSourceCountry(o.sourceCountry);
+    }
+    return DEFAULT_WORK_COUNTRY;
+  }, [countryOverride, orders]);
 
   /** סיכום כרטסת לקוח — יתרות פתוחות וזכות (מ-DB, חתום) */
   const customerLedgerSummary = useMemo(() => {
@@ -752,19 +747,56 @@ export function PaymentModalUpdated({
 
   const canApplyResetCustomerBalance = resetBalanceConfirm.openDebtUsd > 0.01;
 
+  const clearPaymentCodeNav = useCallback(() => {
+    setPaymentNavPrevCode(null);
+    setPaymentNavNextCode(null);
+    setPaymentNavFirstInCountry(false);
+    setPaymentNavLastInCountry(false);
+    setPaymentNavInCountryList(false);
+  }, []);
+
+  const refreshPaymentCodeNeighbors = useCallback(
+    async (code: string) => {
+      const trimmed = code.trim();
+      if (!trimmed || !workCountryFromCapturePaymentCode(trimmed)) {
+        clearPaymentCodeNav();
+        return;
+      }
+      const neighbors = await getCapturePaymentCodeNeighborsAction({
+        code: trimmed,
+        workCountry: workCountryFromCapturePaymentCode(trimmed)!,
+      });
+      if (neighbors.ok) {
+        setPaymentNavPrevCode(neighbors.prevCode);
+        setPaymentNavNextCode(neighbors.nextCode);
+        setPaymentNavFirstInCountry(neighbors.isFirstInCountry);
+        setPaymentNavLastInCountry(neighbors.isLastInCountry);
+        setPaymentNavInCountryList(neighbors.inCountryList);
+      } else {
+        clearPaymentCodeNav();
+      }
+    },
+    [clearPaymentCodeNav],
+  );
+
   const refreshPaymentCodePreview = useCallback(() => {
     setPaymentCodePreviewPending(true);
-    void previewPaymentCodeForCaptureAction().then((pr) => {
+    void previewPaymentCodeForCaptureAction({
+      customerId: customer?.id,
+      workCountry: captureWorkCountry,
+    }).then(async (pr) => {
       setPaymentCodePreviewPending(false);
       if (pr.ok) {
         setPreviewPaymentCode(pr.code);
         setSaveErr(null);
+        await refreshPaymentCodeNeighbors(pr.code);
       } else {
         setPreviewPaymentCode(null);
+        clearPaymentCodeNav();
         setSaveErr(pr.error);
       }
     });
-  }, []);
+  }, [customer?.id, captureWorkCountry, refreshPaymentCodeNeighbors, clearPaymentCodeNav]);
 
   const focusCustomerCodeInput = useCallback(() => {
     const el = customerCodeInputRef.current;
@@ -796,15 +828,18 @@ export function PaymentModalUpdated({
       if (opts?.silent) setOrdersLoading(true);
       else setLoadingCustomer(true);
       setLoadErr(null);
-      const res = await fetchPaymentIntakeCustomerOrdersAction(customerId, null);
+      const weekForFetch = opts?.weekCode?.trim() || null;
+      const res = await fetchPaymentIntakeCustomerOrdersAction(customerId, weekForFetch);
       if (opts?.silent) setOrdersLoading(false);
       else setLoadingCustomer(false);
       if (!res.ok) {
-        setCustomer(null);
-        setCustomerPayments([]);
-        setOrders([]);
-        setCommissionResetIds([]);
-        setCustomerBalanceResetPending(false);
+        if (!opts?.silent) {
+          setCustomer(null);
+          setCustomerPayments([]);
+          setOrders([]);
+          setCommissionResetIds([]);
+          setCustomerBalanceResetPending(false);
+        }
         setLoadErr(res.error);
         return false;
       }
@@ -832,11 +867,46 @@ export function PaymentModalUpdated({
     [focusFirstAmountInput],
   );
 
-  /** בחירת לקוח מיידית — פוקוס לסכום בלי להמתין לטעינת הזמנות */
+  const applyIntakeWeekCode = useCallback(
+    (code: string, opts?: { reloadOrders?: boolean }) => {
+      const raw = code.trim().toUpperCase();
+      const norm = normalizeAhWeekCode(raw);
+      if (!norm || !getAhWeekRange(norm)) {
+        setWeekDraft(raw);
+        return;
+      }
+      setWeekDraft(norm);
+      setWeekInputErr(null);
+      setPaymentDateYmd(paymentDateYmdForWeekCode(norm));
+      if (opts?.reloadOrders && customer?.id) {
+        void loadCustomerOrders(customer.id, { silent: true, weekCode: norm });
+      }
+    },
+    [customer?.id, loadCustomerOrders],
+  );
+
+  const shiftIntakeWeek = useCallback(
+    (delta: -1 | 1) => {
+      const cur =
+        parseWeekNumber(weekDraft) ??
+        parseWeekNumber(weekSelectValue) ??
+        parseWeekNumber(DEFAULT_WEEK_CODE) ??
+        1;
+      const num = delta === -1 ? goToPrevWeekNumber(cur) : goToNextWeekNumber(cur);
+      applyIntakeWeekCode(toWeekCode(num), { reloadOrders: true });
+    },
+    [weekDraft, weekSelectValue, applyIntakeWeekCode],
+  );
+
+  const goToCurrentWorkWeek = useCallback(() => {
+    applyIntakeWeekCode(DEFAULT_WEEK_CODE, { reloadOrders: true });
+  }, [applyIntakeWeekCode]);
+
+  /** בחירת לקוח מיידית — פוקוס לסכום; הזמנות נטענות ברקע בלי לאפס את הטבלה */
   const selectCustomerQuick = useCallback(
     (row: CustomerSearchRow, opts?: { focusAmount?: boolean }) => {
-      setOrders([]);
-      setCustomerPayments([]);
+      setOrdersLoading(true);
+      setLoadErr(null);
       setCommissionResetIds([]);
       setCustomerBalanceResetPending(false);
       setCustomer({
@@ -867,9 +937,10 @@ export function PaymentModalUpdated({
       if (opts?.focusAmount !== false) {
         focusFirstAmountInput();
       }
-      void loadCustomerOrders(row.id, { silent: true });
+      const weekForLoad = normalizeAhWeekCode(weekDraft.trim()) ?? intakeWeekCode;
+      void loadCustomerOrders(row.id, { silent: true, weekCode: weekForLoad });
     },
-    [loadCustomerOrders, focusFirstAmountInput],
+    [loadCustomerOrders, focusFirstAmountInput, weekDraft, intakeWeekCode],
   );
 
   const pickCustHit = useCallback(
@@ -972,24 +1043,11 @@ export function PaymentModalUpdated({
     setLoadedPayment(createNewCaptureLoadedPayment(""));
     setPreviewPaymentCode(null);
     setPaymentCodePreviewPending(true);
-    setPreviousPaymentId(null);
-    setNextPaymentId(null);
+    clearPaymentCodeNav();
     setCustomerBalanceResetPending(false);
     baselineSigRef.current = "";
     refreshPaymentCodePreview();
-  }, [financial, refreshPaymentCodePreview]);
-
-  function applyNavigationLinks(nav: PaymentEntryNavigation) {
-    setPreviousPaymentId(nav.previousPaymentId);
-    setNextPaymentId(nav.nextPaymentId);
-    console.log("[payment-nav] currentPayment", {
-      id: nav.currentPaymentId,
-      code: nav.currentPaymentCode,
-      number: nav.currentPaymentNumber,
-    });
-    console.log("[payment-nav] previousPayment", nav.previousPaymentId);
-    console.log("[payment-nav] nextPayment", nav.nextPaymentId);
-  }
+  }, [financial, refreshPaymentCodePreview, clearPaymentCodeNav]);
 
   async function applyPaymentEntry(snapshot: PaymentEntryResponse): Promise<boolean> {
     custSearchGenRef.current += 1;
@@ -1029,7 +1087,52 @@ export function PaymentModalUpdated({
     return true;
   }
 
-  /** טעינת קליטה שמורה + שכנות ניווט מהשרת — מרענן את כל המסך */
+  /** טעינה מלאה לפי קוד תשלום + מדינה — כמו פתיחת קליטה רגילה */
+  async function loadPaymentByCode(code: string): Promise<boolean> {
+    const trimmed = code.trim();
+    if (!trimmed) return false;
+
+    setPaymentNavLoading(true);
+    setSaveErr(null);
+    setLoadErr(null);
+
+    const navCountry = workCountryFromCapturePaymentCode(trimmed);
+    if (!navCountry) {
+      setSaveErr("קוד התשלום לא מזוהה למדינה (TR-P / CN-P / CH-P / AE-P)");
+      return false;
+    }
+
+    try {
+      const res = await loadPaymentCaptureByCodeAction({
+        code: trimmed,
+        workCountry: navCountry,
+      });
+      if (!res.ok) {
+        setSaveErr(res.error);
+        return false;
+      }
+
+      custSearchGenRef.current += 1;
+      setCommissionResetIds([]);
+      setCustomerBalanceResetPending(false);
+      setIncludedIds(null);
+      setHighlightInvalidCheckFields(false);
+      baselineSigRef.current = "";
+
+      const ok = await applyPaymentEntry(res.entry);
+      if (!ok) return false;
+
+      await refreshPaymentCodeNeighbors(trimmed);
+      return true;
+    } catch {
+      setSaveErr("שגיאת רשת בטעינת תשלום");
+      return false;
+    } finally {
+      setPaymentNavLoading(false);
+    }
+  }
+
+  /** טעינה לפי מזהה (פתיחה מחלון) — אחר כך ניווט לפי קוד במדינה */
   async function loadPayment(paymentId: string): Promise<boolean> {
     const trimmed = paymentId.trim();
     if (!trimmed) return false;
@@ -1047,19 +1150,21 @@ export function PaymentModalUpdated({
         return false;
       }
 
-      const raw = (await res.json()) as PaymentEntryLoadResponse;
-      const { navigation, ...entryFields } = raw;
-      const entry = clonePaymentEntry(entryFields);
+      const entry = clonePaymentEntry((await res.json()) as PaymentEntryResponse);
 
+      custSearchGenRef.current += 1;
       setCommissionResetIds([]);
       setCustomerBalanceResetPending(false);
       setIncludedIds(null);
+      setHighlightInvalidCheckFields(false);
       baselineSigRef.current = "";
 
       const ok = await applyPaymentEntry(entry);
       if (!ok) return false;
 
-      applyNavigationLinks(navigation);
+      const code = entry.paymentCode?.trim();
+      if (code) await refreshPaymentCodeNeighbors(code);
+      else clearPaymentCodeNav();
       return true;
     } catch {
       setSaveErr("שגיאת רשת בטעינת תשלום");
@@ -1073,32 +1178,58 @@ export function PaymentModalUpdated({
     return baselineSigRef.current !== "" && baselineSigRef.current !== currentDraftSig;
   }
 
-  function goToPreviousPayment() {
-    if (!previousPaymentId || paymentNavLoading || saveBusy) return;
+  function requestNavigateToPaymentCode(code: string) {
+    if (!code.trim() || paymentNavLoading || saveBusy) return;
     if (paymentCaptureIsDirty()) {
-      setNavUnsavedOpen("prev");
+      setNavUnsavedPendingCode(code.trim());
       return;
     }
-    void loadPayment(previousPaymentId);
+    void loadPaymentByCode(code);
   }
 
-  function goToNextPayment() {
-    if (!nextPaymentId || paymentNavLoading || saveBusy) return;
-    if (paymentCaptureIsDirty()) {
-      setNavUnsavedOpen("next");
+  function goToPreviousPaymentCode() {
+    if (saveBusy || paymentNavLoading) return;
+    if (!paymentNavPrevCode) {
+      if (paymentNavInCountryList && paymentNavFirstInCountry) {
+        onToast("אין קוד תשלום קודם");
+      }
       return;
     }
-    void loadPayment(nextPaymentId);
+    requestNavigateToPaymentCode(paymentNavPrevCode);
+  }
+
+  function goToNextPaymentCode() {
+    if (saveBusy || paymentNavLoading) return;
+    if (!paymentNavNextCode) {
+      if (paymentNavInCountryList && paymentNavLastInCountry) {
+        onToast("אין קוד תשלום הבא");
+      }
+      return;
+    }
+    requestNavigateToPaymentCode(paymentNavNextCode);
   }
 
   function confirmNavUnsavedAndProceed() {
-    const direction = navUnsavedOpen;
-    if (!direction) return;
-    setNavUnsavedOpen(null);
-    const targetId = direction === "prev" ? previousPaymentId : nextPaymentId;
-    if (!targetId) return;
-    void loadPayment(targetId);
+    const code = navUnsavedPendingCode;
+    setNavUnsavedPendingCode(null);
+    if (!code) return;
+    void loadPaymentByCode(code);
   }
+
+  useEffect(() => {
+    if (savedCapturePaymentId) return;
+    refreshPaymentCodePreview();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- רק מדינה / מעבר לקליטה חדשה
+  }, [captureWorkCountry, savedCapturePaymentId]);
+
+  useEffect(() => {
+    const code = displayedPaymentCode;
+    if (!code) {
+      clearPaymentCodeNav();
+      return;
+    }
+    void refreshPaymentCodeNeighbors(code);
+  }, [displayedPaymentCode, refreshPaymentCodeNeighbors, clearPaymentCodeNav]);
 
   useEffect(() => {
     if (initialAppliedRef.current) return;
@@ -1166,16 +1297,15 @@ export function PaymentModalUpdated({
     setPaymentTimeHm(formatLocalHm(new Date()));
     setSaveErr(null);
     setPaymentNavLoading(false);
-    setNavUnsavedOpen(null);
-    setPreviousPaymentId(null);
-    setNextPaymentId(null);
+    setNavUnsavedPendingCode(null);
+    clearPaymentCodeNav();
     setCustomerBalanceResetPending(false);
     setPreviewPaymentCode(null);
     setLoadedPayment(createNewCaptureLoadedPayment(""));
     refreshPaymentCodePreview();
     syncBaselineSoon();
     window.setTimeout(() => focusCustomerCodeInput(), 0);
-  }, [resetOnKey, financial, refreshPaymentCodePreview, focusCustomerCodeInput]);
+  }, [resetOnKey, financial, refreshPaymentCodePreview, focusCustomerCodeInput, clearPaymentCodeNav]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1368,11 +1498,29 @@ export function PaymentModalUpdated({
       return { ok: false };
     }
     const forceCustomerCreditPayment = customerHasCredit;
+    const allocDiag = logPaymentAllocationPreSave({
+      source: "payment-modal",
+      customerId: customer?.id ?? null,
+      customerLoaded: Boolean(customer),
+      ordersLoading,
+      ordersCount: orders.length,
+      paymentAmountUsd: totals.totalUsd,
+      selectedOrderIds: includedIds,
+      weekCode: intakeWeekCode,
+      bases,
+      prioritizedOrderIds: prioritizedSet,
+      forceCustomerCreditPayment,
+      lastCustomerSearchExactOnly: lastEditedFieldRef.current === "code",
+      custSearchNoHits,
+    });
     const { byOrderId, unallocatedUsd } =
       forceCustomerCreditPayment && totals.totalUsd > 0.02
         ? { byOrderId: new Map<string, number>(), unallocatedUsd: totals.totalUsd }
-        : allocatePaymentAcrossOrders(bases, totals.totalUsd, prioritizedSet);
-    const hasAlloc = [...byOrderId.values()].some((v) => v > 0.02);
+        : {
+            byOrderId: new Map(allocDiag.allocationTargets.map((t) => [t.orderId, t.amountUsd])),
+            unallocatedUsd: allocDiag.unallocatedUsd,
+          };
+    const hasAlloc = allocDiag.allocationTargets.length > 0;
     if (!hasAlloc && !((saveSurplusAsCredit || forceCustomerCreditPayment) && unallocatedUsd > 0.02)) {
       setSaveErr("אין יעד להקצאה");
       return { ok: false };
@@ -1400,6 +1548,7 @@ export function PaymentModalUpdated({
       paymentDateYmd: receivedTodaySave ? formatLocalYmd(new Date()) : paymentDateYmd,
       paymentTimeHm: hm,
       weekCode: weekForSave,
+      workCountry: captureWorkCountry,
       dollarRate,
       commissionPercent: commissionPercentStr,
       payments,
@@ -1452,11 +1601,10 @@ export function PaymentModalUpdated({
     setCommissionResetIds([]);
     setSaveErr(null);
     setLoadedPayment(createNewCaptureLoadedPayment(savedCode));
-    setPreviousPaymentId(null);
-    setNextPaymentId(null);
+    clearPaymentCodeNav();
     syncBaselineSoon();
     focusFirstAmountInput();
-    void loadCustomerOrders(cid, { silent: true });
+    void loadCustomerOrders(cid, { silent: true, weekCode: intakeWeekCode });
     refreshPaymentCodePreview();
   }
 
@@ -1575,11 +1723,8 @@ export function PaymentModalUpdated({
   const paymentCaptureNavLabel = displayedPaymentCode;
   const paymentIsCancelled = loadedPayment?.status === "CANCELLED";
   const canCancelSavedPayment = Boolean(savedCapturePaymentId) && !paymentIsCancelled;
-  const canNavigateSavedPayments = Boolean(savedCapturePaymentId);
-  const prevPaymentNavDisabled =
-    saveBusy || paymentNavLoading || !canNavigateSavedPayments || !previousPaymentId;
-  const nextPaymentNavDisabled =
-    saveBusy || paymentNavLoading || !canNavigateSavedPayments || !nextPaymentId;
+  const prevPaymentNavDisabled = saveBusy || paymentNavLoading;
+  const nextPaymentNavDisabled = saveBusy || paymentNavLoading;
 
   async function executeCancelPayment() {
     if (!savedCapturePaymentId || cancelPaymentBusy) return;
@@ -1598,9 +1743,11 @@ export function PaymentModalUpdated({
       setCancelPaymentOpen(false);
       setCancelReasonDraft("");
       onToast(`תשלום ${res.paymentCode ?? ""} בוטל — היתרה עודכנה`);
-      await loadPayment(savedCapturePaymentId);
+      const reloadCode = displayedPaymentCode;
+      if (reloadCode) await loadPaymentByCode(reloadCode);
+      else if (savedCapturePaymentId) await loadPayment(savedCapturePaymentId);
       if (customer?.id) {
-        await loadCustomerOrders(customer.id, { silent: true });
+        await loadCustomerOrders(customer.id, { silent: true, weekCode: intakeWeekCode });
       }
       router.refresh();
     } finally {
@@ -1941,12 +2088,19 @@ export function PaymentModalUpdated({
                     className="payment-modal-week-arrow"
                     variant="angle"
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      const cur = parseWeekNumber(weekDraft) ?? parseWeekNumber(weekSelectValue) ?? baseWeekNumber;
-                      applyWeekNumber(goToPrevWeekNumber(cur));
-                      setWeekInputErr(null);
-                    }}
+                    onClick={() => shiftIntakeWeek(-1)}
                   />
+                  <button
+                    type="button"
+                    className="payment-modal-week-arrow"
+                    aria-label="שבוע נוכחי"
+                    title="שבוע נוכחי"
+                    disabled={isActiveWorkWeekCode(intakeWeekCode)}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={goToCurrentWorkWeek}
+                  >
+                    🏠
+                  </button>
                   <input
                     type="text"
                     className={weekInputErr ? "payment-modal-week-inp payment-modal-week-inp--err" : "payment-modal-week-inp"}
@@ -1963,7 +2117,7 @@ export function PaymentModalUpdated({
                         return;
                       }
                       setWeekInputErr(null);
-                      applyWeekNumber(num);
+                      applyIntakeWeekCode(toWeekCode(num), { reloadOrders: true });
                     }}
                     onBlur={() => {
                       const curRaw = weekDraft.trim().toUpperCase();
@@ -1973,18 +2127,14 @@ export function PaymentModalUpdated({
                       setWeekDraft(weekReadonly !== "—" ? weekReadonly : globalWeek);
                         return;
                       }
-                      setWeekDraft(toWeekCode(num));
+                      applyIntakeWeekCode(toWeekCode(num));
                     }}
                   />
                   <AhWeekNavNextButton
                     className="payment-modal-week-arrow"
                     variant="angle"
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      const cur = parseWeekNumber(weekDraft) ?? parseWeekNumber(weekSelectValue) ?? baseWeekNumber;
-                      applyWeekNumber(goToNextWeekNumber(cur));
-                      setWeekInputErr(null);
-                    }}
+                    onClick={() => shiftIntakeWeek(1)}
                   />
                   <button
                     type="button"
@@ -2009,6 +2159,11 @@ export function PaymentModalUpdated({
             </div>
 
             <div className="payment-modal-table-wrap">
+              {customer && ordersLoading ? (
+                <p className="payment-modal-hint" role="status" aria-live="polite">
+                  מעדכן נתונים…
+                </p>
+              ) : null}
               {customer && intakeWeekTableHint ? (
                 <p className="payment-modal-intake-week-hint" dir="rtl">
                   {intakeWeekTableHint}
@@ -2146,7 +2301,11 @@ export function PaymentModalUpdated({
                     {matched.length === 0 ? (
                       <tr>
                         <td colSpan={12} className="payment-modal-empty">
-                          {customer ? "אין הזמנות ללקוח זה" : "בחרו לקוח"}
+                          {customer && ordersLoading
+                            ? "טוען הזמנות…"
+                            : customer
+                              ? "אין הזמנות ללקוח זה"
+                              : "בחרו לקוח"}
                         </td>
                       </tr>
                     ) : (
@@ -2315,21 +2474,22 @@ export function PaymentModalUpdated({
               <div className="payment-modal-side-inner payment-modal-side-inner--payment-only">
                 <label className="payment-modal-lbl payment-modal-lbl--micro">
                   קוד תשלום
-                  <div className="payment-navigation-row" dir="ltr" aria-label="ניווט בין קליטות תשלום">
+                  <div className="payment-navigation-row" dir="ltr" aria-label="ניווט בין קודי תשלום">
                     <button
                       type="button"
                       className={[
                         "payment-nav-arrow",
                         paymentNavLoading ? "payment-nav-arrow--busy" : "",
-                        !previousPaymentId && canNavigateSavedPayments ? "payment-nav-arrow--edge" : "",
+                        !paymentNavPrevCode ? "payment-nav-arrow--edge" : "",
                       ]
                         .filter(Boolean)
                         .join(" ")}
-                      aria-label="קליטת תשלום קודמת"
+                      aria-label="הקודם"
+                      title={paymentNavPrevCode ? `הקודם: ${paymentNavPrevCode}` : "אין קליטה קודמת במדינה זו"}
                       disabled={prevPaymentNavDisabled}
-                      onClick={goToPreviousPayment}
+                      onClick={goToPreviousPaymentCode}
                     >
-                      {paymentNavLoading ? <span className="payment-modal-save-spinner" aria-hidden /> : "◀"}
+                      {paymentNavLoading ? <span className="payment-modal-save-spinner" aria-hidden /> : "⬅"}
                     </button>
                     {paymentCaptureNavLabel ? (
                       <div className="payment-nav-code" dir="ltr" aria-label="קוד קליטת תשלום">
@@ -2354,15 +2514,16 @@ export function PaymentModalUpdated({
                       className={[
                         "payment-nav-arrow",
                         paymentNavLoading ? "payment-nav-arrow--busy" : "",
-                        !nextPaymentId && canNavigateSavedPayments ? "payment-nav-arrow--edge" : "",
+                        !paymentNavNextCode ? "payment-nav-arrow--edge" : "",
                       ]
                         .filter(Boolean)
                         .join(" ")}
-                      aria-label="קליטת תשלום הבאה"
+                      aria-label="הבא"
+                      title={paymentNavNextCode ? `הבא: ${paymentNavNextCode}` : "אין קליטה הבאה במדינה זו"}
                       disabled={nextPaymentNavDisabled}
-                      onClick={goToNextPayment}
+                      onClick={goToNextPaymentCode}
                     >
-                      {paymentNavLoading ? <span className="payment-modal-save-spinner" aria-hidden /> : "▶"}
+                      {paymentNavLoading ? <span className="payment-modal-save-spinner" aria-hidden /> : "➡"}
                     </button>
                   </div>
                 </label>
@@ -2507,7 +2668,7 @@ export function PaymentModalUpdated({
         canEditOrders={canEditOrders}
         onClose={() => setOrderEditId(null)}
         onSaved={() => {
-          if (customer?.id) void loadCustomerOrders(customer.id);
+          if (customer?.id) void loadCustomerOrders(customer.id, { silent: true, weekCode: intakeWeekCode });
         }}
       />
       <PaymentOpenDebtDetailModal
@@ -2591,13 +2752,13 @@ export function PaymentModalUpdated({
           </div>
         </div>
       ) : null}
-      {navUnsavedOpen ? (
+      {navUnsavedPendingCode ? (
         <div
           className="adm-oc-edit-request-backdrop"
           role="presentation"
           onClick={() => {
             if (paymentNavLoading) return;
-            setNavUnsavedOpen(null);
+            setNavUnsavedPendingCode(null);
           }}
         >
           <div
@@ -2614,7 +2775,7 @@ export function PaymentModalUpdated({
                 type="button"
                 className="adm-btn adm-btn--ghost adm-btn--dense"
                 disabled={paymentNavLoading}
-                onClick={() => setNavUnsavedOpen(null)}
+                onClick={() => setNavUnsavedPendingCode(null)}
               >
                 ביטול
               </button>

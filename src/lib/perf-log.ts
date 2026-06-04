@@ -11,6 +11,13 @@ export function perfNowLabel(scope: string): string {
   return `[perf] ${scope}`;
 }
 
+/** redirect() / notFound() — לא שגיאה אמיתית; לא לוגים כ-[perf] error */
+export function isNextNavigationError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("digest" in error)) return false;
+  const digest = String((error as { digest: unknown }).digest);
+  return digest.startsWith("NEXT_REDIRECT") || digest.startsWith("NEXT_NOT_FOUND");
+}
+
 export function perfError(scope: string, error: unknown, extra?: Record<string, unknown>): void {
   if (!PERF_ENABLED) return;
   console.error(perfNowLabel(scope), {
@@ -43,7 +50,9 @@ export async function withPerfTimer<T>(scope: string, fn: () => Promise<T>): Pro
     const out = await fn();
     return out;
   } catch (error) {
-    perfError(scope, error);
+    if (!isNextNavigationError(error)) {
+      perfError(scope, error);
+    }
     throw error;
   } finally {
     perfTimeEnd(label);

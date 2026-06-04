@@ -14,6 +14,7 @@ import {
 
 type Props = {
   plan: ClearDemoDataPlan;
+  envBlockedReason?: string | null;
 };
 
 const COUNT_LABELS: Record<keyof ClearDemoDataPlan["counts"], string> = {
@@ -21,6 +22,7 @@ const COUNT_LABELS: Record<keyof ClearDemoDataPlan["counts"], string> = {
   payments: "קליטות תשלום / תשלומים",
   orderEditRequests: "בקשות עריכת הזמנה",
   orders: "הזמנות",
+  orderWeekCounters: "מוני מספור הזמנות (order_week_counter)",
   receiptControls: "בקרת קבלות",
   customerBalanceOverrides: "סטטוס יתרות לקוח",
   customers: "לקוחות",
@@ -34,14 +36,14 @@ const COUNT_LABELS: Record<keyof ClearDemoDataPlan["counts"], string> = {
   employeeUsers: "משתמשי עובד",
 };
 
-export function ClearDemoDataClient({ plan: initialPlan }: Props) {
+export function ClearDemoDataClient({ plan: initialPlan, envBlockedReason = null }: Props) {
   const router = useRouter();
   const [plan, setPlan] = useState(initialPlan);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [typed, setTyped] = useState("");
   const [result, setResult] = useState<ClearDemoDataActionState | null>(null);
   const [isPending, startTransition] = useTransition();
-  const canSubmit = isClearDemoConfirmationValid(typed) && !isPending;
+  const canSubmit = isClearDemoConfirmationValid(typed) && !isPending && !envBlockedReason;
 
   const totalRows = useMemo(() => {
     return Object.values(plan.counts).reduce((sum, n) => sum + n, 0);
@@ -71,13 +73,20 @@ export function ClearDemoDataClient({ plan: initialPlan }: Props) {
         <div>
           <h1>ניקוי נתוני מערכת</h1>
           <p>
-            מוחק נתוני עבודה בלבד ומשאיר את מבנה המערכת, הרשאות, הגדרות, טבלאות מקור וכל המשתמשים (ADMIN + עובדים).
+            מוחק הזמנות, תשלומים, לקוחות ונתוני עבודה נלווים (ייבוא, יומן, מוני הזמנות) — לא נוגע במשתמשים, הרשאות, הגדרות, סטטוסים או טבלאות מקור.
+            ב-production נדרש <code dir="ltr">ALLOW_CLEAR_DEMO_DATA=1</code> ב-env. ל-DEMO עם לקוח מ-100: <code dir="ltr">CUSTOMER_CODE_FIRST_NUMBER=100</code>.
             יש להקליד בדיוק <code dir="ltr">{CLEAR_DEMO_DATA_CONFIRMATION}</code> באישור.
             מהטרמינל: <code dir="ltr">npx tsx scripts/clear-demo-data.ts --confirm &quot;{CLEAR_DEMO_DATA_CONFIRMATION}&quot;</code> (ללא{" "}
             <code dir="ltr">--confirm</code> זו רק תצוגה מקדימה).
           </p>
         </div>
       </div>
+
+      {envBlockedReason ? (
+        <div className="clear-demo-result clear-demo-result--err">
+          <p>{envBlockedReason}</p>
+        </div>
+      ) : null}
 
       <section className="clear-demo-card clear-demo-card--danger">
         <h2>סיכום מחיקה</h2>
@@ -135,7 +144,12 @@ export function ClearDemoDataClient({ plan: initialPlan }: Props) {
       ) : null}
 
       <div className="clear-demo-actions">
-        <button type="button" className="adm-btn adm-btn--danger" onClick={() => setConfirmOpen(true)}>
+        <button
+          type="button"
+          className="adm-btn adm-btn--danger"
+          disabled={!!envBlockedReason}
+          onClick={() => setConfirmOpen(true)}
+        >
           פתיחת אישור מחיקה
         </button>
       </div>

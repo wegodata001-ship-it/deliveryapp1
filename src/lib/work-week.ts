@@ -130,6 +130,17 @@ export function balancesSnapshotToYmd(selectedWeekCode: string | null | undefine
   return getAhWeekRange(norm)?.to ?? "";
 }
 
+/** מיישר טווח YMD — אם from > to מחליף (מונע URL / סינון הפוך) */
+export function normalizeYmdRangePair(fromYmd: string, toYmd: string): { from: string; to: string; swapped: boolean } {
+  const from = fromYmd.trim();
+  const to = toYmd.trim();
+  if (!from || !to || !isValidYmd(from) || !isValidYmd(to)) {
+    return { from, to, swapped: false };
+  }
+  if (from > to) return { from: to, to: from, swapped: true };
+  return { from, to, swapped: false };
+}
+
 export function nextWeekCode(code: string): string | null {
   return getNextAhWeek(code)?.code ?? null;
 }

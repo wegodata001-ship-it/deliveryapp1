@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { getCustomerLedgerAction } from "@/app/admin/capture/actions";
 import {
   exportCustomerLedgerExcel,
@@ -48,6 +49,7 @@ type Props = {
   payments: CustomerProfilePaymentRow[];
   /** תצוגה קומפקטית בראש מסך ה-Workspace */
   compact?: boolean;
+  onShowStats?: () => void;
 };
 
 export function CustomerDocumentsPanel({
@@ -58,11 +60,25 @@ export function CustomerDocumentsPanel({
   orders,
   payments,
   compact = false,
+  onShowStats,
 }: Props) {
   const [fromYmd, setFromYmd] = useState("");
   const [toYmd, setToYmd] = useState("");
   const [reportType, setReportType] = useState<CustomerModuleExportKind>("ledger");
   const [busy, setBusy] = useState<"pdf" | "excel" | "email" | null>(null);
+  const [pdfMenuOpen, setPdfMenuOpen] = useState(false);
+  const pdfMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!pdfMenuOpen) return;
+    function onPointerDown(e: MouseEvent) {
+      if (pdfMenuRef.current && !pdfMenuRef.current.contains(e.target as Node)) {
+        setPdfMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, [pdfMenuOpen]);
 
   const meta: CustomerLedgerExportMeta = { ...exportMeta, fromYmd, toYmd };
 
@@ -169,14 +185,88 @@ export function CustomerDocumentsPanel({
         </div>
       </div>
       <div className="adm-cust-docs-card__actions">
-        <button
-          type="button"
-          className="adm-btn adm-btn--primary adm-export-btn--pdf"
-          disabled={!!busy}
-          onClick={() => void runExport("pdf")}
+        {onShowStats ? (
+          <button
+            type="button"
+            className="adm-btn adm-btn--secondary adm-cust-docs-stats-btn"
+            disabled={!!busy}
+            onClick={onShowStats}
+          >
+            📊 הצג סטטיסטיקה
+          </button>
+        ) : null}
+        <div
+          ref={pdfMenuRef}
+          className={[
+            "adm-export-split-wrap",
+            "adm-export-split-wrap--pdf",
+            pdfMenuOpen ? "adm-export-split-wrap--open" : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
         >
-          {busy === "pdf" ? "מייצא…" : "PDF"}
-        </button>
+          <div className="adm-btn adm-btn--primary adm-export-btn--pdf adm-export-split">
+            <button
+              type="button"
+              className="adm-export-split__main"
+              disabled={!!busy}
+              onClick={() => {
+                setPdfMenuOpen(false);
+                void runExport("pdf");
+              }}
+            >
+              <span className="adm-export-split__label">{busy === "pdf" ? "מייצא…" : "PDF"}</span>
+            </button>
+            <button
+              type="button"
+              className="adm-export-split__toggle"
+              disabled={!!busy}
+              aria-expanded={pdfMenuOpen}
+              aria-haspopup="menu"
+              aria-label="אפשרויות PDF"
+              onClick={() => setPdfMenuOpen((o) => !o)}
+            >
+              <ChevronDown
+                size={16}
+                strokeWidth={2.25}
+                className={pdfMenuOpen ? "adm-export-split__chev adm-export-split__chev--open" : "adm-export-split__chev"}
+                aria-hidden
+              />
+            </button>
+          </div>
+          {pdfMenuOpen ? (
+            <ul className="adm-export-menu adm-cust-docs-pdf-menu" role="menu" dir="rtl">
+              <li role="none">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="adm-export-menu__btn"
+                  disabled={!!busy}
+                  onClick={() => {
+                    setPdfMenuOpen(false);
+                    void runExport("pdf");
+                  }}
+                >
+                  הורד PDF
+                </button>
+              </li>
+              <li role="none">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="adm-export-menu__btn"
+                  disabled={!!busy}
+                  onClick={() => {
+                    setPdfMenuOpen(false);
+                    onEmail();
+                  }}
+                >
+                  שלח למייל
+                </button>
+              </li>
+            </ul>
+          ) : null}
+        </div>
         <button
           type="button"
           className="adm-btn adm-btn--secondary adm-export-btn--excel"
@@ -184,9 +274,6 @@ export function CustomerDocumentsPanel({
           onClick={() => void runExport("excel")}
         >
           {busy === "excel" ? "מייצא…" : "Excel"}
-        </button>
-        <button type="button" className="adm-btn adm-btn--ghost" disabled={!!busy} onClick={onEmail}>
-          שלח למייל
         </button>
       </div>
     </div>

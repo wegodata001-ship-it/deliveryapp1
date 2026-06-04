@@ -8,6 +8,7 @@ import {
   clearDemoData,
   getClearDemoDataPlan,
   isClearDemoConfirmationValid,
+  isClearDemoDataEnvironmentAllowed,
   type ClearDemoDataCounts,
   type ClearDemoDataPlan,
 } from "@/lib/clear-demo-data";
@@ -25,6 +26,11 @@ export async function clearDemoDataAction(confirmation: string): Promise<ClearDe
   }
   if (!isClearDemoConfirmationValid(confirmation)) {
     return { ok: false, error: `יש להקליד בדיוק: ${CLEAR_DEMO_DATA_CONFIRMATION}` };
+  }
+
+  const envCheck = isClearDemoDataEnvironmentAllowed();
+  if (!envCheck.allowed) {
+    return { ok: false, error: envCheck.reason ?? "איפוס DEMO אינו מותר בסביבה זו" };
   }
 
   try {

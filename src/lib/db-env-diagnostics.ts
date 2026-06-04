@@ -97,14 +97,22 @@ export function getDbEnvSnapshot(prismaInstanceId = "singleton"): DbEnvSnapshot 
   };
 }
 
-/** לוג בתחילת API / server action — פעם אחת לכל route לכל process */
+function dbEnvDebugEnabled(): boolean {
+  return process.env.DB_ENV_DEBUG === "1" || process.env.DB_ENV_DEBUG === "true";
+}
+
+/** לוג בתחילת API / server action — רק כש-DB_ENV_DEBUG=1 (או פעם ראשונה ב-dev) */
 export function logDbEnvDiagnostics(route: string, prismaInstanceId = "singleton"): void {
   const key = route || "unknown";
+  const verbose = dbEnvDebugEnabled();
   if (!loggedGlobal) {
     loggedGlobal = true;
-    const snap = getDbEnvSnapshot(prismaInstanceId);
-    console.log("[db-env] global (first load)", snap);
+    if (verbose || process.env.NODE_ENV !== "production") {
+      const snap = getDbEnvSnapshot(prismaInstanceId);
+      console.log("[db-env] global (first load)", snap);
+    }
   }
+  if (!verbose) return;
   if (loggedRoutes.has(key)) return;
   loggedRoutes.add(key);
 

@@ -90,6 +90,14 @@ const ACTIVE_WEEK_NAV_PATHS = new Set(["/admin/orders", "/admin/balances"]);
 
 function applyActiveWorkWeekToParams(out: URLSearchParams, pathname: string): void {
   const active = getActiveWorkWeekRange();
+  if (pathname === "/admin/balances") {
+    /** יתרות: רק שבוע + תאריך snapshot (סוף שבוע קודם) — לא from/to של טווח השבוע */
+    out.set("week", active.weekCode);
+    out.set("to", balancesSnapshotToYmd(active.weekCode));
+    out.delete("from");
+    out.delete("upto");
+    return;
+  }
   out.set("week", active.weekCode);
   out.set("from", active.fromYmd);
   out.set("to", active.toYmd);
@@ -99,10 +107,6 @@ function applyActiveWorkWeekToParams(out: URLSearchParams, pathname: string): vo
     out.set("ordersTo", active.toYmd);
     out.delete("ordersPreset");
     out.delete("preset");
-  }
-  if (pathname === "/admin/balances") {
-    out.set("to", balancesSnapshotToYmd(active.weekCode));
-    out.delete("upto");
   }
 }
 

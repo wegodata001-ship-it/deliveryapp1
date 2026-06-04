@@ -6,7 +6,14 @@ import { perfEnabled } from "@/lib/perf-log";
 import { logDbEnvDiagnostics } from "@/lib/db-env-diagnostics";
 import { prisma } from "@/lib/prisma";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
-import { endOfLocalDay, formatLocalYmd, getAhWeekRange, normalizeAhWeekCode, parseLocalDate } from "@/lib/work-week";
+import {
+  endOfLocalDay,
+  formatLocalYmd,
+  getAhWeekRange,
+  normalizeAhWeekCode,
+  normalizeYmdRangePair,
+  parseLocalDate,
+} from "@/lib/work-week";
 import { resolveCountryScopeFromCode } from "@/lib/country-data-scope";
 import { ORDER_COUNTRY_CODES, normalizeOrderSourceCountry, type OrderCountryCode } from "@/lib/order-countries";
 import {
@@ -688,13 +695,20 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       lte: lteBound,
     };
   } else if (query.fromYmd?.trim() || query.toYmd?.trim()) {
+    let fromYmd = query.fromYmd?.trim() ?? "";
+    let toYmd = query.toYmd?.trim() ?? "";
+    if (fromYmd && toYmd) {
+      const pair = normalizeYmdRangePair(fromYmd, toYmd);
+      fromYmd = pair.from;
+      toYmd = pair.to;
+    }
     orderDateFilter = {
-      ...(query.fromYmd?.trim() ? { gte: parseLocalDate(query.fromYmd.trim()) } : {}),
-      ...(query.toYmd?.trim() ? { lte: endOfLocalDay(query.toYmd.trim()) } : {}),
+      ...(fromYmd ? { gte: parseLocalDate(fromYmd) } : {}),
+      ...(toYmd ? { lte: endOfLocalDay(toYmd) } : {}),
     };
     paymentDateFilter = {
-      ...(query.fromYmd?.trim() ? { gte: parseLocalDate(query.fromYmd.trim()) } : {}),
-      ...(query.toYmd?.trim() ? { lte: endOfLocalDay(query.toYmd.trim()) } : {}),
+      ...(fromYmd ? { gte: parseLocalDate(fromYmd) } : {}),
+      ...(toYmd ? { lte: endOfLocalDay(toYmd) } : {}),
     };
   }
 

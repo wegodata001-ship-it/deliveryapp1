@@ -22,13 +22,21 @@ export const CUSTOMER_SEARCH_SELECT = {
   nameAr: true,
   nameEn: true,
   nameHe: true,
+  address: true,
+  countryCode: true,
+  balanceUsd: true,
   isActive: true,
   deletedAt: true,
 } as const;
 
 type CustomerSearchDbRow = Prisma.CustomerGetPayload<{ select: typeof CUSTOMER_SEARCH_SELECT }>;
 
+export function mapCustomerRowsToSearchRows(rows: CustomerSearchDbRow[]): CustomerSearchRow[] {
+  return rows.map(toSearchRow);
+}
+
 function toSearchRow(r: CustomerSearchDbRow): CustomerSearchRow {
+  const bal = r.balanceUsd != null ? Number(r.balanceUsd) : 0;
   return {
     id: r.id,
     label: primaryCustomerDisplayName({
@@ -46,6 +54,9 @@ function toSearchRow(r: CustomerSearchDbRow): CustomerSearchRow {
     nameHe: r.nameHe,
     phone2: r.phone2,
     oldCustomerCode: r.oldCustomerCode,
+    address: r.address,
+    countryCode: r.countryCode,
+    balanceUsd: Number.isFinite(bal) ? bal : 0,
   };
 }
 

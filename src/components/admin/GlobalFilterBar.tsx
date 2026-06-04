@@ -11,6 +11,7 @@ import {
   getAhWeekCodeFromDateRange,
   getAhWeekRange,
   normalizeAhWeekCode,
+  normalizeYmdRangePair,
 } from "@/lib/work-week";
 import { withQuery } from "@/lib/admin-url-query";
 import { ORDER_COUNTRY_CODES, orderCountryLabel, type OrderCountryCode } from "@/lib/order-countries";
@@ -141,18 +142,19 @@ export function GlobalFilterBar({ financial = null, canManageFinancial = false }
 
   const applyValues = useCallback(
     (nextWeek: string, nextFrom: string, nextTo: string, nextCountry: OrderCountryCode = country) => {
+      const range = normalizeYmdRangePair(nextFrom, nextTo);
       const next = withQuery(pathname, sp, {
         week: nextWeek === "—" ? "" : nextWeek,
-        from: nextFrom,
-        to: nextTo,
+        from: range.from,
+        to: range.to,
         country: nextCountry,
         modal: null,
       });
       router.push(next);
       try {
         localStorage.setItem("globalWeek", nextWeek === "—" ? "" : nextWeek);
-        localStorage.setItem("globalFrom", nextFrom);
-        localStorage.setItem("globalTo", nextTo);
+        localStorage.setItem("globalFrom", range.from);
+        localStorage.setItem("globalTo", range.to);
         localStorage.setItem("globalCountry", nextCountry);
       } catch {
         // ignore
