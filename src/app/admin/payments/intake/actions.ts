@@ -38,7 +38,7 @@ export type PaymentIntakeCustomerPayload = {
   phone: string | null;
   customerCode: string | null;
   customerIndex: string | null;
-  /** totalPayments - totalOrders. חיובי = יתרת זכות, שלילי = חוב פתוח */
+  /** totalPayments + debtWithdrawals - totalOrders. חיובי = יתרת זכות, שלילי = חוב פתוח */
   customerBalanceUsd: string;
 };
 
@@ -60,7 +60,7 @@ export async function calculatePaymentCaptureCustomerBalanceUsd(customerId: stri
   const [orders, payments] = await Promise.all([
     prisma.order.findMany({
       where: { customerId, deletedAt: null },
-      select: { status: true, totalUsd: true, amountUsd: true, commissionUsd: true },
+      select: { status: true, totalUsd: true, amountUsd: true, commissionUsd: true, debtWithdrawalUsd: true },
     }),
     prisma.payment.findMany({
       where: { customerId, isPaid: true },
@@ -68,13 +68,21 @@ export async function calculatePaymentCaptureCustomerBalanceUsd(customerId: stri
     }),
   ]);
 
-  const totalOrders = orders.reduce((sum, o) => {
-    if (isDebtWithdrawalOrderStatus(o.status)) return sum;
+  const totalOrders = orders.reduce(
+    (sum, o) =>
+      isDebtWithdrawalOrderStatus(o.status)
+        ? sum
+        : sum.add(o.totalUsd ?? (o.amountUsd ?? new Prisma.Decimal(0)).add(o.commissionUsd ?? new Prisma.Decimal(0))),
+    new Prisma.Decimal(0),
+  );
+  const totalDebtWithdrawals = orders.reduce((sum, o) => {
+    if (!isDebtWithdrawalOrderStatus(o.status)) return sum;
+    if (o.debtWithdrawalUsd && o.debtWithdrawalUsd.gt(0)) return sum.add(o.debtWithdrawalUsd);
     return sum.add(o.totalUsd ?? (o.amountUsd ?? new Prisma.Decimal(0)).add(o.commissionUsd ?? new Prisma.Decimal(0)));
   }, new Prisma.Decimal(0));
 
   const totalPayments = payments.reduce((sum, p) => sum.add(paymentUsdEquivalent(p)), new Prisma.Decimal(0));
-  return totalPayments.sub(totalOrders).toDecimalPlaces(2, 4);
+  return totalPayments.add(totalDebtWithdrawals).sub(totalOrders).toDecimalPlaces(2, 4);
 }
 
 async function applyPaymentCustomerDraftsIfNeeded(params: {
@@ -153,6 +161,7 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
     where: {
       customerId: cid,
       deletedAt: null,
+      status: { not: "DEBT_WITHDRAWAL" },
       ...(weekDateWhere ?? {}),
     },
     orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],

@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { useOrderStatusCatalog } from "@/components/admin/OrderStatusCatalogProvider";
 import { statusSelectBorderStyle } from "@/lib/order-status-catalog";
+import { OS } from "@/lib/order-status-slugs";
 
 type Props = {
   id?: string;
@@ -35,6 +36,8 @@ export function OrderStatusSelect({
 
   const colorHex = getColorHex(value);
   const variantClass = variant === "table" ? "adm-order-status-select--table" : "adm-order-status-select--default";
+  const displayLabel = (statusId: string, label: string): string =>
+    statusId === OS.DEBT_WITHDRAWAL ? "💰 משיכה מחוב" : label;
 
   return (
     <select
@@ -51,7 +54,7 @@ export function OrderStatusSelect({
       ) : (
         list.map((o) => (
           <option key={o.value} value={o.value}>
-            {o.colorHex ? `● ${o.label}` : o.label}
+            {o.colorHex ? `● ${displayLabel(o.value, o.label)}` : displayLabel(o.value, o.label)}
           </option>
         ))
       )}

@@ -290,12 +290,14 @@ export async function fetchOrdersListPageData(
   const orders: OrderListRow[] = await perfTimed((ms) => (summaryMs += ms), async () =>
     rows.map((r) => {
       const total = r.totalUsd != null ? Number(r.totalUsd) : 0;
-    const rawPaid = paidByOrder.get(r.id) ?? 0;
-    const debtWithdrawal = r.debtWithdrawalUsd != null ? Number(r.debtWithdrawalUsd) : 0;
-    const paid = rawPaid + debtWithdrawal;
-      const balanceUsd = total - paid;
+      const isDebtWithdrawal = r.status === OS.DEBT_WITHDRAWAL;
+      const rawPaid = paidByOrder.get(r.id) ?? 0;
+      const paid = isDebtWithdrawal ? 0 : rawPaid;
+      const balanceUsd = isDebtWithdrawal ? 0 : total - paid;
       let paymentStatus: OrderListRow["paymentStatus"] = "unpaid";
-      if (total > 0.01) {
+      if (isDebtWithdrawal) {
+        paymentStatus = "paid";
+      } else if (total > 0.01) {
         if (paid >= total - 0.02) paymentStatus = "paid";
         else if (paid > 0.01) paymentStatus = "partial";
       } else if (paid > 0.01) {

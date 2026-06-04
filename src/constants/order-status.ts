@@ -84,8 +84,8 @@ export const ORDER_STATUS_META: Record<string, OrderStatusMeta> = {
   },
   [OS.DEBT_WITHDRAWAL]: {
     value: OS.DEBT_WITHDRAWAL,
-    label: "משיכה מהחוב",
-    editLabel: "משיכה מהחוב",
+    label: "💰 משיכה מחוב",
+    editLabel: "💰 יתרת זכות ללקוח",
     color: "purple",
     badgeClass: "adm-badge-sel--withdrawal",
     tableClass: "adm-ord-st adm-ord-st--muted",

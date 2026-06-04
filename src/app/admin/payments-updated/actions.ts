@@ -358,6 +358,7 @@ export async function savePaymentUpdatedAction(
     where: {
       customerId: cid,
       deletedAt: null,
+      status: { not: OS.DEBT_WITHDRAWAL },
       ...(weekDateWhere ?? {}),
     },
     orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],

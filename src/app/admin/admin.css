@@ -1978,19 +1978,19 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
 
 .adm-ord-money--debt-withdrawal,
 .adm-ledger-charge--debt-withdrawal {
-  color: #dc2626 !important;
+  color: #16a34a !important;
   font-weight: 700;
 }
 
 .adm-oc-money-value--debt-withdrawal {
-  color: #dc2626;
+  color: #16a34a;
 }
 
 .adm-oc-debt-withdrawal-hint {
   margin: 4px 0 0;
   font-size: 11px;
   font-weight: 600;
-  color: #b91c1c;
+  color: #15803d;
   line-height: 1.3;
 }
 .adm-table-excel--orders-v2 .adm-ord-col-ils      { width: 9%; text-align: end; }
