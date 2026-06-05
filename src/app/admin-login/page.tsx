@@ -21,12 +21,18 @@ export default async function AdminLoginPage({
 
     return (
       <div className="al-page" dir="rtl" lang="he">
+        <div className="al-page__glow" aria-hidden />
         <div className="al-card">
           <header className="al-header">
-            <div className="al-logo-wrap adm-brand-logo adm-brand-logo--erp" style={{ width: 72, height: 72 }}>
-              <WegoWMarkSvg size={72} />
+            <div className="al-logo-wrap adm-brand-logo adm-brand-logo--erp">
+              <WegoWMarkSvg size={104} />
             </div>
-            <h1>וויגו פרו — מערכת לוגיסטיקה</h1>
+            <h1 className="al-title" dir="ltr" lang="en">
+              WEGO ERP
+            </h1>
+            <p className="al-tagline" dir="ltr" lang="en">
+              Business Logistics &amp; Financial Control Center
+            </p>
           </header>
           <LoginForm nextPath={nextPath} />
         </div>

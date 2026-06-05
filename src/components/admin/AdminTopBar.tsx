@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { Menu } from "lucide-react";
 import { DEFAULT_WEEK_CODE } from "@/lib/work-week";
@@ -64,10 +65,20 @@ export function AdminTopBar({ displayName, roleLabel, financial, canManageFinanc
               <Menu size={22} strokeWidth={2.2} aria-hidden />
             </button>
           ) : null}
-          <WegoBrandLogo size={36} className="adm-header-mark" />
+          <Link
+            href="/admin"
+            className="adm-header-brand-home"
+            title="חזרה למסך הבית"
+            aria-label="חזרה למסך הבית"
+          >
+            <WegoBrandLogo size={58} className="adm-header-brand-home__logo" />
+            <span className="adm-header-brand-home__text">
+              <span className="adm-header-brand-home__title">וויגו פרו</span>
+              <span className="adm-header-brand-home__sub">מערכת לוגיסטיקה</span>
+            </span>
+          </Link>
           <div className="adm-page-headline">
             <div className="adm-page-headline-title">{titleForPath(pathname)}</div>
-            <div className="adm-page-headline-brand">וויגו פרו — מערכת לוגיסטיקה</div>
           </div>
         </div>
         <div className="adm-header-meta adm-header-meta--rtl">

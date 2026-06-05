@@ -1,5 +1,6 @@
 "use server";
 
+import { unstable_noStore as noStore } from "next/cache";
 import { OrderSourceCountry, Prisma } from "@prisma/client";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { perfEnabled } from "@/lib/perf-log";
@@ -657,6 +658,13 @@ function computeBalanceStats(rows: CustomerBalanceRow[]): CustomerBalancesPayloa
 }
 
 export async function listCustomerBalancesAction(query: CustomerBalanceQuery): Promise<CustomerBalancesPayload> {
+  noStore();
+  console.log("[balances-report-query]", {
+    week: query.weekCode?.trim() || null,
+    country: query.sourceCountry?.trim() || null,
+    from: query.fromYmd?.trim() || null,
+    to: query.toYmd?.trim() || null,
+  });
   logDbEnvDiagnostics("server /admin/balances listCustomerBalancesAction");
   const perfT0 = Date.now();
   let fetchCustomersMs = 0;
@@ -733,10 +741,18 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       ? (countryNorm as OrderSourceCountry)
       : undefined;
   const countryScope = resolveCountryScopeFromCode(
-    orderCountryPrisma
-      ? workCountryFromOrderSourceCountry(orderCountryPrisma)
-      : DEFAULT_WORK_COUNTRY,
+    orderCountryPrisma ? workCountryFromOrderSourceCountry(orderCountryPrisma) : DEFAULT_WORK_COUNTRY,
   );
+
+  const balancesReportLogBase = {
+    week: query.weekCode?.trim() || null,
+    country: countryScope.workCountry,
+    sourceCountry: countryScope.sourceCountry,
+    lifetime,
+    fromYmd: query.fromYmd?.trim() || null,
+    toYmd: query.toYmd?.trim() || null,
+    orderStatusFilter: parseCustomerBalanceOrderStatusFilter(query.filters?.orderStatus),
+  };
 
   const activeOrderStatusFilter = parseCustomerBalanceOrderStatusFilter(query.filters?.orderStatus);
   const orderStatusList = orderStatusesForBalanceFilter(activeOrderStatusFilter);
@@ -815,6 +831,19 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
 
   const customerIds = customers.map((c) => c.id);
   if (customerIds.length === 0) {
+    console.log("[balances-report]", {
+      ...balancesReportLogBase,
+      ordersFound: 0,
+      paymentsFound: 0,
+      balancesFound: 0,
+      reason: "no_customers",
+    });
+    console.log({
+      customersCount: 0,
+      ordersCount: 0,
+      paymentsCount: 0,
+      balancesCount: 0,
+    });
     return emptyBalancesPayload(limit);
   }
   const scopeFrom = orderDateFilter && "gte" in orderDateFilter ? (orderDateFilter.gte as Date | undefined) : undefined;
@@ -1245,6 +1274,20 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     activeOrderStatusFilter,
     ...(reportModalStats ? { reportModalStats } : {}),
   };
+
+  console.log("[balances-report]", {
+    ...balancesReportLogBase,
+    ordersFound: orderRows.length,
+    paymentsFound: paymentRows.length + generalCreditRows.length,
+    balancesFound: sorted.length,
+    debtFilter,
+  });
+  console.log({
+    customersCount: customers.length,
+    ordersCount: orderRows.length,
+    paymentsCount: paymentRows.length + generalCreditRows.length,
+    balancesCount: sorted.length,
+  });
 
   if (perfEnabled()) {
     const totalMs = Date.now() - perfT0;

@@ -522,11 +522,12 @@ function intakeWeekCodeFromPaymentDateYmd(ymd: string): string {
   return norm ?? DEFAULT_WEEK_CODE;
 }
 
-/** טעינה מרוכזת לניווט ⬅/➡ — כל קודי הקליטה במדינה + workspace לכל מסמך */
+/** טעינה מרוכזת לניווט ⬅/➡ — קודי קליטה במדינה + שבוע AH + workspace לכל מסמך (פעם אחת בפתיחה) */
 export async function preloadCapturePaymentNavigationCacheAction(
   workCountry: string,
+  weekCode: string,
 ): Promise<
-  | { ok: true; codes: string[]; entries: PaymentNavigationCacheEntryPayload[] }
+  | { ok: true; week: string; codes: string[]; entries: PaymentNavigationCacheEntryPayload[] }
   | { ok: false; error: string }
 > {
   const me = await requireAuth();
@@ -537,8 +538,10 @@ export async function preloadCapturePaymentNavigationCacheAction(
   if (!wc || !isCapturePaymentNavCountry(wc)) {
     return { ok: false, error: "מדינת קליטה לא תקינה" };
   }
+  const weekNorm = normalizeAhWeekCode(weekCode) ?? DEFAULT_WEEK_CODE;
 
-  const codes = await listCapturePaymentCodesOrdered(wc as CapturePaymentNavCountry);
+  /** רשימת ניווט — כל קודי הקליטה במדינה (לא מסונן לפי שבוע) */
+  const navCodes = await listCapturePaymentCodesOrdered(wc as CapturePaymentNavCountry);
   const entries: PaymentNavigationCacheEntryPayload[] = [];
   const hydrateByCustomerWeek = new Map<
     string,
@@ -548,7 +551,7 @@ export async function preloadCapturePaymentNavigationCacheAction(
   const debtScope = openDebtScopeForWorkCountry(wc);
   const openDebtByCustomer = new Map<string, number>();
 
-  for (const code of codes) {
+  for (const code of navCodes) {
     const paymentId = await findCapturePaymentIdByCode(code, wc);
     if (!paymentId) continue;
     const entry = await loadPaymentEntryPayload(paymentId);
@@ -585,7 +588,7 @@ export async function preloadCapturePaymentNavigationCacheAction(
     });
   }
 
-  return { ok: true, codes, entries };
+  return { ok: true, week: weekNorm, codes: navCodes, entries };
 }
 
 export async function getCapturePaymentCodeNeighborsAction(input: {

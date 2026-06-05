@@ -57,6 +57,7 @@ import type { PaymentEntryPayload } from "@/lib/payment-entry-payload";
 import {
   capturePaymentCodeNeighborsFromList,
   isCapturePaymentNavCountry,
+  resolvePaymentNavPosition,
   workCountryFromCapturePaymentCode,
   type CapturePaymentNavCountry,
 } from "@/lib/payment-code-navigation";
@@ -513,6 +514,8 @@ export function PaymentModalUpdated({
   const [customerBalanceResetPending, setCustomerBalanceResetPending] = useState(false);
   const [paymentNavPrevCode, setPaymentNavPrevCode] = useState<string | null>(null);
   const [paymentNavNextCode, setPaymentNavNextCode] = useState<string | null>(null);
+  /** false עד שאומת שהקוד הנוכחי נמצא ברשימת הניווט */
+  const [paymentNavListResolved, setPaymentNavListResolved] = useState(false);
   /** אינדקס בשורות payments[] (0 = תשלום אחרון שנוסף) — ניווט ⬅/➡ מקומי בלבד */
   const [activePaymentLineIndex, setActivePaymentLineIndex] = useState(0);
   const paymentLinesContainerRef = useRef<HTMLDivElement | null>(null);
@@ -537,9 +540,10 @@ export function PaymentModalUpdated({
   const customerIdRef = useRef<string | null>(null);
   customerIdRef.current = customer?.id ?? null;
 
-  /** רשימת קודי קליטה במדינה — נטענת פעם אחת לניווט ⬅/➡ */
+  /** רשימת קודי קליטה במדינה + שבוע — נטענת פעם אחת לניווט ⬅/➡ */
   const paymentCodesListRef = useRef<string[]>([]);
   const paymentCodesCountryRef = useRef<CapturePaymentNavCountry | null>(null);
+  const paymentCodesWeekRef = useRef<string | null>(null);
   const paymentCodesLoadRef = useRef<Promise<string[]> | null>(null);
   /** מטמון ניווט מלא — ללא fetch בלחיצת ⬅/➡ */
   const paymentNavigationCacheRef = useRef<Map<string, PaymentNavigationCacheEntry>>(new Map());
@@ -724,6 +728,13 @@ export function PaymentModalUpdated({
     return normalizeAhWeekCode(globalWeek) ?? DEFAULT_WEEK_CODE;
   }, [weekDraft, weekReadonly, globalWeek]);
 
+  /** שבוע לניווט ⬅/➡ — לפי תאריך התשלום (כמו סינון קודים בשרת) */
+  const paymentNavWeekCode = useMemo(() => {
+    const fromDate = normalizeAhWeekCode(weekCodeFromYmd(paymentDateYmd));
+    if (fromDate) return fromDate;
+    return intakeWeekCode;
+  }, [paymentDateYmd, intakeWeekCode]);
+
   const intakeWeekTableHint = useMemo(() => {
     return "מציג את כל היסטוריית ההזמנות של הלקוח";
   }, []);
@@ -869,11 +880,78 @@ export function PaymentModalUpdated({
   const clearPaymentCodeNav = useCallback(() => {
     setPaymentNavPrevCode(null);
     setPaymentNavNextCode(null);
+    setPaymentNavListResolved(false);
   }, []);
+
+  const normalizePaymentNavCodes = useCallback((codes: readonly string[]): string[] => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const raw of codes) {
+      const c = raw.trim().toUpperCase();
+      if (!c || seen.has(c)) continue;
+      seen.add(c);
+      out.push(c);
+    }
+    return out;
+  }, []);
+
+  const logPaymentNavDebug = useCallback(
+    (extra?: Record<string, unknown>) => {
+      const codes = paymentNavStateRef.current?.paymentCodes ?? paymentCodesListRef.current;
+      const cur = displayedPaymentCode.trim().toUpperCase();
+      let idx = paymentNavCurrentIndexRef.current;
+      if (idx < 0 || (idx < codes.length && codes[idx] !== cur)) {
+        idx = codes.indexOf(cur);
+      }
+      console.log({
+        currentCode: cur,
+        country: intakeDocumentWorkCountry,
+        week: paymentNavWeekCode,
+        codesCount: codes.length,
+        currentIndex: idx,
+        prevCode: paymentNavPrevCode,
+        nextCode: paymentNavNextCode,
+        disabledPrev: saveBusy || paymentNavLoading,
+        disabledNext: saveBusy || paymentNavLoading,
+        cacheReady: paymentNavCacheReadyRef.current,
+        ...extra,
+      });
+    },
+    [
+      displayedPaymentCode,
+      intakeDocumentWorkCountry,
+      paymentNavWeekCode,
+      paymentNavPrevCode,
+      paymentNavNextCode,
+      saveBusy,
+      paymentNavLoading,
+    ],
+  );
+
+  const logPaymentNavArrow = useCallback(
+    (direction: "prev" | "next") => {
+      const codes = paymentNavStateRef.current?.paymentCodes ?? paymentCodesListRef.current;
+      let idx = paymentNavCurrentIndexRef.current;
+      if (idx < 0) {
+        idx = codes.indexOf(displayedPaymentCode.trim().toUpperCase());
+      }
+      const currentCode = idx >= 0 ? codes[idx] ?? displayedPaymentCode : displayedPaymentCode;
+      console.log({
+        direction,
+        currentCode,
+        currentIndex: idx,
+        totalCodes: codes.length,
+        nextCode: idx >= 0 && idx < codes.length - 1 ? codes[idx + 1]! : null,
+        prevCode: idx > 0 ? codes[idx - 1]! : null,
+      });
+    },
+    [displayedPaymentCode],
+  );
 
   const clearPaymentNavCache = useCallback(() => {
     paymentCodesListRef.current = [];
     paymentCodesCountryRef.current = null;
+    paymentCodesWeekRef.current = null;
     paymentCodesLoadRef.current = null;
     paymentNavCodesReadyRef.current = false;
     paymentNavigationCacheRef.current.clear();
@@ -924,12 +1002,20 @@ export function PaymentModalUpdated({
   );
 
   const ingestNavigationCachePayloads = useCallback(
-    (wc: CapturePaymentNavCountry, codes: string[], payloads: PaymentNavigationCacheEntryPayload[]) => {
-      paymentCodesListRef.current = codes;
+    (
+      wc: CapturePaymentNavCountry,
+      week: string,
+      codes: string[],
+      payloads: PaymentNavigationCacheEntryPayload[],
+    ) => {
+      const weekNorm = normalizeAhWeekCode(week) ?? DEFAULT_WEEK_CODE;
+      paymentCodesListRef.current = normalizePaymentNavCodes(codes);
       paymentCodesCountryRef.current = wc;
+      paymentCodesWeekRef.current = weekNorm;
       const paymentIds = buildPaymentIdsForCodes(codes, payloads);
       paymentNavStateRef.current = {
         country: wc,
+        week: weekNorm,
         paymentCodes: codes,
         paymentIds,
         currentIndex: paymentNavCurrentIndexRef.current,
@@ -950,14 +1036,21 @@ export function PaymentModalUpdated({
           customerPayments: p.customerPayments,
         });
       }
-      paymentNavCacheReadyRef.current = paymentNavigationCacheRef.current.size > 0;
+      paymentNavCacheReadyRef.current = codes.length > 0;
     },
-    [buildNavigationCacheEntry, countryOverride, defaultRate, globalCountry],
+    [buildNavigationCacheEntry, countryOverride, defaultRate, globalCountry, normalizePaymentNavCodes],
   );
 
   const warmPaymentNavigationCache = useCallback(
-    async (wc: CapturePaymentNavCountry): Promise<void> => {
-      if (paymentCodesCountryRef.current === wc && paymentNavCacheReadyRef.current) return;
+    async (wc: CapturePaymentNavCountry, weekCode: string): Promise<void> => {
+      const weekNorm = normalizeAhWeekCode(weekCode) ?? DEFAULT_WEEK_CODE;
+      if (
+        paymentCodesCountryRef.current === wc &&
+        paymentNavCacheReadyRef.current &&
+        paymentCodesListRef.current.length > 0
+      ) {
+        return;
+      }
       if (paymentCodesCountryRef.current != null && paymentCodesCountryRef.current !== wc) {
         clearPaymentNavCache();
       }
@@ -965,14 +1058,14 @@ export function PaymentModalUpdated({
         await paymentNavCacheWarmRef.current;
         return;
       }
-      const warmPromise = preloadCapturePaymentNavigationCacheAction(wc).then((res) => {
+      const warmPromise = preloadCapturePaymentNavigationCacheAction(wc, weekNorm).then((res) => {
         if (!res.ok) {
           paymentNavCacheReadyRef.current = false;
           return;
         }
-        ingestNavigationCachePayloads(wc, res.codes, res.entries);
+        ingestNavigationCachePayloads(wc, res.week, res.codes, res.entries);
         console.log("payment nav cache size", paymentNavigationCacheRef.current.size);
-        console.log("payment nav country", wc);
+        console.log("payment nav country", wc, "week", res.week);
       });
       paymentNavCacheWarmRef.current = warmPromise;
       try {
@@ -984,6 +1077,63 @@ export function PaymentModalUpdated({
     [clearPaymentNavCache, ingestNavigationCachePayloads],
   );
 
+  const applyNeighborsFromCode = useCallback(
+    (code: string, codes?: readonly string[]) => {
+      const trimmed = code.trim().toUpperCase();
+      if (!trimmed || !workCountryFromCapturePaymentCode(trimmed)) {
+        clearPaymentCodeNav();
+        return;
+      }
+      const list = normalizePaymentNavCodes(codes ?? paymentCodesListRef.current);
+      const currentId = savedCapturePaymentId;
+      const country = workCountryFromCapturePaymentCode(trimmed);
+      const week = paymentNavWeekCode;
+
+      console.log({
+        currentCode: trimmed,
+        currentId,
+        country,
+        week,
+        codesFound: list.length,
+      });
+      if (list.length > 0) {
+        console.table(list.map((paymentCode, index) => ({ index, paymentCode })));
+      }
+
+      const pos = resolvePaymentNavPosition(list, trimmed);
+      const neighbors = capturePaymentCodeNeighborsFromList(list, trimmed);
+
+      console.log({
+        currentIndex: pos.inList ? list.indexOf(trimmed) : pos.index,
+        inList: pos.inList,
+        prevCode: neighbors.prevCode,
+        nextCode: neighbors.nextCode,
+      });
+
+      if (pos.index < 0) {
+        console.error("[payment-nav-error] Current payment not found in navigation list", {
+          currentCode: trimmed,
+          currentId,
+          country,
+          week,
+        });
+        setPaymentNavListResolved(false);
+        return;
+      }
+
+      const exactIdx = list.indexOf(trimmed);
+      paymentNavCurrentIndexRef.current = exactIdx >= 0 ? exactIdx : pos.index;
+      if (paymentNavStateRef.current) {
+        paymentNavStateRef.current.currentIndex = paymentNavCurrentIndexRef.current;
+      }
+
+      setPaymentNavListResolved(true);
+      setPaymentNavPrevCode(neighbors.prevCode);
+      setPaymentNavNextCode(neighbors.nextCode);
+    },
+    [clearPaymentCodeNav, normalizePaymentNavCodes, paymentNavWeekCode, savedCapturePaymentId],
+  );
+
   const applyFromPaymentNavigationCache = useCallback(
     (code: string): boolean => {
       const key = code.trim().toUpperCase();
@@ -993,12 +1143,7 @@ export function PaymentModalUpdated({
       const pageScrollY = window.scrollY;
       const tableScroll = tableScrollRef.current?.scrollTop ?? 0;
       const snap = clonePaymentEntry(row.entry as PaymentEntryResponse);
-      const codes = paymentCodesListRef.current;
-      const idx = codes.indexOf(key);
-      paymentNavCurrentIndexRef.current = idx;
-      if (paymentNavStateRef.current) paymentNavStateRef.current.currentIndex = idx;
-      setPaymentNavPrevCode(idx > 0 ? codes[idx - 1]! : null);
-      setPaymentNavNextCode(idx >= 0 && idx < codes.length - 1 ? codes[idx + 1]! : null);
+      applyNeighborsFromCode(key, paymentCodesListRef.current);
 
       setCustomerOpenDebtSignedUsd(row.openDebtSignedUsd > 0.01 ? row.openDebtSignedUsd : 0);
 
@@ -1044,46 +1189,40 @@ export function PaymentModalUpdated({
       logPaymentNavCacheState(key);
       return true;
     },
-    [logPaymentNavCacheState, systemCommissionPercentStr],
+    [applyNeighborsFromCode, logPaymentNavCacheState, systemCommissionPercentStr],
   );
 
   const navigatePaymentCodeByIndexDelta = useCallback(
     (delta: -1 | 1) => {
       const nav = paymentNavStateRef.current;
-      const codes = nav?.paymentCodes ?? paymentCodesListRef.current;
+      const codes = normalizePaymentNavCodes(nav?.paymentCodes ?? paymentCodesListRef.current);
       if (!paymentNavCacheReadyRef.current || codes.length === 0) {
-        console.log("[NAV BLOCKED]", "cache not ready or empty codes", {
-          cacheReady: paymentNavCacheReadyRef.current,
-          codesLength: codes.length,
-        });
         onToast("מטמון ניווט עדיין נטען");
         return;
       }
-      let idx = paymentNavCurrentIndexRef.current;
-      if (idx < 0) {
-        idx = codes.indexOf(displayedPaymentCode.trim().toUpperCase());
-      }
-      const nextIdx = idx + delta;
-      if (nextIdx < 0 || nextIdx >= codes.length) {
-        console.log("[NAV BLOCKED]", "index out of range", { idx, nextIdx, codesLength: codes.length, delta });
-        onToast(delta < 0 ? "אין קוד תשלום קודם" : "אין קוד תשלום הבא");
-        return;
-      }
-      const targetCode = codes[nextIdx]!;
+      const curCode = displayedPaymentCode.trim().toUpperCase();
+      const targetCode =
+        delta < 0
+          ? (paymentNavPrevCode ?? capturePaymentCodeNeighborsFromList(codes, curCode).prevCode)
+          : (paymentNavNextCode ?? capturePaymentCodeNeighborsFromList(codes, curCode).nextCode);
+      if (!targetCode) return;
       if (paymentCaptureIsDirty()) {
-        console.log("[NAV BLOCKED]", "dirty form — unsaved pending", { targetCode });
         setNavUnsavedPendingCode(targetCode);
         return;
       }
-      const fromCode = displayedPaymentCode.trim().toUpperCase();
-      console.log("[NAVIGATING]", { from: fromCode, to: targetCode });
       if (!applyFromPaymentNavigationCache(targetCode)) {
-        console.log("[NAV BLOCKED]", "applyFromPaymentNavigationCache returned false", { targetCode });
-        onToast("אין נתונים במטמון לקוד זה");
-        return;
+        void loadPaymentByCode(targetCode);
       }
     },
-    [applyFromPaymentNavigationCache, displayedPaymentCode, onToast],
+    [
+      applyFromPaymentNavigationCache,
+      displayedPaymentCode,
+      loadPaymentByCode,
+      normalizePaymentNavCodes,
+      onToast,
+      paymentNavNextCode,
+      paymentNavPrevCode,
+    ],
   );
 
   const cachePaymentEntry = useCallback((entry: PaymentEntryResponse) => {
@@ -1094,33 +1233,9 @@ export function PaymentModalUpdated({
     if (id && id !== NEW_CAPTURE_ROW_ID) paymentEntryCacheRef.current.set(id, snap);
   }, []);
 
-  const removePaymentFromNavCache = useCallback((code: string) => {
-    const key = code.trim().toUpperCase();
-    paymentNavigationCacheRef.current.delete(key);
-    paymentEntryCacheRef.current.delete(key);
-    const codes = paymentCodesListRef.current.filter((c) => c !== key);
-    paymentCodesListRef.current = codes;
-    if (paymentNavStateRef.current) {
-      const idx = paymentNavStateRef.current.paymentCodes.indexOf(key);
-      const paymentIds =
-        idx >= 0
-          ? paymentNavStateRef.current.paymentIds.filter((_, i) => i !== idx)
-          : paymentNavStateRef.current.paymentIds;
-      paymentNavStateRef.current = {
-        ...paymentNavStateRef.current,
-        paymentCodes: codes,
-        paymentIds,
-        currentIndex: Math.min(
-          paymentNavStateRef.current.currentIndex,
-          Math.max(0, codes.length - 1),
-        ),
-      };
-    }
-    paymentNavCacheReadyRef.current = paymentNavigationCacheRef.current.size > 0;
-  }, []);
-
   const ensurePaymentCodesList = useCallback(
-    async (wc: CapturePaymentNavCountry): Promise<string[]> => {
+    async (wc: CapturePaymentNavCountry, weekCode: string): Promise<string[]> => {
+      const weekNorm = normalizeAhWeekCode(weekCode) ?? DEFAULT_WEEK_CODE;
       if (
         paymentCodesCountryRef.current === wc &&
         paymentCodesListRef.current.length > 0 &&
@@ -1136,7 +1251,7 @@ export function PaymentModalUpdated({
         await paymentCodesLoadRef.current;
         return paymentCodesListRef.current;
       }
-      const loadPromise = warmPaymentNavigationCache(wc).then(() => paymentCodesListRef.current);
+      const loadPromise = warmPaymentNavigationCache(wc, weekNorm).then(() => paymentCodesListRef.current);
       paymentCodesLoadRef.current = loadPromise;
       try {
         return await loadPromise;
@@ -1147,19 +1262,30 @@ export function PaymentModalUpdated({
     [warmPaymentNavigationCache],
   );
 
-  const applyNeighborsFromCode = useCallback(
-    (code: string, codes?: readonly string[]) => {
-      const trimmed = code.trim().toUpperCase();
-      if (!trimmed || !workCountryFromCapturePaymentCode(trimmed)) {
-        clearPaymentCodeNav();
-        return;
+  const removePaymentFromNavCache = useCallback(
+    (code: string) => {
+      const key = code.trim().toUpperCase();
+      paymentNavigationCacheRef.current.delete(key);
+      paymentEntryCacheRef.current.delete(key);
+      const codes = paymentCodesListRef.current.filter((c) => c !== key);
+      paymentCodesListRef.current = codes;
+      if (paymentNavStateRef.current) {
+        const idx = paymentNavStateRef.current.paymentCodes.indexOf(key);
+        const paymentIds =
+          idx >= 0
+            ? paymentNavStateRef.current.paymentIds.filter((_, i) => i !== idx)
+            : paymentNavStateRef.current.paymentIds;
+        paymentNavStateRef.current = {
+          ...paymentNavStateRef.current,
+          paymentCodes: codes,
+          paymentIds,
+          currentIndex: Math.min(paymentNavStateRef.current.currentIndex, Math.max(0, codes.length - 1)),
+        };
+        applyNeighborsFromCode(displayedPaymentCode.trim().toUpperCase(), codes);
       }
-      const list = codes ?? paymentCodesListRef.current;
-      const neighbors = capturePaymentCodeNeighborsFromList(list, trimmed);
-      setPaymentNavPrevCode(neighbors.prevCode);
-      setPaymentNavNextCode(neighbors.nextCode);
+      paymentNavCacheReadyRef.current = codes.length > 0;
     },
-    [clearPaymentCodeNav],
+    [applyNeighborsFromCode, displayedPaymentCode],
   );
 
   const upsertNavCacheFromCurrentState = useCallback(
@@ -1231,11 +1357,15 @@ export function PaymentModalUpdated({
       if (paymentCodesCountryRef.current !== wc) {
         paymentCodesCountryRef.current = wc;
       }
+      if (!paymentCodesWeekRef.current) {
+        paymentCodesWeekRef.current = normalizeAhWeekCode(intakeWeekCode) ?? DEFAULT_WEEK_CODE;
+      }
       const paymentIds = buildPaymentIdsForCodes(codes, [payload]);
       const idx = codes.indexOf(key);
       paymentNavCurrentIndexRef.current = idx;
       paymentNavStateRef.current = {
         country: wc,
+        week: paymentCodesWeekRef.current ?? intakeWeekCode,
         paymentCodes: codes,
         paymentIds,
         currentIndex: idx,
@@ -1315,9 +1445,9 @@ export function PaymentModalUpdated({
         applyNeighborsFromCode(trimmed, paymentCodesListRef.current);
         return;
       }
-      void ensurePaymentCodesList(wc).then((codes) => applyNeighborsFromCode(trimmed, codes));
+      void ensurePaymentCodesList(wc, paymentNavWeekCode).then((codes) => applyNeighborsFromCode(trimmed, codes));
     },
-    [applyNeighborsFromCode, clearPaymentCodeNav, ensurePaymentCodesList],
+    [applyNeighborsFromCode, clearPaymentCodeNav, ensurePaymentCodesList, paymentNavWeekCode],
   );
 
   const refreshPaymentCodePreview = useCallback(() => {
@@ -1835,7 +1965,7 @@ export function PaymentModalUpdated({
       if (applyFromPaymentNavigationCache(trimmed)) return true;
     }
 
-    const codes = await ensurePaymentCodesList(navCountry);
+    const codes = await ensurePaymentCodesList(navCountry, paymentNavWeekCode);
     applyNeighborsFromCode(trimmed, codes);
 
     if (applyFromPaymentNavigationCache(trimmed)) return true;
@@ -1906,19 +2036,19 @@ export function PaymentModalUpdated({
       const code = entry.paymentCode?.trim().toUpperCase();
       const wc = code ? workCountryFromCapturePaymentCode(code) : null;
       if (code && wc) {
-        if (!paymentNavCacheReadyRef.current || paymentCodesCountryRef.current !== wc) {
-          await warmPaymentNavigationCache(wc);
+        const entryWeek = normalizeAhWeekCode(weekCodeFromYmd(entry.paymentDateYmd)) ?? DEFAULT_WEEK_CODE;
+        if (
+          !paymentNavCacheReadyRef.current ||
+          paymentCodesCountryRef.current !== wc ||
+          paymentCodesWeekRef.current !== entryWeek
+        ) {
+          await warmPaymentNavigationCache(wc, entryWeek);
         }
         const codes = paymentCodesListRef.current;
-        applyNeighborsFromCode(code, codes);
-        paymentNavCurrentIndexRef.current = codes.indexOf(code);
-        if (paymentNavStateRef.current) paymentNavStateRef.current.currentIndex = codes.indexOf(code);
         if (!paymentNavigationCacheRef.current.has(code)) {
-          const week =
-            normalizeAhWeekCode(weekCodeFromYmd(entry.paymentDateYmd)) ?? DEFAULT_WEEK_CODE;
           const hydrateRes = await fetchPaymentIntakeCustomerOrdersAction(
             entry.customer.id?.trim() ?? "",
-            week,
+            entryWeek,
             wc,
           );
           if (hydrateRes.ok) {
@@ -1931,19 +2061,14 @@ export function PaymentModalUpdated({
               customerData: hydrateRes.customer,
               orders: hydrateRes.orders,
               customerPayments: hydrateRes.customerPayments,
-              intakeWeekCode: week,
+              intakeWeekCode: entryWeek,
               openDebtSignedUsd: openDebt,
             };
             const row = buildNavigationCacheEntry(payload, defaultRate);
             paymentNavigationCacheRef.current.set(code, row);
-            if (!codes.includes(code)) {
-              paymentCodesListRef.current = [...codes, code].sort((a, b) => a.localeCompare(b));
-            }
           }
         }
-        if (applyFromPaymentNavigationCache(code)) {
-          return true;
-        }
+        applyNeighborsFromCode(code, codes);
         logPaymentNavCacheState(code);
       } else {
         clearPaymentCodeNav();
@@ -1975,45 +2100,23 @@ export function PaymentModalUpdated({
     void loadPaymentByCode(code);
   }
 
-  /** כפתור שמאלי (⬅) — מסמך קליטה קודם — ממטמון בלבד */
+  /** כפתור שמאלי (⬅) — מסמך קליטה קודם — ממטמון בלבד, ללא שרת */
   function goToPreviousPaymentCode() {
-    const currentCode = displayedPaymentCode;
-    const currentId = savedCapturePaymentId ?? loadedPayment?.id ?? null;
-    const disabled = saveBusy || paymentNavLoading;
-    const isDirty = paymentCaptureIsDirty();
-    console.log("[NAV CLICK]", {
-      direction: "prev",
-      currentCode,
-      currentId,
-      disabled,
-      isDirty,
-    });
-    if (saveBusy || paymentNavLoading) {
-      console.log("[NAV BLOCKED]", saveBusy ? "saveBusy" : "paymentNavLoading");
-      return;
-    }
-    logPaymentNavCacheState();
+    console.log("onClick Previous");
+    logPaymentNavDebug();
+    if (saveBusy || paymentNavLoading) return;
+    logPaymentNavArrow("prev");
+    if (!paymentNavPrevCode) return;
     navigatePaymentCodeByIndexDelta(-1);
   }
 
-  /** כפתור ימני (➡) — מסמך קליטה הבא — ממטמון בלבד */
+  /** כפתור ימני (➡) — מסמך קליטה הבא — ממטמון בלבד, ללא שרת */
   function goToNextPaymentCode() {
-    const currentCode = displayedPaymentCode;
-    const currentId = savedCapturePaymentId ?? loadedPayment?.id ?? null;
-    const disabled = saveBusy || paymentNavLoading;
-    const isDirty = paymentCaptureIsDirty();
-    console.log("[NAV CLICK]", {
-      direction: "next",
-      currentCode,
-      currentId,
-      disabled,
-      isDirty,
-    });
-    if (saveBusy || paymentNavLoading) {
-      console.log("[NAV BLOCKED]", saveBusy ? "saveBusy" : "paymentNavLoading");
-      return;
-    }
-    logPaymentNavCacheState();
+    console.log("onClick Next");
+    logPaymentNavDebug();
+    if (saveBusy || paymentNavLoading) return;
+    logPaymentNavArrow("next");
+    if (!paymentNavNextCode) return;
     navigatePaymentCodeByIndexDelta(1);
   }
 
@@ -2053,8 +2156,18 @@ export function PaymentModalUpdated({
 
   useEffect(() => {
     if (!isCapturePaymentNavCountry(intakeDocumentWorkCountry)) return;
-    void warmPaymentNavigationCache(intakeDocumentWorkCountry);
-  }, [intakeDocumentWorkCountry, warmPaymentNavigationCache]);
+    void warmPaymentNavigationCache(intakeDocumentWorkCountry, paymentNavWeekCode).then(() => {
+      const code = displayedPaymentCode.trim().toUpperCase();
+      if (code && workCountryFromCapturePaymentCode(code)) {
+        applyNeighborsFromCode(code, paymentCodesListRef.current);
+      }
+    });
+  }, [intakeDocumentWorkCountry, paymentNavWeekCode, warmPaymentNavigationCache, displayedPaymentCode, applyNeighborsFromCode]);
+
+  useEffect(() => {
+    logPaymentNavDebug({ source: "nav-state" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- debug בלבד
+  }, [paymentNavPrevCode, paymentNavNextCode]);
 
   useEffect(() => {
     if (initialAppliedRef.current) return;
@@ -2450,7 +2563,10 @@ export function PaymentModalUpdated({
     void loadCustomerOrders(cid, { silent: true, weekCode: intakeWeekCode });
     refreshPaymentCodePreview();
     if (isCapturePaymentNavCountry(intakeDocumentWorkCountry)) {
-      void warmPaymentNavigationCache(intakeDocumentWorkCountry);
+      void warmPaymentNavigationCache(intakeDocumentWorkCountry, paymentNavWeekCode).then(() => {
+        const code = savedCode.trim().toUpperCase();
+        if (code) applyNeighborsFromCode(code, paymentCodesListRef.current);
+      });
     }
   }
 
@@ -3370,7 +3486,12 @@ export function PaymentModalUpdated({
               <div className="payment-modal-side-inner payment-modal-side-inner--payment-only">
                 <label className="payment-modal-lbl payment-modal-lbl--micro">
                   קוד תשלום
-                  <div className="payment-navigation-row" dir="ltr" aria-label="ניווט בין קודי תשלום">
+                  <div
+                    className="payment-navigation-row"
+                    dir="ltr"
+                    aria-label="ניווט בין קודי תשלום"
+                    style={{ pointerEvents: "auto" }}
+                  >
                     <button
                       type="button"
                       className={[
@@ -3381,12 +3502,15 @@ export function PaymentModalUpdated({
                         .filter(Boolean)
                         .join(" ")}
                       aria-label="הקודם"
+                      aria-disabled={!paymentNavPrevCode || prevPaymentNavDisabled}
                       title={
                         paymentNavLoading
                           ? "טוען..."
-                          : paymentNavPrevCode
-                            ? `הקודם: ${paymentNavPrevCode}`
-                            : "אין תשלום קודם"
+                          : !paymentNavListResolved
+                            ? "טוען ניווט..."
+                            : paymentNavPrevCode
+                              ? `הקודם: ${paymentNavPrevCode}`
+                              : "אין תשלום קודם"
                       }
                       disabled={prevPaymentNavDisabled}
                       onClick={goToPreviousPaymentCode}
@@ -3421,12 +3545,15 @@ export function PaymentModalUpdated({
                         .filter(Boolean)
                         .join(" ")}
                       aria-label="הבא"
+                      aria-disabled={!paymentNavNextCode || nextPaymentNavDisabled}
                       title={
                         paymentNavLoading
                           ? "טוען..."
-                          : paymentNavNextCode
-                            ? `הבא: ${paymentNavNextCode}`
-                            : "אין תשלום הבא"
+                          : !paymentNavListResolved
+                            ? "טוען ניווט..."
+                            : paymentNavNextCode
+                              ? `הבא: ${paymentNavNextCode}`
+                              : "אין תשלום הבא"
                       }
                       disabled={nextPaymentNavDisabled}
                       onClick={goToNextPaymentCode}

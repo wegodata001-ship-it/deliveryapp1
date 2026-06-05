@@ -3688,10 +3688,71 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
   min-width: 0;
 }
 
-.adm-header-mark {
+.adm-header-brand-home {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-shrink: 0;
+  padding: 0.35rem 0.65rem 0.35rem 0.45rem;
+  margin: -0.35rem 0;
+  border-radius: 14px;
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+  background: linear-gradient(180deg, rgba(59, 130, 246, 0.08), transparent);
+  border: 1px solid transparent;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease,
+    background 0.2s ease;
+}
+
+.adm-header-brand-home:hover {
+  transform: scale(1.03);
+  box-shadow: 0 0 20px rgba(59, 130, 246, 0.25);
+  border-color: rgba(59, 130, 246, 0.18);
+  background: linear-gradient(180deg, rgba(59, 130, 246, 0.12), rgba(59, 130, 246, 0.02));
+}
+
+.adm-header-brand-home:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+}
+
+.adm-header-brand-home__logo {
   flex-shrink: 0;
   margin: 0 !important;
   box-shadow: 0 6px 16px rgba(29, 78, 216, 0.28);
+  transition: box-shadow 0.2s ease;
+}
+
+.adm-header-brand-home:hover .adm-header-brand-home__logo {
+  box-shadow: 0 8px 20px rgba(29, 78, 216, 0.34);
+}
+
+.adm-header-brand-home__text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+  line-height: 1.2;
+}
+
+.adm-header-brand-home__title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #0f172a;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.adm-header-brand-home__sub {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #64748b;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
 }
 
 .adm-page-headline {
@@ -3699,6 +3760,8 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
   flex-direction: column;
   gap: 0.05rem;
   min-width: 0;
+  padding-inline-start: 0.15rem;
+  border-inline-start: 1px solid rgba(148, 163, 184, 0.35);
 }
 
 .adm-page-headline-brand {
@@ -8281,6 +8344,9 @@ select.payment-modal-inline-input {
   width: 100%;
   margin-top: 10px;
   margin-bottom: 14px;
+  position: relative;
+  z-index: 3;
+  pointer-events: auto;
 }
 
 .payment-nav-code {
@@ -8329,15 +8395,21 @@ select.payment-modal-inline-input {
 }
 
 .payment-nav-arrow:disabled {
-  opacity: 0.4;
+  opacity: 0.55;
   cursor: not-allowed;
 }
 
-.payment-nav-arrow--edge:not(:disabled) {
-  opacity: 0.5;
+.payment-nav-arrow:not(:disabled) {
+  cursor: pointer;
+  opacity: 1;
 }
 
-.payment-nav-arrow--busy {
+.payment-nav-arrow--edge:not(:disabled) {
+  opacity: 0.72;
+  cursor: pointer;
+}
+
+.payment-nav-arrow--busy:disabled {
   pointer-events: none;
 }
 
@@ -15405,6 +15477,242 @@ select.adm-balances-input {
   color: #15803d;
   background: #ecfdf5;
   border: 1px solid #bbf7d0;
+}
+
+/* יתרות — Financial Control Center (עיצוב בלבד) */
+.adm-balances-page--fcc {
+  --bal-navy: #03142f;
+  --bal-gold: #e8c766;
+  --bal-blue: #3b82f6;
+  gap: 6px;
+}
+
+.adm-balances-page--fcc.adm-balances-page--page-scroll.adm-balances-excel-page {
+  gap: 6px;
+}
+
+.adm-balances-hero {
+  flex-shrink: 0;
+  margin: 0 0 4px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, var(--bal-navy) 0%, #0b234d 100%);
+  border: 1px solid rgba(232, 199, 102, 0.22);
+  box-shadow: 0 8px 22px rgba(3, 20, 47, 0.18);
+}
+
+.adm-balances-hero__title {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 800;
+  line-height: 1.25;
+  color: #fff;
+  letter-spacing: 0.01em;
+}
+
+.adm-balances-hero__desc {
+  margin: 0.35rem 0 0;
+  font-size: 0.82rem;
+  font-weight: 500;
+  line-height: 1.35;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.adm-balances-page--fcc .adm-balances-toolbar-row--primary {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(3, 20, 47, 0.08);
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(3, 20, 47, 0.05);
+}
+
+.adm-balances-fcc-kpi {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 6px;
+  flex-shrink: 0;
+}
+
+.adm-balances-fcc-kpi__card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 4px;
+  min-height: 72px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(3, 20, 47, 0.08);
+  background: #fff;
+  box-shadow: 0 4px 14px rgba(3, 20, 47, 0.06);
+}
+
+.adm-balances-fcc-kpi__label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #64748b;
+  line-height: 1.2;
+}
+
+.adm-balances-fcc-kpi__value {
+  font-size: 1.2rem;
+  font-weight: 900;
+  color: var(--bal-navy);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.adm-balances-fcc-kpi__card--debt {
+  border-color: rgba(220, 38, 38, 0.2);
+  background: linear-gradient(180deg, #fff 0%, #fef2f2 100%);
+}
+
+.adm-balances-fcc-kpi__card--debt .adm-balances-fcc-kpi__value {
+  color: #dc2626;
+}
+
+.adm-balances-fcc-kpi__card--payments {
+  border-color: rgba(59, 130, 246, 0.22);
+  background: linear-gradient(180deg, #fff 0%, #eff6ff 100%);
+}
+
+.adm-balances-fcc-kpi__card--payments .adm-balances-fcc-kpi__value {
+  color: var(--bal-blue);
+}
+
+.adm-balances-fcc-kpi__card--balance {
+  border-color: rgba(232, 199, 102, 0.45);
+  background: linear-gradient(180deg, #fff 0%, #fffbeb 100%);
+}
+
+.adm-balances-fcc-kpi__card--balance .adm-balances-fcc-kpi__value {
+  color: #92400e;
+}
+
+.adm-balances-page--fcc .adm-balances-work {
+  gap: 6px;
+}
+
+.adm-balances-page--fcc .adm-balances-scope-line {
+  margin: 0 0 2px;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.adm-balances-page--fcc .adm-balances-table-wrap {
+  border-radius: 14px;
+  border: 1px solid rgba(3, 20, 47, 0.1);
+  background: #fff;
+  box-shadow:
+    0 10px 28px rgba(3, 20, 47, 0.1),
+    0 2px 8px rgba(3, 20, 47, 0.05);
+  overflow: hidden;
+}
+
+.adm-balances-page--fcc .adm-balances-table--erp thead th {
+  background: var(--bal-navy);
+  border-bottom-color: #020a16;
+  box-shadow: inset 0 -2px 0 rgba(232, 199, 102, 0.2);
+}
+
+.adm-balances-page--fcc .adm-balances-table--erp tbody tr.adm-balances-row-click {
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.adm-balances-page--fcc .adm-balances-table--erp tbody tr.adm-balances-row-click:nth-child(even) {
+  background: #f8fafc;
+}
+
+.adm-balances-page--fcc .adm-balances-table--erp tbody tr.adm-balances-row-click:nth-child(odd) {
+  background: #fff;
+}
+
+.adm-balances-page--fcc .adm-balances-table--erp tbody tr.adm-balances-row-click:hover {
+  background: rgba(59, 130, 246, 0.09) !important;
+  box-shadow: inset 4px 0 0 var(--bal-blue);
+}
+
+.adm-balances-page--fcc .adm-balances-table--erp tbody tr.adm-balances-row-click:focus-visible {
+  outline: 2px solid var(--bal-blue);
+  outline-offset: -2px;
+}
+
+.adm-bal-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 4.75rem;
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.adm-bal-badge--balanced {
+  color: #15803d;
+  background: #ecfdf5;
+  border: 1px solid #86efac;
+  box-shadow: 0 1px 0 rgba(21, 128, 61, 0.08);
+}
+
+.adm-bal-badge--credit {
+  color: #c2410c;
+  background: #fff7ed;
+  border: 1px solid #fdba74;
+  box-shadow: 0 1px 0 rgba(194, 65, 12, 0.08);
+}
+
+.adm-bal-badge--debt {
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fca5a5;
+  box-shadow: 0 1px 0 rgba(185, 28, 28, 0.08);
+}
+
+.adm-balances-ledger-btn {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px !important;
+  border-radius: 8px !important;
+  border: 1px solid rgba(232, 199, 102, 0.55) !important;
+  color: var(--bal-navy) !important;
+  background: linear-gradient(180deg, #fffef8 0%, #fff8e6 100%) !important;
+  font-weight: 700 !important;
+}
+
+.adm-balances-ledger-btn:hover {
+  border-color: var(--bal-gold) !important;
+  box-shadow: 0 4px 12px rgba(232, 199, 102, 0.35);
+}
+
+.adm-balances-page--fcc .adm-balances-foot {
+  margin-top: 4px;
+  padding: 4px 0 2px;
+}
+
+@media (max-width: 960px) {
+  .adm-balances-fcc-kpi {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .adm-balances-fcc-kpi {
+    grid-template-columns: 1fr;
+  }
+
+  .adm-balances-hero__title {
+    font-size: 1.15rem;
+  }
 }
 
 .adm-balances-td-balance .adm-balance-flow {

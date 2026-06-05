@@ -29,9 +29,10 @@ export type PaymentNavigationCacheEntryPayload = Omit<
   openDebtSignedUsd?: number;
 };
 
-/** מצב ניווט במדינה אחת — ללא ערבוב TR/AE/CH */
+/** מצב ניווט במדינה + שבוע AH — ללא ערבוב TR/AE/CH */
 export type PaymentNavigationState = {
   country: CapturePaymentNavCountry;
+  week: string;
   paymentCodes: string[];
   paymentIds: string[];
   currentIndex: number;

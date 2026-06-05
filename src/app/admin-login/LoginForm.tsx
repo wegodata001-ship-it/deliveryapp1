@@ -162,6 +162,11 @@ export function LoginForm({ nextPath }: { nextPath: string }) {
           "כניסה"
         )}
       </button>
+      <ul className="al-features" aria-label="יכולות המערכת">
+        <li>✓ ניהול הזמנות</li>
+        <li>✓ ניהול תשלומים</li>
+        <li>✓ דוחות ויתרות</li>
+      </ul>
     </form>
   );
 }

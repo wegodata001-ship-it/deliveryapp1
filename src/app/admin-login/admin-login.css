@@ -1,33 +1,61 @@
 .al-page {
+  --al-gold-light: #e8c766;
+  --al-gold-deep: #d4af37;
+  --al-navy-deep: #03142f;
+  --al-navy-mid: #0b234d;
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 2rem 1.25rem;
-  background: linear-gradient(135deg, #f4f7fb 0%, #eef3ff 50%, #f8fafc 100%);
+  padding: 2.5rem 1.5rem;
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(155deg, var(--al-navy-deep) 0%, var(--al-navy-mid) 55%, #0d2a5c 100%);
+  animation: al-page-fade 0.65s ease-out both;
+}
+
+.al-page__glow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 70% 45% at 50% 18%, rgba(232, 199, 102, 0.14), transparent 62%),
+    radial-gradient(ellipse 55% 40% at 80% 85%, rgba(56, 189, 248, 0.08), transparent 55%);
+}
+
+@keyframes al-page-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .al-card {
+  position: relative;
+  z-index: 1;
   width: 100%;
-  max-width: 480px;
-  background: #fff;
-  border-radius: 28px;
-  padding: 42px;
-  border: 1px solid #e5e7eb;
+  max-width: 540px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  border-radius: 32px;
+  padding: 3rem 3.25rem 2.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.65);
   box-shadow:
-    0 25px 60px rgba(37, 99, 235, 0.12),
-    0 8px 24px rgba(15, 23, 42, 0.06);
-  animation: al-card-in 0.45s ease-out both;
+    0 40px 80px rgba(3, 20, 47, 0.55),
+    0 16px 40px rgba(0, 0, 0, 0.28),
+    0 0 0 1px rgba(255, 255, 255, 0.12);
+  animation: al-card-in 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.08s both;
 }
 
 @keyframes al-card-in {
   from {
     opacity: 0;
-    transform: translateY(12px);
+    transform: translateY(20px) scale(0.98);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(0) scale(1);
   }
 }
 
@@ -36,21 +64,33 @@
   flex-direction: column;
   align-items: center;
   text-align: center;
-  margin-bottom: 2.25rem;
+  margin-bottom: 2.5rem;
 }
 
 .al-logo-wrap {
-  margin: 0 auto 1.25rem !important;
+  width: 104px !important;
+  height: 104px !important;
+  margin: 0 auto 1.5rem !important;
+  filter: drop-shadow(0 12px 28px rgba(11, 35, 77, 0.22));
 }
 
-.al-header h1 {
+.al-title {
   margin: 0;
-  font-size: 1.35rem;
+  font-size: 2rem;
   font-weight: 800;
-  line-height: 1.35;
-  letter-spacing: -0.01em;
-  color: #0f172a;
-  max-width: 20rem;
+  line-height: 1.1;
+  letter-spacing: 0.14em;
+  color: #03142f;
+}
+
+.al-tagline {
+  margin: 0.85rem 0 0;
+  max-width: 22rem;
+  font-size: 0.82rem;
+  font-weight: 500;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  color: #64748b;
 }
 
 .al-form {
@@ -103,7 +143,7 @@
 
 .al-input-wrap:focus-within .al-input-icon {
   opacity: 1;
-  color: #2563eb;
+  color: #0b234d;
 }
 
 .al-input-wrap input {
@@ -127,9 +167,9 @@
 
 .al-input-wrap input:focus {
   outline: none;
-  border-color: #2563eb;
+  border-color: #0b234d;
   background: #fff;
-  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+  box-shadow: 0 0 0 4px rgba(11, 35, 77, 0.1);
 }
 
 .al-submit {
@@ -139,24 +179,31 @@
   padding: 0 1.25rem;
   border: none;
   border-radius: 16px;
-  background: linear-gradient(135deg, #2563eb, #1d4ed8);
-  color: #fff;
-  font-weight: 700;
+  background: linear-gradient(135deg, var(--al-gold-light) 0%, var(--al-gold-deep) 100%);
+  color: #03142f;
+  font-weight: 800;
   font-size: 18px;
+  letter-spacing: 0.02em;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
+  box-shadow:
+    0 10px 28px rgba(212, 175, 55, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
   transition:
     transform 0.2s ease,
     box-shadow 0.2s ease,
-    opacity 0.2s ease;
+    filter 0.2s ease;
 }
 
 .al-submit:hover:not(:disabled) {
   transform: translateY(-2px);
-  box-shadow: 0 12px 30px rgba(37, 99, 235, 0.25);
+  filter: brightness(1.04);
+  box-shadow:
+    0 14px 36px rgba(212, 175, 55, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
 }
 
 .al-submit:active:not(:disabled) {
@@ -168,6 +215,24 @@
   cursor: wait;
   transform: none;
   box-shadow: none;
+}
+
+.al-features {
+  list-style: none;
+  margin: 1.35rem 0 0;
+  padding: 1.1rem 0 0;
+  border-top: 1px solid #e8edf4;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  text-align: center;
+}
+
+.al-features li {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: #475569;
+  letter-spacing: 0.01em;
 }
 
 .al-spin {
@@ -192,28 +257,27 @@
 
 @media (max-width: 520px) {
   .al-page {
-    padding: 1.25rem 0.75rem;
+    padding: 1.5rem 1rem;
   }
 
   .al-card {
-    width: 92%;
+    width: 94%;
     max-width: none;
-    padding: 28px;
-    border-radius: 24px;
+    padding: 2rem 1.65rem 1.85rem;
+    border-radius: 26px;
   }
 
-  .al-header h1 {
-    font-size: 30px;
+  .al-logo-wrap {
+    width: 88px !important;
+    height: 88px !important;
   }
 
-  .al-logo {
-    width: 64px;
-    height: 64px;
-    font-size: 1.75rem;
-    margin-bottom: 1.1rem;
+  .al-title {
+    font-size: 1.65rem;
+    letter-spacing: 0.1em;
   }
 
-  .al-subtitle {
-    font-size: 0.95rem;
+  .al-tagline {
+    font-size: 0.78rem;
   }
 }

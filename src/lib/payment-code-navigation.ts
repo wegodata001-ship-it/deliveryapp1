@@ -3,6 +3,8 @@ import { parsePaymentNumberFromCode, PAYMENT_CODE_PREFIX } from "@/lib/payment-c
 import { paymentCodePrefixesForWorkCountry } from "@/lib/country-document-numbering";
 import { PAYMENT_RECORD_STATUS_CANCELLED } from "@/lib/payment-record-status-shared";
 import { paymentCodePrefix, type WorkCountryCode } from "@/lib/work-country";
+import { endOfLocalDay, normalizeAhWeekCode, parseLocalDate } from "@/lib/work-week";
+import { getWeekRangeFromAH } from "@/lib/weeks/order-week-dates";
 
 /** מדינות עם רצף קודי קליטה נפרד (לא רצף גלובלי) */
 export const CAPTURE_PAYMENT_NAV_COUNTRIES = ["TR", "CN", "AE"] as const;
@@ -95,6 +97,55 @@ export async function listCapturePaymentCodesOrdered(
   });
 
   return codes;
+}
+
+function sortCapturePaymentCodes(codes: string[], workCountry: CapturePaymentNavCountry): string[] {
+  return [...codes].sort((a, b) => {
+    const na = parsePaymentNumberFromCode(a, workCountry) ?? 0;
+    const nb = parsePaymentNumberFromCode(b, workCountry) ?? 0;
+    if (na !== nb) return na - nb;
+    return a.localeCompare(b);
+  });
+}
+
+/**
+ * קודי קליטה במדינה ובשבוע AH אחד — לפי תאריך תשלום בלבד (לא מערבב מדינות / שבועות).
+ */
+export async function listCapturePaymentCodesOrderedByCountryAndWeek(
+  workCountry: CapturePaymentNavCountry,
+  weekCode: string,
+): Promise<string[]> {
+  const weekNorm = normalizeAhWeekCode(weekCode);
+  const range = weekNorm ? getWeekRangeFromAH(weekNorm) : null;
+  if (!range) return [];
+
+  const startDate = parseLocalDate(range.startDate);
+  const endDate = endOfLocalDay(range.endDate);
+
+  const rows = await prisma.payment.findMany({
+    where: {
+      ...CAPTURE_PAYMENT_WHERE,
+      paymentDate: { gte: startDate, lte: endDate },
+      OR: captureCodePrefixWhere(workCountry),
+    },
+    select: { paymentCode: true },
+    orderBy: { paymentCode: "asc" },
+    take: 10_000,
+  });
+
+  const seen = new Set<string>();
+  const codes: string[] = [];
+  for (const r of rows) {
+    const raw = r.paymentCode?.trim();
+    if (!raw) continue;
+    const up = raw.toUpperCase();
+    if (workCountryFromCapturePaymentCode(up) !== workCountry) continue;
+    if (seen.has(up)) continue;
+    seen.add(up);
+    codes.push(up);
+  }
+
+  return sortCapturePaymentCodes(codes, workCountry);
 }
 
 /**

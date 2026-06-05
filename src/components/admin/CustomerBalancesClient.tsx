@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FileSpreadsheet, FileText } from "lucide-react";
+import { BookOpen, FileSpreadsheet, FileText } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   exportCustomerBalancesAction,
@@ -37,6 +37,7 @@ import {
   balancesSnapshotToYmd,
   DEFAULT_WEEK_CODE,
   formatLocalYmd,
+  getAhWeekRange,
   normalizeAhWeekCode,
   normalizeYmdRangePair,
   prevWeekCode,
@@ -91,9 +92,9 @@ function balanceToneClass(tone: BalanceUiTone): string {
 }
 
 function statusChipClass(tone: BalanceUiTone): string {
-  if (tone === "debt") return "adm-bal-chip adm-bal-chip--debt";
-  if (tone === "credit") return "adm-bal-chip adm-bal-chip--credit";
-  return "adm-bal-chip adm-bal-chip--balanced";
+  if (tone === "debt") return "adm-bal-badge adm-bal-badge--debt";
+  if (tone === "credit") return "adm-bal-badge adm-bal-badge--credit";
+  return "adm-bal-badge adm-bal-badge--balanced";
 }
 
 function balanceRowClass(tone: BalanceUiTone): string {
@@ -239,6 +240,18 @@ export function CustomerBalancesClient() {
   const hoverIdRef = useRef<string | null>(null);
   const [refreshSig, setRefreshSig] = useState(0);
   const [insightsExpanded, setInsightsExpanded] = useState(false);
+  const balancesScopeKeyRef = useRef<string | null>(null);
+
+  /** מקור יחיד לשאילתה — מסונכרן עם תצוגת השבוע (לא ממתין לעדכון URL) */
+  const balancesQueryScope = useMemo(() => {
+    const week = normalizeAhWeekCode(balancesFilters.weekCode) ?? ACTIVE_WORK_WEEK_CODE;
+    const weekRange = getAhWeekRange(week);
+    const from = weekRange?.from ?? "";
+    const to = weekRange?.to ?? balancesFilters.toYmd ?? "";
+    const urlCountry = orderCountryCodeForWorkCountry(resolveWorkCountryFromSearchParams(sp));
+    const country = balancesFilters.sourceCountry || urlCountry;
+    return { week, country, from, to };
+  }, [balancesFilters.weekCode, balancesFilters.toYmd, balancesFilters.sourceCountry, sp]);
 
   useEffect(() => {
     setBalancesFilters(parseStructuralFromSearchParams(new URLSearchParams(sp.toString())));
@@ -287,9 +300,10 @@ export function CustomerBalancesClient() {
     (p: number) => ({
       page: p,
       limit: LIMIT,
-      lifetime: true as const,
-      toYmd: balancesFilters.toYmd.trim() || undefined,
-      sourceCountry: balancesFilters.sourceCountry,
+      weekCode: balancesQueryScope.week,
+      fromYmd: balancesQueryScope.from,
+      toYmd: balancesQueryScope.to,
+      sourceCountry: balancesQueryScope.country,
       filters: {
         code: debouncedSearch.code.trim() || undefined,
         name: debouncedSearch.name.trim() || undefined,
@@ -301,15 +315,40 @@ export function CustomerBalancesClient() {
         sort: balancesFilters.sort,
       },
     }),
-    [balancesFilters, debouncedSearch],
+    [balancesFilters.sort, balancesQueryScope, debouncedSearch],
   );
+
+  const { week: scopeWeek, country: scopeCountry, from: scopeFrom, to: scopeTo } = balancesQueryScope;
+
+  useEffect(() => {
+    console.log({
+      week: scopeWeek,
+      country: scopeCountry,
+      from: scopeFrom,
+      to: scopeTo,
+    });
+    const key = `${scopeWeek}|${scopeCountry}|${scopeFrom}|${scopeTo}`;
+    if (balancesScopeKeyRef.current !== null && balancesScopeKeyRef.current !== key) {
+      refetchBalances();
+    }
+    balancesScopeKeyRef.current = key;
+  }, [scopeWeek, scopeCountry, scopeFrom, scopeTo, refetchBalances]);
 
   useEffect(() => {
     if (!urlReady) return;
     const gen = ++fetchGenRef.current;
+    const query = buildListQuery(page);
+    console.log("[balances-client-fetch]", {
+      week: query.weekCode,
+      country: query.sourceCountry,
+      from: query.fromYmd,
+      to: query.toYmd,
+      page: query.page,
+      refreshSig,
+    });
     setTableLoading(true);
     setErr(null);
-    void listCustomerBalancesAction(buildListQuery(page))
+    void listCustomerBalancesAction(query)
       .then((next) => {
         if (gen !== fetchGenRef.current) return;
         setPayload(next);
@@ -330,24 +369,29 @@ export function CustomerBalancesClient() {
 
   const syncUrl = useCallback(() => {
     if (!urlReady) return;
+    const weekRange = getAhWeekRange(balancesFilters.weekCode);
+    const nextFrom = weekRange?.from ?? null;
+    const nextTo = weekRange?.to ?? (balancesFilters.toYmd || null);
+    const nextCountry =
+      balancesFilters.sourceCountry ||
+      orderCountryCodeForWorkCountry(resolveWorkCountryFromSearchParams(sp));
     const curTo = sp.get("to") ?? "";
+    const curFrom = sp.get("from") ?? "";
     const curWeek = sp.get("week") ?? "";
     const curCountry = sp.get("country") ?? "";
-    const staleFrom = sp.get("from");
-    const nextCountry = balancesFilters.sourceCountry || "";
     if (
-      curTo === balancesFilters.toYmd &&
+      curTo === (nextTo ?? "") &&
+      curFrom === (nextFrom ?? "") &&
       curWeek === balancesFilters.weekCode &&
-      curCountry === nextCountry &&
-      !staleFrom
+      curCountry === nextCountry
     ) {
       return;
     }
     const nextHref = withQuery(pathname, sp, {
       week: balancesFilters.weekCode || null,
       upto: null,
-      from: null,
-      to: balancesFilters.toYmd || null,
+      from: nextFrom,
+      to: nextTo,
       country: nextCountry || null,
       modal: null,
     });
@@ -367,7 +411,6 @@ export function CustomerBalancesClient() {
       toYmd: balancesSnapshotToYmd(normalizedWeek),
     }));
     setPage(1);
-    setRefreshSig((s) => s + 1);
   }, []);
 
   function clearPageFilters() {
@@ -445,9 +488,12 @@ export function CustomerBalancesClient() {
   const stats = payload?.stats;
 
   return (
-    <div className="adm-balances-page adm-balances-excel-page adm-balances-page--v2 adm-balances-page--page-scroll adm-page--page-scroll">
-      <header className="adm-balances-head adm-balances-head--compact">
-        <h1>יתרות לקוחות</h1>
+    <div className="adm-balances-page adm-balances-excel-page adm-balances-page--v2 adm-balances-page--fcc adm-balances-page--page-scroll adm-page--page-scroll">
+      <header className="adm-balances-hero" dir="rtl">
+        <div className="adm-balances-hero__text">
+          <h1 className="adm-balances-hero__title">מרכז ניהול יתרות לקוחות</h1>
+          <p className="adm-balances-hero__desc">ניהול חובות, תשלומים ויתרות פתוחות</p>
+        </div>
       </header>
 
       {err ? <div className="adm-error adm-balances-error">{err}</div> : null}
@@ -644,6 +690,33 @@ export function CustomerBalancesClient() {
         </div>
       ) : null}
 
+      {stats ? (
+        <section className="adm-balances-fcc-kpi" dir="rtl" aria-label="סיכום פיננסי">
+          <article className="adm-balances-fcc-kpi__card">
+            <span className="adm-balances-fcc-kpi__label">סה״כ לקוחות</span>
+            <strong className="adm-balances-fcc-kpi__value">{(payload?.totalRows ?? 0).toLocaleString("he-IL")}</strong>
+          </article>
+          <article className="adm-balances-fcc-kpi__card adm-balances-fcc-kpi__card--debt">
+            <span className="adm-balances-fcc-kpi__label">סה״כ חובות פתוחים</span>
+            <strong className="adm-balances-fcc-kpi__value" dir="ltr">
+              {usdStatDisplay(stats.totalDebtUsd)}
+            </strong>
+          </article>
+          <article className="adm-balances-fcc-kpi__card adm-balances-fcc-kpi__card--payments">
+            <span className="adm-balances-fcc-kpi__label">סה״כ תשלומים</span>
+            <strong className="adm-balances-fcc-kpi__value" dir="ltr">
+              {usdStatDisplay(stats.totalPaymentsUsd)}
+            </strong>
+          </article>
+          <article className="adm-balances-fcc-kpi__card adm-balances-fcc-kpi__card--balance">
+            <span className="adm-balances-fcc-kpi__label">סה״כ יתרות</span>
+            <strong className="adm-balances-fcc-kpi__value" dir="ltr">
+              {usdStatDisplay(stats.totalNetBalanceUsd)}
+            </strong>
+          </article>
+        </section>
+      ) : null}
+
       <div className="adm-balances-work">
         {balancesScopeSubtitle(balancesFilters.weekCode, balancesFilters.toYmd) ? (
           <p className="adm-balances-scope-line" role="note">
@@ -666,32 +739,6 @@ export function CustomerBalancesClient() {
             totalPages={payload?.totalPages ?? 1}
             expanded={insightsExpanded}
           />
-        ) : null}
-
-        {stats && !insightsExpanded ? (
-          <div className="adm-balances-kpi-compact-row" dir="rtl" role="region" aria-label="סיכום מהיר">
-            <div className="adm-balances-kpi-compact">
-              <span className="adm-balances-kpi-compact__item">
-                <span>לקוחות</span>
-                <strong>{(payload?.totalRows ?? 0).toLocaleString("he-IL")}</strong>
-              </span>
-              <span className="adm-balances-kpi-compact__divider" aria-hidden />
-              <span className="adm-balances-kpi-compact__item adm-balances-kpi-compact__item--open">
-                <span>חוב פתוח</span>
-                <strong dir="ltr">{usdStatDisplay(stats.totalDebtUsd)}</strong>
-              </span>
-              <span className="adm-balances-kpi-compact__divider" aria-hidden />
-              <span className="adm-balances-kpi-compact__item adm-balances-kpi-compact__item--payments">
-                <span>תשלומים</span>
-                <strong dir="ltr">{usdStatDisplay(stats.totalPaymentsUsd)}</strong>
-              </span>
-              <span className="adm-balances-kpi-compact__divider" aria-hidden />
-              <span className="adm-balances-kpi-compact__item adm-balances-kpi-compact__item--credit">
-                <span>יתרות</span>
-                <strong dir="ltr">{usdStatDisplay(stats.totalNetBalanceUsd)}</strong>
-              </span>
-            </div>
-          </div>
         ) : null}
 
         <div
@@ -792,12 +839,13 @@ export function CustomerBalancesClient() {
                       <td className="adm-balances-td-actions">
                         <button
                           type="button"
-                          className="adm-btn adm-btn--ghost adm-btn--xs"
+                          className="adm-btn adm-btn--ghost adm-btn--xs adm-balances-ledger-btn"
                           onClick={(e) => {
                             e.stopPropagation();
                             openCustomerCard(r);
                           }}
                         >
+                          <BookOpen size={14} strokeWidth={2.2} aria-hidden />
                           כרטסת
                         </button>
                       </td>
