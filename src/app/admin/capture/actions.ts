@@ -46,7 +46,15 @@ import {
   loadFinanceSettingsSerialized,
 } from "@/lib/financial-settings";
 import { logFinanceSaveTarget, logFinanceSourceTable } from "@/lib/finance-log";
-import { DEFAULT_WEEK_CODE, formatLocalHm, formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate, parseLocalDateTime } from "@/lib/work-week";
+import {
+  DEFAULT_WEEK_CODE,
+  formatLocalHm,
+  formatLocalYmd,
+  getWeekCodeForLocalDate,
+  normalizeAhWeekCode,
+  parseLocalDate,
+  parseLocalDateTime,
+} from "@/lib/work-week";
 import { deriveAhWeekCodeFromOrderDateYmd } from "@/lib/weeks/order-week-dates";
 import { isValidYmd } from "@/lib/weeks/ah-week";
 import { orderNumberMatchesWeekFormat } from "@/lib/order-number";
@@ -60,16 +68,25 @@ import { prisma } from "@/lib/prisma";
 import { allocateNextPaymentCapture, resolvePaymentWorkCountry } from "@/lib/payment-capture-code";
 import {
   findCapturePaymentIdByCode,
+  isCapturePaymentNavCountry,
+  listCapturePaymentCodesOrdered,
   resolveCapturePaymentCodeNeighbors,
   workCountryFromCapturePaymentCode,
 } from "@/lib/payment-code-navigation";
 import { loadPaymentEntryPayload, type PaymentEntryPayload } from "@/lib/payment-entry-payload";
+import type { PaymentNavigationCacheEntryPayload } from "@/lib/payment-navigation-cache";
+import { fetchPaymentIntakeCustomerOrdersAction } from "@/app/admin/payments/intake/actions";
+import type { CapturePaymentNavCountry } from "@/lib/payment-code-navigation";
 import { normalizeWorkCountryCode, type WorkCountryCode } from "@/lib/work-country";
 import { ensureOnce } from "@/lib/ensure-tables-once";
 import { parseSplitPaymentMethodRaw } from "@/lib/order-capture-payment-methods";
 import { getSelectedCountriesForOrdersInternal } from "@/app/admin/settings/actions";
 import { ORDER_COUNTRY_CODES, coerceOrderCountryForForm, normalizeOrderSourceCountry, type OrderCountryCode } from "@/lib/order-countries";
-import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
+import {
+  DEFAULT_WORK_COUNTRY,
+  orderSourceCountryFromWorkCountry,
+  workCountryFromOrderSourceCountry,
+} from "@/lib/work-country";
 import { prismaVatRatePercent } from "@/lib/vat-prisma";
 import { computeCustomerNamePatches, primaryCustomerDisplayName } from "@/lib/customer-names";
 import {
@@ -476,14 +493,99 @@ export async function previewPaymentCodeForCaptureAction(input?: {
   if (!userHasAnyPermission(me, ["receive_payments"])) {
     return { ok: false, error: "אין הרשאה" };
   }
-  const fromUi = normalizeWorkCountryCode(input?.workCountry ?? null);
-  const wc =
-    fromUi ??
-    (await resolvePaymentWorkCountry({
-      orderId: input?.orderId,
-      customerId: input?.customerId,
-    }));
+  const wc = await resolvePaymentWorkCountry({
+    orderId: input?.orderId,
+    customerId: input?.customerId,
+    workCountry: input?.workCountry,
+  });
   return { ok: true, code: (await allocateNextPaymentCapture(wc)).code };
+}
+
+/** רשימת כל קודי הקליטה במדינה — נטענת פעם אחת לניווט ⬅/➡ */
+export async function listCapturePaymentCodesForNavAction(
+  workCountry: string,
+): Promise<{ ok: true; codes: string[] } | { ok: false; error: string }> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["receive_payments"])) {
+    return { ok: false, error: "אין הרשאה" };
+  }
+  const wc = normalizeWorkCountryCode(workCountry);
+  if (!wc || !isCapturePaymentNavCountry(wc)) {
+    return { ok: false, error: "מדינת קליטה לא תקינה" };
+  }
+  const codes = await listCapturePaymentCodesOrdered(wc);
+  return { ok: true, codes };
+}
+
+function intakeWeekCodeFromPaymentDateYmd(ymd: string): string {
+  const norm = normalizeAhWeekCode(deriveAhWeekCodeFromOrderDateYmd(ymd.trim()));
+  return norm ?? DEFAULT_WEEK_CODE;
+}
+
+/** טעינה מרוכזת לניווט ⬅/➡ — כל קודי הקליטה במדינה + workspace לכל מסמך */
+export async function preloadCapturePaymentNavigationCacheAction(
+  workCountry: string,
+): Promise<
+  | { ok: true; codes: string[]; entries: PaymentNavigationCacheEntryPayload[] }
+  | { ok: false; error: string }
+> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["receive_payments"])) {
+    return { ok: false, error: "אין הרשאה" };
+  }
+  const wc = normalizeWorkCountryCode(workCountry);
+  if (!wc || !isCapturePaymentNavCountry(wc)) {
+    return { ok: false, error: "מדינת קליטה לא תקינה" };
+  }
+
+  const codes = await listCapturePaymentCodesOrdered(wc as CapturePaymentNavCountry);
+  const entries: PaymentNavigationCacheEntryPayload[] = [];
+  const hydrateByCustomerWeek = new Map<
+    string,
+    Awaited<ReturnType<typeof fetchPaymentIntakeCustomerOrdersAction>>
+  >();
+  const { getCustomerOpenDebt, openDebtScopeForWorkCountry } = await import("@/lib/customer-open-debt");
+  const debtScope = openDebtScopeForWorkCountry(wc);
+  const openDebtByCustomer = new Map<string, number>();
+
+  for (const code of codes) {
+    const paymentId = await findCapturePaymentIdByCode(code, wc);
+    if (!paymentId) continue;
+    const entry = await loadPaymentEntryPayload(paymentId);
+    if (!entry) continue;
+
+    const customerId = entry.customer.id?.trim();
+    if (!customerId) continue;
+
+    const intakeWeekCode = intakeWeekCodeFromPaymentDateYmd(entry.paymentDateYmd);
+    const hydrateKey = `${customerId}|${intakeWeekCode}|${wc}`;
+    let hydrate = hydrateByCustomerWeek.get(hydrateKey);
+    if (!hydrate) {
+      hydrate = await fetchPaymentIntakeCustomerOrdersAction(customerId, intakeWeekCode, wc);
+      hydrateByCustomerWeek.set(hydrateKey, hydrate);
+    }
+    if (!hydrate.ok) continue;
+
+    let openDebtSignedUsd = openDebtByCustomer.get(customerId);
+    if (openDebtSignedUsd === undefined) {
+      const debt = await getCustomerOpenDebt(customerId, debtScope);
+      openDebtSignedUsd = Number(debt.signedBalanceUsd.toFixed(2));
+      openDebtByCustomer.set(customerId, openDebtSignedUsd);
+    }
+
+    entries.push({
+      paymentCode: code,
+      paymentId: entry.id,
+      entry,
+      customerData: hydrate.customer,
+      orders: hydrate.orders,
+      customerPayments: hydrate.customerPayments,
+      intakeWeekCode,
+      openDebtSignedUsd,
+    });
+  }
+
+  return { ok: true, codes, entries };
 }
 
 export async function getCapturePaymentCodeNeighborsAction(input: {
@@ -850,30 +952,45 @@ export async function capturePaymentAction(form: {
   };
 }
 
-export async function searchCustomersForOrderAction(query: string): Promise<CustomerSearchRow[]> {
+export async function searchCustomersForOrderAction(
+  query: string,
+  workCountryRaw?: string | null,
+): Promise<CustomerSearchRow[]> {
   return withPerfTimer("search.customers.capture", async () => {
     const me = await requireAuth();
     if (!userHasAnyPermission(me, ["create_orders", "edit_orders", "receive_payments"])) return [];
-    return searchCustomersPrisma(query, { limit: 20 });
+    return searchCustomersPrisma(query, { limit: 20, workCountry: workCountryRaw });
   });
 }
 
 /** זיהוי לקוח לפי מזהה מערכת, קוד לקוח או קוד ישן — התאמה מדויקת בלבד */
-export async function resolveCustomerForCaptureAction(raw: string): Promise<CustomerSearchRow | null> {
+export async function resolveCustomerForCaptureAction(
+  raw: string,
+  workCountryRaw?: string | null,
+): Promise<CustomerSearchRow | null> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["create_orders", "edit_orders", "receive_payments"])) return null;
 
-  const rows = await searchCustomersPrisma(raw, { limit: 1, exactOnly: true });
+  const rows = await searchCustomersPrisma(raw, {
+    limit: 1,
+    exactOnly: true,
+    workCountry: workCountryRaw,
+  });
   return rows[0] ?? null;
 }
 
 /** רשימה קצרה לבחירה מהירה בטופס קליטה */
-export async function listCustomersForOrderQuickPickAction(): Promise<CustomerSearchRow[]> {
+export async function listCustomersForOrderQuickPickAction(
+  workCountryRaw?: string | null,
+): Promise<CustomerSearchRow[]> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["create_orders", "edit_orders", "receive_payments"])) return [];
 
+  const { resolveWorkCountryOrDefault } = await import("@/lib/work-country");
+  const wc = resolveWorkCountryOrDefault(workCountryRaw);
+
   const rows = await prisma.customer.findMany({
-    where: { isActive: true, deletedAt: null },
+    where: { isActive: true, deletedAt: null, countryCode: wc },
     take: 50,
     orderBy: { displayName: "asc" },
     select: {
@@ -970,12 +1087,21 @@ export async function createMinimalOrderAction(form: {
 
   const customer = await prisma.customer.findFirst({
     where: { id: custId, deletedAt: null, isActive: true },
+    select: {
+      id: true,
+      customerCode: true,
+      displayName: true,
+      customerType: true,
+      countryCode: true,
+    },
   });
   if (!customer) return { ok: false, error: "לקוח לא נמצא" };
 
   const orderDate = parseLocalDateTime(form.orderDateYmd, form.orderTimeHm || "00:00");
   const weekCode = getWeekCodeForLocalDate(orderDate);
-  const { orderNumber, oldOrderNumber } = await generateNextOrderNumber(weekCode);
+  const workCountry = normalizeWorkCountryCode(String(customer.countryCode)) ?? DEFAULT_WORK_COUNTRY;
+  const sourceCountry = orderSourceCountryFromWorkCountry(workCountry);
+  const { orderNumber, oldOrderNumber } = await generateNextOrderNumber(weekCode, workCountry);
 
   const zero = new Prisma.Decimal(0);
 
@@ -985,6 +1111,8 @@ export async function createMinimalOrderAction(form: {
     data: {
       orderNumber,
       oldOrderNumber,
+      sourceCountry,
+      countryCode: workCountry,
       customer: { connect: { id: customer.id } },
       customerCodeSnapshot: customer.customerCode,
       customerNameSnapshot: customer.displayName,
@@ -1199,7 +1327,10 @@ export async function createPaymentPointForOrderAction(input: {
 }
 
 /** פרטי תצוגה לטופס קליטת הזמנה (שמות, אינדקס, יתרה משוערת) */
-export async function getCustomerOrderFormExtrasAction(customerId: string): Promise<{
+export async function getCustomerOrderFormExtrasAction(
+  customerId: string,
+  workCountryRaw?: string | null,
+): Promise<{
   /** שם באנגלית — כולל תאימות לשדה ישן nameHe */
   nameEn: string | null;
   nameAr: string | null;
@@ -1216,36 +1347,25 @@ export async function getCustomerOrderFormExtrasAction(customerId: string): Prom
   const id = customerId.trim();
   if (!id) return null;
 
-  // All 3 reads are independent (only depend on the function param `id`) — run in parallel.
-  const [cust, orderAgg, payAgg] = await Promise.all([
-    prisma.customer.findFirst({
-      where: { id, deletedAt: null, isActive: true },
-      select: {
-        nameHe: true,
-        nameEn: true,
-        nameAr: true,
-        phone: true,
-        phone2: true,
-        oldCustomerCode: true,
-        customerCode: true,
-        city: true,
-        address: true,
-      },
-    }),
-    prisma.order.aggregate({
-      where: { customerId: id, deletedAt: null },
-      _sum: { totalUsd: true },
-    }),
-    prisma.payment.aggregate({
-      where: { customerId: id, isPaid: true },
-      _sum: { amountUsd: true },
-    }),
-  ]);
+  const cust = await prisma.customer.findFirst({
+    where: { id, deletedAt: null, isActive: true },
+    select: {
+      nameHe: true,
+      nameEn: true,
+      nameAr: true,
+      phone: true,
+      phone2: true,
+      oldCustomerCode: true,
+      customerCode: true,
+      city: true,
+      address: true,
+    },
+  });
   if (!cust) return null;
 
-  const o = Number(orderAgg._sum.totalUsd ?? 0);
-  const p = Number(payAgg._sum.amountUsd ?? 0);
-  const bal = o - p;
+  const { getCustomerOpenDebt, openDebtScopeForWorkCountry } = await import("@/lib/customer-open-debt");
+  const debt = await getCustomerOpenDebt(id, openDebtScopeForWorkCountry(workCountryRaw));
+  const businessSigned = Number(debt.signedBalanceUsd.toFixed(2));
   const indexLabel = cust.oldCustomerCode?.trim() || cust.customerCode?.trim() || null;
 
   return {
@@ -1255,8 +1375,45 @@ export async function getCustomerOrderFormExtrasAction(customerId: string): Prom
     indexLabel,
     city: cust.city?.trim() || null,
     address: cust.address?.trim() || null,
-    balanceUsdDisplay: bal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
-    balanceUsdNegative: bal < -0.005,
+    balanceUsdDisplay: businessSigned.toLocaleString("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }),
+    balanceUsdNegative: businessSigned < -0.005,
+  };
+}
+
+/** חוב פתוח — מקור חישוב יחיד (ללא cache) */
+export async function fetchCustomerOpenDebtAction(
+  customerId: string,
+  workCountryRaw?: string | null,
+): Promise<
+  | {
+      ok: true;
+      openDebtUsd: string;
+      signedBalanceUsd: string;
+      internalSignedUsd: string;
+      totalOrdersUsd: string;
+      totalPaymentsUsd: string;
+    }
+  | { ok: false; error: string }
+> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["create_orders", "edit_orders", "receive_payments", "view_orders"])) {
+    return { ok: false, error: "אין הרשאה" };
+  }
+  const id = customerId.trim();
+  if (!id) return { ok: false, error: "חסר לקוח" };
+
+  const { getCustomerOpenDebt, openDebtScopeForWorkCountry } = await import("@/lib/customer-open-debt");
+  const debt = await getCustomerOpenDebt(id, openDebtScopeForWorkCountry(workCountryRaw));
+  return {
+    ok: true,
+    openDebtUsd: debt.openDebtUsd.toFixed(2),
+    signedBalanceUsd: debt.signedBalanceUsd.toFixed(2),
+    internalSignedUsd: debt.internalSignedUsd.toFixed(2),
+    totalOrdersUsd: debt.totalOrdersUsd.toFixed(2),
+    totalPaymentsUsd: debt.totalPaymentsUsd.toFixed(2),
   };
 }
 
@@ -1523,7 +1680,7 @@ async function captureOrderActionInner(
   } else {
     if (!allocated) {
       const fresh = await capturePerfTimed("capture.generateOrderNumber", () =>
-        generateNextOrderNumber(weekCode),
+        generateNextOrderNumber(weekCode, workCountryFromOrderSourceCountry(form.sourceCountry)),
       );
       orderNumber = fresh.orderNumber;
       oldOrderNumber = fresh.oldOrderNumber;

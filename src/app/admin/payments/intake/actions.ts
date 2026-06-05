@@ -17,6 +17,7 @@ import { prisma } from "@/lib/prisma";
 import { allocateNextPaymentCapture, resolvePaymentWorkCountry } from "@/lib/payment-capture-code";
 import { prismaVatRatePercent } from "@/lib/vat-prisma";
 import { paymentIntakeOrderDateThroughAhWeekEnd } from "@/lib/payment-intake-order-filter";
+import { DEFAULT_WORK_COUNTRY, normalizeWorkCountryCode } from "@/lib/work-country";
 import { formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate, parseLocalDateTime } from "@/lib/work-week";
 import { isDebtWithdrawalOrderStatus } from "@/lib/debt-withdrawal-order";
 import {
@@ -53,33 +54,14 @@ export type PaymentIntakeCustomerPayload = {
 
 const MONEY_EPS = 0.02;
 
-export async function calculatePaymentCaptureCustomerBalanceUsd(customerId: string): Promise<Prisma.Decimal> {
-  const [orders, payments] = await Promise.all([
-    prisma.order.findMany({
-      where: { customerId, deletedAt: null },
-      select: { status: true, totalUsd: true, amountUsd: true, commissionUsd: true, debtWithdrawalUsd: true },
-    }),
-    findActiveCustomerPayments({
-      where: { customerId },
-      select: { amountUsd: true, amountIls: true, exchangeRate: true },
-    }),
-  ]);
-
-  const totalOrders = orders.reduce(
-    (sum, o) =>
-      isDebtWithdrawalOrderStatus(o.status)
-        ? sum
-        : sum.add(o.totalUsd ?? (o.amountUsd ?? new Prisma.Decimal(0)).add(o.commissionUsd ?? new Prisma.Decimal(0))),
-    new Prisma.Decimal(0),
+export async function calculatePaymentCaptureCustomerBalanceUsd(
+  customerId: string,
+  workCountryRaw?: string | null,
+): Promise<Prisma.Decimal> {
+  const { getCustomerInternalBalanceUsd, openDebtScopeForWorkCountry } = await import(
+    "@/lib/customer-open-debt"
   );
-  const totalDebtWithdrawals = orders.reduce((sum, o) => {
-    if (!isDebtWithdrawalOrderStatus(o.status)) return sum;
-    if (o.debtWithdrawalUsd && o.debtWithdrawalUsd.gt(0)) return sum.add(o.debtWithdrawalUsd);
-    return sum.add(o.totalUsd ?? (o.amountUsd ?? new Prisma.Decimal(0)).add(o.commissionUsd ?? new Prisma.Decimal(0)));
-  }, new Prisma.Decimal(0));
-
-  const totalPayments = payments.reduce((sum, p) => sum.add(paymentRecordUsdEquivalent(p)), new Prisma.Decimal(0));
-  return totalPayments.add(totalDebtWithdrawals).sub(totalOrders).toDecimalPlaces(2, 4);
+  return getCustomerInternalBalanceUsd(customerId, openDebtScopeForWorkCountry(workCountryRaw));
 }
 
 async function applyPaymentCustomerDraftsIfNeeded(params: {
@@ -111,23 +93,28 @@ async function applyPaymentCustomerDraftsIfNeeded(params: {
 }
 
 /** חיפוש לקוח: עדיפות ל-id / קוד מדויק, אחר כך רשימה */
-export async function searchCustomersPaymentIntakeAction(raw: string): Promise<CustomerSearchRow[]> {
+export async function searchCustomersPaymentIntakeAction(
+  raw: string,
+  workCountryRaw?: string | null,
+): Promise<CustomerSearchRow[]> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["receive_payments"])) return [];
 
   const q = raw.trim();
   if (!q) return [];
 
-  const exact = await resolveCustomerForCaptureAction(q);
+  const exact = await resolveCustomerForCaptureAction(q, workCountryRaw);
   if (exact) return [exact];
 
-  return searchCustomersForOrderAction(q);
+  return searchCustomersForOrderAction(q, workCountryRaw);
 }
 
 export async function fetchPaymentIntakeCustomerOrdersAction(
   customerId: string,
   /** אופציונלי: סינון תאריך עד סוף שבוע AH. null = כל היסטוריית ההזמנות */
   weekCodeForOpenBalances?: string | null,
+  /** מדינת מסמך הקליטה (TR / CN / AE) — מסנן הזמנות לפי countryCode */
+  paymentWorkCountryRaw?: string | null,
 ): Promise<
   | { ok: true; customer: PaymentIntakeCustomerPayload; orders: PaymentIntakeOrderRow[]; customerPayments: PaymentIntakeCustomerPaymentRow[] }
   | { ok: false; error: string }
@@ -158,6 +145,7 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
   if (!cust) return { ok: false, error: "לקוח לא נמצא" };
 
   const weekDateWhere = paymentIntakeOrderDateThroughAhWeekEnd(weekCodeForOpenBalances);
+  const paymentWorkCountry = normalizeWorkCountryCode(paymentWorkCountryRaw) ?? DEFAULT_WORK_COUNTRY;
 
   const [orders, customerPaymentRows] = await Promise.all([
     prisma.order.findMany({
@@ -165,6 +153,7 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
         customerId: cid,
         deletedAt: null,
         status: { not: "DEBT_WITHDRAWAL" },
+        countryCode: paymentWorkCountry,
         ...(weekDateWhere ?? {}),
       },
       orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],
@@ -185,7 +174,10 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
       },
     }),
     findActiveCustomerPayments({
-      where: { customerId: cid },
+      where: {
+        customerId: cid,
+        countryCode: paymentWorkCountry,
+      },
       select: {
         amountUsd: true,
         amountIls: true,
@@ -271,7 +263,7 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
   const rows: PaymentIntakeOrderRow[] = rowsWithRem.map((x) => x.row);
 
   const index = cust.oldCustomerCode?.trim() || cust.customerCode?.trim() || null;
-  const customerBalanceUsd = await calculatePaymentCaptureCustomerBalanceUsd(cid);
+  const customerBalanceUsd = await calculatePaymentCaptureCustomerBalanceUsd(cid, paymentWorkCountry);
 
   const customerPayments: PaymentIntakeCustomerPaymentRow[] = customerPaymentRows.map((p) => ({
     amountUsd: p.amountUsd != null ? p.amountUsd.toFixed(4) : null,

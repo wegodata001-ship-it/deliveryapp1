@@ -35,7 +35,7 @@ enum OrderSourceCountry {
   JORDAN
 }
 
-/** סביבת עבודה לפי מדינה — TR/CN/AE/JO */
+/** סביבת עבודה לפי מדינה — TR/CN/AE (מספור CH; JO legacy בלבד) */
 enum WorkCountryCode {
   TR
   CN

@@ -1,7 +1,7 @@
 import { Prisma, type OrderSourceCountry } from "@prisma/client";
 import { OS } from "@/lib/order-status-slugs";
 import { prisma } from "@/lib/prisma";
-import { activePaidPaymentWhere } from "@/lib/payment-record-status";
+import { findActiveCustomerPayments } from "@/lib/payment-record-status";
 import { paymentRecordUsdEquivalent as paymentUsd } from "@/lib/payment-usd-equivalent";
 import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
 
@@ -75,15 +75,17 @@ export async function calculateCustomerBalances(
   const orderWhere = {
     customerId: { in: ids },
     deletedAt: null,
+    status: scope.orderStatuses?.length
+      ? { in: scope.orderStatuses }
+      : { not: OS.CANCELLED },
     ...dateWhere("orderDate", scope),
     ...(scope.sourceCountry ? { sourceCountry: scope.sourceCountry, countryCode: wc! } : {}),
-    ...(scope.orderStatuses?.length ? { status: { in: scope.orderStatuses } } : {}),
   } satisfies Prisma.OrderWhereInput;
 
-  const paymentWhere = {
+  const paymentDateFilter = dateWhere("paymentDate", scope);
+  const paymentBaseWhere = {
     customerId: { in: ids },
-    ...activePaidPaymentWhere,
-    ...dateWhere("paymentDate", scope),
+    ...(paymentDateFilter ?? {}),
     ...(wc ? { countryCode: wc } : {}),
   } satisfies Prisma.PaymentWhereInput;
 
@@ -99,8 +101,8 @@ export async function calculateCustomerBalances(
         debtWithdrawalUsd: true,
       },
     }),
-    prisma.payment.findMany({
-      where: paymentWhere,
+    findActiveCustomerPayments({
+      where: paymentBaseWhere,
       select: {
         customerId: true,
         amountUsd: true,

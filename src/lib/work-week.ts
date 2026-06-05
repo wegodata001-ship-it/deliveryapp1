@@ -162,6 +162,25 @@ function resolveBaseWeek(code: string): WorkWeekRange {
   return getAhWeekRange(code) ?? getCurrentWeekYmdRange();
 }
 
+/** כשיש week ב-URL — שומר from/to מותאמים (למשל «היום») אם בתוך השבוע */
+function resolveRangeForKnownWeek(
+  knownWeek: string,
+  fromYmd: string,
+  toYmd: string,
+  fromParam?: string,
+  toParam?: string,
+): WorkWeekRange {
+  const wr = resolveBaseWeek(knownWeek);
+  const inWeek =
+    isValidYmd(fromParam) &&
+    isValidYmd(toParam) &&
+    fromParam >= wr.from &&
+    toParam <= wr.to &&
+    fromParam <= toParam;
+  if (inWeek) return { from: fromParam, to: toParam };
+  return wr;
+}
+
 export function parseDateFilterFromSearchParams(
   raw: Record<string, string | string[] | undefined>,
 ): ParsedDateFilter {
@@ -202,7 +221,7 @@ export function parseDateFilterFromSearchParams(
   }
 
   if (knownWeek) {
-    const wr = resolveBaseWeek(knownWeek);
+    const wr = resolveRangeForKnownWeek(knownWeek, fromYmd, toYmd, fromParam, toParam);
     fromYmd = wr.from;
     toYmd = wr.to;
   }
@@ -271,7 +290,7 @@ export function parseOrdersListDateFilterFromSearchParams(
   }
 
   if (knownWeek) {
-    const wr = resolveBaseWeek(knownWeek);
+    const wr = resolveRangeForKnownWeek(knownWeek, fromYmd, toYmd, ofrom, oto);
     fromYmd = wr.from;
     toYmd = wr.to;
   }

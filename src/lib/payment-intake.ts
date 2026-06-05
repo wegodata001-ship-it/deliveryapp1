@@ -124,6 +124,32 @@ function orderRemainingUsd(o: PaymentIntakeOrderBase): number {
   return roundMoney2(Math.max(0, o.totalAmountUsd - o.dbPaidUsd));
 }
 
+type ClosureDebtRow = { o: PaymentIntakeOrderBase; idx: number; remaining: number };
+
+/** תור סגירת חובות — עדיפות מסומנת ואז כרונולוגי (ישן → חדש) */
+export function buildPaymentAllocationClosureQueue(
+  ordersOldestFirst: PaymentIntakeOrderBase[],
+  prioritizedOrderIds: Set<string> | null,
+): PaymentIntakeOrderBase[] {
+  const debtRows: ClosureDebtRow[] = ordersOldestFirst
+    .map((o, idx) => ({ o, idx, remaining: orderRemainingUsd(o) }))
+    .filter((x) => x.remaining > EPS);
+
+  const hasPriority = prioritizedOrderIds != null && prioritizedOrderIds.size > 0;
+  const priorityRows = hasPriority
+    ? debtRows.filter((x) => prioritizedOrderIds!.has(x.o.id))
+    : [];
+  const restRows = hasPriority
+    ? debtRows.filter((x) => !prioritizedOrderIds!.has(x.o.id))
+    : debtRows;
+
+  const byOldestFirst = (a: ClosureDebtRow, b: ClosureDebtRow) => a.idx - b.idx;
+  priorityRows.sort(byOldestFirst);
+  restRows.sort(byOldestFirst);
+
+  return [...priorityRows, ...restRows].map((x) => x.o);
+}
+
 /**
  * מנוע הקצאה מרכזי לקליטת תשלום רגילה + מעודכנת.
  * rules:
@@ -139,32 +165,15 @@ export function allocatePaymentAcrossOrders(
   let remainingPayment = roundMoney2(Number.isFinite(totalUsd) ? totalUsd : 0);
   if (remainingPayment < 0) remainingPayment = 0;
 
-  const debtRows = ordersOldestFirst
-    .map((o, idx) => ({ o, idx, remaining: orderRemainingUsd(o) }))
-    .filter((x) => x.remaining > EPS);
-
-  const hasPriority = prioritizedOrderIds != null && prioritizedOrderIds.size > 0;
-  const priorityRows = hasPriority
-    ? debtRows.filter((x) => prioritizedOrderIds!.has(x.o.id))
-    : [];
-  const restRows = hasPriority
-    ? debtRows.filter((x) => !prioritizedOrderIds!.has(x.o.id))
-    : debtRows;
-
-  /** סדר כרונולוגי: אינדקס נמוך = הזמנה ישנה יותר ב־ordersOldestFirst */
-  const byOldestFirst = (a: { idx: number }, b: { idx: number }) => a.idx - b.idx;
-
-  priorityRows.sort(byOldestFirst);
-  restRows.sort(byOldestFirst);
-
-  const queue = [...priorityRows, ...restRows];
+  const queue = buildPaymentAllocationClosureQueue(ordersOldestFirst, prioritizedOrderIds);
   const byOrderId = new Map<string, number>();
 
-  for (const row of queue) {
+  for (const o of queue) {
     if (remainingPayment <= EPS) break;
-    const alloc = roundMoney2(Math.min(remainingPayment, row.remaining));
+    const debtRem = orderRemainingUsd(o);
+    const alloc = roundMoney2(Math.min(remainingPayment, debtRem));
     if (alloc <= EPS) continue;
-    byOrderId.set(row.o.id, alloc);
+    byOrderId.set(o.id, alloc);
     remainingPayment = roundMoney2(remainingPayment - alloc);
   }
 

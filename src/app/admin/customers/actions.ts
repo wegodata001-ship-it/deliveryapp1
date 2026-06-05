@@ -194,7 +194,8 @@ export async function getCustomerProfileAction(
     };
   });
 
-  const balance = customer.balanceUsd.toDecimalPlaces(2, 4);
+  const { getCustomerInternalBalanceUsd } = await import("@/lib/customer-open-debt");
+  const balance = (await getCustomerInternalBalanceUsd(id)).toDecimalPlaces(2, 4);
 
   return {
     customer: {

@@ -4,21 +4,21 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { listCustomersModuleAction } from "@/app/admin/customers/actions";
 import type { CustomersModuleListRow } from "@/lib/customers-module-types";
-import { formatFromInternalSigned } from "@/lib/customer-balance";
+import { formatCustomerBalanceDisplay } from "@/lib/customer-balance";
 import { parseMoneyStringOrZero } from "@/lib/money-format";
 
 const LIMIT = 25;
 
 function balanceClass(balanceUsd: string): string {
   const n = parseMoneyStringOrZero(balanceUsd);
-  const view = formatFromInternalSigned(n, "USD");
+  const view = formatCustomerBalanceDisplay(n, "USD");
   if (view.kind === "debt") return "adm-cust-module-amt adm-cust-module-amt--debt";
   if (view.kind === "credit") return "adm-cust-module-amt adm-cust-module-amt--credit";
   return "adm-cust-module-amt adm-cust-module-amt--even";
 }
 
 function balanceText(balanceUsd: string): string {
-  return formatFromInternalSigned(parseMoneyStringOrZero(balanceUsd), "USD").amountFormatted;
+  return formatCustomerBalanceDisplay(parseMoneyStringOrZero(balanceUsd), "USD").amountFormatted;
 }
 
 export function CustomersListClient() {

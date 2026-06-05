@@ -235,39 +235,11 @@ type CustomerBalanceAggRow = {
 
 async function fetchBalancesUsdForCustomers(customerIds: string[]): Promise<Map<string, Prisma.Decimal>> {
   if (customerIds.length === 0) return new Map();
-  const ids = customerIds;
-  const [ordersAgg, withdrawalsAgg, paymentsAgg] = await Promise.all([
-    prisma.order.groupBy({
-      by: ["customerId"],
-      where: { deletedAt: null, customerId: { in: ids }, status: { not: "DEBT_WITHDRAWAL" } },
-      _sum: { totalUsd: true },
-    }),
-    prisma.order.groupBy({
-      by: ["customerId"],
-      where: { deletedAt: null, customerId: { in: ids }, status: "DEBT_WITHDRAWAL" },
-      _sum: { debtWithdrawalUsd: true },
-    }),
-    prisma.payment.groupBy({
-      by: ["customerId"],
-      where: { isPaid: true, customerId: { in: ids } },
-      _sum: { amountUsd: true },
-    }),
-  ]);
-
-  const ordersMap = new Map(ordersAgg.map((r) => [r.customerId ?? "", (r._sum.totalUsd ?? new Prisma.Decimal(0)) as Prisma.Decimal]));
-  const withdrawalsMap = new Map(
-    withdrawalsAgg.map((r) => [r.customerId ?? "", (r._sum.debtWithdrawalUsd ?? new Prisma.Decimal(0)) as Prisma.Decimal]),
-  );
-  const paymentsMap = new Map(
-    paymentsAgg.map((r) => [r.customerId ?? "", (r._sum.amountUsd ?? new Prisma.Decimal(0)) as Prisma.Decimal]),
-  );
-
+  const { calculateCustomerBalances } = await import("@/lib/customer-balance-calculator");
+  const map = await calculateCustomerBalances(customerIds);
   const out = new Map<string, Prisma.Decimal>();
-  for (const id of ids) {
-    const orders = ordersMap.get(id) ?? new Prisma.Decimal(0);
-    const withdrawals = withdrawalsMap.get(id) ?? new Prisma.Decimal(0);
-    const payments = paymentsMap.get(id) ?? new Prisma.Decimal(0);
-    out.set(id, orders.sub(payments).sub(withdrawals));
+  for (const [id, row] of map) {
+    out.set(id, row.balance);
   }
   return out;
 }
@@ -306,7 +278,7 @@ export async function listCustomersSourceTable(
         LEFT JOIN (
           SELECT "customerId", SUM(COALESCE("totalUsd",0)) AS orders_usd
           FROM "Order"
-          WHERE "deletedAt" IS NULL AND "status" <> 'DEBT_WITHDRAWAL'
+          WHERE "deletedAt" IS NULL AND "status" <> 'DEBT_WITHDRAWAL' AND "status" <> 'CANCELLED'
           GROUP BY "customerId"
         ) o ON o."customerId" = c.id
         LEFT JOIN (

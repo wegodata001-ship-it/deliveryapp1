@@ -6,6 +6,8 @@ import {
   DEFAULT_WORK_COUNTRY,
   formatOrderNumber,
   orderCounterKey,
+  orderNumberCountryPrefix,
+  orderSourceCountryFromWorkCountry,
   weekNumericPart,
   type WorkCountryCode,
 } from "@/lib/work-country";
@@ -31,9 +33,13 @@ async function ensureOrderWeekCounterTable(): Promise<void> {
 
 function orderNumberPrefixes(workCountry: WorkCountryCode, weekCode: string): string[] {
   const wn = weekNumericPart(weekCode);
-  const modern = `${workCountry}-${wn}-`;
+  const display = orderNumberCountryPrefix(workCountry);
+  const modern = `${display}-${wn}-`;
   if (workCountry === "TR") {
     return [modern, `AH-${wn}-`, `${weekCode.trim()}-`];
+  }
+  if (workCountry === "CN") {
+    return [modern, `CN-${wn}-`];
   }
   return [modern];
 }
@@ -59,10 +65,13 @@ async function scanMaxSequenceFromOrders(
   const prefixes = orderNumberPrefixes(workCountry, wc);
   const wn = weekNumericPart(wc);
 
+  const sourceCountry = orderSourceCountryFromWorkCountry(workCountry);
+
   const [numAgg, legacyAgg, oldAgg] = await Promise.all([
     db.order.aggregate({
       where: {
         countryCode: workCountry as PrismaWorkCountryCode,
+        sourceCountry,
         weekCode: wc,
         isActive: true,
         OR: prefixes.map((p) => ({ orderNumber: { startsWith: p } })),
@@ -72,6 +81,8 @@ async function scanMaxSequenceFromOrders(
     workCountry === "TR"
       ? db.order.aggregate({
           where: {
+            countryCode: "TR",
+            sourceCountry: "TURKEY",
             weekCode: wc,
             isActive: true,
             orderNumber: { startsWith: `AH-${wn}-` },
@@ -82,6 +93,7 @@ async function scanMaxSequenceFromOrders(
     db.order.aggregate({
       where: {
         countryCode: workCountry as PrismaWorkCountryCode,
+        sourceCountry,
         weekCode: wc,
         isActive: true,
         oldOrderNumber: { not: null },

@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { DEFAULT_WORK_COUNTRY, normalizeWorkCountryCode, type WorkCountryCode } from "@/lib/work-country";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import type { CustomerSearchRow } from "@/app/admin/capture/actions";
 import {
@@ -60,8 +61,16 @@ function toSearchRow(r: CustomerSearchDbRow): CustomerSearchRow {
   };
 }
 
-function baseWhere(): Prisma.CustomerWhereInput {
-  return { isActive: true, deletedAt: null };
+function resolveSearchWorkCountry(workCountry?: string | null): WorkCountryCode {
+  return normalizeWorkCountryCode(workCountry) ?? DEFAULT_WORK_COUNTRY;
+}
+
+function baseWhere(workCountry?: string | null): Prisma.CustomerWhereInput {
+  return {
+    isActive: true,
+    deletedAt: null,
+    countryCode: resolveSearchWorkCountry(workCountry),
+  };
 }
 
 function partialOrConditions(q: string): Prisma.CustomerWhereInput[] {
@@ -83,10 +92,10 @@ function partialOrConditions(q: string): Prisma.CustomerWhereInput[] {
   return or;
 }
 
-async function fetchByIdList(ids: string[]): Promise<CustomerSearchRow[]> {
+async function fetchByIdList(ids: string[], workCountry?: string | null): Promise<CustomerSearchRow[]> {
   if (ids.length === 0) return [];
   const rows = await prisma.customer.findMany({
-    where: { ...baseWhere(), id: { in: ids } },
+    where: { ...baseWhere(workCountry), id: { in: ids } },
     select: CUSTOMER_SEARCH_SELECT,
     orderBy: { displayName: "asc" },
   });
@@ -95,14 +104,20 @@ async function fetchByIdList(ids: string[]): Promise<CustomerSearchRow[]> {
 }
 
 /** חיפוש קוד מספרי עם אפסים מובילים — רק במצב חלקי (לא exact=1) */
-async function searchByNormalizedCodeDigits(q: string, limit: number): Promise<CustomerSearchRow[]> {
+async function searchByNormalizedCodeDigits(
+  q: string,
+  limit: number,
+  workCountry?: string | null,
+): Promise<CustomerSearchRow[]> {
   if (!/^\d+$/.test(q)) return [];
+  const wc = resolveSearchWorkCountry(workCountry);
   const stripped = q.replace(/^0+/, "") || "0";
   const pattern = `%${stripped}%`;
   const ids = await prisma.$queryRaw<{ id: string }[]>`
     SELECT id FROM "Customer"
     WHERE "deletedAt" IS NULL
       AND "isActive" = true
+      AND "countryCode" = ${wc}::"WorkCountryCode"
       AND (
         regexp_replace(COALESCE("customerCode", ''), '^0+', '') ILIKE ${pattern}
         OR regexp_replace(COALESCE("oldCustomerCode", ''), '^0+', '') ILIKE ${pattern}
@@ -110,7 +125,10 @@ async function searchByNormalizedCodeDigits(q: string, limit: number): Promise<C
     ORDER BY "displayName" ASC
     LIMIT ${limit}
   `;
-  return fetchByIdList(ids.map((r) => r.id));
+  return fetchByIdList(
+    ids.map((r) => r.id),
+    workCountry,
+  );
 }
 
 /**
@@ -121,29 +139,24 @@ function isActiveCustomer(row: { deletedAt: Date | null; isActive: boolean }): b
   return row.isActive && row.deletedAt == null;
 }
 
-async function searchCustomersExact(q: string): Promise<CustomerSearchRow[]> {
+async function searchCustomersExact(q: string, workCountry?: string | null): Promise<CustomerSearchRow[]> {
+  const wc = resolveSearchWorkCountry(workCountry);
   if (CUSTOMER_SEARCH_UUID_RE.test(q)) {
-    const byId = await prisma.customer.findUnique({
-      where: { id: q },
+    const byId = await prisma.customer.findFirst({
+      where: { ...baseWhere(workCountry), id: q },
       select: CUSTOMER_SEARCH_SELECT,
     });
-    return byId && isActiveCustomer(byId) ? [toSearchRow(byId)] : [];
+    return byId ? [toSearchRow(byId)] : [];
   }
 
-  const byCode = await prisma.customer.findUnique({
-    where: { customerCode: q },
+  const byCode = await prisma.customer.findFirst({
+    where: { ...baseWhere(workCountry), customerCode: { equals: q, mode: "insensitive" } },
     select: CUSTOMER_SEARCH_SELECT,
   });
-  if (byCode && isActiveCustomer(byCode)) return [toSearchRow(byCode)];
-
-  const byCodeCi = await prisma.customer.findFirst({
-    where: { ...baseWhere(), customerCode: { equals: q, mode: "insensitive" } },
-    select: CUSTOMER_SEARCH_SELECT,
-  });
-  if (byCodeCi) return [toSearchRow(byCodeCi)];
+  if (byCode) return [toSearchRow(byCode)];
 
   const byOld = await prisma.customer.findFirst({
-    where: { ...baseWhere(), oldCustomerCode: { equals: q, mode: "insensitive" } },
+    where: { ...baseWhere(workCountry), oldCustomerCode: { equals: q, mode: "insensitive" } },
     select: CUSTOMER_SEARCH_SELECT,
   });
   if (byOld) return [toSearchRow(byOld)];
@@ -154,6 +167,8 @@ async function searchCustomersExact(q: string): Promise<CustomerSearchRow[]> {
 export type CustomerPrismaSearchOptions = {
   limit?: number;
   exactOnly?: boolean;
+  /** TR / CN / AE — חובה לסינון סביבה */
+  workCountry?: string | null;
 };
 
 /**
@@ -169,20 +184,20 @@ export async function searchCustomersPrisma(
 
   if (!customerSearchQueryAllowed(q, exactOnly)) return [];
 
+  const workCountry = opts?.workCountry;
+
   if (exactOnly) {
-    return searchCustomersExact(q);
+    return searchCustomersExact(q, workCountry);
   }
 
-  const codeHit =
-    (await prisma.customer.findUnique({ where: { customerCode: q }, select: CUSTOMER_SEARCH_SELECT })) ??
-    (await prisma.customer.findFirst({
-      where: { ...baseWhere(), customerCode: { equals: q, mode: "insensitive" } },
-      select: CUSTOMER_SEARCH_SELECT,
-    }));
-  if (codeHit && isActiveCustomer(codeHit)) return [toSearchRow(codeHit)];
+  const codeHit = await prisma.customer.findFirst({
+    where: { ...baseWhere(workCountry), customerCode: { equals: q, mode: "insensitive" } },
+    select: CUSTOMER_SEARCH_SELECT,
+  });
+  if (codeHit) return [toSearchRow(codeHit)];
 
   const partialHits = await prisma.customer.findMany({
-    where: { ...baseWhere(), OR: partialOrConditions(q) },
+    where: { ...baseWhere(workCountry), OR: partialOrConditions(q) },
     take: limit,
     orderBy: { displayName: "asc" },
     select: CUSTOMER_SEARCH_SELECT,
@@ -192,5 +207,5 @@ export async function searchCustomersPrisma(
     return partialHits.map(toSearchRow);
   }
 
-  return searchByNormalizedCodeDigits(q, limit);
+  return searchByNormalizedCodeDigits(q, limit, workCountry);
 }

@@ -18,10 +18,12 @@ import {
 } from "@/lib/customer-balance-order-status-filter";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { TableSkeleton } from "@/components/ui/loading";
+import { CustomerBalanceView } from "@/components/ui/CustomerBalanceView";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { formatUsdDisplay, parseMoneyString, parseMoneyStringOrZero } from "@/lib/money-format";
 import { withQuery } from "@/lib/admin-url-query";
 import { CustomerBalancesInsightsBar } from "@/components/admin/CustomerBalancesInsightsBar";
+import { rowOpenBalanceUsd, rowOrdersUsdSplit } from "@/lib/customer-balances-display";
 import { ReportWeekNav } from "@/components/admin/ReportWeekNav";
 import { ORDER_COUNTRY_CODES, orderCountryLabel, type OrderCountryCode } from "@/lib/order-countries";
 import { ACTIVE_WORK_WEEK_CODE } from "@/lib/active-work-week";
@@ -34,6 +36,7 @@ import { useEnsureActiveWorkWeekOnEnter } from "@/hooks/useEnsureActiveWorkWeekO
 import {
   balancesSnapshotToYmd,
   DEFAULT_WEEK_CODE,
+  formatLocalYmd,
   normalizeAhWeekCode,
   normalizeYmdRangePair,
   prevWeekCode,
@@ -48,15 +51,6 @@ const BALANCE_STATUS_OPTIONS: { value: CustomerBalanceDebtFilter; label: string 
   { value: "OWES", label: "חוב" },
   { value: "CREDIT", label: "זכות" },
 ];
-
-type BalancesKpiKey =
-  | "OWES"
-  | "CREDIT"
-  | "OPEN"
-  | "READY"
-  | "IN_PROGRESS"
-  | "CANCELLED"
-  | "DEBT_WITHDRAWAL";
 
 const SORT_LABELS: Record<CustomerBalanceSort, string> = {
   balance_desc: "יתרה: גבוה → נמוך",
@@ -81,9 +75,13 @@ function moneyUsdCell(value: string): string {
 
 function balanceUi(balanceIls: string): { label: string; tone: BalanceUiTone } {
   const n = dec(balanceIls);
-  if (n > 0.01) return { label: "🔴 חייב", tone: "debt" };
-  if (n < -0.01) return { label: "🟢 זכאי", tone: "credit" };
-  return { label: "⚪ מאוזן", tone: "balanced" };
+  if (n > 0.01) return { label: "חוב פתוח", tone: "debt" };
+  if (n < -0.01) return { label: "יתרה", tone: "credit" };
+  return { label: "מאוזן", tone: "balanced" };
+}
+
+function usdStatDisplay(value: string): string {
+  return formatUsdDisplay(parseMoneyStringOrZero(value));
 }
 
 function balanceToneClass(tone: BalanceUiTone): string {
@@ -118,14 +116,15 @@ function formatHeDate(ymd: string): string {
 function balancesScopeSubtitle(weekCode: string, snapshotToYmd: string): string | null {
   const week = (weekCode || "").trim();
   const to = (snapshotToYmd || "").trim();
+  const todayHe = formatHeDate(formatLocalYmd(new Date()));
   if (week && to && /^\d{4}-\d{2}-\d{2}$/.test(to)) {
     const prev = prevWeekCode(week);
     if (prev) {
-      return `יתרות מצטברות · נכון לסוף ${prev} (${formatHeDate(to)}) · שבוע עבודה ${week}`;
+      return `חוב פתוח מעודכן עד היום (${todayHe}) · שבוע עבודה ${week} · תנועות עד סוף ${prev} (${formatHeDate(to)})`;
     }
-    return `יתרות מצטברות · נכון לתאריך ${formatHeDate(to)}`;
+    return `חוב פתוח מעודכן עד היום (${todayHe}) · שבוע עבודה ${week}`;
   }
-  return "יתרות מצטברות · מיום כניסת הלקוח ועד היום";
+  return `חוב פתוח מעודכן עד היום (${todayHe}) · מיום כניסת הלקוח`;
 }
 
 export type BalancesFiltersState = {
@@ -162,7 +161,7 @@ function defaultSearchDraft(): BalancesSearchDraft {
     code: "",
     name: "",
     phone: "",
-    balanceStatus: "ALL",
+    balanceStatus: "OWES",
     orderStatus: "ALL",
     minBalanceIls: "",
     maxBalanceIls: "",
@@ -213,16 +212,6 @@ function openPdfHtml(base64: string) {
   }
 }
 
-function isKpiActive(key: BalancesKpiKey, draft: BalancesSearchDraft): boolean {
-  if (key === "OWES") return draft.balanceStatus === "OWES";
-  if (key === "CREDIT") return draft.balanceStatus === "CREDIT";
-  if (key === "OPEN") return draft.orderStatus === "OPEN";
-  if (key === "READY") return draft.orderStatus === "COMPLETED";
-  if (key === "IN_PROGRESS") return draft.orderStatus === "IN_PROGRESS";
-  if (key === "CANCELLED") return draft.orderStatus === "CANCELLED";
-  return draft.orderStatus === "DEBT_WITHDRAWAL";
-}
-
 export function CustomerBalancesClient() {
   useEnsureActiveWorkWeekOnEnter("balances");
   const router = useRouter();
@@ -264,13 +253,21 @@ export function CustomerBalancesClient() {
     return () => window.clearTimeout(t);
   }, [searchDraft]);
 
+  const refetchBalances = useCallback(() => {
+    setPayload(null);
+    setPage(1);
+    setErr(null);
+    setRefreshSig((s) => s + 1);
+    router.refresh();
+  }, [router]);
+
   useEffect(() => {
     function onBalancesRefresh() {
-      setRefreshSig((s) => s + 1);
+      refetchBalances();
     }
     window.addEventListener("wego:balances-refresh", onBalancesRefresh);
     return () => window.removeEventListener("wego:balances-refresh", onBalancesRefresh);
-  }, []);
+  }, [refetchBalances]);
 
   useEffect(() => {
     let hiddenAt: number | null = null;
@@ -305,37 +302,6 @@ export function CustomerBalancesClient() {
       },
     }),
     [balancesFilters, debouncedSearch],
-  );
-
-  const applySearchPatch = useCallback((patch: Partial<BalancesSearchDraft>) => {
-    setSearchDraft((s) => {
-      const next = { ...s, ...patch };
-      setDebouncedSearch(next);
-      return next;
-    });
-    setPage(1);
-  }, []);
-
-  const toggleKpi = useCallback(
-    (key: BalancesKpiKey) => {
-      const active = isKpiActive(key, debouncedSearch);
-      if (key === "OWES") {
-        applySearchPatch({ balanceStatus: active ? "ALL" : "OWES" });
-      } else if (key === "CREDIT") {
-        applySearchPatch({ balanceStatus: active ? "ALL" : "CREDIT" });
-      } else if (key === "OPEN") {
-        applySearchPatch({ orderStatus: active ? "ALL" : "OPEN" });
-      } else if (key === "READY") {
-        applySearchPatch({ orderStatus: active ? "ALL" : "COMPLETED" });
-      } else if (key === "IN_PROGRESS") {
-        applySearchPatch({ orderStatus: active ? "ALL" : "IN_PROGRESS" });
-      } else if (key === "CANCELLED") {
-        applySearchPatch({ orderStatus: active ? "ALL" : "CANCELLED" });
-      } else {
-        applySearchPatch({ orderStatus: active ? "ALL" : "DEBT_WITHDRAWAL" });
-      }
-    },
-    [applySearchPatch, debouncedSearch],
   );
 
   useEffect(() => {
@@ -475,44 +441,14 @@ export function CustomerBalancesClient() {
     }
   }
 
-  const colCount = 8;
+  const colCount = 9;
   const stats = payload?.stats;
-  const statusKpis = payload?.statusBalanceKpis;
-
-  const debtFilterActive = isKpiActive("OWES", debouncedSearch);
-  const creditFilterActive = isKpiActive("CREDIT", debouncedSearch);
-
-  const insightsProps =
-    stats != null
-      ? {
-          stats,
-          statusKpis,
-          totalRows: payload?.totalRows ?? 0,
-          pageRows: payload?.rows ?? [],
-          debtFilterActive,
-          creditFilterActive,
-          onToggleDebtFilter: () => toggleKpi("OWES"),
-          onToggleCreditFilter: () => toggleKpi("CREDIT"),
-          onToggleOrderKpi: (key: BalancesKpiKey) => toggleKpi(key),
-          orderKpiActive: (key: BalancesKpiKey) => isKpiActive(key, debouncedSearch),
-        }
-      : null;
 
   return (
     <div className="adm-balances-page adm-balances-excel-page adm-balances-page--v2 adm-balances-page--page-scroll adm-page--page-scroll">
-      <header className="adm-balances-head">
+      <header className="adm-balances-head adm-balances-head--compact">
         <h1>יתרות לקוחות</h1>
-        <p>לחיצה על שורה פותחת את כרטסת הלקוח במערכת.</p>
       </header>
-
-      {insightsProps ? (
-        <CustomerBalancesInsightsBar
-          {...insightsProps}
-          part="strip"
-          expanded={insightsExpanded}
-          onExpandedChange={setInsightsExpanded}
-        />
-      ) : null}
 
       {err ? <div className="adm-error adm-balances-error">{err}</div> : null}
       {searchPending ? (
@@ -587,6 +523,15 @@ export function CustomerBalancesClient() {
           </select>
         </label>
         <div className="adm-balances-filters-actions">
+          <button
+            type="button"
+            className="adm-btn adm-btn--secondary adm-btn--xs adm-balances-stats-toggle"
+            disabled={tableBusy || !stats}
+            aria-expanded={insightsExpanded}
+            onClick={() => setInsightsExpanded((v) => !v)}
+          >
+            {insightsExpanded ? "הסתר סטטיסטיקה" : "📊 הצג סטטיסטיקה"}
+          </button>
           <div className="adm-balances-export-actions" role="group" aria-label="ייצוא דוח">
             <button
               type="button"
@@ -713,7 +658,41 @@ export function CustomerBalancesClient() {
           </p>
         ) : null}
 
-        {insightsProps ? <CustomerBalancesInsightsBar {...insightsProps} part="tableLead" /> : null}
+        {stats && insightsExpanded ? (
+          <CustomerBalancesInsightsBar
+            stats={stats}
+            rows={payload?.rows ?? []}
+            totalRows={payload?.totalRows ?? 0}
+            totalPages={payload?.totalPages ?? 1}
+            expanded={insightsExpanded}
+          />
+        ) : null}
+
+        {stats && !insightsExpanded ? (
+          <div className="adm-balances-kpi-compact-row" dir="rtl" role="region" aria-label="סיכום מהיר">
+            <div className="adm-balances-kpi-compact">
+              <span className="adm-balances-kpi-compact__item">
+                <span>לקוחות</span>
+                <strong>{(payload?.totalRows ?? 0).toLocaleString("he-IL")}</strong>
+              </span>
+              <span className="adm-balances-kpi-compact__divider" aria-hidden />
+              <span className="adm-balances-kpi-compact__item adm-balances-kpi-compact__item--open">
+                <span>חוב פתוח</span>
+                <strong dir="ltr">{usdStatDisplay(stats.totalDebtUsd)}</strong>
+              </span>
+              <span className="adm-balances-kpi-compact__divider" aria-hidden />
+              <span className="adm-balances-kpi-compact__item adm-balances-kpi-compact__item--payments">
+                <span>תשלומים</span>
+                <strong dir="ltr">{usdStatDisplay(stats.totalPaymentsUsd)}</strong>
+              </span>
+              <span className="adm-balances-kpi-compact__divider" aria-hidden />
+              <span className="adm-balances-kpi-compact__item adm-balances-kpi-compact__item--credit">
+                <span>יתרות</span>
+                <strong dir="ltr">{usdStatDisplay(stats.totalNetBalanceUsd)}</strong>
+              </span>
+            </div>
+          </div>
+        ) : null}
 
         <div
           className={[
@@ -729,16 +708,17 @@ export function CustomerBalancesClient() {
               <span className="adm-balances-table-spinner" />
             </div>
           ) : null}
-          <table className="adm-table adm-table--excel adm-balances-table">
+          <table className="adm-table adm-table--excel adm-balances-table adm-balances-table--erp adm-balances-table--focus">
             <thead>
               <tr>
-                <th className="adm-balances-th-num">סה&quot;כ הזמנות מצטבר ($)</th>
-                <th className="adm-balances-th-num">סה&quot;כ הזמנות ($)</th>
-                <th className="adm-balances-th-num">סה&quot;כ תשלומים ($)</th>
-                <th className="adm-balances-th-num">יתרה ($)</th>
-                <th>סטטוס</th>
-                <th>שם לקוח</th>
-                <th>קוד לקוח</th>
+                <th className="adm-balances-th-num adm-balances-th-num--before">לפני עמלה ($)</th>
+                <th className="adm-balances-th-num adm-balances-th-num--including">אחרי עמלה ($)</th>
+                <th className="adm-balances-th-num adm-balances-th-num--payments">תשלומים ($)</th>
+                <th className="adm-balances-th-num adm-balances-th-num--balance">יתרה ($)</th>
+                <th className="adm-balances-th-status">סטטוס</th>
+                <th className="adm-balances-th-num adm-balances-th-num--open-debt">חוב פתוח ($)</th>
+                <th className="adm-balances-th-name">שם לקוח</th>
+                <th className="adm-balances-th-code">קוד</th>
                 <th className="adm-balances-th-actions">פעולות</th>
               </tr>
             </thead>
@@ -752,6 +732,8 @@ export function CustomerBalancesClient() {
               ) : (
                 payload?.rows.map((r) => {
                   const ui = balanceUi(r.balanceILS);
+                  const ordersUsd = rowOrdersUsdSplit(r);
+                  const openDebtUsd = rowOpenBalanceUsd(r);
                   return (
                     <tr
                       key={r.customerId}
@@ -770,26 +752,43 @@ export function CustomerBalancesClient() {
                       onFocus={() => schedulePreview(r)}
                       onBlur={clearPreview}
                     >
-                      <td className="adm-balances-td-num" dir="ltr">
-                        {moneyUsdCell(r.lifetimeOrdersUSD)}
+                      <td className="adm-balances-td-num adm-balances-td-num--before" dir="ltr">
+                        {formatUsdDisplay(ordersUsd.beforeUsd)}
                       </td>
-                      <td className="adm-balances-td-num" dir="ltr">
-                        {moneyUsdCell(r.totalOrdersUSD)}
+                      <td className="adm-balances-td-num adm-balances-td-num--including" dir="ltr">
+                        {formatUsdDisplay(ordersUsd.includingUsd)}
                       </td>
-                      <td className="adm-balances-td-num" dir="ltr">
+                      <td className="adm-balances-td-num adm-balances-td-num--payments" dir="ltr">
                         {moneyUsdCell(r.totalPaymentsUSD)}
                       </td>
                       <td
                         className={`adm-balances-td-num adm-balances-td-num--hero ${balanceToneClass(ui.tone)}`}
                         dir="ltr"
                       >
-                        {moneyUsdCell(r.totalBalanceUSD)}
+                        <CustomerBalanceView businessSigned={dec(r.totalBalanceUSD)} currency="USD" compact />
                       </td>
                       <td className="adm-balances-td-status">
                         <span className={statusChipClass(ui.tone)}>{ui.label}</span>
                       </td>
-                      <td>{r.customerName}</td>
-                      <td dir="ltr">{r.customerCode ?? "—"}</td>
+                      <td
+                        className={[
+                          "adm-balances-td-num adm-balances-td-num--open-debt",
+                          openDebtUsd > 0.01 ? "adm-balances-td-open-debt--active" : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" ")}
+                        dir="ltr"
+                      >
+                        {openDebtUsd > 0.01 ? (
+                          <strong className="adm-balances-open-debt-val">{formatUsdDisplay(openDebtUsd)}</strong>
+                        ) : (
+                          <span className="adm-balances-open-debt-zero">—</span>
+                        )}
+                      </td>
+                      <td className="adm-balances-td-name">{r.customerName}</td>
+                      <td className="adm-balances-td-code" dir="ltr">
+                        {r.customerCode ?? "—"}
+                      </td>
                       <td className="adm-balances-td-actions">
                         <button
                           type="button"

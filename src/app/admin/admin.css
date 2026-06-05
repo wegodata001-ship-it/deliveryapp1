@@ -7767,6 +7767,11 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
   transition: opacity 0.15s ease;
 }
 
+.payment-modal-main > .payment-modal-table-wrap--focused {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .payment-modal-main.is-payment-nav-busy {
   opacity: 0.9;
 }
@@ -8668,6 +8673,201 @@ select.payment-modal-inline-input {
   flex-direction: column;
   gap: 10px;
   margin-top: 10px;
+}
+
+/* Preview Allocation — יתרה בטבלת הזמנות */
+.payment-modal-tr--alloc-preview td {
+  background: linear-gradient(90deg, rgba(219, 234, 254, 0.35) 0%, transparent 100%);
+}
+
+.pm-num--bal-alloc-preview {
+  min-width: 7.5rem;
+  vertical-align: top;
+}
+
+.pm-balance-alloc-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.pm-balance-alloc-preview__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.pm-balance-alloc-preview__k {
+  color: #64748b;
+  font-weight: 600;
+  font-size: 0.6875rem;
+}
+
+.pm-balance-alloc-preview__v {
+  font-variant-numeric: tabular-nums;
+}
+
+.pm-balance-alloc-preview__row--alloc .pm-balance-alloc-preview__v {
+  color: #1d4ed8;
+  font-weight: 700;
+}
+
+.pm-balance-alloc-preview__row--after .pm-balance-alloc-preview__v {
+  color: #0f766e;
+  font-weight: 800;
+}
+
+.payment-alloc-preview {
+  margin-top: 12px;
+  padding: 12px 12px 10px;
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #f8fafc 0%, #fff 100%);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+.payment-alloc-preview__heading {
+  margin: 0 0 4px;
+  font-size: 0.875rem;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.payment-alloc-preview__subtitle {
+  margin: 0 0 10px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #475569;
+}
+
+.payment-alloc-preview__empty {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.75rem;
+}
+
+.payment-alloc-preview__orders {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.payment-alloc-preview__order {
+  padding: 10px 10px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.payment-alloc-preview__order-num {
+  font-weight: 800;
+  font-size: 0.8125rem;
+  color: #1e40af;
+  margin-bottom: 6px;
+}
+
+.payment-alloc-preview__alloc-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 8px;
+}
+
+.payment-alloc-preview__line {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.payment-alloc-preview__line--alloc .payment-alloc-preview__v {
+  color: #047857;
+  font-weight: 800;
+}
+
+.payment-alloc-preview__k {
+  color: #64748b;
+  font-weight: 600;
+}
+
+.payment-alloc-preview__v {
+  font-weight: 700;
+  color: #0f172a;
+  font-variant-numeric: tabular-nums;
+}
+
+.payment-alloc-preview__commission {
+  padding-top: 8px;
+  border-top: 1px dashed #e2e8f0;
+}
+
+.payment-alloc-preview__commission-title {
+  font-size: 0.7rem;
+  font-weight: 800;
+  color: #475569;
+  margin-bottom: 6px;
+  text-transform: none;
+}
+
+.payment-alloc-preview__commission-grid {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+}
+
+.payment-alloc-preview__commission-row {
+  display: contents;
+}
+
+.payment-alloc-preview__commission-row dt {
+  margin: 0;
+  color: #64748b;
+  font-weight: 600;
+  font-size: 0.7rem;
+}
+
+.payment-alloc-preview__commission-row dd {
+  margin: 0;
+  font-weight: 700;
+  color: #0f172a;
+  font-size: 0.75rem;
+  text-align: left;
+}
+
+.payment-alloc-preview__footer {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid #e2e8f0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.payment-alloc-preview__total,
+.payment-alloc-preview__unallocated {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+  font-weight: 700;
+}
+
+.payment-alloc-preview__total strong,
+.payment-alloc-preview__unallocated strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.payment-alloc-preview__unallocated {
+  color: #b45309;
+  font-size: 0.75rem;
 }
 
 .payment-upd-linecard {
@@ -9728,6 +9928,16 @@ select.payment-modal-inline-input {
   position: relative;
 }
 
+.payment-modal-table-wrap--focused {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.payment-modal-table-wrap--focused .payment-modal-table-scroll {
+  flex: 1 1 auto;
+  min-height: 8rem;
+}
+
 .payment-modal-ledger-head {
   display: flex;
   flex-wrap: wrap;
@@ -9813,6 +10023,65 @@ select.payment-modal-inline-input {
   border-top: 1px solid #e2e8f0;
   background: linear-gradient(to top, #f8fafc 0%, #fff 100%);
   box-shadow: 0 -4px 14px rgba(15, 23, 42, 0.06);
+}
+
+/** כרטיסי אמצעי תשלום — שורה אחת מתחת לטבלה, גובה מוקטן */
+.payment-modal-orders-summary--methods {
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 6px;
+  padding: 6px 8px 8px;
+  margin: 0;
+  border-top: 1px solid #e2e8f0;
+  background: #f8fafc;
+  box-shadow: none;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.payment-modal-orders-summary--methods .payment-modal-live-kpis,
+.payment-modal-orders-summary--methods .payment-modal-live-kpis--inline-row,
+.payment-modal-orders-summary--methods .payment-modal-live-kpis--with-open-debt {
+  display: flex;
+  flex-flow: row nowrap;
+  align-items: stretch;
+  width: 100%;
+  min-width: min-content;
+  gap: 6px;
+  margin: 0;
+  grid-template-columns: unset;
+}
+
+.payment-modal-orders-summary--methods .payment-modal-live-kpi {
+  flex: 1 1 0;
+  min-width: 5.5rem;
+  max-width: none;
+  min-height: 4.75rem;
+  height: auto;
+  max-height: 4.75rem;
+  padding: 5px 6px 4px;
+  gap: 2px;
+  border-radius: 8px;
+  justify-content: center;
+}
+
+.payment-modal-orders-summary--methods .payment-modal-live-kpi__lbl {
+  font-size: 0.62rem;
+  line-height: 1.15;
+}
+
+.payment-modal-orders-summary--methods .payment-modal-live-kpi__val--main {
+  font-size: 0.82rem;
+  margin-top: 0;
+}
+
+.payment-modal-orders-summary--methods .payment-modal-live-kpi--total .payment-modal-live-kpi__val--main {
+  font-size: 0.88rem;
+}
+
+.payment-modal-orders-summary--methods .payment-modal-live-kpi__breakdown,
+.payment-modal-orders-summary--methods .payment-modal-live-kpi__hint {
+  display: none;
 }
 
 .payment-modal-orders-summary-card {
@@ -10199,6 +10468,20 @@ select.payment-modal-inline-input {
   font-size: 0.82rem;
 }
 
+.pm-intake-head-totals--strip {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding: 6px 10px;
+  margin: 4px 0 6px;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  -webkit-overflow-scrolling: touch;
+}
+
+.pm-intake-head-totals--strip .pm-intake-head-totals__v {
+  font-size: 0.92rem;
+}
+
 .pm-intake-head-totals__item {
   display: inline-flex;
   align-items: baseline;
@@ -10508,28 +10791,38 @@ select.payment-modal-inline-input {
     grid-template-columns: 1fr;
   }
 
-  .payment-modal-live-kpis,
-  .payment-modal-live-kpis--with-open-debt {
+  .payment-modal-summary-row .payment-modal-live-kpis,
+  .payment-modal-summary-row .payment-modal-live-kpis--with-open-debt {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .payment-modal-live-kpi {
+  .payment-modal-summary-row .payment-modal-live-kpi {
     min-height: 104px;
+  }
+
+  .payment-modal-orders-summary--methods .payment-modal-live-kpi {
+    min-width: 5rem;
+    min-height: 4.5rem;
+    max-height: 4.5rem;
   }
 }
 
 @media (max-width: 720px) {
-  .payment-modal-live-kpis {
+  .payment-modal-summary-row .payment-modal-live-kpis {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .payment-modal-live-kpi--total {
+  .payment-modal-summary-row .payment-modal-live-kpi--total {
     grid-column: 1 / -1;
     min-height: 88px;
   }
 
-  .payment-modal-live-kpi__val--main {
+  .payment-modal-summary-row .payment-modal-live-kpi__val--main {
     font-size: 1.1rem;
+  }
+
+  .payment-modal-orders-summary--methods .payment-modal-live-kpis {
+    flex-wrap: nowrap;
   }
 }
 
@@ -13989,13 +14282,13 @@ html.adm-app-shell .adm-chrome-main:has(.adm-balances-excel-page) {
 }
 
 .adm-balances-kpi-compact__item--credit {
-  background: #ecfdf5;
-  border-color: #a7f3d0;
+  background: #fff7ed;
+  border-color: #fed7aa;
 }
 
 .adm-balances-kpi-compact__item--credit .adm-balances-kpi-compact__icon,
 .adm-balances-kpi-compact__item--credit strong {
-  color: #059669;
+  color: #ea580c;
 }
 
 .adm-balances-kpi-compact__item--payments {
@@ -14037,6 +14330,405 @@ html.adm-app-shell .adm-chrome-main:has(.adm-balances-excel-page) {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+}
+
+.adm-balances-summary-block {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.adm-balances-summary-row {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+  line-height: 1.45;
+  background: #f8fafc;
+  border: 1px solid var(--adm-border);
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 2px;
+}
+
+.adm-balances-summary-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.adm-balances-summary-k {
+  font-size: 12px;
+  font-weight: 700;
+  color: #64748b;
+}
+
+.adm-balances-summary-sep {
+  color: #94a3b8;
+  font-weight: 700;
+  padding: 0 2px;
+}
+
+.adm-balances-kpi-collapse {
+  padding: 10px 12px;
+  background: #fff;
+  border: 1px solid var(--adm-border);
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+}
+
+.adm-balances-kpi-grid--stats {
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.adm-balances-kpi-card--stat {
+  min-width: 0;
+  max-width: none;
+  width: auto;
+  height: auto;
+  min-height: 72px;
+  max-height: none;
+}
+
+.adm-balances-page--page-scroll .adm-balances-work {
+  width: 100%;
+  max-width: 100%;
+}
+
+.adm-balances-page--page-scroll .adm-balances-table-wrap {
+  width: 100%;
+  max-width: 100%;
+}
+
+.adm-balances-page--page-scroll .adm-balances-table {
+  width: 100%;
+  min-width: 1040px;
+}
+
+.adm-balances-page--v2.adm-balances-page--page-scroll .adm-balances-table--focus {
+  width: max-content;
+  min-width: 100%;
+  table-layout: auto;
+  font-size: 13px;
+}
+
+.adm-balances-page--v2 .adm-balances-head--compact {
+  margin: 0;
+}
+
+.adm-balances-page--v2 .adm-balances-head--compact h1 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.adm-balances-page--v2 .adm-balances-work {
+  gap: 4px;
+}
+
+.adm-balances-page--v2 .adm-balances-kpi-compact-row {
+  margin: 0 0 4px;
+}
+
+.adm-balances-page--v2 .adm-balances-kpi-compact {
+  max-height: 38px;
+  min-height: 34px;
+  padding: 0 8px;
+  gap: 8px;
+}
+
+.adm-balances-page--v2 .adm-balances-scope-line {
+  margin: 0 0 4px;
+  font-size: 11.5px;
+  line-height: 1.3;
+}
+
+.adm-balances-page--v2 .adm-balances-table-wrap {
+  border-radius: 8px;
+  border: 1px solid var(--adm-border);
+  background: #fff;
+}
+
+.adm-balances-page--v2 .adm-balances-table--focus thead th {
+  height: 36px;
+  padding: 5px 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.adm-balances-page--v2 .adm-balances-table--focus tbody td {
+  height: 38px;
+  padding: 4px 8px;
+  font-size: 13px;
+}
+
+.adm-balances-page--v2 .adm-balances-table--focus tbody tr.adm-balances-row-click {
+  height: 38px;
+}
+
+.adm-balances-page--v2 .adm-balances-table--focus .adm-balances-th-num,
+.adm-balances-page--v2 .adm-balances-table--focus .adm-balances-td-num {
+  text-align: right;
+  direction: ltr;
+}
+
+.adm-balances-th-num--before,
+.adm-balances-td-num--before,
+.adm-balances-th-num--including,
+.adm-balances-td-num--including,
+.adm-balances-th-num--payments,
+.adm-balances-td-num--payments {
+  width: auto;
+  min-width: 5.5rem;
+}
+
+.adm-balances-th-num--open-debt,
+.adm-balances-td-num--open-debt {
+  width: auto;
+  min-width: 5.75rem;
+}
+
+.adm-balances-td-open-debt--active .adm-balances-open-debt-val {
+  color: #dc2626;
+  font-weight: 900;
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.adm-balances-open-debt-zero {
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.adm-balances-th-num--balance,
+.adm-balances-td-num--hero {
+  width: auto;
+  min-width: 5.25rem;
+}
+
+.adm-balances-page--v2 .adm-balances-th-name,
+.adm-balances-page--v2 .adm-balances-td-name {
+  min-width: 8rem;
+  max-width: 14rem;
+  width: auto;
+  text-align: start;
+}
+
+.adm-balances-page--v2 .adm-balances-th-code,
+.adm-balances-page--v2 .adm-balances-td-code {
+  width: auto;
+  min-width: 3.5rem;
+  max-width: 5rem;
+}
+
+.adm-balances-page--v2 .adm-balances-th-status,
+.adm-balances-page--v2 .adm-balances-td-status {
+  width: auto;
+  min-width: 4.75rem;
+  text-align: center;
+}
+
+.adm-balances-page--v2 .adm-balances-th-actions,
+.adm-balances-page--v2 .adm-balances-td-actions {
+  width: auto;
+  min-width: 4.5rem;
+  white-space: nowrap;
+}
+
+.adm-balances-page--v2 .adm-balances-toolbar-row {
+  margin: 0;
+  padding: 4px 8px;
+}
+
+.adm-balances-page--v2 .adm-balances-table-wrap {
+  margin: 0;
+}
+
+.adm-balances-stats-scope-hint {
+  margin: 0 0 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #64748b;
+  line-height: 1.4;
+}
+
+/* סטטיסטיקה מורחבת — 7 כרטיסים אחידים */
+.adm-balances-stats-panel {
+  flex-shrink: 0;
+  width: 100%;
+  margin: 0 0 6px;
+}
+
+.adm-balances-stat-cards {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 10px;
+  width: 100%;
+  align-items: stretch;
+}
+
+.adm-balances-stat-card {
+  box-sizing: border-box;
+  height: 100px;
+  min-height: 100px;
+  max-height: 100px;
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid transparent;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.06);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+  text-align: center;
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.adm-balances-stat-card:hover {
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.1);
+  transform: translateY(-1px);
+}
+
+.adm-balances-stat-card__lbl {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1.25;
+  color: inherit;
+  opacity: 0.92;
+  white-space: nowrap;
+}
+
+.adm-balances-stat-card__val {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  margin: 0;
+  font-size: 1.28rem;
+  font-weight: 900;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.adm-balances-stat-card--open-debt {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #991b1b;
+}
+
+.adm-balances-stat-card--open-debt .adm-balances-stat-card__val {
+  color: #b91c1c;
+}
+
+.adm-balances-stat-card--debt-customers {
+  background: #fff7ed;
+  border-color: #fed7aa;
+  color: #9a3412;
+}
+
+.adm-balances-stat-card--debt-customers .adm-balances-stat-card__val {
+  color: #c2410c;
+}
+
+.adm-balances-stat-card--credit-customers {
+  background: #ecfdf5;
+  border-color: #bbf7d0;
+  color: #14532d;
+}
+
+.adm-balances-stat-card--credit-customers .adm-balances-stat-card__val {
+  color: #15803d;
+}
+
+.adm-balances-stat-card--payments {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1e3a8a;
+}
+
+.adm-balances-stat-card--payments .adm-balances-stat-card__val {
+  color: #1d4ed8;
+}
+
+.adm-balances-stat-card--before-commission {
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+  color: #475569;
+}
+
+.adm-balances-stat-card--before-commission .adm-balances-stat-card__val {
+  color: #334155;
+}
+
+.adm-balances-stat-card--after-commission {
+  background: #f5f3ff;
+  border-color: #ddd6fe;
+  color: #5b21b6;
+}
+
+.adm-balances-stat-card--after-commission .adm-balances-stat-card__val {
+  color: #6d28d9;
+}
+
+.adm-balances-stat-card--commissions {
+  background: #fffbeb;
+  border-color: #fde68a;
+  color: #92400e;
+}
+
+.adm-balances-stat-card--commissions .adm-balances-stat-card__val {
+  color: #b45309;
+}
+
+@media (max-width: 1280px) {
+  .adm-balances-stat-cards {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .adm-balances-stat-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .adm-balances-stat-card {
+    height: 92px;
+    min-height: 92px;
+    max-height: 92px;
+    padding: 12px;
+    border-radius: 14px;
+  }
+
+  .adm-balances-stat-card__val {
+    font-size: 1.1rem;
+  }
+}
+
+.adm-balances-page--v2 .adm-balances-foot {
+  margin: 4px 0 0;
+  padding: 4px 0 0;
+}
+
+.adm-balances-page--v2 .adm-balances-kpi-grid--stats {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+@media (max-width: 1100px) {
+  .adm-balances-page--v2 .adm-balances-kpi-grid--stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .adm-balances-page--v2 .adm-balances-kpi-grid,
@@ -14670,15 +15362,49 @@ select.adm-balances-input {
 
 .adm-bal-amt--debt {
   color: #dc2626;
+  font-weight: 800;
 }
 
 .adm-bal-amt--credit {
-  color: #15803d;
+  color: #ea580c;
+  font-weight: 700;
 }
 
 .adm-bal-amt--balanced,
 .adm-bal-amt--neutral {
-  color: #475569;
+  color: #15803d;
+  font-weight: 700;
+}
+
+.adm-bal-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 4.5rem;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.adm-bal-chip--debt {
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+}
+
+.adm-bal-chip--credit {
+  color: #c2410c;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+}
+
+.adm-bal-chip--balanced {
+  color: #15803d;
+  background: #ecfdf5;
+  border: 1px solid #bbf7d0;
 }
 
 .adm-balances-td-balance .adm-balance-flow {
@@ -14772,7 +15498,8 @@ select.adm-balances-input {
 
 .adm-balances-th-num,
 .adm-balances-td-num {
-  text-align: end;
+  text-align: right;
+  direction: ltr;
   font-variant-numeric: tabular-nums;
   color: #2563eb;
   font-weight: 600;

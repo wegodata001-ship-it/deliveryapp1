@@ -28,35 +28,26 @@ export async function GET(req: Request) {
       const id = (searchParams.get("id") ?? "").trim();
       if (!id) return NextResponse.json(null);
 
-      const [cust, orderAgg, payAgg] = await Promise.all([
-        prisma.customer.findFirst({
-          where: { id, deletedAt: null, isActive: true },
-          select: {
-            nameHe: true,
-            nameEn: true,
-            nameAr: true,
-            phone: true,
-            phone2: true,
-            oldCustomerCode: true,
-            customerCode: true,
-            city: true,
-            address: true,
-          },
-        }),
-        prisma.order.aggregate({
-          where: { customerId: id, deletedAt: null },
-          _sum: { totalUsd: true },
-        }),
-        prisma.payment.aggregate({
-          where: { customerId: id, isPaid: true },
-          _sum: { amountUsd: true },
-        }),
-      ]);
+      const cust = await prisma.customer.findFirst({
+        where: { id, deletedAt: null, isActive: true },
+        select: {
+          nameHe: true,
+          nameEn: true,
+          nameAr: true,
+          phone: true,
+          phone2: true,
+          oldCustomerCode: true,
+          customerCode: true,
+          city: true,
+          address: true,
+        },
+      });
       if (!cust) return NextResponse.json(null);
 
-      const o = Number(orderAgg._sum.totalUsd ?? 0);
-      const p = Number(payAgg._sum.amountUsd ?? 0);
-      const bal = o - p;
+      const country = searchParams.get("country");
+      const { getCustomerOpenDebt, openDebtScopeForWorkCountry } = await import("@/lib/customer-open-debt");
+      const debt = await getCustomerOpenDebt(id, openDebtScopeForWorkCountry(country));
+      const businessSigned = Number(debt.signedBalanceUsd.toFixed(2));
       const indexLabel = cust.oldCustomerCode?.trim() || cust.customerCode?.trim() || null;
 
       const payload: CustomerExtrasPayload = {
@@ -66,8 +57,11 @@ export async function GET(req: Request) {
         indexLabel,
         city: cust.city?.trim() || null,
         address: cust.address?.trim() || null,
-        balanceUsdDisplay: bal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
-        balanceUsdNegative: bal < -0.005,
+        balanceUsdDisplay: businessSigned.toLocaleString("en-US", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        }),
+        balanceUsdNegative: businessSigned < -0.005,
       };
       return NextResponse.json(payload);
     } catch (error) {

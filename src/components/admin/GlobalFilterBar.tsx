@@ -14,6 +14,13 @@ import {
   normalizeYmdRangePair,
 } from "@/lib/work-week";
 import { withQuery } from "@/lib/admin-url-query";
+import { getActiveWorkWeekRange } from "@/lib/active-work-week";
+import {
+  isGlobalFilterUrlReady,
+  LS_GLOBAL_COUNTRY,
+  persistGlobalFilterWeek,
+  resolveGlobalFilterWeekFromStorage,
+} from "@/lib/global-filter-persist";
 import { ORDER_COUNTRY_CODES, orderCountryLabel, type OrderCountryCode } from "@/lib/order-countries";
 import { AhWeekNavNextButton, AhWeekNavPrevButton } from "@/components/admin/AhWeekNavButtons";
 import { shiftAhWeekCode } from "@/lib/weeks/ah-week-nav";
@@ -72,16 +79,45 @@ export function GlobalFilterBar({ financial = null, canManageFinancial = false }
   const { openFinancialModal } = useAdminFinancialModal();
 
   const initial = useMemo(() => {
-    const week = sp.get("week") || "";
+    const active = getActiveWorkWeekRange();
+    const weekRaw = sp.get("week") || "";
     const from = sp.get("from") || "";
     const to = sp.get("to") || "";
     const country = sp.get("country") || "";
-    const base = weekRangeFromCode(week) ?? weekRangeFromCode(DEFAULT_WEEK_CODE) ?? { from: "2026-05-03", to: "2026-05-09" };
-    const weekFromDates = from && to ? getAhWeekCodeFromDateRange(from, to) : null;
+    const weekNorm = weekRaw ? normalizeWeekInput(weekRaw) : null;
+    const hasUrlRange = /^\d{4}-\d{2}-\d{2}$/.test(from) && /^\d{4}-\d{2}-\d{2}$/.test(to);
+
+    let weekCode: string;
+    let fromYmd: string;
+    let toYmd: string;
+
+    if (weekNorm) {
+      const r = weekRangeFromCode(weekNorm);
+      weekCode = weekNorm;
+      fromYmd = hasUrlRange ? from : (r?.from ?? active.fromYmd);
+      toYmd = hasUrlRange ? to : (r?.to ?? active.toYmd);
+    } else if (hasUrlRange) {
+      const wk = getAhWeekCodeFromDateRange(from, to);
+      if (wk) {
+        const r = weekRangeFromCode(wk);
+        weekCode = wk;
+        fromYmd = r?.from ?? from;
+        toYmd = r?.to ?? to;
+      } else {
+        weekCode = active.weekCode;
+        fromYmd = active.fromYmd;
+        toYmd = active.toYmd;
+      }
+    } else {
+      weekCode = active.weekCode;
+      fromYmd = active.fromYmd;
+      toYmd = active.toYmd;
+    }
+
     return {
-      week: week && normalizeWeekInput(week) ? normalizeWeekInput(week)! : weekFromDates ?? "—",
-      from: from && /^\d{4}-\d{2}-\d{2}$/.test(from) ? from : base.from,
-      to: to && /^\d{4}-\d{2}-\d{2}$/.test(to) ? to : base.to,
+      week: weekCode,
+      from: fromYmd,
+      to: toYmd,
       country: (ORDER_COUNTRY_CODES.includes(country as OrderCountryCode) ? (country as OrderCountryCode) : ORDER_COUNTRY_CODES[0]) as OrderCountryCode,
     };
   }, [sp]);
@@ -128,13 +164,8 @@ export function GlobalFilterBar({ financial = null, canManageFinancial = false }
       const next = withQuery(pathname, sp, { week: week === "—" ? "" : week, from, to, country, modal: null });
       if (mode === "replace") router.replace(next);
       else router.push(next);
-      try {
-        localStorage.setItem("globalWeek", week === "—" ? "" : week);
-        localStorage.setItem("globalFrom", from);
-        localStorage.setItem("globalTo", to);
-        localStorage.setItem("globalCountry", country);
-      } catch {
-        // ignore
+      if (week !== "—" && normalizeWeekInput(week)) {
+        persistGlobalFilterWeek(week, from, to, country);
       }
     },
     [pathname, router, sp, week, from, to, country],
@@ -151,21 +182,22 @@ export function GlobalFilterBar({ financial = null, canManageFinancial = false }
         modal: null,
       });
       router.push(next);
-      try {
-        localStorage.setItem("globalWeek", nextWeek === "—" ? "" : nextWeek);
-        localStorage.setItem("globalFrom", range.from);
-        localStorage.setItem("globalTo", range.to);
-        localStorage.setItem("globalCountry", nextCountry);
-      } catch {
-        // ignore
+      if (nextWeek !== "—" && normalizeWeekInput(nextWeek)) {
+        persistGlobalFilterWeek(nextWeek, range.from, range.to, nextCountry);
       }
     },
     [country, pathname, router, sp],
   );
 
   const reset = useCallback(() => {
-    router.push(pathname);
-  }, [pathname, router]);
+    const active = getActiveWorkWeekRange();
+    setWeek(active.weekCode);
+    setWeekInput(active.weekCode);
+    setLastValidWeek(active.weekCode);
+    setFrom(active.fromYmd);
+    setTo(active.toYmd);
+    applyValues(active.weekCode, active.fromYmd, active.toYmd, country);
+  }, [applyValues, country]);
 
   const setRangeFromWeek = useCallback((code: string) => {
     setWeek(code);
@@ -178,22 +210,29 @@ export function GlobalFilterBar({ financial = null, canManageFinancial = false }
     }
   }, []);
 
-  // Ensure URL has global filters from localStorage (important for server-driven screens)
+  // URL חסר / לא מיושר — שבוע שמור ב-localStorage או שבוע עבודה פעיל
   useEffect(() => {
-    const hasWeek = !!sp.get("week");
-    const hasCountry = !!sp.get("country");
-    if (hasWeek && hasCountry) return;
+    const urlCountry = sp.get("country") || "";
+    if (isGlobalFilterUrlReady(sp.get("week"), sp.get("from"), sp.get("to"), urlCountry)) return;
+
     try {
-      const w = localStorage.getItem("globalWeek") || "";
-      const f = localStorage.getItem("globalFrom") || "";
-      const t = localStorage.getItem("globalTo") || "";
-      const c = localStorage.getItem("globalCountry") || "";
-      const wNorm = normalizeWeekInput(w) ?? DEFAULT_WEEK_CODE;
-      const r = weekRangeFromCode(wNorm) ?? weekRangeFromCode(DEFAULT_WEEK_CODE);
-      const fromUse = /^\d{4}-\d{2}-\d{2}$/.test(f) ? f : (r?.from ?? from);
-      const toUse = /^\d{4}-\d{2}-\d{2}$/.test(t) ? t : (r?.to ?? to);
-      const cUse = (ORDER_COUNTRY_CODES.includes(c as OrderCountryCode) ? (c as OrderCountryCode) : country) as OrderCountryCode;
-      const next = withQuery(pathname, sp, { week: wNorm || DEFAULT_WEEK_CODE, from: fromUse, to: toUse, country: cUse, modal: null });
+      const stored = resolveGlobalFilterWeekFromStorage();
+      let cUse = country;
+      try {
+        const c = localStorage.getItem(LS_GLOBAL_COUNTRY) || "";
+        if (ORDER_COUNTRY_CODES.includes(c as OrderCountryCode)) {
+          cUse = c as OrderCountryCode;
+        }
+      } catch {
+        // ignore
+      }
+      const next = withQuery(pathname, sp, {
+        week: stored.weekCode,
+        from: stored.fromYmd,
+        to: stored.toYmd,
+        country: urlCountry && ORDER_COUNTRY_CODES.includes(urlCountry as OrderCountryCode) ? urlCountry : cUse,
+        modal: null,
+      });
       router.replace(next);
     } catch {
       // ignore

@@ -84,7 +84,6 @@ const COUNTRY_BADGE_SHORT: Record<OrderCountryCode, string> = {
   TURKEY: "טורקיה",
   CHINA: "סין",
   UAE: "אמירויות",
-  JORDAN: "ירדן",
 };
 
 type BadgeEditField = "week" | "country" | "date" | "time" | null;

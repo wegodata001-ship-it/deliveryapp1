@@ -8,7 +8,6 @@ export const CUSTOMER_PLACE_SUGGESTIONS: readonly string[] = [
   "סין",
   "ארה״ב",
   "USA",
-  "ירדן",
   "מצרים",
   "איחוד האמירויות",
   "דובאי",

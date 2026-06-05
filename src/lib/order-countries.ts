@@ -1,4 +1,4 @@
-export const ORDER_COUNTRY_CODES = ["TURKEY", "CHINA", "UAE", "JORDAN"] as const;
+export const ORDER_COUNTRY_CODES = ["TURKEY", "CHINA", "UAE"] as const;
 
 export type OrderCountryCode = (typeof ORDER_COUNTRY_CODES)[number];
 
@@ -15,9 +15,8 @@ export function normalizeOrderSourceCountry(raw: string | null | undefined): Ord
   if (ORDER_COUNTRY_SET.has(compact)) return compact as OrderCountryCode;
   const alnum = up.replace(/[^A-Z0-9]/g, "");
   if (alnum === "TURKEY" || alnum === "TURKIYE") return "TURKEY";
-  if (alnum === "CHINA" || alnum === "CN") return "CHINA";
+  if (alnum === "CHINA" || alnum === "CN" || alnum === "CH") return "CHINA";
   if (alnum === "UAE" || alnum === "ARE" || alnum === "EMIRATES") return "UAE";
-  if (alnum === "JORDAN" || alnum === "JO") return "JORDAN";
   return null;
 }
 
@@ -35,12 +34,13 @@ const LABELS_HE: Record<OrderCountryCode, string> = {
   TURKEY: "🇹🇷 טורקיה",
   CHINA: "🇨🇳 סין",
   UAE: "🇦🇪 אמירויות",
-  JORDAN: "🇯🇴 ירדן",
 };
 
 export function orderCountryLabel(code: string | null | undefined): string {
   if (!code) return "—";
-  return LABELS_HE[code as OrderCountryCode] ?? String(code);
+  const norm = normalizeOrderSourceCountry(code);
+  if (norm) return LABELS_HE[norm];
+  return String(code);
 }
 
 /** חיפוש לפי שם בעברית / קוד אנגלי — לסינון רשימת הזמנות */
@@ -61,15 +61,14 @@ export function orderCountryCodesMatchingHeSearch(query: string): OrderCountryCo
 
 /** מחלקות תצוגה ל-badge — תכלית אדום / זהב / ירוק */
 export function orderCountryBadgeClass(code: string | null | undefined): string {
-  switch (code) {
+  const norm = normalizeOrderSourceCountry(code);
+  switch (norm) {
     case "TURKEY":
       return "adm-oc-badge adm-oc-badge--turkey";
     case "CHINA":
       return "adm-oc-badge adm-oc-badge--china";
     case "UAE":
       return "adm-oc-badge adm-oc-badge--uae";
-    case "JORDAN":
-      return "adm-oc-badge adm-oc-badge--jordan";
     default:
       return "adm-oc-badge adm-oc-badge--muted";
   }
@@ -82,8 +81,9 @@ export function parseSelectedCountriesJson(raw: string | undefined | null): Orde
     if (!Array.isArray(a)) return [...ORDER_COUNTRY_CODES];
     const set = new Set<OrderCountryCode>();
     for (const x of a) {
-      if (typeof x === "string" && ORDER_COUNTRY_CODES.includes(x as OrderCountryCode)) {
-        set.add(x as OrderCountryCode);
+      if (typeof x === "string") {
+        const norm = normalizeOrderSourceCountry(x);
+        if (norm) set.add(norm);
       }
     }
     return set.size > 0 ? [...set] : [...ORDER_COUNTRY_CODES];

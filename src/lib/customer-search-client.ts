@@ -11,8 +11,9 @@ type CacheEntry = { expires: number; data: CustomerSearchRow[] };
 const cache = new Map<string, CacheEntry>();
 let activeAbort: AbortController | null = null;
 
-function cacheKey(q: string, exact: boolean): string {
-  return `${exact ? "e:" : "s:"}${q.toLowerCase()}`;
+function cacheKey(q: string, exact: boolean, workCountry?: string | null): string {
+  const wc = (workCountry ?? "").trim().toUpperCase() || "TR";
+  return `${wc}|${exact ? "e:" : "s:"}${q.toLowerCase()}`;
 }
 
 function readCache(key: string): CustomerSearchRow[] | null {
@@ -49,9 +50,9 @@ export function customerSearchMinQueryLength(q: string, exact = false): boolean 
 
 async function fetchSearchFast(
   q: string,
-  opts: { exact?: boolean; signal?: AbortSignal },
+  opts: { exact?: boolean; signal?: AbortSignal; workCountry?: string | null },
 ): Promise<CustomerSearchRow[]> {
-  const key = cacheKey(q, !!opts.exact);
+  const key = cacheKey(q, !!opts.exact, opts.workCountry);
   const cached = readCache(key);
   if (cached) return cached;
 
@@ -65,6 +66,7 @@ async function fetchSearchFast(
 
   const params = new URLSearchParams({ q });
   if (opts.exact) params.set("exact", "1");
+  if (opts.workCountry?.trim()) params.set("country", opts.workCountry.trim());
 
   const useConsoleTimer = typeof console !== "undefined" && typeof console.time === "function";
   if (useConsoleTimer) console.time("customer-search");
@@ -109,30 +111,34 @@ async function fetchSearchFast(
 
 export async function searchCustomersFastClient(
   query: string,
-  opts?: { signal?: AbortSignal },
+  opts?: { signal?: AbortSignal; workCountry?: string | null },
 ): Promise<CustomerSearchRow[]> {
   const q = query.trim();
   if (!customerSearchMinQueryLength(q)) return [];
-  return fetchSearchFast(q, { signal: opts?.signal });
+  return fetchSearchFast(q, { signal: opts?.signal, workCountry: opts?.workCountry });
 }
 
 /** חיפוש מדויק לפי קוד — exact=1 בלבד (שדה קוד במסך קליטת תשלום) */
 export async function searchCustomerCodeExactClient(
   query: string,
-  opts?: { signal?: AbortSignal },
+  opts?: { signal?: AbortSignal; workCountry?: string | null },
 ): Promise<CustomerSearchRow[]> {
   const q = query.trim();
   if (!customerSearchMinQueryLength(q, true)) return [];
-  return fetchSearchFast(q, { exact: true, signal: opts?.signal });
+  return fetchSearchFast(q, { exact: true, signal: opts?.signal, workCountry: opts?.workCountry });
 }
 
 export async function resolveCustomerFastClient(
   query: string,
-  opts?: { signal?: AbortSignal },
+  opts?: { signal?: AbortSignal; workCountry?: string | null },
 ): Promise<CustomerSearchRow | null> {
   const q = query.trim();
   if (!customerSearchMinQueryLength(q, true)) return null;
-  const rows = await fetchSearchFast(q, { exact: true, signal: opts?.signal });
+  const rows = await fetchSearchFast(q, {
+    exact: true,
+    signal: opts?.signal,
+    workCountry: opts?.workCountry,
+  });
   if (rows.length > 0) return rows[0]!;
   /** קוד מספרי / UUID — רק exact=1, בלי חיפוש חלקי (חוסך round-trip שני) */
   if (/^\d+$/.test(q) || CUSTOMER_SEARCH_UUID_RE.test(q)) return null;

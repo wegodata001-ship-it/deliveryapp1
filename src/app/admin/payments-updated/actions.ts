@@ -24,7 +24,8 @@ import { paymentIntakeOrderDateThroughAhWeekEnd } from "@/lib/payment-intake-ord
 import { validatePaymentCheckLines } from "@/lib/payment-checks";
 import { prisma } from "@/lib/prisma";
 import { allocateNextPaymentCapture, resolvePaymentWorkCountry } from "@/lib/payment-capture-code";
-import { normalizeWorkCountryCode } from "@/lib/work-country";
+import { DEFAULT_WORK_COUNTRY, normalizeWorkCountryCode } from "@/lib/work-country";
+import { openDebtScopeForWorkCountry } from "@/lib/customer-open-debt";
 import { formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate, parseLocalDateTime } from "@/lib/work-week";
 import {
   calculatePaymentLine,
@@ -35,7 +36,7 @@ import {
 } from "@/lib/payment-updated";
 import { VAT_RATE } from "@/lib/vat";
 import { prismaVatRatePercent } from "@/lib/vat-prisma";
-import { calculatePaymentCaptureCustomerBalanceUsd } from "@/app/admin/payments/intake/actions";
+import { getCustomerInternalBalanceUsd } from "@/lib/customer-open-debt";
 import { ensureOnce } from "@/lib/ensure-tables-once";
 import { recordActivityAudit } from "@/lib/activity-audit";
 import {
@@ -190,6 +191,7 @@ const ALLOC_EPS = 0.02;
 async function loadOrdersForPaymentAllocation(
   customerId: string,
   weekCode: string | null,
+  workCountryRaw?: string | null,
 ): Promise<
   Array<{
     id: string;
@@ -203,10 +205,12 @@ async function loadOrdersForPaymentAllocation(
   }>
 > {
   const weekDateWhere = paymentIntakeOrderDateThroughAhWeekEnd(weekCode);
+  const wc = normalizeWorkCountryCode(workCountryRaw) ?? DEFAULT_WORK_COUNTRY;
   const orders = await prisma.order.findMany({
     where: {
       customerId,
       deletedAt: null,
+      countryCode: wc,
       ...(weekDateWhere ?? {}),
     },
     orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],
@@ -251,6 +255,7 @@ export async function previewCustomerPaymentOverageAction(input: {
   totalPaymentUsd: number;
   dollarRate: string;
   weekCode?: string | null;
+  workCountry?: string | null;
 }): Promise<{ ok: true; preview: PaymentOveragePreview } | { ok: false; error: string }> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["receive_payments"])) return { ok: false, error: "אין הרשאה" };
@@ -264,7 +269,11 @@ export async function previewCustomerPaymentOverageAction(input: {
   const paymentUsd = roundMoney2(input.totalPaymentUsd);
   if (paymentUsd <= 0) return { ok: false, error: "סכום תשלום לא תקין" };
 
-  const orders = await loadOrdersForPaymentAllocation(cid, input.weekCode?.trim() || null);
+  const orders = await loadOrdersForPaymentAllocation(
+    cid,
+    input.weekCode?.trim() || null,
+    input.workCountry,
+  );
   const openDebtIls = sumOpenDebtIlsFromOrders(
     orders.map((o) => ({
       totalIlsWithVat: o.totalIlsWithVat,
@@ -370,7 +379,7 @@ export async function savePaymentUpdatedAction(
   const weekCode = (form.weekCode?.trim() || getWeekCodeForLocalDate(paymentDate)).trim() || null;
 
   const weekDateWhere = paymentIntakeOrderDateThroughAhWeekEnd(weekCode);
-  const existingCustomerBalanceUsd = await calculatePaymentCaptureCustomerBalanceUsd(cid);
+  const existingCustomerBalanceUsd = await getCustomerInternalBalanceUsd(cid);
   const forceCreditPayment = existingCustomerBalanceUsd.gt(new Prisma.Decimal("0.01"));
 
   // Load orders for allocations (same engine as intake + אותו חלון שבוע AH כמו במסך)
@@ -777,7 +786,7 @@ export async function savePaymentUpdatedAction(
   revalidatePath("/admin/orders");
   revalidatePath("/admin/balances");
   revalidatePath("/admin/source-tables/payments");
-  const customerBalanceUsd = await calculatePaymentCaptureCustomerBalanceUsd(cid);
+  const customerBalanceUsd = await getCustomerInternalBalanceUsd(cid);
   await persistCustomerBalanceSnapshot(cid, customerBalanceUsd);
   return {
     ok: true,
@@ -921,7 +930,7 @@ export async function resetOrderBalanceAction(input: {
       select: { customerId: true },
     });
     if (targetAfter?.customerId) {
-      const customerBalanceUsd = await calculatePaymentCaptureCustomerBalanceUsd(targetAfter.customerId);
+      const customerBalanceUsd = await getCustomerInternalBalanceUsd(targetAfter.customerId);
       await persistCustomerBalanceSnapshot(targetAfter.customerId, customerBalanceUsd);
     }
 
@@ -1117,7 +1126,7 @@ export async function resetCustomerOutstandingBalancesAction(input: {
       }),
     );
 
-    const customerBalanceUsd = await calculatePaymentCaptureCustomerBalanceUsd(cid);
+    const customerBalanceUsd = await getCustomerInternalBalanceUsd(cid);
     await persistCustomerBalanceSnapshot(cid, customerBalanceUsd);
 
     revalidateAllKpiCaches();
@@ -1225,7 +1234,7 @@ export async function cancelPaymentAction(input: {
     },
   });
 
-  const customerBalanceUsd = await calculatePaymentCaptureCustomerBalanceUsd(row.customerId);
+  const customerBalanceUsd = await getCustomerInternalBalanceUsd(row.customerId);
   await persistCustomerBalanceSnapshot(row.customerId, customerBalanceUsd);
 
   revalidateAllKpiCaches();
@@ -1311,7 +1320,7 @@ export async function restorePaymentAction(input: {
     },
   });
 
-  const customerBalanceUsd = await calculatePaymentCaptureCustomerBalanceUsd(row.customerId);
+  const customerBalanceUsd = await getCustomerInternalBalanceUsd(row.customerId);
   await persistCustomerBalanceSnapshot(row.customerId, customerBalanceUsd);
 
   revalidateAllKpiCaches();

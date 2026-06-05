@@ -27,7 +27,12 @@ export async function GET(req: Request) {
     }
 
     searchPerfTimeStart("searchFast.db");
-    const rows = await searchCustomersPrisma(q, { limit: exactOnly ? 1 : 20, exactOnly });
+    const country = url.searchParams.get("country");
+    const rows = await searchCustomersPrisma(q, {
+      limit: exactOnly ? 1 : 20,
+      exactOnly,
+      workCountry: country,
+    });
     searchPerfTimeEnd("searchFast.db");
 
     searchPerfTimeStart("searchFast.response");

@@ -7,7 +7,7 @@ import {
   CreditCard,
   FileCheck,
 } from "lucide-react";
-import { formatFromInternalSigned } from "@/lib/customer-balance";
+import { formatCustomerBalanceDisplay } from "@/lib/customer-balance";
 import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
 import { OS } from "@/lib/order-status-slugs";
 import { paymentMethodTone, type PaymentMethodTone } from "@/lib/payments-source-shared";
@@ -31,14 +31,14 @@ const ORDER_IN_PROGRESS: readonly string[] = [
 
 export function balanceClass(balanceUsd: string): string {
   const n = parseMoneyStringOrZero(balanceUsd);
-  const view = formatFromInternalSigned(n, "USD");
+  const view = formatCustomerBalanceDisplay(n, "USD");
   if (view.kind === "debt") return "adm-ws-amt adm-ws-amt--debt";
   if (view.kind === "credit") return "adm-ws-amt adm-ws-amt--credit";
   return "adm-ws-amt adm-ws-amt--even";
 }
 
 export function balanceText(balanceUsd: string): string {
-  return formatFromInternalSigned(parseMoneyStringOrZero(balanceUsd), "USD").amountFormatted;
+  return formatCustomerBalanceDisplay(parseMoneyStringOrZero(balanceUsd), "USD").amountFormatted;
 }
 
 export function fmtUsd(s: string): string {

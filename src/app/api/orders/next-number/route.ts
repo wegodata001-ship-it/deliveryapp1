@@ -4,6 +4,7 @@ import { previewNextOrderNumberForWeek } from "@/lib/orders-next-number";
 import { bootPerfLog, bootPerfTimed, bootPerfTimeEnd, bootPerfTimeStart } from "@/lib/orders-boot-perf";
 import { perfError } from "@/lib/perf-log";
 import { adminSessionCookieName, verifySessionToken } from "@/lib/session";
+import { normalizeWorkCountryCode } from "@/lib/work-country";
 
 export const runtime = "nodejs";
 
@@ -19,13 +20,18 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const weekCode = new URL(req.url).searchParams.get("weekCode")?.trim() ?? "";
+    const url = new URL(req.url);
+    const weekCode = url.searchParams.get("weekCode")?.trim() ?? "";
     if (!weekCode) {
       return NextResponse.json({ error: "חסר weekCode" }, { status: 400 });
     }
 
+    const workCountry =
+      normalizeWorkCountryCode(url.searchParams.get("country") ?? url.searchParams.get("workCountry")) ??
+      undefined;
+
     const payload = await bootPerfTimed("boot.nextOrderNumber", () =>
-      previewNextOrderNumberForWeek(weekCode),
+      previewNextOrderNumberForWeek(weekCode, workCountry),
     );
 
     bootPerfLog({ route: "next-number", apiMs: Date.now() - t0, weekCode: payload.weekCode });

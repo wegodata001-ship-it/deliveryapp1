@@ -30,6 +30,7 @@ import {
 } from "@/lib/customer-balance-order-status";
 import { computeSignedFromTotals } from "@/lib/customer-balance";
 import { calculateCustomerBalances } from "@/lib/customer-balance-calculator";
+import { customerHasOpenBalance } from "@/lib/customer-balances-display";
 import {
   orderStatusesForBalanceFilter,
   parseCustomerBalanceOrderStatusFilter,
@@ -188,6 +189,10 @@ export type CustomerBalancesPayload = {
     highDebtCount: number;
     /** לקוחות עם תשלומים בטווח */
     withPaymentsCount: number;
+    /** סיכום תצוגה — סכום שדות שורה (אותה קבוצה מסוננת) */
+    totalLifetimeOrdersUsd: string;
+    totalOrdersAfterCommissionUsd: string;
+    totalNetBalanceUsd: string;
   };
   /** KPI נוספים למודאל דוח יתרות (לפי אותה קבוצה מסוננת לפני pagination) */
   reportModalStats?: {
@@ -525,6 +530,9 @@ function emptyBalancesPayload(limit: number): CustomerBalancesPayload {
       notPaidCount: 0,
       highDebtCount: 0,
       withPaymentsCount: 0,
+      totalLifetimeOrdersUsd: z,
+      totalOrdersAfterCommissionUsd: z,
+      totalNetBalanceUsd: z,
     },
     statusBalanceKpis: emptyStatusBalanceKpis(),
     activeOrderStatusFilter: "ALL",
@@ -595,11 +603,21 @@ function computeBalanceStats(rows: CustomerBalanceRow[]): CustomerBalancesPayloa
   let notPaid = 0;
   let highDebt = 0;
   let withPayments = 0;
+  let totalLifetimeOrdersUsd = new Prisma.Decimal(0);
+  let totalOrdersAfterCommissionUsd = new Prisma.Decimal(0);
+  let totalNetBalanceUsd = new Prisma.Decimal(0);
   const eps = 0.01;
   for (const r of rows) {
     const businessBal = rowBalanceUsdNumber(r.totalBalanceUSD);
     const businessBalUsd = rowBalanceUsdNumber(r.totalBalanceUSD);
     const signed = rowSignedIlsNumber(r);
+    totalLifetimeOrdersUsd = totalLifetimeOrdersUsd.add(
+      new Prisma.Decimal(rowBalanceUsdNumber(r.lifetimeOrdersUSD).toFixed(4)),
+    );
+    totalOrdersAfterCommissionUsd = totalOrdersAfterCommissionUsd.add(
+      new Prisma.Decimal(rowOrdersTotalNumber(r.totalOrdersUSD).toFixed(4)),
+    );
+    totalNetBalanceUsd = totalNetBalanceUsd.add(new Prisma.Decimal(businessBalUsd.toFixed(4)));
     totalPayments = totalPayments.add(new Prisma.Decimal(rowPaymentsTotalNumber(r.totalPaymentsUSD).toFixed(4)));
     totalPaymentsUsd = totalPaymentsUsd.add(new Prisma.Decimal(rowBalanceUsdNumber(r.totalPaymentsUSD).toFixed(4)));
     if (businessBal > eps) {
@@ -632,6 +650,9 @@ function computeBalanceStats(rows: CustomerBalanceRow[]): CustomerBalancesPayloa
     notPaidCount: notPaid,
     highDebtCount: highDebt,
     withPaymentsCount: withPayments,
+    totalLifetimeOrdersUsd: money(totalLifetimeOrdersUsd),
+    totalOrdersAfterCommissionUsd: money(totalOrdersAfterCommissionUsd),
+    totalNetBalanceUsd: money(totalNetBalanceUsd),
   };
 }
 
@@ -674,16 +695,10 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   let paymentDateFilter: Prisma.DateTimeFilter | undefined;
 
   if (lifetime) {
-    const lteBound =
-      cumulativeThrough && userToEnd
-        ? userToEnd.getTime() < cumulativeThrough.getTime()
-          ? userToEnd
-          : cumulativeThrough
-        : cumulativeThrough ?? userToEnd;
-    if (lteBound) {
-      orderDateFilter = { lte: lteBound };
-      paymentDateFilter = { lte: lteBound };
-    }
+    /** דוח יתרות חי — תשלומים/הזמנות עד היום; toYmd ב-URL הוא תווית שבוע בלבד */
+    const lteBound = endOfLocalDay(formatLocalYmd(new Date()));
+    orderDateFilter = { lte: lteBound };
+    paymentDateFilter = { lte: lteBound };
   } else if (cumulativeThrough) {
     const lteBound = userToEnd != null && userToEnd.getTime() < cumulativeThrough.getTime() ? userToEnd : cumulativeThrough;
     orderDateFilter = {
@@ -747,7 +762,10 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     },
   };
 
-  const customerWhere = buildCustomerWhere(query);
+  const customerWhere: Prisma.CustomerWhereInput = {
+    ...buildCustomerWhere(query),
+    countryCode: countryScope.workCountry,
+  };
   const smartTrim = query.filters?.smart?.trim();
   const scopeToActivity = !query.customerId?.trim() && !smartTrim;
   const activityOrderWhere: Prisma.OrderWhereInput = lifetime
@@ -818,6 +836,8 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
         deletedAt: null,
         customerId: { in: customerIds },
         status: { not: OS.DEBT_WITHDRAWAL },
+        countryCode: countryScope.workCountry,
+        sourceCountry: countryScope.sourceCountry,
       },
       _sum: { totalUsd: true },
     }),
@@ -876,6 +896,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
             ...activePaidPaymentWhere,
             orderId: null,
             customerId: { in: chunk },
+            countryCode: countryScope.workCountry,
             ...(!lifetime && !cumulativeThrough && query.weekCode?.trim() ? { weekCode: query.weekCode.trim() } : {}),
             ...(paymentDateFilter ? { paymentDate: paymentDateFilter } : {}),
           },
@@ -1012,7 +1033,13 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     const calculated = autoStatus(expectedIls, receivedIls);
     const override = overrideMap.get(c.id) ?? null;
     const oc = shared?.ordersCount ?? orderCountByCustomer.get(c.id) ?? 0;
-    const balUsdDec = shared?.balance ?? expectedUsd.sub(receivedUsd);
+    let balUsdDec = shared?.balance ?? expectedUsd.sub(receivedUsd);
+    if (creditsUsd.gt(0)) {
+      balUsdDec = balUsdDec.sub(creditsUsd);
+    }
+    if (balUsdDec.lt(0)) {
+      balUsdDec = new Prisma.Decimal(0);
+    }
     const debtUsdPos = balUsdDec.gt(0) ? Number(balUsdDec.toFixed(4)) : 0;
     const paymentFlow = computePaymentFlow(calculated, debtUsdPos);
     const lastDt = lastOrderDateByCustomer.get(c.id);
@@ -1079,6 +1106,11 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   const maxB = parseIlsFilter(query.filters?.maxBalanceIls);
 
   let filtered = rows.filter((r) => matchesDebtFilter(r, debtFilter));
+
+  /** דוח גבייה — ללא חוב פתוח: לא בטבלה, לא ב-KPI (מלבד סינון «זכות» מפורש) */
+  if (debtFilter !== "CREDIT") {
+    filtered = filtered.filter((r) => customerHasOpenBalance(r));
+  }
 
   if (query.filters?.hasPayments) {
     const epsPay = 0.01;

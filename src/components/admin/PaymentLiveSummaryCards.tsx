@@ -25,6 +25,7 @@ export function PaymentLiveSummaryCards({ kpis, openDebtUsd = 0, onOpenDebtClick
     <div
       className={[
         "payment-modal-live-kpis",
+        "payment-modal-live-kpis--inline-row",
         showOpenDebt ? "payment-modal-live-kpis--with-open-debt" : "",
       ]
         .filter(Boolean)

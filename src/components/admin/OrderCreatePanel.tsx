@@ -41,6 +41,7 @@ import type { OrderCaptureWindowProps } from "@/lib/admin-windows";
 
 import { ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS } from "@/lib/order-capture-payment-methods";
 import { orderCountryLabel, ORDER_COUNTRY_CODES, coerceOrderCountryForForm, type OrderCountryCode } from "@/lib/order-countries";
+import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
 import { buildCaptureFinancialSnapshot } from "@/lib/capture-form-snapshot";
 import { IntakeLocationCombobox } from "@/components/admin/IntakeLocationCombobox";
 import { ErpSearchCombobox } from "@/components/admin/ErpCreatableCombobox";
@@ -108,41 +109,19 @@ function roundMoney2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-async function loadCustomerExtrasFast(customerId: string): Promise<CustomerExtrasPayload | null> {
-  const res = await fetch(`/api/customers/extras?id=${encodeURIComponent(customerId)}`, {
+async function loadCustomerExtrasFast(
+  customerId: string,
+  workCountry: string,
+): Promise<CustomerExtrasPayload | null> {
+  const q = new URLSearchParams({
+    id: customerId,
+    country: workCountry,
+  });
+  const res = await fetch(`/api/customers/extras?${q.toString()}`, {
     credentials: "include",
   });
   if (!res.ok) throw new Error("טעינת פרטי לקוח נכשלה");
   return (await res.json()) as CustomerExtrasPayload | null;
-}
-
-function balanceUiFromSnapshot(balanceUsd: number | undefined): {
-  balanceUsdDisplay: string;
-  balanceUsdNegative: boolean;
-} {
-  const n = balanceUsd ?? 0;
-  return {
-    balanceUsdDisplay: n.toLocaleString("en-US", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }),
-    balanceUsdNegative: n < -0.005,
-  };
-}
-
-function extrasFromCustomerRow(row: CustomerSearchRow): CustomerExtrasPayload | null {
-  const phone = row.phone ?? row.phone2 ?? null;
-  const indexLabel = row.oldCustomerCode?.trim() || row.code?.trim() || null;
-  const bal = balanceUiFromSnapshot(row.balanceUsd);
-  return {
-    nameEn: row.nameEn ?? row.nameHe ?? row.label ?? null,
-    nameAr: row.nameAr ?? null,
-    phone,
-    indexLabel,
-    city: row.city?.trim() || null,
-    address: row.address?.trim() || null,
-    ...bal,
-  };
 }
 
 import {
@@ -183,22 +162,27 @@ async function fetchOrderBootCountries(): Promise<OrderCountryCode[]> {
 
 const nextNumberInflight = new Map<string, Promise<NextOrderNumberPayload | null>>();
 
-async function fetchNextOrderNumber(weekCode: string): Promise<NextOrderNumberPayload | null> {
+async function fetchNextOrderNumber(
+  weekCode: string,
+  workCountry: string,
+): Promise<NextOrderNumberPayload | null> {
   const wc = weekCode.trim() || DEFAULT_WEEK_CODE;
-  const existing = nextNumberInflight.get(wc);
+  const cacheKey = `${workCountry}|${wc}`;
+  const existing = nextNumberInflight.get(cacheKey);
   if (existing) return existing;
 
   const promise = (async () => {
-    const res = await fetch(`/api/orders/next-number?weekCode=${encodeURIComponent(wc)}`, {
+    const q = new URLSearchParams({ weekCode: wc, country: workCountry });
+    const res = await fetch(`/api/orders/next-number?${q.toString()}`, {
       credentials: "include",
     });
     if (!res.ok) return null;
     return (await res.json()) as NextOrderNumberPayload;
   })().finally(() => {
-    nextNumberInflight.delete(wc);
+    nextNumberInflight.delete(cacheKey);
   });
 
-  nextNumberInflight.set(wc, promise);
+  nextNumberInflight.set(cacheKey, promise);
   return promise;
 }
 
@@ -492,6 +476,10 @@ export function OrderCreatePanel({
     [countrySelectOptions, orderCountries],
   );
 
+  const previewWorkCountry = workCountryFromOrderSourceCountry(
+    sourceCountry || globalCountry,
+  );
+
   useEffect(() => {
     if (orderCountries.length === 0) return;
     if (isEdit) return;
@@ -507,25 +495,25 @@ export function OrderCreatePanel({
       if (cancelled || countries.length === 0) return;
       setOrderCountries(countries);
     });
-    void preloadCustomerCaptureIndex();
+    void preloadCustomerCaptureIndex(previewWorkCountry);
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [previewWorkCountry]);
 
-  // מספר הזמנה — placeholder מיידי, עדכון ברקע (לא קשור לבחירת לקוח)
+  // מספר הזמנה — placeholder מיידי, עדכון ברקע לפי מדינת עבודה (לא קשור לבחירת לקוח)
   useEffect(() => {
     if (isEdit) return;
     setOrderNumberPreview(formatOrderNumberPlaceholder(displayWeekCode));
     let cancelled = false;
-    void fetchNextOrderNumber(displayWeekCode).then((payload) => {
+    void fetchNextOrderNumber(displayWeekCode, previewWorkCountry).then((payload) => {
       if (cancelled || !payload?.nextOrderNumber) return;
       setOrderNumberPreview(payload.nextOrderNumber);
     });
     return () => {
       cancelled = true;
     };
-  }, [isEdit, displayWeekCode]);
+  }, [isEdit, displayWeekCode, previewWorkCountry]);
 
   useEffect(() => {
     if (!isEdit) setLoadedSourceCountry("");
@@ -616,14 +604,10 @@ export function OrderCreatePanel({
   }, []);
 
   const loadCustomerExtras = useCallback(
-    async (customerId: string, prefillFromRow: CustomerExtrasPayload | null) => {
+    async (customerId: string) => {
       const req = ++customerExtrasReqRef.current;
       try {
-        if (prefillFromRow) {
-          applyExtras(prefillFromRow);
-          return;
-        }
-        const ex = await loadCustomerExtrasFast(customerId);
+        const ex = await loadCustomerExtrasFast(customerId, previewWorkCountry);
         if (customerExtrasReqRef.current !== req) return;
         if (!ex) {
           setExtras(null);
@@ -638,7 +622,7 @@ export function OrderCreatePanel({
         setErr("טעינת נתונים נכשלה");
       }
     },
-    [applyExtras],
+    [applyExtras, previewWorkCountry],
   );
 
   useEffect(() => {
@@ -647,9 +631,17 @@ export function OrderCreatePanel({
       setPhoneStr("");
       return;
     }
-    const prefill = extrasFromCustomerRow(selectedCustomer);
-    void loadCustomerExtras(selectedCustomer.id, prefill);
+    void loadCustomerExtras(selectedCustomer.id);
   }, [selectedCustomer, loadCustomerExtras]);
+
+  useEffect(() => {
+    const onBalancesRefresh = () => {
+      const cid = selectedCustomer?.id?.trim();
+      if (cid) void loadCustomerExtras(cid);
+    };
+    window.addEventListener("wego:balances-refresh", onBalancesRefresh);
+    return () => window.removeEventListener("wego:balances-refresh", onBalancesRefresh);
+  }, [selectedCustomer?.id, loadCustomerExtras]);
 
   const openCustomerCard = useCallback(() => {
     if (!selectedCustomer) return;
@@ -717,8 +709,7 @@ export function OrderCreatePanel({
     setCodeStr(row.code?.trim() ? row.code.trim() : row.id);
     if (row.nameAr != null) setNameArStr(row.nameAr);
     if (row.nameEn != null) setNameEnStr(row.nameEn);
-    const prefill = extrasFromCustomerRow(row);
-    if (prefill) applyExtras(prefill);
+    setPhoneStr(row.phone ?? row.phone2 ?? "");
     setHits([]);
     setDropdownField(null);
     setIsSearching(false);
@@ -825,16 +816,20 @@ export function OrderCreatePanel({
         try {
           let rows: CustomerSearchRow[] = searchCustomerCaptureIndexLocal(trimmed, field);
 
+          const searchWc = previewWorkCountry;
           if (field === "code" && (isNumericCode || isUuid)) {
             if (rows.length === 0) {
-              rows = await searchCustomerCodeExactClient(trimmed);
+              rows = await searchCustomerCodeExactClient(trimmed, { workCountry: searchWc });
             }
           } else if (rows.length === 0) {
             if (field === "code") {
-              const exact = await searchCustomerCodeExactClient(trimmed);
-              rows = exact.length > 0 ? exact : await searchCustomersFastClient(trimmed);
+              const exact = await searchCustomerCodeExactClient(trimmed, { workCountry: searchWc });
+              rows =
+                exact.length > 0
+                  ? exact
+                  : await searchCustomersFastClient(trimmed, { workCountry: searchWc });
             } else {
-              rows = await searchCustomersFastClient(trimmed);
+              rows = await searchCustomersFastClient(trimmed, { workCountry: searchWc });
             }
           }
 
@@ -860,14 +855,14 @@ export function OrderCreatePanel({
     }, debounceMs);
 
     return () => window.clearTimeout(t);
-  }, [codeStr, nameArStr, nameEnStr, pickCustomer]);
+  }, [codeStr, nameArStr, nameEnStr, pickCustomer, previewWorkCountry]);
 
   const openFullList = useCallback(async (field: ComboField) => {
     focusedComboRef.current = field;
-    const rows = await listCustomersForOrderQuickPickAction();
+    const rows = await listCustomersForOrderQuickPickAction(previewWorkCountry);
     setHits(rows);
     setDropdownField(field);
-  }, []);
+  }, [previewWorkCountry]);
 
   const resolveExactCode = useCallback(
     async (opts?: { openCreateIfMissing?: boolean }) => {
@@ -1131,6 +1126,7 @@ export function OrderCreatePanel({
           setIsSaving(false);
           onToast("ההזמנה עודכנה בהצלחה!");
           window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
+          if (s.selectedCustomer?.id) void loadCustomerExtras(s.selectedCustomer.id);
           if (keepOpen) {
             /* stay open */
           } else {
@@ -1146,6 +1142,7 @@ export function OrderCreatePanel({
           setIsSaving(false);
           onToast("הזמנה נשמרה בהצלחה");
           window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
+          if (s.selectedCustomer?.id) void loadCustomerExtras(s.selectedCustomer.id);
           if (res.nextOrderNumberPreview) {
             setOrderNumberPreview(res.nextOrderNumberPreview);
           }
@@ -1167,7 +1164,7 @@ export function OrderCreatePanel({
         setIsSaving(false);
       }
     },
-    [pickCustomer, onToast, onSaved, onClose, resetFormForNew],
+    [pickCustomer, loadCustomerExtras, onToast, onSaved, onClose, resetFormForNew],
   );
 
   const onSubmit = useCallback(

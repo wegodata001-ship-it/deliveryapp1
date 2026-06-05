@@ -5,8 +5,8 @@ import {
   type OrderCountryCode,
 } from "@/lib/order-countries";
 
-/** קוד סביבת עבודה — מדינה נפרדת במערכת */
-export const WORK_COUNTRY_CODES = ["TR", "CN", "AE", "JO"] as const;
+/** קוד סביבת עבודה — מדינה נפרדת במערכת (ב-DB: TR / CN / AE) */
+export const WORK_COUNTRY_CODES = ["TR", "CN", "AE"] as const;
 
 export type WorkCountryCode = (typeof WORK_COUNTRY_CODES)[number];
 
@@ -16,34 +16,46 @@ const TO_SOURCE: Record<WorkCountryCode, OrderSourceCountry> = {
   TR: "TURKEY",
   CN: "CHINA",
   AE: "UAE",
-  JO: "JORDAN",
 };
 
 const FROM_SOURCE: Partial<Record<OrderSourceCountry, WorkCountryCode>> = {
   TURKEY: "TR",
   CHINA: "CN",
   UAE: "AE",
-  JORDAN: "JO",
 };
 
 /** ברירת מחדל — כל הנתונים ההיסטוריים בטורקיה */
 export const DEFAULT_WORK_COUNTRY: WorkCountryCode = "TR";
 
+/** קידומת במספור הזמנות/תשלומים — סין = CH (פנימית CN) */
+export function orderNumberCountryPrefix(workCountry: WorkCountryCode): "TR" | "CH" | "AE" {
+  if (workCountry === "CN") return "CH";
+  return workCountry;
+}
+
 export function isWorkCountryCode(raw: string | null | undefined): raw is WorkCountryCode {
   const t = (raw ?? "").trim().toUpperCase();
+  if (t === "CH") return true;
   return WORK_SET.has(t);
 }
 
 export function normalizeWorkCountryCode(raw: string | null | undefined): WorkCountryCode | null {
   const t = (raw ?? "").trim().toUpperCase();
+  if (t === "CH") return "CN";
   if (WORK_SET.has(t)) return t as WorkCountryCode;
   const fromOrder = normalizeOrderSourceCountry(raw);
   if (fromOrder) return workCountryFromOrderSourceCountry(fromOrder);
   if (t === "TURKEY" || t === "TURKIYE") return "TR";
   if (t === "CHINA") return "CN";
   if (t === "UAE" || t === "EMIRATES") return "AE";
-  if (t === "JORDAN") return "JO";
   return null;
+}
+
+/** בטוח ל-client — TR / CN / AE עם ברירת מחדל */
+export function resolveWorkCountryOrDefault(
+  workCountry: string | null | undefined,
+): WorkCountryCode {
+  return normalizeWorkCountryCode(workCountry) ?? DEFAULT_WORK_COUNTRY;
 }
 
 export function workCountryFromOrderSourceCountry(
@@ -65,7 +77,7 @@ export function orderSourceCountryFromWorkCountry(
   return TO_SOURCE[w];
 }
 
-/** פרמטר country ב-URL (TURKEY | TR | …) → קוד סביבה */
+/** פרמטר country ב-URL (TURKEY | TR | CH | …) → קוד סביבה */
 export function resolveWorkCountryFromSearchParams(
   sp: URLSearchParams | Record<string, string | string[] | undefined>,
 ): WorkCountryCode {
@@ -82,7 +94,6 @@ const LABELS_HE: Record<WorkCountryCode, string> = {
   TR: "🇹🇷 טורקיה",
   CN: "🇨🇳 סין",
   AE: "🇦🇪 אמירויות",
-  JO: "🇯🇴 ירדן",
 };
 
 export function workCountryLabel(code: WorkCountryCode | string | null | undefined): string {
@@ -96,7 +107,6 @@ const ENV_LABEL_HE: Record<WorkCountryCode, string> = {
   TR: "טורקיה",
   CN: "סין",
   AE: "אמירויות",
-  JO: "ירדן",
 };
 
 export function workEnvironmentLabelHe(code: WorkCountryCode | string | null | undefined): string {
@@ -105,7 +115,7 @@ export function workEnvironmentLabelHe(code: WorkCountryCode | string | null | u
   return ENV_LABEL_HE[w];
 }
 
-/** מפתח מונה הזמנות: TR|AH-125 */
+/** מפתח מונה הזמנות: TR|AH-125 (מדינה+שבוע — רצף נפרד לכל מדינה) */
 export function orderCounterKey(workCountry: WorkCountryCode, weekCode: string): string {
   const wc = weekCode.trim() || "AH-1";
   return `${workCountry}|${wc}`;
@@ -118,19 +128,20 @@ export function weekNumericPart(weekCode: string): string {
   return weekCode.replace(/^AH-/i, "").trim() || "1";
 }
 
-/** TR-125-0016 */
+/** TR-125-0016 / CH-125-0001 / AE-125-0001 */
 export function formatOrderNumber(
   workCountry: WorkCountryCode,
   weekCode: string,
   sequence: number,
 ): string {
+  const prefix = orderNumberCountryPrefix(workCountry);
   const wn = weekNumericPart(weekCode);
   const suffix = String(sequence).padStart(4, "0");
-  return `${workCountry}-${wn}-${suffix}`;
+  return `${prefix}-${wn}-${suffix}`;
 }
 
 export function paymentCodePrefix(workCountry: WorkCountryCode): string {
-  return `${workCountry}-P-`;
+  return `${orderNumberCountryPrefix(workCountry)}-P-`;
 }
 
 /** תאימות ל-ORDER_COUNTRY_CODES בטופס (ללא שינוי UI) */
@@ -149,7 +160,9 @@ export function orderNumberMatchesWorkCountry(
 ): boolean {
   const n = (orderNumber ?? "").trim().toUpperCase();
   if (!n) return false;
-  if (n.startsWith(`${workCountry}-`)) return true;
+  const prefix = orderNumberCountryPrefix(workCountry);
+  if (n.startsWith(`${prefix}-`)) return true;
   if (workCountry === "TR" && /^AH-\d+/.test(n)) return true;
+  if (workCountry === "CN" && n.startsWith("CN-")) return true;
   return false;
 }

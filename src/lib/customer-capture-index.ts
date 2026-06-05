@@ -1,22 +1,32 @@
 import type { CustomerSearchRow } from "@/app/admin/capture/actions";
 import { CUSTOMER_SEARCH_UUID_RE } from "@/lib/customer-search-shared";
+import { resolveWorkCountryOrDefault, type WorkCountryCode } from "@/lib/work-country";
 
 export type CustomerCaptureSearchField = "code" | "nameAr" | "nameEn";
 
 let indexRows: CustomerSearchRow[] | null = null;
+let indexCountryKey: WorkCountryCode | null = null;
 let indexPromise: Promise<CustomerSearchRow[]> | null = null;
 
 export function invalidateCustomerCaptureIndex(): void {
   indexRows = null;
+  indexCountryKey = null;
   indexPromise = null;
 }
 
-/** טעינה מראש בפתיחת קליטת הזמנה — חיפוש ראשון מיידי מהזיכרון */
-export function preloadCustomerCaptureIndex(): Promise<CustomerSearchRow[]> {
-  if (indexRows) return Promise.resolve(indexRows);
-  if (indexPromise) return indexPromise;
+/** טעינה מראש בפתיחת קליטת הזמנה — חיפוש ראשון מיידי מהזיכרון (לפי מדינה) */
+export function preloadCustomerCaptureIndex(
+  workCountry?: string | null,
+): Promise<CustomerSearchRow[]> {
+  const wc = resolveWorkCountryOrDefault(workCountry);
+  if (indexRows && indexCountryKey === wc) return Promise.resolve(indexRows);
+  if (indexPromise && indexCountryKey === wc) return indexPromise;
 
-  indexPromise = fetch("/api/customers/capture-index", { credentials: "include" })
+  indexCountryKey = wc;
+  indexRows = null;
+  indexPromise = fetch(`/api/customers/capture-index?country=${encodeURIComponent(wc)}`, {
+    credentials: "include",
+  })
     .then(async (res) => {
       if (!res.ok) throw new Error("capture-index");
       const data = (await res.json()) as CustomerSearchRow[];
@@ -99,8 +109,4 @@ export function searchCustomerCaptureIndexLocal(
     }
   }
   return out;
-}
-
-export function isCustomerCaptureIndexReady(): boolean {
-  return indexRows != null && indexRows.length > 0;
 }

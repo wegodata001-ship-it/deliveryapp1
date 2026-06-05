@@ -1,9 +1,7 @@
 import { prisma } from "@/lib/prisma";
-import {
-  CHINA_CAPTURE_LEGACY_PREFIX,
-  parsePaymentNumberFromCode,
-  PAYMENT_CODE_PREFIX,
-} from "@/lib/payment-capture-code";
+import { parsePaymentNumberFromCode, PAYMENT_CODE_PREFIX } from "@/lib/payment-capture-code";
+import { paymentCodePrefixesForWorkCountry } from "@/lib/country-document-numbering";
+import { PAYMENT_RECORD_STATUS_CANCELLED } from "@/lib/payment-record-status-shared";
 import { paymentCodePrefix, type WorkCountryCode } from "@/lib/work-country";
 
 /** מדינות עם רצף קודי קליטה נפרד (לא רצף גלובלי) */
@@ -17,11 +15,9 @@ export function isCapturePaymentNavCountry(
   return wc === "TR" || wc === "CN" || wc === "AE";
 }
 
-/** קידומות קוד לפי מדינה — TR-P / CN-P|CH-P / AE-P בלבד */
+/** קידומות קוד לפי מדינה — TR-P / CH-P / AE-P בלבד */
 export function capturePaymentPrefixesForCountry(workCountry: CapturePaymentNavCountry): string[] {
-  if (workCountry === "TR") return [paymentCodePrefix("TR"), PAYMENT_CODE_PREFIX];
-  if (workCountry === "CN") return [paymentCodePrefix("CN"), CHINA_CAPTURE_LEGACY_PREFIX];
-  return [paymentCodePrefix("AE")];
+  return paymentCodePrefixesForWorkCountry(workCountry);
 }
 
 /** מדינה מתוך קידומת הקוד בלבד — TR-P-000007 → TR, לא CH/AE */
@@ -32,7 +28,7 @@ export function workCountryFromCapturePaymentCode(
   if (!c) return null;
   for (const wc of CAPTURE_PAYMENT_NAV_COUNTRIES) {
     for (const prefix of capturePaymentPrefixesForCountry(wc)) {
-      const re = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\d{6}$`);
+      const re = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\d{4,6}$`);
       if (re.test(c)) return wc;
     }
   }
@@ -41,7 +37,8 @@ export function workCountryFromCapturePaymentCode(
 
 export function formatCapturePaymentCode(workCountry: WorkCountryCode, paymentNumber: number): string {
   const n = Math.max(1, Math.floor(paymentNumber));
-  return `${paymentCodePrefix(workCountry)}${String(n).padStart(6, "0")}`;
+  const width = workCountry === "CN" ? 4 : 6;
+  return `${paymentCodePrefix(workCountry)}${String(n).padStart(width, "0")}`;
 }
 
 export function capturePaymentCodeMatchesCountry(
@@ -100,6 +97,67 @@ export async function listCapturePaymentCodesOrdered(
   return codes;
 }
 
+/**
+ * קודי קליטת תשלום פתוחים (טיוטה) במדינה — isPaid=false, לא מבוטלים.
+ * לניווט ⬅/➡ בקליטה בלבד; לא כולל תשלומים שהושלמו.
+ */
+function isStalePrismaPaymentStatusError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes("Unknown argument `status`") || msg.includes('Unknown argument "status"');
+}
+
+export async function listOpenCaptureDraftPaymentCodesOrdered(
+  workCountry: CapturePaymentNavCountry,
+): Promise<string[]> {
+  let rows: { paymentCode: string | null }[];
+  try {
+    rows = await prisma.payment.findMany({
+      where: {
+        ...CAPTURE_PAYMENT_WHERE,
+        isPaid: false,
+        status: { not: PAYMENT_RECORD_STATUS_CANCELLED },
+        OR: captureCodePrefixWhere(workCountry),
+      },
+      select: { paymentCode: true },
+      orderBy: { paymentCode: "asc" },
+      take: 500,
+    });
+  } catch (err) {
+    if (!isStalePrismaPaymentStatusError(err)) throw err;
+    rows = await prisma.payment.findMany({
+      where: {
+        ...CAPTURE_PAYMENT_WHERE,
+        isPaid: false,
+        OR: captureCodePrefixWhere(workCountry),
+      },
+      select: { paymentCode: true },
+      orderBy: { paymentCode: "asc" },
+      take: 500,
+    });
+  }
+
+  const seen = new Set<string>();
+  const codes: string[] = [];
+  for (const r of rows) {
+    const raw = r.paymentCode?.trim();
+    if (!raw) continue;
+    const up = raw.toUpperCase();
+    if (workCountryFromCapturePaymentCode(up) !== workCountry) continue;
+    if (seen.has(up)) continue;
+    seen.add(up);
+    codes.push(up);
+  }
+
+  codes.sort((a, b) => {
+    const na = parsePaymentNumberFromCode(a, workCountry) ?? 0;
+    const nb = parsePaymentNumberFromCode(b, workCountry) ?? 0;
+    if (na !== nb) return na - nb;
+    return a.localeCompare(b);
+  });
+
+  return codes;
+}
+
 export async function findCapturePaymentIdByCode(
   code: string,
   workCountry: WorkCountryCode,
@@ -130,6 +188,117 @@ export type CapturePaymentCodeNeighbors = {
   inCountryList: boolean;
 };
 
+const EMPTY_CAPTURE_NEIGHBORS: CapturePaymentCodeNeighbors = {
+  prevCode: null,
+  nextCode: null,
+  isFirstInCountry: false,
+  isLastInCountry: false,
+  inCountryList: false,
+};
+
+/** מיקום בניווט — כולל קוד תצוגה (טרם נשמר) שלא מופיע עדיין ברשימה מה-DB */
+export type PaymentNavPosition = {
+  index: number;
+  inList: boolean;
+  total: number;
+};
+
+export function resolvePaymentNavPosition(
+  codes: readonly string[],
+  currentCode: string,
+): PaymentNavPosition {
+  const trimmed = currentCode.trim().toUpperCase();
+  if (!trimmed) return { index: -1, inList: false, total: codes.length };
+  const exactIdx = codes.findIndex((c) => c === trimmed);
+  if (exactIdx >= 0) {
+    return { index: exactIdx, inList: true, total: codes.length };
+  }
+  const wc = workCountryFromCapturePaymentCode(trimmed);
+  if (!wc) return { index: -1, inList: false, total: codes.length };
+  const curN = parsePaymentNumberFromCode(trimmed, wc);
+  if (curN == null) return { index: -1, inList: false, total: codes.length };
+
+  let insertAt = codes.length;
+  for (let i = 0; i < codes.length; i++) {
+    const n = parsePaymentNumberFromCode(codes[i]!, wc) ?? 0;
+    if (curN < n) {
+      insertAt = i;
+      break;
+    }
+  }
+  return { index: insertAt, inList: false, total: codes.length + 1 };
+}
+
+/** קוד קודם ברשימה — אינדקס מדויק או מספר סידורי בקוד */
+export function resolvePrevCapturePaymentCodeInList(
+  codes: readonly string[],
+  currentCode: string,
+): string | null {
+  const trimmed = currentCode.trim().toUpperCase();
+  if (!trimmed || codes.length === 0) return null;
+  const exactIdx = codes.indexOf(trimmed);
+  if (exactIdx > 0) return codes[exactIdx - 1]!;
+  const wc = workCountryFromCapturePaymentCode(trimmed);
+  if (!wc) return null;
+  const curN = parsePaymentNumberFromCode(trimmed, wc);
+  if (curN == null) return null;
+  let best: string | null = null;
+  let bestN = -1;
+  for (const code of codes) {
+    const n = parsePaymentNumberFromCode(code, wc);
+    if (n != null && n < curN && n > bestN) {
+      bestN = n;
+      best = code;
+    }
+  }
+  return best;
+}
+
+/** קוד הבא ברשימה — אינדקס מדויק או מספר סידורי בקוד */
+export function resolveNextCapturePaymentCodeInList(
+  codes: readonly string[],
+  currentCode: string,
+): string | null {
+  const trimmed = currentCode.trim().toUpperCase();
+  if (!trimmed || codes.length === 0) return null;
+  const exactIdx = codes.indexOf(trimmed);
+  if (exactIdx >= 0 && exactIdx < codes.length - 1) return codes[exactIdx + 1]!;
+  const wc = workCountryFromCapturePaymentCode(trimmed);
+  if (!wc) return null;
+  const curN = parsePaymentNumberFromCode(trimmed, wc);
+  if (curN == null) return null;
+  for (const code of codes) {
+    const n = parsePaymentNumberFromCode(code, wc);
+    if (n != null && n > curN) return code;
+  }
+  return null;
+}
+
+/** שכנות לפי רשימת קודים שכבר בזיכרון — ללא DB */
+export function capturePaymentCodeNeighborsFromList(
+  codes: readonly string[],
+  currentCode: string,
+): CapturePaymentCodeNeighbors {
+  const trimmed = currentCode.trim().toUpperCase();
+  if (!trimmed || codes.length === 0) return EMPTY_CAPTURE_NEIGHBORS;
+
+  const pos = resolvePaymentNavPosition(codes, trimmed);
+  if (pos.index < 0) return EMPTY_CAPTURE_NEIGHBORS;
+
+  const prevCode = resolvePrevCapturePaymentCodeInList(codes, trimmed);
+  const nextCode = resolveNextCapturePaymentCodeInList(codes, trimmed);
+
+  return {
+    prevCode,
+    nextCode,
+    isFirstInCountry: pos.index === 0,
+    isLastInCountry: pos.inList
+      ? pos.index === codes.length - 1
+      : pos.index >= codes.length,
+    inCountryList: pos.inList,
+  };
+}
+
 /**
  * שכנות לפי רשימת קודים במדינה אחת בלבד (אינדקס ב-DB של אותו קידומת).
  */
@@ -138,26 +307,10 @@ export async function resolveCapturePaymentCodeNeighbors(
 ): Promise<CapturePaymentCodeNeighbors> {
   const trimmed = currentCode.trim().toUpperCase();
   const wc = workCountryFromCapturePaymentCode(trimmed);
-  const empty: CapturePaymentCodeNeighbors = {
-    prevCode: null,
-    nextCode: null,
-    isFirstInCountry: false,
-    isLastInCountry: false,
-    inCountryList: false,
-  };
-  if (!wc) return empty;
+  if (!wc) return EMPTY_CAPTURE_NEIGHBORS;
 
   const codes = await listCapturePaymentCodesOrdered(wc);
-  const idx = codes.findIndex((c) => c === trimmed);
-  if (idx < 0) return empty;
-
-  return {
-    prevCode: idx > 0 ? codes[idx - 1]! : null,
-    nextCode: idx < codes.length - 1 ? codes[idx + 1]! : null,
-    isFirstInCountry: idx === 0,
-    isLastInCountry: idx === codes.length - 1,
-    inCountryList: true,
-  };
+  return capturePaymentCodeNeighborsFromList(codes, trimmed);
 }
 
 export function legacyTurkeyPaymentPrefixes(): string[] {

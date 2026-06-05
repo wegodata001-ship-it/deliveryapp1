@@ -1,6 +1,7 @@
 import type { OrderSourceCountry, Prisma } from "@prisma/client";
 import {
   DEFAULT_WORK_COUNTRY,
+  normalizeWorkCountryCode,
   orderSourceCountryFromWorkCountry,
   resolveWorkCountryFromSearchParams,
   type WorkCountryCode,
@@ -24,11 +25,7 @@ export function resolveCountryScope(
 export function resolveCountryScopeFromCode(
   workCountry: WorkCountryCode | string | null | undefined,
 ): CountryScope {
-  const w =
-    typeof workCountry === "string" && workCountry.length === 2
-      ? (workCountry.toUpperCase() as WorkCountryCode)
-      : DEFAULT_WORK_COUNTRY;
-  const wc = ["TR", "CN", "AE", "JO"].includes(w) ? (w as WorkCountryCode) : DEFAULT_WORK_COUNTRY;
+  const wc = normalizeWorkCountryCode(workCountry != null ? String(workCountry) : null) ?? DEFAULT_WORK_COUNTRY;
   return {
     workCountry: wc,
     sourceCountry: orderSourceCountryFromWorkCountry(wc),
@@ -47,6 +44,7 @@ export function paymentWhereForCountryScope(scope: CountryScope): Prisma.Payment
   return { countryCode: scope.workCountry };
 }
 
+/** לקוח — סביבת עבודה (TR / CN / AE) */
 export function customerWhereForCountryScope(scope: CountryScope): Prisma.CustomerWhereInput {
   return { countryCode: scope.workCountry };
 }

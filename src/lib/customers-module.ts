@@ -2,6 +2,7 @@ import "server-only";
 
 import { Prisma } from "@prisma/client";
 import { ORDER_STATUS_META } from "@/constants/order-status";
+import { calculateCustomerBalances } from "@/lib/customer-balance-calculator";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { isDebtWithdrawalOrderStatus } from "@/lib/debt-withdrawal-order";
 import type {
@@ -13,6 +14,7 @@ import type {
   CustomerWorkspacePaymentRow,
 } from "@/lib/customers-module-types";
 import { CUSTOMER_WORKSPACE_ROW_LIMIT } from "@/lib/customers-module-types";
+import { scopeFromWorkCountryParam } from "@/lib/customer-open-debt";
 import { prisma } from "@/lib/prisma";
 import { activePaidPaymentWhere } from "@/lib/payment-record-status-shared";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
@@ -33,14 +35,6 @@ export type {
 } from "@/lib/customers-module-types";
 
 export { CUSTOMER_WORKSPACE_ROW_LIMIT } from "@/lib/customers-module-types";
-
-type AggRow = {
-  customerId: string;
-  ordersUsd: Prisma.Decimal;
-  withdrawalsUsd: Prisma.Decimal;
-  paymentsUsd: Prisma.Decimal;
-  balanceUsd: Prisma.Decimal;
-};
 
 const customerSelect = {
   id: true,
@@ -76,7 +70,23 @@ function mapCustomerRow(
   };
 }
 
-/** רשימת לקוחות + סכומי הזמנות/תשלומים/יתרה — שאילתת אגרגציה אחת + שליפת פרטים */
+function customerSearchWhere(search: string): Prisma.CustomerWhereInput {
+  const q = search.trim();
+  if (!q) return {};
+  return {
+    OR: [
+      { displayName: { contains: q, mode: "insensitive" } },
+      { nameAr: { contains: q, mode: "insensitive" } },
+      { nameEn: { contains: q, mode: "insensitive" } },
+      { nameHe: { contains: q, mode: "insensitive" } },
+      { customerCode: { contains: q, mode: "insensitive" } },
+      { oldCustomerCode: { contains: q, mode: "insensitive" } },
+      { phone: { contains: q, mode: "insensitive" } },
+    ],
+  };
+}
+
+/** רשימת לקוחות + סכומי הזמנות/תשלומים/יתרה — מקור חישוב יחיד */
 export async function listCustomersModule(
   opts: { page?: number; limit?: number; search?: string; workCountry?: WorkCountryCode } = {},
 ): Promise<CustomersModuleListResult> {
@@ -85,75 +95,30 @@ export async function listCustomersModule(
   const skip = (page - 1) * limit;
   const search = (opts.search ?? "").trim();
   const workCountry = opts.workCountry ?? DEFAULT_WORK_COUNTRY;
-
-  const searchSql = search
-    ? Prisma.sql`(
-        c."displayName" ILIKE ${`%${search}%`}
-        OR c."nameAr" ILIKE ${`%${search}%`}
-        OR c."nameEn" ILIKE ${`%${search}%`}
-        OR c."nameHe" ILIKE ${`%${search}%`}
-        OR c."customerCode" ILIKE ${`%${search}%`}
-        OR c."oldCustomerCode" ILIKE ${`%${search}%`}
-        OR c."phone" ILIKE ${`%${search}%`}
-      )`
-    : Prisma.sql`TRUE`;
-
-  const aggRows = await prisma.$queryRaw<AggRow[]>(Prisma.sql`
-    SELECT
-      c.id AS "customerId",
-      COALESCE(o.orders_usd, 0) AS "ordersUsd",
-      COALESCE(w.withdrawals_usd, 0) AS "withdrawalsUsd",
-      COALESCE(p.payments_usd, 0) AS "paymentsUsd",
-      (COALESCE(o.orders_usd, 0) - COALESCE(p.payments_usd, 0) - COALESCE(w.withdrawals_usd, 0)) AS "balanceUsd"
-    FROM "Customer" c
-    LEFT JOIN (
-      SELECT "customerId", SUM(COALESCE("totalUsd", 0)) AS orders_usd
-      FROM "Order"
-      WHERE "deletedAt" IS NULL AND "status" <> 'DEBT_WITHDRAWAL' AND "countryCode" = ${workCountry}::"WorkCountryCode"
-      GROUP BY "customerId"
-    ) o ON o."customerId" = c.id
-    LEFT JOIN (
-      SELECT "customerId", SUM(COALESCE("debtWithdrawalUsd", 0)) AS withdrawals_usd
-      FROM "Order"
-      WHERE "deletedAt" IS NULL AND "status" = 'DEBT_WITHDRAWAL' AND "countryCode" = ${workCountry}::"WorkCountryCode"
-      GROUP BY "customerId"
-    ) w ON w."customerId" = c.id
-    LEFT JOIN (
-      SELECT "customerId", SUM(COALESCE("amountUsd", 0)) AS payments_usd
-      FROM "Payment"
-      WHERE "isPaid" = TRUE AND ("status" IS NULL OR "status" <> 'CANCELLED') AND "countryCode" = ${workCountry}::"WorkCountryCode"
-      GROUP BY "customerId"
-    ) p ON p."customerId" = c.id
-    WHERE c."deletedAt" IS NULL AND ${searchSql}
-    ORDER BY c."displayName" ASC
-    OFFSET ${skip}
-    LIMIT ${limit + 1}
-  `);
-
-  const hasMore = aggRows.length > limit;
-  const slice = hasMore ? aggRows.slice(0, limit) : aggRows;
-  const ids = slice.map((r) => r.customerId).filter(Boolean);
-  if (ids.length === 0) return { rows: [], page, limit, hasMore: false };
+  const balanceScope = scopeFromWorkCountryParam(workCountry);
 
   const customers = await prisma.customer.findMany({
-    where: { id: { in: ids } },
+    where: { deletedAt: null, ...customerSearchWhere(search) },
+    orderBy: { displayName: "asc" },
+    skip,
+    take: limit + 1,
     select: customerSelect,
   });
-  const byId = new Map(customers.map((c) => [c.id, c]));
-  const aggById = new Map(slice.map((r) => [r.customerId, r]));
 
-  const rows = ids
-    .map((id) => {
-      const c = byId.get(id);
-      const a = aggById.get(id);
-      if (!c || !a) return null;
-      return mapCustomerRow(c, {
-        ordersUsd: a.ordersUsd,
-        paymentsUsd: a.paymentsUsd,
-        balanceUsd: a.balanceUsd,
-      });
-    })
-    .filter((r): r is CustomersModuleListRow => r != null);
+  const hasMore = customers.length > limit;
+  const slice = hasMore ? customers.slice(0, limit) : customers;
+  const ids = slice.map((c) => c.id);
+  if (ids.length === 0) return { rows: [], page, limit, hasMore: false };
+
+  const balances = await calculateCustomerBalances(ids, balanceScope);
+
+  const rows = slice.map((c) => {
+    const b = balances.get(c.id);
+    const ordersUsd = b?.totalOrders ?? new Prisma.Decimal(0);
+    const paymentsUsd = b?.totalPayments ?? new Prisma.Decimal(0);
+    const balanceUsd = b?.balance ?? new Prisma.Decimal(0);
+    return mapCustomerRow(c, { ordersUsd, paymentsUsd, balanceUsd });
+  });
 
   return { rows, page, limit, hasMore };
 }
