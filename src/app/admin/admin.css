@@ -1545,6 +1545,9 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
 }
 
 .adm-orders-excel-page .adm-orders-btn--refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   height: 34px;
   min-height: 34px;
   padding-inline: 12px;
@@ -1555,6 +1558,18 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
   background: #fff;
   color: #334155;
   cursor: pointer;
+}
+
+.adm-orders-excel-page .adm-orders-btn--refresh .adm-orders-refresh-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(51, 65, 85, 0.25);
+  border-top-color: #334155;
+}
+
+.adm-orders-excel-page .adm-orders-btn--refresh:disabled {
+  opacity: 0.75;
+  cursor: wait;
 }
 
 .adm-orders-excel-page .adm-orders-btn--refresh:hover {
@@ -8336,17 +8351,31 @@ select.payment-modal-inline-input {
   box-shadow: 0 0 0 1px #2563eb;
 }
 
+.payment-modal-nav-sticky {
+  flex: 0 0 auto;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: #fff;
+  padding: 8px 0 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid #e5e7eb;
+  pointer-events: auto;
+  isolation: isolate;
+}
+
 .payment-navigation-row {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   width: 100%;
-  margin-top: 10px;
-  margin-bottom: 14px;
+  margin-top: 8px;
+  margin-bottom: 0;
   position: relative;
-  z-index: 3;
+  z-index: 51;
   pointer-events: auto;
+  isolation: isolate;
 }
 
 .payment-nav-code {
@@ -8371,9 +8400,9 @@ select.payment-modal-inline-input {
 }
 
 .payment-nav-arrow {
-  flex: 0 0 36px;
-  width: 36px;
-  height: 36px;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
   border-radius: 10px;
   border: 1px solid #dbe4ff;
   background: #f8faff;
@@ -8388,6 +8417,20 @@ select.payment-modal-inline-input {
   font-weight: 700;
   line-height: 1;
   transition: 0.2s;
+  position: relative;
+  z-index: 52;
+  pointer-events: auto !important;
+  touch-action: manipulation;
+  user-select: none;
+  box-sizing: border-box;
+}
+
+.payment-nav-arrow--hit {
+  outline: none;
+}
+
+.payment-nav-arrow--hit:focus-visible {
+  box-shadow: 0 0 0 2px #2563eb;
 }
 
 .payment-nav-arrow:hover:not(:disabled) {
@@ -8409,8 +8452,26 @@ select.payment-modal-inline-input {
   cursor: pointer;
 }
 
-.payment-nav-arrow--busy:disabled {
-  pointer-events: none;
+.payment-nav-arrow--busy {
+  opacity: 0.85;
+}
+
+.adm-app-shell--busy .payment-nav-arrow,
+.adm-app-shell--busy .payment-modal-nav-sticky [role="button"].payment-nav-arrow {
+  pointer-events: auto !important;
+  cursor: pointer !important;
+}
+
+.adm-win-panel .payment-modal-nav-sticky {
+  position: relative;
+  z-index: 200;
+}
+
+.adm-win-panel .payment-navigation-row,
+.adm-win-panel .payment-nav-arrow {
+  position: relative;
+  z-index: 201;
+  pointer-events: auto !important;
 }
 
 .clear-demo-page {
@@ -10563,6 +10624,51 @@ select.payment-modal-inline-input {
 
 .pm-intake-head-totals__item--balance {
   align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
+.pm-open-debt-after-payment-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px dashed rgba(194, 65, 12, 0.35);
+  background: rgba(255, 247, 237, 0.65);
+  font-size: 0.72rem;
+  line-height: 1.25;
+}
+
+.pm-open-debt-after-payment-preview__row {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.pm-open-debt-after-payment-preview__k {
+  color: #64748b;
+  font-weight: 800;
+}
+
+.pm-open-debt-after-payment-preview__v {
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  color: #334155;
+}
+
+.pm-open-debt-after-payment-preview__v--payment {
+  color: #15803d;
+}
+
+.pm-open-debt-after-payment-preview__v--debt {
+  color: #c2410c;
+}
+
+.pm-open-debt-after-payment-preview__v--cleared {
+  color: #15803d;
 }
 
 .pm-intake-head-totals__k {

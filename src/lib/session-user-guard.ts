@@ -2,9 +2,9 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
   clearAdminSession,
+  getCurrentUser,
   getSessionPayload,
   logSessionPayload,
-  resolveSessionToAppUser,
   type AppUser,
 } from "@/lib/admin-auth";
 import type { SessionPayload } from "@/lib/session";
@@ -58,7 +58,7 @@ export async function requireApiAuth(): Promise<ApiAuthResult> {
 
   logSessionPayload(session);
 
-  const user = await resolveSessionToAppUser(session);
+  const user = await getCurrentUser();
   if (!user) {
     await clearAdminSession();
     return { ok: false, status: 401, error: "User Session Invalid" };

@@ -1,54 +1,34 @@
+import "server-only";
+
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { parsePaymentNumberFromCode, PAYMENT_CODE_PREFIX } from "@/lib/payment-capture-code";
-import { paymentCodePrefixesForWorkCountry } from "@/lib/country-document-numbering";
-import { PAYMENT_RECORD_STATUS_CANCELLED } from "@/lib/payment-record-status-shared";
-import { paymentCodePrefix, type WorkCountryCode } from "@/lib/work-country";
+import { parsePaymentNumberFromCode } from "@/lib/payment-capture-code";
+import {
+  activePaidPaymentWhere,
+  activePaidPaymentWhereLegacy,
+  PAYMENT_RECORD_STATUS_CANCELLED,
+} from "@/lib/payment-record-status-shared";
+import type { WorkCountryCode } from "@/lib/work-country";
 import { endOfLocalDay, normalizeAhWeekCode, parseLocalDate } from "@/lib/work-week";
 import { getWeekRangeFromAH } from "@/lib/weeks/order-week-dates";
 
-/** מדינות עם רצף קודי קליטה נפרד (לא רצף גלובלי) */
-export const CAPTURE_PAYMENT_NAV_COUNTRIES = ["TR", "CN", "AE"] as const;
+export {
+  CAPTURE_PAYMENT_NAV_COUNTRIES,
+  type CapturePaymentNavCountry,
+  capturePaymentCodeMatchesCountry,
+  capturePaymentPrefixesForCountry,
+  formatCapturePaymentCode,
+  isCapturePaymentNavCountry,
+  legacyTurkeyPaymentPrefixes,
+  workCountryFromCapturePaymentCode,
+} from "@/lib/payment-code-navigation-shared";
 
-export type CapturePaymentNavCountry = (typeof CAPTURE_PAYMENT_NAV_COUNTRIES)[number];
-
-export function isCapturePaymentNavCountry(
-  wc: WorkCountryCode | null | undefined,
-): wc is CapturePaymentNavCountry {
-  return wc === "TR" || wc === "CN" || wc === "AE";
-}
-
-/** קידומות קוד לפי מדינה — TR-P / CH-P / AE-P בלבד */
-export function capturePaymentPrefixesForCountry(workCountry: CapturePaymentNavCountry): string[] {
-  return paymentCodePrefixesForWorkCountry(workCountry);
-}
-
-/** מדינה מתוך קידומת הקוד בלבד — TR-P-000007 → TR, לא CH/AE */
-export function workCountryFromCapturePaymentCode(
-  code: string | null | undefined,
-): CapturePaymentNavCountry | null {
-  const c = code?.trim().toUpperCase();
-  if (!c) return null;
-  for (const wc of CAPTURE_PAYMENT_NAV_COUNTRIES) {
-    for (const prefix of capturePaymentPrefixesForCountry(wc)) {
-      const re = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\d{4,6}$`);
-      if (re.test(c)) return wc;
-    }
-  }
-  return null;
-}
-
-export function formatCapturePaymentCode(workCountry: WorkCountryCode, paymentNumber: number): string {
-  const n = Math.max(1, Math.floor(paymentNumber));
-  const width = workCountry === "CN" ? 4 : 6;
-  return `${paymentCodePrefix(workCountry)}${String(n).padStart(width, "0")}`;
-}
-
-export function capturePaymentCodeMatchesCountry(
-  code: string | null | undefined,
-  workCountry: WorkCountryCode,
-): boolean {
-  return workCountryFromCapturePaymentCode(code) === workCountry;
-}
+import {
+  type CapturePaymentNavCountry,
+  capturePaymentPrefixesForCountry,
+  isCapturePaymentNavCountry,
+  workCountryFromCapturePaymentCode,
+} from "@/lib/payment-code-navigation-shared";
 
 const CAPTURE_PAYMENT_WHERE = {
   paymentCode: { not: null },
@@ -97,6 +77,82 @@ export async function listCapturePaymentCodesOrdered(
   });
 
   return codes;
+}
+
+/**
+ * מזהי Payment לפי אותו סדר כמו listCapturePaymentCodesOrdered — לניווט ⬅/➡.
+ */
+export async function listCapturePaymentIdsOrdered(
+  workCountry: CapturePaymentNavCountry,
+): Promise<string[]> {
+  const codes = await listCapturePaymentCodesOrdered(workCountry);
+  if (codes.length === 0) return [];
+
+  const rows = await prisma.payment.findMany({
+    where: {
+      ...CAPTURE_PAYMENT_WHERE,
+      paymentCode: { in: codes },
+    },
+    select: { id: true, paymentCode: true, createdAt: true },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  });
+
+  const idByCode = new Map<string, string>();
+  for (const r of rows) {
+    const code = r.paymentCode?.trim().toUpperCase();
+    if (!code || idByCode.has(code)) continue;
+    idByCode.set(code, r.id);
+  }
+
+  return codes.map((c) => idByCode.get(c.trim().toUpperCase()) ?? "").filter(Boolean);
+}
+
+export type CustomerCapturePaymentNavItem = {
+  id: string;
+  paymentCode: string;
+};
+
+/**
+ * כל קליטות התשלום של לקוח (שורות עם paymentCode) — לניווט ⬅/➡ בין תשלומי אותו לקוח.
+ */
+export async function listCustomerCapturePaymentsForNav(
+  customerId: string,
+  workCountry?: WorkCountryCode | null,
+): Promise<CustomerCapturePaymentNavItem[]> {
+  const cid = customerId.trim();
+  if (!cid) return [];
+
+  const wc =
+    workCountry && isCapturePaymentNavCountry(workCountry) ? workCountry : null;
+
+  const rows = await findActiveCustomerCapturePaymentsForNav({
+    customerId: cid,
+    workCountry: wc,
+  });
+
+  const seen = new Set<string>();
+  const items: CustomerCapturePaymentNavItem[] = [];
+  for (const r of rows) {
+    const code = r.paymentCode?.trim().toUpperCase();
+    if (!code || seen.has(code)) continue;
+    if (wc && workCountryFromCapturePaymentCode(code) !== wc) continue;
+    seen.add(code);
+    items.push({ id: r.id, paymentCode: code });
+  }
+
+  items.sort((a, b) => {
+    const country =
+      wc ?? workCountryFromCapturePaymentCode(a.paymentCode) ?? workCountryFromCapturePaymentCode(b.paymentCode);
+    if (!country || !isCapturePaymentNavCountry(country)) {
+      return a.paymentCode.localeCompare(b.paymentCode);
+    }
+    const na = parsePaymentNumberFromCode(a.paymentCode, country) ?? 0;
+    const nb = parsePaymentNumberFromCode(b.paymentCode, country) ?? 0;
+    if (na !== nb) return na - nb;
+    return a.paymentCode.localeCompare(b.paymentCode);
+  });
+
+  return items;
 }
 
 function sortCapturePaymentCodes(codes: string[], workCountry: CapturePaymentNavCountry): string[] {
@@ -155,6 +211,35 @@ export async function listCapturePaymentCodesOrderedByCountryAndWeek(
 function isStalePrismaPaymentStatusError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return msg.includes("Unknown argument `status`") || msg.includes('Unknown argument "status"');
+}
+
+async function findActiveCustomerCapturePaymentsForNav(params: {
+  customerId: string;
+  workCountry: CapturePaymentNavCountry | null;
+}): Promise<{ id: string; paymentCode: string | null }[]> {
+  const customerWhere: Prisma.PaymentWhereInput = {
+    customerId: params.customerId,
+    paymentCode: { not: null },
+    ...(params.workCountry ? { OR: captureCodePrefixWhere(params.workCountry) } : {}),
+  };
+  const select = { id: true, paymentCode: true } as const;
+  const orderBy = [{ paymentDate: "asc" as const }, { createdAt: "asc" as const }, { id: "asc" as const }];
+  try {
+    return await prisma.payment.findMany({
+      where: { AND: [customerWhere, activePaidPaymentWhere] },
+      select,
+      orderBy,
+      take: 500,
+    });
+  } catch (err) {
+    if (!isStalePrismaPaymentStatusError(err)) throw err;
+    return await prisma.payment.findMany({
+      where: { AND: [customerWhere, activePaidPaymentWhereLegacy] },
+      select,
+      orderBy,
+      take: 500,
+    });
+  }
 }
 
 export async function listOpenCaptureDraftPaymentCodesOrdered(
@@ -364,6 +449,3 @@ export async function resolveCapturePaymentCodeNeighbors(
   return capturePaymentCodeNeighborsFromList(codes, trimmed);
 }
 
-export function legacyTurkeyPaymentPrefixes(): string[] {
-  return [paymentCodePrefix("TR"), PAYMENT_CODE_PREFIX];
-}

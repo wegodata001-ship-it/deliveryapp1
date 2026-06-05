@@ -75,6 +75,7 @@ async function fetchSearchFast(
     const t0 = typeof performance !== "undefined" ? performance.now() : Date.now();
     const res = await fetch(`/api/customers/search-fast?${params.toString()}`, {
       credentials: "include",
+      cache: "no-store",
       signal,
     });
     const fetchMs = Math.round(
@@ -140,9 +141,11 @@ export async function resolveCustomerFastClient(
     workCountry: opts?.workCountry,
   });
   if (rows.length > 0) return rows[0]!;
-  /** קוד מספרי / UUID — רק exact=1, בלי חיפוש חלקי (חוסך round-trip שני) */
-  if (/^\d+$/.test(q) || CUSTOMER_SEARCH_UUID_RE.test(q)) return null;
-  const partial = await fetchSearchFast(q, { signal: opts?.signal });
+  if (CUSTOMER_SEARCH_UUID_RE.test(q)) return null;
+  const partial = await fetchSearchFast(q, {
+    signal: opts?.signal,
+    workCountry: opts?.workCountry,
+  });
   if (partial.length === 0) return null;
   const lower = q.toLowerCase();
   return (

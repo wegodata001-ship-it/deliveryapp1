@@ -3,7 +3,7 @@ import type { PaymentIntakeOrderRow } from "@/lib/payment-intake";
 import type { PaymentIntakeCustomerPayload } from "@/app/admin/payments/intake/actions";
 import type { PaymentEntryPayload } from "@/lib/payment-entry-payload";
 import type { PaymentLine, PaymentTotals } from "@/lib/payment-updated";
-import type { CapturePaymentNavCountry } from "@/lib/payment-code-navigation";
+import type { CapturePaymentNavCountry } from "@/lib/payment-code-navigation-shared";
 
 /** מטמון ניווט קליטת תשלום — מפתח: קוד תשלום (TR-P-…) */
 export type PaymentNavigationCacheEntry = {

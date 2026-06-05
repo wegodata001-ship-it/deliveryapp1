@@ -24,6 +24,20 @@ type AdminWindowContextValue = {
 
 const AdminWindowContext = createContext<AdminWindowContextValue | null>(null);
 
+/**
+ * גיבוי ל-SSR / router.refresh חלקי — Next.js עלול לרנדר מחדש רק את segment של הדף
+ * בלי להריץ שוב את boundary של ה-Provider מה-layout.
+ */
+const SSR_ADMIN_WINDOWS_FALLBACK: AdminWindowContextValue = {
+  stack: [],
+  openWindow: () => "",
+  closeWindow: () => {},
+  closeTop: () => {},
+  isWindowTypeOpen: () => false,
+  openCreateCustomerForOrder: () => "",
+  completeCustomerCreate: () => false,
+};
+
 export function AdminWindowProvider({ children }: { children: ReactNode }) {
   const [stack, setStack] = useState<AdminWindowEntry[]>([]);
   const customerCreatedListenerRef = useRef<((client: ClientCreateResult) => void) | null>(null);
@@ -102,6 +116,9 @@ export function AdminWindowProvider({ children }: { children: ReactNode }) {
 
 export function useAdminWindows(): AdminWindowContextValue {
   const ctx = useContext(AdminWindowContext);
-  if (!ctx) throw new Error("useAdminWindows must be used within AdminWindowProvider");
-  return ctx;
+  if (ctx) return ctx;
+  if (typeof window === "undefined") {
+    return SSR_ADMIN_WINDOWS_FALLBACK;
+  }
+  throw new Error("useAdminWindows must be used within AdminWindowProvider");
 }

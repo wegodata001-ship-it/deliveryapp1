@@ -127,6 +127,13 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
   const cid = customerId.trim();
   if (!cid) return { ok: false, error: "חסר לקוח" };
 
+  const loadT0 = Date.now();
+  console.log("START LOAD ORDERS (server)", {
+    customerId: cid,
+    week: weekCodeForOpenBalances ?? null,
+    country: paymentWorkCountryRaw ?? null,
+  });
+
   await ensurePaymentRecordStatusColumns();
 
   const cust = await prisma.customer.findFirst({
@@ -273,6 +280,14 @@ export async function fetchPaymentIntakeCustomerOrdersAction(
     usdPaymentMethod: p.usdPaymentMethod,
     ilsPaymentMethod: p.ilsPaymentMethod,
   }));
+
+  console.log("END LOAD ORDERS (server)", {
+    customerId: cid,
+    week: weekCodeForOpenBalances ?? null,
+    country: paymentWorkCountry,
+    orderCount: rows.length,
+    ms: Date.now() - loadT0,
+  });
 
   return {
     ok: true,

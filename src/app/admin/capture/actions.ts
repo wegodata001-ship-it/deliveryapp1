@@ -36,7 +36,9 @@ import {
   capturePerfTimeEnd,
   capturePerfTimeStart,
   capturePerfTimed,
+  logOrderStatusUpdatePerf,
   scheduleCaptureAuditInsert,
+  type OrderStatusUpdatePerf,
 } from "@/lib/capture-perf";
 import { CaptureSavePerf } from "@/lib/capture-save-perf";
 import { breakdownIlsIncludingVat, computeFromUsdAmount } from "@/lib/financial-calc";
@@ -70,6 +72,8 @@ import {
   findCapturePaymentIdByCode,
   isCapturePaymentNavCountry,
   listCapturePaymentCodesOrdered,
+  listCapturePaymentIdsOrdered,
+  listCustomerCapturePaymentsForNav,
   resolveCapturePaymentCodeNeighbors,
   workCountryFromCapturePaymentCode,
 } from "@/lib/payment-code-navigation";
@@ -515,6 +519,42 @@ export async function listCapturePaymentCodesForNavAction(
   }
   const codes = await listCapturePaymentCodesOrdered(wc);
   return { ok: true, codes };
+}
+
+/** רשימת קליטות תשלום של לקוח — מקור הניווט ⬅/➡ */
+export async function listCustomerCapturePaymentsForNavAction(
+  customerId: string,
+  workCountry?: string,
+): Promise<
+  | { ok: true; payments: { id: string; paymentCode: string }[] }
+  | { ok: false; error: string }
+> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["receive_payments"])) {
+    return { ok: false, error: "אין הרשאה" };
+  }
+  const cid = customerId.trim();
+  if (!cid) return { ok: false, error: "חסר מזהה לקוח" };
+  const wc = workCountry ? normalizeWorkCountryCode(workCountry) : null;
+  const payments = await listCustomerCapturePaymentsForNav(cid, wc);
+  return { ok: true, payments };
+}
+
+/** רשימת מזהי קליטה לניווט ⬅/➡ — נטענת פעם אחת בפתיחה */
+export async function listCapturePaymentIdsForNavAction(
+  workCountry: string,
+): Promise<{ ok: true; ids: string[] } | { ok: false; error: string }> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["receive_payments"])) {
+    return { ok: false, error: "אין הרשאה" };
+  }
+  const wc = normalizeWorkCountryCode(workCountry);
+  if (!wc || !isCapturePaymentNavCountry(wc)) {
+    return { ok: false, error: "מדינת קליטה לא תקינה" };
+  }
+  const { listCapturePaymentIdsOrdered } = await import("@/lib/payment-code-navigation");
+  const ids = await listCapturePaymentIdsOrdered(wc);
+  return { ok: true, ids };
 }
 
 function intakeWeekCodeFromPaymentDateYmd(ymd: string): string {
@@ -2213,27 +2253,32 @@ export type UpdateOrderListStatusApiResult =
 
 /**
  * Fast API-path update for orders list status.
- * - Uses session payload (no requireAuth / RSC refresh)
- * - Does NOT revalidate routes (caller updates UI locally)
+ * - מאומת מראש ב-requireApiAuth (ללא resolveCaptureActor כפול)
+ * - ללא revalidate / KPI / יתרות / refetch רשימה
  */
 export async function updateOrderListStatusActionForApi(
   orderId: string,
   statusRaw: string,
-  session: SessionPayload,
+  me: AppUser,
+  perf?: Pick<OrderStatusUpdatePerf, "AUTH_MS">,
 ): Promise<UpdateOrderListStatusApiResult> {
-  const actor = await resolveCaptureActor(session);
-  if ("error" in actor) return { ok: false, error: actor.error };
-  const me = actor;
+  const startedAt = performance.now();
+  let findOrderMs = 0;
+  let updateOrderMs = 0;
+  const recalcBalancesMs = 0;
+  const refreshDataMs = 0;
+
   if (!userHasAnyPermission(me, ["edit_orders"])) {
     return { ok: false, error: "אין הרשאה" };
   }
   const id = orderId.trim();
   if (!id) return { ok: false, error: "חסר מזהה הזמנה" };
   const status = statusRaw.trim();
-  if (!status || !(await isAllowedListStatus(status))) {
+  if (!status || !getActiveOrderStatusIdsSync().has(status)) {
     return { ok: false, error: "סטטוס לא חוקי" };
   }
 
+  const findT0 = performance.now();
   const exists = await prisma.order.findFirst({
     where: { id, deletedAt: null },
     select: {
@@ -2246,9 +2291,9 @@ export async function updateOrderListStatusActionForApi(
       editUnlockedUntil: true,
     },
   });
+  findOrderMs = Math.round(performance.now() - findT0);
   if (!exists) return { ok: false, error: "הזמנה לא נמצאה" };
 
-  // Avoid a second DB round-trip: determine gate from the row we already fetched.
   const unlockExpired =
     exists.editUnlockedUntil != null && exists.editUnlockedUntil.getTime() < Date.now();
   const effectiveGate = unlockExpired
@@ -2265,6 +2310,7 @@ export async function updateOrderListStatusActionForApi(
     void clearExpiredOrderEditUnlockForOrder(id).catch(() => {});
   }
 
+  const updateT0 = performance.now();
   if (status === OS.DEBT_WITHDRAWAL) {
     if (!exists.customerId) {
       return { ok: false, error: "אי אפשר למשוך מהחוב — להזמנה אין לקוח משויך" };
@@ -2277,8 +2323,8 @@ export async function updateOrderListStatusActionForApi(
       orderTotalUsd: orderTotal,
       alreadyAppliedUsd: alreadyApplied,
     });
+    updateOrderMs = Math.round(performance.now() - updateT0);
     if (!dw.ok) return dw;
-    // audit insert is async already; keep it fire-and-forget
     void prisma.auditLog
       .create({
         data: {
@@ -2294,6 +2340,14 @@ export async function updateOrderListStatusActionForApi(
         },
       })
       .catch(() => {});
+    logOrderStatusUpdatePerf({
+      AUTH_MS: perf?.AUTH_MS ?? 0,
+      FIND_ORDER_MS: findOrderMs,
+      UPDATE_ORDER_MS: updateOrderMs,
+      RECALC_BALANCES_MS: recalcBalancesMs,
+      REFRESH_DATA_MS: refreshDataMs,
+      TOTAL_MS: Math.round(performance.now() - startedAt) + (perf?.AUTH_MS ?? 0),
+    });
     return { ok: true, debtWithdrawalUsd: dw.debtWithdrawalUsd };
   }
 
@@ -2303,6 +2357,16 @@ export async function updateOrderListStatusActionForApi(
   await prisma.order.update({
     where: { id },
     data: { status, ...(shouldClearDebtWithdrawal ? { debtWithdrawalUsd: null } : {}) },
+  });
+  updateOrderMs = Math.round(performance.now() - updateT0);
+
+  logOrderStatusUpdatePerf({
+    AUTH_MS: perf?.AUTH_MS ?? 0,
+    FIND_ORDER_MS: findOrderMs,
+    UPDATE_ORDER_MS: updateOrderMs,
+    RECALC_BALANCES_MS: recalcBalancesMs,
+    REFRESH_DATA_MS: refreshDataMs,
+    TOTAL_MS: Math.round(performance.now() - startedAt) + (perf?.AUTH_MS ?? 0),
   });
 
   return { ok: true };

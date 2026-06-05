@@ -80,3 +80,20 @@ export function capturePerfLog(extra: Record<string, unknown>): void {
     ...extra,
   });
 }
+
+export type OrderStatusUpdatePerf = {
+  AUTH_MS: number;
+  FIND_ORDER_MS: number;
+  UPDATE_ORDER_MS: number;
+  RECALC_BALANCES_MS: number;
+  REFRESH_DATA_MS: number;
+  TOTAL_MS: number;
+};
+
+/** Profiling ל-POST /api/orders/status — תמיד ב-dev; בפרוד כשאיטי מ-300ms */
+export function logOrderStatusUpdatePerf(perf: OrderStatusUpdatePerf): void {
+  const slow = perf.TOTAL_MS > 300;
+  if (process.env.NODE_ENV !== "development" && !slow && !capturePerfEnabled()) return;
+  console.table(perf);
+  capturePerfLog({ kind: "orders.status.profiling", ...perf });
+}

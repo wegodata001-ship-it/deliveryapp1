@@ -20,6 +20,7 @@ import {
 import {
   updateOrderListPaymentLocationAction,
 } from "@/app/admin/capture/actions";
+import { refreshOrdersListAction } from "@/app/admin/orders/actions";
 import { exportOrdersListPdfHtmlAction } from "@/app/admin/orders/export-orders-pdf-action";
 import { exportOrdersListExcelCsvAction } from "@/app/admin/orders/export-orders-excel-action";
 import { OrdersListExportSplitButton } from "@/components/admin/OrdersListExportSplitButton";
@@ -253,6 +254,13 @@ export function OrdersListShell({
   const { openWindow } = useAdminWindows();
   useOrderStatusCatalog();
   const [rows, setRows] = useState<OrderListRow[]>(orders);
+  const [statusSummaryLive, setStatusSummaryLive] = useState(statusSummary);
+  const [paginationLive, setPaginationLive] = useState(pagination);
+  const [filterOptionsLive, setFilterOptionsLive] = useState({
+    createdByOptions: toolbarProps.createdByOptions,
+    paymentLocationOptions,
+  });
+  const [refreshLoading, setRefreshLoading] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [listErr, setListErr] = useState<string | null>(null);
   const [lockModal, setLockModal] = useState<OrderEditLockGatePayload | null>(null);
@@ -275,10 +283,10 @@ export function OrdersListShell({
 
   const mergedPaymentLocationOptions = useMemo(() => {
     const m = new Map<string, string>();
-    for (const p of paymentLocationOptions) m.set(p.id, p.label);
+    for (const p of filterOptionsLive.paymentLocationOptions) m.set(p.id, p.label);
     for (const p of extraPaymentLocationOptions) m.set(p.id, p.label);
     return [...m.entries()].map(([id, label]) => ({ id, label }));
-  }, [paymentLocationOptions, extraPaymentLocationOptions]);
+  }, [filterOptionsLive.paymentLocationOptions, extraPaymentLocationOptions]);
 
   const paymentLocationLabelById = useMemo(() => {
     const m = new Map<string, string>();
@@ -299,35 +307,35 @@ export function OrdersListShell({
           tone: "adm-status-card--open",
           title: "פתוחות",
           icon: FolderOpen,
-          bucket: statusSummary.open,
+          bucket: statusSummaryLive.open,
         },
         {
           key: "completed" as const,
           tone: "adm-status-card--completed",
           title: "מוכנות",
           icon: CircleCheck,
-          bucket: statusSummary.completed,
+          bucket: statusSummaryLive.completed,
         },
         {
           key: "cancelled" as const,
           tone: "adm-status-card--cancelled",
           title: "מבוטלות",
           icon: CircleX,
-          bucket: statusSummary.cancelled,
+          bucket: statusSummaryLive.cancelled,
         },
         {
           key: "inProgress" as const,
           tone: "adm-status-card--progress",
           title: "בטיפול",
           icon: Hourglass,
-          bucket: statusSummary.inProgress,
+          bucket: statusSummaryLive.inProgress,
         },
         {
           key: "debtWithdrawal" as const,
           tone: "adm-status-card--withdrawal",
           title: "משיכה מחו״ב",
           icon: Globe2,
-          bucket: statusSummary.debtWithdrawal,
+          bucket: statusSummaryLive.debtWithdrawal,
         },
       ] satisfies {
         key: OrderStatusKpiKey;
@@ -336,22 +344,28 @@ export function OrdersListShell({
         icon: LucideIcon;
         bucket: OrdersStatusBucket;
       }[],
-    [statusSummary],
+    [statusSummaryLive],
   );
 
   const paginationLabel = useMemo(() => {
-    const { page, pageSize, totalCount } = pagination;
+    const { page, pageSize, totalCount } = paginationLive;
     if (totalCount === 0) return "אין הזמנות בתצוגה";
     const from = (page - 1) * pageSize + 1;
     const to = Math.min(page * pageSize, totalCount);
     const base = `מציג ${from.toLocaleString("he-IL")}–${to.toLocaleString("he-IL")} מתוך ${totalCount.toLocaleString("he-IL")}`;
     if (activeStatusFilters.length === 0) return base;
     return `${base} · ${tableRows.length.toLocaleString("he-IL")} לאחר סינון ריבועים בעמוד`;
-  }, [pagination, activeStatusFilters.length, tableRows.length]);
+  }, [paginationLive, activeStatusFilters.length, tableRows.length]);
 
   useEffect(() => {
     setRows(orders);
-  }, [orders]);
+    setStatusSummaryLive(statusSummary);
+    setPaginationLive(pagination);
+    setFilterOptionsLive({
+      createdByOptions: toolbarProps.createdByOptions,
+      paymentLocationOptions,
+    });
+  }, [orders, statusSummary, pagination, toolbarProps.createdByOptions, paymentLocationOptions]);
 
   const readExportSearchParams = useCallback((): Record<string, string | string[] | undefined> => {
     const sp = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
@@ -381,6 +395,27 @@ export function OrdersListShell({
     setToastMsg(msg);
     window.setTimeout(() => setToastMsg(null), 3800);
   }, []);
+
+  const refreshList = useCallback(async () => {
+    if (refreshLoading) return;
+    setRefreshLoading(true);
+    setListErr(null);
+    try {
+      const data = await refreshOrdersListAction(readExportSearchParams());
+      setRows(data.orders);
+      setStatusSummaryLive(data.statusSummary);
+      setPaginationLive(data.pagination);
+      setFilterOptionsLive({
+        createdByOptions: data.createdByOptions,
+        paymentLocationOptions: data.paymentLocationOptions,
+      });
+      showToast("הנתונים עודכנו");
+    } catch {
+      setListErr("שגיאה ברענון הרשימה");
+    } finally {
+      setRefreshLoading(false);
+    }
+  }, [refreshLoading, readExportSearchParams, showToast]);
 
   const openOrderOverlay = useCallback(
     (orderId: string, row?: OrderListRow) => {
@@ -422,82 +457,82 @@ export function OrdersListShell({
     [canEditOrders, openWindow, router, viewerIsAdmin],
   );
 
-  const onRowStatusChange = useCallback(
-    async (orderId: string, next: string) => {
-      const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
-      const t0 = now();
-      let statusUpdateDbMs = 0;
-      let statusUpdateUiMs = 0;
-      let statusRefreshMs = 0;
-      setListErr(null);
-      const prevSnapshot = rows;
-      const uiT0 = now();
-      setRows((cur) => cur.map((r) => (r.id === orderId ? { ...r, status: next } : r)));
-      statusUpdateUiMs += now() - uiT0;
-      setBusyId(orderId);
-      const dbT0 = now();
-      const res = await fetch("/api/orders/status", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ orderId, status: next }),
-      })
-        .then(async (r) => ((await r.json().catch(() => null)) as any) ?? { ok: false, error: "שגיאה" })
-        .catch(() => ({ ok: false, error: "שגיאה בשמירה" }));
-      statusUpdateDbMs += now() - dbT0;
-      setBusyId(null);
-      if (!res.ok) {
-        const uiRollbackT0 = now();
-        setRows(prevSnapshot);
-        statusUpdateUiMs += now() - uiRollbackT0;
-        setListErr(res.error);
-        const totalMs = Math.round(now() - t0);
-        if (process.env.NODE_ENV === "development" || totalMs > 300) {
-          console.table({
-            statusUpdateDbMs: Math.round(statusUpdateDbMs),
-            statusUpdateUiMs: Math.round(statusUpdateUiMs),
-            statusRefreshMs: Math.round(statusRefreshMs),
-            totalMs,
-          });
-        }
-        return;
-      }
-      // משיכה מחוב: מקזזים חוב בדיוק כמו תשלום (paid += withdrawn).
-      if (next === OS.DEBT_WITHDRAWAL && typeof res.debtWithdrawalUsd === "number") {
-        const withdrawn = res.debtWithdrawalUsd;
-        const uiDwT0 = now();
-        setRows((cur) =>
-          cur.map((r) => {
-            if (r.id !== orderId) return r;
-            const total = parseNumeric(r.totalAmountUsd) ?? 0;
-            const newBalance = Math.max(0, total - withdrawn);
-            return {
-              ...r,
-              paymentStatus:
-                total > 0.01 && withdrawn >= total - 0.02
-                  ? "paid"
-                  : withdrawn > 0.01
-                    ? "partial"
-                    : "unpaid",
-              balanceUsd: fmtUsd(newBalance),
-            };
-          }),
-        );
-        statusUpdateUiMs += now() - uiDwT0;
-      }
-
+  const onRowStatusChange = useCallback(async (orderId: string, next: string) => {
+    const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
+    const t0 = now();
+    let statusUpdateDbMs = 0;
+    let statusUpdateUiMs = 0;
+    /** אין router.refresh / refetch רשימה / KPI — רק optimistic לשורה */
+    const statusRefreshMs = 0;
+    setListErr(null);
+    let prevSnapshot: OrderListRow[] = [];
+    const uiT0 = now();
+    setRows((cur) => {
+      prevSnapshot = cur;
+      return cur.map((r) => (r.id === orderId ? { ...r, status: next } : r));
+    });
+    statusUpdateUiMs += now() - uiT0;
+    setBusyId(orderId);
+    const dbT0 = now();
+    const res = await fetch("/api/orders/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ orderId, status: next }),
+    })
+      .then(async (r) => ((await r.json().catch(() => null)) as { ok: boolean; error?: string; debtWithdrawalUsd?: number }) ?? { ok: false, error: "שגיאה" })
+      .catch(() => ({ ok: false, error: "שגיאה בשמירה" }));
+    statusUpdateDbMs += now() - dbT0;
+    setBusyId(null);
+    if (!res.ok) {
+      const uiRollbackT0 = now();
+      setRows(prevSnapshot);
+      statusUpdateUiMs += now() - uiRollbackT0;
+      setListErr(res.error ?? "שגיאה בשמירה");
       const totalMs = Math.round(now() - t0);
       if (process.env.NODE_ENV === "development" || totalMs > 300) {
         console.table({
           statusUpdateDbMs: Math.round(statusUpdateDbMs),
           statusUpdateUiMs: Math.round(statusUpdateUiMs),
-          statusRefreshMs: Math.round(statusRefreshMs),
+          statusRefreshMs,
           totalMs,
         });
       }
-    },
-    [rows],
-  );
+      return;
+    }
+    if (next === OS.DEBT_WITHDRAWAL && "debtWithdrawalUsd" in res && typeof res.debtWithdrawalUsd === "number") {
+      const withdrawn = res.debtWithdrawalUsd;
+      const uiDwT0 = now();
+      setRows((cur) =>
+        cur.map((r) => {
+          if (r.id !== orderId) return r;
+          const total = parseNumeric(r.totalAmountUsd) ?? 0;
+          const newBalance = Math.max(0, total - withdrawn);
+          return {
+            ...r,
+            paymentStatus:
+              total > 0.01 && withdrawn >= total - 0.02
+                ? "paid"
+                : withdrawn > 0.01
+                  ? "partial"
+                  : "unpaid",
+            balanceUsd: fmtUsd(newBalance),
+          };
+        }),
+      );
+      statusUpdateUiMs += now() - uiDwT0;
+    }
+
+    const totalMs = Math.round(now() - t0);
+    if (process.env.NODE_ENV === "development" || totalMs > 300) {
+      console.table({
+        statusUpdateDbMs: Math.round(statusUpdateDbMs),
+        statusUpdateUiMs: Math.round(statusUpdateUiMs),
+        statusRefreshMs,
+        totalMs,
+      });
+    }
+  }, []);
 
   const onRowPaymentMethodChange = useCallback(
     async (orderId: string, raw: string) => {
@@ -704,9 +739,18 @@ export function OrdersListShell({
     [downloadCsv, readExportSearchParams, activeStatusFilters],
   );
 
+  const toolbarPropsLive = useMemo(
+    () => ({
+      ...toolbarProps,
+      createdByOptions: filterOptionsLive.createdByOptions,
+      paymentLocationOptions: filterOptionsLive.paymentLocationOptions,
+    }),
+    [toolbarProps, filterOptionsLive],
+  );
+
   const createdByOptionsMerged = useMemo(() => {
     const map = new Map<string, string>();
-    for (const opt of toolbarProps.createdByOptions) {
+    for (const opt of toolbarPropsLive.createdByOptions) {
       map.set(opt.id, opt.label);
     }
     for (const o of orders) {
@@ -714,13 +758,13 @@ export function OrdersListShell({
         map.set(o.createdById, o.createdByName?.trim() || o.createdById);
       }
     }
-    if (toolbarProps.createdById && !map.has(toolbarProps.createdById)) {
-      map.set(toolbarProps.createdById, "עובד נבחר");
+    if (toolbarPropsLive.createdById && !map.has(toolbarPropsLive.createdById)) {
+      map.set(toolbarPropsLive.createdById, "עובד נבחר");
     }
     return [...map.entries()]
       .map(([id, label]) => ({ id, label }))
       .sort((a, b) => a.label.localeCompare(b.label, "he"));
-  }, [orders, toolbarProps.createdById, toolbarProps.createdByOptions]);
+  }, [orders, toolbarPropsLive.createdById, toolbarPropsLive.createdByOptions]);
 
   const filterLeadingActions = (
     <>
@@ -737,9 +781,14 @@ export function OrdersListShell({
       <button
         type="button"
         className="adm-orders-btn adm-orders-btn--refresh"
-        onClick={() => router.refresh()}
+        onClick={() => void refreshList()}
+        disabled={refreshLoading}
         title="רענון רשימה"
+        aria-busy={refreshLoading}
       >
+        {refreshLoading ? (
+          <span className="payment-modal-save-spinner adm-orders-refresh-spinner" aria-hidden />
+        ) : null}
         רענון
       </button>
     </>
@@ -767,8 +816,8 @@ export function OrdersListShell({
       <div className="adm-orders-filters-row">
         <Suspense fallback={<div className="adm-orders-toolbar-skel" aria-hidden />}>
           <OrdersListToolbar
-            key={`${toolbarProps.ahWeekSelect}|${toolbarProps.fromYmd}|${toolbarProps.toYmd}`}
-            {...toolbarProps}
+            key={`${toolbarPropsLive.ahWeekSelect}|${toolbarPropsLive.fromYmd}|${toolbarPropsLive.toYmd}`}
+            {...toolbarPropsLive}
             createdByOptions={createdByOptionsMerged}
             leadingActions={filterLeadingActions}
             exportActions={kpiExportActions}
@@ -785,8 +834,8 @@ export function OrdersListShell({
             <OrderStatusKpiButton
               title="הכל"
               toneClass="adm-status-card--all"
-              count={statusSummary.all.count}
-              totalUsd={statusSummary.all.totalUsd}
+              count={statusSummaryLive.all.count}
+              totalUsd={statusSummaryLive.all.totalUsd}
               active={statusKpiAllActive}
               isAll
               icon={LayoutGrid}
@@ -1013,7 +1062,7 @@ export function OrdersListShell({
         </table>
       </div>
 
-        <OrdersListPaginationBar pagination={pagination} label={paginationLabel} />
+        <OrdersListPaginationBar pagination={paginationLive} label={paginationLabel} />
 
         <p className="adm-orders-hint">
           {canEditOrders

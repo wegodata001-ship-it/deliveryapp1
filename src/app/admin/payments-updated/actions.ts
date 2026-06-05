@@ -303,7 +303,15 @@ export async function previewCustomerPaymentOverageAction(input: {
 export async function savePaymentUpdatedAction(
   form: PaymentUpdatedSaveInput,
 ): Promise<
-  | { ok: true; saved: { primaryPaymentCode: string | null; count: number; customerBalanceUsd: string } }
+  | {
+      ok: true;
+      saved: {
+        primaryPaymentCode: string | null;
+        primaryPaymentId: string | null;
+        count: number;
+        customerBalanceUsd: string;
+      };
+    }
   | { ok: false; error: string }
 > {
   const me = await requireAuth();
@@ -566,9 +574,9 @@ export async function savePaymentUpdatedAction(
   let savedCount = 0;
 
   const BALANCE_EPS = new Prisma.Decimal("0.01");
+  let primaryPaymentId: string | null = null;
 
   try {
-    let primaryPaymentId: string | null = null;
     await prisma.$transaction(async (tx) => {
       let allocIndex = 0;
       for (const [orderId, allocUsd] of allocationEntries) {
@@ -790,7 +798,12 @@ export async function savePaymentUpdatedAction(
   await persistCustomerBalanceSnapshot(cid, customerBalanceUsd);
   return {
     ok: true,
-    saved: { primaryPaymentCode: primaryCode, count: savedCount, customerBalanceUsd: customerBalanceUsd.toFixed(2) },
+    saved: {
+      primaryPaymentCode: primaryCode,
+      primaryPaymentId: primaryPaymentId,
+      count: savedCount,
+      customerBalanceUsd: customerBalanceUsd.toFixed(2),
+    },
   };
 }
 

@@ -180,6 +180,8 @@ model Customer {
   receiptControls ReceiptControl[]
 
   @@index([countryCode])
+  @@index([countryCode, customerCode])
+  @@index([countryCode, oldCustomerCode])
   @@index([displayName])
   @@index([nameHe])
   @@index([nameAr])
