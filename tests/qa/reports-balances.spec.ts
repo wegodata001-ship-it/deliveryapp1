@@ -6,10 +6,10 @@ function moneyIlsHe(n: number): string {
   return `₪ ${n.toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-test.describe("Reports demo: customer balances non-zero", () => {
+test.describe("Reports demo: customer balances", () => {
   test.skip(!USERNAME || !PASSWORD, "Missing E2E_ADMIN_USERNAME / E2E_ADMIN_PASSWORD");
 
-  test("יתרות לקוחות: יתרה 0 מסוננת; יתרה פתוחה מוצגת; סיכום ללא 0", async ({ page }) => {
+  test("יתרות לקוחות: כל הלקוחות הפעילים מוצגים; יתרה 0 ויתרה פתוחה", async ({ page }) => {
     const errors: string[] = [];
     page.on("console", (m) => {
       if (m.type() === "error") errors.push(m.text());
@@ -36,7 +36,7 @@ test.describe("Reports demo: customer balances non-zero", () => {
     const tbody = table.locator("tbody");
 
     await expect(tbody).toBeVisible();
-    await expect(tbody).not.toContainText("QA-REPORT-ZERO");
+    await expect(tbody).toContainText("QA-REPORT-ZERO");
     await expect(tbody).toContainText("QA-REPORT-OPEN");
 
     const openRow = tbody.locator("tr").filter({ hasText: "QA-REPORT-OPEN" }).first();
@@ -46,10 +46,12 @@ test.describe("Reports demo: customer balances non-zero", () => {
     await expect(cells.nth(3)).toContainText(moneyIlsHe(2000));
     await expect(cells.nth(4)).toContainText(moneyIlsHe(3000));
 
+    const zeroRow = tbody.locator("tr").filter({ hasText: "QA-REPORT-ZERO" }).first();
+    await expect(zeroRow).toBeVisible();
+    await expect(zeroRow).toContainText("מאוזן");
+
     const summary = modal.locator(".adm-report-summary");
     await expect(summary).toBeVisible();
-    // סיכום כולל את כל הלקוחות עם יתרה ≠ 0 בטווח — לא רק QA; נוודא שלא מופיע שם לקוח ה-0
-    await expect(summary).not.toContainText("QA-REPORT-ZERO");
 
     expect(errors, `Console/page/network errors: ${errors.join("\n")}`).toEqual([]);
   });

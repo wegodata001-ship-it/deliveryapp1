@@ -45,17 +45,30 @@ export async function POST(req: Request) {
         ? await updateOrderWorkPanelActionForApi(
             payload as Parameters<typeof updateOrderWorkPanelActionForApi>[0],
             session,
+            auth.user,
           )
         : await captureOrderActionForApi(
             payload as Parameters<typeof captureOrderActionForApi>[0],
             session,
+            auth.user,
           );
     const actionMs = Date.now() - actionT0;
+    const actionDoneAt = Date.now();
 
     const responseJsonT0 = Date.now();
-    const response = NextResponse.json(result, { status: result.ok ? 200 : 400 });
+    const responseSentAt = Date.now();
+    const response = NextResponse.json(result, {
+      status: result.ok ? 200 : 400,
+      headers: {
+        "X-Capture-Action-Ms": String(actionMs),
+        "X-Capture-Response-Sent-At": String(responseSentAt),
+      },
+    });
     const responseJsonMs = Date.now() - responseJsonT0;
+    const postActionMs = Date.now() - actionDoneAt;
 
+    capturePerfTimeStart("capture.responseSent");
+    capturePerfTimeEnd("capture.responseSent");
     capturePerfLog({
       mode,
       ok: result.ok,
@@ -64,7 +77,10 @@ export async function POST(req: Request) {
       requestJsonMs,
       actionMs,
       responseJsonMs,
-      hint: "actionMs should match capture save totalMs; apiMs−actionMs ≈ session+JSON; client total−fetchMs ≈ UI",
+      postActionMs,
+      actionDoneAt,
+      responseSentAt,
+      hint: "client POST−actionMs ≈ network+JSON; postActionMs = build response only; audit/revalidate deferred",
     });
 
     return response;

@@ -81,7 +81,8 @@ export class CaptureSavePerf {
       responseSerializationMs: this.responseSerializationMs,
       authMs: this.authMs,
       unaccountedMs,
-      hint: "unaccountedMs ≈ sync compute + gaps between timers; deferred revalidate logs separately",
+      saveOrderMs: totalMs,
+      hint: "totalMs = action inner; compare to route actionMs + responseSentAt; audit/revalidate are deferred",
       ...extra,
     });
   }

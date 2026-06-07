@@ -25,6 +25,13 @@ export type PaymentsSourcePreview = {
   ordersCount: number;
 };
 
+export type PaymentCaptureAllocationRow = {
+  orderNumber: string;
+  orderTotalUsd: number;
+  paidUsd: number;
+  remainingUsd: number;
+};
+
 export function paymentMethodTone(method: string | null | undefined): PaymentMethodTone {
   if (!method) return "neutral";
   if (method === "CASH") return "cash";

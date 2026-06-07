@@ -2,6 +2,7 @@
 
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import {
+  getPaymentCaptureAllocations,
   getPaymentSourcePreview,
   getPaymentsSourceKpis,
   listPaymentsSourceForExport,
@@ -9,6 +10,7 @@ import {
   type PaymentsSourceFilters,
   type PaymentsSourceListQuery,
 } from "@/lib/payments-source-table";
+import type { PaymentCaptureAllocationRow } from "@/lib/payments-source-shared";
 import { DEFAULT_WORK_COUNTRY, type WorkCountryCode } from "@/lib/work-country";
 
 async function ensurePaymentsTableAccess() {
@@ -47,6 +49,13 @@ export async function getPaymentSourcePreviewAction(
   return getPaymentSourcePreview(customerId);
 }
 
+export async function getPaymentCaptureAllocationsAction(
+  paymentId: string,
+): Promise<PaymentCaptureAllocationRow[]> {
+  await ensurePaymentsTableAccess();
+  return getPaymentCaptureAllocations(paymentId);
+}
+
 export type PaymentsExportKind = "excel" | "pdf";
 
 export async function exportPaymentsSourceAction(
@@ -65,15 +74,25 @@ export async function exportPaymentsSourceAction(
     const rows = await listPaymentsSourceForExport({ ...exportQuery, filters });
     if (rows.length === 0) return { ok: false, error: "אין שורות לייצוא" };
 
-    const headers = ["מספר תשלום", "לקוח", "קוד לקוח", "תאריך", "דולר", "שקלים", "אמצעי תשלום"];
+    const headers = [
+      "מספר תשלום",
+      "תאריך",
+      "לקוח",
+      "סה״כ תשלום ($)",
+      "שקלים",
+      "דולרים",
+      "אמצעי תשלום",
+      "סטטוס",
+    ];
     const data = rows.map((r) => [
       r.paymentCode,
-      r.customerName,
-      r.customerCode,
       r.paymentDateYmd,
-      r.usd,
-      r.ils,
+      r.customerName,
+      r.totalUsd === "—" ? "—" : `$${r.totalUsd}`,
+      r.ils === "—" ? "—" : `₪${r.ils}`,
+      r.usd === "—" ? "—" : `$${r.usd}`,
       r.methodLabel,
+      r.statusLabel,
     ]);
 
     const stamp = new Date().toISOString().slice(0, 10);

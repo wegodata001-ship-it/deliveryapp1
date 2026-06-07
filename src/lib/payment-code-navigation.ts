@@ -125,9 +125,16 @@ export async function listCustomerCapturePaymentsForNav(
   const wc =
     workCountry && isCapturePaymentNavCountry(workCountry) ? workCountry : null;
 
+  const navQueryStart = Date.now();
   const rows = await findActiveCustomerCapturePaymentsForNav({
     customerId: cid,
     workCountry: wc,
+  });
+  console.log("PAYMENT CAPTURE PERF", {
+    label: "navigation.list",
+    navigationQueryMs: Date.now() - navQueryStart,
+    customerId: cid,
+    rowCount: rows.length,
   });
 
   const seen = new Set<string>();

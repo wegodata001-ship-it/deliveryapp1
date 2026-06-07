@@ -81,6 +81,7 @@ import { loadPaymentEntryPayload, type PaymentEntryPayload } from "@/lib/payment
 import type { PaymentNavigationCacheEntryPayload } from "@/lib/payment-navigation-cache";
 import { fetchPaymentIntakeCustomerOrdersAction } from "@/app/admin/payments/intake/actions";
 import type { CapturePaymentNavCountry } from "@/lib/payment-code-navigation";
+import { normalizeCapturePaymentCodeQuery } from "@/lib/payment-code-search";
 import { normalizeWorkCountryCode, type WorkCountryCode } from "@/lib/work-country";
 import { ensureOnce } from "@/lib/ensure-tables-once";
 import { parseSplitPaymentMethodRaw } from "@/lib/order-capture-payment-methods";
@@ -312,7 +313,12 @@ type CaptureDbClient = typeof prisma | Prisma.TransactionClient;
 type CaptureActorResult = AppUser | { error: string };
 
 /** מאמת session + User ב-DB לפני create/update — מונע FK על createdById */
-async function resolveCaptureActor(apiSession: SessionPayload | null): Promise<CaptureActorResult> {
+async function resolveCaptureActor(
+  apiSession: SessionPayload | null,
+  preAuthenticated?: AppUser | null,
+): Promise<CaptureActorResult> {
+  if (preAuthenticated) return preAuthenticated;
+
   const user = apiSession ? await resolveSessionToAppUser(apiSession) : await getCurrentUser();
   if (!user) {
     return { error: apiSession ? "User Session Invalid" : "לא מחובר" };
@@ -675,6 +681,34 @@ export async function loadPaymentCaptureByCodeAction(input: {
   const entry = await loadPaymentEntryPayload(id);
   if (!entry) return { ok: false, error: "לא ניתן לטעון קליטת תשלום" };
   return { ok: true, entry };
+}
+
+/** חיפוש קליטה לפי קוד — 7 / 0007 / TR-P-000007 (בלתי תלוי ב-Navigation Store) */
+export async function resolveCapturePaymentByCodeQueryAction(
+  query: string,
+  workCountry?: string,
+): Promise<
+  | { ok: true; paymentId: string; paymentCode: string }
+  | { ok: false; error: string }
+> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["receive_payments"])) {
+    return { ok: false, error: "אין הרשאה" };
+  }
+  const raw = query.trim();
+  if (!raw) return { ok: false, error: "הזן קוד תשלום" };
+
+  const fallbackWc = normalizeWorkCountryCode(workCountry ?? "") ?? DEFAULT_WORK_COUNTRY;
+  const code = normalizeCapturePaymentCodeQuery(raw, fallbackWc);
+  if (!code) return { ok: false, error: "קוד תשלום לא תקין" };
+
+  const wc = workCountryFromCapturePaymentCode(code);
+  if (!wc) return { ok: false, error: "קוד התשלום לא מזוהה למדינה (TR-P / CN-P / AE-P)" };
+
+  const paymentId = await findCapturePaymentIdByCode(code, wc);
+  if (!paymentId) return { ok: false, error: `לא נמצא תשלום ${code}` };
+
+  return { ok: true, paymentId, paymentCode: code };
 }
 
 export async function listPaymentLocationsForPaymentAction(): Promise<PaymentLocationOptionRow[]> {
@@ -1502,20 +1536,24 @@ export async function captureOrderAction(form: {
 export async function captureOrderActionForApi(
   form: Parameters<typeof captureOrderAction>[0],
   session: SessionPayload,
+  preAuthenticated?: AppUser | null,
 ): Promise<CaptureState> {
-  return captureOrderActionInner(form, session);
+  return captureOrderActionInner(form, session, preAuthenticated);
 }
 
 async function captureOrderActionInner(
   form: Parameters<typeof captureOrderAction>[0],
   apiSession: SessionPayload | null,
+  preAuthenticated?: AppUser | null,
 ): Promise<CaptureState> {
   const perf = new CaptureSavePerf();
   const cacheT0 = Date.now();
   warmCaptureHotPathCaches();
   perf.cacheRefreshMs = Date.now() - cacheT0;
 
-  const actor = await perf.time("authMs", () => resolveCaptureActor(apiSession));
+  const actor = preAuthenticated
+    ? preAuthenticated
+    : await perf.time("authMs", () => resolveCaptureActor(apiSession));
   if ("error" in actor) return { ok: false, error: actor.error };
   const me = actor;
 
@@ -2517,20 +2555,24 @@ export async function updateOrderWorkPanelAction(form: {
 export async function updateOrderWorkPanelActionForApi(
   form: Parameters<typeof updateOrderWorkPanelAction>[0],
   session: SessionPayload,
+  preAuthenticated?: AppUser | null,
 ): Promise<CaptureState> {
-  return updateOrderWorkPanelActionInner(form, session);
+  return updateOrderWorkPanelActionInner(form, session, preAuthenticated);
 }
 
 async function updateOrderWorkPanelActionInner(
   form: Parameters<typeof updateOrderWorkPanelAction>[0],
   apiSession: SessionPayload | null,
+  preAuthenticated?: AppUser | null,
 ): Promise<CaptureState> {
   const perf = new CaptureSavePerf();
   const cacheT0 = Date.now();
   warmCaptureHotPathCaches();
   perf.cacheRefreshMs = Date.now() - cacheT0;
 
-  const actor = await perf.time("authMs", () => resolveCaptureActor(apiSession));
+  const actor = preAuthenticated
+    ? preAuthenticated
+    : await perf.time("authMs", () => resolveCaptureActor(apiSession));
   if ("error" in actor) return { ok: false, error: actor.error };
   const me = actor;
 

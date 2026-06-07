@@ -18,6 +18,14 @@ export type OrderNumberAllocation = {
   sequence: number;
 };
 
+const BOOTSTRAPPED_GLOBAL_KEY = "__wegoOrderCounterBootstrapped__";
+
+function bootstrappedKeys(): Set<string> {
+  const g = globalThis as typeof globalThis & { [BOOTSTRAPPED_GLOBAL_KEY]?: Set<string> };
+  if (!g[BOOTSTRAPPED_GLOBAL_KEY]) g[BOOTSTRAPPED_GLOBAL_KEY] = new Set();
+  return g[BOOTSTRAPPED_GLOBAL_KEY];
+}
+
 async function ensureOrderWeekCounterTable(): Promise<void> {
   await ensureOnce("order-week-counter-table", async () => {
     await prisma.$executeRaw`
@@ -55,7 +63,7 @@ function parseSeqFromOrderNumber(orderNumber: string, prefixes: string[]): numbe
   return 0;
 }
 
-/** סריקת MAX חד-פעמית לשבוע+מדינה */
+/** סריקת MAX — findFirst+orderBy במקום aggregate על כל הטבלה */
 async function scanMaxSequenceFromOrders(
   workCountry: WorkCountryCode,
   weekCode: string,
@@ -63,52 +71,45 @@ async function scanMaxSequenceFromOrders(
 ): Promise<number> {
   const wc = weekCode.trim() || DEFAULT_WEEK_CODE;
   const prefixes = orderNumberPrefixes(workCountry, wc);
-  const wn = weekNumericPart(wc);
-
   const sourceCountry = orderSourceCountryFromWorkCountry(workCountry);
-
-  const [numAgg, legacyAgg, oldAgg] = await Promise.all([
-    db.order.aggregate({
-      where: {
-        countryCode: workCountry as PrismaWorkCountryCode,
-        sourceCountry,
-        weekCode: wc,
-        isActive: true,
-        OR: prefixes.map((p) => ({ orderNumber: { startsWith: p } })),
-      },
-      _max: { orderNumber: true },
-    }),
-    workCountry === "TR"
-      ? db.order.aggregate({
-          where: {
-            countryCode: "TR",
-            sourceCountry: "TURKEY",
-            weekCode: wc,
-            isActive: true,
-            orderNumber: { startsWith: `AH-${wn}-` },
-          },
-          _max: { orderNumber: true },
-        })
-      : Promise.resolve({ _max: { orderNumber: null as string | null } }),
-    db.order.aggregate({
-      where: {
-        countryCode: workCountry as PrismaWorkCountryCode,
-        sourceCountry,
-        weekCode: wc,
-        isActive: true,
-        oldOrderNumber: { not: null },
-      },
-      _max: { oldOrderNumber: true },
-    }),
-  ]);
+  const wn = weekNumericPart(wc);
+  const orClauses = [
+    ...prefixes.map((p) => ({ orderNumber: { startsWith: p } })),
+    ...(workCountry === "TR" ? [{ orderNumber: { startsWith: `AH-${wn}-` } }] : []),
+  ];
 
   let maxSeq = 0;
-  for (const agg of [numAgg, legacyAgg]) {
-    const latest = agg._max.orderNumber;
-    if (latest) maxSeq = Math.max(maxSeq, parseSeqFromOrderNumber(latest, prefixes));
+  const latest = await db.order.findFirst({
+    where: {
+      countryCode: workCountry as PrismaWorkCountryCode,
+      sourceCountry,
+      weekCode: wc,
+      isActive: true,
+      OR: orClauses,
+    },
+    orderBy: { orderNumber: "desc" },
+    select: { orderNumber: true },
+  });
+  if (latest?.orderNumber) {
+    maxSeq = Math.max(maxSeq, parseSeqFromOrderNumber(latest.orderNumber, prefixes));
   }
-  const oldMax = oldAgg._max.oldOrderNumber?.trim();
-  if (oldMax && /^\d{4}$/.test(oldMax)) maxSeq = Math.max(maxSeq, parseInt(oldMax, 10));
+
+  const oldLatest = await db.order.findFirst({
+    where: {
+      countryCode: workCountry as PrismaWorkCountryCode,
+      sourceCountry,
+      weekCode: wc,
+      isActive: true,
+      oldOrderNumber: { not: null },
+    },
+    orderBy: { oldOrderNumber: "desc" },
+    select: { oldOrderNumber: true },
+  });
+  const oldMax = oldLatest?.oldOrderNumber?.trim();
+  if (oldMax && /^\d{4}$/.test(oldMax)) {
+    maxSeq = Math.max(maxSeq, parseInt(oldMax, 10));
+  }
+
   return maxSeq;
 }
 
@@ -135,17 +136,34 @@ async function counterRowExists(
   return rows.length > 0;
 }
 
+async function bumpCounter(
+  counterKey: string,
+  db: Prisma.TransactionClient,
+): Promise<number | null> {
+  const rows = await db.$queryRaw<Array<{ next_number: number }>>`
+    UPDATE "order_week_counter"
+    SET "next_number" = "next_number" + 1,
+        "updated_at" = CURRENT_TIMESTAMP
+    WHERE "week_code" = ${counterKey}
+    RETURNING "next_number"
+  `;
+  const sequence = Number(rows[0]?.next_number ?? 0);
+  return sequence > 0 ? sequence : null;
+}
+
 async function ensureWeekCounterRow(
   workCountry: WorkCountryCode,
   weekCode: string,
-  db: Prisma.TransactionClient | typeof prisma,
+  db: Prisma.TransactionClient,
 ): Promise<void> {
   const wc = weekCode.trim() || DEFAULT_WEEK_CODE;
   const key = orderCounterKey(workCountry, wc);
-  await ensureOrderWeekCounterTable();
   if (await counterRowExists(key, db)) return;
 
-  const maxSeq = await scanMaxSequenceFromOrders(workCountry, wc, db);
+  const bootstrapped = bootstrappedKeys();
+  const maxSeq = bootstrapped.has(key) ? 0 : await scanMaxSequenceFromOrders(workCountry, wc, db);
+  bootstrapped.add(key);
+
   try {
     await db.$executeRaw`
       INSERT INTO "order_week_counter" ("week_code", "next_number", "updated_at")
@@ -157,7 +175,7 @@ async function ensureWeekCounterRow(
   }
 }
 
-/** הקצאה אטומית — מונה לפי מדינה+שבוע */
+/** הקצאה אטומית — מונה לפי מדינה+שבוע; UPDATE בפעולה אחת כשהשורה קיימת */
 export async function allocateNextOrderNumberFromCounter(
   weekCode: string,
   workCountry: WorkCountryCode = DEFAULT_WORK_COUNTRY,
@@ -167,17 +185,14 @@ export async function allocateNextOrderNumberFromCounter(
   await ensureOrderWeekCounterTable();
 
   return prisma.$transaction(async (tx) => {
+    let sequence = await bumpCounter(key, tx);
+    if (sequence != null) return formatAllocation(workCountry, wc, sequence);
+
     await ensureWeekCounterRow(workCountry, wc, tx);
-
-    const rows = await tx.$queryRaw<Array<{ next_number: number }>>`
-      UPDATE "order_week_counter"
-      SET "next_number" = "next_number" + 1,
-          "updated_at" = CURRENT_TIMESTAMP
-      WHERE "week_code" = ${key}
-      RETURNING "next_number"
-    `;
-
-    const sequence = Number(rows[0]?.next_number ?? 1);
+    sequence = await bumpCounter(key, tx);
+    if (sequence == null) {
+      throw new Error("order counter allocation failed");
+    }
     return formatAllocation(workCountry, wc, sequence);
   });
 }
@@ -189,11 +204,30 @@ export async function peekNextOrderNumberFromCounter(
   const wc = weekCode.trim() || DEFAULT_WEEK_CODE;
   const key = orderCounterKey(workCountry, wc);
   await ensureOrderWeekCounterTable();
-  await ensureWeekCounterRow(workCountry, wc, prisma);
 
   const rows = await prisma.$queryRaw<Array<{ next_number: number }>>`
     SELECT "next_number" FROM "order_week_counter" WHERE "week_code" = ${key} LIMIT 1
   `;
-  const sequence = Number(rows[0]?.next_number ?? 0) + 1;
+  if (rows.length > 0) {
+    const sequence = Number(rows[0]?.next_number ?? 0) + 1;
+    return formatAllocation(workCountry, wc, sequence);
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await ensureWeekCounterRow(workCountry, wc, tx);
+  });
+
+  const after = await prisma.$queryRaw<Array<{ next_number: number }>>`
+    SELECT "next_number" FROM "order_week_counter" WHERE "week_code" = ${key} LIMIT 1
+  `;
+  const sequence = Number(after[0]?.next_number ?? 0) + 1;
   return formatAllocation(workCountry, wc, sequence);
+}
+
+/** חימום מונה לשבוע+מדינה — לקריאה מ-/api/orders/next-number או בפתיחת טופס */
+export async function warmOrderWeekCounter(
+  weekCode: string,
+  workCountry: WorkCountryCode = DEFAULT_WORK_COUNTRY,
+): Promise<void> {
+  await peekNextOrderNumberFromCounter(weekCode, workCountry);
 }

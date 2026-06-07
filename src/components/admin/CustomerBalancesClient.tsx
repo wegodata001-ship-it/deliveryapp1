@@ -74,10 +74,9 @@ function moneyUsdCell(value: string): string {
   return formatUsdDisplay(parseMoneyStringOrZero(value));
 }
 
-function balanceUi(balanceIls: string): { label: string; tone: BalanceUiTone } {
-  const n = dec(balanceIls);
+function balanceUiFromUsd(totalBalanceUsd: string): { label: string; tone: BalanceUiTone } {
+  const n = parseMoneyStringOrZero(totalBalanceUsd);
   if (n > 0.01) return { label: "חוב פתוח", tone: "debt" };
-  if (n < -0.01) return { label: "יתרה", tone: "credit" };
   return { label: "מאוזן", tone: "balanced" };
 }
 
@@ -162,7 +161,7 @@ function defaultSearchDraft(): BalancesSearchDraft {
     code: "",
     name: "",
     phone: "",
-    balanceStatus: "OWES",
+    balanceStatus: "ALL",
     orderStatus: "ALL",
     minBalanceIls: "",
     maxBalanceIls: "",
@@ -245,12 +244,11 @@ export function CustomerBalancesClient() {
   /** מקור יחיד לשאילתה — מסונכרן עם תצוגת השבוע (לא ממתין לעדכון URL) */
   const balancesQueryScope = useMemo(() => {
     const week = normalizeAhWeekCode(balancesFilters.weekCode) ?? ACTIVE_WORK_WEEK_CODE;
-    const weekRange = getAhWeekRange(week);
-    const from = weekRange?.from ?? "";
-    const to = weekRange?.to ?? balancesFilters.toYmd ?? "";
+    const snapshotTo = balancesFilters.toYmd?.trim() || balancesSnapshotToYmd(week);
+    const snapshotWeek = prevWeekCode(week);
     const urlCountry = orderCountryCodeForWorkCountry(resolveWorkCountryFromSearchParams(sp));
     const country = balancesFilters.sourceCountry || urlCountry;
-    return { week, country, from, to };
+    return { week, snapshotWeek, country, snapshotTo };
   }, [balancesFilters.weekCode, balancesFilters.toYmd, balancesFilters.sourceCountry, sp]);
 
   useEffect(() => {
@@ -301,8 +299,8 @@ export function CustomerBalancesClient() {
       page: p,
       limit: LIMIT,
       weekCode: balancesQueryScope.week,
-      fromYmd: balancesQueryScope.from,
-      toYmd: balancesQueryScope.to,
+      uptoWeekCode: balancesQueryScope.snapshotWeek ?? undefined,
+      toYmd: balancesQueryScope.snapshotTo,
       sourceCountry: balancesQueryScope.country,
       filters: {
         code: debouncedSearch.code.trim() || undefined,
@@ -318,21 +316,22 @@ export function CustomerBalancesClient() {
     [balancesFilters.sort, balancesQueryScope, debouncedSearch],
   );
 
-  const { week: scopeWeek, country: scopeCountry, from: scopeFrom, to: scopeTo } = balancesQueryScope;
+  const { week: scopeWeek, country: scopeCountry, snapshotTo: scopeTo, snapshotWeek: scopeSnapshotWeek } =
+    balancesQueryScope;
 
   useEffect(() => {
     console.log({
       week: scopeWeek,
       country: scopeCountry,
-      from: scopeFrom,
+      snapshotWeek: scopeSnapshotWeek,
       to: scopeTo,
     });
-    const key = `${scopeWeek}|${scopeCountry}|${scopeFrom}|${scopeTo}`;
+    const key = `${scopeWeek}|${scopeCountry}|${scopeSnapshotWeek ?? ""}|${scopeTo}`;
     if (balancesScopeKeyRef.current !== null && balancesScopeKeyRef.current !== key) {
       refetchBalances();
     }
     balancesScopeKeyRef.current = key;
-  }, [scopeWeek, scopeCountry, scopeFrom, scopeTo, refetchBalances]);
+  }, [scopeWeek, scopeCountry, scopeSnapshotWeek, scopeTo, refetchBalances]);
 
   useEffect(() => {
     if (!urlReady) return;
@@ -340,8 +339,8 @@ export function CustomerBalancesClient() {
     const query = buildListQuery(page);
     console.log("[balances-client-fetch]", {
       week: query.weekCode,
+      uptoWeek: query.uptoWeekCode,
       country: query.sourceCountry,
-      from: query.fromYmd,
       to: query.toYmd,
       page: query.page,
       refreshSig,
@@ -778,7 +777,7 @@ export function CustomerBalancesClient() {
                 </tr>
               ) : (
                 payload?.rows.map((r) => {
-                  const ui = balanceUi(r.balanceILS);
+                  const ui = balanceUiFromUsd(r.totalBalanceUSD);
                   const ordersUsd = rowOrdersUsdSplit(r);
                   const openDebtUsd = rowOpenBalanceUsd(r);
                   return (

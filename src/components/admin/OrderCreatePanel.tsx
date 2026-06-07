@@ -216,10 +216,14 @@ async function saveCaptureFast(payload: Record<string, unknown>): Promise<Captur
     body: JSON.stringify(payload),
   });
   const fetchMs = Math.round(now() - t0);
+  const serverActionMs = Number(res.headers.get("X-Capture-Action-Ms") ?? "");
+  const serverResponseSentAt = res.headers.get("X-Capture-Response-Sent-At");
   const jsonT0 = now();
   const data = (await res.json().catch(() => null)) as CaptureState | null;
   const jsonMs = Math.round(now() - jsonT0);
   const totalMs = Math.round(now() - t0);
+  const clientOverServerMs =
+    Number.isFinite(serverActionMs) && serverActionMs > 0 ? fetchMs - serverActionMs : undefined;
   if (process.env.NODE_ENV === "development" || totalMs > 500) {
     console.log("[capture.client]", {
       mode: payload.mode,
@@ -227,8 +231,11 @@ async function saveCaptureFast(payload: Record<string, unknown>): Promise<Captur
       fetchMs,
       jsonMs,
       totalMs,
+      serverActionMs: Number.isFinite(serverActionMs) ? serverActionMs : undefined,
+      serverResponseSentAt,
+      clientOverServerMs,
       afterFetchMs: totalMs - fetchMs,
-      hint: "afterFetchMs ≈ JSON parse + React; compare fetchMs to server apiMs",
+      hint: "clientOverServerMs ≈ network+TLS; fetchMs should ≈ server apiMs",
     });
   }
   return data ?? { ok: false, error: "שגיאה בשמירה" };
@@ -1124,15 +1131,14 @@ export function OrderCreatePanel({
           const res = await saveCaptureFast(savePayload(feeStr));
           if (!res.ok) throw new Error(res.error);
           setIsSaving(false);
-          onToast("ההזמנה עודכנה בהצלחה!");
-          window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
-          if (s.selectedCustomer?.id) void loadCustomerExtras(s.selectedCustomer.id);
+          onToast("ההזמנה נשמרה");
           if (keepOpen) {
             /* stay open */
           } else {
             onClose();
           }
           queueMicrotask(() => {
+            window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
             onSaved?.();
           });
         } else {
@@ -1140,9 +1146,7 @@ export function OrderCreatePanel({
           const res = await saveCaptureFast(savePayload(feeStr));
           if (!res.ok) throw new Error(res.error);
           setIsSaving(false);
-          onToast("הזמנה נשמרה בהצלחה");
-          window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
-          if (s.selectedCustomer?.id) void loadCustomerExtras(s.selectedCustomer.id);
+          onToast("ההזמנה נשמרה");
           if (res.nextOrderNumberPreview) {
             setOrderNumberPreview(res.nextOrderNumberPreview);
           }
@@ -1152,6 +1156,7 @@ export function OrderCreatePanel({
             onClose();
           }
           queueMicrotask(() => {
+            window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
             onSaved?.();
           });
         }
@@ -1164,7 +1169,7 @@ export function OrderCreatePanel({
         setIsSaving(false);
       }
     },
-    [pickCustomer, loadCustomerExtras, onToast, onSaved, onClose, resetFormForNew],
+    [pickCustomer, onToast, onSaved, onClose, resetFormForNew],
   );
 
   const onSubmit = useCallback(

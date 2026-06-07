@@ -31,7 +31,6 @@ import {
 } from "@/lib/customer-balance-order-status";
 import { computeSignedFromTotals } from "@/lib/customer-balance";
 import { calculateCustomerBalances } from "@/lib/customer-balance-calculator";
-import { customerHasOpenBalance } from "@/lib/customer-balances-display";
 import {
   orderStatusesForBalanceFilter,
   parseCustomerBalanceOrderStatusFilter,
@@ -782,41 +781,9 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     ...buildCustomerWhere(query),
     countryCode: countryScope.workCountry,
   };
-  const smartTrim = query.filters?.smart?.trim();
-  const scopeToActivity = !query.customerId?.trim() && !smartTrim;
-  const activityOrderWhere: Prisma.OrderWhereInput = lifetime
-    ? {
-        deletedAt: null,
-        countryCode: countryScope.workCountry,
-        sourceCountry: countryScope.sourceCountry,
-      }
-    : orderNestedWhere;
-  /** לקוחות חדשים (7 ימים) — גם בלי הזמנה/תשלום בתחום */
-  const recentSignupCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const customerWhereFinal: Prisma.CustomerWhereInput = scopeToActivity
-    ? {
-        AND: [
-          customerWhere,
-          {
-            OR: [
-              buildCustomerActivityScope(
-                activityOrderWhere,
-                paymentDateFilter,
-                lifetime ? undefined : query.weekCode?.trim(),
-                lifetime || !!cumulativeThrough,
-                orderCountryPrisma,
-                countryScope.workCountry,
-              ),
-              { createdAt: { gte: recentSignupCutoff } },
-            ],
-          },
-        ],
-      }
-    : customerWhere;
-
   const customers = await perfTimed((ms) => (fetchCustomersMs += ms), () =>
     prisma.customer.findMany({
-      where: customerWhereFinal,
+      where: customerWhere,
       orderBy: { displayName: "asc" },
       select: {
         id: true,
@@ -1046,6 +1013,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     const receiptsIls = receivedIls.add(creditsIls);
     const creditsUsd = creditUsdByCustomer.get(c.id) ?? new Prisma.Decimal(0);
     const expectedUsd = shared?.totalOrders ?? expectedUsdByCustomer.get(c.id) ?? new Prisma.Decimal(0);
+    const paymentsUsdOnly = shared?.totalPayments ?? receivedUsdByCustomer.get(c.id) ?? new Prisma.Decimal(0);
     const receivedUsd = shared
       ? shared.totalPayments.add(shared.totalWithdrawals)
       : receivedUsdByCustomer.get(c.id) ?? new Prisma.Decimal(0);
@@ -1062,7 +1030,9 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     const calculated = autoStatus(expectedIls, receivedIls);
     const override = overrideMap.get(c.id) ?? null;
     const oc = shared?.ordersCount ?? orderCountByCustomer.get(c.id) ?? 0;
-    let balUsdDec = shared?.balance ?? expectedUsd.sub(receivedUsd);
+    let balUsdDec =
+      shared?.balance ??
+      expectedUsd.sub(paymentsUsdOnly).sub(shared?.totalWithdrawals ?? new Prisma.Decimal(0));
     if (creditsUsd.gt(0)) {
       balUsdDec = balUsdDec.sub(creditsUsd);
     }
@@ -1100,7 +1070,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       lifetimeOrdersUSD: money(lifetimeUsd),
       ordersCount: oc,
       totalOrdersUSD: money(expectedUsd),
-      totalPaymentsUSD: money(receivedUsd),
+      totalPaymentsUSD: money(paymentsUsdOnly),
       totalBalanceUSD: money(balUsdDec),
       totalOrdersILS: money(expectedIls),
       totalPaymentsILS: money(receivedIls),
@@ -1135,11 +1105,6 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   const maxB = parseIlsFilter(query.filters?.maxBalanceIls);
 
   let filtered = rows.filter((r) => matchesDebtFilter(r, debtFilter));
-
-  /** דוח גבייה — ללא חוב פתוח: לא בטבלה, לא ב-KPI (מלבד סינון «זכות» מפורש) */
-  if (debtFilter !== "CREDIT") {
-    filtered = filtered.filter((r) => customerHasOpenBalance(r));
-  }
 
   if (query.filters?.hasPayments) {
     const epsPay = 0.01;
@@ -1345,7 +1310,7 @@ export async function listCustomerBalancesReportModalAction(
     filters: {
       smart: modal.smart,
       orderPhase: modal.orderPhase ?? "ALL",
-      balanceDebtStatus: "OWES",
+      balanceDebtStatus: "ALL",
       minBalanceIls: modal.minBalanceIls,
       maxBalanceIls: modal.maxBalanceIls,
       minBalanceUsd: modal.minBalanceUsd,

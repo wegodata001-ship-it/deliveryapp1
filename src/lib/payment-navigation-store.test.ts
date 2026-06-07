@@ -74,4 +74,18 @@ describe("PaymentNavigationStore", () => {
     store.syncToPaymentId("missing");
     assert.equal(store.getState().currentIndex, 2);
   });
+
+  it("sync by paymentCode when opened id differs from nav list id", () => {
+    const store = createPaymentNavigationStore();
+    store.setNavPayments(
+      [
+        { id: "canonical-1", paymentCode: "TR-P-000001" },
+        { id: "canonical-5", paymentCode: "TR-P-000005" },
+      ],
+      { syncPaymentId: "opened-row-5", syncPaymentCode: "TR-P-000005" },
+    );
+    assert.equal(store.getState().currentIndex, 1);
+    assert.equal(store.currentPaymentId(), "canonical-5");
+    assert.equal(store.currentPaymentCode(), "TR-P-000005");
+  });
 });

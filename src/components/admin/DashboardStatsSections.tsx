@@ -13,7 +13,7 @@ import type { AppUser } from "@/lib/admin-auth";
 import { getDashboardStatsCore, type DashboardStatsRange } from "@/lib/dashboard-stats";
 import { resolveWorkCountryFromSearchParams } from "@/lib/work-country";
 import { withPerfTimer } from "@/lib/perf-log";
-import { adminOrdersHrefWithFilters } from "@/lib/admin-href";
+import { adminOrdersHrefWithFilters, adminSourceTableHref } from "@/lib/admin-href";
 import { DashboardAnimatedNumber } from "@/components/admin/DashboardAnimatedNumber";
 import { DashboardSparkline } from "@/components/admin/DashboardSparkline";
 import {
@@ -37,7 +37,9 @@ export async function DashboardStatsSections({ me, range, searchParams, showStaf
 
   const alertsTotalFast =
     stats.alerts.pendingPaymentsOlderThan24h + stats.alerts.unpaidOrders;
-  const paymentsPendingHref = "/admin/source-tables/payments?search=%D7%9C%D7%90";
+  const paymentsPendingHref = adminSourceTableHref("payments", searchParams, {
+    search: "לא",
+  });
 
   return (
     <>
@@ -92,7 +94,10 @@ export async function DashboardStatsSections({ me, range, searchParams, showStaf
             <DashboardHighBalanceKpi workCountry={workCountry} />
           </Suspense>
 
-          <Link className="adm-dash-kpi-xl adm-dash-kpi-xl--green" href="/admin/source-tables/payments?search=%D7%9B%D7%9F">
+          <Link
+            className="adm-dash-kpi-xl adm-dash-kpi-xl--green"
+            href={adminSourceTableHref("payments", searchParams, { search: "כן" })}
+          >
             <div className="adm-dash-kpi-xl__top">
               <span className="adm-dash-kpi-xl__icon" aria-hidden>
                 <Wallet size={18} strokeWidth={2} />

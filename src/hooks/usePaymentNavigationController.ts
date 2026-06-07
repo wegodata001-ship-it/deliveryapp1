@@ -2,112 +2,195 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listCustomerCapturePaymentsForNavAction } from "@/app/admin/capture/actions";
-import { createPaymentNavigationStore, type PaymentNavigationStore } from "@/lib/payment-navigation-store";
+import {
+  createPaymentNavigationStore,
+  type PaymentNavigationStore,
+  type PaymentNavigationSyncHint,
+} from "@/lib/payment-navigation-store";
 import type { WorkCountryCode } from "@/lib/work-country";
+
+export type NavPaymentListItem = {
+  id: string;
+  paymentCode: string;
+};
 
 type Options = {
   customerId: string | null;
   workCountry: WorkCountryCode;
+  /** מזהה מפתיחה מטבלה — לפני שהטופס נטען */
+  openingPaymentId?: string | null;
   currentPaymentId: string | null;
-  /** קוד קליטה שמור/מוצג — גיבוי לסנכרון כשמזהה השורה ברשימה שונה */
   currentPaymentCode: string | null;
   saveBusy: boolean;
-  paymentNavLoading: boolean;
   isDirty: () => boolean;
-  loadPayment: (paymentId: string) => Promise<boolean>;
+  /** סנכרון טופס לפי מקור האמת — navigationStore.currentPaymentId */
+  onNavPaymentChange: (paymentId: string, paymentCode: string | null) => void;
+  /** טעינה מרוכזת של כל התשלומים לזיכרון */
+  onNavListReady?: (payments: NavPaymentListItem[]) => void;
 };
 
-type NavSyncHint = {
-  paymentId?: string | null;
-  paymentCode?: string | null;
-};
-
-function resolveNavIndex(ids: readonly string[], codes: readonly string[], hint: NavSyncHint): number {
-  const id = hint.paymentId?.trim();
-  if (id) {
-    const byId = ids.findIndex((x) => x === id);
-    if (byId >= 0) return byId;
-  }
-  const code = hint.paymentCode?.trim().toUpperCase();
-  if (code) {
-    const byCode = codes.findIndex((c) => c.trim().toUpperCase() === code);
-    if (byCode >= 0) return byCode;
-  }
-  return -1;
-}
-
-function logNavOpenSnapshot(params: {
-  currentPaymentId: string | null;
-  currentCustomerId: string;
-  paymentIds: readonly string[];
-  paymentCodes: readonly string[];
-}) {
-  console.log({
-    currentPaymentId: params.currentPaymentId,
-    currentCustomerId: params.currentCustomerId,
-    paymentIds: params.paymentIds,
-    paymentCount: params.paymentIds.length,
+function logPaymentNavState(
+  label: string,
+  hint: PaymentNavigationSyncHint,
+  state: { paymentIds: readonly string[]; paymentCodes: readonly string[]; currentIndex: number },
+) {
+  const paymentId = hint.paymentId?.trim() || null;
+  const paymentCode = hint.paymentCode?.trim() || null;
+  const findIndex = paymentId ? state.paymentIds.findIndex((x) => x === paymentId) : -1;
+  const findIndexByCode = paymentCode
+    ? state.paymentCodes.findIndex((c) => c.toUpperCase() === paymentCode.toUpperCase())
+    : -1;
+  console.log(label, {
+    currentPaymentId: paymentId,
+    currentPaymentCode: paymentCode,
+    paymentIds: state.paymentIds,
+    paymentCodes: state.paymentCodes,
+    findIndex: findIndex >= 0 ? findIndex : findIndexByCode,
+    currentIndex: state.currentIndex,
   });
-  console.log("NAV PAYMENTS", params.paymentCodes);
 }
 
 export function usePaymentNavigationController({
   customerId,
   workCountry,
+  openingPaymentId,
   currentPaymentId,
   currentPaymentCode,
   saveBusy,
-  paymentNavLoading,
   isDirty,
-  loadPayment,
+  onNavPaymentChange,
+  onNavListReady,
 }: Options) {
   const storeRef = useRef<PaymentNavigationStore>(createPaymentNavigationStore());
   const navCustomerRef = useRef<string | null>(null);
   const navWorkCountryRef = useRef<WorkCountryCode | null>(null);
   const initInflightRef = useRef<Promise<void> | null>(null);
-  const paymentCodesRef = useRef<string[]>([]);
-  const pendingSyncRef = useRef<NavSyncHint | null>(null);
-  const navInFlightRef = useRef(false);
+  const initGenRef = useRef(0);
+  const pendingSyncRef = useRef<PaymentNavigationSyncHint | null>(null);
+  const activePaymentRef = useRef<PaymentNavigationSyncHint>({ paymentId: null, paymentCode: null });
+  const onNavListReadyRef = useRef(onNavListReady);
+  onNavListReadyRef.current = onNavListReady;
+  const onNavPaymentChangeRef = useRef(onNavPaymentChange);
+  onNavPaymentChangeRef.current = onNavPaymentChange;
+
+  const currentPaymentIdRef = useRef(currentPaymentId);
+  const currentPaymentCodeRef = useRef(currentPaymentCode);
+  const openingPaymentIdRef = useRef(openingPaymentId);
+  currentPaymentIdRef.current = currentPaymentId;
+  currentPaymentCodeRef.current = currentPaymentCode;
+  openingPaymentIdRef.current = openingPaymentId;
+
   const [revision, setRevision] = useState(0);
   const [navUnsavedPendingId, setNavUnsavedPendingId] = useState<string | null>(null);
 
   const bump = useCallback(() => setRevision((n) => n + 1), []);
 
-  const applyNavSync = useCallback(
-    (hint: NavSyncHint, context?: string): boolean => {
-      const state = storeRef.current.getState();
-      const ids = state.paymentIds;
-      const codes = paymentCodesRef.current;
-      if (ids.length === 0) return false;
+  const buildSyncHint = useCallback((): PaymentNavigationSyncHint => {
+    return {
+      paymentId:
+        activePaymentRef.current.paymentId?.trim() ||
+        pendingSyncRef.current?.paymentId?.trim() ||
+        currentPaymentIdRef.current?.trim() ||
+        openingPaymentIdRef.current?.trim() ||
+        null,
+      paymentCode:
+        activePaymentRef.current.paymentCode?.trim() ||
+        pendingSyncRef.current?.paymentCode?.trim() ||
+        currentPaymentCodeRef.current?.trim() ||
+        null,
+    };
+  }, []);
 
-      const merged: NavSyncHint = {
+  const applyNavSync = useCallback(
+    (hint: PaymentNavigationSyncHint, context?: string): boolean => {
+      const store = storeRef.current;
+      const before = store.getState();
+      if (before.paymentIds.length === 0) return false;
+
+      const merged: PaymentNavigationSyncHint = {
         paymentId:
           hint.paymentId?.trim() ||
+          activePaymentRef.current.paymentId?.trim() ||
           pendingSyncRef.current?.paymentId?.trim() ||
-          currentPaymentId?.trim() ||
-          storeRef.current.currentPaymentId() ||
+          currentPaymentIdRef.current?.trim() ||
+          openingPaymentIdRef.current?.trim() ||
           null,
         paymentCode:
           hint.paymentCode?.trim() ||
+          activePaymentRef.current.paymentCode?.trim() ||
           pendingSyncRef.current?.paymentCode?.trim() ||
-          currentPaymentCode?.trim() ||
+          currentPaymentCodeRef.current?.trim() ||
           null,
       };
 
-      const idx = resolveNavIndex(ids, codes, merged);
-      if (idx < 0) return false;
+      const prevIndex = before.currentIndex;
+      const synced = store.syncToPayment(merged);
+      if (!synced) {
+        logPaymentNavState(`NAV SYNC MISS (${context ?? "applyNavSync"})`, merged, before);
+        return false;
+      }
 
-      storeRef.current.syncToPaymentId(ids[idx]!);
+      const syncedState = store.getState();
+      const canonicalId = syncedState.paymentIds[syncedState.currentIndex] ?? null;
+      const canonicalCode = syncedState.paymentCodes[syncedState.currentIndex] ?? null;
+      activePaymentRef.current = {
+        paymentId: canonicalId,
+        paymentCode: canonicalCode,
+      };
       pendingSyncRef.current = null;
-      storeRef.current.log(context ?? "applyNavSync");
-      bump();
+      if (syncedState.currentIndex !== prevIndex) bump();
+      store.log(context ?? "applyNavSync");
       return true;
     },
-    [currentPaymentId, currentPaymentCode, bump],
+    [bump],
   );
 
+  const ensureNavSynced = useCallback(
+    (context?: string): boolean => {
+      const state = storeRef.current.getState();
+      if (state.paymentIds.length === 0) return false;
+      const hint = buildSyncHint();
+      if (!hint.paymentId && !hint.paymentCode) return false;
+
+      logPaymentNavState(context ?? "NAV ENSURE SYNC", hint, state);
+
+      const idx = storeRef.current.resolveIndex(hint);
+      if (idx >= 0 && state.currentIndex === idx) return true;
+
+      return applyNavSync(hint, context ?? "ensureNavSynced");
+    },
+    [buildSyncHint, applyNavSync],
+  );
+
+  const setCurrentPayment = useCallback(
+    (paymentId: string | null, paymentCode?: string | null) => {
+      const id = paymentId?.trim() || null;
+      const code = paymentCode?.trim() || null;
+      pendingSyncRef.current = { paymentId: id, paymentCode: code };
+      const synced = applyNavSync({ paymentId: id, paymentCode: code }, "setCurrentPayment");
+      if (!synced && (id || code)) {
+        pendingSyncRef.current = { paymentId: id, paymentCode: code };
+      }
+    },
+    [applyNavSync],
+  );
+
+  const logNavInit = useCallback(() => {
+    const state = storeRef.current.getState();
+    const hint = buildSyncHint();
+    logPaymentNavState("NAV INIT", hint, state);
+    storeRef.current.logStoreBuilt("nav-init");
+  }, [buildSyncHint]);
+
+  useEffect(() => {
+    const seedId = openingPaymentId?.trim();
+    if (!seedId) return;
+    if (activePaymentRef.current.paymentId || activePaymentRef.current.paymentCode) return;
+    pendingSyncRef.current = { paymentId: seedId, paymentCode: null };
+  }, [openingPaymentId]);
+
   const initNavListForCustomer = useCallback(
-    async (cid: string, syncHint?: NavSyncHint) => {
+    async (cid: string, initGen: number, syncHint?: PaymentNavigationSyncHint) => {
       const customerKey = cid.trim();
       if (!customerKey) return;
 
@@ -115,46 +198,50 @@ export function usePaymentNavigationController({
         navCustomerRef.current === customerKey && navWorkCountryRef.current === workCountry;
       if (initInflightRef.current && sameScope) {
         await initInflightRef.current;
-        applyNavSync(syncHint ?? {}, "init-await-resync");
+        if (initGen !== initGenRef.current) return;
+        ensureNavSynced("init-await-resync");
+        logNavInit();
         return;
       }
 
       const promise = listCustomerCapturePaymentsForNavAction(customerKey, workCountry).then((res) => {
+        if (initGen !== initGenRef.current) return;
         if (!res.ok) {
           console.warn("NAV init failed", res.error);
           return;
         }
 
         const payments = res.payments;
-        const ids = payments.map((p) => p.id);
-        paymentCodesRef.current = payments.map((p) => p.paymentCode);
-        const syncId =
-          syncHint?.paymentId?.trim() ||
-          pendingSyncRef.current?.paymentId?.trim() ||
-          currentPaymentId?.trim() ||
-          storeRef.current.currentPaymentId();
+        const syncHintMerged: PaymentNavigationSyncHint = {
+          paymentId:
+            syncHint?.paymentId?.trim() ||
+            activePaymentRef.current.paymentId?.trim() ||
+            pendingSyncRef.current?.paymentId?.trim() ||
+            currentPaymentIdRef.current?.trim() ||
+            openingPaymentIdRef.current?.trim() ||
+            null,
+          paymentCode:
+            syncHint?.paymentCode?.trim() ||
+            activePaymentRef.current.paymentCode?.trim() ||
+            pendingSyncRef.current?.paymentCode?.trim() ||
+            currentPaymentCodeRef.current?.trim() ||
+            null,
+        };
 
-        storeRef.current.setPaymentIds(ids, { syncPaymentId: syncId });
-        const synced = applyNavSync(syncHint ?? {}, "init-customer");
-        if (!synced && storeRef.current.getState().currentIndex < 0 && ids.length > 0) {
-          const hasHint =
-            Boolean(syncHint?.paymentId?.trim()) ||
-            Boolean(syncHint?.paymentCode?.trim()) ||
-            Boolean(pendingSyncRef.current?.paymentId?.trim()) ||
-            Boolean(pendingSyncRef.current?.paymentCode?.trim()) ||
-            Boolean(currentPaymentId?.trim()) ||
-            Boolean(currentPaymentCode?.trim());
-          if (!hasHint) storeRef.current.syncToPaymentId(ids[0]!);
-        }
+        storeRef.current.setNavPayments(payments, {
+          syncPaymentId: syncHintMerged.paymentId,
+          syncPaymentCode: syncHintMerged.paymentCode,
+        });
+        ensureNavSynced("init-customer");
+
         navCustomerRef.current = customerKey;
         navWorkCountryRef.current = workCountry;
 
-        logNavOpenSnapshot({
-          currentPaymentId: storeRef.current.currentPaymentId(),
-          currentCustomerId: customerKey,
-          paymentIds: ids,
-          paymentCodes: paymentCodesRef.current,
-        });
+        storeRef.current.logStoreBuilt("init-customer");
+        logNavInit();
+        onNavListReadyRef.current?.(
+          payments.map((p) => ({ id: p.id, paymentCode: p.paymentCode })),
+        );
       });
 
       initInflightRef.current = promise;
@@ -164,7 +251,32 @@ export function usePaymentNavigationController({
         if (initInflightRef.current === promise) initInflightRef.current = null;
       }
     },
-    [workCountry, currentPaymentId, currentPaymentCode, applyNavSync],
+    [workCountry, ensureNavSynced, logNavInit],
+  );
+
+  const refreshNavList = useCallback(async (overrideCustomerId?: string): Promise<NavPaymentListItem[]> => {
+    const cid =
+      overrideCustomerId?.trim() || customerId?.trim() || navCustomerRef.current?.trim();
+    if (!cid) return [];
+    navWorkCountryRef.current = null;
+    initInflightRef.current = null;
+    const gen = ++initGenRef.current;
+    await initNavListForCustomer(cid, gen, buildSyncHint());
+    const state = storeRef.current.getState();
+    return state.paymentIds.map((id, i) => ({
+      id,
+      paymentCode: state.paymentCodes[i] ?? id,
+    }));
+  }, [customerId, initNavListForCustomer, buildSyncHint]);
+
+  const initNavStore = useCallback(
+    (items: readonly NavPaymentListItem[], sync?: PaymentNavigationSyncHint) => {
+      storeRef.current.initNavStore(items, sync);
+      ensureNavSynced("initNavStore");
+      bump();
+      logNavInit();
+    },
+    [ensureNavSynced, bump, logNavInit],
   );
 
   useEffect(() => {
@@ -172,55 +284,47 @@ export function usePaymentNavigationController({
     if (!cid) {
       navCustomerRef.current = null;
       navWorkCountryRef.current = null;
-      paymentCodesRef.current = [];
-      pendingSyncRef.current = null;
       return;
     }
-    void initNavListForCustomer(cid, {
-      paymentId: storeRef.current.currentPaymentId() ?? currentPaymentId,
-      paymentCode: currentPaymentCode,
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- רק לקוח + מדינה, לא orders/balances
+    const gen = ++initGenRef.current;
+    void initNavListForCustomer(cid, gen, buildSyncHint());
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- רק לקוח + מדינה
   }, [customerId, workCountry, initNavListForCustomer]);
 
+  /** סנכרון store בכל שינוי בתשלום הנוכחי — גם בפתיחה רגילה */
   useEffect(() => {
     const cid = customerId?.trim();
     if (!cid || storeRef.current.getState().paymentIds.length === 0) return;
-    if (navInFlightRef.current || paymentNavLoading) return;
-    if (!currentPaymentId?.trim() && !currentPaymentCode?.trim()) return;
-    applyNavSync({ paymentId: currentPaymentId, paymentCode: currentPaymentCode }, "screen-sync");
-  }, [customerId, currentPaymentId, currentPaymentCode, paymentNavLoading, applyNavSync]);
+    ensureNavSynced("screen-payment-changed");
+  }, [customerId, currentPaymentId, currentPaymentCode, openingPaymentId, ensureNavSynced]);
 
   const syncAfterLoad = useCallback(
     (paymentId: string, paymentCode?: string | null) => {
-      navInFlightRef.current = false;
       pendingSyncRef.current = {
-        paymentId: paymentId.trim() || null,
+        paymentId: paymentId.trim(),
         paymentCode: paymentCode?.trim() || null,
       };
-      applyNavSync(pendingSyncRef.current, "syncAfterLoad");
+      setCurrentPayment(paymentId, paymentCode);
+      logNavInit();
     },
-    [applyNavSync],
+    [setCurrentPayment, logNavInit],
   );
 
   const appendAfterSave = useCallback(
-    (paymentId: string) => {
-      storeRef.current.appendPaymentId(paymentId);
+    (paymentId: string, paymentCode?: string | null) => {
+      storeRef.current.appendPaymentId(paymentId, paymentCode);
+      setCurrentPayment(paymentId, paymentCode);
       storeRef.current.log("appendAfterSave");
+      storeRef.current.logStoreBuilt("appendAfterSave");
       bump();
+      logNavInit();
     },
-    [bump],
+    [setCurrentPayment, bump, logNavInit],
   );
 
   const removePayment = useCallback(
     (paymentId: string) => {
-      const key = paymentId.trim();
-      const state = storeRef.current.getState();
-      const idx = state.paymentIds.findIndex((id) => id === key);
-      if (idx >= 0) {
-        paymentCodesRef.current = paymentCodesRef.current.filter((_, i) => i !== idx);
-      }
-      storeRef.current.removePaymentId(key);
+      storeRef.current.removePaymentId(paymentId.trim());
       storeRef.current.log("removePayment");
       bump();
     },
@@ -228,126 +332,154 @@ export function usePaymentNavigationController({
   );
 
   const resetNav = useCallback(() => {
-    storeRef.current.setPaymentIds([]);
+    storeRef.current.setNavPayments([]);
     navCustomerRef.current = null;
     navWorkCountryRef.current = null;
-    paymentCodesRef.current = [];
+    activePaymentRef.current = { paymentId: null, paymentCode: null };
+    pendingSyncRef.current = null;
     setNavUnsavedPendingId(null);
     bump();
   }, [bump]);
 
-  const logNavStore = useCallback((label: string) => {
+  const stepToPayment = useCallback(
+    (paymentId: string, paymentCode: string | null) => {
+      const state = storeRef.current.getState();
+      logPaymentNavState("NAV STEP", { paymentId, paymentCode }, state);
+      setCurrentPayment(paymentId, paymentCode);
+      onNavPaymentChangeRef.current(paymentId, paymentCode);
+    },
+    [setCurrentPayment],
+  );
+
+  const computeNavEnabled = useCallback((): boolean => {
     const state = storeRef.current.getState();
-    console.log(label, {
-      currentIndex: state.currentIndex,
-      paymentIds: state.paymentIds,
-      paymentCount: state.paymentIds.length,
-      currentPaymentId: storeRef.current.currentPaymentId(),
-    });
-  }, []);
+    if (state.paymentIds.length === 0) return false;
+
+    const hint = buildSyncHint();
+    const inList = storeRef.current.resolveIndex(hint) >= 0;
+
+    if (openingPaymentIdRef.current?.trim()) return true;
+    if (state.currentIndex >= 0) return true;
+    if (inList) return true;
+    // טיוטה חדשה — קוד תצוגה שאינו ברשימת התשלומים השמורים
+    if (!hint.paymentId && hint.paymentCode && !inList) return false;
+    if (hint.paymentId?.trim()) return true;
+    return false;
+  }, [buildSyncHint]);
+
+  const navEnabled = computeNavEnabled();
+
+  const guardNavigation = useCallback((): boolean => {
+    if (!computeNavEnabled()) {
+      console.log("NAV GUARD: new draft or empty list — navigation not available");
+      return false;
+    }
+    if (saveBusy) {
+      console.log("NAV GUARD: saveBusy", { saveBusy });
+      return false;
+    }
+    if (!ensureNavSynced("guard-navigation")) {
+      console.warn("NAV GUARD: could not sync current payment into store");
+      return false;
+    }
+    return true;
+  }, [computeNavEnabled, saveBusy, ensureNavSynced]);
 
   const prevPayment = useCallback(() => {
-    logNavStore("prevPayment()");
-    if (saveBusy || paymentNavLoading) {
-      console.log("NAV GUARD: saveBusy or paymentNavLoading", { saveBusy, paymentNavLoading });
-      return;
-    }
+    const state = storeRef.current.getState();
+    const hint = buildSyncHint();
+    logPaymentNavState("NAV PREV RESOLVE", hint, state);
+    console.log("PREV CLICK (store)", state.currentIndex, storeRef.current.currentPaymentId());
+
+    if (!guardNavigation()) return;
+
     const store = storeRef.current;
     const peek = store.peekPrev();
-    if (!peek) {
-      console.log("NAV GUARD: peekPrev is null");
-      return;
-    }
+    if (!peek) return;
+
     if (isDirty()) {
-      console.log("NAV GUARD: form is dirty → confirm modal", peek.paymentId);
       setNavUnsavedPendingId(peek.paymentId);
       return;
     }
-    navInFlightRef.current = true;
+
     const step = store.prevPayment();
-    logNavStore("prevPayment after step");
     bump();
-    if (!step) {
-      navInFlightRef.current = false;
-      console.log("NAV GUARD: prevPayment step is null");
-      return;
-    }
-    console.log("LOAD PAYMENT", step.paymentId);
-    void loadPayment(step.paymentId).finally(() => {
-      navInFlightRef.current = false;
-    });
-  }, [saveBusy, paymentNavLoading, isDirty, loadPayment, logNavStore, bump]);
+    if (!step) return;
+    const st = store.getState();
+    const code = st.paymentCodes[st.currentIndex] ?? null;
+    stepToPayment(step.paymentId, code);
+  }, [guardNavigation, isDirty, bump, buildSyncHint, stepToPayment]);
 
   const nextPayment = useCallback(() => {
-    logNavStore("nextPayment()");
-    if (saveBusy || paymentNavLoading) {
-      console.log("NAV GUARD: saveBusy or paymentNavLoading", { saveBusy, paymentNavLoading });
-      return;
-    }
+    const state = storeRef.current.getState();
+    const hint = buildSyncHint();
+    logPaymentNavState("NAV NEXT RESOLVE", hint, state);
+    console.log("NEXT CLICK (store)", state.currentIndex, storeRef.current.currentPaymentId());
+
+    if (!guardNavigation()) return;
+
     const store = storeRef.current;
     const peek = store.peekNext();
-    if (!peek) {
-      console.log("NAV GUARD: peekNext is null");
-      return;
-    }
+    if (!peek) return;
+
     if (isDirty()) {
-      console.log("NAV GUARD: form is dirty → confirm modal", peek.paymentId);
       setNavUnsavedPendingId(peek.paymentId);
       return;
     }
-    navInFlightRef.current = true;
+
     const step = store.nextPayment();
-    logNavStore("nextPayment after step");
     bump();
-    if (!step) {
-      navInFlightRef.current = false;
-      console.log("NAV GUARD: nextPayment step is null");
-      return;
-    }
-    console.log("LOAD PAYMENT", step.paymentId);
-    void loadPayment(step.paymentId).finally(() => {
-      navInFlightRef.current = false;
-    });
-  }, [saveBusy, paymentNavLoading, isDirty, loadPayment, logNavStore, bump]);
+    if (!step) return;
+    const st = store.getState();
+    const code = st.paymentCodes[st.currentIndex] ?? null;
+    stepToPayment(step.paymentId, code);
+  }, [guardNavigation, isDirty, bump, buildSyncHint, stepToPayment]);
 
   const confirmNavUnsaved = useCallback(() => {
     const pendingId = navUnsavedPendingId?.trim();
     setNavUnsavedPendingId(null);
     if (!pendingId) return;
-    const store = storeRef.current;
-    store.syncToPaymentId(pendingId);
-    store.log("confirmUnsaved");
+    storeRef.current.syncToPayment({ paymentId: pendingId });
+    storeRef.current.log("confirmUnsaved");
     bump();
-    void loadPayment(pendingId);
-  }, [navUnsavedPendingId, loadPayment, bump]);
+    const st = storeRef.current.getState();
+    const code = st.paymentCodes[st.currentIndex] ?? null;
+    stepToPayment(pendingId, code);
+  }, [navUnsavedPendingId, bump, stepToPayment]);
 
   const store = storeRef.current;
   void revision;
 
-  const peekPrev = store.peekPrev();
-  const peekNext = store.peekNext();
-  const peekPrevCode = peekPrev ? (paymentCodesRef.current[peekPrev.index] ?? null) : null;
-  const peekNextCode = peekNext ? (paymentCodesRef.current[peekNext.index] ?? null) : null;
   const navState = store.getState();
+  const storeCurrentId = store.currentPaymentId();
+  const storeCurrentCode = store.currentPaymentCode();
 
   return {
-    canGoPrev: store.canGoPrev(),
-    canGoNext: store.canGoNext(),
-    peekPrevCode,
-    peekNextCode,
-    currentPaymentId: store.currentPaymentId(),
+    canGoPrev: navEnabled && store.canGoPrev(),
+    canGoNext: navEnabled && store.canGoNext(),
+    peekPrevCode: store.peekPrev() ? (navState.paymentCodes[store.peekPrev()!.index] ?? null) : null,
+    peekNextCode: store.peekNext() ? (navState.paymentCodes[store.peekNext()!.index] ?? null) : null,
+    currentPaymentId: storeCurrentId,
+    currentPaymentCode: storeCurrentCode,
+    currentIndex: navState.currentIndex,
+    paymentIds: navState.paymentIds,
+    paymentCodes: navState.paymentCodes,
+    totalPayments: navState.paymentIds.length,
     navReady: navState.paymentIds.length > 0,
+    navEnabled,
     navUnsavedPendingId,
     setNavUnsavedPendingId,
+    setCurrentPayment,
     syncAfterLoad,
     appendAfterSave,
     removePayment,
     resetNav,
+    refreshNavList,
+    initNavStore,
+    ensureNavSynced,
     prevPayment,
     nextPayment,
-    /** @deprecated use prevPayment */
     goPrev: prevPayment,
-    /** @deprecated use nextPayment */
     goNext: nextPayment,
     confirmNavUnsaved,
   };

@@ -3,8 +3,13 @@ import { SourceTablesCards } from "@/components/admin/SourceTablesCards";
 import { SourceTablesCardsSkeleton } from "@/components/admin/SourceTablesCardsSkeleton";
 import { requireRoutePermission } from "@/lib/route-access";
 
-export default async function SourceTablesPage() {
+export default async function SourceTablesPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   await requireRoutePermission(["manage_settings"]);
+  const sp = await searchParams;
 
   return (
     <div className="adm-source-page adm-page--page-scroll">
@@ -14,7 +19,7 @@ export default async function SourceTablesPage() {
       </header>
 
       <Suspense fallback={<SourceTablesCardsSkeleton />}>
-        <SourceTablesCards />
+        <SourceTablesCards searchParams={sp} />
       </Suspense>
     </div>
   );

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { resolveGlobalCountry } from "@/lib/current-country";
 import { withQuery } from "@/lib/admin-url-query";
 import { getActiveWorkWeekRange, isActiveWorkWeekCode } from "@/lib/active-work-week";
 import { balancesSnapshotToYmd, normalizeAhWeekCode } from "@/lib/work-week";
@@ -35,6 +36,7 @@ export function useEnsureActiveWorkWeekOnEnter(scope: WorkWeekScreenScope): void
     if (!entered) return;
 
     const active = getActiveWorkWeekRange();
+    const country = resolveGlobalCountry(sp.get("country"));
 
     if (scope === "orders") {
       const cur =
@@ -49,6 +51,7 @@ export function useEnsureActiveWorkWeekOnEnter(scope: WorkWeekScreenScope): void
       next.set("ordersTo", active.toYmd);
       next.delete("ordersPreset");
       next.delete("preset");
+      next.set("country", country);
       const qs = next.toString();
       router.replace(qs ? `/admin/orders?${qs}` : "/admin/orders", { scroll: false });
       router.refresh();
@@ -67,6 +70,7 @@ export function useEnsureActiveWorkWeekOnEnter(scope: WorkWeekScreenScope): void
         upto: null,
         from: null,
         modal: null,
+        country,
       }),
       { scroll: false },
     );

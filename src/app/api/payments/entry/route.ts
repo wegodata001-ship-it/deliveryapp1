@@ -30,20 +30,20 @@ export async function GET(req: Request) {
         return NextResponse.json({ error: "Payment not found" }, { status: 404, headers: NO_STORE_HEADERS });
       }
 
-      const links = await getPaymentNavigationLinks(payload.id);
-      const navigation = links ?? {
-        currentPaymentId: payload.id,
-        currentPaymentCode: payload.paymentCode,
-        currentPaymentNumber: payload.paymentNumber,
-        previousPaymentId: null,
-        nextPaymentId: null,
-      };
+      /** ניווט ⬅/➡ בקליטה — מנוהל ב-Navigation Store בצד הלקוח; שאילתת prev/next גלובלית איטית (~1.7s) */
+      const includeNav = searchParams.get("includeNav") === "1";
+      const navigation = includeNav
+        ? (await getPaymentNavigationLinks(payload.id)) ?? {
+            currentPaymentId: payload.id,
+            currentPaymentCode: payload.paymentCode,
+            currentPaymentNumber: payload.paymentNumber,
+            previousPaymentId: null,
+            nextPaymentId: null,
+          }
+        : undefined;
 
       return NextResponse.json(
-        {
-          ...payload,
-          navigation,
-        },
+        navigation ? { ...payload, navigation } : payload,
         { headers: NO_STORE_HEADERS },
       );
     } catch (error) {

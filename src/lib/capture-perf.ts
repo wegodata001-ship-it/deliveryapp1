@@ -17,7 +17,8 @@ export type CapturePerfScope =
   | "capture.response"
   | "capture.generateOrderNumber"
   | "capture.loadSettings"
-  | "capture.auditInsert";
+  | "capture.auditInsert"
+  | "capture.responseSent";
 
 const timers = new Set<string>();
 
@@ -52,18 +53,23 @@ export async function capturePerfTimed<T>(scope: CapturePerfScope, fn: () => Pro
 
 /** Audit — לא חוסם את תשובת ה-API; מודד זמן ה-INSERT בפועל */
 export function scheduleCaptureAuditInsert(work: () => Promise<unknown>): void {
-  if (!capturePerfEnabled()) {
-    void work().catch(() => {});
-    return;
+  const run = () => {
+    const t0 = Date.now();
+    if (capturePerfEnabled()) capturePerfTimeStart("capture.auditInsert");
+    void work()
+      .catch(() => {})
+      .finally(() => {
+        if (capturePerfEnabled()) {
+          capturePerfTimeEnd("capture.auditInsert");
+          capturePerfLog({ auditInsertMs: Date.now() - t0 });
+        }
+      });
+  };
+  if (typeof queueMicrotask === "function") {
+    queueMicrotask(run);
+  } else {
+    run();
   }
-  const t0 = Date.now();
-  capturePerfTimeStart("capture.auditInsert");
-  void work()
-    .catch(() => {})
-    .finally(() => {
-      capturePerfTimeEnd("capture.auditInsert");
-      capturePerfLog({ auditInsertMs: Date.now() - t0 });
-    });
 }
 
 export function capturePerfLog(extra: Record<string, unknown>): void {

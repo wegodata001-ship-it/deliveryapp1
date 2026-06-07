@@ -8206,15 +8206,215 @@ select.payment-modal-inline-input {
 .payment-modal-rate-strip {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
+  justify-content: space-between;
+  gap: 10px;
   flex-wrap: wrap;
-  padding: 2px 10px 4px;
+  padding: 6px 10px 8px;
   font-size: 0.75rem;
   font-weight: 700;
   color: #475569;
   border-bottom: 1px solid #e5e7eb;
   background: #fafafa;
+  position: relative;
+  z-index: 30;
+  pointer-events: auto;
+  isolation: isolate;
+}
+
+.payment-modal-rate-strip-rates {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.payment-navigator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-shrink: 0;
+  pointer-events: auto;
+  position: relative;
+  z-index: 31;
+}
+
+.payment-navigator-btn {
+  min-height: 34px;
+  padding: 4px 12px;
+  border-radius: 10px;
+  border: 1px solid #dbe4ff;
+  background: #f8faff;
+  color: #2563eb;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  transition: 0.2s;
+  pointer-events: auto !important;
+  touch-action: manipulation;
+}
+
+.payment-navigator-btn:hover:not(:disabled) {
+  background: #eef4ff;
+}
+
+.payment-navigator-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.payment-navigator-btn--edge:not(:disabled) {
+  opacity: 0.72;
+}
+
+.payment-navigator-btn--busy {
+  min-width: 72px;
+}
+
+.payment-navigator-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.payment-navigator-invalid {
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: #b91c1c;
+  white-space: nowrap;
+}
+
+.payment-navigator-code {
+  min-width: 132px;
+  height: 34px;
+  padding-inline: 12px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  border: 1px solid #dbe4ff;
+  background: #fff;
+  color: #0f172a;
+  font-size: 0.9375rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+.payment-navigator--search-first,
+.payment-navigator--capture {
+  gap: 6px;
+}
+
+.payment-navigator-home {
+  min-width: 34px;
+  height: 34px;
+  padding: 0 8px;
+  border-radius: 10px;
+  border: 1px solid #dbe4ff;
+  background: #f8faff;
+  color: #0f172a;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: 0.2s;
+}
+
+.payment-navigator-home:hover:not(:disabled) {
+  background: #eef4ff;
+}
+
+.payment-navigator-home:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.payment-navigator-new {
+  min-height: 34px;
+  padding: 4px 10px;
+  border-radius: 10px;
+  border: 1px solid #bbf7d0;
+  background: #f0fdf4;
+  color: #15803d;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: 0.2s;
+}
+
+.payment-navigator-new:hover:not(:disabled) {
+  background: #dcfce7;
+}
+
+.payment-navigator-new:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.payment-navigator-btn--secondary {
+  min-width: 36px;
+  padding-inline: 8px;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.payment-navigator-search {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 132px;
+  flex: 1 1 auto;
+}
+
+.payment-navigator-search--primary {
+  min-width: 168px;
+  max-width: 220px;
+}
+
+.payment-navigator-code--search {
+  width: 100%;
+  text-align: center;
+  font-weight: 700;
+}
+
+.payment-navigator-search-busy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.65rem;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.adm-app-shell--busy .payment-navigator-btn {
+  pointer-events: auto !important;
+  cursor: pointer !important;
+}
+
+.payment-modal-side-code-readonly {
+  flex: 0 0 auto;
+  padding: 8px 0 6px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.payment-nav-code--readonly {
+  margin-top: 6px;
+  width: 100%;
+  justify-content: center;
 }
 
 .payment-modal-rate-strip-lead {
@@ -17325,6 +17525,100 @@ select.adm-balances-input {
 
 .adm-payments-source-table tbody tr.adm-payments-source-row:hover td {
   background: #e0f2fe;
+}
+
+.adm-payments-source-row--expandable {
+  cursor: pointer;
+}
+
+.adm-payments-source-row--expanded td {
+  background: #eff6ff !important;
+  border-bottom-color: #bfdbfe;
+}
+
+.adm-payments-code-cell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.adm-payments-expand-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  font-size: 10px;
+  color: #64748b;
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.adm-payments-expand-btn--open {
+  transform: rotate(180deg);
+}
+
+.adm-payments-expand-btn--spacer {
+  visibility: hidden;
+}
+
+.adm-payments-source-subrow td {
+  padding: 0 !important;
+  height: auto !important;
+  background: #f8fafc !important;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.adm-payments-alloc-panel {
+  padding: 8px 14px 10px 42px;
+}
+
+.adm-payments-alloc-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.adm-payments-alloc-line {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
+  text-align: left;
+}
+
+.adm-payments-alloc-meta {
+  margin: 0;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.adm-payments-status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.adm-payments-status-badge--active {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.adm-payments-status-badge--cancelled {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.adm-payments-td-actions {
+  white-space: nowrap;
 }
 
 .adm-payments-td-customer {

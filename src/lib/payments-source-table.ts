@@ -1,10 +1,14 @@
 import { PaymentMethod, Prisma } from "@prisma/client";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { prisma } from "@/lib/prisma";
-import { activePaidPaymentWhere } from "@/lib/payment-record-status";
+import {
+  activePaidPaymentWhere,
+  PAYMENT_RECORD_STATUS_CANCELLED,
+} from "@/lib/payment-record-status";
 import {
   PAYMENT_METHOD_LABELS,
   paymentMethodTone,
+  type PaymentCaptureAllocationRow,
   type PaymentMethodTone,
   type PaymentsSourcePreview,
 } from "@/lib/payments-source-shared";
@@ -15,6 +19,7 @@ import { DEFAULT_WEEK_CODE, formatLocalYmd } from "@/lib/work-week";
 export {
   PAYMENT_METHOD_LABELS,
   paymentMethodTone,
+  type PaymentCaptureAllocationRow,
   type PaymentMethodTone,
   type PaymentsSourcePreview,
 } from "@/lib/payments-source-shared";
@@ -45,6 +50,9 @@ export type PaymentsSourceRow = {
   customerName: string;
   customerCode: string;
   paymentDateYmd: string;
+  /** סה״כ דולר בכל הקצאות הקליטה */
+  totalUsd: string;
+  totalUsdNum: number;
   usd: string;
   ils: string;
   usdNum: number;
@@ -52,6 +60,9 @@ export type PaymentsSourceRow = {
   paymentMethod: string;
   methodLabel: string;
   methodTone: PaymentMethodTone;
+  allocationCount: number;
+  status: string;
+  statusLabel: string;
 };
 
 export type PaymentsSourceListResult = {
@@ -95,6 +106,8 @@ export function buildPaymentsSourceWhere(filters: PaymentsSourceFilters = {}): P
     paymentWhereForCountryScope(
       resolveCountryScopeFromCode(filters.workCountry ?? DEFAULT_WORK_COUNTRY),
     ),
+    /** שורה ראשית לקליטה — לא שורות הקצאה להזמנה */
+    { paymentCode: { not: null } },
   ];
 
   const code = filters.paymentCode?.trim();
@@ -179,10 +192,14 @@ function orderByFromQuery(query: PaymentsSourceListQuery): Prisma.PaymentOrderBy
       return { paymentDate: sortDir };
     case "usd":
       return { amountUsd: sortDir };
+    case "total":
+      return { paymentDate: sortDir };
     case "ils":
       return { amountIls: sortDir };
     case "method":
       return { paymentMethod: sortDir };
+    case "status":
+      return { status: sortDir };
     default:
       return { createdAt: "desc" };
   }
@@ -191,10 +208,12 @@ function orderByFromQuery(query: PaymentsSourceListQuery): Prisma.PaymentOrderBy
 const paymentListSelect = {
   id: true,
   paymentCode: true,
+  paymentNumber: true,
   paymentDate: true,
   amountUsd: true,
   amountIls: true,
   paymentMethod: true,
+  status: true,
   customerId: true,
   customer: {
     select: {
@@ -211,7 +230,66 @@ const paymentListSelect = {
   },
 } as const;
 
-function mapPaymentRow(r: Prisma.PaymentGetPayload<{ select: typeof paymentListSelect }>): PaymentsSourceRow {
+type PaymentListRow = Prisma.PaymentGetPayload<{ select: typeof paymentListSelect }>;
+
+function captureBatchKey(paymentNumber: number | null, customerId: string | null): string | null {
+  if (paymentNumber == null || !customerId?.trim()) return null;
+  return `${customerId.trim()}#${paymentNumber}`;
+}
+
+function paymentStatusLabel(status: string | null | undefined): string {
+  if (status === PAYMENT_RECORD_STATUS_CANCELLED) return "מבוטל";
+  return "פעיל";
+}
+
+async function loadCaptureBatchTotals(
+  primaries: PaymentListRow[],
+): Promise<Map<string, { totalUsd: number; allocationCount: number }>> {
+  const keys = new Map<string, { paymentNumber: number; customerId: string }>();
+  for (const p of primaries) {
+    const k = captureBatchKey(p.paymentNumber, p.customerId);
+    if (!k || p.paymentNumber == null || !p.customerId) continue;
+    keys.set(k, { paymentNumber: p.paymentNumber, customerId: p.customerId });
+  }
+  if (keys.size === 0) return new Map();
+
+  const batches = [...keys.values()];
+  const rows = await prisma.payment.findMany({
+    where: {
+      AND: [
+        activePaidPaymentWhere,
+        {
+          OR: batches.map((b) => ({
+            paymentNumber: b.paymentNumber,
+            customerId: b.customerId,
+          })),
+        },
+      ],
+    },
+    select: {
+      paymentNumber: true,
+      customerId: true,
+      amountUsd: true,
+      orderId: true,
+    },
+  });
+
+  const out = new Map<string, { totalUsd: number; allocationCount: number }>();
+  for (const r of rows) {
+    const k = captureBatchKey(r.paymentNumber, r.customerId);
+    if (!k) continue;
+    const prev = out.get(k) ?? { totalUsd: 0, allocationCount: 0 };
+    prev.totalUsd += decNum(r.amountUsd);
+    if (r.orderId) prev.allocationCount += 1;
+    out.set(k, prev);
+  }
+  return out;
+}
+
+function mapPaymentRow(
+  r: PaymentListRow,
+  batchTotals: Map<string, { totalUsd: number; allocationCount: number }>,
+): PaymentsSourceRow {
   const pm = r.paymentMethod ?? "";
   const customerName =
     r.customer != null
@@ -225,6 +303,10 @@ function mapPaymentRow(r: Prisma.PaymentGetPayload<{ select: typeof paymentListS
 
   const usdNum = decNum(r.amountUsd);
   const ilsNum = decNum(r.amountIls);
+  const batchKey = captureBatchKey(r.paymentNumber, r.customerId);
+  const batch = batchKey ? batchTotals.get(batchKey) : null;
+  const totalUsdNum = batch?.totalUsd ?? usdNum;
+  const status = r.status ?? "ACTIVE";
 
   return {
     id: r.id,
@@ -233,6 +315,8 @@ function mapPaymentRow(r: Prisma.PaymentGetPayload<{ select: typeof paymentListS
     customerName,
     customerCode: r.customer?.customerCode?.trim() || "—",
     paymentDateYmd: r.paymentDate ? formatLocalYmd(r.paymentDate) : "—",
+    totalUsd: fmtMoney(totalUsdNum),
+    totalUsdNum,
     usd: fmtMoney(usdNum),
     ils: fmtMoney(ilsNum),
     usdNum,
@@ -240,6 +324,9 @@ function mapPaymentRow(r: Prisma.PaymentGetPayload<{ select: typeof paymentListS
     paymentMethod: pm,
     methodLabel: pm ? PAYMENT_METHOD_LABELS[pm] ?? pm : "—",
     methodTone: paymentMethodTone(pm),
+    allocationCount: batch?.allocationCount ?? 0,
+    status,
+    statusLabel: paymentStatusLabel(status),
   };
 }
 
@@ -261,7 +348,15 @@ export async function listPaymentsSourceTable(
 
   const hasMore = raw.length > limit;
   const slice = hasMore ? raw.slice(0, limit) : raw;
-  return { rows: slice.map(mapPaymentRow), page, limit, hasMore };
+  const batchTotals = await loadCaptureBatchTotals(slice);
+  let rows = slice.map((r) => mapPaymentRow(r, batchTotals));
+
+  if (query.sortKey === "total") {
+    const dir = query.sortDir === "asc" ? 1 : -1;
+    rows = [...rows].sort((a, b) => (a.totalUsdNum - b.totalUsdNum) * dir);
+  }
+
+  return { rows, page, limit, hasMore };
 }
 
 export async function listPaymentsSourceForExport(
@@ -275,7 +370,50 @@ export async function listPaymentsSourceForExport(
     take: maxRows,
     select: paymentListSelect,
   });
-  return raw.map(mapPaymentRow);
+  const batchTotals = await loadCaptureBatchTotals(raw);
+  return raw.map((r) => mapPaymentRow(r, batchTotals));
+}
+
+/** פירוט הזמנות שסגרה קליטת תשלום — תתי שורות */
+export async function getPaymentCaptureAllocations(
+  paymentId: string,
+): Promise<PaymentCaptureAllocationRow[]> {
+  const id = paymentId.trim();
+  if (!id) return [];
+
+  const primary = await prisma.payment.findFirst({
+    where: { id },
+    select: { paymentNumber: true, customerId: true },
+  });
+  if (!primary?.paymentNumber || !primary.customerId) return [];
+
+  const rows = await prisma.payment.findMany({
+    where: {
+      paymentNumber: primary.paymentNumber,
+      customerId: primary.customerId,
+      orderId: { not: null },
+      isPaid: true,
+    },
+    select: {
+      amountUsd: true,
+      order: {
+        select: { orderNumber: true, totalUsd: true },
+      },
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  });
+
+  return rows.map((r) => {
+    const orderTotalUsd = decNum(r.order?.totalUsd);
+    const paidUsd = decNum(r.amountUsd);
+    const remainingUsd = Math.max(0, Math.round((orderTotalUsd - paidUsd) * 100) / 100);
+    return {
+      orderNumber: r.order?.orderNumber?.trim() || "—",
+      orderTotalUsd,
+      paidUsd,
+      remainingUsd,
+    };
+  });
 }
 
 export async function getPaymentsSourceKpis(
@@ -285,8 +423,12 @@ export async function getPaymentsSourceKpis(
   const activeWhere: Prisma.PaymentWhereInput = { AND: [where, activePaidPaymentWhere] };
   const weekCode = DEFAULT_WEEK_CODE;
 
+  const captureWhere: Prisma.PaymentWhereInput = {
+    AND: [activeWhere, { paymentCode: { not: null } }],
+  };
+
   const [totalPayments, agg, weekPayments] = await Promise.all([
-    prisma.payment.count({ where: activeWhere }),
+    prisma.payment.count({ where: captureWhere }),
     prisma.payment.aggregate({
       where: activeWhere,
       _sum: { amountUsd: true, amountIls: true },

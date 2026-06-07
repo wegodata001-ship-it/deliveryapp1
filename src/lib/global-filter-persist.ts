@@ -1,5 +1,9 @@
+import { persistGlobalCountry, readPersistedCountry, resolveGlobalCountry } from "@/lib/current-country";
 import { getActiveWorkWeekRange } from "@/lib/active-work-week";
 import { getAhWeekRange, normalizeAhWeekCode } from "@/lib/work-week";
+import type { OrderCountryCode } from "@/lib/order-countries";
+
+export { readPersistedCountry, persistGlobalCountry, resolveGlobalCountry };
 
 /** שבוע שנבחר במסך הבית (שבוע קודם/הבא/היום) — נשמר לרענון F5 */
 export const LS_SELECTED_WEEK = "selectedWeek";
@@ -34,7 +38,7 @@ export function persistGlobalFilterWeek(
     localStorage.setItem(LS_GLOBAL_WEEK, norm);
     localStorage.setItem(LS_GLOBAL_FROM, fromYmd);
     localStorage.setItem(LS_GLOBAL_TO, toYmd);
-    if (country) localStorage.setItem(LS_GLOBAL_COUNTRY, country);
+    if (country) persistGlobalCountry(country as OrderCountryCode);
   } catch {
     // ignore
   }

@@ -17,16 +17,15 @@ import { withQuery } from "@/lib/admin-url-query";
 import { getActiveWorkWeekRange } from "@/lib/active-work-week";
 import {
   isGlobalFilterUrlReady,
-  LS_GLOBAL_COUNTRY,
   persistGlobalFilterWeek,
+  resolveGlobalCountry,
   resolveGlobalFilterWeekFromStorage,
 } from "@/lib/global-filter-persist";
+import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import { ORDER_COUNTRY_CODES, orderCountryLabel, type OrderCountryCode } from "@/lib/order-countries";
 import { AhWeekNavNextButton, AhWeekNavPrevButton } from "@/components/admin/AhWeekNavButtons";
 import { shiftAhWeekCode } from "@/lib/weeks/ah-week-nav";
-import { dispatchCountryChanged } from "@/lib/country-switch-bus";
 import { revalidateAllKpiCachesAction } from "@/lib/kpi-cache-revalidate-action";
-import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 import { useAdminFinancialModal } from "@/components/admin/AdminFinancialModalContext";
 
@@ -70,6 +69,7 @@ export function GlobalFilterBar({ financial = null, canManageFinancial = false }
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
+  const { setGlobalCountry } = useAdminGlobal();
   const rateLabel = financial?.finalDollarRate ?? "—";
   const rateTitle =
     financial != null
@@ -118,7 +118,7 @@ export function GlobalFilterBar({ financial = null, canManageFinancial = false }
       week: weekCode,
       from: fromYmd,
       to: toYmd,
-      country: (ORDER_COUNTRY_CODES.includes(country as OrderCountryCode) ? (country as OrderCountryCode) : ORDER_COUNTRY_CODES[0]) as OrderCountryCode,
+      country: resolveGlobalCountry(country),
     };
   }, [sp]);
 
@@ -217,15 +217,7 @@ export function GlobalFilterBar({ financial = null, canManageFinancial = false }
 
     try {
       const stored = resolveGlobalFilterWeekFromStorage();
-      let cUse = country;
-      try {
-        const c = localStorage.getItem(LS_GLOBAL_COUNTRY) || "";
-        if (ORDER_COUNTRY_CODES.includes(c as OrderCountryCode)) {
-          cUse = c as OrderCountryCode;
-        }
-      } catch {
-        // ignore
-      }
+      const cUse = resolveGlobalCountry(urlCountry);
       const next = withQuery(pathname, sp, {
         week: stored.weekCode,
         from: stored.fromYmd,
@@ -426,7 +418,7 @@ export function GlobalFilterBar({ financial = null, canManageFinancial = false }
             onChange={(e) => {
               const nextCountry = e.target.value as OrderCountryCode;
               setCountry(nextCountry);
-              dispatchCountryChanged(workCountryFromOrderSourceCountry(nextCountry));
+              setGlobalCountry(nextCountry);
               void revalidateAllKpiCachesAction();
               applyValues(week, from, to, nextCountry);
               router.refresh();

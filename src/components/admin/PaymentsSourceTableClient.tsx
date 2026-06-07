@@ -1,15 +1,17 @@
 "use client";
 
 import { PaymentMethod } from "@prisma/client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import {
   exportPaymentsSourceAction,
+  getPaymentCaptureAllocationsAction,
   getPaymentSourcePreviewAction,
   listPaymentsSourceTableAction,
   type PaymentsSourceListPayload,
 } from "@/app/admin/source-tables/payments-actions";
 import {
   PAYMENT_METHOD_LABELS,
+  type PaymentCaptureAllocationRow,
   type PaymentMethodTone,
   type PaymentsSourcePreview,
 } from "@/lib/payments-source-shared";
@@ -17,6 +19,7 @@ import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
 import { TableEmpty, TableError, TableSkeleton } from "@/components/ui/data-table";
+import { prefetchPaymentEntryClient } from "@/lib/payment-entry-client";
 
 const PAGE_LIMIT = 25;
 const SEARCH_DEBOUNCE_MS = 350;
@@ -54,6 +57,33 @@ function amountClass(n: number): string {
   const base = "adm-payments-amt";
   return Math.abs(n) >= AMOUNT_HIGHLIGHT ? `${base} ${base}--high` : base;
 }
+
+function formatPaymentDateDisplay(ymd: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd.trim());
+  if (!m) return ymd;
+  return `${m[3]}/${m[2]}/${m[1]}`;
+}
+
+function fmtUsd(n: number): string {
+  if (!Number.isFinite(n) || n === 0) return "$0.00";
+  return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function formatAllocationLine(row: PaymentCaptureAllocationRow): string {
+  return `${row.orderNumber}   ${fmtUsd(row.orderTotalUsd)} → שולם ${fmtUsd(row.paidUsd)} → נשאר ${fmtUsd(row.remainingUsd)}`;
+}
+
+const TABLE_COLUMNS = [
+  { key: "code", label: "מספר תשלום", sortable: true },
+  { key: "date", label: "תאריך", sortable: true },
+  { key: "customer", label: "לקוח", sortable: true },
+  { key: "total", label: 'סה"כ תשלום', sortable: true },
+  { key: "ils", label: "שקלים", sortable: true },
+  { key: "usd", label: "דולרים", sortable: true },
+  { key: "method", label: "אמצעי תשלום", sortable: true },
+  { key: "status", label: "סטטוס", sortable: true },
+  { key: "actions", label: "פעולות", sortable: false },
+] as const;
 
 function downloadBase64(base64: string, filename: string, mime: string) {
   const bin = atob(base64);
@@ -96,6 +126,11 @@ export function PaymentsSourceTableClient({ initialSearch = "" }: { initialSearc
   const [hoverCustomerId, setHoverCustomerId] = useState<string | null>(null);
   const [preview, setPreview] = useState<PaymentsSourcePreview | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
+  const [allocationsByPaymentId, setAllocationsByPaymentId] = useState<
+    Record<string, PaymentCaptureAllocationRow[]>
+  >({});
+  const [allocationsLoadingId, setAllocationsLoadingId] = useState<string | null>(null);
   const fetchGen = useRef(0);
   const previewGen = useRef(0);
   const hoverTimerRef = useRef<number | null>(null);
@@ -188,6 +223,40 @@ export function PaymentsSourceTableClient({ initialSearch = "" }: { initialSearc
       openWindow({ type: "paymentsUpdated", props: { paymentId } });
     },
     [openWindow],
+  );
+
+  const prefetchPaymentOpen = useCallback((paymentId: string) => {
+    prefetchPaymentEntryClient(paymentId);
+  }, []);
+
+  const loadAllocations = useCallback(async (paymentId: string) => {
+    const id = paymentId.trim();
+    if (!id || allocationsByPaymentId[id]) return;
+    setAllocationsLoadingId(id);
+    try {
+      const rows = await getPaymentCaptureAllocationsAction(id);
+      setAllocationsByPaymentId((prev) => ({ ...prev, [id]: rows }));
+    } finally {
+      setAllocationsLoadingId((cur) => (cur === id ? null : cur));
+    }
+  }, [allocationsByPaymentId]);
+
+  const toggleExpanded = useCallback(
+    (paymentId: string, allocationCount: number) => {
+      const id = paymentId.trim();
+      if (!id) return;
+      setExpandedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) {
+          next.delete(id);
+          return next;
+        }
+        next.add(id);
+        return next;
+      });
+      if (allocationCount > 0) void loadAllocations(id);
+    },
+    [loadAllocations],
   );
 
   async function runExport(kind: "pdf" | "excel") {
@@ -326,82 +395,179 @@ export function PaymentsSourceTableClient({ initialSearch = "" }: { initialSearc
         <table className="adm-table adm-payments-source-table">
           <thead>
             <tr>
-              {[
-                { key: "code", label: "מספר תשלום", sortable: true },
-                { key: "customer", label: "לקוח", sortable: true },
-                { key: "usd", label: "דולר", sortable: true },
-                { key: "ils", label: "שקלים", sortable: true },
-                { key: "method", label: "אמצעי תשלום", sortable: true },
-                { key: "date", label: "תאריך", sortable: true },
-              ].map((col) => (
+              {TABLE_COLUMNS.map((col) => (
                 <th key={col.key}>
-                  <button
-                    type="button"
-                    className="adm-source-sort-btn"
-                    disabled={loading}
-                    onClick={() => {
-                      setSortKey(col.key);
-                      setSortDir((d) => (sortKey === col.key && d === "asc" ? "desc" : "asc"));
-                    }}
-                  >
-                    {col.label}
-                    {sortKey === col.key ? (sortDir === "asc" ? " ↑" : " ↓") : ""}
-                  </button>
+                  {col.sortable ? (
+                    <button
+                      type="button"
+                      className="adm-source-sort-btn"
+                      disabled={loading}
+                      onClick={() => {
+                        setSortKey(col.key);
+                        setSortDir((d) => (sortKey === col.key && d === "asc" ? "desc" : "asc"));
+                      }}
+                    >
+                      {col.label}
+                      {sortKey === col.key ? (sortDir === "asc" ? " ↑" : " ↓") : ""}
+                    </button>
+                  ) : (
+                    col.label
+                  )}
                 </th>
               ))}
             </tr>
           </thead>
           {loading && !payload ? (
-            <TableSkeleton columnCount={6} rowCount={10} />
+            <TableSkeleton columnCount={TABLE_COLUMNS.length} rowCount={10} />
           ) : (
             <tbody>
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={6}>
+                  <td colSpan={TABLE_COLUMNS.length}>
                     <TableEmpty />
                   </td>
                 </tr>
               ) : (
-                rows.map((r) => (
-                  <tr
-                    key={r.id}
-                    className="adm-payments-source-row"
-                    onMouseEnter={() => r.customerId && schedulePreview(r.customerId)}
-                    onMouseLeave={() => schedulePreview(null)}
-                  >
-                    <td className="adm-payments-td-code">
-                      <button
-                        type="button"
-                        className="adm-source-primary-link adm-payments-code-link"
-                        dir="ltr"
-                        onClick={() => openPayment(r.id)}
+                rows.map((r) => {
+                  const expanded = expandedIds.has(r.id);
+                  const canExpand = r.allocationCount > 0;
+                  const allocations = allocationsByPaymentId[r.id];
+                  const allocBusy = allocationsLoadingId === r.id;
+
+                  return (
+                    <Fragment key={r.id}>
+                      <tr
+                        className={[
+                          "adm-payments-source-row",
+                          expanded ? "adm-payments-source-row--expanded" : "",
+                          canExpand ? "adm-payments-source-row--expandable" : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" ")}
+                        onMouseEnter={() => {
+                          prefetchPaymentOpen(r.id);
+                          if (r.customerId) schedulePreview(r.customerId);
+                        }}
+                        onMouseLeave={() => schedulePreview(null)}
+                        onClick={() => {
+                          if (canExpand) toggleExpanded(r.id, r.allocationCount);
+                        }}
+                        onKeyDown={(e) => {
+                          if (!canExpand) return;
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            toggleExpanded(r.id, r.allocationCount);
+                          }
+                        }}
+                        tabIndex={canExpand ? 0 : -1}
+                        role={canExpand ? "button" : undefined}
+                        aria-expanded={canExpand ? expanded : undefined}
                       >
-                        {r.paymentCode}
-                      </button>
-                    </td>
-                    <td className="adm-payments-td-customer">{r.customerName}</td>
-                    <td className="adm-payments-td-amt">
-                      <span dir="ltr" className={amountClass(r.usdNum)}>
-                        {r.usd === "—" ? "—" : `$${r.usd}`}
-                      </span>
-                    </td>
-                    <td className="adm-payments-td-amt">
-                      <span dir="ltr" className={amountClass(r.ilsNum)}>
-                        {r.ils === "—" ? "—" : `₪${r.ils}`}
-                      </span>
-                    </td>
-                    <td className="adm-payments-td-method">
-                      {r.methodLabel === "—" ? (
-                        <span className="adm-payments-empty">—</span>
-                      ) : (
-                        <span className={methodBadgeClass(r.methodTone)}>{r.methodLabel}</span>
-                      )}
-                    </td>
-                    <td className="adm-payments-td-date" dir="ltr">
-                      {r.paymentDateYmd}
-                    </td>
-                  </tr>
-                ))
+                        <td className="adm-payments-td-code">
+                          <div className="adm-payments-code-cell">
+                            {canExpand ? (
+                              <span
+                                className={[
+                                  "adm-payments-expand-btn",
+                                  expanded ? "adm-payments-expand-btn--open" : "",
+                                ]
+                                  .filter(Boolean)
+                                  .join(" ")}
+                                aria-hidden
+                              >
+                                ▼
+                              </span>
+                            ) : (
+                              <span className="adm-payments-expand-btn adm-payments-expand-btn--spacer" aria-hidden />
+                            )}
+                            <button
+                              type="button"
+                              className="adm-source-primary-link adm-payments-code-link"
+                              dir="ltr"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openPayment(r.id);
+                              }}
+                            >
+                              {r.paymentCode}
+                            </button>
+                          </div>
+                        </td>
+                        <td className="adm-payments-td-date" dir="ltr">
+                          {formatPaymentDateDisplay(r.paymentDateYmd)}
+                        </td>
+                        <td className="adm-payments-td-customer">{r.customerName}</td>
+                        <td className="adm-payments-td-amt">
+                          <span dir="ltr" className={amountClass(r.totalUsdNum)}>
+                            {r.totalUsd === "—" ? "—" : `$${r.totalUsd}`}
+                          </span>
+                        </td>
+                        <td className="adm-payments-td-amt">
+                          <span dir="ltr" className={amountClass(r.ilsNum)}>
+                            {r.ils === "—" ? "—" : `₪${r.ils}`}
+                          </span>
+                        </td>
+                        <td className="adm-payments-td-amt">
+                          <span dir="ltr" className={amountClass(r.usdNum)}>
+                            {r.usd === "—" ? "—" : `$${r.usd}`}
+                          </span>
+                        </td>
+                        <td className="adm-payments-td-method">
+                          {r.methodLabel === "—" ? (
+                            <span className="adm-payments-empty">—</span>
+                          ) : (
+                            <span className={methodBadgeClass(r.methodTone)}>{r.methodLabel}</span>
+                          )}
+                        </td>
+                        <td className="adm-payments-td-status">
+                          <span
+                            className={[
+                              "adm-payments-status-badge",
+                              r.status === "CANCELLED"
+                                ? "adm-payments-status-badge--cancelled"
+                                : "adm-payments-status-badge--active",
+                            ].join(" ")}
+                          >
+                            {r.statusLabel}
+                          </span>
+                        </td>
+                        <td className="adm-payments-td-actions">
+                          <button
+                            type="button"
+                            className="adm-btn adm-btn--ghost adm-btn--xs"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openPayment(r.id);
+                            }}
+                          >
+                            פתח
+                          </button>
+                        </td>
+                      </tr>
+                      {expanded ? (
+                        <tr className="adm-payments-source-subrow">
+                          <td colSpan={TABLE_COLUMNS.length}>
+                            <div className="adm-payments-alloc-panel" dir="rtl">
+                              {allocBusy && !allocations ? (
+                                <p className="adm-payments-alloc-meta">טוען פירוט הזמנות…</p>
+                              ) : allocations && allocations.length > 0 ? (
+                                <ul className="adm-payments-alloc-list">
+                                  {allocations.map((line) => (
+                                    <li key={`${r.id}-${line.orderNumber}`} dir="ltr" className="adm-payments-alloc-line">
+                                      {formatAllocationLine(line)}
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p className="adm-payments-alloc-meta">אין הקצאות להזמנות בקליטה זו</p>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ) : null}
+                    </Fragment>
+                  );
+                })
               )}
             </tbody>
           )}

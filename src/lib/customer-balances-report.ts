@@ -108,17 +108,15 @@ function autoPayStatus(expected: Prisma.Decimal, received: Prisma.Decimal): "NOT
   return "PAID";
 }
 
-function paymentStatusLabel(auto: "NOT_PAID" | "PARTIAL" | "PAID", debtUsd: Prisma.Decimal): string {
+function paymentStatusLabel(debtUsd: Prisma.Decimal): string {
   const u = Number(debtUsd.toFixed(2));
-  if (u > 0 && u < 5) return "יתרה נמוכה";
-  if (auto === "PAID") return "שולם במלואו";
-  if (auto === "PARTIAL") return "שולם חלקית";
-  return "ללא תשלום";
+  if (u > 0.01) return "חוב פתוח";
+  return "מאוזן";
 }
 
 /**
- * מקור אמת יחיד: שורות לקוח עם יתרה חיובית (סכום הזמנות בטווח − תשלומים קשורים בטווח),
- * כולל הזמנות ללא customerId (שורה סינתטית).
+ * מקור אמת יחיד: כל הלקוחות הפעילים + יתרה (הזמנות בטווח − תשלומים בטווח),
+ * כולל לקוחות עם יתרה 0; הזמנות ללא customerId (שורה סינתטית).
  */
 export async function getCustomerBalancesReport(filters: CustomerBalancesReportFilters): Promise<{
   rows: CustomerBalanceReportRow[];
@@ -219,9 +217,8 @@ export async function getCustomerBalancesReport(filters: CustomerBalancesReportF
         balance: remainingUsd.toFixed(2),
       });
     }
-    const auto = autoPayStatus(expected, received);
-    const paymentStatus = paymentStatusLabel(auto, remainingUsd.gt(0) ? remainingUsd : new Prisma.Decimal(0));
-    if (remaining.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).lte(0)) continue;
+    const debtUsdDisplay = remainingUsd.gt(0) ? remainingUsd : new Prisma.Decimal(0);
+    const paymentStatus = paymentStatusLabel(debtUsdDisplay);
 
     rows.push({
       customerId: c.id,
@@ -301,20 +298,18 @@ export async function getCustomerBalancesReport(filters: CustomerBalancesReportF
       .reduce((s, p) => s.add(paymentUsd(p)), new Prisma.Decimal(0))
       .add(withdrawalOrphanUsd);
     const remainingOrphanUsd = expectedOrphanUsd.sub(receivedOrphanUsd);
-    const autoOrphan = autoPayStatus(expectedOrphan, receivedOrphan);
-    const paymentStatusOrphan = paymentStatusLabel(autoOrphan, remainingOrphanUsd.gt(0) ? remainingOrphanUsd : new Prisma.Decimal(0));
-    if (remainingOrphan.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).gt(0)) {
-      rows.push({
-        customerId: null,
-        label: "הזמנות ללא שיוך לקוח",
-        customerCode: null,
-        expected: expectedOrphan,
-        received: receivedOrphan,
-        remaining: remainingOrphan,
-        remainingUsd: remainingOrphanUsd,
-        paymentStatus: paymentStatusOrphan,
-      });
-    }
+    const debtOrphanUsd = remainingOrphanUsd.gt(0) ? remainingOrphanUsd : new Prisma.Decimal(0);
+    const paymentStatusOrphan = paymentStatusLabel(debtOrphanUsd);
+    rows.push({
+      customerId: null,
+      label: "הזמנות ללא שיוך לקוח",
+      customerCode: null,
+      expected: expectedOrphan,
+      received: receivedOrphan,
+      remaining: remainingOrphan,
+      remainingUsd: remainingOrphanUsd,
+      paymentStatus: paymentStatusOrphan,
+    });
   }
 
   const totalDebt = rows.reduce((s, r) => s.add(r.remaining), new Prisma.Decimal(0));

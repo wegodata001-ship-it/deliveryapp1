@@ -119,9 +119,12 @@ async function resolveNavigationAnchor(currentPaymentId: string): Promise<Paymen
 export async function getPaymentNavigationLinks(
   currentPaymentId: string,
 ): Promise<PaymentNavigationLinks | null> {
+  const totalStart = Date.now();
   paymentsPerfTimeStart("payments.navigation.db");
   try {
+    const anchorStart = Date.now();
     const anchor = await resolveNavigationAnchor(currentPaymentId);
+    const resolveAnchorMs = Date.now() - anchorStart;
     if (!anchor) return null;
 
     const currentRow = await prisma.payment.findFirst({
@@ -129,6 +132,7 @@ export async function getPaymentNavigationLinks(
       select: navSelect,
     });
 
+    const prevNextStart = Date.now();
     const [prevRow, nextRow] = await Promise.all([
       prisma.payment.findFirst({
         where: {
@@ -157,14 +161,24 @@ export async function getPaymentNavigationLinks(
         select: navSelect,
       }),
     ]);
+    const prevNextMs = Date.now() - prevNextStart;
 
-    return {
+    const result = {
       currentPaymentId: anchor.id,
       currentPaymentCode: currentRow?.paymentCode ?? null,
       currentPaymentNumber: currentRow?.paymentNumber ?? anchor.paymentNumber,
       previousPaymentId: prevRow?.id ?? null,
       nextPaymentId: nextRow?.id ?? null,
     };
+
+    console.log("payments.navigation.db breakdown", {
+      navigationQueryMs: Date.now() - totalStart,
+      resolveAnchorMs,
+      prevNextMs,
+      note: "prev/next scan all capture payments (no customerId filter)",
+    });
+
+    return result;
   } finally {
     paymentsPerfTimeEnd("payments.navigation.db");
   }

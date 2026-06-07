@@ -28,6 +28,7 @@ import {
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { WegoBrandLogo } from "@/components/admin/WegoBrandLogo";
 import { useAdminFinancialModal } from "@/components/admin/AdminFinancialModalContext";
+import { resolveGlobalCountry } from "@/lib/current-country";
 import { useAdminNavLayout } from "@/components/admin/AdminNavLayoutContext";
 import type { AdminWindowPayload } from "@/lib/admin-windows";
 
@@ -112,10 +113,11 @@ function applyActiveWorkWeekToParams(out: URLSearchParams, pathname: string): vo
 
 function resolveNavHref(item: NavItemDef, sp: URLSearchParams): string {
   const globals = new URLSearchParams();
-  for (const key of ["week", "from", "to", "country"] as const) {
+  for (const key of ["week", "from", "to"] as const) {
     const v = sp.get(key);
     if (v) globals.set(key, v);
   }
+  globals.set("country", resolveGlobalCountry(sp.get("country")));
 
   if (item.href === "/admin") {
     const qs = globals.toString();
@@ -135,8 +137,7 @@ function resolveNavHref(item: NavItemDef, sp: URLSearchParams): string {
     const out = new URLSearchParams(u.search);
     if (ACTIVE_WEEK_NAV_PATHS.has(u.pathname)) {
       applyActiveWorkWeekToParams(out, u.pathname);
-      const country = sp.get("country");
-      if (country) out.set("country", country);
+      out.set("country", resolveGlobalCountry(sp.get("country")));
     } else {
       for (const [k, v] of globals.entries()) out.set(k, v);
       if (u.pathname === "/admin/orders" || u.pathname.startsWith("/admin/orders/")) {

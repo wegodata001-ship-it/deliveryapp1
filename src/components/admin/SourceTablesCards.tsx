@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { listSourceTableCardCountsAction } from "@/app/admin/source-tables/actions";
+import { adminSourceTableHref } from "@/lib/admin-href";
 import { SOURCE_TABLE_DEFINITIONS, type SourceTableCardDefinition } from "@/lib/source-table-definitions";
 
 function cardClass(card: SourceTableCardDefinition): string {
@@ -13,10 +14,12 @@ function SourceTableSection({
   title,
   group,
   counts,
+  searchParams,
 }: {
   title: string;
   group: SourceTableCardDefinition["group"];
   counts: Record<string, number | null>;
+  searchParams: Record<string, string | string[] | undefined>;
 }) {
   const cards = SOURCE_TABLE_DEFINITIONS.filter((c) => c.group === group);
   const sectionClass =
@@ -34,7 +37,7 @@ function SourceTableSection({
       </div>
       <div className="adm-source-grid">
         {cards.map((card) => (
-          <Link key={card.id} href={`/admin/source-tables/${card.id}`} className={cardClass(card)}>
+          <Link key={card.id} href={adminSourceTableHref(card.id, searchParams)} className={cardClass(card)}>
             <span className="adm-source-icon" aria-hidden>
               {card.icon}
             </span>
@@ -54,14 +57,18 @@ function SourceTableSection({
 }
 
 /** כרטיסי טבלאות מקור — counts נטענים async (Suspense) */
-export async function SourceTablesCards() {
+export async function SourceTablesCards({
+  searchParams = {},
+}: {
+  searchParams?: Record<string, string | string[] | undefined>;
+}) {
   const counts = await listSourceTableCardCountsAction();
 
   return (
     <>
-      <SourceTableSection title="טבלאות שוטפות" group="running" counts={counts} />
-      <SourceTableSection title="טבלאות כספים" group="finance" counts={counts} />
-      <SourceTableSection title="טבלאות מערכת" group="system" counts={counts} />
+      <SourceTableSection title="טבלאות שוטפות" group="running" counts={counts} searchParams={searchParams} />
+      <SourceTableSection title="טבלאות כספים" group="finance" counts={counts} searchParams={searchParams} />
+      <SourceTableSection title="טבלאות מערכת" group="system" counts={counts} searchParams={searchParams} />
     </>
   );
 }
