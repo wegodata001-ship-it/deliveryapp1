@@ -182,7 +182,7 @@ export async function exportCustomerModuleOrdersExcel(
   };
 
   const aoa: (string | ReturnType<typeof excelCell>)[][] = [
-    [excelCell("ATLAS IMPORT & EXPORT — דוח הזמנות לקוח", { font: { bold: true, sz: 14 } })],
+    [excelCell("WEGO ERP — דוח הזמנות לקוח", { font: { bold: true, sz: 14 } })],
     [excelCell(`${meta.displayName} · ${meta.customerCode}`, cellStyle)],
     [excelCell(`הופק: ${todayYmd()}`, cellStyle)],
     [],
@@ -223,7 +223,7 @@ export async function exportCustomerModulePaymentsExcel(
   };
 
   const aoa: (string | ReturnType<typeof excelCell>)[][] = [
-    [excelCell("ATLAS IMPORT & EXPORT — דוח תשלומים לקוח", { font: { bold: true, sz: 14 } })],
+    [excelCell("WEGO ERP — דוח תשלומים לקוח", { font: { bold: true, sz: 14 } })],
     [excelCell(`${meta.displayName} · ${meta.customerCode}`, cellStyle)],
     [excelCell(`הופק: ${todayYmd()}`, cellStyle)],
     [],

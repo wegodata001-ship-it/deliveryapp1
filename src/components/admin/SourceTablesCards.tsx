@@ -2,6 +2,7 @@ import Link from "next/link";
 import { listSourceTableCardCountsAction } from "@/app/admin/source-tables/actions";
 import { adminSourceTableHref } from "@/lib/admin-href";
 import { SOURCE_TABLE_DEFINITIONS, type SourceTableCardDefinition } from "@/lib/source-table-definitions";
+import { SourceTableIcon } from "@/components/admin/SourceTableIcon";
 
 function cardClass(card: SourceTableCardDefinition): string {
   if (card.id === "payment-checks") return "adm-source-card adm-source-card--checks";
@@ -39,7 +40,7 @@ function SourceTableSection({
         {cards.map((card) => (
           <Link key={card.id} href={adminSourceTableHref(card.id, searchParams)} className={cardClass(card)}>
             <span className="adm-source-icon" aria-hidden>
-              {card.icon}
+              <SourceTableIcon icon={card.icon} />
             </span>
             <div>
               <h3>{card.titleHe}</h3>

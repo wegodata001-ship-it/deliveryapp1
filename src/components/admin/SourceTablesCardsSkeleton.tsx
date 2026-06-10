@@ -1,4 +1,5 @@
 import { SOURCE_TABLE_DEFINITIONS } from "@/lib/source-table-definitions";
+import { SourceTableIcon } from "@/components/admin/SourceTableIcon";
 
 function SectionSkeleton({ group, title }: { group: "running" | "finance" | "system"; title: string }) {
   const cards = SOURCE_TABLE_DEFINITIONS.filter((c) => c.group === group);
@@ -18,7 +19,9 @@ function SectionSkeleton({ group, title }: { group: "running" | "finance" | "sys
       <div className="adm-source-grid">
         {cards.map((card) => (
           <div key={card.id} className="adm-source-card adm-source-card--skeleton" aria-hidden>
-            <span className="adm-source-icon">{card.icon}</span>
+            <span className="adm-source-icon">
+              <SourceTableIcon icon={card.icon} />
+            </span>
             <div>
               <h3>{card.titleHe}</h3>
               <p>{card.description}</p>

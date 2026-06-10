@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BookOpen, FileSpreadsheet, FileText } from "lucide-react";
+import { BarChart3, BookOpen, FileSpreadsheet, FileText, Search, X } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   exportCustomerBalancesAction,
@@ -575,7 +575,7 @@ export function CustomerBalancesClient() {
             aria-expanded={insightsExpanded}
             onClick={() => setInsightsExpanded((v) => !v)}
           >
-            {insightsExpanded ? "הסתר סטטיסטיקה" : "📊 הצג סטטיסטיקה"}
+            {insightsExpanded ? "הסתר סטטיסטיקה" : <><BarChart3 size={16} strokeWidth={1.75} aria-hidden /> הצג סטטיסטיקה</>}
           </button>
           <div className="adm-balances-export-actions" role="group" aria-label="ייצוא דוח">
             <button
@@ -610,7 +610,7 @@ export function CustomerBalancesClient() {
             aria-expanded={filterOpen}
             onClick={() => setFilterOpen((v) => !v)}
           >
-            {filterOpen ? "✕ סגור סינון מתקדם" : "🔍 סינון מתקדם"}
+            {filterOpen ? <><X size={16} strokeWidth={1.75} aria-hidden /> סגור סינון מתקדם</> : <><Search size={16} strokeWidth={1.75} aria-hidden /> סינון מתקדם</>}
           </button>
         </div>
       </div>

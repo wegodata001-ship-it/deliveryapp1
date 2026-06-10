@@ -1,5 +1,5 @@
 import type { CustomerLedgerPayload, CustomerLedgerRow } from "@/app/admin/capture/actions";
-import { ATLAS_BRAND_TITLE, ATLAS_PDF_LOGO_DATA_URI } from "@/lib/atlas-pdf-logo";
+import { ATLAS_BRAND_TITLE, getSafeAtlasPdfLogoDataUrl } from "@/lib/atlas-pdf-logo";
 import { ledgerPdfFontFamily } from "@/lib/pdfFonts";
 import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
 import { formatLocalYmd } from "@/lib/work-week";
@@ -21,7 +21,7 @@ export type AtlasCustomerReportMeta = {
 export type AtlasCustomerReportKind = "ledger" | "orders" | "payments" | "balances";
 
 export const ATLAS_CUSTOMER_REPORT_TITLES: Record<AtlasCustomerReportKind, string> = {
-  ledger: "דוח כרטסת לקוח",
+  ledger: "כרטסת לקוח",
   orders: "דוח הזמנות לקוח",
   payments: "דוח תשלומים לקוח",
   balances: "דוח יתרות לקוח",
@@ -62,6 +62,8 @@ export function atlasHeadersRtl(headersRightToLeft: string[]): Content[] {
     text: h,
     style: "atlasTableHeader",
     alignment: "right",
+    direction: "rtl",
+    rtl: true,
   }));
 }
 
@@ -71,10 +73,10 @@ export const ATLAS_PDF_TABLE_LAYOUT = {
   vLineWidth: () => 0.35,
   hLineColor: (i: number) => (i === 1 ? "#1e3a5f" : "#e2e8f0"),
   vLineColor: () => "#e2e8f0",
-  paddingLeft: () => 8,
-  paddingRight: () => 8,
-  paddingTop: () => 7,
-  paddingBottom: () => 7,
+  paddingLeft: () => 9,
+  paddingRight: () => 9,
+  paddingTop: () => 8,
+  paddingBottom: () => 8,
   fillColor: (rowIndex: number) => (rowIndex === 0 ? "#1e3a5f" : null),
 };
 
@@ -98,21 +100,32 @@ export function atlasPdfCell(
     bold: opts?.bold,
     color: opts?.color,
     direction: ltr ? "ltr" : undefined,
+    rtl: !ltr,
+    lineHeight: 1.25,
     fillColor: opts?.fillColor,
   });
 }
 
 function atlasMetaLine(label: string, value: string, ltrValue = false): Content {
   const display = value || "—";
-  return {
-    text: [
-      { text: `${label}: `, bold: true, color: "#475569" },
-      ltrValue
-        ? pdfContent({ text: display, direction: "ltr" })
-        : { text: display, font: ledgerPdfFontFamily(display) },
-    ],
+  return pdfContent({
+    text: `${label}: ${display}`,
+    font: ledgerPdfFontFamily(`${label}: ${display}`),
     style: "atlasMeta",
     alignment: "right",
+    direction: ltrValue ? "rtl" : "rtl",
+    rtl: true,
+  });
+}
+
+function atlasFooterTotalBox(label: string, value: string, valueColor: string, fillColor: string): Content {
+  return {
+    stack: [
+      { text: label, bold: true, color: "#475569", alignment: "right", margin: [0, 0, 0, 4] },
+      pdfContent({ text: value, bold: true, color: valueColor, direction: "ltr", alignment: "right" }),
+    ],
+    fillColor,
+    margin: [12, 10, 12, 10],
   };
 }
 
@@ -120,25 +133,29 @@ export function buildAtlasPdfHeader(meta: AtlasCustomerReportMeta, reportKind: A
   const env = meta.workEnvironmentLabel?.trim();
   const baseTitle = ATLAS_CUSTOMER_REPORT_TITLES[reportKind];
   const reportTitle = env ? `${baseTitle} - ${env}` : baseTitle;
+  const logoDataUrl = getSafeAtlasPdfLogoDataUrl();
+  const logoStack: Content[] = logoDataUrl
+    ? [pdfContent({ image: logoDataUrl, width: 130, height: 34 })]
+    : [];
   return [
     {
       columns: [
         {
           width: 140,
-          stack: [{ image: ATLAS_PDF_LOGO_DATA_URI, width: 130, height: 34 }],
+          stack: logoStack.length > 0 ? logoStack : [{ text: ATLAS_BRAND_TITLE, style: "atlasLogoFallback" }],
           alignment: "right",
         },
         {
           width: "*",
           stack: [
             pdfContent({ text: ATLAS_BRAND_TITLE, style: "atlasBrandEn", direction: "ltr", alignment: "right" }),
-            { text: reportTitle, style: "atlasReportTitle", alignment: "right" },
+            pdfContent({ text: reportTitle, style: "atlasReportTitle", alignment: "right", direction: "rtl", rtl: true }),
           ],
-          margin: [0, 4, 12, 0],
+          margin: [0, 2, 12, 0],
         },
       ],
       columnGap: 12,
-      margin: [0, 0, 0, 14],
+      margin: [0, 0, 0, 16],
     },
     {
       table: {
@@ -164,48 +181,27 @@ export function buildAtlasPdfHeader(meta: AtlasCustomerReportMeta, reportKind: A
 export function buildAtlasPdfFooter(totals: AtlasPdfFooterTotals): Content {
   const items: Content[] = [];
   if (totals.ordersTotalUsd != null) {
-    items.push({
-      text: [
-        { text: 'סה"כ הזמנות: ', bold: true, color: "#475569" },
-        pdfContent({ text: totals.ordersTotalUsd, bold: true, color: "#0f172a", direction: "ltr" }),
-      ],
-      alignment: "right",
-      margin: [0, 0, 0, 4],
-    });
+    items.push(atlasFooterTotalBox('סה"כ הזמנות', totals.ordersTotalUsd, "#0f172a", "#fff7ed"));
   }
   if (totals.paymentsTotalUsd != null) {
-    items.push({
-      text: [
-        { text: 'סה"כ תשלומים: ', bold: true, color: "#475569" },
-        pdfContent({ text: totals.paymentsTotalUsd, bold: true, color: "#047857", direction: "ltr" }),
-      ],
-      alignment: "right",
-      margin: [0, 0, 0, 4],
-    });
+    items.push(atlasFooterTotalBox('סה"כ תשלומים', totals.paymentsTotalUsd, "#047857", "#ecfdf5"));
   }
   if (totals.commissionsTotalUsd != null) {
-    items.push({
-      text: [
-        { text: 'סה"כ עמלות: ', bold: true, color: "#475569" },
-        pdfContent({ text: totals.commissionsTotalUsd, bold: true, color: "#c2410c", direction: "ltr" }),
-      ],
-      alignment: "right",
-      margin: [0, 0, 0, 4],
-    });
+    items.push(atlasFooterTotalBox('סה"כ עמלות', totals.commissionsTotalUsd, "#c2410c", "#fff7ed"));
   }
   if (totals.balanceUsd != null) {
-    items.push({
-      text: [
-        { text: "יתרה: ", bold: true, color: "#475569" },
-        pdfContent({ text: totals.balanceUsd, bold: true, color: "#1d4ed8", direction: "ltr" }),
-      ],
-      alignment: "right",
-    });
+    items.push(atlasFooterTotalBox("יתרה נוכחית", totals.balanceUsd, "#1d4ed8", "#eff6ff"));
   }
+  const boxes = [...items];
+  while (boxes.length < 3) boxes.push({ text: "" });
   return {
     table: {
-      widths: ["*"],
-      body: [[{ stack: items, fillColor: "#f8fafc", margin: [12, 10, 12, 10] }]],
+      widths: ["*", "*", "*"],
+      body: [[
+        boxes[0],
+        boxes[1],
+        boxes[2],
+      ]],
     },
     layout: {
       hLineWidth: () => 1,
@@ -213,28 +209,29 @@ export function buildAtlasPdfFooter(totals: AtlasPdfFooterTotals): Content {
       hLineColor: () => "#cbd5e1",
       vLineColor: () => "#cbd5e1",
     },
-    margin: [0, 14, 0, 0],
+    margin: [0, 16, 0, 0],
   };
 }
 
 export const ATLAS_PDF_STYLES: TDocumentDefinitions["styles"] = {
-  atlasBrandEn: { fontSize: 10, bold: true, color: "#1e3a5f" },
-  atlasReportTitle: { fontSize: 17, bold: true, color: "#0f172a", margin: [0, 4, 0, 0] },
-  atlasMeta: { fontSize: 9.5, color: "#1e293b", margin: [0, 3, 0, 3] },
+  atlasLogoFallback: { fontSize: 18, bold: true, color: "#1e3a5f", alignment: "right", margin: [0, 4, 0, 0] },
+  atlasBrandEn: { fontSize: 12, bold: true, color: "#1e3a5f" },
+  atlasReportTitle: { fontSize: 18, bold: true, color: "#0f172a", margin: [0, 6, 0, 0], lineHeight: 1.2 },
+  atlasMeta: { fontSize: 9.5, color: "#1e293b", margin: [0, 4, 0, 4], lineHeight: 1.25 },
   atlasTableHeader: {
     fontSize: 9,
     bold: true,
     color: "#ffffff",
-    margin: [6, 6, 6, 6],
+    margin: [6, 7, 6, 7],
   },
-  atlasFooterNote: { fontSize: 8, color: "#64748b", italics: true, alignment: "right" },
+  atlasFooterNote: { fontSize: 8, color: "#64748b", italics: true, alignment: "right", lineHeight: 1.25 },
 };
 
 export function atlasPdfPageDefaults(): Pick<TDocumentDefinitions, "pageSize" | "pageOrientation" | "pageMargins"> {
   return {
     pageSize: "A4",
     pageOrientation: "landscape",
-    pageMargins: [32, 36, 32, 36],
+    pageMargins: [34, 38, 34, 40],
   };
 }
 

@@ -41,6 +41,7 @@ import {
   type OrderStatusUpdatePerf,
 } from "@/lib/capture-perf";
 import { CaptureSavePerf } from "@/lib/capture-save-perf";
+import { invalidateOrdersListDataCache } from "@/lib/orders-list-data";
 import { breakdownIlsIncludingVat, computeFromUsdAmount } from "@/lib/financial-calc";
 import {
   ensureDefaultFinancialSettings,
@@ -511,7 +512,7 @@ export async function previewPaymentCodeForCaptureAction(input?: {
   return { ok: true, code: (await allocateNextPaymentCapture(wc)).code };
 }
 
-/** רשימת כל קודי הקליטה במדינה — נטענת פעם אחת לניווט ⬅/➡ */
+/** רשימת כל קודי הקליטה במדינה — נטענת פעם אחת לניווט */
 export async function listCapturePaymentCodesForNavAction(
   workCountry: string,
 ): Promise<{ ok: true; codes: string[] } | { ok: false; error: string }> {
@@ -527,7 +528,7 @@ export async function listCapturePaymentCodesForNavAction(
   return { ok: true, codes };
 }
 
-/** רשימת קליטות תשלום של לקוח — מקור הניווט ⬅/➡ */
+/** רשימת קליטות תשלום של לקוח — מקור הניווט */
 export async function listCustomerCapturePaymentsForNavAction(
   customerId: string,
   workCountry?: string,
@@ -546,7 +547,7 @@ export async function listCustomerCapturePaymentsForNavAction(
   return { ok: true, payments };
 }
 
-/** רשימת מזהי קליטה לניווט ⬅/➡ — נטענת פעם אחת בפתיחה */
+/** רשימת מזהי קליטה לניווט — נטענת פעם אחת בפתיחה */
 export async function listCapturePaymentIdsForNavAction(
   workCountry: string,
 ): Promise<{ ok: true; ids: string[] } | { ok: false; error: string }> {
@@ -568,7 +569,7 @@ function intakeWeekCodeFromPaymentDateYmd(ymd: string): string {
   return norm ?? DEFAULT_WEEK_CODE;
 }
 
-/** טעינה מרוכזת לניווט ⬅/➡ — קודי קליטה במדינה + שבוע AH + workspace לכל מסמך (פעם אחת בפתיחה) */
+/** טעינה מרוכזת לניווט — קודי קליטה במדינה + שבוע AH + workspace לכל מסמך (פעם אחת בפתיחה) */
 export async function preloadCapturePaymentNavigationCacheAction(
   workCountry: string,
   weekCode: string,
@@ -1005,6 +1006,7 @@ export async function capturePaymentAction(form: {
   });
 
   revalidateAllKpiCaches();
+  invalidateOrdersListDataCache();
   revalidatePath("/admin");
   revalidatePath("/admin/orders");
   revalidatePath("/admin/balances");
@@ -1230,6 +1232,7 @@ export async function createMinimalOrderAction(form: {
   });
 
   revalidateAllKpiCaches();
+  invalidateOrdersListDataCache();
   revalidatePath("/admin");
   revalidatePath("/admin/orders");
   revalidatePath("/admin/balances");
@@ -1334,6 +1337,7 @@ export async function updateCustomerCardDetailsAction(form: {
   const { revalidateAfterCustomerCreate } = await import("@/lib/revalidate-customer-create");
   revalidateAfterCustomerCreate(id);
   revalidateAllKpiCaches();
+  invalidateOrdersListDataCache();
   revalidatePath("/admin");
   revalidatePath("/admin/orders");
   revalidatePath("/admin/balances");
@@ -2252,6 +2256,7 @@ export async function updateOrderListStatusAction(
       })
       .catch(() => {});
     revalidateAllKpiCaches();
+    invalidateOrdersListDataCache();
     revalidatePath("/admin");
     revalidatePath("/admin/orders");
     revalidatePath("/admin/balances");
@@ -2277,6 +2282,7 @@ export async function updateOrderListStatusAction(
   });
 
   revalidateAllKpiCaches();
+  invalidateOrdersListDataCache();
   revalidatePath("/admin");
   revalidatePath("/admin/orders");
   revalidatePath("/admin/balances");
@@ -2482,6 +2488,7 @@ export async function updateOrderListPaymentMethodActionForApi(
   }
 
   await prisma.order.update({ where: { id }, data: { paymentMethod: next } });
+  invalidateOrdersListDataCache();
   return { ok: true };
 }
 
@@ -2519,6 +2526,7 @@ export async function updateOrderListPaymentLocationAction(
     where: { id },
     data: { locationId: trimmedLoc, paymentPointId: null },
   });
+  invalidateOrdersListDataCache();
   return { ok: true };
 }
 

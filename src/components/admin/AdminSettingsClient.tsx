@@ -5,6 +5,7 @@ import {
   saveBusinessProfileAction,
   type BusinessProfilePayload,
 } from "@/app/admin/settings/actions";
+import { Building2, Camera, Globe2, MessageCircle, Save, ThumbsUp } from "lucide-react";
 
 type Props = {
   initial: BusinessProfilePayload;
@@ -33,7 +34,7 @@ export function AdminSettingsClient({ initial }: Props) {
       return;
     }
     setSaved(res.payload);
-    setToast("פרטי העסק נשמרו ✓");
+    setToast("פרטי העסק נשמרו");
     window.setTimeout(() => setToast(null), 3500);
   }
 
@@ -57,7 +58,7 @@ export function AdminSettingsClient({ initial }: Props) {
             <div className="adm-biz-logo-placeholder">{logoInitial}</div>
           )}
           <div>
-            <h1 className="adm-biz-title">🏢 פרטי העסק</h1>
+            <h1 className="adm-biz-title"><Building2 size={18} strokeWidth={1.75} aria-hidden /> פרטי העסק</h1>
             <p className="adm-biz-subtitle">
               {form.systemName || "שם העסק"} · {form.businessPhone || "טלפון"} · {form.businessEmail || "אימייל"}
             </p>
@@ -142,7 +143,7 @@ export function AdminSettingsClient({ initial }: Props) {
           <h2 className="adm-biz-section-title">נוכחות דיגיטלית <span className="adm-biz-optional">(אופציונלי)</span></h2>
           <div className="adm-biz-grid">
             <label className="adm-biz-label">
-              <span className="adm-biz-social-label">🌐 אתר אינטרנט</span>
+              <span className="adm-biz-social-label"><Globe2 size={16} strokeWidth={1.75} aria-hidden /> אתר אינטרנט</span>
               <input
                 className="adm-biz-input"
                 dir="ltr"
@@ -152,7 +153,7 @@ export function AdminSettingsClient({ initial }: Props) {
               />
             </label>
             <label className="adm-biz-label">
-              <span className="adm-biz-social-label">💬 WhatsApp</span>
+              <span className="adm-biz-social-label"><MessageCircle size={16} strokeWidth={1.75} aria-hidden /> WhatsApp</span>
               <input
                 className="adm-biz-input"
                 dir="ltr"
@@ -162,7 +163,7 @@ export function AdminSettingsClient({ initial }: Props) {
               />
             </label>
             <label className="adm-biz-label">
-              <span className="adm-biz-social-label">📸 Instagram</span>
+              <span className="adm-biz-social-label"><Camera size={16} strokeWidth={1.75} aria-hidden /> Instagram</span>
               <input
                 className="adm-biz-input"
                 dir="ltr"
@@ -172,7 +173,7 @@ export function AdminSettingsClient({ initial }: Props) {
               />
             </label>
             <label className="adm-biz-label">
-              <span className="adm-biz-social-label">👍 Facebook</span>
+              <span className="adm-biz-social-label"><ThumbsUp size={16} strokeWidth={1.75} aria-hidden /> Facebook</span>
               <input
                 className="adm-biz-input"
                 dir="ltr"
@@ -209,7 +210,7 @@ export function AdminSettingsClient({ initial }: Props) {
             onClick={() => void save()}
             disabled={saving}
           >
-            {saving ? "שומר..." : "💾 שמור פרטי עסק"}
+            {saving ? "שומר..." : <><Save size={16} strokeWidth={1.75} aria-hidden /> שמור פרטי עסק</>}
           </button>
         </div>
 

@@ -19,6 +19,7 @@ import { ORDER_COUNTRY_CODES, orderCountryLabel, type OrderCountryCode } from "@
 import { CustomerBalancesReportModal } from "@/components/admin/CustomerBalancesReportModal";
 import { OpenOrdersReportModal } from "@/components/admin/OpenOrdersReportModal";
 import { PaymentsByLocationReportModal } from "@/components/admin/PaymentsByLocationReportModal";
+import { CalendarDays, CreditCard, Package, Scale, MapPin } from "lucide-react";
 
 type Props = {
   initialPayload: ReportPayload;
@@ -27,6 +28,20 @@ type Props = {
 
 function todayYmd() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function ReportCardIcon({ icon }: { icon: ReportCard["icon"] }) {
+  const Icon =
+    icon === "package"
+      ? Package
+      : icon === "map-pin"
+        ? MapPin
+        : icon === "calendar"
+          ? CalendarDays
+          : icon === "scale"
+            ? Scale
+            : CreditCard;
+  return <Icon size={18} strokeWidth={1.75} aria-hidden />;
 }
 
 function escapeHtml(v: string) {
@@ -352,19 +367,19 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
         ) : (
           <>
             <div className="adm-report-kpi-card adm-report-kpi-card--orders">
-              <span>📦 סה״כ הזמנות</span>
+              <span><Package size={16} strokeWidth={1.75} aria-hidden /> סה״כ הזמנות</span>
               <strong>{payload.kpis.totalOrders}</strong>
             </div>
             <div className="adm-report-kpi-card adm-report-kpi-card--payments">
-              <span>💳 סה״כ תשלומים (קשורים)</span>
+              <span><CreditCard size={16} strokeWidth={1.75} aria-hidden /> סה״כ תשלומים (קשורים)</span>
               <strong>{payload.kpis.totalPaymentsLinked}</strong>
             </div>
             <div className="adm-report-kpi-card adm-report-kpi-card--balance">
-              <span>🔴 יתרת חוב</span>
+              <span><Scale size={16} strokeWidth={1.75} aria-hidden /> יתרת חוב</span>
               <strong>{payload.kpis.totalDebt}</strong>
             </div>
             <div className="adm-report-kpi-card adm-report-kpi-card--balance">
-              <span>🟢 יתרת זכות</span>
+              <span><Scale size={16} strokeWidth={1.75} aria-hidden /> יתרת זכות</span>
               <strong>{payload.kpis.totalCredit}</strong>
             </div>
           </>
@@ -374,7 +389,7 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
       <section className="adm-reports-grid">
         {payload.reports.map((r) => (
           <article key={r.id} className="adm-report-card">
-            <div className="adm-report-card-icon">{r.icon}</div>
+            <div className="adm-report-card-icon"><ReportCardIcon icon={r.icon} /></div>
             <div>
               <h2>{r.title}</h2>
               <p>{r.description}</p>

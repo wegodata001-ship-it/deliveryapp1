@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { Package } from "lucide-react";
 import { useAdminLoading } from "@/components/admin/AdminLoadingProvider";
 
 type PreviewRow = {
@@ -133,9 +134,9 @@ export function ExcelImportClient() {
       setSelectedRowIds(Object.fromEntries(nextRows.map((r) => [r.id, r.status === "VALID"])));
       setPage(1);
       void loadHistory();
-      setDoneMsg("✔ הקובץ נסרק בהצלחה");
+      setDoneMsg("הקובץ נסרק בהצלחה");
     } catch {
-      setErr("❌ שגיאה בביצוע פעולה");
+      setErr("שגיאה בביצוע פעולה");
     } finally {
       setIsScanning(false);
       setBusy(false);
@@ -211,11 +212,11 @@ export function ExcelImportClient() {
         return;
       }
       const importedSet = new Set(payload.importedRowIds || []);
-      setDoneMsg(`✔ הייבוא הושלם בהצלחה · יובאו ${payload.imported ?? 0} שורות`);
+      setDoneMsg(`הייבוא הושלם בהצלחה · יובאו ${payload.imported ?? 0} שורות`);
       setRows((old) => old.map((r) => (importedSet.has(r.id) ? { ...r, status: "IMPORTED" } : r)));
       void loadHistory();
     } catch {
-      setErr("❌ שגיאה בביצוע פעולה");
+      setErr("שגיאה בביצוע פעולה");
     } finally {
       setBusy(false);
     }
@@ -261,7 +262,7 @@ export function ExcelImportClient() {
             }
           : old,
       );
-      setDoneMsg("✔ Header נשמר ידנית");
+      setDoneMsg("Header נשמר ידנית");
       void loadHistory();
     } finally {
       setBusy(false);
@@ -296,9 +297,9 @@ export function ExcelImportClient() {
             : r,
         ),
       );
-      setDoneMsg("✔ הפעולה בוצעה בהצלחה");
+      setDoneMsg("הפעולה בוצעה בהצלחה");
     } catch {
-      setErr("❌ שגיאה בביצוע פעולה");
+      setErr("שגיאה בביצוע פעולה");
     } finally {
       setBusy(false);
     }
@@ -325,7 +326,7 @@ export function ExcelImportClient() {
         delete next[id];
         return next;
       });
-      setDoneMsg("✔ שורה נמחקה");
+      setDoneMsg("שורה נמחקה");
       void loadHistory();
     } finally {
       setBusy(false);
@@ -349,7 +350,7 @@ export function ExcelImportClient() {
             onChange={(e) => setFile(e.target.files?.[0] || null)}
           />
           <button type="button" className="adm-btn adm-btn--primary" disabled={busy || !file} onClick={() => void onUpload()}>
-            {busy ? "⏳ סורק..." : "סריקת קובץ"}
+            {busy ? "סורק..." : "סריקת קובץ"}
           </button>
           <button
             type="button"
@@ -357,7 +358,7 @@ export function ExcelImportClient() {
             disabled={busy || !previewFile || validCount === 0}
             onClick={() => void onConfirmImport("valid_only")}
           >
-            {busy ? "⏳ מייבא..." : "ייבא שורות תקינות בלבד"}
+            {busy ? "מייבא..." : "ייבא שורות תקינות בלבד"}
           </button>
           <button
             type="button"
@@ -365,7 +366,7 @@ export function ExcelImportClient() {
             disabled={busy || !previewFile || rows.length === 0}
             onClick={() => void onConfirmImport("all")}
           >
-            {busy ? "⏳ מייבא..." : "ייבא הכל (כולל שגיאות)"}
+            {busy ? "מייבא..." : "ייבא הכל (כולל שגיאות)"}
           </button>
           <button
             type="button"
@@ -373,7 +374,7 @@ export function ExcelImportClient() {
             disabled={busy || !previewFile || selectedCount === 0}
             onClick={() => void onConfirmImport("selected")}
           >
-            {busy ? "⏳ מייבא..." : `ייבא מסומנות בלבד (${selectedCount})`}
+            {busy ? "מייבא..." : `ייבא מסומנות בלבד (${selectedCount})`}
           </button>
         </div>
         {doneMsg ? <div className="adm-settings-toast">{doneMsg}</div> : null}
@@ -382,7 +383,7 @@ export function ExcelImportClient() {
 
       {previewFile ? (
         <section className="adm-excel-meta-card">
-          <h2>📦 פרטי קובץ</h2>
+          <h2><Package size={18} strokeWidth={1.75} aria-hidden /> פרטי קובץ</h2>
           <div className="adm-excel-meta-grid">
             <div>
               <strong>מספר משלוח:</strong>
@@ -448,8 +449,8 @@ export function ExcelImportClient() {
             <span style={{ fontSize: 12, opacity: 0.8 }}>מיועד לתיקון שורות 1–4 כשזיהוי אוטומטי לא מדויק</span>
           </div>
           <div className="adm-excel-counters">
-            <span className="adm-excel-valid">✔ שורות תקינות: {validCount}</span>
-            <span className="adm-excel-error">❌ שורות עם שגיאה: {errorCount}</span>
+            <span className="adm-excel-valid">שורות תקינות: {validCount}</span>
+            <span className="adm-excel-error">שורות עם שגיאה: {errorCount}</span>
             <span>סה״כ שורות: {rows.length}</span>
           </div>
           <p className="adm-excel-hint">{`${rows.length} שורות נקלטו בהצלחה`}</p>
@@ -498,7 +499,7 @@ export function ExcelImportClient() {
 
       <section className="adm-excel-table-wrap">
         {isScanning ? (
-          <div className="adm-table-empty">⏳ סורק קובץ... נא להמתין</div>
+          <div className="adm-table-empty">סורק קובץ... נא להמתין</div>
         ) : (
           <>
             <table className="adm-table adm-excel-table">

@@ -78,11 +78,21 @@ export function loginTraceSinceOrigin(ctx: LoginTraceContext): number {
   return Math.max(0, Date.now() - ctx.originMs);
 }
 
+function readProcessUptimeSec(): number | undefined {
+  // Middleware runs in Edge — process.uptime exists but throws if invoked.
+  if (process.env.NEXT_RUNTIME === "edge") return undefined;
+  try {
+    if (typeof process?.uptime === "function") {
+      return Number(process.uptime().toFixed(3));
+    }
+  } catch {
+    /* Edge / restricted runtime */
+  }
+  return undefined;
+}
+
 export function loginTraceRuntimeMeta(): Record<string, unknown> {
-  const uptime =
-    typeof process !== "undefined" && typeof process.uptime === "function"
-      ? Number(process.uptime().toFixed(3))
-      : undefined;
+  const uptime = readProcessUptimeSec();
   const coldStartLikely = uptime !== undefined && uptime < 2;
   return {
     ts: loginTraceIsoNow(),

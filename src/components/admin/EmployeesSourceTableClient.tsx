@@ -14,6 +14,7 @@ import {
 import type { EmployeeRoleTone, EmployeesSourcePreview, EmployeesSourceRow } from "@/lib/employees-source-table";
 import { Modal } from "@/components/ui/Modal";
 import { TableEmpty, TableError, TableSkeleton } from "@/components/ui/data-table";
+import { CheckCircle2, Clock, FileSpreadsheet, FileText, Search, ShieldCheck, Users } from "lucide-react";
 
 const PAGE_LIMIT = 25;
 const FILTER_DEBOUNCE_MS = 350;
@@ -217,19 +218,19 @@ export function EmployeesSourceTableClient({ initialSearch = "" }: { initialSear
       {kpis ? (
         <div className="adm-employees-source-kpi-row" dir="rtl">
           <div className="adm-employees-source-kpi-card">
-            <span className="adm-employees-source-kpi-lbl">👥 סה״כ עובדים</span>
+            <span className="adm-employees-source-kpi-lbl"><Users size={16} strokeWidth={1.75} aria-hidden /> סה״כ עובדים</span>
             <strong>{kpis.totalEmployees.toLocaleString("he-IL")}</strong>
           </div>
           <div className="adm-employees-source-kpi-card">
-            <span className="adm-employees-source-kpi-lbl">👔 מנהלים</span>
+            <span className="adm-employees-source-kpi-lbl"><ShieldCheck size={16} strokeWidth={1.75} aria-hidden /> מנהלים</span>
             <strong>{kpis.managersCount.toLocaleString("he-IL")}</strong>
           </div>
           <div className="adm-employees-source-kpi-card">
-            <span className="adm-employees-source-kpi-lbl">✅ עובדים פעילים</span>
+            <span className="adm-employees-source-kpi-lbl"><CheckCircle2 size={16} strokeWidth={1.75} aria-hidden /> עובדים פעילים</span>
             <strong>{kpis.activeCount.toLocaleString("he-IL")}</strong>
           </div>
           <div className="adm-employees-source-kpi-card">
-            <span className="adm-employees-source-kpi-lbl">🕒 התחברו השבוע ({kpis.weekCode})</span>
+            <span className="adm-employees-source-kpi-lbl"><Clock size={16} strokeWidth={1.75} aria-hidden /> התחברו השבוע ({kpis.weekCode})</span>
             <strong>{kpis.loggedInWeekCount.toLocaleString("he-IL")}</strong>
           </div>
         </div>
@@ -243,7 +244,7 @@ export function EmployeesSourceTableClient({ initialSearch = "" }: { initialSear
           disabled={loading && !payload}
         />
         <button type="button" className="adm-btn adm-btn--ghost" onClick={() => setFilterOpen((v) => !v)}>
-          {filterOpen ? "הסתר סינון" : "סינון 🔍"}
+          {filterOpen ? "הסתר סינון" : <><Search size={16} strokeWidth={1.75} aria-hidden /> סינון</>}
         </button>
         <button
           type="button"
@@ -251,7 +252,7 @@ export function EmployeesSourceTableClient({ initialSearch = "" }: { initialSear
           disabled={!!exportBusy || loading}
           onClick={() => void runExport("pdf")}
         >
-          {exportBusy === "pdf" ? "…" : "📄 PDF"}
+          {exportBusy === "pdf" ? "…" : <><FileText size={16} strokeWidth={1.75} aria-hidden /> PDF</>}
         </button>
         <button
           type="button"
@@ -259,7 +260,7 @@ export function EmployeesSourceTableClient({ initialSearch = "" }: { initialSear
           disabled={!!exportBusy || loading}
           onClick={() => void runExport("excel")}
         >
-          {exportBusy === "excel" ? "…" : "📊 Excel"}
+          {exportBusy === "excel" ? "…" : <><FileSpreadsheet size={16} strokeWidth={1.75} aria-hidden /> Excel</>}
         </button>
         <Link href="/admin/users/new" className="adm-btn adm-btn--primary adm-btn--xs">
           עובד חדש
@@ -397,7 +398,7 @@ export function EmployeesSourceTableClient({ initialSearch = "" }: { initialSear
                     </td>
                     <td>
                       <span className={r.isActive ? "adm-employees-active-yes" : "adm-employees-active-no"}>
-                        {r.isActive ? "🟢 פעיל" : "🔴 לא פעיל"}
+                        {r.isActive ? "פעיל" : "לא פעיל"}
                       </span>
                     </td>
                     <td dir="ltr">{r.lastLoginYmd}</td>
@@ -468,7 +469,7 @@ export function EmployeesSourceTableClient({ initialSearch = "" }: { initialSear
                 <span>כניסה אחרונה</span> <span dir="ltr">{preview.lastLoginYmd}</span>
               </p>
               <p>
-                <span>סטטוס</span> {preview.isActive ? "🟢 פעיל" : "🔴 לא פעיל"}
+                <span>סטטוס</span> {preview.isActive ? "פעיל" : "לא פעיל"}
               </p>
             </>
           ) : null}
@@ -516,7 +517,7 @@ export function EmployeesSourceTableClient({ initialSearch = "" }: { initialSear
               <span>תפקיד</span> <span className={roleBadgeClass(viewRow.roleTone)}>{viewRow.roleLabel}</span>
             </p>
             <p>
-              <span>סטטוס</span> {viewRow.isActive ? "🟢 פעיל" : "🔴 לא פעיל"}
+              <span>סטטוס</span> {viewRow.isActive ? "פעיל" : "לא פעיל"}
             </p>
             <p>
               <span>כניסה אחרונה</span> <span dir="ltr">{viewRow.lastLoginYmd}</span>

@@ -1,6 +1,6 @@
 "use client";
 
-import { Search } from "lucide-react";
+import { Inbox, Search } from "lucide-react";
 import type {
   CustomersModuleListRow,
   CustomerWorkspaceOrderRow,
@@ -56,7 +56,7 @@ function WorkspaceTablePlaceholder({
       <td colSpan={colSpan} className="adm-ws-empty-state">
         <div className="adm-ws-empty-state__box" role="status">
           <span className="adm-ws-empty-state__ico" aria-hidden>
-            📭
+            <Inbox size={18} strokeWidth={1.75} />
           </span>
           <span className="adm-ws-empty-state__txt">{loading ? "טוען נתונים…" : emptyText}</span>
         </div>
@@ -326,9 +326,6 @@ export function OrdersWorkspacePanel({
                 </td>
                 <td>
                   <span className={st.className}>
-                    <span className="adm-ws-badge__emoji" aria-hidden>
-                      {st.emoji}
-                    </span>
                     <span>{st.label}</span>
                   </span>
                 </td>

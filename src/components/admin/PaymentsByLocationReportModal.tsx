@@ -11,6 +11,7 @@ import type { ReportFilters } from "@/app/admin/reports/actions";
 import { useAdminLoading } from "@/components/admin/AdminLoadingProvider";
 import { LoadingButton, TableSkeleton } from "@/components/ui/loading";
 import { DEFAULT_WEEK_CODE, WORK_WEEK_CODES_SORTED, getAhWeekRange, normalizeAhWeekCode } from "@/lib/work-week";
+import { MapPin } from "lucide-react";
 
 const PAGE_SIZE = 15;
 const SEARCH_DEBOUNCE_MS = 300;
@@ -65,7 +66,7 @@ const PblTableBody = memo(function PblTableBody({ rows, busy }: TableBodyProps) 
           <td colSpan={5} className="adm-pbl-erp-empty-cell">
             <div className="adm-pbl-erp-empty">
               <span className="adm-pbl-erp-empty__icon" aria-hidden>
-                📍
+                <MapPin size={18} strokeWidth={1.75} />
               </span>
               <p className="adm-pbl-erp-empty__text">לא נמצאו תשלומים לפי הסינון שנבחר</p>
             </div>

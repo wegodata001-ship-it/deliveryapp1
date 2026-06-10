@@ -4,6 +4,7 @@ import {
   type UpdateOrderPaymentMethodApiResult,
 } from "@/app/admin/capture/actions";
 import { capturePerfLog } from "@/lib/capture-perf";
+import { invalidateOrdersListDataCache } from "@/lib/orders-list-data";
 import { perfError } from "@/lib/perf-log";
 import { requireApiAuth } from "@/lib/session-user-guard";
 
@@ -35,6 +36,7 @@ export async function POST(req: Request) {
     const orderId = (body.orderId ?? "").trim();
     const paymentMethod = body.paymentMethod ?? null;
     const res = await updateOrderListPaymentMethodActionForApi(orderId, paymentMethod, session);
+    if (res.ok) invalidateOrdersListDataCache();
     capturePerfLog({ kind: "orders.paymentMethod.POST", apiMs: Date.now() - t0, ok: res.ok });
     return NextResponse.json(res, { status: res.ok ? 200 : 400 });
   } catch (error) {

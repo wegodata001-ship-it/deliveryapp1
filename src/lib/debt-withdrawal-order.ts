@@ -57,4 +57,4 @@ export function formatSignedUsdDisplay(signed: number): string {
   return formatted;
 }
 
-export const DEBT_WITHDRAWAL_LEDGER_LABEL = "💰 משיכה מחוב";
+export const DEBT_WITHDRAWAL_LEDGER_LABEL = "משיכה מחוב";

@@ -669,12 +669,30 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   let fetchCustomersMs = 0;
   let fetchOrdersMs = 0;
   let fetchPaymentsMs = 0;
+  let customersQueryMs = 0;
+  let customersTransformMs = 0;
+  let ordersQueryMs = 0;
+  let ordersTransformMs = 0;
+  let paymentsQueryMs = 0;
+  let paymentsTransformMs = 0;
+  let statusOverrideSetupMs = 0;
   let calculateBalancesMs = 0;
   let calculateTotalsMs = 0;
   let renderMs = 0;
   let serializeMs = 0;
+  let prismaQueryCount = 0;
+  const prismaQueryBreakdown: Record<string, number> = {};
 
-  const perfTimed = async <T>(setter: (ms: number) => void, work: () => Promise<T>): Promise<T> => {
+  const countPrismaQuery = (name: string) => {
+    prismaQueryCount += 1;
+    prismaQueryBreakdown[name] = (prismaQueryBreakdown[name] ?? 0) + 1;
+  };
+  const perfPrismaQuery = async <T>(
+    name: string,
+    setter: (ms: number) => void,
+    work: () => Promise<T>,
+  ): Promise<T> => {
+    countPrismaQuery(name);
     if (!perfEnabled()) return work();
     const t0 = Date.now();
     try {
@@ -690,7 +708,15 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     return emptyBalancesPayload(limit);
   }
 
+  const statusOverrideSetupWasCold = statusOverrideTableReady == null;
+  const statusOverrideSetupT0 = Date.now();
   await ensureStatusOverrideTable();
+  statusOverrideSetupMs = Date.now() - statusOverrideSetupT0;
+  if (statusOverrideSetupWasCold) {
+    countPrismaQuery("statusOverrideSetup.$executeRaw");
+    countPrismaQuery("statusOverrideSetup.$executeRaw");
+    countPrismaQuery("statusOverrideSetup.$executeRaw");
+  }
 
   const lifetime = query.lifetime === true;
   const uptoNorm = normalizeAhWeekCode(query.uptoWeekCode?.trim() || null);
@@ -781,7 +807,10 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     ...buildCustomerWhere(query),
     countryCode: countryScope.workCountry,
   };
-  const customers = await perfTimed((ms) => (fetchCustomersMs += ms), () =>
+  const customers = await perfPrismaQuery("customers.findMany", (ms) => {
+    fetchCustomersMs += ms;
+    customersQueryMs += ms;
+  }, () =>
     prisma.customer.findMany({
       where: customerWhere,
       orderBy: { displayName: "asc" },
@@ -796,7 +825,9 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     }),
   );
 
+  const customersTransformT0 = Date.now();
   const customerIds = customers.map((c) => c.id);
+  customersTransformMs += Date.now() - customersTransformT0;
   if (customerIds.length === 0) {
     console.log("[balances-report]", {
       ...balancesReportLogBase,
@@ -811,21 +842,63 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       paymentsCount: 0,
       balancesCount: 0,
     });
+    if (perfEnabled()) {
+      const totalMs = Date.now() - perfT0;
+      console.table({
+        fetchCustomersMs,
+        fetchOrdersMs,
+        fetchPaymentsMs,
+        customersQueryMs,
+        customersTransformMs,
+        ordersQueryMs,
+        ordersTransformMs,
+        paymentsQueryMs,
+        paymentsTransformMs,
+        statusOverrideSetupMs,
+        calculateBalancesMs,
+        calculateTotalsMs,
+        renderMs,
+        serializeMs,
+        totalMs,
+      });
+      console.log("[balances-report-prisma-query-count]", {
+        prismaQueryCount,
+        prismaQueryBreakdown,
+        scope: "balances-report-data",
+      });
+    }
     return emptyBalancesPayload(limit);
   }
   const scopeFrom = orderDateFilter && "gte" in orderDateFilter ? (orderDateFilter.gte as Date | undefined) : undefined;
   const scopeTo = orderDateFilter && "lte" in orderDateFilter ? (orderDateFilter.lte as Date | undefined) : undefined;
-  const sharedBalances = await perfTimed((ms) => (fetchOrdersMs += ms), () =>
-    calculateCustomerBalances(customerIds, {
-      from: scopeFrom ?? null,
-      to: scopeTo ?? null,
-      sourceCountry: orderCountryPrisma ?? null,
-      orderStatuses: orderStatusList,
-    }),
-  );
+  const sharedBalances = await calculateCustomerBalances(customerIds, {
+    from: scopeFrom ?? null,
+    to: scopeTo ?? null,
+    sourceCountry: orderCountryPrisma ?? null,
+    orderStatuses: orderStatusList,
+    metrics: {
+      onQuery: (kind, ms) => {
+        countPrismaQuery(`calculateCustomerBalances.${kind}`);
+        if (kind === "orders") {
+          fetchOrdersMs += ms;
+          ordersQueryMs += ms;
+        } else {
+          fetchPaymentsMs += ms;
+          paymentsQueryMs += ms;
+        }
+      },
+      onTransform: (kind, ms) => {
+        if (kind === "orders") ordersTransformMs += ms;
+        else paymentsTransformMs += ms;
+      },
+    },
+  });
 
   // Business-only metric: lifetime (since day 1) sum of orders in USD, excluding debt withdrawals.
-  const lifetimeAgg = await perfTimed((ms) => (fetchOrdersMs += ms), () =>
+  const lifetimeAgg = await perfPrismaQuery("orders.lifetimeGroupBy", (ms) => {
+    fetchOrdersMs += ms;
+    ordersQueryMs += ms;
+  }, () =>
     prisma.order.groupBy({
       by: ["customerId"],
       where: {
@@ -838,9 +911,11 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       _sum: { totalUsd: true },
     }),
   );
+  const lifetimeTransformT0 = Date.now();
   const lifetimeOrdersUsdByCustomer = new Map(
     lifetimeAgg.map((r) => [r.customerId, (r._sum.totalUsd ?? new Prisma.Decimal(0)) as Prisma.Decimal]),
   );
+  ordersTransformMs += Date.now() - lifetimeTransformT0;
 
   const orderSelect = {
     customerId: true,
@@ -869,24 +944,33 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   } as const;
 
   const [orderRows, paymentRows, generalCreditRows, overrides] = await Promise.all([
-    perfTimed((ms) => (fetchOrdersMs += ms), () =>
-      findManyInChunks(customerIds, (chunk) =>
+    findManyInChunks(customerIds, (chunk) =>
+      perfPrismaQuery("orders.findMany", (ms) => {
+        fetchOrdersMs += ms;
+        ordersQueryMs += ms;
+      }, () =>
         prisma.order.findMany({
           where: { ...orderNestedWhere, customerId: { in: chunk } },
           select: orderSelect,
         }),
       ),
     ),
-    perfTimed((ms) => (fetchPaymentsMs += ms), () =>
-      findManyInChunks(customerIds, (chunk) =>
+    findManyInChunks(customerIds, (chunk) =>
+      perfPrismaQuery("payments.linkedFindMany", (ms) => {
+        fetchPaymentsMs += ms;
+        paymentsQueryMs += ms;
+      }, () =>
         prisma.payment.findMany({
           where: { ...paymentLinkedWhere, customerId: { in: chunk } },
           select: paymentSelect,
         }),
       ),
     ),
-    perfTimed((ms) => (fetchPaymentsMs += ms), () =>
-      findManyInChunks(customerIds, (chunk) =>
+    findManyInChunks(customerIds, (chunk) =>
+      perfPrismaQuery("payments.generalCreditFindMany", (ms) => {
+        fetchPaymentsMs += ms;
+        paymentsQueryMs += ms;
+      }, () =>
         prisma.payment.findMany({
           where: {
             ...activePaidPaymentWhere,
@@ -906,16 +990,19 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
         }),
       ),
     ),
-    perfTimed((ms) => (fetchCustomersMs += ms), () =>
-      customerIds.length > 0
-        ? findManyInChunks(customerIds, (chunk) =>
+    customerIds.length > 0
+      ? findManyInChunks(customerIds, (chunk) =>
+          perfPrismaQuery("customerBalanceStatusOverride.findMany", (ms) => {
+            fetchCustomersMs += ms;
+            customersQueryMs += ms;
+          }, () =>
             prisma.customerBalanceStatusOverride.findMany({
               where: { customerId: { in: chunk } },
               select: { customerId: true, statusOverride: true },
             }),
-          )
-        : Promise.resolve([] as Array<{ customerId: string; statusOverride: string | null }>),
-    ),
+          ),
+        )
+      : Promise.resolve([] as Array<{ customerId: string; statusOverride: string | null }>),
   ]);
 
   const calcT0 = Date.now();
@@ -929,6 +1016,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   const maxAhByCustomer = new Map<string, number>();
   const lastOrderDateByCustomer = new Map<string, Date>();
 
+  const orderRowsTransformT0 = Date.now();
   for (const o of orderRows) {
     const cid = o.customerId;
     if (!cid) continue;
@@ -976,7 +1064,9 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       if (!prev || od.getTime() > prev.getTime()) lastOrderDateByCustomer.set(cid, od);
     }
   }
+  ordersTransformMs += Date.now() - orderRowsTransformT0;
 
+  const paymentRowsTransformT0 = Date.now();
   for (const p of paymentRows) {
     const cid = p.customerId;
     if (!cid) continue;
@@ -995,13 +1085,17 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     const curUsd = creditUsdByCustomer.get(cid) ?? new Prisma.Decimal(0);
     creditUsdByCustomer.set(cid, curUsd.add(p.amountUsd ?? new Prisma.Decimal(0)));
   }
+  paymentsTransformMs += Date.now() - paymentRowsTransformT0;
 
+  const overrideTransformT0 = Date.now();
   const overrideMap = new Map(
     overrides
       .filter((r) => r.statusOverride && STATUS_VALUES.has(r.statusOverride as CustomerBalanceStatus))
       .map((r) => [r.customerId, r.statusOverride as CustomerBalanceStatus]),
   );
+  customersTransformMs += Date.now() - overrideTransformT0;
 
+  const customerRowsTransformT0 = Date.now();
   const rows: CustomerBalanceRow[] = customers.map((c): CustomerBalanceRow => {
     const shared = sharedBalances.get(c.id);
     const expectedIls = expectedIlsByCustomer.get(c.id) ?? new Prisma.Decimal(0);
@@ -1094,6 +1188,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       maxAhWeekNum: maxN,
     };
   });
+  customersTransformMs += Date.now() - customerRowsTransformT0;
   calculateBalancesMs += Date.now() - calcT0;
 
   const debtFilter: CustomerBalanceDebtFilter =
@@ -1130,6 +1225,22 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       customerIds: filtered.map((r) => r.customerId),
       orderWhere: orderNestedWhere,
       paymentWhereLinked: paymentLinkedWhere,
+      metrics: {
+        onQuery: (kind, ms) => {
+          countPrismaQuery(`openOrderEnrichment.${kind}`);
+          if (kind === "orders") {
+            fetchOrdersMs += ms;
+            ordersQueryMs += ms;
+          } else {
+            fetchPaymentsMs += ms;
+            paymentsQueryMs += ms;
+          }
+        },
+        onTransform: (kind, ms) => {
+          if (kind === "orders") ordersTransformMs += ms;
+          else paymentsTransformMs += ms;
+        },
+      },
     });
     const emptyBuckets: Record<OrderPhaseUi, number> = { READY: 0, IN_PROGRESS: 0, PARTIAL: 0, DELAYED: 0 };
     working = filtered.map((r) => {
@@ -1260,11 +1371,23 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       fetchCustomersMs,
       fetchOrdersMs,
       fetchPaymentsMs,
+      customersQueryMs,
+      customersTransformMs,
+      ordersQueryMs,
+      ordersTransformMs,
+      paymentsQueryMs,
+      paymentsTransformMs,
+      statusOverrideSetupMs,
       calculateBalancesMs,
       calculateTotalsMs,
       renderMs,
       serializeMs,
       totalMs,
+    });
+    console.log("[balances-report-prisma-query-count]", {
+      prismaQueryCount,
+      prismaQueryBreakdown,
+      scope: "balances-report-data",
     });
   }
 

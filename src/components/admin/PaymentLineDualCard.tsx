@@ -23,6 +23,7 @@ import { formatVatPercentLabel } from "@/lib/vat";
 import { formatMoneyAmount, formatIlsDisplay, formatUsdDisplay, sanitizeMoneyInput } from "@/lib/money-format";
 import { AnimatedMoneyValue } from "@/components/ui/AnimatedMoneyValue";
 import { MoneyInput } from "@/components/ui/MoneyInput";
+import { CreditCard, X } from "lucide-react";
 
 const fmtFooterAmount = formatMoneyAmount;
 
@@ -84,7 +85,7 @@ function PaymentCheckBlock({
     <div className="payment-upd-checks" dir="rtl">
       <div className="payment-upd-checks-header">
         <span className="payment-upd-checks-header-icon" aria-hidden>
-          💳
+          <CreditCard size={16} strokeWidth={1.75} />
         </span>
         <span className="payment-upd-checks-header-title">פרטי צ׳יקים</span>
       </div>
@@ -106,7 +107,7 @@ function PaymentCheckBlock({
                       aria-label="הסר צ׳יק"
                       onClick={() => onRemove(ch.id)}
                     >
-                      ✕
+                      <X size={15} strokeWidth={1.75} aria-hidden />
                     </button>
                   ) : null}
                 </div>
@@ -286,7 +287,7 @@ export function PaymentLineDualCard({
           {isLatest ? <span className="payment-upd-linecard-tag">חדש</span> : null}
         </div>
         <button type="button" className="payment-upd-del" aria-label="מחיקת תשלום" onClick={onRemove}>
-          ✕
+          <X size={16} strokeWidth={1.75} aria-hidden />
         </button>
       </div>
 

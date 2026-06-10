@@ -28,6 +28,7 @@ import { shiftAhWeekCode } from "@/lib/weeks/ah-week-nav";
 import { revalidateAllKpiCachesAction } from "@/lib/kpi-cache-revalidate-action";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 import { useAdminFinancialModal } from "@/components/admin/AdminFinancialModalContext";
+import { useLayoutFinancialDisplay } from "@/hooks/useLayoutFinancialDisplay";
 
 /**
  * דפים נוספים שמציגים את סרגל הסינון הגלובלי (כיום: בקרת קבלות).
@@ -70,11 +71,7 @@ export function GlobalFilterBar({ financial = null, canManageFinancial = false }
   const pathname = usePathname();
   const sp = useSearchParams();
   const { setGlobalCountry } = useAdminGlobal();
-  const rateLabel = financial?.finalDollarRate ?? "—";
-  const rateTitle =
-    financial != null
-      ? `בסיס ${financial.baseDollarRate} + עמלה ${financial.dollarFee} = סופי ${financial.finalDollarRate} ₪/USD`
-      : undefined;
+  const { rateLabel, rateTitle } = useLayoutFinancialDisplay(financial);
 
   const { openFinancialModal } = useAdminFinancialModal();
 

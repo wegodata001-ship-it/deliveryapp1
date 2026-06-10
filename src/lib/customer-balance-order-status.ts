@@ -142,43 +142,53 @@ export async function fetchCustomerOpenOrderEnrichment(params: {
   customerIds: string[];
   orderWhere: PrismaTypes.OrderWhereInput;
   paymentWhereLinked: PrismaTypes.PaymentWhereInput;
+  metrics?: {
+    onQuery?: (kind: "orders" | "payments", ms: number) => void;
+    onTransform?: (kind: "orders" | "payments", ms: number) => void;
+  };
 }): Promise<Map<string, CustomerOpenOrderEnrich>> {
   const map = new Map<string, CustomerOpenOrderEnrich>();
-  const { prisma, customerIds, orderWhere, paymentWhereLinked } = params;
+  const { prisma, customerIds, orderWhere, paymentWhereLinked, metrics } = params;
   const ids = [...new Set(customerIds.filter(Boolean))];
   for (const id of ids) {
     map.set(id, { ...EMPTY_ENRICH, buckets: { READY: 0, IN_PROGRESS: 0, PARTIAL: 0, DELAYED: 0 } });
   }
   if (ids.length === 0) return map;
 
-  const orders = await findManyInChunks(ids, (chunk) =>
-    prisma.order.findMany({
-      where: {
-        ...orderWhere,
-        customerId: { in: chunk },
-        status: { not: OS.CANCELLED },
-      },
-      select: {
-        id: true,
-        customerId: true,
-        orderNumber: true,
-        weekCode: true,
-        status: true,
-        totalIlsWithVat: true,
-        totalIls: true,
-        totalUsd: true,
-        amountUsd: true,
-        commissionUsd: true,
-        usdRateUsed: true,
-        snapshotFinalDollarRate: true,
-        exchangeRate: true,
-      },
-    }),
-  );
+  const orders = await findManyInChunks(ids, async (chunk) => {
+    const t0 = Date.now();
+    try {
+      return await prisma.order.findMany({
+        where: {
+          ...orderWhere,
+          customerId: { in: chunk },
+          status: { not: OS.CANCELLED },
+        },
+        select: {
+          id: true,
+          customerId: true,
+          orderNumber: true,
+          weekCode: true,
+          status: true,
+          totalIlsWithVat: true,
+          totalIls: true,
+          totalUsd: true,
+          amountUsd: true,
+          commissionUsd: true,
+          usdRateUsed: true,
+          snapshotFinalDollarRate: true,
+          exchangeRate: true,
+        },
+      });
+    } finally {
+      metrics?.onQuery?.("orders", Date.now() - t0);
+    }
+  });
 
   const orderIds = orders.map((o) => o.id);
   const paidByOrder = new Map<string, Prisma.Decimal>();
   if (orderIds.length > 0) {
+    const paymentsT0 = Date.now();
     const payments = await prisma.payment.findMany({
       where: {
         ...paymentWhereLinked,
@@ -192,14 +202,18 @@ export async function fetchCustomerOpenOrderEnrichment(params: {
         exchangeRate: true,
       },
     });
+    metrics?.onQuery?.("payments", Date.now() - paymentsT0);
+    const paymentsTransformT0 = Date.now();
     for (const p of payments) {
       const oid = p.orderId;
       if (!oid) continue;
       const cur = paidByOrder.get(oid) ?? new Prisma.Decimal(0);
       paidByOrder.set(oid, cur.add(paymentIlsValue(p)));
     }
+    metrics?.onTransform?.("payments", Date.now() - paymentsTransformT0);
   }
 
+  const ordersTransformT0 = Date.now();
   for (const o of orders) {
     const cid = o.customerId;
     if (!cid) continue;
@@ -241,6 +255,7 @@ export async function fetchCustomerOpenOrderEnrichment(params: {
     }
     map.set(cid, entry);
   }
+  metrics?.onTransform?.("orders", Date.now() - ordersTransformT0);
 
   for (const [, v] of map) {
     v.summary = buildOpenOrderSummary(v.buckets);

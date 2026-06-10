@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PaymentMethod } from "@prisma/client";
+import { Search, X } from "lucide-react";
 import { IntakeLocationCombobox } from "@/components/admin/IntakeLocationCombobox";
 import { AhWeekNavNextButton, AhWeekNavPrevButton } from "@/components/admin/AhWeekNavButtons";
 import {
@@ -458,7 +459,7 @@ export function OrdersListToolbar({
             aria-expanded={filterOpen}
             onClick={() => setFilterOpen((v) => !v)}
           >
-            {filterOpen ? "✕ סגור סינון מתקדם" : "🔍 סינון מתקדם"}
+            {filterOpen ? <><X size={16} strokeWidth={1.75} aria-hidden /> סגור סינון מתקדם</> : <><Search size={16} strokeWidth={1.75} aria-hidden /> סינון מתקדם</>}
           </button>
         </div>
       </div>

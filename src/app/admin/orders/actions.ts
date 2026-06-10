@@ -10,5 +10,5 @@ export async function refreshOrdersListAction(
 ) {
   noStore();
   const me = await requireRoutePermission(["view_orders"]);
-  return fetchOrdersListPageData(sp, me);
+  return fetchOrdersListPageData(sp, me, { bypassCache: true, refreshStats: true });
 }

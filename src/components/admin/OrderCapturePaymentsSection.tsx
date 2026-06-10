@@ -1,7 +1,7 @@
 "use client";
 
 import { PaymentMethod } from "@prisma/client";
-import { Plus, Trash2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Plus, Trash2 } from "lucide-react";
 import { ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS } from "@/lib/order-capture-payment-methods";
 import { formatIlsDisplay, formatUsdDisplay } from "@/lib/money-format";
 import { OrderStatusSelect } from "@/components/admin/OrderStatusSelect";
@@ -258,13 +258,13 @@ export function OrderCapturePaymentsSection({
 
         {showUnderpay ? (
           <div className="adm-pay-warning" role="status">
-            ⚠ לא שולם במלואו — נותר <span dir="ltr">{fmtUsd(remainingUsd!)}</span>
+            <AlertTriangle size={16} strokeWidth={1.75} aria-hidden /> לא שולם במלואו — נותר <span dir="ltr">{fmtUsd(remainingUsd!)}</span>
           </div>
         ) : null}
 
         {showPaidFull ? (
           <div className="adm-pay-success" role="status">
-            ✔ שולם במלואו
+            <CheckCircle2 size={16} strokeWidth={1.75} aria-hidden /> שולם במלואו
           </div>
         ) : null}
 

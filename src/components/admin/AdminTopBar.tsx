@@ -10,6 +10,7 @@ import { shouldShowGlobalFilter } from "@/components/admin/GlobalFilterBar";
 import { useAdminFinancialModal } from "@/components/admin/AdminFinancialModalContext";
 import { AdminLiveClock } from "@/components/admin/AdminLiveClock";
 import { WegoBrandLogo } from "@/components/admin/WegoBrandLogo";
+import { useLayoutFinancialDisplay } from "@/hooks/useLayoutFinancialDisplay";
 
 function titleForPath(pathname: string): string {
   if (pathname === "/admin") return "מסך הבית";
@@ -44,11 +45,7 @@ export function AdminTopBar({ displayName, roleLabel, financial, canManageFinanc
 
   const showGlobalFilters = shouldShowGlobalFilter(pathname);
   const weekCode = sp.get("week") || DEFAULT_WEEK_CODE;
-  const rateLabel = financial?.finalDollarRate ?? "—";
-  const rateTitle =
-    financial != null
-      ? `בסיס ${financial.baseDollarRate} + עמלה ${financial.dollarFee} = סופי ${financial.finalDollarRate} ₪/USD`
-      : undefined;
+  const { rateLabel, rateTitle } = useLayoutFinancialDisplay(financial);
 
   return (
     <header className="adm-header adm-header--erp">

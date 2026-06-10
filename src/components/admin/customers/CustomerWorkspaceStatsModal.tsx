@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { X } from "lucide-react";
 import { formatUsdDisplay } from "@/lib/money-format";
 import {
   WORKSPACE_ORDER_STATUS_LABELS,
@@ -56,7 +57,7 @@ export function CustomerWorkspaceStatsModal({ open, onClose, stats }: Props) {
             onClick={onClose}
             aria-label="סגור"
           >
-            ✕
+            <X size={16} strokeWidth={1.75} aria-hidden />
           </button>
         </header>
 

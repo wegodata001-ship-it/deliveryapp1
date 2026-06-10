@@ -6,6 +6,7 @@ import {
   CircleDollarSign,
   CreditCard,
   FileCheck,
+  Maximize2,
 } from "lucide-react";
 import { formatCustomerBalanceDisplay } from "@/lib/customer-balance";
 import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
@@ -61,27 +62,27 @@ export function orderStatusBadgeClass(status: string): string {
   return "adm-ws-badge adm-ws-badge--neutral";
 }
 
-/** תצוגת סטטוס הזמנה — אימוג׳י + תווית (עיצוב בלבד) */
+/** תצוגת סטטוס הזמנה — תווית ו-badge בלבד (עיצוב בלבד) */
 export function orderStatusDisplay(
   status: string,
   fallbackLabel: string,
-): { emoji: string; label: string; className: string } {
+): { label: string; className: string } {
   if (status === OS.COMPLETED) {
-    return { emoji: "🟢", label: "מוכן", className: orderStatusBadgeClass(status) };
+    return { label: "מוכן", className: orderStatusBadgeClass(status) };
   }
   if (status === OS.CANCELLED) {
-    return { emoji: "🔴", label: "ביטול", className: orderStatusBadgeClass(status) };
+    return { label: "ביטול", className: orderStatusBadgeClass(status) };
   }
   if (status === OS.DEBT_WITHDRAWAL) {
-    return { emoji: "🟣", label: "משיכה מחוב", className: orderStatusBadgeClass(status) };
+    return { label: "משיכה מחוב", className: orderStatusBadgeClass(status) };
   }
   if (status === OS.OPEN) {
-    return { emoji: "🟠", label: "פתוחה", className: orderStatusBadgeClass(status) };
+    return { label: "פתוחה", className: orderStatusBadgeClass(status) };
   }
   if (ORDER_IN_PROGRESS.includes(status)) {
-    return { emoji: "🟠", label: fallbackLabel.trim() || "בתהליך", className: orderStatusBadgeClass(status) };
+    return { label: fallbackLabel.trim() || "בתהליך", className: orderStatusBadgeClass(status) };
   }
-  return { emoji: "⚪", label: fallbackLabel.trim() || "—", className: orderStatusBadgeClass(status) };
+  return { label: fallbackLabel.trim() || "—", className: orderStatusBadgeClass(status) };
 }
 
 function paymentMethodBadgeClass(tone: PaymentMethodTone): string {
@@ -124,7 +125,7 @@ export function WorkspaceExpandButton({ onClick, label }: { onClick: () => void;
       title="הרחב"
       onClick={onClick}
     >
-      <span aria-hidden>⛶</span>
+      <Maximize2 size={16} strokeWidth={1.75} aria-hidden />
     </button>
   );
 }

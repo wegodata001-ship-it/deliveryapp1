@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { useRouter } from "next/navigation";
 import type { PaymentMethod } from "@prisma/client";
 import { logPaymentAllocationPreSave } from "@/lib/payment-allocation-debug";
 import {
@@ -74,6 +73,7 @@ import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import { OrderEditModal } from "@/components/admin/OrderEditModal";
 import { Button } from "@/components/ui/Button";
+import { BarChart3, Home, Search } from "lucide-react";
 import { normalizeOrderSourceCountry, type OrderCountryCode } from "@/lib/order-countries";
 import {
   DEFAULT_WORK_COUNTRY,
@@ -393,7 +393,6 @@ export function PaymentModalUpdated({
   canCreateOrders = true,
   viewerIsAdmin = false,
 }: Props) {
-  const router = useRouter();
   const { globalWeek, globalCountry } = useAdminGlobal();
   const [financeLive, setFinanceLive] = useState<SerializedFinancial | null>(null);
   const financeEffective = financeLive ?? financial;
@@ -490,6 +489,8 @@ export function PaymentModalUpdated({
 
   const [includedIds, setIncludedIds] = useState<string[] | null>(null);
   const [saveBusy, setSaveBusy] = useState(false);
+  const [saveJustSaved, setSaveJustSaved] = useState(false);
+  const saveJustSavedTimerRef = useRef<number | null>(null);
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [overageModalOpen, setOverageModalOpen] = useState(false);
   const [overagePreview, setOveragePreview] = useState<PaymentOveragePreview | null>(null);
@@ -502,7 +503,7 @@ export function PaymentModalUpdated({
   const tableScrollRef = useRef<HTMLDivElement | null>(null);
   /** תצוגת "איפוס יתרה" — ללא שינוי DB/טבלה עד שמירת תשלום */
   const [customerBalanceResetPending, setCustomerBalanceResetPending] = useState(false);
-  /** אינדקס בשורות payments[] (0 = תשלום אחרון שנוסף) — ניווט ⬅/➡ מקומי בלבד */
+  /** אינדקס בשורות payments[] (0 = תשלום אחרון שנוסף) — ניווט מקומי בלבד */
   const [activePaymentLineIndex, setActivePaymentLineIndex] = useState(0);
   const paymentLinesContainerRef = useRef<HTMLDivElement | null>(null);
   const [paymentNavLoading, setPaymentNavLoading] = useState(false);
@@ -775,6 +776,9 @@ export function PaymentModalUpdated({
     return () => window.removeEventListener("wego:balances-refresh", onBalancesRefresh);
   }, [customer?.id, refreshCustomerOpenDebt]);
 
+  const customerWorkspaceLoading =
+    loadingCustomer || ordersLoading || balancesLoading || paymentsLoading;
+
   const customerBalanceUsd = useMemo(
     () => parseMoneyStringOrZero(customer?.customerBalanceUsd ?? "0"),
     [customer?.customerBalanceUsd],
@@ -989,6 +993,7 @@ export function PaymentModalUpdated({
       const balancesStart = performance.now();
       const paymentsStart = performance.now();
 
+      // orders + balances + payments — במקביל (Promise.all), לא ברצף
       const ordersP = fetchPaymentIntakeOrdersClient(cid, weekForFetch, wc).then((res) => {
         const ordersLoadMs = Math.round(performance.now() - ordersStart);
         if (gen !== customerWorkspaceGenRef.current) return { ordersLoadMs, ok: true as const };
@@ -1043,87 +1048,21 @@ export function PaymentModalUpdated({
 
         const ordersMs = ordersRes.ordersLoadMs;
         const balancesMs = balancesRes.balancesLoadMs;
+        const customerPaymentsMs = paymentsRes.paymentsLoadMs;
+        const totalCustomerLoadMs = Math.round(performance.now() - bgStart);
         logPaymentCapturePerf({
           label: opts?.perfLabel ?? "customerWorkspaceBackground",
           customerFoundMs,
+          ordersMs,
+          balancesMs,
+          customerPaymentsMs,
+          totalCustomerLoadMs,
           ordersLoadMs: ordersMs,
           loadOrdersMs: ordersMs,
           balancesLoadMs: balancesMs,
           loadBalancesMs: balancesMs,
-          paymentsLoadMs: paymentsRes.paymentsLoadMs,
-          renderMs: Math.round(performance.now() - bgStart),
-        });
-      });
-    },
-    [intakeDocumentWorkCountry],
-  );
-
-  /** רענון הזמנות+יתרות אחרי שמירה — ברקע בלבד, בלי לחסום את ה-UI */
-  const refreshOrdersAndBalancesInBackground = useCallback(
-    (
-      customerId: string,
-      weekCode: string | null,
-      opts?: { cacheSnapshotPaymentId?: string; savePaymentMs?: number },
-    ) => {
-      const cid = customerId.trim();
-      if (!cid) return;
-
-      const gen = ++customerWorkspaceGenRef.current;
-      const weekForFetch = weekCode?.trim() || null;
-      const wc = intakeDocumentWorkCountry;
-
-      setOrdersLoading(true);
-      setBalancesLoading(true);
-
-      const ordersStart = performance.now();
-      const balancesStart = performance.now();
-
-      const ordersP = fetchPaymentIntakeOrdersClient(cid, weekForFetch, wc).then((res) => {
-        const refreshOrdersMs = Math.round(performance.now() - ordersStart);
-        if (gen !== customerWorkspaceGenRef.current) return { refreshOrdersMs, ok: true as const };
-        setOrdersLoading(false);
-        if (!res.ok) {
-          setLoadErr(res.error);
-          return { refreshOrdersMs, ok: false as const };
-        }
-        setOrders(res.orders);
-        return { refreshOrdersMs, ok: true as const };
-      });
-
-      const balancesP = fetchPaymentIntakeBalancesClient(cid, wc).then((res) => {
-        const refreshBalancesMs = Math.round(performance.now() - balancesStart);
-        if (gen !== customerWorkspaceGenRef.current) return { refreshBalancesMs, ok: true as const };
-        setBalancesLoading(false);
-        if (!res.ok) return { refreshBalancesMs, ok: false as const };
-        setCustomerOpenDebtSignedUsd(parseMoneyStringOrZero(String(res.openDebtSignedUsd)));
-        setCustomer((cur) =>
-          cur?.id === cid
-            ? { ...cur, customerBalanceUsd: res.internalSignedUsd || res.customerBalanceUsd }
-            : cur,
-        );
-        return { refreshBalancesMs, ok: true as const };
-      });
-
-      void Promise.allSettled([ordersP, balancesP]).then((results) => {
-        if (gen !== customerWorkspaceGenRef.current) return;
-
-        const ordersRes = results[0].status === "fulfilled" ? results[0].value : null;
-        const balancesRes = results[1].status === "fulfilled" ? results[1].value : null;
-
-        const cachePid = opts?.cacheSnapshotPaymentId?.trim();
-        if (cachePid) {
-          const snap = buildSnapshotRef.current?.();
-          if (snap && snap.paymentId === cachePid) {
-            paymentSnapshotCacheRef.current.set(snap);
-            cacheSharedPaymentSnapshot(snap);
-          }
-        }
-
-        logPaymentCapturePerf({
-          label: "savePaymentBackground",
-          savePaymentMs: opts?.savePaymentMs,
-          refreshOrdersMs: ordersRes?.refreshOrdersMs,
-          refreshBalancesMs: balancesRes?.refreshBalancesMs,
+          paymentsLoadMs: customerPaymentsMs,
+          renderMs: totalCustomerLoadMs,
         });
       });
     },
@@ -1144,36 +1083,84 @@ export function PaymentModalUpdated({
       }
 
       setLoadingCustomer(true);
+      setOrdersLoading(true);
+      setBalancesLoading(true);
+      setPaymentsLoading(true);
       setLoadErr(null);
       const weekForFetch = opts?.weekCode?.trim() || null;
-      const res = await fetchPaymentIntakeCustomerOrdersAction(cid, weekForFetch, intakeDocumentWorkCountry);
+      const wc = intakeDocumentWorkCountry;
+      const loadStart = performance.now();
+      const workspaceStart = performance.now();
+      const balancesStart = performance.now();
+
+      const [workspaceRes, balancesRes] = await Promise.all([
+        fetchPaymentIntakeCustomerOrdersAction(cid, weekForFetch, wc).then((r) => ({
+          res: r,
+          ms: Math.round(performance.now() - workspaceStart),
+        })),
+        fetchPaymentIntakeBalancesClient(cid, wc).then((r) => ({
+          res: r,
+          ms: Math.round(performance.now() - balancesStart),
+        })),
+      ]);
+
       setLoadingCustomer(false);
-      if (!res.ok) {
+      setOrdersLoading(false);
+      setBalancesLoading(false);
+      setPaymentsLoading(false);
+
+      const totalCustomerLoadMs = Math.round(performance.now() - loadStart);
+      const workspace = workspaceRes.res;
+      const balances = balancesRes.res;
+
+      if (!workspace.ok) {
         setCustomer(null);
         setCustomerPayments([]);
         setOrders([]);
         setCommissionResetIds([]);
         setCustomerBalanceResetPending(false);
-        setLoadErr(res.error);
+        setLoadErr(workspace.error);
+        logPaymentCapturePerf({
+          label: "customerWorkspaceAwait",
+          totalCustomerLoadMs,
+          ordersMs: workspaceRes.ms,
+        });
         return false;
       }
-      setCustomer(res.customer);
-      setCustomerPayments(res.customerPayments);
-      setOrders(res.orders);
+
+      setCustomer(workspace.customer);
+      setCustomerPayments(workspace.customerPayments);
+      setOrders(workspace.orders);
       setCommissionResetIds([]);
       setCustomerBalanceResetPending(false);
       setDraftCustomer({
-        code: res.customer.customerCode ?? "",
-        displayName: res.customer.displayName ?? "",
-        nameEn: res.customer.nameEn ?? res.customer.nameHe ?? "",
-        nameAr: res.customer.nameAr ?? "",
-        phone: res.customer.phone ?? "",
-        index: res.customer.customerIndex ?? "",
+        code: workspace.customer.customerCode ?? "",
+        displayName: workspace.customer.displayName ?? "",
+        nameEn: workspace.customer.nameEn ?? workspace.customer.nameHe ?? "",
+        nameAr: workspace.customer.nameAr ?? "",
+        phone: workspace.customer.phone ?? "",
+        index: workspace.customer.customerIndex ?? "",
       });
       setIncludedIds(null);
       setSaveErr(null);
       setCustSearchNoHits(false);
-      setCustomerOpenDebtSignedUsd(parseMoneyStringOrZero(res.customer.customerBalanceUsd));
+      if (balances.ok) {
+        setCustomerOpenDebtSignedUsd(parseMoneyStringOrZero(String(balances.openDebtSignedUsd)));
+        setCustomer((cur) =>
+          cur?.id === cid
+            ? { ...cur, customerBalanceUsd: balances.internalSignedUsd || balances.customerBalanceUsd }
+            : cur,
+        );
+      } else {
+        setCustomerOpenDebtSignedUsd(parseMoneyStringOrZero(workspace.customer.customerBalanceUsd));
+      }
+      logPaymentCapturePerf({
+        label: "customerWorkspaceAwait",
+        totalCustomerLoadMs,
+        ordersMs: workspaceRes.ms,
+        balancesMs: balancesRes.ms,
+        customerPaymentsMs: workspaceRes.ms,
+      });
       if (opts?.focusAmount === true) focusFirstAmountInput();
       return true;
     },
@@ -2150,17 +2137,30 @@ export function PaymentModalUpdated({
       saveSurplusAsCredit: saveSurplusAsCredit || forceCustomerCreditPayment,
     });
     const savePaymentMs = Math.round(performance.now() - saveStart);
-    setSaveBusy(false);
     if (!res.ok) {
+      setSaveBusy(false);
       setSaveErr(res.error);
       return { ok: false };
     }
     const primaryPaymentCode = res.saved.primaryPaymentCode?.trim() ?? "";
     if (!primaryPaymentCode) {
+      setSaveBusy(false);
       setSaveErr("שמירה הצליחה אך חסר קוד תשלום");
       return { ok: false };
     }
 
+    setSaveBusy(false);
+    if (saveJustSavedTimerRef.current != null) {
+      window.clearTimeout(saveJustSavedTimerRef.current);
+    }
+    setSaveJustSaved(true);
+    saveJustSavedTimerRef.current = window.setTimeout(() => {
+      setSaveJustSaved(false);
+      saveJustSavedTimerRef.current = null;
+    }, 2000);
+    onToast("התשלום נשמר");
+
+    const refreshStart = performance.now();
     const savedDateYmd = receivedTodaySave ? formatLocalYmd(new Date()) : paymentDateYmd;
     const resetIds = [...commissionResetIds];
     setOrders((cur) =>
@@ -2211,25 +2211,14 @@ export function PaymentModalUpdated({
     }
     syncBaselineSoon();
 
-    onToast("התשלום נשמר");
-
+    const refreshAfterSaveMs = Math.round(performance.now() - refreshStart);
     logPaymentCapturePerf({
       label: "savePayment",
       savePaymentMs,
+      refreshAfterSaveMs,
+      totalUiUpdateMs: savePaymentMs + refreshAfterSaveMs,
       paymentCode: primaryPaymentCode,
     });
-
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
-    }
-
-    const cidAfterSave = customer?.id?.trim();
-    if (cidAfterSave) {
-      refreshOrdersAndBalancesInBackground(cidAfterSave, weekForSave, {
-        cacheSnapshotPaymentId: savedPaymentId || undefined,
-        savePaymentMs,
-      });
-    }
 
     return { ok: true, primaryPaymentCode, customerBalanceUsd: res.saved.customerBalanceUsd };
   }
@@ -2254,9 +2243,8 @@ export function PaymentModalUpdated({
   }
 
   /**
-   * "שמור וחדש" — שומר את התשלום הנוכחי, מאפס את הטופס,
-   * וטוען מחדש את ההזמנות של הלקוח כדי שיתרת ההזמנות תתעדכן —
-   * אך המודאל נשאר פתוח, מוכן לתשלום חדש.
+   * "שמור וחדש" — שומר את התשלום, מעדכן יתרות מקומית, ומאפס את הטופס
+   * לתשלום הבא — בלי רענון מלא של המערכת.
    */
   async function onSaveAndNew() {
     saveAfterOverageRef.current = "new";
@@ -2382,7 +2370,6 @@ export function PaymentModalUpdated({
       searchBusy: paymentCodeSearchBusy,
       searchPlaceholder: displayedPaymentCode || null,
       actionsDisabled: paymentNavLoading || saveBusy,
-      onNewCapture: onStartNewCapturePayment,
       onHome: onStartNewCapturePayment,
     }),
     [
@@ -2419,8 +2406,6 @@ export function PaymentModalUpdated({
       if (customer?.id) {
         void refreshCustomerOpenDebt(customer.id);
       }
-      window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
-      router.refresh();
     } finally {
       setCancelPaymentBusy(false);
     }
@@ -2469,8 +2454,11 @@ export function PaymentModalUpdated({
                 />
               </div>
             </div>
-            {loadingCustomer ? (
-              <p className="payment-modal-hint payment-modal-hint--top">טוען לקוח…</p>
+            {customerWorkspaceLoading ? (
+              <p className="payment-modal-hint payment-modal-hint--top payment-modal-hint--workspace-load" role="status">
+                <span className="payment-modal-save-spinner" aria-hidden />
+                טוען נתוני לקוח…
+              </p>
             ) : null}
             {loadErr ? <div className="payment-modal-err payment-modal-err--top">{loadErr}</div> : null}
 
@@ -2494,7 +2482,7 @@ export function PaymentModalUpdated({
                         aria-label="חיפוש לפי קוד לקוח"
                         onClick={() => triggerFieldSearch("code")}
                       >
-                        🔍
+                        <Search size={16} strokeWidth={1.75} aria-hidden />
                       </button>
                     </span>
                     <div className="payment-modal-cust-code-field">
@@ -2529,7 +2517,7 @@ export function PaymentModalUpdated({
                         aria-label="חיפוש לפי שם לקוח"
                         onClick={() => triggerFieldSearch("displayName")}
                       >
-                        🔍
+                        <Search size={16} strokeWidth={1.75} aria-hidden />
                       </button>
                     </span>
                     <input
@@ -2573,7 +2561,7 @@ export function PaymentModalUpdated({
                         aria-label="חיפוש לפי שם בערבית"
                         onClick={() => triggerFieldSearch("nameAr")}
                       >
-                        🔍
+                        <Search size={16} strokeWidth={1.75} aria-hidden />
                       </button>
                     </span>
                     <input
@@ -2619,7 +2607,7 @@ export function PaymentModalUpdated({
                         aria-label="חיפוש לפי אינדקס"
                         onClick={() => triggerFieldSearch("index")}
                       >
-                        🔍
+                        <Search size={16} strokeWidth={1.75} aria-hidden />
                       </button>
                     </span>
                     <input
@@ -2645,7 +2633,7 @@ export function PaymentModalUpdated({
                     title="כרטסת לקוח"
                     aria-label="כרטסת לקוח"
                   >
-                    📊
+                    <BarChart3 size={16} strokeWidth={1.75} aria-hidden />
                   </button>
                 </div>
                 {custDdOpen && customerHits.length > 0 ? (
@@ -2674,14 +2662,12 @@ export function PaymentModalUpdated({
                     <span className="payment-modal-cust-ids" dir="ltr">
                       {customer.customerCode ? `#${customer.customerCode}` : null}
                       {" · "}
-                      {ordersLoading ? (
-                        <span className="payment-modal-cust-summary-loading">הזמנות…</span>
+                      {customerWorkspaceLoading ? (
+                        <span className="payment-modal-cust-summary-loading">טוען נתוני לקוח…</span>
                       ) : (
                         <span>{orders.length} הזמנות</span>
                       )}
-                      {balancesLoading ? (
-                        <span className="payment-modal-cust-summary-loading"> · יתרות…</span>
-                      ) : customerOpenDebtDisplayUsd > 0.01 ? (
+                      {!customerWorkspaceLoading && customerOpenDebtDisplayUsd > 0.01 ? (
                         <>
                           {" · "}
                           <button
@@ -2692,9 +2678,6 @@ export function PaymentModalUpdated({
                             חוב פתוח: ${fmtUsdDisplay(customerOpenDebtDisplayUsd)}
                           </button>
                         </>
-                      ) : null}
-                      {paymentsLoading ? (
-                        <span className="payment-modal-cust-summary-loading"> · תשלומים…</span>
                       ) : null}
                     </span>
                   </div>
@@ -2778,7 +2761,7 @@ export function PaymentModalUpdated({
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={goToCurrentWorkWeek}
                   >
-                    🏠
+                    <Home size={16} strokeWidth={1.75} aria-hidden />
                   </button>
                   <input
                     type="text"
@@ -2838,15 +2821,9 @@ export function PaymentModalUpdated({
             </div>
 
             <div className="payment-modal-table-wrap payment-modal-table-wrap--focused">
-              {customer && (ordersLoading || balancesLoading || paymentsLoading) ? (
+              {customer && customerWorkspaceLoading ? (
                 <p className="payment-modal-hint" role="status" aria-live="polite">
-                  {[
-                    ordersLoading ? "הזמנות…" : null,
-                    balancesLoading ? "יתרות…" : null,
-                    paymentsLoading ? "תשלומים…" : null,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
+                  טוען נתוני לקוח…
                 </p>
               ) : null}
               {customer && intakeWeekTableHint ? (
@@ -3014,13 +2991,11 @@ export function PaymentModalUpdated({
                     {matched.length === 0 ? (
                       <tr>
                         <td colSpan={12} className="payment-modal-empty">
-                          {customer && ordersLoading
-                            ? "טוען הזמנות…"
-                            : customer && balancesLoading
-                              ? "טוען יתרות…"
-                              : customer
-                                ? "אין הזמנות ללקוח זה"
-                                : "בחרו לקוח"}
+                          {customer && customerWorkspaceLoading
+                            ? "טוען נתוני לקוח…"
+                            : customer
+                              ? "אין הזמנות ללקוח זה"
+                              : "בחרו לקוח"}
                         </td>
                       </tr>
                     ) : (
@@ -3278,6 +3253,8 @@ export function PaymentModalUpdated({
                         <span className="payment-modal-save-spinner" aria-hidden />
                         שומר…
                       </>
+                    ) : saveJustSaved ? (
+                      "נשמר"
                     ) : (
                       "שמור וחדש"
                     )}
@@ -3384,6 +3361,8 @@ export function PaymentModalUpdated({
                       <span className="payment-modal-save-spinner" aria-hidden />
                       שומר…
                     </>
+                  ) : saveJustSaved ? (
+                    "נשמר"
                   ) : (
                     "שמור תשלום"
                   )}

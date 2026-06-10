@@ -14,6 +14,7 @@ import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
 import { TableEmpty, TableError, TableSkeleton } from "@/components/ui/data-table";
+import { CalendarDays, DollarSign, FileSpreadsheet, FileText, Globe2, Package, Search } from "lucide-react";
 
 const PAGE_LIMIT = 25;
 const SEARCH_DEBOUNCE_MS = 350;
@@ -245,19 +246,19 @@ export function OrdersSourceTableClient({ initialSearch = "" }: { initialSearch?
       {kpis ? (
         <div className="adm-orders-source-kpi-row" dir="rtl">
           <div className="adm-orders-source-kpi-card">
-            <span className="adm-orders-source-kpi-lbl">📦 סה״כ הזמנות</span>
+            <span className="adm-orders-source-kpi-lbl"><Package size={16} strokeWidth={1.75} aria-hidden /> סה״כ הזמנות</span>
             <strong>{kpis.totalOrders.toLocaleString("he-IL")}</strong>
           </div>
           <div className="adm-orders-source-kpi-card">
-            <span className="adm-orders-source-kpi-lbl">💰 סכום כולל (USD)</span>
+            <span className="adm-orders-source-kpi-lbl"><DollarSign size={16} strokeWidth={1.75} aria-hidden /> סכום כולל (USD)</span>
             <strong dir="ltr">${kpis.totalUsd}</strong>
           </div>
           <div className="adm-orders-source-kpi-card">
-            <span className="adm-orders-source-kpi-lbl">🌍 מדינות פעילות</span>
+            <span className="adm-orders-source-kpi-lbl"><Globe2 size={16} strokeWidth={1.75} aria-hidden /> מדינות פעילות</span>
             <strong>{kpis.activeCountries.toLocaleString("he-IL")}</strong>
           </div>
           <div className="adm-orders-source-kpi-card">
-            <span className="adm-orders-source-kpi-lbl">📅 הזמנות השבוע ({kpis.weekCode})</span>
+            <span className="adm-orders-source-kpi-lbl"><CalendarDays size={16} strokeWidth={1.75} aria-hidden /> הזמנות השבוע ({kpis.weekCode})</span>
             <strong>{kpis.weekOrders.toLocaleString("he-IL")}</strong>
           </div>
         </div>
@@ -271,7 +272,7 @@ export function OrdersSourceTableClient({ initialSearch = "" }: { initialSearch?
           disabled={loading && !payload}
         />
         <button type="button" className="adm-btn adm-btn--ghost" onClick={() => setFilterOpen((v) => !v)}>
-          סינון מתקדם 🔍
+          <Search size={16} strokeWidth={1.75} aria-hidden /> סינון מתקדם
         </button>
         <button
           type="button"
@@ -279,7 +280,7 @@ export function OrdersSourceTableClient({ initialSearch = "" }: { initialSearch?
           disabled={!!exportBusy || loading}
           onClick={() => void runExport("pdf")}
         >
-          {exportBusy === "pdf" ? "…" : "📄 Export PDF"}
+          {exportBusy === "pdf" ? "…" : <><FileText size={16} strokeWidth={1.75} aria-hidden /> Export PDF</>}
         </button>
         <button
           type="button"
@@ -287,7 +288,7 @@ export function OrdersSourceTableClient({ initialSearch = "" }: { initialSearch?
           disabled={!!exportBusy || loading}
           onClick={() => void runExport("excel")}
         >
-          {exportBusy === "excel" ? "…" : "📊 Export Excel"}
+          {exportBusy === "excel" ? "…" : <><FileSpreadsheet size={16} strokeWidth={1.75} aria-hidden /> Export Excel</>}
         </button>
         <button type="button" className="adm-btn adm-btn--ghost" onClick={() => runFetch()} disabled={loading}>
           רענון

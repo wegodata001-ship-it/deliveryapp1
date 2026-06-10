@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { UserRound } from "lucide-react";
 import {
   listCustomerWorkspaceOrdersAction,
   listCustomerWorkspacePaymentsAction,
@@ -245,7 +246,7 @@ export function CustomerWorkspaceClient() {
         <div className="adm-cust-workspace__hero-main">
           <h1 className="adm-cust-workspace__h1">
             <span className="adm-cust-workspace__h1-ico" aria-hidden>
-              👤
+              <UserRound size={18} strokeWidth={1.75} />
             </span>
             מרכז לקוחות
           </h1>

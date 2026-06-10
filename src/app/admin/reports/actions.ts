@@ -39,7 +39,7 @@ export type ReportCard = {
   id: ReportKind;
   title: string;
   description: string;
-  icon: string;
+  icon: "package" | "map-pin" | "calendar" | "scale" | "credit-card";
   preview: string;
 };
 
@@ -176,11 +176,11 @@ export async function getReportsDashboardAction(filters: ReportFilters): Promise
     getOrderStatusLabelMap(),
   ]);
   const reports: ReportCard[] = [
-    { id: "openOrdersReport", title: "דוח הזמנות פתוחות", description: "הזמנות שעדיין לא נסגרו, לפי לקוח ושבוע.", icon: "📦", preview: `${kpis.totalOrders} הזמנות בטווח` },
-    { id: "paymentsByLocationReport", title: "תשלומים לפי מקום", description: "סיכום תשלומים לפי מקום קליטת התשלום.", icon: "📍", preview: `תשלומים קשורים ${kpis.totalPaymentsLinked}` },
-    { id: "weeklySummaryReport", title: "סיכום שבועי", description: "סיכום הזמנות, תשלומים ויתרות לפי שבוע עבודה.", icon: "📅", preview: filters.workWeek ? `שבוע ${filters.workWeek}` : "כל השבועות בטווח" },
-    { id: "customerBalanceReport", title: "יתרות לקוחות", description: "לקוחות, שולם, יתרה פתוחה וסכומים לתשלום.", icon: "⚖️", preview: `יתרת חוב ${kpis.totalDebt}` },
-    { id: "paymentsByMethodReport", title: "תשלומים לפי אמצעי", description: "חלוקת תשלומים לפי מזומן, אשראי, העברה ועוד.", icon: "💳", preview: `סה\"כ זיכויים ${kpis.totalCredit}` },
+    { id: "openOrdersReport", title: "דוח הזמנות פתוחות", description: "הזמנות שעדיין לא נסגרו, לפי לקוח ושבוע.", icon: "package", preview: `${kpis.totalOrders} הזמנות בטווח` },
+    { id: "paymentsByLocationReport", title: "תשלומים לפי מקום", description: "סיכום תשלומים לפי מקום קליטת התשלום.", icon: "map-pin", preview: `תשלומים קשורים ${kpis.totalPaymentsLinked}` },
+    { id: "weeklySummaryReport", title: "סיכום שבועי", description: "סיכום הזמנות, תשלומים ויתרות לפי שבוע עבודה.", icon: "calendar", preview: filters.workWeek ? `שבוע ${filters.workWeek}` : "כל השבועות בטווח" },
+    { id: "customerBalanceReport", title: "יתרות לקוחות", description: "לקוחות, שולם, יתרה פתוחה וסכומים לתשלום.", icon: "scale", preview: `יתרת חוב ${kpis.totalDebt}` },
+    { id: "paymentsByMethodReport", title: "תשלומים לפי אמצעי", description: "חלוקת תשלומים לפי מזומן, אשראי, העברה ועוד.", icon: "credit-card", preview: `סה\"כ זיכויים ${kpis.totalCredit}` },
   ];
   return {
     kpis,

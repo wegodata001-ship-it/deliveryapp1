@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
-import { Loader2, Lock, User } from "lucide-react";
+import { CheckCircle2, Loader2, Lock, User } from "lucide-react";
 import {
   LOGIN_TRACE_HEADER,
   createLoginTraceId,
@@ -163,9 +163,9 @@ export function LoginForm({ nextPath }: { nextPath: string }) {
         )}
       </button>
       <ul className="al-features" aria-label="יכולות המערכת">
-        <li>✓ ניהול הזמנות</li>
-        <li>✓ ניהול תשלומים</li>
-        <li>✓ דוחות ויתרות</li>
+        <li><CheckCircle2 size={16} strokeWidth={1.75} aria-hidden /> ניהול הזמנות</li>
+        <li><CheckCircle2 size={16} strokeWidth={1.75} aria-hidden /> ניהול תשלומים</li>
+        <li><CheckCircle2 size={16} strokeWidth={1.75} aria-hidden /> דוחות ויתרות</li>
       </ul>
     </form>
   );

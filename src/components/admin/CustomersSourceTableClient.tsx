@@ -12,6 +12,7 @@ import { WEGO_CUSTOMER_CREATED_EVENT } from "@/lib/customer-created-bus";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { TableEmpty, TableError, TableSkeleton } from "@/components/ui/data-table";
 import { formatMoneyAmount } from "@/lib/money-format";
+import { FileSpreadsheet, FileText, Search } from "lucide-react";
 
 const PAGE_LIMIT = 25;
 const SEARCH_DEBOUNCE_MS = 350;
@@ -48,8 +49,8 @@ function parseNumber(raw: string | null | undefined): number {
 function balanceUi(balanceUsd: string): { cls: string; badge: string; text: string } {
   const n = parseNumber(balanceUsd);
   const abs = formatMoneyAmount(Math.abs(n), 2);
-  if (n > 0.005) return { cls: "adm-custbal adm-custbal--debt", badge: "🔴 חייב", text: `$${abs}` };
-  if (n < -0.005) return { cls: "adm-custbal adm-custbal--credit", badge: "🟢 זכות", text: `-$${abs}` };
+  if (n > 0.005) return { cls: "adm-custbal adm-custbal--debt", badge: "חייב", text: `$${abs}` };
+  if (n < -0.005) return { cls: "adm-custbal adm-custbal--credit", badge: "זכות", text: `-$${abs}` };
   return { cls: "adm-custbal adm-custbal--zero", badge: "אפס", text: "$0.00" };
 }
 
@@ -258,7 +259,7 @@ export function CustomersSourceTableClient({ initialSearch = "" }: { initialSear
           disabled={loading && !payload}
         />
         <button type="button" className="adm-btn adm-btn--ghost" onClick={() => setFilterOpen((v) => !v)}>
-          סינון מתקדם 🔍
+          <Search size={16} strokeWidth={1.75} aria-hidden /> סינון מתקדם
         </button>
         <button
           type="button"
@@ -266,7 +267,7 @@ export function CustomersSourceTableClient({ initialSearch = "" }: { initialSear
           disabled={!!exportBusy || loading}
           onClick={() => void runExport("pdf")}
         >
-          {exportBusy === "pdf" ? "…" : "📄 Export PDF"}
+          {exportBusy === "pdf" ? "…" : <><FileText size={16} strokeWidth={1.75} aria-hidden /> Export PDF</>}
         </button>
         <button
           type="button"
@@ -274,7 +275,7 @@ export function CustomersSourceTableClient({ initialSearch = "" }: { initialSear
           disabled={!!exportBusy || loading}
           onClick={() => void runExport("excel")}
         >
-          {exportBusy === "excel" ? "…" : "📊 Export Excel"}
+          {exportBusy === "excel" ? "…" : <><FileSpreadsheet size={16} strokeWidth={1.75} aria-hidden /> Export Excel</>}
         </button>
         <button type="button" className="adm-btn adm-btn--ghost" onClick={() => runFetch()} disabled={loading}>
           רענון

@@ -9,10 +9,16 @@ export type PaymentCapturePerfMetrics = {
   loadOrdersMs?: number;
   customerLoadMs?: number;
   customerFoundMs?: number;
+  ordersMs?: number;
+  balancesMs?: number;
+  customerPaymentsMs?: number;
+  totalCustomerLoadMs?: number;
   balancesLoadMs?: number;
   loadBalancesMs?: number;
   paymentsLoadMs?: number;
   savePaymentMs?: number;
+  refreshAfterSaveMs?: number;
+  totalUiUpdateMs?: number;
   refreshOrdersMs?: number;
   refreshBalancesMs?: number;
   renderMs?: number;

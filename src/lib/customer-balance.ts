@@ -5,7 +5,7 @@
  *   • שלילי = חוב לקוח  • חיובי = זכות ללקוח
  *
  * **businessSigned** (תצוגה לעובדים): הזמנות − תשלומים − זיכויים = −internalSigned
- *   • חיובי = חוב פתוח (גבייה) 🔴  • שלילי = יתרת זכות 🟢  • 0 = מאוזן
+ *   • חיובי = חוב פתוח (גבייה)  • שלילי = יתרת זכות  • 0 = מאוזן
  */
 
 import { Prisma } from "@prisma/client";
@@ -123,7 +123,7 @@ export function formatCustomerBalanceDisplay(
   if (businessSigned > EPS) {
     return {
       kind: "debt",
-      badge: "🔴",
+      badge: "חוב",
       label: "חוב פתוח",
       className: "adm-balance-kind adm-balance-kind--debt",
       primaryText: `חוב פתוח: ${amountFormatted}`,
@@ -133,7 +133,7 @@ export function formatCustomerBalanceDisplay(
   if (businessSigned < -EPS) {
     return {
       kind: "credit",
-      badge: "🟢",
+      badge: "זכות",
       label: "יתרת זכות",
       className: "adm-balance-kind adm-balance-kind--credit",
       primaryText: `יתרת זכות: ${amountFormatted}`,
@@ -142,7 +142,7 @@ export function formatCustomerBalanceDisplay(
   }
   return {
     kind: "even",
-    badge: "⚪",
+    badge: "מאוזן",
     label: "מאוזן",
     className: "adm-balance-kind adm-balance-kind--even",
     primaryText: `מאוזן · ${formatMoneyAbs(0, currency)}`,

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { updateOrderListStatusActionForApi, type UpdateOrderListStatusApiResult } from "@/app/admin/capture/actions";
 import { capturePerfLog, logOrderStatusUpdatePerf } from "@/lib/capture-perf";
 import { perfError } from "@/lib/perf-log";
+import { invalidateOrdersListDataCache } from "@/lib/orders-list-data";
 import { requireApiAuth } from "@/lib/session-user-guard";
 
 export const runtime = "nodejs";
@@ -30,6 +31,7 @@ export async function POST(req: Request) {
     const orderId = (body.orderId ?? "").trim();
     const status = (body.status ?? "").trim();
     const res = await updateOrderListStatusActionForApi(orderId, status, auth.user, { AUTH_MS: authMs });
+    if (res.ok) invalidateOrdersListDataCache();
     const totalMs = Math.round(performance.now() - startedAt);
     capturePerfLog({ kind: "orders.status.POST", apiMs: totalMs, ok: res.ok });
     if (!res.ok) {

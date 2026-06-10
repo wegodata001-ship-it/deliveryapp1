@@ -1,4 +1,4 @@
-import { OrderEditRequestStatus } from "@prisma/client";
+import { OrderEditRequestStatus, type Prisma } from "@prisma/client";
 import { isLegacyOrderStatusSlug, OS } from "@/lib/order-status-slugs";
 import type { OrderListRow, OrdersStatusSummary } from "@/components/admin/OrdersListShell";
 import type { OrdersCreatedByOption, OrdersPaymentLocationOption } from "@/components/admin/OrdersListToolbar";
@@ -9,7 +9,7 @@ import { ORDERS_LIST_MAX_PAGE_SIZE, ORDERS_LIST_PAGE_SIZE } from "@/lib/orders-l
 import { perfEnabled, withPerfTimer } from "@/lib/perf-log";
 import { logDbEnvDiagnostics } from "@/lib/db-env-diagnostics";
 import { prisma } from "@/lib/prisma";
-import { formatLocalYmd } from "@/lib/work-week";
+import { formatLocalYmd, parseOrdersListDateFilterFromSearchParams } from "@/lib/work-week";
 import { buildOrdersListWhereFromSearchParams } from "@/app/admin/orders/orders-list-where";
 import { formatMoneyAmount } from "@/lib/money-format";
 
@@ -84,12 +84,101 @@ const orderListSelect = {
   customer: { select: { phone: true, phone2: true } },
 } as const;
 
+type OrderListDbRow = Prisma.OrderGetPayload<{ select: typeof orderListSelect }>;
+type StatusGroupRow = { status: string; _count: { _all: number }; _sum: { totalUsd: unknown } };
+type IntakeLocationRow = { id: string; name: string };
+type PaymentSumRow = { orderId: string | null; _sum: { amountUsd: unknown } };
+type EditRequestsPayload = {
+  pendingRows: { orderId: string; requestedByUserId: string }[];
+  recentRequests: { orderId: string; status: OrderEditRequestStatus; requestedByUserId: string }[];
+};
+type CacheEntry<T> = { expiresAt: number; value: T };
+
+const ORDERS_LIST_CACHE_TTL_MS = 120_000;
+const ORDERS_LIST_CACHE_MAX_ENTRIES = 120;
+
+const ordersStore = new Map<string, CacheEntry<OrderListDbRow[]>>();
+const ordersCountStore = new Map<string, CacheEntry<number>>();
+const ordersStatsStore = new Map<string, CacheEntry<IntakeLocationRow[]>>();
+const ordersKpiStore = new Map<string, CacheEntry<StatusGroupRow[]>>();
+const ordersPaymentSumsStore = new Map<string, CacheEntry<PaymentSumRow[]>>();
+const ordersEditRequestsStore = new Map<string, CacheEntry<EditRequestsPayload>>();
+
+export function invalidateOrdersListDataCache(): void {
+  ordersStore.clear();
+  ordersCountStore.clear();
+  ordersStatsStore.clear();
+  ordersKpiStore.clear();
+  ordersPaymentSumsStore.clear();
+  ordersEditRequestsStore.clear();
+}
+
+function pruneCache<T>(store: Map<string, CacheEntry<T>>): void {
+  if (store.size <= ORDERS_LIST_CACHE_MAX_ENTRIES) return;
+  const first = store.keys().next().value;
+  if (first) store.delete(first);
+}
+
+function getCache<T>(store: Map<string, CacheEntry<T>>, key: string): T | undefined {
+  const entry = store.get(key);
+  if (!entry) return undefined;
+  if (entry.expiresAt < Date.now()) {
+    store.delete(key);
+    return undefined;
+  }
+  return entry.value;
+}
+
+function setCache<T>(store: Map<string, CacheEntry<T>>, key: string, value: T): void {
+  pruneCache(store);
+  store.set(key, { expiresAt: Date.now() + ORDERS_LIST_CACHE_TTL_MS, value });
+}
+
+function stableParamValue(value: string | string[] | undefined): string | string[] | null {
+  if (Array.isArray(value)) return [...value].sort();
+  return typeof value === "string" ? value : null;
+}
+
+function stableSearchParamsKey(sp: Record<string, string | string[] | undefined>): string {
+  return JSON.stringify(
+    Object.keys(sp)
+      .sort()
+      .map((key) => [key, stableParamValue(sp[key])] as const)
+      .filter(([, value]) => value != null && !(Array.isArray(value) && value.length === 0)),
+  );
+}
+
+function buildOrdersStatsScopeParams(
+  sp: Record<string, string | string[] | undefined>,
+): Record<string, string | string[] | undefined> {
+  const out: Record<string, string | string[] | undefined> = {};
+  for (const key of ["ordersWeek", "ordersFrom", "ordersTo", "week", "from", "to", "country", "ordersCountry"]) {
+    if (sp[key] != null) out[key] = sp[key];
+  }
+  return out;
+}
+
+function ordersScopeCacheKey(sp: Record<string, string | string[] | undefined>): string {
+  const range = parseOrdersListDateFilterFromSearchParams(sp);
+  return stableSearchParamsKey({
+    ...buildOrdersStatsScopeParams(sp),
+    __from: range.fromYmd,
+    __to: range.toYmd,
+  });
+}
+
+export type FetchOrdersListPageDataOptions = {
+  bypassCache?: boolean;
+  refreshStats?: boolean;
+};
+
 /**
  * מקור נתונים יחיד ל־SSR של `/admin/orders` (ללא fetch כפול בצד לקוח).
  */
 export async function fetchOrdersListPageData(
   sp: Record<string, string | string[] | undefined>,
   me: AppUser,
+  options: FetchOrdersListPageDataOptions = {},
 ): Promise<OrdersListPageData> {
   logDbEnvDiagnostics("server /admin/orders fetchOrdersListPageData");
   const perfT0 = Date.now();
@@ -100,6 +189,9 @@ export async function fetchOrdersListPageData(
   let summaryMs = 0;
   let renderMs = 0;
   let serializationMs = 0;
+  let cacheHit = 0;
+  let cacheMiss = 0;
+  const cacheState: Record<string, "hit" | "miss" | "bypass"> = {};
 
   const perfTimed = async <T>(
     setter: (ms: number) => void,
@@ -113,30 +205,65 @@ export async function fetchOrdersListPageData(
       setter(Date.now() - t0);
     }
   };
+  const cachedTimed = async <T>(
+    label: string,
+    store: Map<string, CacheEntry<T>>,
+    key: string,
+    setter: (ms: number) => void,
+    work: () => Promise<T>,
+    opts?: { bypass?: boolean },
+  ): Promise<T> => {
+    if (!opts?.bypass && !options.bypassCache) {
+      const cached = getCache(store, key);
+      if (cached !== undefined) {
+        cacheHit += 1;
+        cacheState[label] = "hit";
+        return cached;
+      }
+    }
+    cacheMiss += 1;
+    cacheState[label] = options.bypassCache || opts?.bypass ? "bypass" : "miss";
+    const value = await perfTimed(setter, work);
+    setCache(store, key, value);
+    return value;
+  };
 
   const where = buildOrdersListWhereFromSearchParams(sp);
+  const statsScopeParams = buildOrdersStatsScopeParams(sp);
+  const statsWhere = buildOrdersListWhereFromSearchParams(statsScopeParams);
+  const fullCacheKey = stableSearchParamsKey(sp);
+  const scopeCacheKey = ordersScopeCacheKey(sp);
   const page = readPageParam(sp);
   const pageSize = ORDERS_LIST_PAGE_SIZE;
+  const ordersPageCacheKey = `${fullCacheKey}|page=${page}|pageSize=${pageSize}|user=${me.id}`;
+  const countCacheKey = `${fullCacheKey}|count`;
 
   const [statusGroups, intakeLocationRows, totalCount] = await withPerfTimer(
     "orders.page.fetchOrders",
     async () => {
-      const statusP = perfTimed((ms) => (kpiMs += ms), () =>
-        prisma.order.groupBy({
+      const statusP = cachedTimed("ordersKpiStore", ordersKpiStore, scopeCacheKey, (ms) => (kpiMs += ms), async () =>
+        (await (prisma.order.groupBy as unknown as (args: {
+          by: ["status"];
+          where: Prisma.OrderWhereInput;
+          _count: { _all: true };
+          _sum: { totalUsd: true };
+        }) => Promise<StatusGroupRow[]>)({
           by: ["status"],
-          where,
+          where: statsWhere,
           _count: { _all: true },
           _sum: { totalUsd: true },
-        }),
+        })) as StatusGroupRow[],
+        { bypass: options.refreshStats },
       );
-      const locationsP = perfTimed((ms) => (statsMs += ms), () =>
+      const locationsP = cachedTimed("ordersStatsStore", ordersStatsStore, "intakeLocations:v1", (ms) => (statsMs += ms), () =>
         prisma.intakeLocation.findMany({
           select: { id: true, name: true },
           orderBy: { name: "asc" },
           take: 500,
         }),
+        { bypass: options.refreshStats },
       );
-      const countP = perfTimed((ms) => (ordersCountMs += ms), () =>
+      const countP = cachedTimed("ordersCountStore", ordersCountStore, countCacheKey, (ms) => (ordersCountMs += ms), () =>
         prisma.order.count({ where }),
       );
       return Promise.all([statusP, locationsP, countP]);
@@ -147,7 +274,7 @@ export async function fetchOrdersListPageData(
   const safePage = Math.min(page, totalPages);
   const skip = (safePage - 1) * pageSize;
 
-  const rows = await perfTimed((ms) => (ordersQueryMs += ms), () =>
+  const rows = await cachedTimed("ordersStore", ordersStore, ordersPageCacheKey, (ms) => (ordersQueryMs += ms), () =>
     prisma.order.findMany({
       where,
       orderBy: [{ orderDate: "desc" }, { createdAt: "desc" }],
@@ -172,20 +299,28 @@ export async function fetchOrdersListPageData(
 
   if (sensitiveIds.length > 0) {
     const editTake = Math.min(sensitiveIds.length * 4, 400);
-    const [pendingRows, recentRequests] = await perfTimed((ms) => (statsMs += ms), () =>
-      Promise.all([
-        prisma.orderEditRequest.findMany({
-          where: { orderId: { in: sensitiveIds }, status: OrderEditRequestStatus.PENDING },
-          select: { orderId: true, requestedByUserId: true },
-        }),
-        prisma.orderEditRequest.findMany({
-          where: { orderId: { in: sensitiveIds } },
-          orderBy: { createdAt: "desc" },
-          select: { orderId: true, status: true, requestedByUserId: true },
-          take: editTake,
-        }),
-      ]),
+    const editRequests = await cachedTimed(
+      "ordersEditRequestsStore",
+      ordersEditRequestsStore,
+      `editRequests:${sensitiveIds.slice().sort().join(",")}:take=${editTake}`,
+      (ms) => (statsMs += ms),
+      async () => {
+        const [pendingRows, recentRequests] = await Promise.all([
+          prisma.orderEditRequest.findMany({
+            where: { orderId: { in: sensitiveIds }, status: OrderEditRequestStatus.PENDING },
+            select: { orderId: true, requestedByUserId: true },
+          }),
+          prisma.orderEditRequest.findMany({
+            where: { orderId: { in: sensitiveIds } },
+            orderBy: { createdAt: "desc" },
+            select: { orderId: true, status: true, requestedByUserId: true },
+            take: editTake,
+          }),
+        ]);
+        return { pendingRows, recentRequests };
+      },
     );
+    const { pendingRows, recentRequests } = editRequests;
     pendingEditOrderIds = new Set(pendingRows.map((p) => p.orderId));
     for (const p of pendingRows) {
       pendingRequestedByUserId.set(p.orderId, p.requestedByUserId);
@@ -278,12 +413,16 @@ export async function fetchOrdersListPageData(
   const ids = rows.map((r) => r.id);
   const paySums =
     ids.length > 0
-      ? await perfTimed((ms) => (statsMs += ms), () =>
-          prisma.payment.groupBy({
+      ? await cachedTimed("ordersPaymentSumsStore", ordersPaymentSumsStore, `paySums:${ids.slice().sort().join(",")}`, (ms) => (statsMs += ms), async () =>
+          (await (prisma.payment.groupBy as unknown as (args: {
+            by: ["orderId"];
+            where: Prisma.PaymentWhereInput;
+            _sum: { amountUsd: true };
+          }) => Promise<PaymentSumRow[]>)({
             by: ["orderId"],
             where: { orderId: { in: ids } },
             _sum: { amountUsd: true },
-          }),
+          })) as PaymentSumRow[],
         )
       : [];
   const paidByOrder = new Map<string, number>();
@@ -389,6 +528,8 @@ export async function fetchOrdersListPageData(
   if (perfEnabled()) {
     const totalMs = Date.now() - perfT0;
     console.table({
+      cacheHit,
+      cacheMiss,
       ordersQueryMs,
       ordersCountMs,
       statsMs,
@@ -397,6 +538,12 @@ export async function fetchOrdersListPageData(
       renderMs,
       serializationMs,
       totalMs,
+    });
+    console.log("[orders-list-cache]", {
+      cacheHit,
+      cacheMiss,
+      cacheState,
+      scopeCacheKey,
     });
   }
 

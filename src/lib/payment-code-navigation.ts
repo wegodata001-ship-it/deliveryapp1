@@ -80,7 +80,7 @@ export async function listCapturePaymentCodesOrdered(
 }
 
 /**
- * מזהי Payment לפי אותו סדר כמו listCapturePaymentCodesOrdered — לניווט ⬅/➡.
+ * מזהי Payment לפי אותו סדר כמו listCapturePaymentCodesOrdered — לניווט.
  */
 export async function listCapturePaymentIdsOrdered(
   workCountry: CapturePaymentNavCountry,
@@ -113,7 +113,7 @@ export type CustomerCapturePaymentNavItem = {
 };
 
 /**
- * כל קליטות התשלום של לקוח (שורות עם paymentCode) — לניווט ⬅/➡ בין תשלומי אותו לקוח.
+ * כל קליטות התשלום של לקוח (שורות עם paymentCode) — לניווט בין תשלומי אותו לקוח.
  */
 export async function listCustomerCapturePaymentsForNav(
   customerId: string,
@@ -213,7 +213,7 @@ export async function listCapturePaymentCodesOrderedByCountryAndWeek(
 
 /**
  * קודי קליטת תשלום פתוחים (טיוטה) במדינה — isPaid=false, לא מבוטלים.
- * לניווט ⬅/➡ בקליטה בלבד; לא כולל תשלומים שהושלמו.
+ * לניווט בקליטה בלבד; לא כולל תשלומים שהושלמו.
  */
 function isStalePrismaPaymentStatusError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);

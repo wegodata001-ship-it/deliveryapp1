@@ -14,6 +14,7 @@ import {
   Globe2,
   Hourglass,
   LayoutGrid,
+  LockKeyhole,
   Plus,
   type LucideIcon,
 } from "lucide-react";
@@ -197,29 +198,29 @@ function signedExportMoney(o: OrderListRow, field: "deal" | "total" | "ils"): st
 function orderEditBadgeLabel(
   b: NonNullable<OrderListRow["editBadge"]>,
   orderStatus: string,
-): { emoji: string; text: string; cls: string } {
+): { tone: "pending" | "unlock" | "rejected" | "locked" | ""; text: string; cls: string } {
   const isCancelled = orderStatus === OS.CANCELLED;
   switch (b) {
     case "pending":
-      return { emoji: "🟠", text: "ממתין לאישור מנהל", cls: "adm-order-edit-badge--pending" };
+      return { tone: "pending", text: "ממתין לאישור מנהל", cls: "adm-order-edit-badge--pending" };
     case "unlock":
-      return { emoji: "🟢", text: "אושר לעריכה", cls: "adm-order-edit-badge--unlock" };
+      return { tone: "unlock", text: "אושר לעריכה", cls: "adm-order-edit-badge--unlock" };
     case "rejected":
-      return { emoji: "🔴", text: "נדחה", cls: "adm-order-edit-badge--rejected" };
+      return { tone: "rejected", text: "נדחה", cls: "adm-order-edit-badge--rejected" };
     case "locked":
       return isCancelled
         ? {
-            emoji: "🔒",
+            tone: "locked",
             text: "הזמנה נעולה — ממתין לאישור מנהל",
             cls: "adm-order-edit-badge adm-order-edit-badge--locked-cancelled",
           }
         : {
-            emoji: "🔒",
+            tone: "locked",
             text: "הזמנה נעולה — ממתין לאישור מנהל",
             cls: "adm-order-edit-badge adm-order-edit-badge--locked-ready",
           };
     default:
-      return { emoji: "", text: "", cls: "" };
+      return { tone: "", text: "", cls: "" };
   }
 }
 
@@ -929,7 +930,12 @@ export function OrdersListShell({
                         {o.orderNumber ?? "—"}
                         {editBadgeUi ? (
                           <span className={`adm-order-edit-badge ${editBadgeUi.cls}`} title={editBadgeUi.text}>
-                            {editBadgeUi.emoji} {editBadgeUi.text}
+                            {editBadgeUi.tone === "locked" ? (
+                              <LockKeyhole size={13} strokeWidth={1.75} aria-hidden />
+                            ) : (
+                              <span className={`adm-order-edit-badge-dot adm-order-edit-badge-dot--${editBadgeUi.tone}`} aria-hidden />
+                            )}
+                            {editBadgeUi.text}
                           </span>
                         ) : null}
                       </button>

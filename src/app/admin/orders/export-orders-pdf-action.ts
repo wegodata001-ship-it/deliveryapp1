@@ -125,7 +125,7 @@ function groupedPdfStyles(): string {
   .cust-head-code{font-size:12px;font-weight:600;color:#475569;margin-top:4px}
   .pay-place-grand{
     margin-top:28px;padding:14px 16px;
-    background:#1e293b;color:#fff;border-radius:10px;
+    background:#1e3a5f;color:#fff;border-radius:10px;
     page-break-inside:avoid;break-inside:avoid-page;
   }
   .pay-place-grand h2{font-size:15px;margin:0 0 10px;font-weight:800;color:#fff}
@@ -259,12 +259,12 @@ function cmpPaymentPlaceRowAsc(a: PaymentPlacesReportRow, b: PaymentPlacesReport
 function basePdfStyles(): string {
   return `${atlasExportHtmlStyles()}
   .meta{font-size:12px;color:#475569;margin-bottom:14px}
-  .warn{font-size:12px;color:#b45309;margin-bottom:10px}
+  .warn{font-size:12px;color:#1e3a5f;margin-bottom:10px}
   .place-head{
     margin:22px 0 10px;
     padding:10px 12px;
-    background:#e8ecf4;
-    border:1px solid #cbd5e1;
+    background:#eff6ff;
+    border:1px solid #1d4ed8;
     border-radius:8px;
     text-align:center;
     font-size:15px;
@@ -275,8 +275,9 @@ function basePdfStyles(): string {
   .grp-foot{
     margin:12px 0 20px;
     padding:10px 12px;
-    background:#f8fafc;
-    border:1px solid #e2e8f0;
+    background:#fff;
+    border-top:2px solid #1e3a5f;
+    border-bottom:2px solid #1e3a5f;
     border-radius:8px;
     font-size:12px;
     font-weight:700;
@@ -291,10 +292,11 @@ function basePdfStyles(): string {
   th,td{border:1px solid #cbd5e1;padding:10px 12px;text-align:right;vertical-align:middle}
   thead th{background:#1e3a5f;color:#fff;font-weight:800;letter-spacing:.02em}
   tbody tr:nth-child(even){background:#f8fafc}
-  tbody tr:hover{background:#f1f5f9}
+  tbody tr:hover{background:#eff6ff}
   td.cust{text-align:right;font-weight:700}
-  td.ils{color:#0f9f55;font-weight:700}
+  td.ils{color:#1e3a5f;font-weight:700}
   td.usd{color:#1d4ed8;font-weight:700}
+  .wego-export-foot{margin-top:14px;font-size:10px;color:#1e3a5f;text-align:center;direction:ltr}
   @media print { @page { size: A4 landscape; margin: 10mm } }
 `;
 }
@@ -656,6 +658,7 @@ ${renderPaymentPlacesReportBody(paymentRows)}
 ${atlasHtmlHeadBlock(null, "דוח הזמנות לפי מקום", { extraMeta: meta })}
 ${warn}
 ${renderByIntakePlaceBody(pdfRows)}
+<div class="wego-export-foot">WEGO ERP Business Management System</div>
 </body></html>`;
     return { ok: true, html };
   }
@@ -667,6 +670,7 @@ ${renderByIntakePlaceBody(pdfRows)}
 ${atlasHtmlHeadBlock(null, "דוח הזמנות לפי לקוח", { extraMeta: meta })}
 ${warn}
 ${renderByCustomerBody(pdfRows)}
+<div class="wego-export-foot">WEGO ERP Business Management System</div>
 </body></html>`;
     return { ok: true, html };
   }
@@ -678,6 +682,7 @@ ${renderByCustomerBody(pdfRows)}
 ${atlasHtmlHeadBlock("orders", "דוח הזמנות", { extraMeta: meta })}
 ${warn}
 ${tableHtml(pdfRows) + footerBlock(sumTotals(pdfRows), "סה״כ כללי")}
+<div class="wego-export-foot">WEGO ERP Business Management System</div>
 </body></html>`;
 
   return { ok: true, html };

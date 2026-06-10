@@ -213,7 +213,7 @@ export function MinimalOrderCapturePanel({ onToast, canCreateOrders, onClose }: 
             ביטול
           </button>
           <button type="submit" className={`adm-btn adm-btn--primary adm-btn--dense${busy ? " loading" : ""}`} disabled={busy}>
-            {busy ? "⏳ שומר..." : "שמירה"}
+            {busy ? "שומר..." : "שמירה"}
           </button>
         </div>
       </form>

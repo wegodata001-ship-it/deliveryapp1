@@ -12,6 +12,7 @@ import {
 import { Modal } from "@/components/ui/Modal";
 import { TableEmpty, TableError, TableSkeleton } from "@/components/ui/data-table";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
+import { Eye, Pencil, Search, Trash2 } from "lucide-react";
 
 const PAGE_LIMIT = 20;
 const SEARCH_DEBOUNCE_MS = 400;
@@ -270,7 +271,7 @@ export function SourceTableProClient({ tableId, initialData = null, initialSearc
           disabled={loading && !data}
         />
         <button type="button" className="adm-btn adm-btn--ghost" onClick={() => setFilterOpen((v) => !v)} disabled={!data}>
-          סינון 🔍
+          <Search size={16} strokeWidth={1.75} aria-hidden /> סינון
         </button>
         {data?.canAdd ? (
           <button type="button" className="adm-btn adm-btn--primary" onClick={() => startModal({ type: "add" })} disabled={loading}>
@@ -436,15 +437,15 @@ export function SourceTableProClient({ tableId, initialData = null, initialSearc
                       <td>
                         <div className="adm-source-row-actions">
                           <button type="button" onClick={() => startModal({ type: "view", row: r })} disabled={loading}>
-                            👁 צפייה
+                            <Eye size={16} strokeWidth={1.75} aria-hidden /> צפייה
                           </button>
                           {editableColumns.length ? (
                             <button type="button" onClick={() => startModal({ type: "edit", row: r })} disabled={loading}>
-                              ✏️ ערוך
+                              <Pencil size={16} strokeWidth={1.75} aria-hidden /> ערוך
                             </button>
                           ) : null}
                           <button type="button" onClick={() => void deleteRows([r.id])} disabled={loading}>
-                            🗑 מחק
+                            <Trash2 size={16} strokeWidth={1.75} aria-hidden /> מחק
                           </button>
                         </div>
                       </td>

@@ -4,6 +4,7 @@ import { PaymentMethod, Prisma } from "@prisma/client";
 import { OS } from "@/lib/order-status-slugs";
 import { revalidatePath } from "next/cache";
 import { revalidateAllKpiCaches } from "@/lib/kpi-cache-revalidate";
+import { scheduleRevalidateAfterPaymentSave } from "@/lib/revalidate-after-payment-save";
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { assertCreatedByUserExists, SessionUserInvalidError } from "@/lib/session-user-guard";
 import { computeFromUsdAmount } from "@/lib/financial-calc";
@@ -790,12 +791,9 @@ export async function savePaymentUpdatedAction(
     return { ok: false, error: msg };
   }
 
-  revalidateAllKpiCaches();
-  revalidatePath("/admin/orders");
-  revalidatePath("/admin/balances");
-  revalidatePath("/admin/source-tables/payments");
   const customerBalanceUsd = await getCustomerInternalBalanceUsd(cid);
   await persistCustomerBalanceSnapshot(cid, customerBalanceUsd);
+  scheduleRevalidateAfterPaymentSave();
   return {
     ok: true,
     saved: {

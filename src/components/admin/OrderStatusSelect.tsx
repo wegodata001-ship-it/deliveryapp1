@@ -37,7 +37,7 @@ export function OrderStatusSelect({
   const colorHex = getColorHex(value);
   const variantClass = variant === "table" ? "adm-order-status-select--table" : "adm-order-status-select--default";
   const displayLabel = (statusId: string, label: string): string =>
-    statusId === OS.DEBT_WITHDRAWAL ? "💰 משיכה מחוב" : label;
+    statusId === OS.DEBT_WITHDRAWAL ? "משיכה מחוב" : label;
 
   return (
     <select

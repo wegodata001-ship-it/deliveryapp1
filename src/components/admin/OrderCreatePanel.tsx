@@ -1216,7 +1216,7 @@ export function OrderCreatePanel({
     });
     const phone = (phoneStr || extras.phone || "").trim();
     const place = [extras.city, extras.address].filter(Boolean).join(" · ");
-    const parts = [`👤 ${name}`, phone, place].filter((p) => p.length > 0);
+    const parts = [name, phone, place].filter((p) => p.length > 0);
     return parts.join(" | ");
   }, [selectedCustomer, extras, nameEnStr, nameArStr, phoneStr]);
 

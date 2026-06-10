@@ -1,5 +1,6 @@
 "use client";
 
+import { Home } from "lucide-react";
 import { memo } from "react";
 
 export type PaymentNavigatorProps = {
@@ -8,7 +9,6 @@ export type PaymentNavigatorProps = {
   onSearchSubmit: () => void;
   searchBusy?: boolean;
   searchPlaceholder?: string | null;
-  onNewCapture: () => void;
   onHome: () => void;
   actionsDisabled?: boolean;
 };
@@ -19,7 +19,6 @@ function PaymentNavigatorInner({
   onSearchSubmit,
   searchBusy = false,
   searchPlaceholder,
-  onNewCapture,
   onHome,
   actionsDisabled = false,
 }: PaymentNavigatorProps) {
@@ -35,7 +34,7 @@ function PaymentNavigatorInner({
         type="button"
         data-testid="payment-capture-home"
         className="payment-navigator-home"
-        aria-label="קליטת תשלום חדשה (ריקה)"
+        aria-label="קליטת תשלום חדשה"
         title="קליטת תשלום חדשה"
         disabled={busy}
         onClick={(e) => {
@@ -44,7 +43,7 @@ function PaymentNavigatorInner({
           onHome();
         }}
       >
-        🏠
+        <Home size={18} strokeWidth={2.2} aria-hidden />
       </button>
 
       <form
@@ -72,22 +71,6 @@ function PaymentNavigatorInner({
           </span>
         ) : null}
       </form>
-
-      <button
-        type="button"
-        data-testid="payment-capture-new"
-        className="payment-navigator-new"
-        aria-label="קליטת תשלום חדשה"
-        title="קליטת תשלום חדשה"
-        disabled={busy}
-        onClick={(e) => {
-          e.stopPropagation();
-          if (busy) return;
-          onNewCapture();
-        }}
-      >
-        ➕ קליטת תשלום חדשה
-      </button>
     </div>
   );
 }
@@ -98,7 +81,6 @@ function propsEqual(a: PaymentNavigatorProps, b: PaymentNavigatorProps): boolean
     a.searchBusy === b.searchBusy &&
     a.searchPlaceholder === b.searchPlaceholder &&
     a.actionsDisabled === b.actionsDisabled &&
-    a.onNewCapture === b.onNewCapture &&
     a.onHome === b.onHome &&
     a.onSearchValueChange === b.onSearchValueChange &&
     a.onSearchSubmit === b.onSearchSubmit

@@ -17,6 +17,18 @@ import type {
 } from "@/lib/payment-methods-source-table";
 import { Modal } from "@/components/ui/Modal";
 import { TableEmpty, TableError, TableSkeleton } from "@/components/ui/data-table";
+import {
+  CheckCircle2,
+  CreditCard,
+  Eye,
+  FileSpreadsheet,
+  FileText,
+  Landmark,
+  Lock,
+  Pencil,
+  Search,
+  XCircle,
+} from "lucide-react";
 
 const FILTER_DEBOUNCE_MS = 300;
 const PREVIEW_DEBOUNCE_MS = 260;
@@ -212,19 +224,19 @@ export function PaymentMethodsSourceTableClient({ initialSearch = "" }: { initia
       {kpis ? (
         <div className="adm-pm-source-kpi-row" dir="rtl">
           <div className="adm-pm-source-kpi-card">
-            <span className="adm-pm-source-kpi-lbl">💳 סה״כ אמצעי תשלום</span>
+            <span className="adm-pm-source-kpi-lbl"><CreditCard size={16} strokeWidth={1.75} aria-hidden /> סה״כ אמצעי תשלום</span>
             <strong>{kpis.totalMethods.toLocaleString("he-IL")}</strong>
           </div>
           <div className="adm-pm-source-kpi-card">
-            <span className="adm-pm-source-kpi-lbl">✅ פעילים</span>
+            <span className="adm-pm-source-kpi-lbl"><CheckCircle2 size={16} strokeWidth={1.75} aria-hidden /> פעילים</span>
             <strong>{kpis.activeCount.toLocaleString("he-IL")}</strong>
           </div>
           <div className="adm-pm-source-kpi-card">
-            <span className="adm-pm-source-kpi-lbl">❌ לא פעילים</span>
+            <span className="adm-pm-source-kpi-lbl"><XCircle size={16} strokeWidth={1.75} aria-hidden /> לא פעילים</span>
             <strong>{kpis.inactiveCount.toLocaleString("he-IL")}</strong>
           </div>
           <div className="adm-pm-source-kpi-card">
-            <span className="adm-pm-source-kpi-lbl">🏦 העברות בנקאיות</span>
+            <span className="adm-pm-source-kpi-lbl"><Landmark size={16} strokeWidth={1.75} aria-hidden /> העברות בנקאיות</span>
             <strong>{kpis.bankTransferPayments.toLocaleString("he-IL")}</strong>
           </div>
         </div>
@@ -238,13 +250,13 @@ export function PaymentMethodsSourceTableClient({ initialSearch = "" }: { initia
           disabled={loading && !payload}
         />
         <button type="button" className="adm-btn adm-btn--ghost" onClick={() => setFilterOpen((v) => !v)}>
-          {filterOpen ? "הסתר סינון" : "סינון 🔍"}
+          {filterOpen ? "הסתר סינון" : <><Search size={16} strokeWidth={1.75} aria-hidden /> סינון</>}
         </button>
         <button type="button" className="adm-btn adm-btn--ghost" disabled={!!exportBusy || loading} onClick={() => void runExport("pdf")}>
-          {exportBusy === "pdf" ? "…" : "📄 PDF"}
+          {exportBusy === "pdf" ? "…" : <><FileText size={16} strokeWidth={1.75} aria-hidden /> PDF</>}
         </button>
         <button type="button" className="adm-btn adm-btn--ghost" disabled={!!exportBusy || loading} onClick={() => void runExport("excel")}>
-          {exportBusy === "excel" ? "…" : "📊 Excel"}
+          {exportBusy === "excel" ? "…" : <><FileSpreadsheet size={16} strokeWidth={1.75} aria-hidden /> Excel</>}
         </button>
         <button type="button" className="adm-btn adm-btn--ghost" onClick={() => runFetch()} disabled={loading}>
           רענון
@@ -346,7 +358,7 @@ export function PaymentMethodsSourceTableClient({ initialSearch = "" }: { initia
                     </td>
                     <td>
                       <span className={r.isActive ? "adm-pm-active-yes" : "adm-pm-active-no"}>
-                        {r.isActive ? "🟢 פעיל" : "🔴 לא פעיל"}
+                        {r.isActive ? "פעיל" : "לא פעיל"}
                       </span>
                     </td>
                     <td>
@@ -362,7 +374,7 @@ export function PaymentMethodsSourceTableClient({ initialSearch = "" }: { initia
                           disabled={actionBusyId === r.id}
                           onClick={() => setViewRow(r)}
                         >
-                          👁️
+                          <Eye size={16} strokeWidth={1.75} aria-hidden />
                         </button>
                         <button
                           type="button"
@@ -371,7 +383,7 @@ export function PaymentMethodsSourceTableClient({ initialSearch = "" }: { initia
                           disabled={actionBusyId === r.id}
                           onClick={() => openEdit(r)}
                         >
-                          ✏️
+                          <Pencil size={16} strokeWidth={1.75} aria-hidden />
                         </button>
                         <button
                           type="button"
@@ -380,7 +392,7 @@ export function PaymentMethodsSourceTableClient({ initialSearch = "" }: { initia
                           disabled={actionBusyId === r.id}
                           onClick={() => void onToggle(r)}
                         >
-                          🔒
+                          <Lock size={16} strokeWidth={1.75} aria-hidden />
                         </button>
                       </div>
                     </td>
@@ -428,7 +440,7 @@ export function PaymentMethodsSourceTableClient({ initialSearch = "" }: { initia
               <span>סוג</span> <span className={typeBadgeClass(viewRow.typeTone)}>{viewRow.typeLabel}</span>
             </p>
             <p>
-              <span>סטטוס</span> {viewRow.isActive ? "🟢 פעיל" : "🔴 לא פעיל"}
+              <span>סטטוס</span> {viewRow.isActive ? "פעיל" : "לא פעיל"}
             </p>
             <p>
               <span>שימושים</span> {viewRow.usageCount.toLocaleString("he-IL")}

@@ -35,4 +35,5 @@ export const ledgerPdfDefaultStyle = {
   font: LEDGER_PDF_DEFAULT_FONT,
   fontSize: 10,
   alignment: "right" as const,
+  rtl: true,
 };

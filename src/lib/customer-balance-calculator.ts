@@ -11,6 +11,10 @@ export type CustomerBalanceScope = {
   sourceCountry?: OrderSourceCountry | null;
   /** כשמוגדר — רק הזמנות בסטטוסים אלה נספרות בחיוב/משיכה */
   orderStatuses?: string[] | null;
+  metrics?: {
+    onQuery?: (kind: "orders" | "payments", ms: number) => void;
+    onTransform?: (kind: "orders" | "payments", ms: number) => void;
+  };
 };
 
 export type CustomerBalanceCalculation = {
@@ -90,28 +94,43 @@ export async function calculateCustomerBalances(
   } satisfies Prisma.PaymentWhereInput;
 
   const [orders, payments] = await Promise.all([
-    prisma.order.findMany({
-      where: orderWhere,
-      select: {
-        customerId: true,
-        status: true,
-        totalUsd: true,
-        amountUsd: true,
-        commissionUsd: true,
-        debtWithdrawalUsd: true,
-      },
-    }),
-    findActiveCustomerPayments({
-      where: paymentBaseWhere,
-      select: {
-        customerId: true,
-        amountUsd: true,
-        amountIls: true,
-        exchangeRate: true,
-      },
-    }),
+    (async () => {
+      const t0 = Date.now();
+      try {
+        return await prisma.order.findMany({
+          where: orderWhere,
+          select: {
+            customerId: true,
+            status: true,
+            totalUsd: true,
+            amountUsd: true,
+            commissionUsd: true,
+            debtWithdrawalUsd: true,
+          },
+        });
+      } finally {
+        scope.metrics?.onQuery?.("orders", Date.now() - t0);
+      }
+    })(),
+    (async () => {
+      const t0 = Date.now();
+      try {
+        return await findActiveCustomerPayments({
+          where: paymentBaseWhere,
+          select: {
+            customerId: true,
+            amountUsd: true,
+            amountIls: true,
+            exchangeRate: true,
+          },
+        });
+      } finally {
+        scope.metrics?.onQuery?.("payments", Date.now() - t0);
+      }
+    })(),
   ]);
 
+  const ordersTransformT0 = Date.now();
   for (const o of orders) {
     if (!o.customerId) continue;
     const row = out.get(o.customerId);
@@ -123,13 +142,16 @@ export async function calculateCustomerBalances(
       row.totalOrders = row.totalOrders.add(orderUsd(o));
     }
   }
+  scope.metrics?.onTransform?.("orders", Date.now() - ordersTransformT0);
 
+  const paymentsTransformT0 = Date.now();
   for (const p of payments) {
     if (!p.customerId) continue;
     const row = out.get(p.customerId);
     if (!row) continue;
     row.totalPayments = row.totalPayments.add(paymentUsd(p));
   }
+  scope.metrics?.onTransform?.("payments", Date.now() - paymentsTransformT0);
 
   for (const row of out.values()) {
     row.balance = row.totalOrders.sub(row.totalWithdrawals).sub(row.totalPayments);

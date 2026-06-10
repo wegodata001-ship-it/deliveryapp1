@@ -27,6 +27,7 @@ import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { OrderEditModal } from "@/components/admin/OrderEditModal";
 import Card from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
+import { BarChart3, Search } from "lucide-react";
 import { normalizeOrderSourceCountry, type OrderCountryCode } from "@/lib/order-countries";
 import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import {
@@ -763,7 +764,7 @@ export function PaymentModal({
                       aria-label="חיפוש לפי קוד לקוח"
                       onClick={() => triggerFieldSearch("code")}
                     >
-                      🔍
+                      <Search size={16} strokeWidth={1.75} aria-hidden />
                     </button>
                   </span>
                   <input
@@ -784,7 +785,7 @@ export function PaymentModal({
                       aria-label="חיפוש לפי שם לקוח"
                       onClick={() => triggerFieldSearch("displayName")}
                     >
-                      🔍
+                      <Search size={16} strokeWidth={1.75} aria-hidden />
                     </button>
                   </span>
                   <input
@@ -816,7 +817,7 @@ export function PaymentModal({
                       aria-label="חיפוש לפי שם בערבית"
                       onClick={() => triggerFieldSearch("nameAr")}
                     >
-                      🔍
+                      <Search size={16} strokeWidth={1.75} aria-hidden />
                     </button>
                   </span>
                   <input
@@ -854,7 +855,7 @@ export function PaymentModal({
                       aria-label="חיפוש לפי אינדקס"
                       onClick={() => triggerFieldSearch("index")}
                     >
-                      🔍
+                      <Search size={16} strokeWidth={1.75} aria-hidden />
                     </button>
                   </span>
                   <input
@@ -874,7 +875,7 @@ export function PaymentModal({
                   title="כרטסת לקוח"
                   aria-label="כרטסת לקוח"
                 >
-                  📊
+                  <BarChart3 size={16} strokeWidth={1.75} aria-hidden />
                 </button>
               </div>
               {custDdOpen && customerHits.length > 0 ? (

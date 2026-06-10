@@ -91,16 +91,16 @@ export function FinancialSettingsModal({ open, onClose, onToast }: Props) {
       });
       if (!res.ok) {
         setErr(res.error);
-        onToast("✗ שמירת ההגדרות נכשלה", { variant: "error" });
+        onToast("שמירת ההגדרות נכשלה", { variant: "error" });
         return;
       }
       dispatchFinancialSettingsSaved(res.settings);
-      onToast("✓ הגדרות כספיות נשמרו בהצלחה", { variant: "success" });
+      onToast("הגדרות כספיות נשמרו בהצלחה", { variant: "success" });
       router.refresh();
       onClose();
     } catch {
       setErr("שגיאה בשמירה");
-      onToast("✗ שמירת ההגדרות נכשלה", { variant: "error" });
+      onToast("שמירת ההגדרות נכשלה", { variant: "error" });
     } finally {
       setSaving(false);
     }
@@ -114,17 +114,17 @@ export function FinancialSettingsModal({ open, onClose, onToast }: Props) {
       const res = await resetFinancialSettingsToDefaultsAction();
       if (!res.ok) {
         setErr(res.error);
-        onToast("✗ שמירת ההגדרות נכשלה", { variant: "error" });
+        onToast("שמירת ההגדרות נכשלה", { variant: "error" });
         return;
       }
       applySerialized(res.settings, { setBase, setFee, setDefaultCommissionPercent, setMeta });
       dispatchFinancialSettingsSaved(res.settings);
-      onToast("✓ הגדרות כספיות נשמרו בהצלחה", { variant: "success" });
+      onToast("הגדרות כספיות נשמרו בהצלחה", { variant: "success" });
       router.refresh();
       onClose();
     } catch {
       setErr("שגיאה בשמירה");
-      onToast("✗ שמירת ההגדרות נכשלה", { variant: "error" });
+      onToast("שמירת ההגדרות נכשלה", { variant: "error" });
     } finally {
       setResetting(false);
     }

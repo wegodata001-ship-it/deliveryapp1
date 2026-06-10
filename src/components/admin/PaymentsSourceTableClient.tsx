@@ -20,6 +20,7 @@ import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
 import { TableEmpty, TableError, TableSkeleton } from "@/components/ui/data-table";
 import { prefetchPaymentEntryClient } from "@/lib/payment-entry-client";
+import { BadgeDollarSign, CalendarDays, DollarSign, FileSpreadsheet, FileText, Search } from "lucide-react";
 
 const PAGE_LIMIT = 25;
 const SEARCH_DEBOUNCE_MS = 350;
@@ -283,11 +284,11 @@ export function PaymentsSourceTableClient({ initialSearch = "" }: { initialSearc
       {kpis ? (
         <div className="adm-payments-source-kpi-row" dir="rtl">
           <div className="adm-payments-source-kpi-card">
-            <span className="adm-payments-source-kpi-lbl">💰 סה״כ תשלומים</span>
+            <span className="adm-payments-source-kpi-lbl"><BadgeDollarSign size={16} strokeWidth={1.75} aria-hidden /> סה״כ תשלומים</span>
             <strong>{kpis.totalPayments.toLocaleString("he-IL")}</strong>
           </div>
           <div className="adm-payments-source-kpi-card">
-            <span className="adm-payments-source-kpi-lbl">💵 סה״כ דולר</span>
+            <span className="adm-payments-source-kpi-lbl"><DollarSign size={16} strokeWidth={1.75} aria-hidden /> סה״כ דולר</span>
             <strong dir="ltr">${kpis.totalUsd}</strong>
           </div>
           <div className="adm-payments-source-kpi-card">
@@ -295,7 +296,7 @@ export function PaymentsSourceTableClient({ initialSearch = "" }: { initialSearc
             <strong dir="ltr">₪{kpis.totalIls}</strong>
           </div>
           <div className="adm-payments-source-kpi-card">
-            <span className="adm-payments-source-kpi-lbl">📅 תשלומים השבוע ({kpis.weekCode})</span>
+            <span className="adm-payments-source-kpi-lbl"><CalendarDays size={16} strokeWidth={1.75} aria-hidden /> תשלומים השבוע ({kpis.weekCode})</span>
             <strong>{kpis.weekPayments.toLocaleString("he-IL")}</strong>
           </div>
         </div>
@@ -309,7 +310,7 @@ export function PaymentsSourceTableClient({ initialSearch = "" }: { initialSearc
           disabled={loading && !payload}
         />
         <button type="button" className="adm-btn adm-btn--ghost" onClick={() => setFilterOpen((v) => !v)}>
-          {filterOpen ? "הסתר סינון" : "סינון 🔍"}
+          {filterOpen ? "הסתר סינון" : <><Search size={16} strokeWidth={1.75} aria-hidden /> סינון</>}
         </button>
         <button
           type="button"
@@ -317,7 +318,7 @@ export function PaymentsSourceTableClient({ initialSearch = "" }: { initialSearc
           disabled={!!exportBusy || loading}
           onClick={() => void runExport("pdf")}
         >
-          {exportBusy === "pdf" ? "…" : "📄 PDF"}
+          {exportBusy === "pdf" ? "…" : <><FileText size={16} strokeWidth={1.75} aria-hidden /> PDF</>}
         </button>
         <button
           type="button"
@@ -325,7 +326,7 @@ export function PaymentsSourceTableClient({ initialSearch = "" }: { initialSearc
           disabled={!!exportBusy || loading}
           onClick={() => void runExport("excel")}
         >
-          {exportBusy === "excel" ? "…" : "📊 Excel"}
+          {exportBusy === "excel" ? "…" : <><FileSpreadsheet size={16} strokeWidth={1.75} aria-hidden /> Excel</>}
         </button>
         <button type="button" className="adm-btn adm-btn--ghost" onClick={() => runFetch()} disabled={loading}>
           רענון

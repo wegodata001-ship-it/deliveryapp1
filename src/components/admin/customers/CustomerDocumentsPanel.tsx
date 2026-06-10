@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { BarChart3, ChevronDown } from "lucide-react";
 import { getCustomerLedgerAction } from "@/app/admin/capture/actions";
 import {
   exportCustomerLedgerExcel,
@@ -192,7 +192,7 @@ export function CustomerDocumentsPanel({
             disabled={!!busy}
             onClick={onShowStats}
           >
-            📊 הצג סטטיסטיקה
+            <BarChart3 size={16} strokeWidth={1.75} aria-hidden /> הצג סטטיסטיקה
           </button>
         ) : null}
         <div

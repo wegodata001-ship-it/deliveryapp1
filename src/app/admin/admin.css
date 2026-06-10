@@ -4257,13 +4257,25 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
 }
 
 .adm-fin-settings__impact-list--yes li::before {
-  content: "✓ ";
-  font-weight: 800;
+  content: "";
+  display: inline-block;
+  width: 0.42rem;
+  height: 0.42rem;
+  margin-inline-end: 0.35rem;
+  border-radius: 999px;
+  background: currentColor;
+  vertical-align: middle;
 }
 
 .adm-fin-settings__impact-list--no li::before {
-  content: "✗ ";
-  font-weight: 800;
+  content: "";
+  display: inline-block;
+  width: 0.42rem;
+  height: 0.42rem;
+  margin-inline-end: 0.35rem;
+  border-radius: 999px;
+  background: currentColor;
+  vertical-align: middle;
 }
 
 .adm-fin-settings__meta {
@@ -8315,53 +8327,45 @@ select.payment-modal-inline-input {
 }
 
 .payment-navigator-home {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
   min-width: 34px;
   height: 34px;
-  padding: 0 8px;
+  padding: 0;
   border-radius: 10px;
-  border: 1px solid #dbe4ff;
-  background: #f8faff;
-  color: #0f172a;
+  border: 1px solid #c7d7fe;
+  background: #fff;
+  color: #2563eb;
   cursor: pointer;
-  font-size: 1rem;
   line-height: 1;
   flex-shrink: 0;
-  transition: 0.2s;
+  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.08);
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    color 0.15s ease;
 }
 
 .payment-navigator-home:hover:not(:disabled) {
-  background: #eef4ff;
+  background: #eff6ff;
+  border-color: #93b4fd;
+  color: #1d4ed8;
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.14);
+}
+
+.payment-navigator-home:focus-visible {
+  outline: 2px solid #93c5fd;
+  outline-offset: 2px;
 }
 
 .payment-navigator-home:disabled {
   opacity: 0.55;
   cursor: not-allowed;
-}
-
-.payment-navigator-new {
-  min-height: 34px;
-  padding: 4px 10px;
-  border-radius: 10px;
-  border: 1px solid #bbf7d0;
-  background: #f0fdf4;
-  color: #15803d;
-  cursor: pointer;
-  font: inherit;
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1.2;
-  white-space: nowrap;
-  flex-shrink: 0;
-  transition: 0.2s;
-}
-
-.payment-navigator-new:hover:not(:disabled) {
-  background: #dcfce7;
-}
-
-.payment-navigator-new:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
+  box-shadow: none;
 }
 
 .payment-navigator-btn--secondary {
@@ -20598,6 +20602,14 @@ select.adm-balances-input {
   font-weight: 800;
   vertical-align: middle;
   white-space: nowrap;
+}
+
+.adm-order-edit-badge-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: currentColor;
+  flex: 0 0 auto;
 }
 
 .adm-order-edit-badge--pending {

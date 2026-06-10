@@ -30,7 +30,7 @@ export async function GET(req: Request) {
         return NextResponse.json({ error: "Payment not found" }, { status: 404, headers: NO_STORE_HEADERS });
       }
 
-      /** ניווט ⬅/➡ בקליטה — מנוהל ב-Navigation Store בצד הלקוח; שאילתת prev/next גלובלית איטית (~1.7s) */
+      /** ניווט בקליטה — מנוהל ב-Navigation Store בצד הלקוח; שאילתת prev/next גלובלית איטית (~1.7s) */
       const includeNav = searchParams.get("includeNav") === "1";
       const navigation = includeNav
         ? (await getPaymentNavigationLinks(payload.id)) ?? {

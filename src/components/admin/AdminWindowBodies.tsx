@@ -1160,7 +1160,7 @@ export function CreateCustomerWindowBody({ initialCustomerCode }: { initialCusto
         </>
       ) : (
         <div className="adm-client-create-success">
-          <div className="adm-pay-success">✅ הלקוח נוסף בהצלחה</div>
+          <div className="adm-pay-success">הלקוח נוסף בהצלחה</div>
           <div className="adm-cust-display-card">
             <div><strong>קוד לקוח:</strong> <span dir="ltr">{standaloneDone.customerCode}</span></div>
             <div>

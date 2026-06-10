@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { CheckCircle2 } from "lucide-react";
 import { WegoWMarkSvg } from "@/components/brand/WegoWMarkSvg";
 
 export default function Home() {
@@ -19,9 +20,9 @@ export default function Home() {
           כניסה למערכת
         </Link>
         <ul className="wego-home__features" aria-label="יכולות המערכת">
-          <li>✓ ניהול הזמנות</li>
-          <li>✓ ניהול תשלומים</li>
-          <li>✓ דוחות ויתרות</li>
+          <li><CheckCircle2 size={16} strokeWidth={1.75} aria-hidden /> ניהול הזמנות</li>
+          <li><CheckCircle2 size={16} strokeWidth={1.75} aria-hidden /> ניהול תשלומים</li>
+          <li><CheckCircle2 size={16} strokeWidth={1.75} aria-hidden /> דוחות ויתרות</li>
         </ul>
       </div>
     </main>
