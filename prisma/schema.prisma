@@ -282,6 +282,9 @@ model Order {
   @@index([sourceCountry])
   @@index([countryCode])
   @@index([countryCode, weekCode])
+  @@index([countryCode, sourceCountry, weekCode, deletedAt, customerId])
+  @@index([countryCode, sourceCountry, orderDate, deletedAt, customerId])
+  @@index([customerId, countryCode, sourceCountry, status])
   @@index([status, orderDate])
 }
 
@@ -395,6 +398,9 @@ model Payment {
   @@index([status])
   @@index([paymentDate, isPaid])
   @@index([weekCode, isPaid])
+  @@index([countryCode, weekCode, status, isPaid, customerId])
+  @@index([countryCode, paymentDate, status, isPaid, customerId])
+  @@index([customerId, countryCode, status, isPaid])
 }
 
 /** פירוט צ׳קים לקליטת תשלום בצ׳ק — משויך לשורת Payment (בדרך כלל לתשלום הראשי בפיצול להזמנות) */

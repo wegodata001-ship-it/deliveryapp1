@@ -14870,6 +14870,21 @@ html.adm-app-shell .adm-chrome-main:has(.adm-balances-excel-page) {
   min-width: 5.5rem;
 }
 
+.adm-balances-td-num--before {
+  color: #0f172a;
+  font-weight: 800;
+}
+
+.adm-balances-td-num--including {
+  color: #1d4ed8;
+  font-weight: 800;
+}
+
+.adm-balances-td-num--payments {
+  color: #15803d;
+  font-weight: 800;
+}
+
 .adm-balances-th-num--open-debt,
 .adm-balances-td-num--open-debt {
   width: auto;
@@ -15748,13 +15763,13 @@ select.adm-balances-input {
 }
 
 .adm-bal-amt--credit {
-  color: #ea580c;
-  font-weight: 700;
+  color: #15803d;
+  font-weight: 800;
 }
 
 .adm-bal-amt--balanced,
 .adm-bal-amt--neutral {
-  color: #15803d;
+  color: #64748b;
   font-weight: 700;
 }
 
@@ -15839,7 +15854,7 @@ select.adm-balances-input {
 
 .adm-balances-fcc-kpi {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
   margin: 0 0 6px;
   flex-shrink: 0;
@@ -15874,13 +15889,22 @@ select.adm-balances-input {
   line-height: 1.1;
 }
 
-.adm-balances-fcc-kpi__card--debt {
-  border-color: rgba(220, 38, 38, 0.2);
-  background: linear-gradient(180deg, #fff 0%, #fef2f2 100%);
+.adm-balances-fcc-kpi__card--before-commission {
+  border-color: rgba(15, 23, 42, 0.16);
+  background: linear-gradient(180deg, #fff 0%, #f8fafc 100%);
 }
 
-.adm-balances-fcc-kpi__card--debt .adm-balances-fcc-kpi__value {
-  color: #dc2626;
+.adm-balances-fcc-kpi__card--before-commission .adm-balances-fcc-kpi__value {
+  color: #0f172a;
+}
+
+.adm-balances-fcc-kpi__card--after-commission {
+  border-color: rgba(37, 99, 235, 0.18);
+  background: linear-gradient(180deg, #fff 0%, #eff6ff 100%);
+}
+
+.adm-balances-fcc-kpi__card--after-commission .adm-balances-fcc-kpi__value {
+  color: #1d4ed8;
 }
 
 .adm-balances-fcc-kpi__card--payments {
@@ -15942,6 +15966,18 @@ select.adm-balances-input {
   background: #fff;
 }
 
+.adm-balances-page--fcc .adm-balances-table--erp tbody tr.adm-balances-row--debt {
+  background: #fff7f7;
+}
+
+.adm-balances-page--fcc .adm-balances-table--erp tbody tr.adm-balances-row--credit {
+  background: #f0fdf4;
+}
+
+.adm-balances-page--fcc .adm-balances-table--erp tbody tr.adm-balances-row--balanced {
+  background: #fff;
+}
+
 .adm-balances-page--fcc .adm-balances-table--erp tbody tr.adm-balances-row-click:hover {
   background: rgba(59, 130, 246, 0.09) !important;
   box-shadow: inset 4px 0 0 var(--bal-blue);
@@ -15967,17 +16003,17 @@ select.adm-balances-input {
 }
 
 .adm-bal-badge--balanced {
-  color: #15803d;
-  background: #ecfdf5;
-  border: 1px solid #86efac;
+  color: #166534;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
   box-shadow: 0 1px 0 rgba(21, 128, 61, 0.08);
 }
 
 .adm-bal-badge--credit {
-  color: #c2410c;
-  background: #fff7ed;
-  border: 1px solid #fdba74;
-  box-shadow: 0 1px 0 rgba(194, 65, 12, 0.08);
+  color: #6d28d9;
+  background: #f5f3ff;
+  border: 1px solid #ddd6fe;
+  box-shadow: 0 1px 0 rgba(109, 40, 217, 0.08);
 }
 
 .adm-bal-badge--debt {

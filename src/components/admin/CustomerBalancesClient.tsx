@@ -18,12 +18,11 @@ import {
 } from "@/lib/customer-balance-order-status-filter";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { TableSkeleton } from "@/components/ui/loading";
-import { CustomerBalanceView } from "@/components/ui/CustomerBalanceView";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { formatUsdDisplay, parseMoneyString, parseMoneyStringOrZero } from "@/lib/money-format";
 import { withQuery } from "@/lib/admin-url-query";
 import { CustomerBalancesInsightsBar } from "@/components/admin/CustomerBalancesInsightsBar";
-import { rowOpenBalanceUsd, rowOrdersUsdSplit } from "@/lib/customer-balances-display";
+import { rowOrdersUsdSplit } from "@/lib/customer-balances-display";
 import { ReportWeekNav } from "@/components/admin/ReportWeekNav";
 import { ORDER_COUNTRY_CODES, orderCountryLabel, type OrderCountryCode } from "@/lib/order-countries";
 import { ACTIVE_WORK_WEEK_CODE } from "@/lib/active-work-week";
@@ -66,10 +65,6 @@ const SORT_LABELS: Record<CustomerBalanceSort, string> = {
 
 type BalanceUiTone = "debt" | "balanced" | "credit";
 
-function dec(value: string): number {
-  return parseMoneyStringOrZero(value);
-}
-
 function moneyUsdCell(value: string): string {
   return formatUsdDisplay(parseMoneyStringOrZero(value));
 }
@@ -77,6 +72,7 @@ function moneyUsdCell(value: string): string {
 function balanceUiFromUsd(totalBalanceUsd: string): { label: string; tone: BalanceUiTone } {
   const n = parseMoneyStringOrZero(totalBalanceUsd);
   if (n > 0.01) return { label: "חוב פתוח", tone: "debt" };
+  if (n < -0.01) return { label: "יתרת זכות", tone: "credit" };
   return { label: "מאוזן", tone: "balanced" };
 }
 
@@ -483,7 +479,7 @@ export function CustomerBalancesClient() {
     }
   }
 
-  const colCount = 9;
+  const colCount = 8;
   const stats = payload?.stats;
 
   return (
@@ -695,10 +691,16 @@ export function CustomerBalancesClient() {
             <span className="adm-balances-fcc-kpi__label">סה״כ לקוחות</span>
             <strong className="adm-balances-fcc-kpi__value">{(payload?.totalRows ?? 0).toLocaleString("he-IL")}</strong>
           </article>
-          <article className="adm-balances-fcc-kpi__card adm-balances-fcc-kpi__card--debt">
-            <span className="adm-balances-fcc-kpi__label">סה״כ חובות פתוחים</span>
+          <article className="adm-balances-fcc-kpi__card adm-balances-fcc-kpi__card--before-commission">
+            <span className="adm-balances-fcc-kpi__label">סה״כ לפני עמלה</span>
             <strong className="adm-balances-fcc-kpi__value" dir="ltr">
-              {usdStatDisplay(stats.totalDebtUsd)}
+              {usdStatDisplay(stats.totalLifetimeOrdersUsd)}
+            </strong>
+          </article>
+          <article className="adm-balances-fcc-kpi__card adm-balances-fcc-kpi__card--after-commission">
+            <span className="adm-balances-fcc-kpi__label">סה״כ אחרי עמלה</span>
+            <strong className="adm-balances-fcc-kpi__value" dir="ltr">
+              {usdStatDisplay(stats.totalOrdersAfterCommissionUsd)}
             </strong>
           </article>
           <article className="adm-balances-fcc-kpi__card adm-balances-fcc-kpi__card--payments">
@@ -757,14 +759,13 @@ export function CustomerBalancesClient() {
           <table className="adm-table adm-table--excel adm-balances-table adm-balances-table--erp adm-balances-table--focus">
             <thead>
               <tr>
+                <th className="adm-balances-th-code">קוד לקוח</th>
+                <th className="adm-balances-th-name">שם לקוח</th>
                 <th className="adm-balances-th-num adm-balances-th-num--before">לפני עמלה ($)</th>
                 <th className="adm-balances-th-num adm-balances-th-num--including">אחרי עמלה ($)</th>
                 <th className="adm-balances-th-num adm-balances-th-num--payments">תשלומים ($)</th>
-                <th className="adm-balances-th-num adm-balances-th-num--balance">יתרה ($)</th>
-                <th className="adm-balances-th-status">סטטוס</th>
-                <th className="adm-balances-th-num adm-balances-th-num--open-debt">חוב פתוח ($)</th>
-                <th className="adm-balances-th-name">שם לקוח</th>
-                <th className="adm-balances-th-code">קוד</th>
+                <th className="adm-balances-th-num adm-balances-th-num--balance">יתרה נוכחית ($)</th>
+                <th className="adm-balances-th-status">מצב חשבון</th>
                 <th className="adm-balances-th-actions">פעולות</th>
               </tr>
             </thead>
@@ -779,7 +780,6 @@ export function CustomerBalancesClient() {
                 payload?.rows.map((r) => {
                   const ui = balanceUiFromUsd(r.totalBalanceUSD);
                   const ordersUsd = rowOrdersUsdSplit(r);
-                  const openDebtUsd = rowOpenBalanceUsd(r);
                   return (
                     <tr
                       key={r.customerId}
@@ -798,6 +798,10 @@ export function CustomerBalancesClient() {
                       onFocus={() => schedulePreview(r)}
                       onBlur={clearPreview}
                     >
+                      <td className="adm-balances-td-code" dir="ltr">
+                        {r.customerCode ?? "—"}
+                      </td>
+                      <td className="adm-balances-td-name">{r.customerName}</td>
                       <td className="adm-balances-td-num adm-balances-td-num--before" dir="ltr">
                         {formatUsdDisplay(ordersUsd.beforeUsd)}
                       </td>
@@ -811,29 +815,10 @@ export function CustomerBalancesClient() {
                         className={`adm-balances-td-num adm-balances-td-num--hero ${balanceToneClass(ui.tone)}`}
                         dir="ltr"
                       >
-                        <CustomerBalanceView businessSigned={dec(r.totalBalanceUSD)} currency="USD" compact />
+                        {moneyUsdCell(r.totalBalanceUSD)}
                       </td>
                       <td className="adm-balances-td-status">
                         <span className={statusChipClass(ui.tone)}>{ui.label}</span>
-                      </td>
-                      <td
-                        className={[
-                          "adm-balances-td-num adm-balances-td-num--open-debt",
-                          openDebtUsd > 0.01 ? "adm-balances-td-open-debt--active" : "",
-                        ]
-                          .filter(Boolean)
-                          .join(" ")}
-                        dir="ltr"
-                      >
-                        {openDebtUsd > 0.01 ? (
-                          <strong className="adm-balances-open-debt-val">{formatUsdDisplay(openDebtUsd)}</strong>
-                        ) : (
-                          <span className="adm-balances-open-debt-zero">—</span>
-                        )}
-                      </td>
-                      <td className="adm-balances-td-name">{r.customerName}</td>
-                      <td className="adm-balances-td-code" dir="ltr">
-                        {r.customerCode ?? "—"}
                       </td>
                       <td className="adm-balances-td-actions">
                         <button
