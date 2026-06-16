@@ -31,7 +31,6 @@ import { OrderEditLockGateModal } from "@/components/admin/OrderEditLockGateModa
 import type { CustomerCardWindowProps } from "@/lib/admin-windows";
 import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
-import { workCountryFromOrderSourceCountry, workEnvironmentLabelHe } from "@/lib/work-country";
 import { CustomerPlaceCombo } from "@/components/admin/CustomerPlaceCombo";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { formatMoneyAmount, formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
@@ -45,7 +44,10 @@ import {
   ledgerHasExportRows,
   type CustomerLedgerExportMeta,
 } from "@/lib/customer-ledger-export";
-import { LedgerPaymentDetailBlock } from "@/components/admin/LedgerPaymentDetailBlock";
+import {
+  ledgerPaymentMethodDisplayLines,
+  shouldShowLedgerPaymentMethodSubrows,
+} from "@/lib/ledger-payment-detail";
 import { LedgerPaymentExpandButton } from "@/components/admin/LedgerPaymentExpandButton";
 
 function displayCustomerCode(s: CustomerCardSnapshot): string {
@@ -96,9 +98,6 @@ export function CustomerCardWindowBody({
   const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
   const { globalCountry } = useAdminGlobal();
   const effectiveLedgerCountry = ledgerSourceCountry ?? globalCountry;
-  const ledgerWorkEnvLabel = workEnvironmentLabelHe(
-    workCountryFromOrderSourceCountry(ledgerSourceCountry ?? globalCountry),
-  );
   const { openWindow } = useAdminWindows();
   const router = useRouter();
   const [listPayload, setListPayload] = useState<ClientLedgerPayload | null>(null);
@@ -445,9 +444,8 @@ export function CustomerCardWindowBody({
         customerCode: displayCustomerCode(snap),
         phone: snap.phone,
         email: snap.email,
-        country: snap.country,
+        city: snap.city,
         sourceCountry: effectiveLedgerCountry,
-        workEnvironmentLabel: ledgerWorkEnvLabel,
         fromYmd,
         toYmd,
       }
@@ -767,9 +765,21 @@ export function CustomerCardWindowBody({
                       const isPayment = r.kind === "PAYMENT";
                       const isWithdrawal = !!r.isDebtWithdrawal;
                       const isCancelledPayment = !!r.isPaymentCancelled;
-                      const canExpandPayment =
-                        isPayment && !isCancelledPayment && (!!r.paymentDetail || paymentNum > 0);
-                      const paymentExpanded = canExpandPayment && expandedLedgerPayments.has(r.id);
+                      const isCancelledOrder = !!r.isOrderCancelled;
+                      const paymentMethodSubrows =
+                        isPayment && !isCancelledPayment && shouldShowLedgerPaymentMethodSubrows(r.paymentDetail)
+                          ? ledgerPaymentMethodDisplayLines(r.paymentDetail)
+                          : [];
+                      const paymentExpandable = paymentMethodSubrows.length > 0;
+                      const paymentExpanded = expandedLedgerPayments.has(r.id);
+                      const togglePaymentExpanded = () => {
+                        setExpandedLedgerPayments((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(r.id)) next.delete(r.id);
+                          else next.add(r.id);
+                          return next;
+                        });
+                      };
                       return (
                         <Fragment key={r.id}>
                         <tr
@@ -777,6 +787,7 @@ export function CustomerCardWindowBody({
                             r.kind === "OPENING_BALANCE" ? "adm-ledger-row--opening" : "",
                             isPayment ? "adm-ledger-row--payment" : "",
                             isCancelledPayment ? "adm-ledger-row--payment-cancelled" : "",
+                            isCancelledOrder ? "adm-ledger-row--payment-cancelled" : "",
                             isWithdrawal ? "adm-ledger-row--withdrawal" : "",
                             isCommissionClosure ? "adm-ledger-row--commission-closure" : "",
                             clickable ? "clickable" : "",
@@ -797,19 +808,6 @@ export function CustomerCardWindowBody({
                           <td dir="ltr">{r.dateYmd}</td>
                           <td dir="ltr" className="adm-ledger-doc-cell">
                             <span className="adm-ledger-doc-cell-inner">
-                              {canExpandPayment ? (
-                                <LedgerPaymentExpandButton
-                                  expanded={paymentExpanded}
-                                  onToggle={() => {
-                                    setExpandedLedgerPayments((prev) => {
-                                      const next = new Set(prev);
-                                      if (next.has(r.id)) next.delete(r.id);
-                                      else next.add(r.id);
-                                      return next;
-                                    });
-                                  }}
-                                />
-                              ) : null}
                               {clickable ? (
                                 <button
                                   type="button"
@@ -851,7 +849,12 @@ export function CustomerCardWindowBody({
                           </td>
                           <td
                             dir="ltr"
-                            className={isCommissionClosure ? "adm-ledger-closure-cell" : ""}
+                            className={[
+                              "adm-ledger-payment-cell",
+                              isCommissionClosure ? "adm-ledger-closure-cell" : "",
+                            ]
+                              .filter(Boolean)
+                              .join(" ")}
                           >
                             {isCommissionClosure ? (
                               <span className="adm-ledger-closure-delta">
@@ -859,20 +862,38 @@ export function CustomerCardWindowBody({
                                 {fmtUsd(r.commissionAfterUsd ?? "0")}
                               </span>
                             ) : paymentNum > 0 ? (
-                              fmtUsd(r.paymentUsd)
+                              <span className="adm-ledger-payment-cell-inner">
+                                <span>{fmtUsd(r.paymentUsd)}</span>
+                                {paymentExpandable ? (
+                                  <LedgerPaymentExpandButton
+                                    expanded={paymentExpanded}
+                                    onToggle={togglePaymentExpanded}
+                                  />
+                                ) : null}
+                              </span>
                             ) : (
                               "—"
                             )}
                           </td>
                           <td dir="ltr">{formatLedgerRunningBalance(r.balanceUsd)}</td>
                         </tr>
-                        {paymentExpanded && r.paymentDetail ? (
-                          <tr className="adm-ledger-payment-detail-row">
-                            <td colSpan={6}>
-                              <LedgerPaymentDetailBlock detail={r.paymentDetail} />
+                        {paymentExpanded
+                          ? paymentMethodSubrows.map((line, subIdx) => (
+                          <tr
+                            key={`${r.id}-pay-meth-${subIdx}`}
+                            className="adm-ledger-row--payment-method-sub"
+                          >
+                            <td />
+                            <td />
+                            <td className="adm-ledger-payment-method-sub-type">
+                              {line.label}:
                             </td>
+                            <td>—</td>
+                            <td dir="ltr">{fmtUsd(line.amountUsd)}</td>
+                            <td />
                           </tr>
-                        ) : null}
+                        ))
+                          : null}
                         </Fragment>
                       );
                     })

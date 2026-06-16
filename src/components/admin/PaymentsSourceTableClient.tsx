@@ -440,6 +440,7 @@ export function PaymentsSourceTableClient({ initialSearch = "" }: { initialSearc
                       <tr
                         className={[
                           "adm-payments-source-row",
+                          r.status === "CANCELLED" ? "adm-payments-source-row--cancelled" : "",
                           expanded ? "adm-payments-source-row--expanded" : "",
                           canExpand ? "adm-payments-source-row--expandable" : "",
                         ]

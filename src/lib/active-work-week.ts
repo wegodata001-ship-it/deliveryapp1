@@ -24,9 +24,9 @@ export function getActiveWorkWeekRange(): ActiveWorkWeekRange {
   };
 }
 
-export function balancesActiveWeekQuery(): { week: string; to: string } {
+export function balancesActiveWeekQuery(): { balancesWeek: string; balancesTo: string } {
   const { weekCode } = getActiveWorkWeekRange();
-  return { week: weekCode, to: balancesSnapshotToYmd(weekCode) };
+  return { balancesWeek: weekCode, balancesTo: balancesSnapshotToYmd(weekCode) };
 }
 
 export function isActiveWorkWeekCode(code: string | null | undefined): boolean {

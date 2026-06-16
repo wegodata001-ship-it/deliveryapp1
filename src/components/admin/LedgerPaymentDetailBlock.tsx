@@ -1,6 +1,9 @@
 "use client";
 
-import type { LedgerPaymentDetail } from "@/lib/ledger-payment-detail";
+import {
+  ledgerPaymentMethodDisplayLines,
+  type LedgerPaymentDetail,
+} from "@/lib/ledger-payment-detail";
 import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
 
 function fmtUsd(s: string): string {
@@ -12,6 +15,7 @@ type Props = {
 };
 
 export function LedgerPaymentDetailBlock({ detail }: Props) {
+  const methodLines = ledgerPaymentMethodDisplayLines(detail);
   return (
     <div className="adm-ledger-payment-detail" dir="rtl">
       <div className="adm-ledger-payment-detail-head">
@@ -25,11 +29,11 @@ export function LedgerPaymentDetailBlock({ detail }: Props) {
 
       <section className="adm-ledger-payment-detail-section">
         <h4 className="adm-ledger-payment-detail-section-title">פירוט אמצעי תשלום</h4>
-        {detail.methods.length > 0 ? (
+        {methodLines.length > 0 ? (
           <ul className="adm-ledger-payment-detail-list">
-            {detail.methods.map((m) => (
-              <li key={m.method}>
-                <span>{m.label}</span>
+            {methodLines.map((m, idx) => (
+              <li key={`${m.label}-${idx}`}>
+                <span>↳ {m.label}:</span>
                 <span dir="ltr">{fmtUsd(m.amountUsd)}</span>
               </li>
             ))}

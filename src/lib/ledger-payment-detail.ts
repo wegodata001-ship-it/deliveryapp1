@@ -20,11 +20,22 @@ export type LedgerPaymentOrderAllocation = {
   amountUsd: string;
 };
 
+export type LedgerPaymentCheckLine = {
+  checkNumber: string;
+  amountUsd: string;
+};
+
 export type LedgerPaymentDetail = {
   paymentCode: string;
   totalUsd: string;
   methods: LedgerPaymentMethodBucket[];
+  checks: LedgerPaymentCheckLine[];
   orders: LedgerPaymentOrderAllocation[];
+};
+
+export type LedgerPaymentMethodDisplayLine = {
+  label: string;
+  amountUsd: string;
 };
 
 const METHOD_ORDER: PaymentLineMethod[] = ["CASH", "CHECK", "BANK_TRANSFER", "CREDIT", "OTHER"];
@@ -165,6 +176,38 @@ function paymentRowUsdEquivalent(row: LedgerPaymentBatchRow): number {
   return 0;
 }
 
+/** פירוק שורות # מ-notes של קליטת תשלום — סכומים כפי שנשמרו (USD/ILS · METHOD) */
+function bucketsFromIntakeNotesBreakdown(
+  notes: string | null | undefined,
+  exchangeRate: number,
+): Map<PaymentLineMethod, number> {
+  const buckets = new Map<PaymentLineMethod, number>();
+  const txt = (notes ?? "").trim();
+  if (!txt) return buckets;
+  const rate = Number.isFinite(exchangeRate) && exchangeRate > 0 ? exchangeRate : 0;
+  const add = (method: PaymentLineMethod, usd: number) => {
+    if (usd <= 0.005) return;
+    buckets.set(method, roundMoney2((buckets.get(method) ?? 0) + usd));
+  };
+
+  for (const line of txt.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("#")) continue;
+
+    for (const m of trimmed.matchAll(/USD\s+\$([\d.,]+)\s·\s([A-Z_]+)/gi)) {
+      const amt = Number(String(m[1] ?? "").replace(/,/g, ""));
+      if (Number.isFinite(amt) && amt > 0) add(mapMethodToken(String(m[2] ?? "CASH")), amt);
+    }
+    for (const m of trimmed.matchAll(/ILS\s+₪([\d.,]+)\s·\s([A-Z_]+)/gi)) {
+      const ils = Number(String(m[1] ?? "").replace(/,/g, ""));
+      if (!Number.isFinite(ils) || ils <= 0) continue;
+      const usd = rate > 0 ? roundMoney2(ils / rate) : 0;
+      if (usd > 0) add(mapMethodToken(String(m[2] ?? "CASH")), usd);
+    }
+  }
+  return buckets;
+}
+
 function bucketsFromBatchRows(batchRows: LedgerPaymentBatchRow[]): Map<PaymentLineMethod, number> {
   const buckets = new Map<PaymentLineMethod, number>();
   const add = (method: PaymentLineMethod, usd: number) => {
@@ -246,8 +289,9 @@ export function buildLedgerPaymentDetail(params: {
   batchRows: LedgerPaymentBatchRow[];
   orderNumberById: Map<string, string>;
   checkAmountUsdByPaymentId?: Map<string, number>;
+  checksByPaymentId?: Map<string, LedgerPaymentCheckLine[]>;
 }): LedgerPaymentDetail | null {
-  const { batchRows, orderNumberById, checkAmountUsdByPaymentId } = params;
+  const { batchRows, orderNumberById, checkAmountUsdByPaymentId, checksByPaymentId } = params;
   if (batchRows.length === 0) return null;
 
   const primary = batchRows.find((r) => r.paymentCode?.trim()) ?? batchRows[0];
@@ -258,7 +302,10 @@ export function buildLedgerPaymentDetail(params: {
     primary.usdPaymentMethod ?? primary.ilsPaymentMethod ?? primary.paymentMethod,
   );
 
-  let bucketMap = bucketsFromPaymentLines(parsePaymentLinesFromNotes(notes), rate);
+  let bucketMap = bucketsFromIntakeNotesBreakdown(notes, rate);
+  if (bucketMap.size === 0) {
+    bucketMap = bucketsFromPaymentLines(parsePaymentLinesFromNotes(notes), rate);
+  }
   if (bucketMap.size === 0 && notes) {
     bucketMap = parseLegacyIntakeBuckets(notes, defaultMethod, rate);
   }
@@ -283,20 +330,63 @@ export function buildLedgerPaymentDetail(params: {
   }
 
   const orders = mergeOrderAllocations(batchRows, orderNumberById);
+  const checks = checksByPaymentId?.get(primary.id) ?? [];
 
   return {
     paymentCode,
     totalUsd: totalUsd.toFixed(2),
     methods: sortedMethodBuckets(bucketMap),
+    checks,
     orders,
   };
+}
+
+/** שורות תצוגה בלבד — ↳ מזומן / צ'ק / העברה (ללא השפעה על יתרה) */
+export function ledgerPaymentMethodDisplayLines(
+  detail: LedgerPaymentDetail | undefined | null,
+): LedgerPaymentMethodDisplayLine[] {
+  if (!detail) return [];
+  const out: LedgerPaymentMethodDisplayLine[] = [];
+  const hasChecks = detail.checks.length > 0;
+
+  for (const m of detail.methods) {
+    if (m.method === "CHECK" && hasChecks) {
+      for (const c of detail.checks) {
+        out.push({
+          label: `צ'ק ${c.checkNumber}`,
+          amountUsd: c.amountUsd,
+        });
+      }
+      continue;
+    }
+    out.push({ label: m.label, amountUsd: m.amountUsd });
+  }
+
+  if (hasChecks && !detail.methods.some((m) => m.method === "CHECK")) {
+    for (const c of detail.checks) {
+      out.push({
+        label: `צ'ק ${c.checkNumber}`,
+        amountUsd: c.amountUsd,
+      });
+    }
+  }
+
+  return out;
+}
+
+export function shouldShowLedgerPaymentMethodSubrows(
+  detail: LedgerPaymentDetail | undefined | null,
+): boolean {
+  const lines = ledgerPaymentMethodDisplayLines(detail);
+  if (lines.length <= 1) return false;
+  return lines.length > 1;
 }
 
 export function formatLedgerPaymentDetailLines(detail: LedgerPaymentDetail | undefined | null): string[] {
   if (!detail) return [];
   const lines: string[] = [`${detail.paymentCode} · סה״כ ${detail.totalUsd}$`];
-  for (const m of detail.methods) {
-    lines.push(`${m.label}: $${m.amountUsd}`);
+  for (const m of ledgerPaymentMethodDisplayLines(detail)) {
+    lines.push(`↳ ${m.label}: $${m.amountUsd}`);
   }
   for (const o of detail.orders) {
     lines.push(`${o.orderNumber} → $${o.amountUsd}`);

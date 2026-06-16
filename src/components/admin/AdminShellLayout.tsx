@@ -6,6 +6,7 @@ import { AdminWindowProvider } from "@/components/admin/AdminWindowProvider";
 import { AdminNavShell } from "@/components/admin/AdminNavShell";
 import { filterSidebarSections } from "@/lib/sidebar-nav";
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
+import { INVOICE_CANCEL_APPROVE_PERMISSION } from "@/lib/invoice-cancel-approve";
 import { getLayoutFinancialSettings } from "@/lib/admin-layout-cache";
 import type { AdminRouteMode } from "@/lib/admin-route-mode";
 import { getLoginTraceFromCookies } from "@/lib/login-trace-server";
@@ -39,6 +40,8 @@ export async function AdminShellLayout({ mode, children }: Props) {
 
       const user = await adminLayoutPerfRun("layout.auth", () => requireAuth());
       const isAdmin = isAdminUser(user);
+      const showApprovalBadges =
+        isAdmin || userHasAnyPermission(user, [INVOICE_CANCEL_APPROVE_PERMISSION]);
       const sections = filterSidebarSections(isAdmin, user.permissionKeys);
       const isLight = mode === "light";
 
@@ -57,7 +60,7 @@ export async function AdminShellLayout({ mode, children }: Props) {
         <AdminSidebar sections={sections} />
       ) : (
         <Suspense fallback={<AdminSidebar sections={sections} />}>
-          <AdminSidebarWithBadges sections={sections} showPendingBadge={isAdmin} />
+          <AdminSidebarWithBadges sections={sections} showPendingBadge={showApprovalBadges} />
         </Suspense>
       );
 

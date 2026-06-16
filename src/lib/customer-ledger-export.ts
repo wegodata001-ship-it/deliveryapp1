@@ -1,6 +1,9 @@
 import type { CustomerLedgerPayload, CustomerLedgerRow } from "@/app/admin/capture/actions";
 import { parseBalanceAmountString } from "@/lib/customer-balance";
-import type { LedgerPaymentDetail } from "@/lib/ledger-payment-detail";
+import {
+  ledgerPaymentMethodDisplayLines,
+  shouldShowLedgerPaymentMethodSubrows,
+} from "@/lib/ledger-payment-detail";
 import {
   atlasFmtUsd,
   atlasHeadersRtl,
@@ -21,11 +24,12 @@ export type CustomerLedgerExportMeta = {
   customerCode: string;
   phone: string | null;
   email: string | null;
-  /** מדינת מגורים/כתובת לקוח (לא סביבת עבודה) */
+  /** @deprecated — PDF כרטסת משתמש ב-city */
   country?: string | null;
+  city?: string | null;
   /** TURKEY | CHINA — לסינון כרטסת */
   sourceCountry?: string | null;
-  /** טורקיה | סין — לכותרת PDF */
+  /** לא מוצג בכותרת PDF כרטסת */
   workEnvironmentLabel?: string | null;
   fromYmd: string;
   toYmd: string;
@@ -48,6 +52,7 @@ export type LedgerExportTableRow = {
 export const LEDGER_EXPORT_HEADERS = ["תאריך", "מסמך", "סוג", "חיוב לקוח ($)", "תשלום/זיכוי ($)", "יתרה ($)"] as const;
 
 const LEDGER_PDF_HEADERS_RTL = ["תאריך", "מסמך", "סוג", "חיוב", "תשלום", "יתרה"] as const;
+const PDF_RLM = "\u200F";
 
 function todayYmd(): string {
   return formatLocalYmd(new Date());
@@ -92,69 +97,22 @@ function formatPaymentCell(row: CustomerLedgerRow): string {
 function pushPaymentDetailExportRows(out: LedgerExportTableRow[], row: CustomerLedgerRow): void {
   const detail = row.paymentDetail;
   if (!detail || row.isPaymentCancelled) return;
+  if (!shouldShowLedgerPaymentMethodSubrows(detail)) return;
 
-  if (detail.methods.length > 0) {
+  for (const line of ledgerPaymentMethodDisplayLines(detail)) {
     out.push({
       dateYmd: "",
       document: "",
-      typeLabel: "פירוט אמצעי תשלום",
+      typeLabel: `${line.label}:`,
       chargeUsd: "—",
-      paymentUsd: "—",
+      paymentUsd: fmtUsd(line.amountUsd),
       balance: "—",
       isOpening: false,
-      isPaymentDetailSection: true,
+      isPaymentDetailRow: true,
     });
-    for (const m of detail.methods) {
-      out.push({
-        dateYmd: "",
-        document: m.label,
-        typeLabel: "אמצעי תשלום",
-        chargeUsd: "—",
-        paymentUsd: fmtUsd(m.amountUsd),
-        balance: "—",
-        isOpening: false,
-        isPaymentDetailRow: true,
-      });
-    }
-  }
-
-  if (detail.orders.length > 0) {
-    out.push({
-      dateYmd: "",
-      document: "",
-      typeLabel: "הזמנות ששולמו",
-      chargeUsd: "—",
-      paymentUsd: "—",
-      balance: "—",
-      isOpening: false,
-      isPaymentDetailSection: true,
-    });
-    for (const o of detail.orders) {
-      out.push({
-        dateYmd: "",
-        document: `${o.orderNumber} → ${fmtUsd(o.amountUsd)}`,
-        typeLabel: "הקצאה להזמנה",
-        chargeUsd: "—",
-        paymentUsd: fmtUsd(o.amountUsd),
-        balance: "—",
-        isOpening: false,
-        isPaymentDetailRow: true,
-      });
-    }
   }
 }
 
-function compactLedgerPaymentDetail(detail: LedgerPaymentDetail | undefined | null): string {
-  if (!detail) return "";
-  const parts: string[] = [];
-  if (detail.methods.length > 0) {
-    parts.push(detail.methods.map((m) => `${m.label} ${fmtUsd(m.amountUsd)}`).join(" · "));
-  }
-  if (detail.orders.length > 0) {
-    parts.push(detail.orders.map((o) => `${o.orderNumber} -> ${fmtUsd(o.amountUsd)}`).join(" · "));
-  }
-  return parts.join("\n");
-}
 
 /** יתרה מצטברת — סכום בלבד, בלי תגית «חוב פתוח» */
 export function formatLedgerRunningBalance(balanceUsd: string): string {
@@ -184,19 +142,7 @@ export function buildLedgerExportTableRows(ledger: CustomerLedgerPayload): Ledge
 }
 
 function buildLedgerPdfTableRows(ledger: CustomerLedgerPayload): LedgerExportTableRow[] {
-  return ledger.rows.map((r) => {
-    const detailSummary = r.kind === "PAYMENT" && !r.isPaymentCancelled ? compactLedgerPaymentDetail(r.paymentDetail) : "";
-    return {
-      dateYmd: r.dateYmd,
-      document: detailSummary ? `${r.document}\n${detailSummary}` : r.document,
-      typeLabel: r.typeLabel,
-      chargeUsd: formatChargeCell(r),
-      paymentUsd: formatPaymentCell(r),
-      balance: formatLedgerRunningBalance(r.balanceUsd),
-      isOpening: r.kind === "OPENING_BALANCE",
-      isPaymentDetailRow: Boolean(detailSummary),
-    };
-  });
+  return buildLedgerExportTableRows(ledger);
 }
 
 function formatDateRangeLabel(fromYmd: string, toYmd: string): string {
@@ -234,21 +180,21 @@ function ledgerRowToPdfCells(r: LedgerExportTableRow, zebra: boolean): Content[]
   const fillColor = r.isOpening
     ? "#fffbeb"
     : r.isPaymentDetailRow
-      ? "#f7fee7"
+      ? "#f8fafc"
       : zebra
         ? "#f8fafc"
         : undefined;
   const bold = r.isOpening || r.isPaymentDetailSection;
-  const fontSize = r.isPaymentDetailRow ? 8.2 : undefined;
+  const fontSize = r.isPaymentDetailRow ? 8.5 : undefined;
   const chargeColor = r.chargeUsd !== "—" && !r.isPaymentDetailRow && !r.isPaymentDetailSection ? "#b91c1c" : undefined;
   const paymentColor = r.paymentUsd !== "—" && !r.isPaymentDetailSection ? "#047857" : undefined;
   const logical = [
-    atlasPdfCell(r.dateYmd, { ltr: true, fillColor, bold, fontSize }),
-    atlasPdfCell(r.document, { fillColor, bold, fontSize }),
-    atlasPdfCell(r.typeLabel, { fillColor, bold, fontSize }),
-    atlasPdfCell(r.chargeUsd, { ltr: true, fillColor, bold, fontSize, color: chargeColor }),
-    atlasPdfCell(r.paymentUsd, { ltr: true, fillColor, bold, fontSize, color: paymentColor }),
-    atlasPdfCell(r.balance, { ltr: true, fillColor, bold, fontSize }),
+    atlasPdfCell(r.dateYmd, { ltr: true, fillColor, bold, fontSize, alignment: "right" }),
+    atlasPdfCell(r.document, { fillColor, bold, fontSize, alignment: "right" }),
+    atlasPdfCell(r.typeLabel, { fillColor, bold, fontSize, alignment: "right" }),
+    atlasPdfCell(r.chargeUsd, { ltr: true, fillColor, bold, fontSize, color: chargeColor, alignment: "right" }),
+    atlasPdfCell(r.paymentUsd, { ltr: true, fillColor, bold, fontSize, color: paymentColor, alignment: "right" }),
+    atlasPdfCell(r.balance, { ltr: true, fillColor, bold, fontSize, alignment: "right" }),
   ];
   return [...logical].reverse();
 }
@@ -268,15 +214,16 @@ export async function exportCustomerLedgerPdf(
 
   const docDefinition: TDocumentDefinitions = {
     ...atlasPdfPageDefaults(),
-    defaultStyle: ledgerPdfDefaultStyle,
+    defaultStyle: { ...ledgerPdfDefaultStyle, direction: "rtl" },
     footer: (currentPage: number, pageCount: number) =>
       ({
-        text: `עמוד ${currentPage} מתוך ${pageCount}`,
+        text: `${PDF_RLM}עמוד ${currentPage} מתוך ${pageCount}${PDF_RLM}`,
         alignment: "center",
         font: ledgerPdfDefaultStyle.font,
         fontSize: 8,
         color: "#64748b",
         margin: [0, 0, 0, 10],
+        direction: "rtl",
         rtl: true,
       }) as Content,
     content: [
@@ -284,7 +231,7 @@ export async function exportCustomerLedgerPdf(
       {
         table: {
           headerRows: 1,
-          widths: [78, 78, 78, 88, "*", 72],
+          widths: [72, 72, "*", 88, 88, 88],
           body: tableBody,
         },
         layout: ATLAS_PDF_TABLE_LAYOUT,
@@ -295,9 +242,11 @@ export async function exportCustomerLedgerPdf(
         balanceUsd: currentBalance,
       }),
       {
-        text: "יתרת פתיחה · אמצעי תשלום והקצאות להזמנות מוצגים בתוך שורת התשלום · יתרה מצטברת לאחר כל תנועה",
+        text: `${PDF_RLM}יתרת פתיחה · אמצעי תשלום והקצאות להזמנות מוצגים בתוך שורת התשלום · יתרה מצטברת לאחר כל תנועה${PDF_RLM}`,
         style: "atlasFooterNote",
         margin: [0, 8, 0, 0],
+        direction: "rtl",
+        rtl: true,
       },
     ],
     styles: ATLAS_PDF_STYLES,
@@ -363,11 +312,12 @@ export async function exportCustomerLedgerExcel(
   };
 
   const aoa: (string | number)[][] = [
-    ["WEGO ERP — כרטסת לקוח"],
-    ["שם לקוח", meta.displayName || "—"],
+    ["WEGO ERP"],
+    ["כרטסת לקוח"],
     ["קוד לקוח", meta.customerCode || "—"],
+    ["שם לקוח", meta.displayName || "—"],
     ["טלפון", meta.phone?.trim() || "—"],
-    ["אימייל", meta.email?.trim() || "—"],
+    ["עיר", meta.city?.trim() || "—"],
     ["טווח תאריכים", formatDateRangeLabel(meta.fromYmd, meta.toYmd)],
     ["שבוע AH", resolveAhWeekLabel(meta.fromYmd, meta.toYmd)],
     [],
@@ -397,16 +347,17 @@ export async function exportCustomerLedgerExcel(
   };
 
   setCellStyle(0, 0, headerStyle);
-  for (let r = 1; r <= 6; r++) {
+  setCellStyle(1, 0, { ...headerStyle, font: { bold: true, sz: 12, color: { rgb: "0F172A" } } });
+  for (let r = 2; r <= 7; r++) {
     setCellStyle(r, 0, labelStyle);
     setCellStyle(r, 1, valueStyle);
   }
-  setCellStyle(8, 0, { ...kpiLabelStyle, fill: { fgColor: { rgb: "FEF2F2" } } });
-  setCellStyle(8, 1, { ...kpiValueStyle, font: { bold: true, sz: 11, color: { rgb: "B91C1C" } } });
-  setCellStyle(9, 0, { ...kpiLabelStyle, fill: { fgColor: { rgb: "ECFDF5" } } });
-  setCellStyle(9, 1, { ...kpiValueStyle, font: { bold: true, sz: 11, color: { rgb: "047857" } } });
-  setCellStyle(10, 0, { ...kpiLabelStyle, fill: { fgColor: { rgb: "EFF6FF" } } });
-  setCellStyle(10, 1, { ...kpiValueStyle, font: { bold: true, sz: 11, color: { rgb: "1D4ED8" } } });
+  setCellStyle(9, 0, { ...kpiLabelStyle, fill: { fgColor: { rgb: "FEF2F2" } } });
+  setCellStyle(9, 1, { ...kpiValueStyle, font: { bold: true, sz: 11, color: { rgb: "B91C1C" } } });
+  setCellStyle(10, 0, { ...kpiLabelStyle, fill: { fgColor: { rgb: "ECFDF5" } } });
+  setCellStyle(10, 1, { ...kpiValueStyle, font: { bold: true, sz: 11, color: { rgb: "047857" } } });
+  setCellStyle(11, 0, { ...kpiLabelStyle, fill: { fgColor: { rgb: "EFF6FF" } } });
+  setCellStyle(11, 1, { ...kpiValueStyle, font: { bold: true, sz: 11, color: { rgb: "1D4ED8" } } });
 
   for (let c = 0; c < 6; c++) setCellStyle(headRow, c, tableHeadStyle);
   const detailSectionStyle = {
@@ -417,7 +368,7 @@ export async function exportCustomerLedgerExcel(
   const detailRowStyle = {
     ...tableCellStyle,
     font: { sz: 9, color: { rgb: "64748B" } },
-    fill: { fgColor: { rgb: "FAFBFC" } },
+    fill: { fgColor: { rgb: "F8FAFC" } },
   };
 
   for (let i = 0; i < tableRows.length; i++) {

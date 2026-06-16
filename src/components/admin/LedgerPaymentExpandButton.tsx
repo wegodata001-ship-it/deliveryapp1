@@ -19,7 +19,7 @@ export function LedgerPaymentExpandButton({ expanded, onToggle }: Props) {
       }}
     >
       <span className="adm-ledger-payment-expand-icon" aria-hidden>
-        {expanded ? "▼" : "▶"}
+        {expanded ? "▲" : "▼"}
       </span>
     </button>
   );

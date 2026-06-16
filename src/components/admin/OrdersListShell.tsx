@@ -202,9 +202,9 @@ function orderEditBadgeLabel(
   const isCancelled = orderStatus === OS.CANCELLED;
   switch (b) {
     case "pending":
-      return { tone: "pending", text: "ממתין לאישור מנהל", cls: "adm-order-edit-badge--pending" };
+      return { tone: "pending", text: "ממתין לאישור עדכון", cls: "adm-order-edit-badge--pending" };
     case "unlock":
-      return { tone: "unlock", text: "אושר לעריכה", cls: "adm-order-edit-badge--unlock" };
+      return { tone: "unlock", text: "מאושר", cls: "adm-order-edit-badge--unlock" };
     case "rejected":
       return { tone: "rejected", text: "נדחה", cls: "adm-order-edit-badge--rejected" };
     case "locked":

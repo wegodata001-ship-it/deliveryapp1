@@ -16,6 +16,7 @@ import {
   parseLocalDate,
 } from "@/lib/work-week";
 import { resolveCountryScopeFromCode } from "@/lib/country-data-scope";
+import { customerBalancesDataRevision } from "@/lib/customer-balances-revision";
 import { ORDER_COUNTRY_CODES, normalizeOrderSourceCountry, type OrderCountryCode } from "@/lib/order-countries";
 import {
   DEFAULT_WORK_COUNTRY,
@@ -118,6 +119,8 @@ export type CustomerBalanceQuery = {
   /** צבירה מצטברת לכל חיי הלקוח (לא לפי שבוע בלבד) */
   lifetime?: boolean;
   filters?: CustomerBalanceFilters;
+  /** דילוג על cache — לבדיקת עדכון נתונים ברקע */
+  skipCache?: boolean;
 };
 
 export type CustomerBalanceRow = {
@@ -771,6 +774,11 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   let orderDateFilter: Prisma.DateTimeFilter | undefined;
   let paymentDateFilter: Prisma.DateTimeFilter | undefined;
 
+  const dateRangeFilterActive =
+    !lifetime &&
+    !cumulativeThrough &&
+    Boolean(query.fromYmd?.trim() || query.toYmd?.trim());
+
   if (lifetime) {
     /** דוח יתרות חי — תשלומים/הזמנות עד היום; toYmd ב-URL הוא תווית שבוע בלבד */
     const lteBound = endOfLocalDay(formatLocalYmd(new Date()));
@@ -839,7 +847,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     enrichOpenOrders: query.enrichOpenOrders === true,
     filters: query.filters ?? {},
   });
-  const cachedPayload = getCachedBalancesPayload(cacheKey);
+  const cachedPayload = query.skipCache ? null : getCachedBalancesPayload(cacheKey);
   if (cachedPayload) {
     const totalMs = Date.now() - perfT0;
     console.table({
@@ -859,7 +867,9 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     deletedAt: null,
     countryCode: countryScope.workCountry,
     sourceCountry: countryScope.sourceCountry,
-    ...(!lifetime && !cumulativeThrough && query.weekCode?.trim() ? { weekCode: query.weekCode.trim() } : {}),
+    ...(!lifetime && !cumulativeThrough && !dateRangeFilterActive && query.weekCode?.trim()
+      ? { weekCode: query.weekCode.trim() }
+      : {}),
     ...(orderDateFilter ? { orderDate: orderDateFilter } : {}),
   };
 
@@ -867,7 +877,9 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     ...activePaidPaymentWhere,
     countryCode: countryScope.workCountry,
     orderId: { not: null },
-    ...(!lifetime && !cumulativeThrough && query.weekCode?.trim() ? { weekCode: query.weekCode.trim() } : {}),
+    ...(!lifetime && !cumulativeThrough && !dateRangeFilterActive && query.weekCode?.trim()
+      ? { weekCode: query.weekCode.trim() }
+      : {}),
     ...(paymentDateFilter ? { paymentDate: paymentDateFilter } : {}),
     order: {
       deletedAt: null,
@@ -1050,7 +1062,9 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
             orderId: null,
             customerId: { in: chunk },
             countryCode: countryScope.workCountry,
-            ...(!lifetime && !cumulativeThrough && query.weekCode?.trim() ? { weekCode: query.weekCode.trim() } : {}),
+            ...(!lifetime && !cumulativeThrough && !dateRangeFilterActive && query.weekCode?.trim()
+              ? { weekCode: query.weekCode.trim() }
+              : {}),
             ...(paymentDateFilter ? { paymentDate: paymentDateFilter } : {}),
           },
           select: {
@@ -1707,4 +1721,18 @@ export async function exportCustomerBalancesAction(
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "ייצוא נכשל" };
   }
+}
+
+/** בדיקה קלה — האם יש נתונים חדשים מאשר התצוגה הנוכחית */
+export async function getCustomerBalancesRevisionAction(
+  query: CustomerBalanceQuery,
+): Promise<string> {
+  noStore();
+  const payload = await listCustomerBalancesAction({
+    ...query,
+    page: 1,
+    limit: 1,
+    skipCache: true,
+  });
+  return customerBalancesDataRevision(payload);
 }

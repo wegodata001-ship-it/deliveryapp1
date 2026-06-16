@@ -928,6 +928,14 @@
   gap: 4px;
 }
 
+.adm-ledger-payment-cell-inner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  width: 100%;
+}
+
 .adm-ledger-payment-expand {
   display: inline-flex;
   align-items: center;
@@ -954,6 +962,27 @@
 .adm-ledger-payment-expand:hover {
   background: #e2e8f0;
   border-color: #94a3b8;
+}
+
+.adm-ledger-row--payment-method-sub td {
+  padding-top: 2px !important;
+  padding-bottom: 2px !important;
+  background: #f8fafc;
+  border-top: none !important;
+  font-size: 0.78rem;
+  color: #64748b;
+}
+
+.adm-ledger-payment-method-sub-type {
+  padding-inline-start: 1.25rem !important;
+  font-weight: 600;
+  color: #475569;
+}
+
+.adm-ledger-row--payment-method-sub td:last-child,
+.adm-ledger-row--payment-method-sub td:nth-child(5) {
+  color: #047857;
+  font-weight: 700;
 }
 
 .adm-ledger-payment-detail-row td {

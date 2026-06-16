@@ -55,6 +55,12 @@ export const SIDEBAR_SECTIONS: NavSectionDef[] = [
       },
       { href: "/admin/orders", label: "רשימת הזמנות", icon: "orderList", anyOf: ["view_orders"] },
       {
+        href: "/admin/invoice-cancel-requests",
+        label: "בקשות ביטול חשבונית",
+        icon: "editRequests",
+        anyOf: ["invoice.cancel.approve"],
+      },
+      {
         href: "/admin/order-edit-requests",
         label: "בקשות עריכת הזמנות",
         icon: "editRequests",

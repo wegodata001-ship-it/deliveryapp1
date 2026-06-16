@@ -6,6 +6,11 @@ import { resolveGlobalCountry } from "@/lib/current-country";
 import { withQuery } from "@/lib/admin-url-query";
 import { getActiveWorkWeekRange, isActiveWorkWeekCode } from "@/lib/active-work-week";
 import { balancesSnapshotToYmd, normalizeAhWeekCode } from "@/lib/work-week";
+import {
+  BALANCES_TO_PARAM,
+  BALANCES_WEEK_PARAM,
+  balancesWeekQueryPatch,
+} from "@/lib/balances-week-filter";
 
 export type WorkWeekScreenScope = "orders" | "balances";
 
@@ -58,20 +63,13 @@ export function useEnsureActiveWorkWeekOnEnter(scope: WorkWeekScreenScope): void
       return;
     }
 
-    const cur = normalizeAhWeekCode(sp.get("week") || "") ?? "";
+    const cur = normalizeAhWeekCode(sp.get(BALANCES_WEEK_PARAM) || "") ?? "";
     const snap = balancesSnapshotToYmd(active.weekCode);
-    const curTo = sp.get("to") || "";
+    const curTo = sp.get(BALANCES_TO_PARAM) || "";
     if (cur === active.weekCode && curTo === snap) return;
 
     router.replace(
-      withQuery(pathname, sp, {
-        week: active.weekCode,
-        to: snap,
-        upto: null,
-        from: null,
-        modal: null,
-        country,
-      }),
+      withQuery(pathname, sp, balancesWeekQueryPatch(active.weekCode, snap)),
       { scroll: false },
     );
   }, [pathname, router, scope, sp]);

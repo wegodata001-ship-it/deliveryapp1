@@ -15,7 +15,8 @@ export type AppPermissionKey =
   | "view_customer_card"
   | "view_reports"
   | "import_excel"
-  | "manage_settings";
+  | "manage_settings"
+  | "invoice.cancel.approve";
 
 export type AppPermissionDef = {
   key: AppPermissionKey;
@@ -37,6 +38,11 @@ export const APP_PERMISSION_DEFINITIONS: AppPermissionDef[] = [
   { key: "view_reports", name: "דוחות ויתרות", description: "דוחות, יתרות וייצוא" },
   { key: "import_excel", name: "ייבוא Excel", description: "ייבוא נתונים מקובץ" },
   { key: "manage_settings", name: "הגדרות מערכת", description: "טבלאות מקור והגדרות" },
+  {
+    key: "invoice.cancel.approve",
+    name: "אישור ביטול חשבונית",
+    description: "אישור או דחיית בקשות ביטול חשבונית",
+  },
 ];
 
 /** הרשאות שניתן לשייך לעובד דרך טופס ניהול משתמשים */

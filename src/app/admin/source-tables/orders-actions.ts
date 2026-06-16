@@ -14,6 +14,8 @@ import {
 } from "@/lib/orders-source-table";
 import { DEFAULT_WORK_COUNTRY, type WorkCountryCode } from "@/lib/work-country";
 import { isValidOrderStatusId, resolveOrderStatusFromDisplayText } from "@/lib/order-status-registry";
+import { OS } from "@/lib/order-status-slugs";
+import { executeOrderCancellation } from "@/lib/order-cancellation";
 import { prisma } from "@/lib/prisma";
 
 async function ensureOrdersTableAccess() {
@@ -68,11 +70,35 @@ export async function updateOrderStatusSourceAction(
   await clearExpiredOrderEditUnlockForOrder(oid);
   const orderRow = await prisma.order.findFirst({
     where: { id: oid, deletedAt: null },
-    select: { id: true, status: true, editUnlockedForUserId: true, editUnlockedUntil: true },
+    select: {
+      id: true,
+      status: true,
+      customerId: true,
+      editUnlockedForUserId: true,
+      editUnlockedUntil: true,
+    },
   });
   if (!orderRow) return { ok: false, error: "הזמנה לא נמצאה" };
-  if (!isAdminUser(me) && !canUserEditCompletedOrder(me, orderRow)) {
-    return { ok: false, error: "הזמנה בהושלמה נעולה — שינוי דורש אישור מנהל." };
+  if (!isAdminUser(me)) {
+    return { ok: false, error: "עדכון הזמנה דורש אישור מנהל. פתחו את ההזמנה ושלחו בקשת עדכון." };
+  }
+  if (status === OS.CANCELLED) {
+    if (orderRow.status === OS.CANCELLED) {
+      return { ok: false, error: "ההזמנה כבר מבוטלת" };
+    }
+    if (!orderRow.customerId) {
+      return { ok: false, error: "אי אפשר לבטל — להזמנה אין לקוח משויך" };
+    }
+    await executeOrderCancellation({
+      orderId: oid,
+      actorUserId: me.id,
+      actorFullName: me.fullName,
+      directByAdmin: true,
+    });
+    revalidatePath("/admin/orders");
+    revalidatePath("/admin/balances");
+    revalidatePath("/admin/source-tables/orders");
+    return { ok: true };
   }
   await prisma.order.update({ where: { id: oid }, data: { status } });
   revalidatePath("/admin/orders");

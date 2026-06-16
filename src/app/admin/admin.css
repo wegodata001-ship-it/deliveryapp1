@@ -7928,7 +7928,7 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 4px 10px 8px;
+  padding: 4px 10px 4px;
   position: sticky;
   top: 0;
   z-index: 10;
@@ -9718,14 +9718,118 @@ select.payment-modal-inline-input {
 
 .payment-modal-cust-summary {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 10px;
+  flex-direction: column;
+  gap: 8px;
   margin: 6px 2px 0;
-  padding: 6px 10px;
+  padding: 8px 12px;
   background: #f0fdf4;
   border: 1px solid #bbf7d0;
   border-radius: 6px;
+}
+
+.payment-modal-cust-summary__identity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+
+.payment-modal-cust-summary__sep {
+  color: #94a3b8;
+  font-weight: 700;
+  user-select: none;
+}
+
+.payment-modal-cust-summary__code {
+  font-size: 0.78rem;
+  color: #475569;
+  font-weight: 700;
+}
+
+.payment-modal-cust-summary__totals {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 24px;
+}
+
+.payment-modal-cust-summary__total {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  line-height: 1.25;
+}
+
+.payment-modal-cust-summary__total-k {
+  color: #475569;
+  font-weight: 800;
+}
+
+.payment-modal-cust-summary__total-v {
+  font-variant-numeric: tabular-nums;
+  font-weight: 900;
+}
+
+.payment-modal-cust-summary__total--charges .payment-modal-cust-summary__total-v,
+.payment-modal-cust-summary__total--charges svg {
+  color: #0ea5e9;
+}
+
+.payment-modal-cust-summary__total--payments .payment-modal-cust-summary__total-v,
+.payment-modal-cust-summary__total--payments svg {
+  color: #15803d;
+}
+
+.payment-modal-cust-summary__total--commissions .payment-modal-cust-summary__total-v,
+.payment-modal-cust-summary__total--commissions svg {
+  color: #b45309;
+}
+
+.payment-modal-cust-summary__total-v--commission-neg {
+  color: #b45309;
+}
+
+.payment-modal-cust-summary__total--balance-zero .payment-modal-cust-summary__total-v,
+.payment-modal-cust-summary__total--balance-zero svg {
+  color: #15803d;
+}
+
+.payment-modal-cust-summary__total--balance-debt .payment-modal-cust-summary__total-v,
+.payment-modal-cust-summary__total--balance-debt svg {
+  color: #dc2626;
+}
+
+.payment-modal-cust-summary__total--balance-credit .payment-modal-cust-summary__total-v,
+.payment-modal-cust-summary__total--balance-credit svg {
+  color: #7c3aed;
+}
+
+@media (min-width: 1024px) {
+  .payment-modal-cust-summary__totals {
+    flex-wrap: nowrap;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1023px) {
+  .payment-modal-cust-summary__total {
+    flex: 0 0 calc(50% - 12px);
+  }
+}
+
+@media (max-width: 767px) {
+  .payment-modal-cust-summary__totals {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .payment-modal-cust-summary__total {
+    padding: 8px 10px;
+    border: 1px solid #bbf7d0;
+    border-radius: 6px;
+    background: #fff;
+  }
 }
 
 .payment-modal-cust-summary-loading {
@@ -10158,6 +10262,38 @@ select.payment-modal-inline-input {
   text-align: center;
 }
 
+.payment-modal-cancelled-banner--invoice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.payment-modal-cancelled-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #dc2626;
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+}
+
+.payment-modal-cancel-pending-banner {
+  margin-bottom: 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  color: #9a3412;
+  font-weight: 700;
+  text-align: center;
+  font-size: 0.8125rem;
+}
+
 .payment-modal-cancelled-reason {
   font-weight: 500;
 }
@@ -10260,7 +10396,7 @@ select.payment-modal-inline-input {
   display: flex;
   flex-direction: column;
   overflow: visible;
-  border-top: 1px solid #e5e7eb;
+  border-top: none;
   background: #fff;
   position: relative;
 }
@@ -10320,6 +10456,65 @@ select.payment-modal-inline-input {
   line-height: 1.35;
   border-bottom: 1px solid #f1f5f9;
   background: #fafafa;
+}
+
+.payment-balance-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 0 10px 6px;
+  padding: 6px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(248, 250, 252, 0.95);
+  font-size: 0.8125rem;
+  line-height: 1.3;
+  -webkit-overflow-scrolling: touch;
+}
+
+.payment-balance-summary__item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.payment-balance-summary__k {
+  color: #475569;
+  font-weight: 700;
+}
+
+.payment-balance-summary__v {
+  font-size: 0.875rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.payment-balance-summary__v--current {
+  color: #c2410c;
+}
+
+.payment-balance-summary__v--entered {
+  color: #15803d;
+}
+
+.payment-balance-summary__v--cleared {
+  color: #15803d;
+}
+
+.payment-balance-summary__v--debt {
+  color: #dc2626;
+}
+
+.payment-balance-summary__v--credit {
+  color: #7c3aed;
+}
+
+.payment-balance-summary__sep {
+  color: #94a3b8;
+  font-weight: 700;
+  user-select: none;
 }
 
 .payment-modal-nav-loading-overlay {
@@ -10391,29 +10586,37 @@ select.payment-modal-inline-input {
 
 .payment-modal-orders-summary--methods .payment-modal-live-kpi {
   flex: 1 1 0;
-  min-width: 5.5rem;
+  min-width: 6.75rem;
   max-width: none;
-  min-height: 4.75rem;
+  min-height: 6.5rem;
   height: auto;
-  max-height: 4.75rem;
-  padding: 5px 6px 4px;
-  gap: 2px;
-  border-radius: 8px;
-  justify-content: center;
+  max-height: none;
+  padding: 8px 8px 7px;
+  gap: 4px;
+  border-radius: 10px;
+  justify-content: flex-start;
 }
 
 .payment-modal-orders-summary--methods .payment-modal-live-kpi__lbl {
-  font-size: 0.62rem;
-  line-height: 1.15;
+  font-size: 1rem;
+  line-height: 1.2;
+  font-weight: 800;
+}
+
+.payment-modal-orders-summary--methods .payment-modal-live-kpi__amount-v {
+  font-size: 1.375rem;
+}
+
+.payment-modal-orders-summary--methods .payment-modal-live-kpi--total .payment-modal-live-kpi__amount-v {
+  font-size: 1.5rem;
+}
+
+.payment-modal-orders-summary--methods .payment-modal-live-kpi__amount-k {
+  font-size: 0.78rem;
 }
 
 .payment-modal-orders-summary--methods .payment-modal-live-kpi__val--main {
-  font-size: 0.82rem;
-  margin-top: 0;
-}
-
-.payment-modal-orders-summary--methods .payment-modal-live-kpi--total .payment-modal-live-kpi__val--main {
-  font-size: 0.88rem;
+  display: none;
 }
 
 .payment-modal-orders-summary--methods .payment-modal-live-kpi__breakdown,
@@ -11068,7 +11271,7 @@ select.payment-modal-inline-input {
   align-items: center;
   justify-content: flex-start;
   gap: 4px;
-  min-height: 108px;
+  min-height: 7.5rem;
   height: 100%;
   padding: 10px 8px 8px;
   border-radius: 12px;
@@ -11078,11 +11281,54 @@ select.payment-modal-inline-input {
 }
 
 .payment-modal-live-kpi__lbl {
-  font-size: 0.74rem;
+  font-size: 1.0625rem;
   font-weight: 800;
   color: #475569;
   line-height: 1.2;
   flex-shrink: 0;
+}
+
+.payment-modal-live-kpi__amounts {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  width: 100%;
+  margin-top: 2px;
+}
+
+.payment-modal-live-kpi__amount-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.35rem;
+  line-height: 1.15;
+}
+
+.payment-modal-live-kpi__amount-k {
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: #64748b;
+  flex-shrink: 0;
+}
+
+.payment-modal-live-kpi__amount-v {
+  font-size: 1.4375rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #0f172a;
+}
+
+.payment-modal-live-kpi__amount-v--ils {
+  color: #0369a1;
+}
+
+.payment-modal-live-kpi__amount-v--usd {
+  color: #0f172a;
+}
+
+.payment-modal-live-kpi__amount-v--solo {
+  margin-top: 0.15rem;
 }
 
 .payment-modal-live-kpi__val {
@@ -11128,43 +11374,87 @@ select.payment-modal-inline-input {
 }
 
 .payment-modal-live-kpi--cash {
-  border-color: rgba(22, 163, 74, 0.35);
-  background: rgba(220, 252, 231, 0.55);
+  border-color: rgba(22, 163, 74, 0.45);
+  background: rgba(220, 252, 231, 0.65);
+}
+
+.payment-modal-live-kpi--cash .payment-modal-live-kpi__lbl {
+  color: #15803d;
+}
+
+.payment-modal-live-kpi--cash .payment-modal-live-kpi__amount-v--usd {
+  color: #166534;
 }
 
 .payment-modal-live-kpi--bank_transfer {
-  border-color: rgba(14, 165, 233, 0.35);
-  background: rgba(224, 242, 254, 0.55);
+  border-color: rgba(14, 165, 233, 0.45);
+  background: rgba(224, 242, 254, 0.65);
+}
+
+.payment-modal-live-kpi--bank_transfer .payment-modal-live-kpi__lbl {
+  color: #0369a1;
+}
+
+.payment-modal-live-kpi--bank_transfer .payment-modal-live-kpi__amount-v--usd {
+  color: #0c4a6e;
 }
 
 .payment-modal-live-kpi--checks {
-  border-color: rgba(139, 92, 246, 0.35);
-  background: rgba(237, 233, 254, 0.55);
+  border-color: rgba(139, 92, 246, 0.45);
+  background: rgba(237, 233, 254, 0.65);
+}
+
+.payment-modal-live-kpi--checks .payment-modal-live-kpi__lbl {
+  color: #6d28d9;
+}
+
+.payment-modal-live-kpi--checks .payment-modal-live-kpi__amount-v--usd {
+  color: #5b21b6;
 }
 
 .payment-modal-live-kpi--credit {
-  border-color: rgba(217, 119, 6, 0.35);
-  background: rgba(254, 243, 199, 0.55);
+  border-color: rgba(217, 119, 6, 0.45);
+  background: rgba(254, 243, 199, 0.65);
+}
+
+.payment-modal-live-kpi--credit .payment-modal-live-kpi__lbl {
+  color: #b45309;
+}
+
+.payment-modal-live-kpi--credit .payment-modal-live-kpi__amount-v--usd {
+  color: #92400e;
 }
 
 .payment-modal-live-kpi--other {
-  border-color: rgba(100, 116, 139, 0.35);
-  background: rgba(241, 245, 249, 0.85);
+  border-color: rgba(100, 116, 139, 0.45);
+  background: rgba(241, 245, 249, 0.92);
+}
+
+.payment-modal-live-kpi--other .payment-modal-live-kpi__lbl {
+  color: #475569;
+}
+
+.payment-modal-live-kpi--other .payment-modal-live-kpi__amount-v--usd {
+  color: #334155;
 }
 
 .payment-modal-live-kpi--total {
   border-color: rgba(21, 128, 61, 0.55);
   background: linear-gradient(180deg, rgba(220, 252, 231, 0.95), rgba(187, 247, 208, 0.75));
   box-shadow: 0 4px 14px rgba(21, 128, 61, 0.12);
-  justify-content: center;
+  justify-content: flex-start;
 }
 
 .payment-modal-live-kpi--total .payment-modal-live-kpi__lbl {
   color: #14532d;
+  font-size: 1.125rem;
 }
 
-.payment-modal-live-kpi--total .payment-modal-live-kpi__val--main {
-  font-size: 1.28rem;
+.payment-modal-live-kpi--total .payment-modal-live-kpi__amount-v {
+  font-size: 1.5625rem;
+}
+
+.payment-modal-live-kpi--total .payment-modal-live-kpi__amount-v--usd {
   color: #14532d;
 }
 
@@ -11183,9 +11473,9 @@ select.payment-modal-inline-input {
   }
 
   .payment-modal-orders-summary--methods .payment-modal-live-kpi {
-    min-width: 5rem;
-    min-height: 4.5rem;
-    max-height: 4.5rem;
+    min-width: 6.25rem;
+    min-height: 6.25rem;
+    max-height: none;
   }
 }
 
@@ -15183,6 +15473,16 @@ html.adm-app-shell .adm-chrome-main:has(.adm-balances-excel-page) {
   min-width: 0;
 }
 
+.adm-balances-toolbar-row--primary .adm-balances-field--date {
+  flex: 0 1 132px;
+  min-width: 118px;
+}
+
+.adm-balances-toolbar-row--primary .adm-balances-input--date {
+  min-width: 0;
+  width: 100%;
+}
+
 .adm-balances-toolbar-row--primary .adm-balances-week-wrap .adm-report-week-nav {
   min-height: 36px;
 }
@@ -15232,6 +15532,46 @@ html.adm-app-shell .adm-chrome-main:has(.adm-balances-excel-page) {
   background: #059669;
   border-color: #059669;
   box-shadow: 0 4px 12px rgba(5, 150, 105, 0.22);
+}
+
+.adm-balances-export-btn--refresh.adm-export-btn {
+  color: #334155;
+  background: #f8fafc;
+  border-color: #cbd5e1;
+}
+
+.adm-balances-export-btn--refresh.adm-export-btn:hover:not(:disabled) {
+  color: #0f172a;
+  background: #f1f5f9;
+  border-color: #94a3b8;
+}
+
+.adm-balances-refresh-spin {
+  animation: adm-balances-refresh-spin 0.85s linear infinite;
+}
+
+@keyframes adm-balances-refresh-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.adm-balances-new-data-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #1e40af;
+  font-size: 0.88rem;
 }
 
 .adm-balances-advanced-toggle {
@@ -17655,6 +17995,16 @@ select.adm-balances-input {
 .adm-payments-status-badge--cancelled {
   background: #fee2e2;
   color: #991b1b;
+}
+
+.adm-payments-source-row--cancelled {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.adm-payments-source-row--cancelled .adm-payments-code-link,
+.adm-payments-source-row--cancelled .adm-payments-amt {
+  color: #64748b;
 }
 
 .adm-payments-td-actions {
@@ -20761,6 +21111,100 @@ select.adm-balances-input {
   text-align: center;
   font-weight: 700;
   color: #334155;
+}
+
+.adm-order-update-req-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  margin-inline-start: 0.5rem;
+}
+
+.adm-order-update-req-badge--pending {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fcd34d;
+}
+
+.adm-order-update-req-badge--approved {
+  background: #dcfce7;
+  color: #166534;
+  border: 1px solid #86efac;
+}
+
+.adm-order-update-req-badge--rejected {
+  background: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #fca5a5;
+}
+
+.adm-oc-edit-request-modal__hint {
+  margin: 0 0 0.75rem;
+  font-size: 0.85rem;
+  color: #64748b;
+  line-height: 1.45;
+}
+
+.adm-order-update-diff-modal {
+  position: relative;
+  z-index: 1;
+  margin: 6vh auto;
+  max-width: min(720px, 94vw);
+  padding: 1rem 1.15rem 1.15rem;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.14);
+}
+
+.adm-order-update-diff-modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.65rem;
+}
+
+.adm-order-update-diff-modal__head h4 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.adm-order-update-diff-modal__reason {
+  margin: 0 0 0.75rem;
+  font-size: 0.88rem;
+  color: #334155;
+}
+
+.adm-order-update-diff-table .adm-order-update-diff-old {
+  color: #64748b;
+}
+
+.adm-order-update-diff-table .adm-order-update-diff-new {
+  color: #0f766e;
+  font-weight: 700;
+}
+
+.adm-order-update-diff-arrow {
+  width: 2rem;
+  text-align: center;
+  color: #94a3b8;
+}
+
+.adm-order-update-diff-modal__meta {
+  margin: 0.75rem 0 0;
+  font-size: 0.82rem;
+  color: #64748b;
+}
+
+.adm-oc-pro-header__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
 }
 .ui-top-loading-bar {
   position: fixed;

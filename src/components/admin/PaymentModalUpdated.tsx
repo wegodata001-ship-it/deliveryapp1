@@ -73,7 +73,7 @@ import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import { OrderEditModal } from "@/components/admin/OrderEditModal";
 import { Button } from "@/components/ui/Button";
-import { BarChart3, Home, Search } from "lucide-react";
+import { BarChart3, CreditCard, DollarSign, Home, Scale, Search, TrendingDown } from "lucide-react";
 import { normalizeOrderSourceCountry, type OrderCountryCode } from "@/lib/order-countries";
 import {
   DEFAULT_WORK_COUNTRY,
@@ -95,6 +95,10 @@ import { AhWeekNavNextButton, AhWeekNavPrevButton } from "@/components/admin/AhW
 import { isActiveWorkWeekCode } from "@/lib/active-work-week";
 import { goToNextWeekNumber, goToPrevWeekNumber } from "@/lib/weeks/ah-week-nav";
 import {
+  defaultPaymentIntakeDateYmd,
+  defaultPaymentIntakeWeekCode,
+} from "@/lib/payment-intake-default-week";
+import {
   calculateTotalBaseIls,
   calculateTotals,
   createDefaultPaymentLine,
@@ -108,9 +112,13 @@ import { validatePaymentCheckLines } from "@/lib/payment-checks";
 import { formatCommissionPercentValue, parseCommissionPercentString } from "@/lib/commission-percent";
 import {
   previewCustomerPaymentOverageAction,
-  cancelPaymentAction,
   savePaymentUpdatedAction,
 } from "@/app/admin/payments-updated/actions";
+import {
+  createInvoiceCancelRequestAction,
+  getPaymentCancelRequestHintAction,
+  type PaymentCancelRequestHint,
+} from "@/app/admin/invoice-cancel-requests/actions";
 import { CustomerPaymentOverageModal } from "@/components/admin/CustomerPaymentOverageModal";
 import {
   formatIlsDisplay,
@@ -457,14 +465,9 @@ export function PaymentModalUpdated({
   /** קוד תשלום לתצוגה בלבד — נטען ברקע, לא מעדכן את loadedPayment (מונע remount / איבוד פוקוס) */
   const [previewPaymentCode, setPreviewPaymentCode] = useState<string | null>(null);
   const [paymentCodePreviewPending, setPaymentCodePreviewPending] = useState(true);
-  const [paymentDateYmd, setPaymentDateYmd] = useState(() => {
-    const today = new Date();
-    const currentCode = getWeekCodeForLocalDate(today);
-    if (globalWeek === currentCode) return formatLocalYmd(today);
-    return WORK_WEEK_RANGES[globalWeek]?.from ?? formatLocalYmd(today);
-  });
+  const [paymentDateYmd, setPaymentDateYmd] = useState(() => defaultPaymentIntakeDateYmd());
   const [paymentTimeHm, setPaymentTimeHm] = useState(() => formatLocalHm(new Date()));
-  const [weekDraft, setWeekDraft] = useState(() => globalWeek);
+  const [weekDraft, setWeekDraft] = useState(() => defaultPaymentIntakeWeekCode());
   const [weekInputErr, setWeekInputErr] = useState<string | null>(null);
 
   const dollarRateTouchedRef = useRef(false);
@@ -514,6 +517,8 @@ export function PaymentModalUpdated({
   const [cancelPaymentOpen, setCancelPaymentOpen] = useState(false);
   const [cancelPaymentBusy, setCancelPaymentBusy] = useState(false);
   const [cancelReasonDraft, setCancelReasonDraft] = useState("");
+  const [cancelNotesDraft, setCancelNotesDraft] = useState("");
+  const [cancelRequestHint, setCancelRequestHint] = useState<PaymentCancelRequestHint>({ status: "none" });
   const [openDebtDetailOpen, setOpenDebtDetailOpen] = useState(false);
   /** חוב פתוח — מקור יחיד מהשרת (ללא cache מקומי) */
   const [customerOpenDebtSignedUsd, setCustomerOpenDebtSignedUsd] = useState(0);
@@ -714,10 +719,6 @@ export function PaymentModalUpdated({
     return normalizeAhWeekCode(globalWeek) ?? DEFAULT_WEEK_CODE;
   }, [weekDraft, weekReadonly, globalWeek]);
 
-  const intakeWeekTableHint = useMemo(() => {
-    return "מציג את כל היסטוריית ההזמנות של הלקוח";
-  }, []);
-
   useEffect(() => {
     const c = weekCodeFromYmd(paymentDateYmd);
     if (c && c !== "—") setWeekDraft(c);
@@ -845,15 +846,6 @@ export function PaymentModalUpdated({
   }, [customerBalanceResetPending, customerOpenDebtSignedUsd, totals.totalUsd, orders]);
 
   const intakeStripOpenDebtUsd = customerOpenDebtDisplayUsd;
-
-  const showOpenDebtAfterPaymentPreview =
-    openDebtAfterPaymentPreview.currentOpenBalance > 0.01 ||
-    openDebtAfterPaymentPreview.enteredPaymentAmount > 0.01;
-
-  const showIntakeStripOpenDebt =
-    customerBalanceResetPending ||
-    intakeStripOpenDebtUsd > 0.01 ||
-    showOpenDebtAfterPaymentPreview;
 
   const showResetBalanceBtn = useMemo(() => {
     if (!viewerIsAdmin || !customer) return false;
@@ -1695,7 +1687,10 @@ export function PaymentModalUpdated({
     commissionPercentTouchedRef.current = false;
     setDollarRate(parseFinalRate(financial).toFixed(4));
     setCommissionPercentStr(systemCommissionPercentStr);
-    setPaymentDateYmd(formatLocalYmd(new Date()));
+    const defWeek = defaultPaymentIntakeWeekCode();
+    setWeekDraft(defWeek);
+    setWeekInputErr(null);
+    setPaymentDateYmd(defaultPaymentIntakeDateYmd(defWeek));
     setPaymentTimeHm(formatLocalHm(new Date()));
     setPaymentNavLoading(false);
     setLoadErr(null);
@@ -1711,6 +1706,9 @@ export function PaymentModalUpdated({
     setPreviewPaymentCode(null);
     setPaymentCodePreviewPending(true);
     setPaymentCodeSearch("");
+    setCancelReasonDraft("");
+    setCancelNotesDraft("");
+    setCancelRequestHint({ status: "none" });
     setLoadedPayment(createNewCaptureLoadedPayment(""));
     clearPaymentEntryCaches();
     baselineSigRef.current = "";
@@ -1762,6 +1760,7 @@ export function PaymentModalUpdated({
       const cached = resolveCachedSnapshot(trimmed);
       if (cached) {
         const ok = applyPaymentSnapshot(cached);
+        if (ok) void refreshCancelRequestHint(trimmed);
         logPaymentCapturePerf({
           label: "openPayment",
           paymentId: trimmed,
@@ -1787,6 +1786,7 @@ export function PaymentModalUpdated({
       const shellStart = performance.now();
       applyPaymentShellSync(entry as PaymentEntryResponse);
       setPaymentCodePreviewPending(false);
+      void refreshCancelRequestHint(trimmed);
       const renderMs = Math.round(performance.now() - shellStart);
 
       const customerId = entry.customer.id?.trim();
@@ -2383,16 +2383,29 @@ export function PaymentModalUpdated({
     ],
   );
   const paymentIsCancelled = loadedPayment?.status === "CANCELLED";
-  const canCancelSavedPayment = Boolean(savedCapturePaymentId) && !paymentIsCancelled;
+  const captureReadOnly = paymentIsCancelled;
+  const canCancelSavedPayment =
+    Boolean(savedCapturePaymentId) && !paymentIsCancelled && cancelRequestHint.status !== "PENDING";
 
-  async function executeCancelPayment() {
+  async function refreshCancelRequestHint(paymentId: string) {
+    const hint = await getPaymentCancelRequestHintAction(paymentId);
+    setCancelRequestHint(hint);
+  }
+
+  async function submitCancelRequest() {
     if (!savedCapturePaymentId || cancelPaymentBusy) return;
+    const reason = cancelReasonDraft.trim();
+    if (reason.length < 3) {
+      setSaveErr("יש להזין סיבת ביטול (לפחות 3 תווים)");
+      return;
+    }
     setCancelPaymentBusy(true);
     setSaveErr(null);
     try {
-      const res = await cancelPaymentAction({
+      const res = await createInvoiceCancelRequestAction({
         paymentId: savedCapturePaymentId,
-        reason: cancelReasonDraft.trim() || null,
+        cancelReason: reason,
+        notes: cancelNotesDraft.trim() || null,
       });
       if (!res.ok) {
         setSaveErr(res.error);
@@ -2401,11 +2414,15 @@ export function PaymentModalUpdated({
       }
       setCancelPaymentOpen(false);
       setCancelReasonDraft("");
-      onToast(`תשלום ${res.paymentCode ?? ""} בוטל — היתרה עודכנה`);
-      startNewCapturePayment();
-      if (customer?.id) {
-        void refreshCustomerOpenDebt(customer.id);
+      setCancelNotesDraft("");
+      if (res.mode === "immediate") {
+        await loadPayment(savedCapturePaymentId, { forceNetwork: true });
+        setCancelRequestHint({ status: "none" });
+        onToast("החשבונית בוטלה");
+        return;
       }
+      setCancelRequestHint({ status: "PENDING", requestId: res.requestId });
+      onToast("בקשת ביטול נשלחה למנהל — החשבונית נשארת פעילה");
     } finally {
       setCancelPaymentBusy(false);
     }
@@ -2435,6 +2452,7 @@ export function PaymentModalUpdated({
                   value={dollarRate}
                   onChange={(e) => { dollarRateTouchedRef.current = true; setDollarRate(sanitizeMoneyInput(e.target.value)); }}
                   aria-label="שער דולר"
+                  readOnly={captureReadOnly}
                 />
                 <span className="payment-modal-rate-strip-lead payment-modal-rate-strip-lead--pct">
                   אחוז עמלה:
@@ -2451,6 +2469,7 @@ export function PaymentModalUpdated({
                     commissionPercentTouchedRef.current = true;
                     setCommissionPercentStr(sanitizePercentInput(e.target.value));
                   }}
+                  readOnly={captureReadOnly}
                 />
               </div>
             </div>
@@ -2658,28 +2677,89 @@ export function PaymentModalUpdated({
                 ) : null}
                 {customer ? (
                   <div className="payment-modal-cust-summary" role="status" aria-live="polite">
-                    <span className="payment-modal-cust-name">{customer.displayName}</span>
-                    <span className="payment-modal-cust-ids" dir="ltr">
-                      {customer.customerCode ? `#${customer.customerCode}` : null}
-                      {" · "}
+                    <div className="payment-modal-cust-summary__identity">
+                      <span className="payment-modal-cust-name">{customer.displayName}</span>
                       {customerWorkspaceLoading ? (
                         <span className="payment-modal-cust-summary-loading">טוען נתוני לקוח…</span>
                       ) : (
-                        <span>{orders.length} הזמנות</span>
-                      )}
-                      {!customerWorkspaceLoading && customerOpenDebtDisplayUsd > 0.01 ? (
                         <>
-                          {" · "}
-                          <button
-                            type="button"
-                            className="payment-modal-cust-open-debt-link"
-                            onClick={() => setOpenDebtDetailOpen(true)}
-                          >
-                            חוב פתוח: ${fmtUsdDisplay(customerOpenDebtDisplayUsd)}
-                          </button>
+                          <span className="payment-modal-cust-summary__sep" aria-hidden>
+                            |
+                          </span>
+                          <span>{orders.length} הזמנות</span>
+                          {customer.customerCode ? (
+                            <>
+                              <span className="payment-modal-cust-summary__sep" aria-hidden>
+                                |
+                              </span>
+                              <span className="payment-modal-cust-summary__code" dir="ltr">
+                                #{customer.customerCode}
+                              </span>
+                            </>
+                          ) : null}
                         </>
-                      ) : null}
-                    </span>
+                      )}
+                    </div>
+                    {!customerWorkspaceLoading ? (
+                      <div
+                        className="payment-modal-cust-summary__totals"
+                        dir="rtl"
+                        aria-label="מחשבון לקוח"
+                      >
+                        <div className="payment-modal-cust-summary__total payment-modal-cust-summary__total--charges">
+                          <DollarSign size={16} strokeWidth={1.75} aria-hidden />
+                          <span className="payment-modal-cust-summary__total-k">חיובים:</span>
+                          <strong className="payment-modal-cust-summary__total-v" dir="ltr">
+                            {fmtUsdDisplay(liveIntakeTotals.chargesUsd)}
+                          </strong>
+                        </div>
+                        <div className="payment-modal-cust-summary__total payment-modal-cust-summary__total--payments">
+                          <CreditCard size={16} strokeWidth={1.75} aria-hidden />
+                          <span className="payment-modal-cust-summary__total-k">תשלומים:</span>
+                          <strong className="payment-modal-cust-summary__total-v" dir="ltr">
+                            {fmtUsdDisplay(liveIntakeTotals.paymentsUsd)}
+                          </strong>
+                        </div>
+                        <div className="payment-modal-cust-summary__total payment-modal-cust-summary__total--commissions">
+                          <TrendingDown size={16} strokeWidth={1.75} aria-hidden />
+                          <span className="payment-modal-cust-summary__total-k">עמלות:</span>
+                          <strong
+                            className={[
+                              "payment-modal-cust-summary__total-v",
+                              liveIntakeTotals.commissionsUsd < -0.01
+                                ? "payment-modal-cust-summary__total-v--commission-neg"
+                                : "",
+                            ]
+                              .filter(Boolean)
+                              .join(" ")}
+                            dir="ltr"
+                          >
+                            {liveIntakeTotals.commissionsUsd < -0.01
+                              ? `${fmtUsdDisplay(Math.abs(liveIntakeTotals.commissionsUsd))}-`
+                              : fmtUsdDisplay(liveIntakeTotals.commissionsUsd)}
+                          </strong>
+                        </div>
+                        <div
+                          className={[
+                            "payment-modal-cust-summary__total",
+                            "payment-modal-cust-summary__total--balance",
+                            customerBalanceResetPending || intakeStripOpenDebtUsd <= 0.01
+                              ? customerOpenDebtSignedUsd < -0.01
+                                ? "payment-modal-cust-summary__total--balance-credit"
+                                : "payment-modal-cust-summary__total--balance-zero"
+                              : "payment-modal-cust-summary__total--balance-debt",
+                          ].join(" ")}
+                        >
+                          <Scale size={16} strokeWidth={1.75} aria-hidden />
+                          <span className="payment-modal-cust-summary__total-k">
+                            {customerBalanceResetPending ? "חוב פתוח לאחר איפוס" : "חוב פתוח"}:
+                          </span>
+                          <strong className="payment-modal-cust-summary__total-v" dir="ltr">
+                            {fmtUsdDisplay(intakeStripOpenDebtUsd)}
+                          </strong>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
@@ -2821,124 +2901,16 @@ export function PaymentModalUpdated({
             </div>
 
             <div className="payment-modal-table-wrap payment-modal-table-wrap--focused">
-              {customer && customerWorkspaceLoading ? (
-                <p className="payment-modal-hint" role="status" aria-live="polite">
-                  טוען נתוני לקוח…
-                </p>
-              ) : null}
-              {customer && intakeWeekTableHint ? (
-                <p className="payment-modal-intake-week-hint" dir="rtl">
-                  {intakeWeekTableHint}
-                </p>
-              ) : null}
-              {customer ? (
+              {customer && !customerWorkspaceLoading ? (
                 <div
-                  className="pm-intake-head-totals pm-intake-head-totals--live pm-intake-head-totals--strip"
+                  className="payment-balance-summary"
                   dir="rtl"
                   role="status"
                   aria-live="polite"
-                  aria-label="מחשבון לקוח"
+                  aria-label="תצוגת יתרה לאחר שמירת התשלום"
                 >
-                  <span className="pm-intake-head-totals__item">
-                    <span className="pm-intake-head-totals__k">חיובים:</span>
-                    <strong className="pm-intake-head-totals__v pm-intake-head-totals__v--charge" dir="ltr">
-                      {fmtUsdDisplay(liveIntakeTotals.chargesUsd)}
-                    </strong>
-                  </span>
-                  <span className="pm-intake-head-totals__sep" aria-hidden>
-                    ·
-                  </span>
-                  <span className="pm-intake-head-totals__item">
-                    <span className="pm-intake-head-totals__k">עמלות:</span>
-                    <strong
-                      className={[
-                        "pm-intake-head-totals__v",
-                        "pm-intake-head-totals__v--commission",
-                        liveIntakeTotals.commissionsUsd < -0.01 ? "pm-intake-head-totals__v--commission-neg" : "",
-                      ]
-                        .filter(Boolean)
-                        .join(" ")}
-                      dir="ltr"
-                    >
-                      {liveIntakeTotals.commissionsUsd < -0.01
-                        ? `${fmtUsdDisplay(Math.abs(liveIntakeTotals.commissionsUsd))}-`
-                        : fmtUsdDisplay(liveIntakeTotals.commissionsUsd)}
-                    </strong>
-                  </span>
-                  <span className="pm-intake-head-totals__sep" aria-hidden>
-                    ·
-                  </span>
-                  <span className="pm-intake-head-totals__item">
-                    <span className="pm-intake-head-totals__k">תשלומים:</span>
-                    <strong className="pm-intake-head-totals__v pm-intake-head-totals__v--payments" dir="ltr">
-                      {fmtUsdDisplay(liveIntakeTotals.paymentsUsd)}
-                    </strong>
-                  </span>
-                  {showIntakeStripOpenDebt ? (
-                    <>
-                      <span className="pm-intake-head-totals__sep" aria-hidden>
-                        ·
-                      </span>
-                      <span className="pm-intake-head-totals__item pm-intake-head-totals__item--balance">
-                        <span className="pm-intake-head-totals__k">
-                          {customerBalanceResetPending ? "חוב פתוח לאחר איפוס" : "חוב פתוח"}:
-                        </span>
-                        <strong
-                          className={[
-                            "pm-intake-head-totals__v",
-                            intakeStripOpenDebtUsd > 0.01
-                              ? "pm-intake-head-totals__v--debt"
-                              : "pm-intake-head-totals__v--payments",
-                          ].join(" ")}
-                          dir="ltr"
-                        >
-                          {fmtUsdDisplay(intakeStripOpenDebtUsd)}
-                        </strong>
-                        {showOpenDebtAfterPaymentPreview ? (
-                          <span
-                            className="pm-open-debt-after-payment-preview"
-                            dir="rtl"
-                            aria-label="תצוגת יתרה לאחר שמירת התשלום"
-                          >
-                            <span className="pm-open-debt-after-payment-preview__row">
-                              <span className="pm-open-debt-after-payment-preview__k">חוב נוכחי</span>
-                              <AnimatedMoneyValue
-                                className="pm-open-debt-after-payment-preview__v"
-                                dir="ltr"
-                                value={`$${fmtUsdDisplay(openDebtAfterPaymentPreview.currentOpenBalance)}`}
-                              />
-                            </span>
-                            <span className="pm-open-debt-after-payment-preview__row">
-                              <span className="pm-open-debt-after-payment-preview__k">סכום תשלום בהקלדה</span>
-                              <AnimatedMoneyValue
-                                className="pm-open-debt-after-payment-preview__v pm-open-debt-after-payment-preview__v--payment"
-                                dir="ltr"
-                                value={`$${fmtUsdDisplay(openDebtAfterPaymentPreview.enteredPaymentAmount)}`}
-                              />
-                            </span>
-                            <span className="pm-open-debt-after-payment-preview__row">
-                              <span className="pm-open-debt-after-payment-preview__k">יתרה לאחר שמירה</span>
-                              <AnimatedMoneyValue
-                                className={[
-                                  "pm-open-debt-after-payment-preview__v",
-                                  openDebtAfterPaymentPreview.remainingAfterPayment > 0.01
-                                    ? "pm-open-debt-after-payment-preview__v--debt"
-                                    : "pm-open-debt-after-payment-preview__v--cleared",
-                                ].join(" ")}
-                                dir="ltr"
-                                value={`$${fmtUsdDisplay(openDebtAfterPaymentPreview.remainingAfterPayment)}`}
-                              />
-                            </span>
-                          </span>
-                        ) : null}
-                      </span>
-                    </>
-                  ) : null}
                   {showResetBalanceBtn ? (
                     <>
-                      <span className="pm-intake-head-totals__sep" aria-hidden>
-                        ·
-                      </span>
                       <button
                         type="button"
                         className={[
@@ -2962,11 +2934,48 @@ export function PaymentModalUpdated({
                       >
                         {customerBalanceResetPending ? "ביטול תצוגת איפוס" : "איפוס יתרה"}
                       </button>
+                      <span className="payment-balance-summary__sep" aria-hidden>
+                        •
+                      </span>
                     </>
                   ) : null}
-                  {customerBalanceResetPending ? (
-                    <span className="pm-intake-head-totals__note">תצוגת איפוס — יוחל בשמירת התשלום</span>
-                  ) : null}
+                  <span className="payment-balance-summary__item">
+                    <span className="payment-balance-summary__k">חוב נוכחי:</span>
+                    <AnimatedMoneyValue
+                      className="payment-balance-summary__v payment-balance-summary__v--current"
+                      dir="ltr"
+                      value={`$${fmtUsdDisplay(openDebtAfterPaymentPreview.currentOpenBalance)}`}
+                    />
+                  </span>
+                  <span className="payment-balance-summary__sep" aria-hidden>
+                    •
+                  </span>
+                  <span className="payment-balance-summary__item">
+                    <span className="payment-balance-summary__k">סכום תשלום בהקלדה:</span>
+                    <AnimatedMoneyValue
+                      className="payment-balance-summary__v payment-balance-summary__v--entered"
+                      dir="ltr"
+                      value={`$${fmtUsdDisplay(openDebtAfterPaymentPreview.enteredPaymentAmount)}`}
+                    />
+                  </span>
+                  <span className="payment-balance-summary__sep" aria-hidden>
+                    •
+                  </span>
+                  <span className="payment-balance-summary__item">
+                    <span className="payment-balance-summary__k">יתרה לאחר שמירה:</span>
+                    <AnimatedMoneyValue
+                      className={[
+                        "payment-balance-summary__v",
+                        openDebtAfterPaymentPreview.remainingAfterPayment > 0.01
+                          ? "payment-balance-summary__v--debt"
+                          : openDebtAfterPaymentPreview.remainingAfterPayment < -0.01
+                            ? "payment-balance-summary__v--credit"
+                            : "payment-balance-summary__v--cleared",
+                      ].join(" ")}
+                      dir="ltr"
+                      value={`$${fmtUsdDisplay(openDebtAfterPaymentPreview.remainingAfterPayment)}`}
+                    />
+                  </span>
                 </div>
               ) : null}
               <div className="payment-modal-table-scroll" ref={tableScrollRef}>
@@ -3232,7 +3241,7 @@ export function PaymentModalUpdated({
             <div className="payment-modal-side-body">
               <div className="payment-modal-side-inner payment-modal-side-inner--payment-only">
                 <div className="payment-upd-addrow">
-                  <button type="button" className="payment-upd-add-btn" onClick={() => addPaymentLine()} disabled={saveBusy}>
+                  <button type="button" className="payment-upd-add-btn" onClick={() => addPaymentLine()} disabled={saveBusy || captureReadOnly}>
                     + הוסף תשלום
                   </button>
                   <button
@@ -3324,9 +3333,15 @@ export function PaymentModalUpdated({
                   ) : null}
                 </div>
               </div>
+              {cancelRequestHint.status === "PENDING" ? (
+                <div className="payment-modal-cancel-pending-banner" role="status">
+                  בקשת ביטול ממתינה לאישור מנהל — החשבונית נשארת פעילה
+                </div>
+              ) : null}
               {paymentIsCancelled ? (
-                <div className="payment-modal-cancelled-banner" role="status">
-                  תשלום זה בוטל
+                <div className="payment-modal-cancelled-banner payment-modal-cancelled-banner--invoice" role="status">
+                  <span className="payment-modal-cancelled-badge">מבוטל</span>
+                  חשבונית זו בוטלה — קריאה בלבד
                   {loadedPayment?.cancelReason ? (
                     <span className="payment-modal-cancelled-reason"> — {loadedPayment.cancelReason}</span>
                   ) : null}
@@ -3341,7 +3356,7 @@ export function PaymentModalUpdated({
                     disabled={saveBusy || cancelPaymentBusy || paymentNavLoading}
                     onClick={() => setCancelPaymentOpen(true)}
                   >
-                    בטל תשלום
+                    ביטול חשבונית
                   </button>
                 ) : null}
                 <button
@@ -3495,18 +3510,39 @@ export function PaymentModalUpdated({
             onClick={(e) => e.stopPropagation()}
             dir="rtl"
           >
-            <h4>ביטול תשלום</h4>
+            <h4>{viewerIsAdmin ? "ביטול חשבונית" : "בקשת ביטול חשבונית"}</h4>
             <p>
-              לבטל את <strong dir="ltr">{displayedPaymentCode || "קליטה זו"}</strong>? החוב יחזור אוטומטית. התשלום לא
-              יימחק מהמערכת.
+              {viewerIsAdmin ? (
+                <>
+                  ביטול מיידי של{" "}
+                  <strong dir="ltr">{displayedPaymentCode || "חשבונית זו"}</strong>. הפעולה תירשם ביומן פעילות ותעדכן
+                  יתרות וכרטסת.
+                </>
+              ) : (
+                <>
+                  שליחת בקשה למנהל לביטול{" "}
+                  <strong dir="ltr">{displayedPaymentCode || "חשבונית זו"}</strong>. עד לאישור — החשבונית נשארת פעילה
+                  ללא שינוי ביתרות, בכרטסת או בתשלומים.
+                </>
+              )}
             </p>
             <label className="payment-cancel-reason-lbl">
-              סיבת ביטול (אופציונלי)
+              סיבת ביטול
               <textarea
                 className="payment-cancel-reason-input"
                 rows={2}
                 value={cancelReasonDraft}
                 onChange={(e) => setCancelReasonDraft(e.target.value)}
+                disabled={cancelPaymentBusy}
+              />
+            </label>
+            <label className="payment-cancel-reason-lbl">
+              הערות
+              <textarea
+                className="payment-cancel-reason-input"
+                rows={2}
+                value={cancelNotesDraft}
+                onChange={(e) => setCancelNotesDraft(e.target.value)}
                 disabled={cancelPaymentBusy}
               />
             </label>
@@ -3523,9 +3559,15 @@ export function PaymentModalUpdated({
                 type="button"
                 className="adm-btn payment-cancel-confirm-btn adm-btn--dense"
                 disabled={cancelPaymentBusy}
-                onClick={() => void executeCancelPayment()}
+                onClick={() => void submitCancelRequest()}
               >
-                {cancelPaymentBusy ? "מבטל…" : "בטל תשלום"}
+                {cancelPaymentBusy
+                  ? viewerIsAdmin
+                    ? "מבטל…"
+                    : "שולח…"
+                  : viewerIsAdmin
+                    ? "בטל חשבונית"
+                    : "שלח בקשה למנהל"}
               </button>
             </div>
           </div>

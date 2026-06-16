@@ -1,17 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BarChart3, BookOpen, FileSpreadsheet, FileText, Search, X } from "lucide-react";
+import { BarChart3, BookOpen, FileSpreadsheet, FileText, RefreshCw, Search, X } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   exportCustomerBalancesAction,
   getCustomerBalancePreviewAction,
+  getCustomerBalancesRevisionAction,
   listCustomerBalancesAction,
   type CustomerBalanceDebtFilter,
   type CustomerBalanceRow,
   type CustomerBalanceSort,
   type CustomerBalancesPayload,
 } from "@/app/admin/balances/actions";
+import { customerBalancesDataRevision } from "@/lib/customer-balances-revision";
 import {
   CUSTOMER_BALANCE_ORDER_STATUS_OPTIONS,
   type CustomerBalanceOrderStatusFilter,
@@ -34,17 +36,23 @@ import {
 import { useEnsureActiveWorkWeekOnEnter } from "@/hooks/useEnsureActiveWorkWeekOnEnter";
 import {
   balancesSnapshotToYmd,
-  DEFAULT_WEEK_CODE,
   formatLocalYmd,
-  getAhWeekRange,
   normalizeAhWeekCode,
-  normalizeYmdRangePair,
   prevWeekCode,
 } from "@/lib/work-week";
+import {
+  BALANCES_FROM_PARAM,
+  BALANCES_RANGE_TO_PARAM,
+  BALANCES_TO_PARAM,
+  BALANCES_WEEK_PARAM,
+  balancesWeekQueryPatch,
+  parseBalancesWeekFromSearchParams,
+} from "@/lib/balances-week-filter";
 
 const LIMIT = 25;
 const FILTER_DEBOUNCE_MS = 350;
 const PREVIEW_DEBOUNCE_MS = 280;
+const BALANCES_AUTO_CHECK_MS = 60_000;
 
 const BALANCE_STATUS_OPTIONS: { value: CustomerBalanceDebtFilter; label: string }[] = [
   { value: "ALL", label: "הכל" },
@@ -109,7 +117,20 @@ function formatHeDate(ymd: string): string {
   return `${m[3]}/${m[2]}/${m[1]}`;
 }
 
-function balancesScopeSubtitle(weekCode: string, snapshotToYmd: string): string | null {
+function balancesScopeSubtitle(
+  weekCode: string,
+  snapshotToYmd: string,
+  rangeFromYmd: string,
+  rangeToYmd: string,
+): string | null {
+  const rangeFrom = rangeFromYmd.trim();
+  const rangeTo = rangeToYmd.trim();
+  if (rangeFrom || rangeTo) {
+    const fromLabel = rangeFrom ? formatHeDate(rangeFrom) : "תחילת ההיסטוריה";
+    const toLabel = rangeTo ? formatHeDate(rangeTo) : formatHeDate(formatLocalYmd(new Date()));
+    return `יתרות לפי טווח תאריכים: ${fromLabel} — ${toLabel}`;
+  }
+
   const week = (weekCode || "").trim();
   const to = (snapshotToYmd || "").trim();
   const todayHe = formatHeDate(formatLocalYmd(new Date()));
@@ -123,11 +144,19 @@ function balancesScopeSubtitle(weekCode: string, snapshotToYmd: string): string 
   return `חוב פתוח מעודכן עד היום (${todayHe}) · מיום כניסת הלקוח`;
 }
 
+function isBalancesDateRangeActive(filters: Pick<BalancesFiltersState, "rangeFromYmd" | "rangeToYmd">): boolean {
+  return Boolean(filters.rangeFromYmd.trim() || filters.rangeToYmd.trim());
+}
+
 export type BalancesFiltersState = {
   /** שבוע עבודה שנבחר ב-UI (למשל AH-125) */
   weekCode: string;
   /** תאריך סיום snapshot — סוף השבוע הקודם */
   toYmd: string;
+  /** טווח תאריכים — מתאריך (ריק = כל ההיסטוריה) */
+  rangeFromYmd: string;
+  /** טווח תאריכים — עד תאריך (ריק = היום) */
+  rangeToYmd: string;
   sourceCountry: OrderCountryCode | "";
   sort: CustomerBalanceSort;
 };
@@ -147,6 +176,8 @@ function defaultBalancesFilters(): BalancesFiltersState {
   return {
     weekCode,
     toYmd: balancesSnapshotToYmd(weekCode),
+    rangeFromYmd: "",
+    rangeToYmd: "",
     sourceCountry: orderCountryCodeForWorkCountry(DEFAULT_WORK_COUNTRY),
     sort: "balance_desc",
   };
@@ -165,21 +196,14 @@ function defaultSearchDraft(): BalancesSearchDraft {
 }
 
 function parseStructuralFromSearchParams(sp: URLSearchParams): BalancesFiltersState {
-  const weekRaw = sp.get("week") || "";
-  const weekCode = normalizeAhWeekCode(weekRaw) ?? ACTIVE_WORK_WEEK_CODE;
-  const toParam = sp.get("to") || "";
-  const fromParam = sp.get("from") || "";
-  let toYmd =
-    toParam && /^\d{4}-\d{2}-\d{2}$/.test(toParam) ? toParam : balancesSnapshotToYmd(weekCode);
-  if (fromParam && toParam && /^\d{4}-\d{2}-\d{2}$/.test(fromParam) && /^\d{4}-\d{2}-\d{2}$/.test(toParam)) {
-    const { to } = normalizeYmdRangePair(fromParam, toParam);
-    toYmd = to;
-  }
+  const { weekCode, toYmd, rangeFromYmd, rangeToYmd } = parseBalancesWeekFromSearchParams(sp);
   const workCountry = resolveWorkCountryFromSearchParams(sp);
   const country = orderCountryCodeForWorkCountry(workCountry);
   return {
     weekCode,
     toYmd,
+    rangeFromYmd,
+    rangeToYmd,
     sourceCountry: country,
     sort: "balance_desc",
   };
@@ -213,7 +237,7 @@ export function CustomerBalancesClient() {
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
-  const { openWindow } = useAdminWindows();
+  const { openWindow, stack: adminWindowStack } = useAdminWindows();
   const [tableLoading, setTableLoading] = useState(false);
   const fetchGenRef = useRef(0);
 
@@ -234,6 +258,11 @@ export function CustomerBalancesClient() {
   const hoverTimerRef = useRef<number | null>(null);
   const hoverIdRef = useRef<string | null>(null);
   const [refreshSig, setRefreshSig] = useState(0);
+  const [manualRefreshBusy, setManualRefreshBusy] = useState(false);
+  const [newDataAvailable, setNewDataAvailable] = useState(false);
+  const softRefreshPendingRef = useRef(false);
+  const payloadRevisionRef = useRef("");
+  const staleCheckGenRef = useRef(0);
   const [insightsExpanded, setInsightsExpanded] = useState(false);
   const balancesScopeKeyRef = useRef<string | null>(null);
 
@@ -264,9 +293,17 @@ export function CustomerBalancesClient() {
     setPayload(null);
     setPage(1);
     setErr(null);
+    setNewDataAvailable(false);
     setRefreshSig((s) => s + 1);
     router.refresh();
   }, [router]);
+
+  const softRefreshBalances = useCallback(() => {
+    softRefreshPendingRef.current = true;
+    setNewDataAvailable(false);
+    setErr(null);
+    setRefreshSig((s) => s + 1);
+  }, []);
 
   useEffect(() => {
     function onBalancesRefresh() {
@@ -291,25 +328,42 @@ export function CustomerBalancesClient() {
   }, []);
 
   const buildListQuery = useCallback(
-    (p: number) => ({
-      page: p,
-      limit: LIMIT,
-      weekCode: balancesQueryScope.week,
-      uptoWeekCode: balancesQueryScope.snapshotWeek ?? undefined,
-      toYmd: balancesQueryScope.snapshotTo,
-      sourceCountry: balancesQueryScope.country,
-      filters: {
-        code: debouncedSearch.code.trim() || undefined,
-        name: debouncedSearch.name.trim() || undefined,
-        phone: debouncedSearch.phone.trim() || undefined,
-        balanceDebtStatus: debouncedSearch.balanceStatus,
-        orderStatus: debouncedSearch.orderStatus,
-        minBalanceIls: debouncedSearch.minBalanceIls,
-        maxBalanceIls: debouncedSearch.maxBalanceIls,
-        sort: balancesFilters.sort,
-      },
-    }),
-    [balancesFilters.sort, balancesQueryScope, debouncedSearch],
+    (p: number) => {
+      const snapshotTo = balancesQueryScope.snapshotTo;
+      const dateRangeActive = isBalancesDateRangeActive(balancesFilters);
+      return {
+        page: p,
+        limit: LIMIT,
+        weekCode: balancesQueryScope.week,
+        ...(dateRangeActive
+          ? {
+              fromYmd: balancesFilters.rangeFromYmd.trim() || undefined,
+              toYmd: balancesFilters.rangeToYmd.trim() || formatLocalYmd(new Date()),
+            }
+          : {
+              uptoWeekCode: balancesQueryScope.snapshotWeek ?? undefined,
+              toYmd: snapshotTo,
+            }),
+        sourceCountry: balancesQueryScope.country,
+        filters: {
+          code: debouncedSearch.code.trim() || undefined,
+          name: debouncedSearch.name.trim() || undefined,
+          phone: debouncedSearch.phone.trim() || undefined,
+          balanceDebtStatus: debouncedSearch.balanceStatus,
+          orderStatus: debouncedSearch.orderStatus,
+          minBalanceIls: debouncedSearch.minBalanceIls,
+          maxBalanceIls: debouncedSearch.maxBalanceIls,
+          sort: balancesFilters.sort,
+        },
+      };
+    },
+    [
+      balancesFilters.rangeFromYmd,
+      balancesFilters.rangeToYmd,
+      balancesFilters.sort,
+      balancesQueryScope,
+      debouncedSearch,
+    ],
   );
 
   const { week: scopeWeek, country: scopeCountry, snapshotTo: scopeTo, snapshotWeek: scopeSnapshotWeek } =
@@ -322,31 +376,41 @@ export function CustomerBalancesClient() {
       snapshotWeek: scopeSnapshotWeek,
       to: scopeTo,
     });
-    const key = `${scopeWeek}|${scopeCountry}|${scopeSnapshotWeek ?? ""}|${scopeTo}`;
+    const key = `${scopeWeek}|${scopeCountry}|${scopeSnapshotWeek ?? ""}|${scopeTo}|${balancesFilters.rangeFromYmd}|${balancesFilters.rangeToYmd}`;
     if (balancesScopeKeyRef.current !== null && balancesScopeKeyRef.current !== key) {
       refetchBalances();
     }
     balancesScopeKeyRef.current = key;
-  }, [scopeWeek, scopeCountry, scopeSnapshotWeek, scopeTo, refetchBalances]);
+  }, [scopeWeek, scopeCountry, scopeSnapshotWeek, scopeTo, balancesFilters.rangeFromYmd, balancesFilters.rangeToYmd, refetchBalances]);
 
   useEffect(() => {
     if (!urlReady) return;
     const gen = ++fetchGenRef.current;
     const query = buildListQuery(page);
+    const isSoftRefresh = softRefreshPendingRef.current;
+    if (isSoftRefresh) {
+      softRefreshPendingRef.current = false;
+      setManualRefreshBusy(true);
+    } else {
+      setTableLoading(true);
+    }
     console.log("[balances-client-fetch]", {
       week: query.weekCode,
-      uptoWeek: query.uptoWeekCode,
+      uptoWeek: "uptoWeekCode" in query ? query.uptoWeekCode : undefined,
+      from: "fromYmd" in query ? query.fromYmd : undefined,
       country: query.sourceCountry,
       to: query.toYmd,
       page: query.page,
       refreshSig,
+      soft: isSoftRefresh,
     });
-    setTableLoading(true);
     setErr(null);
     void listCustomerBalancesAction(query)
       .then((next) => {
         if (gen !== fetchGenRef.current) return;
         setPayload(next);
+        payloadRevisionRef.current = customerBalancesDataRevision(next);
+        setNewDataAvailable(false);
         if (page > 1 && next.rows.length === 0) setPage(1);
       })
       .catch(() => {
@@ -356,46 +420,103 @@ export function CustomerBalancesClient() {
       .finally(() => {
         if (gen !== fetchGenRef.current) return;
         setTableLoading(false);
+        setManualRefreshBusy(false);
       });
   }, [urlReady, page, buildListQuery, refreshSig]);
 
   const searchPending = JSON.stringify(searchDraft) !== JSON.stringify(debouncedSearch);
   const tableBusy = !urlReady || (tableLoading && !payload);
+  const urlModalOpen = Boolean(sp.get("modal")?.trim());
+  const overlayBlocksAutoCheck =
+    adminWindowStack.length > 0 || urlModalOpen || Boolean(exportBusy) || manualRefreshBusy || tableLoading;
+
+  useEffect(() => {
+    if (!urlReady || !payload || overlayBlocksAutoCheck) return;
+
+    const checkForNewData = () => {
+      if (document.hidden) return;
+      if (adminWindowStack.length > 0 || urlModalOpen || exportBusy || manualRefreshBusy || tableLoading) {
+        return;
+      }
+      const gen = ++staleCheckGenRef.current;
+      const query = buildListQuery(page);
+      void getCustomerBalancesRevisionAction(query)
+        .then((revision) => {
+          if (gen !== staleCheckGenRef.current) return;
+          if (!payloadRevisionRef.current) {
+            payloadRevisionRef.current = revision;
+            return;
+          }
+          if (revision !== payloadRevisionRef.current) {
+            setNewDataAvailable(true);
+          }
+        })
+        .catch(() => {
+          /* ignore background check errors */
+        });
+    };
+
+    const id = window.setInterval(checkForNewData, BALANCES_AUTO_CHECK_MS);
+    return () => window.clearInterval(id);
+  }, [
+    urlReady,
+    payload,
+    buildListQuery,
+    page,
+    adminWindowStack.length,
+    urlModalOpen,
+    exportBusy,
+    manualRefreshBusy,
+    tableLoading,
+    overlayBlocksAutoCheck,
+  ]);
 
   const syncUrl = useCallback(() => {
     if (!urlReady) return;
-    const weekRange = getAhWeekRange(balancesFilters.weekCode);
-    const nextFrom = weekRange?.from ?? null;
-    const nextTo = weekRange?.to ?? (balancesFilters.toYmd || null);
-    const nextCountry =
-      balancesFilters.sourceCountry ||
-      orderCountryCodeForWorkCountry(resolveWorkCountryFromSearchParams(sp));
-    const curTo = sp.get("to") ?? "";
-    const curFrom = sp.get("from") ?? "";
-    const curWeek = sp.get("week") ?? "";
-    const curCountry = sp.get("country") ?? "";
+    const snapshotTo = balancesFilters.toYmd?.trim() || balancesSnapshotToYmd(balancesFilters.weekCode);
+    const curTo = sp.get(BALANCES_TO_PARAM) ?? "";
+    const curWeek = sp.get(BALANCES_WEEK_PARAM) ?? "";
+    const curFrom = sp.get(BALANCES_FROM_PARAM) ?? "";
+    const curRangeTo = sp.get(BALANCES_RANGE_TO_PARAM) ?? "";
     if (
-      curTo === (nextTo ?? "") &&
-      curFrom === (nextFrom ?? "") &&
+      curTo === snapshotTo &&
       curWeek === balancesFilters.weekCode &&
-      curCountry === nextCountry
+      curFrom === balancesFilters.rangeFromYmd &&
+      curRangeTo === balancesFilters.rangeToYmd
     ) {
       return;
     }
-    const nextHref = withQuery(pathname, sp, {
-      week: balancesFilters.weekCode || null,
-      upto: null,
-      from: nextFrom,
-      to: nextTo,
-      country: nextCountry || null,
-      modal: null,
-    });
+    const nextHref = withQuery(
+      pathname,
+      sp,
+      balancesWeekQueryPatch(
+        balancesFilters.weekCode,
+        snapshotTo,
+        balancesFilters.rangeFromYmd,
+        balancesFilters.rangeToYmd,
+      ),
+    );
     router.replace(nextHref);
-  }, [balancesFilters.toYmd, balancesFilters.weekCode, balancesFilters.sourceCountry, pathname, router, sp, urlReady]);
+  }, [
+    balancesFilters.rangeFromYmd,
+    balancesFilters.rangeToYmd,
+    balancesFilters.toYmd,
+    balancesFilters.weekCode,
+    pathname,
+    router,
+    sp,
+    urlReady,
+  ]);
 
   useEffect(() => {
     syncUrl();
-  }, [balancesFilters.toYmd, balancesFilters.weekCode, balancesFilters.sourceCountry, syncUrl]);
+  }, [
+    balancesFilters.toYmd,
+    balancesFilters.weekCode,
+    balancesFilters.rangeFromYmd,
+    balancesFilters.rangeToYmd,
+    syncUrl,
+  ]);
 
   const pages = useMemo(() => pageNumbers(payload?.page ?? page, payload?.totalPages ?? 1), [payload?.page, payload?.totalPages, page]);
 
@@ -563,6 +684,43 @@ export function CustomerBalancesClient() {
             ))}
           </select>
         </label>
+        <label className="adm-balances-field adm-balances-field--inline adm-balances-field--date">
+          <span className="adm-balances-field-label">מתאריך</span>
+          <input
+            className="adm-balances-input adm-balances-input--date"
+            type="date"
+            value={balancesFilters.rangeFromYmd}
+            onChange={(e) => {
+              setBalancesFilters((f) => ({ ...f, rangeFromYmd: e.target.value }));
+              setPage(1);
+            }}
+            dir="ltr"
+          />
+        </label>
+        <label className="adm-balances-field adm-balances-field--inline adm-balances-field--date">
+          <span className="adm-balances-field-label">עד תאריך</span>
+          <input
+            className="adm-balances-input adm-balances-input--date"
+            type="date"
+            value={balancesFilters.rangeToYmd}
+            onChange={(e) => {
+              setBalancesFilters((f) => ({ ...f, rangeToYmd: e.target.value }));
+              setPage(1);
+            }}
+            dir="ltr"
+            title="ריק = היום"
+          />
+        </label>
+        <label className="adm-balances-field adm-balances-field--inline adm-balances-field--date">
+          <span className="adm-balances-field-label">נכון לתאריך</span>
+          <input
+            className="adm-balances-input adm-balances-input--date"
+            type="date"
+            value={balancesFilters.toYmd}
+            readOnly
+            title="נגזר משבוע העבודה — סוף השבוע הקודם"
+          />
+        </label>
         <div className="adm-balances-filters-actions">
           <button
             type="button"
@@ -573,7 +731,23 @@ export function CustomerBalancesClient() {
           >
             {insightsExpanded ? "הסתר סטטיסטיקה" : <><BarChart3 size={16} strokeWidth={1.75} aria-hidden /> הצג סטטיסטיקה</>}
           </button>
-          <div className="adm-balances-export-actions" role="group" aria-label="ייצוא דוח">
+          <div className="adm-balances-export-actions" role="group" aria-label="ייצוא ורענון דוח">
+            <button
+              type="button"
+              className="adm-export-btn adm-balances-export-btn adm-balances-export-btn--refresh"
+              disabled={!!exportBusy || tableBusy || manualRefreshBusy}
+              title="רענון נתוני הדוח"
+              aria-label="רענון נתוני הדוח"
+              onClick={() => softRefreshBalances()}
+            >
+              <RefreshCw
+                size={15}
+                strokeWidth={2.2}
+                aria-hidden
+                className={manualRefreshBusy ? "adm-balances-refresh-spin" : undefined}
+              />
+              <span>{manualRefreshBusy ? "…" : "רענון"}</span>
+            </button>
             <button
               type="button"
               className="adm-export-btn adm-export-btn--pdf adm-balances-export-btn"
@@ -613,16 +787,6 @@ export function CustomerBalancesClient() {
 
       {filterOpen ? (
         <div className="adm-balances-advanced-filters" dir="rtl">
-          <label className="adm-balances-field adm-balances-field--inline">
-            <span className="adm-balances-field-label">נכון לתאריך (snapshot)</span>
-            <input
-              className="adm-balances-input"
-              type="date"
-              value={balancesFilters.toYmd}
-              readOnly
-              title="נגזר משבוע העבודה — סוף השבוע הקודם"
-            />
-          </label>
           <label className="adm-balances-field adm-balances-field--inline">
             <span className="adm-balances-field-label">מדינה</span>
             <select
@@ -685,6 +849,20 @@ export function CustomerBalancesClient() {
         </div>
       ) : null}
 
+      {newDataAvailable ? (
+        <div className="adm-balances-new-data-banner" role="status" dir="rtl">
+          <span>נמצאו נתונים חדשים בדוח</span>
+          <button
+            type="button"
+            className="adm-btn adm-btn--secondary adm-btn--xs"
+            disabled={manualRefreshBusy || tableLoading}
+            onClick={() => softRefreshBalances()}
+          >
+            רענן עכשיו
+          </button>
+        </div>
+      ) : null}
+
       {stats ? (
         <section className="adm-balances-fcc-kpi" dir="rtl" aria-label="סיכום פיננסי">
           <article className="adm-balances-fcc-kpi__card">
@@ -719,9 +897,19 @@ export function CustomerBalancesClient() {
       ) : null}
 
       <div className="adm-balances-work">
-        {balancesScopeSubtitle(balancesFilters.weekCode, balancesFilters.toYmd) ? (
+        {balancesScopeSubtitle(
+          balancesFilters.weekCode,
+          balancesFilters.toYmd,
+          balancesFilters.rangeFromYmd,
+          balancesFilters.rangeToYmd,
+        ) ? (
           <p className="adm-balances-scope-line" role="note">
-            {balancesScopeSubtitle(balancesFilters.weekCode, balancesFilters.toYmd)}
+            {balancesScopeSubtitle(
+              balancesFilters.weekCode,
+              balancesFilters.toYmd,
+              balancesFilters.rangeFromYmd,
+              balancesFilters.rangeToYmd,
+            )}
           </p>
         ) : null}
         {payload?.activeOrderStatusFilter && payload.activeOrderStatusFilter !== "ALL" ? (

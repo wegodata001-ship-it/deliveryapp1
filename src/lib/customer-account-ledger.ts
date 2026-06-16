@@ -11,6 +11,7 @@ import {
   orderCustomerChargeUsd,
   orderCustomerCreditUsd,
 } from "@/lib/debt-withdrawal-order";
+import { OS } from "@/lib/order-status-slugs";
 import { normalizeOrderSourceCountry } from "@/lib/order-countries";
 import { workCountryFromOrderSourceCountry, type WorkCountryCode } from "@/lib/work-country";
 import {
@@ -22,8 +23,14 @@ import {
   buildLedgerPaymentDetail,
   paymentBatchGroupKey,
   type LedgerPaymentBatchRow,
+  type LedgerPaymentCheckLine,
   type LedgerPaymentDetail,
 } from "@/lib/ledger-payment-detail";
+import { INVOICE_CANCEL_LEDGER_LABEL } from "@/lib/payment-cancellation";
+import {
+  ORDER_CANCELLED_AUDIT_ACTION,
+  ORDER_CANCEL_LEDGER_LABEL,
+} from "@/lib/order-cancellation";
 import { formatLocalYmd, parseLocalDate } from "@/lib/work-week";
 
 export type CustomerLedgerRowKind =
@@ -49,6 +56,8 @@ export type CustomerLedgerRow = {
   isDebtWithdrawal?: boolean;
   /** תשלום שבוטל — מוצג בכרטסת, לא נספר ביתרה */
   isPaymentCancelled?: boolean;
+  /** הזמנה שבוטלה באישור מנהל — זיכוי בכרטסת */
+  isOrderCancelled?: boolean;
   /** סגירת חוב באמצעות עמלה — לא תשלום */
   isCommissionDebtClosure?: boolean;
   /** תצוגה: יתרת עמלה לאחר הפעולה */
@@ -104,6 +113,7 @@ type LedgerEvent = {
   paymentId: string | null;
   isDebtWithdrawal?: boolean;
   isPaymentCancelled?: boolean;
+  isOrderCancelled?: boolean;
   isCommissionDebtClosure?: boolean;
   commissionBeforeUsd?: string;
   commissionAfterUsd?: string;
@@ -112,6 +122,7 @@ type LedgerEvent = {
   paymentDetail?: LedgerPaymentDetail;
   /** סכום לתצוגה (גם כשבוטל) */
   displayPaymentUsd?: Prisma.Decimal;
+  displayChargeUsd?: Prisma.Decimal;
 };
 
 const COMMISSION_CLOSURE_AUDIT_TYPES = ["ORDER_COMMISSION_RESET", "ORDER_BALANCE_RESET"] as const;
@@ -195,7 +206,8 @@ export async function buildCustomerAccountLedger(params: {
     sourceCountry,
   });
 
-  const [preOrders, prePayments, orders, payments, closureAuditLogs, customerBulkResets] = await Promise.all([
+  const [preOrders, prePayments, orders, payments, closureAuditLogs, customerBulkResets, orderCancelAuditLogs] =
+    await Promise.all([
     fromFilterSet
       ? timed((ms) => (fetchOrdersMs += ms), () =>
           prisma.order.findMany({
@@ -294,6 +306,22 @@ export async function buildCustomerAccountLedger(params: {
         },
       }),
     ),
+    timed((ms) => (fetchOrdersMs += ms), () =>
+      prisma.auditLog.findMany({
+        where: {
+          actionType: ORDER_CANCELLED_AUDIT_ACTION,
+          entityType: "Order",
+          createdAt: { gte: from, lte: to },
+        },
+        orderBy: { createdAt: "asc" },
+        select: {
+          id: true,
+          entityId: true,
+          createdAt: true,
+          metadata: true,
+        },
+      }),
+    ),
   ]);
   const sharedBalance = await sharedBalancePromise;
 
@@ -317,6 +345,34 @@ export async function buildCustomerAccountLedger(params: {
     }
   }
 
+  const orderCancelByOrderId = new Map<
+    string,
+    { date: Date; orderNumber: string | null; amountUsd: Prisma.Decimal; approvedBy: string | null; logId: string }
+  >();
+  for (const log of orderCancelAuditLogs) {
+    const oid = log.entityId?.trim();
+    if (!oid) continue;
+    const meta = parseJsonRecord(log.metadata);
+    const logCustomerId = decStr(meta?.customerId);
+    if (logCustomerId && logCustomerId !== id) continue;
+    if (!logCustomerId && !orderIdSet.has(oid)) continue;
+    const amountRaw = decStr(meta?.orderAmountUsd);
+    if (!amountRaw) continue;
+    const amount = new Prisma.Decimal(amountRaw);
+    if (amount.lte(0)) continue;
+    orderCancelByOrderId.set(oid, {
+      date: log.createdAt,
+      orderNumber: decStr(meta?.orderNumber),
+      amountUsd: amount,
+      approvedBy: decStr(meta?.approvedBy),
+      logId: log.id,
+    });
+    orderIdSet.add(oid);
+    if (!orderNumberById.has(oid)) {
+      orderNumberById.set(oid, decStr(meta?.orderNumber) ?? oid);
+    }
+  }
+
   const primaryPaymentIds = payments
     .filter((p) => p.paymentCode?.trim())
     .map((p) => p.id);
@@ -324,13 +380,23 @@ export async function buildCustomerAccountLedger(params: {
     primaryPaymentIds.length > 0
       ? await prisma.paymentCheck.findMany({
           where: { paymentId: { in: primaryPaymentIds } },
-          select: { paymentId: true, amount: true },
+          select: { paymentId: true, checkNumber: true, amount: true },
+          orderBy: { checkNumber: "asc" },
         })
       : [];
   const checkAmountUsdByPaymentId = new Map<string, number>();
+  const checksByPaymentId = new Map<string, LedgerPaymentCheckLine[]>();
   for (const ch of paymentChecks) {
+    const amt = Number(ch.amount);
+    if (!Number.isFinite(amt) || amt <= 0) continue;
     const prev = checkAmountUsdByPaymentId.get(ch.paymentId) ?? 0;
-    checkAmountUsdByPaymentId.set(ch.paymentId, prev + Number(ch.amount));
+    checkAmountUsdByPaymentId.set(ch.paymentId, prev + amt);
+    const list = checksByPaymentId.get(ch.paymentId) ?? [];
+    list.push({
+      checkNumber: ch.checkNumber.trim() || "—",
+      amountUsd: amt.toFixed(2),
+    });
+    checksByPaymentId.set(ch.paymentId, list);
   }
 
   const paymentBatches = new Map<string, LedgerPaymentBatchRow[]>();
@@ -452,6 +518,7 @@ export async function buildCustomerAccountLedger(params: {
     let preCharges = new Prisma.Decimal(0);
     let prePaid = new Prisma.Decimal(0);
     for (const o of preOrders) {
+      if (o.status === OS.CANCELLED) continue;
       preCharges = preCharges.add(
         new Prisma.Decimal(orderCustomerChargeUsd(o).toFixed(4)),
       );
@@ -483,21 +550,40 @@ export async function buildCustomerAccountLedger(params: {
         };
       }
       const closure = closureByOrderId.get(o.id);
+      const cancelMeta = orderCancelByOrderId.get(o.id);
       const chargeUsd = closure
         ? Math.max(0, Number(closure.beforeTotalUsd) || orderCustomerChargeUsd(o))
         : orderCustomerChargeUsd(o);
+      const chargeForBalance =
+        o.status === OS.CANCELLED && !cancelMeta ? 0 : chargeUsd;
       return {
         id: `o-${o.id}`,
         date: o.orderDate ?? new Date(0),
         kind: "ORDER" as const,
         typeLabel: "הזמנה",
-        charge: new Prisma.Decimal(chargeUsd.toFixed(4)),
+        charge: new Prisma.Decimal(chargeForBalance.toFixed(4)),
         payment: new Prisma.Decimal(0),
         document: o.orderNumber?.trim() || "הזמנה",
         orderId: o.id,
         paymentId: null,
+        displayChargeUsd: new Prisma.Decimal(chargeUsd.toFixed(4)),
       };
     }),
+    ...[...orderCancelByOrderId.entries()].map(([oid, cancel]) => ({
+      id: `oc-${cancel.logId}`,
+      date: cancel.date,
+      kind: "PAYMENT" as const,
+      typeLabel: cancel.approvedBy
+        ? `${ORDER_CANCEL_LEDGER_LABEL} — ${cancel.approvedBy}`
+        : ORDER_CANCEL_LEDGER_LABEL,
+      charge: new Prisma.Decimal(0),
+      payment: cancel.amountUsd,
+      displayPaymentUsd: cancel.amountUsd,
+      document: cancel.orderNumber ?? orderNumberById.get(oid) ?? oid,
+      orderId: oid,
+      paymentId: null,
+      isOrderCancelled: true,
+    })),
     ...[...paymentBatches.entries()].map(([batchKey, batchRows]) => {
       const primary = batchRows.find((r) => r.paymentCode?.trim()) ?? batchRows[0];
       const payUsd = batchRows.reduce((sum, row) => {
@@ -509,12 +595,13 @@ export async function buildCustomerAccountLedger(params: {
         batchRows,
         orderNumberById,
         checkAmountUsdByPaymentId,
+        checksByPaymentId,
       });
       return {
         id: `pb-${batchKey}`,
         date: primary.paymentDate ?? new Date(0),
         kind: "PAYMENT" as const,
-        typeLabel: isCancelled ? "תשלום מבוטל" : "תשלום",
+        typeLabel: isCancelled ? INVOICE_CANCEL_LEDGER_LABEL : "תשלום",
         charge: new Prisma.Decimal(0),
         payment: isCancelled ? new Prisma.Decimal(0) : payUsd,
         displayPaymentUsd: payUsd,
@@ -564,7 +651,7 @@ export async function buildCustomerAccountLedger(params: {
       dateYmd: ev.date.getTime() > 0 ? formatLocalYmd(ev.date) : "—",
       kind: ev.kind,
       typeLabel: ev.typeLabel,
-      chargeUsd: ev.charge.toFixed(2),
+      chargeUsd: (ev.displayChargeUsd ?? ev.charge).toFixed(2),
       paymentUsd: (ev.displayPaymentUsd ?? ev.payment).toFixed(2),
       balanceUsd: balance.toFixed(2),
       document: ev.document,
@@ -572,6 +659,7 @@ export async function buildCustomerAccountLedger(params: {
       paymentId: ev.paymentId,
       isDebtWithdrawal: ev.isDebtWithdrawal,
       isPaymentCancelled: ev.isPaymentCancelled,
+      isOrderCancelled: ev.isOrderCancelled,
       isCommissionDebtClosure: ev.isCommissionDebtClosure,
       commissionBeforeUsd: ev.commissionBeforeUsd,
       commissionAfterUsd: ev.commissionAfterUsd,

@@ -7,7 +7,7 @@ import {
   type SerializedFinancial,
 } from "@/lib/financial-settings";
 import { logFinanceLoadedValues, logFinanceSourceTable } from "@/lib/finance-log";
-import { OrderEditRequestStatus } from "@prisma/client";
+import { OrderEditRequestStatus, ApprovalRequestStatus, ApprovalRequestType } from "@prisma/client";
 
 export const FINANCIAL_LAYOUT_CACHE_TAG = "wego-admin-financial-layout";
 
@@ -49,5 +49,26 @@ export const getPendingOrderEditRequestCount = unstable_cache(
     });
   },
   ["wego-pending-order-edit-requests"],
+  { revalidate: 45 },
+);
+
+/** ספירת בקשות ביטול חשבונית ממתינות */
+export const getPendingInvoiceCancelRequestCount = unstable_cache(
+  async (): Promise<number> => {
+    try {
+      const { ensureApprovalRequestTablesOnce } = await import("@/lib/approval-request-bootstrap");
+      await ensureApprovalRequestTablesOnce();
+      return prisma.approvalRequest.count({
+        where: {
+          type: ApprovalRequestType.INVOICE_CANCEL,
+          status: ApprovalRequestStatus.PENDING,
+          requestedBy: { role: { not: "ADMIN" } },
+        },
+      });
+    } catch {
+      return 0;
+    }
+  },
+  ["wego-pending-invoice-cancel-requests"],
   { revalidate: 45 },
 );

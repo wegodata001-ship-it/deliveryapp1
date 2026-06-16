@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { Menu } from "lucide-react";
-import { DEFAULT_WEEK_CODE } from "@/lib/work-week";
+import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 import { useAdminNavLayout } from "@/components/admin/AdminNavLayoutContext";
 import { shouldShowGlobalFilter } from "@/components/admin/GlobalFilterBar";
@@ -39,12 +39,11 @@ type Props = {
 
 export function AdminTopBar({ displayName, roleLabel, financial, canManageFinancial }: Props) {
   const pathname = usePathname();
-  const sp = useSearchParams();
   const navLayout = useAdminNavLayout();
   const { openFinancialModal } = useAdminFinancialModal();
 
   const showGlobalFilters = shouldShowGlobalFilter(pathname);
-  const weekCode = sp.get("week") || DEFAULT_WEEK_CODE;
+  const { globalWeek } = useAdminGlobal();
   const { rateLabel, rateTitle } = useLayoutFinancialDisplay(financial);
 
   return (
@@ -84,7 +83,7 @@ export function AdminTopBar({ displayName, roleLabel, financial, canManageFinanc
             <>
               <div className="adm-pill adm-pill--accent adm-pill--dense">
                 <span>שבוע עבודה</span>
-                <strong>{weekCode}</strong>
+                <strong>{globalWeek}</strong>
               </div>
               <button
                 type="button"

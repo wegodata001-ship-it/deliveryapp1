@@ -7,11 +7,10 @@ import { prisma } from "@/lib/prisma";
 import { ensureOrderEditRequestTablesOnce } from "@/lib/order-edit-request-bootstrap";
 import { getPendingOrderEditRequestCount } from "@/lib/admin-layout-cache";
 import {
-  ORDER_EDIT_UNLOCK_DURATION_MS,
-  canUserEditCompletedOrder,
-  orderSensitiveStatusHe,
-  orderStatusRequiresEditApproval,
-} from "@/lib/order-edit-lock";
+  computeOrderEditDiff,
+  parseOrderEditSnapshot,
+  type OrderEditDiffRow,
+} from "@/lib/order-edit-snapshot";
 
 async function notifyUsers(userIds: string[], title: string, body: string | null, kind: string, payload?: Prisma.InputJsonValue) {
   await ensureOrderEditRequestTablesOnce();
@@ -66,137 +65,22 @@ export type OrderEditEntryHint =
     };
 
 /**
- * לפני פתיחת UI עריכת הזמנה — קובע האם עובד צריך מודל נעילה במקום לפתוח את הטופס.
- * אדמינים תמיד `direct`.
+ * לפני פתיחת UI עריכת הזמנה — תמיד פותחים את הטופס.
+ * עובדים שולחים בקשת עדכון בעת שמירה (לא לפני).
  */
-export async function getOrderEditEntryHintAction(orderId: string): Promise<OrderEditEntryHint> {
-  const me = await requireAuth();
-  if (!userHasAnyPermission(me, ["edit_orders"])) return { kind: "direct" };
-
-  const oid = orderId.trim();
-  if (!oid) return { kind: "direct" };
-
-  await ensureOrderEditRequestTablesOnce();
-  await clearExpiredOrderEditUnlockForOrder(oid);
-
-  const order = await prisma.order.findFirst({
-    where: { id: oid, deletedAt: null },
-    select: {
-      id: true,
-      status: true,
-      orderNumber: true,
-      editUnlockedForUserId: true,
-      editUnlockedUntil: true,
-    },
-  });
-  if (!order) return { kind: "direct" };
-
-  if (isAdminUser(me)) return { kind: "direct" };
-  if (!orderStatusRequiresEditApproval(order.status)) return { kind: "direct" };
-
-  const gate = {
-    status: order.status,
-    editUnlockedForUserId: order.editUnlockedForUserId,
-    editUnlockedUntil: order.editUnlockedUntil,
-  };
-  if (canUserEditCompletedOrder(me, gate)) return { kind: "direct" };
-
-  const pending = await prisma.orderEditRequest.findFirst({
-    where: { orderId: oid, status: OrderEditRequestStatus.PENDING },
-    select: { requestedByUserId: true },
-  });
-  if (pending) {
-    return {
-      kind: "prelock",
-      variant: pending.requestedByUserId === me.id ? "pending_mine" : "pending_other",
-      orderId: oid,
-      orderNumber: order.orderNumber,
-      status: order.status,
-    };
-  }
-
-  const latest = await prisma.orderEditRequest.findFirst({
-    where: { orderId: oid },
-    orderBy: { createdAt: "desc" },
-    select: { status: true, requestedByUserId: true },
-  });
-  if (latest?.status === OrderEditRequestStatus.REJECTED && latest.requestedByUserId === me.id) {
-    return {
-      kind: "prelock",
-      variant: "rejected",
-      orderId: oid,
-      orderNumber: order.orderNumber,
-      status: order.status,
-    };
-  }
-
-  return {
-    kind: "prelock",
-    variant: "locked",
-    orderId: oid,
-    orderNumber: order.orderNumber,
-    status: order.status,
-  };
+export async function getOrderEditEntryHintAction(_orderId: string): Promise<OrderEditEntryHint> {
+  await requireAuth();
+  return { kind: "direct" };
 }
 
+/** @deprecated — השתמשו בשמירה עם סיבת עדכון מתוך טופס ההזמנה */
 export async function createOrderEditRequestAction(orderId: string, requestReason: string): Promise<{ ok: true } | { ok: false; error: string }> {
-  const me = await requireAuth();
-  if (!userHasAnyPermission(me, ["edit_orders"])) return { ok: false, error: "אין הרשאה" };
-  if (isAdminUser(me)) return { ok: false, error: "מנהלים יכולים לערוך ישירות — לא נדרשת בקשה" };
-  await ensureOrderEditRequestTablesOnce();
-
-  const oid = orderId.trim();
-  const reason = requestReason.trim();
-  if (!oid) return { ok: false, error: "חסר מזהה הזמנה" };
-  if (!reason || reason.length < 3) return { ok: false, error: "יש להזין סיבת עריכה (לפחות 3 תווים)" };
-
-  const order = await prisma.order.findFirst({
-    where: { id: oid, deletedAt: null },
-    select: { id: true, status: true, orderNumber: true },
-  });
-  if (!order) return { ok: false, error: "הזמנה לא נמצאה" };
-  if (!orderStatusRequiresEditApproval(order.status)) {
-    return { ok: false, error: "בקשת אישור נדרשת רק להזמנה במצב ״מוכן״ (הושלמה) או ״מבוטל״" };
-  }
-
-  const pending = await prisma.orderEditRequest.findFirst({
-    where: { orderId: oid, status: OrderEditRequestStatus.PENDING },
-    select: { id: true },
-  });
-  if (pending) return { ok: false, error: "כבר קיימת בקשה ממתינה להזמנה זו" };
-
-  const req = await prisma.orderEditRequest.create({
-    data: {
-      orderId: oid,
-      requestedByUserId: me.id,
-      requestReason: reason,
-      status: OrderEditRequestStatus.PENDING,
-    },
-    select: { id: true },
-  });
-
-  await prisma.auditLog.create({
-    data: {
-      userId: me.id,
-      actionType: "ORDER_EDIT_REQUEST_CREATED",
-      entityType: "OrderEditRequest",
-      entityId: req.id,
-      metadata: { orderId: oid, orderNumber: order.orderNumber, requestReason: reason } as Prisma.InputJsonValue,
-    },
-  });
-
-  const statusHe = orderSensitiveStatusHe(order.status);
-  const timeHe = new Date().toLocaleString("he-IL", { dateStyle: "short", timeStyle: "short" });
-  await notifyAllAdmins(
-    "בקשת עריכת הזמנה",
-    `הזמנה ${order.orderNumber ?? oid} (${statusHe}) — ${me.fullName} — ${timeHe}`,
-    "ORDER_EDIT_REQUEST",
-    { orderEditRequestId: req.id, orderId: oid } as Prisma.InputJsonValue,
-  );
-
-  revalidatePath("/admin/orders");
-  revalidatePath("/admin/order-edit-requests");
-  return { ok: true };
+  void orderId;
+  void requestReason;
+  return {
+    ok: false,
+    error: "בצעו את השינוי בטופס ההזמנה ולחצו «שליחה לאישור» עם סיבת העדכון.",
+  };
 }
 
 export type OrderEditRequestRow = {
@@ -204,12 +88,17 @@ export type OrderEditRequestRow = {
   orderId: string;
   orderNumber: string | null;
   customerLabel: string | null;
-  /** סטטוס ההזמנה ב־DB (מוכן / מבוטל וכו׳) */
   orderStatus: string;
   requestedByName: string;
   createdAtIso: string;
   requestReason: string;
   status: OrderEditRequestStatus;
+  diff: OrderEditDiffRow[];
+  approvedByName: string | null;
+  approvedAtIso: string | null;
+  rejectedByName: string | null;
+  rejectedAtIso: string | null;
+  rejectionReason: string | null;
 };
 
 export async function countPendingOrderEditRequestsForAdmin(): Promise<number> {
@@ -229,20 +118,46 @@ export async function listOrderEditRequestsAction(): Promise<OrderEditRequestRow
     include: {
       order: { select: { orderNumber: true, customerNameSnapshot: true, status: true } },
       requestedBy: { select: { fullName: true } },
+      approvedBy: { select: { fullName: true } },
+      rejectedBy: { select: { fullName: true } },
     },
   });
 
-  return rows.map((r) => ({
-    id: r.id,
-    orderId: r.orderId,
-    orderNumber: r.order.orderNumber,
-    customerLabel: r.order.customerNameSnapshot,
-    orderStatus: r.order.status,
-    requestedByName: r.requestedBy.fullName,
-    createdAtIso: r.createdAt.toISOString(),
-    requestReason: r.requestReason,
-    status: r.status,
-  }));
+  const snapshotRows =
+    rows.length > 0
+      ? await prisma.$queryRaw<
+          Array<{ id: string; beforeSnapshot: unknown; afterSnapshot: unknown; rejectionReason: string | null }>
+        >`
+          SELECT "id", "beforeSnapshot", "afterSnapshot", "rejectionReason"
+          FROM "OrderEditRequest"
+          WHERE "id" IN (${Prisma.join(rows.map((r) => r.id))})
+        `
+      : [];
+  const snapshotById = new Map(snapshotRows.map((s) => [s.id, s]));
+
+  return rows.map((r) => {
+    const snap = snapshotById.get(r.id);
+    return {
+      id: r.id,
+      orderId: r.orderId,
+      orderNumber: r.order.orderNumber,
+      customerLabel: r.order.customerNameSnapshot,
+      orderStatus: r.order.status,
+      requestedByName: r.requestedBy.fullName,
+      createdAtIso: r.createdAt.toISOString(),
+      requestReason: r.requestReason,
+      status: r.status,
+      diff: computeOrderEditDiff(
+        parseOrderEditSnapshot(snap?.beforeSnapshot),
+        parseOrderEditSnapshot(snap?.afterSnapshot),
+      ),
+      approvedByName: r.approvedBy?.fullName ?? null,
+      approvedAtIso: r.approvedAt?.toISOString() ?? null,
+      rejectedByName: r.rejectedBy?.fullName ?? null,
+      rejectedAtIso: r.rejectedAt?.toISOString() ?? null,
+      rejectionReason: snap?.rejectionReason ?? null,
+    };
+  });
 }
 
 export async function approveOrderEditRequestAction(
@@ -255,101 +170,153 @@ export async function approveOrderEditRequestAction(
   const rid = requestId.trim();
   const req = await prisma.orderEditRequest.findFirst({
     where: { id: rid, status: OrderEditRequestStatus.PENDING },
-    select: { id: true, orderId: true, requestedByUserId: true, requestReason: true },
+    select: {
+      id: true,
+      orderId: true,
+      requestedByUserId: true,
+      requestReason: true,
+      order: { select: { orderNumber: true } },
+    },
   });
   if (!req) return { ok: false, error: "בקשה לא נמצאה או שכבר טופלה" };
 
-  const until = new Date(Date.now() + ORDER_EDIT_UNLOCK_DURATION_MS);
+  const reqFull = await prisma.$queryRaw<
+    Array<{
+      beforeSnapshot: unknown;
+      afterSnapshot: unknown;
+      proposedPayload: unknown;
+    }>
+  >`
+    SELECT "beforeSnapshot", "afterSnapshot", "proposedPayload"
+    FROM "OrderEditRequest"
+    WHERE "id" = ${rid}
+    LIMIT 1
+  `;
+  const snapshots = reqFull[0];
+  if (!snapshots?.proposedPayload || typeof snapshots.proposedPayload !== "object") {
+    return { ok: false, error: "בקשה ישנה ללא נתוני עדכון — דחו ובקשו מהעובד לשלוח מחדש" };
+  }
 
-  await prisma.$transaction([
-    prisma.orderEditRequest.updateMany({
-      where: {
-        orderId: req.orderId,
-        status: OrderEditRequestStatus.APPROVED,
-        id: { not: req.id },
-      },
-      data: { status: OrderEditRequestStatus.USED },
-    }),
-    prisma.orderEditRequest.update({
-      where: { id: req.id },
-      data: {
-        status: OrderEditRequestStatus.APPROVED,
-        approvedAt: new Date(),
-        approvedByUserId: me.id,
-      },
-    }),
-    prisma.order.update({
-      where: { id: req.orderId },
-      data: {
-        editUnlockedForUserId: req.requestedByUserId,
-        editUnlockedUntil: until,
-      },
-    }),
-  ]);
+  const { updateOrderWorkPanelAction } = await import("@/app/admin/capture/actions");
+  const applyResult = await updateOrderWorkPanelAction(
+    snapshots.proposedPayload as Parameters<typeof updateOrderWorkPanelAction>[0],
+    { orderEditRequestId: req.id },
+  );
+  if (!applyResult.ok) return { ok: false, error: applyResult.error };
+
+  const diff = computeOrderEditDiff(
+    parseOrderEditSnapshot(snapshots.beforeSnapshot),
+    parseOrderEditSnapshot(snapshots.afterSnapshot),
+  );
+
+  await prisma.orderEditRequest.update({
+    where: { id: req.id },
+    data: {
+      status: OrderEditRequestStatus.APPROVED,
+      approvedAt: new Date(),
+      approvedByUserId: me.id,
+    },
+  });
 
   await prisma.auditLog.create({
     data: {
       userId: me.id,
-      actionType: "ORDER_EDIT_REQUEST_APPROVED",
+      actionType: "ORDER_UPDATE_REQUEST_APPROVED",
       entityType: "OrderEditRequest",
       entityId: req.id,
       metadata: {
         orderId: req.orderId,
-        unlockedUntil: until.toISOString(),
+        orderNumber: req.order.orderNumber,
         requestReason: req.requestReason,
+        approvedBy: me.fullName,
+        diff: diff as unknown as Prisma.InputJsonValue,
       } as Prisma.InputJsonValue,
     },
   });
 
   await notifyUsers(
     [req.requestedByUserId],
-    "בקשת עריכת הזמנה אושרה",
-    `קיבלת הרשאת עריכה זמנית עד ${until.toLocaleString("he-IL")}`,
-    "ORDER_EDIT_APPROVED",
+    "בקשת עדכון הזמנה אושרה",
+    `השינויים להזמנה ${req.order.orderNumber ?? req.orderId} יושמו במערכת.`,
+    "ORDER_UPDATE_APPROVED",
     { orderId: req.orderId } as Prisma.InputJsonValue,
   );
 
   revalidatePath("/admin/orders");
+  revalidatePath("/admin/balances");
   revalidatePath("/admin/order-edit-requests");
   return { ok: true };
 }
 
-export async function rejectOrderEditRequestAction(requestId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+export async function rejectOrderEditRequestAction(
+  requestId: string,
+  rejectionReason?: string | null,
+): Promise<{ ok: true } | { ok: false; error: string }> {
   const me = await requireAuth();
   if (!isAdminUser(me)) return { ok: false, error: "אין הרשאה — מנהלים בלבד" };
   await ensureOrderEditRequestTablesOnce();
 
   const rid = requestId.trim();
+  const reason = (rejectionReason ?? "").trim() || null;
   const req = await prisma.orderEditRequest.findFirst({
     where: { id: rid, status: OrderEditRequestStatus.PENDING },
-    select: { id: true, orderId: true, requestedByUserId: true, requestReason: true },
+    select: {
+      id: true,
+      orderId: true,
+      requestedByUserId: true,
+      requestReason: true,
+      order: { select: { orderNumber: true } },
+    },
   });
   if (!req) return { ok: false, error: "בקשה לא נמצאה או שכבר טופלה" };
 
-  await prisma.orderEditRequest.update({
-    where: { id: req.id },
-    data: {
-      status: OrderEditRequestStatus.REJECTED,
-      rejectedAt: new Date(),
-      rejectedByUserId: me.id,
-    },
-  });
+  const reqFull = await prisma.$queryRaw<
+    Array<{ beforeSnapshot: unknown; afterSnapshot: unknown }>
+  >`
+    SELECT "beforeSnapshot", "afterSnapshot"
+    FROM "OrderEditRequest"
+    WHERE "id" = ${rid}
+    LIMIT 1
+  `;
+  const snapshots = reqFull[0];
+
+  const diff = computeOrderEditDiff(
+    parseOrderEditSnapshot(snapshots?.beforeSnapshot),
+    parseOrderEditSnapshot(snapshots?.afterSnapshot),
+  );
+
+  await prisma.$executeRaw`
+    UPDATE "OrderEditRequest"
+    SET
+      "status" = 'REJECTED'::"OrderEditRequestStatus",
+      "rejectedAt" = ${new Date()},
+      "rejectedByUserId" = ${me.id},
+      "rejectionReason" = ${reason}
+    WHERE "id" = ${rid}
+  `;
 
   await prisma.auditLog.create({
     data: {
       userId: me.id,
-      actionType: "ORDER_EDIT_REQUEST_REJECTED",
+      actionType: "ORDER_UPDATE_REQUEST_REJECTED",
       entityType: "OrderEditRequest",
       entityId: req.id,
-      metadata: { orderId: req.orderId, requestReason: req.requestReason } as Prisma.InputJsonValue,
+      metadata: {
+        orderId: req.orderId,
+        orderNumber: req.order.orderNumber,
+        requestReason: req.requestReason,
+        rejectionReason: reason,
+        rejectedBy: me.fullName,
+        diff: diff as unknown as Prisma.InputJsonValue,
+      } as Prisma.InputJsonValue,
     },
   });
 
   await notifyUsers(
     [req.requestedByUserId],
-    "בקשת עריכת הזמנה נדחתה",
-    "פנה למנהל לפרטים נוספים.",
-    "ORDER_EDIT_REJECTED",
+    "בקשת עדכון הזמנה נדחתה",
+    reason ?? "פנה למנהל לפרטים נוספים.",
+    "ORDER_UPDATE_REJECTED",
     { orderId: req.orderId } as Prisma.InputJsonValue,
   );
 
@@ -386,67 +353,14 @@ export async function markNotificationsReadAction(ids: string[]): Promise<void> 
   });
 }
 
-/**
- * לאחר שמירת עריכה מוצלחת — מסמן את אישור העריכה האחרון (אם קיים) כנוצל,
- * ומנקה תמיד את שדות פתיחת הנעילה בהזמנה.
- *
- * שיפור ביצועים: רוב השמירות הן של הזמנות רגילות ללא APPROVED edit-request
- * וללא unlock פעיל — במקרים אלו אנחנו יוצאים מוקדם ללא עבודה.
- */
+/** @deprecated — זרימת unlock הוחלפה בבקשת עדכון עם snapshot */
 export async function markApprovedEditRequestUsedAndClearUnlock(orderId: string, editorUserId: string): Promise<void> {
+  void editorUserId;
   const oid = orderId.trim();
   if (!oid) return;
-
   await ensureOrderEditRequestTablesOnce();
-
-  // קריאה מקבילית: גם ה-APPROVED האחרון, גם מצב הנעילה של ההזמנה.
-  const [latest, orderState] = await Promise.all([
-    prisma.orderEditRequest.findFirst({
-      where: { orderId: oid, status: OrderEditRequestStatus.APPROVED },
-      orderBy: [{ approvedAt: "desc" }, { createdAt: "desc" }],
-      select: { id: true },
-    }),
-    prisma.order.findFirst({
-      where: { id: oid },
-      select: { editUnlockedForUserId: true, editUnlockedUntil: true },
-    }),
-  ]);
-
-  const hasUnlock = Boolean(orderState?.editUnlockedForUserId || orderState?.editUnlockedUntil);
-  // Short-circuit: אין מה לעדכן ואין מה לסמן כנוצל.
-  if (!latest && !hasUnlock) return;
-
-  const ops: Prisma.PrismaPromise<unknown>[] = [];
-  if (latest) {
-    ops.push(
-      prisma.orderEditRequest.update({
-        where: { id: latest.id },
-        data: { status: OrderEditRequestStatus.USED },
-      }),
-    );
-  }
-  if (hasUnlock) {
-    ops.push(
-      prisma.order.update({
-        where: { id: oid },
-        data: { editUnlockedForUserId: null, editUnlockedUntil: null },
-      }),
-    );
-  }
-
-  if (ops.length > 0) {
-    await prisma.$transaction(ops);
-  }
-
-  if (latest) {
-    await prisma.auditLog.create({
-      data: {
-        userId: editorUserId,
-        actionType: "ORDER_EDIT_REQUEST_USED",
-        entityType: "OrderEditRequest",
-        entityId: latest.id,
-        metadata: { orderId: oid } as Prisma.InputJsonValue,
-      },
-    });
-  }
+  await prisma.order.updateMany({
+    where: { id: oid, editUnlockedUntil: { not: null } },
+    data: { editUnlockedForUserId: null, editUnlockedUntil: null },
+  });
 }

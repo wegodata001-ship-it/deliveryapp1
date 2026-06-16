@@ -4,10 +4,9 @@ import { AnimatedMoneyValue } from "@/components/ui/AnimatedMoneyValue";
 import {
   LIVE_PAYMENT_KPI_CARDS,
   liveKpiBucket,
-  liveKpiTotalUsd,
   type LivePaymentFormKpis,
 } from "@/lib/payment-intake-live-kpi";
-import { formatIlsDisplay, formatUsdDisplay } from "@/lib/money-format";
+import { formatIlsPlain, formatUsdPlain } from "@/lib/money-format";
 
 type Props = {
   kpis: LivePaymentFormKpis;
@@ -15,6 +14,39 @@ type Props = {
   openDebtUsd?: number;
   onOpenDebtClick?: () => void;
 };
+
+function totalEnteredIls(kpis: LivePaymentFormKpis): number {
+  return (
+    kpis.cash.enteredIls +
+    kpis.bankTransfer.enteredIls +
+    kpis.credit.enteredIls +
+    kpis.checks.enteredIls +
+    kpis.other.enteredIls
+  );
+}
+
+function KpiDualAmounts({ ils, usd }: { ils: number; usd: number }) {
+  return (
+    <div className="payment-modal-live-kpi__amounts">
+      <div className="payment-modal-live-kpi__amount-row">
+        <span className="payment-modal-live-kpi__amount-k">ש&quot;ח:</span>
+        <AnimatedMoneyValue
+          className="payment-modal-live-kpi__amount-v payment-modal-live-kpi__amount-v--ils"
+          dir="ltr"
+          value={formatIlsPlain(ils)}
+        />
+      </div>
+      <div className="payment-modal-live-kpi__amount-row">
+        <span className="payment-modal-live-kpi__amount-k">$:</span>
+        <AnimatedMoneyValue
+          className="payment-modal-live-kpi__amount-v payment-modal-live-kpi__amount-v--usd"
+          dir="ltr"
+          value={formatUsdPlain(usd)}
+        />
+      </div>
+    </div>
+  );
+}
 
 export function PaymentLiveSummaryCards({ kpis, openDebtUsd = 0, onOpenDebtClick }: Props) {
   const showOpenDebt = openDebtUsd > 0.01;
@@ -36,30 +68,16 @@ export function PaymentLiveSummaryCards({ kpis, openDebtUsd = 0, onOpenDebtClick
       dir="rtl"
     >
       {methodCards.map((card) => {
-        const totalUsd = liveKpiTotalUsd(kpis, card.id);
         const bucket = liveKpiBucket(kpis, card.id);
+        const enteredIls = bucket?.enteredIls ?? 0;
+        const enteredUsd = bucket?.enteredUsd ?? 0;
         return (
           <div
             key={card.id}
             className={["payment-modal-live-kpi", `payment-modal-live-kpi--${card.id}`].join(" ")}
           >
             <div className="payment-modal-live-kpi__lbl">{card.label}</div>
-            <AnimatedMoneyValue
-              className="payment-modal-live-kpi__val payment-modal-live-kpi__val--main"
-              dir="ltr"
-              value={formatUsdDisplay(totalUsd)}
-            />
-            {bucket ? (
-              <div className="payment-modal-live-kpi__breakdown" dir="ltr">
-                <div className="payment-modal-live-kpi__breakdown-sep" aria-hidden />
-                <div className="payment-modal-live-kpi__breakdown-line">
-                  {formatUsdDisplay(bucket.enteredUsd)}
-                </div>
-                <div className="payment-modal-live-kpi__breakdown-line payment-modal-live-kpi__breakdown-line--ils">
-                  {formatIlsDisplay(bucket.enteredIls)}
-                </div>
-              </div>
-            ) : null}
+            <KpiDualAmounts ils={enteredIls} usd={enteredUsd} />
           </div>
         );
       })}
@@ -73,9 +91,9 @@ export function PaymentLiveSummaryCards({ kpis, openDebtUsd = 0, onOpenDebtClick
         >
           <div className="payment-modal-live-kpi__lbl">חוב פתוח</div>
           <AnimatedMoneyValue
-            className="payment-modal-live-kpi__val payment-modal-live-kpi__val--main payment-modal-live-kpi__val--open-debt"
+            className="payment-modal-live-kpi__amount-v payment-modal-live-kpi__amount-v--usd payment-modal-live-kpi__amount-v--solo"
             dir="ltr"
-            value={formatUsdDisplay(openDebtUsd)}
+            value={formatUsdPlain(openDebtUsd)}
           />
           <span className="payment-modal-live-kpi__hint">לחץ לפירוט</span>
         </button>
@@ -84,11 +102,7 @@ export function PaymentLiveSummaryCards({ kpis, openDebtUsd = 0, onOpenDebtClick
       {totalCard ? (
         <div className="payment-modal-live-kpi payment-modal-live-kpi--total">
           <div className="payment-modal-live-kpi__lbl">{totalCard.label}</div>
-          <AnimatedMoneyValue
-            className="payment-modal-live-kpi__val payment-modal-live-kpi__val--main"
-            dir="ltr"
-            value={formatUsdDisplay(liveKpiTotalUsd(kpis, "total"))}
-          />
+          <KpiDualAmounts ils={totalEnteredIls(kpis)} usd={kpis.totalPaymentUsd} />
         </div>
       ) : null}
     </div>

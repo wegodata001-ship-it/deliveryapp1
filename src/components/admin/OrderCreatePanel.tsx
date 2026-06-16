@@ -21,13 +21,14 @@ import {
 import {
   getOrderForWorkPanelAction,
   listCustomersForOrderQuickPickAction,
+  submitOrderUpdateRequestAction,
   type CaptureState,
   type CustomerSearchRow,
   type OrderWorkPanelPayload,
 } from "@/app/admin/capture/actions";
 import type { ClientCreateResult } from "@/app/admin/customers/ledger-types";
 import type { CustomerExtrasPayload } from "@/app/api/customers/extras/route";
-import { createOrderEditRequestAction } from "@/app/admin/order-edit-requests/actions";
+import { OrderEditRequestStatus } from "@prisma/client";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import type { AdminToastFn } from "@/components/admin/AdminNavShell";
 import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
@@ -340,6 +341,8 @@ export function OrderCreatePanel({
   const [editRequestReason, setEditRequestReason] = useState("");
   const [editRequestBusy, setEditRequestBusy] = useState(false);
   const [editRequestFlash, setEditRequestFlash] = useState<string | null>(null);
+  const pendingUpdatePayloadRef = useRef<Record<string, unknown> | null>(null);
+  const pendingUpdateDisplayRef = useRef<{ customerLabel: string; customerCode: string | null; locationName: string | null } | null>(null);
 
   const displayWeekCode = useMemo(
     () => deriveAhWeekCodeFromOrderDateYmd(orderExecutionDateYmd) ?? DEFAULT_WEEK_CODE,
@@ -1015,7 +1018,10 @@ export function OrderCreatePanel({
     async (keepOpen: boolean) => {
       const s = performSaveStateRef.current;
       if (s.isSaving) return;
-      if (s.isEdit && s.editGate?.employeeEditBlocked) return;
+      if (s.isEdit && s.editGate?.hasPendingEditRequest) {
+        setErr("קיימת בקשת עדכון ממתינה — לא ניתן לשלוח בקשה נוספת עד לטיפול מנהל.");
+        return;
+      }
 
       let cust = s.selectedCustomer;
       if (!cust && s.codeStr.trim()) {
@@ -1128,7 +1134,23 @@ export function OrderCreatePanel({
 
         if (s.isEdit) {
           const feeStr = s.commissionUsdEffective.toFixed(2);
-          const res = await saveCaptureFast(savePayload(feeStr));
+          const payload = savePayload(feeStr);
+
+          if (s.editGate?.requiresApprovalOnSave) {
+            pendingUpdatePayloadRef.current = payload;
+            pendingUpdateDisplayRef.current = {
+              customerLabel: cust.label,
+              customerCode: cust.code ?? null,
+              locationName: s.paymentPointQuery.trim() || null,
+            };
+            setEditRequestReason("");
+            setEditRequestFlash(null);
+            setEditRequestOpen(true);
+            setIsSaving(false);
+            return;
+          }
+
+          const res = await saveCaptureFast(payload);
           if (!res.ok) throw new Error(res.error);
           setIsSaving(false);
           onToast("ההזמנה נשמרה");
@@ -1240,7 +1262,8 @@ export function OrderCreatePanel({
     );
   }
 
-  const formLocked = Boolean(isEdit && editGate?.employeeEditBlocked);
+  const formLocked = Boolean(isEdit && editGate?.hasPendingEditRequest);
+  const requiresApprovalOnSave = Boolean(isEdit && editGate?.requiresApprovalOnSave);
   const fieldDisabled = isSaving || formLocked;
 
 
@@ -1257,6 +1280,15 @@ export function OrderCreatePanel({
               <FileText size={18} strokeWidth={2.2} />
             </span>
             <h2>{isEdit ? "עריכת הזמנה" : "קליטת הזמנה"}</h2>
+            {isEdit && editGate?.latestUpdateRequestStatus === OrderEditRequestStatus.PENDING ? (
+              <span className="adm-order-update-req-badge adm-order-update-req-badge--pending">ממתין לאישור עדכון</span>
+            ) : null}
+            {isEdit && editGate?.latestUpdateRequestStatus === OrderEditRequestStatus.APPROVED ? (
+              <span className="adm-order-update-req-badge adm-order-update-req-badge--approved">מאושר</span>
+            ) : null}
+            {isEdit && editGate?.latestUpdateRequestStatus === OrderEditRequestStatus.REJECTED ? (
+              <span className="adm-order-update-req-badge adm-order-update-req-badge--rejected">נדחה</span>
+            ) : null}
           </div>
         </header>
 
@@ -1369,40 +1401,18 @@ export function OrderCreatePanel({
 
         {isEdit && formLocked ? (
           <div className="adm-oc-edit-lock-banner" role="status">
-            <p>הזמנה זו נעולה לעריכה (מוכנה או מבוטלת). יש לשלוח בקשת אישור מנהל.</p>
-            {editGate?.hasPendingEditRequest ? (
-              <p style={{ marginTop: "0.35rem", fontWeight: 700 }}>
-                {editGate.pendingEditRequestOwnedByMe
-                  ? "הבקשה שלך ממתינה לאישור."
-                  : "קיימת בקשת עריכה ממתינה להזמנה זו."}
-              </p>
-            ) : null}
-            <div className="adm-oc-edit-lock-actions">
-              <button
-                type="button"
-                className="adm-btn adm-btn--primary adm-btn--dense"
-                disabled={editRequestBusy || !!editGate?.hasPendingEditRequest}
-                onClick={() => {
-                  setEditRequestFlash(null);
-                  setEditRequestReason("");
-                  setEditRequestOpen(true);
-                }}
-              >
-                שלח בקשת עריכה
-              </button>
-            </div>
+            <p>קיימת בקשת עדכון ממתינה להזמנה זו. ההזמנה במערכת לא תשתנה עד אישור מנהל.</p>
+            {editGate?.pendingEditRequestOwnedByMe ? (
+              <p style={{ marginTop: "0.35rem", fontWeight: 700 }}>הבקשה שלך ממתינה לאישור.</p>
+            ) : (
+              <p style={{ marginTop: "0.35rem", fontWeight: 700 }}>בקשה ממתינה (מעובד אחר).</p>
+            )}
           </div>
         ) : null}
 
-        {isEdit && editRequestFlash ? (
-          <div className="adm-settings-toast adm-oc-edit-request-sent-flash" role="status">
-            {editRequestFlash}
-          </div>
-        ) : null}
-
-        {isEdit && editGate && !editGate.viewerIsAdmin && editGate.unlockExpiresAtIso && !formLocked ? (
+        {isEdit && requiresApprovalOnSave && !formLocked ? (
           <div className="adm-oc-edit-unlock-hint" role="status">
-            עריכה זמינה עד {new Date(editGate.unlockExpiresAtIso).toLocaleString("he-IL")}
+            שינויים יישלחו לאישור מנהל — ההזמנה לא תתעדכן עד לאישור.
           </div>
         ) : null}
 
@@ -2060,7 +2070,7 @@ export function OrderCreatePanel({
             title="שמירה (Ctrl+Enter)"
           >
             <Save size={15} strokeWidth={2.2} aria-hidden />
-            <span>{isSaving ? "שומר…" : isEdit ? "עדכון" : "שמור"}</span>
+            <span>{isSaving ? "שולח…" : isEdit ? (requiresApprovalOnSave ? "שליחה לאישור" : "עדכון") : "שמור"}</span>
           </button>
           <span className="adm-oc-pro-shortcut-hint" aria-hidden>
             <kbd>Ctrl</kbd>
@@ -2095,15 +2105,19 @@ export function OrderCreatePanel({
               onClick={(e) => e.stopPropagation()}
               dir="rtl"
             >
-              <h4 id={idp("edit-req-title")}>בקשת עריכה</h4>
+              <h4 id={idp("edit-req-title")}>סיבת העדכון</h4>
+              <p className="adm-oc-edit-request-modal__hint">
+                חובה לציין סיבה. ההזמנה המקורית לא תשתנה עד אישור מנהל.
+              </p>
               <label className="adm-field" htmlFor={idp("edit-req-reason")}>
-                סיבת עריכה
+                סיבת העדכון
                 <textarea
                   id={idp("edit-req-reason")}
                   value={editRequestReason}
                   disabled={editRequestBusy}
                   onChange={(e) => setEditRequestReason(e.target.value)}
-                  placeholder="למשל: תיקון סכום לפי אישור לקוח…"
+                  placeholder="לדוגמה: הלקוח ביקש שינוי מחיר · טעות בהקלדה · עדכון עמלה · עדכון כמות · עדכון מקום · תיקון נתונים"
+                  required
                 />
               </label>
               <div className="adm-oc-edit-request-modal-actions">
@@ -2118,29 +2132,49 @@ export function OrderCreatePanel({
                 <button
                   type="button"
                   className={`adm-btn adm-btn--primary adm-btn--dense${editRequestBusy ? " loading" : ""}`}
-                  disabled={editRequestBusy}
+                  disabled={editRequestBusy || editRequestReason.trim().length < 3}
                   onClick={() => {
                     if (editRequestBusy || !editOrderId) return;
+                    const payload = pendingUpdatePayloadRef.current;
+                    const display = pendingUpdateDisplayRef.current;
+                    if (!payload) {
+                      setErr("שגיאה פנימית — נסו לשמור שוב");
+                      setEditRequestOpen(false);
+                      return;
+                    }
                     setEditRequestBusy(true);
                     setErr(null);
-                    void createOrderEditRequestAction(editOrderId, editRequestReason).then((res) => {
+                    void submitOrderUpdateRequestAction(
+                      payload as Parameters<typeof submitOrderUpdateRequestAction>[0],
+                      editRequestReason,
+                      display ?? undefined,
+                    ).then((res) => {
                       setEditRequestBusy(false);
                       if (!res.ok) {
                         setErr(res.error);
                         return;
                       }
                       setEditRequestOpen(false);
-                      setEditRequestFlash("הבקשה נשלחה למנהלים");
+                      pendingUpdatePayloadRef.current = null;
+                      pendingUpdateDisplayRef.current = null;
+                      setEditRequestFlash("בקשת העדכון נשלחה למנהלים");
+                      onToast("בקשת העדכון נשלחה");
                       void getOrderForWorkPanelAction(editOrderId).then((row) => {
                         if (row) setEditGate(row.editGate);
                       });
                     });
                   }}
                 >
-                  {editRequestBusy ? "שולח…" : "שליחה"}
+                  {editRequestBusy ? "שולח…" : "שליחה לאישור"}
                 </button>
               </div>
             </div>
+          </div>
+        ) : null}
+
+        {isEdit && editRequestFlash ? (
+          <div className="adm-settings-toast adm-oc-edit-request-sent-flash" role="status">
+            {editRequestFlash}
           </div>
         ) : null}
       </form>

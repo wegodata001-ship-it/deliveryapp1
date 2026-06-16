@@ -44,8 +44,18 @@ export function activityActionLabelHe(actionType: string): string {
       return "קלט תשלום";
     case "PaymentCancelled":
       return "ביטול תשלום";
+    case "OrderCancelled":
+      return "ביטול הזמנה";
     case "PaymentRestored":
       return "שחזור תשלום";
+    case "INVOICE_CANCEL_REQUEST_CREATED":
+      return "בקשת ביטול חשבונית";
+    case "INVOICE_CANCEL_REQUEST_APPROVED":
+      return "אישור ביטול חשבונית";
+    case "INVOICE_CANCEL_REQUEST_REJECTED":
+      return "דחיית ביטול חשבונית";
+    case "INVOICE_CANCELLED_IMMEDIATE":
+      return "ביטול חשבונית (מנהל)";
     case "CUSTOMER_CREATED":
       return "יצר לקוח";
     case "CUSTOMER_UPDATED":

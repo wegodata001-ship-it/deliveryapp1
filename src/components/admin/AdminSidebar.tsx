@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { getActiveWorkWeekRange } from "@/lib/active-work-week";
+import { BALANCES_TO_PARAM, BALANCES_WEEK_PARAM } from "@/lib/balances-week-filter";
 import { balancesSnapshotToYmd } from "@/lib/work-week";
 import { useHydratedSearchParams } from "@/lib/use-hydrated-search-params";
 import type { NavIconId, NavItemDef, NavSectionDef } from "@/lib/sidebar-nav";
@@ -89,13 +90,16 @@ const ORDERS_LIST_KEYS = [
 
 const ACTIVE_WEEK_NAV_PATHS = new Set(["/admin/orders", "/admin/balances"]);
 
-function applyActiveWorkWeekToParams(out: URLSearchParams, pathname: string): void {
+function applyActiveWorkWeekToParams(out: URLSearchParams, pathname: string, globalSp: URLSearchParams): void {
   const active = getActiveWorkWeekRange();
   if (pathname === "/admin/balances") {
-    /** יתרות: רק שבוע + תאריך snapshot (סוף שבוע קודם) — לא from/to של טווח השבוע */
-    out.set("week", active.weekCode);
-    out.set("to", balancesSnapshotToYmd(active.weekCode));
-    out.delete("from");
+    /** יתרות: פילטר שבוע מקומי בלבד — שומר week/from/to גלובלי מה-URL הנוכחי */
+    for (const key of ["week", "from", "to"] as const) {
+      const v = globalSp.get(key);
+      if (v) out.set(key, v);
+    }
+    out.set(BALANCES_WEEK_PARAM, active.weekCode);
+    out.set(BALANCES_TO_PARAM, balancesSnapshotToYmd(active.weekCode));
     out.delete("upto");
     return;
   }
@@ -136,7 +140,7 @@ function resolveNavHref(item: NavItemDef, sp: URLSearchParams): string {
     const u = new URL(item.href, "http://local.invalid");
     const out = new URLSearchParams(u.search);
     if (ACTIVE_WEEK_NAV_PATHS.has(u.pathname)) {
-      applyActiveWorkWeekToParams(out, u.pathname);
+      applyActiveWorkWeekToParams(out, u.pathname, sp);
       out.set("country", resolveGlobalCountry(sp.get("country")));
     } else {
       for (const [k, v] of globals.entries()) out.set(k, v);
@@ -187,7 +191,7 @@ function NavBlock({
   pathname: string;
   sp: URLSearchParams;
   openWindow: (p: AdminWindowPayload) => void;
-  navBadges?: { pendingOrderEditRequests?: number };
+  navBadges?: { pendingOrderEditRequests?: number; pendingInvoiceCancelRequests?: number };
   onNavigate?: () => void;
 }) {
   const { openFinancialModal } = useAdminFinancialModal();
@@ -237,7 +241,9 @@ function NavBlock({
         const editReqBadge =
           item.href === "/admin/order-edit-requests" && navBadges?.pendingOrderEditRequests
             ? navBadges.pendingOrderEditRequests
-            : 0;
+            : item.href === "/admin/invoice-cancel-requests" && navBadges?.pendingInvoiceCancelRequests
+              ? navBadges.pendingInvoiceCancelRequests
+              : 0;
         const disablePrefetch = item.href === "/admin" || item.href === "/admin/";
         return (
           <Link
@@ -268,7 +274,7 @@ export function AdminSidebar({
   navBadges,
 }: {
   sections: NavSectionDef[];
-  navBadges?: { pendingOrderEditRequests?: number };
+  navBadges?: { pendingOrderEditRequests?: number; pendingInvoiceCancelRequests?: number };
 }) {
   const pathname = usePathname();
   const sp = useHydratedSearchParams();

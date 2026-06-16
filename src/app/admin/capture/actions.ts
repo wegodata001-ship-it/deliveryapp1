@@ -7,6 +7,8 @@ import { OS } from "@/lib/order-status-slugs";
 import { revalidatePath, revalidateTag } from "next/cache";
 import { revalidateAllKpiCaches } from "@/lib/kpi-cache-revalidate";
 import { recordActivityAudit } from "@/lib/activity-audit";
+import { getCustomerInternalBalanceUsd } from "@/lib/customer-open-debt";
+import { executeOrderCancellation } from "@/lib/order-cancellation";
 import {
   getCurrentUser,
   isAdminUser,
@@ -107,6 +109,13 @@ import {
   clearExpiredOrderEditUnlockForOrder,
   markApprovedEditRequestUsedAndClearUnlock,
 } from "@/app/admin/order-edit-requests/actions";
+import { ensureOrderEditRequestTablesOnce } from "@/lib/order-edit-request-bootstrap";
+import {
+  computeOrderEditDiff,
+  snapshotFromUpdateForm,
+  snapshotFromWorkPanel,
+  type OrderEditSnapshot,
+} from "@/lib/order-edit-snapshot";
 import { perfError, withPerfTimer } from "@/lib/perf-log";
 import {
   ensureIntakeLocationTable,
@@ -1961,11 +1970,16 @@ export type OrderWorkPanelPayload = {
   existingPaymentsUsdSum: string;
   /** סה״כ USD של ההזמנה (לווידוא תשלומים) */
   orderTotalUsd: string;
-  /** נעילת עריכה להזמנה בהושלמה — עובד צריך אישור מנהל */
+  /** נעילת עריכה — עובדים שולחים בקשת עדכון במקום שמירה ישירה */
   editGate: {
     employeeEditBlocked: boolean;
     hasPendingEditRequest: boolean;
     pendingEditRequestOwnedByMe: boolean;
+    /** האם שמירה דורשת אישור מנהל (עובדים בלבד) */
+    requiresApprovalOnSave: boolean;
+    /** סטטוס בקשת העדכון האחרונה להצגת badge */
+    latestUpdateRequestStatus: OrderEditRequestStatus | null;
+    latestUpdateRequestOwnedByMe: boolean;
     unlockExpiresAtIso: string | null;
     viewerIsAdmin: boolean;
   };
@@ -2067,6 +2081,11 @@ export async function getOrderForWorkPanelAction(orderId: string): Promise<Order
       where: { orderId: order.id, status: OrderEditRequestStatus.PENDING },
       select: { requestedByUserId: true },
     });
+    const latestReq = await prisma.orderEditRequest.findFirst({
+      where: { orderId: order.id },
+      orderBy: { createdAt: "desc" },
+      select: { status: true, requestedByUserId: true },
+    });
 
     const viewerIsAdmin = isAdminUser(me);
     const unlockUntil = gateRow?.editUnlockedUntil ?? null;
@@ -2075,12 +2094,6 @@ export async function getOrderForWorkPanelAction(orderId: string): Promise<Order
       unlockUntil != null &&
       unlockUntil.getTime() > Date.now();
     const unlockExpiresAtIso = unlockForMe ? unlockUntil.toISOString() : null;
-
-    const canEdit = canUserEditCompletedOrder(me, {
-      status: gateRow?.status ?? order.status,
-      editUnlockedForUserId: gateRow?.editUnlockedForUserId ?? null,
-      editUnlockedUntil: gateRow?.editUnlockedUntil ?? null,
-    });
 
     return {
       id: order.id,
@@ -2112,9 +2125,12 @@ export async function getOrderForWorkPanelAction(orderId: string): Promise<Order
       orderTotalUsd: orderTotalUsdVal.toFixed(4),
       sourceCountry: coerceOrderCountryForForm(order.sourceCountry) || null,
       editGate: {
-        employeeEditBlocked: !viewerIsAdmin && !canEdit,
+        employeeEditBlocked: false,
         hasPendingEditRequest: !!pendingReq,
         pendingEditRequestOwnedByMe: pendingReq?.requestedByUserId === me.id,
+        requiresApprovalOnSave: !viewerIsAdmin,
+        latestUpdateRequestStatus: latestReq?.status ?? null,
+        latestUpdateRequestOwnedByMe: latestReq?.requestedByUserId === me.id,
         unlockExpiresAtIso,
         viewerIsAdmin,
       },
@@ -2188,6 +2204,9 @@ export async function updateOrderListStatusAction(
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["edit_orders"])) {
     return { ok: false, error: "אין הרשאה" };
+  }
+  if (!isAdminUser(me)) {
+    return { ok: false, error: "עדכון הזמנה דורש אישור מנהל. פתחו את ההזמנה ושלחו בקשת עדכון." };
   }
   const id = orderId.trim();
   if (!id) return { ok: false, error: "חסר מזהה הזמנה" };
@@ -2268,6 +2287,25 @@ export async function updateOrderListStatusAction(
    * מעבר משינוי "משיכה מהחוב" לכל סטטוס אחר — מאפסים את
    * debtWithdrawalUsd כדי שיתרת הלקוח לא תיוותר עם קיזוז שגוי.
    */
+  if (status === OS.CANCELLED) {
+    if (exists.status === OS.CANCELLED) {
+      return { ok: false, error: "ההזמנה כבר מבוטלת" };
+    }
+    if (!exists.customerId) {
+      return { ok: false, error: "אי אפשר לבטל — להזמנה אין לקוח משויך" };
+    }
+    await executeOrderCancellation({
+      orderId: id,
+      actorUserId: me.id,
+      actorFullName: me.fullName,
+      directByAdmin: true,
+    });
+    invalidateOrdersListDataCache();
+    revalidatePath("/admin");
+    revalidatePath(`/admin/orders/${id}`);
+    return { ok: true };
+  }
+
   const shouldClearDebtWithdrawal =
     exists.status === OS.DEBT_WITHDRAWAL &&
     status !== OS.DEBT_WITHDRAWAL &&
@@ -2395,6 +2433,32 @@ export async function updateOrderListStatusActionForApi(
     return { ok: true, debtWithdrawalUsd: dw.debtWithdrawalUsd };
   }
 
+  if (status === OS.CANCELLED) {
+    if (exists.status === OS.CANCELLED) {
+      return { ok: false, error: "ההזמנה כבר מבוטלת" };
+    }
+    if (!exists.customerId) {
+      return { ok: false, error: "אי אפשר לבטל — להזמנה אין לקוח משויך" };
+    }
+    const cancelT0 = performance.now();
+    await executeOrderCancellation({
+      orderId: id,
+      actorUserId: me.id,
+      actorFullName: me.fullName,
+      directByAdmin: true,
+    });
+    updateOrderMs = Math.round(performance.now() - cancelT0);
+    logOrderStatusUpdatePerf({
+      AUTH_MS: perf?.AUTH_MS ?? 0,
+      FIND_ORDER_MS: findOrderMs,
+      UPDATE_ORDER_MS: updateOrderMs,
+      RECALC_BALANCES_MS: recalcBalancesMs,
+      REFRESH_DATA_MS: refreshDataMs,
+      TOTAL_MS: Math.round(performance.now() - startedAt) + (perf?.AUTH_MS ?? 0),
+    });
+    return { ok: true };
+  }
+
   const shouldClearDebtWithdrawal =
     exists.status === OS.DEBT_WITHDRAWAL && status !== OS.DEBT_WITHDRAWAL && exists.debtWithdrawalUsd != null;
 
@@ -2424,6 +2488,9 @@ export async function updateOrderListPaymentMethodAction(
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["edit_orders"])) {
     return { ok: false, error: "אין הרשאה" };
+  }
+  if (!isAdminUser(me)) {
+    return { ok: false, error: "עדכון הזמנה דורש אישור מנהל. פתחו את ההזמנה ושלחו בקשת עדכון." };
   }
   const id = orderId.trim();
   if (!id) return { ok: false, error: "חסר מזהה הזמנה" };
@@ -2459,6 +2526,9 @@ export async function updateOrderListPaymentMethodActionForApi(
   const me = actor;
   if (!userHasAnyPermission(me, ["edit_orders"])) {
     return { ok: false, error: "אין הרשאה" };
+  }
+  if (!isAdminUser(me)) {
+    return { ok: false, error: "עדכון הזמנה דורש אישור מנהל. פתחו את ההזמנה ושלחו בקשת עדכון." };
   }
   const id = orderId.trim();
   if (!id) return { ok: false, error: "חסר מזהה הזמנה" };
@@ -2501,6 +2571,9 @@ export async function updateOrderListPaymentLocationAction(
   if (!userHasAnyPermission(me, ["edit_orders"])) {
     return { ok: false, error: "אין הרשאה" };
   }
+  if (!isAdminUser(me)) {
+    return { ok: false, error: "עדכון הזמנה דורש אישור מנהל. פתחו את ההזמנה ושלחו בקשת עדכון." };
+  }
   const id = orderId.trim();
   if (!id) return { ok: false, error: "חסר מזהה הזמנה" };
 
@@ -2509,11 +2582,8 @@ export async function updateOrderListPaymentLocationAction(
     select: { id: true, status: true, editUnlockedForUserId: true, editUnlockedUntil: true },
   });
   if (!existing) return { ok: false, error: "הזמנה לא נמצאה" };
-  if (!canUserEditCompletedOrder(me, existing)) {
-    return { ok: false, error: "הזמנה במצב ״מוכן״ או ״מבוטל״ נעולה — שינוי דורש אישור מנהל." };
-  }
 
-  const trimmedLoc = locationId?.trim() || null;
+  const trimmedLoc = (locationId ?? "").trim() || null;
   if (trimmedLoc) {
     const exists = await prisma.intakeLocation.findFirst({
       where: { id: trimmedLoc },
@@ -2556,8 +2626,10 @@ export async function updateOrderWorkPanelAction(form: {
   sourceCountry?: OrderCountryCode | string | null;
   draftNameAr?: string | null;
   draftNameEn?: string | null;
-} & CaptureOrderFormExtras): Promise<CaptureState> {
-  return updateOrderWorkPanelActionInner(form, null);
+} & CaptureOrderFormExtras,
+  applyOptions?: { orderEditRequestId?: string },
+): Promise<CaptureState> {
+  return updateOrderWorkPanelActionInner(form, null, null, applyOptions);
 }
 
 export async function updateOrderWorkPanelActionForApi(
@@ -2572,6 +2644,7 @@ async function updateOrderWorkPanelActionInner(
   form: Parameters<typeof updateOrderWorkPanelAction>[0],
   apiSession: SessionPayload | null,
   preAuthenticated?: AppUser | null,
+  options?: { dryRun?: boolean; orderEditRequestId?: string },
 ): Promise<CaptureState> {
   const perf = new CaptureSavePerf();
   const cacheT0 = Date.now();
@@ -2590,6 +2663,15 @@ async function updateOrderWorkPanelActionInner(
     capturePerfTimeEnd("capture.validation");
     perf.validateInputMs = Date.now() - validationT0;
     return { ok: false, error: "אין הרשאה" };
+  }
+
+  if (!options?.dryRun && !isAdminUser(me)) {
+    capturePerfTimeEnd("capture.validation");
+    perf.validateInputMs = Date.now() - validationT0;
+    return {
+      ok: false,
+      error: "עדכון הזמנה דורש אישור מנהל. שלחו בקשת עדכון עם סיבת השינוי.",
+    };
   }
 
   if (!form.customerId?.trim()) {
@@ -2774,6 +2856,16 @@ async function updateOrderWorkPanelActionInner(
   }
   const sourceCountryUpdate = requestedCode;
 
+  const transitioningToCancel = status === OS.CANCELLED && existing.status !== OS.CANCELLED;
+  let balanceBeforeCancel: Prisma.Decimal | undefined;
+  if (transitioningToCancel) {
+    balanceBeforeCancel = await getCustomerInternalBalanceUsd(customer.id);
+  }
+
+  if (options?.dryRun) {
+    return { ok: true, orderNumber: existing.orderNumber ?? "" };
+  }
+
   capturePerfTimeStart("capture.insertOrder");
   await capturePerfTimed("capture.insertOrderRow", () =>
     prisma.$transaction(async (tx) => {
@@ -2873,12 +2965,31 @@ async function updateOrderWorkPanelActionInner(
       .catch(() => {});
   } else if (
     isDebtWithdrawalOrderStatus(existing.status) &&
-    !isDebtWithdrawalOrderStatus(status)
+    !isDebtWithdrawalOrderStatus(status) &&
+    status !== OS.CANCELLED
   ) {
     await prisma.order.update({
       where: { id: existing.id },
       data: { debtWithdrawalUsd: null },
     });
+  }
+
+  if (transitioningToCancel && balanceBeforeCancel != null) {
+    try {
+      await executeOrderCancellation({
+        orderId: existing.id,
+        actorUserId: me.id,
+        actorFullName: me.fullName,
+        reason: form.notes?.trim() || null,
+        orderEditRequestId: options?.orderEditRequestId,
+        directByAdmin: isAdminUser(me),
+        statusAlreadyCancelled: true,
+        priorStatus: existing.status,
+        balanceBeforeInternalUsd: balanceBeforeCancel,
+      });
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : "ביטול הזמנה נכשל" };
+    }
   }
 
   const auditT0 = Date.now();
@@ -2907,4 +3018,125 @@ async function updateOrderWorkPanelActionInner(
   capturePerfTimeEnd("capture.response");
   perf.logSummary({ mode: "update", orderId: existing.id, orderNumber: existing.orderNumber });
   return out;
+}
+
+export type SubmitOrderUpdateRequestExtras = {
+  customerLabel?: string;
+  customerCode?: string | null;
+  locationName?: string | null;
+};
+
+async function notifyOrderUpdateRequestAdmins(
+  title: string,
+  body: string | null,
+  payload?: Prisma.InputJsonValue,
+) {
+  await ensureOrderEditRequestTablesOnce();
+  const admins = await prisma.user.findMany({
+    where: { role: "ADMIN", isActive: true },
+    select: { id: true },
+  });
+  for (const admin of admins) {
+    await prisma.userNotification.create({
+      data: {
+        userId: admin.id,
+        title,
+        body,
+        kind: "ORDER_UPDATE_REQUEST",
+        ...(payload !== undefined ? { payload } : {}),
+      },
+    });
+  }
+}
+
+/** שליחת בקשת עדכון הזמנה — עובדים בלבד; ההזמנה לא משתנה עד אישור מנהל */
+export async function submitOrderUpdateRequestAction(
+  form: Parameters<typeof updateOrderWorkPanelAction>[0],
+  requestReason: string,
+  displayExtras?: SubmitOrderUpdateRequestExtras,
+): Promise<{ ok: true; requestId: string } | { ok: false; error: string }> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["edit_orders"])) return { ok: false, error: "אין הרשאה" };
+  if (isAdminUser(me)) return { ok: false, error: "מנהלים יכולים לעדכן ישירות — לא נדרשת בקשה" };
+
+  const reason = requestReason.trim();
+  if (reason.length < 3) return { ok: false, error: "יש להזין סיבת עדכון (לפחות 3 תווים)" };
+
+  const oid = form.orderId.trim();
+  if (!oid) return { ok: false, error: "חסר מזהה הזמנה" };
+
+  await ensureOrderEditRequestTablesOnce();
+
+  const pending = await prisma.orderEditRequest.findFirst({
+    where: { orderId: oid, status: OrderEditRequestStatus.PENDING },
+    select: { id: true },
+  });
+  if (pending) return { ok: false, error: "כבר קיימת בקשת עדכון ממתינה להזמנה זו" };
+
+  const validation = await updateOrderWorkPanelActionInner(form, null, me, { dryRun: true });
+  if (!validation.ok) return { ok: false, error: validation.error };
+
+  const beforePanel = await getOrderForWorkPanelAction(oid);
+  if (!beforePanel) return { ok: false, error: "הזמנה לא נמצאה" };
+
+  const beforeSnapshot = snapshotFromWorkPanel(beforePanel);
+  const afterSnapshot = snapshotFromUpdateForm({
+    customerLabel: displayExtras?.customerLabel ?? beforePanel.customerLabel,
+    customerCode: displayExtras?.customerCode ?? beforePanel.customerCode,
+    amountUsd: form.amountUsd,
+    feeUsd: form.feeUsd,
+    commissionPercent: form.commissionPercent,
+    paymentMethod: form.paymentMethod,
+    status: form.status ?? beforePanel.status,
+    notes: form.notes,
+    sourceCountry: form.sourceCountry ?? beforePanel.sourceCountry,
+    locationName: displayExtras?.locationName ?? beforePanel.locationName,
+    orderExecutionDateYmd: form.orderExecutionDateYmd ?? beforePanel.orderExecutionDateYmd,
+    intakeDateYmd: form.intakeDateYmd ?? beforePanel.intakeDateYmd,
+    intakeTimeHm: form.intakeTimeHm ?? beforePanel.intakeTimeHm,
+    weekCode: form.weekCode ?? beforePanel.weekCode,
+  });
+
+  const diff = computeOrderEditDiff(beforeSnapshot, afterSnapshot);
+  if (diff.length === 0) return { ok: false, error: "לא זוהו שינויים — אין מה לשלוח לאישור" };
+
+  const req = await prisma.orderEditRequest.create({
+    data: {
+      orderId: oid,
+      requestedByUserId: me.id,
+      requestReason: reason,
+      status: OrderEditRequestStatus.PENDING,
+      beforeSnapshot: beforeSnapshot as unknown as Prisma.InputJsonValue,
+      afterSnapshot: afterSnapshot as unknown as Prisma.InputJsonValue,
+      proposedPayload: form as unknown as Prisma.InputJsonValue,
+    } as Prisma.OrderEditRequestUncheckedCreateInput,
+    select: { id: true },
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      userId: me.id,
+      actionType: "ORDER_UPDATE_REQUEST_CREATED",
+      entityType: "OrderEditRequest",
+      entityId: req.id,
+      metadata: {
+        orderId: oid,
+        orderNumber: beforePanel.orderNumber,
+        requestReason: reason,
+        changedFields: diff.map((d) => d.key),
+        diff: diff as unknown as Prisma.InputJsonValue,
+      } as Prisma.InputJsonValue,
+    },
+  });
+
+  const timeHe = new Date().toLocaleString("he-IL", { dateStyle: "short", timeStyle: "short" });
+  await notifyOrderUpdateRequestAdmins(
+    "בקשת עדכון הזמנה",
+    `הזמנה ${beforePanel.orderNumber} — ${me.fullName} — ${timeHe}`,
+    { orderEditRequestId: req.id, orderId: oid } as Prisma.InputJsonValue,
+  );
+
+  revalidatePath("/admin/orders");
+  revalidatePath("/admin/order-edit-requests");
+  return { ok: true, requestId: req.id };
 }

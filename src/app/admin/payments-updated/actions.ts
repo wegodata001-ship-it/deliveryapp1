@@ -1156,7 +1156,7 @@ export async function resetCustomerOutstandingBalancesAction(input: {
   }
 }
 
-/** ביטול קליטת תשלום — ללא מחיקה; מעדכן יתרת לקוח בלבד */
+/** ביטול קליטת תשלום — דורש אישור מנהל; ראה createInvoiceCancelRequestAction */
 export async function cancelPaymentAction(input: {
   paymentId: string;
   reason?: string | null;
@@ -1168,95 +1168,10 @@ export async function cancelPaymentAction(input: {
   if (!userHasAnyPermission(me, ["receive_payments"])) {
     return { ok: false, error: "אין הרשאה" };
   }
-
-  const pid = (input.paymentId || "").trim();
-  if (!pid) return { ok: false, error: "חסר מזהה תשלום" };
-
-  await ensurePaymentRecordStatusColumns();
-
-  const row = await prisma.payment.findFirst({
-    where: { id: pid, customerId: { not: null } },
-    select: {
-      id: true,
-      paymentCode: true,
-      paymentNumber: true,
-      customerId: true,
-      status: true,
-    },
-  });
-  if (!row?.customerId) return { ok: false, error: "תשלום לא נמצא" };
-  if (row.status === PAYMENT_RECORD_STATUS_CANCELLED) {
-    return { ok: false, error: "התשלום כבר בוטל" };
-  }
-
-  const reason = (input.reason ?? "").trim() || null;
-  const now = new Date();
-  const cancelWhere =
-    row.paymentNumber != null ? { paymentNumber: row.paymentNumber } : { id: row.id };
-
-  await prisma.$transaction(async (tx) => {
-    await tx.payment.updateMany({
-      where: cancelWhere,
-      data: {
-        status: PAYMENT_RECORD_STATUS_CANCELLED,
-        cancelledAt: now,
-        cancelledById: me.id,
-        cancelReason: reason,
-      },
-    });
-
-    await tx.auditLog.create({
-      data: {
-        userId: me.id,
-        actionType: "PaymentCancelled",
-        entityType: "Payment",
-        entityId: row.id,
-        oldValue: {
-          status: PAYMENT_RECORD_STATUS_ACTIVE,
-          paymentCode: row.paymentCode,
-          paymentNumber: row.paymentNumber,
-        } as Prisma.InputJsonValue,
-        newValue: {
-          status: PAYMENT_RECORD_STATUS_CANCELLED,
-          cancelledAt: now.toISOString(),
-          cancelReason: reason,
-        } as Prisma.InputJsonValue,
-        metadata: {
-          paymentId: row.id,
-          paymentNumber: row.paymentNumber,
-          customerId: row.customerId,
-          reason,
-        } as Prisma.InputJsonValue,
-      },
-    });
-  });
-
-  recordActivityAudit({
-    userId: me.id,
-    actionType: "PaymentCancelled",
-    entityType: "Payment",
-    entityId: row.id,
-    metadata: {
-      paymentId: row.id,
-      paymentNumber: row.paymentNumber,
-      customerId: row.customerId,
-      reason,
-      dateTime: now.toISOString(),
-    },
-  });
-
-  const customerBalanceUsd = await getCustomerInternalBalanceUsd(row.customerId);
-  await persistCustomerBalanceSnapshot(row.customerId, customerBalanceUsd);
-
-  revalidateAllKpiCaches();
-  revalidatePath("/admin/orders");
-  revalidatePath("/admin/balances");
-  revalidatePath("/admin/source-tables/payments");
-
+  void input;
   return {
-    ok: true,
-    customerBalanceUsd: customerBalanceUsd.toFixed(2),
-    paymentCode: row.paymentCode,
+    ok: false,
+    error: "ביטול חשבונית דורש אישור מנהל — שלחו בקשה דרך «ביטול חשבונית»",
   };
 }
 

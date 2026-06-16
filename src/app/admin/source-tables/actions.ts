@@ -550,8 +550,8 @@ export async function upsertSourceTableRowAction(input: SourceTableMutation): Pr
         select: { id: true, status: true, editUnlockedForUserId: true, editUnlockedUntil: true },
       });
       if (!orderRow) return { ok: false, error: "הזמנה לא נמצאה" };
-      if (!isAdminUser(me) && !canUserEditCompletedOrder(me, orderRow)) {
-        return { ok: false, error: "הזמנה בהושלמה נעולה — שינוי דורש אישור מנהל." };
+      if (!isAdminUser(me)) {
+        return { ok: false, error: "עדכון הזמנה דורש אישור מנהל. פתחו את ההזמנה ושלחו בקשת עדכון." };
       }
       const updated = await prisma.order.update({
         where: { id: oid },

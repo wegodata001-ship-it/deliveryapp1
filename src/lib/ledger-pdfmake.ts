@@ -36,4 +36,5 @@ export const ledgerPdfDefaultStyle = {
   fontSize: 10,
   alignment: "right" as const,
   rtl: true,
+  direction: "rtl" as const,
 };

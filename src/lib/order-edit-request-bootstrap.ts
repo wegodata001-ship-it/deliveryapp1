@@ -48,6 +48,19 @@ export async function ensureOrderEditRequestTablesOnce(): Promise<void> {
     await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "OrderEditRequest_createdAt_idx" ON "OrderEditRequest" ("createdAt")`;
 
     await prisma.$executeRaw`
+      ALTER TABLE "OrderEditRequest" ADD COLUMN IF NOT EXISTS "beforeSnapshot" JSONB
+    `;
+    await prisma.$executeRaw`
+      ALTER TABLE "OrderEditRequest" ADD COLUMN IF NOT EXISTS "afterSnapshot" JSONB
+    `;
+    await prisma.$executeRaw`
+      ALTER TABLE "OrderEditRequest" ADD COLUMN IF NOT EXISTS "proposedPayload" JSONB
+    `;
+    await prisma.$executeRaw`
+      ALTER TABLE "OrderEditRequest" ADD COLUMN IF NOT EXISTS "rejectionReason" TEXT
+    `;
+
+    await prisma.$executeRaw`
       CREATE TABLE IF NOT EXISTS "UserNotification" (
         "id" TEXT PRIMARY KEY,
         "userId" TEXT NOT NULL,

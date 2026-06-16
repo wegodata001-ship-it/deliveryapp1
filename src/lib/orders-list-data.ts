@@ -4,7 +4,6 @@ import type { OrderListRow, OrdersStatusSummary } from "@/components/admin/Order
 import type { OrdersCreatedByOption, OrdersPaymentLocationOption } from "@/components/admin/OrdersListToolbar";
 import type { AppUser } from "@/lib/admin-auth";
 import { isAdminUser, userHasAnyPermission } from "@/lib/admin-auth";
-import { hasActiveEditUnlock } from "@/lib/order-edit-lock";
 import { ORDERS_LIST_MAX_PAGE_SIZE, ORDERS_LIST_PAGE_SIZE } from "@/lib/orders-list-constants";
 import { perfEnabled, withPerfTimer } from "@/lib/perf-log";
 import { logDbEnvDiagnostics } from "@/lib/db-env-diagnostics";
@@ -286,9 +285,7 @@ export async function fetchOrdersListPageData(
 
   const intakeById = new Map(intakeLocationRows.map((l) => [l.id, l.name.trim()]));
 
-  const sensitiveIds = rows
-    .filter((r) => r.status === OS.COMPLETED || r.status === OS.CANCELLED)
-    .map((r) => r.id);
+  const pageOrderIds = rows.map((r) => r.id);
 
   let pendingEditOrderIds = new Set<string>();
   const pendingRequestedByUserId = new Map<string, string>();
@@ -297,21 +294,21 @@ export async function fetchOrdersListPageData(
     { status: OrderEditRequestStatus; requestedByUserId: string }
   >();
 
-  if (sensitiveIds.length > 0) {
-    const editTake = Math.min(sensitiveIds.length * 4, 400);
+  if (pageOrderIds.length > 0) {
+    const editTake = Math.min(pageOrderIds.length * 4, 400);
     const editRequests = await cachedTimed(
       "ordersEditRequestsStore",
       ordersEditRequestsStore,
-      `editRequests:${sensitiveIds.slice().sort().join(",")}:take=${editTake}`,
+      `editRequests:${pageOrderIds.slice().sort().join(",")}:take=${editTake}`,
       (ms) => (statsMs += ms),
       async () => {
         const [pendingRows, recentRequests] = await Promise.all([
           prisma.orderEditRequest.findMany({
-            where: { orderId: { in: sensitiveIds }, status: OrderEditRequestStatus.PENDING },
+            where: { orderId: { in: pageOrderIds }, status: OrderEditRequestStatus.PENDING },
             select: { orderId: true, requestedByUserId: true },
           }),
           prisma.orderEditRequest.findMany({
-            where: { orderId: { in: sensitiveIds } },
+            where: { orderId: { in: pageOrderIds } },
             orderBy: { createdAt: "desc" },
             select: { orderId: true, status: true, requestedByUserId: true },
             take: editTake,
@@ -453,41 +450,19 @@ export async function fetchOrdersListPageData(
 
       let editBadge: OrderListRow["editBadge"] = null;
       let pendingEditOwnedByMe = false;
-      const sensitiveForEditLock = r.status === OS.COMPLETED || r.status === OS.CANCELLED;
-      if (sensitiveForEditLock) {
-        if (pendingEditOrderIds.has(r.id)) {
-          editBadge = "pending";
-          pendingEditOwnedByMe = pendingRequestedByUserId.get(r.id) === me.id;
-        } else if (
-          hasActiveEditUnlock({
-            editUnlockedForUserId: r.editUnlockedForUserId,
-            editUnlockedUntil: r.editUnlockedUntil,
-            viewerUserId: me.id,
-          })
-        ) {
+      if (pendingEditOrderIds.has(r.id)) {
+        editBadge = "pending";
+        pendingEditOwnedByMe = pendingRequestedByUserId.get(r.id) === me.id;
+      } else {
+        const latest = latestEditRequestByOrder.get(r.id);
+        if (latest?.status === OrderEditRequestStatus.REJECTED && latest.requestedByUserId === me.id) {
+          editBadge = "rejected";
+        } else if (latest?.status === OrderEditRequestStatus.APPROVED && latest.requestedByUserId === me.id) {
           editBadge = "unlock";
-        } else {
-          const latest = latestEditRequestByOrder.get(r.id);
-          if (
-            latest?.status === OrderEditRequestStatus.REJECTED &&
-            latest.requestedByUserId === me.id
-          ) {
-            editBadge = "rejected";
-          } else if (!isAdminUser(me)) {
-            editBadge = "locked";
-          }
         }
       }
 
-      const quickStatusLocked =
-        canEditOrders &&
-        !isAdminUser(me) &&
-        sensitiveForEditLock &&
-        !hasActiveEditUnlock({
-          editUnlockedForUserId: r.editUnlockedForUserId,
-          editUnlockedUntil: r.editUnlockedUntil,
-          viewerUserId: me.id,
-        });
+      const quickStatusLocked = canEditOrders && !isAdminUser(me);
 
       const paymentLocationId = r.paymentPointId ?? r.locationId ?? null;
       const paymentLocationName =

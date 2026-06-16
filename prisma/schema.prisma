@@ -51,6 +51,16 @@ enum OrderEditRequestStatus {
   USED
 }
 
+enum ApprovalRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ApprovalRequestType {
+  INVOICE_CANCEL
+}
+
 enum PaymentMethod {
   POINT
   BANK_TRANSFER
@@ -102,6 +112,9 @@ model User {
   orderEditRequestsRequested OrderEditRequest[] @relation("OrderEditRequestRequestedBy")
   orderEditRequestsApproved  OrderEditRequest[] @relation("OrderEditRequestApprovedBy")
   orderEditRequestsRejected  OrderEditRequest[] @relation("OrderEditRequestRejectedBy")
+  approvalRequestsRequested  ApprovalRequest[]  @relation("ApprovalRequestRequestedBy")
+  approvalRequestsApproved   ApprovalRequest[]  @relation("ApprovalRequestApprovedBy")
+  approvalRequestsRejected   ApprovalRequest[]  @relation("ApprovalRequestRejectedBy")
   ordersEditUnlockedFor      Order[]            @relation("OrderEditUnlockFor")
   notifications              UserNotification[]
 }
@@ -308,6 +321,13 @@ model OrderEditRequest {
   approvedByUserId  String?
   rejectedAt        DateTime?
   rejectedByUserId  String?
+  /** ערכי הזמנה לפני השינוי המבוקש */
+  beforeSnapshot    Json?
+  /** ערכי הזמנה אחרי השינוי המבוקש (תצוגה) */
+  afterSnapshot     Json?
+  /** payload מלא ליישום בעת אישור */
+  proposedPayload   Json?
+  rejectionReason   String?                @db.Text
 
   order       Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
   requestedBy User  @relation("OrderEditRequestRequestedBy", fields: [requestedByUserId], references: [id])
@@ -334,6 +354,32 @@ model UserNotification {
 
   @@index([userId, createdAt])
   @@index([userId, readAt])
+}
+
+model ApprovalRequest {
+  id                String                @id @default(uuid())
+  type              ApprovalRequestType
+  status            ApprovalRequestStatus @default(PENDING)
+  paymentId         String
+  requestedByUserId String
+  cancelReason      String                @db.Text
+  notes             String?               @db.Text
+  createdAt         DateTime              @default(now())
+  approvedAt        DateTime?
+  approvedByUserId  String?
+  rejectedAt        DateTime?
+  rejectedByUserId  String?
+
+  payment     Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  requestedBy User    @relation("ApprovalRequestRequestedBy", fields: [requestedByUserId], references: [id])
+  approvedBy  User?   @relation("ApprovalRequestApprovedBy", fields: [approvedByUserId], references: [id])
+  rejectedBy  User?   @relation("ApprovalRequestRejectedBy", fields: [rejectedByUserId], references: [id])
+
+  @@index([paymentId])
+  @@index([status])
+  @@index([type, status])
+  @@index([requestedByUserId])
+  @@index([createdAt])
 }
 
 model Payment {
@@ -386,6 +432,7 @@ model Payment {
   createdBy   User?     @relation("PaymentCreatedBy", fields: [createdById], references: [id])
   cancelledBy User?     @relation("PaymentCancelledBy", fields: [cancelledById], references: [id])
   checks      PaymentCheck[]
+  approvalRequests ApprovalRequest[]
 
   @@index([customerId])
   @@index([orderId])
