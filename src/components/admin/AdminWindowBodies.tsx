@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
@@ -48,6 +48,10 @@ import {
   ledgerPaymentMethodDisplayLines,
   shouldShowLedgerPaymentMethodSubrows,
 } from "@/lib/ledger-payment-detail";
+import {
+  prepareLedgerRowsForDisplay,
+  type CustomerLedgerQuickFilter,
+} from "@/lib/customer-ledger-display";
 import { LedgerPaymentExpandButton } from "@/components/admin/LedgerPaymentExpandButton";
 
 function displayCustomerCode(s: CustomerCardSnapshot): string {
@@ -180,6 +184,7 @@ export function CustomerCardWindowBody({
   const [ledgerGateToast, setLedgerGateToast] = useState<string | null>(null);
   const [exportBusy, setExportBusy] = useState<"pdf" | "excel" | null>(null);
   const [expandedLedgerPayments, setExpandedLedgerPayments] = useState<Set<string>>(() => new Set());
+  const [ledgerQuickFilter, setLedgerQuickFilter] = useState<CustomerLedgerQuickFilter>("all");
   const [fromYmd, setFromYmd] = useState(ledgerFromYmd?.trim() ?? "");
   const [toYmd, setToYmd] = useState(ledgerToYmd?.trim() ?? "");
   const [form, setForm] = useState(() => (initialSnap ? formFromSnap(initialSnap) : {
@@ -437,6 +442,11 @@ export function CustomerCardWindowBody({
 
   const balanceNum = ledger ? parseBalanceAmountString(ledger.balanceUsd) : 0;
   const balanceSummaryView = formatCustomerBalanceDisplay(balanceNum, "USD");
+
+  const displayLedgerRows = useMemo(
+    () => (ledger ? prepareLedgerRowsForDisplay(ledger.rows, ledgerQuickFilter) : []),
+    [ledger, ledgerQuickFilter],
+  );
 
   const exportMeta: CustomerLedgerExportMeta | null = snap
     ? {
@@ -734,6 +744,32 @@ export function CustomerCardWindowBody({
         {activeTab === "ledger" ? (
           <section className="adm-cust-tab-panel">
             {ledgerFilters}
+            <div className="adm-cust-ledger-quick-filter" role="group" aria-label="סינון תנועות">
+              <button
+                type="button"
+                className={`adm-btn adm-btn--xs ${ledgerQuickFilter === "all" ? "adm-btn--primary" : "adm-btn--ghost"}`}
+                aria-pressed={ledgerQuickFilter === "all"}
+                onClick={() => setLedgerQuickFilter("all")}
+              >
+                הכל
+              </button>
+              <button
+                type="button"
+                className={`adm-btn adm-btn--xs ${ledgerQuickFilter === "payments" ? "adm-btn--primary" : "adm-btn--ghost"}`}
+                aria-pressed={ledgerQuickFilter === "payments"}
+                onClick={() => setLedgerQuickFilter("payments")}
+              >
+                תשלומים
+              </button>
+              <button
+                type="button"
+                className={`adm-btn adm-btn--xs ${ledgerQuickFilter === "orders" ? "adm-btn--primary" : "adm-btn--ghost"}`}
+                aria-pressed={ledgerQuickFilter === "orders"}
+                onClick={() => setLedgerQuickFilter("orders")}
+              >
+                הזמנות
+              </button>
+            </div>
             <div className="adm-cust-card-table-scroll">
               <table className="adm-cust-card-orders-table adm-ledger-table-saas">
                 <thead>
@@ -755,8 +791,12 @@ export function CustomerCardWindowBody({
                     <tr>
                       <td colSpan={6}>אין תנועות בטווח.</td>
                     </tr>
+                  ) : displayLedgerRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={6}>אין תנועות בסינון הנוכחי.</td>
+                    </tr>
                   ) : (
-                    ledger.rows.map((r) => {
+                    displayLedgerRows.map((r) => {
                       const isCommissionClosure = !!r.isCommissionDebtClosure;
                       const clickable =
                         r.kind !== "OPENING_BALANCE" && !!(r.orderId || r.paymentId);

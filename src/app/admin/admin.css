@@ -13654,6 +13654,13 @@ select.payment-modal-inline-input {
   border-width: 2px;
 }
 
+.adm-cust-ledger-quick-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
 .adm-cust-ledger-summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
