@@ -13,12 +13,13 @@ export function isLedgerDisplayOrderRow(row: CustomerLedgerRow): boolean {
 }
 
 export function filterLedgerRowsForDisplay(
-  rows: CustomerLedgerRow[],
+  rows: CustomerLedgerRow[] | null | undefined,
   filter: CustomerLedgerQuickFilter,
 ): CustomerLedgerRow[] {
-  if (filter === "all") return rows;
-  if (filter === "payments") return rows.filter(isLedgerDisplayPaymentRow);
-  return rows.filter(isLedgerDisplayOrderRow);
+  const safe = rows ?? [];
+  if (filter === "all") return safe;
+  if (filter === "payments") return safe.filter(isLedgerDisplayPaymentRow);
+  return safe.filter(isLedgerDisplayOrderRow);
 }
 
 function compareLedgerDocumentDesc(a: string, b: string): number {
@@ -33,8 +34,8 @@ function compareLedgerDateDesc(a: string, b: string): number {
 }
 
 /** מיון תצוגה: תאריך יורד, ואז מסמך יורד (חדש למעלה) */
-export function sortLedgerRowsForDisplay(rows: CustomerLedgerRow[]): CustomerLedgerRow[] {
-  return [...rows].sort((a, b) => {
+export function sortLedgerRowsForDisplay(rows: CustomerLedgerRow[] | null | undefined): CustomerLedgerRow[] {
+  return [...(rows ?? [])].sort((a, b) => {
     const byDate = compareLedgerDateDesc(a.dateYmd, b.dateYmd);
     if (byDate !== 0) return byDate;
     return compareLedgerDocumentDesc(a.document, b.document);
@@ -42,8 +43,8 @@ export function sortLedgerRowsForDisplay(rows: CustomerLedgerRow[]): CustomerLed
 }
 
 export function prepareLedgerRowsForDisplay(
-  rows: CustomerLedgerRow[],
+  rows: CustomerLedgerRow[] | null | undefined,
   filter: CustomerLedgerQuickFilter,
 ): CustomerLedgerRow[] {
-  return sortLedgerRowsForDisplay(filterLedgerRowsForDisplay(rows, filter));
+  return sortLedgerRowsForDisplay(filterLedgerRowsForDisplay(rows ?? [], filter));
 }

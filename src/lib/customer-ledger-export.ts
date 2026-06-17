@@ -68,7 +68,7 @@ export function buildLedgerExportFilename(customerCode: string, ext: "pdf" | "xl
 }
 
 export function ledgerHasExportRows(ledger: CustomerLedgerPayload | null | undefined): boolean {
-  return !!ledger && ledger.rows.length > 0;
+  return !!ledger && (ledger.rows ?? []).length > 0;
 }
 
 function fmtUsd(s: string): string {
@@ -124,7 +124,7 @@ export function formatLedgerRunningBalance(balanceUsd: string): string {
 
 export function buildLedgerExportTableRows(ledger: CustomerLedgerPayload): LedgerExportTableRow[] {
   const out: LedgerExportTableRow[] = [];
-  for (const r of ledger.rows) {
+  for (const r of ledger.rows ?? []) {
     out.push({
       dateYmd: r.dateYmd,
       document: r.document,

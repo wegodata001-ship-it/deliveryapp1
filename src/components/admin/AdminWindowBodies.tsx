@@ -53,6 +53,8 @@ import {
   type CustomerLedgerQuickFilter,
 } from "@/lib/customer-ledger-display";
 import { LedgerPaymentExpandButton } from "@/components/admin/LedgerPaymentExpandButton";
+import { CustomerLedgerErrorBoundary } from "@/components/admin/CustomerLedgerErrorBoundary";
+import { formatLocalYmd } from "@/lib/work-week";
 
 function displayCustomerCode(s: CustomerCardSnapshot): string {
   const c = s.customerCode?.trim();
@@ -251,6 +253,9 @@ export function CustomerCardWindowBody({
       if (!cancelled) {
         setLedger(row);
         setLedgerLoading(false);
+        if (!row) {
+          console.error("[CustomerLedger] fetch returned null", { customerId, fromYmd, toYmd });
+        }
         const perf = (window as any).__WEGO_CUSTCARD_PERF;
         if (perf?.startedAt && perf.customerId === customerId.trim()) {
           const ledgerPerf = row?.perf;
@@ -281,6 +286,40 @@ export function CustomerCardWindowBody({
       cancelled = true;
     };
   }, [customerId, activeTab, fromYmd, toYmd, effectiveLedgerCountry]);
+
+  useEffect(() => {
+    if (!customerId?.trim() || activeTab !== "ledger") return;
+    const onError = (event: ErrorEvent) => {
+      if (!String(event.message ?? "").includes("CustomerLedger")) return;
+      console.error("[CustomerLedger] window error", event.error ?? event.message);
+    };
+    const onRejection = (event: PromiseRejectionEvent) => {
+      console.error("[CustomerLedger] unhandled rejection", event.reason);
+    };
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onRejection);
+    return () => {
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onRejection);
+    };
+  }, [customerId, activeTab]);
+
+  /** חייב להיות לפני כל early return — אחרת React #310 ב-production */
+  const displayLedgerRows = useMemo(
+    () => prepareLedgerRowsForDisplay(ledger?.rows ?? [], ledgerQuickFilter),
+    [ledger?.rows, ledgerQuickFilter],
+  );
+
+  useEffect(() => {
+    if (activeTab !== "ledger" || !customerId?.trim()) return;
+    console.info("[CustomerLedger] state", {
+      customerId: customerId.trim(),
+      rows: ledger?.rows?.length ?? 0,
+      displayRows: displayLedgerRows.length,
+      filter: ledgerQuickFilter,
+      loading: ledgerLoading,
+    });
+  }, [activeTab, customerId, ledger?.rows, displayLedgerRows.length, ledgerQuickFilter, ledgerLoading]);
 
   function resetFormFromSnap(row: CustomerCardSnapshot) {
     setForm(formFromSnap(row));
@@ -391,7 +430,9 @@ export function CustomerCardWindowBody({
                     </td>
                     <td dir="ltr">{r.phone || "—"}</td>
                     <td dir="ltr">{r.email || "—"}</td>
-                    <td dir="ltr">{new Date(r.createdAt).toLocaleDateString("he-IL")}</td>
+                    <td dir="ltr" suppressHydrationWarning>
+                      {r.createdAt ? formatLocalYmd(new Date(r.createdAt)) : "—"}
+                    </td>
                   </tr>
                 ))
               )}
@@ -440,21 +481,16 @@ export function CustomerCardWindowBody({
     }
   }
 
-  const balanceNum = ledger ? parseBalanceAmountString(ledger.balanceUsd) : 0;
+  const balanceNum = ledger ? parseBalanceAmountString(ledger.balanceUsd ?? "0") : 0;
   const balanceSummaryView = formatCustomerBalanceDisplay(balanceNum, "USD");
-
-  const displayLedgerRows = useMemo(
-    () => (ledger ? prepareLedgerRowsForDisplay(ledger.rows, ledgerQuickFilter) : []),
-    [ledger, ledgerQuickFilter],
-  );
 
   const exportMeta: CustomerLedgerExportMeta | null = snap
     ? {
-        displayName: snap.displayName || customerName || "",
-        customerCode: displayCustomerCode(snap),
-        phone: snap.phone,
-        email: snap.email,
-        city: snap.city,
+        displayName: snap?.displayName || customerName || "",
+        customerCode: snap ? displayCustomerCode(snap) : "—",
+        phone: snap?.phone ?? null,
+        email: snap?.email ?? null,
+        city: snap?.city ?? null,
         sourceCountry: effectiveLedgerCountry,
         fromYmd,
         toYmd,
@@ -575,7 +611,7 @@ export function CustomerCardWindowBody({
                 type: "paymentsUpdated",
                 props: {
                   customerId,
-                  customerName: snap.displayName || customerName || "",
+                  customerName: snap?.displayName || customerName || "",
                   amountUsd: balanceNum > 0.01 ? Math.abs(balanceNum).toFixed(2) : null,
                 },
               })
@@ -742,6 +778,7 @@ export function CustomerCardWindowBody({
         ) : null}
 
         {activeTab === "ledger" ? (
+          <CustomerLedgerErrorBoundary customerId={customerId}>
           <section className="adm-cust-tab-panel">
             {ledgerFilters}
             <div className="adm-cust-ledger-quick-filter" role="group" aria-label="סינון תנועות">
@@ -787,7 +824,7 @@ export function CustomerCardWindowBody({
                     <tr>
                       <td colSpan={6}>טוען…</td>
                     </tr>
-                  ) : !ledger || ledger.rows.length === 0 ? (
+                  ) : !ledger || (ledger.rows ?? []).length === 0 ? (
                     <tr>
                       <td colSpan={6}>אין תנועות בטווח.</td>
                     </tr>
@@ -796,7 +833,7 @@ export function CustomerCardWindowBody({
                       <td colSpan={6}>אין תנועות בסינון הנוכחי.</td>
                     </tr>
                   ) : (
-                    displayLedgerRows.map((r) => {
+                    (displayLedgerRows ?? []).map((r) => {
                       const isCommissionClosure = !!r.isCommissionDebtClosure;
                       const clickable =
                         r.kind !== "OPENING_BALANCE" && !!(r.orderId || r.paymentId);
@@ -943,6 +980,7 @@ export function CustomerCardWindowBody({
             </div>
             {summaryGrid}
           </section>
+          </CustomerLedgerErrorBoundary>
         ) : null}
       </div>
       <OrderEditLockGateModal

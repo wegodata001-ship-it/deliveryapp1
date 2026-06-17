@@ -13661,6 +13661,23 @@ select.payment-modal-inline-input {
   margin-bottom: 10px;
 }
 
+.adm-ledger-error-boundary__msg {
+  font-size: 13px;
+  margin: 8px 0;
+  word-break: break-word;
+}
+
+.adm-ledger-error-boundary__stack {
+  font-size: 11px;
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  margin: 8px 0;
+  padding: 8px;
+  background: #fef2f2;
+  border-radius: 6px;
+}
+
 .adm-cust-ledger-summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
