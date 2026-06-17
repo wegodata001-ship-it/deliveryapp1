@@ -251,6 +251,8 @@ model Order {
   totalIlsWithoutVat       Decimal? @db.Decimal(19, 4)
   vatAmount                Decimal? @db.Decimal(19, 4)
   notes                String?
+  /** סימון תפעולי בלבד: הזמנה מוכנה שהסתיימה בפועל (לא סטטוס, לא משפיע חישובים) */
+  isCompleted          Boolean        @default(false)
   isActive             Boolean        @default(true)
   deletedAt            DateTime?
   createdById          String?
@@ -286,6 +288,7 @@ model Order {
   @@index([intakeDateTime])
   @@index([createdAt])
   @@index([status])
+  @@index([isCompleted])
   @@index([customerId])
   @@index([paymentPointId])
   @@index([editUnlockedForUserId])

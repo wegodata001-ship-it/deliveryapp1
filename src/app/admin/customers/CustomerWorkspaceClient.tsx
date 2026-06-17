@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { UserRound } from "lucide-react";
+import { RefreshCw, UserRound } from "lucide-react";
 import {
   listCustomerWorkspaceOrdersAction,
   listCustomerWorkspacePaymentsAction,
@@ -40,6 +40,26 @@ import { computeCustomerWorkspaceStats } from "@/lib/customer-workspace-stats";
 import type { CustomerLedgerExportMeta } from "@/lib/customer-ledger-export";
 
 const CUSTOMERS_LIMIT = 40;
+type BalanceFilter = "all" | "debt" | "credit" | "balanced";
+
+function moneyNum(value: string): number {
+  const n = Number(String(value ?? "").replace(/[$,\s]/g, ""));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function textIncludes(value: string, needle: string): boolean {
+  const q = needle.trim().toLowerCase();
+  if (!q) return true;
+  return value.toLowerCase().includes(q);
+}
+
+function balanceMatches(balanceUsd: string, filter: BalanceFilter): boolean {
+  if (filter === "all") return true;
+  const n = moneyNum(balanceUsd);
+  if (filter === "debt") return n > 0.01;
+  if (filter === "credit") return n < -0.01;
+  return Math.abs(n) <= 0.01;
+}
 
 export function CustomerWorkspaceClient() {
   const router = useRouter();
@@ -55,6 +75,11 @@ export function CustomerWorkspaceClient() {
   const [customersHasMore, setCustomersHasMore] = useState(false);
   const [customerSearch, setCustomerSearch] = useState("");
   const [customerSearchDraft, setCustomerSearchDraft] = useState("");
+  const [customerCodeFilter, setCustomerCodeFilter] = useState("");
+  const [customerNameFilter, setCustomerNameFilter] = useState("");
+  const [weekFilter, setWeekFilter] = useState("");
+  const [orderStatusFilter, setOrderStatusFilter] = useState("all");
+  const [balanceFilter, setBalanceFilter] = useState<BalanceFilter>("all");
   const [customersLoading, setCustomersLoading] = useState(true);
 
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
@@ -88,15 +113,67 @@ export function CustomerWorkspaceClient() {
     [selectedCustomer, ledgerSourceCountry, workEnvironmentLabel],
   );
 
+  const orderStatusOptions = useMemo(() => {
+    const unique = new Map<string, string>();
+    for (const o of orders) {
+      if (!unique.has(o.status)) unique.set(o.status, o.statusLabel);
+    }
+    return [...unique.entries()].map(([value, label]) => ({ value, label }));
+  }, [orders]);
+
+  const filteredCustomers = useMemo(
+    () =>
+      customers.filter((c) => {
+        const combined = `${c.code} ${c.name} ${c.phone} ${c.country}`;
+        return (
+          textIncludes(c.code, customerCodeFilter) &&
+          textIncludes(c.name, customerNameFilter) &&
+          textIncludes(combined, customerSearchDraft) &&
+          balanceMatches(c.balanceUsd, balanceFilter)
+        );
+      }),
+    [customers, customerCodeFilter, customerNameFilter, customerSearchDraft, balanceFilter],
+  );
+
+  const filteredOrders = useMemo(
+    () =>
+      orders.filter((o) => {
+        const combined = `${o.customerCode} ${o.customerName} ${o.orderNumber} ${o.statusLabel}`;
+        return (
+          textIncludes(o.customerCode, customerCodeFilter) &&
+          textIncludes(o.customerName, customerNameFilter) &&
+          textIncludes(combined, customerSearchDraft) &&
+          textIncludes(o.orderNumber, weekFilter) &&
+          (orderStatusFilter === "all" || o.status === orderStatusFilter) &&
+          balanceMatches(o.balanceUsd, balanceFilter)
+        );
+      }),
+    [orders, customerCodeFilter, customerNameFilter, customerSearchDraft, weekFilter, orderStatusFilter, balanceFilter],
+  );
+
+  const filteredPayments = useMemo(
+    () =>
+      payments.filter((p) => {
+        const combined = `${p.customerCode} ${p.customerName} ${p.paymentCode} ${p.methodLabel} ${p.note}`;
+        return (
+          textIncludes(p.customerCode, customerCodeFilter) &&
+          textIncludes(p.customerName, customerNameFilter) &&
+          textIncludes(combined, customerSearchDraft) &&
+          textIncludes(p.paymentCode, weekFilter)
+        );
+      }),
+    [payments, customerCodeFilter, customerNameFilter, customerSearchDraft, weekFilter],
+  );
+
   const workspaceStats = useMemo(
     () =>
       computeCustomerWorkspaceStats({
-        orders,
-        payments,
-        customers,
+        orders: filteredOrders,
+        payments: filteredPayments,
+        customers: filteredCustomers,
         selectedCustomer,
       }),
-    [orders, payments, customers, selectedCustomer],
+    [filteredOrders, filteredPayments, filteredCustomers, selectedCustomer],
   );
 
   const showToast = useCallback((msg: string) => {
@@ -199,6 +276,12 @@ export function CustomerWorkspaceClient() {
     setCustomersPage(1);
   }
 
+  function refreshWorkspace() {
+    void loadCustomers(customersPage, customerSearch);
+    void loadOrdersPayments(selectedCustomerId);
+    showToast("הנתונים רועננו");
+  }
+
   const filterHint = selectedCustomer
     ? `${selectedCustomer.name} (${selectedCustomer.code})`
     : "כל הלקוחות";
@@ -210,7 +293,7 @@ export function CustomerWorkspaceClient() {
   const showPaymentsCol = layoutMode === "combined" || layoutMode === "payments";
 
   const customersPanelProps = {
-    customers,
+    customers: filteredCustomers,
     customersLoading,
     selectedCustomerId,
     customersPage,
@@ -220,10 +303,11 @@ export function CustomerWorkspaceClient() {
     onCustomerSearchSubmit: submitCustomerSearch,
     onSelectCustomer: selectCustomer,
     onLoadCustomersPage: (page: number) => void loadCustomers(page, customerSearch),
+    hideSearch: true,
   };
 
   const ordersPanelProps = {
-    orders,
+    orders: filteredOrders,
     ordersLoading,
     showCustomerCol,
     rowLimitSuffix,
@@ -232,7 +316,7 @@ export function CustomerWorkspaceClient() {
   };
 
   const paymentsPanelProps = {
-    payments,
+    payments: filteredPayments,
     paymentsLoading,
     showCustomerCol,
     rowLimitSuffix,
@@ -242,28 +326,101 @@ export function CustomerWorkspaceClient() {
 
   return (
     <div className="adm-cust-workspace adm-cust-workspace--premium">
-      <header className="adm-cust-workspace__hero">
-        <div className="adm-cust-workspace__hero-main">
-          <h1 className="adm-cust-workspace__h1">
+      <header className="adm-cust-workspace__compact-head" dir="rtl">
+        <div className="adm-cust-workspace__filter-row">
+          <h1 className="adm-cust-workspace__h1 adm-cust-workspace__h1--compact">
             <span className="adm-cust-workspace__h1-ico" aria-hidden>
               <UserRound size={18} strokeWidth={1.75} />
             </span>
             מרכז לקוחות
           </h1>
+          <label className="adm-cust-workspace__top-field">
+            <span>קוד לקוח</span>
+            <input
+              value={customerCodeFilter}
+              onChange={(e) => setCustomerCodeFilter(e.target.value)}
+              placeholder="701"
+              dir="ltr"
+            />
+          </label>
+          <label className="adm-cust-workspace__top-field">
+            <span>שם לקוח</span>
+            <input
+              value={customerNameFilter}
+              onChange={(e) => setCustomerNameFilter(e.target.value)}
+              placeholder="שם לקוח"
+            />
+          </label>
+          <label className="adm-cust-workspace__top-field">
+            <span>שבוע עבודה</span>
+            <input
+              value={weekFilter}
+              onChange={(e) => setWeekFilter(e.target.value)}
+              placeholder="TR-127 / AH-127"
+              dir="ltr"
+            />
+          </label>
+          <label className="adm-cust-workspace__top-field">
+            <span>סטטוס הזמנה</span>
+            <select value={orderStatusFilter} onChange={(e) => setOrderStatusFilter(e.target.value)}>
+              <option value="all">הכל</option>
+              {orderStatusOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="adm-cust-workspace__top-field">
+            <span>מצב יתרה</span>
+            <select value={balanceFilter} onChange={(e) => setBalanceFilter(e.target.value as BalanceFilter)}>
+              <option value="all">הכל</option>
+              <option value="debt">בחוב</option>
+              <option value="credit">בזכות</option>
+              <option value="balanced">מאוזן</option>
+            </select>
+          </label>
+          <form
+            className="adm-cust-workspace__top-field adm-cust-workspace__top-search"
+            onSubmit={(e) => {
+              e.preventDefault();
+              submitCustomerSearch();
+            }}
+          >
+            <span>חיפוש</span>
+            <input
+              value={customerSearchDraft}
+              onChange={(e) => setCustomerSearchDraft(e.target.value)}
+              placeholder="שם / קוד / טלפון / מסמך"
+            />
+          </form>
         </div>
-        <CustomerDocumentsPanel
-          compact
-          onToast={showToast}
-          customerId={selectedCustomerId}
-          exportMeta={exportMeta}
-          ledgerSourceCountry={ledgerSourceCountry}
-          orders={orders}
-          payments={payments}
-          onShowStats={() => setStatsOpen(true)}
-        />
-      </header>
 
-      <CustomerWorkspaceKpiStrip stats={workspaceStats} rowLimitSuffix={rowLimitSuffix} />
+        <div className="adm-cust-workspace__actions-row">
+          <div className="adm-cust-workspace__actions">
+            <CustomerDocumentsPanel
+              compact
+              onToast={showToast}
+              customerId={selectedCustomerId}
+              exportMeta={exportMeta}
+              ledgerSourceCountry={ledgerSourceCountry}
+              orders={filteredOrders}
+              payments={filteredPayments}
+              onShowStats={() => setStatsOpen(true)}
+            />
+            <button
+              type="button"
+              className="adm-btn adm-btn--secondary adm-cust-workspace__refresh-btn"
+              onClick={refreshWorkspace}
+              disabled={customersLoading || ordersLoading || paymentsLoading}
+            >
+              <RefreshCw size={16} strokeWidth={1.75} aria-hidden />
+              רענון
+            </button>
+          </div>
+          <CustomerWorkspaceKpiStrip stats={workspaceStats} rowLimitSuffix={rowLimitSuffix} />
+        </div>
+      </header>
 
       <CustomerWorkspaceStatsModal
         open={statsOpen}
@@ -273,7 +430,7 @@ export function CustomerWorkspaceClient() {
 
       {error ? <div className="adm-error adm-error--compact">{error}</div> : null}
 
-      <div className="adm-cust-workspace__filter-bar" dir="rtl">
+      <div className="adm-cust-workspace__filter-bar adm-cust-workspace__tabs-row" dir="rtl">
         <span className="adm-cust-workspace__filter-label">
           סינון לקוח: <strong>{filterHint}</strong>
         </span>

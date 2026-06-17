@@ -54,6 +54,7 @@ function emptyStatusCounts(): Record<WorkspaceOrderStatusKey, { count: number; a
 }
 
 export type CustomerWorkspaceComputedStats = {
+  customersCount: number;
   ordersCount: number;
   ordersBeforeCommissionUsd: number;
   ordersAfterCommissionUsd: number;
@@ -117,6 +118,7 @@ export function computeCustomerWorkspaceStats(input: {
   }
 
   return {
+    customersCount: selectedCustomer ? 1 : customers.length,
     ordersCount: orders.length,
     ordersBeforeCommissionUsd,
     ordersAfterCommissionUsd,

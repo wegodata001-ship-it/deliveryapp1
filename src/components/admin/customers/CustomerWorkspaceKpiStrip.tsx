@@ -2,7 +2,7 @@
 
 import { formatUsdDisplay } from "@/lib/money-format";
 import type { CustomerWorkspaceComputedStats } from "@/lib/customer-workspace-stats";
-import { BadgeDollarSign, CircleDot, CreditCard, DollarSign, Package, Scale } from "lucide-react";
+import { BadgeDollarSign, CreditCard, DollarSign, Scale, Users } from "lucide-react";
 
 type Props = {
   stats: CustomerWorkspaceComputedStats;
@@ -10,13 +10,13 @@ type Props = {
 };
 
 export function CustomerWorkspaceKpiStrip({ stats, rowLimitSuffix }: Props) {
-  const suffix = rowLimitSuffix?.(stats.ordersCount) ?? "";
+  void rowLimitSuffix;
 
   const items = [
     {
-      Icon: Package,
-      label: 'סה"כ הזמנות',
-      value: `${stats.ordersCount.toLocaleString("he-IL")}${suffix}`,
+      Icon: Users,
+      label: 'סה"כ לקוחות',
+      value: stats.customersCount.toLocaleString("he-IL"),
     },
     {
       Icon: DollarSign,
@@ -37,16 +37,6 @@ export function CustomerWorkspaceKpiStrip({ stats, rowLimitSuffix }: Props) {
       Icon: Scale,
       label: 'סה"כ יתרות',
       value: formatUsdDisplay(stats.balancesTotalUsd),
-    },
-    {
-      Icon: CircleDot,
-      label: "לקוחות בזכות",
-      value: stats.customersCreditCount.toLocaleString("he-IL"),
-    },
-    {
-      Icon: CircleDot,
-      label: "לקוחות בחוב",
-      value: stats.customersDebtCount.toLocaleString("he-IL"),
     },
   ];
 

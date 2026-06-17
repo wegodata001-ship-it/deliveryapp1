@@ -160,30 +160,32 @@ export function CustomerDocumentsPanel({
   return (
     <div className={compact ? "adm-cust-docs-card adm-cust-docs-card--compact" : "adm-cust-docs-card"}>
       {!compact ? <h3 className="adm-cust-docs-card__title">הפקת מסמכים</h3> : null}
-      <div className="adm-cust-docs-card__form">
-        <div className="adm-field adm-field--wide">
-          <label htmlFor="cust-docs-type">סוג מסמך</label>
-          <select
-            id="cust-docs-type"
-            value={reportType}
-            onChange={(e) => setReportType(e.target.value as CustomerModuleExportKind)}
-          >
-            {REPORT_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
+      {!compact ? (
+        <div className="adm-cust-docs-card__form">
+          <div className="adm-field adm-field--wide">
+            <label htmlFor="cust-docs-type">סוג מסמך</label>
+            <select
+              id="cust-docs-type"
+              value={reportType}
+              onChange={(e) => setReportType(e.target.value as CustomerModuleExportKind)}
+            >
+              {REPORT_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="adm-field">
+            <label htmlFor="cust-docs-from">מתאריך</label>
+            <input id="cust-docs-from" type="date" value={fromYmd} onChange={(e) => setFromYmd(e.target.value)} />
+          </div>
+          <div className="adm-field">
+            <label htmlFor="cust-docs-to">עד תאריך</label>
+            <input id="cust-docs-to" type="date" value={toYmd} onChange={(e) => setToYmd(e.target.value)} />
+          </div>
         </div>
-        <div className="adm-field">
-          <label htmlFor="cust-docs-from">מתאריך</label>
-          <input id="cust-docs-from" type="date" value={fromYmd} onChange={(e) => setFromYmd(e.target.value)} />
-        </div>
-        <div className="adm-field">
-          <label htmlFor="cust-docs-to">עד תאריך</label>
-          <input id="cust-docs-to" type="date" value={toYmd} onChange={(e) => setToYmd(e.target.value)} />
-        </div>
-      </div>
+      ) : null}
       <div className="adm-cust-docs-card__actions">
         {onShowStats ? (
           <button

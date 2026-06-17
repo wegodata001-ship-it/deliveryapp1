@@ -11,6 +11,7 @@ import { prisma } from "@/lib/prisma";
 import { formatLocalYmd, parseOrdersListDateFilterFromSearchParams } from "@/lib/work-week";
 import { buildOrdersListWhereFromSearchParams } from "@/app/admin/orders/orders-list-where";
 import { formatMoneyAmount } from "@/lib/money-format";
+import { ensureOrderCompletionColumnOnce } from "@/lib/order-completion";
 
 function fmtUsd2(n: unknown): string | null {
   if (n == null) return null;
@@ -73,6 +74,7 @@ const orderListSelect = {
   commissionUsd: true,
   totalUsd: true,
   debtWithdrawalUsd: true,
+  isCompleted: true,
   totalIlsWithVat: true,
   totalIls: true,
   editUnlockedForUserId: true,
@@ -85,6 +87,7 @@ const orderListSelect = {
 
 type OrderListDbRow = Prisma.OrderGetPayload<{ select: typeof orderListSelect }>;
 type StatusGroupRow = { status: string; _count: { _all: number }; _sum: { totalUsd: unknown } };
+type CompletedGroupRow = { isCompleted: boolean; _count: { _all: number }; _sum: { totalUsd: unknown } };
 type IntakeLocationRow = { id: string; name: string };
 type PaymentSumRow = { orderId: string | null; _sum: { amountUsd: unknown } };
 type EditRequestsPayload = {
@@ -100,6 +103,7 @@ const ordersStore = new Map<string, CacheEntry<OrderListDbRow[]>>();
 const ordersCountStore = new Map<string, CacheEntry<number>>();
 const ordersStatsStore = new Map<string, CacheEntry<IntakeLocationRow[]>>();
 const ordersKpiStore = new Map<string, CacheEntry<StatusGroupRow[]>>();
+const ordersCompletedKpiStore = new Map<string, CacheEntry<CompletedGroupRow[]>>();
 const ordersPaymentSumsStore = new Map<string, CacheEntry<PaymentSumRow[]>>();
 const ordersEditRequestsStore = new Map<string, CacheEntry<EditRequestsPayload>>();
 
@@ -108,6 +112,7 @@ export function invalidateOrdersListDataCache(): void {
   ordersCountStore.clear();
   ordersStatsStore.clear();
   ordersKpiStore.clear();
+  ordersCompletedKpiStore.clear();
   ordersPaymentSumsStore.clear();
   ordersEditRequestsStore.clear();
 }
@@ -181,6 +186,7 @@ export async function fetchOrdersListPageData(
 ): Promise<OrdersListPageData> {
   logDbEnvDiagnostics("server /admin/orders fetchOrdersListPageData");
   const perfT0 = Date.now();
+  await ensureOrderCompletionColumnOnce();
   let ordersQueryMs = 0;
   let ordersCountMs = 0;
   let statsMs = 0;
@@ -237,7 +243,7 @@ export async function fetchOrdersListPageData(
   const ordersPageCacheKey = `${fullCacheKey}|page=${page}|pageSize=${pageSize}|user=${me.id}`;
   const countCacheKey = `${fullCacheKey}|count`;
 
-  const [statusGroups, intakeLocationRows, totalCount] = await withPerfTimer(
+  const [statusGroups, completedGroups, intakeLocationRows, totalCount] = await withPerfTimer(
     "orders.page.fetchOrders",
     async () => {
       const statusP = cachedTimed("ordersKpiStore", ordersKpiStore, scopeCacheKey, (ms) => (kpiMs += ms), async () =>
@@ -254,6 +260,20 @@ export async function fetchOrdersListPageData(
         })) as StatusGroupRow[],
         { bypass: options.refreshStats },
       );
+      const completedP = cachedTimed("ordersCompletedKpiStore", ordersCompletedKpiStore, `${scopeCacheKey}|completed`, (ms) => (kpiMs += ms), async () =>
+        (await (prisma.order.groupBy as unknown as (args: {
+          by: ["isCompleted"];
+          where: Prisma.OrderWhereInput;
+          _count: { _all: true };
+          _sum: { totalUsd: true };
+        }) => Promise<CompletedGroupRow[]>)({
+          by: ["isCompleted"],
+          where: statsWhere,
+          _count: { _all: true },
+          _sum: { totalUsd: true },
+        })) as CompletedGroupRow[],
+        { bypass: options.refreshStats },
+      );
       const locationsP = cachedTimed("ordersStatsStore", ordersStatsStore, "intakeLocations:v1", (ms) => (statsMs += ms), () =>
         prisma.intakeLocation.findMany({
           select: { id: true, name: true },
@@ -265,7 +285,7 @@ export async function fetchOrdersListPageData(
       const countP = cachedTimed("ordersCountStore", ordersCountStore, countCacheKey, (ms) => (ordersCountMs += ms), () =>
         prisma.order.count({ where }),
       );
-      return Promise.all([statusP, locationsP, countP]);
+      return Promise.all([statusP, completedP, locationsP, countP]);
     },
   );
 
@@ -338,7 +358,13 @@ export async function fetchOrdersListPageData(
     completed: { count: 0, totalUsd: 0 },
     cancelled: { count: 0, totalUsd: 0 },
     debtWithdrawal: { count: 0, totalUsd: 0 },
+    operationalCompleted: { count: 0, totalUsd: 0 },
   };
+  for (const g of completedGroups) {
+    if (!g.isCompleted) continue;
+    statusSummaryAcc.operationalCompleted.count += g._count?._all ?? 0;
+    statusSummaryAcc.operationalCompleted.totalUsd += Number(g._sum?.totalUsd ?? 0);
+  }
   for (const g of statusGroups) {
     const count = g._count?._all ?? 0;
     const totalUsd = Number(g._sum?.totalUsd ?? 0);
@@ -404,6 +430,10 @@ export async function fetchOrdersListPageData(
     debtWithdrawal: {
       count: statusSummaryAcc.debtWithdrawal.count.toLocaleString("he-IL"),
       totalUsd: fmtUsdCompact(statusSummaryAcc.debtWithdrawal.totalUsd),
+    },
+    operationalCompleted: {
+      count: statusSummaryAcc.operationalCompleted.count.toLocaleString("he-IL"),
+      totalUsd: fmtUsdCompact(statusSummaryAcc.operationalCompleted.totalUsd),
     },
   };
 
@@ -481,6 +511,7 @@ export async function fetchOrdersListPageData(
         orderDateTime: fmtDateTime(r.orderDate ? new Date(r.orderDate) : null),
         weekCode: r.weekCode,
         status: (r.status as unknown as string | null | undefined)?.trim() || OS.OPEN,
+        isCompleted: Boolean(r.isCompleted),
         sourceCountry: r.sourceCountry,
         paymentType: r.paymentMethod,
         paymentLocationId,

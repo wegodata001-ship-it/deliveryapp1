@@ -4,20 +4,8 @@ import {
   ledgerPaymentMethodDisplayLines,
   shouldShowLedgerPaymentMethodSubrows,
 } from "@/lib/ledger-payment-detail";
-import {
-  atlasFmtUsd,
-  atlasHeadersRtl,
-  atlasPdfCell,
-  atlasPdfPageDefaults,
-  ATLAS_PDF_STYLES,
-  ATLAS_PDF_TABLE_LAYOUT,
-  buildAtlasPdfFooter,
-  buildAtlasPdfHeader,
-} from "@/lib/atlas-pdf-template";
-import { getLedgerPdfMake, ledgerPdfDefaultStyle } from "@/lib/ledger-pdfmake";
 import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
 import { formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate } from "@/lib/work-week";
-import type { Content, TDocumentDefinitions } from "pdfmake/interfaces";
 
 export type CustomerLedgerExportMeta = {
   displayName: string;
@@ -50,9 +38,6 @@ export type LedgerExportTableRow = {
 
 /** סדר עמודות בגיליון Excel (ימין→שמאל): תאריך | מסמך | סוג | חיוב לקוח | תשלום/זיכוי | יתרה */
 export const LEDGER_EXPORT_HEADERS = ["תאריך", "מסמך", "סוג", "חיוב לקוח ($)", "תשלום/זיכוי ($)", "יתרה ($)"] as const;
-
-const LEDGER_PDF_HEADERS_RTL = ["תאריך", "מסמך", "סוג", "חיוב", "תשלום", "יתרה"] as const;
-const PDF_RLM = "\u200F";
 
 function todayYmd(): string {
   return formatLocalYmd(new Date());
@@ -111,6 +96,39 @@ function pushPaymentDetailExportRows(out: LedgerExportTableRow[], row: CustomerL
       isPaymentDetailRow: true,
     });
   }
+  out.push({
+    dateYmd: "",
+    document: "",
+    typeLabel: "סה״כ:",
+    chargeUsd: "—",
+    paymentUsd: fmtUsd(detail.totalUsd),
+    balance: "—",
+    isOpening: false,
+    isPaymentDetailRow: true,
+  });
+}
+
+function pushOrderCancelDetailExportRows(out: LedgerExportTableRow[], row: CustomerLedgerRow): void {
+  const detail = row.orderCancelDetail;
+  if (!detail) return;
+  const push = (label: string, value: string, target: "document" | "payment" | "balance" = "document") => {
+    out.push({
+      dateYmd: "",
+      document: target === "document" ? value : "",
+      typeLabel: label,
+      chargeUsd: "—",
+      paymentUsd: target === "payment" ? value : "—",
+      balance: target === "balance" ? value : "—",
+      isOpening: false,
+      isPaymentDetailRow: true,
+    });
+  };
+  push("מספר הזמנה שבוטלה", detail.orderNumber);
+  push("סכום שבוטל", fmtUsd(detail.amountUsd), "payment");
+  push("יתרה לפני", detail.balanceBeforeUsd === "—" ? "—" : fmtUsd(detail.balanceBeforeUsd), "balance");
+  push("יתרה אחרי", detail.balanceAfterUsd === "—" ? "—" : fmtUsd(detail.balanceAfterUsd), "balance");
+  push("מאשר", detail.approvedBy);
+  if (detail.reason?.trim()) push("סיבת הביטול", detail.reason.trim());
 }
 
 
@@ -136,6 +154,9 @@ export function buildLedgerExportTableRows(ledger: CustomerLedgerPayload): Ledge
     });
     if (r.kind === "PAYMENT" && r.paymentDetail) {
       pushPaymentDetailExportRows(out, r);
+    }
+    if (r.isOrderCancelled) {
+      pushOrderCancelDetailExportRows(out, r);
     }
   }
   return out;
@@ -176,83 +197,24 @@ function triggerBlobDownload(blob: Blob, filename: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
-function ledgerRowToPdfCells(r: LedgerExportTableRow, zebra: boolean): Content[] {
-  const fillColor = r.isOpening
-    ? "#fffbeb"
-    : r.isPaymentDetailRow
-      ? "#f8fafc"
-      : zebra
-        ? "#f8fafc"
-        : undefined;
-  const bold = r.isOpening || r.isPaymentDetailSection;
-  const fontSize = r.isPaymentDetailRow ? 8.5 : undefined;
-  const chargeColor = r.chargeUsd !== "—" && !r.isPaymentDetailRow && !r.isPaymentDetailSection ? "#b91c1c" : undefined;
-  const paymentColor = r.paymentUsd !== "—" && !r.isPaymentDetailSection ? "#047857" : undefined;
-  const logical = [
-    atlasPdfCell(r.dateYmd, { ltr: true, fillColor, bold, fontSize, alignment: "right" }),
-    atlasPdfCell(r.document, { fillColor, bold, fontSize, alignment: "right" }),
-    atlasPdfCell(r.typeLabel, { fillColor, bold, fontSize, alignment: "right" }),
-    atlasPdfCell(r.chargeUsd, { ltr: true, fillColor, bold, fontSize, color: chargeColor, alignment: "right" }),
-    atlasPdfCell(r.paymentUsd, { ltr: true, fillColor, bold, fontSize, color: paymentColor, alignment: "right" }),
-    atlasPdfCell(r.balance, { ltr: true, fillColor, bold, fontSize, alignment: "right" }),
-  ];
-  return [...logical].reverse();
-}
-
 export async function exportCustomerLedgerPdf(
   meta: CustomerLedgerExportMeta,
   ledger: CustomerLedgerPayload,
 ): Promise<void> {
-  const pdfMake = await getLedgerPdfMake();
-  const tableRows = buildLedgerPdfTableRows(ledger);
-  const currentBalance = formatLedgerRunningBalance(ledger.balanceUsd);
-
-  const tableBody: Content[][] = [
-    atlasHeadersRtl([...LEDGER_PDF_HEADERS_RTL]),
-    ...tableRows.map((r, i) => ledgerRowToPdfCells(r, i % 2 === 1)),
-  ];
-
-  const docDefinition: TDocumentDefinitions = {
-    ...atlasPdfPageDefaults(),
-    defaultStyle: { ...ledgerPdfDefaultStyle, direction: "rtl" },
-    footer: (currentPage: number, pageCount: number) =>
-      ({
-        text: `${PDF_RLM}עמוד ${currentPage} מתוך ${pageCount}${PDF_RLM}`,
-        alignment: "center",
-        font: ledgerPdfDefaultStyle.font,
-        fontSize: 8,
-        color: "#64748b",
-        margin: [0, 0, 0, 10],
-        direction: "rtl",
-        rtl: true,
-      }) as Content,
-    content: [
-      ...buildAtlasPdfHeader(meta, "ledger"),
-      {
-        table: {
-          headerRows: 1,
-          widths: [72, 72, "*", 88, 88, 88],
-          body: tableBody,
-        },
-        layout: ATLAS_PDF_TABLE_LAYOUT,
-      },
-      buildAtlasPdfFooter({
-        ordersTotalUsd: atlasFmtUsd(ledger.totalChargesUsd),
-        paymentsTotalUsd: atlasFmtUsd(ledger.totalPaymentsUsd),
-        balanceUsd: currentBalance,
-      }),
-      {
-        text: `${PDF_RLM}יתרת פתיחה · אמצעי תשלום והקצאות להזמנות מוצגים בתוך שורת התשלום · יתרה מצטברת לאחר כל תנועה${PDF_RLM}`,
-        style: "atlasFooterNote",
-        margin: [0, 8, 0, 0],
-        direction: "rtl",
-        rtl: true,
-      },
-    ],
-    styles: ATLAS_PDF_STYLES,
-  } as TDocumentDefinitions;
-
-  pdfMake.createPdf(docDefinition).download(buildLedgerExportFilename(meta.customerCode, "pdf"));
+  const res = await fetch("/api/customer-ledger/pdf", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ meta, ledger }),
+  });
+  if (!res.ok) {
+    const msg = await res
+      .json()
+      .then((body) => (typeof body?.error === "string" ? body.error : null))
+      .catch(() => null);
+    throw new Error(msg ?? "ייצוא PDF נכשל");
+  }
+  const blob = await res.blob();
+  triggerBlobDownload(blob, buildLedgerExportFilename(meta.customerCode, "pdf"));
 }
 
 export async function exportCustomerLedgerExcel(

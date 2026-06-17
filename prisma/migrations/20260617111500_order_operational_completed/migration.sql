@@ -1,0 +1,4 @@
+ALTER TABLE "Order"
+ADD COLUMN IF NOT EXISTS "isCompleted" BOOLEAN NOT NULL DEFAULT FALSE;
+
+CREATE INDEX IF NOT EXISTS "Order_isCompleted_idx" ON "Order" ("isCompleted");

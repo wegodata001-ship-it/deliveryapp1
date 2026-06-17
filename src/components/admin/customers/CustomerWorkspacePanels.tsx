@@ -79,6 +79,7 @@ type CustomersPanelProps = {
   onLoadCustomersPage: (page: number) => void;
   onExpand: () => void;
   showCardShell?: boolean;
+  hideSearch?: boolean;
 };
 
 export function CustomersWorkspacePanel({
@@ -95,6 +96,7 @@ export function CustomersWorkspacePanel({
   onLoadCustomersPage,
   onExpand,
   showCardShell = true,
+  hideSearch = false,
 }: CustomersPanelProps) {
   const searchForm = (
     <form
@@ -116,12 +118,12 @@ export function CustomersWorkspacePanel({
   );
 
   const head = inModal ? (
-    <div className="adm-cust-workspace__card-head adm-cust-workspace__card-head--modal">{searchForm}</div>
+    <div className="adm-cust-workspace__card-head adm-cust-workspace__card-head--modal">{hideSearch ? null : searchForm}</div>
   ) : (
     <div className="adm-cust-workspace__card-head adm-cust-workspace__card-head--has-expand">
       <WorkspaceExpandButton label="לקוחות" onClick={onExpand} />
       <h2>לקוחות</h2>
-      {searchForm}
+      {hideSearch ? null : searchForm}
     </div>
   );
 

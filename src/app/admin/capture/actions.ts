@@ -104,6 +104,7 @@ import {
 } from "@/lib/customer-code";
 import { normalizeCustomerPlaceInput } from "@/lib/customer-place";
 import { canUserEditCompletedOrder } from "@/lib/order-edit-lock";
+import { ensureOrderCompletionColumnOnce } from "@/lib/order-completion";
 import { searchCustomersPrisma } from "@/lib/customer-search-prisma";
 import {
   clearExpiredOrderEditUnlockForOrder,
@@ -2192,7 +2193,7 @@ async function applyDebtWithdrawalForOrder(params: {
   const toWithdrawDec = new Prisma.Decimal(toWithdraw.toFixed(4));
   await prisma.order.update({
     where: { id: orderId },
-    data: { status: OS.DEBT_WITHDRAWAL, debtWithdrawalUsd: toWithdrawDec },
+    data: { status: OS.DEBT_WITHDRAWAL, debtWithdrawalUsd: toWithdrawDec, isCompleted: false },
   });
   return { ok: true, debtWithdrawalUsd: toWithdraw };
 }
@@ -2393,6 +2394,7 @@ export async function updateOrderListStatusActionForApi(
   }
 
   const updateT0 = performance.now();
+  await ensureOrderCompletionColumnOnce();
   if (status === OS.DEBT_WITHDRAWAL) {
     if (!exists.customerId) {
       return { ok: false, error: "אי אפשר למשוך מהחוב — להזמנה אין לקוח משויך" };
@@ -2447,6 +2449,7 @@ export async function updateOrderListStatusActionForApi(
       actorFullName: me.fullName,
       directByAdmin: true,
     });
+    await prisma.order.update({ where: { id }, data: { isCompleted: false } });
     updateOrderMs = Math.round(performance.now() - cancelT0);
     logOrderStatusUpdatePerf({
       AUTH_MS: perf?.AUTH_MS ?? 0,
@@ -2464,7 +2467,11 @@ export async function updateOrderListStatusActionForApi(
 
   await prisma.order.update({
     where: { id },
-    data: { status, ...(shouldClearDebtWithdrawal ? { debtWithdrawalUsd: null } : {}) },
+    data: {
+      status,
+      ...(status !== OS.COMPLETED ? { isCompleted: false } : {}),
+      ...(shouldClearDebtWithdrawal ? { debtWithdrawalUsd: null } : {}),
+    },
   });
   updateOrderMs = Math.round(performance.now() - updateT0);
 

@@ -29,7 +29,6 @@ import {
 import { INVOICE_CANCEL_LEDGER_LABEL } from "@/lib/payment-cancellation";
 import {
   ORDER_CANCELLED_AUDIT_ACTION,
-  ORDER_CANCEL_LEDGER_LABEL,
 } from "@/lib/order-cancellation";
 import { formatLocalYmd, parseLocalDate } from "@/lib/work-week";
 
@@ -58,6 +57,14 @@ export type CustomerLedgerRow = {
   isPaymentCancelled?: boolean;
   /** הזמנה שבוטלה באישור מנהל — זיכוי בכרטסת */
   isOrderCancelled?: boolean;
+  orderCancelDetail?: {
+    orderNumber: string;
+    amountUsd: string;
+    balanceBeforeUsd: string;
+    balanceAfterUsd: string;
+    approvedBy: string;
+    reason: string | null;
+  };
   /** סגירת חוב באמצעות עמלה — לא תשלום */
   isCommissionDebtClosure?: boolean;
   /** תצוגה: יתרת עמלה לאחר הפעולה */
@@ -114,6 +121,7 @@ type LedgerEvent = {
   isDebtWithdrawal?: boolean;
   isPaymentCancelled?: boolean;
   isOrderCancelled?: boolean;
+  orderCancelDetail?: CustomerLedgerRow["orderCancelDetail"];
   isCommissionDebtClosure?: boolean;
   commissionBeforeUsd?: string;
   commissionAfterUsd?: string;
@@ -347,7 +355,16 @@ export async function buildCustomerAccountLedger(params: {
 
   const orderCancelByOrderId = new Map<
     string,
-    { date: Date; orderNumber: string | null; amountUsd: Prisma.Decimal; approvedBy: string | null; logId: string }
+    {
+      date: Date;
+      orderNumber: string | null;
+      amountUsd: Prisma.Decimal;
+      balanceBeforeUsd: Prisma.Decimal | null;
+      balanceAfterUsd: Prisma.Decimal | null;
+      approvedBy: string | null;
+      reason: string | null;
+      logId: string;
+    }
   >();
   for (const log of orderCancelAuditLogs) {
     const oid = log.entityId?.trim();
@@ -360,11 +377,16 @@ export async function buildCustomerAccountLedger(params: {
     if (!amountRaw) continue;
     const amount = new Prisma.Decimal(amountRaw);
     if (amount.lte(0)) continue;
+    const balanceBeforeRaw = decStr(meta?.balanceBeforeInternalUsd);
+    const balanceBefore = balanceBeforeRaw ? new Prisma.Decimal(balanceBeforeRaw) : null;
     orderCancelByOrderId.set(oid, {
       date: log.createdAt,
       orderNumber: decStr(meta?.orderNumber),
       amountUsd: amount,
+      balanceBeforeUsd: balanceBefore,
+      balanceAfterUsd: balanceBefore ? balanceBefore.add(amount) : null,
       approvedBy: decStr(meta?.approvedBy),
+      reason: decStr(meta?.cancelReason),
       logId: log.id,
     });
     orderIdSet.add(oid);
@@ -573,9 +595,7 @@ export async function buildCustomerAccountLedger(params: {
       id: `oc-${cancel.logId}`,
       date: cancel.date,
       kind: "PAYMENT" as const,
-      typeLabel: cancel.approvedBy
-        ? `${ORDER_CANCEL_LEDGER_LABEL} — ${cancel.approvedBy}`
-        : ORDER_CANCEL_LEDGER_LABEL,
+      typeLabel: "ביטול הזמנה",
       charge: new Prisma.Decimal(0),
       payment: cancel.amountUsd,
       displayPaymentUsd: cancel.amountUsd,
@@ -583,6 +603,14 @@ export async function buildCustomerAccountLedger(params: {
       orderId: oid,
       paymentId: null,
       isOrderCancelled: true,
+      orderCancelDetail: {
+        orderNumber: cancel.orderNumber ?? orderNumberById.get(oid) ?? oid,
+        amountUsd: cancel.amountUsd.toFixed(2),
+        balanceBeforeUsd: cancel.balanceBeforeUsd?.toFixed(2) ?? "—",
+        balanceAfterUsd: cancel.balanceAfterUsd?.toFixed(2) ?? "—",
+        approvedBy: cancel.approvedBy ?? "—",
+        reason: cancel.reason,
+      },
     })),
     ...[...paymentBatches.entries()].map(([batchKey, batchRows]) => {
       const primary = batchRows.find((r) => r.paymentCode?.trim()) ?? batchRows[0];
@@ -660,6 +688,7 @@ export async function buildCustomerAccountLedger(params: {
       isDebtWithdrawal: ev.isDebtWithdrawal,
       isPaymentCancelled: ev.isPaymentCancelled,
       isOrderCancelled: ev.isOrderCancelled,
+      orderCancelDetail: ev.orderCancelDetail,
       isCommissionDebtClosure: ev.isCommissionDebtClosure,
       commissionBeforeUsd: ev.commissionBeforeUsd,
       commissionAfterUsd: ev.commissionAfterUsd,

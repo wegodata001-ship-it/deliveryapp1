@@ -97,6 +97,11 @@ export function buildOrdersListWhereFromSearchParams(
   const statusSingleRaw = readTextParam(sp, "status");
   const openOnly = readTextParam(sp, "ordersOpenOnly") === "1";
   const readyOnly = readTextParam(sp, "ordersReadyOnly") === "1";
+  const completedFilterRaw = readTextParam(sp, "ordersCompleted");
+  const completedFilter =
+    completedFilterRaw === "all" || completedFilterRaw === "done" || completedFilterRaw === "not_done"
+      ? completedFilterRaw
+      : "not_done";
   const statusSingle = openOnly
     ? OS.OPEN
     : readyOnly
@@ -134,6 +139,11 @@ export function buildOrdersListWhereFromSearchParams(
   const base: Prisma.OrderWhereInput = {
     deletedAt: null,
     orderDate: { gte: range.fromStart, lte: range.toEnd },
+    ...(completedFilter === "done"
+      ? { isCompleted: true }
+      : completedFilter === "not_done"
+        ? { isCompleted: false }
+        : {}),
     ...(statusSingle ? { status: statusSingle } : {}),
     ...(countrySingle ? { sourceCountry: countrySingle, countryCode: countryScope.workCountry } : {}),
     ...(createdById ? { createdById } : {}),

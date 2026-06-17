@@ -16,12 +16,13 @@ import {
   LayoutGrid,
   LockKeyhole,
   Plus,
+  CheckSquare,
   type LucideIcon,
 } from "lucide-react";
 import {
   updateOrderListPaymentLocationAction,
 } from "@/app/admin/capture/actions";
-import { refreshOrdersListAction } from "@/app/admin/orders/actions";
+import { refreshOrdersListAction, updateOrderCompletedFlagAction } from "@/app/admin/orders/actions";
 import { exportOrdersListPdfHtmlAction } from "@/app/admin/orders/export-orders-pdf-action";
 import { exportOrdersListExcelCsvAction } from "@/app/admin/orders/export-orders-excel-action";
 import { OrdersListExportSplitButton } from "@/components/admin/OrdersListExportSplitButton";
@@ -48,6 +49,8 @@ import {
   type OrderStatusKpiKey,
 } from "@/lib/orders-status-kpi-filter";
 
+type CompletedFilter = "not_done" | "done" | "all";
+
 export type OrderListRow = {
   id: string;
   orderNumber: string | null;
@@ -60,6 +63,7 @@ export type OrderListRow = {
   orderDateTime: string | null;
   weekCode: string | null;
   status: string;
+  isCompleted: boolean;
   sourceCountry: string | null;
   paymentType: string | null;
   /** מקום תשלום — IntakeLocation / PaymentPoint id (לסינון) */
@@ -98,6 +102,7 @@ export type OrdersStatusSummary = {
   completed: OrdersStatusBucket;
   cancelled: OrdersStatusBucket;
   debtWithdrawal: OrdersStatusBucket;
+  operationalCompleted: OrdersStatusBucket;
 };
 
 export type OrdersListPagination = {
@@ -170,6 +175,12 @@ function parseNumeric(s: string | null | undefined): number | null {
 
 function fmtUsd(n: number): string {
   return formatMoneyAmount(n);
+}
+
+function readCompletedFilterFromLocation(): CompletedFilter {
+  if (typeof window === "undefined") return "not_done";
+  const v = new URLSearchParams(window.location.search).get("ordersCompleted");
+  return v === "done" || v === "all" || v === "not_done" ? v : "not_done";
 }
 
 function formatOrdersListMoney(
@@ -268,6 +279,7 @@ export function OrdersListShell({
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [excelLoading, setExcelLoading] = useState(false);
+  const [completedFilter, setCompletedFilter] = useState<CompletedFilter>(() => readCompletedFilterFromLocation());
   const [activeStatusFilters, setActiveStatusFilters] = useState<OrderStatusKpiKey[]>([]);
   const [extraPaymentLocationOptions, setExtraPaymentLocationOptions] = useState<
     { id: string; label: string }[]
@@ -338,8 +350,15 @@ export function OrdersListShell({
           icon: Globe2,
           bucket: statusSummaryLive.debtWithdrawal,
         },
+        {
+          key: "operationalCompleted" as const,
+          tone: "adm-status-card--operational-completed",
+          title: "הושלמו",
+          icon: CheckSquare,
+          bucket: statusSummaryLive.operationalCompleted,
+        },
       ] satisfies {
-        key: OrderStatusKpiKey;
+        key: OrderStatusKpiKey | "operationalCompleted";
         tone: string;
         title: string;
         icon: LucideIcon;
@@ -376,6 +395,19 @@ export function OrdersListShell({
     });
     return raw;
   }, []);
+
+  const setCompletedFilterInUrl = useCallback(
+    (next: CompletedFilter) => {
+      setCompletedFilter(next);
+      const sp = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
+      if (next === "not_done") sp.delete("ordersCompleted");
+      else sp.set("ordersCompleted", next);
+      sp.delete("page");
+      const q = sp.toString();
+      router.replace(q ? `/admin/orders?${q}` : "/admin/orders", { scroll: false });
+    },
+    [router],
+  );
 
   const newOrder = useCallback(() => {
     if (!canCreateOrders) return;
@@ -470,7 +502,11 @@ export function OrdersListShell({
     const uiT0 = now();
     setRows((cur) => {
       prevSnapshot = cur;
-      return cur.map((r) => (r.id === orderId ? { ...r, status: next } : r));
+      return cur.map((r) =>
+        r.id === orderId
+          ? { ...r, status: next, ...(next !== OS.COMPLETED ? { isCompleted: false } : {}) }
+          : r,
+      );
     });
     statusUpdateUiMs += now() - uiT0;
     setBusyId(orderId);
@@ -534,6 +570,38 @@ export function OrdersListShell({
       });
     }
   }, []);
+
+  const onRowCompletedChange = useCallback(
+    async (orderId: string, next: boolean) => {
+      const row = rows.find((r) => r.id === orderId);
+      if (!row) return;
+      if (row.status !== OS.COMPLETED) {
+        setListErr("אפשר לסמן הושלם רק להזמנה במצב מוכן");
+        return;
+      }
+      setListErr(null);
+      const prevSnapshot = rows;
+      setRows((cur) =>
+        cur
+          .map((r) => (r.id === orderId ? { ...r, isCompleted: next } : r))
+          .filter((r) => {
+            if (completedFilter === "all") return true;
+            if (completedFilter === "done") return r.isCompleted;
+            return !r.isCompleted;
+          }),
+      );
+      setBusyId(orderId);
+      const res = await updateOrderCompletedFlagAction(orderId, next);
+      setBusyId(null);
+      if (!res.ok) {
+        setRows(prevSnapshot);
+        setListErr(res.error);
+      } else {
+        showToast(next ? "ההזמנה סומנה כהושלמה" : "סימון הושלם בוטל");
+      }
+    },
+    [rows, completedFilter, showToast],
+  );
 
   const onRowPaymentMethodChange = useCallback(
     async (orderId: string, raw: string) => {
@@ -779,6 +847,18 @@ export function OrdersListShell({
           הזמנה חדשה
         </button>
       ) : null}
+      <label className="adm-orders-completed-filter">
+        <span>הושלם</span>
+        <select
+          value={completedFilter}
+          onChange={(e) => setCompletedFilterInUrl(e.target.value as CompletedFilter)}
+          aria-label="סינון הושלם"
+        >
+          <option value="all">הכל</option>
+          <option value="not_done">לא הושלם</option>
+          <option value="done">הושלם</option>
+        </select>
+      </label>
       <button
         type="button"
         className="adm-orders-btn adm-orders-btn--refresh"
@@ -844,7 +924,8 @@ export function OrdersListShell({
               ariaLabel={`הכל — ${statusKpiAllActive ? "מציג את כל ההזמנות" : "לחיצה לאיפוס סינון סטטוס והצגת כל ההזמנות"}`}
             />
             {statusKpiCards.map((card) => {
-              const active = activeStatusFilters.includes(card.key);
+              const operational = card.key === "operationalCompleted";
+              const active = !operational && activeStatusFilters.includes(card.key);
               return (
                 <OrderStatusKpiButton
                   key={card.key}
@@ -854,8 +935,15 @@ export function OrdersListShell({
                   totalUsd={card.bucket.totalUsd}
                   active={active}
                   icon={card.icon}
-                  onClick={() => toggleStatusFilter(card.key)}
-                  ariaLabel={`${card.title} — ${active ? "סינון פעיל, לחיצה לביטול" : "לחיצה לסינון לפי סטטוס זה"}`}
+                  onClick={() => {
+                    if (operational) setCompletedFilterInUrl("done");
+                    else toggleStatusFilter(card.key);
+                  }}
+                  ariaLabel={
+                    operational
+                      ? "הושלמו — לחיצה להצגת הזמנות שסומנו הושלם"
+                      : `${card.title} — ${active ? "סינון פעיל, לחיצה לביטול" : "לחיצה לסינון לפי סטטוס זה"}`
+                  }
                 />
               );
             })}
@@ -887,6 +975,7 @@ export function OrdersListShell({
                 סכום בשקל (₪)
               </th>
               <th className="adm-ord-col-status">סטטוס הזמנה</th>
+              <th className="adm-ord-col-completed">הושלם</th>
               <th className="adm-ord-col-meta adm-ord-col-pay">צורת תשלום</th>
               <th className="adm-ord-col-meta adm-ord-col-payloc">מקום תשלום</th>
             </tr>
@@ -894,7 +983,7 @@ export function OrdersListShell({
           <tbody>
             {tableRows.length === 0 ? (
               <tr>
-                <td colSpan={11} className="adm-table-empty">
+                <td colSpan={12} className="adm-table-empty">
                   {rows.length === 0
                     ? "אין הזמנות בטווח הנבחר."
                     : "אין הזמנות בעמוד הנוכחי לפי ריבועי הסטטוס שנבחרו."}
@@ -1020,6 +1109,35 @@ export function OrdersListShell({
                         aria-label="סטטוס הזמנה"
                         onChange={(v) => void onRowStatusChange(o.id, v)}
                       />
+                    </td>
+                    <td className="adm-ord-col-completed" onClick={(e) => e.stopPropagation()}>
+                      <label
+                        className={[
+                          "adm-order-completed-check",
+                          o.isCompleted ? "adm-order-completed-check--done" : "",
+                          o.status !== OS.COMPLETED || !viewerIsAdmin ? "adm-order-completed-check--disabled" : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" ")}
+                        title={
+                          o.status !== OS.COMPLETED
+                            ? "ניתן לסמן הושלם רק כשההזמנה מוכנה"
+                            : !viewerIsAdmin
+                              ? "קריאה בלבד"
+                              : o.isCompleted
+                                ? "בטל הושלם"
+                                : "סמן הושלם"
+                        }
+                      >
+                        <input
+                          type="checkbox"
+                          checked={o.isCompleted}
+                          disabled={o.status !== OS.COMPLETED || !viewerIsAdmin || busyId === o.id}
+                          onChange={(e) => void onRowCompletedChange(o.id, e.target.checked)}
+                          aria-label="הושלם"
+                        />
+                        <span aria-hidden>{o.isCompleted ? "✅" : "⬜"}</span>
+                      </label>
                     </td>
                     <td className="adm-ord-col-meta adm-ord-col-pay" onClick={(e) => e.stopPropagation()}>
                       <select
