@@ -290,7 +290,13 @@ export function OrdersListShell({
 
   const clearStatusKpiFilters = useCallback(() => {
     setActiveStatusFilters([]);
-  }, []);
+    setCompletedFilter("all");
+    const sp = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
+    sp.set("ordersCompleted", "all");
+    sp.delete("page");
+    const q = sp.toString();
+    router.replace(q ? `/admin/orders?${q}` : "/admin/orders", { scroll: false });
+  }, [router]);
 
   const statusKpiAllActive = activeStatusFilters.length === 0;
 
