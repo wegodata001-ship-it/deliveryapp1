@@ -111,6 +111,7 @@ function autoPayStatus(expected: Prisma.Decimal, received: Prisma.Decimal): "NOT
 function paymentStatusLabel(debtUsd: Prisma.Decimal): string {
   const u = Number(debtUsd.toFixed(2));
   if (u > 0.01) return "חוב פתוח";
+  if (u < -0.01) return "יתרת זכות";
   return "מאוזן";
 }
 

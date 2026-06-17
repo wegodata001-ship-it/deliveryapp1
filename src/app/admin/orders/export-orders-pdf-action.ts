@@ -5,7 +5,7 @@ import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
 import { formatLocalYmd, parseOrdersListDateFilterFromSearchParams } from "@/lib/work-week";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
-import { orderCaptureSplitMethodLabel } from "@/lib/order-capture-payment-methods";
+import { getPaymentMethodLabelMap, paymentMethodLabelFromMap } from "@/lib/payment-method-registry";
 import { getOrderStatusLabelMap, labelFromMap } from "@/lib/order-status-registry";
 import {
   buildOrdersExportWhereFromPreset,
@@ -67,9 +67,9 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-function paymentTypeLabel(m: PaymentMethod | null | undefined): string {
+function paymentTypeLabel(m: string | null | undefined, labelMap: Record<string, string>): string {
   if (!m) return "—";
-  return orderCaptureSplitMethodLabel(m);
+  return paymentMethodLabelFromMap(labelMap, m);
 }
 
 /** מפתח קבוצה ל־PDF "לפי מקום" — זהה לעמודת "מקום תשלום" ברשימה */
@@ -478,7 +478,7 @@ export async function exportOrdersListPdfHtmlAction(
 
   const needsIntakeNames = layoutMode === "by_place";
 
-  const [intakeLocationRows, raw, statusMap] = await Promise.all([
+  const [intakeLocationRows, raw, statusMap, paymentMethodMap] = await Promise.all([
     needsIntakeNames
       ? prisma.intakeLocation.findMany({
           select: { id: true, name: true },
@@ -518,6 +518,7 @@ export async function exportOrdersListPdfHtmlAction(
       },
     }),
     getOrderStatusLabelMap(),
+    getPaymentMethodLabelMap(),
   ]);
 
   const truncated = raw.length > PDF_EXPORT_MAX_ROWS;
@@ -638,7 +639,7 @@ ${renderPaymentPlacesReportBody(paymentRows)}
       commissionUsdNum: commSigned,
       statusHe: labelFromMap(statusMap, r.status),
       status: r.status,
-      paymentType: paymentTypeLabel(r.paymentMethod),
+      paymentType: paymentTypeLabel(r.paymentMethod as string | null, paymentMethodMap),
       paymentLocation: paymentLocationName ?? "—",
       orderDate: od,
       placeKey,

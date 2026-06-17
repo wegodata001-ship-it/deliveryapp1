@@ -50,11 +50,8 @@ const EmployeesSourceTableClient = dynamic(
   { loading: () => <div className="adm-source-pro adm-source-pro--shell" aria-busy="true" /> },
 );
 
-const PaymentMethodsSourceTableClient = dynamic(
-  () =>
-    import("@/components/admin/PaymentMethodsSourceTableClient").then((m) => ({
-      default: m.PaymentMethodsSourceTableClient,
-    })),
+const PaymentMethodsManager = dynamic(
+  () => import("@/components/admin/PaymentMethodsManager").then((m) => ({ default: m.PaymentMethodsManager })),
   { loading: () => <div className="adm-source-pro adm-source-pro--shell" aria-busy="true" /> },
 );
 
@@ -83,7 +80,7 @@ export function SourceTableDetailBody({ tableId, initialSearch }: Props) {
     return <EmployeesSourceTableClient initialSearch={initialSearch} />;
   }
   if (tableId === "payment-methods") {
-    return <PaymentMethodsSourceTableClient initialSearch={initialSearch} />;
+    return <PaymentMethodsManager initialSearch={initialSearch} />;
   }
   return <SourceTableProClient tableId={tableId} initialData={null} initialSearch={initialSearch} />;
 }

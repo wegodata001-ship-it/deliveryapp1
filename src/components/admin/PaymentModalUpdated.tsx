@@ -120,6 +120,7 @@ import {
   type PaymentCancelRequestHint,
 } from "@/app/admin/invoice-cancel-requests/actions";
 import { CustomerPaymentOverageModal } from "@/components/admin/CustomerPaymentOverageModal";
+import { isSmallPaymentOverageUsd } from "@/lib/payment-small-overage";
 import {
   formatIlsDisplay,
   formatMoneyAmount,
@@ -584,21 +585,6 @@ export function PaymentModalUpdated({
       }));
   }, [commissionResetIds, orders]);
 
-  const customerBalanceResetPreview = useMemo((): CommissionResetOrderPreview[] => {
-    if (!customerBalanceResetPending) return [];
-    return orders
-      .filter((o) => {
-        const rem = Math.max(0, Number(o.totalAmountUsd) - Number(o.dbPaidUsd));
-        return rem > 0.01;
-      })
-      .map((o) => ({
-        id: o.id,
-        totalAmountUsd: Number(o.totalAmountUsd) || 0,
-        dbPaidUsd: Number(o.dbPaidUsd) || 0,
-        commissionUsd: Number(o.commissionUsd) || 0,
-      }));
-  }, [customerBalanceResetPending, orders]);
-
   const bases = useMemo(() => {
     if (commissionResetIds.length === 0) return toPaymentIntakeBases(orders);
     const reset = new Set(commissionResetIds);
@@ -623,6 +609,35 @@ export function PaymentModalUpdated({
     if (includedIds === null) return null;
     return new Set(includedIds);
   }, [includedIds]);
+
+  const customerBalanceResetPreview = useMemo((): CommissionResetOrderPreview[] => {
+    if (!customerBalanceResetPending) return [];
+    const allocated = allocatePaymentAcrossOrders(
+      toPaymentIntakeBases(orders),
+      totals.totalUsd,
+      prioritizedSet,
+    );
+    const surplus = roundMoney2(allocated.unallocatedUsd);
+    const allocPairs = [...allocated.byOrderId.entries()].filter(([, amountUsd]) => amountUsd > 0.01);
+    const lastAllocOrderId = allocPairs.length > 0 ? allocPairs[allocPairs.length - 1][0] : null;
+
+    return orders
+      .map((o) => {
+        let alloc = roundMoney2(allocated.byOrderId.get(o.id) ?? 0);
+        if (surplus > 0.01 && o.id === lastAllocOrderId) {
+          alloc = roundMoney2(alloc + surplus);
+        }
+        const paidUsd = roundMoney2(Number(o.dbPaidUsd) + alloc);
+        const totalUsd = Number(o.totalAmountUsd) || 0;
+        return {
+          id: o.id,
+          totalAmountUsd: totalUsd,
+          dbPaidUsd: paidUsd,
+          commissionUsd: Number(o.commissionUsd) || 0,
+        };
+      })
+      .filter((row) => Math.abs(row.totalAmountUsd - row.dbPaidUsd) > 0.01);
+  }, [customerBalanceResetPending, orders, totals.totalUsd, prioritizedSet]);
 
   const matched = useMemo(() => {
     return matchPaymentToOrders(bases, totals.totalUsd, prioritizedSet);
@@ -825,9 +840,9 @@ export function PaymentModalUpdated({
         ? roundMoney2(customerOpenDebtSignedUsd)
         : 0;
     const enteredPaymentAmount = roundMoney2(totals.totalUsd);
-    const remainingAfterPayment = roundMoney2(
-      Math.max(0, currentOpenBalance - enteredPaymentAmount),
-    );
+    const remainingAfterPayment = customerBalanceResetPending
+      ? 0
+      : roundMoney2(Math.max(0, currentOpenBalance - enteredPaymentAmount));
     let openCommissionUsd = 0;
     for (const o of orders) {
       const rem = Math.max(0, Number(o.totalAmountUsd) - Number(o.dbPaidUsd));
@@ -845,12 +860,33 @@ export function PaymentModalUpdated({
     };
   }, [customerBalanceResetPending, customerOpenDebtSignedUsd, totals.totalUsd, orders]);
 
+  const stickyCustomerBalanceAfterPayment = useMemo(() => {
+    const currentSignedBalance = customerBalanceResetPending ? 0 : customerOpenDebtSignedUsd;
+    const afterPayment = roundMoney2(currentSignedBalance - totals.totalUsd);
+    return {
+      amountUsd: afterPayment,
+      absAmountUsd: Math.abs(afterPayment),
+      isCredit: afterPayment < -0.01,
+      isDebt: afterPayment > 0.01,
+      label: afterPayment < -0.01 ? "יתרת זכות" : "יתרת לקוח",
+    };
+  }, [customerBalanceResetPending, customerOpenDebtSignedUsd, totals.totalUsd]);
+
   const intakeStripOpenDebtUsd = customerOpenDebtDisplayUsd;
+
+  const canApplyResetCustomerBalance = useMemo(() => {
+    if (customerBalanceResetPending) return true;
+    const currentOpenBalance =
+      customerOpenDebtSignedUsd > 0.01 ? roundMoney2(customerOpenDebtSignedUsd) : 0;
+    if (currentOpenBalance <= 0.01) return false;
+    const gap = roundMoney2(currentOpenBalance - totals.totalUsd);
+    return Math.abs(gap) > 0.01;
+  }, [customerBalanceResetPending, customerOpenDebtSignedUsd, totals.totalUsd]);
 
   const showResetBalanceBtn = useMemo(() => {
     if (!viewerIsAdmin || !customer) return false;
     return (
-      openDebtAfterPaymentPreview.remainingAfterPayment > 0.01 ||
+      canApplyResetCustomerBalance ||
       customerBalanceResetPending ||
       liveIntakeTotals.balanceUsd > 0.01 ||
       liveIntakeTotals.hasDebt
@@ -858,13 +894,11 @@ export function PaymentModalUpdated({
   }, [
     viewerIsAdmin,
     customer,
+    canApplyResetCustomerBalance,
     customerBalanceResetPending,
-    openDebtAfterPaymentPreview.remainingAfterPayment,
     liveIntakeTotals.balanceUsd,
     liveIntakeTotals.hasDebt,
   ]);
-
-  const canApplyResetCustomerBalance = openDebtAfterPaymentPreview.remainingAfterPayment > 0.01;
 
   const paymentCaptureIsDirty = useCallback(
     () => baselineSigRef.current !== "" && baselineSigRef.current !== currentDraftSig,
@@ -2101,16 +2135,18 @@ export function PaymentModalUpdated({
       return { ok: false };
     }
     if (totals.totalUsd > 0.02 && unallocatedUsd > 0.02 && !saveSurplusAsCredit && !forceCustomerCreditPayment) {
-      const prev = await previewCustomerPaymentOverageAction({
-        customerId: customer.id,
-        totalPaymentUsd: totals.totalUsd,
-        dollarRate,
-        weekCode: intakeWeekCode,
-      });
-      if (prev.ok && prev.preview.hasOverage) {
-        setOveragePreview(prev.preview);
-        setOverageModalOpen(true);
-        return { ok: false };
+      if (!isSmallPaymentOverageUsd(unallocatedUsd)) {
+        const prev = await previewCustomerPaymentOverageAction({
+          customerId: customer.id,
+          totalPaymentUsd: totals.totalUsd,
+          dollarRate,
+          weekCode: intakeWeekCode,
+        });
+        if (prev.ok && prev.preview.hasOverage) {
+          setOveragePreview(prev.preview);
+          setOverageModalOpen(true);
+          return { ok: false };
+        }
       }
     }
     setSaveBusy(true);
@@ -3316,14 +3352,29 @@ export function PaymentModalUpdated({
             </div>
 
             <div className="payment-modal-side-sticky payment-summary-stack payment-summary-stack--v2">
-              <div className="payment-upd-sticky-total payment-upd-sticky-total--basis-led" aria-live="polite">
+              <div
+                className={[
+                  "payment-upd-sticky-total",
+                  "payment-upd-sticky-total--basis-led",
+                  stickyCustomerBalanceAfterPayment.isCredit
+                    ? "payment-upd-sticky-total--credit"
+                    : stickyCustomerBalanceAfterPayment.isDebt
+                      ? "payment-upd-sticky-total--debt"
+                      : "payment-upd-sticky-total--zero",
+                ].join(" ")}
+                aria-live="polite"
+              >
                 <div className="payment-upd-sticky-total-amounts">
                   <AnimatedMoneyValue
                     className="payment-upd-sticky-total-usd money-amount"
                     dir="ltr"
-                    value={fmtUsdDisplay(totals.totalUsd)}
+                    value={fmtUsdDisplay(stickyCustomerBalanceAfterPayment.absAmountUsd)}
                   />
-                  <div className="payment-upd-sticky-total-lbl">סה״כ לתשלום</div>
+                  <div className="payment-upd-sticky-total-lbl">{stickyCustomerBalanceAfterPayment.label}</div>
+                  <div className="payment-upd-sticky-total-doc" dir="rtl">
+                    <span>סה״כ מסמך:</span>
+                    <strong dir="ltr">{fmtUsdDisplay(totals.totalUsd)}</strong>
+                  </div>
                   {stickyIlsEntered > 0.005 ? (
                     <AnimatedMoneyValue
                       className="payment-upd-sticky-total-ils money-amount payment-upd-sticky-total-ils--hint"

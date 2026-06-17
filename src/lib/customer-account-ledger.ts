@@ -30,6 +30,7 @@ import { INVOICE_CANCEL_LEDGER_LABEL } from "@/lib/payment-cancellation";
 import {
   ORDER_CANCELLED_AUDIT_ACTION,
 } from "@/lib/order-cancellation";
+import { parseOrderUpdateLedgerDetail, type OrderUpdateLedgerDetail } from "@/lib/order-update-audit";
 import { formatLocalYmd, parseLocalDate } from "@/lib/work-week";
 
 export type CustomerLedgerRowKind =
@@ -65,6 +66,9 @@ export type CustomerLedgerRow = {
     approvedBy: string;
     reason: string | null;
   };
+  /** עדכון הזמנה מאושר — שורת audit (ללא השפעה על יתרה) */
+  isOrderUpdated?: boolean;
+  orderUpdateDetail?: OrderUpdateLedgerDetail;
   /** סגירת חוב באמצעות עמלה — לא תשלום */
   isCommissionDebtClosure?: boolean;
   /** תצוגה: יתרת עמלה לאחר הפעולה */
@@ -122,6 +126,8 @@ type LedgerEvent = {
   isPaymentCancelled?: boolean;
   isOrderCancelled?: boolean;
   orderCancelDetail?: CustomerLedgerRow["orderCancelDetail"];
+  isOrderUpdated?: boolean;
+  orderUpdateDetail?: OrderUpdateLedgerDetail;
   isCommissionDebtClosure?: boolean;
   commissionBeforeUsd?: string;
   commissionAfterUsd?: string;
@@ -214,8 +220,16 @@ export async function buildCustomerAccountLedger(params: {
     sourceCountry,
   });
 
-  const [preOrders, prePayments, orders, payments, closureAuditLogs, customerBulkResets, orderCancelAuditLogs] =
-    await Promise.all([
+  const [
+    preOrders,
+    prePayments,
+    orders,
+    payments,
+    closureAuditLogs,
+    customerBulkResets,
+    orderCancelAuditLogs,
+    orderUpdateAuditLogs,
+  ] = await Promise.all([
     fromFilterSet
       ? timed((ms) => (fetchOrdersMs += ms), () =>
           prisma.order.findMany({
@@ -330,6 +344,22 @@ export async function buildCustomerAccountLedger(params: {
         },
       }),
     ),
+    timed((ms) => (fetchOrdersMs += ms), () =>
+      prisma.auditLog.findMany({
+        where: {
+          actionType: "ORDER_UPDATED",
+          entityType: "Order",
+          createdAt: { gte: from, lte: to },
+        },
+        orderBy: { createdAt: "asc" },
+        select: {
+          id: true,
+          entityId: true,
+          createdAt: true,
+          metadata: true,
+        },
+      }),
+    ),
   ]);
   const sharedBalance = await sharedBalancePromise;
 
@@ -393,6 +423,38 @@ export async function buildCustomerAccountLedger(params: {
     if (!orderNumberById.has(oid)) {
       orderNumberById.set(oid, decStr(meta?.orderNumber) ?? oid);
     }
+  }
+
+  const orderUpdateEvents: LedgerEvent[] = [];
+  for (const log of orderUpdateAuditLogs) {
+    const detail = parseOrderUpdateLedgerDetail(log.metadata);
+    if (!detail) continue;
+    const meta = parseJsonRecord(log.metadata);
+    const logCustomerId = decStr(meta?.customerId);
+    if (logCustomerId && logCustomerId !== id) continue;
+    const oid = log.entityId?.trim() ?? decStr(meta?.orderId);
+    if (!oid) continue;
+    if (!logCustomerId && !orderIdSet.has(oid)) {
+      const orderRow = orders.find((o) => o.id === oid);
+      if (!orderRow) continue;
+    }
+    orderIdSet.add(oid);
+    if (!orderNumberById.has(oid)) {
+      orderNumberById.set(oid, detail.orderNumber);
+    }
+    orderUpdateEvents.push({
+      id: `ou-${log.id}`,
+      date: log.createdAt,
+      kind: "ORDER",
+      typeLabel: "עדכון הזמנה",
+      charge: new Prisma.Decimal(0),
+      payment: new Prisma.Decimal(0),
+      document: detail.orderNumber,
+      orderId: oid,
+      paymentId: null,
+      isOrderUpdated: true,
+      orderUpdateDetail: detail,
+    });
   }
 
   const primaryPaymentIds = payments
@@ -641,6 +703,7 @@ export async function buildCustomerAccountLedger(params: {
       };
     }),
     ...closureEvents,
+    ...orderUpdateEvents,
   ].sort((a, b) => a.date.getTime() - b.date.getTime() || a.id.localeCompare(b.id));
 
   const rows: CustomerLedgerRow[] = [];
@@ -665,13 +728,15 @@ export async function buildCustomerAccountLedger(params: {
   }
 
   for (const ev of events) {
-    balance = balance.add(ev.charge).sub(ev.payment);
+    if (!ev.isOrderUpdated) {
+      balance = balance.add(ev.charge).sub(ev.payment);
+    }
     if (ev.isDebtWithdrawal) {
       // charge is negative here: sum as absolute withdrawal amount
       totalWithdrawals = totalWithdrawals.add(new Prisma.Decimal(Math.abs(Number(ev.charge.toFixed(4))).toFixed(4)));
-    } else if (ev.kind === "ORDER") {
+    } else if (ev.kind === "ORDER" && !ev.isOrderUpdated) {
       totalCharges = totalCharges.add(ev.charge);
-    } else if (ev.kind === "PAYMENT" && !ev.isCommissionDebtClosure) {
+    } else if (ev.kind === "PAYMENT" && !ev.isCommissionDebtClosure && !ev.isOrderUpdated) {
       totalPayments = totalPayments.add(ev.payment);
     }
     rows.push({
@@ -689,6 +754,8 @@ export async function buildCustomerAccountLedger(params: {
       isPaymentCancelled: ev.isPaymentCancelled,
       isOrderCancelled: ev.isOrderCancelled,
       orderCancelDetail: ev.orderCancelDetail,
+      isOrderUpdated: ev.isOrderUpdated,
+      orderUpdateDetail: ev.orderUpdateDetail,
       isCommissionDebtClosure: ev.isCommissionDebtClosure,
       commissionBeforeUsd: ev.commissionBeforeUsd,
       commissionAfterUsd: ev.commissionAfterUsd,

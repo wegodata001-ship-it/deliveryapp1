@@ -1,10 +1,9 @@
 "use server";
 
-import { PaymentMethod } from "@prisma/client";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
-import { orderCaptureSplitMethodLabel } from "@/lib/order-capture-payment-methods";
+import { getPaymentMethodLabelMap, paymentMethodLabelFromMap } from "@/lib/payment-method-registry";
 import {
   buildOrdersExportWhereFromPreset,
   orderMatchesExportKpiAfterFetch,
@@ -21,9 +20,9 @@ import { getOrderStatusLabelMap, labelFromMap } from "@/lib/order-status-registr
 
 const EXPORT_MAX_ROWS = 15_000;
 
-function paymentTypeLabel(m: PaymentMethod | null | undefined): string {
+function paymentTypeLabel(m: string | null | undefined, labelMap: Record<string, string>): string {
   if (!m) return "—";
-  return orderCaptureSplitMethodLabel(m);
+  return paymentMethodLabelFromMap(labelMap, m);
 }
 
 function escapeCsv(v: string | null | undefined): string {
@@ -43,7 +42,7 @@ export async function exportOrdersListExcelCsvAction(
 
   const where = buildOrdersExportWhereFromPreset(sp, preset, kpiStatusFilters);
 
-  const [intakeLocationRows, raw, statusMap] = await Promise.all([
+  const [intakeLocationRows, raw, statusMap, paymentMethodMap] = await Promise.all([
     prisma.intakeLocation.findMany({
       select: { id: true, name: true },
       orderBy: { name: "asc" },
@@ -76,6 +75,7 @@ export async function exportOrdersListExcelCsvAction(
       },
     }),
     getOrderStatusLabelMap(),
+    getPaymentMethodLabelMap(),
   ]);
 
   let rows = raw.length > EXPORT_MAX_ROWS ? raw.slice(0, EXPORT_MAX_ROWS) : raw;
@@ -157,7 +157,7 @@ export async function exportOrdersListExcelCsvAction(
         totalUsd,
         totalIls,
         labelFromMap(statusMap, r.status),
-        paymentTypeLabel(r.paymentMethod),
+        paymentTypeLabel(r.paymentMethod as string | null, paymentMethodMap),
         paymentLocationName ?? "—",
       ]
         .map(escapeCsv)

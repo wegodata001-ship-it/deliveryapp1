@@ -6,7 +6,7 @@ import {
   liveKpiBucket,
   type LivePaymentFormKpis,
 } from "@/lib/payment-intake-live-kpi";
-import { formatIlsPlain, formatUsdPlain } from "@/lib/money-format";
+import { formatIlsDisplay, formatUsdDisplay, formatUsdPlain } from "@/lib/money-format";
 
 type Props = {
   kpis: LivePaymentFormKpis;
@@ -28,20 +28,20 @@ function totalEnteredIls(kpis: LivePaymentFormKpis): number {
 function KpiDualAmounts({ ils, usd }: { ils: number; usd: number }) {
   return (
     <div className="payment-modal-live-kpi__amounts">
-      <div className="payment-modal-live-kpi__amount-row">
-        <span className="payment-modal-live-kpi__amount-k">ש&quot;ח:</span>
+      <div className="payment-modal-live-kpi__amount-block">
+        <span className="payment-modal-live-kpi__amount-k">סה&quot;כ:</span>
         <AnimatedMoneyValue
           className="payment-modal-live-kpi__amount-v payment-modal-live-kpi__amount-v--ils"
           dir="ltr"
-          value={formatIlsPlain(ils)}
+          value={formatIlsDisplay(ils)}
         />
       </div>
-      <div className="payment-modal-live-kpi__amount-row">
-        <span className="payment-modal-live-kpi__amount-k">$:</span>
+      <div className="payment-modal-live-kpi__amount-block">
+        <span className="payment-modal-live-kpi__amount-k">המרה לדולר:</span>
         <AnimatedMoneyValue
           className="payment-modal-live-kpi__amount-v payment-modal-live-kpi__amount-v--usd"
           dir="ltr"
-          value={formatUsdPlain(usd)}
+          value={formatUsdDisplay(usd)}
         />
       </div>
     </div>

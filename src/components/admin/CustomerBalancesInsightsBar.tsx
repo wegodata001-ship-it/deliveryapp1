@@ -17,6 +17,7 @@ type StatCardVariant =
   | "open-debt"
   | "debt-customers"
   | "credit-customers"
+  | "balanced-customers"
   | "payments"
   | "before-commission"
   | "after-commission"
@@ -87,6 +88,12 @@ export function CustomerBalancesInsightsBar({ stats, rows, totalRows, totalPages
           variant="credit-customers"
           label="לקוחות בזכות"
           value={stats.withCreditCount.toLocaleString("he-IL")}
+          dir="rtl"
+        />
+        <StatCard
+          variant="balanced-customers"
+          label="לקוחות מאוזנים"
+          value={stats.noDebtCount.toLocaleString("he-IL")}
           dir="rtl"
         />
         <StatCard variant="payments" label="תשלומים" value={usd(stats.totalPaymentsUsd)} />

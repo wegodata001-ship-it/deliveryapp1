@@ -1,4 +1,4 @@
-import { planCommissionDebtClosureFromNumbers } from "@/lib/commission-debt-closure";
+import { planCommissionDebtClosureFromNumbers, planBalanceResetToZeroFromNumbers } from "@/lib/commission-debt-closure";
 import { roundMoney2, type PaymentIntakeOrderBase } from "@/lib/payment-intake";
 
 const EPS = 0.02;
@@ -28,14 +28,21 @@ export type PaymentIntakeLiveTotals = {
 function commissionUsdAfterClosurePreview(
   order: Pick<PaymentIntakeOrderBase, "id" | "amountUsd" | "commissionUsd">,
   previewById: Map<string, CommissionResetOrderPreview>,
+  useBalanceReset = false,
 ): number {
   const prev = previewById.get(order.id);
   if (!prev) return Number.isFinite(order.commissionUsd) ? order.commissionUsd : 0;
-  const plan = planCommissionDebtClosureFromNumbers({
-    commissionUsd: prev.commissionUsd,
-    totalUsd: prev.totalAmountUsd,
-    paidUsd: prev.dbPaidUsd,
-  });
+  const plan = useBalanceReset
+    ? planBalanceResetToZeroFromNumbers({
+        commissionUsd: prev.commissionUsd,
+        totalUsd: prev.totalAmountUsd,
+        paidUsd: prev.dbPaidUsd,
+      })
+    : planCommissionDebtClosureFromNumbers({
+        commissionUsd: prev.commissionUsd,
+        totalUsd: prev.totalAmountUsd,
+        paidUsd: prev.dbPaidUsd,
+      });
   return plan.afterCommissionUsd;
 }
 
@@ -59,7 +66,7 @@ export function computePaymentIntakeLiveTotals(params: {
   for (const o of params.orders) {
     chargesUsd += Number.isFinite(o.amountUsd) ? o.amountUsd : 0;
     if (balanceResetPreviewById.has(o.id)) {
-      commissionsUsd += commissionUsdAfterClosurePreview(o, balanceResetPreviewById);
+      commissionsUsd += commissionUsdAfterClosurePreview(o, balanceResetPreviewById, true);
     } else if (commissionReset.has(o.id)) {
       commissionsUsd += commissionUsdAfterClosurePreview(o, commissionPreviewById);
     } else {
@@ -72,14 +79,15 @@ export function computePaymentIntakeLiveTotals(params: {
     Math.max(0, params.customerPaymentsUsd) + Math.max(0, params.formPaymentUsd),
   );
   const balanceUsd = roundMoney2(chargesUsd + commissionsUsd - paymentsUsd);
-  const hasDebt = balanceUsd > EPS;
-  const hasCredit = balanceUsd < -EPS;
-  const balanceLabel = hasCredit ? "יתרת זכות ללקוח" : hasDebt ? "חוב פתוח" : "מאוזן";
+  const balanceResetActive = (params.customerBalanceResetPreview ?? []).length > 0;
+  const hasDebt = balanceResetActive ? false : balanceUsd > EPS;
+  const hasCredit = balanceResetActive ? false : balanceUsd < -EPS;
+  const balanceLabel = balanceResetActive ? "מאוזן" : hasCredit ? "יתרת זכות ללקוח" : hasDebt ? "חוב פתוח" : "מאוזן";
   return {
     chargesUsd,
     commissionsUsd,
     paymentsUsd,
-    balanceUsd,
+    balanceUsd: balanceResetActive ? 0 : balanceUsd,
     hasDebt,
     hasCredit,
     balanceLabel,

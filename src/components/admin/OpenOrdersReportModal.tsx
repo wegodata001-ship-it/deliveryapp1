@@ -44,8 +44,8 @@ const IN_CARE: string[] = [
 const STATUS_OPTIONS: Array<{ value: OpenOrdersModalStatusBucket; label: string }> = [
   { value: "ALL", label: "פתוח" },
   { value: "PARTIAL_PAY", label: "חלקי" },
-  { value: "IN_CARE", label: "בטיפול" },
-  { value: "COMPLETED", label: "מוכן" },
+  { value: "IN_CARE", label: "ממתין לביצוע" },
+  { value: "COMPLETED", label: "בוצע" },
   { value: "CANCELLED", label: "מבוטל" },
 ];
 

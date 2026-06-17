@@ -59,10 +59,11 @@ async function main() {
         paymentDetail: {
           paymentCode: "TR-P-00012",
           totalUsd: "600.00",
+          totalIls: null,
           methods: [
-            { method: "CASH", label: "מזומן", amountUsd: "100.00" },
-            { method: "BANK_TRANSFER", label: "העברה בנקאית", amountUsd: "200.00" },
-            { method: "CREDIT", label: "אשראי", amountUsd: "300.00" },
+            { method: "CASH", label: "מזומן", amountIls: null, amountUsd: "100.00" },
+            { method: "BANK_TRANSFER", label: "העברה בנקאית", amountIls: null, amountUsd: "200.00" },
+            { method: "CREDIT", label: "אשראי", amountIls: null, amountUsd: "300.00" },
           ],
           checks: [],
           orders: [],

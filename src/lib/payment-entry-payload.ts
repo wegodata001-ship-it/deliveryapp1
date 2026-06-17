@@ -1,4 +1,5 @@
-import type { PaymentMethod, PaymentRecordStatus } from "@prisma/client";
+import type { PaymentRecordStatus } from "@prisma/client";
+import { normalizePaymentMethodId } from "@/lib/payment-method-slugs";
 import { parsePaymentLinesFromNotes } from "@/lib/ledger-payment-detail";
 import {
   createDefaultPaymentLine,
@@ -31,20 +32,21 @@ export type PaymentEntryPayload = {
   lines: PaymentLine[];
 };
 
-function mapPrismaMethod(m: PaymentMethod | null | undefined): PaymentLineMethod {
-  if (m === "CREDIT") return "CREDIT";
-  if (m === "BANK_TRANSFER" || m === "BANK_TRANSFER_DONE") return "BANK_TRANSFER";
-  if (m === "CASH") return "CASH";
-  if (m === "CHECK") return "CHECK";
-  return "OTHER";
+function mapPrismaMethod(m: string | null | undefined): PaymentLineMethod {
+  const id = normalizePaymentMethodId(m ?? "");
+  if (id === "CREDIT") return "CREDIT";
+  if (id === "BANK_TRANSFER" || id === "BANK_TRANSFER_DONE") return "BANK_TRANSFER";
+  if (id === "CASH") return "CASH";
+  if (id === "CHECK") return "CHECK";
+  return id || "OTHER";
 }
 
 function lineFromDbRow(row: {
   amountUsd: { toString(): string } | null;
   amountIls: { toString(): string } | null;
-  usdPaymentMethod: PaymentMethod | null;
-  ilsPaymentMethod: PaymentMethod | null;
-  paymentMethod: PaymentMethod | null;
+  usdPaymentMethod: string | null;
+  ilsPaymentMethod: string | null;
+  paymentMethod: string | null;
   usdNote: string | null;
   ilsNote: string | null;
 }): PaymentLine {
@@ -71,9 +73,9 @@ function transformPaymentEntryRow(row: {
   commissionPercent: { toString(): string } | null;
   amountUsd: { toString(): string } | null;
   amountIls: { toString(): string } | null;
-  paymentMethod: PaymentMethod | null;
-  usdPaymentMethod: PaymentMethod | null;
-  ilsPaymentMethod: PaymentMethod | null;
+  paymentMethod: string | null;
+  usdPaymentMethod: string | null;
+  ilsPaymentMethod: string | null;
   usdNote: string | null;
   ilsNote: string | null;
   notes: string | null;

@@ -4,24 +4,38 @@ import { NextResponse } from "next/server";
 import type { CustomerLedgerPayload } from "@/app/admin/capture/actions";
 import { requireAuth } from "@/lib/admin-auth";
 import { buildCustomerLedgerPdfHtml } from "@/lib/customer-ledger-pdf-html";
-import type { CustomerLedgerExportMeta } from "@/lib/customer-ledger-export";
+import {
+  buildLedgerExportFilename,
+  type CustomerLedgerExportMeta,
+  type LedgerPdfMode,
+} from "@/lib/customer-ledger-export";
+import { launchPdfBrowser } from "@/lib/playwright-pdf-browser";
 
 export const runtime = "nodejs";
 
 type PdfRequestBody = {
   meta: CustomerLedgerExportMeta;
   ledger: CustomerLedgerPayload;
+  mode?: LedgerPdfMode;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+function parsePdfMode(value: unknown): LedgerPdfMode {
+  return value === "detailed" ? "detailed" : "regular";
+}
+
 function parseBody(value: unknown): PdfRequestBody | null {
   if (!isRecord(value)) return null;
   if (!isRecord(value.meta) || !isRecord(value.ledger)) return null;
   if (!Array.isArray(value.ledger.rows)) return null;
-  return value as PdfRequestBody;
+  return {
+    meta: value.meta as CustomerLedgerExportMeta,
+    ledger: value.ledger as CustomerLedgerPayload,
+    mode: parsePdfMode(value.mode),
+  };
 }
 
 async function loadHebrewFont(): Promise<string> {
@@ -30,31 +44,9 @@ async function loadHebrewFont(): Promise<string> {
   return bytes.toString("base64");
 }
 
-export async function POST(req: Request): Promise<Response> {
+async function renderLedgerPdfBytes(html: string): Promise<Uint8Array | null> {
   try {
-    await requireAuth();
-    const body = parseBody(await req.json().catch(() => null));
-    if (!body) {
-      return NextResponse.json({ ok: false, error: "Invalid ledger PDF payload" }, { status: 400 });
-    }
-
-    const fontBase64 = await loadHebrewFont();
-    const html = buildCustomerLedgerPdfHtml({
-      meta: body.meta,
-      ledger: body.ledger,
-      font: {
-        family: "Noto Sans Hebrew",
-        mimeType: "font/ttf",
-        base64: fontBase64,
-      },
-    });
-
-    const playwright = await import("playwright");
-    const browser = await playwright.chromium.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    });
-
+    const browser = await launchPdfBrowser();
     try {
       const page = await browser.newPage({ locale: "he-IL" });
       await page.setContent(html, { waitUntil: "networkidle" });
@@ -66,17 +58,60 @@ export async function POST(req: Request): Promise<Response> {
         preferCSSPageSize: true,
         margin: { top: "0", right: "0", bottom: "0", left: "0" },
       });
-
-      return new Response(new Uint8Array(pdf), {
-        headers: {
-          "Content-Type": "application/pdf",
-          "Content-Disposition": `attachment; filename="ledger.pdf"`,
-          "Cache-Control": "no-store",
-        },
-      });
+      return new Uint8Array(pdf);
     } finally {
       await browser.close().catch(() => undefined);
     }
+  } catch (error) {
+    console.warn("[customer-ledger-pdf] playwright render failed — HTML fallback", error);
+    return null;
+  }
+}
+
+export async function POST(req: Request): Promise<Response> {
+  try {
+    await requireAuth();
+
+    const body = parseBody(await req.json().catch(() => null));
+    if (!body) {
+      return NextResponse.json({ ok: false, error: "Invalid ledger PDF payload" }, { status: 400 });
+    }
+
+    const mode = body.mode ?? "regular";
+    const fontBase64 = await loadHebrewFont();
+    const html = buildCustomerLedgerPdfHtml({
+      meta: body.meta,
+      ledger: body.ledger,
+      mode,
+      font: {
+        family: "Noto Sans Hebrew",
+        mimeType: "font/ttf",
+        base64: fontBase64,
+      },
+    });
+
+    const filename = buildLedgerExportFilename(body.meta.customerCode, "pdf", mode);
+    const pdfBytes = await renderLedgerPdfBytes(html);
+
+    if (pdfBytes) {
+      return new Response(Buffer.from(pdfBytes), {
+        headers: {
+          "Content-Type": "application/pdf",
+          "Content-Disposition": `inline; filename="${filename}"`,
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+
+    const htmlFilename = filename.replace(/\.pdf$/i, ".html");
+    return new Response(html, {
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Content-Disposition": `inline; filename="${htmlFilename}"`,
+        "X-Ledger-Pdf-Fallback": "html",
+        "Cache-Control": "no-store",
+      },
+    });
   } catch (e) {
     console.error("[customer-ledger-pdf] failed", e);
     return NextResponse.json(

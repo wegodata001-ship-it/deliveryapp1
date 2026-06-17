@@ -62,7 +62,7 @@ export const SIDEBAR_SECTIONS: NavSectionDef[] = [
       },
       {
         href: "/admin/order-edit-requests",
-        label: "בקשות עריכת הזמנות",
+        label: "בקשות עריכה",
         icon: "editRequests",
         adminOnly: true,
       },

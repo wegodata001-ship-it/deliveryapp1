@@ -1,11 +1,13 @@
 "use client";
 
 import { useState } from "react";
+import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { CustomerDocumentsPanel } from "@/components/admin/customers/CustomerDocumentsPanel";
 import type { CustomerProfilePayload } from "@/lib/customers-module-types";
 import { formatFromInternalSigned } from "@/lib/customer-balance";
 import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
+import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
 
 type TabId = "orders" | "payments" | "docs";
 
@@ -24,6 +26,8 @@ type Props = { profile: CustomerProfilePayload };
 
 export function CustomerProfileClient({ profile }: Props) {
   const { openWindow } = useAdminWindows();
+  const { globalCountry } = useAdminGlobal();
+  const workCountry = workCountryFromOrderSourceCountry(globalCountry);
   const [tab, setTab] = useState<TabId>("orders");
   const [toast, setToast] = useState<string | null>(null);
 
@@ -184,6 +188,7 @@ export function CustomerProfileClient({ profile }: Props) {
             <CustomerDocumentsPanel
               onToast={showToast}
               customerId={profile.customer.id}
+              workCountry={workCountry}
               exportMeta={{
                 displayName: profile.customer.name,
                 customerCode: profile.customer.code,

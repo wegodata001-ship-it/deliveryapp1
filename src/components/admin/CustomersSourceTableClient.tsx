@@ -54,30 +54,7 @@ function balanceUi(balanceUsd: string): { cls: string; badge: string; text: stri
   return { cls: "adm-custbal adm-custbal--zero", badge: "אפס", text: "$0.00" };
 }
 
-function downloadBase64(base64: string, filename: string, mime: string) {
-  const bin = atob(base64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  const blob = new Blob([bytes], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-function openPdfHtml(base64: string) {
-  const bin = atob(base64);
-  const html = new TextDecoder("utf-8").decode(
-    Uint8Array.from(bin, (c) => c.charCodeAt(0)),
-  );
-  const w = window.open("", "_blank");
-  if (w) {
-    w.document.write(html);
-    w.document.close();
-  }
-}
+import { downloadBase64File, handleSourceTableExportResult } from "@/lib/pdf-export-client";
 
 export function CustomersSourceTableClient({ initialSearch = "" }: { initialSearch?: string }) {
   const { openWindow } = useAdminWindows();
@@ -217,11 +194,7 @@ export function CustomersSourceTableClient({ initialSearch = "" }: { initialSear
       setLoadError(res.error);
       return;
     }
-    if (kind === "pdf" && res.mime.startsWith("text/html")) {
-      openPdfHtml(res.base64);
-    } else {
-      downloadBase64(res.base64, res.filename, res.mime);
-    }
+    handleSourceTableExportResult(kind, res, setLoadError, downloadBase64File);
   }
 
   const kpis = payload?.kpis;

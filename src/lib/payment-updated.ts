@@ -4,7 +4,7 @@ export type PaymentLineCurrency = "ILS" | "USD";
 
 export type PaymentLineVatMode = "EXEMPT" | "BEFORE_VAT" | "INCLUDING_VAT";
 
-export type PaymentLineMethod = "CREDIT" | "BANK_TRANSFER" | "CASH" | "CHECK" | "OTHER";
+export type PaymentLineMethod = string;
 
 export type PaymentLineCheck = {
   id: string;

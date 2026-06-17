@@ -39,7 +39,7 @@ export async function updateOrderCompletedFlagAction(
   });
   if (!row) return { ok: false, error: "הזמנה לא נמצאה" };
   if (row.status !== OS.COMPLETED) {
-    return { ok: false, error: "אפשר לסמן הושלם רק להזמנה במצב מוכן" };
+    return { ok: false, error: "אפשר לסמן הושלם רק להזמנה בסטטוס בוצע" };
   }
   if (row.isCompleted === isCompleted) return { ok: true };
 

@@ -9,6 +9,8 @@ export type CustomersModuleListRow = {
   balanceUsd: string;
 };
 
+export type CustomersPdfScope = "current" | "all" | "debt" | "credit";
+
 export type CustomersModuleListResult = {
   rows: CustomersModuleListRow[];
   page: number;

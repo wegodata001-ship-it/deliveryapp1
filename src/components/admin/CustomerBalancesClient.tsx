@@ -48,6 +48,7 @@ import {
   balancesWeekQueryPatch,
   parseBalancesWeekFromSearchParams,
 } from "@/lib/balances-week-filter";
+import { downloadBase64File, handleSourceTableExportResult } from "@/lib/pdf-export-client";
 
 const LIMIT = 25;
 const FILTER_DEBOUNCE_MS = 350;
@@ -58,6 +59,7 @@ const BALANCE_STATUS_OPTIONS: { value: CustomerBalanceDebtFilter; label: string 
   { value: "ALL", label: "הכל" },
   { value: "OWES", label: "חוב" },
   { value: "CREDIT", label: "זכות" },
+  { value: "BALANCED", label: "מאוזן" },
 ];
 
 const SORT_LABELS: Record<CustomerBalanceSort, string> = {
@@ -169,6 +171,8 @@ export type BalancesSearchDraft = {
   orderStatus: CustomerBalanceOrderStatusFilter;
   minBalanceIls: string;
   maxBalanceIls: string;
+  /** ברירת מחדל: false — לא מציג לקוחות מאוזנים */
+  showBalanced: boolean;
 };
 
 function defaultBalancesFilters(): BalancesFiltersState {
@@ -192,6 +196,7 @@ function defaultSearchDraft(): BalancesSearchDraft {
     orderStatus: "ALL",
     minBalanceIls: "",
     maxBalanceIls: "",
+    showBalanced: false,
   };
 }
 
@@ -207,29 +212,6 @@ function parseStructuralFromSearchParams(sp: URLSearchParams): BalancesFiltersSt
     sourceCountry: country,
     sort: "balance_desc",
   };
-}
-
-function downloadBase64(base64: string, filename: string, mime: string) {
-  const bin = atob(base64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  const blob = new Blob([bytes], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-function openPdfHtml(base64: string) {
-  const bin = atob(base64);
-  const html = new TextDecoder("utf-8").decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
-  const w = window.open("", "_blank");
-  if (w) {
-    w.document.write(html);
-    w.document.close();
-  }
 }
 
 export function CustomerBalancesClient() {
@@ -353,6 +335,7 @@ export function CustomerBalancesClient() {
           orderStatus: debouncedSearch.orderStatus,
           minBalanceIls: debouncedSearch.minBalanceIls,
           maxBalanceIls: debouncedSearch.maxBalanceIls,
+          showBalanced: debouncedSearch.showBalanced || undefined,
           sort: balancesFilters.sort,
         },
       };
@@ -587,16 +570,25 @@ export function CustomerBalancesClient() {
 
   async function runExport(kind: "pdf" | "excel") {
     setExportBusy(kind);
-    const res = await exportCustomerBalancesAction(buildListQuery(1), kind);
+    const exportQuery = {
+      ...buildListQuery(1),
+      limit: Math.max(payload?.totalRows ?? 0, 10000),
+    };
+    const res = await exportCustomerBalancesAction(exportQuery, kind);
     setExportBusy(null);
     if (!res.ok) {
       setErr(res.error);
       return;
     }
-    if (kind === "pdf" && res.mime.startsWith("text/html")) {
-      openPdfHtml(res.base64);
+    if (kind === "pdf") {
+      handleSourceTableExportResult(
+        "pdf",
+        { ok: true, base64: res.base64, filename: res.filename, mime: res.mime },
+        setErr,
+        downloadBase64File,
+      );
     } else {
-      downloadBase64(res.base64, res.filename, res.mime);
+      downloadBase64File(res.base64, res.filename, res.mime);
     }
   }
 
@@ -683,6 +675,17 @@ export function CustomerBalancesClient() {
               </option>
             ))}
           </select>
+        </label>
+        <label className="adm-balances-field adm-balances-field--inline adm-balances-field--checkbox">
+          <span className="adm-balances-field-label">לקוחות מאוזנים</span>
+          <span className="adm-balances-checkbox-wrap">
+            <input
+              type="checkbox"
+              checked={searchDraft.showBalanced}
+              onChange={(e) => setSearchDraft((s) => ({ ...s, showBalanced: e.target.checked }))}
+            />
+            <span>הצג לקוחות מאוזנים (יתרה 0)</span>
+          </span>
         </label>
         <label className="adm-balances-field adm-balances-field--inline adm-balances-field--date">
           <span className="adm-balances-field-label">מתאריך</span>

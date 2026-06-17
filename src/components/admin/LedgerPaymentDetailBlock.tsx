@@ -4,11 +4,7 @@ import {
   ledgerPaymentMethodDisplayLines,
   type LedgerPaymentDetail,
 } from "@/lib/ledger-payment-detail";
-import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
-
-function fmtUsd(s: string): string {
-  return formatUsdDisplay(parseMoneyStringOrZero(s));
-}
+import { LedgerDualAmountDisplay } from "@/components/admin/LedgerDualAmountDisplay";
 
 type Props = {
   detail: LedgerPaymentDetail;
@@ -23,7 +19,8 @@ export function LedgerPaymentDetailBlock({ detail }: Props) {
           {detail.paymentCode}
         </span>
         <span className="adm-ledger-payment-detail-total" dir="ltr">
-          סה״כ: {fmtUsd(detail.totalUsd)}
+          סה״כ:{" "}
+          <LedgerDualAmountDisplay amountIls={detail.totalIls} amountUsd={detail.totalUsd} />
         </span>
       </div>
 
@@ -34,7 +31,7 @@ export function LedgerPaymentDetailBlock({ detail }: Props) {
             {methodLines.map((m, idx) => (
               <li key={`${m.label}-${idx}`}>
                 <span>↳ {m.label}:</span>
-                <span dir="ltr">{fmtUsd(m.amountUsd)}</span>
+                <LedgerDualAmountDisplay amountIls={m.amountIls} amountUsd={m.amountUsd} />
               </li>
             ))}
           </ul>
@@ -49,7 +46,7 @@ export function LedgerPaymentDetailBlock({ detail }: Props) {
           <ul className="adm-ledger-payment-detail-list adm-ledger-payment-detail-list--orders">
             {detail.orders.map((o) => (
               <li key={`${o.orderNumber}-${o.amountUsd}`} dir="ltr">
-                {o.orderNumber} → {fmtUsd(o.amountUsd)}
+                {o.orderNumber} → ${o.amountUsd}
               </li>
             ))}
           </ul>

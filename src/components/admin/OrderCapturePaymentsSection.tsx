@@ -1,8 +1,7 @@
 "use client";
 
-import { PaymentMethod } from "@prisma/client";
 import { AlertTriangle, CheckCircle2, Plus, Trash2 } from "lucide-react";
-import { ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS } from "@/lib/order-capture-payment-methods";
+import { usePaymentMethodCatalog } from "@/components/admin/PaymentMethodCatalogProvider";
 import { formatIlsDisplay, formatUsdDisplay } from "@/lib/money-format";
 import { OrderStatusSelect } from "@/components/admin/OrderStatusSelect";
 
@@ -10,7 +9,7 @@ export type OrderCapturePaymentLineCurrency = "USD" | "ILS";
 
 export type OrderCapturePaymentRow = {
   id: string;
-  paymentMethod: PaymentMethod;
+  paymentMethod: string;
   /** מטבע הסכום בשורה — USD או ₪ (המרה ל-USD בשרת לפי שער ההזמנה) */
   currency: OrderCapturePaymentLineCurrency;
   amount: string;
@@ -77,6 +76,7 @@ export function OrderCapturePaymentsSection({
   rateNisPerUsd,
   hideOrderStatus = false,
 }: Props) {
+  const { options: paymentMethodOptions } = usePaymentMethodCatalog();
   const splitHintText = "מילוי מהיר של היתרה שנותרה לתשלום.";
 
   const totalPaidAll = existingPaidUsd + formPaymentsUsd;
@@ -184,12 +184,12 @@ export function OrderCapturePaymentsSection({
                       id={`${idPrefix}-pm-${row.id}`}
                       value={row.paymentMethod}
                       disabled={disabled}
-                      onChange={(e) => onChangeRow(row.id, { paymentMethod: e.target.value as PaymentMethod })}
+                      onChange={(e) => onChangeRow(row.id, { paymentMethod: e.target.value })}
                       className="adm-pay-cell-select"
                       aria-label={`אמצעי תשלום שורה ${i + 1}`}
                     >
-                      {ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS.map((m) => (
-                        <option key={m.value} value={String(m.value)}>
+                      {paymentMethodOptions.map((m) => (
+                        <option key={m.value} value={m.value}>
                           {m.label}
                         </option>
                       ))}

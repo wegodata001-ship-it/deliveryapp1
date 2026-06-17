@@ -5,6 +5,7 @@ import {
   type OrderStatusSelectOption,
   type OrderStatusTag,
 } from "@/lib/order-status-registry";
+import { ensureOrderStatusSourceTable } from "@/lib/order-status-registry-data";
 
 export type OrderStatusCatalog = {
   statuses: OrderStatusTag[];
@@ -17,6 +18,7 @@ export type OrderStatusCatalog = {
 };
 
 export async function getOrderStatusCatalogAction(): Promise<OrderStatusCatalog> {
+  await ensureOrderStatusSourceTable();
   const data = await fetchOrderStatusCatalogData();
   return {
     ...data,

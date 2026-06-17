@@ -2,8 +2,9 @@
 
 import { useMemo } from "react";
 import { useOrderStatusCatalog } from "@/components/admin/OrderStatusCatalogProvider";
-import { statusSelectBorderStyle } from "@/lib/order-status-catalog";
-import { OS } from "@/lib/order-status-slugs";
+import { statusColorById, statusSelectBorderStyle } from "@/lib/order-status-catalog";
+import { officialStatusOptionsForValue } from "@/lib/order-status-shared";
+import { getOfficialOrderStatusDisplayLabel } from "@/constants/order-status";
 
 type Props = {
   id?: string;
@@ -15,6 +16,8 @@ type Props = {
   includeCurrentValue?: boolean;
   "aria-label"?: string;
   variant?: "default" | "table";
+  /** ברשימת הזמנות — רק 5 סטטוסים רשמיים */
+  officialOnly?: boolean;
 };
 
 export function OrderStatusSelect({
@@ -26,18 +29,21 @@ export function OrderStatusSelect({
   includeCurrentValue = true,
   "aria-label": ariaLabel = "סטטוס הזמנה",
   variant = "default",
+  officialOnly = false,
 }: Props) {
-  const { options, optionsForValue, getColorHex, loading } = useOrderStatusCatalog();
+  const { options, optionsForValue, labelById, getColorHex, loading } = useOrderStatusCatalog();
 
-  const list = useMemo(
-    () => (includeCurrentValue ? optionsForValue(value) : options),
-    [includeCurrentValue, options, optionsForValue, value],
-  );
+  const list = useMemo(() => {
+    if (officialOnly || variant === "table") {
+      return officialStatusOptionsForValue(options, labelById, includeCurrentValue ? value : undefined);
+    }
+    return includeCurrentValue ? optionsForValue(value) : options;
+  }, [officialOnly, variant, includeCurrentValue, options, optionsForValue, labelById, value]);
 
   const colorHex = getColorHex(value);
   const variantClass = variant === "table" ? "adm-order-status-select--table" : "adm-order-status-select--default";
   const displayLabel = (statusId: string, label: string): string =>
-    statusId === OS.DEBT_WITHDRAWAL ? "משיכה מחוב" : label;
+    getOfficialOrderStatusDisplayLabel(statusId) || label;
 
   return (
     <select

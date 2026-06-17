@@ -68,7 +68,7 @@ export function orderStatusDisplay(
   fallbackLabel: string,
 ): { label: string; className: string } {
   if (status === OS.COMPLETED) {
-    return { label: "מוכן", className: orderStatusBadgeClass(status) };
+    return { label: "בוצע", className: orderStatusBadgeClass(status) };
   }
   if (status === OS.CANCELLED) {
     return { label: "ביטול", className: orderStatusBadgeClass(status) };

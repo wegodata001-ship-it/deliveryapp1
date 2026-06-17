@@ -9,6 +9,8 @@ import { AdminLoadingProvider } from "@/components/admin/AdminLoadingProvider";
 import { NavigationProgress } from "@/components/admin/NavigationProgress";
 import { AdminGlobalProvider } from "@/components/admin/AdminGlobalContext";
 import { OrderStatusCatalogProvider } from "@/components/admin/OrderStatusCatalogProvider";
+import { PaymentMethodCatalogProvider } from "@/components/admin/PaymentMethodCatalogProvider";
+import { PdfPreviewProvider } from "@/components/admin/PdfPreviewProvider";
 import { useAdminToast } from "@/components/admin/AdminNavShell";
 import type { SerializedFinancial } from "@/lib/financial-settings";
 
@@ -79,7 +81,11 @@ export function AdminChrome({
   return (
     <AdminLoadingProvider>
       <AdminGlobalProvider>
-        <OrderStatusCatalogProvider>{chromeBody}</OrderStatusCatalogProvider>
+        <OrderStatusCatalogProvider>
+          <PaymentMethodCatalogProvider>
+            <PdfPreviewProvider>{chromeBody}</PdfPreviewProvider>
+          </PaymentMethodCatalogProvider>
+        </OrderStatusCatalogProvider>
       </AdminGlobalProvider>
     </AdminLoadingProvider>
   );

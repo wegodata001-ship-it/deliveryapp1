@@ -13,7 +13,7 @@ import {
   parseAhWeekNumber,
   toAhWeekCode,
 } from "@/lib/weeks/ah-week-nav";
-import { ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS } from "@/lib/order-capture-payment-methods";
+import { usePaymentMethodCatalog } from "@/components/admin/PaymentMethodCatalogProvider";
 import { ORDER_COUNTRY_CODES, orderCountryLabel, type OrderCountryCode } from "@/lib/order-countries";
 import { OS } from "@/lib/order-status-slugs";
 import { ACTIVE_WORK_WEEK_CODE } from "@/lib/active-work-week";
@@ -111,6 +111,7 @@ export function OrdersListToolbar({
   const router = useRouter();
   const searchParams = useSearchParams();
   const { options: STATUS_OPTIONS } = useOrderStatusCatalog();
+  const { options: PAYMENT_METHOD_OPTIONS } = usePaymentMethodCatalog();
   const ordersWeekFromUrl = (() => {
     const raw = searchParams.get("ordersWeek")?.trim() ?? "";
     return normalizeAhWeekCode(raw) ?? raw;
@@ -552,7 +553,7 @@ export function OrdersListToolbar({
               className="adm-orders-week-sel adm-orders-sel-arrow"
             >
               <option value="">הכל</option>
-              {ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS.map((p) => (
+              {PAYMENT_METHOD_OPTIONS.map((p) => (
                 <option key={p.value} value={p.value}>
                   {p.label}
                 </option>
@@ -667,7 +668,7 @@ export function OrdersListToolbar({
                   }
                 }}
               />
-              הזמנות מוכנות בלבד
+              הזמנות בוצע בלבד
             </span>
           </label>
         </div>

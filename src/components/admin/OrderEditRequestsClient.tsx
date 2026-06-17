@@ -172,7 +172,7 @@ export function OrderEditRequestsClient({ initialRows }: Props) {
   return (
     <div className="adm-order-edit-requests">
       <div className="adm-orders-toolbar">
-        <h1 className="adm-page-title adm-page-title--sm">בקשות עדכון הזמנות</h1>
+        <h1 className="adm-page-title adm-page-title--sm">בקשות עריכה</h1>
       </div>
 
       {listErr ? (

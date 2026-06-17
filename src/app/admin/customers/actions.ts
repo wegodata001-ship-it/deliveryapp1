@@ -8,6 +8,7 @@ import {
   listCustomerWorkspaceOrders,
   listCustomerWorkspacePayments,
   listCustomersModule,
+  listCustomersModuleForExport,
   type CustomerProfilePayload,
   type CustomersModuleListResult,
   type CustomerWorkspaceOrderRow,
@@ -20,6 +21,8 @@ import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
 import { formatLocalYmd } from "@/lib/work-week";
 import { isDebtWithdrawalOrderStatus } from "@/lib/debt-withdrawal-order";
 import { paymentRecordUsdEquivalent } from "@/lib/payment-usd-equivalent";
+import type { CustomersPdfScope } from "@/lib/customers-module-types";
+import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
 
 function canViewCustomersModule(me: Awaited<ReturnType<typeof requireAuth>>): boolean {
   return userHasAnyPermission(me, ["view_customers", "view_customer_card", "view_reports"]);
@@ -221,5 +224,108 @@ export async function getCustomerProfileAction(
     orders: orderRows,
     payments: paymentRows,
   };
+}
+
+export type CustomersModuleExportKind = "excel" | "pdf";
+
+const CUSTOMERS_PDF_SCOPE_LABELS: Record<CustomersPdfScope, string> = {
+  current: "לקוח_נוכחי",
+  all: "כל_הלקוחות",
+  debt: "חובות",
+  credit: "יתרות_זכות",
+};
+
+function customersExportFilename(scope: CustomersPdfScope, ext: "html" | "xlsx"): string {
+  const stamp = new Date().toISOString().slice(0, 10);
+  return `customers_${CUSTOMERS_PDF_SCOPE_LABELS[scope]}_${stamp}.${ext}`;
+}
+
+export async function exportCustomersModuleListAction(params: {
+  scope: CustomersPdfScope;
+  customerId?: string | null;
+  workCountry?: string;
+  kind?: CustomersModuleExportKind;
+}): Promise<{ ok: true; base64: string; filename: string; mime: string } | { ok: false; error: string }> {
+  try {
+    const me = await requireAuth();
+    if (!canViewCustomersModule(me)) return { ok: false, error: "אין הרשאה" };
+
+    const scope = params.scope;
+    if (scope === "current" && !params.customerId?.trim()) {
+      return { ok: false, error: "יש לבחור לקוח" };
+    }
+
+    const wc = workCountryFromOrderSourceCountry(params.workCountry);
+    const rows = await listCustomersModuleForExport({
+      scope,
+      customerId: params.customerId,
+      workCountry: wc,
+    });
+    if (!rows.length) return { ok: false, error: "אין נתונים לייצוא" };
+
+    const headers = ['שם לקוח', "קוד לקוח", 'סה"כ הזמנות ($)', 'סה"כ תשלומים ($)', "יתרה ($)"];
+    const data = rows.map((r) => [
+      r.name,
+      r.code,
+      formatUsdDisplay(parseMoneyStringOrZero(r.ordersTotalUsd)),
+      formatUsdDisplay(parseMoneyStringOrZero(r.paymentsTotalUsd)),
+      formatUsdDisplay(parseMoneyStringOrZero(r.balanceUsd)),
+    ]);
+
+    let ordersSum = 0;
+    let paymentsSum = 0;
+    let balanceSum = 0;
+    for (const r of rows) {
+      ordersSum += parseMoneyStringOrZero(r.ordersTotalUsd);
+      paymentsSum += parseMoneyStringOrZero(r.paymentsTotalUsd);
+      balanceSum += parseMoneyStringOrZero(r.balanceUsd);
+    }
+
+    const stamp = new Date().toISOString().slice(0, 10);
+    const scopeTitle =
+      scope === "current"
+        ? "רשימת לקוחות — לקוח נוכחי"
+        : scope === "debt"
+          ? "רשימת לקוחות — חובות בלבד"
+          : scope === "credit"
+            ? "רשימת לקוחות — יתרות זכות בלבד"
+            : "רשימת לקוחות — כל הלקוחות";
+
+    const kind = params.kind ?? "pdf";
+
+    if (kind === "excel") {
+      const { generateExcel } = await import("@/lib/reports-excel");
+      const buf = generateExcel(headers, data, [[`${scopeTitle} · ${stamp}`]]);
+      return {
+        ok: true,
+        base64: Buffer.from(buf).toString("base64"),
+        filename: customersExportFilename(scope, "xlsx"),
+        mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      };
+    }
+
+    const { buildAtlasExportHtml } = await import("@/lib/atlas-export-html");
+    const html = buildAtlasExportHtml({
+      title: `${scopeTitle} · ${stamp}`,
+      reportKind: "balances",
+      headers,
+      rows: data,
+      meta: { extraMeta: `הופק: ${stamp} · ${rows.length} לקוחות` },
+      footer: {
+        ordersTotalUsd: formatUsdDisplay(ordersSum),
+        paymentsTotalUsd: formatUsdDisplay(paymentsSum),
+        balanceUsd: formatUsdDisplay(balanceSum),
+      },
+    });
+
+    return {
+      ok: true,
+      base64: Buffer.from(html, "utf-8").toString("base64"),
+      filename: customersExportFilename(scope, "html"),
+      mime: "text/html; charset=utf-8",
+    };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "ייצוא נכשל" };
+  }
 }
 

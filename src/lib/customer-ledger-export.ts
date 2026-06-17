@@ -4,15 +4,19 @@ import {
   ledgerPaymentMethodDisplayLines,
   shouldShowLedgerPaymentMethodSubrows,
 } from "@/lib/ledger-payment-detail";
+import { formatLedgerAmountDisplay } from "@/lib/ledger-payment-display";
+import { openPdfPreview } from "@/lib/pdf-preview";
 import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
 import { formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate } from "@/lib/work-week";
+
+export type LedgerPdfMode = "regular" | "detailed";
 
 export type CustomerLedgerExportMeta = {
   displayName: string;
   customerCode: string;
   phone: string | null;
   email: string | null;
-  /** @deprecated — PDF כרטסת משתמש ב-city */
+  /** @deprecated — PDF כרטת משתמש ב-city */
   country?: string | null;
   city?: string | null;
   /** TURKEY | CHINA — לסינון כרטסת */
@@ -48,8 +52,19 @@ function sanitizeFileCode(code: string): string {
   return t || "customer";
 }
 
-export function buildLedgerExportFilename(customerCode: string, ext: "pdf" | "xlsx"): string {
-  return `ledger_${sanitizeFileCode(customerCode)}_${todayYmd()}.${ext}`;
+export function buildLedgerExportFilename(
+  customerCode: string,
+  ext: "pdf" | "xlsx",
+  pdfMode?: LedgerPdfMode,
+): string {
+  const code = sanitizeFileCode(customerCode);
+  if (ext === "pdf" && pdfMode === "detailed") {
+    return `ledger_${code}_detailed.pdf`;
+  }
+  if (ext === "pdf") {
+    return `ledger_${code}.pdf`;
+  }
+  return `ledger_${code}_${todayYmd()}.${ext}`;
 }
 
 export function ledgerHasExportRows(ledger: CustomerLedgerPayload | null | undefined): boolean {
@@ -61,7 +76,7 @@ function fmtUsd(s: string): string {
 }
 
 function formatChargeCell(row: CustomerLedgerRow): string {
-  if (row.kind === "OPENING_BALANCE") return "—";
+  if (row.kind === "OPENING_BALANCE" || row.isOrderUpdated) return "—";
   if (row.isCommissionDebtClosure) {
     return `יתרת הזמנה: ${fmtUsd(row.orderBalanceAfterUsd ?? "0")}`;
   }
@@ -70,13 +85,17 @@ function formatChargeCell(row: CustomerLedgerRow): string {
   return n > 0 ? fmtUsd(row.chargeUsd) : "—";
 }
 
-function formatPaymentCell(row: CustomerLedgerRow): string {
-  if (row.kind === "OPENING_BALANCE") return "—";
+function formatPaymentCell(row: CustomerLedgerRow, includePaymentDetails: boolean): string {
+  if (row.kind === "OPENING_BALANCE" || row.isOrderUpdated) return "—";
   if (row.isCommissionDebtClosure) {
     return `יתרת עמלה: ${fmtUsd(row.commissionAfterUsd ?? "0")}`;
   }
   const n = parseMoneyStringOrZero(row.paymentUsd);
-  return n > 0 ? fmtUsd(row.paymentUsd) : "—";
+  if (n <= 0) return "—";
+  if (includePaymentDetails && row.paymentDetail) {
+    return formatLedgerAmountDisplay(row.paymentDetail.totalIls, row.paymentDetail.totalUsd).singleLine;
+  }
+  return fmtUsd(row.paymentUsd);
 }
 
 function pushPaymentDetailExportRows(out: LedgerExportTableRow[], row: CustomerLedgerRow): void {
@@ -90,7 +109,7 @@ function pushPaymentDetailExportRows(out: LedgerExportTableRow[], row: CustomerL
       document: "",
       typeLabel: `${line.label}:`,
       chargeUsd: "—",
-      paymentUsd: fmtUsd(line.amountUsd),
+      paymentUsd: formatLedgerAmountDisplay(line.amountIls, line.amountUsd).singleLine,
       balance: "—",
       isOpening: false,
       isPaymentDetailRow: true,
@@ -99,9 +118,9 @@ function pushPaymentDetailExportRows(out: LedgerExportTableRow[], row: CustomerL
   out.push({
     dateYmd: "",
     document: "",
-    typeLabel: "סה״כ:",
+    typeLabel: 'סה"כ תשלום:',
     chargeUsd: "—",
-    paymentUsd: fmtUsd(detail.totalUsd),
+    paymentUsd: formatLedgerAmountDisplay(detail.totalIls, detail.totalUsd).singleLine,
     balance: "—",
     isOpening: false,
     isPaymentDetailRow: true,
@@ -131,6 +150,32 @@ function pushOrderCancelDetailExportRows(out: LedgerExportTableRow[], row: Custo
   if (detail.reason?.trim()) push("סיבת הביטול", detail.reason.trim());
 }
 
+function pushOrderUpdateDetailExportRows(out: LedgerExportTableRow[], row: CustomerLedgerRow): void {
+  const detail = row.orderUpdateDetail;
+  if (!detail) return;
+  const push = (label: string, value: string) => {
+    out.push({
+      dateYmd: "",
+      document: value,
+      typeLabel: label,
+      chargeUsd: "—",
+      paymentUsd: "—",
+      balance: "—",
+      isOpening: false,
+      isPaymentDetailRow: true,
+    });
+  };
+  for (const change of detail.changes) {
+    push(`${change.label} קודם`, change.before);
+    push(`${change.label} חדש`, change.after);
+    if (change.deltaUsd) push("שינוי", change.deltaUsd);
+  }
+  push("אושר ע\"י", detail.approvedBy);
+  if (detail.requestedBy && detail.requestedBy !== "—") {
+    push("מבקש", detail.requestedBy);
+  }
+}
+
 
 /** יתרה מצטברת — סכום בלבד, בלי תגית «חוב פתוח» */
 export function formatLedgerRunningBalance(balanceUsd: string): string {
@@ -140,7 +185,16 @@ export function formatLedgerRunningBalance(balanceUsd: string): string {
   return formatUsdDisplay(n);
 }
 
-export function buildLedgerExportTableRows(ledger: CustomerLedgerPayload): LedgerExportTableRow[] {
+export type BuildLedgerExportTableRowsOptions = {
+  /** PDF מפורט / Excel — פירוט אמצעי תשלום. PDF רגיל: false */
+  includePaymentDetails?: boolean;
+};
+
+export function buildLedgerExportTableRows(
+  ledger: CustomerLedgerPayload,
+  options?: BuildLedgerExportTableRowsOptions,
+): LedgerExportTableRow[] {
+  const includePaymentDetails = options?.includePaymentDetails ?? true;
   const out: LedgerExportTableRow[] = [];
   for (const r of ledger.rows ?? []) {
     out.push({
@@ -148,22 +202,21 @@ export function buildLedgerExportTableRows(ledger: CustomerLedgerPayload): Ledge
       document: r.document,
       typeLabel: r.typeLabel,
       chargeUsd: formatChargeCell(r),
-      paymentUsd: formatPaymentCell(r),
+      paymentUsd: formatPaymentCell(r, includePaymentDetails),
       balance: formatLedgerRunningBalance(r.balanceUsd),
       isOpening: r.kind === "OPENING_BALANCE",
     });
-    if (r.kind === "PAYMENT" && r.paymentDetail) {
+    if (includePaymentDetails && r.kind === "PAYMENT" && r.paymentDetail) {
       pushPaymentDetailExportRows(out, r);
     }
     if (r.isOrderCancelled) {
       pushOrderCancelDetailExportRows(out, r);
     }
+    if (r.isOrderUpdated) {
+      pushOrderUpdateDetailExportRows(out, r);
+    }
   }
   return out;
-}
-
-function buildLedgerPdfTableRows(ledger: CustomerLedgerPayload): LedgerExportTableRow[] {
-  return buildLedgerExportTableRows(ledger);
 }
 
 function formatDateRangeLabel(fromYmd: string, toYmd: string): string {
@@ -200,11 +253,13 @@ function triggerBlobDownload(blob: Blob, filename: string) {
 export async function exportCustomerLedgerPdf(
   meta: CustomerLedgerExportMeta,
   ledger: CustomerLedgerPayload,
+  options?: { mode?: LedgerPdfMode },
 ): Promise<void> {
+  const mode = options?.mode ?? "regular";
   const res = await fetch("/api/customer-ledger/pdf", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ meta, ledger }),
+    body: JSON.stringify({ meta, ledger, mode }),
   });
   if (!res.ok) {
     const msg = await res
@@ -214,7 +269,14 @@ export async function exportCustomerLedgerPdf(
     throw new Error(msg ?? "ייצוא PDF נכשל");
   }
   const blob = await res.blob();
-  triggerBlobDownload(blob, buildLedgerExportFilename(meta.customerCode, "pdf"));
+  const contentType = (res.headers.get("content-type") ?? "application/pdf").split(";")[0]?.trim() ?? "application/pdf";
+  const isHtml = contentType.includes("text/html");
+  const pdfFilename = buildLedgerExportFilename(meta.customerCode, "pdf", mode);
+  openPdfPreview({
+    blob,
+    filename: isHtml ? pdfFilename.replace(/\.pdf$/i, ".html") : pdfFilename,
+    mime: contentType,
+  });
 }
 
 export async function exportCustomerLedgerExcel(

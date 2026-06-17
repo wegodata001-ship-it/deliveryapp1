@@ -24,16 +24,9 @@ import { formatMoneyAmount, formatIlsDisplay, formatUsdDisplay, sanitizeMoneyInp
 import { AnimatedMoneyValue } from "@/components/ui/AnimatedMoneyValue";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { CreditCard, X } from "lucide-react";
+import { usePaymentMethodCatalog } from "@/components/admin/PaymentMethodCatalogProvider";
 
 const fmtFooterAmount = formatMoneyAmount;
-
-function paymentMethodLabel(m: PaymentLineMethod): string {
-  if (m === "CREDIT") return "אשראי";
-  if (m === "BANK_TRANSFER") return "העברה בנקאית";
-  if (m === "CASH") return "מזומן";
-  if (m === "CHECK") return "צ׳ק";
-  return "אחר";
-}
 
 function vatModeLabel(v: PaymentLineVatMode): string {
   if (v === "EXEMPT") return "פטור ממע״מ";
@@ -216,6 +209,7 @@ export function PaymentLineDualCard({
   onRemove,
   onEnterInFirstAmount,
 }: PaymentLineDualCardProps) {
+  const { optionsForValue: paymentMethodOptionsForValue } = usePaymentMethodCatalog();
   const p = normalizePaymentLine(line);
   const payMethod = linePaymentMethod(p);
   const usesCloaking = paymentMethodUsesCommissionCloaking(payMethod);
@@ -367,13 +361,13 @@ export function PaymentLineDualCard({
           <select
             className="payment-modal-inp"
             value={payMethod}
-            onChange={(e) => setPaymentMethod(e.target.value as PaymentLineMethod)}
+            onChange={(e) => setPaymentMethod(e.target.value)}
           >
-            <option value="CREDIT">{paymentMethodLabel("CREDIT")}</option>
-            <option value="BANK_TRANSFER">{paymentMethodLabel("BANK_TRANSFER")}</option>
-            <option value="CASH">{paymentMethodLabel("CASH")}</option>
-            <option value="CHECK">{paymentMethodLabel("CHECK")}</option>
-            <option value="OTHER">{paymentMethodLabel("OTHER")}</option>
+            {paymentMethodOptionsForValue(payMethod).map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
           </select>
         </label>
 

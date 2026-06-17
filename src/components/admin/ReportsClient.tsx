@@ -19,6 +19,7 @@ import { ORDER_COUNTRY_CODES, orderCountryLabel, type OrderCountryCode } from "@
 import { CustomerBalancesReportModal } from "@/components/admin/CustomerBalancesReportModal";
 import { OpenOrdersReportModal } from "@/components/admin/OpenOrdersReportModal";
 import { PaymentsByLocationReportModal } from "@/components/admin/PaymentsByLocationReportModal";
+import { openPdfPreview } from "@/lib/pdf-preview";
 import { CalendarDays, CreditCard, Package, Scale, MapPin } from "lucide-react";
 
 type Props = {
@@ -102,13 +103,11 @@ function buildExportHref(kind: ReportKind, filters: ReportFilters): string {
   return `/admin/reports/export?${sp.toString()}`;
 }
 
-function printPdf(report: ReportTable, filters: ReportFilters) {
-  const w = window.open("", "_blank", "width=1100,height=800");
-  if (!w) return;
-  w.document.write(buildReportHtml(report, filters));
-  w.document.close();
-  w.focus();
-  w.print();
+function previewReportPdf(report: ReportTable, filters: ReportFilters) {
+  openPdfPreview({
+    html: buildReportHtml(report, filters),
+    filename: `report_${todayYmd()}.html`,
+  });
 }
 
 export function ReportsClient({ initialPayload, initialFilters }: Props) {
@@ -256,7 +255,7 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
           message: "מכין PDF...",
           mode: "bar",
         });
-        printPdf(report, filters);
+        previewReportPdf(report, filters);
       }
     } catch {
       setExportErr("ייצוא נכשל");

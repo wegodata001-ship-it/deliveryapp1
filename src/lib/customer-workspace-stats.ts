@@ -21,7 +21,7 @@ export type WorkspaceOrderStatusKey =
   | "inProgress";
 
 export const WORKSPACE_ORDER_STATUS_LABELS: Record<WorkspaceOrderStatusKey, string> = {
-  ready: "מוכן",
+  ready: "בוצע",
   open: "פתוחות",
   cancelled: "ביטול",
   debtWithdrawal: "משיכה מחוב",

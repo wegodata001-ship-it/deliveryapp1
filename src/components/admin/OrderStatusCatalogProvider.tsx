@@ -16,6 +16,7 @@ type OrderStatusCatalogContextValue = {
   refresh: () => void;
   getLabel: (statusId: string) => string;
   getColorHex: (statusId: string) => string | undefined;
+  labelById: Record<string, string>;
   /** כל הסטטוסים הפעילים — מקור יחיד */
   options: OrderStatusSelectOption[];
   statuses: OrderStatusTag[];
@@ -93,6 +94,7 @@ export function OrderStatusCatalogProvider({ children }: { children: React.React
       refresh: load,
       getLabel,
       getColorHex,
+      labelById: catalog.labelById,
       options: catalog.options,
       statuses: catalog.statuses,
       optionsForValue,
@@ -113,6 +115,7 @@ export function useOrderStatusCatalog(): OrderStatusCatalogContextValue {
       refresh: () => {},
       getLabel: (id) => id,
       getColorHex: () => undefined,
+      labelById: FALLBACK_LABELS,
       options: [],
       statuses: [],
       optionsForValue: () => [],

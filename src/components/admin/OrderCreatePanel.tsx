@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { PaymentMethod } from "@prisma/client";
+import { PM } from "@/lib/payment-method-slugs";
 import { isDebtWithdrawalOrderStatus } from "@/lib/debt-withdrawal-order";
 import { OS } from "@/lib/order-status-slugs";
 import {
@@ -40,10 +40,16 @@ import { parseBalanceAmountString } from "@/lib/customer-balance";
 import { formatMoneyAmount, parseMoneyString } from "@/lib/money-format";
 import type { OrderCaptureWindowProps } from "@/lib/admin-windows";
 
-import { ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS } from "@/lib/order-capture-payment-methods";
 import { orderCountryLabel, ORDER_COUNTRY_CODES, coerceOrderCountryForForm, type OrderCountryCode } from "@/lib/order-countries";
 import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
 import { buildCaptureFinancialSnapshot } from "@/lib/capture-form-snapshot";
+import {
+  computeOrderEditDiff,
+  snapshotFromUpdateForm,
+  snapshotFromWorkPanel,
+  type OrderEditSnapshot,
+} from "@/lib/order-edit-snapshot";
+import { orderEditDiffRequiresApproval } from "@/lib/order-edit-approval";
 import { IntakeLocationCombobox } from "@/components/admin/IntakeLocationCombobox";
 import { ErpSearchCombobox } from "@/components/admin/ErpCreatableCombobox";
 import { loadFinancialSettingsForCaptureAction } from "@/app/admin/financial/actions";
@@ -76,6 +82,7 @@ import {
 import { goToNextWeekNumber, goToPrevWeekNumber } from "@/lib/weeks/ah-week-nav";
 import { AhWeekNavNextButton, AhWeekNavPrevButton } from "@/components/admin/AhWeekNavButtons";
 import { useOrderStatusCatalog } from "@/components/admin/OrderStatusCatalogProvider";
+import { usePaymentMethodCatalog } from "@/components/admin/PaymentMethodCatalogProvider";
 import { OrderStatusSelect } from "@/components/admin/OrderStatusSelect";
 
 function toWeekCode(n: number): string {
@@ -277,6 +284,7 @@ export function OrderCreatePanel({
   const { openWindow, openCreateCustomerForOrder } = useAdminWindows();
   const { globalWeek, globalCountry } = useAdminGlobal();
   useOrderStatusCatalog();
+  const { optionsForValue: paymentMethodOptionsForValue } = usePaymentMethodCatalog();
   const idp = (s: string) => `${windowId}-${s}`;
 
   const isEdit = target.mode === "edit";
@@ -337,12 +345,37 @@ export function OrderCreatePanel({
   const [loadOrderBusy, setLoadOrderBusy] = useState(false);
   const [loadedSourceCountry, setLoadedSourceCountry] = useState<OrderCountryCode | "">("");
   const [editGate, setEditGate] = useState<OrderWorkPanelPayload["editGate"] | null>(null);
+  const [editInitialSnapshot, setEditInitialSnapshot] = useState<OrderEditSnapshot | null>(null);
   const [editRequestOpen, setEditRequestOpen] = useState(false);
   const [editRequestReason, setEditRequestReason] = useState("");
   const [editRequestBusy, setEditRequestBusy] = useState(false);
   const [editRequestFlash, setEditRequestFlash] = useState<string | null>(null);
   const pendingUpdatePayloadRef = useRef<Record<string, unknown> | null>(null);
   const pendingUpdateDisplayRef = useRef<{ customerLabel: string; customerCode: string | null; locationName: string | null } | null>(null);
+
+  function orderEditSaveRequiresApproval(
+    initial: OrderEditSnapshot | null,
+    proposed: {
+      customerLabel: string;
+      customerCode: string | null;
+      amountUsd: string;
+      feeUsd: string;
+      commissionPercent: string;
+      paymentMethod: string;
+      status: string;
+      notes: string;
+      sourceCountry: string;
+      locationName: string | null;
+      orderExecutionDateYmd: string;
+      intakeDateYmd: string;
+      intakeTimeHm: string;
+      weekCode: string;
+    },
+  ): boolean {
+    if (!initial) return false;
+    const after = snapshotFromUpdateForm(proposed);
+    return orderEditDiffRequiresApproval(computeOrderEditDiff(initial, after));
+  }
 
   const displayWeekCode = useMemo(
     () => deriveAhWeekCodeFromOrderDateYmd(orderExecutionDateYmd) ?? DEFAULT_WEEK_CODE,
@@ -453,7 +486,7 @@ export function OrderCreatePanel({
 
   const [phoneStr, setPhoneStr] = useState("");
   const [orderStatus, setOrderStatus] = useState<string>(OS.OPEN);
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(PaymentMethod.CASH);
+  const [paymentMethod, setPaymentMethod] = useState<string>(PM.CASH);
   const [isSearching, setIsSearching] = useState(false);
   /** אחרי חיפוש קוד שלא נמצא — הצעה להוספת לקוח */
   const [customerCodeMissing, setCustomerCodeMissing] = useState(false);
@@ -532,6 +565,7 @@ export function OrderCreatePanel({
   useEffect(() => {
     if (!isEdit) {
       setEditGate(null);
+      setEditInitialSnapshot(null);
       setEditRequestFlash(null);
     }
   }, [isEdit]);
@@ -544,6 +578,7 @@ export function OrderCreatePanel({
     setLoadOrderBusy(true);
     setErr(null);
     setEditGate(null);
+    setEditInitialSnapshot(null);
     void getOrderForWorkPanelAction(editOrderId).then((row) => {
       if (cancelled) return;
       setLoadOrderBusy(false);
@@ -552,6 +587,7 @@ export function OrderCreatePanel({
         return;
       }
       setEditGate(row.editGate);
+      setEditInitialSnapshot(snapshotFromWorkPanel(row));
       skipSearchRef.current = true;
       setOrderExecutionDateYmd(row.orderExecutionDateYmd);
       setIntakeDateYmd(row.intakeDateYmd);
@@ -924,7 +960,7 @@ export function OrderCreatePanel({
     setDropdownField(null);
     setIsSearching(false);
     setErr(null);
-    setPaymentMethod(PaymentMethod.CASH);
+    setPaymentMethod(PM.CASH);
     setOrderStatus(OS.OPEN);
     {
       const code = globalWeek || DEFAULT_WEEK_CODE;
@@ -959,6 +995,7 @@ export function OrderCreatePanel({
     isSaving,
     isEdit,
     editGate,
+    editInitialSnapshot,
     selectedCustomer,
     codeStr,
     dealUsdTotal,
@@ -983,11 +1020,13 @@ export function OrderCreatePanel({
     financial: financeEffective,
     orderCountries,
     finalRate,
+    displayWeekCode,
   });
   performSaveStateRef.current = {
     isSaving,
     isEdit,
     editGate,
+    editInitialSnapshot,
     selectedCustomer,
     codeStr,
     dealUsdTotal,
@@ -1012,7 +1051,49 @@ export function OrderCreatePanel({
     financial: financeEffective,
     orderCountries,
     finalRate,
+    displayWeekCode,
   };
+
+  const saveNeedsSensitiveApproval = useMemo(() => {
+    if (!isEdit || editGate?.viewerIsAdmin || !editInitialSnapshot) return false;
+    return orderEditSaveRequiresApproval(editInitialSnapshot, {
+      customerLabel: selectedCustomer?.label ?? editInitialSnapshot.customerLabel,
+      customerCode: selectedCustomer?.code ?? editInitialSnapshot.customerCode,
+      amountUsd: roundMoney2(dealUsdTotal).toFixed(2),
+      feeUsd: commissionUsdEffective.toFixed(2),
+      commissionPercent: commissionPercentStr,
+      paymentMethod,
+      status: orderStatus,
+      notes: notes.trim(),
+      sourceCountry:
+        coerceOrderCountryForForm(sourceCountry) ||
+        coerceOrderCountryForForm(loadedSourceCountry) ||
+        editInitialSnapshot.sourceCountry,
+      locationName: paymentPointQuery.trim() || null,
+      orderExecutionDateYmd,
+      intakeDateYmd,
+      intakeTimeHm,
+      weekCode: displayWeekCode,
+    });
+  }, [
+    isEdit,
+    editGate?.viewerIsAdmin,
+    editInitialSnapshot,
+    selectedCustomer,
+    dealUsdTotal,
+    commissionUsdEffective,
+    commissionPercentStr,
+    paymentMethod,
+    orderStatus,
+    notes,
+    sourceCountry,
+    loadedSourceCountry,
+    paymentPointQuery,
+    orderExecutionDateYmd,
+    intakeDateYmd,
+    intakeTimeHm,
+    displayWeekCode,
+  ]);
 
   const performSave = useCallback(
     async (keepOpen: boolean) => {
@@ -1136,7 +1217,26 @@ export function OrderCreatePanel({
           const feeStr = s.commissionUsdEffective.toFixed(2);
           const payload = savePayload(feeStr);
 
-          if (s.editGate?.requiresApprovalOnSave) {
+          const needsApproval =
+            !s.editGate?.viewerIsAdmin &&
+            orderEditSaveRequiresApproval(s.editInitialSnapshot, {
+              customerLabel: cust.label,
+              customerCode: cust.code ?? null,
+              amountUsd: roundMoney2(s.dealUsdTotal).toFixed(2),
+              feeUsd: feeStr,
+              commissionPercent: s.commissionPercentStr,
+              paymentMethod: s.paymentMethod,
+              status: s.orderStatus,
+              notes: s.notes.trim(),
+              sourceCountry: countryForSave,
+              locationName: s.paymentPointQuery.trim() || null,
+              orderExecutionDateYmd: s.orderExecutionDateYmd,
+              intakeDateYmd: s.intakeDateYmd,
+              intakeTimeHm: s.intakeTimeHm,
+              weekCode: s.displayWeekCode,
+            });
+
+          if (needsApproval) {
             pendingUpdatePayloadRef.current = payload;
             pendingUpdateDisplayRef.current = {
               customerLabel: cust.label,
@@ -1263,7 +1363,6 @@ export function OrderCreatePanel({
   }
 
   const formLocked = Boolean(isEdit && editGate?.hasPendingEditRequest);
-  const requiresApprovalOnSave = Boolean(isEdit && editGate?.requiresApprovalOnSave);
   const fieldDisabled = isSaving || formLocked;
 
 
@@ -1410,9 +1509,9 @@ export function OrderCreatePanel({
           </div>
         ) : null}
 
-        {isEdit && requiresApprovalOnSave && !formLocked ? (
+        {isEdit && !editGate?.viewerIsAdmin && !formLocked ? (
           <div className="adm-oc-edit-unlock-hint" role="status">
-            שינויים יישלחו לאישור מנהל — ההזמנה לא תתעדכן עד לאישור.
+            שינוי בסכום, עמלה, לקוח, שבוע, מדינה, תשלום, הערות או מקום תשלום — יישלח לאישור מנהל.
           </div>
         ) : null}
 
@@ -1924,7 +2023,7 @@ export function OrderCreatePanel({
                     disabled={fieldDisabled}
                     value={paymentMethod}
                     onFocus={closeCustomerDropdown}
-                    onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
+                    onChange={(e) => setPaymentMethod(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault();
@@ -1932,7 +2031,7 @@ export function OrderCreatePanel({
                       }
                     }}
                   >
-                    {ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS.map((o) => (
+                    {paymentMethodOptionsForValue(paymentMethod).map((o) => (
                       <option key={o.value} value={o.value}>
                         {o.label}
                       </option>
@@ -2070,7 +2169,7 @@ export function OrderCreatePanel({
             title="שמירה (Ctrl+Enter)"
           >
             <Save size={15} strokeWidth={2.2} aria-hidden />
-            <span>{isSaving ? "שולח…" : isEdit ? (requiresApprovalOnSave ? "שליחה לאישור" : "עדכון") : "שמור"}</span>
+            <span>{isSaving ? "שולח…" : isEdit ? (saveNeedsSensitiveApproval ? "שליחה לאישור" : "עדכון") : "שמור"}</span>
           </button>
           <span className="adm-oc-pro-shortcut-hint" aria-hidden>
             <kbd>Ctrl</kbd>
@@ -2157,8 +2256,8 @@ export function OrderCreatePanel({
                       setEditRequestOpen(false);
                       pendingUpdatePayloadRef.current = null;
                       pendingUpdateDisplayRef.current = null;
-                      setEditRequestFlash("בקשת העדכון נשלחה למנהלים");
-                      onToast("בקשת העדכון נשלחה");
+                      setEditRequestFlash("הבקשה נשלחה לאישור מנהל");
+                      onToast("הבקשה נשלחה לאישור מנהל");
                       void getOrderForWorkPanelAction(editOrderId).then((row) => {
                         if (row) setEditGate(row.editGate);
                       });

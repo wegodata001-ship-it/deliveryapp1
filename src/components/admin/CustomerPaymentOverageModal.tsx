@@ -25,7 +25,7 @@ export function CustomerPaymentOverageModal({ open, preview, busy, onConfirm, on
         onClick={(e) => e.stopPropagation()}
       >
         <h2 id="payment-overage-title" className="adm-mini-modal-title">
-          הלקוח משלם יותר מהיתרה הפתוחה
+          התשלום גבוה מהחוב ב-{formatUsdDisplay(preview.surplusUsd)}
         </h2>
         <p className="adm-payment-overage-lead">האם לשמור את ההפרש כיתרת זכות ללקוח?</p>
         <dl className="adm-payment-overage-stats">

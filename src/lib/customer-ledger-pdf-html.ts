@@ -1,6 +1,9 @@
 import type { CustomerLedgerPayload } from "@/app/admin/capture/actions";
-import type { CustomerLedgerExportMeta } from "@/lib/customer-ledger-export";
-import { buildLedgerExportTableRows, formatLedgerRunningBalance } from "@/lib/customer-ledger-export";
+import type { CustomerLedgerExportMeta, LedgerPdfMode } from "@/lib/customer-ledger-export";
+import {
+  buildLedgerExportTableRows,
+  formatLedgerRunningBalance,
+} from "@/lib/customer-ledger-export";
 import { formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate } from "@/lib/work-week";
 
 type HtmlFont = {
@@ -51,17 +54,22 @@ function moneyCell(value: string): string {
   return `<span class="num">${escapeHtml(value)}</span>`;
 }
 
-function metaLine(label: string, value: string | null | undefined): string {
-  return `<div class="meta-line"><span class="meta-label">${escapeHtml(label)}:</span><span class="meta-value">${escapeHtml(safeText(value))}</span></div>`;
+function metaLine(label: string, value: string | null | undefined, ltrValue = false): string {
+  const safe = escapeHtml(safeText(value));
+  const valueHtml = ltrValue ? `<span class="num">${safe}</span>` : safe;
+  return `<tr><td class="meta-label">${escapeHtml(label)}</td><td class="meta-value">${valueHtml}</td></tr>`;
 }
 
 export function buildCustomerLedgerPdfHtml(params: {
   meta: CustomerLedgerExportMeta;
   ledger: CustomerLedgerPayload;
   font: HtmlFont;
+  mode?: LedgerPdfMode;
 }): string {
-  const { meta, ledger, font } = params;
-  const rows = buildLedgerExportTableRows(ledger);
+  const { meta, ledger, font, mode = "regular" } = params;
+  const rows = buildLedgerExportTableRows(ledger, {
+    includePaymentDetails: mode === "detailed",
+  });
   const currentBalance = formatLedgerRunningBalance(ledger.balanceUsd);
 
   const tableRows = rows
@@ -158,6 +166,24 @@ export function buildCustomerLedgerPdfHtml(params: {
       gap: 4px 16px;
       color: #334155;
     }
+    .report-meta-table {
+      width: 100%;
+      border-collapse: collapse;
+      direction: rtl;
+      text-align: right;
+    }
+    .report-meta-table td {
+      padding: 2px 0;
+      border: none;
+      text-align: right;
+      vertical-align: baseline;
+    }
+    .report-meta-label {
+      font-weight: 800;
+      white-space: nowrap;
+      width: 1%;
+      padding-left: 10px;
+    }
     .customer-box {
       border: 1px solid #cbd5e1;
       border-radius: 12px;
@@ -166,24 +192,28 @@ export function buildCustomerLedgerPdfHtml(params: {
       direction: rtl;
       text-align: right;
     }
-    .meta-line {
-      display: flex;
-      flex-direction: row;
-      justify-content: flex-start;
-      align-items: baseline;
-      gap: 6px;
-      margin: 3px 0;
+    .meta-table {
+      width: 100%;
+      border-collapse: collapse;
       direction: rtl;
       text-align: right;
-      unicode-bidi: isolate;
+    }
+    .meta-table td {
+      padding: 3px 0;
+      border: none;
+      vertical-align: baseline;
+      text-align: right;
     }
     .meta-label {
       font-weight: 800;
       white-space: nowrap;
+      width: 1%;
+      padding-left: 10px;
+      color: #334155;
     }
     .meta-value {
-      unicode-bidi: isolate;
-      direction: rtl;
+      color: #0f172a;
+      unicode-bidi: plaintext;
     }
     .kpis {
       display: grid;
@@ -271,16 +301,24 @@ export function buildCustomerLedgerPdfHtml(params: {
         <div class="brand-en">WEGO ERP</div>
         <h1>כרטסת לקוח</h1>
         <div class="report-meta">
-          ${metaLine("טווח תאריכים", formatDateRangeLabel(meta.fromYmd, meta.toYmd))}
-          ${metaLine("שבוע AH", resolveAhWeekLabel(meta.fromYmd, meta.toYmd))}
-          ${metaLine("תאריך הפקה", todayYmd())}
+          <table class="report-meta-table" dir="rtl">
+            <tbody>
+              ${metaLine("טווח תאריכים", formatDateRangeLabel(meta.fromYmd, meta.toYmd), true)}
+              ${metaLine("שבוע AH", resolveAhWeekLabel(meta.fromYmd, meta.toYmd), true)}
+              ${metaLine("תאריך הפקה", todayYmd(), true)}
+            </tbody>
+          </table>
         </div>
       </div>
       <aside class="customer-box">
-        ${metaLine("קוד לקוח", meta.customerCode || "—")}
-        ${metaLine("שם לקוח", meta.displayName || "—")}
-        ${metaLine("טלפון", meta.phone?.trim() || "—")}
-        ${metaLine("עיר", meta.city?.trim() || "—")}
+        <table class="meta-table" dir="rtl">
+          <tbody>
+            ${metaLine("קוד לקוח", meta.customerCode || "—", true)}
+            ${metaLine("שם לקוח", meta.displayName || "—")}
+            ${metaLine("טלפון", meta.phone?.trim() || "—", true)}
+            ${metaLine("עיר", meta.city?.trim() || "—")}
+          </tbody>
+        </table>
       </aside>
     </section>
     <section class="kpis">
@@ -301,7 +339,7 @@ export function buildCustomerLedgerPdfHtml(params: {
       </thead>
       <tbody>${tableRows || `<tr><td colspan="6">אין תנועות בכרטסת</td></tr>`}</tbody>
     </table>
-    <p class="note">יתרת פתיחה · אמצעי תשלום והקצאות להזמנות מוצגים בתוך שורת התשלום · יתרה מצטברת לאחר כל תנועה</p>
+    <p class="note">${mode === "detailed" ? "PDF מפורט — כולל פירוט אמצעי תשלום" : "PDF רגיל — ללא פירוט אמצעי תשלום"} · יתרת פתיחה · יתרה מצטברת לאחר כל תנועה</p>
   </main>
 </body>
 </html>`;

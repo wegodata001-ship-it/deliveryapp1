@@ -1,12 +1,20 @@
 "use server";
 
 import { randomUUID } from "crypto";
-import { OrderEditRequestStatus, PaymentMethod, Prisma } from "@prisma/client";
+import { OrderEditRequestStatus, Prisma } from "@prisma/client";
 import { listOrderStatusTags } from "@/lib/order-status-registry";
 import { OS } from "@/lib/order-status-slugs";
 import { revalidatePath, revalidateTag } from "next/cache";
 import { revalidateAllKpiCaches } from "@/lib/kpi-cache-revalidate";
 import { recordActivityAudit } from "@/lib/activity-audit";
+import {
+  computeOrderEditDiff,
+  snapshotFromUpdateForm,
+  snapshotFromWorkPanel,
+  type OrderEditSnapshot,
+} from "@/lib/order-edit-snapshot";
+import { orderEditDiffRequiresApproval } from "@/lib/order-edit-approval";
+import { writeOrderUpdateAuditLog } from "@/lib/order-update-audit";
 import { getCustomerInternalBalanceUsd } from "@/lib/customer-open-debt";
 import { executeOrderCancellation } from "@/lib/order-cancellation";
 import {
@@ -28,6 +36,7 @@ import {
 import {
   getActiveOrderStatusIdsCached,
   getActiveOrderStatusIdsSync,
+  getActivePaymentMethodIdsSync,
   getCaptureFinancialSettingsCached,
   loadCaptureSettingsCountries,
   warmCaptureHotPathCaches,
@@ -87,6 +96,7 @@ import type { CapturePaymentNavCountry } from "@/lib/payment-code-navigation";
 import { normalizeCapturePaymentCodeQuery } from "@/lib/payment-code-search";
 import { normalizeWorkCountryCode, type WorkCountryCode } from "@/lib/work-country";
 import { ensureOnce } from "@/lib/ensure-tables-once";
+import { PM } from "@/lib/payment-method-slugs";
 import { parseSplitPaymentMethodRaw } from "@/lib/order-capture-payment-methods";
 import { getSelectedCountriesForOrdersInternal } from "@/app/admin/settings/actions";
 import { ORDER_COUNTRY_CODES, coerceOrderCountryForForm, normalizeOrderSourceCountry, type OrderCountryCode } from "@/lib/order-countries";
@@ -111,12 +121,6 @@ import {
   markApprovedEditRequestUsedAndClearUnlock,
 } from "@/app/admin/order-edit-requests/actions";
 import { ensureOrderEditRequestTablesOnce } from "@/lib/order-edit-request-bootstrap";
-import {
-  computeOrderEditDiff,
-  snapshotFromUpdateForm,
-  snapshotFromWorkPanel,
-  type OrderEditSnapshot,
-} from "@/lib/order-edit-snapshot";
 import { perfError, withPerfTimer } from "@/lib/perf-log";
 import {
   ensureIntakeLocationTable,
@@ -188,7 +192,7 @@ export type OrderCaptureSavedSummary = {
   orderNumber: string;
   customerLabel: string;
   totalUsd: string;
-  payments: { paymentMethod: PaymentMethod; amountUsd: string }[];
+  payments: { paymentMethod: string; amountUsd: string }[];
 };
 
 export type PaymentCaptureSavedSummary = {
@@ -200,7 +204,7 @@ export type PaymentCaptureSavedSummary = {
   paymentDateYmd: string;
   paymentTimeHm: string;
   paymentPlace: string | null;
-  paymentMethod: PaymentMethod;
+  paymentMethod: string;
   amountDisplay: string;
   totalIlsWithVat: string;
   totalIlsWithoutVat: string;
@@ -216,7 +220,11 @@ export type PaymentCaptureState =
   | { ok: true; saved: PaymentCaptureSavedSummary }
   | { ok: false; error: string };
 
-const PAYMENT_METHODS = new Set<string>(Object.values(PaymentMethod));
+const PAYMENT_METHODS = {
+  has(id: string) {
+    return getActivePaymentMethodIdsSync().has(id);
+  },
+};
 
 async function loadCustomerForCapture(
   customerId: string,
@@ -282,9 +290,9 @@ export type OrderCapturePaymentLineInput = {
 function parseOrderPaymentLines(
   lines: OrderCapturePaymentLineInput[] | undefined,
   finalNisPerUsd: Prisma.Decimal,
-): { ok: true; parsed: { method: PaymentMethod; amount: Prisma.Decimal }[]; sum: Prisma.Decimal } | { ok: false; error: string } {
+): { ok: true; parsed: { method: string; amount: Prisma.Decimal }[]; sum: Prisma.Decimal } | { ok: false; error: string } {
   if (!lines?.length) return { ok: true, parsed: [], sum: new Prisma.Decimal(0) };
-  const parsed: { method: PaymentMethod; amount: Prisma.Decimal }[] = [];
+  const parsed: { method: string; amount: Prisma.Decimal }[] = [];
   let sum = new Prisma.Decimal(0);
   for (const line of lines) {
     const raw = (line.amountUsd || "").trim().replace(",", ".");
@@ -297,10 +305,10 @@ function parseOrderPaymentLines(
     }
     if (amtInput.lte(0)) continue;
     const method = parseSplitPaymentMethodRaw(line.paymentMethod);
-    if (!method) {
+    if (!method || !PAYMENT_METHODS.has(method)) {
       return {
         ok: false,
-        error: "אמצעי בשורת תשלום לא תקין — מותרים רק: אשראי, מזומן, העברה בנקאית או צ׳ק",
+        error: "אמצעי בשורת תשלום לא תקין",
       };
     }
     const cur = (line.currency || "USD").trim().toUpperCase();
@@ -350,7 +358,7 @@ async function appendParsedPaymentsForOrder(
     customerId: string;
     weekCode: string | null;
     paymentDate: Date;
-    parsed: { method: PaymentMethod; amount: Prisma.Decimal }[];
+    parsed: { method: string; amount: Prisma.Decimal }[];
     base: Prisma.Decimal;
     fee: Prisma.Decimal;
     final: Prisma.Decimal;
@@ -980,7 +988,7 @@ export async function capturePaymentAction(form: {
       totalIlsWithoutVat: totals.totalIlsWithoutVat,
       vatAmount: totals.vatAmount,
       manualDateChanged,
-      paymentMethod: form.paymentMethod as PaymentMethod,
+      paymentMethod: form.paymentMethod,
       isPaid: true,
       notes: form.notes?.trim() || null,
       createdById: me.id,
@@ -1031,7 +1039,7 @@ export async function capturePaymentAction(form: {
       paymentDateYmd: formatLocalYmd(paymentDate),
       paymentTimeHm: formatLocalHm(paymentDate),
       paymentPlace: form.paymentPlace?.trim() || null,
-      paymentMethod: form.paymentMethod as PaymentMethod,
+      paymentMethod: form.paymentMethod,
       amountDisplay,
       totalIlsWithVat: totals.totalIlsWithVat.toFixed(2),
       totalIlsWithoutVat: totals.totalIlsWithoutVat.toFixed(2),
@@ -1818,7 +1826,7 @@ async function captureOrderActionInner(
           orderExecutionDate,
           intakeDateTime,
           status,
-          paymentMethod: form.paymentMethod as PaymentMethod,
+          paymentMethod: form.paymentMethod,
           paymentPointId: resolvedLoc.paymentPointIdForPrisma,
           amountUsd: deal,
           commissionUsd,
@@ -1958,7 +1966,7 @@ export type OrderWorkPanelPayload = {
   customerCode: string | null;
   amountUsd: string;
   feeUsd: string;
-  paymentMethod: PaymentMethod;
+  paymentMethod: string;
   paymentPointId: string | null;
   locationId: string | null;
   locationName: string | null;
@@ -2112,7 +2120,7 @@ export async function getOrderForWorkPanelAction(orderId: string): Promise<Order
       customerCode: order.customer?.customerCode ?? order.customerCodeSnapshot ?? null,
       amountUsd: deal.toString(),
       feeUsd: com.toString(),
-      paymentMethod: order.paymentMethod ?? PaymentMethod.BANK_TRANSFER,
+      paymentMethod: order.paymentMethod ?? PM.BANK_TRANSFER,
       paymentPointId: order.paymentPointId ?? null,
       locationId: geo?.locationId ?? null,
       locationName:
@@ -2129,7 +2137,7 @@ export async function getOrderForWorkPanelAction(orderId: string): Promise<Order
         employeeEditBlocked: false,
         hasPendingEditRequest: !!pendingReq,
         pendingEditRequestOwnedByMe: pendingReq?.requestedByUserId === me.id,
-        requiresApprovalOnSave: !viewerIsAdmin,
+        requiresApprovalOnSave: false,
         latestUpdateRequestStatus: latestReq?.status ?? null,
         latestUpdateRequestOwnedByMe: latestReq?.requestedByUserId === me.id,
         unlockExpiresAtIso,
@@ -2235,7 +2243,7 @@ export async function updateOrderListStatusAction(
     select: { status: true, editUnlockedForUserId: true, editUnlockedUntil: true },
   });
   if (!gate || !canUserEditCompletedOrder(me, gate)) {
-    return { ok: false, error: "הזמנה במצב ״מוכן״ או ״מבוטל״ נעולה — שינוי סטטוס דורש אישור מנהל." };
+    return { ok: false, error: "הזמנה במצב ״בוצע״ או ״מבוטל״ נעולה — שינוי סטטוס דורש אישור מנהל." };
   }
 
   /**
@@ -2387,7 +2395,7 @@ export async function updateOrderListStatusActionForApi(
         editUnlockedUntil: exists.editUnlockedUntil,
       };
   if (!canUserEditCompletedOrder(me, effectiveGate)) {
-    return { ok: false, error: "הזמנה במצב ״מוכן״ או ״מבוטל״ נעולה — שינוי סטטוס דורש אישור מנהל." };
+    return { ok: false, error: "הזמנה במצב ״בוצע״ או ״מבוטל״ נעולה — שינוי סטטוס דורש אישור מנהל." };
   }
   if (unlockExpired) {
     void clearExpiredOrderEditUnlockForOrder(id).catch(() => {});
@@ -2490,7 +2498,7 @@ export async function updateOrderListStatusActionForApi(
 /** עדכון inline מהטבלה — אמצעי תשלום בלבד (ללא שינויי DB structure / חישובים) */
 export async function updateOrderListPaymentMethodAction(
   orderId: string,
-  method: PaymentMethod | null,
+  method: string | null,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["edit_orders"])) {
@@ -2511,7 +2519,7 @@ export async function updateOrderListPaymentMethodAction(
   });
   if (!existing) return { ok: false, error: "הזמנה לא נמצאה" };
   if (!canUserEditCompletedOrder(me, existing)) {
-    return { ok: false, error: "הזמנה במצב ״מוכן״ או ״מבוטל״ נעולה — שינוי דורש אישור מנהל." };
+    return { ok: false, error: "הזמנה במצב ״בוצע״ או ״מבוטל״ נעולה — שינוי דורש אישור מנהל." };
   }
 
   await prisma.order.update({ where: { id }, data: { paymentMethod: method } });
@@ -2540,7 +2548,7 @@ export async function updateOrderListPaymentMethodActionForApi(
   const id = orderId.trim();
   if (!id) return { ok: false, error: "חסר מזהה הזמנה" };
   const method = (methodRaw?.trim() || "") as string;
-  const next = method ? (method as PaymentMethod) : null;
+  const next = method ? method : null;
   if (next !== null && !PAYMENT_METHODS.has(next)) {
     return { ok: false, error: "אמצעי תשלום לא תקין" };
   }
@@ -2558,7 +2566,7 @@ export async function updateOrderListPaymentMethodActionForApi(
     ? { status: existing.status, editUnlockedForUserId: null, editUnlockedUntil: null }
     : existing;
   if (!canUserEditCompletedOrder(me, effectiveGate)) {
-    return { ok: false, error: "הזמנה במצב ״מוכן״ או ״מבוטל״ נעולה — שינוי דורש אישור מנהל." };
+    return { ok: false, error: "הזמנה במצב ״בוצע״ או ״מבוטל״ נעולה — שינוי דורש אישור מנהל." };
   }
   if (unlockExpired) {
     void clearExpiredOrderEditUnlockForOrder(id).catch(() => {});
@@ -2672,15 +2680,6 @@ async function updateOrderWorkPanelActionInner(
     return { ok: false, error: "אין הרשאה" };
   }
 
-  if (!options?.dryRun && !isAdminUser(me)) {
-    capturePerfTimeEnd("capture.validation");
-    perf.validateInputMs = Date.now() - validationT0;
-    return {
-      ok: false,
-      error: "עדכון הזמנה דורש אישור מנהל. שלחו בקשת עדכון עם סיבת השינוי.",
-    };
-  }
-
   if (!form.customerId?.trim()) {
     capturePerfTimeEnd("capture.validation");
     perf.validateInputMs = Date.now() - validationT0;
@@ -2764,7 +2763,7 @@ async function updateOrderWorkPanelActionInner(
   if (!canUserEditCompletedOrder(me, effectiveGate)) {
     return {
       ok: false,
-      error: "הזמנה במצב ״מוכן״ או ״מבוטל״ נעולה לעריכה. נדרש אישור מנהל — שלחו בקשת עריכה מהמסך.",
+      error: "הזמנה במצב ״בוצע״ או ״מבוטל״ נעולה לעריכה. נדרש אישור מנהל — שלחו בקשת עריכה מהמסך.",
     };
   }
   if (unlockExpired) {
@@ -2873,6 +2872,34 @@ async function updateOrderWorkPanelActionInner(
     return { ok: true, orderNumber: existing.orderNumber ?? "" };
   }
 
+  const beforePanel = await getOrderForWorkPanelAction(existing.id);
+  const beforeSnapshot = beforePanel ? snapshotFromWorkPanel(beforePanel) : null;
+
+  if (!isAdminUser(me) && !options?.orderEditRequestId && beforeSnapshot && beforePanel) {
+    const afterSnapshot = snapshotFromUpdateForm({
+      customerLabel: customer.displayName,
+      customerCode: customer.customerCode,
+      amountUsd: form.amountUsd,
+      feeUsd: form.feeUsd,
+      commissionPercent: form.commissionPercent,
+      paymentMethod: form.paymentMethod,
+      status,
+      notes: form.notes,
+      sourceCountry: sourceCountryUpdate,
+      locationName: form.intakeLocationDraftName?.trim() || beforePanel.locationName,
+      orderExecutionDateYmd: form.orderExecutionDateYmd ?? beforePanel.orderExecutionDateYmd,
+      intakeDateYmd: form.intakeDateYmd ?? beforePanel.intakeDateYmd,
+      intakeTimeHm: form.intakeTimeHm ?? beforePanel.intakeTimeHm,
+      weekCode,
+    });
+    if (orderEditDiffRequiresApproval(computeOrderEditDiff(beforeSnapshot, afterSnapshot))) {
+      return {
+        ok: false,
+        error: "עדכון שדות רגישים דורש אישור מנהל. שלחו בקשת עדכון עם סיבת השינוי.",
+      };
+    }
+  }
+
   capturePerfTimeStart("capture.insertOrder");
   await capturePerfTimed("capture.insertOrderRow", () =>
     prisma.$transaction(async (tx) => {
@@ -2890,7 +2917,7 @@ async function updateOrderWorkPanelActionInner(
           orderExecutionDate,
           intakeDateTime,
           status,
-          paymentMethod: form.paymentMethod as PaymentMethod,
+          paymentMethod: form.paymentMethod,
           paymentPointId: paymentPointIdUpdate,
           amountUsd: deal,
           commissionUsd,
@@ -3000,20 +3027,33 @@ async function updateOrderWorkPanelActionInner(
   }
 
   const auditT0 = Date.now();
-  scheduleCaptureAuditInsert(() =>
-    prisma.auditLog.create({
-      data: {
-        userId: me.id,
-        actionType: "ORDER_UPDATED",
-        entityType: "Order",
-        entityId: existing.id,
-        metadata: {
-          orderNumber: existing.orderNumber,
-          customerName: customer.displayName,
-        } as Prisma.InputJsonValue,
-      },
-    }),
-  );
+  const afterPanel = await getOrderForWorkPanelAction(existing.id);
+  const afterSnapshot = afterPanel ? snapshotFromWorkPanel(afterPanel) : null;
+  const updateDiff = computeOrderEditDiff(beforeSnapshot, afterSnapshot);
+
+  let requestedByName: string | null = null;
+  if (options?.orderEditRequestId) {
+    const editReq = await prisma.orderEditRequest.findFirst({
+      where: { id: options.orderEditRequestId },
+      select: { requestedBy: { select: { fullName: true } } },
+    });
+    requestedByName = editReq?.requestedBy.fullName ?? null;
+  }
+
+  try {
+    await writeOrderUpdateAuditLog({
+      orderId: existing.id,
+      orderNumber: existing.orderNumber ?? "",
+      customerId: customer.id,
+      actorUserId: me.id,
+      actorFullName: me.fullName,
+      orderEditRequestId: options?.orderEditRequestId,
+      requestedByName,
+      diff: updateDiff,
+    });
+  } catch (auditErr) {
+    console.error("[order-update-audit] failed", auditErr);
+  }
   perf.auditMs = Date.now() - auditT0;
   void markApprovedEditRequestUsedAndClearUnlock(existing.id, me.id).catch(() => {});
 
@@ -3106,6 +3146,12 @@ export async function submitOrderUpdateRequestAction(
 
   const diff = computeOrderEditDiff(beforeSnapshot, afterSnapshot);
   if (diff.length === 0) return { ok: false, error: "לא זוהו שינויים — אין מה לשלוח לאישור" };
+  if (!orderEditDiffRequiresApproval(diff)) {
+    return {
+      ok: false,
+      error: "לא נמצא שינוי בשדות שדורשים אישור מנהל (סכום, עמלה, לקוח, שבוע, מדינה, תשלום, הערות, מקום תשלום)",
+    };
+  }
 
   const req = await prisma.orderEditRequest.create({
     data: {

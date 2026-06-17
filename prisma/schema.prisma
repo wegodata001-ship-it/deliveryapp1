@@ -228,7 +228,7 @@ model Order {
   intakeDateTime       DateTime?
   /** מזהה סטטוס — ערך מ-SourceStatus.id (למשל OPEN או מזהה מותאם) */
   status               String         @default("OPEN")
-  paymentMethod        PaymentMethod?
+  paymentMethod        String?
   paymentPointId       String?
   amountUsd            Decimal?       @db.Decimal(19, 4)
   commissionUsd        Decimal?       @db.Decimal(19, 4)
@@ -410,11 +410,11 @@ model Payment {
   totalIlsWithoutVat       Decimal? @db.Decimal(19, 4)
   vatAmount                Decimal? @db.Decimal(19, 4)
   manualDateChanged        Boolean  @default(false)
-  paymentMethod    PaymentMethod?
+  paymentMethod    String?
   /** צורת תשלום בדולר (כאשר יש amountUsd) — תאימות לקליטה דו-מטבעית */
-  usdPaymentMethod PaymentMethod?
+  usdPaymentMethod String?
   /** צורת תשלום בשקל (כאשר יש amountIls) */
-  ilsPaymentMethod PaymentMethod?
+  ilsPaymentMethod String?
   usdNote          String?
   ilsNote          String?
   paymentPlace     String?

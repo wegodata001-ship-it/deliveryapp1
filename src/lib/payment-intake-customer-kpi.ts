@@ -1,4 +1,3 @@
-import type { PaymentMethod } from "@prisma/client";
 import { roundMoney2 } from "@/lib/payment-updated";
 
 /** שורת תשלום מהשרת לסיכומי KPI — ללא שאילתות נוספות במסך */
@@ -6,9 +5,9 @@ export type PaymentIntakeCustomerPaymentRow = {
   amountUsd: string | null;
   amountIls: string | null;
   exchangeRate: string | null;
-  paymentMethod: PaymentMethod | null;
-  usdPaymentMethod: PaymentMethod | null;
-  ilsPaymentMethod: PaymentMethod | null;
+  paymentMethod: string | null;
+  usdPaymentMethod: string | null;
+  ilsPaymentMethod: string | null;
 };
 
 export type PaymentMethodKpiKey = "BANK_TRANSFER" | "CASH" | "CHECK" | "CREDIT" | "OTHER";
@@ -27,7 +26,7 @@ function n(raw: string | null | undefined): number {
   return Number.isFinite(v) ? v : 0;
 }
 
-function methodToKpiKey(method: PaymentMethod | null | undefined): PaymentMethodKpiKey {
+function methodToKpiKey(method: string | null | undefined): PaymentMethodKpiKey {
   if (method === "BANK_TRANSFER" || method === "BANK_TRANSFER_DONE") return "BANK_TRANSFER";
   if (method === "CASH") return "CASH";
   if (method === "CHECK") return "CHECK";

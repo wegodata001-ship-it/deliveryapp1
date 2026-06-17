@@ -30,8 +30,8 @@ export const ORDER_STATUS_META: Record<string, OrderStatusMeta> = {
   },
   [OS.WAITING_FOR_EXECUTION]: {
     value: OS.WAITING_FOR_EXECUTION,
-    label: "בטיפול",
-    editLabel: "בטיפול",
+    label: "ממתין לביצוע",
+    editLabel: "ממתין לביצוע",
     color: "orange",
     badgeClass: "adm-badge-sel--warning",
     tableClass: "adm-ord-st adm-ord-st--progress",
@@ -39,8 +39,8 @@ export const ORDER_STATUS_META: Record<string, OrderStatusMeta> = {
   },
   [OS.WITHDRAWAL_FROM_SUPPLIER]: {
     value: OS.WITHDRAWAL_FROM_SUPPLIER,
-    label: "בטיפול",
-    editLabel: "משיכה מספק",
+    label: "ממתין לביצוע",
+    editLabel: "ממתין לביצוע",
     color: "orange",
     badgeClass: "adm-badge-sel--warning",
     tableClass: "adm-ord-st adm-ord-st--progress",
@@ -48,8 +48,8 @@ export const ORDER_STATUS_META: Record<string, OrderStatusMeta> = {
   },
   [OS.SENT]: {
     value: OS.SENT,
-    label: "בטיפול",
-    editLabel: "נשלחה",
+    label: "ממתין לביצוע",
+    editLabel: "ממתין לביצוע",
     color: "orange",
     badgeClass: "adm-badge-sel--warning",
     tableClass: "adm-ord-st adm-ord-st--progress",
@@ -57,8 +57,8 @@ export const ORDER_STATUS_META: Record<string, OrderStatusMeta> = {
   },
   [OS.WAITING_FOR_CHINA_EXECUTION]: {
     value: OS.WAITING_FOR_CHINA_EXECUTION,
-    label: "בטיפול",
-    editLabel: "ממתין לסין",
+    label: "ממתין לביצוע",
+    editLabel: "ממתין לביצוע",
     color: "orange",
     badgeClass: "adm-badge-sel--warning",
     tableClass: "adm-ord-st adm-ord-st--progress",
@@ -66,8 +66,8 @@ export const ORDER_STATUS_META: Record<string, OrderStatusMeta> = {
   },
   [OS.COMPLETED]: {
     value: OS.COMPLETED,
-    label: "מוכן",
-    editLabel: "מוכן",
+    label: "בוצע",
+    editLabel: "בוצע",
     color: "green",
     badgeClass: "adm-badge-sel--success",
     tableClass: "adm-ord-st adm-ord-st--done",
@@ -85,7 +85,7 @@ export const ORDER_STATUS_META: Record<string, OrderStatusMeta> = {
   [OS.DEBT_WITHDRAWAL]: {
     value: OS.DEBT_WITHDRAWAL,
     label: "משיכה מחוב",
-    editLabel: "יתרת זכות ללקוח",
+    editLabel: "משיכה מחוב",
     color: "purple",
     badgeClass: "adm-badge-sel--withdrawal",
     tableClass: "adm-ord-st adm-ord-st--muted",
@@ -122,6 +122,14 @@ export function getOrderStatusMeta(status: string): OrderStatusMeta {
 
 export function getOrderStatusLabel(status: string): string {
   return getOrderStatusMeta(status).label;
+}
+
+/** תווית אחידה ל-5 סטטוסים רשמיים (כולל מיפוי legacy) */
+export function getOfficialOrderStatusDisplayLabel(status: string): string {
+  if (status === OS.DEBT_WITHDRAWAL) return "משיכה מחוב";
+  const quick = orderStatusToQuickSelectValue(status);
+  if (quick in ORDER_STATUS_META) return ORDER_STATUS_META[quick].label;
+  return getOrderStatusLabel(status);
 }
 
 export function orderStatusToQuickSelectValue(status: string): string {

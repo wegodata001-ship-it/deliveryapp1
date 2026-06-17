@@ -10,6 +10,7 @@ import type {
   CustomerProfilePaymentRow,
   CustomersModuleListRow,
   CustomersModuleListResult,
+  CustomersPdfScope,
   CustomerWorkspaceOrderRow,
   CustomerWorkspacePaymentRow,
 } from "@/lib/customers-module-types";
@@ -121,6 +122,73 @@ export async function listCustomersModule(
   });
 
   return { rows, page, limit, hasMore };
+}
+
+export type { CustomersPdfScope } from "@/lib/customers-module-types";
+
+const BALANCE_EPS = 0.0001;
+
+function balanceUsdNumber(value: string): number {
+  const n = Number(String(value ?? "").replace(/[$,\s]/g, ""));
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** רשימת לקוחות לייצוא PDF — לפי היקף (נוכחי / כל / חוב / זכות) */
+export async function listCustomersModuleForExport(opts: {
+  workCountry?: WorkCountryCode;
+  scope: CustomersPdfScope;
+  customerId?: string | null;
+}): Promise<CustomersModuleListRow[]> {
+  const workCountry = opts.workCountry ?? DEFAULT_WORK_COUNTRY;
+  const balanceScope = scopeFromWorkCountryParam(workCountry);
+
+  if (opts.scope === "current") {
+    const cid = opts.customerId?.trim();
+    if (!cid) return [];
+    const customer = await prisma.customer.findFirst({
+      where: { id: cid, deletedAt: null },
+      select: customerSelect,
+    });
+    if (!customer) return [];
+    const balances = await calculateCustomerBalances([cid], balanceScope);
+    const b = balances.get(cid);
+    return [
+      mapCustomerRow(customer, {
+        ordersUsd: b?.totalOrders ?? new Prisma.Decimal(0),
+        paymentsUsd: b?.totalPayments ?? new Prisma.Decimal(0),
+        balanceUsd: b?.balance ?? new Prisma.Decimal(0),
+      }),
+    ];
+  }
+
+  const customers = await prisma.customer.findMany({
+    where: { deletedAt: null },
+    orderBy: { displayName: "asc" },
+    select: customerSelect,
+  });
+  if (!customers.length) return [];
+
+  const balances = await calculateCustomerBalances(
+    customers.map((c) => c.id),
+    balanceScope,
+  );
+
+  let rows = customers.map((c) => {
+    const b = balances.get(c.id);
+    return mapCustomerRow(c, {
+      ordersUsd: b?.totalOrders ?? new Prisma.Decimal(0),
+      paymentsUsd: b?.totalPayments ?? new Prisma.Decimal(0),
+      balanceUsd: b?.balance ?? new Prisma.Decimal(0),
+    });
+  });
+
+  if (opts.scope === "debt") {
+    rows = rows.filter((r) => balanceUsdNumber(r.balanceUsd) > BALANCE_EPS);
+  } else if (opts.scope === "credit") {
+    rows = rows.filter((r) => balanceUsdNumber(r.balanceUsd) < -BALANCE_EPS);
+  }
+
+  return rows;
 }
 
 export function customerDisplayCode(c: {

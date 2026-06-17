@@ -1,7 +1,7 @@
 "use client";
 
-import { PaymentMethod } from "@prisma/client";
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { usePaymentMethodCatalog } from "@/components/admin/PaymentMethodCatalogProvider";
 import {
   exportPaymentsSourceAction,
   getPaymentCaptureAllocationsAction,
@@ -10,7 +10,6 @@ import {
   type PaymentsSourceListPayload,
 } from "@/app/admin/source-tables/payments-actions";
 import {
-  PAYMENT_METHOD_LABELS,
   type PaymentCaptureAllocationRow,
   type PaymentMethodTone,
   type PaymentsSourcePreview,
@@ -44,11 +43,6 @@ const EMPTY_FILTERS: AdvancedFilters = {
   fromYmd: "",
   toYmd: "",
 };
-
-const METHOD_FILTER_OPTIONS = Object.values(PaymentMethod).map((m) => ({
-  value: m,
-  label: PAYMENT_METHOD_LABELS[m] ?? m,
-}));
 
 function methodBadgeClass(tone: PaymentMethodTone): string {
   return `adm-payments-method-badge adm-payments-method-badge--${tone}`;
@@ -86,30 +80,10 @@ const TABLE_COLUMNS = [
   { key: "actions", label: "פעולות", sortable: false },
 ] as const;
 
-function downloadBase64(base64: string, filename: string, mime: string) {
-  const bin = atob(base64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  const blob = new Blob([bytes], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-function openPdfHtml(base64: string) {
-  const bin = atob(base64);
-  const html = new TextDecoder("utf-8").decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
-  const w = window.open("", "_blank");
-  if (w) {
-    w.document.write(html);
-    w.document.close();
-  }
-}
+import { downloadBase64File, handleSourceTableExportResult } from "@/lib/pdf-export-client";
 
 export function PaymentsSourceTableClient({ initialSearch = "" }: { initialSearch?: string }) {
+  const { options: paymentMethodFilterOptions } = usePaymentMethodCatalog();
   const { globalCountry } = useAdminGlobal();
   const workCountry = workCountryFromOrderSourceCountry(globalCountry);
   const { openWindow } = useAdminWindows();
@@ -268,11 +242,7 @@ export function PaymentsSourceTableClient({ initialSearch = "" }: { initialSearc
       setLoadError(res.error);
       return;
     }
-    if (kind === "pdf" && res.mime.startsWith("text/html")) {
-      openPdfHtml(res.base64);
-    } else {
-      downloadBase64(res.base64, res.filename, res.mime);
-    }
+    handleSourceTableExportResult(kind, res, setLoadError, downloadBase64File);
   }
 
   const kpis = payload?.kpis;
@@ -365,7 +335,7 @@ export function PaymentsSourceTableClient({ initialSearch = "" }: { initialSearc
               onChange={(e) => setFilters((f) => ({ ...f, paymentMethod: e.target.value }))}
             >
               <option value="">הכל</option>
-              {METHOD_FILTER_OPTIONS.map((o) => (
+              {paymentMethodFilterOptions.map((o) => (
                 <option key={o.value} value={o.value}>
                   {o.label}
                 </option>

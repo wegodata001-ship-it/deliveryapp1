@@ -70,24 +70,8 @@ export function paymentMethodTypeTone(id: string): PaymentMethodTypeTone {
 }
 
 async function ensurePaymentMethodsTable(): Promise<void> {
-  await ensureOnce("source-management-tables", async () => {
-    await prisma.$executeRaw`
-      CREATE TABLE IF NOT EXISTS "SourcePaymentMethod" (
-        "id" TEXT PRIMARY KEY,
-        "nameHe" TEXT NOT NULL,
-        "isActive" BOOLEAN NOT NULL DEFAULT true,
-        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
-      )
-    `;
-    for (const method of Object.values(PaymentMethod)) {
-      await prisma.$executeRaw`
-        INSERT INTO "SourcePaymentMethod" ("id", "nameHe")
-        VALUES (${method}, ${PAYMENT_METHOD_LABELS[method] ?? method})
-        ON CONFLICT ("id") DO NOTHING
-      `;
-    }
-  });
+  const { ensurePaymentMethodSourceTable } = await import("@/lib/payment-method-registry-data");
+  await ensurePaymentMethodSourceTable();
 }
 
 function matchesFilters(row: PaymentMethodsSourceRow, filters: PaymentMethodsSourceFilters): boolean {

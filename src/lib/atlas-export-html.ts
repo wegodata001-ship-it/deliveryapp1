@@ -156,7 +156,6 @@ ${head}
 ${table}
 ${footer}
 <div class="wego-export-foot">WEGO ERP Business Management System</div>
-<script>window.onload=function(){window.print();}</script>
 </body>
 </html>`;
 }

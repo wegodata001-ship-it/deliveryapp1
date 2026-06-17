@@ -1,4 +1,4 @@
-import { PaymentMethod, Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { mergeOrderWhere, resolveCountryScope } from "@/lib/country-data-scope";
 import { ORDER_COUNTRY_CODES, type OrderCountryCode } from "@/lib/order-countries";
 import { OS } from "@/lib/order-status-slugs";
@@ -117,11 +117,7 @@ export function buildOrdersListWhereFromSearchParams(
   const createdById = readTextParam(sp, "createdBy");
   const rawPaymentType = readTextParam(sp, "paymentType");
   const paymentType =
-    rawPaymentType === "NONE"
-      ? rawPaymentType
-      : Object.values(PaymentMethod).includes(rawPaymentType as PaymentMethod)
-        ? (rawPaymentType as PaymentMethod)
-        : "";
+    rawPaymentType === "NONE" ? rawPaymentType : rawPaymentType || "";
   const paymentLocationRaw = readTextParam(sp, "paymentLocation");
   const amountMinRaw = readTextParam(sp, "amountMin");
   const amountMaxRaw = readTextParam(sp, "amountMax");
@@ -150,7 +146,7 @@ export function buildOrdersListWhereFromSearchParams(
     ...(paymentType === "NONE"
       ? { paymentMethod: null }
       : paymentType
-        ? { paymentMethod: paymentType as PaymentMethod }
+        ? { paymentMethod: paymentType }
         : {}),
     ...(paymentLocationRaw === "NONE"
       ? { AND: [{ paymentPointId: null }, { locationId: null }] }

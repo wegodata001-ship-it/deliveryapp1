@@ -31,7 +31,7 @@ import {
   type OrderPhaseUi,
 } from "@/lib/customer-balance-order-status";
 import { computeSignedFromTotals } from "@/lib/customer-balance";
-import { calculateCustomerBalances } from "@/lib/customer-balance-calculator";
+import { calculateCustomerBalances, type CustomerBalanceCalculation } from "@/lib/customer-balance-calculator";
 import {
   orderStatusesForBalanceFilter,
   parseCustomerBalanceOrderStatusFilter,
@@ -94,6 +94,8 @@ export type CustomerBalanceFilters = {
   orderStatus?: CustomerBalanceOrderStatusFilter;
   /** true = רק לקוחות עם תשלומים בטווח */
   hasPayments?: boolean;
+  /** true = כולל לקוחות מאוזנים (יתרה 0). ברירת מחדל: false */
+  showBalanced?: boolean;
   sort?: CustomerBalanceSort;
   /** סינון תצוגה: כל / חוב בש״ח בלבד / חוב בדולר בלבד */
   currencyView?: "" | "ILS" | "USD";
@@ -244,6 +246,9 @@ const ORDER_PHASE_FILTER_VALUES = new Set<CustomerBalanceOrderPhaseFilter>([
 
 /** חוב בדולר מתחת לסף — "יתרה נמוכה" */
 const LOW_DEBT_USD = 5;
+/** סף יתרה מאוזנת — ABS(balance) ≤ EPS נחשב 0 */
+const BALANCE_ZERO_EPS = 0.0001;
+const BALANCE_ZERO_EPS_DECIMAL = new Prisma.Decimal(String(BALANCE_ZERO_EPS));
 /** חוב בש״ח מעליו — נספר ב־KPI "יתרה גבוהה" */
 const HIGH_DEBT_ILS = 15_000;
 
@@ -411,6 +416,46 @@ function rowSignedUsdNumber(row: CustomerBalanceRow): number {
 function rowBalanceUsdNumber(balanceUsd: string): number {
   const n = Number(balanceUsd.replace(",", "."));
   return Number.isFinite(n) ? n : 0;
+}
+
+function resolveDebtFilter(query: CustomerBalanceQuery): CustomerBalanceDebtFilter {
+  return query.filters?.balanceDebtStatus && DEBT_FILTER_VALUES.has(query.filters.balanceDebtStatus)
+    ? query.filters.balanceDebtStatus
+    : "ALL";
+}
+
+function sharedBalanceDecimal(
+  customerId: string,
+  sharedBalances: Map<string, CustomerBalanceCalculation>,
+): Prisma.Decimal {
+  return sharedBalances.get(customerId)?.balance ?? new Prisma.Decimal(0);
+}
+
+/** סינון מוקדם ב-DB — לפני שליפת הזמנות/תשלומים מפורטים */
+function filterCustomerIdsByBalanceScope(
+  customerIds: string[],
+  sharedBalances: Map<string, CustomerBalanceCalculation>,
+  debtFilter: CustomerBalanceDebtFilter,
+  showBalanced: boolean,
+): string[] {
+  return customerIds.filter((id) => {
+    const bal = sharedBalanceDecimal(id, sharedBalances);
+    const absBal = bal.abs();
+    const isZero = absBal.lte(BALANCE_ZERO_EPS_DECIMAL);
+
+    if (debtFilter === "OWES") return bal.gt(BALANCE_ZERO_EPS_DECIMAL);
+    if (debtFilter === "CREDIT") return bal.lt(BALANCE_ZERO_EPS_DECIMAL.neg());
+    if (debtFilter === "BALANCED") return isZero;
+
+    if (!showBalanced && isZero) return false;
+    return true;
+  });
+}
+
+function rowHasNonZeroBalance(row: CustomerBalanceRow): boolean {
+  const signed = rowBalanceUsdNumber(row.signedUsd);
+  if (Math.abs(signed) > BALANCE_ZERO_EPS) return true;
+  return Math.abs(rowBalanceUsdNumber(row.totalBalanceUSD)) > BALANCE_ZERO_EPS;
 }
 
 function rowOrdersTotalNumber(totalOrdersUSD: string): number {
@@ -983,36 +1028,59 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     exchangeRate: true,
   } as const;
 
-  const [
+  const debtFilter = resolveDebtFilter(query);
+  const showBalanced = query.filters?.showBalanced === true;
+
+  const sharedBalances = await calculateCustomerBalances(customerIds, {
+    from: scopeFrom ?? null,
+    to: scopeTo ?? null,
+    sourceCountry: orderCountryPrisma ?? null,
+    orderStatuses: orderStatusList,
+    metrics: {
+      onQuery: (kind, ms) => {
+        countPrismaQuery(`calculateCustomerBalances.${kind}`);
+        if (kind === "orders") {
+          fetchOrdersMs += ms;
+          ordersQueryMs += ms;
+        } else {
+          fetchPaymentsMs += ms;
+          paymentsQueryMs += ms;
+        }
+      },
+      onTransform: (kind, ms) => {
+        if (kind === "orders") ordersTransformMs += ms;
+        else paymentsTransformMs += ms;
+      },
+    },
+  });
+
+  const scopedCustomerIds = filterCustomerIdsByBalanceScope(
+    customerIds,
     sharedBalances,
+    debtFilter,
+    showBalanced,
+  );
+  const scopedCustomerIdSet = new Set(scopedCustomerIds);
+  const scopedCustomers = customers.filter((c) => scopedCustomerIdSet.has(c.id));
+
+  if (scopedCustomerIds.length === 0) {
+    console.log("[balances-report]", {
+      ...balancesReportLogBase,
+      ordersFound: 0,
+      paymentsFound: 0,
+      balancesFound: 0,
+      reason: "no_customers_after_balance_scope",
+    });
+    return emptyBalancesPayload(limit);
+  }
+
+  const [
     lifetimeAgg,
     orderRows,
     paymentRows,
     generalCreditRows,
     overrides,
   ] = await Promise.all([
-    calculateCustomerBalances(customerIds, {
-      from: scopeFrom ?? null,
-      to: scopeTo ?? null,
-      sourceCountry: orderCountryPrisma ?? null,
-      orderStatuses: orderStatusList,
-      metrics: {
-        onQuery: (kind, ms) => {
-          countPrismaQuery(`calculateCustomerBalances.${kind}`);
-          if (kind === "orders") {
-            fetchOrdersMs += ms;
-            ordersQueryMs += ms;
-          } else {
-            fetchPaymentsMs += ms;
-            paymentsQueryMs += ms;
-          }
-        },
-        onTransform: (kind, ms) => {
-          if (kind === "orders") ordersTransformMs += ms;
-          else paymentsTransformMs += ms;
-        },
-      },
-    }),
     perfPrismaQuery("orders.lifetimeGroupBy", (ms) => {
       fetchOrdersMs += ms;
       ordersQueryMs += ms;
@@ -1021,7 +1089,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
         by: ["customerId"],
         where: {
           deletedAt: null,
-          customerId: { in: customerIds },
+          customerId: { in: scopedCustomerIds },
           status: { not: OS.DEBT_WITHDRAWAL },
           countryCode: countryScope.workCountry,
           sourceCountry: countryScope.sourceCountry,
@@ -1029,7 +1097,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
         _sum: { totalUsd: true },
       }),
     ),
-    findManyInChunks(customerIds, (chunk) =>
+    findManyInChunks(scopedCustomerIds, (chunk) =>
       perfPrismaQuery("orders.findMany", (ms) => {
         fetchOrdersMs += ms;
         ordersQueryMs += ms;
@@ -1040,7 +1108,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
         }),
       ),
     ),
-    findManyInChunks(customerIds, (chunk) =>
+    findManyInChunks(scopedCustomerIds, (chunk) =>
       perfPrismaQuery("payments.linkedFindMany", (ms) => {
         fetchPaymentsMs += ms;
         paymentsQueryMs += ms;
@@ -1051,7 +1119,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
         }),
       ),
     ),
-    findManyInChunks(customerIds, (chunk) =>
+    findManyInChunks(scopedCustomerIds, (chunk) =>
       perfPrismaQuery("payments.generalCreditFindMany", (ms) => {
         fetchPaymentsMs += ms;
         paymentsQueryMs += ms;
@@ -1077,8 +1145,8 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
         }),
       ),
     ),
-    customerIds.length > 0
-      ? findManyInChunks(customerIds, (chunk) =>
+    scopedCustomerIds.length > 0
+      ? findManyInChunks(scopedCustomerIds, (chunk) =>
           perfPrismaQuery("customerBalanceStatusOverride.findMany", (ms) => {
             fetchCustomersMs += ms;
             customersQueryMs += ms;
@@ -1188,7 +1256,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   customersTransformMs += Date.now() - overrideTransformT0;
 
   const customerRowsTransformT0 = Date.now();
-  const rows: CustomerBalanceRow[] = customers.map((c): CustomerBalanceRow => {
+  const rows: CustomerBalanceRow[] = scopedCustomers.map((c): CustomerBalanceRow => {
     const shared = sharedBalances.get(c.id);
     const expectedIls = expectedIlsByCustomer.get(c.id) ?? new Prisma.Decimal(0);
     const receivedIls = receivedIlsByCustomer.get(c.id) ?? new Prisma.Decimal(0);
@@ -1283,20 +1351,19 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   customersTransformMs += Date.now() - customerRowsTransformT0;
   calculateBalancesMs += Date.now() - calcT0;
 
-  const debtFilter: CustomerBalanceDebtFilter =
-    query.filters?.balanceDebtStatus && DEBT_FILTER_VALUES.has(query.filters.balanceDebtStatus)
-      ? query.filters.balanceDebtStatus
-      : "ALL";
-
-  const minB = parseIlsFilter(query.filters?.minBalanceIls);
-  const maxB = parseIlsFilter(query.filters?.maxBalanceIls);
-
   let filtered = rows.filter((r) => matchesDebtFilter(r, debtFilter));
+
+  if (!showBalanced && debtFilter !== "BALANCED") {
+    filtered = filtered.filter((r) => rowHasNonZeroBalance(r));
+  }
 
   if (query.filters?.hasPayments) {
     const epsPay = 0.01;
     filtered = filtered.filter((r) => rowPaymentsTotalNumber(r.totalPaymentsUSD) > epsPay);
   }
+
+  const minB = parseIlsFilter(query.filters?.minBalanceIls);
+  const maxB = parseIlsFilter(query.filters?.maxBalanceIls);
 
   if (minB != null) filtered = filtered.filter((r) => rowBalanceUsdNumber(r.totalBalanceUSD) >= minB);
   if (maxB != null) filtered = filtered.filter((r) => rowBalanceUsdNumber(r.totalBalanceUSD) <= maxB);
@@ -1373,7 +1440,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     query.filters?.sort && SORT_VALUES.has(query.filters.sort) ? query.filters.sort : "balance_desc";
 
   const statusBalanceKpis = computeStatusBalanceKpis({
-    customerIds,
+    customerIds: scopedCustomerIds,
     orderRows,
     receivedUsdByCustomer,
     creditUsdByCustomer,
@@ -1666,7 +1733,7 @@ export async function exportCustomerBalancesAction(
     const headers = ["קוד לקוח", "שם לקוח", "סה\"כ הזמנות מצטבר ($)", "סה\"כ הזמנות ($)", "סה\"כ תשלומים ($)", "יתרה ($)", "סטטוס"];
     const data = payload.rows.map((r) => {
       const b = rowBalanceUsdNumber(r.totalBalanceUSD);
-      const status = b > 0.01 ? "חייב" : b < -0.01 ? "זכות" : "מאוזן";
+      const status = b > 0.01 ? "חוב פתוח" : b < -0.01 ? "יתרת זכות" : "מאוזן";
       return [
         r.customerCode ?? "—",
         r.customerName,

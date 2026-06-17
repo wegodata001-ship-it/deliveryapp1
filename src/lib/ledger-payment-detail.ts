@@ -1,4 +1,7 @@
-import type { PaymentMethod, PaymentRecordStatus, Prisma } from "@prisma/client";
+import type { PaymentRecordStatus, Prisma } from "@prisma/client";
+import { formatLedgerAmountDisplay } from "@/lib/ledger-payment-display";
+import { normalizePaymentMethodId } from "@/lib/payment-method-slugs";
+import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 import {
   calculateLineTotalPaymentUsd,
   createDefaultPaymentLine,
@@ -10,8 +13,11 @@ import {
 } from "@/lib/payment-updated";
 
 export type LedgerPaymentMethodBucket = {
-  method: PaymentLineMethod;
+  method: string;
   label: string;
+  /** סכום מקורי בשקלים — null כשלא נרשם ₪ */
+  amountIls: string | null;
+  /** שווי בדולר (כולל המרה מ-₪) */
   amountUsd: string;
 };
 
@@ -28,6 +34,8 @@ export type LedgerPaymentCheckLine = {
 export type LedgerPaymentDetail = {
   paymentCode: string;
   totalUsd: string;
+  /** סה״כ שקלים שנרשמו בקליטה */
+  totalIls: string | null;
   methods: LedgerPaymentMethodBucket[];
   checks: LedgerPaymentCheckLine[];
   orders: LedgerPaymentOrderAllocation[];
@@ -35,25 +43,64 @@ export type LedgerPaymentDetail = {
 
 export type LedgerPaymentMethodDisplayLine = {
   label: string;
+  amountIls: string | null;
   amountUsd: string;
 };
 
-const METHOD_ORDER: PaymentLineMethod[] = ["CASH", "CHECK", "BANK_TRANSFER", "CREDIT", "OTHER"];
+const METHOD_SORT_ORDER: readonly string[] = [
+  "CASH",
+  "CHECK",
+  "BANK_TRANSFER",
+  "BANK_TRANSFER_DONE",
+  "CREDIT",
+  "OTHER",
+];
 
-export function ledgerPaymentMethodLabel(m: PaymentLineMethod): string {
-  if (m === "CREDIT") return "אשראי";
-  if (m === "BANK_TRANSFER") return "העברה בנקאית";
-  if (m === "CASH") return "מזומן";
-  if (m === "CHECK") return "צ׳ק";
-  return "אחר";
+type MethodAmountAcc = { ils: number; usd: number };
+
+function emptyAcc(): MethodAmountAcc {
+  return { ils: 0, usd: 0 };
 }
 
-function mapPrismaMethod(m: PaymentMethod | null | undefined): PaymentLineMethod {
-  if (m === "CREDIT") return "CREDIT";
-  if (m === "BANK_TRANSFER" || m === "BANK_TRANSFER_DONE") return "BANK_TRANSFER";
-  if (m === "CASH") return "CASH";
-  if (m === "CHECK") return "CHECK";
-  return "OTHER";
+function methodKey(raw: string): string {
+  const id = normalizePaymentMethodId(raw.trim());
+  return id || "OTHER";
+}
+
+function addBucket(
+  map: Map<string, MethodAmountAcc>,
+  methodRaw: string,
+  patch: Partial<MethodAmountAcc>,
+): void {
+  const key = methodKey(methodRaw);
+  const prev = map.get(key) ?? emptyAcc();
+  map.set(key, {
+    ils: roundMoney2(prev.ils + (patch.ils ?? 0)),
+    usd: roundMoney2(prev.usd + (patch.usd ?? 0)),
+  });
+}
+
+function mergeBucketMaps(...maps: Map<string, MethodAmountAcc>[]): Map<string, MethodAmountAcc> {
+  const out = new Map<string, MethodAmountAcc>();
+  for (const m of maps) {
+    for (const [k, v] of m) {
+      const prev = out.get(k) ?? emptyAcc();
+      out.set(k, {
+        ils: roundMoney2(prev.ils + v.ils),
+        usd: roundMoney2(prev.usd + v.usd),
+      });
+    }
+  }
+  return out;
+}
+
+export function ledgerPaymentMethodLabel(m: string): string {
+  const id = methodKey(m);
+  return PAYMENT_METHOD_LABELS[id] ?? id;
+}
+
+function mapPrismaMethod(m: string | null | undefined): string {
+  return methodKey(m ?? "");
 }
 
 function parseAmountToken(raw: string): number | "" {
@@ -61,10 +108,8 @@ function parseAmountToken(raw: string): number | "" {
   return Number.isFinite(n) && n > 0 ? n : "";
 }
 
-function mapMethodToken(token: string): PaymentLineMethod {
-  if (token === "CREDIT" || token === "BANK_TRANSFER" || token === "CASH" || token === "CHECK" || token === "OTHER")
-    return token;
-  return "CASH";
+function mapMethodToken(token: string): string {
+  return methodKey(token);
 }
 
 /** פירוק שורות # מתוך notes — זהה לקליטת תשלום */
@@ -81,15 +126,15 @@ export function parsePaymentLinesFromNotes(notes: string | null | undefined): Pa
     const dualUsd = line.match(/USD\s+\$([\d.,]+)/i);
     const dualIls = line.match(/ILS\s+₪([\d.,]+)/i);
     if (dualUsd || dualIls) {
-      const usdMethod = line.match(/USD\s+\$[\d.,]+\s·\s([A-Z_]+)/)?.[1];
-      const ilsMethod = line.match(/ILS\s+₪[\d.,]+\s·\s([A-Z_]+)/)?.[1];
+      const usdMethod = line.match(/USD\s+\$[\d.,]+\s·\s([A-Z0-9_]+)/i)?.[1];
+      const ilsMethod = line.match(/ILS\s+₪[\d.,]+\s·\s([A-Z0-9_]+)/i)?.[1];
       const vatMatch = line.match(/vatMode=([A-Z_]+)/)?.[1];
       parsed.push({
         ...createDefaultPaymentLine(`hist_${parsed.length + 1}`),
         usdAmount: dualUsd ? parseAmountToken(dualUsd[1] ?? "0") : "",
         ilsAmount: dualIls ? parseAmountToken(dualIls[1] ?? "0") : "",
-        usdPaymentMethod: mapMethodToken(usdMethod ?? "CASH"),
-        ilsPaymentMethod: mapMethodToken(ilsMethod ?? "CASH"),
+        usdPaymentMethod: mapMethodToken(usdMethod ?? "CASH") as PaymentLineMethod,
+        ilsPaymentMethod: mapMethodToken(ilsMethod ?? "CASH") as PaymentLineMethod,
         vatMode:
           vatMatch === "EXEMPT" || vatMatch === "BEFORE_VAT" || vatMatch === "INCLUDING_VAT"
             ? vatMatch
@@ -98,7 +143,7 @@ export function parsePaymentLinesFromNotes(notes: string | null | undefined): Pa
       continue;
     }
 
-    const m = line.match(/^#\d+\s+([$₪])\s?([\d.,]+)\s·\s([A-Z_]+)\s·\s([A-Z_]+)(?:\s\|\s.*)?$/);
+    const m = line.match(/^#\d+\s+([$₪])\s?([\d.,]+)\s·\s([A-Z_]+)\s·\s([A-Z_0-9]+)(?:\s\|\s.*)?$/);
     if (!m) continue;
     const noteMatch = line.match(/\|\s*note=(.*)$/);
     const cur = (m[1] ?? "$") === "$" ? "USD" : "ILS";
@@ -109,8 +154,16 @@ export function parsePaymentLinesFromNotes(notes: string | null | undefined): Pa
       vatMode:
         m[3] === "EXEMPT" || m[3] === "BEFORE_VAT" || m[3] === "INCLUDING_VAT" ? m[3] : "INCLUDING_VAT",
       ...(cur === "USD"
-        ? { usdAmount: amt, usdPaymentMethod: mapMethodToken(m[4] ?? "CASH"), usdNote: noteMatch?.[1]?.trim() ?? "" }
-        : { ilsAmount: amt, ilsPaymentMethod: mapMethodToken(m[4] ?? "CASH"), ilsNote: noteMatch?.[1]?.trim() ?? "" }),
+        ? {
+            usdAmount: amt,
+            usdPaymentMethod: mapMethodToken(m[4] ?? "CASH") as PaymentLineMethod,
+            usdNote: noteMatch?.[1]?.trim() ?? "",
+          }
+        : {
+            ilsAmount: amt,
+            ilsPaymentMethod: mapMethodToken(m[4] ?? "CASH") as PaymentLineMethod,
+            ilsNote: noteMatch?.[1]?.trim() ?? "",
+          }),
     });
   }
   return parsed;
@@ -118,10 +171,10 @@ export function parsePaymentLinesFromNotes(notes: string | null | undefined): Pa
 
 function parseLegacyIntakeBuckets(
   notes: string,
-  defaultMethod: PaymentLineMethod,
+  defaultMethod: string,
   exchangeRate: number,
-): Map<PaymentLineMethod, number> {
-  const buckets = new Map<PaymentLineMethod, number>();
+): Map<string, MethodAmountAcc> {
+  const buckets = new Map<string, MethodAmountAcc>();
   const intakeLine = notes
     .split("\n")
     .map((l) => l.trim())
@@ -134,35 +187,44 @@ function parseLegacyIntakeBuckets(
   const transferM = intakeLine.match(/העברה\s*₪\s*([\d.,]+)/);
   const noVatM = intakeLine.match(/ללא\s*מע״מ\s*₪\s*([\d.,]+)/);
 
-  const add = (method: PaymentLineMethod, ilsOrUsd: number, isIls: boolean) => {
-    if (!Number.isFinite(ilsOrUsd) || ilsOrUsd <= 0) return;
-    const usd = isIls && rate > 0 ? roundMoney2(ilsOrUsd / rate) : roundMoney2(ilsOrUsd);
-    buckets.set(method, roundMoney2((buckets.get(method) ?? 0) + usd));
+  const addIls = (method: string, ils: number) => {
+    if (!Number.isFinite(ils) || ils <= 0) return;
+    const usd = rate > 0 ? roundMoney2(ils / rate) : 0;
+    addBucket(buckets, method, { ils, usd });
+  };
+  const addUsd = (method: string, usd: number) => {
+    if (!Number.isFinite(usd) || usd <= 0) return;
+    addBucket(buckets, method, { usd: roundMoney2(usd) });
   };
 
-  if (usdM) add(defaultMethod, Number(usdM[1].replace(/,/g, "")), false);
-  if (ilsM) add(defaultMethod, Number(ilsM[1].replace(/,/g, "")), true);
-  if (transferM) add("BANK_TRANSFER", Number(transferM[1].replace(/,/g, "")), true);
-  if (noVatM) add("OTHER", Number(noVatM[1].replace(/,/g, "")), true);
+  if (usdM) addUsd(defaultMethod, Number(usdM[1].replace(/,/g, "")));
+  if (ilsM) addIls(defaultMethod, Number(ilsM[1].replace(/,/g, "")));
+  if (transferM) addIls("BANK_TRANSFER", Number(transferM[1].replace(/,/g, "")));
+  if (noVatM) addIls("OTHER", Number(noVatM[1].replace(/,/g, "")));
 
   return buckets;
 }
 
-function bucketsFromPaymentLines(lines: PaymentLine[], exchangeRate: number): Map<PaymentLineMethod, number> {
-  const buckets = new Map<PaymentLineMethod, number>();
+function bucketsFromPaymentLines(lines: PaymentLine[], exchangeRate: number): Map<string, MethodAmountAcc> {
+  const buckets = new Map<string, MethodAmountAcc>();
   const rate = Number.isFinite(exchangeRate) && exchangeRate > 0 ? exchangeRate : 0;
-  const add = (method: PaymentLineMethod, usd: number) => {
-    if (usd <= 0.005) return;
-    buckets.set(method, roundMoney2((buckets.get(method) ?? 0) + usd));
-  };
+
   for (const line of lines) {
     const n = normalizePaymentLine(line);
     const usdRaw = typeof n.usdAmount === "number" && n.usdAmount > 0 ? n.usdAmount : 0;
-    if (usdRaw > 0) add(n.usdPaymentMethod, usdRaw);
+    if (usdRaw > 0) addBucket(buckets, n.usdPaymentMethod, { usd: usdRaw });
+
+    const ilsRaw = typeof n.ilsAmount === "number" && n.ilsAmount > 0 ? n.ilsAmount : 0;
+    if (ilsRaw > 0) {
+      const usdFromIls = rate > 0 ? roundMoney2(ilsRaw / rate) : 0;
+      addBucket(buckets, n.ilsPaymentMethod, { ils: ilsRaw, usd: usdFromIls });
+      continue;
+    }
+
     const calc = calculateLineTotalPaymentUsd(n, rate);
     const ilsUsd = roundMoney2(calc - usdRaw);
-    if (ilsUsd > 0) add(n.ilsPaymentMethod, ilsUsd);
-    if (usdRaw <= 0 && ilsUsd <= 0 && calc > 0) add(linePaymentMethod(n), calc);
+    if (ilsUsd > 0) addBucket(buckets, n.ilsPaymentMethod, { usd: ilsUsd });
+    if (usdRaw <= 0 && ilsUsd <= 0 && calc > 0) addBucket(buckets, linePaymentMethod(n), { usd: calc });
   }
   return buckets;
 }
@@ -176,54 +238,50 @@ function paymentRowUsdEquivalent(row: LedgerPaymentBatchRow): number {
   return 0;
 }
 
-/** פירוק שורות # מ-notes של קליטת תשלום — סכומים כפי שנשמרו (USD/ILS · METHOD) */
+/** פירוק שורות # מ-notes — סכומים מקוריים לפי אמצעי */
 function bucketsFromIntakeNotesBreakdown(
   notes: string | null | undefined,
   exchangeRate: number,
-): Map<PaymentLineMethod, number> {
-  const buckets = new Map<PaymentLineMethod, number>();
+): Map<string, MethodAmountAcc> {
+  const buckets = new Map<string, MethodAmountAcc>();
   const txt = (notes ?? "").trim();
   if (!txt) return buckets;
   const rate = Number.isFinite(exchangeRate) && exchangeRate > 0 ? exchangeRate : 0;
-  const add = (method: PaymentLineMethod, usd: number) => {
-    if (usd <= 0.005) return;
-    buckets.set(method, roundMoney2((buckets.get(method) ?? 0) + usd));
-  };
 
   for (const line of txt.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed.startsWith("#")) continue;
 
-    for (const m of trimmed.matchAll(/USD\s+\$([\d.,]+)\s·\s([A-Z_]+)/gi)) {
+    for (const m of trimmed.matchAll(/USD\s+\$([\d.,]+)\s·\s([A-Z0-9_]+)/gi)) {
       const amt = Number(String(m[1] ?? "").replace(/,/g, ""));
-      if (Number.isFinite(amt) && amt > 0) add(mapMethodToken(String(m[2] ?? "CASH")), amt);
+      if (Number.isFinite(amt) && amt > 0) addBucket(buckets, mapMethodToken(String(m[2] ?? "CASH")), { usd: amt });
     }
-    for (const m of trimmed.matchAll(/ILS\s+₪([\d.,]+)\s·\s([A-Z_]+)/gi)) {
+    for (const m of trimmed.matchAll(/ILS\s+₪([\d.,]+)\s·\s([A-Z0-9_]+)/gi)) {
       const ils = Number(String(m[1] ?? "").replace(/,/g, ""));
       if (!Number.isFinite(ils) || ils <= 0) continue;
       const usd = rate > 0 ? roundMoney2(ils / rate) : 0;
-      if (usd > 0) add(mapMethodToken(String(m[2] ?? "CASH")), usd);
+      addBucket(buckets, mapMethodToken(String(m[2] ?? "CASH")), { ils, usd });
     }
   }
   return buckets;
 }
 
-function bucketsFromBatchRows(batchRows: LedgerPaymentBatchRow[]): Map<PaymentLineMethod, number> {
-  const buckets = new Map<PaymentLineMethod, number>();
-  const add = (method: PaymentLineMethod, usd: number) => {
-    if (usd <= 0.005) return;
-    buckets.set(method, roundMoney2((buckets.get(method) ?? 0) + usd));
-  };
+function bucketsFromBatchRows(batchRows: LedgerPaymentBatchRow[]): Map<string, MethodAmountAcc> {
+  const buckets = new Map<string, MethodAmountAcc>();
   for (const row of batchRows) {
     if (row.status === "CANCELLED") continue;
     const rate = Number(row.exchangeRate ?? 0);
     const usdAmt = Number(row.amountUsd ?? 0);
     if (Number.isFinite(usdAmt) && usdAmt > 0) {
-      add(mapPrismaMethod(row.usdPaymentMethod ?? row.paymentMethod), usdAmt);
+      addBucket(buckets, mapPrismaMethod(row.usdPaymentMethod ?? row.paymentMethod), { usd: usdAmt });
     }
     const ilsAmt = Number(row.amountIls ?? 0);
-    if (Number.isFinite(ilsAmt) && ilsAmt > 0 && rate > 0) {
-      add(mapPrismaMethod(row.ilsPaymentMethod ?? row.paymentMethod), roundMoney2(ilsAmt / rate));
+    if (Number.isFinite(ilsAmt) && ilsAmt > 0) {
+      const usdFromIls = rate > 0 ? roundMoney2(ilsAmt / rate) : 0;
+      addBucket(buckets, mapPrismaMethod(row.ilsPaymentMethod ?? row.paymentMethod), {
+        ils: ilsAmt,
+        usd: usdFromIls,
+      });
     }
   }
   return buckets;
@@ -248,15 +306,27 @@ function mergeOrderAllocations(
     .map(([orderNumber, amountUsd]) => ({ orderNumber, amountUsd: amountUsd.toFixed(2) }));
 }
 
-function sortedMethodBuckets(raw: Map<PaymentLineMethod, number>): LedgerPaymentMethodBucket[] {
+function sortMethodKeys(keys: string[]): string[] {
+  return [...keys].sort((a, b) => {
+    const ia = METHOD_SORT_ORDER.indexOf(a);
+    const ib = METHOD_SORT_ORDER.indexOf(b);
+    const ra = ia === -1 ? 999 : ia;
+    const rb = ib === -1 ? 999 : ib;
+    if (ra !== rb) return ra - rb;
+    return a.localeCompare(b, "he");
+  });
+}
+
+function sortedMethodBuckets(raw: Map<string, MethodAmountAcc>): LedgerPaymentMethodBucket[] {
   const out: LedgerPaymentMethodBucket[] = [];
-  for (const method of METHOD_ORDER) {
-    const amt = raw.get(method) ?? 0;
-    if (amt <= 0.005) continue;
+  for (const method of sortMethodKeys([...raw.keys()])) {
+    const acc = raw.get(method);
+    if (!acc || (acc.ils <= 0.005 && acc.usd <= 0.005)) continue;
     out.push({
       method,
       label: ledgerPaymentMethodLabel(method),
-      amountUsd: amt.toFixed(2),
+      amountIls: acc.ils > 0.005 ? acc.ils.toFixed(2) : null,
+      amountUsd: acc.usd.toFixed(2),
     });
   }
   return out;
@@ -271,9 +341,9 @@ export type LedgerPaymentBatchRow = {
   amountUsd: Prisma.Decimal | null;
   amountIls: Prisma.Decimal | null;
   exchangeRate: Prisma.Decimal | null;
-  paymentMethod: PaymentMethod | null;
-  usdPaymentMethod: PaymentMethod | null;
-  ilsPaymentMethod: PaymentMethod | null;
+  paymentMethod: string | null;
+  usdPaymentMethod: string | null;
+  ilsPaymentMethod: string | null;
   notes: string | null;
   status: PaymentRecordStatus;
 };
@@ -283,6 +353,24 @@ export function paymentBatchGroupKey(p: LedgerPaymentBatchRow): string {
   const code = p.paymentCode?.trim();
   if (code) return `c:${code}`;
   return `id:${p.id}`;
+}
+
+function sumBatchIls(batchRows: LedgerPaymentBatchRow[]): number {
+  let sum = 0;
+  for (const row of batchRows) {
+    if (row.status === "CANCELLED") continue;
+    const ils = Number(row.amountIls ?? 0);
+    if (Number.isFinite(ils) && ils > 0) sum += ils;
+  }
+  return roundMoney2(sum);
+}
+
+function notesHaveMethodBreakdown(notes: string): boolean {
+  if (!notes.trim()) return false;
+  return notes.split("\n").some((l) => {
+    const t = l.trim();
+    return t.startsWith("#") && (/\bILS\s+₪/.test(t) || /\bUSD\s+\$/.test(t));
+  });
 }
 
 export function buildLedgerPaymentDetail(params: {
@@ -302,46 +390,58 @@ export function buildLedgerPaymentDetail(params: {
     primary.usdPaymentMethod ?? primary.ilsPaymentMethod ?? primary.paymentMethod,
   );
 
-  let bucketMap = bucketsFromIntakeNotesBreakdown(notes, rate);
-  if (bucketMap.size === 0) {
-    bucketMap = bucketsFromPaymentLines(parsePaymentLinesFromNotes(notes), rate);
+  const fromIntakeRegex = bucketsFromIntakeNotesBreakdown(notes, rate);
+  const parsedLines = parsePaymentLinesFromNotes(notes);
+  const fromParsed = bucketsFromPaymentLines(parsedLines, rate);
+
+  let fromNotes: Map<string, MethodAmountAcc>;
+  if (fromIntakeRegex.size >= fromParsed.size && fromIntakeRegex.size > 0) {
+    fromNotes = fromIntakeRegex;
+  } else if (fromParsed.size > 0) {
+    fromNotes = fromParsed;
+  } else {
+    fromNotes = mergeBucketMaps(
+      fromIntakeRegex,
+      notes ? parseLegacyIntakeBuckets(notes, defaultMethod, rate) : new Map(),
+    );
   }
-  if (bucketMap.size === 0 && notes) {
-    bucketMap = parseLegacyIntakeBuckets(notes, defaultMethod, rate);
-  }
-  if (bucketMap.size === 0) {
-    bucketMap = bucketsFromBatchRows(batchRows);
-  }
+
+  const bucketMap = mergeBucketMaps(
+    fromNotes,
+    notesHaveMethodBreakdown(notes) ? new Map() : bucketsFromBatchRows(batchRows),
+  );
 
   const checkUsd = checkAmountUsdByPaymentId?.get(primary.id) ?? 0;
   if (checkUsd > 0.005) {
-    bucketMap.set("CHECK", roundMoney2((bucketMap.get("CHECK") ?? 0) + checkUsd));
+    addBucket(bucketMap, "CHECK", { usd: checkUsd });
   }
 
   let totalUsd = 0;
   for (const row of batchRows) {
-    const n = Number(row.amountUsd ?? 0);
-    if (Number.isFinite(n) && n > 0) totalUsd += n;
+    if (row.status === "CANCELLED") continue;
+    totalUsd += paymentRowUsdEquivalent(row);
   }
   totalUsd = roundMoney2(totalUsd);
 
   if (bucketMap.size === 0 && totalUsd > 0.005) {
-    bucketMap.set(defaultMethod, totalUsd);
+    addBucket(bucketMap, defaultMethod, { usd: totalUsd });
   }
 
+  const totalIlsN = sumBatchIls(batchRows);
   const orders = mergeOrderAllocations(batchRows, orderNumberById);
   const checks = checksByPaymentId?.get(primary.id) ?? [];
 
   return {
     paymentCode,
     totalUsd: totalUsd.toFixed(2),
+    totalIls: totalIlsN > 0.005 ? totalIlsN.toFixed(2) : null,
     methods: sortedMethodBuckets(bucketMap),
     checks,
     orders,
   };
 }
 
-/** שורות תצוגה בלבד — ↳ מזומן / צ'ק / העברה (ללא השפעה על יתרה) */
+/** שורות תצוגה — כל אמצעי תשלום שנרשם */
 export function ledgerPaymentMethodDisplayLines(
   detail: LedgerPaymentDetail | undefined | null,
 ): LedgerPaymentMethodDisplayLine[] {
@@ -354,18 +454,24 @@ export function ledgerPaymentMethodDisplayLines(
       for (const c of detail.checks) {
         out.push({
           label: `צ'ק ${c.checkNumber}`,
+          amountIls: null,
           amountUsd: c.amountUsd,
         });
       }
       continue;
     }
-    out.push({ label: m.label, amountUsd: m.amountUsd });
+    out.push({
+      label: m.label,
+      amountIls: m.amountIls,
+      amountUsd: m.amountUsd,
+    });
   }
 
   if (hasChecks && !detail.methods.some((m) => m.method === "CHECK")) {
     for (const c of detail.checks) {
       out.push({
         label: `צ'ק ${c.checkNumber}`,
+        amountIls: null,
         amountUsd: c.amountUsd,
       });
     }
@@ -378,15 +484,21 @@ export function shouldShowLedgerPaymentMethodSubrows(
   detail: LedgerPaymentDetail | undefined | null,
 ): boolean {
   const lines = ledgerPaymentMethodDisplayLines(detail);
-  if (lines.length <= 1) return false;
-  return lines.length > 1;
+  if (lines.length > 1) return true;
+  if (lines.length === 1) {
+    const only = lines[0];
+    return only.amountIls != null && Number(only.amountIls) > 0.005;
+  }
+  return false;
 }
 
 export function formatLedgerPaymentDetailLines(detail: LedgerPaymentDetail | undefined | null): string[] {
   if (!detail) return [];
-  const lines: string[] = [`${detail.paymentCode} · סה״כ ${detail.totalUsd}$`];
+  const totalDisp = formatLedgerAmountDisplay(detail.totalIls, detail.totalUsd);
+  const lines: string[] = [`${detail.paymentCode} · סה״כ ${totalDisp.singleLine}`];
   for (const m of ledgerPaymentMethodDisplayLines(detail)) {
-    lines.push(`↳ ${m.label}: $${m.amountUsd}`);
+    const disp = formatLedgerAmountDisplay(m.amountIls, m.amountUsd);
+    lines.push(`↳ ${m.label}: ${disp.singleLine}`);
   }
   for (const o of detail.orders) {
     lines.push(`${o.orderNumber} → $${o.amountUsd}`);

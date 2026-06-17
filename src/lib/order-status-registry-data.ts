@@ -2,8 +2,8 @@ import { randomUUID } from "crypto";
 import { prisma } from "@/lib/prisma";
 import { statusesPerfEnd, statusesPerfLog, statusesPerfStart } from "@/lib/statuses-source-perf";
 import { ensureOnce } from "@/lib/ensure-tables-once";
-import { ORDER_STATUS_META } from "@/constants/order-status";
-import { isLegacyOrderStatusSlug, LEGACY_ORDER_STATUS_SLUGS, OS } from "@/lib/order-status-slugs";
+import { getOfficialOrderStatusDisplayLabel, ORDER_STATUS_META } from "@/constants/order-status";
+import { isLegacyOrderStatusSlug, LEGACY_IN_PROGRESS_STATUS_IDS, LEGACY_ORDER_STATUS_SLUGS, OS } from "@/lib/order-status-slugs";
 import type { OrderStatusTag } from "@/lib/order-status-shared";
 
 async function invalidateOrderStatusDataCaches(): Promise<void> {
@@ -131,10 +131,39 @@ async function runOrderStatusSourceTableMigration(): Promise<void> {
   });
 }
 
+/** איחוד שמות סטטוס — 5 סטטוסים רשמיים בלבד */
+async function runOrderStatusUnifiedLabelsMigration(): Promise<void> {
+  await ensureOnce("order-status-unified-labels-v5", async () => {
+    const officialNames: Array<[string, string]> = [
+      [OS.OPEN, "פתוחה"],
+      [OS.WAITING_FOR_EXECUTION, "ממתין לביצוע"],
+      [OS.COMPLETED, "בוצע"],
+      [OS.DEBT_WITHDRAWAL, "משיכה מחוב"],
+      [OS.CANCELLED, "מבוטל"],
+    ];
+    for (const [id, nameHe] of officialNames) {
+      await prisma.$executeRaw`
+        UPDATE "SourceStatus"
+        SET "nameHe" = ${nameHe}, "isActive" = true, "updatedAt" = CURRENT_TIMESTAMP
+        WHERE "id" = ${id}
+      `;
+    }
+    for (const id of LEGACY_IN_PROGRESS_STATUS_IDS) {
+      await prisma.$executeRaw`
+        UPDATE "SourceStatus"
+        SET "nameHe" = ${"ממתין לביצוע"}, "isActive" = false, "updatedAt" = CURRENT_TIMESTAMP
+        WHERE "id" = ${id}
+      `;
+    }
+    await invalidateOrderStatusDataCaches();
+  });
+}
+
 /** טבלת SourceStatus — schema + מיגרציה (לכתיבה). */
 export async function ensureOrderStatusSourceTable(): Promise<void> {
   await ensureOrderStatusSourceTableSchema();
   await runOrderStatusSourceTableMigration();
+  await runOrderStatusUnifiedLabelsMigration();
 }
 
 /** קריאה מהירה לקטלוג; מוודאת schema כי סביבות קיימות יכולות להיות בלי עמודות חדשות. */
@@ -186,7 +215,11 @@ export async function loadOrderStatusUsageMapUncached(): Promise<Record<string, 
 export async function getOrderStatusLabelMap(): Promise<Record<string, string>> {
   const { listOrderStatusTags } = await import("@/lib/order-status-registry-cache");
   const rows = await listOrderStatusTags(true);
-  return Object.fromEntries(rows.map((r) => [r.id, r.nameHe]));
+  const map = Object.fromEntries(rows.map((r) => [r.id, r.nameHe]));
+  for (const slug of LEGACY_ORDER_STATUS_SLUGS) {
+    map[slug] = getOfficialOrderStatusDisplayLabel(slug);
+  }
+  return map;
 }
 
 export async function isValidOrderStatusId(id: string): Promise<boolean> {

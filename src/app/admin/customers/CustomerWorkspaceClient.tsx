@@ -404,6 +404,7 @@ export function CustomerWorkspaceClient() {
               customerId={selectedCustomerId}
               exportMeta={exportMeta}
               ledgerSourceCountry={ledgerSourceCountry}
+              workCountry={workCountry}
               orders={filteredOrders}
               payments={filteredPayments}
               onShowStats={() => setStatsOpen(true)}

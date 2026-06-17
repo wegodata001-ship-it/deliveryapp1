@@ -13,6 +13,7 @@ import {
 } from "@/lib/atlas-pdf-template";
 import type { CustomerProfileOrderRow, CustomerProfilePaymentRow } from "@/lib/customers-module-types";
 import { getLedgerPdfMake, ledgerPdfDefaultStyle } from "@/lib/ledger-pdfmake";
+import { previewPdfMakeDocument } from "@/lib/pdfmake-preview";
 import { formatLocalYmd } from "@/lib/work-week";
 import { parseMoneyStringOrZero } from "@/lib/money-format";
 import type { Content, TDocumentDefinitions } from "pdfmake/interfaces";
@@ -99,7 +100,7 @@ export async function exportCustomerModuleOrdersPdf(
     styles: ATLAS_PDF_STYLES,
   };
 
-  pdfMake.createPdf(docDefinition).download(buildFilename("orders", meta.customerCode, "pdf"));
+  previewPdfMakeDocument(pdfMake, docDefinition, buildFilename("orders", meta.customerCode, "pdf"));
 }
 
 export async function exportCustomerModulePaymentsPdf(
@@ -124,7 +125,7 @@ export async function exportCustomerModulePaymentsPdf(
       ],
       styles: ATLAS_PDF_STYLES,
     };
-    pdfMake.createPdf(docDefinition).download(buildFilename("payments", meta.customerCode, "pdf"));
+    previewPdfMakeDocument(pdfMake, docDefinition, buildFilename("payments", meta.customerCode, "pdf"));
     return;
   }
 
@@ -156,7 +157,7 @@ export async function exportCustomerModulePaymentsPdf(
     styles: ATLAS_PDF_STYLES,
   };
 
-  pdfMake.createPdf(docDefinition).download(buildFilename("payments", meta.customerCode, "pdf"));
+  previewPdfMakeDocument(pdfMake, docDefinition, buildFilename("payments", meta.customerCode, "pdf"));
 }
 
 function excelCell(

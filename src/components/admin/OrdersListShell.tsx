@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { OrdersListToolbar, type OrdersListToolbarProps } from "@/components/admin/OrdersListToolbar";
 import { useRouter } from "next/navigation";
 import { PaymentMethod } from "@prisma/client";
@@ -25,14 +25,12 @@ import {
 import { refreshOrdersListAction, updateOrderCompletedFlagAction } from "@/app/admin/orders/actions";
 import { exportOrdersListPdfHtmlAction } from "@/app/admin/orders/export-orders-pdf-action";
 import { exportOrdersListExcelCsvAction } from "@/app/admin/orders/export-orders-excel-action";
+import { openPdfPreview } from "@/lib/pdf-preview";
 import { OrdersListExportSplitButton } from "@/components/admin/OrdersListExportSplitButton";
 import type { OrdersListExportPreset } from "@/lib/orders-list-export-presets";
 import { OrderEditLockGateModal, type OrderEditLockGatePayload } from "@/components/admin/OrderEditLockGateModal";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
-import {
-  ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS,
-  orderCaptureSplitMethodLabel,
-} from "@/lib/order-capture-payment-methods";
+import { usePaymentMethodCatalog } from "@/components/admin/PaymentMethodCatalogProvider";
 import { orderListRowToneClass } from "@/constants/order-status";
 import { useEnsureActiveWorkWeekOnEnter } from "@/hooks/useEnsureActiveWorkWeekOnEnter";
 import type { ParsedDateFilter } from "@/lib/work-week";
@@ -48,6 +46,7 @@ import {
   toggleStatusKpiFilter,
   type OrderStatusKpiKey,
 } from "@/lib/orders-status-kpi-filter";
+import { adjustStatusSummaryForStatusChange } from "@/lib/orders-status-kpi-optimistic";
 
 type CompletedFilter = "not_done" | "done" | "all";
 
@@ -87,7 +86,7 @@ export type OrderListRow = {
   quickStatusLocked?: boolean;
 };
 
-type OrdersStatusBucket = {
+export type OrdersStatusBucket = {
   /** מספר הזמנות מפורמט לעברית */
   count: string;
   /** סכום סה״כ USD מפורמט (en-US, 2 ספרות) */
@@ -112,9 +111,9 @@ export type OrdersListPagination = {
   totalPages: number;
 };
 
-function paymentTypeLabel(paymentType: string | null): string {
+function paymentTypeLabel(paymentType: string | null, getLabel: (id: string) => string): string {
   if (!paymentType) return "—";
-  return orderCaptureSplitMethodLabel(paymentType as PaymentMethod);
+  return getLabel(paymentType);
 }
 
 function OrderStatusKpiButton({
@@ -155,7 +154,7 @@ function OrderStatusKpiButton({
       onClick={onClick}
     >
       <span className="adm-status-card__head">
-        <Icon className="adm-status-card__icon" size={17} strokeWidth={2.25} aria-hidden />
+        <Icon className="adm-status-card__icon" size={14} strokeWidth={2.25} aria-hidden />
         <span className="adm-status-card-title">{title}</span>
       </span>
       <strong className="adm-status-card-count">{count}</strong>
@@ -265,6 +264,7 @@ export function OrdersListShell({
   const router = useRouter();
   const { openWindow } = useAdminWindows();
   useOrderStatusCatalog();
+  const { optionsForValue: paymentMethodOptionsForValue } = usePaymentMethodCatalog();
   const [rows, setRows] = useState<OrderListRow[]>(orders);
   const [statusSummaryLive, setStatusSummaryLive] = useState(statusSummary);
   const [paginationLive, setPaginationLive] = useState(pagination);
@@ -274,6 +274,7 @@ export function OrdersListShell({
   });
   const [refreshLoading, setRefreshLoading] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const recentLocalStatusRef = useRef(new Map<string, { status: string; isCompleted: boolean; at: number }>());
   const [listErr, setListErr] = useState<string | null>(null);
   const [lockModal, setLockModal] = useState<OrderEditLockGatePayload | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
@@ -324,30 +325,30 @@ export function OrdersListShell({
         {
           key: "open" as const,
           tone: "adm-status-card--open",
-          title: "פתוחות",
+          title: "פתוחה",
           icon: FolderOpen,
           bucket: statusSummaryLive.open,
         },
         {
+          key: "inProgress" as const,
+          tone: "adm-status-card--progress",
+          title: "ממתין לביצוע",
+          icon: Hourglass,
+          bucket: statusSummaryLive.inProgress,
+        },
+        {
           key: "completed" as const,
           tone: "adm-status-card--completed",
-          title: "מוכנות",
+          title: "בוצע",
           icon: CircleCheck,
           bucket: statusSummaryLive.completed,
         },
         {
-          key: "cancelled" as const,
-          tone: "adm-status-card--cancelled",
-          title: "מבוטלות",
-          icon: CircleX,
-          bucket: statusSummaryLive.cancelled,
-        },
-        {
-          key: "inProgress" as const,
-          tone: "adm-status-card--progress",
-          title: "בטיפול",
-          icon: Hourglass,
-          bucket: statusSummaryLive.inProgress,
+          key: "operationalCompleted" as const,
+          tone: "adm-status-card--operational-completed",
+          title: "הושלמו",
+          icon: CheckSquare,
+          bucket: statusSummaryLive.operationalCompleted,
         },
         {
           key: "debtWithdrawal" as const,
@@ -357,11 +358,11 @@ export function OrdersListShell({
           bucket: statusSummaryLive.debtWithdrawal,
         },
         {
-          key: "operationalCompleted" as const,
-          tone: "adm-status-card--operational-completed",
-          title: "הושלמו",
-          icon: CheckSquare,
-          bucket: statusSummaryLive.operationalCompleted,
+          key: "cancelled" as const,
+          tone: "adm-status-card--cancelled",
+          title: "מבוטל",
+          icon: CircleX,
+          bucket: statusSummaryLive.cancelled,
         },
       ] satisfies {
         key: OrderStatusKpiKey | "operationalCompleted";
@@ -384,7 +385,19 @@ export function OrdersListShell({
   }, [paginationLive, activeStatusFilters.length, tableRows.length]);
 
   useEffect(() => {
-    setRows(orders);
+    const pending = recentLocalStatusRef.current;
+    setRows((cur) => {
+      const curById = new Map(cur.map((r) => [r.id, r]));
+      return orders.map((o) => {
+        const local = pending.get(o.id);
+        if (local && Date.now() - local.at < 15_000 && o.status !== local.status) {
+          const prev = curById.get(o.id);
+          return prev ? { ...prev, ...o, status: local.status, isCompleted: local.isCompleted } : { ...o, status: local.status, isCompleted: local.isCompleted };
+        }
+        if (local && o.status === local.status) pending.delete(o.id);
+        return o;
+      });
+    });
     setStatusSummaryLive(statusSummary);
     setPaginationLive(pagination);
     setFilterOptionsLive({
@@ -501,10 +514,13 @@ export function OrdersListShell({
     const t0 = now();
     let statusUpdateDbMs = 0;
     let statusUpdateUiMs = 0;
-    /** אין router.refresh / refetch רשימה / KPI — רק optimistic לשורה */
     const statusRefreshMs = 0;
     setListErr(null);
+    const prevRow = rows.find((r) => r.id === orderId);
+    if (!prevRow || prevRow.status === next) return;
     let prevSnapshot: OrderListRow[] = [];
+    const nextIsCompleted = next === OS.COMPLETED ? prevRow.isCompleted : false;
+    recentLocalStatusRef.current.set(orderId, { status: next, isCompleted: nextIsCompleted, at: Date.now() });
     const uiT0 = now();
     setRows((cur) => {
       prevSnapshot = cur;
@@ -514,8 +530,11 @@ export function OrdersListShell({
           : r,
       );
     });
+    const orderTotalUsd = parseNumeric(prevRow.totalAmountUsd) ?? 0;
+    setStatusSummaryLive((summary) =>
+      adjustStatusSummaryForStatusChange(summary, prevRow.status, next, orderTotalUsd),
+    );
     statusUpdateUiMs += now() - uiT0;
-    setBusyId(orderId);
     const dbT0 = now();
     const res = await fetch("/api/orders/status", {
       method: "POST",
@@ -526,10 +545,13 @@ export function OrdersListShell({
       .then(async (r) => ((await r.json().catch(() => null)) as { ok: boolean; error?: string; debtWithdrawalUsd?: number }) ?? { ok: false, error: "שגיאה" })
       .catch(() => ({ ok: false, error: "שגיאה בשמירה" }));
     statusUpdateDbMs += now() - dbT0;
-    setBusyId(null);
     if (!res.ok) {
+      recentLocalStatusRef.current.delete(orderId);
       const uiRollbackT0 = now();
       setRows(prevSnapshot);
+      setStatusSummaryLive((summary) =>
+        adjustStatusSummaryForStatusChange(summary, next, prevRow.status, orderTotalUsd),
+      );
       statusUpdateUiMs += now() - uiRollbackT0;
       setListErr(res.error ?? "שגיאה בשמירה");
       const totalMs = Math.round(now() - t0);
@@ -575,14 +597,14 @@ export function OrdersListShell({
         totalMs,
       });
     }
-  }, []);
+  }, [rows]);
 
   const onRowCompletedChange = useCallback(
     async (orderId: string, next: boolean) => {
       const row = rows.find((r) => r.id === orderId);
       if (!row) return;
       if (row.status !== OS.COMPLETED) {
-        setListErr("אפשר לסמן הושלם רק להזמנה במצב מוכן");
+        setListErr("אפשר לסמן הושלם רק להזמנה בסטטוס בוצע");
         return;
       }
       setListErr(null);
@@ -714,56 +736,8 @@ export function OrdersListShell({
     [exportFilenameBase],
   );
 
-  const printOrdersPdfHtml = useCallback((html: string) => {
-    const iframe = document.createElement("iframe");
-    iframe.setAttribute("aria-hidden", "true");
-    iframe.style.position = "fixed";
-    iframe.style.right = "0";
-    iframe.style.bottom = "0";
-    iframe.style.width = "0";
-    iframe.style.height = "0";
-    iframe.style.border = "0";
-    iframe.style.visibility = "hidden";
-    document.body.appendChild(iframe);
-
-    const cleanup = () => {
-      try {
-        if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
-      } catch {
-        /* noop */
-      }
-    };
-
-    iframe.onload = () => {
-      const win = iframe.contentWindow;
-      if (!win) {
-        cleanup();
-        setListErr("לא ניתן להפיק PDF — אנא נסו שוב.");
-        return;
-      }
-      try {
-        win.focus();
-        win.print();
-      } catch {
-        /* noop */
-      }
-      const onAfter = () => {
-        win.removeEventListener("afterprint", onAfter);
-        setTimeout(cleanup, 100);
-      };
-      win.addEventListener("afterprint", onAfter);
-      setTimeout(cleanup, 60_000);
-    };
-
-    const doc = iframe.contentDocument;
-    if (!doc) {
-      cleanup();
-      setListErr("לא ניתן להפיק PDF — אנא נסו שוב.");
-      return;
-    }
-    doc.open();
-    doc.write(html);
-    doc.close();
+  const previewOrdersPdfHtml = useCallback((html: string, filename: string) => {
+    openPdfPreview({ html, filename });
   }, []);
 
   const runPdfExport = useCallback(
@@ -780,14 +754,14 @@ export function OrdersListShell({
           setListErr(res.error);
           return;
         }
-        printOrdersPdfHtml(res.html);
+        previewOrdersPdfHtml(res.html, `${exportFilenameBase}.html`);
       } catch {
         setListErr("לא ניתן להפיק PDF — אנא נסו שוב.");
       } finally {
         setPdfLoading(false);
       }
     },
-    [printOrdersPdfHtml, readExportSearchParams, activeStatusFilters],
+    [previewOrdersPdfHtml, readExportSearchParams, activeStatusFilters, exportFilenameBase],
   );
 
   const runExcelExport = useCallback(
@@ -861,8 +835,8 @@ export function OrdersListShell({
           aria-label="סינון הושלם"
         >
           <option value="all">הכל</option>
-          <option value="not_done">לא הושלם</option>
-          <option value="done">הושלם</option>
+          <option value="not_done">לא הושלם (ברירת מחדל)</option>
+          <option value="done">הצג הושלמו</option>
         </select>
       </label>
       <button
@@ -1111,7 +1085,7 @@ export function OrdersListShell({
                         className="adm-table-status-sel"
                         value={selVal}
                         includeCurrentValue
-                        disabled={!canEditOrders || busyId === o.id || !!o.quickStatusLocked}
+                        disabled={!canEditOrders || !!o.quickStatusLocked}
                         aria-label="סטטוס הזמנה"
                         onChange={(v) => void onRowStatusChange(o.id, v)}
                       />
@@ -1127,7 +1101,7 @@ export function OrdersListShell({
                           .join(" ")}
                         title={
                           o.status !== OS.COMPLETED
-                            ? "ניתן לסמן הושלם רק כשההזמנה מוכנה"
+                            ? "ניתן לסמן הושלם רק כשההזמנה בוצעה"
                             : !viewerIsAdmin
                               ? "קריאה בלבד"
                               : o.isCompleted
@@ -1154,7 +1128,7 @@ export function OrdersListShell({
                         onChange={(e) => void onRowPaymentMethodChange(o.id, e.target.value)}
                       >
                         <option value="">—</option>
-                        {ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS.map((opt) => (
+                        {paymentMethodOptionsForValue((o.paymentType as string | null) ?? undefined).map((opt) => (
                           <option key={opt.value} value={opt.value}>
                             {opt.label}
                           </option>
@@ -1198,7 +1172,7 @@ export function OrdersListShell({
           {canEditOrders
             ? viewerIsAdmin
               ? "לחיצה על שורה פותחת עריכת הזמנה (חלון)."
-              : "לחיצה על שורה פותחת עריכה, או מודל בקשת אישור להזמנות מוכנות/מבוטלות לפי הרשאות."
+              : "לחיצה על שורה פותחת עריכה, או מודל בקשת אישור להזמנות בוצע/מבוטל לפי הרשאות."
             : "לחיצה על שורה פותחת את דף ההזמנה."}
         </p>
       </div>
