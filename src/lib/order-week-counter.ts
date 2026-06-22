@@ -197,6 +197,36 @@ export async function allocateNextOrderNumberFromCounter(
   });
 }
 
+/**
+ * הקצאה לאחר התנגשות (P2002): מסנכרן את המונה מול ה-MAX האמיתי בטבלת ההזמנות
+ * (כולל אתחול שורת המונה אם חסרה), מקפיץ ל-GREATEST(next_number, scannedMax)
+ * ומחזיר מספר חדש מובטח-מעל-הקיים. אטומי בתוך טרנזקציה.
+ */
+export async function allocateNextOrderNumberResynced(
+  weekCode: string,
+  workCountry: WorkCountryCode = DEFAULT_WORK_COUNTRY,
+): Promise<OrderNumberAllocation> {
+  const wc = weekCode.trim() || DEFAULT_WEEK_CODE;
+  const key = orderCounterKey(workCountry, wc);
+  await ensureOrderWeekCounterTable();
+
+  return prisma.$transaction(async (tx) => {
+    await ensureWeekCounterRow(workCountry, wc, tx);
+    const scannedMax = await scanMaxSequenceFromOrders(workCountry, wc, tx);
+    await tx.$executeRaw`
+      UPDATE "order_week_counter"
+      SET "next_number" = GREATEST("next_number", ${scannedMax}),
+          "updated_at" = CURRENT_TIMESTAMP
+      WHERE "week_code" = ${key}
+    `;
+    const sequence = await bumpCounter(key, tx);
+    if (sequence == null) {
+      throw new Error("order counter resync allocation failed");
+    }
+    return formatAllocation(workCountry, wc, sequence);
+  });
+}
+
 export async function peekNextOrderNumberFromCounter(
   weekCode: string,
   workCountry: WorkCountryCode = DEFAULT_WORK_COUNTRY,

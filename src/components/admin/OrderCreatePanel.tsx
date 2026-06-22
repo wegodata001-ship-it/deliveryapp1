@@ -83,6 +83,14 @@ import { goToNextWeekNumber, goToPrevWeekNumber } from "@/lib/weeks/ah-week-nav"
 import { AhWeekNavNextButton, AhWeekNavPrevButton } from "@/components/admin/AhWeekNavButtons";
 import { useOrderStatusCatalog } from "@/components/admin/OrderStatusCatalogProvider";
 import { usePaymentMethodCatalog } from "@/components/admin/PaymentMethodCatalogProvider";
+import OrderPaymentBreakdownModal from "@/components/admin/OrderPaymentBreakdownModal";
+import {
+  COMPOSITE_PM,
+  COMPOSITE_PM_LABEL,
+  isCompositePaymentMethod,
+  validateBreakdown,
+  type OrderBreakdownLineInput,
+} from "@/lib/payment-breakdown-shared";
 import { OrderStatusSelect } from "@/components/admin/OrderStatusSelect";
 
 function toWeekCode(n: number): string {
@@ -284,7 +292,7 @@ export function OrderCreatePanel({
   const { openWindow, openCreateCustomerForOrder } = useAdminWindows();
   const { globalWeek, globalCountry } = useAdminGlobal();
   useOrderStatusCatalog();
-  const { optionsForValue: paymentMethodOptionsForValue } = usePaymentMethodCatalog();
+  const { optionsForValue: paymentMethodOptionsForValue, options: paymentMethodOptions } = usePaymentMethodCatalog();
   const idp = (s: string) => `${windowId}-${s}`;
 
   const isEdit = target.mode === "edit";
@@ -487,6 +495,11 @@ export function OrderCreatePanel({
   const [phoneStr, setPhoneStr] = useState("");
   const [orderStatus, setOrderStatus] = useState<string>(OS.OPEN);
   const [paymentMethod, setPaymentMethod] = useState<string>(PM.CASH);
+  /** חלוקת "תשלום מורכב" — רלוונטי רק כאשר paymentMethod === COMPOSITE_PM */
+  const [paymentBreakdown, setPaymentBreakdown] = useState<OrderBreakdownLineInput[]>([]);
+  const [breakdownModalOpen, setBreakdownModalOpen] = useState(false);
+  /** ערך אמצעי התשלום לפני מעבר ל"תשלום מורכב" — לשחזור בביטול ה-Modal */
+  const [paymentMethodBeforeComposite, setPaymentMethodBeforeComposite] = useState<string>(PM.CASH);
   const [isSearching, setIsSearching] = useState(false);
   /** אחרי חיפוש קוד שלא נמצא — הצעה להוספת לקוח */
   const [customerCodeMissing, setCustomerCodeMissing] = useState(false);
@@ -601,6 +614,16 @@ export function OrderCreatePanel({
       setOrderNumberPreview(row.orderNumber);
       setOrderStatus(row.status);
       setPaymentMethod(row.paymentMethod);
+      setPaymentBreakdown(
+        row.paymentBreakdown.map((b) => ({
+          paymentMethod: b.paymentMethod,
+          amount: b.amount,
+          currency: b.currency,
+        })),
+      );
+      setPaymentMethodBeforeComposite(
+        isCompositePaymentMethod(row.paymentMethod) ? PM.CASH : row.paymentMethod,
+      );
       setPaymentPointId(row.locationId ?? row.paymentPointId ?? "");
       setPaymentPointQuery(row.locationName ?? "");
       setNotes(row.notes);
@@ -961,6 +984,9 @@ export function OrderCreatePanel({
     setIsSearching(false);
     setErr(null);
     setPaymentMethod(PM.CASH);
+    setPaymentMethodBeforeComposite(PM.CASH);
+    setPaymentBreakdown([]);
+    setBreakdownModalOpen(false);
     setOrderStatus(OS.OPEN);
     {
       const code = globalWeek || DEFAULT_WEEK_CODE;
@@ -1013,6 +1039,7 @@ export function OrderCreatePanel({
     intakeDateYmd,
     intakeTimeHm,
     paymentMethod,
+    paymentBreakdown,
     orderStatus,
     notes,
     nameArStr,
@@ -1044,6 +1071,7 @@ export function OrderCreatePanel({
     intakeDateYmd,
     intakeTimeHm,
     paymentMethod,
+    paymentBreakdown,
     orderStatus,
     notes,
     nameArStr,
@@ -1156,6 +1184,20 @@ export function OrderCreatePanel({
         return;
       }
 
+      if (isCompositePaymentMethod(s.paymentMethod)) {
+        const payable = roundMoney2(s.dealUsdTotal + s.commissionUsdEffective);
+        const v = validateBreakdown(s.paymentBreakdown, payable, s.finalRate);
+        if (!v.ok) {
+          setErr(
+            v.validCount < 1
+              ? "תשלום מורכב: יש להגדיר חלוקת תשלום"
+              : "תשלום מורכב: סכום החלוקה אינו תואם לסך ההזמנה",
+          );
+          setBreakdownModalOpen(true);
+          return;
+        }
+      }
+
       try {
         setIsSaving(true);
         setErr(null);
@@ -1177,6 +1219,7 @@ export function OrderCreatePanel({
                 commissionPercent: s.commissionPercentStr,
                 finalRateOverride: s.finalRate > 0 ? String(s.finalRate) : null,
                 paymentMethod: s.paymentMethod,
+                paymentBreakdown: isCompositePaymentMethod(s.paymentMethod) ? s.paymentBreakdown : [],
                 status: s.orderStatus,
                 notes: s.notes.trim() || undefined,
                 paymentPointId: s.paymentPointId.trim() || null,
@@ -1200,6 +1243,7 @@ export function OrderCreatePanel({
                 commissionPercent: s.commissionPercentStr,
                 finalRateOverride: s.finalRate > 0 ? String(s.finalRate) : null,
                 paymentMethod: s.paymentMethod,
+                paymentBreakdown: isCompositePaymentMethod(s.paymentMethod) ? s.paymentBreakdown : [],
                 status: s.orderStatus,
                 notes: s.notes.trim() || undefined,
                 paymentPointId: s.paymentPointId.trim() || null,
@@ -1269,6 +1313,9 @@ export function OrderCreatePanel({
           if (!res.ok) throw new Error(res.error);
           setIsSaving(false);
           onToast("ההזמנה נשמרה");
+          if (res.notice) {
+            onToast(res.notice);
+          }
           if (res.nextOrderNumberPreview) {
             setOrderNumberPreview(res.nextOrderNumberPreview);
           }
@@ -2023,7 +2070,17 @@ export function OrderCreatePanel({
                     disabled={fieldDisabled}
                     value={paymentMethod}
                     onFocus={closeCustomerDropdown}
-                    onChange={(e) => setPaymentMethod(e.target.value)}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      if (isCompositePaymentMethod(value)) {
+                        if (!isCompositePaymentMethod(paymentMethod)) setPaymentMethodBeforeComposite(paymentMethod);
+                        setPaymentMethod(COMPOSITE_PM);
+                        setBreakdownModalOpen(true);
+                      } else {
+                        setPaymentMethod(value);
+                        setPaymentBreakdown([]);
+                      }
+                    }}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault();
@@ -2031,12 +2088,27 @@ export function OrderCreatePanel({
                       }
                     }}
                   >
-                    {paymentMethodOptionsForValue(paymentMethod).map((o) => (
+                    {paymentMethodOptionsForValue(
+                      isCompositePaymentMethod(paymentMethod) ? undefined : paymentMethod,
+                    ).map((o) => (
                       <option key={o.value} value={o.value}>
                         {o.label}
                       </option>
                     ))}
+                    <option value={COMPOSITE_PM}>{COMPOSITE_PM_LABEL}</option>
                   </select>
+                  {isCompositePaymentMethod(paymentMethod) ? (
+                    <button
+                      type="button"
+                      className="adm-oc-pbd-edit"
+                      disabled={fieldDisabled}
+                      onClick={() => setBreakdownModalOpen(true)}
+                    >
+                      {paymentBreakdown.length > 0
+                        ? `חלוקה: ${paymentBreakdown.length} אמצעים · ערוך`
+                        : "הגדר חלוקת תשלום"}
+                    </button>
+                  ) : null}
                 </div>
               </aside>
             </Card>
@@ -2270,6 +2342,27 @@ export function OrderCreatePanel({
             </div>
           </div>
         ) : null}
+
+        <OrderPaymentBreakdownModal
+          open={breakdownModalOpen}
+          payableTotalUsd={roundMoney2(dealUsdTotal + commissionUsdEffective)}
+          nisPerUsd={finalRate}
+          methodOptions={paymentMethodOptions.map((o) => ({ value: o.value, label: o.label }))}
+          initialLines={paymentBreakdown}
+          idPrefix={windowId}
+          onClose={() => {
+            setBreakdownModalOpen(false);
+            // אם אין חלוקה תקפה — חזרה לאמצעי הקודם
+            if (paymentBreakdown.length === 0) {
+              setPaymentMethod(paymentMethodBeforeComposite);
+            }
+          }}
+          onConfirm={(lines) => {
+            setPaymentBreakdown(lines);
+            setPaymentMethod(COMPOSITE_PM);
+            setBreakdownModalOpen(false);
+          }}
+        />
 
         {isEdit && editRequestFlash ? (
           <div className="adm-settings-toast adm-oc-edit-request-sent-flash" role="status">

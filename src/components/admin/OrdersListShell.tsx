@@ -827,18 +827,6 @@ export function OrdersListShell({
           הזמנה חדשה
         </button>
       ) : null}
-      <label className="adm-orders-completed-filter">
-        <span>הושלם</span>
-        <select
-          value={completedFilter}
-          onChange={(e) => setCompletedFilterInUrl(e.target.value as CompletedFilter)}
-          aria-label="סינון הושלם"
-        >
-          <option value="all">הכל</option>
-          <option value="not_done">לא הושלם (ברירת מחדל)</option>
-          <option value="done">הצג הושלמו</option>
-        </select>
-      </label>
       <button
         type="button"
         className="adm-orders-btn adm-orders-btn--refresh"

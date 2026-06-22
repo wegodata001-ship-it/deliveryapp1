@@ -30,6 +30,17 @@ import {
   orderBalanceBeforeAllocation,
 } from "@/lib/payment-allocation-preview";
 import { aggregateLivePaymentFormKpis } from "@/lib/payment-intake-live-kpi";
+import { DocumentsPanel } from "@/components/admin/DocumentsPanel";
+import { attachDraftDocumentsAction } from "@/app/admin/documents/actions";
+import {
+  PAYMENT_BUCKET_LABELS,
+  breakdownViolationMessage,
+  enforceBreakdownAgainstEntered,
+  paymentMethodBucketKey,
+  type EnteredBucketUsd,
+  type PaymentBucketKey,
+  type PlannedBucketUsd,
+} from "@/lib/payment-breakdown-shared";
 import { PaymentAllocationPreviewPanel } from "@/components/admin/PaymentAllocationPreviewPanel";
 import { PaymentLiveSummaryCards } from "@/components/admin/PaymentLiveSummaryCards";
 import { PaymentOpenDebtDetailModal } from "@/components/admin/PaymentOpenDebtDetailModal";
@@ -381,6 +392,18 @@ function paymentIntakeTableWorkCountry(
   return workCountryFromOrderSourceCountry(fallbackGlobal);
 }
 
+/** מפתח טיוטה למסמכים מצורפים בקליטת תשלום חדש (לפני שקיים paymentId) */
+function makeDocDraftKey(): string {
+  try {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return `draft-${crypto.randomUUID()}`;
+    }
+  } catch {
+    /* noop */
+  }
+  return `draft-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 function clonePaymentEntry(e: PaymentEntryResponse): PaymentEntryResponse {
   return {
     ...e,
@@ -610,6 +633,35 @@ export function PaymentModalUpdated({
     return new Set(includedIds);
   }, [includedIds]);
 
+  /**
+   * אמצעי תשלום מתוכננים הם להמלצה/בקרה בלבד — לא לנעילה.
+   * בעולם האמיתי לקוחות משנים אמצעי תשלום (לדוגמה תכננו העברה ושילמו אשראי),
+   * ולכן אין להגביל את הבחירה. חריגה (planned != actual) תסומן ותתועד בנפרד.
+   */
+  const allowedMethods = null;
+
+  /** סיכום חלוקת תשלום מורכב לכל אמצעי (איחוד על פני הזמנות מורכבות עם יתרה) */
+  const compositeSummary = useMemo(() => {
+    const payable = orders.filter((o) => o.isComposite && o.breakdown.length > 0 && Number(o.dbRemainingUsd) > 0.02);
+    if (payable.length === 0) return [] as { method: string; label: string; plannedUsd: number; paidUsd: number; remainingUsd: number }[];
+    const map = new Map<string, { method: string; label: string; plannedUsd: number; paidUsd: number; remainingUsd: number }>();
+    for (const o of payable) {
+      for (const b of o.breakdown) {
+        const cur = map.get(b.method) ?? { method: b.method, label: b.label, plannedUsd: 0, paidUsd: 0, remainingUsd: 0 };
+        cur.plannedUsd += b.plannedUsd;
+        cur.paidUsd += b.paidUsd;
+        cur.remainingUsd += b.remainingUsd;
+        map.set(b.method, cur);
+      }
+    }
+    return [...map.values()].map((r) => ({
+      ...r,
+      plannedUsd: Math.round(r.plannedUsd * 100) / 100,
+      paidUsd: Math.round(r.paidUsd * 100) / 100,
+      remainingUsd: Math.round(r.remainingUsd * 100) / 100,
+    }));
+  }, [orders]);
+
   const customerBalanceResetPreview = useMemo((): CommissionResetOrderPreview[] => {
     if (!customerBalanceResetPending) return [];
     const allocated = allocatePaymentAcrossOrders(
@@ -663,6 +715,18 @@ export function PaymentModalUpdated({
     if (!id || id === NEW_CAPTURE_ROW_ID) return null;
     return id;
   }, [loadedPayment?.id]);
+
+  // מסמכים מצורפים: תשלום חדש מעלה תחת מפתח טיוטה ומקושר ל-paymentId האמיתי בשמירה.
+  const [docDraftKey, setDocDraftKey] = useState<string>(() => makeDocDraftKey());
+  const docDraftKeyRef = useRef(docDraftKey);
+  docDraftKeyRef.current = docDraftKey;
+  const docEntityId = savedCapturePaymentId ?? docDraftKey;
+
+  // החלפת לקוח בתשלום חדש — מאפס את אזור המסמכים כדי לא לקשר טיוטה ללקוח אחר.
+  useEffect(() => {
+    if (!savedCapturePaymentId) setDocDraftKey(makeDocDraftKey());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customer?.id]);
 
   const displayedPaymentCode = useMemo(() => {
     const id = loadedPayment?.id?.trim();
@@ -832,6 +896,61 @@ export function PaymentModalUpdated({
     [payments, rateN],
   );
 
+  /** Part 1 — סיכום הזמנה מרכזי: סה"כ הזמנה / שווי בש"ח / שולם (DB + הקלדה) / יתרה */
+  const orderSummaryForCards = useMemo(() => {
+    let total = 0;
+    let paidDb = 0;
+    for (const o of orders) {
+      total += Number(o.totalAmountUsd) || 0;
+      paidDb += Number(o.dbPaidUsd) || 0;
+    }
+    const totalR = roundMoney2(total);
+    const paid = roundMoney2(paidDb + totals.totalUsd);
+    if (totalR <= 0.005 && paid <= 0.005) return null;
+    const remaining = Math.max(0, roundMoney2(totalR - paid));
+    const ilsValue = roundMoney2(totalR * (rateN > 0 ? rateN : 0));
+    return { totalUsd: totalR, ilsValue, paidUsd: paid, remainingUsd: remaining };
+  }, [orders, totals.totalUsd, rateN]);
+
+  /**
+   * בקרת "תשלום מורכב" — אכיפה אמיתית.
+   * כאשר להזמנות יש חלוקת תשלום מתוכננת, אסור לשלם באמצעי שלא הוגדר,
+   * ואסור לחרוג מהסכום שהוגדר לכל אמצעי. חריגה חוסמת שמירה.
+   */
+  const breakdownEnforcement = useMemo(() => {
+    if (compositeSummary.length === 0) {
+      return { active: false, violations: [] as ReturnType<typeof enforceBreakdownAgainstEntered> };
+    }
+    // אם קיים חוב פתוח בהזמנה שאינה מורכבת — הסכום עשוי להיות מוקצה אליה,
+    // ולכן לא נאכוף חסימה (כדי לא לחסום תשלום לגיטימי). מסמנים חריגה בלבד.
+    const hasNonCompositeDebt = orders.some(
+      (o) => !(o.isComposite && o.breakdown.length > 0) && Number(o.dbRemainingUsd) > 0.02,
+    );
+    if (hasNonCompositeDebt) {
+      return { active: false, violations: [] as ReturnType<typeof enforceBreakdownAgainstEntered> };
+    }
+    const planByBucket = new Map<PaymentBucketKey, PlannedBucketUsd>();
+    for (const r of compositeSummary) {
+      const bucket = paymentMethodBucketKey(r.method);
+      const cur =
+        planByBucket.get(bucket) ??
+        { bucket, label: PAYMENT_BUCKET_LABELS[bucket], plannedUsd: 0, remainingUsd: 0 };
+      cur.plannedUsd = roundMoney2(cur.plannedUsd + r.plannedUsd);
+      cur.remainingUsd = roundMoney2(cur.remainingUsd + r.remainingUsd);
+      planByBucket.set(bucket, cur);
+    }
+    const entered: EnteredBucketUsd[] = [
+      { bucket: "CASH", label: PAYMENT_BUCKET_LABELS.CASH, enteredUsd: liveFormKpis.cash.totalUsd },
+      { bucket: "BANK_TRANSFER", label: PAYMENT_BUCKET_LABELS.BANK_TRANSFER, enteredUsd: liveFormKpis.bankTransfer.totalUsd },
+      { bucket: "CREDIT", label: PAYMENT_BUCKET_LABELS.CREDIT, enteredUsd: liveFormKpis.credit.totalUsd },
+      { bucket: "CHECK", label: PAYMENT_BUCKET_LABELS.CHECK, enteredUsd: liveFormKpis.checks.totalUsd },
+      { bucket: "OTHER", label: PAYMENT_BUCKET_LABELS.OTHER, enteredUsd: liveFormKpis.other.totalUsd },
+    ];
+    return { active: true, violations: enforceBreakdownAgainstEntered([...planByBucket.values()], entered) };
+  }, [compositeSummary, liveFormKpis, orders]);
+
+  const breakdownBlocked = breakdownEnforcement.violations.length > 0;
+
   /** תצוגה חיה בלבד — יתרה לאחר שמירה = חוב נוכחי − סכום בהקלדה */
   const openDebtAfterPaymentPreview = useMemo(() => {
     const currentOpenBalance = customerBalanceResetPending
@@ -859,18 +978,6 @@ export function PaymentModalUpdated({
       afterCommissionUsd,
     };
   }, [customerBalanceResetPending, customerOpenDebtSignedUsd, totals.totalUsd, orders]);
-
-  const stickyCustomerBalanceAfterPayment = useMemo(() => {
-    const currentSignedBalance = customerBalanceResetPending ? 0 : customerOpenDebtSignedUsd;
-    const afterPayment = roundMoney2(currentSignedBalance - totals.totalUsd);
-    return {
-      amountUsd: afterPayment,
-      absAmountUsd: Math.abs(afterPayment),
-      isCredit: afterPayment < -0.01,
-      isDebt: afterPayment > 0.01,
-      label: afterPayment < -0.01 ? "יתרת זכות" : "יתרת לקוח",
-    };
-  }, [customerBalanceResetPending, customerOpenDebtSignedUsd, totals.totalUsd]);
 
   const intakeStripOpenDebtUsd = customerOpenDebtDisplayUsd;
 
@@ -2106,6 +2213,11 @@ export function PaymentModalUpdated({
       setHighlightInvalidCheckFields(true);
       return { ok: false };
     }
+    if (breakdownBlocked) {
+      const msg = breakdownEnforcement.violations.map(breakdownViolationMessage).join("\n\n");
+      setSaveErr(`לא ניתן לשמור.\n\n${msg}`);
+      return { ok: false };
+    }
     const forceCustomerCreditPayment = customerHasCredit;
     const allocDiag = logPaymentAllocationPreSave({
       source: "payment-modal",
@@ -2238,6 +2350,11 @@ export function PaymentModalUpdated({
 
     const savedPaymentId = res.saved.primaryPaymentId?.trim() ?? savedCapturePaymentId ?? "";
     if (savedPaymentId) {
+      // קישור מסמכים שהועלו תחת מפתח טיוטה ל-paymentId האמיתי (לפני remount של הפאנל).
+      const draftKey = docDraftKeyRef.current;
+      if (draftKey && draftKey !== savedPaymentId) {
+        await attachDraftDocumentsAction(draftKey, savedPaymentId).catch(() => {});
+      }
       setLoadedPayment((cur) => ({
         ...cur,
         id: savedPaymentId,
@@ -2269,6 +2386,7 @@ export function PaymentModalUpdated({
     setCommissionResetIds([]);
     setSaveErr(null);
     setLoadedPayment(createNewCaptureLoadedPayment(savedCode));
+    setDocDraftKey(makeDocDraftKey());
     syncBaselineSoon();
     focusFirstAmountInput();
     refreshPaymentCodePreview();
@@ -3244,7 +3362,12 @@ export function PaymentModalUpdated({
                   role="region"
                   aria-label="סיכום לפי אמצעי תשלום"
                 >
-                  <PaymentLiveSummaryCards kpis={liveFormKpis} />
+                  <PaymentLiveSummaryCards
+                    kpis={liveFormKpis}
+                    orderSummary={orderSummaryForCards}
+                    lines={payments}
+                    rate={rateN}
+                  />
                 </div>
               ) : null}
             </div>
@@ -3288,9 +3411,9 @@ export function PaymentModalUpdated({
                     onKeyDown={(e) => {
                       if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
                       e.preventDefault();
-                      if (!saveBusy && customer) void onSaveAndNew();
+                      if (!saveBusy && customer && !breakdownBlocked) void onSaveAndNew();
                     }}
-                    disabled={saveBusy || !customer || paymentIsCancelled}
+                    disabled={saveBusy || !customer || paymentIsCancelled || breakdownBlocked}
                     title="שומר את התשלום ומיד פותח טופס ריק לתשלום הבא — בלי לסגור את החלון"
                   >
                     {saveBusy ? (
@@ -3309,6 +3432,57 @@ export function PaymentModalUpdated({
                     <strong>{payments.length}</strong>
                   </div>
                 </div>
+
+                {compositeSummary.length > 0 ? (
+                  <div className="payment-upd-composite" dir="rtl">
+                    <div className="payment-upd-composite-title">
+                      <span>אמצעי תשלום מתוכננים</span>
+                      {orders.some((o) => o.hasMethodDeviation) ? (
+                        <span className="payment-upd-deviation-badge" title="שולם בפועל באמצעי ששונה מהמתוכנן">
+                          חריגת אמצעי תשלום
+                        </span>
+                      ) : null}
+                    </div>
+                    <table className="payment-upd-composite-tbl">
+                      <thead>
+                        <tr>
+                          <th>סוג</th>
+                          <th>תוכנן</th>
+                          <th>שולם</th>
+                          <th>נותר</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {compositeSummary.map((r) => (
+                          <tr key={r.method}>
+                            <td>{r.label}</td>
+                            <td dir="ltr">${r.plannedUsd.toFixed(2)}</td>
+                            <td dir="ltr">${r.paidUsd.toFixed(2)}</td>
+                            <td dir="ltr" className={r.remainingUsd > 0.02 ? "payment-upd-composite-rem" : "payment-upd-composite-done"}>
+                              ${r.remainingUsd.toFixed(2)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {breakdownBlocked ? (
+                      <div className="payment-upd-composite-block" role="alert">
+                        <div className="payment-upd-composite-block-title">לא ניתן לשמור — חריגה מחלוקת התשלום</div>
+                        {breakdownEnforcement.violations.map((v) => (
+                          <div className="payment-upd-composite-block-item" key={v.bucket}>
+                            {breakdownViolationMessage(v).split("\n").map((ln, i) => (
+                              <div key={i}>{ln}</div>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="payment-upd-composite-hint">
+                        החלוקה נאכפת — לא ניתן לשלם באמצעי שלא הוגדר בהזמנה או לחרוג מהסכום שהוגדר לכל אמצעי.
+                      </div>
+                    )}
+                  </div>
+                ) : null}
 
                 <div
                   ref={paymentLinesContainerRef}
@@ -3329,6 +3503,7 @@ export function PaymentModalUpdated({
                         firstAmountInputRef={idx === 0 ? firstAmountInputRef : undefined}
                         onUpdate={(patch) => updatePaymentLine(p.id, patch)}
                         onRemove={() => removePaymentLine(p.id)}
+                        allowedMethods={allowedMethods}
                         onEnterInFirstAmount={
                           idx === 0
                             ? () => {
@@ -3348,40 +3523,36 @@ export function PaymentModalUpdated({
 
                 {customer ? <PaymentAllocationPreviewPanel preview={paymentAllocationPreview} /> : null}
 
+                {customer ? (
+                  <DocumentsPanel
+                    key={docEntityId}
+                    entityType="PAYMENT"
+                    entityId={docEntityId}
+                    title="מסמכים מצורפים"
+                    selfResolvePermissions
+                  />
+                ) : null}
+
               </div>
             </div>
 
             <div className="payment-modal-side-sticky payment-summary-stack payment-summary-stack--v2">
               <div
-                className={[
-                  "payment-upd-sticky-total",
-                  "payment-upd-sticky-total--basis-led",
-                  stickyCustomerBalanceAfterPayment.isCredit
-                    ? "payment-upd-sticky-total--credit"
-                    : stickyCustomerBalanceAfterPayment.isDebt
-                      ? "payment-upd-sticky-total--debt"
-                      : "payment-upd-sticky-total--zero",
-                ].join(" ")}
+                className="payment-upd-sticky-total payment-upd-sticky-total--basis-led payment-upd-sticky-total--current"
                 aria-live="polite"
               >
                 <div className="payment-upd-sticky-total-amounts">
+                  <div className="payment-upd-sticky-total-lbl">סה״כ תשלום נוכחי</div>
                   <AnimatedMoneyValue
                     className="payment-upd-sticky-total-usd money-amount"
                     dir="ltr"
-                    value={fmtUsdDisplay(stickyCustomerBalanceAfterPayment.absAmountUsd)}
+                    value={fmtUsdDisplay(totals.totalUsd)}
                   />
-                  <div className="payment-upd-sticky-total-lbl">{stickyCustomerBalanceAfterPayment.label}</div>
-                  <div className="payment-upd-sticky-total-doc" dir="rtl">
-                    <span>סה״כ מסמך:</span>
-                    <strong dir="ltr">{fmtUsdDisplay(totals.totalUsd)}</strong>
-                  </div>
-                  {stickyIlsEntered > 0.005 ? (
-                    <AnimatedMoneyValue
-                      className="payment-upd-sticky-total-ils money-amount payment-upd-sticky-total-ils--hint"
-                      dir="ltr"
-                      value={`₪${fmtFooterAmount(stickyIlsEntered)} נקלט`}
-                    />
-                  ) : null}
+                  <AnimatedMoneyValue
+                    className="payment-upd-sticky-total-ils money-amount"
+                    dir="ltr"
+                    value={`₪${fmtFooterAmount(rateN > 0 ? totals.totalUsd * rateN : stickyIlsEntered)}`}
+                  />
                 </div>
               </div>
               {cancelRequestHint.status === "PENDING" ? (
@@ -3398,7 +3569,11 @@ export function PaymentModalUpdated({
                   ) : null}
                 </div>
               ) : null}
-              {saveErr ? <div className="payment-modal-err payment-modal-err--sm">{saveErr}</div> : null}
+              {saveErr ? (
+                <div className="payment-modal-err payment-modal-err--sm" style={{ whiteSpace: "pre-line" }}>
+                  {saveErr}
+                </div>
+              ) : null}
               <div className="payment-modal-save-actions">
                 {canCancelSavedPayment ? (
                   <button
@@ -3414,12 +3589,12 @@ export function PaymentModalUpdated({
                   type="button"
                   ref={savePrimaryButtonRef}
                   className={`btn btn-primary btn-save payment-modal-save payment-modal-save--v2${saveBusy ? " loading" : ""}`}
-                  disabled={saveBusy || !customer || paymentIsCancelled}
+                  disabled={saveBusy || !customer || paymentIsCancelled || breakdownBlocked}
                   onClick={() => void onSaveAndClose()}
                   onKeyDown={(e) => {
                     if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
                     e.preventDefault();
-                    if (!saveBusy && customer) void onSaveAndClose();
+                    if (!saveBusy && customer && !breakdownBlocked) void onSaveAndClose();
                   }}
                 >
                   {saveBusy ? (

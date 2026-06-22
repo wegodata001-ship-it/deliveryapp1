@@ -74,6 +74,7 @@ import { isValidYmd } from "@/lib/weeks/ah-week";
 import { orderNumberMatchesWeekFormat } from "@/lib/order-number";
 import {
   generateNextOrderNumber,
+  regenerateOrderNumberAfterCollision,
   previewOrderNumberAfter,
   previewNextOrderNumberForWeek,
 } from "@/lib/orders-next-number";
@@ -97,6 +98,11 @@ import { normalizeCapturePaymentCodeQuery } from "@/lib/payment-code-search";
 import { normalizeWorkCountryCode, type WorkCountryCode } from "@/lib/work-country";
 import { ensureOnce } from "@/lib/ensure-tables-once";
 import { PM } from "@/lib/payment-method-slugs";
+import {
+  isCompositePaymentMethod,
+  type BreakdownCurrency,
+  type OrderBreakdownLineInput,
+} from "@/lib/payment-breakdown-shared";
 import { parseSplitPaymentMethodRaw } from "@/lib/order-capture-payment-methods";
 import { getSelectedCountriesForOrdersInternal } from "@/app/admin/settings/actions";
 import { ORDER_COUNTRY_CODES, coerceOrderCountryForForm, normalizeOrderSourceCountry, type OrderCountryCode } from "@/lib/order-countries";
@@ -213,7 +219,14 @@ export type PaymentCaptureSavedSummary = {
 };
 
 export type CaptureState =
-  | { ok: true; saved?: OrderCaptureSavedSummary; orderNumber?: string; nextOrderNumberPreview?: string | null }
+  | {
+      ok: true;
+      saved?: OrderCaptureSavedSummary;
+      orderNumber?: string;
+      nextOrderNumberPreview?: string | null;
+      /** הודעת מידע ידידותית (למשל: מספר הזמנה הופק מחדש עקב התנגשות) */
+      notice?: string | null;
+    }
   | { ok: false; error: string };
 
 export type PaymentCaptureState =
@@ -400,6 +413,80 @@ async function appendParsedPaymentsForOrder(
     };
   });
   await db.payment.createMany({ data });
+}
+
+type ParsedBreakdownRow = { paymentMethod: string; amount: Prisma.Decimal; currency: BreakdownCurrency };
+
+/**
+ * מפענח ומאמת חלוקת "תשלום מורכב". מאחסן את הסכום במטבע שהוזן (currency),
+ * ומאמת שסכום החלוקה (ב-USD) שווה ל-totalUsd של ההזמנה.
+ */
+function parseOrderBreakdown(
+  lines: OrderBreakdownLineInput[] | undefined,
+  totalUsd: Prisma.Decimal,
+  finalNisPerUsd: Prisma.Decimal,
+): { ok: true; rows: ParsedBreakdownRow[] } | { ok: false; error: string } {
+  if (!lines?.length) return { ok: false, error: "תשלום מורכב: יש להגדיר חלוקת תשלום" };
+  const rows: ParsedBreakdownRow[] = [];
+  let sumUsd = new Prisma.Decimal(0);
+  for (const line of lines) {
+    const raw = (line.amount || "").trim().replace(",", ".");
+    if (!raw) continue;
+    let amt: Prisma.Decimal;
+    try {
+      amt = new Prisma.Decimal(raw);
+    } catch {
+      return { ok: false, error: "תשלום מורכב: סכום לא תקין בשורת חלוקה" };
+    }
+    if (amt.lte(0)) continue;
+    const method = parseSplitPaymentMethodRaw(line.paymentMethod);
+    if (!method || !PAYMENT_METHODS.has(method)) {
+      return { ok: false, error: "תשלום מורכב: אמצעי תשלום לא תקין בשורת חלוקה" };
+    }
+    const cur: BreakdownCurrency = line.currency === "ILS" ? "ILS" : "USD";
+    let amtUsd: Prisma.Decimal;
+    if (cur === "ILS") {
+      if (finalNisPerUsd.lte(0)) return { ok: false, error: "תשלום מורכב: שער דולר לא תקין" };
+      amtUsd = amt.div(finalNisPerUsd);
+    } else {
+      amtUsd = amt;
+    }
+    sumUsd = sumUsd.add(amtUsd);
+    rows.push({ paymentMethod: method, amount: amt.toDecimalPlaces(4, 4), currency: cur });
+  }
+  if (rows.length === 0) return { ok: false, error: "תשלום מורכב: יש להגדיר חלוקת תשלום" };
+  const diff = sumUsd.sub(totalUsd).abs();
+  if (diff.gt(new Prisma.Decimal("0.01"))) {
+    return { ok: false, error: "תשלום מורכב: סכום החלוקה חייב להיות שווה לסה״כ ההזמנה" };
+  }
+  return { ok: true, rows };
+}
+
+/** כותב מחדש את חלוקת התשלום של הזמנה (מחיקה + יצירה). rows ריק = ניקוי חלוקה. */
+async function writeOrderBreakdown(
+  db: CaptureDbClient,
+  orderId: string,
+  rows: ParsedBreakdownRow[],
+): Promise<void> {
+  await db.orderPaymentBreakdown.deleteMany({ where: { orderId } });
+  if (rows.length === 0) return;
+  await db.orderPaymentBreakdown.createMany({
+    data: rows.map((r) => ({
+      orderId,
+      paymentMethod: r.paymentMethod,
+      amount: r.amount,
+      currency: r.currency,
+    })),
+  });
+}
+
+/** האם השגיאה היא הפרת ייחודיות (P2002) על שדה orderNumber */
+function isUniqueOrderNumberError(e: unknown): boolean {
+  if (!(e instanceof Prisma.PrismaClientKnownRequestError)) return false;
+  if (e.code !== "P2002") return false;
+  const target = e.meta?.target;
+  const fields = Array.isArray(target) ? target.map(String) : [String(target ?? "")];
+  return fields.some((f) => f.toLowerCase().includes("ordernumber"));
 }
 
 function isSameLocalCalendarDay(a: Date, b: Date): boolean {
@@ -1541,6 +1628,8 @@ export async function captureOrderAction(form: {
   paymentPointId?: string | null;
   /** שורות תשלום נוספות (USD) — נשמרות אחרי ההזמנה; סכוםן לא יעלה על totalUsd */
   paymentLines?: OrderCapturePaymentLineInput[];
+  /** חלוקת "תשלום מורכב" — כאשר paymentMethod=COMPOSITE. [] = ניקוי חלוקה */
+  paymentBreakdown?: OrderBreakdownLineInput[];
   /** אחוז מע״מ (ברירת מחדל 18 — תאימות אחורה) */
   vatPercent?: string | null;
   /** מקור / מדינת ספק */
@@ -1593,7 +1682,7 @@ async function captureOrderActionInner(
     return { ok: false, error: "יש לבחור לקוח" };
   }
 
-  if (!PAYMENT_METHODS.has(form.paymentMethod)) {
+  if (!isCompositePaymentMethod(form.paymentMethod) && !PAYMENT_METHODS.has(form.paymentMethod)) {
     capturePerfTimeEnd("capture.validation");
     perf.validateInputMs = Date.now() - validationT0;
     return { ok: false, error: "אמצעי תשלום לא תקין" };
@@ -1735,6 +1824,13 @@ async function captureOrderActionInner(
   }
 
   const totalUsd = deal.add(commissionUsd).toDecimalPlaces(4, 4);
+  const isComposite = isCompositePaymentMethod(form.paymentMethod);
+  let breakdownRows: ParsedBreakdownRow[] = [];
+  if (isComposite) {
+    const bd = parseOrderBreakdown(form.paymentBreakdown, totalUsd, finalRate);
+    if (!bd.ok) return bd;
+    breakdownRows = bd.rows;
+  }
   const payParse = parseOrderPaymentLines(form.paymentLines, finalRate);
   if (!payParse.ok) return payParse;
   if (isDebtWithdrawalOrderStatus(status)) {
@@ -1807,8 +1903,13 @@ async function captureOrderActionInner(
   }
   const sourceCountryCreate = rawCountry as OrderCountryCode;
 
+  // האם המספר הופק אוטומטית (ולכן מותר להפיק מחדש בעת התנגשות)
+  const autoOrderNumber = !(requestedOrderNumber && requestedOrderNumber !== "—");
+  const ORDER_NUMBER_MAX_ATTEMPTS = 5;
+  let orderNumberCollisionRecovered = false;
+
   capturePerfTimeStart("capture.insertOrder");
-  const order = await capturePerfTimed("capture.insertOrderRow", () =>
+  const runCreateTransaction = () =>
     prisma.$transaction(async (tx) => {
       const tOrder = Date.now();
       const created = await tx.order.create({
@@ -1879,10 +1980,45 @@ async function captureOrderActionInner(
         perf.add("createItemsMs", Date.now() - tItems);
       }
 
+      if (isComposite) {
+        await writeOrderBreakdown(tx, created.id, breakdownRows);
+      }
+
       return created;
-    }),
-  );
+    });
+
+  // Retry על התנגשות מספר הזמנה (P2002): מפיקים מספר חדש (מסונכרן מול ה-MAX)
+  // ומנסים שוב עד 5 פעמים — בלי להקריס את המסך.
+  let createdOrderResult: Awaited<ReturnType<typeof runCreateTransaction>> | null = null;
+  for (let attempt = 1; attempt <= ORDER_NUMBER_MAX_ATTEMPTS; attempt++) {
+    try {
+      createdOrderResult = await capturePerfTimed("capture.insertOrderRow", runCreateTransaction);
+      break;
+    } catch (e) {
+      if (!isUniqueOrderNumberError(e)) throw e;
+      if (!autoOrderNumber) {
+        capturePerfTimeEnd("capture.insertOrder");
+        return { ok: false, error: "מספר הזמנה זה כבר קיים במערכת" };
+      }
+      if (attempt >= ORDER_NUMBER_MAX_ATTEMPTS) {
+        capturePerfTimeEnd("capture.insertOrder");
+        return { ok: false, error: "מספר הזמנה כבר קיים במערכת — נסו לשמור שוב" };
+      }
+      const fresh = await regenerateOrderNumberAfterCollision(
+        weekCode,
+        workCountryFromOrderSourceCountry(form.sourceCountry),
+      );
+      orderNumber = fresh.orderNumber;
+      oldOrderNumber = fresh.oldOrderNumber;
+      sequenceForPreview = fresh.sequence;
+      orderNumberCollisionRecovered = true;
+    }
+  }
   capturePerfTimeEnd("capture.insertOrder");
+  if (!createdOrderResult) {
+    return { ok: false, error: "שמירת ההזמנה נכשלה" };
+  }
+  const order = createdOrderResult;
 
   if (isDebtWithdrawalOrderStatus(status)) {
     const dw = await applyDebtWithdrawalForOrder({
@@ -1945,6 +2081,9 @@ async function captureOrderActionInner(
     },
     orderNumber: order.orderNumber ?? orderNumber,
     nextOrderNumberPreview: nextPreview,
+    notice: orderNumberCollisionRecovered
+      ? "מספר הזמנה כבר קיים במערכת, נוצר מספר חדש אוטומטית."
+      : null,
   }));
   capturePerfTimeEnd("capture.response");
   perf.logSummary({ mode: "create", orderId: order.id, orderNumber });
@@ -1967,6 +2106,8 @@ export type OrderWorkPanelPayload = {
   amountUsd: string;
   feeUsd: string;
   paymentMethod: string;
+  /** חלוקת "תשלום מורכב" — ריק אם ההזמנה אינה מורכבת */
+  paymentBreakdown: { paymentMethod: string; amount: string; currency: BreakdownCurrency }[];
   paymentPointId: string | null;
   locationId: string | null;
   locationName: string | null;
@@ -2021,6 +2162,10 @@ export async function getOrderForWorkPanelAction(orderId: string): Promise<Order
         amountUsd: true,
         commissionUsd: true,
         paymentMethod: true,
+        paymentBreakdown: {
+          select: { paymentMethod: true, amount: true, currency: true },
+          orderBy: { createdAt: "asc" },
+        },
         paymentPointId: true,
         paymentPoint: {
           select: { pointName: true, city: true },
@@ -2121,6 +2266,11 @@ export async function getOrderForWorkPanelAction(orderId: string): Promise<Order
       amountUsd: deal.toString(),
       feeUsd: com.toString(),
       paymentMethod: order.paymentMethod ?? PM.BANK_TRANSFER,
+      paymentBreakdown: order.paymentBreakdown.map((b) => ({
+        paymentMethod: b.paymentMethod,
+        amount: b.amount.toString(),
+        currency: (b.currency === "ILS" ? "ILS" : "USD") as BreakdownCurrency,
+      })),
       paymentPointId: order.paymentPointId ?? null,
       locationId: geo?.locationId ?? null,
       locationName:
@@ -2638,6 +2788,8 @@ export async function updateOrderWorkPanelAction(form: {
   locationId?: string | null;
   intakeLocationDraftName?: string | null;
   paymentLines?: OrderCapturePaymentLineInput[];
+  /** חלוקת "תשלום מורכב" — כאשר paymentMethod=COMPOSITE. [] = ניקוי חלוקה */
+  paymentBreakdown?: OrderBreakdownLineInput[];
   sourceCountry?: OrderCountryCode | string | null;
   draftNameAr?: string | null;
   draftNameEn?: string | null;
@@ -2686,7 +2838,7 @@ async function updateOrderWorkPanelActionInner(
     return { ok: false, error: "יש לבחור לקוח" };
   }
 
-  if (!PAYMENT_METHODS.has(form.paymentMethod)) {
+  if (!isCompositePaymentMethod(form.paymentMethod) && !PAYMENT_METHODS.has(form.paymentMethod)) {
     capturePerfTimeEnd("capture.validation");
     perf.validateInputMs = Date.now() - validationT0;
     return { ok: false, error: "אמצעי תשלום לא תקין" };
@@ -2816,6 +2968,13 @@ async function updateOrderWorkPanelActionInner(
   }
 
   const totalUsd = deal.add(commissionUsd).toDecimalPlaces(4, 4);
+  const isComposite = isCompositePaymentMethod(form.paymentMethod);
+  let breakdownRows: ParsedBreakdownRow[] = [];
+  if (isComposite) {
+    const bd = parseOrderBreakdown(form.paymentBreakdown, totalUsd, final);
+    if (!bd.ok) return bd;
+    breakdownRows = bd.rows;
+  }
   const payParse = parseOrderPaymentLines(form.paymentLines, final);
   if (!payParse.ok) return payParse;
   if (isDebtWithdrawalOrderStatus(status)) {
@@ -2963,6 +3122,9 @@ async function updateOrderWorkPanelActionInner(
         );
         perf.add("createItemsMs", Date.now() - tItems);
       }
+
+      // תשלום מורכב: כתיבה מחדש של החלוקה (composite=rows, אחרת ניקוי)
+      await writeOrderBreakdown(tx, existing.id, breakdownRows);
     }),
   );
   capturePerfTimeEnd("capture.insertOrder");

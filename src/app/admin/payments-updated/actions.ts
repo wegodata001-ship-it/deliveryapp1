@@ -35,6 +35,19 @@ import {
   type PaymentLine,
   type PaymentLineMethod,
 } from "@/lib/payment-updated";
+import {
+  isCompositePaymentMethod,
+  enforceBreakdownAgainstEntered,
+  breakdownViolationMessage,
+  paymentMethodBucketKey,
+  PAYMENT_BUCKET_LABELS,
+  type EnteredBucketUsd,
+  type PaymentBucketKey,
+  type PlannedBucketUsd,
+} from "@/lib/payment-breakdown-shared";
+import { aggregateLivePaymentFormKpis } from "@/lib/payment-intake-live-kpi";
+import { loadPaymentIntakeOrdersForCustomer } from "@/lib/payment-intake-load";
+import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 import { VAT_RATE } from "@/lib/vat";
 import { prismaVatRatePercent } from "@/lib/vat-prisma";
 import { getCustomerInternalBalanceUsd } from "@/lib/customer-open-debt";
@@ -305,6 +318,63 @@ export async function previewCustomerPaymentOverageAction(input: {
   return { ok: true, preview };
 }
 
+/**
+ * אכיפת "תשלום מורכב" בצד שרת — בודק שהמתוכנן (OrderPaymentBreakdown) נשמר:
+ * אסור לשלם באמצעי שלא הוגדר בהזמנה, ואסור לחרוג מהסכום שהוגדר לכל אמצעי.
+ * מחזיר טקסט שגיאה (לחסימת שמירה) או null אם תקין.
+ */
+async function validateCompositeBreakdownEnforcement(params: {
+  customerId: string;
+  weekCode: string | null | undefined;
+  workCountry: string | null | undefined;
+  payments: PaymentLine[];
+  rateN: number;
+}): Promise<string | null> {
+  const ordersRes = await loadPaymentIntakeOrdersForCustomer({
+    customerId: params.customerId,
+    weekCodeForOpenBalances: params.weekCode ?? null,
+    paymentWorkCountryRaw: params.workCountry ?? null,
+  });
+  if (!ordersRes.ok) return null;
+
+  const payable = ordersRes.orders.filter(
+    (o) => o.isComposite && o.breakdown.length > 0 && Number(o.dbRemainingUsd) > 0.02,
+  );
+  if (payable.length === 0) return null;
+
+  // אם קיים חוב פתוח בהזמנה שאינה מורכבת — לא נאכוף חסימה (תשלום עשוי להיות מוקצה אליה).
+  const hasNonCompositeDebt = ordersRes.orders.some(
+    (o) => !(o.isComposite && o.breakdown.length > 0) && Number(o.dbRemainingUsd) > 0.02,
+  );
+  if (hasNonCompositeDebt) return null;
+
+  const planByBucket = new Map<PaymentBucketKey, PlannedBucketUsd>();
+  for (const o of payable) {
+    for (const b of o.breakdown) {
+      const bucket = paymentMethodBucketKey(b.method);
+      const cur =
+        planByBucket.get(bucket) ??
+        { bucket, label: PAYMENT_BUCKET_LABELS[bucket], plannedUsd: 0, remainingUsd: 0 };
+      cur.plannedUsd += b.plannedUsd;
+      cur.remainingUsd += b.remainingUsd;
+      planByBucket.set(bucket, cur);
+    }
+  }
+
+  const kpis = aggregateLivePaymentFormKpis(params.payments, params.rateN);
+  const entered: EnteredBucketUsd[] = [
+    { bucket: "CASH", label: PAYMENT_BUCKET_LABELS.CASH, enteredUsd: kpis.cash.totalUsd },
+    { bucket: "BANK_TRANSFER", label: PAYMENT_BUCKET_LABELS.BANK_TRANSFER, enteredUsd: kpis.bankTransfer.totalUsd },
+    { bucket: "CREDIT", label: PAYMENT_BUCKET_LABELS.CREDIT, enteredUsd: kpis.credit.totalUsd },
+    { bucket: "CHECK", label: PAYMENT_BUCKET_LABELS.CHECK, enteredUsd: kpis.checks.totalUsd },
+    { bucket: "OTHER", label: PAYMENT_BUCKET_LABELS.OTHER, enteredUsd: kpis.other.totalUsd },
+  ];
+
+  const violations = enforceBreakdownAgainstEntered([...planByBucket.values()], entered);
+  if (violations.length === 0) return null;
+  return `לא ניתן לשמור.\n\n${violations.map(breakdownViolationMessage).join("\n\n")}`;
+}
+
 export async function savePaymentUpdatedAction(
   form: PaymentUpdatedSaveInput,
 ): Promise<
@@ -368,6 +438,16 @@ export async function savePaymentUpdatedAction(
 
   const checkValidationErr = validatePaymentCheckLines(form.payments ?? []);
   if (checkValidationErr) return { ok: false, error: checkValidationErr };
+
+  // בקרת "תשלום מורכב" — אכיפה אמיתית בצד שרת (מונע עקיפת חסימת ה-UI).
+  const breakdownErr = await validateCompositeBreakdownEnforcement({
+    customerId: cid,
+    weekCode: form.weekCode,
+    workCountry: form.workCountry,
+    payments: form.payments ?? [],
+    rateN,
+  });
+  if (breakdownErr) return { ok: false, error: breakdownErr };
 
   const flatChecksForPrimary = flattenChecksFromPayments(form.payments ?? []);
 
@@ -442,6 +522,10 @@ export async function savePaymentUpdatedAction(
         status: "unpaid" as const,
         lastPaymentDateYmd: null,
         sourceCountry: null,
+        isComposite: false,
+        breakdown: [],
+        actualMethods: [],
+        hasMethodDeviation: false,
       };
     }),
   );
@@ -626,7 +710,12 @@ export async function savePaymentUpdatedAction(
 
         const order = await tx.order.findFirst({
           where: { id: orderId, customerId: cid, deletedAt: null },
-          select: { id: true },
+          select: {
+            id: true,
+            orderNumber: true,
+            paymentMethod: true,
+            paymentBreakdown: { select: { paymentMethod: true } },
+          },
         });
         if (!order) throw new Error("הזמנה לא נמצאה או שאינה של הלקוח");
 
@@ -654,6 +743,8 @@ export async function savePaymentUpdatedAction(
             currency: ilsOnRow && totalIlsEntered > ALLOC_EPS ? "MIXED" : "USD",
             amountUsd: amt,
             amountIls: ilsOnRow,
+            sourceCurrency: ilsOnRow && totalIlsEntered > ALLOC_EPS ? "MIXED" : "USD",
+            sourceAmount: ilsOnRow && totalIlsEntered > ALLOC_EPS ? ilsOnRow : amt,
             exchangeRate: finalUse,
             vatRate,
             commissionPercent: commissionPctDec,
@@ -676,6 +767,40 @@ export async function savePaymentUpdatedAction(
           },
         });
         if (allocIndex === 0) primaryPaymentId = created.id;
+
+        // חריגת אמצעי תשלום: אם להזמנה יש תכנון מורכב ואמצעי התשלום בפועל אינו מהמתוכננים — לתעד Audit.
+        if (isCompositePaymentMethod(order.paymentMethod) && order.paymentBreakdown.length > 0) {
+          const plannedSet = new Set(order.paymentBreakdown.map((b) => b.paymentMethod));
+          const actualMethodsUsed = [usdMethod, ilsMethod, payMethodDb].filter(
+            (m): m is PaymentMethod => !!m && !isCompositePaymentMethod(m),
+          );
+          const deviatingMethods = [...new Set(actualMethodsUsed)].filter((m) => !plannedSet.has(m));
+          if (deviatingMethods.length > 0) {
+            await tx.auditLog.create({
+              data: {
+                userId: me.id,
+                actionType: "PAYMENT_METHOD_DEVIATION",
+                entityType: "Order",
+                entityId: order.id,
+                oldValue: {
+                  plannedMethods: [...plannedSet],
+                } as Prisma.InputJsonValue,
+                newValue: {
+                  actualMethods: deviatingMethods,
+                } as Prisma.InputJsonValue,
+                metadata: {
+                  orderNumber: order.orderNumber ?? null,
+                  paymentId: created.id,
+                  paymentCode: code,
+                  amountUsd: amt.toFixed(2),
+                  plannedLabels: [...plannedSet].map((m) => PAYMENT_METHOD_LABELS[m] ?? m),
+                  actualLabels: deviatingMethods.map((m) => PAYMENT_METHOD_LABELS[m] ?? m),
+                } as Prisma.InputJsonValue,
+              },
+            });
+          }
+        }
+
         allocIndex += 1;
         savedCount += 1;
       }
@@ -706,6 +831,8 @@ export async function savePaymentUpdatedAction(
             currency: "USD",
             amountUsd: creditUsd,
             amountIls: null,
+            sourceCurrency: "USD",
+            sourceAmount: creditUsd,
             exchangeRate: finalUse,
             vatRate,
             commissionPercent: commissionPctDec,

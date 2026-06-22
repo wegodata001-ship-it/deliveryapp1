@@ -13,6 +13,7 @@ export const PAYMENT_METHOD_LABELS: Record<string, string> = {
   CASH: "מזומן",
   CREDIT: "אשראי",
   OTHER: "אחר",
+  COMPOSITE: "תשלום מורכב",
 };
 
 export type PaymentMethodTone = "cash" | "bank" | "credit" | "check" | "neutral";

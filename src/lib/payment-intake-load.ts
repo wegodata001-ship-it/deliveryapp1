@@ -2,7 +2,9 @@ import "server-only";
 
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import type { PaymentIntakeOrderRow } from "@/lib/payment-intake";
+import type { OrderBreakdownMethodRow, PaymentIntakeOrderRow } from "@/lib/payment-intake";
+import { breakdownLineUsd, computeOrderMethodDeviation, isCompositePaymentMethod } from "@/lib/payment-breakdown-shared";
+import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 import type { PaymentIntakeCustomerPaymentRow } from "@/lib/payment-intake-customer-kpi";
 import { paymentIntakeOrderDateThroughAhWeekEnd } from "@/lib/payment-intake-order-filter";
 import { DEFAULT_WORK_COUNTRY, normalizeWorkCountryCode } from "@/lib/work-country";
@@ -99,6 +101,11 @@ export async function loadPaymentIntakeOrdersForCustomer(
       totalIlsWithVat: true,
       totalIls: true,
       sourceCountry: true,
+      paymentMethod: true,
+      paymentBreakdown: {
+        select: { paymentMethod: true, amount: true, currency: true },
+        orderBy: { createdAt: "asc" },
+      },
     },
   });
 
@@ -106,13 +113,25 @@ export async function loadPaymentIntakeOrdersForCustomer(
   const paidByOrder = new Map<string, Prisma.Decimal>();
   const latestCodeByOrder = new Map<string, string | null>();
   const latestPaymentDateByOrder = new Map<string, string | null>();
+  /** שולם בפועל לכל אמצעי תשלום, לפי הזמנה (USD): orderId → (method → סכום) */
+  const actualByOrderMethod = new Map<string, Map<string, number>>();
   if (orderIds.length > 0) {
     const [sums, payRows] = await Promise.all([
       groupByActivePayments("orderId", { orderId: { in: orderIds }, amountUsd: { not: null } }, { amountUsd: true }),
       prisma.payment.findMany({
         where: { orderId: { in: orderIds } },
         orderBy: [{ paymentDate: "desc" }, { createdAt: "desc" }],
-        select: { orderId: true, paymentCode: true, paymentDate: true, createdAt: true },
+        select: {
+          orderId: true,
+          paymentCode: true,
+          paymentDate: true,
+          createdAt: true,
+          status: true,
+          amountUsd: true,
+          paymentMethod: true,
+          usdPaymentMethod: true,
+          ilsPaymentMethod: true,
+        },
       }),
     ]);
     for (const s of sums) {
@@ -125,6 +144,18 @@ export async function loadPaymentIntakeOrdersForCustomer(
         const dt = p.paymentDate ?? p.createdAt;
         latestPaymentDateByOrder.set(p.orderId, dt ? formatLocalYmd(new Date(dt)) : null);
       }
+      // שולם-בפועל-לכל-אמצעי: רק תשלומים פעילים, לפי אמצעי התשלום שנרשם
+      if (String(p.status) !== "ACTIVE") continue;
+      const amt = p.amountUsd ? Number(p.amountUsd.toString()) : 0;
+      if (!Number.isFinite(amt) || amt <= 0) continue;
+      const method = (p.paymentMethod || p.usdPaymentMethod || p.ilsPaymentMethod || "").trim();
+      if (!method) continue;
+      let byMethod = actualByOrderMethod.get(p.orderId);
+      if (!byMethod) {
+        byMethod = new Map<string, number>();
+        actualByOrderMethod.set(p.orderId, byMethod);
+      }
+      byMethod.set(method, (byMethod.get(method) ?? 0) + amt);
     }
   }
 
@@ -141,6 +172,39 @@ export async function loadPaymentIntakeOrdersForCustomer(
     const rateDec = o.usdRateUsed ?? o.snapshotFinalDollarRate ?? o.exchangeRate ?? new Prisma.Decimal(0);
     const rateN = Number(rateDec.toString()) || 0;
     const ilsDec = o.totalIlsWithVat ?? o.totalIls ?? new Prisma.Decimal(0);
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    const isComposite = isCompositePaymentMethod(o.paymentMethod);
+    const actualMap = actualByOrderMethod.get(o.id) ?? new Map<string, number>();
+    const actualMethods = [...actualMap.entries()]
+      .filter(([, usd]) => usd > 0.0001)
+      .map(([method, usd]) => ({ method, label: PAYMENT_METHOD_LABELS[method] ?? method, usd: round2(usd) }));
+    let breakdown: OrderBreakdownMethodRow[] = [];
+    let hasMethodDeviation = false;
+    if (isComposite && o.paymentBreakdown.length > 0) {
+      const plannedByMethod = new Map<string, number>();
+      for (const b of o.paymentBreakdown) {
+        const usd =
+          breakdownLineUsd(
+            { amount: b.amount.toString(), currency: b.currency === "ILS" ? "ILS" : "USD" },
+            rateN,
+          ) ?? 0;
+        plannedByMethod.set(b.paymentMethod, (plannedByMethod.get(b.paymentMethod) ?? 0) + usd);
+      }
+      breakdown = [...plannedByMethod.entries()].map(([method, plannedUsd]) => {
+        const paid = actualMap.get(method) ?? 0;
+        return {
+          method,
+          label: PAYMENT_METHOD_LABELS[method] ?? method,
+          plannedUsd: round2(plannedUsd),
+          paidUsd: round2(paid),
+          remainingUsd: Math.max(0, round2(plannedUsd - paid)),
+        };
+      });
+      hasMethodDeviation = computeOrderMethodDeviation(
+        [...plannedByMethod.entries()].map(([method, usd]) => ({ method, usd })),
+        actualMethods.map((a) => ({ method: a.method, usd: a.usd })),
+      ).hasDeviation;
+    }
     return {
       id: o.id,
       orderNumber: o.orderNumber,
@@ -157,6 +221,10 @@ export async function loadPaymentIntakeOrdersForCustomer(
       status,
       lastPaymentDateYmd: latestPaymentDateByOrder.get(o.id) ?? null,
       sourceCountry: o.sourceCountry != null ? String(o.sourceCountry) : null,
+      isComposite,
+      breakdown,
+      actualMethods,
+      hasMethodDeviation,
     };
   });
 

@@ -17,14 +17,17 @@ import {
   ListOrdered,
   LogOut,
   PlusCircle,
+  Scale,
   ScrollText,
   Settings,
   UserPlus,
   CircleDollarSign,
   ClipboardList,
+  Coins,
   TrendingUp,
   Users,
   Wallet,
+  Archive,
 } from "lucide-react";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { WegoBrandLogo } from "@/components/admin/WegoBrandLogo";
@@ -68,6 +71,12 @@ function NavIcon({ id }: { id: NavIconId }) {
       return <CircleDollarSign {...common} />;
     case "editRequests":
       return <ClipboardList {...common} />;
+    case "reconcile":
+      return <Scale {...common} />;
+    case "cashbox":
+      return <Coins {...common} />;
+    case "documents":
+      return <Archive {...common} />;
     default:
       return <Home {...common} />;
   }
@@ -239,11 +248,14 @@ function NavBlock({
           );
         }
         const editReqBadge =
-          item.href === "/admin/order-edit-requests" && navBadges?.pendingOrderEditRequests
-            ? navBadges.pendingOrderEditRequests
-            : item.href === "/admin/invoice-cancel-requests" && navBadges?.pendingInvoiceCancelRequests
-              ? navBadges.pendingInvoiceCancelRequests
-              : 0;
+          item.href === "/admin/edit-requests"
+            ? (navBadges?.pendingOrderEditRequests ?? 0) +
+              (navBadges?.pendingInvoiceCancelRequests ?? 0)
+            : item.href === "/admin/order-edit-requests" && navBadges?.pendingOrderEditRequests
+              ? navBadges.pendingOrderEditRequests
+              : item.href === "/admin/invoice-cancel-requests" && navBadges?.pendingInvoiceCancelRequests
+                ? navBadges.pendingInvoiceCancelRequests
+                : 0;
         const disablePrefetch = item.href === "/admin" || item.href === "/admin/";
         return (
           <Link

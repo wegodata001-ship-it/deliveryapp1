@@ -42,6 +42,8 @@ export type LedgerPaymentDetail = {
 };
 
 export type LedgerPaymentMethodDisplayLine = {
+  /** מזהה אמצעי תשלום קנוני — לצביעה אחידה */
+  method: string;
   label: string;
   amountIls: string | null;
   amountUsd: string;
@@ -453,6 +455,7 @@ export function ledgerPaymentMethodDisplayLines(
     if (m.method === "CHECK" && hasChecks) {
       for (const c of detail.checks) {
         out.push({
+          method: "CHECK",
           label: `צ'ק ${c.checkNumber}`,
           amountIls: null,
           amountUsd: c.amountUsd,
@@ -461,6 +464,7 @@ export function ledgerPaymentMethodDisplayLines(
       continue;
     }
     out.push({
+      method: m.method,
       label: m.label,
       amountIls: m.amountIls,
       amountUsd: m.amountUsd,
@@ -470,6 +474,7 @@ export function ledgerPaymentMethodDisplayLines(
   if (hasChecks && !detail.methods.some((m) => m.method === "CHECK")) {
     for (const c of detail.checks) {
       out.push({
+        method: "CHECK",
         label: `צ'ק ${c.checkNumber}`,
         amountIls: null,
         amountUsd: c.amountUsd,

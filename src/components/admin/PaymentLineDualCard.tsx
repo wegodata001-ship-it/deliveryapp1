@@ -196,6 +196,8 @@ export type PaymentLineDualCardProps = {
   onUpdate: (patch: Partial<PaymentLine>) => void;
   onRemove: () => void;
   onEnterInFirstAmount?: () => void;
+  /** הגבלת אמצעי תשלום לפי חלוקת "תשלום מורכב" של ההזמנות. null = ללא הגבלה */
+  allowedMethods?: string[] | null;
 };
 
 export function PaymentLineDualCard({
@@ -208,6 +210,7 @@ export function PaymentLineDualCard({
   onUpdate,
   onRemove,
   onEnterInFirstAmount,
+  allowedMethods,
 }: PaymentLineDualCardProps) {
   const { optionsForValue: paymentMethodOptionsForValue } = usePaymentMethodCatalog();
   const p = normalizePaymentLine(line);
@@ -363,11 +366,19 @@ export function PaymentLineDualCard({
             value={payMethod}
             onChange={(e) => setPaymentMethod(e.target.value)}
           >
-            {paymentMethodOptionsForValue(payMethod).map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
+            {paymentMethodOptionsForValue(payMethod)
+              .filter(
+                (o) =>
+                  !allowedMethods ||
+                  allowedMethods.length === 0 ||
+                  allowedMethods.includes(o.value) ||
+                  o.value === payMethod,
+              )
+              .map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
           </select>
         </label>
 

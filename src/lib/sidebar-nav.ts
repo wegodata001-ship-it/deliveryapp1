@@ -16,7 +16,10 @@ export type NavIconId =
   | "activity"
   | "settings"
   | "finance"
-  | "editRequests";
+  | "editRequests"
+  | "reconcile"
+  | "cashbox"
+  | "documents";
 
 export type NavItemDef = {
   href: string;
@@ -55,25 +58,12 @@ export const SIDEBAR_SECTIONS: NavSectionDef[] = [
       },
       { href: "/admin/orders", label: "רשימת הזמנות", icon: "orderList", anyOf: ["view_orders"] },
       {
-        href: "/admin/invoice-cancel-requests",
-        label: "בקשות ביטול חשבונית",
-        icon: "editRequests",
-        anyOf: ["invoice.cancel.approve"],
-      },
-      {
-        href: "/admin/order-edit-requests",
-        label: "בקשות עריכה",
-        icon: "editRequests",
-        adminOnly: true,
-      },
-      {
         href: "/admin/orders",
         label: "לקוח חדש",
         icon: "customerNew",
         anyOf: ["create_orders"],
         openWindow: { type: "createCustomer" },
       },
-      { href: "/admin/import", label: "ייבוא Excel", icon: "import", anyOf: ["import_excel"] },
     ],
   },
   {
@@ -86,7 +76,8 @@ export const SIDEBAR_SECTIONS: NavSectionDef[] = [
         anyOf: ["receive_payments"],
         openWindow: { type: "paymentsUpdated", props: {} },
       },
-      { href: "/admin/receipt-control", label: "בקרת תקבולים", icon: "receipt", anyOf: ["view_payment_control"] },
+      // "בקרת תקבולים" הוסר מהתפריט (כפילות מול קליטת תשלום / יתרות / כרטסת לקוח).
+      // הדף, ה-route וה-API נשמרים: /admin/receipt-control — לשילוב עתידי.
       {
         href: "/admin/customers",
         label: "לקוחות",
@@ -104,12 +95,36 @@ export const SIDEBAR_SECTIONS: NavSectionDef[] = [
     ],
   },
   {
+    title: "בקרות",
+    items: [
+      {
+        href: "/admin/reconciliation",
+        label: "התאמת מערכות",
+        icon: "reconcile",
+        anyOf: ["view_reports"],
+      },
+      {
+        href: "/admin/cash-control",
+        label: "בקרת קופה",
+        icon: "cashbox",
+        anyOf: ["view_payment_control"],
+      },
+      {
+        href: "/admin/edit-requests",
+        label: "בקשות עריכה",
+        icon: "editRequests",
+        anyOf: ["invoice.cancel.approve"],
+      },
+      { href: "/admin/documents", label: "ארכיון מסמכים", icon: "documents", anyOf: ["documents.view"] },
+      { href: "/admin/source-tables", label: "טבלאות מקור", icon: "sourceTables", anyOf: ["manage_settings"] },
+      { href: "/admin/reports", label: "דוחות", icon: "reports", anyOf: ["view_reports"] },
+      { href: "/admin/activity", label: "יומן פעולות", icon: "activity", anyOf: ["manage_users"] },
+    ],
+  },
+  {
     title: "מערכת",
     items: [
       { href: "/admin", label: "הגדרות כספים", icon: "finance", anyOf: ["manage_settings"], openFinancialModal: true },
-      { href: "/admin/source-tables", label: "טבלאות מקור", icon: "sourceTables", anyOf: ["manage_settings"] },
-      { href: "/admin/reports", label: "דוחות", icon: "reports", anyOf: ["view_reports"] },
-      { href: "/admin/activity", label: "יומן פעילות", icon: "activity", anyOf: ["manage_users"] },
     ],
   },
 ];

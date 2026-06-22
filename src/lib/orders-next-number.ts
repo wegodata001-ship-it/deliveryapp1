@@ -1,5 +1,6 @@
 import {
   allocateNextOrderNumberFromCounter,
+  allocateNextOrderNumberResynced,
   peekNextOrderNumberFromCounter,
   type OrderNumberAllocation,
 } from "@/lib/order-week-counter";
@@ -14,6 +15,14 @@ export async function generateNextOrderNumber(
   workCountry: WorkCountryCode = DEFAULT_WORK_COUNTRY,
 ): Promise<OrderNumberAllocation> {
   return allocateNextOrderNumberFromCounter(weekCode, workCountry);
+}
+
+/** הקצאת מספר חדש לאחר התנגשות — מסנכרן את המונה מול ה-MAX האמיתי בטבלה */
+export async function regenerateOrderNumberAfterCollision(
+  weekCode: string,
+  workCountry: WorkCountryCode = DEFAULT_WORK_COUNTRY,
+): Promise<OrderNumberAllocation> {
+  return allocateNextOrderNumberResynced(weekCode, workCountry);
 }
 
 export function previewOrderNumberAfter(allocation: { orderNumber: string; sequence: number }): string {

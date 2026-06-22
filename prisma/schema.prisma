@@ -117,6 +117,9 @@ model User {
   approvalRequestsRejected   ApprovalRequest[]  @relation("ApprovalRequestRejectedBy")
   ordersEditUnlockedFor      Order[]            @relation("OrderEditUnlockFor")
   notifications              UserNotification[]
+  cashExpenses               CashExpense[]      @relation("CashExpenseCreatedBy")
+  cashCountsCreated          CashCount[]        @relation("CashCountCreatedBy")
+  cashCountsApproved         CashCount[]        @relation("CashCountApprovedBy")
 }
 
 /** הגדרות שער דולר גלובליות: בסיס (usd_rate_base), עמלה (usd_fee), שער סופי מחושב (usd_rate_final). */
@@ -275,6 +278,8 @@ model Order {
   createdBy    User?         @relation("OrderCreatedBy", fields: [createdById], references: [id])
   paymentPoint PaymentPoint? @relation(fields: [paymentPointId], references: [id])
   payments    Payment[]
+  /** חלוקת תשלום מורכב — הגדרת פיצול ההזמנה בין אמצעי תשלום (תכנון, לא תשלום בפועל) */
+  paymentBreakdown OrderPaymentBreakdown[]
   /** נפתח זמנית לאחר אישור מנהל לעריכת הזמנה בסטטוס הושלמה */
   editUnlockedForUserId String?
   editUnlockedUntil     DateTime?
@@ -302,6 +307,25 @@ model Order {
   @@index([countryCode, sourceCountry, orderDate, deletedAt, customerId])
   @@index([customerId, countryCode, sourceCountry, status])
   @@index([status, orderDate])
+}
+
+/**
+ * חלוקת "תשלום מורכב" של הזמנה בין אמצעי תשלום.
+ * זו הגדרת פיצול מתוכננת (כמה אמור להיגבות בכל אמצעי) — לא תשלום בפועל.
+ * התשלומים בפועל נרשמים ב-Payment, ומסך קליטת התשלום מוגבל לאמצעים שכאן.
+ * amount/currency: USD או ILS לפי currency. סכום החלוקה חייב להיות שווה לסך ההזמנה.
+ */
+model OrderPaymentBreakdown {
+  id            String   @id @default(uuid())
+  orderId       String
+  paymentMethod String
+  amount        Decimal  @db.Decimal(19, 4)
+  currency      String   @default("USD")
+  createdAt     DateTime @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
 }
 
 /// מונה רץ למספור הזמנות לפי שבוע — UPDATE+RETURNING במקום MAX על Order
@@ -398,6 +422,10 @@ model Payment {
   currency         String         @default("ILS")
   amountUsd        Decimal?       @db.Decimal(19, 4)
   amountIls        Decimal?       @db.Decimal(19, 4)
+  /** מטבע המקור שבו שולם בפועל (ILS/USD/MIXED) — בקרה ודוחות */
+  sourceCurrency   String?
+  /** סכום המקור כפי שהוקלד במטבע המקור (לפני המרה) */
+  sourceAmount     Decimal?       @db.Decimal(19, 4)
   exchangeRate     Decimal?       @db.Decimal(19, 6)
   vatRate          Decimal        @default(18) @db.Decimal(7, 4)
   /** אחוז עמלה ששמרנו ברגע הקליטה — תצוגתי/תיעודי, אין לו השפעה על amountUsd ואינו שובר חישובים קיימים */
@@ -451,6 +479,65 @@ model Payment {
   @@index([countryCode, weekCode, status, isPaid, customerId])
   @@index([countryCode, paymentDate, status, isPaid, customerId])
   @@index([customerId, countryCode, status, isPaid])
+}
+
+/**
+ * בקרת קופה — הוצאת כסף פיזי מהקופה (₪/$).
+ * currency: "ILS" | "USD". reason: FUEL/COURIER/FOOD/SUPPLIER/PURCHASE/OTHER.
+ * status: ACTIVE/CANCELLED (ביטול ללא מחיקה — לא נספר בחישוב הקופה).
+ */
+model CashExpense {
+  id          String              @id @default(uuid())
+  countryCode WorkCountryCode     @default(TR)
+  weekCode    String?
+  expenseDate DateTime            @default(now())
+  currency    String              @default("ILS")
+  amount      Decimal             @db.Decimal(19, 4)
+  reason      String              @default("OTHER")
+  notes       String?
+  status      PaymentRecordStatus @default(ACTIVE)
+  createdById String?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  createdBy User? @relation("CashExpenseCreatedBy", fields: [createdById], references: [id])
+
+  @@index([countryCode])
+  @@index([weekCode])
+  @@index([expenseDate])
+  @@index([status])
+}
+
+/**
+ * בקרת קופה — ספירת קופה (snapshot). שומר "אמור להיות" שחושב בעת הספירה,
+ * "נספר בפועל" שהוזן, והפער. varianceStatus: OPEN/APPROVED (אישור מנהל לפער).
+ */
+model CashCount {
+  id             String          @id @default(uuid())
+  countryCode    WorkCountryCode @default(TR)
+  weekCode       String?
+  countedAt      DateTime        @default(now())
+  expectedIls    Decimal         @db.Decimal(19, 4) @default(0)
+  expectedUsd    Decimal         @db.Decimal(19, 4) @default(0)
+  countedIls     Decimal         @db.Decimal(19, 4) @default(0)
+  countedUsd     Decimal         @db.Decimal(19, 4) @default(0)
+  diffIls        Decimal         @db.Decimal(19, 4) @default(0)
+  diffUsd        Decimal         @db.Decimal(19, 4) @default(0)
+  notes          String?
+  varianceNote   String?
+  varianceStatus String          @default("OPEN")
+  createdById    String?
+  approvedById   String?
+  approvedAt     DateTime?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  createdBy  User? @relation("CashCountCreatedBy", fields: [createdById], references: [id])
+  approvedBy User? @relation("CashCountApprovedBy", fields: [approvedById], references: [id])
+
+  @@index([countryCode])
+  @@index([weekCode])
+  @@index([countedAt])
 }
 
 /** פירוט צ׳קים לקליטת תשלום בצ׳ק — משויך לשורת Payment (בדרך כלל לתשלום הראשי בפיצול להזמנות) */
@@ -716,4 +803,31 @@ model ManualImportRow {
   @@index([rowNumber])
   @@index([status])
   @@map("import_rows")
+}
+
+/// SQL-managed table — מסמכים מצורפים (Document Atlas). נוצרת דרך prisma/sql/documents_table.sql.
+model Document {
+  id             String    @id @default(uuid())
+  /// סוג הישות הקשורה: ORDER | PAYMENT | CUSTOMER | EMPLOYEE | SUPPLIER | TASK | REPORT
+  entityType     String
+  /// מזהה הישות הקשורה
+  entityId       String
+  /// תיוג קטגוריית מסמך (אופציונלי): CHECK / TRANSFER / RECEIPT / CONTRACT / ID / ...
+  docType        String?
+  fileName       String
+  bucket         String
+  storagePath    String
+  mimeType       String
+  fileSize       Int       @default(0)
+  uploadedById   String?
+  uploadedByName String?
+  /// סומן אוטומטית כשנוצר ע"י המערכת (PDF הזמנה/תשלום/דוח)
+  isAuto         Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+  deletedAt      DateTime?
+
+  @@index([entityType, entityId])
+  @@index([docType])
+  @@index([createdAt])
+  @@map("Document")
 }

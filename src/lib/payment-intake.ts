@@ -205,6 +205,15 @@ export function matchPaymentToOrders(
   });
 }
 
+/** שורת חלוקת "תשלום מורכב" להזמנה — מתוכנן/שולם/נותר לכל אמצעי (USD) */
+export type OrderBreakdownMethodRow = {
+  method: string;
+  label: string;
+  plannedUsd: number;
+  paidUsd: number;
+  remainingUsd: number;
+};
+
 /** שורה מה-API (רשימת הזמנות ללקוח) */
 export type PaymentIntakeOrderRow = {
   id: string;
@@ -224,6 +233,14 @@ export type PaymentIntakeOrderRow = {
   lastPaymentDateYmd: string | null;
   /** מדינת מקור מהזמנה (תצוגה בלבד) */
   sourceCountry: string | null;
+  /** האם זו הזמנת "תשלום מורכב" */
+  isComposite: boolean;
+  /** חלוקת תשלום מורכב (מתוכנן) — ריק אם לא מורכבת */
+  breakdown: OrderBreakdownMethodRow[];
+  /** אמצעי תשלום ששולמו בפועל (USD) — מכל התשלומים הפעילים של ההזמנה */
+  actualMethods: { method: string; label: string; usd: number }[];
+  /** חריגת אמצעי תשלום: שולם בפועל באמצעי ששונה מהמתוכנן */
+  hasMethodDeviation: boolean;
 };
 
 export function toPaymentIntakeBases(rows: PaymentIntakeOrderRow[]): PaymentIntakeOrderBase[] {

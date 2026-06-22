@@ -16,7 +16,11 @@ export type AppPermissionKey =
   | "view_reports"
   | "import_excel"
   | "manage_settings"
-  | "invoice.cancel.approve";
+  | "invoice.cancel.approve"
+  | "documents.view"
+  | "documents.upload"
+  | "documents.delete"
+  | "documents.download";
 
 export type AppPermissionDef = {
   key: AppPermissionKey;
@@ -43,6 +47,10 @@ export const APP_PERMISSION_DEFINITIONS: AppPermissionDef[] = [
     name: "אישור ביטול חשבונית",
     description: "אישור או דחיית בקשות ביטול חשבונית",
   },
+  { key: "documents.view", name: "צפייה במסמכים", description: "צפייה בארכיון המסמכים ובמסמכים מצורפים" },
+  { key: "documents.upload", name: "העלאת מסמכים", description: "צירוף מסמכים לישויות במערכת" },
+  { key: "documents.delete", name: "מחיקת מסמכים", description: "מחיקת מסמכים מצורפים" },
+  { key: "documents.download", name: "הורדת מסמכים", description: "הורדה וצפייה בקבצי המסמכים" },
 ];
 
 /** הרשאות שניתן לשייך לעובד דרך טופס ניהול משתמשים */
@@ -57,6 +65,10 @@ export const MANAGED_EMPLOYEE_PERMISSION_KEYS = [
   "view_reports",
   "import_excel",
   "manage_settings",
+  "documents.view",
+  "documents.upload",
+  "documents.delete",
+  "documents.download",
 ] as const satisfies readonly AppPermissionKey[];
 
 export type ManagedEmployeePermissionKey = (typeof MANAGED_EMPLOYEE_PERMISSION_KEYS)[number];
@@ -91,6 +103,15 @@ export const EMPLOYEE_PERMISSION_GROUPS: {
   {
     title: "דוחות",
     entries: [{ key: "view_reports", label: "צפייה ביתרות ודוחות" }],
+  },
+  {
+    title: "מסמכים",
+    entries: [
+      { key: "documents.view", label: "צפייה בארכיון מסמכים" },
+      { key: "documents.upload", label: "העלאת מסמכים" },
+      { key: "documents.download", label: "הורדת מסמכים" },
+      { key: "documents.delete", label: "מחיקת מסמכים" },
+    ],
   },
   {
     title: "מערכת",
