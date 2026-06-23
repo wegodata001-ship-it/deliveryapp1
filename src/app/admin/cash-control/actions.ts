@@ -5,9 +5,16 @@ import { Prisma } from "@prisma/client";
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
 import { getAhWeekRange } from "@/lib/weeks/ah-week";
-import { breakdownLineUsd, isCompositePaymentMethod } from "@/lib/payment-breakdown-shared";
+import {
+  breakdownLineUsd,
+  isCompositePaymentMethod,
+  paymentMethodBucketKey,
+  PAYMENT_BUCKET_LABELS,
+  type PaymentBucketKey,
+} from "@/lib/payment-breakdown-shared";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 import { formatLocalYmd } from "@/lib/work-week";
+import { ensureDocumentsTable } from "@/lib/documents/ensure";
 import {
   CASH_EXPENSE_REASONS,
   type CashCurrency,
@@ -26,8 +33,10 @@ export type CashDayRow = {
   receiptsUsd: string;
   expensesIls: string;
   expensesUsd: string;
-  expectedIls: string;
+  expectedIls: string; // תנועת היום (קבלות − הוצאות)
   expectedUsd: string;
+  receiptsCount: number; // מספר קליטות מזומן ביום
+  deviations: number; // מספר חריגות אמצעי תשלום ביום
 };
 
 /** סטטוס קבלת אמצעי תשלום: ✅ במלואו · 🟠 חלקית · ❌ לא התקבל */
@@ -67,6 +76,7 @@ export type CashMethodDeviationRow = {
   remainingUsd: string; // סה״כ נותר לגבות
   deviationUsd: string; // סכום שהתקבל באמצעי לא מתוכנן
   status: "deviation" | "partial" | "full";
+  dateKey: string | null; // יום החריגה (YYYY-MM-DD) — לשיוך לטבלת הבקרה
 };
 
 export type CashMethodDeviationTotals = {
@@ -114,12 +124,18 @@ export type CashDetailRow = {
   docLabel: string | null; // מספר מסמך (קוד קליטה)
   customerId: string | null;
   customerName: string | null; // לקוח
+  orderId: string | null; // הזמנה מקושרת
+  orderNumber: string | null; // מספר הזמנה
   movementLabel: string; // סוג תנועה
   methodLabel: string | null; // סוג תשלום (לקליטות)
+  methodBucket: PaymentBucketKey | null; // קבוצת אמצעי לצביעה
   reasonLabel: string | null; // סוג הוצאה (להוצאות)
   notes: string | null;
   userName: string | null; // משתמש שרשם
-  amount: string; // חיובי לתקבול, שלילי להוצאה
+  amount: string; // חיובי לתקבול, שלילי להוצאה (במטבע המודל)
+  amountUsd: string | null; // סכום בדולר (לקליטות)
+  amountIls: string | null; // סכום בשקל (לקליטות)
+  documents: { id: string; fileName: string }[]; // מסמכים מצורפים
 };
 
 export type CashDetailPayload = {
@@ -173,6 +189,7 @@ type DayBucket = {
   recUsd: Prisma.Decimal;
   expIls: Prisma.Decimal;
   expUsd: Prisma.Decimal;
+  recIds: Set<string>;
 };
 
 /**
@@ -191,11 +208,11 @@ async function computeExpected(week: string): Promise<{
   const [ilsReceipts, usdReceipts, expenses] = await Promise.all([
     prisma.payment.findMany({
       where: { weekCode: week, status: "ACTIVE", ilsPaymentMethod: "CASH" },
-      select: { amountIls: true, paymentDate: true, createdAt: true },
+      select: { id: true, amountIls: true, paymentDate: true, createdAt: true },
     }),
     prisma.payment.findMany({
       where: { weekCode: week, status: "ACTIVE", usdPaymentMethod: "CASH" },
-      select: { amountUsd: true, paymentDate: true, createdAt: true },
+      select: { id: true, amountUsd: true, paymentDate: true, createdAt: true },
     }),
     prisma.cashExpense.findMany({
       where: { weekCode: week, status: "ACTIVE" },
@@ -207,7 +224,7 @@ async function computeExpected(week: string): Promise<{
   const bucket = (key: string): DayBucket => {
     let b = buckets.get(key);
     if (!b) {
-      b = { recIls: Z, recUsd: Z, expIls: Z, expUsd: Z };
+      b = { recIls: Z, recUsd: Z, expIls: Z, expUsd: Z, recIds: new Set<string>() };
       buckets.set(key, b);
     }
     return b;
@@ -223,12 +240,14 @@ async function computeExpected(week: string): Promise<{
     receiptsIls = receiptsIls.add(amt);
     const b = bucket(dayKey(p.paymentDate ?? p.createdAt));
     b.recIls = b.recIls.add(amt);
+    b.recIds.add(p.id);
   }
   for (const p of usdReceipts) {
     const amt = p.amountUsd ?? Z;
     receiptsUsd = receiptsUsd.add(amt);
     const b = bucket(dayKey(p.paymentDate ?? p.createdAt));
     b.recUsd = b.recUsd.add(amt);
+    b.recIds.add(p.id);
   }
   for (const e of expenses) {
     const amt = e.amount ?? Z;
@@ -256,7 +275,7 @@ async function computeExpected(week: string): Promise<{
   }
   dateKeys.sort((a, b) => a.localeCompare(b));
 
-  const emptyBucket: DayBucket = { recIls: Z, recUsd: Z, expIls: Z, expUsd: Z };
+  const emptyBucket: DayBucket = { recIls: Z, recUsd: Z, expIls: Z, expUsd: Z, recIds: new Set<string>() };
   const days: CashDayRow[] = dateKeys.map((date) => {
     const b = buckets.get(date) ?? emptyBucket;
     return {
@@ -267,6 +286,8 @@ async function computeExpected(week: string): Promise<{
       expensesUsd: money(b.expUsd),
       expectedIls: money(b.recIls.sub(b.expIls)),
       expectedUsd: money(b.recUsd.sub(b.expUsd)),
+      receiptsCount: b.recIds.size,
+      deviations: 0,
     };
   });
 
@@ -295,11 +316,15 @@ async function computeMethodDeviations(wk: string): Promise<CashMethodDeviationR
       paymentMethod: true,
       usdPaymentMethod: true,
       ilsPaymentMethod: true,
+      paymentDate: true,
+      createdAt: true,
     },
   });
   if (payments.length === 0) return [];
 
   const byOrder = new Map<string, Map<string, Prisma.Decimal>>();
+  // יום אחרון לכל (הזמנה, אמצעי) — לשיוך חריגה ליום בטבלת הבקרה
+  const dayByOrderMethod = new Map<string, string>();
   for (const p of payments) {
     if (!p.orderId) continue;
     const method = (p.paymentMethod || p.usdPaymentMethod || p.ilsPaymentMethod || "").trim();
@@ -310,6 +335,10 @@ async function computeMethodDeviations(wk: string): Promise<CashMethodDeviationR
       byOrder.set(p.orderId, m);
     }
     m.set(method, (m.get(method) ?? Z).add(p.amountUsd ?? Z));
+    const dk = dayKey(p.paymentDate ?? p.createdAt);
+    const compositeKey = `${p.orderId}|${method}`;
+    const prev = dayByOrderMethod.get(compositeKey);
+    if (!prev || dk > prev) dayByOrderMethod.set(compositeKey, dk);
   }
 
   const orderIds = [...byOrder.keys()];
@@ -394,6 +423,12 @@ async function computeMethodDeviations(wk: string): Promise<CashMethodDeviationR
     for (const amt of actualByMethod.values()) actualTotal += amt;
 
     const remaining = Math.max(0, plannedTotal - actualTotal);
+    // יום החריגה = היום האחרון שבו התקבל אמצעי לא מתוכנן
+    let devDay: string | null = null;
+    for (const ex of extraMethods) {
+      const dk = dayByOrderMethod.get(`${o.id}|${ex.method}`);
+      if (dk && (!devDay || dk > devDay)) devDay = dk;
+    }
     rows.push({
       orderId: o.id,
       orderNumber: o.orderNumber ?? null,
@@ -409,6 +444,7 @@ async function computeMethodDeviations(wk: string): Promise<CashMethodDeviationR
       remainingUsd: fix(remaining),
       deviationUsd: fix(deviationUsd),
       status: remaining > EPS ? "partial" : "deviation",
+      dateKey: devDay,
     });
   }
   rows.sort((a, b) => (a.orderNumber ?? "").localeCompare(b.orderNumber ?? ""));
@@ -619,6 +655,15 @@ export async function getCashDashboardAction(week: string): Promise<CashDashboar
 
   const exp = await computeExpected(wk);
   const deviations = await computeMethodDeviations(wk);
+  // שיוך חריגות ליום בטבלת הבקרה
+  const devByDay = new Map<string, number>();
+  for (const d of deviations) {
+    if (!d.dateKey) continue;
+    devByDay.set(d.dateKey, (devByDay.get(d.dateKey) ?? 0) + 1);
+  }
+  for (const day of exp.days) {
+    day.deviations = devByDay.get(day.date) ?? 0;
+  }
   const last = await prisma.cashCount.findFirst({
     where: { weekCode: wk },
     orderBy: { countedAt: "desc" },
@@ -680,12 +725,42 @@ export async function listCashDetailAction(
       amountUsd: true,
       ilsPaymentMethod: true,
       usdPaymentMethod: true,
+      paymentMethod: true,
+      usdNote: true,
+      ilsNote: true,
+      notes: true,
       customerId: true,
+      orderId: true,
+      order: { select: { orderNumber: true } },
       customer: { select: { displayName: true, customerCode: true } },
       createdBy: { select: { fullName: true } },
     },
     orderBy: { paymentDate: "asc" },
   });
+
+  // מסמכים מצורפים לכל קליטות התשלום בטווח — שאילתה אחת (ללא N+1)
+  const docsByPayment = new Map<string, { id: string; fileName: string }[]>();
+  if (payments.length > 0) {
+    try {
+      await ensureDocumentsTable();
+      const docs = await prisma.document.findMany({
+        where: {
+          entityType: "PAYMENT",
+          entityId: { in: payments.map((p) => p.id) },
+          deletedAt: null,
+        },
+        select: { id: true, fileName: true, entityId: true },
+        orderBy: { createdAt: "desc" },
+      });
+      for (const d of docs) {
+        const arr = docsByPayment.get(d.entityId) ?? [];
+        arr.push({ id: d.id, fileName: d.fileName });
+        docsByPayment.set(d.entityId, arr);
+      }
+    } catch {
+      /* טבלת מסמכים לא זמינה — ממשיכים ללא מסמכים */
+    }
+  }
   const expenses = await prisma.cashExpense.findMany({
     where: { weekCode: wk, status: "ACTIVE", currency },
     select: {
@@ -707,6 +782,8 @@ export async function listCashDetailAction(
     const amt = (currency === "ILS" ? p.amountIls : p.amountUsd) ?? Z;
     receipts = receipts.add(amt);
     const method = currency === "ILS" ? p.ilsPaymentMethod : p.usdPaymentMethod;
+    const bucket = paymentMethodBucketKey(method ?? p.paymentMethod);
+    const note = (currency === "ILS" ? p.ilsNote : p.usdNote) ?? p.notes ?? null;
     rows.push({
       id: p.id,
       kind: "RECEIPT",
@@ -716,12 +793,18 @@ export async function listCashDetailAction(
       customerName:
         p.customer?.displayName ??
         (p.customer?.customerCode ? `קוד ${p.customer.customerCode}` : null),
+      orderId: p.orderId ?? null,
+      orderNumber: p.order?.orderNumber ?? null,
       movementLabel: "קליטת תשלום",
-      methodLabel: method === "CASH" ? "מזומן" : method === "OTHER" ? "אחר" : method || "מזומן",
+      methodLabel: PAYMENT_BUCKET_LABELS[bucket],
+      methodBucket: bucket,
       reasonLabel: null,
-      notes: null,
+      notes: note,
       userName: p.createdBy?.fullName ?? null,
       amount: money(amt),
+      amountUsd: money(p.amountUsd ?? Z),
+      amountIls: money(p.amountIls ?? Z),
+      documents: docsByPayment.get(p.id) ?? [],
     });
   }
   let expensesTotal = Z;
@@ -737,12 +820,18 @@ export async function listCashDetailAction(
       docLabel: null,
       customerId: null,
       customerName: null,
+      orderId: null,
+      orderNumber: null,
       movementLabel: `הוצאת קופה — ${reasonLabel}`,
       methodLabel: null,
+      methodBucket: "OTHER",
       reasonLabel,
       notes: e.notes,
       userName: e.createdBy?.fullName ?? null,
       amount: money(amt.neg()),
+      amountUsd: currency === "USD" ? money(amt.neg()) : null,
+      amountIls: currency === "ILS" ? money(amt.neg()) : null,
+      documents: [],
     });
   }
 

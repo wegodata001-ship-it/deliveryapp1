@@ -27183,3 +27183,375 @@ button.adm-cash-kpi:hover {
   color: #94a3b8;
   font-size: 11px;
 }
+
+/* ===================================================== */
+/* שדרוג חלון פירוט קופה — XL + KPI + תגי אמצעי + Drawer   */
+/* ===================================================== */
+.adm-cash-modal.adm-cash-modal--xl {
+  width: min(1200px, 96vw);
+  max-width: 96vw;
+  height: 80vh;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+.adm-cash-modal.adm-cash-modal--xl .adm-cash-modal__body {
+  flex: 1;
+  overflow: auto;
+}
+
+.adm-cash-detail-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.adm-cash-detail-kpi {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: #f8fafc;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.adm-cash-detail-kpi__lbl {
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+}
+.adm-cash-detail-kpi__val {
+  font-size: 22px;
+  font-weight: 800;
+  color: #0f172a;
+}
+.adm-cash-detail-kpi__val--txt {
+  font-size: 16px;
+}
+.adm-cash-detail-kpi--usd {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+}
+.adm-cash-detail-kpi--usd .adm-cash-detail-kpi__val {
+  color: #047857;
+}
+.adm-cash-detail-kpi--ils {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+.adm-cash-detail-kpi--ils .adm-cash-detail-kpi__val {
+  color: #1d4ed8;
+}
+.adm-cash-detail-kpi--cnt {
+  background: #fefce8;
+  border-color: #fde68a;
+}
+.adm-cash-detail-kpi--user {
+  background: #faf5ff;
+  border-color: #e9d5ff;
+}
+
+@media (max-width: 900px) {
+  .adm-cash-detail-kpis {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* תגי אמצעי תשלום — צבעים */
+.adm-cash-mtag {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.adm-cash-mtag--cash {
+  background: #dcfce7;
+  color: #15803d;
+}
+.adm-cash-mtag--bank {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+.adm-cash-mtag--credit {
+  background: #f3e8ff;
+  color: #7c3aed;
+}
+.adm-cash-mtag--check {
+  background: #ffedd5;
+  color: #c2410c;
+}
+.adm-cash-mtag--other {
+  background: #e2e8f0;
+  color: #475569;
+}
+
+.adm-cash-doc-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #b91c1c;
+}
+
+.adm-cash-detail-tbl .adm-cash-row-link {
+  cursor: pointer;
+}
+
+/* Drawer פרטי תנועה */
+.adm-cash-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  z-index: 1200;
+  display: flex;
+  justify-content: flex-start;
+}
+.adm-cash-drawer {
+  width: min(420px, 92vw);
+  height: 100%;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 2px 0 24px rgba(15, 23, 42, 0.25);
+  animation: adm-cash-drawer-in 0.18s ease-out;
+}
+@keyframes adm-cash-drawer-in {
+  from {
+    transform: translateX(-24px);
+    opacity: 0.4;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+.adm-cash-drawer__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px;
+  border-bottom: 1px solid #e2e8f0;
+}
+.adm-cash-drawer__head h3 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 800;
+  color: #0f172a;
+}
+.adm-cash-drawer__body {
+  flex: 1;
+  overflow: auto;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.adm-cash-drawer__field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.adm-cash-drawer__lbl {
+  font-size: 12px;
+  font-weight: 600;
+  color: #94a3b8;
+}
+.adm-cash-drawer__val {
+  font-size: 15px;
+  font-weight: 600;
+  color: #0f172a;
+}
+.adm-cash-drawer__amounts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.adm-cash-drawer__amt {
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.adm-cash-drawer__amt span {
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+}
+.adm-cash-drawer__amt strong {
+  font-size: 18px;
+  font-weight: 800;
+}
+.adm-cash-drawer__amt--usd {
+  background: #ecfdf5;
+}
+.adm-cash-drawer__amt--usd strong {
+  color: #047857;
+}
+.adm-cash-drawer__amt--ils {
+  background: #eff6ff;
+}
+.adm-cash-drawer__amt--ils strong {
+  color: #1d4ed8;
+}
+.adm-cash-drawer__docs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.adm-cash-drawer__doc {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  color: #1d4ed8;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 600;
+}
+.adm-cash-drawer__doc:hover {
+  background: #f1f5f9;
+}
+.adm-cash-drawer__foot {
+  display: flex;
+  gap: 8px;
+  padding: 14px 18px;
+  border-top: 1px solid #e2e8f0;
+}
+.adm-cash-drawer__foot .adm-btn {
+  flex: 1;
+  justify-content: center;
+}
+
+/* ===================================================== */
+/* בקרת קופה — KPI קומפקטי + טבלת בקרה מרכזית אחת          */
+/* ===================================================== */
+.adm-cash-kpibar {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.adm-cash-kchip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 8px 12px;
+  background: #f8fafc;
+  cursor: pointer;
+  text-align: start;
+}
+.adm-cash-kchip:disabled {
+  cursor: default;
+  opacity: 0.85;
+}
+.adm-cash-kchip__lbl {
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+}
+.adm-cash-kchip__val {
+  font-size: 18px;
+  font-weight: 800;
+  color: #0f172a;
+}
+.adm-cash-kchip--rec {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+.adm-cash-kchip--rec .adm-cash-kchip__val {
+  color: #1d4ed8;
+}
+.adm-cash-kchip--exp {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+.adm-cash-kchip--exp .adm-cash-kchip__val {
+  color: #b91c1c;
+}
+.adm-cash-kchip--prof {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+}
+.adm-cash-kchip--prof .adm-cash-kchip__val {
+  color: #047857;
+}
+.adm-cash-kchip--dev {
+  background: #f8fafc;
+}
+.adm-cash-kchip--dev.is-warn {
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+.adm-cash-kchip--dev.is-warn .adm-cash-kchip__val {
+  color: #b45309;
+}
+
+@media (max-width: 1100px) {
+  .adm-cash-kpibar {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+@media (max-width: 640px) {
+  .adm-cash-kpibar {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.adm-cash-maintbl {
+  margin-bottom: 18px;
+}
+.adm-cash-maintbl__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 800;
+  color: #0f172a;
+  margin: 0 0 10px;
+}
+.adm-cash-maintbl__table th,
+.adm-cash-maintbl__table td {
+  text-align: center;
+  white-space: nowrap;
+}
+.adm-cash-maintbl__table th:first-child,
+.adm-cash-maintbl__table td:first-child {
+  text-align: start;
+}
+.adm-cash-cnt-cell {
+  font-weight: 700;
+  color: #334155;
+}
+.adm-cash-maintbl__foot td {
+  font-weight: 800;
+  background: #f1f5f9;
+  border-top: 2px solid #cbd5e1;
+}
+.adm-cash-maintbl__prof {
+  color: #047857;
+}
+.adm-cash-devcell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid #fde68a;
+  background: #fffbeb;
+  color: #b45309;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.adm-cash-devcell:hover {
+  background: #fef3c7;
+}

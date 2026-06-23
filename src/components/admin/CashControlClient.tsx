@@ -19,6 +19,7 @@ import {
   type CashCountRow,
   type CashDashboard,
   type CashDetailPayload,
+  type CashDetailRow,
   type PaymentsControlOrderRow,
   type PaymentsControlPayload,
   type PaymentsControlReceiptRow,
@@ -99,6 +100,7 @@ export function CashControlClient({ isAdmin, initialWeek }: { isAdmin: boolean; 
     diff: null,
   });
   const [detailCounts, setDetailCounts] = useState<CashCountRow[]>([]);
+  const [drawerRow, setDrawerRow] = useState<CashDetailRow | null>(null);
   const [auditOpen, setAuditOpen] = useState(false);
   const [audit, setAudit] = useState<CashCountRow[]>([]);
   const [exporting, setExporting] = useState<"pdf" | "excel" | null>(null);
@@ -181,20 +183,18 @@ export function CashControlClient({ isAdmin, initialWeek }: { isAdmin: boolean; 
   ) {
     const { day, mode = "all" } = opts;
     const curLabel = currency === "ILS" ? "ש״ח" : "דולר";
-    const modeLabel =
-      mode === "receipts"
-        ? "קליטות מזומן"
-        : mode === "expenses"
-          ? "הוצאות קופה"
-          : mode === "variance"
-            ? "הרכב הפער"
-            : "תנועות מזומן";
+    const baseTitle =
+      mode === "expenses"
+        ? `הוצאות קופה ${curLabel}`
+        : mode === "variance"
+          ? `הרכב הפער ${curLabel}`
+          : `קופת ${curLabel}`;
     setDetailMode(mode);
     setDetailCtx({
       counted: currency === "ILS" ? dash?.countedIls ?? null : dash?.countedUsd ?? null,
       diff: currency === "ILS" ? dash?.diffIls ?? null : dash?.diffUsd ?? null,
     });
-    setDetailTitle(`${modeLabel} ${curLabel} — ${day ? fmtDate(day) : week}`);
+    setDetailTitle(`${baseTitle} - ${day ? fmtDate(day) : week}`);
     setDetail({ currency, rows: [], receipts: "0.00", expenses: "0.00", total: "0.00" });
     if (mode === "variance") {
       setDetailCounts([]);
@@ -263,64 +263,41 @@ export function CashControlClient({ isAdmin, initialWeek }: { isAdmin: boolean; 
         </div>
       </div>
 
-      <div className="adm-cash-kpi-grid" aria-busy={loading}>
-        {(["ILS", "USD"] as const).map((cur) => {
-          const fmt = cur === "ILS" ? ils : usd;
-          const receipts = cur === "ILS" ? dash?.receiptsIls : dash?.receiptsUsd;
-          const expensesV = cur === "ILS" ? dash?.expensesIls : dash?.expensesUsd;
-          const expected = cur === "ILS" ? dash?.expectedIls : dash?.expectedUsd;
-          const counted = cur === "ILS" ? dash?.countedIls : dash?.countedUsd;
-          const diff = cur === "ILS" ? dash?.diffIls : dash?.diffUsd;
-          return (
-            <div className="adm-cash-curblock" key={cur}>
-              <div className="adm-cash-curblock__title">
-                {cur === "ILS" ? <Coins size={15} aria-hidden /> : <DollarSign size={15} aria-hidden />}
-                {cur === "ILS" ? "מזומן ש״ח (₪)" : "מזומן דולר ($)"}
-              </div>
-              <div className="adm-cash-kpi-row">
-                <button type="button" className="adm-cash-kpi adm-cash-kpi--src" onClick={() => void openDetail(cur, { mode: "receipts" })}>
-                  <span className="adm-cash-kpi__head">סה״כ קליטות מזומן</span>
-                  <strong className="adm-cash-kpi__val" dir="ltr">{fmt(receipts)}</strong>
-                  <span className="adm-cash-kpi__sub">לחץ לפירוט</span>
-                </button>
-                <button type="button" className="adm-cash-kpi adm-cash-kpi--out" onClick={() => void openDetail(cur, { mode: "expenses" })}>
-                  <span className="adm-cash-kpi__head">סה״כ הוצאות קופה</span>
-                  <strong className="adm-cash-kpi__val" dir="ltr">{fmt(expensesV)}</strong>
-                  <span className="adm-cash-kpi__sub">לחץ לפירוט</span>
-                </button>
-                <button type="button" className="adm-cash-kpi adm-cash-kpi--expected" onClick={() => void openDetail(cur, { mode: "all" })}>
-                  <span className="adm-cash-kpi__head">צפוי בקופה</span>
-                  <strong className="adm-cash-kpi__val" dir="ltr">{fmt(expected)}</strong>
-                  <span className="adm-cash-kpi__sub">קליטות − הוצאות</span>
-                </button>
-                <div className="adm-cash-kpi adm-cash-kpi--counted">
-                  <span className="adm-cash-kpi__head">נספר בפועל</span>
-                  <strong className="adm-cash-kpi__val" dir="ltr">{counted ? fmt(counted) : "—"}</strong>
-                </div>
-                <button
-                  type="button"
-                  className={`adm-cash-kpi adm-cash-kpi--diff ${counted ? (diffTone(diff) === "zero" ? "adm-cash-kpi--var-ok" : "adm-cash-kpi--var-warn") : ""}`}
-                  onClick={() => void openDetail(cur, { mode: "variance" })}
-                >
-                  <span className="adm-cash-kpi__head">פער</span>
-                  <strong className="adm-cash-kpi__val" dir="ltr">{counted ? signed(cur, diff) : "—"}</strong>
-                  <span className="adm-cash-kpi__sub">לחץ להרכב הפער</span>
-                </button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {dash && dash.methodDeviations > 0 ? (
-        <button type="button" className="adm-cash-devbar" onClick={() => void openDeviations()}>
-          <AlertTriangle size={16} aria-hidden />
-          <span className="adm-cash-devbar__txt">נמצאו</span>
-          <strong className="adm-cash-devbar__count">{dash.methodDeviations}</strong>
-          <span className="adm-cash-devbar__txt">חריגות תשלום</span>
-          <span className="adm-cash-devbar__hint">לחץ לפירוט מלא</span>
+      <div className="adm-cash-kpibar" aria-busy={loading}>
+        <button type="button" className="adm-cash-kchip adm-cash-kchip--rec" onClick={() => void openDetail("USD", { mode: "receipts" })}>
+          <span className="adm-cash-kchip__lbl">קבלות $</span>
+          <strong className="adm-cash-kchip__val" dir="ltr">{usd(dash?.receiptsUsd)}</strong>
         </button>
-      ) : null}
+        <button type="button" className="adm-cash-kchip adm-cash-kchip--rec" onClick={() => void openDetail("ILS", { mode: "receipts" })}>
+          <span className="adm-cash-kchip__lbl">קבלות ₪</span>
+          <strong className="adm-cash-kchip__val" dir="ltr">{ils(dash?.receiptsIls)}</strong>
+        </button>
+        <button type="button" className="adm-cash-kchip adm-cash-kchip--exp" onClick={() => void openDetail("USD", { mode: "expenses" })}>
+          <span className="adm-cash-kchip__lbl">הוצאות $</span>
+          <strong className="adm-cash-kchip__val" dir="ltr">{usd(dash?.expensesUsd)}</strong>
+        </button>
+        <button type="button" className="adm-cash-kchip adm-cash-kchip--exp" onClick={() => void openDetail("ILS", { mode: "expenses" })}>
+          <span className="adm-cash-kchip__lbl">הוצאות ₪</span>
+          <strong className="adm-cash-kchip__val" dir="ltr">{ils(dash?.expensesIls)}</strong>
+        </button>
+        <button type="button" className="adm-cash-kchip adm-cash-kchip--prof" onClick={() => void openDetail("USD", { mode: "all" })}>
+          <span className="adm-cash-kchip__lbl">רווח $</span>
+          <strong className="adm-cash-kchip__val" dir="ltr">{usd(dash?.expectedUsd)}</strong>
+        </button>
+        <button type="button" className="adm-cash-kchip adm-cash-kchip--prof" onClick={() => void openDetail("ILS", { mode: "all" })}>
+          <span className="adm-cash-kchip__lbl">רווח ₪</span>
+          <strong className="adm-cash-kchip__val" dir="ltr">{ils(dash?.expectedIls)}</strong>
+        </button>
+        <button
+          type="button"
+          className={`adm-cash-kchip adm-cash-kchip--dev ${dash && dash.methodDeviations > 0 ? "is-warn" : ""}`}
+          onClick={() => void openDeviations()}
+          disabled={!dash || dash.methodDeviations === 0}
+        >
+          <span className="adm-cash-kchip__lbl">חריגות</span>
+          <strong className="adm-cash-kchip__val">{dash?.methodDeviations ?? 0}</strong>
+        </button>
+      </div>
 
       {hasVariance && dash?.lastCount ? (
         <VarianceBanner
@@ -332,28 +309,12 @@ export function CashControlClient({ isAdmin, initialWeek }: { isAdmin: boolean; 
         />
       ) : null}
 
-      <div className="adm-cash-tables">
-        <CurrencyCashTable
-          currency="ILS"
-          week={week}
-          days={dash?.days ?? []}
-          totalReceipts={dash?.receiptsIls}
-          totalExpenses={dash?.expensesIls}
-          totalExpected={dash?.expectedIls}
-          onOpen={openDetail}
-        />
-        <CurrencyCashTable
-          currency="USD"
-          week={week}
-          days={dash?.days ?? []}
-          totalReceipts={dash?.receiptsUsd}
-          totalExpenses={dash?.expensesUsd}
-          totalExpected={dash?.expectedUsd}
-          onOpen={openDetail}
-        />
-      </div>
-
-      {dash ? <WeekSummaryCard week={week} dash={dash} /> : null}
+      <CashControlTable
+        week={week}
+        dash={dash}
+        onOpen={openDetail}
+        onOpenDeviations={() => void openDeviations()}
+      />
 
       <div className="adm-cash-section">
         <div className="adm-cash-section__head">
@@ -431,8 +392,18 @@ export function CashControlClient({ isAdmin, initialWeek }: { isAdmin: boolean; 
           counted={detailCtx.counted}
           diff={detailCtx.diff}
           counts={detailCounts}
-          onOpenRow={openMovement}
+          onRowClick={(r) => setDrawerRow(r)}
           onClose={() => setDetail(null)}
+        />
+      ) : null}
+      {drawerRow ? (
+        <MovementDrawer
+          row={drawerRow}
+          onOpenOriginal={(r) => {
+            setDrawerRow(null);
+            openMovement(r);
+          }}
+          onClose={() => setDrawerRow(null)}
         />
       ) : null}
       {devOpen ? (
@@ -681,108 +652,121 @@ function PaymentsControlReceiptsTable({
   );
 }
 
-function CurrencyCashTable({
-  currency,
+function CashControlTable({
   week,
-  days,
-  totalReceipts,
-  totalExpenses,
-  totalExpected,
+  dash,
   onOpen,
+  onOpenDeviations,
 }: {
-  currency: CashCurrency;
   week: string;
-  days: CashDashboard["days"];
-  totalReceipts: string | undefined;
-  totalExpenses: string | undefined;
-  totalExpected: string | undefined;
+  dash: CashDashboard | null;
   onOpen: (currency: CashCurrency, opts?: { day?: string; mode?: DetailMode }) => void;
+  onOpenDeviations: () => void;
 }) {
-  const isIls = currency === "ILS";
-  const fmt = isIls ? ils : usd;
-  const tone = isIls ? "ils" : "usd";
+  const days = dash?.days ?? [];
+
+  // יתרה מצטברת (רצה) ל-$ ול-₪
+  let balUsd = 0;
+  let balIls = 0;
+  const rows = days.map((d) => {
+    balUsd += num(d.receiptsUsd) - num(d.expensesUsd);
+    balIls += num(d.receiptsIls) - num(d.expensesIls);
+    return { ...d, balUsd, balIls };
+  });
+
+  const totalReceiptsCount = days.reduce((s, d) => s + d.receiptsCount, 0);
+  const totalDeviations = days.reduce((s, d) => s + d.deviations, 0);
+
+  const cell = (
+    value: string | null | undefined,
+    fmt: (s: string | null | undefined) => string,
+    currency: CashCurrency,
+    day: string,
+    mode: DetailMode,
+    extraCls = "",
+  ) => (
+    <td>
+      <button
+        type="button"
+        className={`adm-cash-cellbtn ${num(value) > 0 ? extraCls : "adm-cash-cell--zero"}`}
+        onClick={() => onOpen(currency, { day, mode })}
+      >
+        {fmt(value)}
+      </button>
+    </td>
+  );
 
   return (
-    <section className={`adm-cash-ctable adm-cash-ctable--${tone}`}>
-      <h2 className={`adm-cash-ctable__title adm-cash-ctable__title--${tone}`}>
-        {isIls ? <Coins size={18} aria-hidden /> : <DollarSign size={18} aria-hidden />}
-        {isIls ? "קופת ש״ח" : "קופת דולר"} — {week}
+    <section className="adm-cash-maintbl">
+      <h2 className="adm-cash-maintbl__title">
+        <Coins size={18} aria-hidden /> טבלת בקרת קופה — {week}
       </h2>
-      <div className="adm-table-excel-wrap adm-cash-days-wrap">
-        <table className="adm-table-excel adm-cash-ctable__table">
+      <div className="adm-table-excel-wrap">
+        <table className="adm-table-excel adm-cash-maintbl__table">
           <thead>
             <tr>
               <th>תאריך</th>
-              <th>קליטות</th>
-              <th>הוצאות</th>
-              <th>צפי</th>
+              <th>קבלות $</th>
+              <th>קבלות ₪</th>
+              <th>הוצאות $</th>
+              <th>הוצאות ₪</th>
+              <th>יתרה $</th>
+              <th>יתרה ₪</th>
+              <th>מס׳ קבלות</th>
+              <th>חריגות</th>
             </tr>
           </thead>
           <tbody>
-            {days.length === 0 ? (
-              <tr><td colSpan={4} className="adm-table-empty">אין תנועות מזומן לשבוע זה.</td></tr>
+            {rows.length === 0 ? (
+              <tr><td colSpan={9} className="adm-table-empty">אין תנועות מזומן לשבוע זה.</td></tr>
             ) : (
-              days.map((d) => {
-                const rec = isIls ? d.receiptsIls : d.receiptsUsd;
-                const exp = isIls ? d.expensesIls : d.expensesUsd;
-                const expd = isIls ? d.expectedIls : d.expectedUsd;
-                const rowCls = num(exp) > 0 ? "adm-cash-day--exp" : num(rec) > 0 ? "adm-cash-day--act" : "adm-cash-day--idle";
-                return (
-                  <tr key={d.date} className={`adm-table-excel-row ${rowCls}`}>
-                    <td className="adm-cash-day__date">{fmtDate(d.date)}</td>
-                    <td>
-                      <button type="button" className={`adm-cash-cellbtn ${num(rec) > 0 ? "adm-cash-c-rec" : "adm-cash-cell--zero"}`} onClick={() => onOpen(currency, { day: d.date, mode: "receipts" })}>
-                        {fmt(rec)}
+              rows.map((d) => (
+                <tr key={d.date} className="adm-table-excel-row">
+                  <td className="adm-cash-day__date" dir="ltr">{fmtDate(d.date)}</td>
+                  {cell(d.receiptsUsd, usd, "USD", d.date, "receipts", "adm-cash-c-rec")}
+                  {cell(d.receiptsIls, ils, "ILS", d.date, "receipts", "adm-cash-c-rec")}
+                  {cell(d.expensesUsd, usd, "USD", d.date, "expenses", "adm-cash-c-exp")}
+                  {cell(d.expensesIls, ils, "ILS", d.date, "expenses", "adm-cash-c-exp")}
+                  <td>
+                    <button type="button" className="adm-cash-cellbtn adm-cash-c-expd" onClick={() => onOpen("USD", { day: d.date, mode: "all" })}>
+                      {usd(String(d.balUsd))}
+                    </button>
+                  </td>
+                  <td>
+                    <button type="button" className="adm-cash-cellbtn adm-cash-c-expd" onClick={() => onOpen("ILS", { day: d.date, mode: "all" })}>
+                      {ils(String(d.balIls))}
+                    </button>
+                  </td>
+                  <td dir="ltr" className="adm-cash-cnt-cell">{d.receiptsCount}</td>
+                  <td>
+                    {d.deviations > 0 ? (
+                      <button type="button" className="adm-cash-devcell" onClick={onOpenDeviations} title="לפירוט החריגה">
+                        <AlertTriangle size={13} aria-hidden /> {d.deviations}
                       </button>
-                    </td>
-                    <td>
-                      <button type="button" className={`adm-cash-cellbtn ${num(exp) > 0 ? "adm-cash-c-exp" : "adm-cash-cell--zero"}`} onClick={() => onOpen(currency, { day: d.date, mode: "expenses" })}>
-                        {fmt(exp)}
-                      </button>
-                    </td>
-                    <td>
-                      <button type="button" className="adm-cash-cellbtn adm-cash-c-expd" onClick={() => onOpen(currency, { day: d.date, mode: "all" })}>
-                        {fmt(expd)}
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })
+                    ) : (
+                      <span className="adm-cash-cell--zero">0</span>
+                    )}
+                  </td>
+                </tr>
+              ))
             )}
           </tbody>
           <tfoot>
-            <tr className={`adm-cash-ctable__foot adm-cash-ctable__foot--${tone}`}>
+            <tr className="adm-cash-maintbl__foot">
               <td>סה״כ {week}</td>
-              <td dir="ltr">{fmt(totalReceipts)}</td>
-              <td dir="ltr">{fmt(totalExpenses)}</td>
-              <td dir="ltr">{fmt(totalExpected)}</td>
+              <td dir="ltr">{usd(dash?.receiptsUsd)}</td>
+              <td dir="ltr">{ils(dash?.receiptsIls)}</td>
+              <td dir="ltr">{usd(dash?.expensesUsd)}</td>
+              <td dir="ltr">{ils(dash?.expensesIls)}</td>
+              <td dir="ltr" className="adm-cash-maintbl__prof">{usd(dash?.expectedUsd)}</td>
+              <td dir="ltr" className="adm-cash-maintbl__prof">{ils(dash?.expectedIls)}</td>
+              <td dir="ltr">{totalReceiptsCount}</td>
+              <td dir="ltr">{totalDeviations}</td>
             </tr>
           </tfoot>
         </table>
       </div>
     </section>
-  );
-}
-
-function WeekSummaryCard({ week, dash }: { week: string; dash: CashDashboard }) {
-  return (
-    <div className="adm-cash-weeksum">
-      <div className="adm-cash-weeksum__title">סה״כ שבוע {week}</div>
-      <div className="adm-cash-weeksum__grid">
-        <div className="adm-cash-weeksum__cur adm-cash-weeksum__cur--ils">
-          <h4><Coins size={16} aria-hidden /> קופת ש״ח</h4>
-          <div className="adm-cash-weeksum__line adm-cash-weeksum__line--rec"><span>קליטות</span><strong dir="ltr">{ils(dash.receiptsIls)}</strong></div>
-          <div className="adm-cash-weeksum__line adm-cash-weeksum__line--exp"><span>הוצאות</span><strong dir="ltr">{ils(dash.expensesIls)}</strong></div>
-          <div className="adm-cash-weeksum__line adm-cash-weeksum__line--expd"><span>צפי בקופה</span><strong dir="ltr">{ils(dash.expectedIls)}</strong></div>
-        </div>
-        <div className="adm-cash-weeksum__cur adm-cash-weeksum__cur--usd">
-          <h4><DollarSign size={16} aria-hidden /> קופת דולר</h4>
-          <div className="adm-cash-weeksum__line adm-cash-weeksum__line--rec"><span>קליטות</span><strong dir="ltr">{usd(dash.receiptsUsd)}</strong></div>
-          <div className="adm-cash-weeksum__line adm-cash-weeksum__line--exp"><span>הוצאות</span><strong dir="ltr">{usd(dash.expensesUsd)}</strong></div>
-          <div className="adm-cash-weeksum__line adm-cash-weeksum__line--expd"><span>צפי בקופה</span><strong dir="ltr">{usd(dash.expectedUsd)}</strong></div>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -1054,6 +1038,22 @@ function ExpenseModal({ week, onClose, onSaved }: { week: string; onClose: () =>
   );
 }
 
+const CASH_METHOD_TAG_CLASS: Record<NonNullable<CashDetailRow["methodBucket"]>, string> = {
+  CASH: "adm-cash-mtag--cash",
+  BANK_TRANSFER: "adm-cash-mtag--bank",
+  CREDIT: "adm-cash-mtag--credit",
+  CHECK: "adm-cash-mtag--check",
+  OTHER: "adm-cash-mtag--other",
+};
+
+function CashMethodTag({ row }: { row: CashDetailRow }) {
+  if (row.kind === "EXPENSE") {
+    return <span className="adm-cash-mtag adm-cash-mtag--other">{row.reasonLabel ?? "הוצאה"}</span>;
+  }
+  const cls = row.methodBucket ? CASH_METHOD_TAG_CLASS[row.methodBucket] : "adm-cash-mtag--other";
+  return <span className={`adm-cash-mtag ${cls}`}>{row.methodLabel ?? "מזומן"}</span>;
+}
+
 function DetailModal({
   payload,
   title,
@@ -1061,7 +1061,7 @@ function DetailModal({
   counted,
   diff,
   counts,
-  onOpenRow,
+  onRowClick,
   onClose,
 }: {
   payload: CashDetailPayload;
@@ -1070,7 +1070,7 @@ function DetailModal({
   counted: string | null;
   diff: string | null;
   counts: CashCountRow[];
-  onOpenRow: (row: CashDetailPayload["rows"][number]) => void;
+  onRowClick: (row: CashDetailRow) => void;
   onClose: () => void;
 }) {
   const c = payload.currency;
@@ -1081,9 +1081,16 @@ function DetailModal({
         ? payload.rows.filter((r) => r.kind === "EXPENSE")
         : payload.rows;
 
+  const receiptRows = rows.filter((r) => r.kind === "RECEIPT");
+  const sumUsd = receiptRows.reduce((s, r) => s + num(r.amountUsd), 0);
+  const sumIls = receiptRows.reduce((s, r) => s + num(r.amountIls), 0);
+  const users = Array.from(new Set(receiptRows.map((r) => r.userName).filter(Boolean))) as string[];
+  const userLabel = users.length === 0 ? "—" : users.length === 1 ? users[0] : `${users.length} משתמשים`;
+  const isVariance = mode === "variance";
+
   return (
     <div className="adm-cash-modal-backdrop" onClick={onClose}>
-      <div className="adm-cash-modal adm-cash-modal--wide" dir="rtl" onClick={(e) => e.stopPropagation()}>
+      <div className="adm-cash-modal adm-cash-modal--xl" dir="rtl" onClick={(e) => e.stopPropagation()}>
         <div className="adm-cash-modal__head">
           <h3>
             {c === "ILS" ? <Coins size={16} aria-hidden /> : <DollarSign size={16} aria-hidden />}
@@ -1092,10 +1099,32 @@ function DetailModal({
           <button type="button" className="adm-icon-btn" onClick={onClose}><X size={16} /></button>
         </div>
         <div className="adm-cash-modal__body">
-          {mode === "variance" ? (
+          {isVariance ? (
             <VarianceDetail currency={c} expected={payload.total} counted={counted} diff={diff} counts={counts} />
           ) : (
-            <MovementsTable currency={c} rows={rows} mode={mode} payload={payload} onOpenRow={onOpenRow} />
+            <>
+              {mode !== "expenses" ? (
+                <div className="adm-cash-detail-kpis">
+                  <div className="adm-cash-detail-kpi adm-cash-detail-kpi--usd">
+                    <span className="adm-cash-detail-kpi__lbl">התקבל דולר</span>
+                    <strong className="adm-cash-detail-kpi__val" dir="ltr">{usd(String(sumUsd))}</strong>
+                  </div>
+                  <div className="adm-cash-detail-kpi adm-cash-detail-kpi--ils">
+                    <span className="adm-cash-detail-kpi__lbl">התקבל ₪</span>
+                    <strong className="adm-cash-detail-kpi__val" dir="ltr">{ils(String(sumIls))}</strong>
+                  </div>
+                  <div className="adm-cash-detail-kpi adm-cash-detail-kpi--cnt">
+                    <span className="adm-cash-detail-kpi__lbl">מספר תנועות</span>
+                    <strong className="adm-cash-detail-kpi__val">{receiptRows.length}</strong>
+                  </div>
+                  <div className="adm-cash-detail-kpi adm-cash-detail-kpi--user">
+                    <span className="adm-cash-detail-kpi__lbl">משתמש קולט</span>
+                    <strong className="adm-cash-detail-kpi__val adm-cash-detail-kpi__val--txt">{userLabel}</strong>
+                  </div>
+                </div>
+              ) : null}
+              <MovementsTable currency={c} rows={rows} mode={mode} payload={payload} onRowClick={onRowClick} />
+            </>
           )}
         </div>
         <div className="adm-cash-modal__foot">
@@ -1111,90 +1140,184 @@ function MovementsTable({
   rows,
   mode,
   payload,
-  onOpenRow,
+  onRowClick,
 }: {
   currency: CashCurrency;
   rows: CashDetailPayload["rows"];
   mode: DetailMode;
   payload: CashDetailPayload;
-  onOpenRow: (row: CashDetailPayload["rows"][number]) => void;
+  onRowClick: (row: CashDetailRow) => void;
 }) {
   return (
     <div className="adm-table-excel-wrap">
-      <table className="adm-table-excel">
+      <table className="adm-table-excel adm-cash-detail-tbl">
         <thead>
           <tr>
             <th>תאריך</th>
-            <th>מספר מסמך</th>
+            <th>הזמנה</th>
+            <th>קליטת תשלום</th>
             <th>לקוח</th>
-            <th>סוג תנועה</th>
+            <th>דולר</th>
+            <th>₪</th>
+            <th>אמצעי תשלום</th>
             <th>משתמש</th>
-            <th>סכום</th>
-            <th aria-label="פתיחה" />
+            <th aria-label="מסמך" />
           </tr>
         </thead>
         <tbody>
           {rows.length === 0 ? (
-            <tr><td colSpan={7} className="adm-table-empty">אין תנועות מזומן בטווח זה.</td></tr>
+            <tr><td colSpan={9} className="adm-table-empty">אין תנועות מזומן בטווח זה.</td></tr>
           ) : (
             rows.map((r) => (
               <tr
                 key={`${r.kind}:${r.id}`}
                 className="adm-table-excel-row adm-cash-row-link"
-                onClick={() => onOpenRow(r)}
-                title={r.kind === "RECEIPT" ? "פתח קליטת תשלום מקורית" : "הצג הוצאת קופה במסך"}
+                onClick={() => onRowClick(r)}
+                title={r.kind === "RECEIPT" ? "פרטי קליטת תשלום" : "פרטי הוצאת קופה"}
               >
-                <td>{fmtDate(r.date)}</td>
+                <td dir="ltr">{fmtDate(r.date)}</td>
+                <td dir="ltr">{r.orderNumber ?? "—"}</td>
                 <td dir="ltr">{r.docLabel ?? "—"}</td>
-                <td>{r.customerName ?? (r.notes ? r.notes : "—")}</td>
-                <td>
-                  <span className={`adm-recon-tag ${r.kind === "EXPENSE" ? "adm-recon-tag--diff" : "adm-recon-tag--matched"}`}>
-                    {r.movementLabel}
-                  </span>
-                </td>
-                <td>{r.userName ?? "—"}</td>
+                <td>{r.customerName ?? (r.kind === "EXPENSE" ? r.movementLabel : "—")}</td>
                 <td dir="ltr" className={`adm-table-excel-num ${r.kind === "EXPENSE" ? "adm-cash-cell--neg" : "adm-cash-cell--pos"}`}>
-                  {money(currency, r.amount)}
+                  {r.amountUsd ? usd(r.amountUsd) : "—"}
                 </td>
-                <td className="adm-cash-row-link__icon"><ExternalLink size={14} aria-hidden /></td>
+                <td dir="ltr" className={`adm-table-excel-num ${r.kind === "EXPENSE" ? "adm-cash-cell--neg" : "adm-cash-cell--pos"}`}>
+                  {r.amountIls ? ils(r.amountIls) : "—"}
+                </td>
+                <td><CashMethodTag row={r} /></td>
+                <td>{r.userName ?? "—"}</td>
+                <td className="adm-cash-row-link__icon">
+                  {r.documents.length > 0 ? (
+                    <span className="adm-cash-doc-badge" title={`${r.documents.length} מסמכים מצורפים`}>
+                      <FileText size={13} aria-hidden /> {r.documents.length}
+                    </span>
+                  ) : (
+                    <ExternalLink size={14} aria-hidden />
+                  )}
+                </td>
               </tr>
             ))
           )}
         </tbody>
         <tfoot>
-          {mode === "receipts" ? (
+          {mode === "expenses" ? (
             <tr>
-              <td colSpan={5} className="adm-cash-detail-foot adm-cash-detail-foot--total">סה״כ קליטות מזומן</td>
-              <td dir="ltr" className="adm-table-excel-num adm-cash-detail-total">{money(currency, payload.receipts)}</td>
-              <td />
-            </tr>
-          ) : mode === "expenses" ? (
-            <tr>
-              <td colSpan={5} className="adm-cash-detail-foot adm-cash-detail-foot--total">סה״כ הוצאות קופה</td>
-              <td dir="ltr" className="adm-table-excel-num adm-cash-cell--neg">{money(currency, `-${payload.expenses}`)}</td>
-              <td />
+              <td colSpan={7} className="adm-cash-detail-foot adm-cash-detail-foot--total">סה״כ הוצאות קופה</td>
+              <td dir="ltr" colSpan={2} className="adm-table-excel-num adm-cash-cell--neg">{money(currency, `-${payload.expenses}`)}</td>
             </tr>
           ) : (
             <>
               <tr>
-                <td colSpan={5} className="adm-cash-detail-foot">תקבולים (קליטות מזומן)</td>
-                <td dir="ltr" className="adm-table-excel-num adm-cash-cell--pos">{money(currency, payload.receipts)}</td>
-                <td />
+                <td colSpan={7} className="adm-cash-detail-foot">קליטות מזומן</td>
+                <td dir="ltr" colSpan={2} className="adm-table-excel-num adm-cash-cell--pos">{money(currency, payload.receipts)}</td>
               </tr>
+              {num(payload.expenses) > 0 ? (
+                <tr>
+                  <td colSpan={7} className="adm-cash-detail-foot">הוצאות קופה</td>
+                  <td dir="ltr" colSpan={2} className="adm-table-excel-num adm-cash-cell--neg">{money(currency, `-${payload.expenses}`)}</td>
+                </tr>
+              ) : null}
               <tr>
-                <td colSpan={5} className="adm-cash-detail-foot">הוצאות קופה</td>
-                <td dir="ltr" className="adm-table-excel-num adm-cash-cell--neg">{money(currency, `-${payload.expenses}`)}</td>
-                <td />
-              </tr>
-              <tr>
-                <td colSpan={5} className="adm-cash-detail-foot adm-cash-detail-foot--total">צפוי בקופה</td>
-                <td dir="ltr" className="adm-table-excel-num adm-cash-detail-total">{money(currency, payload.total)}</td>
-                <td />
+                <td colSpan={7} className="adm-cash-detail-foot adm-cash-detail-foot--total">צפוי בקופה</td>
+                <td dir="ltr" colSpan={2} className="adm-table-excel-num adm-cash-detail-total">{money(currency, payload.total)}</td>
               </tr>
             </>
           )}
         </tfoot>
       </table>
+    </div>
+  );
+}
+
+function MovementDrawer({
+  row,
+  onOpenOriginal,
+  onClose,
+}: {
+  row: CashDetailRow;
+  onOpenOriginal: (row: CashDetailRow) => void;
+  onClose: () => void;
+}) {
+  const isReceipt = row.kind === "RECEIPT";
+  return (
+    <div className="adm-cash-drawer-backdrop" onClick={onClose} role="presentation">
+      <aside className="adm-cash-drawer" dir="rtl" onClick={(e) => e.stopPropagation()}>
+        <div className="adm-cash-drawer__head">
+          <h3>{isReceipt ? "פרטי קליטת תשלום" : "פרטי הוצאת קופה"}</h3>
+          <button type="button" className="adm-icon-btn" onClick={onClose}><X size={16} /></button>
+        </div>
+        <div className="adm-cash-drawer__body">
+          {isReceipt ? (
+            <>
+              <DrawerField label="לקוח" value={row.customerName ?? "—"} />
+              <DrawerField label="הזמנה" value={row.orderNumber ?? "—"} ltr />
+              <DrawerField label="קליטת תשלום" value={row.docLabel ?? "—"} ltr />
+              <div className="adm-cash-drawer__amounts">
+                <div className="adm-cash-drawer__amt adm-cash-drawer__amt--usd">
+                  <span>התקבל דולר</span>
+                  <strong dir="ltr">{row.amountUsd ? usd(row.amountUsd) : "—"}</strong>
+                </div>
+                <div className="adm-cash-drawer__amt adm-cash-drawer__amt--ils">
+                  <span>התקבל ₪</span>
+                  <strong dir="ltr">{row.amountIls ? ils(row.amountIls) : "—"}</strong>
+                </div>
+              </div>
+              <div className="adm-cash-drawer__field">
+                <span className="adm-cash-drawer__lbl">אמצעי תשלום</span>
+                <CashMethodTag row={row} />
+              </div>
+            </>
+          ) : (
+            <>
+              <DrawerField label="סוג הוצאה" value={row.reasonLabel ?? "—"} />
+              <div className="adm-cash-drawer__amounts">
+                <div className="adm-cash-drawer__amt adm-cash-drawer__amt--ils">
+                  <span>סכום</span>
+                  <strong dir="ltr">{row.amountUsd ?? row.amountIls ?? "—"}</strong>
+                </div>
+              </div>
+            </>
+          )}
+          <DrawerField label="נקלט על ידי" value={row.userName ?? "—"} />
+          <DrawerField label="תאריך" value={fmtDateTime(row.date)} ltr />
+          {row.notes ? <DrawerField label="הערה" value={row.notes} /> : null}
+
+          {row.documents.length > 0 ? (
+            <div className="adm-cash-drawer__docs">
+              <span className="adm-cash-drawer__lbl">מסמכים מצורפים</span>
+              {row.documents.map((d) => (
+                <a
+                  key={d.id}
+                  className="adm-cash-drawer__doc"
+                  href={`/api/documents/${d.id}/download`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <FileText size={14} aria-hidden /> {d.fileName}
+                </a>
+              ))}
+            </div>
+          ) : (
+            <DrawerField label="מסמך מצורף" value="אין" />
+          )}
+        </div>
+        <div className="adm-cash-drawer__foot">
+          <button type="button" className="adm-btn adm-btn--ghost" onClick={onClose}>סגור</button>
+          <button type="button" className="adm-btn adm-btn--primary" onClick={() => onOpenOriginal(row)}>
+            <ExternalLink size={14} aria-hidden /> {isReceipt ? "פתח קליטת תשלום מקורית" : "הצג הוצאה במסך"}
+          </button>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function DrawerField({ label, value, ltr }: { label: string; value: string; ltr?: boolean }) {
+  return (
+    <div className="adm-cash-drawer__field">
+      <span className="adm-cash-drawer__lbl">{label}</span>
+      <span className="adm-cash-drawer__val" dir={ltr ? "ltr" : undefined}>{value}</span>
     </div>
   );
 }
