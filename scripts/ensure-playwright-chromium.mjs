@@ -4,7 +4,7 @@ import path from "node:path";
 
 const BROWSERS_PATH = path.join(process.cwd(), ".playwright-browsers");
 
-function installChromium(withDeps: boolean) {
+function installChromium(withDeps) {
   const args = withDeps
     ? "npx playwright install --with-deps chromium"
     : "npx playwright install chromium";
