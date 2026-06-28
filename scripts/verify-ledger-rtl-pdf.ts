@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { chromium } from "playwright";
+import { launchPdfBrowser } from "@/lib/pdf/browser";
 import type { CustomerLedgerPayload } from "@/app/admin/capture/actions";
 import { buildCustomerLedgerPdfHtml } from "@/lib/customer-ledger-pdf-html";
 import type { CustomerLedgerExportMeta } from "@/lib/customer-ledger-export";
@@ -132,7 +132,7 @@ async function main() {
   });
   await writeFile(path.join(outDir, "ledger-rtl-test.html"), html, "utf8");
 
-  const browser = await chromium.launch({ headless: true, args: ["--no-sandbox", "--disable-setuid-sandbox"] });
+  const browser = await launchPdfBrowser();
   try {
     const page = await browser.newPage({ locale: "he-IL", viewport: { width: 1600, height: 1000 } });
     await page.setContent(html, { waitUntil: "networkidle" });

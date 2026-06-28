@@ -9,7 +9,7 @@ import {
   type CustomerLedgerExportMeta,
   type LedgerPdfMode,
 } from "@/lib/customer-ledger-export";
-import { launchPdfBrowser } from "@/lib/playwright-pdf-browser";
+import { renderHtmlToPdf } from "@/lib/pdf/browser";
 
 export const runtime = "nodejs";
 
@@ -44,30 +44,6 @@ async function loadHebrewFont(): Promise<string> {
   return bytes.toString("base64");
 }
 
-async function renderLedgerPdfBytes(html: string): Promise<Uint8Array | null> {
-  try {
-    const browser = await launchPdfBrowser();
-    try {
-      const page = await browser.newPage({ locale: "he-IL" });
-      await page.setContent(html, { waitUntil: "networkidle" });
-      await page.emulateMedia({ media: "print" });
-      const pdf = await page.pdf({
-        format: "A4",
-        landscape: true,
-        printBackground: true,
-        preferCSSPageSize: true,
-        margin: { top: "0", right: "0", bottom: "0", left: "0" },
-      });
-      return new Uint8Array(pdf);
-    } finally {
-      await browser.close().catch(() => undefined);
-    }
-  } catch (error) {
-    console.warn("[customer-ledger-pdf] playwright render failed — HTML fallback", error);
-    return null;
-  }
-}
-
 export async function POST(req: Request): Promise<Response> {
   try {
     await requireAuth();
@@ -91,7 +67,7 @@ export async function POST(req: Request): Promise<Response> {
     });
 
     const filename = buildLedgerExportFilename(body.meta.customerCode, "pdf", mode);
-    const pdfBytes = await renderLedgerPdfBytes(html);
+    const pdfBytes = await renderHtmlToPdf(html);
 
     if (pdfBytes) {
       return new Response(Buffer.from(pdfBytes), {
