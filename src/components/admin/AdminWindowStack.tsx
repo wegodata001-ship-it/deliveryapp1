@@ -122,7 +122,17 @@ export function AdminWindowStack({
               dir="rtl"
             >
               <div className="adm-win-header">
-                <h2 className="adm-win-title">{windowTitle(w)}</h2>
+                {w.type === "orderCapture" && w.props.mode === "edit" ? (
+                  <nav className="adm-win-breadcrumb" aria-label="ניווט">
+                    <span className="adm-win-breadcrumb__root">הזמנות</span>
+                    <span className="adm-win-breadcrumb__sep" aria-hidden>›</span>
+                    <span className="adm-win-breadcrumb__cur">
+                      עריכת הזמנה{w.props.orderNumber ? ` ${w.props.orderNumber}` : ""}
+                    </span>
+                  </nav>
+                ) : (
+                  <h2 className="adm-win-title">{windowTitle(w)}</h2>
+                )}
                 <button type="button" className="ui-close" onClick={() => closeWindow(w.id)} aria-label="סגירה">
                   ×
                 </button>

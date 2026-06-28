@@ -6,7 +6,12 @@ export type AdminWindowType = "orderCapture" | "customerCard" | "createCustomer"
 
 export type OrderCaptureWindowProps =
   | { mode: "create" }
-  | { mode: "edit"; orderId: string; /** נפתח מיד מודל בקשת אישור (הזמנה נעולה) */ startWithEditRequest?: boolean };
+  | {
+      mode: "edit";
+      orderId: string;
+      /** נפתח מיד מודל בקשת אישור (הזמנה נעולה) */ startWithEditRequest?: boolean;
+      /** מספר הזמנה להצגה ב-Breadcrump בכותרת החלון (אופציונלי) */ orderNumber?: string | null;
+    };
 
 export type CustomerCardWindowProps = {
   customerId?: string | null;

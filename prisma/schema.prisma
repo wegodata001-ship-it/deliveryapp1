@@ -215,6 +215,12 @@ model Order {
   id                   String         @id @default(uuid())
   oldOrderNumber       String?
   orderNumber          String?        @unique
+  /** מזהה הזמנה חיצוני (מערכת מקור — למשל טורקיה). לייבוא והתאמת מערכות; ייחודי כשקיים. */
+  externalOrderId      String?
+  /** סניף מקור מתוך דוח חיצוני (לא לוגיקה — שדה מידע) */
+  branch               String?
+  /** גובה / אחראי גבייה מתוך דוח חיצוני (לא לוגיקה — שדה מידע) */
+  collector            String?
   customerId           String?
   customerCodeSnapshot String?
   customerNameSnapshot String?
@@ -287,6 +293,7 @@ model Order {
   editRequests          OrderEditRequest[]
 
   @@index([oldOrderNumber])
+  @@index([externalOrderId])
   @@index([weekCode])
   @@index([orderDate])
   @@index([orderExecutionDate])

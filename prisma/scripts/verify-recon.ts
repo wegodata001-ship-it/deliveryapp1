@@ -31,7 +31,9 @@ async function main() {
   const orders = await prisma.order.findMany({
     where: { weekCode: week, isActive: true, deletedAt: null },
     select: {
+      id: true,
       orderNumber: true,
+      externalOrderId: true,
       customerCodeSnapshot: true,
       customerNameSnapshot: true,
       totalUsd: true,
@@ -43,7 +45,9 @@ async function main() {
   console.log(`system orders (${week}): ${orders.length}`);
 
   const systemOrders: SystemOrderForRecon[] = orders.map((o) => ({
+    orderId: o.id,
     orderNumber: o.orderNumber,
+    externalOrderId: o.externalOrderId,
     customerCode: o.customerCodeSnapshot ?? o.customer?.customerCode ?? null,
     customerName: o.customerNameSnapshot ?? o.customer?.displayName ?? null,
     amount: toNumber(o.totalUsd) ?? toNumber(o.amountUsd),

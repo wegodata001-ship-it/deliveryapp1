@@ -26214,6 +26214,498 @@ select.adm-balances-input {
   white-space: nowrap;
 }
 
+/* ===== התאמת מערכות — מסך מאוחד (מקורות / בדיקת שבוע / טבלה / Drawer) ===== */
+.adm-recon-sources {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+@media (max-width: 900px) {
+  .adm-recon-sources { grid-template-columns: 1fr; }
+}
+.adm-recon-src {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
+  padding: 14px 16px;
+}
+.adm-recon-src__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 800;
+  color: #0f172a;
+  margin: 0 0 10px;
+}
+.adm-recon-src__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+.adm-recon-src__ok {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #15803d;
+}
+
+.adm-recon-weekerr {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  border-radius: 12px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+}
+.adm-recon-weekerr__icon { color: #dc2626; flex-shrink: 0; }
+.adm-recon-weekerr__body h3 { margin: 0 0 8px; font-size: 15px; color: #991b1b; }
+.adm-recon-weekerr__body p { margin: 8px 0; font-size: 13px; color: #7f1d1d; }
+.adm-recon-weekerr__cmp {
+  display: flex;
+  gap: 18px;
+  font-size: 13px;
+  color: #7f1d1d;
+}
+.adm-recon-weekerr__cmp strong { color: #991b1b; }
+.adm-recon-weekerr__btns { display: flex; gap: 10px; margin-top: 10px; }
+
+.adm-recon-done {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px solid #86efac;
+  background: #f0fdf4;
+  color: #15803d;
+  font-size: 16px;
+  font-weight: 800;
+  border-radius: 12px;
+  padding: 14px;
+  margin-bottom: 16px;
+}
+
+.adm-recon-tablecard {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
+  overflow: hidden;
+}
+.adm-recon-tablecard__head {
+  padding: 12px 16px;
+  border-bottom: 1px solid #eef2f7;
+}
+.adm-recon-tablecard__head h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+  color: #0f172a;
+}
+.adm-recon-thresholds {
+  display: inline-block;
+  margin-inline-start: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #94a3b8;
+}
+
+.adm-recon-flag {
+  display: inline-block;
+  margin-inline-start: 4px;
+  color: #c2410c;
+  font-weight: 800;
+  cursor: help;
+}
+.adm-recon-noedit { color: #cbd5e1; }
+
+/* תגי סטטוס נוספים */
+.adm-recon-tag--small { background: #fef9c3; color: #a16207; }
+.adm-recon-tag--medium { background: #ffedd5; color: #c2410c; }
+.adm-recon-tag--severe { background: #fee2e2; color: #b91c1c; }
+
+/* גוון שורה לפי חומרה — נשמר בדיוק; גובר על ה-zebra */
+.adm-recon-row--severe td { background: #fef2f2; }
+.adm-recon-row--medium td { background: #fff7ed; }
+.adm-recon-row--missing-system td { background: #f8fafc; }
+
+/* ===== שיפור קריאות טבלת ההתאמה (UX/UI בלבד) ===== */
+/* ריווח (גובה שורה ~50px) + קו הפרדה דק בין שורות */
+.adm-recon-table th,
+.adm-recon-table td {
+  padding: 14px 12px;
+  border-bottom: 1px solid #e5e7eb;
+  vertical-align: middle;
+}
+/* Zebra — מוחל על שורות "תואם" בלבד כדי לא לפגוע בצבעי הסטטוס */
+.adm-recon-table tbody tr.adm-recon-row--matched:nth-child(even) td { background: #f8fafc; }
+.adm-recon-table tbody tr.adm-recon-row--matched:nth-child(odd) td { background: #ffffff; }
+/* Hover — רקע תכלת עדין מאוד (תגי הסטטוס נשארים בצבעם) */
+.adm-recon-table tbody tr.adm-recon-row--click:hover td { background: #eff6ff; filter: none; }
+/* Header sticky עם הצללה קלה בעת גלילה + טקסט כהה קריא */
+.adm-recon-tablescroll { max-height: 620px; overflow: auto; }
+.adm-recon-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #f1f5f9;
+  color: #0f172a;
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.01em;
+  border-bottom: 2px solid #e5e7eb;
+  box-shadow: 0 2px 4px rgba(15, 23, 42, 0.08);
+}
+/* שורת ספירה + בורר שורות-לעמוד מעל הטבלה */
+.adm-recon-tablebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #eef2f7;
+  background: #fcfdfe;
+}
+.adm-recon-tablebar__count { font-size: 13px; font-weight: 600; color: #475569; }
+.adm-recon-tablebar__size { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #64748b; }
+.adm-recon-tablebar__size select {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 4px 26px 4px 10px;
+  font-size: 13px;
+}
+/* Pagination בתחתית */
+.adm-recon-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 12px 16px;
+  border-top: 1px solid #eef2f7;
+}
+.adm-recon-pager__info { font-size: 13px; color: #475569; }
+/* ריווח בין אזור ה-KPI לטבלה */
+.adm-recon-tablecard { margin-top: 18px; }
+
+/* גווני KPI נוספים */
+.adm-recon-kpi--small { border-color: #fde68a; background: #fefce8; }
+.adm-recon-kpi--small .adm-recon-kpi__head { color: #a16207; }
+.adm-recon-kpi--medium { border-color: #fed7aa; background: #fff7ed; }
+.adm-recon-kpi--medium .adm-recon-kpi__head { color: #c2410c; }
+.adm-recon-kpi--severe { border-color: #fecaca; background: #fef2f2; }
+.adm-recon-kpi--severe .adm-recon-kpi__head { color: #b91c1c; }
+.adm-recon-kpi--missing { border-color: #e2e8f0; background: #f8fafc; }
+.adm-recon-kpi--missing .adm-recon-kpi__head { color: #475569; }
+
+/* Drawer עריכה */
+.adm-recon-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.35);
+  z-index: 60;
+}
+.adm-recon-drawer {
+  position: fixed;
+  top: 0;
+  inset-inline-start: 0;
+  height: 100vh;
+  width: 380px;
+  max-width: 92vw;
+  background: #fff;
+  box-shadow: 2px 0 24px rgba(15, 23, 42, 0.18);
+  z-index: 61;
+  display: flex;
+  flex-direction: column;
+  animation: adm-recon-drawer-in 0.18s ease-out;
+}
+@keyframes adm-recon-drawer-in {
+  from { transform: translateX(-12px); opacity: 0.6; }
+  to { transform: translateX(0); opacity: 1; }
+}
+.adm-recon-drawer__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid #eef2f7;
+}
+.adm-recon-drawer__head h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+  color: #0f172a;
+}
+.adm-recon-drawer__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.adm-recon-drawer__hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: #1d4ed8;
+}
+.adm-recon-drawer__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.adm-recon-drawer__field > span {
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+}
+.adm-recon-drawer__field input,
+.adm-recon-drawer__field textarea {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 14px;
+  font-family: inherit;
+}
+.adm-recon-drawer__field input:focus,
+.adm-recon-drawer__field textarea:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+.adm-recon-drawer__audit {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: #94a3b8;
+}
+.adm-recon-drawer__foot {
+  display: flex;
+  gap: 10px;
+  padding: 14px 16px;
+  border-top: 1px solid #eef2f7;
+}
+.adm-recon-drawer__foot .adm-btn { flex: 1; justify-content: center; }
+
+/* אזור שתי חוויות העבודה: עריכה מהירה (Drawer) ↔ מסך קליטה מלא */
+.adm-recon-drawer__modes {
+  padding: 12px 16px;
+  border-bottom: 1px solid #eef2f7;
+  background: #f8fafc;
+}
+.adm-btn--block { width: 100%; justify-content: center; }
+.adm-recon-drawer__modes-hint {
+  display: block;
+  margin-top: 6px;
+  font-size: 11px;
+  color: #94a3b8;
+  text-align: center;
+}
+
+/* Breadcrumb בכותרת חלון קליטת/עריכת הזמנה */
+.adm-win-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
+}
+.adm-win-breadcrumb__root { color: #64748b; font-weight: 600; }
+.adm-win-breadcrumb__sep { color: #cbd5e1; }
+.adm-win-breadcrumb__cur { color: #0f172a; }
+
+/* סטטיסטיקות מקור */
+.adm-recon-src__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: #475569;
+}
+.adm-recon-src__stats strong { color: #0f172a; }
+
+/* באנר אי-התאמת שבוע — שורת ה-prompt */
+.adm-recon-weekerr__prompt {
+  background: #fff;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+/* כרטיסי סיכום עליון (WEGO / Excel / הפרש) */
+.adm-recon-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+@media (max-width: 760px) {
+  .adm-recon-summary { grid-template-columns: 1fr; }
+}
+.adm-recon-sumcard {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: #fff;
+}
+.adm-recon-sumcard__t {
+  display: block;
+  font-size: 12px;
+  font-weight: 800;
+  margin-bottom: 8px;
+}
+.adm-recon-sumcard__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 13px;
+  color: #475569;
+  padding: 2px 0;
+}
+.adm-recon-sumcard__row strong { font-size: 15px; color: #0f172a; }
+.adm-recon-sumcard--wego { border-color: #bfdbfe; background: #eff6ff; }
+.adm-recon-sumcard--wego .adm-recon-sumcard__t { color: #1d4ed8; }
+.adm-recon-sumcard--excel { border-color: #e2e8f0; background: #f8fafc; }
+.adm-recon-sumcard--excel .adm-recon-sumcard__t { color: #334155; }
+.adm-recon-sumcard--diff.is-ok { border-color: #86efac; background: #f0fdf4; }
+.adm-recon-sumcard--diff.is-ok .adm-recon-sumcard__t { color: #15803d; }
+.adm-recon-sumcard--diff.is-warn { border-color: #fed7aa; background: #fff7ed; }
+.adm-recon-sumcard--diff.is-warn .adm-recon-sumcard__t { color: #c2410c; }
+
+/* כותרת טבלה + כפתורי ייצוא */
+.adm-recon-tablecard__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.adm-recon-exports { display: flex; gap: 8px; flex-shrink: 0; }
+
+/* שורה לחיצה */
+.adm-recon-row--click { cursor: pointer; }
+.adm-recon-row--click:hover td { filter: brightness(0.98); }
+
+/* חלון פירוט התאמה */
+.adm-recon-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 70;
+  padding: 20px;
+}
+.adm-recon-modal {
+  background: #fff;
+  border-radius: 14px;
+  width: 560px;
+  max-width: 100%;
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.25);
+  overflow: hidden;
+}
+.adm-recon-modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid #eef2f7;
+}
+.adm-recon-modal__head h3 { margin: 0; font-size: 16px; font-weight: 800; color: #0f172a; }
+.adm-recon-modal__body { padding: 18px; }
+.adm-recon-modal__sides {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.adm-recon-modal__side {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 12px;
+}
+.adm-recon-modal__side h4 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 800;
+  color: #334155;
+}
+.adm-recon-modal__field {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  padding: 3px 0;
+}
+.adm-recon-modal__field > span { color: #64748b; }
+.adm-recon-modal__field > strong { color: #0f172a; }
+.adm-recon-modal__status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #eef2f7;
+  font-size: 13px;
+  font-weight: 600;
+  color: #475569;
+}
+.adm-recon-modal__diff { margin-inline-start: auto; color: #0f172a; }
+.adm-recon-modal__foot {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  padding: 14px 18px;
+  border-top: 1px solid #eef2f7;
+}
+
+/* טבלאות תצוגה מקדימה (WEGO / Excel) לפני התאמה */
+.adm-recon-previews {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  padding: 12px;
+}
+@media (max-width: 900px) {
+  .adm-recon-previews { grid-template-columns: 1fr; }
+}
+.adm-recon-preview { min-width: 0; }
+.adm-recon-preview__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 800;
+  color: #334155;
+}
+.adm-recon-preview .adm-table-excel-wrap { max-height: 420px; overflow: auto; }
+.adm-recon-previews__hint {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 12px;
+  color: #64748b;
+  text-align: center;
+}
+
 /* ===== בקרת קופה (Cash Control) ===== */
 .adm-cash {
   display: flex;
