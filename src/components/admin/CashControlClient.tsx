@@ -130,10 +130,15 @@ export function CashControlClient({ isAdmin, initialWeek }: { isAdmin: boolean; 
   async function exportFile(format: "pdf" | "excel") {
     setExporting(format);
     try {
-      const res = await fetch("/api/controls/cash-control/export", {
+      // ייצוא Excel ו-PDF מופרדים לשני routes נפרדים בשרת: ל-Excel אין תלות ב-playwright/chromium.
+      const endpoint =
+        format === "excel"
+          ? "/api/controls/cash-control/export/excel"
+          : "/api/controls/cash-control/export/pdf";
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ week, format }),
+        body: JSON.stringify({ week }),
       });
       if (!res.ok) {
         const msg = await res.json().then((b) => b?.error).catch(() => null);

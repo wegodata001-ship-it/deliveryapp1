@@ -234,13 +234,16 @@ export function ReconciliationClient({ canEdit }: { canEdit: boolean }) {
     if (!recon) return;
     setExporting(format);
     try {
-      const res = await fetch("/api/controls/reconciliation/export", {
+      const endpoint =
+        format === "excel"
+          ? "/api/controls/reconciliation/export/excel"
+          : "/api/controls/reconciliation/export/pdf";
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
         body: JSON.stringify({
           week,
-          format,
           rows: recon.rows,
           kpis: recon.kpis,
           summary: { wegoCount, wegoSum, extCount, extSum, diffSum, countDiff },
