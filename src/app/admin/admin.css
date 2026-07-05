@@ -7912,14 +7912,27 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
   max-height: 92vh;
 }
 
+@media (min-width: 1920px) {
+  .adm-win-panel--payment-capture-updated {
+    width: min(1720px, 96vw);
+    max-height: min(96vh, calc(100dvh - 20px));
+  }
+
+  .adm-win-body--payment-capture {
+    height: calc(min(96vh, calc(100dvh - 20px)) - 52px);
+    max-height: calc(min(96vh, calc(100dvh - 20px)) - 52px);
+  }
+}
+
 .adm-win-body--payment-capture {
-  padding: 6px 8px 8px;
-  /* Main scroll should be the window body (no inner table scroll trap) */
-  overflow-y: auto;
+  padding: 4px 6px 6px;
+  /* גובה קבוע — הטבלה גוללת פנימית; כרטיסי סיכום נשארים דבוקים בתחתית */
+  overflow: hidden;
   overflow-x: hidden;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  height: calc(92vh - 52px);
   max-height: calc(92vh - 52px);
 }
 
@@ -7928,6 +7941,7 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  height: 100%;
 }
 
 .payment-modal-split {
@@ -7942,7 +7956,7 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
 }
 
 .payment-modal-main {
-  flex: 4 1 0;
+  flex: 5 1 0;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -8025,8 +8039,8 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 4px 10px 4px;
+  gap: 6px;
+  padding: 3px 8px 3px;
   position: sticky;
   top: 0;
   z-index: 10;
@@ -8556,6 +8570,65 @@ select.payment-modal-inline-input {
 .payment-modal-rate-strip-inp--pct::placeholder {
   color: #94a3b8;
   font-weight: 600;
+}
+
+/* אייקוני מסמך ליד שער הדולר */
+.payment-modal-rate-doc-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-inline: 4px 2px;
+  vertical-align: middle;
+}
+
+.payment-modal-rate-doc-file {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.payment-modal-rate-doc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 0.875rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, opacity 0.12s ease;
+}
+
+.payment-modal-rate-doc-btn--empty {
+  color: #94a3b8;
+  border-color: #e2e8f0;
+}
+
+.payment-modal-rate-doc-btn--has {
+  color: #2563eb;
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.payment-modal-rate-doc-btn--preview:not(:disabled) {
+  color: #1d4ed8;
+  border-color: #bfdbfe;
+}
+
+.payment-modal-rate-doc-btn:hover:not(:disabled) {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+}
+
+.payment-modal-rate-doc-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .payment-modal-rate-strip-inp--ro {
@@ -11124,11 +11197,17 @@ select.payment-modal-inline-input {
 .payment-modal-table-wrap--focused {
   flex: 1 1 auto;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .payment-modal-table-wrap--focused .payment-modal-table-scroll {
   flex: 1 1 auto;
-  min-height: 8rem;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .payment-modal-ledger-head {
@@ -11182,9 +11261,9 @@ select.payment-modal-inline-input {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-  margin: 0 10px 6px;
-  padding: 6px 12px;
+  gap: 10px;
+  margin: 0 8px 4px;
+  padding: 4px 10px;
   border-radius: 10px;
   border: 1px solid rgba(148, 163, 184, 0.28);
   background: rgba(248, 250, 252, 0.95);
@@ -11257,9 +11336,8 @@ select.payment-modal-inline-input {
 .payment-modal-table-scroll {
   flex: 0 0 auto;
   min-height: 0;
-  /* Allow page/window vertical scroll; keep horizontal scroll if wide */
   overflow-x: auto;
-  overflow-y: visible;
+  overflow-y: auto;
 }
 
 /** סיכום כספי תחת טבלת הזמנות — תמיד גלוי מתחת לאזור הגלילה של הטבלה */
@@ -11277,18 +11355,22 @@ select.payment-modal-inline-input {
   box-shadow: 0 -4px 14px rgba(15, 23, 42, 0.06);
 }
 
-/** כרטיסי אמצעי תשלום — שורה אחת מתחת לטבלה, גובה מוקטן */
+/** כרטיסי אמצעי תשלום — שורה דביקה בתחתית אזור הטבלה (~25% קטן יותר) */
 .payment-modal-orders-summary--methods {
+  flex: 0 0 auto;
   flex-wrap: nowrap;
   align-items: stretch;
-  gap: 6px;
-  padding: 6px 8px 8px;
+  gap: 5px;
+  padding: 4px 6px 5px;
   margin: 0;
   border-top: 1px solid #e2e8f0;
   background: #f8fafc;
-  box-shadow: none;
+  box-shadow: 0 -3px 10px rgba(15, 23, 42, 0.05);
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
 }
 
 .payment-modal-orders-summary--methods .payment-modal-live-kpis,
@@ -11306,20 +11388,20 @@ select.payment-modal-inline-input {
 
 .payment-modal-orders-summary--methods .payment-modal-live-kpi {
   flex: 1 1 0;
-  min-width: 6.75rem;
+  min-width: 6rem;
   max-width: none;
-  min-height: 6.5rem;
+  min-height: 4.75rem;
   height: auto;
   max-height: none;
-  padding: 8px 8px 7px;
-  gap: 4px;
-  border-radius: 10px;
+  padding: 5px 6px 4px;
+  gap: 2px;
+  border-radius: 8px;
   justify-content: flex-start;
 }
 
 .payment-modal-orders-summary--methods .payment-modal-live-kpi__lbl {
-  font-size: 1rem;
-  line-height: 1.2;
+  font-size: 0.875rem;
+  line-height: 1.15;
   font-weight: 800;
 }
 
@@ -11354,11 +11436,11 @@ select.payment-modal-inline-input {
   line-height: 1.05;
 }
 .payment-modal-orders-summary--methods .payment-modal-live-kpi__big-v {
-  font-size: 1.22rem; /* גדול וברור */
-  line-height: 1.12;
+  font-size: 1.05rem;
+  line-height: 1.1;
 }
 .payment-modal-orders-summary--methods .payment-modal-live-kpi--total .payment-modal-live-kpi__big-v {
-  font-size: 1.3rem;
+  font-size: 1.12rem;
 }
 .payment-modal-orders-summary--methods .payment-modal-live-kpi__convbox {
   margin-top: 3px;
@@ -11373,13 +11455,13 @@ select.payment-modal-inline-input {
 /* כרטיס "נשאר לתשלום" — קומפקטי בפס התחתון */
 .payment-modal-orders-summary--methods .payment-modal-live-kpi--order-summary {
   flex: 1.3 1 0;
-  min-width: 8.5rem;
+  min-width: 7.5rem;
 }
 .payment-modal-orders-summary--methods .payment-modal-live-kpi__hero-v {
-  font-size: 1.7rem;
+  font-size: 1.35rem;
 }
 .payment-modal-orders-summary--methods .payment-modal-live-kpi__sub {
-  font-size: 0.64rem;
+  font-size: 0.58rem;
 }
 
 .payment-modal-orders-summary-card {
@@ -28010,14 +28092,78 @@ button.adm-cash-kpi:hover {
   color: #0f172a;
   margin: 0 0 10px;
 }
+.adm-cash-maintbl__scroll {
+  overflow: auto;
+  max-height: min(62vh, 720px);
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+}
+.adm-cash-maintbl__table {
+  width: 100%;
+  min-width: 1420px;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.adm-cash-maintbl__table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: #0f172a;
+  color: #f8fafc;
+  font-weight: 800;
+  font-size: 12px;
+  padding: 12px 16px;
+  border-bottom: 2px solid #334155;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.12);
+  vertical-align: middle;
+}
+.adm-cash-maintbl__table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid #e5e7eb;
+  vertical-align: middle;
+}
+.adm-cash-col-date {
+  width: 120px;
+  min-width: 120px;
+  text-align: center !important;
+}
+.adm-cash-col-money {
+  width: 130px;
+  min-width: 130px;
+  text-align: end !important;
+}
+.adm-cash-col-count {
+  width: 100px;
+  min-width: 100px;
+  text-align: center !important;
+}
+.adm-cash-col-dev {
+  width: 100px;
+  min-width: 100px;
+  text-align: center !important;
+}
+.adm-cash-num {
+  display: block;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  text-align: end;
+}
+.adm-cash-num--muted {
+  color: #94a3b8;
+  font-weight: 600;
+}
+.adm-cash-diff--ok .adm-cash-num { color: #15803d; }
+.adm-cash-diff--small .adm-cash-num { color: #ca8a04; }
+.adm-cash-diff--severe .adm-cash-num { color: #dc2626; }
 .adm-cash-maintbl__table th,
 .adm-cash-maintbl__table td {
-  text-align: center;
   white-space: nowrap;
 }
 .adm-cash-maintbl__table th:first-child,
 .adm-cash-maintbl__table td:first-child {
-  text-align: start;
+  text-align: center;
 }
 .adm-cash-cnt-cell {
   font-weight: 700;
@@ -28027,6 +28173,9 @@ button.adm-cash-kpi:hover {
   font-weight: 800;
   background: #f1f5f9;
   border-top: 2px solid #cbd5e1;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
 }
 .adm-cash-maintbl__prof {
   color: #047857;
@@ -28044,6 +28193,502 @@ button.adm-cash-kpi:hover {
   font-weight: 800;
   cursor: pointer;
 }
+.adm-cash-devcell--ok {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #15803d;
+  cursor: default;
+}
 .adm-cash-devcell:hover {
   background: #fef3c7;
+}
+.adm-cash-dev-overview {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+.adm-cash-dev-overview--ok {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+  font-weight: 700;
+}
+.adm-cash-dev-overview__grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+@media (max-width: 1200px) {
+  .adm-cash-dev-overview__grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+.adm-cash-dev-overview__card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+}
+.adm-cash-dev-overview__card--method { border-color: #fed7aa; background: #fff7ed; }
+.adm-cash-dev-overview__card--amount { border-color: #fecaca; background: #fef2f2; }
+.adm-cash-dev-overview__lbl {
+  font-size: 11px;
+  font-weight: 700;
+  color: #64748b;
+}
+.adm-cash-dev-overview__val {
+  font-size: 18px;
+  font-weight: 800;
+  color: #0f172a;
+}
+.adm-cash-dev-detail-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
+  margin: 0 0 14px;
+  max-height: 280px;
+  overflow: auto;
+  padding: 2px;
+}
+.adm-cash-dev-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.adm-cash-dev-card.is-small { border-color: #fde68a; background: #fffbeb; }
+.adm-cash-dev-card.is-method { border-color: #fdba74; background: #fff7ed; }
+.adm-cash-dev-card.is-severe { border-color: #fca5a5; background: #fef2f2; }
+.adm-cash-dev-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.adm-cash-dev-card__tag {
+  font-size: 11px;
+  font-weight: 800;
+  color: #64748b;
+  margin-inline-start: auto;
+}
+.adm-cash-dev-card__body p {
+  margin: 0 0 4px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.adm-cash-dev-card__k {
+  font-weight: 800;
+  color: #475569;
+}
+.adm-cash-dev-card__hint {
+  font-size: 12px;
+  color: #64748b;
+}
+.adm-cash-dev-card__foot {
+  margin-top: auto;
+}
+
+/* ===================================================== */
+/* CashDetailsTable — חלונות פירוט קופה (6 חלונות)       */
+/* ===================================================== */
+.adm-cash-modal.adm-cash-modal--detail {
+  width: min(1480px, 98vw);
+  max-width: 98vw;
+  height: min(88vh, 920px);
+  max-height: 88vh;
+}
+.adm-cash-modal.adm-cash-modal--detail .adm-cash-modal__body--detail {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 16px 8px;
+}
+
+.adm-cash-details {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 12px;
+}
+
+.adm-cash-details__summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  flex-shrink: 0;
+}
+@media (max-width: 768px) {
+  .adm-cash-details__summary {
+    grid-template-columns: 1fr;
+  }
+}
+.adm-cash-details__card {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 10px 14px;
+  background: #f8fafc;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 64px;
+}
+.adm-cash-details__card-lbl {
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+}
+.adm-cash-details__card-val {
+  font-size: 20px;
+  font-weight: 800;
+  color: #0f172a;
+  font-variant-numeric: tabular-nums;
+}
+.adm-cash-details__card-val--txt {
+  font-size: 15px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adm-cash-details__empty {
+  flex: 1;
+  min-height: 200px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 12px;
+  background: #f8fafc;
+  color: #64748b;
+  font-weight: 700;
+}
+.adm-cash-details__empty p {
+  margin: 0;
+}
+
+.adm-cash-details__table-shell {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.adm-cash-details__table {
+  width: 100%;
+  min-width: 1410px;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.adm-cash-details__thead-wrap {
+  flex-shrink: 0;
+  overflow: hidden;
+  border-bottom: 2px solid #334155;
+}
+.adm-cash-details__table--head thead th {
+  background: #0f172a;
+  color: #f8fafc;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 12px 16px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.adm-cash-details__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.adm-cash-details__table--body tbody td {
+  padding: 12px 16px;
+  border-bottom: 1px solid #e5e7eb;
+  vertical-align: middle;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adm-cash-details__tfoot-wrap {
+  flex-shrink: 0;
+  border-top: 2px solid #cbd5e1;
+  background: #f1f5f9;
+  overflow: hidden;
+}
+.adm-cash-details__table--foot tfoot td {
+  padding: 12px 16px;
+  font-weight: 800;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.adm-cash-details__foot-lbl {
+  text-align: start;
+  color: #0f172a;
+  font-size: 14px;
+}
+.adm-cash-details__foot-pad {
+  padding: 0;
+}
+.adm-cash-details__foot-val {
+  font-size: 15px;
+}
+.adm-cash-details__foot-val--pos { color: #047857; }
+.adm-cash-details__foot-val--neg { color: #b91c1c; }
+.adm-cash-details__foot-val--total { color: #0f172a; }
+
+/* רוחבי עמודות קבועים */
+.adm-cash-dcol-date { width: 120px; min-width: 120px; text-align: center !important; }
+.adm-cash-dcol-ref { width: 180px; min-width: 180px; text-align: end !important; }
+.adm-cash-dcol-doc { width: 180px; min-width: 180px; text-align: end !important; }
+.adm-cash-dcol-cust { width: 220px; min-width: 220px; text-align: end !important; }
+.adm-cash-dcol-usd { width: 150px; min-width: 150px; text-align: end !important; }
+.adm-cash-dcol-ils { width: 150px; min-width: 150px; text-align: end !important; }
+.adm-cash-dcol-method { width: 160px; min-width: 160px; text-align: center !important; }
+.adm-cash-dcol-user { width: 180px; min-width: 180px; text-align: end !important; }
+.adm-cash-dcol-act { width: 70px; min-width: 70px; text-align: center !important; }
+
+.adm-cash-details__num {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+.adm-cash-details__act {
+  text-align: center;
+}
+.adm-cash-details__row {
+  cursor: pointer;
+}
+.adm-cash-details__table .adm-cash-mtag {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+@media (max-width: 1024px) {
+  .adm-cash-modal.adm-cash-modal--detail {
+    width: 98vw;
+    height: 92vh;
+  }
+  .adm-cash-details__table-shell {
+    overflow-x: auto;
+  }
+}
+
+/* ===================================================== */
+/* adm-cash-erp-table — סגנון ERP אחיד לכל טבלאות בקרת כספים */
+/* ===================================================== */
+.adm-cash-erp-table {
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+/* קו מפריד אנכי בין כל שתי עמודות */
+.adm-cash-erp-table th + th,
+.adm-cash-erp-table td + td {
+  border-inline-start: 1px solid #e5e7eb;
+}
+
+/* Header כהה — מפריד בגוון מתאים */
+.adm-cash-erp-table thead th + th {
+  border-inline-start-color: #475569;
+}
+
+.adm-cash-erp-table th,
+.adm-cash-erp-table td {
+  padding: 12px 16px;
+  vertical-align: middle;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* שורות Zebra + Hover */
+.adm-cash-erp-table tbody tr:nth-child(even) td {
+  background: #f9fafb;
+}
+.adm-cash-erp-table tbody tr:hover td {
+  background: #eff6ff;
+  transition: background-color 0.12s ease;
+}
+
+.adm-cash-erp-table tbody td {
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.adm-cash-erp-table tfoot td {
+  border-bottom: none;
+}
+.adm-cash-erp-table tfoot td + td {
+  border-inline-start: 1px solid #e5e7eb;
+}
+
+/* יישור סכומים ומספרים */
+.adm-cash-erp-table .adm-table-excel-num,
+.adm-cash-erp-table .adm-cash-num,
+.adm-cash-erp-table .adm-cash-details__num {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+/* יישור תאריך */
+.adm-cash-erp-table .adm-cash-col-date,
+.adm-cash-erp-table .adm-cash-dcol-date {
+  text-align: center !important;
+}
+
+/* יישור שמות / טקסט */
+.adm-cash-erp-table .adm-cash-dcol-ref,
+.adm-cash-erp-table .adm-cash-dcol-doc,
+.adm-cash-erp-table .adm-cash-dcol-cust,
+.adm-cash-erp-table .adm-cash-dcol-user {
+  text-align: end !important;
+}
+
+/* יישור סטטוס / badges / פעולות */
+.adm-cash-erp-table .adm-cash-dcol-method,
+.adm-cash-erp-table .adm-cash-dcol-act,
+.adm-cash-erp-table .adm-cash-col-dev,
+.adm-cash-erp-table .adm-cash-col-count,
+.adm-cash-erp-table .adm-cash-dev-status,
+.adm-cash-erp-table .adm-cash-dev-rowactions {
+  text-align: center !important;
+}
+
+/* טבלת הוצאות קופה (7 עמודות) */
+.adm-cash .adm-table-excel-wrap > .adm-cash-erp-table:not(.adm-cash-dev-tbl):not(.adm-cash-maintbl__table) thead th:nth-child(1),
+.adm-cash .adm-table-excel-wrap > .adm-cash-erp-table:not(.adm-cash-dev-tbl):not(.adm-cash-maintbl__table) tbody td:nth-child(1) {
+  text-align: center;
+  min-width: 120px;
+  width: 120px;
+}
+.adm-cash .adm-table-excel-wrap > .adm-cash-erp-table:not(.adm-cash-dev-tbl):not(.adm-cash-maintbl__table) thead th:nth-child(3),
+.adm-cash .adm-table-excel-wrap > .adm-cash-erp-table:not(.adm-cash-dev-tbl):not(.adm-cash-maintbl__table) tbody td:nth-child(3) {
+  min-width: 150px;
+  width: 150px;
+}
+.adm-cash .adm-table-excel-wrap > .adm-cash-erp-table:not(.adm-cash-dev-tbl):not(.adm-cash-maintbl__table) thead th:nth-child(4),
+.adm-cash .adm-table-excel-wrap > .adm-cash-erp-table:not(.adm-cash-dev-tbl):not(.adm-cash-maintbl__table) tbody td:nth-child(4),
+.adm-cash .adm-table-excel-wrap > .adm-cash-erp-table:not(.adm-cash-dev-tbl):not(.adm-cash-maintbl__table) thead th:nth-child(5),
+.adm-cash .adm-table-excel-wrap > .adm-cash-erp-table:not(.adm-cash-dev-tbl):not(.adm-cash-maintbl__table) tbody td:nth-child(5),
+.adm-cash .adm-table-excel-wrap > .adm-cash-erp-table:not(.adm-cash-dev-tbl):not(.adm-cash-maintbl__table) thead th:nth-child(6),
+.adm-cash .adm-table-excel-wrap > .adm-cash-erp-table:not(.adm-cash-dev-tbl):not(.adm-cash-maintbl__table) tbody td:nth-child(6) {
+  min-width: 180px;
+}
+.adm-cash .adm-table-excel-wrap > .adm-cash-erp-table:not(.adm-cash-dev-tbl):not(.adm-cash-maintbl__table) thead th:nth-child(7),
+.adm-cash .adm-table-excel-wrap > .adm-cash-erp-table:not(.adm-cash-dev-tbl):not(.adm-cash-maintbl__table) tbody td:nth-child(7) {
+  text-align: center;
+  min-width: 70px;
+  width: 70px;
+}
+
+/* טבלת יומן ספירות (Audit) */
+.adm-cash .adm-cash-section + .adm-table-excel-wrap .adm-cash-erp-table,
+.adm-cash .adm-cash-section ~ .adm-table-excel-wrap .adm-cash-erp-table {
+  min-width: 1200px;
+}
+
+/* טבלת בקרת תשלומים — הזמנות (9 עמודות) */
+.adm-cash-dev-tbl.adm-cash-erp-table {
+  min-width: 1280px;
+}
+.adm-cash-dev-tbl.adm-cash-erp-table th:nth-child(1),
+.adm-cash-dev-tbl.adm-cash-erp-table td:nth-child(1) { min-width: 180px; width: 180px; text-align: end; }
+.adm-cash-dev-tbl.adm-cash-erp-table th:nth-child(2),
+.adm-cash-dev-tbl.adm-cash-erp-table td:nth-child(2) { min-width: 220px; width: 220px; text-align: end; }
+.adm-cash-dev-tbl.adm-cash-erp-table th:nth-child(3),
+.adm-cash-dev-tbl.adm-cash-erp-table td:nth-child(3) { min-width: 120px; width: 120px; text-align: center; }
+.adm-cash-dev-tbl.adm-cash-erp-table th:nth-child(4),
+.adm-cash-dev-tbl.adm-cash-erp-table td:nth-child(4) { min-width: 160px; width: 160px; text-align: center; }
+.adm-cash-dev-tbl.adm-cash-erp-table th:nth-child(5),
+.adm-cash-dev-tbl.adm-cash-erp-table td:nth-child(5),
+.adm-cash-dev-tbl.adm-cash-erp-table th:nth-child(6),
+.adm-cash-dev-tbl.adm-cash-erp-table td:nth-child(6),
+.adm-cash-dev-tbl.adm-cash-erp-table th:nth-child(7),
+.adm-cash-dev-tbl.adm-cash-erp-table td:nth-child(7) { min-width: 150px; width: 150px; text-align: end; }
+.adm-cash-dev-tbl.adm-cash-erp-table th:nth-child(8),
+.adm-cash-dev-tbl.adm-cash-erp-table td:nth-child(8) { min-width: 140px; width: 140px; text-align: center; }
+.adm-cash-dev-tbl.adm-cash-erp-table th:nth-child(9),
+.adm-cash-dev-tbl.adm-cash-erp-table td:nth-child(9) { min-width: 180px; width: 180px; text-align: center; }
+
+/* קליטות: 7 עמודות */
+.adm-cash-dev-tbl.adm-cash-erp-table thead tr th:first-child:nth-last-child(7),
+.adm-cash-dev-tbl.adm-cash-erp-table tbody tr td:first-child:nth-last-child(7) { min-width: 180px; width: 180px; text-align: end; }
+.adm-cash-dev-tbl.adm-cash-erp-table thead tr th:first-child:nth-last-child(7) ~ th:nth-child(2),
+.adm-cash-dev-tbl.adm-cash-erp-table tbody tr td:first-child:nth-last-child(7) ~ td:nth-child(2) { min-width: 180px; width: 180px; text-align: end; }
+.adm-cash-dev-tbl.adm-cash-erp-table thead tr th:first-child:nth-last-child(7) ~ th:nth-child(3),
+.adm-cash-dev-tbl.adm-cash-erp-table tbody tr td:first-child:nth-last-child(7) ~ td:nth-child(3) { min-width: 220px; width: 220px; text-align: end; }
+.adm-cash-dev-tbl.adm-cash-erp-table thead tr th:first-child:nth-last-child(7) ~ th:nth-child(4),
+.adm-cash-dev-tbl.adm-cash-erp-table tbody tr td:first-child:nth-last-child(7) ~ td:nth-child(4) { min-width: 120px; width: 120px; text-align: center; }
+.adm-cash-dev-tbl.adm-cash-erp-table thead tr th:first-child:nth-last-child(7) ~ th:nth-child(5),
+.adm-cash-dev-tbl.adm-cash-erp-table tbody tr td:first-child:nth-last-child(7) ~ td:nth-child(5) { min-width: 160px; width: 160px; text-align: center; }
+.adm-cash-dev-tbl.adm-cash-erp-table thead tr th:first-child:nth-last-child(7) ~ th:nth-child(6),
+.adm-cash-dev-tbl.adm-cash-erp-table tbody tr td:first-child:nth-last-child(7) ~ td:nth-child(6) { min-width: 150px; width: 150px; text-align: end; }
+.adm-cash-dev-tbl.adm-cash-erp-table thead tr th:first-child:nth-last-child(7) ~ th:nth-child(7),
+.adm-cash-dev-tbl.adm-cash-erp-table tbody tr td:first-child:nth-last-child(7) ~ td:nth-child(7) { min-width: 180px; width: 180px; text-align: center; }
+
+/* Footer בקרת קופה — מפרידים + padding */
+.adm-cash-maintbl__table.adm-cash-erp-table tfoot td {
+  padding: 12px 16px;
+  font-weight: 800;
+  background: #f1f5f9;
+  border-top: 2px solid #cbd5e1;
+}
+
+/* Header כהה — padding אחיד */
+.adm-cash-erp-table thead th {
+  font-weight: 800;
+  font-size: 12px;
+}
+
+/* Empty state — ללא מפרידים פנימיים */
+.adm-cash-erp-table .adm-table-empty {
+  text-align: center;
+  padding: 28px 16px;
+  color: #64748b;
+  font-weight: 600;
+  border-inline-start: none !important;
+}
+
+.adm-cash-erp-table .adm-table-empty + td,
+.adm-cash-erp-table tr:has(.adm-table-empty) td + td {
+  border-inline-start: none;
+}
+
+.adm-cash-erp-table tr:has(.adm-table-empty) td {
+  border-inline-start: none !important;
+}
+
+/* גלילה אופקית ב-wrap */
+.adm-cash .adm-table-excel-wrap {
+  overflow-x: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
 }

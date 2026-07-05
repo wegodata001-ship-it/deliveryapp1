@@ -27,10 +27,9 @@ import {
 import { sumCustomerPaymentsUsd } from "@/lib/payment-intake-customer-kpi";
 import {
   buildPaymentAllocationPreview,
-  orderBalanceBeforeAllocation,
 } from "@/lib/payment-allocation-preview";
 import { aggregateLivePaymentFormKpis } from "@/lib/payment-intake-live-kpi";
-import { DocumentsPanel } from "@/components/admin/DocumentsPanel";
+import { PaymentDocumentRateIcons } from "@/components/admin/PaymentDocumentRateIcons";
 import { attachDraftDocumentsAction } from "@/app/admin/documents/actions";
 import {
   PAYMENT_BUCKET_LABELS,
@@ -41,7 +40,6 @@ import {
   type PaymentBucketKey,
   type PlannedBucketUsd,
 } from "@/lib/payment-breakdown-shared";
-import { PaymentAllocationPreviewPanel } from "@/components/admin/PaymentAllocationPreviewPanel";
 import { PaymentLiveSummaryCards } from "@/components/admin/PaymentLiveSummaryCards";
 import { PaymentOpenDebtDetailModal } from "@/components/admin/PaymentOpenDebtDetailModal";
 import {
@@ -695,7 +693,8 @@ export function PaymentModalUpdated({
     return matchPaymentToOrders(bases, totals.totalUsd, prioritizedSet);
   }, [bases, totals.totalUsd, prioritizedSet]);
 
-  const paymentAllocationPreview = useMemo(
+  /** לוגיקת Preview Allocation — נשמרת לשימוש עתידי; התצוגה הוסרה מהמסך */
+  const _paymentAllocationPreview = useMemo(
     () =>
       buildPaymentAllocationPreview(
         matched,
@@ -706,6 +705,7 @@ export function PaymentModalUpdated({
       ),
     [matched, totals.totalUsd, commissionPercentN, bases, prioritizedSet],
   );
+  void _paymentAllocationPreview;
 
   const weekReadonly = useMemo(() => weekCodeFromYmd(paymentDateYmd), [paymentDateYmd]);
 
@@ -2608,6 +2608,11 @@ export function PaymentModalUpdated({
                   aria-label="שער דולר"
                   readOnly={captureReadOnly}
                 />
+                <PaymentDocumentRateIcons
+                  entityType="PAYMENT"
+                  entityId={docEntityId}
+                  disabled={captureReadOnly}
+                />
                 <span className="payment-modal-rate-strip-lead payment-modal-rate-strip-lead--pct">
                   אחוז עמלה:
                 </span>
@@ -3166,11 +3171,6 @@ export function PaymentModalUpdated({
                         const isCommissionResetPreview = commissionResetIds.includes(row.id);
                         const commissionUsd = Number(row.commissionUsd);
                         const ledgerBal = isCommissionResetPreview ? 0 : orderRowLedgerBalance(row);
-                        const balanceBefore = orderBalanceBeforeAllocation(row);
-                        const showBalancePreview =
-                          paymentAllocationPreview.show &&
-                          !isCommissionResetPreview &&
-                          (balanceBefore > 0.02 || row.allocationUsd > 0.02);
                         const commissionPreviewPlan = isCommissionResetPreview
                           ? planCommissionDebtClosureFromNumbers({
                               commissionUsd: Number(
@@ -3196,9 +3196,6 @@ export function PaymentModalUpdated({
                             "payment-modal-tr--clickable",
                             ledgerRowClass(ledgerSt),
                             isCommissionResetPreview ? "payment-modal-tr--commission-closure" : "",
-                            showBalancePreview && row.allocationUsd > 0.02
-                              ? "payment-modal-tr--alloc-preview"
-                              : "",
                           ]
                             .filter(Boolean)
                             .join(" ")}
@@ -3294,31 +3291,11 @@ export function PaymentModalUpdated({
                             className={[
                               "pm-num pm-num--total-usd",
                               `pm-num--bal-${ledgerSt}`,
-                              showBalancePreview ? "pm-num--bal-alloc-preview" : "",
                             ]
                               .filter(Boolean)
                               .join(" ")}
                           >
-                            {showBalancePreview ? (
-                              <div className="pm-balance-alloc-preview" aria-label="תצוגת הקצאה לפני שמירה">
-                                <div className="pm-balance-alloc-preview__row">
-                                  <span className="pm-balance-alloc-preview__k">לפני</span>
-                                  <span className="pm-balance-alloc-preview__v">{fmtUsdDisplay(balanceBefore)}</span>
-                                </div>
-                                {row.allocationUsd > 0.02 ? (
-                                  <div className="pm-balance-alloc-preview__row pm-balance-alloc-preview__row--alloc">
-                                    <span className="pm-balance-alloc-preview__k">מוקצה</span>
-                                    <span className="pm-balance-alloc-preview__v">{fmtUsdDisplay(row.allocationUsd)}</span>
-                                  </div>
-                                ) : null}
-                                <div className="pm-balance-alloc-preview__row pm-balance-alloc-preview__row--after">
-                                  <span className="pm-balance-alloc-preview__k">אחרי</span>
-                                  <strong className="pm-balance-alloc-preview__v">{fmtUsdDisplay(ledgerBal)}</strong>
-                                </div>
-                              </div>
-                            ) : (
-                              fmtUsdDisplay(ledgerBal)
-                            )}
+                            {fmtUsdDisplay(ledgerBal)}
                           </td>
                           <td dir="ltr" className="payment-modal-td-date">
                             {row.lastPaymentDateYmd ?? "—"}
@@ -3520,18 +3497,6 @@ export function PaymentModalUpdated({
                     );
                   })}
                 </div>
-
-                {customer ? <PaymentAllocationPreviewPanel preview={paymentAllocationPreview} /> : null}
-
-                {customer ? (
-                  <DocumentsPanel
-                    key={docEntityId}
-                    entityType="PAYMENT"
-                    entityId={docEntityId}
-                    title="מסמכים מצורפים"
-                    selfResolvePermissions
-                  />
-                ) : null}
 
               </div>
             </div>

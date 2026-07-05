@@ -14,12 +14,14 @@ import {
   listCashCountsAction,
   listCashDetailAction,
   listCashExpensesAction,
+  listMethodDeviationsAction,
   saveCashCountAction,
   saveCashExpenseAction,
   type CashCountRow,
   type CashDashboard,
   type CashDetailPayload,
   type CashDetailRow,
+  type CashMethodDeviationPayload,
   type PaymentsControlOrderRow,
   type PaymentsControlPayload,
   type PaymentsControlReceiptRow,
@@ -29,6 +31,7 @@ import {
   type CashCurrency,
   type CashExpenseReason,
 } from "@/app/admin/cash-control/constants";
+import { CashDetailsTable, CashMethodTag, type CashDetailsVariant } from "@/components/admin/CashDetailsTable";
 
 type ExpenseRow = Awaited<ReturnType<typeof listCashExpensesAction>>[number];
 
@@ -64,11 +67,134 @@ function signed(currency: CashCurrency, s: string | null | undefined): string {
   return n > 0 ? `+${body}` : body;
 }
 
+
+type DeviationSeverity = "ok" | "small" | "method" | "severe";
+
 function diffTone(s: string | null | undefined): "pos" | "neg" | "zero" {
   const n = num(s);
   if (n > 0.001) return "pos";
   if (n < -0.001) return "neg";
   return "zero";
+}
+
+function amountDeviationSeverity(missingUsd: number): "ok" | "small" | "severe" {
+  if (missingUsd <= 0.02) return "ok";
+  if (missingUsd <= 10) return "small";
+  return "severe";
+}
+
+function aggregateControlByDay(payload: PaymentsControlPayload | null) {
+  const ordersUsdByDay = new Map<string, number>();
+  const intakeUsdByDay = new Map<string, number>();
+  if (payload) {
+    for (const o of payload.orders) {
+      if (!o.dateYmd || o.dateYmd === "—") continue;
+      ordersUsdByDay.set(o.dateYmd, (ordersUsdByDay.get(o.dateYmd) ?? 0) + num(o.requiredUsd));
+    }
+    for (const r of payload.receipts) {
+      if (!r.dateYmd || r.dateYmd === "—") continue;
+      intakeUsdByDay.set(r.dateYmd, (intakeUsdByDay.get(r.dateYmd) ?? 0) + num(r.amountUsd));
+    }
+  }
+  return { ordersUsdByDay, intakeUsdByDay };
+}
+
+type DeviationDisplayItem =
+  | {
+      kind: "method";
+      severity: "method";
+      orderNumber: string;
+      orderId: string;
+      customerId: string | null;
+      plannedLabel: string;
+      actualLabel: string;
+      amountUsd: string;
+    }
+  | {
+      kind: "amount";
+      severity: "small" | "severe";
+      orderNumber: string;
+      orderId: string;
+      customerId: string | null;
+      requiredUsd: string;
+      receivedUsd: string;
+      missingUsd: string;
+    }
+  | {
+      kind: "orphan_receipt";
+      severity: "severe";
+      paymentCode: string | null;
+      paymentId: string;
+      customerId: string | null;
+      amountUsd: string;
+    };
+
+function buildDeviationDisplayItems(
+  pc: PaymentsControlPayload | null,
+  methodDev: CashMethodDeviationPayload | null,
+): DeviationDisplayItem[] {
+  const items: DeviationDisplayItem[] = [];
+  for (const r of methodDev?.rows ?? []) {
+    items.push({
+      kind: "method",
+      severity: "method",
+      orderNumber: r.orderNumber ?? "—",
+      orderId: r.orderId,
+      customerId: r.customerId,
+      plannedLabel: r.plannedLabel,
+      actualLabel: r.actualLabel,
+      amountUsd: r.deviationUsd,
+    });
+  }
+  for (const o of pc?.orders ?? []) {
+    const missing = num(o.missingUsd);
+    if (missing <= 0.02 || o.hasDeviation) continue;
+    const sev = amountDeviationSeverity(missing);
+    if (sev === "ok") continue;
+    items.push({
+      kind: "amount",
+      severity: sev,
+      orderNumber: o.orderNumber ?? "—",
+      orderId: o.orderId,
+      customerId: o.customerId,
+      requiredUsd: o.requiredUsd,
+      receivedUsd: o.receivedUsd,
+      missingUsd: o.missingUsd,
+    });
+  }
+  for (const r of pc?.receipts ?? []) {
+    if (r.orderId) continue;
+    items.push({
+      kind: "orphan_receipt",
+      severity: "severe",
+      paymentCode: r.paymentCode,
+      paymentId: r.paymentId,
+      customerId: r.customerId,
+      amountUsd: r.amountUsd,
+    });
+  }
+  return items;
+}
+
+function deviationSummaryStats(
+  pc: PaymentsControlPayload | null,
+  methodDev: CashMethodDeviationPayload | null,
+  items: DeviationDisplayItem[],
+) {
+  const methodCount = methodDev?.count ?? 0;
+  const amountCount = items.filter((i) => i.kind === "amount").length;
+  const unpaidOrders = (pc?.orders ?? []).filter((o) => num(o.missingUsd) > 0.02).length;
+  const orphanReceipts = (pc?.receipts ?? []).filter((r) => !r.orderId).length;
+  const amountMissingTotal = (pc?.orders ?? []).reduce((s, o) => s + num(o.missingUsd), 0);
+  return {
+    totalCount: items.length,
+    methodCount,
+    amountCount,
+    amountMissingTotal,
+    unpaidOrders,
+    orphanReceipts,
+    deviationUsd: num(pc?.totals.deviationUsd),
+  };
 }
 
 function fmtDateTime(iso: string): string {
@@ -106,6 +232,8 @@ export function CashControlClient({ isAdmin, initialWeek }: { isAdmin: boolean; 
   const [exporting, setExporting] = useState<"pdf" | "excel" | null>(null);
   const [devOpen, setDevOpen] = useState(false);
   const [devPayload, setDevPayload] = useState<PaymentsControlPayload | null>(null);
+  const [methodDevPayload, setMethodDevPayload] = useState<CashMethodDeviationPayload | null>(null);
+  const [pcPayload, setPcPayload] = useState<PaymentsControlPayload | null>(null);
   const [devTab, setDevTab] = useState<PaymentsControlTab>("required");
 
   async function openDeviations() {
@@ -166,10 +294,18 @@ export function CashControlClient({ isAdmin, initialWeek }: { isAdmin: boolean; 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    void Promise.all([getCashDashboardAction(week), listCashExpensesAction(week)]).then(([d, e]) => {
+    void Promise.all([
+      getCashDashboardAction(week),
+      listCashExpensesAction(week),
+      getPaymentsControlAction(week),
+      listMethodDeviationsAction(week),
+    ]).then(([d, e, pc, md]) => {
       if (cancelled) return;
       setDash(d);
       setExpenses(e);
+      setPcPayload(pc);
+      setMethodDevPayload(md);
+      setDevPayload(pc);
       setLoading(false);
     });
     return () => {
@@ -187,19 +323,21 @@ export function CashControlClient({ isAdmin, initialWeek }: { isAdmin: boolean; 
     opts: { day?: string; mode?: DetailMode } = {},
   ) {
     const { day, mode = "all" } = opts;
-    const curLabel = currency === "ILS" ? "ש״ח" : "דולר";
+    const curLabel = currency === "ILS" ? "₪" : "דולר";
     const baseTitle =
       mode === "expenses"
-        ? `הוצאות קופה ${curLabel}`
-        : mode === "variance"
-          ? `הרכב הפער ${curLabel}`
-          : `קופת ${curLabel}`;
+        ? `הוצאות ${curLabel}`
+        : mode === "receipts"
+          ? `התקבל ${curLabel}`
+          : mode === "variance"
+            ? `הרכב הפער ${currency === "ILS" ? "ש״ח" : "דולר"}`
+            : `קופת ${curLabel}`;
     setDetailMode(mode);
     setDetailCtx({
       counted: currency === "ILS" ? dash?.countedIls ?? null : dash?.countedUsd ?? null,
       diff: currency === "ILS" ? dash?.diffIls ?? null : dash?.diffUsd ?? null,
     });
-    setDetailTitle(`${baseTitle} - ${day ? fmtDate(day) : week}`);
+    setDetailTitle(`${baseTitle} – ${day ? fmtDate(day) : week}`);
     setDetail({ currency, rows: [], receipts: "0.00", expenses: "0.00", total: "0.00" });
     if (mode === "variance") {
       setDetailCounts([]);
@@ -270,11 +408,11 @@ export function CashControlClient({ isAdmin, initialWeek }: { isAdmin: boolean; 
 
       <div className="adm-cash-kpibar" aria-busy={loading}>
         <button type="button" className="adm-cash-kchip adm-cash-kchip--rec" onClick={() => void openDetail("USD", { mode: "receipts" })}>
-          <span className="adm-cash-kchip__lbl">קבלות $</span>
+          <span className="adm-cash-kchip__lbl">קליטות $</span>
           <strong className="adm-cash-kchip__val" dir="ltr">{usd(dash?.receiptsUsd)}</strong>
         </button>
         <button type="button" className="adm-cash-kchip adm-cash-kchip--rec" onClick={() => void openDetail("ILS", { mode: "receipts" })}>
-          <span className="adm-cash-kchip__lbl">קבלות ₪</span>
+          <span className="adm-cash-kchip__lbl">קליטות ₪</span>
           <strong className="adm-cash-kchip__val" dir="ltr">{ils(dash?.receiptsIls)}</strong>
         </button>
         <button type="button" className="adm-cash-kchip adm-cash-kchip--exp" onClick={() => void openDetail("USD", { mode: "expenses" })}>
@@ -295,9 +433,9 @@ export function CashControlClient({ isAdmin, initialWeek }: { isAdmin: boolean; 
         </button>
         <button
           type="button"
-          className={`adm-cash-kchip adm-cash-kchip--dev ${dash && dash.methodDeviations > 0 ? "is-warn" : ""}`}
+          className={`adm-cash-kchip adm-cash-kchip--dev ${dash && (dash.methodDeviations > 0 || (pcPayload && buildDeviationDisplayItems(pcPayload, methodDevPayload).length > 0)) ? "is-warn" : ""}`}
           onClick={() => void openDeviations()}
-          disabled={!dash || dash.methodDeviations === 0}
+          disabled={!dash}
         >
           <span className="adm-cash-kchip__lbl">חריגות</span>
           <strong className="adm-cash-kchip__val">{dash?.methodDeviations ?? 0}</strong>
@@ -317,8 +455,11 @@ export function CashControlClient({ isAdmin, initialWeek }: { isAdmin: boolean; 
       <CashControlTable
         week={week}
         dash={dash}
+        pcPayload={pcPayload}
+        methodDevPayload={methodDevPayload}
         onOpen={openDetail}
         onOpenDeviations={() => void openDeviations()}
+        onOpenIntake={(customerId, orderId) => openIntakeFor(customerId, orderId)}
       />
 
       <div className="adm-cash-section">
@@ -329,7 +470,7 @@ export function CashControlClient({ isAdmin, initialWeek }: { isAdmin: boolean; 
           </button>
         </div>
         <div className="adm-table-excel-wrap">
-          <table className="adm-table-excel">
+          <table className="adm-table-excel adm-cash-erp-table">
             <thead>
               <tr>
                 <th>תאריך</th>
@@ -540,7 +681,7 @@ function PaymentsControlOrdersTable({
         : "אין הזמנות לשבוע זה.";
   return (
     <div className="adm-table-excel-wrap">
-      <table className="adm-table-excel adm-cash-dev-tbl">
+      <table className="adm-table-excel adm-cash-dev-tbl adm-cash-erp-table">
         <thead>
           <tr>
             <th>הזמנה</th>
@@ -610,7 +751,7 @@ function PaymentsControlReceiptsTable({
 }) {
   return (
     <div className="adm-table-excel-wrap">
-      <table className="adm-table-excel adm-cash-dev-tbl">
+      <table className="adm-table-excel adm-cash-dev-tbl adm-cash-erp-table">
         <thead>
           <tr>
             <th>קוד קליטה</th>
@@ -657,30 +798,186 @@ function PaymentsControlReceiptsTable({
   );
 }
 
+function CashDeviationSummaryPanel({ stats }: { stats: ReturnType<typeof deviationSummaryStats> }) {
+  if (stats.totalCount === 0) {
+    return (
+      <div className="adm-cash-dev-overview adm-cash-dev-overview--ok" role="status">
+        <span className="adm-cash-dev-overview__icon" aria-hidden>🟢</span>
+        <span>אין חריגות בשבוע — כל הקליטות תואמות להזמנות.</span>
+      </div>
+    );
+  }
+  return (
+    <div className="adm-cash-dev-overview" role="region" aria-label="סיכום חריגות">
+      <div className="adm-cash-dev-overview__grid">
+        <div className="adm-cash-dev-overview__card">
+          <span className="adm-cash-dev-overview__lbl">מספר חריגות</span>
+          <strong className="adm-cash-dev-overview__val">{stats.totalCount}</strong>
+        </div>
+        <div className="adm-cash-dev-overview__card">
+          <span className="adm-cash-dev-overview__lbl">סכום חריגות (חסר)</span>
+          <strong className="adm-cash-dev-overview__val" dir="ltr">{usd(String(stats.amountMissingTotal))}</strong>
+        </div>
+        <div className="adm-cash-dev-overview__card adm-cash-dev-overview__card--method">
+          <span className="adm-cash-dev-overview__lbl">חריגות סוג תשלום</span>
+          <strong className="adm-cash-dev-overview__val">{stats.methodCount}</strong>
+        </div>
+        <div className="adm-cash-dev-overview__card adm-cash-dev-overview__card--amount">
+          <span className="adm-cash-dev-overview__lbl">חריגות סכום</span>
+          <strong className="adm-cash-dev-overview__val">{stats.amountCount}</strong>
+        </div>
+        <div className="adm-cash-dev-overview__card">
+          <span className="adm-cash-dev-overview__lbl">הזמנות ללא קליטה</span>
+          <strong className="adm-cash-dev-overview__val">{stats.unpaidOrders}</strong>
+        </div>
+        <div className="adm-cash-dev-overview__card">
+          <span className="adm-cash-dev-overview__lbl">קליטות ללא הזמנה</span>
+          <strong className="adm-cash-dev-overview__val">{stats.orphanReceipts}</strong>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const DEV_SEVERITY_META: Record<
+  Exclude<DeviationSeverity, "ok">,
+  { icon: string; cls: string; title: string }
+> = {
+  small: { icon: "🟡", cls: "is-small", title: "הפרש קטן" },
+  method: { icon: "🟠", cls: "is-method", title: "סוג תשלום שונה" },
+  severe: { icon: "🔴", cls: "is-severe", title: "הפרש כספי משמעותי" },
+};
+
+function CashDeviationDetailList({
+  items,
+  onOpenIntake,
+}: {
+  items: DeviationDisplayItem[];
+  onOpenIntake: (customerId: string | null, orderId: string | null) => void;
+}) {
+  if (items.length === 0) return null;
+  return (
+    <div className="adm-cash-dev-detail-list" role="list" aria-label="פירוט חריגות">
+      {items.map((item, idx) => {
+        if (item.kind === "method") {
+          const meta = DEV_SEVERITY_META.method;
+          return (
+            <article key={`m-${item.orderId}-${idx}`} className={`adm-cash-dev-card ${meta.cls}`} role="listitem">
+              <header className="adm-cash-dev-card__head">
+                <span className="adm-cash-dev-card__icon" aria-hidden>{meta.icon}</span>
+                <strong dir="ltr">הזמנה {item.orderNumber}</strong>
+                <span className="adm-cash-dev-card__tag">{meta.title}</span>
+              </header>
+              <div className="adm-cash-dev-card__body">
+                <p><span className="adm-cash-dev-card__k">סוג תשלום בהזמנה:</span> {item.plannedLabel}</p>
+                <p><span className="adm-cash-dev-card__k">בפועל נקלט:</span> {item.actualLabel}</p>
+                <p className="adm-cash-dev-card__hint">סטטוס: לא תואם אמצעי תשלום</p>
+              </div>
+              <footer className="adm-cash-dev-card__foot">
+                <button type="button" className="adm-cash-dev-minibtn adm-cash-dev-minibtn--primary" onClick={() => onOpenIntake(item.customerId, item.orderId)}>
+                  קליטת תשלום
+                </button>
+              </footer>
+            </article>
+          );
+        }
+        if (item.kind === "amount") {
+          const meta = DEV_SEVERITY_META[item.severity];
+          return (
+            <article key={`a-${item.orderId}-${idx}`} className={`adm-cash-dev-card ${meta.cls}`} role="listitem">
+              <header className="adm-cash-dev-card__head">
+                <span className="adm-cash-dev-card__icon" aria-hidden>{meta.icon}</span>
+                <strong dir="ltr">הזמנה {item.orderNumber}</strong>
+                <span className="adm-cash-dev-card__tag">{meta.title}</span>
+              </header>
+              <div className="adm-cash-dev-card__body">
+                <p><span className="adm-cash-dev-card__k">אמור להתקבל:</span> <span dir="ltr">{usd(item.requiredUsd)}</span></p>
+                <p><span className="adm-cash-dev-card__k">נקלט:</span> <span dir="ltr">{usd(item.receivedUsd)}</span></p>
+                <p><span className="adm-cash-dev-card__k">הפרש:</span> <strong dir="ltr">{usd(item.missingUsd)}</strong></p>
+              </div>
+              <footer className="adm-cash-dev-card__foot">
+                <button type="button" className="adm-cash-dev-minibtn adm-cash-dev-minibtn--primary" onClick={() => onOpenIntake(item.customerId, item.orderId)}>
+                  קליטת תשלום
+                </button>
+              </footer>
+            </article>
+          );
+        }
+        const meta = DEV_SEVERITY_META.severe;
+        return (
+          <article key={`o-${item.paymentId}-${idx}`} className={`adm-cash-dev-card ${meta.cls}`} role="listitem">
+            <header className="adm-cash-dev-card__head">
+              <span className="adm-cash-dev-card__icon" aria-hidden>{meta.icon}</span>
+              <strong dir="ltr">קליטה {item.paymentCode ?? item.paymentId.slice(0, 8)}</strong>
+              <span className="adm-cash-dev-card__tag">קליטה ללא הזמנה</span>
+            </header>
+            <div className="adm-cash-dev-card__body">
+              <p><span className="adm-cash-dev-card__k">סכום:</span> <span dir="ltr">{usd(item.amountUsd)}</span></p>
+              <p className="adm-cash-dev-card__hint">קליטת תשלום שאינה משויכת להזמנה בשבוע.</p>
+            </div>
+            <footer className="adm-cash-dev-card__foot">
+              <button type="button" className="adm-cash-dev-minibtn adm-cash-dev-minibtn--primary" onClick={() => onOpenIntake(item.customerId, null)}>
+                קליטת תשלום
+              </button>
+            </footer>
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
 function CashControlTable({
   week,
   dash,
+  pcPayload,
+  methodDevPayload,
   onOpen,
   onOpenDeviations,
+  onOpenIntake,
 }: {
   week: string;
   dash: CashDashboard | null;
+  pcPayload: PaymentsControlPayload | null;
+  methodDevPayload: CashMethodDeviationPayload | null;
   onOpen: (currency: CashCurrency, opts?: { day?: string; mode?: DetailMode }) => void;
   onOpenDeviations: () => void;
+  onOpenIntake: (customerId: string | null, orderId: string | null) => void;
 }) {
   const days = dash?.days ?? [];
-
-  // יתרה מצטברת (רצה) ל-$ ול-₪
-  let balUsd = 0;
-  let balIls = 0;
-  const rows = days.map((d) => {
-    balUsd += num(d.receiptsUsd) - num(d.expensesUsd);
-    balIls += num(d.receiptsIls) - num(d.expensesIls);
-    return { ...d, balUsd, balIls };
-  });
+  const { ordersUsdByDay, intakeUsdByDay } = useMemo(() => aggregateControlByDay(pcPayload), [pcPayload]);
+  const deviationItems = useMemo(
+    () => buildDeviationDisplayItems(pcPayload, methodDevPayload),
+    [pcPayload, methodDevPayload],
+  );
+  const devStats = useMemo(
+    () => deviationSummaryStats(pcPayload, methodDevPayload, deviationItems),
+    [pcPayload, methodDevPayload, deviationItems],
+  );
+  const devByDay = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const item of deviationItems) {
+      let dk: string | null = null;
+      if (item.kind === "method") {
+        const row = methodDevPayload?.rows.find((r) => r.orderId === item.orderId);
+        dk = row?.dateKey ?? null;
+      } else if (item.kind === "amount") {
+        const o = pcPayload?.orders.find((x) => x.orderId === item.orderId);
+        dk = o?.dateYmd && o.dateYmd !== "—" ? o.dateYmd : null;
+      }
+      if (!dk) continue;
+      m.set(dk, (m.get(dk) ?? 0) + 1);
+    }
+    for (const d of days) {
+      if (!m.has(d.date)) m.set(d.date, d.deviations);
+    }
+    return m;
+  }, [deviationItems, methodDevPayload, pcPayload, days]);
 
   const totalReceiptsCount = days.reduce((s, d) => s + d.receiptsCount, 0);
-  const totalDeviations = days.reduce((s, d) => s + d.deviations, 0);
+  const totalOrdersUsd = pcPayload ? num(pcPayload.totals.requiredUsd) : 0;
+  const totalIntakeUsd = pcPayload ? num(pcPayload.totals.receivedUsd) : 0;
+  const totalDiffUsd = totalOrdersUsd - totalIntakeUsd;
 
   const cell = (
     value: string | null | undefined,
@@ -690,7 +987,7 @@ function CashControlTable({
     mode: DetailMode,
     extraCls = "",
   ) => (
-    <td>
+    <td className="adm-cash-col-money">
       <button
         type="button"
         className={`adm-cash-cellbtn ${num(value) > 0 ? extraCls : "adm-cash-cell--zero"}`}
@@ -701,72 +998,97 @@ function CashControlTable({
     </td>
   );
 
+  const diffToneClass = (diff: number) => {
+    if (Math.abs(diff) <= 0.02) return "adm-cash-diff--ok";
+    if (Math.abs(diff) <= 10) return "adm-cash-diff--small";
+    return "adm-cash-diff--severe";
+  };
+
   return (
     <section className="adm-cash-maintbl">
       <h2 className="adm-cash-maintbl__title">
         <Coins size={18} aria-hidden /> טבלת בקרת קופה — {week}
       </h2>
-      <div className="adm-table-excel-wrap">
-        <table className="adm-table-excel adm-cash-maintbl__table">
+
+      <CashDeviationSummaryPanel stats={devStats} />
+      <CashDeviationDetailList items={deviationItems} onOpenIntake={onOpenIntake} />
+
+      <div className="adm-cash-maintbl__scroll">
+        <table className="adm-table-excel adm-cash-maintbl__table adm-cash-erp-table">
           <thead>
             <tr>
-              <th>תאריך</th>
-              <th>קבלות $</th>
-              <th>קבלות ₪</th>
-              <th>הוצאות $</th>
-              <th>הוצאות ₪</th>
-              <th>יתרה $</th>
-              <th>יתרה ₪</th>
-              <th>מס׳ קבלות</th>
-              <th>חריגות</th>
+              <th className="adm-cash-col-date">תאריך</th>
+              <th className="adm-cash-col-money">סכום הזמנות ($)</th>
+              <th className="adm-cash-col-money">סכום הזמנות (₪)</th>
+              <th className="adm-cash-col-money">קליטות תשלום ($)</th>
+              <th className="adm-cash-col-money">קליטות תשלום (₪)</th>
+              <th className="adm-cash-col-money">הוצאות $</th>
+              <th className="adm-cash-col-money">הוצאות ₪</th>
+              <th className="adm-cash-col-money">הפרש יומי ($)</th>
+              <th className="adm-cash-col-money">הפרש יומי (₪)</th>
+              <th className="adm-cash-col-count">מס׳ קליטות</th>
+              <th className="adm-cash-col-dev">חריגות</th>
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 ? (
-              <tr><td colSpan={9} className="adm-table-empty">אין תנועות מזומן לשבוע זה.</td></tr>
+            {days.length === 0 ? (
+              <tr><td colSpan={11} className="adm-table-empty">אין תנועות לשבוע זה.</td></tr>
             ) : (
-              rows.map((d) => (
-                <tr key={d.date} className="adm-table-excel-row">
-                  <td className="adm-cash-day__date" dir="ltr">{fmtDate(d.date)}</td>
-                  {cell(d.receiptsUsd, usd, "USD", d.date, "receipts", "adm-cash-c-rec")}
-                  {cell(d.receiptsIls, ils, "ILS", d.date, "receipts", "adm-cash-c-rec")}
-                  {cell(d.expensesUsd, usd, "USD", d.date, "expenses", "adm-cash-c-exp")}
-                  {cell(d.expensesIls, ils, "ILS", d.date, "expenses", "adm-cash-c-exp")}
-                  <td>
-                    <button type="button" className="adm-cash-cellbtn adm-cash-c-expd" onClick={() => onOpen("USD", { day: d.date, mode: "all" })}>
-                      {usd(String(d.balUsd))}
-                    </button>
-                  </td>
-                  <td>
-                    <button type="button" className="adm-cash-cellbtn adm-cash-c-expd" onClick={() => onOpen("ILS", { day: d.date, mode: "all" })}>
-                      {ils(String(d.balIls))}
-                    </button>
-                  </td>
-                  <td dir="ltr" className="adm-cash-cnt-cell">{d.receiptsCount}</td>
-                  <td>
-                    {d.deviations > 0 ? (
-                      <button type="button" className="adm-cash-devcell" onClick={onOpenDeviations} title="לפירוט החריגה">
-                        <AlertTriangle size={13} aria-hidden /> {d.deviations}
-                      </button>
-                    ) : (
-                      <span className="adm-cash-cell--zero">0</span>
-                    )}
-                  </td>
-                </tr>
-              ))
+              days.map((d) => {
+                const ordersUsd = ordersUsdByDay.get(d.date) ?? 0;
+                const intakeUsd = intakeUsdByDay.get(d.date) ?? 0;
+                const intakeIls = num(d.receiptsIls);
+                const diffUsd = ordersUsd - intakeUsd;
+                const dayDevCount = devByDay.get(d.date) ?? d.deviations;
+                return (
+                  <tr key={d.date} className="adm-table-excel-row">
+                    <td className="adm-cash-col-date" dir="ltr">{fmtDate(d.date)}</td>
+                    <td className="adm-cash-col-money" dir="ltr">
+                      <span className="adm-cash-num">{ordersUsd > 0 ? usd(String(ordersUsd)) : "—"}</span>
+                    </td>
+                    <td className="adm-cash-col-money" dir="ltr"><span className="adm-cash-num adm-cash-num--muted">—</span></td>
+                    <td className="adm-cash-col-money" dir="ltr">
+                      <span className="adm-cash-num">{intakeUsd > 0 ? usd(String(intakeUsd)) : "—"}</span>
+                    </td>
+                    <td className="adm-cash-col-money" dir="ltr">
+                      <span className="adm-cash-num">{intakeIls > 0 ? ils(String(intakeIls)) : "—"}</span>
+                    </td>
+                    {cell(d.expensesUsd, usd, "USD", d.date, "expenses", "adm-cash-c-exp")}
+                    {cell(d.expensesIls, ils, "ILS", d.date, "expenses", "adm-cash-c-exp")}
+                    <td className={`adm-cash-col-money ${diffToneClass(diffUsd)}`} dir="ltr">
+                      <span className="adm-cash-num">{Math.abs(diffUsd) > 0.001 ? usd(String(diffUsd)) : "🟢 0"}</span>
+                    </td>
+                    <td className="adm-cash-col-money" dir="ltr">
+                      <span className="adm-cash-num adm-cash-num--muted">—</span>
+                    </td>
+                    <td className="adm-cash-col-count" dir="ltr">{d.receiptsCount}</td>
+                    <td className="adm-cash-col-dev">
+                      {dayDevCount > 0 ? (
+                        <button type="button" className="adm-cash-devcell" onClick={onOpenDeviations} title="לפירוט החריגות">
+                          <AlertTriangle size={13} aria-hidden /> {dayDevCount}
+                        </button>
+                      ) : (
+                        <span className="adm-cash-devcell adm-cash-devcell--ok" title="תקין">🟢 0</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
           <tfoot>
             <tr className="adm-cash-maintbl__foot">
-              <td>סה״כ {week}</td>
-              <td dir="ltr">{usd(dash?.receiptsUsd)}</td>
-              <td dir="ltr">{ils(dash?.receiptsIls)}</td>
-              <td dir="ltr">{usd(dash?.expensesUsd)}</td>
-              <td dir="ltr">{ils(dash?.expensesIls)}</td>
-              <td dir="ltr" className="adm-cash-maintbl__prof">{usd(dash?.expectedUsd)}</td>
-              <td dir="ltr" className="adm-cash-maintbl__prof">{ils(dash?.expectedIls)}</td>
-              <td dir="ltr">{totalReceiptsCount}</td>
-              <td dir="ltr">{totalDeviations}</td>
+              <td className="adm-cash-col-date">סה״כ {week}</td>
+              <td className="adm-cash-col-money" dir="ltr">{totalOrdersUsd > 0 ? usd(String(totalOrdersUsd)) : "—"}</td>
+              <td className="adm-cash-col-money" dir="ltr">—</td>
+              <td className="adm-cash-col-money" dir="ltr">{totalIntakeUsd > 0 ? usd(String(totalIntakeUsd)) : "—"}</td>
+              <td className="adm-cash-col-money" dir="ltr">{num(dash?.receiptsIls) > 0 ? ils(dash?.receiptsIls) : "—"}</td>
+              <td className="adm-cash-col-money" dir="ltr">{usd(dash?.expensesUsd)}</td>
+              <td className="adm-cash-col-money" dir="ltr">{ils(dash?.expensesIls)}</td>
+              <td className={`adm-cash-col-money ${diffToneClass(totalDiffUsd)}`} dir="ltr">{usd(String(totalDiffUsd))}</td>
+              <td className="adm-cash-col-money" dir="ltr">—</td>
+              <td className="adm-cash-col-count" dir="ltr">{totalReceiptsCount}</td>
+              <td className="adm-cash-col-dev" dir="ltr">{devStats.totalCount}</td>
             </tr>
           </tfoot>
         </table>
@@ -856,7 +1178,7 @@ function AuditTable({ rows, isAdmin, onChanged }: { rows: CashCountRow[]; isAdmi
         <h2>יומן ספירות קופה</h2>
       </div>
       <div className="adm-table-excel-wrap">
-        <table className="adm-table-excel">
+        <table className="adm-table-excel adm-cash-erp-table">
           <thead>
             <tr>
               <th>תאריך</th>
@@ -1043,22 +1365,6 @@ function ExpenseModal({ week, onClose, onSaved }: { week: string; onClose: () =>
   );
 }
 
-const CASH_METHOD_TAG_CLASS: Record<NonNullable<CashDetailRow["methodBucket"]>, string> = {
-  CASH: "adm-cash-mtag--cash",
-  BANK_TRANSFER: "adm-cash-mtag--bank",
-  CREDIT: "adm-cash-mtag--credit",
-  CHECK: "adm-cash-mtag--check",
-  OTHER: "adm-cash-mtag--other",
-};
-
-function CashMethodTag({ row }: { row: CashDetailRow }) {
-  if (row.kind === "EXPENSE") {
-    return <span className="adm-cash-mtag adm-cash-mtag--other">{row.reasonLabel ?? "הוצאה"}</span>;
-  }
-  const cls = row.methodBucket ? CASH_METHOD_TAG_CLASS[row.methodBucket] : "adm-cash-mtag--other";
-  return <span className={`adm-cash-mtag ${cls}`}>{row.methodLabel ?? "מזומן"}</span>;
-}
-
 function DetailModal({
   payload,
   title,
@@ -1085,17 +1391,13 @@ function DetailModal({
       : mode === "expenses"
         ? payload.rows.filter((r) => r.kind === "EXPENSE")
         : payload.rows;
-
-  const receiptRows = rows.filter((r) => r.kind === "RECEIPT");
-  const sumUsd = receiptRows.reduce((s, r) => s + num(r.amountUsd), 0);
-  const sumIls = receiptRows.reduce((s, r) => s + num(r.amountIls), 0);
-  const users = Array.from(new Set(receiptRows.map((r) => r.userName).filter(Boolean))) as string[];
-  const userLabel = users.length === 0 ? "—" : users.length === 1 ? users[0] : `${users.length} משתמשים`;
   const isVariance = mode === "variance";
+  const tableVariant: CashDetailsVariant =
+    mode === "receipts" ? "receipts" : mode === "expenses" ? "expenses" : "all";
 
   return (
     <div className="adm-cash-modal-backdrop" onClick={onClose}>
-      <div className="adm-cash-modal adm-cash-modal--xl" dir="rtl" onClick={(e) => e.stopPropagation()}>
+      <div className="adm-cash-modal adm-cash-modal--xl adm-cash-modal--detail" dir="rtl" onClick={(e) => e.stopPropagation()}>
         <div className="adm-cash-modal__head">
           <h3>
             {c === "ILS" ? <Coins size={16} aria-hidden /> : <DollarSign size={16} aria-hidden />}
@@ -1103,134 +1405,23 @@ function DetailModal({
           </h3>
           <button type="button" className="adm-icon-btn" onClick={onClose}><X size={16} /></button>
         </div>
-        <div className="adm-cash-modal__body">
+        <div className="adm-cash-modal__body adm-cash-modal__body--detail">
           {isVariance ? (
             <VarianceDetail currency={c} expected={payload.total} counted={counted} diff={diff} counts={counts} />
           ) : (
-            <>
-              {mode !== "expenses" ? (
-                <div className="adm-cash-detail-kpis">
-                  <div className="adm-cash-detail-kpi adm-cash-detail-kpi--usd">
-                    <span className="adm-cash-detail-kpi__lbl">התקבל דולר</span>
-                    <strong className="adm-cash-detail-kpi__val" dir="ltr">{usd(String(sumUsd))}</strong>
-                  </div>
-                  <div className="adm-cash-detail-kpi adm-cash-detail-kpi--ils">
-                    <span className="adm-cash-detail-kpi__lbl">התקבל ₪</span>
-                    <strong className="adm-cash-detail-kpi__val" dir="ltr">{ils(String(sumIls))}</strong>
-                  </div>
-                  <div className="adm-cash-detail-kpi adm-cash-detail-kpi--cnt">
-                    <span className="adm-cash-detail-kpi__lbl">מספר תנועות</span>
-                    <strong className="adm-cash-detail-kpi__val">{receiptRows.length}</strong>
-                  </div>
-                  <div className="adm-cash-detail-kpi adm-cash-detail-kpi--user">
-                    <span className="adm-cash-detail-kpi__lbl">משתמש קולט</span>
-                    <strong className="adm-cash-detail-kpi__val adm-cash-detail-kpi__val--txt">{userLabel}</strong>
-                  </div>
-                </div>
-              ) : null}
-              <MovementsTable currency={c} rows={rows} mode={mode} payload={payload} onRowClick={onRowClick} />
-            </>
+            <CashDetailsTable
+              variant={tableVariant}
+              currency={c}
+              rows={rows}
+              payload={payload}
+              onRowClick={onRowClick}
+            />
           )}
         </div>
         <div className="adm-cash-modal__foot">
           <button type="button" className="adm-btn adm-btn--ghost" onClick={onClose}>סגור</button>
         </div>
       </div>
-    </div>
-  );
-}
-
-function MovementsTable({
-  currency,
-  rows,
-  mode,
-  payload,
-  onRowClick,
-}: {
-  currency: CashCurrency;
-  rows: CashDetailPayload["rows"];
-  mode: DetailMode;
-  payload: CashDetailPayload;
-  onRowClick: (row: CashDetailRow) => void;
-}) {
-  return (
-    <div className="adm-table-excel-wrap">
-      <table className="adm-table-excel adm-cash-detail-tbl">
-        <thead>
-          <tr>
-            <th>תאריך</th>
-            <th>הזמנה</th>
-            <th>קליטת תשלום</th>
-            <th>לקוח</th>
-            <th>דולר</th>
-            <th>₪</th>
-            <th>אמצעי תשלום</th>
-            <th>משתמש</th>
-            <th aria-label="מסמך" />
-          </tr>
-        </thead>
-        <tbody>
-          {rows.length === 0 ? (
-            <tr><td colSpan={9} className="adm-table-empty">אין תנועות מזומן בטווח זה.</td></tr>
-          ) : (
-            rows.map((r) => (
-              <tr
-                key={`${r.kind}:${r.id}`}
-                className="adm-table-excel-row adm-cash-row-link"
-                onClick={() => onRowClick(r)}
-                title={r.kind === "RECEIPT" ? "פרטי קליטת תשלום" : "פרטי הוצאת קופה"}
-              >
-                <td dir="ltr">{fmtDate(r.date)}</td>
-                <td dir="ltr">{r.orderNumber ?? "—"}</td>
-                <td dir="ltr">{r.docLabel ?? "—"}</td>
-                <td>{r.customerName ?? (r.kind === "EXPENSE" ? r.movementLabel : "—")}</td>
-                <td dir="ltr" className={`adm-table-excel-num ${r.kind === "EXPENSE" ? "adm-cash-cell--neg" : "adm-cash-cell--pos"}`}>
-                  {r.amountUsd ? usd(r.amountUsd) : "—"}
-                </td>
-                <td dir="ltr" className={`adm-table-excel-num ${r.kind === "EXPENSE" ? "adm-cash-cell--neg" : "adm-cash-cell--pos"}`}>
-                  {r.amountIls ? ils(r.amountIls) : "—"}
-                </td>
-                <td><CashMethodTag row={r} /></td>
-                <td>{r.userName ?? "—"}</td>
-                <td className="adm-cash-row-link__icon">
-                  {r.documents.length > 0 ? (
-                    <span className="adm-cash-doc-badge" title={`${r.documents.length} מסמכים מצורפים`}>
-                      <FileText size={13} aria-hidden /> {r.documents.length}
-                    </span>
-                  ) : (
-                    <ExternalLink size={14} aria-hidden />
-                  )}
-                </td>
-              </tr>
-            ))
-          )}
-        </tbody>
-        <tfoot>
-          {mode === "expenses" ? (
-            <tr>
-              <td colSpan={7} className="adm-cash-detail-foot adm-cash-detail-foot--total">סה״כ הוצאות קופה</td>
-              <td dir="ltr" colSpan={2} className="adm-table-excel-num adm-cash-cell--neg">{money(currency, `-${payload.expenses}`)}</td>
-            </tr>
-          ) : (
-            <>
-              <tr>
-                <td colSpan={7} className="adm-cash-detail-foot">קליטות מזומן</td>
-                <td dir="ltr" colSpan={2} className="adm-table-excel-num adm-cash-cell--pos">{money(currency, payload.receipts)}</td>
-              </tr>
-              {num(payload.expenses) > 0 ? (
-                <tr>
-                  <td colSpan={7} className="adm-cash-detail-foot">הוצאות קופה</td>
-                  <td dir="ltr" colSpan={2} className="adm-table-excel-num adm-cash-cell--neg">{money(currency, `-${payload.expenses}`)}</td>
-                </tr>
-              ) : null}
-              <tr>
-                <td colSpan={7} className="adm-cash-detail-foot adm-cash-detail-foot--total">צפוי בקופה</td>
-                <td dir="ltr" colSpan={2} className="adm-table-excel-num adm-cash-detail-total">{money(currency, payload.total)}</td>
-              </tr>
-            </>
-          )}
-        </tfoot>
-      </table>
     </div>
   );
 }
@@ -1359,7 +1550,7 @@ function VarianceDetail({
       <div>
         <h4 className="adm-cash-detail-sub">היסטוריית ספירות</h4>
         <div className="adm-table-excel-wrap">
-          <table className="adm-table-excel">
+          <table className="adm-table-excel adm-cash-erp-table">
             <thead>
               <tr>
                 <th>תאריך</th>
