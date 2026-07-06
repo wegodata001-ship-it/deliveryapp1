@@ -29,17 +29,24 @@ import {
   buildPaymentAllocationPreview,
 } from "@/lib/payment-allocation-preview";
 import { aggregateLivePaymentFormKpis } from "@/lib/payment-intake-live-kpi";
+import {
+  buildLivePaymentMethodControlRows,
+  fmtMethodControlCell,
+  fmtMethodControlUsd,
+  hasCompositeMethodControl,
+  METHOD_CONTROL_STATUS_ICON,
+} from "@/lib/payment-intake-method-control";
 import { PaymentDocumentRateIcons } from "@/components/admin/PaymentDocumentRateIcons";
 import { attachDraftDocumentsAction } from "@/app/admin/documents/actions";
 import {
   PAYMENT_BUCKET_LABELS,
-  breakdownViolationMessage,
-  enforceBreakdownAgainstEntered,
-  paymentMethodBucketKey,
   type EnteredBucketUsd,
-  type PaymentBucketKey,
-  type PlannedBucketUsd,
 } from "@/lib/payment-breakdown-shared";
+import {
+  computeIntakeSaveDeviations,
+  intakeSaveHasDeviations,
+  type IntakeSaveDeviationRow,
+} from "@/lib/cash-control-intake-breakdown";
 import { PaymentLiveSummaryCards } from "@/components/admin/PaymentLiveSummaryCards";
 import { PaymentOpenDebtDetailModal } from "@/components/admin/PaymentOpenDebtDetailModal";
 import {
@@ -413,6 +420,16 @@ function clonePaymentEntry(e: PaymentEntryResponse): PaymentEntryResponse {
   };
 }
 
+function buildEnteredByBucket(kpis: ReturnType<typeof aggregateLivePaymentFormKpis>): EnteredBucketUsd[] {
+  return [
+    { bucket: "CASH", label: PAYMENT_BUCKET_LABELS.CASH, enteredUsd: kpis.cash.totalUsd },
+    { bucket: "BANK_TRANSFER", label: PAYMENT_BUCKET_LABELS.BANK_TRANSFER, enteredUsd: kpis.bankTransfer.totalUsd },
+    { bucket: "CREDIT", label: PAYMENT_BUCKET_LABELS.CREDIT, enteredUsd: kpis.credit.totalUsd },
+    { bucket: "CHECK", label: PAYMENT_BUCKET_LABELS.CHECK, enteredUsd: kpis.checks.totalUsd },
+    { bucket: "OTHER", label: PAYMENT_BUCKET_LABELS.OTHER, enteredUsd: kpis.other.totalUsd },
+  ];
+}
+
 export function PaymentModalUpdated({
   financial,
   onToast,
@@ -519,7 +536,11 @@ export function PaymentModalUpdated({
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [overageModalOpen, setOverageModalOpen] = useState(false);
   const [overagePreview, setOveragePreview] = useState<PaymentOveragePreview | null>(null);
+  const [intakeDevModalOpen, setIntakeDevModalOpen] = useState(false);
+  const [intakeDevRows, setIntakeDevRows] = useState<IntakeSaveDeviationRow[]>([]);
   const saveAfterOverageRef = useRef<"new" | "close" | null>(null);
+  const saveSurplusPendingRef = useRef(false);
+  const intakeDevPendingSaveRef = useRef(false);
   /** אחרי ניסיון שמירה שנכשל באימות צ׳יקים — מסמן שדות חסרים */
   const [highlightInvalidCheckFields, setHighlightInvalidCheckFields] = useState(false);
   const [resetCustomerConfirmOpen, setResetCustomerConfirmOpen] = useState(false);
@@ -637,28 +658,6 @@ export function PaymentModalUpdated({
    * ולכן אין להגביל את הבחירה. חריגה (planned != actual) תסומן ותתועד בנפרד.
    */
   const allowedMethods = null;
-
-  /** סיכום חלוקת תשלום מורכב לכל אמצעי (איחוד על פני הזמנות מורכבות עם יתרה) */
-  const compositeSummary = useMemo(() => {
-    const payable = orders.filter((o) => o.isComposite && o.breakdown.length > 0 && Number(o.dbRemainingUsd) > 0.02);
-    if (payable.length === 0) return [] as { method: string; label: string; plannedUsd: number; paidUsd: number; remainingUsd: number }[];
-    const map = new Map<string, { method: string; label: string; plannedUsd: number; paidUsd: number; remainingUsd: number }>();
-    for (const o of payable) {
-      for (const b of o.breakdown) {
-        const cur = map.get(b.method) ?? { method: b.method, label: b.label, plannedUsd: 0, paidUsd: 0, remainingUsd: 0 };
-        cur.plannedUsd += b.plannedUsd;
-        cur.paidUsd += b.paidUsd;
-        cur.remainingUsd += b.remainingUsd;
-        map.set(b.method, cur);
-      }
-    }
-    return [...map.values()].map((r) => ({
-      ...r,
-      plannedUsd: Math.round(r.plannedUsd * 100) / 100,
-      paidUsd: Math.round(r.paidUsd * 100) / 100,
-      remainingUsd: Math.round(r.remainingUsd * 100) / 100,
-    }));
-  }, [orders]);
 
   const customerBalanceResetPreview = useMemo((): CommissionResetOrderPreview[] => {
     if (!customerBalanceResetPending) return [];
@@ -896,6 +895,16 @@ export function PaymentModalUpdated({
     [payments, rateN],
   );
 
+  /** שורות בקרת אמצעי תשלום — תוכנן מההזמנה, נקלט מההקלדה הנוכחית בטופס */
+  const methodControlRows = useMemo(
+    () => buildLivePaymentMethodControlRows(orders, includedIds, liveFormKpis),
+    [orders, includedIds, liveFormKpis],
+  );
+  const showMethodControl = useMemo(
+    () => hasCompositeMethodControl(orders, includedIds),
+    [orders, includedIds],
+  );
+
   /** Part 1 — סיכום הזמנה מרכזי: סה"כ הזמנה / שווי בש"ח / שולם (DB + הקלדה) / יתרה */
   const orderSummaryForCards = useMemo(() => {
     let total = 0;
@@ -911,45 +920,6 @@ export function PaymentModalUpdated({
     const ilsValue = roundMoney2(totalR * (rateN > 0 ? rateN : 0));
     return { totalUsd: totalR, ilsValue, paidUsd: paid, remainingUsd: remaining };
   }, [orders, totals.totalUsd, rateN]);
-
-  /**
-   * בקרת "תשלום מורכב" — אכיפה אמיתית.
-   * כאשר להזמנות יש חלוקת תשלום מתוכננת, אסור לשלם באמצעי שלא הוגדר,
-   * ואסור לחרוג מהסכום שהוגדר לכל אמצעי. חריגה חוסמת שמירה.
-   */
-  const breakdownEnforcement = useMemo(() => {
-    if (compositeSummary.length === 0) {
-      return { active: false, violations: [] as ReturnType<typeof enforceBreakdownAgainstEntered> };
-    }
-    // אם קיים חוב פתוח בהזמנה שאינה מורכבת — הסכום עשוי להיות מוקצה אליה,
-    // ולכן לא נאכוף חסימה (כדי לא לחסום תשלום לגיטימי). מסמנים חריגה בלבד.
-    const hasNonCompositeDebt = orders.some(
-      (o) => !(o.isComposite && o.breakdown.length > 0) && Number(o.dbRemainingUsd) > 0.02,
-    );
-    if (hasNonCompositeDebt) {
-      return { active: false, violations: [] as ReturnType<typeof enforceBreakdownAgainstEntered> };
-    }
-    const planByBucket = new Map<PaymentBucketKey, PlannedBucketUsd>();
-    for (const r of compositeSummary) {
-      const bucket = paymentMethodBucketKey(r.method);
-      const cur =
-        planByBucket.get(bucket) ??
-        { bucket, label: PAYMENT_BUCKET_LABELS[bucket], plannedUsd: 0, remainingUsd: 0 };
-      cur.plannedUsd = roundMoney2(cur.plannedUsd + r.plannedUsd);
-      cur.remainingUsd = roundMoney2(cur.remainingUsd + r.remainingUsd);
-      planByBucket.set(bucket, cur);
-    }
-    const entered: EnteredBucketUsd[] = [
-      { bucket: "CASH", label: PAYMENT_BUCKET_LABELS.CASH, enteredUsd: liveFormKpis.cash.totalUsd },
-      { bucket: "BANK_TRANSFER", label: PAYMENT_BUCKET_LABELS.BANK_TRANSFER, enteredUsd: liveFormKpis.bankTransfer.totalUsd },
-      { bucket: "CREDIT", label: PAYMENT_BUCKET_LABELS.CREDIT, enteredUsd: liveFormKpis.credit.totalUsd },
-      { bucket: "CHECK", label: PAYMENT_BUCKET_LABELS.CHECK, enteredUsd: liveFormKpis.checks.totalUsd },
-      { bucket: "OTHER", label: PAYMENT_BUCKET_LABELS.OTHER, enteredUsd: liveFormKpis.other.totalUsd },
-    ];
-    return { active: true, violations: enforceBreakdownAgainstEntered([...planByBucket.values()], entered) };
-  }, [compositeSummary, liveFormKpis, orders]);
-
-  const breakdownBlocked = breakdownEnforcement.violations.length > 0;
 
   /** תצוגה חיה בלבד — יתרה לאחר שמירה = חוב נוכחי − סכום בהקלדה */
   const openDebtAfterPaymentPreview = useMemo(() => {
@@ -2192,6 +2162,7 @@ export function PaymentModalUpdated({
    */
   async function performSave(
     saveSurplusAsCredit = false,
+    allowMethodDeviation = false,
   ): Promise<{ ok: true; primaryPaymentCode: string; customerBalanceUsd: string } | { ok: false }> {
     setSaveErr(null);
     setHighlightInvalidCheckFields(false);
@@ -2213,9 +2184,18 @@ export function PaymentModalUpdated({
       setHighlightInvalidCheckFields(true);
       return { ok: false };
     }
-    if (breakdownBlocked) {
-      const msg = breakdownEnforcement.violations.map(breakdownViolationMessage).join("\n\n");
-      setSaveErr(`לא ניתן לשמור.\n\n${msg}`);
+    const devRows = computeIntakeSaveDeviations({
+      orders,
+      includedOrderIds: includedIds,
+      enteredByBucket: buildEnteredByBucket(liveFormKpis),
+      formRateN: rateN,
+      totalPaymentUsd: totals.totalUsd,
+    });
+    if (intakeSaveHasDeviations(devRows) && !allowMethodDeviation) {
+      saveSurplusPendingRef.current = saveSurplusAsCredit;
+      intakeDevPendingSaveRef.current = true;
+      setIntakeDevRows(devRows);
+      setIntakeDevModalOpen(true);
       return { ok: false };
     }
     const forceCustomerCreditPayment = customerHasCredit;
@@ -2283,6 +2263,7 @@ export function PaymentModalUpdated({
       draftNameEn: draftCustomer.nameEn.trim() || null,
       draftPhone: draftCustomer.phone.trim() || null,
       saveSurplusAsCredit: saveSurplusAsCredit || forceCustomerCreditPayment,
+      allowMethodDeviation,
     });
     const savePaymentMs = Math.round(performance.now() - saveStart);
     if (!res.ok) {
@@ -2423,11 +2404,32 @@ export function PaymentModalUpdated({
   async function onOverageConfirm() {
     setOverageModalOpen(false);
     const mode = saveAfterOverageRef.current;
-    const res = await performSave(true);
+    const res = await performSave(true, false);
     if (!res.ok) return;
     saveAfterOverageRef.current = null;
     if (mode === "new") await finishSaveAndNew(res.primaryPaymentCode);
     else if (mode === "close") closeTop();
+  }
+
+  async function onIntakeDevConfirm() {
+    setIntakeDevModalOpen(false);
+    if (!intakeDevPendingSaveRef.current) return;
+    intakeDevPendingSaveRef.current = false;
+    const mode = saveAfterOverageRef.current;
+    const surplus = saveSurplusPendingRef.current;
+    saveSurplusPendingRef.current = false;
+    const res = await performSave(surplus, true);
+    if (!res.ok) return;
+    saveAfterOverageRef.current = null;
+    if (mode === "new") await finishSaveAndNew(res.primaryPaymentCode);
+    else if (mode === "close") closeTop();
+  }
+
+  function onIntakeDevCancel() {
+    setIntakeDevModalOpen(false);
+    intakeDevPendingSaveRef.current = false;
+    saveAfterOverageRef.current = null;
+    saveSurplusPendingRef.current = false;
   }
 
   function onOverageCancel() {
@@ -3388,9 +3390,9 @@ export function PaymentModalUpdated({
                     onKeyDown={(e) => {
                       if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
                       e.preventDefault();
-                      if (!saveBusy && customer && !breakdownBlocked) void onSaveAndNew();
+                      if (!saveBusy && customer) void onSaveAndNew();
                     }}
-                    disabled={saveBusy || !customer || paymentIsCancelled || breakdownBlocked}
+                    disabled={saveBusy || !customer || paymentIsCancelled}
                     title="שומר את התשלום ומיד פותח טופס ריק לתשלום הבא — בלי לסגור את החלון"
                   >
                     {saveBusy ? (
@@ -3410,12 +3412,12 @@ export function PaymentModalUpdated({
                   </div>
                 </div>
 
-                {compositeSummary.length > 0 ? (
+                {showMethodControl ? (
                   <div className="payment-upd-composite" dir="rtl">
                     <div className="payment-upd-composite-title">
                       <span>אמצעי תשלום מתוכננים</span>
-                      {orders.some((o) => o.hasMethodDeviation) ? (
-                        <span className="payment-upd-deviation-badge" title="שולם בפועל באמצעי ששונה מהמתוכנן">
+                      {methodControlRows.some((r) => r.status === "excess") ? (
+                        <span className="payment-upd-deviation-badge" title="חריגה בין ההקלדה הנוכחית לחלוקה המתוכננת">
                           חריגת אמצעי תשלום
                         </span>
                       ) : null}
@@ -3423,41 +3425,59 @@ export function PaymentModalUpdated({
                     <table className="payment-upd-composite-tbl">
                       <thead>
                         <tr>
-                          <th>סוג</th>
+                          <th>אמצעי תשלום</th>
                           <th>תוכנן</th>
-                          <th>שולם</th>
+                          <th>נקלט</th>
                           <th>נותר</th>
+                          <th>סטטוס</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {compositeSummary.map((r) => (
-                          <tr key={r.method}>
-                            <td>{r.label}</td>
-                            <td dir="ltr">${r.plannedUsd.toFixed(2)}</td>
-                            <td dir="ltr">${r.paidUsd.toFixed(2)}</td>
-                            <td dir="ltr" className={r.remainingUsd > 0.02 ? "payment-upd-composite-rem" : "payment-upd-composite-done"}>
-                              ${r.remainingUsd.toFixed(2)}
+                        {methodControlRows.map((r) => (
+                          <tr key={r.bucket} className={`payment-upd-composite-row is-${r.status}`}>
+                            <td className="payment-upd-composite-method">{r.label}</td>
+                            <td dir="ltr" className="payment-upd-composite-num">
+                              {fmtMethodControlCell(r, "planned")}
+                            </td>
+                            <td dir="ltr" className="payment-upd-composite-num">
+                              {fmtMethodControlCell(r, "entered")}
+                            </td>
+                            <td
+                              dir="ltr"
+                              className={`payment-upd-composite-num payment-upd-composite-rem-cell${r.status === "excess" ? " is-excess" : ""}`}
+                            >
+                              {fmtMethodControlCell(r, "remaining")}
+                            </td>
+                            <td className="payment-upd-composite-status">
+                              <span className={`payment-upd-composite-badge is-${r.status}`}>
+                                <span className="payment-upd-composite-badge__icon" aria-hidden>
+                                  {METHOD_CONTROL_STATUS_ICON[r.status]}
+                                </span>
+                                {r.statusLabel}
+                              </span>
+                              {r.status === "excess" ? (
+                                <span className="payment-upd-composite-status__detail" dir="ltr">
+                                  {r.plannedUsd > 0.01 ? (
+                                    <>
+                                      <span>תוכנן: {fmtMethodControlUsd(r.plannedUsd)}</span>
+                                      <span>נקלט: {fmtMethodControlUsd(r.enteredUsd)}</span>
+                                      <span className="payment-upd-composite-status__excess">
+                                        חריגה: +${r.excessUsd.toFixed(2)}
+                                      </span>
+                                    </>
+                                  ) : (
+                                    <span>אמצעי שלא תוכנן בהזמנה</span>
+                                  )}
+                                </span>
+                              ) : null}
                             </td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
-                    {breakdownBlocked ? (
-                      <div className="payment-upd-composite-block" role="alert">
-                        <div className="payment-upd-composite-block-title">לא ניתן לשמור — חריגה מחלוקת התשלום</div>
-                        {breakdownEnforcement.violations.map((v) => (
-                          <div className="payment-upd-composite-block-item" key={v.bucket}>
-                            {breakdownViolationMessage(v).split("\n").map((ln, i) => (
-                              <div key={i}>{ln}</div>
-                            ))}
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="payment-upd-composite-hint">
-                        החלוקה נאכפת — לא ניתן לשלם באמצעי שלא הוגדר בהזמנה או לחרוג מהסכום שהוגדר לכל אמצעי.
-                      </div>
-                    )}
+                    <div className="payment-upd-composite-hint">
+                      מתעדכן בזמן אמת לפי ההקלדה הנוכחית — נקלט = סכום בטופס בלבד.
+                    </div>
                   </div>
                 ) : null}
 
@@ -3554,12 +3574,12 @@ export function PaymentModalUpdated({
                   type="button"
                   ref={savePrimaryButtonRef}
                   className={`btn btn-primary btn-save payment-modal-save payment-modal-save--v2${saveBusy ? " loading" : ""}`}
-                  disabled={saveBusy || !customer || paymentIsCancelled || breakdownBlocked}
+                  disabled={saveBusy || !customer || paymentIsCancelled}
                   onClick={() => void onSaveAndClose()}
                   onKeyDown={(e) => {
                     if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
                     e.preventDefault();
-                    if (!saveBusy && customer && !breakdownBlocked) void onSaveAndClose();
+                    if (!saveBusy && customer) void onSaveAndClose();
                   }}
                 >
                   {saveBusy ? (
@@ -3890,6 +3910,65 @@ export function PaymentModalUpdated({
         onConfirm={() => void onOverageConfirm()}
         onCancel={onOverageCancel}
       />
+      {intakeDevModalOpen && intakeDevRows.length > 0 ? (
+        <div className="adm-cash-modal-backdrop" role="presentation" onClick={onIntakeDevCancel}>
+          <div
+            className="adm-cash-modal adm-cash-modal--xl payment-intake-dev-modal"
+            dir="rtl"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-labelledby="intake-dev-title"
+          >
+            <div className="adm-cash-modal__head">
+              <h3 id="intake-dev-title">⚠️ נמצאו חריגות בקליטת התשלום</h3>
+            </div>
+            <div className="adm-cash-modal__body">
+              <p className="payment-intake-dev-modal__lead">
+                המערכת זיהתה מספר חריגות בין התשלום שהוזן לבין אמצעי התשלום והסכומים שהוגדרו בהזמנה.
+              </p>
+              <h4 className="payment-intake-dev-modal__subtitle">פירוט החריגות</h4>
+              <div className="payment-intake-dev-modal__scroll">
+                <table className="adm-table-excel payment-intake-dev-modal__tbl">
+                  <thead>
+                    <tr>
+                      <th>סוג החריגה</th>
+                      <th>תוכנן</th>
+                      <th>נקלט</th>
+                      <th>הפרש</th>
+                      <th>סטטוס</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {intakeDevRows.map((row) => (
+                      <tr key={row.id} className={`payment-intake-dev-modal__row is-${row.rowTone}`}>
+                        <td>{row.typeLabel}</td>
+                        <td dir="ltr">{row.plannedDisplay}</td>
+                        <td dir="ltr">{row.receivedDisplay}</td>
+                        <td dir="ltr" className="payment-intake-dev-modal__diff">{row.diffDisplay}</td>
+                        <td>{row.statusLabel}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="payment-intake-dev-modal__question">האם ברצונך לשמור את התשלום למרות החריגות?</p>
+            </div>
+            <div className="adm-cash-modal__foot payment-intake-dev-modal__foot">
+              <button type="button" className="adm-btn payment-intake-dev-modal__btn-back" onClick={onIntakeDevCancel}>
+                חזור לעריכה
+              </button>
+              <button
+                type="button"
+                className="adm-btn payment-intake-dev-modal__btn-save"
+                disabled={saveBusy}
+                onClick={() => void onIntakeDevConfirm()}
+              >
+                שמור למרות החריגות
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }

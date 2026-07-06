@@ -4,8 +4,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getAhWeekRange } from "@/lib/weeks/ah-week";
-import { isCompositePaymentMethod } from "@/lib/payment-breakdown-shared";
-import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 import { CASH_EXPENSE_REASONS } from "./constants";
 
 const Z = new Prisma.Decimal(0);
@@ -89,52 +87,14 @@ export type CashExportData = {
 };
 
 async function computeDeviations(week: string): Promise<CashExportDeviation[]> {
-  const payments = await prisma.payment.findMany({
-    where: { weekCode: week, status: "ACTIVE", orderId: { not: null }, amountUsd: { not: null } },
-    select: { orderId: true, amountUsd: true, paymentMethod: true, usdPaymentMethod: true, ilsPaymentMethod: true },
-  });
-  if (payments.length === 0) return [];
-  const byOrder = new Map<string, Map<string, Prisma.Decimal>>();
-  for (const p of payments) {
-    if (!p.orderId) continue;
-    const method = (p.paymentMethod || p.usdPaymentMethod || p.ilsPaymentMethod || "").trim();
-    if (!method) continue;
-    let m = byOrder.get(p.orderId);
-    if (!m) {
-      m = new Map<string, Prisma.Decimal>();
-      byOrder.set(p.orderId, m);
-    }
-    m.set(method, (m.get(method) ?? Z).add(p.amountUsd ?? Z));
-  }
-  const orders = await prisma.order.findMany({
-    where: { id: { in: [...byOrder.keys()] }, deletedAt: null },
-    select: { id: true, orderNumber: true, paymentMethod: true, paymentBreakdown: { select: { paymentMethod: true } } },
-  });
-  const out: CashExportDeviation[] = [];
-  for (const o of orders) {
-    if (!isCompositePaymentMethod(o.paymentMethod) || o.paymentBreakdown.length === 0) continue;
-    const plannedSet = new Set(o.paymentBreakdown.map((b) => b.paymentMethod));
-    const actual = byOrder.get(o.id);
-    if (!actual) continue;
-    let devAmount = Z;
-    const devMethods: string[] = [];
-    for (const [method, amt] of actual) {
-      if (isCompositePaymentMethod(method)) continue;
-      if (!plannedSet.has(method)) {
-        devAmount = devAmount.add(amt);
-        devMethods.push(method);
-      }
-    }
-    if (devMethods.length === 0) continue;
-    out.push({
-      orderNumber: o.orderNumber ?? null,
-      plannedLabel: [...plannedSet].map((m) => PAYMENT_METHOD_LABELS[m] ?? m).join(" · "),
-      actualLabel: [...new Set(devMethods)].map((m) => PAYMENT_METHOD_LABELS[m] ?? m).join(" · "),
-      amountUsd: money(devAmount),
-    });
-  }
-  out.sort((a, b) => (a.orderNumber ?? "").localeCompare(b.orderNumber ?? ""));
-  return out;
+  const { computeMethodDeviationsLegacy } = await import("@/lib/cash-control-deviations");
+  const rows = await computeMethodDeviationsLegacy(week.trim());
+  return rows.map((r) => ({
+    orderNumber: r.orderNumber ?? null,
+    plannedLabel: r.plannedLabel,
+    actualLabel: r.actualLabel,
+    amountUsd: r.deviationUsd,
+  }));
 }
 
 type DayBucket = { recIls: Prisma.Decimal; recUsd: Prisma.Decimal; expIls: Prisma.Decimal; expUsd: Prisma.Decimal };

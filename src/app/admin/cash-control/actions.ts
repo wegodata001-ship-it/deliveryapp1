@@ -6,7 +6,6 @@ import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth
 import { prisma } from "@/lib/prisma";
 import { getAhWeekRange } from "@/lib/weeks/ah-week";
 import {
-  breakdownLineUsd,
   isCompositePaymentMethod,
   paymentMethodBucketKey,
   PAYMENT_BUCKET_LABELS,
@@ -15,6 +14,17 @@ import {
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 import { formatLocalYmd } from "@/lib/work-week";
 import { ensureDocumentsTable } from "@/lib/documents/ensure";
+import {
+  computeCashControlOrderBalance,
+  fixCashUsd,
+  toCashControlOrderComputed,
+  CASH_CONTROL_EPS,
+} from "@/lib/cash-control-calculation";
+import { groupByActivePayments } from "@/lib/payment-record-status";
+import {
+  computeCashControlDeviations,
+  computeMethodDeviationsLegacy,
+} from "@/lib/cash-control-deviations";
 import {
   CASH_EXPENSE_REASONS,
   type CashCurrency,
@@ -85,6 +95,13 @@ export type CashMethodDeviationTotals = {
   remainingUsd: string;
   deviationUsd: string;
 };
+
+export type {
+  CashControlDeviationRow,
+  CashControlDeviationType,
+  CashControlDeviationStatus,
+  CashControlDeviationMethodLine,
+} from "@/lib/cash-control-deviations-shared";
 
 export type CashMethodDeviationPayload = {
   rows: CashMethodDeviationRow[];
@@ -302,153 +319,18 @@ async function computeExpected(week: string): Promise<{
   };
 }
 
-/**
- * חריגות אמצעי תשלום לשבוע: הזמנות "תשלום מורכב" שבהן שולם בפועל
- * (Payment) באמצעי שלא תוכנן (OrderPaymentBreakdown). גזירה מנתוני האמת —
- * תאימות מלאה להזמנות ישנות (ללא חלוקה = ללא חריגה).
- */
+/** חריגות אמצעי תשלום — לפי שבוע ההזמנה (Order.weekCode), לא לפי שבוע הקליטה. */
 async function computeMethodDeviations(wk: string): Promise<CashMethodDeviationRow[]> {
-  const payments = await prisma.payment.findMany({
-    where: { weekCode: wk, status: "ACTIVE", orderId: { not: null }, amountUsd: { not: null } },
-    select: {
-      orderId: true,
-      amountUsd: true,
-      paymentMethod: true,
-      usdPaymentMethod: true,
-      ilsPaymentMethod: true,
-      paymentDate: true,
-      createdAt: true,
-    },
-  });
-  if (payments.length === 0) return [];
+  return computeMethodDeviationsLegacy(wk.trim());
+}
 
-  const byOrder = new Map<string, Map<string, Prisma.Decimal>>();
-  // יום אחרון לכל (הזמנה, אמצעי) — לשיוך חריגה ליום בטבלת הבקרה
-  const dayByOrderMethod = new Map<string, string>();
-  for (const p of payments) {
-    if (!p.orderId) continue;
-    const method = (p.paymentMethod || p.usdPaymentMethod || p.ilsPaymentMethod || "").trim();
-    if (!method) continue;
-    let m = byOrder.get(p.orderId);
-    if (!m) {
-      m = new Map<string, Prisma.Decimal>();
-      byOrder.set(p.orderId, m);
-    }
-    m.set(method, (m.get(method) ?? Z).add(p.amountUsd ?? Z));
-    const dk = dayKey(p.paymentDate ?? p.createdAt);
-    const compositeKey = `${p.orderId}|${method}`;
-    const prev = dayByOrderMethod.get(compositeKey);
-    if (!prev || dk > prev) dayByOrderMethod.set(compositeKey, dk);
+export async function listCashControlDeviationsAction(week: string) {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, READ_PERMS)) {
+    return { rows: [], count: 0 };
   }
-
-  const orderIds = [...byOrder.keys()];
-  if (orderIds.length === 0) return [];
-  const orders = await prisma.order.findMany({
-    where: { id: { in: orderIds }, deletedAt: null },
-    select: {
-      id: true,
-      orderNumber: true,
-      customerId: true,
-      paymentMethod: true,
-      usdRateUsed: true,
-      snapshotFinalDollarRate: true,
-      exchangeRate: true,
-      customer: { select: { displayName: true } },
-      paymentBreakdown: { select: { paymentMethod: true, amount: true, currency: true } },
-    },
-  });
-
-  const EPS = 0.02;
-  const r2 = (n: number) => Math.round(n * 100) / 100;
-  const fix = (n: number) => r2(Math.max(0, n)).toFixed(2);
-
-  const rows: CashMethodDeviationRow[] = [];
-  for (const o of orders) {
-    if (!isCompositePaymentMethod(o.paymentMethod) || o.paymentBreakdown.length === 0) continue;
-    const actual = byOrder.get(o.id);
-    if (!actual) continue;
-
-    const rateDec = o.usdRateUsed ?? o.snapshotFinalDollarRate ?? o.exchangeRate ?? Z;
-    const rateN = Number(rateDec.toString()) || 0;
-
-    // מתוכנן לכל אמצעי (USD)
-    const plannedByMethod = new Map<string, number>();
-    for (const b of o.paymentBreakdown) {
-      const usdVal =
-        breakdownLineUsd(
-          { amount: b.amount.toString(), currency: b.currency === "ILS" ? "ILS" : "USD" },
-          rateN,
-        ) ?? 0;
-      plannedByMethod.set(b.paymentMethod, (plannedByMethod.get(b.paymentMethod) ?? 0) + usdVal);
-    }
-
-    // בפועל לכל אמצעי (USD)
-    const actualByMethod = new Map<string, number>();
-    for (const [method, amt] of actual) {
-      if (isCompositePaymentMethod(method)) continue;
-      actualByMethod.set(method, (actualByMethod.get(method) ?? 0) + Number(amt.toString()));
-    }
-
-    // חריגות: אמצעי שהתקבל אך לא תוכנן
-    const extraMethods: CashDeviationExtraLine[] = [];
-    let deviationUsd = 0;
-    for (const [method, amt] of actualByMethod) {
-      if (!plannedByMethod.has(method) && amt > EPS) {
-        extraMethods.push({ method, label: PAYMENT_METHOD_LABELS[method] ?? method, actualUsd: fix(amt) });
-        deviationUsd += amt;
-      }
-    }
-    if (extraMethods.length === 0) continue; // המסך מציג רק חריגות אמיתיות
-
-    // שורות מתוכנן מול בפועל לכל אמצעי שתוכנן
-    const plannedMethods: CashDeviationMethodLine[] = [];
-    let plannedTotal = 0;
-    for (const [method, planned] of plannedByMethod) {
-      const got = actualByMethod.get(method) ?? 0;
-      let status: CashDeviationMethodStatus = "none";
-      if (got >= planned - EPS && planned > EPS) status = "full";
-      else if (got > EPS) status = "partial";
-      plannedMethods.push({
-        method,
-        label: PAYMENT_METHOD_LABELS[method] ?? method,
-        plannedUsd: fix(planned),
-        actualUsd: fix(got),
-        remainingUsd: fix(planned - got),
-        status,
-      });
-      plannedTotal += planned;
-    }
-
-    let actualTotal = 0;
-    for (const amt of actualByMethod.values()) actualTotal += amt;
-
-    const remaining = Math.max(0, plannedTotal - actualTotal);
-    // יום החריגה = היום האחרון שבו התקבל אמצעי לא מתוכנן
-    let devDay: string | null = null;
-    for (const ex of extraMethods) {
-      const dk = dayByOrderMethod.get(`${o.id}|${ex.method}`);
-      if (dk && (!devDay || dk > devDay)) devDay = dk;
-    }
-    rows.push({
-      orderId: o.id,
-      orderNumber: o.orderNumber ?? null,
-      customerId: o.customerId ?? null,
-      customerName: o.customer?.displayName ?? null,
-      plannedLabel: [...plannedByMethod.keys()].map((m) => PAYMENT_METHOD_LABELS[m] ?? m).join(" · "),
-      actualLabel: extraMethods.map((e) => e.label).join(" · "),
-      amountUsd: fix(deviationUsd),
-      plannedMethods,
-      extraMethods,
-      plannedTotalUsd: fix(plannedTotal),
-      actualTotalUsd: fix(actualTotal),
-      remainingUsd: fix(remaining),
-      deviationUsd: fix(deviationUsd),
-      status: remaining > EPS ? "partial" : "deviation",
-      dateKey: devDay,
-    });
-  }
-  rows.sort((a, b) => (a.orderNumber ?? "").localeCompare(b.orderNumber ?? ""));
-  return rows;
+  const rows = await computeCashControlDeviations(week.trim());
+  return { rows, count: rows.length };
 }
 
 export async function listMethodDeviationsAction(week: string): Promise<CashMethodDeviationPayload> {
@@ -487,8 +369,21 @@ export type PaymentsControlOrderRow = {
   dateYmd: string;
   methodLabel: string; // אמצעי מתוכנן / אמצעי ההזמנה
   actualMethodLabel: string | null; // אמצעי בפועל (כשיש חריגה)
+  /** סכום הזמנה מלא (ביקורת) */
+  orderTotalUsd: string;
+  /** יתרה פתוחה אמיתית */
+  openBalanceUsd: string;
+  /** שולם עד כה על ההזמנה */
+  paidUsd: string;
+  /** נקלט בשבוע זה על ההזמנה */
+  weekReceivedUsd: string;
+  /** עודף גבייה */
+  surplusUsd: string;
+  /** תאימות לאחור — שווה ל-openBalanceUsd */
   requiredUsd: string;
+  /** תאימות לאחור — שווה ל-paidUsd */
   receivedUsd: string;
+  /** תאימות לאחור — שווה ל-openBalanceUsd */
   missingUsd: string;
   deviationUsd: string;
   status: PaymentsControlOrderStatus;
@@ -524,7 +419,7 @@ export async function getPaymentsControlAction(week: string): Promise<PaymentsCo
   if (!userHasAnyPermission(me, READ_PERMS)) return null;
   const wk = week.trim();
 
-  const [orders, deviations] = await Promise.all([
+  const [orders, deviations, allDeviations] = await Promise.all([
     prisma.order.findMany({
       where: { weekCode: wk, deletedAt: null, status: { not: "DEBT_WITHDRAWAL" } },
       orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],
@@ -535,44 +430,43 @@ export async function getPaymentsControlAction(week: string): Promise<PaymentsCo
         customerId: true,
         totalUsd: true,
         amountUsd: true,
+        commissionUsd: true,
         paymentMethod: true,
         customer: { select: { displayName: true } },
         paymentBreakdown: { select: { paymentMethod: true } },
       },
     }),
     computeMethodDeviations(wk),
+    computeCashControlDeviations(wk),
   ]);
 
   const orderIds = orders.map((o) => o.id);
   const receivedByOrder = new Map<string, number>();
   if (orderIds.length > 0) {
-    const sums = await prisma.payment.findMany({
-      where: { orderId: { in: orderIds }, status: "ACTIVE", amountUsd: { not: null } },
-      select: { orderId: true, amountUsd: true },
-    });
-    for (const s of sums) {
+    const lifetimeSums = await groupByActivePayments(
+      "orderId",
+      { orderId: { in: orderIds }, amountUsd: { not: null } },
+      { amountUsd: true },
+    );
+    for (const s of lifetimeSums) {
       if (!s.orderId) continue;
-      receivedByOrder.set(s.orderId, (receivedByOrder.get(s.orderId) ?? 0) + Number(s.amountUsd?.toString() ?? 0));
+      receivedByOrder.set(s.orderId, Number(s._sum?.amountUsd?.toString() ?? 0) || 0);
     }
   }
 
   const devByOrder = new Map(deviations.map((d) => [d.orderId, d]));
+  const orderHasDeviation = new Set(allDeviations.map((d) => d.orderId));
 
-  const r2 = (n: number) => Math.round(n * 100) / 100;
-  const fix = (n: number) => r2(Math.max(0, n)).toFixed(2);
-
-  let requiredTotal = 0;
-  let missingTotal = 0;
+  let openBalanceTotal = 0;
   let deviationTotal = 0;
   const orderRows: PaymentsControlOrderRow[] = orders.map((o) => {
-    const required = Number((o.totalUsd ?? o.amountUsd ?? Z).toString()) || 0;
-    const received = receivedByOrder.get(o.id) ?? 0;
-    const missing = Math.max(0, required - received);
-    requiredTotal += required;
-    missingTotal += missing;
+    const paid = receivedByOrder.get(o.id) ?? 0;
+    const balance = computeCashControlOrderBalance(o, paid);
+    const computed = toCashControlOrderComputed(balance, paid);
+    openBalanceTotal += balance.openBalanceUsd;
     let status: PaymentsControlOrderStatus = "unpaid";
-    if (missing <= 0.02) status = "paid";
-    else if (received > 0.02) status = "partial";
+    if (balance.openBalanceUsd <= CASH_CONTROL_EPS) status = "paid";
+    else if (balance.paidUsd > CASH_CONTROL_EPS) status = "partial";
     const methodLabel = isCompositePaymentMethod(o.paymentMethod)
       ? o.paymentBreakdown.map((b) => PAYMENT_METHOD_LABELS[b.paymentMethod] ?? b.paymentMethod).join(" · ") ||
         "תשלום מורכב"
@@ -589,33 +483,41 @@ export async function getPaymentsControlAction(week: string): Promise<PaymentsCo
       dateYmd: o.orderDate ? formatLocalYmd(new Date(o.orderDate)) : "—",
       methodLabel,
       actualMethodLabel: dev ? dev.actualLabel || null : null,
-      requiredUsd: fix(required),
-      receivedUsd: fix(received),
-      missingUsd: fix(missing),
-      deviationUsd: dev ? fix(Number(dev.deviationUsd)) : "0.00",
+      orderTotalUsd: computed.orderTotalUsd,
+      openBalanceUsd: computed.openBalanceUsd,
+      paidUsd: computed.paidUsd,
+      weekReceivedUsd: computed.weekReceivedUsd,
+      surplusUsd: computed.surplusUsd,
+      requiredUsd: computed.requiredUsd,
+      receivedUsd: computed.receivedUsd,
+      missingUsd: computed.missingUsd,
+      deviationUsd: dev ? fixCashUsd(Number(dev.deviationUsd)) : "0.00",
       status,
-      hasDeviation: Boolean(dev),
+      hasDeviation: orderHasDeviation.has(o.id),
     };
   });
 
-  const payRows = await prisma.payment.findMany({
-    where: { weekCode: wk, status: "ACTIVE", amountUsd: { not: null } },
-    orderBy: [{ paymentDate: "desc" }, { createdAt: "desc" }],
-    select: {
-      id: true,
-      paymentCode: true,
-      orderId: true,
-      customerId: true,
-      paymentDate: true,
-      createdAt: true,
-      amountUsd: true,
-      paymentMethod: true,
-      usdPaymentMethod: true,
-      ilsPaymentMethod: true,
-      customer: { select: { displayName: true } },
-      order: { select: { orderNumber: true } },
-    },
-  });
+  const payRows =
+    orderIds.length > 0
+      ? await prisma.payment.findMany({
+          where: { orderId: { in: orderIds }, status: "ACTIVE", amountUsd: { not: null } },
+          orderBy: [{ paymentDate: "desc" }, { createdAt: "desc" }],
+          select: {
+            id: true,
+            paymentCode: true,
+            orderId: true,
+            customerId: true,
+            paymentDate: true,
+            createdAt: true,
+            amountUsd: true,
+            paymentMethod: true,
+            usdPaymentMethod: true,
+            ilsPaymentMethod: true,
+            customer: { select: { displayName: true } },
+            order: { select: { orderNumber: true } },
+          },
+        })
+      : [];
   let receivedTotal = 0;
   const receiptRows: PaymentsControlReceiptRow[] = payRows.map((p) => {
     const amt = Number(p.amountUsd?.toString() ?? 0) || 0;
@@ -631,17 +533,17 @@ export async function getPaymentsControlAction(week: string): Promise<PaymentsCo
       customerName: p.customer?.displayName ?? null,
       dateYmd: dt ? formatLocalYmd(new Date(dt)) : "—",
       methodLabel: method ? PAYMENT_METHOD_LABELS[method] ?? method : "—",
-      amountUsd: fix(amt),
+      amountUsd: fixCashUsd(amt),
     };
   });
 
   return {
     week: wk,
     totals: {
-      requiredUsd: fix(requiredTotal),
-      receivedUsd: fix(receivedTotal),
-      missingUsd: fix(missingTotal),
-      deviationUsd: fix(deviationTotal),
+      requiredUsd: fixCashUsd(openBalanceTotal),
+      receivedUsd: fixCashUsd(receivedTotal),
+      missingUsd: fixCashUsd(openBalanceTotal),
+      deviationUsd: fixCashUsd(deviationTotal),
     },
     orders: orderRows,
     receipts: receiptRows,
@@ -654,12 +556,11 @@ export async function getCashDashboardAction(week: string): Promise<CashDashboar
   const wk = week.trim();
 
   const exp = await computeExpected(wk);
-  const deviations = await computeMethodDeviations(wk);
-  // שיוך חריגות ליום בטבלת הבקרה
+  const allDeviations = await computeCashControlDeviations(wk);
   const devByDay = new Map<string, number>();
-  for (const d of deviations) {
-    if (!d.dateKey) continue;
-    devByDay.set(d.dateKey, (devByDay.get(d.dateKey) ?? 0) + 1);
+  for (const d of allDeviations) {
+    if (!d.intakeDateKey) continue;
+    devByDay.set(d.intakeDateKey, (devByDay.get(d.intakeDateKey) ?? 0) + 1);
   }
   for (const day of exp.days) {
     day.deviations = devByDay.get(day.date) ?? 0;
@@ -675,7 +576,7 @@ export async function getCashDashboardAction(week: string): Promise<CashDashboar
 
   return {
     week: wk,
-    methodDeviations: deviations.length,
+    methodDeviations: allDeviations.length,
     expectedIls: money(exp.expectedIls),
     expectedUsd: money(exp.expectedUsd),
     countedIls: countedIls ? money(countedIls) : null,

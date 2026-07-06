@@ -37,14 +37,14 @@ import {
 } from "@/lib/payment-updated";
 import {
   isCompositePaymentMethod,
-  enforceBreakdownAgainstEntered,
   breakdownViolationMessage,
-  paymentMethodBucketKey,
   PAYMENT_BUCKET_LABELS,
   type EnteredBucketUsd,
-  type PaymentBucketKey,
-  type PlannedBucketUsd,
 } from "@/lib/payment-breakdown-shared";
+import {
+  checkIntakeBreakdownViolations,
+  METHOD_DEV_APPROVED_NOTE_TAG,
+} from "@/lib/cash-control-intake-breakdown";
 import { aggregateLivePaymentFormKpis } from "@/lib/payment-intake-live-kpi";
 import { loadPaymentIntakeOrdersForCustomer } from "@/lib/payment-intake-load";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
@@ -202,6 +202,8 @@ export type PaymentUpdatedSaveInput = {
   saveSurplusAsCredit?: boolean;
   /** מדינת קליטה מהמסך — מקצה TR-P / CN-P / AE-P נפרד */
   workCountry?: string | null;
+  /** כאשר true — מאפשר שמירה למרות חריגת אמצעי תשלום (אישור מנהל) */
+  allowMethodDeviation?: boolean;
 };
 
 const ALLOC_EPS = 0.02;
@@ -329,6 +331,7 @@ async function validateCompositeBreakdownEnforcement(params: {
   workCountry: string | null | undefined;
   payments: PaymentLine[];
   rateN: number;
+  includedOrderIds: string[] | null | undefined;
 }): Promise<string | null> {
   const ordersRes = await loadPaymentIntakeOrdersForCustomer({
     customerId: params.customerId,
@@ -336,30 +339,6 @@ async function validateCompositeBreakdownEnforcement(params: {
     paymentWorkCountryRaw: params.workCountry ?? null,
   });
   if (!ordersRes.ok) return null;
-
-  const payable = ordersRes.orders.filter(
-    (o) => o.isComposite && o.breakdown.length > 0 && Number(o.dbRemainingUsd) > 0.02,
-  );
-  if (payable.length === 0) return null;
-
-  // אם קיים חוב פתוח בהזמנה שאינה מורכבת — לא נאכוף חסימה (תשלום עשוי להיות מוקצה אליה).
-  const hasNonCompositeDebt = ordersRes.orders.some(
-    (o) => !(o.isComposite && o.breakdown.length > 0) && Number(o.dbRemainingUsd) > 0.02,
-  );
-  if (hasNonCompositeDebt) return null;
-
-  const planByBucket = new Map<PaymentBucketKey, PlannedBucketUsd>();
-  for (const o of payable) {
-    for (const b of o.breakdown) {
-      const bucket = paymentMethodBucketKey(b.method);
-      const cur =
-        planByBucket.get(bucket) ??
-        { bucket, label: PAYMENT_BUCKET_LABELS[bucket], plannedUsd: 0, remainingUsd: 0 };
-      cur.plannedUsd += b.plannedUsd;
-      cur.remainingUsd += b.remainingUsd;
-      planByBucket.set(bucket, cur);
-    }
-  }
 
   const kpis = aggregateLivePaymentFormKpis(params.payments, params.rateN);
   const entered: EnteredBucketUsd[] = [
@@ -370,7 +349,11 @@ async function validateCompositeBreakdownEnforcement(params: {
     { bucket: "OTHER", label: PAYMENT_BUCKET_LABELS.OTHER, enteredUsd: kpis.other.totalUsd },
   ];
 
-  const violations = enforceBreakdownAgainstEntered([...planByBucket.values()], entered);
+  const violations = checkIntakeBreakdownViolations(
+    ordersRes.orders,
+    params.includedOrderIds ?? null,
+    entered,
+  );
   if (violations.length === 0) return null;
   return `לא ניתן לשמור.\n\n${violations.map(breakdownViolationMessage).join("\n\n")}`;
 }
@@ -439,15 +422,18 @@ export async function savePaymentUpdatedAction(
   const checkValidationErr = validatePaymentCheckLines(form.payments ?? []);
   if (checkValidationErr) return { ok: false, error: checkValidationErr };
 
-  // בקרת "תשלום מורכב" — אכיפה אמיתית בצד שרת (מונע עקיפת חסימת ה-UI).
-  const breakdownErr = await validateCompositeBreakdownEnforcement({
-    customerId: cid,
-    weekCode: form.weekCode,
-    workCountry: form.workCountry,
-    payments: form.payments ?? [],
-    rateN,
-  });
-  if (breakdownErr) return { ok: false, error: breakdownErr };
+  // בקרת "תשלום מורכב" — אכיפה בצד שרת (ניתן לעקוף באישור מנהל מפורש)
+  if (!form.allowMethodDeviation) {
+    const breakdownErr = await validateCompositeBreakdownEnforcement({
+      customerId: cid,
+      weekCode: form.weekCode,
+      workCountry: form.workCountry,
+      payments: form.payments ?? [],
+      rateN,
+      includedOrderIds: form.includedOrderIds,
+    });
+    if (breakdownErr) return { ok: false, error: breakdownErr };
+  }
 
   const flatChecksForPrimary = flattenChecksFromPayments(form.payments ?? []);
 
@@ -677,6 +663,7 @@ export async function savePaymentUpdatedAction(
   const combinedNotes = [
     "קליטת תשלום מעודכן (דו-מטבעי)",
     lineNotes ? `הערה: ${lineNotes}` : null,
+    form.allowMethodDeviation ? METHOD_DEV_APPROVED_NOTE_TAG : null,
     `totalPaymentUsd: $${totals.totalUsd.toFixed(2)}`,
     smallOverageAbsorbedUsd > ALLOC_EPS
       ? `ספיגת הפרש קטן בעמלה: $${smallOverageAbsorbedUsd.toFixed(2)} (לא יתרת זכות)`
