@@ -28298,6 +28298,247 @@ button.adm-cash-kpi:hover {
   border-top: 2px solid #e2e8f0;
 }
 
+/* התאמת קופה — נקלט במערכת מול נספר בפועל */
+.adm-cash-recon {
+  margin-bottom: 18px;
+}
+.adm-cash-recon__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 800;
+  color: #0f172a;
+  margin: 0 0 10px;
+}
+.adm-cash-recon__scroll {
+  overflow: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+}
+.adm-cash-recon__tbl {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+}
+.adm-cash-recon__tbl th {
+  background: #f8fafc;
+  font-weight: 700;
+  font-size: 12px;
+  padding: 10px 12px;
+  text-align: right;
+  border-bottom: 1px solid #e2e8f0;
+}
+.adm-cash-recon__tbl th:nth-child(2),
+.adm-cash-recon__tbl th:nth-child(3),
+.adm-cash-recon__tbl th:nth-child(4) {
+  text-align: left;
+}
+.adm-cash-recon__tbl td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #f1f5f9;
+  vertical-align: middle;
+}
+.adm-cash-recon__method {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.adm-cash-recon__icon {
+  margin-inline-end: 6px;
+}
+.adm-cash-recon__num {
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+.adm-cash-recon__recorded-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: #2563eb;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.adm-cash-recon__recorded-btn:hover {
+  color: #1d4ed8;
+}
+.adm-cash-recon__counted {
+  text-align: left;
+}
+.adm-cash-recon__input {
+  width: 120px;
+  max-width: 100%;
+  padding: 6px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  direction: ltr;
+  text-align: left;
+}
+.adm-cash-recon__input:focus {
+  outline: 2px solid #93c5fd;
+  border-color: #3b82f6;
+}
+.adm-cash-recon__diff.is-ok {
+  color: #15803d;
+  font-weight: 700;
+}
+.adm-cash-recon__diff.is-short {
+  color: #b45309;
+  font-weight: 700;
+}
+.adm-cash-recon__diff.is-excess {
+  color: #dc2626;
+  font-weight: 700;
+}
+.adm-cash-recon__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.adm-cash-recon__muted {
+  color: #94a3b8;
+}
+.adm-cash-recon__recorded-btn.is-active {
+  color: #1d4ed8;
+  background: #eff6ff;
+  border-radius: 6px;
+  padding: 2px 6px;
+}
+.adm-cash-recon__row.is-expanded td {
+  background: #f8fafc;
+}
+
+.adm-cash-recon-expand {
+  margin-top: 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: #fff;
+  overflow: hidden;
+}
+.adm-cash-recon-expand__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  background: #f1f5f9;
+  border-bottom: 1px solid #e2e8f0;
+}
+.adm-cash-recon-expand__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+  color: #0f172a;
+}
+.adm-cash-recon-expand__summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+  padding: 12px 16px;
+  background: #fafafa;
+  border-bottom: 1px solid #e2e8f0;
+}
+.adm-cash-recon-expand__stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 13px;
+}
+.adm-cash-recon-expand__stat-lbl {
+  color: #64748b;
+}
+.adm-cash-recon-expand__stat.is-ok strong {
+  color: #15803d;
+}
+.adm-cash-recon-expand__stat.is-pending strong {
+  color: #b45309;
+}
+.adm-cash-recon-expand__filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-inline-start: auto;
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+  cursor: pointer;
+}
+.adm-cash-recon-expand__loading {
+  padding: 20px 16px;
+  text-align: center;
+  color: #64748b;
+}
+.adm-cash-recon-expand__scroll {
+  overflow: auto;
+  max-height: min(52vh, 480px);
+}
+.adm-cash-recon-expand__tbl {
+  width: 100%;
+  min-width: 980px;
+  font-size: 13px;
+}
+.adm-cash-recon-expand__tbl th {
+  background: #f8fafc;
+  font-weight: 700;
+  padding: 8px 10px;
+  white-space: nowrap;
+}
+.adm-cash-recon-expand__tbl td {
+  padding: 8px 10px;
+  vertical-align: middle;
+}
+.adm-cash-recon-expand__col-check {
+  width: 72px;
+  text-align: center;
+}
+.adm-cash-recon-expand__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #475569;
+}
+.adm-cash-recon-expand__check-lbl {
+  display: none;
+}
+.adm-cash-recon-expand__row.is-reviewed td {
+  background: #ecfdf5;
+}
+.adm-cash-recon-expand__row.is-reviewed:hover td {
+  background: #d1fae5;
+}
+.adm-cash-recon-expand__open {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  padding: 0;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.adm-cash-recon-expand__open:hover {
+  color: #1d4ed8;
+  text-decoration: underline;
+}
+.adm-cash-recon-expand__foot td {
+  font-weight: 800;
+  background: #f8fafc;
+  border-top: 2px solid #e2e8f0;
+}
+
 .adm-cash-maintbl {
   margin-bottom: 18px;
 }

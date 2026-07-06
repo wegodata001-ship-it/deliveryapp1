@@ -25,8 +25,16 @@ import {
   type CashControlMethodSummaryPayload,
 } from "@/lib/cash-control-method-summary";
 import {
+  buildCashReconciliationSummary,
+  paymentAmountForReconciliationLine,
+  type CashReconciliationLineId,
+  type CashReconciliationSummaryPayload,
+} from "@/lib/cash-control-reconciliation";
+import {
   cashControlWeekCashPaymentsWhere,
   cashControlWeekPaymentsWhere,
+  cashControlWeekReconciliationPaymentsWhere,
+  cashControlReconciliationLineWhere,
 } from "@/lib/cash-control-week-payments";
 import { groupByActivePayments } from "@/lib/payment-record-status";
 import {
@@ -411,6 +419,21 @@ export type PaymentsControlReceiptRow = {
 };
 
 export type { CashControlMethodSummaryPayload } from "@/lib/cash-control-method-summary";
+export type { CashReconciliationSummaryPayload, CashReconciliationLineId } from "@/lib/cash-control-reconciliation";
+
+export type CashReconciliationDetailRow = {
+  paymentId: string;
+  paymentCode: string | null;
+  orderId: string | null;
+  orderNumber: string | null;
+  customerId: string | null;
+  customerName: string | null;
+  dateYmd: string;
+  timeHm: string;
+  recordedByName: string | null;
+  amount: string;
+  reviewed: boolean;
+};
 
 export type PaymentsControlPayload = {
   week: string;
@@ -423,6 +446,7 @@ export type PaymentsControlPayload = {
   orders: PaymentsControlOrderRow[];
   receipts: PaymentsControlReceiptRow[];
   methodSummary: CashControlMethodSummaryPayload;
+  reconciliation: CashReconciliationSummaryPayload;
 };
 
 export async function getPaymentsControlAction(week: string): Promise<PaymentsControlPayload | null> {
@@ -529,6 +553,16 @@ export async function getPaymentsControlAction(week: string): Promise<PaymentsCo
       order: { select: { orderNumber: true } },
     },
   });
+  const reconPayRows = await prisma.payment.findMany({
+    where: cashControlWeekReconciliationPaymentsWhere(wk),
+    select: {
+      amountIls: true,
+      amountUsd: true,
+      paymentMethod: true,
+      usdPaymentMethod: true,
+      ilsPaymentMethod: true,
+    },
+  });
   let receivedTotal = 0;
   const receiptRows: PaymentsControlReceiptRow[] = payRows.map((p) => {
     const amt = Number(p.amountUsd?.toString() ?? 0) || 0;
@@ -549,6 +583,7 @@ export async function getPaymentsControlAction(week: string): Promise<PaymentsCo
   });
 
   const methodSummary = buildCashControlMethodSummary(orders, payRows);
+  const reconciliation = buildCashReconciliationSummary(reconPayRows);
 
   return {
     week: wk,
@@ -561,7 +596,97 @@ export async function getPaymentsControlAction(week: string): Promise<PaymentsCo
     orders: orderRows,
     receipts: receiptRows,
     methodSummary,
+    reconciliation,
   };
+}
+
+export async function listCashReconciliationDetailAction(
+  week: string,
+  lineId: CashReconciliationLineId,
+): Promise<CashReconciliationDetailRow[]> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, READ_PERMS)) return [];
+  const wk = week.trim();
+
+  const payments = await prisma.payment.findMany({
+    where: cashControlReconciliationLineWhere(wk, lineId),
+    orderBy: [{ paymentDate: "asc" }, { createdAt: "asc" }],
+    select: {
+      id: true,
+      paymentCode: true,
+      orderId: true,
+      customerId: true,
+      paymentDate: true,
+      createdAt: true,
+      amountIls: true,
+      amountUsd: true,
+      paymentMethod: true,
+      usdPaymentMethod: true,
+      ilsPaymentMethod: true,
+      order: { select: { orderNumber: true } },
+      customer: { select: { displayName: true } },
+      createdBy: { select: { fullName: true } },
+    },
+  });
+
+  const paymentIds = payments.map((p) => p.id);
+  const reviewedSet = new Set<string>();
+  if (paymentIds.length > 0) {
+    const reviews = await prisma.paymentCashAuditReview.findMany({
+      where: { weekCode: wk, paymentId: { in: paymentIds } },
+      select: { paymentId: true },
+    });
+    for (const r of reviews) reviewedSet.add(r.paymentId);
+  }
+
+  const rows: CashReconciliationDetailRow[] = [];
+  for (const p of payments) {
+    const amt = paymentAmountForReconciliationLine(p, lineId);
+    if (amt <= CASH_CONTROL_EPS) continue;
+    const dt = p.paymentDate ?? p.createdAt;
+    const when = dt ? new Date(dt) : null;
+    rows.push({
+      paymentId: p.id,
+      paymentCode: p.paymentCode ?? null,
+      orderId: p.orderId ?? null,
+      orderNumber: p.order?.orderNumber ?? null,
+      customerId: p.customerId ?? null,
+      customerName: p.customer?.displayName ?? null,
+      dateYmd: when ? formatLocalYmd(when) : "—",
+      timeHm: when
+        ? when.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", hour12: false })
+        : "—",
+      recordedByName: p.createdBy?.fullName ?? null,
+      amount: fixCashUsd(amt),
+      reviewed: reviewedSet.has(p.id),
+    });
+  }
+  return rows;
+}
+
+export async function setPaymentCashAuditReviewAction(input: {
+  paymentId: string;
+  week: string;
+  reviewed: boolean;
+}): Promise<{ ok: boolean; error?: string }> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, READ_PERMS)) return { ok: false, error: "אין הרשאה" };
+
+  const paymentId = input.paymentId.trim();
+  const wk = input.week.trim();
+  if (!paymentId || !wk) return { ok: false, error: "נתונים חסרים" };
+
+  if (input.reviewed) {
+    await prisma.paymentCashAuditReview.upsert({
+      where: { paymentId_weekCode: { paymentId, weekCode: wk } },
+      create: { paymentId, weekCode: wk, reviewedById: me.id },
+      update: { reviewedAt: new Date(), reviewedById: me.id },
+    });
+  } else {
+    await prisma.paymentCashAuditReview.deleteMany({ where: { paymentId, weekCode: wk } });
+  }
+
+  return { ok: true };
 }
 
 export async function getCashDashboardAction(week: string): Promise<CashDashboard | null> {

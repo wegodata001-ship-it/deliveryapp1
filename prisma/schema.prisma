@@ -120,6 +120,7 @@ model User {
   cashExpenses               CashExpense[]      @relation("CashExpenseCreatedBy")
   cashCountsCreated          CashCount[]        @relation("CashCountCreatedBy")
   cashCountsApproved         CashCount[]        @relation("CashCountApprovedBy")
+  paymentCashAuditReviews    PaymentCashAuditReview[] @relation("PaymentCashAuditReviewBy")
 }
 
 /** הגדרות שער דולר גלובליות: בסיס (usd_rate_base), עמלה (usd_fee), שער סופי מחושב (usd_rate_final). */
@@ -471,6 +472,7 @@ model Payment {
   cancelledBy User?     @relation("PaymentCancelledBy", fields: [cancelledById], references: [id])
   checks      PaymentCheck[]
   approvalRequests ApprovalRequest[]
+  cashAuditReviews PaymentCashAuditReview[]
 
   @@index([customerId])
   @@index([orderId])
@@ -545,6 +547,25 @@ model CashCount {
   @@index([countryCode])
   @@index([weekCode])
   @@index([countedAt])
+}
+
+/**
+ * בקרת קופה — סימון "נבדק" לקליטת תשלום (ביקורת בלבד, ללא שינוי עסקי).
+ * פר קליטה + שבוע עבודה — נשמר בין רענונים.
+ */
+model PaymentCashAuditReview {
+  id           String   @id @default(uuid())
+  paymentId    String
+  weekCode     String
+  reviewedAt   DateTime @default(now())
+  reviewedById String?
+
+  payment    Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  reviewedBy User?   @relation("PaymentCashAuditReviewBy", fields: [reviewedById], references: [id])
+
+  @@unique([paymentId, weekCode])
+  @@index([weekCode])
+  @@index([paymentId])
 }
 
 /** פירוט צ׳קים לקליטת תשלום בצ׳ק — משויך לשורת Payment (בדרך כלל לתשלום הראשי בפיצול להזמנות) */

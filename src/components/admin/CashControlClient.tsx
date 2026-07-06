@@ -26,8 +26,8 @@ import {
   type PaymentsControlPayload,
   type PaymentsControlReceiptRow,
 } from "@/app/admin/cash-control/actions";
-import { CashControlDeviationsHierarchy } from "@/components/admin/CashControlDeviationsHierarchy";
 import { CashControlMethodSummary } from "@/components/admin/CashControlMethodSummary";
+import { CashControlReconciliationTable } from "@/components/admin/CashControlReconciliationTable";
 import { CashDetailsTable, CashMethodTag, type CashDetailsVariant } from "@/components/admin/CashDetailsTable";
 import {
   CASH_EXPENSE_REASONS,
@@ -79,22 +79,6 @@ function diffTone(s: string | null | undefined): "pos" | "neg" | "zero" {
   if (n > 0.001) return "pos";
   if (n < -0.001) return "neg";
   return "zero";
-}
-
-function aggregateControlByDay(payload: PaymentsControlPayload | null) {
-  const ordersUsdByDay = new Map<string, number>();
-  const intakeUsdByDay = new Map<string, number>();
-  if (payload) {
-    for (const o of payload.orders) {
-      if (!o.dateYmd || o.dateYmd === "—") continue;
-      ordersUsdByDay.set(o.dateYmd, (ordersUsdByDay.get(o.dateYmd) ?? 0) + num(o.openBalanceUsd));
-    }
-    for (const r of payload.receipts) {
-      if (!r.dateYmd || r.dateYmd === "—") continue;
-      intakeUsdByDay.set(r.dateYmd, (intakeUsdByDay.get(r.dateYmd) ?? 0) + num(r.amountUsd));
-    }
-  }
-  return { ordersUsdByDay, intakeUsdByDay };
 }
 
 function fmtDateTime(iso: string): string {
@@ -364,13 +348,11 @@ export function CashControlClient({ isAdmin, initialWeek }: { isAdmin: boolean; 
 
       <CashControlMethodSummary week={week} summary={pcPayload?.methodSummary} />
 
-      <CashControlTable
+      <CashControlReconciliationTable
         week={week}
-        dash={dash}
-        pcPayload={pcPayload}
+        summary={pcPayload?.reconciliation}
         cashDeviations={cashDeviations}
-        onOpen={openDetail}
-        onOpenDeviations={() => void openDeviations()}
+        isAdmin={isAdmin}
         onOpenIntake={(customerId, orderId) => openIntakeFor(customerId, orderId)}
       />
 
@@ -711,159 +693,6 @@ function PaymentsControlReceiptsTable({
         </tbody>
       </table>
     </div>
-  );
-}
-
-function CashControlTable({
-  week,
-  dash,
-  pcPayload,
-  cashDeviations,
-  onOpen,
-  onOpenDeviations,
-  onOpenIntake,
-}: {
-  week: string;
-  dash: CashDashboard | null;
-  pcPayload: PaymentsControlPayload | null;
-  cashDeviations: CashControlDeviationRow[];
-  onOpen: (currency: CashCurrency, opts?: { day?: string; mode?: DetailMode }) => void;
-  onOpenDeviations: () => void;
-  onOpenIntake: (customerId: string | null, orderId: string | null) => void;
-}) {
-  const days = dash?.days ?? [];
-  const { ordersUsdByDay, intakeUsdByDay } = useMemo(() => aggregateControlByDay(pcPayload), [pcPayload]);
-  const devByDay = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const row of cashDeviations) {
-      if (!row.intakeDateKey) continue;
-      m.set(row.intakeDateKey, (m.get(row.intakeDateKey) ?? 0) + 1);
-    }
-    for (const d of days) {
-      if (!m.has(d.date)) m.set(d.date, d.deviations);
-    }
-    return m;
-  }, [cashDeviations, days]);
-
-  const totalReceiptsCount = days.reduce((s, d) => s + d.receiptsCount, 0);
-  const totalOpenBalanceUsd = pcPayload ? num(pcPayload.totals.requiredUsd) : 0;
-  const totalIntakeUsd = pcPayload ? num(pcPayload.totals.receivedUsd) : 0;
-  const totalDiffUsd = totalOpenBalanceUsd - totalIntakeUsd;
-
-  const cell = (
-    value: string | null | undefined,
-    fmt: (s: string | null | undefined) => string,
-    currency: CashCurrency,
-    day: string,
-    mode: DetailMode,
-    extraCls = "",
-  ) => (
-    <td className="adm-cash-col-money">
-      <button
-        type="button"
-        className={`adm-cash-cellbtn ${num(value) > 0 ? extraCls : "adm-cash-cell--zero"}`}
-        onClick={() => onOpen(currency, { day, mode })}
-      >
-        {fmt(value)}
-      </button>
-    </td>
-  );
-
-  const diffToneClass = (diff: number) => {
-    if (Math.abs(diff) <= 0.02) return "adm-cash-diff--ok";
-    if (Math.abs(diff) <= 10) return "adm-cash-diff--small";
-    return "adm-cash-diff--severe";
-  };
-
-  return (
-    <section className="adm-cash-maintbl">
-      <h2 className="adm-cash-maintbl__title">
-        <Coins size={18} aria-hidden /> טבלת בקרת קופה — {week}
-      </h2>
-
-      <div className="adm-cash-maintbl__scroll">
-        <table className="adm-table-excel adm-cash-maintbl__table adm-cash-erp-table">
-          <thead>
-            <tr>
-              <th className="adm-cash-col-date">תאריך</th>
-              <th className="adm-cash-col-money">יתרה פתוחה ($)</th>
-              <th className="adm-cash-col-money">יתרה פתוחה (₪)</th>
-              <th className="adm-cash-col-money">קליטות תשלום ($)</th>
-              <th className="adm-cash-col-money">קליטות תשלום (₪)</th>
-              <th className="adm-cash-col-money">הוצאות $</th>
-              <th className="adm-cash-col-money">הוצאות ₪</th>
-              <th className="adm-cash-col-money">הפרש יומי ($)</th>
-              <th className="adm-cash-col-money">הפרש יומי (₪)</th>
-              <th className="adm-cash-col-count">מס׳ קליטות</th>
-              <th className="adm-cash-col-dev">חריגות</th>
-            </tr>
-          </thead>
-          <tbody>
-            {days.length === 0 ? (
-              <tr><td colSpan={11} className="adm-table-empty">אין תנועות לשבוע זה.</td></tr>
-            ) : (
-              days.map((d) => {
-                const ordersUsd = ordersUsdByDay.get(d.date) ?? 0;
-                const intakeUsd = intakeUsdByDay.get(d.date) ?? 0;
-                const intakeIls = num(d.receiptsIls);
-                const diffUsd = ordersUsd - intakeUsd;
-                const dayDevCount = devByDay.get(d.date) ?? d.deviations;
-                return (
-                  <tr key={d.date} className="adm-table-excel-row">
-                    <td className="adm-cash-col-date" dir="ltr">{fmtDate(d.date)}</td>
-                    <td className="adm-cash-col-money" dir="ltr">
-                      <span className="adm-cash-num">{ordersUsd > 0 ? usd(String(ordersUsd)) : "—"}</span>
-                    </td>
-                    <td className="adm-cash-col-money" dir="ltr"><span className="adm-cash-num adm-cash-num--muted">—</span></td>
-                    <td className="adm-cash-col-money" dir="ltr">
-                      <span className="adm-cash-num">{intakeUsd > 0 ? usd(String(intakeUsd)) : "—"}</span>
-                    </td>
-                    <td className="adm-cash-col-money" dir="ltr">
-                      <span className="adm-cash-num">{intakeIls > 0 ? ils(String(intakeIls)) : "—"}</span>
-                    </td>
-                    {cell(d.expensesUsd, usd, "USD", d.date, "expenses", "adm-cash-c-exp")}
-                    {cell(d.expensesIls, ils, "ILS", d.date, "expenses", "adm-cash-c-exp")}
-                    <td className={`adm-cash-col-money ${diffToneClass(diffUsd)}`} dir="ltr">
-                      <span className="adm-cash-num">{Math.abs(diffUsd) > 0.001 ? usd(String(diffUsd)) : "🟢 0"}</span>
-                    </td>
-                    <td className="adm-cash-col-money" dir="ltr">
-                      <span className="adm-cash-num adm-cash-num--muted">—</span>
-                    </td>
-                    <td className="adm-cash-col-count" dir="ltr">{d.receiptsCount}</td>
-                    <td className="adm-cash-col-dev">
-                      {dayDevCount > 0 ? (
-                        <button type="button" className="adm-cash-devcell" onClick={onOpenDeviations} title="לפירוט החריגות">
-                          <AlertTriangle size={13} aria-hidden /> {dayDevCount}
-                        </button>
-                      ) : (
-                        <span className="adm-cash-devcell adm-cash-devcell--ok" title="תקין">🟢 0</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-          <tfoot>
-            <tr className="adm-cash-maintbl__foot">
-              <td className="adm-cash-col-date">סה״כ {week}</td>
-              <td className="adm-cash-col-money" dir="ltr">{totalOpenBalanceUsd > 0 ? usd(String(totalOpenBalanceUsd)) : "—"}</td>
-              <td className="adm-cash-col-money" dir="ltr">—</td>
-              <td className="adm-cash-col-money" dir="ltr">{totalIntakeUsd > 0 ? usd(String(totalIntakeUsd)) : "—"}</td>
-              <td className="adm-cash-col-money" dir="ltr">{num(dash?.receiptsIls) > 0 ? ils(dash?.receiptsIls) : "—"}</td>
-              <td className="adm-cash-col-money" dir="ltr">{usd(dash?.expensesUsd)}</td>
-              <td className="adm-cash-col-money" dir="ltr">{ils(dash?.expensesIls)}</td>
-              <td className={`adm-cash-col-money ${diffToneClass(totalDiffUsd)}`} dir="ltr">{usd(String(totalDiffUsd))}</td>
-              <td className="adm-cash-col-money" dir="ltr">—</td>
-              <td className="adm-cash-col-count" dir="ltr">{totalReceiptsCount}</td>
-              <td className="adm-cash-col-dev" dir="ltr">{cashDeviations.length}</td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-
-      <CashControlDeviationsHierarchy rows={cashDeviations} onOpenIntake={onOpenIntake} />
-    </section>
   );
 }
 
