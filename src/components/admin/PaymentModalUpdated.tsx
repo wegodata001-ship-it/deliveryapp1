@@ -137,6 +137,7 @@ import {
 } from "@/app/admin/invoice-cancel-requests/actions";
 import { CustomerPaymentOverageModal } from "@/components/admin/CustomerPaymentOverageModal";
 import { isSmallPaymentOverageUsd } from "@/lib/payment-small-overage";
+import { dispatchCashControlRefresh } from "@/lib/cash-control-refresh-bus";
 import {
   formatIlsDisplay,
   formatMoneyAmount,
@@ -2288,6 +2289,7 @@ export function PaymentModalUpdated({
       saveJustSavedTimerRef.current = null;
     }, 2000);
     onToast("התשלום נשמר");
+    dispatchCashControlRefresh(weekForSave);
 
     const refreshStart = performance.now();
     const savedDateYmd = receivedTodaySave ? formatLocalYmd(new Date()) : paymentDateYmd;
@@ -3422,6 +3424,7 @@ export function PaymentModalUpdated({
                         </span>
                       ) : null}
                     </div>
+                    <div className="payment-upd-composite-scroll">
                     <table className="payment-upd-composite-tbl">
                       <thead>
                         <tr>
@@ -3475,6 +3478,7 @@ export function PaymentModalUpdated({
                         ))}
                       </tbody>
                     </table>
+                    </div>
                     <div className="payment-upd-composite-hint">
                       מתעדכן בזמן אמת לפי ההקלדה הנוכחית — נקלט = סכום בטופס בלבד.
                     </div>

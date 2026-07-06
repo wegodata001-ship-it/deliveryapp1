@@ -34,6 +34,10 @@ import {
   type CashExpenseReason,
 } from "@/app/admin/cash-control/constants";
 import { CASH_CONTROL_EPS } from "@/lib/cash-control-calculation";
+import {
+  WEGO_CASH_CONTROL_REFRESH_EVENT,
+  type CashControlRefreshDetail,
+} from "@/lib/cash-control-refresh-bus";
 
 type ExpenseRow = Awaited<ReturnType<typeof listCashExpensesAction>>[number];
 
@@ -207,6 +211,16 @@ export function CashControlClient({ isAdmin, initialWeek }: { isAdmin: boolean; 
       cancelled = true;
     };
   }, [week, refreshTick]);
+
+  useEffect(() => {
+    const onPaymentSaved = (e: Event) => {
+      const detail = (e as CustomEvent<CashControlRefreshDetail>).detail;
+      const savedWeek = detail?.weekCode?.trim();
+      if (!savedWeek || savedWeek === week) refresh();
+    };
+    window.addEventListener(WEGO_CASH_CONTROL_REFRESH_EVENT, onPaymentSaved);
+    return () => window.removeEventListener(WEGO_CASH_CONTROL_REFRESH_EVENT, onPaymentSaved);
+  }, [week, refresh]);
 
   useEffect(() => {
     if (!auditOpen) return;

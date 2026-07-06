@@ -4,6 +4,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getAhWeekRange } from "@/lib/weeks/ah-week";
+import { cashControlWeekCashPaymentsWhere } from "@/lib/cash-control-week-payments";
 import { CASH_EXPENSE_REASONS } from "./constants";
 
 const Z = new Prisma.Decimal(0);
@@ -105,11 +106,11 @@ export async function getCashExportData(weekRaw: string): Promise<CashExportData
 
   const [ilsReceipts, usdReceipts, expenseRows, lastCount, countRows] = await Promise.all([
     prisma.payment.findMany({
-      where: { weekCode: week, status: "ACTIVE", ilsPaymentMethod: "CASH" },
+      where: cashControlWeekCashPaymentsWhere(week, "ILS"),
       select: { amountIls: true, paymentDate: true, createdAt: true },
     }),
     prisma.payment.findMany({
-      where: { weekCode: week, status: "ACTIVE", usdPaymentMethod: "CASH" },
+      where: cashControlWeekCashPaymentsWhere(week, "USD"),
       select: { amountUsd: true, paymentDate: true, createdAt: true },
     }),
     prisma.cashExpense.findMany({

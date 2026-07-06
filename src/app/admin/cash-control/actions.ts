@@ -20,6 +20,10 @@ import {
   toCashControlOrderComputed,
   CASH_CONTROL_EPS,
 } from "@/lib/cash-control-calculation";
+import {
+  cashControlWeekCashPaymentsWhere,
+  cashControlWeekPaymentsWhere,
+} from "@/lib/cash-control-week-payments";
 import { groupByActivePayments } from "@/lib/payment-record-status";
 import {
   computeCashControlDeviations,
@@ -224,11 +228,11 @@ async function computeExpected(week: string): Promise<{
 }> {
   const [ilsReceipts, usdReceipts, expenses] = await Promise.all([
     prisma.payment.findMany({
-      where: { weekCode: week, status: "ACTIVE", ilsPaymentMethod: "CASH" },
+      where: cashControlWeekCashPaymentsWhere(week, "ILS"),
       select: { id: true, amountIls: true, paymentDate: true, createdAt: true },
     }),
     prisma.payment.findMany({
-      where: { weekCode: week, status: "ACTIVE", usdPaymentMethod: "CASH" },
+      where: cashControlWeekCashPaymentsWhere(week, "USD"),
       select: { id: true, amountUsd: true, paymentDate: true, createdAt: true },
     }),
     prisma.cashExpense.findMany({
@@ -497,27 +501,24 @@ export async function getPaymentsControlAction(week: string): Promise<PaymentsCo
     };
   });
 
-  const payRows =
-    orderIds.length > 0
-      ? await prisma.payment.findMany({
-          where: { orderId: { in: orderIds }, status: "ACTIVE", amountUsd: { not: null } },
-          orderBy: [{ paymentDate: "desc" }, { createdAt: "desc" }],
-          select: {
-            id: true,
-            paymentCode: true,
-            orderId: true,
-            customerId: true,
-            paymentDate: true,
-            createdAt: true,
-            amountUsd: true,
-            paymentMethod: true,
-            usdPaymentMethod: true,
-            ilsPaymentMethod: true,
-            customer: { select: { displayName: true } },
-            order: { select: { orderNumber: true } },
-          },
-        })
-      : [];
+  const payRows = await prisma.payment.findMany({
+    where: cashControlWeekPaymentsWhere(wk),
+    orderBy: [{ paymentDate: "desc" }, { createdAt: "desc" }],
+    select: {
+      id: true,
+      paymentCode: true,
+      orderId: true,
+      customerId: true,
+      paymentDate: true,
+      createdAt: true,
+      amountUsd: true,
+      paymentMethod: true,
+      usdPaymentMethod: true,
+      ilsPaymentMethod: true,
+      customer: { select: { displayName: true } },
+      order: { select: { orderNumber: true } },
+    },
+  });
   let receivedTotal = 0;
   const receiptRows: PaymentsControlReceiptRow[] = payRows.map((p) => {
     const amt = Number(p.amountUsd?.toString() ?? 0) || 0;
@@ -613,9 +614,8 @@ export async function listCashDetailAction(
   const wk = week.trim();
   const day = filterDay?.trim() || null;
 
-  const methodField = currency === "ILS" ? "ilsPaymentMethod" : "usdPaymentMethod";
   const payments = await prisma.payment.findMany({
-    where: { weekCode: wk, status: "ACTIVE", [methodField]: "CASH" },
+    where: cashControlWeekCashPaymentsWhere(wk, currency),
     select: {
       id: true,
       paymentCode: true,

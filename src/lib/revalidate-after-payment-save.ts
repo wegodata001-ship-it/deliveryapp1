@@ -9,6 +9,7 @@ export function scheduleRevalidateAfterPaymentSave(): void {
     revalidatePath("/admin/orders");
     revalidatePath("/admin/balances");
     revalidatePath("/admin/source-tables/payments");
+    revalidatePath("/admin/cash-control");
   };
   try {
     after(run);
