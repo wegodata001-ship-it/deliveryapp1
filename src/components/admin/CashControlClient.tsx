@@ -27,6 +27,7 @@ import {
   type PaymentsControlReceiptRow,
 } from "@/app/admin/cash-control/actions";
 import { CashControlDeviationsHierarchy } from "@/components/admin/CashControlDeviationsHierarchy";
+import { CashControlMethodSummary } from "@/components/admin/CashControlMethodSummary";
 import { CashDetailsTable, CashMethodTag, type CashDetailsVariant } from "@/components/admin/CashDetailsTable";
 import {
   CASH_EXPENSE_REASONS,
@@ -360,6 +361,8 @@ export function CashControlClient({ isAdmin, initialWeek }: { isAdmin: boolean; 
           onChanged={refresh}
         />
       ) : null}
+
+      <CashControlMethodSummary week={week} summary={pcPayload?.methodSummary} />
 
       <CashControlTable
         week={week}
@@ -778,8 +781,6 @@ function CashControlTable({
         <Coins size={18} aria-hidden /> טבלת בקרת קופה — {week}
       </h2>
 
-      <CashControlDeviationsHierarchy rows={cashDeviations} onOpenIntake={onOpenIntake} />
-
       <div className="adm-cash-maintbl__scroll">
         <table className="adm-table-excel adm-cash-maintbl__table adm-cash-erp-table">
           <thead>
@@ -860,6 +861,8 @@ function CashControlTable({
           </tfoot>
         </table>
       </div>
+
+      <CashControlDeviationsHierarchy rows={cashDeviations} onOpenIntake={onOpenIntake} />
     </section>
   );
 }

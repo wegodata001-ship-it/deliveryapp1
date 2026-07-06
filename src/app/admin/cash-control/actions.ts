@@ -21,6 +21,10 @@ import {
   CASH_CONTROL_EPS,
 } from "@/lib/cash-control-calculation";
 import {
+  buildCashControlMethodSummary,
+  type CashControlMethodSummaryPayload,
+} from "@/lib/cash-control-method-summary";
+import {
   cashControlWeekCashPaymentsWhere,
   cashControlWeekPaymentsWhere,
 } from "@/lib/cash-control-week-payments";
@@ -406,6 +410,8 @@ export type PaymentsControlReceiptRow = {
   amountUsd: string;
 };
 
+export type { CashControlMethodSummaryPayload } from "@/lib/cash-control-method-summary";
+
 export type PaymentsControlPayload = {
   week: string;
   totals: {
@@ -416,6 +422,7 @@ export type PaymentsControlPayload = {
   };
   orders: PaymentsControlOrderRow[];
   receipts: PaymentsControlReceiptRow[];
+  methodSummary: CashControlMethodSummaryPayload;
 };
 
 export async function getPaymentsControlAction(week: string): Promise<PaymentsControlPayload | null> {
@@ -436,8 +443,11 @@ export async function getPaymentsControlAction(week: string): Promise<PaymentsCo
         amountUsd: true,
         commissionUsd: true,
         paymentMethod: true,
+        usdRateUsed: true,
+        snapshotFinalDollarRate: true,
+        exchangeRate: true,
         customer: { select: { displayName: true } },
-        paymentBreakdown: { select: { paymentMethod: true } },
+        paymentBreakdown: { select: { paymentMethod: true, amount: true, currency: true } },
       },
     }),
     computeMethodDeviations(wk),
@@ -538,6 +548,8 @@ export async function getPaymentsControlAction(week: string): Promise<PaymentsCo
     };
   });
 
+  const methodSummary = buildCashControlMethodSummary(orders, payRows);
+
   return {
     week: wk,
     totals: {
@@ -548,6 +560,7 @@ export async function getPaymentsControlAction(week: string): Promise<PaymentsCo
     },
     orders: orderRows,
     receipts: receiptRows,
+    methodSummary,
   };
 }
 
