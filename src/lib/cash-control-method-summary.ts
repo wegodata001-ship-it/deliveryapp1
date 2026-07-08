@@ -87,7 +87,7 @@ function rowStatus(planned: number, received: number): CashControlMethodSummaryS
 function aggregatePlanned(orders: SummaryOrderInput[]): Map<PaymentBucketKey, number> {
   const planned = new Map<PaymentBucketKey, number>();
   for (const o of orders) {
-    if (isCompositePaymentMethod(o.paymentMethod) && o.paymentBreakdown.length > 0) {
+    if (o.paymentBreakdown.length > 0) {
       const rateN = orderRateN(o);
       for (const b of o.paymentBreakdown) {
         const usdVal =

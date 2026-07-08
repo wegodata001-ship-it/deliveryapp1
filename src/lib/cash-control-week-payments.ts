@@ -5,6 +5,7 @@
 
 import type { Prisma } from "@prisma/client";
 import type { CashReconciliationLineId } from "@/lib/cash-control-reconciliation";
+import { cashControlExcludeInternalPaymentsWhere } from "@/lib/cash-control-internal-payments";
 import { activePaidPaymentWhere } from "@/lib/payment-record-status-shared";
 
 const CREDIT_METHODS = ["CREDIT", "CREDIT_CARD", "CARD"];
@@ -15,13 +16,20 @@ const CHECK_METHODS = ["CHECK", "CHECKS", "CHEQUE"];
 export function cashControlWeekPaymentsWhere(week: string): Prisma.PaymentWhereInput {
   const wk = week.trim();
   return {
-    AND: [activePaidPaymentWhere, { weekCode: wk }, { amountUsd: { not: null } }],
+    AND: [
+      activePaidPaymentWhere,
+      { weekCode: wk },
+      { amountUsd: { not: null } },
+      cashControlExcludeInternalPaymentsWhere,
+    ],
   };
 }
 
 /** כל קליטות התשלום הפעילות בשבוע — להתאמת קופה (כולל ₪ בלבד) */
 export function cashControlWeekReconciliationPaymentsWhere(week: string): Prisma.PaymentWhereInput {
-  return { AND: [activePaidPaymentWhere, { weekCode: week.trim() }] };
+  return {
+    AND: [activePaidPaymentWhere, { weekCode: week.trim() }, cashControlExcludeInternalPaymentsWhere],
+  };
 }
 
 /** מסנן קליטות לפי שורת התאמה (לפירוט lazy) */
@@ -96,6 +104,11 @@ export function cashControlWeekCashPaymentsWhere(
 ): Prisma.PaymentWhereInput {
   const methodField = currency === "ILS" ? "ilsPaymentMethod" : "usdPaymentMethod";
   return {
-    AND: [activePaidPaymentWhere, { weekCode: week.trim() }, { [methodField]: "CASH" }],
+    AND: [
+      activePaidPaymentWhere,
+      { weekCode: week.trim() },
+      { [methodField]: "CASH" },
+      cashControlExcludeInternalPaymentsWhere,
+    ],
   };
 }

@@ -29,6 +29,7 @@ import {
 import { CashControlMethodSummary } from "@/components/admin/CashControlMethodSummary";
 import { CashControlReconciliationTable } from "@/components/admin/CashControlReconciliationTable";
 import { CashDetailsTable, CashMethodTag, type CashDetailsVariant } from "@/components/admin/CashDetailsTable";
+import { PaymentDetailViewModal } from "@/components/admin/PaymentDetailViewModal";
 import {
   CASH_EXPENSE_REASONS,
   type CashCurrency,
@@ -436,7 +437,9 @@ export function CashControlClient({ isAdmin, initialWeek }: { isAdmin: boolean; 
           onClose={() => setDetail(null)}
         />
       ) : null}
-      {drawerRow ? (
+      {drawerRow?.kind === "RECEIPT" ? (
+        <PaymentDetailViewModal paymentId={drawerRow.id} onClose={() => setDrawerRow(null)} />
+      ) : drawerRow ? (
         <MovementDrawer
           row={drawerRow}
           onOpenOriginal={(r) => {

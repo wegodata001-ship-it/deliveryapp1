@@ -462,6 +462,31 @@ function parseOrderBreakdown(
   return { ok: true, rows };
 }
 
+/** מפענח חלוקת תשלום — מורכב מהטופס, אחרת שורה אחידה לפי אמצעי ההזמנה */
+function resolveOrderBreakdownRows(
+  form: { paymentMethod: string; paymentBreakdown?: OrderBreakdownLineInput[] },
+  totalUsd: Prisma.Decimal,
+  finalNisPerUsd: Prisma.Decimal,
+): { ok: true; rows: ParsedBreakdownRow[] } | { ok: false; error: string } {
+  const isComposite = isCompositePaymentMethod(form.paymentMethod);
+  if (isComposite) {
+    return parseOrderBreakdown(form.paymentBreakdown, totalUsd, finalNisPerUsd);
+  }
+  const method = (form.paymentMethod ?? "").trim();
+  if (!method) return { ok: true, rows: [] };
+  if (!PAYMENT_METHODS.has(method)) {
+    return { ok: false, error: "אמצעי תשלום לא תקין" };
+  }
+  const singleLine: OrderBreakdownLineInput[] = [
+    {
+      paymentMethod: method,
+      amount: totalUsd.toDecimalPlaces(2, 4).toString(),
+      currency: "USD",
+    },
+  ];
+  return parseOrderBreakdown(singleLine, totalUsd, finalNisPerUsd);
+}
+
 /** כותב מחדש את חלוקת התשלום של הזמנה (מחיקה + יצירה). rows ריק = ניקוי חלוקה. */
 async function writeOrderBreakdown(
   db: CaptureDbClient,
@@ -1824,13 +1849,9 @@ async function captureOrderActionInner(
   }
 
   const totalUsd = deal.add(commissionUsd).toDecimalPlaces(4, 4);
-  const isComposite = isCompositePaymentMethod(form.paymentMethod);
-  let breakdownRows: ParsedBreakdownRow[] = [];
-  if (isComposite) {
-    const bd = parseOrderBreakdown(form.paymentBreakdown, totalUsd, finalRate);
-    if (!bd.ok) return bd;
-    breakdownRows = bd.rows;
-  }
+  const bdResolved = resolveOrderBreakdownRows(form, totalUsd, finalRate);
+  if (!bdResolved.ok) return bdResolved;
+  const breakdownRows = bdResolved.rows;
   const payParse = parseOrderPaymentLines(form.paymentLines, finalRate);
   if (!payParse.ok) return payParse;
   if (isDebtWithdrawalOrderStatus(status)) {
@@ -1980,7 +2001,7 @@ async function captureOrderActionInner(
         perf.add("createItemsMs", Date.now() - tItems);
       }
 
-      if (isComposite) {
+      if (breakdownRows.length > 0 && !isDebtWithdrawalOrderStatus(status)) {
         await writeOrderBreakdown(tx, created.id, breakdownRows);
       }
 
@@ -2968,13 +2989,9 @@ async function updateOrderWorkPanelActionInner(
   }
 
   const totalUsd = deal.add(commissionUsd).toDecimalPlaces(4, 4);
-  const isComposite = isCompositePaymentMethod(form.paymentMethod);
-  let breakdownRows: ParsedBreakdownRow[] = [];
-  if (isComposite) {
-    const bd = parseOrderBreakdown(form.paymentBreakdown, totalUsd, final);
-    if (!bd.ok) return bd;
-    breakdownRows = bd.rows;
-  }
+  const bdResolved = resolveOrderBreakdownRows(form, totalUsd, final);
+  if (!bdResolved.ok) return bdResolved;
+  const breakdownRows = bdResolved.rows;
   const payParse = parseOrderPaymentLines(form.paymentLines, final);
   if (!payParse.ok) return payParse;
   if (isDebtWithdrawalOrderStatus(status)) {

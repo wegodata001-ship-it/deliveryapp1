@@ -39,6 +39,10 @@ export function activityActionLabelHe(actionType: string): string {
       return "סגירת חוב באמצעות עמלה";
     case "CUSTOMER_BALANCES_RESET":
       return "איפוס יתרות לקוח";
+    case "CUSTOMER_BALANCE_RESET_FROM_CREDIT":
+      return "איפוס יתרה מתוך יתרת זכות";
+    case "PAYMENT_SURPLUS_TO_COMMISSION":
+      return "העודף הועבר לעמלה";
     case "PAYMENT_RECEIVED":
     case "PAYMENT_INTAKE_BATCH":
       return "קלט תשלום";

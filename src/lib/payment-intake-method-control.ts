@@ -8,7 +8,7 @@ import type { LivePaymentFormKpis } from "@/lib/payment-intake-live-kpi";
 import type { PaymentIntakeOrderRow } from "@/lib/payment-intake";
 import { PAYMENT_BUCKET_LABELS, type PaymentBucketKey } from "@/lib/payment-breakdown-shared";
 
-export type MethodControlRowStatus = "paid" | "remaining" | "excess" | "not-required";
+export type MethodControlRowStatus = "paid" | "remaining" | "excess" | "surplus" | "not-required";
 
 export type LivePaymentMethodControlRow = {
   bucket: PaymentBucketKey;
@@ -45,6 +45,7 @@ function enteredForBucket(kpis: LivePaymentFormKpis, bucket: PaymentBucketKey): 
 function computeRowStatus(
   plannedUsd: number,
   enteredUsd: number,
+  globalOverageUsd: number,
 ): Pick<LivePaymentMethodControlRow, "status" | "statusLabel" | "excessUsd"> {
   if (plannedUsd <= CASH_CONTROL_EPS) {
     if (enteredUsd <= CASH_CONTROL_EPS) {
@@ -55,6 +56,9 @@ function computeRowStatus(
   }
   if (enteredUsd > plannedUsd + CASH_CONTROL_EPS) {
     const excess = round2(enteredUsd - plannedUsd);
+    if (globalOverageUsd >= excess - CASH_CONTROL_EPS) {
+      return { status: "surplus", statusLabel: "עודף תשלום", excessUsd: excess };
+    }
     return { status: "excess", statusLabel: "חריגה", excessUsd: excess };
   }
   const remaining = round2(plannedUsd - enteredUsd);
@@ -76,9 +80,21 @@ export function buildLivePaymentMethodControlRows(
   orders: PaymentIntakeOrderRow[],
   includedOrderIds: string[] | null,
   kpis: LivePaymentFormKpis,
+  totalPaymentUsd?: number,
 ): LivePaymentMethodControlRow[] {
   const plan = buildIntakeBreakdownPlan(orders, includedOrderIds);
   const planMap = new Map(plan.map((p) => [p.bucket, p.plannedUsd]));
+
+  const idSet = includedOrderIds ? new Set(includedOrderIds) : null;
+  let totalRemaining = 0;
+  for (const o of orders) {
+    if (idSet && !idSet.has(o.id)) continue;
+    totalRemaining += Math.max(0, Number(o.dbRemainingUsd) || 0);
+  }
+  totalRemaining = round2(totalRemaining);
+  const paymentTotal = round2(totalPaymentUsd ?? kpis.totalPaymentUsd ?? 0);
+  const globalOverageUsd = round2(Math.max(0, paymentTotal - totalRemaining));
+  let unexplainedOverageUsd = globalOverageUsd;
 
   const buckets: PaymentBucketKey[] = [...DISPLAY_BUCKETS];
   const otherPlanned = planMap.get("OTHER") ?? 0;
@@ -91,7 +107,10 @@ export function buildLivePaymentMethodControlRows(
     const plannedUsd = round2(planMap.get(bucket) ?? 0);
     const enteredUsd = round2(enteredForBucket(kpis, bucket));
     const remainingUsd = round2(plannedUsd - enteredUsd);
-    const { status, statusLabel, excessUsd } = computeRowStatus(plannedUsd, enteredUsd);
+    let { status, statusLabel, excessUsd } = computeRowStatus(plannedUsd, enteredUsd, unexplainedOverageUsd);
+    if (status === "surplus" && excessUsd > 0) {
+      unexplainedOverageUsd = round2(Math.max(0, unexplainedOverageUsd - excessUsd));
+    }
     return {
       bucket,
       label: PAYMENT_BUCKET_LABELS[bucket],
@@ -113,6 +132,7 @@ export const METHOD_CONTROL_STATUS_ICON: Record<MethodControlRowStatus, string> 
   paid: "🟢",
   remaining: "🟡",
   excess: "🔴",
+  surplus: "🟢",
   "not-required": "⚪",
 };
 
@@ -123,9 +143,24 @@ export function fmtMethodControlCell(
 ): string {
   if (row.status === "not-required") return "—";
   if (kind === "remaining") {
-    if (row.status === "excess") return `+$${round2(row.excessUsd).toFixed(2)}`;
+    if (row.status === "excess" || row.status === "surplus") {
+      return `+$${round2(row.excessUsd).toFixed(2)}`;
+    }
     return fmtMethodControlUsd(row.remainingUsd);
   }
   if (kind === "planned") return fmtMethodControlUsd(row.plannedUsd);
   return fmtMethodControlUsd(row.enteredUsd);
+}
+
+/** הודעת סיכום לאחר שמירה — כמה נשאר לגבות מכל אמצעי */
+export function buildPostSaveRemainingSummary(
+  orders: PaymentIntakeOrderRow[],
+  includedOrderIds: string[] | null,
+): string {
+  const plan = buildIntakeBreakdownPlan(orders, includedOrderIds);
+  const lines = plan
+    .filter((p) => p.remainingUsd > CASH_CONTROL_EPS)
+    .map((p) => `${p.label} – נותר ${fmtMethodControlUsd(p.remainingUsd)}`);
+  if (lines.length === 0) return "התשלום נשמר — כל האמצעים שולמו במלואם";
+  return `התשלום נשמר\n${lines.join("\n")}`;
 }

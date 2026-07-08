@@ -12,7 +12,9 @@ import {
   type PaymentBucketKey,
 } from "@/lib/payment-breakdown-shared";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
-import { formatLocalYmd } from "@/lib/work-week";
+import { formatLocalHm, formatLocalYmd } from "@/lib/work-week";
+import { loadPaymentEntryPayload, type PaymentEntryPayload } from "@/lib/payment-entry-payload";
+import type { PaymentLine } from "@/lib/payment-updated";
 import { ensureDocumentsTable } from "@/lib/documents/ensure";
 import {
   computeCashControlOrderBalance,
@@ -1034,4 +1036,145 @@ export async function approveVarianceAction(countId: string): Promise<{ ok: bool
   });
   revalidatePath("/admin/cash-control");
   return { ok: true };
+}
+
+const PAYMENT_DETAIL_PERMS = ["view_payment_control", "receive_payments", "view_reports"];
+
+export type PaymentDetailLineView = {
+  lineNo: number;
+  usdAmount: string;
+  ilsAmount: string;
+  usdMethodLabel: string;
+  ilsMethodLabel: string;
+  usdNote: string;
+  ilsNote: string;
+};
+
+export type PaymentDetailViewPayload = {
+  paymentId: string;
+  paymentCode: string | null;
+  orderId: string | null;
+  orderNumber: string | null;
+  customerName: string;
+  recordedByName: string | null;
+  paymentDateYmd: string;
+  paymentTimeHm: string;
+  status: PaymentEntryPayload["status"];
+  cancelReason: string | null;
+  dollarRate: string | null;
+  commissionPercent: string;
+  notes: string | null;
+  lines: PaymentDetailLineView[];
+  totalUsd: string;
+  totalIls: string;
+  documents: { id: string; fileName: string }[];
+  createdByName: string | null;
+  createdDateYmd: string;
+  createdTimeHm: string;
+  updatedDateYmd: string;
+  updatedTimeHm: string;
+  /** Payment אין updatedBy — null תמיד */
+  updatedByName: string | null;
+  wasUpdated: boolean;
+};
+
+function methodLabel(method: string | null | undefined): string {
+  if (!method) return "—";
+  return PAYMENT_METHOD_LABELS[method] ?? method;
+}
+
+function fmtLineAmount(n: number | ""): string {
+  if (n === "" || !Number.isFinite(Number(n)) || Number(n) <= 0) return "—";
+  return Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function mapPaymentDetailLines(lines: PaymentLine[]): PaymentDetailLineView[] {
+  return lines.map((line, idx) => ({
+    lineNo: idx + 1,
+    usdAmount: fmtLineAmount(line.usdAmount),
+    ilsAmount: fmtLineAmount(line.ilsAmount),
+    usdMethodLabel: methodLabel(line.usdPaymentMethod),
+    ilsMethodLabel: methodLabel(line.ilsPaymentMethod),
+    usdNote: line.usdNote?.trim() || "—",
+    ilsNote: line.ilsNote?.trim() || "—",
+  }));
+}
+
+/** פירוט קליטת תשלום — תצוגה רחבה (קריאה בלבד) */
+export async function getPaymentDetailViewAction(paymentId: string): Promise<PaymentDetailViewPayload | null> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, PAYMENT_DETAIL_PERMS)) return null;
+
+  const id = paymentId.trim();
+  if (!id) return null;
+
+  const entry = await loadPaymentEntryPayload(id);
+  if (!entry) return null;
+
+  const meta = await prisma.payment.findFirst({
+    where: { id, customerId: { not: null } },
+    select: {
+      id: true,
+      orderId: true,
+      notes: true,
+      createdAt: true,
+      updatedAt: true,
+      order: { select: { orderNumber: true } },
+      createdBy: { select: { fullName: true } },
+    },
+  });
+  if (!meta) return null;
+
+  const documents: { id: string; fileName: string }[] = [];
+  try {
+    await ensureDocumentsTable();
+    const docs = await prisma.document.findMany({
+      where: { entityType: "PAYMENT", entityId: id, deletedAt: null },
+      select: { id: true, fileName: true },
+      orderBy: { createdAt: "desc" },
+    });
+    documents.push(...docs);
+  } catch {
+    /* טבלת מסמכים לא זמינה */
+  }
+
+  let totalUsd = 0;
+  let totalIls = 0;
+  for (const line of entry.lines) {
+    const u = Number(line.usdAmount);
+    const i = Number(line.ilsAmount);
+    if (Number.isFinite(u) && u > 0) totalUsd += u;
+    if (Number.isFinite(i) && i > 0) totalIls += i;
+  }
+
+  const createdAt = meta.createdAt;
+  const updatedAt = meta.updatedAt;
+  const wasUpdated = updatedAt.getTime() - createdAt.getTime() > 2000;
+
+  return {
+    paymentId: entry.id,
+    paymentCode: entry.paymentCode,
+    orderId: meta.orderId,
+    orderNumber: meta.order?.orderNumber ?? null,
+    customerName: entry.customer.displayName || entry.customer.customerCode || "—",
+    recordedByName: meta.createdBy?.fullName ?? null,
+    paymentDateYmd: entry.paymentDateYmd,
+    paymentTimeHm: entry.paymentTimeHm,
+    status: entry.status,
+    cancelReason: entry.cancelReason,
+    dollarRate: entry.dollarRate,
+    commissionPercent: entry.commissionPercent,
+    notes: meta.notes?.trim() || null,
+    lines: mapPaymentDetailLines(entry.lines),
+    totalUsd: totalUsd.toFixed(2),
+    totalIls: totalIls.toFixed(2),
+    documents,
+    createdByName: meta.createdBy?.fullName ?? null,
+    createdDateYmd: formatLocalYmd(createdAt),
+    createdTimeHm: formatLocalHm(createdAt),
+    updatedDateYmd: formatLocalYmd(updatedAt),
+    updatedTimeHm: formatLocalHm(updatedAt),
+    updatedByName: null,
+    wasUpdated,
+  };
 }

@@ -213,3 +213,28 @@ export function validateBreakdown(
   const ok = validCount >= 1 && Math.abs(diffUsd) <= BREAKDOWN_EPS;
   return { sumUsd, diffUsd, ok, validCount };
 }
+
+/** שורת חלוקה יחידה — לשמירה אחידה גם כשאין "תשלום מורכב" */
+export function singleMethodBreakdownLine(
+  paymentMethod: string,
+  totalUsd: number,
+): OrderBreakdownLineInput {
+  const n = Number.isFinite(totalUsd) ? totalUsd : 0;
+  return {
+    paymentMethod: paymentMethod.trim(),
+    amount: n.toFixed(2),
+    currency: "USD",
+  };
+}
+
+/** בונה מערך חלוקה לשמירה — מורכב מהטופס, אחרת שורה אחת */
+export function paymentBreakdownForSave(
+  paymentMethod: string,
+  paymentBreakdown: OrderBreakdownLineInput[],
+  payableUsd: number,
+): OrderBreakdownLineInput[] {
+  if (isCompositePaymentMethod(paymentMethod)) return paymentBreakdown;
+  const method = paymentMethod.trim();
+  if (!method) return [];
+  return [singleMethodBreakdownLine(method, payableUsd)];
+}

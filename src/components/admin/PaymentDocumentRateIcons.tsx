@@ -12,10 +12,17 @@ type Props = {
   entityType: DocumentEntityType;
   entityId: string | null;
   disabled?: boolean;
+  /** compact = אייקונים ליד שער · labeled = כפתורים עם טקסט */
+  variant?: "compact" | "labeled";
 };
 
-/** אייקוני מסמך ליד שער הדולר — סטטוס + תצוגה (ללא כרטיס מסמכים במסך). */
-export function PaymentDocumentRateIcons({ entityType, entityId, disabled = false }: Props) {
+/** מסמכים מצורפים לקליטת תשלום — העלאה וצפייה */
+export function PaymentDocumentRateIcons({
+  entityType,
+  entityId,
+  disabled = false,
+  variant = "compact",
+}: Props) {
   const [docs, setDocs] = useState<DocumentDto[]>([]);
   const [canView, setCanView] = useState(false);
   const [canUpload, setCanUpload] = useState(false);
@@ -71,13 +78,22 @@ export function PaymentDocumentRateIcons({ entityType, entityId, disabled = fals
     window.open(`/api/documents/${doc.id}/download`, "_blank", "noopener,noreferrer");
   }
 
-  if (!entityId || (!canView && !canUpload)) return null;
+  if (!entityId) return null;
 
   const hasDoc = docs.length > 0;
   const previewable = hasDoc && (docs[0].kind === "pdf" || docs[0].kind === "image");
+  const labeled = variant === "labeled";
 
   return (
-    <span className="payment-modal-rate-doc-icons" dir="ltr">
+    <span
+      className={[
+        "payment-modal-rate-doc-icons",
+        labeled ? "payment-modal-rate-doc-icons--labeled" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      dir="ltr"
+    >
       <input
         ref={fileInputRef}
         type="file"
@@ -92,36 +108,49 @@ export function PaymentDocumentRateIcons({ entityType, entityId, disabled = fals
         type="button"
         className={[
           "payment-modal-rate-doc-btn",
+          labeled ? "payment-modal-rate-doc-btn--labeled" : "",
           hasDoc ? "payment-modal-rate-doc-btn--has" : "payment-modal-rate-doc-btn--empty",
-        ].join(" ")}
+        ]
+          .filter(Boolean)
+          .join(" ")}
         title={
-          hasDoc
-            ? `מסמך מצורף (${docs.length})`
-            : canUpload
-              ? "אין מסמך — לחץ להעלאה"
-              : "אין מסמך מצורף"
+          !canUpload
+            ? "אין הרשאת העלאת מסמכים"
+            : hasDoc
+              ? `הוסף מסמך (${docs.length} מצורפים)`
+              : "הוספת מסמך לקליטה"
         }
-        aria-label={hasDoc ? "קיים מסמך מצורף" : "אין מסמך מצורף"}
-        disabled={disabled || busy || (!hasDoc && !canUpload)}
-        onClick={() => {
-          if (hasDoc) return;
-          fileInputRef.current?.click();
-        }}
+        aria-label="הוספת מסמך"
+        disabled={disabled || busy || !canUpload}
+        onClick={() => fileInputRef.current?.click()}
       >
-        <span aria-hidden>📄</span>
+        <span aria-hidden>📎</span>
+        {labeled ? <span className="payment-modal-rate-doc-lbl">הוספת מסמך</span> : null}
       </button>
       <button
         type="button"
         className={[
           "payment-modal-rate-doc-btn",
+          labeled ? "payment-modal-rate-doc-btn--labeled" : "",
           previewable ? "payment-modal-rate-doc-btn--preview" : "payment-modal-rate-doc-btn--empty",
-        ].join(" ")}
-        title={previewable ? "צפייה במסמך" : "אין מסמך לתצוגה"}
+        ]
+          .filter(Boolean)
+          .join(" ")}
+        title={
+          !canView
+            ? "אין הרשאת צפייה במסמכים"
+            : previewable
+              ? "צפייה במסמך"
+              : hasDoc
+                ? "המסמך אינו נתמך לתצוגה — הורדה בלבד"
+                : "אין מסמך מצורף"
+        }
         aria-label="צפייה במסמך"
         disabled={disabled || !previewable}
         onClick={onPreview}
       >
         <span aria-hidden>👁</span>
+        {labeled ? <span className="payment-modal-rate-doc-lbl">צפייה במסמך</span> : null}
       </button>
     </span>
   );

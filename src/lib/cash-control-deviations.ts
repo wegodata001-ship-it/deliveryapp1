@@ -212,7 +212,7 @@ export async function computeCashControlDeviations(orderWeekCode: string): Promi
     const actualByMethod = new Map<string, number>();
     const lastPaymentByMethod = new Map<string, (typeof orderPayments)[number]>();
 
-    if (isCompositePaymentMethod(o.paymentMethod) && o.paymentBreakdown.length > 0) {
+    if (o.paymentBreakdown.length > 0) {
       const rateDec = o.usdRateUsed ?? o.snapshotFinalDollarRate ?? o.exchangeRate ?? Z;
       const rateN = Number(rateDec.toString()) || 0;
       for (const b of o.paymentBreakdown) {

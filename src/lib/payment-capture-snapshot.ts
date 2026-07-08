@@ -58,6 +58,7 @@ export type PaymentCaptureSnapshot = {
   includedIds: string[] | null;
   commissionResetIds: string[];
   customerBalanceResetPending: boolean;
+  balanceResetFromCredit: boolean;
   customerOpenDebtSignedUsd: number;
 };
 

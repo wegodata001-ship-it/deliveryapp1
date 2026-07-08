@@ -20,7 +20,13 @@ export type AppPermissionKey =
   | "documents.view"
   | "documents.upload"
   | "documents.delete"
-  | "documents.download";
+  | "documents.download"
+  | "manage_cash_expenses"
+  | "cashflow.view"
+  | "cashflow.count.create"
+  | "cashflow.count.edit"
+  | "cashflow.count.approve"
+  | "cashflow.export";
 
 export type AppPermissionDef = {
   key: AppPermissionKey;
@@ -51,6 +57,16 @@ export const APP_PERMISSION_DEFINITIONS: AppPermissionDef[] = [
   { key: "documents.upload", name: "העלאת מסמכים", description: "צירוף מסמכים לישויות במערכת" },
   { key: "documents.delete", name: "מחיקת מסמכים", description: "מחיקת מסמכים מצורפים" },
   { key: "documents.download", name: "הורדת מסמכים", description: "הורדה וצפייה בקבצי המסמכים" },
+  {
+    key: "manage_cash_expenses",
+    name: "הוצאות קופה",
+    description: "הזנה, עריכה ומחיקה של הוצאות קופה (ללא צורך בגישה לבקרת קופה)",
+  },
+  { key: "cashflow.view", name: "בקרת תזרים — צפייה", description: "צפייה במודול בקרת תזרים" },
+  { key: "cashflow.count.create", name: "בקרת תזרים — יצירת ספירה", description: "יצירת ספירת קופה" },
+  { key: "cashflow.count.edit", name: "בקרת תזרים — עריכת ספירה", description: "עריכת ספירת קופה קיימת" },
+  { key: "cashflow.count.approve", name: "בקרת תזרים — אישור ספירה", description: "אישור פערי ספירת קופה" },
+  { key: "cashflow.export", name: "בקרת תזרים — ייצוא", description: "ייצוא PDF / Excel של בקרת התזרים" },
 ];
 
 /** הרשאות שניתן לשייך לעובד דרך טופס ניהול משתמשים */
@@ -61,6 +77,12 @@ export const MANAGED_EMPLOYEE_PERMISSION_KEYS = [
   "edit_orders",
   "receive_payments",
   "view_payment_control",
+  "manage_cash_expenses",
+  "cashflow.view",
+  "cashflow.count.create",
+  "cashflow.count.edit",
+  "cashflow.count.approve",
+  "cashflow.export",
   "view_customer_card",
   "view_reports",
   "import_excel",
@@ -94,6 +116,17 @@ export const EMPLOYEE_PERMISSION_GROUPS: {
     entries: [
       { key: "receive_payments", label: "קליטת תשלום" },
       { key: "view_payment_control", label: "בקרת תקבולים" },
+      { key: "manage_cash_expenses", label: "הוצאות קופה" },
+    ],
+  },
+  {
+    title: "בקרת תזרים",
+    entries: [
+      { key: "cashflow.view", label: "צפייה בבקרת תזרים" },
+      { key: "cashflow.count.create", label: "יצירת ספירת קופה" },
+      { key: "cashflow.count.edit", label: "עריכת ספירת קופה" },
+      { key: "cashflow.count.approve", label: "אישור ספירת קופה" },
+      { key: "cashflow.export", label: "ייצוא PDF / Excel" },
     ],
   },
   {

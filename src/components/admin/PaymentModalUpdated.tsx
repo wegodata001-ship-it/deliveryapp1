@@ -31,11 +31,10 @@ import {
 import { aggregateLivePaymentFormKpis } from "@/lib/payment-intake-live-kpi";
 import {
   buildLivePaymentMethodControlRows,
-  fmtMethodControlCell,
-  fmtMethodControlUsd,
+  buildPostSaveRemainingSummary,
   hasCompositeMethodControl,
-  METHOD_CONTROL_STATUS_ICON,
 } from "@/lib/payment-intake-method-control";
+import { PaymentMethodControlModal } from "@/components/admin/PaymentMethodControlModal";
 import { PaymentDocumentRateIcons } from "@/components/admin/PaymentDocumentRateIcons";
 import { attachDraftDocumentsAction } from "@/app/admin/documents/actions";
 import {
@@ -45,6 +44,10 @@ import {
 import {
   computeIntakeSaveDeviations,
   intakeSaveHasDeviations,
+  intakeHasMethodMismatch,
+  intakeHasRateMismatch,
+  intakeHasOpenBalanceShortfall,
+  intakeDeviationModalRows,
   type IntakeSaveDeviationRow,
 } from "@/lib/cash-control-intake-breakdown";
 import { PaymentLiveSummaryCards } from "@/components/admin/PaymentLiveSummaryCards";
@@ -135,8 +138,8 @@ import {
   getPaymentCancelRequestHintAction,
   type PaymentCancelRequestHint,
 } from "@/app/admin/invoice-cancel-requests/actions";
-import { CustomerPaymentOverageModal } from "@/components/admin/CustomerPaymentOverageModal";
-import { isSmallPaymentOverageUsd } from "@/lib/payment-small-overage";
+import { CustomerPaymentOverageModal, type SurplusDisposition } from "@/components/admin/CustomerPaymentOverageModal";
+import { BalanceResetCreditConfirmModal } from "@/components/admin/BalanceResetCreditConfirmModal";
 import { dispatchCashControlRefresh } from "@/lib/cash-control-refresh-bus";
 import {
   formatIlsDisplay,
@@ -539,12 +542,15 @@ export function PaymentModalUpdated({
   const [overagePreview, setOveragePreview] = useState<PaymentOveragePreview | null>(null);
   const [intakeDevModalOpen, setIntakeDevModalOpen] = useState(false);
   const [intakeDevRows, setIntakeDevRows] = useState<IntakeSaveDeviationRow[]>([]);
+  const [methodControlOpen, setMethodControlOpen] = useState(false);
   const saveAfterOverageRef = useRef<"new" | "close" | null>(null);
   const saveSurplusPendingRef = useRef(false);
   const intakeDevPendingSaveRef = useRef(false);
   /** אחרי ניסיון שמירה שנכשל באימות צ׳יקים — מסמן שדות חסרים */
   const [highlightInvalidCheckFields, setHighlightInvalidCheckFields] = useState(false);
   const [resetCustomerConfirmOpen, setResetCustomerConfirmOpen] = useState(false);
+  const [creditResetConfirmOpen, setCreditResetConfirmOpen] = useState(false);
+  const [balanceResetFromCredit, setBalanceResetFromCredit] = useState(false);
   const baselineSigRef = useRef<string>("");
   const currentSigRef = useRef<string>("");
   const tableScrollRef = useRef<HTMLDivElement | null>(null);
@@ -869,6 +875,33 @@ export function PaymentModalUpdated({
     : customerOpenDebtSignedUsd > 0.01
       ? customerOpenDebtSignedUsd
       : 0;
+
+  /** יתרה שנותרת על הזמנות לאחר הקצאת התשלום הנוכחי */
+  const orderRemainderAfterPaymentUsd = useMemo(() => {
+    const allocated = allocatePaymentAcrossOrders(
+      toPaymentIntakeBases(orders),
+      totals.totalUsd,
+      prioritizedSet,
+    );
+    let sum = 0;
+    for (const o of orders) {
+      const alloc = roundMoney2(allocated.byOrderId.get(o.id) ?? 0);
+      const paidAfter = roundMoney2(Number(o.dbPaidUsd) + alloc);
+      const totalUsd = Number(o.totalAmountUsd) || 0;
+      sum += Math.max(0, roundMoney2(totalUsd - paidAfter));
+    }
+    return roundMoney2(sum);
+  }, [orders, totals.totalUsd, prioritizedSet]);
+
+  const creditAvailableForResetUsd = useMemo(
+    () => (customerBalanceUsd > 0.01 ? roundMoney2(customerBalanceUsd) : 0),
+    [customerBalanceUsd],
+  );
+
+  const customerBalanceResetPreviewForLive = useMemo(
+    () => (customerBalanceResetPending && !balanceResetFromCredit ? customerBalanceResetPreview : []),
+    [customerBalanceResetPending, balanceResetFromCredit, customerBalanceResetPreview],
+  );
   /** מחשבון עסקי חי — חיובים / עמלות / תשלומים / יתרה (כולל תשלום בטופס + איפוס עמלה) */
   const liveIntakeTotals = useMemo(
     () =>
@@ -876,7 +909,7 @@ export function PaymentModalUpdated({
         orders: toPaymentIntakeBases(orders),
         commissionResetOrderIds: commissionResetIds,
         commissionResetPreview,
-        customerBalanceResetPreview,
+        customerBalanceResetPreview: customerBalanceResetPreviewForLive,
         customerPaymentsUsd: sumCustomerPaymentsUsd(customerPayments),
         formPaymentUsd: totals.totalUsd,
       }),
@@ -884,7 +917,7 @@ export function PaymentModalUpdated({
       orders,
       commissionResetIds,
       commissionResetPreview,
-      customerBalanceResetPreview,
+      customerBalanceResetPreviewForLive,
       customerPayments,
       totals.totalUsd,
     ],
@@ -898,13 +931,51 @@ export function PaymentModalUpdated({
 
   /** שורות בקרת אמצעי תשלום — תוכנן מההזמנה, נקלט מההקלדה הנוכחית בטופס */
   const methodControlRows = useMemo(
-    () => buildLivePaymentMethodControlRows(orders, includedIds, liveFormKpis),
-    [orders, includedIds, liveFormKpis],
+    () => buildLivePaymentMethodControlRows(orders, includedIds, liveFormKpis, totals.totalUsd),
+    [orders, includedIds, liveFormKpis, totals.totalUsd],
   );
   const showMethodControl = useMemo(
     () => hasCompositeMethodControl(orders, includedIds),
     [orders, includedIds],
   );
+
+  /** בדיקות חריגה/יתרה חיות — לתצוגה בלבד (לא רק בזמן שמירה) */
+  const liveIntakeDevRows = useMemo(() => {
+    if (!customer || totals.totalUsd <= 0.005) return [];
+    return computeIntakeSaveDeviations({
+      orders,
+      includedOrderIds: includedIds,
+      enteredByBucket: buildEnteredByBucket(liveFormKpis),
+      formRateN: rateN,
+      totalPaymentUsd: totals.totalUsd,
+    });
+  }, [customer, orders, includedIds, liveFormKpis, rateN, totals.totalUsd]);
+
+  const hasMethodMismatchLive = useMemo(
+    () => intakeHasMethodMismatch(liveIntakeDevRows),
+    [liveIntakeDevRows],
+  );
+  const hasRateMismatchLive = useMemo(
+    () => intakeHasRateMismatch(liveIntakeDevRows),
+    [liveIntakeDevRows],
+  );
+  const hasOpenBalanceShortfallLive = useMemo(
+    () => intakeHasOpenBalanceShortfall(liveIntakeDevRows),
+    [liveIntakeDevRows],
+  );
+  /** אמצעי תואם + נשאר סכום קטן — לא חריגה, מציעים טיפול ביתרה */
+  const showOpenBalanceActions = useMemo(() => {
+    if (!customer || customerBalanceResetPending) return false;
+    if (hasMethodMismatchLive || hasRateMismatchLive) return false;
+    return orderRemainderAfterPaymentUsd > 0.01 || hasOpenBalanceShortfallLive;
+  }, [
+    customer,
+    customerBalanceResetPending,
+    hasMethodMismatchLive,
+    hasRateMismatchLive,
+    orderRemainderAfterPaymentUsd,
+    hasOpenBalanceShortfallLive,
+  ]);
 
   /** Part 1 — סיכום הזמנה מרכזי: סה"כ הזמנה / שווי בש"ח / שולם (DB + הקלדה) / יתרה */
   const orderSummaryForCards = useMemo(() => {
@@ -954,28 +1025,31 @@ export function PaymentModalUpdated({
 
   const canApplyResetCustomerBalance = useMemo(() => {
     if (customerBalanceResetPending) return true;
-    const currentOpenBalance =
-      customerOpenDebtSignedUsd > 0.01 ? roundMoney2(customerOpenDebtSignedUsd) : 0;
-    if (currentOpenBalance <= 0.01) return false;
-    const gap = roundMoney2(currentOpenBalance - totals.totalUsd);
-    return Math.abs(gap) > 0.01;
-  }, [customerBalanceResetPending, customerOpenDebtSignedUsd, totals.totalUsd]);
+    return orderRemainderAfterPaymentUsd > 0.01;
+  }, [customerBalanceResetPending, orderRemainderAfterPaymentUsd]);
 
   const showResetBalanceBtn = useMemo(() => {
     if (!viewerIsAdmin || !customer) return false;
+    return showOpenBalanceActions || customerBalanceResetPending;
+  }, [viewerIsAdmin, customer, showOpenBalanceActions, customerBalanceResetPending]);
+
+  const showCreditBalanceResetBtn = useMemo(() => {
+    if (!viewerIsAdmin || !customer) return false;
+    if (customerBalanceResetPending && balanceResetFromCredit) return false;
     return (
-      canApplyResetCustomerBalance ||
-      customerBalanceResetPending ||
-      liveIntakeTotals.balanceUsd > 0.01 ||
-      liveIntakeTotals.hasDebt
+      showOpenBalanceActions &&
+      creditAvailableForResetUsd > 0.01 &&
+      orderRemainderAfterPaymentUsd > 0.01 &&
+      creditAvailableForResetUsd >= orderRemainderAfterPaymentUsd - 0.01
     );
   }, [
     viewerIsAdmin,
     customer,
-    canApplyResetCustomerBalance,
+    showOpenBalanceActions,
+    creditAvailableForResetUsd,
+    orderRemainderAfterPaymentUsd,
     customerBalanceResetPending,
-    liveIntakeTotals.balanceUsd,
-    liveIntakeTotals.hasDebt,
+    balanceResetFromCredit,
   ]);
 
   const paymentCaptureIsDirty = useCallback(
@@ -1473,6 +1547,7 @@ export function PaymentModalUpdated({
       includedIds: includedIds ? [...includedIds] : null,
       commissionResetIds: [...commissionResetIds],
       customerBalanceResetPending,
+      balanceResetFromCredit,
       customerOpenDebtSignedUsd,
     };
   }, [
@@ -1494,6 +1569,7 @@ export function PaymentModalUpdated({
     includedIds,
     commissionResetIds,
     customerBalanceResetPending,
+    balanceResetFromCredit,
     customerOpenDebtSignedUsd,
   ]);
   buildSnapshotRef.current = buildSnapshotFromCurrentState;
@@ -1510,6 +1586,7 @@ export function PaymentModalUpdated({
       custSearchGenRef.current += 1;
       setCommissionResetIds(snap.commissionResetIds);
       setCustomerBalanceResetPending(snap.customerBalanceResetPending);
+      setBalanceResetFromCredit(snap.balanceResetFromCredit ?? false);
       setIncludedIds(snap.includedIds);
       setHighlightInvalidCheckFields(false);
       setCountryOverride(snap.countryOverride);
@@ -2162,8 +2239,7 @@ export function PaymentModalUpdated({
    * אין כאן side-effects של reset/reload — את זה מנהלים `onSaveAndNew` / `onSaveAndClose`.
    */
   async function performSave(
-    saveSurplusAsCredit = false,
-    allowMethodDeviation = false,
+    surplusDisposition?: SurplusDisposition | null,
   ): Promise<{ ok: true; primaryPaymentCode: string; customerBalanceUsd: string } | { ok: false }> {
     setSaveErr(null);
     setHighlightInvalidCheckFields(false);
@@ -2183,20 +2259,6 @@ export function PaymentModalUpdated({
     if (checkErr) {
       setSaveErr(checkErr);
       setHighlightInvalidCheckFields(true);
-      return { ok: false };
-    }
-    const devRows = computeIntakeSaveDeviations({
-      orders,
-      includedOrderIds: includedIds,
-      enteredByBucket: buildEnteredByBucket(liveFormKpis),
-      formRateN: rateN,
-      totalPaymentUsd: totals.totalUsd,
-    });
-    if (intakeSaveHasDeviations(devRows) && !allowMethodDeviation) {
-      saveSurplusPendingRef.current = saveSurplusAsCredit;
-      intakeDevPendingSaveRef.current = true;
-      setIntakeDevRows(devRows);
-      setIntakeDevModalOpen(true);
       return { ok: false };
     }
     const forceCustomerCreditPayment = customerHasCredit;
@@ -2223,24 +2285,38 @@ export function PaymentModalUpdated({
             unallocatedUsd: allocDiag.unallocatedUsd,
           };
     const hasAlloc = allocDiag.allocationTargets.length > 0;
-    if (!hasAlloc && !((saveSurplusAsCredit || forceCustomerCreditPayment) && unallocatedUsd > 0.02)) {
+    const saveAsCredit =
+      surplusDisposition === "credit" || forceCustomerCreditPayment;
+    if (!hasAlloc && !(saveAsCredit && unallocatedUsd > 0.02)) {
       setSaveErr("אין יעד להקצאה");
       return { ok: false };
     }
-    if (totals.totalUsd > 0.02 && unallocatedUsd > 0.02 && !saveSurplusAsCredit && !forceCustomerCreditPayment) {
-      if (!isSmallPaymentOverageUsd(unallocatedUsd)) {
-        const prev = await previewCustomerPaymentOverageAction({
-          customerId: customer.id,
-          totalPaymentUsd: totals.totalUsd,
-          dollarRate,
-          weekCode: intakeWeekCode,
-        });
-        if (prev.ok && prev.preview.hasOverage) {
-          setOveragePreview(prev.preview);
-          setOverageModalOpen(true);
-          return { ok: false };
-        }
+    if (totals.totalUsd > 0.02 && unallocatedUsd > 0.02 && !surplusDisposition && !forceCustomerCreditPayment) {
+      const prev = await previewCustomerPaymentOverageAction({
+        customerId: customer.id,
+        totalPaymentUsd: totals.totalUsd,
+        dollarRate,
+        weekCode: intakeWeekCode,
+      });
+      if (prev.ok && prev.preview.hasOverage) {
+        setOveragePreview(prev.preview);
+        setOverageModalOpen(true);
+        return { ok: false };
       }
+    }
+    const devRows = computeIntakeSaveDeviations({
+      orders,
+      includedOrderIds: includedIds,
+      enteredByBucket: buildEnteredByBucket(liveFormKpis),
+      formRateN: rateN,
+      totalPaymentUsd: totals.totalUsd,
+    });
+    if (intakeSaveHasDeviations(devRows)) {
+      saveSurplusPendingRef.current = surplusDisposition === "credit";
+      intakeDevPendingSaveRef.current = true;
+      setIntakeDevRows(devRows);
+      setIntakeDevModalOpen(true);
+      return { ok: false };
     }
     setSaveBusy(true);
     const receivedTodaySave = isTodayYmd(paymentDateYmd);
@@ -2259,12 +2335,14 @@ export function PaymentModalUpdated({
       payments,
       includedOrderIds: forceCustomerCreditPayment ? [] : includedIds,
       commissionResetOrderIds: commissionResetIds.length > 0 ? commissionResetIds : null,
-      applyCustomerBalanceReset: customerBalanceResetPending,
+      applyCustomerBalanceReset: customerBalanceResetPending && !balanceResetFromCredit,
+      applyCustomerBalanceResetFromCredit: customerBalanceResetPending && balanceResetFromCredit,
       draftNameAr: draftCustomer.nameAr.trim() || null,
       draftNameEn: draftCustomer.nameEn.trim() || null,
       draftPhone: draftCustomer.phone.trim() || null,
-      saveSurplusAsCredit: saveSurplusAsCredit || forceCustomerCreditPayment,
-      allowMethodDeviation,
+      saveSurplusAsCredit: saveAsCredit,
+      surplusDisposition: surplusDisposition ?? null,
+      allowMethodDeviation: false,
     });
     const savePaymentMs = Math.round(performance.now() - saveStart);
     if (!res.ok) {
@@ -2288,43 +2366,47 @@ export function PaymentModalUpdated({
       setSaveJustSaved(false);
       saveJustSavedTimerRef.current = null;
     }, 2000);
-    onToast("התשלום נשמר");
     dispatchCashControlRefresh(weekForSave);
 
     const refreshStart = performance.now();
     const savedDateYmd = receivedTodaySave ? formatLocalYmd(new Date()) : paymentDateYmd;
     const resetIds = [...commissionResetIds];
-    setOrders((cur) =>
-      cur.map((o) => {
-        let row = { ...o };
-        if (resetIds.includes(o.id)) {
-          const plan = planCommissionDebtClosureFromNumbers({
-            commissionUsd: Number(o.commissionUsd) || 0,
-            totalUsd: Number(o.totalAmountUsd) || 0,
-            paidUsd: Number(o.dbPaidUsd) || 0,
-          });
-          row = {
-            ...row,
-            commissionUsd: plan.afterCommissionUsd.toFixed(2),
-            totalAmountUsd: plan.afterTotalUsd.toFixed(2),
-          };
-        }
-        const alloc = byOrderId.get(o.id) ?? 0;
-        if (alloc > 0.001) {
-          const newPaid = roundMoney2(parseMoneyStringOrZero(o.dbPaidUsd) + alloc);
-          const total = parseMoneyStringOrZero(o.totalAmountUsd);
-          const newRem = roundMoney2(Math.max(0, total - newPaid));
-          row = {
-            ...row,
-            dbPaidUsd: newPaid.toFixed(2),
-            dbRemainingUsd: newRem.toFixed(2),
-            lastPaymentDateYmd: savedDateYmd,
-            status: debtStatus(newPaid, total),
-          };
-        }
-        return row;
-      }),
-    );
+    const updatedOrdersForSummary = orders.map((o) => {
+      let row = { ...o };
+      if (resetIds.includes(o.id)) {
+        const plan = planCommissionDebtClosureFromNumbers({
+          commissionUsd: Number(o.commissionUsd) || 0,
+          totalUsd: Number(o.totalAmountUsd) || 0,
+          paidUsd: Number(o.dbPaidUsd) || 0,
+        });
+        row = {
+          ...row,
+          commissionUsd: plan.afterCommissionUsd.toFixed(2),
+          totalAmountUsd: plan.afterTotalUsd.toFixed(2),
+        };
+      }
+      const alloc = byOrderId.get(o.id) ?? 0;
+      if (alloc > 0.001) {
+        const newPaid = roundMoney2(parseMoneyStringOrZero(o.dbPaidUsd) + alloc);
+        const total = parseMoneyStringOrZero(o.totalAmountUsd);
+        const newRem = roundMoney2(Math.max(0, total - newPaid));
+        row = {
+          ...row,
+          dbPaidUsd: newPaid.toFixed(2),
+          dbRemainingUsd: newRem.toFixed(2),
+          lastPaymentDateYmd: savedDateYmd,
+          status: debtStatus(newPaid, total),
+        };
+      }
+      return row;
+    });
+    setOrders(updatedOrdersForSummary);
+    void fetchPaymentIntakeOrdersClient(customer.id, weekForSave, intakeDocumentWorkCountry).then((fresh) => {
+      const summaryOrders = fresh.ok ? fresh.orders : updatedOrdersForSummary;
+      if (fresh.ok) setOrders(fresh.orders);
+      onToast(buildPostSaveRemainingSummary(summaryOrders, null));
+      setMethodControlOpen(false);
+    });
     setCommissionResetIds([]);
     setCustomerBalanceResetPending(false);
     setIncludedIds(null);
@@ -2385,7 +2467,7 @@ export function PaymentModalUpdated({
    */
   async function onSaveAndNew() {
     saveAfterOverageRef.current = "new";
-    const res = await performSave(false);
+    const res = await performSave(null);
     if (!res.ok) return;
     saveAfterOverageRef.current = null;
     await finishSaveAndNew(res.primaryPaymentCode);
@@ -2397,34 +2479,34 @@ export function PaymentModalUpdated({
    */
   async function onSaveAndClose() {
     saveAfterOverageRef.current = "close";
-    const res = await performSave(false);
+    const res = await performSave(null);
     if (!res.ok) return;
     saveAfterOverageRef.current = null;
     closeTop();
   }
 
-  async function onOverageConfirm() {
+  async function onOverageConfirm(disposition: SurplusDisposition) {
     setOverageModalOpen(false);
     const mode = saveAfterOverageRef.current;
-    const res = await performSave(true, false);
+    const res = await performSave(disposition);
     if (!res.ok) return;
     saveAfterOverageRef.current = null;
     if (mode === "new") await finishSaveAndNew(res.primaryPaymentCode);
     else if (mode === "close") closeTop();
   }
 
-  async function onIntakeDevConfirm() {
+  function onIntakeDevEditOrder() {
     setIntakeDevModalOpen(false);
-    if (!intakeDevPendingSaveRef.current) return;
     intakeDevPendingSaveRef.current = false;
-    const mode = saveAfterOverageRef.current;
-    const surplus = saveSurplusPendingRef.current;
-    saveSurplusPendingRef.current = false;
-    const res = await performSave(surplus, true);
-    if (!res.ok) return;
     saveAfterOverageRef.current = null;
-    if (mode === "new") await finishSaveAndNew(res.primaryPaymentCode);
-    else if (mode === "close") closeTop();
+    saveSurplusPendingRef.current = false;
+    const idSet = includedIds ? new Set(includedIds) : null;
+    const target =
+      orders.find((o) => (!idSet || idSet.has(o.id)) && o.breakdown.length > 0 && Number(o.dbRemainingUsd) > 0.02)
+        ?? orders.find((o) => o.breakdown.length > 0)
+        ?? orders[0];
+    if (target?.id) setOrderEditId(target.id);
+    else onToast("לא נמצאה הזמנה לעריכה");
   }
 
   function onIntakeDevCancel() {
@@ -3064,6 +3146,53 @@ export function PaymentModalUpdated({
             </div>
 
             <div className="payment-modal-table-wrap payment-modal-table-wrap--focused">
+              {customer && !customerWorkspaceLoading && showOpenBalanceActions ? (
+                <div className="payment-open-balance-panel" dir="rtl" role="region" aria-label="יתרה פתוחה">
+                  <p className="payment-open-balance-panel__lead">
+                    אמצעי התשלום תואם להזמנה — נותרה יתרה של{" "}
+                    <strong dir="ltr">${fmtUsdDisplay(orderRemainderAfterPaymentUsd)}</strong>.
+                    ניתן לשמור תשלום חלקי, לאפס יתרה, או להשתמש ביתרת זכות.
+                  </p>
+                  {viewerIsAdmin ? (
+                    <div className="payment-open-balance-panel__actions">
+                      {showCreditBalanceResetBtn ? (
+                        <button
+                          type="button"
+                          className="adm-btn adm-btn--primary pm-reset-balance-btn pm-reset-balance-btn--credit"
+                          onClick={() => setCreditResetConfirmOpen(true)}
+                        >
+                          השתמש ביתרת זכות
+                        </button>
+                      ) : null}
+                      {showResetBalanceBtn ? (
+                        <button
+                          type="button"
+                          className={[
+                            "adm-btn",
+                            "pm-reset-balance-btn",
+                            customerBalanceResetPending ? "pm-reset-balance-btn--preview" : "adm-btn--ghost",
+                          ]
+                            .filter(Boolean)
+                            .join(" ")}
+                          onClick={() => {
+                            if (customerBalanceResetPending) {
+                              setCustomerBalanceResetPending(false);
+                              setBalanceResetFromCredit(false);
+                              onToast("תצוגת איפוס יתרה בוטלה");
+                              return;
+                            }
+                            setResetCustomerConfirmOpen(true);
+                          }}
+                        >
+                          {customerBalanceResetPending && !balanceResetFromCredit
+                            ? "ביטול תצוגת איפוס"
+                            : "איפוס יתרה"}
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               {customer && !customerWorkspaceLoading ? (
                 <div
                   className="payment-balance-summary"
@@ -3072,31 +3201,9 @@ export function PaymentModalUpdated({
                   aria-live="polite"
                   aria-label="תצוגת יתרה לאחר שמירת התשלום"
                 >
-                  {showResetBalanceBtn ? (
+                  {customerBalanceResetPending ? (
                     <>
-                      <button
-                        type="button"
-                        className={[
-                          "pm-reset-balance-btn",
-                          "pm-reset-balance-btn--inline",
-                          canApplyResetCustomerBalance ? "pm-reset-balance-btn--ready" : "",
-                          customerBalanceResetPending ? "pm-reset-balance-btn--preview" : "",
-                        ]
-                          .filter(Boolean)
-                          .join(" ")}
-                        disabled={!canApplyResetCustomerBalance && !customerBalanceResetPending}
-                        onClick={() => {
-                          if (customerBalanceResetPending) {
-                            setCustomerBalanceResetPending(false);
-                            onToast("תצוגת איפוס יתרה בוטלה");
-                            return;
-                          }
-                          setResetCustomerConfirmOpen(true);
-                        }}
-                        title="איפוס יתרה — תצוגה בלבד עד שמירת תשלום"
-                      >
-                        {customerBalanceResetPending ? "ביטול תצוגת איפוס" : "איפוס יתרה"}
-                      </button>
+                      <span className="payment-balance-summary__badge">איפוס יתרה — יוחל בשמירה</span>
                       <span className="payment-balance-summary__sep" aria-hidden>
                         •
                       </span>
@@ -3415,75 +3522,29 @@ export function PaymentModalUpdated({
                 </div>
 
                 {showMethodControl ? (
-                  <div className="payment-upd-composite" dir="rtl">
-                    <div className="payment-upd-composite-title">
-                      <span>אמצעי תשלום מתוכננים</span>
-                      {methodControlRows.some((r) => r.status === "excess") ? (
-                        <span className="payment-upd-deviation-badge" title="חריגה בין ההקלדה הנוכחית לחלוקה המתוכננת">
-                          חריגת אמצעי תשלום
-                        </span>
-                      ) : null}
-                    </div>
-                    <div className="payment-upd-composite-scroll">
-                    <table className="payment-upd-composite-tbl">
-                      <thead>
-                        <tr>
-                          <th>אמצעי תשלום</th>
-                          <th>תוכנן</th>
-                          <th>נקלט</th>
-                          <th>נותר</th>
-                          <th>סטטוס</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {methodControlRows.map((r) => (
-                          <tr key={r.bucket} className={`payment-upd-composite-row is-${r.status}`}>
-                            <td className="payment-upd-composite-method">{r.label}</td>
-                            <td dir="ltr" className="payment-upd-composite-num">
-                              {fmtMethodControlCell(r, "planned")}
-                            </td>
-                            <td dir="ltr" className="payment-upd-composite-num">
-                              {fmtMethodControlCell(r, "entered")}
-                            </td>
-                            <td
-                              dir="ltr"
-                              className={`payment-upd-composite-num payment-upd-composite-rem-cell${r.status === "excess" ? " is-excess" : ""}`}
-                            >
-                              {fmtMethodControlCell(r, "remaining")}
-                            </td>
-                            <td className="payment-upd-composite-status">
-                              <span className={`payment-upd-composite-badge is-${r.status}`}>
-                                <span className="payment-upd-composite-badge__icon" aria-hidden>
-                                  {METHOD_CONTROL_STATUS_ICON[r.status]}
-                                </span>
-                                {r.statusLabel}
-                              </span>
-                              {r.status === "excess" ? (
-                                <span className="payment-upd-composite-status__detail" dir="ltr">
-                                  {r.plannedUsd > 0.01 ? (
-                                    <>
-                                      <span>תוכנן: {fmtMethodControlUsd(r.plannedUsd)}</span>
-                                      <span>נקלט: {fmtMethodControlUsd(r.enteredUsd)}</span>
-                                      <span className="payment-upd-composite-status__excess">
-                                        חריגה: +${r.excessUsd.toFixed(2)}
-                                      </span>
-                                    </>
-                                  ) : (
-                                    <span>אמצעי שלא תוכנן בהזמנה</span>
-                                  )}
-                                </span>
-                              ) : null}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    </div>
-                    <div className="payment-upd-composite-hint">
-                      מתעדכן בזמן אמת לפי ההקלדה הנוכחית — נקלט = סכום בטופס בלבד.
-                    </div>
-                  </div>
+                  <button
+                    type="button"
+                    className={`payment-upd-planned-btn${methodControlRows.some((r) => r.status === "excess") ? " has-warn" : ""}${methodControlRows.some((r) => r.status === "remaining") && !hasMethodMismatchLive ? " has-remaining" : ""}`}
+                    onClick={() => setMethodControlOpen(true)}
+                  >
+                    אמצעי תשלום מתוכננים
+                    {methodControlRows.some((r) => r.status === "excess") ? (
+                      <span className="payment-upd-planned-btn__warn" title="חריגה באמצעי תשלום">
+                        !
+                      </span>
+                    ) : methodControlRows.some((r) => r.status === "remaining") && showOpenBalanceActions ? (
+                      <span className="payment-upd-planned-btn__info" title="יתרה פתוחה — לא חריגה">
+                        ○
+                      </span>
+                    ) : null}
+                  </button>
                 ) : null}
+
+                <PaymentMethodControlModal
+                  open={methodControlOpen && showMethodControl}
+                  rows={methodControlRows}
+                  onClose={() => setMethodControlOpen(false)}
+                />
 
                 <div
                   ref={paymentLinesContainerRef}
@@ -3563,6 +3624,12 @@ export function PaymentModalUpdated({
                   {saveErr}
                 </div>
               ) : null}
+              <PaymentDocumentRateIcons
+                entityType="PAYMENT"
+                entityId={docEntityId}
+                disabled={captureReadOnly}
+                variant="labeled"
+              />
               <div className="payment-modal-save-actions">
                 {canCancelSavedPayment ? (
                   <button
@@ -3620,6 +3687,20 @@ export function PaymentModalUpdated({
         onClose={() => setOpenDebtDetailOpen(false)}
         onOrderClick={(orderId) => openWindow({ type: "orderCapture", props: { mode: "edit", orderId } })}
       />
+      {creditResetConfirmOpen ? (
+        <BalanceResetCreditConfirmModal
+          open={creditResetConfirmOpen}
+          creditUsd={creditAvailableForResetUsd}
+          requiredUsd={orderRemainderAfterPaymentUsd}
+          onCancel={() => setCreditResetConfirmOpen(false)}
+          onConfirm={() => {
+            setCreditResetConfirmOpen(false);
+            setCustomerBalanceResetPending(true);
+            setBalanceResetFromCredit(true);
+            onToast("איפוס מתוך יתרת זכות — יוחל בשמירת התשלום");
+          }}
+        />
+      ) : null}
       {resetCustomerConfirmOpen ? (
         <div
           className="adm-oc-edit-request-backdrop"
@@ -3633,54 +3714,25 @@ export function PaymentModalUpdated({
             onClick={(e) => e.stopPropagation()}
             dir="rtl"
           >
-            <h4>האם לבצע איפוס יתרה?</h4>
+            <h4>איפוס יתרה (התאמת עמלה)</h4>
+            {creditAvailableForResetUsd > 0.01 && orderRemainderAfterPaymentUsd > creditAvailableForResetUsd ? (
+              <p className="adm-muted-keys payment-reset-confirm-note">
+                יתרת הזכות (${fmtUsdDisplay(creditAvailableForResetUsd)}) אינה מספיקה — יוחל איפוס רגיל.
+              </p>
+            ) : creditAvailableForResetUsd <= 0.01 ? (
+              <p className="adm-muted-keys payment-reset-confirm-note">
+                לא נמצאה יתרת זכות — יוחל איפוס יתרה רגיל (התאמת עמלה).
+              </p>
+            ) : null}
             <ul className="payment-reset-confirm-deltas">
               <li>
-                חוב נוכחי:{" "}
-                <strong dir="ltr">
-                  ${fmtUsdDisplay(openDebtAfterPaymentPreview.currentOpenBalance)}
-                </strong>
-              </li>
-              <li>
-                סכום תשלום בהקלדה:{" "}
-                <strong dir="ltr">
-                  ${fmtUsdDisplay(openDebtAfterPaymentPreview.enteredPaymentAmount)}
-                </strong>
-              </li>
-              <li>
-                יתרה לאחר שמירה:{" "}
-                <strong dir="ltr">
-                  ${fmtUsdDisplay(openDebtAfterPaymentPreview.remainingAfterPayment)}
-                </strong>
-              </li>
-              <li>
-                עמלה נוכחית:{" "}
-                <strong dir="ltr">${fmtUsdDisplay(openDebtAfterPaymentPreview.openCommissionUsd)}</strong>
-              </li>
-            </ul>
-            <p className="payment-reset-confirm-note">בפס הסיכומים העליון (בלבד) יוצג:</p>
-            <ul className="payment-reset-confirm-deltas payment-reset-confirm-deltas--after">
-              <li>
-                חוב פתוח לאחר איפוס: <strong dir="ltr">$0.00</strong>
-              </li>
-              <li>
-                עמלות מצטברות:{" "}
-                <strong dir="ltr">
-                  {openDebtAfterPaymentPreview.afterCommissionUsd < -0.01
-                    ? `${fmtUsdDisplay(Math.abs(openDebtAfterPaymentPreview.afterCommissionUsd))}-`
-                    : fmtUsdDisplay(openDebtAfterPaymentPreview.afterCommissionUsd)}
-                </strong>
-                <span className="adm-muted-keys"> (עמלה − יתרה לאחר תשלום)</span>
+                יתרה להזמנות לאחר תשלום:{" "}
+                <strong dir="ltr">${fmtUsdDisplay(orderRemainderAfterPaymentUsd)}</strong>
               </li>
             </ul>
             <p className="adm-muted-keys payment-reset-confirm-note">
-              טבלת ההזמנות לא תשתנה. האיפוס במסד הנתונים יבוצע רק בלחיצה על שמור תשלום.
+              האיפוס יוחל רק בשמירת קליטת התשלום.
             </p>
-            {totals.totalUsd <= 0.01 ? (
-              <p className="adm-muted-keys payment-reset-confirm-note">
-                יש להוסיף תשלום ולשמור כדי ליישם את האיפוס במערכת.
-              </p>
-            ) : null}
             <div className="payment-nav-confirm-actions">
               <button
                 type="button"
@@ -3696,14 +3748,11 @@ export function PaymentModalUpdated({
                 onClick={() => {
                   setResetCustomerConfirmOpen(false);
                   setCustomerBalanceResetPending(true);
-                  onToast(
-                    totals.totalUsd > 0.01
-                      ? "תצוגת איפוס יתרה — יוחל בשמירת התשלום"
-                      : "תצוגת איפוס יתרה — הוסיפו תשלום ושמרו כדי ליישם",
-                  );
+                  setBalanceResetFromCredit(false);
+                  onToast("תצוגת איפוס יתרה — יוחל בשמירת התשלום");
                 }}
               >
-                הצג בתצוגה
+                אישור
               </button>
             </div>
           </div>
@@ -3911,10 +3960,10 @@ export function PaymentModalUpdated({
         open={overageModalOpen}
         preview={overagePreview}
         busy={saveBusy}
-        onConfirm={() => void onOverageConfirm()}
+        onConfirm={(disposition) => void onOverageConfirm(disposition)}
         onCancel={onOverageCancel}
       />
-      {intakeDevModalOpen && intakeDevRows.length > 0 ? (
+      {intakeDevModalOpen && intakeDeviationModalRows(intakeDevRows).length > 0 ? (
         <div className="adm-cash-modal-backdrop" role="presentation" onClick={onIntakeDevCancel}>
           <div
             className="adm-cash-modal adm-cash-modal--xl payment-intake-dev-modal"
@@ -3924,50 +3973,56 @@ export function PaymentModalUpdated({
             aria-labelledby="intake-dev-title"
           >
             <div className="adm-cash-modal__head">
-              <h3 id="intake-dev-title">⚠️ נמצאו חריגות בקליטת התשלום</h3>
+              <h3 id="intake-dev-title">
+                {intakeHasRateMismatch(intakeDevRows) && !intakeHasMethodMismatch(intakeDevRows)
+                  ? "חריגת שער דולר"
+                  : "קיימת חריגה באמצעי התשלום"}
+              </h3>
             </div>
             <div className="adm-cash-modal__body">
               <p className="payment-intake-dev-modal__lead">
-                המערכת זיהתה מספר חריגות בין התשלום שהוזן לבין אמצעי התשלום והסכומים שהוגדרו בהזמנה.
+                {intakeHasRateMismatch(intakeDevRows) && !intakeHasMethodMismatch(intakeDevRows)
+                  ? "שער הדולר בקליטה שונה משער ההזמנה — יש לעדכן את ההזמנה או את השער."
+                  : "המערכת זיהתה שאמצעי התשלום שנקלט אינו תואם לאמצעי התשלום שנשמר בהזמנה."}
               </p>
-              <h4 className="payment-intake-dev-modal__subtitle">פירוט החריגות</h4>
               <div className="payment-intake-dev-modal__scroll">
                 <table className="adm-table-excel payment-intake-dev-modal__tbl">
                   <thead>
                     <tr>
-                      <th>סוג החריגה</th>
-                      <th>תוכנן</th>
-                      <th>נקלט</th>
-                      <th>הפרש</th>
-                      <th>סטטוס</th>
+                      <th>אמצעי מתוכנן</th>
+                      <th>אמצעי שנקלט</th>
+                      <th>סכום</th>
+                      <th>גובה החריגה</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {intakeDevRows.map((row) => (
+                    {intakeDeviationModalRows(intakeDevRows).map((row) => (
                       <tr key={row.id} className={`payment-intake-dev-modal__row is-${row.rowTone}`}>
+                        <td>{row.id.startsWith("unplanned:") ? "—" : row.typeLabel}</td>
                         <td>{row.typeLabel}</td>
-                        <td dir="ltr">{row.plannedDisplay}</td>
                         <td dir="ltr">{row.receivedDisplay}</td>
                         <td dir="ltr" className="payment-intake-dev-modal__diff">{row.diffDisplay}</td>
-                        <td>{row.statusLabel}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-              <p className="payment-intake-dev-modal__question">האם ברצונך לשמור את התשלום למרות החריגות?</p>
+              {!viewerIsAdmin && !canEditOrders ? (
+                <p className="payment-intake-dev-modal__employee-hint">
+                  לעריכת ההזמנה יש לשלוח בקשת אישור מנהל מתוך טופס העריכה.
+                </p>
+              ) : null}
             </div>
             <div className="adm-cash-modal__foot payment-intake-dev-modal__foot">
               <button type="button" className="adm-btn payment-intake-dev-modal__btn-back" onClick={onIntakeDevCancel}>
-                חזור לעריכה
+                ביטול
               </button>
               <button
                 type="button"
-                className="adm-btn payment-intake-dev-modal__btn-save"
-                disabled={saveBusy}
-                onClick={() => void onIntakeDevConfirm()}
+                className="adm-btn adm-btn--primary payment-intake-dev-modal__btn-edit"
+                onClick={onIntakeDevEditOrder}
               >
-                שמור למרות החריגות
+                עריכת ההזמנה
               </button>
             </div>
           </div>

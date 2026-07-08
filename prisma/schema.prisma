@@ -121,6 +121,8 @@ model User {
   cashCountsCreated          CashCount[]        @relation("CashCountCreatedBy")
   cashCountsApproved         CashCount[]        @relation("CashCountApprovedBy")
   paymentCashAuditReviews    PaymentCashAuditReview[] @relation("PaymentCashAuditReviewBy")
+  cashDailyDrawerCounts      CashDailyDrawerCount[]   @relation("CashDailyDrawerCountBy")
+  cashWeekFlowsUpdated       CashWeekFlow[]           @relation("CashWeekFlowBy")
 }
 
 /** הגדרות שער דולר גלובליות: בסיס (usd_rate_base), עמלה (usd_fee), שער סופי מחושב (usd_rate_final). */
@@ -566,6 +568,58 @@ model PaymentCashAuditReview {
   @@unique([paymentId, weekCode])
   @@index([weekCode])
   @@index([paymentId])
+}
+
+/**
+ * בקרת קופה יומית — ספירת קופה בפועל לפי יום (מנהל).
+ */
+model CashDailyDrawerCount {
+  id          String          @id @default(uuid())
+  countryCode WorkCountryCode @default(TR)
+  weekCode    String
+  countDate   String
+  cashIls     Decimal?        @db.Decimal(19, 4)
+  cashUsd     Decimal?        @db.Decimal(19, 4)
+  checksIls   Decimal?        @db.Decimal(19, 4)
+  creditIls   Decimal?        @db.Decimal(19, 4)
+  transferIls Decimal?        @db.Decimal(19, 4)
+  otherIls    Decimal?        @db.Decimal(19, 4)
+  updatedById String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  updatedBy User? @relation("CashDailyDrawerCountBy", fields: [updatedById], references: [id])
+
+  @@unique([countryCode, weekCode, countDate])
+  @@index([weekCode])
+  @@index([countDate])
+}
+
+/**
+ * בקרת קופה שבועית — ספירה, רכישת מט"ח, העברה לטורקיה, יתרות.
+ */
+model CashWeekFlow {
+  id                 String          @id @default(uuid())
+  countryCode        WorkCountryCode @default(TR)
+  weekCode           String
+  countedCashIls     Decimal?        @db.Decimal(19, 4)
+  countedCashUsd     Decimal?        @db.Decimal(19, 4)
+  countedCreditIls   Decimal?        @db.Decimal(19, 4)
+  countedChecksIls   Decimal?        @db.Decimal(19, 4)
+  countedTransferIls Decimal?        @db.Decimal(19, 4)
+  fxPurchaseIls      Decimal?        @db.Decimal(19, 4)
+  fxPurchaseUsd      Decimal?        @db.Decimal(19, 4)
+  turkeyTransferUsd  Decimal?        @db.Decimal(19, 4)
+  bankBalanceIls     Decimal?        @db.Decimal(19, 4)
+  bankBalanceUsd     Decimal?        @db.Decimal(19, 4)
+  updatedById        String?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  updatedBy User? @relation("CashWeekFlowBy", fields: [updatedById], references: [id])
+
+  @@unique([countryCode, weekCode])
+  @@index([weekCode])
 }
 
 /** פירוט צ׳קים לקליטת תשלום בצ׳ק — משויך לשורת Payment (בדרך כלל לתשלום הראשי בפיצול להזמנות) */

@@ -187,6 +187,15 @@ export function listAhWeekCodesAround(centerCode: string, before = 80, after = 5
 }
 
 /** תצוגה: AH-122 · 10/05/2026 – 16/05/2026 */
+/** כל 7 ימי השבוע (ראשון→שבת) כ-YYYY-MM-DD */
+export function listWeekDayYmds(code: string | null | undefined): string[] {
+  const range = getAhWeekRange(code);
+  if (!range) return [];
+  const out: string[] = [];
+  for (let i = 0; i < 7; i++) out.push(addDaysYmd(range.from, i));
+  return out;
+}
+
 export function formatAhWeekLabel(code: string, style: "slash" | "iso" = "slash"): string | null {
   const w = getAhWeekRange(code);
   if (!w) return null;

@@ -1,19 +1,25 @@
 "use client";
 
+import { useState } from "react";
 import type { PaymentOveragePreview } from "@/lib/customer-balance";
 import { formatIlsDisplay, formatUsdDisplay } from "@/lib/money-format";
-import { Button } from "@/components/ui/Button";
+
+export type SurplusDisposition = "credit" | "commission";
 
 type Props = {
   open: boolean;
   preview: PaymentOveragePreview | null;
   busy?: boolean;
-  onConfirm: () => void;
+  onConfirm: (disposition: SurplusDisposition) => void;
   onCancel: () => void;
 };
 
 export function CustomerPaymentOverageModal({ open, preview, busy, onConfirm, onCancel }: Props) {
+  const [choice, setChoice] = useState<SurplusDisposition>("credit");
+
   if (!open || !preview) return null;
+
+  const surplusUsd = preview.surplusUsd;
 
   return (
     <div className="adm-mini-modal-layer" role="presentation" onClick={onCancel}>
@@ -23,11 +29,42 @@ export function CustomerPaymentOverageModal({ open, preview, busy, onConfirm, on
         aria-modal="true"
         aria-labelledby="payment-overage-title"
         onClick={(e) => e.stopPropagation()}
+        dir="rtl"
       >
         <h2 id="payment-overage-title" className="adm-mini-modal-title">
-          התשלום גבוה מהחוב ב-{formatUsdDisplay(preview.surplusUsd)}
+          נוצר עודף בתשלום — {formatUsdDisplay(surplusUsd)}
         </h2>
-        <p className="adm-payment-overage-lead">האם לשמור את ההפרש כיתרת זכות ללקוח?</p>
+        <p className="adm-payment-overage-lead">בחרו כיצד לטפל בעודף:</p>
+
+        <div className="adm-payment-overage-options" role="radiogroup" aria-label="טיפול בעודף">
+          <label className="adm-payment-overage-option">
+            <input
+              type="radio"
+              name="surplus-disposition"
+              value="credit"
+              checked={choice === "credit"}
+              onChange={() => setChoice("credit")}
+            />
+            <span>
+              <strong>שמור כיתרת זכות ללקוח</strong>
+              <small>ניתן להשתמש בעתיד · מופיע בכרטסת וביתרות</small>
+            </span>
+          </label>
+          <label className="adm-payment-overage-option">
+            <input
+              type="radio"
+              name="surplus-disposition"
+              value="commission"
+              checked={choice === "commission"}
+              onChange={() => setChoice("commission")}
+            />
+            <span>
+              <strong>הוסף לעמלות</strong>
+              <small>העודף יתווסף לעמלת ההזמנה · לא תיווצר יתרת זכות</small>
+            </span>
+          </label>
+        </div>
+
         <dl className="adm-payment-overage-stats">
           <div>
             <dt>יתרה פתוחה</dt>
@@ -41,21 +78,20 @@ export function CustomerPaymentOverageModal({ open, preview, busy, onConfirm, on
             <dt>עודף</dt>
             <dd dir="ltr">{formatIlsDisplay(preview.surplusIls)}</dd>
           </div>
-          {preview.surplusUsd > 0.01 ? (
-            <div>
-              <dt>עודף (USD)</dt>
-              <dd dir="ltr">{formatUsdDisplay(preview.surplusUsd)}</dd>
-            </div>
-          ) : null}
         </dl>
-        <p className="adm-payment-overage-note">באישור: כל החובות הפתוחים ייסגרו ויתרת הזכות תירשם בכרטסת.</p>
+
         <div className="adm-mini-modal-actions">
-          <Button type="button" variant="secondary" disabled={busy} onClick={onCancel}>
+          <button type="button" className="adm-btn adm-btn--ghost" disabled={busy} onClick={onCancel}>
             ביטול / הפחת סכום
-          </Button>
-          <Button type="button" variant="primary" disabled={busy} onClick={onConfirm}>
-            {busy ? "שומר…" : "שמור כיתרת זכות"}
-          </Button>
+          </button>
+          <button
+            type="button"
+            className="adm-btn adm-btn--primary"
+            disabled={busy}
+            onClick={() => onConfirm(choice)}
+          >
+            {busy ? "שומר…" : "אישור ושמירה"}
+          </button>
         </div>
       </div>
     </div>

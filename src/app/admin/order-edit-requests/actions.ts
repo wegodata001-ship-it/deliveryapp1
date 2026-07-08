@@ -11,6 +11,7 @@ import {
   parseOrderEditSnapshot,
   type OrderEditDiffRow,
 } from "@/lib/order-edit-snapshot";
+import { requestTypeLabelFromDiff } from "@/lib/order-edit-request-labels";
 
 async function notifyUsers(userIds: string[], title: string, body: string | null, kind: string, payload?: Prisma.InputJsonValue) {
   await ensureOrderEditRequestTablesOnce();
@@ -101,28 +102,27 @@ export type OrderEditRequestRow = {
   rejectionReason: string | null;
 };
 
-export async function countPendingOrderEditRequestsForAdmin(): Promise<number> {
-  const me = await requireAuth();
-  if (!isAdminUser(me)) return 0;
-  return getPendingOrderEditRequestCount();
-}
+export type MyOrderEditRequestRow = OrderEditRequestRow & {
+  requestTypeLabel: string;
+  relatedPaymentId: string | null;
+  relatedPaymentCode: string | null;
+};
 
-export async function listOrderEditRequestsAction(): Promise<OrderEditRequestRow[]> {
-  const me = await requireAuth();
-  if (!isAdminUser(me)) return [];
-  await ensureOrderEditRequestTablesOnce();
+type OrderEditRequestDbRow = {
+  id: string;
+  orderId: string;
+  requestReason: string;
+  status: OrderEditRequestStatus;
+  createdAt: Date;
+  approvedAt: Date | null;
+  rejectedAt: Date | null;
+  order: { orderNumber: string | null; customerNameSnapshot: string | null; status: string };
+  requestedBy: { fullName: string };
+  approvedBy: { fullName: string } | null;
+  rejectedBy: { fullName: string } | null;
+};
 
-  const rows = await prisma.orderEditRequest.findMany({
-    orderBy: { createdAt: "desc" },
-    take: 200,
-    include: {
-      order: { select: { orderNumber: true, customerNameSnapshot: true, status: true } },
-      requestedBy: { select: { fullName: true } },
-      approvedBy: { select: { fullName: true } },
-      rejectedBy: { select: { fullName: true } },
-    },
-  });
-
+async function mapOrderEditRequestRows(rows: OrderEditRequestDbRow[]): Promise<OrderEditRequestRow[]> {
   const snapshotRows =
     rows.length > 0
       ? await prisma.$queryRaw<
@@ -158,6 +158,79 @@ export async function listOrderEditRequestsAction(): Promise<OrderEditRequestRow
       rejectionReason: snap?.rejectionReason ?? null,
     };
   });
+}
+
+async function attachRelatedPayments(rows: OrderEditRequestRow[]): Promise<MyOrderEditRequestRow[]> {
+  const orderIds = [...new Set(rows.map((r) => r.orderId))];
+  const paymentByOrder = new Map<string, { id: string; paymentCode: string | null }>();
+  if (orderIds.length > 0) {
+    const payments = await prisma.payment.findMany({
+      where: { orderId: { in: orderIds }, status: "ACTIVE" },
+      orderBy: [{ paymentDate: "desc" }, { createdAt: "desc" }],
+      select: { id: true, orderId: true, paymentCode: true },
+    });
+    for (const p of payments) {
+      if (!p.orderId || paymentByOrder.has(p.orderId)) continue;
+      paymentByOrder.set(p.orderId, { id: p.id, paymentCode: p.paymentCode });
+    }
+  }
+
+  return rows.map((r) => {
+    const pay = paymentByOrder.get(r.orderId);
+    return {
+      ...r,
+      requestTypeLabel: requestTypeLabelFromDiff(r.diff),
+      relatedPaymentId: pay?.id ?? null,
+      relatedPaymentCode: pay?.paymentCode ?? null,
+    };
+  });
+}
+
+export async function countPendingOrderEditRequestsForAdmin(): Promise<number> {
+  const me = await requireAuth();
+  if (!isAdminUser(me)) return 0;
+  return getPendingOrderEditRequestCount();
+}
+
+export async function listOrderEditRequestsAction(): Promise<OrderEditRequestRow[]> {
+  const me = await requireAuth();
+  if (!isAdminUser(me)) return [];
+  await ensureOrderEditRequestTablesOnce();
+
+  const rows = await prisma.orderEditRequest.findMany({
+    orderBy: { createdAt: "desc" },
+    take: 200,
+    include: {
+      order: { select: { orderNumber: true, customerNameSnapshot: true, status: true } },
+      requestedBy: { select: { fullName: true } },
+      approvedBy: { select: { fullName: true } },
+      rejectedBy: { select: { fullName: true } },
+    },
+  });
+
+  return mapOrderEditRequestRows(rows);
+}
+
+/** בקשות עריכה שהעובד הנוכחי שלח — מסך "הבקשות שלי" */
+export async function listMyOrderEditRequestsAction(): Promise<MyOrderEditRequestRow[]> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["edit_orders"])) return [];
+  await ensureOrderEditRequestTablesOnce();
+
+  const rows = await prisma.orderEditRequest.findMany({
+    where: { requestedByUserId: me.id },
+    orderBy: { createdAt: "desc" },
+    take: 200,
+    include: {
+      order: { select: { orderNumber: true, customerNameSnapshot: true, status: true } },
+      requestedBy: { select: { fullName: true } },
+      approvedBy: { select: { fullName: true } },
+      rejectedBy: { select: { fullName: true } },
+    },
+  });
+
+  const mapped = await mapOrderEditRequestRows(rows);
+  return attachRelatedPayments(mapped);
 }
 
 export async function approveOrderEditRequestAction(
@@ -245,6 +318,7 @@ export async function approveOrderEditRequestAction(
   revalidatePath("/admin/orders");
   revalidatePath("/admin/balances");
   revalidatePath("/admin/order-edit-requests");
+  revalidatePath("/admin/my-requests");
   return { ok: true };
 }
 
@@ -322,6 +396,7 @@ export async function rejectOrderEditRequestAction(
 
   revalidatePath("/admin/orders");
   revalidatePath("/admin/order-edit-requests");
+  revalidatePath("/admin/my-requests");
   return { ok: true };
 }
 

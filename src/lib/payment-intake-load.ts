@@ -180,7 +180,7 @@ export async function loadPaymentIntakeOrdersForCustomer(
       .map(([method, usd]) => ({ method, label: PAYMENT_METHOD_LABELS[method] ?? method, usd: round2(usd) }));
     let breakdown: OrderBreakdownMethodRow[] = [];
     let hasMethodDeviation = false;
-    if (isComposite && o.paymentBreakdown.length > 0) {
+    if (o.paymentBreakdown.length > 0) {
       const plannedByMethod = new Map<string, number>();
       for (const b of o.paymentBreakdown) {
         const usd =

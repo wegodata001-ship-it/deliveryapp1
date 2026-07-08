@@ -58,6 +58,12 @@ export const SIDEBAR_SECTIONS: NavSectionDef[] = [
       },
       { href: "/admin/orders", label: "רשימת הזמנות", icon: "orderList", anyOf: ["view_orders"] },
       {
+        href: "/admin/my-requests",
+        label: "הבקשות שלי",
+        icon: "editRequests",
+        anyOf: ["edit_orders"],
+      },
+      {
         href: "/admin/orders",
         label: "לקוח חדש",
         icon: "customerNew",
@@ -92,6 +98,18 @@ export const SIDEBAR_SECTIONS: NavSectionDef[] = [
         openWindow: { type: "customerCard", props: {} },
       },
       { href: "/admin/balances", label: "יתרות", icon: "balances", anyOf: ["view_reports"] },
+      {
+        href: "/admin/cash-flow",
+        label: "בקרת תזרים",
+        icon: "finance",
+        anyOf: ["cashflow.view", "view_payment_control"],
+      },
+      {
+        href: "/admin/cash-expenses",
+        label: "הוצאות קופה",
+        icon: "cashbox",
+        anyOf: ["manage_cash_expenses", "view_payment_control"],
+      },
     ],
   },
   {

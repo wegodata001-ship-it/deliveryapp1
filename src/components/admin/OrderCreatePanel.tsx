@@ -88,6 +88,7 @@ import {
   COMPOSITE_PM,
   COMPOSITE_PM_LABEL,
   isCompositePaymentMethod,
+  paymentBreakdownForSave,
   validateBreakdown,
   type OrderBreakdownLineInput,
 } from "@/lib/payment-breakdown-shared";
@@ -1204,6 +1205,9 @@ export function OrderCreatePanel({
 
         const extras = captureExtrasFromPanel(s.financial, s.finalRate, cust, s.orderCountries);
 
+        const payable = roundMoney2(s.dealUsdTotal + s.commissionUsdEffective);
+        const breakdownForSave = paymentBreakdownForSave(s.paymentMethod, s.paymentBreakdown, payable);
+
         const savePayload = (feeStr: string) =>
           s.isEdit
             ? {
@@ -1219,7 +1223,7 @@ export function OrderCreatePanel({
                 commissionPercent: s.commissionPercentStr,
                 finalRateOverride: s.finalRate > 0 ? String(s.finalRate) : null,
                 paymentMethod: s.paymentMethod,
-                paymentBreakdown: isCompositePaymentMethod(s.paymentMethod) ? s.paymentBreakdown : [],
+                paymentBreakdown: breakdownForSave,
                 status: s.orderStatus,
                 notes: s.notes.trim() || undefined,
                 paymentPointId: s.paymentPointId.trim() || null,
@@ -1243,7 +1247,7 @@ export function OrderCreatePanel({
                 commissionPercent: s.commissionPercentStr,
                 finalRateOverride: s.finalRate > 0 ? String(s.finalRate) : null,
                 paymentMethod: s.paymentMethod,
-                paymentBreakdown: isCompositePaymentMethod(s.paymentMethod) ? s.paymentBreakdown : [],
+                paymentBreakdown: breakdownForSave,
                 status: s.orderStatus,
                 notes: s.notes.trim() || undefined,
                 paymentPointId: s.paymentPointId.trim() || null,
