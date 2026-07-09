@@ -35,6 +35,11 @@ export const LEGACY_PAYMENT_METHOD_ALIASES: Record<string, string> = {
   BANK: PM.BANK_TRANSFER,
   bank: PM.BANK_TRANSFER,
   Bank: PM.BANK_TRANSFER,
+  CREDIT_CARD: PM.CREDIT,
+  CARD: PM.CREDIT,
+  TRANSFER: PM.BANK_TRANSFER,
+  CHECKS: PM.CHECK,
+  CHEQUE: PM.CHECK,
 };
 
 export function isLegacyPaymentMethodSlug(id: string): boolean {

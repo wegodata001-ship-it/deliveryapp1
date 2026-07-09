@@ -3,81 +3,97 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FileSpreadsheet, FileText, RefreshCw, TrendingUp } from "lucide-react";
 import { ACTIVE_WORK_WEEK_CODE } from "@/lib/active-work-week";
-import { goToNextWeek, goToPrevWeek, parseAhWeekNumber, toAhWeekCode } from "@/lib/weeks/ah-week-nav";
-import type { CashDailyWeekSummaryPayload } from "@/app/admin/cash-control/daily-types";
+import { parseAhWeekNumber, toAhWeekCode } from "@/lib/weeks/ah-week-nav";
 import type { CashFlowCapabilities } from "@/app/admin/cash-flow/types";
-import type { FlowWeekPayload, ManagerCountForm } from "@/app/admin/cash-flow/flow-types";
-import { getFlowWeekAction } from "@/app/admin/cash-flow/get-flow-week-action";
-import { getFlowWeekReceivedSummaryAction } from "@/app/admin/cash-flow/get-flow-week-summary-action";
-import { saveManagerCountAction } from "@/app/admin/cash-flow/save-manager-count-action";
-import { saveFxPurchaseAction } from "@/app/admin/cash-flow/save-fx-purchase-action";
-import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
+import type { FlowWeekDrillPayload, FlowWeekOverviewRow } from "@/app/admin/cash-flow/flow-types";
+import { getFlowWeeksOverviewAction } from "@/app/admin/cash-flow/get-flow-weeks-overview-action";
+import { getFlowWeekDrillAction } from "@/app/admin/cash-flow/get-flow-week-drill-action";
 import {
   WEGO_CASH_CONTROL_REFRESH_EVENT,
   type CashControlRefreshDetail,
 } from "@/lib/cash-control-refresh-bus";
-import { FlowKpiCards } from "@/components/admin/flow-control/FlowKpiCards";
-import { WeeklySummarySection } from "@/components/admin/flow-control/WeeklySummarySection";
-import { ManagerCountSection } from "@/components/admin/flow-control/ManagerCountSection";
-import { WeeklyFlowSummaryCards } from "@/components/admin/flow-control/WeeklyFlowSummaryCards";
+import { FlowWeeksOverviewTable } from "@/components/admin/flow-control/FlowWeeksOverviewTable";
+import { FlowWeekDrillPanel } from "@/components/admin/flow-control/FlowWeekDrillPanel";
 
-function buildWeekOptions(): string[] {
+const WEEKS_TO_SHOW = 12;
+
+function buildWeekList(): string[] {
   const active = parseAhWeekNumber(ACTIVE_WORK_WEEK_CODE) ?? 127;
   const out: string[] = [];
-  for (let n = active; n > active - 52 && n >= 1; n -= 1) out.push(toAhWeekCode(n));
+  for (let n = active; n > active - WEEKS_TO_SHOW && n >= 1; n -= 1) {
+    out.push(toAhWeekCode(n));
+  }
   return out;
 }
 
 export function FlowControlClient({
   caps,
-  initialWeek,
+  initialWeek: _initialWeek,
 }: {
   caps: CashFlowCapabilities;
   initialWeek: string;
 }) {
-  const weekOptions = useMemo(buildWeekOptions, []);
-  const [week, setWeek] = useState(initialWeek || weekOptions[0]);
-  const [summary, setSummary] = useState<CashDailyWeekSummaryPayload | null>(null);
-  const [flow, setFlow] = useState<FlowWeekPayload | null>(null);
+  const weekList = useMemo(buildWeekList, []);
+  const [overview, setOverview] = useState<FlowWeekOverviewRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
   const [exporting, setExporting] = useState<"pdf" | "excel" | null>(null);
 
-  const canEdit = caps.canManageFlow || caps.canCountEdit;
+  const [expandedWeek, setExpandedWeek] = useState<string | null>(null);
+  const [drill, setDrill] = useState<FlowWeekDrillPayload | null>(null);
+  const [drillLoading, setDrillLoading] = useState(false);
 
   const refresh = useCallback(() => setRefreshTick((t) => t + 1), []);
 
-  const reload = useCallback(async () => {
-    const [sum, fl] = await Promise.all([getFlowWeekReceivedSummaryAction(week), getFlowWeekAction(week)]);
-    setSummary(sum);
-    setFlow(fl);
-  }, [week]);
+  const loadDrill = useCallback(async (week: string) => {
+    setDrillLoading(true);
+    try {
+      const data = await getFlowWeekDrillAction(week);
+      setDrill(data);
+    } finally {
+      setDrillLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    void Promise.all([getFlowWeekReceivedSummaryAction(week), getFlowWeekAction(week)]).then(([sum, fl]) => {
+    void getFlowWeeksOverviewAction(weekList).then((data) => {
       if (cancelled) return;
-      setSummary(sum);
-      setFlow(fl);
+      setOverview(data.weeks);
       setLoading(false);
     });
     return () => {
       cancelled = true;
     };
-  }, [week, refreshTick]);
+  }, [weekList, refreshTick]);
 
   useEffect(() => {
     const onCashControlSaved = (e: Event) => {
       const detail = (e as CustomEvent<CashControlRefreshDetail>).detail;
-      if (!detail?.weekCode?.trim() || detail.weekCode === week) refresh();
+      if (detail?.weekCode?.trim()) refresh();
     };
     window.addEventListener(WEGO_CASH_CONTROL_REFRESH_EVENT, onCashControlSaved);
     return () => window.removeEventListener(WEGO_CASH_CONTROL_REFRESH_EVENT, onCashControlSaved);
-  }, [week, refresh]);
+  }, [refresh]);
+
+  const toggleWeek = useCallback(
+    async (week: string) => {
+      if (expandedWeek === week) {
+        setExpandedWeek(null);
+        setDrill(null);
+        return;
+      }
+      setExpandedWeek(week);
+      setDrill(null);
+      await loadDrill(week);
+    },
+    [expandedWeek, loadDrill],
+  );
 
   async function exportFile(format: "pdf" | "excel") {
+    const wk = expandedWeek ?? weekList[0];
+    if (!wk) return;
     setExporting(format);
     try {
       const endpoint =
@@ -87,7 +103,7 @@ export function FlowControlClient({
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ week }),
+        body: JSON.stringify({ week: wk }),
       });
       if (!res.ok) {
         alert((await res.json().then((b) => b?.error).catch(() => null)) ?? "ייצוא נכשל");
@@ -99,7 +115,7 @@ export function FlowControlClient({
       else {
         const a = document.createElement("a");
         a.href = url;
-        a.download = `Flow_Control_${week}.xlsx`;
+        a.download = `Flow_Control_${wk}.xlsx`;
         a.click();
       }
       setTimeout(() => URL.revokeObjectURL(url), 5000);
@@ -115,73 +131,64 @@ export function FlowControlClient({
           <TrendingUp size={22} />
           <div>
             <h1>בקרת תזרים</h1>
-            {flow?.weekLabel ? <span>{flow.weekLabel}</span> : null}
+            <span>סיכום שבועי — מבקרת קופה</span>
           </div>
         </div>
         <div className="fc-toolbar__actions">
           {caps.canExport ? (
             <>
-              <button type="button" className="fc-btn fc-btn--ghost" disabled={!!exporting} onClick={() => void exportFile("excel")}>
+              <button
+                type="button"
+                className="fc-btn fc-btn--ghost"
+                disabled={!!exporting}
+                onClick={() => void exportFile("excel")}
+              >
                 <FileSpreadsheet size={15} /> Excel
               </button>
-              <button type="button" className="fc-btn fc-btn--ghost" disabled={!!exporting} onClick={() => void exportFile("pdf")}>
+              <button
+                type="button"
+                className="fc-btn fc-btn--ghost"
+                disabled={!!exporting}
+                onClick={() => void exportFile("pdf")}
+              >
                 <FileText size={15} /> PDF
               </button>
             </>
           ) : null}
-          <button type="button" className="fc-btn fc-btn--ghost" onClick={refresh} aria-label="רענון">
+          <button
+            type="button"
+            className="fc-btn fc-btn--ghost"
+            onClick={() => {
+              refresh();
+              if (expandedWeek) void loadDrill(expandedWeek);
+            }}
+            aria-label="רענון"
+          >
             <RefreshCw size={15} />
           </button>
         </div>
       </header>
 
-      <FlowKpiCards kpis={flow?.kpis ?? null} />
+      <section className="fc-section fc-section--blue">
+        <header className="fc-section__head">
+          <div>
+            <h2>סיכום שבועי</h2>
+            <p className="fc-section__sub">כל שורה = שבוע אחד · לחץ לפירוט</p>
+          </div>
+        </header>
+        <FlowWeeksOverviewTable
+          rows={overview}
+          loading={loading}
+          expandedWeek={expandedWeek}
+          onToggleWeek={(w) => void toggleWeek(w)}
+        />
+      </section>
 
-      <WeeklySummarySection
-        week={week}
-        weekOptions={weekOptions}
-        summary={summary}
-        loading={loading}
-        onWeekChange={setWeek}
-        onPrevWeek={() => {
-          const p = goToPrevWeek(week);
-          if (p) setWeek(p);
-        }}
-        onNextWeek={() => {
-          const n = goToNextWeek(week);
-          if (n) setWeek(n);
-        }}
-      />
-
-      <ManagerCountSection
-        week={week}
-        weekLabel={flow?.weekLabel ?? null}
-        flow={flow}
-        canEdit={canEdit}
-        saving={saving}
-        onSaveManagerCount={async (form: ManagerCountForm) => {
-          setSaving(true);
-          try {
-            const res = await saveManagerCountAction({ week, form });
-            if (res.ok) await reload();
-            return res;
-          } finally {
-            setSaving(false);
-          }
-        }}
-        onSaveFx={async (input) => {
-          setSaving(true);
-          try {
-            const res = await saveFxPurchaseAction({ week, ...input });
-            if (res.ok) await reload();
-            return res;
-          } finally {
-            setSaving(false);
-          }
-        }}
-      />
-
-      <WeeklyFlowSummaryCards flow={flow} />
+      {expandedWeek ? (
+        <FlowWeekDrillPanel drill={drill} loading={drillLoading} />
+      ) : (
+        <p className="fc-hint">בחר שבוע מהטבלה לצפייה בפירוט מלא</p>
+      )}
     </div>
   );
 }

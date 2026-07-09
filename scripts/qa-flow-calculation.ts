@@ -21,7 +21,15 @@ import {
   ilsExVatFactor,
   validateFxRemainderSplit,
 } from "../src/lib/flow-control/flow-calculation-service";
-import { emptyDailyIntake } from "../src/lib/cash-control-daily";
+import {
+  emptyDailyIntake,
+  getDailyPaymentContributions,
+  type CashDailyMethodId,
+} from "../src/lib/cash-control-daily";
+import {
+  paymentMethodBucketKey,
+  parsePaymentNoteContributions,
+} from "../src/lib/payment-breakdown-shared";
 import type { FxPurchaseRecord } from "../src/app/admin/cash-flow/flow-types";
 
 let passed = 0;
@@ -183,6 +191,69 @@ console.log("\n=== בקרת תזרים — QA חישובים ===\n");
   });
   assert("Preview — 10000$", preview.usdReceived === 10000);
   assert("Preview — split תקין", preview.splitValid);
+}
+
+// מיפוי אמצעי תשלום — אחד לאחד (ללא נפילה ל«אחר»)
+{
+  const dualUsdNotes = [
+    "קליטת תשלום מעודכן (דו-מטבעי)",
+    "#1 USD $500.00 · CASH | usdBase=$500.00 usdVat=$0.00",
+    "#2 USD $1410.00 · CREDIT | usdBase=$1410.00 usdVat=$0.00",
+  ].join("\n");
+
+  const dualPayment = {
+    amountIls: null,
+    amountUsd: { toString: () => "1910" },
+    paymentMethod: "OTHER",
+    usdPaymentMethod: "OTHER",
+    ilsPaymentMethod: null,
+    notes: dualUsdNotes,
+    exchangeRate: { toString: () => "3.5" },
+  };
+
+  const daily = getDailyPaymentContributions(dualPayment);
+  const cashUsd = daily.find((c) => c.column === "CASH_USD")?.amount ?? 0;
+  const credit = daily.find((c) => c.column === "CREDIT")?.amount ?? 0;
+  const other = daily.find((c) => c.column === "OTHER")?.amount ?? 0;
+  assert("תשלום מורכב — מזומן $500", cashUsd === 500, `got ${cashUsd}`);
+  assert("תשלום מורכב — אשראי $1410", credit === 1410, `got ${credit}`);
+  assert("תשלום מורכב — אחר 0", other === 0, `got ${other}`);
+
+  const flow = getFlowPaymentContributions(dualPayment);
+  assert("Flow — אשראי מ-notes", flow.some((c) => c.column === "CREDIT" && c.amount === 1410));
+  assert("Flow — ללא OTHER", !flow.some((c) => c.column === "OTHER"));
+}
+
+function assertMethodColumn(
+  name: string,
+  method: string,
+  side: "ILS" | "USD",
+  expectedColumn: CashDailyMethodId,
+) {
+  const amt = side === "USD" ? "100" : "0";
+  const ilsAmt = side === "ILS" ? "100" : "0";
+  const p = {
+    amountIls: side === "ILS" ? { toString: () => ilsAmt } : null,
+    amountUsd: side === "USD" ? { toString: () => amt } : null,
+    paymentMethod: method,
+    usdPaymentMethod: side === "USD" ? method : null,
+    ilsPaymentMethod: side === "ILS" ? method : null,
+  };
+  const cols = getDailyPaymentContributions(p).map((c) => c.column);
+  assert(`${name} → ${expectedColumn}`, cols.length === 1 && cols[0] === expectedColumn, `got ${cols.join(",")}`);
+}
+
+{
+  assertMethodColumn("CASH_USD", "CASH", "USD", "CASH_USD");
+  assertMethodColumn("CASH_ILS", "CASH", "ILS", "CASH_ILS");
+  assertMethodColumn("BANK_TRANSFER", "BANK_TRANSFER", "ILS", "BANK_TRANSFER");
+  assertMethodColumn("CHECK", "CHECK", "ILS", "CHECK");
+  assertMethodColumn("CREDIT", "CREDIT", "USD", "CREDIT");
+  assertMethodColumn("CREDIT_CARD", "CREDIT_CARD", "USD", "CREDIT");
+  assertMethodColumn("OTHER", "OTHER", "ILS", "OTHER");
+  assert("CREDIT_CARD bucket", paymentMethodBucketKey("CREDIT_CARD") === "CREDIT");
+  const parsed = parsePaymentNoteContributions("#1 USD $50.00 · CREDIT_CARD");
+  assert("notes CREDIT_CARD", parsed[0]?.bucket === "CREDIT" && parsed[0]?.amount === 50);
 }
 
 console.log(`\n=== סיכום: ${passed} עברו, ${failed} נכשלו ===\n`);

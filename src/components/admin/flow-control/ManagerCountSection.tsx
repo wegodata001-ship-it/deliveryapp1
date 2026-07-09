@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Calculator, Plus, X } from "lucide-react";
+import { Calculator, Lock, Plus, X } from "lucide-react";
 import type { FlowWeekPayload, ManagerCountForm } from "@/app/admin/cash-flow/flow-types";
 import { CurrencyExchangeModal } from "@/components/admin/flow-control/CurrencyExchangeModal";
 import { CurrencyExchangeHistory } from "@/components/admin/flow-control/CurrencyExchangeHistory";
@@ -25,10 +25,12 @@ export type ManagerCountSectionProps = {
   week: string;
   weekLabel: string | null;
   flow: FlowWeekPayload | null;
-  canEdit: boolean;
-  saving: boolean;
-  onSaveManagerCount: (form: ManagerCountForm) => Promise<{ ok: boolean; error?: string }>;
-  onSaveFx: (input: {
+  /** מצב קריאה בלבד — בקרת תזרים (ללא הזנה) */
+  readOnly?: boolean;
+  canEdit?: boolean;
+  saving?: boolean;
+  onSaveManagerCount?: (form: ManagerCountForm) => Promise<{ ok: boolean; error?: string }>;
+  onSaveFx?: (input: {
     ilsAmount: number;
     rate: number;
     remainderCashIls: number;
@@ -41,8 +43,9 @@ export function ManagerCountSection({
   week,
   weekLabel,
   flow,
-  canEdit,
-  saving,
+  readOnly = false,
+  canEdit = false,
+  saving = false,
   onSaveManagerCount,
   onSaveFx,
 }: ManagerCountSectionProps) {
@@ -64,19 +67,30 @@ export function ManagerCountSection({
   }, [flow]);
 
   const submitManager = async () => {
+    if (!onSaveManagerCount) return;
     const res = await onSaveManagerCount(form);
     if (res.ok) setModalOpen(false);
     else alert(res.error ?? "שמירה נכשלה");
   };
 
+  const showEdit = !readOnly && canEdit && onSaveManagerCount;
+
   return (
-    <section className="fc-section fc-section--green">
+    <section className={`fc-section fc-section--green${readOnly ? " fc-section--readonly" : ""}`}>
       <header className="fc-section__head">
         <div>
           <h2>ספירת מנהל</h2>
-          <p className="fc-section__sub">נתונים שהמנהל מזין — ספירה, עמלות, רכישת מט&quot;ח והעברה לטורקיה</p>
+          <p className="fc-section__sub">
+            {readOnly ? (
+              <>
+                <Lock size={12} aria-hidden /> נתונים מבקרת קופה — ללא עריכה
+              </>
+            ) : (
+              "נתונים שהמנהל מזין — ספירה, עמלות, רכישת מט\"ח והעברה לטורקיה"
+            )}
+          </p>
         </div>
-        {canEdit ? (
+        {showEdit ? (
           <button type="button" className="fc-btn fc-btn--primary" onClick={() => setModalOpen(true)}>
             <Plus size={16} /> ספירת מנהל
           </button>
@@ -106,11 +120,27 @@ export function ManagerCountSection({
             <strong dir="ltr">{flow.counted.BANK_TRANSFER ?? "—"}</strong>
           </div>
           <div className="fc-stat">
+            <span>עמלה $</span>
+            <strong dir="ltr">{flow.commissionUsd ?? "—"}</strong>
+          </div>
+          <div className="fc-stat">
+            <span>עמלה ₪</span>
+            <strong dir="ltr">{flow.commissionIls ?? "—"}</strong>
+          </div>
+          <div className="fc-stat">
             <span>רכישת מט&quot;ח</span>
             <strong dir="ltr">
               {flow.fxPurchaseIls ? `₪${flow.fxPurchaseIls}` : "—"}
               {flow.fxPurchaseUsd ? ` → $${flow.fxPurchaseUsd}` : ""}
             </strong>
+          </div>
+          <div className="fc-stat">
+            <span>נשאר בקופה (מט&quot;ח)</span>
+            <strong dir="ltr">{flow.fxRemainderCashIls ? `₪${flow.fxRemainderCashIls}` : "—"}</strong>
+          </div>
+          <div className="fc-stat">
+            <span>הוחזר לבנק</span>
+            <strong dir="ltr">{flow.fxRemainderBankIls ? `₪${flow.fxRemainderBankIls}` : "—"}</strong>
           </div>
           <div className="fc-stat">
             <span>הועבר לטורקיה</span>
@@ -121,7 +151,7 @@ export function ManagerCountSection({
         <p className="fc-muted">טוען נתוני מנהל…</p>
       )}
 
-      {flow && flow.fxPurchases.length > 0 ? (
+      {flow && flow.fxPurchases.length > 0 && !readOnly ? (
         <>
           <CurrencyExchangeHistory purchases={flow.fxPurchases} />
           <ExchangeProfitLossHistoryTable rows={flow.fxProfitLossHistory} />
@@ -129,7 +159,7 @@ export function ManagerCountSection({
         </>
       ) : null}
 
-      {modalOpen ? (
+      {modalOpen && showEdit ? (
         <div className="fc-modal-backdrop" role="presentation" onClick={() => setModalOpen(false)}>
           <div
             className="fc-modal"
@@ -173,14 +203,16 @@ export function ManagerCountSection({
               ))}
             </div>
             <div className="fc-modal__actions">
-              <button
-                type="button"
-                className="fc-btn fc-btn--ghost"
-                onClick={() => setFxOpen(true)}
-                disabled={saving}
-              >
-                רכישת מט&quot;ח
-              </button>
+              {onSaveFx ? (
+                <button
+                  type="button"
+                  className="fc-btn fc-btn--ghost"
+                  onClick={() => setFxOpen(true)}
+                  disabled={saving}
+                >
+                  רכישת מט&quot;ח
+                </button>
+              ) : null}
               <button type="button" className="fc-btn fc-btn--primary" disabled={saving} onClick={() => void submitManager()}>
                 שמירה
               </button>
@@ -189,19 +221,21 @@ export function ManagerCountSection({
         </div>
       ) : null}
 
-      <CurrencyExchangeModal
-        open={fxOpen}
-        week={week}
-        weekLabel={weekLabel}
-        availableIls={flow?.availableIlsForFx ?? "0"}
-        saving={saving}
-        onClose={() => setFxOpen(false)}
-        onSave={async (input) => {
-          const res = await onSaveFx(input);
-          if (res.ok) setFxOpen(false);
-          return res;
-        }}
-      />
+      {onSaveFx ? (
+        <CurrencyExchangeModal
+          open={fxOpen}
+          week={week}
+          weekLabel={weekLabel}
+          availableIls={flow?.availableIlsForFx ?? "0"}
+          saving={saving}
+          onClose={() => setFxOpen(false)}
+          onSave={async (input) => {
+            const res = await onSaveFx(input);
+            if (res.ok) setFxOpen(false);
+            return res;
+          }}
+        />
+      ) : null}
     </section>
   );
 }

@@ -1,4 +1,5 @@
 import { roundMoney2 } from "@/lib/payment-updated";
+import { normalizePaymentMethodSlug } from "@/lib/payment-breakdown-shared";
 
 /** שורת תשלום מהשרת לסיכומי KPI — ללא שאילתות נוספות במסך */
 export type PaymentIntakeCustomerPaymentRow = {
@@ -27,10 +28,11 @@ function n(raw: string | null | undefined): number {
 }
 
 function methodToKpiKey(method: string | null | undefined): PaymentMethodKpiKey {
-  if (method === "BANK_TRANSFER" || method === "BANK_TRANSFER_DONE") return "BANK_TRANSFER";
-  if (method === "CASH") return "CASH";
-  if (method === "CHECK") return "CHECK";
-  if (method === "CREDIT") return "CREDIT";
+  const m = normalizePaymentMethodSlug(method);
+  if (m === "BANK_TRANSFER") return "BANK_TRANSFER";
+  if (m === "CASH") return "CASH";
+  if (m === "CHECK") return "CHECK";
+  if (m === "CREDIT") return "CREDIT";
   return "OTHER";
 }
 

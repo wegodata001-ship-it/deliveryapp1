@@ -1,9 +1,9 @@
 "use client";
 
-import { Check, Eye, Paperclip, Pencil } from "lucide-react";
-import { fmtDailyMoney, type CashDailyMethodId } from "@/lib/cash-control-daily";
+import { MethodIcon } from "@/components/admin/cash-flow/shared";
+import { IntakeDrillTable } from "@/components/admin/cash-control/IntakeDrillTable";
+import type { CashDailyMethodId } from "@/lib/cash-control-daily";
 import type { CashDailyMethodDetailRow } from "@/app/admin/cash-control/daily-types";
-import { MethodIcon, num } from "@/components/admin/cash-flow/shared";
 
 export type MethodDrillPanelProps = {
   method: CashDailyMethodId;
@@ -15,7 +15,7 @@ export type MethodDrillPanelProps = {
   onToggleReviewed: (paymentId: string, reviewed: boolean) => void;
 };
 
-/** פירוט אמצעי תשלום נבחר — נטען רק בלחיצה (Drill Down) */
+/** פירוט אמצעי תשלום נבחר — מסך בקרה יומי למנהל */
 export function MethodDrillPanel({
   method,
   methodLabel,
@@ -33,67 +33,18 @@ export function MethodDrillPanel({
           <MethodIcon method={method} size={16} />
           פירוט קליטות — {methodLabel}
         </div>
-        <span className="cc-block__note">לחיצה על שורה פותחת את קליטת התשלום</span>
+        <span className="cc-block__note">
+          👁 לצפייה בקובץ · סמן «נבדק» לאחר בדיקה · פתח קליטה לעריכה בלבד
+        </span>
       </header>
-      {loading ? (
-        <p className="cc-loading">טוען…</p>
-      ) : !rows || rows.length === 0 ? (
-        <p className="cc-empty">אין קליטות</p>
-      ) : (
-        <div className="cc-block__scroll">
-          <table className="cc-table cc-table--detail">
-            <thead>
-              <tr>
-                <th>שעה</th>
-                <th>לקוח</th>
-                <th>עובד</th>
-                <th>מספר קליטה</th>
-                <th className="cc-num">סכום</th>
-                <th>מסמך</th>
-                <th>נבדק</th>
-                <th>צפייה</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr
-                  key={r.paymentId}
-                  className={`cc-detail-row${r.reviewed ? " is-reviewed" : ""}`}
-                  onClick={() => onOpenPayment(r.paymentId)}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") onOpenPayment(r.paymentId);
-                  }}
-                >
-                  <td dir="ltr">{r.timeHm}</td>
-                  <td>{r.customerName ?? "—"}</td>
-                  <td>{r.recordedByName ?? "—"}</td>
-                  <td dir="ltr">{r.paymentCode ?? "—"}</td>
-                  <td dir="ltr" className="cc-num">{fmtDailyMoney(cur, num(r.amount))}</td>
-                  <td className="cc-icon-cell">
-                    {r.hasDocument ? <Paperclip size={14} aria-hidden /> : <span className="cc-muted">—</span>}
-                  </td>
-                  <td className="cc-icon-cell" onClick={(e) => e.stopPropagation()}>
-                    <label className="cc-check" title="נבדק">
-                      <input
-                        type="checkbox"
-                        checked={r.reviewed}
-                        disabled={reviewBusy === r.paymentId}
-                        onChange={(ev) => onToggleReviewed(r.paymentId, ev.target.checked)}
-                      />
-                      <Check size={14} className={r.reviewed ? "cc-check--on" : "cc-check--off"} aria-hidden />
-                    </label>
-                  </td>
-                  <td className="cc-icon-cell">
-                    <Eye size={14} aria-hidden />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      <IntakeDrillTable
+        currency={cur}
+        loading={loading}
+        rows={rows}
+        reviewBusy={reviewBusy}
+        onOpenPayment={onOpenPayment}
+        onToggleReviewed={onToggleReviewed}
+      />
     </section>
   );
 }

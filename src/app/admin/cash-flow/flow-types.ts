@@ -1,5 +1,6 @@
 import type { CashWeekFlowLineId } from "@/lib/cash-control-week-flow";
 import type { CashDailyMethodId } from "@/lib/cash-control-daily";
+import type { CashDailySummaryRowDto } from "@/app/admin/cash-control/daily-types";
 
 /** רשומת רכישת מט"ח — נשמרת ב-CashWeekFlow.fxPurchases (JSON), append-only */
 export type FxPurchaseRecord = {
@@ -120,4 +121,54 @@ export const FLOW_COLUMN_CLASS: Record<CashDailyMethodId, string> = {
   CHECK: "fc-col--check",
   CREDIT: "fc-col--credit",
   OTHER: "fc-col--other",
+};
+
+/** שורת סיכום שבועי — בקרת תזרים (מסך ראשי) */
+export type FlowWeekOverviewRow = {
+  week: string;
+  weekLabel: string | null;
+  hasData: boolean;
+  /** סכומי ספירות קופה יומיות מצטברים */
+  drawer: Record<CashDailyMethodId, string>;
+  totalReceivedIls: string;
+  daysCounted: number;
+  /** ספירת מנהל — CashWeekFlow */
+  manager: Partial<Record<CashWeekFlowLineId, string | null>>;
+  commissionUsd: string | null;
+  commissionIls: string | null;
+  turkeyTransferUsd: string | null;
+  fxPurchaseIls: string | null;
+  fxPurchaseUsd: string | null;
+  fxRemainderCashIls: string | null;
+  fxRemainderBankIls: string | null;
+  fxPurchaseCount: number;
+  expensesIls: string;
+  expensesUsd: string;
+  drawerRemainingIls: string;
+  drawerRemainingUsd: string;
+  bankBalanceIls: string | null;
+};
+
+export type FlowWeeksOverviewPayload = {
+  weeks: FlowWeekOverviewRow[];
+};
+
+/** פירוט שבוע — נפתח מתחת לשורה */
+export type FlowWeekDrillPayload = {
+  week: string;
+  weekLabel: string | null;
+  flow: FlowWeekPayload;
+  dailyCounts: CashDailySummaryRowDto[];
+  expenses: FlowWeekDrillExpenseRow[];
+  paymentIntake: Record<CashDailyMethodId, string>;
+};
+
+export type FlowWeekDrillExpenseRow = {
+  id: string;
+  dateYmd: string;
+  timeHm: string;
+  reasonLabel: string;
+  currency: "ILS" | "USD";
+  amount: string;
+  createdByName: string | null;
 };

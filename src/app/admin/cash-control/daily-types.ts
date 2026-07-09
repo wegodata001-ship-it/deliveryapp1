@@ -46,6 +46,8 @@ export type CashDailyPaymentRowDto = {
   amount: string;
   amountCurrency: "ILS" | "USD";
   hasDocument: boolean;
+  documentPreviewable: boolean;
+  previewDocumentId: string | null;
   reviewed: boolean;
 };
 
@@ -98,5 +100,7 @@ export type CashDailyMethodDetailRow = {
   timeHm: string;
   amount: string;
   hasDocument: boolean;
+  documentPreviewable: boolean;
+  previewDocumentId: string | null;
   reviewed: boolean;
 };

@@ -4,7 +4,11 @@
  */
 
 import { CASH_CONTROL_EPS } from "@/lib/cash-control-calculation";
-import { paymentMethodBucketKey, type PaymentBucketKey } from "@/lib/payment-breakdown-shared";
+import {
+  parsePaymentNoteContributions,
+  paymentMethodBucketKey,
+  type PaymentBucketKey,
+} from "@/lib/payment-breakdown-shared";
 import type { ReconciliationPaymentInput } from "@/lib/cash-control-reconciliation";
 import { formatYmdJerusalem, getJerusalemDayOfWeek, isValidYmd } from "@/lib/weeks/ah-week";
 
@@ -110,10 +114,40 @@ export function paymentDayKeyJerusalem(p: { paymentDate: Date | string | null; c
   return formatYmdJerusalem(new Date(raw));
 }
 
+/** קלט לפיצול קליטה לעמודות — כולל notes לתשלום מורכב */
+export type DailyPaymentSplitInput = {
+  amountIls: { toString(): string } | null;
+  amountUsd: { toString(): string } | null;
+  paymentMethod: string | null;
+  usdPaymentMethod: string | null;
+  ilsPaymentMethod: string | null;
+  notes?: string | null;
+  exchangeRate?: { toString(): string } | null;
+};
+
+function contributionsFromNoteLines(
+  p: DailyPaymentSplitInput,
+): Array<{ column: CashDailyMethodId; amount: number }> | null {
+  const rate = Number(p.exchangeRate?.toString() ?? 0);
+  const parts = parsePaymentNoteContributions(p.notes, rate);
+  if (parts.length === 0) return null;
+
+  const out: Array<{ column: CashDailyMethodId; amount: number }> = [];
+  for (const part of parts) {
+    const col = bucketToMethod(part.bucket, part.side);
+    if (!col) continue;
+    out.push({ column: col, amount: part.amount });
+  }
+  return out.length > 0 ? out : null;
+}
+
 /** מפצל קליטה לעמודות הטבלה היומית (כולל «אחר»). */
 export function getDailyPaymentContributions(
-  p: ReconciliationPaymentInput,
+  p: DailyPaymentSplitInput,
 ): Array<{ column: CashDailyMethodId; amount: number }> {
+  const fromNotes = contributionsFromNoteLines(p);
+  if (fromNotes) return fromNotes;
+
   const out: Array<{ column: CashDailyMethodId; amount: number }> = [];
   const ilsAmt = num(p.amountIls);
   const usdAmt = num(p.amountUsd);

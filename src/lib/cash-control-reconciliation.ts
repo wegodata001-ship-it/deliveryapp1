@@ -3,7 +3,11 @@
  */
 
 import { CASH_CONTROL_EPS } from "@/lib/cash-control-calculation";
-import { paymentMethodBucketKey, type PaymentBucketKey } from "@/lib/payment-breakdown-shared";
+import {
+  parsePaymentNoteContributions,
+  paymentMethodBucketKey,
+  type PaymentBucketKey,
+} from "@/lib/payment-breakdown-shared";
 
 export type CashReconciliationLineId =
   | "CASH_ILS"
@@ -50,6 +54,8 @@ export type ReconciliationPaymentInput = {
   paymentMethod: string | null;
   usdPaymentMethod: string | null;
   ilsPaymentMethod: string | null;
+  notes?: string | null;
+  exchangeRate?: { toString(): string } | null;
 };
 
 type LineContribution = { lineId: CashReconciliationLineId; amount: number };
@@ -71,14 +77,31 @@ function bucketToLineId(bucket: PaymentBucketKey, side: "ILS" | "USD"): CashReco
   return null;
 }
 
+function contributionsFromNoteLines(p: ReconciliationPaymentInput): LineContribution[] | null {
+  const rate = Number(p.exchangeRate?.toString() ?? 0);
+  const parts = parsePaymentNoteContributions(p.notes, rate);
+  if (parts.length === 0) return null;
+
+  const out: LineContribution[] = [];
+  for (const part of parts) {
+    const lineId = bucketToLineId(part.bucket, part.side);
+    if (!lineId) continue;
+    out.push({ lineId, amount: part.amount });
+  }
+  return out.length > 0 ? out : null;
+}
+
 /** מפצל קליטה לתרומות לשורות ההתאמה (מזומן ₪/$, אשראי, העברה, צ׳קים). */
 export function getPaymentReconciliationContributions(p: ReconciliationPaymentInput): LineContribution[] {
+  const fromNotes = contributionsFromNoteLines(p);
+  if (fromNotes) return fromNotes;
+
   const out: LineContribution[] = [];
   const ilsAmt = num(p.amountIls);
   const usdAmt = num(p.amountUsd);
 
   if (ilsAmt > CASH_CONTROL_EPS) {
-    const method = (p.ilsPaymentMethod ?? "").trim();
+    const method = (p.ilsPaymentMethod ?? p.paymentMethod ?? "").trim();
     if (method) {
       const lineId = bucketToLineId(paymentMethodBucketKey(method), "ILS");
       if (lineId) out.push({ lineId, amount: ilsAmt });

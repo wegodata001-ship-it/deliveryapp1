@@ -112,10 +112,14 @@ function flattenChecksFromPayments(payments: PaymentLine[]): FlatCheckInsert[] {
 }
 
 function mapMethodToPrismaFromLine(method: PaymentLineMethod): PaymentMethod {
-  if (method === "CREDIT") return PaymentMethod.CREDIT;
-  if (method === "BANK_TRANSFER") return PaymentMethod.BANK_TRANSFER;
-  if (method === "CASH") return PaymentMethod.CASH;
-  if (method === "CHECK") return PaymentMethod.CHECK;
+  const m = (method ?? "").trim().toUpperCase();
+  if (m === "CREDIT" || m === "CREDIT_CARD" || m === "CARD") return PaymentMethod.CREDIT;
+  if (m === "BANK_TRANSFER" || m === "TRANSFER" || m === "BANK" || m === "BANK_TRANSFER_DONE") {
+    return PaymentMethod.BANK_TRANSFER;
+  }
+  if (m === "CASH") return PaymentMethod.CASH;
+  if (m === "CHECK" || m === "CHECKS" || m === "CHEQUE") return PaymentMethod.CHECK;
+  if (m === "OTHER") return PaymentMethod.OTHER;
   return PaymentMethod.OTHER;
 }
 
@@ -640,16 +644,17 @@ export async function savePaymentUpdatedAction(
     const n = normalizePaymentLine(p);
     const c = calculatePaymentLine(n, rateN, VAT_RATE);
     const parts: string[] = [`#${i + 1}`];
-    const method = n.paymentMethod ?? n.usdPaymentMethod ?? n.ilsPaymentMethod ?? "CASH";
+    const usdMethod = n.usdPaymentMethod ?? n.paymentMethod ?? "CASH";
+    const ilsMethod = n.ilsPaymentMethod ?? n.paymentMethod ?? "CASH";
     if (c.usd.hasAmount) {
       parts.push(
-        `USD $${c.usd.finalAmount.toFixed(2)} · ${method}`,
+        `USD $${c.usd.finalAmount.toFixed(2)} · ${usdMethod}`,
         `usdBase=$${c.usd.baseAmount.toFixed(2)} usdVat=$${c.usd.vatAmount.toFixed(2)}`,
       );
     }
     if (c.finalIls > 0) {
       parts.push(
-        `ILS ₪${c.finalIls.toFixed(2)} · ${method}`,
+        `ILS ₪${c.finalIls.toFixed(2)} · ${ilsMethod}`,
         `ilsBase=₪${c.ils.baseAmount.toFixed(2)} ilsVat=₪${c.ils.vatAmount.toFixed(2)}`,
         `ilsToUsd=$${c.convertedIlsUsd.toFixed(2)} @ ${rateN.toFixed(4)}`,
       );

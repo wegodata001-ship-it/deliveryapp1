@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ensureDocumentsTable } from "@/lib/documents/ensure";
+import { fileKindOf } from "@/lib/documents/constants";
 import { fixCashUsd, CASH_CONTROL_EPS } from "@/lib/cash-control-calculation";
 import { cashControlWeekReconciliationPaymentsWhere } from "@/lib/cash-control-week-payments";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
@@ -33,6 +34,52 @@ import type {
 } from "@/app/admin/cash-control/daily-types";
 
 /** לוגיקת בקרת קופה יומית — ללא "use server" (נקרא מקבצי action דקים). */
+
+export type PaymentDocumentHint = {
+  hasDocument: boolean;
+  documentPreviewable: boolean;
+  previewDocumentId: string | null;
+};
+
+async function loadPaymentDocumentHints(paymentIds: string[]): Promise<Map<string, PaymentDocumentHint>> {
+  const map = new Map<string, PaymentDocumentHint>();
+  if (paymentIds.length === 0) return map;
+
+  await ensureDocumentsTable();
+  const docs = await prisma.document.findMany({
+    where: { entityType: "PAYMENT", entityId: { in: paymentIds }, deletedAt: null },
+    select: { id: true, entityId: true, fileName: true, mimeType: true },
+    orderBy: { createdAt: "asc" },
+  });
+
+  for (const d of docs) {
+    let hint = map.get(d.entityId);
+    if (!hint) {
+      const kind = fileKindOf(d.fileName, d.mimeType);
+      const previewable = kind === "pdf" || kind === "image";
+      hint = {
+        hasDocument: true,
+        documentPreviewable: previewable,
+        previewDocumentId: previewable ? d.id : null,
+      };
+      map.set(d.entityId, hint);
+      continue;
+    }
+    if (!hint.previewDocumentId) {
+      const kind = fileKindOf(d.fileName, d.mimeType);
+      if (kind === "pdf" || kind === "image") {
+        hint.documentPreviewable = true;
+        hint.previewDocumentId = d.id;
+      }
+    }
+  }
+  return map;
+}
+
+function emptyDocumentHint(): PaymentDocumentHint {
+  return { hasDocument: false, documentPreviewable: false, previewDocumentId: null };
+}
+
 
 const EXPENSE_REASON_LABEL: Record<string, string> = Object.fromEntries(
   CASH_EXPENSE_REASONS.map((r) => [r.value, r.label]),
@@ -172,6 +219,8 @@ export async function loadCashControlWeekSummary(week: string): Promise<CashDail
         paymentMethod: true,
         usdPaymentMethod: true,
         ilsPaymentMethod: true,
+        notes: true,
+        exchangeRate: true,
         paymentDate: true,
         createdAt: true,
       },
@@ -274,6 +323,8 @@ export async function loadCashControlDayDetail(input: {
         paymentMethod: true,
         usdPaymentMethod: true,
         ilsPaymentMethod: true,
+        notes: true,
+        exchangeRate: true,
         paymentDate: true,
         createdAt: true,
       },
@@ -384,6 +435,8 @@ export async function loadCashControlDayIntakes(input: {
       paymentMethod: true,
       usdPaymentMethod: true,
       ilsPaymentMethod: true,
+      notes: true,
+      exchangeRate: true,
       customer: { select: { displayName: true } },
       createdBy: { select: { fullName: true } },
     },
@@ -395,24 +448,17 @@ export async function loadCashControlDayIntakes(input: {
 
   const paymentIds = filtered.map((p) => p.id);
   const reviewedSet = new Set<string>();
-  const docSet = new Set<string>();
+  let docHints = new Map<string, PaymentDocumentHint>();
   if (paymentIds.length > 0) {
-    const [reviews, docs] = await Promise.all([
+    const [reviews, hints] = await Promise.all([
       prisma.paymentCashAuditReview.findMany({
         where: { weekCode: wk, paymentId: { in: paymentIds } },
         select: { paymentId: true },
       }),
-      (async () => {
-        await ensureDocumentsTable();
-        return prisma.document.findMany({
-          where: { entityType: "PAYMENT", entityId: { in: paymentIds }, deletedAt: null },
-          select: { entityId: true },
-          distinct: ["entityId"],
-        });
-      })(),
+      loadPaymentDocumentHints(paymentIds),
     ]);
     for (const r of reviews) reviewedSet.add(r.paymentId);
-    for (const d of docs) docSet.add(d.entityId);
+    docHints = hints;
   }
 
   const rows: CashDailyMethodDetailRow[] = [];
@@ -420,6 +466,7 @@ export async function loadCashControlDayIntakes(input: {
     const amt = paymentAmountForDailyColumn(p, column);
     if (amt <= CASH_CONTROL_EPS) continue;
     const when = new Date(p.paymentDate ?? p.createdAt);
+    const doc = docHints.get(p.id) ?? emptyDocumentHint();
     rows.push({
       paymentId: p.id,
       paymentCode: p.paymentCode ?? null,
@@ -429,7 +476,9 @@ export async function loadCashControlDayIntakes(input: {
       recordedByName: p.createdBy?.fullName ?? null,
       timeHm: when.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", hour12: false }),
       amount: fixCashUsd(amt),
-      hasDocument: docSet.has(p.id),
+      hasDocument: doc.hasDocument,
+      documentPreviewable: doc.documentPreviewable,
+      previewDocumentId: doc.previewDocumentId,
       reviewed: reviewedSet.has(p.id),
     });
   }
@@ -505,6 +554,8 @@ export async function loadCashControlDayPayments(input: {
       paymentMethod: true,
       usdPaymentMethod: true,
       ilsPaymentMethod: true,
+      notes: true,
+      exchangeRate: true,
       order: { select: { orderNumber: true } },
       customer: { select: { displayName: true } },
       createdBy: { select: { fullName: true } },
@@ -515,26 +566,17 @@ export async function loadCashControlDayPayments(input: {
   const paymentIds = dayPayments.map((p) => p.id);
 
   const reviewedSet = new Set<string>();
-  const docSet = new Set<string>();
-
+  let docHints = new Map<string, PaymentDocumentHint>();
   if (paymentIds.length > 0) {
-    const [reviews, docs] = await Promise.all([
+    const [reviews, hints] = await Promise.all([
       prisma.paymentCashAuditReview.findMany({
         where: { weekCode: wk, paymentId: { in: paymentIds } },
         select: { paymentId: true },
       }),
-      (async () => {
-        await ensureDocumentsTable();
-        const found = await prisma.document.findMany({
-          where: { entityType: "PAYMENT", entityId: { in: paymentIds }, deletedAt: null },
-          select: { entityId: true },
-          distinct: ["entityId"],
-        });
-        return found;
-      })(),
+      loadPaymentDocumentHints(paymentIds),
     ]);
     for (const r of reviews) reviewedSet.add(r.paymentId);
-    for (const d of docs) docSet.add(d.entityId);
+    docHints = hints;
   }
 
   const rows: CashDailyPaymentRowDto[] = [];
@@ -544,6 +586,7 @@ export async function loadCashControlDayPayments(input: {
     const when = new Date(p.paymentDate ?? p.createdAt);
     const primary = contribs[0];
     const methodRaw = (p.ilsPaymentMethod ?? p.usdPaymentMethod ?? p.paymentMethod ?? "").trim();
+    const doc = docHints.get(p.id) ?? emptyDocumentHint();
     rows.push({
       paymentId: p.id,
       paymentCode: p.paymentCode ?? null,
@@ -556,7 +599,9 @@ export async function loadCashControlDayPayments(input: {
       methodLabel: methodRaw ? (PAYMENT_METHOD_LABELS[methodRaw] ?? methodRaw) : "—",
       amount: fixCashUsd(primary.amount),
       amountCurrency: primary.column === "CASH_USD" ? "USD" : "ILS",
-      hasDocument: docSet.has(p.id),
+      hasDocument: doc.hasDocument,
+      documentPreviewable: doc.documentPreviewable,
+      previewDocumentId: doc.previewDocumentId,
       reviewed: reviewedSet.has(p.id),
     });
   }
