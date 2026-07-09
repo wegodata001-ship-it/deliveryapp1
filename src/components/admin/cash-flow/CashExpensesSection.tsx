@@ -2,7 +2,7 @@
 
 import { Eye, Paperclip, Pencil, Plus, Trash2 } from "lucide-react";
 import { fmtDailyMoney } from "@/lib/cash-control-daily";
-import type { CashDailyExpenseRowDto } from "@/app/admin/cash-control/daily-actions";
+import type { CashDailyExpenseRowDto } from "@/app/admin/cash-control/daily-types";
 import { num } from "@/components/admin/cash-flow/shared";
 
 export type CashExpensesSectionCaps = {
@@ -68,7 +68,7 @@ export function CashExpensesSection({
                 <th className="cc-num">סכום</th>
                 <th>מטבע</th>
                 <th>עובד שהזין</th>
-                <th>📎</th>
+                <th>מסמך</th>
                 <th>סטטוס</th>
                 <th>פעולות</th>
               </tr>

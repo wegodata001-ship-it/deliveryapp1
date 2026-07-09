@@ -1,8 +1,9 @@
 "use client";
 
+import { Lock } from "lucide-react";
 import { fmtDailyMoney, type CashDailyMethodId } from "@/lib/cash-control-daily";
-import type { CashDailyDayDetailPayload } from "@/app/admin/cash-control/daily-actions";
-import { METHOD_ICON, num } from "@/components/admin/cash-flow/shared";
+import type { CashDailyDayDetailPayload } from "@/app/admin/cash-control/daily-types";
+import { MethodIcon, num } from "@/components/admin/cash-flow/shared";
 
 type ReconLine = CashDailyDayDetailPayload["reconciliation"][number];
 
@@ -21,7 +22,9 @@ export function PaymentIntakeSection({ reconciliation, methodDrill, onDrill }: P
           <span className="cc-block__dot cc-block__dot--blue" aria-hidden />
           קליטות תשלום
         </div>
-        <span className="cc-block__note cc-block__note--lock">🔒 מתעדכן אוטומטית מקליטות התשלום</span>
+        <span className="cc-block__note cc-block__note--lock">
+          <Lock size={12} aria-hidden /> מתעדכן אוטומטית מקליטות התשלום
+        </span>
       </header>
       <div className="cc-metric-grid">
         {reconciliation.map((r) => {
@@ -37,7 +40,7 @@ export function PaymentIntakeSection({ reconciliation, methodDrill, onDrill }: P
               disabled={!clickable}
             >
               <span className="cc-metric__label">
-                <span className="cc-metric__icon" aria-hidden>{METHOD_ICON[r.method]}</span>
+                <MethodIcon method={r.method} size={14} />
                 {r.label}
               </span>
               <span className="cc-metric__value" dir="ltr">

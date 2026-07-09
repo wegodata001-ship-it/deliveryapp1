@@ -1,8 +1,8 @@
 "use client";
 
 import { fmtDailyMoney, type CashDailyMethodId } from "@/lib/cash-control-daily";
-import type { CashDailyDayDetailPayload } from "@/app/admin/cash-control/daily-actions";
-import { METHOD_ICON, num, statusIcon, statusLabel } from "@/components/admin/cash-flow/shared";
+import type { CashDailyDayDetailPayload } from "@/app/admin/cash-control/daily-types";
+import { MethodIcon, StatusIcon, num, statusLabel } from "@/components/admin/cash-flow/shared";
 
 type ReconLine = CashDailyDayDetailPayload["reconciliation"][number];
 
@@ -42,7 +42,7 @@ export function ReconciliationSection({ reconciliation, methodDrill, onDrill }: 
                 <tr key={r.method} className={`is-${r.status}${active ? " is-active" : ""}`}>
                   <td>
                     <span className="cc-method-cell">
-                      <span aria-hidden>{METHOD_ICON[r.method]}</span> {r.label}
+                      <MethodIcon method={r.method} size={14} /> {r.label}
                     </span>
                   </td>
                   <td dir="ltr" className="cc-num">
@@ -76,7 +76,8 @@ export function ReconciliationSection({ reconciliation, methodDrill, onDrill }: 
                   </td>
                   <td>
                     <span className={`cc-badge is-${r.status}`}>
-                      {statusIcon(r.status)} {statusLabel(r.status)}
+                      <StatusIcon kind={r.status} size={12} />
+                      {statusLabel(r.status)}
                     </span>
                   </td>
                 </tr>

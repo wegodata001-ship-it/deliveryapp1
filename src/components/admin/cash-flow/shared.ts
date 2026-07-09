@@ -1,25 +1,29 @@
 import type { CashDailyMethodId, CashDailyStatusKind } from "@/lib/cash-control-daily";
 
-/** אייקון לכל אמצעי תשלום — משותף לכל אזורי המודול */
-export const METHOD_ICON: Record<CashDailyMethodId, string> = {
-  CASH_ILS: "💵",
-  CASH_USD: "💵",
-  CREDIT: "💳",
-  CHECK: "🧾",
-  BANK_TRANSFER: "🏦",
-  OTHER: "📦",
+export { MethodIcon, StatusIcon } from "@/components/admin/cash-flow/shared-icons";
+
+/** סדר עמודות בטבלת בקרת קופה — זוגות שולם/התקבל */
+export const CASH_CONTROL_TABLE_METHODS: CashDailyMethodId[] = [
+  "CASH_USD",
+  "CASH_ILS",
+  "BANK_TRANSFER",
+  "CHECK",
+  "CREDIT",
+  "OTHER",
+];
+
+export const METHOD_GROUP_CLASS: Record<CashDailyMethodId, string> = {
+  CASH_USD: "cc-col--usd",
+  CASH_ILS: "cc-col--ils",
+  BANK_TRANSFER: "cc-col--transfer",
+  CHECK: "cc-col--check",
+  CREDIT: "cc-col--credit",
+  OTHER: "cc-col--other",
 };
 
 export function num(s: string | null | undefined): number {
   const n = Number((s ?? "").replace(/,/g, ""));
   return Number.isFinite(n) ? n : 0;
-}
-
-export function statusIcon(kind: CashDailyStatusKind): string {
-  if (kind === "ok") return "🟢";
-  if (kind === "warn") return "🟡";
-  if (kind === "critical") return "🔴";
-  return "⚪";
 }
 
 export function statusLabel(kind: CashDailyStatusKind): string {

@@ -6,8 +6,8 @@ import {
   fmtDailyMoney,
   type CashDailyMethodId,
 } from "@/lib/cash-control-daily";
-import type { CashDailyWeekSummaryPayload } from "@/app/admin/cash-control/daily-actions";
-import { METHOD_ICON, num, statusIcon, statusLabel } from "@/components/admin/cash-flow/shared";
+import type { CashDailyWeekSummaryPayload } from "@/app/admin/cash-control/daily-types";
+import { MethodIcon, StatusIcon, num, statusLabel } from "@/components/admin/cash-flow/shared";
 
 function fmtCell(method: CashDailyMethodId, value: string): string {
   const n = num(value);
@@ -77,7 +77,10 @@ export function WeeklySummaryCard({
                 <th>תאריך</th>
                 {CASH_DAILY_METHODS.map((m) => (
                   <th key={m.id} className="cc-num">
-                    <span className="cc-th-icon" aria-hidden>{METHOD_ICON[m.id]}</span> {m.label}
+                    <span className="cc-th-icon" aria-hidden>
+                      <MethodIcon method={m.id} size={13} />
+                    </span>{" "}
+                    {m.label}
                   </th>
                 ))}
                 <th className="cc-num">סך התקבל</th>
@@ -118,7 +121,8 @@ export function WeeklySummaryCard({
                     </td>
                     <td>
                       <span className={`cc-badge is-${row.status}`}>
-                        {statusIcon(row.status)} {statusLabel(row.status)}
+                        <StatusIcon kind={row.status} size={12} />
+                        {statusLabel(row.status)}
                       </span>
                     </td>
                   </tr>

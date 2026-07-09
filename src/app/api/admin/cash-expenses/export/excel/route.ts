@@ -1,10 +1,8 @@
 import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
-import {
-  listCashExpensesFullAction,
-  type CashExpenseListFilter,
-} from "@/app/admin/cash-expenses/actions";
+import { listCashExpensesFull } from "@/app/admin/cash-expenses/service";
+import type { CashExpenseListFilter } from "@/app/admin/cash-expenses/types";
 
 export const runtime = "nodejs";
 
@@ -23,7 +21,7 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     const filter = ((await req.json().catch(() => null)) ?? {}) as CashExpenseListFilter;
-    const rows = await listCashExpensesFullAction(filter);
+    const rows = await listCashExpensesFull(filter);
 
     const wb = XLSX.utils.book_new();
     const aoa: (string | number)[][] = [

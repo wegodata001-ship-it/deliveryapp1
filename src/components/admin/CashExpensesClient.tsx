@@ -17,10 +17,12 @@ import { parseAhWeekNumber, toAhWeekCode } from "@/lib/weeks/ah-week-nav";
 import {
   deleteCashExpenseAction,
   listCashExpensesFullAction,
-  type CashExpenseCapabilities,
-  type CashExpenseListFilter,
-  type CashExpenseRowDto,
 } from "@/app/admin/cash-expenses/actions";
+import type {
+  CashExpenseCapabilities,
+  CashExpenseListFilter,
+  CashExpenseRowDto,
+} from "@/app/admin/cash-expenses/types";
 import {
   CASH_EXPENSE_REASONS,
   type CashCurrency,

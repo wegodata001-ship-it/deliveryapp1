@@ -1,9 +1,9 @@
 "use client";
 
-import { Eye, Paperclip } from "lucide-react";
+import { Check, Eye, Paperclip, Pencil } from "lucide-react";
 import { fmtDailyMoney, type CashDailyMethodId } from "@/lib/cash-control-daily";
-import type { CashDailyMethodDetailRow } from "@/app/admin/cash-control/daily-actions";
-import { METHOD_ICON, num } from "@/components/admin/cash-flow/shared";
+import type { CashDailyMethodDetailRow } from "@/app/admin/cash-control/daily-types";
+import { MethodIcon, num } from "@/components/admin/cash-flow/shared";
 
 export type MethodDrillPanelProps = {
   method: CashDailyMethodId;
@@ -30,8 +30,8 @@ export function MethodDrillPanel({
     <section className="cc-block cc-block--detail cc-slide">
       <header className="cc-block__head">
         <div className="cc-block__title">
-          <span className="cc-block__dot cc-block__dot--white" aria-hidden>{METHOD_ICON[method]}</span>
-          פירוט {methodLabel}
+          <MethodIcon method={method} size={16} />
+          פירוט קליטות — {methodLabel}
         </div>
         <span className="cc-block__note">לחיצה על שורה פותחת את קליטת התשלום</span>
       </header>
@@ -45,13 +45,13 @@ export function MethodDrillPanel({
             <thead>
               <tr>
                 <th>שעה</th>
-                <th>מספר קליטה</th>
                 <th>לקוח</th>
                 <th>עובד</th>
+                <th>מספר קליטה</th>
                 <th className="cc-num">סכום</th>
-                <th>📎 מסמך</th>
-                <th>✔ נבדק</th>
-                <th>👁 צפייה</th>
+                <th>מסמך</th>
+                <th>נבדק</th>
+                <th>צפייה</th>
               </tr>
             </thead>
             <tbody>
@@ -67,22 +67,22 @@ export function MethodDrillPanel({
                   }}
                 >
                   <td dir="ltr">{r.timeHm}</td>
-                  <td dir="ltr">{r.paymentCode ?? "—"}</td>
                   <td>{r.customerName ?? "—"}</td>
                   <td>{r.recordedByName ?? "—"}</td>
+                  <td dir="ltr">{r.paymentCode ?? "—"}</td>
                   <td dir="ltr" className="cc-num">{fmtDailyMoney(cur, num(r.amount))}</td>
                   <td className="cc-icon-cell">
                     {r.hasDocument ? <Paperclip size={14} aria-hidden /> : <span className="cc-muted">—</span>}
                   </td>
                   <td className="cc-icon-cell" onClick={(e) => e.stopPropagation()}>
-                    <label className="cc-check">
+                    <label className="cc-check" title="נבדק">
                       <input
                         type="checkbox"
                         checked={r.reviewed}
                         disabled={reviewBusy === r.paymentId}
                         onChange={(ev) => onToggleReviewed(r.paymentId, ev.target.checked)}
                       />
-                      {r.reviewed ? "☑" : "☐"}
+                      <Check size={14} className={r.reviewed ? "cc-check--on" : "cc-check--off"} aria-hidden />
                     </label>
                   </td>
                   <td className="cc-icon-cell">

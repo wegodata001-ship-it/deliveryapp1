@@ -1,20 +1,19 @@
 "use client";
 
+import { Pencil } from "lucide-react";
 import { CASH_DAILY_METHODS, type CashDailyMethodId } from "@/lib/cash-control-daily";
-import { METHOD_ICON } from "@/components/admin/cash-flow/shared";
+import { MethodIcon } from "@/components/admin/cash-flow/shared";
 
 export type CashCountSectionProps = {
-  /** ערך נוכחי לכל אמצעי (מחרוזת קלט) */
   valueOf: (method: CashDailyMethodId) => string;
   readOnlyValueOf: (method: CashDailyMethodId) => string;
   editable: boolean;
   saving: boolean;
   onChange: (method: CashDailyMethodId, value: string) => void;
-  /** נשמר ב-blur — מקבל snapshot מלא של כל האמצעים */
   onBlurSave: (method: CashDailyMethodId, value: string) => void;
 };
 
-/** אזור 3 — ספירת קופה (ירוק, ידני) */
+/** ספירת קופה — נתונים ידניים */
 export function CashCountSection({
   valueOf,
   readOnlyValueOf,
@@ -30,13 +29,15 @@ export function CashCountSection({
           <span className="cc-block__dot cc-block__dot--green" aria-hidden />
           ספירת קופה
         </div>
-        <span className="cc-block__note cc-block__note--edit">✍️ נתונים ידניים</span>
+        <span className="cc-block__note cc-block__note--edit">
+          <Pencil size={12} aria-hidden /> נתונים ידניים — נשמרים אוטומטית
+        </span>
       </header>
       <div className="cc-count-form">
         {CASH_DAILY_METHODS.map((m) => (
           <label key={m.id} className="cc-count-field">
             <span className="cc-count-field__lbl">
-              <span aria-hidden>{METHOD_ICON[m.id]}</span> {m.label}
+              <MethodIcon method={m.id} size={14} /> {m.label}
             </span>
             {editable ? (
               <input

@@ -16,6 +16,8 @@
     "db:push": "prisma db push",
     "db:ensure-payment-status": "tsx scripts/ensure-payment-status-columns.ts",
     "db:apply-customer-search-indexes": "prisma db execute --file prisma/sql/customer_exact_code_indexes.sql --schema prisma/schema.prisma",
+    "db:apply-cash-week-flow-flow-control": "prisma db execute --file prisma/sql/cash_week_flow_flow_control_columns.sql --schema prisma/schema.prisma",
+    "qa:flow-calculation": "tsx scripts/qa-flow-calculation.ts",
     "db:migrate": "prisma migrate dev",
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",

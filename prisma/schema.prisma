@@ -612,6 +612,15 @@ model CashWeekFlow {
   turkeyTransferUsd  Decimal?        @db.Decimal(19, 4)
   bankBalanceIls     Decimal?        @db.Decimal(19, 4)
   bankBalanceUsd     Decimal?        @db.Decimal(19, 4)
+  /** עמלות מנהל — שבוע */
+  commissionUsd      Decimal?        @db.Decimal(19, 4)
+  commissionIls      Decimal?        @db.Decimal(19, 4)
+  /** יתרת ₪ אחרי רכישת מט"ח — נשאר בקופה (סכום אחרון / מצטבר) */
+  fxRemainderCashIls Decimal?        @db.Decimal(19, 4)
+  /** יתרת ₪ אחרי רכישת מט"ח — הועבר לבנק */
+  fxRemainderBankIls Decimal?        @db.Decimal(19, 4)
+  /** היסטוריית רכישות מט"ח — מערך JSON */
+  fxPurchases        Json?
   updatedById        String?
   createdAt          DateTime        @default(now())
   updatedAt          DateTime        @updatedAt
@@ -823,11 +832,29 @@ model SourcePaymentMethod {
   updatedAt DateTime @default(now())
 }
 
+/// SQL-managed payment method catalog (payment_methods — raw SQL workflow).
+model PaymentMethodRegistry {
+  id        String   @id
+  nameHe    String   @map("name_he")
+  nameAr    String?  @map("name_ar")
+  nameEn    String?  @map("name_en")
+  color     String   @default("#64748b")
+  icon      String?
+  isActive  Boolean  @default(true) @map("is_active")
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@map("payment_methods")
+}
+
 /// SQL-managed table used by source-tables workflow (created via raw SQL).
 model SourceStatus {
   id        String   @id
   nameHe    String
   color     String   @default("info")
+  colorHex  String?
+  sortOrder Int      @default(0)
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now())

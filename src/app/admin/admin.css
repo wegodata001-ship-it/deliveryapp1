@@ -25552,7 +25552,7 @@ select.adm-balances-input {
 .adm-cust-workspace__filter-row,
 .adm-cust-workspace__actions-row {
   display: flex;
-  align-items: end;
+  align-items: flex-end;
   gap: 8px;
   min-width: 0;
 }
@@ -28034,6 +28034,222 @@ button.adm-cash-kpi:hover {
   max-width: 720px;
 }
 
+.adm-cash-modal--quick-expense {
+  max-width: 700px;
+  width: 100%;
+}
+
+.cash-expense-quick__head {
+  gap: 12px;
+}
+
+.cash-expense-quick__head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cash-expense-quick__body {
+  gap: 20px;
+}
+
+.cash-expense-quick__form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cash-expense-quick__grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px 12px;
+}
+
+.cash-expense-quick__field--wide {
+  grid-column: 1 / -1;
+}
+
+.cash-expense-quick__form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.cash-expense-quick__list-title {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #475569;
+}
+
+.cash-expense-quick__table-wrap {
+  overflow-x: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+}
+
+.cash-expense-quick__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.cash-expense-quick__table th,
+.cash-expense-quick__table td {
+  padding: 8px 10px;
+  text-align: right;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.cash-expense-quick__table th {
+  background: #f8fafc;
+  font-weight: 700;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.cash-expense-quick__table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.cash-expense-quick__foot {
+  justify-content: center;
+}
+
+.cash-expense-quick__open-full {
+  width: 100%;
+  justify-content: center;
+  text-decoration: none;
+}
+
+/* ── ספירת קופה — מודאל מהיר ── */
+.adm-cash-modal--cash-count {
+  max-width: 760px;
+  width: 100%;
+}
+
+.cash-count-quick__head h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 800;
+  color: #166534;
+}
+
+.cash-count-quick__body {
+  gap: 16px;
+}
+
+.cash-count-quick__grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px 16px;
+}
+
+.cash-count-quick__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #475569;
+}
+
+.cash-count-quick__field .cc-input {
+  margin-top: 4px;
+}
+
+.cash-count-quick__foot {
+  justify-content: flex-end;
+}
+
+.cc-btn--green {
+  background: #16a34a;
+  border-color: #16a34a;
+  color: #fff;
+}
+
+.cc-btn__dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-left: 4px;
+}
+
+.cc-btn__dot--green {
+  background: #22c55e;
+}
+
+.cc-btn--count {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cc-btn--green:hover:not(:disabled) {
+  background: #15803d;
+  border-color: #15803d;
+}
+
+.cash-count-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  margin-top: 12px;
+}
+
+.cash-count-status--saved {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+
+.cash-count-status__day {
+  font-size: 13px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.cash-count-status__ok {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #166534;
+}
+
+.cash-count-status__msg {
+  font-size: 13px;
+  color: #64748b;
+}
+
+.cash-count-status__meta {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.cash-count-status__meta strong {
+  color: #0f172a;
+  font-weight: 700;
+}
+
+@media (max-width: 640px) {
+  .cash-count-quick__grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .cash-expense-quick__grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
 /* חריגות אמצעי תשלום — מודל רחב (75% מרוחב המסך) */
 .adm-cash-modal--xwide {
   max-width: 75vw;
@@ -30512,6 +30728,13 @@ button.adm-cash-kpi:hover {
   color: #fff;
 }
 .cc-btn--danger:hover:not(:disabled) { background: #b91c1c; border-color: #b91c1c; }
+.cc-btn--accent {
+  background: #f0f9ff;
+  border-color: #7dd3fc;
+  color: #0369a1;
+  font-weight: 700;
+}
+.cc-btn--accent:hover:not(:disabled) { background: #e0f2fe; border-color: #38bdf8; }
 .cc-toolbar__logo--red { background: linear-gradient(135deg, #ef4444, #b91c1c); }
 
 /* Row action icon buttons + doc badge */
@@ -30628,8 +30851,8 @@ button.adm-cash-kpi:hover {
 .cc-table thead th:last-child { border-top-left-radius: 10px; }
 .cc-th-icon { margin-left: 3px; }
 .cc-table td {
-  padding: 12px 12px;
-  border-bottom: 1.5px solid #e2e8f0;
+  padding: 14px 12px;
+  border-bottom: 1.5px solid #cbd5e1;
   vertical-align: middle;
   color: #1e293b;
 }
@@ -30675,6 +30898,126 @@ button.adm-cash-kpi:hover {
 .cc-badge.is-warn { background: #fef9c3; color: #b45309; }
 .cc-badge.is-critical { background: #fee2e2; color: #b91c1c; }
 .cc-badge.is-pending { background: #f1f5f9; color: #94a3b8; }
+
+/* Paired columns table — שולם / התקבל */
+.cc-table--pairs {
+  border: 1px solid #cbd5e1;
+}
+.cc-table--pairs thead th {
+  border-left: 1px solid rgba(0, 0, 0, 0.04);
+  border-right: 1px solid rgba(0, 0, 0, 0.04);
+  font-weight: 700;
+}
+.cc-table__group-row th {
+  text-align: center;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  padding: 10px 8px;
+}
+.cc-group-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  justify-content: center;
+}
+.cc-pair-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.cc-col--sep {
+  border-left: 1px solid #e8ecf0 !important;
+}
+/* מידע כללי — אפור עדין */
+.cc-col--info,
+.cc-table--pairs thead .cc-col--info { background: #f4f6f8 !important; color: #64748b !important; }
+.cc-table--pairs tbody .cc-col--info { background: #fafbfc; }
+/* מזומן $ — כחול עדין מאוד */
+.cc-col--usd,
+.cc-table--pairs thead .cc-col--usd { background: #f3f7fb !important; color: #6b8aad !important; }
+.cc-table--pairs tbody .cc-col--usd { background: #fafcfe; }
+/* מזומן ₪ — ירוק עדין מאוד */
+.cc-col--ils,
+.cc-table--pairs thead .cc-col--ils { background: #f4f9f6 !important; color: #6b9178 !important; }
+.cc-table--pairs tbody .cc-col--ils { background: #fbfdfc; }
+/* העברה — סגול עדין מאוד */
+.cc-col--transfer,
+.cc-table--pairs thead .cc-col--transfer { background: #f8f6fb !important; color: #8a7da0 !important; }
+.cc-table--pairs tbody .cc-col--transfer { background: #fcfbfe; }
+/* צ'קים — כתום עדין מאוד */
+.cc-col--check,
+.cc-table--pairs thead .cc-col--check { background: #faf7f3 !important; color: #9a8570 !important; }
+.cc-table--pairs tbody .cc-col--check { background: #fefdfb; }
+/* אשראי — תכלת עדין מאוד */
+.cc-col--credit,
+.cc-table--pairs thead .cc-col--credit { background: #f3f9fa !important; color: #6b949c !important; }
+.cc-table--pairs tbody .cc-col--credit { background: #fbfeff; }
+/* אחר */
+.cc-col--other,
+.cc-table--pairs thead .cc-col--other { background: #f5f6f8 !important; color: #64748b !important; }
+.cc-table--pairs tbody .cc-col--other { background: #fafbfc; }
+/* סטטוס */
+.cc-col--status,
+.cc-table--pairs thead .cc-col--status { background: #eef1f5 !important; color: #475569 !important; }
+.cc-table--pairs tbody .cc-col--status { background: inherit; }
+/* Zebra — הבדל כמעט בלתי מורגש */
+.cc-table--pairs tbody > tr:nth-child(even) > td.cc-col--info { background: #f6f8fa; }
+.cc-table--pairs tbody > tr:nth-child(even) > td.cc-col--usd { background: #f6f9fc; }
+.cc-table--pairs tbody > tr:nth-child(even) > td.cc-col--ils { background: #f6faf7; }
+.cc-table--pairs tbody > tr:nth-child(even) > td.cc-col--transfer { background: #f8f6fa; }
+.cc-table--pairs tbody > tr:nth-child(even) > td.cc-col--check { background: #f8f6f2; }
+.cc-table--pairs tbody > tr:nth-child(even) > td.cc-col--credit { background: #f4f8f9; }
+.cc-table--pairs tbody > tr:nth-child(even) > td.cc-col--other { background: #f6f8fa; }
+/* Hover — רק טיפה יותר כהה */
+.cc-table--pairs tbody > tr:hover > td.cc-col--info { background: #eef1f4 !important; }
+.cc-table--pairs tbody > tr:hover > td.cc-col--usd { background: #edf3f8 !important; }
+.cc-table--pairs tbody > tr:hover > td.cc-col--ils { background: #edf5f0 !important; }
+.cc-table--pairs tbody > tr:hover > td.cc-col--transfer { background: #f0ecf5 !important; }
+.cc-table--pairs tbody > tr:hover > td.cc-col--check { background: #f5f0e8 !important; }
+.cc-table--pairs tbody > tr:hover > td.cc-col--credit { background: #eaf2f4 !important; }
+.cc-table--pairs tbody > tr:hover > td.cc-col--other { background: #eef1f4 !important; }
+.cc-table--pairs tbody > tr.is-selected > td.cc-col--usd { background: #e8f0f8 !important; }
+.cc-table--pairs tbody > tr.is-selected > td.cc-col--ils { background: #e8f2ec !important; }
+.cc-table--pairs tbody > tr.is-selected > td.cc-col--transfer { background: #ebe6f2 !important; }
+.cc-table--pairs tbody > tr.is-selected > td.cc-col--check { background: #f0ebe3 !important; }
+.cc-table--pairs tbody > tr.is-selected > td.cc-col--credit { background: #e4eef0 !important; }
+.cc-table--pairs tbody > tr.is-selected > td.cc-col--info { background: #e8ecf0 !important; }
+.cc-table--pairs tbody > tr.is-selected > td.cc-col--status { background: #e8ecf0 !important; }
+.cc-table--pairs .cc-row--day.is-selected td {
+  box-shadow: inset 3px 0 0 #a8c4e0;
+}
+.cc-table--pairs .cc-row--day:hover td {
+  background: unset;
+}
+.cc-amount-link--count { color: #15803d; }
+.cc-amount-link--count:hover,
+.cc-amount-link--count.is-active { color: #166534; }
+
+.cc-panels {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 8px;
+}
+.cc-panels__context {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: #334155;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cc-check--on { color: #15803d; }
+.cc-check--off { color: #cbd5e1; }
+.cc-kpi__icon {
+  display: inline-flex;
+  align-items: center;
+  color: inherit;
+  opacity: 0.85;
+}
 
 /* Day detail */
 .cc-day {
@@ -31043,4 +31386,207 @@ button.adm-cash-kpi:hover {
   .cxp-grid { grid-template-columns: 1fr; }
 }
 
+/* ═══ בקרת תזרים (Flow Control) ═══ */
+.fc-page { display: flex; flex-direction: column; gap: 24px; padding-bottom: 32px; }
+.fc-toolbar {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 16px 20px; background: #fff; border: 1px solid #e2e8f0; border-radius: 12px;
+}
+.fc-toolbar__brand { display: flex; align-items: center; gap: 12px; }
+.fc-toolbar__brand h1 { margin: 0; font-size: 20px; font-weight: 800; color: #0f172a; }
+.fc-toolbar__brand span { font-size: 13px; color: #64748b; font-weight: 600; }
+.fc-toolbar__actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.fc-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.fc-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
+}
+.fc-kpi svg { color: #64748b; }
+.fc-kpi__label { font-size: 11px; font-weight: 700; color: #64748b; }
+.fc-kpi__value { font-size: 17px; font-weight: 800; color: #0f172a; }
+.fc-kpi--profit .fc-kpi__value { color: #15803d; }
+.fc-kpi--loss .fc-kpi__value { color: #b91c1c; }
+.fc-kpi--turkey svg { color: #ea580c; }
+.fc-kpi--fx svg { color: #2563eb; }
+.fc-field--full { grid-column: 1 / -1; }
+.fc-num--profit { color: #15803d; font-weight: 700; }
+.fc-num--loss { color: #b91c1c; font-weight: 700; }
+.fc-fx-pl-history { margin-top: 16px; }
+.fc-fx-pl-history h4 { margin: 0 0 10px; font-size: 14px; font-weight: 800; }
+.fc-card__hint { margin: 8px 0 0; font-size: 11px; color: #64748b; font-weight: 600; }
+.fc-btn {
+  display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px;
+  border: 1px solid #cbd5e1; border-radius: 8px; background: #fff;
+  font-size: 13px; font-weight: 600; cursor: pointer; color: #334155;
+}
+.fc-btn:hover:not(:disabled) { background: #f8fafc; }
+.fc-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.fc-btn--ghost { border-color: transparent; background: transparent; }
+.fc-btn--icon { padding: 7px; }
+.fc-btn--primary { background: #16a34a; border-color: #16a34a; color: #fff; }
+.fc-btn--primary:hover:not(:disabled) { background: #15803d; }
+.fc-section {
+  border-radius: 14px; padding: 20px; border: 1px solid transparent;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.06);
+}
+.fc-section--blue { background: #f0f7ff; border-color: #bfdbfe; }
+.fc-section--green { background: #f0fdf4; border-color: #bbf7d0; }
+.fc-section--orange { background: #fff7ed; border-color: #fed7aa; }
+.fc-section__head {
+  display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between;
+  gap: 12px; margin-bottom: 16px;
+}
+.fc-section__head h2 { margin: 0; font-size: 18px; font-weight: 800; color: #0f172a; }
+.fc-section__sub {
+  margin: 4px 0 0; font-size: 12px; font-weight: 600; color: #64748b;
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.fc-week-nav {
+  display: flex; align-items: center; border: 1px solid #cbd5e1;
+  border-radius: 8px; overflow: hidden; background: #fff;
+}
+.fc-week-select { border: none; padding: 7px 10px; font-weight: 800; background: transparent; }
+.fc-muted { color: #64748b; font-size: 14px; margin: 0; padding: 12px 0; }
+.fc-table-wrap { overflow: auto; border: 1px solid #cbd5e1; border-radius: 10px; background: #fff; }
+.fc-table {
+  width: 100%; border-collapse: collapse; font-size: 13px; background: #fff;
+}
+.fc-table thead th {
+  background: #1e293b; color: #f1f5f9; padding: 12px 10px;
+  font-size: 11px; font-weight: 800; text-align: right; white-space: nowrap;
+  border-bottom: 2px solid #0f172a;
+}
+.fc-table__group-row th { text-align: center; font-size: 10.5px; }
+.fc-table td {
+  padding: 13px 10px; border-bottom: 1px solid #e2e8f0; vertical-align: middle;
+}
+.fc-table tbody > tr:nth-child(even) > td { background: #fafbfc; }
+.fc-table tbody > tr:hover > td { background: #f1f5f9; }
+.fc-row--foot td { background: #e2e8f0 !important; font-weight: 800; border-top: 2px solid #94a3b8; }
+.fc-num { text-align: left !important; direction: ltr; font-variant-numeric: tabular-nums; }
+.fc-num--bold { font-weight: 700; }
+.fc-daycell { font-weight: 700; }
+.fc-col--meta, .fc-table thead .fc-col--meta { background: #f4f6f8 !important; color: #64748b !important; }
+.fc-table tbody .fc-col--meta { background: #fafbfc; }
+.fc-col--usd, .fc-table thead .fc-col--usd { background: #f3f7fb !important; color: #6b8aad !important; }
+.fc-table tbody .fc-col--usd { background: #fafcfe; }
+.fc-col--ils, .fc-table thead .fc-col--ils { background: #f4f9f6 !important; color: #6b9178 !important; }
+.fc-table tbody .fc-col--ils { background: #fbfdfc; }
+.fc-col--transfer, .fc-table thead .fc-col--transfer { background: #f8f6fb !important; color: #8a7da0 !important; }
+.fc-table tbody .fc-col--transfer { background: #fcfbfe; }
+.fc-col--check, .fc-table thead .fc-col--check { background: #faf7f3 !important; color: #9a8570 !important; }
+.fc-table tbody .fc-col--check { background: #fefdfb; }
+.fc-col--credit, .fc-table thead .fc-col--credit { background: #f3f9fa !important; color: #6b949c !important; }
+.fc-table tbody .fc-col--credit { background: #fbfeff; }
+.fc-col--total, .fc-table thead .fc-col--total { background: #eef1f5 !important; color: #475569 !important; }
+.fc-col--sep { border-left: 1px solid #e8ecf0 !important; }
+.fc-group-head { display: inline-flex; align-items: center; gap: 5px; justify-content: center; }
+.fc-amount-link {
+  border: none; background: transparent; color: #1d4ed8; font-weight: 700;
+  cursor: pointer; text-decoration: underline; padding: 0;
+}
+.fc-amount-link.is-active { color: #1e3a8a; }
+.fc-drill {
+  background: #fff; border: 1px solid #bfdbfe; border-radius: 12px; padding: 16px;
+}
+.fc-drill__head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+.fc-drill__head h3 { margin: 0; font-size: 16px; font-weight: 800; }
+.fc-drill__hint { font-size: 12px; color: #64748b; }
+.fc-detail-row { cursor: pointer; }
+.fc-detail-row.is-reviewed td { background: #f0fdf4 !important; }
+.fc-icon-cell { text-align: center; }
+.fc-check input { position: absolute; opacity: 0; width: 0; height: 0; }
+.fc-check .is-on { color: #15803d; }
+.fc-check .is-off { color: #cbd5e1; }
+.fc-iconbtn {
+  border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; padding: 4px;
+  cursor: pointer; color: #475569;
+}
+.fc-manager-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px;
+}
+.fc-stat {
+  background: rgba(255,255,255,0.7); border: 1px solid #bbf7d0; border-radius: 10px; padding: 12px;
+}
+.fc-stat span { display: block; font-size: 11px; font-weight: 600; color: #64748b; }
+.fc-stat strong { font-size: 16px; font-weight: 800; color: #0f172a; }
+.fc-modal-backdrop {
+  position: fixed; inset: 0; background: rgba(15,23,42,0.45); z-index: 200;
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+}
+.fc-modal-backdrop--top { z-index: 210; }
+.fc-modal {
+  background: #fff; border-radius: 14px; width: min(520px, 100%);
+  max-height: 90vh; overflow: auto; box-shadow: 0 20px 50px rgba(0,0,0,0.2);
+}
+.fc-modal__head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; border-bottom: 1px solid #e2e8f0;
+}
+.fc-modal__head h3 { margin: 0; font-size: 17px; font-weight: 800; display: flex; align-items: center; gap: 8px; }
+.fc-modal__meta { padding: 0 20px; margin: 12px 0 0; font-size: 13px; color: #64748b; font-weight: 600; }
+.fc-form-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px; padding: 16px 20px;
+}
+.fc-field { display: flex; flex-direction: column; gap: 5px; }
+.fc-field span { font-size: 12px; font-weight: 700; color: #475569; }
+.fc-field--calc strong { font-size: 18px; color: #0f172a; }
+.fc-input {
+  padding: 9px 11px; border: 1px solid #cbd5e1; border-radius: 8px;
+  font-size: 14px; font-weight: 600; direction: ltr; text-align: left;
+}
+.fc-modal__actions {
+  display: flex; justify-content: flex-end; gap: 10px; padding: 14px 20px;
+  border-top: 1px solid #e2e8f0; background: #f8fafc;
+}
+.fc-fx-remainder { padding: 0 20px 12px; }
+.fc-fx-remainder__q { font-weight: 700; margin: 8px 0; }
+.fc-error { color: #b91c1c; font-size: 12px; font-weight: 600; }
+.fc-fx-history, .fc-fx-pl { margin-top: 16px; }
+.fc-fx-history h4, .fc-fx-pl h4 { margin: 0 0 10px; font-size: 14px; font-weight: 800; }
+.fc-table--compact td, .fc-table--compact th { padding: 8px 10px; font-size: 12px; }
+.fc-fx-pl__kpis { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+.fc-fx-pl__kpi {
+  flex: 1; min-width: 120px; background: #fff; border: 1px solid #e2e8f0;
+  border-radius: 10px; padding: 10px 12px;
+}
+.fc-fx-pl__kpi span { display: block; font-size: 11px; color: #64748b; font-weight: 600; }
+.fc-fx-pl__kpi strong { font-size: 16px; font-weight: 800; }
+.fc-fx-pl__kpi--profit { border-color: #bbf7d0; }
+.fc-fx-pl__kpi--loss { border-color: #fecaca; }
+.fc-fx-pl__bar-row { display: grid; grid-template-columns: 48px 1fr 80px; gap: 8px; align-items: center; margin-bottom: 6px; }
+.fc-fx-pl__bar-track { height: 10px; background: #e2e8f0; border-radius: 5px; overflow: hidden; }
+.fc-fx-pl__bar-fill { height: 100%; background: #3b82f6; border-radius: 5px; }
+.fc-summary-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px;
+}
+.fc-card {
+  background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+.fc-card header { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+.fc-card header h3 { margin: 0; font-size: 15px; font-weight: 800; flex: 1; }
+.fc-card__values, .fc-card__rows { display: flex; flex-direction: column; gap: 10px; }
+.fc-card__values div, .fc-card__rows div { display: flex; justify-content: space-between; align-items: center; }
+.fc-card__values span, .fc-card__rows span { font-size: 12px; color: #64748b; font-weight: 600; }
+.fc-card__values strong, .fc-card__rows strong { font-size: 20px; font-weight: 900; color: #0f172a; }
+.fc-card--turkey.is-debt { border-color: #fecaca; background: #fef2f2; }
+.fc-card--turkey.is-ok { border-color: #bbf7d0; }
+.fc-debt-line strong { color: #b91c1c !important; }
+.fc-status-ok { color: #15803d; }
+.fc-status-debt { color: #b91c1c; }
+.fc-card__edit { display: flex; flex-direction: column; gap: 8px; }
+.fc-card__edit label { display: flex; align-items: center; gap: 8px; }
 
