@@ -3,7 +3,8 @@
 import { useCallback, useState } from "react";
 import type { FlowWeekDrillPayload } from "@/app/admin/cash-flow/flow-types";
 import { FLOW_PAYMENT_COLUMNS } from "@/app/admin/cash-flow/flow-types";
-import { fmtDailyMoney, type CashDailyMethodId } from "@/lib/cash-control-daily";
+import { fmtDailyMoney, channelCurrency, type CashDailyMethodId } from "@/lib/cash-control-daily";
+import { channelColLabels } from "@/lib/cash-control-channel";
 import { CurrencyExchangeHistory } from "@/components/admin/flow-control/CurrencyExchangeHistory";
 import { ManagerCountCard } from "@/components/admin/manager-count/ManagerCountCard";
 import { PaymentSummaryTable } from "@/components/admin/flow-control/PaymentSummaryTable";
@@ -18,14 +19,7 @@ import type { CashDailyMethodDetailRow } from "@/app/admin/cash-control/daily-ty
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { fcNum } from "@/components/admin/flow-control/shared";
 
-const COL_LABEL: Record<CashDailyMethodId, string> = {
-  CASH_USD: "מזומן $",
-  CASH_ILS: "מזומן ₪",
-  BANK_TRANSFER: "העברות",
-  CHECK: "צ'קים",
-  CREDIT: "אשראי",
-  OTHER: "אחר",
-};
+const COL_LABEL = channelColLabels();
 
 export type FlowWeekDrillPanelProps = {
   drill: FlowWeekDrillPayload | null;
@@ -159,7 +153,7 @@ export function FlowWeekDrillPanel({
                   if (firstDay) void openMethodIntakes(m, firstDay.dateYmd);
                 }}
               >
-                {COL_LABEL[m]}: {fmtDailyMoney(m === "CASH_USD" ? "USD" : "ILS", amt)}
+                {COL_LABEL[m]}: {fmtDailyMoney(channelCurrency(m), amt)}
               </button>
             );
           })}

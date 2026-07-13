@@ -23,9 +23,12 @@ export function deriveWeekStatus(drill: FlowWeekDrillPayload): FlowWeekStatusVie
   const hasCritical = days.some((d) => d.status === "critical");
   const hasWarn = days.some((d) => d.status === "warn");
   const hasPending = days.some((d) => d.status === "pending" || !d.countSaved);
-  const turkeyDebt = drill.flow.turkeyDebtStatus === "debt" && fcNum(drill.flow.turkeyDebtUsd) > 0.02;
+  const turkeyAwaiting =
+    drill.flow.turkeyBalanceStatus !== "FULLY_TRANSFERRED" &&
+    drill.flow.turkeyBalanceStatus !== "NO_COUNT" &&
+    fcNum(drill.flow.turkeyBalanceClosingUsd) > 0.02;
 
-  if (hasCritical || turkeyDebt) {
+  if (hasCritical || turkeyAwaiting) {
     return { status: "critical", label: "נמצאו חריגות", dot: "🔴" };
   }
   if (hasWarn || hasPending) {

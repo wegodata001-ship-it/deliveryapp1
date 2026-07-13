@@ -116,6 +116,7 @@ model User {
   approvalRequestsApproved   ApprovalRequest[]  @relation("ApprovalRequestApprovedBy")
   approvalRequestsRejected   ApprovalRequest[]  @relation("ApprovalRequestRejectedBy")
   ordersEditUnlockedFor      Order[]            @relation("OrderEditUnlockFor")
+  paymentPlansCreated        PaymentPlan[]      @relation("PaymentPlanCreatedBy")
   notifications              UserNotification[]
   cashExpenses               CashExpense[]      @relation("CashExpenseCreatedBy")
   cashCountsCreated          CashCount[]        @relation("CashCountCreatedBy")
@@ -123,6 +124,7 @@ model User {
   paymentCashAuditReviews    PaymentCashAuditReview[] @relation("PaymentCashAuditReviewBy")
   cashDailyDrawerCounts      CashDailyDrawerCount[]   @relation("CashDailyDrawerCountBy")
   cashWeekFlowsUpdated       CashWeekFlow[]           @relation("CashWeekFlowBy")
+  turkeyTransferMovements  TurkeyTransferMovement[] @relation("TurkeyTransferMovementBy")
 }
 
 /** הגדרות שער דולר גלובליות: בסיס (usd_rate_base), עמלה (usd_fee), שער סופי מחושב (usd_rate_final). */
@@ -197,6 +199,7 @@ model Customer {
   orders          Order[]
   payments        Payment[]
   receiptControls ReceiptControl[]
+  paymentPlans    PaymentPlan[]
 
   @@index([countryCode])
   @@index([countryCode, customerCode])
@@ -289,6 +292,8 @@ model Order {
   payments    Payment[]
   /** חלוקת תשלום מורכב — הגדרת פיצול ההזמנה בין אמצעי תשלום (תכנון, לא תשלום בפועל) */
   paymentBreakdown OrderPaymentBreakdown[]
+  /** מטא-דאטה לחלוקת תשלום פעילה — שורות בפועל ב-OrderPaymentBreakdown */
+  paymentPlan      PaymentPlan?
   /** נפתח זמנית לאחר אישור מנהל לעריכת הזמנה בסטטוס הושלמה */
   editUnlockedForUserId String?
   editUnlockedUntil     DateTime?
@@ -336,6 +341,91 @@ model OrderPaymentBreakdown {
   order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
   @@index([orderId])
+}
+
+enum PaymentPlanStatus {
+  ACTIVE
+  PARTIALLY_RECEIVED
+  COMPLETED
+  CANCELLED
+  REPLACED
+}
+
+enum PaymentPlanClosureType {
+  BALANCE_RESET
+  CREDIT_BALANCE
+  PAYMENT_RECEIVED
+}
+
+/**
+ * מטא-דאטה לחלוקת תשלום פעילה של הזמנה.
+ * שורות החלוקה נשמרות ב-OrderPaymentBreakdown; אין שכפול במעבר שבוע.
+ */
+model PaymentPlan {
+  id                String                  @id @default(uuid())
+  orderId           String                  @unique @map("order_id")
+  customerId        String                  @map("customer_id")
+  /** שבוע מקור ההזמנה בעת יצירת החלוקה */
+  sourceWeekCode    String?                 @map("source_week_code")
+  /** שבוע שבו נוצרה החלוקה */
+  createdInWeekCode String                  @map("created_in_week_code")
+  status            PaymentPlanStatus       @default(ACTIVE)
+  closureType       PaymentPlanClosureType? @map("closure_type")
+  createdById       String?                 @map("created_by_id")
+  createdAt         DateTime                @default(now()) @map("created_at")
+  updatedAt         DateTime                @updatedAt @map("updated_at")
+
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customer  Customer @relation(fields: [customerId], references: [id])
+  createdBy User?    @relation("PaymentPlanCreatedBy", fields: [createdById], references: [id])
+
+  @@index([customerId, status])
+  @@index([status])
+  @@map("payment_plan")
+}
+
+enum TurkeyTransferMovementType {
+  CASH_COUNT_ALLOCATION
+  TRANSFER_TO_TURKEY
+  CASH_COUNT_ADJUSTMENT
+  TRANSFER_REVERSAL
+  MANUAL_ADJUSTMENT
+}
+
+enum TurkeyTransferCurrency {
+  USD
+  ILS
+}
+
+/**
+ * תנועות יתרה להעברה לטורקיה — מקור האמת.
+ * היתרה = סכום תנועות (הקצאות + התאמות − העברות + ביטולים).
+ */
+model TurkeyTransferMovement {
+  id             String                   @id @default(uuid())
+  countryCode    WorkCountryCode          @default(TR)
+  weekCode       String                   @map("week_code")
+  cashWeekFlowId String?                  @map("cash_week_flow_id")
+  type           TurkeyTransferMovementType
+  currency       TurkeyTransferCurrency
+  /** סכום חיובי; סימן נגזר מ-type בחישוב */
+  amount         Decimal                  @db.Decimal(19, 4)
+  balanceBefore  Decimal?                 @map("balance_before") @db.Decimal(19, 4)
+  balanceAfter   Decimal?                 @map("balance_after") @db.Decimal(19, 4)
+  reference      String?
+  notes          String?
+  metadata       Json?
+  createdById    String?                  @map("created_by_id")
+  createdAt      DateTime                 @default(now()) @map("created_at")
+
+  cashWeekFlow CashWeekFlow? @relation(fields: [cashWeekFlowId], references: [id], onDelete: SetNull)
+  createdBy    User?         @relation("TurkeyTransferMovementBy", fields: [createdById], references: [id])
+
+  @@index([countryCode, weekCode])
+  @@index([cashWeekFlowId])
+  @@index([type])
+  @@index([createdAt])
+  @@map("turkey_transfer_movement")
 }
 
 /// מונה רץ למספור הזמנות לפי שבוע — UPDATE+RETURNING במקום MAX על Order
@@ -585,6 +675,10 @@ model CashDailyDrawerCount {
   checksIls   Decimal?        @db.Decimal(19, 4)
   creditIls   Decimal?        @db.Decimal(19, 4)
   transferIls Decimal?        @db.Decimal(19, 4)
+  transferUsd Decimal?        @db.Decimal(19, 4)
+  creditUsd   Decimal?        @db.Decimal(19, 4)
+  checksUsd   Decimal?        @db.Decimal(19, 4)
+  otherUsd    Decimal?        @db.Decimal(19, 4)
   otherIls    Decimal?        @db.Decimal(19, 4)
   updatedById String?
   createdAt   DateTime        @default(now())
@@ -628,6 +722,7 @@ model CashWeekFlow {
   updatedAt          DateTime        @updatedAt
 
   updatedBy User? @relation("CashWeekFlowBy", fields: [updatedById], references: [id])
+  turkeyTransferMovements TurkeyTransferMovement[]
 
   @@unique([countryCode, weekCode])
   @@index([weekCode])

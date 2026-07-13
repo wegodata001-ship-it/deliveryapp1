@@ -3,11 +3,14 @@
 import { useCallback, useState } from "react";
 import type { FlowWeekDrillPayload, FlowWeekOverviewRow } from "@/app/admin/cash-flow/flow-types";
 import { FLOW_PAYMENT_COLUMNS } from "@/app/admin/cash-flow/flow-types";
-import { fmtDailyMoney, type CashDailyMethodId } from "@/lib/cash-control-daily";
+import { fmtDailyMoney, channelCurrency, type CashDailyMethodId } from "@/lib/cash-control-daily";
+import { channelColLabels } from "@/lib/cash-control-channel";
 import { PaymentSummaryTable } from "@/components/admin/flow-control/PaymentSummaryTable";
 import { CashBalanceCard } from "@/components/admin/flow-control/CashBalanceCard";
 import { BankBalanceCard } from "@/components/admin/flow-control/BankBalanceCard";
 import { TurkeyDebtCard } from "@/components/admin/flow-control/TurkeyDebtCard";
+import { TurkeyTransferModal } from "@/components/admin/flow-control/TurkeyTransferModal";
+import { TurkeyMovementsTable } from "@/components/admin/flow-control/TurkeyMovementsTable";
 import { CurrencyExchangeHistory } from "@/components/admin/flow-control/CurrencyExchangeHistory";
 import { ExchangeProfitLossChart } from "@/components/admin/flow-control/ExchangeProfitLossChart";
 import { MethodDrillPanel } from "@/components/admin/cash-flow/MethodDrillPanel";
@@ -35,14 +38,7 @@ import type { CashDailyMethodDetailRow } from "@/app/admin/cash-control/daily-ty
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { fcNum } from "@/components/admin/flow-control/shared";
 
-const COL_LABEL: Record<CashDailyMethodId, string> = {
-  CASH_USD: "מזומן $",
-  CASH_ILS: "מזומן ₪",
-  BANK_TRANSFER: "העברות",
-  CHECK: "צ'קים",
-  CREDIT: "אשראי",
-  OTHER: "אחר",
-};
+const COL_LABEL = channelColLabels();
 
 type DetailKey = "intakes" | "reconciliation" | "balance" | null;
 
@@ -66,6 +62,7 @@ export function FlowWeekDashboard({
   const [managerOpen, setManagerOpen] = useState(false);
   const [fxOpen, setFxOpen] = useState(false);
   const [turkeyOpen, setTurkeyOpen] = useState(false);
+  const [turkeyTransferOpen, setTurkeyTransferOpen] = useState(false);
 
   const [methodDrill, setMethodDrill] = useState<CashDailyMethodId | null>(null);
   const [methodRows, setMethodRows] = useState<CashDailyMethodDetailRow[] | null>(null);
@@ -126,7 +123,7 @@ export function FlowWeekDashboard({
   const matchStatus = deriveMatchStatus(matchPct);
   const weekStatus = deriveWeekStatus(drill);
   const fxNet = deriveFxNetIls(drill);
-  const turkeyDebt = fcNum(drill.flow.turkeyDebtUsd);
+  const turkeyBalanceUsd = fcNum(drill.flow.turkeyBalanceClosingUsd ?? drill.flow.turkeyDebtUsd);
   const cashIls = fcNum(drill.flow.kpis.cashRemainingIls);
   const cashUsd = fcNum(drill.flow.kpis.cashRemainingUsd);
 
@@ -148,7 +145,7 @@ export function FlowWeekDashboard({
   };
 
   const fxStatus = fxNet > 0.005 ? "ok" : fxNet < -0.005 ? "critical" : "warn";
-  const turkeyStatus = drill.flow.turkeyDebtStatus === "debt" ? "critical" : "ok";
+  const turkeyStatus = turkeyBalanceUsd > 0.005 ? "critical" : "ok";
 
   return (
     <div className="fd-dashboard">
@@ -190,10 +187,10 @@ export function FlowWeekDashboard({
         />
         <FlowDashboardTile
           accent="orange"
-          title="חוב לטורקיה"
-          value={turkeyDebt > 0.005 ? fmtHeroUsd(turkeyDebt) : "—"}
+          title="יתרה להעברה לטורקיה"
+          value={turkeyBalanceUsd > 0.005 ? fmtHeroUsd(turkeyBalanceUsd) : "—"}
           status={turkeyStatus}
-          statusLabel={turkeyDebt > 0.005 ? "חוב פתוח" : "מסודר"}
+          statusLabel={turkeyBalanceUsd > 0.005 ? "ממתין להעברה" : "מסודר"}
           onClick={() => setTurkeyOpen(true)}
         />
         <FlowDashboardTile
@@ -240,7 +237,7 @@ export function FlowWeekDashboard({
                       if (firstDay) void openMethodIntakes(m, firstDay.dateYmd);
                     }}
                   >
-                    {COL_LABEL[m]}: {fmtDailyMoney(m === "CASH_USD" ? "USD" : "ILS", amt)}
+                    {COL_LABEL[m]}: {fmtDailyMoney(channelCurrency(m), amt)}
                   </button>
                 );
               })}
@@ -342,10 +339,13 @@ export function FlowWeekDashboard({
           <CashBalanceCard ils={drill.flow.drawerRemainingIls} usd={drill.flow.drawerRemainingUsd} />
           <BankBalanceCard ils={drill.flow.bankBalanceIls} />
           <TurkeyDebtCard
+            openingUsd={drill.flow.turkeyBalance?.usd.openingBalance.toFixed(2)}
+            addedUsd={drill.flow.turkeyBalance?.usd.addedFromCashCount.toFixed(2)}
+            transferredUsd={drill.flow.turkeyBalance?.usd.transferred.toFixed(2)}
+            closingUsd={drill.flow.turkeyBalanceClosingUsd}
+            status={drill.flow.turkeyBalanceStatus}
             expectedUsd={drill.flow.turkeyExpectedUsd}
-            actualUsd={drill.flow.turkeyTransferUsd}
-            debtUsd={drill.flow.turkeyDebtUsd}
-            status={drill.flow.turkey.status}
+            actualUsd={drill.flow.turkeyBalance?.usd.transferred.toFixed(2) ?? drill.flow.turkeyTransferUsd}
           />
         </div>
         {drill.flow.fxPurchases.length > 0 ? (
@@ -402,24 +402,48 @@ export function FlowWeekDashboard({
 
       <FlowDetailModal
         open={turkeyOpen}
-        title="חוב לטורקיה — פירוט"
+        title="יתרה להעברה לטורקיה — פירוט"
         subtitle={drill.weekLabel}
         wide
         onClose={() => setTurkeyOpen(false)}
       >
         <TurkeyDebtCard
+          openingUsd={drill.flow.turkeyBalance?.usd.openingBalance.toFixed(2)}
+          addedUsd={drill.flow.turkeyBalance?.usd.addedFromCashCount.toFixed(2)}
+          transferredUsd={drill.flow.turkeyBalance?.usd.transferred.toFixed(2)}
+          closingUsd={drill.flow.turkeyBalanceClosingUsd}
+          status={drill.flow.turkeyBalanceStatus}
           expectedUsd={drill.flow.turkeyExpectedUsd}
-          actualUsd={drill.flow.turkeyTransferUsd}
-          debtUsd={drill.flow.turkeyDebtUsd}
-          status={drill.flow.turkey.status}
+          actualUsd={drill.flow.turkeyBalance?.usd.transferred.toFixed(2) ?? drill.flow.turkeyTransferUsd}
         />
-        <button type="button" className="fc-btn fc-btn--ghost fd-mt" onClick={() => { setTurkeyOpen(false); setFxOpen(true); }}>
-          פירוט הזמנות וספקים →
-        </button>
+        <TurkeyMovementsTable
+          movements={drill.flow.turkeyBalance?.movements ?? []}
+          weekCode={drill.week}
+          closingUsd={drill.flow.turkeyBalanceClosingUsd}
+        />
+        <div className="fd-turkey-actions">
+          <button
+            type="button"
+            className="fc-btn fc-btn--primary"
+            onClick={() => setTurkeyTransferOpen(true)}
+          >
+            העברה לטורקיה
+          </button>
+          <button type="button" className="fc-btn fc-btn--ghost" onClick={() => { setTurkeyOpen(false); setFxOpen(true); }}>
+            פירוט הזמנות וספקים →
+          </button>
+        </div>
         {drill.flow.fxProfitLoss.purchases.length > 0 ? (
           <ExchangeProfitLossChart summary={drill.flow.fxProfitLoss} />
         ) : null}
       </FlowDetailModal>
+      <TurkeyTransferModal
+        open={turkeyTransferOpen}
+        weekCode={drill.week}
+        currentBalanceUsd={turkeyBalanceUsd}
+        onClose={() => setTurkeyTransferOpen(false)}
+        onSaved={onManagerCountSaved}
+      />
     </div>
   );
 }

@@ -36,8 +36,8 @@ const KPI_ITEMS: {
     },
   },
   {
-    label: "חוב לטורקיה",
-    getValue: (d) => fmtHeroUsd(fcNum(d.flow.turkeyDebtUsd)),
+    label: "יתרה לטורקיה",
+    getValue: (d) => fmtHeroUsd(fcNum(d.flow.turkeyBalanceClosingUsd ?? d.flow.turkeyDebtUsd)),
   },
   {
     label: "יתרה בקופה",

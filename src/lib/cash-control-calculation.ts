@@ -158,3 +158,61 @@ export function toCashControlOrderComputed(
     missingUsd: open,
   };
 }
+
+/** קלט לחישוב הפרש בקרת קופה — ערוץ יחיד (אמצעי תשלום + מטבע) */
+export type CashControlInput = {
+  receivedAmount: number;
+  existingExpensesAmount: number;
+  newExpenseAmount?: number;
+  countedAmount: number | null;
+};
+
+export type CashControlVarianceStatus = "MATCHED" | "SHORTAGE" | "SURPLUS" | "WAITING_FOR_COUNT";
+
+export type CashControlResult = {
+  expectedNetAmount: number;
+  varianceAmount: number | null;
+  status: CashControlVarianceStatus;
+  totalExpensesAmount: number;
+};
+
+/**
+ * מקור אמת יחיד — הפרש בקרת קופה לערוץ בודד.
+ * צפוי נטו = התקבל − הוצאות (קיימות + חדשה)
+ * הפרש = נספר − צפוי נטו
+ */
+export function calculateCashControlVariance(input: CashControlInput): CashControlResult {
+  const received = roundCashUsd(input.receivedAmount);
+  const existing = roundCashUsd(input.existingExpensesAmount);
+  const newExpense = roundCashUsd(input.newExpenseAmount ?? 0);
+  const totalExpenses = roundCashUsd(existing + newExpense);
+  const expectedNet = roundCashUsd(received - totalExpenses);
+
+  if (input.countedAmount == null || !Number.isFinite(input.countedAmount)) {
+    return {
+      expectedNetAmount: expectedNet,
+      varianceAmount: null,
+      status: "WAITING_FOR_COUNT",
+      totalExpensesAmount: totalExpenses,
+    };
+  }
+
+  const counted = roundCashUsd(input.countedAmount);
+  const variance = roundCashUsd(counted - expectedNet);
+
+  let status: CashControlVarianceStatus;
+  if (Math.abs(variance) <= CASH_CONTROL_EPS) {
+    status = "MATCHED";
+  } else if (variance < 0) {
+    status = "SHORTAGE";
+  } else {
+    status = "SURPLUS";
+  }
+
+  return {
+    expectedNetAmount: expectedNet,
+    varianceAmount: variance,
+    status,
+    totalExpensesAmount: totalExpenses,
+  };
+}

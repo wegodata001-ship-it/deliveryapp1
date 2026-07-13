@@ -2,7 +2,7 @@
 
 import { IntakeDrillTable } from "@/components/admin/cash-control/IntakeDrillTable";
 import type { CashDailyMethodDetailRow } from "@/app/admin/cash-control/daily-types";
-import { type CashDailyMethodId, CASH_DAILY_METHODS } from "@/lib/cash-control-daily";
+import { channelCurrency, formatChannelLabel, type CashDailyMethodId } from "@/lib/cash-control-daily";
 
 export type PaymentDrillDownTableProps = {
   method: CashDailyMethodId;
@@ -23,8 +23,8 @@ export function PaymentDrillDownTable({
   onOpenPayment,
   onToggleReviewed,
 }: PaymentDrillDownTableProps) {
-  const cur = method === "CASH_USD" ? "USD" : "ILS";
-  const methodLabel = CASH_DAILY_METHODS.find((m) => m.id === method)?.label ?? method;
+  const cur = channelCurrency(method);
+  const methodLabel = formatChannelLabel(method);
 
   return (
     <section className="fc-drill cc-intake-drill-wrap">

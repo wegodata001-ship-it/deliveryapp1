@@ -1,19 +1,13 @@
 "use client";
 
 import { ChevronDown, ChevronLeft, Lock } from "lucide-react";
-import { fmtDailyMoney, type CashDailyMethodId } from "@/lib/cash-control-daily";
+import { fmtDailyMoney, channelCurrency, type CashDailyMethodId } from "@/lib/cash-control-daily";
+import { allCashControlChannels, channelColLabels } from "@/lib/cash-control-channel";
 import type { FlowWeekOverviewRow } from "@/app/admin/cash-flow/flow-types";
 import type { CashWeekFlowLineId } from "@/lib/cash-control-week-flow";
 import { fcNum } from "@/components/admin/flow-control/shared";
 
-const DRAWER_COLS: CashDailyMethodId[] = [
-  "CASH_USD",
-  "CASH_ILS",
-  "CHECK",
-  "CREDIT",
-  "BANK_TRANSFER",
-  "OTHER",
-];
+const DRAWER_COLS: CashDailyMethodId[] = allCashControlChannels();
 
 const MANAGER_COLS: CashWeekFlowLineId[] = [
   "CASH_USD",
@@ -23,13 +17,14 @@ const MANAGER_COLS: CashWeekFlowLineId[] = [
   "BANK_TRANSFER",
 ];
 
-const COL_LABEL: Record<CashDailyMethodId, string> = {
+const COL_LABEL = channelColLabels();
+
+const MANAGER_LABEL: Record<CashWeekFlowLineId, string> = {
   CASH_USD: "מזומן $",
   CASH_ILS: "מזומן ₪",
-  BANK_TRANSFER: "העברות",
-  CHECK: "צ'קים",
-  CREDIT: "אשראי",
-  OTHER: "אחר",
+  CHECK: "צ'קים ₪",
+  CREDIT: "אשראי ₪",
+  BANK_TRANSFER: "העברה ₪",
 };
 
 function cell(value: string | null | undefined, currency: "ILS" | "USD" = "ILS"): string {
@@ -78,8 +73,8 @@ export function FlowWeeksOverviewTable({
             <th rowSpan={2} className="fc-col--fx-pl">
               רווח מט״ח
             </th>
-            <th rowSpan={2} className="fc-col--turkey">
-              לטורקיה
+            <th colSpan={5} className="fc-col--turkey">
+              יתרה להעברה לטורקיה ($)
             </th>
             <th colSpan={2} className="fc-col--expense">
               הוצאות
@@ -96,7 +91,7 @@ export function FlowWeeksOverviewTable({
             ))}
             {MANAGER_COLS.map((m) => (
               <th key={`m-${m}`} className="fc-num fc-col--manager">
-                {COL_LABEL[m]}
+                {MANAGER_LABEL[m]}
               </th>
             ))}
             <th className="fc-num fc-col--commission">$</th>
@@ -105,6 +100,11 @@ export function FlowWeeksOverviewTable({
             <th className="fc-num fc-col--fx">רכישה $</th>
             <th className="fc-num fc-col--fx">נשאר בקופה</th>
             <th className="fc-num fc-col--fx">הוחזר לבנק</th>
+            <th className="fc-num fc-col--turkey">פתיחה</th>
+            <th className="fc-num fc-col--turkey">נוסף מספירה</th>
+            <th className="fc-num fc-col--turkey">הועבר</th>
+            <th className="fc-num fc-col--turkey">סגירה</th>
+            <th className="fc-num fc-col--turkey">לטורקיה PS</th>
             <th className="fc-num fc-col--expense">₪</th>
             <th className="fc-num fc-col--expense">$</th>
             <th className="fc-num fc-col--balance">קופה ₪</th>
@@ -135,7 +135,7 @@ export function FlowWeeksOverviewTable({
                 </td>
                 {DRAWER_COLS.map((m) => (
                   <td key={`${row.week}-d-${m}`} dir="ltr" className="fc-num fc-col--drawer">
-                    {cell(row.drawer[m], m === "CASH_USD" ? "USD" : "ILS")}
+                    {cell(row.drawer[m], channelCurrency(m))}
                   </td>
                 ))}
                 {MANAGER_COLS.map((m) => (
@@ -184,6 +184,18 @@ export function FlowWeeksOverviewTable({
                       return fmtDailyMoney("ILS", net);
                     })()}
                   </button>
+                </td>
+                <td dir="ltr" className="fc-num fc-col--turkey">
+                  {cell(row.turkeyOpeningUsd, "USD")}
+                </td>
+                <td dir="ltr" className="fc-num fc-col--turkey">
+                  {cell(row.turkeyAddedUsd, "USD")}
+                </td>
+                <td dir="ltr" className="fc-num fc-col--turkey">
+                  {cell(row.turkeyTransferredUsd, "USD")}
+                </td>
+                <td dir="ltr" className="fc-num fc-col--turkey">
+                  {cell(row.turkeyClosingUsd, "USD")}
                 </td>
                 <td dir="ltr" className="fc-num fc-col--turkey">
                   {cell(row.turkeyTransferUsd, "USD")}

@@ -9,13 +9,32 @@ const globalForPrisma = globalThis as unknown as {
 
 const PRISMA_INSTANCE_ID = "wego-app-singleton";
 
-export const prisma =
-  globalForPrisma.prisma ??
-  new PrismaClient({
+function prismaClientHasRequiredDelegates(client: PrismaClient): boolean {
+  const c = client as PrismaClient & {
+    turkeyTransferMovement?: { findMany?: unknown };
+    paymentPlan?: { findMany?: unknown };
+  };
+  return (
+    typeof c.turkeyTransferMovement?.findMany === "function" &&
+    typeof c.paymentPlan?.findMany === "function"
+  );
+}
+
+function createPrismaClient(): PrismaClient {
+  return new PrismaClient({
     log: perfEnabled()
       ? [{ level: "query", emit: "event" }, { level: "error", emit: "stdout" }, { level: "warn", emit: "stdout" }]
       : ["error"],
   });
+}
+
+// Next dev caches the module singleton — recreate after `prisma generate` adds new models.
+if (globalForPrisma.prisma && !prismaClientHasRequiredDelegates(globalForPrisma.prisma)) {
+  void globalForPrisma.prisma.$disconnect().catch(() => {});
+  globalForPrisma.prisma = undefined;
+}
+
+export const prisma = globalForPrisma.prisma ?? createPrismaClient();
 
 if (typeof window === "undefined") {
   logDbEnvDiagnostics("prisma:init", PRISMA_INSTANCE_ID);

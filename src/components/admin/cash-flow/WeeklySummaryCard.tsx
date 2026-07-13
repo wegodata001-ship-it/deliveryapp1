@@ -4,6 +4,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import {
   CASH_DAILY_METHODS,
   fmtDailyMoney,
+  channelCurrency,
   type CashDailyMethodId,
 } from "@/lib/cash-control-daily";
 import type { CashDailyWeekSummaryPayload } from "@/app/admin/cash-control/daily-types";
@@ -12,7 +13,7 @@ import { MethodIcon, StatusIcon, num, statusLabel } from "@/components/admin/cas
 function fmtCell(method: CashDailyMethodId, value: string): string {
   const n = num(value);
   if (n <= 0) return "—";
-  return fmtDailyMoney(method === "CASH_USD" ? "USD" : "ILS", n);
+  return fmtDailyMoney(channelCurrency(method), n);
 }
 
 export type WeeklySummaryCardProps = {

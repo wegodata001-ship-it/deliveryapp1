@@ -6,7 +6,7 @@ import { Prisma } from "@prisma/client";
 import { loadFlowWeek } from "@/app/admin/cash-flow/week-flow-service";
 import type { FlowWeekDrillExpenseRow, FlowWeekDrillPayload } from "@/app/admin/cash-flow/flow-types";
 import { CASH_EXPENSE_REASONS } from "@/app/admin/cash-control/constants";
-import { paymentDayKeyJerusalem } from "@/lib/cash-control-daily";
+import { paymentDayKeyJerusalem, emptyDailyIntake } from "@/lib/cash-control-daily";
 import { cashControlWeekReconciliationPaymentsWhere } from "@/lib/cash-control-week-payments";
 import { aggregateFlowIntakesByDay } from "@/lib/flow-control/flow-calculation-service";
 import { loadFlowWeekApprovedSummary } from "@/lib/flow-control/services/cash-count-summary-service";
@@ -60,14 +60,7 @@ export async function loadFlowWeekDrill(week: string): Promise<FlowWeekDrillPayl
   if (!flow) return null;
 
   const intakeByDay = aggregateFlowIntakesByDay(payments, paymentDayKeyJerusalem);
-  const paymentIntake = {
-    CASH_ILS: 0,
-    CASH_USD: 0,
-    CREDIT: 0,
-    CHECK: 0,
-    BANK_TRANSFER: 0,
-    OTHER: 0,
-  };
+  const paymentIntake = emptyDailyIntake();
   for (const totals of intakeByDay.values()) {
     for (const k of Object.keys(paymentIntake) as (keyof typeof paymentIntake)[]) {
       paymentIntake[k] = Math.round((paymentIntake[k] + totals[k]) * 100) / 100;

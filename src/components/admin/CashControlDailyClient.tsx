@@ -527,8 +527,25 @@ export function CashControlClient({
         onClose={() => setVarianceModalOpen(false)}
         dayLabel={varianceDayLabel}
         dateYmd={varianceDayYmd ?? ""}
+        weekCode={week}
         lines={varianceLines}
         loading={varianceLoading}
+        onAddExpense={
+          expenseCaps?.canCreate
+            ? () => {
+                setVarianceModalOpen(false);
+                setQuickExpenseOpen(true);
+              }
+            : undefined
+        }
+        onOpenCount={
+          isAdmin
+            ? () => {
+                setVarianceModalOpen(false);
+                if (varianceDayYmd) void openCountModal(varianceDayYmd);
+              }
+            : undefined
+        }
       />
     </div>
   );

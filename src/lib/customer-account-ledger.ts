@@ -8,6 +8,10 @@ import {
   PAYMENT_SURPLUS_TO_COMMISSION_LEDGER_LABEL,
 } from "@/lib/commission-debt-closure";
 import {
+  BALANCE_RESET_OVERPAYMENT_LEDGER_LABEL,
+  BALANCE_RESET_SHORTFALL_LEDGER_LABEL,
+} from "@/lib/balance-reset-calculation";
+import {
   DEBT_WITHDRAWAL_LEDGER_LABEL,
   isDebtWithdrawalOrderStatus,
   orderCustomerChargeUsd,
@@ -530,14 +534,22 @@ export async function buildCustomerAccountLedger(params: {
     const oldV = parseJsonRecord(log.oldValue);
     const newV = parseJsonRecord(log.newValue);
     const meta = parseJsonRecord(log.metadata);
-    const typeLabel = ledgerLabelForClosureAudit(log.actionType, meta);
     const remainingRaw =
+      decStr(meta?.balanceBeforeUsd) ??
       decStr(meta?.beforeRemainingUsd) ??
       decStr(meta?.remainingUsd) ??
       decStr(oldV?.remainingUsd) ??
       decStr(newV?.remainingUsd);
     const remaining = remainingRaw ? new Prisma.Decimal(remainingRaw) : new Prisma.Decimal(0);
-    if (remaining.lte(0)) continue;
+    const adjustmentType = decStr(meta?.adjustmentType);
+    const isOverpayment = adjustmentType === "OVERPAYMENT" || remaining.lt(0);
+    if (remaining.abs().lte(new Prisma.Decimal("0.01")) && adjustmentType !== "SHORTFALL") continue;
+
+    const typeLabel = isOverpayment
+      ? (decStr(meta?.ledgerLabel) ?? BALANCE_RESET_OVERPAYMENT_LEDGER_LABEL)
+      : adjustmentType === "SHORTFALL"
+        ? (decStr(meta?.ledgerLabel) ?? BALANCE_RESET_SHORTFALL_LEDGER_LABEL)
+        : ledgerLabelForClosureAudit(log.actionType, meta);
 
     const beforeCom =
       decStr(meta?.beforeCommissionUsd) ?? decStr(oldV?.commissionUsd) ?? "0";
@@ -567,7 +579,7 @@ export async function buildCustomerAccountLedger(params: {
       kind: "COMMISSION_DEBT_CLOSURE",
       typeLabel,
       charge: new Prisma.Decimal(0),
-      payment: remaining,
+      payment: remaining.abs(),
       document: orderNumber ?? typeLabel,
       orderId: oid,
       paymentId: null,
@@ -589,16 +601,22 @@ export async function buildCustomerAccountLedger(params: {
       const co = row as Record<string, unknown>;
       const oid = decStr(co.orderId);
       if (!oid || !orderIdSet.has(oid) || closureByOrderId.has(oid)) continue;
-      const remainingRaw = decStr(co.remainingUsd) ?? decStr(co.resetUsd);
+      const remainingRaw =
+        decStr(co.balanceBeforeUsd) ?? decStr(co.remainingUsd) ?? decStr(co.resetUsd);
       if (!remainingRaw) continue;
       const remaining = new Prisma.Decimal(remainingRaw);
-      if (remaining.lte(0)) continue;
+      const rowAdjustment = decStr(co.adjustmentType);
+      const rowOverpayment = rowAdjustment === "OVERPAYMENT" || remaining.lt(0);
+      if (remaining.abs().lte(new Prisma.Decimal("0.01")) && rowAdjustment !== "SHORTFALL") continue;
       const beforeCom = decStr(co.beforeCommissionUsd) ?? "0";
       const afterCom = decStr(co.afterCommissionUsd) ?? "0";
       const afterRemaining = decStr(co.afterRemainingUsd) ?? "0.00";
       const beforeTotal = decStr(co.beforeTotalUsd) ?? "0";
       const orderNumber = decStr(co.orderNumber);
-      const bulkLabel = decStr(co.ledgerLabel) ?? decStr(meta?.ledgerLabel) ?? BALANCE_RESET_LEDGER_LABEL;
+      const bulkLabel =
+        decStr(co.ledgerLabel) ??
+        decStr(meta?.ledgerLabel) ??
+        (rowOverpayment ? BALANCE_RESET_OVERPAYMENT_LEDGER_LABEL : BALANCE_RESET_SHORTFALL_LEDGER_LABEL);
       closureByOrderId.set(oid, {
         orderId: oid,
         date: log.createdAt,
@@ -614,7 +632,7 @@ export async function buildCustomerAccountLedger(params: {
         kind: "COMMISSION_DEBT_CLOSURE",
         typeLabel: bulkLabel,
         charge: new Prisma.Decimal(0),
-        payment: remaining,
+        payment: remaining.abs(),
         document: orderNumber ?? bulkLabel,
         orderId: oid,
         paymentId: null,

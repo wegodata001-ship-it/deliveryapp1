@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Plus, X } from "lucide-react";
+import { Eye, Plus, X } from "lucide-react";
 import {
   CASH_EXPENSE_REASONS,
   type CashCurrency,
@@ -26,7 +26,6 @@ export type CashExpenseQuickModalProps = {
   open: boolean;
   onClose: () => void;
   week: string;
-  /** יום עבודה נבחר בטבלה — אם חסר, משתמשים בהיום */
   activeDateYmd?: string;
   canCreate: boolean;
   currentUserName: string;
@@ -104,8 +103,7 @@ export function CashExpenseQuickModal({
 
   useEffect(() => {
     if (!open) return;
-    const date = activeDateYmd?.trim() || todayYmd();
-    setForm(resetFormFields(date));
+    setForm(resetFormFields(activeDateYmd?.trim() || todayYmd()));
     setErr(null);
   }, [open, activeDateYmd]);
 
@@ -133,7 +131,7 @@ export function CashExpenseQuickModal({
 
   const dateLabel = useMemo(() => {
     const [, m, d] = listDate.split("-");
-    return d && m ? `${d}/${m}` : listDate;
+    return d && m ? `${d}/${m}/${listDate.slice(0, 4)}` : listDate;
   }, [listDate]);
 
   const allowedCurrencies = useMemo(
@@ -141,11 +139,25 @@ export function CashExpenseQuickModal({
     [form.paymentMethod],
   );
 
+  const daySummary = useMemo(() => {
+    const sums: Record<string, number> = {};
+    for (const r of rows) {
+      const key = `${r.paymentMethodLabel} ${r.currency === "USD" ? "$" : "₪"}`;
+      sums[key] = (sums[key] ?? 0) + Number(r.amount);
+    }
+    return Object.entries(sums);
+  }, [rows]);
+
   useEffect(() => {
     if (!allowedCurrencies.includes(form.currency)) {
       setForm((f) => ({ ...f, currency: allowedCurrencies[0] ?? "ILS" }));
     }
   }, [allowedCurrencies, form.currency]);
+
+  const canSubmit = useMemo(() => {
+    const amt = Number(form.amount.replace(",", "."));
+    return Number.isFinite(amt) && amt > 0 && !!form.reason && !!form.paymentMethod;
+  }, [form.amount, form.paymentMethod, form.reason]);
 
   if (!open) return null;
 
@@ -159,12 +171,11 @@ export function CashExpenseQuickModal({
       setErr("אין הרשאה להוספת הוצאה");
       return;
     }
-    setErr(null);
-    const amt = Number(form.amount.replace(",", "."));
-    if (!Number.isFinite(amt) || amt <= 0) {
-      setErr("יש להזין סכום חיובי");
+    if (!canSubmit) {
+      setErr("יש למלא סוג הוצאה, אמצעי תשלום, מטבע וסכום חיובי");
       return;
     }
+    setErr(null);
     const datePart = form.dateYmd.trim() || todayYmd();
 
     setSaving(true);
@@ -185,6 +196,8 @@ export function CashExpenseQuickModal({
       }
       setForm(resetFormFields(datePart));
       await loadRows();
+      const detail = await getCashControlDayDetailAction({ week, dateYmd: datePart });
+      setVarianceLines(detail ? reconLinesToVariance(detail.reconciliation) : []);
       await onSaved();
       dispatchCashControlRefresh(week);
     } finally {
@@ -195,16 +208,19 @@ export function CashExpenseQuickModal({
   return (
     <div className="adm-cash-modal-backdrop" role="presentation" onClick={onClose}>
       <div
-        className="adm-cash-modal adm-cash-modal--quick-expense"
+        className="adm-cash-modal adm-cash-modal--expense-v2"
         dir="rtl"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="cash-expense-quick-title"
+        aria-labelledby="cash-expense-v2-title"
         onClick={(e) => e.stopPropagation()}
       >
-        <header className="adm-cash-modal__head cash-expense-quick__head">
-          <h3 id="cash-expense-quick-title">הוצאות קופה</h3>
-          <div className="cash-expense-quick__head-actions">
+        <header className="ce-modal-v2__head">
+          <div>
+            <h3 id="cash-expense-v2-title">הוצאות קופה</h3>
+            <p className="ce-modal-v2__subtitle">רישום הוצאה והשפעתה על בקרת הקופה</p>
+          </div>
+          <div className="ce-modal-v2__head-actions">
             {canCreate ? (
               <button type="button" className="cc-btn cc-btn--ghost cc-btn--sm" onClick={resetForNew}>
                 <Plus size={14} aria-hidden /> הוצאה חדשה
@@ -216,88 +232,91 @@ export function CashExpenseQuickModal({
           </div>
         </header>
 
-        <div className="adm-cash-modal__body cash-expense-quick__body">
+        <div className="ce-modal-v2__body">
           {canCreate ? (
             <form
-              className="cash-expense-quick__form"
+              className="ce-modal-v2__form"
               onSubmit={(e) => {
                 e.preventDefault();
                 void submit();
               }}
             >
-              <div className="cash-expense-quick__grid">
-                <label className="adm-cash-field">
-                  <span>סוג הוצאה</span>
-                  <select
-                    className="cc-input"
-                    value={form.reason}
-                    onChange={(e) => setForm((f) => ({ ...f, reason: e.target.value as CashExpenseReason }))}
-                  >
-                    {CASH_EXPENSE_REASONS.map((r) => (
-                      <option key={r.value} value={r.value}>
-                        {r.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="adm-cash-field">
-                  <span>סכום</span>
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    className="cc-input"
-                    value={form.amount}
-                    placeholder="0.00"
-                    dir="ltr"
-                    onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
-                  />
-                </label>
-                <label className="adm-cash-field">
-                  <span>מטבע</span>
-                  <select
-                    className="cc-input"
-                    value={form.currency}
-                    onChange={(e) => setForm((f) => ({ ...f, currency: e.target.value as CashCurrency }))}
-                  >
-                    {allowedCurrencies.includes("ILS") ? <option value="ILS">₪ שקל</option> : null}
-                    {allowedCurrencies.includes("USD") ? <option value="USD">$ דולר</option> : null}
-                  </select>
-                </label>
-                <label className="adm-cash-field">
-                  <span>אמצעי תשלום</span>
-                  <CashExpensePaymentMethodSelect
-                    value={form.paymentMethod}
-                    onChange={(paymentMethod) => setForm((f) => ({ ...f, paymentMethod }))}
-                  />
-                </label>
-                <label className="adm-cash-field">
-                  <span>תאריך</span>
-                  <input
-                    type="date"
-                    className="cc-input"
-                    value={form.dateYmd}
-                    onChange={(e) => setForm((f) => ({ ...f, dateYmd: e.target.value }))}
-                  />
-                </label>
-                <label className="adm-cash-field">
-                  <span>שעה</span>
-                  <input type="text" className="cc-input" value={form.timeDisplay} readOnly dir="ltr" />
-                </label>
-                <label className="adm-cash-field">
-                  <span>עובד שרשם</span>
-                  <input type="text" className="cc-input" value={currentUserName || "—"} readOnly />
-                </label>
-                <label className="adm-cash-field cash-expense-quick__field--wide">
-                  <span>הערה</span>
-                  <input
-                    type="text"
-                    className="cc-input"
-                    value={form.notes}
-                    placeholder="אופציונלי"
-                    onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-                  />
-                </label>
-              </div>
+              <section className="ce-modal-v2__section">
+                <h4 className="ce-modal-v2__section-title">פרטי ההוצאה</h4>
+                <div className="ce-modal-v2__grid">
+                  <label className="adm-cash-field">
+                    <span>סוג הוצאה</span>
+                    <select
+                      className="cc-input"
+                      value={form.reason}
+                      onChange={(e) => setForm((f) => ({ ...f, reason: e.target.value as CashExpenseReason }))}
+                    >
+                      {CASH_EXPENSE_REASONS.map((r) => (
+                        <option key={r.value} value={r.value}>
+                          {r.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="adm-cash-field">
+                    <span>סכום</span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      className="cc-input"
+                      value={form.amount}
+                      placeholder="0.00"
+                      dir="ltr"
+                      onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
+                    />
+                  </label>
+                  <label className="adm-cash-field">
+                    <span>מטבע</span>
+                    <select
+                      className="cc-input"
+                      value={form.currency}
+                      onChange={(e) => setForm((f) => ({ ...f, currency: e.target.value as CashCurrency }))}
+                    >
+                      {allowedCurrencies.includes("ILS") ? <option value="ILS">₪ שקל</option> : null}
+                      {allowedCurrencies.includes("USD") ? <option value="USD">$ דולר</option> : null}
+                    </select>
+                  </label>
+                  <label className="adm-cash-field">
+                    <span>אמצעי תשלום</span>
+                    <CashExpensePaymentMethodSelect
+                      value={form.paymentMethod}
+                      onChange={(paymentMethod) => setForm((f) => ({ ...f, paymentMethod }))}
+                    />
+                  </label>
+                  <label className="adm-cash-field">
+                    <span>תאריך</span>
+                    <input
+                      type="date"
+                      className="cc-input"
+                      value={form.dateYmd}
+                      onChange={(e) => setForm((f) => ({ ...f, dateYmd: e.target.value }))}
+                    />
+                  </label>
+                  <label className="adm-cash-field">
+                    <span>שעה</span>
+                    <input type="text" className="cc-input" value={form.timeDisplay} readOnly dir="ltr" />
+                  </label>
+                  <label className="adm-cash-field">
+                    <span>עובד שרשם</span>
+                    <input type="text" className="cc-input" value={currentUserName || "—"} readOnly />
+                  </label>
+                  <label className="adm-cash-field ce-modal-v2__field--wide">
+                    <span>הערה</span>
+                    <input
+                      type="text"
+                      className="cc-input"
+                      value={form.notes}
+                      placeholder="אופציונלי"
+                      onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+                    />
+                  </label>
+                </div>
+              </section>
 
               <CashExpenseVarianceImpact
                 lines={varianceLines}
@@ -308,38 +327,39 @@ export function CashExpenseQuickModal({
               />
 
               {err ? <div className="cxp-err">{err}</div> : null}
-
-              <div className="cash-expense-quick__form-actions">
-                <button type="button" className="cc-btn cc-btn--ghost" onClick={onClose} disabled={saving}>
-                  ביטול
-                </button>
-                <button type="submit" className="cc-btn cc-btn--primary" disabled={saving}>
-                  {saving ? "שומר…" : "שמור"}
-                </button>
-              </div>
             </form>
           ) : (
             <p className="cc-muted">אין הרשאה להוספת הוצאות קופה.</p>
           )}
 
-          <div className="cash-expense-quick__list">
-            <p className="cash-expense-quick__list-title">הוצאות ליום {dateLabel}</p>
+          <section className="ce-modal-v2__section ce-modal-v2__section--history">
+            <h4 className="ce-modal-v2__section-title">הוצאות ליום {dateLabel}</h4>
+            {daySummary.length > 0 ? (
+              <div className="ce-modal-v2__day-summary">
+                {daySummary.map(([label, sum]) => (
+                  <span key={label}>
+                    {label}: <strong dir="ltr">{fmtDailyMoney(label.includes("$") ? "USD" : "ILS", sum)}</strong>
+                  </span>
+                ))}
+              </div>
+            ) : null}
             {loadingRows ? (
               <p className="cc-muted">טוען…</p>
             ) : rows.length === 0 ? (
               <p className="cc-empty">אין הוצאות ליום זה</p>
             ) : (
-              <div className="cash-expense-quick__table-wrap">
-                <table className="cash-expense-quick__table">
+              <div className="ce-modal-v2__table-wrap">
+                <table className="ce-modal-v2__table">
                   <thead>
                     <tr>
                       <th>שעה</th>
-                      <th>סוג</th>
+                      <th>סוג הוצאה</th>
                       <th>אמצעי תשלום</th>
                       <th>מטבע</th>
                       <th>סכום</th>
                       <th>עובד</th>
                       <th>הערה</th>
+                      <th>פעולה</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -348,7 +368,7 @@ export function CashExpenseQuickModal({
                         <td dir="ltr">{formatExpenseTime(r.expenseDateIso)}</td>
                         <td>{r.reasonLabel}</td>
                         <td>
-                          <span className="cash-expense-quick__pm">
+                          <span className="ce-modal-v2__pm">
                             <PaymentMethodIcon method={r.paymentMethod} size={13} />
                             {r.paymentMethodLabel}
                           </span>
@@ -357,19 +377,43 @@ export function CashExpenseQuickModal({
                         <td dir="ltr">{fmtDailyMoney(r.currency === "USD" ? "USD" : "ILS", Number(r.amount))}</td>
                         <td>{r.createdByName ?? "—"}</td>
                         <td>{r.notes ?? "—"}</td>
+                        <td>
+                          <Link
+                            href={`/admin/cash-expenses?expense=${r.id}`}
+                            className="ce-modal-v2__link-btn"
+                            title="צפייה"
+                          >
+                            <Eye size={14} /> צפייה
+                          </Link>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
             )}
-          </div>
+          </section>
         </div>
 
-        <footer className="adm-cash-modal__foot adm-cash-modal__foot--stack cash-expense-quick__foot">
-          <Link href="/admin/cash-expenses" className="cc-btn cc-btn--ghost cash-expense-quick__open-full">
-            פתח את מודול הוצאות קופה
+        <footer className="ce-modal-v2__foot">
+          <Link href="/admin/cash-expenses" className="cc-btn cc-btn--ghost">
+            מודול הוצאות מלא
           </Link>
+          <div className="ce-modal-v2__foot-actions">
+            <button type="button" className="cc-btn cc-btn--ghost" onClick={onClose} disabled={saving}>
+              ביטול
+            </button>
+            {canCreate ? (
+              <button
+                type="button"
+                className="cc-btn cc-btn--primary"
+                disabled={saving || !canSubmit}
+                onClick={() => void submit()}
+              >
+                {saving ? "שומר…" : "שמור הוצאה"}
+              </button>
+            ) : null}
+          </div>
         </footer>
       </div>
     </div>

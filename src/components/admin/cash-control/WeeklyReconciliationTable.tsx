@@ -2,7 +2,8 @@
 
 import { Fragment } from "react";
 import { ArrowDown } from "lucide-react";
-import { fmtDailyMoney, type CashDailyMethodId } from "@/lib/cash-control-daily";
+import { fmtDailyMoney, channelCurrency, type CashDailyMethodId } from "@/lib/cash-control-daily";
+import { channelColLabels } from "@/lib/cash-control-channel";
 import type { CashDailySummaryRowDto } from "@/app/admin/cash-control/daily-types";
 import {
   CASH_CONTROL_TABLE_METHODS,
@@ -13,26 +14,19 @@ import {
   statusLabel,
 } from "@/components/admin/cash-flow/shared";
 
-const METHOD_HEADER: Record<CashDailyMethodId, string> = {
-  CASH_USD: "מזומן $",
-  CASH_ILS: "מזומן ₪",
-  BANK_TRANSFER: "העברה",
-  CHECK: "צ'קים",
-  CREDIT: "אשראי",
-  OTHER: "אחר",
-};
+const METHOD_HEADER = channelColLabels();
 
 function fmtPaid(method: CashDailyMethodId, value: string): string {
   const n = num(value);
   if (n <= 0) return "—";
-  return fmtDailyMoney(method === "CASH_USD" ? "USD" : "ILS", n);
+  return fmtDailyMoney(channelCurrency(method), n);
 }
 
 function fmtReceived(method: CashDailyMethodId, value: string | null | undefined): string {
   if (value == null || value === "") return "—";
   const n = num(value);
   if (n <= 0) return "—";
-  return fmtDailyMoney(method === "CASH_USD" ? "USD" : "ILS", n);
+  return fmtDailyMoney(channelCurrency(method), n);
 }
 
 export type WeeklyReconciliationTableProps = {

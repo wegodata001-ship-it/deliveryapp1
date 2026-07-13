@@ -4,13 +4,13 @@
  * אין קריאה ל-Payment.
  */
 
-import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { loadFlowWeek } from "@/app/admin/cash-flow/week-flow-service";
 import type { FlowWeekOverviewRow } from "@/app/admin/cash-flow/flow-types";
 import type { CashDailyMethodId } from "@/lib/cash-control-daily";
-import { emptyDailyIntake } from "@/lib/cash-control-daily";
-import type { CashWeekFlowLineId } from "@/lib/cash-control-week-flow";
+import { emptyDailyIntake, sumIlsChannelIntake } from "@/lib/cash-control-daily";
+import { allCashControlChannels, CHANNEL_DRAWER_FIELD } from "@/lib/cash-control-channel";
+import { loadTurkeyBalanceForWeek } from "@/lib/flow-control/turkey-transfer-balance-service";
 import { loadFlowWeekCashCountSummary } from "@/lib/flow-control/services/cash-count-summary-service";
 import { formatAhWeekLabel } from "@/lib/weeks/ah-week";
 
@@ -18,37 +18,42 @@ function money(n: number): string {
   return (Math.round(n * 100) / 100).toFixed(2);
 }
 
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
 async function loadOneWeekOverview(weekCode: string): Promise<FlowWeekOverviewRow | null> {
   const wk = weekCode.trim();
-  const [approved, flow] = await Promise.all([
+  const [approved, flow, drawerRows, turkeyBalance] = await Promise.all([
     loadFlowWeekCashCountSummary(wk),
     loadFlowWeek(wk),
+    prisma.cashDailyDrawerCount.findMany({
+      where: { weekCode: wk, countryCode: "TR" },
+    }),
+    loadTurkeyBalanceForWeek(wk),
   ]);
   if (!flow) return null;
 
-  const drawer = { ...emptyDailyIntake() };
-  for (const id of ["CASH_ILS", "CASH_USD", "CREDIT", "CHECK", "BANK_TRANSFER"] as CashWeekFlowLineId[]) {
-    drawer[id] = approved.approved[id]?.amount ?? 0;
+  const drawerTotals = emptyDailyIntake();
+  for (const row of drawerRows) {
+    for (const channel of allCashControlChannels()) {
+      const field = CHANNEL_DRAWER_FIELD[channel];
+      const raw = row[field as keyof typeof row];
+      if (raw == null) continue;
+      const v = Number(raw.toString());
+      if (!Number.isFinite(v)) continue;
+      drawerTotals[channel] = round2(drawerTotals[channel] + v);
+    }
   }
-  // OTHER — רק מספירות יומיות
-  let otherTotal = 0;
+
+  const drawerDto = Object.fromEntries(
+    allCashControlChannels().map((k) => [k, money(drawerTotals[k])]),
+  ) as Record<CashDailyMethodId, string>;
+
   let maxDays = 0;
   for (const line of Object.values(approved.approved)) {
     if (line.daysCounted > maxDays) maxDays = line.daysCounted;
   }
-
-  const drawerRows = await prisma.cashDailyDrawerCount.findMany({
-    where: { weekCode: wk, countryCode: "TR" },
-    select: { otherIls: true },
-  });
-  for (const r of drawerRows) {
-    otherTotal += Number(r.otherIls?.toString() ?? 0);
-  }
-
-  const drawerDto = Object.fromEntries(
-    (Object.keys(drawer) as CashDailyMethodId[]).map((k) => [k, money(drawer[k])]),
-  ) as Record<CashDailyMethodId, string>;
-  drawerDto.OTHER = money(otherTotal);
 
   const lastFx = flow.fxPurchases.length > 0 ? flow.fxPurchases[flow.fxPurchases.length - 1] : null;
 
@@ -57,12 +62,17 @@ async function loadOneWeekOverview(weekCode: string): Promise<FlowWeekOverviewRo
     weekLabel: formatAhWeekLabel(wk),
     hasData: approved.hasAnyCount || flow.counted.CASH_ILS != null,
     drawer: drawerDto,
-    totalReceivedIls: money(approved.totalApprovedIls + otherTotal),
+    totalReceivedIls: money(sumIlsChannelIntake(drawerTotals)),
     daysCounted: maxDays,
     manager: flow.counted,
     commissionUsd: flow.commissionUsd,
     commissionIls: flow.commissionIls,
     turkeyTransferUsd: flow.turkeyTransferUsd,
+    turkeyOpeningUsd: money(turkeyBalance.usd.openingBalance),
+    turkeyAddedUsd: money(turkeyBalance.usd.addedFromCashCount + turkeyBalance.usd.adjusted),
+    turkeyTransferredUsd: money(turkeyBalance.usd.transferred - turkeyBalance.usd.reversed),
+    turkeyClosingUsd: money(turkeyBalance.usd.closingBalance),
+    turkeyBalanceStatus: turkeyBalance.usd.status,
     fxPurchaseIls: flow.fxPurchaseIls,
     fxPurchaseUsd: flow.fxPurchaseUsd,
     fxRemainderCashIls: lastFx ? money(lastFx.remainderCashIls) : flow.fxRemainderCashIls,

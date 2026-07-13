@@ -7,6 +7,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import type { CashWeekFlowLineId } from "@/lib/cash-control-week-flow";
+import { allCashControlChannels, CHANNEL_DRAWER_FIELD } from "@/lib/cash-control-channel";
 import {
   computeWeekTotalReceivedIls,
 } from "@/lib/flow-control/flow-calculation-service";
@@ -25,15 +26,12 @@ export const FLOW_COUNTRY_LABEL = "טורקיה";
 
 export type FlowWeekApprovedLine = {
   amount: number;
-  /** כמה ימים בשבוע נספרו לשורה זו */
   daysCounted: number;
 };
 
 export type FlowWeekCashCountSummary = {
-  /** סיכום שבועי מאושר לפי אמצעי תשלום */
   approved: Record<CashWeekFlowLineId, FlowWeekApprovedLine>;
   totalApprovedIls: number;
-  /** האם יש לפחות יום אחד עם ספירה */
   hasAnyCount: boolean;
 };
 
@@ -55,24 +53,27 @@ function drawerFromDb(row: {
   cashIls: Prisma.Decimal | null;
   cashUsd: Prisma.Decimal | null;
   checksIls: Prisma.Decimal | null;
+  checksUsd?: Prisma.Decimal | null;
   creditIls: Prisma.Decimal | null;
+  creditUsd?: Prisma.Decimal | null;
   transferIls: Prisma.Decimal | null;
+  transferUsd?: Prisma.Decimal | null;
   otherIls?: Prisma.Decimal | null;
+  otherUsd?: Prisma.Decimal | null;
 } | null): CashDailyDrawerValues {
   if (!row) return {};
-  return {
-    CASH_ILS: row.cashIls != null ? numDec(row.cashIls) : null,
-    CASH_USD: row.cashUsd != null ? numDec(row.cashUsd) : null,
-    CHECK: row.checksIls != null ? numDec(row.checksIls) : null,
-    CREDIT: row.creditIls != null ? numDec(row.creditIls) : null,
-    BANK_TRANSFER: row.transferIls != null ? numDec(row.transferIls) : null,
-    OTHER: row.otherIls != null ? numDec(row.otherIls) : null,
-  };
+  const out: CashDailyDrawerValues = {};
+  for (const channel of allCashControlChannels()) {
+    const field = CHANNEL_DRAWER_FIELD[channel];
+    const raw = row[field];
+    out[channel] = raw != null ? numDec(raw) : null;
+  }
+  return out;
 }
 
 function drawerToTotals(drawer: CashDailyDrawerValues): CashDailyIntakeTotals {
   const out = emptyDailyIntake();
-  for (const k of Object.keys(out) as CashDailyMethodId[]) {
+  for (const k of allCashControlChannels()) {
     const v = drawer[k];
     out[k] = v != null ? round2(v) : 0;
   }
@@ -80,19 +81,14 @@ function drawerToTotals(drawer: CashDailyDrawerValues): CashDailyIntakeTotals {
 }
 
 function drawerToDto(drawer: CashDailyDrawerValues): Partial<Record<CashDailyMethodId, string | null>> {
-  return {
-    CASH_ILS: drawer.CASH_ILS != null ? money(drawer.CASH_ILS) : null,
-    CASH_USD: drawer.CASH_USD != null ? money(drawer.CASH_USD) : null,
-    CREDIT: drawer.CREDIT != null ? money(drawer.CREDIT) : null,
-    CHECK: drawer.CHECK != null ? money(drawer.CHECK) : null,
-    BANK_TRANSFER: drawer.BANK_TRANSFER != null ? money(drawer.BANK_TRANSFER) : null,
-    OTHER: drawer.OTHER != null ? money(drawer.OTHER) : null,
-  };
+  return Object.fromEntries(
+    allCashControlChannels().map((id) => [id, drawer[id] != null ? money(drawer[id]!) : null]),
+  ) as Partial<Record<CashDailyMethodId, string | null>>;
 }
 
 function sumDrawer(a: CashDailyDrawerValues, b: CashDailyDrawerValues): CashDailyDrawerValues {
   const out: CashDailyDrawerValues = {};
-  for (const k of ["CASH_ILS", "CASH_USD", "CREDIT", "CHECK", "BANK_TRANSFER", "OTHER"] as CashDailyMethodId[]) {
+  for (const k of allCashControlChannels()) {
     const av = a[k];
     const bv = b[k];
     if (av == null && bv == null) continue;
@@ -107,9 +103,13 @@ function hasDrawerData(drawer: CashDailyDrawerValues): boolean {
 
 const LINE_IDS = ["CASH_ILS", "CASH_USD", "CREDIT", "CHECK", "BANK_TRANSFER"] as CashWeekFlowLineId[];
 
+/** מיפוי ערוץ יומי → שורת ספירת מנהל שבועית (ILS בלבד, מזומן לפי מטבע) */
 function methodToLineId(method: CashDailyMethodId): CashWeekFlowLineId | null {
-  if (method === "OTHER") return null;
-  return method as CashWeekFlowLineId;
+  if (method === "CASH_ILS" || method === "CASH_USD") return method;
+  if (method === "CREDIT_CARD_ILS") return "CREDIT";
+  if (method === "CHECK_ILS") return "CHECK";
+  if (method === "BANK_TRANSFER_ILS") return "BANK_TRANSFER";
+  return null;
 }
 
 export async function loadFlowWeekCashCountSummary(weekCode: string): Promise<FlowWeekCashCountSummary> {
@@ -128,7 +128,7 @@ export async function loadFlowWeekCashCountSummary(weekCode: string): Promise<Fl
     const drawer = drawerFromDb(row);
     if (!hasDrawerData(drawer)) continue;
     hasAnyCount = true;
-    for (const method of ["CASH_ILS", "CASH_USD", "CREDIT", "CHECK", "BANK_TRANSFER"] as CashDailyMethodId[]) {
+    for (const method of allCashControlChannels()) {
       const lineId = methodToLineId(method);
       if (!lineId) continue;
       const v = drawer[method];
@@ -176,14 +176,10 @@ export async function loadFlowWeekApprovedSummary(week: string): Promise<CashDai
       dateDisplay: formatDailyDateDisplay(dateYmd),
       weekCode: wk,
       countryLabel: FLOW_COUNTRY_LABEL,
-      intake: {
-        CASH_ILS: money(totals.CASH_ILS),
-        CASH_USD: money(totals.CASH_USD),
-        CREDIT: money(totals.CREDIT),
-        CHECK: money(totals.CHECK),
-        BANK_TRANSFER: money(totals.BANK_TRANSFER),
-        OTHER: money(totals.OTHER),
-      },
+      intake: Object.fromEntries(allCashControlChannels().map((id) => [id, money(totals[id])])) as Record<
+        CashDailyMethodId,
+        string
+      >,
       drawer: drawerToDto(drawer),
       totalReceived: money(totalReceived),
       expensesIls: money(0),
@@ -202,14 +198,10 @@ export async function loadFlowWeekApprovedSummary(week: string): Promise<CashDai
     dateDisplay: 'סה"כ שבוע',
     weekCode: wk,
     countryLabel: FLOW_COUNTRY_LABEL,
-    intake: {
-      CASH_ILS: money(weekTotals.CASH_ILS),
-      CASH_USD: money(weekTotals.CASH_USD),
-      CREDIT: money(weekTotals.CREDIT),
-      CHECK: money(weekTotals.CHECK),
-      BANK_TRANSFER: money(weekTotals.BANK_TRANSFER),
-      OTHER: money(weekTotals.OTHER),
-    },
+    intake: Object.fromEntries(allCashControlChannels().map((id) => [id, money(weekTotals[id])])) as Record<
+      CashDailyMethodId,
+      string
+    >,
     drawer: drawerToDto(weekDrawer),
     totalReceived: money(weekTotalReceived),
     expensesIls: money(0),

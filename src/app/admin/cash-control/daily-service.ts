@@ -8,6 +8,7 @@ import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 import {
   aggregateDailyIntakes,
   buildDailyReconciliation,
+  channelCurrency,
   computeDailyStatus,
   dayNameHe,
   emptyDailyExpenses,
@@ -17,12 +18,17 @@ import {
   paymentAmountForDailyColumn,
   paymentDayKeyJerusalem,
   paymentMatchesDailyColumn,
+  sumIlsChannelIntake,
   type CashDailyDrawerValues,
   type CashDailyExpenseTotals,
   type CashDailyIntakeTotals,
   type CashDailyMethodId,
 } from "@/lib/cash-control-daily";
 import { formatAhWeekLabel, formatYmdJerusalem, getAhWeekRange, listWeekDayYmds } from "@/lib/weeks/ah-week";
+import {
+  allCashControlChannels,
+  CHANNEL_DRAWER_FIELD,
+} from "@/lib/cash-control-channel";
 import {
   addExpenseToMethodTotals,
   aggregateExpensesByMethod,
@@ -135,14 +141,9 @@ function numDec(v: Prisma.Decimal | null | undefined): number {
 }
 
 function intakeToDto(intake: CashDailyIntakeTotals): Record<CashDailyMethodId, string> {
-  return {
-    CASH_ILS: money(intake.CASH_ILS),
-    CASH_USD: money(intake.CASH_USD),
-    CREDIT: money(intake.CREDIT),
-    CHECK: money(intake.CHECK),
-    BANK_TRANSFER: money(intake.BANK_TRANSFER),
-    OTHER: money(intake.OTHER),
-  };
+  return Object.fromEntries(
+    allCashControlChannels().map((id) => [id, money(intake[id] ?? 0)]),
+  ) as Record<CashDailyMethodId, string>;
 }
 
 function sumIntake(a: CashDailyIntakeTotals, b: CashDailyIntakeTotals): CashDailyIntakeTotals {
@@ -155,7 +156,7 @@ function sumIntake(a: CashDailyIntakeTotals, b: CashDailyIntakeTotals): CashDail
 
 function sumDrawer(a: CashDailyDrawerValues, b: CashDailyDrawerValues): CashDailyDrawerValues {
   const out: CashDailyDrawerValues = {};
-  for (const k of ["CASH_ILS", "CASH_USD", "CREDIT", "CHECK", "BANK_TRANSFER", "OTHER"] as CashDailyMethodId[]) {
+  for (const k of allCashControlChannels()) {
     const av = a[k];
     const bv = b[k];
     if (av == null && bv == null) continue;
@@ -191,30 +192,28 @@ function drawerFromDb(row: {
   cashIls: Prisma.Decimal | null;
   cashUsd: Prisma.Decimal | null;
   checksIls: Prisma.Decimal | null;
+  checksUsd?: Prisma.Decimal | null;
   creditIls: Prisma.Decimal | null;
+  creditUsd?: Prisma.Decimal | null;
   transferIls: Prisma.Decimal | null;
+  transferUsd?: Prisma.Decimal | null;
   otherIls?: Prisma.Decimal | null;
+  otherUsd?: Prisma.Decimal | null;
 } | null): CashDailyDrawerValues {
   if (!row) return {};
-  return {
-    CASH_ILS: row.cashIls != null ? numDec(row.cashIls) : null,
-    CASH_USD: row.cashUsd != null ? numDec(row.cashUsd) : null,
-    CHECK: row.checksIls != null ? numDec(row.checksIls) : null,
-    CREDIT: row.creditIls != null ? numDec(row.creditIls) : null,
-    BANK_TRANSFER: row.transferIls != null ? numDec(row.transferIls) : null,
-    OTHER: row.otherIls != null ? numDec(row.otherIls) : null,
-  };
+  const out: CashDailyDrawerValues = {};
+  for (const channel of allCashControlChannels()) {
+    const field = CHANNEL_DRAWER_FIELD[channel];
+    const raw = row[field as keyof typeof row];
+    out[channel] = raw != null ? numDec(raw as Prisma.Decimal) : null;
+  }
+  return out;
 }
 
 function drawerToDto(drawer: CashDailyDrawerValues): Partial<Record<CashDailyMethodId, string | null>> {
-  return {
-    CASH_ILS: drawer.CASH_ILS != null ? money(drawer.CASH_ILS) : null,
-    CASH_USD: drawer.CASH_USD != null ? money(drawer.CASH_USD) : null,
-    CREDIT: drawer.CREDIT != null ? money(drawer.CREDIT) : null,
-    CHECK: drawer.CHECK != null ? money(drawer.CHECK) : null,
-    BANK_TRANSFER: drawer.BANK_TRANSFER != null ? money(drawer.BANK_TRANSFER) : null,
-    OTHER: drawer.OTHER != null ? money(drawer.OTHER) : null,
-  };
+  return Object.fromEntries(
+    allCashControlChannels().map((id) => [id, drawer[id] != null ? money(drawer[id]!) : null]),
+  ) as Partial<Record<CashDailyMethodId, string | null>>;
 }
 
 export async function loadCashControlWeekSummary(week: string): Promise<CashDailyWeekSummaryPayload | null> {
@@ -269,7 +268,7 @@ export async function loadCashControlWeekSummary(week: string): Promise<CashDail
     weekExpIls = Math.round((weekExpIls + expCur.ils) * 100) / 100;
     weekExpUsd = Math.round((weekExpUsd + expCur.usd) * 100) / 100;
     const { kind, worstDiff, worstCurrency } = computeDailyStatus(intake, drawer, expenses);
-    const totalReceived = intake.CASH_ILS + intake.CREDIT + intake.CHECK + intake.BANK_TRANSFER + intake.OTHER;
+    const totalReceived = sumIlsChannelIntake(intake);
 
     dayRows.push({
       dateYmd,
@@ -289,12 +288,7 @@ export async function loadCashControlWeekSummary(week: string): Promise<CashDail
     });
   }
 
-  const weekTotalReceived =
-    weekIntake.CASH_ILS +
-    weekIntake.CREDIT +
-    weekIntake.CHECK +
-    weekIntake.BANK_TRANSFER +
-    weekIntake.OTHER;
+  const weekTotalReceived = sumIlsChannelIntake(weekIntake);
 
   dayRows.push({
     dateYmd: "",
@@ -515,16 +509,14 @@ export async function persistCashDailyDrawer(input: {
   }
 
   const d = input.drawer;
+  const fieldValues = Object.fromEntries(
+    allCashControlChannels().map((channel) => [CHANNEL_DRAWER_FIELD[channel], dec(d[channel])]),
+  );
   const createData = {
     countryCode: "TR" as const,
     weekCode: wk,
     countDate: dateYmd,
-    cashIls: dec(d.CASH_ILS),
-    cashUsd: dec(d.CASH_USD),
-    checksIls: dec(d.CHECK),
-    creditIls: dec(d.CREDIT),
-    transferIls: dec(d.BANK_TRANSFER),
-    otherIls: dec(d.OTHER),
+    ...fieldValues,
     updatedById: input.updatedById,
   };
   await prisma.cashDailyDrawerCount.upsert({
@@ -533,12 +525,7 @@ export async function persistCashDailyDrawer(input: {
     },
     create: createData,
     update: {
-      cashIls: createData.cashIls,
-      cashUsd: createData.cashUsd,
-      checksIls: createData.checksIls,
-      creditIls: createData.creditIls,
-      transferIls: createData.transferIls,
-      otherIls: createData.otherIls,
+      ...fieldValues,
       updatedById: input.updatedById,
     },
   });
@@ -612,7 +599,7 @@ export async function loadCashControlDayPayments(input: {
       timeHm: when.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", hour12: false }),
       methodLabel: methodRaw ? (PAYMENT_METHOD_LABELS[methodRaw] ?? methodRaw) : "—",
       amount: fixCashUsd(primary.amount),
-      amountCurrency: primary.column === "CASH_USD" ? "USD" : "ILS",
+      amountCurrency: channelCurrency(primary.column),
       hasDocument: doc.hasDocument,
       documentPreviewable: doc.documentPreviewable,
       previewDocumentId: doc.previewDocumentId,

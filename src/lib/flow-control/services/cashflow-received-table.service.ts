@@ -11,6 +11,7 @@ import {
   type CashDailyIntakeTotals,
   type CashDailyMethodId,
 } from "@/lib/cash-control-daily";
+import { allCashControlChannels } from "@/lib/cash-control-channel";
 import {
   aggregateFlowIntakesByDay,
   computeWeekTotalReceivedIls,
@@ -25,14 +26,9 @@ function money(n: number): string {
 }
 
 function intakeToDto(intake: CashDailyIntakeTotals): Record<CashDailyMethodId, string> {
-  return {
-    CASH_ILS: money(intake.CASH_ILS),
-    CASH_USD: money(intake.CASH_USD),
-    CREDIT: money(intake.CREDIT),
-    CHECK: money(intake.CHECK),
-    BANK_TRANSFER: money(intake.BANK_TRANSFER),
-    OTHER: money(intake.OTHER),
-  };
+  return Object.fromEntries(
+    allCashControlChannels().map((id) => [id, money(intake[id] ?? 0)]),
+  ) as Record<CashDailyMethodId, string>;
 }
 
 function sumIntake(a: CashDailyIntakeTotals, b: CashDailyIntakeTotals): CashDailyIntakeTotals {

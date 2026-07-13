@@ -9,8 +9,10 @@ import { buildCashReconciliationSummary } from "@/lib/cash-control-reconciliatio
 import {
   computeDrawerRemaining,
   countLineDiff,
+  WEEK_FLOW_LINE_CHANNEL,
   type CashWeekFlowLineId,
 } from "@/lib/cash-control-week-flow";
+import { aggregateExpensesByMethod } from "@/lib/cash-expense-payment-method";
 import { formatAhWeekLabel, getAhWeekRange } from "@/lib/weeks/ah-week";
 
 const READ_PERMS = ["view_payment_control"];
@@ -97,7 +99,7 @@ export async function getCashWeekFlowAction(week: string): Promise<CashWeekFlowP
     }),
     prisma.cashExpense.findMany({
       where: { weekCode: wk, status: "ACTIVE" },
-      select: { currency: true, amount: true },
+      select: { currency: true, amount: true, paymentMethod: true },
     }),
     prisma.cashWeekFlow.findUnique({
       where: { countryCode_weekCode: { countryCode: "TR", weekCode: wk } },
@@ -122,12 +124,22 @@ export async function getCashWeekFlowAction(week: string): Promise<CashWeekFlowP
     else expensesIls += amt;
   }
 
+  const weekExpensesByMethod = aggregateExpensesByMethod(
+    expenses.map((e) => ({
+      currency: e.currency,
+      amount: e.amount,
+      paymentMethod: e.paymentMethod,
+    })),
+  );
+
   const counted = lineFromFlow(flowRow);
   const countDiff: Partial<Record<CashWeekFlowLineId, string | null>> = {};
   for (const lineId of ["CASH_ILS", "CASH_USD", "CREDIT", "CHECK", "BANK_TRANSFER"] as CashWeekFlowLineId[]) {
     const rec = Number(received[lineId]?.amount ?? 0);
     const cnt = counted[lineId] != null ? Number(counted[lineId]) : null;
-    const diff = countLineDiff(rec, cnt);
+    const channel = WEEK_FLOW_LINE_CHANNEL[lineId];
+    const expAmt = weekExpensesByMethod[channel] ?? 0;
+    const diff = countLineDiff(rec, cnt, expAmt);
     countDiff[lineId] = diff != null ? money(diff) : null;
   }
 

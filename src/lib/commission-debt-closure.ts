@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import { calculateBalanceReset } from "@/lib/balance-reset-calculation";
 
 /** שורת כרטסת — איפוס עמלה בודד מתוך קליטת תשלום */
 export const COMMISSION_DEBT_CLOSURE_LEDGER_LABEL = "סגירת חוב באמצעות עמלה";
@@ -69,36 +70,28 @@ export function planCommissionSurplusAbsorption(params: {
   };
 }
 
-const BALANCE_RESET_EPS = new Prisma.Decimal("0.01");
-
 /**
  * איפוס יתרה — סגירה מלאה ל-0 באמצעות התאמת עמלה:
- * חוסר בתשלום → עמלה -= הפרש; עודף בתשלום → עמלה += הפרש.
+ * עמלה_חדשה = עמלה_קיימת + (שולם − סה״כ לפני).
  */
 export function planBalanceResetToZero(params: {
   commissionUsd: Prisma.Decimal;
   totalUsd: Prisma.Decimal;
   paidUsd: Prisma.Decimal;
 }): CommissionDebtClosurePlan {
-  const remaining = params.totalUsd.sub(params.paidUsd).toDecimalPlaces(4, 4);
-  if (remaining.abs().lte(BALANCE_RESET_EPS)) {
-    return {
-      remainingUsd: remaining,
-      beforeCommissionUsd: params.commissionUsd,
-      beforeTotalUsd: params.totalUsd,
-      paidUsd: params.paidUsd,
-      afterCommissionUsd: params.commissionUsd,
-      afterTotalUsd: params.paidUsd.toDecimalPlaces(4, 4),
-    };
-  }
-  if (remaining.gt(0)) {
-    return planCommissionDebtClosure(params);
-  }
-  return planCommissionSurplusAbsorption({
-    commissionUsd: params.commissionUsd,
-    totalUsd: params.totalUsd,
-    surplusUsd: remaining.abs(),
+  const calc = calculateBalanceReset({
+    totalBeforeUsd: Number(params.totalUsd),
+    paidUsd: Number(params.paidUsd),
+    commissionBeforeUsd: Number(params.commissionUsd),
   });
+  return {
+    remainingUsd: new Prisma.Decimal(calc.balanceBeforeUsd.toFixed(4)),
+    beforeCommissionUsd: params.commissionUsd,
+    beforeTotalUsd: params.totalUsd,
+    paidUsd: params.paidUsd,
+    afterCommissionUsd: new Prisma.Decimal(calc.commissionAfterUsd.toFixed(4)),
+    afterTotalUsd: new Prisma.Decimal(calc.totalAfterUsd.toFixed(4)),
+  };
 }
 
 export function planBalanceResetToZeroFromNumbers(params: {
@@ -111,24 +104,16 @@ export function planBalanceResetToZeroFromNumbers(params: {
   afterCommissionUsd: number;
   afterTotalUsd: number;
 } {
-  const remaining = Math.round((params.totalUsd - params.paidUsd) * 100) / 100;
-  if (Math.abs(remaining) <= 0.01) {
-    return {
-      remainingUsd: remaining,
-      beforeCommissionUsd: params.commissionUsd,
-      afterCommissionUsd: params.commissionUsd,
-      afterTotalUsd: Math.round(params.paidUsd * 100) / 100,
-    };
-  }
-  if (remaining > 0) {
-    return planCommissionDebtClosureFromNumbers(params);
-  }
-  const surplus = Math.abs(remaining);
+  const calc = calculateBalanceReset({
+    totalBeforeUsd: params.totalUsd,
+    paidUsd: params.paidUsd,
+    commissionBeforeUsd: params.commissionUsd,
+  });
   return {
-    remainingUsd: remaining,
+    remainingUsd: calc.balanceBeforeUsd,
     beforeCommissionUsd: params.commissionUsd,
-    afterCommissionUsd: Math.round((params.commissionUsd + surplus) * 100) / 100,
-    afterTotalUsd: Math.round((params.totalUsd + surplus) * 100) / 100,
+    afterCommissionUsd: calc.commissionAfterUsd,
+    afterTotalUsd: calc.totalAfterUsd,
   };
 }
 

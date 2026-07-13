@@ -13,15 +13,19 @@ import {
   XCircle,
 } from "lucide-react";
 import type { CashDailyMethodId, CashDailyStatusKind } from "@/lib/cash-control-daily";
+import { allCashControlChannels } from "@/lib/cash-control-channel";
 
-export const METHOD_LUCIDE: Record<CashDailyMethodId, LucideIcon> = {
-  CASH_ILS: Banknote,
-  CASH_USD: Banknote,
-  CREDIT: CreditCard,
-  CHECK: Receipt,
-  BANK_TRANSFER: Landmark,
-  OTHER: Package,
-};
+function iconForChannel(method: CashDailyMethodId): LucideIcon {
+  if (method.startsWith("CASH_")) return Banknote;
+  if (method.startsWith("BANK_TRANSFER")) return Landmark;
+  if (method.startsWith("CREDIT_CARD")) return CreditCard;
+  if (method.startsWith("CHECK")) return Receipt;
+  return Package;
+}
+
+export const METHOD_LUCIDE: Record<CashDailyMethodId, LucideIcon> = Object.fromEntries(
+  allCashControlChannels().map((id) => [id, iconForChannel(id)]),
+) as Record<CashDailyMethodId, LucideIcon>;
 
 export function StatusIcon({ kind, size = 14 }: { kind: CashDailyStatusKind; size?: number }) {
   if (kind === "ok") return <CheckCircle2 size={size} aria-hidden />;

@@ -1,5 +1,6 @@
 import type { CashWeekFlowLineId } from "@/lib/cash-control-week-flow";
 import type { CashDailyMethodId } from "@/lib/cash-control-daily";
+import { allCashControlChannels, channelGroupClass } from "@/lib/cash-control-channel";
 import type { CashDailySummaryRowDto } from "@/app/admin/cash-control/daily-types";
 
 /** שורת הקצאת תקבול לרכישת מט"ח */
@@ -54,6 +55,11 @@ export type TurkeyDebtResult = {
   status: "ok" | "debt";
 };
 
+/** @deprecated — השתמש ב-TurkeyTransferBalanceResult */
+export type TurkeyDebtResultLegacy = TurkeyDebtResult;
+
+export type { TurkeyTransferBalanceResult, TurkeyTransferMovementDto } from "@/lib/flow-control/turkey-transfer-balance-types";
+
 export type FlowWeekKpiCards = {
   totalReceivedIls: string;
   totalFxConvertedIls: string;
@@ -107,6 +113,8 @@ export type FlowWeekPayload = {
   fxProfitLossHistory: FxProfitLossHistoryRow[];
   kpis: FlowWeekKpiCards;
   turkey: TurkeyDebtResult;
+  /** יתרה להעברה לטורקיה — מחושב מתנועות (לא מחוב לקוח) */
+  turkeyBalance: import("@/lib/flow-control/turkey-transfer-balance-types").TurkeyTransferBalanceResult;
   turkeyTransferUsd: string | null;
   /** מחושב: כסף שהועבר לבנק − משיכות + הפקדות */
   bankBalanceIls: string | null;
@@ -116,30 +124,23 @@ export type FlowWeekPayload = {
   drawerRemainingUsd: string;
   /** כמה ₪ זמין לרכישת מט"ח הבאה */
   availableIlsForFx: string;
-  /** כמה $ היה צריך להעביר לטורקיה */
+  /** כמה $ מוקצה לטורקיה מספירת קופה (לטורקיה PS) */
   turkeyExpectedUsd: string;
-  /** חוב לטורקיה (חיובי = חסר העברה) */
+  /** @deprecated — השתמש ב-turkeyBalance.usd.closingBalance */
   turkeyDebtUsd: string;
+  /** @deprecated */
   turkeyDebtStatus: "ok" | "debt";
+  /** יתרה להעברה לטורקיה — סגירה */
+  turkeyBalanceClosingUsd: string;
+  turkeyBalanceStatus: import("@/lib/flow-control/turkey-transfer-balance-types").TurkeyWeekStatus;
 };
 
-/** עמודות טבלת קליטות — חלק 1 */
-export const FLOW_PAYMENT_COLUMNS: CashDailyMethodId[] = [
-  "CASH_USD",
-  "CASH_ILS",
-  "BANK_TRANSFER",
-  "CHECK",
-  "CREDIT",
-];
+/** עמודות טבלת קליטות — כל ערוצי בקרת הקופה */
+export const FLOW_PAYMENT_COLUMNS: CashDailyMethodId[] = allCashControlChannels();
 
-export const FLOW_COLUMN_CLASS: Record<CashDailyMethodId, string> = {
-  CASH_USD: "fc-col--usd",
-  CASH_ILS: "fc-col--ils",
-  BANK_TRANSFER: "fc-col--transfer",
-  CHECK: "fc-col--check",
-  CREDIT: "fc-col--credit",
-  OTHER: "fc-col--other",
-};
+export const FLOW_COLUMN_CLASS: Record<CashDailyMethodId, string> = Object.fromEntries(
+  allCashControlChannels().map((id) => [id, channelGroupClass(id)]),
+) as Record<CashDailyMethodId, string>;
 
 /** שורת סיכום שבועי — בקרת תזרים (מסך ראשי) */
 export type FlowWeekOverviewRow = {
@@ -154,7 +155,14 @@ export type FlowWeekOverviewRow = {
   manager: Partial<Record<CashWeekFlowLineId, string | null>>;
   commissionUsd: string | null;
   commissionIls: string | null;
+  /** לטורקיה PS מספירת קופה */
   turkeyTransferUsd: string | null;
+  /** יתרה להעברה לטורקיה — USD */
+  turkeyOpeningUsd: string | null;
+  turkeyAddedUsd: string | null;
+  turkeyTransferredUsd: string | null;
+  turkeyClosingUsd: string | null;
+  turkeyBalanceStatus: import("@/lib/flow-control/turkey-transfer-balance-types").TurkeyWeekStatus;
   fxPurchaseIls: string | null;
   fxPurchaseUsd: string | null;
   fxRemainderCashIls: string | null;

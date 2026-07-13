@@ -10,7 +10,7 @@ import {
   type PaymentBucketKey,
 } from "@/lib/payment-breakdown-shared";
 import type { CashDailyMethodId, CashDailyIntakeTotals } from "@/lib/cash-control-daily";
-import { emptyDailyIntake } from "@/lib/cash-control-daily";
+import { emptyDailyIntake, resolveChannelFromPaymentBucket, sumIlsChannelIntake } from "@/lib/cash-control-daily";
 import type {
   FxProfitLossSummary,
   FxPurchaseIntakeAllocation,
@@ -38,7 +38,8 @@ export type FlowWeekCalculationInput = {
   countedCashIls: number;
   expensesIls: number;
   commissionUsd: number;
-  turkeyTransferUsd: number;
+  /** סכום העברות בפועל לטורקיה בשבוע — לא הקצאה מספירה */
+  actualTurkeyTransfersUsd: number;
   fxPurchases: FxPurchaseRecord[];
   bankWithdrawalsIls?: number;
   bankDepositsIls?: number;
@@ -82,12 +83,7 @@ function num(v: { toString(): string } | null | undefined): number {
 }
 
 function bucketToMethod(bucket: PaymentBucketKey, side: "ILS" | "USD"): CashDailyMethodId | null {
-  if (bucket === "CASH") return side === "ILS" ? "CASH_ILS" : "CASH_USD";
-  if (bucket === "BANK_TRANSFER") return "BANK_TRANSFER";
-  if (bucket === "CHECK") return "CHECK";
-  if (bucket === "CREDIT") return "CREDIT";
-  if (bucket === "OTHER") return "OTHER";
-  return null;
+  return resolveChannelFromPaymentBucket(bucket, side);
 }
 
 /** גורם ניטרול מע״מ לקליטה — סכומי ₪ מוצגים ללא מע״מ */
@@ -184,9 +180,7 @@ export function aggregateFlowIntakesByDay(
 
 /** סה״כ התקבל (₪) — ללא מזומן $ וללא «אחר» */
 export function computeWeekTotalReceivedIls(intake: CashDailyIntakeTotals): number {
-  return round2(
-    intake.CASH_ILS + intake.CREDIT + intake.CHECK + intake.BANK_TRANSFER,
-  );
+  return sumIlsChannelIntake(intake);
 }
 
 export function sumFxPurchases(records: FxPurchaseRecord[]): { ils: number; usd: number } {
@@ -230,15 +224,15 @@ export function validateFxRemainderSplit(
 }
 
 /**
- * דולר בקופה = דולר PS + רכישות מט״ח − דולר שנשלח לטורקיה
+ * דולר בקופה = דולר PS + רכישות מט״ח − העברות בפועל לטורקיה
  */
 export function computeCashUsdInDrawer(
   countedCashUsd: number,
   fxPurchases: FxPurchaseRecord[],
-  turkeyTransferUsd: number,
+  actualTurkeyTransfersUsd: number,
 ): number {
   const fxUsd = sumFxPurchases(fxPurchases).usd;
-  return round2(countedCashUsd + fxUsd - turkeyTransferUsd);
+  return round2(countedCashUsd + fxUsd - actualTurkeyTransfersUsd);
 }
 
 /**
@@ -268,15 +262,18 @@ export function computeBankBalanceIls(
 }
 
 /**
- * כל הכסף שהיה אמור לעבור לטורקיה = דולר PS + דולר מרכישות מט״ח − עמלה $
+ * לטורקיה PS מספירת קופה = דולר PS + דולר מרכישות מט״ח − עמלה $
  */
-export function computeTurkeyExpectedUsd(
+export function computeTurkeyAllocationFromCashCount(
   countedCashUsd: number,
   fxUsdTotal: number,
   commissionUsd: number,
 ): number {
   return Math.max(0, round2(countedCashUsd + fxUsdTotal - commissionUsd));
 }
+
+/** @deprecated — השתמש ב-computeTurkeyAllocationFromCashCount */
+export const computeTurkeyExpectedUsd = computeTurkeyAllocationFromCashCount;
 
 /** חוב לטורקיה = צפוי − בפועל */
 export function computeTurkeyDebtUsd(turkeyExpectedUsd: number, turkeyTransferUsd: number): number {
@@ -450,7 +447,7 @@ export function computeFlowWeekSummary(input: FlowWeekCalculationInput): FlowWee
   const cashUsdInDrawer = computeCashUsdInDrawer(
     input.countedCashUsd,
     input.fxPurchases,
-    input.turkeyTransferUsd,
+    input.actualTurkeyTransfersUsd,
   );
   const cashIlsInDrawer = computeCashIlsInDrawer(
     input.countedCashIls,
@@ -466,7 +463,7 @@ export function computeFlowWeekSummary(input: FlowWeekCalculationInput): FlowWee
     countedCashUsd: input.countedCashUsd,
     fxUsdTotal: fxTotals.usd,
     commissionUsd: input.commissionUsd,
-    turkeyTransferUsd: input.turkeyTransferUsd,
+    turkeyTransferUsd: input.actualTurkeyTransfersUsd,
   });
   const fxProfitLoss = computeFxProfitLoss(input.fxPurchases);
   const fxProfitLossHistory = computeFxProfitLossHistory(input.fxPurchases);

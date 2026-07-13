@@ -492,6 +492,7 @@ async function writeOrderBreakdown(
   db: CaptureDbClient,
   orderId: string,
   rows: ParsedBreakdownRow[],
+  opts?: { userId?: string | null; intakeWeekCode?: string | null },
 ): Promise<void> {
   await db.orderPaymentBreakdown.deleteMany({ where: { orderId } });
   if (rows.length === 0) return;
@@ -502,6 +503,12 @@ async function writeOrderBreakdown(
       amount: r.amount,
       currency: r.currency,
     })),
+  });
+  const { syncPaymentPlanAfterBreakdownWrite } = await import("@/lib/payment-plan-service");
+  await syncPaymentPlanAfterBreakdownWrite(db, {
+    orderId,
+    userId: opts?.userId,
+    intakeWeekCode: opts?.intakeWeekCode,
   });
 }
 
@@ -2002,7 +2009,10 @@ async function captureOrderActionInner(
       }
 
       if (breakdownRows.length > 0 && !isDebtWithdrawalOrderStatus(status)) {
-        await writeOrderBreakdown(tx, created.id, breakdownRows);
+        await writeOrderBreakdown(tx, created.id, breakdownRows, {
+          userId: me.id,
+          intakeWeekCode: weekCode,
+        });
       }
 
       return created;
@@ -3141,7 +3151,10 @@ async function updateOrderWorkPanelActionInner(
       }
 
       // תשלום מורכב: כתיבה מחדש של החלוקה (composite=rows, אחרת ניקוי)
-      await writeOrderBreakdown(tx, existing.id, breakdownRows);
+      await writeOrderBreakdown(tx, existing.id, breakdownRows, {
+        userId: me.id,
+        intakeWeekCode: weekCode,
+      });
     }),
   );
   capturePerfTimeEnd("capture.insertOrder");

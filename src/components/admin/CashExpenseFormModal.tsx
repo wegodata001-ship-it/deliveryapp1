@@ -185,30 +185,39 @@ export function CashExpenseFormModal({
   }
 
   return (
-    <div className="cxp-overlay" role="dialog" aria-modal="true" onClick={onClose}>
-      <div className="cxp-modal" dir="rtl" onClick={(e) => e.stopPropagation()}>
-        <header className="cxp-modal__head">
-          <h2>
-            <Wallet size={18} aria-hidden /> {title}
-          </h2>
-          <button type="button" className="cxp-modal__close" onClick={onClose} aria-label="סגור">
+    <div className="adm-cash-modal-backdrop" role="dialog" aria-modal="true" onClick={onClose}>
+      <div
+        className="adm-cash-modal adm-cash-modal--expense-v2"
+        dir="rtl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="ce-modal-v2__head">
+          <div>
+            <h3>
+              <Wallet size={18} aria-hidden /> {title}
+            </h3>
+            <p className="ce-modal-v2__subtitle">רישום הוצאה והשפעתה על בקרת הקופה</p>
+          </div>
+          <button type="button" className="adm-modal__close" onClick={onClose} aria-label="סגור">
             <X size={18} />
           </button>
         </header>
 
-        <div className="cxp-modal__body">
-          <div className="cxp-grid cxp-grid--expense">
-            <label className="cxp-field">
-              <span>סוג הוצאה</span>
-              <select className="cc-input" value={reason} onChange={(e) => setReason(e.target.value as CashExpenseReason)}>
-                {CASH_EXPENSE_REASONS.map((r) => (
-                  <option key={r.value} value={r.value}>
-                    {r.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="cxp-field">
+        <div className="ce-modal-v2__body">
+          <section className="ce-modal-v2__section">
+            <h4 className="ce-modal-v2__section-title">פרטי ההוצאה</h4>
+            <div className="ce-modal-v2__grid">
+              <label className="adm-cash-field">
+                <span>סוג הוצאה</span>
+                <select className="cc-input" value={reason} onChange={(e) => setReason(e.target.value as CashExpenseReason)}>
+                  {CASH_EXPENSE_REASONS.map((r) => (
+                    <option key={r.value} value={r.value}>
+                      {r.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            <label className="adm-cash-field">
               <span>סכום</span>
               <input
                 type="text"
@@ -220,22 +229,22 @@ export function CashExpenseFormModal({
                 dir="ltr"
               />
             </label>
-            <label className="cxp-field">
+            <label className="adm-cash-field">
               <span>מטבע</span>
               <select className="cc-input" value={currency} onChange={(e) => setCurrency(e.target.value as CashCurrency)}>
                 {allowedCurrencies.includes("ILS") ? <option value="ILS">₪ שקל</option> : null}
                 {allowedCurrencies.includes("USD") ? <option value="USD">$ דולר</option> : null}
               </select>
             </label>
-            <label className="cxp-field">
+            <label className="adm-cash-field">
               <span>אמצעי תשלום</span>
               <CashExpensePaymentMethodSelect value={paymentMethod} onChange={setPaymentMethod} />
             </label>
-            <label className="cxp-field">
+            <label className="adm-cash-field">
               <span>תאריך</span>
               <input type="date" className="cc-input" value={dateYmd} onChange={(e) => setDateYmd(e.target.value)} />
             </label>
-            <label className="cxp-field">
+            <label className="adm-cash-field">
               <span>שעה</span>
               <input
                 type="time"
@@ -245,17 +254,18 @@ export function CashExpenseFormModal({
                 dir="ltr"
               />
             </label>
-            <label className="cxp-field cxp-field--wide">
-              <span>הערה</span>
-              <input
-                type="text"
-                className="cc-input"
-                value={notes}
-                placeholder="פירוט ההוצאה (אופציונלי)"
-                onChange={(e) => setNotes(e.target.value)}
-              />
-            </label>
-          </div>
+              <label className="adm-cash-field ce-modal-v2__field--wide">
+                <span>הערה</span>
+                <input
+                  type="text"
+                  className="cc-input"
+                  value={notes}
+                  placeholder="פירוט ההוצאה (אופציונלי)"
+                  onChange={(e) => setNotes(e.target.value)}
+                />
+              </label>
+            </div>
+          </section>
 
           <CashExpenseVarianceImpact
             lines={varianceLines ?? null}
@@ -277,13 +287,21 @@ export function CashExpenseFormModal({
           </div>
         </div>
 
-        <footer className="cxp-modal__foot">
-          <button type="button" className="cc-btn cc-btn--ghost" onClick={onClose} disabled={saving}>
-            ביטול
-          </button>
-          <button type="button" className="cc-btn cc-btn--primary" onClick={() => void submit()} disabled={saving}>
-            {saving ? "שומר…" : isEdit ? "שמירת שינויים" : "הוספת הוצאה"}
-          </button>
+        <footer className="ce-modal-v2__foot">
+          <span />
+          <div className="ce-modal-v2__foot-actions">
+            <button type="button" className="cc-btn cc-btn--ghost" onClick={onClose} disabled={saving}>
+              ביטול
+            </button>
+            <button
+              type="button"
+              className="cc-btn cc-btn--primary"
+              onClick={() => void submit()}
+              disabled={saving || !amount || Number(amount.replace(",", ".")) <= 0}
+            >
+              {saving ? "שומר…" : isEdit ? "שמירת שינויים" : "שמור הוצאה"}
+            </button>
+          </div>
         </footer>
       </div>
     </div>

@@ -22,10 +22,18 @@ import {
   validateFxRemainderSplit,
 } from "../src/lib/flow-control/flow-calculation-service";
 import {
+  buildDailyReconciliation,
+  emptyDailyExpenses,
   emptyDailyIntake,
   getDailyPaymentContributions,
   type CashDailyMethodId,
 } from "../src/lib/cash-control-daily";
+import {
+  addExpenseToMethodTotals,
+  expenseToDailyMethodId,
+} from "../src/lib/cash-expense-payment-method";
+import { resolveCashControlChannel } from "../src/lib/cash-control-channel";
+import { computeCashVarianceDay, previewExpenseVarianceImpact } from "../src/lib/cash-control-variance";
 import {
   paymentMethodBucketKey,
   parsePaymentNoteContributions,
@@ -64,7 +72,7 @@ console.log("\n=== בקרת תזרים — QA חישובים ===\n");
     countedCashIls: 0,
     expensesIls: 0,
     commissionUsd: 0,
-    turkeyTransferUsd: 0,
+    actualTurkeyTransfersUsd: 0,
     fxPurchases: [],
   });
   assert("שבוע ללא נתונים — דולר בקופה 0", calc.cashUsdInDrawer === 0);
@@ -96,7 +104,7 @@ console.log("\n=== בקרת תזרים — QA חישובים ===\n");
 
 // סה״כ התקבל ללא מזומן $
 {
-  const intake = { ...emptyDailyIntake(), CASH_ILS: 100, CASH_USD: 50, CREDIT: 20 };
+  const intake = { ...emptyDailyIntake(), CASH_ILS: 100, CASH_USD: 50, CREDIT_CARD_ILS: 20 };
   assert("סה״כ התקבל — ללא $", computeWeekTotalReceivedIls(intake) === 120);
 }
 
@@ -213,15 +221,15 @@ console.log("\n=== בקרת תזרים — QA חישובים ===\n");
 
   const daily = getDailyPaymentContributions(dualPayment);
   const cashUsd = daily.find((c) => c.column === "CASH_USD")?.amount ?? 0;
-  const credit = daily.find((c) => c.column === "CREDIT")?.amount ?? 0;
-  const other = daily.find((c) => c.column === "OTHER")?.amount ?? 0;
+  const credit = daily.find((c) => c.column === "CREDIT_CARD_USD")?.amount ?? 0;
+  const other = daily.find((c) => c.column === "OTHER_USD")?.amount ?? 0;
   assert("תשלום מורכב — מזומן $500", cashUsd === 500, `got ${cashUsd}`);
   assert("תשלום מורכב — אשראי $1410", credit === 1410, `got ${credit}`);
   assert("תשלום מורכב — אחר 0", other === 0, `got ${other}`);
 
   const flow = getFlowPaymentContributions(dualPayment);
-  assert("Flow — אשראי מ-notes", flow.some((c) => c.column === "CREDIT" && c.amount === 1410));
-  assert("Flow — ללא OTHER", !flow.some((c) => c.column === "OTHER"));
+  assert("Flow — אשראי מ-notes", flow.some((c) => c.column === "CREDIT_CARD_USD" && c.amount === 1410));
+  assert("Flow — ללא OTHER", !flow.some((c) => c.column === "OTHER_USD"));
 }
 
 function assertMethodColumn(
@@ -246,14 +254,98 @@ function assertMethodColumn(
 {
   assertMethodColumn("CASH_USD", "CASH", "USD", "CASH_USD");
   assertMethodColumn("CASH_ILS", "CASH", "ILS", "CASH_ILS");
-  assertMethodColumn("BANK_TRANSFER", "BANK_TRANSFER", "ILS", "BANK_TRANSFER");
-  assertMethodColumn("CHECK", "CHECK", "ILS", "CHECK");
-  assertMethodColumn("CREDIT", "CREDIT", "USD", "CREDIT");
-  assertMethodColumn("CREDIT_CARD", "CREDIT_CARD", "USD", "CREDIT");
-  assertMethodColumn("OTHER", "OTHER", "ILS", "OTHER");
+  assertMethodColumn("BANK_TRANSFER", "BANK_TRANSFER", "ILS", "BANK_TRANSFER_ILS");
+  assertMethodColumn("CHECK", "CHECK", "ILS", "CHECK_ILS");
+  assertMethodColumn("CREDIT", "CREDIT", "USD", "CREDIT_CARD_USD");
+  assertMethodColumn("CREDIT_CARD", "CREDIT_CARD", "USD", "CREDIT_CARD_USD");
+  assertMethodColumn("OTHER", "OTHER", "ILS", "OTHER_ILS");
   assert("CREDIT_CARD bucket", paymentMethodBucketKey("CREDIT_CARD") === "CREDIT");
   const parsed = parsePaymentNoteContributions("#1 USD $50.00 · CREDIT_CARD");
   assert("notes CREDIT_CARD", parsed[0]?.bucket === "CREDIT" && parsed[0]?.amount === 50);
+}
+
+console.log("\n--- מיפוי ערוצים והוצאות קופה ---");
+{
+  assert("העברה USD → BANK_TRANSFER_USD", expenseToDailyMethodId("BANK_TRANSFER", "USD") === "BANK_TRANSFER_USD");
+  assert("העברה USD לא OTHER", expenseToDailyMethodId("BANK_TRANSFER", "USD") !== "OTHER_USD");
+  assert("resolveCashControlChannel", resolveCashControlChannel("BANK_TRANSFER", "USD") === "BANK_TRANSFER_USD");
+
+  // בדיקה 1 — העברה דולר
+  {
+    const intake = { ...emptyDailyIntake(), BANK_TRANSFER_USD: 2000 };
+    const drawer = { BANK_TRANSFER_USD: 1999 };
+    const before = buildDailyReconciliation(intake, drawer, emptyDailyExpenses()).find((l) => l.method === "BANK_TRANSFER_USD")!;
+    assert("בדיקה 1 חסר $1 לפני", before.diff === -1);
+    const expenses = addExpenseToMethodTotals(emptyDailyExpenses(), "BANK_TRANSFER", "USD", 1);
+    const after = buildDailyReconciliation(intake, drawer, expenses).find((l) => l.method === "BANK_TRANSFER_USD")!;
+    assert("בדיקה 1 תקין אחרי הוצאה", after.diff === 0 && after.status === "ok");
+  }
+
+  // בדיקה 2 — העברה שקל
+  {
+    const intake = { ...emptyDailyIntake(), BANK_TRANSFER_ILS: 5000 };
+    const expenses = addExpenseToMethodTotals(emptyDailyExpenses(), "BANK_TRANSFER", "ILS", 100);
+    const after = buildDailyReconciliation(intake, { BANK_TRANSFER_ILS: 4900 }, expenses).find((l) => l.method === "BANK_TRANSFER_ILS")!;
+    assert("בדיקה 2 תקין", after.diff === 0 && after.status === "ok");
+  }
+
+  // בדיקה 3 — אשראי שקל
+  {
+    const intake = { ...emptyDailyIntake(), CREDIT_CARD_ILS: 2080 };
+    const expenses = addExpenseToMethodTotals(emptyDailyExpenses(), "CREDIT_CARD", "ILS", 80);
+    const after = buildDailyReconciliation(intake, { CREDIT_CARD_ILS: 2000 }, expenses).find((l) => l.method === "CREDIT_CARD_ILS")!;
+    assert("בדיקה 3 תקין", after.diff === 0 && after.status === "ok");
+  }
+
+  // בדיקה 4 — צ'ק שקל
+  {
+    const intake = { ...emptyDailyIntake(), CHECK_ILS: 2000 };
+    const expenses = addExpenseToMethodTotals(emptyDailyExpenses(), "CHECK", "ILS", 100);
+    const after = buildDailyReconciliation(intake, { CHECK_ILS: 1900 }, expenses).find((l) => l.method === "CHECK_ILS")!;
+    assert("בדיקה 4 תקין", after.diff === 0 && after.status === "ok");
+  }
+
+  // בדיקה 5 — הוצאה במזומן לא סוגרת חריגה בהעברה
+  {
+    const intake = { ...emptyDailyIntake(), BANK_TRANSFER_USD: 2000 };
+    const drawer = { BANK_TRANSFER_USD: 1999 };
+    const expenses = addExpenseToMethodTotals(emptyDailyExpenses(), "CASH", "USD", 1);
+    const lines = buildDailyReconciliation(intake, drawer, expenses);
+    const bank = lines.find((l) => l.method === "BANK_TRANSFER_USD")!;
+    assert("בדיקה 5 העברה עדיין חסר", bank.diff === -100);
+    assert("בדיקה 5 מזומן לא משנה העברה", bank.expense === 0);
+  }
+
+  // בדיקה 6 — עודף
+  {
+    const intake = { ...emptyDailyIntake(), BANK_TRANSFER_USD: 2000 };
+    const expenses = addExpenseToMethodTotals(emptyDailyExpenses(), "BANK_TRANSFER", "USD", 1);
+    const line = buildDailyReconciliation(intake, { BANK_TRANSFER_USD: 2010 }, expenses).find((l) => l.method === "BANK_TRANSFER_USD")!;
+    assert("בדיקה 6 עודף $11", line.diff === 11);
+  }
+
+  // בדיקה 7 — עריכת ערוץ (העברה מ-OTHER ל-BANK)
+  {
+    let expenses = addExpenseToMethodTotals(emptyDailyExpenses(), "OTHER", "USD", 1);
+    expenses = addExpenseToMethodTotals(
+      { ...expenses, OTHER_USD: Math.max(0, (expenses.OTHER_USD ?? 0) - 1) },
+      "BANK_TRANSFER",
+      "USD",
+      1,
+    );
+    assert("בדיקה 7 OTHER אפס", expenses.OTHER_USD === 0);
+    assert("בדיקה 7 BANK מעודכן", expenses.BANK_TRANSFER_USD === 1);
+  }
+
+  // אזור השפעה — אותו ערוץ כמו הטבלה
+  {
+    const intake = { ...emptyDailyIntake(), BANK_TRANSFER_USD: 2000 };
+    const drawer = { BANK_TRANSFER_USD: 1999 };
+    const day = computeCashVarianceDay(intake, drawer, emptyDailyExpenses());
+    const preview = previewExpenseVarianceImpact(day.lines, "USD", 1, "BANK_TRANSFER_USD");
+    assert("השפעה — ערוץ נכון", preview.method === "BANK_TRANSFER_USD");
+    assert("השפעה — סוגר חריגה", preview.messageKind === "closes");
+  }
 }
 
 console.log(`\n=== סיכום: ${passed} עברו, ${failed} נכשלו ===\n`);

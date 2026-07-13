@@ -1,24 +1,18 @@
 "use client";
 
-import { fmtDailyMoney, type CashDailyMethodId } from "@/lib/cash-control-daily";
+import { fmtDailyMoney, channelCurrency, type CashDailyMethodId } from "@/lib/cash-control-daily";
+import { channelColLabels } from "@/lib/cash-control-channel";
 import type { CashDailySummaryRowDto } from "@/app/admin/cash-control/daily-types";
 import { FLOW_COLUMN_CLASS, FLOW_PAYMENT_COLUMNS } from "@/app/admin/cash-flow/flow-types";
 import { MethodIcon } from "@/components/admin/cash-flow/shared";
 import { fcNum } from "@/components/admin/flow-control/shared";
 
-const COL_LABEL: Record<CashDailyMethodId, string> = {
-  CASH_USD: "מזומן $",
-  CASH_ILS: "מזומן ₪",
-  BANK_TRANSFER: "העברות",
-  CHECK: "צ'קים",
-  CREDIT: "אשראי",
-  OTHER: "אחר",
-};
+const COL_LABEL = channelColLabels();
 
 function fmtCell(method: CashDailyMethodId, value: string): string {
   const n = fcNum(value);
   if (n <= 0) return "—";
-  return fmtDailyMoney(method === "CASH_USD" ? "USD" : "ILS", n);
+  return fmtDailyMoney(channelCurrency(method), n);
 }
 
 export type PaymentSummaryTableProps = {

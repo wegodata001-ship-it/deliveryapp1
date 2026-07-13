@@ -41,6 +41,18 @@ export function activityActionLabelHe(actionType: string): string {
       return "איפוס יתרות לקוח";
     case "CUSTOMER_BALANCE_RESET_FROM_CREDIT":
       return "איפוס יתרה מתוך יתרת זכות";
+    case "PAYMENT_PLAN_CREATED":
+      return "נוצרה חלוקת תשלום";
+    case "PAYMENT_PLAN_UPDATED":
+      return "עודכנה חלוקת תשלום";
+    case "PAYMENT_PLAN_COMPLETED":
+      return "חלוקת תשלום הושלמה";
+    case "PAYMENT_PLAN_CANCELLED":
+      return "חלוקת תשלום בוטלה";
+    case "TURKEY_TRANSFER_CREATED":
+      return "העברה לטורקיה";
+    case "TURKEY_TRANSFER_REVERSED":
+      return "ביטול העברה לטורקיה";
     case "PAYMENT_SURPLUS_TO_COMMISSION":
       return "העודף הועבר לעמלה";
     case "PAYMENT_RECEIVED":

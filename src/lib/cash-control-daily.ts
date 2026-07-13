@@ -1,9 +1,21 @@
 /**
- * בקרת קופה יומית — אגרגציה לפי יום (ירושלים) ואמצעי תשלום.
+ * בקרת קופה יומית — אגרגציה לפי יום (ירושלים) וערוץ (אמצעי + מטבע).
  * מקור אמת: קליטות התשלום. הספירה (drawer) מוזנת ידנית ומושווית מול «התקבל».
  */
 
-import { CASH_CONTROL_EPS } from "@/lib/cash-control-calculation";
+import { CASH_CONTROL_EPS, calculateCashControlVariance } from "@/lib/cash-control-calculation";
+import {
+  CASH_CONTROL_CHANNELS,
+  CASH_DAILY_METHODS,
+  allCashControlChannels,
+  channelCurrency,
+  emptyChannelTotals,
+  formatChannelLabel,
+  resolveChannelFromPaymentBucket,
+  type CashControlChannel,
+  type CashControlChannelMeta,
+  type CashControlCurrency,
+} from "@/lib/cash-control-channel";
 import {
   parsePaymentNoteContributions,
   paymentMethodBucketKey,
@@ -12,14 +24,24 @@ import {
 import type { ReconciliationPaymentInput } from "@/lib/cash-control-reconciliation";
 import { formatYmdJerusalem, getJerusalemDayOfWeek, isValidYmd } from "@/lib/weeks/ah-week";
 
-/** ששת אמצעי התשלום, לפי סדר העיצוב המאושר */
-export type CashDailyMethodId =
-  | "CASH_ILS"
-  | "CASH_USD"
-  | "CREDIT"
-  | "CHECK"
-  | "BANK_TRANSFER"
-  | "OTHER";
+export type {
+  CashControlChannel,
+  CashControlChannelMeta,
+  CashControlCurrency,
+  CashExpensePaymentMethod,
+} from "@/lib/cash-control-channel";
+export {
+  CASH_CONTROL_CHANNELS,
+  CASH_DAILY_METHODS,
+  allCashControlChannels,
+  channelCurrency,
+  formatChannelLabel,
+  resolveCashControlChannel,
+  resolveChannelFromPaymentBucket,
+} from "@/lib/cash-control-channel";
+
+/** ערוץ בקרת קופה — מטבע + אמצעי תשלום */
+export type CashDailyMethodId = CashControlChannel;
 
 export type CashDailyIntakeColumnId = CashDailyMethodId;
 export type CashDailyDrawerColumnId = CashDailyMethodId;
@@ -29,23 +51,9 @@ export type CashDailyStatusKind = "ok" | "warn" | "critical" | "pending";
 export type CashDailyIntakeTotals = Record<CashDailyMethodId, number>;
 export type CashDailyDrawerValues = Partial<Record<CashDailyMethodId, number | null>>;
 
-export type CashDailyMethodMeta = {
-  id: CashDailyMethodId;
-  label: string;
-  currency: "ILS" | "USD";
-};
+export type CashDailyMethodMeta = CashControlChannelMeta;
 
-/** רשימת אמצעי התשלום — מקור יחיד לטבלה, לטופס הספירה ולטבלת ההתאמה */
-export const CASH_DAILY_METHODS: CashDailyMethodMeta[] = [
-  { id: "CASH_ILS", label: "מזומן ₪", currency: "ILS" },
-  { id: "CASH_USD", label: "מזומן $", currency: "USD" },
-  { id: "CREDIT", label: "אשראי", currency: "ILS" },
-  { id: "CHECK", label: "צ'קים", currency: "ILS" },
-  { id: "BANK_TRANSFER", label: "העברות", currency: "ILS" },
-  { id: "OTHER", label: "אחר", currency: "ILS" },
-];
-
-/** תאימות לאחור — שמות ישנים */
+/** תאימות לאחור */
 export const CASH_DAILY_INTAKE_COLUMNS = CASH_DAILY_METHODS;
 export const CASH_DAILY_DRAWER_COLUMNS = CASH_DAILY_METHODS;
 
@@ -57,20 +65,15 @@ const HEB_DAY_NAMES = ["ראשון", "שני", "שלישי", "רביעי", "חמ
 export type CashDailyReconLine = {
   method: CashDailyMethodId;
   label: string;
-  currency: "ILS" | "USD";
-  /** סכום ברוטו שהתקבל מקליטות התשלום (לפני ניכוי הוצאות) */
+  currency: CashControlCurrency;
   grossReceived: number;
-  /** הוצאות קופה שנוכו מהאמצעי (מזומן ₪/$ בלבד) */
   expense: number;
-  /** התקבל נטו = ברוטו פחות הוצאות — מול הספירה */
   received: number;
   counted: number | null;
-  /** חריגה = צפוי נטו − נספר (חיובי = חסר בקופה) */
   diff: number | null;
   status: CashDailyStatusKind;
 };
 
-/** הוצאות קופה יומיות — לפי עמודת בקרת קופה (מטבע + אמצעי תשלום) */
 export type CashDailyExpenseTotals = CashDailyIntakeTotals;
 
 export function emptyDailyExpenses(): CashDailyExpenseTotals {
@@ -87,16 +90,11 @@ function num(v: { toString(): string } | null | undefined): number {
 }
 
 export function emptyDailyIntake(): CashDailyIntakeTotals {
-  return { CASH_ILS: 0, CASH_USD: 0, CREDIT: 0, CHECK: 0, BANK_TRANSFER: 0, OTHER: 0 };
+  return emptyChannelTotals();
 }
 
-function bucketToMethod(bucket: PaymentBucketKey, side: "ILS" | "USD"): CashDailyMethodId | null {
-  if (bucket === "CASH") return side === "ILS" ? "CASH_ILS" : "CASH_USD";
-  if (bucket === "BANK_TRANSFER") return "BANK_TRANSFER";
-  if (bucket === "CHECK") return "CHECK";
-  if (bucket === "CREDIT") return "CREDIT";
-  if (bucket === "OTHER") return "OTHER";
-  return null;
+function bucketToMethod(bucket: PaymentBucketKey, side: CashControlCurrency): CashDailyMethodId | null {
+  return resolveChannelFromPaymentBucket(bucket, side);
 }
 
 export function dayNameHe(ymd: string): string {
@@ -115,7 +113,6 @@ export function paymentDayKeyJerusalem(p: { paymentDate: Date | string | null; c
   return formatYmdJerusalem(new Date(raw));
 }
 
-/** קלט לפיצול קליטה לעמודות — כולל notes לתשלום מורכב */
 export type DailyPaymentSplitInput = {
   amountIls: { toString(): string } | null;
   amountUsd: { toString(): string } | null;
@@ -142,7 +139,6 @@ function contributionsFromNoteLines(
   return out.length > 0 ? out : null;
 }
 
-/** מפצל קליטה לעמודות הטבלה היומית (כולל «אחר»). */
 export function getDailyPaymentContributions(
   p: DailyPaymentSplitInput,
 ): Array<{ column: CashDailyMethodId; amount: number }> {
@@ -200,19 +196,17 @@ export function aggregateDailyIntakes(
   return map;
 }
 
-/** צבע הסטטוס לפי גודל הפרש (מטבע נלקח בחשבון) */
-export function diffStatusKind(diff: number | null, currency: "ILS" | "USD"): CashDailyStatusKind {
-  if (diff == null) return "pending";
-  const abs = Math.abs(diff);
+export function diffStatusKind(
+  variance: number | null,
+  currency: CashControlCurrency,
+): CashDailyStatusKind {
+  if (variance == null) return "pending";
+  const abs = Math.abs(variance);
   if (abs <= CASH_CONTROL_EPS) return "ok";
   if (abs <= CASH_DAILY_DIFF_THRESHOLD[currency]) return "warn";
   return "critical";
 }
 
-/**
- * טבלת התאמה: לכל אמצעי — צפוי / הוצאות / צפוי נטו / נספר / חריגה.
- * חריגה = צפוי נטו − נספר (חיובי = חסר בקופה).
- */
 export function buildDailyReconciliation(
   intake: CashDailyIntakeTotals,
   drawer: CashDailyDrawerValues,
@@ -221,17 +215,21 @@ export function buildDailyReconciliation(
   return CASH_DAILY_METHODS.map((m) => {
     const grossReceived = round2(intake[m.id] ?? 0);
     const expense = round2(expenses[m.id] ?? 0);
-    const received = round2(grossReceived - expense);
     const countedRaw = drawer[m.id];
     const counted = countedRaw === null || countedRaw === undefined ? null : round2(countedRaw);
-    const diff = counted == null ? null : round2(received - counted);
+    const calc = calculateCashControlVariance({
+      receivedAmount: grossReceived,
+      existingExpensesAmount: expense,
+      countedAmount: counted,
+    });
+    const diff = calc.varianceAmount;
     return {
       method: m.id,
-      label: m.label,
+      label: formatChannelLabel(m.id),
       currency: m.currency,
       grossReceived,
       expense,
-      received,
+      received: calc.expectedNetAmount,
       counted,
       diff,
       status: diffStatusKind(diff, m.currency),
@@ -239,7 +237,6 @@ export function buildDailyReconciliation(
   });
 }
 
-/** סטטוס יומי מצרפי: המצב הגרוע ביותר בין האמצעים שנספרו. */
 export function computeDailyStatus(
   intake: CashDailyIntakeTotals,
   drawer: CashDailyDrawerValues,
@@ -247,7 +244,7 @@ export function computeDailyStatus(
 ): {
   kind: CashDailyStatusKind;
   worstDiff: number | null;
-  worstCurrency: "ILS" | "USD";
+  worstCurrency: CashControlCurrency;
   worstMethod: CashDailyMethodId | null;
 } {
   const lines = buildDailyReconciliation(intake, drawer, expenses);
@@ -271,11 +268,20 @@ export function computeDailyStatus(
   };
 }
 
-export function fmtDailyMoney(currency: "ILS" | "USD", amount: number): string {
+export function fmtDailyMoney(currency: CashControlCurrency, amount: number): string {
   const abs = Math.abs(amount);
   const body =
     currency === "ILS"
       ? `₪${abs.toLocaleString("he-IL", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
       : `$${abs.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
   return amount < 0 ? `-${body}` : body;
+}
+
+/** סכום ערוצי ₪ (לסיכומי שבוע בבקרת תזרים) */
+export function sumIlsChannelIntake(intake: CashDailyIntakeTotals): number {
+  return round2(
+    allCashControlChannels()
+      .filter((id) => channelCurrency(id) === "ILS")
+      .reduce((s, id) => s + (intake[id] ?? 0), 0),
+  );
 }

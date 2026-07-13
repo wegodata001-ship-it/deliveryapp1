@@ -6,8 +6,10 @@ import type { OrderBreakdownMethodRow, PaymentIntakeOrderRow } from "@/lib/payme
 import { breakdownLineUsd, computeOrderMethodDeviation, isCompositePaymentMethod } from "@/lib/payment-breakdown-shared";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 import type { PaymentIntakeCustomerPaymentRow } from "@/lib/payment-intake-customer-kpi";
+import { annotateIntakeOrderGroups, mergeIntakeOrdersById } from "@/lib/payment-intake-order-groups";
 import { paymentIntakeOrderDateThroughAhWeekEnd } from "@/lib/payment-intake-order-filter";
-import { DEFAULT_WORK_COUNTRY, normalizeWorkCountryCode } from "@/lib/work-country";
+import { loadPaymentPlanSummariesByOrderId } from "@/lib/payment-plan-service";
+import { DEFAULT_WORK_COUNTRY, normalizeWorkCountryCode, type WorkCountryCode } from "@/lib/work-country";
 import { formatLocalYmd } from "@/lib/work-week";
 import { findActiveCustomerPayments, groupByActivePayments } from "@/lib/payment-record-status";
 
@@ -30,6 +32,30 @@ type IntakeLoadParams = {
   weekCodeForOpenBalances?: string | null;
   paymentWorkCountryRaw?: string | null;
 };
+
+const INTAKE_ORDER_SELECT = {
+  id: true,
+  orderNumber: true,
+  orderDate: true,
+  weekCode: true,
+  amountUsd: true,
+  commissionUsd: true,
+  totalUsd: true,
+  exchangeRate: true,
+  usdRateUsed: true,
+  snapshotFinalDollarRate: true,
+  totalIlsWithVat: true,
+  totalIls: true,
+  sourceCountry: true,
+  paymentMethod: true,
+  createdAt: true,
+  paymentBreakdown: {
+    select: { paymentMethod: true, amount: true, currency: true },
+    orderBy: { createdAt: "asc" as const },
+  },
+} satisfies Prisma.OrderSelect;
+
+type IntakeOrderRecord = Prisma.OrderGetPayload<{ select: typeof INTAKE_ORDER_SELECT }>;
 
 async function loadIntakeCustomerRecord(customerId: string) {
   return prisma.customer.findFirst({
@@ -65,58 +91,117 @@ function customerPayloadFromRow(
   };
 }
 
-/** הזמנות לקוח בלבד — לטעינה ברקע */
-export async function loadPaymentIntakeOrdersForCustomer(
-  params: IntakeLoadParams,
-): Promise<{ ok: true; orders: PaymentIntakeOrderRow[] } | { ok: false; error: string }> {
-  const cid = params.customerId.trim();
-  if (!cid) return { ok: false, error: "חסר לקוח" };
+function intakeOrderBaseWhere(cid: string, paymentWorkCountry: WorkCountryCode): Prisma.OrderWhereInput {
+  return {
+    customerId: cid,
+    deletedAt: null,
+    status: { notIn: ["DEBT_WITHDRAWAL", "CANCELLED"] },
+    countryCode: paymentWorkCountry,
+  };
+}
 
-  const cust = await loadIntakeCustomerRecord(cid);
-  if (!cust) return { ok: false, error: "לקוח לא נמצא" };
-
-  const weekDateWhere = paymentIntakeOrderDateThroughAhWeekEnd(params.weekCodeForOpenBalances);
-  const paymentWorkCountry = normalizeWorkCountryCode(params.paymentWorkCountryRaw) ?? DEFAULT_WORK_COUNTRY;
-
-  const orders = await prisma.order.findMany({
+/** הזמנות פתוחות עם חלוקת תשלום — ללא סינון שבוע (מניעת אובדן חלוקה במעבר שבוע) */
+async function loadOpenOrdersWithBreakdown(
+  cid: string,
+  paymentWorkCountry: WorkCountryCode,
+): Promise<IntakeOrderRecord[]> {
+  return prisma.order.findMany({
     where: {
-      customerId: cid,
-      deletedAt: null,
-      status: { not: "DEBT_WITHDRAWAL" },
-      countryCode: paymentWorkCountry,
-      ...(weekDateWhere ?? {}),
+      ...intakeOrderBaseWhere(cid, paymentWorkCountry),
+      paymentBreakdown: { some: {} },
     },
     orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],
-    select: {
-      id: true,
-      orderNumber: true,
-      orderDate: true,
-      weekCode: true,
-      amountUsd: true,
-      commissionUsd: true,
-      totalUsd: true,
-      exchangeRate: true,
-      usdRateUsed: true,
-      snapshotFinalDollarRate: true,
-      totalIlsWithVat: true,
-      totalIls: true,
-      sourceCountry: true,
-      paymentMethod: true,
-      paymentBreakdown: {
-        select: { paymentMethod: true, amount: true, currency: true },
-        orderBy: { createdAt: "asc" },
-      },
-    },
+    select: INTAKE_ORDER_SELECT,
   });
+}
 
+function mapOrderToIntakeRow(
+  o: IntakeOrderRecord,
+  paidByOrder: Map<string, Prisma.Decimal>,
+  latestCodeByOrder: Map<string, string | null>,
+  latestPaymentDateByOrder: Map<string, string | null>,
+  actualByOrderMethod: Map<string, Map<string, number>>,
+): PaymentIntakeOrderRow {
+  const deal = o.amountUsd ?? new Prisma.Decimal(0);
+  const com = o.commissionUsd ?? new Prisma.Decimal(0);
+  const totalUsdVal = o.totalUsd ?? deal.add(com).toDecimalPlaces(4, 4);
+  const paidSum = paidByOrder.get(o.id) ?? new Prisma.Decimal(0);
+  const remDec = totalUsdVal.sub(paidSum).toDecimalPlaces(2, 4);
+  const paidN = Number(paidSum.toString());
+  let status: "unpaid" | "partial" | "paid" = "unpaid";
+  if (Number(remDec.toString()) <= MONEY_EPS) status = "paid";
+  else if (paidN > MONEY_EPS) status = "partial";
+  const rateDec = o.usdRateUsed ?? o.snapshotFinalDollarRate ?? o.exchangeRate ?? new Prisma.Decimal(0);
+  const rateN = Number(rateDec.toString()) || 0;
+  const ilsDec = o.totalIlsWithVat ?? o.totalIls ?? new Prisma.Decimal(0);
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  const isComposite = isCompositePaymentMethod(o.paymentMethod);
+  const actualMap = actualByOrderMethod.get(o.id) ?? new Map<string, number>();
+  const actualMethods = [...actualMap.entries()]
+    .filter(([, usd]) => usd > 0.0001)
+    .map(([method, usd]) => ({ method, label: PAYMENT_METHOD_LABELS[method] ?? method, usd: round2(usd) }));
+  let breakdown: OrderBreakdownMethodRow[] = [];
+  let hasMethodDeviation = false;
+  if (o.paymentBreakdown.length > 0) {
+    const plannedByMethod = new Map<string, number>();
+    for (const b of o.paymentBreakdown) {
+      const usd =
+        breakdownLineUsd(
+          { amount: b.amount.toString(), currency: b.currency === "ILS" ? "ILS" : "USD" },
+          rateN,
+        ) ?? 0;
+      plannedByMethod.set(b.paymentMethod, (plannedByMethod.get(b.paymentMethod) ?? 0) + usd);
+    }
+    breakdown = [...plannedByMethod.entries()].map(([method, plannedUsd]) => {
+      const paid = actualMap.get(method) ?? 0;
+      return {
+        method,
+        label: PAYMENT_METHOD_LABELS[method] ?? method,
+        plannedUsd: round2(plannedUsd),
+        paidUsd: round2(paid),
+        remainingUsd: Math.max(0, round2(plannedUsd - paid)),
+      };
+    });
+    hasMethodDeviation = computeOrderMethodDeviation(
+      [...plannedByMethod.entries()].map(([method, usd]) => ({ method, usd })),
+      actualMethods.map((a) => ({ method: a.method, usd: a.usd })),
+    ).hasDeviation;
+  }
+  return {
+    id: o.id,
+    orderNumber: o.orderNumber,
+    paymentCode: latestCodeByOrder.get(o.id) ?? null,
+    dateYmd: o.orderDate ? formatLocalYmd(new Date(o.orderDate)) : "—",
+    week: o.weekCode?.trim() || null,
+    rate: rateN > 0 ? rateN.toFixed(4) : "—",
+    amountUsd: deal.toFixed(2),
+    commissionUsd: com.toFixed(2),
+    totalIls: ilsDec.toFixed(2),
+    totalAmountUsd: totalUsdVal.toFixed(2),
+    dbPaidUsd: paidSum.toFixed(2),
+    dbRemainingUsd: remDec.toFixed(2),
+    status,
+    lastPaymentDateYmd: latestPaymentDateByOrder.get(o.id) ?? null,
+    sourceCountry: o.sourceCountry != null ? String(o.sourceCountry) : null,
+    isComposite,
+    breakdown,
+    actualMethods,
+    hasMethodDeviation,
+  };
+}
+
+async function attachPaymentsAndMapRows(
+  orders: IntakeOrderRecord[],
+  intakeWeekCode: string | null | undefined,
+): Promise<PaymentIntakeOrderRow[]> {
   const orderIds = orders.map((o) => o.id);
   const paidByOrder = new Map<string, Prisma.Decimal>();
   const latestCodeByOrder = new Map<string, string | null>();
   const latestPaymentDateByOrder = new Map<string, string | null>();
-  /** שולם בפועל לכל אמצעי תשלום, לפי הזמנה (USD): orderId → (method → סכום) */
   const actualByOrderMethod = new Map<string, Map<string, number>>();
+
   if (orderIds.length > 0) {
-    const [sums, payRows] = await Promise.all([
+    const [sums, payRows, planByOrder] = await Promise.all([
       groupByActivePayments("orderId", { orderId: { in: orderIds }, amountUsd: { not: null } }, { amountUsd: true }),
       prisma.payment.findMany({
         where: { orderId: { in: orderIds } },
@@ -133,7 +218,9 @@ export async function loadPaymentIntakeOrdersForCustomer(
           ilsPaymentMethod: true,
         },
       }),
+      loadPaymentPlanSummariesByOrderId(orderIds),
     ]);
+
     for (const s of sums) {
       if (s.orderId) paidByOrder.set(s.orderId, s._sum?.amountUsd ?? new Prisma.Decimal(0));
     }
@@ -144,7 +231,6 @@ export async function loadPaymentIntakeOrdersForCustomer(
         const dt = p.paymentDate ?? p.createdAt;
         latestPaymentDateByOrder.set(p.orderId, dt ? formatLocalYmd(new Date(dt)) : null);
       }
-      // שולם-בפועל-לכל-אמצעי: רק תשלומים פעילים, לפי אמצעי התשלום שנרשם
       if (String(p.status) !== "ACTIVE") continue;
       const amt = p.amountUsd ? Number(p.amountUsd.toString()) : 0;
       if (!Number.isFinite(amt) || amt <= 0) continue;
@@ -157,76 +243,52 @@ export async function loadPaymentIntakeOrdersForCustomer(
       }
       byMethod.set(method, (byMethod.get(method) ?? 0) + amt);
     }
+
+    const rows = orders.map((o) => ({
+      ...mapOrderToIntakeRow(o, paidByOrder, latestCodeByOrder, latestPaymentDateByOrder, actualByOrderMethod),
+      paymentPlan: planByOrder.get(o.id) ?? null,
+    }));
+
+    return annotateIntakeOrderGroups(rows, intakeWeekCode);
   }
 
-  const rows: PaymentIntakeOrderRow[] = orders.map((o) => {
-    const deal = o.amountUsd ?? new Prisma.Decimal(0);
-    const com = o.commissionUsd ?? new Prisma.Decimal(0);
-    const totalUsdVal = o.totalUsd ?? deal.add(com).toDecimalPlaces(4, 4);
-    const paidSum = paidByOrder.get(o.id) ?? new Prisma.Decimal(0);
-    const remDec = totalUsdVal.sub(paidSum).toDecimalPlaces(2, 4);
-    const paidN = Number(paidSum.toString());
-    let status: "unpaid" | "partial" | "paid" = "unpaid";
-    if (Number(remDec.toString()) <= MONEY_EPS) status = "paid";
-    else if (paidN > MONEY_EPS) status = "partial";
-    const rateDec = o.usdRateUsed ?? o.snapshotFinalDollarRate ?? o.exchangeRate ?? new Prisma.Decimal(0);
-    const rateN = Number(rateDec.toString()) || 0;
-    const ilsDec = o.totalIlsWithVat ?? o.totalIls ?? new Prisma.Decimal(0);
-    const round2 = (n: number) => Math.round(n * 100) / 100;
-    const isComposite = isCompositePaymentMethod(o.paymentMethod);
-    const actualMap = actualByOrderMethod.get(o.id) ?? new Map<string, number>();
-    const actualMethods = [...actualMap.entries()]
-      .filter(([, usd]) => usd > 0.0001)
-      .map(([method, usd]) => ({ method, label: PAYMENT_METHOD_LABELS[method] ?? method, usd: round2(usd) }));
-    let breakdown: OrderBreakdownMethodRow[] = [];
-    let hasMethodDeviation = false;
-    if (o.paymentBreakdown.length > 0) {
-      const plannedByMethod = new Map<string, number>();
-      for (const b of o.paymentBreakdown) {
-        const usd =
-          breakdownLineUsd(
-            { amount: b.amount.toString(), currency: b.currency === "ILS" ? "ILS" : "USD" },
-            rateN,
-          ) ?? 0;
-        plannedByMethod.set(b.paymentMethod, (plannedByMethod.get(b.paymentMethod) ?? 0) + usd);
-      }
-      breakdown = [...plannedByMethod.entries()].map(([method, plannedUsd]) => {
-        const paid = actualMap.get(method) ?? 0;
-        return {
-          method,
-          label: PAYMENT_METHOD_LABELS[method] ?? method,
-          plannedUsd: round2(plannedUsd),
-          paidUsd: round2(paid),
-          remainingUsd: Math.max(0, round2(plannedUsd - paid)),
-        };
-      });
-      hasMethodDeviation = computeOrderMethodDeviation(
-        [...plannedByMethod.entries()].map(([method, usd]) => ({ method, usd })),
-        actualMethods.map((a) => ({ method: a.method, usd: a.usd })),
-      ).hasDeviation;
-    }
-    return {
-      id: o.id,
-      orderNumber: o.orderNumber,
-      paymentCode: latestCodeByOrder.get(o.id) ?? null,
-      dateYmd: o.orderDate ? formatLocalYmd(new Date(o.orderDate)) : "—",
-      week: o.weekCode?.trim() || null,
-      rate: rateN > 0 ? rateN.toFixed(4) : "—",
-      amountUsd: deal.toFixed(2),
-      commissionUsd: com.toFixed(2),
-      totalIls: ilsDec.toFixed(2),
-      totalAmountUsd: totalUsdVal.toFixed(2),
-      dbPaidUsd: paidSum.toFixed(2),
-      dbRemainingUsd: remDec.toFixed(2),
-      status,
-      lastPaymentDateYmd: latestPaymentDateByOrder.get(o.id) ?? null,
-      sourceCountry: o.sourceCountry != null ? String(o.sourceCountry) : null,
-      isComposite,
-      breakdown,
-      actualMethods,
-      hasMethodDeviation,
-    };
+  return annotateIntakeOrderGroups([], intakeWeekCode);
+}
+
+/** הזמנות לקוח בלבד — לטעינה ברקע */
+export async function loadPaymentIntakeOrdersForCustomer(
+  params: IntakeLoadParams,
+): Promise<{ ok: true; orders: PaymentIntakeOrderRow[] } | { ok: false; error: string }> {
+  const cid = params.customerId.trim();
+  if (!cid) return { ok: false, error: "חסר לקוח" };
+
+  const cust = await loadIntakeCustomerRecord(cid);
+  if (!cust) return { ok: false, error: "לקוח לא נמצא" };
+
+  const intakeWeekCode = params.weekCodeForOpenBalances?.trim() || null;
+  const weekDateWhere = paymentIntakeOrderDateThroughAhWeekEnd(intakeWeekCode);
+  const paymentWorkCountry = normalizeWorkCountryCode(params.paymentWorkCountryRaw) ?? DEFAULT_WORK_COUNTRY;
+  const baseWhere = intakeOrderBaseWhere(cid, paymentWorkCountry);
+
+  const [weekOrders, openBreakdownOrders] = await Promise.all([
+    prisma.order.findMany({
+      where: { ...baseWhere, ...(weekDateWhere ?? {}) },
+      orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],
+      select: INTAKE_ORDER_SELECT,
+    }),
+    weekDateWhere
+      ? loadOpenOrdersWithBreakdown(cid, paymentWorkCountry)
+      : Promise.resolve([] as IntakeOrderRecord[]),
+  ]);
+
+  const mergedOrders = mergeIntakeOrdersById(weekOrders, openBreakdownOrders).sort((a, b) => {
+    const ad = a.orderDate?.getTime() ?? 0;
+    const bd = b.orderDate?.getTime() ?? 0;
+    if (ad !== bd) return ad - bd;
+    return a.createdAt.getTime() - b.createdAt.getTime();
   });
+
+  const rows = await attachPaymentsAndMapRows(mergedOrders, intakeWeekCode);
 
   return { ok: true, orders: rows };
 }

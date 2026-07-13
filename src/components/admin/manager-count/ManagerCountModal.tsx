@@ -366,9 +366,9 @@ export function ManagerCountModal({
                       <strong dir="ltr">{fmtDailyMoney("ILS", fcNum(flow.bankBalanceIls ?? "0"))}</strong>
                     </div>
                     <div>
-                      <span>חוב לטורקיה</span>
-                      <strong dir="ltr" className={flow.turkeyDebtStatus === "debt" ? "fc-num--loss" : ""}>
-                        {fcNum(flow.turkeyDebtUsd) > 0 ? fmtDailyMoney("USD", fcNum(flow.turkeyDebtUsd)) : "—"}
+                      <span>יתרה לטורקיה</span>
+                      <strong dir="ltr" className={flow.turkeyBalanceStatus === "AWAITING_TRANSFER" || flow.turkeyBalanceStatus === "PARTIALLY_TRANSFERRED" ? "fc-num--loss" : ""}>
+                        {fcNum(flow.turkeyBalanceClosingUsd ?? flow.turkeyDebtUsd) > 0 ? fmtDailyMoney("USD", fcNum(flow.turkeyBalanceClosingUsd ?? flow.turkeyDebtUsd)) : "—"}
                       </strong>
                     </div>
                   </div>

@@ -66,7 +66,7 @@ export function CashflowCalculationTable({
           <tr>
             <th title="יתרת דולר בקופה לאחר כל הפעולות">דולר בקופה</th>
             <th title="יתרת שקל בקופה לאחר כל הפעולות">שקל בקופה</th>
-            <th title="חוב / יתרה לטורקיה">יתרה לטורקיה</th>
+            <th title="יתרה להעברה לטורקיה">יתרה לטורקיה</th>
             <th title="יתרה בבנק">יתרה בבנק</th>
             <th>הוצאות קופה ₪</th>
             <th>הוצאות קופה $</th>
@@ -90,9 +90,9 @@ export function CashflowCalculationTable({
               {fmtDailyMoney("ILS", fcNum(row.drawerIls))}
             </td>
             <td dir="ltr" className="ft-cell--computed">
-              {fcNum(row.turkeyDebtUsd) > 0
-                ? fmtDailyMoney("USD", fcNum(row.turkeyDebtUsd))
-                : "תקין"}
+              {fcNum(row.turkeyBalanceUsd) > 0
+                ? fmtDailyMoney("USD", fcNum(row.turkeyBalanceUsd))
+                : "—"}
             </td>
             <td dir="ltr" className="ft-cell--computed">
               {fmtDailyMoney("ILS", fcNum(row.bankBalanceIls))}

@@ -3,7 +3,9 @@
  */
 
 import { CASH_CONTROL_EPS } from "@/lib/cash-control-calculation";
+import { calculateCashControlVariance } from "@/lib/cash-control-calculation";
 import type { CashReconciliationLineId } from "@/lib/cash-control-reconciliation";
+import type { CashDailyMethodId } from "@/lib/cash-control-daily";
 
 export type CashWeekFlowLineId = CashReconciliationLineId;
 
@@ -21,6 +23,15 @@ export const CASH_WEEK_FLOW_LINES: CashWeekFlowLineMeta[] = [
   { id: "CHECK", label: "צ'קים", currency: "ILS" },
   { id: "BANK_TRANSFER", label: "העברות", currency: "ILS" },
 ];
+
+/** מיפוי שורת ספירת מנהל → ערוץ בקרת קופה (להוצאות) */
+export const WEEK_FLOW_LINE_CHANNEL: Record<CashWeekFlowLineId, CashDailyMethodId> = {
+  CASH_ILS: "CASH_ILS",
+  CASH_USD: "CASH_USD",
+  CREDIT: "CREDIT_CARD_ILS",
+  CHECK: "CHECK_ILS",
+  BANK_TRANSFER: "BANK_TRANSFER_ILS",
+};
 
 export type CashWeekFlowCountedValues = Partial<Record<CashWeekFlowLineId, number | null>>;
 
@@ -63,7 +74,10 @@ export function computeDrawerRemaining(input: {
   };
 }
 
-export function countLineDiff(received: number, counted: number | null): number | null {
-  if (counted == null || !Number.isFinite(counted)) return null;
-  return round2(counted - received);
+export function countLineDiff(received: number, counted: number | null, expensesAmount = 0): number | null {
+  return calculateCashControlVariance({
+    receivedAmount: received,
+    existingExpensesAmount: expensesAmount,
+    countedAmount: counted,
+  }).varianceAmount;
 }

@@ -15,7 +15,7 @@ import type { CashVarianceLineDto } from "@/lib/cash-control-variance";
 export type FlowCalculationTableRow = {
   drawerUsd: string;
   drawerIls: string;
-  turkeyDebtUsd: string;
+  turkeyBalanceUsd: string;
   bankBalanceIls: string;
   expensesIls: string;
   expensesUsd: string;
@@ -76,7 +76,7 @@ export function buildFlowCalculationTableRow(drill: FlowWeekDrillPayload): FlowC
   return {
     drawerUsd: flow.drawerRemainingUsd,
     drawerIls: flow.drawerRemainingIls,
-    turkeyDebtUsd: flow.turkeyDebtUsd,
+    turkeyBalanceUsd: flow.turkeyBalanceClosingUsd,
     bankBalanceIls: flow.bankBalanceIls ?? "0",
     expensesIls: flow.expensesIls,
     expensesUsd: flow.expensesUsd,

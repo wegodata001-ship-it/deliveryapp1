@@ -26,7 +26,7 @@ export function FlowDashboardCharts({
 }) {
   const intake = intakeDistribution(drill);
   const fxNet = deriveFxNetIls(drill);
-  const turkeyDebt = fcNum(drill.flow.turkeyDebtUsd);
+  const turkeyBalanceUsd = fcNum(drill.flow.turkeyBalanceClosingUsd ?? drill.flow.turkeyDebtUsd);
   const cashIls = fcNum(drill.flow.kpis.cashRemainingIls);
   const recent = overview.slice(0, 6).reverse();
 
@@ -75,15 +75,15 @@ export function FlowDashboardCharts({
         </div>
 
         <div className="fd-chart">
-          <h4>חוב לטורקיה</h4>
-          {turkeyDebt <= 0.005 ? (
+          <h4>יתרה להעברה לטורקיה</h4>
+          {turkeyBalanceUsd <= 0.005 ? (
             <div className="fd-hero-chart">
               <strong className="fd-text-profit">ללא חוב</strong>
             </div>
           ) : (
             <div className="fd-hero-chart">
               <strong dir="ltr" className="fd-text-loss">
-                {fmtDailyMoney("USD", turkeyDebt)}
+                {fmtDailyMoney("USD", turkeyBalanceUsd)}
               </strong>
               <div className="fd-bar-row__track fd-bar-row__track--tall">
                 <div className="fd-bar-row__fill fd-bar-row__fill--orange" style={{ width: "72%" }} />

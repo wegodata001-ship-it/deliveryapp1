@@ -186,6 +186,7 @@ export function FlowWeekTablesSection({
         onClose={() => setVarianceOpen(false)}
         dayLabel={drill?.weekLabel ?? drill?.week ?? ""}
         dateYmd={drill?.week ?? ""}
+        weekCode={drill?.week}
         lines={varianceLines}
         loading={loading}
       />

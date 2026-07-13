@@ -51,14 +51,22 @@ import {
   type IntakeSaveDeviationRow,
 } from "@/lib/cash-control-intake-breakdown";
 import { PaymentLiveSummaryCards } from "@/components/admin/PaymentLiveSummaryCards";
+import { BalanceResetConfirmModal } from "@/components/admin/BalanceResetConfirmModal";
 import { DebtBreakdownModal } from "@/components/admin/debt-breakdown/DebtBreakdownModal";
 import { DebtAllocationPreview } from "@/components/admin/debt-breakdown/DebtAllocationPreview";
+import { PriorWeekOpenDebtsPanel } from "@/components/admin/PriorWeekOpenDebtsPanel";
+import { splitIntakeOrdersByGroup } from "@/lib/payment-intake-order-groups";
 import {
   computePaymentIntakeLiveTotals,
   formatIntakeLiveBalanceDisplay,
   type CommissionResetOrderPreview,
 } from "@/lib/payment-intake-live-calculator";
 import { planCommissionDebtClosureFromNumbers } from "@/lib/commission-debt-closure";
+import {
+  BALANCE_RESET_TOLERANCE_USD,
+  computeOrderBalanceResetRows,
+  summarizeOrderBalanceResetRows,
+} from "@/lib/balance-reset-calculation";
 import {
   fetchCustomerOpenDebtAction,
   fetchOrderForPaymentContextAction,
@@ -674,31 +682,56 @@ export function PaymentModalUpdated({
       totals.totalUsd,
       prioritizedSet,
     );
-    const surplus = roundMoney2(allocated.unallocatedUsd);
-    const allocPairs = [...allocated.byOrderId.entries()].filter(([, amountUsd]) => amountUsd > 0.01);
+    const allocPairs = [...allocated.byOrderId.entries()].filter(([, amountUsd]) => amountUsd > BALANCE_RESET_TOLERANCE_USD);
     const lastAllocOrderId = allocPairs.length > 0 ? allocPairs[allocPairs.length - 1][0] : null;
-
-    return orders
-      .map((o) => {
-        let alloc = roundMoney2(allocated.byOrderId.get(o.id) ?? 0);
-        if (surplus > 0.01 && o.id === lastAllocOrderId) {
-          alloc = roundMoney2(alloc + surplus);
-        }
-        const paidUsd = roundMoney2(Number(o.dbPaidUsd) + alloc);
-        const totalUsd = Number(o.totalAmountUsd) || 0;
-        return {
-          id: o.id,
-          totalAmountUsd: totalUsd,
-          dbPaidUsd: paidUsd,
-          commissionUsd: Number(o.commissionUsd) || 0,
-        };
-      })
-      .filter((row) => Math.abs(row.totalAmountUsd - row.dbPaidUsd) > 0.01);
+    return computeOrderBalanceResetRows({
+      orders: orders.map((o) => ({
+        id: o.id,
+        totalAmountUsd: Number(o.totalAmountUsd) || 0,
+        dbPaidUsd: Number(o.dbPaidUsd) || 0,
+        commissionUsd: Number(o.commissionUsd) || 0,
+      })),
+      allocationByOrderId: allocated.byOrderId,
+      unallocatedUsd: allocated.unallocatedUsd,
+      lastAllocatedOrderId: lastAllocOrderId,
+    }).map((row) => ({
+      id: row.orderId,
+      totalAmountUsd: row.totalBeforeUsd,
+      dbPaidUsd: row.paidUsd,
+      commissionUsd: row.commissionBeforeUsd,
+    }));
   }, [customerBalanceResetPending, orders, totals.totalUsd, prioritizedSet]);
+
+  const orderBalanceResetSummary = useMemo(() => {
+    const allocated = allocatePaymentAcrossOrders(
+      toPaymentIntakeBases(orders),
+      totals.totalUsd,
+      prioritizedSet,
+    );
+    const allocPairs = [...allocated.byOrderId.entries()].filter(([, amountUsd]) => amountUsd > BALANCE_RESET_TOLERANCE_USD);
+    const lastAllocOrderId = allocPairs.length > 0 ? allocPairs[allocPairs.length - 1][0] : null;
+    const rows = computeOrderBalanceResetRows({
+      orders: orders.map((o) => ({
+        id: o.id,
+        totalAmountUsd: Number(o.totalAmountUsd) || 0,
+        dbPaidUsd: Number(o.dbPaidUsd) || 0,
+        commissionUsd: Number(o.commissionUsd) || 0,
+      })),
+      allocationByOrderId: allocated.byOrderId,
+      unallocatedUsd: allocated.unallocatedUsd,
+      lastAllocatedOrderId: lastAllocOrderId,
+    });
+    return summarizeOrderBalanceResetRows(rows);
+  }, [orders, totals.totalUsd, prioritizedSet]);
 
   const matched = useMemo(() => {
     return matchPaymentToOrders(bases, totals.totalUsd, prioritizedSet);
   }, [bases, totals.totalUsd, prioritizedSet]);
+
+  const { priorWeekOpen: priorWeekOpenOrders } = useMemo(
+    () => splitIntakeOrdersByGroup(orders),
+    [orders],
+  );
 
   const paymentAllocationPreview = useMemo(
     () =>
@@ -875,22 +908,16 @@ export function PaymentModalUpdated({
       ? customerOpenDebtSignedUsd
       : 0;
 
-  /** יתרה שנותרת על הזמנות לאחר הקצאת התשלום הנוכחי */
+  /** יתרה שנותרת על הזמנות לאחר הקצאת התשלום הנוכחי (חוסר בלבד — תאימות לאחור) */
   const orderRemainderAfterPaymentUsd = useMemo(() => {
-    const allocated = allocatePaymentAcrossOrders(
-      toPaymentIntakeBases(orders),
-      totals.totalUsd,
-      prioritizedSet,
-    );
-    let sum = 0;
-    for (const o of orders) {
-      const alloc = roundMoney2(allocated.byOrderId.get(o.id) ?? 0);
-      const paidAfter = roundMoney2(Number(o.dbPaidUsd) + alloc);
-      const totalUsd = Number(o.totalAmountUsd) || 0;
-      sum += Math.max(0, roundMoney2(totalUsd - paidAfter));
-    }
-    return roundMoney2(sum);
-  }, [orders, totals.totalUsd, prioritizedSet]);
+    return roundMoney2(orderBalanceResetSummary.totalShortfallUsd);
+  }, [orderBalanceResetSummary.totalShortfallUsd]);
+
+  const orderOverpaymentAfterPaymentUsd = useMemo(() => {
+    return roundMoney2(orderBalanceResetSummary.totalOverpaymentUsd);
+  }, [orderBalanceResetSummary.totalOverpaymentUsd]);
+
+  const hasOrderPaymentDifference = orderBalanceResetSummary.hasEligibleDifference;
 
   const creditAvailableForResetUsd = useMemo(
     () => (customerBalanceUsd > 0.01 ? roundMoney2(customerBalanceUsd) : 0),
@@ -966,13 +993,13 @@ export function PaymentModalUpdated({
   const showOpenBalanceActions = useMemo(() => {
     if (!customer || customerBalanceResetPending) return false;
     if (hasMethodMismatchLive || hasRateMismatchLive) return false;
-    return orderRemainderAfterPaymentUsd > 0.01 || hasOpenBalanceShortfallLive;
+    return hasOrderPaymentDifference || hasOpenBalanceShortfallLive;
   }, [
     customer,
     customerBalanceResetPending,
     hasMethodMismatchLive,
     hasRateMismatchLive,
-    orderRemainderAfterPaymentUsd,
+    hasOrderPaymentDifference,
     hasOpenBalanceShortfallLive,
   ]);
 
@@ -1024,8 +1051,8 @@ export function PaymentModalUpdated({
 
   const canApplyResetCustomerBalance = useMemo(() => {
     if (customerBalanceResetPending) return true;
-    return orderRemainderAfterPaymentUsd > 0.01;
-  }, [customerBalanceResetPending, orderRemainderAfterPaymentUsd]);
+    return hasOrderPaymentDifference;
+  }, [customerBalanceResetPending, hasOrderPaymentDifference]);
 
   const showResetBalanceBtn = useMemo(() => {
     if (!viewerIsAdmin || !customer) return false;
@@ -3148,8 +3175,21 @@ export function PaymentModalUpdated({
               {customer && !customerWorkspaceLoading && showOpenBalanceActions ? (
                 <div className="payment-open-balance-panel" dir="rtl" role="region" aria-label="יתרה פתוחה">
                   <p className="payment-open-balance-panel__lead">
-                    אמצעי התשלום תואם להזמנה — נותרה יתרה של{" "}
-                    <strong dir="ltr">${fmtUsdDisplay(orderRemainderAfterPaymentUsd)}</strong>.
+                    אמצעי התשלום תואם להזמנה —
+                    {orderRemainderAfterPaymentUsd > BALANCE_RESET_TOLERANCE_USD ? (
+                      <>
+                        {" "}
+                        נותרה יתרה של{" "}
+                        <strong dir="ltr">${fmtUsdDisplay(orderRemainderAfterPaymentUsd)}</strong>.
+                      </>
+                    ) : null}
+                    {orderOverpaymentAfterPaymentUsd > BALANCE_RESET_TOLERANCE_USD ? (
+                      <>
+                        {" "}
+                        קיים עודף תשלום של{" "}
+                        <strong dir="ltr">${fmtUsdDisplay(orderOverpaymentAfterPaymentUsd)}</strong>.
+                      </>
+                    ) : null}{" "}
                     ניתן לשמור תשלום חלקי, לאפס יתרה, או להשתמש ביתרת זכות.
                   </p>
                   {viewerIsAdmin ? (
@@ -3258,6 +3298,11 @@ export function PaymentModalUpdated({
               {customer && !customerWorkspaceLoading && totals.totalUsd > 0.01 ? (
                 <DebtAllocationPreview preview={paymentAllocationPreview} />
               ) : null}
+              <PriorWeekOpenDebtsPanel
+                orders={priorWeekOpenOrders}
+                intakeWeekCode={intakeWeekCode}
+                onOrderClick={(orderId) => void openPaymentHistory(orderId)}
+              />
               <div className="payment-modal-table-scroll" ref={tableScrollRef}>
                 <table className="payment-modal-table" dir="rtl">
                   <thead>
@@ -3310,6 +3355,7 @@ export function PaymentModalUpdated({
                           ? (commissionPreviewPlan?.beforeCommissionUsd ?? commissionUsd)
                           : null;
                         const ledgerSt = displayedLedgerStatus(ledgerBal);
+                        const isPriorWeekDebt = orders.find((o) => o.id === row.id)?.isPriorWeekOpenDebt === true;
                         return (
                         <tr
                           key={row.id}
@@ -3317,6 +3363,7 @@ export function PaymentModalUpdated({
                             "payment-modal-tr--clickable",
                             ledgerRowClass(ledgerSt),
                             isCommissionResetPreview ? "payment-modal-tr--commission-closure" : "",
+                            isPriorWeekDebt ? "payment-modal-tr--prior-week" : "",
                           ]
                             .filter(Boolean)
                             .join(" ")}
@@ -3343,7 +3390,13 @@ export function PaymentModalUpdated({
                             {row.dateYmd}
                           </td>
                           <td dir="ltr" className="payment-modal-td-week">
-                            {row.week ?? "—"}
+                            {isPriorWeekDebt ? (
+                              <span className="payment-modal-prior-week-badge" title={`שבוע מקור: ${row.week ?? "—"}`}>
+                                חוב קודם · {row.week ?? "—"}
+                              </span>
+                            ) : (
+                              (row.week ?? "—")
+                            )}
                           </td>
                           <td dir="ltr" className="pm-num">
                             {fmtRate(row.rate)}
@@ -3715,63 +3768,22 @@ export function PaymentModalUpdated({
           }}
         />
       ) : null}
-      {resetCustomerConfirmOpen ? (
-        <div
-          className="adm-oc-edit-request-backdrop"
-          role="presentation"
-          onClick={() => setResetCustomerConfirmOpen(false)}
-        >
-          <div
-            className="payment-nav-confirm-modal payment-reset-confirm-modal"
-            role="dialog"
-            aria-modal="true"
-            onClick={(e) => e.stopPropagation()}
-            dir="rtl"
-          >
-            <h4>איפוס יתרה (התאמת עמלה)</h4>
-            {creditAvailableForResetUsd > 0.01 && orderRemainderAfterPaymentUsd > creditAvailableForResetUsd ? (
-              <p className="adm-muted-keys payment-reset-confirm-note">
-                יתרת הזכות (${fmtUsdDisplay(creditAvailableForResetUsd)}) אינה מספיקה — יוחל איפוס רגיל.
-              </p>
-            ) : creditAvailableForResetUsd <= 0.01 ? (
-              <p className="adm-muted-keys payment-reset-confirm-note">
-                לא נמצאה יתרת זכות — יוחל איפוס יתרה רגיל (התאמת עמלה).
-              </p>
-            ) : null}
-            <ul className="payment-reset-confirm-deltas">
-              <li>
-                יתרה להזמנות לאחר תשלום:{" "}
-                <strong dir="ltr">${fmtUsdDisplay(orderRemainderAfterPaymentUsd)}</strong>
-              </li>
-            </ul>
-            <p className="adm-muted-keys payment-reset-confirm-note">
-              האיפוס יוחל רק בשמירת קליטת התשלום.
-            </p>
-            <div className="payment-nav-confirm-actions">
-              <button
-                type="button"
-                className="adm-btn adm-btn--ghost adm-btn--dense"
-                onClick={() => setResetCustomerConfirmOpen(false)}
-              >
-                ביטול
-              </button>
-              <button
-                type="button"
-                className="adm-btn adm-btn--primary adm-btn--dense"
-                disabled={!canApplyResetCustomerBalance}
-                onClick={() => {
-                  setResetCustomerConfirmOpen(false);
-                  setCustomerBalanceResetPending(true);
-                  setBalanceResetFromCredit(false);
-                  onToast("תצוגת איפוס יתרה — יוחל בשמירת התשלום");
-                }}
-              >
-                אישור
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <BalanceResetConfirmModal
+        open={resetCustomerConfirmOpen}
+        rows={orderBalanceResetSummary.rows}
+        getOrderLabel={(orderId) => {
+          const order = orders.find((o) => o.id === orderId);
+          return order?.orderNumber?.trim() || orderId;
+        }}
+        canConfirm={canApplyResetCustomerBalance}
+        onCancel={() => setResetCustomerConfirmOpen(false)}
+        onConfirm={() => {
+          setResetCustomerConfirmOpen(false);
+          setCustomerBalanceResetPending(true);
+          setBalanceResetFromCredit(false);
+          onToast("תצוגת איפוס יתרה — יוחל בשמירת התשלום");
+        }}
+      />
       {cancelPaymentOpen ? (
         <div
           className="adm-oc-edit-request-backdrop"

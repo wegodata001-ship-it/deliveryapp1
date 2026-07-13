@@ -1,15 +1,15 @@
 "use client";
 
 import { useMemo } from "react";
-import { AlertTriangle, CheckCircle2, Clock, Info } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, Info, TrendingDown, TrendingUp } from "lucide-react";
 import type { CashCurrency } from "@/app/admin/cash-control/constants";
 import { fmtDailyMoney } from "@/lib/cash-control-daily";
 import {
-  channelLabel,
   expenseToDailyMethodId,
   type CashExpensePaymentMethod,
 } from "@/lib/cash-expense-payment-method";
 import {
+  cashControlStatusLabel,
   formatVarianceShort,
   previewExpenseVarianceImpact,
   type CashVarianceLineDto,
@@ -23,7 +23,7 @@ export type CashExpenseVarianceImpactProps = {
   loading?: boolean;
 };
 
-function StatusMsg({
+function ImpactBadge({
   kind,
   message,
 }: {
@@ -32,37 +32,59 @@ function StatusMsg({
 }) {
   if (kind === "closes") {
     return (
-      <p className="cc-var-impact__msg is-closes">
-        <CheckCircle2 size={14} aria-hidden /> {message}
+      <p className="ce-impact__badge is-matched">
+        <CheckCircle2 size={15} aria-hidden />
+        <span>
+          <strong>תקין</strong> — {message}
+        </span>
       </p>
     );
   }
   if (kind === "reduces") {
     return (
-      <p className="cc-var-impact__msg is-reduces">
-        <AlertTriangle size={14} aria-hidden /> {message}
+      <p className="ce-impact__badge is-shortage">
+        <TrendingDown size={15} aria-hidden />
+        <span>{message}</span>
       </p>
     );
   }
   if (kind === "still_open") {
     return (
-      <p className="cc-var-impact__msg is-still_open">
-        <AlertTriangle size={14} aria-hidden /> {message}
+      <p className="ce-impact__badge is-shortage">
+        <AlertTriangle size={15} aria-hidden />
+        <span>{message}</span>
+      </p>
+    );
+  }
+  if (kind === "surplus") {
+    return (
+      <p className="ce-impact__badge is-surplus">
+        <TrendingUp size={15} aria-hidden />
+        <span>{message}</span>
       </p>
     );
   }
   if (kind === "no_count") {
     return (
-      <p className="cc-var-impact__msg is-no_count">
-        <Clock size={14} aria-hidden /> {message} <strong>ממתין לספירה</strong>
+      <p className="ce-impact__badge is-waiting">
+        <Clock size={15} aria-hidden />
+        <span>
+          {message} <strong>ממתין לספירה</strong>
+        </span>
       </p>
     );
   }
   return (
-    <p className="cc-var-impact__msg is-invalid_amount">
-      <Info size={14} aria-hidden /> {message}
+    <p className="ce-impact__badge is-neutral">
+      <Info size={15} aria-hidden />
+      <span>{message}</span>
     </p>
   );
+}
+
+function moneyCell(currency: CashCurrency, value: number | null): string {
+  if (value == null) return "—";
+  return fmtDailyMoney(currency, value);
 }
 
 export function CashExpenseVarianceImpact({
@@ -90,8 +112,8 @@ export function CashExpenseVarianceImpact({
 
   if (loading) {
     return (
-      <section className="cc-var-impact" aria-label="השפעה על בקרת הקופה">
-        <h4 className="cc-var-impact__title">השפעה על בקרת הקופה</h4>
+      <section className="ce-impact" aria-label="השפעה על בקרת הקופה">
+        <h4 className="ce-impact__title">השפעה על בקרת הקופה</h4>
         <p className="cc-muted">טוען מצב קופה…</p>
       </section>
     );
@@ -101,58 +123,73 @@ export function CashExpenseVarianceImpact({
     return null;
   }
 
-  const channel = channelLabel(preview.method, preview.currency);
+  const hasAmount = preview.proposedExpenseAmount > 0;
+  const showAfter = hasAmount;
+  const cur = preview.currency;
+
+  const beforeExpenses = preview.currentExpensesAmount;
+  const afterExpenses = showAfter ? preview.afterExpensesAmount : beforeExpenses;
+  const beforeNet = preview.currentExpectedNet;
+  const afterNet = showAfter ? preview.afterExpectedNet : beforeNet;
+  const beforeVar = preview.currentVariance;
+  const afterVar = showAfter ? preview.afterVariance : beforeVar;
 
   return (
-    <section className="cc-var-impact" aria-label="השפעה על בקרת הקופה">
-      <h4 className="cc-var-impact__title">השפעה על בקרת הקופה</h4>
-
-      <p className="cc-var-impact__channel">
-        ערוץ: <strong>{channel}</strong>
+    <section className="ce-impact" aria-label="השפעה על בקרת הקופה">
+      <h4 className="ce-impact__title">השפעה על בקרת הקופה</h4>
+      <p className="ce-impact__channel">
+        ערוץ מושפע: <strong>{preview.channelLabel}</strong>
       </p>
 
-      <ul className="cc-var-impact__list">
-        <li>
-          <span>התקבל / שולם:</span>
-          <strong dir="ltr">{fmtDailyMoney(currency, preview.currentExpectedAmount)}</strong>
-        </li>
-        <li>
-          <span>הוצאות קיימות:</span>
-          <strong dir="ltr">{fmtDailyMoney(currency, preview.currentExpensesAmount)}</strong>
-        </li>
-        {preview.proposedExpenseAmount > 0 ? (
-          <li>
-            <span>הוצאה חדשה:</span>
-            <strong dir="ltr">{fmtDailyMoney(currency, preview.proposedExpenseAmount)}</strong>
-          </li>
-        ) : null}
-        <li>
-          <span>צפוי נטו{preview.proposedExpenseAmount > 0 ? " לאחר השמירה" : ""}:</span>
-          <strong dir="ltr">
-            {fmtDailyMoney(
-              currency,
-              preview.proposedExpenseAmount > 0 ? preview.afterExpectedNet : preview.currentExpectedNet,
-            )}
-          </strong>
-        </li>
-        <li>
-          <span>ספירה בפועל:</span>
-          <strong dir="ltr">
-            {preview.currentCounted != null ? fmtDailyMoney(currency, preview.currentCounted) : "—"}
-          </strong>
-        </li>
-        <li>
-          <span>חריגה{preview.proposedExpenseAmount > 0 ? " לאחר השמירה" : " נוכחית"}:</span>
-          <strong dir="ltr" className="cc-var-impact__var">
-            {formatVarianceShort(
-              currency,
-              preview.proposedExpenseAmount > 0 ? preview.afterVariance : preview.currentVariance,
-            )}
-          </strong>
-        </li>
-      </ul>
+      <div className="ce-impact__table-wrap">
+        <table className="ce-impact__table">
+          <thead>
+            <tr>
+              <th>נתון</th>
+              <th>לפני</th>
+              {showAfter ? <th>אחרי</th> : null}
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>התקבל</td>
+              <td dir="ltr">{moneyCell(cur, preview.currentExpectedAmount)}</td>
+              {showAfter ? (
+                <td dir="ltr">{moneyCell(cur, preview.currentExpectedAmount)}</td>
+              ) : null}
+            </tr>
+            <tr>
+              <td>הוצאות קופה</td>
+              <td dir="ltr">{moneyCell(cur, beforeExpenses)}</td>
+              {showAfter ? <td dir="ltr">{moneyCell(cur, afterExpenses)}</td> : null}
+            </tr>
+            <tr>
+              <td>צפוי נטו</td>
+              <td dir="ltr">{moneyCell(cur, beforeNet)}</td>
+              {showAfter ? <td dir="ltr">{moneyCell(cur, afterNet)}</td> : null}
+            </tr>
+            <tr>
+              <td>ספירת מנהל</td>
+              <td dir="ltr">{moneyCell(cur, preview.currentCounted)}</td>
+              {showAfter ? <td dir="ltr">{moneyCell(cur, preview.currentCounted)}</td> : null}
+            </tr>
+            <tr className="ce-impact__row--var">
+              <td>הפרש</td>
+              <td dir="ltr">{formatVarianceShort(cur, beforeVar)}</td>
+              {showAfter ? <td dir="ltr">{formatVarianceShort(cur, afterVar)}</td> : null}
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
-      <StatusMsg kind={preview.messageKind} message={preview.message} />
+      {showAfter && preview.currentCounted != null ? (
+        <p className="ce-impact__status-line">
+          סטטוס לאחר שמירה:{" "}
+          <strong>{cashControlStatusLabel(preview.afterStatus)}</strong>
+        </p>
+      ) : null}
+
+      <ImpactBadge kind={preview.messageKind} message={preview.message} />
     </section>
   );
 }

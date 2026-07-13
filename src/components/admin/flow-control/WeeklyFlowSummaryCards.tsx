@@ -28,10 +28,13 @@ export function WeeklyFlowSummaryCards({ flow }: WeeklyFlowSummaryCardsProps) {
           <CashBalanceCard ils={flow.drawerRemainingIls} usd={flow.drawerRemainingUsd} />
           <BankBalanceCard ils={flow.bankBalanceIls} />
           <TurkeyDebtCard
+            openingUsd={flow.turkeyBalance?.usd.openingBalance.toFixed(2)}
+            addedUsd={flow.turkeyBalance?.usd.addedFromCashCount.toFixed(2)}
+            transferredUsd={flow.turkeyBalance?.usd.transferred.toFixed(2)}
+            closingUsd={flow.turkeyBalanceClosingUsd}
+            status={flow.turkeyBalanceStatus}
             expectedUsd={flow.turkeyExpectedUsd}
-            actualUsd={flow.turkeyTransferUsd}
-            debtUsd={flow.turkeyDebtUsd}
-            status={flow.turkey.status}
+            actualUsd={flow.turkeyBalance?.usd.transferred.toFixed(2) ?? flow.turkeyTransferUsd}
           />
         </div>
       )}

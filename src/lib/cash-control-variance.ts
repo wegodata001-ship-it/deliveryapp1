@@ -1,24 +1,34 @@
 /**
- * חישוב חריגות בקרת קופה — מקור אמת יחיד.
+ * חישוב חריגות בקרת קופה — מקור אמת יחיד (DTO + תצוגה).
  *
- * נוסחה:
- *   צפוי נטו = התקבל/שולם − הוצאות קופה (רלוונטיות למזומן ₪/$)
- *   חריגה (variance) = צפוי נטו − נספר בפועל
+ * נוסחה (calculateCashControlVariance ב-cash-control-calculation.ts):
+ *   צפוי נטו = התקבל − הוצאות קופה (באותו ערוץ)
+ *   הפרש = נספר בפועל − צפוי נטו
  *
- * חריגה חיובית = חסר בקופה (נספר פחות מהצפוי).
+ * הפרש שלילי = חסר · הפרש חיובי = עודף
  */
 
-import { CASH_CONTROL_EPS } from "@/lib/cash-control-calculation";
+import {
+  CASH_CONTROL_EPS,
+  calculateCashControlVariance,
+  type CashControlInput,
+  type CashControlResult,
+  type CashControlVarianceStatus,
+} from "@/lib/cash-control-calculation";
 import {
   buildDailyReconciliation,
+  emptyDailyExpenses,
+  emptyDailyIntake,
   type CashDailyDrawerValues,
   type CashDailyExpenseTotals,
   type CashDailyIntakeTotals,
   type CashDailyMethodId,
   type CashDailyReconLine,
   type CashDailyStatusKind,
-  emptyDailyExpenses,
 } from "@/lib/cash-control-daily";
+
+export type { CashControlInput, CashControlResult, CashControlVarianceStatus };
+export { calculateCashControlVariance };
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
@@ -30,14 +40,15 @@ export type CashVarianceLineDto = {
   currency: "ILS" | "USD";
   /** התקבל / שולם (ברוטו) */
   expectedAmount: number;
-  /** הוצאות קופה שנרשמו לאותו יום ומטבע */
+  /** הוצאות קופה שנרשמו לאותו ערוץ */
   expensesAmount: number;
   /** צפוי נטו = expected − expenses */
   expectedNet: number;
   countedAmount: number | null;
-  /** חריגה = expectedNet − counted */
+  /** הפרש = counted − expectedNet */
   variance: number | null;
   status: CashDailyStatusKind;
+  cashControlStatus: CashControlVarianceStatus;
 };
 
 export type CashVarianceDaySummary = {
@@ -52,18 +63,48 @@ export type CashVarianceDaySummary = {
 export type ExpenseVariancePreview = {
   currency: "ILS" | "USD";
   method: CashDailyMethodId;
+  channelLabel: string;
   currentExpectedAmount: number;
   currentExpensesAmount: number;
   currentExpectedNet: number;
   currentCounted: number | null;
   currentVariance: number | null;
+  currentStatus: CashControlVarianceStatus;
   proposedExpenseAmount: number;
   afterExpensesAmount: number;
   afterExpectedNet: number;
   afterVariance: number | null;
-  messageKind: "closes" | "reduces" | "still_open" | "no_count" | "no_cash_line" | "invalid_amount";
+  afterStatus: CashControlVarianceStatus;
+  messageKind:
+    | "closes"
+    | "reduces"
+    | "still_open"
+    | "surplus"
+    | "no_count"
+    | "no_cash_line"
+    | "invalid_amount";
   message: string;
 };
+
+function lineFromRecon(line: CashDailyReconLine): CashVarianceLineDto {
+  const calc = calculateCashControlVariance({
+    receivedAmount: line.grossReceived,
+    existingExpensesAmount: line.expense,
+    countedAmount: line.counted,
+  });
+  return {
+    method: line.method,
+    label: line.label,
+    currency: line.currency,
+    expectedAmount: line.grossReceived,
+    expensesAmount: line.expense,
+    expectedNet: calc.expectedNetAmount,
+    countedAmount: line.counted,
+    variance: calc.varianceAmount,
+    status: line.status,
+    cashControlStatus: calc.status,
+  };
+}
 
 export function computeCashVarianceLine(
   method: CashDailyMethodId,
@@ -73,22 +114,12 @@ export function computeCashVarianceLine(
   counted: number | null | undefined,
 ): CashVarianceLineDto {
   const line = buildDailyReconciliation(
-    { CASH_ILS: 0, CASH_USD: 0, CREDIT: 0, CHECK: 0, BANK_TRANSFER: 0, OTHER: 0, [method]: grossReceived },
+    { ...emptyDailyIntake(), [method]: grossReceived },
     { [method]: counted ?? null },
     expenses,
   ).find((l) => l.method === method)!;
 
-  return {
-    method: line.method,
-    label: line.label,
-    currency: line.currency,
-    expectedAmount: line.grossReceived,
-    expensesAmount: line.expense,
-    expectedNet: line.received,
-    countedAmount: line.counted,
-    variance: line.diff,
-    status: line.status,
-  };
+  return { ...lineFromRecon(line), label: meta.label, currency: meta.currency };
 }
 
 export function computeCashVarianceDay(
@@ -96,17 +127,7 @@ export function computeCashVarianceDay(
   drawer: CashDailyDrawerValues,
   expenses: CashDailyExpenseTotals = emptyDailyExpenses(),
 ): CashVarianceDaySummary {
-  const lines = buildDailyReconciliation(intake, drawer, expenses).map((line) => ({
-    method: line.method,
-    label: line.label,
-    currency: line.currency,
-    expectedAmount: line.grossReceived,
-    expensesAmount: line.expense,
-    expectedNet: line.received,
-    countedAmount: line.counted,
-    variance: line.diff,
-    status: line.status,
-  }));
+  const lines = buildDailyReconciliation(intake, drawer, expenses).map(lineFromRecon);
 
   const countedLines = lines.filter((l) => l.countedAmount != null);
   if (countedLines.length === 0) {
@@ -126,10 +147,10 @@ export function computeCashVarianceDay(
     if (!worst || Math.abs(l.variance) > Math.abs(worst.variance ?? 0)) worst = l;
   }
 
-  const okCount = countedLines.filter((l) => l.status === "ok").length;
+  const okCount = countedLines.filter((l) => l.cashControlStatus === "MATCHED").length;
   const matchPercent = Math.round((okCount / countedLines.length) * 100);
 
-  if (!worst || worst.variance == null || Math.abs(worst.variance) <= CASH_CONTROL_EPS) {
+  if (!worst || worst.variance == null || worst.cashControlStatus === "MATCHED") {
     return {
       lines,
       status: "ok",
@@ -150,7 +171,6 @@ export function computeCashVarianceDay(
   };
 }
 
-/** המרה ל-CashDailyReconLine לתאימות לאחור */
 export function varianceLineToRecon(line: CashVarianceLineDto): CashDailyReconLine {
   return {
     method: line.method,
@@ -179,96 +199,124 @@ export function previewExpenseVarianceImpact(
   proposedExpenseAmount: number,
   dailyMethod?: CashDailyMethodId,
 ): ExpenseVariancePreview {
-  const method: CashDailyMethodId =
-    dailyMethod ?? (currency === "USD" ? "CASH_USD" : "CASH_ILS");
+  const method: CashDailyMethodId = dailyMethod ?? "CASH_ILS";
   const line = lines.find((l) => l.method === method);
 
+  const emptyPreview = (messageKind: ExpenseVariancePreview["messageKind"], message: string): ExpenseVariancePreview => ({
+    currency,
+    method,
+    channelLabel: line?.label ?? method,
+    currentExpectedAmount: line?.expectedAmount ?? 0,
+    currentExpensesAmount: line?.expensesAmount ?? 0,
+    currentExpectedNet: line?.expectedNet ?? 0,
+    currentCounted: line?.countedAmount ?? null,
+    currentVariance: line?.variance ?? null,
+    currentStatus: line?.cashControlStatus ?? "WAITING_FOR_COUNT",
+    proposedExpenseAmount: 0,
+    afterExpensesAmount: line?.expensesAmount ?? 0,
+    afterExpectedNet: line?.expectedNet ?? 0,
+    afterVariance: line?.variance ?? null,
+    afterStatus: line?.cashControlStatus ?? "WAITING_FOR_COUNT",
+    messageKind,
+    message,
+  });
+
   if (!line) {
-    return {
-      currency,
-      method,
-      currentExpectedAmount: 0,
-      currentExpensesAmount: 0,
-      currentExpectedNet: 0,
-      currentCounted: null,
-      currentVariance: null,
-      proposedExpenseAmount: 0,
-      afterExpensesAmount: 0,
-      afterExpectedNet: 0,
-      afterVariance: null,
-      messageKind: "no_cash_line",
-      message: "אין נתוני התאמה לערוץ זה ביום הנבחר",
-    };
+    return emptyPreview("no_cash_line", "אין נתוני התאמה לערוץ זה ביום הנבחר");
   }
 
   const amt = round2(proposedExpenseAmount);
   if (amt <= 0) {
-    return {
-      currency,
-      method,
-      currentExpectedAmount: line.expectedAmount,
-      currentExpensesAmount: line.expensesAmount,
-      currentExpectedNet: line.expectedNet,
-      currentCounted: line.countedAmount,
-      currentVariance: line.variance,
-      proposedExpenseAmount: 0,
-      afterExpensesAmount: line.expensesAmount,
-      afterExpectedNet: line.expectedNet,
-      afterVariance: line.variance,
-      messageKind: "invalid_amount",
-      message: "הזן סכום הוצאה לתצוגת השפעה",
-    };
+    return emptyPreview("invalid_amount", "הזן סכום הוצאה כדי לראות את ההשפעה על בקרת הקופה");
   }
+
+  const before = calculateCashControlVariance({
+    receivedAmount: line.expectedAmount,
+    existingExpensesAmount: line.expensesAmount,
+    countedAmount: line.countedAmount,
+  });
+
+  const after = calculateCashControlVariance({
+    receivedAmount: line.expectedAmount,
+    existingExpensesAmount: line.expensesAmount,
+    newExpenseAmount: amt,
+    countedAmount: line.countedAmount,
+  });
 
   if (line.countedAmount == null) {
     return {
       currency,
       method,
+      channelLabel: line.label,
       currentExpectedAmount: line.expectedAmount,
       currentExpensesAmount: line.expensesAmount,
-      currentExpectedNet: line.expectedNet,
+      currentExpectedNet: before.expectedNetAmount,
       currentCounted: null,
       currentVariance: null,
+      currentStatus: "WAITING_FOR_COUNT",
       proposedExpenseAmount: amt,
-      afterExpensesAmount: round2(line.expensesAmount + amt),
-      afterExpectedNet: round2(line.expectedNet - amt),
+      afterExpensesAmount: after.totalExpensesAmount,
+      afterExpectedNet: after.expectedNetAmount,
       afterVariance: null,
+      afterStatus: "WAITING_FOR_COUNT",
       messageKind: "no_count",
-      message: "ההשפעה תחושב לאחר הזנת ספירת מנהל.",
+      message: "עדיין לא בוצעה ספירת מנהל לערוץ זה. ההוצאה תישמר, וההשפעה תחושב לאחר ביצוע הספירה.",
     };
   }
 
-  const afterExpenses = round2(line.expensesAmount + amt);
-  const afterExpectedNet = round2(line.expectedAmount - afterExpenses);
-  const afterVariance = round2(afterExpectedNet - line.countedAmount);
-  const curVar = line.variance ?? 0;
-
   let messageKind: ExpenseVariancePreview["messageKind"] = "still_open";
-  let message = `לאחר רישום ההוצאה עדיין תישאר חריגה של ${formatVarianceShort(currency, afterVariance)}.`;
+  let message = `לאחר שמירת ההוצאה עדיין יישאר חסר של ${formatVarianceShort(currency, after.varianceAmount)}.`;
 
-  if (Math.abs(afterVariance) <= CASH_CONTROL_EPS) {
+  if (after.status === "MATCHED") {
     messageKind = "closes";
-    message = "ההוצאה צפויה לסגור את החריגה.";
-  } else if (Math.abs(afterVariance) < Math.abs(curVar) - CASH_CONTROL_EPS) {
+    message = "הוצאה זו תסגור את החריגה.";
+  } else if (after.status === "SURPLUS") {
+    messageKind = "surplus";
+    message = `לאחר שמירת ההוצאה יישאר עודף של ${formatVarianceShort(currency, after.varianceAmount)}.`;
+  } else if (
+    before.status === "SHORTAGE" &&
+    after.status === "SHORTAGE" &&
+    after.varianceAmount != null &&
+    before.varianceAmount != null &&
+    Math.abs(after.varianceAmount) < Math.abs(before.varianceAmount) - CASH_CONTROL_EPS
+  ) {
     messageKind = "reduces";
-    message = "ההוצאה תקטין את החריגה אך לא תסגור אותה.";
+    message = `ההוצאה תקטין את החריגה, אך עדיין יישאר חסר של ${formatVarianceShort(currency, after.varianceAmount)}.`;
   }
 
   return {
     currency,
     method,
+    channelLabel: line.label,
     currentExpectedAmount: line.expectedAmount,
     currentExpensesAmount: line.expensesAmount,
-    currentExpectedNet: line.expectedNet,
+    currentExpectedNet: before.expectedNetAmount,
     currentCounted: line.countedAmount,
-    currentVariance: line.variance,
+    currentVariance: before.varianceAmount,
+    currentStatus: before.status,
     proposedExpenseAmount: amt,
-    afterExpensesAmount: afterExpenses,
-    afterExpectedNet,
-    afterVariance,
+    afterExpensesAmount: after.totalExpensesAmount,
+    afterExpectedNet: after.expectedNetAmount,
+    afterVariance: after.varianceAmount,
+    afterStatus: after.status,
     messageKind,
     message,
   };
+}
+
+export function cashControlStatusLabel(status: CashControlVarianceStatus): string {
+  switch (status) {
+    case "MATCHED":
+      return "תקין";
+    case "SHORTAGE":
+      return "חסר";
+    case "SURPLUS":
+      return "עודף";
+    case "WAITING_FOR_COUNT":
+      return "ממתין לספירה";
+    default:
+      return status;
+  }
 }
 
 export function formatVarianceShort(currency: "ILS" | "USD", variance: number | null): string {
@@ -279,7 +327,7 @@ export function formatVarianceShort(currency: "ILS" | "USD", variance: number | 
       ? `₪${abs.toLocaleString("he-IL", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
       : `$${abs.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
   if (Math.abs(variance) <= CASH_CONTROL_EPS) return body;
-  return variance > 0 ? `${body}-` : `+${body}`;
+  return variance < 0 ? `${body}-` : `+${body}`;
 }
 
 export function varianceStatusLabel(status: CashDailyStatusKind): string {
@@ -291,21 +339,23 @@ export function varianceStatusLabel(status: CashDailyStatusKind): string {
     case "critical":
       return "חריג";
     default:
-      return "ממתין";
+      return "ממתין לספירה";
   }
 }
 
 export function varianceProblemSummary(line: CashVarianceLineDto): string | null {
   if (line.countedAmount == null) return null;
-  if (line.variance == null || Math.abs(line.variance) <= CASH_CONTROL_EPS) {
-    return `לא נמצאה חריגה ב${line.label}\nצפוי נטו: ${formatVarianceShort(line.currency, line.expectedNet).replace("-", "").replace("+", "")}\nנספר בפועל: ${formatVarianceShort(line.currency, line.countedAmount).replace("-", "").replace("+", "")}`;
+  if (line.cashControlStatus === "MATCHED") {
+    return `לא נמצאה חריגה ב${line.label}\nצפוי נטו: ${formatMoneyPlain(line.currency, line.expectedNet)}\nנספר בפועל: ${formatMoneyPlain(line.currency, line.countedAmount)}`;
   }
-  const shortfall = line.variance > 0;
+  const shortage = (line.variance ?? 0) < -CASH_CONTROL_EPS;
   return [
     `נמצאה חריגה ב${line.label}`,
     `צפוי נטו: ${formatMoneyPlain(line.currency, line.expectedNet)}`,
     `נספר בפועל: ${formatMoneyPlain(line.currency, line.countedAmount)}`,
-    shortfall ? `חסר: ${formatVarianceShort(line.currency, line.variance)}` : `עודף: ${formatVarianceShort(line.currency, -line.variance)}`,
+    shortage
+      ? `חסר: ${formatVarianceShort(line.currency, line.variance)}`
+      : `עודף: ${formatVarianceShort(line.currency, line.variance)}`,
     line.expensesAmount > 0
       ? "החריגה מחושבת לאחר קיזוז הוצאות קופה שנרשמו."
       : "ייתכן שחסר רישום הוצאת קופה — בדוק אם יצא כסף מהקופה.",
@@ -327,15 +377,26 @@ export function reconLinesToVariance(lines: Array<{
   diff: string | null;
   status: CashDailyStatusKind;
 }>): CashVarianceLineDto[] {
-  return lines.map((r) => ({
-    method: r.method,
-    label: r.label,
-    currency: r.currency,
-    expectedAmount: Number(r.grossReceived) || 0,
-    expensesAmount: Number(r.expense) || 0,
-    expectedNet: Number(r.received) || 0,
-    countedAmount: r.counted != null && r.counted !== "" ? Number(r.counted) : null,
-    variance: r.diff != null && r.diff !== "" ? Number(r.diff) : null,
-    status: r.status,
-  }));
+  return lines.map((r) => {
+    const expectedAmount = Number(r.grossReceived) || 0;
+    const expensesAmount = Number(r.expense) || 0;
+    const countedAmount = r.counted != null && r.counted !== "" ? Number(r.counted) : null;
+    const calc = calculateCashControlVariance({
+      receivedAmount: expectedAmount,
+      existingExpensesAmount: expensesAmount,
+      countedAmount,
+    });
+    return {
+      method: r.method,
+      label: r.label,
+      currency: r.currency,
+      expectedAmount,
+      expensesAmount,
+      expectedNet: calc.expectedNetAmount,
+      countedAmount,
+      variance: calc.varianceAmount,
+      status: r.status,
+      cashControlStatus: calc.status,
+    };
+  });
 }
