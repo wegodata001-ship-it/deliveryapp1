@@ -13,6 +13,7 @@ import type { CashDailyMethodId, CashDailyIntakeTotals } from "@/lib/cash-contro
 import { emptyDailyIntake } from "@/lib/cash-control-daily";
 import type {
   FxProfitLossSummary,
+  FxPurchaseIntakeAllocation,
   FxPurchaseRecord,
   FxProfitLossHistoryRow,
   TurkeyDebtResult,
@@ -381,6 +382,32 @@ export function computeFxProfitLoss(purchases: FxPurchaseRecord[]): FxProfitLoss
   };
 }
 
+function parseIntakeAllocations(raw: unknown): FxPurchaseIntakeAllocation[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const out: FxPurchaseIntakeAllocation[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    const ils = Number(o.ilsAmount);
+    const intakeRate = Number(o.intakeRate);
+    const purchaseRate = Number(o.purchaseRate);
+    if (!Number.isFinite(ils) || ils <= 0) continue;
+    out.push({
+      paymentId: String(o.paymentId ?? ""),
+      orderId: o.orderId != null ? String(o.orderId) : null,
+      orderNumber: o.orderNumber != null ? String(o.orderNumber) : null,
+      dateYmd: String(o.dateYmd ?? ""),
+      dateLabel: String(o.dateLabel ?? ""),
+      sourceLabel: String(o.sourceLabel ?? ""),
+      ilsAmount: ils,
+      intakeRate: Number.isFinite(intakeRate) ? intakeRate : 0,
+      purchaseRate: Number.isFinite(purchaseRate) ? purchaseRate : 0,
+      profitIls: Number(o.profitIls) || 0,
+    });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
 export function parseFxPurchasesJson(raw: unknown): FxPurchaseRecord[] {
   if (!Array.isArray(raw)) return [];
   const out: FxPurchaseRecord[] = [];
@@ -400,6 +427,9 @@ export function parseFxPurchasesJson(raw: unknown): FxPurchaseRecord[] {
       remainderBankIls: Number(o.remainderBankIls) || 0,
       commissionUsd: Number(o.commissionUsd) || 0,
       commissionIls: Number(o.commissionIls) || 0,
+      intakeAllocations: parseIntakeAllocations(o.intakeAllocations),
+      intakeProfitIls: Number(o.intakeProfitIls) || undefined,
+      intakeLossIls: Number(o.intakeLossIls) || undefined,
       createdById: o.createdById != null ? String(o.createdById) : undefined,
       createdByName: o.createdByName != null ? String(o.createdByName) : undefined,
       note: o.note != null ? String(o.note) : undefined,

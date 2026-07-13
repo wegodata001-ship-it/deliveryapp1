@@ -44,6 +44,9 @@ export async function persistFxPurchase(input: {
   remainderCashIls: number;
   remainderBankIls: number;
   note?: string | null;
+  intakeAllocations?: import("@/app/admin/cash-flow/flow-types").FxPurchaseRecord["intakeAllocations"];
+  intakeProfitIls?: number;
+  intakeLossIls?: number;
   updatedById: string;
   createdByName?: string | null;
 }): Promise<{ ok: boolean; error?: string }> {
@@ -57,6 +60,9 @@ export async function persistFxPurchase(input: {
     remainderCashIls: input.remainderCashIls,
     remainderBankIls: input.remainderBankIls,
     note: input.note,
+    intakeAllocations: input.intakeAllocations,
+    intakeProfitIls: input.intakeProfitIls,
+    intakeLossIls: input.intakeLossIls,
     updatedById: input.updatedById,
     createdByName: input.createdByName,
   });

@@ -30,6 +30,9 @@ export type AppendFxPurchaseInput = {
   remainderCashIls: number;
   remainderBankIls: number;
   note?: string | null;
+  intakeAllocations?: FxPurchaseRecord["intakeAllocations"];
+  intakeProfitIls?: number;
+  intakeLossIls?: number;
   updatedById: string;
   createdByName?: string | null;
 };
@@ -67,6 +70,9 @@ export async function appendFlowFxPurchase(
     remainderBankIls: input.remainderBankIls,
     commissionUsd: cashCount.commissionUsd,
     commissionIls: cashCount.commissionIls,
+    intakeAllocations: input.intakeAllocations,
+    intakeProfitIls: input.intakeProfitIls,
+    intakeLossIls: input.intakeLossIls,
     note: input.note?.trim() || undefined,
     createdById: input.updatedById,
     createdByName: input.createdByName ?? undefined,

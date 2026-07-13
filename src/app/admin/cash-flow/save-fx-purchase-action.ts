@@ -2,6 +2,7 @@
 
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { persistFxPurchase } from "@/app/admin/cash-flow/flow-persist-service";
+import type { FxPurchaseRecord } from "@/app/admin/cash-flow/flow-types";
 
 const WRITE_PERMS = ["cashflow.count.edit", "view_payment_control"];
 
@@ -12,6 +13,9 @@ export async function saveFxPurchaseAction(input: {
   remainderCashIls: number;
   remainderBankIls: number;
   note?: string | null;
+  intakeAllocations?: FxPurchaseRecord["intakeAllocations"];
+  intakeProfitIls?: number;
+  intakeLossIls?: number;
 }): Promise<{ ok: boolean; error?: string }> {
   const me = await requireAuth();
   if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS)) {

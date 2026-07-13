@@ -36,6 +36,7 @@ import {
 import { CashCountQuickModal } from "@/components/admin/cash-control/CashCountQuickModal";
 import { CashCountStatusBar } from "@/components/admin/cash-control/CashCountStatusBar";
 import { CashExpenseQuickModal } from "@/components/admin/cash-control/CashExpenseQuickModal";
+import { CashVarianceDetailModal } from "@/components/admin/cash-control/CashVarianceDetailModal";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import {
   WEGO_CASH_CONTROL_REFRESH_EVENT,
@@ -44,6 +45,7 @@ import {
 import { WeeklyReconciliationTable } from "@/components/admin/cash-control/WeeklyReconciliationTable";
 import { MethodDrillPanel } from "@/components/admin/cash-flow/MethodDrillPanel";
 import { num } from "@/components/admin/cash-flow/shared";
+import { reconLinesToVariance, type CashVarianceLineDto } from "@/lib/cash-control-variance";
 
 type PanelMode = "drill" | null;
 
@@ -85,6 +87,10 @@ export function CashControlClient({
   const [expenseCaps, setExpenseCaps] = useState<CashExpenseCapabilities | null>(null);
   const [quickExpenseOpen, setQuickExpenseOpen] = useState(false);
   const [countModalOpen, setCountModalOpen] = useState(false);
+  const [varianceModalOpen, setVarianceModalOpen] = useState(false);
+  const [varianceDayYmd, setVarianceDayYmd] = useState<string | null>(null);
+  const [varianceLines, setVarianceLines] = useState<CashVarianceLineDto[]>([]);
+  const [varianceLoading, setVarianceLoading] = useState(false);
 
   const refresh = useCallback(() => setRefreshTick((t) => t + 1), []);
 
@@ -272,6 +278,13 @@ export function CashControlClient({
       ? `${dayDetail.dayName} · ${dayDetail.dateDisplay}`
       : null;
 
+  const varianceDayLabel = varianceDayYmd
+    ? (() => {
+        const r = dayRows.find((d) => d.dateYmd === varianceDayYmd);
+        return r ? `${r.dayName} · ${r.dateDisplay}` : varianceDayYmd;
+      })()
+    : "";
+
   const countStatus = useMemo(() => {
     if (dayDetail && dayDetail.dateYmd === selectedDay) {
       return {
@@ -298,6 +311,22 @@ export function CashControlClient({
   const handleToolbarExpenses = () => {
     setQuickExpenseOpen(true);
   };
+
+  const openVarianceDetail = useCallback(
+    async (row: CashDailySummaryRowDto) => {
+      if (row.isTotal) return;
+      setVarianceDayYmd(row.dateYmd);
+      setVarianceModalOpen(true);
+      setVarianceLoading(true);
+      try {
+        const detail = await ensureDay(row.dateYmd);
+        setVarianceLines(detail?.reconciliation ? reconLinesToVariance(detail.reconciliation) : []);
+      } finally {
+        setVarianceLoading(false);
+      }
+    },
+    [ensureDay],
+  );
 
   return (
     <div className="cc">
@@ -426,6 +455,7 @@ export function CashControlClient({
             onSelectDay={selectDay}
             onPaidClick={(row, method) => void openMethodDrill(row.dateYmd, method)}
             onReceivedClick={(row) => void openCountModal(row.dateYmd)}
+            onVarianceClick={(row) => void openVarianceDetail(row)}
           />
         )}
 
@@ -490,6 +520,15 @@ export function CashControlClient({
         canCreate={!!expenseCaps?.canCreate}
         currentUserName={currentUserName}
         onSaved={() => reloadSummary()}
+      />
+
+      <CashVarianceDetailModal
+        open={varianceModalOpen}
+        onClose={() => setVarianceModalOpen(false)}
+        dayLabel={varianceDayLabel}
+        dateYmd={varianceDayYmd ?? ""}
+        lines={varianceLines}
+        loading={varianceLoading}
       />
     </div>
   );

@@ -504,8 +504,9 @@ model CashExpense {
   expenseDate DateTime            @default(now())
   currency    String              @default("ILS")
   amount      Decimal             @db.Decimal(19, 4)
-  reason      String              @default("OTHER")
-  notes       String?
+  reason        String              @default("OTHER")
+  paymentMethod String              @default("CASH")
+  notes         String?
   status      PaymentRecordStatus @default(ACTIVE)
   createdById String?
   createdAt   DateTime            @default(now())
@@ -517,6 +518,7 @@ model CashExpense {
   @@index([weekCode])
   @@index([expenseDate])
   @@index([status])
+  @@index([paymentMethod])
 }
 
 /**

@@ -5,11 +5,13 @@ import type { FlowWeekDrillPayload } from "@/app/admin/cash-flow/flow-types";
 import { FLOW_PAYMENT_COLUMNS } from "@/app/admin/cash-flow/flow-types";
 import { fmtDailyMoney, type CashDailyMethodId } from "@/lib/cash-control-daily";
 import { CurrencyExchangeHistory } from "@/components/admin/flow-control/CurrencyExchangeHistory";
-import { ManagerCountSection } from "@/components/admin/flow-control/ManagerCountSection";
+import { ManagerCountCard } from "@/components/admin/manager-count/ManagerCountCard";
 import { PaymentSummaryTable } from "@/components/admin/flow-control/PaymentSummaryTable";
 import { WeeklyFlowSummaryCards } from "@/components/admin/flow-control/WeeklyFlowSummaryCards";
 import { FlowKpiCards } from "@/components/admin/flow-control/FlowKpiCards";
 import { MethodDrillPanel } from "@/components/admin/cash-flow/MethodDrillPanel";
+import { ExchangeProfitModal } from "@/components/admin/flow-control/exchange-profit/ExchangeProfitModal";
+import { ExchangeProfitSummaryCard } from "@/components/admin/flow-control/exchange-profit/ExchangeProfitSummaryCard";
 import { listCashControlDayIntakesAction } from "@/app/admin/cash-control/day-intakes-action";
 import { setPaymentCashAuditReviewAction } from "@/app/admin/cash-control/review-action";
 import type { CashDailyMethodDetailRow } from "@/app/admin/cash-control/daily-types";
@@ -28,15 +30,23 @@ const COL_LABEL: Record<CashDailyMethodId, string> = {
 export type FlowWeekDrillPanelProps = {
   drill: FlowWeekDrillPayload | null;
   loading: boolean;
+  canEditManagerCount?: boolean;
+  onManagerCountSaved?: () => void;
 };
 
-export function FlowWeekDrillPanel({ drill, loading }: FlowWeekDrillPanelProps) {
+export function FlowWeekDrillPanel({
+  drill,
+  loading,
+  canEditManagerCount = false,
+  onManagerCountSaved,
+}: FlowWeekDrillPanelProps) {
   const { openWindow } = useAdminWindows();
   const [methodDrill, setMethodDrill] = useState<CashDailyMethodId | null>(null);
   const [methodRows, setMethodRows] = useState<CashDailyMethodDetailRow[] | null>(null);
   const [methodLoading, setMethodLoading] = useState(false);
   const [reviewBusy, setReviewBusy] = useState<string | null>(null);
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [fxModalOpen, setFxModalOpen] = useState(false);
 
   const openMethodIntakes = useCallback(
     async (method: CashDailyMethodId, dateYmd: string) => {
@@ -105,14 +115,33 @@ export function FlowWeekDrillPanel({ drill, loading }: FlowWeekDrillPanelProps) 
         {drill.weekLabel ? <span className="fc-muted">{drill.weekLabel}</span> : null}
       </header>
 
-      <FlowKpiCards kpis={drill.flow.kpis} />
+      <ManagerCountCard
+        week={drill.week}
+        weekLabel={drill.weekLabel}
+        flow={drill.flow}
+        canEdit={canEditManagerCount}
+        onSaved={() => onManagerCountSaved?.()}
+      />
+
+      <FlowKpiCards kpis={drill.flow.kpis} onFxProfitClick={() => setFxModalOpen(true)} />
+
+      <div className="xp-inline-card">
+        <ExchangeProfitSummaryCard
+          week={drill.week}
+          weekLabel={drill.weekLabel}
+          netIls={(
+            fcNum(drill.flow.kpis.fxProfitIls) - fcNum(drill.flow.kpis.fxLossIls)
+          ).toFixed(2)}
+          profitIls={drill.flow.kpis.fxProfitIls}
+          lossIls={drill.flow.kpis.fxLossIls}
+          onClick={() => setFxModalOpen(true)}
+        />
+      </div>
 
       <section className="fc-week-drill__block">
         <h4>ספירות קופה יומיות</h4>
         <PaymentSummaryTable dayRows={dayRows} totalRow={totalRow} />
       </section>
-
-      <ManagerCountSection week={drill.week} weekLabel={drill.weekLabel} flow={drill.flow} readOnly />
 
       <section className="fc-week-drill__block">
         <h4>קליטות תשלום (שולם)</h4>
@@ -186,6 +215,8 @@ export function FlowWeekDrillPanel({ drill, loading }: FlowWeekDrillPanelProps) 
       ) : null}
 
       <WeeklyFlowSummaryCards flow={drill.flow} />
+
+      <ExchangeProfitModal open={fxModalOpen} week={drill.week} onClose={() => setFxModalOpen(false)} />
     </div>
   );
 }

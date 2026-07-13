@@ -51,7 +51,8 @@ import {
   type IntakeSaveDeviationRow,
 } from "@/lib/cash-control-intake-breakdown";
 import { PaymentLiveSummaryCards } from "@/components/admin/PaymentLiveSummaryCards";
-import { PaymentOpenDebtDetailModal } from "@/components/admin/PaymentOpenDebtDetailModal";
+import { DebtBreakdownModal } from "@/components/admin/debt-breakdown/DebtBreakdownModal";
+import { DebtAllocationPreview } from "@/components/admin/debt-breakdown/DebtAllocationPreview";
 import {
   computePaymentIntakeLiveTotals,
   formatIntakeLiveBalanceDisplay,
@@ -92,7 +93,7 @@ import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import { OrderEditModal } from "@/components/admin/OrderEditModal";
 import { Button } from "@/components/ui/Button";
-import { BarChart3, CreditCard, DollarSign, Home, Scale, Search, TrendingDown } from "lucide-react";
+import { BarChart3, CreditCard, DollarSign, FileText, Home, Scale, Search, TrendingDown } from "lucide-react";
 import { normalizeOrderSourceCountry, type OrderCountryCode } from "@/lib/order-countries";
 import {
   DEFAULT_WORK_COUNTRY,
@@ -569,7 +570,7 @@ export function PaymentModalUpdated({
   const [cancelReasonDraft, setCancelReasonDraft] = useState("");
   const [cancelNotesDraft, setCancelNotesDraft] = useState("");
   const [cancelRequestHint, setCancelRequestHint] = useState<PaymentCancelRequestHint>({ status: "none" });
-  const [openDebtDetailOpen, setOpenDebtDetailOpen] = useState(false);
+  const [debtBreakdownOpen, setDebtBreakdownOpen] = useState(false);
   /** חוב פתוח — מקור יחיד מהשרת (ללא cache מקומי) */
   const [customerOpenDebtSignedUsd, setCustomerOpenDebtSignedUsd] = useState(0);
   const customerOpenDebtFetchGenRef = useRef(0);
@@ -699,8 +700,7 @@ export function PaymentModalUpdated({
     return matchPaymentToOrders(bases, totals.totalUsd, prioritizedSet);
   }, [bases, totals.totalUsd, prioritizedSet]);
 
-  /** לוגיקת Preview Allocation — נשמרת לשימוש עתידי; התצוגה הוסרה מהמסך */
-  const _paymentAllocationPreview = useMemo(
+  const paymentAllocationPreview = useMemo(
     () =>
       buildPaymentAllocationPreview(
         matched,
@@ -711,7 +711,6 @@ export function PaymentModalUpdated({
       ),
     [matched, totals.totalUsd, commissionPercentN, bases, prioritizedSet],
   );
-  void _paymentAllocationPreview;
 
   const weekReadonly = useMemo(() => weekCodeFromYmd(paymentDateYmd), [paymentDateYmd]);
 
@@ -3209,19 +3208,27 @@ export function PaymentModalUpdated({
                       </span>
                     </>
                   ) : null}
-                  <span className="payment-balance-summary__item">
-                    <span className="payment-balance-summary__k">חוב נוכחי:</span>
+                  <span className="payment-balance-summary__item payment-balance-summary__item--with-btn">
+                    <span className="payment-balance-summary__k">חוב לפני התשלום:</span>
                     <AnimatedMoneyValue
                       className="payment-balance-summary__v payment-balance-summary__v--current"
                       dir="ltr"
                       value={`$${fmtUsdDisplay(openDebtAfterPaymentPreview.currentOpenBalance)}`}
                     />
+                    <button
+                      type="button"
+                      className="payment-balance-summary__detail-btn"
+                      onClick={() => setDebtBreakdownOpen(true)}
+                      title="הצג פירוט חוב"
+                    >
+                      <FileText size={14} aria-hidden /> הצג פירוט חוב
+                    </button>
                   </span>
                   <span className="payment-balance-summary__sep" aria-hidden>
                     •
                   </span>
                   <span className="payment-balance-summary__item">
-                    <span className="payment-balance-summary__k">סכום תשלום בהקלדה:</span>
+                    <span className="payment-balance-summary__k">תשלום נוכחי:</span>
                     <AnimatedMoneyValue
                       className="payment-balance-summary__v payment-balance-summary__v--entered"
                       dir="ltr"
@@ -3232,7 +3239,7 @@ export function PaymentModalUpdated({
                     •
                   </span>
                   <span className="payment-balance-summary__item">
-                    <span className="payment-balance-summary__k">יתרה לאחר שמירה:</span>
+                    <span className="payment-balance-summary__k">חוב לאחר התשלום:</span>
                     <AnimatedMoneyValue
                       className={[
                         "payment-balance-summary__v",
@@ -3247,6 +3254,9 @@ export function PaymentModalUpdated({
                     />
                   </span>
                 </div>
+              ) : null}
+              {customer && !customerWorkspaceLoading && totals.totalUsd > 0.01 ? (
+                <DebtAllocationPreview preview={paymentAllocationPreview} />
               ) : null}
               <div className="payment-modal-table-scroll" ref={tableScrollRef}>
                 <table className="payment-modal-table" dir="rtl">
@@ -3452,6 +3462,8 @@ export function PaymentModalUpdated({
                 >
                   <PaymentLiveSummaryCards
                     kpis={liveFormKpis}
+                    openDebtUsd={customerOpenDebtDisplayUsd}
+                    onOpenDebtClick={() => setDebtBreakdownOpen(true)}
                     orderSummary={orderSummaryForCards}
                     lines={payments}
                     rate={rateN}
@@ -3681,10 +3693,12 @@ export function PaymentModalUpdated({
           if (customer?.id) void loadCustomerOrders(customer.id, { silent: true, weekCode: intakeWeekCode });
         }}
       />
-      <PaymentOpenDebtDetailModal
-        open={openDebtDetailOpen}
-        rows={matched}
-        onClose={() => setOpenDebtDetailOpen(false)}
+      <DebtBreakdownModal
+        open={debtBreakdownOpen}
+        customerId={customer?.id ?? null}
+        country={intakeDocumentWorkCountry}
+        weekCode={intakeWeekCode}
+        onClose={() => setDebtBreakdownOpen(false)}
         onOrderClick={(orderId) => openWindow({ type: "orderCapture", props: { mode: "edit", orderId } })}
       />
       {creditResetConfirmOpen ? (

@@ -25,10 +25,11 @@ export async function POST(req: Request): Promise<Response> {
 
     const wb = XLSX.utils.book_new();
     const aoa: (string | number)[][] = [
-      ["תאריך", "סוג הוצאה", "תיאור", "סכום", "מטבע", "שבוע", "עובד שהזין", "מסמכים"],
+      ["תאריך", "סוג הוצאה", "אמצעי תשלום", "תיאור", "סכום", "מטבע", "שבוע", "עובד שהזין", "מסמכים"],
       ...rows.map((r) => [
         r.dateDisplay,
         r.reasonLabel,
+        r.paymentMethodLabel,
         r.notes ?? "—",
         n(r.amount),
         r.currency === "USD" ? "$" : "₪",
@@ -46,6 +47,7 @@ export async function POST(req: Request): Promise<Response> {
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     ws["!cols"] = [
       { wch: 12 },
+      { wch: 14 },
       { wch: 14 },
       { wch: 28 },
       { wch: 12 },

@@ -17,6 +17,8 @@ export type CashDailySummaryRowDto = {
   expensesIls: string;
   expensesUsd: string;
   diff: string | null;
+  /** מטבע החריגה המצרפית (השורה הגרועה ביותר) */
+  diffCurrency?: "ILS" | "USD";
   status: CashDailyStatusKind;
   isTotal?: boolean;
   /** ספירת קופה — מטא-נתונים */
@@ -58,6 +60,8 @@ export type CashDailyExpenseRowDto = {
   reasonLabel: string;
   notes: string | null;
   currency: "ILS" | "USD";
+  paymentMethod: string;
+  paymentMethodLabel: string;
   amount: string;
   createdByName: string | null;
   documentCount: number;

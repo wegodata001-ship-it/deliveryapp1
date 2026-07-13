@@ -43,6 +43,7 @@ export type WeeklyReconciliationTableProps = {
   onSelectDay: (row: CashDailySummaryRowDto) => void;
   onPaidClick: (row: CashDailySummaryRowDto, method: CashDailyMethodId) => void;
   onReceivedClick: (row: CashDailySummaryRowDto, method: CashDailyMethodId) => void;
+  onVarianceClick?: (row: CashDailySummaryRowDto) => void;
 };
 
 /** טבלת שבוע — זוגות שולם (קליטה) / התקבל (ספירה) לכל אמצעי תשלום */
@@ -54,6 +55,7 @@ export function WeeklyReconciliationTable({
   onSelectDay,
   onPaidClick,
   onReceivedClick,
+  onVarianceClick,
 }: WeeklyReconciliationTableProps) {
   return (
     <div className="cc-summary__scroll">
@@ -148,13 +150,42 @@ export function WeeklyReconciliationTable({
                   );
                 })}
                 <td dir="ltr" className={`cc-num cc-diff is-${row.status} cc-col--status`}>
-                  {row.diff != null ? fmtDailyMoney("ILS", num(row.diff)) : "—"}
+                  {row.diff != null && row.status !== "pending" && Math.abs(num(row.diff)) > 0.009 ? (
+                    <button
+                      type="button"
+                      className="cc-variance-link"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onVarianceClick?.(row);
+                      }}
+                      title="פירוט חריגה"
+                    >
+                      {fmtDailyMoney(row.diffCurrency ?? "ILS", num(row.diff))}
+                    </button>
+                  ) : (
+                    "—"
+                  )}
                 </td>
                 <td className="cc-col--status">
-                  <span className={`cc-badge is-${row.status}`}>
-                    <StatusIcon kind={row.status} size={12} />
-                    {statusLabel(row.status)}
-                  </span>
+                  {(row.status === "warn" || row.status === "critical") && onVarianceClick ? (
+                    <button
+                      type="button"
+                      className={`cc-badge cc-badge--clickable is-${row.status}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onVarianceClick(row);
+                      }}
+                      title="פירוט חריגה"
+                    >
+                      <StatusIcon kind={row.status} size={12} />
+                      {statusLabel(row.status)}
+                    </button>
+                  ) : (
+                    <span className={`cc-badge is-${row.status}`}>
+                      <StatusIcon kind={row.status} size={12} />
+                      {statusLabel(row.status)}
+                    </span>
+                  )}
                 </td>
               </tr>
             );

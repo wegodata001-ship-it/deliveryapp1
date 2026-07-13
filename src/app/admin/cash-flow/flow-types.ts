@@ -2,6 +2,20 @@ import type { CashWeekFlowLineId } from "@/lib/cash-control-week-flow";
 import type { CashDailyMethodId } from "@/lib/cash-control-daily";
 import type { CashDailySummaryRowDto } from "@/app/admin/cash-control/daily-types";
 
+/** שורת הקצאת תקבול לרכישת מט"ח */
+export type FxPurchaseIntakeAllocation = {
+  paymentId: string;
+  orderId: string | null;
+  orderNumber: string | null;
+  dateYmd: string;
+  dateLabel: string;
+  sourceLabel: string;
+  ilsAmount: number;
+  intakeRate: number;
+  purchaseRate: number;
+  profitIls: number;
+};
+
 /** רשומת רכישת מט"ח — נשמרת ב-CashWeekFlow.fxPurchases (JSON), append-only */
 export type FxPurchaseRecord = {
   id: string;
@@ -12,6 +26,10 @@ export type FxPurchaseRecord = {
   remainderBankIls: number;
   commissionUsd?: number;
   commissionIls?: number;
+  /** פירוט תקבולים שהרכיבו את רכישת המט"ח */
+  intakeAllocations?: FxPurchaseIntakeAllocation[];
+  intakeProfitIls?: number;
+  intakeLossIls?: number;
   createdById?: string;
   createdByName?: string;
   note?: string;
@@ -147,6 +165,9 @@ export type FlowWeekOverviewRow = {
   drawerRemainingIls: string;
   drawerRemainingUsd: string;
   bankBalanceIls: string | null;
+  /** רווח/הפסד שערים מרכישות מט״ח (קיים) — לתצוגה לחיצה */
+  fxProfitIls: string;
+  fxLossIls: string;
 };
 
 export type FlowWeeksOverviewPayload = {
@@ -159,8 +180,27 @@ export type FlowWeekDrillPayload = {
   weekLabel: string | null;
   flow: FlowWeekPayload;
   dailyCounts: CashDailySummaryRowDto[];
+  /** קליטות יומיות מ-Payment (ללא מע״מ ב-₪) */
+  paymentDailyRows: FlowPaymentDailyRow[];
   expenses: FlowWeekDrillExpenseRow[];
   paymentIntake: Record<CashDailyMethodId, string>;
+  meta: FlowWeekMeta;
+};
+
+export type FlowPaymentDailyRow = {
+  dateYmd: string;
+  dayName: string;
+  dateDisplay: string;
+  weekCode: string;
+  countryLabel: string;
+  intake: Record<CashDailyMethodId, string>;
+  totalReceived: string;
+  isTotal?: boolean;
+};
+
+export type FlowWeekMeta = {
+  updatedByName: string | null;
+  updatedAtDisplay: string | null;
 };
 
 export type FlowWeekDrillExpenseRow = {
@@ -169,6 +209,8 @@ export type FlowWeekDrillExpenseRow = {
   timeHm: string;
   reasonLabel: string;
   currency: "ILS" | "USD";
+  paymentMethod: string;
+  paymentMethodLabel: string;
   amount: string;
   createdByName: string | null;
 };

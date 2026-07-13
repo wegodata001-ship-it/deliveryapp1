@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { FileSpreadsheet, FileText, RefreshCw, TrendingUp } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight, FileSpreadsheet, FileText, RefreshCw, TrendingUp } from "lucide-react";
 import { ACTIVE_WORK_WEEK_CODE } from "@/lib/active-work-week";
-import { parseAhWeekNumber, toAhWeekCode } from "@/lib/weeks/ah-week-nav";
+import { goToNextWeek, goToPrevWeek, parseAhWeekNumber, toAhWeekCode } from "@/lib/weeks/ah-week-nav";
+import { formatAhWeekLabel } from "@/lib/weeks/ah-week";
 import type { CashFlowCapabilities } from "@/app/admin/cash-flow/types";
 import type { FlowWeekDrillPayload, FlowWeekOverviewRow } from "@/app/admin/cash-flow/flow-types";
 import { getFlowWeeksOverviewAction } from "@/app/admin/cash-flow/get-flow-weeks-overview-action";
@@ -12,53 +13,64 @@ import {
   WEGO_CASH_CONTROL_REFRESH_EVENT,
   type CashControlRefreshDetail,
 } from "@/lib/cash-control-refresh-bus";
-import { FlowWeeksOverviewTable } from "@/components/admin/flow-control/FlowWeeksOverviewTable";
-import { FlowWeekDrillPanel } from "@/components/admin/flow-control/FlowWeekDrillPanel";
+import { FlowWeekTablesSection } from "@/components/admin/flow-control/tables/FlowWeekTablesSection";
+import { FlowWeekHistorySection } from "@/components/admin/flow-control/dashboard/FlowWeekHistorySection";
 
-const WEEKS_TO_SHOW = 12;
+const WEEKS_IN_TABLE = 12;
 
-function buildWeekList(): string[] {
+function buildWeekOptions(): string[] {
   const active = parseAhWeekNumber(ACTIVE_WORK_WEEK_CODE) ?? 127;
   const out: string[] = [];
-  for (let n = active; n > active - WEEKS_TO_SHOW && n >= 1; n -= 1) {
+  for (let n = active; n > active - 52 && n >= 1; n -= 1) {
     out.push(toAhWeekCode(n));
   }
   return out;
 }
 
+function buildRecentWeekList(): string[] {
+  const active = parseAhWeekNumber(ACTIVE_WORK_WEEK_CODE) ?? 127;
+  const out: string[] = [];
+  for (let n = active; n > active - WEEKS_IN_TABLE && n >= 1; n -= 1) {
+    out.push(toAhWeekCode(n));
+  }
+  return out;
+}
+
+/** שבועות לטבלת הסיכום — 12 אחרונים + השבוע הנבחר אם מחוץ לטווח */
+function overviewWeekCodes(selectedWeek: string): string[] {
+  const recent = buildRecentWeekList();
+  if (recent.includes(selectedWeek)) return recent;
+  return [selectedWeek, ...recent];
+}
+
 export function FlowControlClient({
   caps,
-  initialWeek: _initialWeek,
+  initialWeek,
 }: {
   caps: CashFlowCapabilities;
   initialWeek: string;
 }) {
-  const weekList = useMemo(buildWeekList, []);
+  const weekOptions = useMemo(buildWeekOptions, []);
+  const [selectedWeek, setSelectedWeek] = useState(
+    () => initialWeek?.trim() || weekOptions[0] || ACTIVE_WORK_WEEK_CODE,
+  );
+  const drillRef = useRef<HTMLDivElement>(null);
+
+  const overviewWeeks = useMemo(() => overviewWeekCodes(selectedWeek), [selectedWeek]);
   const [overview, setOverview] = useState<FlowWeekOverviewRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshTick, setRefreshTick] = useState(0);
   const [exporting, setExporting] = useState<"pdf" | "excel" | null>(null);
 
-  const [expandedWeek, setExpandedWeek] = useState<string | null>(null);
   const [drill, setDrill] = useState<FlowWeekDrillPayload | null>(null);
   const [drillLoading, setDrillLoading] = useState(false);
 
   const refresh = useCallback(() => setRefreshTick((t) => t + 1), []);
 
-  const loadDrill = useCallback(async (week: string) => {
-    setDrillLoading(true);
-    try {
-      const data = await getFlowWeekDrillAction(week);
-      setDrill(data);
-    } finally {
-      setDrillLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    void getFlowWeeksOverviewAction(weekList).then((data) => {
+    void getFlowWeeksOverviewAction(overviewWeeks).then((data) => {
       if (cancelled) return;
       setOverview(data.weeks);
       setLoading(false);
@@ -66,7 +78,20 @@ export function FlowControlClient({
     return () => {
       cancelled = true;
     };
-  }, [weekList, refreshTick]);
+  }, [overviewWeeks, refreshTick]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setDrillLoading(true);
+    void getFlowWeekDrillAction(selectedWeek).then((data) => {
+      if (cancelled) return;
+      setDrill(data);
+      setDrillLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedWeek, refreshTick]);
 
   useEffect(() => {
     const onCashControlSaved = (e: Event) => {
@@ -77,22 +102,23 @@ export function FlowControlClient({
     return () => window.removeEventListener(WEGO_CASH_CONTROL_REFRESH_EVENT, onCashControlSaved);
   }, [refresh]);
 
-  const toggleWeek = useCallback(
-    async (week: string) => {
-      if (expandedWeek === week) {
-        setExpandedWeek(null);
-        setDrill(null);
-        return;
-      }
-      setExpandedWeek(week);
-      setDrill(null);
-      await loadDrill(week);
-    },
-    [expandedWeek, loadDrill],
-  );
+  const selectWeek = useCallback((week: string) => {
+    const wk = week.trim();
+    if (!wk) return;
+    setSelectedWeek((prev) => {
+      if (prev === wk) return prev;
+      window.requestAnimationFrame(() => {
+        drillRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      return wk;
+    });
+  }, []);
+
+  const selectedWeekLabel = useMemo(() => formatAhWeekLabel(selectedWeek), [selectedWeek]);
+  const canEditManagerCount = caps.canCountEdit || caps.canCountCreate || caps.canManageFlow;
 
   async function exportFile(format: "pdf" | "excel") {
-    const wk = expandedWeek ?? weekList[0];
+    const wk = selectedWeek;
     if (!wk) return;
     setExporting(format);
     try {
@@ -131,10 +157,47 @@ export function FlowControlClient({
           <TrendingUp size={22} />
           <div>
             <h1>בקרת תזרים</h1>
-            <span>סיכום שבועי — מבקרת קופה</span>
+            <span>
+              {selectedWeekLabel ?? selectedWeek} · בקרת תזרים שבועית
+            </span>
           </div>
         </div>
         <div className="fc-toolbar__actions">
+          <div className="fc-week-nav">
+            <button
+              type="button"
+              className="fc-btn fc-btn--icon"
+              aria-label="שבוע קודם"
+              onClick={() => {
+                const prev = goToPrevWeek(selectedWeek);
+                if (prev) selectWeek(prev);
+              }}
+            >
+              <ChevronRight size={18} />
+            </button>
+            <select
+              className="fc-week-select"
+              value={selectedWeek}
+              onChange={(e) => selectWeek(e.target.value)}
+            >
+              {weekOptions.map((w) => (
+                <option key={w} value={w}>
+                  {w}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="fc-btn fc-btn--icon"
+              aria-label="שבוע הבא"
+              onClick={() => {
+                const next = goToNextWeek(selectedWeek);
+                if (next) selectWeek(next);
+              }}
+            >
+              <ChevronLeft size={18} />
+            </button>
+          </div>
           {caps.canExport ? (
             <>
               <button
@@ -160,7 +223,6 @@ export function FlowControlClient({
             className="fc-btn fc-btn--ghost"
             onClick={() => {
               refresh();
-              if (expandedWeek) void loadDrill(expandedWeek);
             }}
             aria-label="רענון"
           >
@@ -169,26 +231,21 @@ export function FlowControlClient({
         </div>
       </header>
 
-      <section className="fc-section fc-section--blue">
-        <header className="fc-section__head">
-          <div>
-            <h2>סיכום שבועי</h2>
-            <p className="fc-section__sub">כל שורה = שבוע אחד · לחץ לפירוט</p>
-          </div>
-        </header>
-        <FlowWeeksOverviewTable
+      <div ref={drillRef} className="ft-page-body">
+        <FlowWeekTablesSection
+          drill={drill}
+          loading={drillLoading}
+          canEditManagerCount={canEditManagerCount}
+          onManagerCountSaved={refresh}
+        />
+
+        <FlowWeekHistorySection
           rows={overview}
           loading={loading}
-          expandedWeek={expandedWeek}
-          onToggleWeek={(w) => void toggleWeek(w)}
+          selectedWeek={selectedWeek}
+          onSelectWeek={selectWeek}
         />
-      </section>
-
-      {expandedWeek ? (
-        <FlowWeekDrillPanel drill={drill} loading={drillLoading} />
-      ) : (
-        <p className="fc-hint">בחר שבוע מהטבלה לצפייה בפירוט מלא</p>
-      )}
+      </div>
     </div>
   );
 }

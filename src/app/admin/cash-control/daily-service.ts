@@ -23,6 +23,13 @@ import {
   type CashDailyMethodId,
 } from "@/lib/cash-control-daily";
 import { formatAhWeekLabel, formatYmdJerusalem, getAhWeekRange, listWeekDayYmds } from "@/lib/weeks/ah-week";
+import {
+  addExpenseToMethodTotals,
+  aggregateExpensesByMethod,
+  expensesCurrencyTotals,
+  normalizePaymentMethod,
+  paymentMethodLabel,
+} from "@/lib/cash-expense-payment-method";
 import { CASH_EXPENSE_REASONS } from "@/app/admin/cash-control/constants";
 import type {
   CashDailyDayDetailPayload,
@@ -158,7 +165,12 @@ function sumDrawer(a: CashDailyDrawerValues, b: CashDailyDrawerValues): CashDail
 }
 
 function aggregateWeekExpenses(
-  rows: Array<{ expenseDate: Date; currency: string; amount: Prisma.Decimal | null }>,
+  rows: Array<{
+    expenseDate: Date;
+    currency: string;
+    amount: Prisma.Decimal | null;
+    paymentMethod?: string | null;
+  }>,
 ): Map<string, CashDailyExpenseTotals> {
   const map = new Map<string, CashDailyExpenseTotals>();
   for (const r of rows) {
@@ -169,8 +181,8 @@ function aggregateWeekExpenses(
       map.set(day, t);
     }
     const amt = numDec(r.amount);
-    if (r.currency === "USD") t.usd = Math.round((t.usd + amt) * 100) / 100;
-    else t.ils = Math.round((t.ils + amt) * 100) / 100;
+    t = addExpenseToMethodTotals(t, r.paymentMethod, r.currency === "USD" ? "USD" : "ILS", amt);
+    map.set(day, t);
   }
   return map;
 }
@@ -231,7 +243,7 @@ export async function loadCashControlWeekSummary(week: string): Promise<CashDail
     }),
     prisma.cashExpense.findMany({
       where: { weekCode: wk, status: "ACTIVE" },
-      select: { expenseDate: true, currency: true, amount: true },
+      select: { expenseDate: true, currency: true, amount: true, paymentMethod: true },
     }),
   ]);
 
@@ -253,9 +265,10 @@ export async function loadCashControlWeekSummary(week: string): Promise<CashDail
     const countMeta = countMetaFromDrawerRow(drawerRowByDay.get(dateYmd));
     weekDrawer = sumDrawer(weekDrawer, drawer);
     const expenses = expenseByDay.get(dateYmd) ?? emptyDailyExpenses();
-    weekExpIls = Math.round((weekExpIls + expenses.ils) * 100) / 100;
-    weekExpUsd = Math.round((weekExpUsd + expenses.usd) * 100) / 100;
-    const { kind, worstDiff } = computeDailyStatus(intake, drawer, expenses);
+    const expCur = expensesCurrencyTotals(expenses);
+    weekExpIls = Math.round((weekExpIls + expCur.ils) * 100) / 100;
+    weekExpUsd = Math.round((weekExpUsd + expCur.usd) * 100) / 100;
+    const { kind, worstDiff, worstCurrency } = computeDailyStatus(intake, drawer, expenses);
     const totalReceived = intake.CASH_ILS + intake.CREDIT + intake.CHECK + intake.BANK_TRANSFER + intake.OTHER;
 
     dayRows.push({
@@ -267,9 +280,10 @@ export async function loadCashControlWeekSummary(week: string): Promise<CashDail
       intake: intakeToDto(intake),
       drawer: drawerToDto(drawer),
       totalReceived: money(totalReceived),
-      expensesIls: money(expenses.ils),
-      expensesUsd: money(expenses.usd),
+      expensesIls: money(expCur.ils),
+      expensesUsd: money(expCur.usd),
       diff: worstDiff != null ? money(worstDiff) : null,
+      diffCurrency: worstCurrency,
       status: kind,
       ...countMeta,
     });
@@ -346,17 +360,14 @@ export async function loadCashControlDayDetail(input: {
   const countMeta = countMetaFromDrawerRow(drawerRow);
 
   const dayExpenses = expenseRows.filter((e) => formatYmdJerusalem(e.expenseDate) === dateYmd);
-  let expIls = 0;
-  let expUsd = 0;
-  for (const e of dayExpenses) {
-    const amt = numDec(e.amount);
-    if (e.currency === "USD") expUsd += amt;
-    else expIls += amt;
-  }
-  const expenseTotals: CashDailyExpenseTotals = {
-    ils: Math.round(expIls * 100) / 100,
-    usd: Math.round(expUsd * 100) / 100,
-  };
+  const expenseTotals = aggregateExpensesByMethod(
+    dayExpenses.map((e) => ({
+      currency: e.currency,
+      amount: e.amount,
+      paymentMethod: e.paymentMethod,
+    })),
+  );
+  const expCur = expensesCurrencyTotals(expenseTotals);
 
   const expenseIds = dayExpenses.map((e) => e.id);
   const docCount = new Map<string, number>();
@@ -380,10 +391,11 @@ export async function loadCashControlDayDetail(input: {
     intake: intakeToDto(intake),
     drawer: drawerToDto(drawer),
     ...countMeta,
-    expensesIls: money(expenseTotals.ils),
-    expensesUsd: money(expenseTotals.usd),
+    expensesIls: money(expCur.ils),
+    expensesUsd: money(expCur.usd),
     expenses: dayExpenses.map((e) => {
       const when = new Date(e.expenseDate);
+      const pm = normalizePaymentMethod(e.paymentMethod);
       return {
         id: e.id,
         timeHm: when.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", hour12: false }),
@@ -391,6 +403,8 @@ export async function loadCashControlDayDetail(input: {
         reasonLabel: EXPENSE_REASON_LABEL[e.reason] ?? "אחר",
         notes: e.notes,
         currency: e.currency === "USD" ? "USD" : "ILS",
+        paymentMethod: pm,
+        paymentMethodLabel: paymentMethodLabel(pm),
         amount: money(e.amount ?? new Prisma.Decimal(0)),
         createdByName: e.createdBy?.fullName ?? null,
         documentCount: docCount.get(e.id) ?? 0,

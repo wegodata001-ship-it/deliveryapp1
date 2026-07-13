@@ -6,6 +6,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import type { CashWeekFlowLineId } from "@/lib/cash-control-week-flow";
+import { aggregateExpensesByMethod, cashDrawerExpenseTotals } from "@/lib/cash-expense-payment-method";
 
 export type FlowWeekCashCount = {
   countedCashUsd: number | null;
@@ -38,17 +39,12 @@ export async function loadFlowWeekCashCount(weekCode: string): Promise<FlowWeekC
     }),
     prisma.cashExpense.findMany({
       where: { weekCode: wk, status: "ACTIVE" },
-      select: { currency: true, amount: true },
+      select: { currency: true, amount: true, paymentMethod: true },
     }),
   ]);
 
-  let expensesIls = 0;
-  let expensesUsd = 0;
-  for (const e of expenses) {
-    const amt = numDec(e.amount);
-    if (e.currency === "USD") expensesUsd += amt;
-    else expensesIls += amt;
-  }
+  const byMethod = aggregateExpensesByMethod(expenses);
+  const cashExp = cashDrawerExpenseTotals(byMethod);
 
   return {
     countedCashUsd: decToNum(flowRow?.countedCashUsd),
@@ -58,8 +54,8 @@ export async function loadFlowWeekCashCount(weekCode: string): Promise<FlowWeekC
     countedTransferIls: decToNum(flowRow?.countedTransferIls),
     commissionUsd: numDec(flowRow?.commissionUsd),
     commissionIls: numDec(flowRow?.commissionIls),
-    expensesIls: Math.round(expensesIls * 100) / 100,
-    expensesUsd: Math.round(expensesUsd * 100) / 100,
+    expensesIls: cashExp.ils,
+    expensesUsd: cashExp.usd,
   };
 }
 

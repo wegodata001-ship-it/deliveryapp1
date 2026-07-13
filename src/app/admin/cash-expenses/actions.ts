@@ -15,6 +15,7 @@ import type {
   CashExpenseRowDto,
 } from "@/app/admin/cash-expenses/types";
 import type { CashCurrency, CashExpenseReason } from "@/app/admin/cash-control/constants";
+import type { CashExpensePaymentMethod } from "@/lib/cash-expense-payment-method";
 
 /**
  * Server Actions למודול הוצאות קופה.
@@ -62,8 +63,10 @@ export async function createCashExpenseAction(input: {
   amount: number | string;
   currency: CashCurrency;
   reason: CashExpenseReason;
+  paymentMethod: CashExpensePaymentMethod;
   notes?: string;
   dateYmd?: string;
+  timeHm?: string;
   week?: string;
   draftKey?: string;
 }): Promise<{ ok: boolean; error?: string; id?: string }> {
@@ -79,8 +82,10 @@ export async function updateCashExpenseAction(input: {
   amount: number | string;
   currency: CashCurrency;
   reason: CashExpenseReason;
+  paymentMethod: CashExpensePaymentMethod;
   notes?: string;
   dateYmd?: string;
+  timeHm?: string;
 }): Promise<{ ok: boolean; error?: string }> {
   const me = await requireAuth();
   if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS)) return { ok: false, error: "אין הרשאה" };

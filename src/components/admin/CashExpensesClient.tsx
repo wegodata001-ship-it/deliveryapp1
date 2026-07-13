@@ -28,8 +28,11 @@ import {
   type CashCurrency,
   type CashExpenseReason,
 } from "@/app/admin/cash-control/constants";
+import { CASH_EXPENSE_PAYMENT_METHODS } from "@/lib/cash-expense-payment-method";
+import type { CashExpensePaymentMethod } from "@/lib/cash-expense-payment-method";
 import { fmtDailyMoney } from "@/lib/cash-control-daily";
-import { CashExpenseFormModal, type CashExpenseEditable } from "@/components/admin/CashExpenseFormModal";
+import { CashExpenseFormModal, type CashExpenseEditable, timeFromIso } from "@/components/admin/CashExpenseFormModal";
+import { PaymentMethodIcon } from "@/components/admin/cash-control/CashExpensePaymentMethodSelect";
 
 function buildWeekOptions(): string[] {
   const active = parseAhWeekNumber(ACTIVE_WORK_WEEK_CODE) ?? 127;
@@ -52,7 +55,9 @@ export function CashExpensesClient({
 }) {
   const weekOptions = useMemo(buildWeekOptions, []);
   const [week, setWeek] = useState<string>(initialWeek || weekOptions[0]);
+  const [dateYmd, setDateYmd] = useState("");
   const [reason, setReason] = useState<CashExpenseReason | "ALL">("ALL");
+  const [paymentMethod, setPaymentMethod] = useState<CashExpensePaymentMethod | "ALL">("ALL");
   const [currency, setCurrency] = useState<CashCurrency | "ALL">("ALL");
   const [search, setSearch] = useState("");
   const [rows, setRows] = useState<CashExpenseRowDto[]>([]);
@@ -67,11 +72,13 @@ export function CashExpensesClient({
   const filter = useMemo<CashExpenseListFilter>(
     () => ({
       week: week === "ALL" ? undefined : week,
+      dateYmd: dateYmd.trim() || undefined,
       reason,
+      paymentMethod,
       currency,
       search: search.trim() || undefined,
     }),
-    [week, reason, currency, search],
+    [week, dateYmd, reason, paymentMethod, currency, search],
   );
 
   useEffect(() => {
@@ -162,6 +169,7 @@ export function CashExpensesClient({
         (r) => `<tr>
         <td>${r.dateDisplay}</td>
         <td>${r.reasonLabel}</td>
+        <td>${r.paymentMethodLabel}</td>
         <td>${r.notes ?? "—"}</td>
         <td dir="ltr">${fmtDailyMoney(r.currency, num(r.amount))}</td>
         <td>${r.currency === "USD" ? "$ דולר" : "₪ שקל"}</td>
@@ -173,7 +181,7 @@ export function CashExpensesClient({
       <h1>הוצאות קופה</h1>
       <p class="sub">${week === "ALL" ? "כל השבועות" : `שבוע ${week}`} · ${totals.count} רשומות · סה"כ ₪${totals.ils.toLocaleString("he-IL")} · $${totals.usd.toLocaleString("en-US")}</p>
       <table>
-        <thead><tr><th>תאריך</th><th>סוג הוצאה</th><th>תיאור</th><th>סכום</th><th>מטבע</th><th>עובד שהזין</th></tr></thead>
+        <thead><tr><th>תאריך</th><th>סוג הוצאה</th><th>אמצעי תשלום</th><th>תיאור</th><th>סכום</th><th>מטבע</th><th>עובד שהזין</th></tr></thead>
         <tbody>${bodyRows}</tbody>
       </table>
     </body></html>`);
@@ -233,12 +241,31 @@ export function CashExpensesClient({
           </select>
         </label>
         <label className="cxp-filter">
+          <span>תאריך</span>
+          <input type="date" className="cc-input" value={dateYmd} onChange={(e) => setDateYmd(e.target.value)} />
+        </label>
+        <label className="cxp-filter">
           <span>סוג הוצאה</span>
           <select className="cc-input" value={reason} onChange={(e) => setReason(e.target.value as CashExpenseReason | "ALL")}>
             <option value="ALL">הכל</option>
             {CASH_EXPENSE_REASONS.map((r) => (
               <option key={r.value} value={r.value}>
                 {r.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="cxp-filter">
+          <span>אמצעי תשלום</span>
+          <select
+            className="cc-input"
+            value={paymentMethod}
+            onChange={(e) => setPaymentMethod(e.target.value as CashExpensePaymentMethod | "ALL")}
+          >
+            <option value="ALL">הכל</option>
+            {CASH_EXPENSE_PAYMENT_METHODS.map((m) => (
+              <option key={m.value} value={m.value}>
+                {m.label}
               </option>
             ))}
           </select>
@@ -303,6 +330,7 @@ export function CashExpensesClient({
                 <tr>
                   <th>תאריך</th>
                   <th>סוג הוצאה</th>
+                  <th>אמצעי תשלום</th>
                   <th>תיאור</th>
                   <th className="cc-num">סכום</th>
                   <th>מטבע</th>
@@ -318,6 +346,12 @@ export function CashExpensesClient({
                   <tr key={r.id}>
                     <td dir="ltr">{r.dateDisplay}</td>
                     <td>{r.reasonLabel}</td>
+                    <td>
+                      <span className="cxp-pm-cell">
+                        <PaymentMethodIcon method={r.paymentMethod} size={13} />
+                        {r.paymentMethodLabel}
+                      </span>
+                    </td>
                     <td>{r.notes ?? "—"}</td>
                     <td dir="ltr" className="cc-num">{fmtDailyMoney(r.currency, num(r.amount))}</td>
                     <td>{r.currency === "USD" ? "$ דולר" : "₪ שקל"}</td>
@@ -345,10 +379,12 @@ export function CashExpensesClient({
                             setEditing({
                               id: r.id,
                               dateYmd: r.dateYmd,
+                              timeHm: timeFromIso(r.expenseDateIso),
                               reason: r.reason,
                               notes: r.notes,
                               currency: r.currency,
                               amount: r.amount,
+                              paymentMethod: r.paymentMethod,
                             });
                             setModalOpen(true);
                           }}
@@ -373,7 +409,7 @@ export function CashExpensesClient({
               </tbody>
               <tfoot>
                 <tr className="cc-row--total">
-                  <td colSpan={3}><strong>סה"כ</strong></td>
+                  <td colSpan={4}><strong>סה"כ</strong></td>
                   <td dir="ltr" className="cc-num">
                     <strong>{fmtDailyMoney("ILS", totals.ils)}</strong>
                     {totals.usd > 0 ? (
@@ -383,7 +419,7 @@ export function CashExpensesClient({
                       </>
                     ) : null}
                   </td>
-                  <td colSpan={6} />
+                  <td colSpan={7} />
                 </tr>
               </tfoot>
             </table>

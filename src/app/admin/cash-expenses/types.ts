@@ -1,4 +1,5 @@
 import type { CashCurrency, CashExpenseReason } from "@/app/admin/cash-control/constants";
+import type { CashExpensePaymentMethod } from "@/lib/cash-expense-payment-method";
 
 /** טיפוסים למודול הוצאות קופה — קובץ נפרד (ללא "use server"). */
 
@@ -17,6 +18,8 @@ export type CashExpenseRowDto = {
   weekCode: string | null;
   reason: CashExpenseReason;
   reasonLabel: string;
+  paymentMethod: CashExpensePaymentMethod;
+  paymentMethodLabel: string;
   notes: string | null;
   currency: CashCurrency;
   amount: string;
@@ -31,6 +34,7 @@ export type CashExpenseListFilter = {
   /** יום ספציפי (YYYY-MM-DD, ירושלים) — לשימוש מסך בקרת הקופה */
   dateYmd?: string;
   reason?: CashExpenseReason | "ALL";
+  paymentMethod?: CashExpensePaymentMethod | "ALL";
   currency?: CashCurrency | "ALL";
   /** חיפוש חופשי בתיאור / עובד */
   search?: string;

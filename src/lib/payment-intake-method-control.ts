@@ -6,7 +6,11 @@ import { buildIntakeBreakdownPlan } from "@/lib/cash-control-intake-breakdown";
 import { CASH_CONTROL_EPS } from "@/lib/cash-control-calculation";
 import type { LivePaymentFormKpis } from "@/lib/payment-intake-live-kpi";
 import type { PaymentIntakeOrderRow } from "@/lib/payment-intake";
-import { PAYMENT_BUCKET_LABELS, type PaymentBucketKey } from "@/lib/payment-breakdown-shared";
+import {
+  PAYMENT_BUCKET_LABELS,
+  paymentMethodBucketKey,
+  type PaymentBucketKey,
+} from "@/lib/payment-breakdown-shared";
 
 export type MethodControlRowStatus = "paid" | "remaining" | "excess" | "surplus" | "not-required";
 
@@ -19,12 +23,53 @@ export type LivePaymentMethodControlRow = {
   status: MethodControlRowStatus;
   statusLabel: string;
   excessUsd: number;
+  /** הזמנות / יעד שהסכום המתוכנן מיועד אליהן */
+  targetLabel: string;
 };
 
 const DISPLAY_BUCKETS: PaymentBucketKey[] = ["CASH", "BANK_TRANSFER", "CREDIT", "CHECK"];
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+function buildBucketTargets(
+  orders: PaymentIntakeOrderRow[],
+  includedOrderIds: string[] | null,
+): Map<PaymentBucketKey, string> {
+  const idSet = includedOrderIds ? new Set(includedOrderIds) : null;
+  const byBucket = new Map<PaymentBucketKey, Set<string>>();
+  for (const o of orders) {
+    if (idSet && !idSet.has(o.id)) continue;
+    if (Number(o.dbRemainingUsd) <= CASH_CONTROL_EPS) continue;
+    if (o.breakdown.length === 0) continue;
+    for (const b of o.breakdown) {
+      if (b.plannedUsd <= CASH_CONTROL_EPS) continue;
+      const bucket = paymentMethodBucketKey(b.method);
+      const nums = byBucket.get(bucket) ?? new Set<string>();
+      nums.add(o.orderNumber?.trim() || o.id.slice(0, 8));
+      byBucket.set(bucket, nums);
+    }
+  }
+  const out = new Map<PaymentBucketKey, string>();
+  for (const [bucket, nums] of byBucket) {
+    const list = [...nums];
+    out.set(bucket, list.length <= 2 ? list.join(", ") : `${list.slice(0, 2).join(", ")} +${list.length - 2}`);
+  }
+  return out;
+}
+
+function targetLabelForRow(
+  bucket: PaymentBucketKey,
+  plannedUsd: number,
+  enteredUsd: number,
+  targets: Map<PaymentBucketKey, string>,
+): string {
+  const planned = targets.get(bucket);
+  if (planned) return planned;
+  if (plannedUsd > CASH_CONTROL_EPS) return "חוב פתוח";
+  if (enteredUsd > CASH_CONTROL_EPS) return "טרם הוקצה";
+  return "—";
 }
 
 function enteredForBucket(kpis: LivePaymentFormKpis, bucket: PaymentBucketKey): number {
@@ -103,6 +148,8 @@ export function buildLivePaymentMethodControlRows(
     buckets.push("OTHER");
   }
 
+  const targets = buildBucketTargets(orders, includedOrderIds);
+
   return buckets.map((bucket) => {
     const plannedUsd = round2(planMap.get(bucket) ?? 0);
     const enteredUsd = round2(enteredForBucket(kpis, bucket));
@@ -120,6 +167,7 @@ export function buildLivePaymentMethodControlRows(
       status,
       statusLabel,
       excessUsd,
+      targetLabel: targetLabelForRow(bucket, plannedUsd, enteredUsd, targets),
     };
   });
 }

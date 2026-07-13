@@ -45,12 +45,13 @@ export function PaymentMethodControlModal({
                   <th>תוכנן</th>
                   <th>נקלט</th>
                   <th>נותר</th>
+                  <th>מיועד ל</th>
                 </tr>
               </thead>
               <tbody>
                 {visibleRows.length === 0 ? (
                   <tr>
-                    <td colSpan={4} className="adm-table-empty">
+                    <td colSpan={5} className="adm-table-empty">
                       אין אמצעי תשלום מתוכננים להזמנות שנבחרו.
                     </td>
                   </tr>
@@ -70,6 +71,7 @@ export function PaymentMethodControlModal({
                       >
                         {fmtMethodControlCell(r, "remaining")}
                       </td>
+                      <td className="payment-method-control-modal__target">{r.targetLabel}</td>
                     </tr>
                   ))
                 )}

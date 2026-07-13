@@ -73,6 +73,8 @@ async function loadOneWeekOverview(weekCode: string): Promise<FlowWeekOverviewRo
     drawerRemainingIls: flow.drawerRemainingIls,
     drawerRemainingUsd: flow.drawerRemainingUsd,
     bankBalanceIls: flow.bankBalanceIls,
+    fxProfitIls: flow.kpis.fxProfitIls,
+    fxLossIls: flow.kpis.fxLossIls,
   };
 }
 

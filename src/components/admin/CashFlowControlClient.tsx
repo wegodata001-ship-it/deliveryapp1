@@ -33,6 +33,7 @@ import {
   type CashControlRefreshDetail,
 } from "@/lib/cash-control-refresh-bus";
 import { CashExpenseFormModal, type CashExpenseEditable } from "@/components/admin/CashExpenseFormModal";
+import { reconLinesToVariance } from "@/lib/cash-control-variance";
 import { num } from "@/components/admin/cash-flow/shared";
 import { WeeklySummaryCard } from "@/components/admin/cash-flow/WeeklySummaryCard";
 import { PaymentIntakeSection } from "@/components/admin/cash-flow/PaymentIntakeSection";
@@ -475,10 +476,12 @@ export function CashFlowControlClient({
                   setEditingExpense({
                     id: row.id,
                     dateYmd: dayDetail.dateYmd,
+                    timeHm: row.timeHm,
                     reason: row.reason as CashExpenseEditable["reason"],
                     notes: row.notes,
                     currency: row.currency,
                     amount: row.amount,
+                    paymentMethod: row.paymentMethod as CashExpenseEditable["paymentMethod"],
                   });
                   setExpenseModalOpen(true);
                 }}
@@ -537,6 +540,7 @@ export function CashFlowControlClient({
         expense={editingExpense}
         week={week}
         defaultDateYmd={selectedDay ?? undefined}
+        varianceLines={dayDetail ? reconLinesToVariance(dayDetail.reconciliation) : null}
       />
     </div>
   );

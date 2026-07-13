@@ -42,15 +42,17 @@ function cell(value: string | null | undefined, currency: "ILS" | "USD" = "ILS")
 export type FlowWeeksOverviewTableProps = {
   rows: FlowWeekOverviewRow[];
   loading: boolean;
-  expandedWeek: string | null;
-  onToggleWeek: (week: string) => void;
+  selectedWeek: string | null;
+  onSelectWeek: (week: string) => void;
+  onFxProfitClick?: (week: string) => void;
 };
 
 export function FlowWeeksOverviewTable({
   rows,
   loading,
-  expandedWeek,
-  onToggleWeek,
+  selectedWeek,
+  onSelectWeek,
+  onFxProfitClick,
 }: FlowWeeksOverviewTableProps) {
   if (loading) return <p className="fc-muted">טוען סיכום שבועות…</p>;
   if (rows.length === 0) return <p className="fc-muted">אין נתונים</p>;
@@ -72,6 +74,9 @@ export function FlowWeeksOverviewTable({
             </th>
             <th colSpan={4} className="fc-col--fx">
               מט&quot;ח
+            </th>
+            <th rowSpan={2} className="fc-col--fx-pl">
+              רווח מט״ח
             </th>
             <th rowSpan={2} className="fc-col--turkey">
               לטורקיה
@@ -109,21 +114,21 @@ export function FlowWeeksOverviewTable({
         </thead>
         <tbody>
           {rows.map((row) => {
-            const open = expandedWeek === row.week;
+            const selected = selectedWeek === row.week;
             return (
               <tr
                 key={row.week}
-                className={`fc-week-row${open ? " is-expanded" : ""}${row.hasData ? "" : " is-empty"}`}
-                onClick={() => onToggleWeek(row.week)}
+                className={`fc-week-row${selected ? " is-expanded" : ""}${row.hasData ? "" : " is-empty"}`}
+                onClick={() => onSelectWeek(row.week)}
                 role="button"
                 tabIndex={0}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") onToggleWeek(row.week);
+                  if (e.key === "Enter" || e.key === " ") onSelectWeek(row.week);
                 }}
               >
                 <td className="fc-week-cell">
                   <span className="fc-week-cell__inner">
-                    {open ? <ChevronDown size={14} /> : <ChevronLeft size={14} />}
+                    {selected ? <ChevronDown size={14} /> : <ChevronLeft size={14} />}
                     <strong dir="ltr">{row.week}</strong>
                     {row.weekLabel ? <span className="fc-muted">{row.weekLabel}</span> : null}
                   </span>
@@ -156,6 +161,30 @@ export function FlowWeeksOverviewTable({
                 <td dir="ltr" className="fc-num fc-col--fx">
                   {cell(row.fxRemainderBankIls)}
                 </td>
+                <td
+                  dir="ltr"
+                  className="fc-num fc-col--fx-pl"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onFxProfitClick?.(row.week);
+                  }}
+                >
+                  <button
+                    type="button"
+                    className="fc-fx-pl-btn"
+                    title="פירוט רווח מט״ח"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onFxProfitClick?.(row.week);
+                    }}
+                  >
+                    {(() => {
+                      const net = fcNum(row.fxProfitIls) - fcNum(row.fxLossIls);
+                      if (Math.abs(net) < 0.005) return "—";
+                      return fmtDailyMoney("ILS", net);
+                    })()}
+                  </button>
+                </td>
                 <td dir="ltr" className="fc-num fc-col--turkey">
                   {cell(row.turkeyTransferUsd, "USD")}
                 </td>
@@ -180,7 +209,7 @@ export function FlowWeeksOverviewTable({
         </tbody>
       </table>
       <p className="fc-weeks-hint">
-        <Lock size={12} aria-hidden /> נתונים מבקרת קופה בלבד — לחץ על שבוע לפירוט
+        <Lock size={12} aria-hidden /> נתונים מבקרת קופה בלבד · השבוע המסומן מוצג בפירוט למטה
       </p>
     </div>
   );

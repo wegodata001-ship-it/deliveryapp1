@@ -3,6 +3,7 @@
 import { Eye, Paperclip, Pencil, Plus, Trash2 } from "lucide-react";
 import { fmtDailyMoney } from "@/lib/cash-control-daily";
 import type { CashDailyExpenseRowDto } from "@/app/admin/cash-control/daily-types";
+import { PaymentMethodIcon } from "@/components/admin/cash-control/CashExpensePaymentMethodSelect";
 import { num } from "@/components/admin/cash-flow/shared";
 
 export type CashExpensesSectionCaps = {
@@ -64,6 +65,7 @@ export function CashExpensesSection({
               <tr>
                 <th>שעה</th>
                 <th>סוג הוצאה</th>
+                <th>אמצעי תשלום</th>
                 <th>תיאור</th>
                 <th className="cc-num">סכום</th>
                 <th>מטבע</th>
@@ -78,6 +80,12 @@ export function CashExpensesSection({
                 <tr key={e.id}>
                   <td dir="ltr">{e.timeHm}</td>
                   <td>{e.reasonLabel}</td>
+                  <td>
+                    <span className="cxp-pm-cell">
+                      <PaymentMethodIcon method={e.paymentMethod} size={13} />
+                      {e.paymentMethodLabel}
+                    </span>
+                  </td>
                   <td>{e.notes ?? "—"}</td>
                   <td dir="ltr" className="cc-num">{fmtDailyMoney(e.currency, num(e.amount))}</td>
                   <td>{e.currency === "USD" ? "$ דולר" : "₪ שקל"}</td>

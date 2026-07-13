@@ -65,15 +65,16 @@ export type CashDailyReconLine = {
   /** התקבל נטו = ברוטו פחות הוצאות — מול הספירה */
   received: number;
   counted: number | null;
+  /** חריגה = צפוי נטו − נספר (חיובי = חסר בקופה) */
   diff: number | null;
   status: CashDailyStatusKind;
 };
 
-/** הוצאות קופה יומיות מסוכמות לפי מטבע (₪ / $) */
-export type CashDailyExpenseTotals = { ils: number; usd: number };
+/** הוצאות קופה יומיות — לפי עמודת בקרת קופה (מטבע + אמצעי תשלום) */
+export type CashDailyExpenseTotals = CashDailyIntakeTotals;
 
 export function emptyDailyExpenses(): CashDailyExpenseTotals {
-  return { ils: 0, usd: 0 };
+  return emptyDailyIntake();
 }
 
 function round2(n: number): number {
@@ -209,9 +210,8 @@ export function diffStatusKind(diff: number | null, currency: "ILS" | "USD"): Ca
 }
 
 /**
- * טבלת התאמה: לכל אמצעי — התקבל / נספר / הפרש / סטטוס.
- * הוצאות הקופה (מזומן ₪/$) מנוכות מהברוטו שהתקבל, כך שההשוואה מול הספירה
- * מתבצעת מול היתרה שאמורה להישאר בפועל: (התקבל − הוצאות) מול נספר.
+ * טבלת התאמה: לכל אמצעי — צפוי / הוצאות / צפוי נטו / נספר / חריגה.
+ * חריגה = צפוי נטו − נספר (חיובי = חסר בקופה).
  */
 export function buildDailyReconciliation(
   intake: CashDailyIntakeTotals,
@@ -220,12 +220,11 @@ export function buildDailyReconciliation(
 ): CashDailyReconLine[] {
   return CASH_DAILY_METHODS.map((m) => {
     const grossReceived = round2(intake[m.id] ?? 0);
-    const expense =
-      m.id === "CASH_ILS" ? round2(expenses.ils) : m.id === "CASH_USD" ? round2(expenses.usd) : 0;
+    const expense = round2(expenses[m.id] ?? 0);
     const received = round2(grossReceived - expense);
     const countedRaw = drawer[m.id];
     const counted = countedRaw === null || countedRaw === undefined ? null : round2(countedRaw);
-    const diff = counted == null ? null : round2(counted - received);
+    const diff = counted == null ? null : round2(received - counted);
     return {
       method: m.id,
       label: m.label,
@@ -245,11 +244,16 @@ export function computeDailyStatus(
   intake: CashDailyIntakeTotals,
   drawer: CashDailyDrawerValues,
   expenses: CashDailyExpenseTotals = emptyDailyExpenses(),
-): { kind: CashDailyStatusKind; worstDiff: number | null; worstCurrency: "ILS" | "USD" } {
+): {
+  kind: CashDailyStatusKind;
+  worstDiff: number | null;
+  worstCurrency: "ILS" | "USD";
+  worstMethod: CashDailyMethodId | null;
+} {
   const lines = buildDailyReconciliation(intake, drawer, expenses);
   const countedLines = lines.filter((l) => l.counted != null);
   if (countedLines.length === 0) {
-    return { kind: "pending", worstDiff: null, worstCurrency: "ILS" };
+    return { kind: "pending", worstDiff: null, worstCurrency: "ILS", worstMethod: null };
   }
   let worst: CashDailyReconLine | null = null;
   for (const l of countedLines) {
@@ -257,9 +261,14 @@ export function computeDailyStatus(
     if (!worst || Math.abs(l.diff) > Math.abs(worst.diff ?? 0)) worst = l;
   }
   if (!worst || worst.diff == null || Math.abs(worst.diff) <= CASH_CONTROL_EPS) {
-    return { kind: "ok", worstDiff: 0, worstCurrency: "ILS" };
+    return { kind: "ok", worstDiff: 0, worstCurrency: "ILS", worstMethod: null };
   }
-  return { kind: worst.status, worstDiff: worst.diff, worstCurrency: worst.currency };
+  return {
+    kind: worst.status,
+    worstDiff: worst.diff,
+    worstCurrency: worst.currency,
+    worstMethod: worst.method,
+  };
 }
 
 export function fmtDailyMoney(currency: "ILS" | "USD", amount: number): string {

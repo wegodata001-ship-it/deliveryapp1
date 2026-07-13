@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { X } from "lucide-react";
+import { Wallet, X } from "lucide-react";
 import {
   CASH_EXPENSE_REASONS,
   type CashCurrency,
@@ -12,14 +12,24 @@ import {
   updateCashExpenseAction,
 } from "@/app/admin/cash-expenses/actions";
 import { DocumentsPanel } from "@/components/admin/DocumentsPanel";
+import { CashExpenseVarianceImpact } from "@/components/admin/cash-control/CashExpenseVarianceImpact";
+import { CashExpensePaymentMethodSelect } from "@/components/admin/cash-control/CashExpensePaymentMethodSelect";
+import type { CashVarianceLineDto } from "@/lib/cash-control-variance";
+import {
+  allowedCurrenciesForPaymentMethod,
+  normalizePaymentMethod,
+  type CashExpensePaymentMethod,
+} from "@/lib/cash-expense-payment-method";
 
 export type CashExpenseEditable = {
   id: string;
   dateYmd: string;
+  timeHm?: string;
   reason: CashExpenseReason;
   notes: string | null;
   currency: CashCurrency;
   amount: string;
+  paymentMethod: CashExpensePaymentMethod;
 };
 
 export type CashExpenseFormModalProps = {
@@ -32,6 +42,9 @@ export type CashExpenseFormModalProps = {
   week?: string;
   /** תאריך ברירת מחדל (YYYY-MM-DD) להוצאה חדשה */
   defaultDateYmd?: string;
+  /** שורות חריגה ליום — להצגת השפעה על בקרת הקופה */
+  varianceLines?: CashVarianceLineDto[] | null;
+  varianceLoading?: boolean;
   canDelete?: boolean;
 };
 
@@ -49,6 +62,25 @@ function todayYmd(): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+function nowTimeHm(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function timeFromIso(iso: string): string {
+  try {
+    return new Date(iso).toLocaleTimeString("he-IL", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      timeZone: "Asia/Jerusalem",
+    });
+  } catch {
+    return "12:00";
+  }
+}
+
 export function CashExpenseFormModal({
   open,
   onClose,
@@ -56,17 +88,20 @@ export function CashExpenseFormModal({
   expense,
   week,
   defaultDateYmd,
+  varianceLines,
+  varianceLoading,
 }: CashExpenseFormModalProps) {
   const isEdit = !!expense;
   const [dateYmd, setDateYmd] = useState("");
+  const [timeHm, setTimeHm] = useState("");
   const [reason, setReason] = useState<CashExpenseReason>("FUEL");
   const [currency, setCurrency] = useState<CashCurrency>("ILS");
+  const [paymentMethod, setPaymentMethod] = useState<CashExpensePaymentMethod>("CASH");
   const [amount, setAmount] = useState("");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // מזהה יציב לקישור מסמכים לפני שמירה (מצב הוספה)
   const [draftKey] = useState(newDraftKey);
   const entityId = isEdit ? expense!.id : draftKey;
 
@@ -75,18 +110,33 @@ export function CashExpenseFormModal({
     setErr(null);
     if (expense) {
       setDateYmd(expense.dateYmd || todayYmd());
+      setTimeHm(expense.timeHm ?? "12:00");
       setReason(expense.reason);
       setCurrency(expense.currency);
+      setPaymentMethod(normalizePaymentMethod(expense.paymentMethod));
       setAmount(expense.amount);
       setNotes(expense.notes ?? "");
     } else {
       setDateYmd(defaultDateYmd || todayYmd());
+      setTimeHm(nowTimeHm());
       setReason("FUEL");
       setCurrency("ILS");
+      setPaymentMethod("CASH");
       setAmount("");
       setNotes("");
     }
   }, [open, expense, defaultDateYmd]);
+
+  const allowedCurrencies = useMemo(
+    () => allowedCurrenciesForPaymentMethod(paymentMethod),
+    [paymentMethod],
+  );
+
+  useEffect(() => {
+    if (!allowedCurrencies.includes(currency)) {
+      setCurrency(allowedCurrencies[0] ?? "ILS");
+    }
+  }, [allowedCurrencies, currency]);
 
   const title = useMemo(() => (isEdit ? "עריכת הוצאת קופה" : "הוצאת קופה חדשה"), [isEdit]);
 
@@ -107,15 +157,19 @@ export function CashExpenseFormModal({
             amount: amount,
             currency,
             reason,
+            paymentMethod,
             notes,
             dateYmd,
+            timeHm,
           })
         : await createCashExpenseAction({
             amount,
             currency,
             reason,
+            paymentMethod,
             notes,
             dateYmd,
+            timeHm,
             week,
             draftKey,
           });
@@ -134,18 +188,16 @@ export function CashExpenseFormModal({
     <div className="cxp-overlay" role="dialog" aria-modal="true" onClick={onClose}>
       <div className="cxp-modal" dir="rtl" onClick={(e) => e.stopPropagation()}>
         <header className="cxp-modal__head">
-          <h2>🟥 {title}</h2>
+          <h2>
+            <Wallet size={18} aria-hidden /> {title}
+          </h2>
           <button type="button" className="cxp-modal__close" onClick={onClose} aria-label="סגור">
             <X size={18} />
           </button>
         </header>
 
         <div className="cxp-modal__body">
-          <div className="cxp-grid">
-            <label className="cxp-field">
-              <span>תאריך</span>
-              <input type="date" className="cc-input" value={dateYmd} onChange={(e) => setDateYmd(e.target.value)} />
-            </label>
+          <div className="cxp-grid cxp-grid--expense">
             <label className="cxp-field">
               <span>סוג הוצאה</span>
               <select className="cc-input" value={reason} onChange={(e) => setReason(e.target.value as CashExpenseReason)}>
@@ -154,13 +206,6 @@ export function CashExpenseFormModal({
                     {r.label}
                   </option>
                 ))}
-              </select>
-            </label>
-            <label className="cxp-field">
-              <span>מטבע</span>
-              <select className="cc-input" value={currency} onChange={(e) => setCurrency(e.target.value as CashCurrency)}>
-                <option value="ILS">₪ שקל</option>
-                <option value="USD">$ דולר</option>
               </select>
             </label>
             <label className="cxp-field">
@@ -175,8 +220,33 @@ export function CashExpenseFormModal({
                 dir="ltr"
               />
             </label>
+            <label className="cxp-field">
+              <span>מטבע</span>
+              <select className="cc-input" value={currency} onChange={(e) => setCurrency(e.target.value as CashCurrency)}>
+                {allowedCurrencies.includes("ILS") ? <option value="ILS">₪ שקל</option> : null}
+                {allowedCurrencies.includes("USD") ? <option value="USD">$ דולר</option> : null}
+              </select>
+            </label>
+            <label className="cxp-field">
+              <span>אמצעי תשלום</span>
+              <CashExpensePaymentMethodSelect value={paymentMethod} onChange={setPaymentMethod} />
+            </label>
+            <label className="cxp-field">
+              <span>תאריך</span>
+              <input type="date" className="cc-input" value={dateYmd} onChange={(e) => setDateYmd(e.target.value)} />
+            </label>
+            <label className="cxp-field">
+              <span>שעה</span>
+              <input
+                type="time"
+                className="cc-input"
+                value={timeHm}
+                onChange={(e) => setTimeHm(e.target.value)}
+                dir="ltr"
+              />
+            </label>
             <label className="cxp-field cxp-field--wide">
-              <span>תיאור</span>
+              <span>הערה</span>
               <input
                 type="text"
                 className="cc-input"
@@ -186,6 +256,14 @@ export function CashExpenseFormModal({
               />
             </label>
           </div>
+
+          <CashExpenseVarianceImpact
+            lines={varianceLines ?? null}
+            currency={currency}
+            paymentMethod={paymentMethod}
+            amount={amount}
+            loading={varianceLoading}
+          />
 
           {err ? <div className="cxp-err">{err}</div> : null}
 
@@ -212,4 +290,5 @@ export function CashExpenseFormModal({
   );
 }
 
+export { timeFromIso };
 export default CashExpenseFormModal;
