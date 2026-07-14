@@ -11,7 +11,7 @@ export function previewPdfExportResult(result: {
 }
 
 export function handleSourceTableExportResult(
-  kind: "pdf" | "excel",
+  kind: "pdf" | "excel" | "csv",
   res:
     | { ok: true; base64: string; filename: string; mime: string }
     | { ok: false; error: string },

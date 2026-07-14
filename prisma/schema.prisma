@@ -125,6 +125,8 @@ model User {
   cashDailyDrawerCounts      CashDailyDrawerCount[]   @relation("CashDailyDrawerCountBy")
   cashWeekFlowsUpdated       CashWeekFlow[]           @relation("CashWeekFlowBy")
   turkeyTransferMovements  TurkeyTransferMovement[] @relation("TurkeyTransferMovementBy")
+  paymentAdjustmentFeesCreated PaymentAdjustmentFee[] @relation("PaymentAdjustmentFeeCreatedBy")
+  paymentAdjustmentFeesClosed  PaymentAdjustmentFee[] @relation("PaymentAdjustmentFeeClosedBy")
 }
 
 /** הגדרות שער דולר גלובליות: בסיס (usd_rate_base), עמלה (usd_fee), שער סופי מחושב (usd_rate_final). */
@@ -200,6 +202,7 @@ model Customer {
   payments        Payment[]
   receiptControls ReceiptControl[]
   paymentPlans    PaymentPlan[]
+  paymentAdjustmentFees PaymentAdjustmentFee[]
 
   @@index([countryCode])
   @@index([countryCode, customerCode])
@@ -290,6 +293,7 @@ model Order {
   createdBy    User?         @relation("OrderCreatedBy", fields: [createdById], references: [id])
   paymentPoint PaymentPoint? @relation(fields: [paymentPointId], references: [id])
   payments    Payment[]
+  paymentAdjustmentFees PaymentAdjustmentFee[]
   /** חלוקת תשלום מורכב — הגדרת פיצול ההזמנה בין אמצעי תשלום (תכנון, לא תשלום בפועל) */
   paymentBreakdown OrderPaymentBreakdown[]
   /** מטא-דאטה לחלוקת תשלום פעילה — שורות בפועל ב-OrderPaymentBreakdown */
@@ -565,6 +569,7 @@ model Payment {
   checks      PaymentCheck[]
   approvalRequests ApprovalRequest[]
   cashAuditReviews PaymentCashAuditReview[]
+  paymentAdjustmentFees PaymentAdjustmentFee[]
 
   @@index([customerId])
   @@index([orderId])
@@ -1009,6 +1014,69 @@ model ManualImportRow {
   @@index([rowNumber])
   @@index([status])
   @@map("import_rows")
+}
+
+/**
+ * הפרשי התאמה / עמלות שנוצרו בתהליך תשלום (אחרי FIFO).
+ * תוספת בלבד — לא משנה FinanceEntry / PaymentAllocation / Cashflow קיימים.
+ * פעולות סגירה/קיזוז/מחיקה — ארכיטקטורה מוכנה; טרם מיושמות.
+ */
+enum PaymentAdjustmentReason {
+  PAYMENT_SURPLUS
+  METHOD_DEVIATION
+  BANK_FEE
+  FX_DIFF
+  ROUNDING
+  MANUAL_ADJUST
+  OTHER
+}
+
+enum PaymentAdjustmentStatus {
+  OPEN
+  CLOSED
+  CANCELLED
+}
+
+model PaymentAdjustmentFee {
+  id                 String                   @id @default(uuid())
+  customerId         String
+  /** מסמך מקור (הזמנה) — אם יש */
+  orderId            String?
+  /** שורת תשלום עודף (orderId=null) שנרשמה לקופה בלי יתרת זכות */
+  paymentId          String?
+  /** קוד קליטת תשלום ראשי (למשל WGP-P-000092) */
+  paymentCaptureCode String?
+  /** מספר הזמנה לצפייה מהירה */
+  sourceDocumentCode String?
+  paymentMethod      String?
+  amountUsd          Decimal                  @db.Decimal(19, 4)
+  amountIls          Decimal?                 @db.Decimal(19, 4)
+  reason             PaymentAdjustmentReason  @default(PAYMENT_SURPLUS)
+  status             PaymentAdjustmentStatus  @default(OPEN)
+  notes              String?
+  /** בחירת משתמש בשמירה: commission | credit וכו׳ */
+  userChoice         String?
+  createdById        String?
+  closedAt           DateTime?
+  closedById         String?
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+
+  customer  Customer @relation(fields: [customerId], references: [id])
+  order     Order?   @relation(fields: [orderId], references: [id])
+  payment   Payment? @relation(fields: [paymentId], references: [id])
+  createdBy User?    @relation("PaymentAdjustmentFeeCreatedBy", fields: [createdById], references: [id])
+  closedBy  User?    @relation("PaymentAdjustmentFeeClosedBy", fields: [closedById], references: [id])
+
+  @@index([customerId])
+  @@index([orderId])
+  @@index([paymentId])
+  @@index([paymentCaptureCode])
+  @@index([status])
+  @@index([reason])
+  @@index([createdAt])
+  @@index([customerId, status, createdAt])
+  @@index([status, createdAt])
 }
 
 /// SQL-managed table — מסמכים מצורפים (Document Atlas). נוצרת דרך prisma/sql/documents_table.sql.

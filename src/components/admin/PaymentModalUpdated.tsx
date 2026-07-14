@@ -2287,7 +2287,9 @@ export function PaymentModalUpdated({
       setHighlightInvalidCheckFields(true);
       return { ok: false };
     }
-    const forceCustomerCreditPayment = customerHasCredit;
+    // חשוב: קרדיט קיים ללקוח לא אומר שצריך "לכפות" תשלום כיתרת זכות.
+    // תמיד מנסים Allocation (FIFO) קודם; רק עודף מטופל כקרדיט/עמלה לפי בחירת משתמש.
+    const forceCustomerCreditPayment = false;
     const allocDiag = logPaymentAllocationPreSave({
       source: "payment-modal",
       customerId: customer?.id ?? null,
@@ -2303,21 +2305,16 @@ export function PaymentModalUpdated({
       lastCustomerSearchExactOnly: lastEditedFieldRef.current === "code",
       custSearchNoHits,
     });
-    const { byOrderId, unallocatedUsd } =
-      forceCustomerCreditPayment && totals.totalUsd > 0.02
-        ? { byOrderId: new Map<string, number>(), unallocatedUsd: totals.totalUsd }
-        : {
-            byOrderId: new Map(allocDiag.allocationTargets.map((t) => [t.orderId, t.amountUsd])),
-            unallocatedUsd: allocDiag.unallocatedUsd,
-          };
+    const { byOrderId, unallocatedUsd } = {
+      byOrderId: new Map(allocDiag.allocationTargets.map((t) => [t.orderId, t.amountUsd])),
+      unallocatedUsd: allocDiag.unallocatedUsd,
+    };
     const hasAlloc = allocDiag.allocationTargets.length > 0;
-    const saveAsCredit =
-      surplusDisposition === "credit" || forceCustomerCreditPayment;
-    if (!hasAlloc && !(saveAsCredit && unallocatedUsd > 0.02)) {
-      setSaveErr("אין יעד להקצאה");
-      return { ok: false };
-    }
-    if (totals.totalUsd > 0.02 && unallocatedUsd > 0.02 && !surplusDisposition && !forceCustomerCreditPayment) {
+    const saveAsCredit = surplusDisposition === "credit";
+    const saveAsFee = surplusDisposition === "commission";
+    // אם אין יעד הקצאה (אין חוב פתוח), נציג את חלון "עודף" כדי שהמשתמש יבחר קרדיט/עמלה,
+    // במקום להיתקע עם "אין יעד להקצאה".
+    if (totals.totalUsd > 0.02 && unallocatedUsd > 0.02 && !surplusDisposition) {
       const prev = await previewCustomerPaymentOverageAction({
         customerId: customer.id,
         totalPaymentUsd: totals.totalUsd,
@@ -2330,6 +2327,10 @@ export function PaymentModalUpdated({
         return { ok: false };
       }
     }
+    if (!hasAlloc && !(saveAsCredit && unallocatedUsd > 0.02) && !(saveAsFee && unallocatedUsd > 0.02)) {
+      setSaveErr("אין יעד להקצאה");
+      return { ok: false };
+    }
     const devRows = computeIntakeSaveDeviations({
       orders,
       includedOrderIds: includedIds,
@@ -2337,8 +2338,16 @@ export function PaymentModalUpdated({
       formRateN: rateN,
       totalPaymentUsd: totals.totalUsd,
     });
-    if (intakeSaveHasDeviations(devRows)) {
-      saveSurplusPendingRef.current = surplusDisposition === "credit";
+    /**
+     * כאשר המשתמש כבר בחר כיצד לטפל בעודף (עמלה / יתרת זכות),
+     * חריגת אמצעי תשלום היא חלק מאותו עודף ואין לחסום את השמירה.
+     * חריגת שער (rate) כן נשמרת ונרשמת ב-Audit בצד השרת — לא מחסימים כאן.
+     */
+    const surplusAlreadyHandled =
+      surplusDisposition === "commission" || surplusDisposition === "credit";
+    if (!surplusAlreadyHandled && intakeSaveHasDeviations(devRows)) {
+      // surplusDisposition is null/undefined here (narrowed by surplusAlreadyHandled check)
+      saveSurplusPendingRef.current = false;
       intakeDevPendingSaveRef.current = true;
       setIntakeDevRows(devRows);
       setIntakeDevModalOpen(true);
@@ -2359,7 +2368,7 @@ export function PaymentModalUpdated({
       dollarRate,
       commissionPercent: commissionPercentStr,
       payments,
-      includedOrderIds: forceCustomerCreditPayment ? [] : includedIds,
+      includedOrderIds: includedIds,
       commissionResetOrderIds: commissionResetIds.length > 0 ? commissionResetIds : null,
       applyCustomerBalanceReset: customerBalanceResetPending && !balanceResetFromCredit,
       applyCustomerBalanceResetFromCredit: customerBalanceResetPending && balanceResetFromCredit,
@@ -2393,9 +2402,11 @@ export function PaymentModalUpdated({
       saveJustSavedTimerRef.current = null;
     }, 2000);
     dispatchCashControlRefresh(weekForSave);
+    window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
 
     const refreshStart = performance.now();
     const savedDateYmd = receivedTodaySave ? formatLocalYmd(new Date()) : paymentDateYmd;
+    const savedPaymentId = res.saved.primaryPaymentId?.trim() ?? savedCapturePaymentId ?? "";
     const resetIds = [...commissionResetIds];
     const updatedOrdersForSummary = orders.map((o) => {
       let row = { ...o };
@@ -2427,11 +2438,13 @@ export function PaymentModalUpdated({
       return row;
     });
     setOrders(updatedOrdersForSummary);
-    void fetchPaymentIntakeOrdersClient(customer.id, weekForSave, intakeDocumentWorkCountry).then((fresh) => {
-      const summaryOrders = fresh.ok ? fresh.orders : updatedOrdersForSummary;
-      if (fresh.ok) setOrders(fresh.orders);
-      onToast(buildPostSaveRemainingSummary(summaryOrders, null));
-      setMethodControlOpen(false);
+    onToast(buildPostSaveRemainingSummary(updatedOrdersForSummary, null));
+    setMethodControlOpen(false);
+    // Silent refresh (authoritative rebuild): orders + balances + payments.
+    // No page refresh; the workspace reload overrides optimistic state when it arrives.
+    loadCustomerWorkspaceInBackground(customer.id, weekForSave, {
+      perfLabel: "postSaveSilentRefresh",
+      cacheSnapshotPaymentId: savedPaymentId || undefined,
     });
     setCommissionResetIds([]);
     setCustomerBalanceResetPending(false);
@@ -2439,7 +2452,6 @@ export function PaymentModalUpdated({
     setCustomer((cur) => (cur ? { ...cur, customerBalanceUsd: res.saved.customerBalanceUsd } : cur));
     setCustomerOpenDebtSignedUsd(Math.max(0, openDebtAfterPaymentPreview.remainingAfterPayment));
 
-    const savedPaymentId = res.saved.primaryPaymentId?.trim() ?? savedCapturePaymentId ?? "";
     if (savedPaymentId) {
       // קישור מסמכים שהועלו תחת מפתח טיוטה ל-paymentId האמיתי (לפני remount של הפאנל).
       const draftKey = docDraftKeyRef.current;

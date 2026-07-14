@@ -253,23 +253,26 @@ async function seedReceivablesIfEmpty() {
 }
 
 async function loadSourceTableCardCounts(): Promise<Record<SourceTableId, number | null>> {
-  const [customers, orders, payments, receivables, paymentChecks, activeUsers, paymentLocations, rates, statuses] =
+  const [customers, orders, payments, paymentFees, receivables, paymentChecks, activeUsers, paymentLocations, rates, statuses, cashFlowWeeks] =
     await Promise.all([
       prisma.customer.count({ where: { deletedAt: null } }),
       prisma.order.count({ where: { deletedAt: null } }),
       prisma.payment.count({ where: { isPaid: true } }),
+      prisma.paymentAdjustmentFee.count().catch(() => 0),
       prisma.receiptControl.count(),
       prisma.paymentCheck.count(),
       prisma.user.count({ where: { isActive: true } }),
       prisma.paymentLocation.count({ where: { isActive: true } }),
       prisma.financialSettings.count(),
       prisma.sourceStatus.count({ where: { isActive: true } }),
+      prisma.cashWeekFlow.count().catch(() => 0),
     ]);
 
   console.table({
     customersCount: customers,
     ordersCount: orders,
     paymentsCount: payments,
+    paymentFeesCount: paymentFees,
     balancesCount: customers,
     suppliersCount: null,
     receivablesCount: receivables,
@@ -282,6 +285,7 @@ async function loadSourceTableCardCounts(): Promise<Record<SourceTableId, number
     customers,
     orders,
     payments,
+    "payment-fees": paymentFees,
     receivables,
     "payment-checks": paymentChecks,
     "customer-ledger": orders + payments,
@@ -292,6 +296,7 @@ async function loadSourceTableCardCounts(): Promise<Record<SourceTableId, number
     statuses,
     "payment-locations": paymentLocations,
     "exchange-rates": rates,
+    "cash-flow": cashFlowWeeks,
   };
 }
 
@@ -342,9 +347,11 @@ export async function listSourceTableDataAction(id: SourceTableId, query: Source
     id === "customers" ||
     id === "orders" ||
     id === "payments" ||
+    id === "payment-fees" ||
     id === "employees" ||
     id === "payment-methods" ||
-    id === "statuses"
+    id === "statuses" ||
+    id === "cash-flow"
   )
     return null;
   if (TABLES_NEEDING_SOURCE_DDL.has(id)) {

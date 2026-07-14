@@ -8,6 +8,7 @@ import {
   Receipt,
   Scale,
   Tags,
+  TrendingUp,
   Users,
 } from "lucide-react";
 import type React from "react";
@@ -24,6 +25,7 @@ const ICONS = {
   tag: Tags,
   "map-pin": MapPin,
   landmark: Landmark,
+  "trending-up": TrendingUp,
 } satisfies Record<SourceTableIconKey, React.ComponentType<{ size?: number; strokeWidth?: number; "aria-hidden"?: boolean }>>;
 
 export function SourceTableIcon({ icon }: { icon: SourceTableIconKey }) {

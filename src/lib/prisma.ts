@@ -13,10 +13,12 @@ function prismaClientHasRequiredDelegates(client: PrismaClient): boolean {
   const c = client as PrismaClient & {
     turkeyTransferMovement?: { findMany?: unknown };
     paymentPlan?: { findMany?: unknown };
+    paymentAdjustmentFee?: { findMany?: unknown };
   };
   return (
     typeof c.turkeyTransferMovement?.findMany === "function" &&
-    typeof c.paymentPlan?.findMany === "function"
+    typeof c.paymentPlan?.findMany === "function" &&
+    typeof c.paymentAdjustmentFee?.findMany === "function"
   );
 }
 

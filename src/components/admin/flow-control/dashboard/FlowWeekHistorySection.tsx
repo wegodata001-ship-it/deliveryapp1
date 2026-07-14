@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { ChevronDown, ChevronLeft, History } from "lucide-react";
 import type { FlowWeekOverviewRow } from "@/app/admin/cash-flow/flow-types";
-import { FlowWeeksOverviewTable } from "@/components/admin/flow-control/FlowWeeksOverviewTable";
+import { FlowWeeksOverviewBlocks } from "@/components/admin/flow-control/FlowWeeksOverviewBlocks";
 
 export type FlowWeekHistorySectionProps = {
   rows: FlowWeekOverviewRow[];
@@ -31,7 +31,7 @@ export function FlowWeekHistorySection({
       </button>
       <div className={`fd-history__panel${open ? " is-open" : ""}`}>
         {open ? (
-          <FlowWeeksOverviewTable
+          <FlowWeeksOverviewBlocks
             rows={rows}
             loading={loading}
             selectedWeek={selectedWeek}

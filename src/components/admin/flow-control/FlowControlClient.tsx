@@ -6,17 +6,13 @@ import { ACTIVE_WORK_WEEK_CODE } from "@/lib/active-work-week";
 import { goToNextWeek, goToPrevWeek, parseAhWeekNumber, toAhWeekCode } from "@/lib/weeks/ah-week-nav";
 import { formatAhWeekLabel } from "@/lib/weeks/ah-week";
 import type { CashFlowCapabilities } from "@/app/admin/cash-flow/types";
-import type { FlowWeekDrillPayload, FlowWeekOverviewRow } from "@/app/admin/cash-flow/flow-types";
-import { getFlowWeeksOverviewAction } from "@/app/admin/cash-flow/get-flow-weeks-overview-action";
-import { getFlowWeekDrillAction } from "@/app/admin/cash-flow/get-flow-week-drill-action";
+import type { FlowWeekOverviewRow } from "@/app/admin/cash-flow/flow-types";
+import { getAllFlowWeeksOverviewAction } from "@/app/admin/cash-flow/get-all-flow-weeks-overview-action";
 import {
   WEGO_CASH_CONTROL_REFRESH_EVENT,
   type CashControlRefreshDetail,
 } from "@/lib/cash-control-refresh-bus";
-import { FlowWeekTablesSection } from "@/components/admin/flow-control/tables/FlowWeekTablesSection";
-import { FlowWeekHistorySection } from "@/components/admin/flow-control/dashboard/FlowWeekHistorySection";
-
-const WEEKS_IN_TABLE = 12;
+import { FlowWeeksOverviewBlocks } from "@/components/admin/flow-control/FlowWeeksOverviewBlocks";
 
 function buildWeekOptions(): string[] {
   const active = parseAhWeekNumber(ACTIVE_WORK_WEEK_CODE) ?? 127;
@@ -25,22 +21,6 @@ function buildWeekOptions(): string[] {
     out.push(toAhWeekCode(n));
   }
   return out;
-}
-
-function buildRecentWeekList(): string[] {
-  const active = parseAhWeekNumber(ACTIVE_WORK_WEEK_CODE) ?? 127;
-  const out: string[] = [];
-  for (let n = active; n > active - WEEKS_IN_TABLE && n >= 1; n -= 1) {
-    out.push(toAhWeekCode(n));
-  }
-  return out;
-}
-
-/** שבועות לטבלת הסיכום — 12 אחרונים + השבוע הנבחר אם מחוץ לטווח */
-function overviewWeekCodes(selectedWeek: string): string[] {
-  const recent = buildRecentWeekList();
-  if (recent.includes(selectedWeek)) return recent;
-  return [selectedWeek, ...recent];
 }
 
 export function FlowControlClient({
@@ -54,23 +34,18 @@ export function FlowControlClient({
   const [selectedWeek, setSelectedWeek] = useState(
     () => initialWeek?.trim() || weekOptions[0] || ACTIVE_WORK_WEEK_CODE,
   );
-  const drillRef = useRef<HTMLDivElement>(null);
-
-  const overviewWeeks = useMemo(() => overviewWeekCodes(selectedWeek), [selectedWeek]);
+  const tableRef = useRef<HTMLDivElement>(null);
   const [overview, setOverview] = useState<FlowWeekOverviewRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshTick, setRefreshTick] = useState(0);
   const [exporting, setExporting] = useState<"pdf" | "excel" | null>(null);
-
-  const [drill, setDrill] = useState<FlowWeekDrillPayload | null>(null);
-  const [drillLoading, setDrillLoading] = useState(false);
 
   const refresh = useCallback(() => setRefreshTick((t) => t + 1), []);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    void getFlowWeeksOverviewAction(overviewWeeks).then((data) => {
+    void getAllFlowWeeksOverviewAction().then((data) => {
       if (cancelled) return;
       setOverview(data.weeks);
       setLoading(false);
@@ -78,20 +53,7 @@ export function FlowControlClient({
     return () => {
       cancelled = true;
     };
-  }, [overviewWeeks, refreshTick]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setDrillLoading(true);
-    void getFlowWeekDrillAction(selectedWeek).then((data) => {
-      if (cancelled) return;
-      setDrill(data);
-      setDrillLoading(false);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedWeek, refreshTick]);
+  }, [refreshTick]);
 
   useEffect(() => {
     const onCashControlSaved = (e: Event) => {
@@ -108,14 +70,14 @@ export function FlowControlClient({
     setSelectedWeek((prev) => {
       if (prev === wk) return prev;
       window.requestAnimationFrame(() => {
-        drillRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        tableRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
       return wk;
     });
   }, []);
 
   const selectedWeekLabel = useMemo(() => formatAhWeekLabel(selectedWeek), [selectedWeek]);
-  const canEditManagerCount = caps.canCountEdit || caps.canCountCreate || caps.canManageFlow;
+  void caps;
 
   async function exportFile(format: "pdf" | "excel") {
     const wk = selectedWeek;
@@ -231,15 +193,8 @@ export function FlowControlClient({
         </div>
       </header>
 
-      <div ref={drillRef} className="ft-page-body">
-        <FlowWeekTablesSection
-          drill={drill}
-          loading={drillLoading}
-          canEditManagerCount={canEditManagerCount}
-          onManagerCountSaved={refresh}
-        />
-
-        <FlowWeekHistorySection
+      <div ref={tableRef} className="ft-page-body">
+        <FlowWeeksOverviewBlocks
           rows={overview}
           loading={loading}
           selectedWeek={selectedWeek}

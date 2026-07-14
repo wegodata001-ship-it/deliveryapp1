@@ -4,6 +4,9 @@ import { prisma } from "@/lib/prisma";
 import { findActiveCustomerPayments } from "@/lib/payment-record-status";
 import { paymentRecordUsdEquivalent as paymentUsd } from "@/lib/payment-usd-equivalent";
 import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
+import {
+  customerBalanceExcludeAdjustmentFeePaymentsWhere,
+} from "@/lib/payment-adjustment-fee";
 
 export type CustomerBalanceScope = {
   from?: Date | null;
@@ -91,6 +94,7 @@ export async function calculateCustomerBalances(
     customerId: { in: ids },
     ...(paymentDateFilter ?? {}),
     ...(wc ? { countryCode: wc } : {}),
+    ...customerBalanceExcludeAdjustmentFeePaymentsWhere,
   } satisfies Prisma.PaymentWhereInput;
 
   const [orders, payments] = await Promise.all([

@@ -60,7 +60,7 @@ export function CustomerPaymentOverageModal({ open, preview, busy, onConfirm, on
             />
             <span>
               <strong>הוסף לעמלות</strong>
-              <small>העודף יתווסף לעמלת ההזמנה · לא תיווצר יתרת זכות</small>
+              <small>העודף יישמר כהפרש התאמה · לא תיווצר יתרת זכות · ללא הקצאה נוספת</small>
             </span>
           </label>
         </div>

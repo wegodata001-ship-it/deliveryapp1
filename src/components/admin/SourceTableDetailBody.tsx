@@ -42,6 +42,22 @@ const PaymentsSourceTableClient = dynamic(
   { loading: () => <div className="adm-source-pro adm-source-pro--shell" aria-busy="true" /> },
 );
 
+const PaymentFeesSourceTableClient = dynamic(
+  () =>
+    import("@/components/admin/PaymentFeesSourceTableClient").then((m) => ({
+      default: m.PaymentFeesSourceTableClient,
+    })),
+  { loading: () => <div className="adm-source-pro adm-source-pro--shell" aria-busy="true" /> },
+);
+
+const CashFlowSourceTableClient = dynamic(
+  () =>
+    import("@/components/admin/CashFlowSourceTableClient").then((m) => ({
+      default: m.CashFlowSourceTableClient,
+    })),
+  { loading: () => <div className="adm-source-pro adm-source-pro--shell" aria-busy="true" /> },
+);
+
 const EmployeesSourceTableClient = dynamic(
   () =>
     import("@/components/admin/EmployeesSourceTableClient").then((m) => ({
@@ -75,6 +91,12 @@ export function SourceTableDetailBody({ tableId, initialSearch }: Props) {
   }
   if (tableId === "payments") {
     return <PaymentsSourceTableClient initialSearch={initialSearch} />;
+  }
+  if (tableId === "payment-fees") {
+    return <PaymentFeesSourceTableClient initialSearch={initialSearch} />;
+  }
+  if (tableId === "cash-flow") {
+    return <CashFlowSourceTableClient />;
   }
   if (tableId === "employees") {
     return <EmployeesSourceTableClient initialSearch={initialSearch} />;

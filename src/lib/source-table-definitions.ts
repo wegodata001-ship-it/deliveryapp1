@@ -2,6 +2,7 @@ export type SourceTableId =
   | "customers"
   | "orders"
   | "payments"
+  | "payment-fees"
   | "receivables"
   | "payment-checks"
   | "customer-ledger"
@@ -11,7 +12,8 @@ export type SourceTableId =
   | "payment-methods"
   | "statuses"
   | "payment-locations"
-  | "exchange-rates";
+  | "exchange-rates"
+  | "cash-flow";
 
 export type SourceTableCardDefinition = {
   id: SourceTableId;
@@ -33,7 +35,8 @@ export type SourceTableIconKey =
   | "id-card"
   | "tag"
   | "map-pin"
-  | "landmark";
+  | "landmark"
+  | "trending-up";
 
 /** מטא-נתונים סטטיים לכרטיסי טבלאות מקור — ללא DB */
 export const SOURCE_TABLE_DEFINITIONS: SourceTableCardDefinition[] = [
@@ -41,6 +44,15 @@ export const SOURCE_TABLE_DEFINITIONS: SourceTableCardDefinition[] = [
   { id: "orders", title: "Orders", titleHe: "הזמנות", description: "כל ההזמנות, שבועות, סכומים וסטטוסים.", icon: "package", group: "running" },
   { id: "customer-balances", title: "CustomerBalances", titleHe: "יתרות", description: "יתרות לקוחות וסטטוס גבייה.", icon: "scale", group: "running" },
   { id: "payments", title: "Payments", titleHe: "תשלומים", description: "תשלומים שנקלטו וקישור להזמנות.", icon: "dollar", group: "finance" },
+  {
+    id: "payment-fees",
+    title: "PaymentFees",
+    titleHe: "עמלות / הפרשי התאמה",
+    description: "הפרשי תשלום שנוצרו בקליטה — עודף שהועבר לעמלות.",
+    icon: "receipt",
+    group: "finance",
+    countLabel: "סה״כ רשומות",
+  },
   { id: "receivables", title: "Receivables", titleHe: "תקבולים", description: "בקרת תקבולים וצפי מול התקבל.", icon: "receipt", group: "finance" },
   {
     id: "payment-checks",
@@ -56,6 +68,15 @@ export const SOURCE_TABLE_DEFINITIONS: SourceTableCardDefinition[] = [
   { id: "statuses", title: "Statuses", titleHe: "סטטוסים", description: "סטטוסי הזמנות וגבייה.", icon: "tag", group: "system" },
   { id: "payment-locations", title: "PaymentLocations", titleHe: "מקומות תשלום", description: "מקומות/נקודות לקליטת תשלום.", icon: "map-pin", group: "system" },
   { id: "exchange-rates", title: "ExchangeRates", titleHe: "שערי מטבע", description: "הגדרות שער דולר ושער סופי.", icon: "landmark", group: "system" },
+  {
+    id: "cash-flow",
+    title: "CashFlow",
+    titleHe: "בקרת תזרים",
+    description: "בקרת תזרים שבועית — רכישות מט״ח, העברות לטורקיה ויתרות קופה.",
+    icon: "trending-up",
+    group: "finance",
+    countLabel: "שבועות עם נתונים",
+  },
 ];
 
 export function getSourceTableDefinition(id: string): SourceTableCardDefinition | undefined {

@@ -224,6 +224,85 @@ export function intakeSaveHasDeviations(rows: IntakeSaveDeviationRow[]): boolean
   return intakeHasMethodMismatch(rows) || intakeHasRateMismatch(rows);
 }
 
+// ---------------------------------------------------------------------------
+// חישוב עודף לפי אמצעי תשלום — עבור רישום הפרשי התאמה מפורטים
+// ---------------------------------------------------------------------------
+
+/** עודף לפי אמצעי תשלום אחד */
+export type PerMethodSurplusRow = {
+  /** קבוצת אמצעי תשלום נורמלית */
+  bucket: PaymentBucketKey;
+  /** מחרוזת אמצעי תשלום (ל-DB) — "CASH", "BANK_TRANSFER" וכו' */
+  dbMethod: string;
+  label: string;
+  plannedUsd: number;
+  enteredUsd: number;
+  /** max(0, entered − planned) */
+  surplusUsd: number;
+};
+
+/**
+ * ממיר PaymentBucketKey לערך DB (PaymentMethod string).
+ * שם מחרוזת ולא enum כדי לא לייבא Prisma מ-client-side.
+ */
+export function bucketKeyToDbMethod(bucket: PaymentBucketKey): string {
+  switch (bucket) {
+    case "CASH":
+      return "CASH";
+    case "BANK_TRANSFER":
+      return "BANK_TRANSFER";
+    case "CREDIT":
+      return "CREDIT";
+    case "CHECK":
+      return "CHECK";
+    default:
+      return "OTHER";
+  }
+}
+
+/**
+ * מחשב עודף לכל אמצעי תשלום בנפרד.
+ *
+ * הלוגיקה:
+ *   לכל bucket שהוזן:
+ *     - plannedUsd  = סכום ה-remainingUsd מהחלוקה המתוכננת (breakdown)
+ *     - enteredUsd  = מה שהוקלד בטופס עבור אותו bucket
+ *     - surplusUsd  = max(0, entered − planned)
+ *
+ * מחזיר רק buckets עם surplusUsd > EPS.
+ * אם אין חלוקה מתוכננת כלל (orders ללא breakdown) — מחזיר ריק.
+ */
+export function computePerMethodSurplus(params: {
+  orders: PaymentIntakeOrderRow[];
+  includedOrderIds: string[] | null;
+  enteredByBucket: EnteredBucketUsd[];
+  eps?: number;
+}): PerMethodSurplusRow[] {
+  const eps = params.eps ?? CASH_CONTROL_EPS;
+  const plan = buildIntakeBreakdownPlan(params.orders, params.includedOrderIds);
+  if (plan.length === 0) return [];
+
+  const planMap = new Map(plan.map((p) => [p.bucket, p.remainingUsd]));
+  const result: PerMethodSurplusRow[] = [];
+
+  for (const e of params.enteredByBucket) {
+    if (e.enteredUsd <= eps) continue;
+    const plannedUsd = planMap.get(e.bucket) ?? 0;
+    const surplusUsd = round2(Math.max(0, e.enteredUsd - plannedUsd));
+    if (surplusUsd <= eps) continue;
+    result.push({
+      bucket: e.bucket,
+      dbMethod: bucketKeyToDbMethod(e.bucket),
+      label: e.label,
+      plannedUsd: round2(plannedUsd),
+      enteredUsd: round2(e.enteredUsd),
+      surplusUsd,
+    });
+  }
+
+  return result;
+}
+
 export function intakeSaveHasSurplus(rows: IntakeSaveDeviationRow[]): boolean {
   return rows.some((r) => r.rowTone === "surplus" || r.rowTone === "amount");
 }

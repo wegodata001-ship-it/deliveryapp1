@@ -60,6 +60,7 @@ import {
   PAYMENT_RECORD_STATUS_ACTIVE,
   PAYMENT_RECORD_STATUS_CANCELLED,
 } from "@/lib/payment-record-status";
+import { loadOrderClosureSnapshot } from "@/lib/payment-closure-recalc";
 import {
   BALANCE_RESET_TOLERANCE_USD,
   balanceResetLedgerLabel,
@@ -69,6 +70,10 @@ import {
   pickOverpaymentCreditsToCancel,
 } from "@/lib/balance-reset-calculation";
 import { CUSTOMER_CREDIT_SURPLUS_NOTE_PREFIX } from "@/lib/cash-control-internal-payments";
+import {
+  buildPaymentAdjustmentFeeCreateData,
+  PAYMENT_ADJUSTMENT_FEE_NOTE_PREFIX,
+} from "@/lib/payment-adjustment-fee";
 import {
   BALANCE_RESET_FROM_CREDIT_LEDGER_LABEL,
   BALANCE_RESET_LEDGER_LABEL,
@@ -479,7 +484,9 @@ export async function savePaymentUpdatedAction(
 
   const weekDateWhere = paymentIntakeOrderDateThroughAhWeekEnd(weekCode);
   const existingCustomerBalanceUsd = await getCustomerInternalBalanceUsd(cid);
-  const forceCreditPayment = existingCustomerBalanceUsd.gt(new Prisma.Decimal("0.01"));
+  // חשוב: יתרת זכות קיימת לא "כופה" תשלום כקרדיט.
+  // תמיד מבצעים FIFO allocation קודם; רק עודף (unallocated) מטופל כקרדיט/עמלה לפי בחירת משתמש.
+  const forceCreditPayment = false;
 
   // Load orders for allocations (same engine as intake + אותו חלון שבוע AH כמו במסך)
   const orders = await prisma.order.findMany({
@@ -551,8 +558,10 @@ export async function savePaymentUpdatedAction(
   let unallocatedUsd = 0;
   let surplusCommissionAbsorbedUsd = 0;
   let surplusCommissionOrderId: string | null = null;
+  /** עודף שהמשתמש בחר להעביר לעמלות/הפרשי התאמה — ללא הקצאה נוספת */
+  let surplusFeeUsd = 0;
   const surplusAsCredit =
-    form.saveSurplusAsCredit || forceCreditPayment || form.surplusDisposition === "credit";
+    form.saveSurplusAsCredit || form.surplusDisposition === "credit";
   const surplusToCommission = form.surplusDisposition === "commission";
   if (totals.totalUsd > ALLOC_EPS) {
     if (forceCreditPayment) {
@@ -586,7 +595,10 @@ export async function savePaymentUpdatedAction(
       unallocatedUsd = allocDiag.unallocatedUsd;
       allocationEntries = allocDiag.allocationTargets.map((t) => [t.orderId, t.amountUsd] as [string, number]);
     }
-    if (allocationEntries.length === 0 && !(surplusAsCredit && unallocatedUsd > ALLOC_EPS)) {
+    const canSaveWithoutAllocTarget =
+      (surplusAsCredit && unallocatedUsd > ALLOC_EPS) ||
+      (surplusToCommission && unallocatedUsd > ALLOC_EPS);
+    if (allocationEntries.length === 0 && !canSaveWithoutAllocTarget) {
       return { ok: false, error: "אין יעד להקצאה לסכום הדולר" };
     }
     if (
@@ -602,12 +614,13 @@ export async function savePaymentUpdatedAction(
       };
     }
 
-    if (surplusToCommission && unallocatedUsd > ALLOC_EPS && allocationEntries.length > 0) {
-      surplusCommissionAbsorbedUsd = roundMoney2(unallocatedUsd);
-      const lastIdx = allocationEntries.length - 1;
-      const [orderId, allocUsd] = allocationEntries[lastIdx];
-      allocationEntries[lastIdx] = [orderId, roundMoney2(allocUsd + surplusCommissionAbsorbedUsd)];
-      surplusCommissionOrderId = orderId;
+    /**
+     * כלל הזהב: FIFO כבר בוצע למעלה.
+     * «הוסף לעמלות» — רשומת עמלה + תשלום לקופה בלי הקצאה נוספת / בלי יתרת זכות.
+     * לא מחפשים יעד הקצאה ולא מגדילים עמלת הזמנה קיימת.
+     */
+    if (surplusToCommission && unallocatedUsd > ALLOC_EPS) {
+      surplusFeeUsd = roundMoney2(unallocatedUsd);
       unallocatedUsd = 0;
     } else if (
       form.applyCustomerBalanceReset &&
@@ -686,6 +699,9 @@ export async function savePaymentUpdatedAction(
     surplusCommissionAbsorbedUsd > ALLOC_EPS
       ? `${PAYMENT_SURPLUS_TO_COMMISSION_LEDGER_LABEL}: $${surplusCommissionAbsorbedUsd.toFixed(2)}`
       : null,
+    surplusFeeUsd > ALLOC_EPS
+      ? `${PAYMENT_SURPLUS_TO_COMMISSION_LEDGER_LABEL}: $${surplusFeeUsd.toFixed(2)}`
+      : null,
     `סה״כ דולר: $${totals.totalUsd.toFixed(2)} · סה״כ שקל: ₪${totals.totalIls.toFixed(2)} · שער: ${finalUse.toFixed(4)} (גלובלי ${finalGlobal.toFixed(4)})`,
     `בסיס: ${base.toFixed(4)} · עמלה: ${fee.toFixed(4)}`,
     commissionPctLine,
@@ -710,6 +726,7 @@ export async function savePaymentUpdatedAction(
   const pendingAudits: Prisma.AuditLogCreateManyInput[] = [];
 
   const allocOrderIds = [...new Set(allocationEntries.map(([id]) => id))];
+  const closureBefore = allocOrderIds.length > 0 ? await loadOrderClosureSnapshot(allocOrderIds) : [];
   const allocOrdersById = new Map(
     (
       allocOrderIds.length > 0
@@ -926,6 +943,191 @@ export async function savePaymentUpdatedAction(
         savedCount += 1;
       }
 
+      if (surplusFeeUsd > ALLOC_EPS) {
+        // ------------------------------------------------------------------
+        // חישוב עודף לפי אמצעי תשלום בנפרד (לרישום מפורט בטבלת עמלות).
+        //
+        // שלב 1: נחשב כמה הוזן בטופס לפי כל אמצעי (מ-form.payments).
+        // שלב 2: נטען את תכנון החלוקה להזמנות שהוקצו (paymentBreakdown מה-DB).
+        // שלב 3: עבור כל אמצעי: surplus = max(0, entered − planned).
+        // שלב 4: נשתמש בסכומים המפורטים ליצירת PaymentAdjustmentFee אחד לכל אמצעי.
+        // אם אין breakdown — רשומה אחת עם אמצעי ראשי (fallback).
+        // ------------------------------------------------------------------
+
+        // Step 1: entered per method from form payments
+        const formKpis = aggregateLivePaymentFormKpis(form.payments ?? [], rateN);
+        const enteredByMethod = new Map<string, number>([
+          ["CASH", roundMoney2(formKpis.cash.totalUsd)],
+          ["BANK_TRANSFER", roundMoney2(formKpis.bankTransfer.totalUsd)],
+          ["CREDIT", roundMoney2(formKpis.credit.totalUsd)],
+          ["CHECK", roundMoney2(formKpis.checks.totalUsd)],
+          ["OTHER", roundMoney2(formKpis.other.totalUsd)],
+        ]);
+
+        // Step 2: load breakdown planned amounts for allocated orders
+        const allocatedOrderIds = allocationEntries.map(([id]) => id);
+        const breakdownRows =
+          allocatedOrderIds.length > 0
+            ? await tx.orderPaymentBreakdown.findMany({
+                where: { orderId: { in: allocatedOrderIds } },
+                select: { paymentMethod: true, amount: true, currency: true },
+              })
+            : [];
+
+        // Step 3: aggregate planned by method (convert ILS → USD using rate)
+        const plannedByMethod = new Map<string, number>();
+        for (const b of breakdownRows) {
+          const bAmt = Number(b.amount.toString());
+          const bUsd = b.currency === "ILS" ? roundMoney2(bAmt / rateN) : bAmt;
+          plannedByMethod.set(b.paymentMethod, (plannedByMethod.get(b.paymentMethod) ?? 0) + bUsd);
+        }
+
+        type SurplusEntry = { dbMethod: string; label: string; surplusUsd: number };
+        let surplusEntries: SurplusEntry[];
+
+        if (plannedByMethod.size > 0) {
+          // Per-method surplus from breakdown data
+          const raw: SurplusEntry[] = [];
+          for (const [method, entered] of enteredByMethod) {
+            if (entered <= ALLOC_EPS) continue;
+            const planned = plannedByMethod.get(method) ?? 0;
+            const surplus = Math.max(0, roundMoney2(entered - planned));
+            if (surplus > ALLOC_EPS) {
+              raw.push({ dbMethod: method, label: PAYMENT_METHOD_LABELS[method] ?? method, surplusUsd: surplus });
+            }
+          }
+          // Validate total matches surplusFeeUsd (float safety)
+          const calcTotal = roundMoney2(raw.reduce((s, r) => s + r.surplusUsd, 0));
+          surplusEntries =
+            raw.length > 0 && Math.abs(calcTotal - surplusFeeUsd) <= 0.05
+              ? raw
+              : [{ dbMethod: String(payMethodDb), label: PAYMENT_METHOD_LABELS[String(payMethodDb)] ?? String(payMethodDb), surplusUsd: surplusFeeUsd }];
+        } else {
+          // No breakdown data — single fee with primary method
+          surplusEntries = [{ dbMethod: String(payMethodDb), label: PAYMENT_METHOD_LABELS[String(payMethodDb)] ?? String(payMethodDb), surplusUsd: surplusFeeUsd }];
+        }
+
+        // Source order/document (last allocated order, or primary code)
+        const sourceOrderId =
+          allocationEntries.length > 0 ? allocationEntries[allocationEntries.length - 1][0] : null;
+        const sourceOrder = sourceOrderId ? allocOrdersById.get(sourceOrderId) : null;
+        const sourceDocumentCode = sourceOrder?.orderNumber ?? primaryCode;
+
+        // Create ONE summary Payment row for the total surplus amount
+        const feeUsd = new Prisma.Decimal(surplusFeeUsd.toFixed(4));
+        const feeTotals = computeFromUsdAmount(feeUsd, {
+          baseDollarRate: base,
+          dollarFee: fee,
+          finalDollarRate: finalUse,
+          vatRate,
+        });
+        const methodSummary = surplusEntries.length > 1
+          ? surplusEntries.map((e) => `${e.label} $${e.surplusUsd.toFixed(2)}`).join(" · ")
+          : null;
+        const feeNotes = [
+          PAYMENT_ADJUSTMENT_FEE_NOTE_PREFIX,
+          `קשור לקליטה ${primaryCode}`,
+          sourceDocumentCode ? `מסמך מקור: ${sourceDocumentCode}` : null,
+          `עודף: $${surplusFeeUsd.toFixed(2)}`,
+          methodSummary ? `לפי אמצעי: ${methodSummary}` : null,
+          PAYMENT_SURPLUS_TO_COMMISSION_LEDGER_LABEL,
+        ]
+          .filter(Boolean)
+          .join("\n");
+        const feePaymentCode = allocIndex === 0 ? primaryCode : null;
+        const createdFeePayment = await tx.payment.create({
+          data: {
+            countryCode: payWorkCountry,
+            paymentCode: feePaymentCode,
+            paymentNumber: allocated.paymentNumber,
+            orderId: null,
+            customerId: cid,
+            weekCode,
+            paymentDate,
+            paymentPlace: null,
+            currency: "USD",
+            amountUsd: feeUsd,
+            amountIls: null,
+            sourceCurrency: "USD",
+            sourceAmount: feeUsd,
+            exchangeRate: finalUse,
+            vatRate,
+            commissionPercent: commissionPctDec,
+            amountWithoutVat: feeTotals.totalIlsWithoutVat,
+            snapshotBaseDollarRate: feeTotals.snapshotBaseDollarRate,
+            snapshotDollarFee: feeTotals.snapshotDollarFee,
+            snapshotFinalDollarRate: feeTotals.snapshotFinalDollarRate,
+            totalIlsWithVat: feeTotals.totalIlsWithVat,
+            totalIlsWithoutVat: feeTotals.totalIlsWithoutVat,
+            vatAmount: feeTotals.vatAmount,
+            manualDateChanged,
+            paymentMethod: payMethodDb,
+            usdPaymentMethod: usdMethod,
+            ilsPaymentMethod: ilsMethod,
+            usdNote: null,
+            ilsNote: null,
+            isPaid: true,
+            notes: feeNotes,
+            createdById: me.id,
+          },
+        });
+        if (!primaryPaymentId) primaryPaymentId = createdFeePayment.id;
+        savedCount += 1;
+
+        // Create ONE PaymentAdjustmentFee per payment-method that has a surplus.
+        // This provides full per-method auditability as requested.
+        for (const entry of surplusEntries) {
+          const entryUsd = new Prisma.Decimal(entry.surplusUsd.toFixed(4));
+          const entryTotals = surplusEntries.length === 1
+            ? feeTotals
+            : computeFromUsdAmount(entryUsd, { baseDollarRate: base, dollarFee: fee, finalDollarRate: finalUse, vatRate });
+
+          const feeRow = await tx.paymentAdjustmentFee.create({
+            data: buildPaymentAdjustmentFeeCreateData({
+              customerId: cid,
+              orderId: sourceOrderId,
+              paymentId: createdFeePayment.id,
+              paymentCaptureCode: primaryCode,
+              sourceDocumentCode,
+              paymentMethod: entry.dbMethod,
+              amountUsd: entryUsd,
+              amountIls: entryTotals.totalIlsWithVat,
+              reason: "PAYMENT_SURPLUS",
+              status: "OPEN",
+              notes: `עודף מתשלום · אמצעי: ${entry.label} · בחירת משתמש: הוסף לעמלות`,
+              userChoice: "commission",
+              createdById: me.id,
+            }),
+          });
+
+          pendingAudits.push({
+            userId: me.id,
+            actionType: "PAYMENT_SURPLUS_TO_COMMISSION",
+            entityType: "PaymentAdjustmentFee",
+            entityId: feeRow.id,
+            oldValue: Prisma.JsonNull,
+            newValue: {
+              amountUsd: entryUsd.toFixed(2),
+              status: "OPEN",
+              reason: "PAYMENT_SURPLUS",
+            } as Prisma.InputJsonValue,
+            metadata: {
+              customerId: cid,
+              paymentId: createdFeePayment.id,
+              paymentCaptureCode: primaryCode,
+              sourceDocumentCode,
+              orderId: sourceOrderId,
+              paymentMethod: entry.dbMethod,
+              surplusUsd: entry.surplusUsd.toFixed(2),
+              totalSurplusUsd: surplusFeeUsd.toFixed(2),
+              perMethodCount: surplusEntries.length,
+              userChoice: "commission",
+              ledgerLabel: PAYMENT_SURPLUS_TO_COMMISSION_LEDGER_LABEL,
+            } as Prisma.InputJsonValue,
+          });
+        }
+      }
+
       if (primaryPaymentId && flatChecksForPrimary.length > 0) {
         await tx.paymentCheck.createMany({
           data: flatChecksForPrimary.map((c) => ({
@@ -1088,6 +1290,66 @@ export async function savePaymentUpdatedAction(
   } catch (e) {
     const msg = e instanceof Error ? e.message : "שמירה נכשלה";
     return { ok: false, error: msg };
+  }
+
+  // תיעוד Recalculate (Audit) — לפני/אחרי, בלי שינוי נתונים קיימים.
+  // מטרת הרישום: שקיפות מלאה למה קרה למסמכים בעקבות FIFO והסגירה.
+  try {
+    if (allocOrderIds.length > 0) {
+      const closureAfter = await loadOrderClosureSnapshot(allocOrderIds);
+      const beforeById = new Map(closureBefore.map((r) => [r.orderId, r]));
+      const afterById = new Map(closureAfter.map((r) => [r.orderId, r]));
+      const audits: Prisma.AuditLogCreateManyInput[] = [];
+
+      const EPS = 0.009;
+      for (const oid of allocOrderIds) {
+        const b = beforeById.get(oid) ?? null;
+        const a = afterById.get(oid) ?? null;
+        if (!a) continue;
+        if (
+          b &&
+          Math.abs(b.paidUsd - a.paidUsd) <= EPS &&
+          Math.abs(b.remainingUsd - a.remainingUsd) <= EPS &&
+          b.status === a.status
+        ) {
+          continue;
+        }
+        audits.push({
+          userId: me.id,
+          actionType: "PAYMENT_CLOSURE_RECALC",
+          entityType: "Order",
+          entityId: oid,
+          oldValue: b
+            ? ({
+                paidUsd: b.paidUsd.toFixed(2),
+                remainingUsd: b.remainingUsd.toFixed(2),
+                status: b.status,
+              } satisfies Prisma.InputJsonValue)
+            : Prisma.JsonNull,
+          newValue: {
+            paidUsd: a.paidUsd.toFixed(2),
+            remainingUsd: a.remainingUsd.toFixed(2),
+            status: a.status,
+          } satisfies Prisma.InputJsonValue,
+          metadata: {
+            orderNumber: a.orderNumber,
+            totalUsd: a.totalUsd.toFixed(2),
+            customerId: cid,
+            paymentCaptureCode: primaryCode,
+            paymentNumber: allocated.paymentNumber,
+            weekCode: weekCode ?? null,
+            workCountry: payWorkCountry,
+            at: new Date().toISOString(),
+          } satisfies Prisma.InputJsonValue,
+        });
+      }
+
+      if (audits.length > 0) {
+        await prisma.auditLog.createMany({ data: audits });
+      }
+    }
+  } catch {
+    // Audit is best-effort; never block payment save completion.
   }
 
   const customerBalanceUsd = await getCustomerInternalBalanceUsd(cid);
@@ -1901,4 +2163,285 @@ export async function restorePaymentAction(input: {
   revalidatePath("/admin/source-tables/payments");
 
   return { ok: true, customerBalanceUsd: customerBalanceUsd.toFixed(2) };
+}
+
+/**
+ * תיקון נתונים בטוח: החלת "יתרת זכות" קיימת (תשלומי credit עם orderId=null)
+ * על הזמנות פתוחות של אותו לקוח, FIFO, בלי למחוק נתונים.
+ *
+ * מבצע:
+ * - ביטול שורות credit קיימות (status=CANCELLED) במקום למחוק/לערוך סכומים
+ * - יצירת שורות Payment חדשות שמוקצות להזמנה (orderId=...)
+ * - אם שורת credit גדולה מהנדרש: מפצלים (cancel מקור + create allocated + create credit remainder)
+ *
+ * חשוב: לא נוגע ב-FinanceEntry / PaymentAllocation (אין טבלה) ולא משנה schema.
+ */
+export async function applyCustomerCreditToOpenOrdersAction(input: {
+  customerId: string;
+  /** מגביל סכום שמוחל (אופציונלי) */
+  maxUsd?: string | null;
+}): Promise<
+  | {
+      ok: true;
+      appliedUsd: string;
+      cancelledCreditPayments: number;
+      createdPayments: number;
+      affectedOrderIds: string[];
+    }
+  | { ok: false; error: string }
+> {
+  const me = await requireAuth();
+  if (!isAdminUser(me)) return { ok: false, error: "אין הרשאת מנהל" };
+
+  const cid = (input.customerId || "").trim();
+  if (!cid) return { ok: false, error: "חסר לקוח" };
+
+  let maxUsd: Prisma.Decimal | null = null;
+  try {
+    const raw = (input.maxUsd ?? "").trim();
+    if (raw) maxUsd = new Prisma.Decimal(raw.replace(",", ".")).toDecimalPlaces(4, 4);
+  } catch {
+    return { ok: false, error: "maxUsd לא תקין" };
+  }
+
+  const EPS = new Prisma.Decimal("0.01");
+  const now = new Date();
+  const affectedOrderIds: string[] = [];
+  let cancelledCreditPayments = 0;
+  let createdPayments = 0;
+  let appliedUsd = new Prisma.Decimal(0);
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      // 1) Open orders + paid sums
+      const orders = await tx.order.findMany({
+        where: { customerId: cid, deletedAt: null, status: { not: OS.DEBT_WITHDRAWAL } },
+        orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],
+        select: { id: true, orderNumber: true, amountUsd: true, commissionUsd: true, totalUsd: true, weekCode: true, countryCode: true },
+      });
+      if (orders.length === 0) throw new Error("אין הזמנות ללקוח");
+
+      const orderIds = orders.map((o) => o.id);
+      const paidAgg = await tx.payment.groupBy({
+        by: ["orderId"],
+        where: { orderId: { in: orderIds }, amountUsd: { not: null }, ...activePaidPaymentWhere },
+        _sum: { amountUsd: true },
+      });
+      const paidByOrder = new Map<string, Prisma.Decimal>();
+      for (const p of paidAgg) {
+        if (p.orderId) paidByOrder.set(p.orderId, p._sum.amountUsd ?? new Prisma.Decimal(0));
+      }
+
+      const openOrders = orders
+        .map((o) => {
+          const deal = o.amountUsd ?? new Prisma.Decimal(0);
+          const com = o.commissionUsd ?? new Prisma.Decimal(0);
+          const total = o.totalUsd ?? deal.add(com).toDecimalPlaces(4, 4);
+          const paid = paidByOrder.get(o.id) ?? new Prisma.Decimal(0);
+          const remaining = total.sub(paid).toDecimalPlaces(4, 4);
+          return {
+            orderId: o.id,
+            orderNumber: o.orderNumber?.trim() || null,
+            weekCode: o.weekCode?.trim() || null,
+            countryCode: o.countryCode,
+            remaining,
+          };
+        })
+        .filter((o) => o.remaining.gt(EPS));
+
+      if (openOrders.length === 0) throw new Error("אין יתרה פתוחה להזמנות");
+
+      // 2) Credit payments candidates (created from overage flow)
+      const credits = await tx.payment.findMany({
+        where: {
+          customerId: cid,
+          orderId: null,
+          notes: { startsWith: CUSTOMER_CREDIT_SURPLUS_NOTE_PREFIX },
+          amountUsd: { not: null },
+          ...activePaidPaymentWhere,
+        },
+        orderBy: [{ paymentDate: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+        select: {
+          id: true,
+          paymentNumber: true,
+          countryCode: true,
+          weekCode: true,
+          paymentDate: true,
+          currency: true,
+          amountUsd: true,
+          amountIls: true,
+          sourceCurrency: true,
+          sourceAmount: true,
+          exchangeRate: true,
+          vatRate: true,
+          paymentMethod: true,
+          usdPaymentMethod: true,
+          ilsPaymentMethod: true,
+          notes: true,
+          createdById: true,
+        },
+      });
+
+      if (credits.length === 0) throw new Error("אין שורות יתרת זכות (קרדיט) זמינות");
+
+      const audits: Prisma.AuditLogCreateManyInput[] = [];
+
+      let creditIndex = 0;
+      for (const ord of openOrders) {
+        if (maxUsd && appliedUsd.gte(maxUsd.sub(EPS))) break;
+        let remaining = ord.remaining;
+        while (remaining.gt(EPS) && creditIndex < credits.length) {
+          const c = credits[creditIndex]!;
+          const creditAmt = c.amountUsd ?? new Prisma.Decimal(0);
+          if (creditAmt.lte(EPS)) {
+            creditIndex += 1;
+            continue;
+          }
+
+          // amount to apply
+          let take = remaining;
+          if (take.gt(creditAmt)) take = creditAmt;
+          if (maxUsd) {
+            const left = maxUsd.sub(appliedUsd);
+            if (left.lte(EPS)) break;
+            if (take.gt(left)) take = left;
+          }
+          if (take.lte(EPS)) break;
+
+          // cancel original credit row
+          await tx.payment.update({
+            where: { id: c.id },
+            data: {
+              status: PAYMENT_RECORD_STATUS_CANCELLED,
+              cancelledAt: now,
+              cancelledById: me.id,
+              cancelReason: `Applied credit to order ${ord.orderNumber ?? ord.orderId}`,
+            },
+          });
+          cancelledCreditPayments += 1;
+
+          // create allocated payment row (new)
+          const notes = [
+            "קיזוז יתרת זכות לסגירת הזמנה",
+            `מקור קרדיט: ${c.id}`,
+            ord.orderNumber ? `הזמנה: ${ord.orderNumber}` : null,
+            `סכום: $${take.toFixed(2)}`,
+          ]
+            .filter(Boolean)
+            .join("\n");
+
+          await tx.payment.create({
+            data: {
+              countryCode: c.countryCode,
+              paymentCode: null,
+              paymentNumber: c.paymentNumber ?? null,
+              orderId: ord.orderId,
+              customerId: cid,
+              weekCode: ord.weekCode ?? c.weekCode ?? null,
+              paymentDate: c.paymentDate ?? now,
+              currency: "USD",
+              amountUsd: take,
+              amountIls: null,
+              sourceCurrency: "USD",
+              sourceAmount: take,
+              exchangeRate: c.exchangeRate,
+              vatRate: c.vatRate ?? new Prisma.Decimal(VAT_RATE),
+              manualDateChanged: false,
+              paymentMethod: PaymentMethod.OTHER,
+              usdPaymentMethod: PaymentMethod.OTHER,
+              ilsPaymentMethod: null,
+              usdNote: null,
+              ilsNote: null,
+              isPaid: true,
+              notes,
+              createdById: me.id,
+            },
+          });
+          createdPayments += 1;
+          appliedUsd = appliedUsd.add(take).toDecimalPlaces(4, 4);
+          affectedOrderIds.push(ord.orderId);
+
+          audits.push({
+            userId: me.id,
+            actionType: "CUSTOMER_CREDIT_APPLIED_TO_ORDER",
+            entityType: "Payment",
+            entityId: c.id,
+            oldValue: { status: "ACTIVE", amountUsd: creditAmt.toFixed(2) } as Prisma.InputJsonValue,
+            newValue: { status: "CANCELLED", appliedUsd: take.toFixed(2) } as Prisma.InputJsonValue,
+            metadata: {
+              customerId: cid,
+              orderId: ord.orderId,
+              orderNumber: ord.orderNumber,
+              creditPaymentId: c.id,
+              creditPaymentNumber: c.paymentNumber ?? null,
+            } as Prisma.InputJsonValue,
+          });
+
+          // remainder credit -> create new credit row
+          const remainder = creditAmt.sub(take).toDecimalPlaces(4, 4);
+          if (remainder.gt(EPS)) {
+            const remainderNotes = [
+              CUSTOMER_CREDIT_SURPLUS_NOTE_PREFIX,
+              "פיצול אחרי קיזוז יתרת זכות",
+              `מקור: ${c.id}`,
+              `יתרה: $${remainder.toFixed(2)}`,
+            ].join("\n");
+            await tx.payment.create({
+              data: {
+                countryCode: c.countryCode,
+                paymentCode: null,
+                paymentNumber: c.paymentNumber ?? null,
+                orderId: null,
+                customerId: cid,
+                weekCode: c.weekCode ?? null,
+                paymentDate: c.paymentDate ?? now,
+                currency: "USD",
+                amountUsd: remainder,
+                amountIls: null,
+                sourceCurrency: "USD",
+                sourceAmount: remainder,
+                exchangeRate: c.exchangeRate,
+                vatRate: c.vatRate ?? new Prisma.Decimal(VAT_RATE),
+                manualDateChanged: false,
+                paymentMethod: c.paymentMethod ?? PaymentMethod.OTHER,
+                usdPaymentMethod: c.usdPaymentMethod ?? PaymentMethod.OTHER,
+                ilsPaymentMethod: c.ilsPaymentMethod ?? null,
+                usdNote: null,
+                ilsNote: null,
+                isPaid: true,
+                notes: remainderNotes,
+                createdById: me.id,
+              },
+            });
+            createdPayments += 1;
+          }
+
+          remaining = remaining.sub(take).toDecimalPlaces(4, 4);
+          creditIndex += 1;
+        }
+      }
+
+      if (audits.length > 0) {
+        await tx.auditLog.createMany({ data: audits });
+      }
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "כשלון";
+    return { ok: false, error: msg };
+  }
+
+  const customerBalanceUsd = await getCustomerInternalBalanceUsd(cid);
+  await persistCustomerBalanceSnapshot(cid, customerBalanceUsd);
+  revalidateAllKpiCaches();
+  revalidatePath("/admin/orders");
+  revalidatePath("/admin/balances");
+  revalidatePath("/admin/source-tables/payments");
+
+  return {
+    ok: true,
+    appliedUsd: appliedUsd.toFixed(2),
+    cancelledCreditPayments,
+    createdPayments,
+    affectedOrderIds: [...new Set(affectedOrderIds)],
+  };
 }
