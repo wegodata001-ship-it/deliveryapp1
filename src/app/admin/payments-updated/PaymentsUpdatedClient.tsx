@@ -30,4 +30,3 @@ export function PaymentsUpdatedClient({ financial, viewerIsAdmin = false }: Prop
     </div>
   );
 }
-

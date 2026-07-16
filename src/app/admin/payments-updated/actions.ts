@@ -447,18 +447,9 @@ export async function savePaymentUpdatedAction(
   const checkValidationErr = validatePaymentCheckLines(form.payments ?? []);
   if (checkValidationErr) return { ok: false, error: checkValidationErr };
 
-  // בקרת "תשלום מורכב" — אכיפה בצד שרת (ניתן לעקוף באישור מנהל מפורש)
-  if (!form.allowMethodDeviation) {
-    const breakdownErr = await validateCompositeBreakdownEnforcement({
-      customerId: cid,
-      weekCode: form.weekCode,
-      workCountry: form.workCountry,
-      payments: form.payments ?? [],
-      rateN,
-      includedOrderIds: form.includedOrderIds,
-    });
-    if (breakdownErr) return { ok: false, error: breakdownErr };
-  }
+  // לוגיקה מחודשת: אין אכיפת התאמת אמצעי תשלום למסמך מקור.
+  // נשמר מה שהתקבל בפועל; allowMethodDeviation נשאר בשדה לתאימות לאחור בלבד.
+  void form.allowMethodDeviation;
 
   const flatChecksForPrimary = flattenChecksFromPayments(form.payments ?? []);
 
@@ -694,7 +685,6 @@ export async function savePaymentUpdatedAction(
   const combinedNotes = [
     "קליטת תשלום מעודכן (דו-מטבעי)",
     lineNotes ? `הערה: ${lineNotes}` : null,
-    form.allowMethodDeviation ? METHOD_DEV_APPROVED_NOTE_TAG : null,
     `totalPaymentUsd: $${totals.totalUsd.toFixed(2)}`,
     surplusCommissionAbsorbedUsd > ALLOC_EPS
       ? `${PAYMENT_SURPLUS_TO_COMMISSION_LEDGER_LABEL}: $${surplusCommissionAbsorbedUsd.toFixed(2)}`
@@ -856,36 +846,7 @@ export async function savePaymentUpdatedAction(
         });
         if (allocIndex === 0) primaryPaymentId = created.id;
 
-        // חריגת אמצעי תשלום: אם להזמנה יש תכנון מורכב ואמצעי התשלום בפועל אינו מהמתוכננים — לתעד Audit.
-        if (isCompositePaymentMethod(order.paymentMethod) && order.paymentBreakdown.length > 0) {
-          const plannedSet = new Set(order.paymentBreakdown.map((b) => b.paymentMethod));
-          const actualMethodsUsed = [usdMethod, ilsMethod, payMethodDb].filter(
-            (m): m is PaymentMethod => !!m && !isCompositePaymentMethod(m),
-          );
-          const deviatingMethods = [...new Set(actualMethodsUsed)].filter((m) => !plannedSet.has(m));
-          if (deviatingMethods.length > 0) {
-            pendingAudits.push({
-              userId: me.id,
-              actionType: "PAYMENT_METHOD_DEVIATION",
-              entityType: "Order",
-              entityId: order.id,
-              oldValue: {
-                plannedMethods: [...plannedSet],
-              } as Prisma.InputJsonValue,
-              newValue: {
-                actualMethods: deviatingMethods,
-              } as Prisma.InputJsonValue,
-              metadata: {
-                orderNumber: order.orderNumber ?? null,
-                paymentId: created.id,
-                paymentCode: code,
-                amountUsd: amt.toFixed(2),
-                plannedLabels: [...plannedSet].map((m) => PAYMENT_METHOD_LABELS[m] ?? m),
-                actualLabels: deviatingMethods.map((m) => PAYMENT_METHOD_LABELS[m] ?? m),
-              } as Prisma.InputJsonValue,
-            });
-          }
-        }
+        // אין תיעוד חריגת אמצעי תשלום — הקליטה שומרת את מה שהתקבל בפועל בלבד.
 
         allocIndex += 1;
         savedCount += 1;

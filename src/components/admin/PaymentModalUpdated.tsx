@@ -29,12 +29,10 @@ import {
   buildPaymentAllocationPreview,
 } from "@/lib/payment-allocation-preview";
 import { aggregateLivePaymentFormKpis } from "@/lib/payment-intake-live-kpi";
-import {
-  buildLivePaymentMethodControlRows,
-  buildPostSaveRemainingSummary,
-  hasCompositeMethodControl,
-} from "@/lib/payment-intake-method-control";
+import { buildPostSaveRemainingSummary } from "@/lib/payment-intake-method-control";
 import { PaymentMethodControlModal } from "@/components/admin/PaymentMethodControlModal";
+import { usePaymentIntakePlanningViews } from "@/hooks/usePaymentIntakePlanningViews";
+import { softRefreshPaymentIntakeOrders } from "@/lib/payment-intake-orders-source";
 import { PaymentDocumentRateIcons } from "@/components/admin/PaymentDocumentRateIcons";
 import { attachDraftDocumentsAction } from "@/app/admin/documents/actions";
 import {
@@ -552,6 +550,10 @@ export function PaymentModalUpdated({
   const [intakeDevModalOpen, setIntakeDevModalOpen] = useState(false);
   const [intakeDevRows, setIntakeDevRows] = useState<IntakeSaveDeviationRow[]>([]);
   const [methodControlOpen, setMethodControlOpen] = useState(false);
+  /** רענון מקור ההזמנות המשותף (טבלה ראשית + חלון מתוכננים) */
+  const [sharedOrdersRefreshing, setSharedOrdersRefreshing] = useState(false);
+  /** חזרה לחלון אמצעי מתוכננים אחרי עריכת הזמנה שנפתחה ממנו */
+  const reopenMethodControlAfterOrderEditRef = useRef(false);
   const saveAfterOverageRef = useRef<"new" | "close" | null>(null);
   const saveSurplusPendingRef = useRef(false);
   const intakeDevPendingSaveRef = useRef(false);
@@ -955,15 +957,15 @@ export function PaymentModalUpdated({
     [payments, rateN],
   );
 
-  /** שורות בקרת אמצעי תשלום — תוכנן מההזמנה, נקלט מההקלדה הנוכחית בטופס */
-  const methodControlRows = useMemo(
-    () => buildLivePaymentMethodControlRows(orders, includedIds, liveFormKpis, totals.totalUsd),
-    [orders, includedIds, liveFormKpis, totals.totalUsd],
-  );
-  const showMethodControl = useMemo(
-    () => hasCompositeMethodControl(orders, includedIds),
-    [orders, includedIds],
-  );
+  /**
+   * מקור תצוגה משותף: כפתור בקרה + גריד החלון נגזרים מאותו `orders` + KPIs
+   * (SSOT) — בלי חישוב נפרד בתוך המודאל.
+   */
+  const {
+    methodControlRows,
+    methodViews,
+    showMethodControl,
+  } = usePaymentIntakePlanningViews(orders, includedIds, liveFormKpis, totals.totalUsd);
 
   /** בדיקות חריגה/יתרה חיות — לתצוגה בלבד (לא רק בזמן שמירה) */
   const liveIntakeDevRows = useMemo(() => {
@@ -1003,21 +1005,39 @@ export function PaymentModalUpdated({
     hasOpenBalanceShortfallLive,
   ]);
 
-  /** Part 1 — סיכום הזמנה מרכזי: סה"כ הזמנה / שווי בש"ח / שולם (DB + הקלדה) / יתרה */
+  /**
+   * סיכום לכרטיס «נשאר לתשלום».
+   * חשוב: היתרה חייבת להגיע מאותו מקור כמו «חוב פתוח» / פס הסיכום
+   * (`customerOpenDebtSignedUsd`), לא מסכום total הזמנות − dbPaid בלבד —
+   * אחרת אחרי שמירה (כשהטופס מתאפס וה־orders עדיין לא הספיקו להתעדכן)
+   * הכרטיס מציג חוב ישן בעוד שאר המסך מציג $0.
+   */
   const orderSummaryForCards = useMemo(() => {
     let total = 0;
-    let paidDb = 0;
     for (const o of orders) {
       total += Number(o.totalAmountUsd) || 0;
-      paidDb += Number(o.dbPaidUsd) || 0;
     }
     const totalR = roundMoney2(total);
-    const paid = roundMoney2(paidDb + totals.totalUsd);
-    if (totalR <= 0.005 && paid <= 0.005) return null;
-    const remaining = Math.max(0, roundMoney2(totalR - paid));
+    const entered = roundMoney2(totals.totalUsd);
+    const openDebtNow = customerBalanceResetPending
+      ? 0
+      : customerOpenDebtSignedUsd > 0.01
+        ? roundMoney2(customerOpenDebtSignedUsd)
+        : 0;
+    const remainingUsd = customerBalanceResetPending
+      ? 0
+      : roundMoney2(Math.max(0, openDebtNow - entered));
+    const paidUsd = roundMoney2(Math.max(0, totalR - remainingUsd));
+    if (totalR <= 0.005 && paidUsd <= 0.005 && remainingUsd <= 0.005) return null;
     const ilsValue = roundMoney2(totalR * (rateN > 0 ? rateN : 0));
-    return { totalUsd: totalR, ilsValue, paidUsd: paid, remainingUsd: remaining };
-  }, [orders, totals.totalUsd, rateN]);
+    return { totalUsd: totalR, ilsValue, paidUsd, remainingUsd };
+  }, [
+    orders,
+    totals.totalUsd,
+    rateN,
+    customerOpenDebtSignedUsd,
+    customerBalanceResetPending,
+  ]);
 
   /** תצוגה חיה בלבד — יתרה לאחר שמירה = חוב נוכחי − סכום בהקלדה */
   const openDebtAfterPaymentPreview = useMemo(() => {
@@ -2331,28 +2351,11 @@ export function PaymentModalUpdated({
       setSaveErr("אין יעד להקצאה");
       return { ok: false };
     }
-    const devRows = computeIntakeSaveDeviations({
-      orders,
-      includedOrderIds: includedIds,
-      enteredByBucket: buildEnteredByBucket(liveFormKpis),
-      formRateN: rateN,
-      totalPaymentUsd: totals.totalUsd,
-    });
     /**
-     * כאשר המשתמש כבר בחר כיצד לטפל בעודף (עמלה / יתרת זכות),
-     * חריגת אמצעי תשלום היא חלק מאותו עודף ואין לחסום את השמירה.
-     * חריגת שער (rate) כן נשמרת ונרשמת ב-Audit בצד השרת — לא מחסימים כאן.
+     * לוגיקה עסקית מחודשת: אין חסימה על חריגת אמצעי תשלום מול המסמך.
+     * נשמר מה שהתקבל בפועל; השוואה יחידה = סה״כ התקבל מול סה״כ חוב (FIFO + עודף).
+     * המודאל הישן נשאר בקוד לתאימות UI אך אינו נפתח יותר בשמירה.
      */
-    const surplusAlreadyHandled =
-      surplusDisposition === "commission" || surplusDisposition === "credit";
-    if (!surplusAlreadyHandled && intakeSaveHasDeviations(devRows)) {
-      // surplusDisposition is null/undefined here (narrowed by surplusAlreadyHandled check)
-      saveSurplusPendingRef.current = false;
-      intakeDevPendingSaveRef.current = true;
-      setIntakeDevRows(devRows);
-      setIntakeDevModalOpen(true);
-      return { ok: false };
-    }
     setSaveBusy(true);
     const receivedTodaySave = isTodayYmd(paymentDateYmd);
     const hm = (paymentTimeHm || "").trim() || formatLocalHm(new Date());
@@ -2377,7 +2380,7 @@ export function PaymentModalUpdated({
       draftPhone: draftCustomer.phone.trim() || null,
       saveSurplusAsCredit: saveAsCredit,
       surplusDisposition: surplusDisposition ?? null,
-      allowMethodDeviation: false,
+      allowMethodDeviation: true,
     });
     const savePaymentMs = Math.round(performance.now() - saveStart);
     if (!res.ok) {
@@ -2568,12 +2571,56 @@ export function PaymentModalUpdated({
     });
   }
 
-  function openOrderForEdit(orderId: string) {
+  function openOrderForEdit(orderId: string, opts?: { fromMethodControl?: boolean }) {
     if (!canEditOrders) {
       onToast("אין הרשאת עריכת הזמנה");
       return;
     }
+    const fromMethodControl = opts?.fromMethodControl === true;
+    reopenMethodControlAfterOrderEditRef.current = fromMethodControl;
+    if (fromMethodControl) setMethodControlOpen(false);
     setOrderEditId(orderId);
+  }
+
+  /**
+   * רענון אחד למקור ההזמנות המשותף — מעדכן את טבלת הקליטה ואת חלון האמצעים יחד.
+   * לא מאפס בחירת הזמנות / טופס תשלום / טיוטת לקוח.
+   */
+  async function refreshSharedPaymentIntakeOrders() {
+    const cid = customer?.id?.trim();
+    if (!cid) return;
+    setSharedOrdersRefreshing(true);
+    try {
+      const res = await softRefreshPaymentIntakeOrders({
+        customerId: cid,
+        weekCode: intakeWeekCode,
+        workCountry: intakeDocumentWorkCountry,
+      });
+      if (!res.ok) return;
+      setOrders(res.orders);
+      setCustomerOpenDebtSignedUsd(parseMoneyStringOrZero(String(res.openDebtSignedUsd)));
+      setCustomer((cur) =>
+        cur?.id === cid
+          ? { ...cur, customerBalanceUsd: res.internalSignedUsd || res.customerBalanceUsd }
+          : cur,
+      );
+    } finally {
+      setSharedOrdersRefreshing(false);
+    }
+  }
+
+  function finishOrderEditAndRestore(refresh: boolean) {
+    setOrderEditId(null);
+    const reopen = reopenMethodControlAfterOrderEditRef.current;
+    reopenMethodControlAfterOrderEditRef.current = false;
+    if (refresh) {
+      void (async () => {
+        await refreshSharedPaymentIntakeOrders();
+        if (reopen) setMethodControlOpen(true);
+      })();
+      return;
+    }
+    if (reopen) setMethodControlOpen(true);
   }
 
   function ledgerStatusClass(status: PaymentLedgerStatus): string {
@@ -3326,7 +3373,7 @@ export function PaymentModalUpdated({
                       <th className="pm-num pm-th-amt">סכום מקור ($)</th>
                       <th className="pm-num pm-th-commission">עמלה ($)</th>
                       <th className="pm-num">שולם ($)</th>
-                      <th className="pm-num pm-th-total">יתרה ($)</th>
+                      <th className="pm-num pm-th-total">יתרת חוב ($)</th>
                       <th>תשלום אחרון</th>
                       <th>סטטוס</th>
                       <th className="payment-modal-th-check" aria-label="עדיפות לסגירה" />
@@ -3619,8 +3666,13 @@ export function PaymentModalUpdated({
 
                 <PaymentMethodControlModal
                   open={methodControlOpen && showMethodControl}
-                  rows={methodControlRows}
+                  methodViews={methodViews}
+                  canEditOrders={canEditOrders}
+                  refreshing={sharedOrdersRefreshing}
                   onClose={() => setMethodControlOpen(false)}
+                  onRefresh={() => void refreshSharedPaymentIntakeOrders()}
+                  onOrderEdit={(orderId) => openOrderForEdit(orderId, { fromMethodControl: true })}
+                  onOrderView={(orderId) => void openPaymentHistory(orderId)}
                 />
 
                 <div
@@ -3753,10 +3805,8 @@ export function PaymentModalUpdated({
         onToast={onToast}
         canCreateOrders={canCreateOrders}
         canEditOrders={canEditOrders}
-        onClose={() => setOrderEditId(null)}
-        onSaved={() => {
-          if (customer?.id) void loadCustomerOrders(customer.id, { silent: true, weekCode: intakeWeekCode });
-        }}
+        onClose={() => finishOrderEditAndRestore(false)}
+        onSaved={() => finishOrderEditAndRestore(true)}
       />
       <DebtBreakdownModal
         open={debtBreakdownOpen}
