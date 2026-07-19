@@ -161,7 +161,7 @@ export async function createCashExpense(input: {
   createdById: string;
 }): Promise<{ ok: boolean; error?: string; id?: string }> {
   const amount = dec(input.amount);
-  if (amount.lte(0)) return { ok: false, error: "יש להזין סכום חיובי" };
+  if (amount.eq(0)) return { ok: false, error: "יש להזין סכום שונה מאפס" };
 
   const raw = (input.dateYmd ?? "").trim();
   const expenseDate = expenseDateFromInput(raw || undefined, input.timeHm);
@@ -208,7 +208,7 @@ export async function updateCashExpense(input: {
   const id = input.id.trim();
   if (!id) return { ok: false, error: "חסר מזהה" };
   const amount = dec(input.amount);
-  if (amount.lte(0)) return { ok: false, error: "יש להזין סכום חיובי" };
+  if (amount.eq(0)) return { ok: false, error: "יש להזין סכום שונה מאפס" };
 
   const data: Prisma.CashExpenseUpdateInput = {
     currency: input.currency === "USD" ? "USD" : "ILS",

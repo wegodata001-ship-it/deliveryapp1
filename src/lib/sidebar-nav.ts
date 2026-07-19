@@ -19,7 +19,8 @@ export type NavIconId =
   | "editRequests"
   | "reconcile"
   | "cashbox"
-  | "documents";
+  | "documents"
+  | "shipments";
 
 export type NavItemDef = {
   href: string;
@@ -63,6 +64,11 @@ export const SIDEBAR_SECTIONS: NavSectionDef[] = [
         icon: "editRequests",
         anyOf: ["edit_orders"],
       },
+    ],
+  },
+  {
+    title: "לקוחות",
+    items: [
       {
         href: "/admin/orders",
         label: "לקוח חדש",
@@ -70,20 +76,6 @@ export const SIDEBAR_SECTIONS: NavSectionDef[] = [
         anyOf: ["create_orders"],
         openWindow: { type: "createCustomer" },
       },
-    ],
-  },
-  {
-    title: "כספים ותשלומים",
-    items: [
-      {
-        href: "/admin",
-        label: "קליטת תשלום",
-        icon: "payIn",
-        anyOf: ["receive_payments"],
-        openWindow: { type: "paymentsUpdated", props: {} },
-      },
-      // "בקרת תקבולים" הוסר מהתפריט (כפילות מול קליטת תשלום / יתרות / כרטסת לקוח).
-      // הדף, ה-route וה-API נשמרים: /admin/receipt-control — לשילוב עתידי.
       {
         href: "/admin/customers",
         label: "לקוחות",
@@ -98,6 +90,20 @@ export const SIDEBAR_SECTIONS: NavSectionDef[] = [
         openWindow: { type: "customerCard", props: {} },
       },
       { href: "/admin/balances", label: "יתרות", icon: "balances", anyOf: ["view_reports"] },
+    ],
+  },
+  {
+    title: "כספים",
+    items: [
+      {
+        href: "/admin",
+        label: "קליטת תשלום",
+        icon: "payIn",
+        anyOf: ["receive_payments"],
+        openWindow: { type: "paymentsUpdated", props: {} },
+      },
+      // "בקרת תקבולים" הוסר מהתפריט (כפילות מול קליטת תשלום / יתרות / כרטסת לקוח).
+      // הדף, ה-route וה-API נשמרים: /admin/receipt-control — לשילוב עתידי.
       {
         href: "/admin/cash-flow",
         label: "בקרת תזרים",
@@ -110,6 +116,15 @@ export const SIDEBAR_SECTIONS: NavSectionDef[] = [
         icon: "cashbox",
         anyOf: ["manage_cash_expenses", "view_payment_control"],
       },
+    ],
+  },
+  {
+    title: "משלוחים",
+    items: [
+      { href: "/admin/shipments", label: "רשימת משלוחים", icon: "shipments", anyOf: ["manage_shipments", "view_shipments"] },
+      { href: "/admin/shipments/import", label: "ייבוא משלוח", icon: "import", anyOf: ["manage_shipments"] },
+      { href: "/admin/shipments/control", label: "בקרת משלוחים", icon: "receipt", anyOf: ["manage_shipments", "view_shipments"] },
+      { href: "/admin/reports", label: "דוחות", icon: "reports", anyOf: ["view_reports"] },
     ],
   },
   {
@@ -135,7 +150,6 @@ export const SIDEBAR_SECTIONS: NavSectionDef[] = [
       },
       { href: "/admin/documents", label: "ארכיון מסמכים", icon: "documents", anyOf: ["documents.view"] },
       { href: "/admin/source-tables", label: "טבלאות מקור", icon: "sourceTables", anyOf: ["manage_settings"] },
-      { href: "/admin/reports", label: "דוחות", icon: "reports", anyOf: ["view_reports"] },
       { href: "/admin/activity", label: "יומן פעולות", icon: "activity", anyOf: ["manage_users"] },
     ],
   },

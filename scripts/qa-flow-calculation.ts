@@ -34,10 +34,7 @@ import {
 } from "../src/lib/cash-expense-payment-method";
 import { resolveCashControlChannel } from "../src/lib/cash-control-channel";
 import { computeCashVarianceDay, previewExpenseVarianceImpact } from "../src/lib/cash-control-variance";
-import {
-  paymentMethodBucketKey,
-  parsePaymentNoteContributions,
-} from "../src/lib/payment-breakdown-shared";
+import { paymentMethodBucketKey } from "../src/lib/payment-breakdown-shared";
 import type { FxPurchaseRecord } from "../src/app/admin/cash-flow/flow-types";
 
 let passed = 0;
@@ -260,8 +257,20 @@ function assertMethodColumn(
   assertMethodColumn("CREDIT_CARD", "CREDIT_CARD", "USD", "CREDIT_CARD_USD");
   assertMethodColumn("OTHER", "OTHER", "ILS", "OTHER_ILS");
   assert("CREDIT_CARD bucket", paymentMethodBucketKey("CREDIT_CARD") === "CREDIT");
-  const parsed = parsePaymentNoteContributions("#1 USD $50.00 · CREDIT_CARD");
-  assert("notes CREDIT_CARD", parsed[0]?.bucket === "CREDIT" && parsed[0]?.amount === 50);
+  const structured = getDailyPaymentContributions({
+    amountIls: null,
+    amountUsd: null,
+    paymentMethod: null,
+    usdPaymentMethod: null,
+    ilsPaymentMethod: null,
+    methodAllocations: [
+      { method: "CREDIT_CARD", currency: "USD", sourceAmount: { toString: () => "50" } },
+    ],
+  });
+  assert(
+    "structured CREDIT_CARD",
+    structured[0]?.column === "CREDIT_CARD_USD" && structured[0]?.amount === 50,
+  );
 }
 
 console.log("\n--- מיפוי ערוצים והוצאות קופה ---");

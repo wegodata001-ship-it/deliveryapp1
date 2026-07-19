@@ -14,7 +14,7 @@ import { TurkeyMovementsTable } from "@/components/admin/flow-control/TurkeyMove
 import { CurrencyExchangeHistory } from "@/components/admin/flow-control/CurrencyExchangeHistory";
 import { ExchangeProfitLossChart } from "@/components/admin/flow-control/ExchangeProfitLossChart";
 import { MethodDrillPanel } from "@/components/admin/cash-flow/MethodDrillPanel";
-import { ManagerCountModal } from "@/components/admin/manager-count/ManagerCountModal";
+import { ManagerCountWizard } from "@/components/admin/manager-count/ManagerCountWizard";
 import { ExchangeProfitModal } from "@/components/admin/flow-control/exchange-profit/ExchangeProfitModal";
 import { FlowDashboardKpiStrip } from "@/components/admin/flow-control/dashboard/FlowDashboardKpiStrip";
 import { FlowWeekStatusBanner } from "@/components/admin/flow-control/dashboard/FlowWeekStatusBanner";
@@ -373,7 +373,10 @@ export function FlowWeekDashboard({
                       <td dir="ltr">{e.dateYmd}</td>
                       <td dir="ltr">{e.timeHm}</td>
                       <td>{e.reasonLabel}</td>
-                      <td dir="ltr" className="fc-num">
+                      <td
+                        dir="ltr"
+                        className={`fc-num${fcNum(e.amount) < 0 ? " cc-expense-amount--negative" : ""}`}
+                      >
                         {fmtDailyMoney(e.currency, fcNum(e.amount))}
                       </td>
                     </tr>
@@ -385,11 +388,12 @@ export function FlowWeekDashboard({
         ) : null}
       </FlowDetailModal>
 
-      <ManagerCountModal
+      <ManagerCountWizard
         open={managerOpen}
         week={drill.week}
         weekLabel={drill.weekLabel}
         flow={drill.flow}
+        overview={overview}
         canEdit={canEditManagerCount}
         onClose={() => setManagerOpen(false)}
         onSaved={() => {

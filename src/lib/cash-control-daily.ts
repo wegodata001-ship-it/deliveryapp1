@@ -17,7 +17,6 @@ import {
   type CashControlCurrency,
 } from "@/lib/cash-control-channel";
 import {
-  parsePaymentNoteContributions,
   paymentMethodBucketKey,
   type PaymentBucketKey,
 } from "@/lib/payment-breakdown-shared";
@@ -119,22 +118,26 @@ export type DailyPaymentSplitInput = {
   paymentMethod: string | null;
   usdPaymentMethod: string | null;
   ilsPaymentMethod: string | null;
-  notes?: string | null;
   exchangeRate?: { toString(): string } | null;
+  methodAllocations?: Array<{
+    method: string;
+    currency: string;
+    sourceAmount: { toString(): string };
+  }>;
 };
 
-function contributionsFromNoteLines(
+function contributionsFromStructuredMethods(
   p: DailyPaymentSplitInput,
 ): Array<{ column: CashDailyMethodId; amount: number }> | null {
-  const rate = Number(p.exchangeRate?.toString() ?? 0);
-  const parts = parsePaymentNoteContributions(p.notes, rate);
+  const parts = p.methodAllocations ?? [];
   if (parts.length === 0) return null;
 
   const out: Array<{ column: CashDailyMethodId; amount: number }> = [];
   for (const part of parts) {
-    const col = bucketToMethod(part.bucket, part.side);
+    const side = part.currency === "USD" ? "USD" : "ILS";
+    const col = bucketToMethod(paymentMethodBucketKey(part.method), side);
     if (!col) continue;
-    out.push({ column: col, amount: part.amount });
+    out.push({ column: col, amount: num(part.sourceAmount) });
   }
   return out.length > 0 ? out : null;
 }
@@ -142,8 +145,8 @@ function contributionsFromNoteLines(
 export function getDailyPaymentContributions(
   p: DailyPaymentSplitInput,
 ): Array<{ column: CashDailyMethodId; amount: number }> {
-  const fromNotes = contributionsFromNoteLines(p);
-  if (fromNotes) return fromNotes;
+  const structured = contributionsFromStructuredMethods(p);
+  if (structured) return structured;
 
   const out: Array<{ column: CashDailyMethodId; amount: number }> = [];
   const ilsAmt = num(p.amountIls);

@@ -73,6 +73,8 @@ export type IntakeSaveInput = {
   selectedOrderIds: string[] | null;
   methods: IntakeMethodLine[];
   closeWithFee?: IntakeCloseWithFee | null;
+  /** יעד לעודף — חובה כאשר התקבל יותר מהחוב */
+  surplusDisposition?: "credit" | "commission" | null;
 };
 
 export type IntakeDebtRow = {

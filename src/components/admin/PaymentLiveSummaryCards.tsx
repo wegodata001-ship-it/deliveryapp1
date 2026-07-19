@@ -25,8 +25,15 @@ export type OrderSummaryForCards = {
   ilsValue: number;
   /** סה"כ שולם (DB + הקלדה נוכחית) */
   paidUsd: number;
-  /** יתרה לתשלום */
+  /** חוב פתוח לפני התשלום הנוכחי (total − dbPaid) */
+  openDebtBeforeUsd: number;
+  /** יתרה לתשלום אחרי ההקלדה — 0 כשאין חוב או שיש עודף */
   remainingUsd: number;
+  /**
+   * עודף תשלום חי:
+   * overpayment = enteredPayment − openDebtBefore (כשחיובי).
+   */
+  overpaymentUsd: number;
 };
 
 type Props = {
@@ -114,6 +121,8 @@ export function PaymentLiveSummaryCards({
   const showOpenDebt = openDebtUsd > 0.01;
   const methodCards = LIVE_PAYMENT_KPI_CARDS.filter((c) => !c.isTotal);
   const canDrill = Array.isArray(lines) && lines.length > 0;
+  const hasOverpayment = (orderSummary?.overpaymentUsd ?? 0) > 0.01;
+  const hasRemaining = (orderSummary?.remainingUsd ?? 0) > 0.01;
 
   const [drill, setDrill] = useState<{ title: string; method: PaymentLineMethod | null } | null>(null);
 
@@ -208,19 +217,48 @@ export function PaymentLiveSummaryCards({
       ) : null}
 
       {orderSummary ? (
-        <div className="payment-modal-live-kpi payment-modal-live-kpi--order-summary payment-modal-live-kpi--order-summary--last">
-          <div className="payment-modal-live-kpi__lbl">נשאר לתשלום</div>
+        <div
+          className={[
+            "payment-modal-live-kpi",
+            "payment-modal-live-kpi--order-summary",
+            "payment-modal-live-kpi--order-summary--last",
+            hasOverpayment ? "payment-modal-live-kpi--order-summary--surplus" : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+        >
+          <div className="payment-modal-live-kpi__lbl">
+            {hasOverpayment ? "עודף תשלום" : "נשאר לתשלום"}
+          </div>
           <AnimatedMoneyValue
             className={[
               "payment-modal-live-kpi__hero-v",
-              orderSummary.remainingUsd > 0.01 ? "payment-modal-live-kpi__hero-v--due" : "payment-modal-live-kpi__hero-v--ok",
+              hasOverpayment
+                ? "payment-modal-live-kpi__hero-v--surplus"
+                : hasRemaining
+                  ? "payment-modal-live-kpi__hero-v--due"
+                  : "payment-modal-live-kpi__hero-v--ok",
             ].join(" ")}
             dir="ltr"
-            value={formatUsdDisplay(orderSummary.remainingUsd)}
+            value={
+              hasOverpayment
+                ? `+${formatUsdDisplay(orderSummary.overpaymentUsd)}`
+                : formatUsdDisplay(orderSummary.remainingUsd)
+            }
           />
           <div className="payment-modal-live-kpi__sub">
-            <span>שולם עד כה: <strong dir="ltr">{formatUsdDisplay(orderSummary.paidUsd)}</strong></span>
-            <span>חוב מקורי: <strong dir="ltr">{formatUsdDisplay(orderSummary.totalUsd)}</strong></span>
+            <span>
+              שולם עד כה: <strong dir="ltr">{formatUsdDisplay(orderSummary.paidUsd)}</strong>
+            </span>
+            <span>
+              חוב מקורי: <strong dir="ltr">{formatUsdDisplay(orderSummary.totalUsd)}</strong>
+            </span>
+            {hasOverpayment ? (
+              <span>
+                חוב לפני תשלום:{" "}
+                <strong dir="ltr">{formatUsdDisplay(orderSummary.openDebtBeforeUsd)}</strong>
+              </span>
+            ) : null}
           </div>
         </div>
       ) : null}

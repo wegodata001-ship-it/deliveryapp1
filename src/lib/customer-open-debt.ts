@@ -3,6 +3,8 @@ import {
   calculateCustomerBalance,
   type CustomerBalanceScope,
 } from "@/lib/customer-balance-calculator";
+import { ensureOnce } from "@/lib/ensure-tables-once";
+import { prisma } from "@/lib/prisma";
 import {
   DEFAULT_WORK_COUNTRY,
   orderSourceCountryFromWorkCountry,
@@ -93,4 +95,25 @@ export async function getCustomerInternalBalanceUsd(
 ): Promise<Prisma.Decimal> {
   const r = await getCustomerOpenDebt(customerId, scope);
   return r.internalSignedUsd;
+}
+
+/**
+ * Snapshot cache בלבד — מקור האמת הוא החישוב הנגזר (getCustomerInternalBalanceUsd).
+ * אין להסתמך על Customer.balanceUsd להחלטות עסקיות.
+ */
+export async function persistCustomerBalanceSnapshot(
+  customerId: string,
+  balanceUsd: Prisma.Decimal,
+): Promise<void> {
+  await ensureOnce("customer-balance-usd-column", async () => {
+    await prisma.$executeRaw`
+      ALTER TABLE "Customer"
+      ADD COLUMN IF NOT EXISTS "balanceUsd" DECIMAL(19,4) NOT NULL DEFAULT 0
+    `;
+  });
+  await prisma.$executeRaw`
+    UPDATE "Customer"
+    SET "balanceUsd" = ${balanceUsd}
+    WHERE "id" = ${customerId}
+  `;
 }

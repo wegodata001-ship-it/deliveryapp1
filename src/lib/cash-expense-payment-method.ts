@@ -88,7 +88,7 @@ export function aggregateExpensesByMethod(
   let totals = emptyExpensesByMethod();
   for (const r of rows) {
     const amt = Number(r.amount?.toString() ?? 0);
-    if (!Number.isFinite(amt) || amt <= 0) continue;
+    if (!Number.isFinite(amt) || amt === 0) continue;
     const currency = normalizeCashControlCurrency(r.currency);
     totals = addExpenseToMethodTotals(totals, r.paymentMethod, currency, amt);
   }

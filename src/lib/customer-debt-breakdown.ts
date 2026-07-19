@@ -2,7 +2,6 @@ import "server-only";
 
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { CUSTOMER_CREDIT_SURPLUS_NOTE_PREFIX } from "@/lib/cash-control-internal-payments";
 import { BALANCE_RESET_FROM_CREDIT_LEDGER_LABEL } from "@/lib/commission-debt-closure";
 import { getCustomerOpenDebt, openDebtScopeForWorkCountry } from "@/lib/customer-open-debt";
 import { DEBT_WITHDRAWAL_LEDGER_LABEL, orderCustomerCreditUsd } from "@/lib/debt-withdrawal-order";
@@ -142,6 +141,7 @@ export async function buildCustomerDebtBreakdown(input: {
         ilsPaymentMethod: true,
         orderId: true,
         notes: true,
+        businessType: true,
         status: true,
         createdBy: { select: { fullName: true } },
         order: { select: { orderNumber: true } },
@@ -168,6 +168,7 @@ export async function buildCustomerDebtBreakdown(input: {
         ilsPaymentMethod: true,
         orderId: true,
         notes: true,
+        businessType: true,
         createdBy: { select: { fullName: true } },
         order: { select: { orderNumber: true } },
       },
@@ -305,8 +306,9 @@ export async function buildCustomerDebtBreakdown(input: {
     const amt = round2(dec(paymentUsd(p)));
     const notes = p.notes?.trim() || "";
     const isUnallocated = !p.orderId;
-    const isCreditSurplus = notes.startsWith(CUSTOMER_CREDIT_SURPLUS_NOTE_PREFIX);
-    const isBalanceReset = notes.includes(BALANCE_RESET_FROM_CREDIT_LEDGER_LABEL);
+    const isCreditSurplus = p.businessType === "CUSTOMER_CREDIT";
+    const isBalanceReset =
+      p.businessType === "CREDIT_APPLICATION" || p.businessType === "BALANCE_RESET";
 
     if (isUnallocated) {
       unallocatedPaymentsTotal = round2(unallocatedPaymentsTotal + amt);

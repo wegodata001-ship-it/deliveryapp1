@@ -12,7 +12,6 @@ import {
   summarizeOrderBalanceResetRows,
   computeOrderBalanceResetRows,
 } from "@/lib/balance-reset-calculation";
-import { CUSTOMER_CREDIT_SURPLUS_NOTE_PREFIX } from "@/lib/cash-control-internal-payments";
 
 describe("QA-1 — חוסר עם עמלה מספיקה", () => {
   it("306 / 300 / commission 10 → commission 4", () => {
@@ -142,10 +141,8 @@ describe("QA-9 — Audit בתוך Transaction (הכנה)", () => {
 
 describe("QA-10 — מניעת כפילות ביתרת זכות", () => {
   it("מבטל רק זכות מאותה קליטה — לא יתרה קודמת", () => {
-    const prefix = CUSTOMER_CREDIT_SURPLUS_NOTE_PREFIX;
     const ids = pickOverpaymentCreditsToCancel({
       overpaymentUsd: 4,
-      primaryPaymentCode: "PAY-100",
       paymentNumber: 55,
       candidates: [
         {
@@ -153,14 +150,12 @@ describe("QA-10 — מניעת כפילות ביתרת זכות", () => {
           amountUsd: 4,
           paymentNumber: 55,
           orderId: null,
-          notes: `${prefix}\nקשור לקליטה PAY-100`,
         },
         {
           id: "prior",
           amountUsd: 10,
           paymentNumber: 40,
           orderId: null,
-          notes: `${prefix}\nקשור לקליטה PAY-050`,
         },
       ],
     });

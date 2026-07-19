@@ -156,7 +156,7 @@ export function CashExpenseQuickModal({
 
   const canSubmit = useMemo(() => {
     const amt = Number(form.amount.replace(",", "."));
-    return Number.isFinite(amt) && amt > 0 && !!form.reason && !!form.paymentMethod;
+    return Number.isFinite(amt) && amt !== 0 && !!form.reason && !!form.paymentMethod;
   }, [form.amount, form.paymentMethod, form.reason]);
 
   if (!open) return null;
@@ -172,7 +172,7 @@ export function CashExpenseQuickModal({
       return;
     }
     if (!canSubmit) {
-      setErr("יש למלא סוג הוצאה, אמצעי תשלום, מטבע וסכום חיובי");
+      setErr("יש למלא סוג הוצאה, אמצעי תשלום, מטבע וסכום שונה מאפס");
       return;
     }
     setErr(null);
@@ -265,7 +265,7 @@ export function CashExpenseQuickModal({
                       inputMode="decimal"
                       className="cc-input"
                       value={form.amount}
-                      placeholder="0.00"
+                      placeholder="0.00 (ניתן להזין תיקון שלילי)"
                       dir="ltr"
                       onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
                     />
@@ -338,7 +338,10 @@ export function CashExpenseQuickModal({
               <div className="ce-modal-v2__day-summary">
                 {daySummary.map(([label, sum]) => (
                   <span key={label}>
-                    {label}: <strong dir="ltr">{fmtDailyMoney(label.includes("$") ? "USD" : "ILS", sum)}</strong>
+                    {label}:{" "}
+                    <strong dir="ltr" className={sum < 0 ? "cc-expense-amount--negative" : undefined}>
+                      {fmtDailyMoney(label.includes("$") ? "USD" : "ILS", sum)}
+                    </strong>
                   </span>
                 ))}
               </div>
@@ -374,7 +377,12 @@ export function CashExpenseQuickModal({
                           </span>
                         </td>
                         <td dir="ltr">{r.currency === "USD" ? "$" : "₪"}</td>
-                        <td dir="ltr">{fmtDailyMoney(r.currency === "USD" ? "USD" : "ILS", Number(r.amount))}</td>
+                        <td
+                          dir="ltr"
+                          className={Number(r.amount) < 0 ? "cc-expense-amount--negative" : undefined}
+                        >
+                          {fmtDailyMoney(r.currency === "USD" ? "USD" : "ILS", Number(r.amount))}
+                        </td>
                         <td>{r.createdByName ?? "—"}</td>
                         <td>{r.notes ?? "—"}</td>
                         <td>

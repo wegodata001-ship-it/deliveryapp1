@@ -2,7 +2,12 @@ import "server-only";
 
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import type { OrderBreakdownMethodRow, PaymentIntakeOrderRow } from "@/lib/payment-intake";
+import {
+  debtStatus,
+  orderLedgerBalanceUsd,
+  type OrderBreakdownMethodRow,
+  type PaymentIntakeOrderRow,
+} from "@/lib/payment-intake";
 import { breakdownLineUsd, computeOrderMethodDeviation, isCompositePaymentMethod } from "@/lib/payment-breakdown-shared";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 import type { PaymentIntakeCustomerPaymentRow } from "@/lib/payment-intake-customer-kpi";
@@ -24,8 +29,6 @@ export type PaymentIntakeCustomerPayload = {
   customerIndex: string | null;
   customerBalanceUsd: string;
 };
-
-const MONEY_EPS = 0.02;
 
 type IntakeLoadParams = {
   customerId: string;
@@ -126,11 +129,11 @@ function mapOrderToIntakeRow(
   const com = o.commissionUsd ?? new Prisma.Decimal(0);
   const totalUsdVal = o.totalUsd ?? deal.add(com).toDecimalPlaces(4, 4);
   const paidSum = paidByOrder.get(o.id) ?? new Prisma.Decimal(0);
-  const remDec = totalUsdVal.sub(paidSum).toDecimalPlaces(2, 4);
+  const totalN = Number(totalUsdVal.toString());
   const paidN = Number(paidSum.toString());
-  let status: "unpaid" | "partial" | "paid" = "unpaid";
-  if (Number(remDec.toString()) <= MONEY_EPS) status = "paid";
-  else if (paidN > MONEY_EPS) status = "partial";
+  const remainingN = orderLedgerBalanceUsd({ totalAmountUsd: totalN, dbPaidUsd: paidN });
+  const remDec = new Prisma.Decimal(remainingN).toDecimalPlaces(2, 4);
+  const status = debtStatus(paidN, totalN);
   const rateDec = o.usdRateUsed ?? o.snapshotFinalDollarRate ?? o.exchangeRate ?? new Prisma.Decimal(0);
   const rateN = Number(rateDec.toString()) || 0;
   const ilsDec = o.totalIlsWithVat ?? o.totalIls ?? new Prisma.Decimal(0);
@@ -152,8 +155,36 @@ function mapOrderToIntakeRow(
         ) ?? 0;
       plannedByMethod.set(b.paymentMethod, (plannedByMethod.get(b.paymentMethod) ?? 0) + usd);
     }
-    breakdown = [...plannedByMethod.entries()].map(([method, plannedUsd]) => {
-      const paid = actualMap.get(method) ?? 0;
+
+    // Build per-method paid amounts.
+    // Payments saved as a single COMPOSITE record are not tracked per-method in actualMap,
+    // which would cause every planned method to show full remaining even when paid in full.
+    // Fix: any paid amount not attributed to a specific planned method is distributed
+    // across planned methods in their declaration order (FIFO), so the correct method
+    // (e.g. Credit) retains its remaining balance while already-paid methods (Cash,
+    // Bank Transfer) show zero remaining.
+    const plannedEntries = [...plannedByMethod.entries()];
+    const directPaidByMethod = new Map<string, number>(
+      plannedEntries.map(([m]) => [m, actualMap.get(m) ?? 0]),
+    );
+    const knownAttributedSum = round2(
+      [...directPaidByMethod.values()].reduce((s, v) => s + v, 0),
+    );
+    // Payments attributed to non-planned methods (COMPOSITE, OTHER, etc.)
+    let unattributedPaidUsd = round2(Math.max(0, paidN - knownAttributedSum));
+    if (unattributedPaidUsd > 0.005) {
+      for (const [method, plannedUsd] of plannedEntries) {
+        const direct = directPaidByMethod.get(method) ?? 0;
+        const capacity = round2(Math.max(0, plannedUsd - direct));
+        const absorb = round2(Math.min(capacity, unattributedPaidUsd));
+        directPaidByMethod.set(method, round2(direct + absorb));
+        unattributedPaidUsd = round2(Math.max(0, unattributedPaidUsd - absorb));
+        if (unattributedPaidUsd <= 0.005) break;
+      }
+    }
+
+    breakdown = plannedEntries.map(([method, plannedUsd]) => {
+      const paid = directPaidByMethod.get(method) ?? 0;
       return {
         method,
         label: PAYMENT_METHOD_LABELS[method] ?? method,
@@ -163,7 +194,7 @@ function mapOrderToIntakeRow(
       };
     });
     hasMethodDeviation = computeOrderMethodDeviation(
-      [...plannedByMethod.entries()].map(([method, usd]) => ({ method, usd })),
+      plannedEntries.map(([method, usd]) => ({ method, usd })),
       actualMethods.map((a) => ({ method: a.method, usd: a.usd })),
     ).hasDeviation;
   }

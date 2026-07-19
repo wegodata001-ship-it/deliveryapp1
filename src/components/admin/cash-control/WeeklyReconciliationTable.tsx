@@ -16,6 +16,10 @@ import {
 
 const METHOD_HEADER = channelColLabels();
 
+function currencyToneClass(method: CashDailyMethodId): string {
+  return channelCurrency(method) === "ILS" ? "cc-col--currency-strong" : "cc-col--currency-soft";
+}
+
 function fmtPaid(method: CashDailyMethodId, value: string): string {
   const n = num(value);
   if (n <= 0) return "—";
@@ -60,7 +64,7 @@ export function WeeklyReconciliationTable({
               מידע כללי
             </th>
             {CASH_CONTROL_TABLE_METHODS.map((m) => (
-              <th key={m} colSpan={2} className={METHOD_GROUP_CLASS[m]}>
+              <th key={m} colSpan={2} className={`${METHOD_GROUP_CLASS[m]} ${currencyToneClass(m)}`}>
                 <span className="cc-group-head">
                   <MethodIcon method={m} size={13} />
                   {METHOD_HEADER[m]}
@@ -75,8 +79,8 @@ export function WeeklyReconciliationTable({
             <th className="cc-col--info cc-col--sep">מדינה</th>
             {CASH_CONTROL_TABLE_METHODS.map((m) => (
               <Fragment key={m}>
-                <th className={`cc-num ${METHOD_GROUP_CLASS[m]}`}>שולם</th>
-                <th className={`cc-num ${METHOD_GROUP_CLASS[m]} cc-col--sep`}>
+                <th className={`cc-num ${METHOD_GROUP_CLASS[m]} ${currencyToneClass(m)}`}>שולם</th>
+                <th className={`cc-num ${METHOD_GROUP_CLASS[m]} ${currencyToneClass(m)} cc-col--sep`}>
                   <span className="cc-pair-hint">
                     <ArrowDown size={10} aria-hidden />
                     התקבל
@@ -110,9 +114,10 @@ export function WeeklyReconciliationTable({
                   const recv = row.drawer[m];
                   const paidClickable = paid > 0;
                   const drillActive = active && activeDrill === m;
+                  const columnClasses = `${METHOD_GROUP_CLASS[m]} ${currencyToneClass(m)}`;
                   return (
                     <Fragment key={m}>
-                      <td dir="ltr" className={`cc-num ${METHOD_GROUP_CLASS[m]}`}>
+                      <td dir="ltr" className={`cc-num ${columnClasses}`}>
                         {paidClickable ? (
                           <button
                             type="button"
@@ -128,7 +133,7 @@ export function WeeklyReconciliationTable({
                           "—"
                         )}
                       </td>
-                      <td dir="ltr" className={`cc-num ${METHOD_GROUP_CLASS[m]} cc-col--sep`}>
+                      <td dir="ltr" className={`cc-num ${columnClasses} cc-col--sep`}>
                         <button
                           type="button"
                           className="cc-amount-link cc-amount-link--count"
@@ -161,7 +166,7 @@ export function WeeklyReconciliationTable({
                   )}
                 </td>
                 <td className="cc-col--status">
-                  {(row.status === "warn" || row.status === "critical") && onVarianceClick ? (
+                  {onVarianceClick ? (
                     <button
                       type="button"
                       className={`cc-badge cc-badge--clickable is-${row.status}`}
@@ -169,7 +174,7 @@ export function WeeklyReconciliationTable({
                         e.stopPropagation();
                         onVarianceClick(row);
                       }}
-                      title="פירוט חריגה"
+                      title="פירוט סטטוס"
                     >
                       <StatusIcon kind={row.status} size={12} />
                       {statusLabel(row.status)}
@@ -191,10 +196,16 @@ export function WeeklyReconciliationTable({
               </td>
               {CASH_CONTROL_TABLE_METHODS.map((m) => (
                 <Fragment key={m}>
-                  <td dir="ltr" className={`cc-num ${METHOD_GROUP_CLASS[m]}`}>
+                  <td
+                    dir="ltr"
+                    className={`cc-num ${METHOD_GROUP_CLASS[m]} ${currencyToneClass(m)}`}
+                  >
                     <strong>{fmtPaid(m, totalRow.intake[m])}</strong>
                   </td>
-                  <td dir="ltr" className={`cc-num ${METHOD_GROUP_CLASS[m]} cc-col--sep`}>
+                  <td
+                    dir="ltr"
+                    className={`cc-num ${METHOD_GROUP_CLASS[m]} ${currencyToneClass(m)} cc-col--sep`}
+                  >
                     <strong>{fmtReceived(m, totalRow.drawer[m])}</strong>
                   </td>
                 </Fragment>

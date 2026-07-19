@@ -44,9 +44,23 @@ export function CashExpensesSection({
         </div>
         <div className="cc-block__head-actions">
           <span className="cc-block__note">
-            סה"כ: <strong dir="ltr">{fmtDailyMoney("ILS", num(expensesIls))}</strong>
-            {num(expensesUsd) > 0 ? (
-              <> · <strong dir="ltr">{fmtDailyMoney("USD", num(expensesUsd))}</strong></>
+            סה"כ:{" "}
+            <strong
+              dir="ltr"
+              className={num(expensesIls) < 0 ? "cc-expense-amount--negative" : undefined}
+            >
+              {fmtDailyMoney("ILS", num(expensesIls))}
+            </strong>
+            {num(expensesUsd) !== 0 ? (
+              <>
+                {" · "}
+                <strong
+                  dir="ltr"
+                  className={num(expensesUsd) < 0 ? "cc-expense-amount--negative" : undefined}
+                >
+                  {fmtDailyMoney("USD", num(expensesUsd))}
+                </strong>
+              </>
             ) : null}
           </span>
           {caps.canCreate ? (
@@ -87,7 +101,12 @@ export function CashExpensesSection({
                     </span>
                   </td>
                   <td>{e.notes ?? "—"}</td>
-                  <td dir="ltr" className="cc-num">{fmtDailyMoney(e.currency, num(e.amount))}</td>
+                  <td
+                    dir="ltr"
+                    className={`cc-num${num(e.amount) < 0 ? " cc-expense-amount--negative" : ""}`}
+                  >
+                    {fmtDailyMoney(e.currency, num(e.amount))}
+                  </td>
                   <td>{e.currency === "USD" ? "$ דולר" : "₪ שקל"}</td>
                   <td>{e.createdByName ?? "—"}</td>
                   <td className="cc-icon-cell">

@@ -1,8 +1,10 @@
 import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { recordActivityAudit } from "@/lib/activity-audit";
-import { getCustomerInternalBalanceUsd } from "@/lib/customer-open-debt";
-import { ensureOnce } from "@/lib/ensure-tables-once";
+import {
+  getCustomerInternalBalanceUsd,
+  persistCustomerBalanceSnapshot,
+} from "@/lib/customer-open-debt";
 import { revalidateAllKpiCaches } from "@/lib/kpi-cache-revalidate";
 import { prisma } from "@/lib/prisma";
 import {
@@ -20,20 +22,6 @@ export type ExecutePaymentCancellationResult = {
   customerId: string;
   customerBalanceUsd: string;
 };
-
-async function persistCustomerBalanceSnapshot(customerId: string, balanceUsd: Prisma.Decimal): Promise<void> {
-  await ensureOnce("customer-balance-usd-column", async () => {
-    await prisma.$executeRaw`
-      ALTER TABLE "Customer"
-      ADD COLUMN IF NOT EXISTS "balanceUsd" DECIMAL(19,4) NOT NULL DEFAULT 0
-    `;
-  });
-  await prisma.$executeRaw`
-    UPDATE "Customer"
-    SET "balanceUsd" = ${balanceUsd}
-    WHERE "id" = ${customerId}
-  `;
-}
 
 /** ביטול תשלום/חשבונית — לשימוש פנימי לאחר אישור מנהל בלבד */
 export async function executePaymentCancellation(params: {

@@ -127,6 +127,7 @@ model User {
   turkeyTransferMovements  TurkeyTransferMovement[] @relation("TurkeyTransferMovementBy")
   paymentAdjustmentFeesCreated PaymentAdjustmentFee[] @relation("PaymentAdjustmentFeeCreatedBy")
   paymentAdjustmentFeesClosed  PaymentAdjustmentFee[] @relation("PaymentAdjustmentFeeClosedBy")
+  inventoryCountsCreated   InventoryCount[]         @relation("InventoryCountCreatedBy")
 }
 
 /** הגדרות שער דולר גלובליות: בסיס (usd_rate_base), עמלה (usd_fee), שער סופי מחושב (usd_rate_final). */
@@ -513,6 +514,14 @@ model ApprovalRequest {
   @@index([createdAt])
 }
 
+enum PaymentBusinessType {
+  STANDARD
+  CUSTOMER_CREDIT
+  CREDIT_APPLICATION
+  BALANCE_RESET
+  ADJUSTMENT_FEE
+}
+
 model Payment {
   id               String         @id @default(uuid())
   paymentCode      String?        @unique
@@ -553,6 +562,8 @@ model Payment {
   isPaid           Boolean        @default(false)
   /** ACTIVE = תשלום תקף; CANCELLED = בוטל — לא נספר ביתרות/דוחות */
   status           PaymentRecordStatus @default(ACTIVE)
+  /** סוג עסקי מובנה — החלטות עסקיות אינן תלויות עוד בתוכן notes */
+  businessType     PaymentBusinessType @default(STANDARD)
   cancelledAt      DateTime?
   cancelledById    String?
   cancelReason     String?
@@ -570,6 +581,7 @@ model Payment {
   approvalRequests ApprovalRequest[]
   cashAuditReviews PaymentCashAuditReview[]
   paymentAdjustmentFees PaymentAdjustmentFee[]
+  methodAllocations PaymentMethodAllocation[]
 
   @@index([customerId])
   @@index([orderId])
@@ -580,11 +592,30 @@ model Payment {
   @@index([isPaid])
   @@index([paymentNumber])
   @@index([status])
+  @@index([businessType])
   @@index([paymentDate, isPaid])
   @@index([weekCode, isPaid])
   @@index([countryCode, weekCode, status, isPaid, customerId])
   @@index([countryCode, paymentDate, status, isPaid, customerId])
   @@index([customerId, countryCode, status, isPaid])
+}
+
+/** פירוט אמצעי התשלום של קליטה — מקור מובנה במקום פענוח notes */
+model PaymentMethodAllocation {
+  id           String   @id @default(uuid())
+  paymentId    String
+  method       String
+  currency     String
+  sourceAmount Decimal  @db.Decimal(19, 4)
+  amountUsd    Decimal  @db.Decimal(19, 4)
+  createdAt    DateTime @default(now())
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId])
+  @@index([method])
+  @@index([currency])
+  @@map("payment_method_allocation")
 }
 
 /**
@@ -1079,6 +1110,152 @@ model PaymentAdjustmentFee {
   @@index([status, createdAt])
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// מודול משלוחים — Shipment Management
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum ShipmentStatus {
+  NEW            // חדש
+  RECEIVED       // נקלט
+  ASSIGNED       // שובץ
+  IN_TRANSIT     // בדרך
+  DELIVERED      // נמסר
+  NOT_DELIVERED  // לא נמסר
+  RETURNED       // חזר למחסן
+  COMPLETED      // הושלם
+}
+
+enum ShipmentPaymentStatus {
+  UNPAID
+  PARTIAL
+  PAID
+}
+
+/// אצוות / batch של משלוח (Header)
+model ShipmentBatch {
+  id                    String    @id @default(uuid())
+  /// מספר משלוח אוטומטי: SHP-001, SHP-002, ...
+  batchNumber           String    @unique
+  /// מספר המשלוח כפי שהתקבל בקובץ הספק
+  sourceShipmentNumber  String?
+  containerNumber       String?
+  totalBoxes            Int?
+  totalWeight           Decimal?  @db.Decimal(12, 3)
+  shippingDate          DateTime?
+  arrivalDate           DateTime?
+  releaseDate           DateTime?
+  warehouseReceiptDate  DateTime?
+  distributionStartDate DateTime?
+  notes                 String?
+  createdById           String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  records ShipmentRecord[]
+
+  @@index([batchNumber])
+  @@index([createdAt])
+  @@map("ShipmentBatch")
+}
+
+/// אזור חלוקה — ניתן להגדרה חופשית על ידי המנהל
+model ShipmentDeliveryZone {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  records ShipmentRecord[]
+
+  @@index([isActive])
+  @@map("ShipmentDeliveryZone")
+}
+
+/// שליח קבוע במודול המשלוחים — מנוהל מתוך הגדרות המודול
+model ShipmentCourier {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  records ShipmentRecord[]
+
+  @@index([isActive])
+  @@map("ShipmentCourier")
+}
+
+/// שורת משלוח בודד — נגזרת משורה בקובץ האקסל
+model ShipmentRecord {
+  id              String                @id @default(uuid())
+  batchId         String
+  batch           ShipmentBatch         @relation(fields: [batchId], references: [id])
+  rowIndex        Int
+  customerCode    String?
+  customerName    String?
+  customerPhone   String?
+  address         String?
+  city            String?
+  boxes           Int?
+  cartonDetails   String?
+  weight          Decimal?              @db.Decimal(12, 3)
+  /// סכום ההזמנה כפי שהתקבל בקובץ — מידע בלבד, אינו משמש לגבייה
+  orderAmount         Decimal?           @db.Decimal(19, 4)
+  /// מטבע סכום ההזמנה המקורי: ILS | USD | EUR | TRY | GBP | UNKNOWN
+  orderCurrency       String?
+  /// סכום דמי המשלוח במטבע המקורי של קובץ הספק
+  deliveryFeeAmount   Decimal?           @db.Decimal(19, 4)
+  /// ILS | USD | EUR | TRY | GBP | UNKNOWN
+  deliveryFeeCurrency String?
+  /// שדה legacy: מתמלא רק כאשר מטבע דמי המשלוח הוא ILS
+  deliveryFeeIls  Decimal?              @db.Decimal(12, 2)
+  zoneId          String?
+  zone            ShipmentDeliveryZone? @relation(fields: [zoneId], references: [id])
+  courierId       String?
+  courier         ShipmentCourier?       @relation(fields: [courierId], references: [id])
+  /// snapshot/legacy name retained for reports and old rows
+  courierName     String?
+  status          ShipmentStatus        @default(NEW)
+  paymentStatus   ShipmentPaymentStatus @default(UNPAID)
+  notes           String?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  payments ShipmentPaymentLine[]
+
+  @@index([batchId])
+  @@index([zoneId])
+  @@index([courierId])
+  @@index([status])
+  @@index([paymentStatus])
+  @@index([batchId, status])
+  @@map("ShipmentRecord")
+}
+
+/// שורת תשלום עבור דמי משלוח (אמצעי תשלום אחד לכל שורה)
+model ShipmentPaymentLine {
+  id               String   @id @default(uuid())
+  shipmentRecordId String
+  shipment         ShipmentRecord @relation(fields: [shipmentRecordId], references: [id])
+  /// אמצעי תשלום: CASH | BANK_TRANSFER | CREDIT | CHECK | BIT | PAYBOX | OTHER
+  method           String
+  amountIls        Decimal  @db.Decimal(12, 2)
+  /// JSON של פרטים ייעודיים לאמצעי התשלום (אסמכתא, בנק, צ'ק, אשראי וכו')
+  detailsJson      String?
+  notes            String?
+  createdById      String?
+  updatedById      String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @default(now()) @updatedAt
+
+  @@index([shipmentRecordId])
+  @@map("ShipmentPaymentLine")
+}
+
 /// SQL-managed table — מסמכים מצורפים (Document Atlas). נוצרת דרך prisma/sql/documents_table.sql.
 model Document {
   id             String    @id @default(uuid())
@@ -1104,4 +1281,70 @@ model Document {
   @@index([docType])
   @@index([createdAt])
   @@map("Document")
+}
+
+// ─── מודול ספירת מלאי שבועי ──────────────────────────────────────────────────
+
+enum InventoryCountStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+}
+
+/// מוצר / פריט מלאי — קטלוג הפריטים לספירה
+model InventoryItem {
+  id           String   @id @default(uuid())
+  name         String
+  unit         String   @default("יח'")
+  pricePerUnit Decimal  @db.Decimal(12, 4)
+  currency     String   @default("ILS")
+  isActive     Boolean  @default(true)
+  sortOrder    Int      @default(0)
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  countLines InventoryCountLine[]
+
+  @@index([isActive])
+  @@map("InventoryItem")
+}
+
+/// סשן ספירת מלאי שבועי
+model InventoryCount {
+  id          String               @id @default(uuid())
+  weekCode    String
+  countDate   DateTime
+  status      InventoryCountStatus @default(DRAFT)
+  notes       String?
+  createdById String?
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  createdBy User?                @relation("InventoryCountCreatedBy", fields: [createdById], references: [id])
+  lines     InventoryCountLine[]
+
+  @@index([weekCode])
+  @@index([status])
+  @@map("InventoryCount")
+}
+
+/// שורת ספירה — מוצר × סשן
+model InventoryCountLine {
+  id         String   @id @default(uuid())
+  countId    String
+  itemId     String
+  systemQty  Decimal  @db.Decimal(12, 3)
+  countedQty Decimal  @db.Decimal(12, 3)
+  notes      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  count InventoryCount @relation(fields: [countId], references: [id], onDelete: Cascade)
+  item  InventoryItem  @relation(fields: [itemId], references: [id])
+
+  @@unique([countId, itemId])
+  @@index([countId])
+  @@index([itemId])
+  @@map("InventoryCountLine")
 }

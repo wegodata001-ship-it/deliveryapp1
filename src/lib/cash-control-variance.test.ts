@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { calculateCashControlVariance } from "@/lib/cash-control-calculation";
 import { buildDailyReconciliation, emptyDailyExpenses, emptyDailyIntake } from "@/lib/cash-control-daily";
-import { addExpenseToMethodTotals } from "@/lib/cash-expense-payment-method";
+import { addExpenseToMethodTotals, aggregateExpensesByMethod } from "@/lib/cash-expense-payment-method";
 import { previewExpenseVarianceImpact, computeCashVarianceDay } from "@/lib/cash-control-variance";
 
 describe("QA-1 מזומן דולר", () => {
@@ -147,5 +147,27 @@ describe("תצוגת השפעה — סוגר חריגה", () => {
     const day = computeCashVarianceDay(intake, drawer, emptyDailyExpenses());
     const preview = previewExpenseVarianceImpact(day.lines, "USD", 1, "BANK_TRANSFER_USD");
     assert.equal(preview.messageKind, "closes");
+  });
+});
+
+describe("תיקון הוצאה באמצעות סכום שלילי", () => {
+  it("מקזז את ההוצאה המקורית באותו ערוץ", () => {
+    const expenses = aggregateExpensesByMethod([
+      { paymentMethod: "CASH", currency: "ILS", amount: 100 },
+      { paymentMethod: "CASH", currency: "ILS", amount: -100 },
+    ]);
+
+    assert.equal(expenses.CASH_ILS, 0);
+  });
+
+  it("נכלל בתצוגה המקדימה לפי אותה נוסחת חישוב", () => {
+    const intake = { ...emptyDailyIntake(), CASH_ILS: 1000 };
+    const existing = addExpenseToMethodTotals(emptyDailyExpenses(), "CASH", "ILS", 100);
+    const day = computeCashVarianceDay(intake, { CASH_ILS: 1000 }, existing);
+    const preview = previewExpenseVarianceImpact(day.lines, "ILS", -100, "CASH_ILS");
+
+    assert.equal(preview.proposedExpenseAmount, -100);
+    assert.equal(preview.afterExpensesAmount, 0);
+    assert.equal(preview.afterExpectedNet, 1000);
   });
 });

@@ -949,8 +949,13 @@ function ExpenseModal({ week, onClose, onSaved }: { week: string; onClose: () =>
             className="adm-btn adm-btn--primary"
             disabled={busy}
             onClick={async () => {
+              const amt = Number(String(amount).replace(",", "."));
+              if (!Number.isFinite(amt) || amt === 0) {
+                alert("יש להזין סכום שונה מאפס");
+                return;
+              }
               setBusy(true);
-              const res = await saveCashExpenseAction({ week, currency, amount: amount || 0, reason, notes, expenseDate });
+              const res = await saveCashExpenseAction({ week, currency, amount, reason, notes, expenseDate });
               setBusy(false);
               if (!res.ok) {
                 alert(res.error ?? "שגיאה");

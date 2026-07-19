@@ -6,15 +6,16 @@ import { Prisma, type PaymentAdjustmentReason, type PaymentAdjustmentStatus } fr
  */
 export const PAYMENT_ADJUSTMENT_FEE_NOTE_PREFIX = "הפרש התאמה — עמלה מתשלום";
 
-export function isPaymentAdjustmentFeePayment(notes: string | null | undefined): boolean {
-  const n = (notes ?? "").trim();
-  return n.startsWith(PAYMENT_ADJUSTMENT_FEE_NOTE_PREFIX);
+export function isPaymentAdjustmentFeePayment(
+  businessType: string | null | undefined,
+): boolean {
+  return businessType === "ADJUSTMENT_FEE";
 }
 
 /** סינון Prisma — לא לספור עמלות התאמה ביתרת לקוח */
 export const customerBalanceExcludeAdjustmentFeePaymentsWhere = {
   NOT: {
-    notes: { startsWith: PAYMENT_ADJUSTMENT_FEE_NOTE_PREFIX },
+    businessType: "ADJUSTMENT_FEE",
   },
 } satisfies Prisma.PaymentWhereInput;
 

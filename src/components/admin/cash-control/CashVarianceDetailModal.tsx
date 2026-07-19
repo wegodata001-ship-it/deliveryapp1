@@ -8,7 +8,7 @@ import {
   formatVarianceShort,
   type CashVarianceLineDto,
 } from "@/lib/cash-control-variance";
-import type { CashControlVarianceStatus } from "@/lib/cash-control-calculation";
+import { CASH_CONTROL_EPS, type CashControlVarianceStatus } from "@/lib/cash-control-calculation";
 
 export type CashVarianceDetailModalProps = {
   open: boolean;
@@ -89,20 +89,39 @@ function diagnosisCopy(line: CashVarianceLineDto | null): {
   }
 
   if (line.cashControlStatus === "MATCHED") {
+    const toleranceLabel =
+      line.currency === "USD"
+        ? `±$${CASH_CONTROL_EPS.toFixed(2)}`
+        : `±₪${CASH_CONTROL_EPS.toFixed(2)}`;
     return {
       title: "תקין",
-      body: `אין חריגה בערוץ ${line.label}.`,
-      hint: null,
+      body: "לא נמצאה חריגה. כל הנתונים תואמים לכללי בקרת הקופה.",
+      hint: `המערכת סימנה את המצב כתקין כי ההפרש בין הסכום המתוכנן לנספר בפועל נמצא בטווח הסטייה המותר (${toleranceLabel}).`,
       facts: [
         { label: "ערוץ", value: line.label },
-        { label: "צפוי נטו", value: fmtDailyMoney(line.currency, line.expectedNet), ltr: true },
         {
-          label: "נספר",
+          label: "סכום מתוכנן (צפוי)",
+          value: fmtDailyMoney(line.currency, line.expectedAmount),
+          ltr: true,
+        },
+        {
+          label: "הוצאות קופה",
+          value: fmtDailyMoney(line.currency, line.expensesAmount),
+          ltr: true,
+        },
+        {
+          label: "סכום מתוכנן נטו",
+          value: fmtDailyMoney(line.currency, line.expectedNet),
+          ltr: true,
+        },
+        {
+          label: "סכום שהתקבל בפועל",
           value:
             line.countedAmount != null ? fmtDailyMoney(line.currency, line.countedAmount) : "—",
           ltr: line.countedAmount != null,
         },
-        { label: "הפרש", value: formatVarianceShort(line.currency, line.variance), ltr: true },
+        { label: "הפרש שחושב", value: formatVarianceShort(line.currency, line.variance), ltr: true },
+        { label: "טווח סטייה מותר", value: toleranceLabel, ltr: true },
       ],
     };
   }
@@ -148,6 +167,8 @@ export function CashVarianceDetailModal({
   const focusLine = useMemo(() => pickFocusLine(lines), [lines]);
   const focusStatus: CashControlVarianceStatus = focusLine?.cashControlStatus ?? "WAITING_FOR_COUNT";
   const diagnosis = useMemo(() => diagnosisCopy(focusLine), [focusLine]);
+  const isMatched = focusStatus === "MATCHED";
+  const modalTitle = isMatched ? "פירוט סטטוס – בקרת קופה" : "פירוט חריגה – בקרת קופה";
 
   const subtitle = [weekCode?.trim(), dayLabel.trim(), dateYmd.trim()].filter(Boolean).join(" · ");
 
@@ -165,7 +186,7 @@ export function CashVarianceDetailModal({
       >
         <header className="cvd-modal__head">
           <div>
-            <h3 id="cash-variance-detail-title">פירוט חריגה – בקרת קופה</h3>
+            <h3 id="cash-variance-detail-title">{modalTitle}</h3>
             {subtitle ? <p className="cvd-modal__subtitle">{subtitle}</p> : null}
           </div>
           <button type="button" className="adm-modal__close" onClick={onClose} aria-label="סגור">
@@ -179,10 +200,10 @@ export function CashVarianceDetailModal({
           ) : (
             <>
               {focusLine ? (
-                <section className="cvd-summary" aria-label="סיכום חריגה">
+                <section className="cvd-summary" aria-label={isMatched ? "סיכום סטטוס" : "סיכום חריגה"}>
                   <div className="cvd-summary__cards">
                     <div className="cvd-summary__card">
-                      <span className="cvd-summary__label">ערוץ בחריגה</span>
+                      <span className="cvd-summary__label">{isMatched ? "ערוץ" : "ערוץ בחריגה"}</span>
                       <strong>{focusLine.label}</strong>
                     </div>
                     <div className="cvd-summary__card">

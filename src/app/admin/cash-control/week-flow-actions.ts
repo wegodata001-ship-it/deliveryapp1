@@ -95,6 +95,7 @@ export async function getCashWeekFlowAction(week: string): Promise<CashWeekFlowP
         paymentMethod: true,
         usdPaymentMethod: true,
         ilsPaymentMethod: true,
+        methodAllocations: { select: { method: true, currency: true, sourceAmount: true } },
       },
     }),
     prisma.cashExpense.findMany({

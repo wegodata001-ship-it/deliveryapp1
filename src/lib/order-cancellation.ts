@@ -2,8 +2,10 @@ import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { recordActivityAudit } from "@/lib/activity-audit";
 import { isDebtWithdrawalOrderStatus } from "@/lib/debt-withdrawal-order";
-import { ensureOnce } from "@/lib/ensure-tables-once";
-import { getCustomerInternalBalanceUsd } from "@/lib/customer-open-debt";
+import {
+  getCustomerInternalBalanceUsd,
+  persistCustomerBalanceSnapshot,
+} from "@/lib/customer-open-debt";
 import { orderCancellationReversalInternalUsd } from "@/lib/order-cancellation-math";
 import { revalidateAllKpiCaches } from "@/lib/kpi-cache-revalidate";
 import { OS } from "@/lib/order-status-slugs";
@@ -17,20 +19,6 @@ export const ORDER_CANCELLED_AUDIT_ACTION = "OrderCancelled";
 export { expectedInternalBalanceAfterOrderCancel, orderCancellationReversalInternalUsd } from "@/lib/order-cancellation-math";
 
 const BALANCE_EPS = new Prisma.Decimal("0.02");
-
-async function persistCustomerBalanceSnapshot(customerId: string, balanceUsd: Prisma.Decimal): Promise<void> {
-  await ensureOnce("customer-balance-usd-column", async () => {
-    await prisma.$executeRaw`
-      ALTER TABLE "Customer"
-      ADD COLUMN IF NOT EXISTS "balanceUsd" DECIMAL(19,4) NOT NULL DEFAULT 0
-    `;
-  });
-  await prisma.$executeRaw`
-    UPDATE "Customer"
-    SET "balanceUsd" = ${balanceUsd}
-    WHERE "id" = ${customerId}
-  `;
-}
 
 export type ExecuteOrderCancellationResult = {
   orderId: string;

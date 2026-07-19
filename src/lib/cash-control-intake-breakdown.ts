@@ -3,10 +3,9 @@
  */
 
 import {
-  type BreakdownEnforcementViolation,
+  enforceBreakdownAgainstEntered,
   type EnteredBucketUsd,
   type PlannedBucketUsd,
-  enforceBreakdownAgainstEntered,
   paymentMethodBucketKey,
   PAYMENT_BUCKET_LABELS,
   type PaymentBucketKey,
@@ -44,38 +43,6 @@ export function buildIntakeBreakdownPlan(
   return [...planByBucket.values()];
 }
 
-export function checkIntakeBreakdownViolations(
-  orders: PaymentIntakeOrderRow[],
-  includedOrderIds: string[] | null,
-  enteredByBucket: EnteredBucketUsd[],
-  totalPaymentUsd?: number,
-): BreakdownEnforcementViolation[] {
-  const planned = buildIntakeBreakdownPlan(orders, includedOrderIds);
-  if (planned.length === 0) return [];
-  const violations = enforceBreakdownAgainstEntered(planned, enteredByBucket);
-  if (totalPaymentUsd == null || !Number.isFinite(totalPaymentUsd)) return violations;
-
-  const idSet = includedOrderIds ? new Set(includedOrderIds) : null;
-  let totalRemaining = 0;
-  for (const o of orders) {
-    if (idSet && !idSet.has(o.id)) continue;
-    totalRemaining += Math.max(0, Number(o.dbRemainingUsd) || 0);
-  }
-  totalRemaining = round2(totalRemaining);
-  let unexplainedOverageUsd = round2(Math.max(0, totalPaymentUsd - totalRemaining));
-
-  return violations.filter((v) => {
-    if (v.type !== "excess") return true;
-    if (unexplainedOverageUsd >= v.excessUsd - CASH_CONTROL_EPS) {
-      unexplainedOverageUsd = round2(Math.max(0, unexplainedOverageUsd - v.excessUsd));
-      return false;
-    }
-    return true;
-  });
-}
-
-export const METHOD_DEV_APPROVED_NOTE_TAG = "[METHOD_DEV_APPROVED]";
-
 export type IntakeSaveDeviationRow = {
   id: string;
   typeLabel: string;
@@ -99,6 +66,9 @@ function fmtSignedUsd(n: number): string {
 
 /**
  * בדיקות חריגה לקליטת תשלום — מופעלות רק בניסיון שמירה (לא בזמן הקלדה).
+ *
+ * אמצעי התשלום המתוכננים הם חוק עסקי. חריגה מהיתרה המתוכננת לאמצעי,
+ * או שימוש באמצעי שלא תוכנן, חוסמים שמירה לפני FIFO.
  */
 export function computeIntakeSaveDeviations(params: {
   orders: PaymentIntakeOrderRow[];
@@ -109,10 +79,25 @@ export function computeIntakeSaveDeviations(params: {
 }): IntakeSaveDeviationRow[] {
   const { orders, includedOrderIds, enteredByBucket, formRateN, totalPaymentUsd } = params;
   const rows: IntakeSaveDeviationRow[] = [];
-  const plan = buildIntakeBreakdownPlan(orders, includedOrderIds);
-  const enteredMap = new Map(enteredByBucket.map((e) => [e.bucket, e.enteredUsd]));
   const idSet = includedOrderIds ? new Set(includedOrderIds) : null;
   const includedOrders = orders.filter((o) => !idSet || idSet.has(o.id));
+
+  const methodPlan = buildIntakeBreakdownPlan(orders, includedOrderIds);
+  const methodViolations = enforceBreakdownAgainstEntered(methodPlan, enteredByBucket);
+  for (const violation of methodViolations) {
+    rows.push({
+      id: `method:${violation.bucket}`,
+      typeLabel: violation.label,
+      plannedDisplay: fmtUsd(violation.allowedUsd),
+      receivedDisplay: fmtUsd(violation.enteredUsd),
+      diffDisplay: fmtSignedUsd(violation.excessUsd),
+      statusLabel:
+        violation.type === "not-planned"
+          ? "🔴 אמצעי תשלום לא תוכנן"
+          : "🔴 חריגה מהתכנון",
+      rowTone: "excess",
+    });
+  }
 
   let totalRemaining = 0;
   for (const o of includedOrders) {
@@ -120,54 +105,21 @@ export function computeIntakeSaveDeviations(params: {
   }
   totalRemaining = round2(totalRemaining);
   const globalOverageUsd = round2(Math.max(0, totalPaymentUsd - totalRemaining));
-  let unexplainedOverageUsd = globalOverageUsd;
 
-  if (plan.length > 0) {
-    for (const p of plan) {
-      const entered = enteredMap.get(p.bucket) ?? 0;
-      const allowed = p.remainingUsd;
-      const diff = round2(entered - allowed);
-      let rowTone: IntakeSaveDeviationRow["rowTone"] = "ok";
-      let statusLabel = "🟢 תקין";
-      if (entered > allowed + CASH_CONTROL_EPS) {
-        const bucketOverage = round2(entered - allowed);
-        if (unexplainedOverageUsd >= bucketOverage - CASH_CONTROL_EPS) {
-          rowTone = "surplus";
-          statusLabel = "🟢 עודף תשלום";
-          unexplainedOverageUsd = round2(Math.max(0, unexplainedOverageUsd - bucketOverage));
-        } else {
-          rowTone = "excess";
-          statusLabel = "🔴 חריגה";
-        }
-      } else if (allowed > CASH_CONTROL_EPS && entered < allowed - CASH_CONTROL_EPS) {
-        rowTone = "shortfall";
-        statusLabel = "🟠 לא שולם";
-      }
-      rows.push({
-        id: `method:${p.bucket}`,
-        typeLabel: p.label,
-        plannedDisplay: fmtUsd(allowed),
-        receivedDisplay: fmtUsd(entered),
-        diffDisplay: fmtSignedUsd(diff),
-        statusLabel,
-        rowTone,
-      });
-    }
-
-    for (const e of enteredByBucket) {
-      if (e.enteredUsd <= CASH_CONTROL_EPS) continue;
-      const planEntry = plan.find((p) => p.bucket === e.bucket);
-      if (planEntry && planEntry.plannedUsd > CASH_CONTROL_EPS) continue;
-      rows.push({
-        id: `unplanned:${e.bucket}`,
-        typeLabel: e.label,
-        plannedDisplay: fmtUsd(0),
-        receivedDisplay: fmtUsd(e.enteredUsd),
-        diffDisplay: fmtSignedUsd(e.enteredUsd),
-        statusLabel: "🔴 חריגה",
-        rowTone: "excess",
-      });
-    }
+  // תשלום חלקי — יתרה פתוחה ברמת המסמך (לא חריגה, לא חוסם)
+  if (
+    totalRemaining > CASH_CONTROL_EPS &&
+    totalPaymentUsd < totalRemaining - CASH_CONTROL_EPS
+  ) {
+    rows.push({
+      id: "balance:shortfall",
+      typeLabel: "יתרה לתשלום",
+      plannedDisplay: fmtUsd(totalRemaining),
+      receivedDisplay: fmtUsd(totalPaymentUsd),
+      diffDisplay: fmtSignedUsd(totalPaymentUsd - totalRemaining),
+      statusLabel: "🟠 תשלום חלקי",
+      rowTone: "shortfall",
+    });
   }
 
   const rateChecked = new Set<string>();
@@ -204,7 +156,7 @@ export function computeIntakeSaveDeviations(params: {
   return rows;
 }
 
-/** חריגת אמצעי — אמצעי שונה / סכום באמצעי לא מתוכנן (לא shortfall) */
+/** חריגת אמצעי תשלום שחוסמת שמירה. */
 export function intakeHasMethodMismatch(rows: IntakeSaveDeviationRow[]): boolean {
   return rows.some((r) => r.rowTone === "excess" || r.id.startsWith("unplanned:"));
 }
@@ -214,7 +166,7 @@ export function intakeHasRateMismatch(rows: IntakeSaveDeviationRow[]): boolean {
   return rows.some((r) => r.rowTone === "rate");
 }
 
-/** יתרה פתוחה — אותו אמצעי, פחות מהמתוכנן */
+/** יתרה פתוחה — סה"כ התשלום קטן מהיתרה הכוללת של המסמך (תשלום חלקי) */
 export function intakeHasOpenBalanceShortfall(rows: IntakeSaveDeviationRow[]): boolean {
   return rows.some((r) => r.rowTone === "shortfall");
 }
@@ -316,4 +268,107 @@ export function intakeDeviationModalRows(rows: IntakeSaveDeviationRow[]): Intake
       r.rowTone !== "amount" &&
       r.rowTone !== "shortfall",
   );
+}
+
+// ─── Deviation Comparison Table ───────────────────────────────────────────────
+
+/**
+ * שורת השוואה לטבלת חריגת אמצעי תשלום.
+ * מציגה כל אמצעי שתוכנן + כל אמצעי שהוזן — עם סטטוס ברור לכל שורה.
+ */
+export type DeviationComparisonRow = {
+  bucket: PaymentBucketKey;
+  methodLabel: string;
+  /** יתרה פתוחה מתוכננת (b.remainingUsd אגרגטי) */
+  plannedUsd: number;
+  /** סכום שהוזן בטופס הנוכחי לאמצעי זה */
+  enteredUsd: number;
+  /** max(0, plannedUsd − enteredUsd) */
+  remainingUsd: number;
+  status: "partial" | "pending" | "cleared" | "unplanned" | "excess";
+  statusLabel: string;
+  /** true = עוצר שמירה (אמצעי לא מתוכנן, חריגה מעל המתוכנן) */
+  isBlocking: boolean;
+};
+
+/**
+ * בנה טבלת השוואה מלאה: כל אמצעי מתוכנן + כל אמצעי שהוזן.
+ * ממחיש בבירור מה תוכנן, מה נקלט, ומה הסטטוס של כל אמצעי.
+ *
+ * כלל ההחלטה:
+ *   • תשלום חלקי על אותו אמצעי → status="partial", לא חוסם.
+ *   • אמצעי לא מתוכנן → status="unplanned", חוסם.
+ *   • חריגה מהיתרה → status="excess", חוסם.
+ *   • אמצעי מתוכנן שלא שולם → status="pending", לא חוסם.
+ *   • שולם במלואו → status="cleared", לא חוסם.
+ */
+export function buildDeviationComparisonRows(
+  orders: PaymentIntakeOrderRow[],
+  includedOrderIds: string[] | null,
+  enteredByBucket: EnteredBucketUsd[],
+): DeviationComparisonRow[] {
+  const plan = buildIntakeBreakdownPlan(orders, includedOrderIds);
+  const planMap = new Map(plan.map((p) => [p.bucket, p]));
+  const enteredMap = new Map(
+    enteredByBucket.filter((e) => e.enteredUsd > CASH_CONTROL_EPS).map((e) => [e.bucket, e.enteredUsd]),
+  );
+
+  const allBuckets = new Set<PaymentBucketKey>([...planMap.keys(), ...enteredMap.keys()]);
+  const rows: DeviationComparisonRow[] = [];
+
+  for (const bucket of allBuckets) {
+    const p = planMap.get(bucket);
+    const plannedUsd = round2(p?.remainingUsd ?? 0);
+    const enteredUsd = round2(enteredMap.get(bucket) ?? 0);
+    const remainingUsd = round2(Math.max(0, plannedUsd - enteredUsd));
+    const overUsd = round2(Math.max(0, enteredUsd - plannedUsd));
+
+    let status: DeviationComparisonRow["status"];
+    let statusLabel: string;
+    let isBlocking: boolean;
+
+    if (plannedUsd <= CASH_CONTROL_EPS && enteredUsd > CASH_CONTROL_EPS) {
+      status = "unplanned";
+      statusLabel = `🔴 אמצעי תשלום לא מתוכנן ($${enteredUsd.toFixed(2)} ב-${PAYMENT_BUCKET_LABELS[bucket]})`;
+      isBlocking = true;
+    } else if (enteredUsd > plannedUsd + CASH_CONTROL_EPS) {
+      status = "excess";
+      statusLabel = `🔴 חריגה מהתכנון — עודף $${overUsd.toFixed(2)}`;
+      isBlocking = true;
+    } else if (enteredUsd <= CASH_CONTROL_EPS && plannedUsd > CASH_CONTROL_EPS) {
+      status = "pending";
+      statusLabel = "🔴 לא שולם — חוב פתוח";
+      isBlocking = false;
+    } else if (remainingUsd <= CASH_CONTROL_EPS) {
+      status = "cleared";
+      statusLabel = "🟢 שולם במלואו";
+      isBlocking = false;
+    } else {
+      // 0 < entered <= planned, remaining > 0
+      status = "partial";
+      statusLabel = `🟡 תשלום חלקי — נותר $${remainingUsd.toFixed(2)}`;
+      isBlocking = false;
+    }
+
+    rows.push({
+      bucket,
+      methodLabel: PAYMENT_BUCKET_LABELS[bucket],
+      plannedUsd,
+      enteredUsd,
+      remainingUsd,
+      status,
+      statusLabel,
+      isBlocking,
+    });
+  }
+
+  // סדר: חריגות קודם (עוצרות שמירה), אחר כך ממתין, חלקי, שולם
+  const order: Record<DeviationComparisonRow["status"], number> = {
+    unplanned: 0,
+    excess: 1,
+    pending: 2,
+    partial: 3,
+    cleared: 4,
+  };
+  return rows.sort((a, b) => (order[a.status] - order[b.status]) || a.methodLabel.localeCompare(b.methodLabel, "he"));
 }

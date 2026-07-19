@@ -124,7 +124,7 @@ export function computeCustomerResetBalanceMetrics(
 }
 
 function orderRemainingUsd(o: PaymentIntakeOrderBase): number {
-  return roundMoney2(Math.max(0, o.totalAmountUsd - o.dbPaidUsd));
+  return Math.max(0, orderLedgerBalanceUsd(o));
 }
 
 type ClosureDebtRow = { o: PaymentIntakeOrderBase; idx: number; remaining: number };

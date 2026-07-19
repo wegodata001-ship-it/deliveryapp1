@@ -101,30 +101,27 @@ function enteredForBucket(kpis: LivePaymentFormKpis, bucket: PaymentBucketKey): 
   }
 }
 
+/** סטטוס שורה — תצוגה חיה של חוק אמצעי התשלום שנאכף בצד השרת. */
 function computeRowStatus(
   plannedUsd: number,
   enteredUsd: number,
   globalOverageUsd: number,
 ): Pick<LivePaymentMethodControlRow, "status" | "statusLabel" | "excessUsd"> {
-  if (plannedUsd <= CASH_CONTROL_EPS) {
-    if (enteredUsd <= CASH_CONTROL_EPS) {
-      return { status: "not-required", statusLabel: "לא נדרש", excessUsd: 0 };
-    }
-    const excess = round2(enteredUsd);
-    return { status: "excess", statusLabel: "חריגה", excessUsd: excess };
+  if (plannedUsd <= CASH_CONTROL_EPS && enteredUsd <= CASH_CONTROL_EPS) {
+    return { status: "not-required", statusLabel: "לא נדרש", excessUsd: 0 };
   }
   if (enteredUsd > plannedUsd + CASH_CONTROL_EPS) {
     const excess = round2(enteredUsd - plannedUsd);
-    if (globalOverageUsd >= excess - CASH_CONTROL_EPS) {
+    if (globalOverageUsd > CASH_CONTROL_EPS) {
       return { status: "surplus", statusLabel: "עודף תשלום", excessUsd: excess };
     }
-    return { status: "excess", statusLabel: "חריגה", excessUsd: excess };
+    return { status: "excess", statusLabel: "חריגה מהתכנון", excessUsd: excess };
   }
   const remaining = round2(plannedUsd - enteredUsd);
   if (remaining <= CASH_CONTROL_EPS) {
     return { status: "paid", statusLabel: "שולם", excessUsd: 0 };
   }
-  return { status: "remaining", statusLabel: "נותר לתשלום", excessUsd: 0 };
+  return { status: "remaining", statusLabel: "נותר לפי התכנון", excessUsd: 0 };
 }
 
 export function hasCompositeMethodControl(
@@ -134,7 +131,7 @@ export function hasCompositeMethodControl(
   return buildIntakeBreakdownPlan(orders, includedOrderIds).length > 0;
 }
 
-/** שורות בקרה חיות — תוכנן מההזמנה, נקלט מהטופס הנוכחי בלבד */
+/** שורות בקרה חיות — תצוגת התכנון המחייב מול ההקלדה הנוכחית. */
 export function buildLivePaymentMethodControlRows(
   orders: PaymentIntakeOrderRow[],
   includedOrderIds: string[] | null,
@@ -142,7 +139,7 @@ export function buildLivePaymentMethodControlRows(
   totalPaymentUsd?: number,
 ): LivePaymentMethodControlRow[] {
   const plan = buildIntakeBreakdownPlan(orders, includedOrderIds);
-  const planMap = new Map(plan.map((p) => [p.bucket, p.plannedUsd]));
+  const plannedByBucket = new Map(plan.map((p) => [p.bucket, p.plannedUsd]));
 
   const idSet = includedOrderIds ? new Set(includedOrderIds) : null;
   let totalRemaining = 0;
@@ -155,8 +152,17 @@ export function buildLivePaymentMethodControlRows(
   const globalOverageUsd = round2(Math.max(0, paymentTotal - totalRemaining));
   let unexplainedOverageUsd = globalOverageUsd;
 
+  // מגבילים את "נותר לפי אמצעי" לסכום היתרה הכוללת של המסמך (FIFO על הסדר)
+  let remCapPool = totalRemaining;
+  const effectiveRemaining = new Map<PaymentBucketKey, number>();
+  for (const p of plan) {
+    const capped = round2(Math.min(Math.max(0, p.remainingUsd), remCapPool));
+    remCapPool = round2(Math.max(0, remCapPool - capped));
+    effectiveRemaining.set(p.bucket, capped);
+  }
+
   const buckets: PaymentBucketKey[] = [...DISPLAY_BUCKETS];
-  const otherPlanned = planMap.get("OTHER") ?? 0;
+  const otherPlanned = plannedByBucket.get("OTHER") ?? 0;
   const otherEntered = enteredForBucket(kpis, "OTHER");
   if (otherPlanned > CASH_CONTROL_EPS || otherEntered > CASH_CONTROL_EPS) {
     buckets.push("OTHER");
@@ -165,7 +171,8 @@ export function buildLivePaymentMethodControlRows(
   const targets = buildBucketTargets(orders, includedOrderIds);
 
   return buckets.map((bucket) => {
-    const plannedUsd = round2(planMap.get(bucket) ?? 0);
+    // לתצוגה: "מתוכנן" = מה שעדיין פתוח לפי אמצעי (מכוסה ביתרה הכוללת), לא הסכום המקורי
+    const plannedUsd = round2(effectiveRemaining.get(bucket) ?? 0);
     const enteredUsd = round2(enteredForBucket(kpis, bucket));
     const remainingUsd = round2(plannedUsd - enteredUsd);
     let { status, statusLabel, excessUsd } = computeRowStatus(plannedUsd, enteredUsd, unexplainedOverageUsd);
@@ -388,15 +395,22 @@ export function fmtMethodControlCell(
   return fmtMethodControlUsd(row.enteredUsd);
 }
 
-/** הודעת סיכום לאחר שמירה — כמה נשאר לגבות מכל אמצעי */
+/**
+ * הודעת סיכום לאחר שמירה — יתרה כוללת בלבד.
+ * אין פירוט "נותר" לפי אמצעי תשלום: היתרה היא סכום אחד למסמך,
+ * וניתן לשלם אותה בכל אמצעי.
+ */
 export function buildPostSaveRemainingSummary(
   orders: PaymentIntakeOrderRow[],
   includedOrderIds: string[] | null,
 ): string {
-  const plan = buildIntakeBreakdownPlan(orders, includedOrderIds);
-  const lines = plan
-    .filter((p) => p.remainingUsd > CASH_CONTROL_EPS)
-    .map((p) => `${p.label} – נותר ${fmtMethodControlUsd(p.remainingUsd)}`);
-  if (lines.length === 0) return "התשלום נשמר — כל האמצעים שולמו במלואם";
-  return `התשלום נשמר\n${lines.join("\n")}`;
+  const idSet = includedOrderIds ? new Set(includedOrderIds) : null;
+  let totalRemaining = 0;
+  for (const o of orders) {
+    if (idSet && !idSet.has(o.id)) continue;
+    totalRemaining += Math.max(0, Number(o.dbRemainingUsd) || 0);
+  }
+  totalRemaining = round2(totalRemaining);
+  if (totalRemaining <= CASH_CONTROL_EPS) return "התשלום נשמר — שולם במלואו";
+  return `התשלום נשמר\nיתרה לתשלום: ${fmtMethodControlUsd(totalRemaining)}`;
 }

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Calculator,
   FileSpreadsheet,
   FileText,
   Filter,
@@ -27,6 +28,7 @@ import {
   weekDateRange,
 } from "@/components/admin/cashflow-control/cashflow-control-helpers";
 import "@/components/admin/cashflow-control/cashflow-control.css";
+import { ManagerCountWizard } from "@/components/admin/manager-count/ManagerCountWizard";
 
 /** טעינה ראשונית — 3 שבועות אחרונים בלבד */
 const INITIAL_WEEKS = 3;
@@ -72,6 +74,7 @@ export function CashflowControlScreen({
 
   const [drill, setDrill] = useState<FlowWeekDrillPayload | null>(null);
   const [drillLoading, setDrillLoading] = useState(false);
+  const [managerCountOpen, setManagerCountOpen] = useState(false);
   const drillCacheRef = useRef<Map<string, FlowWeekDrillPayload>>(new Map());
   const detailRef = useRef<HTMLDivElement>(null);
   const loadedCodesRef = useRef<string[]>([]);
@@ -321,6 +324,15 @@ export function CashflowControlScreen({
             </>
           ) : null}
 
+          <button
+            type="button"
+            className="cfc-btn cfc-btn--ghost"
+            onClick={() => setManagerCountOpen(true)}
+          >
+            <Calculator size={15} />
+            ספירת מנהל
+          </button>
+
           <button type="button" className="cfc-btn cfc-btn--ghost" onClick={refresh} aria-label="רענון">
             <RefreshCw size={15} />
             רענון
@@ -362,6 +374,19 @@ export function CashflowControlScreen({
           </div>
         )}
       </div>
+      <ManagerCountWizard
+        open={managerCountOpen}
+        week={selectedWeek}
+        weekLabel={selectedRow?.weekLabel ?? null}
+        flow={drill?.flow ?? null}
+        overview={overview}
+        canEdit={caps.canManageFlow || caps.canCountEdit}
+        onClose={() => setManagerCountOpen(false)}
+        onSaved={() => {
+          setManagerCountOpen(false);
+          refresh();
+        }}
+      />
     </div>
   );
 }

@@ -3,7 +3,6 @@ import { describe, it } from "node:test";
 import {
   buildPaymentAdjustmentFeeCreateData,
   isPaymentAdjustmentFeePayment,
-  PAYMENT_ADJUSTMENT_FEE_NOTE_PREFIX,
   PAYMENT_ADJUSTMENT_REASON_LABELS,
   PAYMENT_ADJUSTMENT_STATUS_LABELS,
 } from "@/lib/payment-adjustment-fee";
@@ -94,9 +93,9 @@ function baseOrder(partial: Partial<PaymentIntakeOrderBase> & Pick<PaymentIntake
  * לוגיקה טהורה — ללא DB.
  */
 describe("payment adjustment fee — helpers", () => {
-  it("מזהה שורת עמלה לפי prefix בלבד", () => {
-    assert.equal(isPaymentAdjustmentFeePayment(`${PAYMENT_ADJUSTMENT_FEE_NOTE_PREFIX}\nעודף: $1`), true);
-    assert.equal(isPaymentAdjustmentFeePayment("יתרת זכות ללקוח — עודף מתשלום"), false);
+  it("מזהה שורת עמלה לפי סוג עסקי מובנה", () => {
+    assert.equal(isPaymentAdjustmentFeePayment("ADJUSTMENT_FEE"), true);
+    assert.equal(isPaymentAdjustmentFeePayment("CUSTOMER_CREDIT"), false);
     assert.equal(isPaymentAdjustmentFeePayment(null), false);
   });
 
@@ -204,7 +203,7 @@ describe("חישוב עודף לפי אמצעי תשלום — תרחיש דוג
     assert.ok(result.some((r) => r.dbMethod === "BANK_TRANSFER"));
   });
 
-  it("אין חסימת שמירה (computeIntakeSaveDeviations) — שני עודפי surplus, לא excess", () => {
+  it("חוסם חריגה מהסכום המתוכנן לכל אמצעי", () => {
     const devRows = computeIntakeSaveDeviations({
       orders: [order],
       includedOrderIds: null,
@@ -212,10 +211,10 @@ describe("חישוב עודף לפי אמצעי תשלום — תרחיש דוג
       formRateN: 3.7,
       totalPaymentUsd: 1706,
     });
-    assert.equal(intakeSaveHasDeviations(devRows), false);
+    assert.equal(intakeSaveHasDeviations(devRows), true);
     assert.equal(intakeSaveHasSurplus(devRows), true);
     assert.ok(devRows.filter((r) => r.rowTone === "surplus").length >= 1);
-    assert.ok(!devRows.some((r) => r.rowTone === "excess"));
+    assert.ok(devRows.some((r) => r.rowTone === "excess"));
   });
 });
 

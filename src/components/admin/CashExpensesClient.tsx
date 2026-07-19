@@ -353,7 +353,12 @@ export function CashExpensesClient({
                       </span>
                     </td>
                     <td>{r.notes ?? "—"}</td>
-                    <td dir="ltr" className="cc-num">{fmtDailyMoney(r.currency, num(r.amount))}</td>
+                    <td
+                      dir="ltr"
+                      className={`cc-num${num(r.amount) < 0 ? " cc-expense-amount--negative" : ""}`}
+                    >
+                      {fmtDailyMoney(r.currency, num(r.amount))}
+                    </td>
                     <td>{r.currency === "USD" ? "$ דולר" : "₪ שקל"}</td>
                     <td dir="ltr">{r.weekCode ?? "—"}</td>
                     <td>{r.createdByName ?? "—"}</td>
@@ -411,11 +416,18 @@ export function CashExpensesClient({
                 <tr className="cc-row--total">
                   <td colSpan={4}><strong>סה"כ</strong></td>
                   <td dir="ltr" className="cc-num">
-                    <strong>{fmtDailyMoney("ILS", totals.ils)}</strong>
-                    {totals.usd > 0 ? (
+                    <strong className={totals.ils < 0 ? "cc-expense-amount--negative" : undefined}>
+                      {fmtDailyMoney("ILS", totals.ils)}
+                    </strong>
+                    {totals.usd !== 0 ? (
                       <>
                         {" · "}
-                        <strong dir="ltr">{fmtDailyMoney("USD", totals.usd)}</strong>
+                        <strong
+                          dir="ltr"
+                          className={totals.usd < 0 ? "cc-expense-amount--negative" : undefined}
+                        >
+                          {fmtDailyMoney("USD", totals.usd)}
+                        </strong>
                       </>
                     ) : null}
                   </td>

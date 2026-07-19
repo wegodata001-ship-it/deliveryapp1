@@ -14,7 +14,10 @@ import { loadFinanceSettingsSerialized } from "@/lib/financial-settings";
 import { prismaVatRatePercent } from "@/lib/vat-prisma";
 import { normalizeWorkCountryCode } from "@/lib/work-country";
 import { parseLocalDateTime } from "@/lib/work-week";
-import { getCustomerInternalBalanceUsd } from "@/lib/customer-open-debt";
+import {
+  getCustomerInternalBalanceUsd,
+  persistCustomerBalanceSnapshot,
+} from "@/lib/customer-open-debt";
 import { buildPaymentAdjustmentFeeCreateData } from "@/lib/payment-adjustment-fee";
 import { scheduleRevalidateAfterPaymentSave } from "@/lib/revalidate-after-payment-save";
 import { paymentIntakeOrderDateThroughAhWeekEnd } from "@/lib/payment-intake-order-filter";
@@ -23,6 +26,19 @@ import { compareReceivedToDebt, computeReceivedUsd } from "@/lib/payment-intake-
 import { INTAKE_EPS, type IntakeSaveInput } from "@/lib/payment-intake-rebuild/types";
 import { mapFeeReasonToPrisma, mapIntakeMethodToPaymentFields, INTAKE_FEE_OPTIONS } from "@/lib/payment-intake-rebuild/catalog";
 import { validatePaymentIntake } from "@/lib/payment-intake-rebuild/validate";
+import { loadPaymentIntakeOrdersForCustomer } from "@/lib/payment-intake-load";
+import { buildIntakeBreakdownPlan } from "@/lib/cash-control-intake-breakdown";
+import {
+  classifySettlementIntent,
+  paymentMethodMismatchMessage,
+  validatePaymentMethods,
+} from "@/lib/payment-business-validation";
+import {
+  PAYMENT_BUCKET_LABELS,
+  paymentMethodBucketKey,
+  type EnteredBucketUsd,
+  type PaymentBucketKey,
+} from "@/lib/payment-breakdown-shared";
 import {
   buildIntakePaymentNotes,
   buildCreditSurplusNotes,
@@ -49,14 +65,6 @@ function summarizeMethods(methods: IntakeSaveInput["methods"]) {
     if (mapped.ilsPaymentMethod) ilsMethod = mapped.ilsPaymentMethod;
   }
   return { primary, usdMethod, ilsMethod };
-}
-
-async function persistCustomerBalanceSnapshot(customerId: string, balanceUsd: Prisma.Decimal) {
-  await prisma.$executeRaw`
-    UPDATE "Customer"
-    SET "balanceUsd" = ${balanceUsd}
-    WHERE id = ${customerId}
-  `;
 }
 
 export type ExecutePaymentIntakeResult =
@@ -89,6 +97,36 @@ export async function executePaymentIntake(params: {
   const { receivedUsd, totalIls } = computeReceivedUsd(input.methods, rateN);
   const weekCode = input.weekCode.trim();
   const weekDateWhere = paymentIntakeOrderDateThroughAhWeekEnd(weekCode);
+
+  // חוק עסקי ראשון — אמצעי התשלום נבדקים מול התכנון לפני טעינת מנוע FIFO.
+  const intakeOrdersResult = await loadPaymentIntakeOrdersForCustomer({
+    customerId: cid,
+    weekCodeForOpenBalances: weekCode,
+    paymentWorkCountryRaw: input.workCountry,
+  });
+  if (!intakeOrdersResult.ok) return intakeOrdersResult;
+  const plannedMethods = buildIntakeBreakdownPlan(
+    intakeOrdersResult.orders,
+    input.selectedOrderIds,
+  );
+  const enteredMap = new Map<PaymentBucketKey, number>();
+  for (const line of input.methods) {
+    const amount = Number(line.amount);
+    if (!Number.isFinite(amount) || amount <= 0) continue;
+    const methodFields = mapIntakeMethodToPaymentFields(line.method);
+    const bucket = paymentMethodBucketKey(methodFields.paymentMethod);
+    const amountUsd = line.method === "USD" ? amount : amount / rateN;
+    enteredMap.set(bucket, roundMoney2((enteredMap.get(bucket) ?? 0) + amountUsd));
+  }
+  const enteredMethods: EnteredBucketUsd[] = [...enteredMap].map(([bucket, enteredUsd]) => ({
+    bucket,
+    label: PAYMENT_BUCKET_LABELS[bucket],
+    enteredUsd,
+  }));
+  const methodViolations = validatePaymentMethods(plannedMethods, enteredMethods, INTAKE_EPS);
+  if (methodViolations.length > 0) {
+    return { ok: false, error: paymentMethodMismatchMessage(methodViolations) };
+  }
 
   const orders = await prisma.order.findMany({
     where: {
@@ -159,6 +197,29 @@ export async function executePaymentIntake(params: {
 
   const debtUsd = roundMoney2(bases.reduce((s, b) => s + Math.max(0, b.totalAmountUsd - b.dbPaidUsd), 0));
   const compare = compareReceivedToDebt(debtUsd, receivedUsd);
+
+  // אותו כלל כוונה קנוני כמו במסלול הראשי: ניסיון סגירה עם חוסר חייב
+  // טיפול מפורש (סגירה עם עמלה) — אחרת נעצר לפני FIFO ולפני כל כתיבה.
+  const settlementIntent = classifySettlementIntent({
+    plannedByMethod: plannedMethods,
+    enteredByMethod: enteredMethods,
+    totalDebtUsd: debtUsd,
+    totalPaymentUsd: receivedUsd,
+    explicitClosureRequested: Boolean(input.closeWithFee?.enabled),
+    eps: INTAKE_EPS,
+  });
+  if (
+    settlementIntent === "CLOSURE_ATTEMPT" &&
+    compare.openRemainderUsd > INTAKE_EPS &&
+    !input.closeWithFee?.enabled
+  ) {
+    return {
+      ok: false,
+      error:
+        `נקלט ניסיון לסגור את המסמך עם חוסר של $${compare.openRemainderUsd.toFixed(2)}. ` +
+        "יש לטפל בחוסר (יתרת זכות / קיזוז עמלות / עמלה שלילית) לפני השמירה.",
+    };
+  }
 
   // FIFO על סכום ההקצאה לחוב בלבד (לא על עודף)
   const prioritized = selected;
@@ -241,6 +302,21 @@ export async function executePaymentIntake(params: {
     .filter((m) => m.method === "CHECK")
     .flatMap((m) => m.checks ?? [])
     .filter((c) => c.checkNumber?.trim() && Number(c.amount) > 0);
+  const structuredMethodAllocations = input.methods
+    .filter((line) => Number.isFinite(Number(line.amount)) && Number(line.amount) > INTAKE_EPS)
+    .map((line) => {
+      const sourceAmount = Number(line.amount);
+      const mapped = mapIntakeMethodToPaymentFields(line.method);
+      const currency = line.method === "USD" ? "USD" : "ILS";
+      return {
+        method: mapped.paymentMethod,
+        currency,
+        sourceAmount: new Prisma.Decimal(sourceAmount.toFixed(4)),
+        amountUsd: new Prisma.Decimal(
+          (currency === "USD" ? sourceAmount : sourceAmount / rateN).toFixed(4),
+        ),
+      };
+    });
 
   let primaryPaymentId: string | null = null;
   let savedCount = 0;
@@ -254,6 +330,7 @@ export async function executePaymentIntake(params: {
         entries: Iterable<[string, number]>,
         rowNotes: string,
         attachIlsOnPrimary: boolean,
+        businessType: "STANDARD" | "BALANCE_RESET" = "STANDARD",
       ) => {
         for (const [orderId, allocUsd] of entries) {
           const amt = new Prisma.Decimal(allocUsd.toFixed(4));
@@ -302,6 +379,7 @@ export async function executePaymentIntake(params: {
               usdNote: null,
               ilsNote: null,
               isPaid: true,
+              businessType,
               notes: rowNotes,
               createdById: userId,
             },
@@ -352,6 +430,7 @@ export async function executePaymentIntake(params: {
             usdPaymentMethod: usdMethod,
             ilsPaymentMethod: ilsMethod,
             isPaid: true,
+            businessType: "CUSTOMER_CREDIT",
             notes: buildCreditSurplusNotes(primaryCode, creditSurplusUsd),
             createdById: userId,
           },
@@ -370,7 +449,7 @@ export async function executePaymentIntake(params: {
           amountUsd: feeCloseUsd,
           description: fee.description,
         });
-        await writeAlloc(feeAllocEntries, feeNotes, false);
+        await writeAlloc(feeAllocEntries, feeNotes, false, "BALANCE_RESET");
 
         const feeAmt = new Prisma.Decimal(feeCloseUsd.toFixed(4));
         const sourceOrderId = feeAllocEntries[0]?.[0] ?? null;
@@ -455,6 +534,15 @@ export async function executePaymentIntake(params: {
             paymentCaptureCode: primaryCode,
             paymentId: primaryPaymentId,
           } as Prisma.InputJsonValue,
+        });
+      }
+
+      if (primaryPaymentId && structuredMethodAllocations.length > 0) {
+        await tx.paymentMethodAllocation.createMany({
+          data: structuredMethodAllocations.map((row) => ({
+            paymentId: primaryPaymentId!,
+            ...row,
+          })),
         });
       }
 

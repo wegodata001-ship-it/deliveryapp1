@@ -226,7 +226,7 @@ export function previewExpenseVarianceImpact(
   }
 
   const amt = round2(proposedExpenseAmount);
-  if (amt <= 0) {
+  if (amt === 0) {
     return emptyPreview("invalid_amount", "הזן סכום הוצאה כדי לראות את ההשפעה על בקרת הקופה");
   }
 

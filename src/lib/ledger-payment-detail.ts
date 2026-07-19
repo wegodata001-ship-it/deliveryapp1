@@ -1,4 +1,4 @@
-import type { PaymentRecordStatus, Prisma } from "@prisma/client";
+import type { PaymentBusinessType, PaymentRecordStatus, Prisma } from "@prisma/client";
 import { formatLedgerAmountDisplay } from "@/lib/ledger-payment-display";
 import { normalizePaymentMethodId } from "@/lib/payment-method-slugs";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
@@ -348,6 +348,7 @@ export type LedgerPaymentBatchRow = {
   ilsPaymentMethod: string | null;
   notes: string | null;
   status: PaymentRecordStatus;
+  businessType?: PaymentBusinessType;
 };
 
 export function paymentBatchGroupKey(p: LedgerPaymentBatchRow): string {

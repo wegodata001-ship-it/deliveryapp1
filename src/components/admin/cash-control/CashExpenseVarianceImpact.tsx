@@ -123,7 +123,7 @@ export function CashExpenseVarianceImpact({
     return null;
   }
 
-  const hasAmount = preview.proposedExpenseAmount > 0;
+  const hasAmount = preview.proposedExpenseAmount !== 0;
   const showAfter = hasAmount;
   const cur = preview.currency;
 

@@ -547,6 +547,7 @@ export async function getPaymentsControlAction(week: string): Promise<PaymentsCo
       paymentMethod: true,
       usdPaymentMethod: true,
       ilsPaymentMethod: true,
+      methodAllocations: { select: { method: true, currency: true, sourceAmount: true } },
     },
   });
   let receivedTotal = 0;
@@ -794,7 +795,7 @@ export async function saveCashExpenseAction(input: {
   if (!userHasAnyPermission(me, READ_PERMS)) return { ok: false, error: "אין הרשאה" };
 
   const amount = dec(input.amount);
-  if (amount.lte(0)) return { ok: false, error: "יש להזין סכום חיובי" };
+  if (amount.eq(0)) return { ok: false, error: "יש להזין סכום שונה מאפס" };
 
   await prisma.cashExpense.create({
     data: {

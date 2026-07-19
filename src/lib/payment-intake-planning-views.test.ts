@@ -56,6 +56,27 @@ function sampleOrder(
 }
 
 describe("derivePaymentIntakePlanningViews (SSOT)", () => {
+  it("attributes typed payment lines by method into PMC rows (KPI ≡ table)", () => {
+    const orders = [sampleOrder({ id: "o1", orderNumber: "TR-100" })];
+    // User typed BANK only — Cash planned first must stay at 0 entered.
+    const kpis = emptyKpis({
+      bankTransfer: bucket(40),
+      totalPaymentUsd: 40,
+    });
+    const views = derivePaymentIntakePlanningViews(orders, null, kpis, 40);
+
+    const cash = views.methodViews.find((r) => r.bucket === "CASH");
+    const bank = views.methodViews.find((r) => r.bucket === "BANK_TRANSFER");
+    assert.equal(cash?.formEnteredUsd, 0);
+    assert.equal(cash?.formRemainingUsd, 60);
+    assert.equal(bank?.formEnteredUsd, 40);
+    assert.equal(bank?.formRemainingUsd, 0);
+
+    assert.equal(views.methodViewSummary.plannedUsd, 100);
+    assert.equal(views.methodViewSummary.enteredUsd, 40);
+    assert.equal(views.methodViewSummary.remainingUsd, 60);
+  });
+
   it("builds button rows and modal detail rows from the same orders snapshot", () => {
     const orders = [sampleOrder({ id: "o1", orderNumber: "TR-100" })];
     const kpis = emptyKpis({

@@ -198,7 +198,10 @@ export function FlowWeekDrillPanel({
                   <td dir="ltr">{e.timeHm}</td>
                   <td>{e.reasonLabel}</td>
                   <td>{e.createdByName ?? "—"}</td>
-                  <td dir="ltr" className="fc-num">
+                  <td
+                    dir="ltr"
+                    className={`fc-num${fcNum(e.amount) < 0 ? " cc-expense-amount--negative" : ""}`}
+                  >
                     {fmtDailyMoney(e.currency, fcNum(e.amount))}
                   </td>
                 </tr>

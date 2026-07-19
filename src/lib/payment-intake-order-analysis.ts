@@ -5,18 +5,13 @@
  *
  * SYNC GUARANTEE
  * ──────────────
- * Both the main intake table and the PMC window must show consistent numbers
- * for the same order.  This is achieved by a single allocation strategy:
+ * Main intake table (order remaining):
+ *   allocatePaymentAcrossOrders → formAllocationUsd / formRemainingUsd per order.
  *
- *   1. allocatePaymentAcrossOrders (order-level FIFO) → formAllocationUsd per order.
- *      ← This is the SAME engine that matchPaymentToOrders uses for the main table.
- *
- *   2. Distribute formAllocationUsd across the order's methods in plan order
- *      (fill method 1 first, then method 2, etc.).
- *      → sum(method.formRemainingUsd) === order.formRemainingUsd   ✓
- *
- * This eliminates the discrepancy that arose when the PMC used a separate
- * per-bucket FIFO (which could produce a different total than the order FIFO).
+ * PMC grid + KPI cards ("סכום מתוכנן / שנקלט / נותר"):
+ *   Method rows attribute live payment-line totals by bucket into planned
+ *   method capacities. KPI cards sum the exact same rows the table renders
+ *   (after filters) — no parallel summary / cache.
  *
  * Rules:
  *   - No DB / Prisma / API changes.
@@ -31,6 +26,7 @@ import {
   toPaymentIntakeBases,
   type PaymentIntakeOrderRow,
 } from "@/lib/payment-intake";
+import type { LivePaymentFormKpis } from "@/lib/payment-intake-live-kpi";
 import {
   PAYMENT_BUCKET_LABELS,
   paymentMethodBucketKey,
@@ -63,12 +59,12 @@ export const PAYMENT_VIEW_STATUS_META: Record<
  * Per-order × per-payment-method view.
  * Used by the "אמצעי תשלום מתוכננים" (PMC) screen.
  *
- * INVARIANT: sum(methodViews[].formRemainingUsd) === max(0, order.formRemainingUsd)
- * Both the main table and PMC always show consistent remaining numbers.
- *
  * Column labels:
- *   formEnteredUsd   → "סכום שנקלט"          (share of order allocation attributed to this method)
- *   formRemainingUsd → "נותר לאמצעי התשלום"   (remaining to settle for this method)
+ *   plannedUsd       → "סכום מתוכנן"         (open capacity for this method)
+ *   formEnteredUsd   → "סכום שנקלט"          (typed payment-line amount for this bucket)
+ *   formRemainingUsd → "נותר לאמצעי התשלום"   (plannedUsd − formEnteredUsd)
+ *
+ * KPI cards must be summarizeIntakeMethodViews(visibleRows) — same list as the table.
  */
 export type IntakeMethodView = {
   /** Unique React key: `{orderId}:{bucket}` or `__excess` */
@@ -181,84 +177,126 @@ function deriveOrderStatus(
 /**
  * Build the full business model for all intake orders.
  *
- * Uses allocatePaymentAcrossOrders (unchanged) for order-level allocation,
- * then distributes that allocation across each order's planned methods.
+ * Order-level remaining (main intake table):
+ *   Uses allocatePaymentAcrossOrders — identical to matchPaymentToOrders.
+ *   order.formRemainingUsd ≡ main-table remainingAmount.
  *
- * Result guarantees:
- *   • order.formRemainingUsd   ≡ main-table remainingAmount  (same engine)
- *   • sum(method.formRemainingUsd) ≡ max(0, order.formRemainingUsd)  (no gap)
+ * Method-level display (PMC grid + KPI cards):
+ *   "סכום שנקלט" is attributed from the live payment lines by method bucket
+ *   (same totals as PaymentLiveSummaryCards / methodControlRows), filled into
+ *   each order×method row in FIFO order up to that method's open capacity.
+ *   KPI cards MUST sum the exact same rows the table renders.
  *
- * @param orders         Full list of intake orders for the customer.
- * @param includedOrderIds  Manual priority selection (null = all orders).
- * @param totalFormUsd   Total USD entered in the form (= totals.totalUsd in the parent).
+ * Step 1 — effectiveCap per method:
+ *   Distribute order-level dbRemainingUsd across methods in plan order.
+ *   → effectiveCap always ≤ dbRem; sum(caps) === dbRem.
+ *
+ * Step 2 — attribute typed payments by bucket into method rows (display only).
  */
 export function buildIntakeOrderViews(
   orders: PaymentIntakeOrderRow[],
   includedOrderIds: string[] | null,
+  liveFormKpis: LivePaymentFormKpis,
   totalFormUsd: number,
 ): IntakeOrderView[] {
   const idSet = includedOrderIds ? new Set(includedOrderIds) : null;
 
   // ── Order-level FIFO (identical to matchPaymentToOrders) ─────────────────
   const bases = toPaymentIntakeBases(orders);
-  const { byOrderId, unallocatedUsd: _unallocated } = allocatePaymentAcrossOrders(
-    bases,
-    totalFormUsd,
-    idSet,
-  );
+  const { byOrderId } = allocatePaymentAcrossOrders(bases, totalFormUsd, idSet);
 
-  return orders.map((o) => {
+  // Live payment-line totals by bucket — same source as the form KPIs.
+  const bucketPool = new Map<PaymentBucketKey, number>([
+    ["CASH", roundMoney2(liveFormKpis.cash.totalUsd)],
+    ["BANK_TRANSFER", roundMoney2(liveFormKpis.bankTransfer.totalUsd)],
+    ["CREDIT", roundMoney2(liveFormKpis.credit.totalUsd)],
+    ["CHECK", roundMoney2(liveFormKpis.checks.totalUsd)],
+    ["OTHER", roundMoney2(liveFormKpis.other.totalUsd)],
+  ]);
+
+  type MethodDraft = {
+    bucket: PaymentBucketKey;
+    methodLabel: string;
+    plannedUsd: number;
+    dbPaidUsd: number;
+    cap: number;
+    dateYmd: string;
+    formEnteredUsd: number;
+  };
+
+  type OrderDraft = {
+    order: PaymentIntakeOrderRow;
+    dbRem: number;
+    formAlloc: number;
+    formRem: number;
+    methods: MethodDraft[];
+  };
+
+  const drafts: OrderDraft[] = orders.map((o) => {
     const dbRem = roundMoney2(Math.max(0, Number(o.dbRemainingUsd)));
     const formAlloc = roundMoney2(byOrderId.get(o.id) ?? 0);
-    const formRem = roundMoney2(dbRem - formAlloc); // can be negative (credit)
+    const formRem = roundMoney2(dbRem - formAlloc);
+    // Filter by b.remainingUsd: methods already paid in full (remainingUsd ≈ 0) must
+    // be excluded from the display pool. Using b.plannedUsd here would assign the entire
+    // dbRem cap to the first planned method even when that method is already fully paid
+    // (e.g. CASH after a COMPOSITE partial payment), leaving CREDIT with cap=0 and making
+    // the "סכום שנקלט" KPI card show $0.00 even when the user has typed the correct amount.
+    const filteredBreakdown = o.breakdown.filter((b) => b.remainingUsd > CASH_CONTROL_EPS);
 
-    // ── Method-level: distribute dbRem then formAlloc across plan methods ───
-    //
-    // WHY TWO STEPS:
-    // b.remainingUsd is unreliable — the API may not track per-method paidUsd,
-    // so b.remainingUsd can equal b.plannedUsd even when the order has partial
-    // payments recorded (e.g., order dbRemainingUsd=$1720 but b.remainingUsd=$2020).
-    //
-    // The ORDER-LEVEL dbRemainingUsd is always authoritative (same value the
-    // main table shows as "יתרת חוב").  We derive method capacities from it
-    // by filling methods in plan order — identical logic to formAlloc distribution.
-    //
-    // Invariant: sum(effectiveCap) = dbRem  (when sum(plannedUsd) >= dbRem)
-    //            sum(formRemainingUsd) = max(0, formRem)  ← matches main table
-    const filteredBreakdown = o.breakdown.filter((b) => b.plannedUsd > CASH_CONTROL_EPS);
-
-    // Step 1: distribute order dbRem → effective capacity per method
     let dbCapPool = dbRem;
-    const effectiveCaps = filteredBreakdown.map((b) => {
-      const cap = roundMoney2(Math.min(roundMoney2(b.plannedUsd), Math.max(0, dbCapPool)));
+    const methods: MethodDraft[] = filteredBreakdown.map((b) => {
+      // Cap = min(b.remainingUsd, available pool).
+      // This correctly limits each method to what is actually still owed for that method.
+      const cap = roundMoney2(Math.min(roundMoney2(b.remainingUsd), Math.max(0, dbCapPool)));
       dbCapPool = roundMoney2(Math.max(0, dbCapPool - cap));
-      return cap;
+      const bucket = paymentMethodBucketKey(b.method);
+      return {
+        bucket,
+        methodLabel: PAYMENT_BUCKET_LABELS[bucket],
+        // לתצוגה/KPI: "מתוכנן" = יתרה פתוחה לאמצעי (לא הסכום ההיסטורי המקורי)
+        plannedUsd: cap,
+        dbPaidUsd: roundMoney2(b.paidUsd),
+        cap,
+        dateYmd: o.dateYmd || "—",
+        formEnteredUsd: 0,
+      };
     });
 
-    // Step 2: distribute formAlloc using those capacities
-    let methodAllocPool = formAlloc;
-    const methodViews: IntakeMethodView[] = filteredBreakdown.map((b, i) => {
-        const bucket = paymentMethodBucketKey(b.method);
-        const plannedUsd = roundMoney2(b.plannedUsd);    // original plan (display)
-        const cap = effectiveCaps[i]!;                   // order-truth-based capacity
-        const methodAlloc = roundMoney2(Math.min(cap, Math.max(0, methodAllocPool)));
-        methodAllocPool = roundMoney2(Math.max(0, methodAllocPool - methodAlloc));
-        const formMethodRem = roundMoney2(Math.max(0, cap - methodAlloc));
-        return {
-          id: `${o.id}:${bucket}`,
-          orderId: o.id,
-          orderNumber: o.orderNumber?.trim() || o.id.slice(0, 8),
-          bucket,
-          methodLabel: PAYMENT_BUCKET_LABELS[bucket],
-          plannedUsd,
-          dbPaidUsd: roundMoney2(b.paidUsd),
-          dbRemainingUsd: cap,   // effective per-method remaining (derived from order-level truth)
-          formEnteredUsd: methodAlloc,
-          formRemainingUsd: formMethodRem,
-          status: deriveMethodStatus(cap, methodAlloc, formMethodRem),
-          dateYmd: o.dateYmd || "—",
-        };
-      });
+    return { order: o, dbRem, formAlloc, formRem, methods };
+  });
+
+  // Attribute typed payment-line amounts into method rows (oldest → newest).
+  for (const draft of drafts) {
+    if (idSet && !idSet.has(draft.order.id)) continue;
+    if (draft.dbRem <= CASH_CONTROL_EPS) continue;
+    for (const method of draft.methods) {
+      const available = bucketPool.get(method.bucket) ?? 0;
+      if (available <= CASH_CONTROL_EPS || method.cap <= CASH_CONTROL_EPS) continue;
+      const take = roundMoney2(Math.min(method.cap, available));
+      method.formEnteredUsd = take;
+      bucketPool.set(method.bucket, roundMoney2(Math.max(0, available - take)));
+    }
+  }
+
+  return drafts.map((draft) => {
+    const o = draft.order;
+    const methodViews: IntakeMethodView[] = draft.methods.map((m) => {
+      const formMethodRem = roundMoney2(Math.max(0, m.cap - m.formEnteredUsd));
+      return {
+        id: `${o.id}:${m.bucket}`,
+        orderId: o.id,
+        orderNumber: o.orderNumber?.trim() || o.id.slice(0, 8),
+        bucket: m.bucket,
+        methodLabel: m.methodLabel,
+        plannedUsd: m.plannedUsd,
+        dbPaidUsd: m.dbPaidUsd,
+        dbRemainingUsd: m.cap,
+        formEnteredUsd: m.formEnteredUsd,
+        formRemainingUsd: formMethodRem,
+        status: deriveMethodStatus(m.cap, m.formEnteredUsd, formMethodRem),
+        dateYmd: m.dateYmd,
+      };
+    });
 
     return {
       orderId: o.id,
@@ -267,10 +305,10 @@ export function buildIntakeOrderViews(
       week: o.week,
       totalAmountUsd: roundMoney2(Number(o.totalAmountUsd)),
       dbPaidUsd: roundMoney2(Number(o.dbPaidUsd)),
-      dbRemainingUsd: dbRem,
-      formAllocationUsd: formAlloc,
-      formRemainingUsd: formRem,
-      orderStatus: deriveOrderStatus(dbRem, formAlloc, formRem),
+      dbRemainingUsd: draft.dbRem,
+      formAllocationUsd: draft.formAlloc,
+      formRemainingUsd: draft.formRem,
+      orderStatus: deriveOrderStatus(draft.dbRem, draft.formAlloc, draft.formRem),
       methodViews,
     };
   });
@@ -302,11 +340,10 @@ export function buildIntakeMethodViews(
   );
   const rows: IntakeMethodView[] = relevant.flatMap((ov) => ov.methodViews);
 
-  // "Excess payment" row: form total > sum of ALL order debts (use all orderViews, not just relevant)
-  const totalAllocated = roundMoney2(
-    orderViews.reduce((s, ov) => s + ov.formAllocationUsd, 0),
-  );
-  const excessUsd = roundMoney2(Math.max(0, totalFormUsd - totalAllocated));
+  // עודף: כל סכום משורות התשלום שלא יוחס לאמצעי מתוכנן בטבלה.
+  // כך סכום KPI "סכום שנקלט" (כולל שורת עודף) ≡ סה״כ שורות התשלום בטופס.
+  const attributedUsd = roundMoney2(rows.reduce((s, r) => s + r.formEnteredUsd, 0));
+  const excessUsd = roundMoney2(Math.max(0, totalFormUsd - attributedUsd));
   if (excessUsd > CASH_CONTROL_EPS) {
     rows.push({
       id: "__excess",

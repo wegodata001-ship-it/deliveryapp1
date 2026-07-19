@@ -97,13 +97,6 @@ export const PAYMENT_BUCKET_LABELS: Record<PaymentBucketKey, string> = {
   OTHER: "אחר",
 };
 
-/** תרומה מפורקת משורת # ב-notes של קליטת תשלום */
-export type PaymentNoteContribution = {
-  bucket: PaymentBucketKey;
-  side: "ILS" | "USD";
-  amount: number;
-};
-
 /**
  * מנרמל slug אמצעי תשלום (קטלוג / Prisma / UI) לערך קנוני.
  * CREDIT_CARD → CREDIT, TRANSFER → BANK_TRANSFER וכו'.
@@ -126,49 +119,6 @@ export function paymentMethodBucketKey(method: string | null | undefined): Payme
   if (m === "CHECK") return "CHECK";
   if (m === "OTHER") return "OTHER";
   return "OTHER";
-}
-
-function parseNoteAmount(raw: string): number {
-  const n = Number(String(raw).replace(/,/g, ""));
-  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : 0;
-}
-
-/**
- * מפצל שורות # מתוך notes של קליטת תשלום — מקור אמת כשיש מספר אמצעים באותה קליטה.
- * פורמט: `USD $500.00 · CASH` / `ILS ₪100.00 · CREDIT`
- */
-export function parsePaymentNoteContributions(
-  notes: string | null | undefined,
-  _exchangeRate = 0,
-): PaymentNoteContribution[] {
-  const txt = (notes ?? "").trim();
-  if (!txt.includes("#")) return [];
-
-  const out: PaymentNoteContribution[] = [];
-  for (const line of txt.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith("#")) continue;
-
-    for (const m of trimmed.matchAll(/USD\s+\$([\d.,]+)\s·\s([A-Z0-9_]+)/gi)) {
-      const amount = parseNoteAmount(m[1] ?? "");
-      if (amount <= 0) continue;
-      out.push({
-        bucket: paymentMethodBucketKey(m[2] ?? "CASH"),
-        side: "USD",
-        amount,
-      });
-    }
-    for (const m of trimmed.matchAll(/ILS\s+₪([\d.,]+)\s·\s([A-Z0-9_]+)/gi)) {
-      const amount = parseNoteAmount(m[1] ?? "");
-      if (amount <= 0) continue;
-      out.push({
-        bucket: paymentMethodBucketKey(m[2] ?? "CASH"),
-        side: "ILS",
-        amount,
-      });
-    }
-  }
-  return out;
 }
 
 /** חלוקה מתוכננת לקבוצה (USD) — מתוכנן + מה שנותר לתשלום באמצעי זה */

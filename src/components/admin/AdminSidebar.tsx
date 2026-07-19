@@ -28,6 +28,7 @@ import {
   Users,
   Wallet,
   Archive,
+  Truck,
 } from "lucide-react";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { WegoBrandLogo } from "@/components/admin/WegoBrandLogo";
@@ -77,6 +78,8 @@ function NavIcon({ id }: { id: NavIconId }) {
       return <Coins {...common} />;
     case "documents":
       return <Archive {...common} />;
+    case "shipments":
+      return <Truck {...common} />;
     default:
       return <Home {...common} />;
   }
@@ -316,8 +319,7 @@ export function AdminSidebar({
         <form action="/admin/logout" method="post">
           <button
             type="submit"
-            className="adm-nav-link"
-            style={{ width: "100%", border: "none", background: "transparent", cursor: "pointer" }}
+            className="adm-nav-link adm-nav-link--action"
             onClick={() => closeNav?.()}
           >
             <LogOut size={18} />

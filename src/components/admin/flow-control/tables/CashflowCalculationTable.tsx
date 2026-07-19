@@ -58,6 +58,7 @@ export function CashflowCalculationTable({
 
   const fxNet = fcNum(row.fxNetIls);
   const hasVariance = row.status === "warn" || row.status === "critical";
+  const statusClickable = !!onVarianceClick;
 
   return (
     <div className="ft-table-wrap ft-table-wrap--wide">
@@ -137,7 +138,7 @@ export function CashflowCalculationTable({
               )}
             </td>
             <td>
-              {hasVariance && onVarianceClick ? (
+              {statusClickable ? (
                 <button type="button" className="ft-status-btn" onClick={onVarianceClick}>
                   <StatusBadge status={row.status} />
                 </button>
@@ -146,9 +147,11 @@ export function CashflowCalculationTable({
               )}
             </td>
             <td className="ft-notes">
-              {hasVariance ? (
+              {statusClickable ? (
                 <button type="button" className="ft-amount-link" onClick={onVarianceClick}>
-                  {varianceStatusLabel(row.status)} — לחץ לפירוט
+                  {hasVariance
+                    ? `${varianceStatusLabel(row.status)} — לחץ לפירוט`
+                    : `${varianceStatusLabel(row.status)} — לחץ לפירוט הסטטוס`}
                 </button>
               ) : (
                 "—"

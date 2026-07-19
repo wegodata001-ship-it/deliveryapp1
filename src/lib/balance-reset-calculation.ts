@@ -1,8 +1,5 @@
 import { roundMoney2 } from "@/lib/payment-intake";
 
-/** חייב להתאים ל־CUSTOMER_CREDIT_SURPLUS_NOTE_PREFIX ב־cash-control-internal-payments */
-const CUSTOMER_CREDIT_SURPLUS_NOTE_PREFIX = "יתרת זכות ללקוח — עודף מתשלום";
-
 /** סובלנות כספית — הפרש מתחת לסף אינו דורש איפוס */
 export const BALANCE_RESET_TOLERANCE_USD = 0.01;
 
@@ -45,7 +42,6 @@ export type OverpaymentCreditCandidate = {
   id: string;
   amountUsd: number;
   paymentNumber: number;
-  notes: string | null;
   orderId: string | null;
 };
 
@@ -161,13 +157,9 @@ export function summarizeOrderBalanceResetRows(rows: OrderBalanceResetRow[]): Or
 /** בוחר רק יתרות זכות מעודף מאותה קליטת תשלום — לא יתרות קודמות */
 export function pickOverpaymentCreditsToCancel(params: {
   candidates: OverpaymentCreditCandidate[];
-  primaryPaymentCode: string;
   paymentNumber: number;
   overpaymentUsd: number;
 }): string[] {
-  const code = params.primaryPaymentCode.trim();
-  if (!code) return [];
-
   let remaining = roundMoney2(params.overpaymentUsd);
   if (remaining <= BALANCE_RESET_TOLERANCE_USD) return [];
 
@@ -176,9 +168,6 @@ export function pickOverpaymentCreditsToCancel(params: {
     if (remaining <= BALANCE_RESET_TOLERANCE_USD) break;
     if (c.orderId != null) continue;
     if (c.paymentNumber !== params.paymentNumber) continue;
-    const notes = (c.notes ?? "").trim();
-    if (!notes.startsWith(CUSTOMER_CREDIT_SURPLUS_NOTE_PREFIX)) continue;
-    if (!notes.includes(code)) continue;
     ids.push(c.id);
     remaining = roundMoney2(remaining - c.amountUsd);
   }

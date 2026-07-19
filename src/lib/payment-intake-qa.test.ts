@@ -5,8 +5,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { Prisma } from "@prisma/client";
 import {
+  buildIntakeBreakdownPlan,
   computeIntakeSaveDeviations,
-  checkIntakeBreakdownViolations,
   intakeSaveHasDeviations,
   intakeSaveHasSurplus,
   intakeHasMethodMismatch,
@@ -15,8 +15,10 @@ import {
 } from "@/lib/cash-control-intake-breakdown";
 import {
   buildLivePaymentMethodControlRows,
+  buildPostSaveRemainingSummary,
   type LivePaymentMethodControlRow,
 } from "@/lib/payment-intake-method-control";
+import { buildIntakeOrderViews } from "@/lib/payment-intake-order-analysis";
 import type { LivePaymentFormKpis } from "@/lib/payment-intake-live-kpi";
 import type { PaymentIntakeOrderRow } from "@/lib/payment-intake";
 import { PAYMENT_BUCKET_LABELS } from "@/lib/payment-breakdown-shared";
@@ -28,7 +30,6 @@ import {
   planCommissionSurplusAbsorption,
 } from "@/lib/commission-debt-closure";
 import {
-  CUSTOMER_CREDIT_SURPLUS_NOTE_PREFIX,
   isInternalNonReceiptPayment,
 } from "@/lib/cash-control-internal-payments";
 import { buildCashControlMethodSummary } from "@/lib/cash-control-method-summary";
@@ -57,6 +58,13 @@ function bankKpis(usd: number): LivePaymentFormKpis {
   return kpis({
     totalPaymentUsd: usd,
     bankTransfer: { totalUsd: usd, enteredUsd: usd, enteredIls: 0 },
+  });
+}
+
+function checkKpis(usd: number): LivePaymentFormKpis {
+  return kpis({
+    totalPaymentUsd: usd,
+    checks: { totalUsd: usd, enteredUsd: usd, enteredIls: 0 },
   });
 }
 
@@ -133,11 +141,6 @@ describe("QA-1 תשלום רגיל ($500 / $500)", () => {
     assert.equal(methodRowsStatus(rows), "paid");
     assert.equal(rows.some((r) => r.status === "excess"), false);
   });
-
-  it("שרת — אין violations", () => {
-    const v = checkIntakeBreakdownViolations(orders, null, enteredCash(500), 500);
-    assert.equal(v.length, 0);
-  });
 });
 
 describe("QA-2b יתרה פתוחה — אותו אמצעי ($510 / $505)", () => {
@@ -193,7 +196,7 @@ describe("QA-2 תשלום חלקי ($500 / $300)", () => {
 describe("QA-3 עודף תשלום ($500 / $520)", () => {
   const orders = [order({ remaining: 500, total: 500 })];
 
-  it("אין חריגה — יש surplus", () => {
+  it("עודף מעבר לתכנון מסומן גם כחריגת אמצעי", () => {
     const devRows = computeIntakeSaveDeviations({
       orders,
       includedOrderIds: null,
@@ -201,7 +204,7 @@ describe("QA-3 עודף תשלום ($500 / $520)", () => {
       formRateN: 3.7,
       totalPaymentUsd: 520,
     });
-    assert.equal(intakeSaveHasDeviations(devRows), false);
+    assert.equal(intakeSaveHasDeviations(devRows), true);
     assert.equal(intakeSaveHasSurplus(devRows), true);
     assert.ok(devRows.some((r) => r.rowTone === "surplus"));
   });
@@ -211,11 +214,6 @@ describe("QA-3 עודף תשלום ($500 / $520)", () => {
     const cash = rows.find((r) => r.bucket === "CASH");
     assert.equal(cash?.status, "surplus");
     assert.equal(rows.some((r) => r.status === "excess"), false);
-  });
-
-  it("שרת — אין violations (עודף מוסבר)", () => {
-    const v = checkIntakeBreakdownViolations(orders, null, enteredCash(520), 520);
-    assert.equal(v.length, 0);
   });
 
   it("מסלול עמלה — planCommissionSurplusAbsorption", () => {
@@ -247,10 +245,10 @@ describe("QA-4 איפוס מתוך יתרת זכות ($50 זכות / $10 נות�
   });
 });
 
-describe("QA-5 חריגה אמיתית (מזומן בהזמנה / העברה בקליטה)", () => {
+describe("QA-5 אמצעי שונה מהמתוכנן (מזומן בהזמנה / העברה בקליטה) — נחסם", () => {
   const orders = [order({ remaining: 500, method: "CASH" })];
 
-  it("חוסם שמירה", () => {
+  it("חוסם שמירה ודורש עדכון תכנון", () => {
     const devRows = computeIntakeSaveDeviations({
       orders,
       includedOrderIds: null,
@@ -259,24 +257,21 @@ describe("QA-5 חריגה אמיתית (מזומן בהזמנה / העברה ב�
       totalPaymentUsd: 500,
     });
     assert.equal(intakeSaveHasDeviations(devRows), true);
+    assert.equal(intakeHasMethodMismatch(devRows), true);
     assert.ok(devRows.some((r) => r.rowTone === "excess"));
+    assert.ok(intakeDeviationModalRows(devRows).length > 0);
   });
 
-  it("בקרת אמצעי — excess על BANK", () => {
+  it("בקרת אמצעי — BANK מסומן כחריגה", () => {
     const rows = buildLivePaymentMethodControlRows(orders, null, bankKpis(500), 500);
     const bank = rows.find((r) => r.bucket === "BANK_TRANSFER");
     assert.equal(bank?.status, "excess");
-  });
-
-  it("שרת — violation", () => {
-    const v = checkIntakeBreakdownViolations(orders, null, enteredBank(500), 500);
-    assert.ok(v.length > 0);
-    assert.equal(v[0]?.type, "not-planned");
+    assert.equal(rows.some((r) => r.status === "excess"), true);
   });
 });
 
-describe("QA-6 עריכת הזמנה — חריגה נעלמת", () => {
-  it("לאחר עדכון breakdown ל-BANK — אין חריגה", () => {
+describe("QA-6 עריכת הזמנה — אמצעי תואם", () => {
+  it("breakdown ב-BANK ותשלום ב-BANK — אין חריגה", () => {
     const fixed = [order({ remaining: 500, method: "BANK_TRANSFER" })];
     const devRows = computeIntakeSaveDeviations({
       orders: fixed,
@@ -309,21 +304,15 @@ describe("QA-7 כרטסת — תוויות פעולות", () => {
 
 describe("QA-8 בקרת קופה — לא כסף שנכנס", () => {
   it("איפוס מתוך זכות — לא receipt", () => {
-    assert.equal(
-      isInternalNonReceiptPayment(`שורה\n${BALANCE_RESET_FROM_CREDIT_LEDGER_LABEL}\nסכום: $10`),
-      true,
-    );
+    assert.equal(isInternalNonReceiptPayment("CREDIT_APPLICATION"), true);
   });
 
   it("עודף כיתרת זכות — לא receipt", () => {
-    assert.equal(
-      isInternalNonReceiptPayment(`${CUSTOMER_CREDIT_SURPLUS_NOTE_PREFIX}\nעודף: $20`),
-      true,
-    );
+    assert.equal(isInternalNonReceiptPayment("CUSTOMER_CREDIT"), true);
   });
 
   it("תשלום רגיל — receipt", () => {
-    assert.equal(isInternalNonReceiptPayment("קליטת תשלום מעודכן (דו-מטבעי)"), false);
+    assert.equal(isInternalNonReceiptPayment("STANDARD"), false);
   });
 
   it("method summary — רק כסף אמיתי", () => {
@@ -389,5 +378,223 @@ describe("QA-10 Regression — תשלום מורכב ואיפוס עמלה", () 
     });
     assert.equal(plan.afterTotalUsd, 490);
     assert.equal(plan.remainingUsd, 10);
+  });
+});
+
+describe("QA-11 יתרה כוללת בלבד — תשלום שני בצ'ק אחרי מזומן+העברה", () => {
+  /**
+   * תרחיש חובה:
+   * מסמך $2020
+   * תשלום 1: מזומן 1005 + העברה 210 → שולם 1215, יתרה 505
+   * תשלום 2: צ'ק 505 → שולם 2020, יתרה 0
+   * אין "יתרת מזומן" / "יתרת העברה" — רק יתרה למסמך.
+   */
+  const afterFirstPayment: PaymentIntakeOrderRow = {
+    id: "o-tr-102-0003",
+    orderNumber: "TR-102-0003",
+    paymentCode: null,
+    dateYmd: "2026-07-11",
+    week: "2026-W28",
+    rate: "3.70",
+    amountUsd: "1920.00",
+    commissionUsd: "100.00",
+    totalIls: "0",
+    totalAmountUsd: "2020.00",
+    dbPaidUsd: "1215.00",
+    dbRemainingUsd: "505.00",
+    status: "partial",
+    lastPaymentDateYmd: "2026-07-11",
+    sourceCountry: null,
+    isComposite: true,
+    breakdown: [
+      {
+        method: "CASH",
+        label: "מזומן",
+        plannedUsd: 1005,
+        paidUsd: 1005,
+        remainingUsd: 0,
+      },
+      {
+        method: "BANK_TRANSFER",
+        label: "העברה בנקאית",
+        plannedUsd: 210,
+        paidUsd: 210,
+        remainingUsd: 0,
+      },
+      {
+        method: "CHECK",
+        label: "צ'ק",
+        plannedUsd: 805,
+        paidUsd: 0,
+        remainingUsd: 805,
+      },
+    ],
+    actualMethods: [
+      { method: "CASH", label: "מזומן", usd: 1005 },
+      { method: "BANK_TRANSFER", label: "העברה בנקאית", usd: 210 },
+    ],
+    hasMethodDeviation: false,
+  };
+
+  it("תשלום שני בצ'ק 505 — אין חריגת אמצעי, אין חסימה", () => {
+    const devRows = computeIntakeSaveDeviations({
+      orders: [afterFirstPayment],
+      includedOrderIds: null,
+      enteredByBucket: [
+        { bucket: "CHECK", label: PAYMENT_BUCKET_LABELS.CHECK, enteredUsd: 505 },
+      ],
+      formRateN: 3.7,
+      totalPaymentUsd: 505,
+    });
+    assert.equal(intakeSaveHasDeviations(devRows), false);
+    assert.equal(intakeHasMethodMismatch(devRows), false);
+    assert.ok(!devRows.some((r) => r.rowTone === "excess"));
+    assert.equal(intakeHasOpenBalanceShortfall(devRows), false);
+  });
+
+  it("PMC — צ'ק סוגר את היתרה הכוללת ללא חריגה", () => {
+    const views = buildIntakeOrderViews(
+      [afterFirstPayment],
+      null,
+      checkKpis(505),
+      505,
+    );
+    const ov = views[0]!;
+    assert.equal(ov.dbRemainingUsd, 505);
+    assert.equal(ov.formAllocationUsd, 505);
+    assert.equal(ov.formRemainingUsd, 0);
+    assert.equal(ov.orderStatus, "cleared");
+    // אין שורת "חריגה" על אמצעי שלא תוכנן לתשלום הנוכחי
+    assert.ok(ov.methodViews.every((m) => m.status !== "open"));
+  });
+
+  it("הודעת אחרי שמירה — יתרה כוללת בלבד (לא פר-אמצעי)", () => {
+    const afterSecond: PaymentIntakeOrderRow = {
+      ...afterFirstPayment,
+      dbPaidUsd: "2020.00",
+      dbRemainingUsd: "0.00",
+      status: "paid",
+      breakdown: afterFirstPayment.breakdown.map((b) => ({
+        ...b,
+        paidUsd: b.plannedUsd,
+        remainingUsd: 0,
+      })),
+    };
+    const msg = buildPostSaveRemainingSummary([afterSecond], null);
+    assert.equal(msg, "התשלום נשמר — שולם במלואו");
+    assert.ok(!msg.includes("מזומן"));
+    assert.ok(!msg.includes("העברה"));
+  });
+
+  it("הודעת יתרה חלקית — סכום אחד בלבד", () => {
+    const msg = buildPostSaveRemainingSummary([afterFirstPayment], null);
+    assert.equal(msg, "התשלום נשמר\nיתרה לתשלום: $505.00");
+    assert.ok(!msg.includes("מזומן"));
+    assert.ok(!msg.includes("העברה"));
+  });
+});
+
+// ─── QA-7: שיוך יתרה לאמצעי התשלום המקורי לאחר תשלום חלקי ────────────────
+// תרחיש: תכנון Cash $1,000 + Bank Transfer $500 + Credit $95.80
+// קליטה ראשונה שולמת Cash+BankTransfer ($1,500) כתשלום COMPOSITE יחיד
+// (→ actualMap שומר COMPOSITE לא CASH/BANK_TRANSFER)
+// לאחר תיקון ה-FIFO distribution ב-mapOrderToIntakeRow,
+// ה-breakdown מכיל: Cash remaining=0, BankTransfer remaining=0, Credit remaining=95.80
+// ─────────────────────────────────────────────────────────────────────────────
+describe("QA-7 שיוך יתרה לאמצעי תשלום מקורי (לאחר תשלום COMPOSITE חלקי)", () => {
+  // This represents what mapOrderToIntakeRow produces AFTER the FIFO-distribution fix.
+  const orderAfterCompositePayment: PaymentIntakeOrderRow = {
+    id: "o-qa7",
+    orderNumber: "TR-QA7",
+    paymentCode: "P001",
+    dateYmd: "2026-07-01",
+    week: "2026-W27",
+    rate: "3.70",
+    amountUsd: "1495.80",
+    commissionUsd: "100.00",
+    totalIls: "0",
+    totalAmountUsd: "1595.80",
+    dbPaidUsd: "1500.00",
+    dbRemainingUsd: "95.80",
+    status: "partial",
+    lastPaymentDateYmd: "2026-07-01",
+    sourceCountry: null,
+    isComposite: true,
+    breakdown: [
+      // Cash paid in full — remainingUsd=0 after FIFO distribution of COMPOSITE payment
+      { method: "CASH",          label: "מזומן",            plannedUsd: 1000,  paidUsd: 1000, remainingUsd: 0 },
+      // Bank Transfer paid in full
+      { method: "BANK_TRANSFER", label: "העברה בנקאית",     plannedUsd: 500,   paidUsd: 500,  remainingUsd: 0 },
+      // Credit NOT paid — still open
+      { method: "CREDIT",        label: "אשראי",            plannedUsd: 95.80, paidUsd: 0,    remainingUsd: 95.80 },
+    ],
+    actualMethods: [
+      { method: "COMPOSITE", label: "מרובה", usd: 1500 },
+    ],
+    hasMethodDeviation: false,
+  };
+
+  it("breakdown.remainingUsd — רק Credit פתוח", () => {
+    const cash  = orderAfterCompositePayment.breakdown.find((b) => b.method === "CASH")!;
+    const bank  = orderAfterCompositePayment.breakdown.find((b) => b.method === "BANK_TRANSFER")!;
+    const credit = orderAfterCompositePayment.breakdown.find((b) => b.method === "CREDIT")!;
+    assert.equal(cash.remainingUsd, 0,     "Cash צריך להיות 0 לאחר תשלום COMPOSITE");
+    assert.equal(bank.remainingUsd, 0,     "BankTransfer צריך להיות 0");
+    assert.equal(credit.remainingUsd, 95.80, "Credit צריך להישאר 95.80");
+  });
+
+  it("buildIntakeBreakdownPlan — רק Credit מחזיר remainingUsd > 0", () => {
+    const plan = buildIntakeBreakdownPlan([orderAfterCompositePayment], null);
+    const cashPlan   = plan.find((p) => p.bucket === "CASH");
+    const bankPlan   = plan.find((p) => p.bucket === "BANK_TRANSFER");
+    const creditPlan = plan.find((p) => p.bucket === "CREDIT");
+    assert.equal(cashPlan?.remainingUsd ?? 0, 0, "Cash remaining בתכנון = 0");
+    assert.equal(bankPlan?.remainingUsd ?? 0, 0, "BankTransfer remaining בתכנון = 0");
+    assert.equal(creditPlan?.remainingUsd, 95.80, "Credit remaining בתכנון = 95.80");
+  });
+
+  it("buildLivePaymentMethodControlRows — הצגת אמצעי: Credit נדרש, Cash לא נדרש", () => {
+    const emptyKpis = kpis({ totalPaymentUsd: 0 });
+    const rows = buildLivePaymentMethodControlRows(
+      [orderAfterCompositePayment],
+      null,
+      emptyKpis,
+      0,
+    );
+    const cashRow   = rows.find((r) => r.bucket === "CASH");
+    const bankRow   = rows.find((r) => r.bucket === "BANK_TRANSFER");
+    const creditRow = rows.find((r) => r.bucket === "CREDIT");
+    assert.equal(cashRow?.status,   "not-required", "מזומן — לא נדרש (שולם)");
+    assert.equal(bankRow?.status,   "not-required", "העברה בנקאית — לא נדרשת (שולמה)");
+    assert.equal(creditRow?.status, "remaining",    "אשראי — נותר לתשלום");
+    assert.equal(creditRow?.plannedUsd, 95.80,      "Credit plannedUsd = 95.80");
+  });
+
+  it("computeIntakeSaveDeviations — קליטת אשראי $95.80 ללא חריגה", () => {
+    const deviations = computeIntakeSaveDeviations({
+      orders: [orderAfterCompositePayment],
+      includedOrderIds: null,
+      enteredByBucket: [
+        { bucket: "CREDIT", label: PAYMENT_BUCKET_LABELS.CREDIT, enteredUsd: 95.80 },
+      ],
+      formRateN: 3.7,
+      totalPaymentUsd: 95.80,
+    });
+    assert.equal(intakeHasMethodMismatch(deviations), false, "אין חריגת אמצעי — אשראי תואם");
+    assert.equal(intakeSaveHasDeviations(deviations), false, "אין חסימת שמירה");
+  });
+
+  it("computeIntakeSaveDeviations — קליטת מזומן $95.80 חוסמת שמירה", () => {
+    const deviations = computeIntakeSaveDeviations({
+      orders: [orderAfterCompositePayment],
+      includedOrderIds: null,
+      enteredByBucket: [
+        { bucket: "CASH", label: PAYMENT_BUCKET_LABELS.CASH, enteredUsd: 95.80 },
+      ],
+      formRateN: 3.7,
+      totalPaymentUsd: 95.80,
+    });
+    assert.equal(intakeHasMethodMismatch(deviations), true, "חריגת אמצעי — מזומן לא מותר ליתרת Credit");
+    assert.equal(intakeSaveHasDeviations(deviations), true, "חסימת שמירה בגלל אמצעי שגוי");
   });
 });

@@ -145,8 +145,8 @@ export function CashExpenseFormModal({
   async function submit() {
     setErr(null);
     const amt = Number(amount.replace(",", "."));
-    if (!Number.isFinite(amt) || amt <= 0) {
-      setErr("יש להזין סכום חיובי");
+    if (!Number.isFinite(amt) || amt === 0) {
+      setErr("יש להזין סכום שונה מאפס");
       return;
     }
     setSaving(true);
@@ -224,7 +224,7 @@ export function CashExpenseFormModal({
                 inputMode="decimal"
                 className="cc-input"
                 value={amount}
-                placeholder="0.00"
+                placeholder="0.00 (ניתן להזין תיקון שלילי)"
                 onChange={(e) => setAmount(e.target.value)}
                 dir="ltr"
               />
@@ -297,7 +297,12 @@ export function CashExpenseFormModal({
               type="button"
               className="cc-btn cc-btn--primary"
               onClick={() => void submit()}
-              disabled={saving || !amount || Number(amount.replace(",", ".")) <= 0}
+              disabled={
+                saving ||
+                !amount ||
+                !Number.isFinite(Number(amount.replace(",", "."))) ||
+                Number(amount.replace(",", ".")) === 0
+              }
             >
               {saving ? "שומר…" : isEdit ? "שמירת שינויים" : "שמור הוצאה"}
             </button>

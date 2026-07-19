@@ -5,7 +5,6 @@
 
 import { CASH_CONTROL_EPS } from "@/lib/cash-control-calculation";
 import {
-  parsePaymentNoteContributions,
   paymentMethodBucketKey,
   type PaymentBucketKey,
 } from "@/lib/payment-breakdown-shared";
@@ -26,8 +25,12 @@ export type FlowPaymentVatFields = {
   paymentMethod: string | null;
   usdPaymentMethod: string | null;
   ilsPaymentMethod: string | null;
-  notes?: string | null;
   exchangeRate?: { toString(): string } | null;
+  methodAllocations?: Array<{
+    method: string;
+    currency: string;
+    sourceAmount: { toString(): string };
+  }>;
   amountWithoutVat?: { toString(): string } | null;
   totalIlsWithoutVat?: { toString(): string } | null;
   totalIlsWithVat?: { toString(): string } | null;
@@ -100,19 +103,20 @@ export function ilsExVatFactor(p: FlowPaymentVatFields): number {
   return net / grossIls;
 }
 
-function contributionsFromNoteLines(
+function contributionsFromStructuredMethods(
   p: FlowPaymentVatFields,
 ): Array<{ column: CashDailyMethodId; amount: number }> | null {
-  const rate = Number(p.exchangeRate?.toString() ?? 0);
-  const parts = parsePaymentNoteContributions(p.notes, rate);
+  const parts = p.methodAllocations ?? [];
   if (parts.length === 0) return null;
 
   const ilsFactor = ilsExVatFactor(p);
   const out: Array<{ column: CashDailyMethodId; amount: number }> = [];
   for (const part of parts) {
-    const col = bucketToMethod(part.bucket, part.side);
+    const side = part.currency === "USD" ? "USD" : "ILS";
+    const col = bucketToMethod(paymentMethodBucketKey(part.method), side);
     if (!col) continue;
-    const amount = part.side === "ILS" ? round2(part.amount * ilsFactor) : part.amount;
+    const sourceAmount = num(part.sourceAmount);
+    const amount = side === "ILS" ? round2(sourceAmount * ilsFactor) : sourceAmount;
     out.push({ column: col, amount });
   }
   return out.length > 0 ? out : null;
@@ -122,8 +126,8 @@ function contributionsFromNoteLines(
 export function getFlowPaymentContributions(
   p: FlowPaymentVatFields,
 ): Array<{ column: CashDailyMethodId; amount: number }> {
-  const fromNotes = contributionsFromNoteLines(p);
-  if (fromNotes) return fromNotes;
+  const structured = contributionsFromStructuredMethods(p);
+  if (structured) return structured;
 
   const out: Array<{ column: CashDailyMethodId; amount: number }> = [];
   const ilsFactor = ilsExVatFactor(p);

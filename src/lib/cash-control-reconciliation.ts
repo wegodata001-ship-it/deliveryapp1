@@ -4,7 +4,6 @@
 
 import { CASH_CONTROL_EPS } from "@/lib/cash-control-calculation";
 import {
-  parsePaymentNoteContributions,
   paymentMethodBucketKey,
   type PaymentBucketKey,
 } from "@/lib/payment-breakdown-shared";
@@ -54,8 +53,12 @@ export type ReconciliationPaymentInput = {
   paymentMethod: string | null;
   usdPaymentMethod: string | null;
   ilsPaymentMethod: string | null;
-  notes?: string | null;
   exchangeRate?: { toString(): string } | null;
+  methodAllocations?: Array<{
+    method: string;
+    currency: string;
+    sourceAmount: { toString(): string };
+  }>;
 };
 
 type LineContribution = { lineId: CashReconciliationLineId; amount: number };
@@ -77,24 +80,24 @@ function bucketToLineId(bucket: PaymentBucketKey, side: "ILS" | "USD"): CashReco
   return null;
 }
 
-function contributionsFromNoteLines(p: ReconciliationPaymentInput): LineContribution[] | null {
-  const rate = Number(p.exchangeRate?.toString() ?? 0);
-  const parts = parsePaymentNoteContributions(p.notes, rate);
+function contributionsFromStructuredMethods(p: ReconciliationPaymentInput): LineContribution[] | null {
+  const parts = p.methodAllocations ?? [];
   if (parts.length === 0) return null;
 
   const out: LineContribution[] = [];
   for (const part of parts) {
-    const lineId = bucketToLineId(part.bucket, part.side);
+    const side = part.currency === "USD" ? "USD" : "ILS";
+    const lineId = bucketToLineId(paymentMethodBucketKey(part.method), side);
     if (!lineId) continue;
-    out.push({ lineId, amount: part.amount });
+    out.push({ lineId, amount: num(part.sourceAmount) });
   }
   return out.length > 0 ? out : null;
 }
 
 /** מפצל קליטה לתרומות לשורות ההתאמה (מזומן ₪/$, אשראי, העברה, צ׳קים). */
 export function getPaymentReconciliationContributions(p: ReconciliationPaymentInput): LineContribution[] {
-  const fromNotes = contributionsFromNoteLines(p);
-  if (fromNotes) return fromNotes;
+  const structured = contributionsFromStructuredMethods(p);
+  if (structured) return structured;
 
   const out: LineContribution[] = [];
   const ilsAmt = num(p.amountIls);

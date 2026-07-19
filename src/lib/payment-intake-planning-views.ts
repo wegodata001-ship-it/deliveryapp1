@@ -4,15 +4,9 @@
  *
  * SYNC GUARANTEE
  * ──────────────
- * buildIntakeOrderViews uses the identical allocatePaymentAcrossOrders engine
- * that the main table's matchPaymentToOrders uses.  Therefore:
- *
- *   order.formRemainingUsd  ≡  main-table remainingAmount        (same engine)
- *   sum(method.formRemainingUsd) ≡ order.formRemainingUsd        (by construction)
- *
- * Both screens always show the same remaining figure for the same order.
- *
- * Business formulas are unchanged — this module only centralizes call sites.
+ * Order remaining (main table): allocatePaymentAcrossOrders — unchanged.
+ * PMC rows + KPI cards: live payment-line totals by bucket → method rows;
+ * cards sum the exact visible table rows.
  */
 
 import {
@@ -62,7 +56,7 @@ export function derivePaymentIntakePlanningViews(
   );
 
   // Unified engine: order views + method views derived from the same allocation
-  const orderViews = buildIntakeOrderViews(orders, includedOrderIds, totalPaymentUsd);
+  const orderViews = buildIntakeOrderViews(orders, includedOrderIds, liveFormKpis, totalPaymentUsd);
   const methodViews = buildIntakeMethodViews(orderViews, totalPaymentUsd, includedOrderIds);
 
   return {

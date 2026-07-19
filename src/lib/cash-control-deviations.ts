@@ -23,8 +23,6 @@ import {
 } from "@/lib/cash-control-deviations-shared";
 
 const Z = new Prisma.Decimal(0);
-const METHOD_DEV_APPROVED_NOTE = "[METHOD_DEV_APPROVED]";
-
 export type CashMethodDeviationRowLegacy = {
   orderId: string;
   orderNumber: string | null;
@@ -81,7 +79,6 @@ function deviationStatusFromPayment(p: {
   notes: string | null;
 }): CashControlDeviationStatus {
   if (String(p.status) === "CANCELLED") return "cancelled";
-  if ((p.notes ?? "").includes(METHOD_DEV_APPROVED_NOTE)) return "approved";
   return "open";
 }
 

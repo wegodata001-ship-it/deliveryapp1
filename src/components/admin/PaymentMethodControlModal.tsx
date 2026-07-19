@@ -36,6 +36,9 @@ const STATUS_FILTERS: { value: "" | PaymentViewStatus; label: string }[] = [
  * (`usePaymentIntakePlanningViews` / `derivePaymentIntakePlanningViews`) owned by
  * PaymentModalUpdated so both tables stay on one orders snapshot.
  *
+ * KPI cards are computed ONLY from the exact rows rendered in the table
+ * (after filters). No separate cache / snapshot / parallel summary.
+ *
  * Column "נותר לאמצעי התשלום" = formRemainingUsd (per-method remaining in current form).
  * This is distinct from "יתרת חוב להזמנה" shown in the main intake table.
  */
@@ -63,18 +66,18 @@ export function PaymentMethodControlModal({
   const [statusFilter, setStatusFilter] = useState<"" | PaymentViewStatus>("");
   const [dateFilter, setDateFilter] = useState("");
 
-  const filteredViews = useMemo(() => {
+  /** שורות הטבלה + סיכום ה-KPI מאותו מקור יחיד — אין חישוב נפרד לכרטיסים. */
+  const { tableRows, summary } = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return methodViews.filter((r) => {
+    const rows = methodViews.filter((r) => {
       if (needle && !r.orderNumber.toLowerCase().includes(needle)) return false;
       if (methodFilter && r.bucket !== methodFilter) return false;
       if (statusFilter && r.status !== statusFilter) return false;
       if (dateFilter && r.dateYmd !== dateFilter) return false;
       return true;
     });
+    return { tableRows: rows, summary: summarizeIntakeMethodViews(rows) };
   }, [methodViews, q, methodFilter, statusFilter, dateFilter]);
-
-  const summary = useMemo(() => summarizeIntakeMethodViews(filteredViews), [filteredViews]);
 
   const dateOptions = useMemo(() => {
     const set = new Set<string>();
@@ -99,7 +102,7 @@ export function PaymentMethodControlModal({
         <header className="pmc-header">
           <div className="pmc-header__title">
             <h2 id="pmc-title">אמצעי תשלום מתוכננים</h2>
-            <p>אותו מקור הזמנות כמו טבלת הקליטה · מתעדכן בזמן אמת לפי ההקלדה</p>
+            <p>הכרטיסים והטבלה מאותן שורות · מתעדכן מיד עם כל שינוי בתשלומים</p>
           </div>
           <div className="pmc-header__actions">
             <button
@@ -167,26 +170,27 @@ export function PaymentMethodControlModal({
               <tr>
                 <th>מספר הזמנה</th>
                 <th>אמצעי תשלום</th>
-                <th>סכום מתוכנן</th>
-                <th>סכום שנקלט</th>
-                <th>נותר לאמצעי התשלום</th>
+                <th className="pmc-num">סכום מתוכנן</th>
+                <th className="pmc-num">סכום שנקלט</th>
+                <th className="pmc-num">נותר לאמצעי התשלום</th>
                 <th>סטטוס</th>
                 <th>תאריך יעד</th>
                 <th>פעולות</th>
               </tr>
             </thead>
             <tbody>
-              {filteredViews.length === 0 ? (
-                <tr>
+              {tableRows.length === 0 ? (
+                <tr className="pmc-row pmc-row--empty">
                   <td colSpan={8} className="pmc-empty">
                     אין שורות להצגה לפי הסינון הנוכחי.
                   </td>
                 </tr>
               ) : (
-                filteredViews.map((r) => (
+                tableRows.map((r, idx) => (
                   <GridRow
                     key={r.id}
                     row={r}
+                    zebra={idx % 2 === 1}
                     canEditOrders={canEditOrders}
                     onOrderEdit={onOrderEdit}
                     onOrderView={onOrderView}
@@ -223,12 +227,14 @@ function SummaryCard({
 
 function GridRow({
   row,
+  zebra,
   canEditOrders,
   onOrderEdit,
   onOrderView,
   onRefreshRow,
 }: {
   row: IntakeMethodView;
+  zebra: boolean;
   canEditOrders: boolean;
   onOrderEdit?: (orderId: string) => void;
   onOrderView?: (orderId: string) => void;
@@ -238,7 +244,7 @@ function GridRow({
   const meta = PAYMENT_VIEW_STATUS_META[row.status];
 
   return (
-    <tr>
+    <tr className={`pmc-row${zebra ? " pmc-row--zebra" : ""}`}>
       <td>
         {hasOrder && canEditOrders && onOrderEdit ? (
           <button
@@ -255,9 +261,13 @@ function GridRow({
         )}
       </td>
       <td>{row.methodLabel}</td>
-      <td dir="ltr">{fmtMethodControlUsd(row.plannedUsd)}</td>
-      <td dir="ltr">{fmtMethodControlUsd(row.formEnteredUsd)}</td>
-      <td dir="ltr" className={row.formRemainingUsd > 0.01 ? "pmc-rem" : ""}>
+      <td className="pmc-num" dir="ltr">
+        {fmtMethodControlUsd(row.plannedUsd)}
+      </td>
+      <td className="pmc-num" dir="ltr">
+        {fmtMethodControlUsd(row.formEnteredUsd)}
+      </td>
+      <td className={`pmc-num${row.formRemainingUsd > 0.01 ? " pmc-rem" : ""}`} dir="ltr">
         {fmtMethodControlUsd(row.formRemainingUsd)}
       </td>
       <td>

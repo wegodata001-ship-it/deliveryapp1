@@ -183,7 +183,7 @@ function decStr(v: unknown): string | null {
 
 function isCreditBalanceResetPayment(p: LedgerPaymentBatchRow): boolean {
   if (p.paymentCode?.trim()) return false;
-  return (p.notes ?? "").includes(BALANCE_RESET_FROM_CREDIT_LEDGER_LABEL);
+  return p.businessType === "CREDIT_APPLICATION" || p.businessType === "BALANCE_RESET";
 }
 
 /** חשבון לקוח — חיובים (הזמנות), תשלומים, יתרה רצה ויתרת פתיחה */
@@ -308,6 +308,7 @@ export async function buildCustomerAccountLedger(params: {
           ilsPaymentMethod: true,
           notes: true,
           status: true,
+          businessType: true,
         },
       }),
     ),
