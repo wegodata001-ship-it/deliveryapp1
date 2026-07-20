@@ -23,6 +23,7 @@ import {
   computeAutoTurkeyUsd,
   formFromFlow,
   isTurkeyManual,
+  resolveAvailableIlsForFx,
   syncAutoTurkey,
 } from "@/components/admin/manager-count/manager-count-utils";
 import { fcNum } from "@/components/admin/flow-control/shared";
@@ -139,13 +140,13 @@ export function ManagerCountWizard({
   const turkeyUsd = fcNum(form.turkeyTransferUsd);
   const israelUsd = Math.max(0, totalUsdAvailable - turkeyUsd);
   const israelIls = cashIls + transferIls + creditIls + checksIls;
-  const availableForFx = flow ? fcNum(flow.availableIlsForFx) : cashIls + transferIls;
+  const availableForFx = fcNum(resolveAvailableIlsForFx(flow, form));
 
   // ── Handlers ────────────────────────────────────────────────────────
   const patch = (key: keyof ManagerCountForm, value: string) => {
     setForm((prev) => {
       const next = { ...prev, [key]: value };
-      if (!turkeyManual && (key === "countedCashUsd" || key === "commissionUsd")) {
+      if (!turkeyManual && key === "commissionUsd") {
         return syncAutoTurkey(next, flow);
       }
       return next;
@@ -248,12 +249,11 @@ export function ManagerCountWizard({
                     </thead>
                     <tbody>
                       {historyRows.map((r) => {
-                        const cashU = fcNum(r.manager?.CASH_USD ?? "0");
                         const fxU = fcNum(r.fxPurchaseUsd ?? "0");
                         const commU = fcNum(r.commissionUsd ?? "0");
                         const turkeyU = fcNum(r.turkeyTransferUsd ?? "0");
-                        const totalU = cashU + fxU - commU;
-                        const israelU = Math.max(0, totalU - turkeyU);
+                        const autoTurkeyU = Math.max(0, Math.round((fxU + commU) * 100) / 100);
+                        const israelU = Math.max(0, autoTurkeyU - turkeyU);
                         const drawerIls = fcNum(r.drawerRemainingIls ?? "0");
                         return (
                           <tr key={r.week} className={r.week === week ? "mcw-tbl__row--active" : ""}>
@@ -454,20 +454,16 @@ export function ManagerCountWizard({
 
                       <div className="mcw-decision-kpis">
                         <div className="mcw-decision-kpi">
-                          <span>מזומן $ בקופה</span>
-                          <strong dir="ltr">{fmtN(cashUsd, "USD")}</strong>
-                        </div>
-                        <div className="mcw-decision-kpi">
-                          <span>+ מט&quot;ח שנרכש</span>
+                          <span>דולרים שנרכשו</span>
                           <strong dir="ltr">{fmtN(fxTotals.usd, "USD")}</strong>
                         </div>
                         <div className="mcw-decision-kpi">
-                          <span>− עמלות $</span>
+                          <span>+ עמלה PS</span>
                           <strong dir="ltr">{fmtN(commUsd, "USD")}</strong>
                         </div>
                         <div className="mcw-decision-kpi mcw-decision-kpi--total">
-                          <span>סה&quot;כ $ זמין</span>
-                          <strong dir="ltr">{fmtN(totalUsdAvailable, "USD")}</strong>
+                          <span>טורקיה PS</span>
+                          <strong dir="ltr">{fmtN(autoTurkey, "USD")}</strong>
                         </div>
                       </div>
 
@@ -492,7 +488,7 @@ export function ManagerCountWizard({
                             </button>
                           ) : (
                             <p className="mcw-hint">
-                              חישוב: מזומן $ + מט&quot;ח − עמלות $ = {autoTurkey.toFixed(2)} $
+                              חישוב: דולרים שנרכשו + עמלה PS = {autoTurkey.toFixed(2)} $
                             </p>
                           )}
                         </label>
@@ -626,7 +622,7 @@ export function ManagerCountWizard({
           open={fxOpen}
           week={week}
           weekLabel={weekLabel}
-          availableIls={flow.availableIlsForFx}
+          availableIls={resolveAvailableIlsForFx(flow, form)}
           saving={saving}
           onClose={() => setFxOpen(false)}
           onSaved={() => void handleFxSaved()}

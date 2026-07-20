@@ -122,7 +122,7 @@ export type FlowWeekPayload = {
   /** דולר בקופה — מחושב */
   drawerRemainingIls: string;
   drawerRemainingUsd: string;
-  /** כמה ₪ זמין לרכישת מט"ח הבאה */
+  /** כמה ₪ זמין לרכישת מט"ח — זהה ל«שקל שנשאר» (תקבולים − FX PS − FX IL) */
   availableIlsForFx: string;
   /** כמה $ מוקצה לטורקיה מספירת קופה (לטורקיה PS) */
   turkeyExpectedUsd: string;
@@ -133,6 +133,10 @@ export type FlowWeekPayload = {
   /** יתרה להעברה לטורקיה — סגירה */
   turkeyBalanceClosingUsd: string;
   turkeyBalanceStatus: import("@/lib/flow-control/turkey-transfer-balance-types").TurkeyWeekStatus;
+  /** רכישת מט״ח IL = העברות IL + צ'קים IL + אשראי IL */
+  ilFxPurchaseIls: string;
+  /** שקל שנשאר = תקבולים ₪ − רכישת מט״ח PS − רכישת מט״ח IL */
+  ilsRemainingAfterFx: string;
 };
 
 /** עמודות טבלת קליטות — כל ערוצי בקרת הקופה */

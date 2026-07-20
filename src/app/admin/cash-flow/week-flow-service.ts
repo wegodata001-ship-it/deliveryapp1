@@ -3,9 +3,14 @@ import { prisma } from "@/lib/prisma";
 import { countLineDiff, WEEK_FLOW_LINE_CHANNEL, type CashWeekFlowLineId } from "@/lib/cash-control-week-flow";
 import { aggregateExpensesByMethod } from "@/lib/cash-expense-payment-method";
 import { formatAhWeekLabel, getAhWeekRange } from "@/lib/weeks/ah-week";
+import { emptyDailyIntake, paymentDayKeyJerusalem } from "@/lib/cash-control-daily";
+import { cashControlWeekReconciliationPaymentsWhere } from "@/lib/cash-control-week-payments";
 import {
+  aggregateFlowIntakesByDay,
+  computeBankReceiptsIlsFromIntake,
   computeFlowWeekKpis,
   computeFlowWeekSummary,
+  computeWeekTotalReceivedIls,
   sumFxPurchases,
 } from "@/lib/flow-control/flow-calculation-service";
 import {
@@ -40,19 +45,37 @@ export async function loadFlowWeek(week: string): Promise<FlowWeekPayload | null
   const range = getAhWeekRange(wk);
   if (!range) return null;
 
-  const [approvedSummary, cashCount, fxPurchases, turkeyAllocationUsd, bankTx, turkeyBalance, expenseRows] =
+  const [approvedSummary, cashCount, fxPurchases, turkeyAllocationUsd, bankTx, turkeyBalance, expenseRows, payments] =
     await Promise.all([
-    loadFlowWeekCashCountSummary(wk),
-    loadFlowWeekCashCount(wk),
-    loadFlowWeekFxPurchases(wk),
-    loadFlowWeekTurkeyTransfer(wk),
-    loadFlowWeekBankTransactions(wk),
-    loadTurkeyBalanceForWeek(wk),
-    prisma.cashExpense.findMany({
-      where: { weekCode: wk, status: "ACTIVE" },
-      select: { currency: true, amount: true, paymentMethod: true },
-    }),
-  ]);
+      loadFlowWeekCashCountSummary(wk),
+      loadFlowWeekCashCount(wk),
+      loadFlowWeekFxPurchases(wk),
+      loadFlowWeekTurkeyTransfer(wk),
+      loadFlowWeekBankTransactions(wk),
+      loadTurkeyBalanceForWeek(wk),
+      prisma.cashExpense.findMany({
+        where: { weekCode: wk, status: "ACTIVE" },
+        select: { currency: true, amount: true, paymentMethod: true },
+      }),
+      prisma.payment.findMany({
+        where: cashControlWeekReconciliationPaymentsWhere(wk),
+        select: {
+          amountIls: true,
+          amountUsd: true,
+          paymentMethod: true,
+          usdPaymentMethod: true,
+          ilsPaymentMethod: true,
+          exchangeRate: true,
+          methodAllocations: { select: { method: true, currency: true, sourceAmount: true } },
+          amountWithoutVat: true,
+          totalIlsWithoutVat: true,
+          totalIlsWithVat: true,
+          intakeDate: true,
+          paymentDate: true,
+          createdAt: true,
+        },
+      }),
+    ]);
 
   const weekExpensesByMethod = aggregateExpensesByMethod(
     expenseRows.map((e) => ({
@@ -63,6 +86,16 @@ export async function loadFlowWeek(week: string): Promise<FlowWeekPayload | null
   );
 
   const actualTurkeyTransfersUsd = turkeyBalance.actualTransfersUsd;
+
+  const intakeByDay = aggregateFlowIntakesByDay(payments, paymentDayKeyJerusalem);
+  const weekIntake = emptyDailyIntake();
+  for (const totals of intakeByDay.values()) {
+    for (const k of Object.keys(weekIntake) as (keyof typeof weekIntake)[]) {
+      weekIntake[k] = Math.round((weekIntake[k] + totals[k]) * 100) / 100;
+    }
+  }
+  const totalReceiptsIls = computeWeekTotalReceivedIls(weekIntake);
+  const bankReceiptsIls = computeBankReceiptsIlsFromIntake(weekIntake);
 
   const received = Object.fromEntries(
     Object.entries(approvedSummary.approved).map(([lineId, t]) => [
@@ -97,10 +130,15 @@ export async function loadFlowWeek(week: string): Promise<FlowWeekPayload | null
     fxPurchases,
     bankWithdrawalsIls: bankTx.withdrawalsIls,
     bankDepositsIls: bankTx.depositsIls,
+    countedTransferIls: cashCount.countedTransferIls ?? 0,
+    countedCreditIls: cashCount.countedCreditIls ?? 0,
+    countedChecksIls: cashCount.countedChecksIls ?? 0,
+    totalReceiptsIls,
+    bankReceiptsIls,
   });
 
   const kpis = computeFlowWeekKpis({
-    totalReceivedIls: approvedSummary.totalApprovedIls,
+    totalReceivedIls: totalReceiptsIls,
     fxTotals: calc.fxTotals,
     turkeyTransferUsd: actualTurkeyTransfersUsd,
     cashIlsInDrawer: calc.cashIlsInDrawer,
@@ -142,6 +180,8 @@ export async function loadFlowWeek(week: string): Promise<FlowWeekPayload | null
     turkeyDebtStatus: turkeyBalance.usd.closingBalance > 0.005 ? "debt" : "ok",
     turkeyBalanceClosingUsd: money(turkeyBalance.usd.closingBalance),
     turkeyBalanceStatus: turkeyBalance.usd.status,
+    ilFxPurchaseIls: money(calc.ilFxPurchaseIls),
+    ilsRemainingAfterFx: money(calc.ilsRemainingAfterFx),
   };
 }
 

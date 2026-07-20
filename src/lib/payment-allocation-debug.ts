@@ -8,7 +8,7 @@ import {
 const ALLOC_EPS = 0.02;
 
 export type PaymentAllocationDebugInput = {
-  source: "payment-modal" | "payment-save-server";
+  source: "payment-modal" | "payment-save-server" | "payment-save-matching-engine";
   customerId: string | null;
   customerLoaded: boolean;
   ordersLoading?: boolean;

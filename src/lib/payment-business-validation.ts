@@ -102,7 +102,18 @@ export type PaymentBusinessValidationInput = {
    * כלל התאמת אמצעי התשלום וכללי העודף עדיין נאכפים לפני השמירה.
    */
   deferShortageResolution?: boolean;
-  surplusDisposition?: "credit" | "commission" | null;
+  surplusDisposition?: "credit" | "commission" | "forfeit" | null;
+  /**
+   * העברות חוב בין אמצעי תשלום שאושרו במפורש ע״י המשתמש.
+   * כשקיימות — מיושמות על התכנון לפני אכיפת אמצעי התשלום.
+   */
+  approvedDebtTransfers?: Array<{
+    fromBucket: PaymentBucketKey;
+    toBucket: PaymentBucketKey;
+    amountUsd: number;
+    fromLabel?: string;
+    toLabel?: string;
+  }> | null;
   requiredApprovalGranted?: boolean;
   eps?: number;
 };
@@ -144,13 +155,60 @@ export function validatePaymentMethods(
 ): PaymentMethodViolation[] {
   // מסמכים ישנים ללא תכנון מפורט נשארים ניתנים לקליטה.
   if (plannedRows.length === 0) return [];
-  return enforceBreakdownAgainstEntered(plannedRows, enteredRows, eps).map((violation) => ({
+  // אכיפה מול יתרות פתוחות בלבד — אמצעי נעול (remaining=0) אינו מקבל תשלום אוטומטי.
+  const openRows = plannedRows
+    .filter((p) => p.remainingUsd > eps)
+    .map((p) => ({ ...p, plannedUsd: p.remainingUsd }));
+  if (openRows.length === 0) {
+    // אין אמצעים פתוחים — כל הזנה תיחשב חריגה (אלא אם אין הזנה).
+    return enforceBreakdownAgainstEntered(
+      plannedRows.map((p) => ({ ...p, remainingUsd: 0, plannedUsd: 0 })),
+      enteredRows,
+      eps,
+    ).map((violation) => ({
+      bucket: violation.bucket,
+      label: PAYMENT_BUCKET_LABELS[violation.bucket],
+      plannedUsd: violation.allowedUsd,
+      enteredUsd: violation.enteredUsd,
+      excessUsd: violation.excessUsd,
+    }));
+  }
+  return enforceBreakdownAgainstEntered(openRows, enteredRows, eps).map((violation) => ({
     bucket: violation.bucket,
     label: PAYMENT_BUCKET_LABELS[violation.bucket],
     plannedUsd: violation.allowedUsd,
     enteredUsd: violation.enteredUsd,
     excessUsd: violation.excessUsd,
   }));
+}
+
+function applyApprovedTransfersToPlanned(
+  plannedRows: PlannedBucketUsd[],
+  transfers: NonNullable<PaymentBusinessValidationInput["approvedDebtTransfers"]>,
+  eps: number,
+): PlannedBucketUsd[] {
+  if (!transfers || transfers.length === 0) return plannedRows;
+  const map = new Map(plannedRows.map((p) => [p.bucket, { ...p }]));
+  for (const t of transfers) {
+    if (t.amountUsd <= eps) continue;
+    const from = map.get(t.fromBucket);
+    if (!from || from.remainingUsd <= eps) continue;
+    const take = roundMoney2(Math.min(from.remainingUsd, t.amountUsd));
+    from.remainingUsd = roundMoney2(from.remainingUsd - take);
+    const to =
+      map.get(t.toBucket) ??
+      ({
+        bucket: t.toBucket,
+        label: t.toLabel ?? PAYMENT_BUCKET_LABELS[t.toBucket],
+        plannedUsd: 0,
+        remainingUsd: 0,
+      } satisfies PlannedBucketUsd);
+    to.remainingUsd = roundMoney2(to.remainingUsd + take);
+    to.plannedUsd = roundMoney2(Math.max(to.plannedUsd, to.remainingUsd));
+    map.set(t.fromBucket, from);
+    map.set(t.toBucket, to);
+  }
+  return [...map.values()];
 }
 
 /**
@@ -166,9 +224,41 @@ export function evaluatePaymentBusinessRules(
   const eps = input.eps ?? PAYMENT_BUSINESS_EPS;
   const totalDebtUsd = nonNegative(input.totalDebtUsd);
   const totalPaymentUsd = nonNegative(input.totalPaymentUsd);
-  const violations = validatePaymentMethods(input.plannedByMethod, input.enteredByMethod, eps);
+  const plannedAfterTransfer = applyApprovedTransfersToPlanned(
+    input.plannedByMethod,
+    input.approvedDebtTransfers ?? [],
+    eps,
+  );
+  const violations = validatePaymentMethods(
+    plannedAfterTransfer,
+    input.enteredByMethod,
+    eps,
+  );
+  const coversAllDebt = totalPaymentUsd >= totalDebtUsd - eps;
+
+  /**
+   * האם נשאר אמצעי פתוח שלא קיבל כלל תשלום בטופס הנוכחי?
+   * אם כן — תשלום בעודף/באמצעי אחר דורש העברת חוב מפורשת (לא סגירה שקטה).
+   */
+  const enteredMap = new Map(
+    input.enteredByMethod
+      .filter((e) => e.enteredUsd > eps)
+      .map((e) => [e.bucket, e.enteredUsd] as const),
+  );
+  const openUnpaidOtherMethod = plannedAfterTransfer.some((p) => {
+    if (p.remainingUsd <= eps) return false;
+    const entered = enteredMap.get(p.bucket) ?? 0;
+    return entered <= eps;
+  });
+
+  // כלל 3–4: עודף על אמצעי פתוח כשכל החוב נסגר ואין אמצעי אחר שלא שולם כלל.
+  const allowSurplusWithoutMethodBlock =
+    coversAllDebt && violations.length > 0 && !openUnpaidOtherMethod;
+
+  const effectiveViolations = allowSurplusWithoutMethodBlock ? [] : violations;
+
   const settlementIntent = classifySettlementIntent({
-    plannedByMethod: input.plannedByMethod,
+    plannedByMethod: plannedAfterTransfer,
     enteredByMethod: input.enteredByMethod,
     totalDebtUsd,
     totalPaymentUsd,
@@ -190,7 +280,7 @@ export function evaluatePaymentBusinessRules(
     ok: code === "READY",
     message,
     settlementIntent,
-    methodViolations: violations,
+    methodViolations: effectiveViolations,
     totalDebtUsd,
     totalPaymentUsd,
     creditAppliedUsd: values.creditAppliedUsd ?? 0,
@@ -199,8 +289,9 @@ export function evaluatePaymentBusinessRules(
     surplusUsd: values.surplusUsd ?? 0,
   });
 
-  if (violations.length > 0) {
-    return result("INVALID_METHODS", paymentMethodMismatchMessage(violations));
+  // ללא אישור העברת חוב — אם יש חריגה (כולל תשלום לאמצעי נעול כשיש חוב באחר), חוסמים.
+  if (effectiveViolations.length > 0) {
+    return result("INVALID_METHODS", paymentMethodMismatchMessage(effectiveViolations));
   }
 
   if (totalPaymentUsd <= eps) {
@@ -253,7 +344,7 @@ export function evaluatePaymentBusinessRules(
   if (surplusUsd > eps && !input.surplusDisposition) {
     return result(
       "CHOOSE_SURPLUS_DISPOSITION",
-      `קיים עודף של $${surplusUsd.toFixed(2)}. יש לבחור שמירה כיתרת זכות או הוספה לעמלות.`,
+      `קיים עודף של $${surplusUsd.toFixed(2)}. יש לבחור: יתרת זכות ללקוח או העברה לעמלות.`,
       { creditAppliedUsd, commissionAppliedUsd, shortageUsd, surplusUsd },
     );
   }

@@ -36,6 +36,7 @@ import {
   cashControlWeekPaymentsWhere,
   cashControlWeekReconciliationPaymentsWhere,
 } from "@/lib/cash-control-week-payments";
+import { paymentDayKeyJerusalem } from "@/lib/cash-control-daily";
 import { groupByActivePayments } from "@/lib/payment-record-status";
 import {
   computeCashControlDeviations,
@@ -241,11 +242,11 @@ async function computeExpected(week: string): Promise<{
   const [ilsReceipts, usdReceipts, expenses] = await Promise.all([
     prisma.payment.findMany({
       where: cashControlWeekCashPaymentsWhere(week, "ILS"),
-      select: { id: true, amountIls: true, paymentDate: true, createdAt: true },
+      select: { id: true, amountIls: true, intakeDate: true, paymentDate: true, createdAt: true },
     }),
     prisma.payment.findMany({
       where: cashControlWeekCashPaymentsWhere(week, "USD"),
-      select: { id: true, amountUsd: true, paymentDate: true, createdAt: true },
+      select: { id: true, amountUsd: true, intakeDate: true, paymentDate: true, createdAt: true },
     }),
     prisma.cashExpense.findMany({
       where: { weekCode: week, status: "ACTIVE" },
@@ -271,14 +272,14 @@ async function computeExpected(week: string): Promise<{
   for (const p of ilsReceipts) {
     const amt = p.amountIls ?? Z;
     receiptsIls = receiptsIls.add(amt);
-    const b = bucket(dayKey(p.paymentDate ?? p.createdAt));
+    const b = bucket(paymentDayKeyJerusalem(p));
     b.recIls = b.recIls.add(amt);
     b.recIds.add(p.id);
   }
   for (const p of usdReceipts) {
     const amt = p.amountUsd ?? Z;
     receiptsUsd = receiptsUsd.add(amt);
-    const b = bucket(dayKey(p.paymentDate ?? p.createdAt));
+    const b = bucket(paymentDayKeyJerusalem(p));
     b.recUsd = b.recUsd.add(amt);
     b.recIds.add(p.id);
   }

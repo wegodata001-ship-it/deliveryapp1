@@ -8615,6 +8615,10 @@ select.payment-modal-inline-input {
   background: #fff;
   box-sizing: border-box;
 }
+.payment-modal-rate-strip-inp--date {
+  width: auto;
+  min-width: 9.75rem;
+}
 
 /**
  * "אחוז עמלה" — אותו style כמו "שער דולר", עם הפרדה ויזואלית קלה
@@ -12083,6 +12087,106 @@ select.payment-modal-inline-input {
   font-variant-numeric: tabular-nums;
 }
 
+.pmc-method-summary {
+  flex: 0 0 auto;
+  padding: 10px 20px 12px;
+  background: #fff;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.pmc-method-summary__title {
+  margin: 0 0 8px;
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: #334155;
+}
+
+.pmc-method-summary__wrap {
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.pmc-method-summary__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.pmc-method-summary__table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f1f5f9;
+  color: #475569;
+  font-weight: 700;
+  text-align: right;
+  padding: 8px 12px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.pmc-method-summary__table thead th.pmc-num,
+.pmc-method-summary__table td.pmc-num,
+.pmc-method-summary__table tfoot td.pmc-num {
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+
+.pmc-method-summary__table tbody td {
+  padding: 7px 12px;
+  border-bottom: 1px solid #eef2f7;
+  color: #0f172a;
+  background: #fff;
+}
+
+.pmc-method-summary__label {
+  font-weight: 700;
+  margin-inline-end: 6px;
+}
+
+.pmc-method-summary__cur {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #64748b;
+  background: #f1f5f9;
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
+.pmc-method-summary__table tfoot {
+  position: sticky;
+  bottom: 0;
+}
+
+.pmc-method-summary__total th,
+.pmc-method-summary__total td {
+  background: #eff6ff;
+  border-top: 1px solid #bfdbfe;
+  padding: 9px 12px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.pmc-table tfoot .pmc-table-foot th,
+.pmc-table tfoot .pmc-table-foot td {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: #0f172a;
+  color: #f8fafc;
+  font-weight: 800;
+  padding: 10px 12px;
+  border-top: 2px solid #1e293b;
+  box-shadow: 0 -4px 12px rgba(15, 23, 42, 0.12);
+}
+
+.pmc-table tfoot .pmc-table-foot .pmc-rem {
+  color: #93c5fd;
+}
+
 .pmc-filters {
   flex: 0 0 auto;
   display: flex;
@@ -14375,6 +14479,11 @@ select.payment-modal-inline-input {
   box-shadow: 0 20px 45px rgba(15, 23, 42, 0.2);
 }
 
+.adm-payment-overage-modal.adm-mini-modal {
+  width: min(440px, 94vw);
+  padding: 18px;
+}
+
 .adm-mini-modal h3 {
   margin: 0 0 10px;
   font-size: 15px;
@@ -14390,12 +14499,35 @@ select.payment-modal-inline-input {
 
 .adm-payment-overage-modal .adm-mini-modal-title {
   margin: 0 0 8px;
-  font-size: 1.05rem;
+  font-size: 1.15rem;
+  line-height: 1.35;
 }
 
 .adm-payment-overage-lead {
-  margin: 0 0 12px;
-  color: var(--adm-text-muted, #64748b);
+  margin: 0 0 14px;
+  color: var(--adm-text, #0f172a);
+  font-size: 0.98rem;
+  font-weight: 600;
+}
+
+.adm-payment-debt-transfer-lead {
+  margin: 0 0 10px;
+  color: var(--adm-text, #0f172a);
+  line-height: 1.5;
+}
+.adm-payment-debt-transfer-q {
+  margin: 12px 0 8px;
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+.adm-payment-debt-transfer-list {
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  background: #fff7ed;
+  border-radius: 8px;
+  border: 1px solid #fed7aa;
+  font-size: 0.88rem;
+  list-style: disc inside;
 }
 
 .adm-payment-overage-stats {
@@ -14455,6 +14587,39 @@ select.payment-modal-inline-input {
   margin-top: 2px;
   color: #64748b;
   font-size: 0.78rem;
+}
+
+/* כרטיסי בחירה גדולים — חלון עודף תשלום */
+.adm-payment-overage-option--card {
+  gap: 14px;
+  padding: 16px 18px;
+  border-radius: 12px;
+  border-width: 2px;
+  background: var(--adm-surface, #fff);
+  transition: border-color 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
+}
+.adm-payment-overage-option--card:hover {
+  border-color: #94a3b8;
+}
+.adm-payment-overage-option--card:has(input:checked) {
+  border-color: #2563eb;
+  background: #eff6ff;
+  box-shadow: 0 0 0 1px #2563eb;
+}
+.adm-payment-overage-option--card input {
+  margin-top: 4px;
+  width: 1.1rem;
+  height: 1.1rem;
+  flex-shrink: 0;
+}
+.adm-payment-overage-option--card strong {
+  font-size: 1.02rem;
+  line-height: 1.3;
+}
+.adm-payment-overage-option--card small {
+  margin-top: 6px;
+  font-size: 0.86rem;
+  line-height: 1.45;
 }
 
 .adm-balance-reset-credit-stats {
@@ -23744,6 +23909,83 @@ select.adm-balances-input {
   border: 1px solid #e2e8f0;
 }
 
+.adm-pbd-modal--wide {
+  width: min(560px, 100%);
+}
+
+.adm-pbd-avail {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.55rem;
+  margin-bottom: 0.85rem;
+}
+
+.adm-pbd-avail-card {
+  background: linear-gradient(165deg, #f8fafc 0%, #f1f5f9 100%);
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 0.65rem 0.75rem;
+}
+
+.adm-pbd-avail-card--err {
+  border-color: #fca5a5;
+  background: linear-gradient(165deg, #fef2f2 0%, #fee2e2 100%);
+}
+
+.adm-pbd-avail-card__title {
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: #334155;
+  margin-bottom: 0.4rem;
+}
+
+.adm-pbd-avail-card__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  color: #64748b;
+  line-height: 1.55;
+}
+
+.adm-pbd-avail-card__row strong {
+  color: #0f172a;
+  font-variant-numeric: tabular-nums;
+  direction: ltr;
+}
+
+.adm-pbd-neg {
+  color: #b91c1c !important;
+}
+
+.adm-pbd-amount-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.adm-pbd-amount-hint {
+  font-size: 0.72rem;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+  direction: ltr;
+  text-align: start;
+}
+
+.adm-pbd-currency-errors {
+  margin: 0.55rem 0 0;
+  padding: 0.55rem 0.7rem;
+  border-radius: 10px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
 .adm-pbd-head {
   display: flex;
   align-items: center;
@@ -31917,11 +32159,21 @@ button.adm-cash-kpi:hover {
 }
 .cc-week-select:focus { outline: none; }
 
-/* KPI bar */
+/* KPI bar — 5 equal cards in one row */
 .cc-kpis {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
+}
+@media (max-width: 1100px) {
+  .cc-kpis {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 720px) {
+  .cc-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 .cc-kpi {
   display: flex;
@@ -31931,13 +32183,14 @@ button.adm-cash-kpi:hover {
   border-radius: 12px;
   border: 1px solid transparent;
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+  min-width: 0;
 }
 .cc-kpi--blue  { background: #eff6ff; border-color: #bfdbfe; }
 .cc-kpi--green { background: #f0fdf4; border-color: #bbf7d0; }
 .cc-kpi--amber { background: #fffbeb; border-color: #fde68a; }
 .cc-kpi--slate { background: #f8fafc; border-color: #e2e8f0; }
 .cc-kpi--red   { background: #fef2f2; border-color: #fecaca; }
-.cc-kpi__icon { font-size: 22px; line-height: 1; }
+.cc-kpi__icon { font-size: 22px; line-height: 1; flex-shrink: 0; }
 .cc-kpi__label {
   display: block;
   font-size: 11px;
@@ -31951,6 +32204,17 @@ button.adm-cash-kpi:hover {
   font-weight: 900;
   color: #0f172a;
   line-height: 1.1;
+}
+.cc-kpi__value--dual {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 6px;
+  font-size: 15px;
+}
+.cc-kpi__sep {
+  color: #94a3b8;
+  font-weight: 600;
 }
 
 /* Summary table */

@@ -339,9 +339,21 @@ model OrderPaymentBreakdown {
   id            String   @id @default(uuid())
   orderId       String
   paymentMethod String
+  /** סכום מתוכנן במטבע של currency (USD או ILS) — ללא המרה */
   amount        Decimal  @db.Decimal(19, 4)
   currency      String   @default("USD")
+  /**
+   * סה״כ ששולם לאמצעי זה במטבע של השורה (USD או ILS).
+   * Matching Engine מעדכן בנפרד לכל מטבע — אין קיזוז בין מטבעות.
+   */
+  paidAmount    Decimal  @default(0) @db.Decimal(19, 4) @map("paidUsd")
+  /**
+   * יתרה פתוחה במטבע של השורה. null = רשומה ישנה;
+   * לאחר Matching Engine תמיד מאוכלס.
+   */
+  remainingAmount Decimal? @db.Decimal(19, 4) @map("remainingUsd")
   createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
@@ -532,6 +544,11 @@ model Payment {
   countryCode      WorkCountryCode @default(TR)
   weekCode         String?
   paymentDate      DateTime?
+  /**
+   * תאריך ביצוע קליטת התשלום — מקור האמת לבקרת קופה בלבד.
+   * לא משנה שבוע הזמנה / FIFO / סגירת חוב (Payment.weekCode + paymentDate נשארים ללוגיקה העסקית).
+   */
+  intakeDate       DateTime?
   currency         String         @default("ILS")
   amountUsd        Decimal?       @db.Decimal(19, 4)
   amountIls        Decimal?       @db.Decimal(19, 4)
@@ -588,6 +605,7 @@ model Payment {
   @@index([countryCode])
   @@index([weekCode])
   @@index([paymentDate])
+  @@index([intakeDate])
   @@index([createdAt])
   @@index([isPaid])
   @@index([paymentNumber])

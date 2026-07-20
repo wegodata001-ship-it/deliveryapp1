@@ -45,6 +45,7 @@ import type {
   CashDailySummaryRowDto,
   CashDailyWeekSummaryPayload,
 } from "@/app/admin/cash-control/daily-types";
+import { cashControlKpiService } from "@/lib/finance-data";
 
 /** לוגיקת בקרת קופה יומית — ללא "use server" (נקרא מקבצי action דקים). */
 
@@ -232,6 +233,7 @@ export async function loadCashControlWeekSummary(week: string): Promise<CashDail
         ilsPaymentMethod: true,
         exchangeRate: true,
         methodAllocations: { select: { method: true, currency: true, sourceAmount: true } },
+        intakeDate: true,
         paymentDate: true,
         createdAt: true,
       },
@@ -306,12 +308,20 @@ export async function loadCashControlWeekSummary(week: string): Promise<CashDail
     isTotal: true,
   });
 
+  const kpi = cashControlKpiService.buildFromWeekAggregates({
+    weekCode: wk,
+    channelIntake: weekIntake,
+    expensesUsd: weekExpUsd,
+    expensesIls: weekExpIls,
+  });
+
   return {
     week: wk,
     weekLabel: formatAhWeekLabel(wk),
     from: range.from,
     to: range.to,
     rows: dayRows,
+    kpi,
   };
 }
 
@@ -333,6 +343,7 @@ export async function loadCashControlDayDetail(input: {
         ilsPaymentMethod: true,
         exchangeRate: true,
         methodAllocations: { select: { method: true, currency: true, sourceAmount: true } },
+        intakeDate: true,
         paymentDate: true,
         createdAt: true,
       },
@@ -436,6 +447,7 @@ export async function loadCashControlDayIntakes(input: {
       paymentCode: true,
       orderId: true,
       customerId: true,
+      intakeDate: true,
       paymentDate: true,
       createdAt: true,
       amountIls: true,
@@ -548,6 +560,7 @@ export async function loadCashControlDayPayments(input: {
       paymentCode: true,
       orderId: true,
       customerId: true,
+      intakeDate: true,
       paymentDate: true,
       createdAt: true,
       amountIls: true,

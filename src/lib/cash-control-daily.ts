@@ -107,8 +107,13 @@ export function formatDailyDateDisplay(ymd: string): string {
   return `${d}/${m}`;
 }
 
-export function paymentDayKeyJerusalem(p: { paymentDate: Date | string | null; createdAt: Date | string }): string {
-  const raw = p.paymentDate ?? p.createdAt;
+export function paymentDayKeyJerusalem(p: {
+  intakeDate?: Date | string | null;
+  paymentDate: Date | string | null;
+  createdAt: Date | string;
+}): string {
+  /** תאריך ביצוע קליטה → בקרת קופה; אחרת תאימות לאחור */
+  const raw = p.intakeDate ?? p.paymentDate ?? p.createdAt;
   return formatYmdJerusalem(new Date(raw));
 }
 

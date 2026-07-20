@@ -104,7 +104,9 @@ export function ManagerCountFxPurchaseFlow({
       return;
     }
     if (ilsNum > availNum + 0.02) {
-      alert(`סכום הרכישה גדול מהזמין בקופה (${availNum.toLocaleString("he-IL")} ₪)`);
+      alert(
+        `לא ניתן להמשיך: סכום הרכישה (${ilsNum.toLocaleString("he-IL")} ₪) גדול מהזמין בקופה (${availNum.toLocaleString("he-IL")} ₪)`,
+      );
       return;
     }
     setStep("remainder");
@@ -135,6 +137,12 @@ export function ManagerCountFxPurchaseFlow({
 
   const handleSave = async () => {
     if (!allocation) return;
+    if (ilsNum > availNum + 0.02) {
+      alert(
+        `לא ניתן לשמור: סכום הרכישה (${ilsNum.toLocaleString("he-IL")} ₪) גדול מהזמין בקופה (${availNum.toLocaleString("he-IL")} ₪)`,
+      );
+      return;
+    }
     setBusy(true);
     try {
       const res = await saveFxPurchaseAction({
@@ -179,7 +187,7 @@ export function ManagerCountFxPurchaseFlow({
         {step === "amount" ? (
           <div className="mc-fx-wizard__body">
             <p className="mc-muted">
-              זמין בקופה: <strong dir="ltr">{fmtDailyMoney("ILS", availNum)}</strong>
+              זמין בקופה (שקל שנשאר): <strong dir="ltr">{fmtDailyMoney("ILS", availNum)}</strong>
             </p>
             <label className="fc-field">
               <span>סכום ₪ לרכישה</span>

@@ -67,30 +67,25 @@ export const PAYMENT_VIEW_STATUS_META: Record<
  * KPI cards must be summarizeIntakeMethodViews(visibleRows) — same list as the table.
  */
 export type IntakeMethodView = {
-  /** Unique React key: `{orderId}:{bucket}` or `__excess` */
+  /** Unique React key: `{orderId}:{bucket}:{currency}` or `__excess` */
   id: string;
   orderId: string;
   /** Display order-number; "—" for the excess-payment row */
   orderNumber: string;
   bucket: PaymentBucketKey;
   methodLabel: string;
-  /** USD planned by the payment plan for this order × method */
+  /** מטבע מקורי של השורה — הפרדה מלאה מול המטבע השני */
+  currency?: "USD" | "ILS";
+  /** מתוכנן במטבע השורה */
+  planned?: number;
+  /** שולם במטבע השורה (DB) */
+  paid?: number;
+  /** נותר במטבע השורה (DB) */
+  remaining?: number;
   plannedUsd: number;
-  /** USD already saved in DB for this method */
   dbPaidUsd: number;
-  /** DB remaining for this method (plannedUsd − dbPaidUsd) */
   dbRemainingUsd: number;
-  /**
-   * Share of the order's total form allocation attributed to this method.
-   * Derived by filling methods in plan order until the allocation is exhausted.
-   * Sum across all methods for an order === order.formAllocationUsd.
-   */
   formEnteredUsd: number;
-  /**
-   * Remaining to settle for this method after applying the current form allocation.
-   * Sum across all methods for an order === max(0, order.formRemainingUsd).
-   * Column header: "נותר לאמצעי התשלום"
-   */
   formRemainingUsd: number;
   status: PaymentViewStatus;
   dateYmd: string;
@@ -134,6 +129,9 @@ export type MethodViewSummary = {
   plannedUsd: number;
   enteredUsd: number;
   remainingUsd: number;
+  plannedIls: number;
+  enteredIls: number;
+  remainingIls: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -205,18 +203,29 @@ export function buildIntakeOrderViews(
   const bases = toPaymentIntakeBases(orders);
   const { byOrderId } = allocatePaymentAcrossOrders(bases, totalFormUsd, idSet);
 
-  // Live payment-line totals by bucket — same source as the form KPIs.
-  const bucketPool = new Map<PaymentBucketKey, number>([
-    ["CASH", roundMoney2(liveFormKpis.cash.totalUsd)],
-    ["BANK_TRANSFER", roundMoney2(liveFormKpis.bankTransfer.totalUsd)],
-    ["CREDIT", roundMoney2(liveFormKpis.credit.totalUsd)],
-    ["CHECK", roundMoney2(liveFormKpis.checks.totalUsd)],
-    ["OTHER", roundMoney2(liveFormKpis.other.totalUsd)],
+  // Live payment-line totals by bucket × currency — אין המרת שקל↔דולר
+  const bucketPoolUsd = new Map<PaymentBucketKey, number>([
+    ["CASH", roundMoney2(liveFormKpis.cash.enteredUsd)],
+    ["BANK_TRANSFER", roundMoney2(liveFormKpis.bankTransfer.enteredUsd)],
+    ["CREDIT", roundMoney2(liveFormKpis.credit.enteredUsd)],
+    ["CHECK", roundMoney2(liveFormKpis.checks.enteredUsd)],
+    ["OTHER", roundMoney2(liveFormKpis.other.enteredUsd)],
+  ]);
+  const bucketPoolIls = new Map<PaymentBucketKey, number>([
+    ["CASH", roundMoney2(liveFormKpis.cash.enteredIls)],
+    ["BANK_TRANSFER", roundMoney2(liveFormKpis.bankTransfer.enteredIls)],
+    ["CREDIT", roundMoney2(liveFormKpis.credit.enteredIls)],
+    ["CHECK", roundMoney2(liveFormKpis.checks.enteredIls)],
+    ["OTHER", roundMoney2(liveFormKpis.other.enteredIls)],
   ]);
 
   type MethodDraft = {
     bucket: PaymentBucketKey;
     methodLabel: string;
+    currency: "USD" | "ILS";
+    planned: number;
+    paid: number;
+    remaining: number;
     plannedUsd: number;
     dbPaidUsd: number;
     cap: number;
@@ -236,27 +245,24 @@ export function buildIntakeOrderViews(
     const dbRem = roundMoney2(Math.max(0, Number(o.dbRemainingUsd)));
     const formAlloc = roundMoney2(byOrderId.get(o.id) ?? 0);
     const formRem = roundMoney2(dbRem - formAlloc);
-    // Filter by b.remainingUsd: methods already paid in full (remainingUsd ≈ 0) must
-    // be excluded from the display pool. Using b.plannedUsd here would assign the entire
-    // dbRem cap to the first planned method even when that method is already fully paid
-    // (e.g. CASH after a COMPOSITE partial payment), leaving CREDIT with cap=0 and making
-    // the "סכום שנקלט" KPI card show $0.00 even when the user has typed the correct amount.
-    const filteredBreakdown = o.breakdown.filter((b) => b.remainingUsd > CASH_CONTROL_EPS);
+    const allBreakdown = o.breakdown;
 
-    let dbCapPool = dbRem;
-    const methods: MethodDraft[] = filteredBreakdown.map((b) => {
-      // Cap = min(b.remainingUsd, available pool).
-      // This correctly limits each method to what is actually still owed for that method.
-      const cap = roundMoney2(Math.min(roundMoney2(b.remainingUsd), Math.max(0, dbCapPool)));
-      dbCapPool = roundMoney2(Math.max(0, dbCapPool - cap));
+    const methods: MethodDraft[] = allBreakdown.map((b) => {
+      const currency = b.currency ?? "USD";
+      const remaining = roundMoney2(Math.max(0, b.remaining ?? b.remainingUsd));
+      const planned = roundMoney2(Math.max(0, b.planned ?? b.plannedUsd));
+      const paid = roundMoney2(Math.max(0, b.paid ?? b.paidUsd));
       const bucket = paymentMethodBucketKey(b.method);
       return {
         bucket,
         methodLabel: PAYMENT_BUCKET_LABELS[bucket],
-        // לתצוגה/KPI: "מתוכנן" = יתרה פתוחה לאמצעי (לא הסכום ההיסטורי המקורי)
-        plannedUsd: cap,
+        currency,
+        planned,
+        paid,
+        remaining,
+        plannedUsd: roundMoney2(b.plannedUsd),
         dbPaidUsd: roundMoney2(b.paidUsd),
-        cap,
+        cap: remaining,
         dateYmd: o.dateYmd || "—",
         formEnteredUsd: 0,
       };
@@ -265,16 +271,16 @@ export function buildIntakeOrderViews(
     return { order: o, dbRem, formAlloc, formRem, methods };
   });
 
-  // Attribute typed payment-line amounts into method rows (oldest → newest).
+  // Attribute typed amounts — USD רק לשורות USD, ILS רק לשורות ILS
   for (const draft of drafts) {
     if (idSet && !idSet.has(draft.order.id)) continue;
-    if (draft.dbRem <= CASH_CONTROL_EPS) continue;
     for (const method of draft.methods) {
-      const available = bucketPool.get(method.bucket) ?? 0;
+      const pool = method.currency === "ILS" ? bucketPoolIls : bucketPoolUsd;
+      const available = pool.get(method.bucket) ?? 0;
       if (available <= CASH_CONTROL_EPS || method.cap <= CASH_CONTROL_EPS) continue;
       const take = roundMoney2(Math.min(method.cap, available));
       method.formEnteredUsd = take;
-      bucketPool.set(method.bucket, roundMoney2(Math.max(0, available - take)));
+      pool.set(method.bucket, roundMoney2(Math.max(0, available - take)));
     }
   }
 
@@ -283,14 +289,18 @@ export function buildIntakeOrderViews(
     const methodViews: IntakeMethodView[] = draft.methods.map((m) => {
       const formMethodRem = roundMoney2(Math.max(0, m.cap - m.formEnteredUsd));
       return {
-        id: `${o.id}:${m.bucket}`,
+        id: `${o.id}:${m.currency}:${m.bucket}`,
         orderId: o.id,
         orderNumber: o.orderNumber?.trim() || o.id.slice(0, 8),
         bucket: m.bucket,
         methodLabel: m.methodLabel,
+        currency: m.currency,
+        planned: m.planned,
+        paid: m.paid,
+        remaining: m.remaining,
         plannedUsd: m.plannedUsd,
         dbPaidUsd: m.dbPaidUsd,
-        dbRemainingUsd: m.cap,
+        dbRemainingUsd: m.remaining,
         formEnteredUsd: m.formEnteredUsd,
         formRemainingUsd: formMethodRem,
         status: deriveMethodStatus(m.cap, m.formEnteredUsd, formMethodRem),
@@ -333,10 +343,7 @@ export function buildIntakeMethodViews(
 ): IntakeMethodView[] {
   const idSet = includedOrderIds ? new Set(includedOrderIds) : null;
   const relevant = orderViews.filter(
-    (ov) =>
-      ov.methodViews.length > 0 &&
-      ov.dbRemainingUsd > CASH_CONTROL_EPS &&
-      (!idSet || idSet.has(ov.orderId)),
+    (ov) => ov.methodViews.length > 0 && (!idSet || idSet.has(ov.orderId)),
   );
   const rows: IntakeMethodView[] = relevant.flatMap((ov) => ov.methodViews);
 
@@ -351,6 +358,10 @@ export function buildIntakeMethodViews(
       orderNumber: "—",
       bucket: "OTHER",
       methodLabel: "עודף תשלום",
+      currency: "USD",
+      planned: 0,
+      paid: 0,
+      remaining: 0,
       plannedUsd: 0,
       dbPaidUsd: 0,
       dbRemainingUsd: 0,
@@ -364,25 +375,43 @@ export function buildIntakeMethodViews(
   return rows.sort((a, b) => {
     const on = a.orderNumber.localeCompare(b.orderNumber, "he");
     if (on !== 0) return on;
+    const cur = (a.currency ?? "USD").localeCompare(b.currency ?? "USD");
+    if (cur !== 0) return cur;
     return a.methodLabel.localeCompare(b.methodLabel, "he");
   });
 }
 
-/** Aggregate summary for the PMC summary cards. */
+/** Aggregate summary — USD ו-ILS בנפרד, בלי איחוד מטבעות */
 export function summarizeIntakeMethodViews(views: IntakeMethodView[]): MethodViewSummary {
   const orderIds = new Set(views.map((v) => v.orderId).filter(Boolean));
   let plannedUsd = 0;
   let enteredUsd = 0;
   let remainingUsd = 0;
+  let plannedIls = 0;
+  let enteredIls = 0;
+  let remainingIls = 0;
   for (const v of views) {
-    plannedUsd += v.plannedUsd;
-    enteredUsd += v.formEnteredUsd;
-    remainingUsd += v.formRemainingUsd;
+    const cur = v.currency ?? "USD";
+    const planned = v.planned ?? v.plannedUsd;
+    const paid = v.paid ?? v.dbPaidUsd;
+    const rem = v.remaining ?? v.dbRemainingUsd;
+    if (cur === "ILS") {
+      plannedIls += planned;
+      enteredIls += paid;
+      remainingIls += rem;
+    } else {
+      plannedUsd += planned;
+      enteredUsd += paid;
+      remainingUsd += rem;
+    }
   }
   return {
     orderCount: orderIds.size,
     plannedUsd: roundMoney2(plannedUsd),
     enteredUsd: roundMoney2(enteredUsd),
     remainingUsd: roundMoney2(remainingUsd),
+    plannedIls: roundMoney2(plannedIls),
+    enteredIls: roundMoney2(enteredIls),
+    remainingIls: roundMoney2(remainingIls),
   };
 }

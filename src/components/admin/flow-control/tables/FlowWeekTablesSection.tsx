@@ -33,7 +33,7 @@ export function FlowWeekTablesSection({
   onManagerCountSaved,
 }: FlowWeekTablesSectionProps) {
   const { openWindow } = useAdminWindows();
-  const [tab, setTab] = useState<TabId>("count");
+  const [tab, setTab] = useState<TabId>("received");
   const [varianceOpen, setVarianceOpen] = useState(false);
   const [fxProfitOpen, setFxProfitOpen] = useState(false);
 
@@ -158,24 +158,27 @@ export function FlowWeekTablesSection({
       <div className="ft-panels ft-panels--stack">
         <section className={`ft-section ft-section--received${tab === "received" ? " is-tab-active" : ""}`} id="ft-received">
           <header className="ft-section__head ft-section__head--blue">
-            <h2>1. קליטות שהתקבלו</h2>
-            <p>נתונים אוטומטיים מקליטות, הזמנות ותשלומים — ללא עריכה</p>
+            <h2>1. תקבולים מקליטת תשלום</h2>
+            <p>קוד שבוע, תאריך, מזומן, העברות, צ&apos;קים ואשראי — אוטומטי לפי תאריך ביצוע הקליטה</p>
           </header>
           {receivedBlock}
         </section>
 
         <section className={`ft-section ft-section--count${tab === "count" ? " is-tab-active" : ""}`} id="ft-count">
           <header className="ft-section__head ft-section__head--green">
-            <h2>2. ספירת קופה ומט&quot;ח</h2>
-            <p>הזנת ספירת מנהל, רכישות מט&quot;ח והעברות — טבלת העבודה המרכזית</p>
+            <h2>2. מסלולי PS ו־IL</h2>
+            <p>
+              PS: דולר/שקל, רכישת מט&quot;ח, עמלה וטורקיה · IL: העברות/צ&apos;קים/אשראי לרכישת מט&quot;ח + עמלה —
+              הזנה ידנית וחישובים אוטומטיים
+            </p>
           </header>
           {countBlock}
         </section>
 
         <section className={`ft-section ft-section--calc${tab === "calc" ? " is-tab-active" : ""}`} id="ft-calc">
           <header className="ft-section__head ft-section__head--purple">
-            <h2>3. חישובים, יתרות והתאמות</h2>
-            <p>מחושב אוטומטית מקליטות, ספירת קופה, הוצאות ומט&quot;ח</p>
+            <h2>3. יתרות וסיכום</h2>
+            <p>שקל שנשאר, יתרה בקופה ויתרה בבנק — מחושב אוטומטית מתקבולים ומסלולי PS/IL</p>
           </header>
           {calcBlock}
         </section>

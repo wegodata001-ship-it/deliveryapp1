@@ -372,3 +372,214 @@ export function buildDeviationComparisonRows(
   };
   return rows.sort((a, b) => (order[a.status] - order[b.status]) || a.methodLabel.localeCompare(b.methodLabel, "he"));
 }
+
+// ─── Locked methods + debt transfer + surplus-after-closure gate ─────────────
+
+/**
+ * אמצעי תשלום שנסגר (יתרה ≈ 0) נעול — אסור לפתוח מחדש / להעביר אליו חוב
+ * ללא אישור מפורש של המשתמש.
+ */
+export function isPaymentMethodLocked(remainingUsd: number, eps = CASH_CONTROL_EPS): boolean {
+  return remainingUsd <= eps;
+}
+
+/** הצעת העברת חוב בין אמצעי תשלום — דורשת אישור משתמש */
+export type DebtTransferProposal = {
+  fromBucket: PaymentBucketKey;
+  fromLabel: string;
+  toBucket: PaymentBucketKey;
+  toLabel: string;
+  amountUsd: number;
+};
+
+/**
+ * שערי החלטה לקליטת תשלום לפי אמצעי:
+ * - ALLOW — מותר להמשיך (תשלום חלקי תקין / התאמה מלאה ללא עודף)
+ * - DEBT_TRANSFER — שולם באמצעי אחר/נעול בעוד חוב פתוח באמצעי אחר → חלון אישור
+ * - METHOD_DEVIATION — חריגת אמצעי רגילה (עדיין יש אמצעים פתוחים)
+ * - SURPLUS_AFTER_CLOSURE — כל החוב נסגר ויש עודף → חלון עודף ייעודי (לא חריגת אמצעי)
+ */
+export type MethodIntakeGate =
+  | { kind: "ALLOW" }
+  | { kind: "DEBT_TRANSFER"; transfers: DebtTransferProposal[] }
+  | { kind: "METHOD_DEVIATION" }
+  | {
+      kind: "SURPLUS_AFTER_CLOSURE";
+      surplusUsd: number;
+      totalDebtUsd: number;
+      totalPaymentUsd: number;
+    };
+
+/**
+ * בונה תכנון אכיפה רק מאמצעים פתוחים (remaining > 0).
+ * אמצעים נעולים (remaining = 0) אינם מקבלים הקצאה אוטומטית.
+ */
+export function buildOpenMethodPlan(
+  orders: PaymentIntakeOrderRow[],
+  includedOrderIds: string[] | null,
+): PlannedBucketUsd[] {
+  return buildIntakeBreakdownPlan(orders, includedOrderIds)
+    .filter((p) => p.remainingUsd > CASH_CONTROL_EPS)
+    .map((p) => ({
+      ...p,
+      // לאכיפה: המותר הוא היתרה הפתוחה בלבד
+      plannedUsd: p.remainingUsd,
+    }));
+}
+
+/**
+ * מחשב הצעות העברת חוב: סכומים שהוזנו לאמצעי נעול/לא-פתוח
+ * מול יתרות פתוחות באמצעים אחרים (FIFO לפי סדר האמצעים הפתוחים).
+ */
+export function buildDebtTransferProposals(
+  openPlan: PlannedBucketUsd[],
+  enteredByBucket: EnteredBucketUsd[],
+  eps = CASH_CONTROL_EPS,
+): DebtTransferProposal[] {
+  const openRemaining = new Map(openPlan.map((p) => [p.bucket, round2(p.remainingUsd)]));
+  const proposals: DebtTransferProposal[] = [];
+
+  for (const e of enteredByBucket) {
+    if (e.enteredUsd <= eps) continue;
+    const allowed = openRemaining.get(e.bucket) ?? 0;
+    let needFromOthers = round2(Math.max(0, e.enteredUsd - allowed));
+    if (needFromOthers <= eps) {
+      // צורכים מהיתרה הפתוחה של אותו אמצעי
+      if (allowed > eps) {
+        openRemaining.set(e.bucket, round2(Math.max(0, allowed - Math.min(allowed, e.enteredUsd))));
+      }
+      continue;
+    }
+    // צורכים קודם את המותר באותו אמצעי
+    if (allowed > eps) {
+      openRemaining.set(e.bucket, 0);
+    }
+    for (const [fromBucket, fromRem] of openRemaining) {
+      if (needFromOthers <= eps) break;
+      if (fromBucket === e.bucket || fromRem <= eps) continue;
+      const take = round2(Math.min(fromRem, needFromOthers));
+      if (take <= eps) continue;
+      proposals.push({
+        fromBucket,
+        fromLabel: PAYMENT_BUCKET_LABELS[fromBucket],
+        toBucket: e.bucket,
+        toLabel: e.label || PAYMENT_BUCKET_LABELS[e.bucket],
+        amountUsd: take,
+      });
+      openRemaining.set(fromBucket, round2(fromRem - take));
+      needFromOthers = round2(needFromOthers - take);
+    }
+  }
+  return proposals;
+}
+
+/**
+ * מחיל העברות חוב מאושרות על תכנון האמצעים הפתוחים —
+ * מעביר remainingUsd מ-from ל-to (ללא שינוי סכום כולל).
+ */
+export function applyDebtTransfersToPlan(
+  openPlan: PlannedBucketUsd[],
+  transfers: DebtTransferProposal[],
+  eps = CASH_CONTROL_EPS,
+): PlannedBucketUsd[] {
+  if (transfers.length === 0) return openPlan;
+  const map = new Map(openPlan.map((p) => [p.bucket, { ...p }]));
+  for (const t of transfers) {
+    if (t.amountUsd <= eps) continue;
+    const from = map.get(t.fromBucket);
+    if (!from || from.remainingUsd <= eps) continue;
+    const take = round2(Math.min(from.remainingUsd, t.amountUsd));
+    from.remainingUsd = round2(from.remainingUsd - take);
+    from.plannedUsd = from.remainingUsd;
+    const to =
+      map.get(t.toBucket) ??
+      ({
+        bucket: t.toBucket,
+        label: t.toLabel || PAYMENT_BUCKET_LABELS[t.toBucket],
+        plannedUsd: 0,
+        remainingUsd: 0,
+      } satisfies PlannedBucketUsd);
+    to.remainingUsd = round2(to.remainingUsd + take);
+    to.plannedUsd = to.remainingUsd;
+    map.set(t.toBucket, to);
+    map.set(t.fromBucket, from);
+  }
+  return [...map.values()].filter((p) => p.remainingUsd > eps);
+}
+
+/**
+ * מקור אמת יחיד להחלטת שערי אמצעי תשלום לפני שמירה.
+ *
+ * סדר:
+ * 1. אמצעים פתוחים בלבד (נעולים = remaining 0).
+ * 2. אם קיימת הצעת העברת חוב ולא אושרה → DEBT_TRANSFER.
+ * 3. אם אחרי העברות/התאמה נשארת חריגת אמצעי ועדיין חוב פתוח → METHOD_DEVIATION.
+ * 4. אם כל החוב נסגר ויש עודף → SURPLUS_AFTER_CLOSURE.
+ * 5. אחרת ALLOW.
+ */
+export function classifyMethodIntakeGate(params: {
+  orders: PaymentIntakeOrderRow[];
+  includedOrderIds: string[] | null;
+  enteredByBucket: EnteredBucketUsd[];
+  totalPaymentUsd: number;
+  /** העברות חוב שכבר אושרו במפורש ע״י המשתמש */
+  approvedDebtTransfers?: DebtTransferProposal[] | null;
+  eps?: number;
+}): MethodIntakeGate {
+  const eps = params.eps ?? CASH_CONTROL_EPS;
+  const openPlan = buildOpenMethodPlan(params.orders, params.includedOrderIds);
+  const entered = params.enteredByBucket.filter((e) => e.enteredUsd > eps);
+
+  let totalDebtUsd = 0;
+  const idSet = params.includedOrderIds ? new Set(params.includedOrderIds) : null;
+  for (const o of params.orders) {
+    if (idSet && !idSet.has(o.id)) continue;
+    totalDebtUsd += Math.max(0, Number(o.dbRemainingUsd) || 0);
+  }
+  totalDebtUsd = round2(totalDebtUsd);
+  const totalPaymentUsd = round2(Math.max(0, params.totalPaymentUsd));
+  const surplusUsd = round2(Math.max(0, totalPaymentUsd - totalDebtUsd));
+  const coversAllDebt = totalPaymentUsd >= totalDebtUsd - eps;
+
+  const approved = params.approvedDebtTransfers ?? [];
+  const planAfterTransfer =
+    approved.length > 0 ? applyDebtTransfersToPlan(openPlan, approved, eps) : openPlan;
+
+  // לפני אישור העברה — אם יש צורך בהעברה, עוצרים כאן
+  if (approved.length === 0) {
+    const proposals = buildDebtTransferProposals(openPlan, entered, eps);
+    if (proposals.length > 0) {
+      return { kind: "DEBT_TRANSFER", transfers: proposals };
+    }
+  }
+
+  const violations = enforceBreakdownAgainstEntered(planAfterTransfer, entered, eps);
+  if (violations.length > 0) {
+    // כל החוב נסגר אך נשארה חריגת אמצעי ברמת bucket —
+    // אם אין חוב פתוח יותר, זו לא חריגת אמצעי אלא עודף/סגירה.
+    if (coversAllDebt) {
+      if (surplusUsd > eps) {
+        return {
+          kind: "SURPLUS_AFTER_CLOSURE",
+          surplusUsd,
+          totalDebtUsd,
+          totalPaymentUsd,
+        };
+      }
+      // סה״כ תואם — אחרי העברה מאושרת / סגירה מלאה
+      return { kind: "ALLOW" };
+    }
+    return { kind: "METHOD_DEVIATION" };
+  }
+
+  if (coversAllDebt && surplusUsd > eps) {
+    return {
+      kind: "SURPLUS_AFTER_CLOSURE",
+      surplusUsd,
+      totalDebtUsd,
+      totalPaymentUsd,
+    };
+  }
+
+  return { kind: "ALLOW" };
+}

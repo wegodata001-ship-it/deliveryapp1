@@ -66,6 +66,7 @@ export async function loadWeekIlsCashIntakeReceipts(weekCode: string): Promise<F
       id: true,
       paymentCode: true,
       orderId: true,
+      intakeDate: true,
       paymentDate: true,
       createdAt: true,
       amountIls: true,

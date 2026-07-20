@@ -21,6 +21,7 @@ import {
 } from "@/lib/cash-control-daily";
 import { formatAhWeekLabel, getAhWeekRange, listWeekDayYmds } from "@/lib/weeks/ah-week";
 import type { CashDailySummaryRowDto, CashDailyWeekSummaryPayload } from "@/app/admin/cash-control/daily-types";
+import { cashControlKpiService } from "@/lib/finance-data";
 
 export const FLOW_COUNTRY_LABEL = "טורקיה";
 
@@ -217,5 +218,11 @@ export async function loadFlowWeekApprovedSummary(week: string): Promise<CashDai
     from: range.from,
     to: range.to,
     rows: dayRows,
+    kpi: cashControlKpiService.buildFromWeekAggregates({
+      weekCode: wk,
+      channelIntake: weekTotals,
+      expensesUsd: 0,
+      expensesIls: 0,
+    }),
   };
 }

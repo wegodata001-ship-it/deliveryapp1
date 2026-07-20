@@ -13,10 +13,13 @@ import {
 import type { CashVarianceLineDto } from "@/lib/cash-control-variance";
 
 export type FlowCalculationTableRow = {
+  /** שקל שנשאר אחרי רכישות מט״ח PS+IL */
+  ilsRemainingAfterFx: string;
   drawerUsd: string;
   drawerIls: string;
   turkeyBalanceUsd: string;
   bankBalanceIls: string;
+  ilFxPurchaseIls: string;
   expensesIls: string;
   expensesUsd: string;
   expectedNetUsd: string;
@@ -74,10 +77,12 @@ export function buildFlowCalculationTableRow(drill: FlowWeekDrillPayload): FlowC
   const diffIls = ilsLine ? flowDisplayDiff(ilsLine) : null;
 
   return {
+    ilsRemainingAfterFx: flow.ilsRemainingAfterFx ?? "0",
     drawerUsd: flow.drawerRemainingUsd,
     drawerIls: flow.drawerRemainingIls,
     turkeyBalanceUsd: flow.turkeyBalanceClosingUsd,
     bankBalanceIls: flow.bankBalanceIls ?? "0",
+    ilFxPurchaseIls: flow.ilFxPurchaseIls ?? "0",
     expensesIls: flow.expensesIls,
     expensesUsd: flow.expensesUsd,
     expectedNetUsd: usdLine ? fmt(usdLine.expectedNet) : "0.00",

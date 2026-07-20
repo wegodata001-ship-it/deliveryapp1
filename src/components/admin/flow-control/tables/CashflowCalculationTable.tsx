@@ -65,10 +65,12 @@ export function CashflowCalculationTable({
       <table className="ft-table ft-table--calc">
         <thead>
           <tr>
+            <th title="סה״כ תקבולים ₪ − רכישת מט״ח PS − רכישת מט״ח IL">שקל שנשאר</th>
+            <th title="מזומן שנשאר בקופה אחרי הוצאות ורכישת מט״ח PS">יתרה בקופה</th>
             <th title="יתרת דולר בקופה לאחר כל הפעולות">דולר בקופה</th>
-            <th title="יתרת שקל בקופה לאחר כל הפעולות">שקל בקופה</th>
+            <th title="תקבולי בנק − רכישת מט״ח IL">יתרה בבנק</th>
+            <th title="העברות IL + צ'קים IL + אשראי IL">רכישת מט&quot;ח IL</th>
             <th title="יתרה להעברה לטורקיה">יתרה לטורקיה</th>
-            <th title="יתרה בבנק">יתרה בבנק</th>
             <th>הוצאות קופה ₪</th>
             <th>הוצאות קופה $</th>
             <th title="התקבל פחות הוצאות — דולר">צפוי נטו $</th>
@@ -85,18 +87,24 @@ export function CashflowCalculationTable({
         <tbody>
           <tr className="ft-row">
             <td dir="ltr" className="ft-cell--computed">
-              {fmtDailyMoney("USD", fcNum(row.drawerUsd))}
+              {fmtDailyMoney("ILS", fcNum(row.ilsRemainingAfterFx))}
             </td>
             <td dir="ltr" className="ft-cell--computed">
               {fmtDailyMoney("ILS", fcNum(row.drawerIls))}
             </td>
             <td dir="ltr" className="ft-cell--computed">
-              {fcNum(row.turkeyBalanceUsd) > 0
-                ? fmtDailyMoney("USD", fcNum(row.turkeyBalanceUsd))
-                : "—"}
+              {fmtDailyMoney("USD", fcNum(row.drawerUsd))}
             </td>
             <td dir="ltr" className="ft-cell--computed">
               {fmtDailyMoney("ILS", fcNum(row.bankBalanceIls))}
+            </td>
+            <td dir="ltr" className="ft-cell--computed">
+              {fmtDailyMoney("ILS", fcNum(row.ilFxPurchaseIls))}
+            </td>
+            <td dir="ltr" className="ft-cell--computed">
+              {fcNum(row.turkeyBalanceUsd) > 0
+                ? fmtDailyMoney("USD", fcNum(row.turkeyBalanceUsd))
+                : "—"}
             </td>
             <td dir="ltr">{fmtDailyMoney("ILS", fcNum(row.expensesIls))}</td>
             <td dir="ltr">{fmtDailyMoney("USD", fcNum(row.expensesUsd))}</td>

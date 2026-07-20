@@ -25,9 +25,6 @@ import {
   type PaymentIntakeCustomerPaymentRow,
 } from "@/app/admin/payments/intake/actions";
 import { sumCustomerPaymentsUsd } from "@/lib/payment-intake-customer-kpi";
-import {
-  buildPaymentAllocationPreview,
-} from "@/lib/payment-allocation-preview";
 import { aggregateLivePaymentFormKpis } from "@/lib/payment-intake-live-kpi";
 import { buildPostSaveRemainingSummary } from "@/lib/payment-intake-method-control";
 import { PaymentMethodControlModal } from "@/components/admin/PaymentMethodControlModal";
@@ -47,9 +44,12 @@ import {
   intakeHasOpenBalanceShortfall,
   intakeDeviationModalRows,
   buildDeviationComparisonRows,
+  classifyMethodIntakeGate,
   type IntakeSaveDeviationRow,
   type DeviationComparisonRow,
+  type DebtTransferProposal,
 } from "@/lib/cash-control-intake-breakdown";
+import { PaymentDebtTransferModal } from "@/components/admin/PaymentDebtTransferModal";
 import { PaymentLiveSummaryCards } from "@/components/admin/PaymentLiveSummaryCards";
 import {
   PaymentPostSaveSummaryModal,
@@ -58,7 +58,6 @@ import {
 } from "@/components/admin/PaymentPostSaveSummaryModal";
 import { BalanceResetConfirmModal } from "@/components/admin/BalanceResetConfirmModal";
 import { DebtBreakdownModal } from "@/components/admin/debt-breakdown/DebtBreakdownModal";
-import { DebtAllocationPreview } from "@/components/admin/debt-breakdown/DebtAllocationPreview";
 import { PriorWeekOpenDebtsPanel } from "@/components/admin/PriorWeekOpenDebtsPanel";
 import { splitIntakeOrdersByGroup } from "@/lib/payment-intake-order-groups";
 import {
@@ -525,6 +524,8 @@ export function PaymentModalUpdated({
   const [previewPaymentCode, setPreviewPaymentCode] = useState<string | null>(null);
   const [paymentCodePreviewPending, setPaymentCodePreviewPending] = useState(true);
   const [paymentDateYmd, setPaymentDateYmd] = useState(() => defaultPaymentIntakeDateYmd());
+  /** תאריך ביצוע קליטת תשלום — לבקרת קופה בלבד (ברירת מחדל: היום) */
+  const [intakeDateYmd, setIntakeDateYmd] = useState(() => formatLocalYmd(new Date()));
   const [paymentTimeHm, setPaymentTimeHm] = useState(() => formatLocalHm(new Date()));
   const [weekDraft, setWeekDraft] = useState(() => defaultPaymentIntakeWeekCode());
   const [weekInputErr, setWeekInputErr] = useState<string | null>(null);
@@ -562,6 +563,11 @@ export function PaymentModalUpdated({
   const [postSaveError, setPostSaveError] = useState<string | null>(null);
   const [overageModalOpen, setOverageModalOpen] = useState(false);
   const [overagePreview, setOveragePreview] = useState<PaymentOveragePreview | null>(null);
+  /** true = חלון "עודף לאחר סגירת חוב" (לא חריגת אמצעי) */
+  const [overageAfterDebtClosure, setOverageAfterDebtClosure] = useState(false);
+  const [debtTransferModalOpen, setDebtTransferModalOpen] = useState(false);
+  const [debtTransferProposals, setDebtTransferProposals] = useState<DebtTransferProposal[]>([]);
+  const approvedDebtTransfersRef = useRef<DebtTransferProposal[] | null>(null);
   const [intakeDevModalOpen, setIntakeDevModalOpen] = useState(false);
   const [intakeDevRows, setIntakeDevRows] = useState<IntakeSaveDeviationRow[]>([]);
   const [methodControlOpen, setMethodControlOpen] = useState(false);
@@ -748,18 +754,6 @@ export function PaymentModalUpdated({
   const { priorWeekOpen: priorWeekOpenOrders } = useMemo(
     () => splitIntakeOrdersByGroup(orders),
     [orders],
-  );
-
-  const paymentAllocationPreview = useMemo(
-    () =>
-      buildPaymentAllocationPreview(
-        matched,
-        totals.totalUsd,
-        commissionPercentN,
-        bases,
-        prioritizedSet,
-      ),
-    [matched, totals.totalUsd, commissionPercentN, bases, prioritizedSet],
   );
 
   const weekReadonly = useMemo(() => weekCodeFromYmd(paymentDateYmd), [paymentDateYmd]);
@@ -1963,6 +1957,7 @@ export function PaymentModalUpdated({
     setWeekDraft(defWeek);
     setWeekInputErr(null);
     setPaymentDateYmd(defaultPaymentIntakeDateYmd(defWeek));
+    setIntakeDateYmd(formatLocalYmd(new Date()));
     setPaymentTimeHm(formatLocalHm(new Date()));
     setPaymentNavLoading(false);
     setLoadErr(null);
@@ -2352,9 +2347,40 @@ export function PaymentModalUpdated({
       setHighlightInvalidCheckFields(true);
       return { ok: false };
     }
-    // חוק עסקי ראשון — אמצעי התשלום המתוכננים מחייבים. חריגה עוצרת את
-    // התהליך כאן: אין FIFO, אין שמירה, עד עדכון תכנון התשלום בהזמנה.
-    if (intakeHasMethodMismatch(liveIntakeDevRows)) {
+    // חוק עסקי ראשון — אמצעי התשלום המתוכננים מחייבים.
+    // אמצעי נעול אינו נפתח מחדש; העברת חוב דורשת אישור; עודף לאחר סגירה — חלון ייעודי.
+    const methodGate = classifyMethodIntakeGate({
+      orders,
+      includedOrderIds: includedIds,
+      enteredByBucket: buildEnteredByBucket(liveFormKpis),
+      totalPaymentUsd: totals.totalUsd,
+      approvedDebtTransfers: approvedDebtTransfersRef.current,
+    });
+    if (methodGate.kind === "DEBT_TRANSFER") {
+      setDebtTransferProposals(methodGate.transfers);
+      setDebtTransferModalOpen(true);
+      return { ok: false };
+    }
+    if (methodGate.kind === "METHOD_DEVIATION") {
+      setIntakeDevRows(liveIntakeDevRows);
+      setIntakeDevModalOpen(true);
+      return { ok: false };
+    }
+    if (methodGate.kind === "SURPLUS_AFTER_CLOSURE" && !surplusDisposition) {
+      setOveragePreview({
+        openDebtIls: roundMoney2(methodGate.totalDebtUsd * rateN),
+        openDebtUsd: methodGate.totalDebtUsd,
+        paymentIls: roundMoney2(methodGate.totalPaymentUsd * rateN),
+        paymentUsd: methodGate.totalPaymentUsd,
+        surplusIls: roundMoney2(methodGate.surplusUsd * rateN),
+        surplusUsd: methodGate.surplusUsd,
+        hasOverage: true,
+      });
+      setOverageAfterDebtClosure(true);
+      setOverageModalOpen(true);
+      return { ok: false };
+    }
+    if (intakeHasRateMismatch(liveIntakeDevRows)) {
       setIntakeDevRows(liveIntakeDevRows);
       setIntakeDevModalOpen(true);
       return { ok: false };
@@ -2435,6 +2461,7 @@ export function PaymentModalUpdated({
       receivedToday: receivedTodaySave,
       paymentDateYmd: receivedTodaySave ? formatLocalYmd(new Date()) : paymentDateYmd,
       paymentTimeHm: hm,
+      intakeDateYmd,
       weekCode: weekForSave,
       workCountry: captureWorkCountry,
       dollarRate,
@@ -2451,6 +2478,7 @@ export function PaymentModalUpdated({
       draftPhone: draftCustomer.phone.trim() || null,
       saveSurplusAsCredit: saveAsCredit,
       surplusDisposition: surplusDisposition ?? null,
+      approvedDebtTransfers: approvedDebtTransfersRef.current,
     });
     const savePaymentMs = Math.round(performance.now() - saveStart);
     if (!res.ok) {
@@ -2466,6 +2494,7 @@ export function PaymentModalUpdated({
     }
 
     setSaveBusy(false);
+    approvedDebtTransfersRef.current = null;
     if (saveJustSavedTimerRef.current != null) {
       window.clearTimeout(saveJustSavedTimerRef.current);
     }
@@ -2705,11 +2734,34 @@ export function PaymentModalUpdated({
 
   async function onOverageConfirm(disposition: SurplusDisposition) {
     setOverageModalOpen(false);
+    setOverageAfterDebtClosure(false);
     const mode = saveAfterOverageRef.current;
     const res = await performSave(disposition);
     if (!res.ok) return;
     saveAfterOverageRef.current = null;
+    approvedDebtTransfersRef.current = null;
     if (mode === "new" || mode === "close") openPostSaveSummary(mode, res);
+  }
+
+  async function onDebtTransferConfirm() {
+    approvedDebtTransfersRef.current = debtTransferProposals;
+    setDebtTransferModalOpen(false);
+    const mode = saveAfterOverageRef.current;
+    const res = await performSave(null);
+    if (!res.ok) {
+      // ייתכן שנפתח חלון עודף — שומרים את אישור ההעברה לשמירה הבאה
+      return;
+    }
+    approvedDebtTransfersRef.current = null;
+    if (mode === "new" || mode === "close") openPostSaveSummary(mode, res);
+  }
+
+  function onDebtTransferCancel() {
+    setDebtTransferModalOpen(false);
+    setDebtTransferProposals([]);
+    approvedDebtTransfersRef.current = null;
+    intakeDevPendingSaveRef.current = false;
+    saveAfterOverageRef.current = null;
   }
 
   function onIntakeDevEditOrder() {
@@ -2735,6 +2787,7 @@ export function PaymentModalUpdated({
 
   function onOverageCancel() {
     setOverageModalOpen(false);
+    setOverageAfterDebtClosure(false);
     saveAfterOverageRef.current = null;
     setOveragePreview(null);
   }
@@ -2946,6 +2999,17 @@ export function PaymentModalUpdated({
             <div className="payment-modal-rate-strip" dir="rtl">
               <PaymentNavigator {...paymentNavigatorProps} />
               <div className="payment-modal-rate-strip-rates">
+                <span className="payment-modal-rate-strip-lead">תאריך ביצוע קליטת תשלום:</span>
+                <input
+                  type="date"
+                  dir="ltr"
+                  className="payment-modal-rate-strip-inp payment-modal-rate-strip-inp--date"
+                  value={intakeDateYmd}
+                  onChange={(e) => setIntakeDateYmd(e.target.value)}
+                  aria-label="תאריך ביצוע קליטת תשלום"
+                  title="תאריך קבלת הכסף בפועל — לבקרת קופה בלבד"
+                  readOnly={captureReadOnly}
+                />
                 <span className="payment-modal-rate-strip-lead">שער דולר:</span>
                 <input
                   type="text"
@@ -3531,9 +3595,6 @@ export function PaymentModalUpdated({
                     />
                   </span>
                 </div>
-              ) : null}
-              {customer && !customerWorkspaceLoading && totals.totalUsd > 0.01 ? (
-                <DebtAllocationPreview preview={paymentAllocationPreview} />
               ) : null}
               <PriorWeekOpenDebtsPanel
                 orders={priorWeekOpenOrders}
@@ -4234,8 +4295,16 @@ export function PaymentModalUpdated({
         open={overageModalOpen}
         preview={overagePreview}
         busy={saveBusy}
+        afterDebtClosure={overageAfterDebtClosure}
         onConfirm={(disposition) => void onOverageConfirm(disposition)}
         onCancel={onOverageCancel}
+      />
+      <PaymentDebtTransferModal
+        open={debtTransferModalOpen}
+        transfers={debtTransferProposals}
+        busy={saveBusy}
+        onConfirm={() => void onDebtTransferConfirm()}
+        onCancel={onDebtTransferCancel}
       />
       {intakeDevModalOpen && intakeDeviationModalRows(intakeDevRows).length > 0 ? (
         <div className="adm-cash-modal-backdrop" role="presentation" onClick={onIntakeDevCancel}>

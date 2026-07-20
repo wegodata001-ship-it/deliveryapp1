@@ -12,6 +12,7 @@ import {
   intakeHasMethodMismatch,
   intakeHasOpenBalanceShortfall,
   intakeDeviationModalRows,
+  classifyMethodIntakeGate,
 } from "@/lib/cash-control-intake-breakdown";
 import {
   buildLivePaymentMethodControlRows,
@@ -596,5 +597,100 @@ describe("QA-7 שיוך יתרה לאמצעי תשלום מקורי (לאחר ת
     });
     assert.equal(intakeHasMethodMismatch(deviations), true, "חריגת אמצעי — מזומן לא מותר ליתרת Credit");
     assert.equal(intakeSaveHasDeviations(deviations), true, "חסימת שמירה בגלל אמצעי שגוי");
+  });
+});
+
+describe("QA-8 — נעילת אמצעי סגור + העברת חוב + עודף לאחר סגירה", () => {
+  const orderPartialTransfer: PaymentIntakeOrderRow = {
+    id: "ord-partial-transfer",
+    orderNumber: "TR-QA8",
+    paymentCode: "P008",
+    dateYmd: "2026-07-01",
+    week: "2026-W27",
+    rate: "3.70",
+    amountUsd: "400",
+    commissionUsd: "0",
+    totalIls: "0",
+    totalAmountUsd: "400",
+    dbPaidUsd: "300",
+    dbRemainingUsd: "100",
+    status: "partial",
+    lastPaymentDateYmd: "2026-07-01",
+    sourceCountry: null,
+    isComposite: true,
+    breakdown: [
+      { method: "CASH", label: "מזומן", plannedUsd: 200, paidUsd: 200, remainingUsd: 0 },
+      { method: "BANK_TRANSFER", label: "העברה בנקאית", plannedUsd: 200, paidUsd: 100, remainingUsd: 100 },
+    ],
+    actualMethods: [{ method: "COMPOSITE", label: "מרובה", usd: 300 }],
+    hasMethodDeviation: false,
+  };
+
+  it("תשלום מזומן כשנותרה העברה → DEBT_TRANSFER", () => {
+    const gate = classifyMethodIntakeGate({
+      orders: [orderPartialTransfer],
+      includedOrderIds: null,
+      enteredByBucket: [{ bucket: "CASH", label: "מזומן", enteredUsd: 100 }],
+      totalPaymentUsd: 100,
+    });
+    assert.equal(gate.kind, "DEBT_TRANSFER");
+    if (gate.kind === "DEBT_TRANSFER") {
+      assert.equal(gate.transfers.length, 1);
+      assert.equal(gate.transfers[0]!.fromBucket, "BANK_TRANSFER");
+      assert.equal(gate.transfers[0]!.toBucket, "CASH");
+      assert.equal(gate.transfers[0]!.amountUsd, 100);
+    }
+  });
+
+  it("לאחר אישור העברה → ALLOW", () => {
+    const gate = classifyMethodIntakeGate({
+      orders: [orderPartialTransfer],
+      includedOrderIds: null,
+      enteredByBucket: [{ bucket: "CASH", label: "מזומן", enteredUsd: 100 }],
+      totalPaymentUsd: 100,
+      approvedDebtTransfers: [
+        {
+          fromBucket: "BANK_TRANSFER",
+          fromLabel: "העברה בנקאית",
+          toBucket: "CASH",
+          toLabel: "מזומן",
+          amountUsd: 100,
+        },
+      ],
+    });
+    assert.equal(gate.kind, "ALLOW");
+  });
+
+  it("עודף על אמצעי פתוח יחיד → SURPLUS_AFTER_CLOSURE", () => {
+    const orderOneOpen: PaymentIntakeOrderRow = {
+      ...orderPartialTransfer,
+      id: "ord-one-open",
+      totalAmountUsd: "100",
+      dbPaidUsd: "0",
+      dbRemainingUsd: "100",
+      breakdown: [
+        { method: "CASH", label: "מזומן", plannedUsd: 100, paidUsd: 0, remainingUsd: 100 },
+      ],
+    };
+    const gate = classifyMethodIntakeGate({
+      orders: [orderOneOpen],
+      includedOrderIds: null,
+      enteredByBucket: [{ bucket: "CASH", label: "מזומן", enteredUsd: 120 }],
+      totalPaymentUsd: 120,
+    });
+    assert.equal(gate.kind, "SURPLUS_AFTER_CLOSURE");
+    if (gate.kind === "SURPLUS_AFTER_CLOSURE") {
+      assert.equal(gate.surplusUsd, 20);
+    }
+  });
+
+  it("תשלום חלקי תקין על אמצעי פתוח → ALLOW", () => {
+    const gate = classifyMethodIntakeGate({
+      orders: [orderPartialTransfer],
+      includedOrderIds: null,
+      enteredByBucket: [{ bucket: "BANK_TRANSFER", label: "העברה בנקאית", enteredUsd: 50 }],
+      totalPaymentUsd: 50,
+    });
+    assert.equal(gate.kind, "ALLOW");
   });
 });

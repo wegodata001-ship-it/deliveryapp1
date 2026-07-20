@@ -25,6 +25,7 @@ import {
   computeAutoTurkeyUsd,
   formFromFlow,
   isTurkeyManual,
+  resolveAvailableIlsForFx,
   sumIntakeFxPlFromPurchases,
   syncAutoTurkey,
 } from "@/components/admin/manager-count/manager-count-utils";
@@ -109,7 +110,7 @@ export function ManagerCountModal({
   const patchForm = (key: keyof ManagerCountForm, value: string) => {
     setForm((prev) => {
       const next = { ...prev, [key]: value };
-      if (!turkeyManual && (key === "countedCashUsd" || key === "commissionUsd")) {
+      if (!turkeyManual && key === "commissionUsd") {
         return syncAutoTurkey(next, flow);
       }
       return next;
@@ -159,6 +160,37 @@ export function ManagerCountModal({
       setLoading(false);
     }
     onSaved();
+  };
+
+  const openFxPurchase = async () => {
+    if (!canEdit) return;
+    const dirty =
+      Math.abs(fcNum(form.countedCashIls) - fcNum(flow?.counted.CASH_ILS)) > 0.02 ||
+      Math.abs(fcNum(form.countedCashUsd) - fcNum(flow?.counted.CASH_USD)) > 0.02;
+    if (dirty) {
+      const payload = turkeyManual || !flow ? form : syncAutoTurkey(form, flow);
+      const saveRes = await saveManagerCountAction({ week, form: payload });
+      if (!saveRes.ok) {
+        alert(saveRes.error ?? "יש לשמור את ספירת הקופה לפני רכישת מט״ח");
+        return;
+      }
+      dispatchCashControlRefresh(week);
+    }
+    setLoading(true);
+    try {
+      const data = await getFlowWeekAction(week);
+      if (data) {
+        setFlow(data);
+        setForm((prev) =>
+          turkeyManual
+            ? { ...formFromFlow(data), turkeyTransferUsd: prev.turkeyTransferUsd }
+            : syncAutoTurkey(formFromFlow(data), data),
+        );
+      }
+    } finally {
+      setLoading(false);
+    }
+    setFxOpen(true);
   };
 
   if (!open) return null;
@@ -219,7 +251,7 @@ export function ManagerCountModal({
                   <Coins size={18} />
                   <h3>רכישת מט&quot;ח</h3>
                   {canEdit ? (
-                    <button type="button" className="fc-btn fc-btn--ghost fc-btn--sm" onClick={() => setFxOpen(true)}>
+                    <button type="button" className="fc-btn fc-btn--ghost fc-btn--sm" onClick={() => void openFxPurchase()}>
                       + רכישה
                     </button>
                   ) : null}
@@ -246,7 +278,9 @@ export function ManagerCountModal({
                   <div>
                     <span>זמין לרכישה</span>
                     <strong dir="ltr">
-                      {flow ? fmtDailyMoney("ILS", fcNum(flow.availableIlsForFx)) : "—"}
+                      {flow
+                        ? fmtDailyMoney("ILS", fcNum(resolveAvailableIlsForFx(flow, form)))
+                        : "—"}
                     </strong>
                   </div>
                 </div>
@@ -292,7 +326,7 @@ export function ManagerCountModal({
                     ) : null}
                   </label>
                   <p className="mc-hint">
-                    נוסחה: דולר PS + רכישת מט&quot;ח − עמלה $ = לטורקיה PS
+                    נוסחה: דולרים שנרכשו + עמלה PS = טורקיה PS
                   </p>
                 </div>
               </section>
@@ -395,7 +429,7 @@ export function ManagerCountModal({
           open={fxOpen}
           week={week}
           weekLabel={weekLabel}
-          availableIls={flow.availableIlsForFx}
+          availableIls={resolveAvailableIlsForFx(flow, form)}
           saving={saving}
           onClose={() => setFxOpen(false)}
           onSaved={handleFxSaved}

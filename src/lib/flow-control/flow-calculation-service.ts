@@ -46,6 +46,14 @@ export type FlowWeekCalculationInput = {
   fxPurchases: FxPurchaseRecord[];
   bankWithdrawalsIls?: number;
   bankDepositsIls?: number;
+  /** הקצאות בנק לרכישת מט״ח IL */
+  countedTransferIls?: number;
+  countedCreditIls?: number;
+  countedChecksIls?: number;
+  /** סה״כ תקבולים ₪ מקליטת תשלום */
+  totalReceiptsIls?: number;
+  /** תקבולי בנק ₪ (העברה+אשראי+צ'קים) מקליטת תשלום */
+  bankReceiptsIls?: number;
 };
 
 export type FlowWeekCalculationResult = {
@@ -54,6 +62,10 @@ export type FlowWeekCalculationResult = {
   cashUsdInDrawer: number;
   cashIlsInDrawer: number;
   bankBalanceIls: number;
+  /** רכישת מט״ח IL = העברות+צ'קים+אשראי */
+  ilFxPurchaseIls: number;
+  /** שקל שנשאר = תקבולים − FX PS − FX IL */
+  ilsRemainingAfterFx: number;
   turkey: TurkeyDebtResult;
   fxProfitLoss: FxProfitLossSummary;
   fxProfitLossHistory: FxProfitLossHistoryRow[];
@@ -203,7 +215,11 @@ export function computeFxUsdReceived(ilsAmount: number, rate: number): number {
   return round2(ilsAmount / rate);
 }
 
-/** כמה ₪ זמין לרכישת מט״ח */
+/**
+ * כמה ₪ זמין לרכישת מט״ח לפי ספירת מנהל (שקל PS) — לוג׳יקה ישנה.
+ * מקור האמת לתצוגת «זמין בקופה» / רכישת מט״ח הוא `computeIlsRemainingAfterFx`
+ * (תקבולים מקליטה − רכישות PS − רכישות IL), לא countedCashIls בלבד.
+ */
 export function computeAvailableIlsForFx(
   managerCashIls: number,
   expensesIls: number,
@@ -266,18 +282,83 @@ export function computeBankBalanceIls(
 }
 
 /**
- * לטורקיה PS מספירת קופה = דולר PS + דולר מרכישות מט״ח − עמלה $
+ * לטורקיה PS =
+ * דולרים שנרכשו (מט״ח) + עמלה PS
  */
 export function computeTurkeyAllocationFromCashCount(
-  countedCashUsd: number,
+  _countedCashUsd: number,
   fxUsdTotal: number,
   commissionUsd: number,
 ): number {
-  return Math.max(0, round2(countedCashUsd + fxUsdTotal - commissionUsd));
+  return Math.max(0, round2(fxUsdTotal + commissionUsd));
 }
 
 /** @deprecated — השתמש ב-computeTurkeyAllocationFromCashCount */
 export const computeTurkeyExpectedUsd = computeTurkeyAllocationFromCashCount;
+
+/**
+ * רכישת מט״ח IL =
+ * העברות IL + צ'קים IL + אשראי IL
+ * (כספי בנק שהוקצו לרכישת מט״ח)
+ */
+export function computeIlFxPurchaseIls(
+  countedTransferIls: number,
+  countedCreditIls: number,
+  countedChecksIls: number,
+): number {
+  return round2(
+    Math.max(0, countedTransferIls) + Math.max(0, countedCreditIls) + Math.max(0, countedChecksIls),
+  );
+}
+
+/** @deprecated — השם הישן; השתמש ב-computeIlFxPurchaseIls */
+export const computeBankPsTransferIls = computeIlFxPurchaseIls;
+
+/**
+ * שקל שנשאר =
+ * סה״כ תקבולים ₪ − רכישת מט״ח PS (₪) − רכישת מט״ח IL (₪)
+ */
+export function computeIlsRemainingAfterFx(
+  totalReceiptsIls: number,
+  fxPsIls: number,
+  fxIlIls: number,
+): number {
+  return round2(totalReceiptsIls - Math.max(0, fxPsIls) - Math.max(0, fxIlIls));
+}
+
+/**
+ * יתרה בקופה (מזומן) =
+ * שקל PS − הוצאות קופה ₪ − רכישת מט״ח PS (₪)
+ */
+export function computeCashDrawerIlsAfterPsFx(
+  countedCashIls: number,
+  expensesIls: number,
+  fxPsIls: number,
+): number {
+  return round2(countedCashIls - Math.max(0, expensesIls) - Math.max(0, fxPsIls));
+}
+
+/**
+ * יתרה בבנק =
+ * תקבולי בנק (העברה+אשראי+צ'קים) − רכישת מט״ח IL − משיכות + הפקדות
+ */
+export function computeBankBalanceAfterIlFx(
+  bankReceiptsIls: number,
+  ilFxPurchaseIls: number,
+  bankWithdrawalsIls = 0,
+  bankDepositsIls = 0,
+): number {
+  return round2(
+    bankReceiptsIls - Math.max(0, ilFxPurchaseIls) - bankWithdrawalsIls + bankDepositsIls,
+  );
+}
+
+/** תקבולי בנק ₪ מקליטה — העברה + אשראי + צ'קים */
+export function computeBankReceiptsIlsFromIntake(intake: CashDailyIntakeTotals): number {
+  return round2(
+    (intake.BANK_TRANSFER_ILS ?? 0) + (intake.CREDIT_CARD_ILS ?? 0) + (intake.CHECK_ILS ?? 0),
+  );
+}
 
 /** חוב לטורקיה = צפוי − בפועל */
 export function computeTurkeyDebtUsd(turkeyExpectedUsd: number, turkeyTransferUsd: number): number {
@@ -443,25 +524,34 @@ export function parseFxPurchasesJson(raw: unknown): FxPurchaseRecord[] {
 /** חישוב מלא לסיכום תזרים — חלק 3 */
 export function computeFlowWeekSummary(input: FlowWeekCalculationInput): FlowWeekCalculationResult {
   const fxTotals = sumFxPurchases(input.fxPurchases);
-  const availableIlsForFx = computeAvailableIlsForFx(
-    input.countedCashIls,
-    input.expensesIls,
-    input.fxPurchases,
+  const ilFxPurchaseIls = computeIlFxPurchaseIls(
+    input.countedTransferIls ?? 0,
+    input.countedCreditIls ?? 0,
+    input.countedChecksIls ?? 0,
   );
+  const bankBalanceIls = computeBankBalanceAfterIlFx(
+    input.bankReceiptsIls ?? 0,
+    ilFxPurchaseIls,
+    input.bankWithdrawalsIls ?? 0,
+    input.bankDepositsIls ?? 0,
+  );
+  /** שקל שנשאר = תקבולים − FX PS − FX IL — מקור אמת גם ל«זמין בקופה» ברכישת מט״ח */
+  const ilsRemainingAfterFx = computeIlsRemainingAfterFx(
+    input.totalReceiptsIls ?? 0,
+    fxTotals.ils,
+    ilFxPurchaseIls,
+  );
+  const availableIlsForFx = ilsRemainingAfterFx;
   const cashUsdInDrawer = computeCashUsdInDrawer(
     input.countedCashUsd,
     input.fxPurchases,
     input.actualTurkeyTransfersUsd,
   );
-  const cashIlsInDrawer = computeCashIlsInDrawer(
+  /** יתרה בקופה — מזומן אחרי הוצאות ורכישת מט״ח PS */
+  const cashIlsInDrawer = computeCashDrawerIlsAfterPsFx(
     input.countedCashIls,
     input.expensesIls,
-    input.fxPurchases,
-  );
-  const bankBalanceIls = computeBankBalanceIls(
-    input.fxPurchases,
-    input.bankWithdrawalsIls ?? 0,
-    input.bankDepositsIls ?? 0,
+    fxTotals.ils,
   );
   const turkey = computeTurkeyDebt({
     countedCashUsd: input.countedCashUsd,
@@ -478,6 +568,8 @@ export function computeFlowWeekSummary(input: FlowWeekCalculationInput): FlowWee
     cashUsdInDrawer,
     cashIlsInDrawer,
     bankBalanceIls,
+    ilFxPurchaseIls,
+    ilsRemainingAfterFx,
     turkey,
     fxProfitLoss,
     fxProfitLossHistory,

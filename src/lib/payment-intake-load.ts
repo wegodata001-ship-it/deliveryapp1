@@ -8,7 +8,7 @@ import {
   type OrderBreakdownMethodRow,
   type PaymentIntakeOrderRow,
 } from "@/lib/payment-intake";
-import { breakdownLineUsd, computeOrderMethodDeviation, isCompositePaymentMethod } from "@/lib/payment-breakdown-shared";
+import { computeOrderMethodDeviation, isCompositePaymentMethod, paymentMethodBucketKey } from "@/lib/payment-breakdown-shared";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 import type { PaymentIntakeCustomerPaymentRow } from "@/lib/payment-intake-customer-kpi";
 import { annotateIntakeOrderGroups, mergeIntakeOrdersById } from "@/lib/payment-intake-order-groups";
@@ -53,7 +53,14 @@ const INTAKE_ORDER_SELECT = {
   paymentMethod: true,
   createdAt: true,
   paymentBreakdown: {
-    select: { paymentMethod: true, amount: true, currency: true },
+    select: {
+      id: true,
+      paymentMethod: true,
+      amount: true,
+      currency: true,
+      paidAmount: true,
+      remainingAmount: true,
+    },
     orderBy: { createdAt: "asc" as const },
   },
 } satisfies Prisma.OrderSelect;
@@ -124,6 +131,8 @@ function mapOrderToIntakeRow(
   latestCodeByOrder: Map<string, string | null>,
   latestPaymentDateByOrder: Map<string, string | null>,
   actualByOrderMethod: Map<string, Map<string, number>>,
+  /** Legacy fallback: paid-by-currency:bucket from PaymentMethodAllocation */
+  allocByOrderBucketCur: Map<string, Map<string, number>>,
 ): PaymentIntakeOrderRow {
   const deal = o.amountUsd ?? new Prisma.Decimal(0);
   const com = o.commissionUsd ?? new Prisma.Decimal(0);
@@ -146,55 +155,73 @@ function mapOrderToIntakeRow(
   let breakdown: OrderBreakdownMethodRow[] = [];
   let hasMethodDeviation = false;
   if (o.paymentBreakdown.length > 0) {
-    const plannedByMethod = new Map<string, number>();
+    /**
+     * Matching Engine SSOT — סכומים במטבע המקורי של כל שורה.
+     * אין המרת ILS→USD ליתרות אמצעים. אין FIFO בטעינה.
+     */
+    const plannedEntries: Array<{
+      method: string;
+      currency: "USD" | "ILS";
+      planned: number;
+      paid: number;
+      remaining: number;
+    }> = [];
     for (const b of o.paymentBreakdown) {
-      const usd =
-        breakdownLineUsd(
-          { amount: b.amount.toString(), currency: b.currency === "ILS" ? "ILS" : "USD" },
-          rateN,
-        ) ?? 0;
-      plannedByMethod.set(b.paymentMethod, (plannedByMethod.get(b.paymentMethod) ?? 0) + usd);
+      const currency: "USD" | "ILS" = b.currency?.toUpperCase() === "ILS" ? "ILS" : "USD";
+      const planned = round2(Math.max(0, Number(b.amount.toString())));
+      const paidPersisted = Number(b.paidAmount?.toString?.() ?? b.paidAmount ?? 0);
+      const remPersisted =
+        b.remainingAmount != null
+          ? Number(b.remainingAmount.toString?.() ?? b.remainingAmount)
+          : null;
+      let paid = round2(Number.isFinite(paidPersisted) ? Math.max(0, paidPersisted) : 0);
+      let remaining =
+        remPersisted != null && Number.isFinite(remPersisted)
+          ? round2(Math.max(0, remPersisted))
+          : round2(Math.max(0, planned - paid));
+      plannedEntries.push({ method: b.paymentMethod, currency, planned, paid, remaining });
     }
 
-    // Build per-method paid amounts.
-    // Payments saved as a single COMPOSITE record are not tracked per-method in actualMap,
-    // which would cause every planned method to show full remaining even when paid in full.
-    // Fix: any paid amount not attributed to a specific planned method is distributed
-    // across planned methods in their declaration order (FIFO), so the correct method
-    // (e.g. Credit) retains its remaining balance while already-paid methods (Cash,
-    // Bank Transfer) show zero remaining.
-    const plannedEntries = [...plannedByMethod.entries()];
-    const directPaidByMethod = new Map<string, number>(
-      plannedEntries.map(([m]) => [m, actualMap.get(m) ?? 0]),
-    );
-    const knownAttributedSum = round2(
-      [...directPaidByMethod.values()].reduce((s, v) => s + v, 0),
-    );
-    // Payments attributed to non-planned methods (COMPOSITE, OTHER, etc.)
-    let unattributedPaidUsd = round2(Math.max(0, paidN - knownAttributedSum));
-    if (unattributedPaidUsd > 0.005) {
-      for (const [method, plannedUsd] of plannedEntries) {
-        const direct = directPaidByMethod.get(method) ?? 0;
-        const capacity = round2(Math.max(0, plannedUsd - direct));
-        const absorb = round2(Math.min(capacity, unattributedPaidUsd));
-        directPaidByMethod.set(method, round2(direct + absorb));
-        unattributedPaidUsd = round2(Math.max(0, unattributedPaidUsd - absorb));
-        if (unattributedPaidUsd <= 0.005) break;
+    // Legacy seed: רק כשאין paidAmount — מייחסים לפי PaymentMethodAllocation לפי מטבע
+    const persistedPaidSum = round2(plannedEntries.reduce((s, e) => s + e.paid, 0));
+    if (persistedPaidSum <= 0.005 && paidN > 0.005) {
+      const byBucketCur = allocByOrderBucketCur.get(o.id);
+      if (byBucketCur && byBucketCur.size > 0) {
+        for (const e of plannedEntries) {
+          const bucket = paymentMethodBucketKey(e.method);
+          const key = `${e.currency}:${bucket}`;
+          const paid = round2(byBucketCur.get(key) ?? 0);
+          e.paid = paid;
+          e.remaining = round2(Math.max(0, e.planned - paid));
+        }
       }
     }
 
-    breakdown = plannedEntries.map(([method, plannedUsd]) => {
-      const paid = directPaidByMethod.get(method) ?? 0;
+    breakdown = plannedEntries.map((e) => {
+      const asUsd =
+        e.currency === "ILS" && rateN > 0 ? round2(e.planned / rateN) : e.planned;
+      const paidAsUsd =
+        e.currency === "ILS" && rateN > 0 ? round2(e.paid / rateN) : e.paid;
+      const remAsUsd =
+        e.currency === "ILS" && rateN > 0 ? round2(e.remaining / rateN) : e.remaining;
       return {
-        method,
-        label: PAYMENT_METHOD_LABELS[method] ?? method,
-        plannedUsd: round2(plannedUsd),
-        paidUsd: round2(paid),
-        remainingUsd: Math.max(0, round2(plannedUsd - paid)),
+        method: e.method,
+        label: PAYMENT_METHOD_LABELS[e.method] ?? e.method,
+        currency: e.currency,
+        planned: e.planned,
+        paid: e.paid,
+        remaining: e.remaining,
+        // תאימות לשערים/גשרים ישנים שעדיין מצפים ל-USD
+        plannedUsd: asUsd,
+        paidUsd: paidAsUsd,
+        remainingUsd: remAsUsd,
       };
     });
     hasMethodDeviation = computeOrderMethodDeviation(
-      plannedEntries.map(([method, usd]) => ({ method, usd })),
+      plannedEntries.map((e) => ({
+        method: e.method,
+        usd: e.currency === "ILS" && rateN > 0 ? e.planned / rateN : e.planned,
+      })),
       actualMethods.map((a) => ({ method: a.method, usd: a.usd })),
     ).hasDeviation;
   }
@@ -238,6 +265,7 @@ async function attachPaymentsAndMapRows(
         where: { orderId: { in: orderIds } },
         orderBy: [{ paymentDate: "desc" }, { createdAt: "desc" }],
         select: {
+          id: true,
           orderId: true,
           paymentCode: true,
           paymentDate: true,
@@ -255,8 +283,11 @@ async function attachPaymentsAndMapRows(
     for (const s of sums) {
       if (s.orderId) paidByOrder.set(s.orderId, s._sum?.amountUsd ?? new Prisma.Decimal(0));
     }
+
+    const paymentIdToOrderId = new Map<string, string>();
     for (const p of payRows) {
       if (!p.orderId) continue;
+      paymentIdToOrderId.set(p.id, p.orderId);
       if (!latestCodeByOrder.has(p.orderId)) {
         latestCodeByOrder.set(p.orderId, p.paymentCode?.trim() || null);
         const dt = p.paymentDate ?? p.createdAt;
@@ -275,8 +306,45 @@ async function attachPaymentsAndMapRows(
       byMethod.set(method, (byMethod.get(method) ?? 0) + amt);
     }
 
+    const allocByOrderBucketCur = new Map<string, Map<string, number>>();
+    const activePaymentIds = [...paymentIdToOrderId.keys()].filter((pid) => {
+      const p = payRows.find((x) => x.id === pid);
+      return p && String(p.status) === "ACTIVE";
+    });
+    if (activePaymentIds.length > 0) {
+      const allocRows = await prisma.paymentMethodAllocation.findMany({
+        where: { paymentId: { in: activePaymentIds } },
+        select: { paymentId: true, method: true, currency: true, sourceAmount: true, amountUsd: true },
+      });
+      for (const a of allocRows) {
+        const orderId = paymentIdToOrderId.get(a.paymentId);
+        if (!orderId) continue;
+        const cur = a.currency?.toUpperCase() === "ILS" ? "ILS" : "USD";
+        const bucket = paymentMethodBucketKey(a.method);
+        const amt =
+          cur === "ILS"
+            ? Number(a.sourceAmount.toString())
+            : Number(a.amountUsd.toString());
+        if (!Number.isFinite(amt) || amt <= 0) continue;
+        let byBucket = allocByOrderBucketCur.get(orderId);
+        if (!byBucket) {
+          byBucket = new Map<string, number>();
+          allocByOrderBucketCur.set(orderId, byBucket);
+        }
+        const key = `${cur}:${bucket}`;
+        byBucket.set(key, Math.round(((byBucket.get(key) ?? 0) + amt) * 100) / 100);
+      }
+    }
+
     const rows = orders.map((o) => ({
-      ...mapOrderToIntakeRow(o, paidByOrder, latestCodeByOrder, latestPaymentDateByOrder, actualByOrderMethod),
+      ...mapOrderToIntakeRow(
+        o,
+        paidByOrder,
+        latestCodeByOrder,
+        latestPaymentDateByOrder,
+        actualByOrderMethod,
+        allocByOrderBucketCur,
+      ),
       paymentPlan: planByOrder.get(o.id) ?? null,
     }));
 
@@ -320,6 +388,22 @@ export async function loadPaymentIntakeOrdersForCustomer(
   });
 
   const rows = await attachPaymentsAndMapRows(mergedOrders, intakeWeekCode);
+
+  void (async () => {
+    try {
+      const { financeIntakeParityEnabled, runPaymentIntakeParity } = await import(
+        "@/lib/finance-data/parity/payment-intake-parity"
+      );
+      if (!financeIntakeParityEnabled()) return;
+      const { toLegacyParityOrders } = await import("@/lib/payment-intake-parity-adapter");
+      await runPaymentIntakeParity({
+        customerId: cid,
+        legacyOrders: toLegacyParityOrders(rows),
+      });
+    } catch (err) {
+      console.error("[finance-intake-parity] failed", err);
+    }
+  })();
 
   return { ok: true, orders: rows };
 }

@@ -64,10 +64,42 @@ export type ShipmentBatchDto = {
   distributionStartDate: string | null;
   notes: string | null;
   createdAt: string;
+  /** מספר שורות חבילה/לקוח באצווה */
   recordCount: number;
+  /** סה״כ קרטונים/חבילות (boxes) */
+  boxesSum: number;
   paidCount: number;
   unpaidCount: number;
   totalFeeIls: number;
+  /** סה״כ סכומי הזמנה בדולר */
+  totalOrderUsd: number;
+  totalPaidIls: number;
+  totalRemainingIls: number;
+  /** שבוע AH מחושב מתאריך יציאה / הגעה */
+  weekCode: string | null;
+  zoneIds: string[];
+  courierIds: string[];
+  paymentStatuses: ShipmentPaymentStatus[];
+  /** טקסט מאוחד לחיפוש חכם (מספר משלוח, לקוחות, טלפון, כתובת) */
+  searchText: string;
+};
+
+export type UpdateShipmentBatchInput = {
+  batchId: string;
+  sourceShipmentNumber?: string | null;
+  containerNumber?: string | null;
+  totalBoxes?: number | null;
+  totalWeight?: number | null;
+  shippingDate?: string | null;
+  arrivalDate?: string | null;
+  releaseDate?: string | null;
+  warehouseReceiptDate?: string | null;
+  distributionStartDate?: string | null;
+  notes?: string | null;
+  /** אם מוגדר — משייך את כל החבילות באצווה לאזור (null = ניקוי) */
+  applyZoneId?: string | null;
+  /** אם מוגדר — משייך את כל החבילות באצווה לשליח (null = ניקוי) */
+  applyCourierId?: string | null;
 };
 
 export type ShipmentZoneDto = {
@@ -186,6 +218,10 @@ export type CreateBatchInput = {
   warehouseReceiptDate?: string;
   distributionStartDate?: string;
   notes?: string;
+  /** אזור ברירת מחדל לכל החבילות שנוצרות עם המשלוח */
+  defaultZoneId?: string;
+  /** שליח ברירת מחדל לכל החבילות שנוצרות עם המשלוח */
+  defaultCourierId?: string;
   rows: ExcelShipmentPreviewRow[];
 };
 

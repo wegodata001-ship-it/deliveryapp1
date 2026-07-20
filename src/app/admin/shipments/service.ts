@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { getAhWeekByDate } from "@/lib/weeks/ah-week";
 import type {
   ShipmentBatchDto,
   ShipmentRecordDto,
@@ -14,6 +15,7 @@ import type {
   ShipmentPaymentStatus,
   ShipmentPaymentDetails,
   UpdateShipmentRecordInput,
+  UpdateShipmentBatchInput,
 } from "@/app/admin/shipments/types";
 import { PAYMENT_METHOD_LABELS, PAYMENT_METHODS } from "@/app/admin/shipments/types";
 
@@ -175,6 +177,17 @@ export async function listShipmentBatches(): Promise<ShipmentBatchDto[]> {
           id: true,
           paymentStatus: true,
           deliveryFeeIls: true,
+          boxes: true,
+          orderAmount: true,
+          orderCurrency: true,
+          zoneId: true,
+          courierId: true,
+          customerCode: true,
+          customerName: true,
+          customerPhone: true,
+          address: true,
+          city: true,
+          payments: { select: { amountIls: true } },
         },
       },
     },
@@ -185,6 +198,41 @@ export async function listShipmentBatches(): Promise<ShipmentBatchDto[]> {
     const paidCount = records.filter((r) => r.paymentStatus === "PAID").length;
     const unpaidCount = records.filter((r) => r.paymentStatus !== "PAID").length;
     const totalFeeIls = records.reduce((s, r) => s + (r.deliveryFeeIls?.toNumber() ?? 0), 0);
+    const boxesSum = records.reduce((s, r) => s + (r.boxes ?? 0), 0);
+    let totalOrderUsd = 0;
+    let totalPaidIls = 0;
+    for (const r of records) {
+      const paid = r.payments.reduce((s, p) => s + p.amountIls.toNumber(), 0);
+      totalPaidIls += paid;
+      const amt = r.orderAmount?.toNumber() ?? 0;
+      const cur = (r.orderCurrency ?? "USD").toUpperCase();
+      if (amt > 0 && (cur === "USD" || cur === "UNKNOWN" || !r.orderCurrency)) {
+        totalOrderUsd += amt;
+      }
+    }
+    const totalRemainingIls = Math.max(0, totalFeeIls - totalPaidIls);
+    const zoneIds = [...new Set(records.map((r) => r.zoneId).filter(Boolean))] as string[];
+    const courierIds = [...new Set(records.map((r) => r.courierId).filter(Boolean))] as string[];
+    const paymentStatuses = [...new Set(records.map((r) => r.paymentStatus))] as ShipmentPaymentStatus[];
+    const weekCode = weekCodeFromBatchDates(toDateStr(b.shippingDate), toDateStr(b.arrivalDate));
+    const searchText = [
+      b.batchNumber,
+      b.sourceShipmentNumber,
+      b.containerNumber,
+      b.notes,
+      weekCode,
+      ...records.flatMap((r) => [
+        r.customerCode,
+        r.customerName,
+        r.customerPhone,
+        r.address,
+        r.city,
+      ]),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLocaleLowerCase();
+
     return {
       id: b.id,
       batchNumber: b.batchNumber,
@@ -200,11 +248,27 @@ export async function listShipmentBatches(): Promise<ShipmentBatchDto[]> {
       notes: b.notes,
       createdAt: b.createdAt.toISOString(),
       recordCount: records.length,
+      boxesSum: boxesSum > 0 ? boxesSum : b.totalBoxes ?? records.length,
       paidCount,
       unpaidCount,
       totalFeeIls,
+      totalOrderUsd: Math.round(totalOrderUsd * 100) / 100,
+      totalPaidIls: Math.round(totalPaidIls * 100) / 100,
+      totalRemainingIls: Math.round(totalRemainingIls * 100) / 100,
+      weekCode,
+      zoneIds,
+      courierIds,
+      paymentStatuses,
+      searchText,
     };
   });
+}
+
+function weekCodeFromBatchDates(shipping: string | null, arrival: string | null): string | null {
+  const ymd = (shipping ?? arrival)?.slice(0, 10);
+  if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return null;
+  const [y, m, d] = ymd.split("-").map(Number);
+  return getAhWeekByDate(new Date(Date.UTC(y, m - 1, d, 12))).code;
 }
 
 export async function createShipmentBatch(
@@ -212,6 +276,23 @@ export async function createShipmentBatch(
   createdById: string
 ): Promise<string> {
   const batchNumber = await nextBatchNumber();
+
+  const defaultCourier = input.defaultCourierId
+    ? await prisma.shipmentCourier.findUnique({
+        where: { id: input.defaultCourierId },
+        select: { id: true, name: true, isActive: true },
+      })
+    : null;
+  if (input.defaultCourierId && (!defaultCourier || !defaultCourier.isActive)) {
+    throw new Error("לא ניתן לשייך שליח מושבת או לא קיים");
+  }
+  if (input.defaultZoneId) {
+    const zone = await prisma.shipmentDeliveryZone.findUnique({
+      where: { id: input.defaultZoneId },
+      select: { id: true, isActive: true },
+    });
+    if (!zone || !zone.isActive) throw new Error("לא ניתן לשייך אזור מושבת או לא קיים");
+  }
 
   const batch = await prisma.shipmentBatch.create({
     data: {
@@ -252,6 +333,9 @@ export async function createShipmentBatch(
         deliveryFeeAmount: null,
         deliveryFeeCurrency: "ILS",
         deliveryFeeIls: null,
+        zoneId: input.defaultZoneId ?? null,
+        courierId: defaultCourier?.id ?? null,
+        courierName: defaultCourier?.name ?? null,
         notes: r.notes ?? null,
         status: "NEW" as const,
         paymentStatus: "UNPAID" as const,
@@ -262,12 +346,105 @@ export async function createShipmentBatch(
   return batch.id;
 }
 
+export async function updateShipmentBatch(input: UpdateShipmentBatchInput): Promise<void> {
+  const data: Record<string, unknown> = {};
+  if (input.sourceShipmentNumber !== undefined) data.sourceShipmentNumber = input.sourceShipmentNumber;
+  if (input.containerNumber !== undefined) data.containerNumber = input.containerNumber;
+  if (input.totalBoxes !== undefined) data.totalBoxes = input.totalBoxes;
+  if (input.totalWeight !== undefined) data.totalWeight = input.totalWeight;
+  if (input.shippingDate !== undefined) {
+    data.shippingDate = input.shippingDate ? new Date(input.shippingDate) : null;
+  }
+  if (input.arrivalDate !== undefined) {
+    data.arrivalDate = input.arrivalDate ? new Date(input.arrivalDate) : null;
+  }
+  if (input.releaseDate !== undefined) {
+    data.releaseDate = input.releaseDate ? new Date(input.releaseDate) : null;
+  }
+  if (input.warehouseReceiptDate !== undefined) {
+    data.warehouseReceiptDate = input.warehouseReceiptDate
+      ? new Date(input.warehouseReceiptDate)
+      : null;
+  }
+  if (input.distributionStartDate !== undefined) {
+    data.distributionStartDate = input.distributionStartDate
+      ? new Date(input.distributionStartDate)
+      : null;
+  }
+  if (input.notes !== undefined) data.notes = input.notes;
+
+  await prisma.shipmentBatch.update({
+    where: { id: input.batchId },
+    data: data as Parameters<typeof prisma.shipmentBatch.update>[0]["data"],
+  });
+
+  if (input.applyZoneId !== undefined || input.applyCourierId !== undefined) {
+    const records = await prisma.shipmentRecord.findMany({
+      where: { batchId: input.batchId },
+      select: { id: true },
+    });
+    const recordIds = records.map((r) => r.id);
+    if (recordIds.length > 0) {
+      if (input.applyZoneId !== undefined) {
+        await assignZone({ recordIds, zoneId: input.applyZoneId });
+      }
+      if (input.applyCourierId !== undefined) {
+        await assignCourier({ recordIds, courierId: input.applyCourierId });
+      }
+    }
+  }
+}
+
+export async function getShipmentBatch(batchId: string): Promise<ShipmentBatchDto | null> {
+  const all = await listShipmentBatches();
+  return all.find((b) => b.id === batchId) ?? null;
+}
+
+/** מחיקת אצוות משלוח (כולל חבילות ותשלומים) — ללא שינוי סכמה */
+export async function deleteShipmentBatches(batchIds: string[]): Promise<number> {
+  const ids = [...new Set(batchIds.map((id) => id.trim()).filter(Boolean))];
+  if (ids.length === 0) return 0;
+
+  const records = await prisma.shipmentRecord.findMany({
+    where: { batchId: { in: ids } },
+    select: { id: true },
+  });
+  const recordIds = records.map((r) => r.id);
+
+  await prisma.$transaction(async (tx) => {
+    if (recordIds.length > 0) {
+      await tx.shipmentPaymentLine.deleteMany({ where: { shipmentRecordId: { in: recordIds } } });
+      await tx.shipmentRecord.deleteMany({ where: { id: { in: recordIds } } });
+    }
+    await tx.shipmentBatch.deleteMany({ where: { id: { in: ids } } });
+  });
+
+  return ids.length;
+}
+
 // ─── Records ─────────────────────────────────────────────────────────────────
 
 export async function listShipmentRecords(batchId: string): Promise<ShipmentRecordDto[]> {
   const records = await prisma.shipmentRecord.findMany({
     where: { batchId },
     orderBy: { rowIndex: "asc" },
+    include: {
+      batch: { select: { batchNumber: true } },
+      zone: { select: { name: true } },
+      courier: { select: { name: true } },
+      payments: { orderBy: { createdAt: "asc" } },
+    },
+  });
+  const userNames = await loadPaymentUserNames(records);
+  return records.map((record) => mapRecord(record, userNames));
+}
+
+export async function listShipmentRecordsByBatchIds(batchIds: string[]): Promise<ShipmentRecordDto[]> {
+  const ids = [...new Set(batchIds.map((id) => id.trim()).filter(Boolean))];
+  if (ids.length === 0) return [];
+  const records = await prisma.shipmentRecord.findMany({
+    where: { batchId: { in: ids } },
+    orderBy: [{ batchId: "asc" }, { rowIndex: "asc" }],
     include: {
       batch: { select: { batchNumber: true } },
       zone: { select: { name: true } },

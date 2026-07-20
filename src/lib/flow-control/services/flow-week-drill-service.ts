@@ -47,6 +47,7 @@ export async function loadFlowWeekDrill(week: string): Promise<FlowWeekDrillPayl
         amountWithoutVat: true,
         totalIlsWithoutVat: true,
         totalIlsWithVat: true,
+        intakeDate: true,
         paymentDate: true,
         createdAt: true,
       },

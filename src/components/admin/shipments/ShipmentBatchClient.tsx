@@ -12,6 +12,7 @@ import {
   Filter,
   CheckSquare,
   Square,
+  Edit2,
 } from "lucide-react";
 import type {
   ShipmentBatchDto,
@@ -20,9 +21,9 @@ import type {
   ShipmentZoneDto,
   ShipmentStatus,
   UpdateShipmentRecordInput,
+  UpdateShipmentBatchInput,
 } from "@/app/admin/shipments/types";
 import {
-  SHIPMENT_STATUS_LABELS,
   SHIPMENT_PAYMENT_STATUS_LABELS,
 } from "@/app/admin/shipments/types";
 import {
@@ -32,11 +33,13 @@ import {
   updateShipmentRecordAction,
   listShipmentRecordsAction,
   createZoneAction,
-  createCourierAction,
+  updateShipmentBatchAction,
+  getShipmentBatchAction,
 } from "@/app/admin/shipments/actions";
 import { ShipmentPaymentModal } from "@/components/admin/shipments/ShipmentPaymentModal";
 import { InlineAutocompleteCell } from "@/components/admin/shipments/InlineAutocompleteCell";
 import { InlineValueCell } from "@/components/admin/shipments/InlineValueCell";
+import { SyncedTableScroll } from "@/components/admin/shipments/SyncedTableScroll";
 
 type Props = {
   batch: ShipmentBatchDto;
@@ -55,11 +58,6 @@ const STATUS_OPTIONS: { value: ShipmentStatus; label: string }[] = [
   { value: "RETURNED", label: "חזר למחסן" },
   { value: "COMPLETED", label: "הושלם" },
 ];
-
-function StatusBadge({ status }: { status: ShipmentStatus }) {
-  const cls = `shp-badge shp-badge--${status.toLowerCase()}`;
-  return <span className={cls}>{SHIPMENT_STATUS_LABELS[status]}</span>;
-}
 
 function PayStatusBadge({ status }: { status: "UNPAID" | "PARTIAL" | "PAID" }) {
   const cls = `shp-badge shp-badge--${status.toLowerCase()}`;
@@ -81,28 +79,35 @@ function fmtDeliveryFee(record: ShipmentRecordDto) {
   })}${suffix}`;
 }
 
-function fmtOrderAmount(record: ShipmentRecordDto) {
-  if (record.orderAmount == null) return "—";
-  const symbol: Record<string, string> = { ILS: "₪", USD: "$", EUR: "€", TRY: "₺", GBP: "£" };
-  const currency = record.orderCurrency ?? "UNKNOWN";
-  const suffix = currency === "UNKNOWN" ? ` ${currency}` : "";
-  return `${symbol[currency] ?? ""}${record.orderAmount.toLocaleString("he-IL", {
-    maximumFractionDigits: 4,
-  })}${suffix}`;
-}
-
 function formatDate(iso: string | null) {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString("he-IL");
 }
 
+function formatPaymentDate(record: ShipmentRecordDto): string {
+  if (!record.payments.length) return "—";
+  const last = record.payments[record.payments.length - 1];
+  const raw = last.details?.paymentDate || last.createdAt;
+  return formatDate(raw);
+}
+
+function formatAddress(record: ShipmentRecordDto): string {
+  const parts = [record.address, record.city].filter(Boolean);
+  return parts.length ? parts.join(", ") : "—";
+}
+
+function batchShipmentLabel(batch: ShipmentBatchDto): string {
+  return batch.containerNumber || batch.sourceShipmentNumber || batch.batchNumber;
+}
+
 export function ShipmentBatchClient({
-  batch,
+  batch: initialBatch,
   initialRecords,
   initialZones,
   initialCouriers,
 }: Props) {
   const router = useRouter();
+  const [batch, setBatch] = useState(initialBatch);
   const [records, setRecords] = useState<ShipmentRecordDto[]>(initialRecords);
   const [zones, setZones] = useState<ShipmentZoneDto[]>(initialZones);
   const [couriers, setCouriers] = useState<ShipmentCourierDto[]>(initialCouriers);
@@ -111,6 +116,8 @@ export function ShipmentBatchClient({
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [paymentRecord, setPaymentRecord] = useState<ShipmentRecordDto | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
 
   // Filters
   const [filterStatus, setFilterStatus] = useState("");
@@ -227,26 +234,6 @@ export function ShipmentBatchClient({
     return true;
   }
 
-  async function handleRowCourier(
-    recordId: string,
-    courier: { id: string; name: string } | null,
-  ): Promise<boolean> {
-    const courierId = courier?.id ?? null;
-    const result = await assignCourierAction({ recordIds: [recordId], courierId });
-    if (!result.ok) {
-      setError(result.error);
-      clearMsg();
-      return false;
-    }
-    setRecords((prev) => prev.map((r) =>
-      r.id === recordId
-        ? { ...r, courierId, courierName: courier?.name ?? null }
-        : r
-    ));
-    showSaved();
-    return true;
-  }
-
   async function handleRowStatus(recordId: string, status: ShipmentStatus) {
     const result = await updateShipmentStatusAction({ recordIds: [recordId], status });
     if (!result.ok) {
@@ -297,20 +284,6 @@ export function ShipmentBatchClient({
     return result.zone;
   }
 
-  async function quickAddCourier(name: string) {
-    const result = await createCourierAction(name);
-    if (!result.ok) {
-      setError(result.error);
-      clearMsg();
-      return null;
-    }
-    setCouriers((previous) => {
-      const without = previous.filter((courier) => courier.id !== result.courier.id);
-      return [...without, result.courier];
-    });
-    return result.courier;
-  }
-
   function handlePaymentSaved(updated: ShipmentRecordDto) {
     setRecords((prev) => prev.map((r) => r.id === updated.id ? updated : r));
     setPaymentRecord(updated);
@@ -337,10 +310,15 @@ export function ShipmentBatchClient({
           {batch.containerNumber && (
             <div style={{ fontSize: "0.8rem", color: "#64748b", marginTop: 2 }}>
               קונטיינר: {batch.containerNumber}
+              {batch.weekCode ? ` · ${batch.weekCode}` : ""}
             </div>
           )}
         </div>
         <div className="shp-header-actions">
+          <button className="shp-btn shp-btn--secondary shp-btn--sm" onClick={() => setEditOpen(true)}>
+            <Edit2 size={14} />
+            עריכת פרטי משלוח
+          </button>
           <button className="shp-btn shp-btn--secondary shp-btn--sm" onClick={refresh} disabled={loading}>
             <RefreshCw size={14} className={loading ? "shp-spinner--dark" : ""} />
             רענון
@@ -352,7 +330,7 @@ export function ShipmentBatchClient({
       <div className="shp-stats">
         <div className="shp-stat-card">
           <div className="shp-stat-card__value">{records.length}</div>
-          <div className="shp-stat-card__label">משלוחים</div>
+          <div className="shp-stat-card__label">חבילות / לקוחות</div>
         </div>
         <div className="shp-stat-card">
           <div className="shp-stat-card__value">{paidCount}</div>
@@ -448,216 +426,163 @@ export function ShipmentBatchClient({
       )}
 
       {/* Main table */}
-      <div className="shp-table-wrap">
+      <SyncedTableScroll>
         <table className="shp-table shp-batch-table">
           <thead>
             <tr>
               <th className="shp-col-check" onClick={toggleAll} style={{ cursor: "pointer" }}>
                 {allSelected ? <CheckSquare size={15} /> : <Square size={15} />}
               </th>
-              <th>#</th>
-              <th className="shp-col-customer">לקוח</th>
-              <th>טלפון</th>
+              <th className="shp-col-arrival">תאריך הגעה</th>
+              <th className="shp-col-shipment-no">מספר משלוח</th>
+              <th className="shp-col-code">קוד לקוח</th>
+              <th className="shp-col-customer">שם לקוח</th>
+              <th className="shp-col-phone">טלפון</th>
               <th className="shp-col-address">כתובת</th>
-              <th>עיר</th>
-              <th>קרטונים</th>
-              <th>משקל</th>
-              <th className="shp-col-money">סכום הזמנה</th>
-              <th className="shp-col-money">דמי משלוח</th>
-              <th className="shp-col-money">סכום שנגבה</th>
-              <th className="shp-col-money">יתרה לגבייה</th>
-              <th className="shp-col-payment">תשלום</th>
-              <th>סטטוס תשלום</th>
-              <th className="shp-col-zone">אזור</th>
-              <th className="shp-col-courier">שליח</th>
-              <th className="shp-col-notes">הערות</th>
+              <th className="shp-col-zone">אזור חלוקה</th>
+              <th className="shp-col-boxes">חבילות</th>
+              <th className="shp-col-fee">דמי משלוח</th>
+              <th className="shp-col-pay-date">תאריך רישום</th>
               <th className="shp-col-status">סטטוס</th>
+              <th className="shp-col-pay-status">סטטוס תשלום</th>
             </tr>
           </thead>
           <tbody>
             {filteredRecords.length === 0 && (
               <tr>
-                <td colSpan={18} style={{ textAlign: "center", padding: "40px", color: "#94a3b8" }}>
+                <td colSpan={13} style={{ textAlign: "center", padding: "40px", color: "#94a3b8" }}>
                   אין שורות להצגה
                 </td>
               </tr>
             )}
-            {filteredRecords.map((r) => (
-              <tr key={r.id} className={selected.has(r.id) ? "shp-row--selected" : ""}>
-                <td className="shp-col-check">
-                  <input
-                    type="checkbox"
-                    checked={selected.has(r.id)}
-                    onChange={() => toggleSelect(r.id)}
-                  />
-                </td>
-                <td style={{ color: "#64748b", fontSize: "0.75rem" }}>{r.rowIndex}</td>
-                <td className="shp-col-customer" style={{ fontWeight: 600 }}>{r.customerName || "—"}</td>
-                <td style={{ direction: "ltr", textAlign: "right" }}>{r.customerPhone || "—"}</td>
-                <td className="shp-col-address">{r.address || "—"}</td>
-                <td>{r.city || "—"}</td>
-                <td style={{ textAlign: "center" }}>
-                  <InlineValueCell
-                    value={r.boxes}
-                    type="number"
-                    min={0}
-                    step={1}
-                    onSave={(value) =>
-                      saveRecordPatch(
-                        r.id,
-                        { boxes: value as number | null },
-                        { boxes: value as number | null },
-                      )
-                    }
-                  />
-                </td>
-                <td style={{ textAlign: "center" }}>
-                  <InlineValueCell
-                    value={r.weight}
-                    type="number"
-                    min={0}
-                    step={0.001}
-                    suffix=" ק״ג"
-                    onSave={(value) =>
-                      saveRecordPatch(
-                        r.id,
-                        { weight: value as number | null },
-                        { weight: value as number | null },
-                      )
-                    }
-                  />
-                </td>
-                <td className="shp-readonly-money shp-col-money" title="סכום ההזמנה מהקובץ — לקריאה בלבד">
-                  {fmtOrderAmount(r)}
-                </td>
-                <td className="shp-col-money" style={{ fontWeight: 600, color: "#1d4ed8" }}>
-                  <InlineValueCell
-                    value={r.deliveryFeeAmount ?? r.deliveryFeeIls}
-                    type="number"
-                    min={0}
-                    step={0.01}
-                    format={() => fmtDeliveryFee(r)}
-                    onSave={(value) => {
-                      const amount = value as number | null;
-                      const currency = r.deliveryFeeCurrency ?? "ILS";
-                      const paymentStatus =
-                        currency !== "ILS" || amount == null || amount <= 0
-                          ? "UNPAID"
-                          : r.paidAmountIls >= amount
-                            ? "PAID"
-                            : r.paidAmountIls > 0
-                              ? "PARTIAL"
-                              : "UNPAID";
-                      return saveRecordPatch(
-                        r.id,
-                        { deliveryFeeAmount: amount, deliveryFeeCurrency: currency },
-                        {
-                          deliveryFeeAmount: amount,
-                          deliveryFeeCurrency: currency,
-                          deliveryFeeIls: currency === "ILS" ? amount : null,
-                          remainingFeeIls:
-                            currency === "ILS"
-                              ? Math.max(0, (amount ?? 0) - r.paidAmountIls)
-                              : 0,
-                          paymentStatus,
-                        },
-                      );
-                    }}
-                  />
-                </td>
-                <td className="shp-col-money" style={{ color: "#15803d", fontWeight: 600 }}>{fmtIls(r.paidAmountIls)}</td>
-                <td className="shp-col-money" style={{ color: r.remainingFeeIls > 0 ? "#dc2626" : "#15803d", fontWeight: 600 }}>
-                  {fmtIls(r.remainingFeeIls)}
-                </td>
-
-                {/* Payment button */}
-                <td className="shp-col-payment">
-                  <button
-                    className="shp-btn shp-btn--sm shp-btn--primary"
-                    onClick={() => setPaymentRecord(r)}
-                    disabled={
-                      (r.deliveryFeeAmount ?? r.deliveryFeeIls ?? 0) <= 0 ||
-                      (r.deliveryFeeCurrency !== "ILS" &&
-                        !(r.deliveryFeeCurrency == null && r.deliveryFeeIls != null))
-                    }
-                    title={
-                      (r.deliveryFeeAmount ?? r.deliveryFeeIls ?? 0) <= 0
-                        ? "יש להזין דמי משלוח בעמודת 'דמי משלוח' לפני הגבייה"
-                        : r.deliveryFeeCurrency !== "ILS" &&
-                          !(r.deliveryFeeCurrency == null && r.deliveryFeeIls != null)
-                          ? "קליטת התשלום הנוכחית זמינה לדמי משלוח בש״ח בלבד"
-                          : undefined
-                    }
-                  >
-                    <Banknote size={13} />
-                    {(r.deliveryFeeAmount ?? r.deliveryFeeIls ?? 0) <= 0
-                      ? "הגדר דמי משלוח"
-                      : r.deliveryFeeCurrency !== "ILS" &&
-                    !(r.deliveryFeeCurrency == null && r.deliveryFeeIls != null)
-                      ? "מטבע זר"
-                      : r.paymentStatus === "PAID"
-                        ? "✅ שולם"
-                        : r.paymentStatus === "PARTIAL"
-                          ? "🟡 שולם חלקית"
-                          : "לא שולם"}
-                  </button>
-                </td>
-
-                <td><PayStatusBadge status={r.paymentStatus} /></td>
-
-                <td className="shp-col-zone">
-                  <InlineAutocompleteCell
-                    valueId={r.zoneId}
-                    valueName={r.zoneName}
-                    options={zones}
-                    placeholder="בחר אזור..."
-                    entityLabel="אזור"
-                    onSelect={(option) => handleRowZone(r.id, option)}
-                    onCreate={quickAddZone}
-                  />
-                </td>
-
-                <td className="shp-col-courier">
-                  <InlineAutocompleteCell
-                    valueId={r.courierId}
-                    valueName={r.courierName}
-                    options={couriers}
-                    placeholder="בחר שליח..."
-                    entityLabel="שליח"
-                    onSelect={(option) => handleRowCourier(r.id, option)}
-                    onCreate={quickAddCourier}
-                  />
-                </td>
-
-                <td className="shp-col-notes">
-                  <InlineValueCell
-                    value={r.notes}
-                    placeholder="הוסף הערה..."
-                    onSave={(value) =>
-                      saveRecordPatch(
-                        r.id,
-                        { notes: value as string | null },
-                        { notes: value as string | null },
-                      )
-                    }
-                  />
-                </td>
-
-                {/* Status select */}
-                <td className="shp-col-status">
-                  <select
-                    className="shp-inline-select"
-                    value={r.status}
-                    onChange={(e) => handleRowStatus(r.id, e.target.value as ShipmentStatus)}
-                  >
-                    {STATUS_OPTIONS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-                  </select>
-                </td>
-              </tr>
-            ))}
+            {filteredRecords.map((r) => {
+              const feeAmount = r.deliveryFeeAmount ?? r.deliveryFeeIls ?? 0;
+              const feeIsIls =
+                r.deliveryFeeCurrency === "ILS" ||
+                (r.deliveryFeeCurrency == null && r.deliveryFeeIls != null) ||
+                r.deliveryFeeCurrency == null;
+              const canCollect = feeAmount > 0 && feeIsIls;
+              return (
+                <tr key={r.id} className={selected.has(r.id) ? "shp-row--selected" : ""}>
+                  <td className="shp-col-check">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(r.id)}
+                      onChange={() => toggleSelect(r.id)}
+                    />
+                  </td>
+                  <td className="shp-col-arrival">{formatDate(batch.arrivalDate)}</td>
+                  <td className="shp-col-shipment-no">
+                    <strong>{batchShipmentLabel(batch)}</strong>
+                    <span className="shp-muted" style={{ display: "block", fontSize: "0.7rem" }}>
+                      {batch.batchNumber}
+                    </span>
+                  </td>
+                  <td className="shp-col-code">{r.customerCode || "—"}</td>
+                  <td className="shp-col-customer">{r.customerName || "—"}</td>
+                  <td className="shp-col-phone">{r.customerPhone || "—"}</td>
+                  <td className="shp-col-address" title={formatAddress(r)}>
+                    {formatAddress(r)}
+                  </td>
+                  <td className="shp-col-zone">
+                    <InlineAutocompleteCell
+                      valueId={r.zoneId}
+                      valueName={r.zoneName}
+                      options={zones}
+                      placeholder="בחר אזור..."
+                      entityLabel="אזור"
+                      onSelect={(option) => handleRowZone(r.id, option)}
+                      onCreate={quickAddZone}
+                    />
+                  </td>
+                  <td className="shp-col-boxes">
+                    <InlineValueCell
+                      value={r.boxes}
+                      type="number"
+                      min={0}
+                      step={1}
+                      onSave={(value) =>
+                        saveRecordPatch(
+                          r.id,
+                          { boxes: value as number | null },
+                          { boxes: value as number | null },
+                        )
+                      }
+                    />
+                  </td>
+                  <td className="shp-col-fee">
+                    <InlineValueCell
+                      value={r.deliveryFeeAmount ?? r.deliveryFeeIls}
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      format={() => fmtDeliveryFee(r)}
+                      onSave={(value) => {
+                        const amount = value as number | null;
+                        const currency = r.deliveryFeeCurrency ?? "ILS";
+                        const paymentStatus =
+                          currency !== "ILS" || amount == null || amount <= 0
+                            ? "UNPAID"
+                            : r.paidAmountIls >= amount
+                              ? "PAID"
+                              : r.paidAmountIls > 0
+                                ? "PARTIAL"
+                                : "UNPAID";
+                        return saveRecordPatch(
+                          r.id,
+                          { deliveryFeeAmount: amount, deliveryFeeCurrency: currency },
+                          {
+                            deliveryFeeAmount: amount,
+                            deliveryFeeCurrency: currency,
+                            deliveryFeeIls: currency === "ILS" ? amount : null,
+                            remainingFeeIls:
+                              currency === "ILS"
+                                ? Math.max(0, (amount ?? 0) - r.paidAmountIls)
+                                : 0,
+                            paymentStatus,
+                          },
+                        );
+                      }}
+                    />
+                  </td>
+                  <td className="shp-col-pay-date">{formatPaymentDate(r)}</td>
+                  <td className="shp-col-status">
+                    <select
+                      className="shp-inline-select"
+                      value={r.status}
+                      onChange={(e) => handleRowStatus(r.id, e.target.value as ShipmentStatus)}
+                    >
+                      {STATUS_OPTIONS.map((s) => (
+                        <option key={s.value} value={s.value}>
+                          {s.label}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="shp-col-pay-status">
+                    <button
+                      type="button"
+                      className="shp-pay-status-btn"
+                      onClick={() => setPaymentRecord(r)}
+                      disabled={!canCollect}
+                      title={
+                        feeAmount <= 0
+                          ? "יש להזין דמי משלוח לפני הגבייה"
+                          : !feeIsIls
+                            ? "קליטת תשלום זמינה לדמי משלוח בש״ח בלבד"
+                            : "פתיחת גבייה"
+                      }
+                    >
+                      <PayStatusBadge status={r.paymentStatus} />
+                      {canCollect ? <Banknote size={12} /> : null}
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
-      </div>
+      </SyncedTableScroll>
 
       {/* Payment modal */}
       {paymentRecord && (
@@ -667,6 +592,143 @@ export function ShipmentBatchClient({
           onSaved={handlePaymentSaved}
         />
       )}
+
+      {editOpen ? (
+        <div className="shp-modal-backdrop" role="presentation" onClick={() => setEditOpen(false)}>
+          <div className="shp-modal" dir="rtl" onClick={(e) => e.stopPropagation()}>
+            <header className="shp-modal__head">
+              <h3>עריכת משלוח {batch.batchNumber}</h3>
+              <button type="button" className="shp-btn shp-btn--ghost shp-btn--sm" onClick={() => setEditOpen(false)}>
+                ✕
+              </button>
+            </header>
+            <form
+              className="shp-modal__body shp-edit-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const fd = new FormData(e.currentTarget);
+                const str = (k: string) => {
+                  const v = String(fd.get(k) ?? "").trim();
+                  return v || null;
+                };
+                const num = (k: string) => {
+                  const v = String(fd.get(k) ?? "").trim();
+                  if (!v) return null;
+                  const n = Number(v.replace(",", "."));
+                  return Number.isFinite(n) ? n : null;
+                };
+                const input: UpdateShipmentBatchInput = {
+                  batchId: batch.id,
+                  sourceShipmentNumber: str("sourceShipmentNumber"),
+                  containerNumber: str("containerNumber"),
+                  shippingDate: str("shippingDate"),
+                  arrivalDate: str("arrivalDate"),
+                  totalBoxes: num("totalBoxes"),
+                  totalWeight: num("totalWeight"),
+                  notes: str("notes"),
+                  applyZoneId: (() => {
+                    const v = String(fd.get("applyZoneId") ?? "");
+                    if (!v) return undefined;
+                    if (v === "__CLEAR__") return null;
+                    return v;
+                  })(),
+                  applyCourierId: (() => {
+                    const v = String(fd.get("applyCourierId") ?? "");
+                    if (!v) return undefined;
+                    if (v === "__CLEAR__") return null;
+                    return v;
+                  })(),
+                };
+                setEditSaving(true);
+                void updateShipmentBatchAction(input).then(async (res) => {
+                  setEditSaving(false);
+                  if (!res.ok) {
+                    setError(res.error);
+                    return;
+                  }
+                  const refreshed = await getShipmentBatchAction(batch.id);
+                  if (refreshed.ok) setBatch(refreshed.batch);
+                  const recRes = await listShipmentRecordsAction(batch.id);
+                  if (recRes.ok) setRecords(recRes.records);
+                  setEditOpen(false);
+                  setSuccess("פרטי המשלוח עודכנו");
+                });
+              }}
+            >
+              <label>
+                <span>מספר משלוח (מקור)</span>
+                <input name="sourceShipmentNumber" defaultValue={batch.sourceShipmentNumber ?? ""} />
+              </label>
+              <label>
+                <span>קונטיינר</span>
+                <input name="containerNumber" defaultValue={batch.containerNumber ?? ""} />
+              </label>
+              <label>
+                <span>תאריך יציאה</span>
+                <input name="shippingDate" type="date" defaultValue={batch.shippingDate?.slice(0, 10) ?? ""} />
+              </label>
+              <label>
+                <span>תאריך הגעה</span>
+                <input name="arrivalDate" type="date" defaultValue={batch.arrivalDate?.slice(0, 10) ?? ""} />
+              </label>
+              <label>
+                <span>שבוע (מחושב)</span>
+                <input value={batch.weekCode ?? "—"} disabled readOnly />
+              </label>
+              <label>
+                <span>קרטונים</span>
+                <input name="totalBoxes" defaultValue={batch.totalBoxes ?? ""} />
+              </label>
+              <label>
+                <span>משקל</span>
+                <input name="totalWeight" defaultValue={batch.totalWeight ?? ""} />
+              </label>
+              <label>
+                <span>אזור (לכל החבילות)</span>
+                <select name="applyZoneId" defaultValue="">
+                  <option value="">ללא שינוי</option>
+                  <option value="__CLEAR__">נקה אזור מכל החבילות</option>
+                  {zones
+                    .filter((z) => z.isActive || batch.zoneIds.includes(z.id))
+                    .map((z) => (
+                      <option key={z.id} value={z.id}>
+                        {z.name}
+                        {batch.zoneIds.includes(z.id) ? " ✓" : ""}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label>
+                <span>שליח (לכל החבילות)</span>
+                <select name="applyCourierId" defaultValue="">
+                  <option value="">ללא שינוי</option>
+                  <option value="__CLEAR__">נקה שליח מכל החבילות</option>
+                  {couriers
+                    .filter((c) => c.isActive || batch.courierIds.includes(c.id))
+                    .map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                        {batch.courierIds.includes(c.id) ? " ✓" : ""}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="shp-edit-form__full">
+                <span>הערות</span>
+                <textarea name="notes" rows={3} defaultValue={batch.notes ?? ""} />
+              </label>
+              <footer className="shp-modal__foot" style={{ gridColumn: "1 / -1" }}>
+                <button type="button" className="shp-btn shp-btn--secondary" onClick={() => setEditOpen(false)}>
+                  ביטול
+                </button>
+                <button type="submit" className="shp-btn shp-btn--primary" disabled={editSaving}>
+                  {editSaving ? "שומר…" : "שמור"}
+                </button>
+              </footer>
+            </form>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

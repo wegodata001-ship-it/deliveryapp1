@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Eye, Pencil, Plus, Save } from "lucide-react";
-import type { FlowWeekDrillPayload, ManagerCountForm } from "@/app/admin/cash-flow/flow-types";
+import type { FlowWeekDrillPayload, FlowWeekPayload, ManagerCountForm } from "@/app/admin/cash-flow/flow-types";
 import { saveManagerCountAction } from "@/app/admin/cash-flow/save-manager-count-action";
 import { getFlowWeekAction } from "@/app/admin/cash-flow/get-flow-week-action";
 import { fmtDailyMoney } from "@/lib/cash-control-daily";
@@ -13,7 +13,7 @@ import { CurrencyExchangeHistory } from "@/components/admin/flow-control/Currenc
 import {
   computeAutoTurkeyUsd,
   formFromFlow,
-  isTurkeyManual,
+  resolveAvailableIlsForFx,
   syncAutoTurkey,
 } from "@/components/admin/manager-count/manager-count-utils";
 import { fcNum } from "@/components/admin/flow-control/shared";
@@ -40,46 +40,52 @@ type ColDef = {
 const COLUMNS: ColDef[] = [
   { key: "usd", label: "דולר PS", kind: "input", formKey: "countedCashUsd", currency: "USD" },
   { key: "ils", label: "שקל PS", kind: "input", formKey: "countedCashIls", currency: "ILS" },
-  { key: "fxPs", label: 'רכישת PS מט"ח', kind: "fx", currency: "USD" },
-  { key: "commUsd", label: "עמלה $", kind: "input", formKey: "commissionUsd", currency: "USD" },
   {
-    key: "turkeyPs",
-    label: "לטורקיה PS",
-    title: "דולר PS + רכישת מט״ח − עמלה $",
-    kind: "input",
-    formKey: "turkeyTransferUsd",
+    key: "fxPs",
+    label: 'רכישת מט"ח PS',
+    title: "דולרים שנרכשו דרך מסלול PS (שקל PS ÷ שער)",
+    kind: "fx",
     currency: "USD",
   },
+  { key: "commUsd", label: "עמלה PS", kind: "input", formKey: "commissionUsd", currency: "USD" },
   {
-    key: "bankPs",
-    label: "העברה לבנק PS",
-    title: "סכום שהועבר לבנק מיתרות מט״ח",
-    kind: "readonly",
-    currency: "ILS",
-    getValue: ({ drill }) => drill.flow.fxRemainderBankIls ?? "",
-  },
-  {
-    key: "ilsXfer",
-    label: "סכום ₪ להעברה",
-    title: "זמין לרכישת מט״ח",
+    key: "turkeyPs",
+    label: "טורקיה PS",
+    title: "דולרים שנרכשו + עמלה PS",
     kind: "computed",
-    currency: "ILS",
-    getValue: ({ drill }) => drill.flow.availableIlsForFx,
+    currency: "USD",
+    getValue: ({ autoTurkey }) => (autoTurkey > 0 ? autoTurkey.toFixed(2) : ""),
   },
   {
-    key: "fxIl",
-    label: 'רכישת IL מט"ח',
+    key: "turkeyTransferred",
+    label: "סכום שהועבר מטורקיה",
+    title: "סכום שהועבר בפועל לטורקיה (מתנועות)",
     kind: "readonly",
-    currency: "ILS",
-    getValue: ({ drill }) => drill.flow.fxPurchaseIls ?? "",
+    currency: "USD",
+    getValue: ({ drill }) => {
+      const n =
+        drill.flow.turkeyBalance?.actualTransfersUsd ??
+        drill.flow.turkeyBalance?.usd.transferred ??
+        fcNum(drill.flow.turkeyTransferUsd);
+      return n > 0 ? n.toFixed(2) : "";
+    },
   },
-  { key: "turkeyIl", label: "לטורקיה IL", kind: "readonly", currency: "ILS", getValue: () => "" },
-  { key: "commIls", label: "עמלה IL", kind: "input", formKey: "commissionIls", currency: "ILS" },
+  { key: "transfer", label: "העברות IL", kind: "input", formKey: "countedTransferIls", currency: "ILS" },
   { key: "checks", label: "צ'קים IL", kind: "input", formKey: "countedChecksIls", currency: "ILS" },
   { key: "credit", label: "אשראי IL", kind: "input", formKey: "countedCreditIls", currency: "ILS" },
-  { key: "transfer", label: "העברה IL", kind: "input", formKey: "countedTransferIls", currency: "ILS" },
-  { key: "other", label: "אחר IL", kind: "readonly", currency: "ILS", getValue: () => "" },
-  { key: "notes", label: "הערות", kind: "readonly", getValue: () => "" },
+  {
+    key: "fxIl",
+    label: 'רכישת מט"ח IL',
+    title: "העברות IL + צ'קים IL + אשראי IL",
+    kind: "computed",
+    currency: "ILS",
+    getValue: ({ form }) => {
+      const n =
+        fcNum(form.countedTransferIls) + fcNum(form.countedCreditIls) + fcNum(form.countedChecksIls);
+      return n > 0 ? n.toFixed(2) : "";
+    },
+  },
+  { key: "commIls", label: "עמלה IL", kind: "input", formKey: "commissionIls", currency: "ILS" },
   {
     key: "by",
     label: "עודכן על ידי",
@@ -112,37 +118,33 @@ export function CashCountTable({ drill, loading, canEdit, onSaved }: CashCountTa
     commissionIls: "",
     turkeyTransferUsd: "",
   });
-  const [turkeyManual, setTurkeyManual] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedOk, setSavedOk] = useState(false);
   const [fxOpen, setFxOpen] = useState(false);
   const [fxDetailOpen, setFxDetailOpen] = useState(false);
+  const [flowSnap, setFlowSnap] = useState<FlowWeekPayload | null>(null);
 
   useEffect(() => {
     if (!drill?.flow) return;
     const f = formFromFlow(drill.flow);
     setForm(syncAutoTurkey(f, drill.flow));
-    setTurkeyManual(isTurkeyManual(f, drill.flow));
+    setFlowSnap(drill.flow);
     setSavedOk(false);
   }, [drill?.flow, drill?.week]);
 
-  const fxTotals = drill ? sumFxPurchases(drill.flow.fxPurchases) : { ils: 0, usd: 0 };
+  const activeFlow = flowSnap ?? drill?.flow ?? null;
+  const availableIls = resolveAvailableIlsForFx(activeFlow, form);
+  const fxTotals = activeFlow ? sumFxPurchases(activeFlow.fxPurchases) : { ils: 0, usd: 0 };
   const autoTurkey = computeAutoTurkeyUsd(form, fxTotals.usd);
 
   const patchForm = (key: keyof ManagerCountForm, value: string) => {
     setForm((prev) => {
       const next = { ...prev, [key]: value };
-      if (!turkeyManual && (key === "countedCashUsd" || key === "commissionUsd")) {
+      if (key === "commissionUsd") {
         return syncAutoTurkey(next, drill?.flow ?? null);
       }
       return next;
     });
-    setSavedOk(false);
-  };
-
-  const handleTurkeyChange = (value: string) => {
-    setTurkeyManual(true);
-    setForm((prev) => ({ ...prev, turkeyTransferUsd: value }));
     setSavedOk(false);
   };
 
@@ -151,7 +153,7 @@ export function CashCountTable({ drill, loading, canEdit, onSaved }: CashCountTa
     setSaving(true);
     setSavedOk(false);
     try {
-      const payload = turkeyManual ? form : syncAutoTurkey(form, drill.flow);
+      const payload = syncAutoTurkey(form, drill.flow);
       const res = await saveManagerCountAction({ week: drill.week, form: payload });
       if (!res.ok) {
         alert(res.error ?? "שמירה נכשלה");
@@ -163,17 +165,44 @@ export function CashCountTable({ drill, loading, canEdit, onSaved }: CashCountTa
     } finally {
       setSaving(false);
     }
-  }, [canEdit, drill, form, onSaved, turkeyManual]);
+  }, [canEdit, drill, form, onSaved]);
 
   const handleFxSaved = async () => {
     if (!drill) return;
     const data = await getFlowWeekAction(drill.week);
     if (data) {
-      const f = formFromFlow(data);
-      setForm((prev) => (turkeyManual ? { ...f, turkeyTransferUsd: prev.turkeyTransferUsd } : syncAutoTurkey(f, data)));
+      setForm(syncAutoTurkey(formFromFlow(data), data));
+      setFlowSnap(data);
     }
     dispatchCashControlRefresh(drill.week);
     onSaved();
+  };
+
+  const openFxPurchase = async () => {
+    if (!drill || !canEdit) return;
+    const dirty =
+      Math.abs(fcNum(form.countedCashIls) - fcNum(drill.flow.counted.CASH_ILS)) > 0.02 ||
+      Math.abs(fcNum(form.countedCashUsd) - fcNum(drill.flow.counted.CASH_USD)) > 0.02 ||
+      Math.abs(fcNum(form.countedTransferIls) - fcNum(drill.flow.counted.BANK_TRANSFER)) > 0.02 ||
+      Math.abs(fcNum(form.countedChecksIls) - fcNum(drill.flow.counted.CHECK)) > 0.02 ||
+      Math.abs(fcNum(form.countedCreditIls) - fcNum(drill.flow.counted.CREDIT)) > 0.02 ||
+      Math.abs(fcNum(form.commissionUsd) - fcNum(drill.flow.commissionUsd)) > 0.02 ||
+      Math.abs(fcNum(form.commissionIls) - fcNum(drill.flow.commissionIls)) > 0.02;
+    if (dirty) {
+      const payload = syncAutoTurkey(form, activeFlow ?? drill.flow);
+      const saveRes = await saveManagerCountAction({ week: drill.week, form: payload });
+      if (!saveRes.ok) {
+        alert(saveRes.error ?? "יש לשמור את ספירת הקופה לפני רכישת מט״ח");
+        return;
+      }
+      dispatchCashControlRefresh(drill.week);
+    }
+    const data = await getFlowWeekAction(drill.week);
+    if (data) {
+      setFlowSnap(data);
+      setForm(syncAutoTurkey(formFromFlow(data), data));
+    }
+    setFxOpen(true);
   };
 
   if (loading) return <p className="ft-empty">טוען ספירת קופה…</p>;
@@ -210,13 +239,13 @@ export function CashCountTable({ drill, loading, canEdit, onSaved }: CashCountTa
                             <Eye size={14} />
                           </button>
                           {canEdit ? (
-                            <button type="button" className="ft-icon-btn" title="עריכה / רכישה" onClick={() => setFxOpen(true)}>
+                            <button type="button" className="ft-icon-btn" title="עריכה / רכישה" onClick={() => void openFxPurchase()}>
                               <Pencil size={14} />
                             </button>
                           ) : null}
                         </div>
                       ) : canEdit ? (
-                        <button type="button" className="ft-fx-add" onClick={() => setFxOpen(true)}>
+                        <button type="button" className="ft-fx-add" onClick={() => void openFxPurchase()}>
                           <Plus size={14} /> רכישת מט&quot;ח
                         </button>
                       ) : (
@@ -227,28 +256,19 @@ export function CashCountTable({ drill, loading, canEdit, onSaved }: CashCountTa
                 }
 
                 if (col.kind === "input" && col.formKey) {
-                  const isTurkey = col.key === "turkeyPs";
                   return (
                     <td key={col.key} className="ft-num ft-cell--input">
                       <div className="ft-input-wrap">
-                        {isTurkey && turkeyManual ? <span className="ft-manual-tag">ידני</span> : null}
                         <input
                           type="text"
                           inputMode="decimal"
                           className="ft-input"
                           dir="ltr"
                           disabled={!canEdit || saving}
-                          value={isTurkey ? form.turkeyTransferUsd : form[col.formKey]}
-                          onChange={(e) =>
-                            isTurkey ? handleTurkeyChange(e.target.value) : patchForm(col.formKey!, e.target.value)
-                          }
+                          value={form[col.formKey]}
+                          onChange={(e) => patchForm(col.formKey!, e.target.value)}
                         />
                       </div>
-                      {isTurkey && !turkeyManual ? (
-                        <span className="ft-calc-hint" dir="ltr" title="חישוב אוטומטי">
-                          {autoTurkey.toFixed(2)}
-                        </span>
-                      ) : null}
                     </td>
                   );
                 }
@@ -280,7 +300,7 @@ export function CashCountTable({ drill, loading, canEdit, onSaved }: CashCountTa
           open={fxOpen}
           week={drill.week}
           weekLabel={drill.weekLabel}
-          availableIls={drill.flow.availableIlsForFx}
+          availableIls={availableIls}
           saving={saving}
           onClose={() => setFxOpen(false)}
           onSaved={() => {
@@ -300,7 +320,7 @@ export function CashCountTable({ drill, loading, canEdit, onSaved }: CashCountTa
               </button>
             </header>
             <div className="adm-cash-modal__body">
-              <CurrencyExchangeHistory purchases={drill.flow.fxPurchases} />
+              <CurrencyExchangeHistory purchases={activeFlow?.fxPurchases ?? drill.flow.fxPurchases} />
             </div>
           </div>
         </div>

@@ -492,17 +492,42 @@ async function writeOrderBreakdown(
   db: CaptureDbClient,
   orderId: string,
   rows: ParsedBreakdownRow[],
-  opts?: { userId?: string | null; intakeWeekCode?: string | null },
+  opts?: { userId?: string | null; intakeWeekCode?: string | null; rateN?: number },
 ): Promise<void> {
+  // שימור paidAmount לפי אמצעי+מטבע לפני מחיקה
+  const existing = await db.orderPaymentBreakdown.findMany({
+    where: { orderId },
+    select: { paymentMethod: true, currency: true, paidAmount: true },
+  });
+  const paidByMethodCur = new Map<string, number>();
+  for (const e of existing) {
+    const n = Number(e.paidAmount?.toString?.() ?? e.paidAmount ?? 0);
+    if (Number.isFinite(n) && n > 0) {
+      const cur = e.currency?.toUpperCase() === "ILS" ? "ILS" : "USD";
+      const key = `${cur}:${e.paymentMethod}`;
+      paidByMethodCur.set(key, (paidByMethodCur.get(key) ?? 0) + n);
+    }
+  }
+
   await db.orderPaymentBreakdown.deleteMany({ where: { orderId } });
   if (rows.length === 0) return;
+
+  const rateN = opts?.rateN && opts.rateN > 0 ? opts.rateN : 0;
   await db.orderPaymentBreakdown.createMany({
-    data: rows.map((r) => ({
-      orderId,
-      paymentMethod: r.paymentMethod,
-      amount: r.amount,
-      currency: r.currency,
-    })),
+    data: rows.map((r) => {
+      const plannedNative = Number(r.amount.toString());
+      const cur = r.currency === "ILS" ? "ILS" : "USD";
+      const paidAmount = paidByMethodCur.get(`${cur}:${r.paymentMethod}`) ?? 0;
+      const remainingAmount = Math.max(0, Math.round((plannedNative - paidAmount) * 100) / 100);
+      return {
+        orderId,
+        paymentMethod: r.paymentMethod,
+        amount: r.amount,
+        currency: r.currency,
+        paidAmount: new Prisma.Decimal(paidAmount.toFixed(4)),
+        remainingAmount: new Prisma.Decimal(remainingAmount.toFixed(4)),
+      };
+    }),
   });
   const { syncPaymentPlanAfterBreakdownWrite } = await import("@/lib/payment-plan-service");
   await syncPaymentPlanAfterBreakdownWrite(db, {
@@ -1799,6 +1824,7 @@ async function captureOrderActionInner(
         await writeOrderBreakdown(tx, created.id, breakdownRows, {
           userId: me.id,
           intakeWeekCode: weekCode,
+          rateN: Number(finalRate),
         });
       }
 
@@ -2941,6 +2967,7 @@ async function updateOrderWorkPanelActionInner(
       await writeOrderBreakdown(tx, existing.id, breakdownRows, {
         userId: me.id,
         intakeWeekCode: weekCode,
+        rateN: Number(final),
       });
     }),
   );

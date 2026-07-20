@@ -1,4 +1,5 @@
 import type { CashDailyMethodId, CashDailyStatusKind } from "@/lib/cash-control-daily";
+import type { CashControlKpiView } from "@/lib/finance-data";
 
 /** טיפוסים לבקרת קופה יומית — קובץ נפרד (ללא "use server"). */
 
@@ -33,6 +34,8 @@ export type CashDailyWeekSummaryPayload = {
   from: string;
   to: string;
   rows: CashDailySummaryRowDto[];
+  /** KPI עליונים — Finance Data Layer V2 (אותם מצטברים כמו הטבלה) */
+  kpi: CashControlKpiView;
 };
 
 export type CashDailyPaymentRowDto = {

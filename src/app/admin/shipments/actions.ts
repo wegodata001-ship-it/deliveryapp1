@@ -5,8 +5,12 @@ import { requireAuth, userHasAnyPermission, isAdminUser } from "@/lib/admin-auth
 import {
   listShipmentBatches,
   listShipmentRecords,
+  listShipmentRecordsByBatchIds,
   listAllShipmentRecords,
   createShipmentBatch,
+  updateShipmentBatch,
+  getShipmentBatch,
+  deleteShipmentBatches,
   assignZone,
   assignCourier,
   updateShipmentStatus,
@@ -39,6 +43,7 @@ import type {
   AddPaymentInput,
   SaveShipmentPaymentsInput,
   UpdateShipmentRecordInput,
+  UpdateShipmentBatchInput,
 } from "@/app/admin/shipments/types";
 
 const VIEW_PERMS = ["manage_shipments", "view_shipments"];
@@ -75,6 +80,66 @@ export async function createShipmentBatchAction(
     const batchId = await createShipmentBatch(input, me.id);
     revalidate();
     return { ok: true, batchId };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+export async function updateShipmentBatchAction(
+  input: UpdateShipmentBatchInput
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const me = await requireAuth();
+    if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
+      return { ok: false, error: "אין הרשאה" };
+    await updateShipmentBatch(input);
+    revalidate();
+    revalidatePath(`/admin/shipments/${input.batchId}`);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+export async function getShipmentBatchAction(
+  batchId: string
+): Promise<{ ok: true; batch: ShipmentBatchDto } | { ok: false; error: string }> {
+  try {
+    const me = await requireAuth();
+    if (!isAdminUser(me) && !userHasAnyPermission(me, VIEW_PERMS))
+      return { ok: false, error: "אין הרשאה" };
+    const batch = await getShipmentBatch(batchId);
+    if (!batch) return { ok: false, error: "משלוח לא נמצא" };
+    return { ok: true, batch };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+export async function deleteShipmentBatchesAction(
+  batchIds: string[]
+): Promise<{ ok: true; deleted: number } | { ok: false; error: string }> {
+  try {
+    const me = await requireAuth();
+    if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
+      return { ok: false, error: "אין הרשאה" };
+    const deleted = await deleteShipmentBatches(batchIds);
+    revalidate();
+    return { ok: true, deleted };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+export async function listShipmentRecordsByBatchIdsAction(
+  batchIds: string[]
+): Promise<{ ok: true; records: ShipmentRecordDto[] } | { ok: false; error: string }> {
+  try {
+    const me = await requireAuth();
+    if (!isAdminUser(me) && !userHasAnyPermission(me, VIEW_PERMS))
+      return { ok: false, error: "אין הרשאה" };
+    const records = await listShipmentRecordsByBatchIds(batchIds);
+    return { ok: true, records };
   } catch (e) {
     return { ok: false, error: String(e) };
   }

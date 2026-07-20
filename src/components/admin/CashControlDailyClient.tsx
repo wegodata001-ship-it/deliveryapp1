@@ -2,16 +2,16 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle,
   Banknote,
-  CheckCircle2,
+  Building2,
   ChevronLeft,
   ChevronRight,
   ClipboardList,
+  DollarSign,
   FileSpreadsheet,
   FileText,
-  FolderOpen,
   RefreshCw,
+  TrendingDown,
   Wallet,
 } from "lucide-react";
 import { ACTIVE_WORK_WEEK_CODE } from "@/lib/active-work-week";
@@ -30,7 +30,6 @@ import { getCashExpenseCapabilitiesAction } from "@/app/admin/cash-expenses/capa
 import type { CashExpenseCapabilities } from "@/app/admin/cash-expenses/types";
 import {
   CASH_DAILY_METHODS,
-  fmtDailyMoney,
   type CashDailyMethodId,
 } from "@/lib/cash-control-daily";
 import { CashCountQuickModal } from "@/components/admin/cash-control/CashCountQuickModal";
@@ -44,10 +43,20 @@ import {
 } from "@/lib/cash-control-refresh-bus";
 import { WeeklyReconciliationTable } from "@/components/admin/cash-control/WeeklyReconciliationTable";
 import { MethodDrillPanel } from "@/components/admin/cash-flow/MethodDrillPanel";
-import { num } from "@/components/admin/cash-flow/shared";
 import { reconLinesToVariance, type CashVarianceLineDto } from "@/lib/cash-control-variance";
 
 type PanelMode = "drill" | null;
+
+/** תצוגת KPI — שתי ספרות אחרי הנקודה, ללא חישובים עסקיים */
+function fmtKpiMoney(currency: "USD" | "ILS", amount: number): string {
+  const n = Number.isFinite(amount) ? amount : 0;
+  const body = Math.abs(n).toLocaleString(currency === "ILS" ? "he-IL" : "en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  const withSymbol = currency === "ILS" ? `₪${body}` : `$${body}`;
+  return n < 0 ? `-${withSymbol}` : withSymbol;
+}
 
 function buildWeekOptions(): string[] {
   const active = parseAhWeekNumber(ACTIVE_WORK_WEEK_CODE) ?? 127;
@@ -258,18 +267,7 @@ export function CashControlClient({
   const dayRows = summary?.rows.filter((r) => !r.isTotal) ?? [];
   const totalRow = summary?.rows.find((r) => r.isTotal);
   const selectedDayRow = selectedDay ? dayRows.find((r) => r.dateYmd === selectedDay) : null;
-
-  const kpi = useMemo(() => {
-    const counted = dayRows.filter((r) => r.countSaved).length;
-    const withDeviation = dayRows.filter((r) => r.status === "warn" || r.status === "critical").length;
-    return {
-      receivedIls: totalRow ? num(totalRow.totalReceived) : 0,
-      receivedUsd: totalRow ? num(totalRow.intake.CASH_USD) : 0,
-      counted,
-      open: dayRows.length - counted,
-      withDeviation,
-    };
-  }, [dayRows, totalRow]);
+  const kpi = summary?.kpi ?? null;
 
   const drillMeta = methodDrill ? CASH_DAILY_METHODS.find((m) => m.id === methodDrill) : null;
   const selectedDayLabel = selectedDayRow
@@ -395,50 +393,70 @@ export function CashControlClient({
         </div>
       </header>
 
-      <section className="cc-kpis">
+      <section className="cc-kpis" aria-label="מדדי שבוע">
+        <div className="cc-kpi cc-kpi--green">
+          <span className="cc-kpi__icon" aria-hidden>
+            <DollarSign size={22} />
+          </span>
+          <div>
+            <span className="cc-kpi__label">סה״כ תקבולים ($)</span>
+            <strong className="cc-kpi__value" dir="ltr">
+              {kpi ? fmtKpiMoney("USD", kpi.totalReceiptsUsd) : "—"}
+            </strong>
+          </div>
+        </div>
         <div className="cc-kpi cc-kpi--blue">
           <span className="cc-kpi__icon" aria-hidden>
             <Banknote size={22} />
           </span>
           <div>
-            <span className="cc-kpi__label">שולם השבוע (₪)</span>
-            <strong className="cc-kpi__value" dir="ltr">{fmtDailyMoney("ILS", kpi.receivedIls)}</strong>
+            <span className="cc-kpi__label">סה״כ תקבולים (₪)</span>
+            <strong className="cc-kpi__value" dir="ltr">
+              {kpi ? fmtKpiMoney("ILS", kpi.totalReceiptsIls) : "—"}
+            </strong>
           </div>
         </div>
-        <div className="cc-kpi cc-kpi--green">
+        <div className="cc-kpi cc-kpi--red">
           <span className="cc-kpi__icon" aria-hidden>
-            <Banknote size={22} />
+            <TrendingDown size={22} />
           </span>
           <div>
-            <span className="cc-kpi__label">שולם השבוע ($)</span>
-            <strong className="cc-kpi__value" dir="ltr">{fmtDailyMoney("USD", kpi.receivedUsd)}</strong>
+            <span className="cc-kpi__label">סה״כ הוצאות ($)</span>
+            <strong className="cc-kpi__value" dir="ltr">
+              {kpi ? fmtKpiMoney("USD", kpi.totalExpensesUsd) : "—"}
+            </strong>
           </div>
         </div>
         <div className="cc-kpi cc-kpi--amber">
           <span className="cc-kpi__icon" aria-hidden>
-            <AlertTriangle size={22} />
+            <TrendingDown size={22} />
           </span>
           <div>
-            <span className="cc-kpi__label">ימים עם הפרש</span>
-            <strong className="cc-kpi__value">{kpi.withDeviation}</strong>
+            <span className="cc-kpi__label">סה״כ הוצאות (₪)</span>
+            <strong className="cc-kpi__value" dir="ltr">
+              {kpi ? fmtKpiMoney("ILS", kpi.totalExpensesIls) : "—"}
+            </strong>
           </div>
         </div>
         <div className="cc-kpi cc-kpi--slate">
           <span className="cc-kpi__icon" aria-hidden>
-            <CheckCircle2 size={22} />
+            <Building2 size={22} />
           </span>
           <div>
-            <span className="cc-kpi__label">ימים שנבדקו</span>
-            <strong className="cc-kpi__value">{kpi.counted}/7</strong>
-          </div>
-        </div>
-        <div className="cc-kpi cc-kpi--slate">
-          <span className="cc-kpi__icon" aria-hidden>
-            <FolderOpen size={22} />
-          </span>
-          <div>
-            <span className="cc-kpi__label">ימים פתוחים</span>
-            <strong className="cc-kpi__value">{kpi.open}</strong>
+            <span className="cc-kpi__label">שולם בבנק</span>
+            <strong className="cc-kpi__value cc-kpi__value--dual" dir="ltr">
+              {kpi ? (
+                <>
+                  <span>{fmtKpiMoney("USD", kpi.bankPaidUsd)}</span>
+                  <span className="cc-kpi__sep" aria-hidden>
+                    ·
+                  </span>
+                  <span>{fmtKpiMoney("ILS", kpi.bankPaidIls)}</span>
+                </>
+              ) : (
+                "—"
+              )}
+            </strong>
           </div>
         </div>
       </section>

@@ -208,10 +208,19 @@ export function matchPaymentToOrders(
   });
 }
 
-/** שורת חלוקת "תשלום מורכב" להזמנה — מתוכנן/שולם/נותר לכל אמצעי (USD) */
+/** שורת חלוקת "תשלום מורכב" — מתוכנן/שולם/נותר במטבע המקורי של השורה */
 export type OrderBreakdownMethodRow = {
   method: string;
   label: string;
+  /** מטבע השורה — ברירת מחדל USD לתאימות */
+  currency?: "USD" | "ILS";
+  /** מתוכנן במטבע השורה (אם חסר — plannedUsd) */
+  planned?: number;
+  /** שולם במטבע השורה */
+  paid?: number;
+  /** נותר במטבע השורה */
+  remaining?: number;
+  /** תאימות / המרה ל-USD לתצוגות ישנות */
   plannedUsd: number;
   paidUsd: number;
   remainingUsd: number;

@@ -21,7 +21,7 @@ import {
 } from "@/lib/cash-control-refresh-bus";
 import { CashflowWeeksTable } from "@/components/admin/cashflow-control/CashflowWeeksTable";
 import { CashflowWeekCards } from "@/components/admin/cashflow-control/CashflowWeekCards";
-import { CashflowWeekTabs } from "@/components/admin/cashflow-control/CashflowWeekTabs";
+import { FlowWeekTablesSection } from "@/components/admin/flow-control/tables/FlowWeekTablesSection";
 import {
   filterWeeksByYear,
   uniqueYears,
@@ -360,12 +360,11 @@ export function CashflowControlScreen({
               <span>{weekDateRange(selectedRow.week, selectedRow.weekLabel)}</span>
             </div>
             <CashflowWeekCards row={selectedRow} drill={drill} loading={drillLoading} />
-            <CashflowWeekTabs
-              row={selectedRow}
+            <FlowWeekTablesSection
               drill={drill}
               loading={drillLoading}
-              canManageFlow={caps.canManageFlow || caps.canCountEdit}
-              onFxSaved={refresh}
+              canEditManagerCount={caps.canManageFlow || caps.canCountEdit}
+              onManagerCountSaved={refresh}
             />
           </>
         ) : (

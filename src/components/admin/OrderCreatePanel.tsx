@@ -2351,6 +2351,12 @@ export function OrderCreatePanel({
           open={breakdownModalOpen}
           payableTotalUsd={roundMoney2(dealUsdTotal + commissionUsdEffective)}
           nisPerUsd={finalRate}
+          availableUsd={
+            usdInput > 0 ? roundMoney2(usdInput + usdInput * (commissionPct / 100)) : 0
+          }
+          availableIls={
+            ilsInput > 0 ? roundMoney2(ilsInput + ilsInput * (commissionPct / 100)) : 0
+          }
           methodOptions={paymentMethodOptions.map((o) => ({ value: o.value, label: o.label }))}
           initialLines={paymentBreakdown}
           idPrefix={windowId}

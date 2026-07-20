@@ -3,15 +3,27 @@
 import { useMemo, useState } from "react";
 import { ExternalLink, Eye, Pencil, RefreshCw, Search } from "lucide-react";
 import {
-  fmtMethodControlUsd,
-} from "@/lib/payment-intake-method-control";
-import {
   PAYMENT_VIEW_STATUS_META,
   summarizeIntakeMethodViews,
   type IntakeMethodView,
   type PaymentViewStatus,
 } from "@/lib/payment-intake-order-analysis";
 import { PAYMENT_BUCKET_LABELS, type PaymentBucketKey } from "@/lib/payment-breakdown-shared";
+import { summarizePaymentMethodLines } from "@/lib/finance-data/view-models";
+
+function fmtMethodAmount(currency: "USD" | "ILS", n: number): string {
+  const abs = Math.abs(n);
+  const body = abs.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const sign = n < 0 ? "-" : "";
+  return currency === "ILS" ? `${sign}₪${body}` : `${sign}$${body}`;
+}
+
+function fmtDualMoney(usd: number, ils: number): string {
+  const parts: string[] = [];
+  if (Math.abs(usd) > 0.005) parts.push(fmtMethodAmount("USD", usd));
+  if (Math.abs(ils) > 0.005) parts.push(fmtMethodAmount("ILS", ils));
+  return parts.length > 0 ? parts.join(" · ") : "$0.00";
+}
 
 const METHOD_FILTERS: { value: "" | PaymentBucketKey; label: string }[] = [
   { value: "", label: "כל האמצעים" },
@@ -32,15 +44,9 @@ const STATUS_FILTERS: { value: "" | PaymentViewStatus; label: string }[] = [
 ];
 
 /**
- * Presentational only — rows must come from the shared planning views
- * (`usePaymentIntakePlanningViews` / `derivePaymentIntakePlanningViews`) owned by
- * PaymentModalUpdated so both tables stay on one orders snapshot.
- *
- * KPI cards are computed ONLY from the exact rows rendered in the table
- * (after filters). No separate cache / snapshot / parallel summary.
- *
- * Column "נותר לאמצעי התשלום" = formRemainingUsd (per-method remaining in current form).
- * This is distinct from "יתרת חוב להזמנה" shown in the main intake table.
+ * Presentational only — rows from shared planning views (PaymentModalUpdated).
+ * KPI cards, per-method summary, and table footer all derive from the exact
+ * filtered table rows via Finance Data Layer summarizers — no parallel math.
  */
 export function PaymentMethodControlModal({
   open,
@@ -66,8 +72,7 @@ export function PaymentMethodControlModal({
   const [statusFilter, setStatusFilter] = useState<"" | PaymentViewStatus>("");
   const [dateFilter, setDateFilter] = useState("");
 
-  /** שורות הטבלה + סיכום ה-KPI מאותו מקור יחיד — אין חישוב נפרד לכרטיסים. */
-  const { tableRows, summary } = useMemo(() => {
+  const { tableRows, summary, methodSummary } = useMemo(() => {
     const needle = q.trim().toLowerCase();
     const rows = methodViews.filter((r) => {
       if (needle && !r.orderNumber.toLowerCase().includes(needle)) return false;
@@ -76,7 +81,21 @@ export function PaymentMethodControlModal({
       if (dateFilter && r.dateYmd !== dateFilter) return false;
       return true;
     });
-    return { tableRows: rows, summary: summarizeIntakeMethodViews(rows) };
+    const methodSummary = summarizePaymentMethodLines(
+      rows.map((r) => ({
+        paymentMethod: r.bucket,
+        label: r.methodLabel || PAYMENT_BUCKET_LABELS[r.bucket] || r.bucket,
+        currency: (r.currency ?? "USD") === "ILS" ? "ILS" : "USD",
+        planned: r.planned ?? r.plannedUsd,
+        paid: r.paid ?? r.dbPaidUsd,
+        remaining: r.remaining ?? r.dbRemainingUsd,
+      })),
+    );
+    return {
+      tableRows: rows,
+      summary: summarizeIntakeMethodViews(rows),
+      methodSummary,
+    };
   }, [methodViews, q, methodFilter, statusFilter, dateFilter]);
 
   const dateOptions = useMemo(() => {
@@ -102,7 +121,7 @@ export function PaymentMethodControlModal({
         <header className="pmc-header">
           <div className="pmc-header__title">
             <h2 id="pmc-title">אמצעי תשלום מתוכננים</h2>
-            <p>הכרטיסים והטבלה מאותן שורות · מתעדכן מיד עם כל שינוי בתשלומים</p>
+            <p>הכרטיסים, סיכום האמצעים והטבלה מאותן שורות · מתעדכן מיד עם כל שינוי</p>
           </div>
           <div className="pmc-header__actions">
             <button
@@ -120,11 +139,86 @@ export function PaymentMethodControlModal({
           </div>
         </header>
 
-        <section className="pmc-summary" aria-label="סיכום">
+        <section className="pmc-summary" aria-label="סיכום כללי">
           <SummaryCard label="מספר הזמנות" value={String(summary.orderCount)} />
-          <SummaryCard label="סכום מתוכנן" value={fmtMethodControlUsd(summary.plannedUsd)} />
-          <SummaryCard label="סכום שנקלט" value={fmtMethodControlUsd(summary.enteredUsd)} />
-          <SummaryCard label="נותר לאמצעי התשלום" value={fmtMethodControlUsd(summary.remainingUsd)} accent />
+          <SummaryCard
+            label="מתוכנן"
+            value={fmtDualMoney(summary.plannedUsd, summary.plannedIls)}
+          />
+          <SummaryCard
+            label="שולם"
+            value={fmtDualMoney(summary.enteredUsd, summary.enteredIls)}
+          />
+          <SummaryCard
+            label="נותר"
+            value={fmtDualMoney(summary.remainingUsd, summary.remainingIls)}
+            accent
+          />
+        </section>
+
+        <section className="pmc-method-summary" aria-label="סיכום לפי אמצעי תשלום">
+          <h3 className="pmc-method-summary__title">סיכום לפי אמצעי תשלום</h3>
+          <div className="pmc-method-summary__wrap">
+            <table className="pmc-method-summary__table">
+              <thead>
+                <tr>
+                  <th>אמצעי תשלום</th>
+                  <th className="pmc-num">מתוכנן</th>
+                  <th className="pmc-num">שולם</th>
+                  <th className="pmc-num">נותר</th>
+                </tr>
+              </thead>
+              <tbody>
+                {methodSummary.byMethod.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="pmc-empty">
+                      אין אמצעים להצגה לפי הסינון הנוכחי.
+                    </td>
+                  </tr>
+                ) : (
+                  methodSummary.byMethod.map((m) => (
+                    <tr key={m.id}>
+                      <td>
+                        <span className="pmc-method-summary__label">{m.label}</span>
+                        <span className="pmc-method-summary__cur">
+                          {m.currency === "ILS" ? "₪" : "$"}
+                        </span>
+                      </td>
+                      <td className="pmc-num" dir="ltr">
+                        {fmtMethodAmount(m.currency, m.planned)}
+                      </td>
+                      <td className="pmc-num" dir="ltr">
+                        {fmtMethodAmount(m.currency, m.paid)}
+                      </td>
+                      <td
+                        className={`pmc-num${m.remaining > 0.01 ? " pmc-rem" : ""}`}
+                        dir="ltr"
+                      >
+                        {fmtMethodAmount(m.currency, m.remaining)}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+              <tfoot>
+                <tr className="pmc-method-summary__total">
+                  <th scope="row">סה״כ</th>
+                  <td className="pmc-num" dir="ltr">
+                    {fmtDualMoney(methodSummary.totals.plannedUsd, methodSummary.totals.plannedIls)}
+                  </td>
+                  <td className="pmc-num" dir="ltr">
+                    {fmtDualMoney(methodSummary.totals.paidUsd, methodSummary.totals.paidIls)}
+                  </td>
+                  <td className="pmc-num pmc-rem" dir="ltr">
+                    {fmtDualMoney(
+                      methodSummary.totals.remainingUsd,
+                      methodSummary.totals.remainingIls,
+                    )}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
         </section>
 
         <section className="pmc-filters" aria-label="סינון">
@@ -170,9 +264,10 @@ export function PaymentMethodControlModal({
               <tr>
                 <th>מספר הזמנה</th>
                 <th>אמצעי תשלום</th>
-                <th className="pmc-num">סכום מתוכנן</th>
-                <th className="pmc-num">סכום שנקלט</th>
-                <th className="pmc-num">נותר לאמצעי התשלום</th>
+                <th>מטבע</th>
+                <th className="pmc-num">מתוכנן</th>
+                <th className="pmc-num">שולם</th>
+                <th className="pmc-num">נותר</th>
                 <th>סטטוס</th>
                 <th>תאריך יעד</th>
                 <th>פעולות</th>
@@ -181,7 +276,7 @@ export function PaymentMethodControlModal({
             <tbody>
               {tableRows.length === 0 ? (
                 <tr className="pmc-row pmc-row--empty">
-                  <td colSpan={8} className="pmc-empty">
+                  <td colSpan={9} className="pmc-empty">
                     אין שורות להצגה לפי הסינון הנוכחי.
                   </td>
                 </tr>
@@ -199,6 +294,25 @@ export function PaymentMethodControlModal({
                 ))
               )}
             </tbody>
+            {tableRows.length > 0 ? (
+              <tfoot>
+                <tr className="pmc-table-foot">
+                  <th scope="row" colSpan={3}>
+                    סה״כ (שורות מוצגות)
+                  </th>
+                  <td className="pmc-num" dir="ltr">
+                    {fmtDualMoney(summary.plannedUsd, summary.plannedIls)}
+                  </td>
+                  <td className="pmc-num" dir="ltr">
+                    {fmtDualMoney(summary.enteredUsd, summary.enteredIls)}
+                  </td>
+                  <td className="pmc-num pmc-rem" dir="ltr">
+                    {fmtDualMoney(summary.remainingUsd, summary.remainingIls)}
+                  </td>
+                  <td colSpan={3} />
+                </tr>
+              </tfoot>
+            ) : null}
           </table>
         </div>
       </div>
@@ -261,14 +375,15 @@ function GridRow({
         )}
       </td>
       <td>{row.methodLabel}</td>
+      <td>{(row.currency ?? "USD") === "ILS" ? "₪ ILS" : "$ USD"}</td>
       <td className="pmc-num" dir="ltr">
-        {fmtMethodControlUsd(row.plannedUsd)}
+        {fmtMethodAmount(row.currency ?? "USD", row.planned ?? row.plannedUsd)}
       </td>
       <td className="pmc-num" dir="ltr">
-        {fmtMethodControlUsd(row.formEnteredUsd)}
+        {fmtMethodAmount(row.currency ?? "USD", row.paid ?? row.dbPaidUsd)}
       </td>
-      <td className={`pmc-num${row.formRemainingUsd > 0.01 ? " pmc-rem" : ""}`} dir="ltr">
-        {fmtMethodControlUsd(row.formRemainingUsd)}
+      <td className={`pmc-num${(row.remaining ?? row.dbRemainingUsd) > 0.01 ? " pmc-rem" : ""}`} dir="ltr">
+        {fmtMethodAmount(row.currency ?? "USD", row.remaining ?? row.dbRemainingUsd)}
       </td>
       <td>
         <span className={`pmc-badge pmc-badge--${meta.tone}`}>{meta.label}</span>

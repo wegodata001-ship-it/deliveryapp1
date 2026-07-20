@@ -1,24 +1,51 @@
 /**
  * מסנן קליטות תשלום לבקרת קופה — מקור אמת יחיד.
- * קליטות נשמרות עם Payment.weekCode; הבקרה חייבת לסנן לפי אותו שדה.
+ *
+ * שיוך לשבוע קופה:
+ * 1. אם קיים Payment.intakeDate — לפי טווח תאריכי שבוע AH של תאריך הביצוע.
+ * 2. אחרת (רשומות ישנות) — לפי Payment.weekCode (התנהגות היסטורית).
+ *
+ * עמודת היום בתוך השבוע: paymentDayKeyJerusalem (intakeDate ?? paymentDate ?? createdAt).
  */
 
 import type { Prisma } from "@prisma/client";
 import type { CashReconciliationLineId } from "@/lib/cash-control-reconciliation";
 import { cashControlExcludeInternalPaymentsWhere } from "@/lib/cash-control-internal-payments";
 import { activePaidPaymentWhere } from "@/lib/payment-record-status-shared";
+import { addDaysYmd, getAhWeekRange } from "@/lib/weeks/ah-week";
+import { parseLocalDate } from "@/lib/work-week";
 
 const CREDIT_METHODS = ["CREDIT", "CREDIT_CARD", "CARD"];
 const BANK_METHODS = ["BANK_TRANSFER", "TRANSFER", "BANK"];
 const CHECK_METHODS = ["CHECK", "CHECKS", "CHEQUE"];
 
-/** כל קליטות התשלום הפעילות בשבוע העבודה (לפי weekCode בשורת Payment) */
-export function cashControlWeekPaymentsWhere(week: string): Prisma.PaymentWhereInput {
+/**
+ * חברות בשבוע בקרת קופה לפי תאריך ביצוע קליטה (או weekCode לרשומות ללא intakeDate).
+ */
+export function cashControlWeekMembershipWhere(week: string): Prisma.PaymentWhereInput {
   const wk = week.trim();
+  const range = getAhWeekRange(wk);
+  if (!range) {
+    return { weekCode: wk };
+  }
+  const gte = parseLocalDate(range.from);
+  const lt = parseLocalDate(addDaysYmd(range.to, 1));
+  return {
+    OR: [
+      { intakeDate: { gte, lt } },
+      {
+        AND: [{ intakeDate: null }, { weekCode: wk }],
+      },
+    ],
+  };
+}
+
+/** כל קליטות התשלום הפעילות בשבוע העבודה */
+export function cashControlWeekPaymentsWhere(week: string): Prisma.PaymentWhereInput {
   return {
     AND: [
       activePaidPaymentWhere,
-      { weekCode: wk },
+      cashControlWeekMembershipWhere(week),
       { amountUsd: { not: null } },
       cashControlExcludeInternalPaymentsWhere,
     ],
@@ -28,7 +55,11 @@ export function cashControlWeekPaymentsWhere(week: string): Prisma.PaymentWhereI
 /** כל קליטות התשלום הפעילות בשבוע — להתאמת קופה (כולל ₪ בלבד) */
 export function cashControlWeekReconciliationPaymentsWhere(week: string): Prisma.PaymentWhereInput {
   return {
-    AND: [activePaidPaymentWhere, { weekCode: week.trim() }, cashControlExcludeInternalPaymentsWhere],
+    AND: [
+      activePaidPaymentWhere,
+      cashControlWeekMembershipWhere(week),
+      cashControlExcludeInternalPaymentsWhere,
+    ],
   };
 }
 
@@ -106,7 +137,7 @@ export function cashControlWeekCashPaymentsWhere(
   return {
     AND: [
       activePaidPaymentWhere,
-      { weekCode: week.trim() },
+      cashControlWeekMembershipWhere(week),
       { [methodField]: "CASH" },
       cashControlExcludeInternalPaymentsWhere,
     ],
