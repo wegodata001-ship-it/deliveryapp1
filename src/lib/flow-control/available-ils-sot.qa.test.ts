@@ -7,10 +7,9 @@ import { describe, it } from "node:test";
 import {
   computeFlowWeekSummary,
   computeIlsRemainingAfterFx,
-  type FxPurchaseRecord,
 } from "@/lib/flow-control/flow-calculation-service";
 import { resolveAvailableIlsForFx } from "@/components/admin/manager-count/manager-count-utils";
-import type { FlowWeekPayload } from "@/app/admin/cash-flow/flow-types";
+import type { FlowWeekPayload, FxPurchaseRecord } from "@/app/admin/cash-flow/flow-types";
 
 function fx(ilsAmount: number): FxPurchaseRecord {
   return {

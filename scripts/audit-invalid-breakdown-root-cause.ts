@@ -87,21 +87,40 @@ async function main() {
     },
   });
 
-  // Order edit audit if table exists
-  let editAudits: unknown[] = [];
+  // Order edit audits live on AuditLog (ORDER_UPDATED), not a separate OrderUpdateAudit table
+  let editAudits: Array<{
+    id: string;
+    orderId: string | null;
+    createdAt: Date;
+    actionType: string;
+    userId: string | null;
+    metadata: unknown;
+  }> = [];
   try {
-    editAudits = await prisma.orderUpdateAudit?.findMany?.({
-      where: { orderId: { in: IDS } },
+    const rows = await prisma.auditLog.findMany({
+      where: {
+        entityType: "Order",
+        entityId: { in: IDS },
+        actionType: "ORDER_UPDATED",
+      },
       orderBy: { createdAt: "asc" },
       select: {
         id: true,
-        orderId: true,
+        entityId: true,
         createdAt: true,
-        action: true,
-        changedFields: true,
-        actorUserId: true,
+        actionType: true,
+        userId: true,
+        metadata: true,
       },
-    } as never);
+    });
+    editAudits = rows.map((r) => ({
+      id: r.id,
+      orderId: r.entityId,
+      createdAt: r.createdAt,
+      actionType: r.actionType,
+      userId: r.userId,
+      metadata: r.metadata,
+    }));
   } catch {
     editAudits = [];
   }
@@ -189,9 +208,7 @@ async function main() {
       })),
       paymentPlan: o.paymentPlan,
       editRequests: (editRequests as Array<{ orderId: string }>).filter((e) => e.orderId === o.id),
-      editAudits: Array.isArray(editAudits)
-        ? (editAudits as Array<{ orderId: string }>).filter((e) => e.orderId === o.id)
-        : [],
+      editAudits: editAudits.filter((e) => e.orderId === o.id),
     };
     console.log("\n========== ORDER ==========");
     console.log(JSON.stringify(report, null, 2));

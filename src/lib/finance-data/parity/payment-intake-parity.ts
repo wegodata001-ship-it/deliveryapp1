@@ -137,7 +137,15 @@ export function comparePaymentIntakeParity(params: {
   customerId: string;
   legacyOrders: LegacyParityOrder[];
   v2: PaymentIntakeView;
-}): Omit<PaymentIntakeParityReport, "validatorsPassed" | "validatorsTotal" | "validatorFailures" | "fullParity"> & {
+}): Omit<
+  PaymentIntakeParityReport,
+  | "validatorsPassed"
+  | "validatorsTotal"
+  | "validatorFailures"
+  | "fullParity"
+  | "layersMatch"
+  | "validatorsOk"
+> & {
   orderIds: string[];
 } {
   const diffs: ParityFieldDiff[] = [];

@@ -242,15 +242,15 @@ export function rebuildBreakdownSnapshots(input: BreakdownSyncOrderInput): Break
 
   const neededFix = orderNeedsBreakdownSync(input);
   if (!neededFix) {
-    const rows: Array<{ id: string; paymentMethod: string; amount: number; currency: "USD" | "ILS"; paidAmount: number; remainingAmount: number | null }> =
-      input.breakdown.map((b) => ({
-        id: b.id,
-        paymentMethod: b.paymentMethod,
-        amount: b.amount,
-        currency: b.currency.toUpperCase() === "ILS" ? "ILS" : "USD",
-        paidAmount: b.paidAmount,
-        remainingAmount: b.remainingAmount,
-      }));
+    const rows = input.breakdown.map((b) => ({
+      id: b.id,
+      orderId: input.orderId,
+      paymentMethod: b.paymentMethod,
+      amount: b.amount,
+      currency: (b.currency.toUpperCase() === "ILS" ? "ILS" : "USD") as "USD" | "ILS",
+      paidAmount: b.paidAmount,
+      remainingAmount: b.remainingAmount,
+    }));
     const v = validateBreakdown({ orderId: input.orderId, openDebtUsd, rows });
     return {
       orderId: input.orderId,
@@ -320,6 +320,7 @@ export function rebuildBreakdownSnapshots(input: BreakdownSyncOrderInput): Break
     const u = updates.find((x) => x.breakdownId === b.id)!;
     return {
       id: b.id,
+      orderId: input.orderId,
       paymentMethod: b.paymentMethod,
       amount: b.amount,
       currency: (b.currency.toUpperCase() === "ILS" ? "ILS" : "USD") as "USD" | "ILS",
