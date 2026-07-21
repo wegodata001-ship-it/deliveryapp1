@@ -1,19 +1,23 @@
 /**
- * QA — זמין בקופה ≡ שקל שנשאר (Source of Truth מאוחד)
- * תרחישים מהגדרת ה־QA לאחר שינוי SoT.
+ * QA — זמין לרכישת מט״ח PS / IL נפרדים (ללא איחוד מסלולים)
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   computeFlowWeekSummary,
-  computeIlsRemainingAfterFx,
+  computeIlAvailableIlsForFx,
+  computePsAvailableIlsForFx,
 } from "@/lib/flow-control/flow-calculation-service";
-import { resolveAvailableIlsForFx } from "@/components/admin/manager-count/manager-count-utils";
+import {
+  resolveAvailableIlIlsForFx,
+  resolveAvailablePsIlsForFx,
+} from "@/components/admin/manager-count/manager-count-utils";
 import type { FlowWeekPayload, FxPurchaseRecord } from "@/app/admin/cash-flow/flow-types";
 
-function fx(ilsAmount: number): FxPurchaseRecord {
+function fx(ilsAmount: number, track: "PS" | "IL" = "PS"): FxPurchaseRecord {
   return {
-    id: `fx-${ilsAmount}`,
+    id: `fx-${track}-${ilsAmount}`,
+    track,
     ilsAmount,
     usdReceived: ilsAmount / 3.5,
     rate: 3.5,
@@ -24,13 +28,12 @@ function fx(ilsAmount: number): FxPurchaseRecord {
 }
 
 function summary(opts: {
-  receipts: number;
+  countedCashIls?: number;
   fxPurchases?: FxPurchaseRecord[];
   transferIl?: number;
   creditIl?: number;
   checksIl?: number;
   expensesIls?: number;
-  countedCashIls?: number;
 }) {
   return computeFlowWeekSummary({
     countedCashUsd: 0,
@@ -42,29 +45,31 @@ function summary(opts: {
     countedTransferIls: opts.transferIl ?? 0,
     countedCreditIls: opts.creditIl ?? 0,
     countedChecksIls: opts.checksIl ?? 0,
-    totalReceiptsIls: opts.receipts,
+    totalReceiptsIls: 0,
     bankReceiptsIls: 0,
   });
 }
 
 function flowFromCalc(
   calc: ReturnType<typeof computeFlowWeekSummary>,
-  receipts: number,
   opts: {
     fxPurchases?: FxPurchaseRecord[];
+    cashIls?: string;
     transferIl?: string;
+    creditIl?: string;
+    checksIl?: string;
   } = {},
 ): FlowWeekPayload {
   const money = (n: number) => n.toFixed(2);
-  const transfer = opts.transferIl ?? money(0);
   return {
     week: "AH-999",
     weekLabel: "QA",
     received: {} as FlowWeekPayload["received"],
     counted: {
-      BANK_TRANSFER: transfer,
-      CREDIT: money(0),
-      CHECK: money(0),
+      CASH_ILS: opts.cashIls ?? money(0),
+      BANK_TRANSFER: opts.transferIl ?? money(0),
+      CREDIT: opts.creditIl ?? money(0),
+      CHECK: opts.checksIl ?? money(0),
     },
     countDiff: {},
     expensesIls: money(0),
@@ -79,7 +84,7 @@ function flowFromCalc(
     fxProfitLoss: calc.fxProfitLoss,
     fxProfitLossHistory: [],
     kpis: {
-      totalReceivedIls: money(receipts),
+      totalReceivedIls: "0.00",
       totalFxConvertedIls: money(calc.fxTotals.ils),
       totalFxConvertedUsd: money(calc.fxTotals.usd),
       turkeyTransferredUsd: "0.00",
@@ -116,11 +121,20 @@ function flowFromCalc(
       movements: [],
     },
     turkeyTransferUsd: null,
+    turkeyTransferIls: null,
     bankBalanceIls: money(calc.bankBalanceIls),
     bankBalanceUsd: null,
     drawerRemainingIls: money(calc.cashIlsInDrawer),
     drawerRemainingUsd: money(calc.cashUsdInDrawer),
     availableIlsForFx: money(calc.availableIlsForFx),
+    availableIlIlsForFx: money(
+      computeIlAvailableIlsForFx(
+        Number(opts.transferIl ?? 0),
+        Number(opts.creditIl ?? 0),
+        Number(opts.checksIl ?? 0),
+        opts.fxPurchases ?? [],
+      ),
+    ),
     turkeyExpectedUsd: money(calc.turkey.expectedUsd),
     turkeyDebtUsd: "0.00",
     turkeyDebtStatus: "ok",
@@ -131,112 +145,61 @@ function flowFromCalc(
   };
 }
 
-describe("QA: זמין בקופה ≡ שקל שנשאר", () => {
-  it("בדיקה 1 — תקבולים בלבד: 10,000", () => {
-    const calc = summary({ receipts: 10000 });
-    assert.equal(calc.ilsRemainingAfterFx, 10000);
+describe("QA: הפרדת PS / IL בזמין לרכישת מט״ח", () => {
+  it("PS בלבד — מזומן 10,000 ללא רכישות", () => {
+    const calc = summary({ countedCashIls: 10000 });
     assert.equal(calc.availableIlsForFx, 10000);
-    assert.equal(calc.availableIlsForFx, calc.ilsRemainingAfterFx);
-    assert.equal(resolveAvailableIlsForFx(flowFromCalc(calc, 10000)), "10000.00");
-  });
-
-  it("בדיקה 2 — רכישת מט״ח PS 3,000 → 7,000", () => {
-    const purchases = [fx(3000)];
-    const calc = summary({ receipts: 10000, fxPurchases: purchases });
-    assert.equal(calc.ilsRemainingAfterFx, 7000);
-    assert.equal(calc.availableIlsForFx, 7000);
-    assert.equal(resolveAvailableIlsForFx(flowFromCalc(calc, 10000, { fxPurchases: purchases })), "7000.00");
-  });
-
-  it("בדיקה 3 — + רכישת מט״ח IL 2,000 → 5,000", () => {
-    const purchases = [fx(3000)];
-    const calc = summary({
-      receipts: 10000,
-      fxPurchases: purchases,
-      transferIl: 2000,
-    });
-    assert.equal(calc.ilFxPurchaseIls, 2000);
-    assert.equal(calc.ilsRemainingAfterFx, 5000);
-    assert.equal(calc.availableIlsForFx, 5000);
+    assert.equal(calc.ilsRemainingAfterFx, 10000);
     assert.equal(
-      resolveAvailableIlsForFx(flowFromCalc(calc, 10000, { fxPurchases: purchases, transferIl: "2000.00" })),
-      "5000.00",
+      resolveAvailablePsIlsForFx(flowFromCalc(calc, { cashIls: "10000.00" })),
+      "10000.00",
     );
   });
 
-  it("בדיקה 4 — + קליטה 1,500 → 6,500", () => {
+  it("רכישת PS 3,000 מורידה רק את מאגר PS", () => {
+    const purchases = [fx(3000, "PS")];
+    const calc = summary({ countedCashIls: 10000, fxPurchases: purchases, transferIl: 2000 });
+    assert.equal(calc.availableIlsForFx, 7000);
+    assert.equal(calc.ilFxPurchaseIls, 0);
+    assert.equal(computeIlAvailableIlsForFx(2000, 0, 0, purchases), 2000);
+  });
+
+  it("רכישת IL לא מורידה את זמין PS", () => {
+    const purchases = [fx(3000, "PS"), fx(2000, "IL")];
     const calc = summary({
-      receipts: 11500,
-      fxPurchases: [fx(3000)],
-      transferIl: 2000,
-    });
-    assert.equal(calc.ilsRemainingAfterFx, 6500);
-    assert.equal(calc.availableIlsForFx, 6500);
-  });
-
-  it("בדיקה 5 — הוצאות לא משפיעות על שקל שנשאר / זמין", () => {
-    const withoutExp = summary({
-      receipts: 10000,
-      fxPurchases: [fx(3000)],
-      transferIl: 2000,
-      expensesIls: 0,
-    });
-    const withExp = summary({
-      receipts: 10000,
-      fxPurchases: [fx(3000)],
-      transferIl: 2000,
-      expensesIls: 900,
-      countedCashIls: 5000,
-    });
-    assert.equal(withoutExp.ilsRemainingAfterFx, 5000);
-    assert.equal(withExp.ilsRemainingAfterFx, 5000);
-    assert.equal(withExp.availableIlsForFx, withExp.ilsRemainingAfterFx);
-    assert.notEqual(withExp.cashIlsInDrawer, withoutExp.cashIlsInDrawer);
-  });
-
-  it("בדיקה 6 — מעבר שבוע: חישוב לפי קלטים של אותו שבוע בלבד", () => {
-    const weekA = summary({ receipts: 10000, fxPurchases: [fx(1000)] });
-    const weekB = summary({ receipts: 500, fxPurchases: [] });
-    assert.equal(weekA.availableIlsForFx, 9000);
-    assert.equal(weekB.availableIlsForFx, 500);
-    assert.notEqual(weekA.availableIlsForFx, weekB.availableIlsForFx);
-  });
-
-  it("בדיקה 7 — אחרי «רענון»: ערכים מחושבים מחדש זהים (אין איפוס ל־0)", () => {
-    const purchases = [fx(3000)];
-    const calc = summary({
-      receipts: 11500,
+      countedCashIls: 10000,
       fxPurchases: purchases,
-      transferIl: 2000,
-      countedCashIls: 0,
+      transferIl: 5000,
     });
-    const flow = flowFromCalc(calc, 11500, { fxPurchases: purchases, transferIl: "2000.00" });
-    assert.equal(flow.ilsRemainingAfterFx, "6500.00");
-    assert.equal(flow.availableIlsForFx, "6500.00");
-    assert.equal(resolveAvailableIlsForFx(flow), "6500.00");
-    assert.notEqual(resolveAvailableIlsForFx(flow), "0.00");
+    assert.equal(calc.availableIlsForFx, 7000);
+    assert.equal(calc.ilFxPurchaseIls, 2000);
+    assert.equal(computeIlAvailableIlsForFx(5000, 0, 0, purchases), 3000);
+    assert.equal(
+      resolveAvailableIlIlsForFx(
+        flowFromCalc(calc, {
+          fxPurchases: purchases,
+          cashIls: "10000.00",
+          transferIl: "5000.00",
+        }),
+      ),
+      "3000.00",
+    );
   });
 
-  it("בדיקה 8 — ולידציה: רכישה מעל הזמין נדחית (לוגיקה)", () => {
-    const available = computeIlsRemainingAfterFx(10000, 3000, 2000);
-    assert.equal(available, 5000);
-    assert.ok(5000.03 > available + 0.02);
-    assert.ok(5000 <= available + 0.02);
+  it("מאגר IL = העברות+אשראי+צ׳קים − רכישות IL בלבד", () => {
+    const purchases = [fx(1500, "IL")];
+    assert.equal(computeIlAvailableIlsForFx(1000, 800, 200, purchases), 500);
+    assert.equal(computePsAvailableIlsForFx(9000, purchases), 9000);
   });
 
-  it("בדיקה 9 — SoT: availableIlsForFx === ilsRemainingAfterFx; לא countedCashIls", () => {
+  it("SoT: availableIlsForFx === ilsRemainingAfterFx (מסלול PS)", () => {
     const calc = summary({
-      receipts: 8000,
-      fxPurchases: [fx(1000)],
-      transferIl: 500,
-      countedCashIls: 0,
+      countedCashIls: 8000,
+      fxPurchases: [fx(1000, "PS")],
+      transferIl: 5000,
       expensesIls: 9999,
     });
     assert.equal(calc.availableIlsForFx, calc.ilsRemainingAfterFx);
-    assert.equal(calc.availableIlsForFx, 6500);
-    assert.ok(calc.availableIlsForFx > 0);
-    const legacyFromCounted = Math.max(0, 0 - 9999 - 1000);
-    assert.equal(legacyFromCounted, 0);
-    assert.notEqual(calc.availableIlsForFx, legacyFromCounted);
+    assert.equal(calc.availableIlsForFx, 7000);
   });
 });

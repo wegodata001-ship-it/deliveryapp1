@@ -51,15 +51,44 @@ const COLUMNS: ColDef[] = [
   {
     key: "turkeyPs",
     label: "טורקיה PS",
-    title: "דולרים שנרכשו + עמלה PS",
+    title: "מזומן $ בקופה + רכישת מט״ח PS + עמלת PS",
     kind: "computed",
     currency: "USD",
     getValue: ({ autoTurkey }) => (autoTurkey > 0 ? autoTurkey.toFixed(2) : ""),
   },
+  { key: "transfer", label: "העברות IL", kind: "input", formKey: "countedTransferIls", currency: "ILS" },
+  { key: "checks", label: "צ'קים IL", kind: "input", formKey: "countedChecksIls", currency: "ILS" },
+  { key: "credit", label: "אשראי IL", kind: "input", formKey: "countedCreditIls", currency: "ILS" },
+  {
+    key: "fxIl",
+    label: 'רכישת מט"ח IL',
+    title: "העברות IL + צ'קים IL + אשראי IL — נפרד מרכישת מט״ח PS",
+    kind: "computed",
+    currency: "ILS",
+    getValue: ({ form }) => {
+      const n =
+        fcNum(form.countedTransferIls) + fcNum(form.countedCreditIls) + fcNum(form.countedChecksIls);
+      return n > 0 ? n.toFixed(2) : "";
+    },
+  },
+  { key: "commIls", label: "עמלה IL", kind: "input", formKey: "commissionIls", currency: "ILS" },
+  {
+    key: "turkeyIl",
+    label: "טורקיה IL",
+    title: "רכישת מט״ח IL + עמלת IL",
+    kind: "computed",
+    currency: "ILS",
+    getValue: ({ form }) => {
+      const fxIl =
+        fcNum(form.countedTransferIls) + fcNum(form.countedCreditIls) + fcNum(form.countedChecksIls);
+      const n = fxIl + fcNum(form.commissionIls);
+      return n > 0 ? n.toFixed(2) : "";
+    },
+  },
   {
     key: "turkeyTransferred",
-    label: "סכום שהועבר מטורקיה",
-    title: "סכום שהועבר בפועל לטורקיה (מתנועות)",
+    label: "סה״כ הועבר לטורקיה",
+    title: "סכום שהועבר בפועל לטורקיה (פנקס) — אחרי חיבור PS + IL",
     kind: "readonly",
     currency: "USD",
     getValue: ({ drill }) => {
@@ -70,22 +99,6 @@ const COLUMNS: ColDef[] = [
       return n > 0 ? n.toFixed(2) : "";
     },
   },
-  { key: "transfer", label: "העברות IL", kind: "input", formKey: "countedTransferIls", currency: "ILS" },
-  { key: "checks", label: "צ'קים IL", kind: "input", formKey: "countedChecksIls", currency: "ILS" },
-  { key: "credit", label: "אשראי IL", kind: "input", formKey: "countedCreditIls", currency: "ILS" },
-  {
-    key: "fxIl",
-    label: 'רכישת מט"ח IL',
-    title: "העברות IL + צ'קים IL + אשראי IL",
-    kind: "computed",
-    currency: "ILS",
-    getValue: ({ form }) => {
-      const n =
-        fcNum(form.countedTransferIls) + fcNum(form.countedCreditIls) + fcNum(form.countedChecksIls);
-      return n > 0 ? n.toFixed(2) : "";
-    },
-  },
-  { key: "commIls", label: "עמלה IL", kind: "input", formKey: "commissionIls", currency: "ILS" },
   {
     key: "by",
     label: "עודכן על ידי",
@@ -117,6 +130,7 @@ export function CashCountTable({ drill, loading, canEdit, onSaved }: CashCountTa
     commissionUsd: "",
     commissionIls: "",
     turkeyTransferUsd: "",
+    turkeyTransferIls: "",
   });
   const [saving, setSaving] = useState(false);
   const [savedOk, setSavedOk] = useState(false);
@@ -134,7 +148,7 @@ export function CashCountTable({ drill, loading, canEdit, onSaved }: CashCountTa
 
   const activeFlow = flowSnap ?? drill?.flow ?? null;
   const availableIls = resolveAvailableIlsForFx(activeFlow, form);
-  const fxTotals = activeFlow ? sumFxPurchases(activeFlow.fxPurchases) : { ils: 0, usd: 0 };
+  const fxTotals = activeFlow ? sumFxPurchases(activeFlow.fxPurchases, "PS") : { ils: 0, usd: 0 };
   const autoTurkey = computeAutoTurkeyUsd(form, fxTotals.usd);
 
   const patchForm = (key: keyof ManagerCountForm, value: string) => {
@@ -300,6 +314,7 @@ export function CashCountTable({ drill, loading, canEdit, onSaved }: CashCountTa
           open={fxOpen}
           week={drill.week}
           weekLabel={drill.weekLabel}
+          track="PS"
           availableIls={availableIls}
           saving={saving}
           onClose={() => setFxOpen(false)}

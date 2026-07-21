@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Calculator,
+  ChevronDown,
   FileSpreadsheet,
   FileText,
   Filter,
@@ -21,10 +22,19 @@ import {
 } from "@/lib/cash-control-refresh-bus";
 import { CashflowWeeksTable } from "@/components/admin/cashflow-control/CashflowWeeksTable";
 import { CashflowWeekCards } from "@/components/admin/cashflow-control/CashflowWeekCards";
+import { CashflowRangeSummary } from "@/components/admin/cashflow-control/CashflowRangeSummary";
+import { ExchangeProfitLossChart } from "@/components/admin/flow-control/ExchangeProfitLossChart";
+import { ExchangeProfitLossHistoryTable } from "@/components/admin/flow-control/ExchangeProfitLossHistoryTable";
+import { ExchangeProfitModal } from "@/components/admin/flow-control/exchange-profit/ExchangeProfitModal";
+import type { ExchangeProfitPeriodFilter } from "@/app/admin/cash-flow/exchange-profit-types";
 import { FlowWeekTablesSection } from "@/components/admin/flow-control/tables/FlowWeekTablesSection";
+import { FlowWeekStatusBadge } from "@/components/admin/flow-control/dashboard/FlowWeekStatusBadge";
 import {
+  aggregateOverviewRange,
+  filterWeeksByRange,
   filterWeeksByYear,
   uniqueYears,
+  weekCodesInRange,
   weekDateRange,
 } from "@/components/admin/cashflow-control/cashflow-control-helpers";
 import "@/components/admin/cashflow-control/cashflow-control.css";
@@ -52,6 +62,19 @@ function mergeWeekRows(prev: FlowWeekOverviewRow[], next: FlowWeekOverviewRow[])
   return [...map.values()].sort((a, b) => (parseAhWeekNumber(b.week) ?? 0) - (parseAhWeekNumber(a.week) ?? 0));
 }
 
+/** אפשרויות בחירה — מהשבוע הפעיל אחורה */
+function buildWeekSelectOptions(activeCode: string, loaded: string[]): string[] {
+  const active = parseAhWeekNumber(activeCode) ?? 1;
+  const loadedMin = loaded.reduce((min, w) => {
+    const n = parseAhWeekNumber(w) ?? active;
+    return Math.min(min, n);
+  }, active);
+  const floor = Math.max(1, Math.min(loadedMin, active - 40));
+  const out: string[] = [];
+  for (let n = active; n >= floor; n -= 1) out.push(toAhWeekCode(n));
+  return out;
+}
+
 export function CashflowControlScreen({
   caps,
   initialWeek,
@@ -59,9 +82,10 @@ export function CashflowControlScreen({
   caps: CashFlowCapabilities;
   initialWeek: string;
 }) {
-  const [selectedWeek, setSelectedWeek] = useState(
-    () => initialWeek?.trim() || ACTIVE_WORK_WEEK_CODE,
-  );
+  const initial = initialWeek?.trim() || ACTIVE_WORK_WEEK_CODE;
+  const [selectedWeek, setSelectedWeek] = useState(initial);
+  const [fromWeek, setFromWeek] = useState(initial);
+  const [toWeek, setToWeek] = useState(initial);
   const [overview, setOverview] = useState<FlowWeekOverviewRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -69,15 +93,42 @@ export function CashflowControlScreen({
   const [refreshTick, setRefreshTick] = useState(0);
   const [exporting, setExporting] = useState<"pdf" | "excel" | null>(null);
   const [yearFilter, setYearFilter] = useState<number | "all">("all");
-  const [weekFilter, setWeekFilter] = useState<string>("all");
   const [showEmpty, setShowEmpty] = useState(true);
+  const [reportsOpen, setReportsOpen] = useState(false);
+  const [varianceOpen, setVarianceOpen] = useState(false);
 
   const [drill, setDrill] = useState<FlowWeekDrillPayload | null>(null);
   const [drillLoading, setDrillLoading] = useState(false);
   const [managerCountOpen, setManagerCountOpen] = useState(false);
+  const [profitModalOpen, setProfitModalOpen] = useState(false);
+  const [profitPeriodFilter, setProfitPeriodFilter] = useState<ExchangeProfitPeriodFilter | null>(
+    null,
+  );
   const drillCacheRef = useRef<Map<string, FlowWeekDrillPayload>>(new Map());
   const detailRef = useRef<HTMLDivElement>(null);
   const loadedCodesRef = useRef<string[]>([]);
+
+  const openProfitAll = useCallback(() => {
+    setProfitPeriodFilter(null);
+    setProfitModalOpen(true);
+  }, []);
+
+  const openProfitPeriod = useCallback((filter: ExchangeProfitPeriodFilter) => {
+    setProfitPeriodFilter(filter);
+    setProfitModalOpen(true);
+  }, []);
+
+  const ensureWeeksLoaded = useCallback(async (codes: string[]) => {
+    const missing = codes.filter((c) => !loadedCodesRef.current.includes(c));
+    if (missing.length === 0) return;
+    const data = await getFlowWeeksOverviewAction(missing);
+    loadedCodesRef.current = [...loadedCodesRef.current, ...missing];
+    setOverview((prev) => mergeWeekRows(prev, data.weeks));
+    const oldest = Math.min(
+      ...loadedCodesRef.current.map((c) => parseAhWeekNumber(c) ?? 1),
+    );
+    setHasMoreWeeks(oldest > 1);
+  }, []);
 
   const refreshVisible = useCallback(async () => {
     const codes =
@@ -101,7 +152,6 @@ export function CashflowControlScreen({
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      // רענון: טוען מחדש רק את השבועות שכבר נטענו (לא כל ההיסטוריה)
       if (loadedCodesRef.current.length === 0) {
         const codes = weekCodesFromActive(INITIAL_WEEKS);
         setLoading(true);
@@ -121,6 +171,13 @@ export function CashflowControlScreen({
       cancelled = true;
     };
   }, [refreshTick, refreshVisible]);
+
+  // טעינת שבועות חסרים כשמשנים טווח
+  useEffect(() => {
+    const codes = weekCodesInRange(fromWeek, toWeek);
+    if (codes.length === 0) return;
+    void ensureWeeksLoaded(codes);
+  }, [fromWeek, toWeek, ensureWeeksLoaded]);
 
   const loadMoreWeeks = useCallback(async () => {
     if (loadingMore || !hasMoreWeeks) return;
@@ -178,25 +235,31 @@ export function CashflowControlScreen({
     return () => window.removeEventListener(WEGO_CASH_CONTROL_REFRESH_EVENT, onCashControlSaved);
   }, [refresh]);
 
-  // אם השבוע הנבחר לא בטעינה הנוכחית — בחר את העדכני ביותר שנטען
   useEffect(() => {
     if (overview.length === 0) return;
     if (overview.some((r) => r.week === selectedWeek)) return;
-    setSelectedWeek(overview[0]!.week);
-  }, [overview, selectedWeek]);
+    const inRange = filterWeeksByRange(overview, fromWeek, toWeek);
+    setSelectedWeek(inRange[0]?.week ?? overview[0]!.week);
+  }, [overview, selectedWeek, fromWeek, toWeek]);
 
   const years = useMemo(() => uniqueYears(overview), [overview]);
-  const loadedWeekOptions = useMemo(
-    () => overview.map((r) => r.week).sort((a, b) => (parseAhWeekNumber(b) ?? 0) - (parseAhWeekNumber(a) ?? 0)),
+  const weekSelectOptions = useMemo(
+    () => buildWeekSelectOptions(
+      ACTIVE_WORK_WEEK_CODE,
+      overview.map((r) => r.week),
+    ),
     [overview],
   );
 
   const filteredRows = useMemo(() => {
     let rows = filterWeeksByYear(overview, yearFilter);
-    if (weekFilter !== "all") rows = rows.filter((r) => r.week === weekFilter);
+    rows = filterWeeksByRange(rows, fromWeek, toWeek);
     if (!showEmpty) rows = rows.filter((r) => r.hasData);
     return rows;
-  }, [overview, yearFilter, weekFilter, showEmpty]);
+  }, [overview, yearFilter, fromWeek, toWeek, showEmpty]);
+
+  const rangeAgg = useMemo(() => aggregateOverviewRange(filteredRows), [filteredRows]);
+  const isRange = fromWeek !== toWeek;
 
   const selectedRow = useMemo(
     () => overview.find((r) => r.week === selectedWeek) ?? filteredRows[0] ?? null,
@@ -211,6 +274,25 @@ export function CashflowControlScreen({
       detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   }, []);
+
+  const onFromChange = (w: string) => {
+    setFromWeek(w);
+    const fromN = parseAhWeekNumber(w) ?? 1;
+    const toN = parseAhWeekNumber(toWeek) ?? fromN;
+    if (fromN > toN) setToWeek(w);
+    // שמירת פוקוס בתוך הטווח
+    const sel = parseAhWeekNumber(selectedWeek) ?? fromN;
+    if (sel < fromN || sel > Math.max(fromN, toN)) setSelectedWeek(w);
+  };
+
+  const onToChange = (w: string) => {
+    setToWeek(w);
+    const toN = parseAhWeekNumber(w) ?? 1;
+    const fromN = parseAhWeekNumber(fromWeek) ?? toN;
+    if (toN < fromN) setFromWeek(w);
+    const sel = parseAhWeekNumber(selectedWeek) ?? toN;
+    if (sel < Math.min(fromN, toN) || sel > toN) setSelectedWeek(w);
+  };
 
   async function exportFile(format: "pdf" | "excel") {
     const wk = selectedWeek;
@@ -255,11 +337,18 @@ export function CashflowControlScreen({
           <div>
             <h1>בקרת תזרים</h1>
             <p>
-              {selectedRow
-                ? `${selectedRow.week} · ${weekDateRange(selectedRow.week, selectedRow.weekLabel)}`
-                : "סגירה שבועית · 3 שבועות אחרונים"}
+              {isRange && rangeAgg
+                ? `${rangeAgg.fromWeek} → ${rangeAgg.toWeek} · ${rangeAgg.weekCount} שבועות`
+                : selectedRow
+                  ? `${selectedRow.week} · ${weekDateRange(selectedRow.week, selectedRow.weekLabel)}`
+                  : "סגירה שבועית"}
             </p>
           </div>
+          <FlowWeekStatusBadge
+            drill={drill}
+            rangeAlertCount={isRange ? rangeAgg?.alertWeekCount ?? 0 : null}
+            onClick={() => setVarianceOpen(true)}
+          />
         </div>
 
         <div className="cfc-header__actions">
@@ -282,11 +371,21 @@ export function CashflowControlScreen({
           </label>
 
           <label className="cfc-select">
-            <span>שבוע</span>
-            <select value={weekFilter} onChange={(e) => setWeekFilter(e.target.value)}>
-              <option value="all">כל הנטענים</option>
-              {loadedWeekOptions.map((w) => (
-                <option key={w} value={w}>
+            <span>משבוע</span>
+            <select value={fromWeek} onChange={(e) => onFromChange(e.target.value)}>
+              {weekSelectOptions.map((w) => (
+                <option key={`from-${w}`} value={w}>
+                  {w}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="cfc-select">
+            <span>עד שבוע</span>
+            <select value={toWeek} onChange={(e) => onToChange(e.target.value)}>
+              {weekSelectOptions.map((w) => (
+                <option key={`to-${w}`} value={w}>
                   {w}
                 </option>
               ))}
@@ -351,25 +450,55 @@ export function CashflowControlScreen({
       />
 
       <div ref={detailRef} className="cfc-detail">
-        {selectedRow ? (
+        {selectedRow && rangeAgg ? (
           <>
-            <div className="cfc-detail__head">
-              <h2>
-                סיכום שבוע <span dir="ltr">{selectedRow.week}</span>
-              </h2>
-              <span>{weekDateRange(selectedRow.week, selectedRow.weekLabel)}</span>
-            </div>
-            <CashflowWeekCards row={selectedRow} drill={drill} loading={drillLoading} />
+            <CashflowRangeSummary
+              agg={rangeAgg}
+              focusWeek={selectedWeek}
+              weekRows={filteredRows}
+            />
+
             <FlowWeekTablesSection
               drill={drill}
               loading={drillLoading}
-              canEditManagerCount={caps.canManageFlow || caps.canCountEdit}
-              onManagerCountSaved={refresh}
+              varianceOpenExternal={varianceOpen}
+              onVarianceOpenChange={setVarianceOpen}
             />
+
+            <details
+              className="cfc-reports-acc"
+              open={reportsOpen}
+              onToggle={(e) => setReportsOpen((e.target as HTMLDetailsElement).open)}
+            >
+              <summary className="cfc-reports-acc__summary">
+                <ChevronDown size={18} className="cfc-reports-acc__chevron" aria-hidden />
+                <span>דוחות וגרפים</span>
+                <span className="cfc-reports-acc__hint">כרטיסי סיכום · גרף רווח</span>
+              </summary>
+              <div className="cfc-reports-acc__body">
+                <CashflowWeekCards
+                  row={selectedRow}
+                  drill={drill}
+                  loading={drillLoading}
+                  onProfitClick={openProfitAll}
+                />
+                {drill?.flow?.fxProfitLoss ? (
+                  <div className="cfc-fx-panel">
+                    <ExchangeProfitLossChart
+                      summary={drill.flow.fxProfitLoss}
+                      history={drill.flow.fxProfitLossHistory ?? []}
+                      onOpenProfitDetail={openProfitAll}
+                      onOpenPeriod={openProfitPeriod}
+                    />
+                    <ExchangeProfitLossHistoryTable rows={drill.flow.fxProfitLossHistory ?? []} />
+                  </div>
+                ) : null}
+              </div>
+            </details>
           </>
         ) : (
           <div className="cfc-card">
-            <p className="cfc-empty">בחרו שבוע מהטבלה להצגת הסיכום</p>
+            <p className="cfc-empty">בחרו שבוע או טווח שבועות להצגת הסיכום</p>
           </div>
         )}
       </div>
@@ -384,6 +513,15 @@ export function CashflowControlScreen({
         onSaved={() => {
           setManagerCountOpen(false);
           refresh();
+        }}
+      />
+      <ExchangeProfitModal
+        open={profitModalOpen}
+        week={selectedWeek}
+        periodFilter={profitPeriodFilter}
+        onClose={() => {
+          setProfitModalOpen(false);
+          setProfitPeriodFilter(null);
         }}
       />
     </div>

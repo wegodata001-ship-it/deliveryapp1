@@ -8,6 +8,7 @@ import {
   listShipmentRecordsByBatchIds,
   listAllShipmentRecords,
   createShipmentBatch,
+  importRowsIntoBatch,
   updateShipmentBatch,
   getShipmentBatch,
   assignZone,
@@ -37,6 +38,7 @@ import type {
   ShipmentZoneDto,
   ShipmentCourierDto,
   CreateBatchInput,
+  ImportRowsIntoBatchInput,
   AssignZoneInput,
   AssignCourierInput,
   UpdateStatusInput,
@@ -80,6 +82,22 @@ export async function createShipmentBatchAction(
     const batchId = await createShipmentBatch(input, me.id);
     revalidate();
     return { ok: true, batchId };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+export async function importRowsIntoBatchAction(
+  input: ImportRowsIntoBatchInput
+): Promise<{ ok: true; count: number } | { ok: false; error: string }> {
+  try {
+    const me = await requireAuth();
+    if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
+      return { ok: false, error: "אין הרשאה" };
+    const count = await importRowsIntoBatch(input);
+    revalidate();
+    revalidatePath(`/admin/shipments/${input.batchId}`);
+    return { ok: true, count };
   } catch (e) {
     return { ok: false, error: String(e) };
   }

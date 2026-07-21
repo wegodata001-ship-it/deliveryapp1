@@ -11,7 +11,11 @@ import { computeFromUsdAmount } from "@/lib/financial-calc";
 import { loadFinanceSettingsSerialized } from "@/lib/financial-settings";
 import { logFinanceSaveTarget } from "@/lib/finance-log";
 import { logPaymentAllocationPreSave } from "@/lib/payment-allocation-debug";
-import { allocatePaymentAcrossOrders, roundMoney2, toPaymentIntakeBases } from "@/lib/payment-intake";
+import {
+  orderLedgerBalanceUsd,
+  roundMoney2,
+  toPaymentIntakeBases,
+} from "@/lib/payment-intake";
 import {
   computePaymentOveragePreview,
   orderExpectedIlsValue,
@@ -508,13 +512,13 @@ export async function savePaymentUpdatedAction(
       Boolean(form.applyCustomerBalanceReset) ||
       (form.commissionResetOrderIds?.length ?? 0) > 0,
     allowNegativeCommission: Boolean(form.applyCustomerBalanceReset) && isAdminUser(me),
-    // זרימת save-first: חוסר אינו חוסם את קליטת התשלום. הוא נשמר כחוב פתוח
-    // ומטופל, אם המשתמש בוחר בכך, רק מחלון הסיכום שלאחר השמירה.
+    // זרימת save-first: חוסר אינו חוסם את קליטת התשלום — נשמר כחוב פתוח.
     deferShortageResolution: true,
     surplusDisposition:
       form.surplusDisposition ??
       (form.saveSurplusAsCredit ? "credit" : null),
-    approvedDebtTransfers: form.approvedDebtTransfers ?? null,
+    // העברת חוב בין אמצעים בוטלה — שינוי אמצעי רק במסך אמצעי מתוכננים.
+    approvedDebtTransfers: null,
     requiredApprovalGranted: isAdminUser(me),
   });
   if (!businessDecision.ok) {
@@ -628,6 +632,10 @@ export async function savePaymentUpdatedAction(
   let surplusFeeUsd = 0;
   /** Matching Engine — מצב אמצעים לשמירה ב-DB (דו-מטבעי) */
   let matchingResult: DualCurrencyMatchingResult | null = null;
+  /** האם Matching רץ על מועמדים עם חלוקת אמצעים */
+  let usedMethodMatching = false;
+  /** סכום יתרות אמצעים פתוחים אחרי Matching/seed — לזיהוי הודעת שגיאה מדויקת */
+  let openMethodRemainingUsd = 0;
   /** ויתור על עודף → הוספה לעמלת הזמנה */
   let forfeitToCommissionUsd = 0;
   let forfeitCommissionOrderId: string | null = null;
@@ -677,6 +685,7 @@ export async function savePaymentUpdatedAction(
       const candidateIds = candidateOrders.map((o) => o.id);
 
       if (candidateIds.length > 0) {
+        usedMethodMatching = true;
         const dbLines = await prisma.orderPaymentBreakdown.findMany({
           where: { orderId: { in: candidateIds } },
           orderBy: [{ orderId: "asc" }, { createdAt: "asc" }],
@@ -758,6 +767,12 @@ export async function savePaymentUpdatedAction(
           }
         }
 
+        openMethodRemainingUsd = roundMoney2(
+          balances
+            .filter((b) => b.currency === "USD" && b.remaining > ALLOC_EPS)
+            .reduce((s, b) => s + b.remaining, 0),
+        );
+
         const orderIdsOldestFirst = [...candidateIds].sort((a, b) => {
           const oa = candidateOrders.find((o) => o.id === a);
           const ob = candidateOrders.find((o) => o.id === b);
@@ -769,18 +784,13 @@ export async function savePaymentUpdatedAction(
           enteredByBucket: enteredMethods,
           orderIdsOldestFirst,
           rateByOrderId: orderRate,
-          debtTransfers: (form.approvedDebtTransfers ?? []).map((t) => ({
-            fromBucket: t.fromBucket,
-            toBucket: t.toBucket,
-            amount: t.amountUsd,
-            // העברת חוב בטופס כיום ב-USD; ILS יתווסף כשיוגדר במפורש
-            currency: "USD" as const,
-          })),
+          // אין העברת חוב בין אמצעים בזמן קליטה
+          debtTransfers: null,
         });
 
-        allocationEntries = [...matchingResult.amountUsdByOrderId.entries()].map(
-          ([orderId, amountUsd]) => [orderId, amountUsd] as [string, number],
-        );
+        allocationEntries = [...matchingResult.amountUsdByOrderId.entries()]
+          .filter(([, amountUsd]) => amountUsd > ALLOC_EPS)
+          .map(([orderId, amountUsd]) => [orderId, amountUsd] as [string, number]);
         // עודף לטיפול משתמש: כרגע מסלול העודף הקיים ב-USD (ILS נשמר בנפרד ב-matchingResult)
         unallocatedUsd = matchingResult.surplusUsd;
 
@@ -796,6 +806,37 @@ export async function savePaymentUpdatedAction(
           prioritizedOrderIds: prioritized,
           forceCustomerCreditPayment: false,
         });
+
+        /**
+         * Matching ריק + חוב Ledger פתוח + אין יתרת אמצעי פתוחה
+         * (snapshot ישן/לא מסונכרן) → FIFO לפי Ledger.
+         * אם יש יתרת אמצעי פתוחה והתשלום לא פגע בה — זו אי-התאמת אמצעי, לא "כבר שולם".
+         */
+        if (allocationEntries.length === 0) {
+          const ledgerOpenUsd = roundMoney2(
+            bases.reduce((s, b) => s + Math.max(0, orderLedgerBalanceUsd(b)), 0),
+          );
+          if (ledgerOpenUsd > ALLOC_EPS && openMethodRemainingUsd <= ALLOC_EPS) {
+            usedMethodMatching = false;
+            matchingResult = null;
+            const fifoDiag = logPaymentAllocationPreSave({
+              source: "payment-save-server",
+              customerId: cid,
+              customerLoaded: true,
+              ordersCount: orders.length,
+              paymentAmountUsd: totals.totalUsd,
+              selectedOrderIds: form.includedOrderIds ?? null,
+              weekCode: weekCode,
+              bases,
+              prioritizedOrderIds: prioritized,
+              forceCustomerCreditPayment: false,
+            });
+            unallocatedUsd = fifoDiag.unallocatedUsd;
+            allocationEntries = fifoDiag.allocationTargets.map(
+              (t) => [t.orderId, t.amountUsd] as [string, number],
+            );
+          }
+        }
       } else {
         // מסמכים ללא תכנון אמצעים — FIFO הזמנות קלאסי
         const allocDiag = logPaymentAllocationPreSave({
@@ -821,6 +862,9 @@ export async function savePaymentUpdatedAction(
       (surplusToCommission && unallocatedUsd > ALLOC_EPS) ||
       (surplusForfeit && unallocatedUsd > ALLOC_EPS);
     if (allocationEntries.length === 0 && !canSaveWithoutAllocTarget) {
+      const ledgerOpenUsd = roundMoney2(
+        bases.reduce((s, b) => s + Math.max(0, orderLedgerBalanceUsd(b)), 0),
+      );
       console.error("[payment-save] Matching/FIFO returned no allocation targets", {
         customerId: cid,
         ordersCount: orders.length,
@@ -829,13 +873,27 @@ export async function savePaymentUpdatedAction(
         weekCode,
         includedOrderIds: form.includedOrderIds,
         prioritized: prioritized ? [...prioritized] : null,
+        ledgerOpenUsd,
+        openMethodRemainingUsd,
+        usedMethodMatching,
+        matchingSurplusUsd: matchingResult?.surplusUsd ?? null,
       });
+      if (orders.length === 0) {
+        return { ok: false, error: "לא נמצאו הזמנות ללקוח זה — לא ניתן לבצע הקצאה" };
+      }
+      if (ledgerOpenUsd > ALLOC_EPS) {
+        // לקוח 105 ודומים: יש חוב Ledger אך Matching לא הקצה (אמצעי נעול/לא תואם)
+        return {
+          ok: false,
+          error:
+            openMethodRemainingUsd > ALLOC_EPS
+              ? "קיימת יתרת חוב פתוחה, אך לא באמצעי התשלום שנבחר. יש לשלם לפי האמצעי המתוכנן, או לעדכן את האמצעים במסך «אמצעי תשלום מתוכננים» לפני הקליטה."
+              : "קיימת יתרת חוב פתוחה בהזמנה, אך לא ניתן להקצות את התשלום לאמצעי המתוכננים. רעננו את המסך או בדקו את חלוקת האמצעים בהזמנה.",
+        };
+      }
       return {
         ok: false,
-        error:
-          orders.length === 0
-            ? "לא נמצאו הזמנות ללקוח זה — לא ניתן לבצע הקצאה"
-            : "לא נמצאו הזמנות עם יתרת חוב פתוחה — ייתכן שהמסמך כבר שולם במלואו",
+        error: "לא נמצאו הזמנות עם יתרת חוב פתוחה — ייתכן שהמסמך כבר שולם במלואו",
       };
     }
     if (

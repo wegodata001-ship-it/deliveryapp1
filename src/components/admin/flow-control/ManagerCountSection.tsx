@@ -18,6 +18,7 @@ function formFromFlow(flow: FlowWeekPayload): ManagerCountForm {
     commissionUsd: flow.commissionUsd ?? "",
     commissionIls: flow.commissionIls ?? "",
     turkeyTransferUsd: flow.turkeyTransferUsd ?? "",
+    turkeyTransferIls: flow.turkeyTransferIls ?? "",
   };
 }
 
@@ -60,6 +61,7 @@ export function ManagerCountSection({
     commissionUsd: "",
     commissionIls: "",
     turkeyTransferUsd: "",
+    turkeyTransferIls: "",
   });
 
   useEffect(() => {
@@ -155,7 +157,7 @@ export function ManagerCountSection({
         <>
           <CurrencyExchangeHistory purchases={flow.fxPurchases} />
           <ExchangeProfitLossHistoryTable rows={flow.fxProfitLossHistory} />
-          <ExchangeProfitLossChart summary={flow.fxProfitLoss} />
+          <ExchangeProfitLossChart summary={flow.fxProfitLoss} history={flow.fxProfitLossHistory} />
         </>
       ) : null}
 

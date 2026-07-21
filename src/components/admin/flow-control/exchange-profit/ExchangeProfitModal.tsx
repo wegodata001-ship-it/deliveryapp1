@@ -1,18 +1,24 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { X } from "lucide-react";
 import { getExchangeProfitWeekSummaryAction } from "@/app/admin/cash-flow/get-exchange-profit-actions";
-import type { ExchangeProfitWeekSummaryDto } from "@/app/admin/cash-flow/exchange-profit-types";
+import type {
+  ExchangeProfitPeriodFilter,
+  ExchangeProfitWeekSummaryDto,
+} from "@/app/admin/cash-flow/exchange-profit-types";
 import { ExchangeProfitTable } from "./ExchangeProfitTable";
 import { ExchangeProfitOrderModal } from "./ExchangeProfitOrderModal";
 import { fmtDailyMoney } from "@/lib/cash-control-daily";
 import { fcNum } from "@/components/admin/flow-control/shared";
+import { orderMatchesProfitPeriod } from "@/lib/flow-control/exchange-profit-period";
 
 export type ExchangeProfitModalProps = {
   open: boolean;
   week: string;
   onClose: () => void;
+  /** סינון מנקודה בגרף (יום / שבוע / חודש) */
+  periodFilter?: ExchangeProfitPeriodFilter | null;
 };
 
 function fmtYmdHe(ymd: string): string {
@@ -34,7 +40,12 @@ function Skeleton() {
   );
 }
 
-export function ExchangeProfitModal({ open, week, onClose }: ExchangeProfitModalProps) {
+export function ExchangeProfitModal({
+  open,
+  week,
+  onClose,
+  periodFilter = null,
+}: ExchangeProfitModalProps) {
   const [summary, setSummary] = useState<ExchangeProfitWeekSummaryDto | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,9 +87,31 @@ export function ExchangeProfitModal({ open, week, onClose }: ExchangeProfitModal
 
   const openOrder = useCallback((id: string) => setOrderId(id), []);
 
+  const filteredOrders = useMemo(() => {
+    if (!summary) return [];
+    if (!periodFilter) return summary.orders;
+    return summary.orders.filter((o) =>
+      orderMatchesProfitPeriod(o.dateYmd, periodFilter.period, periodFilter.key),
+    );
+  }, [summary, periodFilter]);
+
+  const filteredNet = useMemo(() => {
+    let n = 0;
+    for (const o of filteredOrders) n += fcNum(o.netIls);
+    return Math.round(n * 100) / 100;
+  }, [filteredOrders]);
+
   if (!open) return null;
 
-  const net = summary ? fcNum(summary.netIls) : 0;
+  const net = periodFilter ? filteredNet : summary ? fcNum(summary.netIls) : 0;
+  const periodLabel =
+    periodFilter?.period === "day"
+      ? `יום ${periodFilter.label}`
+      : periodFilter?.period === "week"
+        ? `שבוע ${periodFilter.label}`
+        : periodFilter?.period === "month"
+          ? `חודש ${periodFilter.label}`
+          : null;
 
   return (
     <>
@@ -87,13 +120,13 @@ export function ExchangeProfitModal({ open, week, onClose }: ExchangeProfitModal
           className="xp-modal xp-modal--week"
           role="dialog"
           aria-modal="true"
-          aria-label="רווח מט״ח — פירוט שבוע"
+          aria-label="רווח — פירוט לפי הזמנות"
           dir="rtl"
           onClick={(e) => e.stopPropagation()}
         >
           <header className="xp-modal__head">
             <div>
-              <h2>רווח מט״ח</h2>
+              <h2>פירוט רווח לפי הזמנות</h2>
               <p className="xp-modal__sub">
                 שבוע <span dir="ltr">{week}</span>
                 {summary ? (
@@ -102,6 +135,12 @@ export function ExchangeProfitModal({ open, week, onClose }: ExchangeProfitModal
                     <span dir="ltr">
                       {fmtYmdHe(summary.fromYmd)} - {fmtYmdHe(summary.toYmd)}
                     </span>
+                  </>
+                ) : null}
+                {periodLabel ? (
+                  <>
+                    {" · "}
+                    <strong>{periodLabel}</strong>
                   </>
                 ) : null}
               </p>
@@ -118,55 +157,35 @@ export function ExchangeProfitModal({ open, week, onClose }: ExchangeProfitModal
             {!loading && summary ? (
               <>
                 <div className={`xp-hero xp-hero--${net > 0.005 ? "profit" : net < -0.005 ? "loss" : "flat"}`}>
-                  <span>סה״כ רווח מט״ח השבוע</span>
+                  <span>
+                    {periodFilter
+                      ? "סה״כ רווח בתקופה שנבחרה"
+                      : "סה״כ רווח השבוע"}
+                  </span>
                   <strong dir="ltr">{fmtDailyMoney("ILS", net)}</strong>
                 </div>
 
-                <div className="xp-stat-grid">
-                  <article className="xp-stat">
-                    <span>מספר הזמנות</span>
-                    <strong>{summary.orderCount}</strong>
-                  </article>
-                  <article className="xp-stat">
-                    <span>סה״כ תקבולים בדולר</span>
-                    <strong dir="ltr">{fmtDailyMoney("USD", fcNum(summary.totalReceivedUsd))}</strong>
-                  </article>
-                  <article className="xp-stat">
-                    <span>סה״כ תשלומים לספקים</span>
-                    <strong dir="ltr">{fmtDailyMoney("USD", fcNum(summary.totalPaidUsd))}</strong>
-                  </article>
-                  <article className="xp-stat">
-                    <span>סה״כ המרות מט״ח</span>
-                    <strong dir="ltr">
-                      {summary.fxConversionCount} · {fmtDailyMoney("ILS", fcNum(summary.fxConversionIls))}
-                    </strong>
-                  </article>
-                  <article className="xp-stat xp-stat--profit">
-                    <span>סה״כ רווח</span>
-                    <strong dir="ltr">{fmtDailyMoney("ILS", fcNum(summary.totalProfitIls))}</strong>
-                  </article>
-                  <article className="xp-stat xp-stat--loss">
-                    <span>סה״כ הפסד</span>
-                    <strong dir="ltr">{fmtDailyMoney("ILS", fcNum(summary.totalLossIls))}</strong>
-                  </article>
-                  <article className="xp-stat xp-stat--net">
-                    <span>רווח נטו</span>
-                    <strong dir="ltr">{fmtDailyMoney("ILS", fcNum(summary.netIls))}</strong>
-                  </article>
-                </div>
+                <p className="xp-muted xp-hint">
+                  לחצו על שורת הזמנה לפירוט מלא של החישוב · מיון לפי רווחיות (גבוה לנמוך)
+                </p>
 
                 <section className="xp-section">
-                  <h3>הזמנות שתרמו לרווח/הפסד</h3>
-                  <ExchangeProfitTable orders={summary.orders} onOpenOrder={openOrder} />
+                  <h3>
+                    הזמנות שהרכיבו את הרווח
+                    {periodFilter ? ` · ${periodLabel}` : ""}
+                    {` (${filteredOrders.length})`}
+                  </h3>
+                  <ExchangeProfitTable orders={filteredOrders} onOpenOrder={openOrder} />
                 </section>
               </>
             ) : null}
 
-            {!loading && summary && summary.orders.length === 0 && !error ? (
+            {!loading && summary && filteredOrders.length === 0 && !error ? (
               <div className="xp-empty">
-                <p>אין רווח/הפסד מט״ח להזמנות בשבוע זה.</p>
-                <p className="xp-muted">
-                  יוצגו הזמנות עם תשלומים שיש להן שער קבלה ושער הזמנה להשוואה.
+                <p>
+                  {periodFilter
+                    ? "אין הזמנות עם רווח/הפסד מט״ח בתקופה שנבחרה."
+                    : "אין רווח/הפסד מט״ח להזמנות בשבוע זה."}
                 </p>
               </div>
             ) : null}

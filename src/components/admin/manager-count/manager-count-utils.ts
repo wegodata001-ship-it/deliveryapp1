@@ -1,8 +1,10 @@
 import type { FlowWeekPayload, ManagerCountForm } from "@/app/admin/cash-flow/flow-types";
 import {
-  computeIlFxPurchaseIls,
-  computeIlsRemainingAfterFx,
-  computeTurkeyExpectedUsd,
+  computeIlAvailableIlsForFx,
+  computeIlSourcePoolIls,
+  computePsAvailableIlsForFx,
+  computeTurkeyAllocationFromCashCount,
+  computeTurkeyIlAllocationIls,
   sumFxPurchases,
 } from "@/lib/flow-control/flow-calculation-service";
 import { fcNum } from "@/components/admin/flow-control/shared";
@@ -17,64 +19,84 @@ export function formFromFlow(flow: FlowWeekPayload): ManagerCountForm {
     commissionUsd: flow.commissionUsd ?? "",
     commissionIls: flow.commissionIls ?? "",
     turkeyTransferUsd: flow.turkeyTransferUsd ?? "",
+    turkeyTransferIls: flow.turkeyTransferIls ?? "",
   };
 }
 
+/** זמין לרכישת מט״ח PS — מזומן ₪ PS בלבד */
+export function resolveAvailablePsIlsForFx(
+  flow: FlowWeekPayload | null,
+  form?: Pick<ManagerCountForm, "countedCashIls"> | null,
+): string {
+  if (!flow) return "0.00";
+  const cashIls = form ? fcNum(form.countedCashIls) : fcNum(flow.counted.CASH_ILS);
+  return computePsAvailableIlsForFx(cashIls, flow.fxPurchases).toFixed(2);
+}
+
+/** זמין לרכישת מט״ח IL — מאגר בנקאי IL בלבד */
+export function resolveAvailableIlIlsForFx(
+  flow: FlowWeekPayload | null,
+  form?: Pick<
+    ManagerCountForm,
+    "countedTransferIls" | "countedCreditIls" | "countedChecksIls"
+  > | null,
+): string {
+  if (!flow) return "0.00";
+  const transfer = form ? fcNum(form.countedTransferIls) : fcNum(flow.counted.BANK_TRANSFER);
+  const credit = form ? fcNum(form.countedCreditIls) : fcNum(flow.counted.CREDIT);
+  const checks = form ? fcNum(form.countedChecksIls) : fcNum(flow.counted.CHECK);
+  return computeIlAvailableIlsForFx(transfer, credit, checks, flow.fxPurchases).toFixed(2);
+}
+
 /**
- * זמין בקופה לרכישת מט״ח — Source of Truth מאוחד עם מסך בקרת תזרים:
- * «שקל שנשאר» = תקבולים מקליטה − רכישת מט״ח PS − רכישת מט״ח IL
- * (`ilsRemainingAfterFx` / `availableIlsForFx`).
- * לא נשען על countedCashIls כמקור יחיד.
+ * @deprecated איחוד PS+IL אסור. העדף resolveAvailablePsIlsForFx.
  */
 export function resolveAvailableIlsForFx(
   flow: FlowWeekPayload | null,
-  form?: Pick<ManagerCountForm, "countedTransferIls" | "countedCreditIls" | "countedChecksIls"> | null,
+  form?: Pick<ManagerCountForm, "countedCashIls"> | null,
 ): string {
-  if (!flow) return "0.00";
-
-  const receipts = fcNum(flow.kpis.totalReceivedIls);
-  const fxPsIls = sumFxPurchases(flow.fxPurchases).ils;
-  const savedIl = computeIlFxPurchaseIls(
-    fcNum(flow.counted.BANK_TRANSFER),
-    fcNum(flow.counted.CREDIT),
-    fcNum(flow.counted.CHECK),
-  );
-
-  if (form) {
-    const liveIl = computeIlFxPurchaseIls(
-      fcNum(form.countedTransferIls),
-      fcNum(form.countedCreditIls),
-      fcNum(form.countedChecksIls),
-    );
-    if (Math.abs(liveIl - savedIl) > 0.02) {
-      return computeIlsRemainingAfterFx(receipts, fxPsIls, liveIl).toFixed(2);
-    }
-  }
-
-  return flow.ilsRemainingAfterFx || flow.availableIlsForFx || "0.00";
+  return resolveAvailablePsIlsForFx(flow, form);
 }
 
-export function computeAutoTurkeyUsd(form: ManagerCountForm, fxUsdTotal: number): number {
-  return computeTurkeyExpectedUsd(
+export function computeAutoTurkeyUsd(form: ManagerCountForm, fxPsUsd: number): number {
+  return computeTurkeyAllocationFromCashCount(
     fcNum(form.countedCashUsd),
-    fxUsdTotal,
+    fxPsUsd,
     fcNum(form.commissionUsd),
   );
 }
 
+export function computeAutoTurkeyIls(form: ManagerCountForm, fxIlIls: number): number {
+  return computeTurkeyIlAllocationIls(fxIlIls, fcNum(form.commissionIls));
+}
+
 export function isTurkeyManual(form: ManagerCountForm, flow: FlowWeekPayload | null): boolean {
   if (!flow) return false;
-  const fxUsd = sumFxPurchases(flow.fxPurchases).usd;
-  const auto = computeAutoTurkeyUsd(form, fxUsd);
+  const fxPsUsd = sumFxPurchases(flow.fxPurchases, "PS").usd;
+  const auto = computeAutoTurkeyUsd(form, fxPsUsd);
   const stored = fcNum(form.turkeyTransferUsd);
+  return Math.abs(stored - auto) > 0.02;
+}
+
+export function isTurkeyIlManual(form: ManagerCountForm, flow: FlowWeekPayload | null): boolean {
+  if (!flow) return false;
+  const fxIlIls = sumFxPurchases(flow.fxPurchases, "IL").ils;
+  const auto = computeAutoTurkeyIls(form, fxIlIls);
+  const stored = fcNum(form.turkeyTransferIls);
   return Math.abs(stored - auto) > 0.02;
 }
 
 export function syncAutoTurkey(form: ManagerCountForm, flow: FlowWeekPayload | null): ManagerCountForm {
   if (!flow) return form;
-  const fxUsd = sumFxPurchases(flow.fxPurchases).usd;
-  const auto = computeAutoTurkeyUsd(form, fxUsd);
-  return { ...form, turkeyTransferUsd: auto > 0 ? auto.toFixed(2) : "" };
+  const fxPsUsd = sumFxPurchases(flow.fxPurchases, "PS").usd;
+  const fxIlIls = sumFxPurchases(flow.fxPurchases, "IL").ils;
+  const autoPs = computeAutoTurkeyUsd(form, fxPsUsd);
+  const autoIl = computeAutoTurkeyIls(form, fxIlIls);
+  return {
+    ...form,
+    turkeyTransferUsd: autoPs > 0 ? autoPs.toFixed(2) : "",
+    turkeyTransferIls: autoIl > 0 ? autoIl.toFixed(2) : "",
+  };
 }
 
 export function sumIntakeFxPlFromPurchases(flow: FlowWeekPayload | null): {
@@ -86,20 +108,16 @@ export function sumIntakeFxPlFromPurchases(flow: FlowWeekPayload | null): {
   let profitIls = 0;
   let lossIls = 0;
   for (const p of flow.fxPurchases) {
-    if (p.intakeProfitIls != null || p.intakeLossIls != null) {
-      profitIls += p.intakeProfitIls ?? 0;
-      lossIls += p.intakeLossIls ?? 0;
-      continue;
-    }
-    for (const line of p.intakeAllocations ?? []) {
-      if (line.profitIls > 0.005) profitIls += line.profitIls;
-      else if (line.profitIls < -0.005) lossIls += Math.abs(line.profitIls);
-    }
+    profitIls += p.intakeProfitIls ?? 0;
+    lossIls += p.intakeLossIls ?? 0;
   }
-  const netIls = Math.round((profitIls - lossIls) * 100) / 100;
-  return {
-    profitIls: Math.round(profitIls * 100) / 100,
-    lossIls: Math.round(lossIls * 100) / 100,
-    netIls,
-  };
+  return { profitIls, lossIls, netIls: profitIls - lossIls };
+}
+
+export function ilSourcePoolFromForm(form: ManagerCountForm): number {
+  return computeIlSourcePoolIls(
+    fcNum(form.countedTransferIls),
+    fcNum(form.countedCreditIls),
+    fcNum(form.countedChecksIls),
+  );
 }

@@ -1,6 +1,7 @@
 /**
- * @deprecated PaymentSummaryService — בקרת תזרים אינה קוראת מ-Payment.
- * נשמר לתאימות; מפנה ל-CashCountSummaryService.
+ * @deprecated PaymentSummaryService — בקרת תזרים קוראת מ-Payment ישירות
+ * (computePaymentsTotalReceivedIls / buildFlowPaymentDailyRows).
+ * נשמר לתאימות בלבד; לא להשתמש כמקור ל־«סה״כ התקבל».
  */
 
 export {
@@ -11,7 +12,7 @@ export {
   type FlowWeekApprovedLine,
 } from "@/lib/flow-control/services/cash-count-summary-service";
 
-/** @deprecated */
+/** @deprecated — מחזיר ספירת קופה, לא קליטות תשלום */
 export async function loadFlowWeekPaymentSummary(weekCode: string) {
   const { loadFlowWeekCashCountSummary } = await import(
     "@/lib/flow-control/services/cash-count-summary-service"
@@ -28,7 +29,7 @@ export async function loadFlowWeekPaymentSummary(weekCode: string) {
   };
 }
 
-/** @deprecated — אין טעינת Payment בבקרת תזרים */
+/** @deprecated */
 export async function loadFlowWeekPaymentsForIntake(_weekCode: string): Promise<never[]> {
   return [];
 }

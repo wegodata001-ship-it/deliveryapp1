@@ -395,9 +395,9 @@ export type DebtTransferProposal = {
 /**
  * שערי החלטה לקליטת תשלום לפי אמצעי:
  * - ALLOW — מותר להמשיך (תשלום חלקי תקין / התאמה מלאה ללא עודף)
- * - DEBT_TRANSFER — שולם באמצעי אחר/נעול בעוד חוב פתוח באמצעי אחר → חלון אישור
- * - METHOD_DEVIATION — חריגת אמצעי רגילה (עדיין יש אמצעים פתוחים)
- * - SURPLUS_AFTER_CLOSURE — כל החוב נסגר ויש עודף → חלון עודף ייעודי (לא חריגת אמצעי)
+ * - METHOD_DEVIATION — תשלום באמצעי לא מתוכנן / מעל היתרה (אין העברת חוב)
+ * - SURPLUS_AFTER_CLOSURE — כל החוב נסגר ויש עודף אמיתי → חלון עודף ייעודי
+ * - DEBT_TRANSFER — deprecated, לא מוחזר עוד (נשאר בטיפוס לתאימות)
  */
 export type MethodIntakeGate =
   | { kind: "ALLOW" }
@@ -510,19 +510,18 @@ export function applyDebtTransfersToPlan(
 /**
  * מקור אמת יחיד להחלטת שערי אמצעי תשלום לפני שמירה.
  *
- * סדר:
- * 1. אמצעים פתוחים בלבד (נעולים = remaining 0).
- * 2. אם קיימת הצעת העברת חוב ולא אושרה → DEBT_TRANSFER.
- * 3. אם אחרי העברות/התאמה נשארת חריגת אמצעי ועדיין חוב פתוח → METHOD_DEVIATION.
- * 4. אם כל החוב נסגר ויש עודף → SURPLUS_AFTER_CLOSURE.
- * 5. אחרת ALLOW.
+ * עקרון עסקי:
+ * - אין העברת חוב בין אמצעי תשלום בזמן קליטה.
+ * - שינוי אמצעי מתוכנן נעשה רק במסך «אמצעי תשלום מתוכננים».
+ * - תשלום באמצעי לא מתוכנן / מעל היתרה → METHOD_DEVIATION (חסימה).
+ * - עודף אמיתי (סכום > חוב) רק כשאין חריגת אמצעי → SURPLUS_AFTER_CLOSURE.
  */
 export function classifyMethodIntakeGate(params: {
   orders: PaymentIntakeOrderRow[];
   includedOrderIds: string[] | null;
   enteredByBucket: EnteredBucketUsd[];
   totalPaymentUsd: number;
-  /** העברות חוב שכבר אושרו במפורש ע״י המשתמש */
+  /** @deprecated לא בשימוש — העברת חוב בין אמצעים בוטלה */
   approvedDebtTransfers?: DebtTransferProposal[] | null;
   eps?: number;
 }): MethodIntakeGate {
@@ -541,37 +540,33 @@ export function classifyMethodIntakeGate(params: {
   const surplusUsd = round2(Math.max(0, totalPaymentUsd - totalDebtUsd));
   const coversAllDebt = totalPaymentUsd >= totalDebtUsd - eps;
 
-  const approved = params.approvedDebtTransfers ?? [];
-  const planAfterTransfer =
-    approved.length > 0 ? applyDebtTransfersToPlan(openPlan, approved, eps) : openPlan;
+  // אין העברת חוב — אכיפה מול האמצעים הפתוחים כפי שתוכננו בלבד
+  const violations = enforceBreakdownAgainstEntered(openPlan, entered, eps);
 
-  // לפני אישור העברה — אם יש צורך בהעברה, עוצרים כאן
-  if (approved.length === 0) {
-    const proposals = buildDebtTransferProposals(openPlan, entered, eps);
-    if (proposals.length > 0) {
-      return { kind: "DEBT_TRANSFER", transfers: proposals };
-    }
-  }
+  const enteredMap = new Map(
+    entered.map((e) => [e.bucket, e.enteredUsd] as const),
+  );
+  /** אמצעי פתוח שלא קיבל תשלום כלל — אי־אפשר «לסגור» אותו דרך עודף באמצעי אחר */
+  const openUnpaidOtherMethod = openPlan.some((p) => {
+    if (p.remainingUsd <= eps) return false;
+    return (enteredMap.get(p.bucket) ?? 0) <= eps;
+  });
 
-  const violations = enforceBreakdownAgainstEntered(planAfterTransfer, entered, eps);
   if (violations.length > 0) {
-    // כל החוב נסגר אך נשארה חריגת אמצעי ברמת bucket —
-    // אם אין חוב פתוח יותר, זו לא חריגת אמצעי אלא עודף/סגירה.
-    if (coversAllDebt) {
-      if (surplusUsd > eps) {
-        return {
-          kind: "SURPLUS_AFTER_CLOSURE",
-          surplusUsd,
-          totalDebtUsd,
-          totalPaymentUsd,
-        };
-      }
-      // סה״כ תואם — אחרי העברה מאושרת / סגירה מלאה
-      return { kind: "ALLOW" };
+    // עודף אמיתי על האמצעי ששולם (למשל מזומן $120 על חוב $100) — לא חריגת אמצעי.
+    // אבל אם נשאר אמצעי אחר פתוח שלא שולם — זו חריגה, לא העברת חוב.
+    if (coversAllDebt && surplusUsd > eps && !openUnpaidOtherMethod) {
+      return {
+        kind: "SURPLUS_AFTER_CLOSURE",
+        surplusUsd,
+        totalDebtUsd,
+        totalPaymentUsd,
+      };
     }
     return { kind: "METHOD_DEVIATION" };
   }
 
+  // עודף אמיתי בלבד: סכום התשלום גבוה מסך החוב הפתוח
   if (coversAllDebt && surplusUsd > eps) {
     return {
       kind: "SURPLUS_AFTER_CLOSURE",

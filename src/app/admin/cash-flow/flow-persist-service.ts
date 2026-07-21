@@ -24,6 +24,7 @@ export async function persistManagerCount(input: {
 
   const f = input.form;
   const allocationUsd = fcNum(f.turkeyTransferUsd);
+  const allocationIls = fcNum(f.turkeyTransferIls);
 
   await prisma.$transaction(async (tx) => {
     const flowRow = await tx.cashWeekFlow.upsert({
@@ -39,6 +40,7 @@ export async function persistManagerCount(input: {
         commissionUsd: dec(f.commissionUsd),
         commissionIls: dec(f.commissionIls),
         turkeyTransferUsd: dec(f.turkeyTransferUsd),
+        turkeyTransferIls: dec(f.turkeyTransferIls),
         updatedById: input.updatedById,
       },
       update: {
@@ -50,6 +52,7 @@ export async function persistManagerCount(input: {
         commissionUsd: dec(f.commissionUsd),
         commissionIls: dec(f.commissionIls),
         turkeyTransferUsd: dec(f.turkeyTransferUsd),
+        turkeyTransferIls: dec(f.turkeyTransferIls),
         updatedById: input.updatedById,
       },
     });
@@ -58,8 +61,9 @@ export async function persistManagerCount(input: {
       weekCode: wk,
       cashWeekFlowId: flowRow.id,
       allocationUsd,
+      allocationIls,
       userId: input.updatedById,
-      note: "הקצאה מספירת קופה — לטורקיה PS",
+      note: "הקצאה מספירת קופה — PS ($) / IL (₪) נפרדים",
     });
   });
 
@@ -69,6 +73,7 @@ export async function persistManagerCount(input: {
 
 export async function persistFxPurchase(input: {
   week: string;
+  track: import("@/app/admin/cash-flow/flow-types").FxPurchaseTrack;
   ilsAmount: number;
   rate: number;
   remainderCashIls: number;
@@ -85,6 +90,7 @@ export async function persistFxPurchase(input: {
 
   const res = await appendFlowFxPurchase({
     weekCode: wk,
+    track: input.track,
     ilsAmount: input.ilsAmount,
     rate: input.rate,
     remainderCashIls: input.remainderCashIls,

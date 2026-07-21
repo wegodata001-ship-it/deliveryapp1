@@ -37,6 +37,8 @@ export async function loadFlowWeekDrill(week: string): Promise<FlowWeekDrillPayl
     prisma.payment.findMany({
       where: cashControlWeekReconciliationPaymentsWhere(wk),
       select: {
+        id: true,
+        paymentCode: true,
         amountIls: true,
         amountUsd: true,
         paymentMethod: true,

@@ -101,6 +101,26 @@
   padding: 0;
 }
 
+/* מודאל רווח והפסד — מסך גדול ~90% */
+.ui-modal.ui-modal--profit-loss-erp {
+  width: 90vw;
+  max-width: 90vw;
+  height: 90vh;
+  max-height: 90vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.ui-modal.ui-modal--profit-loss-erp .ui-modal-body.ui-modal-body--profit-loss-erp {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+
 /* מודאל תשלומים לפי מקום */
 .ui-modal.ui-modal--payments-location-erp {
   width: min(82vw, 100%);

@@ -19,7 +19,7 @@ function StatusBadge({ status }: { status: "ok" | "warn" | "critical" | "pending
   if (status === "ok") {
     return (
       <span className="ft-status ft-status--ok">
-        <CheckCircle2 size={14} /> תקין
+        <CheckCircle2 size={14} /> מאוזן
       </span>
     );
   }
@@ -32,7 +32,7 @@ function StatusBadge({ status }: { status: "ok" | "warn" | "critical" | "pending
   }
   return (
     <span className="ft-status ft-status--bad">
-      <AlertTriangle size={14} /> {status === "critical" ? "חריג" : "הפרש"}
+      <AlertTriangle size={14} /> לא מאוזן
     </span>
   );
 }
@@ -69,8 +69,9 @@ export function CashflowCalculationTable({
             <th title="מזומן שנשאר בקופה אחרי הוצאות ורכישת מט״ח PS">יתרה בקופה</th>
             <th title="יתרת דולר בקופה לאחר כל הפעולות">דולר בקופה</th>
             <th title="תקבולי בנק − רכישת מט״ח IL">יתרה בבנק</th>
-            <th title="העברות IL + צ'קים IL + אשראי IL">רכישת מט&quot;ח IL</th>
-            <th title="יתרה להעברה לטורקיה">יתרה לטורקיה</th>
+            <th title="רכישות מט״ח ממסלול PS (קופה) — נפרד מ-IL">רכישת מט&quot;ח PS</th>
+            <th title="העברות IL + צ'קים IL + אשראי IL — נפרד מ-PS">רכישת מט&quot;ח IL</th>
+            <th title="יתרה להעברה לטורקיה (אחרי חיבור המסלולים)">יתרה לטורקיה</th>
             <th>הוצאות קופה ₪</th>
             <th>הוצאות קופה $</th>
             <th title="התקבל פחות הוצאות — דולר">צפוי נטו $</th>
@@ -97,6 +98,9 @@ export function CashflowCalculationTable({
             </td>
             <td dir="ltr" className="ft-cell--computed">
               {fmtDailyMoney("ILS", fcNum(row.bankBalanceIls))}
+            </td>
+            <td dir="ltr" className="ft-cell--computed" title={`$ ${fcNum(row.fxPsPurchaseUsd).toFixed(2)}`}>
+              {fmtDailyMoney("ILS", fcNum(row.fxPsPurchaseIls))}
             </td>
             <td dir="ltr" className="ft-cell--computed">
               {fmtDailyMoney("ILS", fcNum(row.ilFxPurchaseIls))}

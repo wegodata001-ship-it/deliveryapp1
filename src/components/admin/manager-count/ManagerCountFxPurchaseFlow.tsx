@@ -6,6 +6,7 @@ import { fmtDailyMoney } from "@/lib/cash-control-daily";
 import { previewFxPurchaseAction } from "@/app/admin/cash-flow/preview-fx-purchase-action";
 import { previewFxIntakeAllocationAction } from "@/app/admin/cash-flow/preview-fx-intake-allocation-action";
 import { saveFxPurchaseAction } from "@/app/admin/cash-flow/save-fx-purchase-action";
+import type { FxPurchaseTrack } from "@/app/admin/cash-flow/flow-types";
 import type { FxIntakeAllocationPreview } from "@/lib/flow-control/services/fx-intake-allocation-service";
 import { fcNum } from "@/components/admin/flow-control/shared";
 
@@ -17,6 +18,8 @@ export type ManagerCountFxPurchaseFlowProps = {
   open: boolean;
   week: string;
   weekLabel: string | null;
+  /** מסלול רכישה — PS או IL (חובה, ללא ברירת מחדל משותפת) */
+  track: FxPurchaseTrack;
   availableIls: string;
   saving: boolean;
   onClose: () => void;
@@ -27,6 +30,7 @@ export function ManagerCountFxPurchaseFlow({
   open,
   week,
   weekLabel,
+  track,
   availableIls,
   saving,
   onClose,
@@ -147,6 +151,7 @@ export function ManagerCountFxPurchaseFlow({
     try {
       const res = await saveFxPurchaseAction({
         week,
+        track,
         ilsAmount: ilsNum,
         rate: rateNum,
         remainderCashIls: fcNum(remainderCash),
@@ -176,7 +181,7 @@ export function ManagerCountFxPurchaseFlow({
       <div className="mc-fx-wizard" role="dialog" onClick={(e) => e.stopPropagation()}>
         <header className="mc-fx-wizard__head">
           <h4>
-            <Coins size={16} /> רכישת מט&quot;ח
+            <Coins size={16} /> רכישת מט&quot;ח — מסלול {track}
           </h4>
           <button type="button" className="fc-btn fc-btn--icon" onClick={handleClose}>
             <X size={16} />
@@ -187,7 +192,9 @@ export function ManagerCountFxPurchaseFlow({
         {step === "amount" ? (
           <div className="mc-fx-wizard__body">
             <p className="mc-muted">
-              זמין בקופה (שקל שנשאר): <strong dir="ltr">{fmtDailyMoney("ILS", availNum)}</strong>
+              זמין במסלול {track}
+              {track === "PS" ? " (מזומן ₪)" : " (העברות/אשראי/צ׳קים)"}:{" "}
+              <strong dir="ltr">{fmtDailyMoney("ILS", availNum)}</strong>
             </p>
             <label className="fc-field">
               <span>סכום ₪ לרכישה</span>

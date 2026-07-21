@@ -223,6 +223,14 @@ export type CreateBatchInput = {
   rows: ExcelShipmentPreviewRow[];
 };
 
+/** ייבוא שורות Excel למשלוח קיים */
+export type ImportRowsIntoBatchInput = {
+  batchId: string;
+  rows: ExcelShipmentPreviewRow[];
+  defaultZoneId?: string;
+  defaultCourierId?: string;
+};
+
 export type AssignZoneInput = {
   recordIds: string[];
   zoneId: string | null;

@@ -323,7 +323,7 @@ export function CashflowWeekTabs({ row, drill, loading, canManageFlow, onFxSaved
         onSave={async (input) => {
           setFxSaving(true);
           try {
-            const res = await saveFxPurchaseAction({ week: row.week, ...input });
+            const res = await saveFxPurchaseAction({ week: row.week, track: "PS", ...input });
             if (res.ok) {
               setFxOpen(false);
               onFxSaved();

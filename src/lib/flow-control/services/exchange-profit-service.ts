@@ -98,11 +98,16 @@ type OrderAgg = {
   paidUsd: number;
   receiveRate: number | null;
   payRate: number | null;
+  saleIls: number;
+  costIls: number;
+  commissionUsd: number;
+  expensesUsd: number;
   netIls: number;
   status: ExchangeProfitStatus;
   statusLabel: string;
   profitIls: number;
   lossIls: number;
+  contributionPct: number;
 };
 
 function buildOrderAgg(
@@ -118,6 +123,7 @@ function buildOrderAgg(
     createdAt: Date;
     totalUsd: Prisma.Decimal | null;
     amountUsd: Prisma.Decimal | null;
+    commissionUsd: Prisma.Decimal | null;
     usdRateUsed: Prisma.Decimal | null;
     snapshotFinalDollarRate: Prisma.Decimal | null;
     exchangeRate: Prisma.Decimal | null;
@@ -151,9 +157,13 @@ function buildOrderAgg(
   const receiveRate = rateWeight > 0 ? rateAcc / rateWeight : null;
   const payRate = orderPayRate(order);
   const paidUsd = round2(num(order.totalUsd) > 0 ? num(order.totalUsd) : num(order.amountUsd) || receivedUsd);
+  const commissionUsd = round2(Math.max(0, num(order.commissionUsd)));
+  const expensesUsd = 0;
 
   // רווח = ערך קבלה ₪ − ערך תשלום ₪ (אותו $ × הפרש שערים)
   const volumeUsd = Math.min(receivedUsd, paidUsd > 0 ? paidUsd : receivedUsd);
+  const saleIls = receiveRate != null ? round2(volumeUsd * receiveRate) : 0;
+  const costIls = payRate != null ? round2(volumeUsd * payRate) : 0;
   let netIls = 0;
   if (receiveRate != null && payRate != null) {
     netIls = round2(volumeUsd * (receiveRate - payRate));
@@ -173,11 +183,16 @@ function buildOrderAgg(
     paidUsd,
     receiveRate,
     payRate,
+    saleIls,
+    costIls,
+    commissionUsd,
+    expensesUsd,
     netIls,
     status: st.status,
     statusLabel: st.statusLabel,
     profitIls: st.profit,
     lossIls: st.loss,
+    contributionPct: 0,
   };
 }
 
@@ -193,9 +208,14 @@ function toRowDto(a: OrderAgg): ExchangeProfitOrderRowDto {
     paidUsd: money(a.paidUsd),
     receiveRate: rateStr(a.receiveRate),
     payRate: rateStr(a.payRate),
+    saleIls: money(a.saleIls),
+    costIls: money(a.costIls),
+    commissionUsd: money(a.commissionUsd),
+    expensesUsd: money(a.expensesUsd),
     profitIls: money(a.profitIls),
     lossIls: money(a.lossIls),
     netIls: money(a.netIls),
+    contributionPct: (Math.round(a.contributionPct * 10) / 10).toFixed(1),
     status: a.status,
     statusLabel: a.statusLabel,
   };
@@ -220,6 +240,7 @@ export async function loadExchangeProfitWeekSummary(week: string): Promise<Excha
         createdAt: true,
         totalUsd: true,
         amountUsd: true,
+        commissionUsd: true,
         usdRateUsed: true,
         snapshotFinalDollarRate: true,
         exchangeRate: true,
@@ -264,6 +285,12 @@ export async function loadExchangeProfitWeekSummary(week: string): Promise<Excha
     totalReceived += a.receivedUsd;
     totalPaid += a.paidUsd;
   }
+  const netAbs = Math.abs(totalProfit - totalLoss);
+  for (const a of relevant) {
+    a.contributionPct = netAbs > 0.005 ? (Math.abs(a.netIls) / netAbs) * 100 : 0;
+  }
+  // רווחיות גבוהה קודם — כדי לראות מי תרם הכי הרבה
+  relevant.sort((a, b) => b.netIls - a.netIls);
 
   const fxPurchases = parseFxPurchasesJson(flowRow?.fxPurchases);
   const fxTotals = sumFxPurchases(fxPurchases);
@@ -292,17 +319,20 @@ export async function loadExchangeProfitWeekSummary(week: string): Promise<Excha
 function buildCalculation(a: OrderAgg): ExchangeProfitCalculationDto {
   const volume = Math.min(a.receivedUsd, a.paidUsd > 0 ? a.paidUsd : a.receivedUsd);
   const receivedIls =
-    a.receiveRate != null ? round2(volume * a.receiveRate) : null;
-  const paidIls = a.payRate != null ? round2(volume * a.payRate) : null;
+    a.receiveRate != null ? round2(volume * a.receiveRate) : a.saleIls || null;
+  const paidIls = a.payRate != null ? round2(volume * a.payRate) : a.costIls || null;
   const lines: string[] = [];
   if (a.receiveRate != null && receivedIls != null) {
-    lines.push(`כסף התקבל  $${money(volume)}  ×  ${rateStr(a.receiveRate)}  =  ₪${money(receivedIls)}`);
+    lines.push(`מכירה  $${money(volume)}  ×  ${rateStr(a.receiveRate)}  =  ₪${money(receivedIls)}`);
   }
   if (a.payRate != null && paidIls != null) {
-    lines.push(`שולם לספק  $${money(volume)}  ×  ${rateStr(a.payRate)}  =  ₪${money(paidIls)}`);
+    lines.push(`עלות  $${money(volume)}  ×  ${rateStr(a.payRate)}  =  ₪${money(paidIls)}`);
   }
-  if (a.status === "profit") lines.push(`רווח מט״ח  ₪${money(a.profitIls)}`);
-  else if (a.status === "loss") lines.push(`הפסד מט״ח  ₪${money(a.lossIls)}`);
+  if (receivedIls != null && paidIls != null) {
+    lines.push(`₪${money(receivedIls)}  −  ₪${money(paidIls)}  =  ₪${money(a.netIls)}`);
+  }
+  if (a.status === "profit") lines.push(`רווח נקי  ₪${money(a.profitIls)}`);
+  else if (a.status === "loss") lines.push(`הפסד  ₪${money(a.lossIls)}`);
   else lines.push("אין הפרש שער");
 
   return {
@@ -312,6 +342,8 @@ function buildCalculation(a: OrderAgg): ExchangeProfitCalculationDto {
     paidUsd: money(a.paidUsd),
     payRate: rateStr(a.payRate),
     paidIls: paidIls != null ? money(paidIls) : null,
+    commissionUsd: money(a.commissionUsd),
+    expensesUsd: money(a.expensesUsd),
     netIls: money(a.netIls),
     status: a.status,
     formulaLines: lines,

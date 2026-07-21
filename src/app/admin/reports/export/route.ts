@@ -11,6 +11,7 @@ const ALLOWED_KINDS: ReportKind[] = [
   "weeklySummaryReport",
   "customerBalanceReport",
   "paymentsByMethodReport",
+  "profitLossReport",
 ];
 
 function readFilters(sp: URLSearchParams): ReportFilters {

@@ -124,6 +124,12 @@ export const SIDEBAR_SECTIONS: NavSectionDef[] = [
       { href: "/admin/shipments", label: "רשימת משלוחים", icon: "shipments", anyOf: ["manage_shipments", "view_shipments"] },
       { href: "/admin/shipments/import", label: "ייבוא משלוח", icon: "import", anyOf: ["manage_shipments"] },
       { href: "/admin/shipments/control", label: "בקרת משלוחים", icon: "receipt", anyOf: ["manage_shipments", "view_shipments"] },
+      {
+        href: "/admin/shipments/manual",
+        label: "משלוחים – הזנה ידנית",
+        icon: "orderIn",
+        anyOf: ["manage_shipments", "view_shipments"],
+      },
       { href: "/admin/reports", label: "דוחות", icon: "reports", anyOf: ["view_reports"] },
     ],
   },

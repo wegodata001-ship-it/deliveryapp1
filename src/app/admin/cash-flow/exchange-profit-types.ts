@@ -17,11 +17,28 @@ export type ExchangeProfitOrderRowDto = {
   paidUsd: string;
   receiveRate: string | null;
   payRate: string | null;
+  /** ערך מכירה ₪ (תקבול × שער קבלה) */
+  saleIls: string;
+  /** ערך עלות ₪ (תשלום לספק × שער תשלום) */
+  costIls: string;
+  /** עמלת הזמנה $ */
+  commissionUsd: string;
+  /** הוצאות נוספות $ (אם אין — 0) */
+  expensesUsd: string;
   profitIls: string;
   lossIls: string;
   netIls: string;
+  /** אחוז תרומה לרווח/הפסד השבועי (0–100) */
+  contributionPct: string;
   status: ExchangeProfitStatus;
   statusLabel: string;
+};
+
+/** סינון תקופה מגרף הרווח (יום / שבוע / חודש) */
+export type ExchangeProfitPeriodFilter = {
+  period: "day" | "week" | "month";
+  key: string;
+  label: string;
 };
 
 export type ExchangeProfitWeekSummaryDto = {
@@ -94,6 +111,8 @@ export type ExchangeProfitCalculationDto = {
   paidUsd: string;
   payRate: string | null;
   paidIls: string | null;
+  commissionUsd: string;
+  expensesUsd: string;
   netIls: string;
   status: ExchangeProfitStatus;
   formulaLines: string[];

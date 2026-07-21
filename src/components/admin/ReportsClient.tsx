@@ -20,7 +20,8 @@ import { CustomerBalancesReportModal } from "@/components/admin/CustomerBalances
 import { OpenOrdersReportModal } from "@/components/admin/OpenOrdersReportModal";
 import { PaymentsByLocationReportModal } from "@/components/admin/PaymentsByLocationReportModal";
 import { openPdfPreview } from "@/lib/pdf-preview";
-import { CalendarDays, CreditCard, Package, Scale, MapPin } from "lucide-react";
+import { CalendarDays, CreditCard, Package, Scale, MapPin, TrendingUp } from "lucide-react";
+import { ProfitLossReportModal } from "@/components/admin/ProfitLossReportModal";
 
 type Props = {
   initialPayload: ReportPayload;
@@ -41,7 +42,9 @@ function ReportCardIcon({ icon }: { icon: ReportCard["icon"] }) {
           ? CalendarDays
           : icon === "scale"
             ? Scale
-            : CreditCard;
+            : icon === "trending-up"
+              ? TrendingUp
+              : CreditCard;
   return <Icon size={18} strokeWidth={1.75} aria-hidden />;
 }
 
@@ -163,6 +166,22 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
 
   async function loadReport(card: ReportCard) {
     if (isLoading || loadingReportId) return;
+    if (card.id === "profitLossReport" || card.href === "/admin/reports/profit-loss") {
+      const sp = new URLSearchParams();
+      if (filters.dateFrom) sp.set("from", filters.dateFrom);
+      if (filters.dateTo) sp.set("to", filters.dateTo);
+      if (filters.workWeek) sp.set("week", filters.workWeek);
+      if (filters.customerId) sp.set("customerId", filters.customerId);
+      if (filters.status) sp.set("status", filters.status);
+      if (filters.sourceCountry) sp.set("country", filters.sourceCountry);
+      const q = sp.toString();
+      window.location.href = `/admin/reports/profit-loss${q ? `?${q}` : ""}`;
+      return;
+    }
+    if (card.href) {
+      window.location.href = card.href;
+      return;
+    }
     setModalTitle(card.title);
     setReportModalOpen(true);
     setActiveReport(null);
@@ -170,33 +189,13 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
     setLoadingReportId(card.id);
     setExportErr(null);
     try {
-      if (card.id === "customerBalanceReport") {
+      if (
+        card.id === "customerBalanceReport" ||
+        card.id === "openOrdersReport" ||
+        card.id === "paymentsByLocationReport"
+      ) {
         setActiveReport({
-          id: "customerBalanceReport",
-          title: card.title,
-          columns: [],
-          rows: [],
-          totals: { total: "—", paid: "—", remaining: "—" },
-        });
-        setModalTableLoading(false);
-        setLoadingReportId(null);
-        return;
-      }
-      if (card.id === "openOrdersReport") {
-        setActiveReport({
-          id: "openOrdersReport",
-          title: card.title,
-          columns: [],
-          rows: [],
-          totals: { total: "—", paid: "—", remaining: "—" },
-        });
-        setModalTableLoading(false);
-        setLoadingReportId(null);
-        return;
-      }
-      if (card.id === "paymentsByLocationReport") {
-        setActiveReport({
-          id: "paymentsByLocationReport",
+          id: card.id,
           title: card.title,
           columns: [],
           rows: [],
@@ -436,7 +435,8 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
           !!activeReport &&
           (activeReport.id === "customerBalanceReport" ||
             activeReport.id === "openOrdersReport" ||
-            activeReport.id === "paymentsByLocationReport")
+            activeReport.id === "paymentsByLocationReport" ||
+            activeReport.id === "profitLossReport")
         }
         modalClassName={
           activeReport?.id === "customerBalanceReport" ?
@@ -445,6 +445,8 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
             "ui-modal--open-orders-erp"
           : activeReport?.id === "paymentsByLocationReport" ?
             "ui-modal--payments-location-erp"
+          : activeReport?.id === "profitLossReport" ?
+            "ui-modal--profit-loss-erp"
           : undefined
         }
         bodyClassName={
@@ -454,6 +456,8 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
             "ui-modal-body--open-orders-erp"
           : activeReport?.id === "paymentsByLocationReport" ?
             "ui-modal-body--payments-location-erp"
+          : activeReport?.id === "profitLossReport" ?
+            "ui-modal-body--profit-loss-erp"
           : undefined
         }
       >
@@ -506,6 +510,17 @@ export function ReportsClient({ initialPayload, initialFilters }: Props) {
               onExportExcel={() => void exportReport("paymentsByLocationReport", "excel")}
               exportingPdf={pdfLoadingKind === "paymentsByLocationReport"}
               exportingExcel={downloadingExcel === "paymentsByLocationReport"}
+            />
+          ) : activeReport.id === "profitLossReport" ? (
+            <ProfitLossReportModal
+              key={filterKey}
+              reportFilters={filters}
+              title={modalTitle || "רווח והפסד"}
+              onClose={closeReportModal}
+              onExportPdf={() => void exportReport("profitLossReport", "pdf")}
+              onExportExcel={() => void exportReport("profitLossReport", "excel")}
+              exportingPdf={pdfLoadingKind === "profitLossReport"}
+              exportingExcel={downloadingExcel === "profitLossReport"}
             />
           ) : (
             <div className="adm-report-modal">

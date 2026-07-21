@@ -18,6 +18,7 @@ import {
   FileText,
   FileSpreadsheet,
   RotateCcw,
+  Upload,
 } from "lucide-react";
 import type {
   ShipmentBatchDto,
@@ -38,11 +39,13 @@ import {
   updateShipmentRecordAction,
   listShipmentRecordsAction,
   createZoneAction,
+  createCourierAction,
   updateShipmentBatchAction,
   getShipmentBatchAction,
   deleteShipmentRecordAction,
 } from "@/app/admin/shipments/actions";
 import { ShipmentPaymentModal } from "@/components/admin/shipments/ShipmentPaymentModal";
+import { ShipmentBatchImportModal } from "@/components/admin/shipments/ShipmentBatchImportModal";
 import { InlineAutocompleteCell } from "@/components/admin/shipments/InlineAutocompleteCell";
 import { InlineValueCell } from "@/components/admin/shipments/InlineValueCell";
 import { SyncedTableScroll } from "@/components/admin/shipments/SyncedTableScroll";
@@ -90,6 +93,23 @@ function fmtDeliveryFee(record: ShipmentRecordDto) {
   })}${suffix}`;
 }
 
+function fmtOrderAmount(record: ShipmentRecordDto) {
+  if (record.orderAmount == null) return "—";
+  const symbol: Record<string, string> = { ILS: "₪", USD: "$", EUR: "€", TRY: "₺", GBP: "£" };
+  const currency = record.orderCurrency ?? "UNKNOWN";
+  const suffix = currency === "UNKNOWN" ? ` ${currency}` : "";
+  return `${symbol[currency] ?? ""}${record.orderAmount.toLocaleString("he-IL", {
+    maximumFractionDigits: 4,
+  })}${suffix}`;
+}
+
+function paymentMethodsLabel(record: ShipmentRecordDto): string {
+  const methods = [
+    ...new Set(record.payments.map((p) => p.methodLabel).filter(Boolean)),
+  ];
+  return methods.length > 0 ? methods.join(", ") : "—";
+}
+
 function formatDate(iso: string | null) {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString("he-IL");
@@ -100,11 +120,6 @@ function formatPaymentDate(record: ShipmentRecordDto): string {
   const last = record.payments[record.payments.length - 1];
   const raw = last.details?.paymentDate || last.createdAt;
   return formatDate(raw);
-}
-
-function formatAddress(record: ShipmentRecordDto): string {
-  const parts = [record.address, record.city].filter(Boolean);
-  return parts.length ? parts.join(", ") : "—";
 }
 
 function batchShipmentLabel(batch: ShipmentBatchDto): string {
@@ -200,6 +215,7 @@ export function ShipmentBatchClient({
   const [success, setSuccess] = useState<string | null>(null);
   const [paymentRecord, setPaymentRecord] = useState<ShipmentRecordDto | null>(null);
   const [editOpen, setEditOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
 
   // Filters
@@ -408,6 +424,28 @@ export function ShipmentBatchClient({
     return true;
   }
 
+  async function handleRowCourier(
+    recordId: string,
+    courier: { id: string; name: string } | null,
+  ): Promise<boolean> {
+    const courierId = courier?.id ?? null;
+    const result = await assignCourierAction({ recordIds: [recordId], courierId });
+    if (!result.ok) {
+      setError(result.error);
+      clearMsg();
+      return false;
+    }
+    setRecords((prev) =>
+      prev.map((r) =>
+        r.id === recordId
+          ? { ...r, courierId, courierName: courier?.name ?? null }
+          : r,
+      ),
+    );
+    showSaved();
+    return true;
+  }
+
   async function handleRowStatus(recordId: string, status: ShipmentStatus) {
     const result = await updateShipmentStatusAction({ recordIds: [recordId], status });
     if (!result.ok) {
@@ -458,6 +496,20 @@ export function ShipmentBatchClient({
     return result.zone;
   }
 
+  async function quickAddCourier(name: string) {
+    const result = await createCourierAction(name);
+    if (!result.ok) {
+      setError(result.error);
+      clearMsg();
+      return null;
+    }
+    setCouriers((previous) => {
+      const without = previous.filter((courier) => courier.id !== result.courier.id);
+      return [...without, result.courier];
+    });
+    return result.courier;
+  }
+
   function handlePaymentSaved(updated: ShipmentRecordDto) {
     setRecords((prev) => prev.map((r) => r.id === updated.id ? updated : r));
     setPaymentRecord(updated);
@@ -493,6 +545,10 @@ export function ShipmentBatchClient({
           <button className="shp-btn shp-btn--secondary shp-btn--sm" onClick={() => setEditOpen(true)}>
             <Edit2 size={14} />
             עריכת פרטי משלוח
+          </button>
+          <button className="shp-btn shp-btn--primary shp-btn--sm" onClick={() => setImportOpen(true)}>
+            <Upload size={14} />
+            ייבוא Excel
           </button>
           <button className="shp-btn shp-btn--secondary shp-btn--sm" onClick={refresh} disabled={loading}>
             <RefreshCw size={14} className={loading ? "shp-spinner--dark" : ""} />
@@ -726,7 +782,7 @@ export function ShipmentBatchClient({
         </div>
       )}
 
-      {/* Main table */}
+      {/* Main table — Excel-style: כל העמודות בשורה אחת, עריכה מקומית */}
       <SyncedTableScroll>
         <table className="shp-table shp-batch-table">
           <thead>
@@ -734,24 +790,31 @@ export function ShipmentBatchClient({
               <th className="shp-col-check" onClick={toggleAll} style={{ cursor: "pointer" }}>
                 {allSelected ? <CheckSquare size={15} /> : <Square size={15} />}
               </th>
-              <th className="shp-col-arrival">תאריך הגעה</th>
-              <th className="shp-col-shipment-no">מספר משלוח</th>
-              <th className="shp-col-code">קוד לקוח</th>
-              <th className="shp-col-customer">שם לקוח</th>
-              <th className="shp-col-phone">טלפון</th>
+              <th>#</th>
+              <th className="shp-col-customer">לקוח</th>
+              <th>טלפון</th>
               <th className="shp-col-address">כתובת</th>
-              <th className="shp-col-zone">אזור חלוקה</th>
-              <th className="shp-col-boxes">חבילות</th>
-              <th className="shp-col-fee">דמי משלוח</th>
-              <th className="shp-col-pay-date">תאריך רישום</th>
+              <th>עיר</th>
+              <th>קרטונים</th>
+              <th>משקל</th>
+              <th className="shp-col-money">סכום הזמנה</th>
+              <th className="shp-col-money">דמי משלוח</th>
+              <th className="shp-col-payment">גביית תשלום</th>
+              <th className="shp-col-pay-method">אמצעי תשלום</th>
+              <th>סטטוס תשלום</th>
+              <th className="shp-col-money">סכום ששולם</th>
+              <th className="shp-col-money">יתרה</th>
+              <th className="shp-col-pay-date">תאריך גבייה</th>
+              <th className="shp-col-zone">אזור</th>
+              <th className="shp-col-courier">שליח</th>
+              <th className="shp-col-notes">הערות</th>
               <th className="shp-col-status">סטטוס</th>
-              <th className="shp-col-pay-status">סטטוס תשלום</th>
             </tr>
           </thead>
           <tbody>
             {filteredRecords.length === 0 && (
               <tr>
-                <td colSpan={13} style={{ textAlign: "center", padding: "40px", color: "#94a3b8" }}>
+                <td colSpan={20} style={{ textAlign: "center", padding: "40px", color: "#94a3b8" }}>
                   אין שורות להצגה
                 </td>
               </tr>
@@ -760,8 +823,7 @@ export function ShipmentBatchClient({
               const feeAmount = r.deliveryFeeAmount ?? r.deliveryFeeIls ?? 0;
               const feeIsIls =
                 r.deliveryFeeCurrency === "ILS" ||
-                (r.deliveryFeeCurrency == null && r.deliveryFeeIls != null) ||
-                r.deliveryFeeCurrency == null;
+                (r.deliveryFeeCurrency == null && r.deliveryFeeIls != null);
               const canCollect = feeAmount > 0 && feeIsIls;
               return (
                 <tr key={r.id} className={selected.has(r.id) ? "shp-row--selected" : ""}>
@@ -772,31 +834,14 @@ export function ShipmentBatchClient({
                       onChange={() => toggleSelect(r.id)}
                     />
                   </td>
-                  <td className="shp-col-arrival">{formatDate(batch.arrivalDate)}</td>
-                  <td className="shp-col-shipment-no">
-                    <strong>{batchShipmentLabel(batch)}</strong>
-                    <span className="shp-muted" style={{ display: "block", fontSize: "0.7rem" }}>
-                      {batch.batchNumber}
-                    </span>
+                  <td style={{ color: "#64748b", fontSize: "0.75rem" }}>{r.rowIndex}</td>
+                  <td className="shp-col-customer" style={{ fontWeight: 600 }}>
+                    {r.customerName || "—"}
                   </td>
-                  <td className="shp-col-code">{r.customerCode || "—"}</td>
-                  <td className="shp-col-customer">{r.customerName || "—"}</td>
-                  <td className="shp-col-phone">{r.customerPhone || "—"}</td>
-                  <td className="shp-col-address" title={formatAddress(r)}>
-                    {formatAddress(r)}
-                  </td>
-                  <td className="shp-col-zone">
-                    <InlineAutocompleteCell
-                      valueId={r.zoneId}
-                      valueName={r.zoneName}
-                      options={zones}
-                      placeholder="בחר אזור..."
-                      entityLabel="אזור"
-                      onSelect={(option) => handleRowZone(r.id, option)}
-                      onCreate={quickAddZone}
-                    />
-                  </td>
-                  <td className="shp-col-boxes">
+                  <td style={{ direction: "ltr", textAlign: "right" }}>{r.customerPhone || "—"}</td>
+                  <td className="shp-col-address">{r.address || "—"}</td>
+                  <td>{r.city || "—"}</td>
+                  <td style={{ textAlign: "center" }}>
                     <InlineValueCell
                       value={r.boxes}
                       type="number"
@@ -811,7 +856,29 @@ export function ShipmentBatchClient({
                       }
                     />
                   </td>
-                  <td className="shp-col-fee">
+                  <td style={{ textAlign: "center" }}>
+                    <InlineValueCell
+                      value={r.weight}
+                      type="number"
+                      min={0}
+                      step={0.001}
+                      suffix=" ק״ג"
+                      onSave={(value) =>
+                        saveRecordPatch(
+                          r.id,
+                          { weight: value as number | null },
+                          { weight: value as number | null },
+                        )
+                      }
+                    />
+                  </td>
+                  <td
+                    className="shp-readonly-money shp-col-money"
+                    title="סכום ההזמנה מהייבוא — לא לעריכה כאן"
+                  >
+                    {fmtOrderAmount(r)}
+                  </td>
+                  <td className="shp-col-money" style={{ fontWeight: 600, color: "#1d4ed8" }}>
                     <InlineValueCell
                       value={r.deliveryFeeAmount ?? r.deliveryFeeIls}
                       type="number"
@@ -846,7 +913,84 @@ export function ShipmentBatchClient({
                       }}
                     />
                   </td>
+                  <td className="shp-col-payment">
+                    <button
+                      type="button"
+                      className="shp-btn shp-btn--sm shp-btn--primary"
+                      onClick={() => setPaymentRecord(r)}
+                      disabled={!canCollect}
+                      title={
+                        feeAmount <= 0
+                          ? "יש להזין דמי משלוח בעמודת «דמי משלוח» לפני הגבייה"
+                          : !feeIsIls
+                            ? "קליטת תשלום זמינה לדמי משלוח בש״ח בלבד"
+                            : undefined
+                      }
+                    >
+                      <Banknote size={13} />
+                      {feeAmount <= 0
+                        ? "הזן דמי משלוח"
+                        : !feeIsIls
+                          ? "מטבע זר"
+                          : r.paymentStatus === "PAID"
+                            ? "✓ שולם"
+                            : r.paymentStatus === "PARTIAL"
+                              ? "שולם חלקית"
+                              : "לא שולם"}
+                    </button>
+                  </td>
+                  <td className="shp-col-pay-method">{paymentMethodsLabel(r)}</td>
+                  <td>
+                    <PayStatusBadge status={r.paymentStatus} />
+                  </td>
+                  <td className="shp-col-money" style={{ color: "#15803d", fontWeight: 600 }}>
+                    {fmtIls(r.paidAmountIls)}
+                  </td>
+                  <td
+                    className="shp-col-money"
+                    style={{
+                      color: r.remainingFeeIls > 0 ? "#dc2626" : "#15803d",
+                      fontWeight: 600,
+                    }}
+                  >
+                    {fmtIls(r.remainingFeeIls)}
+                  </td>
                   <td className="shp-col-pay-date">{formatPaymentDate(r)}</td>
+                  <td className="shp-col-zone">
+                    <InlineAutocompleteCell
+                      valueId={r.zoneId}
+                      valueName={r.zoneName}
+                      options={zones}
+                      placeholder="בחר אזור..."
+                      entityLabel="אזור"
+                      onSelect={(option) => handleRowZone(r.id, option)}
+                      onCreate={quickAddZone}
+                    />
+                  </td>
+                  <td className="shp-col-courier">
+                    <InlineAutocompleteCell
+                      valueId={r.courierId}
+                      valueName={r.courierName}
+                      options={couriers}
+                      placeholder="בחר שליח..."
+                      entityLabel="שליח"
+                      onSelect={(option) => handleRowCourier(r.id, option)}
+                      onCreate={quickAddCourier}
+                    />
+                  </td>
+                  <td className="shp-col-notes">
+                    <InlineValueCell
+                      value={r.notes}
+                      type="text"
+                      onSave={(value) =>
+                        saveRecordPatch(
+                          r.id,
+                          { notes: (value as string | null) || null },
+                          { notes: (value as string | null) || null },
+                        )
+                      }
+                    />
+                  </td>
                   <td className="shp-col-status">
                     <select
                       className="shp-inline-select"
@@ -859,24 +1003,6 @@ export function ShipmentBatchClient({
                         </option>
                       ))}
                     </select>
-                  </td>
-                  <td className="shp-col-pay-status">
-                    <button
-                      type="button"
-                      className="shp-pay-status-btn"
-                      onClick={() => setPaymentRecord(r)}
-                      disabled={!canCollect}
-                      title={
-                        feeAmount <= 0
-                          ? "יש להזין דמי משלוח לפני הגבייה"
-                          : !feeIsIls
-                            ? "קליטת תשלום זמינה לדמי משלוח בש״ח בלבד"
-                            : "פתיחת גבייה"
-                      }
-                    >
-                      <PayStatusBadge status={r.paymentStatus} />
-                      {canCollect ? <Banknote size={12} /> : null}
-                    </button>
                   </td>
                 </tr>
               );
@@ -1030,6 +1156,18 @@ export function ShipmentBatchClient({
           </div>
         </div>
       ) : null}
+
+      <ShipmentBatchImportModal
+        open={importOpen}
+        batchId={batch.id}
+        zones={zones}
+        couriers={couriers}
+        onClose={() => setImportOpen(false)}
+        onImported={() => {
+          setSuccess("הקובץ יובא בהצלחה");
+          void refresh();
+        }}
+      />
     </div>
   );
 }

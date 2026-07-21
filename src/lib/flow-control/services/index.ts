@@ -1,6 +1,7 @@
 /**
  * שכבת שירותי נתונים — בקרת תזרים.
- * חלק 1 (כספים שהתקבלו): CashCountSummaryService בלבד — ללא Payment.
+ * «סה״כ התקבל»: Payment (קליטות תשלום) דרך week-flow / cashflow-received-table.
+ * ספירת קופה מאושרת: CashCountSummaryService (CashDailyDrawerCount) — לא מחליף תקבולים.
  */
 
 export {

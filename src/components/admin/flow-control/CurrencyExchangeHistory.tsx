@@ -12,6 +12,7 @@ export function CurrencyExchangeHistory({ purchases }: { purchases: FxPurchaseRe
         <table className="fc-table fc-table--compact">
           <thead>
             <tr>
+              <th>מסלול</th>
               <th>תאריך</th>
               <th>שעה</th>
               <th>משתמש</th>
@@ -27,8 +28,12 @@ export function CurrencyExchangeHistory({ purchases }: { purchases: FxPurchaseRe
           <tbody>
             {purchases.map((p) => {
               const dt = new Date(p.createdAt);
+              const track = p.track === "IL" ? "IL" : "PS";
               return (
                 <tr key={p.id}>
+                  <td>
+                    <strong>{track}</strong>
+                  </td>
                   <td dir="ltr">{dt.toLocaleDateString("he-IL")}</td>
                   <td dir="ltr">
                     {dt.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", hour12: false })}

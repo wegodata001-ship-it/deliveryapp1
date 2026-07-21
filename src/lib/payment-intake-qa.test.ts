@@ -600,7 +600,7 @@ describe("QA-7 שיוך יתרה לאמצעי תשלום מקורי (לאחר ת
   });
 });
 
-describe("QA-8 — נעילת אמצעי סגור + העברת חוב + עודף לאחר סגירה", () => {
+describe("QA-8 — נעילת אמצעי סגור + חסימת שינוי אמצעי + עודף לאחר סגירה", () => {
   const orderPartialTransfer: PaymentIntakeOrderRow = {
     id: "ord-partial-transfer",
     orderNumber: "TR-QA8",
@@ -626,23 +626,17 @@ describe("QA-8 — נעילת אמצעי סגור + העברת חוב + עודף
     hasMethodDeviation: false,
   };
 
-  it("תשלום מזומן כשנותרה העברה → DEBT_TRANSFER", () => {
+  it("תשלום מזומן כשנותרה העברה → METHOD_DEVIATION (אין העברת חוב)", () => {
     const gate = classifyMethodIntakeGate({
       orders: [orderPartialTransfer],
       includedOrderIds: null,
       enteredByBucket: [{ bucket: "CASH", label: "מזומן", enteredUsd: 100 }],
       totalPaymentUsd: 100,
     });
-    assert.equal(gate.kind, "DEBT_TRANSFER");
-    if (gate.kind === "DEBT_TRANSFER") {
-      assert.equal(gate.transfers.length, 1);
-      assert.equal(gate.transfers[0]!.fromBucket, "BANK_TRANSFER");
-      assert.equal(gate.transfers[0]!.toBucket, "CASH");
-      assert.equal(gate.transfers[0]!.amountUsd, 100);
-    }
+    assert.equal(gate.kind, "METHOD_DEVIATION");
   });
 
-  it("לאחר אישור העברה → ALLOW", () => {
+  it("גם עם approvedDebtTransfers — עדיין METHOD_DEVIATION (העברה מבוטלת)", () => {
     const gate = classifyMethodIntakeGate({
       orders: [orderPartialTransfer],
       includedOrderIds: null,
@@ -657,6 +651,16 @@ describe("QA-8 — נעילת אמצעי סגור + העברת חוב + עודף
           amountUsd: 100,
         },
       ],
+    });
+    assert.equal(gate.kind, "METHOD_DEVIATION");
+  });
+
+  it("תשלום לפי האמצעי הפתוח → ALLOW", () => {
+    const gate = classifyMethodIntakeGate({
+      orders: [orderPartialTransfer],
+      includedOrderIds: null,
+      enteredByBucket: [{ bucket: "BANK_TRANSFER", label: "העברה בנקאית", enteredUsd: 100 }],
+      totalPaymentUsd: 100,
     });
     assert.equal(gate.kind, "ALLOW");
   });

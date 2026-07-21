@@ -16,13 +16,18 @@ import {
   orderDisplayUsdSigned,
 } from "@/lib/debt-withdrawal-order";
 import { formatIlsDisplay, formatUsdDisplay } from "@/lib/money-format";
+import {
+  buildProfitLossReport,
+  profitLossReportToTable,
+} from "@/lib/reports/build-profit-loss-report";
 
 export type ReportKind =
   | "openOrdersReport"
   | "paymentsByLocationReport"
   | "weeklySummaryReport"
   | "customerBalanceReport"
-  | "paymentsByMethodReport";
+  | "paymentsByMethodReport"
+  | "profitLossReport";
 
 export type ReportFilters = {
   dateFrom?: string;
@@ -39,8 +44,10 @@ export type ReportCard = {
   id: ReportKind;
   title: string;
   description: string;
-  icon: "package" | "map-pin" | "calendar" | "scale" | "credit-card";
+  icon: "package" | "map-pin" | "calendar" | "scale" | "credit-card" | "trending-up";
   preview: string;
+  /** ניווט למסך ייעודי במקום מודאל טבלה */
+  href?: string;
 };
 
 export type ReportKpis = {
@@ -176,6 +183,14 @@ export async function getReportsDashboardAction(filters: ReportFilters): Promise
     getOrderStatusLabelMap(),
   ]);
   const reports: ReportCard[] = [
+    {
+      id: "profitLossReport",
+      title: "רווח והפסד",
+      description: "דוח ניהולי מלא: KPI, גרפים, פירוט הזמנות, שער דולר ו-drill down.",
+      icon: "trending-up",
+      preview: "עמוד ניהולי מלא",
+      href: "/admin/reports/profit-loss",
+    },
     { id: "openOrdersReport", title: "דוח הזמנות פתוחות", description: "הזמנות שעדיין לא נסגרו, לפי לקוח ושבוע.", icon: "package", preview: `${kpis.totalOrders} הזמנות בטווח` },
     { id: "paymentsByLocationReport", title: "תשלומים לפי מקום", description: "סיכום תשלומים לפי מקום קליטת התשלום.", icon: "map-pin", preview: `תשלומים קשורים ${kpis.totalPaymentsLinked}` },
     { id: "weeklySummaryReport", title: "סיכום שבועי", description: "סיכום הזמנות, תשלומים ויתרות לפי שבוע עבודה.", icon: "calendar", preview: filters.workWeek ? `שבוע ${filters.workWeek}` : "כל השבועות בטווח" },
@@ -365,6 +380,19 @@ export async function getReportTableAction(kind: ReportKind, filters: ReportFilt
       columns: ["שבוע", "כמות הזמנות", "סכום כולל", "שולם", "פתוח"],
       rows: [...map.entries()].map(([week, v]) => [week, String(v.orders), moneyIls(v.total), moneyIls(v.paid), moneyIls(v.total.sub(v.paid))]),
       totals: { total: moneyIls(total), paid: moneyIls(paid), remaining: moneyIls(total.sub(paid)) },
+    };
+  }
+
+  if (kind === "profitLossReport") {
+    const report = await buildProfitLossReport(filters);
+    const table = profitLossReportToTable(report);
+    return {
+      id: kind,
+      title: "רווח והפסד",
+      columns: table.columns,
+      rows: table.rows,
+      totals: table.totals,
+      exportHeaderLines: table.exportHeaderLines,
     };
   }
 

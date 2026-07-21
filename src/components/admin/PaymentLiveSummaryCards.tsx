@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { X } from "lucide-react";
 import { AnimatedMoneyValue } from "@/components/ui/AnimatedMoneyValue";
+import { RemainingToPayCard } from "@/components/admin/RemainingToPayCard";
 import {
   LIVE_PAYMENT_KPI_CARDS,
   liveKpiBucket,
@@ -18,31 +19,16 @@ import {
 } from "@/lib/payment-updated";
 import { formatIlsDisplay, formatUsdDisplay, formatUsdPlain } from "@/lib/money-format";
 
-export type OrderSummaryForCards = {
-  /** סה"כ הזמנה (USD) */
-  totalUsd: number;
-  /** שווי בש"ח */
-  ilsValue: number;
-  /** סה"כ שולם (DB + הקלדה נוכחית) */
-  paidUsd: number;
-  /** חוב פתוח לפני התשלום הנוכחי (total − dbPaid) */
-  openDebtBeforeUsd: number;
-  /** יתרה לתשלום אחרי ההקלדה — 0 כשאין חוב או שיש עודף */
-  remainingUsd: number;
-  /**
-   * עודף תשלום חי:
-   * overpayment = enteredPayment − openDebtBefore (כשחיובי).
-   */
-  overpaymentUsd: number;
-};
-
 type Props = {
   kpis: LivePaymentFormKpis;
-  /** סה״כ יתרות פתוחות על הזמנות (DB) */
+  /** סה״כ יתרות פתוחות על הזמנות (DB) — כרטיס «חוב פתוח» */
   openDebtUsd?: number;
   onOpenDebtClick?: () => void;
-  /** Part 1 — כרטיס סיכום הזמנה מרכזי */
-  orderSummary?: OrderSummaryForCards | null;
+  /**
+   * «נשאר לתשלום» — ערך מוכן ממקור האמת של המסך (סכום יתרות בטבלה).
+   * הכרטיס לא מחשב מחדש.
+   */
+  remainingToPayUsd?: number | null;
   /** Part 3 — שורות התשלום הנוכחיות, לצורך Drill-down */
   lines?: PaymentLine[];
   rate?: number;
@@ -102,7 +88,9 @@ function KpiMethodAmounts({
           title={`המרה לדולר: ${formatIlsDisplay(ils)} → ${formatUsdDisplay(convertedUsd)}`}
         >
           <span className="payment-modal-live-kpi__convbox-ils">{formatIlsDisplay(ils)}</span>
-          <span className="payment-modal-live-kpi__convbox-arrow" aria-hidden>→</span>
+          <span className="payment-modal-live-kpi__convbox-arrow" aria-hidden>
+            →
+          </span>
           <span className="payment-modal-live-kpi__convbox-usd">{formatUsdDisplay(convertedUsd)}</span>
         </div>
       ) : null}
@@ -114,17 +102,18 @@ export function PaymentLiveSummaryCards({
   kpis,
   openDebtUsd = 0,
   onOpenDebtClick,
-  orderSummary = null,
+  remainingToPayUsd = null,
   lines,
   rate = 0,
 }: Props) {
   const showOpenDebt = openDebtUsd > 0.01;
   const methodCards = LIVE_PAYMENT_KPI_CARDS.filter((c) => !c.isTotal);
   const canDrill = Array.isArray(lines) && lines.length > 0;
-  const hasOverpayment = (orderSummary?.overpaymentUsd ?? 0) > 0.01;
-  const hasRemaining = (orderSummary?.remainingUsd ?? 0) > 0.01;
+  const showRemainingToPay = remainingToPayUsd != null && Number.isFinite(remainingToPayUsd);
 
-  const [drill, setDrill] = useState<{ title: string; method: PaymentLineMethod | null } | null>(null);
+  const [drill, setDrill] = useState<{ title: string; method: PaymentLineMethod | null } | null>(
+    null,
+  );
 
   const openDrill = (title: string, method: PaymentLineMethod | null) => {
     if (!canDrill) return;
@@ -160,118 +149,77 @@ export function PaymentLiveSummaryCards({
         aria-live="polite"
         dir="rtl"
       >
-      {methodCards.map((card) => {
-        const bucket = liveKpiBucket(kpis, card.id);
-        const enteredIls = bucket?.enteredIls ?? 0;
-        const enteredUsd = bucket?.enteredUsd ?? 0;
-        const bucketTotalUsd = bucket?.totalUsd ?? 0;
-        const convertedUsd = round2(bucketTotalUsd - enteredUsd);
-        const method = CARD_ID_TO_METHOD[card.id as Exclude<LivePaymentKpiCardId, "total">];
-        const clickable = canDrill && bucketTotalUsd > 0.005;
-        return (
-          <div
-            key={card.id}
-            className={[
-              "payment-modal-live-kpi",
-              `payment-modal-live-kpi--${card.id}`,
-              clickable ? "payment-modal-live-kpi--clickable" : "",
-            ]
-              .filter(Boolean)
-              .join(" ")}
-            role={clickable ? "button" : undefined}
-            tabIndex={clickable ? 0 : undefined}
-            onClick={clickable ? () => openDrill(card.label, method) : undefined}
-            onKeyDown={
-              clickable
-                ? (e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      openDrill(card.label, method);
+        {methodCards.map((card) => {
+          const bucket = liveKpiBucket(kpis, card.id);
+          const enteredIls = bucket?.enteredIls ?? 0;
+          const enteredUsd = bucket?.enteredUsd ?? 0;
+          const bucketTotalUsd = bucket?.totalUsd ?? 0;
+          const convertedUsd = round2(bucketTotalUsd - enteredUsd);
+          const method = CARD_ID_TO_METHOD[card.id as Exclude<LivePaymentKpiCardId, "total">];
+          const clickable = canDrill && bucketTotalUsd > 0.005;
+          return (
+            <div
+              key={card.id}
+              className={[
+                "payment-modal-live-kpi",
+                `payment-modal-live-kpi--${card.id}`,
+                clickable ? "payment-modal-live-kpi--clickable" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              role={clickable ? "button" : undefined}
+              tabIndex={clickable ? 0 : undefined}
+              onClick={clickable ? () => openDrill(card.label, method) : undefined}
+              onKeyDown={
+                clickable
+                  ? (e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        openDrill(card.label, method);
+                      }
                     }
-                  }
-                : undefined
-            }
-            title={clickable ? "לחץ לפירוט התשלומים" : undefined}
+                  : undefined
+              }
+              title={clickable ? "לחץ לפירוט התשלומים" : undefined}
+            >
+              <div className="payment-modal-live-kpi__lbl">{card.label}</div>
+              <KpiMethodAmounts
+                ils={enteredIls}
+                convertedUsd={convertedUsd}
+                actualUsd={bucketTotalUsd}
+              />
+            </div>
+          );
+        })}
+
+        {showOpenDebt ? (
+          <button
+            type="button"
+            className="payment-modal-live-kpi payment-modal-live-kpi--open-debt"
+            onClick={onOpenDebtClick}
+            title="לחץ לפירוט חובות פתוחים"
           >
-            <div className="payment-modal-live-kpi__lbl">{card.label}</div>
-            <KpiMethodAmounts ils={enteredIls} convertedUsd={convertedUsd} actualUsd={bucketTotalUsd} />
-          </div>
-        );
-      })}
+            <div className="payment-modal-live-kpi__lbl">חוב פתוח</div>
+            <AnimatedMoneyValue
+              className="payment-modal-live-kpi__amount-v payment-modal-live-kpi__amount-v--usd payment-modal-live-kpi__amount-v--solo"
+              dir="ltr"
+              value={formatUsdPlain(openDebtUsd)}
+            />
+            <span className="payment-modal-live-kpi__hint">לחץ לפירוט</span>
+          </button>
+        ) : null}
 
-      {showOpenDebt ? (
-        <button
-          type="button"
-          className="payment-modal-live-kpi payment-modal-live-kpi--open-debt"
-          onClick={onOpenDebtClick}
-          title="לחץ לפירוט חובות פתוחים"
-        >
-          <div className="payment-modal-live-kpi__lbl">חוב פתוח</div>
-          <AnimatedMoneyValue
-            className="payment-modal-live-kpi__amount-v payment-modal-live-kpi__amount-v--usd payment-modal-live-kpi__amount-v--solo"
-            dir="ltr"
-            value={formatUsdPlain(openDebtUsd)}
+        {showRemainingToPay ? <RemainingToPayCard amountUsd={remainingToPayUsd!} /> : null}
+
+        {drill && canDrill ? (
+          <PaymentSummaryDrillModal
+            title={drill.title}
+            method={drill.method}
+            lines={lines!}
+            rate={rate}
+            onClose={() => setDrill(null)}
           />
-          <span className="payment-modal-live-kpi__hint">לחץ לפירוט</span>
-        </button>
-      ) : null}
-
-      {orderSummary ? (
-        <div
-          className={[
-            "payment-modal-live-kpi",
-            "payment-modal-live-kpi--order-summary",
-            "payment-modal-live-kpi--order-summary--last",
-            hasOverpayment ? "payment-modal-live-kpi--order-summary--surplus" : "",
-          ]
-            .filter(Boolean)
-            .join(" ")}
-        >
-          <div className="payment-modal-live-kpi__lbl">
-            {hasOverpayment ? "עודף תשלום" : "נשאר לתשלום"}
-          </div>
-          <AnimatedMoneyValue
-            className={[
-              "payment-modal-live-kpi__hero-v",
-              hasOverpayment
-                ? "payment-modal-live-kpi__hero-v--surplus"
-                : hasRemaining
-                  ? "payment-modal-live-kpi__hero-v--due"
-                  : "payment-modal-live-kpi__hero-v--ok",
-            ].join(" ")}
-            dir="ltr"
-            value={
-              hasOverpayment
-                ? `+${formatUsdDisplay(orderSummary.overpaymentUsd)}`
-                : formatUsdDisplay(orderSummary.remainingUsd)
-            }
-          />
-          <div className="payment-modal-live-kpi__sub">
-            <span>
-              שולם עד כה: <strong dir="ltr">{formatUsdDisplay(orderSummary.paidUsd)}</strong>
-            </span>
-            <span>
-              חוב מקורי: <strong dir="ltr">{formatUsdDisplay(orderSummary.totalUsd)}</strong>
-            </span>
-            {hasOverpayment ? (
-              <span>
-                חוב לפני תשלום:{" "}
-                <strong dir="ltr">{formatUsdDisplay(orderSummary.openDebtBeforeUsd)}</strong>
-              </span>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-
-      {drill && canDrill ? (
-        <PaymentSummaryDrillModal
-          title={drill.title}
-          method={drill.method}
-          lines={lines!}
-          rate={rate}
-          onClose={() => setDrill(null)}
-        />
-      ) : null}
+        ) : null}
       </div>
     </div>
   );
@@ -303,19 +251,30 @@ function PaymentSummaryDrillModal({
       if (ils <= 0 && totalUsd <= 0) return null;
       return { idx: idx + 1, method: m, ils, convertedUsd, totalUsd };
     })
-    .filter((r): r is { idx: number; method: PaymentLineMethod; ils: number; convertedUsd: number; totalUsd: number } => r !== null);
+    .filter(
+      (r): r is { idx: number; method: PaymentLineMethod; ils: number; convertedUsd: number; totalUsd: number } =>
+        r !== null,
+    );
 
   const totalIls = rows.reduce((a, r) => a + r.ils, 0);
   const totalConverted = round2(rows.reduce((a, r) => a + r.convertedUsd, 0));
   const totalUsd = round2(rows.reduce((a, r) => a + r.totalUsd, 0));
   const methodLabel = (m: PaymentLineMethod): string => {
-    const card = LIVE_PAYMENT_KPI_CARDS.find((c) => CARD_ID_TO_METHOD[c.id as Exclude<LivePaymentKpiCardId, "total">] === m);
+    const card = LIVE_PAYMENT_KPI_CARDS.find(
+      (c) => CARD_ID_TO_METHOD[c.id as Exclude<LivePaymentKpiCardId, "total">] === m,
+    );
     return card?.label ?? m;
   };
 
   return (
     <div className="payment-drill-backdrop" role="presentation" onClick={onClose}>
-      <div className="payment-drill-modal" dir="rtl" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="payment-drill-modal"
+        dir="rtl"
+        role="dialog"
+        aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="payment-drill-head">
           <h4>פירוט תשלומים — {title}</h4>
           <button type="button" className="payment-drill-x" onClick={onClose} aria-label="סגור">
@@ -343,7 +302,9 @@ function PaymentSummaryDrillModal({
                     {method === null ? <td>{methodLabel(r.method)}</td> : null}
                     <td dir="ltr">{formatIlsDisplay(r.ils)}</td>
                     <td dir="ltr">{formatUsdDisplay(r.convertedUsd)}</td>
-                    <td dir="ltr" className="payment-drill-strong">{formatUsdDisplay(r.totalUsd)}</td>
+                    <td dir="ltr" className="payment-drill-strong">
+                      {formatUsdDisplay(r.totalUsd)}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -352,7 +313,9 @@ function PaymentSummaryDrillModal({
                   <td colSpan={method === null ? 2 : 1}>סה&quot;כ</td>
                   <td dir="ltr">{formatIlsDisplay(totalIls)}</td>
                   <td dir="ltr">{formatUsdDisplay(totalConverted)}</td>
-                  <td dir="ltr" className="payment-drill-strong">{formatUsdDisplay(totalUsd)}</td>
+                  <td dir="ltr" className="payment-drill-strong">
+                    {formatUsdDisplay(totalUsd)}
+                  </td>
                 </tr>
               </tfoot>
             </table>

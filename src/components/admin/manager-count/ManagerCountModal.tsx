@@ -67,6 +67,7 @@ export function ManagerCountModal({
     commissionUsd: "",
     commissionIls: "",
     turkeyTransferUsd: "",
+    turkeyTransferIls: "",
   });
   const [turkeyManual, setTurkeyManual] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -103,7 +104,7 @@ export function ManagerCountModal({
     }
   }, [open, initialFlow, reloadFlow]);
 
-  const fxTotals = flow ? sumFxPurchases(flow.fxPurchases) : { ils: 0, usd: 0 };
+  const fxTotals = flow ? sumFxPurchases(flow.fxPurchases, "PS") : { ils: 0, usd: 0 };
   const autoTurkey = computeAutoTurkeyUsd(form, fxTotals.usd);
   const intakePl = sumIntakeFxPlFromPurchases(flow);
 
@@ -429,6 +430,7 @@ export function ManagerCountModal({
           open={fxOpen}
           week={week}
           weekLabel={weekLabel}
+          track="PS"
           availableIls={resolveAvailableIlsForFx(flow, form)}
           saving={saving}
           onClose={() => setFxOpen(false)}

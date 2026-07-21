@@ -333,13 +333,12 @@ export function formatVarianceShort(currency: "ILS" | "USD", variance: number | 
 export function varianceStatusLabel(status: CashDailyStatusKind): string {
   switch (status) {
     case "ok":
-      return "תקין";
+      return "מאוזן";
     case "warn":
-      return "הפרש קטן";
     case "critical":
-      return "חריג";
+      return "לא מאוזן";
     default:
-      return "ממתין לספירה";
+      return "ממתין";
   }
 }
 

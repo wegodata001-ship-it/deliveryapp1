@@ -16,6 +16,8 @@ export type FlowWeekCashCount = {
   countedTransferIls: number | null;
   commissionUsd: number;
   commissionIls: number;
+  turkeyTransferUsd: number | null;
+  turkeyTransferIls: number | null;
   expensesIls: number;
   expensesUsd: number;
 };
@@ -54,6 +56,8 @@ export async function loadFlowWeekCashCount(weekCode: string): Promise<FlowWeekC
     countedTransferIls: decToNum(flowRow?.countedTransferIls),
     commissionUsd: numDec(flowRow?.commissionUsd),
     commissionIls: numDec(flowRow?.commissionIls),
+    turkeyTransferUsd: decToNum(flowRow?.turkeyTransferUsd),
+    turkeyTransferIls: decToNum(flowRow?.turkeyTransferIls),
     expensesIls: cashExp.ils,
     expensesUsd: cashExp.usd,
   };
@@ -68,6 +72,7 @@ export type FlowManagerCountPersist = {
   commissionUsd: Prisma.Decimal | null;
   commissionIls: Prisma.Decimal | null;
   turkeyTransferUsd: Prisma.Decimal | null;
+  turkeyTransferIls: Prisma.Decimal | null;
 };
 
 export async function saveFlowWeekCashCount(input: {

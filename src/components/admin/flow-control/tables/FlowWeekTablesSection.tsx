@@ -5,7 +5,6 @@ import type { FlowWeekDrillPayload } from "@/app/admin/cash-flow/flow-types";
 import type { CashDailyMethodId } from "@/lib/cash-control-daily";
 import { CASH_DAILY_METHODS } from "@/lib/cash-control-daily";
 import { CashflowReceivedTable } from "@/components/admin/flow-control/tables/CashflowReceivedTable";
-import { CashCountTable } from "@/components/admin/flow-control/tables/CashCountTable";
 import { CashflowCalculationTable } from "@/components/admin/flow-control/tables/CashflowCalculationTable";
 import { CashVarianceDetailModal } from "@/components/admin/cash-control/CashVarianceDetailModal";
 import { ExchangeProfitModal } from "@/components/admin/flow-control/exchange-profit/ExchangeProfitModal";
@@ -15,26 +14,31 @@ import { setPaymentCashAuditReviewAction } from "@/app/admin/cash-control/review
 import type { CashDailyMethodDetailRow } from "@/app/admin/cash-control/daily-types";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { getFlowWeekVarianceLines } from "@/lib/flow-control/services/flow-variance.service";
-import { FlowWeekStatusBanner } from "@/components/admin/flow-control/dashboard/FlowWeekStatusBanner";
 
 export type FlowWeekTablesSectionProps = {
   drill: FlowWeekDrillPayload | null;
   loading: boolean;
-  canEditManagerCount: boolean;
-  onManagerCountSaved: () => void;
+  /** פתיחת מודל חריגות מבחוץ (תג בראש המסך) */
+  varianceOpenExternal?: boolean;
+  onVarianceOpenChange?: (open: boolean) => void;
 };
 
-type TabId = "received" | "count" | "calc";
+type TabId = "received" | "calc";
 
 export function FlowWeekTablesSection({
   drill,
   loading,
-  canEditManagerCount,
-  onManagerCountSaved,
+  varianceOpenExternal,
+  onVarianceOpenChange,
 }: FlowWeekTablesSectionProps) {
   const { openWindow } = useAdminWindows();
   const [tab, setTab] = useState<TabId>("received");
-  const [varianceOpen, setVarianceOpen] = useState(false);
+  const [varianceOpenLocal, setVarianceOpenLocal] = useState(false);
+  const varianceOpen = varianceOpenExternal ?? varianceOpenLocal;
+  const setVarianceOpen = (open: boolean) => {
+    setVarianceOpenLocal(open);
+    onVarianceOpenChange?.(open);
+  };
   const [fxProfitOpen, setFxProfitOpen] = useState(false);
 
   const [intakeDrillMethod, setIntakeDrillMethod] = useState<CashDailyMethodId | null>(null);
@@ -105,10 +109,6 @@ export function FlowWeekTablesSection({
     </>
   );
 
-  const countBlock = (
-    <CashCountTable drill={drill} loading={loading} canEdit={canEditManagerCount} onSaved={onManagerCountSaved} />
-  );
-
   const calcBlock = (
     <CashflowCalculationTable
       drill={drill}
@@ -120,7 +120,6 @@ export function FlowWeekTablesSection({
 
   return (
     <div className="ft-week">
-      {drill ? <FlowWeekStatusBanner drill={drill} /> : null}
       {drill?.meta.updatedAtDisplay ? (
         <p className="ft-updated">עודכן לאחרונה: {drill.meta.updatedAtDisplay}</p>
       ) : null}
@@ -134,15 +133,6 @@ export function FlowWeekTablesSection({
           onClick={() => setTab("received")}
         >
           קליטות
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "count"}
-          className={tab === "count" ? "is-active" : ""}
-          onClick={() => setTab("count")}
-        >
-          ספירת קופה
         </button>
         <button
           type="button"
@@ -164,21 +154,10 @@ export function FlowWeekTablesSection({
           {receivedBlock}
         </section>
 
-        <section className={`ft-section ft-section--count${tab === "count" ? " is-tab-active" : ""}`} id="ft-count">
-          <header className="ft-section__head ft-section__head--green">
-            <h2>2. מסלולי PS ו־IL</h2>
-            <p>
-              PS: דולר/שקל, רכישת מט&quot;ח, עמלה וטורקיה · IL: העברות/צ&apos;קים/אשראי לרכישת מט&quot;ח + עמלה —
-              הזנה ידנית וחישובים אוטומטיים
-            </p>
-          </header>
-          {countBlock}
-        </section>
-
         <section className={`ft-section ft-section--calc${tab === "calc" ? " is-tab-active" : ""}`} id="ft-calc">
           <header className="ft-section__head ft-section__head--purple">
-            <h2>3. יתרות וסיכום</h2>
-            <p>שקל שנשאר, יתרה בקופה ויתרה בבנק — מחושב אוטומטית מתקבולים ומסלולי PS/IL</p>
+            <h2>2. יתרות וסיכום</h2>
+            <p>שקל שנשאר, יתרה בקופה ויתרה בבנק — מחושב אוטומטית מתקבולים ומספירת מנהל</p>
           </header>
           {calcBlock}
         </section>

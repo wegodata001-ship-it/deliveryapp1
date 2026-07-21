@@ -256,10 +256,37 @@ export function computeDailyStatus(
   worstMethod: CashDailyMethodId | null;
 } {
   const lines = buildDailyReconciliation(intake, drawer, expenses);
+  const hasIntakeOrExpense = lines.some(
+    (l) => l.grossReceived > CASH_CONTROL_EPS || l.expense > CASH_CONTROL_EPS,
+  );
   const countedLines = lines.filter((l) => l.counted != null);
-  if (countedLines.length === 0) {
+  const hasAnyCount = countedLines.length > 0;
+
+  // ממתין — רק כשאין שום פעילות ביום (לא קליטה, לא הוצאה, לא ספירה)
+  if (!hasIntakeOrExpense && !hasAnyCount) {
     return { kind: "pending", worstDiff: null, worstCurrency: "ILS", worstMethod: null };
   }
+
+  // פעילות ללא ספירה כלל → לא מאוזן
+  if (!hasAnyCount) {
+    return { kind: "warn", worstDiff: null, worstCurrency: "ILS", worstMethod: null };
+  }
+
+  // ערוץ עם תנועה שעדיין לא נספר → לא מאוזן
+  const uncountedActive = lines.find(
+    (l) =>
+      l.counted == null &&
+      (l.grossReceived > CASH_CONTROL_EPS || l.expense > CASH_CONTROL_EPS),
+  );
+  if (uncountedActive) {
+    return {
+      kind: "warn",
+      worstDiff: null,
+      worstCurrency: uncountedActive.currency,
+      worstMethod: uncountedActive.method,
+    };
+  }
+
   let worst: CashDailyReconLine | null = null;
   for (const l of countedLines) {
     if (l.diff == null) continue;

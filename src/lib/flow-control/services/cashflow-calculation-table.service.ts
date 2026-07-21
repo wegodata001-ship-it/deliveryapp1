@@ -19,6 +19,10 @@ export type FlowCalculationTableRow = {
   drawerIls: string;
   turkeyBalanceUsd: string;
   bankBalanceIls: string;
+  /** רכישת מט״ח PS — נפרד מ-IL */
+  fxPsPurchaseIls: string;
+  fxPsPurchaseUsd: string;
+  /** רכישת מט״ח IL — נפרד מ-PS */
   ilFxPurchaseIls: string;
   expensesIls: string;
   expensesUsd: string;
@@ -82,6 +86,8 @@ export function buildFlowCalculationTableRow(drill: FlowWeekDrillPayload): FlowC
     drawerIls: flow.drawerRemainingIls,
     turkeyBalanceUsd: flow.turkeyBalanceClosingUsd,
     bankBalanceIls: flow.bankBalanceIls ?? "0",
+    fxPsPurchaseIls: flow.fxPurchaseIls ?? "0",
+    fxPsPurchaseUsd: flow.fxPurchaseUsd ?? "0",
     ilFxPurchaseIls: flow.ilFxPurchaseIls ?? "0",
     expensesIls: flow.expensesIls,
     expensesUsd: flow.expensesUsd,

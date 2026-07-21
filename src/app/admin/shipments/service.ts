@@ -323,6 +323,76 @@ export async function createShipmentBatch(
   return batch.id;
 }
 
+export async function importRowsIntoBatch(
+  input: {
+    batchId: string;
+    rows: CreateBatchInput["rows"];
+    defaultZoneId?: string;
+    defaultCourierId?: string;
+  },
+): Promise<number> {
+  const batch = await prisma.shipmentBatch.findUnique({
+    where: { id: input.batchId },
+    select: { id: true },
+  });
+  if (!batch) throw new Error("המשלוח לא נמצא");
+
+  const validRows = input.rows.filter((r) => r.valid);
+  if (validRows.length === 0) throw new Error("אין שורות תקינות לייבוא");
+
+  const defaultCourier = input.defaultCourierId
+    ? await prisma.shipmentCourier.findUnique({
+        where: { id: input.defaultCourierId },
+        select: { id: true, name: true, isActive: true },
+      })
+    : null;
+  if (input.defaultCourierId && (!defaultCourier || !defaultCourier.isActive)) {
+    throw new Error("לא ניתן לשייך שליח מושבת או לא קיים");
+  }
+  if (input.defaultZoneId) {
+    const zone = await prisma.shipmentDeliveryZone.findUnique({
+      where: { id: input.defaultZoneId },
+      select: { id: true, isActive: true },
+    });
+    if (!zone || !zone.isActive) throw new Error("לא ניתן לשייך אזור מושבת או לא קיים");
+  }
+
+  const last = await prisma.shipmentRecord.findFirst({
+    where: { batchId: input.batchId },
+    orderBy: { rowIndex: "desc" },
+    select: { rowIndex: true },
+  });
+  const baseIndex = last?.rowIndex ?? 0;
+
+  await prisma.shipmentRecord.createMany({
+    data: validRows.map((r, i) => ({
+      batchId: input.batchId,
+      rowIndex: baseIndex + i + 1,
+      customerCode: r.customerCode ?? null,
+      customerName: r.customerName ?? null,
+      customerPhone: r.customerPhone ?? null,
+      address: r.address ?? null,
+      city: r.city ?? null,
+      boxes: r.boxes ?? null,
+      cartonDetails: r.cartonDetails ?? null,
+      weight: r.weight ?? null,
+      orderAmount: r.orderAmount ?? null,
+      orderCurrency: r.orderCurrency ?? null,
+      deliveryFeeAmount: null,
+      deliveryFeeCurrency: "ILS",
+      deliveryFeeIls: null,
+      zoneId: input.defaultZoneId ?? null,
+      courierId: defaultCourier?.id ?? null,
+      courierName: defaultCourier?.name ?? null,
+      notes: r.notes ?? null,
+      status: "NEW" as const,
+      paymentStatus: "UNPAID" as const,
+    })),
+  });
+
+  return validRows.length;
+}
+
 export async function updateShipmentBatch(input: UpdateShipmentBatchInput): Promise<void> {
   const data: Record<string, unknown> = {};
   if (input.sourceShipmentNumber !== undefined) data.sourceShipmentNumber = input.sourceShipmentNumber;

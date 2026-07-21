@@ -598,6 +598,137 @@
 .shp-btn--sm { padding: 4px 10px; font-size: 0.78rem; }
 
 /* ─── Import page ────────────────────────────────────────────────────────────── */
+/* ─── Create shipment — single-screen layout ───────────────────────────────── */
+.shp-create-page {
+  padding-bottom: 100px;
+}
+
+.shp-create-subtitle {
+  margin: 4px 0 0;
+  font-size: 0.85rem;
+  color: #64748b;
+  font-weight: 400;
+}
+
+.shp-create-split {
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) minmax(300px, 1fr);
+  gap: 16px;
+  margin-bottom: 16px;
+  align-items: stretch;
+}
+
+.shp-create-panel {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 18px 20px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+}
+
+.shp-create-panel__title {
+  margin: 0 0 14px;
+  font-size: 1.05rem;
+  font-weight: 750;
+  color: #1e293b;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.shp-create-form {
+  margin-bottom: 0;
+}
+
+.shp-create-form .shp-form-field--full {
+  grid-column: 1 / -1;
+}
+
+.shp-import-zone--tall {
+  min-height: 260px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+
+.shp-file-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #eff6ff 0%, #fff 70%);
+  margin-bottom: 12px;
+}
+
+.shp-file-card__icon {
+  color: #2563eb;
+}
+
+.shp-file-card__name {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: #0f172a;
+  word-break: break-all;
+}
+
+.shp-file-card__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-top: 6px;
+  font-size: 0.82rem;
+  color: #475569;
+}
+
+.shp-file-card__ok {
+  color: #15803d;
+  font-weight: 600;
+}
+
+.shp-file-card__bad {
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.shp-file-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.shp-create-hint {
+  margin: 0;
+  font-size: 0.78rem;
+  color: #64748b;
+  line-height: 1.45;
+}
+
+.shp-create-preview {
+  margin-bottom: 16px;
+}
+
+.shp-create-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 15;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 14px 0 8px;
+  margin-top: 8px;
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0), #f8fafc 28%);
+  border-top: 1px solid #e2e8f0;
+}
+
+@media (max-width: 900px) {
+  .shp-create-split {
+    grid-template-columns: 1fr;
+  }
+}
+
 .shp-import-zone {
   border: 2px dashed #93c5fd;
   border-radius: 12px;
@@ -1937,4 +2068,370 @@
 /* ─── Spin animation for refresh ─────────────────────────────────────────────── */
 .sc-spin {
   animation: shp-spin .7s linear infinite;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Manual shipment entry — משלוחים – הזנה ידנית (standalone module)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.msh-page {
+  min-height: calc(100vh - 80px);
+}
+
+.msh-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: linear-gradient(180deg, #f8fafc 85%, rgba(248, 250, 252, 0));
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+}
+
+.msh-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+}
+
+.msh-input {
+  min-width: 120px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  background: #fff;
+  color: #0f172a;
+}
+
+.msh-input:focus {
+  outline: 2px solid #93c5fd;
+  border-color: #3b82f6;
+}
+
+.msh-table-scroll {
+  margin-bottom: 24px;
+}
+
+.msh-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.msh-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #1e293b;
+  color: #fff;
+  font-weight: 600;
+  padding: 8px 10px;
+  white-space: nowrap;
+  text-align: right;
+  border-bottom: 1px solid #334155;
+}
+
+.msh-table tbody td {
+  padding: 5px 10px;
+  border-bottom: 1px solid #e2e8f0;
+  white-space: nowrap;
+  vertical-align: middle;
+  background: #fff;
+}
+
+.msh-table tbody tr:hover td {
+  background: #f1f5f9;
+}
+
+.msh-table tfoot td {
+  position: sticky;
+  bottom: 0;
+  background: #e2e8f0;
+  font-weight: 700;
+  padding: 8px 10px;
+  border-top: 2px solid #94a3b8;
+}
+
+.msh-col-check {
+  width: 36px;
+}
+
+.msh-col-actions {
+  min-width: 200px;
+}
+
+.msh-empty {
+  text-align: center !important;
+  padding: 32px 16px !important;
+  color: #64748b;
+  white-space: normal !important;
+}
+
+.msh-mono {
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.msh-num {
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  direction: ltr;
+}
+
+.msh-clamp {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.msh-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.msh-link {
+  background: none;
+  border: none;
+  color: #2563eb;
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.msh-link--danger {
+  color: #dc2626;
+}
+
+.msh-link--ok {
+  color: #15803d;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.msh-keep-shipment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: #475569;
+  margin-inline-start: 4px;
+  user-select: none;
+}
+
+.msh-excel-hint {
+  margin-bottom: 8px;
+  padding: 8px 12px;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  color: #065f46;
+}
+
+.msh-row--draft td {
+  background: #f0fdf4 !important;
+}
+
+.msh-excel-input {
+  width: 100%;
+  min-width: 72px;
+  box-sizing: border-box;
+  border: 1px solid #93c5fd;
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 0.78rem;
+  background: #fff;
+  color: #0f172a;
+}
+
+.msh-excel-input:focus {
+  outline: 2px solid #3b82f6;
+  border-color: #2563eb;
+}
+
+textarea.msh-excel-input {
+  min-height: 28px;
+  resize: vertical;
+}
+
+.msh-excel-cell {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  margin: 0;
+  padding: 4px 2px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  text-align: inherit;
+  font: inherit;
+  color: inherit;
+  cursor: cell;
+}
+
+.msh-excel-cell:hover {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+.msh-link:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.msh-status {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.msh-status--new { background: #dbeafe; color: #1d4ed8; }
+.msh-status--transit { background: #fef3c7; color: #b45309; }
+.msh-status--arrived { background: #d1fae5; color: #047857; }
+.msh-status--dist { background: #ede9fe; color: #6d28d9; }
+.msh-status--done { background: #e2e8f0; color: #334155; }
+.msh-status--cancel { background: #fee2e2; color: #b91c1c; }
+
+tr.msh-row--new td:first-child { box-shadow: inset 3px 0 0 #3b82f6; }
+tr.msh-row--transit td:first-child { box-shadow: inset 3px 0 0 #f59e0b; }
+tr.msh-row--arrived td:first-child { box-shadow: inset 3px 0 0 #10b981; }
+tr.msh-row--dist td:first-child { box-shadow: inset 3px 0 0 #8b5cf6; }
+tr.msh-row--done td:first-child { box-shadow: inset 3px 0 0 #64748b; }
+tr.msh-row--cancel td:first-child { box-shadow: inset 3px 0 0 #ef4444; }
+
+.msh-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 40px 16px;
+  overflow-y: auto;
+}
+
+.msh-modal {
+  width: min(1100px, 100%);
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.25);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 80px);
+}
+
+.msh-modal__head,
+.msh-modal__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid #e2e8f0;
+  flex-shrink: 0;
+}
+
+.msh-modal__foot {
+  border-bottom: none;
+  border-top: 1px solid #e2e8f0;
+  justify-content: flex-start;
+}
+
+.msh-modal__head h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  color: #0f172a;
+}
+
+.msh-form {
+  padding: 16px 18px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.msh-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+/* שורת Excel — ללא קיבוץ לנושאים */
+.msh-grid--excel {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.msh-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.78rem;
+  color: #475569;
+  font-weight: 600;
+}
+
+.msh-grid input,
+.msh-grid select,
+.msh-grid textarea {
+  font-weight: 400;
+  font-size: 0.88rem;
+  padding: 7px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  color: #0f172a;
+  background: #fff;
+}
+
+.msh-grid input:disabled,
+.msh-grid select:disabled,
+.msh-grid textarea:disabled,
+.msh-readonly {
+  background: #f8fafc;
+  color: #334155;
+}
+
+.msh-span-2 {
+  grid-column: span 2;
+}
+
+.msh-error {
+  margin: 0 18px;
+  padding: 10px 12px;
+  background: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+@media (max-width: 900px) {
+  .msh-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .msh-span-2 {
+    grid-column: span 2;
+  }
+}
+
+@media (max-width: 560px) {
+  .msh-grid {
+    grid-template-columns: 1fr;
+  }
+  .msh-span-2 {
+    grid-column: span 1;
+  }
 }

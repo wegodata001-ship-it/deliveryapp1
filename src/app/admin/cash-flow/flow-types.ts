@@ -17,9 +17,14 @@ export type FxPurchaseIntakeAllocation = {
   profitIls: number;
 };
 
+/** מסלול רכישת מט״ח — PS ומסלול IL נפרדים לחלוטין */
+export type FxPurchaseTrack = "PS" | "IL";
+
 /** רשומת רכישת מט"ח — נשמרת ב-CashWeekFlow.fxPurchases (JSON), append-only */
 export type FxPurchaseRecord = {
   id: string;
+  /** ברירת מחדל לרשומות ישנות / חסרות: PS */
+  track?: FxPurchaseTrack;
   ilsAmount: number;
   usdReceived: number;
   rate: number;
@@ -39,13 +44,26 @@ export type FxPurchaseRecord = {
 
 export type FxProfitLossHistoryRow = {
   purchaseId: string;
+  /** מספר פעולה להצגה (1…n לפי סדר כרונולוגי) */
+  operationNumber: number;
   dateLabel: string;
   timeLabel: string;
+  dateYmd: string;
+  /** סכום דולר שנרכש */
+  usdReceived: number;
+  /** סכום שקל ששולם ברכישה */
+  ilsAmount: number;
+  /** שער קליטה משוקלל מתקבולים שהוקצו לרכישה */
+  intakeRate: number | null;
   purchaseRate: number;
+  /** הפרש שער = שער רכישה − שער קליטה */
+  rateDiff: number | null;
   avgRateBefore: number;
   saleRate: number | null;
+  /** רווח/הפסד לפי הקצאת תקבולים (אם קיים) — אחרת לפי ממוצע מצטבר */
   profitIls: number;
   lossIls: number;
+  netIls: number;
 };
 
 export type TurkeyDebtResult = {
@@ -91,7 +109,10 @@ export type ManagerCountForm = {
   countedTransferIls: string;
   commissionUsd: string;
   commissionIls: string;
+  /** הקצאה לטורקיה — מסלול PS ($) */
   turkeyTransferUsd: string;
+  /** הקצאה לטורקיה — מסלול IL (₪) */
+  turkeyTransferIls: string;
 };
 
 export type FlowWeekPayload = {
@@ -116,15 +137,19 @@ export type FlowWeekPayload = {
   /** יתרה להעברה לטורקיה — מחושב מתנועות (לא מחוב לקוח) */
   turkeyBalance: import("@/lib/flow-control/turkey-transfer-balance-types").TurkeyTransferBalanceResult;
   turkeyTransferUsd: string | null;
+  /** הקצאה לטורקיה IL (₪) מספירת מנהל */
+  turkeyTransferIls: string | null;
   /** מחושב: כסף שהועבר לבנק − משיכות + הפקדות */
   bankBalanceIls: string | null;
   bankBalanceUsd: string | null;
   /** דולר בקופה — מחושב */
   drawerRemainingIls: string;
   drawerRemainingUsd: string;
-  /** כמה ₪ זמין לרכישת מט"ח — זהה ל«שקל שנשאר» (תקבולים − FX PS − FX IL) */
+  /** כמה ₪ זמין לרכישת מט״ח PS (מזומן PS בלבד) */
   availableIlsForFx: string;
-  /** כמה $ מוקצה לטורקיה מספירת קופה (לטורקיה PS) */
+  /** כמה ₪ זמין לרכישת מט״ח IL (מאגר בנקאי בלבד) */
+  availableIlIlsForFx: string;
+  /** העברה לטורקיה PS = מזומן $ + רכישת מט״ח PS + עמלת PS */
   turkeyExpectedUsd: string;
   /** @deprecated — השתמש ב-turkeyBalance.usd.closingBalance */
   turkeyDebtUsd: string;
@@ -133,9 +158,9 @@ export type FlowWeekPayload = {
   /** יתרה להעברה לטורקיה — סגירה */
   turkeyBalanceClosingUsd: string;
   turkeyBalanceStatus: import("@/lib/flow-control/turkey-transfer-balance-types").TurkeyWeekStatus;
-  /** רכישת מט״ח IL = העברות IL + צ'קים IL + אשראי IL */
+  /** סכום רכישות מט״ח IL שבוצעו (₪) — לא מאגר המקור */
   ilFxPurchaseIls: string;
-  /** שקל שנשאר = תקבולים ₪ − רכישת מט״ח PS − רכישת מט״ח IL */
+  /** יתרת מזומן PS אחרי רכישות PS */
   ilsRemainingAfterFx: string;
 };
 

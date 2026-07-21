@@ -1,7 +1,7 @@
 /**
  * FlowWeeksOverviewService — סיכום שבועי לבקרת תזרים.
- * תקבולים: Payment לפי תאריך ביצוע קליטה (intakeDate).
- * ספירת מנהל / מט״ח / טורקיה: CashWeekFlow.
+ * «סה״כ התקבל»: Payment בלבד (קליטות תשלום) — flow.kpis.totalReceivedIls.
+ * ספירת מנהל / מט״ח / טורקיה: CashWeekFlow / drawer.
  */
 
 import { prisma } from "@/lib/prisma";
@@ -36,6 +36,8 @@ async function loadOneWeekOverview(weekCode: string): Promise<FlowWeekOverviewRo
     prisma.payment.findMany({
       where: cashControlWeekReconciliationPaymentsWhere(wk),
       select: {
+        id: true,
+        paymentCode: true,
         amountIls: true,
         amountUsd: true,
         paymentMethod: true,
@@ -55,8 +57,8 @@ async function loadOneWeekOverview(weekCode: string): Promise<FlowWeekOverviewRo
   if (!flow) return null;
 
   const paymentDaily = buildFlowPaymentDailyRows(wk, payments);
-  const paymentTotalRow = paymentDaily.find((r) => r.isTotal);
-  const totalReceivedIls = paymentTotalRow?.totalReceived ?? money(0);
+  /** מקור יחיד: קליטות תשלום (Payment) — לא ספירת קופה / CashWeekFlow */
+  const totalReceivedIls = flow.kpis.totalReceivedIls;
 
   const drawerTotals = emptyDailyIntake();
   for (const row of drawerRows) {

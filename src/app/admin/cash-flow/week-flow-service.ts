@@ -10,7 +10,9 @@ import {
   computeBankReceiptsIlsFromIntake,
   computeFlowWeekKpis,
   computeFlowWeekSummary,
-  computeWeekTotalReceivedIls,
+  computeIlAvailableIlsForFx,
+  computeIlsChannelReceiptsFromIntake,
+  computePaymentsTotalReceivedIls,
   sumFxPurchases,
 } from "@/lib/flow-control/flow-calculation-service";
 import {
@@ -60,6 +62,8 @@ export async function loadFlowWeek(week: string): Promise<FlowWeekPayload | null
       prisma.payment.findMany({
         where: cashControlWeekReconciliationPaymentsWhere(wk),
         select: {
+          id: true,
+          paymentCode: true,
           amountIls: true,
           amountUsd: true,
           paymentMethod: true,
@@ -94,7 +98,10 @@ export async function loadFlowWeek(week: string): Promise<FlowWeekPayload | null
       weekIntake[k] = Math.round((weekIntake[k] + totals[k]) * 100) / 100;
     }
   }
-  const totalReceiptsIls = computeWeekTotalReceivedIls(weekIntake);
+  /** KPI «סה״כ התקבל» — קליטות תשלום בלבד (כל האמצעים, $ מומר ל־₪) */
+  const totalReceivedIls = computePaymentsTotalReceivedIls(payments);
+  /** תקבולי ₪ לערוצי שקל — לחישוב שקל זמין לרכישת מט״ח */
+  const totalReceiptsIls = computeIlsChannelReceiptsFromIntake(weekIntake);
   const bankReceiptsIls = computeBankReceiptsIlsFromIntake(weekIntake);
 
   const received = Object.fromEntries(
@@ -117,7 +124,8 @@ export async function loadFlowWeek(week: string): Promise<FlowWeekPayload | null
     countDiff[lineId] = diff != null ? money(diff) : null;
   }
 
-  const fxTotals = sumFxPurchases(fxPurchases);
+  const fxPs = sumFxPurchases(fxPurchases, "PS");
+  const fxIl = sumFxPurchases(fxPurchases, "IL");
   const managerCashUsd = cashCount.countedCashUsd ?? 0;
   const managerCashIls = cashCount.countedCashIls ?? 0;
 
@@ -138,7 +146,7 @@ export async function loadFlowWeek(week: string): Promise<FlowWeekPayload | null
   });
 
   const kpis = computeFlowWeekKpis({
-    totalReceivedIls: totalReceiptsIls,
+    totalReceivedIls,
     fxTotals: calc.fxTotals,
     turkeyTransferUsd: actualTurkeyTransfersUsd,
     cashIlsInDrawer: calc.cashIlsInDrawer,
@@ -147,7 +155,15 @@ export async function loadFlowWeek(week: string): Promise<FlowWeekPayload | null
     fxProfitLoss: calc.fxProfitLoss,
   });
 
-  const lastFx = fxPurchases.length > 0 ? fxPurchases[fxPurchases.length - 1] : null;
+  const lastPsFx = fxPurchases.filter((p) => p.track !== "IL").at(-1) ?? null;
+  const availableIlIlsForFx = computeIlAvailableIlsForFx(
+    cashCount.countedTransferIls ?? 0,
+    cashCount.countedCreditIls ?? 0,
+    cashCount.countedChecksIls ?? 0,
+    fxPurchases,
+  );
+  const storedTurkeyUsd = cashCount.turkeyTransferUsd ?? turkeyAllocationUsd;
+  const storedTurkeyIls = cashCount.turkeyTransferIls ?? 0;
 
   return {
     week: wk,
@@ -159,28 +175,30 @@ export async function loadFlowWeek(week: string): Promise<FlowWeekPayload | null
     expensesUsd: money(cashCount.expensesUsd),
     commissionUsd: cashCount.commissionUsd > 0 ? money(cashCount.commissionUsd) : null,
     commissionIls: cashCount.commissionIls > 0 ? money(cashCount.commissionIls) : null,
-    fxPurchaseIls: fxTotals.ils > 0 ? money(fxTotals.ils) : null,
-    fxPurchaseUsd: fxTotals.usd > 0 ? money(fxTotals.usd) : null,
-    fxRemainderCashIls: lastFx ? money(lastFx.remainderCashIls) : null,
-    fxRemainderBankIls: lastFx ? money(lastFx.remainderBankIls) : null,
+    fxPurchaseIls: fxPs.ils > 0 ? money(fxPs.ils) : null,
+    fxPurchaseUsd: fxPs.usd > 0 ? money(fxPs.usd) : null,
+    fxRemainderCashIls: lastPsFx ? money(lastPsFx.remainderCashIls) : null,
+    fxRemainderBankIls: lastPsFx ? money(lastPsFx.remainderBankIls) : null,
     fxPurchases,
     fxProfitLoss: calc.fxProfitLoss,
     fxProfitLossHistory: calc.fxProfitLossHistory,
     kpis,
     turkey: calc.turkey,
     turkeyBalance,
-    turkeyTransferUsd: turkeyAllocationUsd > 0 ? money(turkeyAllocationUsd) : null,
+    turkeyTransferUsd: storedTurkeyUsd > 0 ? money(storedTurkeyUsd) : null,
+    turkeyTransferIls: storedTurkeyIls > 0 ? money(storedTurkeyIls) : null,
     bankBalanceIls: money(calc.bankBalanceIls),
     bankBalanceUsd: null,
     drawerRemainingIls: money(calc.cashIlsInDrawer),
     drawerRemainingUsd: money(calc.cashUsdInDrawer),
     availableIlsForFx: money(calc.availableIlsForFx),
+    availableIlIlsForFx: money(availableIlIlsForFx),
     turkeyExpectedUsd: money(calc.turkey.expectedUsd),
     turkeyDebtUsd: money(turkeyBalance.usd.closingBalance),
     turkeyDebtStatus: turkeyBalance.usd.closingBalance > 0.005 ? "debt" : "ok",
     turkeyBalanceClosingUsd: money(turkeyBalance.usd.closingBalance),
     turkeyBalanceStatus: turkeyBalance.usd.status,
-    ilFxPurchaseIls: money(calc.ilFxPurchaseIls),
+    ilFxPurchaseIls: money(fxIl.ils),
     ilsRemainingAfterFx: money(calc.ilsRemainingAfterFx),
   };
 }

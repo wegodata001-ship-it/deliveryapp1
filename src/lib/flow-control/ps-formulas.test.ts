@@ -7,13 +7,21 @@ import {
   computeIlsRemainingAfterFx,
   computeBankBalanceAfterIlFx,
   computeTurkeyAllocationFromCashCount,
+  computeTurkeyIlAllocationIls,
 } from "@/lib/flow-control/flow-calculation-service";
 
 describe("PS Turkey + IL FX formulas", () => {
-  it("Turkey PS = FX bought + commission", () => {
-    assert.equal(computeTurkeyAllocationFromCashCount(100, 50, 5), 55);
+  it("Turkey PS = cash USD in drawer + FX bought + commission PS", () => {
+    assert.equal(computeTurkeyAllocationFromCashCount(100, 50, 5), 155);
     assert.equal(computeTurkeyAllocationFromCashCount(0, 80, 2.5), 82.5);
-    assert.equal(computeTurkeyAllocationFromCashCount(999, 0, 0), 0);
+    assert.equal(computeTurkeyAllocationFromCashCount(999, 0, 0), 999);
+    assert.equal(computeTurkeyAllocationFromCashCount(0, 0, 0), 0);
+  });
+
+  it("Turkey IL = FX IL + commission IL (separate from PS)", () => {
+    assert.equal(computeTurkeyIlAllocationIls(150, 10), 160);
+    assert.equal(computeTurkeyIlAllocationIls(0, 5), 5);
+    assert.equal(computeTurkeyIlAllocationIls(0, 0), 0);
   });
 
   it("IL FX purchase = transfer + credit + checks", () => {

@@ -760,6 +760,8 @@ model CashWeekFlow {
   fxPurchaseIls      Decimal?        @db.Decimal(19, 4)
   fxPurchaseUsd      Decimal?        @db.Decimal(19, 4)
   turkeyTransferUsd  Decimal?        @db.Decimal(19, 4)
+  /** הקצאה לטורקיה — מסלול IL (₪), נפרד מ־turkeyTransferUsd (PS) */
+  turkeyTransferIls  Decimal?        @db.Decimal(19, 4)
   bankBalanceIls     Decimal?        @db.Decimal(19, 4)
   bankBalanceUsd     Decimal?        @db.Decimal(19, 4)
   /** עמלות מנהל — שבוע */
@@ -1365,4 +1367,64 @@ model InventoryCountLine {
   @@index([countId])
   @@index([itemId])
   @@map("InventoryCountLine")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// משלוחים — הזנה ידנית (מודול נפרד לחלוטין ממשלוחי ייבוא/בקרה)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// רשומת משלוח בהזנה ידנית — ללא קישור חובה ללקוח / הזמנה / אצוות ייבוא
+model ManualShipment {
+  id                    String    @id @default(uuid())
+  /// תאריך ראשי של הרשומה
+  entryDate             DateTime?
+  /// חודש לתצוגה/סינון (YYYY-MM)
+  monthKey              String?
+  country               String?
+  shipmentNumber        String?
+  containerNumber       String?
+  shipmentDetails       String?
+  status                String    @default("NEW")
+  city                  String?
+  orderNumber           String?
+  boxes                 Int?
+  totalWeight           Decimal?  @db.Decimal(12, 3)
+  releaseDate           DateTime?
+  warehouseReceiptDate  DateTime?
+  shippingDate          DateTime?
+  arrivalDate           DateTime?
+  distributionStartDate DateTime?
+  amountTotal           Decimal?  @db.Decimal(19, 4)
+  amountPaid            Decimal?  @db.Decimal(19, 4)
+  /// יתרה נשמרת לתצוגה מהירה (מחושבת בשמירה)
+  amountRemaining       Decimal?  @db.Decimal(19, 4)
+  internalCode          String?
+  notes                 String?
+  /// CPM
+  cpm                   String?
+  /// מע״מ
+  vatAmount             Decimal?  @db.Decimal(19, 4)
+  /// חשבונית איירגט
+  airjetInvoice         String?
+  /// מקאסה
+  makasa                String?
+  /// מספר מקאסה
+  makasaNumber          String?
+  /// הובלה פנים
+  inlandHaulage         Decimal?  @db.Decimal(19, 4)
+  /// הובלה נמל
+  portHaulage           Decimal?  @db.Decimal(19, 4)
+  createdById           String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  deletedAt             DateTime?
+
+  @@index([shipmentNumber])
+  @@index([containerNumber])
+  @@index([country])
+  @@index([monthKey])
+  @@index([status])
+  @@index([entryDate])
+  @@index([deletedAt])
+  @@map("ManualShipment")
 }

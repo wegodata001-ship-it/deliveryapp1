@@ -1,23 +1,20 @@
 /**
- * ExchangeService — רכישות מט"ח (append-only).
+ * ExchangeService — רכישות מט"ח (append-only), מופרדות לפי מסלול PS / IL.
  */
 
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { emptyDailyIntake, paymentDayKeyJerusalem } from "@/lib/cash-control-daily";
-import { cashControlWeekReconciliationPaymentsWhere } from "@/lib/cash-control-week-payments";
 import {
-  aggregateFlowIntakesByDay,
   computeFxRemainderAfterPurchase,
   computeFxUsdReceived,
-  computeIlFxPurchaseIls,
-  computeIlsRemainingAfterFx,
-  computeWeekTotalReceivedIls,
+  computeIlAvailableIlsForFx,
+  computePsAvailableIlsForFx,
+  normalizeFxTrack,
   parseFxPurchasesJson,
   sumFxPurchases,
   validateFxRemainderSplit,
 } from "@/lib/flow-control/flow-calculation-service";
-import type { FxPurchaseRecord } from "@/app/admin/cash-flow/flow-types";
+import type { FxPurchaseRecord, FxPurchaseTrack } from "@/app/admin/cash-flow/flow-types";
 import { loadFlowWeekCashCount } from "@/lib/flow-control/services/cash-count-service";
 
 export async function loadFlowWeekFxPurchases(weekCode: string): Promise<FxPurchaseRecord[]> {
@@ -28,38 +25,9 @@ export async function loadFlowWeekFxPurchases(weekCode: string): Promise<FxPurch
   return parseFxPurchasesJson(row?.fxPurchases);
 }
 
-/** סה״כ תקבולי ₪ לשבוע מקליטת תשלום — אותו מקור כמו בקרת תזרים */
-async function loadWeekTotalReceiptsIls(weekCode: string): Promise<number> {
-  const payments = await prisma.payment.findMany({
-    where: cashControlWeekReconciliationPaymentsWhere(weekCode),
-    select: {
-      amountIls: true,
-      amountUsd: true,
-      paymentMethod: true,
-      usdPaymentMethod: true,
-      ilsPaymentMethod: true,
-      exchangeRate: true,
-      methodAllocations: { select: { method: true, currency: true, sourceAmount: true } },
-      amountWithoutVat: true,
-      totalIlsWithoutVat: true,
-      totalIlsWithVat: true,
-      intakeDate: true,
-      paymentDate: true,
-      createdAt: true,
-    },
-  });
-  const intakeByDay = aggregateFlowIntakesByDay(payments, paymentDayKeyJerusalem);
-  const weekIntake = emptyDailyIntake();
-  for (const totals of intakeByDay.values()) {
-    for (const k of Object.keys(weekIntake) as (keyof typeof weekIntake)[]) {
-      weekIntake[k] = Math.round((weekIntake[k] + totals[k]) * 100) / 100;
-    }
-  }
-  return computeWeekTotalReceivedIls(weekIntake);
-}
-
 export type AppendFxPurchaseInput = {
   weekCode: string;
+  track: FxPurchaseTrack;
   ilsAmount: number;
   rate: number;
   remainderCashIls: number;
@@ -76,6 +44,7 @@ export async function appendFlowFxPurchase(
   input: AppendFxPurchaseInput,
 ): Promise<{ ok: boolean; error?: string }> {
   const wk = input.weekCode.trim();
+  const track = normalizeFxTrack(input.track);
   if (input.ilsAmount <= 0) return { ok: false, error: "סכום רכישה חייב להיות חיובי" };
   if (input.rate <= 0) return { ok: false, error: "שער דולר חייב להיות חיובי" };
 
@@ -85,19 +54,22 @@ export async function appendFlowFxPurchase(
   });
   const cashCount = await loadFlowWeekCashCount(wk);
   const existing = parseFxPurchasesJson(row?.fxPurchases);
-  const fxPsIls = sumFxPurchases(existing).ils;
-  const ilFxPurchaseIls = computeIlFxPurchaseIls(
-    cashCount.countedTransferIls ?? 0,
-    cashCount.countedCreditIls ?? 0,
-    cashCount.countedChecksIls ?? 0,
-  );
-  const totalReceiptsIls = await loadWeekTotalReceiptsIls(wk);
-  /** אותו Source of Truth כמו «שקל שנשאר» במסך בקרת תזרים */
-  const availableIls = computeIlsRemainingAfterFx(totalReceiptsIls, fxPsIls, ilFxPurchaseIls);
+
+  const availableIls =
+    track === "PS"
+      ? computePsAvailableIlsForFx(cashCount.countedCashIls ?? 0, existing)
+      : computeIlAvailableIlsForFx(
+          cashCount.countedTransferIls ?? 0,
+          cashCount.countedCreditIls ?? 0,
+          cashCount.countedChecksIls ?? 0,
+          existing,
+        );
+
   if (input.ilsAmount > availableIls + 0.02) {
+    const trackLabel = track === "PS" ? "PS (מזומן)" : "IL (בנקאי)";
     return {
       ok: false,
-      error: `סכום הרכישה (${input.ilsAmount.toLocaleString("he-IL")} ₪) גדול מהזמין בקופה (${availableIls.toLocaleString("he-IL")} ₪)`,
+      error: `סכום הרכישה (${input.ilsAmount.toLocaleString("he-IL")} ₪) גדול מהזמין במסלול ${trackLabel} (${availableIls.toLocaleString("he-IL")} ₪)`,
     };
   }
   const remainderAfter = computeFxRemainderAfterPurchase(availableIls, input.ilsAmount);
@@ -111,6 +83,7 @@ export async function appendFlowFxPurchase(
 
   const record: FxPurchaseRecord = {
     id: `fx-${Date.now()}`,
+    track,
     ilsAmount: input.ilsAmount,
     usdReceived,
     rate: input.rate,
@@ -127,7 +100,10 @@ export async function appendFlowFxPurchase(
     createdAt: new Date().toISOString(),
   };
   const all = [...existing, record];
-  const totals = sumFxPurchases(all);
+  const totalsPs = sumFxPurchases(all, "PS");
+  const totalsIl = sumFxPurchases(all, "IL");
+  /** עמודות סיכום ישנות: PS בלבד (ללא איחוד עם IL) */
+  const totals = totalsPs;
 
   await prisma.cashWeekFlow.upsert({
     where: { countryCode_weekCode: { countryCode: "TR", weekCode: wk } },
@@ -151,5 +127,6 @@ export async function appendFlowFxPurchase(
     },
   });
 
+  void totalsIl;
   return { ok: true };
 }

@@ -47,9 +47,7 @@ import {
   classifyMethodIntakeGate,
   type IntakeSaveDeviationRow,
   type DeviationComparisonRow,
-  type DebtTransferProposal,
 } from "@/lib/cash-control-intake-breakdown";
-import { PaymentDebtTransferModal } from "@/components/admin/PaymentDebtTransferModal";
 import { PaymentLiveSummaryCards } from "@/components/admin/PaymentLiveSummaryCards";
 import {
   PaymentPostSaveSummaryModal,
@@ -565,9 +563,6 @@ export function PaymentModalUpdated({
   const [overagePreview, setOveragePreview] = useState<PaymentOveragePreview | null>(null);
   /** true = חלון "עודף לאחר סגירת חוב" (לא חריגת אמצעי) */
   const [overageAfterDebtClosure, setOverageAfterDebtClosure] = useState(false);
-  const [debtTransferModalOpen, setDebtTransferModalOpen] = useState(false);
-  const [debtTransferProposals, setDebtTransferProposals] = useState<DebtTransferProposal[]>([]);
-  const approvedDebtTransfersRef = useRef<DebtTransferProposal[] | null>(null);
   const [intakeDevModalOpen, setIntakeDevModalOpen] = useState(false);
   const [intakeDevRows, setIntakeDevRows] = useState<IntakeSaveDeviationRow[]>([]);
   const [methodControlOpen, setMethodControlOpen] = useState(false);
@@ -1021,54 +1016,18 @@ export function PaymentModalUpdated({
   ]);
 
   /**
-   * סיכום לכרטיס «נשאר לתשלום» / «עודף תשלום» — SSOT של המסך בלבד:
-   * טבלת ההזמנות (`orders`: חוב + שולם ב-DB) + סך ההקלדה החיה (`totals.totalUsd`).
-   * overpayment = enteredPayment − openDebtBefore (כשחיובי).
-   * מתעדכן מיד עם כל שינוי סכום / אמצעי / הוספה / מחיקה.
+   * «נשאר לתשלום» — מקור אמת יחיד: סכום עמודת «יתרת חוב ($)» בטבלה (`matched`).
+   * אין חישוב מקביל (total−paid−entered). הכרטיס רק מציג את הסכום הזה.
    */
-  const orderSummaryForCards = useMemo(() => {
-    let total = 0;
-    let dbPaid = 0;
-    for (const o of orders) {
-      total += Number(o.totalAmountUsd) || 0;
-      dbPaid += Number(o.dbPaidUsd) || 0;
+  const remainingToPayUsd = useMemo(() => {
+    if (customerBalanceResetPending) return 0;
+    let sum = 0;
+    for (const row of matched) {
+      const rem = Number(row.remainingAmount);
+      if (Number.isFinite(rem) && rem > 0) sum += rem;
     }
-    const totalR = roundMoney2(total);
-    const dbPaidR = roundMoney2(Math.max(0, dbPaid));
-    const entered = roundMoney2(Math.max(0, totals.totalUsd));
-    const openDebtBeforeUsd = customerBalanceResetPending
-      ? 0
-      : roundMoney2(Math.max(0, totalR - dbPaidR));
-    const remainingUsd = customerBalanceResetPending
-      ? 0
-      : roundMoney2(Math.max(0, openDebtBeforeUsd - entered));
-    const overpaymentUsd = customerBalanceResetPending
-      ? 0
-      : roundMoney2(Math.max(0, entered - openDebtBeforeUsd));
-    const paidUsd = roundMoney2(Math.max(0, dbPaidR + entered));
-    if (
-      totalR <= 0.005 &&
-      paidUsd <= 0.005 &&
-      remainingUsd <= 0.005 &&
-      overpaymentUsd <= 0.005
-    ) {
-      return null;
-    }
-    const ilsValue = roundMoney2(totalR * (rateN > 0 ? rateN : 0));
-    return {
-      totalUsd: totalR,
-      ilsValue,
-      paidUsd,
-      openDebtBeforeUsd,
-      remainingUsd,
-      overpaymentUsd,
-    };
-  }, [
-    orders,
-    totals.totalUsd,
-    rateN,
-    customerBalanceResetPending,
-  ]);
+    return roundMoney2(sum);
+  }, [matched, customerBalanceResetPending]);
 
   /** תצוגה חיה בלבד — יתרה לאחר שמירה = חוב נוכחי − סכום בהקלדה */
   const openDebtAfterPaymentPreview = useMemo(() => {
@@ -2348,20 +2307,16 @@ export function PaymentModalUpdated({
       return { ok: false };
     }
     // חוק עסקי ראשון — אמצעי התשלום המתוכננים מחייבים.
-    // אמצעי נעול אינו נפתח מחדש; העברת חוב דורשת אישור; עודף לאחר סגירה — חלון ייעודי.
+    // אין העברת חוב בין אמצעים; שינוי אמצעי — רק במסך אמצעי מתוכננים.
+    // עודף אמיתי לאחר סגירת כל החוב — חלון ייעודי.
     const methodGate = classifyMethodIntakeGate({
       orders,
       includedOrderIds: includedIds,
       enteredByBucket: buildEnteredByBucket(liveFormKpis),
       totalPaymentUsd: totals.totalUsd,
-      approvedDebtTransfers: approvedDebtTransfersRef.current,
     });
-    if (methodGate.kind === "DEBT_TRANSFER") {
-      setDebtTransferProposals(methodGate.transfers);
-      setDebtTransferModalOpen(true);
-      return { ok: false };
-    }
-    if (methodGate.kind === "METHOD_DEVIATION") {
+    if (methodGate.kind === "METHOD_DEVIATION" || methodGate.kind === "DEBT_TRANSFER") {
+      // DEBT_TRANSFER לא אמור לחזור מהשער החדש — מטופל כחריגת אמצעי.
       setIntakeDevRows(liveIntakeDevRows);
       setIntakeDevModalOpen(true);
       return { ok: false };
@@ -2410,14 +2365,13 @@ export function PaymentModalUpdated({
     const hasAlloc = allocDiag.allocationTargets.length > 0;
     const saveAsCredit = surplusDisposition === "credit";
     const saveAsFee = surplusDisposition === "commission";
-    // חסימה קשיחה: כאשר סה״כ התשלום גבוה מהחוב הפתוח (יש עודף לא מוקצה),
-    // אסור לשמור בלי בחירה מפורשת של המשתמש. תמיד נפתח חלון הבחירה —
-    // גם אם התצוגה המקדימה מהשרת נכשלה נבנה preview מקומי מנתוני ההקצאה,
-    // כדי שלא תתאפשר שמירה "שקטה" עם חריגה.
-    // חריג יחיד: איפוס יתרה מפורש (customerBalanceResetPending) שהמשתמש כבר אישר.
+    // עודף אמיתי בלבד: סה״כ תשלום > חוב פתוח. לא נפתח חלון על בסיס unallocated
+    // מ-FIFO בלבד (עלול ליצור «יתרת זכות» כוזבת כשהסכום תקין מול החוב).
+    const openDebtUsd = roundMoney2(Math.max(0, allocDiag.openBalanceUsd));
+    const realSurplusUsd = roundMoney2(Math.max(0, totals.totalUsd - openDebtUsd));
     if (
       totals.totalUsd > 0.02 &&
-      unallocatedUsd > 0.02 &&
+      realSurplusUsd > 0.02 &&
       !surplusDisposition &&
       !customerBalanceResetPending
     ) {
@@ -2431,12 +2385,12 @@ export function PaymentModalUpdated({
         prev.ok && prev.preview.hasOverage
           ? prev.preview
           : {
-              openDebtIls: roundMoney2(allocDiag.openBalanceUsd * rateN),
-              openDebtUsd: allocDiag.openBalanceUsd,
+              openDebtIls: roundMoney2(openDebtUsd * rateN),
+              openDebtUsd,
               paymentIls: roundMoney2(totals.totalUsd * rateN),
               paymentUsd: roundMoney2(totals.totalUsd),
-              surplusIls: roundMoney2(unallocatedUsd * rateN),
-              surplusUsd: roundMoney2(unallocatedUsd),
+              surplusIls: roundMoney2(realSurplusUsd * rateN),
+              surplusUsd: realSurplusUsd,
               hasOverage: true,
             };
       setOveragePreview(preview);
@@ -2448,7 +2402,7 @@ export function PaymentModalUpdated({
     // let the server attempt allocation rather than blocking here with a misleading error.
     const hasOpenOrders = bases.some((b) => orderLedgerBalanceUsd(b) > 0.02);
     if (!hasAlloc && !hasOpenOrders && !(saveAsCredit && unallocatedUsd > 0.02) && !(saveAsFee && unallocatedUsd > 0.02)) {
-      setSaveErr("לא נמצאו הזמנות עם יתרת חוב פתוחה");
+      setSaveErr("לא נמצאו הזמנות עם יתרת חוב פתוחה — ייתכן שהמסמך כבר שולם במלואו");
       return { ok: false };
     }
     setSaveBusy(true);
@@ -2468,8 +2422,7 @@ export function PaymentModalUpdated({
       commissionPercent: commissionPercentStr,
       payments,
       includedOrderIds: includedIds,
-      // פעולות סגירת חוסר אינן חלק עוד מהשמירה הראשונית. התשלום נשמר קודם,
-      // והמשתמש בוחר טיפול ביתרה רק בחלון הסיכום שלאחר השמירה.
+      // פעולות סגירת חוסר אינן חלק מהשמירה הראשונית — חוב חלקי נשאר פתוח.
       commissionResetOrderIds: null,
       applyCustomerBalanceReset: false,
       applyCustomerBalanceResetFromCredit: false,
@@ -2478,7 +2431,6 @@ export function PaymentModalUpdated({
       draftPhone: draftCustomer.phone.trim() || null,
       saveSurplusAsCredit: saveAsCredit,
       surplusDisposition: surplusDisposition ?? null,
-      approvedDebtTransfers: approvedDebtTransfersRef.current,
     });
     const savePaymentMs = Math.round(performance.now() - saveStart);
     if (!res.ok) {
@@ -2494,7 +2446,6 @@ export function PaymentModalUpdated({
     }
 
     setSaveBusy(false);
-    approvedDebtTransfersRef.current = null;
     if (saveJustSavedTimerRef.current != null) {
       window.clearTimeout(saveJustSavedTimerRef.current);
     }
@@ -2712,12 +2663,21 @@ export function PaymentModalUpdated({
    * "שמור וחדש" — שומר את התשלום, מעדכן יתרות מקומית, ומאפס את הטופס
    * לתשלום הבא — בלי רענון מלא של המערכת.
    */
+  async function finishAfterSuccessfulSave(
+    mode: "new" | "close",
+    result: Extract<Awaited<ReturnType<typeof performSave>>, { ok: true }>,
+  ) {
+    // תשלום תקין נשמר מיד — ללא מסך «סיכום תשלום» ביניים.
+    if (mode === "new") await finishSaveAndNew(result.primaryPaymentCode);
+    else closeTop();
+  }
+
   async function onSaveAndNew() {
     saveAfterOverageRef.current = "new";
     const res = await performSave(null);
     if (!res.ok) return;
     saveAfterOverageRef.current = null;
-    openPostSaveSummary("new", res);
+    await finishAfterSuccessfulSave("new", res);
   }
 
   /**
@@ -2729,7 +2689,7 @@ export function PaymentModalUpdated({
     const res = await performSave(null);
     if (!res.ok) return;
     saveAfterOverageRef.current = null;
-    openPostSaveSummary("close", res);
+    await finishAfterSuccessfulSave("close", res);
   }
 
   async function onOverageConfirm(disposition: SurplusDisposition) {
@@ -2739,29 +2699,7 @@ export function PaymentModalUpdated({
     const res = await performSave(disposition);
     if (!res.ok) return;
     saveAfterOverageRef.current = null;
-    approvedDebtTransfersRef.current = null;
-    if (mode === "new" || mode === "close") openPostSaveSummary(mode, res);
-  }
-
-  async function onDebtTransferConfirm() {
-    approvedDebtTransfersRef.current = debtTransferProposals;
-    setDebtTransferModalOpen(false);
-    const mode = saveAfterOverageRef.current;
-    const res = await performSave(null);
-    if (!res.ok) {
-      // ייתכן שנפתח חלון עודף — שומרים את אישור ההעברה לשמירה הבאה
-      return;
-    }
-    approvedDebtTransfersRef.current = null;
-    if (mode === "new" || mode === "close") openPostSaveSummary(mode, res);
-  }
-
-  function onDebtTransferCancel() {
-    setDebtTransferModalOpen(false);
-    setDebtTransferProposals([]);
-    approvedDebtTransfersRef.current = null;
-    intakeDevPendingSaveRef.current = false;
-    saveAfterOverageRef.current = null;
+    if (mode === "new" || mode === "close") await finishAfterSuccessfulSave(mode, res);
   }
 
   function onIntakeDevEditOrder() {
@@ -3815,7 +3753,7 @@ export function PaymentModalUpdated({
                     kpis={liveFormKpis}
                     openDebtUsd={customerOpenDebtDisplayUsd}
                     onOpenDebtClick={() => setDebtBreakdownOpen(true)}
-                    orderSummary={orderSummaryForCards}
+                    remainingToPayUsd={remainingToPayUsd}
                     lines={payments}
                     rate={rateN}
                   />
@@ -4299,13 +4237,6 @@ export function PaymentModalUpdated({
         onConfirm={(disposition) => void onOverageConfirm(disposition)}
         onCancel={onOverageCancel}
       />
-      <PaymentDebtTransferModal
-        open={debtTransferModalOpen}
-        transfers={debtTransferProposals}
-        busy={saveBusy}
-        onConfirm={() => void onDebtTransferConfirm()}
-        onCancel={onDebtTransferCancel}
-      />
       {intakeDevModalOpen && intakeDeviationModalRows(intakeDevRows).length > 0 ? (
         <div className="adm-cash-modal-backdrop" role="presentation" onClick={onIntakeDevCancel}>
           <div
@@ -4332,9 +4263,11 @@ export function PaymentModalUpdated({
                   <p className="payment-intake-dev-modal__lead">
                     אמצעי התשלום שנקלטו אינם תואמים לאמצעי שתוכננו במסמך.
                     <br />
+                    כל אמצעי עומד בפני עצמו — <strong>אין העברת חוב בין אמצעים</strong>.
+                    <br />
                     <strong>תשלום חלקי (סכום נמוך מהמתוכנן) אינו חריגה</strong> — הוא ישאיר יתרה פתוחה.
                     <br />
-                    שמירה חסומה כל עוד קיימת חריגת אמצעי תשלום (🔴) — יש לתקן את ההזמנה.
+                    לשינוי אמצעי: פתחו «אמצעי תשלום מתוכננים», עדכנו שם, ואז חזרו לקליטה.
                   </p>
                   {deviationComparisonRows.length > 0 ? (
                     <div className="payment-intake-dev-modal__scroll">

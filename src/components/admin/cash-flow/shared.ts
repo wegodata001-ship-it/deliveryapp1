@@ -16,8 +16,7 @@ export function num(s: string | null | undefined): number {
 }
 
 export function statusLabel(kind: CashDailyStatusKind): string {
-  if (kind === "ok") return "תקין";
-  if (kind === "warn") return "חסר";
-  if (kind === "critical") return "חריג";
-  return "ממתין";
+  if (kind === "ok") return "מאוזן";
+  if (kind === "pending") return "ממתין";
+  return "לא מאוזן";
 }

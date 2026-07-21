@@ -310,12 +310,10 @@ export function FlowWeekDashboard({
                         <td>
                           <span className={`fd-pill fd-pill--${row.status}`}>
                             {row.status === "ok"
-                              ? "תקין"
-                              : row.status === "warn"
-                                ? "הפרש"
-                                : row.status === "critical"
-                                  ? "חריג"
-                                  : "ממתין"}
+                              ? "מאוזן"
+                              : row.status === "pending"
+                                ? "ממתין"
+                                : "לא מאוזן"}
                           </span>
                         </td>
                       </tr>

@@ -11961,14 +11961,18 @@ select.payment-modal-inline-input {
 .pmc-modal {
   display: flex;
   flex-direction: column;
-  width: min(90vw, 1400px);
-  height: min(85vh, 920px);
-  max-height: 85vh;
+  width: 90vw;
+  height: 90vh;
+  max-width: 90vw;
+  max-height: 90vh;
   border-radius: 14px;
   border: 1px solid #e2e8f0;
   background: #fff;
   box-shadow: 0 24px 64px rgba(15, 23, 42, 0.22);
-  overflow: hidden;
+  /* גלילה אחת לכל החלון — KPI + סיכומים + טבלאות */
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   color: #0f172a;
 }
 
@@ -12102,8 +12106,8 @@ select.payment-modal-inline-input {
 }
 
 .pmc-method-summary__wrap {
-  max-height: 220px;
-  overflow: auto;
+  max-height: none;
+  overflow: visible;
   border: 1px solid #e2e8f0;
   border-radius: 10px;
   background: #f8fafc;
@@ -12236,9 +12240,9 @@ select.payment-modal-inline-input {
 }
 
 .pmc-table-wrap {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
+  flex: 0 0 auto;
+  min-height: auto;
+  overflow: visible;
   padding: 8px 12px 16px;
 }
 
@@ -12418,8 +12422,9 @@ select.payment-modal-inline-input {
 @media (max-width: 900px) {
   .pmc-modal {
     width: 96vw;
-    height: 90vh;
-    max-height: 90vh;
+    height: 92vh;
+    max-width: 96vw;
+    max-height: 92vh;
   }
 
   .pmc-summary {
@@ -13577,6 +13582,17 @@ select.payment-modal-inline-input {
 }
 .payment-modal-live-kpi__hero-v--surplus {
   color: #0369a1;
+}
+.payment-remaining-to-pay {
+  border-color: #fecaca;
+  background: linear-gradient(180deg, #fff 0%, #fef2f2 100%);
+}
+.payment-remaining-to-pay--ok {
+  border-color: #bbf7d0;
+  background: linear-gradient(180deg, #fff 0%, #f0fdf4 100%);
+}
+.payment-remaining-to-pay--due {
+  border-color: #fecaca;
 }
 .payment-modal-live-kpi--order-summary--surplus {
   border-color: #7dd3fc;
@@ -33177,15 +33193,35 @@ button.adm-cash-kpi:hover {
 .fc-fx-pl__kpis { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
 .fc-fx-pl__kpi {
   flex: 1; min-width: 120px; background: #fff; border: 1px solid #e2e8f0;
-  border-radius: 10px; padding: 10px 12px;
+  border-radius: 10px; padding: 10px 12px; text-align: right; font: inherit; color: inherit;
 }
 .fc-fx-pl__kpi span { display: block; font-size: 11px; color: #64748b; font-weight: 600; }
 .fc-fx-pl__kpi strong { font-size: 16px; font-weight: 800; }
 .fc-fx-pl__kpi--profit { border-color: #bbf7d0; }
 .fc-fx-pl__kpi--loss { border-color: #fecaca; }
-.fc-fx-pl__bar-row { display: grid; grid-template-columns: 48px 1fr 80px; gap: 8px; align-items: center; margin-bottom: 6px; }
+.fc-fx-pl__kpi.is-clickable { cursor: pointer; transition: box-shadow 0.12s, border-color 0.12s; }
+.fc-fx-pl__kpi.is-clickable:hover { box-shadow: 0 4px 14px rgba(37, 99, 235, 0.12); border-color: #93c5fd; }
+.fc-fx-pl__kpi:disabled { cursor: default; opacity: 1; }
+.fc-fx-pl__hint { font-size: 0.75rem; font-weight: 600; color: #64748b; }
+.fc-fx-pl__bar-row {
+  display: grid; grid-template-columns: 48px 1fr 80px; gap: 8px; align-items: center;
+  margin-bottom: 6px; width: 100%; border: 0; background: transparent; padding: 4px 0;
+  font: inherit; color: inherit; text-align: right;
+}
+.fc-fx-pl__bar-row.is-clickable { cursor: pointer; border-radius: 8px; }
+.fc-fx-pl__bar-row.is-clickable:hover { background: #f1f5f9; }
+.fc-fx-pl__bar-row:disabled { cursor: default; opacity: 1; }
 .fc-fx-pl__bar-track { height: 10px; background: #e2e8f0; border-radius: 5px; overflow: hidden; }
 .fc-fx-pl__bar-fill { height: 100%; background: #3b82f6; border-radius: 5px; }
+.fc-fx-pl__bar-fill.is-loss { background: #ef4444; }
+.fc-fx-pl__head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.fc-fx-pl__period { display: inline-flex; gap: 4px; background: #f1f5f9; padding: 3px; border-radius: 10px; }
+.fc-fx-pl__period-btn {
+  border: 0; background: transparent; padding: 6px 12px; border-radius: 8px;
+  font-size: 12px; font-weight: 700; color: #64748b; cursor: pointer;
+}
+.fc-fx-pl__period-btn.is-active { background: #fff; color: #0f172a; box-shadow: 0 1px 2px rgba(15,23,42,.08); }
+.fc-fx-pl-history__empty { color: #94a3b8; font-size: 0.85rem; margin: 0; }
 .fc-summary-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px;
 }
@@ -33353,7 +33389,121 @@ button.adm-cash-kpi:hover {
   border: 1px dashed #cbd5e1; border-radius: 12px; color: #64748b;
 }
 .xp-muted { color: #94a3b8; font-size: 13px; font-weight: 600; }
+.xp-hint { margin: 0 0 14px; }
 .xp-error { color: #b91c1c; font-weight: 700; padding: 12px; background: #fef2f2; border-radius: 8px; }
+
+/* טבלת פירוט רווח לפי הזמנה */
+.xp-data-table-wrap {
+  overflow: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
+}
+.xp-data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.xp-data-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f1f5f9;
+  color: #334155;
+  font-weight: 800;
+  text-align: right;
+  padding: 10px 12px;
+  border-bottom: 1px solid #cbd5e1;
+  white-space: nowrap;
+}
+.xp-data-table .xp-num { text-align: left; font-variant-numeric: tabular-nums; }
+.xp-data-table tbody td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #eef2f7;
+  color: #0f172a;
+  font-weight: 600;
+}
+.xp-data-table__order { font-weight: 900; color: #1d4ed8; }
+.xp-data-table__row { cursor: pointer; transition: background 0.12s; }
+.xp-data-table__row:hover { background: #eff6ff; }
+.xp-data-table__row:focus-visible { outline: 2px solid #3b82f6; outline-offset: -2px; }
+.xp-data-table__row--profit td:first-child { box-shadow: inset -3px 0 0 #22c55e; }
+.xp-data-table__row--loss td:first-child { box-shadow: inset -3px 0 0 #ef4444; }
+.xp-data-table .is-profit { color: #15803d !important; font-weight: 900; }
+.xp-data-table .is-loss { color: #b91c1c !important; font-weight: 900; }
+.xp-data-table__totals th {
+  background: #0f172a;
+  color: #f8fafc;
+  padding: 12px;
+  font-weight: 900;
+  border-top: 2px solid #1e293b;
+}
+.xp-data-table__totals .is-profit { color: #86efac !important; }
+.xp-data-table__totals .is-loss { color: #fca5a5 !important; }
+.xp-data-table__totals-meta td {
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 8px 12px;
+  border-bottom: none;
+}
+
+.xp-calc-detail {
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  padding: 16px;
+  background: #fff;
+}
+.xp-calc-detail--profit { border-color: #bbf7d0; background: linear-gradient(180deg, #f0fdf4, #fff); }
+.xp-calc-detail--loss { border-color: #fecaca; background: linear-gradient(180deg, #fef2f2, #fff); }
+.xp-calc-detail__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.xp-calc-detail__line {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+.xp-calc-detail__line span { font-size: 0.75rem; font-weight: 700; color: #64748b; }
+.xp-calc-detail__line strong { font-size: 1.05rem; font-weight: 900; }
+.xp-calc-detail__formula {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px;
+  margin-bottom: 12px;
+  border-radius: 12px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 1.15rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.xp-calc-detail__formula .is-profit { color: #86efac; }
+.xp-calc-detail__formula .is-loss { color: #fca5a5; }
+.xp-calc-detail__result {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #f1f5f9;
+  font-weight: 800;
+}
+.xp-calc-detail__result strong { font-size: 1.35rem; }
+.xp-calc-detail__result .is-profit { color: #15803d; }
+.xp-calc-detail__result .is-loss { color: #b91c1c; }
 
 .xp-table { display: flex; flex-direction: column; gap: 10px; }
 .xp-order-row {
@@ -33663,6 +33813,42 @@ button.adm-cash-kpi:hover {
   margin: 0; font-size: 13px; color: #475569; font-weight: 600;
   padding: 10px 14px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;
 }
+
+/* Dual PS / IL tracks — never merge visually or financially */
+.mcw-dual-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .mcw-dual-grid { grid-template-columns: 1fr; }
+}
+.mcw-track {
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  padding: 14px 16px 16px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 100%;
+}
+.mcw-track h3 {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 800;
+}
+.mcw-track--ps {
+  border-color: #bfdbfe;
+  background: linear-gradient(180deg, #eff6ff 0%, #fff 42%);
+}
+.mcw-track--ps h3 { color: #1d4ed8; }
+.mcw-track--il {
+  border-color: #bbf7d0;
+  background: linear-gradient(180deg, #f0fdf4 0%, #fff 42%);
+}
+.mcw-track--il h3 { color: #15803d; }
 
 /* step 1 – cash count table */
 .mcw-count-tbl-wrap { overflow-x: auto; }

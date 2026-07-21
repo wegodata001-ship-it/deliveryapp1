@@ -224,41 +224,14 @@ export function evaluatePaymentBusinessRules(
   const eps = input.eps ?? PAYMENT_BUSINESS_EPS;
   const totalDebtUsd = nonNegative(input.totalDebtUsd);
   const totalPaymentUsd = nonNegative(input.totalPaymentUsd);
-  const plannedAfterTransfer = applyApprovedTransfersToPlanned(
-    input.plannedByMethod,
-    input.approvedDebtTransfers ?? [],
-    eps,
-  );
-  const violations = validatePaymentMethods(
-    plannedAfterTransfer,
-    input.enteredByMethod,
-    eps,
-  );
-  const coversAllDebt = totalPaymentUsd >= totalDebtUsd - eps;
-
-  /**
-   * האם נשאר אמצעי פתוח שלא קיבל כלל תשלום בטופס הנוכחי?
-   * אם כן — תשלום בעודף/באמצעי אחר דורש העברת חוב מפורשת (לא סגירה שקטה).
-   */
-  const enteredMap = new Map(
-    input.enteredByMethod
-      .filter((e) => e.enteredUsd > eps)
-      .map((e) => [e.bucket, e.enteredUsd] as const),
-  );
-  const openUnpaidOtherMethod = plannedAfterTransfer.some((p) => {
-    if (p.remainingUsd <= eps) return false;
-    const entered = enteredMap.get(p.bucket) ?? 0;
-    return entered <= eps;
-  });
-
-  // כלל 3–4: עודף על אמצעי פתוח כשכל החוב נסגר ואין אמצעי אחר שלא שולם כלל.
-  const allowSurplusWithoutMethodBlock =
-    coversAllDebt && violations.length > 0 && !openUnpaidOtherMethod;
-
-  const effectiveViolations = allowSurplusWithoutMethodBlock ? [] : violations;
+  // אין העברת חוב בין אמצעים — אכיפה מול התכנון המקורי בלבד.
+  // שינוי אמצעי מתוכנן נעשה במסך «אמצעי תשלום מתוכננים», לא בזמן קליטה.
+  // approvedDebtTransfers נשאר בטיפוס לתאימות לאחור אך אינו מיושם.
+  const plannedRows = input.plannedByMethod;
+  const violations = validatePaymentMethods(plannedRows, input.enteredByMethod, eps);
 
   const settlementIntent = classifySettlementIntent({
-    plannedByMethod: plannedAfterTransfer,
+    plannedByMethod: plannedRows,
     enteredByMethod: input.enteredByMethod,
     totalDebtUsd,
     totalPaymentUsd,
@@ -280,7 +253,7 @@ export function evaluatePaymentBusinessRules(
     ok: code === "READY",
     message,
     settlementIntent,
-    methodViolations: effectiveViolations,
+    methodViolations: violations,
     totalDebtUsd,
     totalPaymentUsd,
     creditAppliedUsd: values.creditAppliedUsd ?? 0,
@@ -289,9 +262,9 @@ export function evaluatePaymentBusinessRules(
     surplusUsd: values.surplusUsd ?? 0,
   });
 
-  // ללא אישור העברת חוב — אם יש חריגה (כולל תשלום לאמצעי נעול כשיש חוב באחר), חוסמים.
-  if (effectiveViolations.length > 0) {
-    return result("INVALID_METHODS", paymentMethodMismatchMessage(effectiveViolations));
+  // חריגת אמצעי — חסימה תמיד. אין «העברת חוב» ואין עקיפה בעודף.
+  if (violations.length > 0) {
+    return result("INVALID_METHODS", paymentMethodMismatchMessage(violations));
   }
 
   if (totalPaymentUsd <= eps) {

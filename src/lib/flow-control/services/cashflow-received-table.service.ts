@@ -1,5 +1,6 @@
 /**
  * בניית שורות לטבלת קליטות — מקור: Payment בלבד (ללא מע״מ ב-₪).
+ * סה״כ התקבל = סכום קליטות התשלום שנשמרו בפועל באותו יום/שבוע.
  */
 
 import { Prisma } from "@prisma/client";
@@ -14,7 +15,7 @@ import {
 import { allCashControlChannels } from "@/lib/cash-control-channel";
 import {
   aggregateFlowIntakesByDay,
-  computeWeekTotalReceivedIls,
+  computePaymentsTotalReceivedIls,
   type FlowPaymentVatFields,
 } from "@/lib/flow-control/flow-calculation-service";
 import { FLOW_COUNTRY_LABEL } from "@/lib/flow-control/services/cash-count-summary-service";
@@ -39,9 +40,15 @@ function sumIntake(a: CashDailyIntakeTotals, b: CashDailyIntakeTotals): CashDail
   return out;
 }
 
+type FlowPaymentRow = FlowPaymentVatFields & {
+  paymentDate: Date | string | null;
+  createdAt: Date | string;
+  intakeDate?: Date | string | null;
+};
+
 export function buildFlowPaymentDailyRows(
   weekCode: string,
-  payments: Array<FlowPaymentVatFields & { paymentDate: Date | string | null; createdAt: Date | string }>,
+  payments: FlowPaymentRow[],
 ): FlowPaymentDailyRow[] {
   const intakeByDay = aggregateFlowIntakesByDay(payments, paymentDayKeyJerusalem);
   let weekIntake = emptyDailyIntake();
@@ -53,6 +60,7 @@ export function buildFlowPaymentDailyRows(
     const hasData = Object.values(intake).some((v) => v > 0.009);
     if (!hasData) continue;
 
+    const dayPayments = payments.filter((p) => paymentDayKeyJerusalem(p) === dateYmd);
     rows.push({
       dateYmd,
       dayName: dayNameHe(dateYmd),
@@ -60,7 +68,7 @@ export function buildFlowPaymentDailyRows(
       weekCode,
       countryLabel: FLOW_COUNTRY_LABEL,
       intake: intakeToDto(intake),
-      totalReceived: money(computeWeekTotalReceivedIls(intake)),
+      totalReceived: money(computePaymentsTotalReceivedIls(dayPayments)),
     });
   }
 
@@ -73,7 +81,7 @@ export function buildFlowPaymentDailyRows(
     weekCode,
     countryLabel: FLOW_COUNTRY_LABEL,
     intake: intakeToDto(weekIntake),
-    totalReceived: money(computeWeekTotalReceivedIls(weekIntake)),
+    totalReceived: money(computePaymentsTotalReceivedIls(payments)),
     isTotal: true,
   });
 

@@ -74,12 +74,10 @@ export function ExchangeProfitOrderModal({ open, week, orderId, onClose }: Excha
       >
         <header className="xp-modal__head">
           <div>
-            <h2>פרטי הזמנה</h2>
-            {detail?.orderNumber ? (
-              <p className="xp-modal__sub" dir="ltr">
-                {detail.orderNumber}
-              </p>
-            ) : null}
+            <h2>
+              {detail?.orderNumber ? `הזמנה ${detail.orderNumber}` : "פרטי הזמנה"}
+            </h2>
+            <p className="xp-modal__sub">פירוט מלא של חישוב הרווח</p>
           </div>
           <button type="button" className="xp-iconbtn" onClick={onClose} aria-label="סגור">
             <X size={20} />

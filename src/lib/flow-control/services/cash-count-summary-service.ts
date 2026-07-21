@@ -1,7 +1,6 @@
 /**
- * CashCountSummaryService — מקור הנתונים הרשמי של בקרת תזרים (חלק 1).
- * קורא אך ורק מ-CashDailyDrawerCount (ספירת קופה מאושרת).
- * אין גישה ל-Payment.
+ * CashCountSummaryService — ספירת קופה מאושרת (CashDailyDrawerCount) בלבד.
+ * אינו מקור ל־«סה״כ התקבל» בבקרת תזרים — שם המקור הוא Payment (קליטות תשלום).
  */
 
 import { Prisma } from "@prisma/client";
@@ -9,12 +8,10 @@ import { prisma } from "@/lib/prisma";
 import type { CashWeekFlowLineId } from "@/lib/cash-control-week-flow";
 import { allCashControlChannels, CHANNEL_DRAWER_FIELD } from "@/lib/cash-control-channel";
 import {
-  computeWeekTotalReceivedIls,
-} from "@/lib/flow-control/flow-calculation-service";
-import {
   dayNameHe,
   emptyDailyIntake,
   formatDailyDateDisplay,
+  sumIlsChannelIntake,
   type CashDailyDrawerValues,
   type CashDailyIntakeTotals,
   type CashDailyMethodId,
@@ -168,7 +165,8 @@ export async function loadFlowWeekApprovedSummary(week: string): Promise<CashDai
     const drawer = drawerByDay.get(dateYmd) ?? {};
     weekDrawer = sumDrawer(weekDrawer, drawer);
     const totals = drawerToTotals(drawer);
-    const totalReceived = computeWeekTotalReceivedIls(totals);
+    /** סה״כ ספירה (drawer) — לא קליטת תשלום */
+    const totalReceived = sumIlsChannelIntake(totals);
     const saved = hasDrawerData(drawer);
 
     dayRows.push({
@@ -191,7 +189,7 @@ export async function loadFlowWeekApprovedSummary(week: string): Promise<CashDai
   }
 
   const weekTotals = drawerToTotals(weekDrawer);
-  const weekTotalReceived = computeWeekTotalReceivedIls(weekTotals);
+  const weekTotalReceived = sumIlsChannelIntake(weekTotals);
 
   dayRows.push({
     dateYmd: "",
