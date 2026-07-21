@@ -177,6 +177,8 @@ export async function listShipmentBatches(): Promise<ShipmentBatchDto[]> {
           id: true,
           paymentStatus: true,
           deliveryFeeIls: true,
+          deliveryFeeAmount: true,
+          deliveryFeeCurrency: true,
           boxes: true,
           orderAmount: true,
           orderCurrency: true,
@@ -192,7 +194,14 @@ export async function listShipmentBatches(): Promise<ShipmentBatchDto[]> {
     const records = b.records;
     const paidCount = records.filter((r) => r.paymentStatus === "PAID").length;
     const unpaidCount = records.filter((r) => r.paymentStatus !== "PAID").length;
-    const totalFeeIls = records.reduce((s, r) => s + (r.deliveryFeeIls?.toNumber() ?? 0), 0);
+    const totalFeeIls = records.reduce((s, r) => {
+      const ils = r.deliveryFeeIls?.toNumber();
+      if (ils != null && ils > 0) return s + ils;
+      const cur = (r.deliveryFeeCurrency ?? "ILS").toUpperCase();
+      const amt = r.deliveryFeeAmount?.toNumber() ?? 0;
+      if (amt > 0 && cur === "ILS") return s + amt;
+      return s;
+    }, 0);
     const boxesSum = records.reduce((s, r) => s + (r.boxes ?? 0), 0);
     let totalOrderUsd = 0;
     let totalPaidIls = 0;

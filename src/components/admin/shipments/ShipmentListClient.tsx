@@ -16,7 +16,6 @@ import {
   UserX,
   Users,
   Layers,
-  DollarSign,
   Wallet,
   FileText,
   FileSpreadsheet,
@@ -29,11 +28,9 @@ import {
 import type {
   ShipmentBatchDto,
   ShipmentCourierDto,
-  ShipmentPaymentStatus,
   ShipmentZoneDto,
   UpdateShipmentBatchInput,
 } from "@/app/admin/shipments/types";
-import { SHIPMENT_PAYMENT_STATUS_LABELS } from "@/app/admin/shipments/types";
 import {
   listShipmentBatchesAction,
   createZoneAction,
@@ -58,12 +55,7 @@ type ListFilters = {
   shippingDateFrom: string;
   shippingDateTo: string;
   arrivalDateFrom: string;
-  arrivalDateTo: string;
   week: string;
-  shipmentNumber: string;
-  zoneId: string;
-  courierId: string;
-  paymentStatus: string;
   freeSearch: string;
 };
 
@@ -71,21 +63,24 @@ const EMPTY_FILTERS: ListFilters = {
   shippingDateFrom: "",
   shippingDateTo: "",
   arrivalDateFrom: "",
-  arrivalDateTo: "",
   week: "",
-  shipmentNumber: "",
-  zoneId: "",
-  courierId: "",
-  paymentStatus: "",
   freeSearch: "",
 };
 
-function fmtUsd(n: number) {
-  return n.toLocaleString("he-IL", { style: "currency", currency: "USD", minimumFractionDigits: 0 });
+function fmtIls(n: number) {
+  return n.toLocaleString("he-IL", {
+    style: "currency",
+    currency: "ILS",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  });
 }
 
-function fmtIls(n: number) {
-  return n.toLocaleString("he-IL", { style: "currency", currency: "ILS", minimumFractionDigits: 0 });
+/** צבע יתרת דמי משלוח: ירוק / כתום / אדום */
+function remainingTone(fee: number, paid: number, remaining: number): "ok" | "partial" | "debt" {
+  if (remaining <= 0.005 || fee <= 0.005) return "ok";
+  if (paid > 0.005) return "partial";
+  return "debt";
 }
 
 function formatDate(iso: string | null) {
@@ -101,48 +96,16 @@ function primaryContainerId(batch: ShipmentBatchDto): string | null {
   return batch.containerNumber || batch.sourceShipmentNumber || null;
 }
 
-function listStatusLabel(batch: ShipmentBatchDto): string {
-  if (batch.recordCount === 0) return "ריק";
-  if (batch.paidCount >= batch.recordCount) return "שולם";
-  if (batch.paidCount === 0) return "פתוח";
-  return "חלקי";
-}
-
-function listStatusClass(batch: ShipmentBatchDto): string {
-  if (batch.recordCount === 0) return "shp-badge--new";
-  if (batch.paidCount >= batch.recordCount) return "shp-badge--paid";
-  if (batch.paidCount === 0) return "shp-badge--unpaid";
-  return "shp-badge--partial";
-}
-
 function matchesFilters(batch: ShipmentBatchDto, f: ListFilters): boolean {
   const ship = ymd(batch.shippingDate);
   const arrive = ymd(batch.arrivalDate);
   if (f.shippingDateFrom && (!ship || ship < f.shippingDateFrom)) return false;
   if (f.shippingDateTo && (!ship || ship > f.shippingDateTo)) return false;
-  if (f.arrivalDateFrom && (!arrive || arrive < f.arrivalDateFrom)) return false;
-  if (f.arrivalDateTo && (!arrive || arrive > f.arrivalDateTo)) return false;
+  if (f.arrivalDateFrom && (!arrive || arrive !== f.arrivalDateFrom)) return false;
   if (f.week.trim()) {
     const w = f.week.trim().toUpperCase();
     const code = (batch.weekCode ?? "").toUpperCase();
     if (!code || (code !== w && !code.includes(w.replace(/^AH-?/i, "")))) return false;
-  }
-  if (f.shipmentNumber.trim()) {
-    const q = f.shipmentNumber.trim().toLocaleLowerCase();
-    const container = primaryContainerId(batch)?.toLocaleLowerCase() ?? "";
-    if (
-      !batch.batchNumber.toLocaleLowerCase().includes(q) &&
-      !container.includes(q) &&
-      !(batch.sourceShipmentNumber ?? "").toLocaleLowerCase().includes(q)
-    ) {
-      return false;
-    }
-  }
-  if (f.zoneId && !batch.zoneIds.includes(f.zoneId)) return false;
-  if (f.courierId && !batch.courierIds.includes(f.courierId)) return false;
-  if (f.paymentStatus) {
-    const ps = f.paymentStatus as ShipmentPaymentStatus;
-    if (!batch.paymentStatuses.includes(ps)) return false;
   }
   if (f.freeSearch.trim()) {
     const q = f.freeSearch.trim().toLocaleLowerCase();
@@ -212,9 +175,9 @@ export function ShipmentListClient({
   const kpis = useMemo(() => {
     const shipmentCount = filteredBatches.length;
     const packages = filteredBatches.reduce((s, b) => s + (b.boxesSum || b.recordCount), 0);
-    const totalUsd = filteredBatches.reduce((s, b) => s + b.totalOrderUsd, 0);
-    const remaining = filteredBatches.reduce((s, b) => s + b.totalRemainingIls, 0);
-    return { shipmentCount, packages, totalUsd, remaining };
+    const totalFees = filteredBatches.reduce((s, b) => s + (b.totalFeeIls || 0), 0);
+    const remainingFees = filteredBatches.reduce((s, b) => s + (b.totalRemainingIls || 0), 0);
+    return { shipmentCount, packages, totalFees, remainingFees };
   }, [filteredBatches]);
 
   function showMsg(msg: string, isError = false) {
@@ -232,36 +195,19 @@ export function ShipmentListClient({
         id: "freeSearch",
         kind: "search",
         placeholder: "מספר משלוח, קונטיינר, שבוע…",
+        minWidth: 160,
       },
-      {
-        id: "paymentStatus",
-        kind: "status",
-        label: "סטטוס תשלום",
-        options: (Object.keys(SHIPMENT_PAYMENT_STATUS_LABELS) as ShipmentPaymentStatus[]).map(
-          (k) => ({ value: k, label: SHIPMENT_PAYMENT_STATUS_LABELS[k] }),
-        ),
-      },
-      {
-        id: "zoneId",
-        kind: "region",
-        label: "אזור",
-        options: zones.map((z) => ({ value: z.id, label: z.name })),
-      },
-      {
-        id: "courierId",
-        kind: "courier",
-        options: couriers.map((c) => ({ value: c.id, label: c.name })),
-      },
+      { id: "shippingDateFrom", kind: "dateFrom", label: "מתאריך", minWidth: 118 },
+      { id: "shippingDateTo", kind: "dateTo", label: "עד תאריך", minWidth: 118 },
+      { id: "arrivalDateFrom", kind: "date", label: "תאריך הגעה", minWidth: 118 },
       {
         id: "week",
         kind: "week",
         options: weekOptions.map((w) => ({ value: w, label: w })),
+        minWidth: 100,
       },
-      { id: "arrivalDateFrom", kind: "date", label: "הגעה מ־" },
-      { id: "shippingDateFrom", kind: "dateFrom", label: "משלוח מ־" },
-      { id: "shippingDateTo", kind: "dateTo", label: "משלוח עד" },
     ],
-    [zones, couriers, weekOptions],
+    [weekOptions],
   );
 
   function toggleSelect(id: string) {
@@ -491,13 +437,17 @@ export function ShipmentListClient({
           <div className="shp-stat-card__value">{kpis.packages}</div>
           <div className="shp-stat-card__label">סה״כ חבילות</div>
         </div>
-        <div className="shp-stat-card">
-          <div className="shp-stat-card__value">{fmtUsd(kpis.totalUsd)}</div>
-          <div className="shp-stat-card__label">סה״כ סכום ($)</div>
+        <div className="shp-stat-card shp-stat-card--fee">
+          <div className="shp-stat-card__value">{fmtIls(kpis.totalFees)}</div>
+          <div className="shp-stat-card__label">סה״כ דמי משלוח</div>
         </div>
-        <div className="shp-stat-card">
-          <div className="shp-stat-card__value">{fmtIls(kpis.remaining)}</div>
-          <div className="shp-stat-card__label">סה״כ יתרה לתשלום</div>
+        <div
+          className={`shp-stat-card shp-stat-card--remaining shp-stat-card--remaining-${
+            kpis.remainingFees > 0.005 ? "debt" : "ok"
+          }`}
+        >
+          <div className="shp-stat-card__value">{fmtIls(kpis.remainingFees)}</div>
+          <div className="shp-stat-card__label">יתרת דמי משלוח</div>
         </div>
       </div>
 
@@ -691,12 +641,12 @@ export function ShipmentListClient({
       ) : (
         <div>
           <TableFiltersBar
+            singleRow
+            clearLabel="איפוס"
             fields={shipmentFilterFields}
             values={filterValues}
             onChange={setField}
             onClear={clearFilters}
-            onRefresh={() => void refresh()}
-            refreshing={loading}
             onPdf={() => router.push("/admin/shipments/control")}
             onExcel={() => router.push("/admin/shipments/control")}
             resultCount={filteredBatches.length}
@@ -719,7 +669,7 @@ export function ShipmentListClient({
                     onClick={() => void handleBulkDelete()}
                   >
                     <Trash2 size={14} />
-                    מחק מסומנים
+                    מחק
                   </button>
                 ) : null}
               </>
@@ -768,20 +718,18 @@ export function ShipmentListClient({
                     <th>יציאה</th>
                     <th>הגעה</th>
                     <th>חבילות</th>
-                    <th>
-                      <DollarSign size={12} style={{ display: "inline" }} /> סכום כולל ($)
-                    </th>
+                    <th>דמי משלוח</th>
                     <th>
                       <Wallet size={12} style={{ display: "inline" }} /> שולם
                     </th>
                     <th>יתרה</th>
-                    <th>סטטוס</th>
                     <th></th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredBatches.map((b) => {
                     const containerId = primaryContainerId(b);
+                    const tone = remainingTone(b.totalFeeIls, b.totalPaidIls, b.totalRemainingIls);
                     return (
                       <tr key={b.id} className={selected.has(b.id) ? "is-selected" : undefined}>
                         <td onClick={(e) => e.stopPropagation()}>
@@ -806,18 +754,12 @@ export function ShipmentListClient({
                         <td>{formatDate(b.shippingDate)}</td>
                         <td>{formatDate(b.arrivalDate)}</td>
                         <td>{b.boxesSum || b.recordCount}</td>
-                        <td className="shp-col-money">{fmtUsd(b.totalOrderUsd)}</td>
+                        <td className="shp-col-money shp-col-fee">{fmtIls(b.totalFeeIls)}</td>
                         <td className="shp-col-money" style={{ color: "#15803d" }}>
                           {fmtIls(b.totalPaidIls)}
                         </td>
-                        <td
-                          className="shp-col-money"
-                          style={{ color: b.totalRemainingIls > 0 ? "#dc2626" : "#15803d", fontWeight: 600 }}
-                        >
+                        <td className={`shp-col-money shp-remaining shp-remaining--${tone}`}>
                           {fmtIls(b.totalRemainingIls)}
-                        </td>
-                        <td>
-                          <span className={`shp-badge ${listStatusClass(b)}`}>{listStatusLabel(b)}</span>
                         </td>
                         <td onClick={(e) => e.stopPropagation()}>
                           <div className="shp-row-actions">

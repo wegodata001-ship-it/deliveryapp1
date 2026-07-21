@@ -151,24 +151,14 @@ function toControlRecord(batch: ShipmentBatchDto, r: ShipmentRecordDto): Shipmen
 
 type RowFilters = {
   search: string;
-  status: string;
-  paymentStatus: string;
-  zoneId: string;
-  courierId: string;
   arrivalDate: string;
-  regDate: string;
   dateFrom: string;
   dateTo: string;
 };
 
 const EMPTY_ROW_FILTERS: RowFilters = {
   search: "",
-  status: "",
-  paymentStatus: "",
-  zoneId: "",
-  courierId: "",
   arrivalDate: "",
-  regDate: "",
   dateFrom: "",
   dateTo: "",
 };
@@ -208,13 +198,7 @@ export function ShipmentBatchClient({
   const filteredRecords = useMemo(() => {
     const q = filters.search.trim().toLocaleLowerCase();
     return records.filter((r) => {
-      if (filters.status && r.status !== filters.status) return false;
-      if (filters.zoneId && r.zoneId !== filters.zoneId) return false;
-      if (filters.courierId && r.courierId !== filters.courierId) return false;
-      if (filters.paymentStatus && r.paymentStatus !== filters.paymentStatus) return false;
       if (filters.arrivalDate && arrivalYmd !== filters.arrivalDate) return false;
-      const reg = recordPaymentYmd(r);
-      if (filters.regDate && reg !== filters.regDate) return false;
       const rangeDate = arrivalYmd || r.createdAt.slice(0, 10);
       if (filters.dateFrom && (!rangeDate || rangeDate < filters.dateFrom)) return false;
       if (filters.dateTo && (!rangeDate || rangeDate > filters.dateTo)) return false;
@@ -564,82 +548,20 @@ export function ShipmentBatchClient({
       {error && <div className="shp-alert shp-alert--error">{error}</div>}
       {success && <div className="shp-alert shp-alert--success">{success}</div>}
 
-      {/* Filters + actions — single horizontal row */}
-      <div className="shp-filter-toolbar" dir="rtl">
-        <div className="shp-filter-toolbar__scroll">
+      {/* Filters + actions — שורה אחת בלי גלילה */}
+      <div className="shp-filter-toolbar shp-filter-toolbar--single" dir="rtl">
+        <div className="shp-filter-toolbar__row">
           <div className="shp-filter-toolbar__search">
             <Search size={14} />
             <input
               value={filters.search}
               onChange={(e) => patchFilter("search", e.target.value)}
-              placeholder="חיפוש: מספר משלוח, קוד, שם, טלפון, כתובת..."
+              placeholder="חיפוש: מספר, שם, טלפון, כתובת…"
               aria-label="חיפוש"
             />
           </div>
-          <select
-            value={filters.status}
-            onChange={(e) => patchFilter("status", e.target.value)}
-            aria-label="סטטוס"
-          >
-            <option value="">כל הסטטוסים</option>
-            {STATUS_OPTIONS.map((s) => (
-              <option key={s.value} value={s.value}>
-                {s.label}
-              </option>
-            ))}
-          </select>
-          <select
-            value={filters.paymentStatus}
-            onChange={(e) => patchFilter("paymentStatus", e.target.value)}
-            aria-label="סטטוס תשלום"
-          >
-            <option value="">סטטוס תשלום</option>
-            <option value="UNPAID">לא שולם</option>
-            <option value="PARTIAL">חלקי</option>
-            <option value="PAID">שולם</option>
-          </select>
-          <select
-            value={filters.zoneId}
-            onChange={(e) => patchFilter("zoneId", e.target.value)}
-            aria-label="אזור"
-          >
-            <option value="">אזור</option>
-            {zones.filter((z) => z.isActive).map((z) => (
-              <option key={z.id} value={z.id}>
-                {z.name}
-              </option>
-            ))}
-          </select>
-          <select
-            value={filters.courierId}
-            onChange={(e) => patchFilter("courierId", e.target.value)}
-            aria-label="שליח"
-          >
-            <option value="">שליח</option>
-            {couriers.filter((c) => c.isActive).map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
           <label className="shp-filter-toolbar__date">
-            <span>הגעה</span>
-            <input
-              type="date"
-              value={filters.arrivalDate}
-              onChange={(e) => patchFilter("arrivalDate", e.target.value)}
-            />
-          </label>
-          <label className="shp-filter-toolbar__date">
-            <span>רישום</span>
-            <input
-              type="date"
-              value={filters.regDate}
-              onChange={(e) => patchFilter("regDate", e.target.value)}
-            />
-          </label>
-          <label className="shp-filter-toolbar__date">
-            <span>מ</span>
+            <span>מתאריך</span>
             <input
               type="date"
               value={filters.dateFrom}
@@ -647,11 +569,19 @@ export function ShipmentBatchClient({
             />
           </label>
           <label className="shp-filter-toolbar__date">
-            <span>עד</span>
+            <span>עד תאריך</span>
             <input
               type="date"
               value={filters.dateTo}
               onChange={(e) => patchFilter("dateTo", e.target.value)}
+            />
+          </label>
+          <label className="shp-filter-toolbar__date">
+            <span>תאריך הגעה</span>
+            <input
+              type="date"
+              value={filters.arrivalDate}
+              onChange={(e) => patchFilter("arrivalDate", e.target.value)}
             />
           </label>
           <button
@@ -666,8 +596,6 @@ export function ShipmentBatchClient({
           <span className="shp-filter-toolbar__count">
             {filteredRecords.length}/{records.length}
           </span>
-        </div>
-        <div className="shp-filter-toolbar__actions">
           <button
             type="button"
             className="shp-btn shp-btn--primary shp-btn--sm"

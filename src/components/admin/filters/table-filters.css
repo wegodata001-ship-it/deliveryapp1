@@ -13,6 +13,55 @@
   border: 1px solid var(--adm-border, #e2e8f0);
   border-radius: var(--adm-radius, 14px);
   box-shadow: var(--adm-shadow, 0 4px 24px rgba(15, 23, 42, 0.06));
+  overflow-x: hidden;
+}
+
+/* שורה אחת — ללא גלילה אופקית */
+.atf-bar--single {
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.atf-bar--single .atf-bar__fields {
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
+  min-width: 0;
+  gap: 8px;
+}
+
+.atf-bar--single .atf-bar__actions {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+
+.atf-bar--single .atf-field {
+  flex: 0 1 118px;
+  min-width: 0;
+}
+
+.atf-bar--single .atf-field--search,
+.atf-bar--single .atf-field--grow {
+  flex: 1 1 180px;
+  min-width: 140px;
+  max-width: 280px;
+}
+
+.atf-bar--single .atf-field__label {
+  font-size: 0.68rem;
+}
+
+.atf-bar--single .atf-btn {
+  padding: 0 10px;
+  font-size: 0.78rem;
+}
+
+.atf-bar--single .atf-count {
+  margin-inline-start: 0;
+  white-space: nowrap;
 }
 
 .atf-bar__fields {
@@ -167,6 +216,22 @@ select.atf-input {
 @keyframes atf-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 1100px) {
+  .atf-bar--single {
+    flex-wrap: wrap;
+  }
+
+  .atf-bar--single .atf-bar__fields {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+  }
+
+  .atf-bar--single .atf-bar__actions {
+    flex: 1 1 100%;
+    justify-content: flex-start;
   }
 }
 

@@ -49,21 +49,57 @@
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   padding: 12px 18px;
-  min-width: 120px;
+  min-width: 140px;
+  flex: 1 1 140px;
   text-align: center;
 }
 
 .shp-stat-card__value {
-  font-size: 1.4rem;
-  font-weight: 700;
+  font-size: 1.45rem;
+  font-weight: 800;
   color: #1e40af;
   line-height: 1.2;
+  font-variant-numeric: tabular-nums;
 }
 
 .shp-stat-card__label {
   font-size: 0.75rem;
   color: #64748b;
   margin-top: 2px;
+  font-weight: 650;
+}
+
+.shp-stat-card--fee .shp-stat-card__value {
+  color: #15803d;
+}
+
+.shp-stat-card--remaining-ok .shp-stat-card__value {
+  color: #15803d;
+}
+
+.shp-stat-card--remaining-debt .shp-stat-card__value {
+  color: #ea580c;
+}
+
+.shp-remaining {
+  font-weight: 700;
+}
+
+.shp-remaining--ok {
+  color: #15803d;
+}
+
+.shp-remaining--partial {
+  color: #ea580c;
+}
+
+.shp-remaining--debt {
+  color: #dc2626;
+}
+
+.shp-table--list .shp-col-fee {
+  color: #15803d;
+  font-weight: 700;
 }
 
 /* ─── Table ──────────────────────────────────────────────────────────────────── */
@@ -282,6 +318,39 @@
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: thin;
+}
+
+/* שורה אחת נקייה — בלי גלילה אופקית */
+.shp-filter-toolbar--single {
+  overflow: hidden;
+  overflow-x: hidden;
+  padding: 10px 12px;
+}
+
+.shp-filter-toolbar--single .shp-filter-toolbar__row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.shp-filter-toolbar--single .shp-filter-toolbar__search {
+  flex: 1 1 160px;
+  min-width: 140px;
+  max-width: 260px;
+}
+
+.shp-filter-toolbar--single .shp-filter-toolbar__date input {
+  height: 32px;
+  max-width: 130px;
+}
+
+.shp-filter-toolbar--single .shp-btn {
+  flex-shrink: 0;
+  height: 32px;
 }
 
 .shp-filter-toolbar__scroll {

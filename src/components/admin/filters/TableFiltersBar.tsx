@@ -32,6 +32,13 @@ export type TableFiltersBarProps = TableFiltersActions & {
   resultCount?: number;
   resultTotal?: number;
   title?: string;
+  /**
+   * שורה אחת קומפקטית — שדות + כפתורים בלי גלילה אופקית.
+   * מתאים למסכים עם מעט מסננים (למשל רשימת משלוחים).
+   */
+  singleRow?: boolean;
+  /** תווית כפתור ניקוי (ברירת מחדל: ניקוי) */
+  clearLabel?: string;
 };
 
 function fieldLabel(field: TableFilterFieldConfig): string {
@@ -54,9 +61,15 @@ export function TableFiltersBar({
   resultCount,
   resultTotal,
   title,
+  singleRow = false,
+  clearLabel = "ניקוי",
 }: TableFiltersBarProps) {
   return (
-    <section className="atf-bar" dir="rtl" aria-label={title || "מסנני טבלה"}>
+    <section
+      className={`atf-bar${singleRow ? " atf-bar--single" : ""}`}
+      dir="rtl"
+      aria-label={title || "מסנני טבלה"}
+    >
       <div className="atf-bar__fields">
         {fields.map((field) => {
           const value = values[field.id] ?? "";
@@ -186,6 +199,11 @@ export function TableFiltersBar({
 
       <div className="atf-bar__actions">
         {leadingActions}
+        <button type="button" className="atf-btn" onClick={onClear} title="איפוס מסננים">
+          <Eraser size={15} />
+          {clearLabel}
+        </button>
+        {trailingActions}
         {onRefresh ? (
           <button
             type="button"
@@ -196,22 +214,6 @@ export function TableFiltersBar({
           >
             <RefreshCw size={15} className={refreshing ? "atf-spin" : undefined} />
             רענון
-          </button>
-        ) : null}
-        <button type="button" className="atf-btn" onClick={onClear} title="ניקוי מסננים">
-          <Eraser size={15} />
-          ניקוי
-        </button>
-        {onExcel ? (
-          <button
-            type="button"
-            className="atf-btn"
-            onClick={onExcel}
-            disabled={exporting}
-            title="Excel"
-          >
-            <FileSpreadsheet size={15} />
-            Excel
           </button>
         ) : null}
         {onPdf ? (
@@ -226,13 +228,24 @@ export function TableFiltersBar({
             PDF
           </button>
         ) : null}
+        {onExcel ? (
+          <button
+            type="button"
+            className="atf-btn"
+            onClick={onExcel}
+            disabled={exporting}
+            title="Excel"
+          >
+            <FileSpreadsheet size={15} />
+            Excel
+          </button>
+        ) : null}
         {onPrint ? (
           <button type="button" className="atf-btn" onClick={onPrint} title="הדפסה">
             <Printer size={15} />
             הדפסה
           </button>
         ) : null}
-        {trailingActions}
         {resultCount != null ? (
           <span className="atf-count" dir="ltr">
             {resultTotal != null ? `${resultCount}/${resultTotal}` : resultCount}
