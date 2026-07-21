@@ -65,7 +65,10 @@ export function ProfitLossReportModal({
 
   const maxOrder = Math.max(...(report?.byOrder.map((x) => Math.abs(x.value)) ?? [1]), 1);
   const maxWeek = Math.max(...(report?.byWeek.map((x) => Math.abs(x.value)) ?? [1]), 1);
-  const maxCountry = Math.max(...(report?.byCountry.map((x) => Math.abs(x.value)) ?? [1]), 1);
+  const maxCountry = Math.max(
+    ...(report?.byCountry.map((x) => Math.abs(x.netProfitIls ?? x.value)) ?? [1]),
+    1,
+  );
   const maxTrend = Math.max(...(report?.trend.map((x) => Math.abs(x.value)) ?? [1]), 1);
 
   const pieGradient = useMemo(() => {
@@ -185,7 +188,7 @@ export function ProfitLossReportModal({
             <div className="pl-grid">
               <section className="pl-card">
                 <h3>רווח לפי מדינה</h3>
-                <p className="pl-card__hint">טורקיה · ישראל · PS</p>
+                <p className="pl-card__hint">טורקיה · סין · איחוד האמירויות</p>
                 <div className="pl-bars">
                   {report.byCountry.map((c) => (
                     <div key={c.key} className="pl-bar-row">
@@ -195,10 +198,14 @@ export function ProfitLossReportModal({
                       <span className="pl-bar-row__track">
                         <span
                           className="pl-bar-row__fill"
-                          style={{ width: `${Math.min(100, (Math.abs(c.value) / maxCountry) * 100)}%` }}
+                          style={{
+                            width: `${Math.min(100, (Math.abs(c.netProfitIls ?? c.value) / maxCountry) * 100)}%`,
+                          }}
                         />
                       </span>
-                      <span className="pl-bar-row__value">{fmtIls(c.value)}</span>
+                      <span className="pl-bar-row__value">
+                        {fmtIls(c.netProfitIls ?? c.value)}
+                      </span>
                     </div>
                   ))}
                 </div>

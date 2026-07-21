@@ -378,6 +378,25 @@
   justify-content: center;
 }
 
+.pl-bar-row--clickable {
+  width: 100%;
+  border: 1px solid transparent;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 10px;
+  transition: background 0.15s ease, border-color 0.15s ease;
+  text-align: inherit;
+}
+.pl-bar-row--clickable:hover {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+.pl-bar-row--clickable:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
 .pl-bar-row {
   display: grid;
   grid-template-columns: 88px 1fr 72px;
@@ -587,6 +606,19 @@
   overflow: hidden;
 }
 
+.pl-drill--wide {
+  width: min(1200px, 100%);
+  max-height: min(90vh, 960px);
+  display: flex;
+  flex-direction: column;
+}
+
+.pl-drill--wide .pl-drill__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
 .pl-drill__head {
   display: flex;
   align-items: center;
@@ -602,8 +634,48 @@
   font-size: 1.15rem;
 }
 
+.pl-drill__sub {
+  margin: 4px 0 0;
+  font-size: 0.82rem;
+  color: #64748b;
+}
+
 .pl-drill__body {
   padding: 18px 20px 24px;
+}
+
+.pl-country-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.pl-country-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.pl-country-summary span {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #64748b;
+}
+
+.pl-country-summary strong {
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.pl-country-totals-row td {
+  text-align: right !important;
+  font-size: 0.85rem;
+  line-height: 1.5;
 }
 
 .pl-drill__grid {

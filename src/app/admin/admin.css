@@ -802,14 +802,15 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
   overflow: visible;
 }
 
+/* מסנני הזמנות — כרטיס אחיד בסגנון TableFilters */
 .adm-orders-filters-bar {
-  padding: 4px 6px;
+  padding: 14px 16px;
   min-height: 0;
   box-sizing: border-box;
   background: #fff;
-  border: 1px solid var(--adm-border);
-  border-radius: 10px;
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
+  border: 1px solid var(--adm-border, #e2e8f0);
+  border-radius: var(--adm-radius, 14px);
+  box-shadow: var(--adm-shadow, 0 4px 24px rgba(15, 23, 42, 0.06));
   overflow: visible;
 }
 

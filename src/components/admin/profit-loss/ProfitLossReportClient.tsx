@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -14,13 +14,21 @@ import {
 } from "lucide-react";
 import ExcelJS from "exceljs";
 import type {
+  ProfitLossCountryPoint,
   ProfitLossOrderLine,
   ProfitLossReport,
   ProfitLossReportFilters,
 } from "@/lib/reports/build-profit-loss-report";
+import { PROFIT_LOSS_CHART_COUNTRIES } from "@/lib/reports/build-profit-loss-report";
 import { getProfitLossReportModalAction } from "@/app/admin/reports/profit-loss-modal-actions";
 import { openPdfPreview } from "@/lib/pdf-preview";
 import { normalizeAhWeekCode, getAhWeekRange } from "@/lib/work-week";
+import {
+  TableFiltersBar,
+  useTableFilters,
+  type TableFilterFieldConfig,
+  type TableFilterValues,
+} from "@/components/admin/filters";
 import "@/app/admin/reports/profit-loss/profit-loss.css";
 
 type Option = { id: string; name: string };
@@ -173,9 +181,11 @@ function PieChart({
 function BarList({
   items,
   color = "blue",
+  onItemClick,
 }: {
-  items: { label: string; value: number }[];
+  items: { key?: string; label: string; value: number }[];
   color?: "blue" | "green" | "amber";
+  onItemClick?: (item: { key?: string; label: string; value: number }) => void;
 }) {
   if (!items.length) return <div className="pl-empty">אין נתונים להצגה</div>;
   const max = Math.max(...items.map((i) => Math.abs(i.value)), 1);
@@ -188,20 +198,44 @@ function BarList({
 
   return (
     <div className="pl-bars">
-      {items.map((item) => (
-        <div key={item.label} className="pl-bar-row" title={`${item.label}: ${fmtIls(item.value)}`}>
-          <div className="pl-bar-row__label">{item.label}</div>
-          <div className="pl-bar-row__track">
-            <div
-              className={fillClass}
-              style={{ width: `${(Math.abs(item.value) / max) * 100}%` }}
-            />
+      {items.map((item) => {
+        const content = (
+          <>
+            <div className="pl-bar-row__label">{item.label}</div>
+            <div className="pl-bar-row__track">
+              <div
+                className={fillClass}
+                style={{ width: `${(Math.abs(item.value) / max) * 100}%` }}
+              />
+            </div>
+            <div className={`pl-bar-row__value ${moneyClass(item.value)}`}>
+              {fmtIls(item.value)}
+            </div>
+          </>
+        );
+        if (onItemClick) {
+          return (
+            <button
+              key={item.key || item.label}
+              type="button"
+              className="pl-bar-row pl-bar-row--clickable"
+              title={`${item.label}: ${fmtIls(item.value)} — לחצו לפירוט`}
+              onClick={() => onItemClick(item)}
+            >
+              {content}
+            </button>
+          );
+        }
+        return (
+          <div
+            key={item.key || item.label}
+            className="pl-bar-row"
+            title={`${item.label}: ${fmtIls(item.value)}`}
+          >
+            {content}
           </div>
-          <div className={`pl-bar-row__value ${moneyClass(item.value)}`}>
-            {fmtIls(item.value)}
-          </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -229,6 +263,49 @@ function LineTrend({ points }: { points: { label: string; value: number }[] }) {
   );
 }
 
+function filtersToValues(f: ProfitLossReportFilters): TableFilterValues {
+  return {
+    q: f.search || "",
+    dateFrom: f.dateFrom || "",
+    dateTo: f.dateTo || "",
+    weekFrom: f.weekFrom || "",
+    weekTo: f.weekTo || "",
+    country: f.countryBucket || "",
+    customerId: f.customerId || "",
+    status: f.status || "",
+    city: f.city || "",
+  };
+}
+
+function valuesToFilters(v: TableFilterValues, prev: ProfitLossReportFilters): ProfitLossReportFilters {
+  const weekFrom = normalizeAhWeekCode(v.weekFrom) ?? (v.weekFrom?.trim() || undefined);
+  const weekTo = normalizeAhWeekCode(v.weekTo) ?? (v.weekTo?.trim() || undefined);
+  let dateFrom = v.dateFrom || undefined;
+  let dateTo = v.dateTo || undefined;
+  let workWeek = prev.workWeek;
+  if (weekFrom) {
+    workWeek = weekFrom;
+    const r = getAhWeekRange(weekFrom);
+    if (r) {
+      if (!dateFrom) dateFrom = r.from;
+      if (!dateTo && !weekTo) dateTo = r.to;
+    }
+  }
+  return {
+    ...prev,
+    search: v.q?.trim() || undefined,
+    dateFrom,
+    dateTo,
+    weekFrom,
+    weekTo,
+    workWeek,
+    countryBucket: (v.country || undefined) as ProfitLossReportFilters["countryBucket"],
+    customerId: v.customerId || undefined,
+    status: v.status || undefined,
+    city: v.city || undefined,
+  };
+}
+
 export default function ProfitLossReportClient({
   initialReport,
   initialFilters,
@@ -242,7 +319,17 @@ export default function ProfitLossReportClient({
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [drill, setDrill] = useState<ProfitLossOrderLine | null>(null);
+  const [countryDrill, setCountryDrill] = useState<ProfitLossCountryPoint | null>(null);
   const [fullscreen, setFullscreen] = useState<string | null>(null);
+
+  const {
+    values: filterValues,
+    setField,
+    clear: clearFilterBar,
+  } = useTableFilters({
+    storageKey: "profit-loss",
+    defaults: filtersToValues(initialFilters),
+  });
 
   const syncUrl = useCallback(
     (next: ProfitLossReportFilters) => {
@@ -280,28 +367,57 @@ export default function ProfitLossReportClient({
     [syncUrl],
   );
 
-  const onFilterChange = <K extends keyof ProfitLossReportFilters>(
-    key: K,
-    value: ProfitLossReportFilters[K],
-  ) => {
-    setFilters((prev) => ({ ...prev, [key]: value || undefined }));
-  };
+  const applyTimer = useRef<number | undefined>(undefined);
+  const filtersRef = useRef(filters);
+  filtersRef.current = filters;
+  const lastAppliedKey = useRef("");
 
-  const onWeekField = (key: "weekFrom" | "weekTo", raw: string) => {
-    const code = normalizeAhWeekCode(raw) ?? (raw.trim().toUpperCase() || undefined);
-    setFilters((prev) => {
-      const next = { ...prev, [key]: code };
-      if (key === "weekFrom" && code) {
-        const r = getAhWeekRange(code);
-        if (r) {
-          next.workWeek = code;
-          if (!prev.dateFrom) next.dateFrom = r.from;
-          if (!prev.dateTo && !prev.weekTo) next.dateTo = r.to;
-        }
-      }
-      return next;
-    });
-  };
+  useEffect(() => {
+    const next = valuesToFilters(filterValues, filtersRef.current);
+    const key = JSON.stringify(filtersToValues(next));
+    if (key === lastAppliedKey.current) return;
+    window.clearTimeout(applyTimer.current);
+    applyTimer.current = window.setTimeout(() => {
+      lastAppliedKey.current = key;
+      applyFilters(next);
+    }, 280);
+    return () => window.clearTimeout(applyTimer.current);
+  }, [filterValues, applyFilters]);
+
+  const plFilterFields = useMemo<TableFilterFieldConfig[]>(
+    () => [
+      { id: "q", kind: "search", placeholder: "הזמנה / לקוח…" },
+      { id: "dateFrom", kind: "dateFrom" },
+      { id: "dateTo", kind: "dateTo" },
+      { id: "weekFrom", kind: "text", label: "משבוע", placeholder: "AH-120", dir: "ltr", minWidth: 110 },
+      { id: "weekTo", kind: "text", label: "עד שבוע", placeholder: "AH-125", dir: "ltr", minWidth: 110 },
+      {
+        id: "country",
+        kind: "country",
+        options: PROFIT_LOSS_CHART_COUNTRIES.map((c) => ({
+          value: c.label,
+          label: `${c.flag} ${c.label}`,
+        })),
+      },
+      {
+        id: "customerId",
+        kind: "customer",
+        options: customers.map((c) => ({ value: c.id, label: c.name })),
+      },
+      {
+        id: "status",
+        kind: "status",
+        options: statuses.map((s) => ({ value: s.id, label: s.name })),
+      },
+      {
+        id: "city",
+        kind: "city",
+        label: "אזור",
+        options: cities.map((c) => ({ value: c, label: c })),
+      },
+    ],
+    [customers, statuses, cities],
+  );
 
   const k = report.kpis;
 
@@ -322,9 +438,35 @@ export default function ProfitLossReportClient({
   }, [report.profitSources, k]);
 
   const countryBars = useMemo(
-    () => report.byCountry.map((c) => ({ label: c.label, value: c.value })),
+    () =>
+      report.byCountry.map((c) => ({
+        key: c.key,
+        label: c.label,
+        value: c.netProfitIls ?? c.value,
+      })),
     [report.byCountry],
   );
+
+  const countryDrillOrders = useMemo(() => {
+    if (!countryDrill) return [];
+    const meta = PROFIT_LOSS_CHART_COUNTRIES.find((c) => c.key === countryDrill.key);
+    const label = meta?.label ?? countryDrill.label;
+    return report.orders.filter((o) => o.country === label);
+  }, [countryDrill, report.orders]);
+
+  const countryDrillTotals = useMemo(() => {
+    return countryDrillOrders.reduce(
+      (acc, o) => {
+        acc.revenue += o.revenueIls;
+        acc.cost += o.costIls;
+        acc.commission += o.commissionIls;
+        acc.fxProfit += o.fxProfitIls;
+        acc.net += o.orderProfitIls;
+        return acc;
+      },
+      { revenue: 0, cost: 0, commission: 0, fxProfit: 0, net: 0 },
+    );
+  }, [countryDrillOrders]);
 
   const weekBars = useMemo(
     () => report.byWeek.map((w) => ({ label: w.label, value: w.value })),
@@ -603,9 +745,21 @@ export default function ProfitLossReportClient({
     {
       id: "country",
       title: "רווח לפי מדינה",
-      hint: "Bar Chart — טורקיה / ישראל / PS",
+      hint: "Bar Chart — טורקיה · סין · איחוד האמירויות · לחצו לפירוט",
       data: countryBars,
-      body: <BarList items={countryBars} color="blue" />,
+      body: (
+        <BarList
+          items={countryBars}
+          color="blue"
+          onItemClick={(item) => {
+            const point =
+              report.byCountry.find((c) => c.key === item.key) ??
+              report.byCountry.find((c) => c.label === item.label) ??
+              null;
+            setCountryDrill(point);
+          }}
+        />
+      ),
     },
     {
       id: "trend",
@@ -664,134 +818,24 @@ export default function ProfitLossReportClient({
           <button type="button" className="pl-dash-btn" onClick={() => window.print()}>
             <Printer size={16} /> הדפסה
           </button>
-          <button
-            type="button"
-            className="pl-dash-btn pl-dash-btn--primary"
-            disabled={pending}
-            onClick={() => applyFilters(filters)}
-          >
-            <RefreshCw size={16} />
-            רענון
-          </button>
         </div>
       </header>
 
-      <form
-        className="pl-dash__filters"
-        onSubmit={(e) => {
-          e.preventDefault();
-          applyFilters(filters);
+      <TableFiltersBar
+        fields={plFilterFields}
+        values={filterValues}
+        onChange={setField}
+        onClear={() => {
+          clearFilterBar();
+          lastAppliedKey.current = "";
         }}
-      >
-        <label>
-          מטווח תאריכים
-          <input
-            type="date"
-            value={filters.dateFrom || ""}
-            onChange={(e) => onFilterChange("dateFrom", e.target.value)}
-          />
-        </label>
-        <label>
-          עד תאריך
-          <input
-            type="date"
-            value={filters.dateTo || ""}
-            onChange={(e) => onFilterChange("dateTo", e.target.value)}
-          />
-        </label>
-        <label>
-          משבוע
-          <input
-            type="text"
-            placeholder="AH-120"
-            dir="ltr"
-            value={filters.weekFrom || ""}
-            onChange={(e) => onWeekField("weekFrom", e.target.value)}
-          />
-        </label>
-        <label>
-          עד שבוע
-          <input
-            type="text"
-            placeholder="AH-125"
-            dir="ltr"
-            value={filters.weekTo || ""}
-            onChange={(e) => onWeekField("weekTo", e.target.value)}
-          />
-        </label>
-        <label>
-          מדינה
-          <select
-            value={filters.countryBucket || ""}
-            onChange={(e) =>
-              onFilterChange(
-                "countryBucket",
-                (e.target.value || undefined) as ProfitLossReportFilters["countryBucket"],
-              )
-            }
-          >
-            <option value="">הכל</option>
-            <option value="טורקיה">טורקיה</option>
-            <option value="ישראל">ישראל</option>
-            <option value="PS">PS</option>
-          </select>
-        </label>
-        <label>
-          לקוח
-          <select
-            value={filters.customerId || ""}
-            onChange={(e) => onFilterChange("customerId", e.target.value)}
-          >
-            <option value="">הכל</option>
-            {customers.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          סטטוס
-          <select
-            value={filters.status || ""}
-            onChange={(e) => onFilterChange("status", e.target.value)}
-          >
-            <option value="">הכל</option>
-            {statuses.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          אזור
-          <select
-            value={filters.city || ""}
-            onChange={(e) => onFilterChange("city", e.target.value)}
-          >
-            <option value="">הכל</option>
-            {cities.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          חיפוש חופשי
-          <input
-            className="pl-dash__search"
-            type="search"
-            placeholder="הזמנה / לקוח…"
-            value={filters.search || ""}
-            onChange={(e) => onFilterChange("search", e.target.value)}
-          />
-        </label>
-        <button type="submit" className="pl-dash-btn pl-dash-btn--primary" disabled={pending}>
-          החל
-        </button>
-      </form>
+        onRefresh={() => applyFilters(valuesToFilters(filterValues, filters))}
+        refreshing={pending}
+        onExcel={() => void exportFullExcel()}
+        onPdf={exportFullPdf}
+        onPrint={() => window.print()}
+        resultCount={k.orderCount}
+      />
 
       {error ? <p style={{ color: "#b91c1c", marginBottom: 16 }}>{error}</p> : null}
 
@@ -1107,6 +1151,141 @@ export default function ProfitLossReportClient({
                   </strong>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {countryDrill ? (
+        <div className="pl-drill-backdrop" onClick={() => setCountryDrill(null)}>
+          <div
+            className="pl-drill pl-drill--wide"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="pl-country-drill-title"
+          >
+            <div className="pl-drill__head">
+              <div>
+                <h3 id="pl-country-drill-title">רווח לפי מדינה — {countryDrill.label}</h3>
+                <p className="pl-drill__sub">
+                  {countryDrillOrders.length} הזמנות · רווח נקי{" "}
+                  <strong className={moneyClass(countryDrill.netProfitIls)}>
+                    {fmtIls(countryDrill.netProfitIls)}
+                  </strong>
+                </p>
+              </div>
+              <button type="button" className="pl-dash-btn" onClick={() => setCountryDrill(null)}>
+                <X size={16} /> סגור
+              </button>
+            </div>
+            <div className="pl-drill__body">
+              <div className="pl-country-summary">
+                <div>
+                  <span>סה״כ הכנסות</span>
+                  <strong>{fmtIls(countryDrillTotals.revenue)}</strong>
+                </div>
+                <div>
+                  <span>סה״כ עלויות</span>
+                  <strong>{fmtIls(countryDrillTotals.cost)}</strong>
+                </div>
+                <div>
+                  <span>סה״כ עמלות</span>
+                  <strong>{fmtIls(countryDrillTotals.commission)}</strong>
+                </div>
+                <div>
+                  <span>סה״כ רווח מהפרשי שער</span>
+                  <strong className={moneyClass(countryDrillTotals.fxProfit)}>
+                    {fmtIls(countryDrillTotals.fxProfit)}
+                  </strong>
+                </div>
+                <div>
+                  <span>סה״כ רווח נקי</span>
+                  <strong className={moneyClass(countryDrillTotals.net)}>
+                    {fmtIls(countryDrillTotals.net)}
+                  </strong>
+                </div>
+              </div>
+
+              {countryDrillOrders.length === 0 ? (
+                <div className="pl-empty">אין הזמנות למדינה זו בטווח שנבחר</div>
+              ) : (
+                <div className="pl-table-wrap">
+                  <table className="pl-table">
+                    <thead>
+                      <tr>
+                        <th>מספר הזמנה</th>
+                        <th>לקוח</th>
+                        <th>תאריך</th>
+                        <th>סכום מקור</th>
+                        <th>סכום ששולם</th>
+                        <th>עלות</th>
+                        <th>עמלה</th>
+                        <th>רכישת מט״ח</th>
+                        <th>רווח מהפרשי שער</th>
+                        <th>רווח מהמכירה</th>
+                        <th>רווח סופי</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {countryDrillOrders.map((o) => (
+                        <tr key={o.orderId}>
+                          <td>{o.orderNumber || "—"}</td>
+                          <td>{o.customerName || "—"}</td>
+                          <td dir="ltr">{o.dateYmd || "—"}</td>
+                          <td className="pl-num" dir="ltr">
+                            {fmtUsd(o.sourceAmountUsd)}
+                          </td>
+                          <td className="pl-num" dir="ltr">
+                            {fmtUsd(o.paidAmountUsd)}
+                          </td>
+                          <td className="pl-num" dir="ltr">
+                            {fmtUsd(o.costUsd)}
+                          </td>
+                          <td className="pl-num" dir="ltr">
+                            {fmtUsd(o.commissionUsd)}
+                          </td>
+                          <td className="pl-num" dir="ltr">
+                            {fmtUsd(o.fxPurchaseUsd)}
+                          </td>
+                          <td className={`pl-num ${moneyClass(o.fxProfitIls)}`}>
+                            {fmtIls(o.fxProfitIls)}
+                          </td>
+                          <td className={`pl-num ${moneyClass(o.saleProfitIls)}`}>
+                            {fmtIls(o.saleProfitIls)}
+                          </td>
+                          <td className={`pl-num ${moneyClass(o.orderProfitIls)}`}>
+                            {fmtIls(o.orderProfitIls)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr>
+                        <td colSpan={8}>סיכום מדינה</td>
+                        <td className={`pl-num ${moneyClass(countryDrillTotals.fxProfit)}`}>
+                          {fmtIls(countryDrillTotals.fxProfit)}
+                        </td>
+                        <td />
+                        <td className={`pl-num ${moneyClass(countryDrillTotals.net)}`}>
+                          {fmtIls(countryDrillTotals.net)}
+                        </td>
+                      </tr>
+                      <tr className="pl-country-totals-row">
+                        <td colSpan={11}>
+                          סה״כ הכנסות {fmtIls(countryDrillTotals.revenue)} · סה״כ עלויות{" "}
+                          {fmtIls(countryDrillTotals.cost)} · סה״כ עמלות{" "}
+                          {fmtIls(countryDrillTotals.commission)} · סה״כ רווח מהפרשי שער{" "}
+                          {fmtIls(countryDrillTotals.fxProfit)} · סה״כ רווח נקי{" "}
+                          <strong className={moneyClass(countryDrillTotals.net)}>
+                            {fmtIls(countryDrillTotals.net)}
+                          </strong>
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         </div>

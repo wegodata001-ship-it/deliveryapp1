@@ -15,14 +15,17 @@ import {
   UserCheck,
   UserX,
   Users,
-  Search,
   Layers,
   DollarSign,
   Wallet,
   FileText,
   FileSpreadsheet,
-  RotateCcw,
 } from "lucide-react";
+import {
+  TableFiltersBar,
+  useTableFilters,
+  type TableFilterFieldConfig,
+} from "@/components/admin/filters";
 import type {
   ShipmentBatchDto,
   ShipmentCourierDto,
@@ -173,7 +176,15 @@ export function ShipmentListClient({
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
-  const [filters, setFilters] = useState<ListFilters>(EMPTY_FILTERS);
+  const {
+    values: filterValues,
+    setField,
+    clear: clearFilters,
+  } = useTableFilters({
+    storageKey: "shipments-list",
+    defaults: EMPTY_FILTERS as unknown as Record<string, string>,
+  });
+  const filters = filterValues as unknown as ListFilters;
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [editBatch, setEditBatch] = useState<ShipmentBatchDto | null>(null);
   const [editSaving, setEditSaving] = useState(false);
@@ -215,9 +226,43 @@ export function ShipmentListClient({
     }, 3000);
   }
 
-  function patchFilter<K extends keyof ListFilters>(key: K, value: ListFilters[K]) {
-    setFilters((prev) => ({ ...prev, [key]: value }));
-  }
+  const shipmentFilterFields = useMemo<TableFilterFieldConfig[]>(
+    () => [
+      {
+        id: "freeSearch",
+        kind: "search",
+        placeholder: "מספר משלוח, קונטיינר, שבוע…",
+      },
+      {
+        id: "paymentStatus",
+        kind: "status",
+        label: "סטטוס תשלום",
+        options: (Object.keys(SHIPMENT_PAYMENT_STATUS_LABELS) as ShipmentPaymentStatus[]).map(
+          (k) => ({ value: k, label: SHIPMENT_PAYMENT_STATUS_LABELS[k] }),
+        ),
+      },
+      {
+        id: "zoneId",
+        kind: "region",
+        label: "אזור",
+        options: zones.map((z) => ({ value: z.id, label: z.name })),
+      },
+      {
+        id: "courierId",
+        kind: "courier",
+        options: couriers.map((c) => ({ value: c.id, label: c.name })),
+      },
+      {
+        id: "week",
+        kind: "week",
+        options: weekOptions.map((w) => ({ value: w, label: w })),
+      },
+      { id: "arrivalDateFrom", kind: "date", label: "הגעה מ־" },
+      { id: "shippingDateFrom", kind: "dateFrom", label: "משלוח מ־" },
+      { id: "shippingDateTo", kind: "dateTo", label: "משלוח עד" },
+    ],
+    [zones, couriers, weekOptions],
+  );
 
   function toggleSelect(id: string) {
     setSelected((prev) => {
@@ -645,147 +690,41 @@ export function ShipmentListClient({
         </div>
       ) : (
         <div>
-          <div className="shp-filter-toolbar" dir="rtl">
-            <div className="shp-filter-toolbar__scroll">
-              <div className="shp-filter-toolbar__search">
-                <Search size={14} />
-                <input
-                  value={filters.freeSearch}
-                  onChange={(e) => patchFilter("freeSearch", e.target.value)}
-                  placeholder="חיפוש: מספר משלוח, קונטיינר, שבוע..."
-                  aria-label="חיפוש"
-                />
-              </div>
-              <select
-                value={filters.paymentStatus}
-                onChange={(e) => patchFilter("paymentStatus", e.target.value)}
-                aria-label="סטטוס תשלום"
-              >
-                <option value="">סטטוס תשלום</option>
-                {(Object.keys(SHIPMENT_PAYMENT_STATUS_LABELS) as ShipmentPaymentStatus[]).map((k) => (
-                  <option key={k} value={k}>
-                    {SHIPMENT_PAYMENT_STATUS_LABELS[k]}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={filters.zoneId}
-                onChange={(e) => patchFilter("zoneId", e.target.value)}
-                aria-label="אזור"
-              >
-                <option value="">אזור</option>
-                {zones.map((z) => (
-                  <option key={z.id} value={z.id}>
-                    {z.name}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={filters.courierId}
-                onChange={(e) => patchFilter("courierId", e.target.value)}
-                aria-label="שליח"
-              >
-                <option value="">שליח</option>
-                {couriers.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-              <select value={filters.week} onChange={(e) => patchFilter("week", e.target.value)} aria-label="שבוע">
-                <option value="">שבוע</option>
-                {weekOptions.map((w) => (
-                  <option key={w} value={w}>
-                    {w}
-                  </option>
-                ))}
-              </select>
-              <label className="shp-filter-toolbar__date">
-                <span>הגעה</span>
-                <input
-                  type="date"
-                  value={filters.arrivalDateFrom}
-                  onChange={(e) => patchFilter("arrivalDateFrom", e.target.value)}
-                />
-              </label>
-              <label className="shp-filter-toolbar__date">
-                <span>מ</span>
-                <input
-                  type="date"
-                  value={filters.shippingDateFrom}
-                  onChange={(e) => patchFilter("shippingDateFrom", e.target.value)}
-                />
-              </label>
-              <label className="shp-filter-toolbar__date">
-                <span>עד</span>
-                <input
-                  type="date"
-                  value={filters.shippingDateTo}
-                  onChange={(e) => patchFilter("shippingDateTo", e.target.value)}
-                />
-              </label>
-              <button
-                type="button"
-                className="shp-btn shp-btn--secondary shp-btn--sm"
-                onClick={() => setFilters(EMPTY_FILTERS)}
-              >
-                <RotateCcw size={13} />
-                איפוס
-              </button>
-              <span className="shp-filter-toolbar__count">
-                {filteredBatches.length}/{batches.length}
-              </span>
-            </div>
-            <div className="shp-filter-toolbar__actions">
-              <button
-                type="button"
-                className="shp-btn shp-btn--primary shp-btn--sm"
-                onClick={() => router.push("/admin/shipments/import")}
-              >
-                <Plus size={14} />
-                הוסף משלוח
-              </button>
-              <button
-                type="button"
-                className="shp-btn shp-btn--secondary shp-btn--sm"
-                disabled={selected.size === 0}
-                onClick={openSelected}
-                title="פתח משלוחים מסומנים"
-              >
-                <Layers size={14} />
-                פתח
-              </button>
-              <button
-                type="button"
-                className="shp-btn shp-btn--secondary shp-btn--sm"
-                onClick={() => router.push("/admin/shipments/control")}
-                title="מעבר לבקרת משלוחים לייצוא PDF"
-              >
-                <FileText size={14} />
-                PDF
-              </button>
-              <button
-                type="button"
-                className="shp-btn shp-btn--secondary shp-btn--sm"
-                onClick={() => router.push("/admin/shipments/control")}
-                title="מעבר לבקרת משלוחים לייצוא Excel"
-              >
-                <FileSpreadsheet size={14} />
-                Excel
-              </button>
-              {selected.size > 0 ? (
+          <TableFiltersBar
+            fields={shipmentFilterFields}
+            values={filterValues}
+            onChange={setField}
+            onClear={clearFilters}
+            onRefresh={() => void refresh()}
+            refreshing={loading}
+            onPdf={() => router.push("/admin/shipments/control")}
+            onExcel={() => router.push("/admin/shipments/control")}
+            resultCount={filteredBatches.length}
+            resultTotal={batches.length}
+            trailingActions={
+              <>
                 <button
                   type="button"
-                  className="shp-btn shp-btn--danger shp-btn--sm"
-                  disabled={loading}
-                  onClick={() => void handleBulkDelete()}
+                  className="atf-btn atf-btn--primary"
+                  onClick={() => router.push("/admin/shipments/import")}
                 >
-                  <Trash2 size={14} />
-                  מחק מסומנים
+                  <Plus size={14} />
+                  הוסף משלוח
                 </button>
-              ) : null}
-            </div>
-          </div>
+                {selected.size > 0 ? (
+                  <button
+                    type="button"
+                    className="atf-btn"
+                    disabled={loading}
+                    onClick={() => void handleBulkDelete()}
+                  >
+                    <Trash2 size={14} />
+                    מחק מסומנים
+                  </button>
+                ) : null}
+              </>
+            }
+          />
 
           {selected.size > 0 ? (
             <div className="shp-toolbar">

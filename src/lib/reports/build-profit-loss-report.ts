@@ -35,20 +35,37 @@ export type ProfitLossReportFilters = {
   weekTo?: string;
   sourceCountry?: string;
   /**
-   * סינון לפי קבוצת מדינה בדוח (טורקיה / ישראל / PS).
-   * עדיף על sourceCountry כשרוצים את אותן קבוצות כמו בגרף.
+   * סינון לפי מדינת הזמנה בדוח (טורקיה / סין / איחוד האמירויות).
+   * מבוסס על sourceCountry של ההזמנה — לא על מסלולי PS/IL.
    */
-  countryBucket?: "טורקיה" | "ישראל" | "PS";
+  countryBucket?: "טורקיה" | "סין" | "איחוד האמירויות";
   /** עיר / אזור לקוח */
   city?: string;
   search?: string;
 };
+
+/** מדינות שמוצגות בגרף «רווח לפי מדינה» — לפי מדינת ההזמנה בלבד */
+export const PROFIT_LOSS_CHART_COUNTRIES = [
+  { key: "TURKEY", label: "טורקיה", flag: "🇹🇷" },
+  { key: "CHINA", label: "סין", flag: "🇨🇳" },
+  { key: "UAE", label: "איחוד האמירויות", flag: "🇦🇪" },
+] as const;
+
+export type ProfitLossChartCountryLabel =
+  (typeof PROFIT_LOSS_CHART_COUNTRIES)[number]["label"];
 
 const SOURCE_COUNTRY_HE: Record<string, string> = {
   TURKEY: "טורקיה",
   CHINA: "סין",
   UAE: "איחוד האמירויות",
   JORDAN: "ירדן",
+};
+
+const WORK_COUNTRY_TO_LABEL: Record<string, string> = {
+  TR: "טורקיה",
+  CN: "סין",
+  AE: "איחוד האמירויות",
+  JO: "ירדן",
 };
 
 function round2(n: number): number {
@@ -69,11 +86,23 @@ function payRateOf(o: {
   return n > 0 ? n : null;
 }
 
-function countryBucket(source: string | null | undefined, workCountry: string | null | undefined): string {
-  if (workCountry === "IL" || source === "ISRAEL") return "ישראל";
-  if (workCountry === "PS") return "PS";
-  if (source === "TURKEY" || workCountry === "TR" || !source) return "טורקיה";
-  return SOURCE_COUNTRY_HE[source] ?? source;
+/**
+ * מדינת הזמנה לדוח — לפי sourceCountry (או countryCode כגיבוי).
+ * לא משתמש במסלולי PS/IL או במקור קליטת תשלום.
+ */
+export function orderCountryLabel(
+  source: string | null | undefined,
+  workCountry: string | null | undefined,
+): string {
+  if (source && SOURCE_COUNTRY_HE[source]) return SOURCE_COUNTRY_HE[source]!;
+  if (workCountry && WORK_COUNTRY_TO_LABEL[workCountry]) {
+    return WORK_COUNTRY_TO_LABEL[workCountry]!;
+  }
+  return "לא ידוע";
+}
+
+function isChartCountry(label: string): label is ProfitLossChartCountryLabel {
+  return PROFIT_LOSS_CHART_COUNTRIES.some((c) => c.label === label);
 }
 
 export type ProfitLossOrderLine = {
@@ -88,6 +117,9 @@ export type ProfitLossOrderLine = {
   costUsd: number;
   commissionUsd: number;
   fxPurchaseUsd: number;
+  revenueIls: number;
+  costIls: number;
+  commissionIls: number;
   buyRate: number | null;
   collectRate: number | null;
   rateDiff: number | null;
@@ -119,6 +151,19 @@ export type ProfitLossNamedPoint = {
   count?: number;
 };
 
+/** נקודת גרף / סיכום מדינה — רווח נקי + פירוט ל־Drill Down */
+export type ProfitLossCountryPoint = {
+  key: string;
+  label: string;
+  value: number;
+  count: number;
+  revenueIls: number;
+  costIls: number;
+  commissionIls: number;
+  fxProfitIls: number;
+  netProfitIls: number;
+};
+
 export type ProfitLossReport = {
   filters: ProfitLossReportFilters;
   kpis: ProfitLossKpis;
@@ -133,7 +178,7 @@ export type ProfitLossReport = {
   };
   byOrder: ProfitLossNamedPoint[];
   byWeek: ProfitLossNamedPoint[];
-  byCountry: ProfitLossNamedPoint[];
+  byCountry: ProfitLossCountryPoint[];
   profitSources: ProfitLossNamedPoint[];
   trend: ProfitLossNamedPoint[];
 };
@@ -310,7 +355,7 @@ export async function buildProfitLossReport(
   let totalSaleProfitIls = 0;
 
   for (const o of ordersRaw) {
-    const orderCountry = countryBucket(o.sourceCountry, o.countryCode);
+    const orderCountry = orderCountryLabel(o.sourceCountry, o.countryCode);
     if (filters.countryBucket && orderCountry !== filters.countryBucket) {
       continue;
     }
@@ -378,6 +423,9 @@ export async function buildProfitLossReport(
       costUsd,
       commissionUsd,
       fxPurchaseUsd: 0,
+      revenueIls,
+      costIls,
+      commissionIls,
       buyRate,
       collectRate,
       rateDiff:
@@ -433,25 +481,52 @@ export async function buildProfitLossReport(
     .map(([key, value]) => ({ key, label: key, value }))
     .sort((a, b) => a.key.localeCompare(b.key));
 
-  const countryMap = new Map<string, { value: number; count: number }>();
+  type CountryAgg = {
+    revenueIls: number;
+    costIls: number;
+    commissionIls: number;
+    fxProfitIls: number;
+    netProfitIls: number;
+    count: number;
+  };
+  const emptyCountryAgg = (): CountryAgg => ({
+    revenueIls: 0,
+    costIls: 0,
+    commissionIls: 0,
+    fxProfitIls: 0,
+    netProfitIls: 0,
+    count: 0,
+  });
+  const countryMap = new Map<string, CountryAgg>();
+  for (const c of PROFIT_LOSS_CHART_COUNTRIES) {
+    countryMap.set(c.label, emptyCountryAgg());
+  }
   for (const o of orders) {
-    const cur = countryMap.get(o.country) ?? { value: 0, count: 0 };
-    cur.value += o.orderProfitIls;
+    if (!isChartCountry(o.country)) continue;
+    const cur = countryMap.get(o.country) ?? emptyCountryAgg();
+    cur.revenueIls += o.revenueIls;
+    cur.costIls += o.costIls;
+    cur.commissionIls += o.commissionIls;
+    cur.fxProfitIls += o.fxProfitIls;
+    cur.netProfitIls += o.orderProfitIls;
     cur.count += 1;
     countryMap.set(o.country, cur);
   }
-  // ודא שטורקיה / ישראל / PS מופיעים
-  for (const c of ["טורקיה", "ישראל", "PS"]) {
-    if (!countryMap.has(c)) countryMap.set(c, { value: 0, count: 0 });
-  }
-  const byCountry = [...countryMap.entries()]
-    .map(([key, v]) => ({
-      key,
-      label: key,
-      value: round2(v.value),
+  const byCountry: ProfitLossCountryPoint[] = PROFIT_LOSS_CHART_COUNTRIES.map((c) => {
+    const v = countryMap.get(c.label) ?? emptyCountryAgg();
+    const net = round2(v.netProfitIls);
+    return {
+      key: c.key,
+      label: `${c.flag} ${c.label}`,
+      value: net,
       count: v.count,
-    }))
-    .sort((a, b) => b.value - a.value);
+      revenueIls: round2(v.revenueIls),
+      costIls: round2(v.costIls),
+      commissionIls: round2(v.commissionIls),
+      fxProfitIls: round2(v.fxProfitIls),
+      netProfitIls: net,
+    };
+  });
 
   const profitSources: ProfitLossNamedPoint[] = [
     { key: "commission", label: "רווח מהעמלות", value: totalCommissionProfitIls },

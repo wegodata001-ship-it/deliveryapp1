@@ -4,9 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Calculator,
   ChevronDown,
-  FileSpreadsheet,
-  FileText,
-  Filter,
   RefreshCw,
   TrendingUp,
 } from "lucide-react";
@@ -39,6 +36,11 @@ import {
 } from "@/components/admin/cashflow-control/cashflow-control-helpers";
 import "@/components/admin/cashflow-control/cashflow-control.css";
 import { ManagerCountWizard } from "@/components/admin/manager-count/ManagerCountWizard";
+import {
+  TableFiltersBar,
+  useTableFilters,
+  type TableFilterFieldConfig,
+} from "@/components/admin/filters";
 
 /** טעינה ראשונית — 3 שבועות אחרונים בלבד */
 const INITIAL_WEEKS = 3;
@@ -84,16 +86,31 @@ export function CashflowControlScreen({
 }) {
   const initial = initialWeek?.trim() || ACTIVE_WORK_WEEK_CODE;
   const [selectedWeek, setSelectedWeek] = useState(initial);
-  const [fromWeek, setFromWeek] = useState(initial);
-  const [toWeek, setToWeek] = useState(initial);
   const [overview, setOverview] = useState<FlowWeekOverviewRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMoreWeeks, setHasMoreWeeks] = useState(true);
   const [refreshTick, setRefreshTick] = useState(0);
   const [exporting, setExporting] = useState<"pdf" | "excel" | null>(null);
-  const [yearFilter, setYearFilter] = useState<number | "all">("all");
-  const [showEmpty, setShowEmpty] = useState(true);
+  const {
+    values: cfcFilterValues,
+    setField: setCfcField,
+    clear: clearCfcFilters,
+  } = useTableFilters({
+    storageKey: "cashflow-control",
+    defaults: {
+      year: "",
+      weekFrom: initial,
+      weekTo: initial,
+      showEmpty: "1",
+    },
+  });
+  const fromWeek = cfcFilterValues.weekFrom || initial;
+  const toWeek = cfcFilterValues.weekTo || initial;
+  const yearFilter: number | "all" = cfcFilterValues.year
+    ? Number(cfcFilterValues.year)
+    : "all";
+  const showEmpty = (cfcFilterValues.showEmpty || "1") !== "0";
   const [reportsOpen, setReportsOpen] = useState(false);
   const [varianceOpen, setVarianceOpen] = useState(false);
 
@@ -276,23 +293,54 @@ export function CashflowControlScreen({
   }, []);
 
   const onFromChange = (w: string) => {
-    setFromWeek(w);
+    setCfcField("weekFrom", w);
     const fromN = parseAhWeekNumber(w) ?? 1;
     const toN = parseAhWeekNumber(toWeek) ?? fromN;
-    if (fromN > toN) setToWeek(w);
-    // שמירת פוקוס בתוך הטווח
+    if (fromN > toN) setCfcField("weekTo", w);
     const sel = parseAhWeekNumber(selectedWeek) ?? fromN;
     if (sel < fromN || sel > Math.max(fromN, toN)) setSelectedWeek(w);
   };
 
   const onToChange = (w: string) => {
-    setToWeek(w);
+    setCfcField("weekTo", w);
     const toN = parseAhWeekNumber(w) ?? 1;
     const fromN = parseAhWeekNumber(fromWeek) ?? toN;
-    if (toN < fromN) setFromWeek(w);
+    if (toN < fromN) setCfcField("weekFrom", w);
     const sel = parseAhWeekNumber(selectedWeek) ?? toN;
     if (sel < Math.min(fromN, toN) || sel > toN) setSelectedWeek(w);
   };
+
+  const cfcFilterFields = useMemo<TableFilterFieldConfig[]>(
+    () => [
+      {
+        id: "year",
+        kind: "select",
+        label: "שנה",
+        options: years.map((y) => ({ value: String(y), label: String(y) })),
+      },
+      {
+        id: "weekFrom",
+        kind: "weekFrom",
+        options: weekSelectOptions.map((w) => ({ value: w, label: w })),
+      },
+      {
+        id: "weekTo",
+        kind: "weekTo",
+        options: weekSelectOptions.map((w) => ({ value: w, label: w })),
+      },
+      {
+        id: "showEmpty",
+        kind: "select",
+        label: "שבועות ריקים",
+        hideEmptyOption: true,
+        options: [
+          { value: "1", label: "הצג הכל" },
+          { value: "0", label: "הסתר ריקים" },
+        ],
+      },
+    ],
+    [years, weekSelectOptions],
+  );
 
   async function exportFile(format: "pdf" | "excel") {
     const wk = selectedWeek;
@@ -352,76 +400,6 @@ export function CashflowControlScreen({
         </div>
 
         <div className="cfc-header__actions">
-          <label className="cfc-select">
-            <span>שנה</span>
-            <select
-              value={yearFilter === "all" ? "all" : String(yearFilter)}
-              onChange={(e) => {
-                const v = e.target.value;
-                setYearFilter(v === "all" ? "all" : Number(v));
-              }}
-            >
-              <option value="all">הכל</option>
-              {years.map((y) => (
-                <option key={y} value={y}>
-                  {y}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="cfc-select">
-            <span>משבוע</span>
-            <select value={fromWeek} onChange={(e) => onFromChange(e.target.value)}>
-              {weekSelectOptions.map((w) => (
-                <option key={`from-${w}`} value={w}>
-                  {w}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="cfc-select">
-            <span>עד שבוע</span>
-            <select value={toWeek} onChange={(e) => onToChange(e.target.value)}>
-              {weekSelectOptions.map((w) => (
-                <option key={`to-${w}`} value={w}>
-                  {w}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <button
-            type="button"
-            className={`cfc-btn cfc-btn--ghost${showEmpty ? "" : " is-active"}`}
-            onClick={() => setShowEmpty((v) => !v)}
-            title="סינון שבועות ללא נתונים"
-          >
-            <Filter size={15} />
-            סינון
-          </button>
-
-          {caps.canExport ? (
-            <>
-              <button
-                type="button"
-                className="cfc-btn cfc-btn--ghost"
-                disabled={!!exporting}
-                onClick={() => void exportFile("pdf")}
-              >
-                <FileText size={15} /> PDF
-              </button>
-              <button
-                type="button"
-                className="cfc-btn cfc-btn--ghost"
-                disabled={!!exporting}
-                onClick={() => void exportFile("excel")}
-              >
-                <FileSpreadsheet size={15} /> Excel
-              </button>
-            </>
-          ) : null}
 
           <button
             type="button"
@@ -438,6 +416,26 @@ export function CashflowControlScreen({
           </button>
         </div>
       </header>
+
+      <TableFiltersBar
+        fields={cfcFilterFields}
+        values={cfcFilterValues}
+        onChange={(id, value) => {
+          if (id === "weekFrom") onFromChange(value);
+          else if (id === "weekTo") onToChange(value);
+          else setCfcField(id, value);
+        }}
+        onClear={() => {
+          clearCfcFilters();
+          setSelectedWeek(initial);
+        }}
+        onRefresh={refresh}
+        refreshing={loading}
+        onExcel={caps.canExport ? () => void exportFile("excel") : undefined}
+        onPdf={caps.canExport ? () => void exportFile("pdf") : undefined}
+        exporting={!!exporting}
+        resultCount={filteredRows.length}
+      />
 
       <CashflowWeeksTable
         rows={filteredRows}

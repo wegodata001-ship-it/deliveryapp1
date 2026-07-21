@@ -26,9 +26,16 @@ function parseCountryBucket(
 ): ProfitLossReportFilters["countryBucket"] {
   if (!raw) return undefined;
   const t = raw.trim();
-  if (t === "טורקיה" || t === "TR" || t === "TURKEY") return "טורקיה";
-  if (t === "ישראל" || t === "IL" || t === "ISRAEL") return "ישראל";
-  if (t === "PS") return "PS";
+  if (t === "טורקיה" || t === "TR" || t === "TURKEY" || t.includes("טורקיה")) return "טורקיה";
+  if (t === "סין" || t === "CN" || t === "CHINA" || t.includes("סין")) return "סין";
+  if (
+    t === "איחוד האמירויות" ||
+    t === "AE" ||
+    t === "UAE" ||
+    t.includes("אמירויות")
+  ) {
+    return "איחוד האמירויות";
+  }
   return undefined;
 }
 

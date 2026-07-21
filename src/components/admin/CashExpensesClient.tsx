@@ -8,7 +8,6 @@ import {
   Pencil,
   Plus,
   RefreshCw,
-  Search,
   Trash2,
   Wallet,
 } from "lucide-react";
@@ -33,6 +32,11 @@ import type { CashExpensePaymentMethod } from "@/lib/cash-expense-payment-method
 import { fmtDailyMoney } from "@/lib/cash-control-daily";
 import { CashExpenseFormModal, type CashExpenseEditable, timeFromIso } from "@/components/admin/CashExpenseFormModal";
 import { PaymentMethodIcon } from "@/components/admin/cash-control/CashExpensePaymentMethodSelect";
+import {
+  TableFiltersBar,
+  useTableFilters,
+  type TableFilterFieldConfig,
+} from "@/components/admin/filters";
 
 function buildWeekOptions(): string[] {
   const active = parseAhWeekNumber(ACTIVE_WORK_WEEK_CODE) ?? 127;
@@ -54,12 +58,33 @@ export function CashExpensesClient({
   initialWeek: string;
 }) {
   const weekOptions = useMemo(buildWeekOptions, []);
-  const [week, setWeek] = useState<string>(initialWeek || weekOptions[0]);
-  const [dateYmd, setDateYmd] = useState("");
-  const [reason, setReason] = useState<CashExpenseReason | "ALL">("ALL");
-  const [paymentMethod, setPaymentMethod] = useState<CashExpensePaymentMethod | "ALL">("ALL");
-  const [currency, setCurrency] = useState<CashCurrency | "ALL">("ALL");
-  const [search, setSearch] = useState("");
+  const filterDefaults = useMemo(
+    () => ({
+      week: initialWeek || weekOptions[0] || "",
+      dateYmd: "",
+      reason: "",
+      paymentMethod: "",
+      currency: "",
+      q: "",
+    }),
+    [initialWeek, weekOptions],
+  );
+  const {
+    values: filterValues,
+    setField,
+    clear: clearFilters,
+  } = useTableFilters({
+    storageKey: "cash-expenses",
+    defaults: filterDefaults,
+  });
+
+  const week = filterValues.week ?? filterDefaults.week;
+  const dateYmd = filterValues.dateYmd || "";
+  const reason = (filterValues.reason || "ALL") as CashExpenseReason | "ALL";
+  const paymentMethod = (filterValues.paymentMethod || "ALL") as CashExpensePaymentMethod | "ALL";
+  const currency = (filterValues.currency || "ALL") as CashCurrency | "ALL";
+  const search = filterValues.q || "";
+
   const [rows, setRows] = useState<CashExpenseRowDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [tick, setTick] = useState(0);
@@ -69,9 +94,47 @@ export function CashExpensesClient({
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<CashExpenseEditable | null>(null);
 
+  const filterFields = useMemo<TableFilterFieldConfig[]>(
+    () => [
+      {
+        id: "q",
+        kind: "search",
+        placeholder: "תיאור / עובד / הערות…",
+      },
+      {
+        id: "week",
+        kind: "week",
+        placeholder: "כל השבועות",
+        options: weekOptions.map((w) => ({ value: w, label: w })),
+      },
+      { id: "dateYmd", kind: "date", label: "תאריך" },
+      {
+        id: "reason",
+        kind: "select",
+        label: "סוג הוצאה",
+        options: CASH_EXPENSE_REASONS.map((r) => ({ value: r.value, label: r.label })),
+      },
+      {
+        id: "paymentMethod",
+        kind: "paymentMethod",
+        options: CASH_EXPENSE_PAYMENT_METHODS.map((m) => ({ value: m.value, label: m.label })),
+      },
+      {
+        id: "currency",
+        kind: "select",
+        label: "מטבע",
+        options: [
+          { value: "ILS", label: "₪ שקל" },
+          { value: "USD", label: "$ דולר" },
+        ],
+      },
+    ],
+    [weekOptions],
+  );
+
   const filter = useMemo<CashExpenseListFilter>(
     () => ({
-      week: week === "ALL" ? undefined : week,
+      week: week.trim() ? week : undefined,
       dateYmd: dateYmd.trim() || undefined,
       reason,
       paymentMethod,
@@ -140,7 +203,7 @@ export function CashExpensesClient({
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `Cash_Expenses_${week === "ALL" ? "all" : week}.xlsx`;
+      a.download = `Cash_Expenses_${week.trim() ? week : "all"}.xlsx`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -153,7 +216,7 @@ export function CashExpensesClient({
   function exportPdf() {
     const w = window.open("", "_blank", "noopener,width=900,height=700");
     if (!w) return;
-    const head = `<meta charset="utf-8"><title>הוצאות קופה${week === "ALL" ? "" : ` — ${week}`}</title>`;
+    const head = `<meta charset="utf-8"><title>הוצאות קופה${week.trim() ? ` — ${week}` : ""}</title>`;
     const style = `<style>
       body{font-family:Arial,Helvetica,sans-serif;direction:rtl;padding:24px;color:#0f172a}
       h1{font-size:20px;margin:0 0 4px}
@@ -179,7 +242,7 @@ export function CashExpensesClient({
       .join("");
     w.document.write(`<!doctype html><html dir="rtl"><head>${head}${style}</head><body>
       <h1>הוצאות קופה</h1>
-      <p class="sub">${week === "ALL" ? "כל השבועות" : `שבוע ${week}`} · ${totals.count} רשומות · סה"כ ₪${totals.ils.toLocaleString("he-IL")} · $${totals.usd.toLocaleString("en-US")}</p>
+      <p class="sub">${week.trim() ? `שבוע ${week}` : "כל השבועות"} · ${totals.count} רשומות · סה"כ ₪${totals.ils.toLocaleString("he-IL")} · $${totals.usd.toLocaleString("en-US")}</p>
       <table>
         <thead><tr><th>תאריך</th><th>סוג הוצאה</th><th>אמצעי תשלום</th><th>תיאור</th><th>סכום</th><th>מטבע</th><th>עובד שהזין</th></tr></thead>
         <tbody>${bodyRows}</tbody>
@@ -227,71 +290,18 @@ export function CashExpensesClient({
         </div>
       </header>
 
-      {/* Filters */}
-      <section className="cxp-filters">
-        <label className="cxp-filter">
-          <span>שבוע</span>
-          <select className="cc-input" value={week} onChange={(e) => setWeek(e.target.value)}>
-            <option value="ALL">כל השבועות</option>
-            {weekOptions.map((w) => (
-              <option key={w} value={w}>
-                {w}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="cxp-filter">
-          <span>תאריך</span>
-          <input type="date" className="cc-input" value={dateYmd} onChange={(e) => setDateYmd(e.target.value)} />
-        </label>
-        <label className="cxp-filter">
-          <span>סוג הוצאה</span>
-          <select className="cc-input" value={reason} onChange={(e) => setReason(e.target.value as CashExpenseReason | "ALL")}>
-            <option value="ALL">הכל</option>
-            {CASH_EXPENSE_REASONS.map((r) => (
-              <option key={r.value} value={r.value}>
-                {r.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="cxp-filter">
-          <span>אמצעי תשלום</span>
-          <select
-            className="cc-input"
-            value={paymentMethod}
-            onChange={(e) => setPaymentMethod(e.target.value as CashExpensePaymentMethod | "ALL")}
-          >
-            <option value="ALL">הכל</option>
-            {CASH_EXPENSE_PAYMENT_METHODS.map((m) => (
-              <option key={m.value} value={m.value}>
-                {m.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="cxp-filter">
-          <span>מטבע</span>
-          <select className="cc-input" value={currency} onChange={(e) => setCurrency(e.target.value as CashCurrency | "ALL")}>
-            <option value="ALL">הכל</option>
-            <option value="ILS">₪ שקל</option>
-            <option value="USD">$ דולר</option>
-          </select>
-        </label>
-        <label className="cxp-filter cxp-filter--grow">
-          <span>חיפוש</span>
-          <div className="cxp-search">
-            <Search size={15} aria-hidden />
-            <input
-              type="text"
-              className="cc-input"
-              value={search}
-              placeholder="תיאור / עובד"
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
-        </label>
-      </section>
+      <TableFiltersBar
+        fields={filterFields}
+        values={filterValues}
+        onChange={setField}
+        onClear={clearFilters}
+        onRefresh={refresh}
+        refreshing={loading}
+        onExcel={() => void exportExcel()}
+        onPdf={exportPdf}
+        exporting={exporting}
+        resultCount={rows.length}
+      />
 
       {/* KPIs */}
       <section className="cc-kpis">
@@ -444,7 +454,7 @@ export function CashExpensesClient({
         onClose={() => setModalOpen(false)}
         onSaved={refresh}
         expense={editing}
-        week={week === "ALL" ? undefined : week}
+        week={week.trim() ? week : undefined}
       />
     </div>
   );
