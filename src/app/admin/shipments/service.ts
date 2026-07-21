@@ -623,6 +623,12 @@ export async function updateShipmentRecord(input: UpdateShipmentRecordInput): Pr
       ...(input.patch.weight !== undefined ? { weight: input.patch.weight } : {}),
       ...(input.patch.notes !== undefined ? { notes: input.patch.notes } : {}),
       ...(input.patch.status !== undefined ? { status: input.patch.status } : {}),
+      ...(input.patch.customerName !== undefined ? { customerName: input.patch.customerName } : {}),
+      ...(input.patch.customerPhone !== undefined ? { customerPhone: input.patch.customerPhone } : {}),
+      ...(input.patch.address !== undefined ? { address: input.patch.address } : {}),
+      ...(input.patch.city !== undefined ? { city: input.patch.city } : {}),
+      ...(input.patch.customerCode !== undefined ? { customerCode: input.patch.customerCode } : {}),
+      ...(input.patch.orderAmount !== undefined ? { orderAmount: input.patch.orderAmount } : {}),
       ...(nextPaymentStatus !== undefined ? { paymentStatus: nextPaymentStatus } : {}),
     },
   });

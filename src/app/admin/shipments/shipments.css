@@ -1315,6 +1315,24 @@
   background: #fff;
 }
 
+.shp-inline-display--empty {
+  color: #94a3b8;
+  font-weight: 500;
+  font-style: italic;
+  border-color: #e2e8f0;
+  background: #f8fafc;
+}
+
+.shp-inline-display--empty:hover {
+  color: #2563eb;
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.shp-col-fee .shp-inline-display {
+  min-width: 96px;
+}
+
 .shp-inline-input,
 .shp-inline-select,
 .shp-inline-combo input {

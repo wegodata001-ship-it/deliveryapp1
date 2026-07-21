@@ -10,10 +10,7 @@ import type {
   ShipmentZoneDto,
   ShipmentStatus,
 } from "@/app/admin/shipments/types";
-import {
-  SHIPMENT_PAYMENT_STATUS_LABELS,
-  SHIPMENT_STATUS_LABELS,
-} from "@/app/admin/shipments/types";
+import { SHIPMENT_STATUS_LABELS } from "@/app/admin/shipments/types";
 import {
   assignCourierAction,
   assignZoneAction,
@@ -284,7 +281,6 @@ export function ShipmentCombinedClient({
               <th className="shp-col-fee">דמי משלוח</th>
               <th className="shp-col-pay-date">תאריך רישום</th>
               <th className="shp-col-status">סטטוס</th>
-              <th className="shp-col-pay-status">סטטוס תשלום</th>
             </tr>
           </thead>
           <tbody>
@@ -321,11 +317,6 @@ export function ShipmentCombinedClient({
                   <td className="shp-col-status">
                     <span className={`shp-badge shp-badge--${r.status.toLowerCase()}`}>
                       {SHIPMENT_STATUS_LABELS[r.status]}
-                    </span>
-                  </td>
-                  <td className="shp-col-pay-status">
-                    <span className={`shp-badge shp-badge--${r.paymentStatus.toLowerCase()}`}>
-                      {SHIPMENT_PAYMENT_STATUS_LABELS[r.paymentStatus]}
                     </span>
                   </td>
                 </tr>

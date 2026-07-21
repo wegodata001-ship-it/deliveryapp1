@@ -255,6 +255,12 @@ export type UpdateShipmentRecordInput = {
     weight?: number | null;
     notes?: string | null;
     status?: ShipmentStatus;
+    customerName?: string | null;
+    customerPhone?: string | null;
+    address?: string | null;
+    city?: string | null;
+    customerCode?: string | null;
+    orderAmount?: number | null;
   };
 };
 

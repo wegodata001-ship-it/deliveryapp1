@@ -15,6 +15,13 @@ type Props = {
   onSave: (value: string | number | null) => Promise<boolean>;
 };
 
+function parseNumberDraft(raw: string): number | null {
+  const cleaned = raw.trim().replace(/,/g, "").replace(/\s/g, "");
+  if (!cleaned) return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : NaN;
+}
+
 export function InlineValueCell({
   value,
   type = "text",
@@ -37,24 +44,35 @@ export function InlineValueCell({
   }, [editing, value]);
 
   useEffect(() => {
-    if (editing) inputRef.current?.select();
+    if (editing) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
   }, [editing]);
 
   async function commit() {
     if (committedRef.current) return;
     committedRef.current = true;
 
-    const next =
-      draft.trim() === ""
-        ? null
-        : type === "number"
-          ? Number(draft)
-          : draft.trim();
-    if (typeof next === "number" && !Number.isFinite(next)) {
-      setState("error");
-      committedRef.current = false;
-      return;
+    let next: string | number | null;
+    if (draft.trim() === "") {
+      next = null;
+    } else if (type === "number") {
+      next = parseNumberDraft(draft);
+      if (typeof next === "number" && !Number.isFinite(next)) {
+        setState("error");
+        committedRef.current = false;
+        return;
+      }
+      if (typeof next === "number" && min != null && next < min) {
+        setState("error");
+        committedRef.current = false;
+        return;
+      }
+    } else {
+      next = draft.trim();
     }
+
     if (String(next ?? "") === String(value ?? "")) {
       setEditing(false);
       committedRef.current = false;
@@ -70,19 +88,23 @@ export function InlineValueCell({
   }
 
   if (!editing) {
+    const display = format
+      ? format(value)
+      : value == null || value === ""
+        ? placeholder
+        : `${value}${suffix ?? ""}`;
+    const empty = value == null || value === "";
     return (
       <button
         type="button"
-        className={`shp-inline-display ${className ?? ""}`}
+        className={`shp-inline-display${empty ? " shp-inline-display--empty" : ""} ${className ?? ""}`}
         onClick={() => {
           committedRef.current = false;
           setEditing(true);
         }}
-        title="לחץ לעריכה"
+        title="לחץ להזנה / עריכה"
       >
-        <span>
-          {format ? format(value) : value == null || value === "" ? placeholder : `${value}${suffix ?? ""}`}
-        </span>
+        <span>{display}</span>
         {state === "saving" && <span className="shp-inline-state">…</span>}
         {state === "saved" && <Check size={12} className="shp-inline-state shp-inline-state--saved" />}
         {state === "error" && <span className="shp-inline-state shp-inline-state--error">!</span>}
@@ -94,11 +116,13 @@ export function InlineValueCell({
     <input
       ref={inputRef}
       className="shp-inline-input"
-      type={type}
+      type="text"
+      inputMode={type === "number" ? "decimal" : "text"}
       value={draft}
-      min={min}
-      step={step}
       disabled={state === "saving"}
+      placeholder={placeholder}
+      dir={type === "number" ? "ltr" : undefined}
+      data-step={step}
       onChange={(event) => setDraft(event.target.value)}
       onBlur={() => void commit()}
       onKeyDown={(event) => {

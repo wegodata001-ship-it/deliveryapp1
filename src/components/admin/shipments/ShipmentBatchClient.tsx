@@ -30,9 +30,6 @@ import type {
   UpdateShipmentBatchInput,
 } from "@/app/admin/shipments/types";
 import {
-  SHIPMENT_PAYMENT_STATUS_LABELS,
-} from "@/app/admin/shipments/types";
-import {
   assignZoneAction,
   assignCourierAction,
   updateShipmentStatusAction,
@@ -73,24 +70,9 @@ const STATUS_OPTIONS: { value: ShipmentStatus; label: string }[] = [
   { value: "COMPLETED", label: "הושלם" },
 ];
 
-function PayStatusBadge({ status }: { status: "UNPAID" | "PARTIAL" | "PAID" }) {
-  const cls = `shp-badge shp-badge--${status.toLowerCase()}`;
-  return <span className={cls}>{SHIPMENT_PAYMENT_STATUS_LABELS[status]}</span>;
-}
-
 function fmtIls(n: number | null) {
   if (n == null) return "—";
   return n.toLocaleString("he-IL", { style: "currency", currency: "ILS", minimumFractionDigits: 2 });
-}
-
-function fmtDeliveryFee(record: ShipmentRecordDto) {
-  if (record.deliveryFeeAmount == null) return fmtIls(record.deliveryFeeIls);
-  const symbol: Record<string, string> = { ILS: "₪", USD: "$", EUR: "€", TRY: "₺", GBP: "£" };
-  const currency = record.deliveryFeeCurrency ?? "UNKNOWN";
-  const suffix = currency === "UNKNOWN" ? " (מטבע לא זוהה)" : "";
-  return `${symbol[currency] ?? ""}${record.deliveryFeeAmount.toLocaleString("he-IL", {
-    maximumFractionDigits: 4,
-  })}${suffix}`;
 }
 
 function fmtOrderAmount(record: ShipmentRecordDto) {
@@ -101,13 +83,6 @@ function fmtOrderAmount(record: ShipmentRecordDto) {
   return `${symbol[currency] ?? ""}${record.orderAmount.toLocaleString("he-IL", {
     maximumFractionDigits: 4,
   })}${suffix}`;
-}
-
-function paymentMethodsLabel(record: ShipmentRecordDto): string {
-  const methods = [
-    ...new Set(record.payments.map((p) => p.methodLabel).filter(Boolean)),
-  ];
-  return methods.length > 0 ? methods.join(", ") : "—";
 }
 
 function formatDate(iso: string | null) {
@@ -798,10 +773,8 @@ export function ShipmentBatchClient({
               <th>קרטונים</th>
               <th>משקל</th>
               <th className="shp-col-money">סכום הזמנה</th>
-              <th className="shp-col-money">דמי משלוח</th>
-              <th className="shp-col-payment">גביית תשלום</th>
-              <th className="shp-col-pay-method">אמצעי תשלום</th>
-              <th>סטטוס תשלום</th>
+              <th className="shp-col-money">דמי משלוח ₪</th>
+              <th className="shp-col-payment">גבייה</th>
               <th className="shp-col-money">סכום ששולם</th>
               <th className="shp-col-money">יתרה</th>
               <th className="shp-col-pay-date">תאריך גבייה</th>
@@ -814,17 +787,14 @@ export function ShipmentBatchClient({
           <tbody>
             {filteredRecords.length === 0 && (
               <tr>
-                <td colSpan={20} style={{ textAlign: "center", padding: "40px", color: "#94a3b8" }}>
+                <td colSpan={18} style={{ textAlign: "center", padding: "40px", color: "#94a3b8" }}>
                   אין שורות להצגה
                 </td>
               </tr>
             )}
             {filteredRecords.map((r) => {
               const feeAmount = r.deliveryFeeAmount ?? r.deliveryFeeIls ?? 0;
-              const feeIsIls =
-                r.deliveryFeeCurrency === "ILS" ||
-                (r.deliveryFeeCurrency == null && r.deliveryFeeIls != null);
-              const canCollect = feeAmount > 0 && feeIsIls;
+              const canCollect = feeAmount > 0;
               return (
                 <tr key={r.id} className={selected.has(r.id) ? "shp-row--selected" : ""}>
                   <td className="shp-col-check">
@@ -836,17 +806,68 @@ export function ShipmentBatchClient({
                   </td>
                   <td style={{ color: "#64748b", fontSize: "0.75rem" }}>{r.rowIndex}</td>
                   <td className="shp-col-customer" style={{ fontWeight: 600 }}>
-                    {r.customerName || "—"}
+                    <InlineValueCell
+                      value={r.customerName}
+                      type="text"
+                      placeholder="שם לקוח"
+                      onSave={(value) =>
+                        saveRecordPatch(
+                          r.id,
+                          { customerName: (value as string | null) || null },
+                          { customerName: (value as string | null) || null },
+                        )
+                      }
+                    />
                   </td>
-                  <td style={{ direction: "ltr", textAlign: "right" }}>{r.customerPhone || "—"}</td>
-                  <td className="shp-col-address">{r.address || "—"}</td>
-                  <td>{r.city || "—"}</td>
+                  <td style={{ direction: "ltr", textAlign: "right" }}>
+                    <InlineValueCell
+                      value={r.customerPhone}
+                      type="text"
+                      placeholder="טלפון"
+                      onSave={(value) =>
+                        saveRecordPatch(
+                          r.id,
+                          { customerPhone: (value as string | null) || null },
+                          { customerPhone: (value as string | null) || null },
+                        )
+                      }
+                    />
+                  </td>
+                  <td className="shp-col-address">
+                    <InlineValueCell
+                      value={r.address}
+                      type="text"
+                      placeholder="כתובת"
+                      onSave={(value) =>
+                        saveRecordPatch(
+                          r.id,
+                          { address: (value as string | null) || null },
+                          { address: (value as string | null) || null },
+                        )
+                      }
+                    />
+                  </td>
+                  <td>
+                    <InlineValueCell
+                      value={r.city}
+                      type="text"
+                      placeholder="עיר"
+                      onSave={(value) =>
+                        saveRecordPatch(
+                          r.id,
+                          { city: (value as string | null) || null },
+                          { city: (value as string | null) || null },
+                        )
+                      }
+                    />
+                  </td>
                   <td style={{ textAlign: "center" }}>
                     <InlineValueCell
                       value={r.boxes}
                       type="number"
                       min={0}
                       step={1}
+                      placeholder="0"
                       onSave={(value) =>
                         saveRecordPatch(
                           r.id,
@@ -863,6 +884,7 @@ export function ShipmentBatchClient({
                       min={0}
                       step={0.001}
                       suffix=" ק״ג"
+                      placeholder="0"
                       onSave={(value) =>
                         saveRecordPatch(
                           r.id,
@@ -872,24 +894,35 @@ export function ShipmentBatchClient({
                       }
                     />
                   </td>
-                  <td
-                    className="shp-readonly-money shp-col-money"
-                    title="סכום ההזמנה מהייבוא — לא לעריכה כאן"
-                  >
-                    {fmtOrderAmount(r)}
+                  <td className="shp-col-money">
+                    <InlineValueCell
+                      value={r.orderAmount}
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      placeholder="סכום"
+                      format={() => fmtOrderAmount(r)}
+                      onSave={(value) =>
+                        saveRecordPatch(
+                          r.id,
+                          { orderAmount: value as number | null },
+                          { orderAmount: value as number | null },
+                        )
+                      }
+                    />
                   </td>
-                  <td className="shp-col-money" style={{ fontWeight: 600, color: "#1d4ed8" }}>
+                  <td className="shp-col-money shp-col-fee" style={{ fontWeight: 600, color: "#1d4ed8" }}>
                     <InlineValueCell
                       value={r.deliveryFeeAmount ?? r.deliveryFeeIls}
                       type="number"
                       min={0}
                       step={0.01}
-                      format={() => fmtDeliveryFee(r)}
+                      placeholder="הזן דמי משלוח"
+                      format={(v) => (v == null ? "הזן דמי משלוח" : fmtIls(typeof v === "number" ? v : Number(v)))}
                       onSave={(value) => {
                         const amount = value as number | null;
-                        const currency = r.deliveryFeeCurrency ?? "ILS";
                         const paymentStatus =
-                          currency !== "ILS" || amount == null || amount <= 0
+                          amount == null || amount <= 0
                             ? "UNPAID"
                             : r.paidAmountIls >= amount
                               ? "PAID"
@@ -898,15 +931,12 @@ export function ShipmentBatchClient({
                                 : "UNPAID";
                         return saveRecordPatch(
                           r.id,
-                          { deliveryFeeAmount: amount, deliveryFeeCurrency: currency },
+                          { deliveryFeeAmount: amount, deliveryFeeCurrency: "ILS" },
                           {
                             deliveryFeeAmount: amount,
-                            deliveryFeeCurrency: currency,
-                            deliveryFeeIls: currency === "ILS" ? amount : null,
-                            remainingFeeIls:
-                              currency === "ILS"
-                                ? Math.max(0, (amount ?? 0) - r.paidAmountIls)
-                                : 0,
+                            deliveryFeeCurrency: "ILS",
+                            deliveryFeeIls: amount,
+                            remainingFeeIls: Math.max(0, (amount ?? 0) - r.paidAmountIls),
                             paymentStatus,
                           },
                         );
@@ -921,27 +951,19 @@ export function ShipmentBatchClient({
                       disabled={!canCollect}
                       title={
                         feeAmount <= 0
-                          ? "יש להזין דמי משלוח בעמודת «דמי משלוח» לפני הגבייה"
-                          : !feeIsIls
-                            ? "קליטת תשלום זמינה לדמי משלוח בש״ח בלבד"
-                            : undefined
+                          ? "יש להזין דמי משלוח בעמודה לפני הגבייה"
+                          : undefined
                       }
                     >
                       <Banknote size={13} />
                       {feeAmount <= 0
-                        ? "הזן דמי משלוח"
-                        : !feeIsIls
-                          ? "מטבע זר"
-                          : r.paymentStatus === "PAID"
-                            ? "✓ שולם"
-                            : r.paymentStatus === "PARTIAL"
-                              ? "שולם חלקית"
-                              : "לא שולם"}
+                        ? "גבייה"
+                        : r.paymentStatus === "PAID"
+                          ? "✓ שולם"
+                          : r.paymentStatus === "PARTIAL"
+                            ? "חלקי"
+                            : "גבה"}
                     </button>
-                  </td>
-                  <td className="shp-col-pay-method">{paymentMethodsLabel(r)}</td>
-                  <td>
-                    <PayStatusBadge status={r.paymentStatus} />
                   </td>
                   <td className="shp-col-money" style={{ color: "#15803d", fontWeight: 600 }}>
                     {fmtIls(r.paidAmountIls)}
