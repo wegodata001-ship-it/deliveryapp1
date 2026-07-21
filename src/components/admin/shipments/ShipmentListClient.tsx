@@ -51,30 +51,30 @@ type Props = {
   initialCouriers: ShipmentCourierDto[];
 };
 
-type ListStatusFilter = "" | "empty" | "open" | "partial" | "paid";
-
 type ListFilters = {
-  freeSearch: string;
-  listStatus: ListStatusFilter;
-  paymentStatus: string;
+  shippingDateFrom: string;
+  shippingDateTo: string;
+  arrivalDateFrom: string;
+  arrivalDateTo: string;
+  week: string;
+  shipmentNumber: string;
   zoneId: string;
   courierId: string;
-  arrivalDate: string;
-  registrationDate: string;
-  dateFrom: string;
-  dateTo: string;
+  paymentStatus: string;
+  freeSearch: string;
 };
 
 const EMPTY_FILTERS: ListFilters = {
-  freeSearch: "",
-  listStatus: "",
-  paymentStatus: "",
+  shippingDateFrom: "",
+  shippingDateTo: "",
+  arrivalDateFrom: "",
+  arrivalDateTo: "",
+  week: "",
+  shipmentNumber: "",
   zoneId: "",
   courierId: "",
-  arrivalDate: "",
-  registrationDate: "",
-  dateFrom: "",
-  dateTo: "",
+  paymentStatus: "",
+  freeSearch: "",
 };
 
 function fmtUsd(n: number) {
@@ -112,29 +112,29 @@ function listStatusClass(batch: ShipmentBatchDto): string {
   return "shp-badge--partial";
 }
 
-function listStatusKey(batch: ShipmentBatchDto): Exclude<ListStatusFilter, ""> {
-  if (batch.recordCount === 0) return "empty";
-  if (batch.paidCount >= batch.recordCount) return "paid";
-  if (batch.paidCount === 0) return "open";
-  return "partial";
-}
-
 function matchesFilters(batch: ShipmentBatchDto, f: ListFilters): boolean {
-  const arrive = ymd(batch.arrivalDate);
-  const created = ymd(batch.createdAt);
   const ship = ymd(batch.shippingDate);
-
-  if (f.arrivalDate && arrive !== f.arrivalDate) return false;
-  if (f.registrationDate && created !== f.registrationDate) return false;
-  if (f.dateFrom) {
-    const ref = arrive || ship || created;
-    if (!ref || ref < f.dateFrom) return false;
+  const arrive = ymd(batch.arrivalDate);
+  if (f.shippingDateFrom && (!ship || ship < f.shippingDateFrom)) return false;
+  if (f.shippingDateTo && (!ship || ship > f.shippingDateTo)) return false;
+  if (f.arrivalDateFrom && (!arrive || arrive < f.arrivalDateFrom)) return false;
+  if (f.arrivalDateTo && (!arrive || arrive > f.arrivalDateTo)) return false;
+  if (f.week.trim()) {
+    const w = f.week.trim().toUpperCase();
+    const code = (batch.weekCode ?? "").toUpperCase();
+    if (!code || (code !== w && !code.includes(w.replace(/^AH-?/i, "")))) return false;
   }
-  if (f.dateTo) {
-    const ref = arrive || ship || created;
-    if (!ref || ref > f.dateTo) return false;
+  if (f.shipmentNumber.trim()) {
+    const q = f.shipmentNumber.trim().toLocaleLowerCase();
+    const container = primaryContainerId(batch)?.toLocaleLowerCase() ?? "";
+    if (
+      !batch.batchNumber.toLocaleLowerCase().includes(q) &&
+      !container.includes(q) &&
+      !(batch.sourceShipmentNumber ?? "").toLocaleLowerCase().includes(q)
+    ) {
+      return false;
+    }
   }
-  if (f.listStatus && listStatusKey(batch) !== f.listStatus) return false;
   if (f.zoneId && !batch.zoneIds.includes(f.zoneId)) return false;
   if (f.courierId && !batch.courierIds.includes(f.courierId)) return false;
   if (f.paymentStatus) {
@@ -143,7 +143,19 @@ function matchesFilters(batch: ShipmentBatchDto, f: ListFilters): boolean {
   }
   if (f.freeSearch.trim()) {
     const q = f.freeSearch.trim().toLocaleLowerCase();
-    if (!(batch.searchText ?? "").includes(q)) return false;
+    const hay = [
+      batch.batchNumber,
+      batch.containerNumber,
+      batch.sourceShipmentNumber,
+      batch.notes,
+      batch.weekCode,
+      formatDate(batch.arrivalDate),
+      formatDate(batch.shippingDate),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLocaleLowerCase();
+    if (!hay.includes(q)) return false;
   }
   return true;
 }
@@ -165,7 +177,6 @@ export function ShipmentListClient({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [editBatch, setEditBatch] = useState<ShipmentBatchDto | null>(null);
   const [editSaving, setEditSaving] = useState(false);
-  const [deleteBusy, setDeleteBusy] = useState(false);
 
   const [newZoneName, setNewZoneName] = useState("");
   const [editZoneId, setEditZoneId] = useState<string | null>(null);
@@ -180,6 +191,12 @@ export function ShipmentListClient({
     () => batches.filter((b) => matchesFilters(b, filters)),
     [batches, filters],
   );
+
+  const weekOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const b of batches) if (b.weekCode) set.add(b.weekCode);
+    return [...set].sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+  }, [batches]);
 
   const kpis = useMemo(() => {
     const shipmentCount = filteredBatches.length;
@@ -225,20 +242,15 @@ export function ShipmentListClient({
     router.push(`/admin/shipments/combined?ids=${encodeURIComponent(ids)}`);
   }
 
-  function openCreateShipment() {
-    router.push("/admin/shipments/import");
-  }
-
-  async function handleDeleteSelected() {
+  async function handleBulkDelete() {
     if (selected.size === 0) return;
     const count = selected.size;
-    const ok = window.confirm(
-      `למחוק ${count} משלוחים?\nפעולה זו תמחק גם את כל החבילות והתשלומים המשויכים ולא ניתן לבטל.`,
-    );
-    if (!ok) return;
-    setDeleteBusy(true);
+    if (!confirm(`למחוק ${count} משלוחים מסומנים?\nכל החבילות והתשלומים שלהם יימחקו. פעולה זו אינה ניתנת לביטול.`)) {
+      return;
+    }
+    setLoading(true);
     const res = await deleteShipmentBatchesAction([...selected]);
-    setDeleteBusy(false);
+    setLoading(false);
     if (!res.ok) {
       showMsg(res.error, true);
       return;
@@ -246,70 +258,6 @@ export function ShipmentListClient({
     setSelected(new Set());
     showMsg(`נמחקו ${res.deleted} משלוחים`);
     await refresh();
-  }
-
-  async function exportExcel() {
-    try {
-      const XLSX = await import("xlsx");
-      const rows = filteredBatches.map((b) => ({
-        "מספר משלוח": primaryContainerId(b) || b.batchNumber,
-        "מזהה מערכת": b.batchNumber,
-        שבוע: b.weekCode ?? "",
-        יציאה: formatDate(b.shippingDate),
-        הגעה: formatDate(b.arrivalDate),
-        "תאריך רישום": formatDate(b.createdAt),
-        חבילות: b.boxesSum || b.recordCount,
-        "סכום ($)": b.totalOrderUsd,
-        "שולם (₪)": b.totalPaidIls,
-        "יתרה (₪)": b.totalRemainingIls,
-        סטטוס: listStatusLabel(b),
-      }));
-      const ws = XLSX.utils.json_to_sheet(rows);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "משלוחים");
-      XLSX.writeFile(wb, `shipments-${new Date().toISOString().slice(0, 10)}.xlsx`);
-      showMsg("הקובץ הורד");
-    } catch (e) {
-      showMsg(String(e), true);
-    }
-  }
-
-  function exportPdf() {
-    const rows = filteredBatches
-      .map((b) => {
-        const id = primaryContainerId(b) || b.batchNumber;
-        return `<tr>
-          <td>${id}</td>
-          <td>${b.weekCode ?? "—"}</td>
-          <td>${formatDate(b.arrivalDate)}</td>
-          <td>${b.boxesSum || b.recordCount}</td>
-          <td>${fmtUsd(b.totalOrderUsd)}</td>
-          <td>${fmtIls(b.totalRemainingIls)}</td>
-          <td>${listStatusLabel(b)}</td>
-        </tr>`;
-      })
-      .join("");
-    const html = `<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8"/><title>משלוחים</title>
-      <style>
-        body{font-family:Arial,sans-serif;padding:24px;color:#0f172a}
-        h1{font-size:18px;margin:0 0 12px}
-        table{width:100%;border-collapse:collapse;font-size:12px}
-        th,td{border:1px solid #cbd5e1;padding:6px 8px;text-align:right}
-        th{background:#f1f5f9}
-      </style></head><body>
-      <h1>רשימת משלוחים (${filteredBatches.length})</h1>
-      <table><thead><tr>
-        <th>מספר משלוח</th><th>שבוע</th><th>הגעה</th><th>חבילות</th><th>סכום</th><th>יתרה</th><th>סטטוס</th>
-      </tr></thead><tbody>${rows}</tbody></table>
-      <script>window.onload=function(){window.print()}</script>
-      </body></html>`;
-    const w = window.open("", "_blank");
-    if (!w) {
-      showMsg("יש לאפשר חלונות קופצים לייצוא PDF", true);
-      return;
-    }
-    w.document.write(html);
-    w.document.close();
   }
 
   async function refresh() {
@@ -481,6 +429,10 @@ export function ShipmentListClient({
           <button className="shp-btn shp-btn--secondary shp-btn--sm" onClick={refresh} disabled={loading}>
             <RefreshCw size={14} />
             רענון
+          </button>
+          <button className="shp-btn shp-btn--primary" onClick={() => router.push("/admin/shipments/import")}>
+            <Plus size={15} />
+            יצירת משלוח חדש
           </button>
         </div>
       </div>
@@ -686,65 +638,24 @@ export function ShipmentListClient({
           <div className="shp-empty__title">אין משלוחים</div>
           <div className="shp-empty__sub">צור משלוח חדש ומלא את פרטיו, ואז הוסף חבילות</div>
           <div style={{ marginTop: 16 }}>
-            <button className="shp-btn shp-btn--primary" onClick={openCreateShipment}>
+            <button className="shp-btn shp-btn--primary" onClick={() => router.push("/admin/shipments/import")}>
               <Plus size={15} /> יצירת משלוח
             </button>
           </div>
         </div>
       ) : (
         <div>
-          {selected.size > 0 && (
-            <div className="shp-selection-bar">
-              <span>
-                נבחרו <strong>{selected.size}</strong> משלוחים
-              </span>
-              <div className="shp-selection-bar__actions">
-                <button type="button" className="shp-btn shp-btn--secondary shp-btn--sm" onClick={openSelected}>
-                  <Layers size={14} />
-                  פתח מסומנים
-                </button>
-                <button
-                  type="button"
-                  className="shp-btn shp-btn--danger shp-btn--sm"
-                  onClick={() => void handleDeleteSelected()}
-                  disabled={deleteBusy}
-                >
-                  <Trash2 size={14} />
-                  מחק משלוחים
-                </button>
-                <button
-                  type="button"
-                  className="shp-btn shp-btn--ghost shp-btn--sm"
-                  onClick={() => setSelected(new Set())}
-                >
-                  בטל סימון
-                </button>
-              </div>
-            </div>
-          )}
-
-          <div className="shp-list-toolbar">
-            <div className="shp-list-toolbar__filters">
-              <div className="shp-list-toolbar__search">
+          <div className="shp-filter-toolbar" dir="rtl">
+            <div className="shp-filter-toolbar__scroll">
+              <div className="shp-filter-toolbar__search">
                 <Search size={14} />
                 <input
                   value={filters.freeSearch}
                   onChange={(e) => patchFilter("freeSearch", e.target.value)}
-                  placeholder="חיפוש: מספר משלוח, קוד, שם, טלפון, כתובת..."
+                  placeholder="חיפוש: מספר משלוח, קונטיינר, שבוע..."
                   aria-label="חיפוש"
                 />
               </div>
-              <select
-                value={filters.listStatus}
-                onChange={(e) => patchFilter("listStatus", e.target.value as ListStatusFilter)}
-                aria-label="סטטוס"
-              >
-                <option value="">כל הסטטוסים</option>
-                <option value="open">פתוח</option>
-                <option value="partial">חלקי</option>
-                <option value="paid">שולם</option>
-                <option value="empty">ריק</option>
-              </select>
               <select
                 value={filters.paymentStatus}
                 onChange={(e) => patchFilter("paymentStatus", e.target.value)}
@@ -781,61 +692,83 @@ export function ShipmentListClient({
                   </option>
                 ))}
               </select>
-              <input
-                type="date"
-                value={filters.arrivalDate}
-                onChange={(e) => patchFilter("arrivalDate", e.target.value)}
-                title="תאריך הגעה"
-                aria-label="תאריך הגעה"
-              />
-              <input
-                type="date"
-                value={filters.registrationDate}
-                onChange={(e) => patchFilter("registrationDate", e.target.value)}
-                title="תאריך רישום"
-                aria-label="תאריך רישום"
-              />
-              <input
-                type="date"
-                value={filters.dateFrom}
-                onChange={(e) => patchFilter("dateFrom", e.target.value)}
-                title="מתאריך"
-                aria-label="מתאריך"
-              />
-              <input
-                type="date"
-                value={filters.dateTo}
-                onChange={(e) => patchFilter("dateTo", e.target.value)}
-                title="עד תאריך"
-                aria-label="עד תאריך"
-              />
+              <select value={filters.week} onChange={(e) => patchFilter("week", e.target.value)} aria-label="שבוע">
+                <option value="">שבוע</option>
+                {weekOptions.map((w) => (
+                  <option key={w} value={w}>
+                    {w}
+                  </option>
+                ))}
+              </select>
+              <label className="shp-filter-toolbar__date">
+                <span>הגעה</span>
+                <input
+                  type="date"
+                  value={filters.arrivalDateFrom}
+                  onChange={(e) => patchFilter("arrivalDateFrom", e.target.value)}
+                />
+              </label>
+              <label className="shp-filter-toolbar__date">
+                <span>מ</span>
+                <input
+                  type="date"
+                  value={filters.shippingDateFrom}
+                  onChange={(e) => patchFilter("shippingDateFrom", e.target.value)}
+                />
+              </label>
+              <label className="shp-filter-toolbar__date">
+                <span>עד</span>
+                <input
+                  type="date"
+                  value={filters.shippingDateTo}
+                  onChange={(e) => patchFilter("shippingDateTo", e.target.value)}
+                />
+              </label>
               <button
                 type="button"
                 className="shp-btn shp-btn--secondary shp-btn--sm"
                 onClick={() => setFilters(EMPTY_FILTERS)}
-                title="איפוס מסננים"
               >
                 <RotateCcw size={13} />
                 איפוס
               </button>
-              <span className="shp-list-toolbar__count">
+              <span className="shp-filter-toolbar__count">
                 {filteredBatches.length}/{batches.length}
               </span>
             </div>
-
-            <div className="shp-list-toolbar__actions">
-              <button type="button" className="shp-btn shp-btn--primary shp-btn--sm" onClick={openCreateShipment}>
+            <div className="shp-filter-toolbar__actions">
+              <button
+                type="button"
+                className="shp-btn shp-btn--primary shp-btn--sm"
+                onClick={() => router.push("/admin/shipments/import")}
+              >
                 <Plus size={14} />
                 הוסף משלוח
               </button>
-              <button type="button" className="shp-btn shp-btn--secondary shp-btn--sm" onClick={exportPdf}>
+              <button
+                type="button"
+                className="shp-btn shp-btn--secondary shp-btn--sm"
+                disabled={selected.size === 0}
+                onClick={openSelected}
+                title="פתח משלוחים מסומנים"
+              >
+                <Layers size={14} />
+                פתח
+              </button>
+              <button
+                type="button"
+                className="shp-btn shp-btn--secondary shp-btn--sm"
+                onClick={() => router.push("/admin/shipments/control")}
+                title="מעבר לבקרת משלוחים לייצוא PDF"
+              >
                 <FileText size={14} />
                 PDF
               </button>
               <button
                 type="button"
                 className="shp-btn shp-btn--secondary shp-btn--sm"
-                onClick={() => void exportExcel()}
+                onClick={() => router.push("/admin/shipments/control")}
+                title="מעבר לבקרת משלוחים לייצוא Excel"
               >
                 <FileSpreadsheet size={14} />
                 Excel
@@ -844,8 +777,8 @@ export function ShipmentListClient({
                 <button
                   type="button"
                   className="shp-btn shp-btn--danger shp-btn--sm"
-                  onClick={() => void handleDeleteSelected()}
-                  disabled={deleteBusy}
+                  disabled={loading}
+                  onClick={() => void handleBulkDelete()}
                 >
                   <Trash2 size={14} />
                   מחק מסומנים
@@ -853,6 +786,25 @@ export function ShipmentListClient({
               ) : null}
             </div>
           </div>
+
+          {selected.size > 0 ? (
+            <div className="shp-toolbar">
+              <span className="shp-toolbar__count">נבחרו {selected.size} משלוחים</span>
+              <button type="button" className="shp-btn shp-btn--primary shp-btn--sm" onClick={openSelected}>
+                <Layers size={14} />
+                פתח משלוחים מסומנים
+              </button>
+              <button
+                type="button"
+                className="shp-btn shp-btn--danger shp-btn--sm"
+                disabled={loading}
+                onClick={() => void handleBulkDelete()}
+              >
+                <Trash2 size={14} />
+                מחק משלוחים
+              </button>
+            </div>
+          ) : null}
 
           {filteredBatches.length === 0 ? (
             <div className="shp-empty" style={{ padding: "40px 20px" }}>

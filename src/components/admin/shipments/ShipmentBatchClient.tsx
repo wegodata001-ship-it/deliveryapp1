@@ -9,10 +9,15 @@ import {
   RefreshCw,
   Banknote,
   Package,
-  Filter,
   CheckSquare,
   Square,
   Edit2,
+  Plus,
+  Search,
+  Trash2,
+  FileText,
+  FileSpreadsheet,
+  RotateCcw,
 } from "lucide-react";
 import type {
   ShipmentBatchDto,
@@ -35,11 +40,17 @@ import {
   createZoneAction,
   updateShipmentBatchAction,
   getShipmentBatchAction,
+  deleteShipmentRecordAction,
 } from "@/app/admin/shipments/actions";
 import { ShipmentPaymentModal } from "@/components/admin/shipments/ShipmentPaymentModal";
 import { InlineAutocompleteCell } from "@/components/admin/shipments/InlineAutocompleteCell";
 import { InlineValueCell } from "@/components/admin/shipments/InlineValueCell";
 import { SyncedTableScroll } from "@/components/admin/shipments/SyncedTableScroll";
+import type { ShipmentControlRecord } from "@/app/admin/shipments/control/types";
+import {
+  exportShipmentReportExcel,
+  exportShipmentReportPdf,
+} from "@/lib/shipment-report-export";
 
 type Props = {
   batch: ShipmentBatchDto;
@@ -100,6 +111,78 @@ function batchShipmentLabel(batch: ShipmentBatchDto): string {
   return batch.containerNumber || batch.sourceShipmentNumber || batch.batchNumber;
 }
 
+function recordPaymentYmd(record: ShipmentRecordDto): string {
+  if (!record.payments.length) return "";
+  const last = record.payments[record.payments.length - 1];
+  const raw = last.details?.paymentDate || last.createdAt;
+  return raw?.slice(0, 10) ?? "";
+}
+
+function toControlRecord(batch: ShipmentBatchDto, r: ShipmentRecordDto): ShipmentControlRecord {
+  return {
+    id: r.id,
+    batchId: r.batchId,
+    batchNumber: r.batchNumber,
+    containerNumber: batch.containerNumber,
+    rowIndex: r.rowIndex,
+    customerName: r.customerName,
+    customerPhone: r.customerPhone,
+    address: r.address,
+    city: r.city,
+    boxes: r.boxes,
+    cartonDetails: r.cartonDetails,
+    weight: r.weight,
+    orderAmount: r.orderAmount,
+    orderCurrency: r.orderCurrency,
+    deliveryFeeAmount: r.deliveryFeeAmount,
+    deliveryFeeCurrency: r.deliveryFeeCurrency,
+    deliveryFeeIls: r.deliveryFeeIls,
+    zoneId: r.zoneId,
+    zoneName: r.zoneName,
+    courierId: r.courierId,
+    courierName: r.courierName,
+    status: r.status,
+    paymentStatus: r.paymentStatus,
+    paidAmountIls: r.paidAmountIls,
+    remainingFeeIls: r.remainingFeeIls,
+    notes: r.notes,
+    createdAt: r.createdAt,
+    payments: r.payments.map((p) => ({
+      id: p.id,
+      method: p.method,
+      methodLabel: p.methodLabel,
+      amountIls: p.amountIls,
+      details: p.details,
+      notes: p.notes,
+      createdAt: p.createdAt,
+    })),
+  };
+}
+
+type RowFilters = {
+  search: string;
+  status: string;
+  paymentStatus: string;
+  zoneId: string;
+  courierId: string;
+  arrivalDate: string;
+  regDate: string;
+  dateFrom: string;
+  dateTo: string;
+};
+
+const EMPTY_ROW_FILTERS: RowFilters = {
+  search: "",
+  status: "",
+  paymentStatus: "",
+  zoneId: "",
+  courierId: "",
+  arrivalDate: "",
+  regDate: "",
+  dateFrom: "",
+  dateTo: "",
+};
+
 export function ShipmentBatchClient({
   batch: initialBatch,
   initialRecords,
@@ -120,25 +203,54 @@ export function ShipmentBatchClient({
   const [editSaving, setEditSaving] = useState(false);
 
   // Filters
-  const [filterStatus, setFilterStatus] = useState("");
-  const [filterZone, setFilterZone] = useState("");
-  const [filterCourier, setFilterCourier] = useState("");
-  const [filterPayStatus, setFilterPayStatus] = useState("");
+  const [filters, setFilters] = useState<RowFilters>(EMPTY_ROW_FILTERS);
+  const [exportBusy, setExportBusy] = useState(false);
 
   // Bulk assign
   const [bulkZoneId, setBulkZoneId] = useState("");
   const [bulkCourierId, setBulkCourierId] = useState("");
   const [bulkStatus, setBulkStatus] = useState<ShipmentStatus | "">("");
 
+  const shipmentLabel = batchShipmentLabel(batch);
+  const arrivalYmd = batch.arrivalDate?.slice(0, 10) ?? "";
+
   const filteredRecords = useMemo(() => {
+    const q = filters.search.trim().toLocaleLowerCase();
     return records.filter((r) => {
-      if (filterStatus && r.status !== filterStatus) return false;
-      if (filterZone && r.zoneId !== filterZone) return false;
-      if (filterCourier && !(r.courierName ?? "").includes(filterCourier)) return false;
-      if (filterPayStatus && r.paymentStatus !== filterPayStatus) return false;
+      if (filters.status && r.status !== filters.status) return false;
+      if (filters.zoneId && r.zoneId !== filters.zoneId) return false;
+      if (filters.courierId && r.courierId !== filters.courierId) return false;
+      if (filters.paymentStatus && r.paymentStatus !== filters.paymentStatus) return false;
+      if (filters.arrivalDate && arrivalYmd !== filters.arrivalDate) return false;
+      const reg = recordPaymentYmd(r);
+      if (filters.regDate && reg !== filters.regDate) return false;
+      const rangeDate = arrivalYmd || r.createdAt.slice(0, 10);
+      if (filters.dateFrom && (!rangeDate || rangeDate < filters.dateFrom)) return false;
+      if (filters.dateTo && (!rangeDate || rangeDate > filters.dateTo)) return false;
+      if (q) {
+        const hay = [
+          shipmentLabel,
+          batch.batchNumber,
+          batch.sourceShipmentNumber,
+          batch.containerNumber,
+          r.customerCode,
+          r.customerName,
+          r.customerPhone,
+          r.address,
+          r.city,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLocaleLowerCase();
+        if (!hay.includes(q)) return false;
+      }
       return true;
     });
-  }, [records, filterStatus, filterZone, filterCourier, filterPayStatus]);
+  }, [records, filters, arrivalYmd, shipmentLabel, batch.batchNumber, batch.sourceShipmentNumber, batch.containerNumber]);
+
+  function patchFilter<K extends keyof RowFilters>(key: K, value: RowFilters[K]) {
+    setFilters((prev) => ({ ...prev, [key]: value }));
+  }
 
   function toggleSelect(id: string) {
     setSelected((prev) => {
@@ -212,6 +324,68 @@ export function ShipmentBatchClient({
     } else {
       setError(res.error);
     }
+    clearMsg();
+  }
+
+  async function handleBulkDelete() {
+    if (selected.size === 0) return;
+    const count = selected.size;
+    if (!confirm(`למחוק ${count} משלוחים מסומנים?\nפעולה זו אינה ניתנת לביטול.`)) return;
+    setLoading(true);
+    const ids = Array.from(selected);
+    const errors: string[] = [];
+    for (const id of ids) {
+      const res = await deleteShipmentRecordAction(id);
+      if (!res.ok) errors.push(res.error);
+    }
+    setLoading(false);
+    setSelected(new Set());
+    await refresh();
+    if (errors.length) {
+      setError(`נמחקו חלקית. שגיאות: ${errors.slice(0, 2).join("; ")}`);
+    } else {
+      setSuccess(`נמחקו ${count} משלוחים`);
+    }
+    clearMsg();
+  }
+
+  async function handleExport(format: "excel" | "pdf") {
+    const source = selected.size > 0
+      ? filteredRecords.filter((r) => selected.has(r.id))
+      : filteredRecords;
+    if (source.length === 0) {
+      setError("אין שורות לייצוא");
+      clearMsg();
+      return;
+    }
+    setExportBusy(true);
+    try {
+      const mapped = source.map((r) => toControlRecord(batch, r));
+      const params = {
+        kind: "all" as const,
+        records: mapped,
+        filters: {
+          dateFrom: "",
+          dateTo: "",
+          containerNumber: "",
+          zoneId: "",
+          courierName: "",
+          status: "",
+          paymentScope: "all" as const,
+        },
+        meta: {
+          companyName: "Wego",
+          generatedBy: "מערכת משלוחים",
+          generatedAt: new Date(),
+        },
+      };
+      if (format === "excel") await exportShipmentReportExcel(params);
+      else await exportShipmentReportPdf(params);
+      setSuccess(format === "excel" ? "קובץ Excel הורד" : "PDF נפתח");
+    } catch (e) {
+      setError(String(e));
+    }
+    setExportBusy(false);
     clearMsg();
   }
 
@@ -289,7 +463,8 @@ export function ShipmentBatchClient({
     setPaymentRecord(updated);
   }
 
-  const allSelected = filteredRecords.length > 0 && selected.size === filteredRecords.length;
+  const allSelected =
+    filteredRecords.length > 0 && filteredRecords.every((r) => selected.has(r.id));
   const totalFee = records.reduce((s, r) => s + (r.deliveryFeeIls ?? 0), 0);
   const totalPaid = records.reduce((s, r) => s + r.paidAmountIls, 0);
   const paidCount = records.filter((r) => r.paymentStatus === "PAID").length;
@@ -358,38 +533,154 @@ export function ShipmentBatchClient({
       {error && <div className="shp-alert shp-alert--error">{error}</div>}
       {success && <div className="shp-alert shp-alert--success">{success}</div>}
 
-      {/* Filters */}
-      <div className="shp-filters">
-        <Filter size={14} style={{ color: "#64748b" }} />
-        <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
-          <option value="">כל הסטטוסים</option>
-          {STATUS_OPTIONS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-        </select>
-        <select value={filterZone} onChange={(e) => setFilterZone(e.target.value)}>
-          <option value="">כל האזורים</option>
-          {zones.filter((zone) => zone.isActive).map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
-        </select>
-        <input
-          placeholder="שם שליח..."
-          value={filterCourier}
-          onChange={(e) => setFilterCourier(e.target.value)}
-          style={{ width: 140 }}
-        />
-        <select value={filterPayStatus} onChange={(e) => setFilterPayStatus(e.target.value)}>
-          <option value="">סטטוס תשלום</option>
-          <option value="UNPAID">לא שולם</option>
-          <option value="PARTIAL">חלקי</option>
-          <option value="PAID">שולם</option>
-        </select>
-        <span style={{ fontSize: "0.8rem", color: "#64748b", marginRight: "auto" }}>
-          {filteredRecords.length} / {records.length} שורות
-        </span>
+      {/* Filters + actions — single horizontal row */}
+      <div className="shp-filter-toolbar" dir="rtl">
+        <div className="shp-filter-toolbar__scroll">
+          <div className="shp-filter-toolbar__search">
+            <Search size={14} />
+            <input
+              value={filters.search}
+              onChange={(e) => patchFilter("search", e.target.value)}
+              placeholder="חיפוש: מספר משלוח, קוד, שם, טלפון, כתובת..."
+              aria-label="חיפוש"
+            />
+          </div>
+          <select
+            value={filters.status}
+            onChange={(e) => patchFilter("status", e.target.value)}
+            aria-label="סטטוס"
+          >
+            <option value="">כל הסטטוסים</option>
+            {STATUS_OPTIONS.map((s) => (
+              <option key={s.value} value={s.value}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+          <select
+            value={filters.paymentStatus}
+            onChange={(e) => patchFilter("paymentStatus", e.target.value)}
+            aria-label="סטטוס תשלום"
+          >
+            <option value="">סטטוס תשלום</option>
+            <option value="UNPAID">לא שולם</option>
+            <option value="PARTIAL">חלקי</option>
+            <option value="PAID">שולם</option>
+          </select>
+          <select
+            value={filters.zoneId}
+            onChange={(e) => patchFilter("zoneId", e.target.value)}
+            aria-label="אזור"
+          >
+            <option value="">אזור</option>
+            {zones.filter((z) => z.isActive).map((z) => (
+              <option key={z.id} value={z.id}>
+                {z.name}
+              </option>
+            ))}
+          </select>
+          <select
+            value={filters.courierId}
+            onChange={(e) => patchFilter("courierId", e.target.value)}
+            aria-label="שליח"
+          >
+            <option value="">שליח</option>
+            {couriers.filter((c) => c.isActive).map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+          <label className="shp-filter-toolbar__date">
+            <span>הגעה</span>
+            <input
+              type="date"
+              value={filters.arrivalDate}
+              onChange={(e) => patchFilter("arrivalDate", e.target.value)}
+            />
+          </label>
+          <label className="shp-filter-toolbar__date">
+            <span>רישום</span>
+            <input
+              type="date"
+              value={filters.regDate}
+              onChange={(e) => patchFilter("regDate", e.target.value)}
+            />
+          </label>
+          <label className="shp-filter-toolbar__date">
+            <span>מ</span>
+            <input
+              type="date"
+              value={filters.dateFrom}
+              onChange={(e) => patchFilter("dateFrom", e.target.value)}
+            />
+          </label>
+          <label className="shp-filter-toolbar__date">
+            <span>עד</span>
+            <input
+              type="date"
+              value={filters.dateTo}
+              onChange={(e) => patchFilter("dateTo", e.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            className="shp-btn shp-btn--secondary shp-btn--sm"
+            onClick={() => setFilters(EMPTY_ROW_FILTERS)}
+            title="איפוס מסננים"
+          >
+            <RotateCcw size={13} />
+            איפוס
+          </button>
+          <span className="shp-filter-toolbar__count">
+            {filteredRecords.length}/{records.length}
+          </span>
+        </div>
+        <div className="shp-filter-toolbar__actions">
+          <button
+            type="button"
+            className="shp-btn shp-btn--primary shp-btn--sm"
+            onClick={() => router.push("/admin/shipments/import")}
+          >
+            <Plus size={14} />
+            הוסף משלוח
+          </button>
+          <button
+            type="button"
+            className="shp-btn shp-btn--secondary shp-btn--sm"
+            disabled={exportBusy || filteredRecords.length === 0}
+            onClick={() => void handleExport("pdf")}
+          >
+            <FileText size={14} />
+            PDF
+          </button>
+          <button
+            type="button"
+            className="shp-btn shp-btn--secondary shp-btn--sm"
+            disabled={exportBusy || filteredRecords.length === 0}
+            onClick={() => void handleExport("excel")}
+          >
+            <FileSpreadsheet size={14} />
+            Excel
+          </button>
+          {selected.size > 0 ? (
+            <button
+              type="button"
+              className="shp-btn shp-btn--danger shp-btn--sm"
+              disabled={loading}
+              onClick={() => void handleBulkDelete()}
+            >
+              <Trash2 size={14} />
+              מחק מסומנים
+            </button>
+          ) : null}
+        </div>
       </div>
 
-      {/* Bulk toolbar */}
+      {/* Selection + bulk toolbar */}
       {selected.size > 0 && (
         <div className="shp-toolbar">
-          <span className="shp-toolbar__count">{selected.size} נבחרו</span>
+          <span className="shp-toolbar__count">נבחרו {selected.size} משלוחים</span>
 
           <select value={bulkZoneId} onChange={(e) => setBulkZoneId(e.target.value)} style={{ padding: "5px 8px", borderRadius: 5, border: "1px solid #93c5fd" }}>
             <option value="">בחר אזור...</option>
@@ -421,6 +712,16 @@ export function ShipmentBatchClient({
           </select>
           <button className="shp-btn shp-btn--secondary shp-btn--sm" onClick={handleBulkStatus} disabled={!bulkStatus || loading}>
             עדכן
+          </button>
+
+          <button
+            type="button"
+            className="shp-btn shp-btn--danger shp-btn--sm"
+            disabled={loading}
+            onClick={() => void handleBulkDelete()}
+          >
+            <Trash2 size={13} />
+            מחק משלוחים
           </button>
         </div>
       )}

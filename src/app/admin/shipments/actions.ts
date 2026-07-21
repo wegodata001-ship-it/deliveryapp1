@@ -10,7 +10,6 @@ import {
   createShipmentBatch,
   updateShipmentBatch,
   getShipmentBatch,
-  deleteShipmentBatches,
   assignZone,
   assignCourier,
   updateShipmentStatus,
@@ -30,6 +29,7 @@ import {
   deleteShipmentPaymentLine,
   getShipmentRecordById,
   deleteShipmentRecord,
+  deleteShipmentBatches,
 } from "@/app/admin/shipments/service";
 import type {
   ShipmentBatchDto,
@@ -116,21 +116,6 @@ export async function getShipmentBatchAction(
   }
 }
 
-export async function deleteShipmentBatchesAction(
-  batchIds: string[]
-): Promise<{ ok: true; deleted: number } | { ok: false; error: string }> {
-  try {
-    const me = await requireAuth();
-    if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
-      return { ok: false, error: "אין הרשאה" };
-    const deleted = await deleteShipmentBatches(batchIds);
-    revalidate();
-    return { ok: true, deleted };
-  } catch (e) {
-    return { ok: false, error: String(e) };
-  }
-}
-
 export async function listShipmentRecordsByBatchIdsAction(
   batchIds: string[]
 ): Promise<{ ok: true; records: ShipmentRecordDto[] } | { ok: false; error: string }> {
@@ -203,6 +188,21 @@ export async function deleteShipmentRecordAction(
     await deleteShipmentRecord(recordId);
     revalidate();
     return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+export async function deleteShipmentBatchesAction(
+  batchIds: string[]
+): Promise<{ ok: true; deleted: number } | { ok: false; error: string }> {
+  try {
+    const me = await requireAuth();
+    if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
+      return { ok: false, error: "אין הרשאה" };
+    const deleted = await deleteShipmentBatches(batchIds);
+    revalidate();
+    return { ok: true, deleted };
   } catch (e) {
     return { ok: false, error: String(e) };
   }

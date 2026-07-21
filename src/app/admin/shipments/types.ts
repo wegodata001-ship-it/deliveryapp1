@@ -80,8 +80,6 @@ export type ShipmentBatchDto = {
   zoneIds: string[];
   courierIds: string[];
   paymentStatuses: ShipmentPaymentStatus[];
-  /** טקסט מאוחד לחיפוש חכם (מספר משלוח, לקוחות, טלפון, כתובת) */
-  searchText: string;
 };
 
 export type UpdateShipmentBatchInput = {

@@ -266,6 +266,117 @@
   box-shadow: 0 0 0 2px rgba(99,102,241,.15);
 }
 
+/* Single-row filter toolbar (never wraps; scrolls on narrow screens) */
+.shp-filter-toolbar {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+.shp-filter-toolbar__scroll {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: max-content;
+}
+
+.shp-filter-toolbar__search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  padding: 0 8px;
+  background: #fff;
+  min-width: 200px;
+  max-width: 280px;
+}
+
+.shp-filter-toolbar__search input {
+  border: none;
+  outline: none;
+  padding: 6px 0;
+  font-size: 0.8rem;
+  width: 100%;
+  min-width: 0;
+  background: transparent;
+}
+
+.shp-filter-toolbar__scroll > select {
+  flex-shrink: 0;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 0.78rem;
+  background: #fff;
+  color: #374151;
+  max-width: 120px;
+}
+
+.shp-filter-toolbar__date {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.shp-filter-toolbar__date input {
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  padding: 5px 6px;
+  font-size: 0.75rem;
+  max-width: 118px;
+}
+
+.shp-filter-toolbar__count {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.shp-filter-toolbar__actions {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.shp-btn--danger {
+  background: #dc2626;
+  color: #fff;
+  border: 1px solid #b91c1c;
+}
+
+.shp-btn--danger:hover:not(:disabled) {
+  background: #b91c1c;
+}
+
+.shp-btn--danger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .shp-filters--advanced {
   flex-direction: column;
   align-items: stretch;
@@ -326,121 +437,6 @@
 
 .shp-table--list tbody tr.is-selected {
   background: #eff6ff;
-}
-
-/* ─── List toolbar: single-row filters + actions ─────────────────────────────── */
-.shp-list-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 12px;
-  background: #fff;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  padding: 8px 10px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  flex-wrap: nowrap;
-  -webkit-overflow-scrolling: touch;
-}
-
-.shp-list-toolbar__filters,
-.shp-list-toolbar__actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: nowrap;
-  flex-shrink: 0;
-}
-
-.shp-list-toolbar__filters {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.shp-list-toolbar__actions {
-  margin-inline-start: auto;
-  padding-inline-start: 6px;
-  border-inline-start: 1px solid #e2e8f0;
-}
-
-.shp-list-toolbar__search {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  border: 1px solid #d1d5db;
-  border-radius: 6px;
-  padding: 0 8px;
-  background: #fff;
-  min-width: 180px;
-  max-width: 260px;
-  height: 32px;
-  color: #64748b;
-}
-
-.shp-list-toolbar__search input {
-  border: none;
-  outline: none;
-  background: transparent;
-  width: 100%;
-  font-size: 0.8rem;
-  color: #1e293b;
-  direction: rtl;
-}
-
-.shp-list-toolbar select,
-.shp-list-toolbar input[type="date"] {
-  border: 1px solid #d1d5db;
-  border-radius: 6px;
-  padding: 5px 8px;
-  font-size: 0.78rem;
-  background: #fff;
-  color: #374151;
-  height: 32px;
-  max-width: 132px;
-}
-
-.shp-list-toolbar input[type="date"] {
-  max-width: 128px;
-}
-
-.shp-list-toolbar__count {
-  font-size: 0.75rem;
-  color: #64748b;
-  white-space: nowrap;
-  padding-inline: 4px;
-}
-
-.shp-selection-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
-  padding: 8px 12px;
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
-  border-radius: 8px;
-  font-size: 0.875rem;
-  color: #1e3a8a;
-}
-
-.shp-selection-bar__actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-@media (max-width: 1100px) {
-  .shp-list-toolbar {
-    justify-content: flex-start;
-  }
-
-  .shp-list-toolbar__actions {
-    margin-inline-start: 0;
-    border-inline-start: none;
-  }
 }
 
 .shp-link-btn {

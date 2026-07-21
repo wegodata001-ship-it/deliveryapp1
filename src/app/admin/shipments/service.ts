@@ -182,11 +182,6 @@ export async function listShipmentBatches(): Promise<ShipmentBatchDto[]> {
           orderCurrency: true,
           zoneId: true,
           courierId: true,
-          customerCode: true,
-          customerName: true,
-          customerPhone: true,
-          address: true,
-          city: true,
           payments: { select: { amountIls: true } },
         },
       },
@@ -215,23 +210,6 @@ export async function listShipmentBatches(): Promise<ShipmentBatchDto[]> {
     const courierIds = [...new Set(records.map((r) => r.courierId).filter(Boolean))] as string[];
     const paymentStatuses = [...new Set(records.map((r) => r.paymentStatus))] as ShipmentPaymentStatus[];
     const weekCode = weekCodeFromBatchDates(toDateStr(b.shippingDate), toDateStr(b.arrivalDate));
-    const searchText = [
-      b.batchNumber,
-      b.sourceShipmentNumber,
-      b.containerNumber,
-      b.notes,
-      weekCode,
-      ...records.flatMap((r) => [
-        r.customerCode,
-        r.customerName,
-        r.customerPhone,
-        r.address,
-        r.city,
-      ]),
-    ]
-      .filter(Boolean)
-      .join(" ")
-      .toLocaleLowerCase();
 
     return {
       id: b.id,
@@ -259,7 +237,6 @@ export async function listShipmentBatches(): Promise<ShipmentBatchDto[]> {
       zoneIds,
       courierIds,
       paymentStatuses,
-      searchText,
     };
   });
 }
@@ -400,28 +377,6 @@ export async function getShipmentBatch(batchId: string): Promise<ShipmentBatchDt
   return all.find((b) => b.id === batchId) ?? null;
 }
 
-/** מחיקת אצוות משלוח (כולל חבילות ותשלומים) — ללא שינוי סכמה */
-export async function deleteShipmentBatches(batchIds: string[]): Promise<number> {
-  const ids = [...new Set(batchIds.map((id) => id.trim()).filter(Boolean))];
-  if (ids.length === 0) return 0;
-
-  const records = await prisma.shipmentRecord.findMany({
-    where: { batchId: { in: ids } },
-    select: { id: true },
-  });
-  const recordIds = records.map((r) => r.id);
-
-  await prisma.$transaction(async (tx) => {
-    if (recordIds.length > 0) {
-      await tx.shipmentPaymentLine.deleteMany({ where: { shipmentRecordId: { in: recordIds } } });
-      await tx.shipmentRecord.deleteMany({ where: { id: { in: recordIds } } });
-    }
-    await tx.shipmentBatch.deleteMany({ where: { id: { in: ids } } });
-  });
-
-  return ids.length;
-}
-
 // ─── Records ─────────────────────────────────────────────────────────────────
 
 export async function listShipmentRecords(batchId: string): Promise<ShipmentRecordDto[]> {
@@ -476,6 +431,29 @@ export async function deleteShipmentRecord(id: string): Promise<void> {
     prisma.shipmentPaymentLine.deleteMany({ where: { shipmentRecordId: id } }),
     prisma.shipmentRecord.delete({ where: { id } }),
   ]);
+}
+
+/** מחיקת אצוות משלוח + כל החבילות והתשלומים שלהן (אותה לוגיקת מחיקה כמו רשומה בודדת). */
+export async function deleteShipmentBatches(batchIds: string[]): Promise<number> {
+  const ids = [...new Set(batchIds.map((id) => id.trim()).filter(Boolean))];
+  if (ids.length === 0) return 0;
+
+  await prisma.$transaction(async (tx) => {
+    const records = await tx.shipmentRecord.findMany({
+      where: { batchId: { in: ids } },
+      select: { id: true },
+    });
+    const recordIds = records.map((r) => r.id);
+    if (recordIds.length > 0) {
+      await tx.shipmentPaymentLine.deleteMany({
+        where: { shipmentRecordId: { in: recordIds } },
+      });
+      await tx.shipmentRecord.deleteMany({ where: { id: { in: recordIds } } });
+    }
+    await tx.shipmentBatch.deleteMany({ where: { id: { in: ids } } });
+  });
+
+  return ids.length;
 }
 
 export async function listAllShipmentRecords(filter?: {
