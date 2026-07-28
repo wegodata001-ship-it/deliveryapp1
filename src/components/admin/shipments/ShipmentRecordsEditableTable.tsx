@@ -126,6 +126,7 @@ export function ShipmentRecordsEditableTable({
   onCourierSelect,
   onStatusChange,
   onCreateZone,
+  onCreateCourier,
   onCollect,
   onFixLocation,
   paymentMethodFilter = null,
@@ -136,7 +137,50 @@ export function ShipmentRecordsEditableTable({
   const [nameFixRecord, setNameFixRecord] = useState<ShipmentRecordDto | null>(null);
   const [nameFixBusy, setNameFixBusy] = useState(false);
 
+  // ─── Add-courier modal state ───
+  const [showAddCourier, setShowAddCourier] = useState(false);
+  const [addCourierForRecord, setAddCourierForRecord] = useState<string | null>(null);
+  const [addCourierName, setAddCourierName] = useState("");
+  const [addCourierPhone, setAddCourierPhone] = useState("");
+  const [addCourierSaving, setAddCourierSaving] = useState(false);
+  const [addCourierError, setAddCourierError] = useState<string | null>(null);
+
   const activeCouriers = (couriers ?? []).filter((c) => c.isActive);
+
+  async function handleAddCourier() {
+    const name = addCourierName.trim();
+    if (!name) return;
+    const existing = activeCouriers.find((c) => c.name === name);
+    if (existing) {
+      setAddCourierError("שליח בשם זה כבר קיים.");
+      return;
+    }
+    setAddCourierSaving(true);
+    setAddCourierError(null);
+    const result = await onCreateCourier(name);
+    setAddCourierSaving(false);
+    if (!result) {
+      setAddCourierError("שגיאה ביצירת השליח");
+      return;
+    }
+    if (addCourierForRecord) {
+      void onCourierSelect(addCourierForRecord, { id: result.id, name: result.name });
+    }
+    setShowAddCourier(false);
+    setAddCourierForRecord(null);
+    setAddCourierName("");
+    setAddCourierPhone("");
+    setCourierEditId(null);
+  }
+
+  function openAddCourierModal(recordId: string, prefill = "") {
+    setAddCourierForRecord(recordId);
+    setAddCourierName(prefill);
+    setAddCourierPhone("");
+    setAddCourierError(null);
+    setShowAddCourier(true);
+    setCourierEditId(null);
+  }
 
   return (
     <div className="shp-daily-wrap">
@@ -276,7 +320,12 @@ export function ShipmentRecordsEditableTable({
                       autoFocus
                       value={r.courierId ?? ""}
                       onChange={(e) => {
-                        const id = e.target.value || null;
+                        const val = e.target.value;
+                        if (val === "__ADD_NEW__") {
+                          openAddCourierModal(r.id);
+                          return;
+                        }
+                        const id = val || null;
                         const c = activeCouriers.find((x) => x.id === id) ?? null;
                         setCourierEditId(null);
                         void onCourierSelect(r.id, c ? { id: c.id, name: c.name } : null);
@@ -287,6 +336,7 @@ export function ShipmentRecordsEditableTable({
                       {activeCouriers.map((c) => (
                         <option key={c.id} value={c.id}>{c.name}</option>
                       ))}
+                      <option value="__ADD_NEW__">➕ הוסף שליח חדש</option>
                     </select>
                   ) : r.courierName ? (
                     <button
@@ -454,6 +504,61 @@ export function ShipmentRecordsEditableTable({
           }}
         />
       ) : null}
+
+      {showAddCourier && (
+        <div className="shp-modal-backdrop" role="presentation" onClick={() => setShowAddCourier(false)}>
+          <div
+            className="shp-modal"
+            dir="rtl"
+            role="dialog"
+            style={{ maxWidth: 420 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header className="shp-modal__head">
+              <h3>הוסף שליח חדש</h3>
+              <button type="button" className="shp-btn shp-btn--ghost shp-btn--sm" onClick={() => setShowAddCourier(false)}>✕</button>
+            </header>
+            <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 14 }}>
+              {addCourierError && (
+                <div style={{ padding: "8px 12px", background: "#fef2f2", color: "#b91c1c", borderRadius: 8, fontSize: "0.85rem" }}>
+                  {addCourierError}
+                </div>
+              )}
+              <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "0.85rem", fontWeight: 600 }}>
+                שם השליח *
+                <input
+                  autoFocus
+                  value={addCourierName}
+                  onChange={(e) => setAddCourierName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleAddCourier()}
+                  style={{ padding: "8px 12px", border: "1.5px solid #cbd5e1", borderRadius: 8, fontSize: "0.9rem" }}
+                />
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "0.85rem", fontWeight: 600 }}>
+                טלפון (אופציונלי)
+                <input
+                  value={addCourierPhone}
+                  onChange={(e) => setAddCourierPhone(e.target.value)}
+                  style={{ padding: "8px 12px", border: "1.5px solid #cbd5e1", borderRadius: 8, fontSize: "0.9rem" }}
+                />
+              </label>
+            </div>
+            <footer className="shp-modal__foot">
+              <button type="button" className="shp-btn shp-btn--secondary" onClick={() => setShowAddCourier(false)}>
+                ביטול
+              </button>
+              <button
+                type="button"
+                className="shp-btn shp-btn--primary"
+                onClick={handleAddCourier}
+                disabled={addCourierSaving || !addCourierName.trim()}
+              >
+                {addCourierSaving ? "שומר…" : "שמור"}
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

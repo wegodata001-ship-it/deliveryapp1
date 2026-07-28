@@ -23,6 +23,8 @@ export type ShipmentRecordExpenseDto = {
   categoryLabel: string;
   amountIls: number;
   notes: string | null;
+  paymentMethod: string;
+  paymentMethodLabel: string;
   expenseDate: string; // YYYY-MM-DD
   createdAt: string;
 };

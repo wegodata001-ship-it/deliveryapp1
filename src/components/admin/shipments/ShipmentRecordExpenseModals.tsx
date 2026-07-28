@@ -12,6 +12,7 @@ import {
   SHIPMENT_CASH_EXPENSE_LABELS,
   type ShipmentCashExpenseCategory,
 } from "@/app/admin/shipments/cash-control/types";
+import { PAYMENT_METHODS } from "@/app/admin/shipments/types";
 
 function fmtIls(n: number) {
   return (
@@ -23,6 +24,10 @@ function fmtIls(n: number) {
 function todayYmd() {
   return new Date().toISOString().slice(0, 10);
 }
+
+const EXPENSE_PAYMENT_METHODS = PAYMENT_METHODS.filter((m) =>
+  ["CASH", "BANK_TRANSFER", "CREDIT", "CHECK", "CREDIT_NOTE", "CODE_DEDUCTION"].includes(m.value),
+);
 
 type FormProps = {
   shipmentRecordId: string;
@@ -44,6 +49,7 @@ export function ShipmentExpenseFormModal({
     initial ? String(initial.amountIls) : "",
   );
   const [notes, setNotes] = useState(initial?.notes ?? "");
+  const [paymentMethod, setPaymentMethod] = useState(initial?.paymentMethod ?? "CASH");
   const [expenseDate, setExpenseDate] = useState(
     initial?.expenseDate ?? todayYmd(),
   );
@@ -51,6 +57,10 @@ export function ShipmentExpenseFormModal({
   const [error, setError] = useState<string | null>(null);
 
   async function handleSave() {
+    if (!paymentMethod) {
+      setError("יש לבחור צורת תשלום");
+      return;
+    }
     setBusy(true);
     setError(null);
     const amountIls = Number(amount);
@@ -60,6 +70,7 @@ export function ShipmentExpenseFormModal({
         category,
         amountIls,
         notes,
+        paymentMethod,
         expenseDate,
       });
       setBusy(false);
@@ -76,6 +87,7 @@ export function ShipmentExpenseFormModal({
       category,
       amountIls,
       notes,
+      paymentMethod,
       expenseDate,
     });
     setBusy(false);
@@ -95,7 +107,7 @@ export function ShipmentExpenseFormModal({
     >
       <div
         className="shp-modal"
-        style={{ maxWidth: 420, width: "92vw" }}
+        style={{ maxWidth: 460, width: "92vw" }}
         dir="rtl"
         onClick={(e) => e.stopPropagation()}
       >
@@ -138,6 +150,18 @@ export function ShipmentExpenseFormModal({
             />
           </label>
           <label className="sc-expense-field">
+            <span>צורת תשלום <span style={{ color: "#dc2626" }}>*</span></span>
+            <select
+              value={paymentMethod}
+              onChange={(e) => setPaymentMethod(e.target.value)}
+              disabled={busy}
+            >
+              {EXPENSE_PAYMENT_METHODS.map((m) => (
+                <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="sc-expense-field">
             <span>הערה</span>
             <input
               value={notes}
@@ -164,7 +188,7 @@ export function ShipmentExpenseFormModal({
           <button
             type="button"
             className="shp-btn shp-btn--primary"
-            disabled={busy || !amount}
+            disabled={busy || !amount || !paymentMethod}
             onClick={() => void handleSave()}
           >
             {busy ? "שומר..." : "שמור"}
@@ -224,7 +248,7 @@ export function ShipmentExpensesListModal({
       >
         <div
           className="shp-modal"
-          style={{ maxWidth: 560, width: "96vw" }}
+          style={{ maxWidth: 620, width: "96vw" }}
           dir="rtl"
           onClick={(e) => e.stopPropagation()}
         >
@@ -259,6 +283,7 @@ export function ShipmentExpensesListModal({
                   <tr>
                     <th>סוג</th>
                     <th>סכום</th>
+                    <th>צורת תשלום</th>
                     <th>תאריך</th>
                     <th>הערה</th>
                     <th>פעולות</th>
@@ -267,7 +292,7 @@ export function ShipmentExpensesListModal({
                 <tbody>
                   {items.length === 0 && (
                     <tr>
-                      <td colSpan={5} style={{ textAlign: "center", color: "#94a3b8", padding: 20 }}>
+                      <td colSpan={6} style={{ textAlign: "center", color: "#94a3b8", padding: 20 }}>
                         אין הוצאות — לחצו «הוסף הוצאה»
                       </td>
                     </tr>
@@ -276,6 +301,7 @@ export function ShipmentExpensesListModal({
                     <tr key={e.id}>
                       <td>{e.categoryLabel}</td>
                       <td style={{ fontWeight: 600 }}>{fmtIls(e.amountIls)}</td>
+                      <td>{e.paymentMethodLabel}</td>
                       <td>{e.expenseDate}</td>
                       <td style={{ color: "#64748b", fontSize: "0.8rem" }}>{e.notes || "—"}</td>
                       <td>

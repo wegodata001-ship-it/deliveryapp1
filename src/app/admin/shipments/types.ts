@@ -350,12 +350,7 @@ export type SaveShipmentPaymentsInput = {
 
 export type CloseDebtSkipReason =
   | "already_closed"
-  | "returned"
-  | "open_balance"
-  | "partial_payment"
-  | "missing_payment"
-  | "underpaid"
-  | "overpaid";
+  | "returned";
 
 export type CourierDebtCloseCandidate = {
   id: string;

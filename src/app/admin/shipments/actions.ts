@@ -304,6 +304,7 @@ export async function closeCourierDebtsAction(input: {
   courierId: string;
   zoneIds: string[];
   batchIds?: string[];
+  paymentMethod: string;
 }): Promise<
   | {
       ok: true;

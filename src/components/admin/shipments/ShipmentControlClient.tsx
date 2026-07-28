@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, useMemo, useCallback, useTransition } from "react";
+import { Fragment, useState, useMemo, useCallback, useTransition } from "react";
 import {
   Truck, RefreshCw, Filter, ChevronDown, ChevronUp,
   AlertTriangle, Users, MapPin, Package, Banknote,
   CheckCircle, XCircle, Clock, RotateCcw, FileText,
-  TrendingUp, BarChart3, Download, FileSpreadsheet,
+  TrendingUp, BarChart3, FileSpreadsheet, Search, X,
 } from "lucide-react";
 import { getShipmentControlDataAction } from "@/app/admin/shipments/control/actions";
 import type {
@@ -16,20 +16,19 @@ import type {
   ZoneSummary,
   ShipmentException,
 } from "@/app/admin/shipments/control/types";
-import { SHIPMENT_STATUS_LABELS, SHIPMENT_PAYMENT_STATUS_LABELS, PAYMENT_METHOD_LABELS } from "@/app/admin/shipments/types";
+import { SHIPMENT_STATUS_LABELS, SHIPMENT_PAYMENT_STATUS_LABELS, PAYMENT_METHOD_LABELS, PAYMENT_METHODS } from "@/app/admin/shipments/types";
 import type { ShipmentStatus } from "@/app/admin/shipments/types";
 import {
   ShipmentControlKpiModal,
   type KpiDrillKey,
 } from "@/components/admin/shipments/ShipmentControlKpiModal";
 import { ShipmentControlShipmentsModal } from "@/components/admin/shipments/ShipmentControlShipmentsModal";
-import { ShipmentReportExportModal } from "@/components/admin/shipments/ShipmentReportExportModal";
-import type {
-  ShipmentReportFormat,
-  ShipmentReportKind,
+import {
+  exportShipmentReportExcel,
+  exportShipmentReportPdf,
 } from "@/lib/shipment-report-export";
 
-type Tab = "overview" | "payments" | "couriers" | "zones" | "exceptions" | "reports";
+type Tab = "overview" | "payments" | "couriers" | "zones" | "exceptions";
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "overview", label: "סיכום", icon: <BarChart3 size={15} /> },
@@ -37,7 +36,6 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "couriers", label: "לפי שליח", icon: <Users size={15} /> },
   { id: "zones", label: "לפי אזור", icon: <MapPin size={15} /> },
   { id: "exceptions", label: "חריגות", icon: <AlertTriangle size={15} /> },
-  { id: "reports", label: "דוחות", icon: <Download size={15} /> },
 ];
 
 const MONTHS = [
@@ -184,6 +182,8 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
   const [selectedZone, setSelectedZone] = useState<string | null>(null);
   const [activeKpi, setActiveKpi] = useState<KpiDrillKey | null>(null);
   const [shipmentsModalOpen, setShipmentsModalOpen] = useState(false);
+  const [containersModalOpen, setContainersModalOpen] = useState(false);
+  const [expensesByBatchModalOpen, setExpensesByBatchModalOpen] = useState(false);
 
   const currentFilter = useCallback((): ShipmentControlFilter => ({
     year: year ? parseInt(year) : undefined,
@@ -321,12 +321,27 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
 
       {/* ── KPI Cards row ───────────────────────────────────────────────────── */}
       <div className="sc-kpi-grid">
-        {/* Shipments group */}
+        {/* Containers group */}
         <div className="sc-kpi-group">
-          <div className="sc-kpi-group__title"><Package size={14} /> משלוחים</div>
+          <div className="sc-kpi-group__title"><Truck size={14} /> משלוחים (קונטיינרים)</div>
           <div className="sc-kpi-row">
             <KpiCard
               label="משלוחים"
+              value={batches.length}
+              icon={<Truck size={18} />}
+              color="#6366f1"
+              sub={`${batches.filter((b) => b.containerNumber).length} עם מספר קונטיינר`}
+              onClick={() => setContainersModalOpen(true)}
+            />
+          </div>
+        </div>
+
+        {/* Shipments/packages group */}
+        <div className="sc-kpi-group">
+          <div className="sc-kpi-group__title"><Package size={14} /> חבילות</div>
+          <div className="sc-kpi-row">
+            <KpiCard
+              label="חבילות"
               value={kpis.total}
               icon={<Package size={18} />}
               onClick={() => setShipmentsModalOpen(true)}
@@ -351,7 +366,7 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
               value={fmtIls(kpis.totalExpensesIls ?? 0)}
               color="#b45309"
               icon={<Banknote size={18} />}
-              onClick={() => setShipmentsModalOpen(true)}
+              onClick={() => setExpensesByBatchModalOpen(true)}
             />
             {kpis.totalCreditIls > 0 && (
               <KpiCard label="יתרת זכות" value={fmtIls(kpis.totalCreditIls)} color="#7c3aed" onClick={() => setActiveKpi("credit")} />
@@ -573,7 +588,7 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
             {/* Courier detail */}
             <div>
               {selectedCourierData ? (
-                <CourierDetail c={selectedCourierData} records={records.filter((r) => (r.courierName ?? "—ללא שליח—") === selectedCourierData.courierName)} />
+                <CourierDetail c={selectedCourierData} records={records.filter((r) => (r.courierName ?? "—ללא שליח—") === selectedCourierData.courierName)} zones={zones} />
               ) : (
                 <div className="sc-detail-placeholder">
                   <Users size={40} />
@@ -638,16 +653,8 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
         </div>
       )}
 
-      {/* ── Tab: Reports ────────────────────────────────────────────────────── */}
-      {activeTab === "reports" && (
-        <ReportsTab
-          records={records}
-          zones={zones}
-          couriers={couriers}
-          filter={currentFilter()}
-          generatedBy={generatedBy}
-        />
-      )}
+      {/* ── Payment Breakdown Table ─────────────────────────────────────── */}
+      <PaymentBreakdownTable records={records} onChanged={refreshCurrent} />
 
       {activeKpi && (
         <ShipmentControlKpiModal
@@ -668,53 +675,770 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
           onChanged={refreshCurrent}
         />
       )}
+
+      {containersModalOpen && (
+        <ContainersModal
+          batches={batches}
+          records={records}
+          onClose={() => setContainersModalOpen(false)}
+        />
+      )}
+
+      {expensesByBatchModalOpen && (
+        <ExpensesByBatchModal
+          batches={batches}
+          records={records}
+          onClose={() => setExpensesByBatchModalOpen(false)}
+        />
+      )}
     </div>
+  );
+}
+
+// ─── Containers (Batches) Modal ───────────────────────────────────────────────
+
+type BatchSummary = {
+  id: string;
+  batchNumber: string;
+  containerNumber: string | null;
+  recordCount: number;
+  totalBoxes: number;
+  totalFeeIls: number;
+  totalPaidIls: number;
+  remainingIls: number;
+  deliveredCount: number;
+};
+
+function ContainersModal({
+  batches,
+  records,
+  onClose,
+}: {
+  batches: { id: string; batchNumber: string; containerNumber: string | null }[];
+  records: ShipmentControlRecord[];
+  onClose: () => void;
+}) {
+  const summaries: BatchSummary[] = useMemo(() => {
+    const byBatch = new Map<string, ShipmentControlRecord[]>();
+    for (const r of records) {
+      const list = byBatch.get(r.batchId) ?? [];
+      list.push(r);
+      byBatch.set(r.batchId, list);
+    }
+    return batches.map((b) => {
+      const recs = byBatch.get(b.id) ?? [];
+      let totalBoxes = 0, totalFeeIls = 0, totalPaidIls = 0, deliveredCount = 0;
+      for (const r of recs) {
+        totalBoxes += r.boxes ?? 0;
+        totalFeeIls += r.deliveryFeeIls ?? 0;
+        totalPaidIls += r.paidAmountIls;
+        if (r.status === "DELIVERED" || r.status === "COMPLETED") deliveredCount++;
+      }
+      return {
+        ...b,
+        recordCount: recs.length,
+        totalBoxes,
+        totalFeeIls,
+        totalPaidIls,
+        remainingIls: totalFeeIls - totalPaidIls,
+        deliveredCount,
+      };
+    });
+  }, [batches, records]);
+
+  const totals = useMemo(() => {
+    let recordCount = 0, totalBoxes = 0, totalFeeIls = 0, totalPaidIls = 0, deliveredCount = 0;
+    for (const s of summaries) {
+      recordCount += s.recordCount;
+      totalBoxes += s.totalBoxes;
+      totalFeeIls += s.totalFeeIls;
+      totalPaidIls += s.totalPaidIls;
+      deliveredCount += s.deliveredCount;
+    }
+    return { recordCount, totalBoxes, totalFeeIls, totalPaidIls, remainingIls: totalFeeIls - totalPaidIls, deliveredCount };
+  }, [summaries]);
+
+  function fm(n: number) {
+    return "₪" + n.toLocaleString("he-IL", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  }
+
+  return (
+    <div className="shp-modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="shp-modal" style={{ maxWidth: 860, width: "96vw" }} dir="rtl" onClick={(e) => e.stopPropagation()}>
+        <div className="shp-modal__header">
+          <strong>פירוט משלוחים (קונטיינרים)</strong>
+          <span style={{ fontSize: "0.82rem", color: "#64748b", marginInlineStart: 8 }}>
+            {summaries.length} משלוחים · {totals.recordCount} חבילות
+          </span>
+          <button type="button" className="shp-icon-btn" onClick={onClose}>
+            <X size={16} />
+          </button>
+        </div>
+        <div className="shp-modal__body" style={{ maxHeight: "65vh", overflowY: "auto" }}>
+          <table className="shp-table" style={{ fontSize: "0.84rem" }}>
+            <thead>
+              <tr>
+                <th>מספר משלוח</th>
+                <th>מספר קונטיינר</th>
+                <th style={{ textAlign: "center" }}>חבילות</th>
+                <th style={{ textAlign: "center" }}>קרטונים</th>
+                <th style={{ textAlign: "center" }}>נמסרו</th>
+                <th style={{ textAlign: "center" }}>דמי משלוח</th>
+                <th style={{ textAlign: "center" }}>נגבה</th>
+                <th style={{ textAlign: "center" }}>יתרה</th>
+              </tr>
+            </thead>
+            <tbody>
+              {summaries.map((s) => (
+                <tr key={s.id}>
+                  <td style={{ fontWeight: 700, color: "#1d4ed8" }}>{s.batchNumber}</td>
+                  <td style={{ fontWeight: 600 }}>{s.containerNumber || "—"}</td>
+                  <td style={{ textAlign: "center" }}>{s.recordCount}</td>
+                  <td style={{ textAlign: "center" }}>{s.totalBoxes}</td>
+                  <td style={{ textAlign: "center", color: "#15803d", fontWeight: 600 }}>{s.deliveredCount}</td>
+                  <td style={{ textAlign: "center", fontWeight: 600 }}>{fm(s.totalFeeIls)}</td>
+                  <td style={{ textAlign: "center", fontWeight: 600, color: "#15803d" }}>{fm(s.totalPaidIls)}</td>
+                  <td style={{ textAlign: "center", fontWeight: 700, color: s.remainingIls > 0.01 ? "#dc2626" : "#15803d" }}>{fm(s.remainingIls)}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr style={{ fontWeight: 800, background: "#f1f5f9" }}>
+                <td colSpan={2} style={{ fontWeight: 800 }}>סה״כ ({summaries.length} משלוחים)</td>
+                <td style={{ textAlign: "center" }}>{totals.recordCount}</td>
+                <td style={{ textAlign: "center" }}>{totals.totalBoxes}</td>
+                <td style={{ textAlign: "center", color: "#15803d" }}>{totals.deliveredCount}</td>
+                <td style={{ textAlign: "center" }}>{fm(totals.totalFeeIls)}</td>
+                <td style={{ textAlign: "center", color: "#15803d" }}>{fm(totals.totalPaidIls)}</td>
+                <td style={{ textAlign: "center", color: totals.remainingIls > 0.01 ? "#dc2626" : "#15803d" }}>{fm(totals.remainingIls)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+        <div className="shp-modal__footer">
+          <button type="button" className="shp-btn" onClick={onClose}>סגור</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Expenses by Batch Modal ──────────────────────────────────────────────────
+
+function ExpensesByBatchModal({
+  batches,
+  records,
+  onClose,
+}: {
+  batches: { id: string; batchNumber: string; containerNumber: string | null }[];
+  records: ShipmentControlRecord[];
+  onClose: () => void;
+}) {
+  const rows = useMemo(() => {
+    const byBatch = new Map<string, ShipmentControlRecord[]>();
+    for (const r of records) {
+      const list = byBatch.get(r.batchId) ?? [];
+      list.push(r);
+      byBatch.set(r.batchId, list);
+    }
+    return batches
+      .map((b) => {
+        const recs = byBatch.get(b.id) ?? [];
+        let totalExpenses = 0;
+        let expenseCount = 0;
+        const allExpenses: (ShipmentControlRecord["expenses"][number] & { customerName: string | null })[] = [];
+        for (const r of recs) {
+          totalExpenses += r.expensesTotalIls ?? 0;
+          expenseCount += r.expensesCount ?? 0;
+          for (const e of r.expenses) allExpenses.push({ ...e, customerName: r.customerName });
+        }
+        return { ...b, totalExpenses, expenseCount, expenses: allExpenses };
+      })
+      .filter((b) => b.totalExpenses > 0);
+  }, [batches, records]);
+
+  const grandTotal = useMemo(() => rows.reduce((s, r) => s + r.totalExpenses, 0), [rows]);
+
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  function toggle(id: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  function fm(n: number) {
+    return "₪" + n.toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  return (
+    <div className="shp-modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="shp-modal" style={{ maxWidth: 780, width: "96vw" }} dir="rtl" onClick={(e) => e.stopPropagation()}>
+        <div className="shp-modal__header">
+          <strong>הוצאות לפי משלוח</strong>
+          <span style={{ fontSize: "0.82rem", color: "#64748b", marginInlineStart: 8 }}>
+            {rows.length} משלוחים · סה״כ {fm(grandTotal)}
+          </span>
+          <button type="button" className="shp-icon-btn" onClick={onClose}>
+            <X size={16} />
+          </button>
+        </div>
+        <div className="shp-modal__body" style={{ maxHeight: "65vh", overflowY: "auto" }}>
+          {rows.length === 0 ? (
+            <div style={{ textAlign: "center", color: "#94a3b8", padding: 28 }}>אין הוצאות</div>
+          ) : (
+            <table className="shp-table" style={{ fontSize: "0.84rem" }}>
+              <thead>
+                <tr>
+                  <th>משלוח</th>
+                  <th>קונטיינר</th>
+                  <th style={{ textAlign: "center" }}>הוצאות</th>
+                  <th style={{ textAlign: "center" }}>סה״כ</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((b) => (
+                  <Fragment key={b.id}>
+                    <tr style={{ cursor: "pointer" }} onClick={() => toggle(b.id)}>
+                      <td style={{ fontWeight: 700, color: "#1d4ed8" }}>
+                        {expanded.has(b.id) ? "▾" : "▸"} {b.batchNumber}
+                      </td>
+                      <td style={{ fontWeight: 600 }}>{b.containerNumber || "—"}</td>
+                      <td style={{ textAlign: "center" }}>{b.expenseCount}</td>
+                      <td style={{ textAlign: "center", fontWeight: 700, color: "#b45309" }}>{fm(b.totalExpenses)}</td>
+                    </tr>
+                    {expanded.has(b.id) && b.expenses.map((e) => (
+                      <tr key={e.id} style={{ background: "#fefce8" }}>
+                        <td style={{ paddingInlineStart: 28, fontSize: "0.8rem", color: "#64748b" }}>{e.customerName || "—"}</td>
+                        <td style={{ fontSize: "0.8rem" }}>{e.categoryLabel}</td>
+                        <td style={{ textAlign: "center", fontSize: "0.8rem" }}>{e.paymentMethodLabel}</td>
+                        <td style={{ textAlign: "center", fontWeight: 600, fontSize: "0.8rem", color: "#b45309" }}>{fm(e.amountIls)}</td>
+                      </tr>
+                    ))}
+                  </Fragment>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr style={{ fontWeight: 800, background: "#f1f5f9" }}>
+                  <td colSpan={3} style={{ fontWeight: 800 }}>סה״כ</td>
+                  <td style={{ textAlign: "center", color: "#b45309" }}>{fm(grandTotal)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          )}
+        </div>
+        <div className="shp-modal__footer">
+          <button type="button" className="shp-btn" onClick={onClose}>סגור</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Payment Breakdown Table ──────────────────────────────────────────────────
+
+const BREAKDOWN_METHODS = [
+  { key: "CASH", label: "מזומן" },
+  { key: "BANK_TRANSFER", label: "העברה" },
+  { key: "CREDIT", label: "אשראי" },
+  { key: "CHECK", label: "צ׳ק" },
+  { key: "CODE_DEDUCTION", label: "משיכה מהקוד" },
+  { key: "CREDIT_NOTE", label: "זיכוי" },
+] as const;
+
+type BreakdownRow = {
+  record: ShipmentControlRecord;
+  fee: number;
+  byMethod: Record<string, number>;
+  expenses: number;
+  toPay: number;
+  balance: number;
+  lastPayDate: string | null;
+};
+
+type DrillTarget = { recordId: string; method: string | null; label: string } | null;
+
+function PaymentBreakdownTable({
+  records,
+}: {
+  records: ShipmentControlRecord[];
+  onChanged?: () => void;
+}) {
+  const [drill, setDrill] = useState<DrillTarget>(null);
+
+  const rows: BreakdownRow[] = useMemo(() => {
+    return records.map((r) => {
+      const fee = r.deliveryFeeIls ?? 0;
+      const byMethod: Record<string, number> = {};
+      for (const m of BREAKDOWN_METHODS) byMethod[m.key] = 0;
+      let lastPayDate: string | null = null;
+      for (const p of r.payments) {
+        byMethod[p.method] = (byMethod[p.method] ?? 0) + p.amountIls;
+        if (!lastPayDate || p.createdAt > lastPayDate) lastPayDate = p.createdAt;
+      }
+      const expenses = r.expensesTotalIls ?? 0;
+      const totalPaid = r.paidAmountIls;
+      const toPay = Math.max(0, fee - totalPaid);
+      const balance = fee - expenses;
+      return { record: r, fee, byMethod, expenses, toPay, balance, lastPayDate };
+    });
+  }, [records]);
+
+  const totals = useMemo(() => {
+    const t = { fee: 0, byMethod: {} as Record<string, number>, expenses: 0, toPay: 0, balance: 0 };
+    for (const m of BREAKDOWN_METHODS) t.byMethod[m.key] = 0;
+    for (const row of rows) {
+      t.fee += row.fee;
+      for (const m of BREAKDOWN_METHODS) t.byMethod[m.key] += row.byMethod[m.key] ?? 0;
+      t.expenses += row.expenses;
+      t.toPay += row.toPay;
+      t.balance += row.balance;
+    }
+    return t;
+  }, [rows]);
+
+  const drillRecord = drill ? records.find((r) => r.id === drill.recordId) : null;
+
+  function fm(n: number) {
+    return "₪" + n.toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  return (
+    <>
+      <div style={{ marginTop: 32 }}>
+        <h2 style={{ fontSize: "1.1rem", fontWeight: 700, marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
+          <Banknote size={18} style={{ color: "#2563eb" }} />
+          בקרת משלוחים
+        </h2>
+        <div className="shp-table-wrap" style={{ maxHeight: "70vh" }}>
+          <table className="shp-table" style={{ fontSize: "0.82rem" }}>
+            <thead style={{ position: "sticky", top: 0, zIndex: 2 }}>
+              <tr>
+                <th style={{ whiteSpace: "nowrap" }}>מספר משלוח</th>
+                <th style={{ whiteSpace: "nowrap" }}>תאריך</th>
+                <th style={{ whiteSpace: "nowrap", textAlign: "center" }}>סך הכול</th>
+                {BREAKDOWN_METHODS.map((m) => (
+                  <th key={m.key} style={{ whiteSpace: "nowrap", textAlign: "center" }}>{m.label}</th>
+                ))}
+                <th style={{ whiteSpace: "nowrap", textAlign: "center", background: "#fff7ed" }}>הוצאות</th>
+                <th style={{ whiteSpace: "nowrap", textAlign: "center" }}>יתרה לתשלום</th>
+                <th style={{ whiteSpace: "nowrap", textAlign: "center" }}>יתרה</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={3 + BREAKDOWN_METHODS.length + 3} style={{ textAlign: "center", padding: 28, color: "#94a3b8" }}>
+                    אין נתונים
+                  </td>
+                </tr>
+              )}
+              {rows.map((row) => (
+                <tr key={row.record.id}>
+                  <td style={{ fontWeight: 700, color: "#1d4ed8", whiteSpace: "nowrap" }}>
+                    {row.record.batchNumber}
+                  </td>
+                  <td style={{ fontSize: "0.78rem", color: "#64748b", whiteSpace: "nowrap" }}>
+                    {row.lastPayDate ? formatDate(row.lastPayDate) : formatDate(row.record.createdAt)}
+                  </td>
+                  <td style={{ textAlign: "center", fontWeight: 700 }}>{fm(row.fee)}</td>
+                  {BREAKDOWN_METHODS.map((m) => {
+                    const v = row.byMethod[m.key] ?? 0;
+                    return (
+                      <td key={m.key} style={{ textAlign: "center", fontWeight: 600 }}>
+                        <button
+                          type="button"
+                          className="sc-bd-cell"
+                          style={{ color: v > 0 ? "#1e293b" : "#cbd5e1" }}
+                          disabled={v === 0}
+                          onClick={() => v > 0 && setDrill({ recordId: row.record.id, method: m.key, label: m.label })}
+                        >
+                          {fm(v)}
+                        </button>
+                      </td>
+                    );
+                  })}
+                  <td style={{ textAlign: "center", fontWeight: 600, background: "#fffbeb" }}>
+                    <button
+                      type="button"
+                      className="sc-bd-cell"
+                      style={{ color: row.expenses > 0 ? "#b45309" : "#cbd5e1" }}
+                      disabled={row.expenses === 0}
+                      onClick={() => row.expenses > 0 && setDrill({ recordId: row.record.id, method: null, label: "הוצאות" })}
+                    >
+                      {fm(row.expenses)}
+                    </button>
+                  </td>
+                  <td style={{ textAlign: "center", fontWeight: 700, color: row.toPay > 0.01 ? "#dc2626" : "#15803d" }}>
+                    {fm(row.toPay)}
+                  </td>
+                  <td style={{ textAlign: "center", fontWeight: 700, color: row.balance < -0.01 ? "#dc2626" : "#15803d" }}>
+                    {fm(row.balance)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            {rows.length > 0 && (
+              <tfoot style={{ position: "sticky", bottom: 0, zIndex: 2 }}>
+                <tr style={{ fontWeight: 800, background: "#f1f5f9", fontSize: "0.85rem" }}>
+                  <td colSpan={2} style={{ fontWeight: 800 }}>סיכום ({rows.length})</td>
+                  <td style={{ textAlign: "center" }}>{fm(totals.fee)}</td>
+                  {BREAKDOWN_METHODS.map((m) => (
+                    <td key={m.key} style={{ textAlign: "center" }}>{fm(totals.byMethod[m.key] ?? 0)}</td>
+                  ))}
+                  <td style={{ textAlign: "center", background: "#fff7ed", color: "#b45309" }}>{fm(totals.expenses)}</td>
+                  <td style={{ textAlign: "center", color: totals.toPay > 0.01 ? "#dc2626" : "#15803d" }}>{fm(totals.toPay)}</td>
+                  <td style={{ textAlign: "center", color: totals.balance < -0.01 ? "#dc2626" : "#15803d" }}>{fm(totals.balance)}</td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      </div>
+
+      {/* ── Drill-down modal ── */}
+      {drill && drillRecord && (
+        <div className="shp-modal-backdrop" onClick={(e) => e.target === e.currentTarget && setDrill(null)}>
+          <div className="shp-modal" style={{ maxWidth: 640, width: "96vw" }} dir="rtl" onClick={(e) => e.stopPropagation()}>
+            <div className="shp-modal__header">
+              <strong>{drill.label}</strong>
+              <span style={{ fontSize: "0.8rem", color: "#64748b", marginInlineStart: 8 }}>
+                {drillRecord.batchNumber} — {drillRecord.customerName || "—"}
+              </span>
+              <button type="button" className="shp-icon-btn" onClick={() => setDrill(null)}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="shp-modal__body" style={{ maxHeight: "60vh", overflowY: "auto" }}>
+              {drill.method !== null ? (
+                /* Payment drill */
+                <table className="shp-table shp-table--compact" style={{ fontSize: "0.82rem" }}>
+                  <thead>
+                    <tr>
+                      <th>לקוח</th>
+                      <th>מספר משלוח</th>
+                      <th>תאריך תשלום</th>
+                      <th>סכום</th>
+                      <th>אמצעי תשלום</th>
+                      <th>הערה</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {drillRecord.payments
+                      .filter((p) => p.method === drill.method)
+                      .map((p) => (
+                        <tr key={p.id}>
+                          <td>{drillRecord.customerName || "—"}</td>
+                          <td style={{ fontWeight: 600, color: "#1d4ed8" }}>{drillRecord.batchNumber}</td>
+                          <td>{formatDate(p.createdAt)}</td>
+                          <td style={{ fontWeight: 700 }}>{fm(p.amountIls)}</td>
+                          <td>{p.methodLabel}</td>
+                          <td style={{ color: "#64748b", fontSize: "0.78rem" }}>{p.notes || "—"}</td>
+                        </tr>
+                      ))}
+                    {drillRecord.payments.filter((p) => p.method === drill.method).length === 0 && (
+                      <tr><td colSpan={6} style={{ textAlign: "center", color: "#94a3b8", padding: 20 }}>אין תשלומים</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              ) : (
+                /* Expenses drill */
+                <table className="shp-table shp-table--compact" style={{ fontSize: "0.82rem" }}>
+                  <thead>
+                    <tr>
+                      <th>סוג הוצאה</th>
+                      <th>סכום</th>
+                      <th>צורת תשלום</th>
+                      <th>תאריך</th>
+                      <th>הערה</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(drillRecord.expenses ?? []).map((e) => (
+                      <tr key={e.id}>
+                        <td>{e.categoryLabel}</td>
+                        <td style={{ fontWeight: 700 }}>{fm(e.amountIls)}</td>
+                        <td>{e.paymentMethodLabel}</td>
+                        <td>{e.expenseDate}</td>
+                        <td style={{ color: "#64748b", fontSize: "0.78rem" }}>{e.notes || "—"}</td>
+                      </tr>
+                    ))}
+                    {(drillRecord.expenses ?? []).length === 0 && (
+                      <tr><td colSpan={5} style={{ textAlign: "center", color: "#94a3b8", padding: 20 }}>אין הוצאות</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            <div className="shp-modal__footer">
+              <button type="button" className="shp-btn" onClick={() => setDrill(null)}>סגור</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
 // ─── Courier detail panel ─────────────────────────────────────────────────────
 
-function CourierDetail({ c, records }: { c: CourierSummary; records: ShipmentControlRecord[] }) {
-  function fmtIls(n: number) { return "₪" + n.toLocaleString("he-IL", { minimumFractionDigits: 2 }); }
-  const deliveryRate = c.totalShipments > 0 ? Math.round((c.delivered / c.totalShipments) * 100) : 0;
-  const collectionRate = c.totalFeeIls > 0 ? Math.round((c.totalPaidIls / c.totalFeeIls) * 100) : 0;
+function weekNumber(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  const start = new Date(d.getFullYear(), 0, 1);
+  return Math.ceil((((d.getTime() - start.getTime()) / 86400000) + start.getDay() + 1) / 7);
+}
+
+function CourierDetail({
+  c,
+  records,
+  zones,
+}: {
+  c: CourierSummary;
+  records: ShipmentControlRecord[];
+  zones: { id: string; name: string }[];
+}) {
+  function fmtI(n: number) { return "₪" + n.toLocaleString("he-IL", { minimumFractionDigits: 2 }); }
+
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [fWeek, setFWeek] = useState("");
+  const [fBatch, setFBatch] = useState("");
+  const [fCustomer, setFCustomer] = useState("");
+  const [fZone, setFZone] = useState("");
+  const [fStatus, setFStatus] = useState("");
+  const [fPayStatus, setFPayStatus] = useState("");
+  const [fPayMethod, setFPayMethod] = useState("");
+  const [fCity, setFCity] = useState("");
+  const [fSearch, setFSearch] = useState("");
+  const [exporting, setExporting] = useState(false);
+
+  const filtered = useMemo(() => {
+    let result = records;
+    if (dateFrom) result = result.filter((r) => r.createdAt >= dateFrom);
+    if (dateTo) result = result.filter((r) => r.createdAt <= dateTo + "T23:59:59");
+    if (fWeek) {
+      const wk = Number(fWeek);
+      result = result.filter((r) => weekNumber(r.createdAt) === wk);
+    }
+    if (fBatch) {
+      const q = fBatch.toLowerCase();
+      result = result.filter((r) => r.batchNumber.toLowerCase().includes(q));
+    }
+    if (fCustomer) {
+      const q = fCustomer.toLowerCase();
+      result = result.filter((r) => (r.customerName ?? "").toLowerCase().includes(q) || (r.customerCode ?? "").toLowerCase().includes(q));
+    }
+    if (fZone) result = result.filter((r) => r.zoneId === fZone);
+    if (fStatus) result = result.filter((r) => r.status === fStatus);
+    if (fPayStatus) result = result.filter((r) => r.paymentStatus === fPayStatus);
+    if (fPayMethod) result = result.filter((r) => r.payments.some((p) => p.method === fPayMethod));
+    if (fCity) result = result.filter((r) => (r.city ?? "").toUpperCase() === fCity);
+    if (fSearch.trim()) {
+      const q = fSearch.trim().toLowerCase();
+      result = result.filter((r) =>
+        [r.batchNumber, r.customerName, r.customerCode, r.customerPhone, r.address, r.city, r.zoneName, r.containerNumber, r.notes]
+          .filter(Boolean).join(" ").toLowerCase().includes(q),
+      );
+    }
+    return result;
+  }, [records, dateFrom, dateTo, fWeek, fBatch, fCustomer, fZone, fStatus, fPayStatus, fPayMethod, fCity, fSearch]);
+
+  const kpis = useMemo(() => {
+    let shipments = 0, boxes = 0, fee = 0, paid = 0, unpaid = 0, partial = 0, paidCount = 0;
+    let delivered = 0, notDelivered = 0, returned = 0;
+    for (const r of filtered) {
+      shipments++;
+      boxes += r.boxes ?? 0;
+      fee += r.deliveryFeeIls ?? 0;
+      paid += r.paidAmountIls;
+      if (r.paymentStatus === "UNPAID") unpaid++;
+      else if (r.paymentStatus === "PARTIAL") partial++;
+      else if (r.paymentStatus === "PAID") paidCount++;
+      if (r.status === "DELIVERED" || r.status === "COMPLETED") delivered++;
+      if (r.status === "NOT_DELIVERED") notDelivered++;
+      if (r.status === "RETURNED") returned++;
+    }
+    const remaining = Math.max(0, fee - paid);
+    const deliveryRate = shipments > 0 ? Math.round((delivered / shipments) * 100) : 0;
+    const collectionRate = fee > 0 ? Math.round((paid / fee) * 100) : 0;
+    return { shipments, boxes, fee, paid, remaining, unpaid, partial, paidCount, delivered, notDelivered, returned, deliveryRate, collectionRate };
+  }, [filtered]);
+
+  const clearFilters = () => {
+    setDateFrom(""); setDateTo(""); setFWeek(""); setFBatch(""); setFCustomer("");
+    setFZone(""); setFStatus(""); setFPayStatus(""); setFPayMethod(""); setFCity(""); setFSearch("");
+  };
+
+  const hasFilters = dateFrom || dateTo || fWeek || fBatch || fCustomer || fZone || fStatus || fPayStatus || fPayMethod || fCity || fSearch;
+
+  async function handleExportPdf() {
+    setExporting(true);
+    try {
+      await exportShipmentReportPdf({
+        kind: "all",
+        records: filtered,
+        filters: { dateFrom, dateTo, containerNumber: "", zoneId: fZone, courierName: c.courierName, status: fStatus, paymentScope: "all" },
+        meta: { companyName: "WEGO", generatedBy: c.courierName, generatedAt: new Date() },
+      });
+    } finally { setExporting(false); }
+  }
+
+  async function handleExportExcel() {
+    setExporting(true);
+    try {
+      await exportShipmentReportExcel({
+        kind: "all",
+        records: filtered,
+        filters: { dateFrom, dateTo, containerNumber: "", zoneId: fZone, courierName: c.courierName, status: fStatus, paymentScope: "all" },
+        meta: { companyName: "WEGO", generatedBy: c.courierName, generatedAt: new Date() },
+      });
+    } finally { setExporting(false); }
+  }
+
+  const uniqueZoneIds = useMemo(() => [...new Set(records.map((r) => r.zoneId).filter(Boolean) as string[])], [records]);
 
   return (
     <div className="sc-detail-panel">
-      <h3 className="sc-detail-title"><Users size={16} /> {c.courierName}</h3>
-      <div className="sc-detail-kpis">
-        <div className="sc-detail-kpi"><div className="sc-detail-kpi__v">{c.totalShipments}</div><div className="sc-detail-kpi__l">משלוחים</div></div>
-        <div className="sc-detail-kpi"><div className="sc-detail-kpi__v" style={{ color: "#15803d" }}>{c.delivered}</div><div className="sc-detail-kpi__l">נמסרו</div></div>
-        <div className="sc-detail-kpi"><div className="sc-detail-kpi__v" style={{ color: "#dc2626" }}>{c.notDelivered}</div><div className="sc-detail-kpi__l">לא נמסרו</div></div>
-        <div className="sc-detail-kpi"><div className="sc-detail-kpi__v" style={{ color: "#9d174d" }}>{c.returned}</div><div className="sc-detail-kpi__l">חזרו</div></div>
-        <div className="sc-detail-kpi"><div className="sc-detail-kpi__v">{deliveryRate}%</div><div className="sc-detail-kpi__l">אחוז מסירה</div></div>
-        <div className="sc-detail-kpi"><div className="sc-detail-kpi__v">{fmtIls(c.totalFeeIls)}</div><div className="sc-detail-kpi__l">לגבות</div></div>
-        <div className="sc-detail-kpi"><div className="sc-detail-kpi__v" style={{ color: "#15803d" }}>{fmtIls(c.totalPaidIls)}</div><div className="sc-detail-kpi__l">גבה</div></div>
-        <div className="sc-detail-kpi"><div className="sc-detail-kpi__v" style={{ color: c.remainingIls > 0 ? "#dc2626" : "#15803d" }}>{fmtIls(c.remainingIls)}</div><div className="sc-detail-kpi__l">חסר</div></div>
-        <div className="sc-detail-kpi"><div className="sc-detail-kpi__v">{collectionRate}%</div><div className="sc-detail-kpi__l">אחוז גבייה</div></div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <h3 className="sc-detail-title"><Users size={16} /> {c.courierName}</h3>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button className="shp-btn shp-btn--sm" disabled={exporting || filtered.length === 0} onClick={() => void handleExportPdf()}>
+            <FileText size={13} /> PDF
+          </button>
+          <button className="shp-btn shp-btn--sm" disabled={exporting || filtered.length === 0} onClick={() => void handleExportExcel()}>
+            <FileSpreadsheet size={13} /> Excel
+          </button>
+        </div>
       </div>
 
-      <div className="shp-table-wrap" style={{ marginTop: 16 }}>
+      {/* ── KPI Summary ── */}
+      <div className="sc-detail-kpis">
+        <div className="sc-detail-kpi"><div className="sc-detail-kpi__v">{kpis.shipments}</div><div className="sc-detail-kpi__l">משלוחים</div></div>
+        <div className="sc-detail-kpi"><div className="sc-detail-kpi__v">{kpis.boxes}</div><div className="sc-detail-kpi__l">חבילות</div></div>
+        <div className="sc-detail-kpi"><div className="sc-detail-kpi__v" style={{ color: "#15803d" }}>{kpis.delivered}</div><div className="sc-detail-kpi__l">נמסרו</div></div>
+        <div className="sc-detail-kpi"><div className="sc-detail-kpi__v" style={{ color: "#dc2626" }}>{kpis.notDelivered}</div><div className="sc-detail-kpi__l">לא נמסרו</div></div>
+        <div className="sc-detail-kpi"><div className="sc-detail-kpi__v" style={{ color: "#9d174d" }}>{kpis.returned}</div><div className="sc-detail-kpi__l">חזרו</div></div>
+        <div className="sc-detail-kpi"><div className="sc-detail-kpi__v">{kpis.deliveryRate}%</div><div className="sc-detail-kpi__l">אחוז מסירה</div></div>
+        <div className="sc-detail-kpi"><div className="sc-detail-kpi__v">{fmtI(kpis.fee)}</div><div className="sc-detail-kpi__l">דמי משלוח</div></div>
+        <div className="sc-detail-kpi"><div className="sc-detail-kpi__v" style={{ color: "#15803d" }}>{fmtI(kpis.paid)}</div><div className="sc-detail-kpi__l">נגבה</div></div>
+        <div className="sc-detail-kpi"><div className="sc-detail-kpi__v" style={{ color: kpis.remaining > 0 ? "#dc2626" : "#15803d" }}>{fmtI(kpis.remaining)}</div><div className="sc-detail-kpi__l">יתרה</div></div>
+        <div className="sc-detail-kpi"><div className="sc-detail-kpi__v">{kpis.collectionRate}%</div><div className="sc-detail-kpi__l">אחוז גבייה</div></div>
+      </div>
+
+      {/* ── Payment status counts ── */}
+      <div style={{ display: "flex", gap: 12, fontSize: "0.82rem", marginTop: 4, flexWrap: "wrap" }}>
+        <span style={{ color: "#15803d" }}>שולמו: <strong>{kpis.paidCount}</strong></span>
+        <span style={{ color: "#d97706" }}>חלקי: <strong>{kpis.partial}</strong></span>
+        <span style={{ color: "#dc2626" }}>לא שולמו: <strong>{kpis.unpaid}</strong></span>
+      </div>
+
+      {/* ── Filter bar ── */}
+      <div className="sc-filter-bar" style={{ marginTop: 12, padding: "8px 10px", gap: 6, fontSize: "0.8rem" }}>
+        <Filter size={12} style={{ color: "#64748b", flexShrink: 0 }} />
+        <div className="sc-filter-group" style={{ gap: 4 }}>
+          <span className="sc-filter-label" style={{ fontSize: "0.72rem" }}>מ:</span>
+          <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={{ fontSize: "0.78rem", padding: "3px 4px" }} />
+          <span className="sc-filter-label" style={{ fontSize: "0.72rem" }}>עד:</span>
+          <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ fontSize: "0.78rem", padding: "3px 4px" }} />
+        </div>
+        <input placeholder="שבוע" type="number" min={1} max={53} value={fWeek} onChange={(e) => setFWeek(e.target.value)} style={{ width: 56, fontSize: "0.78rem", padding: "3px 4px" }} />
+        <input placeholder="מס׳ משלוח" value={fBatch} onChange={(e) => setFBatch(e.target.value)} style={{ width: 80, fontSize: "0.78rem", padding: "3px 4px" }} />
+        <input placeholder="לקוח" value={fCustomer} onChange={(e) => setFCustomer(e.target.value)} style={{ width: 80, fontSize: "0.78rem", padding: "3px 4px" }} />
+        <select value={fZone} onChange={(e) => setFZone(e.target.value)} style={{ fontSize: "0.78rem", padding: "3px 4px" }}>
+          <option value="">כל האזורים</option>
+          {zones.filter((z) => uniqueZoneIds.includes(z.id)).map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
+        </select>
+        <select value={fStatus} onChange={(e) => setFStatus(e.target.value)} style={{ fontSize: "0.78rem", padding: "3px 4px" }}>
+          <option value="">סטטוס</option>
+          {(Object.entries(SHIPMENT_STATUS_LABELS) as [string, string][]).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </select>
+        <select value={fPayStatus} onChange={(e) => setFPayStatus(e.target.value)} style={{ fontSize: "0.78rem", padding: "3px 4px" }}>
+          <option value="">תשלום</option>
+          <option value="PAID">שולם</option>
+          <option value="PARTIAL">חלקי</option>
+          <option value="UNPAID">לא שולם</option>
+        </select>
+        <select value={fPayMethod} onChange={(e) => setFPayMethod(e.target.value)} style={{ fontSize: "0.78rem", padding: "3px 4px" }}>
+          <option value="">צורת תשלום</option>
+          {PAYMENT_METHODS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+        </select>
+        <select value={fCity} onChange={(e) => setFCity(e.target.value)} style={{ fontSize: "0.78rem", padding: "3px 4px" }}>
+          <option value="">עיר</option>
+          <option value="PS">PS</option>
+          <option value="IL">IL</option>
+        </select>
+        <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+          <Search size={11} style={{ position: "absolute", insetInlineStart: 6, color: "#94a3b8", pointerEvents: "none" }} />
+          <input placeholder="חיפוש חופשי" value={fSearch} onChange={(e) => setFSearch(e.target.value)} style={{ paddingInlineStart: 22, width: 110, fontSize: "0.78rem", padding: "3px 4px 3px 22px" }} />
+        </div>
+        {hasFilters && (
+          <button type="button" className="shp-btn shp-btn--sm" onClick={clearFilters} style={{ fontSize: "0.72rem", padding: "2px 8px" }}>
+            נקה
+          </button>
+        )}
+      </div>
+
+      {/* ── Table ── */}
+      <div className="shp-table-wrap" style={{ marginTop: 10 }}>
         <table className="shp-table shp-table--compact">
           <thead>
             <tr>
-              <th>משלוח</th><th>לקוח</th><th>אזור</th><th>דמי משלוח</th><th>שולם</th><th>יתרה</th><th>סטטוס</th><th>תשלום</th>
+              <th>משלוח</th>
+              <th>תאריך</th>
+              <th>שבוע</th>
+              <th>לקוח</th>
+              <th>אזור</th>
+              <th>חבילות</th>
+              <th>דמי משלוח</th>
+              <th>שולם</th>
+              <th>יתרה</th>
+              <th>סטטוס</th>
+              <th>תשלום</th>
             </tr>
           </thead>
           <tbody>
-            {records.map((r) => (
+            {filtered.length === 0 && (
+              <tr>
+                <td colSpan={11} style={{ textAlign: "center", padding: 28, color: "#94a3b8" }}>
+                  אין משלוחים להצגה
+                </td>
+              </tr>
+            )}
+            {filtered.map((r) => (
               <tr key={r.id}>
                 <td style={{ fontWeight: 600, color: "#1d4ed8" }}>{r.batchNumber}</td>
+                <td style={{ fontSize: "0.78rem", color: "#64748b" }}>{formatDate(r.createdAt)}</td>
+                <td style={{ textAlign: "center", fontSize: "0.78rem" }}>{weekNumber(r.createdAt) ?? "—"}</td>
                 <td>{r.customerName || "—"}</td>
                 <td>{r.zoneName || "—"}</td>
-                <td>{r.deliveryFeeIls != null ? "₪" + r.deliveryFeeIls : "—"}</td>
-                <td style={{ color: "#15803d" }}>{r.paidAmountIls > 0 ? "₪" + r.paidAmountIls : "—"}</td>
-                <td style={{ color: r.remainingFeeIls > 0 ? "#dc2626" : "#15803d" }}>{r.remainingFeeIls > 0 ? "₪" + r.remainingFeeIls : "✓"}</td>
+                <td style={{ textAlign: "center" }}>{r.boxes ?? "—"}</td>
+                <td>{r.deliveryFeeIls != null ? fmtI(r.deliveryFeeIls) : "—"}</td>
+                <td style={{ color: "#15803d" }}>{r.paidAmountIls > 0 ? fmtI(r.paidAmountIls) : "—"}</td>
+                <td style={{ color: r.remainingFeeIls > 0 ? "#dc2626" : "#15803d" }}>{r.remainingFeeIls > 0 ? fmtI(r.remainingFeeIls) : "✓"}</td>
                 <td><span className={`shp-badge shp-badge--${r.status.toLowerCase()}`}>{SHIPMENT_STATUS_LABELS[r.status as ShipmentStatus] ?? r.status}</span></td>
                 <td><span className={`shp-badge shp-badge--${r.paymentStatus.toLowerCase()}`}>{SHIPMENT_PAYMENT_STATUS_LABELS[r.paymentStatus as "UNPAID" | "PARTIAL" | "PAID"] ?? r.paymentStatus}</span></td>
               </tr>
             ))}
           </tbody>
+          {filtered.length > 0 && (
+            <tfoot>
+              <tr style={{ fontWeight: 700, background: "#f1f5f9" }}>
+                <td>סיכום ({filtered.length})</td>
+                <td />
+                <td />
+                <td />
+                <td />
+                <td style={{ textAlign: "center" }}>{kpis.boxes}</td>
+                <td>{fmtI(kpis.fee)}</td>
+                <td style={{ color: "#15803d" }}>{fmtI(kpis.paid)}</td>
+                <td style={{ color: kpis.remaining > 0 ? "#dc2626" : "#15803d" }}>{fmtI(kpis.remaining)}</td>
+                <td />
+                <td />
+              </tr>
+            </tfoot>
+          )}
         </table>
       </div>
     </div>
@@ -813,89 +1537,3 @@ function ExceptionCard({ ex }: { ex: ShipmentException }) {
   );
 }
 
-// ─── Reports tab ──────────────────────────────────────────────────────────────
-
-function ReportsTab({
-  records,
-  zones,
-  couriers,
-  filter,
-  generatedBy,
-}: {
-  records: ShipmentControlRecord[];
-  zones: { id: string; name: string }[];
-  couriers: string[];
-  filter: ShipmentControlFilter;
-  generatedBy: string;
-}) {
-  const [exportRequest, setExportRequest] = useState<{
-    kind: ShipmentReportKind;
-    format: ShipmentReportFormat;
-  } | null>(null);
-  const courierCount = new Set(records.map((record) => record.courierName).filter(Boolean)).size;
-  const zoneCount = new Set(records.map((record) => record.zoneId).filter(Boolean)).size;
-  const exceptionCount = records.filter((record) =>
-    !record.courierName ||
-    !record.zoneId ||
-    record.paymentStatus === "UNPAID" ||
-    record.remainingFeeIls > 0.01 ||
-    record.status === "RETURNED"
-  ).length;
-  const reportItems: Array<{
-    kind: ShipmentReportKind;
-    label: string;
-    sub: string;
-    icon: React.ReactNode;
-  }> = [
-    { kind: "all", label: "כל המשלוחים", sub: `${records.length} שורות`, icon: <Package size={22} /> },
-    { kind: "couriers", label: "משלוחים לפי שליח", sub: `${courierCount} שליחים`, icon: <Users size={22} /> },
-    { kind: "zones", label: "משלוחים לפי אזור", sub: `${zoneCount} אזורים`, icon: <MapPin size={22} /> },
-    { kind: "exceptions", label: "חריגות", sub: `${exceptionCount} משלוחים`, icon: <AlertTriangle size={22} /> },
-  ];
-
-  return (
-    <div>
-      <div className="shp-alert shp-alert--info" style={{ maxWidth: 500, marginBottom: 20 }}>
-        <FileText size={15} />
-        הפקת דוחות מקצועיים ב־Excel וב־PDF לפי הנתונים המסוננים.
-      </div>
-      <div className="sc-report-grid">
-        {reportItems.map((item) => (
-          <div key={item.kind} className="sc-report-card">
-            <div className="sc-report-card__icon">{item.icon}</div>
-            <div className="sc-report-card__label">{item.label}</div>
-            <div className="sc-report-card__sub">{item.sub}</div>
-            <div className="sc-report-card__formats">
-              <button
-                type="button"
-                className="sc-report-card__format sc-report-card__format--excel"
-                onClick={() => setExportRequest({ kind: item.kind, format: "excel" })}
-              >
-                <FileSpreadsheet size={14} /> Excel
-              </button>
-              <button
-                type="button"
-                className="sc-report-card__format sc-report-card__format--pdf"
-                onClick={() => setExportRequest({ kind: item.kind, format: "pdf" })}
-              >
-                <FileText size={14} /> PDF
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-      {exportRequest && (
-        <ShipmentReportExportModal
-          kind={exportRequest.kind}
-          format={exportRequest.format}
-          records={records}
-          zones={zones}
-          couriers={couriers}
-          initialFilter={filter}
-          generatedBy={generatedBy}
-          onClose={() => setExportRequest(null)}
-        />
-      )}
-    </div>
-  );
-}

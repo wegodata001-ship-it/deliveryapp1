@@ -56,18 +56,14 @@ type Props = {
 };
 
 type ListFilters = {
-  shippingDateFrom: string;
-  shippingDateTo: string;
-  arrivalDateFrom: string;
-  week: string;
+  arrivalDate: string;
+  departureDate: string;
   freeSearch: string;
 };
 
 const EMPTY_FILTERS: ListFilters = {
-  shippingDateFrom: "",
-  shippingDateTo: "",
-  arrivalDateFrom: "",
-  week: "",
+  arrivalDate: "",
+  departureDate: "",
   freeSearch: "",
 };
 
@@ -103,14 +99,8 @@ function primaryContainerId(batch: ShipmentBatchDto): string | null {
 function matchesFilters(batch: ShipmentBatchDto, f: ListFilters): boolean {
   const ship = ymd(batch.shippingDate);
   const arrive = ymd(batch.arrivalDate);
-  if (f.shippingDateFrom && (!ship || ship < f.shippingDateFrom)) return false;
-  if (f.shippingDateTo && (!ship || ship > f.shippingDateTo)) return false;
-  if (f.arrivalDateFrom && (!arrive || arrive !== f.arrivalDateFrom)) return false;
-  if (f.week.trim()) {
-    const w = f.week.trim().toUpperCase();
-    const code = (batch.weekCode ?? "").toUpperCase();
-    if (!code || (code !== w && !code.includes(w.replace(/^AH-?/i, "")))) return false;
-  }
+  if (f.arrivalDate && (!arrive || arrive !== f.arrivalDate)) return false;
+  if (f.departureDate && (!ship || ship !== f.departureDate)) return false;
   if (f.freeSearch.trim()) {
     const q = f.freeSearch.trim().toLocaleLowerCase();
     const hay = [
@@ -182,12 +172,6 @@ export function ShipmentListClient({
     [batches, filters],
   );
 
-  const weekOptions = useMemo(() => {
-    const set = new Set<string>();
-    for (const b of batches) if (b.weekCode) set.add(b.weekCode);
-    return [...set].sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
-  }, [batches]);
-
   const kpis = useMemo(() => {
     const shipmentCount = filteredBatches.length;
     const packages = filteredBatches.reduce((s, b) => s + (b.boxesSum || b.recordCount), 0);
@@ -213,17 +197,10 @@ export function ShipmentListClient({
         placeholder: "מספר משלוח, קונטיינר, שבוע…",
         minWidth: 160,
       },
-      { id: "shippingDateFrom", kind: "dateFrom", label: "מתאריך", minWidth: 118 },
-      { id: "shippingDateTo", kind: "dateTo", label: "עד תאריך", minWidth: 118 },
-      { id: "arrivalDateFrom", kind: "date", label: "תאריך הגעה", minWidth: 118 },
-      {
-        id: "week",
-        kind: "week",
-        options: weekOptions.map((w) => ({ value: w, label: w })),
-        minWidth: 100,
-      },
+      { id: "arrivalDate", kind: "date", label: "תאריך הגעה", minWidth: 118 },
+      { id: "departureDate", kind: "date", label: "תאריך יציאה", minWidth: 118 },
     ],
-    [weekOptions],
+    [],
   );
 
   function toggleSelect(id: string) {
@@ -306,6 +283,7 @@ export function ShipmentListClient({
         const v = String(fd.get("applyCourierId") ?? "");
         if (!v) return undefined;
         if (v === "__CLEAR__") return null;
+        if (v === "__ADD_NEW__") return undefined;
         return v;
       })(),
     };
@@ -790,7 +768,16 @@ export function ShipmentListClient({
               </label>
               <label>
                 <span>שליח (לכל החבילות)</span>
-                <select name="applyCourierId" defaultValue="">
+                <select
+                  name="applyCourierId"
+                  defaultValue=""
+                  onChange={(e) => {
+                    if (e.target.value === "__ADD_NEW__") {
+                      setShowCouriers(true);
+                      e.target.value = "";
+                    }
+                  }}
+                >
                   <option value="">ללא שינוי</option>
                   <option value="__CLEAR__">נקה שליח מכל החבילות</option>
                   {couriers
@@ -801,6 +788,7 @@ export function ShipmentListClient({
                         {editBatch.courierIds.includes(c.id) ? " ✓" : ""}
                       </option>
                     ))}
+                  <option value="__ADD_NEW__">➕ הוסף שליח חדש</option>
                 </select>
               </label>
               <label className="shp-edit-form__full">

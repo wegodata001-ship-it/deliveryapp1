@@ -1362,6 +1362,7 @@ export async function closeCourierDebts(input: {
   courierId: string;
   zoneIds: string[];
   batchIds?: string[];
+  paymentMethod: string;
   userId: string;
 }): Promise<{
   preview: CourierDebtClosePreview;
@@ -1374,9 +1375,32 @@ export async function closeCourierDebts(input: {
     return { preview, closedCount: 0, closedRecordIds: [] };
   }
 
-  await prisma.shipmentRecord.updateMany({
-    where: { id: { in: ids } },
-    data: { status: "COMPLETED" },
+  await prisma.$transaction(async (tx) => {
+    for (const rec of preview.eligible) {
+      if (rec.remainingFeeIls > 0) {
+        await tx.shipmentPaymentLine.create({
+          data: {
+            shipmentRecordId: rec.id,
+            method: input.paymentMethod,
+            amountIls: rec.remainingFeeIls,
+            notes: `סגירת חוב שליח – ${preview.courierName}`,
+            createdById: input.userId,
+          },
+        });
+        const newTotal = roundMoney(rec.paidAmountIls + rec.remainingFeeIls);
+        await tx.shipmentRecord.update({
+          where: { id: rec.id },
+          data: {
+            paymentStatus: derivePaymentStatus(rec.deliveryFeeIls, newTotal),
+          },
+        });
+      }
+    }
+
+    await tx.shipmentRecord.updateMany({
+      where: { id: { in: ids } },
+      data: { status: "COMPLETED" },
+    });
   });
 
   await prisma.auditLog.create({
@@ -1390,9 +1414,13 @@ export async function closeCourierDebts(input: {
         courierName: preview.courierName,
         zoneIds: preview.zoneIds,
         zoneNames: preview.zoneNames,
+        paymentMethod: input.paymentMethod,
         closedCount: ids.length,
         skippedCount: preview.skipped.length,
         totalFeeIls: preview.summary.eligibleFeeIls,
+        totalRemainingCreated: roundMoney(
+          preview.eligible.reduce((s, r) => s + r.remainingFeeIls, 0),
+        ),
         closedRecordIds: ids,
         at: new Date().toISOString(),
       } as never,

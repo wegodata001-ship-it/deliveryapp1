@@ -2,7 +2,7 @@
 
 import { requireAuth, userHasAnyPermission, isAdminUser } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
-import { PAYMENT_METHOD_LABELS } from "@/app/admin/shipments/types";
+import { PAYMENT_METHOD_LABELS, PAYMENT_METHODS } from "@/app/admin/shipments/types";
 import type { ShipmentPaymentDetails } from "@/app/admin/shipments/types";
 import type {
   ShipmentControlFilter,
@@ -35,6 +35,7 @@ function mapExpense(e: {
   category: string;
   amountIls: { toNumber(): number };
   notes: string | null;
+  paymentMethod: string;
   expenseDate: Date;
   createdAt: Date;
 }): ShipmentRecordExpenseDto {
@@ -45,6 +46,8 @@ function mapExpense(e: {
     categoryLabel: expenseCategoryLabel(e.category),
     amountIls: e.amountIls.toNumber(),
     notes: e.notes,
+    paymentMethod: e.paymentMethod,
+    paymentMethodLabel: PAYMENT_METHOD_LABELS[e.paymentMethod] ?? e.paymentMethod,
     expenseDate: e.expenseDate.toISOString().slice(0, 10),
     createdAt: e.createdAt.toISOString(),
   };
@@ -439,11 +442,14 @@ function emptyPayload(
 
 // ─── הוצאות פר-משלוח ──────────────────────────────────────────────────────────
 
+const VALID_PAYMENT_METHODS: Set<string> = new Set(PAYMENT_METHODS.map((m) => m.value));
+
 export async function createShipmentRecordExpenseAction(input: {
   shipmentRecordId: string;
   category: string;
   amountIls: number;
   notes?: string | null;
+  paymentMethod: string;
   expenseDate: string; // YYYY-MM-DD
 }): Promise<{ ok: true; expense: ShipmentRecordExpenseDto } | { ok: false; error: string }> {
   try {
@@ -458,6 +464,9 @@ export async function createShipmentRecordExpenseAction(input: {
     const amount = Number(input.amountIls);
     if (!Number.isFinite(amount) || amount <= 0) {
       return { ok: false, error: "סכום חייב להיות גדול מאפס" };
+    }
+    if (!input.paymentMethod || !VALID_PAYMENT_METHODS.has(input.paymentMethod)) {
+      return { ok: false, error: "צורת תשלום חסרה או לא תקינה" };
     }
     const day = input.expenseDate?.trim().slice(0, 10);
     if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
@@ -475,6 +484,7 @@ export async function createShipmentRecordExpenseAction(input: {
         category,
         amountIls: amount,
         notes: input.notes?.trim() || null,
+        paymentMethod: input.paymentMethod,
         expenseDate: new Date(day + "T00:00:00.000Z"),
         createdById: me.id,
       },
@@ -490,6 +500,7 @@ export async function updateShipmentRecordExpenseAction(input: {
   category?: string;
   amountIls?: number;
   notes?: string | null;
+  paymentMethod?: string;
   expenseDate?: string;
 }): Promise<{ ok: true; expense: ShipmentRecordExpenseDto } | { ok: false; error: string }> {
   try {
@@ -513,6 +524,12 @@ export async function updateShipmentRecordExpenseAction(input: {
       data.amountIls = amount;
     }
     if (input.notes !== undefined) data.notes = input.notes?.trim() || null;
+    if (input.paymentMethod !== undefined) {
+      if (!VALID_PAYMENT_METHODS.has(input.paymentMethod)) {
+        return { ok: false, error: "צורת תשלום לא תקינה" };
+      }
+      data.paymentMethod = input.paymentMethod;
+    }
     if (input.expenseDate !== undefined) {
       const day = input.expenseDate.trim().slice(0, 10);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {

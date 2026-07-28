@@ -977,6 +977,7 @@ export function ShipmentBatchClient({
                     const v = String(fd.get("applyCourierId") ?? "");
                     if (!v) return undefined;
                     if (v === "__CLEAR__") return null;
+                    if (v === "__ADD_NEW__") return undefined;
                     return v;
                   })(),
                 };
@@ -1052,6 +1053,7 @@ export function ShipmentBatchClient({
                         {batch.courierIds.includes(c.id) ? " ✓" : ""}
                       </option>
                     ))}
+                  <option value="__ADD_NEW__">➕ הוסף שליח חדש</option>
                 </select>
               </label>
               <label className="shp-edit-form__full">

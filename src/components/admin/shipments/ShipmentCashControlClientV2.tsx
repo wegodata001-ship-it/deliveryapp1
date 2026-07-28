@@ -198,7 +198,7 @@ export function ShipmentCashControlClient() {
       <div className="shp-cash-control__header">
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <CircleDollarSign size={20} />
-          <h2 style={{ margin: 0, fontSize: "1.1rem" }}>בקרת קופה — דמי משלוח</h2>
+          <h2 style={{ margin: 0, fontSize: "1.1rem" }}>בקרת קופה – משלוחים</h2>
         </div>
 
         {/* View mode tabs */}
@@ -315,7 +315,7 @@ function DayView({ data, busy, dayOpen, countEditing, countDraft, onCountDraftCh
                 <td className="scc-method-name">{m.label}{m.isManual && <span className="scc-manual-badge">ידני</span>}</td>
                 <td className="scc-clickable" onClick={() => m.collectedIls > 0 && onDrilldown(m.method, "receipts")}>{fmtIls(m.collectedIls)}</td>
                 <td className="scc-clickable" onClick={() => m.expensesIls > 0 && onDrilldown(m.method, "expenses")}>{m.expensesIls > 0 ? fmtIls(m.expensesIls) : "—"}</td>
-                <td style={{ fontWeight: 600 }}>{fmtIls(m.balanceIls)}</td>
+                <td style={{ fontWeight: 700, color: m.balanceIls < 0 ? "#dc2626" : "#15803d" }}>{fmtIls(m.balanceIls)}</td>
                 <td>
                   {countEditing ? (
                     <input
@@ -338,13 +338,13 @@ function DayView({ data, busy, dayOpen, countEditing, countDraft, onCountDraftCh
           </tbody>
           <tfoot>
             <tr className="scc-totals-row">
-              <td><strong>סה״כ</strong></td>
-              <td><strong>{fmtIls(data.summary.collectedIls)}</strong></td>
-              <td><strong>{fmtIls(data.summary.expensesIls)}</strong></td>
-              <td><strong>{fmtIls(data.summary.balanceAfterExpensesIls)}</strong></td>
-              <td><strong>{fmtIls(data.summary.countedIls)}</strong></td>
+              <td>סה״כ</td>
+              <td>{fmtIls(data.summary.collectedIls)}</td>
+              <td style={{ color: data.summary.expensesIls > 0 ? "#b45309" : undefined }}>{fmtIls(data.summary.expensesIls)}</td>
+              <td style={{ color: data.summary.balanceAfterExpensesIls < 0 ? "#dc2626" : "#15803d" }}>{fmtIls(data.summary.balanceAfterExpensesIls)}</td>
+              <td>{fmtIls(data.summary.countedIls)}</td>
               <td className={`scc-diff scc-diff--${Math.abs(data.summary.cashDifferenceIls) < 0.5 ? "ok" : Math.abs(data.summary.cashDifferenceIls) <= 50 ? "small" : "large"}`}>
-                <strong>{fmtIls(data.summary.cashDifferenceIls)}</strong>
+                {fmtIls(data.summary.cashDifferenceIls)}
               </td>
             </tr>
           </tfoot>
@@ -366,9 +366,9 @@ function DayView({ data, busy, dayOpen, countEditing, countDraft, onCountDraftCh
       {/* Expenses list */}
       {data.expenses.length > 0 && (
         <div className="scc-expenses-section">
-          <h3 style={{ fontSize: "0.9rem", margin: "0 0 8px" }}>הוצאות היום</h3>
-          <div className="shp-table-wrap" style={{ maxHeight: 200 }}>
-            <table className="shp-table shp-table--compact">
+          <h3 style={{ fontSize: "0.95rem", margin: "0 0 10px", fontWeight: 700 }}>הוצאות היום</h3>
+          <div className="shp-table-wrap" style={{ maxHeight: 220 }}>
+            <table className="shp-table shp-table--compact scc-method-table">
               <thead>
                 <tr>
                   <th>סוג</th>
@@ -383,8 +383,8 @@ function DayView({ data, busy, dayOpen, countEditing, countDraft, onCountDraftCh
                   <tr key={e.id}>
                     <td>{e.categoryLabel}</td>
                     <td>{e.paymentMethodLabel}</td>
-                    <td>{fmtIls(e.amountIls)}</td>
-                    <td style={{ maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis" }}>{e.notes || "—"}</td>
+                    <td style={{ fontWeight: 700, color: "#b45309" }}>{fmtIls(e.amountIls)}</td>
+                    <td style={{ maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis" }}>{e.notes || "—"}</td>
                     <td>
                       {dayOpen && (
                         <button className="shp-icon-btn" title="מחק" onClick={() => onDeleteExpense(e.id)} disabled={busy}><Trash2 size={14} /></button>
@@ -444,7 +444,7 @@ function WeekView({ data, onDrilldown }: {
                     </td>
                   );
                 })}
-                <td style={{ fontWeight: 600 }}>{fmtIls(day.totalCollected)}</td>
+                <td style={{ fontWeight: 700 }}>{fmtIls(day.totalCollected)}</td>
               </tr>
             ))}
           </tbody>
@@ -464,12 +464,12 @@ function WeekView({ data, onDrilldown }: {
               <td><strong>{fmtIls(data.totalExpenses)}</strong></td>
             </tr>
             <tr className="scc-totals-row scc-balance-row">
-              <td><strong>יתרה</strong></td>
+              <td>יתרה</td>
               {CASH_CONTROL_METHODS.map((m) => {
                 const bal = (data.totalByMethod[m.value] ?? 0) - (data.totalExpensesByMethod[m.value] ?? 0);
-                return <td key={m.value}><strong>{fmtIls(bal)}</strong></td>;
+                return <td key={m.value} style={{ color: bal < 0 ? "#dc2626" : "#15803d" }}>{fmtIls(bal)}</td>;
               })}
-              <td><strong>{fmtIls(data.totalBalance)}</strong></td>
+              <td style={{ color: data.totalBalance < 0 ? "#dc2626" : "#15803d" }}>{fmtIls(data.totalBalance)}</td>
             </tr>
           </tfoot>
         </table>

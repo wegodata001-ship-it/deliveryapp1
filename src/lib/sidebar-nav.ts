@@ -132,7 +132,7 @@ export const SIDEBAR_SECTIONS: NavSectionDef[] = [
       { href: "/admin/shipments/control", label: "בקרת משלוחים", icon: "receipt", anyOf: ["manage_shipments", "view_shipments"] },
       {
         href: "/admin/shipments/cash-control",
-        label: "בקרת קופה",
+        label: "בקרת קופה – משלוחים",
         icon: "cashbox",
         anyOf: ["manage_shipments", "view_shipments"],
       },

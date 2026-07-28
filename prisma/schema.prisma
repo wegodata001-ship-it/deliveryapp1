@@ -1349,6 +1349,8 @@ model ShipmentRecordExpense {
   category         String
   amountIls        Decimal  @db.Decimal(12, 2)
   notes            String?
+  /// CASH | BANK_TRANSFER | CREDIT | CHECK | CREDIT_NOTE | CODE_DEDUCTION
+  paymentMethod    String   @default("CASH")
   /// תאריך ההוצאה (YYYY-MM-DD לוגי)
   expenseDate      DateTime @db.Date
   createdById      String?

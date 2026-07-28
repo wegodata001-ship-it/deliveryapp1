@@ -1,22 +1,29 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, CircleDollarSign, X } from "lucide-react";
+import { CheckCircle2, CircleDollarSign, X, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
 import type { ShipmentCourierDto, ShipmentRecordDto, CourierDebtClosePreview } from "@/app/admin/shipments/types";
 import {
   closeCourierDebtsAction,
   previewCourierDebtCloseAction,
 } from "@/app/admin/shipments/actions";
-import { looksLikeDistributionArea } from "@/lib/distribution-area-name";
 
 type Props = {
   couriers: ShipmentCourierDto[];
   records: ShipmentRecordDto[];
-  /** הגבלה לאצוות נוכחיות (משלוח בודד / מאוחד) */
   batchIds?: string[];
   onClose: () => void;
   onDone: (message: string) => void;
 };
+
+const DEBT_CLOSE_METHODS = [
+  { value: "CASH", label: "מזומן" },
+  { value: "BANK_TRANSFER", label: "העברה בנקאית" },
+  { value: "CREDIT", label: "אשראי" },
+  { value: "CHECK", label: "צ׳קים" },
+  { value: "CREDIT_NOTE", label: "זיכוי" },
+  { value: "CODE_DEDUCTION", label: "משיכה מהקופה" },
+] as const;
 
 function fmtIls(n: number) {
   return n.toLocaleString("he-IL", {
@@ -34,11 +41,12 @@ export function CourierDebtCloseModal({
   onDone,
 }: Props) {
   const [courierId, setCourierId] = useState("");
-  const [zoneIds, setZoneIds] = useState<string[]>([]);
+  const [paymentMethod, setPaymentMethod] = useState("");
   const [preview, setPreview] = useState<CourierDebtClosePreview | null>(null);
-  const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showSkipDetails, setShowSkipDetails] = useState(false);
+  const [showEligibleDetails, setShowEligibleDetails] = useState(false);
 
   const activeCouriers = useMemo(
     () =>
@@ -48,336 +56,311 @@ export function CourierDebtCloseModal({
     [couriers],
   );
 
-  const zoneOptions = useMemo(() => {
+  const allZoneIds = useMemo(() => {
     if (!courierId) return [];
-    const map = new Map<string, string>();
+    const set = new Set<string>();
     for (const r of records) {
       if (r.courierId !== courierId || !r.zoneId) continue;
-      const label =
-        r.zoneName && looksLikeDistributionArea(r.zoneName)
-          ? r.zoneName
-          : r.zoneName?.trim() || r.zoneId;
-      if (!map.has(r.zoneId)) map.set(r.zoneId, label);
+      set.add(r.zoneId);
     }
-    return [...map.entries()]
-      .map(([id, name]) => ({ id, name }))
-      .sort((a, b) => a.name.localeCompare(b.name, "he"));
+    return [...set];
   }, [records, courierId]);
 
   useEffect(() => {
-    setZoneIds([]);
     setPreview(null);
-    setConfirmOpen(false);
+    setPaymentMethod("");
+    setError(null);
+    setShowSkipDetails(false);
+    setShowEligibleDetails(false);
   }, [courierId]);
 
-  function toggleZone(id: string) {
-    setZoneIds((prev) =>
-      prev.includes(id) ? prev.filter((z) => z !== id) : [...prev, id],
-    );
-    setPreview(null);
-  }
-
-  function toggleAllZones() {
-    if (zoneIds.length === zoneOptions.length) setZoneIds([]);
-    else setZoneIds(zoneOptions.map((z) => z.id));
-    setPreview(null);
-  }
-
-  async function loadPreview() {
-    if (!courierId || zoneIds.length === 0) {
-      setError("יש לבחור שליח ולפחות אזור אחד");
-      return;
-    }
+  useEffect(() => {
+    if (!courierId || allZoneIds.length === 0) return;
+    let cancelled = false;
     setBusy(true);
     setError(null);
-    const res = await previewCourierDebtCloseAction({
-      courierId,
-      zoneIds,
-      batchIds,
+    previewCourierDebtCloseAction({ courierId, zoneIds: allZoneIds, batchIds }).then((res) => {
+      if (cancelled) return;
+      setBusy(false);
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      setPreview(res.preview);
     });
-    setBusy(false);
-    if (!res.ok) {
-      setError(res.error);
-      return;
-    }
-    setPreview(res.preview);
-  }
+    return () => { cancelled = true; };
+  }, [courierId, allZoneIds, batchIds]);
 
   async function confirmClose() {
-    if (!courierId || zoneIds.length === 0) return;
+    if (!courierId || allZoneIds.length === 0 || !paymentMethod) return;
     setBusy(true);
     setError(null);
     const res = await closeCourierDebtsAction({
       courierId,
-      zoneIds,
+      zoneIds: allZoneIds,
       batchIds,
+      paymentMethod,
     });
     setBusy(false);
     if (!res.ok) {
       setError(res.error);
       return;
     }
+    const methodLabel = DEBT_CLOSE_METHODS.find((m) => m.value === paymentMethod)?.label ?? paymentMethod;
     const msg =
       res.skippedCount > 0
-        ? `${res.closedCount} משלוחים נסגרו בהצלחה. ${res.skippedCount} משלוחים לא נסגרו ודורשים טיפול.`
-        : `${res.closedCount} משלוחים נסגרו בהצלחה.`;
+        ? `${res.closedCount} משלוחים נסגרו (${methodLabel}). ${res.skippedCount} דורשים טיפול.`
+        : `${res.closedCount} משלוחים נסגרו בהצלחה (${methodLabel}).`;
     onDone(msg);
     onClose();
   }
 
   const courierName =
-    activeCouriers.find((c) => c.id === courierId)?.name ||
-    preview?.courierName ||
-    "";
+    activeCouriers.find((c) => c.id === courierId)?.name ?? "";
+
+  const canClose =
+    !busy &&
+    !!courierId &&
+    !!paymentMethod &&
+    !!preview &&
+    preview.summary.eligibleCount > 0;
 
   return (
-    <>
+    <div
+      className="shp-modal-backdrop"
+      onClick={(e) => e.target === e.currentTarget && !busy && onClose()}
+    >
       <div
-        className="shp-modal-backdrop"
-        onClick={(e) => e.target === e.currentTarget && !busy && onClose()}
+        className="shp-modal"
+        style={{ maxWidth: 720, width: "96vw" }}
+        dir="rtl"
+        onClick={(e) => e.stopPropagation()}
       >
-        <div
-          className="shp-modal"
-          style={{ maxWidth: 720, width: "96vw" }}
-          dir="rtl"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="shp-modal__header">
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <CircleDollarSign size={18} />
-              <strong>סגירת חוב לפי שליח</strong>
-            </div>
-            <button type="button" className="shp-icon-btn" disabled={busy} onClick={onClose}>
-              <X size={16} />
-            </button>
+        <div className="shp-modal__header">
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <CircleDollarSign size={18} />
+            <strong>סגירת חוב לפי שליח</strong>
           </div>
+          <button type="button" className="shp-icon-btn" disabled={busy} onClick={onClose}>
+            <X size={16} />
+          </button>
+        </div>
 
-          <div className="shp-modal__body" style={{ display: "grid", gap: 16 }}>
-            <label className="sc-expense-field">
-              <span>שלב 1 — בחירת שליח</span>
-              <select
-                value={courierId}
-                disabled={busy}
-                onChange={(e) => setCourierId(e.target.value)}
-              >
-                <option value="">בחרו שליח...</option>
-                {activeCouriers.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
+        <div className="shp-modal__body" style={{ display: "grid", gap: 20, padding: "20px 24px", maxHeight: "75vh", overflowY: "auto" }}>
+          {/* ── שלב 1: בחירת שליח ── */}
+          <label className="sc-expense-field">
+            <span style={{ fontWeight: 700 }}>שלב 1 — בחירת שליח</span>
+            <select
+              value={courierId}
+              disabled={busy}
+              onChange={(e) => setCourierId(e.target.value)}
+              style={{ padding: "10px 12px", fontSize: "0.92rem" }}
+            >
+              <option value="">בחרו שליח...</option>
+              {activeCouriers.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          </label>
+
+          {/* ── שלב 2: בחירת אמצעי תשלום ── */}
+          {courierId && (
+            <div className="sc-expense-field">
+              <span style={{ fontWeight: 700 }}>שלב 2 — צורת סגירת החוב</span>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 8 }}>
+                {DEBT_CLOSE_METHODS.map((m) => (
+                  <button
+                    key={m.value}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setPaymentMethod(m.value)}
+                    style={{
+                      padding: "10px 8px",
+                      border: paymentMethod === m.value ? "2px solid #3b82f6" : "1.5px solid #e2e8f0",
+                      borderRadius: 8,
+                      background: paymentMethod === m.value ? "#eff6ff" : "#fff",
+                      color: paymentMethod === m.value ? "#1d4ed8" : "#334155",
+                      fontWeight: paymentMethod === m.value ? 700 : 500,
+                      fontSize: "0.88rem",
+                      cursor: "pointer",
+                      transition: "all 0.15s ease",
+                    }}
+                  >
+                    {m.label}
+                  </button>
                 ))}
-              </select>
-            </label>
+              </div>
+            </div>
+          )}
 
-            {courierId && (
-              <div className="sc-expense-field">
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                  }}
-                >
-                  <span>שלב 2 — אזורי חלוקה של השליח</span>
-                  {zoneOptions.length > 0 && (
-                    <button
-                      type="button"
-                      className="shp-btn shp-btn--sm"
-                      disabled={busy}
-                      onClick={toggleAllZones}
-                    >
-                      {zoneIds.length === zoneOptions.length ? "נקה הכל" : "בחר הכל"}
-                    </button>
-                  )}
+          {/* ── שלב 3: סיכום ── */}
+          {courierId && preview && paymentMethod && (
+            <div style={{ border: "2px solid #e2e8f0", borderRadius: 10, padding: "16px 20px", background: "#fafbfd" }}>
+              <h3 style={{ margin: "0 0 12px", fontSize: "0.95rem", borderBottom: "2px solid #3b82f6", paddingBottom: 8 }}>
+                שלב 3 — סיכום
+              </h3>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 24px", fontSize: "0.9rem" }}>
+                <div>
+                  <span style={{ color: "#64748b" }}>שליח:</span>{" "}
+                  <strong>{courierName}</strong>
                 </div>
-                {zoneOptions.length === 0 ? (
-                  <div style={{ color: "#94a3b8", fontSize: 13 }}>
-                    לא נמצאו אזורי חלוקה למשלוחים של שליח זה במסך הנוכחי
+                <div>
+                  <span style={{ color: "#64748b" }}>צורת סגירה:</span>{" "}
+                  <strong>{DEBT_CLOSE_METHODS.find((m) => m.value === paymentMethod)?.label}</strong>
+                </div>
+                <div>
+                  <span style={{ color: "#64748b" }}>משלוחים לסגירה:</span>{" "}
+                  <strong style={{ color: "#15803d" }}>{preview.summary.eligibleCount}</strong>
+                </div>
+                <div>
+                  <span style={{ color: "#64748b" }}>סכום כולל:</span>{" "}
+                  <strong>{fmtIls(preview.summary.eligibleFeeIls)}</strong>
+                </div>
+                {preview.summary.collectedIls > 0 && (
+                  <div>
+                    <span style={{ color: "#64748b" }}>כבר נקלט:</span>{" "}
+                    <strong>{fmtIls(preview.summary.collectedIls)}</strong>
                   </div>
-                ) : (
-                  <div className="cdc-zone-list">
-                    {zoneOptions.map((z) => (
-                      <label key={z.id} className="cdc-zone-item">
-                        <input
-                          type="checkbox"
-                          checked={zoneIds.includes(z.id)}
-                          disabled={busy}
-                          onChange={() => toggleZone(z.id)}
-                        />
-                        <span>{z.name}</span>
-                      </label>
-                    ))}
+                )}
+                {preview.summary.remainingIls > 0 && (
+                  <div>
+                    <span style={{ color: "#64748b" }}>נשאר לגבות:</span>{" "}
+                    <strong style={{ color: "#b45309" }}>{fmtIls(preview.summary.remainingIls)}</strong>
                   </div>
                 )}
               </div>
-            )}
 
-            {courierId && zoneIds.length > 0 && (
-              <div>
-                <button
-                  type="button"
-                  className="shp-btn shp-btn--secondary shp-btn--sm"
-                  disabled={busy}
-                  onClick={() => void loadPreview()}
-                >
-                  {busy && !preview ? "מחשב..." : "חשב סיכום"}
-                </button>
-              </div>
-            )}
-
-            {preview && (
-              <div className="cdc-summary">
-                <h3 style={{ margin: 0, fontSize: "0.95rem" }}>שלב 3 — סיכום</h3>
-                <div className="cdc-summary-grid">
-                  <div>
-                    <span>מספר משלוחים</span>
-                    <strong>{preview.summary.shipmentCount}</strong>
-                  </div>
-                  <div>
-                    <span>מספר לקוחות</span>
-                    <strong>{preview.summary.customerCount}</strong>
-                  </div>
-                  <div>
-                    <span>סך דמי משלוח</span>
-                    <strong>{fmtIls(preview.summary.totalFeeIls)}</strong>
-                  </div>
-                  <div>
-                    <span>כבר נקלט</span>
-                    <strong>{fmtIls(preview.summary.collectedIls)}</strong>
-                  </div>
-                  <div>
-                    <span>נשאר לגבות</span>
-                    <strong>{fmtIls(preview.summary.remainingIls)}</strong>
-                  </div>
-                  <div>
-                    <span>ניתנים לסגירה</span>
-                    <strong style={{ color: "#15803d" }}>
-                      {preview.summary.eligibleCount}
-                    </strong>
-                  </div>
-                </div>
-
-                {preview.skipped.length > 0 && (
-                  <div className="cdc-skipped">
-                    <strong>
-                      משלוחים שלא ייסגרו ({preview.skipped.length})
-                    </strong>
-                    <div className="shp-table-wrap" style={{ maxHeight: 180 }}>
-                      <table className="shp-table shp-table--compact">
+              {/* ── פירוט משלוחים שייסגרו ── */}
+              {preview.eligible.length > 0 && (
+                <div style={{ marginTop: 14 }}>
+                  <button
+                    type="button"
+                    onClick={() => setShowEligibleDetails(!showEligibleDetails)}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 6, background: "none",
+                      border: "none", cursor: "pointer", fontWeight: 600, fontSize: "0.85rem",
+                      color: "#15803d", padding: 0,
+                    }}
+                  >
+                    {showEligibleDetails ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                    {preview.eligible.length} משלוחים ייסגרו — לחץ לפירוט
+                  </button>
+                  {showEligibleDetails && (
+                    <div style={{
+                      marginTop: 8, border: "1px solid #bbf7d0", borderRadius: 8,
+                      background: "#f0fdf4", maxHeight: 200, overflowY: "auto",
+                    }}>
+                      <table style={{ width: "100%", fontSize: "0.82rem", borderCollapse: "collapse" }}>
                         <thead>
-                          <tr>
-                            <th>משלוח</th>
-                            <th>לקוח</th>
-                            <th>יתרה</th>
-                            <th>סיבה</th>
+                          <tr style={{ background: "#dcfce7" }}>
+                            <th style={{ padding: "6px 10px", textAlign: "right" }}>מס׳ אצווה</th>
+                            <th style={{ padding: "6px 10px", textAlign: "right" }}>לקוח</th>
+                            <th style={{ padding: "6px 10px", textAlign: "right" }}>דמי משלוח</th>
+                            <th style={{ padding: "6px 10px", textAlign: "right" }}>שולם</th>
+                            <th style={{ padding: "6px 10px", textAlign: "right" }}>יתרה לסגירה</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {preview.skipped.slice(0, 50).map((r) => (
-                            <tr key={r.id}>
-                              <td>{r.batchNumber}</td>
-                              <td>{r.customerName || r.customerCode || "—"}</td>
-                              <td>{fmtIls(r.remainingFeeIls)}</td>
-                              <td style={{ color: "#b91c1c" }}>{r.reasonLabel}</td>
+                          {preview.eligible.map((r) => (
+                            <tr key={r.id} style={{ borderTop: "1px solid #bbf7d0" }}>
+                              <td style={{ padding: "5px 10px" }}>{r.batchNumber}</td>
+                              <td style={{ padding: "5px 10px" }}>{r.customerName || r.customerCode || "—"}</td>
+                              <td style={{ padding: "5px 10px" }}>{fmtIls(r.deliveryFeeIls)}</td>
+                              <td style={{ padding: "5px 10px" }}>{fmtIls(r.paidAmountIls)}</td>
+                              <td style={{ padding: "5px 10px", fontWeight: r.remainingFeeIls > 0 ? 700 : 400, color: r.remainingFeeIls > 0 ? "#b45309" : "#15803d" }}>
+                                {r.remainingFeeIls > 0 ? fmtIls(r.remainingFeeIls) : "✓ שולם"}
+                              </td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
                     </div>
-                  </div>
-                )}
-              </div>
+                  )}
+                </div>
+              )}
+
+              {/* ── פירוט משלוחים שלא ייסגרו (דורשים טיפול) ── */}
+              {preview.skipped.length > 0 && (
+                <div style={{ marginTop: 14 }}>
+                  <button
+                    type="button"
+                    onClick={() => setShowSkipDetails(!showSkipDetails)}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 6, width: "100%",
+                      background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8,
+                      cursor: "pointer", fontWeight: 700, fontSize: "0.88rem",
+                      color: "#b45309", padding: "10px 12px", justifyContent: "center",
+                    }}
+                  >
+                    <AlertTriangle size={16} />
+                    {preview.skipped.length} משלוחים לא ייסגרו (דורשים טיפול) — לחץ לפירוט
+                    {showSkipDetails ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  </button>
+
+                  {showSkipDetails && (
+                    <div style={{
+                      marginTop: 8, border: "1px solid #fed7aa", borderRadius: 8,
+                      background: "#fffbeb", maxHeight: 250, overflowY: "auto",
+                    }}>
+                      <table style={{ width: "100%", fontSize: "0.82rem", borderCollapse: "collapse" }}>
+                        <thead>
+                          <tr style={{ background: "#fef3c7" }}>
+                            <th style={{ padding: "6px 10px", textAlign: "right" }}>מס׳ אצווה</th>
+                            <th style={{ padding: "6px 10px", textAlign: "right" }}>לקוח</th>
+                            <th style={{ padding: "6px 10px", textAlign: "right" }}>דמי משלוח</th>
+                            <th style={{ padding: "6px 10px", textAlign: "right" }}>שולם</th>
+                            <th style={{ padding: "6px 10px", textAlign: "right" }}>סיבה</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {preview.skipped.map((r) => (
+                            <tr key={r.id} style={{ borderTop: "1px solid #fed7aa" }}>
+                              <td style={{ padding: "5px 10px" }}>{r.batchNumber}</td>
+                              <td style={{ padding: "5px 10px" }}>{r.customerName || r.customerCode || "—"}</td>
+                              <td style={{ padding: "5px 10px" }}>{fmtIls(r.deliveryFeeIls)}</td>
+                              <td style={{ padding: "5px 10px" }}>{fmtIls(r.paidAmountIls)}</td>
+                              <td style={{ padding: "5px 10px", fontWeight: 700, color: "#b45309" }}>
+                                {r.reasonLabel}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {busy && !preview && courierId && (
+            <div style={{ textAlign: "center", color: "#64748b", fontSize: "0.88rem" }}>
+              מחשב סיכום...
+            </div>
+          )}
+
+          {error && <div className="shp-alert shp-alert--error">{error}</div>}
+        </div>
+
+        <div className="shp-modal__footer">
+          <button type="button" className="shp-btn" disabled={busy} onClick={onClose}>
+            ביטול
+          </button>
+          <button
+            type="button"
+            className="shp-btn shp-btn--primary"
+            disabled={!canClose}
+            onClick={() => void confirmClose()}
+          >
+            {busy ? "סוגר..." : (
+              <>
+                <CheckCircle2 size={14} />
+                סגור חוב
+              </>
             )}
-
-            {error && <div className="shp-alert shp-alert--error">{error}</div>}
-          </div>
-
-          <div className="shp-modal__footer">
-            <button type="button" className="shp-btn" disabled={busy} onClick={onClose}>
-              ביטול
-            </button>
-            <button
-              type="button"
-              className="shp-btn shp-btn--primary"
-              disabled={
-                busy || !preview || preview.summary.eligibleCount === 0
-              }
-              onClick={() => setConfirmOpen(true)}
-            >
-              <CheckCircle2 size={14} />
-              המשך לאישור
-            </button>
-          </div>
+          </button>
         </div>
       </div>
-
-      {confirmOpen && preview && (
-        <div
-          className="shp-modal-backdrop"
-          style={{ zIndex: 70 }}
-          onClick={(e) => e.target === e.currentTarget && !busy && setConfirmOpen(false)}
-        >
-          <div
-            className="shp-modal"
-            style={{ maxWidth: 460, width: "92vw" }}
-            dir="rtl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="shp-modal__header">
-              <strong>אישור סגירת חובות</strong>
-              <button
-                type="button"
-                className="shp-icon-btn"
-                disabled={busy}
-                onClick={() => setConfirmOpen(false)}
-              >
-                <X size={16} />
-              </button>
-            </div>
-            <div className="shp-modal__body" style={{ display: "grid", gap: 10 }}>
-              <p style={{ margin: 0, lineHeight: 1.5 }}>
-                האם לסגור את כל המשלוחים התקינים של השליח{" "}
-                <strong>«{courierName}»</strong> באזור{" "}
-                <strong>
-                  «{preview.zoneNames.join(", ")}»
-                </strong>
-                ?
-              </p>
-              <div className="cdc-confirm-stats">
-                <div>
-                  מספר משלוחים: <strong>{preview.summary.eligibleCount}</strong>
-                </div>
-                <div>
-                  סכום כולל: <strong>{fmtIls(preview.summary.eligibleFeeIls)}</strong>
-                </div>
-                {preview.summary.skippedCount > 0 && (
-                  <div style={{ color: "#b45309" }}>
-                    {preview.summary.skippedCount} משלוחים יישארו לטיפול (לא ייסגרו)
-                  </div>
-                )}
-              </div>
-            </div>
-            <div className="shp-modal__footer">
-              <button
-                type="button"
-                className="shp-btn"
-                disabled={busy}
-                onClick={() => setConfirmOpen(false)}
-              >
-                ביטול
-              </button>
-              <button
-                type="button"
-                className="shp-btn shp-btn--primary"
-                disabled={busy}
-                onClick={() => void confirmClose()}
-              >
-                {busy ? "סוגר..." : "סגור חובות"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
+    </div>
   );
 }
