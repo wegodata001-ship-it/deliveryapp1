@@ -82,6 +82,12 @@ export function activityActionLabelHe(actionType: string): string {
       return "יציאה מהמערכת";
     case "FINANCE_SETTINGS_UPDATED":
       return "עדכן הגדרות כספים";
+    case "SHIPMENT_COURIER_PDF":
+      return "הפקת PDF לשליח";
+    case "SHIPMENT_CUSTOM_PDF":
+      return "הפקת PDF מותאם למשלוחים";
+    case "SHIPMENT_COURIER_ASSIGNED":
+      return "שיוך שליח למשלוחים";
     default:
       return "פעולה";
   }

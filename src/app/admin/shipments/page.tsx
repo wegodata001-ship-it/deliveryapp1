@@ -1,17 +1,31 @@
 import { requireRoutePermission } from "@/lib/route-access";
+import { isAdminUser } from "@/lib/admin-auth";
 import { listCouriers, listShipmentBatches, listZones } from "@/app/admin/shipments/service";
+import { loadShipmentCashControl } from "@/app/admin/shipments/cash-control/service";
 import { ShipmentListClient } from "@/components/admin/shipments/ShipmentListClient";
 import "@/app/admin/shipments/shipments.css";
 
 export const dynamic = "force-dynamic";
 
-export default async function ShipmentsPage() {
-  await requireRoutePermission(["manage_shipments", "view_shipments"]);
+function todayYmd() {
+  return new Date().toISOString().slice(0, 10);
+}
 
-  const [batches, zones, couriers] = await Promise.all([
+export default async function ShipmentsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ view?: string }>;
+}) {
+  const user = await requireRoutePermission(["manage_shipments", "view_shipments"]);
+  const sp = (await searchParams) ?? {};
+  const initialView = sp.view === "cash-control" ? "cash-control" : "list";
+  const dayDate = todayYmd();
+
+  const [batches, zones, couriers, cashControl] = await Promise.all([
     listShipmentBatches(),
     listZones(),
     listCouriers(),
+    loadShipmentCashControl({ dayDate }),
   ]);
 
   return (
@@ -19,6 +33,10 @@ export default async function ShipmentsPage() {
       initialBatches={batches}
       initialZones={zones}
       initialCouriers={couriers}
+      initialView={initialView}
+      cashControlInitialData={cashControl}
+      cashControlDayDate={dayDate}
+      viewerIsAdmin={isAdminUser(user)}
     />
   );
 }

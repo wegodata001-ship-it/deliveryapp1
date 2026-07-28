@@ -61,19 +61,40 @@ export async function launchPdfBrowser(): Promise<Browser> {
  *
  * אפשרויות העמוד/PDF זהות לחלוטין למה שהיה לפני המעבר (A4 landscape וכו').
  */
-export async function renderHtmlToPdf(html: string): Promise<Uint8Array | null> {
+export type RenderHtmlToPdfOptions = {
+  locale?: string;
+  landscape?: boolean;
+  /** ברירת מחדל: margin 0 (זהות למסמכים קיימים) */
+  margin?: { top?: string; right?: string; bottom?: string; left?: string };
+  displayHeaderFooter?: boolean;
+  headerTemplate?: string;
+  footerTemplate?: string;
+  preferCSSPageSize?: boolean;
+};
+
+export async function renderHtmlToPdf(
+  html: string,
+  options?: RenderHtmlToPdfOptions,
+): Promise<Uint8Array | null> {
   let browser: Browser | null = null;
   try {
     browser = await launchPdfBrowser();
-    const page = await browser.newPage({ locale: "he-IL" });
+    const page = await browser.newPage({ locale: options?.locale ?? "he-IL" });
     await page.setContent(html, { waitUntil: "networkidle" });
     await page.emulateMedia({ media: "print" });
     const pdf = await page.pdf({
       format: "A4",
-      landscape: true,
+      landscape: options?.landscape ?? true,
       printBackground: true,
-      preferCSSPageSize: true,
-      margin: { top: "0", right: "0", bottom: "0", left: "0" },
+      preferCSSPageSize: options?.preferCSSPageSize ?? true,
+      margin: options?.margin ?? { top: "0", right: "0", bottom: "0", left: "0" },
+      displayHeaderFooter: Boolean(options?.displayHeaderFooter),
+      headerTemplate: options?.headerTemplate ?? "<span></span>",
+      footerTemplate:
+        options?.footerTemplate ??
+        `<div style="width:100%;font-size:9px;text-align:center;color:#64748b;padding:0 12mm;">
+          <span class="pageNumber"></span> / <span class="totalPages"></span>
+        </div>`,
     });
     return new Uint8Array(pdf);
   } catch (error) {

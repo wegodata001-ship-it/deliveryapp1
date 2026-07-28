@@ -133,12 +133,13 @@ export function CustomersWorkspacePanel({
         <thead>
           <tr>
             <th>לקוח</th>
+            <th>שם בערבית</th>
             <th>יתרה</th>
           </tr>
         </thead>
         <tbody>
           <WorkspaceTablePlaceholder
-            colSpan={2}
+            colSpan={3}
             loading={customersLoading}
             empty={!customersLoading && customers.length === 0}
             emptyText="אין לקוחות להצגה"
@@ -176,6 +177,11 @@ export function CustomersWorkspacePanel({
                         </span>
                       </div>
                     </div>
+                  </td>
+                  <td dir="rtl" title={r.nameAr ? undefined : "חסר שם בערבית — נדרש ל־PDF לשליח"}>
+                    {r.nameAr || (
+                      <span style={{ color: "#b45309", fontSize: "0.85em" }}>חסר</span>
+                    )}
                   </td>
                   <td dir="ltr" className={balanceClass(r.balanceUsd)}>
                     {balanceText(r.balanceUsd)}

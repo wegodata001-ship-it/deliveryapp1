@@ -171,6 +171,7 @@ export function ShipmentControlKpiModal({
         r.batchNumber,
         r.customerName,
         r.customerPhone,
+        r.customerPhone2,
         r.address,
         r.city,
         r.zoneName,
@@ -464,7 +465,7 @@ export function ShipmentControlKpiModal({
                         </td>
                         <td>
                           <div style={{ fontWeight: 600 }}>{r.customerName || "—"}</div>
-                          <div style={{ fontSize: "0.72rem", color: "#64748b" }}>{r.customerPhone || ""}</div>
+                          <div style={{ fontSize: "0.72rem", color: "#64748b" }}>{r.customerPhone || ""}{r.customerPhone2 ? ` / ${r.customerPhone2}` : ""}</div>
                         </td>
 
                         {(cols.zone) && (

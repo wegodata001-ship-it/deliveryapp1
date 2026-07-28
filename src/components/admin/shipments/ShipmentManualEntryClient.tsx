@@ -19,9 +19,13 @@ import {
 } from "@/app/admin/shipments/manual/actions";
 import {
   AUTOCOMPLETE_COLUMN_KEYS,
+  CITY_OPTIONS,
   CLEAR_ON_DUPLICATE_KEYS,
+  COUNTRY_OPTIONS,
+  CUSTOM_STATUSES_KEY,
   MANUAL_SHIPMENT_COLUMNS,
   SESSION_DEFAULTS_KEY,
+  SHIPMENT_TYPE_OPTIONS,
   STICKY_COLUMN_KEYS,
   type ManualColumnKey,
 } from "@/app/admin/shipments/manual/columns";
@@ -39,7 +43,7 @@ type EditTarget = { rowId: string; colIndex: number } | null;
 
 const DRAFT_ID = "__draft__";
 const COL_KEYS = MANUAL_SHIPMENT_COLUMNS.map((c) => c.key);
-const COL_COUNT = MANUAL_SHIPMENT_COLUMNS.length + 2;
+const COL_COUNT = MANUAL_SHIPMENT_COLUMNS.length + 3;
 
 const emptyForm = (): FormState => {
   const f = {} as FormState;
@@ -59,7 +63,6 @@ function dtoToForm(row: ManualShipmentDto): FormState {
     shipmentDetails: row.shipmentDetails ?? "",
     status: row.status || "NEW",
     city: row.city ?? "",
-    cpm: row.cpm ?? "",
     orderNumber: row.orderNumber ?? "",
     vatAmount: row.vatAmount != null ? String(row.vatAmount) : "",
     amountTotal: row.amountTotal != null ? String(row.amountTotal) : "",
@@ -88,7 +91,6 @@ function formToInput(f: FormState): ManualShipmentInput {
     shipmentDetails: f.shipmentDetails || null,
     status: f.status || "NEW",
     city: f.city || null,
-    cpm: f.cpm || null,
     orderNumber: f.orderNumber || null,
     vatAmount: n(f.vatAmount),
     amountTotal: n(f.amountTotal),
@@ -218,6 +220,45 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
     new Map(),
   );
 
+  // ─── Status management ───
+  const [customStatuses, setCustomStatuses] = useState<{ value: string; label: string }[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const stored = localStorage.getItem(CUSTOM_STATUSES_KEY);
+      return stored ? JSON.parse(stored) : [];
+    } catch { return []; }
+  });
+  const [showStatusMgmt, setShowStatusMgmt] = useState(false);
+  const [newStatusValue, setNewStatusValue] = useState("");
+  const [newStatusLabel, setNewStatusLabel] = useState("");
+
+  const allStatuses = useMemo(() => [
+    ...MANUAL_SHIPMENT_STATUSES,
+    ...customStatuses,
+  ], [customStatuses]);
+
+  function addCustomStatus() {
+    if (!newStatusValue.trim() || !newStatusLabel.trim()) return;
+    const next = [...customStatuses, { value: newStatusValue.trim().toUpperCase(), label: newStatusLabel.trim() }];
+    setCustomStatuses(next);
+    localStorage.setItem(CUSTOM_STATUSES_KEY, JSON.stringify(next));
+    setNewStatusValue("");
+    setNewStatusLabel("");
+  }
+
+  function removeCustomStatus(value: string) {
+    const next = customStatuses.filter((s) => s.value !== value);
+    setCustomStatuses(next);
+    localStorage.setItem(CUSTOM_STATUSES_KEY, JSON.stringify(next));
+  }
+
+  // ─── Context menu state ───
+  const [ctxMenuRow, setCtxMenuRow] = useState<string | null>(null);
+
+  // ─── Multi-select filters ───
+  const [filterCities, setFilterCities] = useState<Set<string>>(new Set());
+  const [filterShipmentTypes, setFilterShipmentTypes] = useState<Set<string>>(new Set());
+
   const totals = useMemo(() => {
     return rows.reduce(
       (acc, r) => {
@@ -231,6 +272,17 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
       { amountTotal: 0, amountPaid: 0, vatAmount: 0, inlandHaulage: 0, portHaulage: 0 },
     );
   }, [rows]);
+
+  const displayRows = useMemo(() => {
+    let result = rows;
+    if (filterCities.size > 0) {
+      result = result.filter((r) => r.city && filterCities.has(r.city));
+    }
+    if (filterShipmentTypes.size > 0) {
+      result = result.filter((r) => r.shipmentNumber && filterShipmentTypes.has(r.shipmentNumber));
+    }
+    return result;
+  }, [rows, filterCities, filterShipmentTypes]);
 
   const suggestions = useMemo(() => {
     const map: Record<string, string[]> = {};
@@ -278,6 +330,16 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
       }
     }
   }, [focusCell, draft, inlineEdit]);
+
+  useEffect(() => {
+    if (!ctxMenuRow) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest(".msh-ctx-wrapper")) setCtxMenuRow(null);
+    };
+    document.addEventListener("click", handler);
+    return () => document.removeEventListener("click", handler);
+  }, [ctxMenuRow]);
 
   function refKey(rowId: string, colIndex: number) {
     return `${rowId}:${colIndex}`;
@@ -407,6 +469,12 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
       if (!prev) return prev;
       const next = { ...prev, [key]: value };
       if (key === "entryDate" && value && !prev.monthKey) next.monthKey = value.slice(0, 7);
+      if (key === "vatAmount" && value.trim()) {
+        const vatNum = Number(value);
+        if (Number.isFinite(vatNum) && vatNum > 0) {
+          next.amountTotal = String(Math.round((vatNum / 0.18) * 100) / 100);
+        }
+      }
       return next;
     });
   }
@@ -416,6 +484,12 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
       if (!prev) return prev;
       const next = { ...prev, [key]: value };
       if (key === "entryDate" && value && !prev.monthKey) next.monthKey = value.slice(0, 7);
+      if (key === "vatAmount" && value.trim()) {
+        const vatNum = Number(value);
+        if (Number.isFinite(vatNum) && vatNum > 0) {
+          next.amountTotal = String(Math.round((vatNum / 0.18) * 100) / 100);
+        }
+      }
       return next;
     });
   }
@@ -499,8 +573,78 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
     setForm((prev) => {
       const next = { ...prev, [key]: value };
       if (key === "entryDate" && value && !prev.monthKey) next.monthKey = value.slice(0, 7);
+      if (key === "vatAmount" && value.trim()) {
+        const vatNum = Number(value);
+        if (Number.isFinite(vatNum) && vatNum > 0) {
+          next.amountTotal = String(Math.round((vatNum / 0.18) * 100) / 100);
+        }
+      }
       return next;
     });
+  }
+
+  function renderModalField(col: (typeof MANUAL_SHIPMENT_COLUMNS)[number]) {
+    if (col.input === "status") {
+      return (
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <select
+            disabled={readOnly}
+            value={form.status}
+            onChange={(e) => setField("status", e.target.value)}
+            style={{ flex: 1 }}
+          >
+            {allStatuses.map((s) => (
+              <option key={s.value} value={s.value}>{s.label}</option>
+            ))}
+          </select>
+          {!readOnly && (
+            <button
+              type="button"
+              className="shp-btn"
+              style={{ fontSize: "0.75rem", padding: "4px 8px" }}
+              onClick={() => setShowStatusMgmt(!showStatusMgmt)}
+              title="ניהול סטטוסים"
+            >
+              ⚙
+            </button>
+          )}
+        </div>
+      );
+    }
+    if (col.input === "select" && col.options) {
+      return (
+        <select
+          disabled={readOnly}
+          value={form[col.key]}
+          onChange={(e) => setField(col.key, e.target.value)}
+        >
+          <option value="">— בחר —</option>
+          {col.options.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+      );
+    }
+    if (col.input === "textarea") {
+      return (
+        <textarea
+          disabled={readOnly}
+          rows={2}
+          value={form[col.key]}
+          onChange={(e) => setField(col.key, e.target.value)}
+        />
+      );
+    }
+    return (
+      <input
+        type={col.input === "number" ? "number" : col.input === "date" ? "date" : col.input === "month" ? "month" : "text"}
+        step={col.step}
+        disabled={readOnly}
+        value={form[col.key]}
+        list={col.autocomplete ? `msh-ac-${col.key}` : undefined}
+        onChange={(e) => setField(col.key, e.target.value)}
+      />
+    );
   }
 
   function saveModal() {
@@ -574,10 +718,27 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
           onKeyDown={onKey}
           onChange={(e) => onChange(e.target.value)}
         >
-          {MANUAL_SHIPMENT_STATUSES.map((s) => (
+          {allStatuses.map((s) => (
             <option key={s.value} value={s.value}>
               {s.label}
             </option>
+          ))}
+        </select>
+      );
+    }
+    if (col.input === "select" && col.options) {
+      return (
+        <select
+          ref={bindRef}
+          className="msh-excel-input"
+          disabled={pending}
+          value={value}
+          onKeyDown={onKey}
+          onChange={(e) => onChange(e.target.value)}
+        >
+          <option value="">— בחר —</option>
+          {col.options.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </select>
       );
@@ -600,7 +761,7 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
         ref={bindRef}
         className="msh-excel-input"
         disabled={pending}
-        type={col.input === "text" ? "text" : col.input}
+        type={col.input === "number" ? "number" : col.input === "date" ? "date" : col.input === "month" ? "month" : "text"}
         step={col.step}
         value={value}
         list={listId}
@@ -613,6 +774,8 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
   function renderDisplayCell(row: ManualShipmentDto, colIndex: number) {
     const col = MANUAL_SHIPMENT_COLUMNS[colIndex]!;
     const display = cellValue(row, col.key);
+    const resolveStatusLabel = (s: string) =>
+      allStatuses.find((st) => st.value === s)?.label ?? s;
     return (
       <button
         type="button"
@@ -621,7 +784,11 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
         onDoubleClick={() => beginInlineEdit(row, colIndex)}
       >
         {col.key === "status" ? (
-          <span className={statusBadgeClass(row.status)}>{statusLabel(row.status)}</span>
+          <span className={statusBadgeClass(row.status)}>{resolveStatusLabel(row.status)}</span>
+        ) : col.key === "amountPaid" ? (
+          <span className={`msh-pay-status ${(!row.amountPaid || row.amountPaid === 0) ? "msh-pay-status--unpaid" : "msh-pay-status--paid"}`}>
+            {(!row.amountPaid || row.amountPaid === 0) ? "🔴 לא שולם" : `🟢 ${display}`}
+          </span>
         ) : (
           display
         )}
@@ -684,12 +851,17 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
           value={filters.containerNumber ?? ""}
           onChange={(e) => setFilters((f) => ({ ...f, containerNumber: e.target.value }))}
         />
-        <input
+        <select
           className="msh-input"
-          placeholder="מדינה"
+          title="מדינה"
           value={filters.country ?? ""}
           onChange={(e) => setFilters((f) => ({ ...f, country: e.target.value }))}
-        />
+        >
+          <option value="">כל המדינות</option>
+          {COUNTRY_OPTIONS.map((c) => (
+            <option key={c.value} value={c.value}>{c.label}</option>
+          ))}
+        </select>
         <input
           className="msh-input"
           type="month"
@@ -703,12 +875,54 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
           onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value }))}
         >
           <option value="">כל הסטטוסים</option>
-          {MANUAL_SHIPMENT_STATUSES.map((s) => (
+          {allStatuses.map((s) => (
             <option key={s.value} value={s.value}>
               {s.label}
             </option>
           ))}
         </select>
+        {/* ─── Multi-select: City ─── */}
+        <div className="msh-multiselect">
+          <span className="msh-multiselect__label">עיר:</span>
+          {CITY_OPTIONS.map((c) => (
+            <label key={c.value} className="msh-multiselect__item">
+              <input
+                type="checkbox"
+                checked={filterCities.has(c.value)}
+                onChange={(e) => {
+                  setFilterCities((prev) => {
+                    const next = new Set(prev);
+                    if (e.target.checked) next.add(c.value);
+                    else next.delete(c.value);
+                    return next;
+                  });
+                }}
+              />
+              {c.label}
+            </label>
+          ))}
+        </div>
+        {/* ─── Multi-select: Shipment Type ─── */}
+        <div className="msh-multiselect">
+          <span className="msh-multiselect__label">סוג משלוח:</span>
+          {SHIPMENT_TYPE_OPTIONS.map((t) => (
+            <label key={t.value} className="msh-multiselect__item">
+              <input
+                type="checkbox"
+                checked={filterShipmentTypes.has(t.value)}
+                onChange={(e) => {
+                  setFilterShipmentTypes((prev) => {
+                    const next = new Set(prev);
+                    if (e.target.checked) next.add(t.value);
+                    else next.delete(t.value);
+                    return next;
+                  });
+                }}
+              />
+              {t.label}
+            </label>
+          ))}
+        </div>
         <button
           type="button"
           className="shp-btn shp-btn--primary"
@@ -722,6 +936,8 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
           className="shp-btn"
           onClick={() => {
             setFilters({});
+            setFilterCities(new Set());
+            setFilterShipmentTypes(new Set());
             refresh({});
           }}
           disabled={pending}
@@ -753,9 +969,9 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
               <th className="msh-col-check">
                 <input
                   type="checkbox"
-                  checked={rows.length > 0 && selected.size === rows.length}
+                  checked={displayRows.length > 0 && selected.size === displayRows.length}
                   onChange={(e) =>
-                    setSelected(e.target.checked ? new Set(rows.map((r) => r.id)) : new Set())
+                    setSelected(e.target.checked ? new Set(displayRows.map((r) => r.id)) : new Set())
                   }
                   aria-label="בחר הכול"
                 />
@@ -763,7 +979,8 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
               {MANUAL_SHIPMENT_COLUMNS.map((col) => (
                 <th key={col.key}>{col.label}</th>
               ))}
-              <th className="msh-col-actions">פעולות</th>
+              <th>יתרת לקוח</th>
+              <th className="msh-col-actions"></th>
             </tr>
           </thead>
           <tbody>
@@ -777,6 +994,7 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
                     )}
                   </td>
                 ))}
+                <td className="msh-num">—</td>
                 <td className="msh-actions">
                   <button
                     type="button"
@@ -793,14 +1011,14 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
               </tr>
             )}
 
-            {rows.length === 0 && !draft ? (
+            {displayRows.length === 0 && !draft ? (
               <tr>
                 <td colSpan={COL_COUNT} className="msh-empty">
                   אין משלוחים. לחץ על &quot;+ שורה חדשה&quot; להזנה כמו Excel, או על &quot;הוסף משלוח ידני&quot; לטופס.
                 </td>
               </tr>
             ) : (
-              rows.map((r) => {
+              displayRows.map((r) => {
                 const editing = inlineRowId === r.id && inlineEdit;
                 return (
                   <tr key={r.id} className={statusRowClass(r.status)}>
@@ -821,13 +1039,11 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
                     {MANUAL_SHIPMENT_COLUMNS.map((col, colIndex) => (
                       <td
                         key={col.key}
-                        className={
-                          col.input === "number"
-                            ? "msh-num"
-                            : col.key === "shipmentDetails"
-                              ? "msh-clamp"
-                              : undefined
-                        }
+                        className={[
+                          col.input === "number" ? "msh-num" : "",
+                          col.key === "shipmentDetails" ? "msh-clamp" : "",
+                          ["shipmentNumber", "containerNumber", "orderNumber", "city", "country"].includes(col.key) ? "msh-bold" : "",
+                        ].filter(Boolean).join(" ") || undefined}
                       >
                         {editing
                           ? renderEditableCell(r.id, colIndex, inlineEdit![col.key], (v) =>
@@ -836,46 +1052,56 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
                           : renderDisplayCell(r, colIndex)}
                       </td>
                     ))}
-                    <td className="msh-actions">
+                    <td className="msh-num msh-bold">
+                      {r.amountRemaining != null && r.amountRemaining !== 0
+                        ? fmtMoney(r.amountRemaining)
+                        : "₪0.00"}
+                    </td>
+                    <td className="msh-col-actions">
                       {editing ? (
-                        <>
+                        <div className="msh-actions">
                           <button
                             type="button"
                             className="msh-link msh-link--ok"
                             disabled={pending}
                             onClick={() => void saveInlineRow()}
                           >
-                            ✔ שמירה
+                            ✔
                           </button>
                           <button type="button" className="msh-link" onClick={cancelInline}>
-                            ביטול
+                            ✕
                           </button>
-                        </>
+                        </div>
                       ) : (
-                        <>
-                          <button type="button" className="msh-link" onClick={() => openView(r)}>
-                            צפייה
-                          </button>
-                          <button type="button" className="msh-link" onClick={() => beginInlineEdit(r)}>
-                            עריכה
-                          </button>
+                        <div className="msh-ctx-wrapper">
                           <button
                             type="button"
-                            className="msh-link"
-                            title="שכפל שורה"
-                            onClick={() => duplicateAsDraft(r)}
+                            className="msh-ctx-trigger"
+                            onClick={() => setCtxMenuRow(ctxMenuRow === r.id ? null : r.id)}
                           >
-                            📄 שכפל
+                            ⋮
                           </button>
-                          <button
-                            type="button"
-                            className="msh-link msh-link--danger"
-                            onClick={() => onDelete(r.id)}
-                            disabled={pending}
-                          >
-                            מחיקה
-                          </button>
-                        </>
+                          {ctxMenuRow === r.id && (
+                            <div className="msh-ctx-menu">
+                              <button onClick={() => { openView(r); setCtxMenuRow(null); }}>
+                                👁️ צפייה
+                              </button>
+                              <button onClick={() => { beginInlineEdit(r); setCtxMenuRow(null); }}>
+                                ✏️ עריכה
+                              </button>
+                              <button onClick={() => { duplicateAsDraft(r); setCtxMenuRow(null); }}>
+                                📋 שכפול
+                              </button>
+                              <button
+                                className="msh-ctx-danger"
+                                disabled={pending}
+                                onClick={() => { onDelete(r.id); setCtxMenuRow(null); }}
+                              >
+                                🗑️ מחיקה
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -883,10 +1109,10 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
               })
             )}
           </tbody>
-          {rows.length > 0 && (
+          {displayRows.length > 0 && (
             <tfoot>
               <tr>
-                <td>סיכום ({rows.length})</td>
+                <td>סיכום ({displayRows.length})</td>
                 {MANUAL_SHIPMENT_COLUMNS.map((col) => {
                   const v = footerCell(col.key);
                   return (
@@ -895,6 +1121,7 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
                     </td>
                   );
                 })}
+                <td />
                 <td />
               </tr>
             </tfoot>
@@ -905,7 +1132,7 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
       {mode && (
         <div className="msh-modal-backdrop" role="presentation" onClick={closeModal}>
           <div
-            className="msh-modal"
+            className="msh-modal msh-modal--large"
             role="dialog"
             aria-modal="true"
             onClick={(e) => e.stopPropagation()}
@@ -923,45 +1150,75 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
               </button>
             </div>
             {error && <div className="msh-error">{error}</div>}
-            <div className="msh-form">
-              <div className="msh-grid msh-grid--excel">
-                {MANUAL_SHIPMENT_COLUMNS.map((col) => (
-                  <label
-                    key={col.key}
-                    className={col.input === "textarea" ? "msh-span-2" : undefined}
-                  >
-                    {col.label}
-                    {col.input === "status" ? (
-                      <select
-                        disabled={readOnly}
-                        value={form.status}
-                        onChange={(e) => setField("status", e.target.value)}
-                      >
-                        {MANUAL_SHIPMENT_STATUSES.map((s) => (
-                          <option key={s.value} value={s.value}>
-                            {s.label}
-                          </option>
-                        ))}
-                      </select>
-                    ) : col.input === "textarea" ? (
-                      <textarea
-                        disabled={readOnly}
-                        rows={2}
-                        value={form[col.key]}
-                        onChange={(e) => setField(col.key, e.target.value)}
-                      />
-                    ) : (
+            <div className="msh-form msh-form--v2">
+              {/* ── קבוצה 1: תאריכים ופרטי בסיס ── */}
+              <div className="msh-section">
+                <div className="msh-section__title">תאריכים ופרטי בסיס</div>
+                <div className="msh-grid msh-grid--5">
+                  {MANUAL_SHIPMENT_COLUMNS.filter((c) => c.group === "dates").map((col) => (
+                    <label key={col.key}>
+                      <span className="msh-field-label">{col.label}</span>
+                      {renderModalField(col)}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* ── קבוצה 2: פרטי משלוח ── */}
+              <div className="msh-section">
+                <div className="msh-section__title">פרטי משלוח</div>
+                <div className="msh-grid msh-grid--3">
+                  {MANUAL_SHIPMENT_COLUMNS.filter((c) => c.group === "shipment").map((col) => (
+                    <label key={col.key} className={col.input === "textarea" ? "msh-span-2" : undefined}>
+                      <span className="msh-field-label">{col.label}</span>
+                      {renderModalField(col)}
+                    </label>
+                  ))}
+                </div>
+                {showStatusMgmt && (
+                  <div className="msh-status-mgmt">
+                    <div className="msh-status-mgmt__title">ניהול סטטוסים</div>
+                    <div className="msh-status-mgmt__list">
+                      {customStatuses.map((s) => (
+                        <div key={s.value} className="msh-status-mgmt__item">
+                          <span>{s.label} ({s.value})</span>
+                          <button type="button" onClick={() => removeCustomStatus(s.value)}>✕</button>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="msh-status-mgmt__add">
                       <input
-                        type={col.input === "text" ? "text" : col.input}
-                        step={col.step}
-                        disabled={readOnly}
-                        value={form[col.key]}
-                        list={col.autocomplete ? `msh-ac-${col.key}` : undefined}
-                        onChange={(e) => setField(col.key, e.target.value)}
+                        placeholder="קוד (אנגלית)"
+                        value={newStatusValue}
+                        onChange={(e) => setNewStatusValue(e.target.value)}
                       />
-                    )}
-                  </label>
-                ))}
+                      <input
+                        placeholder="תצוגה (עברית)"
+                        value={newStatusLabel}
+                        onChange={(e) => setNewStatusLabel(e.target.value)}
+                      />
+                      <button type="button" className="shp-btn shp-btn--primary" onClick={addCustomStatus}>
+                        הוסף
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* ── קבוצה 3: נתונים פיננסיים ── */}
+              <div className="msh-section">
+                <div className="msh-section__title">נתונים פיננסיים</div>
+                <div className="msh-grid msh-grid--4">
+                  {MANUAL_SHIPMENT_COLUMNS.filter((c) => c.group === "financial").map((col) => (
+                    <label key={col.key}>
+                      <span className="msh-field-label">{col.label}</span>
+                      {renderModalField(col)}
+                      {col.key === "vatAmount" && (
+                        <span className="msh-hint">הזן מע״מ ← סכום רישומון יחושב אוטומטית</span>
+                      )}
+                    </label>
+                  ))}
+                </div>
               </div>
             </div>
             <div className="msh-modal__foot">

@@ -11,14 +11,12 @@ import {
   MapPin,
   Edit2,
   Trash2,
-  Settings,
   UserCheck,
   UserX,
   Users,
   Layers,
   Wallet,
-  FileText,
-  FileSpreadsheet,
+  Upload,
 } from "lucide-react";
 import {
   TableFiltersBar,
@@ -33,10 +31,6 @@ import type {
 } from "@/app/admin/shipments/types";
 import {
   listShipmentBatchesAction,
-  createZoneAction,
-  updateZoneAction,
-  setZoneActiveAction,
-  deleteZoneAction,
   createCourierAction,
   updateCourierAction,
   setCourierActiveAction,
@@ -45,10 +39,20 @@ import {
   deleteShipmentBatchesAction,
 } from "@/app/admin/shipments/actions";
 
+import type { ShipmentCashControlPayload } from "@/app/admin/shipments/cash-control/types";
+import { ShipmentCashControlClient } from "@/components/admin/shipments/ShipmentCashControlClient";
+import { LocationAliasImportModal } from "@/components/admin/shipments/LocationAliasImportModal";
+
+type DashboardView = "list" | "cash-control";
+
 type Props = {
   initialBatches: ShipmentBatchDto[];
   initialZones: ShipmentZoneDto[];
   initialCouriers: ShipmentCourierDto[];
+  initialView?: DashboardView;
+  cashControlInitialData?: ShipmentCashControlPayload;
+  cashControlDayDate?: string;
+  viewerIsAdmin?: boolean;
 };
 
 type ListFilters = {
@@ -130,15 +134,31 @@ export function ShipmentListClient({
   initialBatches,
   initialZones,
   initialCouriers,
+  initialView = "list",
+  cashControlInitialData,
+  cashControlDayDate,
+  viewerIsAdmin = false,
 }: Props) {
   const router = useRouter();
+  const [view, setView] = useState<DashboardView>(initialView);
   const [batches, setBatches] = useState(initialBatches);
-  const [zones, setZones] = useState(initialZones);
+  const [zones] = useState(initialZones);
   const [couriers, setCouriers] = useState(initialCouriers);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [showSettings, setShowSettings] = useState(false);
+  const [showCouriers, setShowCouriers] = useState(false);
+  const [showZoneImport, setShowZoneImport] = useState(false);
+
+  function openCashControl() {
+    setView("cash-control");
+    router.replace("/admin/shipments?view=cash-control", { scroll: false });
+  }
+
+  function openList() {
+    setView("list");
+    router.replace("/admin/shipments", { scroll: false });
+  }
   const {
     values: filterValues,
     setField,
@@ -152,10 +172,6 @@ export function ShipmentListClient({
   const [editBatch, setEditBatch] = useState<ShipmentBatchDto | null>(null);
   const [editSaving, setEditSaving] = useState(false);
 
-  const [newZoneName, setNewZoneName] = useState("");
-  const [editZoneId, setEditZoneId] = useState<string | null>(null);
-  const [editZoneName, setEditZoneName] = useState("");
-  const [zoneLoading, setZoneLoading] = useState(false);
   const [newCourierName, setNewCourierName] = useState("");
   const [editCourierId, setEditCourierId] = useState<string | null>(null);
   const [editCourierName, setEditCourierName] = useState("");
@@ -305,54 +321,6 @@ export function ShipmentListClient({
     await refresh();
   }
 
-  async function handleCreateZone() {
-    if (!newZoneName.trim()) return;
-    setZoneLoading(true);
-    const res = await createZoneAction(newZoneName.trim());
-    setZoneLoading(false);
-    if (res.ok) {
-      setZones((prev) => [...prev, res.zone]);
-      setNewZoneName("");
-      showMsg("האזור נוסף");
-    } else showMsg(res.error, true);
-  }
-
-  async function handleUpdateZone() {
-    if (!editZoneId || !editZoneName.trim()) return;
-    setZoneLoading(true);
-    const res = await updateZoneAction(editZoneId, editZoneName.trim());
-    setZoneLoading(false);
-    if (res.ok) {
-      setZones((prev) => prev.map((z) => (z.id === editZoneId ? { ...z, name: editZoneName.trim() } : z)));
-      setEditZoneId(null);
-      setEditZoneName("");
-      showMsg("האזור עודכן");
-    } else showMsg(res.error, true);
-  }
-
-  async function handleDeleteZone(id: string) {
-    if (!confirm("למחוק את האזור?")) return;
-    setZoneLoading(true);
-    const res = await deleteZoneAction(id);
-    setZoneLoading(false);
-    if (res.ok) {
-      setZones((prev) => prev.filter((z) => z.id !== id));
-      showMsg("האזור נמחק");
-    } else showMsg(res.error, true);
-  }
-
-  async function handleToggleZone(zone: ShipmentZoneDto) {
-    setZoneLoading(true);
-    const res = await setZoneActiveAction(zone.id, !zone.isActive);
-    setZoneLoading(false);
-    if (res.ok) {
-      setZones((previous) =>
-        previous.map((item) => (item.id === zone.id ? { ...item, isActive: !item.isActive } : item)),
-      );
-      showMsg(zone.isActive ? "האזור הושבת" : "האזור הופעל");
-    } else showMsg(res.error, true);
-  }
-
   async function handleCreateCourier() {
     if (!newCourierName.trim()) return;
     setCourierLoading(true);
@@ -407,23 +375,63 @@ export function ShipmentListClient({
     } else showMsg(res.error, true);
   }
 
+  if (view === "cash-control" && cashControlInitialData && cashControlDayDate) {
+    return (
+      <ShipmentCashControlClient
+        initialData={cashControlInitialData}
+        initialDayDate={cashControlDayDate}
+        viewerIsAdmin={viewerIsAdmin}
+        embedded
+        onBack={openList}
+      />
+    );
+  }
+
   return (
-    <div className="shp-page">
+    <div className="shp-page shp-page--wide">
       <div className="shp-header">
         <Truck size={22} style={{ color: "#2563eb" }} />
-        <h1>ניהול משלוחים</h1>
+        <h1>רשימת משלוחים</h1>
         <div className="shp-header-actions">
-          <button className="shp-btn shp-btn--secondary shp-btn--sm" onClick={() => setShowSettings(!showSettings)}>
-            <Settings size={14} />
-            הגדרות משלוחים
+          <button
+            type="button"
+            className="shp-btn shp-btn--primary shp-btn--sm"
+            onClick={() => router.push("/admin/shipments/import")}
+          >
+            <Plus size={14} />
+            ייבוא משלוחים
           </button>
-          <button className="shp-btn shp-btn--secondary shp-btn--sm" onClick={refresh} disabled={loading}>
+          <button
+            type="button"
+            className="shp-btn shp-btn--secondary shp-btn--sm"
+            onClick={() => setShowZoneImport(true)}
+          >
+            <Upload size={14} />
+            ייבוא התאמות יישובים
+          </button>
+          <button
+            type="button"
+            className="shp-btn shp-btn--secondary shp-btn--sm"
+            onClick={() => router.push("/admin/shipments/locations")}
+          >
+            <MapPin size={14} />
+            יישובים ואזורי חלוקה
+          </button>
+          <button type="button" className="shp-btn shp-btn--secondary shp-btn--sm" onClick={openCashControl}>
+            <Wallet size={14} />
+            בקרת קופה
+          </button>
+          <button
+            type="button"
+            className="shp-btn shp-btn--secondary shp-btn--sm"
+            onClick={() => setShowCouriers(!showCouriers)}
+          >
+            <Users size={14} />
+            שליחים
+          </button>
+          <button type="button" className="shp-btn shp-btn--secondary shp-btn--sm" onClick={refresh} disabled={loading}>
             <RefreshCw size={14} />
             רענון
-          </button>
-          <button className="shp-btn shp-btn--primary" onClick={() => router.push("/admin/shipments/import")}>
-            <Plus size={15} />
-            יצירת משלוח חדש
           </button>
         </div>
       </div>
@@ -454,175 +462,96 @@ export function ShipmentListClient({
       {error && <div className="shp-alert shp-alert--error">{error}</div>}
       {success && <div className="shp-alert shp-alert--success">{success}</div>}
 
-      {showSettings && (
-        <div className="shp-settings-grid">
-          <div className="shp-zones-panel">
-            <h3>
-              <MapPin size={14} style={{ display: "inline", marginLeft: 6, verticalAlign: "middle" }} />
-              ניהול אזורי חלוקה
-            </h3>
-            <div className="shp-zones-list">
-              {zones.length === 0 && (
-                <span style={{ fontSize: "0.8rem", color: "#94a3b8" }}>אין אזורים מוגדרים עדיין</span>
-              )}
-              {zones.map((z) => (
-                <div key={z.id} className={`shp-zone-chip ${!z.isActive ? "is-inactive" : ""}`}>
-                  {editZoneId === z.id ? (
-                    <>
-                      <input
-                        value={editZoneName}
-                        onChange={(e) => setEditZoneName(e.target.value)}
-                        onKeyDown={(e) => e.key === "Enter" && handleUpdateZone()}
-                        style={{
-                          border: "none",
-                          background: "transparent",
-                          width: 90,
-                          fontSize: "0.8rem",
-                          direction: "rtl",
-                        }}
-                        autoFocus
-                      />
-                      <button
-                        onClick={handleUpdateZone}
-                        disabled={zoneLoading}
-                        style={{ background: "none", border: "none", cursor: "pointer", color: "#15803d" }}
-                      >
-                        ✓
-                      </button>
-                      <button
-                        onClick={() => {
-                          setEditZoneId(null);
-                          setEditZoneName("");
-                        }}
-                        style={{ background: "none", border: "none", cursor: "pointer" }}
-                      >
-                        ✕
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      {z.name}
-                      <button
-                        className="shp-zone-chip__del"
-                        onClick={() => {
-                          setEditZoneId(z.id);
-                          setEditZoneName(z.name);
-                        }}
-                        title="ערוך"
-                      >
-                        <Edit2 size={11} />
-                      </button>
-                      <button
-                        className="shp-zone-chip__del"
-                        onClick={() => handleToggleZone(z)}
-                        title={z.isActive ? "השבת" : "הפעל"}
-                      >
-                        {z.isActive ? <UserCheck size={11} /> : <UserX size={11} />}
-                      </button>
-                      <button className="shp-zone-chip__del" onClick={() => handleDeleteZone(z.id)} title="מחק">
-                        <Trash2 size={11} />
-                      </button>
-                    </>
-                  )}
-                </div>
-              ))}
-            </div>
-            <div className="shp-zones-add">
-              <input
-                value={newZoneName}
-                onChange={(e) => setNewZoneName(e.target.value)}
-                placeholder="שם אזור חדש"
-                onKeyDown={(e) => e.key === "Enter" && handleCreateZone()}
-              />
-              <button className="shp-btn shp-btn--primary shp-btn--sm" onClick={handleCreateZone} disabled={zoneLoading}>
-                <Plus size={13} /> הוסף
-              </button>
-            </div>
+      {showCouriers && (
+        <section className="loc-admin__card" style={{ marginBottom: 16 }}>
+          <h2>
+            <Users size={14} style={{ display: "inline", marginLeft: 6, verticalAlign: "middle" }} />
+            ניהול שליחים
+          </h2>
+          <p className="loc-admin__hint">
+            אזורי חלוקה מנוהלים במסך הייעודי — יישובים ואזורי חלוקה.
+          </p>
+          <div className="shp-zones-list">
+            {couriers.length === 0 && (
+              <span style={{ fontSize: "0.8rem", color: "#94a3b8" }}>אין שליחים מוגדרים עדיין</span>
+            )}
+            {couriers.map((c) => (
+              <div key={c.id} className={`shp-zone-chip ${!c.isActive ? "is-inactive" : ""}`}>
+                {editCourierId === c.id ? (
+                  <>
+                    <input
+                      value={editCourierName}
+                      onChange={(e) => setEditCourierName(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleUpdateCourier()}
+                      style={{
+                        border: "none",
+                        background: "transparent",
+                        width: 90,
+                        fontSize: "0.8rem",
+                        direction: "rtl",
+                      }}
+                      autoFocus
+                    />
+                    <button
+                      type="button"
+                      onClick={handleUpdateCourier}
+                      disabled={courierLoading}
+                      style={{ background: "none", border: "none", cursor: "pointer", color: "#15803d" }}
+                    >
+                      ✓
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditCourierId(null);
+                        setEditCourierName("");
+                      }}
+                      style={{ background: "none", border: "none", cursor: "pointer" }}
+                    >
+                      ✕
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    {c.name}
+                    <button
+                      type="button"
+                      className="shp-zone-chip__del"
+                      onClick={() => {
+                        setEditCourierId(c.id);
+                        setEditCourierName(c.name);
+                      }}
+                    >
+                      <Edit2 size={11} />
+                    </button>
+                    <button type="button" className="shp-zone-chip__del" onClick={() => handleToggleCourier(c)}>
+                      {c.isActive ? <UserCheck size={11} /> : <UserX size={11} />}
+                    </button>
+                    <button type="button" className="shp-zone-chip__del" onClick={() => handleDeleteCourier(c.id)}>
+                      <Trash2 size={11} />
+                    </button>
+                  </>
+                )}
+              </div>
+            ))}
           </div>
-
-          <div className="shp-zones-panel">
-            <h3>
-              <Users size={14} style={{ display: "inline", marginLeft: 6, verticalAlign: "middle" }} />
-              ניהול שליחים
-            </h3>
-            <div className="shp-zones-list">
-              {couriers.length === 0 && (
-                <span style={{ fontSize: "0.8rem", color: "#94a3b8" }}>אין שליחים מוגדרים עדיין</span>
-              )}
-              {couriers.map((c) => (
-                <div key={c.id} className={`shp-zone-chip ${!c.isActive ? "is-inactive" : ""}`}>
-                  {editCourierId === c.id ? (
-                    <>
-                      <input
-                        value={editCourierName}
-                        onChange={(e) => setEditCourierName(e.target.value)}
-                        onKeyDown={(e) => e.key === "Enter" && handleUpdateCourier()}
-                        style={{
-                          border: "none",
-                          background: "transparent",
-                          width: 90,
-                          fontSize: "0.8rem",
-                          direction: "rtl",
-                        }}
-                        autoFocus
-                      />
-                      <button
-                        onClick={handleUpdateCourier}
-                        disabled={courierLoading}
-                        style={{ background: "none", border: "none", cursor: "pointer", color: "#15803d" }}
-                      >
-                        ✓
-                      </button>
-                      <button
-                        onClick={() => {
-                          setEditCourierId(null);
-                          setEditCourierName("");
-                        }}
-                        style={{ background: "none", border: "none", cursor: "pointer" }}
-                      >
-                        ✕
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      {c.name}
-                      <button
-                        className="shp-zone-chip__del"
-                        onClick={() => {
-                          setEditCourierId(c.id);
-                          setEditCourierName(c.name);
-                        }}
-                      >
-                        <Edit2 size={11} />
-                      </button>
-                      <button className="shp-zone-chip__del" onClick={() => handleToggleCourier(c)}>
-                        {c.isActive ? <UserCheck size={11} /> : <UserX size={11} />}
-                      </button>
-                      <button className="shp-zone-chip__del" onClick={() => handleDeleteCourier(c.id)}>
-                        <Trash2 size={11} />
-                      </button>
-                    </>
-                  )}
-                </div>
-              ))}
-            </div>
-            <div className="shp-zones-add">
-              <input
-                value={newCourierName}
-                onChange={(e) => setNewCourierName(e.target.value)}
-                placeholder="שם שליח חדש"
-                onKeyDown={(e) => e.key === "Enter" && handleCreateCourier()}
-              />
-              <button
-                className="shp-btn shp-btn--primary shp-btn--sm"
-                onClick={handleCreateCourier}
-                disabled={courierLoading}
-              >
-                <Plus size={13} /> הוסף
-              </button>
-            </div>
+          <div className="shp-zones-add" style={{ marginTop: 10 }}>
+            <input
+              value={newCourierName}
+              onChange={(e) => setNewCourierName(e.target.value)}
+              placeholder="שם שליח חדש"
+              onKeyDown={(e) => e.key === "Enter" && handleCreateCourier()}
+            />
+            <button
+              type="button"
+              className="shp-btn shp-btn--primary shp-btn--sm"
+              onClick={handleCreateCourier}
+              disabled={courierLoading}
+            >
+              <Plus size={13} /> הוסף
+            </button>
           </div>
-        </div>
+        </section>
       )}
 
       {batches.length === 0 ? (
@@ -701,11 +630,11 @@ export function ShipmentListClient({
               <div className="shp-empty__sub">שנה את המסננים או נקה אותם</div>
             </div>
           ) : (
-            <div className="shp-table-wrap">
-              <table className="shp-table shp-table--list">
+            <div className="shp-daily-wrap">
+              <table className="shp-table shp-table--daily">
                 <thead>
                   <tr>
-                    <th style={{ width: 36 }}>
+                    <th className="shp-col-check">
                       <input
                         type="checkbox"
                         checked={selected.size > 0 && selected.size === filteredBatches.length}
@@ -713,17 +642,14 @@ export function ShipmentListClient({
                         aria-label="בחר הכל"
                       />
                     </th>
+                    <th>תאריך הגעה</th>
                     <th>מספר משלוח</th>
                     <th>שבוע</th>
-                    <th>יציאה</th>
-                    <th>הגעה</th>
                     <th>חבילות</th>
                     <th>דמי משלוח</th>
-                    <th>
-                      <Wallet size={12} style={{ display: "inline" }} /> שולם
-                    </th>
-                    <th>יתרה</th>
-                    <th></th>
+                    <th>שולם</th>
+                    <th>יתרת דמי משלוח</th>
+                    <th>פעולות</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -731,8 +657,8 @@ export function ShipmentListClient({
                     const containerId = primaryContainerId(b);
                     const tone = remainingTone(b.totalFeeIls, b.totalPaidIls, b.totalRemainingIls);
                     return (
-                      <tr key={b.id} className={selected.has(b.id) ? "is-selected" : undefined}>
-                        <td onClick={(e) => e.stopPropagation()}>
+                      <tr key={b.id} className={selected.has(b.id) ? "shp-row--selected" : undefined}>
+                        <td className="shp-col-check" onClick={(e) => e.stopPropagation()}>
                           <input
                             type="checkbox"
                             checked={selected.has(b.id)}
@@ -740,32 +666,31 @@ export function ShipmentListClient({
                             aria-label={`בחר ${b.batchNumber}`}
                           />
                         </td>
+                        <td className="shp-daily-nowrap">{formatDate(b.arrivalDate)}</td>
                         <td>
                           <button
                             type="button"
                             className="shp-link-btn"
                             onClick={() => router.push(`/admin/shipments/${b.id}`)}
+                            title={containerId || b.batchNumber}
                           >
-                            <strong>{containerId || b.batchNumber}</strong>
-                            <span className="shp-muted">{b.batchNumber}</span>
+                            <strong className="shp-trunc">{containerId || b.batchNumber}</strong>
                           </button>
                         </td>
                         <td>{b.weekCode ?? "—"}</td>
-                        <td>{formatDate(b.shippingDate)}</td>
-                        <td>{formatDate(b.arrivalDate)}</td>
-                        <td>{b.boxesSum || b.recordCount}</td>
-                        <td className="shp-col-money shp-col-fee">{fmtIls(b.totalFeeIls)}</td>
-                        <td className="shp-col-money" style={{ color: "#15803d" }}>
+                        <td className="shp-daily-center">{b.boxesSum || b.recordCount}</td>
+                        <td className="shp-daily-money">{fmtIls(b.totalFeeIls)}</td>
+                        <td className="shp-daily-money" style={{ color: "#15803d" }}>
                           {fmtIls(b.totalPaidIls)}
                         </td>
-                        <td className={`shp-col-money shp-remaining shp-remaining--${tone}`}>
+                        <td className={`shp-daily-money shp-remaining shp-remaining--${tone}`}>
                           {fmtIls(b.totalRemainingIls)}
                         </td>
                         <td onClick={(e) => e.stopPropagation()}>
-                          <div className="shp-row-actions">
+                          <div className="shp-daily-actions">
                             <button
                               type="button"
-                              className="shp-btn shp-btn--ghost shp-btn--sm"
+                              className="shp-btn shp-btn--sm"
                               title="עריכת פרטי משלוח"
                               onClick={() => setEditBatch(b)}
                             >
@@ -773,11 +698,12 @@ export function ShipmentListClient({
                             </button>
                             <button
                               type="button"
-                              className="shp-btn shp-btn--ghost shp-btn--sm"
-                              title="פתח"
+                              className="shp-btn shp-btn--sm shp-btn--primary"
+                              title="פתח חבילות"
                               onClick={() => router.push(`/admin/shipments/${b.id}`)}
                             >
-                              <ChevronLeft size={16} />
+                              פתח
+                              <ChevronLeft size={14} />
                             </button>
                           </div>
                         </td>
@@ -790,6 +716,20 @@ export function ShipmentListClient({
           )}
         </div>
       )}
+
+      <section className="scc-embed-card">
+        <div>
+          <h2>בקרת קופה – דמי משלוח</h2>
+          <p>
+            התאמה יומית בין דמי משלוח צפויים, סכומים שנקלטו מהשליחים, הוצאות בדרך ויתרות פתוחות —
+            בתוך Dashboard המשלוחים.
+          </p>
+        </div>
+        <button type="button" className="shp-btn shp-btn--primary" onClick={openCashControl}>
+          <Wallet size={15} />
+          פתיחת בקרת קופה
+        </button>
+      </section>
 
       {editBatch ? (
         <div className="shp-modal-backdrop" role="presentation" onClick={() => setEditBatch(null)}>
@@ -882,6 +822,17 @@ export function ShipmentListClient({
           </div>
         </div>
       ) : null}
+
+      {showZoneImport && (
+        <LocationAliasImportModal
+          onClose={() => setShowZoneImport(false)}
+          onDone={(result) => {
+            showMsg(
+              `ייבוא התאמות הושלם: ${result.createdAliases} כינויים · ${result.updatedAliases} עודכנו · ${result.createdAreas} אזורים`,
+            );
+          }}
+        />
+      )}
     </div>
   );
 }

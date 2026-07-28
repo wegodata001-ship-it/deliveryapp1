@@ -63,6 +63,7 @@ function mapCustomerRow(
     id: c.id,
     code,
     name: primaryCustomerDisplayName(c) || c.displayName || "—",
+    nameAr: (c.nameAr ?? "").trim(),
     phone: (c.phone ?? "").trim() || "—",
     country: (c.country ?? "").trim() || "—",
     ordersTotalUsd: dec2(agg.ordersUsd),

@@ -22,6 +22,7 @@ import {
   ShipmentControlKpiModal,
   type KpiDrillKey,
 } from "@/components/admin/shipments/ShipmentControlKpiModal";
+import { ShipmentControlShipmentsModal } from "@/components/admin/shipments/ShipmentControlShipmentsModal";
 import { ShipmentReportExportModal } from "@/components/admin/shipments/ShipmentReportExportModal";
 import type {
   ShipmentReportFormat,
@@ -125,7 +126,7 @@ function RecordRow({ r }: { r: ShipmentControlRecord }) {
           <td colSpan={12} style={{ padding: 0 }}>
             <div className="sc-expand-panel">
               <div className="sc-expand-grid">
-                <div><span className="sc-expand-label">טלפון:</span> {r.customerPhone || "—"}</div>
+                <div><span className="sc-expand-label">טלפון:</span> {r.customerPhone || "—"}{r.customerPhone2 ? ` / ${r.customerPhone2}` : ""}</div>
                 <div><span className="sc-expand-label">כתובת:</span> {r.address || "—"}, {r.city || ""}</div>
                 <div><span className="sc-expand-label">הערות:</span> {r.notes || "—"}</div>
                 <div><span className="sc-expand-label">קונטיינר:</span> {r.containerNumber || "—"}</div>
@@ -173,7 +174,7 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
   const [month, setMonth] = useState<string>("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [containerNumber, setContainerNumber] = useState("");
+  const [customerCode, setCustomerCode] = useState("");
   const [zoneId, setZoneId] = useState("");
   const [courierName, setCourierName] = useState("");
   const [batchId, setBatchId] = useState("");
@@ -182,17 +183,18 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
   const [selectedCourier, setSelectedCourier] = useState<string | null>(null);
   const [selectedZone, setSelectedZone] = useState<string | null>(null);
   const [activeKpi, setActiveKpi] = useState<KpiDrillKey | null>(null);
+  const [shipmentsModalOpen, setShipmentsModalOpen] = useState(false);
 
   const currentFilter = useCallback((): ShipmentControlFilter => ({
     year: year ? parseInt(year) : undefined,
     month: month ? parseInt(month) : undefined,
     dateFrom: dateFrom || undefined,
     dateTo: dateTo || undefined,
-    containerNumber: containerNumber || undefined,
+    customerCode: customerCode || undefined,
     zoneId: zoneId || undefined,
     courierName: courierName || undefined,
     batchId: batchId || undefined,
-  }), [year, month, dateFrom, dateTo, containerNumber, zoneId, courierName, batchId]);
+  }), [year, month, dateFrom, dateTo, customerCode, zoneId, courierName, batchId]);
 
   const refresh = useCallback(
     (filter: ShipmentControlFilter) => {
@@ -210,7 +212,7 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
 
   function clearFilter() {
     setYear(""); setMonth(""); setDateFrom(""); setDateTo("");
-    setContainerNumber(""); setZoneId(""); setCourierName(""); setBatchId("");
+    setCustomerCode(""); setZoneId(""); setCourierName(""); setBatchId("");
     refresh({});
   }
 
@@ -291,10 +293,11 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
         </select>
 
         <input
-          placeholder="קונטיינר..."
-          value={containerNumber}
-          onChange={(e) => setContainerNumber(e.target.value)}
-          style={{ width: 110 }}
+          placeholder="קוד לקוח..."
+          value={customerCode}
+          onChange={(e) => setCustomerCode(e.target.value)}
+          style={{ width: 120 }}
+          aria-label="קוד לקוח"
         />
 
         <select value={zoneId} onChange={(e) => setZoneId(e.target.value)}>
@@ -322,7 +325,12 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
         <div className="sc-kpi-group">
           <div className="sc-kpi-group__title"><Package size={14} /> משלוחים</div>
           <div className="sc-kpi-row">
-            <KpiCard label="סה״כ" value={kpis.total} icon={<Package size={18} />} onClick={() => setActiveKpi("all")} />
+            <KpiCard
+              label="משלוחים"
+              value={kpis.total}
+              icon={<Package size={18} />}
+              onClick={() => setShipmentsModalOpen(true)}
+            />
             <KpiCard label="נמסרו" value={kpis.delivered} color="#15803d" icon={<CheckCircle size={18} />} onClick={() => setActiveKpi("delivered")} />
             <KpiCard label="בדרך" value={kpis.inTransit} color="#d97706" icon={<Truck size={18} />} onClick={() => setActiveKpi("in_transit")} />
             <KpiCard label="לא נמסרו" value={kpis.notDelivered} color="#dc2626" icon={<XCircle size={18} />} onClick={() => setActiveKpi("not_delivered")} />
@@ -338,6 +346,13 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
             <KpiCard label="לחיוב" value={fmtIls(kpis.totalFeeIls)} icon={<Banknote size={18} />} onClick={() => setActiveKpi("to_charge")} />
             <KpiCard label="נגבה" value={fmtIls(kpis.totalPaidIls)} color="#15803d" icon={<TrendingUp size={18} />} onClick={() => setActiveKpi("collected")} />
             <KpiCard label="יתרה" value={fmtIls(kpis.totalRemainingIls)} color={kpis.totalRemainingIls > 0 ? "#dc2626" : "#15803d"} onClick={() => setActiveKpi("remaining")} />
+            <KpiCard
+              label="סה״כ הוצאות משלוחים"
+              value={fmtIls(kpis.totalExpensesIls ?? 0)}
+              color="#b45309"
+              icon={<Banknote size={18} />}
+              onClick={() => setShipmentsModalOpen(true)}
+            />
             {kpis.totalCreditIls > 0 && (
               <KpiCard label="יתרת זכות" value={fmtIls(kpis.totalCreditIls)} color="#7c3aed" onClick={() => setActiveKpi("credit")} />
             )}
@@ -642,6 +657,14 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
           courierOptions={courierOptions}
           canWrite
           onClose={() => setActiveKpi(null)}
+          onChanged={refreshCurrent}
+        />
+      )}
+
+      {shipmentsModalOpen && (
+        <ShipmentControlShipmentsModal
+          records={records}
+          onClose={() => setShipmentsModalOpen(false)}
           onChanged={refreshCurrent}
         />
       )}

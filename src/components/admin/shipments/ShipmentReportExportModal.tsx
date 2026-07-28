@@ -50,7 +50,7 @@ function initialValues(filter: ShipmentControlFilter): ShipmentReportFilters {
   return {
     dateFrom: filter.dateFrom ?? calculatedFrom,
     dateTo: filter.dateTo ?? calculatedTo,
-    containerNumber: filter.containerNumber ?? "",
+    containerNumber: "",
     zoneId: filter.zoneId ?? "",
     courierName: filter.courierName ?? "",
     status: "",
@@ -92,7 +92,6 @@ export function ShipmentReportExportModal({
       const fresh = await getShipmentControlDataAction({
         dateFrom: filters.dateFrom || undefined,
         dateTo: filters.dateTo || undefined,
-        containerNumber: filters.containerNumber || undefined,
         zoneId: filters.zoneId || undefined,
         courierName: filters.courierName || undefined,
       });

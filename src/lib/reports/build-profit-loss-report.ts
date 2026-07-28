@@ -7,7 +7,8 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { paymentRecordUsdEquivalent } from "@/lib/payment-usd-equivalent";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
-import { getOrderStatusLabelMap, labelFromMap } from "@/lib/order-status-registry";
+import { getOrderStatusLabelMap } from "@/lib/order-status-registry-data";
+import { labelFromMap } from "@/lib/order-status-shared";
 import { endOfLocalDay, parseLocalDate, normalizeAhWeekCode, getAhWeekRange } from "@/lib/work-week";
 import { formatYmdJerusalem, parseAhWeekNumber } from "@/lib/weeks/ah-week";
 import { toAhWeekCode } from "@/lib/weeks/ah-week-nav";
@@ -44,15 +45,9 @@ export type ProfitLossReportFilters = {
   search?: string;
 };
 
-/** מדינות שמוצגות בגרף «רווח לפי מדינה» — לפי מדינת ההזמנה בלבד */
-export const PROFIT_LOSS_CHART_COUNTRIES = [
-  { key: "TURKEY", label: "טורקיה", flag: "🇹🇷" },
-  { key: "CHINA", label: "סין", flag: "🇨🇳" },
-  { key: "UAE", label: "איחוד האמירויות", flag: "🇦🇪" },
-] as const;
-
-export type ProfitLossChartCountryLabel =
-  (typeof PROFIT_LOSS_CHART_COUNTRIES)[number]["label"];
+export { PROFIT_LOSS_CHART_COUNTRIES } from "@/lib/reports/profit-loss-constants";
+export type { ProfitLossChartCountryLabel } from "@/lib/reports/profit-loss-constants";
+import { PROFIT_LOSS_CHART_COUNTRIES, type ProfitLossChartCountryLabel } from "@/lib/reports/profit-loss-constants";
 
 const SOURCE_COUNTRY_HE: Record<string, string> = {
   TURKEY: "טורקיה",

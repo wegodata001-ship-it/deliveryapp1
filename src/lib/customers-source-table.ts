@@ -31,6 +31,8 @@ export type CustomersSourceRow = {
   id: string;
   code: string;
   name: string;
+  /** שם לקוח בערבית — מקור ל־PDF לשליח */
+  nameAr: string;
   phone: string;
   email: string;
   /** יתרת לקוח (USD): חיובי=חוב, שלילי=זכות */
@@ -200,6 +202,7 @@ function mapRow(r: {
       nameHe: r.nameHe,
       displayName: r.displayName,
     }),
+    nameAr: (r.nameAr ?? "").trim(),
     phone: r.phone ?? "",
     email: r.email ?? "",
     balanceUsd: new Prisma.Decimal(bal).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toFixed(2),

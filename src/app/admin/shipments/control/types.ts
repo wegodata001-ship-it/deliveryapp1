@@ -9,10 +9,22 @@ export type ShipmentControlFilter = {
   month?: number;
   dateFrom?: string; // ISO date string
   dateTo?: string;
-  containerNumber?: string;
+  /** חיפוש לפי קוד לקוח */
+  customerCode?: string;
   zoneId?: string;
   courierName?: string;
   batchId?: string;
+};
+
+export type ShipmentRecordExpenseDto = {
+  id: string;
+  shipmentRecordId: string;
+  category: string;
+  categoryLabel: string;
+  amountIls: number;
+  notes: string | null;
+  expenseDate: string; // YYYY-MM-DD
+  createdAt: string;
 };
 
 // ─── KPI cards ───────────────────────────────────────────────────────────────
@@ -51,6 +63,9 @@ export type ShipmentKpis = {
   unpaidCount: number;
   partialCount: number;
   paidCount: number;
+
+  /** סה״כ הוצאות משלוחים לפי הסינון הפעיל */
+  totalExpensesIls: number;
 };
 
 // ─── Record (per-shipment row) ─────────────────────────────────────────────
@@ -61,8 +76,10 @@ export type ShipmentControlRecord = {
   batchNumber: string;
   containerNumber: string | null;
   rowIndex: number;
+  customerCode: string | null;
   customerName: string | null;
   customerPhone: string | null;
+  customerPhone2: string | null;
   address: string | null;
   city: string | null;
   boxes: number | null;
@@ -83,6 +100,9 @@ export type ShipmentControlRecord = {
   remainingFeeIls: number;
   notes: string | null;
   createdAt: string;
+  expenses: ShipmentRecordExpenseDto[];
+  expensesTotalIls: number;
+  expensesCount: number;
   // Payment details (for the expanded row)
   payments: {
     id: string;

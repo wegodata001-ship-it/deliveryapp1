@@ -5,6 +5,8 @@ import {
   listShipmentRecordsByBatchIds,
   listZones,
 } from "@/app/admin/shipments/service";
+import { listShipmentPaymentMethodsAction } from "@/app/admin/shipments/actions";
+import { PAYMENT_METHODS } from "@/app/admin/shipments/types";
 import { ShipmentCombinedClient } from "@/components/admin/shipments/ShipmentCombinedClient";
 import "@/app/admin/shipments/shipments.css";
 
@@ -22,15 +24,19 @@ export default async function ShipmentCombinedPage({
     .map((id) => id.trim())
     .filter(Boolean);
 
-  const [records, zones, couriers, allBatches] = await Promise.all([
+  const [records, zones, couriers, allBatches, methodsRes] = await Promise.all([
     listShipmentRecordsByBatchIds(batchIds),
     listZones(),
     listCouriers(),
     listShipmentBatches(),
+    listShipmentPaymentMethodsAction(),
   ]);
 
   const idSet = new Set(batchIds);
   const batches = allBatches.filter((b) => idSet.has(b.id));
+  const paymentMethods = methodsRes.ok
+    ? methodsRes.methods
+    : PAYMENT_METHODS.map((m) => ({ id: m.value, label: m.label }));
 
   return (
     <ShipmentCombinedClient
@@ -39,6 +45,7 @@ export default async function ShipmentCombinedPage({
       initialZones={zones}
       initialCouriers={couriers}
       initialBatches={batches}
+      paymentMethods={paymentMethods}
     />
   );
 }

@@ -33,6 +33,7 @@ import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { CustomerPlaceCombo } from "@/components/admin/CustomerPlaceCombo";
 import { LedgerPdfExportModal } from "@/components/admin/LedgerPdfExportModal";
+import { suggestArabicCustomerName } from "@/lib/arabic-name-suggest";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { formatMoneyAmount, formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
 import { CustomerBalanceView } from "@/components/ui/CustomerBalanceView";
@@ -710,14 +711,37 @@ export function CustomerCardWindowBody({
                     <input id="cust-name" value={form.displayName} onChange={(e) => setForm((f) => ({ ...f, displayName: e.target.value }))} />
                   </div>
                   <div className="form-field">
-                    <label htmlFor="cust-name-ar">שם בערבית</label>
-                    <input
-                      id="cust-name-ar"
-                      dir="rtl"
-                      placeholder="הזן שם בערבית"
-                      value={form.nameAr}
-                      onChange={(e) => setForm((f) => ({ ...f, nameAr: e.target.value }))}
-                    />
+                    <label htmlFor="cust-name-ar">שם לקוח בערבית</label>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <input
+                        id="cust-name-ar"
+                        dir="rtl"
+                        placeholder="مثال: محمد مدبوح"
+                        value={form.nameAr}
+                        onChange={(e) => setForm((f) => ({ ...f, nameAr: e.target.value }))}
+                        style={{ flex: 1 }}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        title="הצעת תעתיק לערבית לפי השם באנגלית"
+                        onClick={() => {
+                          setErr(null);
+                          const src = form.nameEn.trim() || form.displayName.trim();
+                          const { suggested } = suggestArabicCustomerName(src);
+                          if (suggested) {
+                            setForm((f) => ({ ...f, nameAr: suggested }));
+                          } else {
+                            setErr("לא נמצאה הצעת תרגום לשם זה — יש להזין ידנית");
+                          }
+                        }}
+                      >
+                        הצע תרגום
+                      </button>
+                    </div>
+                    <p className="adm-field-hint" style={{ margin: "4px 0 0", fontSize: "0.75rem", color: "#64748b" }}>
+                      חובה ל־PDF לשליח. ניתן ללחוץ «הצע תרגום» לפי השם באנגלית (תעתיק), ואז לערוך ולשמור.
+                    </p>
                   </div>
                   <div className="form-field">
                     <label htmlFor="cust-name-en">שם באנגלית</label>
@@ -763,6 +787,20 @@ export function CustomerCardWindowBody({
               </div>
             ) : (
             <div className="client-info-card">
+              <div className="info-item">
+                <label>שם לקוח בערבית</label>
+                <div dir="rtl">
+                  {snap.nameAr?.trim() || (
+                    <span style={{ color: "#b45309" }}>חסר — נדרש ל־PDF לשליח</span>
+                  )}
+                </div>
+              </div>
+              <div className="info-divider" />
+              <div className="info-item">
+                <label>שם באנגלית</label>
+                <div dir="ltr">{snap.nameEn?.trim() || "—"}</div>
+              </div>
+              <div className="info-divider" />
               <div className="info-item">
                 <label>כתובת</label>
                 <div>{snap.address?.trim() || snap.city?.trim() || "—"}</div>
@@ -1250,17 +1288,6 @@ export function CreateCustomerWindowBody({ initialCustomerCode }: { initialCusto
               />
             </div>
             <div className="adm-field">
-              <label htmlFor="new-customer-name-ar">שם ערבית</label>
-              <input
-                ref={nameArRef}
-                id="new-customer-name-ar"
-                placeholder="محمد"
-                value={form.nameAr}
-                onChange={(e) => setForm((f) => ({ ...f, nameAr: e.target.value }))}
-                required
-              />
-            </div>
-            <div className="adm-field">
               <label htmlFor="new-customer-name-en">שם אנגלית</label>
               <input
                 id="new-customer-name-en"
@@ -1269,6 +1296,33 @@ export function CreateCustomerWindowBody({ initialCustomerCode }: { initialCusto
                 value={form.nameEn}
                 onChange={(e) => setForm((f) => ({ ...f, nameEn: e.target.value }))}
               />
+            </div>
+            <div className="adm-field">
+              <label htmlFor="new-customer-name-ar">שם ערבית</label>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <input
+                  ref={nameArRef}
+                  id="new-customer-name-ar"
+                  placeholder="محمد"
+                  value={form.nameAr}
+                  onChange={(e) => setForm((f) => ({ ...f, nameAr: e.target.value }))}
+                  required
+                  style={{ flex: 1 }}
+                />
+                <button
+                  type="button"
+                  className="adm-btn adm-btn--secondary adm-btn--sm"
+                  disabled={busy}
+                  onClick={() => {
+                    setErr(null);
+                    const { suggested } = suggestArabicCustomerName(form.nameEn.trim());
+                    if (suggested) setForm((f) => ({ ...f, nameAr: suggested }));
+                    else setErr("לא נמצאה הצעת תרגום — הזן שם ערבית ידנית");
+                  }}
+                >
+                  הצע תרגום
+                </button>
+              </div>
             </div>
             <div className="adm-field">
               <label htmlFor="new-customer-phone">טלפון (אופציונלי)</label>

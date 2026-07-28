@@ -1,0 +1,705 @@
+"use client";
+
+import { useCallback, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import {
+  ArrowRight,
+  Download,
+  MapPinned,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Search,
+  Trash2,
+  Upload,
+  X,
+} from "lucide-react";
+import * as XLSX from "xlsx";
+import type { ShipmentZoneDto } from "@/app/admin/shipments/types";
+import type {
+  AliasMappingRow,
+  DeliveryLocationDto,
+  LocationAliasImportPreview,
+  LocationAliasImportResult,
+} from "@/app/admin/shipments/location-service";
+import {
+  commitLocationAliasRowsAction,
+  createZoneForLocationsAction,
+  deleteLocationAliasAction,
+  deleteZoneForLocationsAction,
+  listAliasMappingRowsAction,
+  listDeliveryLocationsAction,
+  previewLocationAliasImportAction,
+  reorderZonesAction,
+  setZoneActiveForLocationsAction,
+  updateZoneForLocationsAction,
+} from "@/app/admin/shipments/location-actions";
+import { looksLikeDistributionArea } from "@/lib/distribution-area-name";
+import { LocationMappingEditModal } from "@/components/admin/shipments/LocationMappingEditModal";
+
+type Props = {
+  initialMappings: AliasMappingRow[];
+  initialZones: ShipmentZoneDto[];
+  initialLocations: DeliveryLocationDto[];
+};
+
+export function LocationsAdminClient({
+  initialMappings,
+  initialZones,
+  initialLocations,
+}: Props) {
+  const router = useRouter();
+  const searchRef = useRef<HTMLInputElement>(null);
+  const [mappings, setMappings] = useState(initialMappings);
+  const [zones, setZones] = useState(() =>
+    initialZones.filter((z) => looksLikeDistributionArea(z.name)),
+  );
+  const [locations, setLocations] = useState(initialLocations);
+  const [search, setSearch] = useState("");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [zonesOpen, setZonesOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [preview, setPreview] = useState<LocationAliasImportPreview | null>(null);
+  const [importResult, setImportResult] = useState<LocationAliasImportResult | null>(null);
+  const [newZoneName, setNewZoneName] = useState("");
+  const [quickZoneOpen, setQuickZoneOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [editingRow, setEditingRow] = useState<AliasMappingRow | null>(null);
+
+  const realZones = useMemo(
+    () => zones.filter((z) => looksLikeDistributionArea(z.name)),
+    [zones],
+  );
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return mappings;
+    return mappings.filter(
+      (m) =>
+        m.originalName.toLowerCase().includes(q) ||
+        m.displayName.toLowerCase().includes(q) ||
+        (m.distributionAreaName ?? "").toLowerCase().includes(q),
+    );
+  }, [mappings, search]);
+
+  const selected = useMemo(
+    () => mappings.find((m) => m.aliasId === selectedId) ?? null,
+    [mappings, selectedId],
+  );
+
+  const locCountByZone = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const loc of locations) {
+      if (!loc.distributionAreaId) continue;
+      map.set(loc.distributionAreaId, (map.get(loc.distributionAreaId) ?? 0) + 1);
+    }
+    return map;
+  }, [locations]);
+
+  const refresh = useCallback(async () => {
+    setBusy(true);
+    const [mapRes, locRes] = await Promise.all([
+      listAliasMappingRowsAction({ includeInactive: true }),
+      listDeliveryLocationsAction({ includeInactive: true }),
+    ]);
+    setBusy(false);
+    if (mapRes.ok) setMappings(mapRes.rows);
+    if (locRes.ok) setLocations(locRes.locations);
+    router.refresh();
+  }, [router]);
+
+  async function onImportFile(file: File) {
+    setBusy(true);
+    setImportResult(null);
+    setPreview(null);
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const grid = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: "" });
+      const res = await previewLocationAliasImportAction(grid);
+      if (res.ok) setPreview(res.preview);
+      else setMsg(res.error);
+    } catch (e) {
+      setMsg(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function commitImport() {
+    if (!preview) return;
+    if (preview.mappingError) {
+      setMsg(preview.mappingError);
+      return;
+    }
+    const rows = preview.rows.filter((r) => r.valid);
+    if (rows.length === 0) {
+      setMsg("אין שורות תקינות — בדקו כותרות: מקום מסירה | אזור חלוקה | מקום מסירה מעודכן");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await commitLocationAliasRowsAction(rows, preview.totalRows);
+      if (res.ok) {
+        setImportResult(res.result);
+        setPreview(null);
+        setImportOpen(false);
+        setMsg(
+          `ייבוא הושלם: ${res.result.createdAliases} כינויים חדשים · ${res.result.updatedAliases} עודכנו · ${res.result.createdAreas} אזורים · ${res.result.failed} נכשלו`,
+        );
+        await refresh();
+      } else setMsg(res.error);
+    } catch (e) {
+      setMsg(`הייבוא נכשל: ${String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function exportExcel() {
+    const rows = mappings.map((m) => ({
+      "מקום מסירה מקורי": m.originalName,
+      "אזור חלוקה": m.distributionAreaName || "",
+      "מקום מסירה מעודכן": m.displayName,
+      סטטוס: m.isActive ? "פעיל" : "מושבת",
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "התאמות");
+    XLSX.writeFile(wb, "delivery-location-aliases.xlsx");
+  }
+
+  async function addZone(nameRaw?: string) {
+    const name = (nameRaw ?? newZoneName).trim();
+    if (!name) return;
+    if (!looksLikeDistributionArea(name)) {
+      setMsg("שם אזור לא תקין — השתמשו בפורמט כמו: צפון 16, דרום 1, מרכז 11, משולש 5");
+      return;
+    }
+    setBusy(true);
+    const res = await createZoneForLocationsAction(name);
+    setBusy(false);
+    if (res.ok) {
+      setZones((prev) => [...prev, res.zone].sort((a, b) => a.sortOrder - b.sortOrder));
+      setNewZoneName("");
+      setQuickZoneOpen(false);
+      setMsg("אזור חלוקה נוסף");
+    } else setMsg(res.error);
+  }
+
+  async function deleteSelected() {
+    if (!selected) {
+      setMsg("בחרו שורה לעריכה/מחיקה");
+      return;
+    }
+    if (!window.confirm(`למחוק התאמה "${selected.originalName}"?`)) return;
+    setBusy(true);
+    const res = await deleteLocationAliasAction(selected.aliasId);
+    setBusy(false);
+    if (!res.ok) setMsg(res.error);
+    else {
+      setSelectedId(null);
+      setMsg("ההתאמה נמחקה");
+      await refresh();
+    }
+  }
+
+  function openEdit(row?: AliasMappingRow | null) {
+    const target = row ?? selected;
+    if (!target) {
+      setMsg("בחרו שורה לעריכה");
+      return;
+    }
+    setSelectedId(target.aliasId);
+    setEditingRow(target);
+  }
+
+  return (
+    <div className="shp-page shp-page--wide loc-admin" dir="rtl">
+      <div className="shp-header">
+        <button type="button" className="shp-btn shp-btn--ghost" onClick={() => router.push("/admin/shipments")}>
+          <ArrowRight size={16} />
+          חזרה לרשימת משלוחים
+        </button>
+        <MapPinned size={22} style={{ color: "#2563eb" }} />
+        <div>
+          <h1>ניהול יישובים ואזורי חלוקה</h1>
+          <p style={{ margin: 0, color: "#64748b", fontSize: 13 }}>
+            טבלת אב קבועה: מקום מסירה מקורי → מעודכן → אזור חלוקה
+          </p>
+        </div>
+        <div className="shp-header-actions">
+          <button type="button" className="shp-btn" onClick={() => setZonesOpen(true)}>
+            ניהול אזורי חלוקה
+          </button>
+          <button type="button" className="shp-btn shp-btn--primary" onClick={() => setImportOpen(true)}>
+            <Upload size={14} />
+            ייבוא התאמות יישובים
+          </button>
+          <button type="button" className="shp-btn" onClick={exportExcel}>
+            <Download size={14} />
+            ייצוא Excel
+          </button>
+          <button type="button" className="shp-btn" onClick={() => void refresh()} disabled={busy}>
+            <RefreshCw size={14} />
+            רענון
+          </button>
+        </div>
+      </div>
+
+      {msg && (
+        <div className="shp-alert" role="status">
+          {msg}
+        </div>
+      )}
+
+      {importResult && (
+        <div className="shp-alert">
+          נקלטו {importResult.processed} · חדשים {importResult.createdAliases} · עודכנו{" "}
+          {importResult.updatedAliases} · אזורים חדשים {importResult.createdAreas} · נכשלו{" "}
+          {importResult.failed}
+        </div>
+      )}
+
+      <section className="loc-admin__toolbar loc-admin__toolbar--actions">
+        <div className="loc-admin__action-btns">
+          <button
+            type="button"
+            className="shp-btn shp-btn--primary"
+            disabled={busy}
+            onClick={() => setCreateOpen(true)}
+          >
+            <Plus size={14} />
+            יישוב חדש
+          </button>
+          <button
+            type="button"
+            className="shp-btn"
+            disabled={busy}
+            onClick={() => {
+              setNewZoneName("");
+              setQuickZoneOpen(true);
+            }}
+          >
+            <Plus size={14} />
+            אזור חלוקה חדש
+          </button>
+          <button type="button" className="shp-btn" disabled={busy} onClick={() => openEdit()}>
+            <Pencil size={14} />
+            עריכה
+          </button>
+          <button type="button" className="shp-btn" disabled={busy} onClick={() => void deleteSelected()}>
+            <Trash2 size={14} />
+            מחיקה
+          </button>
+          <button
+            type="button"
+            className="shp-btn"
+            onClick={() => searchRef.current?.focus()}
+          >
+            <Search size={14} />
+            חיפוש
+          </button>
+        </div>
+        <div className="loc-admin__search">
+          <Search size={16} />
+          <input
+            ref={searchRef}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="חיפוש כינוי / יישוב / אזור…"
+          />
+        </div>
+        <span style={{ fontSize: 13, color: "#64748b" }}>{filtered.length} התאמות</span>
+      </section>
+
+      <section className="loc-admin__card">
+        <h2>טבלת התאמות</h2>
+        <p className="loc-admin__hint">
+          בחרו שורה ולחצו עריכה. ייבוא קבצים חדשים מוסיף רק יישובים חסרים — בלי כפילויות.
+        </p>
+        <div className="shp-daily-wrap">
+          <table className="shp-table shp-table--daily shp-table--alias">
+            <thead>
+              <tr>
+                <th style={{ width: 40 }} />
+                <th style={{ width: 220 }}>מקום מסירה מקורי</th>
+                <th style={{ width: 180 }}>מקום מסירה מעודכן</th>
+                <th style={{ width: 140 }}>אזור חלוקה</th>
+                <th style={{ width: 90 }}>סטטוס</th>
+                <th style={{ width: 100 }}>פעולות</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="shp-daily-empty">
+                    אין התאמות — ייבאו קובץ Excel או הוסיפו יישוב חדש
+                  </td>
+                </tr>
+              )}
+              {filtered.map((m) => (
+                <tr
+                  key={m.aliasId}
+                  className={selectedId === m.aliasId ? "loc-admin__row--selected" : undefined}
+                  onClick={() => setSelectedId(m.aliasId)}
+                  onDoubleClick={() => openEdit(m)}
+                  style={{ cursor: "pointer" }}
+                >
+                  <td className="shp-daily-center">
+                    <input
+                      type="radio"
+                      name="loc-sel"
+                      checked={selectedId === m.aliasId}
+                      onChange={() => setSelectedId(m.aliasId)}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </td>
+                  <td>
+                    <span className="shp-trunc" title={m.originalName}>
+                      {m.originalName}
+                    </span>
+                  </td>
+                  <td style={{ fontWeight: 600 }}>{m.displayName}</td>
+                  <td>
+                    {m.distributionAreaName && looksLikeDistributionArea(m.distributionAreaName) ? (
+                      <span className="shp-zone-tag">{m.distributionAreaName}</span>
+                    ) : (
+                      <span className="shp-unset-tag">לא הוגדר</span>
+                    )}
+                  </td>
+                  <td>{m.isActive ? "פעיל" : "מושבת"}</td>
+                  <td>
+                    <div className="shp-daily-actions">
+                      <button
+                        type="button"
+                        className="shp-btn shp-btn--sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openEdit(m);
+                        }}
+                      >
+                        עריכה
+                      </button>
+                      <button
+                        type="button"
+                        className="shp-btn shp-btn--sm"
+                        title="מחק התאמה"
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          if (!window.confirm(`למחוק התאמה "${m.originalName}"?`)) return;
+                          const res = await deleteLocationAliasAction(m.aliasId);
+                          if (!res.ok) setMsg(res.error);
+                          else {
+                            if (selectedId === m.aliasId) setSelectedId(null);
+                            await refresh();
+                          }
+                        }}
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {(createOpen || editingRow) && (
+        <LocationMappingEditModal
+          mode={createOpen ? "create" : "edit"}
+          mapping={editingRow}
+          locations={locations}
+          zones={zones}
+          onClose={() => {
+            setCreateOpen(false);
+            setEditingRow(null);
+          }}
+          onSaved={(row) => {
+            setMappings((prev) => {
+              const idx = prev.findIndex((m) => m.aliasId === row.aliasId);
+              if (idx < 0) return [row, ...prev];
+              const next = [...prev];
+              next[idx] = row;
+              return next;
+            });
+            setSelectedId(row.aliasId);
+            setMsg(createOpen ? "יישוב נוסף לטבלת ההתאמות" : "ההתאמה עודכנה");
+            void refresh();
+          }}
+          onZonesChange={setZones}
+        />
+      )}
+
+      {quickZoneOpen && (
+        <div
+          className="shp-modal-backdrop"
+          onClick={() => !busy && setQuickZoneOpen(false)}
+        >
+          <div
+            className="shp-modal"
+            style={{ maxWidth: 420, width: "92vw" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="shp-modal__header">
+              <strong>אזור חלוקה חדש</strong>
+              <button type="button" className="shp-icon-btn" onClick={() => setQuickZoneOpen(false)}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="shp-modal__body">
+              <label className="loc-mapping-field">
+                <span>שם אזור</span>
+                <input
+                  value={newZoneName}
+                  onChange={(e) => setNewZoneName(e.target.value)}
+                  placeholder="למשל: צפון 16"
+                  onKeyDown={(e) => e.key === "Enter" && void addZone()}
+                  autoFocus
+                />
+              </label>
+            </div>
+            <div className="shp-modal__footer">
+              <button type="button" className="shp-btn" onClick={() => setQuickZoneOpen(false)}>
+                ביטול
+              </button>
+              <button
+                type="button"
+                className="shp-btn shp-btn--primary"
+                disabled={busy || !newZoneName.trim()}
+                onClick={() => void addZone()}
+              >
+                שמור
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {zonesOpen && (
+        <div className="shp-modal-backdrop" onClick={() => setZonesOpen(false)}>
+          <div
+            className="shp-modal"
+            style={{ maxWidth: 720, width: "96vw" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="shp-modal__header">
+              <strong>ניהול אזורי חלוקה</strong>
+              <button type="button" className="shp-icon-btn" onClick={() => setZonesOpen(false)}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="shp-modal__body">
+              <p className="loc-admin__hint">רק אזורים לוגיסטיים — למשל צפון 16. לא שמות יישובים.</p>
+              <div className="loc-admin__add-row">
+                <input
+                  value={newZoneName}
+                  onChange={(e) => setNewZoneName(e.target.value)}
+                  placeholder="צפון 16"
+                  onKeyDown={(e) => e.key === "Enter" && void addZone()}
+                />
+                <button type="button" className="shp-btn shp-btn--primary" onClick={() => void addZone()}>
+                  <Plus size={14} />
+                  הוסף אזור
+                </button>
+              </div>
+              <div className="shp-daily-wrap" style={{ maxHeight: "50vh" }}>
+                <table className="shp-table shp-table--daily">
+                  <thead>
+                    <tr>
+                      <th>אזור חלוקה</th>
+                      <th>מספר יישובים</th>
+                      <th>סטטוס</th>
+                      <th>פעולות</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {realZones.map((z, idx) => (
+                      <tr key={z.id}>
+                        <td>
+                          <span className="shp-zone-tag">{z.name}</span>
+                        </td>
+                        <td className="shp-daily-center">{locCountByZone.get(z.id) ?? 0}</td>
+                        <td>{z.isActive ? "פעיל" : "מושבת"}</td>
+                        <td>
+                          <div className="shp-daily-actions">
+                            <button
+                              type="button"
+                              className="shp-btn shp-btn--sm"
+                              onClick={async () => {
+                                const name = window.prompt("שם אזור", z.name);
+                                if (!name?.trim()) return;
+                                if (!looksLikeDistributionArea(name.trim())) {
+                                  setMsg("שם אזור לא תקין");
+                                  return;
+                                }
+                                await updateZoneForLocationsAction(z.id, { name: name.trim() });
+                                setZones((prev) =>
+                                  prev.map((x) => (x.id === z.id ? { ...x, name: name.trim() } : x)),
+                                );
+                              }}
+                            >
+                              עריכה
+                            </button>
+                            <button
+                              type="button"
+                              className="shp-btn shp-btn--sm"
+                              onClick={async () => {
+                                await setZoneActiveForLocationsAction(z.id, !z.isActive);
+                                setZones((prev) =>
+                                  prev.map((x) => (x.id === z.id ? { ...x, isActive: !x.isActive } : x)),
+                                );
+                              }}
+                            >
+                              {z.isActive ? "השבת" : "הפעל"}
+                            </button>
+                            <button
+                              type="button"
+                              className="shp-btn shp-btn--sm"
+                              disabled={idx === 0}
+                              onClick={async () => {
+                                const ordered = [...realZones];
+                                const i = ordered.findIndex((x) => x.id === z.id);
+                                if (i <= 0) return;
+                                [ordered[i - 1], ordered[i]] = [ordered[i], ordered[i - 1]];
+                                await reorderZonesAction(ordered.map((x) => x.id));
+                                setZones(ordered.map((x, sortOrder) => ({ ...x, sortOrder })));
+                              }}
+                            >
+                              ↑
+                            </button>
+                            <button
+                              type="button"
+                              className="shp-btn shp-btn--sm"
+                              onClick={async () => {
+                                if (!window.confirm("למחוק אזור?")) return;
+                                await deleteZoneForLocationsAction(z.id);
+                                setZones((prev) => prev.filter((x) => x.id !== z.id));
+                                await refresh();
+                              }}
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div className="shp-modal__footer">
+              <button type="button" className="shp-btn" onClick={() => setZonesOpen(false)}>
+                סגור
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {importOpen && (
+        <div className="shp-modal-backdrop" onClick={() => !busy && setImportOpen(false)}>
+          <div
+            className="shp-modal"
+            style={{ maxWidth: 900, width: "96vw" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="shp-modal__header">
+              <strong>ייבוא התאמות יישובים</strong>
+              <button type="button" className="shp-icon-btn" disabled={busy} onClick={() => setImportOpen(false)}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="shp-modal__body" style={{ display: "grid", gap: 12 }}>
+              <p style={{ margin: 0, fontSize: 13, color: "#64748b" }}>
+                טבלת האב נשמרת: יישובים קיימים לא נוצרים מחדש. סדר עמודות:{" "}
+                <strong>מקום מסירה מקורי</strong> · <strong>אזור חלוקה</strong> ·{" "}
+                <strong>מקום מסירה מעודכן</strong>
+              </p>
+              <label className="shp-btn shp-btn--primary" style={{ display: "inline-flex", cursor: "pointer", width: "fit-content" }}>
+                <Upload size={14} />
+                בחר קובץ Excel
+                <input
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  hidden
+                  disabled={busy}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void onImportFile(f);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+
+              {preview?.mappingError && (
+                <div className="shp-alert shp-alert--error">{preview.mappingError}</div>
+              )}
+              {preview && !preview.mappingError && (
+                <>
+                  <div className="loc-admin__meta">
+                    <span>שורת כותרות #{preview.headerRowIndex + 1}</span>
+                    <span>סה״כ {preview.totalRows}</span>
+                    <span>תקינות {preview.validRows}</span>
+                    <span>חדשות {preview.wouldCreateAliases}</span>
+                    <span>עודכנו {preview.wouldUpdateAliases}</span>
+                    <span>נכשלו {preview.invalidRows}</span>
+                    <span>אזורים חדשים {preview.wouldCreateAreas}</span>
+                  </div>
+                  <div className="shp-daily-wrap" style={{ maxHeight: 280 }}>
+                    <table className="shp-table shp-table--daily">
+                      <thead>
+                        <tr>
+                          <th>מקום מסירה מקורי</th>
+                          <th>מקום מסירה מעודכן</th>
+                          <th>אזור חלוקה</th>
+                          <th>מצב</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {preview.rows.slice(0, 12).map((r) => (
+                          <tr key={r.rowIndex}>
+                            <td>
+                              <span className="shp-trunc" title={r.originalName}>
+                                {r.originalName || "—"}
+                              </span>
+                            </td>
+                            <td style={{ fontWeight: 600 }}>{r.displayName || "—"}</td>
+                            <td>{r.areaName || "—"}</td>
+                            <td style={{ color: r.valid ? "#15803d" : "#b91c1c" }}>
+                              {r.valid ? "תקין" : r.error || "שגיאה"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </div>
+            <div className="shp-modal__footer">
+              <button type="button" className="shp-btn" disabled={busy} onClick={() => setImportOpen(false)}>
+                ביטול
+              </button>
+              <button
+                type="button"
+                className="shp-btn shp-btn--primary"
+                disabled={
+                  busy || !preview || !!preview.mappingError || preview.validRows === 0
+                }
+                onClick={() => void commitImport()}
+              >
+                {busy ? "מייבא..." : "אשר ייבוא"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

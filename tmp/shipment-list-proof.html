@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<meta charset="utf-8"/>
+<title>הוכחת רשימת משלוחים</title>
+<style>
+  body{font-family:Segoe UI,Tahoma,sans-serif;background:#f8fafc;padding:24px;color:#0f172a}
+  h1{margin:0 0 8px;font-size:22px}
+  .meta{color:#475569;margin-bottom:16px;font-size:14px}
+  .ok{color:#15803d;font-weight:700}
+  .bad{color:#b91c1c;font-weight:700}
+  table{border-collapse:collapse;width:100%;background:#fff;box-shadow:0 1px 3px #0001}
+  th,td{border:1px solid #e2e8f0;padding:8px 10px;font-size:13px;white-space:nowrap}
+  th{background:#f1f5f9;position:sticky;top:0}
+  .zone{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:6px;padding:2px 8px;font-weight:700}
+  .unset{color:#c2410c}
+  .bal{font-weight:700;color:#475569}
+  .banner{background:#ecfdf5;border:1px solid #86efac;padding:10px 12px;border-radius:8px;margin-bottom:14px}
+</style>
+<body>
+  <h1>רשימת משלוחים — הוכחת תצוגה (מ־API)</h1>
+  <div class="meta">batch: 19c6bab6-acdf-49c6-beac-dbbed0f362bf · שורות: 25 · עם אזור: 19</div>
+  <div class="banner">
+    <div class="ok">✓ אין עמודת «מקום מסירה מעודכן»</div>
+    <div class="ok">✓ אזור חלוקה אחרי backfill: 19/25</div>
+    <div class="ok">✓ יתרת לקוח מ־SSOT (calculateCustomerBalances) — מוצג ₪0.00 כשאין יתרה</div>
+  </div>
+  <table>
+    <thead><tr><th>תאריך הגעה</th><th>מספר משלוח</th><th>קוד לקוח</th><th>שם לקוח</th><th>טלפון</th><th>כתובת</th><th>אזור חלוקה</th><th>מספר קרטונים</th><th>דמי משלוח</th><th>גובה תשלום</th><th>יתרת לקוח</th><th>סטטוס</th><th>פעולות</th></tr></thead>
+    <tbody><tr>
+        <td>2026-07-19</td>
+        <td>190(1520)</td>
+        <td dir="ltr">21932</td>
+        <td>TABASCO TABASCO(PUNTO)</td>
+        <td dir="ltr">972546246905</td>
+        <td>TEL AVIV Tel Aviv</td>
+        <td><span class="zone">מרכז 11</span></td>
+        <td>50</td>
+        <td>—</td>
+        <td>גבייה</td>
+        <td class="bal">₪0.00</td>
+        <td>DELIVERED</td>
+        <td>תיקון</td>
+      </tr>
+<tr>
+        <td>2026-07-19</td>
+        <td>190(1520)</td>
+        <td dir="ltr">37090</td>
+        <td>TOMAR ABU AFACH</td>
+        <td dir="ltr">972527528092</td>
+        <td>بئر السبع Ber Sabe</td>
+        <td><span class="zone">דרום 3</span></td>
+        <td>5</td>
+        <td>—</td>
+        <td>גבייה</td>
+        <td class="bal">₪0.00</td>
+        <td>DELIVERED</td>
+        <td>תיקון</td>
+      </tr>
+<tr>
+        <td>2026-07-19</td>
+        <td>190(1520)</td>
+        <td dir="ltr">66015</td>
+        <td>RAHAF KAILANI</td>
+        <td dir="ltr">972524933711</td>
+        <td>yafa nasrah Yafa Nasrah</td>
+        <td><span class="zone">צפון 2</span></td>
+        <td>3</td>
+        <td>—</td>
+        <td>גבייה</td>
+        <td class="bal">₪0.00</td>
+        <td>NEW</td>
+        <td>תיקון</td>
+      </tr>
+<tr>
+        <td>2026-07-19</td>
+        <td>190(1520)</td>
+        <td dir="ltr">12851</td>
+        <td>layla abu sbiyah</td>
+        <td dir="ltr">972502994440</td>
+        <td>Deboriyah</td>
+        <td><span class="zone">צפון 2</span></td>
+        <td>7</td>
+        <td>—</td>
+        <td>גבייה</td>
+        <td class="bal">₪0.00</td>
+        <td>ASSIGNED</td>
+        <td>תיקון</td>
+      </tr>
+<tr>
+        <td>2026-07-19</td>
+        <td>190(1520)</td>
+        <td dir="ltr">9379</td>
+        <td>SHADI DAHER (M.AWAD)</td>
+        <td dir="ltr">972505507979</td>
+        <td>NASRAH Nasrah</td>
+        <td><span class="zone">צפון 4</span></td>
+        <td>10</td>
+        <td>—</td>
+        <td>גבייה</td>
+        <td class="bal">₪0.00</td>
+        <td>RECEIVED</td>
+        <td>תיקון</td>
+      </tr>
+<tr>
+        <td>2026-07-19</td>
+        <td>190(1520)</td>
+        <td dir="ltr">40903</td>
+        <td>MARAH SAADI</td>
+        <td dir="ltr">00972526038881
+00972526800642</td>
+        <td>NASRAH Nasrah</td>
+        <td><span class="zone">צפון 4</span></td>
+        <td>7</td>
+        <td>—</td>
+        <td>גבייה</td>
+        <td class="bal">₪0.00</td>
+        <td>NOT_DELIVERED</td>
+        <td>תיקון</td>
+      </tr>
+<tr>
+        <td>2026-07-19</td>
+        <td>190(1520)</td>
+        <td dir="ltr">23557</td>
+        <td>MOSTAFA ABU IBRAHEM</td>
+        <td dir="ltr">972548369119</td>
+        <td>قرية نحف. قضاء عكا Nahaf</td>
+        <td><span class="zone">צפון 19</span></td>
+        <td>6</td>
+        <td>—</td>
+        <td>גבייה</td>
+        <td class="bal">₪0.00</td>
+        <td>NEW</td>
+        <td>תיקון</td>
+      </tr>
+<tr>
+        <td>2026-07-19</td>
+        <td>190(1520)</td>
+        <td dir="ltr">12852</td>
+        <td>nihaya ibrahim isawi</td>
+        <td dir="ltr">972506067456</td>
+        <td>kofr Manda</td>
+        <td><span class="zone">צפון 6</span></td>
+        <td>6</td>
+        <td>—</td>
+        <td>גבייה</td>
+        <td class="bal">₪0.00</td>
+        <td>DELIVERED</td>
+        <td>תיקון</td>
+      </tr>
+<tr>
+        <td>2026-07-19</td>
+        <td>190(1520)</td>
+        <td dir="ltr">3077</td>
+        <td>MOHMMED MADBOH</td>
+        <td dir="ltr">972599811697</td>
+        <td>khalil</td>
+        <td><span class="unset">לא הוגדר</span></td>
+        <td>11</td>
+        <td>—</td>
+        <td>גבייה</td>
+        <td class="bal">₪0.00</td>
+        <td>NEW</td>
+        <td>תיקון</td>
+      </tr>
+<tr>
+        <td>2026-07-19</td>
+        <td>190(1520)</td>
+        <td dir="ltr">6980</td>
+        <td>JIRIS ELYAS</td>
+        <td dir="ltr">972528541967</td>
+        <td>Kofr Yaseef</td>
+        <td><span class="zone">צפון 15</span></td>
+        <td>6</td>
+        <td>—</td>
+        <td>גבייה</td>
+        <td class="bal">₪0.00</td>
+        <td>NEW</td>
+        <td>תיקון</td>
+      </tr>
+<tr>
+        <td>2026-07-19</td>
+        <td>190(1520)</td>
+        <td dir="ltr">7461</td>
+        <td>HANAN BADER KLEPATRA</td>
+        <td dir="ltr">972548380892</td>
+        <td>koferyasef Kofr Yaseef</td>
+        <td><span class="zone">צפון 15</span></td>
+        <td>6</td>
+        <td>—</td>
+        <td>גבייה</td>
+        <td class="bal">₪0.00</td>
+        <td>NEW</td>
+        <td>תיקון</td>
+      </tr>
+<tr>
+        <td>2026-07-19</td>
+        <td>190(1520)</td>
+        <td dir="ltr">36062</td>
+        <td>SALEH JADALLAH</td>
+        <td dir="ltr">00972566130112
+00972537588267</td>
+        <td>RAMALLAH Ramallah</td>
+        <td><span class="unset">לא הוגדר</span></td>
+        <td>6</td>
+        <td>—</td>
+        <td>גבייה</td>
+        <td class="bal">₪0.00</td>
+        <td>NEW</td>
+        <td>תיקון</td>
+      </tr>
+<tr>
+        <td>2026-07-19</td>
+        <td>190(1520)</td>
+        <td dir="ltr">4179</td>
+        <td>Ibrahim AL MOHTASEB</td>
+        <td dir="ltr">972599366769</td>
+        <td>khalil</td>
+        <td><span class="unset">לא הוגדר</span></td>
+        <td>6</td>
+        <td>—</td>
+        <td>גבייה</td>
+        <td class="bal">₪0.00</td>
+        <td>NEW</td>
+        <td>תיקון</td>
+      </tr>
+<tr>
+        <td>2026-07-19</td>
+        <td>190(1520)</td>
+        <td dir="ltr">42143</td>
+        <td>AMAR KILANI</td>
+        <td dir="ltr">972549019297</td>
+        <td>جديدة المكر Jdaydah Makr</td>
+        <td><span class="zone">צפון 13</span></td>
+        <td>3</td>
+        <td>—</td>
+        <td>גבייה</td>
+        <td class="bal">₪0.00</td>
+        <td>NEW</td>
+        <td>תיקון</td>
+      </tr>
+<tr>
+        <td>2026-07-19</td>
+        <td>190(1520)</td>
+        <td dir="ltr">58498</td>
+        <td>ASMAA ARABI</td>
+        <td dir="ltr">972525035600</td>
+        <td>كفر مندا kofr Manda</td>
+        <td><span class="zone">צפון 6</span></td>
+        <td>4</td>
+        <td>—</td>
+        <td>גבייה</td>
+        <td class="bal">₪0.00</td>
+        <td>NEW</td>
+        <td>תיקון</td>
+      </tr>
+<tr>
+        <td>2026-07-19</td>
+        <td>190(1520)</td>
+        <td dir="ltr">4178</td>
+        <td>NOR EL-MOHTASEB</td>
+        <td dir="ltr">972599830383</td>
+        <td>khalil</td>
+        <td><span class="unset">לא הוגדר</span></td>
+        <td>6</td>
+        <td>—</td>
+        <td>גבייה</td>
+        <td class="bal">₪0.00</td>
+        <td>NEW</td>
+        <td>תיקון</td>
+      </tr>
+<tr>
+        <td>2026-07-19</td>
+        <td>190(1520)</td>
+        <td dir="ltr">47738</td>
+        <td>IBRAHIM ABU ALKIAAN</td>
+        <td dir="ltr">972546199698</td>
+        <td>شقيب السلام - رهط Rahat</td>
+        <td><span class="zone">דרום 7</span></td>
+        <td>4</td>
+        <td>—</td>
+        <td>גבייה</td>
+        <td class="bal">₪0.00</td>
+        <td>NEW</td>
+        <td>תיקון</td>
+      </tr>
+<tr>
+        <td>2026-07-19</td>
+        <td>190(1520)</td>
+        <td dir="ltr">60664</td>
+        <td>AYAT ABU KHAYT</td>
+        <td dir="ltr">972547358272</td>
+        <td>TERAH Tereh</td>
+        <td><span class="zone">מרכז 10</span></td>
+        <td>3</td>
+        <td>—</td>
+        <td>גבייה</td>
+        <td class="bal">₪0.00</td>
+        <td>NEW</td>
+        <td>תיקון</td>
+      </tr></tbody>
+  </table>
+</body></html>

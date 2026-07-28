@@ -16,6 +16,7 @@ import type {
   CreateBatchInput,
   ExcelShipmentPreviewRow,
   ShipmentCourierDto,
+  ShipmentImportMatchSummary,
   ShipmentZoneDto,
 } from "@/app/admin/shipments/types";
 import { createShipmentBatchAction } from "@/app/admin/shipments/actions";
@@ -255,6 +256,16 @@ export function ShipmentImportClient({ initialZones, initialCouriers }: Props) {
       setError(res.error);
       setSaving("idle");
       return;
+    }
+    if (mode === "import" && res.matchSummary) {
+      try {
+        sessionStorage.setItem(
+          `shp-import-summary-${res.batchId}`,
+          JSON.stringify(res.matchSummary as ShipmentImportMatchSummary),
+        );
+      } catch {
+        /* ignore */
+      }
     }
     router.push(`/admin/shipments/${res.batchId}`);
   }
@@ -559,7 +570,7 @@ export function ShipmentImportClient({ initialZones, initialCouriers }: Props) {
                     </td>
                     <td>{row.customerCode || missingText("customerCode")}</td>
                     <td>{row.customerName || missingText("customerName")}</td>
-                    <td>{row.customerPhone || missingText("customerPhone")}</td>
+                    <td>{row.customerPhone || missingText("customerPhone")}{row.customerPhone2 ? ` / ${row.customerPhone2}` : ""}</td>
                     <td>{row.address || missingText("address")}</td>
                     <td>{row.city || missingText("city")}</td>
                     <td>{row.boxes ?? missingText("boxes")}</td>

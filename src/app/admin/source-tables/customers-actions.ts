@@ -62,10 +62,11 @@ export async function exportCustomersSourceAction(
     const rows = await listCustomersSourceForExport({ ...exportQuery, filters });
     if (rows.length === 0) return { ok: false, error: "אין שורות לייצוא" };
 
-    const headers = ["קוד", "שם", "טלפון", "אימייל", "יתרת לקוח (USD)", "תאריך הצטרפות"];
+    const headers = ["קוד", "שם", "שם בערבית", "טלפון", "אימייל", "יתרת לקוח (USD)", "תאריך הצטרפות"];
     const data = rows.map((r) => [
       r.code,
       r.name,
+      r.nameAr,
       r.phone,
       r.email,
       r.balanceUsd,

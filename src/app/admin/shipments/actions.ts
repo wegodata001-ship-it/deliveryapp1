@@ -31,6 +31,8 @@ import {
   getShipmentRecordById,
   deleteShipmentRecord,
   deleteShipmentBatches,
+  previewCourierDebtClose,
+  closeCourierDebts,
 } from "@/app/admin/shipments/service";
 import type {
   ShipmentBatchDto,
@@ -47,6 +49,8 @@ import type {
   UpdateShipmentRecordInput,
   UpdateShipmentBatchInput,
 } from "@/app/admin/shipments/types";
+import { PAYMENT_METHODS } from "@/app/admin/shipments/types";
+import type { ShipmentPaymentMethodOption } from "@/lib/shipment-payment-method-filter";
 
 const VIEW_PERMS = ["manage_shipments", "view_shipments"];
 const WRITE_PERMS = ["manage_shipments"];
@@ -74,14 +78,17 @@ export async function listShipmentBatchesAction(): Promise<
 
 export async function createShipmentBatchAction(
   input: CreateBatchInput
-): Promise<{ ok: true; batchId: string } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; batchId: string; matchSummary: import("@/app/admin/shipments/types").ShipmentImportMatchSummary }
+  | { ok: false; error: string }
+> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    const batchId = await createShipmentBatch(input, me.id);
+    const result = await createShipmentBatch(input, me.id);
     revalidate();
-    return { ok: true, batchId };
+    return { ok: true, batchId: result.batchId, matchSummary: result.matchSummary };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
@@ -89,15 +96,18 @@ export async function createShipmentBatchAction(
 
 export async function importRowsIntoBatchAction(
   input: ImportRowsIntoBatchInput
-): Promise<{ ok: true; count: number } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; count: number; matchSummary: import("@/app/admin/shipments/types").ShipmentImportMatchSummary }
+  | { ok: false; error: string }
+> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    const count = await importRowsIntoBatch(input);
+    const result = await importRowsIntoBatch(input);
     revalidate();
     revalidatePath(`/admin/shipments/${input.batchId}`);
-    return { ok: true, count };
+    return { ok: true, count: result.count, matchSummary: result.matchSummary };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
@@ -248,7 +258,7 @@ export async function assignCourierAction(
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    await assignCourier(input);
+    await assignCourier(input, me.id);
     revalidate();
     return { ok: true };
   } catch (e) {
@@ -271,16 +281,71 @@ export async function updateShipmentStatusAction(
   }
 }
 
-export async function updateShipmentRecordAction(
-  input: UpdateShipmentRecordInput
-): Promise<{ ok: true } | { ok: false; error: string }> {
+export async function previewCourierDebtCloseAction(input: {
+  courierId: string;
+  zoneIds: string[];
+  batchIds?: string[];
+}): Promise<
+  | { ok: true; preview: Awaited<ReturnType<typeof previewCourierDebtClose>> }
+  | { ok: false; error: string }
+> {
+  try {
+    const me = await requireAuth();
+    if (!isAdminUser(me) && !userHasAnyPermission(me, VIEW_PERMS))
+      return { ok: false, error: "אין הרשאה" };
+    const preview = await previewCourierDebtClose(input);
+    return { ok: true, preview };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+export async function closeCourierDebtsAction(input: {
+  courierId: string;
+  zoneIds: string[];
+  batchIds?: string[];
+}): Promise<
+  | {
+      ok: true;
+      closedCount: number;
+      skippedCount: number;
+      courierName: string;
+      zoneNames: string[];
+      eligibleFeeIls: number;
+      skipped: Awaited<ReturnType<typeof closeCourierDebts>>["preview"]["skipped"];
+    }
+  | { ok: false; error: string }
+> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    await updateShipmentRecord(input);
+    const result = await closeCourierDebts({ ...input, userId: me.id });
     revalidate();
-    return { ok: true };
+    return {
+      ok: true,
+      closedCount: result.closedCount,
+      skippedCount: result.preview.skipped.length,
+      courierName: result.preview.courierName,
+      zoneNames: result.preview.zoneNames,
+      eligibleFeeIls: result.preview.summary.eligibleFeeIls,
+      skipped: result.preview.skipped,
+    };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+export async function updateShipmentRecordAction(
+  input: UpdateShipmentRecordInput
+): Promise<{ ok: true; updatedRecordIds: string[] } | { ok: false; error: string }> {
+  try {
+    const me = await requireAuth();
+    if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
+      return { ok: false, error: "אין הרשאה" };
+    const result = await updateShipmentRecord(input);
+    revalidate();
+    return { ok: true, updatedRecordIds: result.updatedRecordIds };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
@@ -319,13 +384,15 @@ export async function createZoneAction(
 
 export async function updateZoneAction(
   id: string,
-  name: string
+  nameOrPatch: string | { name?: string; code?: string | null; sortOrder?: number },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    await updateZone(id, name);
+    const patch =
+      typeof nameOrPatch === "string" ? { name: nameOrPatch } : nameOrPatch;
+    await updateZone(id, patch);
     revalidate();
     return { ok: true };
   } catch (e) {
@@ -374,6 +441,51 @@ export async function listCouriersAction(): Promise<
     if (!isAdminUser(me) && !userHasAnyPermission(me, VIEW_PERMS))
       return { ok: false, error: "אין הרשאה" };
     return { ok: true, couriers: await listCouriers() };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+/** אמצעי תשלום לסינון גבייה — SSOT מ־payment_methods (+ שיטות משלוחים נפוצות) */
+export async function listShipmentPaymentMethodsAction(): Promise<
+  { ok: true; methods: ShipmentPaymentMethodOption[] } | { ok: false; error: string }
+> {
+  try {
+    const me = await requireAuth();
+    if (!isAdminUser(me) && !userHasAnyPermission(me, VIEW_PERMS))
+      return { ok: false, error: "אין הרשאה" };
+
+    const { readPaymentMethodTagsFromDb } = await import(
+      "@/lib/payment-method-registry-data"
+    );
+    const tags = await readPaymentMethodTagsFromDb(false);
+    const byId = new Map<string, ShipmentPaymentMethodOption>();
+    for (const t of tags) {
+      byId.set(t.id, { id: t.id, label: t.nameHe });
+    }
+    // ודא ששיטות המשלוחים הסטנדרטיות מופיעות גם אם חסרות בטבלה
+    for (const m of PAYMENT_METHODS) {
+      if (!byId.has(m.value)) byId.set(m.value, { id: m.value, label: m.label });
+    }
+    const preferred = [
+      "CASH",
+      "BANK_TRANSFER",
+      "CREDIT",
+      "CHECK",
+      "BIT",
+      "PAYBOX",
+      "OTHER",
+    ];
+    const methods: ShipmentPaymentMethodOption[] = [];
+    for (const id of preferred) {
+      const hit = byId.get(id);
+      if (hit) {
+        methods.push(hit);
+        byId.delete(id);
+      }
+    }
+    for (const rest of byId.values()) methods.push(rest);
+    return { ok: true, methods };
   } catch (e) {
     return { ok: false, error: String(e) };
   }

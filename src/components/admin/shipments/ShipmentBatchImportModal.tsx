@@ -117,6 +117,16 @@ export function ShipmentBatchImportModal({
       setError(res.error);
       return;
     }
+    if (res.matchSummary) {
+      try {
+        sessionStorage.setItem(
+          `shp-import-summary-${batchId}`,
+          JSON.stringify(res.matchSummary),
+        );
+      } catch {
+        /* ignore */
+      }
+    }
     onImported();
     onClose();
   }

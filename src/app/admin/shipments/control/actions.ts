@@ -9,13 +9,46 @@ import type {
   ShipmentControlPayload,
   ShipmentControlRecord,
   ShipmentKpis,
+  ShipmentRecordExpenseDto,
   CourierSummary,
   ZoneSummary,
   ShipmentException,
   ExceptionType,
 } from "@/app/admin/shipments/control/types";
+import {
+  SHIPMENT_CASH_EXPENSE_LABELS,
+  type ShipmentCashExpenseCategory,
+} from "@/app/admin/shipments/cash-control/types";
 
 const VIEW_PERMS = ["manage_shipments", "view_shipments"];
+const WRITE_PERMS = ["manage_shipments"];
+
+function expenseCategoryLabel(category: string): string {
+  return (
+    SHIPMENT_CASH_EXPENSE_LABELS[category as ShipmentCashExpenseCategory] ?? category
+  );
+}
+
+function mapExpense(e: {
+  id: string;
+  shipmentRecordId: string;
+  category: string;
+  amountIls: { toNumber(): number };
+  notes: string | null;
+  expenseDate: Date;
+  createdAt: Date;
+}): ShipmentRecordExpenseDto {
+  return {
+    id: e.id,
+    shipmentRecordId: e.shipmentRecordId,
+    category: e.category,
+    categoryLabel: expenseCategoryLabel(e.category),
+    amountIls: e.amountIls.toNumber(),
+    notes: e.notes,
+    expenseDate: e.expenseDate.toISOString().slice(0, 10),
+    createdAt: e.createdAt.toISOString(),
+  };
+}
 
 function parsePaymentDetails(value: string | null): ShipmentPaymentDetails | null {
   if (!value) return null;
@@ -44,6 +77,13 @@ function buildWhere(filter: ShipmentControlFilter) {
 
   if (filter.courierName) {
     where.courierName = { contains: filter.courierName, mode: "insensitive" };
+  }
+
+  if (filter.customerCode?.trim()) {
+    where.customerCode = {
+      contains: filter.customerCode.trim(),
+      mode: "insensitive",
+    };
   }
 
   // Date range on createdAt
@@ -75,9 +115,6 @@ function buildWhere(filter: ShipmentControlFilter) {
 function buildBatchWhere(filter: ShipmentControlFilter) {
   const where: Record<string, unknown> = {};
   if (filter.batchId) where.id = filter.batchId;
-  if (filter.containerNumber) {
-    where.containerNumber = { contains: filter.containerNumber, mode: "insensitive" };
-  }
   return where;
 }
 
@@ -92,28 +129,9 @@ export async function getShipmentControlDataAction(
       return { ok: false, error: "אין הרשאה" };
     }
 
-    // If containerNumber filter, first get matching batch IDs
-    let batchIdsFromContainer: string[] | undefined;
-    if (filter.containerNumber) {
-      const matchingBatches = await prisma.shipmentBatch.findMany({
-        where: { containerNumber: { contains: filter.containerNumber, mode: "insensitive" } },
-        select: { id: true },
-      });
-      batchIdsFromContainer = matchingBatches.map((b) => b.id);
-      if (batchIdsFromContainer.length === 0) {
-        return {
-          ok: true,
-          data: emptyPayload(filter, [], [], []),
-        };
-      }
-    }
-
     const recordWhere = buildWhere(filter);
-    if (batchIdsFromContainer) {
-      recordWhere.batchId = { in: batchIdsFromContainer };
-    }
 
-    // Fetch all records with payments
+    // Fetch all records with payments + expenses
     const rawRecords = await prisma.shipmentRecord.findMany({
       where: recordWhere,
       orderBy: [{ batch: { batchNumber: "desc" } }, { rowIndex: "asc" }],
@@ -122,6 +140,7 @@ export async function getShipmentControlDataAction(
         zone: { select: { id: true, name: true } },
         courier: { select: { id: true, name: true } },
         payments: { orderBy: { createdAt: "asc" } },
+        expenses: { orderBy: [{ expenseDate: "desc" }, { createdAt: "desc" }] },
       },
     });
 
@@ -147,14 +166,19 @@ export async function getShipmentControlDataAction(
     const records: ShipmentControlRecord[] = rawRecords.map((r) => {
       const paidAmountIls = r.payments.reduce((s, p) => s + p.amountIls.toNumber(), 0);
       const fee = r.deliveryFeeIls?.toNumber() ?? 0;
+      const expenses = r.expenses.map(mapExpense);
+      const expensesTotalIls =
+        Math.round(expenses.reduce((s, e) => s + e.amountIls, 0) * 100) / 100;
       return {
         id: r.id,
         batchId: r.batchId,
         batchNumber: r.batch.batchNumber,
         containerNumber: r.batch.containerNumber,
         rowIndex: r.rowIndex,
+        customerCode: r.customerCode,
         customerName: r.customerName,
         customerPhone: r.customerPhone,
+        customerPhone2: r.customerPhone2,
         address: r.address,
         city: r.city,
         boxes: r.boxes,
@@ -175,6 +199,9 @@ export async function getShipmentControlDataAction(
         remainingFeeIls: Math.max(0, fee - paidAmountIls),
         notes: r.notes,
         createdAt: r.createdAt.toISOString(),
+        expenses,
+        expensesTotalIls,
+        expensesCount: expenses.length,
         payments: r.payments.map((p) => ({
           id: p.id,
           method: p.method,
@@ -232,6 +259,7 @@ function computeKpis(records: ShipmentControlRecord[]): ShipmentKpis {
   let totalFeeIls = 0, totalPaidIls = 0, totalCreditIls = 0;
   let totalBoxes = 0, totalWeightKg = 0, deliveredBoxes = 0, notDeliveredBoxes = 0;
   let unpaidCount = 0, partialCount = 0, paidCount = 0;
+  let totalExpensesIls = 0;
   const zones = new Set<string>();
   const couriers = new Set<string>();
   let unassignedCourier = 0, noZone = 0;
@@ -268,6 +296,7 @@ function computeKpis(records: ShipmentControlRecord[]): ShipmentKpis {
     if (r.courierName) couriers.add(r.courierName);
     if (!r.courierName) unassignedCourier++;
     if (!r.zoneId) noZone++;
+    totalExpensesIls += r.expensesTotalIls ?? 0;
   }
 
   const totalRemaining = Math.max(0, totalFeeIls - totalPaidIls);
@@ -279,6 +308,7 @@ function computeKpis(records: ShipmentControlRecord[]): ShipmentKpis {
     totalZones: zones.size, totalCouriers: couriers.size, unassignedCourier, noZone,
     totalBoxes, totalWeightKg, deliveredBoxes, notDeliveredBoxes,
     unpaidCount, partialCount, paidCount,
+    totalExpensesIls: Math.round(totalExpensesIls * 100) / 100,
   };
 }
 
@@ -402,6 +432,115 @@ function emptyPayload(
     totalZones: 0, totalCouriers: 0, unassignedCourier: 0, noZone: 0,
     totalBoxes: 0, totalWeightKg: 0, deliveredBoxes: 0, notDeliveredBoxes: 0,
     unpaidCount: 0, partialCount: 0, paidCount: 0,
+    totalExpensesIls: 0,
   };
   return { kpis: emptyKpis, records: [], totalRecordCount: 0, byCourier: [], byZone: [], exceptions: [], batches, zones, couriers, courierOptions: [], filter };
+}
+
+// ─── הוצאות פר-משלוח ──────────────────────────────────────────────────────────
+
+export async function createShipmentRecordExpenseAction(input: {
+  shipmentRecordId: string;
+  category: string;
+  amountIls: number;
+  notes?: string | null;
+  expenseDate: string; // YYYY-MM-DD
+}): Promise<{ ok: true; expense: ShipmentRecordExpenseDto } | { ok: false; error: string }> {
+  try {
+    const me = await requireAuth();
+    if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS)) {
+      return { ok: false, error: "אין הרשאה" };
+    }
+    const category = input.category.trim();
+    if (!(category in SHIPMENT_CASH_EXPENSE_LABELS)) {
+      return { ok: false, error: "סוג הוצאה לא תקין" };
+    }
+    const amount = Number(input.amountIls);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return { ok: false, error: "סכום חייב להיות גדול מאפס" };
+    }
+    const day = input.expenseDate?.trim().slice(0, 10);
+    if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+      return { ok: false, error: "תאריך לא תקין" };
+    }
+    const exists = await prisma.shipmentRecord.findUnique({
+      where: { id: input.shipmentRecordId },
+      select: { id: true },
+    });
+    if (!exists) return { ok: false, error: "המשלוח לא נמצא" };
+
+    const created = await prisma.shipmentRecordExpense.create({
+      data: {
+        shipmentRecordId: input.shipmentRecordId,
+        category,
+        amountIls: amount,
+        notes: input.notes?.trim() || null,
+        expenseDate: new Date(day + "T00:00:00.000Z"),
+        createdById: me.id,
+      },
+    });
+    return { ok: true, expense: mapExpense(created) };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+export async function updateShipmentRecordExpenseAction(input: {
+  id: string;
+  category?: string;
+  amountIls?: number;
+  notes?: string | null;
+  expenseDate?: string;
+}): Promise<{ ok: true; expense: ShipmentRecordExpenseDto } | { ok: false; error: string }> {
+  try {
+    const me = await requireAuth();
+    if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS)) {
+      return { ok: false, error: "אין הרשאה" };
+    }
+    const data: Record<string, unknown> = {};
+    if (input.category !== undefined) {
+      const category = input.category.trim();
+      if (!(category in SHIPMENT_CASH_EXPENSE_LABELS)) {
+        return { ok: false, error: "סוג הוצאה לא תקין" };
+      }
+      data.category = category;
+    }
+    if (input.amountIls !== undefined) {
+      const amount = Number(input.amountIls);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return { ok: false, error: "סכום חייב להיות גדול מאפס" };
+      }
+      data.amountIls = amount;
+    }
+    if (input.notes !== undefined) data.notes = input.notes?.trim() || null;
+    if (input.expenseDate !== undefined) {
+      const day = input.expenseDate.trim().slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+        return { ok: false, error: "תאריך לא תקין" };
+      }
+      data.expenseDate = new Date(day + "T00:00:00.000Z");
+    }
+    const updated = await prisma.shipmentRecordExpense.update({
+      where: { id: input.id },
+      data,
+    });
+    return { ok: true, expense: mapExpense(updated) };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+export async function deleteShipmentRecordExpenseAction(
+  id: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const me = await requireAuth();
+    if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS)) {
+      return { ok: false, error: "אין הרשאה" };
+    }
+    await prisma.shipmentRecordExpense.delete({ where: { id } });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
 }

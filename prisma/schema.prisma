@@ -177,6 +177,7 @@ model Customer {
   oldCustomerCode String?
   customerCode    String?   @unique
   nameHe          String?
+  /** שם לקוח בערבית (customerNameArabic) — מקור לשליחים / PDF */
   nameAr          String?
   nameEn          String?
   displayName     String
@@ -1151,6 +1152,13 @@ enum ShipmentPaymentStatus {
   PAID
 }
 
+/// סטטוס התאמת שם יישוב בעת ייבוא / תיקון ידני
+enum LocationMatchStatus {
+  MATCHED
+  UNMATCHED
+  MANUALLY_FIXED
+}
+
 /// אצוות / batch של משלוח (Header)
 model ShipmentBatch {
   id                    String    @id @default(uuid())
@@ -1178,19 +1186,85 @@ model ShipmentBatch {
   @@map("ShipmentBatch")
 }
 
-/// אזור חלוקה — ניתן להגדרה חופשית על ידי המנהל
+/// אזור חלוקה (DistributionArea) — ניתן להגדרה חופשית על ידי המנהל
 model ShipmentDeliveryZone {
   id          String   @id @default(uuid())
   name        String   @unique
+  /// קוד אופציונלי לתצוגה/ייצוא
+  code        String?
   isActive    Boolean  @default(true)
   sortOrder   Int      @default(0)
   createdById String?
   createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now()) @updatedAt
 
-  records ShipmentRecord[]
+  records   ShipmentRecord[]
+  locations DeliveryLocation[]
 
   @@index([isActive])
   @@map("ShipmentDeliveryZone")
+}
+
+/// יישוב מעודכן ואחיד — מקושר לאזור חלוקה
+model DeliveryLocation {
+  id                 String                @id @default(uuid())
+  displayName        String
+  /** שם יישוב בערבית להפקות לשליחים (deliveryLocationArabic) */
+  displayNameAr      String?
+  distributionAreaId String?
+  distributionArea   ShipmentDeliveryZone? @relation(fields: [distributionAreaId], references: [id])
+  isActive           Boolean               @default(true)
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+
+  aliases DeliveryLocationAlias[]
+  records ShipmentRecord[]
+  audits  DeliveryLocationAudit[]
+
+  @@unique([displayName])
+  @@index([distributionAreaId])
+  @@index([isActive])
+  @@map("DeliveryLocation")
+}
+
+/// כינוי / שם מקורי שמגיע מקבצי Excel ומצביע ליישוב מעודכן
+model DeliveryLocationAlias {
+  id                     String           @id @default(uuid())
+  originalName           String
+  normalizedOriginalName String
+  deliveryLocationId     String
+  deliveryLocation       DeliveryLocation @relation(fields: [deliveryLocationId], references: [id])
+  isActive               Boolean          @default(true)
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
+  createdBy              String?
+
+  @@unique([normalizedOriginalName])
+  @@index([deliveryLocationId])
+  @@index([isActive])
+  @@map("DeliveryLocationAlias")
+}
+
+/// Audit לתיקוני יישוב / אזור חלוקה
+model DeliveryLocationAudit {
+  id                    String             @id @default(uuid())
+  shipmentRecordId      String?
+  deliveryLocationId    String?
+  deliveryLocation      DeliveryLocation?  @relation(fields: [deliveryLocationId], references: [id])
+  originalName          String?
+  previousCity          String?
+  newCity               String?
+  previousZoneId        String?
+  newZoneId             String?
+  savedAsPermanentAlias Boolean            @default(false)
+  source                String?
+  changedById           String?
+  createdAt             DateTime           @default(now())
+
+  @@index([shipmentRecordId])
+  @@index([deliveryLocationId])
+  @@index([createdAt])
+  @@map("DeliveryLocationAudit")
 }
 
 /// שליח קבוע במודול המשלוחים — מנוהל מתוך הגדרות המודול
@@ -1218,8 +1292,14 @@ model ShipmentRecord {
   customerCode    String?
   customerName    String?
   customerPhone   String?
+  customerPhone2  String?
   address         String?
   city            String?
+  /// שם היישוב / הכתובת המקוריים כפי שהגיעו מקובץ הייבוא (Audit)
+  originalDeliveryLocation String?
+  deliveryLocationId       String?
+  deliveryLocation         DeliveryLocation? @relation(fields: [deliveryLocationId], references: [id])
+  locationMatchStatus      LocationMatchStatus?
   boxes           Int?
   cartonDetails   String?
   weight          Decimal?              @db.Decimal(12, 3)
@@ -1246,14 +1326,38 @@ model ShipmentRecord {
   updatedAt       DateTime              @updatedAt
 
   payments ShipmentPaymentLine[]
+  expenses ShipmentRecordExpense[]
 
   @@index([batchId])
   @@index([zoneId])
   @@index([courierId])
+  @@index([deliveryLocationId])
+  @@index([locationMatchStatus])
   @@index([status])
   @@index([paymentStatus])
   @@index([batchId, status])
+  @@index([customerCode])
   @@map("ShipmentRecord")
+}
+
+/// הוצאות פר-משלוח (בקרת משלוחים) — אינן מפחיתות דמי משלוח
+model ShipmentRecordExpense {
+  id               String   @id @default(uuid())
+  shipmentRecordId String
+  shipment         ShipmentRecord @relation(fields: [shipmentRecordId], references: [id], onDelete: Cascade)
+  /// FUEL | ROAD6 | PARKING | CUSTOMER_REFUND | OTHER
+  category         String
+  amountIls        Decimal  @db.Decimal(12, 2)
+  notes            String?
+  /// תאריך ההוצאה (YYYY-MM-DD לוגי)
+  expenseDate      DateTime @db.Date
+  createdById      String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([shipmentRecordId])
+  @@index([expenseDate])
+  @@map("ShipmentRecordExpense")
 }
 
 /// שורת תשלום עבור דמי משלוח (אמצעי תשלום אחד לכל שורה)
@@ -1274,6 +1378,72 @@ model ShipmentPaymentLine {
 
   @@index([shipmentRecordId])
   @@map("ShipmentPaymentLine")
+}
+
+/// יום עבודה לבקרת קופה – דמי משלוח (Session יומי)
+enum ShipmentCashDayStatus {
+  OPEN
+  CLOSED
+}
+
+model ShipmentCashDay {
+  id         String                 @id @default(uuid())
+  /// יום העבודה (תאריך בלבד, ללא שעה) — מפתח ייחודי
+  dayDate    DateTime               @db.Date
+  status     ShipmentCashDayStatus  @default(OPEN)
+  notes      String?
+  openedById String?
+  closedById String?
+  openedAt   DateTime               @default(now())
+  closedAt   DateTime?
+  createdAt  DateTime               @default(now())
+  updatedAt  DateTime               @updatedAt
+
+  expenses ShipmentCashExpense[]
+  counts   ShipmentCashCount[]
+
+  @@unique([dayDate])
+  @@index([status])
+  @@index([dayDate])
+  @@map("ShipmentCashDay")
+}
+
+/// ספירת מנהל לפי אמצעי תשלום — להתאמה מול נקלט מהמשלוחים
+model ShipmentCashCount {
+  id          String   @id @default(uuid())
+  dayId       String
+  day         ShipmentCashDay @relation(fields: [dayId], references: [id], onDelete: Cascade)
+  /// CASH | BANK_TRANSFER | CREDIT | CHECK | BIT | PAYBOX | OTHER
+  method      String
+  countedIls  Decimal  @db.Decimal(12, 2)
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([dayId, method])
+  @@index([dayId])
+  @@map("ShipmentCashCount")
+}
+
+/// הוצאות יומיות בהתחשבנות שליח — אינן מפחיתות דמי משלוח (SSOT נפרד להוצאות בלבד)
+model ShipmentCashExpense {
+  id            String   @id @default(uuid())
+  dayId         String
+  day           ShipmentCashDay @relation(fields: [dayId], references: [id], onDelete: Cascade)
+  /// FUEL | ROAD6 | PARKING | CUSTOMER_REFUND | OTHER
+  category      String
+  /// CASH | BANK_TRANSFER | CHECK | CREDIT | CODE_DEDUCTION | CREDIT_NOTE
+  paymentMethod String   @default("CASH")
+  amountIls     Decimal  @db.Decimal(12, 2)
+  notes         String?
+  createdById   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([dayId])
+  @@index([createdAt])
+  @@index([paymentMethod])
+  @@map("ShipmentCashExpense")
 }
 
 /// SQL-managed table — מסמכים מצורפים (Document Atlas). נוצרת דרך prisma/sql/documents_table.sql.

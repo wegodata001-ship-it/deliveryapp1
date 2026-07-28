@@ -1,5 +1,11 @@
 import { prisma } from "@/lib/prisma";
 import { getAhWeekByDate } from "@/lib/weeks/ah-week";
+import { resolveDeliveryLocationsForRows } from "@/lib/delivery-location-match";
+import {
+  CLOSE_DEBT_SKIP_LABELS,
+  evaluateCourierDebtCloseEligibility,
+  type CloseDebtSkipReason,
+} from "@/lib/shipment-courier-debt-close";
 import type {
   ShipmentBatchDto,
   ShipmentRecordDto,
@@ -16,10 +22,11 @@ import type {
   ShipmentPaymentDetails,
   UpdateShipmentRecordInput,
   UpdateShipmentBatchInput,
+  ShipmentImportMatchSummary,
 } from "@/app/admin/shipments/types";
 import { PAYMENT_METHOD_LABELS, PAYMENT_METHODS } from "@/app/admin/shipments/types";
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ??? Helpers ?????????????????????????????????????????????????????????????????
 
 function toDateStr(d: Date | null | undefined): string | null {
   return d ? d.toISOString() : null;
@@ -68,7 +75,7 @@ function mapPaymentLine(p: {
     createdAt: p.createdAt.toISOString(),
     updatedById: p.updatedById ?? null,
     updatedByName: p.updatedById ? userNames.get(p.updatedById) ?? null : null,
-    // גיבוי ל-createdAt כשהקליינט של Prisma עדיין לא התחדש אחרי שינוי הסכמה
+    // ????? ?-createdAt ????????? ?? Prisma ????? ?? ????? ???? ????? ?????
     updatedAt: (p.updatedAt ?? p.createdAt).toISOString(),
   };
 }
@@ -86,13 +93,23 @@ function derivePaymentStatus(
 function mapRecord(r: {
   id: string;
   batchId: string;
-  batch: { batchNumber: string };
+  batch: {
+    batchNumber: string;
+    shippingDate?: Date | null;
+    arrivalDate?: Date | null;
+    containerNumber?: string | null;
+    sourceShipmentNumber?: string | null;
+  };
   rowIndex: number;
   customerCode: string | null;
   customerName: string | null;
   customerPhone: string | null;
+  customerPhone2: string | null;
   address: string | null;
   city: string | null;
+  originalDeliveryLocation?: string | null;
+  deliveryLocationId?: string | null;
+  locationMatchStatus?: string | null;
   boxes: number | null;
   cartonDetails: string | null;
   weight: { toNumber(): number } | null;
@@ -115,6 +132,8 @@ function mapRecord(r: {
 }, userNames: ReadonlyMap<string, string> = new Map()): ShipmentRecordDto {
   const paidAmountIls = r.payments.reduce((sum, p) => sum + p.amountIls.toNumber(), 0);
   const fee = r.deliveryFeeIls?.toNumber() ?? null;
+  const shippingDate = toDateStr(r.batch.shippingDate ?? null);
+  const arrivalDate = toDateStr(r.batch.arrivalDate ?? null);
   return {
     id: r.id,
     batchId: r.batchId,
@@ -123,8 +142,12 @@ function mapRecord(r: {
     customerCode: r.customerCode,
     customerName: r.customerName,
     customerPhone: r.customerPhone,
+    customerPhone2: r.customerPhone2,
     address: r.address,
     city: r.city,
+    originalDeliveryLocation: r.originalDeliveryLocation ?? null,
+    deliveryLocationId: r.deliveryLocationId ?? null,
+    locationMatchStatus: (r.locationMatchStatus as ShipmentRecordDto["locationMatchStatus"]) ?? null,
     boxes: r.boxes,
     cartonDetails: r.cartonDetails,
     weight: r.weight?.toNumber() ?? null,
@@ -142,10 +165,104 @@ function mapRecord(r: {
     notes: r.notes,
     paidAmountIls,
     remainingFeeIls: Math.max(0, (fee ?? 0) - paidAmountIls),
+    customerBalanceUsd: 0,
     payments: r.payments.map((payment) => mapPaymentLine(payment, userNames)),
     createdAt: r.createdAt.toISOString(),
     updatedAt: r.updatedAt.toISOString(),
+    shippingDate,
+    arrivalDate,
+    containerNumber: r.batch.containerNumber ?? null,
+    sourceShipmentNumber: r.batch.sourceShipmentNumber ?? null,
+    weekCode: weekCodeFromBatchDates(shippingDate, arrivalDate),
   };
+}
+
+/** ??????? ??? ???? ? ??????? ?????? ??21932 ???? ??????? ??????? ATS21932 */
+function customerCodeLookupVariants(code: string): string[] {
+  const t = code.trim();
+  if (!t) return [];
+  const out = new Set<string>([t]);
+  const digits = t.replace(/\D/g, "").replace(/^0+/, "") || "";
+  if (digits) {
+    out.add(digits);
+    out.add(`ATS${digits}`);
+    out.add(`ats${digits}`);
+  }
+  const ats = t.match(/^ats(\d+)$/i);
+  if (ats?.[1]) {
+    const d = ats[1].replace(/^0+/, "") || ats[1];
+    out.add(d);
+    out.add(`ATS${d}`);
+  }
+  return [...out];
+}
+
+function indexCustomerCodes(
+  customers: Array<{ id: string; customerCode: string | null }>,
+): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const c of customers) {
+    if (!c.customerCode) continue;
+    for (const key of customerCodeLookupVariants(c.customerCode)) {
+      const k = key.toLowerCase();
+      // ?? ????? ????? ?????? ?????
+      if (!map.has(k)) map.set(k, c.id);
+    }
+  }
+  return map;
+}
+
+/** ???? ???? ? SSOT ?? ??calculateCustomerBalances (?? ??? ?????, ?? snapshot ??????). */
+async function attachCustomerBalances(
+  rows: ShipmentRecordDto[],
+): Promise<ShipmentRecordDto[]> {
+  const codes = [
+    ...new Set(
+      rows
+        .map((r) => r.customerCode?.trim())
+        .filter((c): c is string => Boolean(c)),
+    ),
+  ];
+  if (codes.length === 0) {
+    return rows.map((r) => ({ ...r, customerBalanceUsd: 0 }));
+  }
+
+  const lookupCodes = [...new Set(codes.flatMap((c) => customerCodeLookupVariants(c)))];
+  const customers = await prisma.customer.findMany({
+    where: {
+      deletedAt: null,
+      OR: lookupCodes.map((code) => ({
+        customerCode: { equals: code, mode: "insensitive" as const },
+      })),
+    },
+    select: { id: true, customerCode: true },
+  });
+  if (customers.length === 0) {
+    return rows.map((r) => ({ ...r, customerBalanceUsd: 0 }));
+  }
+
+  const codeToId = indexCustomerCodes(customers);
+
+  const { calculateCustomerBalances } = await import("@/lib/customer-balance-calculator");
+  const balances = await calculateCustomerBalances([...new Set(customers.map((c) => c.id))]);
+
+  return rows.map((r) => {
+    const raw = r.customerCode?.trim();
+    if (!raw) return { ...r, customerBalanceUsd: 0 };
+
+    let customerId: string | undefined;
+    for (const key of customerCodeLookupVariants(raw)) {
+      customerId = codeToId.get(key.toLowerCase());
+      if (customerId) break;
+    }
+    if (!customerId) return { ...r, customerBalanceUsd: 0 };
+
+    const bal = balances.get(customerId);
+    return {
+      ...r,
+      customerBalanceUsd: bal ? Number(bal.balance.toFixed(2)) : 0,
+    };
+  });
 }
 
 async function loadPaymentUserNames(
@@ -166,7 +283,7 @@ async function loadPaymentUserNames(
   return new Map(users.map((user) => [user.id, user.fullName]));
 }
 
-// ─── Batches ─────────────────────────────────────────────────────────────────
+// ??? Batches ?????????????????????????????????????????????????????????????????
 
 export async function listShipmentBatches(): Promise<ShipmentBatchDto[]> {
   const batches = await prisma.shipmentBatch.findMany({
@@ -260,7 +377,7 @@ function weekCodeFromBatchDates(shipping: string | null, arrival: string | null)
 export async function createShipmentBatch(
   input: CreateBatchInput,
   createdById: string
-): Promise<string> {
+): Promise<{ batchId: string; matchSummary: ShipmentImportMatchSummary }> {
   const batchNumber = await nextBatchNumber();
 
   const defaultCourier = input.defaultCourierId
@@ -270,14 +387,14 @@ export async function createShipmentBatch(
       })
     : null;
   if (input.defaultCourierId && (!defaultCourier || !defaultCourier.isActive)) {
-    throw new Error("לא ניתן לשייך שליח מושבת או לא קיים");
+    throw new Error("?? ???? ????? ???? ????? ?? ?? ????");
   }
   if (input.defaultZoneId) {
     const zone = await prisma.shipmentDeliveryZone.findUnique({
       where: { id: input.defaultZoneId },
       select: { id: true, isActive: true },
     });
-    if (!zone || !zone.isActive) throw new Error("לא ניתן לשייך אזור מושבת או לא קיים");
+    if (!zone || !zone.isActive) throw new Error("?? ???? ????? ???? ????? ?? ?? ????");
   }
 
   const batch = await prisma.shipmentBatch.create({
@@ -300,36 +417,67 @@ export async function createShipmentBatch(
   });
 
   const validRows = input.rows.filter((r) => r.valid);
+  // ????? ????? ??? ? ???? ?????? ???? ??address (???? ??? ??????)
+  const matches = await resolveDeliveryLocationsForRows(
+    validRows.map((r) => ({
+      city: r.city || r.address,
+      address: r.address,
+    })),
+  );
+  let matchedLocations = 0;
+  let unmatchedLocations = 0;
+  let autoFilledZones = 0;
+
   if (validRows.length > 0) {
     await prisma.shipmentRecord.createMany({
-      data: validRows.map((r) => ({
-        batchId: batch.id,
-        rowIndex: r.rowIndex,
-        customerCode: r.customerCode ?? null,
-        customerName: r.customerName ?? null,
-        customerPhone: r.customerPhone ?? null,
-        address: r.address ?? null,
-        city: r.city ?? null,
-        boxes: r.boxes ?? null,
-        cartonDetails: r.cartonDetails ?? null,
-        weight: r.weight ?? null,
-        orderAmount: r.orderAmount ?? null,
-        orderCurrency: r.orderCurrency ?? null,
-        // דמי משלוח נקבעים רק במערכת ואינם מגיעים מקובץ הייבוא.
-        deliveryFeeAmount: null,
-        deliveryFeeCurrency: "ILS",
-        deliveryFeeIls: null,
-        zoneId: input.defaultZoneId ?? null,
-        courierId: defaultCourier?.id ?? null,
-        courierName: defaultCourier?.name ?? null,
-        notes: r.notes ?? null,
-        status: "NEW" as const,
-        paymentStatus: "UNPAID" as const,
-      })),
+      data: validRows.map((r, i) => {
+        const match = matches[i];
+        if (match.status === "MATCHED") matchedLocations++;
+        else unmatchedLocations++;
+        const zoneId = match.zoneId ?? input.defaultZoneId ?? null;
+        if (match.zoneId) autoFilledZones++;
+        return {
+          batchId: batch.id,
+          rowIndex: r.rowIndex,
+          customerCode: r.customerCode ?? null,
+          customerName: r.customerName ?? null,
+          customerPhone: r.customerPhone ?? null,
+          customerPhone2: r.customerPhone2 ?? null,
+          address: r.address ?? null,
+          city: match.city ?? r.city ?? null,
+          originalDeliveryLocation: match.originalName ?? r.city ?? r.address ?? null,
+          deliveryLocationId: match.deliveryLocationId,
+          locationMatchStatus: match.status,
+          boxes: r.boxes ?? null,
+          cartonDetails: r.cartonDetails ?? null,
+          weight: r.weight ?? null,
+          orderAmount: r.orderAmount ?? null,
+          orderCurrency: r.orderCurrency ?? null,
+          deliveryFeeAmount: null,
+          deliveryFeeCurrency: "ILS",
+          deliveryFeeIls: null,
+          zoneId,
+          courierId: defaultCourier?.id ?? null,
+          courierName: defaultCourier?.name ?? null,
+          notes: r.notes ?? null,
+          status: "NEW" as const,
+          paymentStatus: "UNPAID" as const,
+        };
+      }),
     });
   }
 
-  return batch.id;
+  return {
+    batchId: batch.id,
+    matchSummary: {
+      totalRows: input.rows.length,
+      importedRows: validRows.length,
+      matchedLocations,
+      unmatchedLocations,
+      autoFilledZones,
+      failedRows: input.rows.length - validRows.length,
+    },
+  };
 }
 
 export async function importRowsIntoBatch(
@@ -339,15 +487,15 @@ export async function importRowsIntoBatch(
     defaultZoneId?: string;
     defaultCourierId?: string;
   },
-): Promise<number> {
+): Promise<{ count: number; matchSummary: ShipmentImportMatchSummary }> {
   const batch = await prisma.shipmentBatch.findUnique({
     where: { id: input.batchId },
     select: { id: true },
   });
-  if (!batch) throw new Error("המשלוח לא נמצא");
+  if (!batch) throw new Error("?????? ?? ????");
 
   const validRows = input.rows.filter((r) => r.valid);
-  if (validRows.length === 0) throw new Error("אין שורות תקינות לייבוא");
+  if (validRows.length === 0) throw new Error("??? ????? ?????? ??????");
 
   const defaultCourier = input.defaultCourierId
     ? await prisma.shipmentCourier.findUnique({
@@ -356,14 +504,14 @@ export async function importRowsIntoBatch(
       })
     : null;
   if (input.defaultCourierId && (!defaultCourier || !defaultCourier.isActive)) {
-    throw new Error("לא ניתן לשייך שליח מושבת או לא קיים");
+    throw new Error("?? ???? ????? ???? ????? ?? ?? ????");
   }
   if (input.defaultZoneId) {
     const zone = await prisma.shipmentDeliveryZone.findUnique({
       where: { id: input.defaultZoneId },
       select: { id: true, isActive: true },
     });
-    if (!zone || !zone.isActive) throw new Error("לא ניתן לשייך אזור מושבת או לא קיים");
+    if (!zone || !zone.isActive) throw new Error("?? ???? ????? ???? ????? ?? ?? ????");
   }
 
   const last = await prisma.shipmentRecord.findFirst({
@@ -372,34 +520,64 @@ export async function importRowsIntoBatch(
     select: { rowIndex: true },
   });
   const baseIndex = last?.rowIndex ?? 0;
+  const matches = await resolveDeliveryLocationsForRows(
+    validRows.map((r) => ({
+      city: r.city || r.address,
+      address: r.address,
+    })),
+  );
+  let matchedLocations = 0;
+  let unmatchedLocations = 0;
+  let autoFilledZones = 0;
 
   await prisma.shipmentRecord.createMany({
-    data: validRows.map((r, i) => ({
-      batchId: input.batchId,
-      rowIndex: baseIndex + i + 1,
-      customerCode: r.customerCode ?? null,
-      customerName: r.customerName ?? null,
-      customerPhone: r.customerPhone ?? null,
-      address: r.address ?? null,
-      city: r.city ?? null,
-      boxes: r.boxes ?? null,
-      cartonDetails: r.cartonDetails ?? null,
-      weight: r.weight ?? null,
-      orderAmount: r.orderAmount ?? null,
-      orderCurrency: r.orderCurrency ?? null,
-      deliveryFeeAmount: null,
-      deliveryFeeCurrency: "ILS",
-      deliveryFeeIls: null,
-      zoneId: input.defaultZoneId ?? null,
-      courierId: defaultCourier?.id ?? null,
-      courierName: defaultCourier?.name ?? null,
-      notes: r.notes ?? null,
-      status: "NEW" as const,
-      paymentStatus: "UNPAID" as const,
-    })),
+    data: validRows.map((r, i) => {
+      const match = matches[i];
+      if (match.status === "MATCHED") matchedLocations++;
+      else unmatchedLocations++;
+      const zoneId = match.zoneId ?? input.defaultZoneId ?? null;
+      if (match.zoneId) autoFilledZones++;
+      return {
+        batchId: input.batchId,
+        rowIndex: baseIndex + i + 1,
+        customerCode: r.customerCode ?? null,
+        customerName: r.customerName ?? null,
+        customerPhone: r.customerPhone ?? null,
+        customerPhone2: r.customerPhone2 ?? null,
+        address: r.address ?? null,
+        city: match.city ?? r.city ?? null,
+        originalDeliveryLocation: match.originalName ?? r.city ?? r.address ?? null,
+        deliveryLocationId: match.deliveryLocationId,
+        locationMatchStatus: match.status,
+        boxes: r.boxes ?? null,
+        cartonDetails: r.cartonDetails ?? null,
+        weight: r.weight ?? null,
+        orderAmount: r.orderAmount ?? null,
+        orderCurrency: r.orderCurrency ?? null,
+        deliveryFeeAmount: null,
+        deliveryFeeCurrency: "ILS",
+        deliveryFeeIls: null,
+        zoneId,
+        courierId: defaultCourier?.id ?? null,
+        courierName: defaultCourier?.name ?? null,
+        notes: r.notes ?? null,
+        status: "NEW" as const,
+        paymentStatus: "UNPAID" as const,
+      };
+    }),
   });
 
-  return validRows.length;
+  return {
+    count: validRows.length,
+    matchSummary: {
+      totalRows: input.rows.length,
+      importedRows: validRows.length,
+      matchedLocations,
+      unmatchedLocations,
+      autoFilledZones,
+      failedRows: input.rows.length - validRows.length,
+    },
+  };
 }
 
 export async function updateShipmentBatch(input: UpdateShipmentBatchInput): Promise<void> {
@@ -456,21 +634,31 @@ export async function getShipmentBatch(batchId: string): Promise<ShipmentBatchDt
   return all.find((b) => b.id === batchId) ?? null;
 }
 
-// ─── Records ─────────────────────────────────────────────────────────────────
+// ??? Records ?????????????????????????????????????????????????????????????????
+
+const shipmentRecordInclude = {
+  batch: {
+    select: {
+      batchNumber: true,
+      shippingDate: true,
+      arrivalDate: true,
+      containerNumber: true,
+      sourceShipmentNumber: true,
+    },
+  },
+  zone: { select: { name: true } },
+  courier: { select: { name: true } },
+  payments: { orderBy: { createdAt: "asc" as const } },
+};
 
 export async function listShipmentRecords(batchId: string): Promise<ShipmentRecordDto[]> {
   const records = await prisma.shipmentRecord.findMany({
     where: { batchId },
     orderBy: { rowIndex: "asc" },
-    include: {
-      batch: { select: { batchNumber: true } },
-      zone: { select: { name: true } },
-      courier: { select: { name: true } },
-      payments: { orderBy: { createdAt: "asc" } },
-    },
+    include: shipmentRecordInclude,
   });
   const userNames = await loadPaymentUserNames(records);
-  return records.map((record) => mapRecord(record, userNames));
+  return attachCustomerBalances(records.map((record) => mapRecord(record, userNames)));
 }
 
 export async function listShipmentRecordsByBatchIds(batchIds: string[]): Promise<ShipmentRecordDto[]> {
@@ -479,30 +667,21 @@ export async function listShipmentRecordsByBatchIds(batchIds: string[]): Promise
   const records = await prisma.shipmentRecord.findMany({
     where: { batchId: { in: ids } },
     orderBy: [{ batchId: "asc" }, { rowIndex: "asc" }],
-    include: {
-      batch: { select: { batchNumber: true } },
-      zone: { select: { name: true } },
-      courier: { select: { name: true } },
-      payments: { orderBy: { createdAt: "asc" } },
-    },
+    include: shipmentRecordInclude,
   });
   const userNames = await loadPaymentUserNames(records);
-  return records.map((record) => mapRecord(record, userNames));
+  return attachCustomerBalances(records.map((record) => mapRecord(record, userNames)));
 }
 
 export async function getShipmentRecordById(id: string): Promise<ShipmentRecordDto | null> {
   const record = await prisma.shipmentRecord.findUnique({
     where: { id },
-    include: {
-      batch: { select: { batchNumber: true } },
-      zone: { select: { name: true } },
-      courier: { select: { name: true } },
-      payments: { orderBy: { createdAt: "asc" } },
-    },
+    include: shipmentRecordInclude,
   });
   if (!record) return null;
   const userNames = await loadPaymentUserNames([record]);
-  return mapRecord(record, userNames);
+  const [mapped] = await attachCustomerBalances([mapRecord(record, userNames)]);
+  return mapped ?? null;
 }
 
 export async function deleteShipmentRecord(id: string): Promise<void> {
@@ -512,7 +691,7 @@ export async function deleteShipmentRecord(id: string): Promise<void> {
   ]);
 }
 
-/** מחיקת אצוות משלוח + כל החבילות והתשלומים שלהן (אותה לוגיקת מחיקה כמו רשומה בודדת). */
+/** ????? ????? ????? + ?? ??????? ????????? ???? (???? ?????? ????? ??? ????? ?????). */
 export async function deleteShipmentBatches(batchIds: string[]): Promise<number> {
   const ids = [...new Set(batchIds.map((id) => id.trim()).filter(Boolean))];
   if (ids.length === 0) return 0;
@@ -549,15 +728,10 @@ export async function listAllShipmentRecords(filter?: {
       ...(filter?.paymentStatus ? { paymentStatus: filter.paymentStatus as never } : {}),
     },
     orderBy: [{ batch: { batchNumber: "desc" } }, { rowIndex: "asc" }],
-    include: {
-      batch: { select: { batchNumber: true } },
-      zone: { select: { name: true } },
-      courier: { select: { name: true } },
-      payments: { orderBy: { createdAt: "asc" } },
-    },
+    include: shipmentRecordInclude,
   });
   const userNames = await loadPaymentUserNames(records);
-  return records.map((record) => mapRecord(record, userNames));
+  return attachCustomerBalances(records.map((record) => mapRecord(record, userNames)));
 }
 
 export async function assignZone(input: AssignZoneInput): Promise<void> {
@@ -567,14 +741,22 @@ export async function assignZone(input: AssignZoneInput): Promise<void> {
   });
 }
 
-export async function assignCourier(input: AssignCourierInput): Promise<void> {
+export async function assignCourier(
+  input: AssignCourierInput,
+  userId?: string,
+): Promise<void> {
   const courier = input.courierId
     ? await prisma.shipmentCourier.findUniqueOrThrow({
         where: { id: input.courierId },
         select: { id: true, name: true, isActive: true },
       })
     : null;
-  if (courier && !courier.isActive) throw new Error("לא ניתן לשייך שליח מושבת");
+  if (courier && !courier.isActive) throw new Error("?? ???? ????? ???? ?? ????");
+
+  const oldRecords = await prisma.shipmentRecord.findMany({
+    where: { id: { in: input.recordIds } },
+    select: { id: true, courierId: true, courierName: true },
+  });
 
   await prisma.shipmentRecord.updateMany({
     where: { id: { in: input.recordIds } },
@@ -583,6 +765,27 @@ export async function assignCourier(input: AssignCourierInput): Promise<void> {
       courierName: courier?.name ?? null,
     },
   });
+
+  if (userId) {
+    const oldNames = [...new Set(oldRecords.map((r) => r.courierName ?? "??? ????"))];
+    void prisma.auditLog
+      .create({
+        data: {
+          userId,
+          actionType: "SHIPMENT_COURIER_ASSIGNED",
+          entityType: "ShipmentRecord",
+          entityId: input.recordIds.length === 1 ? input.recordIds[0] : null,
+          metadata: {
+            recordCount: input.recordIds.length,
+            previousCouriers: oldNames,
+            newCourierId: courier?.id ?? null,
+            newCourierName: courier?.name ?? "??? ????",
+            recordIds: input.recordIds.slice(0, 50),
+          },
+        },
+      })
+      .catch(() => {});
+  }
 }
 
 export async function updateShipmentStatus(input: UpdateStatusInput): Promise<void> {
@@ -592,10 +795,14 @@ export async function updateShipmentStatus(input: UpdateStatusInput): Promise<vo
   });
 }
 
-export async function updateShipmentRecord(input: UpdateShipmentRecordInput): Promise<void> {
+export async function updateShipmentRecord(
+  input: UpdateShipmentRecordInput,
+): Promise<{ updatedRecordIds: string[] }> {
   const current = await prisma.shipmentRecord.findUniqueOrThrow({
     where: { id: input.recordId },
     select: {
+      customerCode: true,
+      customerName: true,
       deliveryFeeCurrency: true,
       payments: { select: { amountIls: true } },
     },
@@ -634,31 +841,111 @@ export async function updateShipmentRecord(input: UpdateShipmentRecordInput): Pr
       ...(input.patch.status !== undefined ? { status: input.patch.status } : {}),
       ...(input.patch.customerName !== undefined ? { customerName: input.patch.customerName } : {}),
       ...(input.patch.customerPhone !== undefined ? { customerPhone: input.patch.customerPhone } : {}),
+      ...(input.patch.customerPhone2 !== undefined ? { customerPhone2: input.patch.customerPhone2 } : {}),
       ...(input.patch.address !== undefined ? { address: input.patch.address } : {}),
       ...(input.patch.city !== undefined ? { city: input.patch.city } : {}),
       ...(input.patch.customerCode !== undefined ? { customerCode: input.patch.customerCode } : {}),
       ...(input.patch.orderAmount !== undefined ? { orderAmount: input.patch.orderAmount } : {}),
+      ...(input.patch.zoneId !== undefined ? { zoneId: input.patch.zoneId } : {}),
+      ...(input.patch.deliveryLocationId !== undefined
+        ? { deliveryLocationId: input.patch.deliveryLocationId }
+        : {}),
+      ...(input.patch.locationMatchStatus !== undefined
+        ? { locationMatchStatus: input.patch.locationMatchStatus }
+        : {}),
       ...(nextPaymentStatus !== undefined ? { paymentStatus: nextPaymentStatus } : {}),
     },
   });
+
+  const updatedIds = new Set<string>([input.recordId]);
+
+  // ?????? ?? ???? ? ??????? ?????? + ????? ????
+  if (input.patch.customerName !== undefined) {
+    const newName = input.patch.customerName?.trim() || null;
+    const code = (input.patch.customerCode ?? current.customerCode)?.trim() || "";
+    const variants = customerCodeLookupVariants(code);
+
+    if (variants.length && newName) {
+      const siblings = await prisma.shipmentRecord.findMany({
+        where: {
+          id: { not: input.recordId },
+          OR: variants.map((v) => ({
+            customerCode: { equals: v, mode: "insensitive" as const },
+          })),
+        },
+        select: { id: true },
+        take: 500,
+      });
+      if (siblings.length) {
+        const ids = siblings.map((s) => s.id);
+        await prisma.shipmentRecord.updateMany({
+          where: { id: { in: ids } },
+          data: { customerName: newName },
+        });
+        for (const id of ids) updatedIds.add(id);
+      }
+
+      const customers = await prisma.customer.findMany({
+        where: {
+          deletedAt: null,
+          OR: variants.map((v) => ({
+            customerCode: { equals: v, mode: "insensitive" as const },
+          })),
+        },
+        select: { id: true, nameAr: true, nameEn: true, displayName: true },
+        take: 5,
+      });
+
+      const { detectLanguage } = await import("@/lib/customer-names");
+      const lang = detectLanguage(newName);
+      for (const cust of customers) {
+        await prisma.customer.update({
+          where: { id: cust.id },
+          data: {
+            displayName: newName,
+            ...(lang === "ar" ? { nameAr: newName } : {}),
+            ...(lang === "en" ? { nameEn: newName } : {}),
+            ...(lang === "he" ? { nameHe: newName } : {}),
+          },
+        });
+      }
+    }
+  }
+
+  return { updatedRecordIds: [...updatedIds] };
 }
 
-// ─── Zones ───────────────────────────────────────────────────────────────────
+// ??? Zones ???????????????????????????????????????????????????????????????????
+
+function mapZone(z: {
+  id: string;
+  name: string;
+  code: string | null;
+  isActive: boolean;
+  sortOrder: number;
+}): ShipmentZoneDto {
+  return {
+    id: z.id,
+    name: z.name,
+    code: z.code,
+    isActive: z.isActive,
+    sortOrder: z.sortOrder,
+  };
+}
 
 export async function listZones(): Promise<ShipmentZoneDto[]> {
   const zones = await prisma.shipmentDeliveryZone.findMany({
     orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
   });
-  return zones.map((z) => ({
-    id: z.id,
-    name: z.name,
-    isActive: z.isActive,
-    sortOrder: z.sortOrder,
-  }));
+  return zones.map(mapZone);
 }
 
 export async function createZone(name: string, createdById: string): Promise<ShipmentZoneDto> {
-  const normalizedName = name.trim();
+  const { normalizeDistributionAreaName } = await import("@/lib/distribution-area-name");
+  const normalizedName = normalizeDistributionAreaName(name);
+  if (!normalizedName) {
+    throw new Error("?? ???? ????? ?? ???? ? ?????? ?????? ???: ???? 16, ???? 1, ???? 11, ????? 5");
+  }
   const previous = await prisma.shipmentDeliveryZone.findUnique({
     where: { name: normalizedName },
   });
@@ -669,31 +956,50 @@ export async function createZone(name: string, createdById: string): Promise<Shi
           where: { id: previous.id },
           data: { isActive: true },
         });
-    return { id: zone.id, name: zone.name, isActive: zone.isActive, sortOrder: zone.sortOrder };
+    return mapZone(zone);
   }
   const existing = await prisma.shipmentDeliveryZone.count();
   const z = await prisma.shipmentDeliveryZone.create({
     data: { name: normalizedName, createdById, sortOrder: existing },
   });
-  return { id: z.id, name: z.name, isActive: z.isActive, sortOrder: z.sortOrder };
+  return mapZone(z);
 }
 
-export async function updateZone(id: string, name: string): Promise<void> {
-  await prisma.shipmentDeliveryZone.update({ where: { id }, data: { name: name.trim() } });
+export async function updateZone(
+  id: string,
+  patch: { name?: string; code?: string | null; sortOrder?: number },
+): Promise<void> {
+  await prisma.shipmentDeliveryZone.update({
+    where: { id },
+    data: {
+      ...(patch.name !== undefined ? { name: patch.name.trim() } : {}),
+      ...(patch.code !== undefined ? { code: patch.code?.trim() || null } : {}),
+      ...(patch.sortOrder !== undefined ? { sortOrder: patch.sortOrder } : {}),
+    },
+  });
 }
 
 export async function setZoneActive(id: string, isActive: boolean): Promise<void> {
   await prisma.shipmentDeliveryZone.update({ where: { id }, data: { isActive } });
 }
 
+/** ????? ???? ???? ????? ????? ????????/??????? ? ??? ????? ????? */
 export async function deleteZone(id: string): Promise<void> {
-  await prisma.$transaction([
-    prisma.shipmentRecord.updateMany({ where: { zoneId: id }, data: { zoneId: null } }),
-    prisma.shipmentDeliveryZone.delete({ where: { id } }),
+  const [recordCount, locationCount] = await Promise.all([
+    prisma.shipmentRecord.count({ where: { zoneId: id } }),
+    prisma.deliveryLocation.count({ where: { distributionAreaId: id } }),
   ]);
+  if (recordCount > 0 || locationCount > 0) {
+    await prisma.shipmentDeliveryZone.update({
+      where: { id },
+      data: { isActive: false },
+    });
+    return;
+  }
+  await prisma.shipmentDeliveryZone.delete({ where: { id } });
 }
 
-// ─── Couriers ─────────────────────────────────────────────────────────────────
+// ??? Couriers ?????????????????????????????????????????????????????????????????
 
 export async function listCouriers(): Promise<ShipmentCourierDto[]> {
   const couriers = await prisma.shipmentCourier.findMany({
@@ -766,7 +1072,7 @@ export async function deleteCourier(id: string): Promise<void> {
   ]);
 }
 
-// ─── Payments ────────────────────────────────────────────────────────────────
+// ??? Payments ????????????????????????????????????????????????????????????????
 
 export async function addShipmentPayment(
   input: AddPaymentInput,
@@ -775,10 +1081,10 @@ export async function addShipmentPayment(
   if (input.lines.length === 0) return;
   const knownMethods = new Set(PAYMENT_METHODS.map((method) => method.value));
   if (input.lines.some((line) => !knownMethods.has(line.method))) {
-    throw new Error("אמצעי תשלום לא חוקי");
+    throw new Error("????? ????? ?? ????");
   }
   if (input.lines.some((line) => !Number.isFinite(line.amountIls) || line.amountIls <= 0)) {
-    throw new Error("סכום התשלום חייב להיות גדול מאפס");
+    throw new Error("???? ?????? ???? ????? ???? ????");
   }
 
   await prisma.$transaction(async (tx) => {
@@ -797,8 +1103,8 @@ export async function addShipmentPayment(
     const draftTotal = input.lines.reduce((sum, line) => sum + line.amountIls, 0);
     const totalPaid = previousPaid + draftTotal;
 
-    if (fee <= 0) throw new Error("לא הוגדרו דמי משלוח לגבייה");
-    if (totalPaid > fee + 0.001) throw new Error("סכום התשלום חורג מדמי המשלוח");
+    if (fee <= 0) throw new Error("?? ?????? ??? ????? ??????");
+    if (totalPaid > fee + 0.001) throw new Error("???? ?????? ???? ???? ??????");
 
     await tx.shipmentPaymentLine.createMany({
       data: input.lines.map((line) => ({
@@ -826,14 +1132,14 @@ export async function saveShipmentPayments(
 ): Promise<ShipmentRecordDto> {
   const knownMethods = new Set(PAYMENT_METHODS.map((method) => method.value));
   if (input.lines.some((line) => !knownMethods.has(line.method))) {
-    throw new Error("אמצעי תשלום לא חוקי");
+    throw new Error("????? ????? ?? ????");
   }
   if (input.lines.some((line) => !Number.isFinite(line.amountIls) || line.amountIls <= 0)) {
-    throw new Error("כל סכום תשלום חייב להיות גדול מאפס");
+    throw new Error("?? ???? ????? ???? ????? ???? ????");
   }
   const submittedIds = input.lines.flatMap((line) => line.id ? [line.id] : []);
   if (new Set(submittedIds).size !== submittedIds.length) {
-    throw new Error("אותה שורת תשלום נשלחה יותר מפעם אחת");
+    throw new Error("???? ???? ????? ????? ???? ???? ???");
   }
 
   await prisma.$transaction(async (tx) => {
@@ -845,16 +1151,16 @@ export async function saveShipmentPayments(
       },
     });
     const fee = record.deliveryFeeIls?.toNumber() ?? 0;
-    if (fee <= 0) throw new Error("לא הוגדרו דמי משלוח לגבייה");
+    if (fee <= 0) throw new Error("?? ?????? ??? ????? ??????");
 
     const existingIds = new Set(record.payments.map((payment) => payment.id));
     if (submittedIds.some((id) => !existingIds.has(id))) {
-      throw new Error("אחת משורות התשלום אינה שייכת למשלוח");
+      throw new Error("??? ?????? ?????? ???? ????? ??????");
     }
 
     const totalPaid = input.lines.reduce((sum, line) => sum + line.amountIls, 0);
     if (totalPaid > fee + 0.001) {
-      throw new Error("סכום התשלום חורג מדמי המשלוח");
+      throw new Error("???? ?????? ???? ???? ??????");
     }
 
     await tx.shipmentPaymentLine.deleteMany({
@@ -899,15 +1205,11 @@ export async function saveShipmentPayments(
 
   const record = await prisma.shipmentRecord.findUniqueOrThrow({
     where: { id: input.shipmentRecordId },
-    include: {
-      batch: { select: { batchNumber: true } },
-      zone: { select: { name: true } },
-      courier: { select: { name: true } },
-      payments: { orderBy: { createdAt: "asc" } },
-    },
+    include: shipmentRecordInclude,
   });
   const userNames = await loadPaymentUserNames([record]);
-  return mapRecord(record, userNames);
+  const [mapped] = await attachCustomerBalances([mapRecord(record, userNames)]);
+  return mapped!;
 }
 
 export async function deleteShipmentPaymentLine(lineId: string): Promise<void> {
@@ -933,4 +1235,172 @@ export async function deleteShipmentPaymentLine(lineId: string): Promise<void> {
     where: { id: line.shipmentRecordId },
     data: { paymentStatus: newStatus },
   });
+}
+
+// --- Courier debt close ---
+
+import type {
+  CourierDebtCloseCandidate,
+  CourierDebtCloseSkip,
+  CourierDebtClosePreview,
+} from "@/app/admin/shipments/types";
+
+export type { CourierDebtCloseCandidate, CourierDebtCloseSkip, CourierDebtClosePreview };
+
+function roundMoney(n: number) {
+  return Math.round(n * 100) / 100;
+}
+
+export async function previewCourierDebtClose(input: {
+  courierId: string;
+  zoneIds: string[];
+  batchIds?: string[];
+}): Promise<CourierDebtClosePreview> {
+  if (!input.courierId) throw new Error("???? ????");
+  if (!input.zoneIds.length) throw new Error("?? ????? ????? ???? ???");
+
+  const courier = await prisma.shipmentCourier.findUnique({
+    where: { id: input.courierId },
+    select: { id: true, name: true },
+  });
+  if (!courier) throw new Error("????? ?? ????");
+
+  const zones = await prisma.shipmentDeliveryZone.findMany({
+    where: { id: { in: input.zoneIds } },
+    select: { id: true, name: true },
+  });
+  const zoneNameById = new Map(zones.map((z) => [z.id, z.name]));
+
+  const records = await prisma.shipmentRecord.findMany({
+    where: {
+      courierId: input.courierId,
+      zoneId: { in: input.zoneIds },
+      ...(input.batchIds?.length ? { batchId: { in: input.batchIds } } : {}),
+    },
+    include: {
+      batch: { select: { batchNumber: true } },
+      zone: { select: { id: true, name: true } },
+      payments: { select: { amountIls: true } },
+    },
+    orderBy: [{ batch: { batchNumber: "asc" } }, { rowIndex: "asc" }],
+  });
+
+  const eligible: CourierDebtCloseCandidate[] = [];
+  const skipped: CourierDebtCloseSkip[] = [];
+
+  for (const r of records) {
+    const fee = r.deliveryFeeIls?.toNumber() ?? r.deliveryFeeAmount?.toNumber() ?? 0;
+    const paid = r.payments.reduce((s, p) => s + p.amountIls.toNumber(), 0);
+    const remaining = Math.max(0, roundMoney(fee - paid));
+    const candidate: CourierDebtCloseCandidate = {
+      id: r.id,
+      batchNumber: r.batch.batchNumber,
+      customerName: r.customerName,
+      customerCode: r.customerCode,
+      zoneId: r.zoneId,
+      zoneName: r.zone?.name ?? (r.zoneId ? zoneNameById.get(r.zoneId) ?? null : null),
+      deliveryFeeIls: roundMoney(fee),
+      paidAmountIls: roundMoney(paid),
+      remainingFeeIls: remaining,
+      status: r.status,
+      paymentStatus: r.paymentStatus,
+    };
+    const verdict = evaluateCourierDebtCloseEligibility({
+      status: r.status,
+      deliveryFeeIls: fee,
+      paidAmountIls: paid,
+    });
+    if (verdict.ok) eligible.push(candidate);
+    else {
+      skipped.push({
+        ...candidate,
+        reason: verdict.reason,
+        reasonLabel: CLOSE_DEBT_SKIP_LABELS[verdict.reason],
+      });
+    }
+  }
+
+  const customerKeys = new Set(
+    records
+      .map((r) => (r.customerCode ?? "").trim() || (r.customerName ?? "").trim() || r.id)
+      .filter(Boolean),
+  );
+
+  return {
+    courierId: courier.id,
+    courierName: courier.name,
+    zoneIds: input.zoneIds,
+    zoneNames: input.zoneIds.map((id) => zoneNameById.get(id) ?? id),
+    eligible,
+    skipped,
+    summary: {
+      shipmentCount: records.length,
+      customerCount: customerKeys.size,
+      totalFeeIls: roundMoney(
+        records.reduce((s, r) => {
+          const fee = r.deliveryFeeIls?.toNumber() ?? r.deliveryFeeAmount?.toNumber() ?? 0;
+          return s + fee;
+        }, 0),
+      ),
+      collectedIls: roundMoney(
+        records.reduce(
+          (s, r) => s + r.payments.reduce((ps, p) => ps + p.amountIls.toNumber(), 0),
+          0,
+        ),
+      ),
+      remainingIls: roundMoney(
+        [...eligible, ...skipped].reduce((s, r) => s + r.remainingFeeIls, 0),
+      ),
+      eligibleCount: eligible.length,
+      skippedCount: skipped.length,
+      eligibleFeeIls: roundMoney(eligible.reduce((s, r) => s + r.deliveryFeeIls, 0)),
+    },
+  };
+}
+
+export async function closeCourierDebts(input: {
+  courierId: string;
+  zoneIds: string[];
+  batchIds?: string[];
+  userId: string;
+}): Promise<{
+  preview: CourierDebtClosePreview;
+  closedCount: number;
+  closedRecordIds: string[];
+}> {
+  const preview = await previewCourierDebtClose(input);
+  const ids = preview.eligible.map((r) => r.id);
+  if (ids.length === 0) {
+    return { preview, closedCount: 0, closedRecordIds: [] };
+  }
+
+  await prisma.shipmentRecord.updateMany({
+    where: { id: { in: ids } },
+    data: { status: "COMPLETED" },
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      userId: input.userId,
+      actionType: "SHIPMENT_COURIER_DEBT_CLOSE",
+      entityType: "ShipmentCourier",
+      entityId: input.courierId,
+      newValue: {
+        courierId: preview.courierId,
+        courierName: preview.courierName,
+        zoneIds: preview.zoneIds,
+        zoneNames: preview.zoneNames,
+        closedCount: ids.length,
+        skippedCount: preview.skipped.length,
+        totalFeeIls: preview.summary.eligibleFeeIls,
+        closedRecordIds: ids,
+        at: new Date().toISOString(),
+      } as never,
+      metadata: {
+        source: "courier_debt_close_modal",
+      } as never,
+    },
+  });
+
+  return { preview, closedCount: ids.length, closedRecordIds: ids };
 }

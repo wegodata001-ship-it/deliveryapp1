@@ -11,7 +11,6 @@ export type ManualColumnKey =
   | "shipmentDetails"
   | "status"
   | "city"
-  | "cpm"
   | "orderNumber"
   | "vatAmount"
   | "amountTotal"
@@ -22,10 +21,19 @@ export type ManualColumnKey =
   | "inlandHaulage"
   | "portHaulage";
 
+export type ManualColumnInput =
+  | "date"
+  | "month"
+  | "text"
+  | "number"
+  | "status"
+  | "textarea"
+  | "select";
+
 export type ManualColumnDef = {
   key: ManualColumnKey;
   label: string;
-  input: "date" | "month" | "text" | "number" | "status" | "textarea";
+  input: ManualColumnInput;
   step?: string;
   /** נשמר לשורה הבאה (session) */
   sticky?: boolean;
@@ -33,27 +41,52 @@ export type ManualColumnDef = {
   autocomplete?: boolean;
   /** מתנקה בשכפול שורה */
   clearOnDuplicate?: boolean;
+  /** אפשרויות לבחירה (select) */
+  options?: readonly { value: string; label: string }[];
+  /** קבוצה לעיצוב בטופס */
+  group?: "dates" | "shipment" | "financial";
 };
 
+export const COUNTRY_OPTIONS = [
+  { value: "טורקיה", label: "טורקיה" },
+  { value: "סין", label: "סין" },
+  { value: "אמירויות", label: "אמירויות" },
+] as const;
+
+export const SHIPMENT_TYPE_OPTIONS = [
+  { value: "ימי", label: "ימי" },
+  { value: "אוויר", label: "אוויר" },
+  { value: "אחר", label: "אחר" },
+] as const;
+
+export const CITY_OPTIONS = [
+  { value: "PS", label: "PS" },
+  { value: "IL", label: "IL" },
+] as const;
+
 export const MANUAL_SHIPMENT_COLUMNS: ManualColumnDef[] = [
-  { key: "entryDate", label: "תאריך", input: "date" },
-  { key: "monthKey", label: "חודש", input: "month", sticky: true },
-  { key: "country", label: "מדינה", input: "text", sticky: true, autocomplete: true },
-  { key: "shipmentNumber", label: "מספר משלוח", input: "text", sticky: true, clearOnDuplicate: true },
-  { key: "containerNumber", label: "מספר קונטיינר", input: "text", sticky: true },
-  { key: "shipmentDetails", label: "פרטי משלוח", input: "textarea", sticky: true, autocomplete: true },
-  { key: "status", label: "סטטוס", input: "status", sticky: true, autocomplete: true },
-  { key: "city", label: "עיר", input: "text", sticky: true, autocomplete: true },
-  { key: "cpm", label: "CPM", input: "text", sticky: true, autocomplete: true },
-  { key: "orderNumber", label: "מספר רישומין", input: "text", clearOnDuplicate: true },
-  { key: "vatAmount", label: 'מע"מ', input: "number", step: "0.01" },
-  { key: "amountTotal", label: "סכום רישומין", input: "number", step: "0.01" },
-  { key: "airjetInvoice", label: "חש איירגט", input: "text" },
-  { key: "amountPaid", label: "תשלום", input: "number", step: "0.01" },
-  { key: "makasa", label: "מקאסה", input: "text" },
-  { key: "makasaNumber", label: "מספר מקאסה", input: "text", clearOnDuplicate: true },
-  { key: "inlandHaulage", label: "הובלה פנים", input: "number", step: "0.01" },
-  { key: "portHaulage", label: "הובלה נמל", input: "number", step: "0.01" },
+  // ─── קבוצה 1: תאריכים ופרטי בסיס ─────────────────────────────────────────
+  { key: "entryDate", label: "תאריך", input: "date", group: "dates" },
+  { key: "monthKey", label: "חודש", input: "month", sticky: true, group: "dates" },
+  { key: "country", label: "מדינה", input: "select", sticky: true, options: COUNTRY_OPTIONS, group: "dates" },
+  { key: "shipmentNumber", label: "סוג משלוח", input: "select", sticky: true, options: SHIPMENT_TYPE_OPTIONS, group: "dates" },
+  { key: "containerNumber", label: "מספר קונטיינר", input: "text", sticky: true, clearOnDuplicate: true, group: "dates" },
+
+  // ─── קבוצה 2: פרטי משלוח ─────────────────────────────────────────────────
+  { key: "shipmentDetails", label: "פרטי משלוח", input: "textarea", sticky: true, autocomplete: true, group: "shipment" },
+  { key: "status", label: "סטטוס", input: "status", sticky: true, group: "shipment" },
+  { key: "city", label: "עיר", input: "select", sticky: true, options: CITY_OPTIONS, group: "shipment" },
+
+  // ─── קבוצה 3: נתונים פיננסיים ─────────────────────────────────────────────
+  { key: "orderNumber", label: "מספר רישומון", input: "text", clearOnDuplicate: true, group: "financial" },
+  { key: "vatAmount", label: 'מע"מ', input: "number", step: "0.01", group: "financial" },
+  { key: "amountTotal", label: "סכום רישומון", input: "number", step: "0.01", group: "financial" },
+  { key: "airjetInvoice", label: "חש איירגט", input: "text", group: "financial" },
+  { key: "amountPaid", label: "תשלום", input: "number", step: "0.01", group: "financial" },
+  { key: "makasa", label: "מקאסה", input: "text", group: "financial" },
+  { key: "makasaNumber", label: "מספר מקאסה", input: "text", clearOnDuplicate: true, group: "financial" },
+  { key: "inlandHaulage", label: "הובלה פנים", input: "number", step: "0.01", group: "financial" },
+  { key: "portHaulage", label: "הובלה נמל", input: "number", step: "0.01", group: "financial" },
 ];
 
 export const STICKY_COLUMN_KEYS = MANUAL_SHIPMENT_COLUMNS.filter((c) => c.sticky).map((c) => c.key);
@@ -65,3 +98,4 @@ export const CLEAR_ON_DUPLICATE_KEYS = MANUAL_SHIPMENT_COLUMNS.filter((c) => c.c
 );
 
 export const SESSION_DEFAULTS_KEY = "wego.manualShipment.sessionDefaults.v1";
+export const CUSTOM_STATUSES_KEY = "wego.manualShipment.customStatuses.v1";

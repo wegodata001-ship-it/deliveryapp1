@@ -20,6 +20,7 @@ export type ShipmentImportRow = {
   customerCode: string | null;
   customerName: string | null;
   customerPhone: string | null;
+  customerPhone2: string | null;
   address: string | null;
   city: string | null;
   cartonDetails: string | null;
@@ -362,6 +363,30 @@ function detectBatchMetadata(
   return result;
 }
 
+/**
+ * If `phone2Raw` already has a value (from a dedicated column), return both as-is.
+ * Otherwise try to split `phoneRaw` on common delimiters (`/`, `,`, newline)
+ * when it contains two phone-like tokens.
+ */
+function splitPhonePair(
+  phoneRaw: string | null,
+  phone2Raw: string | null,
+): [string | null, string | null] {
+  if (phone2Raw) return [phoneRaw, phone2Raw];
+  if (!phoneRaw) return [null, null];
+
+  const parts = phoneRaw
+    .split(/[/,\n]+/)
+    .map((s) => s.replace(/[\s\-()]+/g, "").trim())
+    .filter((s) => /^\+?\d{7,15}$/.test(s));
+
+  if (parts.length >= 2) {
+    const fmt = (s: string) => s.replace(/^(\+?\d{3})(\d+)$/, "$1-$2");
+    return [fmt(parts[0]), fmt(parts[1])];
+  }
+  return [phoneRaw, null];
+}
+
 function parseRows(
   grid: unknown[][],
   header: HeaderCandidate,
@@ -380,7 +405,9 @@ function parseRows(
 
     const customerCode = asText(value(row, "customerCode"));
     const customerName = asText(value(row, "customerName"));
-    const customerPhone = asText(value(row, "customerPhone"));
+    const phoneRaw = asText(value(row, "customerPhone"));
+    const phone2Raw = asText(value(row, "customerPhone2"));
+    const [customerPhone, customerPhone2] = splitPhonePair(phoneRaw, phone2Raw);
     const address = asText(value(row, "address"));
     const city = asText(value(row, "city"));
     const cartonDetails = asText(value(row, "cartonDetails"));
@@ -395,6 +422,7 @@ function parseRows(
       customerCode,
       customerName,
       customerPhone,
+      customerPhone2,
       address,
       city,
       cartonDetails,

@@ -2,6 +2,8 @@ export type CustomersModuleListRow = {
   id: string;
   code: string;
   name: string;
+  /** שם לקוח בערבית — מקור ל־PDF לשליח */
+  nameAr: string;
   phone: string;
   country: string;
   ordersTotalUsd: string;

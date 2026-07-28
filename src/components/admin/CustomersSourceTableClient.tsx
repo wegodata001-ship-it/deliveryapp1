@@ -323,6 +323,7 @@ export function CustomersSourceTableClient({ initialSearch = "" }: { initialSear
               {[
                 { key: "code", label: "קוד לקוח", sortable: true },
                 { key: "name", label: "שם", sortable: true },
+                { key: "nameAr", label: "שם בערבית", sortable: false },
                 { key: "phone", label: "טלפון", sortable: true },
                 { key: "email", label: "אימייל", sortable: false },
                 { key: "balance", label: "יתרת לקוח", sortable: true },
@@ -347,12 +348,12 @@ export function CustomersSourceTableClient({ initialSearch = "" }: { initialSear
             </tr>
           </thead>
           {loading && !payload ? (
-            <TableSkeleton columnCount={6} rowCount={8} />
+            <TableSkeleton columnCount={7} rowCount={8} />
           ) : (
             <tbody>
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={6}>
+                  <td colSpan={7}>
                     <TableEmpty />
                   </td>
                 </tr>
@@ -366,7 +367,7 @@ export function CustomersSourceTableClient({ initialSearch = "" }: { initialSear
                     onDoubleClick={() =>
                       openWindow({
                         type: "customerCard",
-                        props: { customerId: r.id, customerName: r.name, initialTab: "ledger" },
+                        props: { customerId: r.id, customerName: r.name, initialTab: "details" },
                       })
                     }
                   >
@@ -378,12 +379,17 @@ export function CustomersSourceTableClient({ initialSearch = "" }: { initialSear
                         onClick={() =>
                           openWindow({
                             type: "customerCard",
-                            props: { customerId: r.id, customerName: r.name, initialTab: "ledger" },
+                            props: { customerId: r.id, customerName: r.name, initialTab: "details" },
                           })
                         }
                       >
                         {r.name || "—"}
                       </button>
+                    </td>
+                    <td dir="rtl" title={r.nameAr ? undefined : "חסר שם בערבית — נדרש ל־PDF לשליח"}>
+                      {r.nameAr || (
+                        <span style={{ color: "#b45309", fontSize: "0.85em" }}>חסר</span>
+                      )}
                     </td>
                     <td dir="ltr">{r.phone || "—"}</td>
                     <td dir="ltr">{r.email || "—"}</td>

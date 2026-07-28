@@ -19,7 +19,7 @@ import type {
   ProfitLossReport,
   ProfitLossReportFilters,
 } from "@/lib/reports/build-profit-loss-report";
-import { PROFIT_LOSS_CHART_COUNTRIES } from "@/lib/reports/build-profit-loss-report";
+import { PROFIT_LOSS_CHART_COUNTRIES } from "@/lib/reports/profit-loss-constants";
 import { getProfitLossReportModalAction } from "@/app/admin/reports/profit-loss-modal-actions";
 import { openPdfPreview } from "@/lib/pdf-preview";
 import { normalizeAhWeekCode, getAhWeekRange } from "@/lib/work-week";

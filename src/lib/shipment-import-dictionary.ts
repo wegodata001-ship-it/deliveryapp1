@@ -2,6 +2,7 @@ export type ShipmentColumnField =
   | "customerCode"
   | "customerName"
   | "customerPhone"
+  | "customerPhone2"
   | "address"
   | "city"
   | "cartonDetails"
@@ -47,7 +48,12 @@ export const SHIPMENT_COLUMN_DICTIONARY: readonly DictionaryEntry<ShipmentColumn
   {
     field: "customerPhone",
     labelHe: "טלפון",
-    aliases: ["טלפון", "נייד", "מספר טלפון", "phone", "phone number", "mobile", "mobile number", "رقم الهاتف", "هاتف", "جوال", "telefon", "telefon numarası"],
+    aliases: ["טלפון", "נייד", "מספר טלפון", "phone", "phone number", "mobile", "mobile number", "رقم الهاتف", "هاتف", "جوال", "telefon", "telefon numarası", "טלפון 1", "phone 1", "mobile 1", "هاتف 1"],
+  },
+  {
+    field: "customerPhone2",
+    labelHe: "טלפון 2",
+    aliases: ["טלפון 2", "טלפון נוסף", "נייד 2", "מספר טלפון 2", "phone 2", "phone number 2", "mobile 2", "second phone", "alt phone", "هاتف 2", "رقم هاتف 2", "جوال 2", "telefon 2"],
   },
   {
     field: "address",
@@ -56,8 +62,26 @@ export const SHIPMENT_COLUMN_DICTIONARY: readonly DictionaryEntry<ShipmentColumn
   },
   {
     field: "city",
-    labelHe: "עיר",
-    aliases: ["עיר", "יישוב", "ישוב", "city", "town", "locality", "المدينة", "مدينة", "şehir", "ilçe"],
+    labelHe: "מקום מסירה",
+    aliases: [
+      "מקום מסירה",
+      "מקום המסירה",
+      "עיר",
+      "יישוב",
+      "ישוב",
+      "city",
+      "town",
+      "locality",
+      "delivery location",
+      "delivery place",
+      "المدينة",
+      "مدينة",
+      "مكان التسليم",
+      "موقع التسليم",
+      "şehir",
+      "ilçe",
+      "teslimat yeri",
+    ],
   },
   {
     field: "cartonDetails",

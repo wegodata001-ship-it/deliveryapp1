@@ -97,6 +97,7 @@ export function CustomersListClient() {
             <tr>
               <th>קוד</th>
               <th>שם לקוח</th>
+              <th>שם בערבית</th>
               <th>טלפון</th>
               <th>מדינה</th>
               <th>סה״כ הזמנות</th>
@@ -108,17 +109,22 @@ export function CustomersListClient() {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={8}>טוען…</td>
+                <td colSpan={9}>טוען…</td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={8}>לא נמצאו לקוחות</td>
+                <td colSpan={9}>לא נמצאו לקוחות</td>
               </tr>
             ) : (
               rows.map((r) => (
                 <tr key={r.id}>
                   <td dir="ltr">{r.code}</td>
                   <td>{r.name}</td>
+                  <td dir="rtl">
+                    {r.nameAr || (
+                      <span style={{ color: "#b45309", fontSize: "0.85em" }}>חסר</span>
+                    )}
+                  </td>
                   <td dir="ltr">{r.phone}</td>
                   <td>{r.country}</td>
                   <td dir="ltr" className="adm-cust-module-amt">
