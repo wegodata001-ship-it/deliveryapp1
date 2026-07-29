@@ -9,15 +9,14 @@ import {
   emptyDailyIntake,
   formatDailyDateDisplay,
   paymentDayKeyJerusalem,
+  sumIlsChannelIntake,
+  sumUsdChannelIntake,
   type CashDailyIntakeTotals,
   type CashDailyMethodId,
+  type DailyPaymentSplitInput,
 } from "@/lib/cash-control-daily";
 import { allCashControlChannels } from "@/lib/cash-control-channel";
-import {
-  aggregateFlowIntakesByDay,
-  computePaymentsTotalReceivedIls,
-  type FlowPaymentVatFields,
-} from "@/lib/flow-control/flow-calculation-service";
+import { aggregateFlowIntakesByDay } from "@/lib/flow-control/flow-calculation-service";
 import { FLOW_COUNTRY_LABEL } from "@/lib/flow-control/services/cash-count-summary-service";
 import { listWeekDayYmds } from "@/lib/weeks/ah-week";
 import type { FlowPaymentDailyRow } from "@/app/admin/cash-flow/flow-types";
@@ -40,7 +39,7 @@ function sumIntake(a: CashDailyIntakeTotals, b: CashDailyIntakeTotals): CashDail
   return out;
 }
 
-type FlowPaymentRow = FlowPaymentVatFields & {
+type FlowPaymentRow = DailyPaymentSplitInput & {
   paymentDate: Date | string | null;
   createdAt: Date | string;
   intakeDate?: Date | string | null;
@@ -60,7 +59,8 @@ export function buildFlowPaymentDailyRows(
     const hasData = Object.values(intake).some((v) => v > 0.009);
     if (!hasData) continue;
 
-    const dayPayments = payments.filter((p) => paymentDayKeyJerusalem(p) === dateYmd);
+    const totalIls = sumIlsChannelIntake(intake);
+    const totalUsd = sumUsdChannelIntake(intake);
     rows.push({
       dateYmd,
       dayName: dayNameHe(dateYmd),
@@ -68,11 +68,16 @@ export function buildFlowPaymentDailyRows(
       weekCode,
       countryLabel: FLOW_COUNTRY_LABEL,
       intake: intakeToDto(intake),
-      totalReceived: money(computePaymentsTotalReceivedIls(dayPayments)),
+      totalReceived: money(totalIls),
+      totalReceivedIls: money(totalIls),
+      totalReceivedUsd: money(totalUsd),
     });
   }
 
   if (rows.length === 0) return rows;
+
+  const weekTotalIls = sumIlsChannelIntake(weekIntake);
+  const weekTotalUsd = sumUsdChannelIntake(weekIntake);
 
   rows.push({
     dateYmd: "",
@@ -81,7 +86,9 @@ export function buildFlowPaymentDailyRows(
     weekCode,
     countryLabel: FLOW_COUNTRY_LABEL,
     intake: intakeToDto(weekIntake),
-    totalReceived: money(computePaymentsTotalReceivedIls(payments)),
+    totalReceived: money(weekTotalIls),
+    totalReceivedIls: money(weekTotalIls),
+    totalReceivedUsd: money(weekTotalUsd),
     isTotal: true,
   });
 

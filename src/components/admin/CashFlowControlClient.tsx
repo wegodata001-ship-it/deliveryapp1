@@ -23,10 +23,11 @@ import { setPaymentCashAuditReviewAction } from "@/app/admin/cash-control/review
 import { deleteCashExpenseAction } from "@/app/admin/cash-expenses/delete-expense-action";
 import type { CashFlowCapabilities } from "@/app/admin/cash-flow/types";
 import {
-  CASH_DAILY_METHODS,
+  CASH_DAILY_RECEIPT_COLUMNS,
   fmtDailyMoney,
   type CashDailyMethodId,
 } from "@/lib/cash-control-daily";
+import { channelColLabels } from "@/lib/cash-control-channel";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import {
   WEGO_CASH_CONTROL_REFRESH_EVENT,
@@ -226,11 +227,11 @@ export function CashFlowControlClient({
       setCountSaving(true);
       try {
         const drawer: Partial<Record<CashDailyMethodId, string | null>> = {};
-        for (const m of CASH_DAILY_METHODS) {
+        for (const id of CASH_DAILY_RECEIPT_COLUMNS) {
           const raw = (
-            m.id === changedMethod ? changedValue : (countDraft[m.id] ?? dayDetail?.drawer[m.id] ?? "")
+            id === changedMethod ? changedValue : (countDraft[id] ?? dayDetail?.drawer[id] ?? "")
           ).trim();
-          drawer[m.id] = raw === "" ? null : raw;
+          drawer[id] = raw === "" ? null : raw;
         }
         const res = await saveCashDailyDrawerAction({ week, dateYmd: selectedDay, drawer });
         if (!res.ok) {
@@ -333,7 +334,7 @@ export function CashFlowControlClient({
     };
   }, [dayRows, totalRow]);
 
-  const drillMeta = methodDrill ? CASH_DAILY_METHODS.find((m) => m.id === methodDrill) : null;
+  const drillMetaLabel = methodDrill ? channelColLabels()[methodDrill] : null;
 
   return (
     <div className="cc">
@@ -490,7 +491,7 @@ export function CashFlowControlClient({
               {methodDrill ? (
                 <MethodDrillPanel
                   method={methodDrill}
-                  methodLabel={drillMeta?.label}
+                  methodLabel={drillMetaLabel ?? undefined}
                   loading={methodLoading}
                   rows={methodRows}
                   reviewBusy={reviewBusy}

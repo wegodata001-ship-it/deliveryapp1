@@ -48,6 +48,16 @@ export const CASH_CONTROL_CHANNELS: CashControlChannelMeta[] = [
   { id: "OTHER_USD", label: "אחר $", currency: "USD" },
 ];
 
+/** עמודות טבלת תקבולים — מטבע רלוונטי בלבד לכל אמצעי (סדר תצוגה) */
+export const CASH_RECEIPT_TABLE_COLUMNS: CashControlChannel[] = [
+  "CASH_ILS",
+  "CASH_USD",
+  "BANK_TRANSFER_ILS",
+  "CREDIT_CARD_ILS",
+  "CHECK_ILS",
+  "OTHER_USD",
+];
+
 export const CASH_DAILY_METHODS = CASH_CONTROL_CHANNELS;
 
 export type CashDailyDrawerDbField =
@@ -149,6 +159,10 @@ export function emptyChannelTotals(): Record<CashControlChannel, number> {
 
 export function allCashControlChannels(): CashControlChannel[] {
   return CASH_CONTROL_CHANNELS.map((c) => c.id);
+}
+
+export function receiptTableColumns(): CashControlChannel[] {
+  return [...CASH_RECEIPT_TABLE_COLUMNS];
 }
 
 export function channelGroupClass(channel: CashControlChannel): string {

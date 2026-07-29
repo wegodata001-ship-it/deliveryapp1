@@ -33722,9 +33722,10 @@ button.adm-cash-kpi:hover {
 .mc-radio-card:has(input:checked) { border-color: #2563eb; background: #eff6ff; }
 .mc-radio-card span { flex: 1; font-weight: 700; font-size: 13px; }
 .mc-fx-pl-summary {
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
   padding: 10px; background: #f8fafc; border-radius: 10px; font-size: 12px;
 }
+.fc-fx-history__kpis { margin-top: 10px; }
 .mc-fx-pl-summary span { display: block; color: #64748b; }
 .mc-fx-pl-bars { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
 .mc-fx-pl-bar-row { display: grid; grid-template-columns: 80px 1fr 70px; gap: 8px; align-items: center; font-size: 11px; }

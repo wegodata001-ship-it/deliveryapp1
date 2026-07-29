@@ -7,6 +7,7 @@ import { CASH_CONTROL_EPS, calculateCashControlVariance } from "@/lib/cash-contr
 import {
   CASH_CONTROL_CHANNELS,
   CASH_DAILY_METHODS,
+  CASH_RECEIPT_TABLE_COLUMNS,
   allCashControlChannels,
   channelCurrency,
   emptyChannelTotals,
@@ -32,9 +33,11 @@ export type {
 export {
   CASH_CONTROL_CHANNELS,
   CASH_DAILY_METHODS,
+  CASH_RECEIPT_TABLE_COLUMNS,
   allCashControlChannels,
   channelCurrency,
   formatChannelLabel,
+  receiptTableColumns,
   resolveCashControlChannel,
   resolveChannelFromPaymentBucket,
 } from "@/lib/cash-control-channel";
@@ -52,9 +55,11 @@ export type CashDailyDrawerValues = Partial<Record<CashDailyMethodId, number | n
 
 export type CashDailyMethodMeta = CashControlChannelMeta;
 
-/** תאימות לאחור */
+/** תאימות לאחור — כל הערוצים (כולל היסטוריים) */
 export const CASH_DAILY_INTAKE_COLUMNS = CASH_DAILY_METHODS;
 export const CASH_DAILY_DRAWER_COLUMNS = CASH_DAILY_METHODS;
+/** עמודות תצוגה/הזנה בטבלת תקבולים ובספירת קופה */
+export const CASH_DAILY_RECEIPT_COLUMNS = CASH_RECEIPT_TABLE_COLUMNS;
 
 /** ספים לקביעת צבע הסטטוס */
 export const CASH_DAILY_DIFF_THRESHOLD = { ILS: 50, USD: 5 } as const;
@@ -312,11 +317,20 @@ export function fmtDailyMoney(currency: CashControlCurrency, amount: number): st
   return amount < 0 ? `-${body}` : body;
 }
 
-/** סכום ערוצי ₪ (לסיכומי שבוע בבקרת תזרים) */
+/** סכום ערוצי ₪ (לסיכומי שבוע בבקרת תזרים) — כולל ערוצים היסטוריים שלא מוצגים */
 export function sumIlsChannelIntake(intake: CashDailyIntakeTotals): number {
   return round2(
     allCashControlChannels()
       .filter((id) => channelCurrency(id) === "ILS")
+      .reduce((s, id) => s + (intake[id] ?? 0), 0),
+  );
+}
+
+/** סכום ערוצי $ — כולל ערוצים היסטוריים שלא מוצגים */
+export function sumUsdChannelIntake(intake: CashDailyIntakeTotals): number {
+  return round2(
+    allCashControlChannels()
+      .filter((id) => channelCurrency(id) === "USD")
       .reduce((s, id) => s + (intake[id] ?? 0), 0),
   );
 }

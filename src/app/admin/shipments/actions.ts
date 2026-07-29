@@ -51,6 +51,14 @@ import type {
 } from "@/app/admin/shipments/types";
 import { PAYMENT_METHODS } from "@/app/admin/shipments/types";
 import type { ShipmentPaymentMethodOption } from "@/lib/shipment-payment-method-filter";
+import {
+  commitBatchDeliveryFeeImport,
+  previewBatchDeliveryFeeImport,
+} from "@/app/admin/shipments/delivery-fee-import-service";
+import type {
+  DeliveryFeeImportPreview,
+  DeliveryFeeImportResult,
+} from "@/lib/shipment-delivery-fee-import";
 
 const VIEW_PERMS = ["manage_shipments", "view_shipments"];
 const WRITE_PERMS = ["manage_shipments"];
@@ -596,6 +604,42 @@ export async function deletePaymentLineAction(
     await deleteShipmentPaymentLine(lineId);
     revalidate();
     return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+// ─── Delivery fee pricing import ─────────────────────────────────────────────
+
+export async function previewDeliveryFeeImportAction(
+  batchId: string,
+  grid: unknown[][],
+): Promise<{ ok: true; preview: DeliveryFeeImportPreview } | { ok: false; error: string }> {
+  try {
+    const me = await requireAuth();
+    if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
+      return { ok: false, error: "אין הרשאה" };
+    return await previewBatchDeliveryFeeImport(batchId.trim(), grid);
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+export async function commitDeliveryFeeImportAction(
+  batchId: string,
+  preview: DeliveryFeeImportPreview,
+): Promise<{ ok: true; result: DeliveryFeeImportResult } | { ok: false; error: string }> {
+  try {
+    const me = await requireAuth();
+    if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
+      return { ok: false, error: "אין הרשאה" };
+    const res = await commitBatchDeliveryFeeImport({
+      batchId: batchId.trim(),
+      userId: me.id,
+      preview,
+    });
+    if (res.ok) revalidate();
+    return res;
   } catch (e) {
     return { ok: false, error: String(e) };
   }

@@ -10,6 +10,9 @@ import type {
   ShipmentControlRecord,
   ShipmentKpis,
   ShipmentRecordExpenseDto,
+  ShipmentBatchExpenseDto,
+  ShipmentBatchExpenseSummary,
+  ShipmentBatchExpenseCategory,
   CourierSummary,
   ZoneSummary,
   ShipmentException,
@@ -19,6 +22,7 @@ import {
   SHIPMENT_CASH_EXPENSE_LABELS,
   type ShipmentCashExpenseCategory,
 } from "@/app/admin/shipments/cash-control/types";
+import { SHIPMENT_BATCH_EXPENSE_LABELS } from "@/app/admin/shipments/control/types";
 
 const VIEW_PERMS = ["manage_shipments", "view_shipments"];
 const WRITE_PERMS = ["manage_shipments"];
@@ -51,6 +55,84 @@ function mapExpense(e: {
     expenseDate: e.expenseDate.toISOString().slice(0, 10),
     createdAt: e.createdAt.toISOString(),
   };
+}
+
+function batchExpenseCategoryLabel(category: string): string {
+  return (
+    SHIPMENT_BATCH_EXPENSE_LABELS[category as ShipmentBatchExpenseCategory] ?? category
+  );
+}
+
+function mapBatchExpense(e: {
+  id: string;
+  batchId: string;
+  category: string;
+  amount: { toNumber(): number };
+  currency: string;
+  notes: string | null;
+  paymentMethod: string | null;
+  expenseDate: Date;
+  createdAt: Date;
+}): ShipmentBatchExpenseDto {
+  const currency = e.currency === "USD" ? "USD" : "ILS";
+  return {
+    id: e.id,
+    batchId: e.batchId,
+    category: e.category,
+    categoryLabel: batchExpenseCategoryLabel(e.category),
+    amount: e.amount.toNumber(),
+    currency,
+    notes: e.notes,
+    paymentMethod: e.paymentMethod,
+    paymentMethodLabel: e.paymentMethod
+      ? (PAYMENT_METHOD_LABELS[e.paymentMethod] ?? e.paymentMethod)
+      : null,
+    expenseDate: e.expenseDate.toISOString().slice(0, 10),
+    createdAt: e.createdAt.toISOString(),
+  };
+}
+
+function buildBatchExpenseSummaries(
+  batchIds: string[],
+  raw: Array<{
+    id: string;
+    batchId: string;
+    category: string;
+    amount: { toNumber(): number };
+    currency: string;
+    notes: string | null;
+    paymentMethod: string | null;
+    expenseDate: Date;
+    createdAt: Date;
+  }>,
+): ShipmentBatchExpenseSummary[] {
+  const byBatch = new Map<string, ShipmentBatchExpenseDto[]>();
+  for (const id of batchIds) byBatch.set(id, []);
+  for (const row of raw) {
+    const list = byBatch.get(row.batchId) ?? [];
+    list.push(mapBatchExpense(row));
+    byBatch.set(row.batchId, list);
+  }
+  return batchIds.map((batchId) => {
+    const expenses = byBatch.get(batchId) ?? [];
+    let totalIls = 0;
+    let totalUsd = 0;
+    for (const e of expenses) {
+      if (e.currency === "USD") totalUsd += e.amount;
+      else totalIls += e.amount;
+    }
+    return {
+      batchId,
+      expenses,
+      totalIls: Math.round(totalIls * 100) / 100,
+      totalUsd: Math.round(totalUsd * 100) / 100,
+      count: expenses.length,
+    };
+  });
+}
+
+function sumBatchExpensesIls(summaries: ShipmentBatchExpenseSummary[]): number {
+  return Math.round(summaries.reduce((s, b) => s + b.totalIls, 0) * 100) / 100;
 }
 
 function parsePaymentDetails(value: string | null): ShipmentPaymentDetails | null {
@@ -218,7 +300,16 @@ export async function getShipmentControlDataAction(
     });
 
     // ── KPIs ──────────────────────────────────────────────────────────────────
-    const kpis = computeKpis(records);
+    const batchIdsInScope = [...new Set(records.map((r) => r.batchId))];
+    const rawBatchExpenses = batchIdsInScope.length
+      ? await prisma.shipmentBatchExpense.findMany({
+          where: { batchId: { in: batchIdsInScope } },
+          orderBy: [{ expenseDate: "desc" }, { createdAt: "desc" }],
+        })
+      : [];
+    const batchExpenses = buildBatchExpenseSummaries(batchIdsInScope, rawBatchExpenses);
+
+    const kpis = computeKpis(records, batchExpenses);
 
     // ── By courier ────────────────────────────────────────────────────────────
     const byCourier = computeByCourier(records);
@@ -243,6 +334,7 @@ export async function getShipmentControlDataAction(
         byZone,
         exceptions,
         batches: allBatches,
+        batchExpenses,
         zones: allZones,
         couriers,
         courierOptions: allCouriers,
@@ -256,7 +348,10 @@ export async function getShipmentControlDataAction(
 
 // ─── Compute helpers ──────────────────────────────────────────────────────────
 
-function computeKpis(records: ShipmentControlRecord[]): ShipmentKpis {
+function computeKpis(
+  records: ShipmentControlRecord[],
+  batchExpenses: ShipmentBatchExpenseSummary[] = [],
+): ShipmentKpis {
   let delivered = 0, inTransit = 0, notDelivered = 0, returned = 0, completed = 0;
   let newCount = 0, received = 0, assigned = 0;
   let totalFeeIls = 0, totalPaidIls = 0, totalCreditIls = 0;
@@ -311,7 +406,7 @@ function computeKpis(records: ShipmentControlRecord[]): ShipmentKpis {
     totalZones: zones.size, totalCouriers: couriers.size, unassignedCourier, noZone,
     totalBoxes, totalWeightKg, deliveredBoxes, notDeliveredBoxes,
     unpaidCount, partialCount, paidCount,
-    totalExpensesIls: Math.round(totalExpensesIls * 100) / 100,
+    totalExpensesIls: Math.round((totalExpensesIls + sumBatchExpensesIls(batchExpenses)) * 100) / 100,
   };
 }
 
@@ -437,7 +532,7 @@ function emptyPayload(
     unpaidCount: 0, partialCount: 0, paidCount: 0,
     totalExpensesIls: 0,
   };
-  return { kpis: emptyKpis, records: [], totalRecordCount: 0, byCourier: [], byZone: [], exceptions: [], batches, zones, couriers, courierOptions: [], filter };
+  return { kpis: emptyKpis, records: [], totalRecordCount: 0, byCourier: [], byZone: [], exceptions: [], batches, batchExpenses: [], zones, couriers, courierOptions: [], filter };
 }
 
 // ─── הוצאות פר-משלוח ──────────────────────────────────────────────────────────
@@ -557,6 +652,91 @@ export async function deleteShipmentRecordExpenseAction(
     }
     await prisma.shipmentRecordExpense.delete({ where: { id } });
     return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+// ─── הוצאות פר-קונטיינר/אצוות ────────────────────────────────────────────────
+
+export async function createShipmentBatchExpenseAction(input: {
+  batchId: string;
+  category: string;
+  amount: number;
+  currency: "ILS" | "USD";
+  notes?: string | null;
+  paymentMethod?: string | null;
+  expenseDate: string;
+}): Promise<{ ok: true; expense: ShipmentBatchExpenseDto } | { ok: false; error: string }> {
+  try {
+    const me = await requireAuth();
+    if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS)) {
+      return { ok: false, error: "אין הרשאה" };
+    }
+    const category = input.category.trim();
+    if (!(category in SHIPMENT_BATCH_EXPENSE_LABELS)) {
+      return { ok: false, error: "סוג הוצאה לא תקין" };
+    }
+    const amount = Number(input.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return { ok: false, error: "סכום חייב להיות גדול מאפס" };
+    }
+    const currency = input.currency === "USD" ? "USD" : "ILS";
+    if (input.paymentMethod && !VALID_PAYMENT_METHODS.has(input.paymentMethod)) {
+      return { ok: false, error: "אמצעי תשלום לא תקין" };
+    }
+    const day = input.expenseDate?.trim().slice(0, 10);
+    if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+      return { ok: false, error: "תאריך לא תקין" };
+    }
+
+    const batch = await prisma.shipmentBatch.findUnique({
+      where: { id: input.batchId },
+      select: { id: true, batchNumber: true, containerNumber: true },
+    });
+    if (!batch) return { ok: false, error: "משלוח לא נמצא" };
+
+    const created = await prisma.$transaction(async (tx) => {
+      const expense = await tx.shipmentBatchExpense.create({
+        data: {
+          batchId: input.batchId,
+          category,
+          amount,
+          currency,
+          notes: input.notes?.trim() || null,
+          paymentMethod: input.paymentMethod?.trim() || null,
+          expenseDate: new Date(day + "T00:00:00.000Z"),
+          createdById: me.id,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: me.id,
+          actionType: "SHIPMENT_BATCH_EXPENSE_ADD",
+          entityType: "ShipmentBatchExpense",
+          entityId: expense.id,
+          newValue: {
+            batchId: batch.id,
+            batchNumber: batch.batchNumber,
+            containerNumber: batch.containerNumber,
+            category,
+            categoryLabel: batchExpenseCategoryLabel(category),
+            amount,
+            currency,
+            expenseDate: day,
+            notes: input.notes?.trim() || null,
+            paymentMethod: input.paymentMethod?.trim() || null,
+          },
+          metadata: {
+            source: "containers_modal",
+            at: new Date().toISOString(),
+          },
+        },
+      });
+      return expense;
+    });
+
+    return { ok: true, expense: mapBatchExpense(created) };
   } catch (e) {
     return { ok: false, error: String(e) };
   }

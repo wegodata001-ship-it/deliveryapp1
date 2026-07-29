@@ -4,7 +4,7 @@ import { useCallback, useState } from "react";
 import type { FlowWeekDrillPayload, FlowWeekOverviewRow } from "@/app/admin/cash-flow/flow-types";
 import { FLOW_PAYMENT_COLUMNS } from "@/app/admin/cash-flow/flow-types";
 import { fmtDailyMoney, channelCurrency, type CashDailyMethodId } from "@/lib/cash-control-daily";
-import { channelColLabels } from "@/lib/cash-control-channel";
+import { allCashControlChannels, channelColLabels } from "@/lib/cash-control-channel";
 import { PaymentSummaryTable } from "@/components/admin/flow-control/PaymentSummaryTable";
 import { CashBalanceCard } from "@/components/admin/flow-control/CashBalanceCard";
 import { BankBalanceCard } from "@/components/admin/flow-control/BankBalanceCard";
@@ -39,6 +39,14 @@ import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { fcNum } from "@/components/admin/flow-control/shared";
 
 const COL_LABEL = channelColLabels();
+
+function sumPaymentIntakeUsd(intake: Record<CashDailyMethodId, string>): string {
+  let total = 0;
+  for (const id of allCashControlChannels()) {
+    if (channelCurrency(id) === "USD") total += fcNum(intake[id]);
+  }
+  return total.toFixed(2);
+}
 
 type DetailKey = "intakes" | "reconciliation" | "balance" | null;
 
@@ -137,6 +145,8 @@ export function FlowWeekDashboard({
     intake: drill.paymentIntake,
     drawer: {},
     totalReceived: drill.flow.kpis.totalReceivedIls,
+    totalReceivedIls: drill.flow.kpis.totalReceivedIls,
+    totalReceivedUsd: sumPaymentIntakeUsd(drill.paymentIntake),
     expensesIls: drill.flow.expensesIls,
     expensesUsd: drill.flow.expensesUsd,
     diff: null,

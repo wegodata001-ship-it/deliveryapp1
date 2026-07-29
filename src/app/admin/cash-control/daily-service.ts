@@ -19,6 +19,7 @@ import {
   paymentDayKeyJerusalem,
   paymentMatchesDailyColumn,
   sumIlsChannelIntake,
+  sumUsdChannelIntake,
   type CashDailyDrawerValues,
   type CashDailyExpenseTotals,
   type CashDailyIntakeTotals,
@@ -270,7 +271,8 @@ export async function loadCashControlWeekSummary(week: string): Promise<CashDail
     weekExpIls = Math.round((weekExpIls + expCur.ils) * 100) / 100;
     weekExpUsd = Math.round((weekExpUsd + expCur.usd) * 100) / 100;
     const { kind, worstDiff, worstCurrency } = computeDailyStatus(intake, drawer, expenses);
-    const totalReceived = sumIlsChannelIntake(intake);
+    const totalReceivedIls = sumIlsChannelIntake(intake);
+    const totalReceivedUsd = sumUsdChannelIntake(intake);
 
     dayRows.push({
       dateYmd,
@@ -280,7 +282,9 @@ export async function loadCashControlWeekSummary(week: string): Promise<CashDail
       countryLabel: CASH_CONTROL_COUNTRY_LABEL,
       intake: intakeToDto(intake),
       drawer: drawerToDto(drawer),
-      totalReceived: money(totalReceived),
+      totalReceived: money(totalReceivedIls),
+      totalReceivedIls: money(totalReceivedIls),
+      totalReceivedUsd: money(totalReceivedUsd),
       expensesIls: money(expCur.ils),
       expensesUsd: money(expCur.usd),
       diff: worstDiff != null ? money(worstDiff) : null,
@@ -290,7 +294,8 @@ export async function loadCashControlWeekSummary(week: string): Promise<CashDail
     });
   }
 
-  const weekTotalReceived = sumIlsChannelIntake(weekIntake);
+  const weekTotalReceivedIls = sumIlsChannelIntake(weekIntake);
+  const weekTotalReceivedUsd = sumUsdChannelIntake(weekIntake);
 
   dayRows.push({
     dateYmd: "",
@@ -300,7 +305,9 @@ export async function loadCashControlWeekSummary(week: string): Promise<CashDail
     countryLabel: CASH_CONTROL_COUNTRY_LABEL,
     intake: intakeToDto(weekIntake),
     drawer: drawerToDto(weekDrawer),
-    totalReceived: money(weekTotalReceived),
+    totalReceived: money(weekTotalReceivedIls),
+    totalReceivedIls: money(weekTotalReceivedIls),
+    totalReceivedUsd: money(weekTotalReceivedUsd),
     expensesIls: money(weekExpIls),
     expensesUsd: money(weekExpUsd),
     diff: null,
@@ -521,9 +528,14 @@ export async function persistCashDailyDrawer(input: {
   }
 
   const d = input.drawer;
-  const fieldValues = Object.fromEntries(
-    allCashControlChannels().map((channel) => [CHANNEL_DRAWER_FIELD[channel], dec(d[channel])]),
-  );
+  const fieldValues: Record<string, Prisma.Decimal | null> = {};
+  for (const channel of allCashControlChannels()) {
+    if (!Object.prototype.hasOwnProperty.call(d, channel)) continue;
+    fieldValues[CHANNEL_DRAWER_FIELD[channel]] = dec(d[channel]);
+  }
+  if (Object.keys(fieldValues).length === 0) {
+    return { ok: false, error: "לא נשלחו שדות לעדכון" };
+  }
   const createData = {
     countryCode: "TR" as const,
     weekCode: wk,

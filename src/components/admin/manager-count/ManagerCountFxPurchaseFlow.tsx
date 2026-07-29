@@ -388,24 +388,27 @@ export function ManagerCountFxPurchaseFlow({
                 </div>
                 <div className="mc-fx-pl-summary">
                   <div>
-                    <span>רווח מט&quot;ח</span>
-                    <strong dir="ltr" className="fc-num--profit">
-                      {fmtDailyMoney("ILS", allocation.totalProfitIls)}
-                    </strong>
-                  </div>
-                  <div>
-                    <span>הפסד מט&quot;ח</span>
-                    <strong dir="ltr" className="fc-num--loss">
-                      {fmtDailyMoney("ILS", allocation.totalLossIls)}
-                    </strong>
-                  </div>
-                  <div>
-                    <span>נטו</span>
-                    <strong dir="ltr">{fmtDailyMoney("ILS", allocation.netProfitIls)}</strong>
-                  </div>
-                  <div>
                     <span>דולר שנרכש</span>
                     <strong dir="ltr">{fmtDailyMoney("USD", allocation.usdReceived)}</strong>
+                  </div>
+                  <div>
+                    <span>יתרת ש&quot;ח לאחר הרכישה</span>
+                    <strong dir="ltr">{fmtDailyMoney("ILS", remainderAfter)}</strong>
+                  </div>
+                  <div>
+                    <span>רווח/הפסד כולל</span>
+                    <strong
+                      dir="ltr"
+                      className={
+                        allocation.netProfitIls > 0.005
+                          ? "fc-num--profit"
+                          : allocation.netProfitIls < -0.005
+                            ? "fc-num--loss"
+                            : undefined
+                      }
+                    >
+                      {fmtDailyMoney("ILS", allocation.netProfitIls)}
+                    </strong>
                   </div>
                 </div>
               </>

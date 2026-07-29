@@ -14,7 +14,10 @@ export type CashDailySummaryRowDto = {
   intake: Record<CashDailyMethodId, string>;
   /** התקבל — מספירת קופה */
   drawer: Partial<Record<CashDailyMethodId, string | null>>;
+  /** @deprecated — השתמשו ב-totalReceivedIls */
   totalReceived: string;
+  totalReceivedIls: string;
+  totalReceivedUsd: string;
   expensesIls: string;
   expensesUsd: string;
   diff: string | null;

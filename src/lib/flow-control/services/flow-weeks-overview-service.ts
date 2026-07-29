@@ -133,6 +133,7 @@ async function loadOneWeekOverview(weekCode: string): Promise<FlowWeekOverviewRo
 }
 
 export async function loadFlowWeeksOverview(weekCodes: string[]): Promise<FlowWeekOverviewRow[]> {
-  const results = await Promise.all(weekCodes.map((w) => loadOneWeekOverview(w)));
+  const unique = [...new Set(weekCodes.map((w) => w.trim()).filter(Boolean))];
+  const results = await Promise.all(unique.map((w) => loadOneWeekOverview(w)));
   return results.filter((r): r is FlowWeekOverviewRow => r != null);
 }

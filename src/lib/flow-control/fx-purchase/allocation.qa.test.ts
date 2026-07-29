@@ -5,8 +5,9 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   allocateFxIntakeReceipts,
+  appendCashControlPoolReceipt,
 } from "@/lib/flow-control/fx-purchase/allocation";
-import type { FxIntakeReceipt } from "@/lib/flow-control/fx-purchase/types";
+import type { CashControlSnapshot, FxIntakeReceipt } from "@/lib/flow-control/fx-purchase/types";
 
 function receipt(id: string, remainingIls: number): FxIntakeReceipt {
   return {
@@ -44,5 +45,25 @@ describe("QA: FX FIFO allocation", () => {
     assert.equal(preview.shortfallIls, 0);
     assert.equal(preview.lines.length, 3);
     assert.equal(preview.lines[2]?.ilsAmount, 300);
+  });
+
+  it("יתרה מספירת קופה ללא תקבולי Payment — אין shortfall", () => {
+    const snapshot: CashControlSnapshot = {
+      weekCode: "AH-200",
+      countedCashIls: 1234,
+      countedCashUsd: 0,
+      countedTransferIls: 0,
+      countedCreditIls: 0,
+      countedChecksIls: 0,
+      commissionUsd: 0,
+      commissionIls: 0,
+      fxPurchases: [],
+    };
+    const receipts = appendCashControlPoolReceipt([], snapshot, "PS");
+    assert.equal(receipts.length, 1);
+    assert.equal(receipts[0]?.remainingIls, 1234);
+    const preview = allocateFxIntakeReceipts(receipts, 1234, 3.5);
+    assert.equal(preview.shortfallIls, 0);
+    assert.equal(preview.lines[0]?.sourceLabel, "מזומן PS — ספירת קופה");
   });
 });

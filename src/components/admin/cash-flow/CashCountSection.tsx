@@ -1,7 +1,8 @@
 "use client";
 
 import { Pencil } from "lucide-react";
-import { CASH_DAILY_METHODS, type CashDailyMethodId } from "@/lib/cash-control-daily";
+import { CASH_DAILY_RECEIPT_COLUMNS, type CashDailyMethodId } from "@/lib/cash-control-daily";
+import { channelColLabels } from "@/lib/cash-control-channel";
 import { MethodIcon } from "@/components/admin/cash-flow/shared";
 
 export type CashCountSectionProps = {
@@ -34,27 +35,27 @@ export function CashCountSection({
         </span>
       </header>
       <div className="cc-count-form">
-        {CASH_DAILY_METHODS.map((m) => (
-          <label key={m.id} className="cc-count-field">
+        {CASH_DAILY_RECEIPT_COLUMNS.map((id) => (
+          <label key={id} className="cc-count-field">
             <span className="cc-count-field__lbl">
-              <MethodIcon method={m.id} size={14} /> {m.label}
+              <MethodIcon method={id} size={14} /> {channelColLabels()[id]}
             </span>
             {editable ? (
               <input
                 type="text"
                 inputMode="decimal"
                 className="cc-input"
-                value={valueOf(m.id)}
+                value={valueOf(id)}
                 disabled={saving}
                 placeholder="0"
-                onChange={(e) => onChange(m.id, e.target.value)}
-                onBlur={(e) => onBlurSave(m.id, e.target.value)}
+                onChange={(e) => onChange(id, e.target.value)}
+                onBlur={(e) => onBlurSave(id, e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") (e.target as HTMLInputElement).blur();
                 }}
               />
             ) : (
-              <span className="cc-count-readonly">{readOnlyValueOf(m.id) || "—"}</span>
+              <span className="cc-count-readonly">{readOnlyValueOf(id) || "—"}</span>
             )}
           </label>
         ))}

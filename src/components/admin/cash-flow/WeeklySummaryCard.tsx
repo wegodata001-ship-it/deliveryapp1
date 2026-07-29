@@ -2,12 +2,13 @@
 
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import {
-  CASH_DAILY_METHODS,
+  CASH_DAILY_RECEIPT_COLUMNS,
   fmtDailyMoney,
   channelCurrency,
   type CashDailyMethodId,
 } from "@/lib/cash-control-daily";
 import type { CashDailyWeekSummaryPayload } from "@/app/admin/cash-control/daily-types";
+import { channelColLabels } from "@/lib/cash-control-channel";
 import { MethodIcon, StatusIcon, num, statusLabel } from "@/components/admin/cash-flow/shared";
 
 function fmtCell(method: CashDailyMethodId, value: string): string {
@@ -74,17 +75,19 @@ export function WeeklySummaryCard({
           <table className="cc-table">
             <thead>
               <tr>
-                <th>יום</th>
+                <th>קוד שבוע</th>
                 <th>תאריך</th>
-                {CASH_DAILY_METHODS.map((m) => (
-                  <th key={m.id} className="cc-num">
+                <th>מדינה</th>
+                {CASH_DAILY_RECEIPT_COLUMNS.map((m) => (
+                  <th key={m} className="cc-num">
                     <span className="cc-th-icon" aria-hidden>
-                      <MethodIcon method={m.id} size={13} />
+                      <MethodIcon method={m} size={13} />
                     </span>{" "}
-                    {m.label}
+                    {channelColLabels()[m]}
                   </th>
                 ))}
-                <th className="cc-num">סך התקבל</th>
+                <th className="cc-num">סה&quot;כ התקבל ₪</th>
+                <th className="cc-num">סה&quot;כ התקבל $</th>
                 <th className="cc-num">הוצאות</th>
                 <th className="cc-num">הפרש</th>
                 <th>סטטוס</th>
@@ -104,15 +107,21 @@ export function WeeklySummaryCard({
                       if (e.key === "Enter" || e.key === " ") onSelectDay(row.dateYmd);
                     }}
                   >
-                    <td className="cc-daycell">{row.dayName}</td>
+                    <td className="cc-daycell" dir="ltr">
+                      {row.weekCode}
+                    </td>
                     <td>{row.dateDisplay}</td>
-                    {CASH_DAILY_METHODS.map((m) => (
-                      <td key={m.id} dir="ltr" className="cc-num">
-                        {fmtCell(m.id, row.intake[m.id])}
+                    <td>{row.countryLabel}</td>
+                    {CASH_DAILY_RECEIPT_COLUMNS.map((m) => (
+                      <td key={m} dir="ltr" className="cc-num">
+                        {fmtCell(m, row.intake[m])}
                       </td>
                     ))}
                     <td dir="ltr" className="cc-num cc-num--total">
-                      {fmtDailyMoney("ILS", num(row.totalReceived))}
+                      {fmtDailyMoney("ILS", num(row.totalReceivedIls ?? row.totalReceived))}
+                    </td>
+                    <td dir="ltr" className="cc-num cc-num--total">
+                      {fmtDailyMoney("USD", num(row.totalReceivedUsd ?? "0"))}
                     </td>
                     <td dir="ltr" className="cc-num">
                       {num(row.expensesIls) > 0 ? fmtDailyMoney("ILS", num(row.expensesIls)) : "—"}
@@ -131,16 +140,19 @@ export function WeeklySummaryCard({
               })}
               {totalRow ? (
                 <tr className="cc-row cc-row--total">
-                  <td colSpan={2}>
+                  <td colSpan={3}>
                     <strong>{totalRow.dateDisplay}</strong>
                   </td>
-                  {CASH_DAILY_METHODS.map((m) => (
-                    <td key={m.id} dir="ltr" className="cc-num">
-                      <strong>{fmtCell(m.id, totalRow.intake[m.id])}</strong>
+                  {CASH_DAILY_RECEIPT_COLUMNS.map((m) => (
+                    <td key={m} dir="ltr" className="cc-num">
+                      <strong>{fmtCell(m, totalRow.intake[m])}</strong>
                     </td>
                   ))}
                   <td dir="ltr" className="cc-num cc-num--total">
-                    <strong>{fmtDailyMoney("ILS", num(totalRow.totalReceived))}</strong>
+                    <strong>{fmtDailyMoney("ILS", num(totalRow.totalReceivedIls ?? totalRow.totalReceived))}</strong>
+                  </td>
+                  <td dir="ltr" className="cc-num cc-num--total">
+                    <strong>{fmtDailyMoney("USD", num(totalRow.totalReceivedUsd ?? "0"))}</strong>
                   </td>
                   <td dir="ltr" className="cc-num">
                     <strong>{fmtDailyMoney("ILS", num(totalRow.expensesIls))}</strong>

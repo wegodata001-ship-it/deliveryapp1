@@ -72,18 +72,6 @@ export function statusLabel(status: WeekRowStatus): string {
   return "חריג";
 }
 
-export function matchPercent(received: number, counted: number): number {
-  if (received <= 0.01 && counted <= 0.01) return 100;
-  if (received <= 0.01) return 0;
-  return Math.max(0, Math.min(100, Math.round((counted / received) * 100)));
-}
-
-export function matchTone(pct: number): "ok" | "warn" | "bad" {
-  if (pct >= 98) return "ok";
-  if (pct >= 90) return "warn";
-  return "bad";
-}
-
 export function filterWeeksByYear(rows: FlowWeekOverviewRow[], year: number | "all"): FlowWeekOverviewRow[] {
   if (year === "all") return rows;
   return rows.filter((r) => weekYear(r.week) === year);
@@ -108,6 +96,31 @@ export function filterWeeksByRange(
   return rows.filter((r) => set.has(r.week));
 }
 
+/** שורה אחת לכל week — מונע כפילויות מטעינה/רענון */
+export function dedupeOverviewByWeek(rows: FlowWeekOverviewRow[]): FlowWeekOverviewRow[] {
+  const map = new Map<string, FlowWeekOverviewRow>();
+  for (const row of rows) {
+    const wk = row.week.trim();
+    if (!wk) continue;
+    map.set(wk, row);
+  }
+  return [...map.values()].sort(
+    (a, b) => (parseAhWeekNumber(b.week) ?? 0) - (parseAhWeekNumber(a.week) ?? 0),
+  );
+}
+
+export function dedupeWeekCodes(codes: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of codes) {
+    const wk = raw.trim();
+    if (!wk || seen.has(wk)) continue;
+    seen.add(wk);
+    out.push(wk);
+  }
+  return out;
+}
+
 export type FlowRangeAggregate = {
   fromWeek: string;
   toWeek: string;
@@ -125,6 +138,51 @@ export type FlowRangeAggregate = {
   pendingWeekCount: number;
   okWeekCount: number;
 };
+
+/** סיכומי אמצעי תקבול מטבלת השבועות — לפי שורות מסוננות בלבד */
+export type ReceiptMethodTotals = {
+  cashIls: number;
+  cashUsd: number;
+  bankTransferIls: number;
+  creditIls: number;
+  checksIls: number;
+};
+
+export function aggregateReceiptMethodTotals(rows: FlowWeekOverviewRow[]): ReceiptMethodTotals {
+  let cashIls = 0;
+  let cashUsd = 0;
+  let bankTransferIls = 0;
+  let creditIls = 0;
+  let checksIls = 0;
+  for (const r of rows) {
+    cashIls += fcNum(r.receivedCashIls);
+    cashUsd += fcNum(r.receivedCashUsd);
+    bankTransferIls += fcNum(r.receivedBankTransferIls);
+    creditIls += fcNum(r.receivedCreditCardIls);
+    checksIls += fcNum(r.receivedChecksIls);
+  }
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  return {
+    cashIls: round2(cashIls),
+    cashUsd: round2(cashUsd),
+    bankTransferIls: round2(bankTransferIls),
+    creditIls: round2(creditIls),
+    checksIls: round2(checksIls),
+  };
+}
+
+/** סה״כ לטורקיה — כל אמצעי התקבול ללא המרת מטבע */
+export function aggregateTurkeyReceiptTotals(rows: FlowWeekOverviewRow[]): {
+  totalIls: number;
+  totalUsd: number;
+} {
+  const m = aggregateReceiptMethodTotals(rows);
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  return {
+    totalIls: round2(m.cashIls + m.bankTransferIls + m.creditIls + m.checksIls),
+    totalUsd: round2(m.cashUsd),
+  };
+}
 
 /** סיכום מצטבר מטבלת הסקירה — לתצוגת טווח שבועות */
 export function aggregateOverviewRange(rows: FlowWeekOverviewRow[]): FlowRangeAggregate | null {

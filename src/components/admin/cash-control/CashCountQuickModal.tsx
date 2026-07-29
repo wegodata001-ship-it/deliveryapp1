@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { saveCashDailyDrawerAction } from "@/app/admin/cash-control/save-drawer-action";
 import type { CashDailyDayDetailPayload } from "@/app/admin/cash-control/daily-types";
-import { CASH_DAILY_METHODS, type CashDailyMethodId } from "@/lib/cash-control-daily";
+import { CASH_DAILY_RECEIPT_COLUMNS, type CashDailyMethodId } from "@/lib/cash-control-daily";
+import { channelColLabels } from "@/lib/cash-control-channel";
 import { MethodIcon } from "@/components/admin/cash-flow/shared";
 import { dispatchCashControlRefresh } from "@/lib/cash-control-refresh-bus";
 
@@ -20,15 +21,15 @@ export type CashCountQuickModalProps = {
 
 function emptyDraft(): Partial<Record<CashDailyMethodId, string>> {
   const out: Partial<Record<CashDailyMethodId, string>> = {};
-  for (const m of CASH_DAILY_METHODS) out[m.id] = "";
+  for (const id of CASH_DAILY_RECEIPT_COLUMNS) out[id] = "";
   return out;
 }
 
 function draftFromDetail(detail: CashDailyDayDetailPayload | null): Partial<Record<CashDailyMethodId, string>> {
   if (!detail) return emptyDraft();
   const out = emptyDraft();
-  for (const m of CASH_DAILY_METHODS) {
-    out[m.id] = detail.drawer[m.id] ?? "";
+  for (const id of CASH_DAILY_RECEIPT_COLUMNS) {
+    out[id] = detail.drawer[id] ?? "";
   }
   return out;
 }
@@ -74,9 +75,9 @@ export function CashCountQuickModal({
     setSaving(true);
     try {
       const drawer: Partial<Record<CashDailyMethodId, string | null>> = {};
-      for (const m of CASH_DAILY_METHODS) {
-        const raw = (draft[m.id] ?? "").trim();
-        drawer[m.id] = raw === "" ? null : raw;
+      for (const id of CASH_DAILY_RECEIPT_COLUMNS) {
+        const raw = (draft[id] ?? "").trim();
+        drawer[id] = raw === "" ? null : raw;
       }
       const res = await saveCashDailyDrawerAction({
         week,
@@ -121,21 +122,21 @@ export function CashCountQuickModal({
             <p className="cc-muted">רק מנהל יכול לבצע ספירת קופה.</p>
           ) : (
             <div className="cash-count-quick__grid">
-              {CASH_DAILY_METHODS.map((m) => (
-                <label key={m.id} className="adm-cash-field cash-count-quick__field">
+              {CASH_DAILY_RECEIPT_COLUMNS.map((id) => (
+                <label key={id} className="adm-cash-field cash-count-quick__field">
                   <span className="cash-count-quick__label">
-                    <MethodIcon method={m.id} size={14} />
-                    {m.label}
+                    <MethodIcon method={id} size={14} />
+                    {channelColLabels()[id]}
                   </span>
                   <input
                     type="text"
                     inputMode="decimal"
                     className="cc-input"
-                    value={draft[m.id] ?? ""}
+                    value={draft[id] ?? ""}
                     placeholder="0"
                     dir="ltr"
                     disabled={saving}
-                    onChange={(e) => setDraft((prev) => ({ ...prev, [m.id]: e.target.value }))}
+                    onChange={(e) => setDraft((prev) => ({ ...prev, [id]: e.target.value }))}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") void save();
                     }}

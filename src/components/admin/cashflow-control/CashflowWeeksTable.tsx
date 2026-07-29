@@ -1,10 +1,13 @@
 "use client";
 
+import { useMemo } from "react";
 import type { FlowWeekOverviewRow } from "@/app/admin/cash-flow/flow-types";
 import {
+  dedupeOverviewByWeek,
   money,
   weekDateRange,
 } from "@/components/admin/cashflow-control/cashflow-control-helpers";
+import { CashflowWeekSummaryKpiStrip } from "@/components/admin/cashflow-control/CashflowWeekSummaryKpiStrip";
 
 export type CashflowWeeksTableProps = {
   rows: FlowWeekOverviewRow[];
@@ -25,6 +28,8 @@ export function CashflowWeeksTable({
   loadingMore = false,
   onLoadMore,
 }: CashflowWeeksTableProps) {
+  const displayRows = useMemo(() => dedupeOverviewByWeek(rows), [rows]);
+
   if (loading) {
     return (
       <div className="cfc-card cfc-table-card" aria-busy="true">
@@ -37,7 +42,7 @@ export function CashflowWeeksTable({
     );
   }
 
-  if (rows.length === 0) {
+  if (displayRows.length === 0) {
     return (
       <div className="cfc-card cfc-table-card">
         <p className="cfc-empty">אין שבועות להצגה</p>
@@ -56,8 +61,9 @@ export function CashflowWeeksTable({
     <div className="cfc-card cfc-table-card">
       <div className="cfc-summary-table-title">
         <strong>סיכום שבועי לפי אמצעי תקבול</strong>
-        <span>שורה אחת לכל שבוע</span>
+        <span>שורה אחת לכל שבוע · לחצו על כרטיס KPI לפירוט</span>
       </div>
+      <CashflowWeekSummaryKpiStrip rows={displayRows} />
       <div className="cfc-table-scroll">
         <table className="cfc-table cfc-week-summary-table">
           <thead>
@@ -73,7 +79,7 @@ export function CashflowWeeksTable({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => {
+            {displayRows.map((row) => {
               const selected = selectedWeek === row.week;
               return (
                 <tr

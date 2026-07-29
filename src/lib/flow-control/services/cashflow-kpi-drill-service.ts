@@ -5,7 +5,8 @@
 import { prisma } from "@/lib/prisma";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { cashControlWeekReconciliationPaymentsWhere } from "@/lib/cash-control-week-payments";
-import { paymentDayKeyJerusalem } from "@/lib/cash-control-daily";
+import { paymentDayKeyJerusalem, getDailyPaymentContributions, formatDailyDateDisplay } from "@/lib/cash-control-daily";
+import type { CashControlChannel } from "@/lib/cash-control-channel";
 import {
   computeFxProfitLossHistory,
   normalizeFxTrack,
@@ -18,6 +19,12 @@ import { formatAhWeekLabel } from "@/lib/weeks/ah-week";
 
 export type CashflowKpiKind =
   | "receipts"
+  | "cashIls"
+  | "cashUsd"
+  | "bankTransferIls"
+  | "creditIls"
+  | "checkIls"
+  | "turkeyReceipts"
   | "fxPs"
   | "fxProfit"
   | "expenses"
@@ -27,6 +34,8 @@ export type CashflowKpiKind =
 export type CashflowKpiDrillColumn = { key: string; header: string };
 export type CashflowKpiDrillRow = Record<string, string>;
 
+export type CashflowKpiDrillFooterTotal = { label: string; value: string };
+
 export type CashflowKpiDrillResult = {
   kind: CashflowKpiKind;
   title: string;
@@ -35,6 +44,8 @@ export type CashflowKpiDrillResult = {
   rows: CashflowKpiDrillRow[];
   totalLabel?: string;
   totalValue?: string;
+  /** סיכום כפול (₪ + $) — לכרטיס סה״כ לטורקיה */
+  footerTotals?: CashflowKpiDrillFooterTotal[];
 };
 
 function moneyIls(n: number): string {
@@ -125,6 +136,237 @@ async function loadReceipts(weeks: string[]): Promise<CashflowKpiDrillResult> {
     rows,
     totalLabel: "סה״כ קליטות",
     totalValue: moneyIls(Math.round(total * 100) / 100),
+  };
+}
+
+type ReceiptMethodDrillKind = "cashIls" | "cashUsd" | "bankTransferIls" | "creditIls" | "checkIls";
+
+const RECEIPT_METHOD_DRILL: Record<
+  ReceiptMethodDrillKind,
+  {
+    channel: CashControlChannel;
+    sourceLabel: string;
+    currency: "ILS" | "USD";
+    title: string;
+    totalLabel: string;
+  }
+> = {
+  cashIls: {
+    channel: "CASH_ILS",
+    sourceLabel: "מזומן",
+    currency: "ILS",
+    title: "סה\"כ מזומן ₪ — פירוט",
+    totalLabel: "סה\"כ מזומן",
+  },
+  cashUsd: {
+    channel: "CASH_USD",
+    sourceLabel: "מזומן",
+    currency: "USD",
+    title: "סה\"כ דולר — פירוט",
+    totalLabel: "סה\"כ דולר",
+  },
+  bankTransferIls: {
+    channel: "BANK_TRANSFER_ILS",
+    sourceLabel: "העברה",
+    currency: "ILS",
+    title: "סה\"כ העברות ₪ — פירוט",
+    totalLabel: "סה\"כ העברות",
+  },
+  creditIls: {
+    channel: "CREDIT_CARD_ILS",
+    sourceLabel: "אשראי",
+    currency: "ILS",
+    title: "סה\"כ אשראי ₪ — פירוט",
+    totalLabel: "סה\"כ אשראי",
+  },
+  checkIls: {
+    channel: "CHECK_ILS",
+    sourceLabel: "צ'קים",
+    currency: "ILS",
+    title: "סה\"כ צ'קים ₪ — פירוט",
+    totalLabel: "סה\"כ צ'קים",
+  },
+};
+
+async function loadReceiptMethodDrill(
+  kind: ReceiptMethodDrillKind,
+  weeks: string[],
+): Promise<CashflowKpiDrillResult> {
+  const cfg = RECEIPT_METHOD_DRILL[kind];
+  const payments = await prisma.payment.findMany({
+    where: {
+      OR: weeks.map((w) => cashControlWeekReconciliationPaymentsWhere(w)),
+    },
+    select: {
+      weekCode: true,
+      amountIls: true,
+      amountUsd: true,
+      paymentMethod: true,
+      usdPaymentMethod: true,
+      ilsPaymentMethod: true,
+      methodAllocations: { select: { method: true, currency: true, sourceAmount: true } },
+      intakeDate: true,
+      paymentDate: true,
+      createdAt: true,
+    },
+    take: 10000,
+  });
+
+  const agg = new Map<string, { week: string; dateYmd: string; amount: number }>();
+  for (const p of payments) {
+    const day = paymentDayKeyJerusalem(p);
+    const week = (p.weekCode || "").trim();
+    if (!week) continue;
+    for (const c of getDailyPaymentContributions(p)) {
+      if (c.column !== cfg.channel) continue;
+      const key = `${week}|${day}`;
+      const prev = agg.get(key);
+      if (prev) prev.amount = Math.round((prev.amount + c.amount) * 100) / 100;
+      else agg.set(key, { week, dateYmd: day, amount: Math.round(c.amount * 100) / 100 });
+    }
+  }
+
+  const rows: CashflowKpiDrillRow[] = [...agg.values()]
+    .filter((r) => r.amount > 0.009)
+    .sort((a, b) => a.week.localeCompare(b.week) || a.dateYmd.localeCompare(b.dateYmd))
+    .map((r) => ({
+      week: r.week,
+      date: formatDailyDateDisplay(r.dateYmd),
+      source: cfg.sourceLabel,
+      amount: cfg.currency === "USD" ? moneyUsd(r.amount) : moneyIls(r.amount),
+    }));
+
+  const total = [...agg.values()].reduce((s, r) => s + r.amount, 0);
+
+  return {
+    kind,
+    title: cfg.title,
+    subtitle: weekSubtitle(weeks),
+    columns: [
+      { key: "week", header: "שבוע" },
+      { key: "date", header: "תאריך" },
+      { key: "source", header: "מקור" },
+      { key: "amount", header: cfg.currency === "USD" ? "סכום ($)" : "סכום (₪)" },
+    ],
+    rows,
+    totalLabel: cfg.totalLabel,
+    totalValue:
+      cfg.currency === "USD"
+        ? moneyUsd(Math.round(total * 100) / 100)
+        : moneyIls(Math.round(total * 100) / 100),
+  };
+}
+
+const TURKEY_RECEIPT_CHANNELS: CashControlChannel[] = [
+  "CASH_ILS",
+  "CASH_USD",
+  "BANK_TRANSFER_ILS",
+  "CREDIT_CARD_ILS",
+  "CHECK_ILS",
+];
+
+function channelMethodLabel(channel: CashControlChannel): string {
+  return RECEIPT_METHOD_DRILL[
+    channel === "CASH_ILS"
+      ? "cashIls"
+      : channel === "CASH_USD"
+        ? "cashUsd"
+        : channel === "BANK_TRANSFER_ILS"
+          ? "bankTransferIls"
+          : channel === "CREDIT_CARD_ILS"
+            ? "creditIls"
+            : "checkIls"
+  ].sourceLabel;
+}
+
+function channelCurrency(channel: CashControlChannel): "ILS" | "USD" {
+  return channel.endsWith("_USD") ? "USD" : "ILS";
+}
+
+async function loadTurkeyReceiptsDrill(weeks: string[]): Promise<CashflowKpiDrillResult> {
+  const payments = await prisma.payment.findMany({
+    where: {
+      OR: weeks.map((w) => cashControlWeekReconciliationPaymentsWhere(w)),
+    },
+    select: {
+      weekCode: true,
+      amountIls: true,
+      amountUsd: true,
+      paymentMethod: true,
+      usdPaymentMethod: true,
+      ilsPaymentMethod: true,
+      methodAllocations: { select: { method: true, currency: true, sourceAmount: true } },
+      intakeDate: true,
+      paymentDate: true,
+      createdAt: true,
+    },
+    take: 10000,
+  });
+
+  const channelSet = new Set(TURKEY_RECEIPT_CHANNELS);
+  const agg = new Map<
+    string,
+    { week: string; dateYmd: string; channel: CashControlChannel; amount: number }
+  >();
+
+  for (const p of payments) {
+    const day = paymentDayKeyJerusalem(p);
+    const week = (p.weekCode || "").trim();
+    if (!week) continue;
+    for (const c of getDailyPaymentContributions(p)) {
+      if (!channelSet.has(c.column)) continue;
+      const key = `${week}|${day}|${c.column}`;
+      const prev = agg.get(key);
+      if (prev) prev.amount = Math.round((prev.amount + c.amount) * 100) / 100;
+      else
+        agg.set(key, {
+          week,
+          dateYmd: day,
+          channel: c.column,
+          amount: Math.round(c.amount * 100) / 100,
+        });
+    }
+  }
+
+  let totalIls = 0;
+  let totalUsd = 0;
+  const rows: CashflowKpiDrillRow[] = [...agg.values()]
+    .filter((r) => r.amount > 0.009)
+    .sort(
+      (a, b) =>
+        a.week.localeCompare(b.week) ||
+        a.dateYmd.localeCompare(b.dateYmd) ||
+        channelMethodLabel(a.channel).localeCompare(channelMethodLabel(b.channel), "he"),
+    )
+    .map((r) => {
+      const cur = channelCurrency(r.channel);
+      if (cur === "USD") totalUsd += r.amount;
+      else totalIls += r.amount;
+      return {
+        week: r.week,
+        date: formatDailyDateDisplay(r.dateYmd),
+        method: channelMethodLabel(r.channel),
+        currency: cur === "USD" ? "$" : "₪",
+        amount: cur === "USD" ? moneyUsd(r.amount) : moneyIls(r.amount),
+      };
+    });
+
+  return {
+    kind: "turkeyReceipts",
+    title: "סה\"כ לטורקיה — פירוט תקבולים",
+    subtitle: weekSubtitle(weeks),
+    columns: [
+      { key: "week", header: "שבוע" },
+      { key: "date", header: "תאריך" },
+      { key: "method", header: "אמצעי תשלום" },
+      { key: "currency", header: "מטבע" },
+      { key: "amount", header: "סכום" },
+    ],
+    rows,
+    footerTotals: [
+      { label: "סה\"כ ₪", value: moneyIls(Math.round(totalIls * 100) / 100) },
+      { label: "סה\"כ $", value: moneyUsd(Math.round(totalUsd * 100) / 100) },
+    ],
   };
 }
 
@@ -343,6 +585,14 @@ export async function loadCashflowKpiDrill(
   switch (kind) {
     case "receipts":
       return loadReceipts(weeks);
+    case "cashIls":
+    case "cashUsd":
+    case "bankTransferIls":
+    case "creditIls":
+    case "checkIls":
+      return loadReceiptMethodDrill(kind, weeks);
+    case "turkeyReceipts":
+      return loadTurkeyReceiptsDrill(weeks);
     case "fxPs":
       return loadFxPs(weeks);
     case "fxProfit":

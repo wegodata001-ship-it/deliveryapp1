@@ -9,7 +9,7 @@ export const INTAKE_METHOD_OPTIONS: { code: IntakeMethodCode; labelHe: string; c
   { code: "USD", labelHe: "דולר", currency: "USD" },
   { code: "BIT", labelHe: "Bit", currency: "ILS" },
   { code: "PAYBOX", labelHe: "PayBox", currency: "ILS" },
-  { code: "OTHER", labelHe: "אחר", currency: "ILS" },
+  { code: "OTHER", labelHe: "אחר", currency: "USD" },
 ];
 
 export const INTAKE_FEE_OPTIONS: {
@@ -59,6 +59,6 @@ export function mapIntakeMethodToPaymentFields(method: IntakeMethodCode): {
       return { paymentMethod: "OTHER", usdPaymentMethod: null, ilsPaymentMethod: "PAYBOX" };
     case "OTHER":
     default:
-      return { paymentMethod: "OTHER", usdPaymentMethod: null, ilsPaymentMethod: "OTHER" };
+      return { paymentMethod: "OTHER", usdPaymentMethod: "OTHER", ilsPaymentMethod: null };
   }
 }

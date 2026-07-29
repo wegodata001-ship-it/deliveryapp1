@@ -12,6 +12,7 @@ import {
   emptyDailyIntake,
   formatDailyDateDisplay,
   sumIlsChannelIntake,
+  sumUsdChannelIntake,
   type CashDailyDrawerValues,
   type CashDailyIntakeTotals,
   type CashDailyMethodId,
@@ -166,7 +167,8 @@ export async function loadFlowWeekApprovedSummary(week: string): Promise<CashDai
     weekDrawer = sumDrawer(weekDrawer, drawer);
     const totals = drawerToTotals(drawer);
     /** סה״כ ספירה (drawer) — לא קליטת תשלום */
-    const totalReceived = sumIlsChannelIntake(totals);
+    const totalReceivedIls = sumIlsChannelIntake(totals);
+    const totalReceivedUsd = sumUsdChannelIntake(totals);
     const saved = hasDrawerData(drawer);
 
     dayRows.push({
@@ -180,7 +182,9 @@ export async function loadFlowWeekApprovedSummary(week: string): Promise<CashDai
         string
       >,
       drawer: drawerToDto(drawer),
-      totalReceived: money(totalReceived),
+      totalReceived: money(totalReceivedIls),
+      totalReceivedIls: money(totalReceivedIls),
+      totalReceivedUsd: money(totalReceivedUsd),
       expensesIls: money(0),
       expensesUsd: money(0),
       diff: null,
@@ -189,7 +193,8 @@ export async function loadFlowWeekApprovedSummary(week: string): Promise<CashDai
   }
 
   const weekTotals = drawerToTotals(weekDrawer);
-  const weekTotalReceived = sumIlsChannelIntake(weekTotals);
+  const weekTotalReceivedIls = sumIlsChannelIntake(weekTotals);
+  const weekTotalReceivedUsd = sumUsdChannelIntake(weekTotals);
 
   dayRows.push({
     dateYmd: "",
@@ -202,7 +207,9 @@ export async function loadFlowWeekApprovedSummary(week: string): Promise<CashDai
       string
     >,
     drawer: drawerToDto(weekDrawer),
-    totalReceived: money(weekTotalReceived),
+    totalReceived: money(weekTotalReceivedIls),
+    totalReceivedIls: money(weekTotalReceivedIls),
+    totalReceivedUsd: money(weekTotalReceivedUsd),
     expensesIls: money(0),
     expensesUsd: money(0),
     diff: null,

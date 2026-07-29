@@ -45,6 +45,7 @@ import { assignZoneWithLocationPromptAction } from "@/app/admin/shipments/locati
 import { sameShipmentLocality } from "@/lib/shipment-zone-locality";
 import { ShipmentPaymentModal } from "@/components/admin/shipments/ShipmentPaymentModal";
 import { ShipmentBatchImportModal } from "@/components/admin/shipments/ShipmentBatchImportModal";
+import { ShipmentDeliveryFeeImportModal } from "@/components/admin/shipments/ShipmentDeliveryFeeImportModal";
 import { FixLocationModal } from "@/components/admin/shipments/FixLocationModal";
 import { ShipmentRecordsEditableTable } from "@/components/admin/shipments/ShipmentRecordsEditableTable";
 import { CourierPdfModal } from "@/components/admin/shipments/CourierPdfModal";
@@ -191,6 +192,7 @@ export function ShipmentBatchClient({
   const [paymentRecord, setPaymentRecord] = useState<ShipmentRecordDto | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [feePricingOpen, setFeePricingOpen] = useState(false);
   const [courierPdfOpen, setCourierPdfOpen] = useState(false);
   const [customPdfOpen, setCustomPdfOpen] = useState(false);
   const [debtCloseOpen, setDebtCloseOpen] = useState(false);
@@ -706,6 +708,15 @@ export function ShipmentBatchClient({
         <button
           type="button"
           className="shp-btn shp-btn--secondary shp-btn--sm"
+          onClick={() => setFeePricingOpen(true)}
+          title="ייבוא תמחור דמי משלוח לפי קוד לקוח וסך קרטונים"
+        >
+          <CircleDollarSign size={14} />
+          הוסף תמחור דמי משלוח
+        </button>
+        <button
+          type="button"
+          className="shp-btn shp-btn--secondary shp-btn--sm"
           disabled={exportBusy || filteredRecords.length === 0}
           onClick={() => void handleExportExcel()}
         >
@@ -1084,6 +1095,18 @@ export function ShipmentBatchClient({
           void refresh();
         }}
       />
+
+      {feePricingOpen ? (
+        <ShipmentDeliveryFeeImportModal
+          batchId={batch.id}
+          shipmentLabel={batchShipmentLabel(batch)}
+          onClose={() => setFeePricingOpen(false)}
+          onDone={() => {
+            setSuccess("תמחור דמי משלוח עודכן בהצלחה");
+            void refresh();
+          }}
+        />
+      ) : null}
 
       {courierPdfOpen && (
         <CourierPdfModal

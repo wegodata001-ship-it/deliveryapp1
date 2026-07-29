@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   computeFlowWeekSummary,
   computeWeekIlsBalanceAfterOps,
+  computeFxProfitLoss,
   computeFxProfitLossHistory,
   weightedIntakeRateFromAllocations,
 } from "@/lib/flow-control/flow-calculation-service";
@@ -123,5 +124,58 @@ describe("רווח שער — קליטה מול רכישה", () => {
     assert.equal(rows[0]!.purchaseRate, 4.03);
     assert.ok((rows[0]!.rateDiff ?? 0) > 0.2);
     assert.ok(rows[0]!.profitIls > 0);
+  });
+
+  it("ללא intakeAllocations — אין רווח/הפסד (לא לפי עלות רכישה בלבד)", () => {
+    const p: FxPurchaseRecord = {
+      id: "fx-no-match",
+      ilsAmount: 2000,
+      usdReceived: 500,
+      rate: 4.03,
+      remainderCashIls: 0,
+      remainderBankIls: 0,
+      createdAt: "2026-07-01T12:00:00.000Z",
+    };
+    const summary = computeFxProfitLoss([p]);
+    assert.equal(summary.totalProfitIls, 0);
+    assert.equal(summary.totalLossIls, 0);
+
+    const rows = computeFxProfitLossHistory([p]);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.profitIls, 0);
+    assert.equal(rows[0]!.lossIls, 0);
+    assert.equal(rows[0]!.usdReceived, 0);
+    assert.equal(rows[0]!.intakeRate, null);
+  });
+
+  it("computeFxProfitLoss עם הקצאה — זהה ל-history", () => {
+    const p: FxPurchaseRecord = {
+      id: "fx1",
+      ilsAmount: 2000,
+      usdReceived: 500,
+      rate: 4.03,
+      remainderCashIls: 0,
+      remainderBankIls: 0,
+      createdAt: "2026-07-01T12:00:00.000Z",
+      intakeAllocations: [
+        {
+          paymentId: "p1",
+          orderId: null,
+          orderNumber: "TR-1",
+          dateYmd: "2026-07-01",
+          dateLabel: "01/07/2026",
+          sourceLabel: "TR-1",
+          ilsAmount: 2000,
+          intakeRate: 3.82,
+          purchaseRate: 4.03,
+          profitIls: 104.22,
+        },
+      ],
+      intakeProfitIls: 104.22,
+      intakeLossIls: 0,
+    };
+    const summary = computeFxProfitLoss([p]);
+    assert.ok(summary.totalProfitIls > 100);
+    assert.equal(summary.totalLossIls, 0);
   });
 });

@@ -29,6 +29,47 @@ export type ShipmentRecordExpenseDto = {
   createdAt: string;
 };
 
+export type ShipmentBatchExpenseCategory =
+  | "FUEL"
+  | "ROAD6"
+  | "PORT"
+  | "STORAGE"
+  | "TRANSPORT"
+  | "UNLOADING"
+  | "OTHER";
+
+export const SHIPMENT_BATCH_EXPENSE_LABELS: Record<ShipmentBatchExpenseCategory, string> = {
+  FUEL: "דלק",
+  ROAD6: "כביש 6",
+  PORT: "נמל",
+  STORAGE: "אחסנה",
+  TRANSPORT: "הובלה",
+  UNLOADING: "פריקה",
+  OTHER: "אחר",
+};
+
+export type ShipmentBatchExpenseDto = {
+  id: string;
+  batchId: string;
+  category: string;
+  categoryLabel: string;
+  amount: number;
+  currency: "ILS" | "USD";
+  notes: string | null;
+  paymentMethod: string | null;
+  paymentMethodLabel: string | null;
+  expenseDate: string;
+  createdAt: string;
+};
+
+export type ShipmentBatchExpenseSummary = {
+  batchId: string;
+  expenses: ShipmentBatchExpenseDto[];
+  totalIls: number;
+  totalUsd: number;
+  count: number;
+};
+
 // ─── KPI cards ───────────────────────────────────────────────────────────────
 
 export type ShipmentKpis = {
@@ -172,6 +213,8 @@ export type ShipmentControlPayload = {
   byZone: ZoneSummary[];
   exceptions: ShipmentException[];
   batches: { id: string; batchNumber: string; containerNumber: string | null }[];
+  /** הוצאות קונטיינר/אצוות לפי הסינון הפעיל */
+  batchExpenses: ShipmentBatchExpenseSummary[];
   zones: { id: string; name: string }[];
   /** Unique courier names present in the filtered records (for filter dropdown). */
   couriers: string[];

@@ -1,12 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Calculator,
-  ChevronDown,
-  RefreshCw,
-  TrendingUp,
-} from "lucide-react";
+import { Calculator, RefreshCw, TrendingUp } from "lucide-react";
 import { ACTIVE_WORK_WEEK_CODE } from "@/lib/active-work-week";
 import { parseAhWeekNumber, toAhWeekCode } from "@/lib/weeks/ah-week-nav";
 import type { CashFlowCapabilities } from "@/app/admin/cash-flow/types";
@@ -18,16 +13,13 @@ import {
   type CashControlRefreshDetail,
 } from "@/lib/cash-control-refresh-bus";
 import { CashflowWeeksTable } from "@/components/admin/cashflow-control/CashflowWeeksTable";
-import { CashflowWeekCards } from "@/components/admin/cashflow-control/CashflowWeekCards";
 import { CashflowRangeSummary } from "@/components/admin/cashflow-control/CashflowRangeSummary";
-import { ExchangeProfitLossChart } from "@/components/admin/flow-control/ExchangeProfitLossChart";
-import { ExchangeProfitLossHistoryTable } from "@/components/admin/flow-control/ExchangeProfitLossHistoryTable";
-import { ExchangeProfitModal } from "@/components/admin/flow-control/exchange-profit/ExchangeProfitModal";
-import type { ExchangeProfitPeriodFilter } from "@/app/admin/cash-flow/exchange-profit-types";
 import { FlowWeekTablesSection } from "@/components/admin/flow-control/tables/FlowWeekTablesSection";
 import { FlowWeekStatusBadge } from "@/components/admin/flow-control/dashboard/FlowWeekStatusBadge";
 import {
   aggregateOverviewRange,
+  dedupeOverviewByWeek,
+  dedupeWeekCodes,
   filterWeeksByRange,
   filterWeeksByYear,
   uniqueYears,
@@ -58,10 +50,7 @@ function weekCodesFromActive(count: number, oldestAlreadyLoaded?: number | null)
 }
 
 function mergeWeekRows(prev: FlowWeekOverviewRow[], next: FlowWeekOverviewRow[]): FlowWeekOverviewRow[] {
-  const map = new Map<string, FlowWeekOverviewRow>();
-  for (const r of prev) map.set(r.week, r);
-  for (const r of next) map.set(r.week, r);
-  return [...map.values()].sort((a, b) => (parseAhWeekNumber(b.week) ?? 0) - (parseAhWeekNumber(a.week) ?? 0));
+  return dedupeOverviewByWeek([...prev, ...next]);
 }
 
 /** אפשרויות בחירה — מהשבוע הפעיל אחורה */
@@ -111,35 +100,20 @@ export function CashflowControlScreen({
     ? Number(cfcFilterValues.year)
     : "all";
   const showEmpty = (cfcFilterValues.showEmpty || "1") !== "0";
-  const [reportsOpen, setReportsOpen] = useState(false);
   const [varianceOpen, setVarianceOpen] = useState(false);
 
   const [drill, setDrill] = useState<FlowWeekDrillPayload | null>(null);
   const [drillLoading, setDrillLoading] = useState(false);
   const [managerCountOpen, setManagerCountOpen] = useState(false);
-  const [profitModalOpen, setProfitModalOpen] = useState(false);
-  const [profitPeriodFilter, setProfitPeriodFilter] = useState<ExchangeProfitPeriodFilter | null>(
-    null,
-  );
   const drillCacheRef = useRef<Map<string, FlowWeekDrillPayload>>(new Map());
   const detailRef = useRef<HTMLDivElement>(null);
   const loadedCodesRef = useRef<string[]>([]);
-
-  const openProfitAll = useCallback(() => {
-    setProfitPeriodFilter(null);
-    setProfitModalOpen(true);
-  }, []);
-
-  const openProfitPeriod = useCallback((filter: ExchangeProfitPeriodFilter) => {
-    setProfitPeriodFilter(filter);
-    setProfitModalOpen(true);
-  }, []);
 
   const ensureWeeksLoaded = useCallback(async (codes: string[]) => {
     const missing = codes.filter((c) => !loadedCodesRef.current.includes(c));
     if (missing.length === 0) return;
     const data = await getFlowWeeksOverviewAction(missing);
-    loadedCodesRef.current = [...loadedCodesRef.current, ...missing];
+    loadedCodesRef.current = dedupeWeekCodes([...loadedCodesRef.current, ...missing]);
     setOverview((prev) => mergeWeekRows(prev, data.weeks));
     const oldest = Math.min(
       ...loadedCodesRef.current.map((c) => parseAhWeekNumber(c) ?? 1),
@@ -148,14 +122,15 @@ export function CashflowControlScreen({
   }, []);
 
   const refreshVisible = useCallback(async () => {
-    const codes =
+    const codes = dedupeWeekCodes(
       loadedCodesRef.current.length > 0
         ? loadedCodesRef.current
-        : weekCodesFromActive(INITIAL_WEEKS);
+        : weekCodesFromActive(INITIAL_WEEKS),
+    );
     setLoading(true);
     const data = await getFlowWeeksOverviewAction(codes);
     loadedCodesRef.current = codes;
-    setOverview(data.weeks);
+    setOverview(dedupeOverviewByWeek(data.weeks));
     const oldest = parseAhWeekNumber(codes[codes.length - 1] ?? "") ?? 1;
     setHasMoreWeeks(oldest > 1);
     setLoading(false);
@@ -174,8 +149,8 @@ export function CashflowControlScreen({
         setLoading(true);
         const data = await getFlowWeeksOverviewAction(codes);
         if (cancelled) return;
-        loadedCodesRef.current = codes;
-        setOverview(data.weeks);
+        loadedCodesRef.current = dedupeWeekCodes(codes);
+        setOverview(dedupeOverviewByWeek(data.weeks));
         const oldest = parseAhWeekNumber(codes[codes.length - 1] ?? "") ?? 1;
         setHasMoreWeeks(oldest > 1);
         setLoading(false);
@@ -212,7 +187,7 @@ export function CashflowControlScreen({
     setLoadingMore(true);
     try {
       const data = await getFlowWeeksOverviewAction(nextCodes);
-      loadedCodesRef.current = [...current, ...nextCodes];
+      loadedCodesRef.current = dedupeWeekCodes([...current, ...nextCodes]);
       setOverview((prev) => mergeWeekRows(prev, data.weeks));
       const newOldest = parseAhWeekNumber(nextCodes[nextCodes.length - 1] ?? "") ?? 1;
       setHasMoreWeeks(newOldest > 1);
@@ -272,7 +247,7 @@ export function CashflowControlScreen({
     let rows = filterWeeksByYear(overview, yearFilter);
     rows = filterWeeksByRange(rows, fromWeek, toWeek);
     if (!showEmpty) rows = rows.filter((r) => r.hasData);
-    return rows;
+    return dedupeOverviewByWeek(rows);
   }, [overview, yearFilter, fromWeek, toWeek, showEmpty]);
 
   const rangeAgg = useMemo(() => aggregateOverviewRange(filteredRows), [filteredRows]);
@@ -462,37 +437,6 @@ export function CashflowControlScreen({
               varianceOpenExternal={varianceOpen}
               onVarianceOpenChange={setVarianceOpen}
             />
-
-            <details
-              className="cfc-reports-acc"
-              open={reportsOpen}
-              onToggle={(e) => setReportsOpen((e.target as HTMLDetailsElement).open)}
-            >
-              <summary className="cfc-reports-acc__summary">
-                <ChevronDown size={18} className="cfc-reports-acc__chevron" aria-hidden />
-                <span>דוחות וגרפים</span>
-                <span className="cfc-reports-acc__hint">כרטיסי סיכום · גרף רווח</span>
-              </summary>
-              <div className="cfc-reports-acc__body">
-                <CashflowWeekCards
-                  row={selectedRow}
-                  drill={drill}
-                  loading={drillLoading}
-                  onProfitClick={openProfitAll}
-                />
-                {drill?.flow?.fxProfitLoss ? (
-                  <div className="cfc-fx-panel">
-                    <ExchangeProfitLossChart
-                      summary={drill.flow.fxProfitLoss}
-                      history={drill.flow.fxProfitLossHistory ?? []}
-                      onOpenProfitDetail={openProfitAll}
-                      onOpenPeriod={openProfitPeriod}
-                    />
-                    <ExchangeProfitLossHistoryTable rows={drill.flow.fxProfitLossHistory ?? []} />
-                  </div>
-                ) : null}
-              </div>
-            </details>
           </>
         ) : (
           <div className="cfc-card">
@@ -511,15 +455,6 @@ export function CashflowControlScreen({
         onSaved={() => {
           setManagerCountOpen(false);
           refresh();
-        }}
-      />
-      <ExchangeProfitModal
-        open={profitModalOpen}
-        week={selectedWeek}
-        periodFilter={profitPeriodFilter}
-        onClose={() => {
-          setProfitModalOpen(false);
-          setProfitPeriodFilter(null);
         }}
       />
     </div>

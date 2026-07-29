@@ -27,7 +27,7 @@ export type CashflowKpiDrillModalProps = {
 
 type DrillView = Pick<
   CashflowKpiDrillResult,
-  "title" | "subtitle" | "columns" | "rows" | "totalLabel" | "totalValue"
+  "title" | "subtitle" | "columns" | "rows" | "totalLabel" | "totalValue" | "footerTotals"
 >;
 
 function weeksDrill(kind: "weeksOk" | "weeksAlert", weekRows: FlowWeekOverviewRow[]): DrillView {
@@ -160,7 +160,12 @@ export function CashflowKpiDrillModal({
                   {data.rows.map((row, i) => (
                     <tr key={`${row.week ?? ""}-${i}`}>
                       {data.columns.map((c) => (
-                        <td key={c.key} dir={c.key === "week" || c.key === "amount" ? "ltr" : undefined}>
+                        <td
+                          key={c.key}
+                          dir={
+                            c.key === "week" || c.key === "amount" || c.key === "currency" ? "ltr" : undefined
+                          }
+                        >
                           {row[c.key] ?? "—"}
                         </td>
                       ))}
@@ -172,7 +177,16 @@ export function CashflowKpiDrillModal({
           )}
         </div>
 
-        {data?.totalLabel && !loading ? (
+        {!loading && data?.footerTotals && data.footerTotals.length > 0 ? (
+          <footer className="cfc-kpi-modal__foot cfc-kpi-modal__foot--dual">
+            {data.footerTotals.map((item) => (
+              <div key={item.label} className="cfc-kpi-modal__foot-item">
+                <span>{item.label}</span>
+                <strong dir="ltr">{item.value}</strong>
+              </div>
+            ))}
+          </footer>
+        ) : data?.totalLabel && !loading ? (
           <footer className="cfc-kpi-modal__foot">
             <span>{data.totalLabel}</span>
             <strong dir="ltr">{data.totalValue}</strong>

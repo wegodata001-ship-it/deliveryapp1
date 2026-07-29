@@ -621,6 +621,52 @@ export function weightedIntakeRateFromAllocations(
   return round2(weighted / ils);
 }
 
+function intakeLineFxPl(ilsAmount: number, intakeRate: number, purchaseRate: number): number {
+  if (ilsAmount <= 0 || intakeRate <= 0 || purchaseRate <= 0) return 0;
+  return round2((ilsAmount * (purchaseRate - intakeRate)) / purchaseRate);
+}
+
+/** רווח/הפסד מט״ח — רק על תקבולים שהוקצו לרכישה (FIFO matching). ללא הקצאה → 0. */
+export function computePurchaseMatchedFxPl(p: FxPurchaseRecord): {
+  profitIls: number;
+  lossIls: number;
+  intakeRate: number | null;
+  matchedIls: number;
+  matchedUsd: number;
+} {
+  const allocations = (p.intakeAllocations ?? []).filter(
+    (a) => a.ilsAmount > 0.005 && a.intakeRate > 0 && a.purchaseRate > 0,
+  );
+  if (allocations.length === 0) {
+    return { profitIls: 0, lossIls: 0, intakeRate: null, matchedIls: 0, matchedUsd: 0 };
+  }
+
+  let profitIls = 0;
+  let lossIls = 0;
+  let matchedIls = 0;
+  for (const a of allocations) {
+    matchedIls += a.ilsAmount;
+    const pl =
+      Number.isFinite(a.profitIls) && Math.abs(a.profitIls) > 0.005
+        ? a.profitIls
+        : intakeLineFxPl(a.ilsAmount, a.intakeRate, a.purchaseRate);
+    if (pl > 0.005) profitIls += pl;
+    else if (pl < -0.005) lossIls += Math.abs(pl);
+  }
+
+  matchedIls = round2(matchedIls);
+  const purchaseRate = p.rate > 0 ? p.rate : allocations[0]!.purchaseRate;
+  const matchedUsd = purchaseRate > 0 ? round2(matchedIls / purchaseRate) : 0;
+
+  return {
+    profitIls: round2(profitIls),
+    lossIls: round2(lossIls),
+    intakeRate: weightedIntakeRateFromAllocations(allocations),
+    matchedIls,
+    matchedUsd,
+  };
+}
+
 /** היסטוריית רווח/הפסד לפי רכישה — לטבלת בקרה ניהולית */
 export function computeFxProfitLossHistory(purchases: FxPurchaseRecord[]): FxProfitLossHistoryRow[] {
   const sorted = [...purchases].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
@@ -630,25 +676,12 @@ export function computeFxProfitLossHistory(purchases: FxPurchaseRecord[]): FxPro
 
   sorted.forEach((p, idx) => {
     const avgRateBefore = cumulativeUsd > 0 ? round2(cumulativeIls / cumulativeUsd) : p.rate;
-    const intakeRate = weightedIntakeRateFromAllocations(p.intakeAllocations);
+    const matched = computePurchaseMatchedFxPl(p);
+    const intakeRate = matched.intakeRate;
     const rateDiff =
       intakeRate != null && p.rate > 0 ? round2(p.rate - intakeRate) : null;
-
-    // עדיפות: רווח/הפסד מהקצאת תקבולים (שער קליטה מול שער רכישה)
-    let profitIls = 0;
-    let lossIls = 0;
-    if (p.intakeAllocations?.length) {
-      const fromMeta = round2((p.intakeProfitIls ?? 0) - (p.intakeLossIls ?? 0));
-      const fromLines = round2(p.intakeAllocations.reduce((s, a) => s + (a.profitIls ?? 0), 0));
-      const allocNet = Math.abs(fromMeta) > 0.005 ? fromMeta : fromLines;
-      if (allocNet > 0.005) profitIls = allocNet;
-      else if (allocNet < -0.005) lossIls = round2(Math.abs(allocNet));
-    } else {
-      const fairIls = p.usdReceived * avgRateBefore;
-      const diff = fairIls - p.ilsAmount;
-      profitIls = diff > 0.005 ? round2(diff) : 0;
-      lossIls = diff < -0.005 ? round2(Math.abs(diff)) : 0;
-    }
+    const profitIls = matched.profitIls;
+    const lossIls = matched.lossIls;
 
     const dt = new Date(p.createdAt);
     const y = dt.getFullYear();
@@ -660,13 +693,13 @@ export function computeFxProfitLossHistory(purchases: FxPurchaseRecord[]): FxPro
       dateLabel: dt.toLocaleDateString("he-IL"),
       timeLabel: dt.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", hour12: false }),
       dateYmd: `${y}-${m}-${d}`,
-      usdReceived: round2(p.usdReceived),
-      ilsAmount: round2(p.ilsAmount),
+      usdReceived: matched.matchedUsd > 0 ? matched.matchedUsd : 0,
+      ilsAmount: matched.matchedIls > 0 ? matched.matchedIls : 0,
       intakeRate,
       purchaseRate: p.rate,
       rateDiff,
       avgRateBefore,
-      saleRate: null,
+      saleRate: intakeRate,
       profitIls,
       lossIls,
       netIls: round2(profitIls - lossIls),
@@ -693,7 +726,7 @@ export function computeFlowWeekKpis(input: FlowWeekKpiInput): FlowWeekKpiCards {
   };
 }
 
-/** חישוב רווח/הפסד לפי שער ממוצע מצטבר לפני כל רכישה */
+/** חישוב רווח/הפסד — רק על דולרים שהותאמו לתקבולים (intakeAllocations) */
 export function computeFxProfitLoss(purchases: FxPurchaseRecord[]): FxProfitLossSummary {
   const sorted = [...purchases].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   let cumulativeUsd = 0;
@@ -702,11 +735,9 @@ export function computeFxProfitLoss(purchases: FxPurchaseRecord[]): FxProfitLoss
   let totalLossIls = 0;
 
   for (const p of sorted) {
-    const avgRate = cumulativeUsd > 0 ? cumulativeIls / cumulativeUsd : p.rate;
-    const fairIls = p.usdReceived * avgRate;
-    const diff = fairIls - p.ilsAmount;
-    if (diff > 0.005) totalProfitIls += diff;
-    else if (diff < -0.005) totalLossIls += Math.abs(diff);
+    const matched = computePurchaseMatchedFxPl(p);
+    totalProfitIls += matched.profitIls;
+    totalLossIls += matched.lossIls;
     cumulativeUsd += p.usdReceived;
     cumulativeIls += p.ilsAmount;
   }

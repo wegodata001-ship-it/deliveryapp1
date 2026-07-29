@@ -15,6 +15,14 @@ function fmtCell(method: CashDailyMethodId, value: string): string {
   return fmtDailyMoney(channelCurrency(method), n);
 }
 
+function totalIls(row: CashDailySummaryRowDto): string {
+  return row.totalReceivedIls ?? row.totalReceived;
+}
+
+function totalUsd(row: CashDailySummaryRowDto): string {
+  return row.totalReceivedUsd ?? "0";
+}
+
 export type PaymentSummaryTableProps = {
   dayRows: CashDailySummaryRowDto[];
   totalRow: CashDailySummaryRowDto | undefined;
@@ -26,7 +34,9 @@ export function PaymentSummaryTable({ dayRows, totalRow }: PaymentSummaryTablePr
       <table className="fc-table">
         <thead>
           <tr className="fc-table__group-row">
-            <th colSpan={4} className="fc-col--meta">מידע</th>
+            <th colSpan={3} className="fc-col--meta">
+              מידע
+            </th>
             {FLOW_PAYMENT_COLUMNS.map((m) => (
               <th key={m} className={FLOW_COLUMN_CLASS[m]}>
                 <span className="fc-group-head">
@@ -35,43 +45,47 @@ export function PaymentSummaryTable({ dayRows, totalRow }: PaymentSummaryTablePr
                 </span>
               </th>
             ))}
-            <th className="fc-col--total">סה&quot;כ התקבל</th>
+            <th colSpan={2} className="fc-col--total">
+              סה&quot;כ התקבל
+            </th>
           </tr>
           <tr>
-            <th className="fc-col--meta">יום</th>
+            <th className="fc-col--meta">קוד שבוע</th>
             <th className="fc-col--meta">תאריך</th>
-            <th className="fc-col--meta">מדינה</th>
-            <th className="fc-col--meta fc-col--sep">קוד שבוע</th>
+            <th className="fc-col--meta fc-col--sep">מדינה</th>
             {FLOW_PAYMENT_COLUMNS.map((m) => (
               <th key={`h-${m}`} className={`fc-num ${FLOW_COLUMN_CLASS[m]}`}>
-                התקבל
+                {COL_LABEL[m]}
               </th>
             ))}
             <th className="fc-num fc-col--total">₪</th>
+            <th className="fc-num fc-col--total">$</th>
           </tr>
         </thead>
         <tbody>
           {dayRows.map((row) => (
             <tr key={row.dateYmd} className="fc-row">
-              <td className="fc-col--meta fc-daycell">{row.dayName}</td>
-              <td className="fc-col--meta">{row.dateDisplay}</td>
-              <td className="fc-col--meta">{row.countryLabel}</td>
               <td className="fc-col--meta fc-col--sep" dir="ltr">
                 {row.weekCode}
               </td>
+              <td className="fc-col--meta">{row.dateDisplay}</td>
+              <td className="fc-col--meta">{row.countryLabel}</td>
               {FLOW_PAYMENT_COLUMNS.map((m) => (
                 <td key={`${row.dateYmd}-${m}`} dir="ltr" className={`fc-num ${FLOW_COLUMN_CLASS[m]}`}>
                   {fmtCell(m, row.intake[m])}
                 </td>
               ))}
               <td dir="ltr" className="fc-num fc-col--total fc-num--bold">
-                {fmtDailyMoney("ILS", fcNum(row.totalReceived))}
+                {fmtDailyMoney("ILS", fcNum(totalIls(row)))}
+              </td>
+              <td dir="ltr" className="fc-num fc-col--total fc-num--bold">
+                {fmtDailyMoney("USD", fcNum(totalUsd(row)))}
               </td>
             </tr>
           ))}
           {totalRow ? (
             <tr className="fc-row fc-row--foot">
-              <td colSpan={4} className="fc-col--meta fc-col--sep">
+              <td colSpan={3} className="fc-col--meta fc-col--sep">
                 <strong>{totalRow.dateDisplay}</strong>
               </td>
               {FLOW_PAYMENT_COLUMNS.map((m) => (
@@ -80,7 +94,10 @@ export function PaymentSummaryTable({ dayRows, totalRow }: PaymentSummaryTablePr
                 </td>
               ))}
               <td dir="ltr" className="fc-num fc-col--total">
-                <strong>{fmtDailyMoney("ILS", fcNum(totalRow.totalReceived))}</strong>
+                <strong>{fmtDailyMoney("ILS", fcNum(totalIls(totalRow)))}</strong>
+              </td>
+              <td dir="ltr" className="fc-num fc-col--total">
+                <strong>{fmtDailyMoney("USD", fcNum(totalUsd(totalRow)))}</strong>
               </td>
             </tr>
           ) : null}

@@ -1,10 +1,10 @@
 import type { CashDailyMethodId, CashDailyStatusKind } from "@/lib/cash-control-daily";
-import { allCashControlChannels, channelGroupClass } from "@/lib/cash-control-channel";
+import { allCashControlChannels, channelGroupClass, receiptTableColumns } from "@/lib/cash-control-channel";
 
 export { MethodIcon, StatusIcon } from "@/components/admin/cash-flow/shared-icons";
 
-/** סדר עמודות בטבלת בקרת קופה */
-export const CASH_CONTROL_TABLE_METHODS: CashDailyMethodId[] = allCashControlChannels();
+/** סדר עמודות בטבלת בקרת קופה — מטבע רלוונטי בלבד */
+export const CASH_CONTROL_TABLE_METHODS: CashDailyMethodId[] = receiptTableColumns();
 
 export const METHOD_GROUP_CLASS: Record<CashDailyMethodId, string> = Object.fromEntries(
   allCashControlChannels().map((id) => [id, channelGroupClass(id)]),

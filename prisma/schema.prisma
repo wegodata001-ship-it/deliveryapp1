@@ -1179,11 +1179,35 @@ model ShipmentBatch {
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
-  records ShipmentRecord[]
+  records       ShipmentRecord[]
+  batchExpenses ShipmentBatchExpense[]
 
   @@index([batchNumber])
   @@index([createdAt])
   @@map("ShipmentBatch")
+}
+
+/// הוצאות פר-קונטיינר/אצוות (בקרת משלוחים) — אינן מפחיתות דמי משלוח
+model ShipmentBatchExpense {
+  id            String        @id @default(uuid())
+  batchId       String
+  batch         ShipmentBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  /// FUEL | ROAD6 | PORT | STORAGE | TRANSPORT | UNLOADING | OTHER
+  category      String
+  amount        Decimal       @db.Decimal(19, 4)
+  /// ILS | USD
+  currency      String
+  notes         String?
+  /// CASH | BANK_TRANSFER | CREDIT | CHECK | CREDIT_NOTE | CODE_DEDUCTION
+  paymentMethod String?
+  expenseDate   DateTime      @db.Date
+  createdById   String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([batchId])
+  @@index([expenseDate])
+  @@map("ShipmentBatchExpense")
 }
 
 /// אזור חלוקה (DistributionArea) — ניתן להגדרה חופשית על ידי המנהל

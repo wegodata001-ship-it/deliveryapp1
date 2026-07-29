@@ -19,9 +19,18 @@ import type {
   FxAllocationPreview,
   FxIntakeReceipt,
 } from "@/lib/flow-control/fx-purchase/types";
-import { loadCashControlSnapshot } from "@/lib/flow-control/fx-purchase/balance";
+import {
+  availableIlsForTrack,
+  computeFxAvailableBalances,
+  loadCashControlSnapshot,
+} from "@/lib/flow-control/fx-purchase/balance";
 
 type PrismaTx = import("@prisma/client").Prisma.TransactionClient;
+
+/** Synthetic receipt id — cash pool from approved CashWeekFlow count (not a Payment row). */
+export function cashControlReceiptId(track: FxPurchaseTrack, weekCode: string): string {
+  return `cash-control:${track}:${weekCode.trim()}`;
+}
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
@@ -122,6 +131,50 @@ export function buildIntakeReceipts(
   return receipts;
 }
 
+/**
+ * Adds a cash-pool receipt so allocation uses the same SSOT as balance.ts.
+ * FIFO uses Payment rows first; any remaining approved count balance is allocated here.
+ */
+export function appendCashControlPoolReceipt(
+  receipts: FxIntakeReceipt[],
+  snapshot: CashControlSnapshot,
+  track: FxPurchaseTrack,
+): FxIntakeReceipt[] {
+  const available = availableIlsForTrack(computeFxAvailableBalances(snapshot), track);
+  const fromPayments = round2(receipts.reduce((sum, receipt) => sum + receipt.remainingIls, 0));
+  const poolRemaining = round2(Math.max(0, available - fromPayments));
+  if (poolRemaining <= 0.005) return receipts;
+
+  const paymentId = cashControlReceiptId(track, snapshot.weekCode);
+  const consumedIls =
+    consumedIlsByPayment(snapshot.fxPurchases, track).get(paymentId) ?? 0;
+
+  return [
+    ...receipts,
+    {
+      paymentId,
+      orderId: null,
+      orderNumber: null,
+      dateYmd: snapshot.weekCode,
+      dateLabel: "ספירת קופה",
+      sourceLabel: track === "PS" ? "מזומן PS — ספירת קופה" : "מאגר IL — ספירת קופה",
+      grossIls: round2(poolRemaining + consumedIls),
+      consumedIls,
+      remainingIls: poolRemaining,
+      intakeRate: 0,
+    },
+  ];
+}
+
+export function buildTrackAllocationReceipts(
+  payments: Parameters<typeof buildIntakeReceipts>[0],
+  snapshot: CashControlSnapshot,
+  track: FxPurchaseTrack,
+): FxIntakeReceipt[] {
+  const paymentReceipts = buildIntakeReceipts(payments, snapshot, track);
+  return appendCashControlPoolReceipt(paymentReceipts, snapshot, track);
+}
+
 /** FIFO allocation against remaining receipt balances. */
 export function allocateFxIntakeReceipts(
   receipts: FxIntakeReceipt[],
@@ -198,7 +251,7 @@ export async function loadWeekIntakeReceipts(
     orderBy: [{ paymentDate: "asc" }, { createdAt: "asc" }],
     select: paymentSelect,
   });
-  return buildIntakeReceipts(payments, snapshot, track);
+  return buildTrackAllocationReceipts(payments, snapshot, track);
 }
 
 export async function previewFxAllocation(input: {

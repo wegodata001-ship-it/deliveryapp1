@@ -1,20 +1,25 @@
 "use client";
 
 import { fmtDailyMoney, channelCurrency, type CashDailyMethodId } from "@/lib/cash-control-daily";
-import { allCashControlChannels, channelColLabels } from "@/lib/cash-control-channel";
+import { channelColLabels } from "@/lib/cash-control-channel";
 import type { FlowPaymentDailyRow } from "@/app/admin/cash-flow/flow-types";
 import { FLOW_COLUMN_CLASS, FLOW_PAYMENT_COLUMNS } from "@/app/admin/cash-flow/flow-types";
-import { MethodIcon } from "@/components/admin/cash-flow/shared";
 import { fcNum } from "@/components/admin/flow-control/shared";
 
 const COL_LABEL = channelColLabels();
-
-const ALIAS_LABEL: Partial<Record<CashDailyMethodId, string>> = {};
 
 function fmtCell(method: CashDailyMethodId, value: string): string {
   const n = fcNum(value);
   if (n <= 0) return "לא הוזן";
   return fmtDailyMoney(channelCurrency(method), n);
+}
+
+function totalIls(row: FlowPaymentDailyRow): string {
+  return row.totalReceivedIls ?? row.totalReceived;
+}
+
+function totalUsd(row: FlowPaymentDailyRow): string {
+  return row.totalReceivedUsd ?? "0";
 }
 
 export type CashflowReceivedTableProps = {
@@ -47,14 +52,14 @@ export function CashflowReceivedTable({ rows, loading, onAmountClick }: Cashflow
           <tr>
             <th>קוד שבוע</th>
             <th>תאריך</th>
-            <th>יום</th>
             <th>מדינה</th>
             {FLOW_PAYMENT_COLUMNS.map((m) => (
-              <th key={m} className={`ft-num ${FLOW_COLUMN_CLASS[m]}`} title={ALIAS_LABEL[m]}>
+              <th key={m} className={`ft-num ${FLOW_COLUMN_CLASS[m]}`}>
                 {COL_LABEL[m]}
               </th>
             ))}
-            <th className="ft-num ft-col--total">סך הכול התקבל</th>
+            <th className="ft-num ft-col--total">סה&quot;כ התקבל ₪</th>
+            <th className="ft-num ft-col--total">סה&quot;כ התקבל $</th>
           </tr>
         </thead>
         <tbody>
@@ -62,7 +67,6 @@ export function CashflowReceivedTable({ rows, loading, onAmountClick }: Cashflow
             <tr key={row.dateYmd} className="ft-row">
               <td dir="ltr">{row.weekCode}</td>
               <td>{row.dateDisplay}</td>
-              <td className="ft-day">{row.dayName}</td>
               <td>{row.countryLabel}</td>
               {FLOW_PAYMENT_COLUMNS.map((m) => {
                 const n = fcNum(row.intake[m]);
@@ -80,13 +84,16 @@ export function CashflowReceivedTable({ rows, loading, onAmountClick }: Cashflow
                 );
               })}
               <td dir="ltr" className="ft-num ft-col--total">
-                {fmtDailyMoney("ILS", fcNum(row.totalReceived))}
+                {fmtDailyMoney("ILS", fcNum(totalIls(row)))}
+              </td>
+              <td dir="ltr" className="ft-num ft-col--total">
+                {fmtDailyMoney("USD", fcNum(totalUsd(row)))}
               </td>
             </tr>
           ))}
           {totalRow ? (
             <tr className="ft-row ft-row--foot">
-              <td colSpan={4}>
+              <td colSpan={3}>
                 <strong>{totalRow.dateDisplay}</strong>
               </td>
               {FLOW_PAYMENT_COLUMNS.map((m) => (
@@ -95,7 +102,10 @@ export function CashflowReceivedTable({ rows, loading, onAmountClick }: Cashflow
                 </td>
               ))}
               <td dir="ltr" className="ft-num ft-col--total">
-                <strong>{fmtDailyMoney("ILS", fcNum(totalRow.totalReceived))}</strong>
+                <strong>{fmtDailyMoney("ILS", fcNum(totalIls(totalRow)))}</strong>
+              </td>
+              <td dir="ltr" className="ft-num ft-col--total">
+                <strong>{fmtDailyMoney("USD", fcNum(totalUsd(totalRow)))}</strong>
               </td>
             </tr>
           ) : null}

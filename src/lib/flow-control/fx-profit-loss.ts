@@ -2,6 +2,7 @@
 export {
   computeFxProfitLoss,
   computeFxProfitLossHistory,
+  computePurchaseMatchedFxPl,
   computeTurkeyDebt,
   parseFxPurchasesJson,
 } from "@/lib/flow-control/flow-calculation-service";

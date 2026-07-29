@@ -1,6 +1,6 @@
 import type { CashWeekFlowLineId } from "@/lib/cash-control-week-flow";
 import type { CashDailyMethodId } from "@/lib/cash-control-daily";
-import { allCashControlChannels, channelGroupClass } from "@/lib/cash-control-channel";
+import { CASH_RECEIPT_TABLE_COLUMNS, channelGroupClass } from "@/lib/cash-control-channel";
 import type { CashDailySummaryRowDto } from "@/app/admin/cash-control/daily-types";
 
 /** שורת הקצאת תקבול לרכישת מט"ח */
@@ -60,7 +60,7 @@ export type FxProfitLossHistoryRow = {
   rateDiff: number | null;
   avgRateBefore: number;
   saleRate: number | null;
-  /** רווח/הפסד לפי הקצאת תקבולים (אם קיים) — אחרת לפי ממוצע מצטבר */
+  /** רווח/הפסד לפי הקצאת תקבולים בלבד — ללא התאמה אין רווח */
   profitIls: number;
   lossIls: number;
   netIls: number;
@@ -164,11 +164,11 @@ export type FlowWeekPayload = {
   ilsRemainingAfterFx: string;
 };
 
-/** עמודות טבלת קליטות — כל ערוצי בקרת הקופה */
-export const FLOW_PAYMENT_COLUMNS: CashDailyMethodId[] = allCashControlChannels();
+/** עמודות טבלת קליטות — מטבע רלוונטי בלבד לכל אמצעי תשלום */
+export const FLOW_PAYMENT_COLUMNS: CashDailyMethodId[] = [...CASH_RECEIPT_TABLE_COLUMNS];
 
 export const FLOW_COLUMN_CLASS: Record<CashDailyMethodId, string> = Object.fromEntries(
-  allCashControlChannels().map((id) => [id, channelGroupClass(id)]),
+  CASH_RECEIPT_TABLE_COLUMNS.map((id) => [id, channelGroupClass(id)]),
 ) as Record<CashDailyMethodId, string>;
 
 /** שורת סיכום שבועי — בקרת תזרים (מסך ראשי) */
@@ -241,7 +241,10 @@ export type FlowPaymentDailyRow = {
   weekCode: string;
   countryLabel: string;
   intake: Record<CashDailyMethodId, string>;
+  /** @deprecated — השתמשו ב-totalReceivedIls */
   totalReceived: string;
+  totalReceivedIls: string;
+  totalReceivedUsd: string;
   isTotal?: boolean;
 };
 

@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import type { FlowWeekDrillPayload, FlowWeekOverviewRow } from "@/app/admin/cash-flow/flow-types";
 import { money, moneyBoth, weekDiffIls } from "@/components/admin/cashflow-control/cashflow-control-helpers";
 import { fcNum } from "@/components/admin/flow-control/shared";
-import { CASH_CONTROL_CHANNELS } from "@/lib/cash-control-channel";
+import { channelColLabels, channelCurrency, CASH_RECEIPT_TABLE_COLUMNS } from "@/lib/cash-control-channel";
 import { TURKEY_MOVEMENT_TYPE_LABELS } from "@/lib/flow-control/turkey-transfer-balance-types";
 import { CurrencyExchangeModal } from "@/components/admin/flow-control/CurrencyExchangeModal";
 import { saveFxPurchaseAction } from "@/app/admin/cash-flow/save-fx-purchase-action";
@@ -38,8 +38,9 @@ export function CashflowWeekTabs({ row, drill, loading, canManageFlow, onFxSaved
   const diff = weekDiffIls(row);
 
   const matchRows = useMemo(() => {
-    return CASH_CONTROL_CHANNELS.map((ch) => {
-      const received = fcNum(drill?.paymentIntake?.[ch.id]);
+    return CASH_RECEIPT_TABLE_COLUMNS.map((id) => {
+      const ch = { id, label: channelColLabels()[id], currency: channelCurrency(id) };
+      const received = fcNum(drill?.paymentIntake?.[id]);
       const countedKey =
         ch.id.startsWith("CASH")
           ? ch.id
@@ -94,30 +95,34 @@ export function CashflowWeekTabs({ row, drill, loading, canManageFlow, onFxSaved
             <table className="cfc-detail-table">
               <thead>
                 <tr>
+                  <th>קוד שבוע</th>
                   <th>תאריך</th>
-                  <th>יום</th>
-                  {CASH_CONTROL_CHANNELS.map((c) => (
-                    <th key={c.id}>{c.label}</th>
+                  <th>מדינה</th>
+                  {CASH_RECEIPT_TABLE_COLUMNS.map((id) => (
+                    <th key={id}>{channelColLabels()[id]}</th>
                   ))}
-                  <th>סה״כ</th>
+                  <th>סה&quot;כ התקבל ₪</th>
+                  <th>סה&quot;כ התקבל $</th>
                 </tr>
               </thead>
               <tbody>
                 {(drill?.paymentDailyRows ?? []).map((r) => (
                   <tr key={`${r.dateYmd}-${r.isTotal ? "t" : "d"}`} className={r.isTotal ? "is-total" : ""}>
+                    <td dir="ltr">{r.weekCode}</td>
                     <td>{r.dateDisplay}</td>
-                    <td>{r.dayName}</td>
-                    {CASH_CONTROL_CHANNELS.map((c) => (
-                      <td key={c.id} dir="ltr">
-                        {money(c.currency, r.intake[c.id])}
+                    <td>{r.countryLabel}</td>
+                    {CASH_RECEIPT_TABLE_COLUMNS.map((id) => (
+                      <td key={id} dir="ltr">
+                        {money(channelCurrency(id), r.intake[id])}
                       </td>
                     ))}
-                    <td dir="ltr">{money("ILS", r.totalReceived)}</td>
+                    <td dir="ltr">{money("ILS", r.totalReceivedIls ?? r.totalReceived)}</td>
+                    <td dir="ltr">{money("USD", r.totalReceivedUsd ?? "0")}</td>
                   </tr>
                 ))}
                 {(drill?.paymentDailyRows?.length ?? 0) === 0 ? (
                   <tr>
-                    <td colSpan={12} className="cfc-empty-cell">
+                    <td colSpan={3 + CASH_RECEIPT_TABLE_COLUMNS.length + 2} className="cfc-empty-cell">
                       אין קליטות לשבוע זה
                     </td>
                   </tr>
