@@ -1,12 +1,13 @@
 import type { FlowWeekPayload, ManagerCountForm } from "@/app/admin/cash-flow/flow-types";
 import {
-  computeIlAvailableIlsForFx,
-  computeIlSourcePoolIls,
-  computePsAvailableIlsForFx,
   computeTurkeyAllocationFromCashCount,
   computeTurkeyIlAllocationIls,
   sumFxPurchases,
 } from "@/lib/flow-control/flow-calculation-service";
+import {
+  computeFxAvailableBalances,
+} from "@/lib/flow-control/fx-purchase/balance";
+import type { CashControlSnapshot } from "@/lib/flow-control/fx-purchase/types";
 import { fcNum } from "@/components/admin/flow-control/shared";
 
 export function formFromFlow(flow: FlowWeekPayload): ManagerCountForm {
@@ -23,17 +24,38 @@ export function formFromFlow(flow: FlowWeekPayload): ManagerCountForm {
   };
 }
 
-/** זמין לרכישת מט״ח PS — מזומן ₪ PS בלבד */
+function snapshotFromFlow(
+  flow: FlowWeekPayload,
+  form?: Partial<
+    Pick<
+      ManagerCountForm,
+      "countedCashIls" | "countedTransferIls" | "countedCreditIls" | "countedChecksIls"
+    >
+  > | null,
+): CashControlSnapshot {
+  return {
+    weekCode: flow.week,
+    countedCashIls: form ? fcNum(form.countedCashIls) : fcNum(flow.counted.CASH_ILS),
+    countedCashUsd: fcNum(flow.counted.CASH_USD),
+    countedTransferIls: form ? fcNum(form.countedTransferIls) : fcNum(flow.counted.BANK_TRANSFER),
+    countedCreditIls: form ? fcNum(form.countedCreditIls) : fcNum(flow.counted.CREDIT),
+    countedChecksIls: form ? fcNum(form.countedChecksIls) : fcNum(flow.counted.CHECK),
+    commissionUsd: fcNum(flow.commissionUsd),
+    commissionIls: fcNum(flow.commissionIls),
+    fxPurchases: flow.fxPurchases,
+  };
+}
+
+/** זמין לרכישת מט״ח PS — SSOT formulas, display only */
 export function resolveAvailablePsIlsForFx(
   flow: FlowWeekPayload | null,
   form?: Pick<ManagerCountForm, "countedCashIls"> | null,
 ): string {
   if (!flow) return "0.00";
-  const cashIls = form ? fcNum(form.countedCashIls) : fcNum(flow.counted.CASH_ILS);
-  return computePsAvailableIlsForFx(cashIls, flow.fxPurchases).toFixed(2);
+  return computeFxAvailableBalances(snapshotFromFlow(flow, form)).psCash.toFixed(2);
 }
 
-/** זמין לרכישת מט״ח IL — מאגר בנקאי IL בלבד */
+/** זמין לרכישת מט״ח IL — SSOT formulas, display only */
 export function resolveAvailableIlIlsForFx(
   flow: FlowWeekPayload | null,
   form?: Pick<
@@ -42,15 +64,10 @@ export function resolveAvailableIlIlsForFx(
   > | null,
 ): string {
   if (!flow) return "0.00";
-  const transfer = form ? fcNum(form.countedTransferIls) : fcNum(flow.counted.BANK_TRANSFER);
-  const credit = form ? fcNum(form.countedCreditIls) : fcNum(flow.counted.CREDIT);
-  const checks = form ? fcNum(form.countedChecksIls) : fcNum(flow.counted.CHECK);
-  return computeIlAvailableIlsForFx(transfer, credit, checks, flow.fxPurchases).toFixed(2);
+  return computeFxAvailableBalances(snapshotFromFlow(flow, form)).ilTransfers.toFixed(2);
 }
 
-/**
- * @deprecated איחוד PS+IL אסור. העדף resolveAvailablePsIlsForFx.
- */
+/** @deprecated — use resolveAvailablePsIlsForFx */
 export function resolveAvailableIlsForFx(
   flow: FlowWeekPayload | null,
   form?: Pick<ManagerCountForm, "countedCashIls"> | null,
@@ -115,9 +132,7 @@ export function sumIntakeFxPlFromPurchases(flow: FlowWeekPayload | null): {
 }
 
 export function ilSourcePoolFromForm(form: ManagerCountForm): number {
-  return computeIlSourcePoolIls(
-    fcNum(form.countedTransferIls),
-    fcNum(form.countedCreditIls),
-    fcNum(form.countedChecksIls),
+  return (
+    fcNum(form.countedTransferIls) + fcNum(form.countedCreditIls) + fcNum(form.countedChecksIls)
   );
 }

@@ -32,10 +32,10 @@ export {
 } from "@/lib/flow-control/services/cash-count-service";
 
 export {
-  loadFlowWeekFxPurchases,
-  appendFlowFxPurchase,
-  type AppendFxPurchaseInput,
-} from "@/lib/flow-control/services/exchange-service";
+  loadFxPurchases as loadFlowWeekFxPurchases,
+  executeFxPurchase,
+} from "@/lib/flow-control/fx-purchase/service";
+export type { ExecuteFxPurchaseInput } from "@/lib/flow-control/fx-purchase/types";
 
 export {
   loadFlowWeekTurkeyTransfer,

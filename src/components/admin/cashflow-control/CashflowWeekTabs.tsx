@@ -317,7 +317,6 @@ export function CashflowWeekTabs({ row, drill, loading, canManageFlow, onFxSaved
         open={fxOpen}
         week={row.week}
         weekLabel={row.weekLabel}
-        availableIls={flow?.availableIlsForFx ?? "0"}
         saving={fxSaving}
         onClose={() => setFxOpen(false)}
         onSave={async (input) => {

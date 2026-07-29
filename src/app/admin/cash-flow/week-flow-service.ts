@@ -10,11 +10,14 @@ import {
   computeBankReceiptsIlsFromIntake,
   computeFlowWeekKpis,
   computeFlowWeekSummary,
-  computeIlAvailableIlsForFx,
   computeIlsChannelReceiptsFromIntake,
   computePaymentsTotalReceivedIls,
   sumFxPurchases,
 } from "@/lib/flow-control/flow-calculation-service";
+import {
+  computeFxAvailableBalances,
+  snapshotFromCashWeekFlowRow,
+} from "@/lib/flow-control/fx-purchase/balance";
 import {
   loadFlowWeekBankTransactions,
   loadFlowWeekCashCount,
@@ -145,6 +148,19 @@ export async function loadFlowWeek(week: string): Promise<FlowWeekPayload | null
     bankReceiptsIls,
   });
 
+  const fxBalances = computeFxAvailableBalances(
+    snapshotFromCashWeekFlowRow(wk, {
+      countedCashIls: new Prisma.Decimal(managerCashIls),
+      countedCashUsd: new Prisma.Decimal(managerCashUsd),
+      countedTransferIls: new Prisma.Decimal(cashCount.countedTransferIls ?? 0),
+      countedCreditIls: new Prisma.Decimal(cashCount.countedCreditIls ?? 0),
+      countedChecksIls: new Prisma.Decimal(cashCount.countedChecksIls ?? 0),
+      commissionUsd: new Prisma.Decimal(cashCount.commissionUsd),
+      commissionIls: new Prisma.Decimal(cashCount.commissionIls),
+      fxPurchases: fxPurchases as unknown as Prisma.JsonValue,
+    }),
+  );
+
   const kpis = computeFlowWeekKpis({
     totalReceivedIls,
     fxTotals: calc.fxTotals,
@@ -156,12 +172,6 @@ export async function loadFlowWeek(week: string): Promise<FlowWeekPayload | null
   });
 
   const lastPsFx = fxPurchases.filter((p) => p.track !== "IL").at(-1) ?? null;
-  const availableIlIlsForFx = computeIlAvailableIlsForFx(
-    cashCount.countedTransferIls ?? 0,
-    cashCount.countedCreditIls ?? 0,
-    cashCount.countedChecksIls ?? 0,
-    fxPurchases,
-  );
   const storedTurkeyUsd = cashCount.turkeyTransferUsd ?? turkeyAllocationUsd;
   const storedTurkeyIls = cashCount.turkeyTransferIls ?? 0;
 
@@ -191,8 +201,8 @@ export async function loadFlowWeek(week: string): Promise<FlowWeekPayload | null
     bankBalanceUsd: null,
     drawerRemainingIls: money(calc.cashIlsInDrawer),
     drawerRemainingUsd: money(calc.cashUsdInDrawer),
-    availableIlsForFx: money(calc.availableIlsForFx),
-    availableIlIlsForFx: money(availableIlIlsForFx),
+    availableIlsForFx: money(fxBalances.psCash),
+    availableIlIlsForFx: money(fxBalances.ilTransfers),
     turkeyExpectedUsd: money(calc.turkey.expectedUsd),
     turkeyDebtUsd: money(turkeyBalance.usd.closingBalance),
     turkeyDebtStatus: turkeyBalance.usd.closingBalance > 0.005 ? "debt" : "ok",

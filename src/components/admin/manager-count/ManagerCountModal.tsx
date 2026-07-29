@@ -431,7 +431,6 @@ export function ManagerCountModal({
           week={week}
           weekLabel={weekLabel}
           track="PS"
-          availableIls={resolveAvailableIlsForFx(flow, form)}
           saving={saving}
           onClose={() => setFxOpen(false)}
           onSaved={handleFxSaved}

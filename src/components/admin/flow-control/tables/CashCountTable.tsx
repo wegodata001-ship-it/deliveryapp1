@@ -315,7 +315,6 @@ export function CashCountTable({ drill, loading, canEdit, onSaved }: CashCountTa
           week={drill.week}
           weekLabel={drill.weekLabel}
           track="PS"
-          availableIls={availableIls}
           saving={saving}
           onClose={() => setFxOpen(false)}
           onSaved={() => {

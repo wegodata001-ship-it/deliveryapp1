@@ -4,13 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowDown, Coins, X } from "lucide-react";
 import { fmtDailyMoney } from "@/lib/cash-control-daily";
 import { previewFxPurchaseAction } from "@/app/admin/cash-flow/preview-fx-purchase-action";
+import { getFxPurchaseContextAction } from "@/app/admin/cash-flow/get-fx-purchase-balance-action";
 import { fcNum } from "@/components/admin/flow-control/shared";
 
 export type CurrencyExchangeModalProps = {
   open: boolean;
   week: string;
   weekLabel: string | null;
-  availableIls: string;
   saving: boolean;
   onClose: () => void;
   onSave: (input: {
@@ -23,6 +23,7 @@ export type CurrencyExchangeModalProps = {
 };
 
 type PreviewState = {
+  availableIls: number;
   usdReceived: number;
   remainderAfter: number;
   splitSum: number;
@@ -33,7 +34,6 @@ export function CurrencyExchangeModal({
   open,
   week,
   weekLabel,
-  availableIls,
   saving,
   onClose,
   onSave,
@@ -44,6 +44,8 @@ export function CurrencyExchangeModal({
   const [remainderBank, setRemainderBank] = useState("");
   const [note, setNote] = useState("");
   const [preview, setPreview] = useState<PreviewState>(null);
+  const [availableIls, setAvailableIls] = useState<number | null>(null);
+  const [contextLoading, setContextLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -54,15 +56,32 @@ export function CurrencyExchangeModal({
       setRemainderBank("");
       setNote("");
       setPreview(null);
+      setAvailableIls(null);
     }
   }, [open]);
 
   useEffect(() => {
     if (!open) return;
+    let cancelled = false;
+    setContextLoading(true);
+    void getFxPurchaseContextAction({ week, track: "PS" }).then((ctx) => {
+      if (!cancelled) {
+        setAvailableIls(ctx?.availableIls ?? 0);
+        setContextLoading(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, week]);
+
+  useEffect(() => {
+    if (!open || availableIls === null) return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       void previewFxPurchaseAction({
-        availableIls: fcNum(availableIls),
+        week,
+        track: "PS",
         ilsAmount: fcNum(ilsAmount),
         rate: fcNum(rate),
         remainderCashIls: fcNum(remainderCash),
@@ -72,7 +91,7 @@ export function CurrencyExchangeModal({
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [open, availableIls, ilsAmount, rate, remainderCash, remainderBank]);
+  }, [open, week, availableIls, ilsAmount, rate, remainderCash, remainderBank]);
 
   const handleSave = async () => {
     const ilsNum = fcNum(ilsAmount);
@@ -101,19 +120,40 @@ export function CurrencyExchangeModal({
 
   if (!open) return null;
 
+  const availNum = availableIls ?? 0;
+
   return (
-    <div className="fc-modal-backdrop fc-modal-backdrop--top" role="presentation" onClick={onClose}>
-      <div className="fc-modal fc-modal--fx" role="dialog" onClick={(e) => e.stopPropagation()}>
+    <div className="fc-modal-backdrop" role="presentation" onClick={onClose}>
+      <div className="fc-modal fc-modal--narrow" role="dialog" onClick={(e) => e.stopPropagation()}>
         <header className="fc-modal__head">
-          <h3>
-            <Coins size={18} /> רכישת מט&quot;ח
-          </h3>
+          <h4>
+            <Coins size={16} /> רכישת מט&quot;ח — PS
+          </h4>
           <button type="button" className="fc-btn fc-btn--icon" onClick={onClose}>
-            <X size={18} />
+            <X size={16} />
           </button>
         </header>
         <p className="fc-modal__meta">{weekLabel ?? week}</p>
-        <div className="fc-form-grid">
+        <div className="fc-modal__body">
+          <p className="fc-muted">
+            זמין:{" "}
+            {contextLoading ? (
+              "טוען…"
+            ) : (
+              <strong dir="ltr">{fmtDailyMoney("ILS", availNum)}</strong>
+            )}
+          </p>
+          <label className="fc-field">
+            <span>סכום ₪</span>
+            <input
+              type="text"
+              inputMode="decimal"
+              className="fc-input"
+              value={ilsAmount}
+              disabled={saving || contextLoading}
+              onChange={(e) => setIlsAmount(e.target.value)}
+            />
+          </label>
           <label className="fc-field">
             <span>שער דולר</span>
             <input
@@ -125,96 +165,65 @@ export function CurrencyExchangeModal({
               onChange={(e) => setRate(e.target.value)}
             />
           </label>
-          <label className="fc-field">
-            <span>סכום ₪ לרכישה</span>
-            <input
-              type="text"
-              inputMode="decimal"
-              className="fc-input"
-              value={ilsAmount}
-              disabled={saving}
-              onChange={(e) => setIlsAmount(e.target.value)}
-            />
-          </label>
           <div className="fc-field fc-field--calc">
             <span>
-              <ArrowDown size={12} /> דולר שהתקבל
+              <ArrowDown size={12} /> דולר שנרכש
             </span>
             <strong dir="ltr">
-              {preview && preview.usdReceived > 0 ? fmtDailyMoney("USD", preview.usdReceived) : "—"}
+              {preview ? fmtDailyMoney("USD", preview.usdReceived) : "—"}
             </strong>
           </div>
-        </div>
-
-        {fcNum(ilsAmount) > 0 ? (
-          <div className="fc-fx-remainder">
-            <p>
-              היה זמין: <strong dir="ltr">{fmtDailyMoney("ILS", fcNum(availableIls))}</strong> · אחרי רכישה נשאר:{" "}
-              <strong dir="ltr">
-                {preview ? fmtDailyMoney("ILS", preview.remainderAfter) : "—"}
-              </strong>
-            </p>
-            <p className="fc-fx-remainder__q">מה לעשות עם היתרה?</p>
-            <div className="fc-form-grid">
-              <label className="fc-field">
-                <span>נשאר בקופה ₪</span>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  className="fc-input"
-                  value={remainderCash}
-                  disabled={saving}
-                  onChange={(e) => setRemainderCash(e.target.value)}
-                />
-              </label>
-              <label className="fc-field">
-                <span>הועבר לבנק ₪</span>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  className="fc-input"
-                  value={remainderBank}
-                  disabled={saving}
-                  onChange={(e) => setRemainderBank(e.target.value)}
-                />
-              </label>
-            </div>
-            {preview && !preview.splitValid && preview.remainderAfter > 0 ? (
-              <p className="fc-error">
-                סכום חלוקה ({preview.splitSum.toLocaleString("he-IL")}) ≠ יתרה (
-                {preview.remainderAfter.toLocaleString("he-IL")})
-              </p>
-            ) : null}
+          <div className="fc-form-grid">
+            <label className="fc-field">
+              <span>נשאר בקופה ₪</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                className="fc-input"
+                value={remainderCash}
+                onChange={(e) => setRemainderCash(e.target.value)}
+              />
+            </label>
+            <label className="fc-field">
+              <span>הועבר לבנק ₪</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                className="fc-input"
+                value={remainderBank}
+                onChange={(e) => setRemainderBank(e.target.value)}
+              />
+            </label>
           </div>
-        ) : null}
-
-        <label className="fc-field fc-field--full">
-          <span>הערה (אופציונלי)</span>
-          <input
-            type="text"
-            className="fc-input"
-            value={note}
-            disabled={saving}
-            onChange={(e) => setNote(e.target.value)}
-          />
-        </label>
-
-        <div className="fc-modal__actions">
+          {preview && !preview.splitValid ? (
+            <p className="fc-error">
+              יש לחלק יתרה של {preview.remainderAfter.toLocaleString("he-IL")} ₪
+            </p>
+          ) : null}
+          <label className="fc-field">
+            <span>הערה</span>
+            <input
+              type="text"
+              className="fc-input"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+            />
+          </label>
+        </div>
+        <footer className="fc-modal__foot">
           <button type="button" className="fc-btn fc-btn--ghost" onClick={onClose}>
             ביטול
           </button>
           <button
             type="button"
             className="fc-btn fc-btn--primary"
-            disabled={saving || !preview?.splitValid || fcNum(ilsAmount) <= 0}
+            disabled={saving || contextLoading}
             onClick={() => void handleSave()}
           >
-            שמירת רכישה
+            רכוש
           </button>
-        </div>
+        </footer>
       </div>
     </div>
   );
 }
-
-export default CurrencyExchangeModal;

@@ -21,8 +21,6 @@ import { saveManagerCountAction } from "@/app/admin/cash-flow/save-manager-count
 import { getFlowWeekAction } from "@/app/admin/cash-flow/get-flow-week-action";
 import { fmtDailyMoney } from "@/lib/cash-control-daily";
 import {
-  computeIlRemainingIls,
-  computePsRemainingIls,
   sumFxPurchases,
 } from "@/lib/flow-control/flow-calculation-service";
 import { dispatchCashControlRefresh } from "@/lib/cash-control-refresh-bus";
@@ -163,14 +161,14 @@ export function ManagerCountWizard({
   const commUsd = fcNum(form.commissionUsd);
   const ilPool = ilSourcePoolFromForm(form);
   const psTotalIls = cashIls;
-  const psRemainingIls = computePsRemainingIls(cashIls, fxPs.ils);
-  const ilRemainingIls = computeIlRemainingIls(ilPool, fxIl.ils);
   const turkeyUsd = fcNum(form.turkeyTransferUsd);
   const turkeyIls = fcNum(form.turkeyTransferIls);
   const psUsdAvailable = cashUsd + fxPs.usd + commUsd;
   const psUsdRemaining = Math.max(0, psUsdAvailable - turkeyUsd);
   const availablePs = fcNum(resolveAvailablePsIlsForFx(flow, form));
   const availableIl = fcNum(resolveAvailableIlIlsForFx(flow, form));
+  const psRemainingIls = availablePs;
+  const ilRemainingIls = availableIl;
 
   const patch = (key: keyof ManagerCountForm, value: string) => {
     setForm((prev) => {
@@ -219,19 +217,23 @@ export function ManagerCountWizard({
     }));
   };
 
+  const currentManagerCountPayload = (): ManagerCountForm => {
+    if (!flow) return form;
+    const synced = syncAutoTurkey(form, flow);
+    return {
+      ...form,
+      turkeyTransferUsd: turkeyManual ? form.turkeyTransferUsd : synced.turkeyTransferUsd,
+      turkeyTransferIls: turkeyIlManual ? form.turkeyTransferIls : synced.turkeyTransferIls,
+    };
+  };
+
   const handleSave = async () => {
     setSaving(true);
     try {
-      let payload = form;
-      if (flow) {
-        const synced = syncAutoTurkey(form, flow);
-        payload = {
-          ...form,
-          turkeyTransferUsd: turkeyManual ? form.turkeyTransferUsd : synced.turkeyTransferUsd,
-          turkeyTransferIls: turkeyIlManual ? form.turkeyTransferIls : synced.turkeyTransferIls,
-        };
-      }
-      const res = await saveManagerCountAction({ week, form: payload });
+      const res = await saveManagerCountAction({
+        week,
+        form: currentManagerCountPayload(),
+      });
       if (!res.ok) {
         alert(res.error ?? "שמירה נכשלה");
         return;
@@ -239,6 +241,38 @@ export function ManagerCountWizard({
       dispatchCashControlRefresh(week);
       onSaved();
       onClose();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openFxPurchase = async (track: FxPurchaseTrack) => {
+    setSaving(true);
+    try {
+      const saveResult = await saveManagerCountAction({
+        week,
+        form: currentManagerCountPayload(),
+      });
+      if (!saveResult.ok) {
+        alert(saveResult.error ?? "יש לשמור את ספירת הקופה לפני רכישת מט״ח");
+        return;
+      }
+      const refreshed = await getFlowWeekAction(week);
+      if (!refreshed) return;
+      const refreshedForm = formFromFlow(refreshed);
+      const syncedForm = syncAutoTurkey(refreshedForm, refreshed);
+      setFlow(refreshed);
+      setForm({
+        ...refreshedForm,
+        turkeyTransferUsd: turkeyManual
+          ? refreshedForm.turkeyTransferUsd
+          : syncedForm.turkeyTransferUsd,
+        turkeyTransferIls: turkeyIlManual
+          ? refreshedForm.turkeyTransferIls
+          : syncedForm.turkeyTransferIls,
+      });
+      dispatchCashControlRefresh(week);
+      setFxTrack(track);
     } finally {
       setSaving(false);
     }
@@ -451,7 +485,7 @@ export function ManagerCountWizard({
                             <button
                               type="button"
                               className="fc-btn fc-btn--primary"
-                              onClick={() => setFxTrack("PS")}
+                              onClick={() => void openFxPurchase("PS")}
                             >
                               רכישת מט״ח PS
                             </button>
@@ -479,7 +513,7 @@ export function ManagerCountWizard({
                             <button
                               type="button"
                               className="fc-btn fc-btn--primary"
-                              onClick={() => setFxTrack("IL")}
+                              onClick={() => void openFxPurchase("IL")}
                             >
                               רכישת מט״ח IL
                             </button>
@@ -687,11 +721,6 @@ export function ManagerCountWizard({
           week={week}
           weekLabel={weekLabel}
           track={fxTrack}
-          availableIls={
-            fxTrack === "PS"
-              ? resolveAvailablePsIlsForFx(flow, form)
-              : resolveAvailableIlIlsForFx(flow, form)
-          }
           saving={saving}
           onClose={() => setFxTrack(null)}
           onSaved={() => void handleFxSaved()}

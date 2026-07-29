@@ -14,15 +14,20 @@ import {
 } from "@/components/admin/manager-count/manager-count-utils";
 import type { FlowWeekPayload, FxPurchaseRecord } from "@/app/admin/cash-flow/flow-types";
 
-function fx(ilsAmount: number, track: "PS" | "IL" = "PS"): FxPurchaseRecord {
+function fx(
+  ilsAmount: number,
+  track: "PS" | "IL" = "PS",
+  remainderCashIls = 0,
+  remainderBankIls = 0,
+): FxPurchaseRecord {
   return {
     id: `fx-${track}-${ilsAmount}`,
     track,
     ilsAmount,
     usdReceived: ilsAmount / 3.5,
     rate: 3.5,
-    remainderCashIls: 0,
-    remainderBankIls: 0,
+    remainderCashIls,
+    remainderBankIls,
     createdAt: new Date().toISOString(),
   };
 }
@@ -201,5 +206,30 @@ describe("QA: הפרדת PS / IL בזמין לרכישת מט״ח", () => {
     });
     assert.equal(calc.availableIlsForFx, calc.ilsRemainingAfterFx);
     assert.equal(calc.availableIlsForFx, 7000);
+  });
+
+  it("יתרת IL שהוחזרה לקופה הראשית עוברת מ-IL לזמין PS", () => {
+    const purchases = [fx(100, "IL", 0, 1900)];
+    assert.equal(computeIlAvailableIlsForFx(2000, 0, 0, purchases), 0);
+    assert.equal(computePsAvailableIlsForFx(100, purchases), 2000);
+  });
+
+  it("יתרת IL שנשארה במסלול נשארת זמינה ל-IL בלבד", () => {
+    const purchases = [fx(100, "IL", 1900, 0)];
+    assert.equal(computeIlAvailableIlsForFx(2000, 0, 0, purchases), 1900);
+    assert.equal(computePsAvailableIlsForFx(100, purchases), 100);
+  });
+
+  it("יתרה מדויקת, גבוהה ונמוכה נשמרות ללא סטייה של אגורה", () => {
+    const exact = computePsAvailableIlsForFx(2000, []);
+    assert.equal(exact, 2000);
+    assert.equal(exact >= 2000, true);
+    assert.equal(exact >= 1900, true);
+    assert.equal(exact >= 2000.03, false);
+  });
+
+  it("מספר רכישות באותו שבוע מחושבות פעם אחת בלבד", () => {
+    const purchases = [fx(100, "PS"), fx(400, "PS")];
+    assert.equal(computePsAvailableIlsForFx(2000, purchases), 1500);
   });
 });

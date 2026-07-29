@@ -6,21 +6,23 @@ import { fmtDailyMoney } from "@/lib/cash-control-daily";
 import { previewFxPurchaseAction } from "@/app/admin/cash-flow/preview-fx-purchase-action";
 import { previewFxIntakeAllocationAction } from "@/app/admin/cash-flow/preview-fx-intake-allocation-action";
 import { saveFxPurchaseAction } from "@/app/admin/cash-flow/save-fx-purchase-action";
+import { getFxPurchaseContextAction } from "@/app/admin/cash-flow/get-fx-purchase-balance-action";
 import type { FxPurchaseTrack } from "@/app/admin/cash-flow/flow-types";
-import type { FxIntakeAllocationPreview } from "@/lib/flow-control/services/fx-intake-allocation-service";
 import { fcNum } from "@/components/admin/flow-control/shared";
 
 type Step = "amount" | "remainder" | "rate" | "breakdown";
 
 type RemainderMode = "cash" | "bank" | "split";
 
+type AllocationPreview = NonNullable<
+  Awaited<ReturnType<typeof previewFxIntakeAllocationAction>>
+>;
+
 export type ManagerCountFxPurchaseFlowProps = {
   open: boolean;
   week: string;
   weekLabel: string | null;
-  /** מסלול רכישה — PS או IL (חובה, ללא ברירת מחדל משותפת) */
   track: FxPurchaseTrack;
-  availableIls: string;
   saving: boolean;
   onClose: () => void;
   onSaved: () => void;
@@ -31,7 +33,6 @@ export function ManagerCountFxPurchaseFlow({
   week,
   weekLabel,
   track,
-  availableIls,
   saving,
   onClose,
   onSaved,
@@ -42,9 +43,11 @@ export function ManagerCountFxPurchaseFlow({
   const [remainderMode, setRemainderMode] = useState<RemainderMode>("cash");
   const [remainderCash, setRemainderCash] = useState("");
   const [remainderBank, setRemainderBank] = useState("");
-  const [allocation, setAllocation] = useState<FxIntakeAllocationPreview | null>(null);
+  const [allocation, setAllocation] = useState<AllocationPreview | null>(null);
   const [allocationLoading, setAllocationLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [availableIls, setAvailableIls] = useState<number | null>(null);
+  const [contextLoading, setContextLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const reset = useCallback(() => {
@@ -56,16 +59,30 @@ export function ManagerCountFxPurchaseFlow({
     setRemainderBank("");
     setAllocation(null);
     setBusy(false);
+    setAvailableIls(null);
   }, []);
 
+  const reloadContext = useCallback(async () => {
+    setContextLoading(true);
+    try {
+      const ctx = await getFxPurchaseContextAction({ week, track });
+      setAvailableIls(ctx?.availableIls ?? 0);
+    } finally {
+      setContextLoading(false);
+    }
+  }, [week, track]);
+
   useEffect(() => {
-    if (!open) reset();
-  }, [open, reset]);
+    if (!open) {
+      reset();
+      return;
+    }
+    void reloadContext();
+  }, [open, reset, reloadContext]);
 
   const ilsNum = fcNum(ilsAmount);
   const rateNum = fcNum(rate);
-  const availNum = fcNum(availableIls);
-
+  const availNum = availableIls ?? 0;
   const remainderAfter =
     ilsNum > 0 ? Math.max(0, Math.round((availNum - ilsNum) * 100) / 100) : 0;
 
@@ -85,17 +102,20 @@ export function ManagerCountFxPurchaseFlow({
     if (debounceRef.current) clearTimeout(debounceRef.current);
     setAllocationLoading(true);
     debounceRef.current = setTimeout(() => {
-      void previewFxIntakeAllocationAction({ week, ilsAmount: ilsNum, purchaseRate: rateNum }).then(
-        (data) => {
-          setAllocation(data);
-          setAllocationLoading(false);
-        },
-      );
+      void previewFxIntakeAllocationAction({
+        week,
+        track,
+        ilsAmount: ilsNum,
+        purchaseRate: rateNum,
+      }).then((data) => {
+        setAllocation(data);
+        setAllocationLoading(false);
+      });
     }, 150);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [step, week, ilsNum, rateNum]);
+  }, [step, week, track, ilsNum, rateNum]);
 
   const handleClose = () => {
     reset();
@@ -107,18 +127,13 @@ export function ManagerCountFxPurchaseFlow({
       alert("יש להזין סכום ₪ לרכישה");
       return;
     }
-    if (ilsNum > availNum + 0.02) {
-      alert(
-        `לא ניתן להמשיך: סכום הרכישה (${ilsNum.toLocaleString("he-IL")} ₪) גדול מהזמין בקופה (${availNum.toLocaleString("he-IL")} ₪)`,
-      );
-      return;
-    }
     setStep("remainder");
   };
 
   const goRate = async () => {
     const preview = await previewFxPurchaseAction({
-      availableIls: availNum,
+      week,
+      track,
       ilsAmount: ilsNum,
       rate: rateNum > 0 ? rateNum : 1,
       remainderCashIls: fcNum(remainderCash),
@@ -141,12 +156,6 @@ export function ManagerCountFxPurchaseFlow({
 
   const handleSave = async () => {
     if (!allocation) return;
-    if (ilsNum > availNum + 0.02) {
-      alert(
-        `לא ניתן לשמור: סכום הרכישה (${ilsNum.toLocaleString("he-IL")} ₪) גדול מהזמין בקופה (${availNum.toLocaleString("he-IL")} ₪)`,
-      );
-      return;
-    }
     setBusy(true);
     try {
       const res = await saveFxPurchaseAction({
@@ -156,9 +165,6 @@ export function ManagerCountFxPurchaseFlow({
         rate: rateNum,
         remainderCashIls: fcNum(remainderCash),
         remainderBankIls: fcNum(remainderBank),
-        intakeAllocations: allocation.lines,
-        intakeProfitIls: allocation.totalProfitIls,
-        intakeLossIls: allocation.totalLossIls,
       });
       if (!res.ok) {
         alert(res.error ?? "שמירה נכשלה");
@@ -194,7 +200,11 @@ export function ManagerCountFxPurchaseFlow({
             <p className="mc-muted">
               זמין במסלול {track}
               {track === "PS" ? " (מזומן ₪)" : " (העברות/אשראי/צ׳קים)"}:{" "}
-              <strong dir="ltr">{fmtDailyMoney("ILS", availNum)}</strong>
+              {contextLoading ? (
+                "טוען…"
+              ) : (
+                <strong dir="ltr">{fmtDailyMoney("ILS", availNum)}</strong>
+              )}
             </p>
             <label className="fc-field">
               <span>סכום ₪ לרכישה</span>
@@ -203,7 +213,7 @@ export function ManagerCountFxPurchaseFlow({
                 inputMode="decimal"
                 className="fc-input"
                 value={ilsAmount}
-                disabled={saving || busy}
+                disabled={saving || busy || contextLoading}
                 onChange={(e) => setIlsAmount(e.target.value)}
                 autoFocus
               />
@@ -212,7 +222,12 @@ export function ManagerCountFxPurchaseFlow({
               <button type="button" className="fc-btn fc-btn--ghost" onClick={handleClose}>
                 ביטול
               </button>
-              <button type="button" className="fc-btn fc-btn--primary" onClick={goRemainder}>
+              <button
+                type="button"
+                className="fc-btn fc-btn--primary"
+                disabled={contextLoading}
+                onClick={goRemainder}
+              >
                 המשך
               </button>
             </div>
@@ -331,8 +346,7 @@ export function ManagerCountFxPurchaseFlow({
               <>
                 {allocation.shortfallIls > 0.02 ? (
                   <p className="fc-error">
-                    חסרים {allocation.shortfallIls.toLocaleString("he-IL")} ₪ בתקבולים מזוהים — ייתכן מזומן שלא
-                    מקושר לתשלום
+                    חסרים {allocation.shortfallIls.toLocaleString("he-IL")} ₪ בתקבולים מזוהים במסלול {track}
                   </p>
                 ) : null}
                 <div className="fc-table-wrap">
@@ -394,32 +408,9 @@ export function ManagerCountFxPurchaseFlow({
                     <strong dir="ltr">{fmtDailyMoney("USD", allocation.usdReceived)}</strong>
                   </div>
                 </div>
-                {allocation.lines.length > 0 ? (
-                  <div className="mc-fx-pl-bars">
-                    {allocation.lines.map((line) => {
-                      const max = Math.max(
-                        ...allocation.lines.map((l) => Math.abs(l.profitIls)),
-                        1,
-                      );
-                      const w = Math.min(100, (Math.abs(line.profitIls) / max) * 100);
-                      return (
-                        <div key={`bar-${line.paymentId}`} className="mc-fx-pl-bar-row">
-                          <span>{line.sourceLabel}</span>
-                          <div className="mc-fx-pl-bar-track">
-                            <div
-                              className={`mc-fx-pl-bar-fill${line.profitIls < 0 ? " is-loss" : ""}`}
-                              style={{ width: `${w}%` }}
-                            />
-                          </div>
-                          <span dir="ltr">{fmtDailyMoney("ILS", line.profitIls)}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : null}
               </>
             ) : (
-              <p className="mc-muted">אין תקבולי מזומן ₪ לשבוע זה</p>
+              <p className="mc-muted">אין תקבולים לשבוע זה</p>
             )}
             <div className="mc-fx-wizard__actions">
               <button type="button" className="fc-btn fc-btn--ghost" onClick={() => setStep("rate")}>

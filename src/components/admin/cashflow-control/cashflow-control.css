@@ -151,6 +151,25 @@
   overflow: hidden;
 }
 
+.cfc-summary-table-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--cfc-border);
+  background: #fff;
+}
+
+.cfc-summary-table-title strong {
+  color: var(--cfc-text);
+  font-size: 0.95rem;
+}
+
+.cfc-summary-table-title span {
+  color: var(--cfc-muted);
+  font-size: 0.76rem;
+}
+
 .cfc-load-more {
   display: flex;
   justify-content: center;
@@ -168,6 +187,16 @@
   min-width: 980px;
   border-collapse: separate;
   border-spacing: 0;
+}
+
+.cfc-week-summary-table {
+  min-width: 1080px;
+}
+
+.cfc-week-summary-table .cfc-summary-amount,
+.cfc-week-summary-table .cfc-summary-count {
+  text-align: right;
+  font-weight: 600;
 }
 
 .cfc-table thead th {

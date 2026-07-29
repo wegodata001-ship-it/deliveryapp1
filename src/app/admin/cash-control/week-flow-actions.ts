@@ -199,6 +199,13 @@ export async function saveCashWeekFlowAction(input: {
   const wk = input.week.trim();
   if (!getAhWeekRange(wk)) return { ok: false, error: "שבוע לא תקין" };
 
+  if (input.fxPurchaseIls !== undefined || input.fxPurchaseUsd !== undefined) {
+    return {
+      ok: false,
+      error: "רכישת מט״ח מתבצעת רק דרך מסך רכישת מט״ח — לא ניתן לעדכן ידנית",
+    };
+  }
+
   const c = input.counted ?? {};
   await prisma.cashWeekFlow.upsert({
     where: { countryCode_weekCode: { countryCode: "TR", weekCode: wk } },

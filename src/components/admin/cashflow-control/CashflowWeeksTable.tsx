@@ -2,14 +2,8 @@
 
 import type { FlowWeekOverviewRow } from "@/app/admin/cash-flow/flow-types";
 import {
-  deriveWeekStatus,
   money,
-  moneyBoth,
-  statusLabel,
-  sumManagerIls,
   weekDateRange,
-  weekDiffIls,
-  weekFxNetIls,
 } from "@/components/admin/cashflow-control/cashflow-control-helpers";
 
 export type CashflowWeeksTableProps = {
@@ -60,26 +54,27 @@ export function CashflowWeeksTable({
 
   return (
     <div className="cfc-card cfc-table-card">
+      <div className="cfc-summary-table-title">
+        <strong>סיכום שבועי לפי אמצעי תקבול</strong>
+        <span>שורה אחת לכל שבוע</span>
+      </div>
       <div className="cfc-table-scroll">
-        <table className="cfc-table">
+        <table className="cfc-table cfc-week-summary-table">
           <thead>
             <tr>
               <th>שבוע</th>
-              <th>סה״כ התקבל</th>
-              <th>סה״כ נספר</th>
-              <th>הפרש</th>
-              <th>רווח מט״ח</th>
-              <th>יתרה בקופה</th>
-              <th>חוב לטורקיה</th>
-              <th>סטטוס</th>
+              <th>סה״כ הזמנות</th>
+              <th>סה״כ דוח</th>
+              <th>התקבל $ מזומן</th>
+              <th>התקבל ₪ מזומן</th>
+              <th>סה״כ העברות ₪</th>
+              <th>סה״כ אשראי ₪</th>
+              <th>סה״כ צ׳קים ₪</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((row) => {
               const selected = selectedWeek === row.week;
-              const status = deriveWeekStatus(row);
-              const diff = weekDiffIls(row);
-              const fxNet = weekFxNetIls(row);
               return (
                 <tr
                   key={row.week}
@@ -99,21 +94,13 @@ export function CashflowWeeksTable({
                     <strong dir="ltr">{row.week}</strong>
                     <span>{weekDateRange(row.week, row.weekLabel)}</span>
                   </td>
-                  <td dir="ltr">{money("ILS", row.totalReceivedIls)}</td>
-                  <td dir="ltr">{money("ILS", sumManagerIls(row))}</td>
-                  <td dir="ltr" className={diff === 0 ? "" : diff > 0 ? "cfc-amt--warn" : "cfc-amt--alert"}>
-                    {money("ILS", diff)}
-                  </td>
-                  <td dir="ltr" className={fxNet >= 0 ? "cfc-amt--ok" : "cfc-amt--alert"}>
-                    {money("ILS", fxNet)}
-                  </td>
-                  <td dir="ltr">{moneyBoth(row.drawerRemainingIls, row.drawerRemainingUsd)}</td>
-                  <td dir="ltr" className={Number(row.turkeyClosingUsd ?? 0) > 0.01 ? "cfc-amt--alert" : ""}>
-                    {money("USD", row.turkeyClosingUsd)}
-                  </td>
-                  <td>
-                    <span className={`cfc-status cfc-status--${status}`}>{statusLabel(status)}</span>
-                  </td>
+                  <td className="cfc-summary-count">{row.totalOrders.toLocaleString("he-IL")}</td>
+                  <td dir="ltr" className="cfc-summary-amount">{money("USD", row.totalOrdersUsd)}</td>
+                  <td dir="ltr" className="cfc-summary-amount">{money("USD", row.receivedCashUsd)}</td>
+                  <td dir="ltr" className="cfc-summary-amount">{money("ILS", row.receivedCashIls)}</td>
+                  <td dir="ltr" className="cfc-summary-amount">{money("ILS", row.receivedBankTransferIls)}</td>
+                  <td dir="ltr" className="cfc-summary-amount">{money("ILS", row.receivedCreditCardIls)}</td>
+                  <td dir="ltr" className="cfc-summary-amount">{money("ILS", row.receivedChecksIls)}</td>
                 </tr>
               );
             })}

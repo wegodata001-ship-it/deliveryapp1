@@ -2,7 +2,7 @@ import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getAhWeekRange } from "@/lib/weeks/ah-week";
-import { appendFlowFxPurchase } from "@/lib/flow-control/services/exchange-service";
+import { executeFxPurchase } from "@/lib/flow-control/fx-purchase/service";
 import { saveFlowWeekCashCount } from "@/lib/flow-control/services/cash-count-service";
 import { syncCashCountTurkeyAllocationInTx } from "@/lib/flow-control/turkey-transfer-balance-service";
 import type { ManagerCountForm } from "@/app/admin/cash-flow/flow-types";
@@ -79,16 +79,13 @@ export async function persistFxPurchase(input: {
   remainderCashIls: number;
   remainderBankIls: number;
   note?: string | null;
-  intakeAllocations?: import("@/app/admin/cash-flow/flow-types").FxPurchaseRecord["intakeAllocations"];
-  intakeProfitIls?: number;
-  intakeLossIls?: number;
   updatedById: string;
   createdByName?: string | null;
-}): Promise<{ ok: boolean; error?: string }> {
+}): Promise<{ ok: boolean; error?: string; auditId?: string }> {
   const wk = input.week.trim();
   if (!getAhWeekRange(wk)) return { ok: false, error: "שבוע לא תקין" };
 
-  const res = await appendFlowFxPurchase({
+  const res = await executeFxPurchase({
     weekCode: wk,
     track: input.track,
     ilsAmount: input.ilsAmount,
@@ -96,9 +93,6 @@ export async function persistFxPurchase(input: {
     remainderCashIls: input.remainderCashIls,
     remainderBankIls: input.remainderBankIls,
     note: input.note,
-    intakeAllocations: input.intakeAllocations,
-    intakeProfitIls: input.intakeProfitIls,
-    intakeLossIls: input.intakeLossIls,
     updatedById: input.updatedById,
     createdByName: input.createdByName,
   });
@@ -126,6 +120,12 @@ export async function persistLegacyWeekFlow(input: {
   updatedById: string;
 }): Promise<{ ok: boolean; error?: string }> {
   const wk = input.week.trim();
+  if (input.fxPurchaseIls !== undefined || input.fxPurchaseUsd !== undefined) {
+    return {
+      ok: false,
+      error: "רכישת מט״ח מתבצעת רק דרך מסך רכישת מט״ח — לא ניתן לעדכן ידנית",
+    };
+  }
   const c = input.counted ?? {};
   await prisma.cashWeekFlow.upsert({
     where: { countryCode_weekCode: { countryCode: "TR", weekCode: wk } },

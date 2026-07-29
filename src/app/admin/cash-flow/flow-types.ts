@@ -176,6 +176,16 @@ export type FlowWeekOverviewRow = {
   week: string;
   weekLabel: string | null;
   hasData: boolean;
+  /** מספר ההזמנות הפעילות בשבוע */
+  totalOrders: number;
+  /** סה״כ ערך ההזמנות בשבוע, בדולר */
+  totalOrdersUsd: string;
+  /** תקבולים שהתקבלו בפועל, לפי אמצעי ומטבע */
+  receivedCashUsd: string;
+  receivedCashIls: string;
+  receivedBankTransferIls: string;
+  receivedCreditCardIls: string;
+  receivedChecksIls: string;
   /** סכומי ספירות קופה יומיות מצטברים */
   drawer: Record<CashDailyMethodId, string>;
   totalReceivedIls: string;

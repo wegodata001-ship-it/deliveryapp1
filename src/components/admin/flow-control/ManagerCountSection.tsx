@@ -228,7 +228,6 @@ export function ManagerCountSection({
           open={fxOpen}
           week={week}
           weekLabel={weekLabel}
-          availableIls={flow?.availableIlsForFx ?? "0"}
           saving={saving}
           onClose={() => setFxOpen(false)}
           onSave={async (input) => {

@@ -329,20 +329,33 @@ export function computeFxUsdReceived(ilsAmount: number, rate: number): number {
 }
 
 /**
- * זמין לרכישת מט״ח PS = מזומן ₪ PS − רכישות מט״ח PS בלבד.
- * אסור להחסיר כאן רכישות IL.
+ * יתרות IL שסומנו "להחזיר לקופה הראשית".
+ * השדה remainderBankIls הוא שם legacy; ב-UI ובתהליך העסקי הוא מייצג
+ * החזרה מהמסלול הזמני לקופה הראשית.
+ */
+export function sumIlReturnedToMainCashIls(fxPurchases: FxPurchaseRecord[]): number {
+  return round2(
+    filterFxPurchasesByTrack(fxPurchases, "IL").reduce(
+      (sum, purchase) => sum + Math.max(0, purchase.remainderBankIls),
+      0,
+    ),
+  );
+}
+
+/**
+ * זמין לרכישת מט״ח PS = מזומן ₪ PS + יתרות שחזרו מ-IL − רכישות PS.
  */
 export function computePsAvailableIlsForFx(
   countedCashIls: number,
   fxPurchases: FxPurchaseRecord[],
 ): number {
   const spent = sumFxPurchases(fxPurchases, "PS").ils;
-  return Math.max(0, round2(Math.max(0, countedCashIls) - spent));
+  const returnedFromIl = sumIlReturnedToMainCashIls(fxPurchases);
+  return Math.max(0, round2(Math.max(0, countedCashIls) + returnedFromIl - spent));
 }
 
 /**
- * זמין לרכישת מט״ח IL = מאגר IL (העברות+אשראי+צ'קים) − רכישות מט״ח IL בלבד.
- * אסור להחסיר כאן רכישות PS / מזומן PS.
+ * זמין לרכישת מט״ח IL = מאגר IL − רכישות IL − יתרות שהוחזרו לקופה הראשית.
  */
 export function computeIlAvailableIlsForFx(
   countedTransferIls: number,
@@ -352,7 +365,8 @@ export function computeIlAvailableIlsForFx(
 ): number {
   const pool = computeIlSourcePoolIls(countedTransferIls, countedCreditIls, countedChecksIls);
   const spent = sumFxPurchases(fxPurchases, "IL").ils;
-  return Math.max(0, round2(pool - spent));
+  const returnedToMain = sumIlReturnedToMainCashIls(fxPurchases);
+  return Math.max(0, round2(pool - spent - returnedToMain));
 }
 
 /**
@@ -395,7 +409,7 @@ export function computeCashUsdInDrawer(
 }
 
 /**
- * שקל בקופה PS = שקל PS − הוצאות − רכישות מט״ח PS − יתרות שהועברו לבנק מ־PS
+ * שקל בקופה הראשית = שקל PS + יתרות שחזרו מ-IL − הוצאות − רכישות PS.
  */
 export function computeCashIlsInDrawer(
   countedCashIls: number,
@@ -404,8 +418,8 @@ export function computeCashIlsInDrawer(
 ): number {
   const ps = filterFxPurchasesByTrack(fxPurchases, "PS");
   const fxIls = sumFxPurchases(ps, "PS").ils;
-  const bankFromRemainder = ps.reduce((s, p) => s + p.remainderBankIls, 0);
-  return round2(countedCashIls - expensesIls - fxIls - bankFromRemainder);
+  const returnedFromIl = sumIlReturnedToMainCashIls(fxPurchases);
+  return round2(countedCashIls + returnedFromIl - expensesIls - fxIls);
 }
 
 /**
@@ -786,9 +800,9 @@ export function computeFlowWeekSummary(input: FlowWeekCalculationInput): FlowWee
     input.bankWithdrawalsIls ?? 0,
     input.bankDepositsIls ?? 0,
   );
-  /** יתרת PS / זמין ל־FX PS — ללא החסרת IL */
-  const ilsRemainingAfterFx = computePsRemainingIls(input.countedCashIls, fxPs.ils);
+  /** יתרת הקופה הראשית וזמין ל־FX PS מגיעים מאותו חישוב יחיד. */
   const availableIlsForFx = computePsAvailableIlsForFx(input.countedCashIls, input.fxPurchases);
+  const ilsRemainingAfterFx = availableIlsForFx;
   void ilSourcePool;
   const cashUsdInDrawer = computeCashUsdInDrawer(
     input.countedCashUsd,

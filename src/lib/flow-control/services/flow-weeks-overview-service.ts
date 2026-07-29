@@ -26,7 +26,7 @@ function round2(n: number): number {
 
 async function loadOneWeekOverview(weekCode: string): Promise<FlowWeekOverviewRow | null> {
   const wk = weekCode.trim();
-  const [approved, flow, drawerRows, turkeyBalance, payments] = await Promise.all([
+  const [approved, flow, drawerRows, turkeyBalance, payments, orders] = await Promise.all([
     loadFlowWeekCashCountSummary(wk),
     loadFlowWeek(wk),
     prisma.cashDailyDrawerCount.findMany({
@@ -53,10 +53,20 @@ async function loadOneWeekOverview(weekCode: string): Promise<FlowWeekOverviewRo
         createdAt: true,
       },
     }),
+    prisma.order.aggregate({
+      where: {
+        weekCode: wk,
+        countryCode: "TR",
+        deletedAt: null,
+      },
+      _count: { _all: true },
+      _sum: { totalUsd: true },
+    }),
   ]);
   if (!flow) return null;
 
   const paymentDaily = buildFlowPaymentDailyRows(wk, payments);
+  const paymentWeekTotal = paymentDaily.find((row) => row.isTotal)?.intake ?? emptyDailyIntake();
   /** מקור יחיד: קליטות תשלום (Payment) — לא ספירת קופה / CashWeekFlow */
   const totalReceivedIls = flow.kpis.totalReceivedIls;
 
@@ -87,7 +97,14 @@ async function loadOneWeekOverview(weekCode: string): Promise<FlowWeekOverviewRo
   return {
     week: wk,
     weekLabel: formatAhWeekLabel(wk),
-    hasData: hasPaymentData || approved.hasAnyCount || flow.counted.CASH_ILS != null,
+    hasData: orders._count._all > 0 || hasPaymentData || approved.hasAnyCount || flow.counted.CASH_ILS != null,
+    totalOrders: orders._count._all,
+    totalOrdersUsd: money(Number(orders._sum.totalUsd ?? 0)),
+    receivedCashUsd: money(Number(paymentWeekTotal.CASH_USD ?? 0)),
+    receivedCashIls: money(Number(paymentWeekTotal.CASH_ILS ?? 0)),
+    receivedBankTransferIls: money(Number(paymentWeekTotal.BANK_TRANSFER_ILS ?? 0)),
+    receivedCreditCardIls: money(Number(paymentWeekTotal.CREDIT_CARD_ILS ?? 0)),
+    receivedChecksIls: money(Number(paymentWeekTotal.CHECK_ILS ?? 0)),
     drawer: drawerDto,
     totalReceivedIls,
     daysCounted: maxDays,
