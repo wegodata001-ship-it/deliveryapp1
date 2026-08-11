@@ -8,6 +8,7 @@ import { DEBT_WITHDRAWAL_LEDGER_LABEL, orderCustomerCreditUsd } from "@/lib/debt
 import { paymentIntakeOrderDateThroughAhWeekEnd } from "@/lib/payment-intake-order-filter";
 import { type PaymentIntakeOrderStatus } from "@/lib/payment-intake";
 import { findActiveCustomerPayments, groupByActivePayments } from "@/lib/payment-record-status";
+import { computeOrderOpenDebtUsd, deriveOrderPaymentDisplayStatus } from "@/lib/order-remaining-debt";
 import { paymentRecordUsdEquivalent as paymentUsd } from "@/lib/payment-usd-equivalent";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 import { OS } from "@/lib/order-status-slugs";
@@ -228,11 +229,13 @@ export async function buildCustomerDebtBreakdown(input: {
     const commission = round2(dec(o.commissionUsd));
     const totalDue = orderTotalUsd(o);
     const paid = round2(paidByOrder.get(o.id) ?? 0);
-    const remaining = round2(Math.max(0, totalDue - paid));
+    const remaining = computeOrderOpenDebtUsd(totalDue, paid);
     if (remaining <= EPS) continue;
 
-    let status: PaymentIntakeOrderStatus = "unpaid";
-    if (paid > EPS) status = "partial";
+    const status: PaymentIntakeOrderStatus = deriveOrderPaymentDisplayStatus({
+      totalUsd: totalDue,
+      paidUsd: paid,
+    });
 
     const visible = visibleOrderIds.has(o.id);
     openOrdersDebtAll = round2(openOrdersDebtAll + remaining);

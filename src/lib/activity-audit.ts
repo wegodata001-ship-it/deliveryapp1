@@ -88,6 +88,12 @@ export function activityActionLabelHe(actionType: string): string {
       return "הפקת PDF מותאם למשלוחים";
     case "SHIPMENT_COURIER_ASSIGNED":
       return "שיוך שליח למשלוחים";
+    case "CASH_EXPENSE_DELETED":
+      return "מחיקת הוצאת קופה";
+    case "WEEK_BALANCED":
+      return "איזון שבוע בבקרת קופה";
+    case "WEEK_BALANCE_INVALIDATED":
+      return "ביטול איזון שבוע";
     default:
       return "פעולה";
   }

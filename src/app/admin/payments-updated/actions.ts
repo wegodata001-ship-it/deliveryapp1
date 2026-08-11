@@ -5,6 +5,7 @@ import { OS } from "@/lib/order-status-slugs";
 import { revalidatePath } from "next/cache";
 import { revalidateAllKpiCaches } from "@/lib/kpi-cache-revalidate";
 import { scheduleRevalidateAfterPaymentSave } from "@/lib/revalidate-after-payment-save";
+import { invalidateWeekBalanceIfBalanced } from "@/lib/cash-control/week-balance-service";
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { assertCreatedByUserExists, SessionUserInvalidError } from "@/lib/session-user-guard";
 import { computeFromUsdAmount } from "@/lib/financial-calc";
@@ -16,6 +17,7 @@ import {
   roundMoney2,
   toPaymentIntakeBases,
 } from "@/lib/payment-intake";
+import { computeOrderOpenDebtUsd } from "@/lib/order-remaining-debt";
 import {
   computePaymentOveragePreview,
   orderExpectedIlsValue,
@@ -341,7 +343,7 @@ export async function previewCustomerPaymentOverageAction(input: {
   for (const o of orders) {
     const total = Number(orderUsdTotal(o).toFixed(4));
     const paid = Number(o.paidUsd.toFixed(4));
-    openDebtUsd += Math.max(0, total - paid);
+    openDebtUsd += computeOrderOpenDebtUsd(total, paid);
   }
   openDebtUsd = roundMoney2(openDebtUsd);
 
@@ -814,7 +816,7 @@ export async function savePaymentUpdatedAction(
          */
         if (allocationEntries.length === 0) {
           const ledgerOpenUsd = roundMoney2(
-            bases.reduce((s, b) => s + Math.max(0, orderLedgerBalanceUsd(b)), 0),
+            bases.reduce((s, b) => s + computeOrderOpenDebtUsd(b.totalAmountUsd, b.dbPaidUsd), 0),
           );
           if (ledgerOpenUsd > ALLOC_EPS && openMethodRemainingUsd <= ALLOC_EPS) {
             usedMethodMatching = false;
@@ -863,7 +865,7 @@ export async function savePaymentUpdatedAction(
       (surplusForfeit && unallocatedUsd > ALLOC_EPS);
     if (allocationEntries.length === 0 && !canSaveWithoutAllocTarget) {
       const ledgerOpenUsd = roundMoney2(
-        bases.reduce((s, b) => s + Math.max(0, orderLedgerBalanceUsd(b)), 0),
+        bases.reduce((s, b) => s + computeOrderOpenDebtUsd(b.totalAmountUsd, b.dbPaidUsd), 0),
       );
       console.error("[payment-save] Matching/FIFO returned no allocation targets", {
         customerId: cid,
@@ -1738,6 +1740,14 @@ export async function savePaymentUpdatedAction(
 
   const customerBalanceUsd = await getCustomerInternalBalanceUsd(cid);
   await persistCustomerBalanceSnapshot(cid, customerBalanceUsd);
+  if (weekCode) {
+    await invalidateWeekBalanceIfBalanced({
+      weekCode,
+      userId: me.id,
+      reason: "עריכת תשלום",
+      trigger: primaryPaymentId ?? undefined,
+    });
+  }
   scheduleRevalidateAfterPaymentSave();
   return {
     ok: true,
@@ -1985,7 +1995,9 @@ async function applyCustomerBalanceResetFromCreditInTx(
     const commissionStored = o.commissionUsd ?? new Prisma.Decimal(0);
     const total = o.totalUsd ?? amount.add(commissionStored).toDecimalPlaces(4, 4);
     const paid = paidByOrder.get(o.id) ?? new Prisma.Decimal(0);
-    const remaining = total.sub(paid).toDecimalPlaces(4, 4);
+    const remaining = new Prisma.Decimal(
+      computeOrderOpenDebtUsd(Number(total), Number(paid)).toFixed(4),
+    );
     if (remaining.abs().lte(EPS)) continue;
     toClose.push({
       orderId: o.id,
@@ -2509,7 +2521,7 @@ export async function restorePaymentAction(input: {
 
   const row = await prisma.payment.findFirst({
     where: { id: pid, customerId: { not: null } },
-    select: { id: true, paymentNumber: true, customerId: true, status: true },
+    select: { id: true, paymentNumber: true, customerId: true, status: true, weekCode: true },
   });
   if (!row?.customerId) return { ok: false, error: "תשלום לא נמצא" };
   if (row.status !== PAYMENT_RECORD_STATUS_CANCELLED) {
@@ -2565,6 +2577,14 @@ export async function restorePaymentAction(input: {
 
   const customerBalanceUsd = await getCustomerInternalBalanceUsd(row.customerId);
   await persistCustomerBalanceSnapshot(row.customerId, customerBalanceUsd);
+  if (row.weekCode?.trim()) {
+    await invalidateWeekBalanceIfBalanced({
+      weekCode: row.weekCode,
+      userId: me.id,
+      reason: "שחזור תשלום",
+      trigger: row.id,
+    });
+  }
 
   revalidateAllKpiCaches();
   revalidatePath("/admin/orders");
@@ -2657,7 +2677,9 @@ export async function applyCustomerCreditToOpenOrdersAction(input: {
           const com = o.commissionUsd ?? new Prisma.Decimal(0);
           const total = o.totalUsd ?? deal.add(com).toDecimalPlaces(4, 4);
           const paid = paidByOrder.get(o.id) ?? new Prisma.Decimal(0);
-          const remaining = total.sub(paid).toDecimalPlaces(4, 4);
+          const remaining = new Prisma.Decimal(
+            computeOrderOpenDebtUsd(Number(total), Number(paid)).toFixed(4),
+          );
           return {
             orderId: o.id,
             orderNumber: o.orderNumber?.trim() || null,

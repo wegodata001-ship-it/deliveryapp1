@@ -31,6 +31,8 @@ import {
   getShipmentRecordById,
   deleteShipmentRecord,
   deleteShipmentBatches,
+  createShipmentRecord,
+  createShipmentRecordsBulk,
   previewCourierDebtClose,
   closeCourierDebts,
 } from "@/app/admin/shipments/service";
@@ -47,6 +49,7 @@ import type {
   AddPaymentInput,
   SaveShipmentPaymentsInput,
   UpdateShipmentRecordInput,
+  CreateShipmentRecordInput,
   UpdateShipmentBatchInput,
 } from "@/app/admin/shipments/types";
 import { PAYMENT_METHODS } from "@/app/admin/shipments/types";
@@ -118,6 +121,27 @@ export async function importRowsIntoBatchAction(
     return { ok: true, count: result.count, matchSummary: result.matchSummary };
   } catch (e) {
     return { ok: false, error: String(e) };
+  }
+}
+
+export async function previewShipmentImportLocationMappingsAction(
+  originalPlaces: string[],
+): Promise<
+  | { ok: true; mappings: import("@/app/admin/shipments/types").ShipmentImportLocationMappingDto[] }
+  | { ok: false; error: string }
+> {
+  try {
+    const me = await requireAuth();
+    if (!isAdminUser(me) && !userHasAnyPermission(me, VIEW_PERMS))
+      return { ok: false, error: "אין הרשאה" };
+    const { previewImportLocationMappings } = await import(
+      "@/lib/shipment-import-location-mapping"
+    );
+    const mappings = await previewImportLocationMappings(originalPlaces);
+    return { ok: true, mappings };
+  } catch (e) {
+    console.error("[shipments] previewShipmentImportLocationMappings failed", e);
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
 
@@ -360,6 +384,41 @@ export async function updateShipmentRecordAction(
   }
 }
 
+export async function createShipmentRecordAction(
+  input: CreateShipmentRecordInput,
+): Promise<{ ok: true; record: ShipmentRecordDto } | { ok: false; error: string }> {
+  try {
+    const me = await requireAuth();
+    if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
+      return { ok: false, error: "אין הרשאה" };
+    const record = await createShipmentRecord(input);
+    revalidate();
+    revalidatePath(`/admin/shipments/${input.batchId}`);
+    return { ok: true, record };
+  } catch (e) {
+    console.error("[shipments] createShipmentRecord failed", e);
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export async function createShipmentRecordsBulkAction(input: {
+  batchId: string;
+  count: number;
+}): Promise<{ ok: true; records: ShipmentRecordDto[] } | { ok: false; error: string }> {
+  try {
+    const me = await requireAuth();
+    if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
+      return { ok: false, error: "אין הרשאה" };
+    const records = await createShipmentRecordsBulk(input.batchId, input.count);
+    revalidate();
+    revalidatePath(`/admin/shipments/${input.batchId}`);
+    return { ok: true, records };
+  } catch (e) {
+    console.error("[shipments] createShipmentRecordsBulk failed", e);
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 // ─── Zones ───────────────────────────────────────────────────────────────────
 
 export async function listZonesAction(): Promise<
@@ -387,7 +446,9 @@ export async function createZoneAction(
     revalidate();
     return { ok: true, zone };
   } catch (e) {
-    return { ok: false, error: String(e) };
+    console.error("[shipments] createZone failed", { name, error: e });
+    const message = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: message };
   }
 }
 

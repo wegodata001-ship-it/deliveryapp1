@@ -1,5 +1,10 @@
 /** קליטת תשלום — חישובי תצוגה ומנוע התאמה (ללא Prisma) */
 
+import {
+  computeOrderOpenDebtSignedUsd,
+  computeOrderOpenDebtUsd,
+  deriveOrderPaymentDisplayStatus,
+} from "@/lib/order-remaining-debt";
 import type { PaymentIntakeOrderGroup } from "@/lib/payment-intake-order-groups";
 import type { PaymentPlanIntakeSummary } from "@/lib/payment-plan-types";
 
@@ -35,10 +40,7 @@ export type PaymentIntakeMatchResult = PaymentIntakeOrderBase & {
 const EPS = 1e-6;
 
 export function debtStatus(dbPaid: number, total: number): PaymentIntakeOrderStatus {
-  const rem = total - dbPaid;
-  if (rem <= EPS) return "paid";
-  if (dbPaid <= EPS) return "unpaid";
-  return "partial";
+  return deriveOrderPaymentDisplayStatus({ totalUsd: total, paidUsd: dbPaid, eps: EPS });
 }
 
 /** Part 6 — המרה ל-USD לפי שער */
@@ -67,7 +69,7 @@ export function roundMoney2(n: number): number {
 export function orderLedgerBalanceUsd(
   o: Pick<PaymentIntakeOrderBase, "totalAmountUsd" | "dbPaidUsd">,
 ): number {
-  return roundMoney2(o.totalAmountUsd - o.dbPaidUsd);
+  return computeOrderOpenDebtSignedUsd(Number(o.totalAmountUsd), Number(o.dbPaidUsd));
 }
 
 export type PaymentLedgerStatus = "paid" | "open" | "credit";
@@ -114,7 +116,7 @@ export function computeCustomerResetBalanceMetrics(
     const total = Number(row.totalAmountUsd);
     const paid = Number(row.dbPaidUsd);
     if (Number.isFinite(total) && Number.isFinite(paid)) {
-      remainingAmount += Math.max(0, total - paid);
+      remainingAmount += computeOrderOpenDebtUsd(total, paid);
     }
   }
   return {
@@ -124,7 +126,7 @@ export function computeCustomerResetBalanceMetrics(
 }
 
 function orderRemainingUsd(o: PaymentIntakeOrderBase): number {
-  return Math.max(0, orderLedgerBalanceUsd(o));
+  return computeOrderOpenDebtUsd(o.totalAmountUsd, o.dbPaidUsd);
 }
 
 type ClosureDebtRow = { o: PaymentIntakeOrderBase; idx: number; remaining: number };

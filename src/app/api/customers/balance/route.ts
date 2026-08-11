@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { getSessionPayload } from "@/lib/admin-auth";
-import { prisma } from "@/lib/prisma";
 import { perfError, withPerfTimer } from "@/lib/perf-log";
 
 export const runtime = "nodejs";
@@ -22,27 +21,17 @@ export async function GET(req: Request) {
       const id = (searchParams.get("id") ?? "").trim();
       if (!id) return NextResponse.json(null);
 
-      const [orderAgg, payAgg] = await Promise.all([
-        prisma.order.aggregate({
-          where: { customerId: id, deletedAt: null },
-          _sum: { totalUsd: true },
-        }),
-        prisma.payment.aggregate({
-          where: { customerId: id, isPaid: true },
-          _sum: { amountUsd: true },
-        }),
-      ]);
-
-      const o = Number(orderAgg._sum.totalUsd ?? 0);
-      const p = Number(payAgg._sum.amountUsd ?? 0);
-      const bal = o - p;
+      const country = searchParams.get("country");
+      const { getCustomerOpenDebt, openDebtScopeForWorkCountry } = await import("@/lib/customer-open-debt");
+      const debt = await getCustomerOpenDebt(id, openDebtScopeForWorkCountry(country));
+      const businessSigned = Number(debt.signedBalanceUsd.toFixed(2));
 
       const payload: CustomerBalancePayload = {
-        balanceUsdDisplay: bal.toLocaleString("en-US", {
+        balanceUsdDisplay: businessSigned.toLocaleString("en-US", {
           minimumFractionDigits: 2,
           maximumFractionDigits: 2,
         }),
-        balanceUsdNegative: bal < -0.005,
+        balanceUsdNegative: businessSigned < -0.005,
       };
       return NextResponse.json(payload);
     } catch (error) {

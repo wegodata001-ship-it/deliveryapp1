@@ -31,6 +31,11 @@ import { CASH_EXPENSE_PAYMENT_METHODS } from "@/lib/cash-expense-payment-method"
 import type { CashExpensePaymentMethod } from "@/lib/cash-expense-payment-method";
 import { fmtDailyMoney } from "@/lib/cash-control-daily";
 import { CashExpenseFormModal, type CashExpenseEditable, timeFromIso } from "@/components/admin/CashExpenseFormModal";
+import {
+  CashExpenseDeleteConfirmModal,
+  type CashExpenseDeleteTarget,
+} from "@/components/admin/cash-control/CashExpenseDeleteConfirmModal";
+import { dispatchCashControlRefresh } from "@/lib/cash-control-refresh-bus";
 import { PaymentMethodIcon } from "@/components/admin/cash-control/CashExpensePaymentMethodSelect";
 import {
   TableFiltersBar,
@@ -90,6 +95,7 @@ export function CashExpensesClient({
   const [tick, setTick] = useState(0);
   const [exporting, setExporting] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<CashExpenseDeleteTarget | null>(null);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<CashExpenseEditable | null>(null);
@@ -169,23 +175,39 @@ export function CashExpensesClient({
     return { ils, usd, count: rows.length };
   }, [rows]);
 
-  const removeRow = useCallback(
-    async (id: string) => {
-      if (!window.confirm("למחוק את הוצאת הקופה?")) return;
-      setBusy(id);
-      try {
-        const res = await deleteCashExpenseAction(id);
-        if (!res.ok) {
-          alert(res.error ?? "מחיקה נכשלה");
-          return;
-        }
-        refresh();
-      } finally {
-        setBusy(null);
+  const removeRow = useCallback((row: CashExpenseRowDto) => {
+    setDeleteTarget({
+      id: row.id,
+      reasonLabel: row.reasonLabel,
+      amount: row.amount,
+      currency: row.currency,
+      dateDisplay: row.dateDisplay,
+      weekCode: row.weekCode,
+      notes: row.notes,
+    });
+  }, []);
+
+  const confirmDelete = useCallback(async () => {
+    if (!deleteTarget) return;
+    const id = deleteTarget.id;
+    setBusy(id);
+    try {
+      const res = await deleteCashExpenseAction(id);
+      if (!res.ok) {
+        alert(res.error ?? "מחיקה נכשלה");
+        return;
       }
-    },
-    [refresh],
-  );
+      setDeleteTarget(null);
+      refresh();
+      if (deleteTarget.weekCode?.trim()) {
+        dispatchCashControlRefresh(deleteTarget.weekCode.trim());
+      } else if (week.trim()) {
+        dispatchCashControlRefresh(week.trim());
+      }
+    } finally {
+      setBusy(null);
+    }
+  }, [deleteTarget, refresh, week]);
 
   async function exportExcel() {
     setExporting(true);
@@ -412,7 +434,7 @@ export function CashExpensesClient({
                             className="cc-iconbtn cc-iconbtn--danger"
                             title="מחיקה"
                             disabled={busy === r.id}
-                            onClick={() => void removeRow(r.id)}
+                            onClick={() => removeRow(r)}
                           >
                             <Trash2 size={14} />
                           </button>
@@ -455,6 +477,17 @@ export function CashExpensesClient({
         onSaved={refresh}
         expense={editing}
         week={week.trim() ? week : undefined}
+      />
+
+      <CashExpenseDeleteConfirmModal
+        open={!!deleteTarget}
+        expense={deleteTarget}
+        busy={!!busy}
+        onCancel={() => {
+          if (busy) return;
+          setDeleteTarget(null);
+        }}
+        onConfirm={() => void confirmDelete()}
       />
     </div>
   );

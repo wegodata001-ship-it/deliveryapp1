@@ -2,6 +2,7 @@
 
 import { Prisma } from "@prisma/client";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
+import { mergeOrderWhere, resolveCountryScopeFromCode, resolveWorkCountryParam } from "@/lib/country-data-scope";
 import { prisma } from "@/lib/prisma";
 import { endOfLocalDay, parseLocalDate } from "@/lib/work-week";
 
@@ -16,6 +17,8 @@ export type ReceiptControlQuery = {
   toYmd?: string;
   balanceFilter?: ReceiptBalanceFilter;
   search?: string;
+  /** TR / CN / AE — חובה מה-Country Context */
+  workCountry?: string;
 };
 
 export type ReceiptControlRow = {
@@ -94,7 +97,8 @@ export async function listReceiptControlAction(query: ReceiptControlQuery): Prom
 
   const limit = Math.min(50, Math.max(1, Math.floor(query.limit || 15)));
   const page = Math.max(1, Math.floor(query.page || 1));
-  const where: Prisma.OrderWhereInput = { deletedAt: null };
+  const countryScope = resolveCountryScopeFromCode(resolveWorkCountryParam(query.workCountry));
+  let where: Prisma.OrderWhereInput = mergeOrderWhere({ deletedAt: null }, countryScope);
 
   if (query.weekCode?.trim()) where.weekCode = { contains: query.weekCode.trim(), mode: "insensitive" };
   if (query.fromYmd?.trim() || query.toYmd?.trim()) {

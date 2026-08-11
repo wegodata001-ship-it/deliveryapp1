@@ -6,7 +6,7 @@ import {
 } from "@/lib/flow-control/flow-calculation-service";
 import {
   computeFxAvailableBalances,
-} from "@/lib/flow-control/fx-purchase/balance";
+} from "@/lib/flow-control/fx-purchase/balance.shared";
 import type { CashControlSnapshot } from "@/lib/flow-control/fx-purchase/types";
 import { fcNum } from "@/components/admin/flow-control/shared";
 
@@ -76,15 +76,11 @@ export function resolveAvailableIlsForFx(
 }
 
 export function computeAutoTurkeyUsd(form: ManagerCountForm, fxPsUsd: number): number {
-  return computeTurkeyAllocationFromCashCount(
-    fcNum(form.countedCashUsd),
-    fxPsUsd,
-    fcNum(form.commissionUsd),
-  );
+  return computeTurkeyAllocationFromCashCount(fcNum(form.countedCashUsd), fxPsUsd);
 }
 
-export function computeAutoTurkeyIls(form: ManagerCountForm, fxIlIls: number): number {
-  return computeTurkeyIlAllocationIls(fxIlIls, fcNum(form.commissionIls));
+export function computeAutoTurkeyIls(_form: ManagerCountForm, fxIlIls: number): number {
+  return computeTurkeyIlAllocationIls(fxIlIls);
 }
 
 export function isTurkeyManual(form: ManagerCountForm, flow: FlowWeekPayload | null): boolean {
@@ -136,3 +132,36 @@ export function ilSourcePoolFromForm(form: ManagerCountForm): number {
     fcNum(form.countedTransferIls) + fcNum(form.countedCreditIls) + fcNum(form.countedChecksIls)
   );
 }
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+/** תצוגה/ולידציה — שלב רכישת מט״ח בספירת מנהל */
+export function computeFxPurchaseFormPreview(
+  availableIlsBefore: number,
+  purchaseIls: number,
+  rate: number,
+): {
+  availableIlsBefore: number;
+  purchaseIls: number;
+  rate: number;
+  purchasedUsd: number;
+  remainingIlsAfter: number;
+} {
+  const available = round2(availableIlsBefore);
+  const purchase = round2(Math.max(0, purchaseIls));
+  const remainingIlsAfter = round2(available - purchase);
+  const purchasedUsd =
+    purchase > 0.005 && rate > 0.005 ? round2(purchase / rate) : 0;
+  return {
+    availableIlsBefore: available,
+    purchaseIls: purchase,
+    rate: round2(rate),
+    purchasedUsd,
+    remainingIlsAfter,
+  };
+}
+
+export const FX_PURCHASE_OVER_LIMIT_ERROR =
+  "לא ניתן לרכוש סכום גבוה מהיתרה הזמינה בקופה";

@@ -19,23 +19,24 @@ import type { ShipmentZoneDto } from "@/app/admin/shipments/types";
 import type {
   AliasMappingRow,
   DeliveryLocationDto,
-  LocationAliasImportPreview,
   LocationAliasImportResult,
 } from "@/app/admin/shipments/location-service";
 import {
-  commitLocationAliasRowsAction,
   createZoneForLocationsAction,
   deleteLocationAliasAction,
   deleteZoneForLocationsAction,
   listAliasMappingRowsAction,
   listDeliveryLocationsAction,
-  previewLocationAliasImportAction,
   reorderZonesAction,
+  reMatchUnmatchedShipmentsAction,
   setZoneActiveForLocationsAction,
   updateZoneForLocationsAction,
 } from "@/app/admin/shipments/location-actions";
-import { looksLikeDistributionArea } from "@/lib/distribution-area-name";
+import { distributionAreaValidationError } from "@/lib/distribution-area-name";
 import { LocationMappingEditModal } from "@/components/admin/shipments/LocationMappingEditModal";
+import { LocationAliasesManageModal } from "@/components/admin/shipments/LocationAliasesManageModal";
+import { LocationAliasImportModal } from "@/components/admin/shipments/LocationAliasImportModal";
+import { aliasLookupKey } from "@/lib/delivery-location-normalize";
 
 type Props = {
   initialMappings: AliasMappingRow[];
@@ -51,9 +52,7 @@ export function LocationsAdminClient({
   const router = useRouter();
   const searchRef = useRef<HTMLInputElement>(null);
   const [mappings, setMappings] = useState(initialMappings);
-  const [zones, setZones] = useState(() =>
-    initialZones.filter((z) => looksLikeDistributionArea(z.name)),
-  );
+  const [zones, setZones] = useState(initialZones);
   const [locations, setLocations] = useState(initialLocations);
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -61,27 +60,30 @@ export function LocationsAdminClient({
   const [busy, setBusy] = useState(false);
   const [zonesOpen, setZonesOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
-  const [preview, setPreview] = useState<LocationAliasImportPreview | null>(null);
   const [importResult, setImportResult] = useState<LocationAliasImportResult | null>(null);
   const [newZoneName, setNewZoneName] = useState("");
   const [quickZoneOpen, setQuickZoneOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [editingRow, setEditingRow] = useState<AliasMappingRow | null>(null);
+  const [aliasesLocation, setAliasesLocation] = useState<DeliveryLocationDto | null>(null);
 
-  const realZones = useMemo(
-    () => zones.filter((z) => looksLikeDistributionArea(z.name)),
+  const activeZones = useMemo(
+    () => zones.filter((z) => z.isActive).sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "he")),
     [zones],
   );
 
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = search.trim();
     if (!q) return mappings;
-    return mappings.filter(
-      (m) =>
-        m.originalName.toLowerCase().includes(q) ||
-        m.displayName.toLowerCase().includes(q) ||
-        (m.distributionAreaName ?? "").toLowerCase().includes(q),
-    );
+    const compact = aliasLookupKey(q);
+    const norm = q.toLowerCase();
+    return mappings.filter((m) => {
+      if (m.originalName.toLowerCase().includes(norm)) return true;
+      if (m.displayName.toLowerCase().includes(norm)) return true;
+      if ((m.distributionAreaName ?? "").toLowerCase().includes(norm)) return true;
+      if (compact && aliasLookupKey(m.originalName).includes(compact)) return true;
+      return false;
+    });
   }, [mappings, search]);
 
   const selected = useMemo(
@@ -110,55 +112,6 @@ export function LocationsAdminClient({
     router.refresh();
   }, [router]);
 
-  async function onImportFile(file: File) {
-    setBusy(true);
-    setImportResult(null);
-    setPreview(null);
-    try {
-      const buf = await file.arrayBuffer();
-      const wb = XLSX.read(buf, { type: "array" });
-      const sheet = wb.Sheets[wb.SheetNames[0]];
-      const grid = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: "" });
-      const res = await previewLocationAliasImportAction(grid);
-      if (res.ok) setPreview(res.preview);
-      else setMsg(res.error);
-    } catch (e) {
-      setMsg(String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function commitImport() {
-    if (!preview) return;
-    if (preview.mappingError) {
-      setMsg(preview.mappingError);
-      return;
-    }
-    const rows = preview.rows.filter((r) => r.valid);
-    if (rows.length === 0) {
-      setMsg("אין שורות תקינות — בדקו כותרות: מקום מסירה | אזור חלוקה | מקום מסירה מעודכן");
-      return;
-    }
-    setBusy(true);
-    try {
-      const res = await commitLocationAliasRowsAction(rows, preview.totalRows);
-      if (res.ok) {
-        setImportResult(res.result);
-        setPreview(null);
-        setImportOpen(false);
-        setMsg(
-          `ייבוא הושלם: ${res.result.createdAliases} כינויים חדשים · ${res.result.updatedAliases} עודכנו · ${res.result.createdAreas} אזורים · ${res.result.failed} נכשלו`,
-        );
-        await refresh();
-      } else setMsg(res.error);
-    } catch (e) {
-      setMsg(`הייבוא נכשל: ${String(e)}`);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   function exportExcel() {
     const rows = mappings.map((m) => ({
       "מקום מסירה מקורי": m.originalName,
@@ -175,8 +128,9 @@ export function LocationsAdminClient({
   async function addZone(nameRaw?: string) {
     const name = (nameRaw ?? newZoneName).trim();
     if (!name) return;
-    if (!looksLikeDistributionArea(name)) {
-      setMsg("שם אזור לא תקין — השתמשו בפורמט כמו: צפון 16, דרום 1, מרכז 11, משולש 5");
+    const validationError = distributionAreaValidationError(name);
+    if (validationError) {
+      setMsg(validationError);
       return;
     }
     setBusy(true);
@@ -186,8 +140,8 @@ export function LocationsAdminClient({
       setZones((prev) => [...prev, res.zone].sort((a, b) => a.sortOrder - b.sortOrder));
       setNewZoneName("");
       setQuickZoneOpen(false);
-      setMsg("אזור חלוקה נוסף");
-    } else setMsg(res.error);
+      setMsg(`אזור חלוקה נוסף: ${res.zone.name}`);
+    } else setMsg(res.error || "שמירת אזור נכשלה");
   }
 
   async function deleteSelected() {
@@ -215,6 +169,48 @@ export function LocationsAdminClient({
     }
     setSelectedId(target.aliasId);
     setEditingRow(target);
+  }
+
+  function openAliasesManage(row?: AliasMappingRow | null) {
+    const target = row ?? selected;
+    if (!target) {
+      setMsg("בחרו שורה לניהול כינויים");
+      return;
+    }
+    const loc =
+      locations.find((l) => l.id === target.locationId) ??
+      ({
+        id: target.locationId,
+        displayName: target.displayName,
+        distributionAreaId: target.distributionAreaId,
+        distributionAreaName: target.distributionAreaName,
+        isActive: true,
+        aliasCount: 0,
+        aliases: mappings
+          .filter((m) => m.locationId === target.locationId && m.isActive)
+          .map((m) => ({
+            id: m.aliasId,
+            originalName: m.originalName,
+            normalizedOriginalName: "",
+            isActive: true,
+          })),
+        createdAt: "",
+        updatedAt: "",
+      } satisfies DeliveryLocationDto);
+    setAliasesLocation(loc);
+  }
+
+  async function runReMatchUnmatched() {
+    setBusy(true);
+    const res = await reMatchUnmatchedShipmentsAction();
+    setBusy(false);
+    if (!res.ok) setMsg(res.error);
+    else {
+      setMsg(
+        `התאמה מחדש: נסרקו ${res.result.scanned} · זוהו ${res.result.matched} · עודכנו ${res.result.updated}`,
+      );
+      await refresh();
+    }
   }
 
   return (
@@ -258,9 +254,9 @@ export function LocationsAdminClient({
 
       {importResult && (
         <div className="shp-alert">
-          נקלטו {importResult.processed} · חדשים {importResult.createdAliases} · עודכנו{" "}
-          {importResult.updatedAliases} · אזורים חדשים {importResult.createdAreas} · נכשלו{" "}
-          {importResult.failed}
+          ייבוא #{importResult.audit.importId.slice(0, 8)} · נקלטו {importResult.processed} · חדשים{" "}
+          {importResult.createdAliases} · עודכנו {importResult.updatedAliases} · אזורים חדשים{" "}
+          {importResult.createdAreas} · נכשלו {importResult.failed}
         </div>
       )}
 
@@ -291,6 +287,9 @@ export function LocationsAdminClient({
             <Pencil size={14} />
             עריכה
           </button>
+          <button type="button" className="shp-btn" disabled={busy} onClick={() => openAliasesManage()}>
+            כינויים ליישוב
+          </button>
           <button type="button" className="shp-btn" disabled={busy} onClick={() => void deleteSelected()}>
             <Trash2 size={14} />
             מחיקה
@@ -302,6 +301,15 @@ export function LocationsAdminClient({
           >
             <Search size={14} />
             חיפוש
+          </button>
+          <button
+            type="button"
+            className="shp-btn"
+            disabled={busy}
+            onClick={() => void runReMatchUnmatched()}
+          >
+            <RefreshCw size={14} />
+            התאם לא מזוהים
           </button>
         </div>
         <div className="loc-admin__search">
@@ -319,7 +327,8 @@ export function LocationsAdminClient({
       <section className="loc-admin__card">
         <h2>טבלת התאמות</h2>
         <p className="loc-admin__hint">
-          בחרו שורה ולחצו עריכה. ייבוא קבצים חדשים מוסיף רק יישובים חסרים — בלי כפילויות.
+          בחרו שורה ולחצו עריכה או «כינויים ליישוב». ניתן להוסיף Aliases בכל שפה — המערכת מזהה
+          אוטומטית גם BETLAHEM, bet-lahem ו-بيت لحم.
         </p>
         <div className="shp-daily-wrap">
           <table className="shp-table shp-table--daily shp-table--alias">
@@ -365,7 +374,7 @@ export function LocationsAdminClient({
                   </td>
                   <td style={{ fontWeight: 600 }}>{m.displayName}</td>
                   <td>
-                    {m.distributionAreaName && looksLikeDistributionArea(m.distributionAreaName) ? (
+                    {m.distributionAreaName ? (
                       <span className="shp-zone-tag">{m.distributionAreaName}</span>
                     ) : (
                       <span className="shp-unset-tag">לא הוגדר</span>
@@ -409,6 +418,14 @@ export function LocationsAdminClient({
           </table>
         </div>
       </section>
+
+      {aliasesLocation && (
+        <LocationAliasesManageModal
+          location={aliasesLocation}
+          onClose={() => setAliasesLocation(null)}
+          onChanged={() => void refresh()}
+        />
+      )}
 
       {(createOpen || editingRow) && (
         <LocationMappingEditModal
@@ -458,7 +475,7 @@ export function LocationsAdminClient({
                 <input
                   value={newZoneName}
                   onChange={(e) => setNewZoneName(e.target.value)}
-                  placeholder="למשל: צפון 16"
+                  placeholder="למשל: الجليل, منطقة 1, Zone 7"
                   onKeyDown={(e) => e.key === "Enter" && void addZone()}
                   autoFocus
                 />
@@ -495,12 +512,14 @@ export function LocationsAdminClient({
               </button>
             </div>
             <div className="shp-modal__body">
-              <p className="loc-admin__hint">רק אזורים לוגיסטיים — למשל צפון 16. לא שמות יישובים.</p>
+              <p className="loc-admin__hint">
+                שם חופשי בכל שפה — עברית, ערבית, אנגלית (למשל: الجليل, منطقة 1, Zone 7)
+              </p>
               <div className="loc-admin__add-row">
                 <input
                   value={newZoneName}
                   onChange={(e) => setNewZoneName(e.target.value)}
-                  placeholder="צפון 16"
+                  placeholder="למשל: الجليل, منطقة 1, Zone 7"
                   onKeyDown={(e) => e.key === "Enter" && void addZone()}
                 />
                 <button type="button" className="shp-btn shp-btn--primary" onClick={() => void addZone()}>
@@ -519,7 +538,7 @@ export function LocationsAdminClient({
                     </tr>
                   </thead>
                   <tbody>
-                    {realZones.map((z, idx) => (
+                    {activeZones.map((z, idx) => (
                       <tr key={z.id}>
                         <td>
                           <span className="shp-zone-tag">{z.name}</span>
@@ -534,8 +553,9 @@ export function LocationsAdminClient({
                               onClick={async () => {
                                 const name = window.prompt("שם אזור", z.name);
                                 if (!name?.trim()) return;
-                                if (!looksLikeDistributionArea(name.trim())) {
-                                  setMsg("שם אזור לא תקין");
+                                const validationError = distributionAreaValidationError(name.trim());
+                                if (validationError) {
+                                  setMsg(validationError);
                                   return;
                                 }
                                 await updateZoneForLocationsAction(z.id, { name: name.trim() });
@@ -563,7 +583,7 @@ export function LocationsAdminClient({
                               className="shp-btn shp-btn--sm"
                               disabled={idx === 0}
                               onClick={async () => {
-                                const ordered = [...realZones];
+                                const ordered = [...activeZones];
                                 const i = ordered.findIndex((x) => x.id === z.id);
                                 if (i <= 0) return;
                                 [ordered[i - 1], ordered[i]] = [ordered[i], ordered[i - 1]];
@@ -603,102 +623,16 @@ export function LocationsAdminClient({
       )}
 
       {importOpen && (
-        <div className="shp-modal-backdrop" onClick={() => !busy && setImportOpen(false)}>
-          <div
-            className="shp-modal"
-            style={{ maxWidth: 900, width: "96vw" }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="shp-modal__header">
-              <strong>ייבוא התאמות יישובים</strong>
-              <button type="button" className="shp-icon-btn" disabled={busy} onClick={() => setImportOpen(false)}>
-                <X size={16} />
-              </button>
-            </div>
-            <div className="shp-modal__body" style={{ display: "grid", gap: 12 }}>
-              <p style={{ margin: 0, fontSize: 13, color: "#64748b" }}>
-                טבלת האב נשמרת: יישובים קיימים לא נוצרים מחדש. סדר עמודות:{" "}
-                <strong>מקום מסירה מקורי</strong> · <strong>אזור חלוקה</strong> ·{" "}
-                <strong>מקום מסירה מעודכן</strong>
-              </p>
-              <label className="shp-btn shp-btn--primary" style={{ display: "inline-flex", cursor: "pointer", width: "fit-content" }}>
-                <Upload size={14} />
-                בחר קובץ Excel
-                <input
-                  type="file"
-                  accept=".xlsx,.xls,.csv"
-                  hidden
-                  disabled={busy}
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) void onImportFile(f);
-                    e.target.value = "";
-                  }}
-                />
-              </label>
-
-              {preview?.mappingError && (
-                <div className="shp-alert shp-alert--error">{preview.mappingError}</div>
-              )}
-              {preview && !preview.mappingError && (
-                <>
-                  <div className="loc-admin__meta">
-                    <span>שורת כותרות #{preview.headerRowIndex + 1}</span>
-                    <span>סה״כ {preview.totalRows}</span>
-                    <span>תקינות {preview.validRows}</span>
-                    <span>חדשות {preview.wouldCreateAliases}</span>
-                    <span>עודכנו {preview.wouldUpdateAliases}</span>
-                    <span>נכשלו {preview.invalidRows}</span>
-                    <span>אזורים חדשים {preview.wouldCreateAreas}</span>
-                  </div>
-                  <div className="shp-daily-wrap" style={{ maxHeight: 280 }}>
-                    <table className="shp-table shp-table--daily">
-                      <thead>
-                        <tr>
-                          <th>מקום מסירה מקורי</th>
-                          <th>מקום מסירה מעודכן</th>
-                          <th>אזור חלוקה</th>
-                          <th>מצב</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {preview.rows.slice(0, 12).map((r) => (
-                          <tr key={r.rowIndex}>
-                            <td>
-                              <span className="shp-trunc" title={r.originalName}>
-                                {r.originalName || "—"}
-                              </span>
-                            </td>
-                            <td style={{ fontWeight: 600 }}>{r.displayName || "—"}</td>
-                            <td>{r.areaName || "—"}</td>
-                            <td style={{ color: r.valid ? "#15803d" : "#b91c1c" }}>
-                              {r.valid ? "תקין" : r.error || "שגיאה"}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </>
-              )}
-            </div>
-            <div className="shp-modal__footer">
-              <button type="button" className="shp-btn" disabled={busy} onClick={() => setImportOpen(false)}>
-                ביטול
-              </button>
-              <button
-                type="button"
-                className="shp-btn shp-btn--primary"
-                disabled={
-                  busy || !preview || !!preview.mappingError || preview.validRows === 0
-                }
-                onClick={() => void commitImport()}
-              >
-                {busy ? "מייבא..." : "אשר ייבוא"}
-              </button>
-            </div>
-          </div>
-        </div>
+        <LocationAliasImportModal
+          onClose={() => setImportOpen(false)}
+          onDone={(result) => {
+            setImportResult(result);
+            setMsg(
+              `ייבוא הושלם: ${result.createdAliases} כינויים חדשים · ${result.updatedAliases} עודכנו · ${result.createdAreas} אזורים · ${result.failed} נכשלו`,
+            );
+            void refresh();
+          }}
+        />
       )}
     </div>
   );

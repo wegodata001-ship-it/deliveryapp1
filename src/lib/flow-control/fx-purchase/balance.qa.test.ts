@@ -7,7 +7,7 @@ import {
   availableIlsForTrack,
   computeFxAvailableBalances,
   evaluateFxPurchaseGate,
-} from "@/lib/flow-control/fx-purchase/balance";
+} from "@/lib/flow-control/fx-purchase/balance.shared";
 import type { CashControlSnapshot } from "@/lib/flow-control/fx-purchase/types";
 import type { FxPurchaseRecord } from "@/app/admin/cash-flow/flow-types";
 
@@ -61,7 +61,7 @@ describe("QA: FX purchase SSOT balance", () => {
     assert.match(gate.error ?? "", /קיים:/);
   });
 
-  it("אחרי החזרת IL לקופה הראשית — PS כולל את ההחזרה", () => {
+  it("אחרי IL remainderBank — PS לא מקבל את ההחזרה", () => {
     const balances = computeFxAvailableBalances(
       snapshot({
         countedCashIls: 100,
@@ -69,8 +69,8 @@ describe("QA: FX purchase SSOT balance", () => {
         fxPurchases: [fx(100, "IL", 0, 1900)],
       }),
     );
-    assert.equal(balances.psCash, 2000);
-    assert.equal(availableIlsForTrack(balances, "PS"), 2000);
+    assert.equal(balances.psCash, 100);
+    assert.equal(availableIlsForTrack(balances, "PS"), 100);
   });
 
   it("IL track uses transfer pool only", () => {

@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { activePaidPaymentWhere } from "@/lib/payment-record-status-shared";
+import { computeOrderLedgerView } from "@/lib/order-remaining-debt";
 
 export type OrderClosureSnapshotRow = {
   orderId: string;
@@ -44,17 +45,21 @@ export async function loadOrderClosureSnapshot(orderIds: string[]): Promise<Orde
   }
 
   return orders.map((o) => {
-    const totalUsd = decNum(o.totalUsd) || decNum(o.amountUsd) + decNum(o.commissionUsd);
     const paidUsd = paidByOrder.get(o.id) ?? 0;
-    const remainingUsd = Math.max(0, round2(totalUsd - paidUsd));
-    const status: OrderClosureSnapshotRow["status"] =
-      remainingUsd <= 0.01 ? "paid" : paidUsd > 0.01 ? "partial" : "unpaid";
+    const ledger = computeOrderLedgerView({
+      orderId: o.id,
+      totalUsd: o.totalUsd,
+      amountUsd: o.amountUsd,
+      commissionUsd: o.commissionUsd,
+      paidUsd,
+    });
+    const status: OrderClosureSnapshotRow["status"] = ledger.paymentStatus;
     return {
       orderId: o.id,
       orderNumber: o.orderNumber?.trim() || null,
-      totalUsd: round2(totalUsd),
-      paidUsd: round2(paidUsd),
-      remainingUsd,
+      totalUsd: ledger.totalUsd,
+      paidUsd: ledger.paidUsd,
+      remainingUsd: ledger.remainingUsd,
       status,
     };
   });

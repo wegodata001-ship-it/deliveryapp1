@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Calculator, RefreshCw, TrendingUp } from "lucide-react";
 import { ACTIVE_WORK_WEEK_CODE } from "@/lib/active-work-week";
+import { CurrentBalancesKpiStrip } from "@/components/admin/cashflow-control/CurrentBalancesKpiStrip";
 import { parseAhWeekNumber, toAhWeekCode } from "@/lib/weeks/ah-week-nav";
 import type { CashFlowCapabilities } from "@/app/admin/cash-flow/types";
 import type { FlowWeekDrillPayload, FlowWeekOverviewRow } from "@/app/admin/cash-flow/flow-types";
@@ -28,6 +29,9 @@ import {
 } from "@/components/admin/cashflow-control/cashflow-control-helpers";
 import "@/components/admin/cashflow-control/cashflow-control.css";
 import { ManagerCountWizard } from "@/components/admin/manager-count/ManagerCountWizard";
+import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
+import { WEGO_COUNTRY_CHANGED } from "@/lib/country-switch-bus";
+import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
 import {
   TableFiltersBar,
   useTableFilters,
@@ -74,6 +78,8 @@ export function CashflowControlScreen({
   initialWeek: string;
 }) {
   const initial = initialWeek?.trim() || ACTIVE_WORK_WEEK_CODE;
+  const { globalCountry } = useAdminGlobal();
+  const workCountry = workCountryFromOrderSourceCountry(globalCountry);
   const [selectedWeek, setSelectedWeek] = useState(initial);
   const [overview, setOverview] = useState<FlowWeekOverviewRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -112,14 +118,14 @@ export function CashflowControlScreen({
   const ensureWeeksLoaded = useCallback(async (codes: string[]) => {
     const missing = codes.filter((c) => !loadedCodesRef.current.includes(c));
     if (missing.length === 0) return;
-    const data = await getFlowWeeksOverviewAction(missing);
+    const data = await getFlowWeeksOverviewAction(missing, workCountry);
     loadedCodesRef.current = dedupeWeekCodes([...loadedCodesRef.current, ...missing]);
     setOverview((prev) => mergeWeekRows(prev, data.weeks));
     const oldest = Math.min(
       ...loadedCodesRef.current.map((c) => parseAhWeekNumber(c) ?? 1),
     );
     setHasMoreWeeks(oldest > 1);
-  }, []);
+  }, [workCountry]);
 
   const refreshVisible = useCallback(async () => {
     const codes = dedupeWeekCodes(
@@ -128,13 +134,13 @@ export function CashflowControlScreen({
         : weekCodesFromActive(INITIAL_WEEKS),
     );
     setLoading(true);
-    const data = await getFlowWeeksOverviewAction(codes);
+    const data = await getFlowWeeksOverviewAction(codes, workCountry);
     loadedCodesRef.current = codes;
     setOverview(dedupeOverviewByWeek(data.weeks));
     const oldest = parseAhWeekNumber(codes[codes.length - 1] ?? "") ?? 1;
     setHasMoreWeeks(oldest > 1);
     setLoading(false);
-  }, []);
+  }, [workCountry]);
 
   const refresh = useCallback(() => {
     drillCacheRef.current.clear();
@@ -147,7 +153,7 @@ export function CashflowControlScreen({
       if (loadedCodesRef.current.length === 0) {
         const codes = weekCodesFromActive(INITIAL_WEEKS);
         setLoading(true);
-        const data = await getFlowWeeksOverviewAction(codes);
+        const data = await getFlowWeeksOverviewAction(codes, workCountry);
         if (cancelled) return;
         loadedCodesRef.current = dedupeWeekCodes(codes);
         setOverview(dedupeOverviewByWeek(data.weeks));
@@ -162,7 +168,7 @@ export function CashflowControlScreen({
     return () => {
       cancelled = true;
     };
-  }, [refreshTick, refreshVisible]);
+  }, [refreshTick, refreshVisible, workCountry]);
 
   // טעינת שבועות חסרים כשמשנים טווח
   useEffect(() => {
@@ -186,7 +192,7 @@ export function CashflowControlScreen({
     }
     setLoadingMore(true);
     try {
-      const data = await getFlowWeeksOverviewAction(nextCodes);
+      const data = await getFlowWeeksOverviewAction(nextCodes, workCountry);
       loadedCodesRef.current = dedupeWeekCodes([...current, ...nextCodes]);
       setOverview((prev) => mergeWeekRows(prev, data.weeks));
       const newOldest = parseAhWeekNumber(nextCodes[nextCodes.length - 1] ?? "") ?? 1;
@@ -194,7 +200,7 @@ export function CashflowControlScreen({
     } finally {
       setLoadingMore(false);
     }
-  }, [hasMoreWeeks, loadingMore]);
+  }, [hasMoreWeeks, loadingMore, workCountry]);
 
   useEffect(() => {
     const wk = selectedWeek.trim();
@@ -207,7 +213,7 @@ export function CashflowControlScreen({
     }
     let cancelled = false;
     setDrillLoading(true);
-    void getFlowWeekDrillAction(wk).then((data) => {
+    void getFlowWeekDrillAction(wk, workCountry).then((data) => {
       if (cancelled) return;
       if (data) drillCacheRef.current.set(wk, data);
       setDrill(data);
@@ -216,7 +222,19 @@ export function CashflowControlScreen({
     return () => {
       cancelled = true;
     };
-  }, [selectedWeek, refreshTick]);
+  }, [selectedWeek, refreshTick, workCountry]);
+
+  useEffect(() => {
+    const onCountryChanged = () => {
+      loadedCodesRef.current = [];
+      setOverview([]);
+      drillCacheRef.current.clear();
+      setDrill(null);
+      refresh();
+    };
+    window.addEventListener(WEGO_COUNTRY_CHANGED, onCountryChanged);
+    return () => window.removeEventListener(WEGO_COUNTRY_CHANGED, onCountryChanged);
+  }, [refresh]);
 
   useEffect(() => {
     const onCashControlSaved = (e: Event) => {
@@ -392,6 +410,12 @@ export function CashflowControlScreen({
         </div>
       </header>
 
+      <CurrentBalancesKpiStrip
+        workCountry={workCountry}
+        asOfWeek={ACTIVE_WORK_WEEK_CODE}
+        refreshKey={refreshTick}
+      />
+
       <TableFiltersBar
         fields={cfcFilterFields}
         values={cfcFilterValues}
@@ -452,6 +476,7 @@ export function CashflowControlScreen({
         overview={overview}
         canEdit={caps.canManageFlow || caps.canCountEdit}
         onClose={() => setManagerCountOpen(false)}
+        onRefresh={() => refresh()}
         onSaved={() => {
           setManagerCountOpen(false);
           refresh();

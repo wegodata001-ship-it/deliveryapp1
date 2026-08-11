@@ -28,6 +28,9 @@ import {
 } from "@/lib/flow-control/services";
 import { loadTurkeyBalanceForWeek } from "@/lib/flow-control/turkey-transfer-balance-service";
 import type { FlowWeekPayload } from "@/app/admin/cash-flow/flow-types";
+import type { WorkCountryCode } from "@/lib/work-country";
+import { DEFAULT_WORK_COUNTRY } from "@/lib/work-country";
+import { mergePaymentWhere, resolveCountryScopeFromCode, cashExpenseWhereForCountryScope } from "@/lib/country-data-scope";
 
 function money(n: number | Prisma.Decimal): string {
   const d = n instanceof Prisma.Decimal ? n : new Prisma.Decimal(n);
@@ -45,25 +48,29 @@ function formatCounted(
   return out;
 }
 
-export async function loadFlowWeek(week: string): Promise<FlowWeekPayload | null> {
+export async function loadFlowWeek(
+  week: string,
+  workCountry: WorkCountryCode = DEFAULT_WORK_COUNTRY,
+): Promise<FlowWeekPayload | null> {
   const wk = week.trim();
   const range = getAhWeekRange(wk);
   if (!range) return null;
+  const countryScope = resolveCountryScopeFromCode(workCountry);
 
   const [approvedSummary, cashCount, fxPurchases, turkeyAllocationUsd, bankTx, turkeyBalance, expenseRows, payments] =
     await Promise.all([
-      loadFlowWeekCashCountSummary(wk),
-      loadFlowWeekCashCount(wk),
+      loadFlowWeekCashCountSummary(wk, workCountry),
+      loadFlowWeekCashCount(wk, workCountry),
       loadFlowWeekFxPurchases(wk),
       loadFlowWeekTurkeyTransfer(wk),
       loadFlowWeekBankTransactions(wk),
-      loadTurkeyBalanceForWeek(wk),
+      loadTurkeyBalanceForWeek(wk, workCountry),
       prisma.cashExpense.findMany({
-        where: { weekCode: wk, status: "ACTIVE" },
+        where: { ...cashExpenseWhereForCountryScope(countryScope), weekCode: wk, status: "ACTIVE" },
         select: { currency: true, amount: true, paymentMethod: true },
       }),
       prisma.payment.findMany({
-        where: cashControlWeekReconciliationPaymentsWhere(wk),
+        where: mergePaymentWhere(cashControlWeekReconciliationPaymentsWhere(wk), countryScope),
         select: {
           id: true,
           paymentCode: true,

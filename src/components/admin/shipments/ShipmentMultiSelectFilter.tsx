@@ -10,6 +10,8 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDown, Search, X } from "lucide-react";
+import type { MultiSelectUiStrings } from "@/lib/admin-ui-locale";
+import { getMultiSelectUiStrings } from "@/lib/admin-ui-locale";
 
 export type MultiSelectOption = {
   value: string;
@@ -24,6 +26,8 @@ type Props = {
   placeholder?: string;
   searchable?: boolean;
   disabled?: boolean;
+  strings?: Partial<MultiSelectUiStrings>;
+  dir?: "rtl" | "ltr";
 };
 
 type PanelPos = { top: number; left: number; minWidth: number };
@@ -70,10 +74,14 @@ export function ShipmentMultiSelectFilter({
   options,
   values,
   onChange,
-  placeholder = "הכל",
+  placeholder,
   searchable = true,
   disabled = false,
+  strings: stringsOverride,
+  dir = "rtl",
 }: Props) {
+  const ui = { ...getMultiSelectUiStrings("he"), ...stringsOverride };
+  const resolvedPlaceholder = placeholder ?? ui.placeholder;
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -110,10 +118,10 @@ export function ShipmentMultiSelectFilter({
 
   const summary =
     values.length === 0
-      ? placeholder
+      ? resolvedPlaceholder
       : values.length === 1
         ? options.find((o) => o.value === values[0])?.label || values[0]
-        : `${values.length} נבחרו`;
+        : ui.selectedCount(values.length);
 
   function toggle(value: string) {
     if (selectedSet.has(value)) onChange(values.filter((v) => v !== value));
@@ -128,6 +136,7 @@ export function ShipmentMultiSelectFilter({
             className="shp-ms__panel"
             role="listbox"
             aria-multiselectable
+            dir={dir}
             style={{
               position: "fixed",
               top: pos.top,
@@ -141,7 +150,7 @@ export function ShipmentMultiSelectFilter({
                 <input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="חיפוש…"
+                  placeholder={ui.searchPlaceholder}
                   autoFocus
                 />
               </div>
@@ -152,7 +161,7 @@ export function ShipmentMultiSelectFilter({
                 className="shp-ms__link"
                 onClick={() => onChange(options.map((o) => o.value))}
               >
-                בחר הכל
+                {ui.selectAll}
               </button>
               <button
                 type="button"
@@ -160,12 +169,12 @@ export function ShipmentMultiSelectFilter({
                 onClick={() => onChange([])}
                 disabled={values.length === 0}
               >
-                נקה הכל
+                {ui.clearAll}
               </button>
             </div>
             <div className="shp-ms__list">
               {filtered.length === 0 ? (
-                <div className="shp-ms__empty">אין אפשרויות</div>
+                <div className="shp-ms__empty">{ui.empty}</div>
               ) : (
                 filtered.map((o) => {
                   const checked = selectedSet.has(o.value);
@@ -196,7 +205,7 @@ export function ShipmentMultiSelectFilter({
                       type="button"
                       className="shp-ms__chip"
                       onClick={() => toggle(v)}
-                      title={`הסר: ${opt?.label || v}`}
+                      title={ui.removeTitle(opt?.label || v)}
                     >
                       {opt?.label || v}
                       <X size={11} aria-hidden />
@@ -214,7 +223,7 @@ export function ShipmentMultiSelectFilter({
                 className="shp-ms__done"
                 onClick={() => setOpen(false)}
               >
-                סיום
+                {ui.done}
               </button>
             </div>
           </div>,
@@ -223,7 +232,7 @@ export function ShipmentMultiSelectFilter({
       : null;
 
   return (
-    <div className="shp-ms">
+    <div className="shp-ms" dir={dir}>
       <span className="shp-ms__label">{label}</span>
       <button
         ref={triggerRef}

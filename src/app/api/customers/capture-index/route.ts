@@ -30,7 +30,6 @@ export async function GET(req: Request) {
           ...CUSTOMER_SEARCH_SELECT,
           address: true,
           countryCode: true,
-          balanceUsd: true,
         },
         orderBy: [{ updatedAt: "desc" }],
         take: CAPTURE_INDEX_LIMIT,

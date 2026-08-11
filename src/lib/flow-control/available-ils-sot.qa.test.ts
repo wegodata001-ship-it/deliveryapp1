@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   computeFlowWeekSummary,
+  computeCashIlsInDrawer,
   computeIlAvailableIlsForFx,
   computePsAvailableIlsForFx,
 } from "@/lib/flow-control/flow-calculation-service";
@@ -208,10 +209,22 @@ describe("QA: הפרדת PS / IL בזמין לרכישת מט״ח", () => {
     assert.equal(calc.availableIlsForFx, 7000);
   });
 
-  it("יתרת IL שהוחזרה לקופה הראשית עוברת מ-IL לזמין PS", () => {
+  it("יתרת PS שהועברה לבנק לא נשארת בקופה", () => {
+    const purchases = [fx(21_200, "PS", 0, 8_800)];
+    assert.equal(computePsAvailableIlsForFx(30_000, purchases), 0);
+    assert.equal(computeCashIlsInDrawer(30_000, 0, purchases), 0);
+  });
+
+  it("יתרת PS שנשארה בקופה — נשארת זמינה", () => {
+    const purchases = [fx(21_200, "PS", 8_800, 0)];
+    assert.equal(computePsAvailableIlsForFx(30_000, purchases), 8_800);
+    assert.equal(computeCashIlsInDrawer(30_000, 0, purchases), 8_800);
+  });
+
+  it("יתרת IL שהועברה לבנק לא מגדילה את זמין PS", () => {
     const purchases = [fx(100, "IL", 0, 1900)];
     assert.equal(computeIlAvailableIlsForFx(2000, 0, 0, purchases), 0);
-    assert.equal(computePsAvailableIlsForFx(100, purchases), 2000);
+    assert.equal(computePsAvailableIlsForFx(100, purchases), 100);
   });
 
   it("יתרת IL שנשארה במסלול נשארת זמינה ל-IL בלבד", () => {

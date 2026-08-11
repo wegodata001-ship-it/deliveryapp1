@@ -1,6 +1,11 @@
 import { prisma } from "@/lib/prisma";
 import { getAhWeekByDate } from "@/lib/weeks/ah-week";
-import { resolveDeliveryLocationsForRows } from "@/lib/delivery-location-match";
+import {
+  loadAliasLookupMap,
+  resolveDeliveryLocationsForRows,
+  resolveUpdatedDeliveryLocationDisplay,
+  type ShipmentDeliveryLocationInput,
+} from "@/lib/delivery-location-match";
 import {
   CLOSE_DEBT_SKIP_LABELS,
   evaluateCourierDebtCloseEligibility,
@@ -21,6 +26,7 @@ import type {
   ShipmentPaymentStatus,
   ShipmentPaymentDetails,
   UpdateShipmentRecordInput,
+  CreateShipmentRecordInput,
   UpdateShipmentBatchInput,
   ShipmentImportMatchSummary,
 } from "@/app/admin/shipments/types";
@@ -110,6 +116,7 @@ function mapRecord(r: {
   originalDeliveryLocation?: string | null;
   deliveryLocationId?: string | null;
   locationMatchStatus?: string | null;
+  deliveryLocation?: { displayName: string } | null;
   boxes: number | null;
   cartonDetails: string | null;
   weight: { toNumber(): number } | null;
@@ -129,11 +136,22 @@ function mapRecord(r: {
   payments: Parameters<typeof mapPaymentLine>[0][];
   createdAt: Date;
   updatedAt: Date;
-}, userNames: ReadonlyMap<string, string> = new Map()): ShipmentRecordDto {
+}, userNames: ReadonlyMap<string, string> = new Map(), aliasByKey?: Awaited<ReturnType<typeof loadAliasLookupMap>>): ShipmentRecordDto {
   const paidAmountIls = r.payments.reduce((sum, p) => sum + p.amountIls.toNumber(), 0);
   const fee = r.deliveryFeeIls?.toNumber() ?? null;
   const shippingDate = toDateStr(r.batch.shippingDate ?? null);
   const arrivalDate = toDateStr(r.batch.arrivalDate ?? null);
+  const locationInput: ShipmentDeliveryLocationInput = {
+    originalDeliveryLocation: r.originalDeliveryLocation ?? null,
+    city: r.city,
+    address: r.address,
+    deliveryLocationId: r.deliveryLocationId ?? null,
+    deliveryLocation: r.deliveryLocation ?? null,
+  };
+  const updatedDeliveryLocation =
+    aliasByKey != null
+      ? resolveUpdatedDeliveryLocationDisplay(locationInput, aliasByKey)
+      : null;
   return {
     id: r.id,
     batchId: r.batchId,
@@ -146,6 +164,7 @@ function mapRecord(r: {
     address: r.address,
     city: r.city,
     originalDeliveryLocation: r.originalDeliveryLocation ?? null,
+    updatedDeliveryLocation,
     deliveryLocationId: r.deliveryLocationId ?? null,
     locationMatchStatus: (r.locationMatchStatus as ShipmentRecordDto["locationMatchStatus"]) ?? null,
     boxes: r.boxes,
@@ -175,6 +194,14 @@ function mapRecord(r: {
     sourceShipmentNumber: r.batch.sourceShipmentNumber ?? null,
     weekCode: weekCodeFromBatchDates(shippingDate, arrivalDate),
   };
+}
+
+async function mapShipmentRecords<T extends Parameters<typeof mapRecord>[0]>(
+  records: T[],
+  userNames: ReadonlyMap<string, string>,
+): Promise<ShipmentRecordDto[]> {
+  const aliasByKey = await loadAliasLookupMap();
+  return records.map((record) => mapRecord(record, userNames, aliasByKey));
 }
 
 /** ??????? ??? ???? ? ??????? ?????? ??21932 ???? ??????? ??????? ATS21932 */
@@ -417,25 +444,22 @@ export async function createShipmentBatch(
   });
 
   const validRows = input.rows.filter((r) => r.valid);
-  // ????? ????? ??? ? ???? ?????? ???? ??address (???? ??? ??????)
-  const matches = await resolveDeliveryLocationsForRows(
-    validRows.map((r) => ({
-      city: r.city || r.address,
-      address: r.address,
-    })),
-  );
   let matchedLocations = 0;
   let unmatchedLocations = 0;
   let autoFilledZones = 0;
 
   if (validRows.length > 0) {
     await prisma.shipmentRecord.createMany({
-      data: validRows.map((r, i) => {
-        const match = matches[i];
-        if (match.status === "MATCHED") matchedLocations++;
+      data: validRows.map((r) => {
+        const original =
+          r.originalDeliveryPlace?.trim() || r.city?.trim() || r.address?.trim() || null;
+        const deliveryCity = r.resolvedDeliveryPlace?.trim() || r.city?.trim() || original;
+        const deliveryLocationId = r.deliveryLocationId ?? null;
+        const zoneId = r.zoneId ?? input.defaultZoneId ?? null;
+        if (deliveryLocationId) matchedLocations++;
         else unmatchedLocations++;
-        const zoneId = match.zoneId ?? input.defaultZoneId ?? null;
-        if (match.zoneId) autoFilledZones++;
+        if (zoneId && r.zoneId) autoFilledZones++;
+
         return {
           batchId: batch.id,
           rowIndex: r.rowIndex,
@@ -444,10 +468,12 @@ export async function createShipmentBatch(
           customerPhone: r.customerPhone ?? null,
           customerPhone2: r.customerPhone2 ?? null,
           address: r.address ?? null,
-          city: match.city ?? r.city ?? null,
-          originalDeliveryLocation: match.originalName ?? r.city ?? r.address ?? null,
-          deliveryLocationId: match.deliveryLocationId,
-          locationMatchStatus: match.status,
+          city: deliveryCity,
+          originalDeliveryLocation: original,
+          deliveryLocationId,
+          locationMatchStatus: deliveryLocationId
+            ? ("MATCHED" as const)
+            : (r.locationMatchStatus ?? ("UNMATCHED" as const)),
           boxes: r.boxes ?? null,
           cartonDetails: r.cartonDetails ?? null,
           weight: r.weight ?? null,
@@ -520,23 +546,21 @@ export async function importRowsIntoBatch(
     select: { rowIndex: true },
   });
   const baseIndex = last?.rowIndex ?? 0;
-  const matches = await resolveDeliveryLocationsForRows(
-    validRows.map((r) => ({
-      city: r.city || r.address,
-      address: r.address,
-    })),
-  );
   let matchedLocations = 0;
   let unmatchedLocations = 0;
   let autoFilledZones = 0;
 
   await prisma.shipmentRecord.createMany({
     data: validRows.map((r, i) => {
-      const match = matches[i];
-      if (match.status === "MATCHED") matchedLocations++;
+      const original =
+        r.originalDeliveryPlace?.trim() || r.city?.trim() || r.address?.trim() || null;
+      const deliveryCity = r.resolvedDeliveryPlace?.trim() || r.city?.trim() || original;
+      const deliveryLocationId = r.deliveryLocationId ?? null;
+      const zoneId = r.zoneId ?? input.defaultZoneId ?? null;
+      if (deliveryLocationId) matchedLocations++;
       else unmatchedLocations++;
-      const zoneId = match.zoneId ?? input.defaultZoneId ?? null;
-      if (match.zoneId) autoFilledZones++;
+      if (zoneId && r.zoneId) autoFilledZones++;
+
       return {
         batchId: input.batchId,
         rowIndex: baseIndex + i + 1,
@@ -545,10 +569,12 @@ export async function importRowsIntoBatch(
         customerPhone: r.customerPhone ?? null,
         customerPhone2: r.customerPhone2 ?? null,
         address: r.address ?? null,
-        city: match.city ?? r.city ?? null,
-        originalDeliveryLocation: match.originalName ?? r.city ?? r.address ?? null,
-        deliveryLocationId: match.deliveryLocationId,
-        locationMatchStatus: match.status,
+        city: deliveryCity,
+        originalDeliveryLocation: original,
+        deliveryLocationId,
+        locationMatchStatus: deliveryLocationId
+          ? ("MATCHED" as const)
+          : (r.locationMatchStatus ?? ("UNMATCHED" as const)),
         boxes: r.boxes ?? null,
         cartonDetails: r.cartonDetails ?? null,
         weight: r.weight ?? null,
@@ -578,6 +604,125 @@ export async function importRowsIntoBatch(
       failedRows: input.rows.length - validRows.length,
     },
   };
+}
+
+async function nextShipmentRecordRowIndex(batchId: string): Promise<number> {
+  const last = await prisma.shipmentRecord.findFirst({
+    where: { batchId },
+    orderBy: { rowIndex: "desc" },
+    select: { rowIndex: true },
+  });
+  return (last?.rowIndex ?? 0) + 1;
+}
+
+export async function createShipmentRecord(
+  input: CreateShipmentRecordInput,
+): Promise<ShipmentRecordDto> {
+  const batch = await prisma.shipmentBatch.findUnique({
+    where: { id: input.batchId },
+    select: { id: true },
+  });
+  if (!batch) throw new Error("משלוח לא נמצא");
+
+  const rowIndex = await nextShipmentRecordRowIndex(input.batchId);
+  const city = input.city?.trim() || null;
+  const address = input.address?.trim() || null;
+  const [match] = await resolveDeliveryLocationsForRows([
+    { city: city || address, address },
+  ]);
+
+  let courier: { id: string; name: string } | null = null;
+  if (input.courierId) {
+    const c = await prisma.shipmentCourier.findUnique({
+      where: { id: input.courierId },
+      select: { id: true, name: true, isActive: true },
+    });
+    if (!c || !c.isActive) throw new Error("שליח לא נמצא או לא פעיל");
+    courier = c;
+  }
+
+  if (input.zoneId) {
+    const zone = await prisma.shipmentDeliveryZone.findUnique({
+      where: { id: input.zoneId },
+      select: { id: true, isActive: true },
+    });
+    if (!zone || !zone.isActive) throw new Error("אזור חלוקה לא נמצא");
+  }
+
+  const zoneId = match?.zoneId ?? input.zoneId ?? null;
+  const deliveryFeeAmount = input.deliveryFeeAmount ?? null;
+  const deliveryFeeCurrency = input.deliveryFeeCurrency ?? "ILS";
+
+  const created = await prisma.shipmentRecord.create({
+    data: {
+      batchId: input.batchId,
+      rowIndex,
+      customerCode: input.customerCode?.trim() || null,
+      customerName: input.customerName?.trim() || null,
+      customerPhone: input.customerPhone?.trim() || null,
+      customerPhone2: input.customerPhone2?.trim() || null,
+      address,
+      city: match?.city ?? city,
+      originalDeliveryLocation: match?.originalName ?? city ?? address,
+      deliveryLocationId: match?.deliveryLocationId ?? null,
+      locationMatchStatus: match?.status ?? "UNMATCHED",
+      boxes: input.boxes ?? null,
+      weight: input.weight ?? null,
+      deliveryFeeAmount,
+      deliveryFeeCurrency,
+      deliveryFeeIls: deliveryFeeAmount,
+      zoneId,
+      courierId: courier?.id ?? null,
+      courierName: courier?.name ?? null,
+      notes: input.notes?.trim() || null,
+      status: "NEW",
+      paymentStatus: "UNPAID",
+    },
+    include: shipmentRecordInclude,
+  });
+
+  const userNames = await loadPaymentUserNames([created]);
+  const [mapped] = await mapShipmentRecords([created], userNames);
+  const [withBalance] = await attachCustomerBalances([mapped]);
+  return withBalance ?? mapped;
+}
+
+export async function createShipmentRecordsBulk(
+  batchId: string,
+  count: number,
+): Promise<ShipmentRecordDto[]> {
+  if (count < 1 || count > 50) throw new Error("כמות לא תקינה (1–50)");
+
+  const batch = await prisma.shipmentBatch.findUnique({
+    where: { id: batchId },
+    select: { id: true },
+  });
+  if (!batch) throw new Error("משלוח לא נמצא");
+
+  const startIndex = await nextShipmentRecordRowIndex(batchId);
+  await prisma.shipmentRecord.createMany({
+    data: Array.from({ length: count }, (_, i) => ({
+      batchId,
+      rowIndex: startIndex + i,
+      status: "NEW" as const,
+      paymentStatus: "UNPAID" as const,
+      deliveryFeeCurrency: "ILS",
+      locationMatchStatus: "UNMATCHED" as const,
+    })),
+  });
+
+  const created = await prisma.shipmentRecord.findMany({
+    where: {
+      batchId,
+      rowIndex: { gte: startIndex, lt: startIndex + count },
+    },
+    orderBy: { rowIndex: "asc" },
+    include: shipmentRecordInclude,
+  });
+
+  const userNames = await loadPaymentUserNames(created);
+  const mapped = await mapShipmentRecords(created, userNames);
+  return attachCustomerBalances(mapped);
 }
 
 export async function updateShipmentBatch(input: UpdateShipmentBatchInput): Promise<void> {
@@ -648,6 +793,7 @@ const shipmentRecordInclude = {
   },
   zone: { select: { name: true } },
   courier: { select: { name: true } },
+  deliveryLocation: { select: { displayName: true } },
   payments: { orderBy: { createdAt: "asc" as const } },
 };
 
@@ -658,7 +804,8 @@ export async function listShipmentRecords(batchId: string): Promise<ShipmentReco
     include: shipmentRecordInclude,
   });
   const userNames = await loadPaymentUserNames(records);
-  return attachCustomerBalances(records.map((record) => mapRecord(record, userNames)));
+  const mapped = await mapShipmentRecords(records, userNames);
+  return attachCustomerBalances(mapped);
 }
 
 export async function listShipmentRecordsByBatchIds(batchIds: string[]): Promise<ShipmentRecordDto[]> {
@@ -670,7 +817,8 @@ export async function listShipmentRecordsByBatchIds(batchIds: string[]): Promise
     include: shipmentRecordInclude,
   });
   const userNames = await loadPaymentUserNames(records);
-  return attachCustomerBalances(records.map((record) => mapRecord(record, userNames)));
+  const mapped = await mapShipmentRecords(records, userNames);
+  return attachCustomerBalances(mapped);
 }
 
 export async function getShipmentRecordById(id: string): Promise<ShipmentRecordDto | null> {
@@ -680,8 +828,9 @@ export async function getShipmentRecordById(id: string): Promise<ShipmentRecordD
   });
   if (!record) return null;
   const userNames = await loadPaymentUserNames([record]);
-  const [mapped] = await attachCustomerBalances([mapRecord(record, userNames)]);
-  return mapped ?? null;
+  const [mapped] = await mapShipmentRecords([record], userNames);
+  const [withBalance] = await attachCustomerBalances([mapped]);
+  return withBalance ?? null;
 }
 
 export async function deleteShipmentRecord(id: string): Promise<void> {
@@ -731,7 +880,8 @@ export async function listAllShipmentRecords(filter?: {
     include: shipmentRecordInclude,
   });
   const userNames = await loadPaymentUserNames(records);
-  return attachCustomerBalances(records.map((record) => mapRecord(record, userNames)));
+  const mapped = await mapShipmentRecords(records, userNames);
+  return attachCustomerBalances(mapped);
 }
 
 export async function assignZone(input: AssignZoneInput): Promise<void> {
@@ -941,14 +1091,24 @@ export async function listZones(): Promise<ShipmentZoneDto[]> {
 }
 
 export async function createZone(name: string, createdById: string): Promise<ShipmentZoneDto> {
-  const { normalizeDistributionAreaName } = await import("@/lib/distribution-area-name");
-  const normalizedName = normalizeDistributionAreaName(name);
-  if (!normalizedName) {
-    throw new Error("?? ???? ????? ?? ???? ? ?????? ?????? ???: ???? 16, ???? 1, ???? 11, ????? 5");
+  const {
+    distributionAreaValidationError,
+    distributionAreaLookupKey,
+    sanitizeDistributionAreaName,
+  } = await import("@/lib/distribution-area-name");
+  const validationError = distributionAreaValidationError(name);
+  if (validationError) {
+    throw new Error(validationError);
   }
-  const previous = await prisma.shipmentDeliveryZone.findUnique({
-    where: { name: normalizedName },
+  const sanitizedName = sanitizeDistributionAreaName(name);
+  if (!sanitizedName) {
+    throw new Error("שם אזור לא תקין");
+  }
+  const lookupKey = distributionAreaLookupKey(sanitizedName);
+  const existingZones = await prisma.shipmentDeliveryZone.findMany({
+    select: { id: true, name: true, isActive: true, sortOrder: true, code: true, createdById: true },
   });
+  const previous = existingZones.find((z) => distributionAreaLookupKey(z.name) === lookupKey);
   if (previous) {
     const zone = previous.isActive
       ? previous
@@ -960,7 +1120,7 @@ export async function createZone(name: string, createdById: string): Promise<Shi
   }
   const existing = await prisma.shipmentDeliveryZone.count();
   const z = await prisma.shipmentDeliveryZone.create({
-    data: { name: normalizedName, createdById, sortOrder: existing },
+    data: { name: sanitizedName, createdById, sortOrder: existing },
   });
   return mapZone(z);
 }
@@ -969,13 +1129,38 @@ export async function updateZone(
   id: string,
   patch: { name?: string; code?: string | null; sortOrder?: number },
 ): Promise<void> {
+  const data: {
+    name?: string;
+    code?: string | null;
+    sortOrder?: number;
+  } = {};
+
+  if (patch.name !== undefined) {
+    const {
+      distributionAreaValidationError,
+      distributionAreaLookupKey,
+      sanitizeDistributionAreaName,
+    } = await import("@/lib/distribution-area-name");
+    const validationError = distributionAreaValidationError(patch.name);
+    if (validationError) throw new Error(validationError);
+    const sanitized = sanitizeDistributionAreaName(patch.name);
+    if (!sanitized) throw new Error("שם אזור לא תקין");
+    const key = distributionAreaLookupKey(sanitized);
+    const others = await prisma.shipmentDeliveryZone.findMany({
+      where: { id: { not: id } },
+      select: { name: true },
+    });
+    if (others.some((z) => distributionAreaLookupKey(z.name) === key)) {
+      throw new Error("כבר קיים אזור חלוקה בשם דומה");
+    }
+    data.name = sanitized;
+  }
+  if (patch.code !== undefined) data.code = patch.code?.trim() || null;
+  if (patch.sortOrder !== undefined) data.sortOrder = patch.sortOrder;
+
   await prisma.shipmentDeliveryZone.update({
     where: { id },
-    data: {
-      ...(patch.name !== undefined ? { name: patch.name.trim() } : {}),
-      ...(patch.code !== undefined ? { code: patch.code?.trim() || null } : {}),
-      ...(patch.sortOrder !== undefined ? { sortOrder: patch.sortOrder } : {}),
-    },
+    data,
   });
 }
 
@@ -1208,8 +1393,9 @@ export async function saveShipmentPayments(
     include: shipmentRecordInclude,
   });
   const userNames = await loadPaymentUserNames([record]);
-  const [mapped] = await attachCustomerBalances([mapRecord(record, userNames)]);
-  return mapped!;
+  const [mapped] = await mapShipmentRecords([record], userNames);
+  const [withBalance] = await attachCustomerBalances([mapped]);
+  return withBalance!;
 }
 
 export async function deleteShipmentPaymentLine(lineId: string): Promise<void> {

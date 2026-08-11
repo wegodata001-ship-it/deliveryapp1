@@ -1,11 +1,15 @@
+import "server-only";
+
 import { prisma } from "@/lib/prisma";
-import type { WorkCountryCode as PrismaWorkCountryCode } from "@prisma/client";
-import { escapeRegExp } from "@/lib/order-number";
 import {
   formatNextPaymentCaptureCode,
   maxPaymentSequenceForWorkCountry,
-  paymentCodePrefixesForWorkCountry,
 } from "@/lib/country-document-numbering";
+import {
+  CHINA_CAPTURE_LEGACY_PREFIX,
+  PAYMENT_CODE_PREFIX,
+  parsePaymentNumberFromCode,
+} from "@/lib/country-document-numbering.shared";
 import {
   DEFAULT_WORK_COUNTRY,
   normalizeWorkCountryCode,
@@ -13,6 +17,12 @@ import {
   workCountryFromOrderSourceCountry,
   type WorkCountryCode as WorkCountryCodeLib,
 } from "@/lib/work-country";
+
+export {
+  CHINA_CAPTURE_LEGACY_PREFIX,
+  PAYMENT_CODE_PREFIX,
+  parsePaymentNumberFromCode,
+} from "@/lib/country-document-numbering.shared";
 
 /** מדינת עבודה לקליטת תשלום — לקוח / הזמנה / מדינה מפורשת */
 export async function resolvePaymentWorkCountry(opts: {
@@ -41,33 +51,6 @@ export async function resolvePaymentWorkCountry(opts: {
     if (c?.countryCode) return c.countryCode as WorkCountryCodeLib;
   }
   return DEFAULT_WORK_COUNTRY;
-}
-
-/** תאימות לאחור — תשלומי טורקיה ישנים */
-export const PAYMENT_CODE_PREFIX = "WGP-P-";
-
-/** תאימות לאחור — קודי סין (CH-P-) */
-export const CHINA_CAPTURE_LEGACY_PREFIX = "CH-P-";
-
-function paymentCodeSuffixPattern(prefix: string): RegExp {
-  return new RegExp(`^${escapeRegExp(prefix)}(\\d{4,6})$`);
-}
-
-export function parsePaymentNumberFromCode(
-  code: string | null | undefined,
-  workCountry: WorkCountryCodeLib = DEFAULT_WORK_COUNTRY,
-): number | null {
-  const c = code?.trim();
-  if (!c) return null;
-  const prefixes = paymentCodePrefixesForWorkCountry(workCountry);
-  for (const p of prefixes) {
-    const m = c.match(paymentCodeSuffixPattern(p));
-    if (m?.[1]) {
-      const n = parseInt(m[1], 10);
-      if (Number.isFinite(n)) return n;
-    }
-  }
-  return null;
 }
 
 /**

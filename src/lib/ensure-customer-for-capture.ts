@@ -1,4 +1,4 @@
-import type { CaptureCustomerSnapshotInput } from "@/lib/capture-form-snapshot";
+import type { CaptureCustomerSnapshotInput } from "@/lib/capture-form-snapshot.shared";
 import { capturePerfLog } from "@/lib/capture-perf";
 import { isCustomerCodeTaken, normalizeCustomerCodeInput } from "@/lib/customer-code";
 import { recordActivityAudit } from "@/lib/activity-audit";

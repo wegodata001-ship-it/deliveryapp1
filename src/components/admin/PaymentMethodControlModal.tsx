@@ -51,6 +51,7 @@ const STATUS_FILTERS: { value: "" | PaymentViewStatus; label: string }[] = [
 export function PaymentMethodControlModal({
   open,
   methodViews,
+  orderRemainingToPayUsd,
   onClose,
   onOrderEdit,
   onOrderView,
@@ -60,6 +61,8 @@ export function PaymentMethodControlModal({
 }: {
   open: boolean;
   methodViews: IntakeMethodView[];
+  /** «נשאר לתשלום» — מקור אמת יחיד (זהה למסך קליטה) */
+  orderRemainingToPayUsd: number;
   onClose: () => void;
   onOrderEdit?: (orderId: string) => void;
   onOrderView?: (orderId: string) => void;
@@ -140,6 +143,11 @@ export function PaymentMethodControlModal({
         </header>
 
         <section className="pmc-summary" aria-label="סיכום כללי">
+          <SummaryCard
+            label="נשאר לתשלום"
+            value={fmtMethodAmount("USD", orderRemainingToPayUsd)}
+            accent
+          />
           <SummaryCard label="מספר הזמנות" value={String(summary.orderCount)} />
           <SummaryCard
             label="מתוכנן"
@@ -150,9 +158,8 @@ export function PaymentMethodControlModal({
             value={fmtDualMoney(summary.enteredUsd, summary.enteredIls)}
           />
           <SummaryCard
-            label="נותר"
+            label="נותר לפי אמצעי"
             value={fmtDualMoney(summary.remainingUsd, summary.remainingIls)}
-            accent
           />
         </section>
 

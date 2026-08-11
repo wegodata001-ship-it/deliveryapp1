@@ -84,3 +84,50 @@ export function mergeCustomerWhere(
   }
   return { ...base, ...countryPart };
 }
+
+/** CashWeekFlow / CashDailyDrawerCount / CashCount — scope by work country + week */
+export function cashWeekFlowWhere(scope: CountryScope, weekCode: string): Prisma.CashWeekFlowWhereUniqueInput {
+  return {
+    countryCode_weekCode: {
+      countryCode: scope.workCountry,
+      weekCode: weekCode.trim(),
+    },
+  };
+}
+
+export function cashWeekFlowRowWhere(
+  scope: CountryScope,
+  weekCode: string,
+): Pick<Prisma.CashWeekFlowWhereInput, "countryCode" | "weekCode"> {
+  return { countryCode: scope.workCountry, weekCode: weekCode.trim() };
+}
+
+export function cashDrawerCountWhere(
+  scope: CountryScope,
+  weekCode: string,
+): Prisma.CashDailyDrawerCountWhereInput {
+  return { countryCode: scope.workCountry, weekCode: weekCode.trim() };
+}
+
+export function cashExpenseWhereForCountryScope(
+  scope: CountryScope,
+): Pick<Prisma.CashExpenseWhereInput, "countryCode"> {
+  return { countryCode: scope.workCountry };
+}
+
+/** Server write guard — reject cross-country payloads */
+export function assertWriteCountryScope(
+  active: WorkCountryCode,
+  requested: WorkCountryCode | string | null | undefined,
+): void {
+  const req = normalizeWorkCountryCode(requested != null ? String(requested) : null);
+  if (req && req !== active) {
+    throw new Error(`פעולה לא שייכת למדינה הפעילה (${active}, התקבל ${req})`);
+  }
+}
+
+export function resolveWorkCountryParam(
+  workCountry: WorkCountryCode | string | null | undefined,
+): WorkCountryCode {
+  return normalizeWorkCountryCode(workCountry != null ? String(workCountry) : null) ?? DEFAULT_WORK_COUNTRY;
+}

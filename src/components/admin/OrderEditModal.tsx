@@ -6,7 +6,7 @@ import { getOrderEditEntryHintAction } from "@/app/admin/order-edit-requests/act
 import type { OrderEditEntryHint } from "@/app/admin/order-edit-requests/actions";
 import { OrderCreatePanel } from "@/components/admin/OrderCreatePanel";
 import { OrderEditLockGateModal } from "@/components/admin/OrderEditLockGateModal";
-import type { SerializedFinancial } from "@/lib/financial-settings";
+import type { SerializedFinancial } from "@/lib/financial-settings.shared";
 
 type Props = {
   orderId: string | null;

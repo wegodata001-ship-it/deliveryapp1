@@ -1,6 +1,8 @@
-import { PAYMENT_CODE_PREFIX } from "@/lib/payment-capture-code";
-import { paymentCodePrefixesForWorkCountry } from "@/lib/country-document-numbering";
+import { paymentCodePrefixesForWorkCountry } from "@/lib/country-document-numbering.shared";
 import { paymentCodePrefix, type WorkCountryCode } from "@/lib/work-country";
+
+/** תאימות לאחור — תשלומי טורקיה ישנים (WGP-P-) */
+const LEGACY_TURKEY_PAYMENT_PREFIX = "WGP-P-";
 
 /** מדינות עם רצף קודי קליטה נפרד (לא רצף גלובלי) */
 export const CAPTURE_PAYMENT_NAV_COUNTRIES = ["TR", "CN", "AE"] as const;
@@ -47,5 +49,5 @@ export function capturePaymentCodeMatchesCountry(
 }
 
 export function legacyTurkeyPaymentPrefixes(): string[] {
-  return [paymentCodePrefix("TR"), PAYMENT_CODE_PREFIX];
+  return [paymentCodePrefix("TR"), LEGACY_TURKEY_PAYMENT_PREFIX];
 }

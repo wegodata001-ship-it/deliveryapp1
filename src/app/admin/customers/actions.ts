@@ -15,6 +15,7 @@ import {
   type CustomerWorkspacePaymentRow,
 } from "@/lib/customers-module";
 import { activePaidPaymentWhere, findActiveCustomerPayments } from "@/lib/payment-record-status";
+import { computeOrderOpenDebtUsd } from "@/lib/order-remaining-debt";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 import { prisma } from "@/lib/prisma";
 import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
@@ -156,7 +157,9 @@ export async function getCustomerProfileAction(
     const com = o.commissionUsd ?? new Prisma.Decimal(0);
     const total = o.totalUsd ?? deal.add(com);
     const paid = paidByOrder.get(o.id) ?? new Prisma.Decimal(0);
-    const remaining = total.sub(paid).toDecimalPlaces(2, 4);
+    const remaining = new Prisma.Decimal(
+      computeOrderOpenDebtUsd(Number(total), Number(paid)).toFixed(2),
+    );
     if (!isDebtWithdrawalOrderStatus(o.status)) {
       ordersTotal = ordersTotal.add(total);
       dealsTotal = dealsTotal.add(deal);

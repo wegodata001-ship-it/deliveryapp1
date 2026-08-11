@@ -26,6 +26,8 @@ import {
   type ShipmentCurrency,
 } from "@/lib/shipment-import-detector";
 import { getAhWeekByDate } from "@/lib/weeks/ah-week";
+import { LocationImportMappingModal } from "@/components/admin/shipments/LocationImportMappingModal";
+import { useShipmentImportLocationFlow } from "@/components/admin/shipments/useShipmentImportLocationFlow";
 
 type BatchHeaderForm = {
   sourceShipmentNumber: string;
@@ -107,6 +109,15 @@ export function ShipmentImportClient({ initialZones, initialCouriers }: Props) {
   const [fileName, setFileName] = useState<string | null>(null);
   const [fileSize, setFileSize] = useState<number | null>(null);
   const [saving, setSaving] = useState<"idle" | "header" | "import">("idle");
+  const {
+    pendingMappings,
+    mappingModalOpen,
+    loadPreviewRows,
+    checkLocationMappings,
+    applyMappings,
+    keepOriginalMappings,
+    resetMappingFlow,
+  } = useShipmentImportLocationFlow();
 
   const activeZones = useMemo(() => initialZones.filter((z) => z.isActive), [initialZones]);
   const activeCouriers = useMemo(
@@ -140,6 +151,7 @@ export function ShipmentImportClient({ initialZones, initialCouriers }: Props) {
     setFileName(null);
     setFileSize(null);
     setError(null);
+    resetMappingFlow();
     if (fileRef.current) fileRef.current.value = "";
   }
 
@@ -183,7 +195,8 @@ export function ShipmentImportClient({ initialZones, initialCouriers }: Props) {
           return;
         }
         setAnalysis(detected);
-        setPreview(detected.rows);
+        const rows = loadPreviewRows(detected.rows);
+        setPreview(rows);
         setForm((prev) => ({
           ...prev,
           sourceShipmentNumber:
@@ -199,6 +212,7 @@ export function ShipmentImportClient({ initialZones, initialCouriers }: Props) {
           distributionStartDate:
             prev.distributionStartDate || detected.batchMetadata.distributionStartDate || "",
         }));
+        void checkLocationMappings(rows);
       } catch (err) {
         setError("שגיאה בקריאת הקובץ: " + String(err));
         setPreview([]);
@@ -547,7 +561,8 @@ export function ShipmentImportClient({ initialZones, initialCouriers }: Props) {
                   <th>לקוח</th>
                   <th>טלפון</th>
                   <th>כתובת</th>
-                  <th>עיר</th>
+                  <th>מקום מקורי (Excel)</th>
+                  <th>מקום לייבוא</th>
                   <th>קרטונים</th>
                   <th>פרטי קרטונים</th>
                   <th>משקל</th>
@@ -572,7 +587,16 @@ export function ShipmentImportClient({ initialZones, initialCouriers }: Props) {
                     <td>{row.customerName || missingText("customerName")}</td>
                     <td>{row.customerPhone || missingText("customerPhone")}{row.customerPhone2 ? ` / ${row.customerPhone2}` : ""}</td>
                     <td>{row.address || missingText("address")}</td>
-                    <td>{row.city || missingText("city")}</td>
+                    <td>{row.originalDeliveryPlace || row.city || missingText("city")}</td>
+                    <td>
+                      {row.resolvedDeliveryPlace && row.resolvedDeliveryPlace !== row.originalDeliveryPlace ? (
+                        <span title={`מקור: ${row.originalDeliveryPlace ?? ""}`}>
+                          {row.city}
+                        </span>
+                      ) : (
+                        row.city || missingText("city")
+                      )}
+                    </td>
                     <td>{row.boxes ?? missingText("boxes")}</td>
                     <td>{row.cartonDetails || missingText("cartonDetails")}</td>
                     <td>{row.weight != null ? `${row.weight}` : "—"}</td>
@@ -615,6 +639,14 @@ export function ShipmentImportClient({ initialZones, initialCouriers }: Props) {
           ביטול
         </button>
       </div>
+
+      {mappingModalOpen && pendingMappings && pendingMappings.length > 0 ? (
+        <LocationImportMappingModal
+          mappings={pendingMappings}
+          onApply={() => applyMappings(preview, setPreview)}
+          onKeepOriginal={keepOriginalMappings}
+        />
+      ) : null}
     </div>
   );
 }

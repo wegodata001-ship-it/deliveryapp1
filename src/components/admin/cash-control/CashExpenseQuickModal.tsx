@@ -2,18 +2,22 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Eye, Plus, X } from "lucide-react";
+import { Eye, Plus, Trash2, X } from "lucide-react";
 import {
   CASH_EXPENSE_REASONS,
   type CashCurrency,
   type CashExpenseReason,
 } from "@/app/admin/cash-control/constants";
-import { createCashExpenseAction, listCashExpensesFullAction } from "@/app/admin/cash-expenses/actions";
+import { createCashExpenseAction, deleteCashExpenseAction, listCashExpensesFullAction } from "@/app/admin/cash-expenses/actions";
 import type { CashExpenseRowDto } from "@/app/admin/cash-expenses/types";
 import { getCashControlDayDetailAction } from "@/app/admin/cash-control/day-detail-action";
 import { fmtDailyMoney } from "@/lib/cash-control-daily";
 import { reconLinesToVariance, type CashVarianceLineDto } from "@/lib/cash-control-variance";
 import { dispatchCashControlRefresh } from "@/lib/cash-control-refresh-bus";
+import {
+  CashExpenseDeleteConfirmModal,
+  type CashExpenseDeleteTarget,
+} from "@/components/admin/cash-control/CashExpenseDeleteConfirmModal";
 import { CashExpenseVarianceImpact } from "@/components/admin/cash-control/CashExpenseVarianceImpact";
 import { CashExpensePaymentMethodSelect } from "@/components/admin/cash-control/CashExpensePaymentMethodSelect";
 import { PaymentMethodIcon } from "@/components/admin/cash-control/CashExpensePaymentMethodSelect";
@@ -28,7 +32,9 @@ export type CashExpenseQuickModalProps = {
   week: string;
   activeDateYmd?: string;
   canCreate: boolean;
+  canDelete?: boolean;
   currentUserName: string;
+  balancedWeekLabel?: string | null;
   onSaved: () => void | Promise<void>;
 };
 
@@ -75,7 +81,9 @@ export function CashExpenseQuickModal({
   week,
   activeDateYmd,
   canCreate,
+  canDelete = false,
   currentUserName,
+  balancedWeekLabel = null,
   onSaved,
 }: CashExpenseQuickModalProps) {
   const defaultDate = activeDateYmd?.trim() || todayYmd();
@@ -86,6 +94,8 @@ export function CashExpenseQuickModal({
   const [err, setErr] = useState<string | null>(null);
   const [varianceLines, setVarianceLines] = useState<CashVarianceLineDto[] | null>(null);
   const [varianceLoading, setVarianceLoading] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<CashExpenseDeleteTarget | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   const listDate = form.dateYmd.trim() || defaultDate;
 
@@ -159,6 +169,32 @@ export function CashExpenseQuickModal({
     return Number.isFinite(amt) && amt !== 0 && !!form.reason && !!form.paymentMethod;
   }, [form.amount, form.paymentMethod, form.reason]);
 
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    if (
+      balancedWeekLabel &&
+      !window.confirm(`שבוע ${balancedWeekLabel} כבר אוזן. שינוי זה ישפיע על האיזון. להמשיך?`)
+    ) {
+      return;
+    }
+    setDeleteBusy(true);
+    try {
+      const res = await deleteCashExpenseAction(deleteTarget.id);
+      if (!res.ok) {
+        alert(res.error ?? "מחיקה נכשלה");
+        return;
+      }
+      setDeleteTarget(null);
+      await loadRows();
+      const detail = await getCashControlDayDetailAction({ week, dateYmd: listDate });
+      setVarianceLines(detail ? reconLinesToVariance(detail.reconciliation) : []);
+      await onSaved();
+      dispatchCashControlRefresh(week);
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
   if (!open) return null;
 
   function resetForNew() {
@@ -173,6 +209,12 @@ export function CashExpenseQuickModal({
     }
     if (!canSubmit) {
       setErr("יש למלא סוג הוצאה, אמצעי תשלום, מטבע וסכום שונה מאפס");
+      return;
+    }
+    if (
+      balancedWeekLabel &&
+      !window.confirm(`שבוע ${balancedWeekLabel} כבר אוזן. שינוי זה ישפיע על האיזון. להמשיך?`)
+    ) {
       return;
     }
     setErr(null);
@@ -386,13 +428,35 @@ export function CashExpenseQuickModal({
                         <td>{r.createdByName ?? "—"}</td>
                         <td>{r.notes ?? "—"}</td>
                         <td>
-                          <Link
-                            href={`/admin/cash-expenses?expense=${r.id}`}
-                            className="ce-modal-v2__link-btn"
-                            title="צפייה"
-                          >
-                            <Eye size={14} /> צפייה
-                          </Link>
+                          <div className="ce-modal-v2__row-actions">
+                            <Link
+                              href={`/admin/cash-expenses?expense=${r.id}`}
+                              className="ce-modal-v2__link-btn"
+                              title="צפייה"
+                            >
+                              <Eye size={14} /> צפייה
+                            </Link>
+                            {canDelete ? (
+                              <button
+                                type="button"
+                                className="ce-modal-v2__link-btn ce-modal-v2__link-btn--danger"
+                                title="מחיקה"
+                                onClick={() =>
+                                  setDeleteTarget({
+                                    id: r.id,
+                                    reasonLabel: r.reasonLabel,
+                                    amount: r.amount,
+                                    currency: r.currency,
+                                    dateDisplay: r.dateDisplay,
+                                    weekCode: r.weekCode,
+                                    notes: r.notes,
+                                  })
+                                }
+                              >
+                                <Trash2 size={14} /> מחיקה
+                              </button>
+                            ) : null}
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -424,6 +488,18 @@ export function CashExpenseQuickModal({
           </div>
         </footer>
       </div>
+
+      <CashExpenseDeleteConfirmModal
+        open={!!deleteTarget}
+        expense={deleteTarget}
+        busy={deleteBusy}
+        balancedWeekLabel={balancedWeekLabel}
+        onCancel={() => {
+          if (deleteBusy) return;
+          setDeleteTarget(null);
+        }}
+        onConfirm={() => void confirmDelete()}
+      />
     </div>
   );
 }

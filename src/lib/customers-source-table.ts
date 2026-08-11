@@ -428,24 +428,12 @@ export async function getCustomerSourcePreview(customerId: string): Promise<Cust
     });
     if (!cust) return null;
 
-    const [orderCount, orderAgg, payAgg] = await Promise.all([
+    const { getCustomerOpenDebt } = await import("@/lib/customer-open-debt");
+    const [orderCount, debt] = await Promise.all([
       prisma.order.count({ where: { customerId: id, deletedAt: null } }),
-      prisma.order.aggregate({
-        where: { customerId: id, deletedAt: null },
-        _sum: { totalUsd: true, amountUsd: true },
-      }),
-      prisma.payment.aggregate({
-        where: { customerId: id, isPaid: true, orderId: { not: null } },
-        _sum: { amountUsd: true },
-      }),
+      getCustomerOpenDebt(id),
     ]);
-
-    const charged =
-      Number(orderAgg._sum.totalUsd ?? 0) > 0
-        ? Number(orderAgg._sum.totalUsd)
-        : Number(orderAgg._sum.amountUsd ?? 0);
-    const paid = Number(payAgg._sum.amountUsd ?? 0);
-    const balance = Math.max(0, charged - paid);
+    const balance = Number(debt.openDebtUsd.toFixed(2));
 
     return {
       id: cust.id,

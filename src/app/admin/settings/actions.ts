@@ -19,6 +19,8 @@ import { VAT_RATE_PERCENT } from "@/lib/vat";
 import { FINANCIAL_LAYOUT_CACHE_TAG } from "@/lib/admin-layout-cache";
 import { recordActivityAudit } from "@/lib/activity-audit";
 import { parseCommissionPercentString, sanitizeCommissionPercentInput } from "@/lib/commission-percent";
+import { computeOrderOpenDebtUsd } from "@/lib/order-remaining-debt";
+import { activePaidPaymentWhere } from "@/lib/payment-record-status-shared";
 
 export type AdminSettingsPayload = {
   baseDollarRate: string;
@@ -368,7 +370,7 @@ export async function getSystemStatsAction(): Promise<SystemStats> {
     }),
     prisma.payment.aggregate({
       _sum: { amountUsd: true },
-      where: { isPaid: true, createdAt: { gte: startOfMonth } },
+      where: { ...activePaidPaymentWhere, createdAt: { gte: startOfMonth } },
     }),
     prisma.order.aggregate({
       _sum: { totalUsd: true },
@@ -379,7 +381,7 @@ export async function getSystemStatsAction(): Promise<SystemStats> {
     }),
     prisma.payment.aggregate({
       _sum: { amountUsd: true },
-      where: { isPaid: true, createdAt: { gte: startOfYear } },
+      where: { ...activePaidPaymentWhere, createdAt: { gte: startOfYear } },
     }),
     prisma.order.aggregate({
       _sum: { totalUsd: true },
@@ -387,13 +389,13 @@ export async function getSystemStatsAction(): Promise<SystemStats> {
     }),
     prisma.payment.aggregate({
       _sum: { amountUsd: true },
-      where: { isPaid: true },
+      where: activePaidPaymentWhere,
     }),
   ]);
 
   const totalOrdersUsd = Number(openOrdersAgg._sum?.totalUsd ?? 0);
   const totalPaidUsd = Number(paidOrdersAgg._sum?.amountUsd ?? 0);
-  const openBalancesUsd = Math.max(0, totalOrdersUsd - totalPaidUsd);
+  const openBalancesUsd = computeOrderOpenDebtUsd(totalOrdersUsd, totalPaidUsd);
 
   return {
     customersTotal,

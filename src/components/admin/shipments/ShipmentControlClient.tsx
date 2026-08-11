@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useState, useMemo, useCallback, useTransition } from "react";
+import { Fragment, useState, useMemo, useCallback, useTransition, useEffect } from "react";
 import {
   Truck, RefreshCw, Filter, ChevronDown, ChevronUp,
   AlertTriangle, Users, MapPin, Package, Banknote,
@@ -14,6 +14,7 @@ import type {
   ShipmentControlRecord,
   ShipmentBatchExpenseDto,
   ShipmentBatchExpenseSummary,
+  ShipmentRecordExpenseDto,
   CourierSummary,
   ZoneSummary,
   ShipmentException,
@@ -30,6 +31,7 @@ import {
   ShipmentBatchExpensesDetailModal,
   fmtExpenseTotals,
 } from "@/components/admin/shipments/ShipmentBatchExpenseModals";
+import { ShipmentExpensesManageModal } from "@/components/admin/shipments/ShipmentExpensesManageModal";
 import {
   exportShipmentReportExcel,
   exportShipmentReportPdf,
@@ -132,7 +134,7 @@ function RecordRow({ r }: { r: ShipmentControlRecord }) {
             <div className="sc-expand-panel">
               <div className="sc-expand-grid">
                 <div><span className="sc-expand-label">טלפון:</span> {r.customerPhone || "—"}{r.customerPhone2 ? ` / ${r.customerPhone2}` : ""}</div>
-                <div><span className="sc-expand-label">כתובת:</span> {r.address || "—"}, {r.city || ""}</div>
+                <div><span className="sc-expand-label">כתובת:</span> {r.address || "—"}, {r.updatedDeliveryLocation || r.city || ""}</div>
                 <div><span className="sc-expand-label">הערות:</span> {r.notes || "—"}</div>
                 <div><span className="sc-expand-label">קונטיינר:</span> {r.containerNumber || "—"}</div>
                 <div><span className="sc-expand-label">נוצר:</span> {formatDate(r.createdAt)}</div>
@@ -190,7 +192,7 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
   const [activeKpi, setActiveKpi] = useState<KpiDrillKey | null>(null);
   const [shipmentsModalOpen, setShipmentsModalOpen] = useState(false);
   const [containersModalOpen, setContainersModalOpen] = useState(false);
-  const [expensesByBatchModalOpen, setExpensesByBatchModalOpen] = useState(false);
+  const [expensesManageModalOpen, setExpensesManageModalOpen] = useState(false);
 
   const currentFilter = useCallback((): ShipmentControlFilter => ({
     year: year ? parseInt(year) : undefined,
@@ -227,6 +229,15 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
     refresh(currentFilter());
   }
 
+  function recalcTotalExpensesIls(
+    recs: ShipmentControlRecord[],
+    batchExp: ShipmentBatchExpenseSummary[],
+  ) {
+    const recordIls = recs.reduce((s, r) => s + (r.expensesTotalIls ?? 0), 0);
+    const batchIls = batchExp.reduce((s, b) => s + b.totalIls, 0);
+    return Math.round((recordIls + batchIls) * 100) / 100;
+  }
+
   const handleBatchExpenseChanged = useCallback(
     (batchId: string, expenses: ShipmentBatchExpenseDto[]) => {
       setData((prev) => {
@@ -246,23 +257,46 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
           totalUsd,
           count: expenses.length,
         };
-        const newBatchExpenses = prev.batchExpenses.some((b) => b.batchId === batchId)
-          ? prev.batchExpenses.map((b) => (b.batchId === batchId ? summary : b))
-          : [...prev.batchExpenses, summary];
-
-        const recordExpensesIls = prev.records.reduce(
-          (s, r) => s + (r.expensesTotalIls ?? 0),
-          0,
-        );
-        const batchExpensesIls = newBatchExpenses.reduce((s, b) => s + b.totalIls, 0);
+        const newBatchExpenses =
+          expenses.length === 0
+            ? prev.batchExpenses.filter((b) => b.batchId !== batchId)
+            : prev.batchExpenses.some((b) => b.batchId === batchId)
+              ? prev.batchExpenses.map((b) => (b.batchId === batchId ? summary : b))
+              : [...prev.batchExpenses, summary];
 
         return {
           ...prev,
           batchExpenses: newBatchExpenses,
           kpis: {
             ...prev.kpis,
-            totalExpensesIls:
-              Math.round((recordExpensesIls + batchExpensesIls) * 100) / 100,
+            totalExpensesIls: recalcTotalExpensesIls(prev.records, newBatchExpenses),
+          },
+        };
+      });
+    },
+    [],
+  );
+
+  const handleRecordExpenseChanged = useCallback(
+    (recordId: string, expenses: ShipmentRecordExpenseDto[]) => {
+      setData((prev) => {
+        const newRecords = prev.records.map((r) => {
+          if (r.id !== recordId) return r;
+          const total =
+            Math.round(expenses.reduce((s, e) => s + e.amountIls, 0) * 100) / 100;
+          return {
+            ...r,
+            expenses,
+            expensesTotalIls: total,
+            expensesCount: expenses.length,
+          };
+        });
+        return {
+          ...prev,
+          records: newRecords,
+          kpis: {
+            ...prev.kpis,
+            totalExpensesIls: recalcTotalExpensesIls(newRecords, prev.batchExpenses),
           },
         };
       });
@@ -416,7 +450,7 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
               value={fmtIls(kpis.totalExpensesIls ?? 0)}
               color="#b45309"
               icon={<Banknote size={18} />}
-              onClick={() => setExpensesByBatchModalOpen(true)}
+              onClick={() => setExpensesManageModalOpen(true)}
             />
             {kpis.totalCreditIls > 0 && (
               <KpiCard label="יתרת זכות" value={fmtIls(kpis.totalCreditIls)} color="#7c3aed" onClick={() => setActiveKpi("credit")} />
@@ -736,12 +770,15 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
         />
       )}
 
-      {expensesByBatchModalOpen && (
-        <ExpensesByBatchModal
+      {expensesManageModalOpen && (
+        <ShipmentExpensesManageModal
           batches={batches}
           records={records}
           batchExpenses={batchExpenses}
-          onClose={() => setExpensesByBatchModalOpen(false)}
+          totalExpensesIls={kpis.totalExpensesIls ?? 0}
+          onClose={() => setExpensesManageModalOpen(false)}
+          onBatchExpensesChanged={handleBatchExpenseChanged}
+          onRecordExpensesChanged={handleRecordExpenseChanged}
         />
       )}
     </div>
@@ -781,6 +818,10 @@ function ContainersModal({
   const [batchExpenses, setBatchExpenses] = useState(initialBatchExpenses);
   const [addFor, setAddFor] = useState<BatchSummary | null>(null);
   const [detailFor, setDetailFor] = useState<BatchSummary | null>(null);
+
+  useEffect(() => {
+    setBatchExpenses(initialBatchExpenses);
+  }, [initialBatchExpenses]);
 
   const expenseByBatchId = useMemo(() => {
     const map = new Map<string, ShipmentBatchExpenseSummary>();
@@ -987,6 +1028,7 @@ function ContainersModal({
         <ShipmentBatchExpenseFormModal
           batchId={addFor.id}
           batchLabel={batchLabel(addFor)}
+          layer={detailFor ? "nested-deep" : "nested"}
           onClose={() => setAddFor(null)}
           onSaved={(expense) => {
             applyExpense(addFor.id, expense);
@@ -1008,140 +1050,6 @@ function ContainersModal({
         />
       )}
     </>
-  );
-}
-
-// ─── Expenses by Batch Modal ──────────────────────────────────────────────────
-
-function ExpensesByBatchModal({
-  batches,
-  records,
-  batchExpenses,
-  onClose,
-}: {
-  batches: { id: string; batchNumber: string; containerNumber: string | null }[];
-  records: ShipmentControlRecord[];
-  batchExpenses: ShipmentBatchExpenseSummary[];
-  onClose: () => void;
-}) {
-  const batchExpenseMap = useMemo(() => {
-    const map = new Map<string, ShipmentBatchExpenseSummary>();
-    for (const b of batchExpenses) map.set(b.batchId, b);
-    return map;
-  }, [batchExpenses]);
-
-  const rows = useMemo(() => {
-    const byBatch = new Map<string, ShipmentControlRecord[]>();
-    for (const r of records) {
-      const list = byBatch.get(r.batchId) ?? [];
-      list.push(r);
-      byBatch.set(r.batchId, list);
-    }
-    return batches
-      .map((b) => {
-        const recs = byBatch.get(b.id) ?? [];
-        let totalExpenses = 0;
-        let expenseCount = 0;
-        const allExpenses: (ShipmentControlRecord["expenses"][number] & { customerName: string | null })[] = [];
-        for (const r of recs) {
-          totalExpenses += r.expensesTotalIls ?? 0;
-          expenseCount += r.expensesCount ?? 0;
-          for (const e of r.expenses) {
-            allExpenses.push({ ...e, customerName: r.customerName });
-          }
-        }
-        const batchExp = batchExpenseMap.get(b.id);
-        if (batchExp) {
-          totalExpenses += batchExp.totalIls;
-          expenseCount += batchExp.count;
-        }
-        return {
-          ...b,
-          totalExpenses,
-          expenseCount,
-          expenses: allExpenses,
-          batchExpUsd: batchExp?.totalUsd ?? 0,
-        };
-      })
-      .filter((b) => b.totalExpenses > 0 || b.batchExpUsd > 0);
-  }, [batches, records, batchExpenseMap]);
-
-  const grandTotal = useMemo(() => rows.reduce((s, r) => s + r.totalExpenses, 0), [rows]);
-
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  function toggle(id: string) {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  }
-
-  function fm(n: number) {
-    return "₪" + n.toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  }
-
-  return (
-    <div className="shp-modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="shp-modal" style={{ maxWidth: 780, width: "96vw" }} dir="rtl" onClick={(e) => e.stopPropagation()}>
-        <div className="shp-modal__header">
-          <strong>הוצאות לפי משלוח</strong>
-          <span style={{ fontSize: "0.82rem", color: "#64748b", marginInlineStart: 8 }}>
-            {rows.length} משלוחים · סה״כ {fm(grandTotal)}
-          </span>
-          <button type="button" className="shp-icon-btn" onClick={onClose}>
-            <X size={16} />
-          </button>
-        </div>
-        <div className="shp-modal__body" style={{ maxHeight: "65vh", overflowY: "auto" }}>
-          {rows.length === 0 ? (
-            <div style={{ textAlign: "center", color: "#94a3b8", padding: 28 }}>אין הוצאות</div>
-          ) : (
-            <table className="shp-table" style={{ fontSize: "0.84rem" }}>
-              <thead>
-                <tr>
-                  <th>משלוח</th>
-                  <th>קונטיינר</th>
-                  <th style={{ textAlign: "center" }}>הוצאות</th>
-                  <th style={{ textAlign: "center" }}>סה״כ</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((b) => (
-                  <Fragment key={b.id}>
-                    <tr style={{ cursor: "pointer" }} onClick={() => toggle(b.id)}>
-                      <td style={{ fontWeight: 700, color: "#1d4ed8" }}>
-                        {expanded.has(b.id) ? "▾" : "▸"} {b.batchNumber}
-                      </td>
-                      <td style={{ fontWeight: 600 }}>{b.containerNumber || "—"}</td>
-                      <td style={{ textAlign: "center" }}>{b.expenseCount}</td>
-                      <td style={{ textAlign: "center", fontWeight: 700, color: "#b45309" }}>{fm(b.totalExpenses)}</td>
-                    </tr>
-                    {expanded.has(b.id) && b.expenses.map((e) => (
-                      <tr key={e.id} style={{ background: "#fefce8" }}>
-                        <td style={{ paddingInlineStart: 28, fontSize: "0.8rem", color: "#64748b" }}>{e.customerName || "—"}</td>
-                        <td style={{ fontSize: "0.8rem" }}>{e.categoryLabel}</td>
-                        <td style={{ textAlign: "center", fontSize: "0.8rem" }}>{e.paymentMethodLabel}</td>
-                        <td style={{ textAlign: "center", fontWeight: 600, fontSize: "0.8rem", color: "#b45309" }}>{fm(e.amountIls)}</td>
-                      </tr>
-                    ))}
-                  </Fragment>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr style={{ fontWeight: 800, background: "#f1f5f9" }}>
-                  <td colSpan={3} style={{ fontWeight: 800 }}>סה״כ</td>
-                  <td style={{ textAlign: "center", color: "#b45309" }}>{fm(grandTotal)}</td>
-                </tr>
-              </tfoot>
-            </table>
-          )}
-        </div>
-        <div className="shp-modal__footer">
-          <button type="button" className="shp-btn" onClick={onClose}>סגור</button>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -1443,11 +1351,11 @@ function CourierDetail({
     if (fStatus) result = result.filter((r) => r.status === fStatus);
     if (fPayStatus) result = result.filter((r) => r.paymentStatus === fPayStatus);
     if (fPayMethod) result = result.filter((r) => r.payments.some((p) => p.method === fPayMethod));
-    if (fCity) result = result.filter((r) => (r.city ?? "").toUpperCase() === fCity);
+    if (fCity) result = result.filter((r) => (r.updatedDeliveryLocation ?? r.city ?? "").toUpperCase() === fCity);
     if (fSearch.trim()) {
       const q = fSearch.trim().toLowerCase();
       result = result.filter((r) =>
-        [r.batchNumber, r.customerName, r.customerCode, r.customerPhone, r.address, r.city, r.zoneName, r.containerNumber, r.notes]
+        [r.batchNumber, r.customerName, r.customerCode, r.customerPhone, r.address, r.city, r.updatedDeliveryLocation, r.zoneName, r.containerNumber, r.notes]
           .filter(Boolean).join(" ").toLowerCase().includes(q),
       );
     }

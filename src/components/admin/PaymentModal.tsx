@@ -11,6 +11,7 @@ import {
   type PaymentIntakeMatchResult,
   type PaymentIntakeOrderRow,
 } from "@/lib/payment-intake";
+import { computeOrderOpenDebtUsd } from "@/lib/order-remaining-debt";
 import {
   fetchPaymentIntakeCustomerOrdersAction,
   savePaymentIntakeAction,
@@ -21,7 +22,7 @@ import {
   previewPaymentCodeForCaptureAction,
   type CustomerSearchRow,
 } from "@/app/admin/capture/actions";
-import type { SerializedFinancial } from "@/lib/financial-settings";
+import type { SerializedFinancial } from "@/lib/financial-settings.shared";
 import type { PaymentWindowProps } from "@/lib/admin-windows";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { OrderEditModal } from "@/components/admin/OrderEditModal";
@@ -329,7 +330,12 @@ export function PaymentModal({
     }
     const totalTransactions = roundMoney2(tx);
     const totalPaidDb = roundMoney2(paidSum);
-    const remaining = roundMoney2(Math.max(0, totalTransactions - totalPaidDb));
+    const remaining = roundMoney2(
+      matched.reduce(
+        (s, row) => s + computeOrderOpenDebtUsd(orderRowTotalUsd(row), row.dbPaidUsd),
+        0,
+      ),
+    );
     return { totalTransactions, totalPaidDb, remaining };
   }, [matched]);
 

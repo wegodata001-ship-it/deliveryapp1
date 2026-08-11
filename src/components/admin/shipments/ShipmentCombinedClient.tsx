@@ -33,7 +33,6 @@ import {
   updateShipmentStatusAction,
 } from "@/app/admin/shipments/actions";
 import { assignZoneWithLocationPromptAction } from "@/app/admin/shipments/location-actions";
-import { looksLikeDistributionArea } from "@/lib/distribution-area-name";
 import { isInvalidCustomerName } from "@/lib/shipment-customer-name-quality";
 import { sameShipmentLocality } from "@/lib/shipment-zone-locality";
 import { ShipmentPaymentModal } from "@/components/admin/shipments/ShipmentPaymentModal";
@@ -143,7 +142,7 @@ export function ShipmentCombinedClient({
     () => [
       { value: NO_ZONE_VALUE, label: "ללא אזור" },
       ...zones
-        .filter((z) => z.isActive && looksLikeDistributionArea(z.name))
+        .filter((z) => z.isActive)
         .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "he"))
         .map((z) => ({ value: z.id, label: z.name })),
     ],
@@ -187,6 +186,7 @@ export function ShipmentCombinedClient({
           r.customerPhone2,
           r.address,
           r.city,
+          r.updatedDeliveryLocation,
           r.originalDeliveryLocation,
           r.zoneName,
         ]

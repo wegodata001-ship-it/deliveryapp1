@@ -10,7 +10,7 @@ import {
 } from "@/app/admin/financial/actions";
 import { sanitizeCommissionPercentInput } from "@/lib/commission-percent";
 import { dispatchFinancialSettingsSaved } from "@/lib/financial-settings-bus";
-import { FINANCIAL_SETTINGS_DEFAULTS, type SerializedFinancial } from "@/lib/financial-settings";
+import { FINANCIAL_SETTINGS_DEFAULTS, type SerializedFinancial } from "@/lib/financial-settings.shared";
 
 type Props = {
   open: boolean;

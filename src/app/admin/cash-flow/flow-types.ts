@@ -20,7 +20,19 @@ export type FxPurchaseIntakeAllocation = {
 /** מסלול רכישת מט״ח — PS ומסלול IL נפרדים לחלוטין */
 export type FxPurchaseTrack = "PS" | "IL";
 
-/** רשומת רכישת מט"ח — נשמרת ב-CashWeekFlow.fxPurchases (JSON), append-only */
+/** שורת היסטוריה לעריכת רכישת מט״ח — נשמרת על הרשומה */
+export type FxPurchaseEditRevision = {
+  ilsAmount: number;
+  usdReceived: number;
+  rate: number;
+  remainderCashIls: number;
+  remainderBankIls: number;
+  editedAt: string;
+  editedById?: string;
+  editedByName?: string;
+};
+
+/** רשומת רכישת מט"ח — נשמרת ב-CashWeekFlow.fxPurchases (JSON) */
 export type FxPurchaseRecord = {
   id: string;
   /** ברירת מחדל לרשומות ישנות / חסרות: PS */
@@ -40,6 +52,21 @@ export type FxPurchaseRecord = {
   createdByName?: string;
   note?: string;
   createdAt: string;
+  editedAt?: string;
+  editedById?: string;
+  editedByName?: string;
+  editHistory?: FxPurchaseEditRevision[];
+  /** ס snapshot לפני רכישה — לביקורת */
+  availableIlsBefore?: number;
+  /** יתרה בקופה לאחר הרכישה (available − purchase) */
+  remainingIlsAfter?: number;
+  /** CASH | BANK | SPLIT */
+  remainderAction?: "CASH" | "BANK" | "SPLIT";
+  /** יעד בנק — מקליטות התשלום */
+  remainderBankKey?: string;
+  remainderBankLabel?: string;
+  /** PaymentLocation.id כשזוהה */
+  remainderBankAccountId?: string;
 };
 
 export type FxProfitLossHistoryRow = {
@@ -180,12 +207,19 @@ export type FlowWeekOverviewRow = {
   totalOrders: number;
   /** סה״כ ערך ההזמנות בשבוע, בדולר */
   totalOrdersUsd: string;
-  /** תקבולים שהתקבלו בפועל, לפי אמצעי ומטבע */
+  /** יתרת חוב פתוחה — Σ computeOrderLedgerView().remainingUsd */
+  remainingToPayUsd: string;
+  /** תקבולים שהתקבלו בפועל, לפי אמצעי ומטבע (legacy / drill) */
   receivedCashUsd: string;
   receivedCashIls: string;
   receivedBankTransferIls: string;
   receivedCreditCardIls: string;
   receivedChecksIls: string;
+  /** סה״כ נקלט מקליטת תשלום (₪) — computePaymentsTotalReceivedIls */
+  paymentIntakeIls: string;
+  /** אמצעי תקבול שלא נכנסו לקטגוריות המוגדרות */
+  receivedOtherIls: string;
+  receivedOtherUsd: string;
   /** סכומי ספירות קופה יומיות מצטברים */
   drawer: Record<CashDailyMethodId, string>;
   totalReceivedIls: string;
@@ -196,6 +230,8 @@ export type FlowWeekOverviewRow = {
   commissionIls: string | null;
   /** לטורקיה PS מספירת קופה */
   turkeyTransferUsd: string | null;
+  /** לטורקיה IL מספירת קופה */
+  turkeyTransferIls: string | null;
   /** יתרה להעברה לטורקיה — USD */
   turkeyOpeningUsd: string | null;
   turkeyAddedUsd: string | null;

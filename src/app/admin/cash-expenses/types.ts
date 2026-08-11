@@ -42,4 +42,6 @@ export type CashExpenseListFilter = {
   fromIso?: string;
   toIso?: string;
   includeCancelled?: boolean;
+  /** TR / CN / AE — Country Context */
+  workCountry?: string;
 };

@@ -185,6 +185,8 @@ export type ShipmentRecordDto = {
   city: string | null;
   /** שם מקורי מהייבוא */
   originalDeliveryLocation: string | null;
+  /** מקום מסירה מעודכן — SSOT מטבלת התאמות (או מקורי אם אין התאמה) */
+  updatedDeliveryLocation: string | null;
   deliveryLocationId: string | null;
   locationMatchStatus: LocationMatchStatus | null;
   suggestionDisplayName?: string | null;
@@ -242,6 +244,14 @@ export type ExcelShipmentPreviewRow = {
   customerPhone2: string | null;
   address: string | null;
   city: string | null;
+  /** ערך מקורי מה־Excel — לא משתנה לאחר החלפה */
+  originalDeliveryPlace?: string | null;
+  /** מקום מעודכן לאחר אישור המשתמש */
+  resolvedDeliveryPlace?: string | null;
+  deliveryLocationId?: string | null;
+  zoneId?: string | null;
+  zoneName?: string | null;
+  locationMatchStatus?: LocationMatchStatus | null;
   cartonDetails: string | null;
   boxes: number | null;
   weight: number | null;
@@ -251,6 +261,14 @@ export type ExcelShipmentPreviewRow = {
   notes: string | null;
   valid: boolean;
   error: string | null;
+};
+
+export type ShipmentImportLocationMappingDto = {
+  originalPlace: string;
+  updatedPlace: string;
+  deliveryLocationId: string | null;
+  zoneId: string | null;
+  zoneName: string | null;
 };
 
 export type ShipmentImportPreview = {
@@ -323,6 +341,24 @@ export type UpdateShipmentRecordInput = {
     deliveryLocationId?: string | null;
     locationMatchStatus?: LocationMatchStatus | null;
   };
+};
+
+/** הוספת חבילה בודדת למשלוח קיים */
+export type CreateShipmentRecordInput = {
+  batchId: string;
+  customerCode?: string | null;
+  customerName?: string | null;
+  customerPhone?: string | null;
+  customerPhone2?: string | null;
+  address?: string | null;
+  city?: string | null;
+  boxes?: number | null;
+  weight?: number | null;
+  deliveryFeeAmount?: number | null;
+  deliveryFeeCurrency?: ShipmentCurrency | null;
+  notes?: string | null;
+  zoneId?: string | null;
+  courierId?: string | null;
 };
 
 export type AddPaymentInput = {

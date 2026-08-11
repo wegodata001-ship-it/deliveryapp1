@@ -3,9 +3,9 @@
 import { useMemo, useState } from "react";
 import type { FlowWeekOverviewRow } from "@/app/admin/cash-flow/flow-types";
 import {
-  aggregateReceiptMethodTotals,
-  aggregateTurkeyReceiptTotals,
+  aggregateWeekReceiptSummaryTotals,
   money,
+  moneyManagerCount,
 } from "@/components/admin/cashflow-control/cashflow-control-helpers";
 import {
   CashflowKpiDrillModal,
@@ -13,17 +13,81 @@ import {
 } from "@/components/admin/cashflow-control/CashflowKpiDrillModal";
 import type { CashflowKpiKind } from "@/lib/flow-control/services/cashflow-kpi-drill-service";
 
-const KPI_CARDS: {
-  kind: CashflowKpiKind;
-  label: string;
-  currency: "ILS" | "USD";
-  field: keyof ReturnType<typeof aggregateReceiptMethodTotals>;
-}[] = [
-  { kind: "cashIls", label: "סה\"כ מזומן ₪", currency: "ILS", field: "cashIls" },
-  { kind: "cashUsd", label: "סה\"כ דולר $", currency: "USD", field: "cashUsd" },
-  { kind: "bankTransferIls", label: "סה\"כ העברות ₪", currency: "ILS", field: "bankTransferIls" },
-  { kind: "creditIls", label: "סה\"כ אשראי ₪", currency: "ILS", field: "creditIls" },
-  { kind: "checkIls", label: "סה\"כ צ'קים ₪", currency: "ILS", field: "checksIls" },
+type ClickableKpiKind = Extract<
+  CashflowKpiKind,
+  | "managerCashIls"
+  | "managerCashUsd"
+  | "managerTransferIls"
+  | "managerCreditIls"
+  | "managerChecksIls"
+  | "remainingToPay"
+>;
+
+type KpiCard =
+  | {
+      kind: "static";
+      label: string;
+      renderValue: (totals: ReturnType<typeof aggregateWeekReceiptSummaryTotals>) => string;
+    }
+  | {
+      kind: ClickableKpiKind;
+      label: string;
+      renderValue: (totals: ReturnType<typeof aggregateWeekReceiptSummaryTotals>) => string;
+      clickable: true;
+    };
+
+const KPI_CARDS: KpiCard[] = [
+  {
+    kind: "static",
+    label: 'סה"כ הזמנות',
+    renderValue: (t) => t.totalOrders.toLocaleString("he-IL"),
+  },
+  {
+    kind: "static",
+    label: 'סה"כ דוח',
+    renderValue: (t) => money("USD", t.totalOrdersUsd),
+  },
+  {
+    kind: "static",
+    label: "נקלט מקליטת תשלום",
+    renderValue: (t) => money("ILS", t.paymentIntakeIls),
+  },
+  {
+    kind: "managerCashIls",
+    label: 'סה"כ מזומן ₪',
+    renderValue: (t) => moneyManagerCount("ILS", t.managerCashIls != null ? String(t.managerCashIls) : null),
+    clickable: true,
+  },
+  {
+    kind: "managerCashUsd",
+    label: 'סה"כ דולר',
+    renderValue: (t) => moneyManagerCount("USD", t.managerCashUsd != null ? String(t.managerCashUsd) : null),
+    clickable: true,
+  },
+  {
+    kind: "managerTransferIls",
+    label: 'סה"כ העברות',
+    renderValue: (t) => moneyManagerCount("ILS", t.managerTransferIls != null ? String(t.managerTransferIls) : null),
+    clickable: true,
+  },
+  {
+    kind: "managerCreditIls",
+    label: 'סה"כ באשראי',
+    renderValue: (t) => moneyManagerCount("ILS", t.managerCreditIls != null ? String(t.managerCreditIls) : null),
+    clickable: true,
+  },
+  {
+    kind: "managerChecksIls",
+    label: "סה\"כ בצ'קים",
+    renderValue: (t) => moneyManagerCount("ILS", t.managerChecksIls != null ? String(t.managerChecksIls) : null),
+    clickable: true,
+  },
+  {
+    kind: "remainingToPay",
+    label: "נשאר לתשלום",
+    renderValue: (t) => money("USD", t.remainingToPayUsd),
+    clickable: true,
+  },
 ];
 
 export type CashflowWeekSummaryKpiStripProps = {
@@ -31,8 +95,7 @@ export type CashflowWeekSummaryKpiStripProps = {
 };
 
 export function CashflowWeekSummaryKpiStrip({ rows }: CashflowWeekSummaryKpiStripProps) {
-  const totals = useMemo(() => aggregateReceiptMethodTotals(rows), [rows]);
-  const turkeyTotals = useMemo(() => aggregateTurkeyReceiptTotals(rows), [rows]);
+  const totals = useMemo(() => aggregateWeekReceiptSummaryTotals(rows), [rows]);
   const weekCodes = useMemo(() => rows.map((r) => r.week), [rows]);
   const [drillKind, setDrillKind] = useState<CashflowKpiUiKind | null>(null);
 
@@ -40,32 +103,32 @@ export function CashflowWeekSummaryKpiStrip({ rows }: CashflowWeekSummaryKpiStri
 
   return (
     <>
-      <div className="cfc-week-summary-kpis" aria-label="סיכום תקבולים לפי אמצעי">
-        {KPI_CARDS.map((card) => (
-          <button
-            key={card.kind}
-            type="button"
-            className="cfc-week-summary-kpis__card"
-            onClick={() => setDrillKind(card.kind)}
-            title="לחץ לפירוט תקבולים"
-          >
-            <span>{card.label}</span>
-            <strong dir="ltr">{money(card.currency, totals[card.field])}</strong>
-          </button>
-        ))}
-
-        <button
-          type="button"
-          className="cfc-week-summary-kpis__card cfc-week-summary-kpis__card--turkey"
-          onClick={() => setDrillKind("turkeyReceipts")}
-          title="לחץ לפירוט כל התקבולים לטורקיה"
-        >
-          <span>סה&quot;כ לטורקיה</span>
-          <div className="cfc-week-summary-kpis__dual" dir="ltr">
-            <strong>{money("ILS", turkeyTotals.totalIls)}</strong>
-            <strong>{money("USD", turkeyTotals.totalUsd)}</strong>
-          </div>
-        </button>
+      <div className="cfc-week-summary-kpis" aria-label="סיכום שבועי לפי אמצעי תקבול">
+        {KPI_CARDS.map((card) => {
+          const value = card.renderValue(totals);
+          if (card.kind === "static") {
+            return (
+              <div key={card.label} className="cfc-week-summary-kpis__card cfc-week-summary-kpis__card--static">
+                <span>{card.label}</span>
+                <strong dir="ltr">{value}</strong>
+              </div>
+            );
+          }
+          return (
+            <button
+              key={card.kind}
+              type="button"
+              className={`cfc-week-summary-kpis__card${
+                card.kind === "remainingToPay" ? " cfc-week-summary-kpis__card--debt" : ""
+              }`}
+              onClick={() => setDrillKind(card.kind)}
+              title="לחץ לפירוט"
+            >
+              <span>{card.label}</span>
+              <strong dir="ltr">{value}</strong>
+            </button>
+          );
+        })}
       </div>
 
       <CashflowKpiDrillModal

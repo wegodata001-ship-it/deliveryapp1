@@ -60,9 +60,17 @@ export type ExecuteFxPurchaseInput = {
   rate: number;
   remainderCashIls: number;
   remainderBankIls: number;
+  remainderAction?: "CASH" | "BANK" | "SPLIT";
+  remainderBankKey?: string | null;
+  remainderBankLabel?: string | null;
+  remainderBankAccountId?: string | null;
   note?: string | null;
   updatedById: string;
   createdByName?: string | null;
+};
+
+export type UpdateFxPurchaseInput = ExecuteFxPurchaseInput & {
+  purchaseId: string;
 };
 
 export type FxPurchasePreviewResult = {

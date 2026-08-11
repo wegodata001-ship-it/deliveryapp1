@@ -173,9 +173,50 @@
 
 .cfc-week-summary-kpis {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(9, minmax(0, 1fr));
+  gap: 8px;
   padding: 0 16px 14px;
+}
+
+@media (max-width: 1400px) {
+  .cfc-week-summary-kpis {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 960px) {
+  .cfc-week-summary-kpis {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .cfc-week-summary-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.cfc-week-summary-kpis__card--static {
+  cursor: default;
+}
+
+.cfc-week-summary-kpis__card--static:hover {
+  border-color: var(--cfc-border);
+  box-shadow: none;
+}
+
+.cfc-week-summary-kpis__card--debt {
+  border-color: #fecaca;
+  background: #fff5f5;
+}
+
+.cfc-week-summary-kpis__card--debt:hover {
+  border-color: #f87171;
+}
+
+.cfc-summary-amount--debt {
+  color: #b91c1c;
+  font-weight: 800;
 }
 
 .cfc-week-summary-kpis__card {
@@ -208,7 +249,7 @@
 }
 
 .cfc-week-summary-kpis__card strong {
-  font-size: 1rem;
+  font-size: 0.92rem;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
   color: #0f172a;
@@ -1443,3 +1484,121 @@
   .cfc-journey__paths { grid-template-columns: 1fr; }
   .cfc-path-zone__body { grid-template-columns: 1fr 1fr; }
 }
+
+/* יתרות נוכחיות — Balance (לא Movement) */
+.cfc-current-balances {
+  padding: 16px 18px;
+  background: var(--cfc-card);
+  border: 1px solid var(--cfc-border);
+  border-radius: var(--cfc-radius);
+  box-shadow: var(--cfc-shadow);
+}
+
+.cfc-current-balances.is-loading {
+  opacity: 0.72;
+}
+
+.cfc-current-balances__head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+.cfc-current-balances__head p {
+  margin: 4px 0 0;
+  color: var(--cfc-muted);
+  font-size: 0.82rem;
+}
+
+.cfc-current-balances__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.cfc-current-balances__card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--cfc-border);
+  border-radius: 12px;
+  background: #fff;
+  cursor: pointer;
+  text-align: right;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.cfc-current-balances__card:hover:not(:disabled) {
+  border-color: #93c5fd;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.08);
+}
+
+.cfc-current-balances__card:focus-visible {
+  outline: 2px solid var(--cfc-blue);
+  outline-offset: 2px;
+}
+
+.cfc-current-balances__card:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.cfc-current-balances__card span {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--cfc-muted);
+}
+
+.cfc-current-balances__card strong {
+  font-size: 1.05rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.cfc-current-balances__card small {
+  font-size: 0.68rem;
+  color: var(--cfc-muted);
+  line-height: 1.3;
+}
+
+.cfc-current-balances__status {
+  font-style: normal;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.cfc-current-balances__status--debt {
+  color: #b91c1c;
+  background: var(--cfc-red-soft);
+}
+
+.cfc-current-balances__status--ok {
+  color: #15803d;
+  background: var(--cfc-green-soft);
+}
+
+.cfc-current-balances__status--avail {
+  color: #1d4ed8;
+  background: var(--cfc-blue-soft);
+}
+
+.cfc-balance-drill__summary {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  list-style: none;
+  background: #f8fafc;
+  border: 1px solid var(--cfc-border);
+  border-radius: 10px;
+  font-size: 0.82rem;
+  color: var(--cfc-text);
+}
+
+.cfc-balance-drill__summary li + li {
+  margin-top: 4px;
+}
+

@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useState, type React
 import { AdminNavLayoutProvider } from "@/components/admin/AdminNavLayoutContext";
 import { AdminFinancialModalProvider } from "@/components/admin/AdminFinancialModalContext";
 import { LoginTraceReporter } from "@/components/admin/LoginTraceReporter";
-import type { SerializedFinancial } from "@/lib/financial-settings";
+import type { SerializedFinancial } from "@/lib/financial-settings.shared";
 
 export type AdminToastOptions = { variant?: "success" | "error" };
 

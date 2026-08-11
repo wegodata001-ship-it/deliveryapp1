@@ -11,7 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import { FinancialSettingsModal } from "@/components/admin/FinancialSettingsModal";
-import type { SerializedFinancial } from "@/lib/financial-settings";
+import type { SerializedFinancial } from "@/lib/financial-settings.shared";
 
 type AdminFinancialModalContextValue = {
   openFinancialModal: () => void;

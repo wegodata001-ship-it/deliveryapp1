@@ -30,7 +30,7 @@ const CreateCustomerWindowBody = dynamic(
   },
 );
 import type { AdminToastFn } from "@/components/admin/AdminNavShell";
-import type { SerializedFinancial } from "@/lib/financial-settings";
+import type { SerializedFinancial } from "@/lib/financial-settings.shared";
 import type { AdminWindowEntry } from "@/lib/admin-windows";
 
 const BASE_Z = 950;

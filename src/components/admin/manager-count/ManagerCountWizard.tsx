@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -14,6 +14,7 @@ import {
 import type {
   FlowWeekOverviewRow,
   FlowWeekPayload,
+  FxPurchaseRecord,
   FxPurchaseTrack,
   ManagerCountForm,
 } from "@/app/admin/cash-flow/flow-types";
@@ -21,6 +22,10 @@ import { saveManagerCountAction } from "@/app/admin/cash-flow/save-manager-count
 import { getFlowWeekAction } from "@/app/admin/cash-flow/get-flow-week-action";
 import { fmtDailyMoney } from "@/lib/cash-control-daily";
 import {
+  computeTurkeyIlRemainingIls,
+  computeTurkeyIlTotalOutIls,
+  computeTurkeyPsRemainingUsd,
+  computeTurkeyPsTotalOutUsd,
   sumFxPurchases,
 } from "@/lib/flow-control/flow-calculation-service";
 import { dispatchCashControlRefresh } from "@/lib/cash-control-refresh-bus";
@@ -38,6 +43,8 @@ import {
 } from "@/components/admin/manager-count/manager-count-utils";
 import { fcNum } from "@/components/admin/flow-control/shared";
 import { parseAhWeekNumber } from "@/lib/weeks/ah-week-nav";
+import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
+import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
 
 type WizardView = "wizard" | "history";
 type WizardStep = 1 | 2 | 3 | 4;
@@ -57,6 +64,9 @@ export type ManagerCountWizardProps = {
   overview?: FlowWeekOverviewRow[];
   canEdit: boolean;
   onClose: () => void;
+  /** רענון נתונים ברקע — לא סוגר את האשף */
+  onRefresh?: () => void;
+  /** סגירה לאחר שמירה סופית בשלב 4 */
   onSaved: () => void;
 };
 
@@ -91,8 +101,14 @@ export function ManagerCountWizard({
   overview = [],
   canEdit,
   onClose,
+  onRefresh,
   onSaved,
 }: ManagerCountWizardProps) {
+  const { globalCountry } = useAdminGlobal();
+  const workCountry = workCountryFromOrderSourceCountry(globalCountry);
+  const prevOpenRef = useRef(false);
+  const turkeyManualRef = useRef(false);
+  const turkeyIlManualRef = useRef(false);
   const [view, setView] = useState<WizardView>("wizard");
   const [step, setStep] = useState<WizardStep>(1);
   const [flow, setFlow] = useState<FlowWeekPayload | null>(initialFlow);
@@ -102,50 +118,78 @@ export function ManagerCountWizard({
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
   const [fxTrack, setFxTrack] = useState<FxPurchaseTrack | null>(null);
+  const [fxEditPurchase, setFxEditPurchase] = useState<FxPurchaseRecord | null>(null);
+
+  useEffect(() => {
+    turkeyManualRef.current = turkeyManual;
+  }, [turkeyManual]);
+
+  useEffect(() => {
+    turkeyIlManualRef.current = turkeyIlManual;
+  }, [turkeyIlManual]);
+
+  const mergeFormFromFlow = useCallback(
+    (data: FlowWeekPayload, prev: ManagerCountForm): ManagerCountForm => {
+      const nextForm = formFromFlow(data);
+      let merged = nextForm;
+      if (turkeyManualRef.current) merged = { ...merged, turkeyTransferUsd: prev.turkeyTransferUsd };
+      if (turkeyIlManualRef.current) merged = { ...merged, turkeyTransferIls: prev.turkeyTransferIls };
+      if (!turkeyManualRef.current || !turkeyIlManualRef.current) {
+        const synced = syncAutoTurkey(merged, data);
+        return {
+          ...merged,
+          turkeyTransferUsd: turkeyManualRef.current
+            ? merged.turkeyTransferUsd
+            : synced.turkeyTransferUsd,
+          turkeyTransferIls: turkeyIlManualRef.current
+            ? merged.turkeyTransferIls
+            : synced.turkeyTransferIls,
+        };
+      }
+      return merged;
+    },
+    [],
+  );
 
   const reloadFlow = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await getFlowWeekAction(week);
+      const data = await getFlowWeekAction(week, workCountry);
       if (data) {
         setFlow(data);
-        const nextForm = formFromFlow(data);
-        setForm((prev) => {
-          let merged = nextForm;
-          if (turkeyManual) merged = { ...merged, turkeyTransferUsd: prev.turkeyTransferUsd };
-          if (turkeyIlManual) merged = { ...merged, turkeyTransferIls: prev.turkeyTransferIls };
-          if (!turkeyManual || !turkeyIlManual) {
-            const synced = syncAutoTurkey(merged, data);
-            return {
-              ...merged,
-              turkeyTransferUsd: turkeyManual ? merged.turkeyTransferUsd : synced.turkeyTransferUsd,
-              turkeyTransferIls: turkeyIlManual ? merged.turkeyTransferIls : synced.turkeyTransferIls,
-            };
-          }
-          return merged;
-        });
-        if (!turkeyManual) setTurkeyManual(isTurkeyManual(formFromFlow(data), data));
-        if (!turkeyIlManual) setTurkeyIlManual(isTurkeyIlManual(formFromFlow(data), data));
+        setForm((prev) => mergeFormFromFlow(data, prev));
+        if (!turkeyManualRef.current) setTurkeyManual(isTurkeyManual(formFromFlow(data), data));
+        if (!turkeyIlManualRef.current) setTurkeyIlManual(isTurkeyIlManual(formFromFlow(data), data));
       }
     } finally {
       setLoading(false);
     }
-  }, [week, turkeyManual, turkeyIlManual]);
+  }, [week, mergeFormFromFlow]);
 
   useEffect(() => {
-    if (!open) return;
-    setView("wizard");
-    setStep(1);
-    if (initialFlow) {
-      setFlow(initialFlow);
-      const f = formFromFlow(initialFlow);
-      setForm(syncAutoTurkey(f, initialFlow));
-      setTurkeyManual(isTurkeyManual(f, initialFlow));
-      setTurkeyIlManual(isTurkeyIlManual(f, initialFlow));
-    } else {
-      void reloadFlow();
+    if (open && !prevOpenRef.current) {
+      setView("wizard");
+      setStep(1);
+      setFxTrack(null);
+      setFxEditPurchase(null);
+      if (initialFlow) {
+        setFlow(initialFlow);
+        const f = formFromFlow(initialFlow);
+        setForm(syncAutoTurkey(f, initialFlow));
+        setTurkeyManual(isTurkeyManual(f, initialFlow));
+        setTurkeyIlManual(isTurkeyIlManual(f, initialFlow));
+      } else {
+        void reloadFlow();
+      }
     }
+    prevOpenRef.current = open;
   }, [open, initialFlow, reloadFlow]);
+
+  useEffect(() => {
+    if (!open || !initialFlow) return;
+    setFlow(initialFlow);
+    setForm((prev) => mergeFormFromFlow(initialFlow, prev));
+  }, [open, initialFlow, mergeFormFromFlow]);
 
   const fxPs = flow ? sumFxPurchases(flow.fxPurchases, "PS") : { ils: 0, usd: 0 };
   const fxIl = flow ? sumFxPurchases(flow.fxPurchases, "IL") : { ils: 0, usd: 0 };
@@ -160,29 +204,34 @@ export function ManagerCountWizard({
   const commIls = fcNum(form.commissionIls);
   const commUsd = fcNum(form.commissionUsd);
   const ilPool = ilSourcePoolFromForm(form);
-  const psTotalIls = cashIls;
   const turkeyUsd = fcNum(form.turkeyTransferUsd);
   const turkeyIls = fcNum(form.turkeyTransferIls);
-  const psUsdAvailable = cashUsd + fxPs.usd + commUsd;
-  const psUsdRemaining = Math.max(0, psUsdAvailable - turkeyUsd);
+  const psUsdAvailable = cashUsd + fxPs.usd;
+  const psUsdTotalOut = computeTurkeyPsTotalOutUsd(turkeyUsd, commUsd);
+  const psUsdRemaining = computeTurkeyPsRemainingUsd(psUsdAvailable, turkeyUsd, commUsd);
   const availablePs = fcNum(resolveAvailablePsIlsForFx(flow, form));
   const availableIl = fcNum(resolveAvailableIlIlsForFx(flow, form));
+  const psBeforeFxIls = cashIls;
+  const ilBeforeFxIls = ilPool;
   const psRemainingIls = availablePs;
-  const ilRemainingIls = availableIl;
+  const ilFxRemainingIls = availableIl;
+  const ilAvailableIls = fxIl.ils;
+  const ilTotalOut = computeTurkeyIlTotalOutIls(turkeyIls, commIls);
+  const ilTurkeyRemainingIls = computeTurkeyIlRemainingIls(ilAvailableIls, turkeyIls, commIls);
 
   const patch = (key: keyof ManagerCountForm, value: string) => {
     setForm((prev) => {
       const next = { ...prev, [key]: value };
-      if (!turkeyManual && (key === "commissionUsd" || key === "countedCashUsd")) {
+      if (key === "commissionUsd" || key === "commissionIls") {
+        return next;
+      }
+      if (!turkeyManual && key === "countedCashUsd") {
         const synced = syncAutoTurkey(next, flow);
         return { ...next, turkeyTransferUsd: synced.turkeyTransferUsd };
       }
       if (
         !turkeyIlManual &&
-        (key === "commissionIls" ||
-          key === "countedTransferIls" ||
-          key === "countedCreditIls" ||
-          key === "countedChecksIls")
+        (key === "countedTransferIls" || key === "countedCreditIls" || key === "countedChecksIls")
       ) {
         const synced = syncAutoTurkey(next, flow);
         return { ...next, turkeyTransferIls: synced.turkeyTransferIls };
@@ -233,6 +282,7 @@ export function ManagerCountWizard({
       const res = await saveManagerCountAction({
         week,
         form: currentManagerCountPayload(),
+        workCountry,
       });
       if (!res.ok) {
         alert(res.error ?? "שמירה נכשלה");
@@ -246,12 +296,13 @@ export function ManagerCountWizard({
     }
   };
 
-  const openFxPurchase = async (track: FxPurchaseTrack) => {
+  const openFxPurchase = async (track: FxPurchaseTrack, editPurchase?: FxPurchaseRecord | null) => {
     setSaving(true);
     try {
       const saveResult = await saveManagerCountAction({
         week,
         form: currentManagerCountPayload(),
+        workCountry,
       });
       if (!saveResult.ok) {
         alert(saveResult.error ?? "יש לשמור את ספירת הקופה לפני רכישת מט״ח");
@@ -259,20 +310,10 @@ export function ManagerCountWizard({
       }
       const refreshed = await getFlowWeekAction(week);
       if (!refreshed) return;
-      const refreshedForm = formFromFlow(refreshed);
-      const syncedForm = syncAutoTurkey(refreshedForm, refreshed);
       setFlow(refreshed);
-      setForm({
-        ...refreshedForm,
-        turkeyTransferUsd: turkeyManual
-          ? refreshedForm.turkeyTransferUsd
-          : syncedForm.turkeyTransferUsd,
-        turkeyTransferIls: turkeyIlManual
-          ? refreshedForm.turkeyTransferIls
-          : syncedForm.turkeyTransferIls,
-      });
-      dispatchCashControlRefresh(week);
+      setForm((prev) => mergeFormFromFlow(refreshed, prev));
       setFxTrack(track);
+      setFxEditPurchase(editPurchase ?? null);
     } finally {
       setSaving(false);
     }
@@ -280,9 +321,10 @@ export function ManagerCountWizard({
 
   const handleFxSaved = async () => {
     setFxTrack(null);
-    dispatchCashControlRefresh(week);
+    setFxEditPurchase(null);
     await reloadFlow();
-    onSaved();
+    onRefresh?.();
+    dispatchCashControlRefresh(week);
   };
 
   if (!open) return null;
@@ -335,7 +377,10 @@ export function ManagerCountWizard({
                       <th>שבוע</th>
                       <th>מזומן PS ₪</th>
                       <th>מזומן PS $</th>
-                      <th>טורקיה PS</th>
+                      <th>העברה PS</th>
+                      <th>עמלה PS</th>
+                      <th>העברה IL</th>
+                      <th>עמלה IL</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -345,6 +390,9 @@ export function ManagerCountWizard({
                         <td dir="ltr">{fmt(r.manager?.CASH_ILS, "ILS")}</td>
                         <td dir="ltr">{fmt(r.manager?.CASH_USD, "USD")}</td>
                         <td dir="ltr">{fmt(r.turkeyTransferUsd, "USD")}</td>
+                        <td dir="ltr">{fmt(r.commissionUsd, "USD")}</td>
+                        <td dir="ltr">{fmt(r.turkeyTransferIls, "ILS")}</td>
+                        <td dir="ltr">{fmt(r.commissionIls, "ILS")}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -380,18 +428,20 @@ export function ManagerCountWizard({
                     <div className="mcw-body">
                       <p className="mcw-body__desc">
                         <Banknote size={16} />
-                        ספירה בשני מסלולים נפרדים — אין איחוד בין PS ל-IL
+                        ספירת מה שיש בפועל בקופה — ללא רכישת מט״ח, העברה או עמלות
                       </p>
                       <div className="mcw-dual-grid">
                         <section className="mcw-track mcw-track--ps">
                           <h3>ספירת PS — מזומן פיזי</h3>
+                          <p className="mcw-hint mcw-hint--section">
+                            כמה ₪ וכמה $ נמצאים פיזית במסלול PS
+                          </p>
                           <table className="mcw-count-tbl">
                             <tbody>
                               {(
                                 [
-                                  ["countedCashIls", "מזומן ₪ PS", "ILS"],
-                                  ["countedCashUsd", "מזומן $ PS", "USD"],
-                                  ["commissionUsd", "עמלות PS $", "USD"],
+                                  ["countedCashIls", "מזומן בשקלים — PS", "ILS"],
+                                  ["countedCashUsd", "מזומן בדולרים — PS", "USD"],
                                 ] as const
                               ).map(([key, label]) => (
                                 <tr key={key}>
@@ -404,6 +454,7 @@ export function ManagerCountWizard({
                                       value={form[key]}
                                       disabled={!canEdit || saving}
                                       onChange={(e) => patch(key, e.target.value)}
+                                      aria-label={label}
                                     />
                                   </td>
                                 </tr>
@@ -411,8 +462,12 @@ export function ManagerCountWizard({
                             </tbody>
                             <tfoot>
                               <tr className="mcw-count-tbl__total">
-                                <td>סה״כ PS ₪</td>
-                                <td dir="ltr">{fmtN(psTotalIls, "ILS")}</td>
+                                <td>סה״כ ₪ במסלול PS</td>
+                                <td dir="ltr">{fmtN(cashIls, "ILS")}</td>
+                              </tr>
+                              <tr className="mcw-count-tbl__total mcw-count-tbl__total--usd">
+                                <td>סה״כ $ במסלול PS</td>
+                                <td dir="ltr">{fmtN(cashUsd, "USD")}</td>
                               </tr>
                             </tfoot>
                           </table>
@@ -420,6 +475,9 @@ export function ManagerCountWizard({
 
                         <section className="mcw-track mcw-track--il">
                           <h3>ספירת IL — מסלול בנקאי</h3>
+                          <p className="mcw-hint mcw-hint--section">
+                            מקורות כסף IL בלבד — ללא עמלות (עמלה תוזן בשלב העברה לטורקיה)
+                          </p>
                           <table className="mcw-count-tbl">
                             <tbody>
                               {(
@@ -427,7 +485,6 @@ export function ManagerCountWizard({
                                   ["countedTransferIls", "העברות בנקאיות", "ILS"],
                                   ["countedCreditIls", "אשראי", "ILS"],
                                   ["countedChecksIls", "צ׳קים", "ILS"],
-                                  ["commissionIls", "עמלות IL", "ILS"],
                                 ] as const
                               ).map(([key, label]) => (
                                 <tr key={key}>
@@ -440,6 +497,7 @@ export function ManagerCountWizard({
                                       value={form[key]}
                                       disabled={!canEdit || saving}
                                       onChange={(e) => patch(key, e.target.value)}
+                                      aria-label={label}
                                     />
                                   </td>
                                 </tr>
@@ -447,7 +505,7 @@ export function ManagerCountWizard({
                             </tbody>
                             <tfoot>
                               <tr className="mcw-count-tbl__total">
-                                <td>סה״כ IL ₪ (ללא עמלות)</td>
+                                <td>סה״כ שקלים במסלול IL</td>
                                 <td dir="ltr">{fmtN(ilPool, "ILS")}</td>
                               </tr>
                             </tfoot>
@@ -465,57 +523,81 @@ export function ManagerCountWizard({
                       </p>
                       <div className="mcw-dual-grid">
                         <section className="mcw-track mcw-track--ps">
-                          <h3>רכישות מט״ח PS</h3>
-                          <div className="mcw-fx-summary">
+                          <h3>רכישת מט״ח PS</h3>
+                          <div className="mcw-fx-summary mcw-fx-summary--ledger">
                             <div className="mcw-fx-stat">
-                              <span>זמין PS</span>
-                              <strong dir="ltr">{fmtN(availablePs, "ILS")}</strong>
+                              <span>זמין ₪ לפני רכישה</span>
+                              <strong dir="ltr">{fmtN(psBeforeFxIls, "ILS")}</strong>
                             </div>
                             <div className="mcw-fx-stat">
-                              <span>דולרים שנרכשו PS</span>
+                              <span>נרכש ₪ (PS)</span>
+                              <strong dir="ltr">{fmtN(fxPs.ils, "ILS")}</strong>
+                            </div>
+                            <div className="mcw-fx-stat">
+                              <span>דולרים שנרכשו</span>
                               <strong dir="ltr">{fmtN(fxPs.usd, "USD")}</strong>
                             </div>
-                            <div className="mcw-fx-stat">
-                              <span>יתרת PS ₪</span>
+                            <div className="mcw-fx-stat mcw-fx-stat--highlight">
+                              <span>יתרת ₪ בקופה</span>
                               <strong dir="ltr">{fmtN(psRemainingIls, "ILS")}</strong>
                             </div>
                           </div>
-                          <FxPurchaseTable rows={psPurchases} />
+                          <FxPurchaseTable
+                            rows={psPurchases}
+                            canEdit={canEdit}
+                            onEdit={
+                              canEdit
+                                ? (p) => void openFxPurchase("PS", p)
+                                : undefined
+                            }
+                          />
                           {canEdit && (
                             <button
                               type="button"
                               className="fc-btn fc-btn--primary"
                               onClick={() => void openFxPurchase("PS")}
                             >
-                              רכישת מט״ח PS
+                              {psPurchases.length > 0 ? "רכישת מט״ח PS נוספת" : "רכישת מט״ח PS"}
                             </button>
                           )}
                         </section>
 
                         <section className="mcw-track mcw-track--il">
-                          <h3>רכישות מט״ח IL</h3>
-                          <div className="mcw-fx-summary">
+                          <h3>רכישת מט״ח IL</h3>
+                          <div className="mcw-fx-summary mcw-fx-summary--ledger">
                             <div className="mcw-fx-stat">
-                              <span>זמין IL</span>
-                              <strong dir="ltr">{fmtN(availableIl, "ILS")}</strong>
+                              <span>זמין ₪ לפני רכישה</span>
+                              <strong dir="ltr">{fmtN(ilBeforeFxIls, "ILS")}</strong>
                             </div>
                             <div className="mcw-fx-stat">
-                              <span>דולרים שנרכשו IL</span>
+                              <span>נרכש ₪ (IL)</span>
+                              <strong dir="ltr">{fmtN(fxIl.ils, "ILS")}</strong>
+                            </div>
+                            <div className="mcw-fx-stat">
+                              <span>דולרים שנרכשו</span>
                               <strong dir="ltr">{fmtN(fxIl.usd, "USD")}</strong>
                             </div>
-                            <div className="mcw-fx-stat">
-                              <span>יתרת IL ₪</span>
-                              <strong dir="ltr">{fmtN(ilRemainingIls, "ILS")}</strong>
+                            <div className="mcw-fx-stat mcw-fx-stat--highlight">
+                              <span>יתרת ₪ בקופה</span>
+                              <strong dir="ltr">{fmtN(ilFxRemainingIls, "ILS")}</strong>
                             </div>
                           </div>
-                          <FxPurchaseTable rows={ilPurchases} />
+                          <FxPurchaseTable
+                            rows={ilPurchases}
+                            canEdit={canEdit}
+                            onEdit={
+                              canEdit
+                                ? (p) => void openFxPurchase("IL", p)
+                                : undefined
+                            }
+                          />
                           {canEdit && (
                             <button
                               type="button"
                               className="fc-btn fc-btn--primary"
                               onClick={() => void openFxPurchase("IL")}
                             >
-                              רכישת מט״ח IL
+                              {ilPurchases.length > 0 ? "רכישת מט״ח IL נוספת" : "רכישת מט״ח IL"}
                             </button>
                           )}
                         </section>
@@ -534,21 +616,21 @@ export function ManagerCountWizard({
                           <h3>העברה לטורקיה — PS</h3>
                           <div className="mcw-decision-kpis">
                             <div className="mcw-decision-kpi">
-                              <span>מזומן $ + רכישות PS</span>
-                              <strong dir="ltr">{fmtN(cashUsd + fxPs.usd, "USD")}</strong>
+                              <span>מט״ח זמין PS</span>
+                              <strong dir="ltr">{fmtN(psUsdAvailable, "USD")}</strong>
                             </div>
                             <div className="mcw-decision-kpi">
-                              <span>+ עמלות PS</span>
-                              <strong dir="ltr">{fmtN(commUsd, "USD")}</strong>
+                              <span>סה״כ יוצא</span>
+                              <strong dir="ltr">{fmtN(psUsdTotalOut, "USD")}</strong>
                             </div>
                             <div className="mcw-decision-kpi mcw-decision-kpi--total">
-                              <span>טורקיה PS (אוטומטי)</span>
-                              <strong dir="ltr">{fmtN(autoTurkeyPs, "USD")}</strong>
+                              <span>יתרה PS $</span>
+                              <strong dir="ltr">{fmtN(psUsdRemaining, "USD")}</strong>
                             </div>
                           </div>
                           <label className="mcw-field mcw-field--turkey">
                             <span>
-                              מועבר לטורקיה PS $
+                              סכום להעברה PS $
                               {turkeyManual ? <em className="mcw-manual-badge">ידני</em> : null}
                             </span>
                             <input
@@ -564,10 +646,19 @@ export function ManagerCountWizard({
                                 חזרה לאוטומטי ({autoTurkeyPs.toFixed(2)} $)
                               </button>
                             ) : (
-                              <p className="mcw-hint">
-                                מזומן $ + דולרים שנרכשו PS + עמלות PS
-                              </p>
+                              <p className="mcw-hint">ברירת מחדל: מזומן $ + דולרים שנרכשו PS</p>
                             )}
+                          </label>
+                          <label className="mcw-field">
+                            <span>עמלת העברה PS $</span>
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              className="mcw-input"
+                              value={form.commissionUsd}
+                              disabled={!canEdit || saving}
+                              onChange={(e) => patch("commissionUsd", e.target.value)}
+                            />
                           </label>
                           <div className="mcw-result-card mcw-result-card--israel">
                             <span>נשאר בישראל PS $</span>
@@ -579,21 +670,21 @@ export function ManagerCountWizard({
                           <h3>העברה לטורקיה — IL</h3>
                           <div className="mcw-decision-kpis">
                             <div className="mcw-decision-kpi">
-                              <span>רכישות מט״ח IL ₪</span>
-                              <strong dir="ltr">{fmtN(fxIl.ils, "ILS")}</strong>
+                              <span>מט״ח IL זמין</span>
+                              <strong dir="ltr">{fmtN(ilAvailableIls, "ILS")}</strong>
                             </div>
                             <div className="mcw-decision-kpi">
-                              <span>+ עמלות IL</span>
-                              <strong dir="ltr">{fmtN(commIls, "ILS")}</strong>
+                              <span>סה״כ יוצא</span>
+                              <strong dir="ltr">{fmtN(ilTotalOut, "ILS")}</strong>
                             </div>
                             <div className="mcw-decision-kpi mcw-decision-kpi--total">
-                              <span>טורקיה IL (אוטומטי)</span>
-                              <strong dir="ltr">{fmtN(autoTurkeyIl, "ILS")}</strong>
+                              <span>יתרה IL ₪</span>
+                              <strong dir="ltr">{fmtN(ilTurkeyRemainingIls, "ILS")}</strong>
                             </div>
                           </div>
                           <label className="mcw-field mcw-field--turkey">
                             <span>
-                              מועבר לטורקיה IL ₪
+                              סכום להעברה IL ₪
                               {turkeyIlManual ? <em className="mcw-manual-badge">ידני</em> : null}
                             </span>
                             <input
@@ -609,8 +700,19 @@ export function ManagerCountWizard({
                                 חזרה לאוטומטי ({autoTurkeyIl.toFixed(2)} ₪)
                               </button>
                             ) : (
-                              <p className="mcw-hint">רכישות מט״ח IL + עמלות IL</p>
+                              <p className="mcw-hint">ברירת מחדל: סכום רכישות מט״ח IL</p>
                             )}
+                          </label>
+                          <label className="mcw-field">
+                            <span>עמלת העברה IL ₪</span>
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              className="mcw-input"
+                              value={form.commissionIls}
+                              disabled={!canEdit || saving}
+                              onChange={(e) => patch("commissionIls", e.target.value)}
+                            />
                           </label>
                           <div className="mcw-result-card">
                             <span>דולרים שנרכשו IL</span>
@@ -633,11 +735,12 @@ export function ManagerCountWizard({
                           <div className="mcw-summary-rows">
                             <SummaryRow label="מזומן ₪" value={fmt(cashIls, "ILS")} />
                             <SummaryRow label="מזומן $" value={fmt(cashUsd, "USD")} highlight />
-                            <SummaryRow label="עמלות PS $" value={fmt(commUsd, "USD")} dimmed />
                             <SummaryRow label="רכישת מט״ח PS ₪" value={fmt(fxPs.ils, "ILS")} />
                             <SummaryRow label="דולרים שנרכשו PS" value={fmt(fxPs.usd, "USD")} highlight />
                             <SummaryRow label="יתרת PS ₪" value={fmt(psRemainingIls, "ILS")} bold />
                             <SummaryRow label="העברה לטורקיה PS" value={fmt(turkeyUsd, "USD")} highlight />
+                            <SummaryRow label="עמלת העברה PS" value={fmt(commUsd, "USD")} dimmed />
+                            <SummaryRow label="סה״כ יוצא PS" value={fmt(psUsdTotalOut, "USD")} />
                             <SummaryRow label="נשאר בישראל PS $" value={fmt(psUsdRemaining, "USD")} bold />
                           </div>
                         </section>
@@ -647,12 +750,14 @@ export function ManagerCountWizard({
                             <SummaryRow label="העברות" value={fmt(transferIls, "ILS")} />
                             <SummaryRow label="אשראי" value={fmt(creditIls, "ILS")} />
                             <SummaryRow label="צ׳קים" value={fmt(checksIls, "ILS")} />
-                            <SummaryRow label="עמלות IL" value={fmt(commIls, "ILS")} dimmed />
                             <SummaryRow label="סה״כ מאגר IL" value={fmt(ilPool, "ILS")} bold />
                             <SummaryRow label="רכישת מט״ח IL ₪" value={fmt(fxIl.ils, "ILS")} />
                             <SummaryRow label="דולרים שנרכשו IL" value={fmt(fxIl.usd, "USD")} highlight />
-                            <SummaryRow label="יתרת IL ₪" value={fmt(ilRemainingIls, "ILS")} bold />
+                            <SummaryRow label="יתרת IL ₪ (לפני העברה)" value={fmt(ilFxRemainingIls, "ILS")} />
                             <SummaryRow label="העברה לטורקיה IL" value={fmt(turkeyIls, "ILS")} highlight />
+                            <SummaryRow label="עמלת העברה IL" value={fmt(commIls, "ILS")} dimmed />
+                            <SummaryRow label="סה״כ יוצא IL" value={fmt(ilTotalOut, "ILS")} />
+                            <SummaryRow label="יתרה IL ₪" value={fmt(ilTurkeyRemainingIls, "ILS")} bold />
                           </div>
                         </section>
                       </div>
@@ -721,8 +826,12 @@ export function ManagerCountWizard({
           week={week}
           weekLabel={weekLabel}
           track={fxTrack}
+          editPurchase={fxEditPurchase}
           saving={saving}
-          onClose={() => setFxTrack(null)}
+          onClose={() => {
+            setFxTrack(null);
+            setFxEditPurchase(null);
+          }}
           onSaved={() => void handleFxSaved()}
         />
       ) : null}
@@ -732,8 +841,12 @@ export function ManagerCountWizard({
 
 function FxPurchaseTable({
   rows,
+  canEdit,
+  onEdit,
 }: {
-  rows: { id: string; ilsAmount: number; rate: number; usdReceived: number }[];
+  rows: FxPurchaseRecord[];
+  canEdit?: boolean;
+  onEdit?: (row: FxPurchaseRecord) => void;
 }) {
   if (rows.length === 0) {
     return <p className="mcw-muted">אין רכישות במסלול זה</p>;
@@ -747,6 +860,7 @@ function FxPurchaseTable({
             <th>שקלים</th>
             <th>שער</th>
             <th>דולרים</th>
+            {canEdit && onEdit ? <th /> : null}
           </tr>
         </thead>
         <tbody>
@@ -756,6 +870,13 @@ function FxPurchaseTable({
               <td dir="ltr">{fmtDailyMoney("ILS", p.ilsAmount)}</td>
               <td dir="ltr">{p.rate.toFixed(4)}</td>
               <td dir="ltr">{fmtDailyMoney("USD", p.usdReceived)}</td>
+              {canEdit && onEdit ? (
+                <td>
+                  <button type="button" className="mcw-link-btn" onClick={() => onEdit(p)}>
+                    עריכת רכישה
+                  </button>
+                </td>
+              ) : null}
             </tr>
           ))}
         </tbody>

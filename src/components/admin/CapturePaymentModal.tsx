@@ -2,7 +2,7 @@
 
 import { Modal } from "@/components/ui/Modal";
 import { PaymentModalUpdated } from "@/components/admin/PaymentModalUpdated";
-import type { SerializedFinancial } from "@/lib/financial-settings";
+import type { SerializedFinancial } from "@/lib/financial-settings.shared";
 
 type Props = {
   open: boolean;

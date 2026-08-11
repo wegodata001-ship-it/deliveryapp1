@@ -12,7 +12,7 @@ import { OrderStatusCatalogProvider } from "@/components/admin/OrderStatusCatalo
 import { PaymentMethodCatalogProvider } from "@/components/admin/PaymentMethodCatalogProvider";
 import { PdfPreviewProvider } from "@/components/admin/PdfPreviewProvider";
 import { useAdminToast } from "@/components/admin/AdminNavShell";
-import type { SerializedFinancial } from "@/lib/financial-settings";
+import type { SerializedFinancial } from "@/lib/financial-settings.shared";
 
 type Props = {
   children: React.ReactNode;

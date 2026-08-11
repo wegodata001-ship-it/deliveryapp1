@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MapPinned, Plus, Search, X } from "lucide-react";
 import type { ShipmentRecordDto, ShipmentZoneDto } from "@/app/admin/shipments/types";
-import { looksLikeDistributionArea } from "@/lib/distribution-area-name";
+import { distributionAreaNameMatchesQuery, distributionAreaValidationError } from "@/lib/distribution-area-name";
 
 type Props = {
   record: ShipmentRecordDto;
@@ -33,15 +33,15 @@ export function ZoneAssignModal({
   const activeZones = useMemo(
     () =>
       zones
-        .filter((z) => z.isActive && looksLikeDistributionArea(z.name))
+        .filter((z) => z.isActive)
         .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "he")),
     [zones],
   );
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLocaleLowerCase();
+    const q = query.trim();
     if (!q) return activeZones;
-    return activeZones.filter((z) => z.name.toLocaleLowerCase().includes(q));
+    return activeZones.filter((z) => distributionAreaNameMatchesQuery(z.name, q));
   }, [activeZones, query]);
 
   useEffect(() => {
@@ -58,8 +58,9 @@ export function ZoneAssignModal({
   async function handleCreate() {
     const name = newName.trim();
     if (!name) return;
-    if (!looksLikeDistributionArea(name)) {
-      setError("אזור חלוקה חייב להיות כמו: צפון 16, דרום 1");
+    const validationError = distributionAreaValidationError(name);
+    if (validationError) {
+      setError(validationError);
       return;
     }
     setError(null);
@@ -152,7 +153,7 @@ export function ZoneAssignModal({
                 id="zone-assign-search"
                 value={query}
                 disabled={locked}
-                placeholder="לדוגמה: צפון 16"
+                placeholder="חיפוש — עברית, ערבית, אנגלית"
                 onChange={(e) => setQuery(e.target.value)}
                 style={{ paddingInlineStart: 12, paddingInlineEnd: 32 }}
               />
@@ -219,7 +220,7 @@ export function ZoneAssignModal({
               <input
                 value={newName}
                 disabled={locked}
-                placeholder="צפון 16"
+                placeholder="שם אזור חופשי"
                 onChange={(e) => setNewName(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {

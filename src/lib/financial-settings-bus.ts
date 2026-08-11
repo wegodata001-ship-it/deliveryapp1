@@ -1,4 +1,4 @@
-import type { SerializedFinancial } from "@/lib/financial-settings";
+import type { SerializedFinancial } from "@/lib/financial-settings.shared";
 
 export const WEGO_FINANCIAL_SETTINGS_SAVED = "wego:financial-settings-saved";
 

@@ -13,7 +13,6 @@ import { AlertTriangle } from "lucide-react";
 import { CustomerNameFixModal } from "@/components/admin/shipments/CustomerNameFixModal";
 import { InlineValueCell } from "@/components/admin/shipments/InlineValueCell";
 import { ZoneAssignModal } from "@/components/admin/shipments/ZoneAssignModal";
-import { looksLikeDistributionArea } from "@/lib/distribution-area-name";
 import { isInvalidCustomerName } from "@/lib/shipment-customer-name-quality";
 import { sumCollectedByPaymentMethod } from "@/lib/shipment-payment-method-filter";
 
@@ -196,6 +195,7 @@ export function ShipmentRecordsEditableTable({
             <th className="c-name">שם לקוח</th>
             <th className="c-phone">טלפון</th>
             <th className="c-addr">כתובת</th>
+            <th className="c-upd-loc">מקום מסירה מעודכן</th>
             <th className="c-zone">אזור חלוקה</th>
             <th className="c-courier">שליח</th>
             <th className="c-boxes">מספר קרטונים</th>
@@ -209,17 +209,14 @@ export function ShipmentRecordsEditableTable({
         <tbody>
           {records.length === 0 && (
             <tr>
-              <td colSpan={15} className="shp-daily-empty">
+              <td colSpan={16} className="shp-daily-empty">
                 אין שורות להצגה
               </td>
             </tr>
           )}
           {records.map((r) => {
             const feeAmount = r.deliveryFeeAmount ?? r.deliveryFeeIls ?? 0;
-            const zoneLabel =
-              r.zoneName && looksLikeDistributionArea(r.zoneName)
-                ? r.zoneName
-                : r.zoneName?.trim() || null;
+            const zoneLabel = r.zoneName?.trim() || null;
             const nameInvalid = isInvalidCustomerName(r.customerName);
             const bal = r.customerBalanceUsd;
             const hasMethodFilter = Array.isArray(paymentMethodFilter)
@@ -291,6 +288,9 @@ export function ShipmentRecordsEditableTable({
                 </td>
                 <td className="c-addr">
                   <Trunc text={r.address || "—"} />
+                </td>
+                <td className="c-upd-loc">
+                  <Trunc text={r.updatedDeliveryLocation || "—"} />
                 </td>
                 <td className="c-zone">
                   {zoneLabel ? (

@@ -29,6 +29,7 @@ import { aggregateLivePaymentFormKpis } from "@/lib/payment-intake-live-kpi";
 import { buildPostSaveRemainingSummary } from "@/lib/payment-intake-method-control";
 import { PaymentMethodControlModal } from "@/components/admin/PaymentMethodControlModal";
 import { usePaymentIntakePlanningViews } from "@/hooks/usePaymentIntakePlanningViews";
+import { computeOrderOpenDebtUsd } from "@/lib/order-remaining-debt";
 import { softRefreshPaymentIntakeOrders } from "@/lib/payment-intake-orders-source";
 import { PaymentDocumentRateIcons } from "@/components/admin/PaymentDocumentRateIcons";
 import { attachDraftDocumentsAction } from "@/app/admin/documents/actions";
@@ -97,7 +98,7 @@ import {
 } from "@/lib/payment-intake-client";
 import { loadFinancialSettingsForPaymentCaptureAction } from "@/app/admin/financial/actions";
 import { WEGO_FINANCIAL_SETTINGS_SAVED } from "@/lib/financial-settings-bus";
-import type { SerializedFinancial } from "@/lib/financial-settings";
+import type { SerializedFinancial } from "@/lib/financial-settings.shared";
 import type { PaymentWindowProps } from "@/lib/admin-windows";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
@@ -968,6 +969,7 @@ export function PaymentModalUpdated({
   const {
     methodControlRows,
     methodViews,
+    orderRemainingToPayUsd,
     showMethodControl,
   } = usePaymentIntakePlanningViews(orders, includedIds, liveFormKpis, totals.totalUsd);
 
@@ -1016,18 +1018,10 @@ export function PaymentModalUpdated({
   ]);
 
   /**
-   * «נשאר לתשלום» — מקור אמת יחיד: סכום עמודת «יתרת חוב ($)» בטבלה (`matched`).
-   * אין חישוב מקביל (total−paid−entered). הכרטיס רק מציג את הסכום הזה.
+   * «נשאר לתשלום» — מקור אמת יחיד: sumRemainingToPayUsd(orderViews) דרך planning views.
+   * זהה לסכום עמודת «יתרת חוב ($)» בטבלה (matched.remainingAmount).
    */
-  const remainingToPayUsd = useMemo(() => {
-    if (customerBalanceResetPending) return 0;
-    let sum = 0;
-    for (const row of matched) {
-      const rem = Number(row.remainingAmount);
-      if (Number.isFinite(rem) && rem > 0) sum += rem;
-    }
-    return roundMoney2(sum);
-  }, [matched, customerBalanceResetPending]);
+  const remainingToPayUsd = customerBalanceResetPending ? 0 : orderRemainingToPayUsd;
 
   /** תצוגה חיה בלבד — יתרה לאחר שמירה = חוב נוכחי − סכום בהקלדה */
   const openDebtAfterPaymentPreview = useMemo(() => {
@@ -1042,7 +1036,7 @@ export function PaymentModalUpdated({
       : roundMoney2(Math.max(0, currentOpenBalance - enteredPaymentAmount));
     let openCommissionUsd = 0;
     for (const o of orders) {
-      const rem = Math.max(0, Number(o.totalAmountUsd) - Number(o.dbPaidUsd));
+      const rem = computeOrderOpenDebtUsd(Number(o.totalAmountUsd), Number(o.dbPaidUsd));
       if (rem <= 0.01) continue;
       openCommissionUsd += Number(o.commissionUsd) || 0;
     }
@@ -2479,7 +2473,7 @@ export function PaymentModalUpdated({
       if (alloc > 0.001) {
         const newPaid = roundMoney2(parseMoneyStringOrZero(o.dbPaidUsd) + alloc);
         const total = parseMoneyStringOrZero(o.totalAmountUsd);
-        const newRem = roundMoney2(Math.max(0, total - newPaid));
+        const newRem = computeOrderOpenDebtUsd(total, newPaid);
         row = {
           ...row,
           dbPaidUsd: newPaid.toFixed(2),
@@ -3844,6 +3838,7 @@ export function PaymentModalUpdated({
                 <PaymentMethodControlModal
                   open={methodControlOpen && showMethodControl}
                   methodViews={methodViews}
+                  orderRemainingToPayUsd={orderRemainingToPayUsd}
                   canEditOrders={canEditOrders}
                   refreshing={sharedOrdersRefreshing}
                   onClose={() => setMethodControlOpen(false)}

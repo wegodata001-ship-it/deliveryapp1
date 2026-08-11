@@ -1,27 +1,23 @@
-import type { OrderSourceCountry, WorkCountryCode as PrismaWorkCountryCode } from "@prisma/client";
+import "server-only";
+
+import type { WorkCountryCode as PrismaWorkCountryCode } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
-  CHINA_CAPTURE_LEGACY_PREFIX,
+  formatNextPaymentCaptureCode,
   parsePaymentNumberFromCode,
+  paymentCodePrefixesForWorkCountry,
+} from "@/lib/country-document-numbering.shared";
+
+export {
+  CHINA_CAPTURE_LEGACY_PREFIX,
   PAYMENT_CODE_PREFIX,
-} from "@/lib/payment-capture-code";
-import {
-  orderSourceCountryFromWorkCountry,
-  paymentCodePrefix,
-  type WorkCountryCode,
-} from "@/lib/work-country";
+  formatNextPaymentCaptureCode,
+  orderSourceCountryForWorkCountry,
+  paymentCodePrefixesForWorkCountry,
+  parsePaymentNumberFromCode,
+} from "@/lib/country-document-numbering.shared";
 
-/** קידומות קוד תשלום לפי מדינה — סין = CH-P- בלבד (לא TR / CN-P חדש) */
-export function paymentCodePrefixesForWorkCountry(workCountry: WorkCountryCode): string[] {
-  if (workCountry === "TR") return [paymentCodePrefix("TR"), PAYMENT_CODE_PREFIX];
-  if (workCountry === "CN") return [paymentCodePrefix("CN"), CHINA_CAPTURE_LEGACY_PREFIX];
-  return [paymentCodePrefix(workCountry)];
-}
-
-/** OrderSourceCountry לסינון DB (CHINA / TURKEY / UAE) */
-export function orderSourceCountryForWorkCountry(workCountry: WorkCountryCode): OrderSourceCountry {
-  return orderSourceCountryFromWorkCountry(workCountry);
-}
+import type { WorkCountryCode } from "@/lib/work-country";
 
 /**
  * המספר הסידורי האחרון של קודי תשלום במדינה — רק קידומת המדינה (CH-P / TR-P / AE-P).
@@ -49,13 +45,4 @@ export async function maxPaymentSequenceForWorkCountry(
     if (n != null) maxN = Math.max(maxN, n);
   }
   return maxN;
-}
-
-export function formatNextPaymentCaptureCode(
-  workCountry: WorkCountryCode,
-  sequence: number,
-): string {
-  const prefix = paymentCodePrefix(workCountry);
-  const width = workCountry === "CN" ? 4 : 6;
-  return `${prefix}${String(Math.max(1, sequence)).padStart(width, "0")}`;
 }

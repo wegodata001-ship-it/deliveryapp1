@@ -3,6 +3,7 @@
  * מילון שמות נפוצים + חלקיקים (أبو / آل / عبد…) + נרמול איות.
  */
 import { containsArabic } from "@/lib/arabic-text";
+import { containsHebrew, transliterateHebrewToArabic } from "@/lib/hebrew-name-transliterate";
 
 /** מפתח = טוקן לטיני מנורמל (lowercase, ללא סימנים) */
 const NAME_TOKEN_AR: Record<string, string> = {
@@ -44,6 +45,15 @@ const NAME_TOKEN_AR: Record<string, string> = {
   ahmad: "أحمد",
   ahmed: "أحمد",
   ahmet: "أحمد",
+  khatib: "خطيب",
+  khateeb: "خطيب",
+  david: "دافيد",
+  dafid: "دافيد",
+  cohen: "كوهين",
+  kohen: "كوهين",
+  sulaiman: "سليمان",
+  sulayman: "سليمان",
+  sleiman: "سليمان",
   ali: "علي",
   aly: "علي",
   hassan: "حسن",
@@ -353,6 +363,18 @@ export function suggestArabicCustomerName(latinOrMixed: string | null | undefine
     return { suggested: raw, mappedCount: 1, tokenCount: 1, complete: true };
   }
 
+  if (containsHebrew(raw)) {
+    const he = transliterateHebrewToArabic(raw, "customer");
+    if (he.suggested) {
+      return {
+        suggested: he.suggested,
+        mappedCount: he.mappedCount,
+        tokenCount: he.tokenCount,
+        complete: he.complete,
+      };
+    }
+  }
+
   const tokens = tokenizeLatinName(raw);
   if (tokens.length === 0) {
     return { suggested: null, mappedCount: 0, tokenCount: 0, complete: false };
@@ -409,19 +431,4 @@ export function suggestArabicCustomerName(latinOrMixed: string | null | undefine
   };
 }
 
-/** לשימוש ב־PDF: nameAr שמור → אחרת הצעת תעתיק → אחרת השם הקיים */
-export function resolveCourierPdfCustomerName(params: {
-  nameAr: string | null | undefined;
-  latinFallback: string | null | undefined;
-}): string {
-  const saved = params.nameAr?.trim();
-  if (saved && containsArabic(saved)) return saved;
-
-  const suggestion = suggestArabicCustomerName(params.latinFallback);
-  if (suggestion.suggested && containsArabic(suggestion.suggested)) {
-    return suggestion.suggested;
-  }
-
-  const fb = params.latinFallback?.trim();
-  return fb || "—";
-}
+export { resolveCourierPdfCustomerName } from "@/lib/arabic-display-name";

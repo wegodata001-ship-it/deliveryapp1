@@ -11,7 +11,11 @@ export async function deleteCashExpenseAction(id: string): Promise<{ ok: boolean
   if (!isAdminUser(me) && !userHasAnyPermission(me, ["manage_cash_expenses"])) {
     return { ok: false, error: "אין הרשאה למחוק" };
   }
-  const res = await deleteCashExpense(id);
+  const res = await deleteCashExpense({
+    id,
+    deletedById: me.id,
+    deletedByName: me.fullName ?? me.email ?? null,
+  });
   if (res.ok) {
     for (const p of REVALIDATE_PATHS) revalidatePath(p);
   }

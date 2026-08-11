@@ -1,11 +1,31 @@
 import { prisma } from "@/lib/prisma";
+import { randomUUID } from "crypto";
 import { aliasLookupKey, normalizeLocationName } from "@/lib/delivery-location-normalize";
 import { invalidateDeliveryLocationAliasCache } from "@/lib/delivery-location-match";
 import {
-  looksLikeDistributionArea,
-  looksLikeLocalityName,
-  normalizeDistributionAreaName,
+  distributionAreaLookupKey,
+  distributionAreaValidationError,
+  isBlockedDistributionAreaHeader,
+  isValidDistributionAreaName,
+  isValidLocalityDisplayName,
+  sanitizeDistributionAreaName,
 } from "@/lib/distribution-area-name";
+import {
+  inferLocationAliasImportErrorCode,
+  locationAliasImportErrorLabel,
+  type LocationAliasImportErrorCode,
+} from "@/lib/location-import-errors";
+
+export type { LocationAliasImportErrorCode };
+
+export type LocationAliasImportRowAction = "create" | "update" | "noop" | "fail";
+export type LocationAliasImportRowStatus = "ok" | "failed" | "warning" | "unchanged";
+
+export type LocationAliasImportRowChanges = {
+  displayName?: { before: string; after: string };
+  areaName?: { before: string; after: string };
+  originalName?: { before: string; after: string };
+};
 
 export type DeliveryLocationDto = {
   id: string;
@@ -31,6 +51,28 @@ export type LocationAliasImportRow = {
   areaName: string | null;
   valid: boolean;
   error: string | null;
+  errorCode: LocationAliasImportErrorCode | null;
+  action: LocationAliasImportRowAction;
+  status: LocationAliasImportRowStatus;
+  warningMessage: string | null;
+  changes: LocationAliasImportRowChanges | null;
+};
+
+export type LocationAliasImportNewArea = {
+  name: string;
+  rowCount: number;
+  willCreate: boolean;
+};
+
+export type LocationAliasImportPreviewCounts = {
+  total: number;
+  valid: number;
+  failed: number;
+  warnings: number;
+  unchanged: number;
+  wouldCreate: number;
+  wouldUpdate: number;
+  newAreas: number;
 };
 
 export type LocationAliasImportPreview = {
@@ -43,6 +85,8 @@ export type LocationAliasImportPreview = {
   wouldCreateAliases: number;
   wouldUpdateAliases: number;
   wouldCreateAreas: number;
+  counts: LocationAliasImportPreviewCounts;
+  newAreas: LocationAliasImportNewArea[];
   /** אינדקס שורת הכותרות בקובץ (0-based), או -1 אם לא נמצאה */
   headerRowIndex: number;
   /** מיפוי עמודות לפי כותרת — חובה לפני ייבוא */
@@ -55,6 +99,30 @@ export type LocationAliasImportPreview = {
   mappingError: string | null;
 };
 
+export type LocationAliasImportRowResult = {
+  rowIndex: number;
+  originalName: string;
+  displayName: string;
+  areaName: string | null;
+  success: boolean;
+  action: LocationAliasImportRowAction;
+  errorCode: LocationAliasImportErrorCode | null;
+  error: string | null;
+};
+
+export type LocationAliasImportAudit = {
+  importId: string;
+  fileName: string | null;
+  totalRows: number;
+  created: number;
+  updated: number;
+  failed: number;
+  warnings: number;
+  newAreas: number;
+  importedBy: string;
+  importedAt: string;
+};
+
 export type LocationAliasImportResult = {
   totalRows: number;
   processed: number;
@@ -65,8 +133,168 @@ export type LocationAliasImportResult = {
   createdAreas: number;
   failed: number;
   missingArea: number;
-  errors: Array<{ rowIndex: number; error: string }>;
+  warnings: number;
+  audit: LocationAliasImportAudit;
+  rowResults: LocationAliasImportRowResult[];
+  errors: Array<{
+    rowIndex: number;
+    error: string;
+    errorCode: LocationAliasImportErrorCode | null;
+    originalName?: string;
+    displayName?: string;
+    areaName?: string | null;
+  }>;
 };
+
+function emptyLocationAliasImportPreview(
+  mappingError: string | null = "לא נמצאה שורת כותרות תקינה",
+): LocationAliasImportPreview {
+  return {
+    rows: [],
+    totalRows: 0,
+    validRows: 0,
+    invalidRows: 0,
+    missingAreaRows: 0,
+    wouldCreateLocations: 0,
+    wouldCreateAliases: 0,
+    wouldUpdateAliases: 0,
+    wouldCreateAreas: 0,
+    counts: {
+      total: 0,
+      valid: 0,
+      failed: 0,
+      warnings: 0,
+      unchanged: 0,
+      wouldCreate: 0,
+      wouldUpdate: 0,
+      newAreas: 0,
+    },
+    newAreas: [],
+    headerRowIndex: -1,
+    columnMap: null,
+    mappingError,
+  };
+}
+
+function buildImportRow(
+  partial: Pick<
+    LocationAliasImportRow,
+    "rowIndex" | "originalName" | "displayName" | "areaName" | "valid" | "error"
+  > &
+    Partial<
+      Pick<
+        LocationAliasImportRow,
+        "errorCode" | "action" | "status" | "warningMessage" | "changes"
+      >
+    >,
+): LocationAliasImportRow {
+  const errorCode =
+    partial.errorCode ??
+    (partial.valid ? null : inferLocationAliasImportErrorCode(partial.error));
+  const error =
+    partial.error ??
+    (errorCode ? locationAliasImportErrorLabel(errorCode) : null);
+  return {
+    rowIndex: partial.rowIndex,
+    originalName: partial.originalName,
+    displayName: partial.displayName,
+    areaName: partial.areaName,
+    valid: partial.valid,
+    error,
+    errorCode,
+    action: partial.action ?? (partial.valid ? "create" : "fail"),
+    status: partial.status ?? (partial.valid ? "ok" : "failed"),
+    warningMessage: partial.warningMessage ?? null,
+    changes: partial.changes ?? null,
+  };
+}
+
+function summarizeLocationAliasImportPreview(
+  rows: LocationAliasImportRow[],
+  newAreas: LocationAliasImportNewArea[] = [],
+): Pick<
+  LocationAliasImportPreview,
+  | "totalRows"
+  | "validRows"
+  | "invalidRows"
+  | "missingAreaRows"
+  | "wouldCreateLocations"
+  | "wouldCreateAliases"
+  | "wouldUpdateAliases"
+  | "wouldCreateAreas"
+  | "counts"
+  | "newAreas"
+> {
+  const totalRows = rows.length;
+  const validRows = rows.filter((r) => r.valid).length;
+  const invalidRows = rows.filter((r) => !r.valid).length;
+  const warnings = rows.filter((r) => r.status === "warning").length;
+  const unchanged = rows.filter((r) => r.action === "noop").length;
+  const wouldCreate = rows.filter((r) => r.action === "create" && r.valid).length;
+  const wouldUpdate = rows.filter((r) => r.action === "update" && r.valid).length;
+  return {
+    totalRows,
+    validRows,
+    invalidRows,
+    missingAreaRows: rows.filter(
+      (r) =>
+        r.errorCode === "MISSING_DELIVERY_AREA" ||
+        r.error?.includes("חסר אזור") === true,
+    ).length,
+    wouldCreateLocations: wouldCreate,
+    wouldCreateAliases: wouldCreate,
+    wouldUpdateAliases: wouldUpdate,
+    wouldCreateAreas: newAreas.length,
+    counts: {
+      total: totalRows,
+      valid: validRows,
+      failed: invalidRows,
+      warnings,
+      unchanged,
+      wouldCreate,
+      wouldUpdate,
+      newAreas: newAreas.length,
+    },
+    newAreas,
+  };
+}
+
+async function persistLocationAliasImportAudit(result: LocationAliasImportResult) {
+  result.audit.created = result.createdAliases;
+  result.audit.updated = result.updatedAliases + result.updatedLocations;
+  result.audit.failed = result.failed;
+  result.audit.newAreas = result.createdAreas;
+  result.audit.warnings = result.warnings;
+
+  try {
+    await prisma.auditLog.create({
+      data: {
+        userId: result.audit.importedBy,
+        actionType: "location_alias_import",
+        entityType: "LocationAliasImport",
+        entityId: result.audit.importId,
+        newValue: {
+          summary: result.audit,
+          stats: {
+            processed: result.processed,
+            createdLocations: result.createdLocations,
+            updatedLocations: result.updatedLocations,
+            createdAliases: result.createdAliases,
+            updatedAliases: result.updatedAliases,
+            createdAreas: result.createdAreas,
+            missingArea: result.missingArea,
+          },
+        },
+        metadata: {
+          failedRows: result.errors,
+          rowResults: result.rowResults.filter((r) => !r.success),
+        },
+      },
+    });
+  } catch (e) {
+    console.error("[locations] audit after import failed", e);
+  }
+}
 
 function mapLocation(loc: {
   id: string;
@@ -119,8 +347,8 @@ export async function listDeliveryLocations(opts?: {
                 aliases: {
                   some: {
                     OR: [
-                      { originalName: { contains: search, mode: "insensitive" } },
-                      { normalizedOriginalName: { contains: normalizeLocationName(search) } },
+              { originalName: { contains: search, mode: "insensitive" } },
+              { normalizedOriginalName: { contains: aliasLookupKey(search) || normalizeLocationName(search) } },
                     ],
                   },
                 },
@@ -167,8 +395,8 @@ export async function createDeliveryLocation(input: {
 }): Promise<DeliveryLocationDto> {
   const displayName = input.displayName.trim();
   if (!displayName) throw new Error("שם יישוב חובה");
-  if (looksLikeDistributionArea(displayName)) {
-    throw new Error("זה נראה כאזור חלוקה — יש ליצור אותו תחת ניהול אזורי חלוקה, לא כיישוב");
+  if (!isValidLocalityDisplayName(displayName)) {
+    throw new Error("שם יישוב לא תקין");
   }
   if (input.distributionAreaId) {
     const area = await prisma.shipmentDeliveryZone.findUnique({
@@ -270,7 +498,7 @@ export async function listAliasMappingRows(opts?: {
         ? {
             OR: [
               { originalName: { contains: q, mode: "insensitive" } },
-              { normalizedOriginalName: { contains: normalizeLocationName(q) } },
+              { normalizedOriginalName: { contains: aliasLookupKey(q) || normalizeLocationName(q) } },
               {
                 deliveryLocation: {
                   OR: [
@@ -308,9 +536,7 @@ export async function listAliasMappingRows(opts?: {
 
 /**
  * ניקוי בטוח אחרי ייבוא שגוי:
- * - מוחק אזורים שנראים כיישובים (תל אביב, רמלה…)
- * - מוחק "יישובים" שנראים כאזורי חלוקה (צפון 16 שנוצר כ־DeliveryLocation)
- * - לא מוחק יישובים אמיתיים וכינויים שלהם
+ * - מוחק רק שמות כותרת/שגויים (לא לפי מילות כיוון)
  */
 export async function cleanupMisimportedAreasAndLocations(): Promise<{
   deletedFakeZones: number;
@@ -321,8 +547,10 @@ export async function cleanupMisimportedAreasAndLocations(): Promise<{
   const zones = await prisma.shipmentDeliveryZone.findMany({
     select: { id: true, name: true },
   });
-  const fakeZoneIds = zones.filter((z) => !looksLikeDistributionArea(z.name)).map((z) => z.id);
-  const realZones = zones.filter((z) => looksLikeDistributionArea(z.name));
+  const fakeZoneIds = zones
+    .filter((z) => !isValidDistributionAreaName(z.name))
+    .map((z) => z.id);
+  const realZones = zones.filter((z) => isValidDistributionAreaName(z.name));
 
   if (fakeZoneIds.length > 0) {
     await prisma.shipmentRecord.updateMany({
@@ -339,21 +567,8 @@ export async function cleanupMisimportedAreasAndLocations(): Promise<{
   const locations = await prisma.deliveryLocation.findMany({
     select: { id: true, displayName: true },
   });
-  const junkNames = new Set([
-    "אזור חלוקה",
-    "מקום מסירה",
-    "מקום מסירה מעודכן",
-    "מקומות מסירה",
-    "דרך",
-    "במשרד",
-    "יתרת פתיחה",
-  ]);
   const zoneNamedLocIds = locations
-    .filter(
-      (l) =>
-        looksLikeDistributionArea(l.displayName) ||
-        junkNames.has(l.displayName.trim()),
-    )
+    .filter((l) => isBlockedDistributionAreaHeader(l.displayName))
     .map((l) => l.id);
 
   if (zoneNamedLocIds.length > 0) {
@@ -429,8 +644,8 @@ export async function updateAliasMapping(input: {
 
   const displayName = input.displayName.trim();
   if (!displayName) throw new Error("מקום מסירה מעודכן חובה");
-  if (looksLikeDistributionArea(displayName)) {
-    throw new Error("מקום מסירה מעודכן לא יכול להיות אזור חלוקה");
+  if (!isValidLocalityDisplayName(displayName)) {
+    throw new Error("מקום מסירה מעודכן לא תקין");
   }
 
   let locationId = input.deliveryLocationId?.trim() || null;
@@ -484,8 +699,8 @@ export async function createAliasMapping(input: {
   const displayName = input.displayName.trim();
   if (!originalName) throw new Error("מקום מסירה מקורי חובה");
   if (!displayName) throw new Error("מקום מסירה מעודכן חובה");
-  if (looksLikeDistributionArea(displayName)) {
-    throw new Error("מקום מסירה מעודכן לא יכול להיות אזור חלוקה");
+  if (!isValidLocalityDisplayName(displayName)) {
+    throw new Error("מקום מסירה מעודכן לא תקין");
   }
 
   const location = await createDeliveryLocation({
@@ -520,6 +735,7 @@ export async function upsertLocationAlias(input: {
       where: { id: existing.id },
       data: {
         originalName,
+        normalizedOriginalName: key,
         deliveryLocationId: input.deliveryLocationId,
         isActive: true,
       },
@@ -537,6 +753,236 @@ export async function upsertLocationAlias(input: {
   });
   invalidateDeliveryLocationAliasCache();
   return { created: true, id: created.id };
+}
+
+/** עדכון מפתחות מנורמלים אחרי שינוי אלגוריתם הנרמול */
+export async function renormalizeDeliveryLocationAliases(): Promise<number> {
+  const aliases = await prisma.deliveryLocationAlias.findMany({
+    where: { isActive: true },
+    select: {
+      id: true,
+      originalName: true,
+      normalizedOriginalName: true,
+      deliveryLocationId: true,
+      createdAt: true,
+    },
+    orderBy: { createdAt: "asc" },
+  });
+
+  type AliasRow = (typeof aliases)[number];
+  const pendingKey = (id: string) => `__renorm__${id}`;
+  const retiredKey = (id: string) => `__retired__${id}`;
+
+  const byTarget = new Map<string, AliasRow[]>();
+  for (const a of aliases) {
+    const targetKey = aliasLookupKey(a.originalName);
+    if (!targetKey) continue;
+    const bucket = byTarget.get(targetKey) ?? [];
+    bucket.push(a);
+    byTarget.set(targetKey, bucket);
+  }
+
+  const winnersToUpdate = new Map<string, string>();
+  const toDeactivate = new Set<string>();
+
+  for (const [targetKey, bucket] of byTarget) {
+    bucket.sort((a, b) => {
+      const aMatch = a.normalizedOriginalName === targetKey ? 0 : 1;
+      const bMatch = b.normalizedOriginalName === targetKey ? 0 : 1;
+      if (aMatch !== bMatch) return aMatch - bMatch;
+      return a.createdAt.getTime() - b.createdAt.getTime();
+    });
+    const [winner, ...losers] = bucket;
+    if (winner.normalizedOriginalName !== targetKey) {
+      winnersToUpdate.set(winner.id, targetKey);
+    }
+    for (const loser of losers) {
+      toDeactivate.add(loser.id);
+    }
+  }
+
+  const targetKeys = [...winnersToUpdate.values()];
+  if (targetKeys.length === 0 && toDeactivate.size === 0) return 0;
+
+  const inactiveBlockers =
+    targetKeys.length > 0
+      ? await prisma.deliveryLocationAlias.findMany({
+          where: {
+            isActive: false,
+            normalizedOriginalName: { in: targetKeys },
+          },
+          select: { id: true },
+        })
+      : [];
+
+  const idsNeedingPending = new Set<string>([
+    ...winnersToUpdate.keys(),
+    ...toDeactivate,
+  ]);
+
+  let updated = 0;
+
+  await prisma.$transaction(async (tx) => {
+    for (const b of inactiveBlockers) {
+      await tx.deliveryLocationAlias.update({
+        where: { id: b.id },
+        data: { normalizedOriginalName: retiredKey(b.id) },
+      });
+      updated++;
+    }
+
+    for (const id of idsNeedingPending) {
+      await tx.deliveryLocationAlias.update({
+        where: { id },
+        data: { normalizedOriginalName: pendingKey(id) },
+      });
+    }
+
+    for (const [id, targetKey] of winnersToUpdate) {
+      await tx.deliveryLocationAlias.update({
+        where: { id },
+        data: { normalizedOriginalName: targetKey },
+      });
+      updated++;
+    }
+
+    for (const id of toDeactivate) {
+      await tx.deliveryLocationAlias.update({
+        where: { id },
+        data: { isActive: false, normalizedOriginalName: retiredKey(id) },
+      });
+      updated++;
+    }
+  });
+
+  if (updated > 0) invalidateDeliveryLocationAliasCache();
+  return updated;
+}
+
+/** הוספת Alias ליישוב קיים (ללא יצירת יישוב חדש) */
+export async function addLocationAlias(input: {
+  deliveryLocationId: string;
+  originalName: string;
+  createdBy?: string | null;
+}): Promise<AliasMappingRow> {
+  const loc = await prisma.deliveryLocation.findUnique({
+    where: { id: input.deliveryLocationId.trim() },
+    select: { id: true },
+  });
+  if (!loc) throw new Error("יישוב לא נמצא");
+  const { id: aliasId } = await upsertLocationAlias({
+    originalName: input.originalName,
+    deliveryLocationId: loc.id,
+    createdBy: input.createdBy ?? null,
+  });
+  const row = await loadAliasMappingRow(aliasId);
+  if (!row) throw new Error("שגיאה ביצירת הכינוי");
+  return row;
+}
+
+/** עריכת שם מקורי של Alias (כל שפה) */
+export async function updateLocationAliasOriginalName(input: {
+  aliasId: string;
+  originalName: string;
+}): Promise<AliasMappingRow> {
+  const alias = await prisma.deliveryLocationAlias.findUnique({
+    where: { id: input.aliasId },
+    select: { id: true },
+  });
+  if (!alias) throw new Error("הכינוי לא נמצא");
+  const originalName = input.originalName.trim();
+  if (!originalName) throw new Error("שם כינוי חובה");
+  const key = aliasLookupKey(originalName);
+  if (!key) throw new Error("שם כינוי לא תקין");
+  const conflict = await prisma.deliveryLocationAlias.findUnique({
+    where: { normalizedOriginalName: key },
+    select: { id: true },
+  });
+  if (conflict && conflict.id !== alias.id) {
+    throw new Error("כינוי זה כבר משויך ליישוב אחר");
+  }
+  await prisma.deliveryLocationAlias.update({
+    where: { id: alias.id },
+    data: { originalName, normalizedOriginalName: key, isActive: true },
+  });
+  invalidateDeliveryLocationAliasCache();
+  const row = await loadAliasMappingRow(alias.id);
+  if (!row) throw new Error("שגיאה בטעינת הכינוי");
+  return row;
+}
+
+/** ניסיון התאמה מחדש למשלוחים שלא זוהו — אחרי הוספת Aliases */
+export async function reMatchUnmatchedShipments(options?: {
+  batchId?: string;
+  limit?: number;
+}): Promise<{ scanned: number; matched: number; updated: number }> {
+  const { resolveDeliveryLocation, invalidateDeliveryLocationAliasCache: bust } =
+    await import("@/lib/delivery-location-match");
+  bust();
+
+  const records = await prisma.shipmentRecord.findMany({
+    where: {
+      ...(options?.batchId ? { batchId: options.batchId } : {}),
+      OR: [
+        { locationMatchStatus: "UNMATCHED" },
+        { locationMatchStatus: null },
+        { deliveryLocationId: null },
+      ],
+    },
+    select: {
+      id: true,
+      city: true,
+      address: true,
+      originalDeliveryLocation: true,
+      zoneId: true,
+      deliveryLocationId: true,
+      locationMatchStatus: true,
+    },
+    ...(options?.limit ? { take: options.limit } : {}),
+    orderBy: { createdAt: "asc" },
+  });
+
+  let matched = 0;
+  let updated = 0;
+
+  for (const record of records) {
+    const original =
+      (record.originalDeliveryLocation || "").trim() ||
+      (record.city || "").trim() ||
+      (record.address || "").trim() ||
+      null;
+    if (!original) continue;
+
+    const match = await resolveDeliveryLocation({
+      city: original,
+      address: record.address,
+    });
+
+    if (match.status !== "MATCHED") continue;
+    matched++;
+
+    const needsUpdate =
+      record.deliveryLocationId !== match.deliveryLocationId ||
+      record.city !== match.city ||
+      record.zoneId !== match.zoneId ||
+      record.locationMatchStatus !== "MATCHED";
+
+    if (!needsUpdate) continue;
+
+    await prisma.shipmentRecord.update({
+      where: { id: record.id },
+      data: {
+        originalDeliveryLocation: match.originalName ?? original,
+        city: match.city,
+        deliveryLocationId: match.deliveryLocationId,
+        zoneId: match.zoneId,
+        locationMatchStatus: "MATCHED",
+      },
+    });
+    updated++;
+  }
+
+  return { scanned: records.length, matched, updated };
 }
 
 /** נרמול כותרת להשוואה מדויקת */
@@ -584,20 +1030,7 @@ const UPDATED_HEADERS = new Set([
 export function parseLocationAliasImportRows(
   grid: unknown[][],
 ): LocationAliasImportPreview {
-  const empty: LocationAliasImportPreview = {
-    rows: [],
-    totalRows: 0,
-    validRows: 0,
-    invalidRows: 0,
-    missingAreaRows: 0,
-    wouldCreateLocations: 0,
-    wouldCreateAliases: 0,
-    wouldUpdateAliases: 0,
-    wouldCreateAreas: 0,
-    headerRowIndex: -1,
-    columnMap: null,
-    mappingError: "לא נמצאה שורת כותרות תקינה",
-  };
+  const empty = emptyLocationAliasImportPreview();
   if (!grid.length) return empty;
 
   let headerRowIndex = -1;
@@ -629,11 +1062,9 @@ export function parseLocationAliasImportRows(
   }
 
   if (headerRowIndex < 0 || originalIdx < 0 || areaIdx < 0 || updatedIdx < 0) {
-    return {
-      ...empty,
-      mappingError:
-        "מיפוי העמודות אינו תקין. נדרשות הכותרות: מקום מסירה | אזור חלוקה | מקום מסירה מעודכן",
-    };
+    return emptyLocationAliasImportPreview(
+      "מיפוי העמודות אינו תקין. נדרשות הכותרות: מקום מסירה | אזור חלוקה | מקום מסירה מעודכן",
+    );
   }
 
   const columnMap = { originalIdx, areaIdx, updatedIdx };
@@ -654,7 +1085,7 @@ export function parseLocationAliasImportRows(
     const originalName = String(line[originalIdx] ?? "").trim();
     const areaNameRaw = String(line[areaIdx] ?? "").trim();
     const displayName = String(line[updatedIdx] ?? "").trim();
-    const areaName = normalizeDistributionAreaName(areaNameRaw);
+    const areaName = sanitizeDistributionAreaName(areaNameRaw);
 
     if (!originalName && !displayName && !areaNameRaw) continue;
     if (skipOriginals.has(originalName) && !displayName) continue;
@@ -671,133 +1102,227 @@ export function parseLocationAliasImportRows(
 
     let valid = true;
     let error: string | null = null;
+    let errorCode: LocationAliasImportErrorCode | null = null;
 
     if (!originalName) {
       valid = false;
-      error = "חסר מקום מסירה";
+      errorCode = "MISSING_SOURCE_PLACE";
+      error = locationAliasImportErrorLabel(errorCode);
     } else if (!displayName) {
       valid = false;
-      error = "חסר מקום מסירה מעודכן";
+      errorCode = "MISSING_UPDATED_PLACE";
+      error = locationAliasImportErrorLabel(errorCode);
     } else if (!areaNameRaw) {
       valid = false;
-      error = "חסר אזור חלוקה";
+      errorCode = "MISSING_DELIVERY_AREA";
+      error = locationAliasImportErrorLabel(errorCode);
     } else if (!normalizeLocationName(originalName)) {
       valid = false;
-      error = "שם מקורי לא תקין לאחר נרמול";
-    } else if (looksLikeDistributionArea(displayName)) {
-      // זה הבאג שראינו: דרום 1 / 1 דרום נכנס ל־updated
-      valid = false;
-      error = "מיפוי העמודות אינו תקין — מקום מסירה מעודכן נראה כאזור חלוקה";
+      errorCode = "INVALID_SOURCE_NAME";
+      error = locationAliasImportErrorLabel(errorCode);
     } else if (!areaName) {
       valid = false;
-      error = `אזור חלוקה לא תקין ("${areaNameRaw}") — צפוי פורמט כמו דרום 1 / צפון 16`;
-    } else if (!looksLikeLocalityName(displayName)) {
+      errorCode = "INVALID_DELIVERY_AREA";
+      error = `אזור חלוקה לא תקין ("${areaNameRaw}") — שם קצר מדי או שמור למערכת`;
+    } else if (!isValidLocalityDisplayName(displayName)) {
       valid = false;
-      error = "מקום מסירה מעודכן אינו שם יישוב תקין";
+      errorCode = "INVALID_DISPLAY_NAME";
+      error = locationAliasImportErrorLabel(errorCode);
     }
 
-    rows.push({
-      rowIndex: i + 1,
-      originalName,
-      displayName,
-      areaName,
-      valid,
-      error,
-    });
+    rows.push(
+      buildImportRow({
+        rowIndex: i + 1,
+        originalName,
+        displayName,
+        areaName,
+        valid,
+        error,
+        errorCode,
+        action: valid ? "create" : "fail",
+        status: valid ? "ok" : "failed",
+      }),
+    );
   }
-
-  const validRows = rows.filter((r) => r.valid);
-  const invalidRows = rows.length - validRows.length;
-  const swappedCount = rows.filter(
-    (r) => r.error?.includes("מיפוי העמודות אינו תקין"),
-  ).length;
 
   let mappingError: string | null = null;
   if (rows.length === 0) {
     mappingError = "לא נמצאו שורות נתונים לאחר שורת הכותרות";
-  } else if (swappedCount >= Math.max(3, Math.floor(rows.length * 0.2))) {
-    mappingError =
-      "מיפוי העמודות אינו תקין. בדקו שהעמודות הן: מקום מסירה | אזור חלוקה | מקום מסירה מעודכן";
-  } else if (validRows.length === 0) {
+  } else if (rows.every((r) => !r.valid)) {
     mappingError = "אין שורות תקינות לייבוא — בדקו את מיפוי העמודות והערכים";
   }
 
-  const uniqueDisplays = new Set(validRows.map((r) => r.displayName));
-  const uniqueAreas = new Set(
-    validRows.map((r) => r.areaName).filter((a): a is string => Boolean(a)),
-  );
-  const uniqueAliases = new Set(validRows.map((r) => aliasLookupKey(r.originalName)));
+  const summary = summarizeLocationAliasImportPreview(rows);
 
   return {
     rows,
-    totalRows: rows.length,
-    validRows: validRows.length,
-    invalidRows,
-    missingAreaRows: rows.filter((r) => r.valid === false && r.error?.includes("חסר אזור")).length,
-    wouldCreateLocations: uniqueDisplays.size,
-    wouldCreateAliases: uniqueAliases.size,
-    wouldUpdateAliases: 0,
-    wouldCreateAreas: uniqueAreas.size,
+    ...summary,
     headerRowIndex,
     columnMap,
     mappingError,
   };
 }
 
+export {
+  formatLocationAliasImportCommitError,
+  formatLocationAliasImportResultErrors,
+  validateLocationAliasImportCommitRows,
+  type LocationAliasImportCommitValidation,
+} from "@/lib/location-import-commit-validation";
+
 export async function previewLocationAliasImport(
   grid: unknown[][],
 ): Promise<LocationAliasImportPreview> {
   const preview = parseLocationAliasImportRows(grid);
-  const valid = preview.rows.filter((r) => r.valid);
+  if (preview.mappingError || preview.rows.length === 0) return preview;
 
   const existingLocations = await prisma.deliveryLocation.findMany({
-    select: { displayName: true },
+    select: {
+      displayName: true,
+      distributionAreaId: true,
+      distributionArea: { select: { name: true } },
+    },
   });
-  const locSet = new Set(existingLocations.map((l) => l.displayName));
-  const locNormSet = new Set(
-    existingLocations.map((l) => aliasLookupKey(l.displayName)).filter(Boolean),
-  );
+  const locByDisplay = new Map(existingLocations.map((l) => [l.displayName, l]));
 
   const existingAliases = await prisma.deliveryLocationAlias.findMany({
-    select: { normalizedOriginalName: true },
+    select: {
+      id: true,
+      originalName: true,
+      normalizedOriginalName: true,
+      deliveryLocationId: true,
+      deliveryLocation: {
+        select: {
+          displayName: true,
+          distributionAreaId: true,
+          distributionArea: { select: { name: true } },
+        },
+      },
+    },
   });
-  const aliasSet = new Set(existingAliases.map((a) => a.normalizedOriginalName));
+  const aliasByKey = new Map<string, (typeof existingAliases)[number][]>();
+  for (const alias of existingAliases) {
+    const list = aliasByKey.get(alias.normalizedOriginalName) ?? [];
+    list.push(alias);
+    aliasByKey.set(alias.normalizedOriginalName, list);
+  }
 
   const existingAreas = await prisma.shipmentDeliveryZone.findMany({
     select: { name: true },
   });
   const areaSet = new Set(existingAreas.map((a) => a.name));
 
-  let wouldCreateLocations = 0;
-  let wouldCreateAliases = 0;
-  let wouldUpdateAliases = 0;
-  let wouldCreateAreas = 0;
-  const seenLoc = new Set<string>();
-  const seenArea = new Set<string>();
+  const fileAliasFirstRow = new Map<string, number>();
+  const newAreaCounts = new Map<string, number>();
 
-  for (const row of valid) {
-    const locKey = aliasLookupKey(row.displayName) || row.displayName;
-    const exists =
-      locSet.has(row.displayName) || locNormSet.has(locKey) || seenLoc.has(locKey);
-    if (!exists) {
-      wouldCreateLocations++;
-      seenLoc.add(locKey);
-    }
+  const enrichedRows = preview.rows.map((row) => {
+    if (!row.valid) return row;
+
     const key = aliasLookupKey(row.originalName);
-    if (aliasSet.has(key)) wouldUpdateAliases++;
-    else wouldCreateAliases++;
-    if (row.areaName && !areaSet.has(row.areaName) && !seenArea.has(row.areaName)) {
-      wouldCreateAreas++;
-      seenArea.add(row.areaName);
+    if (!key) {
+      return buildImportRow({
+        ...row,
+        valid: false,
+        errorCode: "INVALID_SOURCE_NAME",
+        error: locationAliasImportErrorLabel("INVALID_SOURCE_NAME"),
+        action: "fail",
+        status: "failed",
+      });
     }
-  }
 
+    let warningMessage = row.warningMessage;
+    let errorCode = row.errorCode;
+    let status: LocationAliasImportRowStatus = row.status;
+    if (fileAliasFirstRow.has(key)) {
+      status = "warning";
+      errorCode = "DUPLICATE_MAPPING";
+      warningMessage =
+        "נמצאה התאמה כפולה בקובץ — בעת הייבוא תישמר השורה האחרונה בלבד";
+    } else {
+      fileAliasFirstRow.set(key, row.rowIndex);
+    }
+
+    const aliasMatches = aliasByKey.get(key) ?? [];
+    if (aliasMatches.length > 1) {
+      status = "warning";
+      errorCode = errorCode ?? "AMBIGUOUS_MATCH";
+      warningMessage =
+        warningMessage ??
+        "נמצאו מספר התאמות אפשריות במערכת — יישמר לפי ההתאמה הראשונה";
+    }
+
+    if (row.areaName && !areaSet.has(row.areaName)) {
+      newAreaCounts.set(row.areaName, (newAreaCounts.get(row.areaName) ?? 0) + 1);
+    }
+
+    const displayKey = aliasLookupKey(row.displayName) || row.displayName;
+    const existingLoc =
+      locByDisplay.get(row.displayName) ??
+      existingLocations.find((l) => aliasLookupKey(l.displayName) === displayKey);
+    const aliasRec = aliasMatches[0];
+    let action: LocationAliasImportRowAction = "create";
+    let changes: LocationAliasImportRowChanges | null = null;
+
+    if (aliasRec) {
+      const loc = aliasRec.deliveryLocation;
+      const currentArea = loc.distributionArea?.name ?? null;
+      const targetArea = row.areaName;
+      const sameOriginal = aliasRec.originalName === row.originalName;
+      const sameDisplay =
+        loc.displayName === row.displayName ||
+        aliasLookupKey(loc.displayName) === displayKey;
+      const sameArea = currentArea === targetArea;
+
+      if (sameOriginal && sameDisplay && sameArea) {
+        action = "noop";
+        if (status !== "warning") status = "unchanged";
+      } else {
+        action = "update";
+        changes = {};
+        if (!sameArea && targetArea) {
+          changes.areaName = { before: currentArea ?? "—", after: targetArea };
+        }
+        if (!sameDisplay) {
+          changes.displayName = { before: loc.displayName, after: row.displayName };
+        }
+        if (!sameOriginal) {
+          changes.originalName = { before: aliasRec.originalName, after: row.originalName };
+        }
+      }
+    } else if (existingLoc) {
+      action = "create";
+      const currentArea = existingLoc.distributionArea?.name ?? null;
+      if (row.areaName && currentArea !== row.areaName) {
+        changes = {
+          areaName: { before: currentArea ?? "—", after: row.areaName },
+        };
+        action = "update";
+      }
+    }
+
+    return buildImportRow({
+      ...row,
+      errorCode,
+      action,
+      status,
+      warningMessage,
+      changes,
+    });
+  });
+
+  const newAreas: LocationAliasImportNewArea[] = [...newAreaCounts.entries()]
+    .map(([name, rowCount]) => ({
+      name,
+      rowCount,
+      willCreate: true,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name, "he"));
+
+  const summary = summarizeLocationAliasImportPreview(enrichedRows, newAreas);
   return {
     ...preview,
-    wouldCreateLocations,
-    wouldCreateAliases,
-    wouldUpdateAliases,
-    wouldCreateAreas,
+    rows: enrichedRows,
+    ...summary,
   };
 }
 
@@ -814,16 +1339,51 @@ async function chunked<T>(items: T[], size: number, fn: (chunk: T[]) => Promise<
 export async function commitLocationAliasImport(
   grid: unknown[][],
   createdById: string,
+  options?: { fileName?: string | null },
 ): Promise<LocationAliasImportResult> {
   const preview = parseLocationAliasImportRows(grid);
-  return commitLocationAliasImportRows(preview.rows, createdById, preview.totalRows);
+  return commitLocationAliasImportRows(preview.rows, createdById, preview.totalRows, options);
+}
+
+function pushLocationAliasImportFailure(
+  result: LocationAliasImportResult,
+  row: Pick<
+    LocationAliasImportRow,
+    "rowIndex" | "originalName" | "displayName" | "areaName"
+  >,
+  errorCode: LocationAliasImportErrorCode,
+  error?: string | null,
+) {
+  const message = error?.trim() || locationAliasImportErrorLabel(errorCode);
+  result.failed++;
+  result.errors.push({
+    rowIndex: row.rowIndex,
+    error: message,
+    errorCode,
+    originalName: row.originalName,
+    displayName: row.displayName,
+    areaName: row.areaName,
+  });
+  result.rowResults.push({
+    rowIndex: row.rowIndex,
+    originalName: row.originalName,
+    displayName: row.displayName,
+    areaName: row.areaName,
+    success: false,
+    action: "fail",
+    errorCode,
+    error: message,
+  });
 }
 
 export async function commitLocationAliasImportRows(
   rows: LocationAliasImportRow[],
   createdById: string,
   totalRowsHint?: number,
+  options?: { fileName?: string | null },
 ): Promise<LocationAliasImportResult> {
+  const importId = randomUUID();
+  const importedAt = new Date().toISOString();
   const result: LocationAliasImportResult = {
     totalRows: totalRowsHint ?? rows.length,
     processed: 0,
@@ -834,21 +1394,41 @@ export async function commitLocationAliasImportRows(
     createdAreas: 0,
     failed: 0,
     missingArea: 0,
+    warnings: rows.filter((r) => r.status === "warning").length,
+    audit: {
+      importId,
+      fileName: options?.fileName ?? null,
+      totalRows: totalRowsHint ?? rows.length,
+      created: 0,
+      updated: 0,
+      failed: 0,
+      warnings: rows.filter((r) => r.status === "warning").length,
+      newAreas: 0,
+      importedBy: createdById,
+      importedAt,
+    },
+    rowResults: [],
     errors: [],
   };
 
   const validRows: LocationAliasImportRow[] = [];
   for (const row of rows) {
-    if (!row.valid) {
-      result.failed++;
-      if (result.errors.length < 50) {
-        result.errors.push({ rowIndex: row.rowIndex, error: row.error ?? "שגיאה" });
-      }
+    if (!row.valid || row.status === "failed") {
+      pushLocationAliasImportFailure(
+        result,
+        row,
+        row.errorCode ?? inferLocationAliasImportErrorCode(row.error) ?? "INVALID_ROW",
+        row.error,
+      );
       continue;
     }
     validRows.push(row);
   }
-  if (validRows.length === 0) return result;
+  if (validRows.length === 0) {
+    result.audit.failed = result.failed;
+    await persistLocationAliasImportAudit(result);
+    return result;
+  }
 
   const [existingAreas, existingLocs, existingAliases] = await Promise.all([
     prisma.shipmentDeliveryZone.findMany({
@@ -867,7 +1447,17 @@ export async function commitLocationAliasImportRows(
     }),
   ]);
 
-  const areaCache = new Map(existingAreas.map((a) => [a.name, a.id]));
+  const areaCache = new Map<string, string>();
+  const registerArea = (name: string, id: string) => {
+    areaCache.set(name, id);
+    const key = distributionAreaLookupKey(name);
+    if (key && !areaCache.has(key)) areaCache.set(key, id);
+    const sanitized = sanitizeDistributionAreaName(name);
+    if (sanitized && sanitized !== name && !areaCache.has(sanitized)) {
+      areaCache.set(sanitized, id);
+    }
+  };
+  for (const a of existingAreas) registerArea(a.name, a.id);
   let nextSort = existingAreas.reduce((m, a) => Math.max(m, a.sortOrder), -1) + 1;
   const locationCache = new Map(existingLocs.map((l) => [l.displayName, l.id]));
   const locationByNorm = new Map<string, string>();
@@ -893,13 +1483,27 @@ export async function commitLocationAliasImportRows(
     return undefined;
   }
 
-  // אזורים חסרים — רק שמות שנראים כאזור חלוקה אמיתי (צפון 16 וכו')
+  function resolveAreaId(areaName: string): string | undefined {
+    const exact = areaCache.get(areaName);
+    if (exact) return exact;
+    const key = distributionAreaLookupKey(areaName);
+    if (key) {
+      const byKey = areaCache.get(key);
+      if (byKey) return byKey;
+    }
+    const sanitized = sanitizeDistributionAreaName(areaName);
+    if (sanitized) return areaCache.get(sanitized);
+    return undefined;
+  }
+
   const areasToCreate: string[] = [];
   const seenNewArea = new Set<string>();
   for (const row of validRows) {
-    if (!row.areaName || !looksLikeDistributionArea(row.areaName)) continue;
-    if (areaCache.has(row.areaName) || seenNewArea.has(row.areaName)) continue;
-    seenNewArea.add(row.areaName);
+    if (!row.areaName) continue;
+    const key = distributionAreaLookupKey(row.areaName);
+    if (!key || !isValidDistributionAreaName(row.areaName)) continue;
+    if (resolveAreaId(row.areaName) || seenNewArea.has(key)) continue;
+    seenNewArea.add(key);
     areasToCreate.push(row.areaName);
   }
   if (areasToCreate.length > 0) {
@@ -916,7 +1520,7 @@ export async function commitLocationAliasImportRows(
       where: { name: { in: areasToCreate } },
       select: { id: true, name: true },
     });
-    for (const a of created) areaCache.set(a.name, a.id);
+    for (const a of created) registerArea(a.name, a.id);
     result.createdAreas = created.length;
   }
 
@@ -933,7 +1537,7 @@ export async function commitLocationAliasImportRows(
     seenNewLoc.add(locKey);
     locsToCreate.push({
       displayName: row.displayName,
-      distributionAreaId: row.areaName ? areaCache.get(row.areaName) ?? null : null,
+      distributionAreaId: row.areaName ? resolveAreaId(row.areaName) ?? null : null,
     });
   }
   if (locsToCreate.length > 0) {
@@ -972,7 +1576,7 @@ export async function commitLocationAliasImportRows(
       result.missingArea++;
       continue;
     }
-    const areaId = areaCache.get(row.areaName);
+    const areaId = resolveAreaId(row.areaName);
     const locationId = resolveLocationId(row.displayName);
     if (!areaId || !locationId) continue;
     const current = locationArea.get(locationId) ?? null;
@@ -1010,15 +1614,12 @@ export async function commitLocationAliasImportRows(
   for (const row of validRows) {
     const locationId = resolveLocationId(row.displayName);
     if (!locationId) {
-      result.failed++;
-      if (result.errors.length < 50) {
-        result.errors.push({ rowIndex: row.rowIndex, error: "יישוב לא נוצר" });
-      }
+      pushLocationAliasImportFailure(result, row, "LOCATION_NOT_CREATED");
       continue;
     }
     const key = aliasLookupKey(row.originalName);
     if (!key) {
-      result.failed++;
+      pushLocationAliasImportFailure(result, row, "INVALID_SOURCE_NAME");
       continue;
     }
     draftByKey.set(key, {
@@ -1071,6 +1672,7 @@ export async function commitLocationAliasImportRows(
             where: { id: d.id },
             data: {
               originalName: d.originalName,
+              normalizedOriginalName: d.key,
               deliveryLocationId: d.deliveryLocationId,
               isActive: true,
             },
@@ -1084,12 +1686,26 @@ export async function commitLocationAliasImportRows(
 
   invalidateDeliveryLocationAliasCache();
 
+  try {
+    await renormalizeDeliveryLocationAliases();
+  } catch (e) {
+    console.error("[locations] renormalize after import failed", e);
+  }
+
+  try {
+    await reMatchUnmatchedShipments();
+  } catch (e) {
+    console.error("[locations] reMatch after import failed", e);
+  }
+
   // לאחר ייבוא התאמות — רענון אזורי חלוקה למשלוחים קיימים
   try {
     await backfillShipmentDistributionZones({ onlyMissingZone: true });
   } catch (e) {
     console.error("[locations] backfill after alias import failed", e);
   }
+
+  await persistLocationAliasImportAudit(result);
   return result;
 }
 

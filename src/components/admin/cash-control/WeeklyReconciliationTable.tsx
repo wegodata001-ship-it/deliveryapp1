@@ -13,39 +13,71 @@ import {
   num,
   statusLabel,
 } from "@/components/admin/cash-flow/shared";
+import {
+  SHIPPING_CASH_METHOD_LABELS,
+  SHIPPING_CASH_TABLE_METHODS,
+  SHIPPING_METHOD_GROUP_CLASS,
+} from "@/components/admin/cash-control/shipping-table-config";
 
 const METHOD_HEADER = channelColLabels();
 
-function currencyToneClass(method: CashDailyMethodId): string {
-  return channelCurrency(method) === "ILS" ? "cc-col--currency-strong" : "cc-col--currency-soft";
+export type CashControlTableMode = "regular" | "shipping";
+
+function currencyToneClass(mode: CashControlTableMode, method: string): string {
+  if (mode === "shipping") return "cc-col--currency-strong";
+  return channelCurrency(method as CashDailyMethodId) === "ILS"
+    ? "cc-col--currency-strong"
+    : "cc-col--currency-soft";
 }
 
-function fmtPaid(method: CashDailyMethodId, value: string): string {
+function methodGroupClass(mode: CashControlTableMode, method: string): string {
+  if (mode === "shipping") return SHIPPING_METHOD_GROUP_CLASS[method] ?? "cc-col--method-other";
+  return METHOD_GROUP_CLASS[method as CashDailyMethodId];
+}
+
+function methodLabel(mode: CashControlTableMode, method: string): string {
+  if (mode === "shipping") return SHIPPING_CASH_METHOD_LABELS[method] ?? method;
+  return METHOD_HEADER[method as CashDailyMethodId];
+}
+
+function fmtPaid(mode: CashControlTableMode, method: string, value: string): string {
   const n = num(value);
   if (n <= 0) return "—";
-  return fmtDailyMoney(channelCurrency(method), n);
+  if (mode === "shipping") return fmtDailyMoney("ILS", n);
+  return fmtDailyMoney(channelCurrency(method as CashDailyMethodId), n);
 }
 
-function fmtReceived(method: CashDailyMethodId, value: string | null | undefined): string {
+function fmtReceived(mode: CashControlTableMode, method: string, value: string | null | undefined): string {
   if (value == null || value === "") return "—";
   const n = num(value);
   if (n <= 0) return "—";
-  return fmtDailyMoney(channelCurrency(method), n);
+  if (mode === "shipping") return fmtDailyMoney("ILS", n);
+  return fmtDailyMoney(channelCurrency(method as CashDailyMethodId), n);
+}
+
+function intakeValue(row: CashDailySummaryRowDto, method: string): string {
+  return (row.intake as Record<string, string>)[method] ?? "0";
+}
+
+function drawerValue(row: CashDailySummaryRowDto, method: string): string | null | undefined {
+  return (row.drawer as Partial<Record<string, string | null>>)[method];
 }
 
 export type WeeklyReconciliationTableProps = {
+  mode?: CashControlTableMode;
   dayRows: CashDailySummaryRowDto[];
   totalRow: CashDailySummaryRowDto | undefined;
   selectedDay: string | null;
-  activeDrill: CashDailyMethodId | null;
+  activeDrill: string | null;
   onSelectDay: (row: CashDailySummaryRowDto) => void;
-  onPaidClick: (row: CashDailySummaryRowDto, method: CashDailyMethodId) => void;
-  onReceivedClick: (row: CashDailySummaryRowDto, method: CashDailyMethodId) => void;
+  onPaidClick: (row: CashDailySummaryRowDto, method: string) => void;
+  onReceivedClick: (row: CashDailySummaryRowDto, method: string) => void;
   onVarianceClick?: (row: CashDailySummaryRowDto) => void;
 };
 
-/** טבלת שבוע — זוגות שולם (קליטה) / התקבל (ספירה) לכל אמצעי תשלום */
+/** טבלת שבוע — זוגות שולם/נקלט (קליטה) / התקבל/נספר (ספירה) לכל אמצעי תשלום */
 export function WeeklyReconciliationTable({
+  mode = "regular",
   dayRows,
   totalRow,
   selectedDay,
@@ -55,6 +87,11 @@ export function WeeklyReconciliationTable({
   onReceivedClick,
   onVarianceClick,
 }: WeeklyReconciliationTableProps) {
+  const tableMethods = mode === "shipping" ? SHIPPING_CASH_TABLE_METHODS : CASH_CONTROL_TABLE_METHODS;
+  const paidLabel = mode === "shipping" ? "נקלט" : "שולם";
+  const receivedLabel = mode === "shipping" ? "נספר" : "התקבל";
+  const infoThirdLabel = mode === "shipping" ? "סוג" : "מדינה";
+
   return (
     <div className="cc-summary__scroll">
       <table className="cc-table cc-table--pairs">
@@ -63,27 +100,37 @@ export function WeeklyReconciliationTable({
             <th colSpan={3} className="cc-col--info">
               מידע כללי
             </th>
-            {CASH_CONTROL_TABLE_METHODS.map((m) => (
-              <th key={m} colSpan={2} className={`${METHOD_GROUP_CLASS[m]} ${currencyToneClass(m)}`}>
+            {tableMethods.map((m) => (
+              <th
+                key={m}
+                colSpan={2}
+                className={`${methodGroupClass(mode, m)} ${currencyToneClass(mode, m)}`}
+              >
                 <span className="cc-group-head">
-                  <MethodIcon method={m} size={13} />
-                  {METHOD_HEADER[m]}
+                  {mode === "regular" ? <MethodIcon method={m as CashDailyMethodId} size={13} /> : null}
+                  {methodLabel(mode, m)}
                 </span>
               </th>
             ))}
-            <th colSpan={2} className="cc-col--status">סטטוס</th>
+            <th colSpan={2} className="cc-col--status">
+              סטטוס
+            </th>
           </tr>
           <tr>
             <th className="cc-col--info">יום</th>
             <th className="cc-col--info">תקופה</th>
-            <th className="cc-col--info cc-col--sep">מדינה</th>
-            {CASH_CONTROL_TABLE_METHODS.map((m) => (
+            <th className="cc-col--info cc-col--sep">{infoThirdLabel}</th>
+            {tableMethods.map((m) => (
               <Fragment key={m}>
-                <th className={`cc-num ${METHOD_GROUP_CLASS[m]} ${currencyToneClass(m)}`}>שולם</th>
-                <th className={`cc-num ${METHOD_GROUP_CLASS[m]} ${currencyToneClass(m)} cc-col--sep`}>
+                <th className={`cc-num ${methodGroupClass(mode, m)} ${currencyToneClass(mode, m)}`}>
+                  {paidLabel}
+                </th>
+                <th
+                  className={`cc-num ${methodGroupClass(mode, m)} ${currencyToneClass(mode, m)} cc-col--sep`}
+                >
                   <span className="cc-pair-hint">
                     <ArrowDown size={10} aria-hidden />
-                    התקבל
+                    {receivedLabel}
                   </span>
                 </th>
               </Fragment>
@@ -109,12 +156,12 @@ export function WeeklyReconciliationTable({
                 <td className="cc-daycell cc-col--info">{row.dayName}</td>
                 <td className="cc-col--info">{row.dateDisplay}</td>
                 <td className="cc-col--info cc-col--sep">{row.countryLabel}</td>
-                {CASH_CONTROL_TABLE_METHODS.map((m) => {
-                  const paid = num(row.intake[m]);
-                  const recv = row.drawer[m];
+                {tableMethods.map((m) => {
+                  const paid = num(intakeValue(row, m));
+                  const recv = drawerValue(row, m);
                   const paidClickable = paid > 0;
                   const drillActive = active && activeDrill === m;
-                  const columnClasses = `${METHOD_GROUP_CLASS[m]} ${currencyToneClass(m)}`;
+                  const columnClasses = `${methodGroupClass(mode, m)} ${currencyToneClass(mode, m)}`;
                   return (
                     <Fragment key={m}>
                       <td dir="ltr" className={`cc-num ${columnClasses}`}>
@@ -127,7 +174,7 @@ export function WeeklyReconciliationTable({
                               onPaidClick(row, m);
                             }}
                           >
-                            {fmtPaid(m, row.intake[m])}
+                            {fmtPaid(mode, m, intakeValue(row, m))}
                           </button>
                         ) : (
                           "—"
@@ -142,7 +189,7 @@ export function WeeklyReconciliationTable({
                             onReceivedClick(row, m);
                           }}
                         >
-                          {fmtReceived(m, recv)}
+                          {fmtReceived(mode, m, recv)}
                         </button>
                       </td>
                     </Fragment>
@@ -194,19 +241,16 @@ export function WeeklyReconciliationTable({
               <td colSpan={3} className="cc-col--info cc-col--sep">
                 <strong>{totalRow.dateDisplay}</strong>
               </td>
-              {CASH_CONTROL_TABLE_METHODS.map((m) => (
+              {tableMethods.map((m) => (
                 <Fragment key={m}>
-                  <td
-                    dir="ltr"
-                    className={`cc-num ${METHOD_GROUP_CLASS[m]} ${currencyToneClass(m)}`}
-                  >
-                    <strong>{fmtPaid(m, totalRow.intake[m])}</strong>
+                  <td dir="ltr" className={`cc-num ${methodGroupClass(mode, m)} ${currencyToneClass(mode, m)}`}>
+                    <strong>{fmtPaid(mode, m, intakeValue(totalRow, m))}</strong>
                   </td>
                   <td
                     dir="ltr"
-                    className={`cc-num ${METHOD_GROUP_CLASS[m]} ${currencyToneClass(m)} cc-col--sep`}
+                    className={`cc-num ${methodGroupClass(mode, m)} ${currencyToneClass(mode, m)} cc-col--sep`}
                   >
-                    <strong>{fmtReceived(m, totalRow.drawer[m])}</strong>
+                    <strong>{fmtReceived(mode, m, drawerValue(totalRow, m))}</strong>
                   </td>
                 </Fragment>
               ))}

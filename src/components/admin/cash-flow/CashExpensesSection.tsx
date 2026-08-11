@@ -21,7 +21,7 @@ export type CashExpensesSectionProps = {
   busy: string | null;
   onAdd: () => void;
   onEdit: (row: CashDailyExpenseRowDto) => void;
-  onDelete: (id: string) => void;
+  onDelete: (row: CashDailyExpenseRowDto) => void;
 };
 
 /** אזור 5 — הוצאות קופה (אדום) */
@@ -138,7 +138,7 @@ export function CashExpensesSection({
                           className="cc-iconbtn cc-iconbtn--danger"
                           title="מחיקה"
                           disabled={busy === e.id}
-                          onClick={() => onDelete(e.id)}
+                          onClick={() => onDelete(e)}
                         >
                           <Trash2 size={14} />
                         </button>

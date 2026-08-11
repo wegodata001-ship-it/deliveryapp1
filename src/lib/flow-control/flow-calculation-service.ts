@@ -280,6 +280,107 @@ export function aggregateFlowIntakesByDay(
   return map;
 }
 
+/** KPI סיכום שבועי — בנק / העברה / אשראי / צ׳קים (לא כולל מזומן) */
+export type CashflowReceiptSummaryBucket = "BANK" | "TRANSFER" | "CREDIT" | "CHECK";
+
+export type CashflowReceiptSummaryUsd = {
+  bankUsd: number;
+  transferUsd: number;
+  creditUsd: number;
+  checksUsd: number;
+};
+
+/**
+ * מיפוי KPI סיכום תקבול — מפריד בנק (הפקדה/בוצעה) מהעברה בנקאית.
+ * אין כפילות: כל תשלום נכנס ל-bucket אחד בלבד.
+ */
+export function resolveCashflowReceiptSummaryBucket(
+  method: string | null | undefined,
+): CashflowReceiptSummaryBucket | null {
+  const m = (method ?? "").trim().toUpperCase();
+  if (!m) return null;
+  if (m === "CREDIT" || m === "CREDIT_CARD" || m === "CARD") return "CREDIT";
+  if (m === "CHECK" || m === "CHEQUE" || m === "CHECKS") return "CHECK";
+  if (m === "BANK_TRANSFER_DONE" || m === "BANK") return "BANK";
+  if (m === "BANK_TRANSFER" || m === "TRANSFER" || m === "WIRE") return "TRANSFER";
+  return null;
+}
+
+function ilsPartToUsd(ilsAmount: number, p: FlowPaymentVatFields): number {
+  const ils = round2(ilsAmount);
+  if (ils <= CASH_CONTROL_EPS) return 0;
+  const rate = num(p.exchangeRate);
+  if (rate <= 0) return 0;
+  return round2(ils / rate);
+}
+
+/** מפצל קליטה ל-KPI סיכום שבועי — סכומים ב-USD (ILS מומר לפי שער הקליטה) */
+export function getFlowPaymentReceiptSummaryParts(
+  p: FlowPaymentVatFields,
+): Array<{ bucket: CashflowReceiptSummaryBucket; usd: number }> {
+  const structured = p.methodAllocations ?? [];
+  if (structured.length > 0) {
+    const ilsFactor = ilsExVatFactor(p);
+    const out: Array<{ bucket: CashflowReceiptSummaryBucket; usd: number }> = [];
+    for (const part of structured) {
+      const bucket = resolveCashflowReceiptSummaryBucket(part.method);
+      if (!bucket) continue;
+      const source = num(part.sourceAmount);
+      const usd =
+        part.currency === "USD" ? source : ilsPartToUsd(source * ilsFactor, p);
+      if (usd > CASH_CONTROL_EPS) out.push({ bucket, usd: round2(usd) });
+    }
+    return out;
+  }
+
+  const out: Array<{ bucket: CashflowReceiptSummaryBucket; usd: number }> = [];
+  const ilsFactor = ilsExVatFactor(p);
+  const ilsGross = num(p.amountIls);
+  const usdAmt = num(p.amountUsd);
+
+  if (ilsGross > CASH_CONTROL_EPS) {
+    const method = (p.ilsPaymentMethod ?? p.paymentMethod ?? "").trim();
+    const bucket = resolveCashflowReceiptSummaryBucket(method);
+    if (bucket) {
+      const usd = ilsPartToUsd(ilsGross * ilsFactor, p);
+      if (usd > CASH_CONTROL_EPS) out.push({ bucket, usd });
+    }
+  }
+
+  if (usdAmt > CASH_CONTROL_EPS) {
+    const method = (p.usdPaymentMethod || p.paymentMethod || "").trim();
+    const bucket = resolveCashflowReceiptSummaryBucket(method);
+    if (bucket) out.push({ bucket, usd: round2(usdAmt) });
+  }
+
+  return out;
+}
+
+/** מצטבר KPI תקבול לשבוע — SSOT לכרטיסים ולטבלה */
+export function aggregateFlowReceiptSummaryUsd(
+  payments: FlowPaymentVatFields[],
+): CashflowReceiptSummaryUsd {
+  const withAlloc = captureKeysWithMethodAllocations(payments);
+  const totals: CashflowReceiptSummaryUsd = {
+    bankUsd: 0,
+    transferUsd: 0,
+    creditUsd: 0,
+    checksUsd: 0,
+  };
+
+  for (const p of payments) {
+    if (!shouldContributePaymentToFlowIntake(p, withAlloc)) continue;
+    for (const part of getFlowPaymentReceiptSummaryParts(p)) {
+      if (part.bucket === "BANK") totals.bankUsd = round2(totals.bankUsd + part.usd);
+      else if (part.bucket === "TRANSFER") totals.transferUsd = round2(totals.transferUsd + part.usd);
+      else if (part.bucket === "CREDIT") totals.creditUsd = round2(totals.creditUsd + part.usd);
+      else if (part.bucket === "CHECK") totals.checksUsd = round2(totals.checksUsd + part.usd);
+    }
+  }
+
+  return totals;
+}
+
 /**
  * תקבולי ₪ לערוצי שקל בלבד — לחישוב «שקל זמין לרכישת מט״ח».
  * לא כולל מזומן $ / אשראי $ וכו׳.
@@ -329,33 +430,37 @@ export function computeFxUsdReceived(ilsAmount: number, rate: number): number {
 }
 
 /**
- * יתרות IL שסומנו "להחזיר לקופה הראשית".
- * השדה remainderBankIls הוא שם legacy; ב-UI ובתהליך העסקי הוא מייצג
- * החזרה מהמסלול הזמני לקופה הראשית.
+ * יתרות FX שהועברו לבנק (remainderBankIls) — לא חוזרות לקופה PS.
  */
-export function sumIlReturnedToMainCashIls(fxPurchases: FxPurchaseRecord[]): number {
-  return round2(
-    filterFxPurchasesByTrack(fxPurchases, "IL").reduce(
-      (sum, purchase) => sum + Math.max(0, purchase.remainderBankIls),
-      0,
-    ),
-  );
+export function sumFxRemainderToBankIls(
+  fxPurchases: FxPurchaseRecord[],
+  track?: FxPurchaseTrack,
+): number {
+  const list = track ? filterFxPurchasesByTrack(fxPurchases, track) : fxPurchases;
+  return round2(list.reduce((sum, purchase) => sum + Math.max(0, purchase.remainderBankIls), 0));
 }
 
 /**
- * זמין לרכישת מט״ח PS = מזומן ₪ PS + יתרות שחזרו מ-IL − רכישות PS.
+ * @deprecated — השתמש ב-sumFxRemainderToBankIls
+ */
+export function sumIlReturnedToMainCashIls(fxPurchases: FxPurchaseRecord[]): number {
+  return sumFxRemainderToBankIls(fxPurchases, "IL");
+}
+
+/**
+ * זמין לרכישת מט״ח PS = מזומן ₪ PS − רכישות PS − יתרות שהועברו לבנק.
  */
 export function computePsAvailableIlsForFx(
   countedCashIls: number,
   fxPurchases: FxPurchaseRecord[],
 ): number {
   const spent = sumFxPurchases(fxPurchases, "PS").ils;
-  const returnedFromIl = sumIlReturnedToMainCashIls(fxPurchases);
-  return Math.max(0, round2(Math.max(0, countedCashIls) + returnedFromIl - spent));
+  const toBank = sumFxRemainderToBankIls(fxPurchases, "PS");
+  return Math.max(0, round2(Math.max(0, countedCashIls) - spent - toBank));
 }
 
 /**
- * זמין לרכישת מט״ח IL = מאגר IL − רכישות IL − יתרות שהוחזרו לקופה הראשית.
+ * זמין לרכישת מט״ח IL = מאגר IL − רכישות IL − יתרות שהועברו לבנק.
  */
 export function computeIlAvailableIlsForFx(
   countedTransferIls: number,
@@ -365,8 +470,8 @@ export function computeIlAvailableIlsForFx(
 ): number {
   const pool = computeIlSourcePoolIls(countedTransferIls, countedCreditIls, countedChecksIls);
   const spent = sumFxPurchases(fxPurchases, "IL").ils;
-  const returnedToMain = sumIlReturnedToMainCashIls(fxPurchases);
-  return Math.max(0, round2(pool - spent - returnedToMain));
+  const toBank = sumFxRemainderToBankIls(fxPurchases, "IL");
+  return Math.max(0, round2(pool - spent - toBank));
 }
 
 /**
@@ -409,48 +514,61 @@ export function computeCashUsdInDrawer(
 }
 
 /**
- * שקל בקופה הראשית = שקל PS + יתרות שחזרו מ-IL − הוצאות − רכישות PS.
+ * שקל בקופה הראשית = שקל PS − הוצאות − רכישות PS − יתרות PS שהועברו לבנק.
  */
 export function computeCashIlsInDrawer(
   countedCashIls: number,
   expensesIls: number,
   fxPurchases: FxPurchaseRecord[],
 ): number {
-  const ps = filterFxPurchasesByTrack(fxPurchases, "PS");
-  const fxIls = sumFxPurchases(ps, "PS").ils;
-  const returnedFromIl = sumIlReturnedToMainCashIls(fxPurchases);
-  return round2(countedCashIls + returnedFromIl - expensesIls - fxIls);
+  const fxIls = sumFxPurchases(fxPurchases, "PS").ils;
+  const toBank = sumFxRemainderToBankIls(fxPurchases, "PS");
+  return round2(countedCashIls - expensesIls - fxIls - toBank);
 }
 
 /**
- * יתרה בבנק = יתרות מ־רכישות IL שהועברו לבנק − משיכות + הפקדות
- * (מסלול בנקאי — לא מזומן PS)
+ * יתרה בבנק = יתרות FX שהועברו לבנק − משיכות + הפקדות
  */
 export function computeBankBalanceIls(
   fxPurchases: FxPurchaseRecord[],
   bankWithdrawalsIls = 0,
   bankDepositsIls = 0,
 ): number {
-  const il = filterFxPurchasesByTrack(fxPurchases, "IL");
-  const transfersToBank = il.reduce((s, p) => s + p.remainderBankIls, 0);
+  const transfersToBank = sumFxRemainderToBankIls(fxPurchases);
   return round2(transfersToBank - bankWithdrawalsIls + bankDepositsIls);
 }
 
 /**
- * העברה לטורקיה (מסלול PS) =
- * דולר שהיה בקופה + רכישת מט״ח PS ($) + עמלת PS
- *
- * מסלול PS נפרד לחלוטין ממסלול IL — אין איחוד חישובים.
+ * מט״ח זמין להעברה (מסלול PS) = מזומן $ + רכישות PS ($).
+ * עמלת העברה מוזנת בנפרד בשלב «העברה לטורקיה» — לא כלולה כאן.
  */
+export function computeTurkeyPsAvailableUsd(countedCashUsd: number, fxUsdTotal: number): number {
+  return Math.max(
+    0,
+    round2(Math.max(0, countedCashUsd) + Math.max(0, fxUsdTotal)),
+  );
+}
+
+/** ברירת מחדל לסכום העברה PS — ללא עמלה */
 export function computeTurkeyAllocationFromCashCount(
   countedCashUsd: number,
   fxUsdTotal: number,
-  commissionUsd: number,
+  _commissionUsd = 0,
 ): number {
-  return Math.max(
-    0,
-    round2(Math.max(0, countedCashUsd) + Math.max(0, fxUsdTotal) + Math.max(0, commissionUsd)),
-  );
+  void _commissionUsd;
+  return computeTurkeyPsAvailableUsd(countedCashUsd, fxUsdTotal);
+}
+
+export function computeTurkeyPsTotalOutUsd(transferUsd: number, feeUsd: number): number {
+  return round2(Math.max(0, transferUsd) + Math.max(0, feeUsd));
+}
+
+export function computeTurkeyPsRemainingUsd(
+  availableUsd: number,
+  transferUsd: number,
+  feeUsd: number,
+): number {
+  return round2(Math.max(0, availableUsd) - computeTurkeyPsTotalOutUsd(transferUsd, feeUsd));
 }
 
 /** @deprecated — השתמש ב-computeTurkeyAllocationFromCashCount */
@@ -484,16 +602,32 @@ export function computeIlFxPurchaseIls(
 }
 
 /**
- * העברה לטורקיה (מסלול IL) =
- * רכישת מט״ח IL (₪) + עמלת IL (₪)
- *
- * מסלול בנקאי — ללא מזומן קופה. לא מתערבב עם מסלול PS.
+ * מט״ח IL זמין להעברה (₪) = סכום רכישות IL בלבד.
+ * עמלת העברה מוזנת בנפרד בשלב «העברה לטורקיה».
  */
+export function computeTurkeyIlAvailableIls(ilFxPurchaseIls: number): number {
+  return Math.max(0, round2(Math.max(0, ilFxPurchaseIls)));
+}
+
+/** ברירת מחדל לסכום העברה IL — ללא עמלה */
 export function computeTurkeyIlAllocationIls(
   ilFxPurchaseIls: number,
-  commissionIls: number,
+  _commissionIls = 0,
 ): number {
-  return Math.max(0, round2(Math.max(0, ilFxPurchaseIls) + Math.max(0, commissionIls)));
+  void _commissionIls;
+  return computeTurkeyIlAvailableIls(ilFxPurchaseIls);
+}
+
+export function computeTurkeyIlTotalOutIls(transferIls: number, feeIls: number): number {
+  return round2(Math.max(0, transferIls) + Math.max(0, feeIls));
+}
+
+export function computeTurkeyIlRemainingIls(
+  availableIls: number,
+  transferIls: number,
+  feeIls: number,
+): number {
+  return round2(Math.max(0, availableIls) - computeTurkeyIlTotalOutIls(transferIls, feeIls));
 }
 
 /** @deprecated — השם הישן; השתמש ב-computeIlFxPurchaseIls */
@@ -561,16 +695,21 @@ export function computeWeekIlsBalanceAfterOps(params: {
 
 /**
  * יתרה בבנק =
- * תקבולי בנק (העברה+אשראי+צ'קים) − רכישת מט״ח IL − משיכות + הפקדות
+ * תקבולי בנק (העברה+אשראי+צ'קים) − רכישת מט״ח IL − משיכות + הפקדות + יתרות FX לבנק
  */
 export function computeBankBalanceAfterIlFx(
   bankReceiptsIls: number,
   ilFxPurchaseIls: number,
   bankWithdrawalsIls = 0,
   bankDepositsIls = 0,
+  fxRemainderToBankIls = 0,
 ): number {
   return round2(
-    bankReceiptsIls - Math.max(0, ilFxPurchaseIls) - bankWithdrawalsIls + bankDepositsIls,
+    bankReceiptsIls -
+      Math.max(0, ilFxPurchaseIls) -
+      bankWithdrawalsIls +
+      bankDepositsIls +
+      Math.max(0, fxRemainderToBankIls),
   );
 }
 
@@ -802,6 +941,22 @@ export function parseFxPurchasesJson(raw: unknown): FxPurchaseRecord[] {
       rate,
       remainderCashIls: Number(o.remainderCashIls) || 0,
       remainderBankIls: Number(o.remainderBankIls) || 0,
+      remainderAction:
+        o.remainderAction === "CASH" || o.remainderAction === "BANK" || o.remainderAction === "SPLIT"
+          ? o.remainderAction
+          : undefined,
+      remainderBankKey: o.remainderBankKey != null ? String(o.remainderBankKey) : undefined,
+      remainderBankLabel: o.remainderBankLabel != null ? String(o.remainderBankLabel) : undefined,
+      remainderBankAccountId:
+        o.remainderBankAccountId != null ? String(o.remainderBankAccountId) : undefined,
+      availableIlsBefore:
+        o.availableIlsBefore != null && Number.isFinite(Number(o.availableIlsBefore))
+          ? Number(o.availableIlsBefore)
+          : undefined,
+      remainingIlsAfter:
+        o.remainingIlsAfter != null && Number.isFinite(Number(o.remainingIlsAfter))
+          ? Number(o.remainingIlsAfter)
+          : undefined,
       commissionUsd: Number(o.commissionUsd) || 0,
       commissionIls: Number(o.commissionIls) || 0,
       intakeAllocations: parseIntakeAllocations(o.intakeAllocations),
@@ -830,6 +985,7 @@ export function computeFlowWeekSummary(input: FlowWeekCalculationInput): FlowWee
     fxIl.ils,
     input.bankWithdrawalsIls ?? 0,
     input.bankDepositsIls ?? 0,
+    sumFxRemainderToBankIls(input.fxPurchases),
   );
   /** יתרת הקופה הראשית וזמין ל־FX PS מגיעים מאותו חישוב יחיד. */
   const availableIlsForFx = computePsAvailableIlsForFx(input.countedCashIls, input.fxPurchases);

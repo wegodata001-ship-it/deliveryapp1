@@ -28,9 +28,11 @@ export type ManualShipmentDto = {
   shippingDate: string | null;
   arrivalDate: string | null;
   distributionStartDate: string | null;
-  /** סכום רישומין */
+  /** סכום רידומין */
   amountTotal: number | null;
-  /** תשלום */
+  /** סכום התשלום (קלט) */
+  paymentAmount: number | null;
+  /** תשלום מחושב */
   amountPaid: number | null;
   amountRemaining: number | null;
   internalCode: string | null;
@@ -64,6 +66,7 @@ export type ManualShipmentInput = {
   arrivalDate?: string | null;
   distributionStartDate?: string | null;
   amountTotal?: number | null;
+  paymentAmount?: number | null;
   amountPaid?: number | null;
   internalCode?: string | null;
   notes?: string | null;

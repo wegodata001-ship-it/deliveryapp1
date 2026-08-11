@@ -6,7 +6,6 @@ import {
   SHIPMENT_PAYMENT_STATUS_LABELS,
   SHIPMENT_STATUS_LABELS,
 } from "@/app/admin/shipments/types";
-import { looksLikeDistributionArea } from "@/lib/distribution-area-name";
 import {
   sumCollectedByPaymentMethod,
   sumRecordsCollectedByPaymentMethod,
@@ -119,7 +118,7 @@ function shipmentLabel(r: ShipmentRecordDto): string {
 }
 
 function zoneLabel(r: ShipmentRecordDto): string {
-  if (r.zoneName && looksLikeDistributionArea(r.zoneName)) return r.zoneName;
+  if (r.zoneName?.trim()) return r.zoneName;
   return r.zoneName?.trim() || "לא הוגדר";
 }
 

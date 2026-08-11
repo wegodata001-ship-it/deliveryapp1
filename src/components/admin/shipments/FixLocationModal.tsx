@@ -9,6 +9,7 @@ import {
   fixShipmentLocationAction,
   listDeliveryLocationsAction,
 } from "@/app/admin/shipments/location-actions";
+import { DistributionAreaPicker } from "@/components/admin/shipments/DistributionAreaPicker";
 
 type Props = {
   record: ShipmentRecordDto;
@@ -46,8 +47,6 @@ export function FixLocationModal({ record, zones, onClose, onSaved }: Props) {
         (l.distributionAreaName ?? "").toLowerCase().includes(q),
     );
   }, [locations, search]);
-
-  const activeZones = zones.filter((z) => z.isActive);
 
   async function handleSave() {
     setBusy(true);
@@ -170,14 +169,13 @@ export function FixLocationModal({ record, zones, onClose, onSaved }: Props) {
 
           <div className="shp-form-field">
             <label>אזור חלוקה</label>
-            <select value={areaId} onChange={(e) => setAreaId(e.target.value)}>
-              <option value="">ללא אזור</option>
-              {activeZones.map((z) => (
-                <option key={z.id} value={z.id}>
-                  {z.name}
-                </option>
-              ))}
-            </select>
+            <DistributionAreaPicker
+              zones={zones}
+              value={areaId}
+              onChange={setAreaId}
+              disabled={busy}
+              emptyLabel="ללא אזור"
+            />
           </div>
 
           <label style={{ display: "flex", gap: 8, alignItems: "center" }}>

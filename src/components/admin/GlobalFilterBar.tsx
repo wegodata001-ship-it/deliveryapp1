@@ -26,7 +26,7 @@ import { ORDER_COUNTRY_CODES, orderCountryLabel, type OrderCountryCode } from "@
 import { AhWeekNavNextButton, AhWeekNavPrevButton } from "@/components/admin/AhWeekNavButtons";
 import { shiftAhWeekCode } from "@/lib/weeks/ah-week-nav";
 import { revalidateAllKpiCachesAction } from "@/lib/kpi-cache-revalidate-action";
-import type { SerializedFinancial } from "@/lib/financial-settings";
+import type { SerializedFinancial } from "@/lib/financial-settings.shared";
 import { useAdminFinancialModal } from "@/components/admin/AdminFinancialModalContext";
 import { useLayoutFinancialDisplay } from "@/hooks/useLayoutFinancialDisplay";
 

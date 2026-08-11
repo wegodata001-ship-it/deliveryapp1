@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { SerializedFinancial } from "@/lib/financial-settings";
+import type { SerializedFinancial } from "@/lib/financial-settings.shared";
 import {
   WEGO_FINANCIAL_SETTINGS_SAVED,
   type FinancialSettingsSavedDetail,

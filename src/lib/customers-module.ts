@@ -16,6 +16,12 @@ import type {
 } from "@/lib/customers-module-types";
 import { CUSTOMER_WORKSPACE_ROW_LIMIT } from "@/lib/customers-module-types";
 import { scopeFromWorkCountryParam } from "@/lib/customer-open-debt";
+import {
+  customerWhereForCountryScope,
+  mergeCustomerWhere,
+  resolveCountryScopeFromCode,
+} from "@/lib/country-data-scope";
+import { computeOrderOpenDebtUsd } from "@/lib/order-remaining-debt";
 import { prisma } from "@/lib/prisma";
 import { activePaidPaymentWhere } from "@/lib/payment-record-status-shared";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
@@ -98,9 +104,10 @@ export async function listCustomersModule(
   const search = (opts.search ?? "").trim();
   const workCountry = opts.workCountry ?? DEFAULT_WORK_COUNTRY;
   const balanceScope = scopeFromWorkCountryParam(workCountry);
+  const countryScope = resolveCountryScopeFromCode(workCountry);
 
   const customers = await prisma.customer.findMany({
-    where: { deletedAt: null, ...customerSearchWhere(search) },
+    where: mergeCustomerWhere({ deletedAt: null, ...customerSearchWhere(search) }, countryScope),
     orderBy: { displayName: "asc" },
     skip,
     take: limit + 1,
@@ -142,12 +149,13 @@ export async function listCustomersModuleForExport(opts: {
 }): Promise<CustomersModuleListRow[]> {
   const workCountry = opts.workCountry ?? DEFAULT_WORK_COUNTRY;
   const balanceScope = scopeFromWorkCountryParam(workCountry);
+  const countryScope = resolveCountryScopeFromCode(workCountry);
 
   if (opts.scope === "current") {
     const cid = opts.customerId?.trim();
     if (!cid) return [];
     const customer = await prisma.customer.findFirst({
-      where: { id: cid, deletedAt: null },
+      where: mergeCustomerWhere({ id: cid, deletedAt: null }, countryScope),
       select: customerSelect,
     });
     if (!customer) return [];
@@ -163,7 +171,7 @@ export async function listCustomersModuleForExport(opts: {
   }
 
   const customers = await prisma.customer.findMany({
-    where: { deletedAt: null },
+    where: mergeCustomerWhere({ deletedAt: null }, countryScope),
     orderBy: { displayName: "asc" },
     select: customerSelect,
   });
@@ -261,7 +269,9 @@ export async function listCustomerWorkspaceOrders(
       const com = o.commissionUsd ?? new Prisma.Decimal(0);
       const total = o.totalUsd ?? deal.add(com);
       const paid = paidByOrder.get(o.id) ?? new Prisma.Decimal(0);
-      const remaining = total.sub(paid).toDecimalPlaces(2, 4);
+      const remaining = new Prisma.Decimal(
+        computeOrderOpenDebtUsd(Number(total), Number(paid)).toFixed(2),
+      );
       const meta = ORDER_STATUS_META[o.status];
       return {
         id: o.id,

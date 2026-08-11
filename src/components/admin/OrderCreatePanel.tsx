@@ -42,7 +42,7 @@ import type { OrderCaptureWindowProps } from "@/lib/admin-windows";
 
 import { orderCountryLabel, ORDER_COUNTRY_CODES, coerceOrderCountryForForm, type OrderCountryCode } from "@/lib/order-countries";
 import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
-import { buildCaptureFinancialSnapshot } from "@/lib/capture-form-snapshot";
+import { buildCaptureFinancialSnapshot } from "@/lib/capture-form-snapshot.shared";
 import {
   computeOrderEditDiff,
   snapshotFromUpdateForm,
@@ -57,7 +57,7 @@ import {
   WEGO_FINANCIAL_SETTINGS_SAVED,
   applyFinancialSettingsToCaptureUi,
 } from "@/lib/financial-settings-bus";
-import type { SerializedFinancial } from "@/lib/financial-settings";
+import type { SerializedFinancial } from "@/lib/financial-settings.shared";
 import { FINANCE_DEFAULTS_CLIENT } from "@/lib/finance-settings-client";
 import { VAT_RATE, VAT_RATE_PERCENT, formatVatPercentLabel } from "@/lib/vat";
 import {

@@ -24,6 +24,7 @@ import {
 } from "@/lib/payment-intake-method-control";
 import type { LivePaymentFormKpis } from "@/lib/payment-intake-live-kpi";
 import type { PaymentIntakeOrderRow } from "@/lib/payment-intake";
+import { sumRemainingToPayUsd } from "@/lib/order-remaining-debt";
 
 export type PaymentIntakePlanningViews = {
   /** Aggregate bucket rows for the PMC button (unchanged logic) */
@@ -32,6 +33,8 @@ export type PaymentIntakePlanningViews = {
   methodViews: IntakeMethodView[];
   /** Summary for the PMC summary cards */
   methodViewSummary: MethodViewSummary;
+  /** «נשאר לתשלום» — סכום יתרות הזמנה (זהה למסך קליטה) */
+  orderRemainingToPayUsd: number;
   /** Full order business model — consumed by the main intake table */
   orderViews: IntakeOrderView[];
   showMethodControl: boolean;
@@ -58,11 +61,13 @@ export function derivePaymentIntakePlanningViews(
   // Unified engine: order views + method views derived from the same allocation
   const orderViews = buildIntakeOrderViews(orders, includedOrderIds, liveFormKpis, totalPaymentUsd);
   const methodViews = buildIntakeMethodViews(orderViews, totalPaymentUsd, includedOrderIds);
+  const orderRemainingToPayUsd = sumRemainingToPayUsd(orderViews);
 
   return {
     methodControlRows,
     methodViews,
     methodViewSummary: summarizeIntakeMethodViews(methodViews),
+    orderRemainingToPayUsd,
     orderViews,
     showMethodControl: hasCompositeMethodControl(orders, includedOrderIds),
   };

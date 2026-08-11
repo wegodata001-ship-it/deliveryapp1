@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { mergeOrderWhere, resolveCountryScope } from "@/lib/country-data-scope";
 import { ORDER_COUNTRY_CODES, type OrderCountryCode } from "@/lib/order-countries";
+import { readMultiParam } from "@/lib/orders-list-filter-params";
 import { OS } from "@/lib/order-status-slugs";
 import { parseOrdersListDateFilterFromSearchParams } from "@/lib/work-week";
 
@@ -13,6 +14,40 @@ function parseAmount(raw: string): number | null {
   if (!raw) return null;
   const n = Number(raw.replace(",", "."));
   return Number.isFinite(n) ? n : null;
+}
+
+function readMultiOrLegacy(sp: Record<string, string | string[] | undefined>, key: string): string[] {
+  const multi = readMultiParam(sp, key);
+  if (multi.length > 0) return multi;
+  const single = readTextParam(sp, key);
+  return single ? [single] : [];
+}
+
+function normalizeCountryCodes(values: string[]): OrderCountryCode[] {
+  return values.filter((v): v is OrderCountryCode =>
+    ORDER_COUNTRY_CODES.includes(v as OrderCountryCode),
+  );
+}
+
+function buildInOrSingle<T extends string>(
+  values: T[],
+  field: keyof Prisma.OrderWhereInput,
+): Prisma.OrderWhereInput | undefined {
+  if (values.length === 0) return undefined;
+  if (values.length === 1) return { [field]: values[0] } as Prisma.OrderWhereInput;
+  return { [field]: { in: values } } as Prisma.OrderWhereInput;
+}
+
+function buildPaymentMethodWhere(values: string[]): Prisma.OrderWhereInput | undefined {
+  if (values.length === 0) return undefined;
+  const methods = values.filter((v) => v !== "NONE");
+  const parts: Prisma.OrderWhereInput[] = [];
+  if (methods.length === 1) parts.push({ paymentMethod: methods[0] });
+  else if (methods.length > 1) parts.push({ paymentMethod: { in: methods } });
+  if (values.includes("NONE")) parts.push({ paymentMethod: null });
+  if (parts.length === 0) return undefined;
+  if (parts.length === 1) return parts[0];
+  return { OR: parts };
 }
 
 /** שדה ראשי: לקוח / קוד לקוח (תואם ordersCustomer + פרמטרים ישנים). */
@@ -94,7 +129,6 @@ export function buildOrdersListWhereFromSearchParams(
   const range = parseOrdersListDateFilterFromSearchParams(sp);
   const countryScope = resolveCountryScope(sp);
 
-  const statusSingleRaw = readTextParam(sp, "status");
   const openOnly = readTextParam(sp, "ordersOpenOnly") === "1";
   const readyOnly = readTextParam(sp, "ordersReadyOnly") === "1";
   const completedFilterRaw = readTextParam(sp, "ordersCompleted");
@@ -102,22 +136,17 @@ export function buildOrdersListWhereFromSearchParams(
     completedFilterRaw === "all" || completedFilterRaw === "done" || completedFilterRaw === "not_done"
       ? completedFilterRaw
       : "not_done";
-  const statusSingle = openOnly
-    ? OS.OPEN
+
+  const statusValues = openOnly
+    ? [OS.OPEN]
     : readyOnly
-      ? OS.COMPLETED
-      : statusSingleRaw || null;
+      ? [OS.COMPLETED]
+      : readMultiOrLegacy(sp, "status");
 
-  const ordersCountryRaw = readTextParam(sp, "ordersCountry");
-  const countrySingle =
-    ordersCountryRaw && ORDER_COUNTRY_CODES.includes(ordersCountryRaw as OrderCountryCode)
-      ? (ordersCountryRaw as OrderCountryCode)
-      : null;
+  const countryValues = normalizeCountryCodes(readMultiOrLegacy(sp, "ordersCountry"));
+  const createdByIds = readMultiOrLegacy(sp, "createdBy");
+  const paymentTypes = readMultiOrLegacy(sp, "paymentType");
 
-  const createdById = readTextParam(sp, "createdBy");
-  const rawPaymentType = readTextParam(sp, "paymentType");
-  const paymentType =
-    rawPaymentType === "NONE" ? rawPaymentType : rawPaymentType || "";
   const paymentLocationRaw = readTextParam(sp, "paymentLocation");
   const amountMinRaw = readTextParam(sp, "amountMin");
   const amountMaxRaw = readTextParam(sp, "amountMax");
@@ -132,6 +161,23 @@ export function buildOrdersListWhereFromSearchParams(
   const phoneWhere = buildOrdersListPhoneWhere(readTextParam(sp, "ordersPhone"));
   if (phoneWhere) filterParts.push(phoneWhere);
 
+  const statusWhere = buildInOrSingle(statusValues, "status");
+  const createdByWhere = buildInOrSingle(createdByIds, "createdById");
+  const paymentMethodWhere = buildPaymentMethodWhere(paymentTypes);
+
+  let countryWhere: Prisma.OrderWhereInput | undefined;
+  if (countryValues.length === 1) {
+    countryWhere = {
+      sourceCountry: countryValues[0],
+      countryCode: countryScope.workCountry,
+    };
+  } else if (countryValues.length > 1) {
+    countryWhere = {
+      sourceCountry: { in: countryValues },
+      countryCode: countryScope.workCountry,
+    };
+  }
+
   const base: Prisma.OrderWhereInput = {
     deletedAt: null,
     orderDate: { gte: range.fromStart, lte: range.toEnd },
@@ -140,14 +186,10 @@ export function buildOrdersListWhereFromSearchParams(
       : completedFilter === "not_done"
         ? { isCompleted: false }
         : {}),
-    ...(statusSingle ? { status: statusSingle } : {}),
-    ...(countrySingle ? { sourceCountry: countrySingle, countryCode: countryScope.workCountry } : {}),
-    ...(createdById ? { createdById } : {}),
-    ...(paymentType === "NONE"
-      ? { paymentMethod: null }
-      : paymentType
-        ? { paymentMethod: paymentType }
-        : {}),
+    ...(statusWhere ?? {}),
+    ...(countryWhere ?? {}),
+    ...(createdByWhere ?? {}),
+    ...(paymentMethodWhere ?? {}),
     ...(paymentLocationRaw === "NONE"
       ? { AND: [{ paymentPointId: null }, { locationId: null }] }
       : paymentLocationRaw

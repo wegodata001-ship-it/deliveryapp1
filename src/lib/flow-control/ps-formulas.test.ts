@@ -11,16 +11,16 @@ import {
 } from "@/lib/flow-control/flow-calculation-service";
 
 describe("PS Turkey + IL FX formulas", () => {
-  it("Turkey PS = cash USD in drawer + FX bought + commission PS", () => {
-    assert.equal(computeTurkeyAllocationFromCashCount(100, 50, 5), 155);
-    assert.equal(computeTurkeyAllocationFromCashCount(0, 80, 2.5), 82.5);
+  it("Turkey PS available = cash USD in drawer + FX bought (fee is separate)", () => {
+    assert.equal(computeTurkeyAllocationFromCashCount(100, 50, 5), 150);
+    assert.equal(computeTurkeyAllocationFromCashCount(0, 80, 2.5), 80);
     assert.equal(computeTurkeyAllocationFromCashCount(999, 0, 0), 999);
     assert.equal(computeTurkeyAllocationFromCashCount(0, 0, 0), 0);
   });
 
-  it("Turkey IL = FX IL + commission IL (separate from PS)", () => {
-    assert.equal(computeTurkeyIlAllocationIls(150, 10), 160);
-    assert.equal(computeTurkeyIlAllocationIls(0, 5), 5);
+  it("Turkey IL available = FX IL only (fee is separate)", () => {
+    assert.equal(computeTurkeyIlAllocationIls(150, 10), 150);
+    assert.equal(computeTurkeyIlAllocationIls(0, 5), 0);
     assert.equal(computeTurkeyIlAllocationIls(0, 0), 0);
   });
 

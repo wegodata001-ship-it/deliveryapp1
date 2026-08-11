@@ -404,6 +404,7 @@ export function FlowWeekDashboard({
         overview={overview}
         canEdit={canEditManagerCount}
         onClose={() => setManagerOpen(false)}
+        onRefresh={() => onManagerCountSaved()}
         onSaved={() => {
           onManagerCountSaved();
           setManagerOpen(false);

@@ -4,6 +4,7 @@ import {
   roundMoney2,
   type PaymentIntakeOrderBase,
 } from "@/lib/payment-intake";
+import { computeOrderOpenDebtUsd } from "@/lib/order-remaining-debt";
 
 const ALLOC_EPS = 0.02;
 
@@ -44,7 +45,7 @@ function closedOrdersCount(bases: PaymentIntakeOrderBase[]): number {
 export function diagnosePaymentAllocation(input: PaymentAllocationDebugInput): PaymentAllocationDebugResult {
   const openOrders = openDebtOrders(input.bases);
   const openBalanceUsd = roundMoney2(
-    openOrders.reduce((sum, o) => sum + Math.max(0, orderLedgerBalanceUsd(o)), 0),
+    openOrders.reduce((sum, o) => sum + computeOrderOpenDebtUsd(o.totalAmountUsd, o.dbPaidUsd), 0),
   );
 
   const alloc =

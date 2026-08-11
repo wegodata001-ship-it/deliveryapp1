@@ -5,6 +5,7 @@ import { OrdersListToolbar, type OrdersListToolbarProps } from "@/components/adm
 import { useRouter } from "next/navigation";
 import { PaymentMethod } from "@prisma/client";
 import { OS } from "@/lib/order-status-slugs";
+import { computeOrderOpenDebtUsd, deriveOrderPaymentDisplayStatus } from "@/lib/order-remaining-debt";
 import { useOrderStatusCatalog } from "@/components/admin/OrderStatusCatalogProvider";
 import { OrderStatusSelect } from "@/components/admin/OrderStatusSelect";
 import {
@@ -270,6 +271,7 @@ export function OrdersListShell({
   const [paginationLive, setPaginationLive] = useState(pagination);
   const [filterOptionsLive, setFilterOptionsLive] = useState({
     createdByOptions: toolbarProps.createdByOptions,
+    countryFilterOptions: toolbarProps.countryFilterOptions,
     paymentLocationOptions,
   });
   const [refreshLoading, setRefreshLoading] = useState(false);
@@ -402,9 +404,10 @@ export function OrdersListShell({
     setPaginationLive(pagination);
     setFilterOptionsLive({
       createdByOptions: toolbarProps.createdByOptions,
+      countryFilterOptions: toolbarProps.countryFilterOptions,
       paymentLocationOptions,
     });
-  }, [orders, statusSummary, pagination, toolbarProps.createdByOptions, paymentLocationOptions]);
+  }, [orders, statusSummary, pagination, toolbarProps.createdByOptions, toolbarProps.countryFilterOptions, paymentLocationOptions]);
 
   const readExportSearchParams = useCallback((): Record<string, string | string[] | undefined> => {
     const sp = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
@@ -459,6 +462,7 @@ export function OrdersListShell({
       setPaginationLive(data.pagination);
       setFilterOptionsLive({
         createdByOptions: data.createdByOptions,
+        countryFilterOptions: data.countryFilterOptions,
         paymentLocationOptions: data.paymentLocationOptions,
       });
       showToast("הנתונים עודכנו");
@@ -572,15 +576,13 @@ export function OrdersListShell({
         cur.map((r) => {
           if (r.id !== orderId) return r;
           const total = parseNumeric(r.totalAmountUsd) ?? 0;
-          const newBalance = Math.max(0, total - withdrawn);
+          const newBalance = computeOrderOpenDebtUsd(total, withdrawn);
           return {
             ...r,
-            paymentStatus:
-              total > 0.01 && withdrawn >= total - 0.02
-                ? "paid"
-                : withdrawn > 0.01
-                  ? "partial"
-                  : "unpaid",
+            paymentStatus: deriveOrderPaymentDisplayStatus({
+              totalUsd: total,
+              paidUsd: withdrawn,
+            }),
             balanceUsd: fmtUsd(newBalance),
           };
         }),
@@ -792,6 +794,7 @@ export function OrdersListShell({
     () => ({
       ...toolbarProps,
       createdByOptions: filterOptionsLive.createdByOptions,
+      countryFilterOptions: filterOptionsLive.countryFilterOptions,
       paymentLocationOptions: filterOptionsLive.paymentLocationOptions,
     }),
     [toolbarProps, filterOptionsLive],
@@ -807,13 +810,33 @@ export function OrdersListShell({
         map.set(o.createdById, o.createdByName?.trim() || o.createdById);
       }
     }
-    if (toolbarPropsLive.createdById && !map.has(toolbarPropsLive.createdById)) {
-      map.set(toolbarPropsLive.createdById, "עובד נבחר");
+    for (const id of toolbarPropsLive.createdByIds) {
+      if (!map.has(id)) {
+        map.set(id, "עובד נבחר");
+      }
     }
     return [...map.entries()]
       .map(([id, label]) => ({ id, label }))
       .sort((a, b) => a.label.localeCompare(b.label, "he"));
-  }, [orders, toolbarPropsLive.createdById, toolbarPropsLive.createdByOptions]);
+  }, [orders, toolbarPropsLive.createdByIds, toolbarPropsLive.createdByOptions]);
+
+  const countryFilterOptionsMerged = useMemo(() => {
+    const set = new Set<string>();
+    for (const opt of toolbarPropsLive.countryFilterOptions) {
+      set.add(opt.value);
+    }
+    for (const o of orders) {
+      if (o.sourceCountry) set.add(o.sourceCountry);
+    }
+    for (const value of toolbarPropsLive.countryFilter) {
+      set.add(value);
+    }
+    return [...set].map((value) => ({ value }));
+  }, [
+    orders,
+    toolbarPropsLive.countryFilter,
+    toolbarPropsLive.countryFilterOptions,
+  ]);
 
   const filterLeadingActions = (
     <>
@@ -868,6 +891,7 @@ export function OrdersListShell({
             key={`${toolbarPropsLive.ahWeekSelect}|${toolbarPropsLive.fromYmd}|${toolbarPropsLive.toYmd}`}
             {...toolbarPropsLive}
             createdByOptions={createdByOptionsMerged}
+            countryFilterOptions={countryFilterOptionsMerged}
             leadingActions={filterLeadingActions}
             exportActions={kpiExportActions}
           />

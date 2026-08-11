@@ -2,6 +2,10 @@
 
 import { requireAuth, userHasAnyPermission, isAdminUser } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
+import {
+  loadAliasLookupMap,
+  resolveUpdatedDeliveryLocationDisplay,
+} from "@/lib/delivery-location-match";
 import { PAYMENT_METHOD_LABELS, PAYMENT_METHODS } from "@/app/admin/shipments/types";
 import type { ShipmentPaymentDetails } from "@/app/admin/shipments/types";
 import type {
@@ -22,7 +26,10 @@ import {
   SHIPMENT_CASH_EXPENSE_LABELS,
   type ShipmentCashExpenseCategory,
 } from "@/app/admin/shipments/cash-control/types";
-import { SHIPMENT_BATCH_EXPENSE_LABELS } from "@/app/admin/shipments/control/types";
+import {
+  SHIPMENT_BATCH_EXPENSE_LABELS,
+  SHIPMENT_MANAGE_EXPENSE_LABELS,
+} from "@/app/admin/shipments/control/types";
 
 const VIEW_PERMS = ["manage_shipments", "view_shipments"];
 const WRITE_PERMS = ["manage_shipments"];
@@ -33,16 +40,24 @@ function expenseCategoryLabel(category: string): string {
   );
 }
 
-function mapExpense(e: {
-  id: string;
-  shipmentRecordId: string;
-  category: string;
-  amountIls: { toNumber(): number };
-  notes: string | null;
-  paymentMethod: string;
-  expenseDate: Date;
-  createdAt: Date;
-}): ShipmentRecordExpenseDto {
+function manageExpenseCategoryLabel(category: string): string {
+  return SHIPMENT_MANAGE_EXPENSE_LABELS[category] ?? category;
+}
+
+function mapExpense(
+  e: {
+    id: string;
+    shipmentRecordId: string;
+    category: string;
+    amountIls: { toNumber(): number };
+    notes: string | null;
+    paymentMethod: string;
+    expenseDate: Date;
+    createdById: string | null;
+    createdAt: Date;
+  },
+  userNames: Map<string, string | null>,
+): ShipmentRecordExpenseDto {
   return {
     id: e.id,
     shipmentRecordId: e.shipmentRecordId,
@@ -53,27 +68,31 @@ function mapExpense(e: {
     paymentMethod: e.paymentMethod,
     paymentMethodLabel: PAYMENT_METHOD_LABELS[e.paymentMethod] ?? e.paymentMethod,
     expenseDate: e.expenseDate.toISOString().slice(0, 10),
+    createdById: e.createdById,
+    createdByName: e.createdById ? (userNames.get(e.createdById) ?? null) : null,
     createdAt: e.createdAt.toISOString(),
   };
 }
 
 function batchExpenseCategoryLabel(category: string): string {
-  return (
-    SHIPMENT_BATCH_EXPENSE_LABELS[category as ShipmentBatchExpenseCategory] ?? category
-  );
+  return manageExpenseCategoryLabel(category);
 }
 
-function mapBatchExpense(e: {
-  id: string;
-  batchId: string;
-  category: string;
-  amount: { toNumber(): number };
-  currency: string;
-  notes: string | null;
-  paymentMethod: string | null;
-  expenseDate: Date;
-  createdAt: Date;
-}): ShipmentBatchExpenseDto {
+function mapBatchExpense(
+  e: {
+    id: string;
+    batchId: string;
+    category: string;
+    amount: { toNumber(): number };
+    currency: string;
+    notes: string | null;
+    paymentMethod: string | null;
+    expenseDate: Date;
+    createdById: string | null;
+    createdAt: Date;
+  },
+  userNames: Map<string, string | null>,
+): ShipmentBatchExpenseDto {
   const currency = e.currency === "USD" ? "USD" : "ILS";
   return {
     id: e.id,
@@ -88,8 +107,25 @@ function mapBatchExpense(e: {
       ? (PAYMENT_METHOD_LABELS[e.paymentMethod] ?? e.paymentMethod)
       : null,
     expenseDate: e.expenseDate.toISOString().slice(0, 10),
+    createdById: e.createdById,
+    createdByName: e.createdById ? (userNames.get(e.createdById) ?? null) : null,
     createdAt: e.createdAt.toISOString(),
   };
+}
+
+async function loadExpenseUserNames(
+  recordExpenses: Array<{ createdById: string | null }>,
+  batchExpenses: Array<{ createdById: string | null }>,
+): Promise<Map<string, string | null>> {
+  const ids = new Set<string>();
+  for (const e of recordExpenses) if (e.createdById) ids.add(e.createdById);
+  for (const e of batchExpenses) if (e.createdById) ids.add(e.createdById);
+  if (ids.size === 0) return new Map();
+  const users = await prisma.user.findMany({
+    where: { id: { in: [...ids] } },
+    select: { id: true, fullName: true },
+  });
+  return new Map(users.map((u) => [u.id, u.fullName]));
 }
 
 function buildBatchExpenseSummaries(
@@ -103,14 +139,16 @@ function buildBatchExpenseSummaries(
     notes: string | null;
     paymentMethod: string | null;
     expenseDate: Date;
+    createdById: string | null;
     createdAt: Date;
   }>,
+  userNames: Map<string, string | null>,
 ): ShipmentBatchExpenseSummary[] {
   const byBatch = new Map<string, ShipmentBatchExpenseDto[]>();
   for (const id of batchIds) byBatch.set(id, []);
   for (const row of raw) {
     const list = byBatch.get(row.batchId) ?? [];
-    list.push(mapBatchExpense(row));
+    list.push(mapBatchExpense(row, userNames));
     byBatch.set(row.batchId, list);
   }
   return batchIds.map((batchId) => {
@@ -129,6 +167,10 @@ function buildBatchExpenseSummaries(
       count: expenses.length,
     };
   });
+}
+
+function isManageExpenseCategory(category: string): boolean {
+  return category in SHIPMENT_MANAGE_EXPENSE_LABELS;
 }
 
 function sumBatchExpensesIls(summaries: ShipmentBatchExpenseSummary[]): number {
@@ -224,10 +266,13 @@ export async function getShipmentControlDataAction(
         batch: { select: { batchNumber: true, containerNumber: true } },
         zone: { select: { id: true, name: true } },
         courier: { select: { id: true, name: true } },
+        deliveryLocation: { select: { displayName: true } },
         payments: { orderBy: { createdAt: "asc" } },
         expenses: { orderBy: [{ expenseDate: "desc" }, { createdAt: "desc" }] },
       },
     });
+
+    const aliasByKey = await loadAliasLookupMap();
 
     // Fetch all batches for the filter sidebar
     const allBatches = await prisma.shipmentBatch.findMany({
@@ -247,11 +292,22 @@ export async function getShipmentControlDataAction(
       orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
     });
 
-    // Map records
+    // Map records — batch expenses loaded first for user-name lookup
+    const batchIdsInScope = [...new Set(rawRecords.map((r) => r.batchId))];
+    const rawBatchExpenses = batchIdsInScope.length
+      ? await prisma.shipmentBatchExpense.findMany({
+          where: { batchId: { in: batchIdsInScope } },
+          orderBy: [{ expenseDate: "desc" }, { createdAt: "desc" }],
+        })
+      : [];
+    const allRecordExpenses = rawRecords.flatMap((r) => r.expenses);
+    const userNames = await loadExpenseUserNames(allRecordExpenses, rawBatchExpenses);
+    const batchExpenses = buildBatchExpenseSummaries(batchIdsInScope, rawBatchExpenses, userNames);
+
     const records: ShipmentControlRecord[] = rawRecords.map((r) => {
       const paidAmountIls = r.payments.reduce((s, p) => s + p.amountIls.toNumber(), 0);
       const fee = r.deliveryFeeIls?.toNumber() ?? 0;
-      const expenses = r.expenses.map(mapExpense);
+      const expenses = r.expenses.map((e) => mapExpense(e, userNames));
       const expensesTotalIls =
         Math.round(expenses.reduce((s, e) => s + e.amountIls, 0) * 100) / 100;
       return {
@@ -266,6 +322,16 @@ export async function getShipmentControlDataAction(
         customerPhone2: r.customerPhone2,
         address: r.address,
         city: r.city,
+        updatedDeliveryLocation: resolveUpdatedDeliveryLocationDisplay(
+          {
+            originalDeliveryLocation: r.originalDeliveryLocation,
+            city: r.city,
+            address: r.address,
+            deliveryLocationId: r.deliveryLocationId,
+            deliveryLocation: r.deliveryLocation,
+          },
+          aliasByKey,
+        ),
         boxes: r.boxes,
         cartonDetails: r.cartonDetails,
         weight: r.weight?.toNumber() ?? null,
@@ -298,16 +364,6 @@ export async function getShipmentControlDataAction(
         })),
       };
     });
-
-    // ── KPIs ──────────────────────────────────────────────────────────────────
-    const batchIdsInScope = [...new Set(records.map((r) => r.batchId))];
-    const rawBatchExpenses = batchIdsInScope.length
-      ? await prisma.shipmentBatchExpense.findMany({
-          where: { batchId: { in: batchIdsInScope } },
-          orderBy: [{ expenseDate: "desc" }, { createdAt: "desc" }],
-        })
-      : [];
-    const batchExpenses = buildBatchExpenseSummaries(batchIdsInScope, rawBatchExpenses);
 
     const kpis = computeKpis(records, batchExpenses);
 
@@ -539,6 +595,10 @@ function emptyPayload(
 
 const VALID_PAYMENT_METHODS: Set<string> = new Set(PAYMENT_METHODS.map((m) => m.value));
 
+function selfUserNames(me: { id: string; fullName?: string | null }): Map<string, string | null> {
+  return new Map([[me.id, me.fullName ?? null]]);
+}
+
 export async function createShipmentRecordExpenseAction(input: {
   shipmentRecordId: string;
   category: string;
@@ -567,24 +627,47 @@ export async function createShipmentRecordExpenseAction(input: {
     if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
       return { ok: false, error: "תאריך לא תקין" };
     }
-    const exists = await prisma.shipmentRecord.findUnique({
+    const record = await prisma.shipmentRecord.findUnique({
       where: { id: input.shipmentRecordId },
-      select: { id: true },
+      select: { id: true, batch: { select: { batchNumber: true } } },
     });
-    if (!exists) return { ok: false, error: "המשלוח לא נמצא" };
+    if (!record) return { ok: false, error: "המשלוח לא נמצא" };
 
-    const created = await prisma.shipmentRecordExpense.create({
-      data: {
-        shipmentRecordId: input.shipmentRecordId,
-        category,
-        amountIls: amount,
-        notes: input.notes?.trim() || null,
-        paymentMethod: input.paymentMethod,
-        expenseDate: new Date(day + "T00:00:00.000Z"),
-        createdById: me.id,
-      },
+    const created = await prisma.$transaction(async (tx) => {
+      const expense = await tx.shipmentRecordExpense.create({
+        data: {
+          shipmentRecordId: input.shipmentRecordId,
+          category,
+          amountIls: amount,
+          notes: input.notes?.trim() || null,
+          paymentMethod: input.paymentMethod,
+          expenseDate: new Date(day + "T00:00:00.000Z"),
+          createdById: me.id,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: me.id,
+          actionType: "SHIPMENT_RECORD_EXPENSE_ADD",
+          entityType: "ShipmentRecordExpense",
+          entityId: expense.id,
+          newValue: {
+            shipmentRecordId: input.shipmentRecordId,
+            batchNumber: record.batch.batchNumber,
+            category,
+            categoryLabel: expenseCategoryLabel(category),
+            amountIls: amount,
+            currency: "ILS",
+            expenseDate: day,
+            notes: input.notes?.trim() || null,
+            paymentMethod: input.paymentMethod,
+          },
+          metadata: { source: "expenses_manage_modal", at: new Date().toISOString() },
+        },
+      });
+      return expense;
     });
-    return { ok: true, expense: mapExpense(created) };
+    return { ok: true, expense: mapExpense(created, selfUserNames(me)) };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
@@ -603,10 +686,16 @@ export async function updateShipmentRecordExpenseAction(input: {
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS)) {
       return { ok: false, error: "אין הרשאה" };
     }
+    const existing = await prisma.shipmentRecordExpense.findUnique({
+      where: { id: input.id },
+      include: { shipment: { select: { batch: { select: { batchNumber: true } } } } },
+    });
+    if (!existing) return { ok: false, error: "ההוצאה לא נמצאה" };
+
     const data: Record<string, unknown> = {};
     if (input.category !== undefined) {
       const category = input.category.trim();
-      if (!(category in SHIPMENT_CASH_EXPENSE_LABELS)) {
+      if (!isManageExpenseCategory(category) && !(category in SHIPMENT_CASH_EXPENSE_LABELS)) {
         return { ok: false, error: "סוג הוצאה לא תקין" };
       }
       data.category = category;
@@ -632,11 +721,50 @@ export async function updateShipmentRecordExpenseAction(input: {
       }
       data.expenseDate = new Date(day + "T00:00:00.000Z");
     }
-    const updated = await prisma.shipmentRecordExpense.update({
-      where: { id: input.id },
-      data,
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const expense = await tx.shipmentRecordExpense.update({
+        where: { id: input.id },
+        data,
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: me.id,
+          actionType: "SHIPMENT_RECORD_EXPENSE_UPDATE",
+          entityType: "ShipmentRecordExpense",
+          entityId: expense.id,
+          oldValue: {
+            batchNumber: existing.shipment.batch.batchNumber,
+            category: existing.category,
+            amountIls: existing.amountIls.toNumber(),
+            currency: "ILS",
+            expenseDate: existing.expenseDate.toISOString().slice(0, 10),
+            notes: existing.notes,
+            paymentMethod: existing.paymentMethod,
+          },
+          newValue: {
+            batchNumber: existing.shipment.batch.batchNumber,
+            category: expense.category,
+            amountIls: expense.amountIls.toNumber(),
+            currency: "ILS",
+            expenseDate: expense.expenseDate.toISOString().slice(0, 10),
+            notes: expense.notes,
+            paymentMethod: expense.paymentMethod,
+          },
+          metadata: { source: "expenses_manage_modal", at: new Date().toISOString() },
+        },
+      });
+      return expense;
     });
-    return { ok: true, expense: mapExpense(updated) };
+    const names = selfUserNames(me);
+    if (updated.createdById && updated.createdById !== me.id) {
+      const u = await prisma.user.findUnique({
+        where: { id: updated.createdById },
+        select: { fullName: true },
+      });
+      names.set(updated.createdById, u?.fullName ?? null);
+    }
+    return { ok: true, expense: mapExpense(updated, names) };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
@@ -650,7 +778,34 @@ export async function deleteShipmentRecordExpenseAction(
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS)) {
       return { ok: false, error: "אין הרשאה" };
     }
-    await prisma.shipmentRecordExpense.delete({ where: { id } });
+    const existing = await prisma.shipmentRecordExpense.findUnique({
+      where: { id },
+      include: { shipment: { select: { batch: { select: { batchNumber: true } } } } },
+    });
+    if (!existing) return { ok: false, error: "ההוצאה לא נמצאה" };
+
+    await prisma.$transaction(async (tx) => {
+      await tx.shipmentRecordExpense.delete({ where: { id } });
+      await tx.auditLog.create({
+        data: {
+          userId: me.id,
+          actionType: "SHIPMENT_RECORD_EXPENSE_DELETE",
+          entityType: "ShipmentRecordExpense",
+          entityId: id,
+          oldValue: {
+            batchNumber: existing.shipment.batch.batchNumber,
+            category: existing.category,
+            categoryLabel: expenseCategoryLabel(existing.category),
+            amountIls: existing.amountIls.toNumber(),
+            currency: "ILS",
+            expenseDate: existing.expenseDate.toISOString().slice(0, 10),
+            notes: existing.notes,
+            paymentMethod: existing.paymentMethod,
+          },
+          metadata: { source: "expenses_manage_modal", at: new Date().toISOString() },
+        },
+      });
+    });
     return { ok: true };
   } catch (e) {
     return { ok: false, error: String(e) };
@@ -674,7 +829,7 @@ export async function createShipmentBatchExpenseAction(input: {
       return { ok: false, error: "אין הרשאה" };
     }
     const category = input.category.trim();
-    if (!(category in SHIPMENT_BATCH_EXPENSE_LABELS)) {
+    if (!isManageExpenseCategory(category)) {
       return { ok: false, error: "סוג הוצאה לא תקין" };
     }
     const amount = Number(input.amount);
@@ -736,7 +891,152 @@ export async function createShipmentBatchExpenseAction(input: {
       return expense;
     });
 
-    return { ok: true, expense: mapBatchExpense(created) };
+    return { ok: true, expense: mapBatchExpense(created, selfUserNames(me)) };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+export async function updateShipmentBatchExpenseAction(input: {
+  id: string;
+  category?: string;
+  amount?: number;
+  currency?: "ILS" | "USD";
+  notes?: string | null;
+  paymentMethod?: string | null;
+  expenseDate?: string;
+}): Promise<{ ok: true; expense: ShipmentBatchExpenseDto } | { ok: false; error: string }> {
+  try {
+    const me = await requireAuth();
+    if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS)) {
+      return { ok: false, error: "אין הרשאה" };
+    }
+    const existing = await prisma.shipmentBatchExpense.findUnique({
+      where: { id: input.id },
+      include: { batch: { select: { batchNumber: true, containerNumber: true } } },
+    });
+    if (!existing) return { ok: false, error: "ההוצאה לא נמצאה" };
+
+    const data: Record<string, unknown> = {};
+    if (input.category !== undefined) {
+      const category = input.category.trim();
+      if (!isManageExpenseCategory(category)) {
+        return { ok: false, error: "סוג הוצאה לא תקין" };
+      }
+      data.category = category;
+    }
+    if (input.amount !== undefined) {
+      const amount = Number(input.amount);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return { ok: false, error: "סכום חייב להיות גדול מאפס" };
+      }
+      data.amount = amount;
+    }
+    if (input.currency !== undefined) {
+      data.currency = input.currency === "USD" ? "USD" : "ILS";
+    }
+    if (input.notes !== undefined) data.notes = input.notes?.trim() || null;
+    if (input.paymentMethod !== undefined) {
+      const pm = input.paymentMethod?.trim() || null;
+      if (pm && !VALID_PAYMENT_METHODS.has(pm)) {
+        return { ok: false, error: "אמצעי תשלום לא תקין" };
+      }
+      data.paymentMethod = pm;
+    }
+    if (input.expenseDate !== undefined) {
+      const day = input.expenseDate.trim().slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+        return { ok: false, error: "תאריך לא תקין" };
+      }
+      data.expenseDate = new Date(day + "T00:00:00.000Z");
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const expense = await tx.shipmentBatchExpense.update({
+        where: { id: input.id },
+        data,
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: me.id,
+          actionType: "SHIPMENT_BATCH_EXPENSE_UPDATE",
+          entityType: "ShipmentBatchExpense",
+          entityId: expense.id,
+          oldValue: {
+            batchNumber: existing.batch.batchNumber,
+            category: existing.category,
+            amount: existing.amount.toNumber(),
+            currency: existing.currency,
+            expenseDate: existing.expenseDate.toISOString().slice(0, 10),
+            notes: existing.notes,
+            paymentMethod: existing.paymentMethod,
+          },
+          newValue: {
+            batchNumber: existing.batch.batchNumber,
+            category: expense.category,
+            amount: expense.amount.toNumber(),
+            currency: expense.currency,
+            expenseDate: expense.expenseDate.toISOString().slice(0, 10),
+            notes: expense.notes,
+            paymentMethod: expense.paymentMethod,
+          },
+          metadata: { source: "expenses_manage_modal", at: new Date().toISOString() },
+        },
+      });
+      return expense;
+    });
+
+    const names = selfUserNames(me);
+    if (updated.createdById && updated.createdById !== me.id) {
+      const u = await prisma.user.findUnique({
+        where: { id: updated.createdById },
+        select: { fullName: true },
+      });
+      names.set(updated.createdById, u?.fullName ?? null);
+    }
+    return { ok: true, expense: mapBatchExpense(updated, names) };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+export async function deleteShipmentBatchExpenseAction(
+  id: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const me = await requireAuth();
+    if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS)) {
+      return { ok: false, error: "אין הרשאה" };
+    }
+    const existing = await prisma.shipmentBatchExpense.findUnique({
+      where: { id },
+      include: { batch: { select: { batchNumber: true } } },
+    });
+    if (!existing) return { ok: false, error: "ההוצאה לא נמצאה" };
+
+    await prisma.$transaction(async (tx) => {
+      await tx.shipmentBatchExpense.delete({ where: { id } });
+      await tx.auditLog.create({
+        data: {
+          userId: me.id,
+          actionType: "SHIPMENT_BATCH_EXPENSE_DELETE",
+          entityType: "ShipmentBatchExpense",
+          entityId: id,
+          oldValue: {
+            batchNumber: existing.batch.batchNumber,
+            category: existing.category,
+            categoryLabel: batchExpenseCategoryLabel(existing.category),
+            amount: existing.amount.toNumber(),
+            currency: existing.currency,
+            expenseDate: existing.expenseDate.toISOString().slice(0, 10),
+            notes: existing.notes,
+            paymentMethod: existing.paymentMethod,
+          },
+          metadata: { source: "expenses_manage_modal", at: new Date().toISOString() },
+        },
+      });
+    });
+    return { ok: true };
   } catch (e) {
     return { ok: false, error: String(e) };
   }

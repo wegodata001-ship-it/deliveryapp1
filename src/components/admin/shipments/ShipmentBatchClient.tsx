@@ -28,6 +28,7 @@ import type {
   UpdateShipmentRecordInput,
   UpdateShipmentBatchInput,
   ShipmentImportMatchSummary,
+  CreateShipmentRecordInput,
 } from "@/app/admin/shipments/types";
 import {
   assignZoneAction,
@@ -40,6 +41,8 @@ import {
   updateShipmentBatchAction,
   getShipmentBatchAction,
   deleteShipmentRecordAction,
+  createShipmentRecordAction,
+  createShipmentRecordsBulkAction,
 } from "@/app/admin/shipments/actions";
 import { assignZoneWithLocationPromptAction } from "@/app/admin/shipments/location-actions";
 import { sameShipmentLocality } from "@/lib/shipment-zone-locality";
@@ -48,13 +51,13 @@ import { ShipmentBatchImportModal } from "@/components/admin/shipments/ShipmentB
 import { ShipmentDeliveryFeeImportModal } from "@/components/admin/shipments/ShipmentDeliveryFeeImportModal";
 import { FixLocationModal } from "@/components/admin/shipments/FixLocationModal";
 import { ShipmentRecordsEditableTable } from "@/components/admin/shipments/ShipmentRecordsEditableTable";
+import { QuickAddPackagePanel } from "@/components/admin/shipments/QuickAddPackagePanel";
 import { CourierPdfModal } from "@/components/admin/shipments/CourierPdfModal";
 import { CustomShipmentPdfModal } from "@/components/admin/shipments/CustomShipmentPdfModal";
 import { CourierDebtCloseModal } from "@/components/admin/shipments/CourierDebtCloseModal";
 import type { ShipmentControlRecord } from "@/app/admin/shipments/control/types";
 import { exportShipmentReportExcel } from "@/lib/shipment-report-export";
 import { ShipmentMultiSelectFilter } from "@/components/admin/shipments/ShipmentMultiSelectFilter";
-import { looksLikeDistributionArea } from "@/lib/distribution-area-name";
 import {
   filterRecordsByPaymentMethod,
   recordHasPaymentOnDate,
@@ -112,6 +115,7 @@ function toControlRecord(batch: ShipmentBatchDto, r: ShipmentRecordDto): Shipmen
     customerPhone2: r.customerPhone2,
     address: r.address,
     city: r.city,
+    updatedDeliveryLocation: r.updatedDeliveryLocation,
     boxes: r.boxes,
     cartonDetails: r.cartonDetails,
     weight: r.weight,
@@ -199,6 +203,10 @@ export function ShipmentBatchClient({
   const [editSaving, setEditSaving] = useState(false);
   const [fixLocationRecord, setFixLocationRecord] = useState<ShipmentRecordDto | null>(null);
   const [importSummary, setImportSummary] = useState<ShipmentImportMatchSummary | null>(null);
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
+  const [quickAddBusy, setQuickAddBusy] = useState(false);
+  const [bulkAddCount, setBulkAddCount] = useState("5");
+  const [bulkAddBusy, setBulkAddBusy] = useState(false);
 
   // Filters
   const [filters, setFilters] = useState<RowFilters>(EMPTY_ROW_FILTERS);
@@ -228,7 +236,7 @@ export function ShipmentBatchClient({
     () => [
       { value: NO_ZONE_VALUE, label: "ללא אזור" },
       ...zones
-        .filter((z) => z.isActive && looksLikeDistributionArea(z.name))
+        .filter((z) => z.isActive)
         .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "he"))
         .map((z) => ({ value: z.id, label: z.name })),
     ],
@@ -272,6 +280,7 @@ export function ShipmentBatchClient({
           r.customerPhone2,
           r.address,
           r.city,
+          r.updatedDeliveryLocation,
           r.originalDeliveryLocation,
           r.zoneName,
         ]
@@ -593,6 +602,60 @@ export function ShipmentBatchClient({
     return result.courier;
   }
 
+  function appendRecordsToState(newRecords: ShipmentRecordDto[]) {
+    setRecords((prev) => {
+      const byId = new Map(prev.map((r) => [r.id, r]));
+      for (const r of newRecords) byId.set(r.id, r);
+      return [...byId.values()].sort((a, b) => a.rowIndex - b.rowIndex);
+    });
+    const addedBoxes = newRecords.reduce((sum, r) => sum + (r.boxes ?? 0), 0);
+    setBatch((prev) => ({
+      ...prev,
+      recordCount: prev.recordCount + newRecords.length,
+      boxesSum: prev.boxesSum + addedBoxes,
+      unpaidCount: prev.unpaidCount + newRecords.length,
+    }));
+  }
+
+  async function handleQuickAddPackage(
+    input: Omit<CreateShipmentRecordInput, "batchId">,
+    addAnother: boolean,
+  ): Promise<boolean> {
+    setQuickAddBusy(true);
+    setError(null);
+    const result = await createShipmentRecordAction({ ...input, batchId: batch.id });
+    setQuickAddBusy(false);
+    if (!result.ok) {
+      setError(result.error);
+      clearMsg();
+      return false;
+    }
+    appendRecordsToState([result.record]);
+    showSaved(`חבילה נוספה · ${records.length + 1} חבילות`);
+    if (!addAnother) setQuickAddOpen(false);
+    return true;
+  }
+
+  async function handleBulkAddPackages() {
+    const count = Number(bulkAddCount.trim());
+    if (!Number.isFinite(count) || count < 1 || count > 50) {
+      setError("כמות לא תקינה (1–50)");
+      clearMsg();
+      return;
+    }
+    setBulkAddBusy(true);
+    setError(null);
+    const result = await createShipmentRecordsBulkAction({ batchId: batch.id, count });
+    setBulkAddBusy(false);
+    if (!result.ok) {
+      setError(result.error);
+      clearMsg();
+      return;
+    }
+    appendRecordsToState(result.records);
+    showSaved(`${result.records.length} חבילות נוספו · ${records.length + result.records.length} סה״כ`);
+  }
+
   function handlePaymentSaved(updated: ShipmentRecordDto) {
     setRecords((prev) => prev.map((r) => r.id === updated.id ? updated : r));
     setPaymentRecord(updated);
@@ -656,7 +719,7 @@ export function ShipmentBatchClient({
       {/* Stats — לפי מסננים פעילים (כולל צורת תשלום) */}
       <div className="shp-stats">
         <div className="shp-stat-card">
-          <div className="shp-stat-card__value">{filteredRecords.length}</div>
+          <div className="shp-stat-card__value">{records.length}</div>
           <div className="shp-stat-card__label">חבילות / לקוחות</div>
         </div>
         <div className="shp-stat-card">
@@ -902,6 +965,86 @@ export function ShipmentBatchClient({
           )}
         </div>
       )}
+
+      <div
+        className="shp-packages-header"
+        dir="rtl"
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 10,
+          marginBottom: 10,
+        }}
+      >
+        <div>
+          <h2 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 700 }}>
+            חבילות במשלוח {batch.batchNumber}
+          </h2>
+          <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>
+            {records.length} חבילות
+            {filteredRecords.length !== records.length
+              ? ` · ${filteredRecords.length} מוצגות לאחר סינון`
+              : null}
+          </div>
+        </div>
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <button
+            type="button"
+            className="shp-btn shp-btn--primary shp-btn--sm"
+            onClick={() => {
+              setQuickAddOpen(true);
+              setError(null);
+            }}
+          >
+            <Plus size={14} />
+            הוספת חבילה
+          </button>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              flexWrap: "wrap",
+            }}
+          >
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={bulkAddCount}
+              onChange={(e) => setBulkAddCount(e.target.value)}
+              style={{ width: 56, padding: "6px 8px" }}
+              aria-label="כמות חבילות להוספה"
+            />
+            <button
+              type="button"
+              className="shp-btn shp-btn--secondary shp-btn--sm"
+              disabled={bulkAddBusy}
+              onClick={() => void handleBulkAddPackages()}
+            >
+              {bulkAddBusy ? "מוסיף…" : "+ הוסף מספר חבילות"}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {quickAddOpen ? (
+        <QuickAddPackagePanel
+          batchLabel={batch.batchNumber}
+          busy={quickAddBusy}
+          onCancel={() => setQuickAddOpen(false)}
+          onSave={handleQuickAddPackage}
+        />
+      ) : null}
 
       <ShipmentRecordsEditableTable
         records={filteredRecords}

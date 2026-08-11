@@ -6,6 +6,8 @@ import {
   type PaymentPlanIntakeSummary,
   type PaymentPlanStatus,
 } from "@/lib/payment-plan-types";
+import { computeOrderOpenDebtUsd } from "@/lib/order-remaining-debt";
+import { activePaidPaymentWhere } from "@/lib/payment-record-status-shared";
 
 const MONEY_EPS = 0.02;
 
@@ -238,11 +240,11 @@ export async function syncPaymentPlanAfterBreakdownWrite(
   plannedUsd = round2(plannedUsd);
 
   const paidAgg = await db.payment.aggregate({
-    where: { orderId: order.id, status: "ACTIVE", amountUsd: { not: null } },
+    where: { orderId: order.id, amountUsd: { not: null }, ...activePaidPaymentWhere },
     _sum: { amountUsd: true },
   });
   const paidUsd = Number(paidAgg._sum.amountUsd?.toString() ?? "0");
-  const remainingUsd = round2(Math.max(0, totalUsd - paidUsd));
+  const remainingUsd = computeOrderOpenDebtUsd(totalUsd, paidUsd);
 
   const week = order.weekCode?.trim() || params.intakeWeekCode?.trim() || "AH-0";
   await ensurePaymentPlanInTx(db, {

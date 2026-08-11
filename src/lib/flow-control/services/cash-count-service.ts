@@ -7,6 +7,10 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import type { CashWeekFlowLineId } from "@/lib/cash-control-week-flow";
 import { aggregateExpensesByMethod, cashDrawerExpenseTotals } from "@/lib/cash-expense-payment-method";
+import { cashExpenseWhereForCountryScope, resolveCountryScopeFromCode } from "@/lib/country-data-scope";
+import { flowWeekCompositeKey, type FlowWorkScope } from "@/lib/flow-control/flow-country-scope";
+import type { WorkCountryCode } from "@/lib/work-country";
+import { DEFAULT_WORK_COUNTRY } from "@/lib/work-country";
 
 export type FlowWeekCashCount = {
   countedCashUsd: number | null;
@@ -33,14 +37,19 @@ function decToNum(v: Prisma.Decimal | null | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-export async function loadFlowWeekCashCount(weekCode: string): Promise<FlowWeekCashCount> {
+export async function loadFlowWeekCashCount(
+  weekCode: string,
+  workCountry: WorkCountryCode = DEFAULT_WORK_COUNTRY,
+): Promise<FlowWeekCashCount> {
   const wk = weekCode.trim();
+  const scope: FlowWorkScope = { workCountry };
+  const countryScope = resolveCountryScopeFromCode(workCountry);
   const [flowRow, expenses] = await Promise.all([
     prisma.cashWeekFlow.findUnique({
-      where: { countryCode_weekCode: { countryCode: "TR", weekCode: wk } },
+      where: flowWeekCompositeKey(scope, wk),
     }),
     prisma.cashExpense.findMany({
-      where: { weekCode: wk, status: "ACTIVE" },
+      where: { ...cashExpenseWhereForCountryScope(countryScope), weekCode: wk, status: "ACTIVE" },
       select: { currency: true, amount: true, paymentMethod: true },
     }),
   ]);
@@ -77,14 +86,17 @@ export type FlowManagerCountPersist = {
 
 export async function saveFlowWeekCashCount(input: {
   weekCode: string;
+  workCountry?: WorkCountryCode;
   data: FlowManagerCountPersist;
   updatedById: string;
 }): Promise<void> {
   const wk = input.weekCode.trim();
+  const workCountry = input.workCountry ?? DEFAULT_WORK_COUNTRY;
+  const scope: FlowWorkScope = { workCountry };
   await prisma.cashWeekFlow.upsert({
-    where: { countryCode_weekCode: { countryCode: "TR", weekCode: wk } },
+    where: flowWeekCompositeKey(scope, wk),
     create: {
-      countryCode: "TR",
+      countryCode: workCountry,
       weekCode: wk,
       ...input.data,
       updatedById: input.updatedById,

@@ -3,15 +3,38 @@
  * Customer.nameAr = מקור שם הלקוח בערבית (SSOT) — בלי תרגום אוטומטי.
  * DeliveryLocation.displayNameAr = שם יישוב בערבית.
  */
+import "server-only";
+import {
+  loadAliasLookupMap,
+  resolveUpdatedDeliveryLocationDisplay,
+} from "@/lib/delivery-location-match";
 import { prisma } from "@/lib/prisma";
 import {
   cleanArabicLocalityName,
   containsArabic,
   extractArabicText,
-  preferArabicName,
 } from "@/lib/arabic-text";
-import { resolveCourierPdfCustomerName } from "@/lib/arabic-name-suggest";
+import {
+  getArabicDisplayName,
+  type ArabicDisplaySource,
+} from "@/lib/arabic-display-name";
+import {
+  contextCacheMap,
+  loadArabicDisplayNameCaches,
+  saveArabicDisplayNameCacheBatch,
+} from "@/lib/arabic-display-name-cache";
+import type {
+  BuildCourierPdfRowsOptions,
+  CourierPdfNameOverride,
+  CourierPdfPreviewRow,
+} from "@/lib/shipment-courier-pdf-types";
 import type { CourierPdfHtmlRow } from "@/lib/shipment-courier-pdf-html";
+
+export type {
+  BuildCourierPdfRowsOptions,
+  CourierPdfNameOverride,
+  CourierPdfPreviewRow,
+} from "@/lib/shipment-courier-pdf-types";
 
 type LocRow = {
   id: string;
@@ -197,9 +220,137 @@ function addressSearchTokens(city: string | null, address: string | null): strin
     .filter((t) => t.length >= 3);
 }
 
+
+function overridesByRecordId(
+  overrides: CourierPdfNameOverride[] | undefined,
+): Map<string, CourierPdfNameOverride> {
+  const map = new Map<string, CourierPdfNameOverride>();
+  for (const o of overrides ?? []) {
+    if (o.recordId) map.set(o.recordId, o);
+  }
+  return map;
+}
+
+export async function buildCourierPdfPreviewRowsForRecordIds(
+  recordIds: string[],
+  options: BuildCourierPdfRowsOptions = {},
+): Promise<CourierPdfPreviewRow[]> {
+  return buildCourierPdfRowsInternal(recordIds, options);
+}
+
 export async function buildCourierPdfRowsForRecordIds(
   recordIds: string[],
+  options: BuildCourierPdfRowsOptions = {},
 ): Promise<CourierPdfHtmlRow[]> {
+  const preview = await buildCourierPdfRowsInternal(recordIds, options);
+  return preview.map(
+    ({
+      recordId: _id,
+      originalCustomerName: _oc,
+      originalLocality: _ol,
+      customerNameSource: _cs,
+      localitySource: _ls,
+      customerNeedsReview: _cr,
+      localityNeedsReview: _lr,
+      ...row
+    }) => row,
+  );
+}
+
+type LocalityArabicResult = {
+  arabicName: string;
+  source: ArabicDisplaySource;
+  needsReview: boolean;
+  cacheCandidate?: { context: "locality"; originalName: string; arabicName: string };
+};
+
+function resolveLocalityArabic(
+  r: {
+    originalDeliveryLocation: string | null;
+    city: string | null;
+    address: string | null;
+    deliveryLocationId: string | null;
+  },
+  aliasByKey: Awaited<ReturnType<typeof loadAliasLookupMap>>,
+  locById: Map<string, LocRow>,
+  locByName: Map<string, LocRow>,
+  locByAlias: Map<string, LocRow>,
+  aliasesByLocId: Map<string, Array<{ originalName: string }>>,
+  localityCache: Map<string, import("@/lib/arabic-display-name").ArabicDisplayCacheEntry>,
+  sessionOverride?: string,
+): LocalityArabicResult {
+  const hebrewLocality =
+    resolveUpdatedDeliveryLocationDisplay(
+      {
+        originalDeliveryLocation: r.originalDeliveryLocation,
+        city: r.city,
+        address: r.address,
+        deliveryLocationId: r.deliveryLocationId,
+      },
+      aliasByKey,
+    ) || r.city || r.address || null;
+
+  const originalText = hebrewLocality || r.city || r.address || "—";
+
+  let loc =
+    (r.deliveryLocationId ? locById.get(r.deliveryLocationId) : null) ||
+    (hebrewLocality ? locByName.get(hebrewLocality.trim().toLowerCase()) : null) ||
+    (r.city ? locByName.get(r.city.trim().toLowerCase()) : null) ||
+    null;
+
+  if (!loc) {
+    for (const token of addressSearchTokens(r.city, r.address)) {
+      const hit =
+        locByAlias.get(token.toLowerCase()) ||
+        locByName.get(token.toLowerCase()) ||
+        null;
+      if (hit) {
+        loc = hit;
+        break;
+      }
+      for (const [alias, candidate] of locByAlias) {
+        if (alias.includes(token.toLowerCase()) || token.toLowerCase().includes(alias)) {
+          loc = candidate;
+          break;
+        }
+      }
+      if (loc) break;
+    }
+  }
+
+  let storedArabic: string | null = null;
+  if (loc) {
+    storedArabic = localityArabicFromLoc(loc, aliasesByLocId.get(loc.id) ?? []);
+  }
+
+  const fromText =
+    cleanArabicLocalityName(r.city) ||
+    cleanArabicLocalityName(r.address) ||
+    extractArabicText(r.city) ||
+    extractArabicText(r.address);
+
+  const resolved = getArabicDisplayName({
+    context: "locality",
+    originalText,
+    storedArabic: storedArabic || fromText,
+    sessionOverride,
+    cache: localityCache,
+  });
+
+  return {
+    arabicName: resolved.arabicName,
+    source: resolved.source,
+    needsReview: resolved.needsReview,
+    cacheCandidate: resolved.cacheCandidate
+      ? { context: "locality", ...resolved.cacheCandidate }
+      : undefined,
+  };
+}
+
+async function buildCourierPdfRowsInternal(
+  recordIds: string[],
+  options: BuildCourierPdfRowsOptions,
+): Promise<CourierPdfPreviewRow[]> {
   const ids = Array.from(new Set(recordIds.filter(Boolean)));
   if (ids.length === 0) return [];
 
@@ -213,6 +364,7 @@ export async function buildCourierPdfRowsForRecordIds(
       customerPhone2: true,
       address: true,
       city: true,
+      originalDeliveryLocation: true,
       boxes: true,
       deliveryFeeAmount: true,
       deliveryFeeIls: true,
@@ -278,6 +430,8 @@ export async function buildCourierPdfRowsForRecordIds(
     }
   }
 
+  const aliasByKey = await loadAliasLookupMap();
+
   const locationIds = [
     ...new Set(ordered.map((r) => r.deliveryLocationId).filter(Boolean) as string[]),
   ];
@@ -326,50 +480,51 @@ export async function buildCourierPdfRowsForRecordIds(
     locByAlias.set(loc.displayName.trim().toLowerCase(), loc);
   }
 
-  function resolveLocality(r: (typeof ordered)[number]): string {
-    let loc =
-      (r.deliveryLocationId ? locById.get(r.deliveryLocationId) : null) ||
-      (r.city ? locByName.get(r.city.trim().toLowerCase()) : null) ||
-      null;
+  const overrideMap = overridesByRecordId(options.overrides);
 
-    if (!loc) {
-      for (const token of addressSearchTokens(r.city, r.address)) {
-        const hit =
-          locByAlias.get(token.toLowerCase()) ||
-          locByName.get(token.toLowerCase()) ||
-          null;
+  const customerOriginals: string[] = [];
+  const localityOriginals: string[] = [];
+
+  for (const r of ordered) {
+    let existingCustomerName: string | null = null;
+    if (r.customerCode) {
+      for (const key of customerCodeVariants(r.customerCode)) {
+        const hit = codeToExistingName.get(key.toLowerCase());
         if (hit) {
-          loc = hit;
+          existingCustomerName = hit;
           break;
         }
-        // התאמה חלקית לכינוי
-        for (const [alias, candidate] of locByAlias) {
-          if (alias.includes(token.toLowerCase()) || token.toLowerCase().includes(alias)) {
-            loc = candidate;
-            break;
-          }
-        }
-        if (loc) break;
       }
     }
+    customerOriginals.push(r.customerName?.trim() || existingCustomerName?.trim() || "—");
 
-    if (loc) {
-      const ar = localityArabicFromLoc(loc, aliasesByLocId.get(loc.id) ?? []);
-      if (ar) return ar;
-    }
-
-    // ערבית שכבר קיימת בכתובת/עיר — בלי תרגום
-    const fromText =
-      cleanArabicLocalityName(r.city) ||
-      cleanArabicLocalityName(r.address) ||
-      extractArabicText(r.city) ||
-      extractArabicText(r.address);
-    if (fromText) return fromText;
-
-    return preferArabicName(null, r.city || r.address || null);
+    const locOriginal =
+      resolveUpdatedDeliveryLocationDisplay(
+        {
+          originalDeliveryLocation: r.originalDeliveryLocation,
+          city: r.city,
+          address: r.address,
+          deliveryLocationId: r.deliveryLocationId,
+        },
+        aliasByKey,
+      ) || r.city || r.address || "—";
+    localityOriginals.push(locOriginal);
   }
 
-  return ordered.map((r) => {
+  const fullCache = await loadArabicDisplayNameCaches({
+    customer: customerOriginals.filter((n) => n && n !== "—"),
+    locality: localityOriginals.filter((n) => n && n !== "—"),
+  });
+  const customerCache = contextCacheMap(fullCache, "customer");
+  const localityCache = contextCacheMap(fullCache, "locality");
+
+  const cacheToPersist: Array<{
+    context: "customer" | "locality";
+    originalName: string;
+    arabicName: string;
+  }> = [];
+
+  const previewRows: CourierPdfPreviewRow[] = ordered.map((r) => {
     let customerNameAr: string | null = null;
     let existingCustomerName: string | null = null;
     if (r.customerCode) {
@@ -381,13 +536,54 @@ export async function buildCourierPdfRowsForRecordIds(
       }
     }
 
-    // nameAr שמור → הצעת תעתיק לערבית → שם קיים
-    const customerName = resolveCourierPdfCustomerName({
-      nameAr: customerNameAr,
-      latinFallback: r.customerName || existingCustomerName,
+    const originalCustomerName =
+      r.customerName?.trim() || existingCustomerName?.trim() || "—";
+    const rowOverride = overrideMap.get(r.id);
+
+    const customerResolved = getArabicDisplayName({
+      context: "customer",
+      originalText: originalCustomerName,
+      storedArabic: customerNameAr,
+      sessionOverride: rowOverride?.customerName,
+      cache: customerCache,
     });
 
-    const locality = resolveLocality(r);
+    if (customerResolved.cacheCandidate && options.persistAutoCache !== false) {
+      cacheToPersist.push({
+        context: "customer",
+        originalName: customerResolved.cacheCandidate.originalName,
+        arabicName: customerResolved.cacheCandidate.arabicName,
+      });
+    }
+
+    const hebrewLocalityForOriginal =
+      resolveUpdatedDeliveryLocationDisplay(
+        {
+          originalDeliveryLocation: r.originalDeliveryLocation,
+          city: r.city,
+          address: r.address,
+          deliveryLocationId: r.deliveryLocationId,
+        },
+        aliasByKey,
+      ) || r.city || r.address || "—";
+
+    const localityResolvedInner = resolveLocalityArabic(
+      r,
+      aliasByKey,
+      locById,
+      locByName,
+      locByAlias,
+      aliasesByLocId,
+      localityCache,
+      rowOverride?.locality,
+    );
+
+    if (localityResolvedInner.cacheCandidate && options.persistAutoCache !== false) {
+      cacheToPersist.push(localityResolvedInner.cacheCandidate);
+    }
+
+    const customerName = customerResolved.arabicName;
+    const locality = localityResolvedInner.arabicName;
 
     const fee =
       r.deliveryFeeAmount != null
@@ -405,6 +601,13 @@ export async function buildCourierPdfRowsForRecordIds(
       "—";
 
     return {
+      recordId: r.id,
+      originalCustomerName,
+      originalLocality: hebrewLocalityForOriginal,
+      customerNameSource: customerResolved.source,
+      localitySource: localityResolvedInner.source,
+      customerNeedsReview: customerResolved.needsReview,
+      localityNeedsReview: localityResolvedInner.needsReview,
       code: (r.customerCode || "—").trim() || "—",
       boxes: r.boxes == null ? "0" : String(r.boxes),
       customerName,
@@ -415,4 +618,16 @@ export async function buildCourierPdfRowsForRecordIds(
       shipment,
     };
   });
+
+  if (cacheToPersist.length > 0 && options.persistAutoCache !== false) {
+    const uniq = new Map<string, (typeof cacheToPersist)[number]>();
+    for (const entry of cacheToPersist) {
+      uniq.set(`${entry.context}:${entry.originalName.toLowerCase()}`, entry);
+    }
+    await saveArabicDisplayNameCacheBatch([...uniq.values()]).catch((e) => {
+      console.warn("[courier-pdf] arabic cache persist skipped", e);
+    });
+  }
+
+  return previewRows;
 }

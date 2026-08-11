@@ -17,6 +17,8 @@ import {
   computeIlFxPurchaseIls,
   computeTurkeyAllocationFromCashCount,
   computeTurkeyIlAllocationIls,
+  computeTurkeyPsRemainingUsd,
+  computeTurkeyPsTotalOutUsd,
   sumFxPurchases,
 } from "@/lib/flow-control/flow-calculation-service";
 import { CheckCircle2, AlertTriangle } from "lucide-react";
@@ -91,8 +93,15 @@ export function FlowMoneyJourneyPanel({ row, drill, loading }: FlowMoneyJourneyP
       computeIlFxPurchaseIls(transferIls, creditIls, checksIls)
     : computeIlFxPurchaseIls(transferIls, creditIls, checksIls);
 
-  const turkeyPsUsd = computeTurkeyAllocationFromCashCount(cashUsd, fxPs.usd, commissionPs);
-  const turkeyIlIls = computeTurkeyIlAllocationIls(fxIlIls, commissionIl);
+  const turkeyPsAvailable = computeTurkeyAllocationFromCashCount(cashUsd, fxPs.usd);
+  const turkeyPsTransfer = fcNum(flow?.turkeyTransferUsd ?? row.turkeyTransferUsd);
+  const turkeyPsFee = commissionPs;
+  const turkeyPsTotalOut = computeTurkeyPsTotalOutUsd(turkeyPsTransfer, turkeyPsFee);
+  const turkeyPsRemaining = computeTurkeyPsRemainingUsd(turkeyPsAvailable, turkeyPsTransfer, turkeyPsFee);
+
+  const turkeyIlAvailable = computeTurkeyIlAllocationIls(fxIlIls);
+  const turkeyIlTransfer = fcNum(flow?.turkeyTransferIls);
+  const turkeyIlFee = commissionIl;
 
   const actualTurkeyUsd = (() => {
     const fromBalance = flow?.turkeyBalance?.actualTransfersUsd ?? flow?.turkeyBalance?.usd.transferred;
@@ -125,38 +134,33 @@ export function FlowMoneyJourneyPanel({ row, drill, loading }: FlowMoneyJourneyP
           path="ps"
           title="מסלול PS — מזומן קופה"
           subtitle="הכסף שנמצא פיזית בקופה · ספירה → המרה → העברה לטורקיה"
-          totalLabel="סה״כ העברה לטורקיה PS"
-          totalValue={money("USD", turkeyPsUsd)}
+          totalLabel="סה״כ יוצא לטורקיה PS"
+          totalValue={money("USD", turkeyPsTotalOut)}
         >
           <KV label="מזומן ₪" value={money("ILS", cashIls)} />
           <KV label="מזומן $" value={money("USD", cashUsd)} />
           <KV label='רכישת מט״ח PS (₪)' value={money("ILS", fxPs.ils)} />
           <KV label='רכישת מט״ח PS ($)' value={money("USD", fxPs.usd)} />
-          <KV label="עמלת PS" value={money("USD", commissionPs)} />
-          <KV
-            label="הרכבה: מזומן $ + מט״ח PS + עמלה"
-            value={money("USD", turkeyPsUsd)}
-            strong
-          />
+          <KV label="מט״ח זמין PS" value={money("USD", turkeyPsAvailable)} />
+          <KV label="העברה PS" value={money("USD", turkeyPsTransfer)} />
+          <KV label="עמלת העברה PS" value={money("USD", turkeyPsFee)} />
+          <KV label="יתרה PS $" value={money("USD", turkeyPsRemaining)} strong />
         </PathZone>
 
         <PathZone
           path="il"
           title="מסלול IL — בנק"
           subtitle="אשראי · צ׳קים · העברות · ללא מזומן קופה"
-          totalLabel="סה״כ העברה לטורקיה IL"
-          totalValue={money("ILS", turkeyIlIls)}
+          totalLabel="סה״כ יוצא לטורקיה IL"
+          totalValue={money("ILS", turkeyIlTransfer + turkeyIlFee)}
         >
           <KV label="העברות בנקאיות" value={money("ILS", transferIls)} />
           <KV label="צ׳קים" value={money("ILS", checksIls)} />
           <KV label="אשראי" value={money("ILS", creditIls)} />
-          <KV label='רכישת מט״ח IL' value={money("ILS", fxIlIls)} strong />
-          <KV label="עמלת IL" value={money("ILS", commissionIl)} />
-          <KV
-            label="הרכבה: מט״ח IL + עמלה IL"
-            value={money("ILS", turkeyIlIls)}
-            strong
-          />
+          <KV label='רכישת מט״ח IL' value={money("ILS", fxIlIls)} />
+          <KV label="מט״ח IL זמין" value={money("ILS", turkeyIlAvailable)} />
+          <KV label="העברה IL" value={money("ILS", turkeyIlTransfer)} />
+          <KV label="עמלת העברה IL" value={money("ILS", turkeyIlFee)} strong />
         </PathZone>
       </div>
 
@@ -166,8 +170,10 @@ export function FlowMoneyJourneyPanel({ row, drill, loading }: FlowMoneyJourneyP
           <p>PS ו-IL נשארים נפרדים גם כאן · אין סכום מאוחד</p>
         </header>
         <div className="cfc-path-combine__grid">
-          <KV label="העברת PS $" value={money("USD", turkeyPsUsd)} strong />
-          <KV label="העברת IL ₪" value={money("ILS", turkeyIlIls)} strong />
+          <KV label="העברת PS $" value={money("USD", turkeyPsTransfer)} strong />
+          <KV label="עמלת PS $" value={money("USD", turkeyPsFee)} />
+          <KV label="העברת IL ₪" value={money("ILS", turkeyIlTransfer)} strong />
+          <KV label="עמלת IL ₪" value={money("ILS", turkeyIlFee)} />
           <KV label="הועבר בפועל PS (פנקס)" value={money("USD", actualTurkeyUsd)} />
           <KV
             label="יתרת מזומן PS"

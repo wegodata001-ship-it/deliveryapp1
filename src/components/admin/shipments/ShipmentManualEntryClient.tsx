@@ -10,6 +10,8 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { SyncedTableScroll } from "@/components/admin/shipments/SyncedTableScroll";
+import { ManualShipmentInlineCell } from "@/components/admin/shipments/ManualShipmentInlineCell";
+import { ManualShipmentPaymentCell } from "@/components/admin/shipments/ManualShipmentPaymentCell";
 import {
   createManualShipmentAction,
   updateManualShipmentAction,
@@ -24,6 +26,7 @@ import {
   COUNTRY_OPTIONS,
   CUSTOM_STATUSES_KEY,
   MANUAL_SHIPMENT_COLUMNS,
+  MANUAL_SHIPMENT_TABLE_COLUMNS,
   SESSION_DEFAULTS_KEY,
   SHIPMENT_TYPE_OPTIONS,
   STICKY_COLUMN_KEYS,
@@ -36,18 +39,27 @@ import {
   type ManualShipmentFilters,
   type ManualShipmentInput,
 } from "@/app/admin/shipments/manual/types";
+import {
+  manualShipmentPaymentFromRow,
+} from "@/lib/manual-shipment-payment";
 
 type Mode = "create" | "edit" | "view" | null;
 type FormState = Record<ManualColumnKey, string>;
 type EditTarget = { rowId: string; colIndex: number } | null;
+type EditingCell = { rowId: string; colKey: ManualColumnKey } | null;
 type CellFeedback = "saving" | "saved" | "error";
 
 const DRAFT_ID = "__draft__";
+const TABLE_COL_KEYS = MANUAL_SHIPMENT_TABLE_COLUMNS.map((c) => c.key);
 const COL_KEYS = MANUAL_SHIPMENT_COLUMNS.map((c) => c.key);
-const COL_COUNT = MANUAL_SHIPMENT_COLUMNS.length + 3;
+const COL_COUNT = MANUAL_SHIPMENT_TABLE_COLUMNS.length + 2;
 
 const NUM_KEYS: Set<ManualColumnKey> = new Set([
-  "vatAmount", "amountTotal", "amountPaid", "inlandHaulage", "portHaulage",
+  "vatAmount",
+  "amountTotal",
+  "paymentAmount",
+  "inlandHaulage",
+  "portHaulage",
 ]);
 
 const emptyForm = (): FormState => {
@@ -72,7 +84,8 @@ function dtoToForm(row: ManualShipmentDto): FormState {
     vatAmount: row.vatAmount != null ? String(row.vatAmount) : "",
     amountTotal: row.amountTotal != null ? String(row.amountTotal) : "",
     airjetInvoice: row.airjetInvoice ?? "",
-    amountPaid: row.amountPaid != null ? String(row.amountPaid) : "",
+    paymentAmount: row.paymentAmount != null ? String(row.paymentAmount) : "",
+    amountPaid: "",
     makasa: row.makasa ?? "",
     makasaNumber: row.makasaNumber ?? "",
     inlandHaulage: row.inlandHaulage != null ? String(row.inlandHaulage) : "",
@@ -100,8 +113,8 @@ function formToInput(f: FormState): ManualShipmentInput {
     vatAmount: n(f.vatAmount),
     amountTotal: n(f.amountTotal),
     airjetInvoice: f.airjetInvoice || null,
-    amountPaid: n(f.amountPaid),
-    makasa: f.makasa || null,
+    paymentAmount: n(f.paymentAmount),
+    makasa: f.makasa.trim() ? f.makasa.trim() : null,
     makasaNumber: f.makasaNumber || null,
     inlandHaulage: n(f.inlandHaulage),
     portHaulage: n(f.portHaulage),
@@ -109,6 +122,7 @@ function formToInput(f: FormState): ManualShipmentInput {
 }
 
 function fieldToPartialInput(key: ManualColumnKey, value: string): ManualShipmentInput {
+  if (key === "amountPaid") return {};
   const n = (v: string) => {
     const t = v.trim();
     if (!t) return null;
@@ -116,13 +130,56 @@ function fieldToPartialInput(key: ManualColumnKey, value: string): ManualShipmen
     return Number.isFinite(x) ? x : null;
   };
   if (NUM_KEYS.has(key)) return { [key]: n(value) };
+  if (key === "makasa") return { makasa: value.trim() ? value.trim() : null };
   if (key === "status") return { status: value || "NEW" };
   return { [key]: value || null };
 }
 
 function fmtMoney(v: number | null | undefined): string {
-  if (v == null) return "—";
+  if (v == null || Number.isNaN(v)) return "—";
   return v.toLocaleString("he-IL", { maximumFractionDigits: 2 });
+}
+
+function syncComputedPayment(row: ManualShipmentDto): ManualShipmentDto {
+  return {
+    ...row,
+    amountPaid: manualShipmentPaymentFromRow(row).payment,
+  };
+}
+
+function fmtDisplayDate(iso: string): string {
+  if (!iso.trim()) return "—";
+  const [y, m, d] = iso.split("-");
+  if (!y || !m || !d) return iso;
+  return `${d}/${m}/${y}`;
+}
+
+function fmtDisplayMonth(ym: string): string {
+  if (!ym.trim()) return "—";
+  const [y, m] = ym.split("-");
+  if (!y || !m) return ym;
+  return `${m}/${y}`;
+}
+
+function formatCellDisplay(
+  col: (typeof MANUAL_SHIPMENT_COLUMNS)[number],
+  value: string,
+  statuses: { value: string; label: string }[],
+): string {
+  if (!value.trim()) return "—";
+  if (col.input === "date") return fmtDisplayDate(value);
+  if (col.input === "month") return fmtDisplayMonth(value);
+  if (col.input === "number") {
+    const n = Number(value);
+    return Number.isFinite(n) ? fmtMoney(n) : value;
+  }
+  if (col.input === "status") {
+    return statuses.find((s) => s.value === value)?.label ?? statusLabel(value);
+  }
+  if (col.input === "select" && col.options) {
+    return col.options.find((o) => o.value === value)?.label ?? value;
+  }
+  return value;
 }
 
 function loadSessionDefaults(): Partial<FormState> {
@@ -200,6 +257,8 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
 
   const [draft, setDraft] = useState<FormState | null>(null);
   const [focusCell, setFocusCell] = useState<EditTarget>(null);
+  const [editingCell, setEditingCell] = useState<EditingCell>(null);
+  const [editingRowId, setEditingRowId] = useState<string | null>(null);
   const [keepShipmentNumber, setKeepShipmentNumber] = useState(true);
   const inputRefs = useRef<Map<string, HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>>(
     new Map(),
@@ -251,20 +310,6 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
   const [filterCities, setFilterCities] = useState<Set<string>>(new Set());
   const [filterShipmentTypes, setFilterShipmentTypes] = useState<Set<string>>(new Set());
 
-  const totals = useMemo(() => {
-    return rows.reduce(
-      (acc, r) => {
-        acc.amountTotal += r.amountTotal ?? 0;
-        acc.amountPaid += r.amountPaid ?? 0;
-        acc.vatAmount += r.vatAmount ?? 0;
-        acc.inlandHaulage += r.inlandHaulage ?? 0;
-        acc.portHaulage += r.portHaulage ?? 0;
-        return acc;
-      },
-      { amountTotal: 0, amountPaid: 0, vatAmount: 0, inlandHaulage: 0, portHaulage: 0 },
-    );
-  }, [rows]);
-
   const displayRows = useMemo(() => {
     let result = rows;
     if (filterCities.size > 0) {
@@ -275,6 +320,21 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
     }
     return result;
   }, [rows, filterCities, filterShipmentTypes]);
+
+  const totals = useMemo(() => {
+    return displayRows.reduce(
+      (acc, r) => {
+        const payment = manualShipmentPaymentFromRow(r);
+        acc.amountTotal += r.amountTotal ?? 0;
+        acc.paymentAmount += r.paymentAmount ?? 0;
+        acc.amountPaid += payment.payment;
+        acc.vatAmount += r.vatAmount ?? 0;
+        acc.makasa += payment.makasaAmount;
+        return acc;
+      },
+      { amountTotal: 0, paymentAmount: 0, amountPaid: 0, vatAmount: 0, makasa: 0 },
+    );
+  }, [displayRows]);
 
   const suggestions = useMemo(() => {
     const map: Record<string, string[]> = {};
@@ -315,8 +375,13 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
   );
 
   useEffect(() => {
-    if (!focusCell) return;
-    const key = `${focusCell.rowId}:${focusCell.colIndex}`;
+    const target =
+      focusCell ??
+      (editingCell
+        ? { rowId: editingCell.rowId, colIndex: TABLE_COL_KEYS.indexOf(editingCell.colKey) }
+        : null);
+    if (!target || target.colIndex < 0) return;
+    const key = `${target.rowId}:${target.colIndex}`;
     const el = inputRefs.current.get(key);
     if (el) {
       el.focus();
@@ -324,7 +389,7 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
         try { el.select(); } catch { /* ignore */ }
       }
     }
-  }, [focusCell, draft]);
+  }, [focusCell, draft, editingCell]);
 
   useEffect(() => {
     if (!ctxMenuRow) return;
@@ -381,12 +446,12 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
   }
 
   // ─── Auto-save a single field for an existing row ───
-  async function saveField(rowId: string, key: ManualColumnKey, newValue: string) {
+  async function saveField(rowId: string, key: ManualColumnKey, newValue: string): Promise<boolean> {
     const row = rows.find((r) => r.id === rowId);
-    if (!row) return;
+    if (!row) return false;
     const origForm = originalValues.current.get(rowId);
     const origValue = origForm ? origForm[key] : "";
-    if (newValue === origValue) return;
+    if (newValue === origValue) return true;
 
     let input = fieldToPartialInput(key, newValue);
 
@@ -426,7 +491,7 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
           return reverted;
         }) as ManualShipmentDto[],
       );
-      return;
+      return false;
     }
 
     setCellFb(rowId, key, "saved");
@@ -448,6 +513,44 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
     if (key === "vatAmount") {
       setCellFb(rowId, "amountTotal", "saved");
     }
+    return true;
+  }
+
+  function exitSingleCellEdit() {
+    setEditingCell(null);
+    setFocusCell(null);
+  }
+
+  function startCellEdit(rowId: string, key: ManualColumnKey, colIndex: number) {
+    setEditingRowId(null);
+    setEditingCell({ rowId, colKey: key });
+    setFocusCell({ rowId, colIndex });
+  }
+
+  function startRowEdit(rowId: string) {
+    setEditingCell(null);
+    setFocusCell(null);
+    setEditingRowId((prev) => (prev === rowId ? null : rowId));
+    setCtxMenuRow(null);
+  }
+
+  function cancelCellEdit(rowId: string, key: ManualColumnKey) {
+    const origForm = originalValues.current.get(rowId);
+    if (origForm) patchRowLocal(rowId, key, origForm[key]);
+    if (editingRowId !== rowId) exitSingleCellEdit();
+  }
+
+  async function commitCell(rowId: string, key: ManualColumnKey, newValue: string) {
+    const inRowEdit = editingRowId === rowId;
+    const origForm = originalValues.current.get(rowId);
+    const origValue = origForm ? origForm[key] : "";
+    if (newValue === origValue) {
+      if (!inRowEdit) exitSingleCellEdit();
+      return;
+    }
+    patchRowLocal(rowId, key, newValue);
+    const ok = await saveField(rowId, key, newValue);
+    if (ok && !inRowEdit) exitSingleCellEdit();
   }
 
   // ─── Update local row state immediately (optimistic) ───
@@ -459,6 +562,8 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
         if (NUM_KEYS.has(key)) {
           const n = value.trim() ? Number(value) : null;
           (updated as Record<string, unknown>)[key] = Number.isFinite(n) ? n : null;
+        } else if (key === "makasa") {
+          updated.makasa = value.trim() || null;
         } else if (key === "status") {
           updated.status = value || "NEW";
         } else {
@@ -478,7 +583,7 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
             updated.monthKey = value.slice(0, 7);
           }
         }
-        return updated;
+        return syncComputedPayment(updated);
       }) as ManualShipmentDto[],
     );
   }
@@ -486,7 +591,7 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
   function moveFocusDraft(colIndex: number, delta: number) {
     let next = colIndex + delta;
     if (next < 0) next = 0;
-    if (next >= COL_KEYS.length) {
+    if (next >= TABLE_COL_KEYS.length) {
       void saveDraft();
       return;
     }
@@ -561,25 +666,7 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); moveFocusDraft(colIndex, 1); return; }
   }
 
-  // ─── Key handler for existing-row cells ───
-  function onCellKeyDown(
-    e: ReactKeyboardEvent,
-    rowId: string,
-    key: ManualColumnKey,
-    currentValue: string,
-  ) {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      const origForm = originalValues.current.get(rowId);
-      if (origForm) patchRowLocal(rowId, key, origForm[key]);
-      return;
-    }
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      (e.target as HTMLElement).blur();
-      return;
-    }
-  }
+  // ─── Key handler for existing-row cells (draft row uses onDraftKeyDown) ───
 
   function openCreate() {
     setForm(formWithDefaults());
@@ -616,6 +703,17 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
   }
 
   function renderModalField(col: (typeof MANUAL_SHIPMENT_COLUMNS)[number]) {
+    if (col.input === "calculated") {
+      return (
+        <div className="msh-payment-cell msh-payment-cell--modal">
+          <ManualShipmentPaymentCell row={{
+            paymentAmount: form.paymentAmount.trim() ? Number(form.paymentAmount) : null,
+            amountTotal: form.amountTotal.trim() ? Number(form.amountTotal) : null,
+            makasa: form.makasa,
+          }} />
+        </div>
+      );
+    }
     if (col.input === "status") {
       return (
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -728,121 +826,63 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
     });
   }
 
-  // ─── Render an always-editable cell for an existing row ───
+  // ─── View / click-to-edit cell for an existing row ───
   function renderInlineCell(row: ManualShipmentDto, colIndex: number) {
-    const col = MANUAL_SHIPMENT_COLUMNS[colIndex]!;
+    const col = MANUAL_SHIPMENT_TABLE_COLUMNS[colIndex]!;
     const key = col.key;
+
+    if (col.input === "calculated") {
+      return <ManualShipmentPaymentCell row={row} />;
+    }
+
     const formVal = dtoToForm(row);
     const value = formVal[key];
     const listId = col.autocomplete ? `msh-ac-${key}` : undefined;
     const fbKey = cellFbKey(row.id, key);
     const fb = cellFeedback.get(fbKey);
     const errMsg = cellErrors.get(fbKey);
-
-    const bindRef = (el: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null) =>
-      setInputRef(row.id, colIndex, el);
-    const onKey = (e: ReactKeyboardEvent) => onCellKeyDown(e, row.id, key, value);
-
-    const onChange = (newVal: string) => patchRowLocal(row.id, key, newVal);
-    const onBlur = () => void saveField(row.id, key, dtoToForm(rows.find((r) => r.id === row.id) ?? row)[key]);
-    const onSelectChange = (newVal: string) => {
-      patchRowLocal(row.id, key, newVal);
-      // for select/date — save immediately
-      setTimeout(() => void saveField(row.id, key, newVal), 0);
-    };
-
-    const wrapperClass = [
-      "msh-icell",
-      fb === "saving" ? "msh-icell--saving" : "",
-      fb === "saved" ? "msh-icell--saved" : "",
-      fb === "error" ? "msh-icell--error" : "",
-    ].filter(Boolean).join(" ");
-
-    const inputEl = (() => {
-      if (col.input === "status") {
-        return (
-          <select
-            ref={bindRef}
-            className="msh-excel-input"
-            value={value || "NEW"}
-            onKeyDown={onKey}
-            onChange={(e) => onSelectChange(e.target.value)}
-          >
-            {allStatuses.map((s) => (
-              <option key={s.value} value={s.value}>{s.label}</option>
-            ))}
-          </select>
-        );
-      }
-      if (col.input === "select" && col.options) {
-        return (
-          <select
-            ref={bindRef}
-            className="msh-excel-input"
-            value={value}
-            onKeyDown={onKey}
-            onChange={(e) => onSelectChange(e.target.value)}
-          >
-            <option value="">—</option>
-            {col.options.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-        );
-      }
-      if (col.input === "textarea") {
-        return (
-          <textarea
-            ref={bindRef}
-            className="msh-excel-input"
-            rows={1}
-            value={value}
-            onKeyDown={onKey}
-            onChange={(e) => onChange(e.target.value)}
-            onBlur={onBlur}
-          />
-        );
-      }
-      if (col.input === "date" || col.input === "month") {
-        return (
-          <input
-            ref={bindRef}
-            className="msh-excel-input"
-            type={col.input}
-            value={value}
-            onKeyDown={onKey}
-            onChange={(e) => onSelectChange(e.target.value)}
-          />
-        );
-      }
-      return (
-        <input
-          ref={bindRef}
-          className="msh-excel-input"
-          type={col.input === "number" ? "number" : "text"}
-          step={col.step}
-          value={value}
-          list={listId}
-          onKeyDown={onKey}
-          onChange={(e) => onChange(e.target.value)}
-          onBlur={onBlur}
-        />
-      );
-    })();
+    const isEditing =
+      editingRowId === row.id ||
+      (editingCell?.rowId === row.id && editingCell.colKey === key);
+    const displayText = formatCellDisplay(col, value, allStatuses);
+    const isEmpty = !value.trim();
 
     return (
-      <div className={wrapperClass}>
-        {inputEl}
-        {fb === "saving" && <span className="msh-icell__spinner" />}
-        {fb === "saved" && <span className="msh-icell__check">✓</span>}
-        {fb === "error" && errMsg && <span className="msh-icell__err" title={errMsg}>!</span>}
-      </div>
+      <ManualShipmentInlineCell
+        col={col}
+        value={value}
+        isEditing={isEditing}
+        displayText={displayText}
+        isEmpty={isEmpty}
+        allStatuses={allStatuses}
+        feedback={fb}
+        errorMsg={errMsg}
+        listId={listId}
+        statusClassName={statusBadgeClass(value || "NEW")}
+        onStartEdit={() => startCellEdit(row.id, key, colIndex)}
+        onCancel={() => cancelCellEdit(row.id, key)}
+        onCommit={(v) => void commitCell(row.id, key, v)}
+        bindRef={(el) => setInputRef(row.id, colIndex, el)}
+      />
     );
   }
 
   // ─── Render editable cell for draft row ───
-  function renderDraftCell(colIndex: number, value: string, onChange: (v: string) => void) {
-    const col = MANUAL_SHIPMENT_COLUMNS[colIndex]!;
+  function renderDraftCell(colIndex: number, value: string, onChange: (v: string) => void, draftForm: FormState) {
+    const col = MANUAL_SHIPMENT_TABLE_COLUMNS[colIndex]!;
+
+    if (col.input === "calculated") {
+      return (
+        <ManualShipmentPaymentCell
+          row={{
+            paymentAmount: draftForm.paymentAmount.trim() ? Number(draftForm.paymentAmount) : null,
+            amountTotal: draftForm.amountTotal.trim() ? Number(draftForm.amountTotal) : null,
+            makasa: draftForm.makasa,
+          }}
+        />
+      );
+    }
+
     const listId = col.autocomplete ? `msh-ac-${col.key}` : undefined;
     const bindRef = (el: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null) =>
       setInputRef(DRAFT_ID, colIndex, el);
@@ -886,10 +926,10 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
 
   function footerCell(key: ManualColumnKey): string | null {
     if (key === "amountTotal") return fmtMoney(totals.amountTotal);
+    if (key === "paymentAmount") return fmtMoney(totals.paymentAmount);
     if (key === "amountPaid") return fmtMoney(totals.amountPaid);
     if (key === "vatAmount") return fmtMoney(totals.vatAmount);
-    if (key === "inlandHaulage") return fmtMoney(totals.inlandHaulage);
-    if (key === "portHaulage") return fmtMoney(totals.portHaulage);
+    if (key === "makasa") return fmtMoney(totals.makasa);
     return null;
   }
 
@@ -1060,10 +1100,9 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
                   aria-label="בחר הכול"
                 />
               </th>
-              {MANUAL_SHIPMENT_COLUMNS.map((col) => (
+              {MANUAL_SHIPMENT_TABLE_COLUMNS.map((col) => (
                 <th key={col.key}>{col.label}</th>
               ))}
-              <th>יתרת לקוח</th>
               <th className="msh-col-actions"></th>
             </tr>
           </thead>
@@ -1071,12 +1110,11 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
             {draft && (
               <tr className="msh-row--draft">
                 <td />
-                {MANUAL_SHIPMENT_COLUMNS.map((col, colIndex) => (
+                {MANUAL_SHIPMENT_TABLE_COLUMNS.map((col, colIndex) => (
                   <td key={col.key}>
-                    {renderDraftCell(colIndex, draft[col.key], (v) => patchDraft(col.key, v))}
+                    {renderDraftCell(colIndex, draft[col.key], (v) => patchDraft(col.key, v), draft)}
                   </td>
                 ))}
-                <td className="msh-num">—</td>
                 <td className="msh-actions">
                   <button
                     type="button"
@@ -1101,7 +1139,15 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
               </tr>
             ) : (
               displayRows.map((r) => (
-                <tr key={r.id} className={statusRowClass(r.status)}>
+                <tr
+                  key={r.id}
+                  className={[
+                    statusRowClass(r.status),
+                    editingRowId === r.id ? "msh-row--editing" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                >
                   <td>
                     <input
                       type="checkbox"
@@ -1116,11 +1162,11 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
                       }}
                     />
                   </td>
-                  {MANUAL_SHIPMENT_COLUMNS.map((col, colIndex) => (
+                  {MANUAL_SHIPMENT_TABLE_COLUMNS.map((col, colIndex) => (
                     <td
                       key={col.key}
                       className={[
-                        col.input === "number" ? "msh-num" : "",
+                        col.input === "number" || col.input === "calculated" ? "msh-num" : "",
                         col.key === "shipmentDetails" ? "msh-clamp" : "",
                         ["shipmentNumber", "containerNumber", "orderNumber", "city", "country"].includes(col.key) ? "msh-bold" : "",
                       ].filter(Boolean).join(" ") || undefined}
@@ -1128,11 +1174,6 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
                       {renderInlineCell(r, colIndex)}
                     </td>
                   ))}
-                  <td className="msh-num msh-bold">
-                    {r.amountRemaining != null && r.amountRemaining !== 0
-                      ? fmtMoney(r.amountRemaining)
-                      : "₪0.00"}
-                  </td>
                   <td className="msh-col-actions">
                     <div className="msh-ctx-wrapper">
                       <button
@@ -1146,6 +1187,9 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
                         <div className="msh-ctx-menu">
                           <button onClick={() => { openView(r); setCtxMenuRow(null); }}>
                             👁️ צפייה
+                          </button>
+                          <button onClick={() => startRowEdit(r.id)}>
+                            {editingRowId === r.id ? "✔ סיום עריכת שורה" : "✏️ עריכת שורה"}
                           </button>
                           <button onClick={() => { duplicateAsDraft(r); setCtxMenuRow(null); }}>
                             📋 שכפול
@@ -1169,7 +1213,7 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
             <tfoot>
               <tr>
                 <td>סיכום ({displayRows.length})</td>
-                {MANUAL_SHIPMENT_COLUMNS.map((col) => {
+                {MANUAL_SHIPMENT_TABLE_COLUMNS.map((col) => {
                   const v = footerCell(col.key);
                   return (
                     <td key={col.key} className={v != null ? "msh-num" : undefined}>
@@ -1177,7 +1221,6 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
                     </td>
                   );
                 })}
-                <td />
                 <td />
               </tr>
             </tfoot>
@@ -1270,7 +1313,10 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
                       <span className="msh-field-label">{col.label}</span>
                       {renderModalField(col)}
                       {col.key === "vatAmount" && (
-                        <span className="msh-hint">הזן מע״מ ← סכום רישומון יחושב אוטומטית</span>
+                        <span className="msh-hint">הזן מע״מ ← סכום רידומין יחושב אוטומטית</span>
+                      )}
+                      {col.key === "amountPaid" && (
+                        <span className="msh-hint">מחושב: סכום התשלום − רידומין + 18% ממקאסה</span>
                       )}
                     </label>
                   ))}

@@ -16,6 +16,7 @@ export type CashCountQuickModalProps = {
   dayDetail: CashDailyDayDetailPayload | null;
   dayLoading: boolean;
   editable: boolean;
+  balancedWeekLabel?: string | null;
   onSaved: () => void | Promise<void>;
 };
 
@@ -41,6 +42,7 @@ export function CashCountQuickModal({
   dayDetail,
   dayLoading,
   editable,
+  balancedWeekLabel = null,
   onSaved,
 }: CashCountQuickModalProps) {
   const [draft, setDraft] = useState<Partial<Record<CashDailyMethodId, string>>>(emptyDraft);
@@ -71,6 +73,12 @@ export function CashCountQuickModal({
       setErr("רק מנהל יכול לשמור ספירת קופה");
       return;
     }
+    if (
+      balancedWeekLabel &&
+      !window.confirm(`שבוע ${balancedWeekLabel} כבר אוזן. שינוי זה ישפיע על האיזון. להמשיך?`)
+    ) {
+      return;
+    }
     setErr(null);
     setSaving(true);
     try {
@@ -94,7 +102,7 @@ export function CashCountQuickModal({
     } finally {
       setSaving(false);
     }
-  }, [dayDetail, draft, editable, onClose, onSaved, week]);
+  }, [balancedWeekLabel, dayDetail, draft, editable, onClose, onSaved, week]);
 
   if (!open) return null;
 

@@ -26,6 +26,7 @@ import {
   toPaymentIntakeBases,
   type PaymentIntakeOrderRow,
 } from "@/lib/payment-intake";
+import { computeOrderOpenDebtUsd } from "@/lib/order-remaining-debt";
 import type { LivePaymentFormKpis } from "@/lib/payment-intake-live-kpi";
 import {
   PAYMENT_BUCKET_LABELS,
@@ -242,7 +243,7 @@ export function buildIntakeOrderViews(
   };
 
   const drafts: OrderDraft[] = orders.map((o) => {
-    const dbRem = roundMoney2(Math.max(0, Number(o.dbRemainingUsd)));
+    const dbRem = computeOrderOpenDebtUsd(Number(o.totalAmountUsd), Number(o.dbPaidUsd));
     const formAlloc = roundMoney2(byOrderId.get(o.id) ?? 0);
     const formRem = roundMoney2(dbRem - formAlloc);
     const allBreakdown = o.breakdown;

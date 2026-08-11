@@ -6,7 +6,7 @@ import {
   CLEAR_DEMO_DATA_CONFIRMATION,
   isClearDemoConfirmationValid,
   type ClearDemoDataPlan,
-} from "@/lib/clear-demo-data";
+} from "@/lib/clear-demo-data.shared";
 import {
   clearDemoDataAction,
   type ClearDemoDataActionState,

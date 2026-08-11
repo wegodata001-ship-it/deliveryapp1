@@ -1,11 +1,13 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { FileSpreadsheet, Upload, Trash2, RefreshCw, AlertCircle } from "lucide-react";
+import { FileSpreadsheet, Upload, Trash2, RefreshCw, AlertCircle, CheckCircle, XCircle } from "lucide-react";
 import * as XLSX from "xlsx";
 import type { ExcelShipmentPreviewRow, ShipmentCourierDto, ShipmentZoneDto } from "@/app/admin/shipments/types";
 import { importRowsIntoBatchAction } from "@/app/admin/shipments/actions";
 import { analyzeShipmentWorkbook } from "@/lib/shipment-import-detector";
+import { LocationImportMappingModal } from "@/components/admin/shipments/LocationImportMappingModal";
+import { useShipmentImportLocationFlow } from "@/components/admin/shipments/useShipmentImportLocationFlow";
 
 type Props = {
   open: boolean;
@@ -39,10 +41,20 @@ export function ShipmentBatchImportModal({
   const [zoneId, setZoneId] = useState("");
   const [courierId, setCourierId] = useState("");
   const [saving, setSaving] = useState(false);
+  const {
+    pendingMappings,
+    mappingModalOpen,
+    loadPreviewRows,
+    checkLocationMappings,
+    applyMappings,
+    keepOriginalMappings,
+    resetMappingFlow,
+  } = useShipmentImportLocationFlow();
 
   const activeZones = useMemo(() => zones.filter((z) => z.isActive), [zones]);
   const activeCouriers = useMemo(() => couriers.filter((c) => c.isActive), [couriers]);
   const validCount = preview.filter((r) => r.valid).length;
+  const invalidCount = preview.length - validCount;
   const uniqueCustomers = useMemo(() => {
     const keys = new Set<string>();
     for (const r of preview) {
@@ -59,6 +71,7 @@ export function ShipmentBatchImportModal({
     setFileName(null);
     setFileSize(null);
     setError(null);
+    resetMappingFlow();
     if (fileRef.current) fileRef.current.value = "";
   }
 
@@ -90,7 +103,9 @@ export function ShipmentBatchImportModal({
           setError("לא נמצאו שורות לייבוא בקובץ.");
           return;
         }
-        setPreview(detected.rows);
+        const rows = loadPreviewRows(detected.rows);
+        setPreview(rows);
+        void checkLocationMappings(rows);
       } catch (err) {
         setError("שגיאה בקריאת הקובץ: " + String(err));
         setPreview([]);
@@ -132,131 +147,183 @@ export function ShipmentBatchImportModal({
   }
 
   return (
-    <div className="msh-modal-backdrop" role="presentation" onClick={onClose}>
-      <div
-        className="msh-modal"
-        style={{ maxWidth: 640 }}
-        role="dialog"
-        aria-modal="true"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="msh-modal__head">
-          <h2>ייבוא קובץ Excel למשלוח</h2>
-          <button type="button" className="shp-btn" onClick={onClose}>
-            סגור
-          </button>
-        </div>
-        <div className="msh-form">
-          {error && (
-            <div className="shp-alert shp-alert--error" style={{ marginBottom: 12 }}>
-              <AlertCircle size={16} />
-              {error}
-            </div>
-          )}
+    <>
+      <div className="msh-modal-backdrop" role="presentation" onClick={onClose}>
+        <div
+          className="msh-modal"
+          style={{ maxWidth: 960, width: "96vw" }}
+          role="dialog"
+          aria-modal="true"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="msh-modal__head">
+            <h2>ייבוא קובץ Excel למשלוח</h2>
+            <button type="button" className="shp-btn" onClick={onClose}>
+              סגור
+            </button>
+          </div>
+          <div className="msh-form">
+            {error && (
+              <div className="shp-alert shp-alert--error" style={{ marginBottom: 12 }}>
+                <AlertCircle size={16} />
+                {error}
+              </div>
+            )}
 
-          {!fileName ? (
-            <div
-              className={`shp-import-zone ${dragActive ? "shp-import-zone--active" : ""}`}
-              onClick={() => fileRef.current?.click()}
-              onDragOver={(e) => {
-                e.preventDefault();
-                setDragActive(true);
-              }}
-              onDragLeave={() => setDragActive(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setDragActive(false);
-                const file = e.dataTransfer.files?.[0];
-                if (file) processFile(file);
-              }}
-            >
-              <div className="shp-import-zone__icon">
-                <Upload size={36} />
+            {!fileName ? (
+              <div
+                className={`shp-import-zone ${dragActive ? "shp-import-zone--active" : ""}`}
+                onClick={() => fileRef.current?.click()}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragActive(true);
+                }}
+                onDragLeave={() => setDragActive(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragActive(false);
+                  const file = e.dataTransfer.files?.[0];
+                  if (file) processFile(file);
+                }}
+              >
+                <div className="shp-import-zone__icon">
+                  <Upload size={36} />
+                </div>
+                <div className="shp-import-zone__text">📄 העלאת קובץ Excel</div>
+                <div className="shp-import-zone__sub">או גרירה ושחרור</div>
               </div>
-              <div className="shp-import-zone__text">📄 העלאת קובץ Excel</div>
-              <div className="shp-import-zone__sub">או גרירה ושחרור</div>
-            </div>
-          ) : (
-            <div className="shp-file-card">
-              <div className="shp-file-card__icon">
-                <FileSpreadsheet size={24} />
-              </div>
-              <div className="shp-file-card__meta">
-                <div className="shp-file-card__name">{fileName}</div>
-                <div className="shp-file-card__stats">
-                  {fileSize != null ? <span>{formatFileSize(fileSize)}</span> : null}
-                  <span>{preview.length} שורות</span>
-                  <span>{uniqueCustomers} לקוחות</span>
-                  <span className="shp-file-card__ok">{validCount} תקינות</span>
+            ) : (
+              <div className="shp-file-card">
+                <div className="shp-file-card__icon">
+                  <FileSpreadsheet size={24} />
+                </div>
+                <div className="shp-file-card__meta">
+                  <div className="shp-file-card__name">{fileName}</div>
+                  <div className="shp-file-card__stats">
+                    {fileSize != null ? <span>{formatFileSize(fileSize)}</span> : null}
+                    <span>{preview.length} שורות</span>
+                    <span>{uniqueCustomers} לקוחות</span>
+                    <span className="shp-file-card__ok">{validCount} תקינות</span>
+                    {invalidCount > 0 ? (
+                      <span className="shp-file-card__bad">{invalidCount} שגויות</span>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="shp-file-card__actions">
+                  <button
+                    type="button"
+                    className="shp-btn shp-btn--secondary shp-btn--sm"
+                    onClick={() => fileRef.current?.click()}
+                  >
+                    <RefreshCw size={14} />
+                    החלף
+                  </button>
+                  <button type="button" className="shp-btn shp-btn--danger shp-btn--sm" onClick={clearFile}>
+                    <Trash2 size={14} />
+                    מחק
+                  </button>
                 </div>
               </div>
-              <div className="shp-file-card__actions">
-                <button
-                  type="button"
-                  className="shp-btn shp-btn--secondary shp-btn--sm"
-                  onClick={() => fileRef.current?.click()}
-                >
-                  <RefreshCw size={14} />
-                  החלף
-                </button>
-                <button type="button" className="shp-btn shp-btn--danger shp-btn--sm" onClick={clearFile}>
-                  <Trash2 size={14} />
-                  מחק
-                </button>
+            )}
+
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              hidden
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) processFile(file);
+              }}
+            />
+
+            {preview.length > 0 ? (
+              <div className="shp-table-wrap" style={{ marginTop: 12, maxHeight: "42vh" }}>
+                <table className="shp-table">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>סטטוס</th>
+                      <th>קוד</th>
+                      <th>לקוח</th>
+                      <th>מקום מקורי (Excel)</th>
+                      <th>מקום לייבוא</th>
+                      <th>קרטונים</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {preview.map((row) => (
+                      <tr key={row.rowIndex} className={row.valid ? "" : "shp-row--invalid"}>
+                        <td>{row.rowIndex}</td>
+                        <td>
+                          {row.valid ? (
+                            <CheckCircle size={14} style={{ color: "#15803d" }} />
+                          ) : (
+                            <span title={row.error ?? ""}>
+                              <XCircle size={14} style={{ color: "#dc2626" }} />
+                            </span>
+                          )}
+                        </td>
+                        <td>{row.customerCode || "—"}</td>
+                        <td>{row.customerName || "—"}</td>
+                        <td>{row.originalDeliveryPlace || row.city || "—"}</td>
+                        <td>{row.city || "—"}</td>
+                        <td>{row.boxes ?? "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+
+            <div className="shp-form-grid" style={{ marginTop: 12 }}>
+              <div className="shp-form-field">
+                <label>אזור ברירת מחדל</label>
+                <select value={zoneId} onChange={(e) => setZoneId(e.target.value)} disabled={saving}>
+                  <option value="">ללא</option>
+                  {activeZones.map((z) => (
+                    <option key={z.id} value={z.id}>
+                      {z.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="shp-form-field">
+                <label>שליח ברירת מחדל</label>
+                <select value={courierId} onChange={(e) => setCourierId(e.target.value)} disabled={saving}>
+                  <option value="">ללא</option>
+                  {activeCouriers.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
-          )}
-
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".xlsx,.xls,.csv"
-            hidden
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) processFile(file);
-            }}
-          />
-
-          <div className="shp-form-grid" style={{ marginTop: 12 }}>
-            <div className="shp-form-field">
-              <label>אזור ברירת מחדל</label>
-              <select value={zoneId} onChange={(e) => setZoneId(e.target.value)} disabled={saving}>
-                <option value="">ללא</option>
-                {activeZones.map((z) => (
-                  <option key={z.id} value={z.id}>
-                    {z.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="shp-form-field">
-              <label>שליח ברירת מחדל</label>
-              <select value={courierId} onChange={(e) => setCourierId(e.target.value)} disabled={saving}>
-                <option value="">ללא</option>
-                {activeCouriers.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+          </div>
+          <div className="msh-modal__foot">
+            <button type="button" className="shp-btn" onClick={onClose} disabled={saving}>
+              ביטול
+            </button>
+            <button
+              type="button"
+              className="shp-btn shp-btn--success"
+              onClick={() => void handleImport()}
+              disabled={saving || validCount === 0}
+            >
+              {saving ? "מייבא…" : `ייבא ${validCount || ""} שורות`}
+            </button>
           </div>
         </div>
-        <div className="msh-modal__foot">
-          <button type="button" className="shp-btn" onClick={onClose} disabled={saving}>
-            ביטול
-          </button>
-          <button
-            type="button"
-            className="shp-btn shp-btn--success"
-            onClick={() => void handleImport()}
-            disabled={saving || validCount === 0}
-          >
-            {saving ? "מייבא…" : `ייבא ${validCount || ""} שורות`}
-          </button>
-        </div>
       </div>
-    </div>
+
+      {mappingModalOpen && pendingMappings && pendingMappings.length > 0 ? (
+        <LocationImportMappingModal
+          mappings={pendingMappings}
+          onApply={() => applyMappings(preview, setPreview)}
+          onKeepOriginal={keepOriginalMappings}
+        />
+      ) : null}
+    </>
   );
 }

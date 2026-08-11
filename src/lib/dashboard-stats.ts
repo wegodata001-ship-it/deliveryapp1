@@ -1,4 +1,6 @@
+import { cache } from "react";
 import { unstable_cache } from "next/cache";
+import "server-only";
 import { OS } from "@/lib/order-status-slugs";
 import type { AppUser } from "@/lib/admin-auth";
 import { isAdminUser } from "@/lib/admin-auth";
@@ -44,8 +46,6 @@ export type DashboardStats = {
 const HIGH_BALANCE_THRESHOLD_ILS = 10_000;
 const DASHBOARD_CACHE_SECONDS = 60;
 
-/** Order active filter — ללא deletedAt (לא קיים ב-DB בפועל) */
-const orderActiveWhere = { isActive: true } as const;
 
 function startOfLocalDay(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
@@ -86,38 +86,45 @@ async function queryOrderDashboardAggregates(
   alerts: { unpaidOrders: number };
 }> {
   return withPerfTimer("dashboard.query.orders", async () => {
-    const orderDateFilter = { gte: fromStart, lte: toEnd };
-    const todayFilter = { gte: todayStart, lte: todayEnd };
-
-    const countryWhere = {
-      countryCode: scope.workCountry,
-      sourceCountry: scope.sourceCountry,
-    };
-    const [ordersInRange, openOrdersInRange, ordersToday, unpaidOrders] = await Promise.all([
-      prisma.order.count({
-        where: { ...orderActiveWhere, ...countryWhere, orderDate: orderDateFilter },
-      }),
-      prisma.order.count({
-        where: { ...orderActiveWhere, ...countryWhere, status: OS.OPEN, orderDate: orderDateFilter },
-      }),
-      prisma.order.count({
-        where: { ...orderActiveWhere, ...countryWhere, orderDate: todayFilter },
-      }),
-      prisma.order.count({
-        where: {
-          ...orderActiveWhere,
-          ...countryWhere,
-          status: { notIn: [OS.COMPLETED, OS.CANCELLED] },
-          payments: { none: { isPaid: true } },
+    const [row] = await prisma.$queryRaw<
+      [
+        {
+          ordersInRange: bigint;
+          openOrdersInRange: bigint;
+          ordersToday: bigint;
+          unpaidOrders: bigint;
         },
-      }),
-    ]);
+      ]
+    >`
+      SELECT
+        COUNT(*) FILTER (
+          WHERE o."orderDate" >= ${fromStart} AND o."orderDate" <= ${toEnd}
+        ) AS "ordersInRange",
+        COUNT(*) FILTER (
+          WHERE o."orderDate" >= ${fromStart} AND o."orderDate" <= ${toEnd}
+            AND o.status = ${OS.OPEN}
+        ) AS "openOrdersInRange",
+        COUNT(*) FILTER (
+          WHERE o."orderDate" >= ${todayStart} AND o."orderDate" <= ${todayEnd}
+        ) AS "ordersToday",
+        COUNT(*) FILTER (
+          WHERE o.status NOT IN (${OS.COMPLETED}, ${OS.CANCELLED})
+            AND NOT EXISTS (
+              SELECT 1 FROM "Payment" p
+              WHERE p."orderId" = o.id AND p."isPaid" = true
+            )
+        ) AS "unpaidOrders"
+      FROM "Order" o
+      WHERE o."isActive" = true
+        AND o."countryCode" = ${scope.workCountry}::"WorkCountryCode"
+        AND o."sourceCountry" = ${scope.sourceCountry}::"OrderSourceCountry"
+    `;
 
     return {
-      ordersInRange,
-      openOrdersInRange,
-      daily: { ordersToday },
-      alerts: { unpaidOrders },
+      ordersInRange: Number(row?.ordersInRange ?? 0),
+      openOrdersInRange: Number(row?.openOrdersInRange ?? 0),
+      daily: { ordersToday: Number(row?.ordersToday ?? 0) },
+      alerts: { unpaidOrders: Number(row?.unpaidOrders ?? 0) },
     };
   });
 }
@@ -136,51 +143,69 @@ async function queryPaymentDashboardAggregates(
   alerts: { pendingPaymentsOlderThan24h: number };
 }> {
   return withPerfTimer("dashboard.query.payments", async () => {
-    const paymentDateFilter = { gte: fromStart, lte: toEnd };
-    const todayFilter = { gte: todayStart, lte: todayEnd };
-
-    const payCountry = { countryCode: scope.workCountry };
-    const [paymentsReceivedCount, pendingPaymentsCount, paymentsToday, paymentsTodaySum, pendingPaymentsOlderThan24h] =
-      await Promise.all([
-        prisma.payment.count({
-          where: { ...payCountry, isPaid: true, paymentDate: paymentDateFilter },
-        }),
-        prisma.payment.count({
-          where: { ...payCountry, isPaid: false, paymentDate: paymentDateFilter },
-        }),
-        prisma.payment.count({
-          where: { ...payCountry, isPaid: true, paymentDate: todayFilter },
-        }),
-        prisma.payment.aggregate({
-          where: { ...payCountry, isPaid: true, paymentDate: todayFilter },
-          _sum: { totalIlsWithVat: true, amountIls: true },
-        }),
-        prisma.payment.count({
-          where: { ...payCountry, isPaid: false, createdAt: { lt: olderThan24h } },
-        }),
-      ]);
-
-    const todayTotal = paymentsTodaySum._sum.totalIlsWithVat ?? paymentsTodaySum._sum.amountIls ?? 0;
+    const [row] = await prisma.$queryRaw<
+      [
+        {
+          paymentsReceivedCount: bigint;
+          pendingPaymentsCount: bigint;
+          paymentsToday: bigint;
+          paymentsTodayTotal: unknown;
+          pendingPaymentsOlderThan24h: bigint;
+        },
+      ]
+    >`
+      SELECT
+        COUNT(*) FILTER (
+          WHERE p."isPaid" = true
+            AND p."paymentDate" >= ${fromStart} AND p."paymentDate" <= ${toEnd}
+        ) AS "paymentsReceivedCount",
+        COUNT(*) FILTER (
+          WHERE p."isPaid" = false
+            AND p."paymentDate" >= ${fromStart} AND p."paymentDate" <= ${toEnd}
+        ) AS "pendingPaymentsCount",
+        COUNT(*) FILTER (
+          WHERE p."isPaid" = true
+            AND p."paymentDate" >= ${todayStart} AND p."paymentDate" <= ${todayEnd}
+        ) AS "paymentsToday",
+        COALESCE(SUM(
+          COALESCE(p."totalIlsWithVat", p."amountIls", 0)::numeric)
+          FILTER (
+            WHERE p."isPaid" = true
+              AND p."paymentDate" >= ${todayStart} AND p."paymentDate" <= ${todayEnd}
+          ),
+          0
+        ) AS "paymentsTodayTotal",
+        COUNT(*) FILTER (
+          WHERE p."isPaid" = false AND p."createdAt" < ${olderThan24h}
+        ) AS "pendingPaymentsOlderThan24h"
+      FROM "Payment" p
+      WHERE p."countryCode" = ${scope.workCountry}::"WorkCountryCode"
+    `;
 
     return {
-      paymentsReceivedCount,
-      pendingPaymentsCount,
+      paymentsReceivedCount: Number(row?.paymentsReceivedCount ?? 0),
+      pendingPaymentsCount: Number(row?.pendingPaymentsCount ?? 0),
       daily: {
-        paymentsToday,
-        totalIls: moneyIls(todayTotal),
+        paymentsToday: Number(row?.paymentsToday ?? 0),
+        totalIls: moneyIls(row?.paymentsTodayTotal ?? 0),
       },
-      alerts: { pendingPaymentsOlderThan24h },
+      alerts: { pendingPaymentsOlderThan24h: Number(row?.pendingPaymentsOlderThan24h ?? 0) },
     };
   });
 }
 
 async function queryUserDashboardAggregates(): Promise<{ registeredUsers: number; activeUsers: number }> {
   return withPerfTimer("dashboard.query.users", async () => {
-    const [registeredUsers, activeUsers] = await Promise.all([
-      prisma.user.count(),
-      prisma.user.count({ where: { isActive: true } }),
-    ]);
-    return { registeredUsers, activeUsers };
+    const [row] = await prisma.$queryRaw<[{ registeredUsers: bigint; activeUsers: bigint }]>`
+      SELECT
+        COUNT(*) AS "registeredUsers",
+        COUNT(*) FILTER (WHERE u."isActive" = true) AS "activeUsers"
+      FROM "User" u
+    `;
+    return {
+      registeredUsers: Number(row?.registeredUsers ?? 0),
+      activeUsers: Number(row?.activeUsers ?? 0),
+    };
   });
 }
 
@@ -215,22 +240,21 @@ export async function countHighBalanceCustomers(
   });
 }
 
-export async function getDashboardHighBalanceCount(
-  workCountry: WorkCountryCode = DEFAULT_WORK_COUNTRY,
-): Promise<number> {
-  return unstable_cache(
-    async () => {
-      try {
-        return await countHighBalanceCustomers(workCountry);
-      } catch (error) {
-        perfError("dashboard.query.highBalance.failed", error);
-        return 0;
-      }
-    },
-    ["wego-dashboard-high-balance-v3", workCountry],
-    { revalidate: DASHBOARD_CACHE_SECONDS, tags: [DASHBOARD_HIGH_BALANCE_TAG] },
-  )();
-}
+export const getDashboardHighBalanceCount = cache(
+  (workCountry: WorkCountryCode = DEFAULT_WORK_COUNTRY): Promise<number> =>
+    unstable_cache(
+      async () => {
+        try {
+          return await countHighBalanceCustomers(workCountry);
+        } catch (error) {
+          perfError("dashboard.query.highBalance.failed", error);
+          return 0;
+        }
+      },
+      ["wego-dashboard-high-balance-v3", workCountry],
+      { revalidate: DASHBOARD_CACHE_SECONDS, tags: [DASHBOARD_HIGH_BALANCE_TAG] },
+    )(),
+);
 
 async function loadDashboardStatsCore(
   range: DashboardStatsRange,
@@ -286,23 +310,25 @@ export async function getDashboardStats(
   };
 }
 
-export async function getDashboardStatsCore(
-  range: DashboardStatsRange,
-  me: AppUser,
-  workCountry: WorkCountryCode = DEFAULT_WORK_COUNTRY,
-): Promise<
-  Omit<DashboardStats, "alerts"> & { alerts: Omit<DashboardStats["alerts"], "highBalanceCustomers"> }
-> {
-  const fromIso = range.fromStart.toISOString();
-  const toIso = range.toEnd.toISOString();
-  const showStaff = isAdminUser(me) || me.permissionKeys.includes("manage_users");
-  try {
-    return await getDashboardStatsCached(fromIso, toIso, showStaff, workCountry);
-  } catch (error) {
-    perfError("dashboard.getDashboardStatsCore.failed", error);
-    return { ...EMPTY_CORE };
-  }
-}
+export const getDashboardStatsCore = cache(
+  async (
+    range: DashboardStatsRange,
+    me: AppUser,
+    workCountry: WorkCountryCode = DEFAULT_WORK_COUNTRY,
+  ): Promise<
+    Omit<DashboardStats, "alerts"> & { alerts: Omit<DashboardStats["alerts"], "highBalanceCustomers"> }
+  > => {
+    const fromIso = range.fromStart.toISOString();
+    const toIso = range.toEnd.toISOString();
+    const showStaff = isAdminUser(me) || me.permissionKeys.includes("manage_users");
+    try {
+      return await getDashboardStatsCached(fromIso, toIso, showStaff, workCountry);
+    } catch (error) {
+      perfError("dashboard.getDashboardStatsCore.failed", error);
+      return { ...EMPTY_CORE };
+    }
+  },
+);
 
 const getDashboardStatsCached = unstable_cache(
   async (fromIso: string, toIso: string, showStaff: boolean, workCountry: WorkCountryCode) => {

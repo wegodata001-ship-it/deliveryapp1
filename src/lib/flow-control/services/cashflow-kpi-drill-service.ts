@@ -12,18 +12,37 @@ import {
   normalizeFxTrack,
   parseFxPurchasesJson,
   paymentRowReceivedIls,
+  getFlowPaymentReceiptSummaryParts,
+  type CashflowReceiptSummaryBucket,
 } from "@/lib/flow-control/flow-calculation-service";
 import { loadTurkeyBalanceForWeek } from "@/lib/flow-control/turkey-transfer-balance-service";
 import { TURKEY_MOVEMENT_TYPE_LABELS } from "@/lib/flow-control/turkey-transfer-balance-types";
 import { formatAhWeekLabel } from "@/lib/weeks/ah-week";
+import { groupByActivePayments } from "@/lib/payment-record-status";
+import { computeOrderLedgerView } from "@/lib/order-remaining-debt";
+import { OrderStatus as OS } from "@prisma/client";
+import type { CashWeekFlowLineId } from "@/lib/cash-control-week-flow";
+import { CASH_WEEK_FLOW_LINES } from "@/lib/cash-control-week-flow";
 
 export type CashflowKpiKind =
   | "receipts"
+  | "paymentIntake"
   | "cashIls"
   | "cashUsd"
   | "bankTransferIls"
   | "creditIls"
   | "checkIls"
+  | "other"
+  | "managerCashIls"
+  | "managerCashUsd"
+  | "managerTransferIls"
+  | "managerCreditIls"
+  | "managerChecksIls"
+  | "bankUsd"
+  | "transferUsd"
+  | "creditUsd"
+  | "checksUsd"
+  | "remainingToPay"
   | "turkeyReceipts"
   | "fxPs"
   | "fxProfit"
@@ -66,6 +85,378 @@ function weekSubtitle(weeks: string[]): string {
   if (weeks.length === 1) return `שבוע ${weeks[0]}`;
   const sorted = [...weeks].sort((a, b) => a.localeCompare(b));
   return `טווח ${sorted[0]} → ${sorted[sorted.length - 1]} · ${weeks.length} שבועות`;
+}
+
+async function loadPaymentIntakeDrill(weeks: string[]): Promise<CashflowKpiDrillResult> {
+  const payments = await prisma.payment.findMany({
+    where: {
+      OR: weeks.map((w) => cashControlWeekReconciliationPaymentsWhere(w)),
+    },
+    select: {
+      id: true,
+      paymentCode: true,
+      weekCode: true,
+      amountIls: true,
+      amountUsd: true,
+      paymentMethod: true,
+      usdPaymentMethod: true,
+      ilsPaymentMethod: true,
+      exchangeRate: true,
+      methodAllocations: { select: { method: true, currency: true, sourceAmount: true } },
+      amountWithoutVat: true,
+      totalIlsWithoutVat: true,
+      intakeDate: true,
+      paymentDate: true,
+      createdAt: true,
+      notes: true,
+      paymentNumber: true,
+      customer: {
+        select: { displayName: true, nameAr: true, nameEn: true, nameHe: true },
+      },
+      order: {
+        select: { orderNumber: true, oldOrderNumber: true },
+      },
+    },
+    orderBy: [{ paymentDate: "desc" }, { createdAt: "desc" }],
+    take: 5000,
+  });
+
+  let total = 0;
+  const rows: CashflowKpiDrillRow[] = payments.map((p) => {
+    const ils = paymentRowReceivedIls(p);
+    total += ils;
+    const method =
+      [p.ilsPaymentMethod, p.usdPaymentMethod, p.paymentMethod].filter(Boolean).join(" / ") || "—";
+    const customer = p.customer
+      ? primaryCustomerDisplayName({
+          nameAr: p.customer.nameAr,
+          nameEn: p.customer.nameEn,
+          nameHe: p.customer.nameHe,
+          displayName: p.customer.displayName ?? "",
+        })
+      : "—";
+    const orderNo = p.order?.orderNumber || p.order?.oldOrderNumber || "—";
+    const usd = num(p.amountUsd);
+    const nativeIls = num(p.amountIls);
+    const currency =
+      usd > 0.009 && nativeIls > 0.009 ? "MIXED" : usd > 0.009 ? "USD" : "ILS";
+    const amount =
+      currency === "MIXED"
+        ? `${moneyUsd(usd)} + ${moneyIls(nativeIls)}`
+        : currency === "USD"
+          ? moneyUsd(usd)
+          : moneyIls(ils);
+    const ref = [p.paymentCode, p.notes?.trim()].filter(Boolean).join(" · ") || "—";
+    return {
+      date: paymentDayKeyJerusalem(p),
+      orderNo,
+      customer,
+      amount,
+      currency,
+      method,
+      ref,
+    };
+  });
+
+  return {
+    kind: "paymentIntake",
+    title: "נקלט מקליטת תשלום — פירוט",
+    subtitle: weekSubtitle(weeks),
+    columns: [
+      { key: "date", header: "תאריך" },
+      { key: "orderNo", header: "מס׳ הזמנה" },
+      { key: "customer", header: "לקוח" },
+      { key: "amount", header: "סכום" },
+      { key: "currency", header: "מטבע" },
+      { key: "method", header: "אמצעי תשלום" },
+      { key: "ref", header: "אסמכתא / הערה" },
+    ],
+    rows,
+    totalLabel: "סה״כ נקלט",
+    totalValue: moneyIls(Math.round(total * 100) / 100),
+  };
+}
+
+const MANAGER_COUNT_DB_FIELD: Record<
+  CashWeekFlowLineId,
+  "countedCashIls" | "countedCashUsd" | "countedTransferIls" | "countedCreditIls" | "countedChecksIls"
+> = {
+  CASH_ILS: "countedCashIls",
+  CASH_USD: "countedCashUsd",
+  BANK_TRANSFER: "countedTransferIls",
+  CREDIT: "countedCreditIls",
+  CHECK: "countedChecksIls",
+};
+
+const MANAGER_COUNT_KPI_KIND: Record<CashWeekFlowLineId, CashflowKpiKind> = {
+  CASH_ILS: "managerCashIls",
+  CASH_USD: "managerCashUsd",
+  BANK_TRANSFER: "managerTransferIls",
+  CREDIT: "managerCreditIls",
+  CHECK: "managerChecksIls",
+};
+
+async function loadManagerCountLineDrill(
+  lineId: CashWeekFlowLineId,
+  weeks: string[],
+): Promise<CashflowKpiDrillResult> {
+  const meta = CASH_WEEK_FLOW_LINES.find((l) => l.id === lineId)!;
+  const field = MANAGER_COUNT_DB_FIELD[lineId];
+
+  const flows = await prisma.cashWeekFlow.findMany({
+    where: { countryCode: "TR", weekCode: { in: weeks } },
+    select: {
+      weekCode: true,
+      countedCashIls: true,
+      countedCashUsd: true,
+      countedTransferIls: true,
+      countedCreditIls: true,
+      countedChecksIls: true,
+      updatedAt: true,
+      updatedBy: { select: { fullName: true, email: true } },
+    },
+    orderBy: { weekCode: "desc" },
+  });
+
+  let total = 0;
+  const rows: CashflowKpiDrillRow[] = [];
+
+  for (const flow of flows) {
+    const raw = flow[field];
+    if (raw == null) continue;
+    const amount = num(raw);
+    if (amount <= 0.009 && amount >= -0.009) {
+      rows.push({
+        week: flow.weekCode,
+        label: formatAhWeekLabel(flow.weekCode) ?? flow.weekCode,
+        amount: meta.currency === "USD" ? moneyUsd(0) : moneyIls(0),
+        updated: flow.updatedAt.toLocaleDateString("he-IL"),
+        by: flow.updatedBy?.fullName ?? flow.updatedBy?.email ?? "—",
+      });
+      continue;
+    }
+    total += amount;
+    rows.push({
+      week: flow.weekCode,
+      label: formatAhWeekLabel(flow.weekCode) ?? flow.weekCode,
+      amount: meta.currency === "USD" ? moneyUsd(amount) : moneyIls(amount),
+      updated: flow.updatedAt.toLocaleDateString("he-IL"),
+      by: flow.updatedBy?.fullName ?? flow.updatedBy?.email ?? "—",
+    });
+  }
+
+  return {
+    kind: MANAGER_COUNT_KPI_KIND[lineId],
+    title: `${meta.label} — ספירת מנהל`,
+    subtitle: weekSubtitle(weeks),
+    columns: [
+      { key: "week", header: "שבוע" },
+      { key: "label", header: "תווית" },
+      { key: "amount", header: meta.currency === "USD" ? "סכום ($)" : "סכום (₪)" },
+      { key: "updated", header: "עודכן" },
+      { key: "by", header: "עודכן ע״י" },
+    ],
+    rows,
+    totalLabel: meta.label,
+    totalValue: meta.currency === "USD" ? moneyUsd(Math.round(total * 100) / 100) : moneyIls(Math.round(total * 100) / 100),
+  };
+}
+
+const RECEIPT_SUMMARY_BUCKET_LABELS: Record<CashflowReceiptSummaryBucket, string> = {
+  BANK: 'סה"כ בבנק',
+  TRANSFER: 'סה"כ העברות',
+  CREDIT: 'סה"כ באשראי',
+  CHECK: "סה\"כ בצ'קים",
+};
+
+async function loadReceiptSummaryBucketDrill(
+  bucket: CashflowReceiptSummaryBucket,
+  weeks: string[],
+): Promise<CashflowKpiDrillResult> {
+  const payments = await prisma.payment.findMany({
+    where: {
+      OR: weeks.map((w) => cashControlWeekReconciliationPaymentsWhere(w)),
+    },
+    select: {
+      id: true,
+      paymentCode: true,
+      weekCode: true,
+      amountIls: true,
+      amountUsd: true,
+      paymentMethod: true,
+      usdPaymentMethod: true,
+      ilsPaymentMethod: true,
+      exchangeRate: true,
+      methodAllocations: { select: { method: true, currency: true, sourceAmount: true } },
+      amountWithoutVat: true,
+      totalIlsWithoutVat: true,
+      intakeDate: true,
+      paymentDate: true,
+      createdAt: true,
+      notes: true,
+      customer: {
+        select: { displayName: true, nameAr: true, nameEn: true, nameHe: true },
+      },
+      order: {
+        select: { orderNumber: true, oldOrderNumber: true },
+      },
+    },
+    orderBy: [{ paymentDate: "desc" }, { createdAt: "desc" }],
+    take: 5000,
+  });
+
+  let totalUsd = 0;
+  const rows: CashflowKpiDrillRow[] = [];
+
+  for (const p of payments) {
+    const parts = getFlowPaymentReceiptSummaryParts(p).filter((part) => part.bucket === bucket);
+    if (parts.length === 0) continue;
+
+    const partUsd = Math.round(parts.reduce((s, x) => s + x.usd, 0) * 100) / 100;
+    totalUsd += partUsd;
+
+    const customer = p.customer
+      ? primaryCustomerDisplayName({
+          nameAr: p.customer.nameAr,
+          nameEn: p.customer.nameEn,
+          nameHe: p.customer.nameHe,
+          displayName: p.customer.displayName ?? "",
+        })
+      : "—";
+    const orderNo = p.order?.orderNumber || p.order?.oldOrderNumber || "—";
+    const method =
+      [p.ilsPaymentMethod, p.usdPaymentMethod, p.paymentMethod].filter(Boolean).join(" / ") || "—";
+    const ref = [p.paymentCode, p.notes?.trim()].filter(Boolean).join(" · ") || "—";
+
+    rows.push({
+      date: formatDailyDateDisplay(paymentDayKeyJerusalem(p)),
+      orderNo,
+      customer,
+      amount: moneyUsd(partUsd),
+      currency: "USD",
+      method,
+      ref,
+    });
+  }
+
+  return {
+    kind:
+      bucket === "BANK"
+        ? "bankUsd"
+        : bucket === "TRANSFER"
+          ? "transferUsd"
+          : bucket === "CREDIT"
+            ? "creditUsd"
+            : "checksUsd",
+    title: `${RECEIPT_SUMMARY_BUCKET_LABELS[bucket]} — פירוט`,
+    subtitle: weekSubtitle(weeks),
+    columns: [
+      { key: "date", header: "תאריך" },
+      { key: "orderNo", header: "מס׳ הזמנה" },
+      { key: "customer", header: "לקוח" },
+      { key: "amount", header: "סכום" },
+      { key: "currency", header: "מטבע" },
+      { key: "method", header: "אמצעי תשלום" },
+      { key: "ref", header: "אסמכתא" },
+    ],
+    rows,
+    totalLabel: RECEIPT_SUMMARY_BUCKET_LABELS[bucket],
+    totalValue: moneyUsd(Math.round(totalUsd * 100) / 100),
+  };
+}
+
+async function loadRemainingToPayDrill(weeks: string[]): Promise<CashflowKpiDrillResult> {
+  const orders = await prisma.order.findMany({
+    where: {
+      OR: weeks.map((w) => ({
+        weekCode: w,
+        countryCode: "TR" as const,
+        deletedAt: null,
+      })),
+    },
+    select: {
+      id: true,
+      weekCode: true,
+      orderNumber: true,
+      oldOrderNumber: true,
+      totalUsd: true,
+      amountUsd: true,
+      commissionUsd: true,
+      status: true,
+      customer: {
+        select: { displayName: true, nameAr: true, nameEn: true, nameHe: true },
+      },
+    },
+    orderBy: [{ weekCode: "desc" }, { orderNumber: "asc" }],
+    take: 5000,
+  });
+
+  const orderIds = orders.map((o) => o.id);
+  const paySums =
+    orderIds.length > 0
+      ? ((await groupByActivePayments(
+          "orderId",
+          { orderId: { in: orderIds }, amountUsd: { not: null } },
+          { amountUsd: true },
+        )) as Array<{ orderId: string | null; _sum: { amountUsd: unknown } }>)
+      : [];
+  const paidByOrder = new Map<string, number>();
+  for (const p of paySums) {
+    if (p.orderId) paidByOrder.set(p.orderId, Number(p._sum.amountUsd ?? 0));
+  }
+
+  let totalRemaining = 0;
+  const rows: CashflowKpiDrillRow[] = [];
+
+  for (const o of orders) {
+    if (o.status === OS.DEBT_WITHDRAWAL) continue;
+    const ledger = computeOrderLedgerView({
+      orderId: o.id,
+      totalUsd: o.totalUsd,
+      amountUsd: o.amountUsd,
+      commissionUsd: o.commissionUsd,
+      paidUsd: paidByOrder.get(o.id) ?? 0,
+    });
+    if (ledger.remainingUsd <= 0.009) continue;
+
+    totalRemaining += ledger.remainingUsd;
+    const customer = o.customer
+      ? primaryCustomerDisplayName({
+          nameAr: o.customer.nameAr,
+          nameEn: o.customer.nameEn,
+          nameHe: o.customer.nameHe,
+          displayName: o.customer.displayName ?? "",
+        })
+      : "—";
+
+    rows.push({
+      week: o.weekCode || "—",
+      orderNo: o.orderNumber || o.oldOrderNumber || "—",
+      customer,
+      orderTotal: moneyUsd(ledger.totalUsd),
+      paid: moneyUsd(ledger.paidUsd),
+      remaining: moneyUsd(ledger.remainingUsd),
+    });
+  }
+
+  const weekLabel = weeks.length === 1 ? weeks[0]! : weekSubtitle(weeks);
+
+  return {
+    kind: "remainingToPay",
+    title: `נשאר לתשלום — ${weekLabel}`,
+    subtitle: `${rows.length} הזמנות עם יתרה פתוחה`,
+    columns: [
+      { key: "week", header: "שבוע" },
+      { key: "orderNo", header: "הזמנה" },
+      { key: "customer", header: "לקוח" },
+      { key: "orderTotal", header: "סכום הזמנה" },
+      { key: "paid", header: "שולם" },
+      { key: "remaining", header: "נשאר" },
+    ],
+    rows,
+    totalLabel: "נשאר לתשלום",
+    totalValue: moneyUsd(Math.round(totalRemaining * 100) / 100),
+  };
 }
 
 async function loadReceipts(weeks: string[]): Promise<CashflowKpiDrillResult> {
@@ -139,7 +530,101 @@ async function loadReceipts(weeks: string[]): Promise<CashflowKpiDrillResult> {
   };
 }
 
-type ReceiptMethodDrillKind = "cashIls" | "cashUsd" | "bankTransferIls" | "creditIls" | "checkIls";
+type ReceiptMethodDrillKind =
+  | "cashIls"
+  | "cashUsd"
+  | "bankTransferIls"
+  | "creditIls"
+  | "checkIls";
+
+const OTHER_CHANNELS: CashControlChannel[] = ["OTHER_ILS", "OTHER_USD"];
+
+async function loadOtherDrill(weeks: string[]): Promise<CashflowKpiDrillResult> {
+  const payments = await prisma.payment.findMany({
+    where: {
+      OR: weeks.map((w) => cashControlWeekReconciliationPaymentsWhere(w)),
+    },
+    select: {
+      id: true,
+      paymentCode: true,
+      weekCode: true,
+      amountIls: true,
+      amountUsd: true,
+      paymentMethod: true,
+      usdPaymentMethod: true,
+      ilsPaymentMethod: true,
+      methodAllocations: { select: { method: true, currency: true, sourceAmount: true } },
+      intakeDate: true,
+      paymentDate: true,
+      createdAt: true,
+      notes: true,
+      customer: {
+        select: { displayName: true, nameAr: true, nameEn: true, nameHe: true },
+      },
+      order: {
+        select: { orderNumber: true, oldOrderNumber: true },
+      },
+    },
+    take: 10000,
+  });
+
+  let totalIls = 0;
+  let totalUsd = 0;
+  const rows: CashflowKpiDrillRow[] = [];
+
+  for (const p of payments) {
+    const customer = p.customer
+      ? primaryCustomerDisplayName({
+          nameAr: p.customer.nameAr,
+          nameEn: p.customer.nameEn,
+          nameHe: p.customer.nameHe,
+          displayName: p.customer.displayName ?? "",
+        })
+      : "—";
+    const orderNo = p.order?.orderNumber || p.order?.oldOrderNumber || "—";
+    const method =
+      [p.ilsPaymentMethod, p.usdPaymentMethod, p.paymentMethod].filter(Boolean).join(" / ") || "—";
+    const ref = [p.paymentCode, p.notes?.trim()].filter(Boolean).join(" · ") || "—";
+
+    for (const c of getDailyPaymentContributions(p)) {
+      if (!OTHER_CHANNELS.includes(c.column)) continue;
+      const cur = c.column.endsWith("_USD") ? "USD" : "ILS";
+      if (cur === "USD") totalUsd += c.amount;
+      else totalIls += c.amount;
+      rows.push({
+        date: paymentDayKeyJerusalem(p),
+        orderNo,
+        customer,
+        amount: cur === "USD" ? moneyUsd(c.amount) : moneyIls(c.amount),
+        currency: cur,
+        method,
+        ref,
+      });
+    }
+  }
+
+  rows.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+
+  return {
+    kind: "other",
+    title: "אחר — פירוט תקבולים",
+    subtitle: weekSubtitle(weeks),
+    columns: [
+      { key: "date", header: "תאריך" },
+      { key: "orderNo", header: "מס׳ הזמנה" },
+      { key: "customer", header: "לקוח" },
+      { key: "amount", header: "סכום" },
+      { key: "currency", header: "מטבע" },
+      { key: "method", header: "אמצעי תשלום" },
+      { key: "ref", header: "אסמכתא / הערה" },
+    ],
+    rows,
+    footerTotals: [
+      { label: "סה״כ ₪", value: moneyIls(Math.round(totalIls * 100) / 100) },
+      { label: "סה״כ $", value: moneyUsd(Math.round(totalUsd * 100) / 100) },
+    ],
+  };
+}
 
 const RECEIPT_METHOD_DRILL: Record<
   ReceiptMethodDrillKind,
@@ -585,12 +1070,36 @@ export async function loadCashflowKpiDrill(
   switch (kind) {
     case "receipts":
       return loadReceipts(weeks);
+    case "paymentIntake":
+      return loadPaymentIntakeDrill(weeks);
     case "cashIls":
     case "cashUsd":
     case "bankTransferIls":
     case "creditIls":
     case "checkIls":
       return loadReceiptMethodDrill(kind, weeks);
+    case "managerCashIls":
+      return loadManagerCountLineDrill("CASH_ILS", weeks);
+    case "managerCashUsd":
+      return loadManagerCountLineDrill("CASH_USD", weeks);
+    case "managerTransferIls":
+      return loadManagerCountLineDrill("BANK_TRANSFER", weeks);
+    case "managerCreditIls":
+      return loadManagerCountLineDrill("CREDIT", weeks);
+    case "managerChecksIls":
+      return loadManagerCountLineDrill("CHECK", weeks);
+    case "bankUsd":
+      return loadReceiptSummaryBucketDrill("BANK", weeks);
+    case "transferUsd":
+      return loadReceiptSummaryBucketDrill("TRANSFER", weeks);
+    case "creditUsd":
+      return loadReceiptSummaryBucketDrill("CREDIT", weeks);
+    case "checksUsd":
+      return loadReceiptSummaryBucketDrill("CHECK", weeks);
+    case "remainingToPay":
+      return loadRemainingToPayDrill(weeks);
+    case "other":
+      return loadOtherDrill(weeks);
     case "turkeyReceipts":
       return loadTurkeyReceiptsDrill(weeks);
     case "fxPs":

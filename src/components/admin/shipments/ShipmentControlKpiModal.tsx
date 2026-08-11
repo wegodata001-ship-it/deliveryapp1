@@ -174,6 +174,7 @@ export function ShipmentControlKpiModal({
         r.customerPhone2,
         r.address,
         r.city,
+        r.updatedDeliveryLocation,
         r.zoneName,
         r.courierName,
         r.containerNumber,
@@ -674,7 +675,7 @@ export function ShipmentControlKpiModal({
                           <td colSpan={12}>
                             <div className="sc-expand-panel">
                               <div className="sc-expand-grid">
-                                <div><span className="sc-expand-label">כתובת:</span> {r.address || "—"} {r.city || ""}</div>
+                                <div><span className="sc-expand-label">כתובת:</span> {r.address || "—"} {r.updatedDeliveryLocation || r.city || ""}</div>
                                 <div><span className="sc-expand-label">קונטיינר:</span> {r.containerNumber || "—"}</div>
                                 <div><span className="sc-expand-label">קרטונים:</span> {r.boxes ?? "—"} {r.cartonDetails ? `(${r.cartonDetails})` : ""}</div>
                                 <div><span className="sc-expand-label">משקל:</span> {r.weight != null ? `${r.weight} ק״ג` : "—"}</div>

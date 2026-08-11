@@ -4,6 +4,7 @@ import {
   cleanupMisimportedAreasAndLocations,
   listAliasMappingRows,
   listDeliveryLocations,
+  renormalizeDeliveryLocationAliases,
 } from "@/app/admin/shipments/location-service";
 import { LocationsAdminClient } from "@/components/admin/shipments/LocationsAdminClient";
 import "@/app/admin/shipments/shipments.css";
@@ -15,6 +16,11 @@ export default async function ShipmentLocationsPage() {
 
   // ניקוי בטוח אוטומטי: אזורים=יישובים / יישובים=אזורים מהייבוא השגוי
   await cleanupMisimportedAreasAndLocations();
+  try {
+    await renormalizeDeliveryLocationAliases();
+  } catch (e) {
+    console.error("[locations] renormalize on load failed", e);
+  }
 
   const [initialMappings, initialZones, initialLocations] = await Promise.all([
     listAliasMappingRows({ includeInactive: true }),

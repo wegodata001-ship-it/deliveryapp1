@@ -30,9 +30,14 @@ import {
 import { channelColLabels } from "@/lib/cash-control-channel";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import {
+  dispatchCashControlRefresh,
   WEGO_CASH_CONTROL_REFRESH_EVENT,
   type CashControlRefreshDetail,
 } from "@/lib/cash-control-refresh-bus";
+import {
+  CashExpenseDeleteConfirmModal,
+  type CashExpenseDeleteTarget,
+} from "@/components/admin/cash-control/CashExpenseDeleteConfirmModal";
 import { CashExpenseFormModal, type CashExpenseEditable } from "@/components/admin/CashExpenseFormModal";
 import { reconLinesToVariance } from "@/lib/cash-control-variance";
 import { num } from "@/components/admin/cash-flow/shared";
@@ -96,6 +101,9 @@ export function CashFlowControlClient({
   const [expenseModalOpen, setExpenseModalOpen] = useState(false);
   const [editingExpense, setEditingExpense] = useState<CashExpenseEditable | null>(null);
   const [expenseBusy, setExpenseBusy] = useState<string | null>(null);
+  const [deleteExpenseTarget, setDeleteExpenseTarget] = useState<CashExpenseDeleteTarget | null>(
+    null,
+  );
 
   const refresh = useCallback(() => setRefreshTick((t) => t + 1), []);
 
@@ -266,23 +274,37 @@ export function CashFlowControlClient({
     [caps.canManageFlow, week],
   );
 
-  const removeExpense = useCallback(
-    async (id: string) => {
-      if (!window.confirm("למחוק את הוצאת הקופה?")) return;
-      setExpenseBusy(id);
-      try {
-        const res = await deleteCashExpenseAction(id);
-        if (!res.ok) {
-          alert(res.error ?? "מחיקה נכשלה");
-          return;
-        }
-        await reloadDay();
-      } finally {
-        setExpenseBusy(null);
+  const removeExpense = useCallback((row: CashDailyExpenseRowDto) => {
+    if (!dayDetail) return;
+    setDeleteExpenseTarget({
+      id: row.id,
+      reasonLabel: row.reasonLabel,
+      amount: row.amount,
+      currency: row.currency,
+      dateDisplay: dayDetail.dateDisplay,
+      weekCode: dayDetail.weekCode,
+      notes: row.notes,
+    });
+  }, [dayDetail]);
+
+  const confirmDeleteExpense = useCallback(async () => {
+    if (!deleteExpenseTarget) return;
+    const id = deleteExpenseTarget.id;
+    setExpenseBusy(id);
+    try {
+      const res = await deleteCashExpenseAction(id);
+      if (!res.ok) {
+        alert(res.error ?? "מחיקה נכשלה");
+        return;
       }
-    },
-    [reloadDay],
-  );
+      setDeleteExpenseTarget(null);
+      await reloadDay();
+      refresh();
+      dispatchCashControlRefresh(week);
+    } finally {
+      setExpenseBusy(null);
+    }
+  }, [deleteExpenseTarget, reloadDay, refresh, week]);
 
   async function exportFile(format: "pdf" | "excel") {
     if (!caps.canExport) return;
@@ -486,7 +508,7 @@ export function CashFlowControlClient({
                   });
                   setExpenseModalOpen(true);
                 }}
-                onDelete={(id) => void removeExpense(id)}
+                onDelete={(row) => removeExpense(row)}
               />
               {methodDrill ? (
                 <MethodDrillPanel
@@ -542,6 +564,17 @@ export function CashFlowControlClient({
         week={week}
         defaultDateYmd={selectedDay ?? undefined}
         varianceLines={dayDetail ? reconLinesToVariance(dayDetail.reconciliation) : null}
+      />
+
+      <CashExpenseDeleteConfirmModal
+        open={!!deleteExpenseTarget}
+        expense={deleteExpenseTarget}
+        busy={!!expenseBusy}
+        onCancel={() => {
+          if (expenseBusy) return;
+          setDeleteExpenseTarget(null);
+        }}
+        onConfirm={() => void confirmDeleteExpense()}
       />
     </div>
   );

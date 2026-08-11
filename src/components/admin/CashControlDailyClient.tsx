@@ -42,8 +42,29 @@ import {
   type CashControlRefreshDetail,
 } from "@/lib/cash-control-refresh-bus";
 import { WeeklyReconciliationTable } from "@/components/admin/cash-control/WeeklyReconciliationTable";
+import { WeekBalanceBanner } from "@/components/admin/cash-control/WeekBalanceBanner";
+import { WeekBalanceConfirmModal } from "@/components/admin/cash-control/WeekBalanceConfirmModal";
+import { WeekBalanceSummaryStrip } from "@/components/admin/cash-control/WeekBalanceSummaryStrip";
 import { MethodDrillPanel } from "@/components/admin/cash-flow/MethodDrillPanel";
 import { reconLinesToVariance, type CashVarianceLineDto } from "@/lib/cash-control-variance";
+import {
+  confirmWeekBalanceAction,
+  getWeekBalanceStateAction,
+} from "@/app/admin/cash-control/week-balance-action";
+import type { WeekBalanceStateDto } from "@/lib/cash-control/week-balance-types";
+import {
+  getShipmentCashControlDayDetailAction,
+  getShipmentCashControlWeekSummaryAction,
+  listShipmentCashControlDayIntakesAction,
+} from "@/app/admin/shipments/cash-control/daily-actions";
+import { shippingMethodLabel } from "@/app/admin/shipments/cash-control/daily-adapter";
+import { ShipmentCashCountQuickModal } from "@/components/admin/cash-control/ShipmentCashCountQuickModal";
+import { ShipmentCashExpenseQuickModal } from "@/components/admin/cash-control/ShipmentCashExpenseQuickModal";
+import { ShipmentMethodDrillPanel } from "@/components/admin/cash-control/ShipmentMethodDrillPanel";
+import { SHIPPING_CASH_TABLE_METHODS } from "@/components/admin/cash-control/shipping-table-config";
+import { num } from "@/components/admin/cash-flow/shared";
+
+export type CashControlMode = "regular" | "shipping";
 
 type PanelMode = "drill" | null;
 
@@ -65,15 +86,22 @@ function buildWeekOptions(): string[] {
   return out;
 }
 
+function weekBalanceDismissKey(weekCode: string): string {
+  return `wego-cc-week-balance-dismiss:${weekCode.trim()}`;
+}
+
 export function CashControlClient({
+  mode = "regular",
   isAdmin,
   initialWeek,
   currentUserName = "",
 }: {
+  mode?: CashControlMode;
   isAdmin: boolean;
   initialWeek: string;
   currentUserName?: string;
 }) {
+  const isShipping = mode === "shipping";
   const { openWindow } = useAdminWindows();
   const weekOptions = useMemo(buildWeekOptions, []);
   const [week, setWeek] = useState(initialWeek || weekOptions[0]);
@@ -87,7 +115,7 @@ export function CashControlClient({
   const [dayLoading, setDayLoading] = useState(false);
   const [panelMode, setPanelMode] = useState<PanelMode>(null);
 
-  const [methodDrill, setMethodDrill] = useState<CashDailyMethodId | null>(null);
+  const [methodDrill, setMethodDrill] = useState<string | null>(null);
   const [methodRows, setMethodRows] = useState<CashDailyMethodDetailRow[] | null>(null);
   const [methodLoading, setMethodLoading] = useState(false);
 
@@ -101,6 +129,13 @@ export function CashControlClient({
   const [varianceLines, setVarianceLines] = useState<CashVarianceLineDto[]>([]);
   const [varianceLoading, setVarianceLoading] = useState(false);
 
+  const [weekBalance, setWeekBalance] = useState<WeekBalanceStateDto | null>(null);
+  const [weekBalanceLoading, setWeekBalanceLoading] = useState(false);
+  const [weekBalanceDismissed, setWeekBalanceDismissed] = useState(false);
+  const [weekBalanceConfirmOpen, setWeekBalanceConfirmOpen] = useState(false);
+  const [weekBalanceBusy, setWeekBalanceBusy] = useState(false);
+  const [weekBalanceErr, setWeekBalanceErr] = useState<string | null>(null);
+
   const refresh = useCallback(() => setRefreshTick((t) => t + 1), []);
 
   useEffect(() => {
@@ -113,14 +148,45 @@ export function CashControlClient({
     };
   }, []);
 
+  const reloadWeekBalance = useCallback(async () => {
+    if (isShipping) return;
+    setWeekBalanceLoading(true);
+    try {
+      const state = await getWeekBalanceStateAction(week);
+      setWeekBalance(state);
+      if (state?.status !== "READY") {
+        setWeekBalanceDismissed(false);
+        try {
+          window.localStorage.removeItem(weekBalanceDismissKey(week));
+        } catch {
+          /* ignore */
+        }
+      }
+    } finally {
+      setWeekBalanceLoading(false);
+    }
+  }, [isShipping, week]);
+
   const reloadSummary = useCallback(async () => {
+    if (isShipping) {
+      const [summaryData, detail] = await Promise.all([
+        getShipmentCashControlWeekSummaryAction(week),
+        selectedDay
+          ? getShipmentCashControlDayDetailAction({ week, dateYmd: selectedDay })
+          : Promise.resolve(null),
+      ]);
+      setSummary(summaryData);
+      if (detail) setDayDetail(detail);
+      return;
+    }
     const [summaryData, detail] = await Promise.all([
       getCashControlWeekSummaryAction(week),
       selectedDay ? getCashControlDayDetailAction({ week, dateYmd: selectedDay }) : Promise.resolve(null),
     ]);
     setSummary(summaryData);
     if (detail) setDayDetail(detail);
-  }, [selectedDay, week]);
+    await reloadWeekBalance();
+  }, [isShipping, reloadWeekBalance, selectedDay, week]);
 
   const ensureDay = useCallback(
     async (dateYmd: string) => {
@@ -128,33 +194,50 @@ export function CashControlClient({
       if (dayDetail?.dateYmd === dateYmd && !dayLoading) return dayDetail;
       setDayLoading(true);
       try {
-        const detail = await getCashControlDayDetailAction({ week, dateYmd });
+        const detail = isShipping
+          ? await getShipmentCashControlDayDetailAction({ week, dateYmd })
+          : await getCashControlDayDetailAction({ week, dateYmd });
         setDayDetail(detail);
         return detail;
       } finally {
         setDayLoading(false);
       }
     },
-    [dayDetail, dayLoading, week],
+    [dayDetail, dayLoading, isShipping, week],
   );
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setWeekBalanceErr(null);
+    setWeekBalanceConfirmOpen(false);
     setSelectedDay(null);
     setDayDetail(null);
     setPanelMode(null);
     setMethodDrill(null);
     setMethodRows(null);
-    void getCashControlWeekSummaryAction(week).then((data) => {
+    try {
+      setWeekBalanceDismissed(window.localStorage.getItem(weekBalanceDismissKey(week)) === "1");
+    } catch {
+      setWeekBalanceDismissed(false);
+    }
+    void Promise.all(
+      isShipping
+        ? [getShipmentCashControlWeekSummaryAction(week)]
+        : [getCashControlWeekSummaryAction(week), getWeekBalanceStateAction(week)],
+    ).then((results) => {
       if (cancelled) return;
-      setSummary(data);
+      setSummary(results[0] as CashDailyWeekSummaryPayload | null);
+      if (!isShipping) {
+        setWeekBalance(results[1] as WeekBalanceStateDto | null);
+        setWeekBalanceLoading(false);
+      }
       setLoading(false);
     });
     return () => {
       cancelled = true;
     };
-  }, [week, refreshTick]);
+  }, [isShipping, week, refreshTick]);
 
   useEffect(() => {
     const onCashControlSaved = (e: Event) => {
@@ -167,7 +250,7 @@ export function CashControlClient({
   }, [week, refresh]);
 
   const openMethodDrill = useCallback(
-    async (dateYmd: string, method: CashDailyMethodId) => {
+    async (dateYmd: string, method: string) => {
       await ensureDay(dateYmd);
       if (methodDrill === method && panelMode === "drill" && selectedDay === dateYmd) {
         setPanelMode(null);
@@ -180,13 +263,19 @@ export function CashControlClient({
       setMethodRows(null);
       setMethodLoading(true);
       try {
-        const rows = await listCashControlDayIntakesAction({ week, dateYmd, column: method });
+        const rows = isShipping
+          ? await listShipmentCashControlDayIntakesAction({ week, dateYmd, column: method })
+          : await listCashControlDayIntakesAction({
+              week,
+              dateYmd,
+              column: method as CashDailyMethodId,
+            });
         setMethodRows(rows);
       } finally {
         setMethodLoading(false);
       }
     },
-    [ensureDay, methodDrill, panelMode, selectedDay, week],
+    [ensureDay, isShipping, methodDrill, panelMode, selectedDay, week],
   );
 
   const openCountModal = useCallback(
@@ -269,7 +358,33 @@ export function CashControlClient({
   const selectedDayRow = selectedDay ? dayRows.find((r) => r.dateYmd === selectedDay) : null;
   const kpi = summary?.kpi ?? null;
 
-  const drillMeta = methodDrill ? CASH_DAILY_METHODS.find((m) => m.id === methodDrill) : null;
+  const drillMeta = methodDrill
+    ? isShipping
+      ? { label: shippingMethodLabel(methodDrill) }
+      : CASH_DAILY_METHODS.find((m) => m.id === methodDrill)
+    : null;
+
+  const shippingKpi = useMemo(() => {
+    if (!isShipping || !summary) return null;
+    const days = summary.rows.filter((r) => !r.isTotal);
+    let counted = 0;
+    for (const row of days) {
+      const drawer = row.drawer as Partial<Record<string, string | null>>;
+      for (const m of SHIPPING_CASH_TABLE_METHODS) {
+        const v = drawer[m];
+        if (v) counted += num(v);
+      }
+    }
+    const collected = summary.kpi?.totalReceiptsIls ?? 0;
+    const expenses = summary.kpi?.totalExpensesIls ?? 0;
+    return {
+      collected,
+      expenses,
+      balance: collected - expenses,
+      counted,
+      diff: counted - collected,
+    };
+  }, [isShipping, summary]);
   const selectedDayLabel = selectedDayRow
     ? `${selectedDayRow.dayName} · ${selectedDayRow.dateDisplay}`
     : dayDetail
@@ -310,6 +425,41 @@ export function CashControlClient({
     setQuickExpenseOpen(true);
   };
 
+  const dismissWeekBalancePrompt = useCallback(() => {
+    setWeekBalanceDismissed(true);
+    try {
+      window.localStorage.setItem(weekBalanceDismissKey(week), "1");
+    } catch {
+      /* ignore */
+    }
+  }, [week]);
+
+  const confirmWeekBalance = useCallback(async () => {
+    setWeekBalanceBusy(true);
+    setWeekBalanceErr(null);
+    try {
+      const res = await confirmWeekBalanceAction(week);
+      if (!res.ok) {
+        setWeekBalanceErr(res.error ?? "איזון נכשל");
+        return;
+      }
+      if (res.state) setWeekBalance(res.state);
+      setWeekBalanceConfirmOpen(false);
+      setWeekBalanceDismissed(false);
+      try {
+        window.localStorage.removeItem(weekBalanceDismissKey(week));
+      } catch {
+        /* ignore */
+      }
+    } finally {
+      setWeekBalanceBusy(false);
+    }
+  }, [week]);
+
+  const canManageWeekBalance = isAdmin || !!expenseCaps?.canDelete;
+  const balancedWeekLabel =
+    weekBalance?.isBalanced ? weekBalance.weekLabel ?? weekBalance.weekCode : null;
+
   const openVarianceDetail = useCallback(
     async (row: CashDailySummaryRowDto) => {
       if (row.isTotal) return;
@@ -334,8 +484,20 @@ export function CashControlClient({
             <Wallet size={20} />
           </span>
           <div>
-            <h1>בקרת קופה</h1>
-            {summary?.weekLabel ? <span className="cc-toolbar__range">{summary.weekLabel}</span> : null}
+            <h1>{isShipping ? "בקרת קופה – משלוחים" : "בקרת קופה"}</h1>
+            {isShipping ? (
+              <>
+                <span className="cc-toolbar__range">{summary?.weekLabel ?? week}</span>
+                <span className="cc-toolbar__range">כספי משלוחים בלבד</span>
+              </>
+            ) : summary?.weekLabel ? (
+              <span className="cc-toolbar__range">{summary.weekLabel}</span>
+            ) : null}
+            {!isShipping && weekBalance ? (
+              <span className={`cc-toolbar__balance-badge is-${weekBalance.status.toLowerCase()}`}>
+                {weekBalance.statusLabel}
+              </span>
+            ) : null}
           </div>
         </div>
         <div className="cc-toolbar__actions">
@@ -371,7 +533,7 @@ export function CashControlClient({
             </button>
           </div>
           <button type="button" className="cc-btn cc-btn--accent" onClick={handleToolbarExpenses}>
-            <ClipboardList size={15} /> הוצאות קופה
+            <ClipboardList size={15} /> {isShipping ? "הוצאות משלוחים" : "הוצאות קופה"}
           </button>
           <button
             type="button"
@@ -381,12 +543,16 @@ export function CashControlClient({
           >
             <span className="cc-btn__dot cc-btn__dot--green" aria-hidden /> ספירת קופה
           </button>
-          <button type="button" className="cc-btn cc-btn--ghost" onClick={() => void exportFile("excel")} disabled={!!exporting}>
-            <FileSpreadsheet size={15} /> Excel
-          </button>
-          <button type="button" className="cc-btn cc-btn--ghost" onClick={() => void exportFile("pdf")} disabled={!!exporting}>
-            <FileText size={15} /> PDF
-          </button>
+          {!isShipping ? (
+            <>
+              <button type="button" className="cc-btn cc-btn--ghost" onClick={() => void exportFile("excel")} disabled={!!exporting}>
+                <FileSpreadsheet size={15} /> Excel
+              </button>
+              <button type="button" className="cc-btn cc-btn--ghost" onClick={() => void exportFile("pdf")} disabled={!!exporting}>
+                <FileText size={15} /> PDF
+              </button>
+            </>
+          ) : null}
           <button type="button" className="cc-btn cc-btn--ghost" onClick={refresh} aria-label="רענון">
             <RefreshCw size={15} />
           </button>
@@ -394,6 +560,66 @@ export function CashControlClient({
       </header>
 
       <section className="cc-kpis" aria-label="מדדי שבוע">
+        {isShipping && shippingKpi ? (
+          <>
+            <div className="cc-kpi cc-kpi--green">
+              <span className="cc-kpi__icon" aria-hidden>
+                <Banknote size={22} />
+              </span>
+              <div>
+                <span className="cc-kpi__label">סה״כ נקלט</span>
+                <strong className="cc-kpi__value" dir="ltr">
+                  {fmtKpiMoney("ILS", shippingKpi.collected)}
+                </strong>
+              </div>
+            </div>
+            <div className="cc-kpi cc-kpi--red">
+              <span className="cc-kpi__icon" aria-hidden>
+                <TrendingDown size={22} />
+              </span>
+              <div>
+                <span className="cc-kpi__label">סה״כ הוצאות</span>
+                <strong className="cc-kpi__value" dir="ltr">
+                  {fmtKpiMoney("ILS", shippingKpi.expenses)}
+                </strong>
+              </div>
+            </div>
+            <div className="cc-kpi cc-kpi--blue">
+              <span className="cc-kpi__icon" aria-hidden>
+                <Wallet size={22} />
+              </span>
+              <div>
+                <span className="cc-kpi__label">יתרה</span>
+                <strong className="cc-kpi__value" dir="ltr">
+                  {fmtKpiMoney("ILS", shippingKpi.balance)}
+                </strong>
+              </div>
+            </div>
+            <div className="cc-kpi cc-kpi--slate">
+              <span className="cc-kpi__icon" aria-hidden>
+                <ClipboardList size={22} />
+              </span>
+              <div>
+                <span className="cc-kpi__label">ספירה בפועל</span>
+                <strong className="cc-kpi__value" dir="ltr">
+                  {fmtKpiMoney("ILS", shippingKpi.counted)}
+                </strong>
+              </div>
+            </div>
+            <div className="cc-kpi cc-kpi--amber">
+              <span className="cc-kpi__icon" aria-hidden>
+                <DollarSign size={22} />
+              </span>
+              <div>
+                <span className="cc-kpi__label">הפרש</span>
+                <strong className="cc-kpi__value" dir="ltr">
+                  {fmtKpiMoney("ILS", shippingKpi.diff)}
+                </strong>
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
         <div className="cc-kpi cc-kpi--green">
           <span className="cc-kpi__icon" aria-hidden>
             <DollarSign size={22} />
@@ -459,13 +685,31 @@ export function CashControlClient({
             </strong>
           </div>
         </div>
+          </>
+        )}
       </section>
+
+      {!isShipping ? (
+        <>
+      <WeekBalanceBanner
+        state={weekBalance}
+        loading={weekBalanceLoading && !weekBalance}
+        dismissed={weekBalanceDismissed}
+        canManage={canManageWeekBalance}
+        onDismiss={dismissWeekBalancePrompt}
+        onOpenConfirm={() => setWeekBalanceConfirmOpen(true)}
+      />
+      {weekBalanceErr ? <p className="cc-week-balance__error">{weekBalanceErr}</p> : null}
+      <WeekBalanceSummaryStrip state={weekBalance} />
+        </>
+      ) : null}
 
       <section className="cc-summary">
         {loading ? (
           <p className="cc-loading">טוען סיכום שבוע…</p>
         ) : (
           <WeeklyReconciliationTable
+            mode={mode}
             dayRows={dayRows}
             totalRow={totalRow}
             selectedDay={selectedDay}
@@ -502,43 +746,96 @@ export function CashControlClient({
           ) : null}
 
           {methodDrill ? (
-            <MethodDrillPanel
-              method={methodDrill}
-              methodLabel={drillMeta?.label}
-              loading={methodLoading}
-              rows={methodRows}
-              reviewBusy={reviewBusy}
-              onOpenPayment={openPayment}
-              onToggleReviewed={(id, reviewed) => void toggleReviewed(id, reviewed)}
-            />
+            isShipping ? (
+              <ShipmentMethodDrillPanel
+                methodLabel={drillMeta?.label}
+                loading={methodLoading}
+                rows={methodRows}
+              />
+            ) : (
+              <MethodDrillPanel
+                method={methodDrill as CashDailyMethodId}
+                methodLabel={drillMeta?.label}
+                loading={methodLoading}
+                rows={methodRows}
+                reviewBusy={reviewBusy}
+                onOpenPayment={openPayment}
+                onToggleReviewed={(id, reviewed) => void toggleReviewed(id, reviewed)}
+              />
+            )
           ) : null}
         </div>
       ) : !selectedDay ? (
         <p className="cc-hint">
-          בחרו יום בטבלה. לחיצה על <strong>שולם</strong> מציגה פירוט קליטות; לחיצה על <strong>התקבל</strong> פותחת ספירת קופה.{" "}
-          <strong>הוצאות קופה</strong> ו<strong>ספירת קופה</strong> נפתחות בחלון מהיר מהסרגל העליון.
+          {isShipping ? (
+            <>
+              בחרו יום בטבלה. לחיצה על <strong>נקלט</strong> מציגה פירוט קליטות משלוחים; לחיצה על{" "}
+              <strong>נספר</strong> פותחת ספירת קופה. <strong>הוצאות משלוחים</strong> ו
+              <strong>ספירת קופה</strong> נפתחות מהסרגל העליון.
+            </>
+          ) : (
+            <>
+              בחרו יום בטבלה. לחיצה על <strong>שולם</strong> מציגה פירוט קליטות; לחיצה על{" "}
+              <strong>התקבל</strong> פותחת ספירת קופה. <strong>הוצאות קופה</strong> ו
+              <strong>ספירת קופה</strong> נפתחות בחלון מהיר מהסרגל העליון.
+            </>
+          )}
         </p>
       ) : null}
 
-      <CashCountQuickModal
-        open={countModalOpen}
-        onClose={() => setCountModalOpen(false)}
-        week={week}
-        dayDetail={dayDetail?.dateYmd === selectedDay ? dayDetail : null}
-        dayLoading={dayLoading}
-        editable={isAdmin}
-        onSaved={() => reloadSummary()}
-      />
+      {isShipping ? (
+        <ShipmentCashCountQuickModal
+          open={countModalOpen}
+          onClose={() => setCountModalOpen(false)}
+          dayDetail={dayDetail?.dateYmd === selectedDay ? dayDetail : null}
+          dayLoading={dayLoading}
+          editable={isAdmin}
+          onSaved={() => reloadSummary()}
+        />
+      ) : (
+        <CashCountQuickModal
+          open={countModalOpen}
+          onClose={() => setCountModalOpen(false)}
+          week={week}
+          dayDetail={dayDetail?.dateYmd === selectedDay ? dayDetail : null}
+          dayLoading={dayLoading}
+          editable={isAdmin}
+          balancedWeekLabel={balancedWeekLabel}
+          onSaved={() => reloadSummary()}
+        />
+      )}
 
-      <CashExpenseQuickModal
-        open={quickExpenseOpen}
-        onClose={() => setQuickExpenseOpen(false)}
-        week={week}
-        activeDateYmd={selectedDay ?? undefined}
-        canCreate={!!expenseCaps?.canCreate}
-        currentUserName={currentUserName}
-        onSaved={() => reloadSummary()}
-      />
+      {isShipping ? (
+        <ShipmentCashExpenseQuickModal
+          open={quickExpenseOpen}
+          onClose={() => setQuickExpenseOpen(false)}
+          dayDate={selectedDay ?? dayRows[0]?.dateYmd ?? null}
+          canCreate={isAdmin}
+          onSaved={() => reloadSummary()}
+        />
+      ) : (
+        <CashExpenseQuickModal
+          open={quickExpenseOpen}
+          onClose={() => setQuickExpenseOpen(false)}
+          week={week}
+          activeDateYmd={selectedDay ?? undefined}
+          canCreate={!!expenseCaps?.canCreate}
+          canDelete={!!expenseCaps?.canDelete}
+          currentUserName={currentUserName}
+          balancedWeekLabel={balancedWeekLabel}
+          onSaved={() => reloadSummary()}
+        />
+      )}
+
+      {!isShipping ? (
+        <WeekBalanceConfirmModal
+          open={weekBalanceConfirmOpen}
+          state={weekBalance}
+          busy={weekBalanceBusy}
+          onCancel={() => setWeekBalanceConfirmOpen(false)}
+          onConfirm={() => void confirmWeekBalance()}
+        />
+      ) : null}
 
       <CashVarianceDetailModal
         open={varianceModalOpen}

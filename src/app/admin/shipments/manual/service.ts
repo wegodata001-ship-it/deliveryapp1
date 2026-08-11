@@ -5,6 +5,7 @@ import type {
   ManualShipmentFilters,
   ManualShipmentInput,
 } from "@/app/admin/shipments/manual/types";
+import { calculateManualShipmentPayment } from "@/lib/manual-shipment-payment";
 
 function dec(n: number | null | undefined): Prisma.Decimal | null {
   if (n == null || Number.isNaN(n)) return null;
@@ -54,6 +55,7 @@ function toDto(row: {
   arrivalDate: Date | null;
   distributionStartDate: Date | null;
   amountTotal: Prisma.Decimal | null;
+  paymentAmount: Prisma.Decimal | null;
   amountPaid: Prisma.Decimal | null;
   amountRemaining: Prisma.Decimal | null;
   internalCode: string | null;
@@ -68,6 +70,15 @@ function toDto(row: {
   createdAt: Date;
   updatedAt: Date;
 }): ManualShipmentDto {
+  const amountTotal = num(row.amountTotal);
+  const paymentAmount = num(row.paymentAmount);
+  const makasa = row.makasa;
+  const computed = calculateManualShipmentPayment({
+    paymentAmount,
+    ridominAmount: amountTotal,
+    makasaAmount: makasa,
+  });
+
   return {
     id: row.id,
     entryDate: isoDate(row.entryDate),
@@ -86,15 +97,16 @@ function toDto(row: {
     shippingDate: isoDate(row.shippingDate),
     arrivalDate: isoDate(row.arrivalDate),
     distributionStartDate: isoDate(row.distributionStartDate),
-    amountTotal: num(row.amountTotal),
-    amountPaid: num(row.amountPaid),
+    amountTotal,
+    paymentAmount,
+    amountPaid: computed.payment,
     amountRemaining: num(row.amountRemaining),
     internalCode: row.internalCode,
     notes: row.notes,
     cpm: row.cpm,
     vatAmount: num(row.vatAmount),
     airjetInvoice: row.airjetInvoice,
-    makasa: row.makasa,
+    makasa,
     makasaNumber: row.makasaNumber,
     inlandHaulage: num(row.inlandHaulage),
     portHaulage: num(row.portHaulage),
@@ -105,12 +117,11 @@ function toDto(row: {
 
 function buildData(input: ManualShipmentInput) {
   const entryDate = parseDate(input.entryDate);
-  const amountTotal = input.amountTotal ?? null;
-  const amountPaid = input.amountPaid ?? null;
-  const remaining =
-    amountTotal != null || amountPaid != null
-      ? (amountTotal ?? 0) - (amountPaid ?? 0)
-      : null;
+  const computed = calculateManualShipmentPayment({
+    paymentAmount: input.paymentAmount,
+    ridominAmount: input.amountTotal,
+    makasaAmount: input.makasa,
+  });
 
   return {
     entryDate,
@@ -129,15 +140,18 @@ function buildData(input: ManualShipmentInput) {
     shippingDate: parseDate(input.shippingDate),
     arrivalDate: parseDate(input.arrivalDate),
     distributionStartDate: parseDate(input.distributionStartDate),
-    amountTotal: dec(amountTotal),
-    amountPaid: dec(amountPaid),
-    amountRemaining: dec(remaining),
+    amountTotal: dec(input.amountTotal),
+    paymentAmount: dec(input.paymentAmount),
+    amountPaid: dec(computed.payment),
+    amountRemaining: null,
     internalCode: input.internalCode?.trim() || null,
     notes: input.notes?.trim() || null,
     cpm: input.cpm?.trim() || null,
     vatAmount: dec(input.vatAmount),
     airjetInvoice: input.airjetInvoice?.trim() || null,
-    makasa: input.makasa?.trim() || null,
+    makasa: input.makasa != null && String(input.makasa).trim() !== ""
+      ? String(input.makasa).trim()
+      : null,
     makasaNumber: input.makasaNumber?.trim() || null,
     inlandHaulage: dec(input.inlandHaulage),
     portHaulage: dec(input.portHaulage),
@@ -210,13 +224,56 @@ export async function createManualShipment(
   return row.id;
 }
 
+function dtoToInput(row: ManualShipmentDto): ManualShipmentInput {
+  return {
+    entryDate: row.entryDate,
+    monthKey: row.monthKey,
+    country: row.country,
+    shipmentNumber: row.shipmentNumber,
+    containerNumber: row.containerNumber,
+    shipmentDetails: row.shipmentDetails,
+    status: row.status,
+    city: row.city,
+    orderNumber: row.orderNumber,
+    boxes: row.boxes,
+    totalWeight: row.totalWeight,
+    releaseDate: row.releaseDate,
+    warehouseReceiptDate: row.warehouseReceiptDate,
+    shippingDate: row.shippingDate,
+    arrivalDate: row.arrivalDate,
+    distributionStartDate: row.distributionStartDate,
+    amountTotal: row.amountTotal,
+    paymentAmount: row.paymentAmount,
+    amountPaid: row.amountPaid,
+    internalCode: row.internalCode,
+    notes: row.notes,
+    cpm: row.cpm,
+    vatAmount: row.vatAmount,
+    airjetInvoice: row.airjetInvoice,
+    makasa: row.makasa,
+    makasaNumber: row.makasaNumber,
+    inlandHaulage: row.inlandHaulage,
+    portHaulage: row.portHaulage,
+  };
+}
+
 export async function updateManualShipment(
   id: string,
   input: ManualShipmentInput
 ): Promise<void> {
+  const existing = await prisma.manualShipment.findFirst({
+    where: { id, deletedAt: null },
+  });
+  if (!existing) throw new Error("משלוח לא נמצא");
+
+  const merged: ManualShipmentInput = {
+    ...dtoToInput(toDto(existing)),
+    ...input,
+  };
+
   await prisma.manualShipment.update({
     where: { id },
-    data: buildData(input),
+    data: buildData(merged),
   });
 }
 
@@ -264,8 +321,9 @@ export async function duplicateManualShipment(
       arrivalDate: src.arrivalDate,
       distributionStartDate: src.distributionStartDate,
       amountTotal: src.amountTotal,
+      paymentAmount: src.paymentAmount,
       amountPaid: src.amountPaid,
-      amountRemaining: src.amountRemaining,
+      amountRemaining: null,
       internalCode: src.internalCode,
       notes: src.notes,
       cpm: src.cpm,

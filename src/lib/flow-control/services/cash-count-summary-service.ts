@@ -19,6 +19,9 @@ import {
 } from "@/lib/cash-control-daily";
 import { formatAhWeekLabel, getAhWeekRange, listWeekDayYmds } from "@/lib/weeks/ah-week";
 import type { CashDailySummaryRowDto, CashDailyWeekSummaryPayload } from "@/app/admin/cash-control/daily-types";
+import { cashDrawerCountWhere, resolveCountryScopeFromCode } from "@/lib/country-data-scope";
+import type { WorkCountryCode } from "@/lib/work-country";
+import { DEFAULT_WORK_COUNTRY } from "@/lib/work-country";
 import { cashControlKpiService } from "@/lib/finance-data";
 
 export const FLOW_COUNTRY_LABEL = "טורקיה";
@@ -111,10 +114,14 @@ function methodToLineId(method: CashDailyMethodId): CashWeekFlowLineId | null {
   return null;
 }
 
-export async function loadFlowWeekCashCountSummary(weekCode: string): Promise<FlowWeekCashCountSummary> {
+export async function loadFlowWeekCashCountSummary(
+  weekCode: string,
+  workCountry: WorkCountryCode = DEFAULT_WORK_COUNTRY,
+): Promise<FlowWeekCashCountSummary> {
   const wk = weekCode.trim();
+  const scope = resolveCountryScopeFromCode(workCountry);
   const drawerRows = await prisma.cashDailyDrawerCount.findMany({
-    where: { weekCode: wk, countryCode: "TR" },
+    where: cashDrawerCountWhere(scope, wk),
   });
 
   const approved = Object.fromEntries(

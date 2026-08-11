@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { invalidateWeekBalanceIfBalanced } from "@/lib/cash-control/week-balance-service";
 import { ensureDocumentsTable } from "@/lib/documents/ensure";
 import { fileKindOf } from "@/lib/documents/constants";
 import { fixCashUsd, CASH_CONTROL_EPS } from "@/lib/cash-control-calculation";
@@ -216,6 +217,72 @@ function drawerToDto(drawer: CashDailyDrawerValues): Partial<Record<CashDailyMet
   return Object.fromEntries(
     allCashControlChannels().map((id) => [id, drawer[id] != null ? money(drawer[id]!) : null]),
   ) as Partial<Record<CashDailyMethodId, string | null>>;
+}
+
+/** מצטברי שבוע גולמיים — SSOT לחישוב איזון שבוע */
+export type CashControlWeekAggregates = {
+  weekCode: string;
+  weekLabel: string | null;
+  weekIntake: CashDailyIntakeTotals;
+  weekDrawer: CashDailyDrawerValues;
+  weekExpenses: CashDailyExpenseTotals;
+};
+
+export async function loadCashControlWeekAggregates(
+  week: string,
+): Promise<CashControlWeekAggregates | null> {
+  const wk = week.trim();
+  const range = getAhWeekRange(wk);
+  if (!range) return null;
+
+  const [payments, drawerRows, expenseRows] = await Promise.all([
+    prisma.payment.findMany({
+      where: cashControlWeekReconciliationPaymentsWhere(wk),
+      select: {
+        amountIls: true,
+        amountUsd: true,
+        paymentMethod: true,
+        usdPaymentMethod: true,
+        ilsPaymentMethod: true,
+        exchangeRate: true,
+        methodAllocations: { select: { method: true, currency: true, sourceAmount: true } },
+        intakeDate: true,
+        paymentDate: true,
+        createdAt: true,
+      },
+    }),
+    prisma.cashDailyDrawerCount.findMany({
+      where: { weekCode: wk, countryCode: "TR" },
+    }),
+    prisma.cashExpense.findMany({
+      where: { weekCode: wk, status: "ACTIVE" },
+      select: { expenseDate: true, currency: true, amount: true, paymentMethod: true },
+    }),
+  ]);
+
+  const intakeByDay = aggregateDailyIntakes(payments);
+  const drawerByDay = new Map(drawerRows.map((d) => [d.countDate, drawerFromDb(d)]));
+  const expenseByDay = aggregateWeekExpenses(expenseRows);
+
+  let weekIntake = emptyDailyIntake();
+  let weekDrawer: CashDailyDrawerValues = {};
+  let weekExpenses = emptyDailyExpenses();
+
+  for (const dateYmd of listWeekDayYmds(wk)) {
+    const intake = intakeByDay.get(dateYmd) ?? emptyDailyIntake();
+    weekIntake = sumIntake(weekIntake, intake);
+    weekDrawer = sumDrawer(weekDrawer, drawerByDay.get(dateYmd) ?? {});
+    const dayExp = expenseByDay.get(dateYmd) ?? emptyDailyExpenses();
+    weekExpenses = sumIntake(weekExpenses, dayExp);
+  }
+
+  return {
+    weekCode: wk,
+    weekLabel: formatAhWeekLabel(wk),
+    weekIntake,
+    weekDrawer,
+    weekExpenses,
+  };
 }
 
 export async function loadCashControlWeekSummary(week: string): Promise<CashDailyWeekSummaryPayload | null> {
@@ -552,6 +619,13 @@ export async function persistCashDailyDrawer(input: {
       ...fieldValues,
       updatedById: input.updatedById,
     },
+  });
+
+  await invalidateWeekBalanceIfBalanced({
+    weekCode: wk,
+    userId: input.updatedById,
+    reason: "ספירת קופה עודכנה",
+    trigger: dateYmd,
   });
 
   return { ok: true };

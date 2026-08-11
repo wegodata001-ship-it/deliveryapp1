@@ -2,8 +2,7 @@
 
 import type { ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { PaymentMethod } from "@prisma/client";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Search, X } from "lucide-react";
 import { IntakeLocationCombobox } from "@/components/admin/IntakeLocationCombobox";
 import { AhWeekNavNextButton, AhWeekNavPrevButton } from "@/components/admin/AhWeekNavButtons";
@@ -14,7 +13,7 @@ import {
   toAhWeekCode,
 } from "@/lib/weeks/ah-week-nav";
 import { usePaymentMethodCatalog } from "@/components/admin/PaymentMethodCatalogProvider";
-import { ORDER_COUNTRY_CODES, orderCountryLabel, type OrderCountryCode } from "@/lib/order-countries";
+import { orderCountryLabelLocalized } from "@/lib/order-countries";
 import { OS } from "@/lib/order-status-slugs";
 import { ACTIVE_WORK_WEEK_CODE } from "@/lib/active-work-week";
 import { CurrentWorkWeekButton } from "@/components/admin/CurrentWorkWeekButton";
@@ -24,6 +23,14 @@ import {
   normalizeAhWeekCode,
 } from "@/lib/work-week";
 import { useOrderStatusCatalog } from "@/components/admin/OrderStatusCatalogProvider";
+import { ShipmentMultiSelectFilter } from "@/components/admin/shipments/ShipmentMultiSelectFilter";
+import { setMultiParam } from "@/lib/orders-list-filter-params";
+import {
+  ADMIN_UI_LOCALE_DIR,
+  getMultiSelectUiStrings,
+  readDocumentUiLocale,
+  type AdminUiLocale,
+} from "@/lib/admin-ui-locale";
 
 export type OrdersCreatedByOption = {
   id: string;
@@ -35,6 +42,10 @@ export type OrdersPaymentLocationOption = {
   label: string;
 };
 
+export type OrdersCountryFilterOption = {
+  value: string;
+};
+
 type Props = {
   fromYmd: string;
   toYmd: string;
@@ -43,11 +54,12 @@ type Props = {
   customerQuery: string;
   ordersOrderNum: string;
   customerPhone: string;
-  statusFilter: string;
-  countryFilter: string;
-  createdById: string;
+  statusFilter: string[];
+  countryFilter: string[];
+  createdByIds: string[];
   createdByOptions: OrdersCreatedByOption[];
-  paymentType: string;
+  countryFilterOptions: OrdersCountryFilterOption[];
+  paymentTypes: string[];
   paymentLocation: string;
   paymentLocationOptions: OrdersPaymentLocationOption[];
   amountMin: string;
@@ -96,9 +108,10 @@ export function OrdersListToolbar({
   customerPhone,
   statusFilter,
   countryFilter,
-  createdById,
+  createdByIds,
   createdByOptions,
-  paymentType,
+  countryFilterOptions,
+  paymentTypes,
   paymentLocation,
   paymentLocationOptions,
   amountMin,
@@ -111,7 +124,10 @@ export function OrdersListToolbar({
   const router = useRouter();
   const searchParams = useSearchParams();
   const { options: STATUS_OPTIONS } = useOrderStatusCatalog();
-  const { options: PAYMENT_METHOD_OPTIONS } = usePaymentMethodCatalog();
+  const { methods: PAYMENT_METHODS } = usePaymentMethodCatalog();
+  const [uiLocale, setUiLocale] = useState<AdminUiLocale>("he");
+  const msStrings = useMemo(() => getMultiSelectUiStrings(uiLocale), [uiLocale]);
+  const msDir = ADMIN_UI_LOCALE_DIR[uiLocale];
   const ordersWeekFromUrl = (() => {
     const raw = searchParams.get("ordersWeek")?.trim() ?? "";
     return normalizeAhWeekCode(raw) ?? raw;
@@ -123,10 +139,10 @@ export function OrdersListToolbar({
   const [customerDraft, setCustomerDraft] = useState(customerQuery);
   const [orderNumDraft, setOrderNumDraft] = useState(ordersOrderNum);
   const [phoneDraft, setPhoneDraft] = useState(customerPhone);
-  const [statusSel, setStatusSel] = useState(statusFilter);
-  const [countrySel, setCountrySel] = useState(countryFilter);
-  const [createdBySel, setCreatedBySel] = useState(createdById);
-  const [payType, setPayType] = useState(paymentType);
+  const [statusValues, setStatusValues] = useState(statusFilter);
+  const [countryValues, setCountryValues] = useState(countryFilter);
+  const [createdByValues, setCreatedByValues] = useState(createdByIds);
+  const [paymentTypeValues, setPaymentTypeValues] = useState(paymentTypes);
   const [payLoc, setPayLoc] = useState(paymentLocation);
   const [minAmount, setMinAmount] = useState(amountMin);
   const [maxAmount, setMaxAmount] = useState(amountMax);
@@ -145,12 +161,16 @@ export function OrdersListToolbar({
   }, [customerQuery]);
 
   useEffect(() => {
+    setUiLocale(readDocumentUiLocale());
+  }, []);
+
+  useEffect(() => {
     setOrderNumDraft(ordersOrderNum);
     setPhoneDraft(customerPhone);
-    setStatusSel(statusFilter);
-    setCountrySel(countryFilter);
-    setCreatedBySel(createdById);
-    setPayType(paymentType);
+    setStatusValues(statusFilter);
+    setCountryValues(countryFilter);
+    setCreatedByValues(createdByIds);
+    setPaymentTypeValues(paymentTypes);
     setPayLoc(paymentLocation);
     setMinAmount(amountMin);
     setMaxAmount(amountMax);
@@ -161,14 +181,45 @@ export function OrdersListToolbar({
     customerPhone,
     statusFilter,
     countryFilter,
-    createdById,
-    paymentType,
+    createdByIds,
+    paymentTypes,
     paymentLocation,
     amountMin,
     amountMax,
     ordersOpenOnly,
     ordersReadyOnly,
   ]);
+
+  const createdByFilterOptions = useMemo(
+    () => createdByOptions.map((o) => ({ value: o.id, label: o.label })),
+    [createdByOptions],
+  );
+
+  const countryOptions = useMemo(
+    () =>
+      countryFilterOptions.map((o) => ({
+        value: o.value,
+        label: orderCountryLabelLocalized(o.value, uiLocale),
+      })),
+    [countryFilterOptions, uiLocale],
+  );
+
+  const paymentFilterOptions = useMemo(() => {
+    const opts = PAYMENT_METHODS.filter((m) => m.isActive).map((m) => ({
+      value: m.id,
+      label:
+        uiLocale === "ar" && m.nameAr
+          ? m.nameAr
+          : uiLocale === "en" && m.nameEn
+            ? m.nameEn
+            : m.nameHe,
+    }));
+    opts.push({
+      value: "NONE",
+      label: uiLocale === "ar" ? "بدون" : uiLocale === "en" ? "None" : "ללא",
+    });
+    return opts;
+  }, [PAYMENT_METHODS, uiLocale]);
 
   const setRangeFromWeekCode = useCallback((code: string) => {
     const norm = normalizeAhWeekCode(code);
@@ -189,10 +240,10 @@ export function OrdersListToolbar({
         customerDraft: string;
         orderNumDraft: string;
         phoneDraft: string;
-        statusSel: string;
-        countrySel: string;
-        createdBySel: string;
-        payType: string;
+        statusValues: string[];
+        countryValues: string[];
+        createdByValues: string[];
+        paymentTypeValues: string[];
         payLoc: string;
         minAmount: string;
         maxAmount: string;
@@ -208,10 +259,10 @@ export function OrdersListToolbar({
         customerDraft,
         orderNumDraft,
         phoneDraft,
-        statusSel,
-        countrySel,
-        createdBySel,
-        payType,
+        statusValues,
+        countryValues,
+        createdByValues,
+        paymentTypeValues,
         payLoc,
         minAmount,
         maxAmount,
@@ -238,19 +289,21 @@ export function OrdersListToolbar({
       if (s.orderNumDraft.trim()) base.set("ordersOrderNum", s.orderNumDraft.trim());
       if (s.phoneDraft.trim()) base.set("ordersPhone", s.phoneDraft.trim());
 
+      base.delete("ordersOpenOnly");
+      base.delete("ordersReadyOnly");
       if (s.openOnly) {
         base.set("ordersOpenOnly", "1");
-        base.set("status", OS.OPEN);
+        setMultiParam(base, "status", [OS.OPEN]);
       } else if (s.readyOnly) {
         base.set("ordersReadyOnly", "1");
-        base.set("status", OS.COMPLETED);
-      } else if (s.statusSel.trim()) {
-        base.set("status", s.statusSel.trim());
+        setMultiParam(base, "status", [OS.COMPLETED]);
+      } else {
+        setMultiParam(base, "status", s.statusValues);
       }
 
-      if (s.countrySel.trim()) base.set("ordersCountry", s.countrySel.trim());
-      if (s.createdBySel.trim()) base.set("createdBy", s.createdBySel.trim());
-      if (s.payType.trim()) base.set("paymentType", s.payType.trim());
+      setMultiParam(base, "ordersCountry", s.countryValues);
+      setMultiParam(base, "createdBy", s.createdByValues);
+      setMultiParam(base, "paymentType", s.paymentTypeValues);
       if (s.payLoc.trim()) base.set("paymentLocation", s.payLoc.trim());
       if (s.minAmount.trim()) base.set("amountMin", s.minAmount.trim());
       if (s.maxAmount.trim()) base.set("amountMax", s.maxAmount.trim());
@@ -261,8 +314,8 @@ export function OrdersListToolbar({
       if (opts?.refresh) router.refresh();
     },
     [
-      countrySel,
-      createdBySel,
+      countryValues,
+      createdByValues,
       customerDraft,
       from,
       maxAmount,
@@ -270,12 +323,12 @@ export function OrdersListToolbar({
       openOnly,
       orderNumDraft,
       payLoc,
-      payType,
+      paymentTypeValues,
       phoneDraft,
       readyOnly,
       router,
       searchParams,
-      statusSel,
+      statusValues,
       to,
       week,
     ],
@@ -383,28 +436,22 @@ export function OrdersListToolbar({
           </div>
         </label>
 
-        <label className="adm-orders-filter-field adm-orders-filter-field--status">
-          <span className="adm-orders-filter-label">סטטוס</span>
-          <select
-            value={openOnly ? OS.OPEN : readyOnly ? OS.COMPLETED : statusSel}
-            disabled={openOnly || readyOnly}
-            onChange={(e) => {
-              const v = e.target.value;
+        <div className="adm-orders-filter-field adm-orders-filter-field--status">
+          <ShipmentMultiSelectFilter
+            label="סטטוס"
+            options={STATUS_OPTIONS.map((s) => ({ value: s.value, label: s.label }))}
+            values={openOnly ? [OS.OPEN] : readyOnly ? [OS.COMPLETED] : statusValues}
+            onChange={(next) => {
               setOpenOnly(false);
               setReadyOnly(false);
-              setStatusSel(v);
-              pushFilters({ statusSel: v, openOnly: false, readyOnly: false });
+              setStatusValues(next);
+              pushFilters({ statusValues: next, openOnly: false, readyOnly: false });
             }}
-            className="adm-orders-week-sel adm-orders-sel-arrow"
-          >
-            <option value="">הכל</option>
-            {STATUS_OPTIONS.map((s) => (
-              <option key={s.value} value={s.value}>
-                {s.label}
-              </option>
-            ))}
-          </select>
-        </label>
+            disabled={openOnly || readyOnly}
+            strings={msStrings}
+            dir={msDir}
+          />
+        </div>
 
         <label className="adm-orders-filter-field adm-orders-filter-field--customer">
           <span className="adm-orders-filter-label">לקוח / קוד לקוח</span>
@@ -428,25 +475,19 @@ export function OrdersListToolbar({
           />
         </label>
 
-        <label className="adm-orders-filter-field adm-orders-filter-field--created-by">
-          <span className="adm-orders-filter-label">עובד שפתח הזמנה</span>
-          <select
-            value={createdBySel}
-            onChange={(e) => {
-              const v = e.target.value;
-              setCreatedBySel(v);
-              pushFilters({ createdBySel: v });
+        <div className="adm-orders-filter-field adm-orders-filter-field--created-by">
+          <ShipmentMultiSelectFilter
+            label="עובד שפתח הזמנה"
+            options={createdByFilterOptions}
+            values={createdByValues}
+            onChange={(next) => {
+              setCreatedByValues(next);
+              pushFilters({ createdByValues: next });
             }}
-            className="adm-orders-week-sel adm-orders-sel-arrow"
-          >
-            <option value="">הכל</option>
-            {createdByOptions.map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-        </label>
+            strings={msStrings}
+            dir={msDir}
+          />
+        </div>
 
         <div className="adm-orders-filter-actions">
           {leadingActions}
@@ -541,46 +582,33 @@ export function OrdersListToolbar({
             />
           </label>
 
-          <label className="adm-orders-filter-field adm-orders-filter-field--pay-type">
-            <span className="adm-orders-filter-label">צורת תשלום</span>
-            <select
-              value={payType}
-              onChange={(e) => {
-                const v = e.target.value;
-                setPayType(v);
-                pushFilters({ payType: v });
+          <div className="adm-orders-filter-field adm-orders-filter-field--pay-type">
+            <ShipmentMultiSelectFilter
+              label="צורת תשלום"
+              options={paymentFilterOptions}
+              values={paymentTypeValues}
+              onChange={(next) => {
+                setPaymentTypeValues(next);
+                pushFilters({ paymentTypeValues: next });
               }}
-              className="adm-orders-week-sel adm-orders-sel-arrow"
-            >
-              <option value="">הכל</option>
-              {PAYMENT_METHOD_OPTIONS.map((p) => (
-                <option key={p.value} value={p.value}>
-                  {p.label}
-                </option>
-              ))}
-              <option value="NONE">ללא</option>
-            </select>
-          </label>
+              strings={msStrings}
+              dir={msDir}
+            />
+          </div>
 
-          <label className="adm-orders-filter-field adm-orders-filter-field--country">
-            <span className="adm-orders-filter-label">מדינה</span>
-            <select
-              value={countrySel}
-              onChange={(e) => {
-                const v = e.target.value as OrderCountryCode | "";
-                setCountrySel(v);
-                pushFilters({ countrySel: v });
+          <div className="adm-orders-filter-field adm-orders-filter-field--country">
+            <ShipmentMultiSelectFilter
+              label="מדינה"
+              options={countryOptions}
+              values={countryValues}
+              onChange={(next) => {
+                setCountryValues(next);
+                pushFilters({ countryValues: next });
               }}
-              className="adm-orders-week-sel adm-orders-sel-arrow"
-            >
-              <option value="">כל המדינות</option>
-              {ORDER_COUNTRY_CODES.map((c) => (
-                <option key={c} value={c}>
-                  {orderCountryLabel(c)}
-                </option>
-              ))}
-            </select>
-          </label>
+              strings={msStrings}
+              dir={msDir}
+            />
+          </div>
 
           <label className="adm-orders-filter-field">
             <span className="adm-orders-filter-label">סכום מינימום ($)</span>
@@ -640,8 +668,8 @@ export function OrdersListToolbar({
                   setOpenOnly(checked);
                   if (checked) {
                     setReadyOnly(false);
-                    setStatusSel(OS.OPEN);
-                    pushFilters({ openOnly: true, readyOnly: false, statusSel: OS.OPEN });
+                    setStatusValues([OS.OPEN]);
+                    pushFilters({ openOnly: true, readyOnly: false, statusValues: [OS.OPEN] });
                   } else {
                     pushFilters({ openOnly: false });
                   }
@@ -661,8 +689,8 @@ export function OrdersListToolbar({
                   setReadyOnly(checked);
                   if (checked) {
                     setOpenOnly(false);
-                    setStatusSel(OS.COMPLETED);
-                    pushFilters({ readyOnly: true, openOnly: false, statusSel: OS.COMPLETED });
+                    setStatusValues([OS.COMPLETED]);
+                    pushFilters({ readyOnly: true, openOnly: false, statusValues: [OS.COMPLETED] });
                   } else {
                     pushFilters({ readyOnly: false });
                   }

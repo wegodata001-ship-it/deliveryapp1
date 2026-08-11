@@ -65,6 +65,7 @@ export function ShipmentControlShipmentsModal({
         r.customerPhone2,
         r.address,
         r.city,
+        r.updatedDeliveryLocation,
         r.zoneName,
         r.courierName,
         r.containerNumber,
@@ -340,7 +341,7 @@ function ShipmentRow({
               <div className="sc-expand-grid">
                 <div><span className="sc-expand-label">לקוח:</span> {r.customerName || "—"} {r.customerCode ? `(${r.customerCode})` : ""}</div>
                 <div><span className="sc-expand-label">טלפון:</span> {r.customerPhone || "—"}{r.customerPhone2 ? ` / ${r.customerPhone2}` : ""}</div>
-                <div><span className="sc-expand-label">כתובת:</span> {[r.address, r.city].filter(Boolean).join(", ") || "—"}</div>
+                <div><span className="sc-expand-label">כתובת:</span> {[r.address, r.updatedDeliveryLocation || r.city].filter(Boolean).join(", ") || "—"}</div>
                 <div><span className="sc-expand-label">קונטיינר:</span> {r.containerNumber || "—"}</div>
                 <div><span className="sc-expand-label">הערות:</span> {r.notes || "—"}</div>
               </div>

@@ -8,6 +8,7 @@ import { PaymentMethod, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { allocatePaymentAcrossOrders, roundMoney2, toPaymentIntakeBases } from "@/lib/payment-intake";
 import { activePaidPaymentWhere } from "@/lib/payment-record-status-shared";
+import { computeOrderOpenDebtUsd } from "@/lib/order-remaining-debt";
 import { allocateNextPaymentCapture, resolvePaymentWorkCountry } from "@/lib/payment-capture-code";
 import { computeFromUsdAmount } from "@/lib/financial-calc";
 import { loadFinanceSettingsSerialized } from "@/lib/financial-settings";
@@ -20,6 +21,7 @@ import {
 } from "@/lib/customer-open-debt";
 import { buildPaymentAdjustmentFeeCreateData } from "@/lib/payment-adjustment-fee";
 import { scheduleRevalidateAfterPaymentSave } from "@/lib/revalidate-after-payment-save";
+import { invalidateWeekBalanceIfBalanced } from "@/lib/cash-control/week-balance-service";
 import { paymentIntakeOrderDateThroughAhWeekEnd } from "@/lib/payment-intake-order-filter";
 import { OrderStatus as OS } from "@prisma/client";
 import { compareReceivedToDebt, computeReceivedUsd } from "@/lib/payment-intake-rebuild/compare";
@@ -170,7 +172,9 @@ export async function executePaymentIntake(params: {
       const com = o.commissionUsd ?? new Prisma.Decimal(0);
       const totalUsdVal = o.totalUsd ?? deal.add(com).toDecimalPlaces(4, 4);
       const paidSum = paidByOrder.get(o.id) ?? new Prisma.Decimal(0);
-      const remDec = totalUsdVal.sub(paidSum).toDecimalPlaces(2, 4);
+      const remDec = new Prisma.Decimal(
+        computeOrderOpenDebtUsd(Number(totalUsdVal), Number(paidSum)).toFixed(2),
+      );
       return {
         id: o.id,
         orderNumber: o.orderNumber,
@@ -195,7 +199,9 @@ export async function executePaymentIntake(params: {
     }),
   );
 
-  const debtUsd = roundMoney2(bases.reduce((s, b) => s + Math.max(0, b.totalAmountUsd - b.dbPaidUsd), 0));
+  const debtUsd = roundMoney2(
+    bases.reduce((s, b) => s + computeOrderOpenDebtUsd(b.totalAmountUsd, b.dbPaidUsd), 0),
+  );
   const compare = compareReceivedToDebt(debtUsd, receivedUsd);
 
   // אותו כלל כוונה קנוני כמו במסלול הראשי: ניסיון סגירה עם חוסר חייב
@@ -574,6 +580,12 @@ export async function executePaymentIntake(params: {
 
   const customerBalanceUsd = await getCustomerInternalBalanceUsd(cid);
   await persistCustomerBalanceSnapshot(cid, customerBalanceUsd);
+  await invalidateWeekBalanceIfBalanced({
+    weekCode,
+    userId,
+    reason: "קליטת תשלום",
+    trigger: primaryPaymentId,
+  });
   scheduleRevalidateAfterPaymentSave();
 
   return {

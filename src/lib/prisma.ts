@@ -1,6 +1,11 @@
+import "server-only";
+
 import { PrismaClient } from "@prisma/client";
 import { logDbEnvDiagnostics } from "@/lib/db-env-diagnostics";
+import { applyPrismaDatabaseUrlDefaults, isPrismaConnectionError } from "@/lib/prisma-connection-url";
 import { perfEnabled } from "@/lib/perf-log";
+
+applyPrismaDatabaseUrlDefaults();
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
@@ -23,11 +28,40 @@ function prismaClientHasRequiredDelegates(client: PrismaClient): boolean {
 }
 
 function createPrismaClient(): PrismaClient {
-  return new PrismaClient({
+  const base = new PrismaClient({
     log: perfEnabled()
       ? [{ level: "query", emit: "event" }, { level: "error", emit: "stdout" }, { level: "warn", emit: "stdout" }]
       : ["error"],
   });
+
+  if (typeof window === "undefined" && perfEnabled() && !globalForPrisma.prismaPerfSubscribed) {
+    globalForPrisma.prismaPerfSubscribed = true;
+    base.$on("query", (event) => {
+      const slow = event.duration >= 350;
+      if (!slow && process.env.DEBUG_PERF_LOGS !== "verbose") return;
+      console.error("[perf] prisma.query", {
+        durationMs: event.duration,
+        target: event.target,
+        query: event.query.slice(0, 280),
+      });
+    });
+  }
+
+  return base.$extends({
+    query: {
+      $allModels: {
+        async $allOperations({ args, query }) {
+          try {
+            return await query(args);
+          } catch (error) {
+            if (!isPrismaConnectionError(error)) throw error;
+            await base.$connect();
+            return await query(args);
+          }
+        },
+      },
+    },
+  }) as unknown as PrismaClient;
 }
 
 // Next dev caches the module singleton — recreate after `prisma generate` adds new models.
@@ -42,21 +76,16 @@ if (typeof window === "undefined") {
   logDbEnvDiagnostics("prisma:init", PRISMA_INSTANCE_ID);
 }
 
-if (typeof window === "undefined" && perfEnabled() && !globalForPrisma.prismaPerfSubscribed) {
-  globalForPrisma.prismaPerfSubscribed = true;
-  (prisma as PrismaClient & {
-    $on: (eventType: "query", callback: (event: { duration: number; target: string; query: string }) => void) => void;
-  }).$on("query", (event) => {
-    const slow = event.duration >= 350;
-    if (!slow && process.env.DEBUG_PERF_LOGS !== "verbose") return;
-    console.error("[perf] prisma.query", {
-      durationMs: event.duration,
-      target: event.target,
-      query: event.query.slice(0, 280),
-    });
-  });
-}
-
 if (process.env.NODE_ENV !== "production") {
   globalForPrisma.prisma = prisma;
+}
+
+/** Warm-up — קורא מ-instrumentation.ts בהפעלת השרת */
+export async function warmPrismaConnection(): Promise<void> {
+  try {
+    await prisma.$connect();
+  } catch {
+    // retry once after pooler reset
+    await prisma.$connect().catch(() => {});
+  }
 }

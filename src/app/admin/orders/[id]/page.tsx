@@ -10,6 +10,8 @@ import { OrderDetailActions } from "@/components/admin/OrderDetailActions";
 import { DocumentsPanel } from "@/components/admin/DocumentsPanel";
 import { isCompositePaymentMethod } from "@/lib/payment-breakdown-shared";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
+import { computeOrderLedgerView } from "@/lib/order-remaining-debt";
+import { activePaidPaymentWhere } from "@/lib/payment-record-status-shared";
 
 const PAYMENT_STATUS_HE = {
   unpaid: "לא שולם",
@@ -22,17 +24,6 @@ function fmtUsd2(n: unknown): string {
   const v = typeof n === "number" ? n : Number(n);
   if (!Number.isFinite(v)) return "—";
   return v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-function derivePaymentStatus(total: number, paid: number): keyof typeof PAYMENT_STATUS_HE {
-  let paymentStatus: keyof typeof PAYMENT_STATUS_HE = "unpaid";
-  if (total > 0.01) {
-    if (paid >= total - 0.02) paymentStatus = "paid";
-    else if (paid > 0.01) paymentStatus = "partial";
-  } else if (paid > 0.01) {
-    paymentStatus = "partial";
-  }
-  return paymentStatus;
 }
 
 export default async function AdminOrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -78,7 +69,7 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
   }
 
   const paidAgg = await prisma.payment.aggregate({
-    where: { orderId: order.id, amountUsd: { not: null } },
+    where: { orderId: order.id, amountUsd: { not: null }, ...activePaidPaymentWhere },
     _sum: { amountUsd: true },
   });
   const paidUsd = Number(paidAgg._sum.amountUsd ?? 0);
@@ -99,8 +90,14 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
   const plannedMethods = new Set(order.paymentBreakdown.map((b) => b.paymentMethod));
   const extraActualMethods = [...actualByMethod.keys()].filter((m) => !plannedMethods.has(m));
   const hasMethodDeviation = extraActualMethods.length > 0;
-  const totalUsd = order.totalUsd != null ? Number(order.totalUsd) : 0;
-  const payKey = derivePaymentStatus(totalUsd, paidUsd);
+  const ledger = computeOrderLedgerView({
+    orderId: order.id,
+    totalUsd: order.totalUsd,
+    amountUsd: order.amountUsd,
+    commissionUsd: order.commissionUsd,
+    paidUsd,
+  });
+  const payKey = ledger.paymentStatus;
   const st = orderBusinessStatusDisplay(order.status);
 
   const orderDateYmd = order.orderDate ? formatLocalYmd(new Date(order.orderDate)) : "—";

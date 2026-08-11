@@ -1,4 +1,4 @@
-import { OrderEditRequestStatus, type Prisma } from "@prisma/client";
+import { OrderEditRequestStatus, UserRole, type Prisma } from "@prisma/client";
 import { isLegacyOrderStatusSlug, OS } from "@/lib/order-status-slugs";
 import type { OrderListRow, OrdersStatusSummary } from "@/components/admin/OrdersListShell";
 import type { OrdersCreatedByOption, OrdersPaymentLocationOption } from "@/components/admin/OrdersListToolbar";
@@ -10,8 +10,14 @@ import { logDbEnvDiagnostics } from "@/lib/db-env-diagnostics";
 import { prisma } from "@/lib/prisma";
 import { formatLocalYmd, parseOrdersListDateFilterFromSearchParams } from "@/lib/work-week";
 import { buildOrdersListWhereFromSearchParams } from "@/app/admin/orders/orders-list-where";
+import { normalizeOrderSourceCountry, orderCountryLabel } from "@/lib/order-countries";
 import { formatMoneyAmount } from "@/lib/money-format";
 import { ensureOrderCompletionColumnOnce } from "@/lib/order-completion";
+import {
+  computeOrderLedgerView,
+  deriveOrderPaymentDisplayStatus,
+} from "@/lib/order-remaining-debt";
+import { groupByActivePayments } from "@/lib/payment-record-status";
 
 function fmtUsd2(n: unknown): string | null {
   if (n == null) return null;
@@ -44,10 +50,15 @@ function readPageParam(sp: Record<string, string | string[] | undefined>): numbe
   return Number.isFinite(n) && n >= 1 ? n : 1;
 }
 
+export type OrdersCountryFilterOption = {
+  value: string;
+};
+
 export type OrdersListPageData = {
   orders: OrderListRow[];
   statusSummary: OrdersStatusSummary;
   createdByOptions: OrdersCreatedByOption[];
+  countryFilterOptions: OrdersCountryFilterOption[];
   paymentLocationOptions: OrdersPaymentLocationOption[];
   pagination: {
     page: number;
@@ -102,6 +113,8 @@ const ORDERS_LIST_CACHE_MAX_ENTRIES = 120;
 const ordersStore = new Map<string, CacheEntry<OrderListDbRow[]>>();
 const ordersCountStore = new Map<string, CacheEntry<number>>();
 const ordersStatsStore = new Map<string, CacheEntry<IntakeLocationRow[]>>();
+const ordersCreatorsStore = new Map<string, CacheEntry<OrdersCreatedByOption[]>>();
+const ordersCountryOptionsStore = new Map<string, CacheEntry<OrdersCountryFilterOption[]>>();
 const ordersKpiStore = new Map<string, CacheEntry<StatusGroupRow[]>>();
 const ordersCompletedKpiStore = new Map<string, CacheEntry<CompletedGroupRow[]>>();
 const ordersPaymentSumsStore = new Map<string, CacheEntry<PaymentSumRow[]>>();
@@ -111,6 +124,8 @@ export function invalidateOrdersListDataCache(): void {
   ordersStore.clear();
   ordersCountStore.clear();
   ordersStatsStore.clear();
+  ordersCreatorsStore.clear();
+  ordersCountryOptionsStore.clear();
   ordersKpiStore.clear();
   ordersCompletedKpiStore.clear();
   ordersPaymentSumsStore.clear();
@@ -169,6 +184,51 @@ function ordersScopeCacheKey(sp: Record<string, string | string[] | undefined>):
     __from: range.fromYmd,
     __to: range.toYmd,
   });
+}
+
+async function loadOrderCreatorFilterOptions(): Promise<OrdersCreatedByOption[]> {
+  const createOrdersPerm = await prisma.permission.findUnique({
+    where: { key: "create_orders" },
+    select: { id: true },
+  });
+  const users = await prisma.user.findMany({
+    where: {
+      isActive: true,
+      OR: [
+        { role: UserRole.ADMIN },
+        ...(createOrdersPerm
+          ? [{ permissions: { some: { permissionId: createOrdersPerm.id } } }]
+          : []),
+      ],
+    },
+    select: { id: true, fullName: true, username: true },
+    orderBy: { fullName: "asc" },
+  });
+  return users.map((u) => ({
+    id: u.id,
+    label: u.fullName?.trim() || u.username || u.id,
+  }));
+}
+
+async function loadOrderCountryFilterOptions(
+  where: Prisma.OrderWhereInput,
+): Promise<OrdersCountryFilterOption[]> {
+  const groups = await (prisma.order.groupBy as unknown as (args: {
+    by: ["sourceCountry"];
+    where: Prisma.OrderWhereInput;
+  }) => Promise<{ sourceCountry: string | null }[]>)({
+    by: ["sourceCountry"],
+    where: { ...where, sourceCountry: { not: null } },
+  });
+  const set = new Set<string>();
+  for (const g of groups) {
+    if (!g.sourceCountry) continue;
+    const norm = normalizeOrderSourceCountry(g.sourceCountry);
+    set.add(norm ?? g.sourceCountry);
+  }
+  return [...set]
+    .sort((a, b) => orderCountryLabel(a).localeCompare(orderCountryLabel(b), "he"))
+    .map((value) => ({ value }));
 }
 
 export type FetchOrdersListPageDataOptions = {
@@ -236,6 +296,10 @@ export async function fetchOrdersListPageData(
   const where = buildOrdersListWhereFromSearchParams(sp);
   const statsScopeParams = buildOrdersStatsScopeParams(sp);
   const statsWhere = buildOrdersListWhereFromSearchParams(statsScopeParams);
+  const countryOptionsWhere = buildOrdersListWhereFromSearchParams({
+    ...statsScopeParams,
+    ordersCountry: undefined,
+  });
   const fullCacheKey = stableSearchParamsKey(sp);
   const scopeCacheKey = ordersScopeCacheKey(sp);
   const page = readPageParam(sp);
@@ -243,7 +307,8 @@ export async function fetchOrdersListPageData(
   const ordersPageCacheKey = `${fullCacheKey}|page=${page}|pageSize=${pageSize}|user=${me.id}`;
   const countCacheKey = `${fullCacheKey}|count`;
 
-  const [statusGroups, completedGroups, intakeLocationRows, totalCount] = await withPerfTimer(
+  const [statusGroups, completedGroups, intakeLocationRows, totalCount, createdByOptions, countryFilterOptions] =
+    await withPerfTimer(
     "orders.page.fetchOrders",
     async () => {
       const statusP = cachedTimed("ordersKpiStore", ordersKpiStore, scopeCacheKey, (ms) => (kpiMs += ms), async () =>
@@ -285,7 +350,23 @@ export async function fetchOrdersListPageData(
       const countP = cachedTimed("ordersCountStore", ordersCountStore, countCacheKey, (ms) => (ordersCountMs += ms), () =>
         prisma.order.count({ where }),
       );
-      return Promise.all([statusP, completedP, locationsP, countP]);
+      const creatorsP = cachedTimed(
+        "ordersCreatorsStore",
+        ordersCreatorsStore,
+        "orderCreators:v1",
+        (ms) => (statsMs += ms),
+        loadOrderCreatorFilterOptions,
+        { bypass: options.refreshStats },
+      );
+      const countriesP = cachedTimed(
+        "ordersCountryOptionsStore",
+        ordersCountryOptionsStore,
+        `${scopeCacheKey}|countryOptions`,
+        (ms) => (statsMs += ms),
+        () => loadOrderCountryFilterOptions(countryOptionsWhere),
+        { bypass: options.refreshStats },
+      );
+      return Promise.all([statusP, completedP, locationsP, countP, creatorsP, countriesP]);
     },
   );
 
@@ -441,15 +522,11 @@ export async function fetchOrdersListPageData(
   const paySums =
     ids.length > 0
       ? await cachedTimed("ordersPaymentSumsStore", ordersPaymentSumsStore, `paySums:${ids.slice().sort().join(",")}`, (ms) => (statsMs += ms), async () =>
-          (await (prisma.payment.groupBy as unknown as (args: {
-            by: ["orderId"];
-            where: Prisma.PaymentWhereInput;
-            _sum: { amountUsd: true };
-          }) => Promise<PaymentSumRow[]>)({
-            by: ["orderId"],
-            where: { orderId: { in: ids } },
-            _sum: { amountUsd: true },
-          })) as PaymentSumRow[],
+          (await groupByActivePayments(
+            "orderId",
+            { orderId: { in: ids }, amountUsd: { not: null } },
+            { amountUsd: true },
+          )) as PaymentSumRow[],
         )
       : [];
   const paidByOrder = new Map<string, number>();
@@ -463,20 +540,23 @@ export async function fetchOrdersListPageData(
 
   const orders: OrderListRow[] = await perfTimed((ms) => (summaryMs += ms), async () =>
     rows.map((r) => {
-      const total = r.totalUsd != null ? Number(r.totalUsd) : 0;
       const isDebtWithdrawal = r.status === OS.DEBT_WITHDRAWAL;
       const rawPaid = paidByOrder.get(r.id) ?? 0;
       const paid = isDebtWithdrawal ? 0 : rawPaid;
-      const balanceUsd = isDebtWithdrawal ? 0 : total - paid;
-      let paymentStatus: OrderListRow["paymentStatus"] = "unpaid";
-      if (isDebtWithdrawal) {
-        paymentStatus = "paid";
-      } else if (total > 0.01) {
-        if (paid >= total - 0.02) paymentStatus = "paid";
-        else if (paid > 0.01) paymentStatus = "partial";
-      } else if (paid > 0.01) {
-        paymentStatus = "partial";
-      }
+      const ledger = computeOrderLedgerView({
+        orderId: r.id,
+        totalUsd: r.totalUsd,
+        amountUsd: r.amountUsd,
+        commissionUsd: r.commissionUsd,
+        paidUsd: paid,
+      });
+      const balanceUsd = isDebtWithdrawal ? 0 : ledger.remainingUsd;
+      const paymentStatus: OrderListRow["paymentStatus"] = isDebtWithdrawal
+        ? "paid"
+        : deriveOrderPaymentDisplayStatus({
+            totalUsd: ledger.totalUsd,
+            paidUsd: ledger.paidUsd,
+          });
 
       let editBadge: OrderListRow["editBadge"] = null;
       let pendingEditOwnedByMe = false;
@@ -556,7 +636,8 @@ export async function fetchOrdersListPageData(
   return {
     orders,
     statusSummary,
-    createdByOptions: [],
+    createdByOptions,
+    countryFilterOptions,
     paymentLocationOptions: intakeLocationRows.map((l) => ({ id: l.id, label: l.name })),
     pagination: {
       page: safePage,

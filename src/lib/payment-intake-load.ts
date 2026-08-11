@@ -8,6 +8,7 @@ import {
   type OrderBreakdownMethodRow,
   type PaymentIntakeOrderRow,
 } from "@/lib/payment-intake";
+import { reconcileOrderBreakdownWithLedger } from "@/lib/order-remaining-debt";
 import { computeOrderMethodDeviation, isCompositePaymentMethod, paymentMethodBucketKey } from "@/lib/payment-breakdown-shared";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 import type { PaymentIntakeCustomerPaymentRow } from "@/lib/payment-intake-customer-kpi";
@@ -224,6 +225,7 @@ function mapOrderToIntakeRow(
       })),
       actualMethods.map((a) => ({ method: a.method, usd: a.usd })),
     ).hasDeviation;
+    breakdown = reconcileOrderBreakdownWithLedger(breakdown, remainingN);
   }
   return {
     id: o.id,

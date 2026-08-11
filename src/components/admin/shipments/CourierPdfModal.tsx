@@ -10,6 +10,11 @@ import type {
 } from "@/app/admin/shipments/types";
 import { SHIPMENT_PAYMENT_STATUS_LABELS } from "@/app/admin/shipments/types";
 import { openPdfPreview } from "@/lib/pdf-preview";
+import type { CourierPdfPreviewRow } from "@/lib/shipment-courier-pdf-types";
+import {
+  CourierPdfPreviewPanel,
+  type CourierPdfRowOverride,
+} from "@/components/admin/shipments/CourierPdfPreviewPanel";
 
 const MAX_COURIERS = 2;
 
@@ -69,6 +74,10 @@ export function CourierPdfModal({
   }));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [step, setStep] = useState<"configure" | "preview">("configure");
+  const [previewCourierId, setPreviewCourierId] = useState<string | null>(null);
+  const [previewRows, setPreviewRows] = useState<CourierPdfPreviewRow[]>([]);
+  const [rowOverrides, setRowOverrides] = useState<Record<string, CourierPdfRowOverride>>({});
 
   const activeCouriers = useMemo(
     () => couriers.filter((c) => c.isActive),
@@ -165,6 +174,7 @@ export function CourierPdfModal({
     courier: ShipmentCourierDto,
     records: ShipmentRecordDto[],
     mode: "preview" | "download",
+    overrides: Record<string, CourierPdfRowOverride> = rowOverrides,
   ): Promise<string> {
     const res = await fetch("/api/admin/shipments/courier-pdf", {
       method: "POST",
@@ -174,6 +184,11 @@ export function CourierPdfModal({
         recordIds: records.map((r) => r.id),
         batchId: batchId ?? null,
         disposition: mode === "download" ? "attachment" : "inline",
+        overrides: records.map((r) => ({
+          recordId: r.id,
+          customerName: overrides[r.id]?.customerName,
+          locality: overrides[r.id]?.locality,
+        })),
       }),
     });
 
@@ -195,7 +210,66 @@ export function CourierPdfModal({
     return filename;
   }
 
-  async function runExport(mode: "preview" | "download") {
+  async function loadArabicPreview(courierId: string) {
+    setError(null);
+    const courier = selectedCouriers.find((c) => c.id === courierId);
+    const records = byCourier.get(courierId) ?? [];
+    if (!courier || records.length === 0) {
+      setError("אין משלוחים לתצוגה מקדימה.");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const res = await fetch("/api/admin/shipments/courier-pdf/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recordIds: records.map((r) => r.id) }),
+      });
+      const payload = (await res.json().catch(() => null)) as {
+        ok?: boolean;
+        error?: string;
+        rows?: CourierPdfPreviewRow[];
+      } | null;
+      if (!res.ok || !payload?.ok || !payload.rows) {
+        throw new Error(payload?.error || "טעינת תצוגה מקדימה נכשלה");
+      }
+      setPreviewCourierId(courierId);
+      setPreviewRows(payload.rows);
+      setRowOverrides({});
+      setStep("preview");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveManualArabicName(entry: {
+    context: "customer" | "locality";
+    originalName: string;
+    arabicName: string;
+  }) {
+    const res = await fetch("/api/admin/shipments/courier-pdf/save-names", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        entries: [
+          {
+            context: entry.context,
+            originalName: entry.originalName,
+            arabicName: entry.arabicName,
+          },
+        ],
+      }),
+    });
+    const payload = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+    if (!res.ok || !payload?.ok) {
+      throw new Error(payload?.error || "שמירת תיקון ערבי נכשלה");
+    }
+  }
+
+  async function runExport(mode: "preview" | "download", courierId?: string | null) {
     setError(null);
     if (courierIds.length === 0) {
       setError("יש לבחור שליח אחד או שניים.");
@@ -218,10 +292,14 @@ export function CourierPdfModal({
     try {
       const names: string[] = [];
       let count = 0;
-      for (const courier of selectedCouriers) {
+      const couriersToExport =
+        courierId != null
+          ? selectedCouriers.filter((c) => c.id === courierId)
+          : selectedCouriers;
+      for (const courier of couriersToExport) {
         const rows = byCourier.get(courier.id) ?? [];
         if (rows.length === 0) continue;
-        await exportOne(courier, rows, mode);
+        await exportOne(courier, rows, mode, rowOverrides);
         names.push(`${courier.name} (${rows.length})`);
         count += rows.length;
       }
@@ -240,6 +318,9 @@ export function CourierPdfModal({
 
   const tableSelectedCount = selectedIds.size;
   const filteredCount = filteredRecords.length;
+  const previewCourier = previewCourierId
+    ? selectedCouriers.find((c) => c.id === previewCourierId) ?? null
+    : null;
 
   return (
     <div
@@ -257,8 +338,8 @@ export function CourierPdfModal({
         aria-labelledby="courier-pdf-title"
         onClick={(e) => e.stopPropagation()}
         style={{
-          maxWidth: 820,
-          width: "min(820px, 96vw)",
+          maxWidth: step === "preview" ? 1100 : 820,
+          width: step === "preview" ? "min(1100px, 98vw)" : "min(820px, 96vw)",
           maxHeight: "92vh",
           display: "flex",
           flexDirection: "column",
@@ -267,7 +348,7 @@ export function CourierPdfModal({
         <header className="shp-modal__head" style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <FileText size={18} color="#dc2626" />
           <strong id="courier-pdf-title" style={{ flex: 1 }}>
-            הפקת PDF לשליח
+            {step === "preview" ? "תצוגה מקדימה — كشف تسليم الشحنات" : "הפקת PDF לשליח"}
           </strong>
           <button
             type="button"
@@ -285,6 +366,25 @@ export function CourierPdfModal({
           className="shp-modal__body"
           style={{ display: "grid", gap: 14, overflow: "auto", flex: 1 }}
         >
+          {step === "preview" ? (
+            <>
+              {previewCourier ? (
+                <div style={{ fontSize: 13, color: "#475569" }}>
+                  שליח: <strong>{previewCourier.name}</strong> · {previewRows.length} משלוחים
+                </div>
+              ) : null}
+              <CourierPdfPreviewPanel
+                rows={previewRows}
+                overrides={rowOverrides}
+                onOverridesChange={setRowOverrides}
+                onSaveManualName={async (entry) => {
+                  await saveManualArabicName(entry);
+                }}
+                busy={busy}
+              />
+            </>
+          ) : (
+            <>
           <div
             className="shp-alert"
             style={{
@@ -512,19 +612,63 @@ export function CourierPdfModal({
               {error}
             </div>
           )}
+            </>
+          )}
         </div>
 
         <footer
           className="shp-modal__foot"
           style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "flex-start" }}
         >
+          {step === "preview" ? (
+            <>
+              <button
+                type="button"
+                className="shp-btn shp-btn--secondary"
+                disabled={busy}
+                onClick={() => {
+                  setStep("configure");
+                  setPreviewRows([]);
+                  setPreviewCourierId(null);
+                }}
+              >
+                חזרה
+              </button>
+              <button
+                type="button"
+                className="shp-btn shp-btn--secondary"
+                disabled={busy || !previewCourierId}
+                onClick={() => void runExport("preview", previewCourierId)}
+              >
+                תצוגת PDF
+              </button>
+              <button
+                type="button"
+                className="shp-btn shp-btn--primary"
+                disabled={busy || !previewCourierId}
+                onClick={() => void runExport("download", previewCourierId)}
+              >
+                {busy ? "מפיק…" : "הורד PDF"}
+              </button>
+            </>
+          ) : (
+            <>
+          <button
+            type="button"
+            className="shp-btn shp-btn--secondary"
+            disabled={!canExport || courierIds.length !== 1}
+            onClick={() => void loadArabicPreview(courierIds[0]!)}
+            title={courierIds.length !== 1 ? "תצוגה מקדימה זמינה לשליח אחד בכל פעם" : undefined}
+          >
+            תצוגה מקדימה בערבית
+          </button>
           <button
             type="button"
             className="shp-btn shp-btn--secondary"
             disabled={!canExport}
             onClick={() => void runExport("preview")}
           >
-            תצוגה מקדימה
+            תצוגת PDF
           </button>
           <button
             type="button"
@@ -546,6 +690,8 @@ export function CourierPdfModal({
           >
             ביטול
           </button>
+            </>
+          )}
         </footer>
       </div>
     </div>

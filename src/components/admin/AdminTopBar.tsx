@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Menu } from "lucide-react";
 import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
-import type { SerializedFinancial } from "@/lib/financial-settings";
+import type { SerializedFinancial } from "@/lib/financial-settings.shared";
 import { useAdminNavLayout } from "@/components/admin/AdminNavLayoutContext";
 import { shouldShowGlobalFilter } from "@/components/admin/GlobalFilterBar";
 import { useAdminFinancialModal } from "@/components/admin/AdminFinancialModalContext";

@@ -633,12 +633,19 @@ export async function fetchOrderForPaymentContextAction(
   const com = order.commissionUsd ?? new Prisma.Decimal(0);
   const totalUsdVal = order.totalUsd ?? deal.add(com).toDecimalPlaces(4, 4);
 
+  const { activePaidPaymentWhere } = await import("@/lib/payment-record-status-shared");
+  const { computeOrderLedgerView } = await import("@/lib/order-remaining-debt");
   const payAgg = await prisma.payment.aggregate({
-    where: { orderId: order.id, amountUsd: { not: null } },
+    where: { orderId: order.id, amountUsd: { not: null }, ...activePaidPaymentWhere },
     _sum: { amountUsd: true },
   });
   const paidUsd = payAgg._sum.amountUsd ?? new Prisma.Decimal(0);
-  const remainingUsd = totalUsdVal.sub(paidUsd).toDecimalPlaces(2, 4);
+  const ledger = computeOrderLedgerView({
+    orderId: order.id,
+    totalUsd: totalUsdVal,
+    paidUsd,
+  });
+  const remainingUsd = new Prisma.Decimal(ledger.remainingUsd.toFixed(2));
 
   const label = order.customer?.displayName ?? order.customerNameSnapshot ?? "—";
 

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ACTIVE_WORK_WEEK_CODE } from "@/lib/active-work-week";
-import type { SerializedFinancial } from "@/lib/financial-settings";
+import type { SerializedFinancial } from "@/lib/financial-settings.shared";
 import type { AdminToastFn } from "@/components/admin/AdminNavShell";
 import type { PaymentWindowProps } from "@/lib/admin-windows";
 import {

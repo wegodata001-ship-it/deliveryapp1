@@ -26,6 +26,8 @@ export type ShipmentRecordExpenseDto = {
   paymentMethod: string;
   paymentMethodLabel: string;
   expenseDate: string; // YYYY-MM-DD
+  createdById: string | null;
+  createdByName: string | null;
   createdAt: string;
 };
 
@@ -48,6 +50,22 @@ export const SHIPMENT_BATCH_EXPENSE_LABELS: Record<ShipmentBatchExpenseCategory,
   OTHER: "אחר",
 };
 
+/** קטגוריות לניהול הוצאות משלוחים (כולל חניה) */
+export const SHIPMENT_MANAGE_EXPENSE_LABELS: Record<string, string> = {
+  FUEL: "דלק",
+  ROAD6: "כביש 6",
+  PARKING: "חניה",
+  PORT: "נמל",
+  STORAGE: "אחסנה",
+  UNLOADING: "פריקה",
+  TRANSPORT: "הובלה",
+  OTHER: "אחר",
+};
+
+export const SHIPMENT_MANAGE_EXPENSE_CATEGORIES = Object.keys(
+  SHIPMENT_MANAGE_EXPENSE_LABELS,
+) as (keyof typeof SHIPMENT_MANAGE_EXPENSE_LABELS)[];
+
 export type ShipmentBatchExpenseDto = {
   id: string;
   batchId: string;
@@ -59,7 +77,28 @@ export type ShipmentBatchExpenseDto = {
   paymentMethod: string | null;
   paymentMethodLabel: string | null;
   expenseDate: string;
+  createdById: string | null;
+  createdByName: string | null;
   createdAt: string;
+};
+
+/** שורה מאוחדת לחלון ניהול הוצאות */
+export type ShipmentExpenseManageRow = {
+  id: string;
+  source: "batch" | "record";
+  batchId: string;
+  batchNumber: string;
+  recordId?: string;
+  category: string;
+  categoryLabel: string;
+  amount: number;
+  currency: "ILS" | "USD";
+  paymentMethod: string | null;
+  paymentMethodLabel: string | null;
+  expenseDate: string;
+  notes: string | null;
+  createdById: string | null;
+  createdByName: string | null;
 };
 
 export type ShipmentBatchExpenseSummary = {
@@ -125,6 +164,8 @@ export type ShipmentControlRecord = {
   customerPhone2: string | null;
   address: string | null;
   city: string | null;
+  /** מקום מסירה מעודכן — SSOT מטבלת התאמות */
+  updatedDeliveryLocation: string | null;
   boxes: number | null;
   cartonDetails: string | null;
   weight: number | null;

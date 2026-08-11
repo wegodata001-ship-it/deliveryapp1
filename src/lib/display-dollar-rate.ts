@@ -1,4 +1,4 @@
-import type { SerializedFinancial } from "@/lib/financial-settings";
+import type { SerializedFinancial } from "@/lib/financial-settings.shared";
 
 function formatRateField(raw: string | null | undefined): string | null {
   const t = raw?.trim();

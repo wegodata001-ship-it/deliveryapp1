@@ -124,6 +124,7 @@ model User {
   paymentCashAuditReviews    PaymentCashAuditReview[] @relation("PaymentCashAuditReviewBy")
   cashDailyDrawerCounts      CashDailyDrawerCount[]   @relation("CashDailyDrawerCountBy")
   cashWeekFlowsUpdated       CashWeekFlow[]           @relation("CashWeekFlowBy")
+  cashWeekFlowsBalanced      CashWeekFlow[]           @relation("CashWeekFlowBalancedBy")
   turkeyTransferMovements  TurkeyTransferMovement[] @relation("TurkeyTransferMovementBy")
   paymentAdjustmentFeesCreated PaymentAdjustmentFee[] @relation("PaymentAdjustmentFeeCreatedBy")
   paymentAdjustmentFeesClosed  PaymentAdjustmentFee[] @relation("PaymentAdjustmentFeeClosedBy")
@@ -774,11 +775,18 @@ model CashWeekFlow {
   fxRemainderBankIls Decimal?        @db.Decimal(19, 4)
   /** היסטוריית רכישות מט"ח — מערך JSON */
   fxPurchases        Json?
+  /** OPEN | NEEDS_BALANCE | READY | BALANCED */
+  weekBalanceStatus     String    @default("OPEN") @map("week_balance_status")
+  weekBalancedAt        DateTime? @map("week_balanced_at")
+  weekBalancedById      String?   @map("week_balanced_by_id")
+  weekBalanceSnapshot   Json?     @map("week_balance_snapshot")
+  weekBalanceDataHash   String?   @map("week_balance_data_hash")
   updatedById        String?
   createdAt          DateTime        @default(now())
   updatedAt          DateTime        @updatedAt
 
   updatedBy User? @relation("CashWeekFlowBy", fields: [updatedById], references: [id])
+  weekBalancedBy User? @relation("CashWeekFlowBalancedBy", fields: [weekBalancedById], references: [id])
   turkeyTransferMovements TurkeyTransferMovement[]
 
   @@unique([countryCode, weekCode])
@@ -1291,6 +1299,22 @@ model DeliveryLocationAudit {
   @@map("DeliveryLocationAudit")
 }
 
+/// תעתיק/תרגום ערבי ל-PDF שליח — cache לפי שם מקור (לא דורס Customer.nameAr)
+model ArabicDisplayNameCache {
+  id               String   @id @default(uuid())
+  context          String
+  originalName     String
+  normalizedKey    String
+  arabicName       String
+  isManualOverride Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([context, normalizedKey])
+  @@index([context])
+  @@map("ArabicDisplayNameCache")
+}
+
 /// שליח קבוע במודול המשלוחים — מנוהל מתוך הגדרות המודול
 model ShipmentCourier {
   id          String   @id @default(uuid())
@@ -1591,6 +1615,8 @@ model ManualShipment {
   arrivalDate           DateTime?
   distributionStartDate DateTime?
   amountTotal           Decimal?  @db.Decimal(19, 4)
+  /// סכום התשלום (קלט) — בסיס לחישוב עמודת «תשלום»
+  paymentAmount         Decimal?  @db.Decimal(19, 4)
   amountPaid            Decimal?  @db.Decimal(19, 4)
   /// יתרה נשמרת לתצוגה מהירה (מחושבת בשמירה)
   amountRemaining       Decimal?  @db.Decimal(19, 4)

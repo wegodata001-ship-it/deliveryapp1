@@ -2,12 +2,15 @@ import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getAhWeekRange } from "@/lib/weeks/ah-week";
-import { executeFxPurchase } from "@/lib/flow-control/fx-purchase/service";
+import { executeFxPurchase, updateFxPurchase } from "@/lib/flow-control/fx-purchase/service";
 import { saveFlowWeekCashCount } from "@/lib/flow-control/services/cash-count-service";
 import { syncCashCountTurkeyAllocationInTx } from "@/lib/flow-control/turkey-transfer-balance-service";
 import type { ManagerCountForm } from "@/app/admin/cash-flow/flow-types";
 import { dec } from "@/app/admin/cash-flow/week-flow-service";
 import type { CashWeekFlowLineId } from "@/lib/cash-control-week-flow";
+import { requireWorkCountryScope } from "@/lib/country-work-context.server";
+import { flowWeekCompositeKey, type FlowWorkScope } from "@/lib/flow-control/flow-country-scope";
+import type { WorkCountryCode } from "@/lib/work-country";
 
 function fcNum(v: string | null | undefined): number {
   const n = Number(String(v ?? "").replace(",", "."));
@@ -18,9 +21,12 @@ export async function persistManagerCount(input: {
   week: string;
   form: ManagerCountForm;
   updatedById: string;
+  workCountry?: WorkCountryCode;
 }): Promise<{ ok: boolean; error?: string }> {
   const wk = input.week.trim();
   if (!getAhWeekRange(wk)) return { ok: false, error: "שבוע לא תקין" };
+  const scope = requireWorkCountryScope(input.workCountry);
+  const flowScope: FlowWorkScope = { workCountry: scope.workCountry };
 
   const f = input.form;
   const allocationUsd = fcNum(f.turkeyTransferUsd);
@@ -28,9 +34,9 @@ export async function persistManagerCount(input: {
 
   await prisma.$transaction(async (tx) => {
     const flowRow = await tx.cashWeekFlow.upsert({
-      where: { countryCode_weekCode: { countryCode: "TR", weekCode: wk } },
+      where: flowWeekCompositeKey(flowScope, wk),
       create: {
-        countryCode: "TR",
+        countryCode: scope.workCountry,
         weekCode: wk,
         countedCashUsd: dec(f.countedCashUsd),
         countedCashIls: dec(f.countedCashIls),
@@ -78,6 +84,10 @@ export async function persistFxPurchase(input: {
   rate: number;
   remainderCashIls: number;
   remainderBankIls: number;
+  remainderAction?: "CASH" | "BANK" | "SPLIT";
+  remainderBankKey?: string | null;
+  remainderBankLabel?: string | null;
+  remainderBankAccountId?: string | null;
   note?: string | null;
   updatedById: string;
   createdByName?: string | null;
@@ -92,6 +102,50 @@ export async function persistFxPurchase(input: {
     rate: input.rate,
     remainderCashIls: input.remainderCashIls,
     remainderBankIls: input.remainderBankIls,
+    remainderAction: input.remainderAction,
+    remainderBankKey: input.remainderBankKey,
+    remainderBankLabel: input.remainderBankLabel,
+    remainderBankAccountId: input.remainderBankAccountId,
+    note: input.note,
+    updatedById: input.updatedById,
+    createdByName: input.createdByName,
+  });
+
+  if (res.ok) revalidatePath("/admin/cash-flow");
+  return res;
+}
+
+export async function persistFxPurchaseUpdate(input: {
+  week: string;
+  purchaseId: string;
+  track: import("@/app/admin/cash-flow/flow-types").FxPurchaseTrack;
+  ilsAmount: number;
+  rate: number;
+  remainderCashIls: number;
+  remainderBankIls: number;
+  remainderAction?: "CASH" | "BANK" | "SPLIT";
+  remainderBankKey?: string | null;
+  remainderBankLabel?: string | null;
+  remainderBankAccountId?: string | null;
+  note?: string | null;
+  updatedById: string;
+  createdByName?: string | null;
+}): Promise<{ ok: boolean; error?: string; auditId?: string }> {
+  const wk = input.week.trim();
+  if (!getAhWeekRange(wk)) return { ok: false, error: "שבוע לא תקין" };
+
+  const res = await updateFxPurchase({
+    weekCode: wk,
+    purchaseId: input.purchaseId,
+    track: input.track,
+    ilsAmount: input.ilsAmount,
+    rate: input.rate,
+    remainderCashIls: input.remainderCashIls,
+    remainderBankIls: input.remainderBankIls,
+    remainderAction: input.remainderAction,
+    remainderBankKey: input.remainderBankKey,
+    remainderBankLabel: input.remainderBankLabel,
+    remainderBankAccountId: input.remainderBankAccountId,
     note: input.note,
     updatedById: input.updatedById,
     createdByName: input.createdByName,

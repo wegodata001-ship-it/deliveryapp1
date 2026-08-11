@@ -13,6 +13,10 @@ export async function saveFxPurchaseAction(input: {
   rate: number;
   remainderCashIls: number;
   remainderBankIls: number;
+  remainderAction?: "CASH" | "BANK" | "SPLIT";
+  remainderBankKey?: string | null;
+  remainderBankLabel?: string | null;
+  remainderBankAccountId?: string | null;
   note?: string | null;
 }): Promise<{ ok: boolean; error?: string; auditId?: string }> {
   const me = await requireAuth();

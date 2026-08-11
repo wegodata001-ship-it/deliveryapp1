@@ -178,7 +178,7 @@ export function buildTurkeyBalanceResult(params: {
 
 export async function loadTurkeyMovementsUpToWeek(
   weekCode: string,
-  countryCode: "TR" = "TR",
+  countryCode: import("@/lib/work-country").WorkCountryCode = "TR",
 ): Promise<TurkeyTransferMovementDto[]> {
   const { prisma } = await import("@/lib/prisma");
   if (typeof prisma.turkeyTransferMovement?.findMany !== "function") {
@@ -233,11 +233,16 @@ export function computeOpeningBalanceBeforeWeek(
   return sumMovementsByCurrency(prior, currency);
 }
 
-export async function loadTurkeyBalanceForWeek(weekCode: string): Promise<TurkeyTransferBalanceResult> {
+export async function loadTurkeyBalanceForWeek(
+  weekCode: string,
+  workCountry: import("@/lib/work-country").WorkCountryCode = "TR",
+): Promise<TurkeyTransferBalanceResult> {
   const movements = await loadTurkeyMovementsUpToWeek(weekCode);
   const { prisma } = await import("@/lib/prisma");
   const flow = await prisma.cashWeekFlow.findUnique({
-    where: { countryCode_weekCode: { countryCode: "TR", weekCode: weekCode.trim() } },
+    where: {
+      countryCode_weekCode: { countryCode: workCountry, weekCode: weekCode.trim() },
+    },
     select: { countedCashUsd: true, countedCashIls: true },
   });
   const hasCashCount =

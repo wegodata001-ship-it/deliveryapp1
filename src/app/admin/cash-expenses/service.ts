@@ -5,6 +5,12 @@
 
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import {
+  cashExpenseWhereForCountryScope,
+  resolveCountryScopeFromCode,
+  resolveWorkCountryParam,
+} from "@/lib/country-data-scope";
+import { invalidateWeekBalanceIfBalanced } from "@/lib/cash-control/week-balance-service";
 import { ensureDocumentsTable } from "@/lib/documents/ensure";
 import { formatYmdJerusalem } from "@/lib/weeks/ah-week";
 import { deriveAhWeekCodeFromOrderDateYmd } from "@/lib/weeks/order-week-dates";
@@ -77,7 +83,10 @@ async function documentCountByExpense(ids: string[]): Promise<Map<string, number
 export async function listCashExpensesFull(
   filter: CashExpenseListFilter = {},
 ): Promise<CashExpenseRowDto[]> {
-  const where: Prisma.CashExpenseWhereInput = {};
+  const countryScope = resolveCountryScopeFromCode(resolveWorkCountryParam(filter.workCountry));
+  const where: Prisma.CashExpenseWhereInput = {
+    ...cashExpenseWhereForCountryScope(countryScope),
+  };
   if (!filter.includeCancelled) where.status = "ACTIVE";
   if (filter.week?.trim()) where.weekCode = filter.week.trim();
   if (filter.reason && filter.reason !== "ALL") where.reason = filter.reason;
@@ -136,11 +145,17 @@ export async function listCashExpensesFull(
 export async function getDayExpenseTotals(input: {
   week: string;
   dateYmd: string;
+  workCountry?: string;
 }): Promise<{ ils: number; usd: number }> {
   const wk = input.week.trim();
   const day = input.dateYmd.trim();
+  const countryScope = resolveCountryScopeFromCode(resolveWorkCountryParam(input.workCountry));
   const rows = await prisma.cashExpense.findMany({
-    where: { weekCode: wk, status: "ACTIVE" },
+    where: {
+      ...cashExpenseWhereForCountryScope(countryScope),
+      weekCode: wk,
+      status: "ACTIVE",
+    },
     select: { expenseDate: true, currency: true, amount: true, paymentMethod: true },
   });
   const dayRows = rows.filter((r) => formatYmdJerusalem(r.expenseDate) === day);
@@ -159,6 +174,7 @@ export async function createCashExpense(input: {
   week?: string;
   draftKey?: string;
   createdById: string;
+  workCountry?: string;
 }): Promise<{ ok: boolean; error?: string; id?: string }> {
   const amount = dec(input.amount);
   if (amount.eq(0)) return { ok: false, error: "יש להזין סכום שונה מאפס" };
@@ -168,9 +184,11 @@ export async function createCashExpense(input: {
   const dateYmd = formatYmdJerusalem(expenseDate);
   const weekCode = input.week?.trim() || deriveAhWeekCodeFromOrderDateYmd(dateYmd) || null;
   const paymentMethod = normalizePaymentMethod(input.paymentMethod);
+  const countryScope = resolveCountryScopeFromCode(resolveWorkCountryParam(input.workCountry));
 
   const created = await prisma.cashExpense.create({
     data: {
+      countryCode: countryScope.workCountry,
       weekCode,
       currency: input.currency === "USD" ? "USD" : "ILS",
       amount,
@@ -182,6 +200,15 @@ export async function createCashExpense(input: {
     },
     select: { id: true },
   });
+
+  if (weekCode) {
+    await invalidateWeekBalanceIfBalanced({
+      weekCode,
+      userId: input.createdById,
+      reason: "הוצאה חדשה נרשמה",
+      trigger: created.id,
+    });
+  }
 
   const key = input.draftKey?.trim();
   if (key && key !== created.id) {
@@ -207,6 +234,12 @@ export async function updateCashExpense(input: {
 }): Promise<{ ok: boolean; error?: string }> {
   const id = input.id.trim();
   if (!id) return { ok: false, error: "חסר מזהה" };
+  const existing = await prisma.cashExpense.findUnique({
+    where: { id },
+    select: { weekCode: true },
+  });
+  if (!existing) return { ok: false, error: "ההוצאה לא נמצאה" };
+
   const amount = dec(input.amount);
   if (amount.eq(0)) return { ok: false, error: "יש להזין סכום שונה מאפס" };
 
@@ -225,13 +258,87 @@ export async function updateCashExpense(input: {
   }
 
   await prisma.cashExpense.update({ where: { id }, data });
+
+  const weeks = new Set<string>();
+  if (existing.weekCode?.trim()) weeks.add(existing.weekCode.trim());
+  if (typeof data.weekCode === "string" && data.weekCode.trim()) weeks.add(data.weekCode.trim());
+  for (const wk of weeks) {
+    await invalidateWeekBalanceIfBalanced({
+      weekCode: wk,
+      reason: "הוצאה עודכנה",
+      trigger: id,
+    });
+  }
+
   return { ok: true };
 }
 
-export async function deleteCashExpense(id: string): Promise<{ ok: boolean; error?: string }> {
-  await prisma.cashExpense.update({
-    where: { id: id.trim() },
-    data: { status: "CANCELLED" },
-  });
-  return { ok: true };
+export async function deleteCashExpense(input: {
+  id: string;
+  deletedById: string;
+  deletedByName?: string | null;
+}): Promise<{ ok: boolean; error?: string; alreadyDeleted?: boolean }> {
+  const id = input.id.trim();
+  if (!id) return { ok: false, error: "חסר מזהה" };
+
+  try {
+    let alreadyDeleted = false;
+    let deletedWeekCode: string | null = null;
+    await prisma.$transaction(async (tx) => {
+      const expense = await tx.cashExpense.findUnique({ where: { id } });
+      if (!expense) throw new Error("NOT_FOUND");
+      if (expense.status === "CANCELLED") {
+        alreadyDeleted = true;
+        return;
+      }
+      deletedWeekCode = expense.weekCode?.trim() || null;
+
+      const deletedAt = new Date();
+      await tx.cashExpense.update({
+        where: { id },
+        data: { status: "CANCELLED" },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          userId: input.deletedById,
+          actionType: "CASH_EXPENSE_DELETED",
+          entityType: "CashExpense",
+          entityId: id,
+          oldValue: {
+            status: "ACTIVE",
+            amount: expense.amount.toString(),
+            currency: expense.currency,
+            reason: expense.reason,
+            paymentMethod: expense.paymentMethod,
+            notes: expense.notes,
+            weekCode: expense.weekCode,
+            expenseDate: expense.expenseDate.toISOString(),
+          } as Prisma.InputJsonValue,
+          newValue: { status: "CANCELLED" } as Prisma.InputJsonValue,
+          metadata: {
+            expenseId: id,
+            weekCode: expense.weekCode,
+            deletedBy: input.deletedById,
+            deletedByName: input.deletedByName ?? null,
+            deletedAt: deletedAt.toISOString(),
+          } as Prisma.InputJsonValue,
+        },
+      });
+    });
+    if (!alreadyDeleted && deletedWeekCode) {
+      await invalidateWeekBalanceIfBalanced({
+        weekCode: deletedWeekCode,
+        userId: input.deletedById,
+        reason: "הוצאה נמחקה",
+        trigger: id,
+      });
+    }
+    return { ok: true, alreadyDeleted };
+  } catch (e) {
+    if (e instanceof Error && e.message === "NOT_FOUND") {
+      return { ok: false, error: "ההוצאה לא נמצאה" };
+    }
+    return { ok: false, error: e instanceof Error ? e.message : "מחיקה נכשלה" };
+  }
 }

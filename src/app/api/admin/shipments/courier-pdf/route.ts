@@ -20,6 +20,11 @@ type Body = {
   recordIds?: string[];
   batchId?: string | null;
   disposition?: "inline" | "attachment";
+  overrides?: Array<{
+    recordId?: string;
+    customerName?: string;
+    locality?: string;
+  }>;
 };
 
 async function loadArabicFont(): Promise<string> {
@@ -65,7 +70,16 @@ export async function POST(req: Request): Promise<Response> {
       console.warn("[courier-pdf] location arabic backfill skipped", e);
     }
 
-    const rows = await buildCourierPdfRowsForRecordIds(recordIds);
+    const rows = await buildCourierPdfRowsForRecordIds(recordIds, {
+      overrides: (body?.overrides ?? [])
+        .filter((o) => o.recordId)
+        .map((o) => ({
+          recordId: o.recordId!,
+          customerName: o.customerName,
+          locality: o.locality,
+        })),
+      persistAutoCache: true,
+    });
     if (rows.length === 0) {
       return NextResponse.json({ ok: false, error: "לא נמצאו משלוחים." }, { status: 400 });
     }

@@ -1,10 +1,12 @@
 import { OrdersListShell } from "@/components/admin/OrdersListShell";
 import { isAdminUser, userHasAnyPermission } from "@/lib/admin-auth";
 import { fetchOrdersListPageData } from "@/lib/orders-list-data";
+import { readMultiParam } from "@/lib/orders-list-filter-params";
 import { perfEnabled } from "@/lib/perf-log";
 import { requireRoutePermission } from "@/lib/route-access";
 import { resolveOrdersListCustomerQuery } from "@/app/admin/orders/orders-list-where";
 import { parseOrdersListDateFilterFromSearchParams } from "@/lib/work-week";
+import "@/app/admin/shipments/shipments.css";
 
 /** רשימת הזמנות חייבת להיבנות מחדש אחרי שמירה — לא מטמון סטטי */
 export const dynamic = "force-dynamic";
@@ -29,7 +31,7 @@ export default async function OrdersListPage({
     (typeof sp.preset === "string" ? sp.preset : null);
 
   const fetchT0 = Date.now();
-  const { orders, statusSummary, createdByOptions, paymentLocationOptions, pagination } =
+  const { orders, statusSummary, createdByOptions, countryFilterOptions, paymentLocationOptions, pagination } =
     await fetchOrdersListPageData(sp, me);
   const fetchMs = Date.now() - fetchT0;
 
@@ -45,11 +47,12 @@ export default async function OrdersListPage({
     customerQuery: resolveOrdersListCustomerQuery(sp),
     ordersOrderNum: readTextParam(sp, "ordersOrderNum"),
     customerPhone: readTextParam(sp, "ordersPhone"),
-    statusFilter: readTextParam(sp, "status"),
-    countryFilter: readTextParam(sp, "ordersCountry"),
-    createdById: readTextParam(sp, "createdBy"),
+    statusFilter: readMultiParam(sp, "status"),
+    countryFilter: readMultiParam(sp, "ordersCountry"),
+    createdByIds: readMultiParam(sp, "createdBy"),
     createdByOptions,
-    paymentType: readTextParam(sp, "paymentType"),
+    countryFilterOptions,
+    paymentTypes: readMultiParam(sp, "paymentType"),
     paymentLocation: readTextParam(sp, "paymentLocation"),
     paymentLocationOptions,
     amountMin: readTextParam(sp, "amountMin"),

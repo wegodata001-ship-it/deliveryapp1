@@ -9,7 +9,8 @@ import {
   createZoneForLocationsAction,
   updateAliasMappingAction,
 } from "@/app/admin/shipments/location-actions";
-import { looksLikeDistributionArea } from "@/lib/distribution-area-name";
+import { distributionAreaValidationError } from "@/lib/distribution-area-name";
+import { DistributionAreaPicker } from "@/components/admin/shipments/DistributionAreaPicker";
 
 type Props = {
   mode: "edit" | "create";
@@ -47,17 +48,9 @@ export function LocationMappingEditModal({
     return () => window.clearTimeout(t);
   }, []);
 
-  const activeZones = useMemo(
-    () =>
-      zones
-        .filter((z) => z.isActive && looksLikeDistributionArea(z.name))
-        .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "he")),
-    [zones],
-  );
-
   const filteredLocations = useMemo(() => {
     const q = locQuery.trim().toLowerCase();
-    const base = locations.filter((l) => l.isActive && !looksLikeDistributionArea(l.displayName));
+    const base = locations.filter((l) => l.isActive);
     if (!q) return base.slice(0, 40);
     return base
       .filter(
@@ -86,8 +79,9 @@ export function LocationMappingEditModal({
   async function handleCreateZone() {
     const name = newZoneName.trim();
     if (!name) return;
-    if (!looksLikeDistributionArea(name)) {
-      setError("שם אזור לא תקין — למשל: צפון 16, דרום 1, מרכז 11");
+    const validationError = distributionAreaValidationError(name);
+    if (validationError) {
+      setError(validationError);
       return;
     }
     setBusy(true);
@@ -112,10 +106,6 @@ export function LocationMappingEditModal({
     const updated = displayName.trim();
     if (!updated) {
       setError("מקום מסירה מעודכן חובה");
-      return;
-    }
-    if (looksLikeDistributionArea(updated)) {
-      setError("מקום מסירה מעודכן לא יכול להיות אזור חלוקה");
       return;
     }
     setBusy(true);
@@ -255,18 +245,12 @@ export function LocationMappingEditModal({
                 אזור חדש
               </button>
             </div>
-            <select
+            <DistributionAreaPicker
+              zones={zones}
               value={areaId}
-              onChange={(e) => setAreaId(e.target.value)}
+              onChange={setAreaId}
               disabled={busy}
-            >
-              <option value="">ללא אזור חלוקה</option>
-              {activeZones.map((z) => (
-                <option key={z.id} value={z.id}>
-                  {z.name}
-                </option>
-              ))}
-            </select>
+            />
           </div>
 
           {error && <div className="shp-alert shp-alert--error">{error}</div>}
@@ -318,7 +302,7 @@ export function LocationMappingEditModal({
                 <input
                   value={newZoneName}
                   onChange={(e) => setNewZoneName(e.target.value)}
-                  placeholder="למשל: צפון 16"
+                  placeholder="למשל: الجليل, منطقة 1, Zone 7"
                   disabled={busy}
                   onKeyDown={(e) => e.key === "Enter" && void handleCreateZone()}
                   autoFocus

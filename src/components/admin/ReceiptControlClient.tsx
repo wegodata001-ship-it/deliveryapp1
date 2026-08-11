@@ -5,6 +5,7 @@ import { listReceiptControlAction, type ReceiptBalanceFilter, type ReceiptContro
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import { getAhWeekCodeFromDateRange, getAhWeekRange, normalizeAhWeekCode } from "@/lib/work-week";
+import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
 
 const LIMIT = 15;
 
@@ -28,7 +29,8 @@ function pageNumbers(page: number, totalPages: number): number[] {
 
 export function ReceiptControlClient() {
   const { openWindow } = useAdminWindows();
-  const { globalWeek } = useAdminGlobal();
+  const { globalWeek, globalCountry } = useAdminGlobal();
+  const workCountry = workCountryFromOrderSourceCountry(globalCountry);
   const [payload, setPayload] = useState<ReceiptControlPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -73,6 +75,7 @@ export function ReceiptControlClient() {
       toYmd,
       balanceFilter,
       search,
+      workCountry,
     }).then((next) => {
       if (cancelled) return;
       setPayload(next);
@@ -81,7 +84,7 @@ export function ReceiptControlClient() {
     return () => {
       cancelled = true;
     };
-  }, [page, weekCode, fromYmd, toYmd, balanceFilter, search]);
+  }, [page, weekCode, fromYmd, toYmd, balanceFilter, search, workCountry]);
 
   const pages = useMemo(() => pageNumbers(payload?.page ?? page, payload?.totalPages ?? 1), [payload?.page, payload?.totalPages, page]);
 

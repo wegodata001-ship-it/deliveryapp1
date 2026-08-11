@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Plus, X } from "lucide-react";
 import type { ShipmentBatchExpenseDto } from "@/app/admin/shipments/control/types";
 import {
-  SHIPMENT_BATCH_EXPENSE_LABELS,
-  type ShipmentBatchExpenseCategory,
+  SHIPMENT_MANAGE_EXPENSE_CATEGORIES,
+  SHIPMENT_MANAGE_EXPENSE_LABELS,
 } from "@/app/admin/shipments/control/types";
 import { createShipmentBatchExpenseAction } from "@/app/admin/shipments/control/actions";
 import { PAYMENT_METHODS } from "@/app/admin/shipments/types";
@@ -13,6 +14,43 @@ import { PAYMENT_METHODS } from "@/app/admin/shipments/types";
 const EXPENSE_PAYMENT_METHODS = PAYMENT_METHODS.filter((m) =>
   ["CASH", "BANK_TRANSFER", "CREDIT", "CHECK", "CREDIT_NOTE", "CODE_DEDUCTION"].includes(m.value),
 );
+
+type ModalLayer = "nested" | "nested-deep";
+
+function ShipmentNestedModalPortal({
+  layer,
+  onBackdropClick,
+  children,
+}: {
+  layer: ModalLayer;
+  onBackdropClick?: () => void;
+  children: ReactNode;
+}) {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted || typeof document === "undefined") return null;
+
+  const layerClass =
+    layer === "nested-deep"
+      ? "shp-modal-backdrop shp-modal-backdrop--nested-deep"
+      : "shp-modal-backdrop shp-modal-backdrop--nested";
+
+  return createPortal(
+    <div
+      className={layerClass}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onBackdropClick?.();
+      }}
+    >
+      {children}
+    </div>,
+    document.body,
+  );
+}
 
 function todayYmd() {
   return new Date().toISOString().slice(0, 10);
@@ -37,6 +75,7 @@ function fmtExpenseTotals(totalIls: number, totalUsd: number) {
 type FormProps = {
   batchId: string;
   batchLabel: string;
+  layer?: ModalLayer;
   onClose: () => void;
   onSaved: (expense: ShipmentBatchExpenseDto) => void;
 };
@@ -44,10 +83,11 @@ type FormProps = {
 export function ShipmentBatchExpenseFormModal({
   batchId,
   batchLabel,
+  layer = "nested",
   onClose,
   onSaved,
 }: FormProps) {
-  const [category, setCategory] = useState<ShipmentBatchExpenseCategory>("FUEL");
+  const [category, setCategory] = useState<string>("FUEL");
   const [amount, setAmount] = useState("");
   const [currency, setCurrency] = useState<"ILS" | "USD">("ILS");
   const [notes, setNotes] = useState("");
@@ -55,6 +95,14 @@ export function ShipmentBatchExpenseFormModal({
   const [expenseDate, setExpenseDate] = useState(todayYmd());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && !busy) onClose();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [busy, onClose]);
 
   async function handleSave() {
     setBusy(true);
@@ -78,19 +126,21 @@ export function ShipmentBatchExpenseFormModal({
   }
 
   return (
-    <div
-      className="shp-modal-backdrop"
-      style={{ zIndex: 75 }}
-      onClick={(e) => e.target === e.currentTarget && !busy && onClose()}
+    <ShipmentNestedModalPortal
+      layer={layer}
+      onBackdropClick={!busy ? onClose : undefined}
     >
       <div
         className="shp-modal"
         style={{ maxWidth: 460, width: "92vw" }}
         dir="rtl"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="shp-batch-expense-form-title"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="shp-modal__header">
-          <strong>הוספת הוצאה</strong>
+          <strong id="shp-batch-expense-form-title">הוספת הוצאה</strong>
           <span style={{ fontSize: 12, color: "#64748b", marginInlineStart: 8 }}>
             {batchLabel}
           </span>
@@ -103,16 +153,15 @@ export function ShipmentBatchExpenseFormModal({
             <span>סוג הוצאה</span>
             <select
               value={category}
-              onChange={(e) => setCategory(e.target.value as ShipmentBatchExpenseCategory)}
+              onChange={(e) => setCategory(e.target.value)}
               disabled={busy}
+              autoFocus
             >
-              {(Object.keys(SHIPMENT_BATCH_EXPENSE_LABELS) as ShipmentBatchExpenseCategory[]).map(
-                (key) => (
-                  <option key={key} value={key}>
-                    {SHIPMENT_BATCH_EXPENSE_LABELS[key]}
-                  </option>
-                ),
-              )}
+              {SHIPMENT_MANAGE_EXPENSE_CATEGORIES.map((key) => (
+                <option key={key} value={key}>
+                  {SHIPMENT_MANAGE_EXPENSE_LABELS[key]}
+                </option>
+              ))}
             </select>
           </label>
           <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8 }}>
@@ -187,7 +236,7 @@ export function ShipmentBatchExpenseFormModal({
           </button>
         </div>
       </div>
-    </div>
+    </ShipmentNestedModalPortal>
   );
 }
 
@@ -208,20 +257,27 @@ export function ShipmentBatchExpensesDetailModal({
   onClose,
   onAdd,
 }: DetailProps) {
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   return (
-    <div
-      className="shp-modal-backdrop"
-      style={{ zIndex: 70 }}
-      onClick={(e) => e.target === e.currentTarget && onClose()}
-    >
+    <ShipmentNestedModalPortal layer="nested" onBackdropClick={onClose}>
       <div
         className="shp-modal"
         style={{ maxWidth: 640, width: "96vw" }}
         dir="rtl"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="shp-batch-expense-detail-title"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="shp-modal__header">
-          <strong>פירוט הוצאות</strong>
+          <strong id="shp-batch-expense-detail-title">פירוט הוצאות</strong>
           <span style={{ fontSize: 12, color: "#64748b", marginInlineStart: 8 }}>
             {batchLabel}
           </span>
@@ -283,7 +339,7 @@ export function ShipmentBatchExpensesDetailModal({
           </button>
         </div>
       </div>
-    </div>
+    </ShipmentNestedModalPortal>
   );
 }
 

@@ -1,4 +1,5 @@
 import type { FlowWeekOverviewRow, FlowWeekDrillPayload } from "@/app/admin/cash-flow/flow-types";
+import type { CashWeekFlowLineId } from "@/lib/cash-control-week-flow";
 import { fcNum } from "@/components/admin/flow-control/shared";
 import { fmtDailyMoney } from "@/lib/cash-control-daily";
 import { formatAhWeekLabel, getAhWeekRange, parseAhWeekNumber } from "@/lib/weeks/ah-week";
@@ -10,6 +11,41 @@ export function money(currency: "ILS" | "USD", value: string | number | null | u
   const n = typeof value === "number" ? value : fcNum(value);
   if (!Number.isFinite(n) || Math.abs(n) < 0.005) return "—";
   return fmtDailyMoney(currency, n);
+}
+
+/** תצוגת יתרה חתומה — כולל שלילי ואפס (לא מסתיר) */
+export function signedMoney(currency: "ILS" | "USD", value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return fmtDailyMoney(currency, value);
+}
+
+/** ספירת מנהל — null = לא נשמר; 0 = נשמר כאפס */
+export function managerCountSaved(value: string | null | undefined): boolean {
+  return value != null && String(value).trim() !== "";
+}
+
+/** תצוגת ספירת מנהל — מציג — רק כשאין רשומה, לא מסתיר 0 */
+export function moneyManagerCount(currency: "ILS" | "USD", value: string | null | undefined): string {
+  if (!managerCountSaved(value)) return "—";
+  const n = fcNum(value);
+  if (!Number.isFinite(n)) return "—";
+  return fmtDailyMoney(currency, n);
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+function sumManagerLine(rows: FlowWeekOverviewRow[], line: CashWeekFlowLineId): number | null {
+  let sum = 0;
+  let hasAny = false;
+  for (const r of rows) {
+    const raw = r.manager[line];
+    if (!managerCountSaved(raw)) continue;
+    hasAny = true;
+    sum += fcNum(raw);
+  }
+  return hasAny ? round2(sum) : null;
 }
 
 export function moneyBoth(ils: string | null | undefined, usd: string | null | undefined): string {
@@ -139,35 +175,85 @@ export type FlowRangeAggregate = {
   okWeekCount: number;
 };
 
-/** סיכומי אמצעי תקבול מטבלת השבועות — לפי שורות מסוננות בלבד */
+/** סיכומי KPI סיכום שבועי — לפי שורות מסוננות בלבד (SSOT) */
+export type WeekReceiptSummaryTotals = {
+  totalOrders: number;
+  totalOrdersUsd: number;
+  paymentIntakeIls: number;
+  remainingToPayUsd: number;
+  /** ספירת מנהל — CashWeekFlow.counted* */
+  managerCashUsd: number | null;
+  managerCashIls: number | null;
+  managerTransferIls: number | null;
+  managerCreditIls: number | null;
+  managerChecksIls: number | null;
+};
+
+export function aggregateWeekReceiptSummaryTotals(rows: FlowWeekOverviewRow[]): WeekReceiptSummaryTotals {
+  let totalOrders = 0;
+  let totalOrdersUsd = 0;
+  let paymentIntakeIls = 0;
+  let remainingToPayUsd = 0;
+  for (const r of rows) {
+    totalOrders += r.totalOrders;
+    totalOrdersUsd += fcNum(r.totalOrdersUsd);
+    paymentIntakeIls += fcNum(r.paymentIntakeIls ?? r.totalReceivedIls);
+    remainingToPayUsd += fcNum(r.remainingToPayUsd);
+  }
+  return {
+    totalOrders,
+    totalOrdersUsd: round2(totalOrdersUsd),
+    paymentIntakeIls: round2(paymentIntakeIls),
+    remainingToPayUsd: round2(remainingToPayUsd),
+    managerCashUsd: sumManagerLine(rows, "CASH_USD"),
+    managerCashIls: sumManagerLine(rows, "CASH_ILS"),
+    managerTransferIls: sumManagerLine(rows, "BANK_TRANSFER"),
+    managerCreditIls: sumManagerLine(rows, "CREDIT"),
+    managerChecksIls: sumManagerLine(rows, "CHECK"),
+  };
+}
+
+/** @deprecated — legacy receipt columns; prefer aggregateWeekReceiptSummaryTotals */
 export type ReceiptMethodTotals = {
+  paymentIntakeIls: number;
   cashIls: number;
   cashUsd: number;
   bankTransferIls: number;
   creditIls: number;
   checksIls: number;
+  otherIls: number;
+  otherUsd: number;
 };
 
 export function aggregateReceiptMethodTotals(rows: FlowWeekOverviewRow[]): ReceiptMethodTotals {
+  let paymentIntakeIls = 0;
   let cashIls = 0;
   let cashUsd = 0;
   let bankTransferIls = 0;
   let creditIls = 0;
   let checksIls = 0;
+  let otherIls = 0;
+  let otherUsd = 0;
   for (const r of rows) {
+    paymentIntakeIls += fcNum(r.paymentIntakeIls ?? r.totalReceivedIls);
     cashIls += fcNum(r.receivedCashIls);
     cashUsd += fcNum(r.receivedCashUsd);
     bankTransferIls += fcNum(r.receivedBankTransferIls);
     creditIls += fcNum(r.receivedCreditCardIls);
     checksIls += fcNum(r.receivedChecksIls);
+    otherIls += fcNum(r.receivedOtherIls);
+    otherUsd += fcNum(r.receivedOtherUsd);
   }
   const round2 = (n: number) => Math.round(n * 100) / 100;
   return {
+    paymentIntakeIls: round2(paymentIntakeIls),
     cashIls: round2(cashIls),
     cashUsd: round2(cashUsd),
     bankTransferIls: round2(bankTransferIls),
     creditIls: round2(creditIls),
     checksIls: round2(checksIls),
+    otherIls: round2(otherIls),
+    otherUsd: round2(otherUsd),
   };
 }
 

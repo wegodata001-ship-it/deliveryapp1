@@ -1,5 +1,9 @@
 import { prisma } from "@/lib/prisma";
-import { aliasLookupKey, normalizeLocationName } from "@/lib/delivery-location-normalize";
+import {
+  aliasLookupKey,
+  locationNamesMatch,
+  normalizeLocationName,
+} from "@/lib/delivery-location-normalize";
 
 export type LocationMatchStatusValue = "MATCHED" | "UNMATCHED" | "MANUALLY_FIXED";
 
@@ -25,6 +29,85 @@ type AliasCacheRow = {
   zoneIsActive: boolean;
   locationActive: boolean;
 };
+
+export type AliasLookupMaps = {
+  byCompactKey: Map<string, AliasCacheRow>;
+  byNormalized: Map<string, AliasCacheRow>;
+};
+
+export type ShipmentDeliveryLocationInput = {
+  originalDeliveryLocation?: string | null;
+  city?: string | null;
+  address?: string | null;
+  deliveryLocationId?: string | null;
+  deliveryLocation?: { displayName: string } | null;
+};
+
+/** שם מקום מסירה מקורי מהמשלוח (לפני התאמה) */
+export function shipmentOriginalDeliveryLocationName(
+  input: Pick<ShipmentDeliveryLocationInput, "originalDeliveryLocation" | "city" | "address">,
+): string | null {
+  return (
+    input.originalDeliveryLocation?.trim() ||
+    input.city?.trim() ||
+    input.address?.trim() ||
+    null
+  );
+}
+
+function registerAliasKey(
+  maps: AliasLookupMaps,
+  raw: string | null | undefined,
+  row: AliasCacheRow,
+): void {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed) return;
+  const compact = aliasLookupKey(trimmed);
+  const norm = normalizeLocationName(trimmed);
+  if (compact && !maps.byCompactKey.has(compact)) maps.byCompactKey.set(compact, row);
+  if (norm && !maps.byNormalized.has(norm)) maps.byNormalized.set(norm, row);
+}
+
+export function buildAliasLookupMap(rows: AliasCacheRow[]): AliasLookupMaps {
+  const maps: AliasLookupMaps = {
+    byCompactKey: new Map(),
+    byNormalized: new Map(),
+  };
+  for (const row of rows) {
+    registerAliasKey(maps, row.originalName, row);
+    registerAliasKey(maps, row.displayName, row);
+    registerAliasKey(maps, row.normalizedOriginalName, row);
+  }
+  return maps;
+}
+
+export async function loadAliasLookupMap(): Promise<AliasLookupMaps> {
+  const rows = await loadAliasCache();
+  return buildAliasLookupMap(rows);
+}
+
+/**
+ * SSOT לתצוגת «מקום מסירה מעודכן»:
+ * 1) טבלת כינויים (DeliveryLocationAlias → DeliveryLocation.displayName)
+ * 2) FK ל-DeliveryLocation (גיבוי)
+ * 3) שם מקורי מהמשלוח
+ */
+export function resolveUpdatedDeliveryLocationDisplay(
+  input: ShipmentDeliveryLocationInput,
+  maps: AliasLookupMaps,
+): string | null {
+  const original = shipmentOriginalDeliveryLocationName(input);
+
+  if (original) {
+    const hit = lookupAliasRow(original, maps);
+    if (hit?.displayName?.trim()) return hit.displayName.trim();
+  }
+
+  const fromFk = input.deliveryLocation?.displayName?.trim();
+  if (fromFk) return fromFk;
+
+  return original;
+}
 
 let aliasCache: { loadedAt: number; rows: AliasCacheRow[] } | null = null;
 const CACHE_TTL_MS = 30_000;
@@ -102,10 +185,73 @@ function toResolved(
 }
 
 /**
- * התאמה זהירה:
- * 1) התאמה מדויקת לפי מפתח מנורמל
- * 2) ניסיון לחלץ שם יישוב מכתובת מלאה — רק אם יש יישוב יחיד שמתאים כ-substring
- * 3) במקרה של ספק — UNMATCHED (ללא שיוך אזור)
+ * חיפוש Alias לפי סדר:
+ * 1) התאמה מדויקת (normalized)
+ * 2) מפתח קומפקטי (ללא רווחים/מקפים, case-insensitive ללatin)
+ * 3) locationNamesMatch על כל alias (גיבוי)
+ */
+export function lookupAliasRow(raw: string, maps: AliasLookupMaps): AliasCacheRow | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  const norm = normalizeLocationName(trimmed);
+  if (norm) {
+    const byNorm = maps.byNormalized.get(norm);
+    if (byNorm) return byNorm;
+  }
+
+  const compact = aliasLookupKey(trimmed);
+  if (compact) {
+    const byCompact = maps.byCompactKey.get(compact);
+    if (byCompact) return byCompact;
+  }
+
+  for (const row of maps.byCompactKey.values()) {
+    if (locationNamesMatch(trimmed, row.originalName) || locationNamesMatch(trimmed, row.displayName)) {
+      return row;
+    }
+  }
+
+  return null;
+}
+
+function substringMatch(
+  haystackRaw: string,
+  maps: AliasLookupMaps,
+): { hit: AliasCacheRow | null; suggestion: string | null } {
+  const hayCompact = aliasLookupKey(haystackRaw);
+  if (!hayCompact || hayCompact.length < 4) return { hit: null, suggestion: null };
+
+  const hits: AliasCacheRow[] = [];
+  const seen = new Set<string>();
+
+  for (const row of maps.byCompactKey.values()) {
+    const needle = aliasLookupKey(row.originalName) || aliasLookupKey(row.displayName);
+    if (!needle || needle.length < 4) continue;
+    if (hayCompact.includes(needle) || needle.includes(hayCompact)) {
+      if (!seen.has(row.deliveryLocationId)) {
+        seen.add(row.deliveryLocationId);
+        hits.push(row);
+      }
+    }
+  }
+
+  if (hits.length === 1) return { hit: hits[0]!, suggestion: null };
+
+  if (hits.length > 1) {
+    const best = [...hits].sort(
+      (a, b) =>
+        aliasLookupKey(b.originalName).length - aliasLookupKey(a.originalName).length,
+    )[0]!;
+    return { hit: null, suggestion: best.displayName };
+  }
+
+  return { hit: null, suggestion: null };
+}
+
+/**
+ * התאמה חכמה — לא תלויה בשפה / איות / רווחים / מקפים.
+ * אם לא נמצא — UNMATCHED (לא זורק שגיאה).
  */
 export async function resolveDeliveryLocation(input: {
   city?: string | null;
@@ -128,64 +274,30 @@ export async function resolveDeliveryLocation(input: {
   }
 
   const rows = await loadAliasCache();
-  const byKey = new Map<string, AliasCacheRow>();
-  for (const row of rows) {
-    const key = row.normalizedOriginalName || aliasLookupKey(row.originalName);
-    if (key) byKey.set(key, row);
-    const norm = normalizeLocationName(row.originalName);
-    if (norm) byKey.set(norm, row);
-  }
-
-  const tryExact = (raw: string): AliasCacheRow | null => {
-    const key = aliasLookupKey(raw);
-    const norm = normalizeLocationName(raw);
-    return (key ? byKey.get(key) : null) ?? (norm ? byKey.get(norm) : null) ?? null;
-  };
+  const maps = buildAliasLookupMap(rows);
 
   if (cityRaw) {
-    const exact = tryExact(cityRaw);
+    const exact = lookupAliasRow(cityRaw, maps);
     if (exact) return toResolved("MATCHED", cityRaw, exact);
   }
 
-  // ניסיון מכתובת / מחרוזת מלאה: substring זהיר — רק התאמה יחידה ברורה
-  const haystack = normalizeLocationName(cityRaw || addressRaw || "");
-  if (haystack) {
-    const hits: AliasCacheRow[] = [];
-    const seenLocations = new Set<string>();
-    for (const row of rows) {
-      const needle = row.normalizedOriginalName;
-      if (!needle || needle.length < 4) continue;
-      if (haystack === needle || haystack.includes(` ${needle} `) || haystack.endsWith(` ${needle}`) || haystack.startsWith(`${needle} `) || haystack.endsWith(needle) || haystack === needle) {
-        if (!seenLocations.has(row.deliveryLocationId)) {
-          seenLocations.add(row.deliveryLocationId);
-          hits.push(row);
-        }
-      } else if (haystack.includes(needle)) {
-        if (!seenLocations.has(row.deliveryLocationId)) {
-          seenLocations.add(row.deliveryLocationId);
-          hits.push(row);
-        }
-      }
-    }
+  if (addressRaw && addressRaw !== cityRaw) {
+    const fromAddress = lookupAliasRow(addressRaw, maps);
+    if (fromAddress) return toResolved("MATCHED", addressRaw, fromAddress);
+  }
 
-    if (hits.length === 1) {
-      return toResolved("MATCHED", originalName, hits[0]);
-    }
-
-    if (hits.length > 1) {
-      const best = [...hits].sort(
-        (a, b) => b.normalizedOriginalName.length - a.normalizedOriginalName.length,
-      )[0];
-      return {
-        status: "UNMATCHED",
-        originalName,
-        city: cityRaw || originalName,
-        deliveryLocationId: null,
-        zoneId: null,
-        zoneName: null,
-        suggestionDisplayName: best.displayName,
-      };
-    }
+  const sub = substringMatch(cityRaw || addressRaw || "", maps);
+  if (sub.hit) return toResolved("MATCHED", originalName, sub.hit);
+  if (sub.suggestion) {
+    return {
+      status: "UNMATCHED",
+      originalName,
+      city: cityRaw || originalName,
+      deliveryLocationId: null,
+      zoneId: null,
+      zoneName: null,
+      suggestionDisplayName: sub.suggestion,
+    };
   }
 
   return {
@@ -202,7 +314,6 @@ export async function resolveDeliveryLocation(input: {
 export async function resolveDeliveryLocationsForRows(
   rows: Array<{ city?: string | null; address?: string | null }>,
 ): Promise<ResolvedDeliveryLocation[]> {
-  // warm cache once
   await loadAliasCache();
   const results: ResolvedDeliveryLocation[] = [];
   for (const row of rows) {

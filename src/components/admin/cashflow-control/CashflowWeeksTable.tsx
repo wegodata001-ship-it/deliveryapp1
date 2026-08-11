@@ -5,6 +5,7 @@ import type { FlowWeekOverviewRow } from "@/app/admin/cash-flow/flow-types";
 import {
   dedupeOverviewByWeek,
   money,
+  moneyManagerCount,
   weekDateRange,
 } from "@/components/admin/cashflow-control/cashflow-control-helpers";
 import { CashflowWeekSummaryKpiStrip } from "@/components/admin/cashflow-control/CashflowWeekSummaryKpiStrip";
@@ -61,7 +62,7 @@ export function CashflowWeeksTable({
     <div className="cfc-card cfc-table-card">
       <div className="cfc-summary-table-title">
         <strong>סיכום שבועי לפי אמצעי תקבול</strong>
-        <span>שורה אחת לכל שבוע · לחצו על כרטיס KPI לפירוט</span>
+        <span>שורה אחת לכל שבוע · נתוני ספירה מספירת מנהל · לחצו על KPI לפירוט</span>
       </div>
       <CashflowWeekSummaryKpiStrip rows={displayRows} />
       <div className="cfc-table-scroll">
@@ -71,11 +72,12 @@ export function CashflowWeeksTable({
               <th>שבוע</th>
               <th>סה״כ הזמנות</th>
               <th>סה״כ דוח</th>
-              <th>התקבל $ מזומן</th>
-              <th>התקבל ₪ מזומן</th>
-              <th>סה״כ העברות ₪</th>
-              <th>סה״כ אשראי ₪</th>
-              <th>סה״כ צ׳קים ₪</th>
+              <th>מזומן $</th>
+              <th>מזומן ₪</th>
+              <th>העברות</th>
+              <th>אשראי</th>
+              <th>צ׳קים</th>
+              <th>נשאר לתשלום</th>
             </tr>
           </thead>
           <tbody>
@@ -101,12 +103,27 @@ export function CashflowWeeksTable({
                     <span>{weekDateRange(row.week, row.weekLabel)}</span>
                   </td>
                   <td className="cfc-summary-count">{row.totalOrders.toLocaleString("he-IL")}</td>
-                  <td dir="ltr" className="cfc-summary-amount">{money("USD", row.totalOrdersUsd)}</td>
-                  <td dir="ltr" className="cfc-summary-amount">{money("USD", row.receivedCashUsd)}</td>
-                  <td dir="ltr" className="cfc-summary-amount">{money("ILS", row.receivedCashIls)}</td>
-                  <td dir="ltr" className="cfc-summary-amount">{money("ILS", row.receivedBankTransferIls)}</td>
-                  <td dir="ltr" className="cfc-summary-amount">{money("ILS", row.receivedCreditCardIls)}</td>
-                  <td dir="ltr" className="cfc-summary-amount">{money("ILS", row.receivedChecksIls)}</td>
+                  <td dir="ltr" className="cfc-summary-amount">
+                    {money("USD", row.totalOrdersUsd)}
+                  </td>
+                  <td dir="ltr" className="cfc-summary-amount">
+                    {moneyManagerCount("USD", row.manager.CASH_USD)}
+                  </td>
+                  <td dir="ltr" className="cfc-summary-amount">
+                    {moneyManagerCount("ILS", row.manager.CASH_ILS)}
+                  </td>
+                  <td dir="ltr" className="cfc-summary-amount">
+                    {moneyManagerCount("ILS", row.manager.BANK_TRANSFER)}
+                  </td>
+                  <td dir="ltr" className="cfc-summary-amount">
+                    {moneyManagerCount("ILS", row.manager.CREDIT)}
+                  </td>
+                  <td dir="ltr" className="cfc-summary-amount">
+                    {moneyManagerCount("ILS", row.manager.CHECK)}
+                  </td>
+                  <td dir="ltr" className="cfc-summary-amount cfc-summary-amount--debt">
+                    {money("USD", row.remainingToPayUsd)}
+                  </td>
                 </tr>
               );
             })}

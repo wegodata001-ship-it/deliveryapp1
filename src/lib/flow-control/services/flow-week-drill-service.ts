@@ -14,6 +14,14 @@ import { buildFlowPaymentDailyRows } from "@/lib/flow-control/services/cashflow-
 import { normalizePaymentMethod, paymentMethodLabel } from "@/lib/cash-expense-payment-method";
 import { formatAhWeekLabel, formatYmdJerusalem } from "@/lib/weeks/ah-week";
 import { prisma } from "@/lib/prisma";
+import {
+  cashExpenseWhereForCountryScope,
+  mergePaymentWhere,
+  resolveCountryScopeFromCode,
+} from "@/lib/country-data-scope";
+import { flowWeekCompositeKey, type FlowWorkScope } from "@/lib/flow-control/flow-country-scope";
+import type { WorkCountryCode } from "@/lib/work-country";
+import { DEFAULT_WORK_COUNTRY } from "@/lib/work-country";
 
 function money(n: number | Prisma.Decimal): string {
   const d = n instanceof Prisma.Decimal ? n : new Prisma.Decimal(n);
@@ -24,18 +32,23 @@ function reasonLabel(reason: string): string {
   return CASH_EXPENSE_REASONS.find((r) => r.value === reason)?.label ?? reason;
 }
 
-export async function loadFlowWeekDrill(week: string): Promise<FlowWeekDrillPayload | null> {
+export async function loadFlowWeekDrill(
+  week: string,
+  workCountry: WorkCountryCode = DEFAULT_WORK_COUNTRY,
+): Promise<FlowWeekDrillPayload | null> {
   const wk = week.trim();
+  const scope = resolveCountryScopeFromCode(workCountry);
+  const flowScope: FlowWorkScope = { workCountry: scope.workCountry };
   const [flow, dailySummary, expenses, payments, flowRow] = await Promise.all([
-    loadFlowWeek(wk),
+    loadFlowWeek(wk, workCountry),
     loadFlowWeekApprovedSummary(wk),
     prisma.cashExpense.findMany({
-      where: { weekCode: wk, status: "ACTIVE" },
+      where: { ...cashExpenseWhereForCountryScope(scope), weekCode: wk, status: "ACTIVE" },
       orderBy: { expenseDate: "asc" },
       include: { createdBy: { select: { fullName: true } } },
     }),
     prisma.payment.findMany({
-      where: cashControlWeekReconciliationPaymentsWhere(wk),
+      where: mergePaymentWhere(cashControlWeekReconciliationPaymentsWhere(wk), scope),
       select: {
         id: true,
         paymentCode: true,
@@ -55,7 +68,7 @@ export async function loadFlowWeekDrill(week: string): Promise<FlowWeekDrillPayl
       },
     }),
     prisma.cashWeekFlow.findUnique({
-      where: { countryCode_weekCode: { countryCode: "TR", weekCode: wk } },
+      where: flowWeekCompositeKey(flowScope, wk),
       include: { updatedBy: { select: { fullName: true } } },
     }),
   ]);

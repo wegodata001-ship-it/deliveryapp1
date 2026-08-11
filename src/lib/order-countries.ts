@@ -1,3 +1,5 @@
+import type { AdminUiLocale } from "@/lib/admin-ui-locale";
+
 export const ORDER_COUNTRY_CODES = ["TURKEY", "CHINA", "UAE"] as const;
 
 export type OrderCountryCode = (typeof ORDER_COUNTRY_CODES)[number];
@@ -36,11 +38,32 @@ const LABELS_HE: Record<OrderCountryCode, string> = {
   UAE: "🇦🇪 אמירויות",
 };
 
-export function orderCountryLabel(code: string | null | undefined): string {
+const LABELS_AR: Record<OrderCountryCode, string> = {
+  TURKEY: "🇹🇷 تركيا",
+  CHINA: "🇨🇳 الصين",
+  UAE: "🇦🇪 الإمارات",
+};
+
+const LABELS_EN: Record<OrderCountryCode, string> = {
+  TURKEY: "🇹🇷 Turkey",
+  CHINA: "🇨🇳 China",
+  UAE: "🇦🇪 UAE",
+};
+
+export function orderCountryLabelLocalized(
+  code: string | null | undefined,
+  locale: AdminUiLocale = "he",
+): string {
   if (!code) return "—";
   const norm = normalizeOrderSourceCountry(code);
-  if (norm) return LABELS_HE[norm];
-  return String(code);
+  if (!norm) return String(code);
+  if (locale === "ar") return LABELS_AR[norm];
+  if (locale === "en") return LABELS_EN[norm];
+  return LABELS_HE[norm];
+}
+
+export function orderCountryLabel(code: string | null | undefined): string {
+  return orderCountryLabelLocalized(code, "he");
 }
 
 /** חיפוש לפי שם בעברית / קוד אנגלי — לסינון רשימת הזמנות */
