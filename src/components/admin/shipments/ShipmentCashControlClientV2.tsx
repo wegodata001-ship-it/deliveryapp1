@@ -44,6 +44,7 @@ import {
   saveManualCollectedAction,
   saveShipmentCashCountsAction,
 } from "@/app/admin/shipments/cash-control/actions";
+import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
 
 function fmtIls(n: number): string {
   return n.toLocaleString("he-IL", { style: "currency", currency: "ILS", minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -71,6 +72,7 @@ function getCurrentWeekCode(): string {
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export function ShipmentCashControlClient() {
+  const { workCountry } = useShipmentCountry();
   const [viewMode, setViewMode] = useState<CashControlViewMode>("day");
   const [dayDate, setDayDate] = useState(todayYmd());
   const [weekCode, setWeekCode] = useState(getCurrentWeekCode());
@@ -94,20 +96,20 @@ export function ShipmentCashControlClient() {
   const loadDay = useCallback(async (date: string) => {
     setBusy(true);
     setError(null);
-    const res = await loadShipmentCashControlAction({ dayDate: date });
+    const res = await loadShipmentCashControlAction({ workCountry, dayDate: date });
     setBusy(false);
     if (!res.ok) { setError(res.error); return; }
     setDayData(res.data);
-  }, []);
+  }, [workCountry]);
 
   const loadWeek = useCallback(async (code: string) => {
     setBusy(true);
     setError(null);
-    const res = await loadShipmentCashWeekAction(code);
+    const res = await loadShipmentCashWeekAction(workCountry, code);
     setBusy(false);
     if (!res.ok) { setError(res.error); return; }
     setWeekData(res.data);
-  }, []);
+  }, [workCountry]);
 
   useEffect(() => {
     if (viewMode === "day") void loadDay(dayDate);
@@ -118,7 +120,7 @@ export function ShipmentCashControlClient() {
 
   async function openDay() {
     setBusy(true);
-    const res = await openShipmentCashDayAction(dayDate);
+    const res = await openShipmentCashDayAction(workCountry, dayDate);
     setBusy(false);
     if (!res.ok) { setError(res.error); return; }
     void loadDay(dayDate);
@@ -128,7 +130,7 @@ export function ShipmentCashControlClient() {
 
   async function closeDay() {
     setBusy(true);
-    const res = await closeShipmentCashDayAction(dayDate);
+    const res = await closeShipmentCashDayAction(workCountry, dayDate);
     setBusy(false);
     if (!res.ok) { setError(res.error); return; }
     void loadDay(dayDate);
@@ -138,7 +140,7 @@ export function ShipmentCashControlClient() {
 
   async function reopenDay() {
     setBusy(true);
-    const res = await reopenShipmentCashDayAction(dayDate);
+    const res = await reopenShipmentCashDayAction(workCountry, dayDate);
     setBusy(false);
     if (!res.ok) { setError(res.error); return; }
     void loadDay(dayDate);
@@ -159,7 +161,7 @@ export function ShipmentCashControlClient() {
       .map(([method, v]) => ({ method, countedIls: Number(v) }));
     if (counts.length === 0) return;
     setBusy(true);
-    const res = await saveShipmentCashCountsAction({ dayDate, counts });
+    const res = await saveShipmentCashCountsAction(workCountry, { dayDate, counts });
     setBusy(false);
     if (!res.ok) { setError(res.error); return; }
     setDayData(res.data);
@@ -171,8 +173,8 @@ export function ShipmentCashControlClient() {
   async function handleDrilldown(date: string, method: string, type: "receipts" | "expenses") {
     setBusy(true);
     const res = type === "receipts"
-      ? await drilldownPaymentsAction(date, method)
-      : await drilldownExpensesAction(date, method);
+      ? await drilldownPaymentsAction(workCountry, date, method)
+      : await drilldownExpensesAction(workCountry, date, method);
     setBusy(false);
     if (!res.ok) { setError(res.error); return; }
     setDrilldown(res.data);
@@ -260,6 +262,7 @@ export function ShipmentCashControlClient() {
       {/* Expense Modal */}
       {expenseOpen && dayData && (
         <ExpenseModal
+          workCountry={workCountry}
           dayDate={dayDate}
           busy={busy}
           onClose={() => setExpenseOpen(false)}
@@ -487,7 +490,8 @@ function WeekView({ data, onDrilldown }: {
 
 // ─── Expense Modal ────────────────────────────────────────────────────────────
 
-function ExpenseModal({ dayDate, busy, onClose, onSaved }: {
+function ExpenseModal({ workCountry, dayDate, busy, onClose, onSaved }: {
+  workCountry: import("@/lib/work-country").WorkCountryCode;
   dayDate: string;
   busy: boolean;
   onClose: () => void;
@@ -505,7 +509,7 @@ function ExpenseModal({ dayDate, busy, onClose, onSaved }: {
     if (!Number.isFinite(amountIls) || amountIls <= 0) { setErr("סכום לא תקין"); return; }
     setSaving(true);
     setErr(null);
-    const res = await addShipmentCashExpenseAction({ dayDate, category, paymentMethod, amountIls, notes: notes.trim() || null });
+    const res = await addShipmentCashExpenseAction(workCountry, { dayDate, category, paymentMethod, amountIls, notes: notes.trim() || null });
     setSaving(false);
     if (!res.ok) { setErr(res.error); return; }
     onSaved();

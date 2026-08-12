@@ -1,6 +1,8 @@
 "use server";
 
 import { requireAuth, userHasAnyPermission, isAdminUser } from "@/lib/admin-auth";
+import { requireShipmentCountryScope } from "@/lib/shipment-country-scope";
+import type { WorkCountryCode } from "@/lib/work-country";
 import type {
   CashDailyDayDetailPayload,
   CashDailyMethodDetailRow,
@@ -19,42 +21,50 @@ import {
 
 const PERMS = ["manage_shipments", "view_shipments"];
 
-async function assertView() {
+async function assertView(workCountry: WorkCountryCode) {
   const me = await requireAuth();
   if (!isAdminUser(me) && !userHasAnyPermission(me, PERMS)) {
     throw new Error("אין הרשאה");
   }
+  requireShipmentCountryScope(workCountry);
   return me;
 }
 
 export async function getShipmentCashControlWeekSummaryAction(
+  workCountry: WorkCountryCode,
   week: string,
 ): Promise<CashDailyWeekSummaryPayload | null> {
-  await assertView();
+  await assertView(workCountry);
   const wk = week.trim();
   if (!wk) return null;
-  const payload = await loadShipmentCashWeek(wk);
+  const payload = await loadShipmentCashWeek(wk, workCountry);
   return mapShippingWeekToDailySummary(payload);
 }
 
-export async function getShipmentCashControlDayDetailAction(input: {
-  week: string;
-  dateYmd: string;
-}): Promise<CashDailyDayDetailPayload | null> {
-  await assertView();
+export async function getShipmentCashControlDayDetailAction(
+  workCountry: WorkCountryCode,
+  input: {
+    week: string;
+    dateYmd: string;
+  },
+): Promise<CashDailyDayDetailPayload | null> {
+  await assertView(workCountry);
   const dateYmd = input.dateYmd.trim();
   if (!dateYmd) return null;
-  const payload = await loadShipmentCashControl({ dayDate: dateYmd });
+  const payload = await loadShipmentCashControl({ workCountry, dayDate: dateYmd });
   return mapShippingDayToDailyDetail(input.week.trim(), payload);
 }
 
-export async function listShipmentCashControlDayIntakesAction(input: {
-  week: string;
-  dateYmd: string;
-  column: string;
-}): Promise<CashDailyMethodDetailRow[]> {
-  await assertView();
+export async function listShipmentCashControlDayIntakesAction(
+  workCountry: WorkCountryCode,
+  input: {
+    week: string;
+    dateYmd: string;
+    column: string;
+  },
+): Promise<CashDailyMethodDetailRow[]> {
+  await assertView(workCountry);
   void input.week;
-  const drill = await drilldownPayments(input.dateYmd.trim(), input.column.trim());
+  const drill = await drilldownPayments(input.dateYmd.trim(), input.column.trim(), workCountry);
   return mapShippingPaymentsToMethodRows(drill.rows as import("./types").CashDrilldownPaymentRow[]);
 }

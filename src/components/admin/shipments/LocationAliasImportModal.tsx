@@ -24,6 +24,7 @@ import {
   commitLocationAliasRowsAction,
   previewLocationAliasImportAction,
 } from "@/app/admin/shipments/location-actions";
+import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
 
 type Props = {
   onClose: () => void;
@@ -177,6 +178,7 @@ function RowDetailPanel({ row }: { row: LocationAliasImportRow }) {
 }
 
 export function LocationAliasImportModal({ onClose, onDone }: Props) {
+  const { workCountry } = useShipmentCountry();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -274,7 +276,7 @@ export function LocationAliasImportModal({ onClose, onDone }: Props) {
       const wb = XLSX.read(buf, { type: "array" });
       const sheet = wb.Sheets[wb.SheetNames[0]];
       const grid = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: "" });
-      const res = await previewLocationAliasImportAction(grid);
+      const res = await previewLocationAliasImportAction(workCountry, grid);
       if (res.ok) setPreview(res.preview);
       else setMsg(res.error);
     } catch (e) {
@@ -298,7 +300,7 @@ export function LocationAliasImportModal({ onClose, onDone }: Props) {
     setBusy(true);
     setMsg(null);
     try {
-      const res = await commitLocationAliasRowsAction(rows, preview.totalRows, { fileName });
+      const res = await commitLocationAliasRowsAction(workCountry, rows, preview.totalRows, { fileName });
       if (res.ok) {
         setCommitResult(res.result);
         onDone?.(res.result);

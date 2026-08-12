@@ -1,5 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import type { WorkCountryCode } from "@/lib/work-country";
+import { shipmentBatchWhere } from "@/lib/shipment-country-scope";
 import type { ShipmentPaymentStatus } from "@prisma/client";
 import {
   buildDeliveryFeeImportResult,
@@ -42,9 +44,10 @@ function shipmentLabel(batch: {
 export async function previewBatchDeliveryFeeImport(
   batchId: string,
   grid: unknown[][],
+  workCountry: WorkCountryCode,
 ): Promise<{ ok: true; preview: DeliveryFeeImportPreview } | { ok: false; error: string }> {
-  const batch = await prisma.shipmentBatch.findUnique({
-    where: { id: batchId },
+  const batch = await prisma.shipmentBatch.findFirst({
+    where: { id: batchId, ...shipmentBatchWhere(workCountry) },
     select: {
       id: true,
       batchNumber: true,
@@ -105,14 +108,15 @@ export async function commitBatchDeliveryFeeImport(input: {
   batchId: string;
   userId: string;
   preview: DeliveryFeeImportPreview;
+  workCountry: WorkCountryCode;
 }): Promise<{ ok: true; result: DeliveryFeeImportResult } | { ok: false; error: string }> {
   const updates = input.preview.updates;
   if (updates.length === 0) {
     return { ok: false, error: "אין רשומות לעדכון" };
   }
 
-  const batch = await prisma.shipmentBatch.findUnique({
-    where: { id: input.batchId },
+  const batch = await prisma.shipmentBatch.findFirst({
+    where: { id: input.batchId, ...shipmentBatchWhere(input.workCountry) },
     select: {
       id: true,
       batchNumber: true,

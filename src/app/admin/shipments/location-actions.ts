@@ -3,6 +3,11 @@
 import { revalidatePath } from "next/cache";
 import { requireAuth, userHasAnyPermission, isAdminUser } from "@/lib/admin-auth";
 import {
+  requireShipmentCountryScope,
+  shipmentCountrySlugFromWorkCountry,
+} from "@/lib/shipment-country-scope";
+import type { WorkCountryCode } from "@/lib/work-country";
+import {
   listDeliveryLocations,
   createDeliveryLocation,
   updateDeliveryLocation,
@@ -14,10 +19,8 @@ import {
   cleanupMisimportedAreasAndLocations,
   listAliasMappingRows,
   previewLocationAliasImport,
-  commitLocationAliasImport,
   commitLocationAliasImportRows,
   formatLocationAliasImportCommitError,
-  formatLocationAliasImportResultErrors,
   validateLocationAliasImportCommitRows,
   backfillShipmentDistributionZones,
   fixShipmentLocation,
@@ -39,72 +42,89 @@ import type { ShipmentZoneDto } from "@/app/admin/shipments/types";
 const VIEW_PERMS = ["manage_shipments", "view_shipments"];
 const WRITE_PERMS = ["manage_shipments"];
 
-function revalidateLocations() {
-  revalidatePath("/admin/shipments");
-  revalidatePath("/admin/shipments/locations");
-  revalidatePath("/admin/shipments/control");
+function revalidateLocations(workCountry: WorkCountryCode) {
+  const slug = shipmentCountrySlugFromWorkCountry(workCountry);
+  revalidatePath(`/admin/shipments/${slug}`);
+  revalidatePath(`/admin/shipments/${slug}/locations`);
+  revalidatePath(`/admin/shipments/${slug}/control`);
 }
 
-export async function listDeliveryLocationsAction(opts?: {
-  search?: string;
-  areaId?: string;
-  includeInactive?: boolean;
-}): Promise<{ ok: true; locations: DeliveryLocationDto[] } | { ok: false; error: string }> {
+export async function listDeliveryLocationsAction(
+  workCountry: WorkCountryCode,
+  opts?: {
+    search?: string;
+    areaId?: string;
+    includeInactive?: boolean;
+  },
+): Promise<{ ok: true; locations: DeliveryLocationDto[] } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, VIEW_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    const locations = await listDeliveryLocations(opts);
+    requireShipmentCountryScope(workCountry);
+    const locations = await listDeliveryLocations(workCountry, opts);
     return { ok: true, locations };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
 }
 
-export async function createDeliveryLocationAction(input: {
-  displayName: string;
-  distributionAreaId?: string | null;
-}): Promise<{ ok: true; location: DeliveryLocationDto } | { ok: false; error: string }> {
+export async function createDeliveryLocationAction(
+  workCountry: WorkCountryCode,
+  input: {
+    displayName: string;
+    distributionAreaId?: string | null;
+  },
+): Promise<{ ok: true; location: DeliveryLocationDto } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    const location = await createDeliveryLocation(input);
-    revalidateLocations();
+    requireShipmentCountryScope(workCountry);
+    const location = await createDeliveryLocation(workCountry, input);
+    revalidateLocations(workCountry);
     return { ok: true, location };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
 }
 
-export async function updateDeliveryLocationAction(input: {
-  id: string;
-  displayName?: string;
-  distributionAreaId?: string | null;
-  isActive?: boolean;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+export async function updateDeliveryLocationAction(
+  workCountry: WorkCountryCode,
+  input: {
+    id: string;
+    displayName?: string;
+    distributionAreaId?: string | null;
+    isActive?: boolean;
+  },
+): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
+    requireShipmentCountryScope(workCountry);
     await updateDeliveryLocation(input);
-    revalidateLocations();
+    revalidateLocations(workCountry);
     return { ok: true };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
 }
 
-export async function bulkAssignLocationsToAreaAction(input: {
-  locationIds: string[];
-  distributionAreaId: string | null;
-}): Promise<{ ok: true; count: number } | { ok: false; error: string }> {
+export async function bulkAssignLocationsToAreaAction(
+  workCountry: WorkCountryCode,
+  input: {
+    locationIds: string[];
+    distributionAreaId: string | null;
+  },
+): Promise<{ ok: true; count: number } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
+    requireShipmentCountryScope(workCountry);
     const count = await bulkAssignLocationsToArea(input);
-    revalidateLocations();
+    revalidateLocations(workCountry);
     return { ok: true, count };
   } catch (e) {
     return { ok: false, error: String(e) };
@@ -112,71 +132,84 @@ export async function bulkAssignLocationsToAreaAction(input: {
 }
 
 export async function deleteLocationAliasAction(
+  workCountry: WorkCountryCode,
   aliasId: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
+    requireShipmentCountryScope(workCountry);
     await deactivateLocationAlias(aliasId);
-    revalidateLocations();
+    revalidateLocations(workCountry);
     return { ok: true };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
 }
 
-export async function updateAliasMappingAction(input: {
-  aliasId: string;
-  displayName: string;
-  deliveryLocationId?: string | null;
-  distributionAreaId?: string | null;
-}): Promise<{ ok: true; row: AliasMappingRow } | { ok: false; error: string }> {
+export async function updateAliasMappingAction(
+  workCountry: WorkCountryCode,
+  input: {
+    aliasId: string;
+    displayName: string;
+    deliveryLocationId?: string | null;
+    distributionAreaId?: string | null;
+  },
+): Promise<{ ok: true; row: AliasMappingRow } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    const row = await updateAliasMapping(input);
-    revalidateLocations();
+    requireShipmentCountryScope(workCountry);
+    const row = await updateAliasMapping({ ...input, workCountry });
+    revalidateLocations(workCountry);
     return { ok: true, row };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
 }
 
-export async function createAliasMappingAction(input: {
-  originalName: string;
-  displayName: string;
-  distributionAreaId?: string | null;
-}): Promise<{ ok: true; row: AliasMappingRow } | { ok: false; error: string }> {
+export async function createAliasMappingAction(
+  workCountry: WorkCountryCode,
+  input: {
+    originalName: string;
+    displayName: string;
+    distributionAreaId?: string | null;
+  },
+): Promise<{ ok: true; row: AliasMappingRow } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    const row = await createAliasMapping(input);
-    revalidateLocations();
+    requireShipmentCountryScope(workCountry);
+    const row = await createAliasMapping({ ...input, workCountry });
+    revalidateLocations(workCountry);
     return { ok: true, row };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
 }
 
-export async function purgeAllDistributionZonesAction(): Promise<
-  { ok: true; deleted: number } | { ok: false; error: string }
-> {
+export async function purgeAllDistributionZonesAction(
+  workCountry: WorkCountryCode,
+): Promise<{ ok: true; deleted: number } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
+    requireShipmentCountryScope(workCountry);
     const deleted = await purgeAllDistributionZones();
-    revalidateLocations();
+    revalidateLocations(workCountry);
     return { ok: true, deleted };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
 }
 
-export async function cleanupMisimportedAreasAction(): Promise<
+export async function cleanupMisimportedAreasAction(
+  workCountry: WorkCountryCode,
+): Promise<
   | {
       ok: true;
       deletedFakeZones: number;
@@ -190,23 +223,28 @@ export async function cleanupMisimportedAreasAction(): Promise<
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    const result = await cleanupMisimportedAreasAndLocations();
-    revalidateLocations();
+    requireShipmentCountryScope(workCountry);
+    const result = await cleanupMisimportedAreasAndLocations(workCountry);
+    revalidateLocations(workCountry);
     return { ok: true, ...result };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
 }
 
-export async function listAliasMappingRowsAction(opts?: {
-  search?: string;
-  includeInactive?: boolean;
-}): Promise<{ ok: true; rows: AliasMappingRow[] } | { ok: false; error: string }> {
+export async function listAliasMappingRowsAction(
+  workCountry: WorkCountryCode,
+  opts?: {
+    search?: string;
+    includeInactive?: boolean;
+  },
+): Promise<{ ok: true; rows: AliasMappingRow[] } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, VIEW_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    const rows = await listAliasMappingRows(opts);
+    requireShipmentCountryScope(workCountry);
+    const rows = await listAliasMappingRows(workCountry, opts);
     return { ok: true, rows };
   } catch (e) {
     return { ok: false, error: String(e) };
@@ -214,12 +252,14 @@ export async function listAliasMappingRowsAction(opts?: {
 }
 
 export async function previewLocationAliasImportAction(
+  workCountry: WorkCountryCode,
   grid: unknown[][],
 ): Promise<{ ok: true; preview: LocationAliasImportPreview } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
+    requireShipmentCountryScope(workCountry);
     const preview = await previewLocationAliasImport(grid);
     return { ok: true, preview };
   } catch (e) {
@@ -228,12 +268,14 @@ export async function previewLocationAliasImportAction(
 }
 
 export async function commitLocationAliasImportAction(
+  workCountry: WorkCountryCode,
   grid: unknown[][],
 ): Promise<{ ok: true; result: LocationAliasImportResult } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
+    requireShipmentCountryScope(workCountry);
     const preview = await previewLocationAliasImport(grid);
     if (preview.mappingError) {
       return { ok: false, error: preview.mappingError };
@@ -242,7 +284,7 @@ export async function commitLocationAliasImportAction(
     if (validRows.length === 0) {
       return { ok: false, error: "אין שורות תקינות לייבוא" };
     }
-    return commitLocationAliasRowsAction(validRows, preview.totalRows);
+    return commitLocationAliasRowsAction(workCountry, validRows, preview.totalRows);
   } catch (e) {
     console.error("[locations] commitLocationAliasImportAction failed", e);
     const message = e instanceof Error ? e.message : String(e);
@@ -250,8 +292,8 @@ export async function commitLocationAliasImportAction(
   }
 }
 
-/** ייבוא קל משקל — שולחים רק שורות תקינות (לא את כל ה־grid) */
 export async function commitLocationAliasRowsAction(
+  workCountry: WorkCountryCode,
   rows: LocationAliasImportRow[],
   totalRows: number,
   options?: { fileName?: string | null },
@@ -260,6 +302,7 @@ export async function commitLocationAliasRowsAction(
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
+    requireShipmentCountryScope(workCountry);
     if (!Array.isArray(rows) || rows.length === 0) {
       return { ok: false, error: "אין שורות לייבוא" };
     }
@@ -274,11 +317,11 @@ export async function commitLocationAliasRowsAction(
       return { ok: false, error: message };
     }
 
-    const result = await commitLocationAliasImportRows(rows, me.id, totalRows, options);
+    const result = await commitLocationAliasImportRows(workCountry, rows, me.id, totalRows, options);
     if (result.failed > 0 && result.errors.length > 0) {
       console.error("[locations] import partial failures", result.errors);
     }
-    revalidateLocations();
+    revalidateLocations(workCountry);
     return { ok: true, result };
   } catch (e) {
     console.error("[locations] commitLocationAliasImport failed", e);
@@ -287,9 +330,10 @@ export async function commitLocationAliasRowsAction(
   }
 }
 
-export async function backfillShipmentZonesAction(input?: {
-  batchId?: string;
-}): Promise<
+export async function backfillShipmentZonesAction(
+  workCountry: WorkCountryCode,
+  input?: { batchId?: string },
+): Promise<
   | {
       ok: true;
       result: {
@@ -306,81 +350,91 @@ export async function backfillShipmentZonesAction(input?: {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
+    requireShipmentCountryScope(workCountry);
     const result = await backfillShipmentDistributionZones({
       batchId: input?.batchId,
       onlyMissingZone: true,
     });
-    revalidateLocations();
+    revalidateLocations(workCountry);
     return { ok: true, result };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
 }
 
-export async function fixShipmentLocationAction(input: {
-  recordId: string;
-  deliveryLocationId?: string | null;
-  newDisplayName?: string | null;
-  distributionAreaId?: string | null;
-  saveAsPermanentAlias?: boolean;
-}): Promise<{ ok: true; updatedRecordIds: string[] } | { ok: false; error: string }> {
+export async function fixShipmentLocationAction(
+  workCountry: WorkCountryCode,
+  input: {
+    recordId: string;
+    deliveryLocationId?: string | null;
+    newDisplayName?: string | null;
+    distributionAreaId?: string | null;
+    saveAsPermanentAlias?: boolean;
+  },
+): Promise<{ ok: true; updatedRecordIds: string[] } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    const result = await fixShipmentLocation({ ...input, changedById: me.id });
-    revalidateLocations();
-    revalidatePath("/admin/shipments");
+    requireShipmentCountryScope(workCountry);
+    const result = await fixShipmentLocation({ ...input, workCountry, changedById: me.id });
+    revalidateLocations(workCountry);
+    revalidatePath(`/admin/shipments/${shipmentCountrySlugFromWorkCountry(workCountry)}`);
     return { ok: true, updatedRecordIds: result.updatedRecordIds };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
 }
 
-export async function assignZoneWithLocationPromptAction(input: {
-  recordIds: string[];
-  zoneId: string | null;
-  updateLocationPermanently?: boolean;
-}): Promise<
-  { ok: true; updatedRecordIds: string[] } | { ok: false; error: string }
-> {
+export async function assignZoneWithLocationPromptAction(
+  workCountry: WorkCountryCode,
+  input: {
+    recordIds: string[];
+    zoneId: string | null;
+    updateLocationPermanently?: boolean;
+  },
+): Promise<{ ok: true; updatedRecordIds: string[] } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
+    requireShipmentCountryScope(workCountry);
     const result = await assignZoneWithOptionalLocationUpdate({
       ...input,
       changedById: me.id,
     });
-    revalidateLocations();
+    revalidateLocations(workCountry);
     return { ok: true, updatedRecordIds: result.updatedRecordIds };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
 }
 
-export async function listZonesForLocationsAction(): Promise<
-  { ok: true; zones: ShipmentZoneDto[] } | { ok: false; error: string }
-> {
+export async function listZonesForLocationsAction(
+  workCountry: WorkCountryCode,
+): Promise<{ ok: true; zones: ShipmentZoneDto[] } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, VIEW_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    return { ok: true, zones: await listZones() };
+    requireShipmentCountryScope(workCountry);
+    return { ok: true, zones: await listZones(workCountry) };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
 }
 
 export async function createZoneForLocationsAction(
+  workCountry: WorkCountryCode,
   name: string,
 ): Promise<{ ok: true; zone: ShipmentZoneDto } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    const zone = await createZone(name, me.id);
-    revalidateLocations();
+    requireShipmentCountryScope(workCountry);
+    const zone = await createZone(name, me.id, workCountry);
+    revalidateLocations(workCountry);
     return { ok: true, zone };
   } catch (e) {
     console.error("[locations] createZone failed", { name, error: e });
@@ -390,6 +444,7 @@ export async function createZoneForLocationsAction(
 }
 
 export async function updateZoneForLocationsAction(
+  workCountry: WorkCountryCode,
   id: string,
   patch: { name?: string; code?: string | null; sortOrder?: number },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -397,8 +452,9 @@ export async function updateZoneForLocationsAction(
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    await updateZone(id, patch);
-    revalidateLocations();
+    requireShipmentCountryScope(workCountry);
+    await updateZone(id, patch, workCountry);
+    revalidateLocations(workCountry);
     return { ok: true };
   } catch (e) {
     return { ok: false, error: String(e) };
@@ -406,6 +462,7 @@ export async function updateZoneForLocationsAction(
 }
 
 export async function setZoneActiveForLocationsAction(
+  workCountry: WorkCountryCode,
   id: string,
   isActive: boolean,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -413,8 +470,9 @@ export async function setZoneActiveForLocationsAction(
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    await setZoneActive(id, isActive);
-    revalidateLocations();
+    requireShipmentCountryScope(workCountry);
+    await setZoneActive(id, isActive, workCountry);
+    revalidateLocations(workCountry);
     return { ok: true };
   } catch (e) {
     return { ok: false, error: String(e) };
@@ -422,14 +480,16 @@ export async function setZoneActiveForLocationsAction(
 }
 
 export async function deleteZoneForLocationsAction(
+  workCountry: WorkCountryCode,
   id: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    await deleteZone(id);
-    revalidateLocations();
+    requireShipmentCountryScope(workCountry);
+    await deleteZone(id, workCountry);
+    revalidateLocations(workCountry);
     return { ok: true };
   } catch (e) {
     return { ok: false, error: String(e) };
@@ -437,55 +497,66 @@ export async function deleteZoneForLocationsAction(
 }
 
 export async function reorderZonesAction(
+  workCountry: WorkCountryCode,
   orderedIds: string[],
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
+    requireShipmentCountryScope(workCountry);
     await reorderZones(orderedIds);
-    revalidateLocations();
+    revalidateLocations(workCountry);
     return { ok: true };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
 }
 
-export async function addLocationAliasAction(input: {
-  deliveryLocationId: string;
-  originalName: string;
-}): Promise<{ ok: true; row: AliasMappingRow } | { ok: false; error: string }> {
+export async function addLocationAliasAction(
+  workCountry: WorkCountryCode,
+  input: {
+    deliveryLocationId: string;
+    originalName: string;
+  },
+): Promise<{ ok: true; row: AliasMappingRow } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
+    requireShipmentCountryScope(workCountry);
     const row = await addLocationAlias({ ...input, createdBy: me.id });
-    revalidateLocations();
+    revalidateLocations(workCountry);
     return { ok: true, row };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
 }
 
-export async function updateLocationAliasOriginalNameAction(input: {
-  aliasId: string;
-  originalName: string;
-}): Promise<{ ok: true; row: AliasMappingRow } | { ok: false; error: string }> {
+export async function updateLocationAliasOriginalNameAction(
+  workCountry: WorkCountryCode,
+  input: {
+    aliasId: string;
+    originalName: string;
+  },
+): Promise<{ ok: true; row: AliasMappingRow } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
+    requireShipmentCountryScope(workCountry);
     const row = await updateLocationAliasOriginalName(input);
-    revalidateLocations();
+    revalidateLocations(workCountry);
     return { ok: true, row };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
 }
 
-export async function reMatchUnmatchedShipmentsAction(input?: {
-  batchId?: string;
-}): Promise<
+export async function reMatchUnmatchedShipmentsAction(
+  workCountry: WorkCountryCode,
+  input?: { batchId?: string },
+): Promise<
   | { ok: true; result: { scanned: number; matched: number; updated: number } }
   | { ok: false; error: string }
 > {
@@ -493,10 +564,11 @@ export async function reMatchUnmatchedShipmentsAction(input?: {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    await renormalizeDeliveryLocationAliases();
+    requireShipmentCountryScope(workCountry);
+    await renormalizeDeliveryLocationAliases(workCountry);
     const result = await reMatchUnmatchedShipments({ batchId: input?.batchId });
-    revalidateLocations();
-    revalidatePath("/admin/shipments");
+    revalidateLocations(workCountry);
+    revalidatePath(`/admin/shipments/${shipmentCountrySlugFromWorkCountry(workCountry)}`);
     return { ok: true, result };
   } catch (e) {
     return { ok: false, error: String(e) };

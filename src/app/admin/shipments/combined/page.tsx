@@ -1,51 +1,29 @@
-import { requireRoutePermission } from "@/lib/route-access";
-import {
-  listCouriers,
-  listShipmentBatches,
-  listShipmentRecordsByBatchIds,
-  listZones,
-} from "@/app/admin/shipments/service";
-import { listShipmentPaymentMethodsAction } from "@/app/admin/shipments/actions";
-import { PAYMENT_METHODS } from "@/app/admin/shipments/types";
-import { ShipmentCombinedClient } from "@/components/admin/shipments/ShipmentCombinedClient";
-import "@/app/admin/shipments/shipments.css";
+import { redirect } from "next/navigation";
+import { prisma } from "@/lib/prisma";
+import { shipmentCountrySlugFromWorkCountry } from "@/lib/shipment-country-scope.shared";
 
-export const dynamic = "force-dynamic";
-
+/** Legacy combined view — redirect to country-scoped route using first batch's country */
 export default async function ShipmentCombinedPage({
   searchParams,
 }: {
   searchParams: Promise<{ ids?: string }>;
 }) {
-  await requireRoutePermission(["manage_shipments", "view_shipments"]);
   const sp = await searchParams;
   const batchIds = (sp.ids ?? "")
     .split(",")
     .map((id) => id.trim())
     .filter(Boolean);
 
-  const [records, zones, couriers, allBatches, methodsRes] = await Promise.all([
-    listShipmentRecordsByBatchIds(batchIds),
-    listZones(),
-    listCouriers(),
-    listShipmentBatches(),
-    listShipmentPaymentMethodsAction(),
-  ]);
+  if (batchIds.length === 0) {
+    redirect("/admin/shipments/turkey");
+  }
 
-  const idSet = new Set(batchIds);
-  const batches = allBatches.filter((b) => idSet.has(b.id));
-  const paymentMethods = methodsRes.ok
-    ? methodsRes.methods
-    : PAYMENT_METHODS.map((m) => ({ id: m.value, label: m.label }));
+  const batch = await prisma.shipmentBatch.findFirst({
+    where: { id: { in: batchIds } },
+    select: { countryCode: true },
+    orderBy: { createdAt: "asc" },
+  });
 
-  return (
-    <ShipmentCombinedClient
-      batchIds={batchIds}
-      initialRecords={records}
-      initialZones={zones}
-      initialCouriers={couriers}
-      initialBatches={batches}
-      paymentMethods={paymentMethods}
-    />
-  );
+  const slug = shipmentCountrySlugFromWorkCountry(batch?.countryCode ?? "TR");
+  redirect(`/admin/shipments/${slug}/combined?ids=${encodeURIComponent(sp.ids ?? "")}`);
 }

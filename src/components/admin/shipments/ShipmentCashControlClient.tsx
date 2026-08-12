@@ -28,6 +28,7 @@ import {
   type ShipmentCashExpenseCategory,
   type ShipmentCashMethodLine,
 } from "@/app/admin/shipments/cash-control/types";
+import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
 
 type Props = {
   initialData: ShipmentCashControlPayload;
@@ -66,6 +67,7 @@ export function ShipmentCashControlClient({
   embedded,
   onBack,
 }: Props) {
+  const { workCountry } = useShipmentCountry();
   const [data, setData] = useState(initialData);
   const [dayDate, setDayDate] = useState(initialData.dayDate || initialDayDate);
   const [busy, setBusy] = useState(false);
@@ -106,7 +108,7 @@ export function ShipmentCashControlClient({
     async (date = dayDate) => {
       setBusy(true);
       setError(null);
-      const res = await loadShipmentCashControlAction({ dayDate: date });
+      const res = await loadShipmentCashControlAction({ workCountry, dayDate: date });
       setBusy(false);
       if (!res.ok) {
         setError(res.error);
@@ -120,7 +122,7 @@ export function ShipmentCashControlClient({
   async function openDay() {
     setBusy(true);
     setError(null);
-    const res = await openShipmentCashDayAction(dayDate);
+    const res = await openShipmentCashDayAction(workCountry, dayDate);
     setBusy(false);
     if (!res.ok) {
       setError(res.error);
@@ -139,7 +141,7 @@ export function ShipmentCashControlClient({
   async function closeDay() {
     if (!window.confirm("לסגור את יום העבודה?")) return;
     setBusy(true);
-    const res = await closeShipmentCashDayAction(dayDate);
+    const res = await closeShipmentCashDayAction(workCountry, dayDate);
     setBusy(false);
     if (!res.ok) {
       setError(res.error);
@@ -151,7 +153,7 @@ export function ShipmentCashControlClient({
 
   async function reopenDay() {
     setBusy(true);
-    const res = await reopenShipmentCashDayAction(dayDate);
+    const res = await reopenShipmentCashDayAction(workCountry, dayDate);
     setBusy(false);
     if (!res.ok) {
       setError(res.error);
@@ -173,7 +175,7 @@ export function ShipmentCashControlClient({
     }
     setBusy(true);
     setError(null);
-    const res = await saveShipmentCashCountsAction({ dayDate, counts });
+    const res = await saveShipmentCashCountsAction(workCountry, { dayDate, counts });
     setBusy(false);
     if (!res.ok) {
       setError(res.error);
@@ -191,7 +193,7 @@ export function ShipmentCashControlClient({
     }
     setBusy(true);
     setError(null);
-    const res = await addShipmentCashExpenseAction({
+    const res = await addShipmentCashExpenseAction(workCountry, {
       dayDate,
       category: expenseCategory,
       paymentMethod: "CASH",
@@ -275,7 +277,7 @@ export function ShipmentCashControlClient({
               value={dayDate}
               onChange={(e) => {
                 setDayDate(e.target.value);
-                void loadShipmentCashControlAction({ dayDate: e.target.value }).then(
+                void loadShipmentCashControlAction({ workCountry, dayDate: e.target.value }).then(
                   (res) => {
                     if (res.ok) syncDraftFromData(res.data);
                     else setError(res.error);

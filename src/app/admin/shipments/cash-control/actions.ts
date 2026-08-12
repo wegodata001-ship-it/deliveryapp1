@@ -2,6 +2,11 @@
 
 import { revalidatePath } from "next/cache";
 import { requireAuth, userHasAnyPermission, isAdminUser } from "@/lib/admin-auth";
+import {
+  requireShipmentCountryScope,
+  shipmentCountrySlugFromWorkCountry,
+} from "@/lib/shipment-country-scope";
+import type { WorkCountryCode } from "@/lib/work-country";
 import type { PaymentMethodValue } from "@/app/admin/shipments/types";
 import type {
   CashControlWeekPayload,
@@ -34,10 +39,11 @@ import {
 const VIEW_PERMS = ["manage_shipments", "view_shipments"];
 const WRITE_PERMS = ["manage_shipments"];
 
-function revalidate() {
-  revalidatePath("/admin/shipments");
-  revalidatePath("/admin/shipments/cash-control");
-  revalidatePath("/admin/shipments/control");
+function revalidate(workCountry: WorkCountryCode) {
+  const slug = shipmentCountrySlugFromWorkCountry(workCountry);
+  revalidatePath(`/admin/shipments/${slug}`);
+  revalidatePath(`/admin/shipments/${slug}/cash-control`);
+  revalidatePath(`/admin/shipments/${slug}/control`);
 }
 
 export async function loadShipmentCashControlAction(
@@ -47,6 +53,7 @@ export async function loadShipmentCashControlAction(
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, VIEW_PERMS))
       return { ok: false, error: "אין הרשאה" };
+    requireShipmentCountryScope(filter.workCountry);
     const data = await loadShipmentCashControl(filter);
     return { ok: true, data };
   } catch (e) {
@@ -55,13 +62,15 @@ export async function loadShipmentCashControlAction(
 }
 
 export async function loadShipmentCashWeekAction(
+  workCountry: WorkCountryCode,
   weekCode: string,
 ): Promise<{ ok: true; data: CashControlWeekPayload } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, VIEW_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    const data = await loadShipmentCashWeek(weekCode);
+    requireShipmentCountryScope(workCountry);
+    const data = await loadShipmentCashWeek(weekCode, workCountry);
     return { ok: true, data };
   } catch (e) {
     return { ok: false, error: String(e) };
@@ -69,6 +78,7 @@ export async function loadShipmentCashWeekAction(
 }
 
 export async function drilldownPaymentsAction(
+  workCountry: WorkCountryCode,
   dayDate: string,
   method: string,
 ): Promise<{ ok: true; data: CashDrilldownPayload } | { ok: false; error: string }> {
@@ -76,7 +86,8 @@ export async function drilldownPaymentsAction(
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, VIEW_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    const data = await drilldownPayments(dayDate, method);
+    requireShipmentCountryScope(workCountry);
+    const data = await drilldownPayments(dayDate, method, workCountry);
     return { ok: true, data };
   } catch (e) {
     return { ok: false, error: String(e) };
@@ -84,6 +95,7 @@ export async function drilldownPaymentsAction(
 }
 
 export async function drilldownExpensesAction(
+  workCountry: WorkCountryCode,
   dayDate: string,
   method: string,
 ): Promise<{ ok: true; data: CashDrilldownPayload } | { ok: false; error: string }> {
@@ -91,7 +103,8 @@ export async function drilldownExpensesAction(
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, VIEW_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    const data = await drilldownExpenses(dayDate, method);
+    requireShipmentCountryScope(workCountry);
+    const data = await drilldownExpenses(dayDate, method, workCountry);
     return { ok: true, data };
   } catch (e) {
     return { ok: false, error: String(e) };
@@ -99,16 +112,18 @@ export async function drilldownExpensesAction(
 }
 
 export async function openShipmentCashDayAction(
+  workCountry: WorkCountryCode,
   dayDate: string,
 ): Promise<{ ok: true; day: ShipmentCashDayDto; reusedExistingOpen: boolean } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    const before = await findActiveOpenShipmentCashDay();
-    const day = await getOrOpenShipmentCashDay(dayDate, me.id);
+    requireShipmentCountryScope(workCountry);
+    const before = await findActiveOpenShipmentCashDay(workCountry);
+    const day = await getOrOpenShipmentCashDay(dayDate, me.id, workCountry);
     const reusedExistingOpen = Boolean(before && before.id === day.id);
-    revalidate();
+    revalidate(workCountry);
     return { ok: true, day, reusedExistingOpen };
   } catch (e) {
     return { ok: false, error: String(e) };
@@ -130,14 +145,16 @@ export async function loadShipmentCashHistoryAction(
 }
 
 export async function closeShipmentCashDayAction(
+  workCountry: WorkCountryCode,
   dayDate: string,
 ): Promise<{ ok: true; day: ShipmentCashDayDto } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    const day = await closeShipmentCashDay(dayDate, me.id);
-    revalidate();
+    requireShipmentCountryScope(workCountry);
+    const day = await closeShipmentCashDay(dayDate, me.id, workCountry);
+    revalidate(workCountry);
     return { ok: true, day };
   } catch (e) {
     return { ok: false, error: String(e) };
@@ -145,53 +162,68 @@ export async function closeShipmentCashDayAction(
 }
 
 export async function reopenShipmentCashDayAction(
+  workCountry: WorkCountryCode,
   dayDate: string,
 ): Promise<{ ok: true; day: ShipmentCashDayDto } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    const day = await reopenShipmentCashDay(dayDate, me.id);
-    revalidate();
+    requireShipmentCountryScope(workCountry);
+    const day = await reopenShipmentCashDay(dayDate, me.id, workCountry);
+    revalidate(workCountry);
     return { ok: true, day };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
 }
 
-export async function intakeShipmentFeePaymentAction(input: {
-  shipmentRecordId: string;
-  amountIls: number;
-  method: PaymentMethodValue;
-  paymentDate?: string | null;
-  notes?: string | null;
-  allowOverpay?: boolean;
-}): Promise<{ ok: true; row: ShipmentCashControlRow } | { ok: false; error: string }> {
+export async function intakeShipmentFeePaymentAction(
+  workCountry: WorkCountryCode,
+  input: {
+    shipmentRecordId: string;
+    amountIls: number;
+    method: PaymentMethodValue;
+    paymentDate?: string | null;
+    notes?: string | null;
+    allowOverpay?: boolean;
+  },
+): Promise<{ ok: true; row: ShipmentCashControlRow } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    const row = await intakeShipmentFeePayment({ ...input, createdById: me.id, isAdmin: isAdminUser(me) });
-    revalidate();
+    requireShipmentCountryScope(workCountry);
+    const row = await intakeShipmentFeePayment({
+      ...input,
+      workCountry,
+      createdById: me.id,
+      isAdmin: isAdminUser(me),
+    });
+    revalidate(workCountry);
     return { ok: true, row };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
 }
 
-export async function addShipmentCashExpenseAction(input: {
-  dayDate: string;
-  category: ShipmentCashExpenseCategory;
-  paymentMethod: string;
-  amountIls: number;
-  notes?: string | null;
-}): Promise<{ ok: true; expense: ShipmentCashExpenseDto } | { ok: false; error: string }> {
+export async function addShipmentCashExpenseAction(
+  workCountry: WorkCountryCode,
+  input: {
+    dayDate: string;
+    category: ShipmentCashExpenseCategory;
+    paymentMethod: string;
+    amountIls: number;
+    notes?: string | null;
+  },
+): Promise<{ ok: true; expense: ShipmentCashExpenseDto } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    const expense = await addShipmentCashExpense({ ...input, createdById: me.id });
-    revalidate();
+    requireShipmentCountryScope(workCountry);
+    const expense = await addShipmentCashExpense({ ...input, workCountry, createdById: me.id });
+    revalidate(workCountry);
     return { ok: true, expense };
   } catch (e) {
     return { ok: false, error: String(e) };
@@ -206,40 +238,52 @@ export async function deleteShipmentCashExpenseAction(
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
     await deleteShipmentCashExpense(expenseId, me.id);
-    revalidate();
     return { ok: true };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
 }
 
-export async function saveShipmentCashCountsAction(input: {
-  dayDate: string;
-  counts: Array<{ method: string; countedIls: number }>;
-}): Promise<{ ok: true; data: ShipmentCashControlPayload } | { ok: false; error: string }> {
+export async function saveShipmentCashCountsAction(
+  workCountry: WorkCountryCode,
+  input: {
+    dayDate: string;
+    counts: Array<{ method: string; countedIls: number }>;
+  },
+): Promise<{ ok: true; data: ShipmentCashControlPayload } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    const data = await saveShipmentCashCounts({ dayDate: input.dayDate, counts: input.counts, createdById: me.id });
-    revalidate();
+    requireShipmentCountryScope(workCountry);
+    const data = await saveShipmentCashCounts({
+      dayDate: input.dayDate,
+      counts: input.counts,
+      createdById: me.id,
+      workCountry,
+    });
+    revalidate(workCountry);
     return { ok: true, data };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
 }
 
-export async function saveManualCollectedAction(input: {
-  dayDate: string;
-  method: string;
-  amountIls: number;
-}): Promise<{ ok: true; data: ShipmentCashControlPayload } | { ok: false; error: string }> {
+export async function saveManualCollectedAction(
+  workCountry: WorkCountryCode,
+  input: {
+    dayDate: string;
+    method: string;
+    amountIls: number;
+  },
+): Promise<{ ok: true; data: ShipmentCashControlPayload } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS))
       return { ok: false, error: "אין הרשאה" };
-    const data = await saveManualCollected({ ...input, createdById: me.id });
-    revalidate();
+    requireShipmentCountryScope(workCountry);
+    const data = await saveManualCollected({ ...input, workCountry, createdById: me.id });
+    revalidate(workCountry);
     return { ok: true, data };
   } catch (e) {
     return { ok: false, error: String(e) };

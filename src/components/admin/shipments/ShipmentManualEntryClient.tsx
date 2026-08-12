@@ -12,6 +12,7 @@ import {
 import { SyncedTableScroll } from "@/components/admin/shipments/SyncedTableScroll";
 import { ManualShipmentInlineCell } from "@/components/admin/shipments/ManualShipmentInlineCell";
 import { ManualShipmentPaymentCell } from "@/components/admin/shipments/ManualShipmentPaymentCell";
+import { ManualShipmentPaymentDetailModal } from "@/components/admin/shipments/ManualShipmentPaymentDetailModal";
 import {
   createManualShipmentAction,
   updateManualShipmentAction,
@@ -42,6 +43,7 @@ import {
 import {
   manualShipmentPaymentFromRow,
 } from "@/lib/manual-shipment-payment";
+import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
 
 type Mode = "create" | "edit" | "view" | null;
 type FormState = Record<ManualColumnKey, string>;
@@ -53,6 +55,24 @@ const DRAFT_ID = "__draft__";
 const TABLE_COL_KEYS = MANUAL_SHIPMENT_TABLE_COLUMNS.map((c) => c.key);
 const COL_KEYS = MANUAL_SHIPMENT_COLUMNS.map((c) => c.key);
 const COL_COUNT = MANUAL_SHIPMENT_TABLE_COLUMNS.length + 2;
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function draftInputType(col: (typeof MANUAL_SHIPMENT_COLUMNS)[number]): {
+  type: string;
+  inputMode?: "decimal" | "text";
+} {
+  if (col.input === "number") return { type: "text", inputMode: "decimal" };
+  if (col.input === "date") return { type: "date" };
+  if (col.input === "month") return { type: "month" };
+  return { type: "text" };
+}
+
+function syncMonthKeyFromEntryDate(entryDate: string, prevMonthKey: string): string {
+  if (!ISO_DATE_RE.test(entryDate)) return prevMonthKey;
+  if (prevMonthKey.trim()) return prevMonthKey;
+  return entryDate.slice(0, 7);
+}
 
 const NUM_KEYS: Set<ManualColumnKey> = new Set([
   "vatAmount",
@@ -95,7 +115,7 @@ function dtoToForm(row: ManualShipmentDto): FormState {
 
 function formToInput(f: FormState): ManualShipmentInput {
   const n = (v: string) => {
-    const t = v.trim();
+    const t = v.trim().replace(/,/g, "");
     if (!t) return null;
     const x = Number(t);
     return Number.isFinite(x) ? x : null;
@@ -124,7 +144,7 @@ function formToInput(f: FormState): ManualShipmentInput {
 function fieldToPartialInput(key: ManualColumnKey, value: string): ManualShipmentInput {
   if (key === "amountPaid") return {};
   const n = (v: string) => {
-    const t = v.trim();
+    const t = v.trim().replace(/,/g, "");
     if (!t) return null;
     const x = Number(t);
     return Number.isFinite(x) ? x : null;
@@ -246,6 +266,7 @@ function statusRowClass(status: string): string {
 type Props = { initialRows: ManualShipmentDto[] };
 
 export function ShipmentManualEntryClient({ initialRows }: Props) {
+  const { workCountry } = useShipmentCountry();
   const [rows, setRows] = useState(initialRows);
   const [filters, setFilters] = useState<ManualShipmentFilters>({});
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -305,6 +326,7 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
 
   // ─── Context menu state ───
   const [ctxMenuRow, setCtxMenuRow] = useState<string | null>(null);
+  const [paymentDetailRow, setPaymentDetailRow] = useState<ManualShipmentDto | null>(null);
 
   // ─── Multi-select filters ───
   const [filterCities, setFilterCities] = useState<Set<string>>(new Set());
@@ -362,7 +384,7 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
   const refresh = useCallback(
     (f: ManualShipmentFilters = filters) => {
       startTransition(async () => {
-        const res = await listManualShipmentsAction(f);
+        const res = await listManualShipmentsAction(workCountry, f);
         if (res.ok) {
           setRows(res.rows);
           setSelected(new Set());
@@ -371,7 +393,7 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
         }
       });
     },
-    [filters],
+    [filters, workCountry],
   );
 
   useEffect(() => {
@@ -383,13 +405,12 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
     if (!target || target.colIndex < 0) return;
     const key = `${target.rowId}:${target.colIndex}`;
     const el = inputRefs.current.get(key);
-    if (el) {
-      el.focus();
-      if ("select" in el && typeof el.select === "function" && el.tagName !== "SELECT") {
-        try { el.select(); } catch { /* ignore */ }
-      }
+    if (!el || document.activeElement === el) return;
+    el.focus();
+    if ("select" in el && typeof el.select === "function" && el.tagName !== "SELECT") {
+      try { el.select(); } catch { /* ignore */ }
     }
-  }, [focusCell, draft, editingCell]);
+  }, [focusCell, editingCell]);
 
   useEffect(() => {
     if (!ctxMenuRow) return;
@@ -474,7 +495,7 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
     setCellFb(rowId, key, "saving");
     setCellErr(rowId, key, null);
 
-    const res = await updateManualShipmentAction(rowId, input);
+    const res = await updateManualShipmentAction(workCountry, rowId, input);
     if (!res.ok) {
       setCellFb(rowId, key, "error");
       setCellErr(rowId, key, res.error);
@@ -619,7 +640,7 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
     if (!draft) return false;
     const input = formToInput(draft);
     setError(null);
-    const res = await createManualShipmentAction(input);
+    const res = await createManualShipmentAction(workCountry, input);
     if (!res.ok) {
       setError(res.error);
       return false;
@@ -635,9 +656,11 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
     setDraft((prev) => {
       if (!prev) return prev;
       const next = { ...prev, [key]: value };
-      if (key === "entryDate" && value && !prev.monthKey) next.monthKey = value.slice(0, 7);
+      if (key === "entryDate") {
+        next.monthKey = syncMonthKeyFromEntryDate(value, prev.monthKey);
+      }
       if (key === "vatAmount" && value.trim()) {
-        const vatNum = Number(value);
+        const vatNum = Number(value.replace(/,/g, ""));
         if (Number.isFinite(vatNum) && vatNum > 0) {
           next.amountTotal = String(Math.round((vatNum / 0.18) * 100) / 100);
         }
@@ -691,9 +714,11 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
   function setField(key: ManualColumnKey, value: string) {
     setForm((prev) => {
       const next = { ...prev, [key]: value };
-      if (key === "entryDate" && value && !prev.monthKey) next.monthKey = value.slice(0, 7);
+      if (key === "entryDate") {
+        next.monthKey = syncMonthKeyFromEntryDate(value, prev.monthKey);
+      }
       if (key === "vatAmount" && value.trim()) {
-        const vatNum = Number(value);
+        const vatNum = Number(value.replace(/,/g, ""));
         if (Number.isFinite(vatNum) && vatNum > 0) {
           next.amountTotal = String(Math.round((vatNum / 0.18) * 100) / 100);
         }
@@ -767,7 +792,8 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
     }
     return (
       <input
-        type={col.input === "number" ? "number" : col.input === "date" ? "date" : col.input === "month" ? "month" : "text"}
+        type={col.input === "number" ? "text" : col.input === "date" ? "date" : col.input === "month" ? "month" : "text"}
+        inputMode={col.input === "number" ? "decimal" : undefined}
         step={col.step}
         disabled={readOnly}
         value={form[col.key]}
@@ -782,14 +808,14 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
     startTransition(async () => {
       setError(null);
       if (mode === "create") {
-        const res = await createManualShipmentAction(input);
+        const res = await createManualShipmentAction(workCountry, input);
         if (!res.ok) {
           setError(res.error);
           return;
         }
         saveSessionDefaults(form);
       } else if (mode === "edit" && editId) {
-        const res = await updateManualShipmentAction(editId, input);
+        const res = await updateManualShipmentAction(workCountry, editId, input);
         if (!res.ok) {
           setError(res.error);
           return;
@@ -804,7 +830,7 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
   function onDelete(id: string) {
     if (!confirm("למחוק את המשלוח הידני?")) return;
     startTransition(async () => {
-      const res = await deleteManualShipmentAction(id);
+      const res = await deleteManualShipmentAction(workCountry, id);
       if (!res.ok) {
         alert(res.error);
         return;
@@ -817,7 +843,7 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
     if (!selected.size) return;
     if (!confirm(`למחוק ${selected.size} רשומות מסומנות?`)) return;
     startTransition(async () => {
-      const res = await deleteManualShipmentsAction([...selected]);
+      const res = await deleteManualShipmentsAction(workCountry, [...selected]);
       if (!res.ok) {
         alert(res.error);
         return;
@@ -832,7 +858,12 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
     const key = col.key;
 
     if (col.input === "calculated") {
-      return <ManualShipmentPaymentCell row={row} />;
+      return (
+        <ManualShipmentPaymentCell
+          row={row}
+          onOpenDetail={() => setPaymentDetailRow(row)}
+        />
+      );
     }
 
     const formVal = dtoToForm(row);
@@ -875,8 +906,8 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
       return (
         <ManualShipmentPaymentCell
           row={{
-            paymentAmount: draftForm.paymentAmount.trim() ? Number(draftForm.paymentAmount) : null,
-            amountTotal: draftForm.amountTotal.trim() ? Number(draftForm.amountTotal) : null,
+            paymentAmount: draftForm.paymentAmount.trim() ? Number(draftForm.paymentAmount.replace(/,/g, "")) : null,
+            amountTotal: draftForm.amountTotal.trim() ? Number(draftForm.amountTotal.replace(/,/g, "")) : null,
             makasa: draftForm.makasa,
           }}
         />
@@ -908,11 +939,13 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
         <textarea ref={bindRef} className="msh-excel-input" rows={1} value={value} onKeyDown={onKey} onChange={(e) => onChange(e.target.value)} />
       );
     }
+    const { type, inputMode } = draftInputType(col);
     return (
       <input
         ref={bindRef}
         className="msh-excel-input"
-        type={col.input === "number" ? "number" : col.input === "date" ? "date" : col.input === "month" ? "month" : "text"}
+        type={type}
+        inputMode={inputMode}
         step={col.step}
         value={value}
         list={listId}
@@ -977,17 +1010,6 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
           value={filters.containerNumber ?? ""}
           onChange={(e) => setFilters((f) => ({ ...f, containerNumber: e.target.value }))}
         />
-        <select
-          className="msh-input"
-          title="מדינה"
-          value={filters.country ?? ""}
-          onChange={(e) => setFilters((f) => ({ ...f, country: e.target.value }))}
-        >
-          <option value="">כל המדינות</option>
-          {COUNTRY_OPTIONS.map((c) => (
-            <option key={c.value} value={c.value}>{c.label}</option>
-          ))}
-        </select>
         <input
           className="msh-input"
           type="month"
@@ -1108,7 +1130,7 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
           </thead>
           <tbody>
             {draft && (
-              <tr className="msh-row--draft">
+              <tr className="msh-row--draft" key="new-manual-shipment">
                 <td />
                 {MANUAL_SHIPMENT_TABLE_COLUMNS.map((col, colIndex) => (
                   <td key={col.key}>
@@ -1185,6 +1207,9 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
                       </button>
                       {ctxMenuRow === r.id && (
                         <div className="msh-ctx-menu">
+                          <button onClick={() => { setPaymentDetailRow(r); setCtxMenuRow(null); }}>
+                            📊 צפה בפירוט
+                          </button>
                           <button onClick={() => { openView(r); setCtxMenuRow(null); }}>
                             👁️ צפייה
                           </button>
@@ -1346,6 +1371,19 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
           </div>
         </div>
       )}
+
+      <ManualShipmentPaymentDetailModal
+        open={paymentDetailRow != null}
+        row={paymentDetailRow}
+        onClose={() => setPaymentDetailRow(null)}
+        onEdit={(row) => {
+          setPaymentDetailRow(null);
+          setForm(dtoToForm(row));
+          setEditId(row.id);
+          setMode("edit");
+          setError(null);
+        }}
+      />
     </div>
   );
 }

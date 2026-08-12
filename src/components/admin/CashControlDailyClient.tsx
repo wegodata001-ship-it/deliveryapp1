@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Banknote,
   Building2,
@@ -28,6 +28,7 @@ import type {
 import { setPaymentCashAuditReviewAction } from "@/app/admin/cash-control/review-action";
 import { getCashExpenseCapabilitiesAction } from "@/app/admin/cash-expenses/capabilities-action";
 import type { CashExpenseCapabilities } from "@/app/admin/cash-expenses/types";
+import type { CashCurrency } from "@/app/admin/cash-control/constants";
 import {
   CASH_DAILY_METHODS,
   type CashDailyMethodId,
@@ -61,8 +62,15 @@ import { shippingMethodLabel } from "@/app/admin/shipments/cash-control/daily-ad
 import { ShipmentCashCountQuickModal } from "@/components/admin/cash-control/ShipmentCashCountQuickModal";
 import { ShipmentCashExpenseQuickModal } from "@/components/admin/cash-control/ShipmentCashExpenseQuickModal";
 import { ShipmentMethodDrillPanel } from "@/components/admin/cash-control/ShipmentMethodDrillPanel";
-import { SHIPPING_CASH_TABLE_METHODS } from "@/components/admin/cash-control/shipping-table-config";
+import { PaymentMethodKpiStrip } from "@/components/admin/cash-control/PaymentMethodKpiStrip";
+import {
+  WeekExpensesPanel,
+  type WeekExpensesPanelHandle,
+  type WeekExpensesSummary,
+} from "@/components/admin/cash-control/WeekExpensesPanel";
+import { SHIPPING_CASH_TABLE_METHODS, SHIPPING_CASH_METHOD_LABELS } from "@/components/admin/cash-control/shipping-table-config";
 import { num } from "@/components/admin/cash-flow/shared";
+import { DEFAULT_WORK_COUNTRY, type WorkCountryCode } from "@/lib/work-country";
 
 export type CashControlMode = "regular" | "shipping";
 
@@ -95,13 +103,16 @@ export function CashControlClient({
   isAdmin,
   initialWeek,
   currentUserName = "",
+  shipmentWorkCountry,
 }: {
   mode?: CashControlMode;
   isAdmin: boolean;
   initialWeek: string;
   currentUserName?: string;
+  shipmentWorkCountry?: WorkCountryCode;
 }) {
   const isShipping = mode === "shipping";
+  const shippingCountry = shipmentWorkCountry ?? DEFAULT_WORK_COUNTRY;
   const { openWindow } = useAdminWindows();
   const weekOptions = useMemo(buildWeekOptions, []);
   const [week, setWeek] = useState(initialWeek || weekOptions[0]);
@@ -128,6 +139,11 @@ export function CashControlClient({
   const [varianceDayYmd, setVarianceDayYmd] = useState<string | null>(null);
   const [varianceLines, setVarianceLines] = useState<CashVarianceLineDto[]>([]);
   const [varianceLoading, setVarianceLoading] = useState(false);
+  const [varianceCountMeta, setVarianceCountMeta] = useState<{
+    countSaved?: boolean;
+    countedAtHm?: string | null;
+    countedByName?: string | null;
+  } | null>(null);
 
   const [weekBalance, setWeekBalance] = useState<WeekBalanceStateDto | null>(null);
   const [weekBalanceLoading, setWeekBalanceLoading] = useState(false);
@@ -136,7 +152,16 @@ export function CashControlClient({
   const [weekBalanceBusy, setWeekBalanceBusy] = useState(false);
   const [weekBalanceErr, setWeekBalanceErr] = useState<string | null>(null);
 
+  const weekExpensesRef = useRef<WeekExpensesPanelHandle>(null);
+  const [expenseCurrencyFilter, setExpenseCurrencyFilter] = useState<CashCurrency | null>(null);
+  const [weekExpenseSummary, setWeekExpenseSummary] = useState<WeekExpensesSummary | null>(null);
+
   const refresh = useCallback(() => setRefreshTick((t) => t + 1), []);
+
+  useEffect(() => {
+    setExpenseCurrencyFilter(null);
+    setWeekExpenseSummary(null);
+  }, [week]);
 
   useEffect(() => {
     let cancelled = false;
@@ -146,6 +171,15 @@ export function CashControlClient({
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  const handleWeekExpenseSummaryChange = useCallback((summary: WeekExpensesSummary) => {
+    setWeekExpenseSummary(summary);
+  }, []);
+
+  const openWeekExpenses = useCallback((currency: CashCurrency) => {
+    setExpenseCurrencyFilter(currency);
+    weekExpensesRef.current?.setCurrencyFilter(currency);
   }, []);
 
   const reloadWeekBalance = useCallback(async () => {
@@ -170,9 +204,9 @@ export function CashControlClient({
   const reloadSummary = useCallback(async () => {
     if (isShipping) {
       const [summaryData, detail] = await Promise.all([
-        getShipmentCashControlWeekSummaryAction(week),
+        getShipmentCashControlWeekSummaryAction(shippingCountry, week),
         selectedDay
-          ? getShipmentCashControlDayDetailAction({ week, dateYmd: selectedDay })
+          ? getShipmentCashControlDayDetailAction(shippingCountry, { week, dateYmd: selectedDay })
           : Promise.resolve(null),
       ]);
       setSummary(summaryData);
@@ -186,7 +220,7 @@ export function CashControlClient({
     setSummary(summaryData);
     if (detail) setDayDetail(detail);
     await reloadWeekBalance();
-  }, [isShipping, reloadWeekBalance, selectedDay, week]);
+  }, [isShipping, reloadWeekBalance, selectedDay, shippingCountry, week]);
 
   const ensureDay = useCallback(
     async (dateYmd: string) => {
@@ -195,7 +229,7 @@ export function CashControlClient({
       setDayLoading(true);
       try {
         const detail = isShipping
-          ? await getShipmentCashControlDayDetailAction({ week, dateYmd })
+          ? await getShipmentCashControlDayDetailAction(shippingCountry, { week, dateYmd })
           : await getCashControlDayDetailAction({ week, dateYmd });
         setDayDetail(detail);
         return detail;
@@ -203,8 +237,12 @@ export function CashControlClient({
         setDayLoading(false);
       }
     },
-    [dayDetail, dayLoading, isShipping, week],
+    [dayDetail, dayLoading, isShipping, shippingCountry, week],
   );
+
+  const handleWeekExpensesChanged = useCallback(() => {
+    refresh();
+  }, [refresh]);
 
   useEffect(() => {
     let cancelled = false;
@@ -223,7 +261,7 @@ export function CashControlClient({
     }
     void Promise.all(
       isShipping
-        ? [getShipmentCashControlWeekSummaryAction(week)]
+        ? [getShipmentCashControlWeekSummaryAction(shippingCountry, week)]
         : [getCashControlWeekSummaryAction(week), getWeekBalanceStateAction(week)],
     ).then((results) => {
       if (cancelled) return;
@@ -237,7 +275,7 @@ export function CashControlClient({
     return () => {
       cancelled = true;
     };
-  }, [isShipping, week, refreshTick]);
+  }, [isShipping, shippingCountry, week, refreshTick]);
 
   useEffect(() => {
     const onCashControlSaved = (e: Event) => {
@@ -264,7 +302,7 @@ export function CashControlClient({
       setMethodLoading(true);
       try {
         const rows = isShipping
-          ? await listShipmentCashControlDayIntakesAction({ week, dateYmd, column: method })
+          ? await listShipmentCashControlDayIntakesAction(shippingCountry, { week, dateYmd, column: method })
           : await listCashControlDayIntakesAction({
               week,
               dateYmd,
@@ -275,7 +313,7 @@ export function CashControlClient({
         setMethodLoading(false);
       }
     },
-    [ensureDay, isShipping, methodDrill, panelMode, selectedDay, week],
+    [ensureDay, isShipping, methodDrill, panelMode, selectedDay, shippingCountry, week],
   );
 
   const openCountModal = useCallback(
@@ -385,6 +423,16 @@ export function CashControlClient({
       diff: counted - collected,
     };
   }, [isShipping, summary]);
+
+  const shippingMethodTotals = useMemo(() => {
+    if (!isShipping || !totalRow) return null;
+    const intake = totalRow.intake as Record<string, string>;
+    const out: Record<string, number> = {};
+    for (const m of SHIPPING_CASH_TABLE_METHODS) {
+      out[m] = num(intake[m] ?? "0");
+    }
+    return out;
+  }, [isShipping, totalRow]);
   const selectedDayLabel = selectedDayRow
     ? `${selectedDayRow.dayName} · ${selectedDayRow.dateDisplay}`
     : dayDetail
@@ -469,6 +517,15 @@ export function CashControlClient({
       try {
         const detail = await ensureDay(row.dateYmd);
         setVarianceLines(detail?.reconciliation ? reconLinesToVariance(detail.reconciliation) : []);
+        setVarianceCountMeta(
+          detail
+            ? {
+                countSaved: detail.countSaved,
+                countedAtHm: detail.countedAtHm,
+                countedByName: detail.countedByName,
+              }
+            : null,
+        );
       } finally {
         setVarianceLoading(false);
       }
@@ -642,27 +699,53 @@ export function CashControlClient({
             </strong>
           </div>
         </div>
-        <div className="cc-kpi cc-kpi--red">
-          <span className="cc-kpi__icon" aria-hidden>
-            <TrendingDown size={22} />
-          </span>
-          <div>
-            <span className="cc-kpi__label">סה״כ הוצאות ($)</span>
-            <strong className="cc-kpi__value" dir="ltr">
-              {kpi ? fmtKpiMoney("USD", kpi.totalExpensesUsd) : "—"}
-            </strong>
-          </div>
+        <div className="cc-kpi cc-kpi--red cc-kpi--clickable">
+          <button
+            type="button"
+            className="cc-kpi__btn"
+            onClick={() => openWeekExpenses("USD")}
+            aria-label="הצג הוצאות דולר בשבוע"
+          >
+            <span className="cc-kpi__icon" aria-hidden>
+              <TrendingDown size={22} />
+            </span>
+            <div>
+              <span className="cc-kpi__label">סה״כ הוצאות ($)</span>
+              <strong className="cc-kpi__value" dir="ltr">
+                {kpi ? fmtKpiMoney("USD", kpi.totalExpensesUsd) : "—"}
+              </strong>
+              {weekExpenseSummary && weekExpenseSummary.usdCount > 0 ? (
+                <span className="cc-kpi__sub">
+                  {weekExpenseSummary.usdCount}{" "}
+                  {weekExpenseSummary.usdCount === 1 ? "הוצאה" : "הוצאות"}
+                </span>
+              ) : null}
+            </div>
+          </button>
         </div>
-        <div className="cc-kpi cc-kpi--amber">
-          <span className="cc-kpi__icon" aria-hidden>
-            <TrendingDown size={22} />
-          </span>
-          <div>
-            <span className="cc-kpi__label">סה״כ הוצאות (₪)</span>
-            <strong className="cc-kpi__value" dir="ltr">
-              {kpi ? fmtKpiMoney("ILS", kpi.totalExpensesIls) : "—"}
-            </strong>
-          </div>
+        <div className="cc-kpi cc-kpi--amber cc-kpi--clickable">
+          <button
+            type="button"
+            className="cc-kpi__btn"
+            onClick={() => openWeekExpenses("ILS")}
+            aria-label="הצג הוצאות שקל בשבוע"
+          >
+            <span className="cc-kpi__icon" aria-hidden>
+              <TrendingDown size={22} />
+            </span>
+            <div>
+              <span className="cc-kpi__label">סה״כ הוצאות (₪)</span>
+              <strong className="cc-kpi__value" dir="ltr">
+                {kpi ? fmtKpiMoney("ILS", kpi.totalExpensesIls) : "—"}
+              </strong>
+              {weekExpenseSummary && weekExpenseSummary.ilsCount > 0 ? (
+                <span className="cc-kpi__sub">
+                  {weekExpenseSummary.ilsCount}{" "}
+                  {weekExpenseSummary.ilsCount === 1 ? "הוצאה" : "הוצאות"}
+                </span>
+              ) : null}
+            </div>
+          </button>
         </div>
         <div className="cc-kpi cc-kpi--slate">
           <span className="cc-kpi__icon" aria-hidden>
@@ -688,6 +771,15 @@ export function CashControlClient({
           </>
         )}
       </section>
+
+      {isShipping && shippingMethodTotals ? (
+        <PaymentMethodKpiStrip
+          methods={SHIPPING_CASH_TABLE_METHODS}
+          labels={SHIPPING_CASH_METHOD_LABELS}
+          values={shippingMethodTotals}
+          currency="ILS"
+        />
+      ) : null}
 
       {!isShipping ? (
         <>
@@ -732,6 +824,23 @@ export function CashControlClient({
         ) : null}
       </section>
 
+      {!isShipping && expenseCaps?.canView ? (
+        <WeekExpensesPanel
+          ref={weekExpensesRef}
+          week={week}
+          weekLabel={summary?.weekLabel ?? week}
+          weekDateRange={summary?.from && summary?.to ? `${summary.from} – ${summary.to}` : null}
+          caps={expenseCaps}
+          balancedWeekLabel={balancedWeekLabel}
+          defaultDateYmd={selectedDay}
+          currencyFilter={expenseCurrencyFilter}
+          onCurrencyFilterChange={setExpenseCurrencyFilter}
+          onSummaryChange={handleWeekExpenseSummaryChange}
+          onChanged={handleWeekExpensesChanged}
+          reloadKey={refreshTick}
+        />
+      ) : null}
+
       {panelMode === "drill" && selectedDay ? (
         <div className="cc-panels">
           {selectedDayLabel ? (
@@ -748,6 +857,7 @@ export function CashControlClient({
           {methodDrill ? (
             isShipping ? (
               <ShipmentMethodDrillPanel
+                method={methodDrill}
                 methodLabel={drillMeta?.label}
                 loading={methodLoading}
                 rows={methodRows}
@@ -790,6 +900,7 @@ export function CashControlClient({
           dayDetail={dayDetail?.dateYmd === selectedDay ? dayDetail : null}
           dayLoading={dayLoading}
           editable={isAdmin}
+          workCountry={shippingCountry}
           onSaved={() => reloadSummary()}
         />
       ) : (
@@ -811,6 +922,7 @@ export function CashControlClient({
           onClose={() => setQuickExpenseOpen(false)}
           dayDate={selectedDay ?? dayRows[0]?.dateYmd ?? null}
           canCreate={isAdmin}
+          workCountry={shippingCountry}
           onSaved={() => reloadSummary()}
         />
       ) : (
@@ -843,8 +955,10 @@ export function CashControlClient({
         dayLabel={varianceDayLabel}
         dateYmd={varianceDayYmd ?? ""}
         weekCode={week}
+        weekDateRange={summary?.from && summary?.to ? `${summary.from} – ${summary.to}` : null}
         lines={varianceLines}
         loading={varianceLoading}
+        countMeta={varianceCountMeta}
         onAddExpense={
           expenseCaps?.canCreate
             ? () => {
@@ -858,6 +972,24 @@ export function CashControlClient({
             ? () => {
                 setVarianceModalOpen(false);
                 if (varianceDayYmd) void openCountModal(varianceDayYmd);
+              }
+            : undefined
+        }
+        onOpenSourceFix={
+          varianceDayYmd
+            ? () => {
+                setVarianceModalOpen(false);
+                setSelectedDay(varianceDayYmd);
+                void ensureDay(varianceDayYmd);
+              }
+            : undefined
+        }
+        onLineDrill={
+          varianceDayYmd
+            ? (method) => {
+                setVarianceModalOpen(false);
+                setSelectedDay(varianceDayYmd);
+                void openMethodDrill(varianceDayYmd, method);
               }
             : undefined
         }

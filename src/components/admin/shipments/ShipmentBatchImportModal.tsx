@@ -8,6 +8,8 @@ import { importRowsIntoBatchAction } from "@/app/admin/shipments/actions";
 import { analyzeShipmentWorkbook } from "@/lib/shipment-import-detector";
 import { LocationImportMappingModal } from "@/components/admin/shipments/LocationImportMappingModal";
 import { useShipmentImportLocationFlow } from "@/components/admin/shipments/useShipmentImportLocationFlow";
+import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
+import { getEffectiveDeliveryPlace } from "@/lib/shipment-delivery-place";
 
 type Props = {
   open: boolean;
@@ -32,6 +34,7 @@ export function ShipmentBatchImportModal({
   onClose,
   onImported,
 }: Props) {
+  const { workCountry } = useShipmentCountry();
   const fileRef = useRef<HTMLInputElement>(null);
   const [dragActive, setDragActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +52,7 @@ export function ShipmentBatchImportModal({
     applyMappings,
     keepOriginalMappings,
     resetMappingFlow,
-  } = useShipmentImportLocationFlow();
+  } = useShipmentImportLocationFlow(workCountry);
 
   const activeZones = useMemo(() => zones.filter((z) => z.isActive), [zones]);
   const activeCouriers = useMemo(() => couriers.filter((c) => c.isActive), [couriers]);
@@ -121,7 +124,7 @@ export function ShipmentBatchImportModal({
     }
     setSaving(true);
     setError(null);
-    const res = await importRowsIntoBatchAction({
+    const res = await importRowsIntoBatchAction(workCountry, {
       batchId,
       rows: preview,
       defaultZoneId: zoneId || undefined,
@@ -246,8 +249,7 @@ export function ShipmentBatchImportModal({
                       <th>סטטוס</th>
                       <th>קוד</th>
                       <th>לקוח</th>
-                      <th>מקום מקורי (Excel)</th>
-                      <th>מקום לייבוא</th>
+                      <th>מקום מסירה</th>
                       <th>קרטונים</th>
                     </tr>
                   </thead>
@@ -266,8 +268,7 @@ export function ShipmentBatchImportModal({
                         </td>
                         <td>{row.customerCode || "—"}</td>
                         <td>{row.customerName || "—"}</td>
-                        <td>{row.originalDeliveryPlace || row.city || "—"}</td>
-                        <td>{row.city || "—"}</td>
+                        <td>{getEffectiveDeliveryPlace(row) || "—"}</td>
                         <td>{row.boxes ?? "—"}</td>
                       </tr>
                     ))}

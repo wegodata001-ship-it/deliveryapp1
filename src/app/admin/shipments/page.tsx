@@ -1,42 +1,41 @@
+import Link from "next/link";
 import { requireRoutePermission } from "@/lib/route-access";
-import { isAdminUser } from "@/lib/admin-auth";
-import { listCouriers, listShipmentBatches, listZones } from "@/app/admin/shipments/service";
-import { loadShipmentCashControl } from "@/app/admin/shipments/cash-control/service";
-import { ShipmentListClient } from "@/components/admin/shipments/ShipmentListClient";
+import {
+  SHIPMENT_COUNTRY_SLUGS,
+  shipmentCountryBasePath,
+  workCountryFromShipmentSlug,
+} from "@/lib/shipment-country-scope.shared";
+import { workCountryLabel } from "@/lib/work-country";
 import "@/app/admin/shipments/shipments.css";
 
 export const dynamic = "force-dynamic";
 
-function todayYmd() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-export default async function ShipmentsPage({
-  searchParams,
-}: {
-  searchParams?: Promise<{ view?: string }>;
-}) {
-  const user = await requireRoutePermission(["manage_shipments", "view_shipments"]);
-  const sp = (await searchParams) ?? {};
-  const initialView = sp.view === "cash-control" ? "cash-control" : "list";
-  const dayDate = todayYmd();
-
-  const [batches, zones, couriers, cashControl] = await Promise.all([
-    listShipmentBatches(),
-    listZones(),
-    listCouriers(),
-    loadShipmentCashControl({ dayDate }),
-  ]);
+export default async function ShipmentsCountryPickerPage() {
+  await requireRoutePermission(["manage_shipments", "view_shipments"]);
 
   return (
-    <ShipmentListClient
-      initialBatches={batches}
-      initialZones={zones}
-      initialCouriers={couriers}
-      initialView={initialView}
-      cashControlInitialData={cashControl}
-      cashControlDayDate={dayDate}
-      viewerIsAdmin={isAdminUser(user)}
-    />
+    <div className="shp-country-picker">
+      <header className="shp-country-picker__head">
+        <h1 className="shp-country-picker__title">מערכת משלוחים</h1>
+        <p className="shp-country-picker__sub">
+          בחרו מדינה — כל מדינה היא מערכת משלוחים עצמאית (נתונים, יבוא, בקרה ודוחות נפרדים).
+        </p>
+      </header>
+      <div className="shp-country-picker__grid">
+        {SHIPMENT_COUNTRY_SLUGS.map((slug) => {
+          const wc = workCountryFromShipmentSlug(slug)!;
+          return (
+            <Link
+              key={slug}
+              href={shipmentCountryBasePath(slug)}
+              className="shp-country-picker__card"
+            >
+              <span className="shp-country-picker__card-label">{workCountryLabel(wc)}</span>
+              <span className="shp-country-picker__card-hint">כניסה למערכת</span>
+            </Link>
+          );
+        })}
+      </div>
+    </div>
   );
 }

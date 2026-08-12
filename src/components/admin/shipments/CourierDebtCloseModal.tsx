@@ -7,6 +7,7 @@ import {
   closeCourierDebtsAction,
   previewCourierDebtCloseAction,
 } from "@/app/admin/shipments/actions";
+import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
 
 type Props = {
   couriers: ShipmentCourierDto[];
@@ -40,6 +41,7 @@ export function CourierDebtCloseModal({
   onClose,
   onDone,
 }: Props) {
+  const { workCountry } = useShipmentCountry();
   const [courierId, setCourierId] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("");
   const [preview, setPreview] = useState<CourierDebtClosePreview | null>(null);
@@ -79,7 +81,7 @@ export function CourierDebtCloseModal({
     let cancelled = false;
     setBusy(true);
     setError(null);
-    previewCourierDebtCloseAction({ courierId, zoneIds: allZoneIds, batchIds }).then((res) => {
+    previewCourierDebtCloseAction(workCountry, { courierId, zoneIds: allZoneIds, batchIds }).then((res) => {
       if (cancelled) return;
       setBusy(false);
       if (!res.ok) {
@@ -89,13 +91,13 @@ export function CourierDebtCloseModal({
       setPreview(res.preview);
     });
     return () => { cancelled = true; };
-  }, [courierId, allZoneIds, batchIds]);
+  }, [courierId, allZoneIds, batchIds, workCountry]);
 
   async function confirmClose() {
     if (!courierId || allZoneIds.length === 0 || !paymentMethod) return;
     setBusy(true);
     setError(null);
-    const res = await closeCourierDebtsAction({
+    const res = await closeCourierDebtsAction(workCountry, {
       courierId,
       zoneIds: allZoneIds,
       batchIds,

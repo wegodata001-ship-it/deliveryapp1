@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { MapPinned, Plus, Search, X } from "lucide-react";
 import type { ShipmentRecordDto, ShipmentZoneDto } from "@/app/admin/shipments/types";
 import { distributionAreaNameMatchesQuery, distributionAreaValidationError } from "@/lib/distribution-area-name";
+import { getEffectiveDeliveryPlaceFromRecord } from "@/lib/shipment-delivery-place";
 
 type Props = {
   record: ShipmentRecordDto;
@@ -49,11 +50,7 @@ export function ZoneAssignModal({
     return () => window.clearTimeout(t);
   }, []);
 
-  const localityHint =
-    record.city?.trim() ||
-    record.originalDeliveryLocation?.trim() ||
-    record.address?.trim() ||
-    "—";
+  const localityHint = getEffectiveDeliveryPlaceFromRecord(record) || "—";
 
   async function handleCreate() {
     const name = newName.trim();

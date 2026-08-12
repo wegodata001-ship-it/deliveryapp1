@@ -1,5 +1,10 @@
 import { prisma } from "@/lib/prisma";
 import { getAhWeekByDate, listWeekDayYmds, formatAhWeekLabel, getCurrentAhWeek } from "@/lib/weeks/ah-week";
+import type { WorkCountryCode } from "@/lib/work-country";
+import {
+  shipmentCashDayWhere,
+  shipmentRecordWhere,
+} from "@/lib/shipment-country-scope";
 import {
   addShipmentPayment,
   getShipmentRecordById,
@@ -99,9 +104,11 @@ async function writeAudit(input: {
 
 // ─── Day Session Management ───────────────────────────────────────────────────
 
-export async function findActiveOpenShipmentCashDay(): Promise<ShipmentCashDayDto | null> {
+export async function findActiveOpenShipmentCashDay(
+  workCountry: WorkCountryCode,
+): Promise<ShipmentCashDayDto | null> {
   const open = await prisma.shipmentCashDay.findFirst({
-    where: { status: "OPEN" },
+    where: { status: "OPEN", ...shipmentCashDayWhere(workCountry) },
     orderBy: { dayDate: "desc" },
   });
   return open ? mapDay(open) : null;
@@ -110,12 +117,15 @@ export async function findActiveOpenShipmentCashDay(): Promise<ShipmentCashDayDt
 export async function getOrOpenShipmentCashDay(
   dayDate: string,
   openedById: string,
+  workCountry: WorkCountryCode,
 ): Promise<ShipmentCashDayDto> {
-  const activeOpen = await findActiveOpenShipmentCashDay();
+  const activeOpen = await findActiveOpenShipmentCashDay(workCountry);
   if (activeOpen) return activeOpen;
 
   const date = parseDayStart(dayDate);
-  const existing = await prisma.shipmentCashDay.findUnique({ where: { dayDate: date } });
+  const existing = await prisma.shipmentCashDay.findUnique({
+    where: { countryCode_dayDate: { countryCode: workCountry, dayDate: date } },
+  });
   if (existing) {
     if (existing.status === "CLOSED") {
       const reopened = await prisma.shipmentCashDay.update({
@@ -129,15 +139,21 @@ export async function getOrOpenShipmentCashDay(
   }
 
   const created = await prisma.shipmentCashDay.create({
-    data: { dayDate: date, status: "OPEN", openedById },
+    data: { countryCode: workCountry, dayDate: date, status: "OPEN", openedById },
   });
   await writeAudit({ userId: openedById, actionType: "SHIPMENT_CASH_DAY_OPEN", entityType: "ShipmentCashDay", entityId: created.id, newValue: { dayDate, status: "OPEN" } });
   return mapDay(created);
 }
 
-export async function closeShipmentCashDay(dayDate: string, closedById: string): Promise<ShipmentCashDayDto> {
+export async function closeShipmentCashDay(
+  dayDate: string,
+  closedById: string,
+  workCountry: WorkCountryCode,
+): Promise<ShipmentCashDayDto> {
   const date = parseDayStart(dayDate);
-  const day = await prisma.shipmentCashDay.findUnique({ where: { dayDate: date } });
+  const day = await prisma.shipmentCashDay.findUnique({
+    where: { countryCode_dayDate: { countryCode: workCountry, dayDate: date } },
+  });
   if (!day) throw new Error("יום העבודה לא נמצא — יש לפתוח יום תחילה");
   if (day.status === "CLOSED") return mapDay(day);
   const updated = await prisma.shipmentCashDay.update({
@@ -148,13 +164,19 @@ export async function closeShipmentCashDay(dayDate: string, closedById: string):
   return mapDay(updated);
 }
 
-export async function reopenShipmentCashDay(dayDate: string, userId: string): Promise<ShipmentCashDayDto> {
-  const active = await findActiveOpenShipmentCashDay();
+export async function reopenShipmentCashDay(
+  dayDate: string,
+  userId: string,
+  workCountry: WorkCountryCode,
+): Promise<ShipmentCashDayDto> {
+  const active = await findActiveOpenShipmentCashDay(workCountry);
   if (active && active.dayDate !== dayDate) {
     throw new Error(`כבר קיים יום עבודה פתוח בתאריך ${active.dayDate}. יש לסגור אותו לפני פתיחת יום אחר.`);
   }
   const date = parseDayStart(dayDate);
-  const day = await prisma.shipmentCashDay.findUnique({ where: { dayDate: date } });
+  const day = await prisma.shipmentCashDay.findUnique({
+    where: { countryCode_dayDate: { countryCode: workCountry, dayDate: date } },
+  });
   if (!day) throw new Error("יום העבודה לא נמצא");
   const updated = await prisma.shipmentCashDay.update({
     where: { id: day.id },
@@ -199,6 +221,7 @@ export async function addShipmentCashExpense(input: {
   amountIls: number;
   notes?: string | null;
   createdById: string;
+  workCountry: WorkCountryCode;
 }): Promise<ShipmentCashExpenseDto> {
   if (!Number.isFinite(input.amountIls) || input.amountIls <= 0) {
     throw new Error("סכום ההוצאה חייב להיות גדול מאפס");
@@ -206,7 +229,7 @@ export async function addShipmentCashExpense(input: {
   if (!(input.category in SHIPMENT_CASH_EXPENSE_LABELS)) {
     throw new Error("קטגוריית הוצאה לא חוקית");
   }
-  const day = await getOrOpenShipmentCashDay(input.dayDate, input.createdById);
+  const day = await getOrOpenShipmentCashDay(input.dayDate, input.createdById, input.workCountry);
   if (day.status === "CLOSED") throw new Error("לא ניתן להוסיף הוצאה ליום סגור");
 
   const created = await prisma.shipmentCashExpense.create({
@@ -250,13 +273,14 @@ export async function intakeShipmentFeePayment(input: {
   allowOverpay?: boolean;
   createdById: string;
   isAdmin: boolean;
+  workCountry: WorkCountryCode;
 }): Promise<ShipmentCashControlRow> {
   if (!Number.isFinite(input.amountIls) || input.amountIls <= 0) throw new Error("סכום הקליטה חייב להיות גדול מאפס");
-  const activeOpen = await findActiveOpenShipmentCashDay();
+  const activeOpen = await findActiveOpenShipmentCashDay(input.workCountry);
   if (!activeOpen) throw new Error("אין יום עבודה פתוח — יש לפתוח יום עבודה לפני קליטת כסף");
 
-  const record = await prisma.shipmentRecord.findUniqueOrThrow({
-    where: { id: input.shipmentRecordId },
+  const record = await prisma.shipmentRecord.findFirstOrThrow({
+    where: { id: input.shipmentRecordId, ...shipmentRecordWhere(input.workCountry) },
     select: { id: true, deliveryFeeIls: true, paymentStatus: true, payments: { select: { amountIls: true } } },
   });
   const fee = record.deliveryFeeIls?.toNumber() ?? 0;
@@ -281,7 +305,7 @@ export async function intakeShipmentFeePayment(input: {
       shipmentRecordId: input.shipmentRecordId,
       lines: [{ method: input.method, amountIls: input.amountIls, notes: input.notes ?? undefined, details: input.paymentDate ? { paymentDate: input.paymentDate } : undefined }],
     };
-    await addShipmentPayment(paymentInput, input.createdById);
+    await addShipmentPayment(paymentInput, input.createdById, input.workCountry);
   }
 
   const newPaid = paid + input.amountIls;
@@ -291,7 +315,7 @@ export async function intakeShipmentFeePayment(input: {
     newValue: { amountIls: input.amountIls, method: input.method, paymentDate: input.paymentDate ?? null, notes: input.notes ?? null, paidAmountIls: newPaid, remainingFeeIls: computeRowRemaining(fee, newPaid), paymentStatus: deriveFeePaymentStatus(fee, newPaid), cashDayId: activeOpen.id, cashDayDate: activeOpen.dayDate },
   });
 
-  const updated = await getShipmentRecordById(input.shipmentRecordId);
+  const updated = await getShipmentRecordById(input.shipmentRecordId, input.workCountry);
   if (!updated) throw new Error("המשלוח לא נמצא לאחר הקליטה");
   return toRow(updated);
 }
@@ -310,13 +334,19 @@ function paymentLineYmd(p: { createdAt: Date; detailsJson: string | null }): str
 }
 
 /** Aggregate payment lines for a single day → method → totalIls */
-async function aggregateCollectedByMethod(dayDate: string): Promise<Map<string, number>> {
+async function aggregateCollectedByMethod(
+  dayDate: string,
+  workCountry: WorkCountryCode,
+): Promise<Map<string, number>> {
   const dayStart = parseDayStart(dayDate);
   const windowStart = new Date(dayStart.getTime() - 14 * 86400000);
   const windowEnd = new Date(dayStart.getTime() + 15 * 86400000);
 
   const payments = await prisma.shipmentPaymentLine.findMany({
-    where: { createdAt: { gte: windowStart, lt: windowEnd } },
+    where: {
+      createdAt: { gte: windowStart, lt: windowEnd },
+      shipment: shipmentRecordWhere(workCountry),
+    },
     select: { method: true, amountIls: true, createdAt: true, detailsJson: true },
   });
 
@@ -335,12 +365,16 @@ async function aggregateCollectedByMethod(dayDate: string): Promise<Map<string, 
 async function aggregateCollectedByMethodForRange(
   fromDate: string,
   toDate: string,
+  workCountry: WorkCountryCode,
 ): Promise<Map<string, Map<string, number>>> {
   const start = parseDayStart(fromDate);
   const end = new Date(parseDayStart(toDate).getTime() + 86400000);
 
   const payments = await prisma.shipmentPaymentLine.findMany({
-    where: { createdAt: { gte: new Date(start.getTime() - 14 * 86400000), lt: new Date(end.getTime() + 14 * 86400000) } },
+    where: {
+      createdAt: { gte: new Date(start.getTime() - 14 * 86400000), lt: new Date(end.getTime() + 14 * 86400000) },
+      shipment: shipmentRecordWhere(workCountry),
+    },
     select: { method: true, amountIls: true, createdAt: true, detailsJson: true },
   });
 
@@ -362,12 +396,13 @@ async function aggregateCollectedByMethodForRange(
 async function aggregateExpensesByMethodForRange(
   fromDate: string,
   toDate: string,
+  workCountry: WorkCountryCode,
 ): Promise<Map<string, Map<string, number>>> {
   const start = parseDayStart(fromDate);
   const end = new Date(parseDayStart(toDate).getTime() + 86400000);
 
   const days = await prisma.shipmentCashDay.findMany({
-    where: { dayDate: { gte: start, lt: end } },
+    where: { dayDate: { gte: start, lt: end }, ...shipmentCashDayWhere(workCountry) },
     include: { expenses: { select: { paymentMethod: true, amountIls: true } } },
   });
 
@@ -401,16 +436,17 @@ function mapMethodExpenses(
 export async function loadShipmentCashControl(
   filter: ShipmentCashControlFilter,
 ): Promise<ShipmentCashControlPayload> {
-  const activeOpenDay = await findActiveOpenShipmentCashDay();
+  const workCountry = filter.workCountry;
+  const activeOpenDay = await findActiveOpenShipmentCashDay(workCountry);
   const dayDate = filter.dayDate?.trim() || activeOpenDay?.dayDate || toYmd(new Date())!;
 
   const dayRow = await prisma.shipmentCashDay.findUnique({
-    where: { dayDate: parseDayStart(dayDate) },
+    where: { countryCode_dayDate: { countryCode: workCountry, dayDate: parseDayStart(dayDate) } },
     include: { counts: true, expenses: { select: { paymentMethod: true, amountIls: true } } },
   });
   const day = dayRow ? mapDay(dayRow) : null;
 
-  const collectedByMethod = await aggregateCollectedByMethod(dayDate);
+  const collectedByMethod = await aggregateCollectedByMethod(dayDate, workCountry);
   const countedByMethod = new Map((dayRow?.counts ?? []).map((c) => [c.method, c.countedIls.toNumber()]));
   const expensesByMethod = dayRow ? mapMethodExpenses(dayRow.expenses) : new Map<string, number>();
 
@@ -435,6 +471,7 @@ export async function loadShipmentCashControl(
 
 export async function loadShipmentCashWeek(
   weekCode: string,
+  workCountry: WorkCountryCode,
 ): Promise<CashControlWeekPayload> {
   const dayYmds = listWeekDayYmds(weekCode);
   if (dayYmds.length === 0) throw new Error("קוד שבוע לא תקין");
@@ -443,12 +480,15 @@ export async function loadShipmentCashWeek(
   const toDate = dayYmds[dayYmds.length - 1];
 
   const [collectedRange, expensesRange] = await Promise.all([
-    aggregateCollectedByMethodForRange(fromDate, toDate),
-    aggregateExpensesByMethodForRange(fromDate, toDate),
+    aggregateCollectedByMethodForRange(fromDate, toDate, workCountry),
+    aggregateExpensesByMethodForRange(fromDate, toDate, workCountry),
   ]);
 
   const cashDays = await prisma.shipmentCashDay.findMany({
-    where: { dayDate: { gte: parseDayStart(fromDate), lte: parseDayStart(toDate) } },
+    where: {
+      dayDate: { gte: parseDayStart(fromDate), lte: parseDayStart(toDate) },
+      ...shipmentCashDayWhere(workCountry),
+    },
     include: { counts: true },
   });
   const dayStatusMap = new Map(cashDays.map((d) => [toYmd(d.dayDate)!, d.status as "OPEN" | "CLOSED"]));
@@ -516,13 +556,21 @@ export async function loadShipmentCashWeek(
 
 // ─── Drill-down ───────────────────────────────────────────────────────────────
 
-export async function drilldownPayments(dayDate: string, method: string): Promise<CashDrilldownPayload> {
+export async function drilldownPayments(
+  dayDate: string,
+  method: string,
+  workCountry: WorkCountryCode,
+): Promise<CashDrilldownPayload> {
   const dayStart = parseDayStart(dayDate);
   const windowStart = new Date(dayStart.getTime() - 14 * 86400000);
   const windowEnd = new Date(dayStart.getTime() + 15 * 86400000);
 
   const payments = await prisma.shipmentPaymentLine.findMany({
-    where: { createdAt: { gte: windowStart, lt: windowEnd }, method: normalizePaymentMethodId(method) },
+    where: {
+      createdAt: { gte: windowStart, lt: windowEnd },
+      method: normalizePaymentMethodId(method),
+      shipment: shipmentRecordWhere(workCountry),
+    },
     include: { shipment: { select: { customerName: true, customerCode: true, batch: { select: { batchNumber: true, containerNumber: true, sourceShipmentNumber: true } } } } },
     orderBy: { createdAt: "asc" },
   });
@@ -556,9 +604,13 @@ export async function drilldownPayments(dayDate: string, method: string): Promis
   };
 }
 
-export async function drilldownExpenses(dayDate: string, method: string): Promise<CashDrilldownPayload> {
+export async function drilldownExpenses(
+  dayDate: string,
+  method: string,
+  workCountry: WorkCountryCode,
+): Promise<CashDrilldownPayload> {
   const dayRow = await prisma.shipmentCashDay.findUnique({
-    where: { dayDate: parseDayStart(dayDate) },
+    where: { countryCode_dayDate: { countryCode: workCountry, dayDate: parseDayStart(dayDate) } },
     include: { expenses: { where: { paymentMethod: method }, orderBy: { createdAt: "asc" } } },
   });
 
@@ -596,8 +648,9 @@ export async function saveShipmentCashCounts(input: {
   dayDate: string;
   counts: Array<{ method: string; countedIls: number }>;
   createdById: string;
+  workCountry: WorkCountryCode;
 }): Promise<ShipmentCashControlPayload> {
-  const day = await getOrOpenShipmentCashDay(input.dayDate, input.createdById);
+  const day = await getOrOpenShipmentCashDay(input.dayDate, input.createdById, input.workCountry);
   if (day.status === "CLOSED") throw new Error("לא ניתן לעדכן ספירה ביום סגור — יש לפתוח מחדש");
 
   for (const row of input.counts) {
@@ -612,7 +665,7 @@ export async function saveShipmentCashCounts(input: {
   }
 
   await writeAudit({ userId: input.createdById, actionType: "SHIPMENT_CASH_COUNT_SAVE", entityType: "ShipmentCashDay", entityId: day.id, newValue: { dayDate: day.dayDate, counts: input.counts } });
-  return loadShipmentCashControl({ dayDate: day.dayDate });
+  return loadShipmentCashControl({ dayDate: day.dayDate, workCountry: input.workCountry });
 }
 
 // ─── Save Manual Collected (CREDIT_NOTE) ──────────────────────────────────────
@@ -622,9 +675,10 @@ export async function saveManualCollected(input: {
   method: string;
   amountIls: number;
   createdById: string;
+  workCountry: WorkCountryCode;
 }): Promise<ShipmentCashControlPayload> {
   if (!isManualMethod(input.method)) throw new Error("אמצעי תשלום זה אינו ידני");
-  const day = await getOrOpenShipmentCashDay(input.dayDate, input.createdById);
+  const day = await getOrOpenShipmentCashDay(input.dayDate, input.createdById, input.workCountry);
   if (day.status === "CLOSED") throw new Error("לא ניתן לעדכן ביום סגור");
   const amount = round2(Number(input.amountIls));
   if (!Number.isFinite(amount) || amount < 0) throw new Error("סכום לא תקין");
@@ -636,7 +690,7 @@ export async function saveManualCollected(input: {
   });
 
   await writeAudit({ userId: input.createdById, actionType: "SHIPMENT_CASH_MANUAL_COLLECTED", entityType: "ShipmentCashDay", entityId: day.id, newValue: { dayDate: input.dayDate, method: input.method, amountIls: amount } });
-  return loadShipmentCashControl({ dayDate: day.dayDate });
+  return loadShipmentCashControl({ dayDate: input.dayDate, workCountry: input.workCountry });
 }
 
 // ─── History ──────────────────────────────────────────────────────────────────

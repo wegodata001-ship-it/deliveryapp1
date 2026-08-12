@@ -4,6 +4,7 @@ import type {
   ShipmentPaymentLineDto,
   CashControlMethodValue,
 } from "@/app/admin/shipments/types";
+import type { WorkCountryCode } from "@/lib/work-country";
 
 export type ShipmentCashExpenseCategory =
   | "FUEL"
@@ -44,6 +45,7 @@ export type ShipmentCashExpenseDto = {
 };
 
 export type ShipmentCashControlFilter = {
+  workCountry: WorkCountryCode;
   dayDate?: string;
   weekCode?: string;
   month?: string;

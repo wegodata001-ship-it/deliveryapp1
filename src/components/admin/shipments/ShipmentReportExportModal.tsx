@@ -20,6 +20,7 @@ import {
   type ShipmentReportFormat,
   type ShipmentReportKind,
 } from "@/lib/shipment-report-export";
+import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
 
 type Props = {
   kind: ShipmentReportKind;
@@ -68,6 +69,7 @@ export function ShipmentReportExportModal({
   generatedBy,
   onClose,
 }: Props) {
+  const { workCountry } = useShipmentCountry();
   const [filters, setFilters] = useState<ShipmentReportFilters>(
     () => initialValues(initialFilter),
   );
@@ -90,6 +92,7 @@ export function ShipmentReportExportModal({
     setError(null);
     try {
       const fresh = await getShipmentControlDataAction({
+        workCountry,
         dateFrom: filters.dateFrom || undefined,
         dateTo: filters.dateTo || undefined,
         zoneId: filters.zoneId || undefined,

@@ -34,6 +34,7 @@ import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { WegoBrandLogo } from "@/components/admin/WegoBrandLogo";
 import { useAdminFinancialModal } from "@/components/admin/AdminFinancialModalContext";
 import { resolveGlobalCountry } from "@/lib/current-country";
+import { resolveShipmentNavHref } from "@/lib/shipment-country-scope.shared";
 import { useAdminNavLayout } from "@/components/admin/AdminNavLayoutContext";
 import type { AdminWindowPayload } from "@/lib/admin-windows";
 
@@ -127,7 +128,7 @@ function applyActiveWorkWeekToParams(out: URLSearchParams, pathname: string, glo
   }
 }
 
-function resolveNavHref(item: NavItemDef, sp: URLSearchParams): string {
+function resolveNavHref(item: NavItemDef, sp: URLSearchParams, pathname: string): string {
   const globals = new URLSearchParams();
   for (const key of ["week", "from", "to"] as const) {
     const v = sp.get(key);
@@ -150,6 +151,10 @@ function resolveNavHref(item: NavItemDef, sp: URLSearchParams): string {
 
   if (item.href.startsWith("/admin/")) {
     const u = new URL(item.href, "http://local.invalid");
+    const resolvedPath =
+      u.pathname.startsWith("/admin/shipments") && u.pathname !== "/admin/shipments"
+        ? resolveShipmentNavHref(u.pathname, pathname)
+        : u.pathname;
     const out = new URLSearchParams(u.search);
     if (ACTIVE_WEEK_NAV_PATHS.has(u.pathname)) {
       applyActiveWorkWeekToParams(out, u.pathname, sp);
@@ -164,7 +169,7 @@ function resolveNavHref(item: NavItemDef, sp: URLSearchParams): string {
       }
     }
     const qs = out.toString();
-    return qs ? `${u.pathname}?${qs}` : u.pathname;
+    return qs ? `${resolvedPath}?${qs}` : resolvedPath;
   }
 
   return item.href;
@@ -212,7 +217,7 @@ function NavBlock({
     <div className="adm-nav-section">
       <div className="adm-nav-label">{section.title}</div>
       {section.items.map((item) => {
-        const resolved = resolveNavHref(item, sp);
+        const resolved = resolveNavHref(item, sp, pathname);
         const active =
           item.openWindow || item.openFinancialModal ? false : linkActive(pathname, item, resolved, sp);
         const key = `${section.title}-${item.label}-${item.openWindow?.type ?? item.openFinancialModal ? "fin" : "link"}`;

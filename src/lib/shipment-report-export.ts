@@ -7,6 +7,7 @@ import {
   SHIPMENT_STATUS_LABELS,
 } from "@/app/admin/shipments/types";
 import type { ShipmentStatus } from "@/app/admin/shipments/types";
+import { getEffectiveDeliveryPlace } from "@/lib/shipment-delivery-place";
 import { getLedgerPdfMake, ledgerPdfDefaultStyle } from "@/lib/ledger-pdfmake";
 import { ledgerPdfFontFamily } from "@/lib/pdfFonts";
 import { previewPdfMakeDocument } from "@/lib/pdfmake-preview";
@@ -357,7 +358,7 @@ function buildReport(
       container: record.containerNumber ?? "—",
       customer: record.customerName ?? "—",
       phone: record.customerPhone ?? "—",
-      address: [record.address, record.city].filter(Boolean).join(", ") || "—",
+      address: [record.address, getEffectiveDeliveryPlace(record)].filter(Boolean).join(", ") || "—",
       courier: record.courierName ?? "—",
       zone: record.zoneName ?? "—",
       boxes: record.boxes ?? 0,

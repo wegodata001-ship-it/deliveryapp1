@@ -8,6 +8,7 @@ import {
   deleteLocationAliasAction,
   updateLocationAliasOriginalNameAction,
 } from "@/app/admin/shipments/location-actions";
+import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
 
 type Props = {
   location: DeliveryLocationDto;
@@ -16,6 +17,7 @@ type Props = {
 };
 
 export function LocationAliasesManageModal({ location, onClose, onChanged }: Props) {
+  const { workCountry } = useShipmentCountry();
   const [aliases, setAliases] = useState(location.aliases);
   const [newAlias, setNewAlias] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -36,7 +38,7 @@ export function LocationAliasesManageModal({ location, onClose, onChanged }: Pro
     }
     setBusy(true);
     setError(null);
-    const res = await addLocationAliasAction({
+    const res = await addLocationAliasAction(workCountry, {
       deliveryLocationId: location.id,
       originalName: name,
     });
@@ -70,7 +72,7 @@ export function LocationAliasesManageModal({ location, onClose, onChanged }: Pro
     }
     setBusy(true);
     setError(null);
-    const res = await updateLocationAliasOriginalNameAction({ aliasId, originalName: name });
+    const res = await updateLocationAliasOriginalNameAction(workCountry, { aliasId, originalName: name });
     setBusy(false);
     if (!res.ok) {
       setError(res.error);
@@ -88,7 +90,7 @@ export function LocationAliasesManageModal({ location, onClose, onChanged }: Pro
     if (!window.confirm(`למחוק את הכינוי "${label}"?`)) return;
     setBusy(true);
     setError(null);
-    const res = await deleteLocationAliasAction(aliasId);
+    const res = await deleteLocationAliasAction(workCountry, aliasId);
     setBusy(false);
     if (!res.ok) {
       setError(res.error);

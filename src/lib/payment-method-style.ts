@@ -1,8 +1,14 @@
-// מקור אמת יחיד לצבעים וללייבלים של אמצעי תשלום — אחידות בכל המערכת:
-// קליטת תשלום, כרטסת, דוחות PDF/Excel, דוח יתרות, דוח תשלומים.
-// STEP 4: מזומן=ירוק · אשראי=סגול · העברה בנקאית=כחול · צ'קים=כתום · אחר=אפור.
+// מקור אמת יחיד לצבעים וללייבלים של אמצעי תשלום — אחידות בכל המערכת.
+// מימוש: payment-method-ui.ts
 
-export type PaymentMethodStyleKey = "cash" | "credit" | "bank_transfer" | "checks" | "other";
+import {
+  getPaymentMethodUI,
+  PAYMENT_METHOD_COLORS,
+  resolvePaymentMethodUiKey,
+  type PaymentMethodUiKey,
+} from "@/lib/payment-method-ui";
+
+export type PaymentMethodStyleKey = PaymentMethodUiKey;
 
 export type PaymentMethodStyle = {
   key: PaymentMethodStyleKey;
@@ -15,34 +21,48 @@ export type PaymentMethodStyle = {
   border: string;
 };
 
-export const PAYMENT_METHOD_STYLES: Record<PaymentMethodStyleKey, PaymentMethodStyle> = {
-  cash: { key: "cash", label: "מזומן", color: "#15803d", bg: "#dcfce7", border: "#86efac" },
-  credit: { key: "credit", label: "אשראי", color: "#6d28d9", bg: "#ede9fe", border: "#c4b5fd" },
-  bank_transfer: { key: "bank_transfer", label: "העברה בנקאית", color: "#0369a1", bg: "#e0f2fe", border: "#7dd3fc" },
-  checks: { key: "checks", label: "צ'קים", color: "#c2410c", bg: "#ffedd5", border: "#fdba74" },
-  other: { key: "other", label: "אחר", color: "#475569", bg: "#f1f5f9", border: "#cbd5e1" },
+const STYLE_KEY_LABELS: Record<PaymentMethodStyleKey, string> = {
+  cash: "מזומן",
+  bankTransfer: "העברה בנקאית",
+  credit: "זיכוי",
+  checks: "צ'קים",
+  card: "אשראי",
+  codeWithdrawal: "משיכה מהקוד",
+  other: "אחר",
 };
+
+/** @deprecated השתמשו ב-PAYMENT_METHOD_COLORS מ-payment-method-ui */
+export const PAYMENT_METHOD_STYLES: Record<PaymentMethodStyleKey, PaymentMethodStyle> =
+  Object.fromEntries(
+    (Object.keys(PAYMENT_METHOD_COLORS) as PaymentMethodUiKey[]).map((key) => {
+      const colors = PAYMENT_METHOD_COLORS[key];
+      return [
+        key,
+        {
+          key,
+          label: STYLE_KEY_LABELS[key],
+          color: colors.text,
+          bg: colors.bg,
+          border: colors.border,
+        },
+      ];
+    }),
+  ) as Record<PaymentMethodStyleKey, PaymentMethodStyle>;
 
 /** ממפה מזהה אמצעי תשלום (DB/טופס) למפתח סגנון קנוני */
 export function paymentMethodStyleKey(method: string | null | undefined): PaymentMethodStyleKey {
-  const m = String(method ?? "").trim().toUpperCase();
-  switch (m) {
-    case "CASH":
-      return "cash";
-    case "CREDIT":
-    case "CREDIT_CARD":
-      return "credit";
-    case "BANK_TRANSFER":
-    case "TRANSFER":
-      return "bank_transfer";
-    case "CHECK":
-    case "CHECKS":
-      return "checks";
-    default:
-      return "other";
-  }
+  return resolvePaymentMethodUiKey(method);
 }
 
 export function paymentMethodStyle(method: string | null | undefined): PaymentMethodStyle {
-  return PAYMENT_METHOD_STYLES[paymentMethodStyleKey(method)];
+  const ui = getPaymentMethodUI(method);
+  return {
+    key: ui.key,
+    label: ui.label,
+    color: ui.textColor,
+    bg: ui.background,
+    border: ui.border,
+  };
 }
+
+export { getPaymentMethodUI, resolvePaymentMethodUiKey } from "@/lib/payment-method-ui";

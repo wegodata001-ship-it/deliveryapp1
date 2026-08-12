@@ -1,18 +1,7 @@
-import { requireRoutePermission } from "@/lib/route-access";
-import { isAdminUser } from "@/lib/admin-auth";
-import { CashControlClient } from "@/components/admin/CashControlDailyClient";
-import { ACTIVE_WORK_WEEK_CODE } from "@/lib/active-work-week";
+import { redirect } from "next/navigation";
+import { DEFAULT_WORK_COUNTRY } from "@/lib/work-country";
+import { shipmentCountrySlugFromWorkCountry } from "@/lib/shipment-country-scope.shared";
 
-export const dynamic = "force-dynamic";
-
-export default async function ShipmentCashControlPage() {
-  const me = await requireRoutePermission(["manage_shipments", "view_shipments"]);
-  return (
-    <CashControlClient
-      mode="shipping"
-      isAdmin={isAdminUser(me)}
-      initialWeek={ACTIVE_WORK_WEEK_CODE}
-      currentUserName={me.fullName?.trim() || me.email || ""}
-    />
-  );
+export default function LegacyShipmentCashControlRedirect() {
+  redirect(`/admin/shipments/${shipmentCountrySlugFromWorkCountry(DEFAULT_WORK_COUNTRY)}/cash-control`);
 }

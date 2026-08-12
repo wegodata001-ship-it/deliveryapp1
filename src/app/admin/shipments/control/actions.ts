@@ -3,6 +3,14 @@
 import { requireAuth, userHasAnyPermission, isAdminUser } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
 import {
+  requireShipmentCountryScope,
+  shipmentBatchWhere,
+  shipmentCourierWhere,
+  shipmentRecordWhere,
+  shipmentZoneWhere,
+} from "@/lib/shipment-country-scope";
+import type { WorkCountryCode } from "@/lib/work-country";
+import {
   loadAliasLookupMap,
   resolveUpdatedDeliveryLocationDisplay,
 } from "@/lib/delivery-location-match";
@@ -192,7 +200,9 @@ function parsePaymentDetails(value: string | null): ShipmentPaymentDetails | nul
 // ─── Helper ───────────────────────────────────────────────────────────────────
 
 function buildWhere(filter: ShipmentControlFilter) {
-  const where: Record<string, unknown> = {};
+  const where: Record<string, unknown> = {
+    ...shipmentRecordWhere(filter.workCountry),
+  };
 
   if (filter.batchId) {
     where.batchId = filter.batchId;
@@ -240,7 +250,9 @@ function buildWhere(filter: ShipmentControlFilter) {
 }
 
 function buildBatchWhere(filter: ShipmentControlFilter) {
-  const where: Record<string, unknown> = {};
+  const where: Record<string, unknown> = {
+    ...shipmentBatchWhere(filter.workCountry),
+  };
   if (filter.batchId) where.id = filter.batchId;
   return where;
 }
@@ -248,13 +260,14 @@ function buildBatchWhere(filter: ShipmentControlFilter) {
 // ─── Main action ──────────────────────────────────────────────────────────────
 
 export async function getShipmentControlDataAction(
-  filter: ShipmentControlFilter = {}
+  filter: ShipmentControlFilter
 ): Promise<{ ok: true; data: ShipmentControlPayload } | { ok: false; error: string }> {
   try {
     const me = await requireAuth();
     if (!isAdminUser(me) && !userHasAnyPermission(me, VIEW_PERMS)) {
       return { ok: false, error: "אין הרשאה" };
     }
+    requireShipmentCountryScope(filter.workCountry);
 
     const recordWhere = buildWhere(filter);
 
@@ -282,12 +295,13 @@ export async function getShipmentControlDataAction(
     });
 
     const allZones = await prisma.shipmentDeliveryZone.findMany({
+      where: shipmentZoneWhere(filter.workCountry),
       select: { id: true, name: true },
       orderBy: { sortOrder: "asc" },
     });
 
     const allCouriers = await prisma.shipmentCourier.findMany({
-      where: { isActive: true },
+      where: { isActive: true, ...shipmentCourierWhere(filter.workCountry) },
       select: { id: true, name: true },
       orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
     });

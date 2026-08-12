@@ -90,6 +90,8 @@ export function activityActionLabelHe(actionType: string): string {
       return "שיוך שליח למשלוחים";
     case "CASH_EXPENSE_DELETED":
       return "מחיקת הוצאת קופה";
+    case "CASH_EXPENSE_UPDATED":
+      return "עדכון הוצאת קופה";
     case "WEEK_BALANCED":
       return "איזון שבוע בבקרת קופה";
     case "WEEK_BALANCE_INVALIDATED":

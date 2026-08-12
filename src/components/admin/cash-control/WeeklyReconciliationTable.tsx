@@ -1,13 +1,12 @@
 "use client";
 
-import { Fragment } from "react";
+import { Fragment, type CSSProperties } from "react";
 import { ArrowDown } from "lucide-react";
 import { fmtDailyMoney, channelCurrency, type CashDailyMethodId } from "@/lib/cash-control-daily";
 import { channelColLabels } from "@/lib/cash-control-channel";
 import type { CashDailySummaryRowDto } from "@/app/admin/cash-control/daily-types";
 import {
   CASH_CONTROL_TABLE_METHODS,
-  METHOD_GROUP_CLASS,
   MethodIcon,
   StatusIcon,
   num,
@@ -16,23 +15,29 @@ import {
 import {
   SHIPPING_CASH_METHOD_LABELS,
   SHIPPING_CASH_TABLE_METHODS,
-  SHIPPING_METHOD_GROUP_CLASS,
 } from "@/components/admin/cash-control/shipping-table-config";
+import { PaymentMethodColorDot } from "@/components/admin/PaymentMethodColorDot";
+import { getPaymentMethodUI } from "@/lib/payment-method-ui";
 
 const METHOD_HEADER = channelColLabels();
 
 export type CashControlTableMode = "regular" | "shipping";
 
-function currencyToneClass(mode: CashControlTableMode, method: string): string {
-  if (mode === "shipping") return "cc-col--currency-strong";
-  return channelCurrency(method as CashDailyMethodId) === "ILS"
-    ? "cc-col--currency-strong"
-    : "cc-col--currency-soft";
+function methodGroupClass(_mode: CashControlTableMode, method: string): string {
+  return getPaymentMethodUI(method).cssClass;
 }
 
-function methodGroupClass(mode: CashControlTableMode, method: string): string {
-  if (mode === "shipping") return SHIPPING_METHOD_GROUP_CLASS[method] ?? "cc-col--method-other";
-  return METHOD_GROUP_CLASS[method as CashDailyMethodId];
+function methodColumnStyle(method: string): CSSProperties {
+  const ui = getPaymentMethodUI(method);
+  return {
+    ["--pm-bg" as string]: ui.background,
+    ["--pm-border" as string]: ui.border,
+    ["--pm-text" as string]: ui.textColor,
+  };
+}
+
+function amountLinkStyle(method: string): CSSProperties {
+  return { color: getPaymentMethodUI(method).textColor };
 }
 
 function methodLabel(mode: CashControlTableMode, method: string): string {
@@ -104,11 +109,12 @@ export function WeeklyReconciliationTable({
               <th
                 key={m}
                 colSpan={2}
-                className={`${methodGroupClass(mode, m)} ${currencyToneClass(mode, m)}`}
+                className={methodGroupClass(mode, m)}
+                style={methodColumnStyle(m)}
               >
                 <span className="cc-group-head">
                   {mode === "regular" ? <MethodIcon method={m as CashDailyMethodId} size={13} /> : null}
-                  {methodLabel(mode, m)}
+                  <PaymentMethodColorDot method={m} label={methodLabel(mode, m)} size={8} />
                 </span>
               </th>
             ))}
@@ -122,11 +128,15 @@ export function WeeklyReconciliationTable({
             <th className="cc-col--info cc-col--sep">{infoThirdLabel}</th>
             {tableMethods.map((m) => (
               <Fragment key={m}>
-                <th className={`cc-num ${methodGroupClass(mode, m)} ${currencyToneClass(mode, m)}`}>
+                <th
+                  className={`cc-num ${methodGroupClass(mode, m)}`}
+                  style={methodColumnStyle(m)}
+                >
                   {paidLabel}
                 </th>
                 <th
-                  className={`cc-num ${methodGroupClass(mode, m)} ${currencyToneClass(mode, m)} cc-col--sep`}
+                  className={`cc-num ${methodGroupClass(mode, m)} cc-col--sep`}
+                  style={methodColumnStyle(m)}
                 >
                   <span className="cc-pair-hint">
                     <ArrowDown size={10} aria-hidden />
@@ -161,14 +171,17 @@ export function WeeklyReconciliationTable({
                   const recv = drawerValue(row, m);
                   const paidClickable = paid > 0;
                   const drillActive = active && activeDrill === m;
-                  const columnClasses = `${methodGroupClass(mode, m)} ${currencyToneClass(mode, m)}`;
+                  const columnClasses = methodGroupClass(mode, m);
+                  const colStyle = methodColumnStyle(m);
+                  const amountStyle = amountLinkStyle(m);
                   return (
                     <Fragment key={m}>
-                      <td dir="ltr" className={`cc-num ${columnClasses}`}>
+                      <td dir="ltr" className={`cc-num ${columnClasses}`} style={colStyle}>
                         {paidClickable ? (
                           <button
                             type="button"
-                            className={`cc-amount-link${drillActive ? " is-active" : ""}`}
+                            className={`cc-amount-link cc-amount-link--pm${drillActive ? " is-active" : ""}`}
+                            style={amountStyle}
                             onClick={(e) => {
                               e.stopPropagation();
                               onPaidClick(row, m);
@@ -180,10 +193,11 @@ export function WeeklyReconciliationTable({
                           "—"
                         )}
                       </td>
-                      <td dir="ltr" className={`cc-num ${columnClasses} cc-col--sep`}>
+                      <td dir="ltr" className={`cc-num ${columnClasses} cc-col--sep`} style={colStyle}>
                         <button
                           type="button"
-                          className="cc-amount-link cc-amount-link--count"
+                          className="cc-amount-link cc-amount-link--pm cc-amount-link--count"
+                          style={amountStyle}
                           onClick={(e) => {
                             e.stopPropagation();
                             onReceivedClick(row, m);
@@ -241,19 +255,32 @@ export function WeeklyReconciliationTable({
               <td colSpan={3} className="cc-col--info cc-col--sep">
                 <strong>{totalRow.dateDisplay}</strong>
               </td>
-              {tableMethods.map((m) => (
-                <Fragment key={m}>
-                  <td dir="ltr" className={`cc-num ${methodGroupClass(mode, m)} ${currencyToneClass(mode, m)}`}>
-                    <strong>{fmtPaid(mode, m, intakeValue(totalRow, m))}</strong>
-                  </td>
-                  <td
-                    dir="ltr"
-                    className={`cc-num ${methodGroupClass(mode, m)} ${currencyToneClass(mode, m)} cc-col--sep`}
-                  >
-                    <strong>{fmtReceived(mode, m, drawerValue(totalRow, m))}</strong>
-                  </td>
-                </Fragment>
-              ))}
+              {tableMethods.map((m) => {
+                const amountStyle = amountLinkStyle(m);
+                const colStyle = methodColumnStyle(m);
+                return (
+                  <Fragment key={m}>
+                    <td
+                      dir="ltr"
+                      className={`cc-num ${methodGroupClass(mode, m)}`}
+                      style={colStyle}
+                    >
+                      <strong className="cc-amount-strong cc-amount-link--pm" style={amountStyle}>
+                        {fmtPaid(mode, m, intakeValue(totalRow, m))}
+                      </strong>
+                    </td>
+                    <td
+                      dir="ltr"
+                      className={`cc-num ${methodGroupClass(mode, m)} cc-col--sep`}
+                      style={colStyle}
+                    >
+                      <strong className="cc-amount-strong cc-amount-link--pm" style={amountStyle}>
+                        {fmtReceived(mode, m, drawerValue(totalRow, m))}
+                      </strong>
+                    </td>
+                  </Fragment>
+                );
+              })}
               <td colSpan={2} className="cc-col--status" />
             </tr>
           ) : null}

@@ -231,13 +231,12 @@ export async function updateCashExpense(input: {
   notes?: string;
   dateYmd?: string;
   timeHm?: string;
+  updatedById?: string;
+  updatedByName?: string | null;
 }): Promise<{ ok: boolean; error?: string }> {
   const id = input.id.trim();
   if (!id) return { ok: false, error: "חסר מזהה" };
-  const existing = await prisma.cashExpense.findUnique({
-    where: { id },
-    select: { weekCode: true },
-  });
+  const existing = await prisma.cashExpense.findUnique({ where: { id } });
   if (!existing) return { ok: false, error: "ההוצאה לא נמצאה" };
 
   const amount = dec(input.amount);
@@ -257,7 +256,56 @@ export async function updateCashExpense(input: {
     data.weekCode = deriveAhWeekCodeFromOrderDateYmd(formatYmdJerusalem(expenseDate)) || undefined;
   }
 
-  await prisma.cashExpense.update({ where: { id }, data });
+  const oldValue = {
+    amount: existing.amount.toString(),
+    currency: existing.currency,
+    reason: existing.reason,
+    paymentMethod: existing.paymentMethod,
+    notes: existing.notes,
+    weekCode: existing.weekCode,
+    expenseDate: existing.expenseDate.toISOString(),
+    status: existing.status,
+  };
+
+  const newValue = {
+    amount: amount.toString(),
+    currency: data.currency,
+    reason: input.reason,
+    paymentMethod: normalizePaymentMethod(input.paymentMethod),
+    notes: input.notes?.trim() || null,
+    weekCode:
+      typeof data.weekCode === "string"
+        ? data.weekCode
+        : existing.weekCode,
+    expenseDate:
+      data.expenseDate instanceof Date
+        ? data.expenseDate.toISOString()
+        : existing.expenseDate.toISOString(),
+    status: existing.status,
+  };
+
+  const changedAt = new Date();
+  await prisma.$transaction(async (tx) => {
+    await tx.cashExpense.update({ where: { id }, data });
+    if (input.updatedById) {
+      await tx.auditLog.create({
+        data: {
+          userId: input.updatedById,
+          actionType: "CASH_EXPENSE_UPDATED",
+          entityType: "CashExpense",
+          entityId: id,
+          oldValue: oldValue as Prisma.InputJsonValue,
+          newValue: newValue as Prisma.InputJsonValue,
+          metadata: {
+            expenseId: id,
+            changedBy: input.updatedById,
+            changedByName: input.updatedByName ?? null,
+            changedAt: changedAt.toISOString(),
+          } as Prisma.InputJsonValue,
+        },
+      });
+    }
+  });
 
   const weeks = new Set<string>();
   if (existing.weekCode?.trim()) weeks.add(existing.weekCode.trim());
@@ -265,6 +313,7 @@ export async function updateCashExpense(input: {
   for (const wk of weeks) {
     await invalidateWeekBalanceIfBalanced({
       weekCode: wk,
+      userId: input.updatedById,
       reason: "הוצאה עודכנה",
       trigger: id,
     });

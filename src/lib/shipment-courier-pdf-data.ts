@@ -8,6 +8,7 @@ import {
   loadAliasLookupMap,
   resolveUpdatedDeliveryLocationDisplay,
 } from "@/lib/delivery-location-match";
+import { getEffectiveDeliveryPlace } from "@/lib/shipment-delivery-place";
 import { prisma } from "@/lib/prisma";
 import {
   cleanArabicLocalityName,
@@ -264,6 +265,33 @@ type LocalityArabicResult = {
   cacheCandidate?: { context: "locality"; originalName: string; arabicName: string };
 };
 
+type RecordLocalityInput = {
+  originalDeliveryLocation: string | null;
+  city: string | null;
+  address: string | null;
+  deliveryLocationId: string | null;
+};
+
+function effectiveRecordLocality(
+  r: RecordLocalityInput,
+  aliasByKey: Awaited<ReturnType<typeof loadAliasLookupMap>>,
+): string | null {
+  return getEffectiveDeliveryPlace({
+    originalDeliveryLocation: r.originalDeliveryLocation,
+    updatedDeliveryLocation: resolveUpdatedDeliveryLocationDisplay(
+      {
+        originalDeliveryLocation: r.originalDeliveryLocation,
+        city: r.city,
+        address: r.address,
+        deliveryLocationId: r.deliveryLocationId,
+      },
+      aliasByKey,
+    ),
+    city: r.city,
+    address: r.address,
+  });
+}
+
 function resolveLocalityArabic(
   r: {
     originalDeliveryLocation: string | null;
@@ -279,16 +307,7 @@ function resolveLocalityArabic(
   localityCache: Map<string, import("@/lib/arabic-display-name").ArabicDisplayCacheEntry>,
   sessionOverride?: string,
 ): LocalityArabicResult {
-  const hebrewLocality =
-    resolveUpdatedDeliveryLocationDisplay(
-      {
-        originalDeliveryLocation: r.originalDeliveryLocation,
-        city: r.city,
-        address: r.address,
-        deliveryLocationId: r.deliveryLocationId,
-      },
-      aliasByKey,
-    ) || r.city || r.address || null;
+  const hebrewLocality = effectiveRecordLocality(r, aliasByKey);
 
   const originalText = hebrewLocality || r.city || r.address || "—";
 
@@ -498,16 +517,7 @@ async function buildCourierPdfRowsInternal(
     }
     customerOriginals.push(r.customerName?.trim() || existingCustomerName?.trim() || "—");
 
-    const locOriginal =
-      resolveUpdatedDeliveryLocationDisplay(
-        {
-          originalDeliveryLocation: r.originalDeliveryLocation,
-          city: r.city,
-          address: r.address,
-          deliveryLocationId: r.deliveryLocationId,
-        },
-        aliasByKey,
-      ) || r.city || r.address || "—";
+    const locOriginal = effectiveRecordLocality(r, aliasByKey) || "—";
     localityOriginals.push(locOriginal);
   }
 
@@ -556,16 +566,7 @@ async function buildCourierPdfRowsInternal(
       });
     }
 
-    const hebrewLocalityForOriginal =
-      resolveUpdatedDeliveryLocationDisplay(
-        {
-          originalDeliveryLocation: r.originalDeliveryLocation,
-          city: r.city,
-          address: r.address,
-          deliveryLocationId: r.deliveryLocationId,
-        },
-        aliasByKey,
-      ) || r.city || r.address || "—";
+    const hebrewLocalityForOriginal = effectiveRecordLocality(r, aliasByKey) || "—";
 
     const localityResolvedInner = resolveLocalityArabic(
       r,

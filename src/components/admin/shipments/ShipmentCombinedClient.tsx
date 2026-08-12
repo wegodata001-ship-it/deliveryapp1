@@ -48,6 +48,13 @@ import {
   sumRecordsCollectedByPaymentMethod,
   type ShipmentPaymentMethodOption,
 } from "@/lib/shipment-payment-method-filter";
+import { useShipmentCountryOptional } from "@/components/admin/shipments/ShipmentCountryProvider";
+import { DEFAULT_WORK_COUNTRY } from "@/lib/work-country";
+import { shipmentCountryBasePath, shipmentCountrySlugFromWorkCountry } from "@/lib/shipment-country-scope.shared";
+import {
+  getEffectiveDeliveryPlaceFromRecord,
+  patchShipmentRecordsAfterLocationFix,
+} from "@/lib/shipment-delivery-place";
 
 type Props = {
   batchIds: string[];
@@ -112,6 +119,9 @@ export function ShipmentCombinedClient({
   paymentMethods = [],
 }: Props) {
   const router = useRouter();
+  const countryCtx = useShipmentCountryOptional();
+  const workCountry = countryCtx?.workCountry ?? DEFAULT_WORK_COUNTRY;
+  const basePath = countryCtx?.basePath ?? shipmentCountryBasePath(shipmentCountrySlugFromWorkCountry(workCountry));
   const [records, setRecords] = useState(initialRecords);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [zones, setZones] = useState(initialZones);
@@ -185,9 +195,7 @@ export function ShipmentCombinedClient({
           r.customerPhone,
           r.customerPhone2,
           r.address,
-          r.city,
-          r.updatedDeliveryLocation,
-          r.originalDeliveryLocation,
+          getEffectiveDeliveryPlaceFromRecord(r),
           r.zoneName,
         ]
           .filter(Boolean)
@@ -227,7 +235,7 @@ export function ShipmentCombinedClient({
 
   async function refresh() {
     setBusy(true);
-    const res = await listShipmentRecordsByBatchIdsAction(batchIds);
+    const res = await listShipmentRecordsByBatchIdsAction(workCountry, batchIds);
     setBusy(false);
     if (res.ok) setRecords(res.records);
   }
@@ -272,7 +280,7 @@ export function ShipmentCombinedClient({
       );
     }
 
-    const result = await updateShipmentRecordAction({ recordId, patch });
+    const result = await updateShipmentRecordAction(workCountry, { recordId, patch });
     if (!result.ok) {
       // רענון מלא בכישלון — פשוט יותר משחזור מדויק
       await refresh();
@@ -313,7 +321,7 @@ export function ShipmentCombinedClient({
     const snapshot = records;
     setRecords(applyLocal);
 
-    const result = await assignZoneWithLocationPromptAction({
+    const result = await assignZoneWithLocationPromptAction(workCountry, {
       recordIds: [recordId],
       zoneId,
       updateLocationPermanently: Boolean(zoneId),
@@ -343,7 +351,7 @@ export function ShipmentCombinedClient({
     courier: { id: string; name: string } | null,
   ): Promise<boolean> {
     const courierId = courier?.id ?? null;
-    const result = await assignCourierAction({ recordIds: [recordId], courierId });
+    const result = await assignCourierAction(workCountry, { recordIds: [recordId], courierId });
     if (!result.ok) {
       setMsg(result.error);
       clearMsg();
@@ -362,7 +370,7 @@ export function ShipmentCombinedClient({
   }
 
   async function handleRowStatus(recordId: string, status: ShipmentStatus) {
-    const result = await updateShipmentStatusAction({ recordIds: [recordId], status });
+    const result = await updateShipmentStatusAction(workCountry, { recordIds: [recordId], status });
     if (!result.ok) {
       setMsg(result.error);
       clearMsg();
@@ -374,7 +382,7 @@ export function ShipmentCombinedClient({
   }
 
   async function quickAddZone(name: string) {
-    const result = await createZoneAction(name);
+    const result = await createZoneAction(workCountry, name);
     if (!result.ok) {
       setMsg(result.error);
       clearMsg();
@@ -385,7 +393,7 @@ export function ShipmentCombinedClient({
   }
 
   async function quickAddCourier(name: string) {
-    const result = await createCourierAction(name);
+    const result = await createCourierAction(workCountry, name);
     if (!result.ok) {
       setMsg(result.error);
       clearMsg();
@@ -398,7 +406,7 @@ export function ShipmentCombinedClient({
   async function bulkZone() {
     if (!bulkZoneId || selected.size === 0) return;
     setBusy(true);
-    const res = await assignZoneAction({
+    const res = await assignZoneAction(workCountry, {
       recordIds: [...selected],
       zoneId: bulkZoneId,
     });
@@ -417,7 +425,7 @@ export function ShipmentCombinedClient({
     const count = selected.size;
     if (!confirm(`האם לשייך את השליח ${courierName} ל-${count} משלוחים?`)) return;
     setBusy(true);
-    const res = await assignCourierAction({
+    const res = await assignCourierAction(workCountry, {
       recordIds: [...selected],
       courierId: bulkCourierId,
     });
@@ -434,7 +442,7 @@ export function ShipmentCombinedClient({
   async function runBulkStatus() {
     if (!bulkStatus || selected.size === 0) return;
     setBusy(true);
-    const res = await updateShipmentStatusAction({
+    const res = await updateShipmentStatusAction(workCountry, {
       recordIds: [...selected],
       status: bulkStatus,
     });
@@ -452,7 +460,7 @@ export function ShipmentCombinedClient({
     if (!confirm(`למחוק ${selected.size} משלוחים?`)) return;
     setBusy(true);
     for (const id of selected) {
-      await deleteShipmentRecordAction(id);
+      await deleteShipmentRecordAction(workCountry, id);
     }
     setBusy(false);
     setSelected(new Set());
@@ -462,7 +470,7 @@ export function ShipmentCombinedClient({
   return (
     <div className="shp-page shp-page--wide">
       <div className="shp-header">
-        <button type="button" className="shp-btn shp-btn--ghost" onClick={() => router.push("/admin/shipments")}>
+        <button type="button" className="shp-btn shp-btn--ghost" onClick={() => router.push(basePath)}>
           <ArrowRight size={16} />
           חזרה
         </button>
@@ -477,7 +485,7 @@ export function ShipmentCombinedClient({
           <button
             type="button"
             className="shp-btn shp-btn--secondary shp-btn--sm"
-            onClick={() => router.push("/admin/shipments/locations")}
+            onClick={() => router.push(`${basePath}/locations`)}
           >
             <MapPinned size={14} />
             ניהול יישובים
@@ -725,10 +733,12 @@ export function ShipmentCombinedClient({
           record={fixLocationRecord}
           zones={zones}
           onClose={() => setFixLocationRecord(null)}
-          onSaved={async () => {
-            await refresh();
-            setMsg("היישוב עודכן");
+          onSaved={(payload) => {
+            setRecords((prev) => patchShipmentRecordsAfterLocationFix(prev, payload));
+            setFixLocationRecord(null);
+            setMsg("מקום המסירה עודכן");
             clearMsg();
+            void refresh();
           }}
         />
       )}

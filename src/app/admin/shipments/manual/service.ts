@@ -1,5 +1,8 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { manualShipmentWhere } from "@/lib/shipment-country-scope";
+import type { WorkCountryCode } from "@/lib/work-country";
+import { workCountryLabel } from "@/lib/work-country";
 import type {
   ManualShipmentDto,
   ManualShipmentFilters,
@@ -115,7 +118,7 @@ function toDto(row: {
   };
 }
 
-function buildData(input: ManualShipmentInput) {
+function buildData(input: ManualShipmentInput, workCountry: WorkCountryCode) {
   const entryDate = parseDate(input.entryDate);
   const computed = calculateManualShipmentPayment({
     paymentAmount: input.paymentAmount,
@@ -124,9 +127,10 @@ function buildData(input: ManualShipmentInput) {
   });
 
   return {
+    countryCode: workCountry,
     entryDate,
     monthKey: deriveMonthKey(entryDate, input.monthKey),
-    country: input.country?.trim() || null,
+    country: input.country?.trim() || workCountryLabel(workCountry),
     shipmentNumber: input.shipmentNumber?.trim() || null,
     containerNumber: input.containerNumber?.trim() || null,
     shipmentDetails: input.shipmentDetails?.trim() || null,
@@ -158,17 +162,20 @@ function buildData(input: ManualShipmentInput) {
   };
 }
 
-function buildWhere(filters: ManualShipmentFilters = {}): Prisma.ManualShipmentWhereInput {
-  const where: Prisma.ManualShipmentWhereInput = { deletedAt: null };
+function buildWhere(
+  workCountry: WorkCountryCode,
+  filters: ManualShipmentFilters = {},
+): Prisma.ManualShipmentWhereInput {
+  const where: Prisma.ManualShipmentWhereInput = {
+    deletedAt: null,
+    ...manualShipmentWhere(workCountry),
+  };
 
   if (filters.shipmentNumber?.trim()) {
     where.shipmentNumber = { contains: filters.shipmentNumber.trim(), mode: "insensitive" };
   }
   if (filters.containerNumber?.trim()) {
     where.containerNumber = { contains: filters.containerNumber.trim(), mode: "insensitive" };
-  }
-  if (filters.country?.trim()) {
-    where.country = { contains: filters.country.trim(), mode: "insensitive" };
   }
   if (filters.monthKey?.trim()) {
     where.monthKey = filters.monthKey.trim().slice(0, 7);
@@ -195,29 +202,34 @@ function buildWhere(filters: ManualShipmentFilters = {}): Prisma.ManualShipmentW
 }
 
 export async function listManualShipments(
-  filters: ManualShipmentFilters = {}
+  workCountry: WorkCountryCode,
+  filters: ManualShipmentFilters = {},
 ): Promise<ManualShipmentDto[]> {
   const rows = await prisma.manualShipment.findMany({
-    where: buildWhere(filters),
+    where: buildWhere(workCountry, filters),
     orderBy: [{ entryDate: "desc" }, { createdAt: "desc" }],
   });
   return rows.map(toDto);
 }
 
-export async function getManualShipment(id: string): Promise<ManualShipmentDto | null> {
+export async function getManualShipment(
+  id: string,
+  workCountry: WorkCountryCode,
+): Promise<ManualShipmentDto | null> {
   const row = await prisma.manualShipment.findFirst({
-    where: { id, deletedAt: null },
+    where: { id, deletedAt: null, ...manualShipmentWhere(workCountry) },
   });
   return row ? toDto(row) : null;
 }
 
 export async function createManualShipment(
+  workCountry: WorkCountryCode,
   input: ManualShipmentInput,
   createdById?: string
 ): Promise<string> {
   const row = await prisma.manualShipment.create({
     data: {
-      ...buildData(input),
+      ...buildData(input, workCountry),
       createdById: createdById ?? null,
     },
   });
@@ -259,10 +271,11 @@ function dtoToInput(row: ManualShipmentDto): ManualShipmentInput {
 
 export async function updateManualShipment(
   id: string,
+  workCountry: WorkCountryCode,
   input: ManualShipmentInput
 ): Promise<void> {
   const existing = await prisma.manualShipment.findFirst({
-    where: { id, deletedAt: null },
+    where: { id, deletedAt: null, ...manualShipmentWhere(workCountry) },
   });
   if (!existing) throw new Error("משלוח לא נמצא");
 
@@ -273,21 +286,32 @@ export async function updateManualShipment(
 
   await prisma.manualShipment.update({
     where: { id },
-    data: buildData(merged),
+    data: buildData(merged, workCountry),
   });
 }
 
-export async function softDeleteManualShipment(id: string): Promise<void> {
+export async function softDeleteManualShipment(
+  id: string,
+  workCountry: WorkCountryCode,
+): Promise<void> {
+  const existing = await prisma.manualShipment.findFirst({
+    where: { id, deletedAt: null, ...manualShipmentWhere(workCountry) },
+    select: { id: true },
+  });
+  if (!existing) throw new Error("משלוח לא נמצא");
   await prisma.manualShipment.update({
     where: { id },
     data: { deletedAt: new Date() },
   });
 }
 
-export async function softDeleteManualShipments(ids: string[]): Promise<number> {
+export async function softDeleteManualShipments(
+  ids: string[],
+  workCountry: WorkCountryCode,
+): Promise<number> {
   if (!ids.length) return 0;
   const result = await prisma.manualShipment.updateMany({
-    where: { id: { in: ids }, deletedAt: null },
+    where: { id: { in: ids }, deletedAt: null, ...manualShipmentWhere(workCountry) },
     data: { deletedAt: new Date() },
   });
   return result.count;
@@ -295,15 +319,17 @@ export async function softDeleteManualShipments(ids: string[]): Promise<number> 
 
 export async function duplicateManualShipment(
   id: string,
+  workCountry: WorkCountryCode,
   createdById?: string
 ): Promise<string | null> {
   const src = await prisma.manualShipment.findFirst({
-    where: { id, deletedAt: null },
+    where: { id, deletedAt: null, ...manualShipmentWhere(workCountry) },
   });
   if (!src) return null;
 
   const copy = await prisma.manualShipment.create({
     data: {
+      countryCode: workCountry,
       entryDate: src.entryDate,
       monthKey: src.monthKey,
       country: src.country,

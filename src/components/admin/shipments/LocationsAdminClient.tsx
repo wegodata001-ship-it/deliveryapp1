@@ -37,6 +37,7 @@ import { LocationMappingEditModal } from "@/components/admin/shipments/LocationM
 import { LocationAliasesManageModal } from "@/components/admin/shipments/LocationAliasesManageModal";
 import { LocationAliasImportModal } from "@/components/admin/shipments/LocationAliasImportModal";
 import { aliasLookupKey } from "@/lib/delivery-location-normalize";
+import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
 
 type Props = {
   initialMappings: AliasMappingRow[];
@@ -50,6 +51,7 @@ export function LocationsAdminClient({
   initialLocations,
 }: Props) {
   const router = useRouter();
+  const { workCountry, basePath } = useShipmentCountry();
   const searchRef = useRef<HTMLInputElement>(null);
   const [mappings, setMappings] = useState(initialMappings);
   const [zones, setZones] = useState(initialZones);
@@ -103,14 +105,14 @@ export function LocationsAdminClient({
   const refresh = useCallback(async () => {
     setBusy(true);
     const [mapRes, locRes] = await Promise.all([
-      listAliasMappingRowsAction({ includeInactive: true }),
-      listDeliveryLocationsAction({ includeInactive: true }),
+      listAliasMappingRowsAction(workCountry, { includeInactive: true }),
+      listDeliveryLocationsAction(workCountry, { includeInactive: true }),
     ]);
     setBusy(false);
     if (mapRes.ok) setMappings(mapRes.rows);
     if (locRes.ok) setLocations(locRes.locations);
     router.refresh();
-  }, [router]);
+  }, [router, workCountry]);
 
   function exportExcel() {
     const rows = mappings.map((m) => ({
@@ -134,7 +136,7 @@ export function LocationsAdminClient({
       return;
     }
     setBusy(true);
-    const res = await createZoneForLocationsAction(name);
+    const res = await createZoneForLocationsAction(workCountry, name);
     setBusy(false);
     if (res.ok) {
       setZones((prev) => [...prev, res.zone].sort((a, b) => a.sortOrder - b.sortOrder));
@@ -151,7 +153,7 @@ export function LocationsAdminClient({
     }
     if (!window.confirm(`למחוק התאמה "${selected.originalName}"?`)) return;
     setBusy(true);
-    const res = await deleteLocationAliasAction(selected.aliasId);
+    const res = await deleteLocationAliasAction(workCountry, selected.aliasId);
     setBusy(false);
     if (!res.ok) setMsg(res.error);
     else {
@@ -202,7 +204,7 @@ export function LocationsAdminClient({
 
   async function runReMatchUnmatched() {
     setBusy(true);
-    const res = await reMatchUnmatchedShipmentsAction();
+    const res = await reMatchUnmatchedShipmentsAction(workCountry);
     setBusy(false);
     if (!res.ok) setMsg(res.error);
     else {
@@ -216,7 +218,7 @@ export function LocationsAdminClient({
   return (
     <div className="shp-page shp-page--wide loc-admin" dir="rtl">
       <div className="shp-header">
-        <button type="button" className="shp-btn shp-btn--ghost" onClick={() => router.push("/admin/shipments")}>
+        <button type="button" className="shp-btn shp-btn--ghost" onClick={() => router.push(basePath)}>
           <ArrowRight size={16} />
           חזרה לרשימת משלוחים
         </button>
@@ -400,7 +402,7 @@ export function LocationsAdminClient({
                         onClick={async (e) => {
                           e.stopPropagation();
                           if (!window.confirm(`למחוק התאמה "${m.originalName}"?`)) return;
-                          const res = await deleteLocationAliasAction(m.aliasId);
+                          const res = await deleteLocationAliasAction(workCountry, m.aliasId);
                           if (!res.ok) setMsg(res.error);
                           else {
                             if (selectedId === m.aliasId) setSelectedId(null);
@@ -558,7 +560,7 @@ export function LocationsAdminClient({
                                   setMsg(validationError);
                                   return;
                                 }
-                                await updateZoneForLocationsAction(z.id, { name: name.trim() });
+                                await updateZoneForLocationsAction(workCountry, z.id, { name: name.trim() });
                                 setZones((prev) =>
                                   prev.map((x) => (x.id === z.id ? { ...x, name: name.trim() } : x)),
                                 );
@@ -570,7 +572,7 @@ export function LocationsAdminClient({
                               type="button"
                               className="shp-btn shp-btn--sm"
                               onClick={async () => {
-                                await setZoneActiveForLocationsAction(z.id, !z.isActive);
+                                await setZoneActiveForLocationsAction(workCountry, z.id, !z.isActive);
                                 setZones((prev) =>
                                   prev.map((x) => (x.id === z.id ? { ...x, isActive: !x.isActive } : x)),
                                 );
@@ -587,7 +589,7 @@ export function LocationsAdminClient({
                                 const i = ordered.findIndex((x) => x.id === z.id);
                                 if (i <= 0) return;
                                 [ordered[i - 1], ordered[i]] = [ordered[i], ordered[i - 1]];
-                                await reorderZonesAction(ordered.map((x) => x.id));
+                                await reorderZonesAction(workCountry, ordered.map((x) => x.id));
                                 setZones(ordered.map((x, sortOrder) => ({ ...x, sortOrder })));
                               }}
                             >
@@ -598,7 +600,7 @@ export function LocationsAdminClient({
                               className="shp-btn shp-btn--sm"
                               onClick={async () => {
                                 if (!window.confirm("למחוק אזור?")) return;
-                                await deleteZoneForLocationsAction(z.id);
+                                await deleteZoneForLocationsAction(workCountry, z.id);
                                 setZones((prev) => prev.filter((x) => x.id !== z.id));
                                 await refresh();
                               }}

@@ -15,6 +15,10 @@ import { InlineValueCell } from "@/components/admin/shipments/InlineValueCell";
 import { ZoneAssignModal } from "@/components/admin/shipments/ZoneAssignModal";
 import { isInvalidCustomerName } from "@/lib/shipment-customer-name-quality";
 import { sumCollectedByPaymentMethod } from "@/lib/shipment-payment-method-filter";
+import {
+  getEffectiveDeliveryPlaceFromRecord,
+  shipmentOriginalDeliveryPlace,
+} from "@/lib/shipment-delivery-place";
 
 const STATUS_OPTIONS: { value: ShipmentStatus; label: string }[] = (
   Object.entries(SHIPMENT_STATUS_LABELS) as Array<[ShipmentStatus, string]>
@@ -108,6 +112,7 @@ export type ShipmentRecordsEditableTableProps = {
   onCreateCourier: (name: string) => Promise<{ id: string; name: string; isActive: boolean } | null>;
   onCollect: (record: ShipmentRecordDto) => void;
   onFixLocation: (record: ShipmentRecordDto) => void;
+  onAddPackage?: (record: ShipmentRecordDto) => void;
   /** כשמוגדר — עמודת גובה תשלום מציגה רק את סכום האמצעי/ים שנבחרו */
   paymentMethodFilter?: string | string[] | null;
 };
@@ -128,6 +133,7 @@ export function ShipmentRecordsEditableTable({
   onCreateCourier,
   onCollect,
   onFixLocation,
+  onAddPackage,
   paymentMethodFilter = null,
 }: ShipmentRecordsEditableTableProps) {
   const [zoneAssignRecord, setZoneAssignRecord] = useState<ShipmentRecordDto | null>(null);
@@ -195,7 +201,7 @@ export function ShipmentRecordsEditableTable({
             <th className="c-name">שם לקוח</th>
             <th className="c-phone">טלפון</th>
             <th className="c-addr">כתובת</th>
-            <th className="c-upd-loc">מקום מסירה מעודכן</th>
+            <th className="c-loc">מקום מסירה</th>
             <th className="c-zone">אזור חלוקה</th>
             <th className="c-courier">שליח</th>
             <th className="c-boxes">מספר קרטונים</th>
@@ -289,8 +295,19 @@ export function ShipmentRecordsEditableTable({
                 <td className="c-addr">
                   <Trunc text={r.address || "—"} />
                 </td>
-                <td className="c-upd-loc">
-                  <Trunc text={r.updatedDeliveryLocation || "—"} />
+                <td className="c-loc">
+                  <button
+                    type="button"
+                    className="shp-loc-link"
+                    title={
+                      shipmentOriginalDeliveryPlace(r)
+                        ? `תיקון מקום מסירה (מקור מהייבוא: ${shipmentOriginalDeliveryPlace(r)})`
+                        : "תיקון מקום מסירה"
+                    }
+                    onClick={() => onFixLocation(r)}
+                  >
+                    <Trunc text={getEffectiveDeliveryPlaceFromRecord(r) || "—"} />
+                  </button>
                 </td>
                 <td className="c-zone">
                   {zoneLabel ? (
@@ -448,18 +465,30 @@ export function ShipmentRecordsEditableTable({
                   </select>
                 </td>
                 <td className="c-act">
-                  <button
-                    type="button"
-                    className="shp-btn shp-btn--sm"
-                    onClick={() => onFixLocation(r)}
-                    title={
-                      r.originalDeliveryLocation
-                        ? `תיקון התאמה (מקור: ${r.originalDeliveryLocation})`
-                        : "תיקון התאמה"
-                    }
-                  >
-                    תיקון
-                  </button>
+                  <div className="shp-row-actions">
+                    {onAddPackage ? (
+                      <button
+                        type="button"
+                        className="shp-btn shp-btn--sm shp-btn--ghost"
+                        onClick={() => onAddPackage(r)}
+                        title="הוסף חבילה ללקוח זה עם כל פרטי השורה"
+                      >
+                        + הוסף חבילה
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="shp-btn shp-btn--sm"
+                      onClick={() => onFixLocation(r)}
+                      title={
+                        shipmentOriginalDeliveryPlace(r)
+                          ? `תיקון מקום מסירה (מקור: ${shipmentOriginalDeliveryPlace(r)})`
+                          : "תיקון מקום מסירה"
+                      }
+                    >
+                      תיקון
+                    </button>
+                  </div>
                 </td>
               </tr>
             );

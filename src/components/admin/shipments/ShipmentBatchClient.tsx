@@ -52,6 +52,7 @@ import { ShipmentDeliveryFeeImportModal } from "@/components/admin/shipments/Shi
 import { FixLocationModal } from "@/components/admin/shipments/FixLocationModal";
 import { ShipmentRecordsEditableTable } from "@/components/admin/shipments/ShipmentRecordsEditableTable";
 import { QuickAddPackagePanel } from "@/components/admin/shipments/QuickAddPackagePanel";
+import { QuickAddPackageSourcePicker } from "@/components/admin/shipments/QuickAddPackageSourcePicker";
 import { CourierPdfModal } from "@/components/admin/shipments/CourierPdfModal";
 import { CustomShipmentPdfModal } from "@/components/admin/shipments/CustomShipmentPdfModal";
 import { CourierDebtCloseModal } from "@/components/admin/shipments/CourierDebtCloseModal";
@@ -65,6 +66,11 @@ import {
   sumRecordsCollectedByPaymentMethod,
   type ShipmentPaymentMethodOption,
 } from "@/lib/shipment-payment-method-filter";
+import {
+  getEffectiveDeliveryPlaceFromRecord,
+  patchShipmentRecordsAfterLocationFix,
+} from "@/lib/shipment-delivery-place";
+import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
 
 /** ערך מיוחד במסנן אזור — משלוחים ללא אזור חלוקה */
 const NO_ZONE_VALUE = "__no_zone__";
@@ -185,6 +191,7 @@ export function ShipmentBatchClient({
   paymentMethods = [],
 }: Props) {
   const router = useRouter();
+  const { workCountry, basePath } = useShipmentCountry();
   const [batch, setBatch] = useState(initialBatch);
   const [records, setRecords] = useState<ShipmentRecordDto[]>(initialRecords);
   const [zones, setZones] = useState<ShipmentZoneDto[]>(initialZones);
@@ -204,6 +211,8 @@ export function ShipmentBatchClient({
   const [fixLocationRecord, setFixLocationRecord] = useState<ShipmentRecordDto | null>(null);
   const [importSummary, setImportSummary] = useState<ShipmentImportMatchSummary | null>(null);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
+  const [quickAddSource, setQuickAddSource] = useState<ShipmentRecordDto | null>(null);
+  const [quickAddSourcePickerOpen, setQuickAddSourcePickerOpen] = useState(false);
   const [quickAddBusy, setQuickAddBusy] = useState(false);
   const [bulkAddCount, setBulkAddCount] = useState("5");
   const [bulkAddBusy, setBulkAddBusy] = useState(false);
@@ -279,9 +288,7 @@ export function ShipmentBatchClient({
           r.customerPhone,
           r.customerPhone2,
           r.address,
-          r.city,
-          r.updatedDeliveryLocation,
-          r.originalDeliveryLocation,
+          getEffectiveDeliveryPlaceFromRecord(r),
           r.zoneName,
         ]
           .filter(Boolean)
@@ -332,7 +339,7 @@ export function ShipmentBatchClient({
 
   async function refresh() {
     setLoading(true);
-    const res = await listShipmentRecordsAction(batch.id);
+    const res = await listShipmentRecordsAction(workCountry, batch.id);
     setLoading(false);
     if (res.ok) setRecords(res.records);
   }
@@ -340,7 +347,7 @@ export function ShipmentBatchClient({
   async function handleBulkZone() {
     if (!bulkZoneId || selected.size === 0) return;
     setLoading(true);
-    const res = await assignZoneAction({ recordIds: Array.from(selected), zoneId: bulkZoneId });
+    const res = await assignZoneAction(workCountry, { recordIds: Array.from(selected), zoneId: bulkZoneId });
     setLoading(false);
     if (res.ok) {
       setSuccess(`שויך אזור ל-${selected.size} משלוחים`);
@@ -358,7 +365,7 @@ export function ShipmentBatchClient({
     const count = selected.size;
     if (!confirm(`האם לשייך את השליח ${courierName} ל-${count} משלוחים?`)) return;
     setLoading(true);
-    const res = await assignCourierAction({
+    const res = await assignCourierAction(workCountry, {
       recordIds: Array.from(selected),
       courierId: bulkCourierId,
     });
@@ -377,7 +384,7 @@ export function ShipmentBatchClient({
   async function handleBulkStatus() {
     if (!bulkStatus || selected.size === 0) return;
     setLoading(true);
-    const res = await updateShipmentStatusAction({ recordIds: Array.from(selected), status: bulkStatus });
+    const res = await updateShipmentStatusAction(workCountry, { recordIds: Array.from(selected), status: bulkStatus });
     setLoading(false);
     if (res.ok) {
       setSuccess(`עודכן סטטוס ל-${selected.size} משלוחים`);
@@ -397,7 +404,7 @@ export function ShipmentBatchClient({
     const ids = Array.from(selected);
     const errors: string[] = [];
     for (const id of ids) {
-      const res = await deleteShipmentRecordAction(id);
+      const res = await deleteShipmentRecordAction(workCountry, id);
       if (!res.ok) errors.push(res.error);
     }
     setLoading(false);
@@ -468,7 +475,7 @@ export function ShipmentBatchClient({
     const snapshot = records;
     setRecords(applyLocal);
 
-    const result = await assignZoneWithLocationPromptAction({
+    const result = await assignZoneWithLocationPromptAction(workCountry, {
       recordIds: [recordId],
       zoneId,
       updateLocationPermanently: Boolean(zoneId),
@@ -497,7 +504,7 @@ export function ShipmentBatchClient({
     courier: { id: string; name: string } | null,
   ): Promise<boolean> {
     const courierId = courier?.id ?? null;
-    const result = await assignCourierAction({ recordIds: [recordId], courierId });
+    const result = await assignCourierAction(workCountry, { recordIds: [recordId], courierId });
     if (!result.ok) {
       setError(result.error);
       clearMsg();
@@ -515,7 +522,7 @@ export function ShipmentBatchClient({
   }
 
   async function handleRowStatus(recordId: string, status: ShipmentStatus) {
-    const result = await updateShipmentStatusAction({ recordIds: [recordId], status });
+    const result = await updateShipmentStatusAction(workCountry, { recordIds: [recordId], status });
     if (!result.ok) {
       setError(result.error);
       clearMsg();
@@ -555,7 +562,7 @@ export function ShipmentBatchClient({
       );
     }
 
-    const result = await updateShipmentRecordAction({ recordId, patch });
+    const result = await updateShipmentRecordAction(workCountry, { recordId, patch });
     if (!result.ok) {
       await refresh();
       setError(result.error);
@@ -575,7 +582,7 @@ export function ShipmentBatchClient({
   }
 
   async function quickAddZone(name: string) {
-    const result = await createZoneAction(name);
+    const result = await createZoneAction(workCountry, name);
     if (!result.ok) {
       setError(result.error);
       clearMsg();
@@ -589,7 +596,7 @@ export function ShipmentBatchClient({
   }
 
   async function quickAddCourier(name: string) {
-    const result = await createCourierAction(name);
+    const result = await createCourierAction(workCountry, name);
     if (!result.ok) {
       setError(result.error);
       clearMsg();
@@ -617,13 +624,35 @@ export function ShipmentBatchClient({
     }));
   }
 
+  function openQuickAddFromRow(record: ShipmentRecordDto) {
+    setQuickAddSource(record);
+    setQuickAddOpen(true);
+    setQuickAddSourcePickerOpen(false);
+    setError(null);
+  }
+
+  function openQuickAddTop() {
+    const selectedRows = records.filter((r) => selected.has(r.id));
+    if (selectedRows.length === 1) {
+      openQuickAddFromRow(selectedRows[0]!);
+      return;
+    }
+    setQuickAddSourcePickerOpen(true);
+    setError(null);
+  }
+
+  function closeQuickAdd() {
+    setQuickAddOpen(false);
+    setQuickAddSource(null);
+  }
+
   async function handleQuickAddPackage(
     input: Omit<CreateShipmentRecordInput, "batchId">,
     addAnother: boolean,
   ): Promise<boolean> {
     setQuickAddBusy(true);
     setError(null);
-    const result = await createShipmentRecordAction({ ...input, batchId: batch.id });
+    const result = await createShipmentRecordAction(workCountry, { ...input, batchId: batch.id });
     setQuickAddBusy(false);
     if (!result.ok) {
       setError(result.error);
@@ -632,7 +661,7 @@ export function ShipmentBatchClient({
     }
     appendRecordsToState([result.record]);
     showSaved(`חבילה נוספה · ${records.length + 1} חבילות`);
-    if (!addAnother) setQuickAddOpen(false);
+    if (!addAnother) closeQuickAdd();
     return true;
   }
 
@@ -645,7 +674,7 @@ export function ShipmentBatchClient({
     }
     setBulkAddBusy(true);
     setError(null);
-    const result = await createShipmentRecordsBulkAction({ batchId: batch.id, count });
+    const result = await createShipmentRecordsBulkAction(workCountry, { batchId: batch.id, count });
     setBulkAddBusy(false);
     if (!result.ok) {
       setError(result.error);
@@ -699,7 +728,7 @@ export function ShipmentBatchClient({
           <button
             type="button"
             className="shp-btn shp-btn--secondary shp-btn--sm"
-            onClick={() => router.push("/admin/shipments/locations")}
+            onClick={() => router.push(`${basePath}/locations`)}
             title="ניהול אזורי חלוקה והתאמות יישובים"
           >
             <MapPinned size={14} />
@@ -755,7 +784,7 @@ export function ShipmentBatchClient({
         <button
           type="button"
           className="shp-btn shp-btn--primary shp-btn--sm"
-          onClick={() => router.push("/admin/shipments/import")}
+          onClick={() => router.push(`${basePath}/import`)}
         >
           <Plus size={14} />
           הוסף משלוח
@@ -1000,10 +1029,7 @@ export function ShipmentBatchClient({
           <button
             type="button"
             className="shp-btn shp-btn--primary shp-btn--sm"
-            onClick={() => {
-              setQuickAddOpen(true);
-              setError(null);
-            }}
+            onClick={() => openQuickAddTop()}
           >
             <Plus size={14} />
             הוספת חבילה
@@ -1040,9 +1066,21 @@ export function ShipmentBatchClient({
       {quickAddOpen ? (
         <QuickAddPackagePanel
           batchLabel={batch.batchNumber}
+          sourceRecord={quickAddSource}
+          zones={zones}
+          couriers={couriers}
           busy={quickAddBusy}
-          onCancel={() => setQuickAddOpen(false)}
+          onCancel={closeQuickAdd}
           onSave={handleQuickAddPackage}
+        />
+      ) : null}
+
+      {quickAddSourcePickerOpen ? (
+        <QuickAddPackageSourcePicker
+          records={records}
+          batchLabel={batch.batchNumber}
+          onClose={() => setQuickAddSourcePickerOpen(false)}
+          onSelect={openQuickAddFromRow}
         />
       ) : null}
 
@@ -1064,6 +1102,7 @@ export function ShipmentBatchClient({
         onCreateCourier={quickAddCourier}
         onCollect={setPaymentRecord}
         onFixLocation={setFixLocationRecord}
+        onAddPackage={openQuickAddFromRow}
       />
 
       {/* Payment modal */}
@@ -1080,10 +1119,12 @@ export function ShipmentBatchClient({
           record={fixLocationRecord}
           zones={zones}
           onClose={() => setFixLocationRecord(null)}
-          onSaved={async () => {
-            await refresh();
-            setSuccess("היישוב עודכן");
+          onSaved={(payload) => {
+            setRecords((prev) => patchShipmentRecordsAfterLocationFix(prev, payload));
+            setFixLocationRecord(null);
+            setSuccess("מקום המסירה עודכן");
             clearMsg();
+            void refresh();
           }}
         />
       )}
@@ -1136,15 +1177,15 @@ export function ShipmentBatchClient({
                   })(),
                 };
                 setEditSaving(true);
-                void updateShipmentBatchAction(input).then(async (res) => {
+                void updateShipmentBatchAction(workCountry, input).then(async (res) => {
                   setEditSaving(false);
                   if (!res.ok) {
                     setError(res.error);
                     return;
                   }
-                  const refreshed = await getShipmentBatchAction(batch.id);
+                  const refreshed = await getShipmentBatchAction(workCountry, batch.id);
                   if (refreshed.ok) setBatch(refreshed.batch);
-                  const recRes = await listShipmentRecordsAction(batch.id);
+                  const recRes = await listShipmentRecordsAction(workCountry, batch.id);
                   if (recRes.ok) setRecords(recRes.records);
                   setEditOpen(false);
                   setSuccess("פרטי המשלוח עודכנו");

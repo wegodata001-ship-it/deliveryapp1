@@ -18,6 +18,7 @@ import {
   previewDeliveryFeeImportAction,
 } from "@/app/admin/shipments/actions";
 import { ShipmentDeliveryFeeImportDetailModal } from "@/components/admin/shipments/ShipmentDeliveryFeeImportDetailModal";
+import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
 
 type Props = {
   batchId: string;
@@ -86,6 +87,7 @@ function ImportReportTable({ rows }: { rows: DeliveryFeeImportResult["rows"] }) 
 }
 
 export function ShipmentDeliveryFeeImportModal({ batchId, shipmentLabel, onClose, onDone }: Props) {
+  const { workCountry } = useShipmentCountry();
   const inputRef = useRef<HTMLInputElement>(null);
   const [step, setStep] = useState<Step>("upload");
   const [busy, setBusy] = useState(false);
@@ -107,7 +109,7 @@ export function ShipmentDeliveryFeeImportModal({ batchId, shipmentLabel, onClose
       const wb = XLSX.read(buf, { type: "array" });
       const sheet = wb.Sheets[wb.SheetNames[0]];
       const grid = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: "" });
-      const res = await previewDeliveryFeeImportAction(batchId, grid);
+      const res = await previewDeliveryFeeImportAction(workCountry, batchId, grid);
       if (!res.ok) {
         setMsg(res.error);
         return;
@@ -130,7 +132,7 @@ export function ShipmentDeliveryFeeImportModal({ batchId, shipmentLabel, onClose
     setBusy(true);
     setMsg(null);
     try {
-      const res = await commitDeliveryFeeImportAction(batchId, preview);
+      const res = await commitDeliveryFeeImportAction(workCountry, batchId, preview);
       if (!res.ok) {
         setMsg(res.error);
         return;

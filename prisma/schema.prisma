@@ -1169,9 +1169,11 @@ enum LocationMatchStatus {
 
 /// אצוות / batch של משלוח (Header)
 model ShipmentBatch {
-  id                    String    @id @default(uuid())
-  /// מספר משלוח אוטומטי: SHP-001, SHP-002, ...
-  batchNumber           String    @unique
+  id                    String          @id @default(uuid())
+  /// סביבת משלוחים — TR / CN / AE (מערכות נפרדות)
+  countryCode           WorkCountryCode @default(TR)
+  /// מספר משלוח אוטומטי: SHP-001, SHP-002, ... (רצף נפרד לכל מדינה)
+  batchNumber           String
   /// מספר המשלוח כפי שהתקבל בקובץ הספק
   sourceShipmentNumber  String?
   containerNumber       String?
@@ -1190,6 +1192,8 @@ model ShipmentBatch {
   records       ShipmentRecord[]
   batchExpenses ShipmentBatchExpense[]
 
+  @@unique([countryCode, batchNumber])
+  @@index([countryCode])
   @@index([batchNumber])
   @@index([createdAt])
   @@map("ShipmentBatch")
@@ -1220,8 +1224,9 @@ model ShipmentBatchExpense {
 
 /// אזור חלוקה (DistributionArea) — ניתן להגדרה חופשית על ידי המנהל
 model ShipmentDeliveryZone {
-  id          String   @id @default(uuid())
-  name        String   @unique
+  id          String          @id @default(uuid())
+  countryCode WorkCountryCode @default(TR)
+  name        String
   /// קוד אופציונלי לתצוגה/ייצוא
   code        String?
   isActive    Boolean  @default(true)
@@ -1233,6 +1238,8 @@ model ShipmentDeliveryZone {
   records   ShipmentRecord[]
   locations DeliveryLocation[]
 
+  @@unique([countryCode, name])
+  @@index([countryCode])
   @@index([isActive])
   @@map("ShipmentDeliveryZone")
 }
@@ -1240,6 +1247,7 @@ model ShipmentDeliveryZone {
 /// יישוב מעודכן ואחיד — מקושר לאזור חלוקה
 model DeliveryLocation {
   id                 String                @id @default(uuid())
+  countryCode        WorkCountryCode       @default(TR)
   displayName        String
   /** שם יישוב בערבית להפקות לשליחים (deliveryLocationArabic) */
   displayNameAr      String?
@@ -1253,7 +1261,8 @@ model DeliveryLocation {
   records ShipmentRecord[]
   audits  DeliveryLocationAudit[]
 
-  @@unique([displayName])
+  @@unique([countryCode, displayName])
+  @@index([countryCode])
   @@index([distributionAreaId])
   @@index([isActive])
   @@map("DeliveryLocation")
@@ -1262,6 +1271,7 @@ model DeliveryLocation {
 /// כינוי / שם מקורי שמגיע מקבצי Excel ומצביע ליישוב מעודכן
 model DeliveryLocationAlias {
   id                     String           @id @default(uuid())
+  countryCode            WorkCountryCode  @default(TR)
   originalName           String
   normalizedOriginalName String
   deliveryLocationId     String
@@ -1271,7 +1281,8 @@ model DeliveryLocationAlias {
   updatedAt              DateTime         @updatedAt
   createdBy              String?
 
-  @@unique([normalizedOriginalName])
+  @@unique([countryCode, normalizedOriginalName])
+  @@index([countryCode])
   @@index([deliveryLocationId])
   @@index([isActive])
   @@map("DeliveryLocationAlias")
@@ -1317,8 +1328,9 @@ model ArabicDisplayNameCache {
 
 /// שליח קבוע במודול המשלוחים — מנוהל מתוך הגדרות המודול
 model ShipmentCourier {
-  id          String   @id @default(uuid())
-  name        String   @unique
+  id          String          @id @default(uuid())
+  countryCode WorkCountryCode @default(TR)
+  name        String
   isActive    Boolean  @default(true)
   sortOrder   Int      @default(0)
   createdById String?
@@ -1327,6 +1339,8 @@ model ShipmentCourier {
 
   records ShipmentRecord[]
 
+  @@unique([countryCode, name])
+  @@index([countryCode])
   @@index([isActive])
   @@map("ShipmentCourier")
 }
@@ -1437,9 +1451,10 @@ enum ShipmentCashDayStatus {
 }
 
 model ShipmentCashDay {
-  id         String                 @id @default(uuid())
-  /// יום העבודה (תאריך בלבד, ללא שעה) — מפתח ייחודי
-  dayDate    DateTime               @db.Date
+  id          String                 @id @default(uuid())
+  countryCode WorkCountryCode        @default(TR)
+  /// יום העבודה (תאריך בלבד, ללא שעה) — ייחודי לכל מדינה
+  dayDate     DateTime               @db.Date
   status     ShipmentCashDayStatus  @default(OPEN)
   notes      String?
   openedById String?
@@ -1452,7 +1467,8 @@ model ShipmentCashDay {
   expenses ShipmentCashExpense[]
   counts   ShipmentCashCount[]
 
-  @@unique([dayDate])
+  @@unique([countryCode, dayDate])
+  @@index([countryCode])
   @@index([status])
   @@index([dayDate])
   @@map("ShipmentCashDay")
@@ -1595,11 +1611,14 @@ model InventoryCountLine {
 
 /// רשומת משלוח בהזנה ידנית — ללא קישור חובה ללקוח / הזמנה / אצוות ייבוא
 model ManualShipment {
-  id                    String    @id @default(uuid())
+  id                    String          @id @default(uuid())
+  /// סביבת משלוחים — TR / CN / AE
+  countryCode           WorkCountryCode @default(TR)
   /// תאריך ראשי של הרשומה
   entryDate             DateTime?
   /// חודש לתצוגה/סינון (YYYY-MM)
   monthKey              String?
+  /// שדה תצוגה legacy (טקסט חופשי)
   country               String?
   shipmentNumber        String?
   containerNumber       String?
@@ -1643,6 +1662,7 @@ model ManualShipment {
 
   @@index([shipmentNumber])
   @@index([containerNumber])
+  @@index([countryCode])
   @@index([country])
   @@index([monthKey])
   @@index([status])

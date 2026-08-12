@@ -21,6 +21,7 @@ import type {
 } from "@/app/admin/shipments/control/types";
 import { SHIPMENT_STATUS_LABELS, SHIPMENT_PAYMENT_STATUS_LABELS, PAYMENT_METHOD_LABELS, PAYMENT_METHODS } from "@/app/admin/shipments/types";
 import type { ShipmentStatus } from "@/app/admin/shipments/types";
+import { getEffectiveDeliveryPlace } from "@/lib/shipment-delivery-place";
 import {
   ShipmentControlKpiModal,
   type KpiDrillKey,
@@ -36,6 +37,7 @@ import {
   exportShipmentReportExcel,
   exportShipmentReportPdf,
 } from "@/lib/shipment-report-export";
+import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
 
 type Tab = "overview" | "payments" | "couriers" | "zones" | "exceptions";
 
@@ -134,7 +136,10 @@ function RecordRow({ r }: { r: ShipmentControlRecord }) {
             <div className="sc-expand-panel">
               <div className="sc-expand-grid">
                 <div><span className="sc-expand-label">טלפון:</span> {r.customerPhone || "—"}{r.customerPhone2 ? ` / ${r.customerPhone2}` : ""}</div>
-                <div><span className="sc-expand-label">כתובת:</span> {r.address || "—"}, {r.updatedDeliveryLocation || r.city || ""}</div>
+                <div>
+                  <span className="sc-expand-label">כתובת:</span>{" "}
+                  {[r.address, getEffectiveDeliveryPlace(r)].filter(Boolean).join(", ") || "—"}
+                </div>
                 <div><span className="sc-expand-label">הערות:</span> {r.notes || "—"}</div>
                 <div><span className="sc-expand-label">קונטיינר:</span> {r.containerNumber || "—"}</div>
                 <div><span className="sc-expand-label">נוצר:</span> {formatDate(r.createdAt)}</div>
@@ -170,6 +175,7 @@ type Props = {
 };
 
 export function ShipmentControlClient({ initialData, generatedBy }: Props) {
+  const { workCountry } = useShipmentCountry();
   const [data, setData] = useState(initialData);
   const [activeTab, setActiveTab] = useState<Tab>("overview");
   const [isPending, startTransition] = useTransition();
@@ -195,6 +201,7 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
   const [expensesManageModalOpen, setExpensesManageModalOpen] = useState(false);
 
   const currentFilter = useCallback((): ShipmentControlFilter => ({
+    workCountry,
     year: year ? parseInt(year) : undefined,
     month: month ? parseInt(month) : undefined,
     dateFrom: dateFrom || undefined,
@@ -203,7 +210,7 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
     zoneId: zoneId || undefined,
     courierName: courierName || undefined,
     batchId: batchId || undefined,
-  }), [year, month, dateFrom, dateTo, customerCode, zoneId, courierName, batchId]);
+  }), [workCountry, year, month, dateFrom, dateTo, customerCode, zoneId, courierName, batchId]);
 
   const refresh = useCallback(
     (filter: ShipmentControlFilter) => {
@@ -222,7 +229,7 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
   function clearFilter() {
     setYear(""); setMonth(""); setDateFrom(""); setDateTo("");
     setCustomerCode(""); setZoneId(""); setCourierName(""); setBatchId("");
-    refresh({});
+    refresh({ workCountry });
   }
 
   function refreshCurrent() {
@@ -1351,12 +1358,29 @@ function CourierDetail({
     if (fStatus) result = result.filter((r) => r.status === fStatus);
     if (fPayStatus) result = result.filter((r) => r.paymentStatus === fPayStatus);
     if (fPayMethod) result = result.filter((r) => r.payments.some((p) => p.method === fPayMethod));
-    if (fCity) result = result.filter((r) => (r.updatedDeliveryLocation ?? r.city ?? "").toUpperCase() === fCity);
+    if (fCity) {
+      result = result.filter(
+        (r) => (getEffectiveDeliveryPlace(r) ?? "").toUpperCase() === fCity,
+      );
+    }
     if (fSearch.trim()) {
       const q = fSearch.trim().toLowerCase();
       result = result.filter((r) =>
-        [r.batchNumber, r.customerName, r.customerCode, r.customerPhone, r.address, r.city, r.updatedDeliveryLocation, r.zoneName, r.containerNumber, r.notes]
-          .filter(Boolean).join(" ").toLowerCase().includes(q),
+        [
+          r.batchNumber,
+          r.customerName,
+          r.customerCode,
+          r.customerPhone,
+          r.address,
+          getEffectiveDeliveryPlace(r),
+          r.zoneName,
+          r.containerNumber,
+          r.notes,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+          .includes(q),
       );
     }
     return result;

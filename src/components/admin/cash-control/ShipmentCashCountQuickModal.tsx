@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { X } from "lucide-react";
 import type { CashDailyDayDetailPayload } from "@/app/admin/cash-control/daily-types";
+import type { WorkCountryCode } from "@/lib/work-country";
 import { saveShipmentCashCountsAction } from "@/app/admin/shipments/cash-control/actions";
 import { CASH_CONTROL_METHODS } from "@/app/admin/shipments/types";
 import { SHIPPING_CASH_METHOD_LABELS } from "@/components/admin/cash-control/shipping-table-config";
@@ -13,6 +14,7 @@ export type ShipmentCashCountQuickModalProps = {
   dayDetail: CashDailyDayDetailPayload | null;
   dayLoading: boolean;
   editable: boolean;
+  workCountry: WorkCountryCode;
   onSaved: () => void | Promise<void>;
 };
 
@@ -38,6 +40,7 @@ export function ShipmentCashCountQuickModal({
   dayDetail,
   dayLoading,
   editable,
+  workCountry,
   onSaved,
 }: ShipmentCashCountQuickModalProps) {
   const [draft, setDraft] = useState<Record<string, string>>(emptyDraft);
@@ -80,7 +83,10 @@ export function ShipmentCashCountQuickModal({
         counts.push({ method: m.value, countedIls });
       }
 
-      const res = await saveShipmentCashCountsAction({ dayDate: dayDetail.dateYmd, counts });
+      const res = await saveShipmentCashCountsAction(workCountry, {
+        dayDate: dayDetail.dateYmd,
+        counts,
+      });
       if (!res.ok) {
         setErr(res.error);
         return;
@@ -90,7 +96,7 @@ export function ShipmentCashCountQuickModal({
     } finally {
       setSaving(false);
     }
-  }, [dayDetail, draft, editable, onClose, onSaved]);
+  }, [dayDetail, draft, editable, onClose, onSaved, workCountry]);
 
   if (!open) return null;
 

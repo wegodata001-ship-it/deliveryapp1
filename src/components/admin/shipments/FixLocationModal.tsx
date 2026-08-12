@@ -10,17 +10,31 @@ import {
   listDeliveryLocationsAction,
 } from "@/app/admin/shipments/location-actions";
 import { DistributionAreaPicker } from "@/components/admin/shipments/DistributionAreaPicker";
+import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
+import {
+  getEffectiveDeliveryPlaceFromRecord,
+  shipmentOriginalDeliveryPlace,
+} from "@/lib/shipment-delivery-place";
+
+type FixLocationSavedPayload = {
+  updatedRecordIds: string[];
+  displayName: string;
+  deliveryLocationId: string;
+  zoneId: string | null;
+  zoneName: string | null;
+};
 
 type Props = {
   record: ShipmentRecordDto;
   zones: ShipmentZoneDto[];
   onClose: () => void;
-  onSaved: (updatedRecordIds: string[]) => void;
+  onSaved: (payload: FixLocationSavedPayload) => void;
 };
 
 export function FixLocationModal({ record, zones, onClose, onSaved }: Props) {
-  const originalName =
-    record.originalDeliveryLocation || record.city || "—";
+  const { workCountry } = useShipmentCountry();
+  const originalName = shipmentOriginalDeliveryPlace(record) || "—";
+  const effectiveName = getEffectiveDeliveryPlaceFromRecord(record);
   const [locations, setLocations] = useState<DeliveryLocationDto[]>([]);
   const [search, setSearch] = useState("");
   const [locationId, setLocationId] = useState(record.deliveryLocationId ?? "");
@@ -32,10 +46,10 @@ export function FixLocationModal({ record, zones, onClose, onSaved }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    void listDeliveryLocationsAction({ includeInactive: false }).then((res) => {
+    void listDeliveryLocationsAction(workCountry, { includeInactive: false }).then((res) => {
       if (res.ok) setLocations(res.locations);
     });
-  }, []);
+  }, [workCountry]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -61,7 +75,7 @@ export function FixLocationModal({ record, zones, onClose, onSaved }: Props) {
         setBusy(false);
         return;
       }
-      const created = await createDeliveryLocationAction({
+      const created = await createDeliveryLocationAction(workCountry, {
         displayName: name,
         distributionAreaId: areaId || null,
       });
@@ -78,7 +92,7 @@ export function FixLocationModal({ record, zones, onClose, onSaved }: Props) {
       return;
     }
 
-    const res = await fixShipmentLocationAction({
+    const res = await fixShipmentLocationAction(workCountry, {
       recordId: record.id,
       deliveryLocationId,
       newDisplayName: displayName,
@@ -90,7 +104,24 @@ export function FixLocationModal({ record, zones, onClose, onSaved }: Props) {
       setError(res.error);
       return;
     }
-    onSaved(res.updatedRecordIds);
+    const savedDisplayName =
+      displayName ??
+      locations.find((l) => l.id === deliveryLocationId)?.displayName ??
+      newDisplayName.trim();
+    if (!savedDisplayName) {
+      setError("לא נמצא שם יישוב לשמירה");
+      return;
+    }
+
+    const zoneName = zones.find((z) => z.id === (areaId || null))?.name ?? null;
+
+    onSaved({
+      updatedRecordIds: res.updatedRecordIds,
+      displayName: savedDisplayName,
+      deliveryLocationId,
+      zoneId: areaId || null,
+      zoneName,
+    });
     onClose();
   }
 
@@ -113,9 +144,18 @@ export function FixLocationModal({ record, zones, onClose, onSaved }: Props) {
 
         <div className="shp-modal__body" style={{ display: "grid", gap: 12 }}>
           <div>
-            <div style={{ fontSize: 12, color: "#64748b" }}>שם מקורי שהתקבל</div>
-            <div style={{ fontWeight: 600 }}>{originalName}</div>
+            <div style={{ fontSize: 12, color: "#64748b" }}>מקום מקורי מהייבוא</div>
+            <div style={{ fontWeight: 600 }} dir="auto">
+              {originalName}
+            </div>
           </div>
+
+          {effectiveName && effectiveName !== originalName ? (
+            <div>
+              <div style={{ fontSize: 12, color: "#64748b" }}>מקום מסירה נוכחי</div>
+              <div style={{ fontWeight: 600 }}>{effectiveName}</div>
+            </div>
+          ) : null}
 
           <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <input
@@ -146,7 +186,7 @@ export function FixLocationModal({ record, zones, onClose, onSaved }: Props) {
                 />
               </div>
               <div className="shp-form-field">
-                <label>יישוב מעודכן</label>
+                <label>מקום מסירה</label>
                 <select
                   value={locationId}
                   onChange={(e) => {

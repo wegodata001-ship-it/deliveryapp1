@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
+import type { WorkCountryCode } from "@/lib/work-country";
 import { addShipmentCashExpenseAction } from "@/app/admin/shipments/cash-control/actions";
 import {
   SHIPMENT_CASH_EXPENSE_LABELS,
@@ -14,6 +15,7 @@ export type ShipmentCashExpenseQuickModalProps = {
   onClose: () => void;
   dayDate: string | null;
   canCreate: boolean;
+  workCountry: WorkCountryCode;
   onSaved: () => void | Promise<void>;
 };
 
@@ -22,6 +24,7 @@ export function ShipmentCashExpenseQuickModal({
   onClose,
   dayDate,
   canCreate,
+  workCountry,
   onSaved,
 }: ShipmentCashExpenseQuickModalProps) {
   const [category, setCategory] = useState<ShipmentCashExpenseCategory>("FUEL");
@@ -61,7 +64,7 @@ export function ShipmentCashExpenseQuickModal({
     }
     setSaving(true);
     setErr(null);
-    const res = await addShipmentCashExpenseAction({
+    const res = await addShipmentCashExpenseAction(workCountry, {
       dayDate,
       category,
       paymentMethod,

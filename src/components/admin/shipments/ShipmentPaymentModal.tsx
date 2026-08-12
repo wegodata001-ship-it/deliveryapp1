@@ -13,6 +13,7 @@ import {
   PAYMENT_METHODS,
   SHIPMENT_PAYMENT_STATUS_LABELS,
 } from "@/app/admin/shipments/types";
+import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
 
 type Props = {
   record: ShipmentRecordDto;
@@ -149,6 +150,7 @@ function PaymentHistory({ payments }: { payments: ShipmentPaymentLineDto[] }) {
 }
 
 export function ShipmentPaymentModal({ record, onClose, onSaved }: Props) {
+  const { workCountry } = useShipmentCountry();
   const [editing, setEditing] = useState(record.payments.length === 0);
   const [lines, setLines] = useState<DraftLine[]>(
     record.payments.length > 0
@@ -205,7 +207,7 @@ export function ShipmentPaymentModal({ record, onClose, onSaved }: Props) {
     setSaving(true);
     setError(null);
 
-    const res = await saveShipmentPaymentsAction({
+    const res = await saveShipmentPaymentsAction(workCountry, {
       shipmentRecordId: record.id,
       lines: validLines,
     });

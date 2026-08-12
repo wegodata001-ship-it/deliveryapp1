@@ -42,6 +42,7 @@ import {
 import type { ShipmentCashControlPayload } from "@/app/admin/shipments/cash-control/types";
 import { ShipmentCashControlClient } from "@/components/admin/shipments/ShipmentCashControlClient";
 import { LocationAliasImportModal } from "@/components/admin/shipments/LocationAliasImportModal";
+import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
 
 type DashboardView = "list" | "cash-control";
 
@@ -130,6 +131,7 @@ export function ShipmentListClient({
   viewerIsAdmin = false,
 }: Props) {
   const router = useRouter();
+  const { workCountry, basePath } = useShipmentCountry();
   const [view, setView] = useState<DashboardView>(initialView);
   const [batches, setBatches] = useState(initialBatches);
   const [zones] = useState(initialZones);
@@ -142,12 +144,12 @@ export function ShipmentListClient({
 
   function openCashControl() {
     setView("cash-control");
-    router.replace("/admin/shipments?view=cash-control", { scroll: false });
+    router.replace(`${basePath}/cash-control`, { scroll: false });
   }
 
   function openList() {
     setView("list");
-    router.replace("/admin/shipments", { scroll: false });
+    router.replace(basePath, { scroll: false });
   }
   const {
     values: filterValues,
@@ -233,7 +235,7 @@ export function ShipmentListClient({
       return;
     }
     setLoading(true);
-    const res = await deleteShipmentBatchesAction([...selected]);
+    const res = await deleteShipmentBatchesAction(workCountry, [...selected]);
     setLoading(false);
     if (!res.ok) {
       showMsg(res.error, true);
@@ -246,7 +248,7 @@ export function ShipmentListClient({
 
   async function refresh() {
     setLoading(true);
-    const res = await listShipmentBatchesAction();
+    const res = await listShipmentBatchesAction(workCountry);
     setLoading(false);
     if (res.ok) setBatches(res.batches);
   }
@@ -288,7 +290,7 @@ export function ShipmentListClient({
       })(),
     };
     setEditSaving(true);
-    const res = await updateShipmentBatchAction(input);
+    const res = await updateShipmentBatchAction(workCountry, input);
     setEditSaving(false);
     if (!res.ok) {
       showMsg(res.error, true);
@@ -302,7 +304,7 @@ export function ShipmentListClient({
   async function handleCreateCourier() {
     if (!newCourierName.trim()) return;
     setCourierLoading(true);
-    const res = await createCourierAction(newCourierName.trim());
+    const res = await createCourierAction(workCountry, newCourierName.trim());
     setCourierLoading(false);
     if (res.ok) {
       setCouriers((previous) => [...previous.filter((item) => item.id !== res.courier.id), res.courier]);
@@ -314,7 +316,7 @@ export function ShipmentListClient({
   async function handleUpdateCourier() {
     if (!editCourierId || !editCourierName.trim()) return;
     setCourierLoading(true);
-    const res = await updateCourierAction(editCourierId, editCourierName.trim());
+    const res = await updateCourierAction(workCountry, editCourierId, editCourierName.trim());
     setCourierLoading(false);
     if (res.ok) {
       setCouriers((previous) =>
@@ -330,7 +332,7 @@ export function ShipmentListClient({
 
   async function handleToggleCourier(courier: ShipmentCourierDto) {
     setCourierLoading(true);
-    const res = await setCourierActiveAction(courier.id, !courier.isActive);
+    const res = await setCourierActiveAction(workCountry, courier.id, !courier.isActive);
     setCourierLoading(false);
     if (res.ok) {
       setCouriers((previous) =>
@@ -345,7 +347,7 @@ export function ShipmentListClient({
   async function handleDeleteCourier(id: string) {
     if (!confirm("למחוק את השליח? השיוך יוסר מהמשלוחים הקיימים.")) return;
     setCourierLoading(true);
-    const res = await deleteCourierAction(id);
+    const res = await deleteCourierAction(workCountry, id);
     setCourierLoading(false);
     if (res.ok) {
       setCouriers((previous) => previous.filter((courier) => courier.id !== id));
@@ -374,7 +376,7 @@ export function ShipmentListClient({
           <button
             type="button"
             className="shp-btn shp-btn--primary shp-btn--sm"
-            onClick={() => router.push("/admin/shipments/import")}
+            onClick={() => router.push(`${basePath}/import`)}
           >
             <Plus size={14} />
             ייבוא משלוחים
@@ -390,7 +392,7 @@ export function ShipmentListClient({
           <button
             type="button"
             className="shp-btn shp-btn--secondary shp-btn--sm"
-            onClick={() => router.push("/admin/shipments/locations")}
+            onClick={() => router.push(`${basePath}/locations`)}
           >
             <MapPin size={14} />
             יישובים ואזורי חלוקה
@@ -540,7 +542,7 @@ export function ShipmentListClient({
           <div className="shp-empty__title">אין משלוחים</div>
           <div className="shp-empty__sub">צור משלוח חדש ומלא את פרטיו, ואז הוסף חבילות</div>
           <div style={{ marginTop: 16 }}>
-            <button className="shp-btn shp-btn--primary" onClick={() => router.push("/admin/shipments/import")}>
+            <button className="shp-btn shp-btn--primary" onClick={() => router.push(`${basePath}/import`)}>
               <Plus size={15} /> יצירת משלוח
             </button>
           </div>
@@ -554,8 +556,8 @@ export function ShipmentListClient({
             values={filterValues}
             onChange={setField}
             onClear={clearFilters}
-            onPdf={() => router.push("/admin/shipments/control")}
-            onExcel={() => router.push("/admin/shipments/control")}
+            onPdf={() => router.push(`${basePath}/control`)}
+            onExcel={() => router.push(`${basePath}/control`)}
             resultCount={filteredBatches.length}
             resultTotal={batches.length}
             trailingActions={
@@ -563,7 +565,7 @@ export function ShipmentListClient({
                 <button
                   type="button"
                   className="atf-btn atf-btn--primary"
-                  onClick={() => router.push("/admin/shipments/import")}
+                  onClick={() => router.push(`${basePath}/import`)}
                 >
                   <Plus size={14} />
                   הוסף משלוח
@@ -649,7 +651,7 @@ export function ShipmentListClient({
                           <button
                             type="button"
                             className="shp-link-btn"
-                            onClick={() => router.push(`/admin/shipments/${b.id}`)}
+                            onClick={() => router.push(`${basePath}/${b.id}`)}
                             title={containerId || b.batchNumber}
                           >
                             <strong className="shp-trunc">{containerId || b.batchNumber}</strong>
@@ -678,7 +680,7 @@ export function ShipmentListClient({
                               type="button"
                               className="shp-btn shp-btn--sm shp-btn--primary"
                               title="פתח חבילות"
-                              onClick={() => router.push(`/admin/shipments/${b.id}`)}
+                              onClick={() => router.push(`${basePath}/${b.id}`)}
                             >
                               פתח
                               <ChevronLeft size={14} />

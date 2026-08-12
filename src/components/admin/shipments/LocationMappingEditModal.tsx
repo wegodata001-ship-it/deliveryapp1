@@ -11,6 +11,7 @@ import {
 } from "@/app/admin/shipments/location-actions";
 import { distributionAreaValidationError } from "@/lib/distribution-area-name";
 import { DistributionAreaPicker } from "@/components/admin/shipments/DistributionAreaPicker";
+import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
 
 type Props = {
   mode: "edit" | "create";
@@ -31,6 +32,7 @@ export function LocationMappingEditModal({
   onSaved,
   onZonesChange,
 }: Props) {
+  const { workCountry } = useShipmentCountry();
   const [originalName, setOriginalName] = useState(mapping?.originalName ?? "");
   const [displayName, setDisplayName] = useState(mapping?.displayName ?? "");
   const [locationId, setLocationId] = useState<string | null>(mapping?.locationId ?? null);
@@ -86,7 +88,7 @@ export function LocationMappingEditModal({
     }
     setBusy(true);
     setError(null);
-    const res = await createZoneForLocationsAction(name);
+    const res = await createZoneForLocationsAction(workCountry, name);
     setBusy(false);
     if (!res.ok) {
       setError(res.error);
@@ -118,7 +120,7 @@ export function LocationMappingEditModal({
         setBusy(false);
         return;
       }
-      const res = await createAliasMappingAction({
+      const res = await createAliasMappingAction(workCountry, {
         originalName: original,
         displayName: updated,
         distributionAreaId: areaId || null,
@@ -139,7 +141,7 @@ export function LocationMappingEditModal({
       return;
     }
 
-    const res = await updateAliasMappingAction({
+    const res = await updateAliasMappingAction(workCountry, {
       aliasId: mapping.aliasId,
       displayName: updated,
       deliveryLocationId: locationId,

@@ -28,6 +28,8 @@ import {
 import { getAhWeekByDate } from "@/lib/weeks/ah-week";
 import { LocationImportMappingModal } from "@/components/admin/shipments/LocationImportMappingModal";
 import { useShipmentImportLocationFlow } from "@/components/admin/shipments/useShipmentImportLocationFlow";
+import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
+import { getEffectiveDeliveryPlace } from "@/lib/shipment-delivery-place";
 
 type BatchHeaderForm = {
   sourceShipmentNumber: string;
@@ -99,6 +101,7 @@ type Props = {
 
 export function ShipmentImportClient({ initialZones, initialCouriers }: Props) {
   const router = useRouter();
+  const { workCountry, basePath } = useShipmentCountry();
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [preview, setPreview] = useState<ExcelShipmentPreviewRow[]>([]);
@@ -117,7 +120,7 @@ export function ShipmentImportClient({ initialZones, initialCouriers }: Props) {
     applyMappings,
     keepOriginalMappings,
     resetMappingFlow,
-  } = useShipmentImportLocationFlow();
+  } = useShipmentImportLocationFlow(workCountry);
 
   const activeZones = useMemo(() => initialZones.filter((z) => z.isActive), [initialZones]);
   const activeCouriers = useMemo(
@@ -265,7 +268,7 @@ export function ShipmentImportClient({ initialZones, initialCouriers }: Props) {
 
     setSaving(mode);
     setError(null);
-    const res = await createShipmentBatchAction(buildInput(mode === "import"));
+    const res = await createShipmentBatchAction(workCountry, buildInput(mode === "import"));
     if (!res.ok) {
       setError(res.error);
       setSaving("idle");
@@ -281,7 +284,7 @@ export function ShipmentImportClient({ initialZones, initialCouriers }: Props) {
         /* ignore */
       }
     }
-    router.push(`/admin/shipments/${res.batchId}`);
+    router.push(`${basePath}/${res.batchId}`);
   }
 
   return (
@@ -561,8 +564,7 @@ export function ShipmentImportClient({ initialZones, initialCouriers }: Props) {
                   <th>לקוח</th>
                   <th>טלפון</th>
                   <th>כתובת</th>
-                  <th>מקום מקורי (Excel)</th>
-                  <th>מקום לייבוא</th>
+                  <th>מקום מסירה</th>
                   <th>קרטונים</th>
                   <th>פרטי קרטונים</th>
                   <th>משקל</th>
@@ -587,16 +589,7 @@ export function ShipmentImportClient({ initialZones, initialCouriers }: Props) {
                     <td>{row.customerName || missingText("customerName")}</td>
                     <td>{row.customerPhone || missingText("customerPhone")}{row.customerPhone2 ? ` / ${row.customerPhone2}` : ""}</td>
                     <td>{row.address || missingText("address")}</td>
-                    <td>{row.originalDeliveryPlace || row.city || missingText("city")}</td>
-                    <td>
-                      {row.resolvedDeliveryPlace && row.resolvedDeliveryPlace !== row.originalDeliveryPlace ? (
-                        <span title={`מקור: ${row.originalDeliveryPlace ?? ""}`}>
-                          {row.city}
-                        </span>
-                      ) : (
-                        row.city || missingText("city")
-                      )}
-                    </td>
+                    <td>{getEffectiveDeliveryPlace(row) || missingText("city")}</td>
                     <td>{row.boxes ?? missingText("boxes")}</td>
                     <td>{row.cartonDetails || missingText("cartonDetails")}</td>
                     <td>{row.weight != null ? `${row.weight}` : "—"}</td>
@@ -633,7 +626,7 @@ export function ShipmentImportClient({ initialZones, initialCouriers }: Props) {
         <button
           type="button"
           className="shp-btn shp-btn--secondary"
-          onClick={() => router.push("/admin/shipments")}
+          onClick={() => router.push(basePath)}
           disabled={isSaving}
         >
           ביטול

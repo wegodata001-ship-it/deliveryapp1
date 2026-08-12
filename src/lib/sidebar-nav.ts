@@ -121,23 +121,24 @@ export const SIDEBAR_SECTIONS: NavSectionDef[] = [
   {
     title: "משלוחים",
     items: [
-      { href: "/admin/shipments", label: "רשימת משלוחים", icon: "shipments", anyOf: ["manage_shipments", "view_shipments"] },
-      { href: "/admin/shipments/import", label: "ייבוא משלוח", icon: "import", anyOf: ["manage_shipments"] },
+      { href: "/admin/shipments", label: "מערכת משלוחים", icon: "shipments", anyOf: ["manage_shipments", "view_shipments"] },
+      { href: "/admin/shipments/turkey", label: "רשימת משלוחים", icon: "shipments", anyOf: ["manage_shipments", "view_shipments"] },
+      { href: "/admin/shipments/turkey/import", label: "ייבוא משלוח", icon: "import", anyOf: ["manage_shipments"] },
       {
-        href: "/admin/shipments/locations",
+        href: "/admin/shipments/turkey/locations",
         label: "ניהול יישובים ואזורי חלוקה",
         icon: "receipt",
         anyOf: ["manage_shipments", "view_shipments"],
       },
-      { href: "/admin/shipments/control", label: "בקרת משלוחים", icon: "receipt", anyOf: ["manage_shipments", "view_shipments"] },
+      { href: "/admin/shipments/turkey/control", label: "בקרת משלוחים", icon: "receipt", anyOf: ["manage_shipments", "view_shipments"] },
       {
-        href: "/admin/shipments/cash-control",
+        href: "/admin/shipments/turkey/cash-control",
         label: "בקרת קופה – משלוחים",
         icon: "cashbox",
         anyOf: ["manage_shipments", "view_shipments"],
       },
       {
-        href: "/admin/shipments/manual",
+        href: "/admin/shipments/turkey/manual",
         label: "משלוחים – הזנה ידנית",
         icon: "orderIn",
         anyOf: ["manage_shipments", "view_shipments"],

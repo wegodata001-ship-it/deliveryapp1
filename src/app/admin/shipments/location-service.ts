@@ -3,6 +3,13 @@ import { randomUUID } from "crypto";
 import { aliasLookupKey, normalizeLocationName } from "@/lib/delivery-location-normalize";
 import { invalidateDeliveryLocationAliasCache } from "@/lib/delivery-location-match";
 import {
+  deliveryLocationWhere,
+  shipmentBatchWhere,
+  shipmentRecordWhere,
+  shipmentZoneWhere,
+} from "@/lib/shipment-country-scope";
+import type { WorkCountryCode } from "@/lib/work-country";
+import {
   distributionAreaLookupKey,
   distributionAreaValidationError,
   isBlockedDistributionAreaHeader,
@@ -329,7 +336,9 @@ function mapLocation(loc: {
   };
 }
 
-export async function listDeliveryLocations(opts?: {
+export async function listDeliveryLocations(
+  workCountry: WorkCountryCode,
+  opts?: {
   search?: string;
   areaId?: string;
   includeInactive?: boolean;
@@ -337,6 +346,7 @@ export async function listDeliveryLocations(opts?: {
   const search = opts?.search?.trim();
   const locations = await prisma.deliveryLocation.findMany({
     where: {
+      ...deliveryLocationWhere(workCountry),
       ...(opts?.includeInactive ? {} : { isActive: true }),
       ...(opts?.areaId ? { distributionAreaId: opts.areaId } : {}),
       ...(search
@@ -370,11 +380,14 @@ export async function listDeliveryLocations(opts?: {
 }
 
 /** מציאת יישוב קיים לפי שם מדויק או מפתח מנורמל — למניעת כפילויות בטבלת האב */
-async function findExistingDeliveryLocationId(displayName: string): Promise<string | null> {
+async function findExistingDeliveryLocationId(
+  displayName: string,
+  workCountry: WorkCountryCode,
+): Promise<string | null> {
   const name = displayName.trim();
   if (!name) return null;
-  const exact = await prisma.deliveryLocation.findUnique({
-    where: { displayName: name },
+  const exact = await prisma.deliveryLocation.findFirst({
+    where: { displayName: name, ...deliveryLocationWhere(workCountry) },
     select: { id: true },
   });
   if (exact) return exact.id;
@@ -382,6 +395,7 @@ async function findExistingDeliveryLocationId(displayName: string): Promise<stri
   const key = aliasLookupKey(name);
   if (!key) return null;
   const all = await prisma.deliveryLocation.findMany({
+    where: deliveryLocationWhere(workCountry),
     select: { id: true, displayName: true },
     take: 5000,
   });
@@ -389,7 +403,9 @@ async function findExistingDeliveryLocationId(displayName: string): Promise<stri
   return hit?.id ?? null;
 }
 
-export async function createDeliveryLocation(input: {
+export async function createDeliveryLocation(
+  workCountry: WorkCountryCode,
+  input: {
   displayName: string;
   distributionAreaId?: string | null;
 }): Promise<DeliveryLocationDto> {
@@ -399,13 +415,13 @@ export async function createDeliveryLocation(input: {
     throw new Error("שם יישוב לא תקין");
   }
   if (input.distributionAreaId) {
-    const area = await prisma.shipmentDeliveryZone.findUnique({
-      where: { id: input.distributionAreaId },
+    const area = await prisma.shipmentDeliveryZone.findFirst({
+      where: { id: input.distributionAreaId, ...shipmentZoneWhere(workCountry) },
       select: { id: true, isActive: true },
     });
     if (!area) throw new Error("אזור החלוקה לא נמצא");
   }
-  const existingId = await findExistingDeliveryLocationId(displayName);
+  const existingId = await findExistingDeliveryLocationId(displayName, workCountry);
   if (existingId) {
     const updated = await prisma.deliveryLocation.update({
       where: { id: existingId },
@@ -425,6 +441,7 @@ export async function createDeliveryLocation(input: {
   }
   const created = await prisma.deliveryLocation.create({
     data: {
+      countryCode: workCountry,
       displayName,
       distributionAreaId: input.distributionAreaId ?? null,
     },
@@ -486,13 +503,16 @@ export type AliasMappingRow = {
 };
 
 /** טבלת התאמות שטוחה — כינוי → יישוב → אזור */
-export async function listAliasMappingRows(opts?: {
+export async function listAliasMappingRows(
+  workCountry: WorkCountryCode,
+  opts?: {
   search?: string;
   includeInactive?: boolean;
 }): Promise<AliasMappingRow[]> {
   const q = opts?.search?.trim();
   const aliases = await prisma.deliveryLocationAlias.findMany({
     where: {
+      countryCode: workCountry,
       ...(opts?.includeInactive ? {} : { isActive: true }),
       ...(q
         ? {
@@ -538,13 +558,16 @@ export async function listAliasMappingRows(opts?: {
  * ניקוי בטוח אחרי ייבוא שגוי:
  * - מוחק רק שמות כותרת/שגויים (לא לפי מילות כיוון)
  */
-export async function cleanupMisimportedAreasAndLocations(): Promise<{
+export async function cleanupMisimportedAreasAndLocations(
+  workCountry: WorkCountryCode,
+): Promise<{
   deletedFakeZones: number;
   deletedZoneNamedLocations: number;
   keptRealZones: number;
   keptLocalities: number;
 }> {
   const zones = await prisma.shipmentDeliveryZone.findMany({
+    where: shipmentZoneWhere(workCountry),
     select: { id: true, name: true },
   });
   const fakeZoneIds = zones
@@ -554,17 +577,20 @@ export async function cleanupMisimportedAreasAndLocations(): Promise<{
 
   if (fakeZoneIds.length > 0) {
     await prisma.shipmentRecord.updateMany({
-      where: { zoneId: { in: fakeZoneIds } },
+      where: { zoneId: { in: fakeZoneIds }, ...shipmentRecordWhere(workCountry) },
       data: { zoneId: null },
     });
     await prisma.deliveryLocation.updateMany({
-      where: { distributionAreaId: { in: fakeZoneIds } },
+      where: { distributionAreaId: { in: fakeZoneIds }, ...deliveryLocationWhere(workCountry) },
       data: { distributionAreaId: null },
     });
-    await prisma.shipmentDeliveryZone.deleteMany({ where: { id: { in: fakeZoneIds } } });
+    await prisma.shipmentDeliveryZone.deleteMany({
+      where: { id: { in: fakeZoneIds }, ...shipmentZoneWhere(workCountry) },
+    });
   }
 
   const locations = await prisma.deliveryLocation.findMany({
+    where: deliveryLocationWhere(workCountry),
     select: { id: true, displayName: true },
   });
   const zoneNamedLocIds = locations
@@ -573,16 +599,21 @@ export async function cleanupMisimportedAreasAndLocations(): Promise<{
 
   if (zoneNamedLocIds.length > 0) {
     await prisma.shipmentRecord.updateMany({
-      where: { deliveryLocationId: { in: zoneNamedLocIds } },
+      where: {
+        deliveryLocationId: { in: zoneNamedLocIds },
+        ...shipmentRecordWhere(workCountry),
+      },
       data: { deliveryLocationId: null, locationMatchStatus: "UNMATCHED" },
     });
     await prisma.deliveryLocationAlias.deleteMany({
-      where: { deliveryLocationId: { in: zoneNamedLocIds } },
+      where: { deliveryLocationId: { in: zoneNamedLocIds }, countryCode: workCountry },
     });
     await prisma.deliveryLocationAudit.deleteMany({
       where: { deliveryLocationId: { in: zoneNamedLocIds } },
     });
-    await prisma.deliveryLocation.deleteMany({ where: { id: { in: zoneNamedLocIds } } });
+    await prisma.deliveryLocation.deleteMany({
+      where: { id: { in: zoneNamedLocIds }, ...deliveryLocationWhere(workCountry) },
+    });
   }
 
   invalidateDeliveryLocationAliasCache();
@@ -630,6 +661,7 @@ async function loadAliasMappingRow(aliasId: string): Promise<AliasMappingRow | n
  * מקום מסירה מקורי נשאר ללא שינוי.
  */
 export async function updateAliasMapping(input: {
+  workCountry: WorkCountryCode;
   aliasId: string;
   /** מקום מסירה מעודכן — בחירה קיימת או שם חדש */
   displayName: string;
@@ -662,7 +694,7 @@ export async function updateAliasMapping(input: {
       isActive: true,
     });
   } else {
-    const existingId = await findExistingDeliveryLocationId(displayName);
+    const existingId = await findExistingDeliveryLocationId(displayName, input.workCountry);
     if (existingId) {
       locationId = existingId;
       await updateDeliveryLocation({
@@ -671,7 +703,7 @@ export async function updateAliasMapping(input: {
         isActive: true,
       });
     } else {
-      const created = await createDeliveryLocation({
+      const created = await createDeliveryLocation(input.workCountry, {
         displayName,
         distributionAreaId: input.distributionAreaId ?? null,
       });
@@ -691,6 +723,7 @@ export async function updateAliasMapping(input: {
 
 /** יצירת התאמה חדשה בטבלת האב (מקורי → מעודכן + אזור) */
 export async function createAliasMapping(input: {
+  workCountry: WorkCountryCode;
   originalName: string;
   displayName: string;
   distributionAreaId?: string | null;
@@ -703,7 +736,7 @@ export async function createAliasMapping(input: {
     throw new Error("מקום מסירה מעודכן לא תקין");
   }
 
-  const location = await createDeliveryLocation({
+  const location = await createDeliveryLocation(input.workCountry, {
     displayName,
     distributionAreaId: input.distributionAreaId ?? null,
   });
@@ -727,8 +760,20 @@ export async function upsertLocationAlias(input: {
   const key = aliasLookupKey(originalName) || normalized;
   if (!key) throw new Error("שם מקורי לא תקין");
 
+  const location = await prisma.deliveryLocation.findUnique({
+    where: { id: input.deliveryLocationId },
+    select: { countryCode: true },
+  });
+  if (!location) throw new Error("יישוב לא נמצא");
+  const workCountry = location.countryCode;
+
   const existing = await prisma.deliveryLocationAlias.findUnique({
-    where: { normalizedOriginalName: key },
+    where: {
+      countryCode_normalizedOriginalName: {
+        countryCode: workCountry,
+        normalizedOriginalName: key,
+      },
+    },
   });
   if (existing) {
     await prisma.deliveryLocationAlias.update({
@@ -745,6 +790,7 @@ export async function upsertLocationAlias(input: {
   }
   const created = await prisma.deliveryLocationAlias.create({
     data: {
+      countryCode: workCountry,
       originalName,
       normalizedOriginalName: key,
       deliveryLocationId: input.deliveryLocationId,
@@ -756,9 +802,11 @@ export async function upsertLocationAlias(input: {
 }
 
 /** עדכון מפתחות מנורמלים אחרי שינוי אלגוריתם הנרמול */
-export async function renormalizeDeliveryLocationAliases(): Promise<number> {
+export async function renormalizeDeliveryLocationAliases(
+  workCountry: WorkCountryCode,
+): Promise<number> {
   const aliases = await prisma.deliveryLocationAlias.findMany({
-    where: { isActive: true },
+    where: { isActive: true, countryCode: workCountry },
     select: {
       id: true,
       originalName: true,
@@ -887,7 +935,7 @@ export async function updateLocationAliasOriginalName(input: {
 }): Promise<AliasMappingRow> {
   const alias = await prisma.deliveryLocationAlias.findUnique({
     where: { id: input.aliasId },
-    select: { id: true },
+    select: { id: true, countryCode: true },
   });
   if (!alias) throw new Error("הכינוי לא נמצא");
   const originalName = input.originalName.trim();
@@ -895,7 +943,12 @@ export async function updateLocationAliasOriginalName(input: {
   const key = aliasLookupKey(originalName);
   if (!key) throw new Error("שם כינוי לא תקין");
   const conflict = await prisma.deliveryLocationAlias.findUnique({
-    where: { normalizedOriginalName: key },
+    where: {
+      countryCode_normalizedOriginalName: {
+        countryCode: alias.countryCode,
+        normalizedOriginalName: key,
+      },
+    },
     select: { id: true },
   });
   if (conflict && conflict.id !== alias.id) {
@@ -1337,12 +1390,13 @@ async function chunked<T>(items: T[], size: number, fn: (chunk: T[]) => Promise<
  * עם DB מרוחק (~400ms לשאילתה) לולאה של 500 upserts הייתה נתקעת בדפדפן.
  */
 export async function commitLocationAliasImport(
+  workCountry: WorkCountryCode,
   grid: unknown[][],
   createdById: string,
   options?: { fileName?: string | null },
 ): Promise<LocationAliasImportResult> {
   const preview = parseLocationAliasImportRows(grid);
-  return commitLocationAliasImportRows(preview.rows, createdById, preview.totalRows, options);
+  return commitLocationAliasImportRows(workCountry, preview.rows, createdById, preview.totalRows, options);
 }
 
 function pushLocationAliasImportFailure(
@@ -1377,6 +1431,7 @@ function pushLocationAliasImportFailure(
 }
 
 export async function commitLocationAliasImportRows(
+  workCountry: WorkCountryCode,
   rows: LocationAliasImportRow[],
   createdById: string,
   totalRowsHint?: number,
@@ -1687,7 +1742,7 @@ export async function commitLocationAliasImportRows(
   invalidateDeliveryLocationAliasCache();
 
   try {
-    await renormalizeDeliveryLocationAliases();
+    await renormalizeDeliveryLocationAliases(workCountry);
   } catch (e) {
     console.error("[locations] renormalize after import failed", e);
   }
@@ -1832,6 +1887,7 @@ export async function backfillShipmentDistributionZones(options?: {
 }
 
 export async function fixShipmentLocation(input: {
+  workCountry: WorkCountryCode;
   recordId: string;
   deliveryLocationId?: string | null;
   newDisplayName?: string | null;
@@ -1839,8 +1895,8 @@ export async function fixShipmentLocation(input: {
   saveAsPermanentAlias?: boolean;
   changedById: string;
 }): Promise<{ updatedRecordIds: string[] }> {
-  const record = await prisma.shipmentRecord.findUnique({
-    where: { id: input.recordId },
+  const record = await prisma.shipmentRecord.findFirst({
+    where: { id: input.recordId, ...shipmentRecordWhere(input.workCountry) },
     select: {
       id: true,
       city: true,
@@ -1856,7 +1912,7 @@ export async function fixShipmentLocation(input: {
 
   let locationId = input.deliveryLocationId ?? null;
   if (!locationId && input.newDisplayName?.trim()) {
-    const created = await createDeliveryLocation({
+    const created = await createDeliveryLocation(input.workCountry, {
       displayName: input.newDisplayName.trim(),
       distributionAreaId: input.distributionAreaId ?? null,
     });

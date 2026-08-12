@@ -4,6 +4,7 @@
  */
 
 import type { PaymentBucketKey } from "@/lib/payment-breakdown-shared";
+import { paymentMethodColumnClass } from "@/lib/payment-method-ui";
 
 export type CashControlCurrency = "USD" | "ILS";
 
@@ -166,11 +167,7 @@ export function receiptTableColumns(): CashControlChannel[] {
 }
 
 export function channelGroupClass(channel: CashControlChannel): string {
-  if (channel.startsWith("CASH_")) return channel.endsWith("_USD") ? "cc-col--usd" : "cc-col--ils";
-  if (channel.startsWith("BANK_TRANSFER")) return "cc-col--transfer";
-  if (channel.startsWith("CREDIT_CARD")) return "cc-col--credit";
-  if (channel.startsWith("CHECK")) return "cc-col--check";
-  return "cc-col--other";
+  return paymentMethodColumnClass(channel);
 }
 
 export function channelColLabels(): Record<CashControlChannel, string> {

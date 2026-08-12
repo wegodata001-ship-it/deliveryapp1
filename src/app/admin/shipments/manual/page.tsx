@@ -1,13 +1,7 @@
-import { requireRoutePermission } from "@/lib/route-access";
-import { listManualShipments } from "@/app/admin/shipments/manual/service";
-import { ShipmentManualEntryClient } from "@/components/admin/shipments/ShipmentManualEntryClient";
-import "@/app/admin/shipments/shipments.css";
+import { redirect } from "next/navigation";
+import { DEFAULT_WORK_COUNTRY } from "@/lib/work-country";
+import { shipmentCountrySlugFromWorkCountry } from "@/lib/shipment-country-scope.shared";
 
-export const dynamic = "force-dynamic";
-
-export default async function ManualShipmentsPage() {
-  await requireRoutePermission(["manage_shipments", "view_shipments"]);
-  const rows = await listManualShipments();
-
-  return <ShipmentManualEntryClient initialRows={rows} />;
+export default function LegacyManualShipmentsRedirect() {
+  redirect(`/admin/shipments/${shipmentCountrySlugFromWorkCountry(DEFAULT_WORK_COUNTRY)}/manual`);
 }

@@ -3,8 +3,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { ShipmentPaymentDetails } from "@/app/admin/shipments/types";
+import type { WorkCountryCode } from "@/lib/work-country";
 
 export type ShipmentControlFilter = {
+  workCountry: WorkCountryCode;
   year?: number;
   month?: number;
   dateFrom?: string; // ISO date string

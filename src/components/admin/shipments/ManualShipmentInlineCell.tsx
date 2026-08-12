@@ -23,6 +23,18 @@ type Props = {
   bindRef: (el: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null) => void;
 };
 
+function inputTypeForCol(col: ManualColumnDef): {
+  type: string;
+  inputMode?: "decimal" | "numeric" | "text";
+} {
+  if (col.input === "number") {
+    return { type: "text", inputMode: "decimal" };
+  }
+  if (col.input === "date") return { type: "date" };
+  if (col.input === "month") return { type: "month" };
+  return { type: "text" };
+}
+
 export function ManualShipmentInlineCell({
   col,
   value,
@@ -50,7 +62,7 @@ export function ManualShipmentInlineCell({
   useEffect(() => {
     if (!isEditing) return;
     const el = inputRef.current;
-    if (!el) return;
+    if (!el || document.activeElement === el) return;
     el.focus();
     if ("select" in el && typeof el.select === "function" && el.tagName !== "SELECT") {
       try {
@@ -177,23 +189,14 @@ export function ManualShipmentInlineCell({
         />
       );
     }
-    if (col.input === "date" || col.input === "month") {
-      return (
-        <input
-          ref={setRef}
-          className="msh-excel-input"
-          type={col.input}
-          value={draft}
-          onKeyDown={handleKeyDown}
-          onChange={(e) => handleCommit(e.target.value)}
-        />
-      );
-    }
+
+    const { type, inputMode } = inputTypeForCol(col);
     return (
       <input
         ref={setRef}
         className="msh-excel-input"
-        type={col.input === "number" ? "number" : "text"}
+        type={type}
+        inputMode={inputMode}
         step={col.step}
         value={draft}
         list={listId}

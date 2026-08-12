@@ -89,7 +89,11 @@ export async function updateCashExpenseAction(input: {
 }): Promise<{ ok: boolean; error?: string }> {
   const me = await requireAuth();
   if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS)) return { ok: false, error: "אין הרשאה" };
-  const res = await updateCashExpense(input);
+  const res = await updateCashExpense({
+    ...input,
+    updatedById: me.id,
+    updatedByName: me.fullName ?? me.email ?? null,
+  });
   if (res.ok) revalidateCashExpensePaths();
   return res;
 }

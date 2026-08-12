@@ -20,7 +20,9 @@ import {
   updateShipmentRecordAction,
   updateShipmentStatusAction,
 } from "@/app/admin/shipments/actions";
+import { getEffectiveDeliveryPlace } from "@/lib/shipment-delivery-place";
 import { ShipmentPaymentModal } from "@/components/admin/shipments/ShipmentPaymentModal";
+import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
 
 export type KpiDrillKey =
   | "all"
@@ -148,6 +150,7 @@ export function ShipmentControlKpiModal({
   onClose,
   onChanged,
 }: Props) {
+  const { workCountry } = useShipmentCountry();
   const [search, setSearch] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -173,8 +176,7 @@ export function ShipmentControlKpiModal({
         r.customerPhone,
         r.customerPhone2,
         r.address,
-        r.city,
-        r.updatedDeliveryLocation,
+        getEffectiveDeliveryPlace(r),
         r.zoneName,
         r.courierName,
         r.containerNumber,
@@ -214,7 +216,7 @@ export function ShipmentControlKpiModal({
 
   async function handleAssignZone(recordId: string, zoneId: string) {
     await withBusy(recordId, async () => {
-      const res = await assignZoneAction({
+      const res = await assignZoneAction(workCountry, {
         recordIds: [recordId],
         zoneId: zoneId || null,
       });
@@ -224,7 +226,7 @@ export function ShipmentControlKpiModal({
 
   async function handleAssignCourier(recordId: string, courierId: string) {
     await withBusy(recordId, async () => {
-      const res = await assignCourierAction({
+      const res = await assignCourierAction(workCountry, {
         recordIds: [recordId],
         courierId: courierId || null,
       });
@@ -234,7 +236,7 @@ export function ShipmentControlKpiModal({
 
   async function handleStatus(recordId: string, status: ShipmentStatus) {
     await withBusy(recordId, async () => {
-      const res = await updateShipmentStatusAction({
+      const res = await updateShipmentStatusAction(workCountry, {
         recordIds: [recordId],
         status,
       });
@@ -244,7 +246,7 @@ export function ShipmentControlKpiModal({
 
   async function handleFee(recordId: string, amount: number | null) {
     await withBusy(recordId, async () => {
-      const res = await updateShipmentRecordAction({
+      const res = await updateShipmentRecordAction(workCountry, {
         recordId,
         patch: { deliveryFeeAmount: amount, deliveryFeeCurrency: "ILS" },
       });
@@ -254,7 +256,7 @@ export function ShipmentControlKpiModal({
 
   async function handleWeight(recordId: string, weight: number | null) {
     await withBusy(recordId, async () => {
-      const res = await updateShipmentRecordAction({
+      const res = await updateShipmentRecordAction(workCountry, {
         recordId,
         patch: { weight },
       });
@@ -264,7 +266,7 @@ export function ShipmentControlKpiModal({
 
   async function handleBoxes(recordId: string, boxes: number | null) {
     await withBusy(recordId, async () => {
-      const res = await updateShipmentRecordAction({
+      const res = await updateShipmentRecordAction(workCountry, {
         recordId,
         patch: { boxes },
       });
@@ -274,7 +276,7 @@ export function ShipmentControlKpiModal({
 
   async function handleNotes(recordId: string, notes: string | null) {
     await withBusy(recordId, async () => {
-      const res = await updateShipmentRecordAction({
+      const res = await updateShipmentRecordAction(workCountry, {
         recordId,
         patch: { notes },
       });
@@ -286,7 +288,7 @@ export function ShipmentControlKpiModal({
     if (!canWrite) return;
     if (!window.confirm("למחוק את המשלוח ואת כל הגביות שלו?")) return;
     await withBusy(recordId, async () => {
-      const res = await deleteShipmentRecordAction(recordId);
+      const res = await deleteShipmentRecordAction(workCountry, recordId);
       if (!res.ok) throw new Error(res.error);
     });
   }
@@ -294,7 +296,7 @@ export function ShipmentControlKpiModal({
   async function openPayment(recordId: string) {
     setBusyId(recordId);
     setError(null);
-    const res = await getShipmentRecordAction(recordId);
+    const res = await getShipmentRecordAction(workCountry, recordId);
     setBusyId(null);
     if (!res.ok) {
       setError(res.error);
@@ -307,7 +309,7 @@ export function ShipmentControlKpiModal({
     const name = newZoneName.trim();
     if (!name) return;
     setBusyId("new-zone");
-    const res = await createZoneAction(name);
+    const res = await createZoneAction(workCountry, name);
     setBusyId(null);
     if (!res.ok) {
       setError(res.error);
@@ -325,7 +327,7 @@ export function ShipmentControlKpiModal({
     const name = newCourierName.trim();
     if (!name) return;
     setBusyId("new-courier");
-    const res = await createCourierAction(name);
+    const res = await createCourierAction(workCountry, name);
     setBusyId(null);
     if (!res.ok) {
       setError(res.error);
@@ -675,7 +677,10 @@ export function ShipmentControlKpiModal({
                           <td colSpan={12}>
                             <div className="sc-expand-panel">
                               <div className="sc-expand-grid">
-                                <div><span className="sc-expand-label">כתובת:</span> {r.address || "—"} {r.updatedDeliveryLocation || r.city || ""}</div>
+                                <div>
+                                  <span className="sc-expand-label">כתובת:</span>{" "}
+                                  {[r.address, getEffectiveDeliveryPlace(r)].filter(Boolean).join(", ") || "—"}
+                                </div>
                                 <div><span className="sc-expand-label">קונטיינר:</span> {r.containerNumber || "—"}</div>
                                 <div><span className="sc-expand-label">קרטונים:</span> {r.boxes ?? "—"} {r.cartonDetails ? `(${r.cartonDetails})` : ""}</div>
                                 <div><span className="sc-expand-label">משקל:</span> {r.weight != null ? `${r.weight} ק״ג` : "—"}</div>

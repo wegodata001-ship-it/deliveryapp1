@@ -15,6 +15,7 @@ import {
   CourierPdfPreviewPanel,
   type CourierPdfRowOverride,
 } from "@/components/admin/shipments/CourierPdfPreviewPanel";
+import { getEffectiveDeliveryPlaceFromRecord } from "@/lib/shipment-delivery-place";
 
 const MAX_COURIERS = 2;
 
@@ -109,11 +110,10 @@ export function CourierPdfModal({
           r.customerName,
           r.customerPhone,
           r.customerPhone2,
-          r.city,
+          getEffectiveDeliveryPlaceFromRecord(r),
           r.address,
           r.zoneName,
           r.courierName,
-          r.originalDeliveryLocation,
         ]
           .filter(Boolean)
           .join(" ")

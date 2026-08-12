@@ -99,6 +99,7 @@ export function buildOrdersListCustomerWhere(q: string): Prisma.OrderWhereInput 
       { customer: { displayName: { contains: t, mode: "insensitive" } } },
       { customer: { nameAr: { contains: t, mode: "insensitive" } } },
       { customer: { nameEn: { contains: t, mode: "insensitive" } } },
+      { orderNumber: { contains: t, mode: "insensitive" } },
     ],
   };
 }

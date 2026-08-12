@@ -346,19 +346,28 @@ export type UpdateShipmentRecordInput = {
 /** הוספת חבילה בודדת למשלוח קיים */
 export type CreateShipmentRecordInput = {
   batchId: string;
+  /** שורת מקור להעתקת שדות חסרים (Duplicate Package) */
+  sourceRecordId?: string | null;
   customerCode?: string | null;
   customerName?: string | null;
   customerPhone?: string | null;
   customerPhone2?: string | null;
   address?: string | null;
   city?: string | null;
+  originalDeliveryLocation?: string | null;
+  deliveryLocationId?: string | null;
+  locationMatchStatus?: LocationMatchStatus | null;
   boxes?: number | null;
   weight?: number | null;
+  cartonDetails?: string | null;
+  orderAmount?: number | null;
+  orderCurrency?: ShipmentCurrency | null;
   deliveryFeeAmount?: number | null;
   deliveryFeeCurrency?: ShipmentCurrency | null;
   notes?: string | null;
   zoneId?: string | null;
   courierId?: string | null;
+  status?: ShipmentStatus;
 };
 
 export type AddPaymentInput = {

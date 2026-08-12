@@ -1,12 +1,8 @@
-import { requireRoutePermission } from "@/lib/route-access";
-import { listCouriers, listZones } from "@/app/admin/shipments/service";
-import { ShipmentImportClient } from "@/components/admin/shipments/ShipmentImportClient";
-import "@/app/admin/shipments/shipments.css";
+import { redirect } from "next/navigation";
+import { DEFAULT_WORK_COUNTRY } from "@/lib/work-country";
+import { shipmentCountrySlugFromWorkCountry } from "@/lib/shipment-country-scope.shared";
 
-export const dynamic = "force-dynamic";
-
-export default async function ShipmentImportPage() {
-  await requireRoutePermission(["manage_shipments"]);
-  const [zones, couriers] = await Promise.all([listZones(), listCouriers()]);
-  return <ShipmentImportClient initialZones={zones} initialCouriers={couriers} />;
+/** Redirect legacy flat routes → Turkey (historical default) */
+export default function LegacyShipmentImportRedirect() {
+  redirect(`/admin/shipments/${shipmentCountrySlugFromWorkCountry(DEFAULT_WORK_COUNTRY)}/import`);
 }
