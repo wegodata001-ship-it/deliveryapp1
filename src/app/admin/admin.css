@@ -881,7 +881,7 @@
 .adm-orders-excel-page {
   display: flex;
   flex-direction: column;
-  gap: 0;
+  gap: 16px;
   min-height: 0;
   height: 100%;
   width: 100%;
@@ -894,7 +894,7 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
 
 .adm-orders-filters-row {
   flex-shrink: 0;
-  margin-bottom: 4px;
+  margin-bottom: 0;
   overflow: visible;
 }
 
@@ -1446,6 +1446,104 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
   }
 }
 
+/* רשימת הזמנות — Toolbar v4 (שורת סינון + פעולות קומפקטית) */
+.adm-orders-filters-bar--v4 {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.adm-orders-filters-bar--v4 .adm-orders-toolbar-row--primary {
+  flex-wrap: nowrap;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 0;
+}
+
+.adm-orders-filters-bar--v4 .adm-orders-toolbar-primary-filters {
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
+  align-items: flex-end;
+  gap: 10px;
+  min-width: 0;
+  width: 100%;
+}
+
+.adm-orders-filters-bar--v4 .adm-orders-toolbar-primary-selects {
+  flex: 0 1 auto;
+  flex-wrap: nowrap;
+  gap: 10px;
+}
+
+.adm-orders-filters-bar--v4 .adm-orders-filter-field--search {
+  flex: 1 1 360px;
+  min-width: 240px;
+  max-width: none;
+}
+
+.adm-orders-filters-bar--v4 .adm-orders-filter-field--week {
+  flex: 0 0 auto;
+}
+
+.adm-orders-filters-bar--v4 .adm-orders-filter-field--country .shp-ms__trigger,
+.adm-orders-filters-bar--v4 .adm-orders-filter-field--pay-type .shp-ms__trigger,
+.adm-orders-filters-bar--v4 .adm-orders-filter-field--status .shp-ms__trigger {
+  width: 148px;
+  min-width: 148px;
+  max-width: 148px;
+}
+
+.adm-orders-filters-bar--v4 .adm-orders-toolbar-row--actions {
+  padding: 0;
+  border-top: 1px solid var(--adm-border, #e2e8f0);
+  padding-top: 10px;
+}
+
+.adm-orders-filters-bar--v4 .adm-orders-filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.adm-orders-filters-bar--v4 .adm-orders-filter-actions .adm-btn--primary,
+.adm-orders-filters-bar--v4 .adm-orders-filter-actions .adm-orders-top-btn--new {
+  margin-inline-start: auto;
+}
+
+.adm-orders-filters-bar--v4 .adm-orders-active-filters {
+  margin-top: 0;
+  padding-top: 8px;
+}
+
+.adm-orders-filters-bar--v4 .adm-orders-advanced-filters {
+  margin-top: 0;
+}
+
+@media (max-width: 1200px) and (min-width: 769px) {
+  .adm-orders-filters-bar--v4 .adm-orders-toolbar-row--primary {
+    flex-wrap: wrap;
+  }
+
+  .adm-orders-filters-bar--v4 .adm-orders-toolbar-primary-filters {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 768px) {
+  .adm-orders-filters-bar--v4 {
+    gap: 8px;
+    padding: 10px 12px;
+  }
+
+  .adm-orders-filters-bar--v4 .adm-orders-toolbar-row--actions {
+    border-top: none;
+    padding-top: 0;
+  }
+}
+
 
 .adm-orders-excel-page .adm-orders-filter-actions {
   display: inline-flex;
@@ -1504,12 +1602,13 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
   min-height: 0;
   width: 100%;
   max-width: 100%;
-  padding: 0 24px 10px;
+  padding: 0 16px 12px;
   box-sizing: border-box;
+  gap: 16px;
 }
 
 .adm-orders-excel-page .adm-orders-action-kpi-row {
-  margin-bottom: 14px;
+  margin-bottom: 0;
 }
 
 .adm-orders-excel-page .adm-orders-status-kpi--board {
@@ -2564,7 +2663,9 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
 }
 
 .adm-table-excel-wrap--orders {
-  overflow-x: hidden;
+  overflow-x: auto;
+  overflow-y: visible;
+  -webkit-overflow-scrolling: touch;
 }
 
 .adm-table-excel {
@@ -2700,25 +2801,13 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
   max-width: 100%;
 }
 
-@media (max-width: 1100px) {
-  .adm-table-excel--orders-v2 .adm-ord-col-payloc,
-  .adm-table-excel--orders-v2 .adm-ord-col-completed,
-  .adm-table-excel--orders-v2 .adm-ord-col-pay {
-    display: none;
-  }
-}
-
-@media (max-width: 880px) {
-  .adm-table-excel--orders-v2 .adm-ord-col-week,
-  .adm-table-excel--orders-v2 .adm-ord-col-money--deal {
-    display: none;
-  }
-  .adm-table-excel--orders-v2 .adm-ord-col-cust {
-    width: 22%;
-  }
-  .adm-table-excel--orders-v2 .adm-ord-col-date {
-    width: 13%;
-  }
+/* orders list — all columns visible; horizontal scroll on narrow viewports */
+.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-ord-col-payloc,
+.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-ord-col-completed,
+.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-ord-col-pay,
+.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-ord-col-week,
+.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-ord-col-money--deal {
+  display: table-cell;
 }
 
 /* === v2: ERP-grade column separators, hover, dropdowns, exports === */
@@ -3477,17 +3566,143 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
 /* טבלה — ERP צפוף (רק דף הזמנות; צבעים/hover ללא שינוי) */
 .adm-orders-excel-page .adm-table-excel--orders-v2 {
   table-layout: fixed;
-  width: 100%;
+  width: max(100%, 1340px);
+  min-width: 1340px;
   font-size: 13px;
   border-spacing: 0;
 }
 
+.adm-orders-excel-page .adm-ord-th-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  white-space: normal;
+  word-break: keep-all;
+  line-height: 1.2;
+  font-size: inherit;
+  font-weight: inherit;
+}
+
 .adm-orders-excel-page .adm-table-excel--orders-v2 thead th {
-  height: 42px;
-  padding: 6px 8px;
+  height: auto;
+  min-height: 52px;
+  padding: 8px 10px;
   font-size: 12px;
   font-weight: 700;
-  line-height: 1.15;
+  line-height: 1.2;
+  white-space: normal;
+  vertical-align: middle;
+  text-align: center;
+}
+
+.adm-orders-excel-page .adm-table-excel--orders-v2 thead th.adm-ord-col-num,
+.adm-orders-excel-page .adm-table-excel--orders-v2 thead th.adm-ord-col-date,
+.adm-orders-excel-page .adm-table-excel--orders-v2 thead th.adm-ord-col-week,
+.adm-orders-excel-page .adm-table-excel--orders-v2 thead th.adm-ord-col-ccode,
+.adm-orders-excel-page .adm-table-excel--orders-v2 thead th.adm-ord-col-completed {
+  white-space: nowrap;
+}
+
+.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-ord-col-num {
+  width: 108px;
+  min-width: 108px;
+  max-width: 108px;
+}
+
+.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-ord-col-date {
+  width: 112px;
+  min-width: 112px;
+  max-width: 112px;
+}
+
+.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-ord-col-week {
+  width: 72px;
+  min-width: 72px;
+  max-width: 72px;
+}
+
+.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-ord-col-ccode {
+  width: 92px;
+  min-width: 92px;
+  max-width: 92px;
+  font-weight: 600;
+}
+
+.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-ord-col-cust {
+  width: 190px;
+  min-width: 190px;
+}
+
+.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-ord-col-money--deal,
+.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-ord-col-money--total {
+  width: 108px;
+  min-width: 108px;
+  max-width: 108px;
+}
+
+.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-ord-col-ils {
+  width: 102px;
+  min-width: 102px;
+  max-width: 102px;
+}
+
+.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-ord-col-status {
+  width: 118px;
+  min-width: 118px;
+  max-width: 118px;
+}
+
+.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-ord-col-completed {
+  width: 76px;
+  min-width: 76px;
+  max-width: 76px;
+}
+
+.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-ord-col-pay {
+  width: 118px;
+  min-width: 118px;
+  max-width: 118px;
+}
+
+.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-ord-col-payloc {
+  width: 150px;
+  min-width: 150px;
+}
+
+.adm-orders-excel-page .adm-table-excel--orders-v2 tbody td.adm-ord-col-num,
+.adm-orders-excel-page .adm-table-excel--orders-v2 tbody td.adm-ord-col-date,
+.adm-orders-excel-page .adm-table-excel--orders-v2 tbody td.adm-ord-col-week,
+.adm-orders-excel-page .adm-table-excel--orders-v2 tbody td.adm-ord-col-ccode,
+.adm-orders-excel-page .adm-table-excel--orders-v2 tbody td.adm-ord-col-money,
+.adm-orders-excel-page .adm-table-excel--orders-v2 tbody td.adm-ord-col-money--deal,
+.adm-orders-excel-page .adm-table-excel--orders-v2 tbody td.adm-ord-col-money--total,
+.adm-orders-excel-page .adm-table-excel--orders-v2 tbody td.adm-ord-col-ils,
+.adm-orders-excel-page .adm-table-excel--orders-v2 tbody td.adm-table-excel-num,
+.adm-orders-excel-page .adm-table-excel--orders-v2 tbody td.adm-table-excel-money,
+.adm-orders-excel-page .adm-table-excel--orders-v2 tbody td.adm-table-excel-week {
+  white-space: nowrap;
+}
+
+.adm-orders-excel-page .adm-table-excel--orders-v2 tbody td.adm-ord-col-cust {
+  white-space: normal;
+  word-break: break-word;
+}
+
+.adm-orders-excel-page .adm-table-excel-wrap--orders {
+  overflow-x: auto;
+  overflow-y: visible;
+  max-width: 100%;
+}
+
+.adm-orders-excel-page .adm-table-excel--orders {
+  min-width: 1340px;
+}
+
+.adm-orders-excel-page .adm-orders-table-host {
+  overflow: hidden;
+  max-width: 100%;
 }
 
 .adm-orders-excel-page .adm-table-excel--orders-v2 tbody tr.adm-table-excel-row {
@@ -3503,31 +3718,6 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
 
 .adm-orders-excel-page .adm-table-excel--orders-v2 tbody tr[class*="adm-order-row--"] td {
   font-weight: inherit;
-}
-
-.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-ord-col-week {
-  width: 80px;
-  min-width: 80px;
-  max-width: 80px;
-}
-
-.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-ord-col-ccode {
-  width: 90px;
-  min-width: 90px;
-  max-width: 90px;
-  font-weight: 600;
-}
-
-.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-ord-col-date {
-  width: 130px;
-  min-width: 130px;
-  max-width: 130px;
-}
-
-.adm-orders-excel-page .adm-table-excel--orders-v2 .adm-ord-col-pay {
-  width: 120px;
-  min-width: 120px;
-  max-width: 120px;
 }
 
 .adm-orders-excel-page .adm-table-excel--orders-v2 .adm-table-excel-ccode {

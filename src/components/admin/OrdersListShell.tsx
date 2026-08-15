@@ -958,18 +958,42 @@ export function OrdersListShell({
               <th className="adm-ord-col-ccode">קוד לקוח</th>
               <th className="adm-ord-col-cust">שם לקוח</th>
               <th className="adm-ord-col-money adm-ord-col-money--deal" dir="ltr">
-                סכום לפני עמלה ($)
+                <span className="adm-ord-th-stack">
+                  <span>סכום לפני</span>
+                  <span>עמלה ($)</span>
+                </span>
               </th>
               <th className="adm-ord-col-money adm-ord-col-money--total" dir="ltr">
-                סכום כולל עמלה ($)
+                <span className="adm-ord-th-stack">
+                  <span>סכום כולל</span>
+                  <span>עמלה ($)</span>
+                </span>
               </th>
               <th className="adm-ord-col-money adm-ord-col-ils" dir="ltr">
-                סכום בשקל (₪)
+                <span className="adm-ord-th-stack">
+                  <span>סכום</span>
+                  <span>בשקל (₪)</span>
+                </span>
               </th>
-              <th className="adm-ord-col-status">סטטוס הזמנה</th>
+              <th className="adm-ord-col-status">
+                <span className="adm-ord-th-stack">
+                  <span>סטטוס</span>
+                  <span>הזמנה</span>
+                </span>
+              </th>
               <th className="adm-ord-col-completed">הושלם</th>
-              <th className="adm-ord-col-meta adm-ord-col-pay">צורת תשלום</th>
-              <th className="adm-ord-col-meta adm-ord-col-payloc">מקום תשלום</th>
+              <th className="adm-ord-col-meta adm-ord-col-pay">
+                <span className="adm-ord-th-stack">
+                  <span>צורת</span>
+                  <span>תשלום</span>
+                </span>
+              </th>
+              <th className="adm-ord-col-meta adm-ord-col-payloc">
+                <span className="adm-ord-th-stack">
+                  <span>מקום</span>
+                  <span>תשלום</span>
+                </span>
+              </th>
             </tr>
           </thead>
           <tbody>

@@ -986,6 +986,7 @@ export function OrdersListToolbar({
         "adm-orders-filters-bar--split",
         "adm-orders-filters-bar--compact",
         "adm-orders-filters-bar--v3",
+        "adm-orders-filters-bar--v4",
         filterOpen ? "adm-orders-filters-bar--advanced-open" : "",
         mobileFilterOpen ? "adm-orders-filters-bar--mobile-open" : "",
       ]
@@ -994,12 +995,12 @@ export function OrdersListToolbar({
     >
       <div className="adm-orders-toolbar-row adm-orders-toolbar-row--primary" dir="rtl">
         <div className="adm-orders-toolbar-primary-filters">
-          {weekControl}
           {searchField}
+          {weekControl}
           <div className="adm-orders-toolbar-primary-selects">
-            {statusField}
-            {paymentField}
             {countryField}
+            {paymentField}
+            {statusField}
           </div>
         </div>
         <div className="adm-orders-toolbar-mobile-quick">
