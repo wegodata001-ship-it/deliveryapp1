@@ -49,6 +49,7 @@ export function ShipmentBatchImportModal({
     mappingModalOpen,
     loadPreviewRows,
     checkLocationMappings,
+    setMappings,
     applyMappings,
     keepOriginalMappings,
     resetMappingFlow,
@@ -321,6 +322,8 @@ export function ShipmentBatchImportModal({
       {mappingModalOpen && pendingMappings && pendingMappings.length > 0 ? (
         <LocationImportMappingModal
           mappings={pendingMappings}
+          zones={zones}
+          onMappingsChange={setMappings}
           onApply={() => applyMappings(preview, setPreview)}
           onKeepOriginal={keepOriginalMappings}
         />

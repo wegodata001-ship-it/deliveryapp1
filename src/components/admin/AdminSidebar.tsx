@@ -2,11 +2,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ChevronDown, LogOut } from "lucide-react";
 import { getActiveWorkWeekRange } from "@/lib/active-work-week";
 import { BALANCES_TO_PARAM, BALANCES_WEEK_PARAM } from "@/lib/balances-week-filter";
 import { balancesSnapshotToYmd } from "@/lib/work-week";
 import { useHydratedSearchParams } from "@/lib/use-hydrated-search-params";
-import type { NavIconId, NavItemDef, NavSectionDef } from "@/lib/sidebar-nav";
+import type { NavGroupDef, NavIconId, NavItemDef } from "@/lib/sidebar-nav";
+import { navGroupIdForPathname } from "@/lib/sidebar-nav";
 import {
   BarChart3,
   ClipboardCheck,
@@ -15,7 +18,6 @@ import {
   FileSpreadsheet,
   Home,
   ListOrdered,
-  LogOut,
   PlusCircle,
   Scale,
   ScrollText,
@@ -39,7 +41,7 @@ import { useAdminNavLayout } from "@/components/admin/AdminNavLayoutContext";
 import type { AdminWindowPayload } from "@/lib/admin-windows";
 
 function NavIcon({ id }: { id: NavIconId }) {
-  const common = { size: 18 as const };
+  const common = { size: 18 as const, strokeWidth: 2 as const };
   switch (id) {
     case "home":
       return <Home {...common} />;
@@ -106,7 +108,6 @@ const ACTIVE_WEEK_NAV_PATHS = new Set(["/admin/orders", "/admin/balances"]);
 function applyActiveWorkWeekToParams(out: URLSearchParams, pathname: string, globalSp: URLSearchParams): void {
   const active = getActiveWorkWeekRange();
   if (pathname === "/admin/balances") {
-    /** יתרות: פילטר שבוע מקומי בלבד — שומר week/from/to גלובלי מה-URL הנוכחי */
     for (const key of ["week", "from", "to"] as const) {
       const v = globalSp.get(key);
       if (v) out.set(key, v);
@@ -176,7 +177,7 @@ function resolveNavHref(item: NavItemDef, sp: URLSearchParams, pathname: string)
 }
 
 function linkActive(pathname: string, item: NavItemDef, resolvedHref: string, sp: URLSearchParams): boolean {
-  if (item.href === "/admin" && !item.openWindow) {
+  if (item.href === "/admin" && !item.openWindow && !item.openFinancialModal) {
     return pathname === "/admin" && !sp.get("modal");
   }
 
@@ -196,110 +197,190 @@ function linkActive(pathname: string, item: NavItemDef, resolvedHref: string, sp
   return true;
 }
 
-function NavBlock({
-  section,
+function NavItemLink({
+  item,
+  itemKey,
+  pathname,
+  sp,
+  openWindow,
+  navBadges,
+  onNavigate,
+  nested,
+}: {
+  item: NavItemDef;
+  itemKey: string;
+  pathname: string;
+  sp: URLSearchParams;
+  openWindow: (p: AdminWindowPayload) => void;
+  navBadges?: { pendingOrderEditRequests?: number; pendingInvoiceCancelRequests?: number };
+  onNavigate?: () => void;
+  nested?: boolean;
+}) {
+  const { openFinancialModal } = useAdminFinancialModal();
+  const resolved = resolveNavHref(item, sp, pathname);
+  const active =
+    item.openWindow || item.openFinancialModal ? false : linkActive(pathname, item, resolved, sp);
+  const linkClass = nested ? "adm-nav-link adm-nav-link--nested" : "adm-nav-link";
+
+  if (item.openFinancialModal) {
+    return (
+      <button
+        key={itemKey}
+        type="button"
+        className={`${linkClass} adm-nav-link--action`}
+        data-active={active ? "true" : "false"}
+        onClick={() => {
+          openFinancialModal();
+          onNavigate?.();
+        }}
+      >
+        <NavIcon id={item.icon} />
+        <span className="adm-nav-link__label">{item.label}</span>
+      </button>
+    );
+  }
+
+  if (item.openWindow) {
+    return (
+      <button
+        key={itemKey}
+        type="button"
+        className={`${linkClass} adm-nav-link--action`}
+        data-active={active ? "true" : "false"}
+        onClick={() => {
+          openWindow(item.openWindow!);
+          onNavigate?.();
+        }}
+      >
+        <NavIcon id={item.icon} />
+        <span className="adm-nav-link__label">{item.label}</span>
+      </button>
+    );
+  }
+
+  const editReqBadge =
+    item.href === "/admin/edit-requests"
+      ? (navBadges?.pendingOrderEditRequests ?? 0) + (navBadges?.pendingInvoiceCancelRequests ?? 0)
+      : item.href === "/admin/order-edit-requests" && navBadges?.pendingOrderEditRequests
+        ? navBadges.pendingOrderEditRequests
+        : item.href === "/admin/invoice-cancel-requests" && navBadges?.pendingInvoiceCancelRequests
+          ? navBadges.pendingInvoiceCancelRequests
+          : 0;
+  const disablePrefetch = item.href === "/admin" || item.href === "/admin/";
+
+  return (
+    <Link
+      key={itemKey}
+      href={resolved}
+      prefetch={disablePrefetch ? false : undefined}
+      className={linkClass}
+      data-active={active ? "true" : "false"}
+      aria-current={active ? "page" : undefined}
+      onClick={() => onNavigate?.()}
+    >
+      <NavIcon id={item.icon} />
+      <span className="adm-nav-link__label">{item.label}</span>
+      {editReqBadge > 0 ? (
+        <span className="adm-nav-badge" aria-label={`${editReqBadge} בקשות ממתינות`}>
+          {editReqBadge > 99 ? "99+" : editReqBadge}
+        </span>
+      ) : null}
+    </Link>
+  );
+}
+
+function NavAccordionGroup({
+  group,
+  expanded,
+  onToggle,
   pathname,
   sp,
   openWindow,
   navBadges,
   onNavigate,
 }: {
-  section: NavSectionDef;
+  group: NavGroupDef;
+  expanded: boolean;
+  onToggle: () => void;
   pathname: string;
   sp: URLSearchParams;
   openWindow: (p: AdminWindowPayload) => void;
   navBadges?: { pendingOrderEditRequests?: number; pendingInvoiceCancelRequests?: number };
   onNavigate?: () => void;
 }) {
-  const { openFinancialModal } = useAdminFinancialModal();
+  const activeGroupId = navGroupIdForPathname(pathname);
+  const groupActive = activeGroupId === group.id;
 
   return (
-    <div className="adm-nav-section">
-      <div className="adm-nav-label">{section.title}</div>
-      {section.items.map((item) => {
-        const resolved = resolveNavHref(item, sp, pathname);
-        const active =
-          item.openWindow || item.openFinancialModal ? false : linkActive(pathname, item, resolved, sp);
-        const key = `${section.title}-${item.label}-${item.openWindow?.type ?? item.openFinancialModal ? "fin" : "link"}`;
-        if (item.openFinancialModal) {
-          return (
-            <button
-              key={key}
-              type="button"
-              className="adm-nav-link adm-nav-link--action"
-              data-active={active ? "true" : "false"}
-              onClick={() => {
-                openFinancialModal();
-                onNavigate?.();
-              }}
-            >
-              <NavIcon id={item.icon} />
-              <span className="adm-nav-link__label">{item.label}</span>
-            </button>
-          );
-        }
-        if (item.openWindow) {
-          return (
-            <button
-              key={key}
-              type="button"
-              className="adm-nav-link adm-nav-link--action"
-              data-active={active ? "true" : "false"}
-              onClick={() => {
-                openWindow(item.openWindow!);
-                onNavigate?.();
-              }}
-            >
-              <NavIcon id={item.icon} />
-              <span className="adm-nav-link__label">{item.label}</span>
-            </button>
-          );
-        }
-        const editReqBadge =
-          item.href === "/admin/edit-requests"
-            ? (navBadges?.pendingOrderEditRequests ?? 0) +
-              (navBadges?.pendingInvoiceCancelRequests ?? 0)
-            : item.href === "/admin/order-edit-requests" && navBadges?.pendingOrderEditRequests
-              ? navBadges.pendingOrderEditRequests
-              : item.href === "/admin/invoice-cancel-requests" && navBadges?.pendingInvoiceCancelRequests
-                ? navBadges.pendingInvoiceCancelRequests
-                : 0;
-        const disablePrefetch = item.href === "/admin" || item.href === "/admin/";
-        return (
-          <Link
-            key={key}
-            href={resolved}
-            prefetch={disablePrefetch ? false : undefined}
-            className="adm-nav-link"
-            data-active={active ? "true" : "false"}
-            aria-current={active ? "page" : undefined}
-            onClick={() => onNavigate?.()}
-          >
-            <NavIcon id={item.icon} />
-            <span className="adm-nav-link__label">{item.label}</span>
-            {editReqBadge > 0 ? (
-              <span className="adm-nav-badge" aria-label={`${editReqBadge} בקשות ממתינות`}>
-                {editReqBadge > 99 ? "99+" : editReqBadge}
-              </span>
-            ) : null}
-          </Link>
-        );
-      })}
+    <div
+      className="adm-nav-group"
+      data-expanded={expanded ? "true" : "false"}
+      data-active-group={groupActive ? "true" : "false"}
+    >
+      <button
+        type="button"
+        className="adm-nav-group__header"
+        aria-expanded={expanded}
+        onClick={onToggle}
+      >
+        <NavIcon id={group.groupIcon} />
+        <span className="adm-nav-group__label">{group.label}</span>
+        <ChevronDown size={16} className="adm-nav-group__chevron" aria-hidden />
+      </button>
+      <div className="adm-nav-group__items" hidden={!expanded}>
+        {group.items.map((item) => (
+          <NavItemLink
+            key={`${group.id}-${item.label}-${item.openWindow?.type ?? item.openFinancialModal ? "action" : item.href}`}
+            item={item}
+            itemKey={`${group.id}-${item.label}`}
+            pathname={pathname}
+            sp={sp}
+            openWindow={openWindow}
+            navBadges={navBadges}
+            onNavigate={onNavigate}
+            nested
+          />
+        ))}
+      </div>
     </div>
   );
 }
 
 export function AdminSidebar({
-  sections,
+  groups,
+  homeItem,
   navBadges,
 }: {
-  sections: NavSectionDef[];
+  groups: NavGroupDef[];
+  homeItem?: NavItemDef | null;
   navBadges?: { pendingOrderEditRequests?: number; pendingInvoiceCancelRequests?: number };
 }) {
   const pathname = usePathname();
   const sp = useHydratedSearchParams();
   const { openWindow } = useAdminWindows();
   const closeNav = useAdminNavLayout()?.closeNav;
+
+  const routeGroupId = useMemo(() => navGroupIdForPathname(pathname), [pathname]);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(routeGroupId ? [routeGroupId] : []));
+
+  useEffect(() => {
+    if (!routeGroupId) return;
+    setExpanded((prev) => {
+      if (prev.has(routeGroupId)) return prev;
+      const next = new Set(prev);
+      next.add(routeGroupId);
+      return next;
+    });
+  }, [routeGroupId]);
+
+  const toggleGroup = useCallback((id: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
   return (
     <aside className="adm-sidebar">
@@ -308,15 +389,30 @@ export function AdminSidebar({
         <p className="adm-brand-title">וויגו פרו — מערכת לוגיסטיקה</p>
       </div>
       <nav className="adm-nav">
-        {sections.map((section) => (
-          <NavBlock
-            key={section.title}
-            section={section}
+        {homeItem ? (
+          <div className="adm-nav-home">
+            <NavItemLink
+              item={homeItem}
+              itemKey="home"
+              pathname={pathname}
+              sp={sp}
+              openWindow={openWindow}
+              navBadges={navBadges}
+              onNavigate={closeNav ?? undefined}
+            />
+          </div>
+        ) : null}
+        {groups.map((group) => (
+          <NavAccordionGroup
+            key={group.id}
+            group={group}
+            expanded={expanded.has(group.id)}
+            onToggle={() => toggleGroup(group.id)}
             pathname={pathname}
             sp={sp}
             openWindow={openWindow}
             navBadges={navBadges}
-            onNavigate={closeNav}
+            onNavigate={closeNav ?? undefined}
           />
         ))}
       </nav>
@@ -327,11 +423,32 @@ export function AdminSidebar({
             className="adm-nav-link adm-nav-link--action"
             onClick={() => closeNav?.()}
           >
-            <LogOut size={18} />
+            <LogOut size={18} strokeWidth={2} />
             <span className="adm-nav-link__label">יציאה</span>
           </button>
         </form>
       </div>
     </aside>
   );
+}
+
+/** @deprecated — תאימות; העברו groups + homeItem */
+export function AdminSidebarLegacy({
+  sections,
+  navBadges,
+}: {
+  sections: { title: string; items: NavItemDef[] }[];
+  navBadges?: { pendingOrderEditRequests?: number; pendingInvoiceCancelRequests?: number };
+}) {
+  const homeSection = sections.find((s) => s.title === "ראשי");
+  const homeItem = homeSection?.items[0] ?? null;
+  const groups: NavGroupDef[] = sections
+    .filter((s) => s.title !== "ראשי")
+    .map((s, i) => ({
+      id: `legacy-${i}`,
+      label: s.title,
+      groupIcon: "settings" as NavIconId,
+      items: s.items,
+    }));
+  return <AdminSidebar groups={groups} homeItem={homeItem} navBadges={navBadges} />;
 }

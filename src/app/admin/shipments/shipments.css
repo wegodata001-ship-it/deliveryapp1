@@ -5535,3 +5535,322 @@ tr.msh-row--cancel td:first-child { box-shadow: inset 3px 0 0 #ef4444; }
   background: #eff6ff;
 }
 
+/* ─── Shipment import — location mapping review modal ─── */
+.shp-modal-backdrop--import-loc {
+  z-index: 70;
+}
+
+.shp-modal--import-loc-review {
+  width: min(1200px, 94vw);
+  max-width: 1200px;
+  max-height: 90vh;
+  height: min(90vh, 900px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.import-loc-review__head {
+  flex-shrink: 0;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.import-loc-review__title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.import-loc-review__title-row strong {
+  display: block;
+  font-size: 1.05rem;
+}
+
+.import-loc-review__subtitle {
+  margin: 4px 0 0;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: #64748b;
+  line-height: 1.45;
+}
+
+.import-loc-review__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 18px;
+  overflow: hidden;
+}
+
+.import-loc-review__intro {
+  margin: 0;
+  font-size: 0.88rem;
+  color: #475569;
+  line-height: 1.5;
+  flex-shrink: 0;
+}
+
+.import-loc-review__summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  font-size: 0.82rem;
+  color: #64748b;
+  flex-shrink: 0;
+}
+
+.import-loc-review__summary strong {
+  color: #0f172a;
+}
+
+.import-loc-review__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.import-loc-review__search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 200px;
+  padding: 0 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.import-loc-review__search input {
+  flex: 1;
+  border: none;
+  outline: none;
+  min-height: 38px;
+  font: inherit;
+  font-size: 0.88rem;
+  background: transparent;
+}
+
+.import-loc-review__filters {
+  display: inline-flex;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.import-loc-review__filters button {
+  border: none;
+  background: transparent;
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #64748b;
+  cursor: pointer;
+}
+
+.import-loc-review__filters button.is-active {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.import-loc-review__table-wrap {
+  flex: 1;
+  min-height: 0;
+  max-height: calc(90vh - 260px);
+  overflow: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+}
+
+.import-loc-review__table {
+  width: 100%;
+}
+
+.import-loc-review__table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #f8fafc;
+  box-shadow: 0 1px 0 #e2e8f0;
+}
+
+.import-loc-review__cell-original {
+  max-width: 220px;
+  word-break: break-word;
+  color: #64748b;
+  font-size: 0.84rem;
+}
+
+.import-loc-review__place {
+  display: grid;
+  gap: 2px;
+}
+
+.import-loc-review__place-name {
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.import-loc-review__edited-tag {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #1d4ed8;
+}
+
+.import-loc-review__row--edited {
+  background: #eff6ff;
+}
+
+.import-loc-review__inline-input,
+.import-loc-review__inline-select {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 0.86rem;
+}
+
+.import-loc-review__actions {
+  white-space: nowrap;
+}
+
+.import-loc-review__edit-btn,
+.import-loc-review__restore-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+
+.import-loc-review__edit-btn {
+  color: #2563eb;
+}
+
+.import-loc-review__edit-btn:hover {
+  background: #eff6ff;
+}
+
+.import-loc-review__restore-btn {
+  color: #64748b;
+  margin-inline-start: 4px;
+}
+
+.import-loc-review__restore-btn:hover {
+  background: #f1f5f9;
+}
+
+.import-loc-review__icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+  margin-inline-start: 4px;
+}
+
+.import-loc-review__icon-btn--ok {
+  border-color: #86efac;
+  background: #ecfdf5;
+  color: #15803d;
+}
+
+.import-loc-review__empty {
+  padding: 24px;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 0.88rem;
+}
+
+.import-loc-review__foot {
+  flex-shrink: 0;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.import-loc-review__cards {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .shp-modal--import-loc-review {
+    width: min(100vw - 16px, 100%);
+    height: min(92vh, 100%);
+  }
+
+  .import-loc-review__table-wrap {
+    display: none;
+  }
+
+  .import-loc-review__cards {
+    display: grid;
+    gap: 10px;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  .import-loc-review__card {
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 12px;
+    background: #fff;
+    display: grid;
+    gap: 4px;
+  }
+
+  .import-loc-review__card--edited {
+    background: #eff6ff;
+    border-color: #bfdbfe;
+  }
+
+  .import-loc-review__card-label {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-top: 4px;
+  }
+
+  .import-loc-review__card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .import-loc-review__foot {
+    flex-direction: column-reverse;
+  }
+
+  .import-loc-review__foot .shp-btn {
+    width: 100%;
+  }
+}
+

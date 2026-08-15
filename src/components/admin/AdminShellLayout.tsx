@@ -4,7 +4,7 @@ import { AdminSidebarWithBadges } from "@/components/admin/AdminSidebarWithBadge
 import { AdminChrome } from "@/components/admin/AdminChrome";
 import { AdminWindowProvider } from "@/components/admin/AdminWindowProvider";
 import { AdminNavShell } from "@/components/admin/AdminNavShell";
-import { filterSidebarSections } from "@/lib/sidebar-nav";
+import { filterSidebarGroups, filterSidebarHome } from "@/lib/sidebar-nav";
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { INVOICE_CANCEL_APPROVE_PERMISSION } from "@/lib/invoice-cancel-approve";
 import { getLayoutFinancialSettings } from "@/lib/admin-layout-cache";
@@ -42,7 +42,8 @@ export async function AdminShellLayout({ mode, children }: Props) {
       const isAdmin = isAdminUser(user);
       const showApprovalBadges =
         isAdmin || userHasAnyPermission(user, [INVOICE_CANCEL_APPROVE_PERMISSION]);
-      const sections = filterSidebarSections(isAdmin, user.permissionKeys);
+      const groups = filterSidebarGroups(isAdmin, user.permissionKeys);
+      const homeItem = filterSidebarHome(isAdmin, user.permissionKeys);
       const isLight = mode === "light";
 
       if (trace) {
@@ -57,10 +58,10 @@ export async function AdminShellLayout({ mode, children }: Props) {
 
       adminLayoutPerfStart("layout.render");
       const sidebar = isLight ? (
-        <AdminSidebar sections={sections} />
+        <AdminSidebar groups={groups} homeItem={homeItem} />
       ) : (
-        <Suspense fallback={<AdminSidebar sections={sections} />}>
-          <AdminSidebarWithBadges sections={sections} showPendingBadge={showApprovalBadges} />
+        <Suspense fallback={<AdminSidebar groups={groups} homeItem={homeItem} />}>
+          <AdminSidebarWithBadges groups={groups} homeItem={homeItem} showPendingBadge={showApprovalBadges} />
         </Suspense>
       );
 

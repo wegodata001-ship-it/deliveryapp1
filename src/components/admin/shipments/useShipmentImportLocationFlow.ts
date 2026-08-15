@@ -7,6 +7,9 @@ import type { WorkCountryCode } from "@/lib/work-country";
 import {
   applyImportLocationMappingsToRows,
   enrichExcelPreviewRows,
+  normalizeImportLocationMappings,
+  restoreImportMappingToSuggested,
+  updateImportMappingOverride,
   type ShipmentImportLocationMapping,
 } from "@/lib/shipment-import-preview-utils";
 
@@ -41,10 +44,38 @@ export function useShipmentImportLocationFlow(workCountry: WorkCountryCode) {
 
     const res = await previewShipmentImportLocationMappingsAction(workCountry, places);
     if (res.ok && res.mappings.length > 0) {
-      setPendingMappings(res.mappings);
+      setPendingMappings(normalizeImportLocationMappings(res.mappings));
       setMappingModalOpen(true);
     }
   }, [workCountry]);
+
+  const setMappings = useCallback((mappings: ShipmentImportLocationMapping[]) => {
+    setPendingMappings(normalizeImportLocationMappings(mappings));
+  }, []);
+
+  const patchMappingOverride = useCallback(
+    (
+      originalPlace: string,
+      patch: { updatedPlace?: string; zoneId?: string | null; zoneName?: string | null },
+    ) => {
+      setPendingMappings((prev) =>
+        prev ? updateImportMappingOverride(prev, originalPlace, patch) : prev,
+      );
+    },
+    [],
+  );
+
+  const restoreMappingOverride = useCallback((originalPlace: string) => {
+    setPendingMappings((prev) =>
+      prev
+        ? prev.map((m) =>
+            m.originalPlace.trim() === originalPlace.trim()
+              ? restoreImportMappingToSuggested(m)
+              : m,
+          )
+        : prev,
+    );
+  }, []);
 
   const applyMappings = useCallback(
     (rows: ExcelShipmentPreviewRow[], setRows: (rows: ExcelShipmentPreviewRow[]) => void) => {
@@ -70,6 +101,9 @@ export function useShipmentImportLocationFlow(workCountry: WorkCountryCode) {
     mappingChecked,
     loadPreviewRows,
     checkLocationMappings,
+    setMappings,
+    patchMappingOverride,
+    restoreMappingOverride,
     applyMappings,
     keepOriginalMappings,
     resetMappingFlow,

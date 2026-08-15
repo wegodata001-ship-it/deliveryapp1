@@ -500,17 +500,18 @@
   position: sticky;
   top: 0;
   z-index: 3;
-  padding: 0.85rem 1.25rem 1rem;
+  flex-shrink: 0;
+  padding: 0.65rem 1rem 0.75rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   background: linear-gradient(180deg, rgba(15, 23, 42, 0.98) 0%, rgba(11, 18, 32, 0.96) 100%);
-  margin-bottom: 0.5rem;
+  margin-bottom: 0;
   text-align: center;
 }
 
 .adm-brand-logo {
-  width: 56px;
-  height: 56px;
-  margin: 0 auto 0.65rem;
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 0.5rem;
   border-radius: 14px;
   display: flex;
   align-items: center;
@@ -534,10 +535,10 @@
 
 .adm-brand-title {
   margin: 0;
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   font-weight: 700;
   color: #f1f5f9;
-  line-height: 1.45;
+  line-height: 1.4;
   letter-spacing: 0.01em;
 }
 
@@ -545,18 +546,107 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 0.75rem 0.75rem 1rem;
+  overflow-x: hidden;
+  padding: 0.5rem 0.65rem 0.75rem;
   display: flex;
   flex-direction: column;
-  /* ריווח אחיד וקבוע בין קבוצות התפריט */
-  gap: 1.15rem;
+  gap: 0.35rem;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+}
+
+.adm-nav::-webkit-scrollbar {
+  width: 5px;
+}
+
+.adm-nav::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.adm-nav::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.28);
+  border-radius: 999px;
+}
+
+.adm-nav::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.45);
+}
+
+.adm-nav-home {
+  margin-bottom: 0.15rem;
+}
+
+.adm-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.adm-nav-group__header {
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  margin: 0;
+  width: 100%;
+  box-sizing: border-box;
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 700;
+  line-height: 1.25;
+  text-align: right;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 44px;
+  padding: 0.5rem 0.75rem;
+  border-radius: 10px;
+  color: #e2e8f0;
+  font-size: 0.88rem;
+  background: transparent;
+  transition: background 0.18s ease, color 0.18s ease;
+}
+
+.adm-nav-group__header:hover {
+  background: rgba(59, 130, 246, 0.1);
+  color: #fff;
+}
+
+.adm-nav-group[data-active-group="true"] > .adm-nav-group__header {
+  background: rgba(59, 130, 246, 0.08);
+  color: #f8fafc;
+}
+
+.adm-nav-group__label {
+  flex: 1;
+  min-width: 0;
+}
+
+.adm-nav-group__chevron {
+  flex-shrink: 0;
+  opacity: 0.75;
+  transition: transform 0.2s ease;
+}
+
+.adm-nav-group[data-expanded="true"] .adm-nav-group__chevron {
+  transform: rotate(180deg);
+}
+
+.adm-nav-group__items {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-block: 0.1rem 0.15rem;
+}
+
+.adm-nav-group__items[hidden] {
+  display: none;
 }
 
 .adm-nav-section {
   margin: 0;
   display: flex;
   flex-direction: column;
-  /* ריווח אחיד בין פריטי התפריט */
   gap: 2px;
 }
 
@@ -569,14 +659,12 @@
   text-transform: uppercase;
   letter-spacing: 0.1em;
   color: #8b9cb5;
-  /* אותה נקודת התחלה כמו פריטי התפריט (padding אופקי זהה) */
   padding: 0 0.85rem;
   margin: 0 0 0.4rem;
   font-weight: 700;
 }
 
 .adm-nav-link {
-  /* מבנה אחיד לכל הפריטים — קישורים וכפתורי פעולה כאחד */
   appearance: none;
   -webkit-appearance: none;
   border: none;
@@ -591,14 +679,22 @@
   position: relative;
   display: flex;
   align-items: center;
-  gap: 0.65rem;
-  min-height: 40px;
-  padding: 0.6rem 0.85rem;
-  border-radius: 10px;
+  gap: 0.55rem;
+  min-height: 44px;
+  padding: 0.45rem 0.75rem;
+  border-radius: 9px;
   color: #cbd5e1;
-  font-size: 0.92rem;
+  font-size: 0.875rem;
   background: transparent;
   transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.adm-nav-link--nested {
+  min-height: 42px;
+  padding-inline-start: 1.65rem;
+  font-size: 0.84rem;
+  font-weight: 500;
+  color: #b8c5d6;
 }
 
 .adm-nav-link:hover {

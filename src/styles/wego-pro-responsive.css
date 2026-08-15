@@ -853,9 +853,18 @@ body.adm-nav-scroll-lock {
   /* collapsed: icons only */
   .adm-root:not(.adm-root--nav-open) .adm-sidebar .adm-nav-link__label,
   .adm-root:not(.adm-root--nav-open) .adm-sidebar .adm-nav-label,
+  .adm-root:not(.adm-root--nav-open) .adm-sidebar .adm-nav-group__label,
+  .adm-root:not(.adm-root--nav-open) .adm-sidebar .adm-nav-group__chevron,
+  .adm-root:not(.adm-root--nav-open) .adm-sidebar .adm-nav-group__items,
   .adm-root:not(.adm-root--nav-open) .adm-sidebar .adm-brand-title,
   .adm-root:not(.adm-root--nav-open) .adm-sidebar .adm-nav-badge {
     display: none !important;
+  }
+
+  .adm-root:not(.adm-root--nav-open) .adm-sidebar .adm-nav-group__header {
+    justify-content: center;
+    padding: 0.45rem 0.35rem;
+    gap: 0;
   }
 
   .adm-root:not(.adm-root--nav-open) .adm-sidebar .adm-nav-link {

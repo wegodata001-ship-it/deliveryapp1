@@ -4,17 +4,18 @@ import {
   getPendingOrderEditRequestCount,
 } from "@/lib/admin-layout-cache";
 import { adminLayoutPerfRun } from "@/lib/admin-layout-perf";
-import type { NavSectionDef } from "@/lib/sidebar-nav";
+import type { NavGroupDef, NavItemDef } from "@/lib/sidebar-nav";
 
 type Props = {
-  sections: NavSectionDef[];
+  groups: NavGroupDef[];
+  homeItem: NavItemDef | null;
   showPendingBadge: boolean;
 };
 
 /** Sidebar + badge בקשות עריכה / ביטול חשbונית — נטען ב-Suspense */
-export async function AdminSidebarWithBadges({ sections, showPendingBadge }: Props) {
+export async function AdminSidebarWithBadges({ groups, homeItem, showPendingBadge }: Props) {
   if (!showPendingBadge) {
-    return <AdminSidebar sections={sections} />;
+    return <AdminSidebar groups={groups} homeItem={homeItem} />;
   }
   const [pendingOrderEdits, pendingInvoiceCancels] = await adminLayoutPerfRun("layout.kpi", () =>
     Promise.all([
@@ -29,5 +30,5 @@ export async function AdminSidebarWithBadges({ sections, showPendingBadge }: Pro
           pendingInvoiceCancelRequests: pendingInvoiceCancels,
         }
       : undefined;
-  return <AdminSidebar sections={sections} navBadges={navBadges} />;
+  return <AdminSidebar groups={groups} homeItem={homeItem} navBadges={navBadges} />;
 }

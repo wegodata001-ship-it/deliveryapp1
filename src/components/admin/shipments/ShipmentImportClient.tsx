@@ -117,6 +117,7 @@ export function ShipmentImportClient({ initialZones, initialCouriers }: Props) {
     mappingModalOpen,
     loadPreviewRows,
     checkLocationMappings,
+    setMappings,
     applyMappings,
     keepOriginalMappings,
     resetMappingFlow,
@@ -636,6 +637,8 @@ export function ShipmentImportClient({ initialZones, initialCouriers }: Props) {
       {mappingModalOpen && pendingMappings && pendingMappings.length > 0 ? (
         <LocationImportMappingModal
           mappings={pendingMappings}
+          zones={initialZones}
+          onMappingsChange={setMappings}
           onApply={() => applyMappings(preview, setPreview)}
           onKeepOriginal={keepOriginalMappings}
         />
