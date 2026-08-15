@@ -119,6 +119,7 @@ model User {
   paymentPlansCreated        PaymentPlan[]      @relation("PaymentPlanCreatedBy")
   notifications              UserNotification[]
   cashExpenses               CashExpense[]      @relation("CashExpenseCreatedBy")
+  cashExpensesOwned          CashExpense[]      @relation("CashExpenseOwner")
   cashCountsCreated          CashCount[]        @relation("CashCountCreatedBy")
   cashCountsApproved         CashCount[]        @relation("CashCountApprovedBy")
   paymentCashAuditReviews    PaymentCashAuditReview[] @relation("PaymentCashAuditReviewBy")
@@ -655,16 +656,20 @@ model CashExpense {
   notes         String?
   status      PaymentRecordStatus @default(ACTIVE)
   createdById String?
+  /** העובד שההוצאה משויכת אליו (יכול להיות שונה ממי שרשם) */
+  expenseOwnerUserId String?
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
 
-  createdBy User? @relation("CashExpenseCreatedBy", fields: [createdById], references: [id])
+  createdBy    User? @relation("CashExpenseCreatedBy", fields: [createdById], references: [id])
+  expenseOwner User? @relation("CashExpenseOwner", fields: [expenseOwnerUserId], references: [id])
 
   @@index([countryCode])
   @@index([weekCode])
   @@index([expenseDate])
   @@index([status])
   @@index([paymentMethod])
+  @@index([expenseOwnerUserId])
 }
 
 /**

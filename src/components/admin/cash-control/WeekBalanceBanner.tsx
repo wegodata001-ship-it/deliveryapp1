@@ -24,8 +24,8 @@ function primaryDiff(state: WeekBalanceStateDto): { currency: "ILS" | "USD"; dif
 
 function diffMessage(currency: "ILS" | "USD", diff: number): string {
   const amt = fmtDailyMoney(currency, Math.abs(diff));
-  if (diff < -CASH_CONTROL_EPS) return `חסר בקופה: ${amt}`;
-  if (diff > CASH_CONTROL_EPS) return `עודף בקופה: ${amt}`;
+  if (diff < -CASH_CONTROL_EPS) return `חוסר: ${amt}`;
+  if (diff > CASH_CONTROL_EPS) return `עודף: ${amt}`;
   return "";
 }
 
@@ -48,8 +48,9 @@ export function WeekBalanceBanner({
           <Check size={20} />
         </div>
         <div className="cc-week-balance__content">
-          <strong>✓ שבוע מאוזן</strong>
-          <p>
+          <strong>✓ השבוע מאוזן</strong>
+          <p>אין הפרש בין הקופה הצפויה לקופה בפועל</p>
+          <p className="cc-week-balance__hint">
             {label}
             {state.balancedByName ? ` · אושר על ידי ${state.balancedByName}` : ""}
           </p>
@@ -60,16 +61,18 @@ export function WeekBalanceBanner({
 
   if (state.status === "READY" && !dismissed) {
     return (
-      <section className="cc-week-balance cc-week-balance--ready" aria-label="מוכן לאיזון">
+      <section className="cc-week-balance cc-week-balance--confirm" aria-label="מוכן לאישור איזון">
         <div className="cc-week-balance__icon" aria-hidden>
-          <Check size={20} />
+          <Scale size={20} />
         </div>
         <div className="cc-week-balance__content">
-          <strong>✓ ההכנסות וההוצאות מאוזנות לשבוע {label}</strong>
-          <p>כל נתוני הקופה לשבוע זה נמצאו תקינים.</p>
+          <strong>הנתונים תואמים — ניתן לאשר איזון</strong>
+          <p>
+            שבוע {label}: אין הפרש בין הקופה הצפויה לספירה בפועל.
+          </p>
           {canManage ? (
             <>
-              <p className="cc-week-balance__prompt">האם ברצונך לאזן את שבוע {label}?</p>
+              <p className="cc-week-balance__prompt">האם ברצונך לאשר את איזון שבוע {label}?</p>
               <div className="cc-week-balance__actions">
                 <button type="button" className="cc-btn cc-btn--ghost" onClick={onDismiss}>
                   לא עכשיו
@@ -87,17 +90,54 @@ export function WeekBalanceBanner({
 
   if (state.status === "NEEDS_BALANCE") {
     const diff = primaryDiff(state);
+    const pendingCounts = state.snapshot.hasPendingCounts;
+
+    if (diff && diff.diff < -CASH_CONTROL_EPS) {
+      return (
+        <section className="cc-week-balance cc-week-balance--shortage" aria-label="שבוע לא מאוזן — חוסר">
+          <div className="cc-week-balance__icon" aria-hidden>
+            <AlertTriangle size={20} />
+          </div>
+          <div className="cc-week-balance__content">
+            <strong>⚠ השבוע אינו מאוזן</strong>
+            <p dir="ltr">{diffMessage(diff.currency, diff.diff)}</p>
+            <p className="cc-week-balance__hint">
+              יש לבדוק הכנסות, הוצאות או את ספירת הקופה לפני איזון השבוע.
+            </p>
+          </div>
+        </section>
+      );
+    }
+
+    if (diff && diff.diff > CASH_CONTROL_EPS) {
+      return (
+        <section className="cc-week-balance cc-week-balance--surplus" aria-label="שבוע לא מאוזן — עודף">
+          <div className="cc-week-balance__icon" aria-hidden>
+            <AlertTriangle size={20} />
+          </div>
+          <div className="cc-week-balance__content">
+            <strong>⚠ קיים עודף בקופה</strong>
+            <p dir="ltr">{diffMessage(diff.currency, diff.diff)}</p>
+            <p className="cc-week-balance__hint">
+              יש לבדוק הכנסות, הוצאות או את ספירת הקופה לפני איזון השבוע.
+            </p>
+          </div>
+        </section>
+      );
+    }
+
     return (
       <section className="cc-week-balance cc-week-balance--warn" aria-label="שבוע לא מאוזן">
         <div className="cc-week-balance__icon" aria-hidden>
           <AlertTriangle size={20} />
         </div>
         <div className="cc-week-balance__content">
-          <strong>⚠ השבוע עדיין אינו מאוזן</strong>
-          {diff ? <p dir="ltr">{diffMessage(diff.currency, diff.diff)}</p> : null}
-          <p className="cc-week-balance__hint">
-            יש לבדוק הכנסות, הוצאות או את ספירת הקופה לפני איזון השבוע.
-          </p>
+          <strong>⚠ השבוע אינו מאוזן</strong>
+          {pendingCounts ? (
+            <p>קיימות תנועות (הכנסות או הוצאות) שטרם נספרו בקופה.</p>
+          ) : (
+            <p>יש לבדוק הכנסות, הוצאות או את ספירת הקופה לפני איזון השבוע.</p>
+          )}
         </div>
       </section>
     );

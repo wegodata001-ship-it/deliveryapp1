@@ -14,6 +14,9 @@ export type WeekBalanceSnapshot = {
   weekCode: string;
   ils: WeekBalanceCurrencySnapshot;
   usd: WeekBalanceCurrencySnapshot;
+  /** יש תנועות (קליטה / הוצאה / ספירה) בשבוע */
+  hasWeekActivity: boolean;
+  /** ערוץ עם תנועה שעדיין לא נספר */
   hasPendingCounts: boolean;
   dataHash: string;
 };

@@ -11,6 +11,7 @@ import { useAdminFinancialModal } from "@/components/admin/AdminFinancialModalCo
 import { AdminLiveClock } from "@/components/admin/AdminLiveClock";
 import { WegoBrandLogo } from "@/components/admin/WegoBrandLogo";
 import { useLayoutFinancialDisplay } from "@/hooks/useLayoutFinancialDisplay";
+import { CashExpenseEntryHost } from "@/components/admin/CashExpenseEntryHost";
 
 function titleForPath(pathname: string): string {
   if (pathname === "/admin") return "מסך הבית";
@@ -23,6 +24,7 @@ function titleForPath(pathname: string): string {
   if (pathname === "/admin/customers" || pathname.startsWith("/admin/customers/")) return "לקוחות";
   if (pathname === "/admin/customer-card") return "כרטסת לקוח";
   if (pathname === "/admin/balances") return "יתרות";
+  if (pathname === "/admin/cash-expenses") return "הוצאות קופה";
   if (pathname === "/admin/source-tables") return "טבלאות מקור";
   if (pathname === "/admin/reports") return "דוחות";
   if (pathname === "/admin/settings") return "הגדרות";
@@ -35,9 +37,20 @@ type Props = {
   roleLabel: string;
   financial: SerializedFinancial | null;
   canManageFinancial: boolean;
+  canCreateCashExpense: boolean;
+  canManageAllCashExpenses: boolean;
+  currentUserId: string;
 };
 
-export function AdminTopBar({ displayName, roleLabel, financial, canManageFinancial }: Props) {
+export function AdminTopBar({
+  displayName,
+  roleLabel,
+  financial,
+  canManageFinancial,
+  canCreateCashExpense,
+  canManageAllCashExpenses,
+  currentUserId,
+}: Props) {
   const pathname = usePathname();
   const navLayout = useAdminNavLayout();
   const { openFinancialModal } = useAdminFinancialModal();
@@ -103,6 +116,14 @@ export function AdminTopBar({ displayName, roleLabel, financial, canManageFinanc
                 {canManageFinancial ? <span className="adm-mobile-fin-hint">הגדרות כספים</span> : null}
               </button>
             </>
+          ) : null}
+          {canCreateCashExpense && !canManageAllCashExpenses ? (
+            <CashExpenseEntryHost
+              canCreate={canCreateCashExpense}
+              canManageAll={canManageAllCashExpenses}
+              currentUserId={currentUserId}
+              variant="header"
+            />
           ) : null}
           <div className="adm-pill adm-pill--user adm-pill--dense">
             <span>משתמש מחובר</span>

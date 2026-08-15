@@ -87,3 +87,26 @@ export type CustomerWorkspacePaymentRow = CustomerProfilePaymentRow & {
   customerCode: string;
   customerName: string;
 };
+
+export type CustomerWorkspaceShipmentRow = {
+  id: string;
+  batchId: string;
+  shipmentLabel: string;
+  countryLabel: string;
+  countrySlug: string;
+  customerId: string | null;
+  customerCode: string | null;
+  customerName: string | null;
+  arrivalDateYmd: string;
+  boxes: number;
+  deliveryFeeIls: string;
+  paidAmountIls: string;
+  remainingFeeIls: string;
+  paymentStatus: "UNPAID" | "PARTIAL" | "PAID";
+};
+
+export type ShipmentCustomerLinkAudit = {
+  linkedRecords: number;
+  unlinkedRecords: number;
+  ambiguousRecords: number;
+};

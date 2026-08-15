@@ -39,7 +39,14 @@ export type {
   CustomersModuleListResult,
   CustomerWorkspaceOrderRow,
   CustomerWorkspacePaymentRow,
+  CustomerWorkspaceShipmentRow,
+  ShipmentCustomerLinkAudit,
 } from "@/lib/customers-module-types";
+
+export {
+  auditShipmentCustomerLinks,
+  listCustomerWorkspaceShipments,
+} from "@/app/admin/shipments/service";
 
 export { CUSTOMER_WORKSPACE_ROW_LIMIT } from "@/lib/customers-module-types";
 

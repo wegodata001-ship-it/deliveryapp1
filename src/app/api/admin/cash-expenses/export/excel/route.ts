@@ -1,12 +1,11 @@
 import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
-import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
+import { requireAuth } from "@/lib/admin-auth";
+import { canManageAllCashExpenses } from "@/app/admin/cash-expenses/rbac";
 import { listCashExpensesFull } from "@/app/admin/cash-expenses/service";
 import type { CashExpenseListFilter } from "@/app/admin/cash-expenses/types";
 
 export const runtime = "nodejs";
-
-const VIEW_PERMS = ["view_payment_control", "manage_cash_expenses"];
 
 function n(s: string | null | undefined): number {
   const v = Number(String(s ?? "").replace(/,/g, ""));
@@ -16,7 +15,7 @@ function n(s: string | null | undefined): number {
 export async function POST(req: Request): Promise<Response> {
   try {
     const me = await requireAuth();
-    if (!isAdminUser(me) && !userHasAnyPermission(me, VIEW_PERMS)) {
+    if (!canManageAllCashExpenses(me)) {
       return NextResponse.json({ ok: false, error: "אין הרשאה" }, { status: 403 });
     }
 
@@ -25,7 +24,7 @@ export async function POST(req: Request): Promise<Response> {
 
     const wb = XLSX.utils.book_new();
     const aoa: (string | number)[][] = [
-      ["תאריך", "סוג הוצאה", "אמצעי תשלום", "תיאור", "סכום", "מטבע", "שבוע", "עובד שהזין", "מסמכים"],
+      ["תאריך", "סוג הוצאה", "אמצעי תשלום", "תיאור", "סכום", "מטבע", "שבוע", "עובד", "נרשם על ידי", "מסמכים"],
       ...rows.map((r) => [
         r.dateDisplay,
         r.reasonLabel,
@@ -34,7 +33,8 @@ export async function POST(req: Request): Promise<Response> {
         n(r.amount),
         r.currency === "USD" ? "$" : "₪",
         r.weekCode ?? "—",
-        r.createdByName ?? "—",
+        r.expenseOwnerName ?? r.createdByName ?? "—",
+        r.recordedByName ?? "—",
         r.documentCount,
       ]),
     ];

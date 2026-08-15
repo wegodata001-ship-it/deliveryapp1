@@ -15,6 +15,7 @@ import { ACTIVE_WORK_WEEK_CODE } from "@/lib/active-work-week";
 import { parseAhWeekNumber, toAhWeekCode } from "@/lib/weeks/ah-week-nav";
 import {
   deleteCashExpenseAction,
+  listCashExpenseEmployeeOptionsAction,
   listCashExpensesFullAction,
 } from "@/app/admin/cash-expenses/actions";
 import type {
@@ -31,6 +32,8 @@ import { CASH_EXPENSE_PAYMENT_METHODS } from "@/lib/cash-expense-payment-method"
 import type { CashExpensePaymentMethod } from "@/lib/cash-expense-payment-method";
 import { fmtDailyMoney } from "@/lib/cash-control-daily";
 import { CashExpenseFormModal, type CashExpenseEditable, timeFromIso } from "@/components/admin/CashExpenseFormModal";
+import { EmployeeExpenseEntryModal } from "@/components/admin/EmployeeExpenseEntryModal";
+import { useAdminToast } from "@/components/admin/AdminNavShell";
 import {
   CashExpenseDeleteConfirmModal,
   type CashExpenseDeleteTarget,
@@ -58,9 +61,11 @@ function num(s: string | null | undefined): number {
 export function CashExpensesClient({
   caps,
   initialWeek,
+  currentUserId,
 }: {
   caps: CashExpenseCapabilities;
   initialWeek: string;
+  currentUserId: string;
 }) {
   const weekOptions = useMemo(buildWeekOptions, []);
   const filterDefaults = useMemo(
@@ -70,6 +75,7 @@ export function CashExpensesClient({
       reason: "",
       paymentMethod: "",
       currency: "",
+      employeeId: "",
       q: "",
     }),
     [initialWeek, weekOptions],
@@ -89,6 +95,10 @@ export function CashExpensesClient({
   const paymentMethod = (filterValues.paymentMethod || "ALL") as CashExpensePaymentMethod | "ALL";
   const currency = (filterValues.currency || "ALL") as CashCurrency | "ALL";
   const search = filterValues.q || "";
+  const employeeId = filterValues.employeeId || "";
+
+  const onToast = useAdminToast();
+  const [employeeOptions, setEmployeeOptions] = useState<{ id: string; label: string }[]>([]);
 
   const [rows, setRows] = useState<CashExpenseRowDto[]>([]);
   const [loading, setLoading] = useState(true);
@@ -98,7 +108,13 @@ export function CashExpensesClient({
   const [deleteTarget, setDeleteTarget] = useState<CashExpenseDeleteTarget | null>(null);
 
   const [modalOpen, setModalOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<CashExpenseEditable | null>(null);
+
+  useEffect(() => {
+    if (!caps.canFilterByEmployee) return;
+    void listCashExpenseEmployeeOptionsAction().then(setEmployeeOptions);
+  }, [caps.canFilterByEmployee, tick]);
 
   const filterFields = useMemo<TableFilterFieldConfig[]>(
     () => [
@@ -107,6 +123,19 @@ export function CashExpensesClient({
         kind: "search",
         placeholder: "תיאור / עובד / הערות…",
       },
+      ...(caps.canFilterByEmployee
+        ? [
+            {
+              id: "employeeId",
+              kind: "select" as const,
+              label: "עובד",
+              options: [
+                { value: "", label: "כל העובדים" },
+                ...employeeOptions.map((e) => ({ value: e.id, label: e.label })),
+              ],
+            },
+          ]
+        : []),
       {
         id: "week",
         kind: "week",
@@ -135,7 +164,7 @@ export function CashExpensesClient({
         ],
       },
     ],
-    [weekOptions],
+    [weekOptions, caps.canFilterByEmployee, employeeOptions],
   );
 
   const filter = useMemo<CashExpenseListFilter>(
@@ -146,8 +175,9 @@ export function CashExpensesClient({
       paymentMethod,
       currency,
       search: search.trim() || undefined,
+      expenseOwnerUserId: employeeId.trim() || undefined,
     }),
-    [week, dateYmd, reason, paymentMethod, currency, search],
+    [week, dateYmd, reason, paymentMethod, currency, search, employeeId],
   );
 
   useEffect(() => {
@@ -258,7 +288,8 @@ export function CashExpensesClient({
         <td>${r.notes ?? "—"}</td>
         <td dir="ltr">${fmtDailyMoney(r.currency, num(r.amount))}</td>
         <td>${r.currency === "USD" ? "$ דולר" : "₪ שקל"}</td>
-        <td>${r.createdByName ?? "—"}</td>
+        <td>${r.expenseOwnerName ?? r.createdByName ?? "—"}</td>
+        <td>${r.recordedByName ?? "—"}</td>
       </tr>`,
       )
       .join("");
@@ -266,7 +297,7 @@ export function CashExpensesClient({
       <h1>הוצאות קופה</h1>
       <p class="sub">${week.trim() ? `שבוע ${week}` : "כל השבועות"} · ${totals.count} רשומות · סה"כ ₪${totals.ils.toLocaleString("he-IL")} · $${totals.usd.toLocaleString("en-US")}</p>
       <table>
-        <thead><tr><th>תאריך</th><th>סוג הוצאה</th><th>אמצעי תשלום</th><th>תיאור</th><th>סכום</th><th>מטבע</th><th>עובד שהזין</th></tr></thead>
+        <thead><tr><th>תאריך</th><th>סוג הוצאה</th><th>אמצעי תשלום</th><th>תיאור</th><th>סכום</th><th>מטבע</th><th>עובד</th><th>נרשם על ידי</th></tr></thead>
         <tbody>${bodyRows}</tbody>
       </table>
     </body></html>`);
@@ -288,12 +319,16 @@ export function CashExpensesClient({
           </div>
         </div>
         <div className="cc-toolbar__actions">
-          <button type="button" className="cc-btn cc-btn--ghost" onClick={() => void exportExcel()} disabled={exporting}>
-            <FileSpreadsheet size={15} /> Excel
-          </button>
-          <button type="button" className="cc-btn cc-btn--ghost" onClick={exportPdf}>
-            <FileText size={15} /> PDF
-          </button>
+          {caps.canExport ? (
+            <>
+              <button type="button" className="cc-btn cc-btn--ghost" onClick={() => void exportExcel()} disabled={exporting}>
+                <FileSpreadsheet size={15} /> Excel
+              </button>
+              <button type="button" className="cc-btn cc-btn--ghost" onClick={exportPdf}>
+                <FileText size={15} /> PDF
+              </button>
+            </>
+          ) : null}
           <button type="button" className="cc-btn cc-btn--ghost" onClick={refresh} aria-label="רענון">
             <RefreshCw size={15} />
           </button>
@@ -303,7 +338,7 @@ export function CashExpensesClient({
               className="cc-btn cc-btn--danger"
               onClick={() => {
                 setEditing(null);
-                setModalOpen(true);
+                setCreateOpen(true);
               }}
             >
               <Plus size={15} /> הוצאה חדשה
@@ -319,8 +354,8 @@ export function CashExpensesClient({
         onClear={clearFilters}
         onRefresh={refresh}
         refreshing={loading}
-        onExcel={() => void exportExcel()}
-        onPdf={exportPdf}
+        onExcel={caps.canExport ? () => void exportExcel() : undefined}
+        onPdf={caps.canExport ? exportPdf : undefined}
         exporting={exporting}
         resultCount={rows.length}
       />
@@ -367,7 +402,8 @@ export function CashExpensesClient({
                   <th className="cc-num">סכום</th>
                   <th>מטבע</th>
                   <th>שבוע</th>
-                  <th>עובד שהזין</th>
+                  <th>עובד</th>
+                  <th>נרשם על ידי</th>
                   <th>📎</th>
                   <th>סטטוס</th>
                   <th>פעולות</th>
@@ -393,7 +429,8 @@ export function CashExpensesClient({
                     </td>
                     <td>{r.currency === "USD" ? "$ דולר" : "₪ שקל"}</td>
                     <td dir="ltr">{r.weekCode ?? "—"}</td>
-                    <td>{r.createdByName ?? "—"}</td>
+                    <td>{r.expenseOwnerName ?? r.createdByName ?? "—"}</td>
+                    <td>{r.recordedByName ?? "—"}</td>
                     <td className="cc-icon-cell">
                       {r.documentCount > 0 ? (
                         <span className="cc-doc-badge">
@@ -463,7 +500,7 @@ export function CashExpensesClient({
                       </>
                     ) : null}
                   </td>
-                  <td colSpan={7} />
+                  <td colSpan={8} />
                 </tr>
               </tfoot>
             </table>
@@ -477,6 +514,18 @@ export function CashExpensesClient({
         onSaved={refresh}
         expense={editing}
         week={week.trim() ? week : undefined}
+      />
+
+      <EmployeeExpenseEntryModal
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onSaved={() => {
+          onToast("ההוצאה נשמרה בהצלחה", { variant: "success" });
+          refresh();
+        }}
+        currentUserId={currentUserId}
+        canSelectExpenseOwner={caps.canSelectExpenseOwner}
+        allowDate={caps.canSetExpenseDate}
       />
 
       <CashExpenseDeleteConfirmModal

@@ -7,12 +7,14 @@ import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import {
   listCustomerWorkspaceOrders,
   listCustomerWorkspacePayments,
+  listCustomerWorkspaceShipments,
   listCustomersModule,
   listCustomersModuleForExport,
   type CustomerProfilePayload,
   type CustomersModuleListResult,
   type CustomerWorkspaceOrderRow,
   type CustomerWorkspacePaymentRow,
+  type CustomerWorkspaceShipmentRow,
 } from "@/lib/customers-module";
 import { activePaidPaymentWhere, findActiveCustomerPayments } from "@/lib/payment-record-status";
 import { computeOrderOpenDebtUsd } from "@/lib/order-remaining-debt";
@@ -61,6 +63,19 @@ export async function listCustomerWorkspacePaymentsAction(
   const me = await requireAuth();
   if (!canViewCustomersModule(me)) return { ok: false, error: "אין הרשאה" };
   const rows = await listCustomerWorkspacePayments(
+    customerId,
+    workCountryFromOrderSourceCountry(workCountry),
+  );
+  return { ok: true, rows };
+}
+
+export async function listCustomerWorkspaceShipmentsAction(
+  customerId?: string | null,
+  workCountry?: string,
+): Promise<{ ok: true; rows: CustomerWorkspaceShipmentRow[] } | { ok: false; error: string }> {
+  const me = await requireAuth();
+  if (!canViewCustomersModule(me)) return { ok: false, error: "אין הרשאה" };
+  const rows = await listCustomerWorkspaceShipments(
     customerId,
     workCountryFromOrderSourceCountry(workCountry),
   );

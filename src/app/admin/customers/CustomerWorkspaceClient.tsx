@@ -6,6 +6,7 @@ import { RefreshCw, UserRound } from "lucide-react";
 import {
   listCustomerWorkspaceOrdersAction,
   listCustomerWorkspacePaymentsAction,
+  listCustomerWorkspaceShipmentsAction,
   listCustomersModuleAction,
 } from "@/app/admin/customers/actions";
 import { CustomerDocumentsPanel } from "@/components/admin/customers/CustomerDocumentsPanel";
@@ -16,6 +17,7 @@ import {
   CustomersWorkspacePanel,
   OrdersWorkspacePanel,
   PaymentsWorkspacePanel,
+  ShipmentsWorkspacePanel,
   rowLimitSuffix,
 } from "@/components/admin/customers/CustomerWorkspacePanels";
 import {
@@ -35,9 +37,11 @@ import type {
   CustomersModuleListRow,
   CustomerWorkspaceOrderRow,
   CustomerWorkspacePaymentRow,
+  CustomerWorkspaceShipmentRow,
 } from "@/lib/customers-module-types";
 import { computeCustomerWorkspaceStats } from "@/lib/customer-workspace-stats";
 import type { CustomerLedgerExportMeta } from "@/lib/customer-ledger-export";
+import { shipmentCountrySlugFromWorkCountry } from "@/lib/shipment-country-scope.shared";
 
 const CUSTOMERS_LIMIT = 40;
 type BalanceFilter = "all" | "debt" | "credit" | "balanced";
@@ -85,8 +89,10 @@ export function CustomerWorkspaceClient() {
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
   const [orders, setOrders] = useState<CustomerWorkspaceOrderRow[]>([]);
   const [payments, setPayments] = useState<CustomerWorkspacePaymentRow[]>([]);
+  const [shipments, setShipments] = useState<CustomerWorkspaceShipmentRow[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(true);
   const [paymentsLoading, setPaymentsLoading] = useState(true);
+  const [shipmentsLoading, setShipmentsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [layoutMode, setLayoutMode] = useState<WorkspaceLayoutMode>("combined");
@@ -165,15 +171,30 @@ export function CustomerWorkspaceClient() {
     [payments, customerCodeFilter, customerNameFilter, customerSearchDraft, weekFilter],
   );
 
+  const filteredShipments = useMemo(
+    () =>
+      shipments.filter((s) => {
+        const combined = `${s.customerCode ?? ""} ${s.customerName ?? ""} ${s.shipmentLabel} ${s.countryLabel}`;
+        return (
+          textIncludes(s.customerCode ?? "", customerCodeFilter) &&
+          textIncludes(s.customerName ?? "", customerNameFilter) &&
+          textIncludes(combined, customerSearchDraft) &&
+          textIncludes(s.shipmentLabel, weekFilter)
+        );
+      }),
+    [shipments, customerCodeFilter, customerNameFilter, customerSearchDraft, weekFilter],
+  );
+
   const workspaceStats = useMemo(
     () =>
       computeCustomerWorkspaceStats({
         orders: filteredOrders,
         payments: filteredPayments,
+        shipments: filteredShipments,
         customers: filteredCustomers,
         selectedCustomer,
       }),
-    [filteredOrders, filteredPayments, filteredCustomers, selectedCustomer],
+    [filteredOrders, filteredPayments, filteredShipments, filteredCustomers, selectedCustomer],
   );
 
   const showToast = useCallback((msg: string) => {
@@ -223,13 +244,15 @@ export function CustomerWorkspaceClient() {
     [workCountry],
   );
 
-  const loadOrdersPayments = useCallback(
+  const loadOrdersPaymentsShipments = useCallback(
     async (customerId: string | null) => {
       setOrdersLoading(true);
       setPaymentsLoading(true);
-      const [oRes, pRes] = await Promise.all([
+      setShipmentsLoading(true);
+      const [oRes, pRes, sRes] = await Promise.all([
         listCustomerWorkspaceOrdersAction(customerId, workCountry),
         listCustomerWorkspacePaymentsAction(customerId, workCountry),
+        listCustomerWorkspaceShipmentsAction(customerId, workCountry),
       ]);
       if (oRes.ok) setOrders(oRes.rows);
       else {
@@ -241,8 +264,14 @@ export function CustomerWorkspaceClient() {
         setPayments([]);
         setError(pRes.error);
       }
+      if (sRes.ok) setShipments(sRes.rows);
+      else {
+        setShipments([]);
+        setError(sRes.error);
+      }
       setOrdersLoading(false);
       setPaymentsLoading(false);
+      setShipmentsLoading(false);
     },
     [workCountry],
   );
@@ -257,8 +286,8 @@ export function CustomerWorkspaceClient() {
   }, [searchParams]);
 
   useEffect(() => {
-    void loadOrdersPayments(selectedCustomerId);
-  }, [loadOrdersPayments, selectedCustomerId]);
+    void loadOrdersPaymentsShipments(selectedCustomerId);
+  }, [loadOrdersPaymentsShipments, selectedCustomerId]);
 
   function selectCustomer(id: string) {
     const next = selectedCustomerId === id ? null : id;
@@ -278,8 +307,21 @@ export function CustomerWorkspaceClient() {
 
   function refreshWorkspace() {
     void loadCustomers(customersPage, customerSearch);
-    void loadOrdersPayments(selectedCustomerId);
+    void loadOrdersPaymentsShipments(selectedCustomerId);
     showToast("הנתונים רועננו");
+  }
+
+  const shipmentCountrySlug = shipmentCountrySlugFromWorkCountry(workCountry);
+
+  function openShipment(row: CustomerWorkspaceShipmentRow) {
+    router.push(`/admin/shipments/${row.countrySlug || shipmentCountrySlug}/${row.batchId}`);
+  }
+
+  function showAllShipmentsForCustomer() {
+    const code = selectedCustomer?.code?.trim();
+    if (!code) return;
+    const q = new URLSearchParams({ customerCode: code });
+    router.push(`/admin/shipments/${shipmentCountrySlug}/control?${q.toString()}`);
   }
 
   const filterHint = selectedCustomer
@@ -290,6 +332,7 @@ export function CustomerWorkspaceClient() {
 
   const showCustomersCol = layoutMode === "combined" || layoutMode === "customers";
   const showOrdersCol = layoutMode === "combined" || layoutMode === "orders";
+  const showShipmentsCol = layoutMode === "combined" || layoutMode === "shipments";
   const showPaymentsCol = layoutMode === "combined" || layoutMode === "payments";
 
   const customersPanelProps = {
@@ -322,6 +365,17 @@ export function CustomerWorkspaceClient() {
     rowLimitSuffix,
     onOpenPayment: (paymentId: string) =>
       openWindow({ type: "paymentsUpdated", props: { paymentId } }),
+  };
+
+  const shipmentsPanelProps = {
+    shipments: filteredShipments,
+    shipmentsLoading,
+    showCustomerCol,
+    selectedCustomerCode: selectedCustomer?.code ?? null,
+    rowLimitSuffix,
+    onOpenShipment: openShipment,
+    onShowAllShipments: showAllShipmentsForCustomer,
+    emptyText: selectedCustomerId ? "אין משלוחים ללקוח זה" : "אין משלוחים להצגה",
   };
 
   return (
@@ -413,13 +467,17 @@ export function CustomerWorkspaceClient() {
               type="button"
               className="adm-btn adm-btn--secondary adm-cust-workspace__refresh-btn"
               onClick={refreshWorkspace}
-              disabled={customersLoading || ordersLoading || paymentsLoading}
+              disabled={customersLoading || ordersLoading || paymentsLoading || shipmentsLoading}
             >
               <RefreshCw size={16} strokeWidth={1.75} aria-hidden />
               רענון
             </button>
           </div>
-          <CustomerWorkspaceKpiStrip stats={workspaceStats} rowLimitSuffix={rowLimitSuffix} />
+          <CustomerWorkspaceKpiStrip
+            stats={workspaceStats}
+            selectedCustomerName={selectedCustomer?.name ?? null}
+            rowLimitSuffix={rowLimitSuffix}
+          />
         </div>
       </header>
 
@@ -489,6 +547,15 @@ export function CustomerWorkspaceClient() {
           </section>
         ) : null}
 
+        {showShipmentsCol ? (
+          <section className="adm-cust-workspace__col adm-cust-workspace__col--shipments">
+            <ShipmentsWorkspacePanel
+              {...shipmentsPanelProps}
+              onExpand={() => setExpandTable("shipments")}
+            />
+          </section>
+        ) : null}
+
         {showPaymentsCol ? (
           <section className="adm-cust-workspace__col adm-cust-workspace__col--payments">
             <PaymentsWorkspacePanel {...paymentsPanelProps} onExpand={() => setExpandTable("payments")} />
@@ -511,6 +578,17 @@ export function CustomerWorkspaceClient() {
         <CustomerWorkspaceExpandModal title="הזמנות" onClose={() => setExpandTable(null)}>
           <OrdersWorkspacePanel
             {...ordersPanelProps}
+            inModal
+            showCardShell={false}
+            onExpand={() => setExpandTable(null)}
+          />
+        </CustomerWorkspaceExpandModal>
+      ) : null}
+
+      {expandTable === "shipments" ? (
+        <CustomerWorkspaceExpandModal title="משלוחים" onClose={() => setExpandTable(null)}>
+          <ShipmentsWorkspacePanel
+            {...shipmentsPanelProps}
             inModal
             showCardShell={false}
             onExpand={() => setExpandTable(null)}

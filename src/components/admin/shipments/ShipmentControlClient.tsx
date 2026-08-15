@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useState, useMemo, useCallback, useTransition, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   Truck, RefreshCw, Filter, ChevronDown, ChevronUp,
   AlertTriangle, Users, MapPin, Package, Banknote,
@@ -176,6 +177,7 @@ type Props = {
 
 export function ShipmentControlClient({ initialData, generatedBy }: Props) {
   const { workCountry } = useShipmentCountry();
+  const searchParams = useSearchParams();
   const [data, setData] = useState(initialData);
   const [activeTab, setActiveTab] = useState<Tab>("overview");
   const [isPending, startTransition] = useTransition();
@@ -221,6 +223,16 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
     },
     []
   );
+
+  useEffect(() => {
+    const fromUrl = searchParams.get("customerCode")?.trim() ?? "";
+    if (!fromUrl) return;
+    setCustomerCode(fromUrl);
+    refresh({
+      workCountry,
+      customerCode: fromUrl,
+    });
+  }, [searchParams, workCountry, refresh]);
 
   function applyFilter() {
     refresh(currentFilter());

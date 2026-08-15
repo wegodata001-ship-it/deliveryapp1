@@ -6,7 +6,9 @@ import { ACTIVE_WORK_WEEK_CODE } from "@/lib/active-work-week";
 export const dynamic = "force-dynamic";
 
 export default async function CashExpensesPage() {
-  await requireRoutePermission(["manage_cash_expenses", "view_payment_control"]);
+  const user = await requireRoutePermission(["view_payment_control"]);
   const caps = await getCashExpenseCapabilitiesAction();
-  return <CashExpensesClient caps={caps} initialWeek={ACTIVE_WORK_WEEK_CODE} />;
+  return (
+    <CashExpensesClient caps={caps} initialWeek={ACTIVE_WORK_WEEK_CODE} currentUserId={user.id} />
+  );
 }

@@ -1,7 +1,6 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
   createClientAction,
@@ -17,7 +16,6 @@ import {
   type CustomerLedgerRow,
 } from "@/app/admin/capture/actions";
 import {
-  dispatchCustomerCreated,
   WEGO_CUSTOMER_CREATED_EVENT,
   type CustomerCreatedDetail,
 } from "@/lib/customer-created-bus";
@@ -33,7 +31,6 @@ import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { CustomerPlaceCombo } from "@/components/admin/CustomerPlaceCombo";
 import { LedgerPdfExportModal } from "@/components/admin/LedgerPdfExportModal";
-import { suggestArabicCustomerName } from "@/lib/arabic-name-suggest";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { formatMoneyAmount, formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
 import { CustomerBalanceView } from "@/components/ui/CustomerBalanceView";
@@ -712,36 +709,13 @@ export function CustomerCardWindowBody({
                   </div>
                   <div className="form-field">
                     <label htmlFor="cust-name-ar">שם לקוח בערבית</label>
-                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      <input
-                        id="cust-name-ar"
-                        dir="rtl"
-                        placeholder="مثال: محمد مدبوح"
-                        value={form.nameAr}
-                        onChange={(e) => setForm((f) => ({ ...f, nameAr: e.target.value }))}
-                        style={{ flex: 1 }}
-                      />
-                      <button
-                        type="button"
-                        className="btn btn-secondary"
-                        title="הצעת תעתיק לערבית לפי השם באנגלית"
-                        onClick={() => {
-                          setErr(null);
-                          const src = form.nameEn.trim() || form.displayName.trim();
-                          const { suggested } = suggestArabicCustomerName(src);
-                          if (suggested) {
-                            setForm((f) => ({ ...f, nameAr: suggested }));
-                          } else {
-                            setErr("לא נמצאה הצעת תרגום לשם זה — יש להזין ידנית");
-                          }
-                        }}
-                      >
-                        הצע תרגום
-                      </button>
-                    </div>
-                    <p className="adm-field-hint" style={{ margin: "4px 0 0", fontSize: "0.75rem", color: "#64748b" }}>
-                      חובה ל־PDF לשליח. ניתן ללחוץ «הצע תרגום» לפי השם באנגלית (תעתיק), ואז לערוך ולשמור.
-                    </p>
+                    <input
+                      id="cust-name-ar"
+                      dir="rtl"
+                      placeholder="مثال: محمد مدبوح"
+                      value={form.nameAr}
+                      onChange={(e) => setForm((f) => ({ ...f, nameAr: e.target.value }))}
+                    />
                   </div>
                   <div className="form-field">
                     <label htmlFor="cust-name-en">שם באנגלית</label>
@@ -768,7 +742,7 @@ export function CustomerCardWindowBody({
                     />
                   </div>
                   <div className="form-field">
-                    <label htmlFor="cust-place">עיר</label>
+                    <label htmlFor="cust-place">עיר / מקום</label>
                     <CustomerPlaceCombo
                       id="cust-place"
                       value={form.country}
@@ -1144,21 +1118,18 @@ const EMPTY_NEW_CUSTOMER_FORM = {
   phone2: "",
   country: "",
   email: "",
-  notes: "",
 };
 
 export function CreateCustomerWindowBody({ initialCustomerCode }: { initialCustomerCode?: string }) {
   const { closeTop, completeCustomerCreate } = useAdminWindows();
   const router = useRouter();
   const nameArRef = useRef<HTMLInputElement>(null);
-  const notesRef = useRef<HTMLTextAreaElement>(null);
   /** true אחרי שהמשתמש ערך את קוד הלקוח ידנית — לא לדרוס באוטומט */
   const customerCodeTouchedRef = useRef(false);
   const [form, setForm] = useState({ ...EMPTY_NEW_CUSTOMER_FORM });
   const [busy, setBusy] = useState(false);
   const [codeBusy, setCodeBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
   const [standaloneDone, setStandaloneDone] = useState<ClientCreateResult | null>(null);
 
   async function loadSuggestedCode(opts?: { force?: boolean }) {
@@ -1189,16 +1160,9 @@ export function CreateCustomerWindowBody({ initialCustomerCode }: { initialCusto
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount בלבד
   }, [initialCustomerCode]);
 
-  function resetFormForNext() {
-    customerCodeTouchedRef.current = false;
-    setForm({ ...EMPTY_NEW_CUSTOMER_FORM });
-    setErr(null);
-  }
-
   async function performSave(): Promise<ClientCreateResult | null> {
     if (busy) return null;
     setErr(null);
-    setSaveSuccessMsg(null);
     if (!form.customerCode.trim()) {
       setErr("יש להזין קוד לקוח");
       return null;
@@ -1217,7 +1181,7 @@ export function CreateCustomerWindowBody({ initialCustomerCode }: { initialCusto
       phone2: form.phone2.trim() || null,
       country: form.country || null,
       email: form.email || null,
-      notes: form.notes || null,
+      notes: null,
     });
     setBusy(false);
     if (!res.ok) {
@@ -1237,175 +1201,131 @@ export function CreateCustomerWindowBody({ initialCustomerCode }: { initialCusto
     }
   }
 
-  async function onSaveAndNew() {
-    const client = await performSave();
-    if (!client) return;
-    dispatchCustomerCreated(client);
-    setSaveSuccessMsg("לקוח נשמר בהצלחה");
-    resetFormForNext();
-    await loadSuggestedCode({ force: true });
-    window.setTimeout(() => nameArRef.current?.focus(), 0);
-    window.setTimeout(() => setSaveSuccessMsg(null), 3200);
-  }
-
   return (
-    <div className="adm-win-scroll-body adm-client-create-modal">
+    <div className="adm-client-create-shell">
       {!standaloneDone ? (
         <>
-          <h3 className="adm-client-create-title">לקוח חדש</h3>
-          {saveSuccessMsg ? <div className="adm-pay-success">{saveSuccessMsg}</div> : null}
-          {err ? <div className="adm-error">{err}</div> : null}
-          <div className="adm-client-create-grid">
-            <div className="adm-field">
-              <div className="adm-client-create-label-row">
-                <label htmlFor="new-customer-code" title="ניתן לשנות ידנית או להשתמש במספר האוטומטי">
-                  קוד לקוח
-                </label>
-                <button
-                  type="button"
-                  className="adm-client-create-auto-code"
-                  disabled={codeBusy || busy}
-                  title="מייצר מספר פנוי חדש (רק בלחיצה)"
-                  onClick={() => void loadSuggestedCode({ force: true })}
-                >
-                  {codeBusy ? "…" : "רענן מספר"}
-                </button>
+          <div className="adm-client-create-body">
+            <p className="adm-client-create-subtitle">פרטי הלקוח</p>
+            {err ? <div className="adm-error adm-error--compact">{err}</div> : null}
+            <div className="adm-client-create-grid">
+              <div className="adm-field adm-client-create-field--code">
+                <div className="adm-client-create-label-row">
+                  <label htmlFor="new-customer-code">קוד לקוח</label>
+                  <button
+                    type="button"
+                    className="adm-client-create-auto-code"
+                    disabled={codeBusy || busy}
+                    title="מייצר מספר פנוי חדש"
+                    onClick={() => void loadSuggestedCode({ force: true })}
+                  >
+                    {codeBusy ? "…" : "רענן מספר"}
+                  </button>
+                </div>
+                <input
+                  id="new-customer-code"
+                  dir="ltr"
+                  placeholder="55"
+                  value={form.customerCode}
+                  disabled={busy}
+                  autoComplete="off"
+                  onChange={(e) => {
+                    customerCodeTouchedRef.current = true;
+                    setForm((f) => ({ ...f, customerCode: e.target.value }));
+                  }}
+                />
               </div>
-              <p className="adm-client-create-code-hint" title="ניתן לשנות ידנית או להשתמש במספר האוטומטי">
-                ניתן לשנות ידנית או להשתמש במספר האוטומטי
-              </p>
-              <input
-                id="new-customer-code"
-                dir="ltr"
-                placeholder="24008"
-                value={form.customerCode}
-                disabled={busy}
-                autoComplete="off"
-                onChange={(e) => {
-                  customerCodeTouchedRef.current = true;
-                  setForm((f) => ({ ...f, customerCode: e.target.value }));
-                }}
-              />
-            </div>
-            <div className="adm-field">
-              <label htmlFor="new-customer-name-en">שם אנגלית</label>
-              <input
-                id="new-customer-name-en"
-                dir="ltr"
-                placeholder="MOHAMMAD"
-                value={form.nameEn}
-                onChange={(e) => setForm((f) => ({ ...f, nameEn: e.target.value }))}
-              />
-            </div>
-            <div className="adm-field">
-              <label htmlFor="new-customer-name-ar">שם ערבית</label>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <div className="adm-field adm-client-create-field--name-ar">
+                <label htmlFor="new-customer-name-ar">שם ערבית</label>
                 <input
                   ref={nameArRef}
                   id="new-customer-name-ar"
+                  dir="rtl"
                   placeholder="محمد"
                   value={form.nameAr}
-                  onChange={(e) => setForm((f) => ({ ...f, nameAr: e.target.value }))}
-                  required
-                  style={{ flex: 1 }}
-                />
-                <button
-                  type="button"
-                  className="adm-btn adm-btn--secondary adm-btn--sm"
                   disabled={busy}
-                  onClick={() => {
-                    setErr(null);
-                    const { suggested } = suggestArabicCustomerName(form.nameEn.trim());
-                    if (suggested) setForm((f) => ({ ...f, nameAr: suggested }));
-                    else setErr("לא נמצאה הצעת תרגום — הזן שם ערבית ידנית");
-                  }}
-                >
-                  הצע תרגום
-                </button>
+                  autoComplete="off"
+                  onChange={(e) => setForm((f) => ({ ...f, nameAr: e.target.value }))}
+                />
+              </div>
+              <div className="adm-field adm-client-create-field--name-en">
+                <label htmlFor="new-customer-name-en">שם אנגלית</label>
+                <input
+                  id="new-customer-name-en"
+                  dir="ltr"
+                  placeholder="wego data"
+                  value={form.nameEn}
+                  disabled={busy}
+                  autoComplete="off"
+                  onChange={(e) => setForm((f) => ({ ...f, nameEn: e.target.value }))}
+                />
+              </div>
+              <div className="adm-field">
+                <label htmlFor="new-customer-phone">טלפון</label>
+                <input
+                  id="new-customer-phone"
+                  dir="ltr"
+                  placeholder="050-0000000"
+                  value={form.phone}
+                  disabled={busy}
+                  autoComplete="off"
+                  onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
+                />
+              </div>
+              <div className="adm-field">
+                <label htmlFor="new-customer-phone2">טלפון נוסף</label>
+                <input
+                  id="new-customer-phone2"
+                  dir="ltr"
+                  placeholder="050-0000000"
+                  value={form.phone2}
+                  disabled={busy}
+                  autoComplete="off"
+                  onChange={(e) => setForm((f) => ({ ...f, phone2: e.target.value }))}
+                />
+              </div>
+              <div className="adm-field">
+                <label htmlFor="new-customer-email">אימייל</label>
+                <input
+                  id="new-customer-email"
+                  dir="ltr"
+                  type="email"
+                  placeholder="name@company.com"
+                  value={form.email}
+                  disabled={busy}
+                  autoComplete="off"
+                  onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+                />
+              </div>
+              <div className="adm-field adm-client-create-field--wide">
+                <label htmlFor="new-customer-place">עיר / מקום</label>
+                <CustomerPlaceCombo
+                  id="new-customer-place"
+                  value={form.country}
+                  disabled={busy}
+                  onChange={(place) => setForm((f) => ({ ...f, country: place }))}
+                />
               </div>
             </div>
-            <div className="adm-field">
-              <label htmlFor="new-customer-phone">טלפון (אופציונלי)</label>
-              <input
-                id="new-customer-phone"
-                dir="ltr"
-                placeholder="050-0000000 (אופציונלי)"
-                value={form.phone}
-                disabled={busy}
-                onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
-              />
-            </div>
-            <div className="adm-field">
-              <label htmlFor="new-customer-phone2">טלפון נוסף (אופציונלי)</label>
-              <input
-                id="new-customer-phone2"
-                dir="ltr"
-                placeholder="050-0000000 (אופציונלי)"
-                value={form.phone2}
-                disabled={busy}
-                onChange={(e) => setForm((f) => ({ ...f, phone2: e.target.value }))}
-              />
-            </div>
-            <div className="adm-field">
-              <label htmlFor="new-customer-email">אימייל</label>
-              <input
-                id="new-customer-email"
-                dir="ltr"
-                placeholder="name@company.com"
-                value={form.email}
-                onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
-              />
-            </div>
-            <div className="adm-field">
-              <label htmlFor="new-customer-place">עיר</label>
-              <CustomerPlaceCombo
-                id="new-customer-place"
-                value={form.country}
-                disabled={busy}
-                onChange={(place) => setForm((f) => ({ ...f, country: place }))}
-              />
-            </div>
-            <div className="adm-field adm-client-create-notes">
-              <label htmlFor="new-customer-notes">הערות</label>
-              <textarea
-                ref={notesRef}
-                id="new-customer-notes"
-                rows={4}
-                placeholder="הערות פנימיות"
-                value={form.notes}
-                disabled={busy}
-                onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-                onKeyDown={(e) => {
-                  if (e.key !== "Enter" || e.nativeEvent.isComposing || e.shiftKey) return;
-                  e.preventDefault();
-                  if (!busy) void onSaveAndNew();
-                }}
-              />
-            </div>
           </div>
-          <div className="adm-mini-modal-actions adm-client-create-actions">
+          <footer className="adm-client-create-footer">
             <button
               type="button"
-              className="adm-btn adm-btn--primary adm-client-create-save-new"
+              className="adm-btn adm-btn--secondary"
               disabled={busy || codeBusy}
-              onClick={() => void onSaveAndNew()}
+              onClick={closeTop}
             >
-              {busy ? (
-                <>
-                  <span className="payment-modal-save-spinner" aria-hidden />
-                  שומר לקוח…
-                </>
-              ) : (
-                <>
-                  <Plus size={16} strokeWidth={2.5} aria-hidden />
-                  שמור וחדש
-                </>
-              )}
+              ביטול
             </button>
-            <button type="button" className="adm-btn adm-btn--primary" disabled={busy || codeBusy} onClick={() => void onSave()}>
-              {busy ? "שומר לקוח…" : "שמור"}
+            <button
+              type="button"
+              className="adm-btn adm-btn--primary"
+              disabled={busy || codeBusy}
+              onClick={() => void onSave()}
+            >
+              {busy ? "שומר לקוח…" : "שמור לקוח"}
             </button>
-          </div>
+          </footer>
         </>
       ) : (
         <div className="adm-client-create-success">

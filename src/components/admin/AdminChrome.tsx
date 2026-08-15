@@ -25,6 +25,9 @@ type Props = {
   canEditOrders: boolean;
   canViewCustomerCard: boolean;
   canCreateCustomer: boolean;
+  canCreateCashExpense: boolean;
+  canManageAllCashExpenses: boolean;
+  currentUserId: string;
   viewerIsAdmin: boolean;
 };
 
@@ -39,6 +42,9 @@ export function AdminChrome({
   canEditOrders,
   canViewCustomerCard,
   canCreateCustomer,
+  canCreateCashExpense,
+  canManageAllCashExpenses,
+  currentUserId,
   viewerIsAdmin,
 }: Props) {
   const onToast = useAdminToast();
@@ -55,6 +61,9 @@ export function AdminChrome({
           roleLabel={roleLabel}
           financial={financial}
           canManageFinancial={canManageFinancial}
+          canCreateCashExpense={canCreateCashExpense}
+          canManageAllCashExpenses={canManageAllCashExpenses}
+          currentUserId={currentUserId}
         />
         <div className="adm-chrome-below-header">
           <GlobalFilterBar financial={financial} canManageFinancial={canManageFinancial} />

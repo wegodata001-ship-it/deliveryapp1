@@ -7,6 +7,10 @@ import { AdminNavShell } from "@/components/admin/AdminNavShell";
 import { filterSidebarGroups, filterSidebarHome } from "@/lib/sidebar-nav";
 import { isAdminUser, requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { INVOICE_CANCEL_APPROVE_PERMISSION } from "@/lib/invoice-cancel-approve";
+import {
+  canCreateCashExpense as userCanCreateCashExpense,
+  canManageAllCashExpenses as userCanManageAllCashExpenses,
+} from "@/app/admin/cash-expenses/rbac";
 import { getLayoutFinancialSettings } from "@/lib/admin-layout-cache";
 import type { AdminRouteMode } from "@/lib/admin-route-mode";
 import { getLoginTraceFromCookies } from "@/lib/login-trace-server";
@@ -66,6 +70,8 @@ export async function AdminShellLayout({ mode, children }: Props) {
       );
 
       const canManageFinancial = userHasAnyPermission(user, ["manage_settings"]);
+      const canCreateCashExpense = userCanCreateCashExpense(user);
+      const canManageAllCashExpenses = userCanManageAllCashExpenses(user);
 
       const tree = (
         <AdminWindowProvider>
@@ -84,6 +90,9 @@ export async function AdminShellLayout({ mode, children }: Props) {
                 canEditOrders={userHasAnyPermission(user, ["edit_orders"])}
                 canViewCustomerCard={userHasAnyPermission(user, ["view_customer_card"])}
                 canCreateCustomer={userHasAnyPermission(user, ["create_orders"])}
+                canCreateCashExpense={canCreateCashExpense}
+                canManageAllCashExpenses={canManageAllCashExpenses}
+                currentUserId={user.id}
                 viewerIsAdmin={isAdmin}
               >
                 {children}

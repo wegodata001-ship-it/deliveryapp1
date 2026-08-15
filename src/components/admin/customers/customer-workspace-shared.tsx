@@ -13,13 +13,14 @@ import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
 import { OS } from "@/lib/order-status-slugs";
 import { paymentMethodTone, type PaymentMethodTone } from "@/lib/payments-source-shared";
 
-export type WorkspaceLayoutMode = "combined" | "customers" | "orders" | "payments";
-export type WorkspaceTableKey = "customers" | "orders" | "payments";
+export type WorkspaceLayoutMode = "combined" | "customers" | "orders" | "shipments" | "payments";
+export type WorkspaceTableKey = "customers" | "orders" | "shipments" | "payments";
 
 export const WORKSPACE_LAYOUT_OPTIONS: { value: WorkspaceLayoutMode; label: string }[] = [
   { value: "combined", label: "הכל" },
   { value: "customers", label: "לקוחות" },
   { value: "orders", label: "הזמנות" },
+  { value: "shipments", label: "משלוחים" },
   { value: "payments", label: "תשלומים" },
 ];
 

@@ -519,6 +519,51 @@ export function CustomerBalancesClient() {
     setPage(1);
   }
 
+  function clearAdvancedFilters() {
+    setBalancesFilters((f) => ({
+      ...f,
+      rangeFromYmd: "",
+      rangeToYmd: "",
+      sourceCountry: orderCountryCodeForWorkCountry(DEFAULT_WORK_COUNTRY),
+      sort: "balance_desc",
+    }));
+    setSearchDraft((s) => ({
+      ...s,
+      phone: "",
+      minBalanceIls: "",
+      maxBalanceIls: "",
+      showBalanced: false,
+    }));
+    setPage(1);
+  }
+
+  const advancedFilterCount = useMemo(() => {
+    let count = 0;
+    if (balancesFilters.rangeFromYmd.trim()) count += 1;
+    if (balancesFilters.rangeToYmd.trim()) count += 1;
+    if (debouncedSearch.showBalanced) count += 1;
+    if (debouncedSearch.phone.trim()) count += 1;
+    if (debouncedSearch.minBalanceIls.trim()) count += 1;
+    if (debouncedSearch.maxBalanceIls.trim()) count += 1;
+    if (
+      balancesFilters.sourceCountry &&
+      balancesFilters.sourceCountry !== orderCountryCodeForWorkCountry(DEFAULT_WORK_COUNTRY)
+    ) {
+      count += 1;
+    }
+    if (balancesFilters.sort !== "balance_desc") count += 1;
+    return count;
+  }, [
+    balancesFilters.rangeFromYmd,
+    balancesFilters.rangeToYmd,
+    balancesFilters.sourceCountry,
+    balancesFilters.sort,
+    debouncedSearch.minBalanceIls,
+    debouncedSearch.phone,
+    debouncedSearch.showBalanced,
+    debouncedSearch.maxBalanceIls,
+  ]);
+
   const openCustomerCard = useCallback(
     (row: CustomerBalanceRow) => {
       if (hoverTimerRef.current != null) {
@@ -595,201 +640,122 @@ export function CustomerBalancesClient() {
   const colCount = 8;
   const stats = payload?.stats;
 
-  return (
-    <div className="adm-balances-page adm-balances-excel-page adm-balances-page--v2 adm-balances-page--fcc adm-balances-page--page-scroll adm-page--page-scroll">
-      <header className="adm-balances-hero" dir="rtl">
-        <div className="adm-balances-hero__text">
-          <h1 className="adm-balances-hero__title">מרכז ניהול יתרות לקוחות</h1>
-          <p className="adm-balances-hero__desc">ניהול חובות, תשלומים ויתרות פתוחות</p>
-        </div>
-      </header>
+  const heroActions = (
+    <div className="adm-balances-hero__actions" role="group" aria-label="פעולות מסך">
+      <button
+        type="button"
+        className="adm-balances-hero__btn adm-balances-hero__btn--secondary"
+        disabled={tableBusy || !stats}
+        aria-expanded={insightsExpanded}
+        onClick={() => setInsightsExpanded((v) => !v)}
+      >
+        <BarChart3 size={15} strokeWidth={2} aria-hidden />
+        {insightsExpanded ? "הסתר סטטיסטיקה" : "הצג סטטיסטיקה"}
+      </button>
+      <button
+        type="button"
+        className="adm-balances-hero__btn adm-balances-hero__btn--secondary"
+        disabled={!!exportBusy || tableBusy || manualRefreshBusy}
+        title="רענון נתוני הדוח"
+        aria-label="רענון נתוני הדוח"
+        onClick={() => softRefreshBalances()}
+      >
+        <RefreshCw
+          size={15}
+          strokeWidth={2.2}
+          aria-hidden
+          className={manualRefreshBusy ? "adm-balances-refresh-spin" : undefined}
+        />
+        {manualRefreshBusy ? "…" : "רענון"}
+      </button>
+      <button
+        type="button"
+        className="adm-balances-hero__btn adm-balances-hero__btn--pdf"
+        disabled={!!exportBusy || tableBusy}
+        title="ייצוא PDF"
+        aria-label="ייצוא PDF"
+        onClick={() => void runExport("pdf")}
+      >
+        <FileText size={15} strokeWidth={2.2} aria-hidden />
+        {exportBusy === "pdf" ? "…" : "PDF"}
+      </button>
+      <button
+        type="button"
+        className="adm-balances-hero__btn adm-balances-hero__btn--excel"
+        disabled={!!exportBusy || tableBusy}
+        title="ייצוא Excel"
+        aria-label="ייצוא Excel"
+        onClick={() => void runExport("excel")}
+      >
+        <FileSpreadsheet size={15} strokeWidth={2.2} aria-hidden />
+        {exportBusy === "excel" ? "…" : "Excel"}
+      </button>
+    </div>
+  );
 
-      {err ? <div className="adm-error adm-balances-error">{err}</div> : null}
-      {searchPending ? (
-        <p className="adm-balances-search-hint" role="status">
-          מעדכן סינון…
-        </p>
-      ) : null}
-
-      <div className="adm-balances-toolbar-row adm-balances-toolbar-row--primary" dir="rtl">
-        <label className="adm-balances-field adm-balances-field--inline adm-balances-field--search">
-          <span className="adm-balances-field-label">קוד לקוח</span>
-          <input
-            className="adm-balances-input adm-balances-input--search"
-            value={searchDraft.code}
-            onChange={(e) => setSearchDraft((s) => ({ ...s, code: e.target.value }))}
-            dir="ltr"
-            autoComplete="off"
-          />
-        </label>
-        <label className="adm-balances-field adm-balances-field--inline adm-balances-field--search">
-          <span className="adm-balances-field-label">שם לקוח</span>
-          <input
-            className="adm-balances-input adm-balances-input--search"
-            value={searchDraft.name}
-            onChange={(e) => setSearchDraft((s) => ({ ...s, name: e.target.value }))}
-            autoComplete="off"
-          />
-        </label>
-        <div className="adm-balances-field adm-balances-field--inline adm-balances-field--week-nav">
-          <span className="adm-balances-field-label">שבוע עבודה</span>
-          <div className="adm-balances-week-wrap">
-            <ReportWeekNav
-              weekCode={balancesFilters.weekCode}
-              disabled={tableBusy}
-              onWeekChange={onBalancesWeekChange}
+  const advancedFiltersPanel = filterOpen ? (
+    <div className="adm-balances-filters-card__advanced" dir="rtl">
+      <div className="adm-balances-filters-card__advanced-section">
+        <h3 className="adm-balances-filters-card__advanced-title">טווח תאריכים</h3>
+        <div className="adm-balances-filters-card__advanced-grid">
+          <label className="adm-balances-field adm-balances-field--inline adm-balances-field--date">
+            <span className="adm-balances-field-label">מתאריך</span>
+            <input
+              className="adm-balances-input adm-balances-input--date"
+              type="date"
+              value={balancesFilters.rangeFromYmd}
+              onChange={(e) => {
+                setBalancesFilters((f) => ({ ...f, rangeFromYmd: e.target.value }));
+                setPage(1);
+              }}
+              dir="ltr"
             />
-          </div>
+          </label>
+          <label className="adm-balances-field adm-balances-field--inline adm-balances-field--date">
+            <span className="adm-balances-field-label">עד תאריך</span>
+            <input
+              className="adm-balances-input adm-balances-input--date"
+              type="date"
+              value={balancesFilters.rangeToYmd}
+              onChange={(e) => {
+                setBalancesFilters((f) => ({ ...f, rangeToYmd: e.target.value }));
+                setPage(1);
+              }}
+              dir="ltr"
+              title="ריק = היום"
+            />
+          </label>
+          <label className="adm-balances-field adm-balances-field--inline adm-balances-field--date">
+            <span className="adm-balances-field-label">נכון לתאריך</span>
+            <input
+              className="adm-balances-input adm-balances-input--date"
+              type="date"
+              value={balancesFilters.toYmd}
+              readOnly
+              title="נגזר משבוע העבודה — סוף השבוע הקודם"
+            />
+          </label>
         </div>
-        <label className="adm-balances-field adm-balances-field--inline adm-balances-field--order-status">
-          <span className="adm-balances-field-label">סטטוס הזמנה</span>
-          <select
-            className="adm-balances-input"
-            value={searchDraft.orderStatus}
-            onChange={(e) =>
-              setSearchDraft((s) => ({
-                ...s,
-                orderStatus: e.target.value as CustomerBalanceOrderStatusFilter,
-              }))
-            }
-          >
-            {CUSTOMER_BALANCE_ORDER_STATUS_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="adm-balances-field adm-balances-field--inline adm-balances-field--status">
-          <span className="adm-balances-field-label">מצב יתרה</span>
-          <select
-            className="adm-balances-input"
-            value={searchDraft.balanceStatus}
-            onChange={(e) =>
-              setSearchDraft((s) => ({ ...s, balanceStatus: e.target.value as CustomerBalanceDebtFilter }))
-            }
-          >
-            {BALANCE_STATUS_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="adm-balances-field adm-balances-field--inline adm-balances-field--checkbox">
-          <span className="adm-balances-field-label">לקוחות מאוזנים</span>
+      </div>
+
+      <div className="adm-balances-filters-card__advanced-section">
+        <h3 className="adm-balances-filters-card__advanced-title">מצב לקוחות</h3>
+        <label className="adm-balances-field adm-balances-field--inline adm-balances-field--checkbox-adv">
           <span className="adm-balances-checkbox-wrap">
             <input
               type="checkbox"
               checked={searchDraft.showBalanced}
               onChange={(e) => setSearchDraft((s) => ({ ...s, showBalanced: e.target.checked }))}
             />
-            <span>הצג לקוחות מאוזנים (יתרה 0)</span>
+            <span>הצג גם לקוחות מאוזנים</span>
           </span>
+          <span className="adm-balances-field-hint">כולל לקוחות שהיתרה הנוכחית שלהם היא $0</span>
         </label>
-        <label className="adm-balances-field adm-balances-field--inline adm-balances-field--date">
-          <span className="adm-balances-field-label">מתאריך</span>
-          <input
-            className="adm-balances-input adm-balances-input--date"
-            type="date"
-            value={balancesFilters.rangeFromYmd}
-            onChange={(e) => {
-              setBalancesFilters((f) => ({ ...f, rangeFromYmd: e.target.value }));
-              setPage(1);
-            }}
-            dir="ltr"
-          />
-        </label>
-        <label className="adm-balances-field adm-balances-field--inline adm-balances-field--date">
-          <span className="adm-balances-field-label">עד תאריך</span>
-          <input
-            className="adm-balances-input adm-balances-input--date"
-            type="date"
-            value={balancesFilters.rangeToYmd}
-            onChange={(e) => {
-              setBalancesFilters((f) => ({ ...f, rangeToYmd: e.target.value }));
-              setPage(1);
-            }}
-            dir="ltr"
-            title="ריק = היום"
-          />
-        </label>
-        <label className="adm-balances-field adm-balances-field--inline adm-balances-field--date">
-          <span className="adm-balances-field-label">נכון לתאריך</span>
-          <input
-            className="adm-balances-input adm-balances-input--date"
-            type="date"
-            value={balancesFilters.toYmd}
-            readOnly
-            title="נגזר משבוע העבודה — סוף השבוע הקודם"
-          />
-        </label>
-        <div className="adm-balances-filters-actions">
-          <button
-            type="button"
-            className="adm-btn adm-btn--secondary adm-btn--xs adm-balances-stats-toggle"
-            disabled={tableBusy || !stats}
-            aria-expanded={insightsExpanded}
-            onClick={() => setInsightsExpanded((v) => !v)}
-          >
-            {insightsExpanded ? "הסתר סטטיסטיקה" : <><BarChart3 size={16} strokeWidth={1.75} aria-hidden /> הצג סטטיסטיקה</>}
-          </button>
-          <div className="adm-balances-export-actions" role="group" aria-label="ייצוא ורענון דוח">
-            <button
-              type="button"
-              className="adm-export-btn adm-balances-export-btn adm-balances-export-btn--refresh"
-              disabled={!!exportBusy || tableBusy || manualRefreshBusy}
-              title="רענון נתוני הדוח"
-              aria-label="רענון נתוני הדוח"
-              onClick={() => softRefreshBalances()}
-            >
-              <RefreshCw
-                size={15}
-                strokeWidth={2.2}
-                aria-hidden
-                className={manualRefreshBusy ? "adm-balances-refresh-spin" : undefined}
-              />
-              <span>{manualRefreshBusy ? "…" : "רענון"}</span>
-            </button>
-            <button
-              type="button"
-              className="adm-export-btn adm-export-btn--pdf adm-balances-export-btn"
-              disabled={!!exportBusy || tableBusy}
-              title="ייצוא PDF"
-              aria-label="ייצוא PDF"
-              onClick={() => void runExport("pdf")}
-            >
-              <FileText size={15} strokeWidth={2.2} aria-hidden />
-              <span>{exportBusy === "pdf" ? "…" : "PDF"}</span>
-            </button>
-            <button
-              type="button"
-              className="adm-export-btn adm-export-btn--excel adm-balances-export-btn"
-              disabled={!!exportBusy || tableBusy}
-              title="ייצוא Excel"
-              aria-label="ייצוא Excel"
-              onClick={() => void runExport("excel")}
-            >
-              <FileSpreadsheet size={15} strokeWidth={2.2} aria-hidden />
-              <span>{exportBusy === "excel" ? "…" : "EXCEL"}</span>
-            </button>
-          </div>
-          <button type="button" className="adm-btn adm-btn--ghost adm-btn--xs" onClick={clearPageFilters}>
-            נקה
-          </button>
-          <button
-            type="button"
-            className="adm-btn adm-btn--ghost adm-btn--xs adm-balances-advanced-toggle"
-            aria-expanded={filterOpen}
-            onClick={() => setFilterOpen((v) => !v)}
-          >
-            {filterOpen ? <><X size={16} strokeWidth={1.75} aria-hidden /> סגור סינון מתקדם</> : <><Search size={16} strokeWidth={1.75} aria-hidden /> סינון מתקדם</>}
-          </button>
-        </div>
       </div>
 
-      {filterOpen ? (
-        <div className="adm-balances-advanced-filters" dir="rtl">
+      <div className="adm-balances-filters-card__advanced-section">
+        <h3 className="adm-balances-filters-card__advanced-title">סינון נוסף</h3>
+        <div className="adm-balances-filters-card__advanced-grid">
           <label className="adm-balances-field adm-balances-field--inline">
             <span className="adm-balances-field-label">מדינה</span>
             <select
@@ -825,24 +791,25 @@ export function CustomerBalancesClient() {
               ))}
             </select>
           </label>
-          <label>
-            טלפון
+          <label className="adm-balances-field adm-balances-field--inline">
+            <span className="adm-balances-field-label">טלפון</span>
             <input
+              className="adm-balances-input"
               value={searchDraft.phone}
               onChange={(e) => setSearchDraft((s) => ({ ...s, phone: e.target.value }))}
               dir="ltr"
             />
           </label>
-          <label>
-            יתרה מינ׳ ($)
+          <label className="adm-balances-field adm-balances-field--inline">
+            <span className="adm-balances-field-label">יתרה מינ׳ ($)</span>
             <MoneyInput
               placeholder="מינימום"
               value={parseMoneyString(searchDraft.minBalanceIls)}
               onChange={(n) => setSearchDraft((s) => ({ ...s, minBalanceIls: n == null ? "" : String(n) }))}
             />
           </label>
-          <label>
-            יתרה מקס׳ ($)
+          <label className="adm-balances-field adm-balances-field--inline">
+            <span className="adm-balances-field-label">יתרה מקס׳ ($)</span>
             <MoneyInput
               placeholder="מקסימום"
               value={parseMoneyString(searchDraft.maxBalanceIls)}
@@ -850,7 +817,134 @@ export function CustomerBalancesClient() {
             />
           </label>
         </div>
+      </div>
+
+      <div className="adm-balances-filters-card__advanced-foot">
+        <button
+          type="button"
+          className="adm-btn adm-btn--ghost adm-btn--xs"
+          onClick={clearAdvancedFilters}
+          disabled={advancedFilterCount === 0}
+        >
+          נקה סינון מתקדם
+        </button>
+      </div>
+    </div>
+  ) : null;
+
+  return (
+    <div className="adm-balances-page adm-balances-excel-page adm-balances-page--v2 adm-balances-page--fcc adm-balances-page--page-scroll adm-page--page-scroll">
+      <header className="adm-balances-hero" dir="rtl">
+        <div className="adm-balances-hero__text">
+          <h1 className="adm-balances-hero__title">מרכז ניהול יתרות לקוחות</h1>
+          <p className="adm-balances-hero__desc">ניהול חובות, תשלומים ויתרות פתוחות</p>
+        </div>
+        {heroActions}
+      </header>
+
+      {err ? <div className="adm-error adm-balances-error">{err}</div> : null}
+      {searchPending ? (
+        <p className="adm-balances-search-hint" role="status">
+          מעדכן סינון…
+        </p>
       ) : null}
+
+      <div className="adm-balances-filters-card">
+        <div className="adm-balances-filters-card__primary" dir="rtl">
+          <label className="adm-balances-field adm-balances-field--inline adm-balances-field--code">
+            <span className="adm-balances-field-label">קוד לקוח</span>
+            <input
+              className="adm-balances-input adm-balances-input--search"
+              value={searchDraft.code}
+              onChange={(e) => setSearchDraft((s) => ({ ...s, code: e.target.value }))}
+              dir="ltr"
+              autoComplete="off"
+            />
+          </label>
+          <label className="adm-balances-field adm-balances-field--inline adm-balances-field--name">
+            <span className="adm-balances-field-label">שם לקוח</span>
+            <input
+              className="adm-balances-input adm-balances-input--search"
+              value={searchDraft.name}
+              onChange={(e) => setSearchDraft((s) => ({ ...s, name: e.target.value }))}
+              autoComplete="off"
+            />
+          </label>
+          <div className="adm-balances-field adm-balances-field--inline adm-balances-field--week-nav">
+            <span className="adm-balances-field-label">שבוע עבודה</span>
+            <div className="adm-balances-week-wrap">
+              <ReportWeekNav
+                weekCode={balancesFilters.weekCode}
+                disabled={tableBusy}
+                onWeekChange={onBalancesWeekChange}
+              />
+            </div>
+          </div>
+          <label className="adm-balances-field adm-balances-field--inline adm-balances-field--order-status">
+            <span className="adm-balances-field-label">סטטוס הזמנה</span>
+            <select
+              className="adm-balances-input"
+              value={searchDraft.orderStatus}
+              onChange={(e) =>
+                setSearchDraft((s) => ({
+                  ...s,
+                  orderStatus: e.target.value as CustomerBalanceOrderStatusFilter,
+                }))
+              }
+            >
+              {CUSTOMER_BALANCE_ORDER_STATUS_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="adm-balances-field adm-balances-field--inline adm-balances-field--status">
+            <span className="adm-balances-field-label">מצב יתרה</span>
+            <select
+              className="adm-balances-input"
+              value={searchDraft.balanceStatus}
+              onChange={(e) =>
+                setSearchDraft((s) => ({ ...s, balanceStatus: e.target.value as CustomerBalanceDebtFilter }))
+              }
+            >
+              {BALANCE_STATUS_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="adm-balances-filters-card__primary-actions">
+            <button
+              type="button"
+              className={[
+                "adm-btn adm-btn--ghost adm-btn--xs adm-balances-advanced-toggle",
+                !filterOpen && advancedFilterCount > 0 ? "is-active" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              aria-expanded={filterOpen}
+              onClick={() => setFilterOpen((v) => !v)}
+            >
+              {filterOpen ? (
+                <>
+                  <X size={16} strokeWidth={1.75} aria-hidden /> סגור סינון מתקדם
+                </>
+              ) : (
+                <>
+                  <Search size={16} strokeWidth={1.75} aria-hidden /> סינון מתקדם
+                  {advancedFilterCount > 0 ? ` • ${advancedFilterCount}` : ""}
+                </>
+              )}
+            </button>
+            <button type="button" className="adm-btn adm-btn--ghost adm-btn--xs" onClick={clearPageFilters}>
+              נקה
+            </button>
+          </div>
+        </div>
+        {advancedFiltersPanel}
+      </div>
 
       {newDataAvailable ? (
         <div className="adm-balances-new-data-banner" role="status" dir="rtl">

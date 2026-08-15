@@ -102,12 +102,14 @@ export function CashControlClient({
   mode = "regular",
   isAdmin,
   initialWeek,
+  currentUserId = "",
   currentUserName = "",
   shipmentWorkCountry,
 }: {
   mode?: CashControlMode;
   isAdmin: boolean;
   initialWeek: string;
+  currentUserId?: string;
   currentUserName?: string;
   shipmentWorkCountry?: WorkCountryCode;
 }) {
@@ -933,7 +935,9 @@ export function CashControlClient({
           activeDateYmd={selectedDay ?? undefined}
           canCreate={!!expenseCaps?.canCreate}
           canDelete={!!expenseCaps?.canDelete}
+          currentUserId={currentUserId}
           currentUserName={currentUserName}
+          canSelectExpenseOwner={!!expenseCaps?.canSelectExpenseOwner}
           balancedWeekLabel={balancedWeekLabel}
           onSaved={() => reloadSummary()}
         />

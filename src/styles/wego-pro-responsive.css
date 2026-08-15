@@ -262,7 +262,6 @@ body.adm-nav-scroll-lock {
     grid-template-columns: 1fr 1fr;
   }
 
-  .adm-client-create-grid,
   .adm-modal-grid-2,
   .adm-payment-compact-grid,
   .adm-payment-saved-grid,
@@ -679,6 +678,7 @@ body.adm-nav-scroll-lock {
 .adm-oc-legacy-actions,
 .adm-oc-pro-actions,
 .adm-client-create-actions,
+.adm-client-create-footer,
 .adm-balances-filters-actions,
 .adm-orders-toolbar-actions,
 .adm-toolbar,
@@ -697,6 +697,7 @@ body.adm-nav-scroll-lock {
   .adm-modal-actions .adm-btn,
   .adm-modal-actions--capture .adm-btn,
   .adm-client-create-actions .adm-btn,
+  .adm-client-create-footer .adm-btn,
   .adm-balances-filters-actions .adm-btn,
   .adm-orders-toolbar .adm-btn,
   .adm-toolbar .adm-btn {
@@ -760,6 +761,15 @@ body.adm-nav-scroll-lock {
   .adm-client-create-grid .adm-field label {
     display: block;
     margin-bottom: 0.35rem;
+  }
+
+  .adm-client-create-body,
+  .adm-client-create-success {
+    padding: 20px 16px 14px;
+  }
+
+  .adm-client-create-footer {
+    padding: 12px 16px 18px;
   }
 }
 

@@ -96,16 +96,10 @@ export const SIDEBAR_GROUPS: NavGroupDef[] = [
         openWindow: { type: "paymentsUpdated", props: {} },
       },
       {
-        href: "/admin/cash-flow",
-        label: "בקרת תזרים",
-        icon: "finance",
-        anyOf: ["cashflow.view", "view_payment_control"],
-      },
-      {
         href: "/admin/cash-expenses",
         label: "הוצאות קופה",
         icon: "cashbox",
-        anyOf: ["manage_cash_expenses", "view_payment_control"],
+        anyOf: ["view_payment_control"],
       },
     ],
   },
@@ -176,6 +170,12 @@ export const SIDEBAR_GROUPS: NavGroupDef[] = [
         anyOf: ["view_payment_control"],
       },
       {
+        href: "/admin/cash-flow",
+        label: "בקרת תזרים",
+        icon: "finance",
+        anyOf: ["cashflow.view", "view_payment_control"],
+      },
+      {
         href: "/admin/edit-requests",
         label: "בקשות עריכה",
         icon: "editRequests",
@@ -228,7 +228,6 @@ const FINANCE_PATH_PREFIXES = [
   "/admin/customers",
   "/admin/customer-card",
   "/admin/balances",
-  "/admin/cash-flow",
   "/admin/cash-expenses",
   "/admin/receipt-control",
 ];
@@ -238,6 +237,7 @@ const SHIPMENTS_PATH_PREFIXES = ["/admin/shipments"];
 const CONTROLS_PATH_PREFIXES = [
   "/admin/reconciliation",
   "/admin/cash-control",
+  "/admin/cash-flow",
   "/admin/edit-requests",
   "/admin/order-edit-requests",
   "/admin/invoice-cancel-requests",

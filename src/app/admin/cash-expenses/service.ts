@@ -92,6 +92,8 @@ export async function listCashExpensesFull(
   if (filter.reason && filter.reason !== "ALL") where.reason = filter.reason;
   if (filter.currency && filter.currency !== "ALL") where.currency = filter.currency;
   if (filter.paymentMethod && filter.paymentMethod !== "ALL") where.paymentMethod = filter.paymentMethod;
+  const ownerFilter = filter.expenseOwnerUserId?.trim() || filter.createdById?.trim();
+  if (ownerFilter) where.expenseOwnerUserId = ownerFilter;
   if (filter.fromIso || filter.toIso) {
     where.expenseDate = {};
     if (filter.fromIso) (where.expenseDate as Prisma.DateTimeFilter).gte = new Date(filter.fromIso);
@@ -101,7 +103,10 @@ export async function listCashExpensesFull(
   const rows = await prisma.cashExpense.findMany({
     where,
     orderBy: { expenseDate: "desc" },
-    include: { createdBy: { select: { fullName: true } } },
+    include: {
+      createdBy: { select: { fullName: true } },
+      expenseOwner: { select: { fullName: true } },
+    },
     take: 2000,
   });
 
@@ -115,9 +120,10 @@ export async function listCashExpensesFull(
     const dateYmd = formatYmdJerusalem(e.expenseDate);
     if (dayFilter && dateYmd !== dayFilter) continue;
     const reasonLabel = REASON_LABEL[e.reason] ?? "אחר";
-    const createdByName = e.createdBy?.fullName ?? null;
+    const recordedByName = e.createdBy?.fullName ?? null;
+    const expenseOwnerName = e.expenseOwner?.fullName ?? recordedByName;
     if (search) {
-      const hay = `${e.notes ?? ""} ${reasonLabel} ${createdByName ?? ""}`.toLowerCase();
+      const hay = `${e.notes ?? ""} ${reasonLabel} ${expenseOwnerName ?? ""} ${recordedByName ?? ""}`.toLowerCase();
       if (!hay.includes(search)) continue;
     }
     const pm = normalizePaymentMethod(e.paymentMethod);
@@ -134,7 +140,9 @@ export async function listCashExpensesFull(
       notes: e.notes,
       currency: e.currency === "USD" ? "USD" : "ILS",
       amount: money(e.amount ?? Z),
-      createdByName,
+      expenseOwnerName,
+      recordedByName,
+      createdByName: expenseOwnerName,
       documentCount: docCounts.get(e.id) ?? 0,
       status: e.status === "CANCELLED" ? "CANCELLED" : "ACTIVE",
     });
@@ -174,6 +182,7 @@ export async function createCashExpense(input: {
   week?: string;
   draftKey?: string;
   createdById: string;
+  expenseOwnerUserId: string;
   workCountry?: string;
 }): Promise<{ ok: boolean; error?: string; id?: string }> {
   const amount = dec(input.amount);
@@ -197,6 +206,7 @@ export async function createCashExpense(input: {
       notes: input.notes?.trim() || null,
       expenseDate,
       createdById: input.createdById,
+      expenseOwnerUserId: input.expenseOwnerUserId,
     },
     select: { id: true },
   });
@@ -231,6 +241,7 @@ export async function updateCashExpense(input: {
   notes?: string;
   dateYmd?: string;
   timeHm?: string;
+  expenseOwnerUserId?: string;
   updatedById?: string;
   updatedByName?: string | null;
 }): Promise<{ ok: boolean; error?: string }> {
@@ -254,6 +265,10 @@ export async function updateCashExpense(input: {
     const expenseDate = expenseDateFromInput(raw, input.timeHm);
     data.expenseDate = expenseDate;
     data.weekCode = deriveAhWeekCodeFromOrderDateYmd(formatYmdJerusalem(expenseDate)) || undefined;
+  }
+
+  if (input.expenseOwnerUserId?.trim()) {
+    data.expenseOwner = { connect: { id: input.expenseOwnerUserId.trim() } };
   }
 
   const oldValue = {

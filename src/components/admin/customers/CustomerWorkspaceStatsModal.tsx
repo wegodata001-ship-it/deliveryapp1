@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { X } from "lucide-react";
-import { formatUsdDisplay } from "@/lib/money-format";
+import { formatIlsDisplay, formatUsdDisplay } from "@/lib/money-format";
 import {
   WORKSPACE_ORDER_STATUS_LABELS,
   type CustomerWorkspaceComputedStats,
@@ -100,6 +100,26 @@ export function CustomerWorkspaceStatsModal({ open, onClose, stats }: Props) {
               <li>
                 <span>לקוחות מאוזנים</span>
                 <strong>{stats.customersBalancedCount.toLocaleString("he-IL")}</strong>
+              </li>
+            </ul>
+          </section>
+
+          <section className="adm-cust-ws-stats-section">
+            <h3>משלוחים</h3>
+            <ul className="adm-cust-ws-stats-list">
+              <li>
+                <span>מספר משלוחים</span>
+                <strong>{stats.shipmentsCount.toLocaleString("he-IL")}</strong>
+              </li>
+            </ul>
+            <ul className="adm-cust-ws-stats-list adm-cust-ws-stats-list--money">
+              <li>
+                <span>סה״כ דמי משלוח</span>
+                <strong dir="ltr">{formatIlsDisplay(stats.deliveryFeesTotalIls)}</strong>
+              </li>
+              <li>
+                <span>סה״כ יתרת משלוחים</span>
+                <strong dir="ltr">{formatIlsDisplay(stats.remainingFeesTotalIls)}</strong>
               </li>
             </ul>
           </section>

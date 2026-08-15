@@ -1,7 +1,13 @@
 import { notFound } from "next/navigation";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getAhWeekByDate } from "@/lib/weeks/ah-week";
-import type { WorkCountryCode } from "@/lib/work-country";
+import { DEFAULT_WORK_COUNTRY, workEnvironmentLabelHe, type WorkCountryCode } from "@/lib/work-country";
+import { shipmentCountrySlugFromWorkCountry } from "@/lib/shipment-country-scope.shared";
+import type {
+  CustomerWorkspaceShipmentRow,
+  ShipmentCustomerLinkAudit,
+} from "@/lib/customers-module-types";
 import {
   deliveryLocationWhere,
   shipmentBatchWhere,
@@ -254,8 +260,8 @@ async function mapShipmentRecords<T extends Parameters<typeof mapRecord>[0]>(
   return records.map((record) => mapRecord(record, userNames, aliasByKey));
 }
 
-/** ??????? ??? ???? ? ??????? ?????? ??21932 ???? ??????? ??????? ATS21932 */
-function customerCodeLookupVariants(code: string): string[] {
+/** וарианты קוד לקוח — ATS21932 / 21932 וכו׳ */
+export function customerCodeLookupVariants(code: string): string[] {
   const t = code.trim();
   if (!t) return [];
   const out = new Set<string>([t]);
@@ -1877,4 +1883,197 @@ export async function closeCourierDebts(input: {
   });
 
   return { preview, closedCount: ids.length, closedRecordIds: ids };
+}
+
+function dec2Ils(n: number): string {
+  return (Math.round(n * 100) / 100).toFixed(2);
+}
+
+async function customerCodeVariantsForCustomerId(customerId: string): Promise<string[]> {
+  const customer = await prisma.customer.findFirst({
+    where: { id: customerId, deletedAt: null },
+    select: { customerCode: true, oldCustomerCode: true },
+  });
+  if (!customer) return [];
+  const codes = [customer.customerCode, customer.oldCustomerCode].filter((c): c is string =>
+    Boolean(c?.trim()),
+  );
+  return [...new Set(codes.flatMap((c) => customerCodeLookupVariants(c)))];
+}
+
+function buildCustomerCodeToIdMap(
+  customers: Array<{ id: string; customerCode: string | null; oldCustomerCode: string | null }>,
+): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const c of customers) {
+    for (const code of [c.customerCode, c.oldCustomerCode].filter(Boolean) as string[]) {
+      for (const v of customerCodeLookupVariants(code)) {
+        const k = v.toLowerCase();
+        if (!map.has(k)) map.set(k, c.id);
+      }
+    }
+  }
+  return map;
+}
+
+function resolveCustomerIdForShipmentCode(
+  code: string | null | undefined,
+  codeToId: Map<string, string>,
+): string | null {
+  const raw = code?.trim();
+  if (!raw) return null;
+  for (const v of customerCodeLookupVariants(raw)) {
+    const id = codeToId.get(v.toLowerCase());
+    if (id) return id;
+  }
+  return null;
+}
+
+/** משלוחים ל-Customer Workspace — קישור דרך customerCode ↔ Customer (SSOT מודול משלוחים) */
+export async function listCustomerWorkspaceShipments(
+  customerId?: string | null,
+  workCountry: WorkCountryCode = DEFAULT_WORK_COUNTRY,
+): Promise<CustomerWorkspaceShipmentRow[]> {
+  const cid = customerId?.trim() || null;
+  const countrySlug = shipmentCountrySlugFromWorkCountry(workCountry);
+  const countryLabel = workEnvironmentLabelHe(workCountry);
+
+  let codeWhere: Prisma.ShipmentRecordWhereInput | undefined;
+  if (cid) {
+    const variants = await customerCodeVariantsForCustomerId(cid);
+    if (variants.length === 0) return [];
+    codeWhere = {
+      OR: variants.map((code) => ({
+        customerCode: { equals: code, mode: "insensitive" as const },
+      })),
+    };
+  }
+
+  const { CUSTOMER_WORKSPACE_ROW_LIMIT } = await import("@/lib/customers-module-types");
+
+  const records = await prisma.shipmentRecord.findMany({
+    where: {
+      ...shipmentRecordWhere(workCountry),
+      ...(codeWhere ?? {}),
+    },
+    orderBy: [{ batch: { arrivalDate: "desc" } }, { createdAt: "desc" }],
+    take: CUSTOMER_WORKSPACE_ROW_LIMIT,
+    include: shipmentRecordInclude,
+  });
+
+  const lookupCodes = [
+    ...new Set(
+      records
+        .map((r) => r.customerCode?.trim())
+        .filter((c): c is string => Boolean(c))
+        .flatMap((c) => customerCodeLookupVariants(c)),
+    ),
+  ];
+
+  const customers =
+    lookupCodes.length > 0
+      ? await prisma.customer.findMany({
+          where: {
+            deletedAt: null,
+            OR: lookupCodes.map((code) => ({
+              customerCode: { equals: code, mode: "insensitive" as const },
+            })),
+          },
+          select: { id: true, customerCode: true, oldCustomerCode: true },
+        })
+      : [];
+
+  const codeToId = buildCustomerCodeToIdMap(customers);
+  const rows: CustomerWorkspaceShipmentRow[] = [];
+
+  for (const r of records) {
+    const resolvedCustomerId = resolveCustomerIdForShipmentCode(r.customerCode, codeToId);
+    if (cid && resolvedCustomerId !== cid) continue;
+
+    const paidAmountIls = r.payments.reduce((sum, p) => sum + p.amountIls.toNumber(), 0);
+    const fee = r.deliveryFeeIls?.toNumber() ?? null;
+    const remaining = Math.max(0, (fee ?? 0) - paidAmountIls);
+    const arrival = toDateStr(r.batch.arrivalDate ?? r.batch.shippingDate ?? null);
+
+    rows.push({
+      id: r.id,
+      batchId: r.batchId,
+      shipmentLabel:
+        r.batch.sourceShipmentNumber?.trim() ||
+        r.batch.batchNumber?.trim() ||
+        `שורה ${r.rowIndex}`,
+      countryLabel,
+      countrySlug,
+      customerId: resolvedCustomerId,
+      customerCode: r.customerCode,
+      customerName: r.customerName,
+      arrivalDateYmd: arrival ?? "—",
+      boxes: r.boxes ?? 0,
+      deliveryFeeIls: dec2Ils(fee ?? 0),
+      paidAmountIls: dec2Ils(paidAmountIls),
+      remainingFeeIls: dec2Ils(remaining),
+      paymentStatus: derivePaymentStatus(fee, paidAmountIls),
+    });
+  }
+
+  return rows;
+}
+
+/** Audit — כמה משלוחים מקושרים/לא מקושרים ללקוח (ללא שינוי נתונים) */
+export async function auditShipmentCustomerLinks(
+  workCountry: WorkCountryCode = DEFAULT_WORK_COUNTRY,
+): Promise<ShipmentCustomerLinkAudit> {
+  const records = await prisma.shipmentRecord.findMany({
+    where: shipmentRecordWhere(workCountry),
+    select: { id: true, customerCode: true },
+  });
+
+  const lookupCodes = [
+    ...new Set(
+      records
+        .map((r) => r.customerCode?.trim())
+        .filter((c): c is string => Boolean(c))
+        .flatMap((c) => customerCodeLookupVariants(c)),
+    ),
+  ];
+
+  const customers =
+    lookupCodes.length > 0
+      ? await prisma.customer.findMany({
+          where: {
+            deletedAt: null,
+            OR: lookupCodes.map((code) => ({
+              OR: [
+                { customerCode: { equals: code, mode: "insensitive" as const } },
+                { oldCustomerCode: { equals: code, mode: "insensitive" as const } },
+              ],
+            })),
+          },
+          select: { id: true, customerCode: true, oldCustomerCode: true },
+        })
+      : [];
+
+  const codeToId = buildCustomerCodeToIdMap(customers);
+
+  let linkedRecords = 0;
+  let unlinkedRecords = 0;
+  let ambiguousRecords = 0;
+
+  for (const r of records) {
+    const raw = r.customerCode?.trim();
+    if (!raw) {
+      unlinkedRecords += 1;
+      continue;
+    }
+    const matchedIds = new Set<string>();
+    for (const v of customerCodeLookupVariants(raw)) {
+      const id = codeToId.get(v.toLowerCase());
+      if (id) matchedIds.add(id);
+    }
+    if (matchedIds.size === 0) unlinkedRecords += 1;
+    else if (matchedIds.size === 1) linkedRecords += 1;
+    else ambiguousRecords += 1;
+  }
+
+  return { linkedRecords, unlinkedRecords, ambiguousRecords };
 }

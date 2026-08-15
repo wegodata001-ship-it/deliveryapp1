@@ -1,6 +1,7 @@
 import type {
   CustomerWorkspaceOrderRow,
   CustomerWorkspacePaymentRow,
+  CustomerWorkspaceShipmentRow,
   CustomersModuleListRow,
 } from "@/lib/customers-module-types";
 import { parseMoneyStringOrZero } from "@/lib/money-format";
@@ -56,6 +57,9 @@ function emptyStatusCounts(): Record<WorkspaceOrderStatusKey, { count: number; a
 export type CustomerWorkspaceComputedStats = {
   customersCount: number;
   ordersCount: number;
+  shipmentsCount: number;
+  deliveryFeesTotalIls: number;
+  remainingFeesTotalIls: number;
   ordersBeforeCommissionUsd: number;
   ordersAfterCommissionUsd: number;
   paymentsTotalUsd: number;
@@ -69,10 +73,11 @@ export type CustomerWorkspaceComputedStats = {
 export function computeCustomerWorkspaceStats(input: {
   orders: CustomerWorkspaceOrderRow[];
   payments: CustomerWorkspacePaymentRow[];
+  shipments: CustomerWorkspaceShipmentRow[];
   customers: CustomersModuleListRow[];
   selectedCustomer: CustomersModuleListRow | null;
 }): CustomerWorkspaceComputedStats {
-  const { orders, payments, customers, selectedCustomer } = input;
+  const { orders, payments, shipments, customers, selectedCustomer } = input;
 
   let ordersBeforeCommissionUsd = 0;
   let ordersAfterCommissionUsd = 0;
@@ -91,6 +96,13 @@ export function computeCustomerWorkspaceStats(input: {
   let paymentsTotalUsd = 0;
   for (const p of payments) {
     paymentsTotalUsd += parseMoneyStringOrZero(p.amountUsd);
+  }
+
+  let deliveryFeesTotalIls = 0;
+  let remainingFeesTotalIls = 0;
+  for (const s of shipments) {
+    deliveryFeesTotalIls += parseMoneyStringOrZero(s.deliveryFeeIls);
+    remainingFeesTotalIls += parseMoneyStringOrZero(s.remainingFeeIls);
   }
 
   const customerRows = selectedCustomer ? [selectedCustomer] : customers;
@@ -120,6 +132,9 @@ export function computeCustomerWorkspaceStats(input: {
   return {
     customersCount: selectedCustomer ? 1 : customers.length,
     ordersCount: orders.length,
+    shipmentsCount: shipments.length,
+    deliveryFeesTotalIls,
+    remainingFeesTotalIls,
     ordersBeforeCommissionUsd,
     ordersAfterCommissionUsd,
     paymentsTotalUsd,

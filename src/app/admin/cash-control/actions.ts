@@ -47,6 +47,7 @@ import {
   type CashCurrency,
   type CashExpenseReason,
 } from "./constants";
+import { invalidateWeekBalanceIfBalanced } from "@/lib/cash-control/week-balance-service";
 
 const READ_PERMS = ["view_payment_control"];
 const Z = new Prisma.Decimal(0);
@@ -810,6 +811,13 @@ export async function saveCashExpenseAction(input: {
     },
   });
 
+  await invalidateWeekBalanceIfBalanced({
+    weekCode: input.week,
+    userId: me.id,
+    reason: "cash_expense_created",
+    trigger: "saveCashExpenseAction",
+  });
+
   revalidatePath("/admin/cash-control");
   return { ok: true };
 }
@@ -846,7 +854,17 @@ export async function listCashExpensesAction(week: string): Promise<
 export async function cancelCashExpenseAction(id: string): Promise<{ ok: boolean }> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, READ_PERMS)) return { ok: false };
+  const existing = await prisma.cashExpense.findUnique({
+    where: { id },
+    select: { weekCode: true },
+  });
   await prisma.cashExpense.update({ where: { id }, data: { status: "CANCELLED" } });
+  await invalidateWeekBalanceIfBalanced({
+    weekCode: existing?.weekCode,
+    userId: me.id,
+    reason: "cash_expense_cancelled",
+    trigger: "cancelCashExpenseAction",
+  });
   revalidatePath("/admin/cash-control");
   return { ok: true };
 }

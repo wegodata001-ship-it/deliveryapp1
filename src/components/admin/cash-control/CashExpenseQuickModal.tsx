@@ -8,7 +8,8 @@ import {
   type CashCurrency,
   type CashExpenseReason,
 } from "@/app/admin/cash-control/constants";
-import { createCashExpenseAction, deleteCashExpenseAction, listCashExpensesFullAction } from "@/app/admin/cash-expenses/actions";
+import { createCashExpenseAction, deleteCashExpenseAction, listCashExpensesFullAction, listCashExpenseEmployeeOptionsAction } from "@/app/admin/cash-expenses/actions";
+import { ExpenseOwnerSelect } from "@/components/admin/cash-expenses/ExpenseOwnerSelect";
 import type { CashExpenseRowDto } from "@/app/admin/cash-expenses/types";
 import { getCashControlDayDetailAction } from "@/app/admin/cash-control/day-detail-action";
 import { fmtDailyMoney } from "@/lib/cash-control-daily";
@@ -33,7 +34,9 @@ export type CashExpenseQuickModalProps = {
   activeDateYmd?: string;
   canCreate: boolean;
   canDelete?: boolean;
+  currentUserId: string;
   currentUserName: string;
+  canSelectExpenseOwner?: boolean;
   balancedWeekLabel?: string | null;
   onSaved: () => void | Promise<void>;
 };
@@ -82,7 +85,9 @@ export function CashExpenseQuickModal({
   activeDateYmd,
   canCreate,
   canDelete = false,
+  currentUserId,
   currentUserName,
+  canSelectExpenseOwner = false,
   balancedWeekLabel = null,
   onSaved,
 }: CashExpenseQuickModalProps) {
@@ -95,6 +100,9 @@ export function CashExpenseQuickModal({
   const [varianceLines, setVarianceLines] = useState<CashVarianceLineDto[] | null>(null);
   const [varianceLoading, setVarianceLoading] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<CashExpenseDeleteTarget | null>(null);
+  const [expenseOwnerUserId, setExpenseOwnerUserId] = useState(currentUserId);
+  const [ownerOptions, setOwnerOptions] = useState<{ id: string; label: string }[]>([]);
+  const [ownersLoading, setOwnersLoading] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
 
   const listDate = form.dateYmd.trim() || defaultDate;
@@ -114,8 +122,17 @@ export function CashExpenseQuickModal({
   useEffect(() => {
     if (!open) return;
     setForm(resetFormFields(activeDateYmd?.trim() || todayYmd()));
+    setExpenseOwnerUserId(currentUserId);
     setErr(null);
-  }, [open, activeDateYmd]);
+  }, [open, activeDateYmd, currentUserId]);
+
+  useEffect(() => {
+    if (!open || !canSelectExpenseOwner) return;
+    setOwnersLoading(true);
+    void listCashExpenseEmployeeOptionsAction()
+      .then(setOwnerOptions)
+      .finally(() => setOwnersLoading(false));
+  }, [open, canSelectExpenseOwner]);
 
   useEffect(() => {
     if (!open) return;
@@ -231,6 +248,7 @@ export function CashExpenseQuickModal({
         dateYmd: datePart,
         timeHm: form.timeDisplay,
         week,
+        expenseOwnerUserId: canSelectExpenseOwner ? expenseOwnerUserId : undefined,
       });
       if (!res.ok) {
         setErr(res.error ?? "שמירה נכשלה");
@@ -343,9 +361,19 @@ export function CashExpenseQuickModal({
                     <span>שעה</span>
                     <input type="text" className="cc-input" value={form.timeDisplay} readOnly dir="ltr" />
                   </label>
-                  <label className="adm-cash-field">
-                    <span>עובד שרשם</span>
-                    <input type="text" className="cc-input" value={currentUserName || "—"} readOnly />
+                  <label className="adm-cash-field ce-modal-v2__field--wide">
+                    <span>עובד שביצע את ההוצאה</span>
+                    {canSelectExpenseOwner ? (
+                      <ExpenseOwnerSelect
+                        options={ownerOptions}
+                        value={expenseOwnerUserId}
+                        onChange={setExpenseOwnerUserId}
+                        loading={ownersLoading}
+                        disabled={saving}
+                      />
+                    ) : (
+                      <input type="text" className="cc-input" value={currentUserName || "—"} readOnly />
+                    )}
                   </label>
                   <label className="adm-cash-field ce-modal-v2__field--wide">
                     <span>הערה</span>
@@ -425,7 +453,7 @@ export function CashExpenseQuickModal({
                         >
                           {fmtDailyMoney(r.currency === "USD" ? "USD" : "ILS", Number(r.amount))}
                         </td>
-                        <td>{r.createdByName ?? "—"}</td>
+                        <td>{r.expenseOwnerName ?? r.createdByName ?? "—"}</td>
                         <td>{r.notes ?? "—"}</td>
                         <td>
                           <div className="ce-modal-v2__row-actions">

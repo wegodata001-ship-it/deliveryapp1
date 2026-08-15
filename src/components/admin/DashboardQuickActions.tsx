@@ -3,14 +3,25 @@
 import Link from "next/link";
 import { FileBarChart, Plus, UserPlus, Wallet } from "lucide-react";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
+import { CashExpenseEntryHost } from "@/components/admin/CashExpenseEntryHost";
 
 type Props = {
   canCreateOrders: boolean;
   canReceivePayments: boolean;
   canViewReports: boolean;
+  canCreateCashExpense: boolean;
+  canManageAllCashExpenses: boolean;
+  currentUserId: string;
 };
 
-export function DashboardQuickActions({ canCreateOrders, canReceivePayments, canViewReports }: Props) {
+export function DashboardQuickActions({
+  canCreateOrders,
+  canReceivePayments,
+  canViewReports,
+  canCreateCashExpense,
+  canManageAllCashExpenses,
+  currentUserId,
+}: Props) {
   const { openWindow } = useAdminWindows();
 
   return (
@@ -26,6 +37,14 @@ export function DashboardQuickActions({ canCreateOrders, canReceivePayments, can
           <Wallet size={18} strokeWidth={2} aria-hidden />
           <span>קליטת תשלום</span>
         </button>
+      ) : null}
+      {canCreateCashExpense ? (
+        <CashExpenseEntryHost
+          canCreate={canCreateCashExpense}
+          canManageAll={canManageAllCashExpenses}
+          currentUserId={currentUserId}
+          variant="dock"
+        />
       ) : null}
       {canCreateOrders ? (
         <button type="button" className="adm-dash-dock__btn" onClick={() => openWindow({ type: "createCustomer" })}>

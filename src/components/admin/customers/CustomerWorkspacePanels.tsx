@@ -5,8 +5,10 @@ import type {
   CustomersModuleListRow,
   CustomerWorkspaceOrderRow,
   CustomerWorkspacePaymentRow,
+  CustomerWorkspaceShipmentRow,
 } from "@/lib/customers-module-types";
 import { CUSTOMER_WORKSPACE_ROW_LIMIT } from "@/lib/customers-module-types";
+import { formatIlsDisplay } from "@/lib/money-format";
 import {
   balanceClass,
   balanceText,
@@ -44,11 +46,13 @@ function WorkspaceTablePlaceholder({
   loading,
   empty,
   emptyText = "אין נתונים להצגה",
+  emptyHint,
 }: {
   colSpan: number;
   loading: boolean;
   empty: boolean;
   emptyText?: string;
+  emptyHint?: string;
 }) {
   if (!loading && !empty) return null;
   return (
@@ -59,6 +63,9 @@ function WorkspaceTablePlaceholder({
             <Inbox size={18} strokeWidth={1.75} />
           </span>
           <span className="adm-ws-empty-state__txt">{loading ? "טוען נתונים…" : emptyText}</span>
+          {!loading && empty && emptyHint ? (
+            <span className="adm-ws-empty-state__hint">{emptyHint}</span>
+          ) : null}
         </div>
       </td>
     </tr>
@@ -455,6 +462,152 @@ export function PaymentsWorkspacePanel({
                 </td>
                 <td>
                   <PaymentMethodBadge method={p.paymentMethod} label={p.methodLabel} />
+                </td>
+              </tr>
+            ))}
+        </tbody>
+      </table>
+    </TableWrap>
+  );
+
+  if (!showCardShell) {
+    return (
+      <div className="adm-cust-workspace__panel-inner">
+        {head}
+        {table}
+      </div>
+    );
+  }
+
+  return (
+    <div className="adm-cust-workspace__card">
+      {head}
+      {table}
+    </div>
+  );
+}
+
+type ShipmentsPanelProps = {
+  inModal?: boolean;
+  shipments: CustomerWorkspaceShipmentRow[];
+  shipmentsLoading: boolean;
+  showCustomerCol: boolean;
+  selectedCustomerCode: string | null;
+  rowLimitSuffix: (n: number) => string;
+  onOpenShipment: (row: CustomerWorkspaceShipmentRow) => void;
+  onShowAllShipments: () => void;
+  onExpand: () => void;
+  showCardShell?: boolean;
+  emptyText?: string;
+};
+
+export function ShipmentsWorkspacePanel({
+  inModal = false,
+  shipments,
+  shipmentsLoading,
+  showCustomerCol,
+  selectedCustomerCode,
+  rowLimitSuffix,
+  onOpenShipment,
+  onShowAllShipments,
+  onExpand,
+  showCardShell = true,
+  emptyText = "אין משלוחים להצגה",
+}: ShipmentsPanelProps) {
+  const colSpan = showCustomerCol ? 8 : 7;
+
+  const meta = (
+    <span className="adm-cust-workspace__card-meta">
+      {shipments.length.toLocaleString("he-IL")}
+      {rowLimitSuffix(shipments.length)} שורות
+    </span>
+  );
+
+  const head = inModal ? (
+    <div className="adm-cust-workspace__card-head adm-cust-workspace__card-head--modal">{meta}</div>
+  ) : (
+    <div className="adm-cust-workspace__card-head adm-cust-workspace__card-head--has-expand">
+      <WorkspaceExpandButton label="משלוחים" onClick={onExpand} />
+      <h2>משלוחים</h2>
+      <div className="adm-cust-workspace__card-head-actions">
+        {meta}
+        {selectedCustomerCode ? (
+          <button
+            type="button"
+            className="adm-cust-workspace__show-all-link"
+            onClick={onShowAllShipments}
+          >
+            הצג הכול ↗
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+
+  const table = (
+    <TableWrap inModal={inModal} busy={shipmentsLoading}>
+      <table className="adm-ws-table adm-ws-table--wide">
+        <thead>
+          <tr>
+            {showCustomerCol ? <th>לקוח</th> : null}
+            <th>משלוח</th>
+            <th>מדינה</th>
+            <th>תאריך הגעה</th>
+            <th>חבילות</th>
+            <th>דמי משלוח</th>
+            <th>שולם</th>
+            <th>יתרה</th>
+          </tr>
+        </thead>
+        <tbody>
+          <WorkspaceTablePlaceholder
+            colSpan={colSpan}
+            loading={shipmentsLoading}
+            empty={!shipmentsLoading && shipments.length === 0}
+            emptyText={emptyText}
+            emptyHint={
+              selectedCustomerCode
+                ? "משלוחים חדשים המשויכים ללקוח יופיעו כאן אוטומטית."
+                : undefined
+            }
+          />
+          {!shipmentsLoading &&
+            shipments.map((s) => (
+              <tr
+                key={s.id}
+                className="adm-ws-row-click"
+                tabIndex={0}
+                role="button"
+                onClick={() => onOpenShipment(s)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onOpenShipment(s);
+                  }
+                }}
+              >
+                {showCustomerCol ? (
+                  <td>
+                    <span className="adm-cust-ws-cust-name">{s.customerName || "—"}</span>
+                    <span className="adm-cust-ws-cust-code" dir="ltr">
+                      {s.customerCode || "—"}
+                    </span>
+                  </td>
+                ) : null}
+                <td className="adm-ws-td-code">{s.shipmentLabel}</td>
+                <td>{s.countryLabel}</td>
+                <td dir="ltr" className="adm-ws-td-date">
+                  {s.arrivalDateYmd}
+                </td>
+                <td dir="ltr">{s.boxes}</td>
+                <td dir="ltr" className="adm-ws-td-amt">
+                  {formatIlsDisplay(Number(s.deliveryFeeIls))}
+                </td>
+                <td dir="ltr" className="adm-ws-td-amt">
+                  {formatIlsDisplay(Number(s.paidAmountIls))}
+                </td>
+                <td dir="ltr" className={Number(s.remainingFeeIls) > 0 ? "adm-ws-amt adm-ws-amt--debt" : "adm-ws-td-amt"}>
+                  {formatIlsDisplay(Number(s.remainingFeeIls))}
                 </td>
               </tr>
             ))}

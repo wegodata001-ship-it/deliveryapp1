@@ -979,68 +979,78 @@ export function OrdersListToolbar({
     </div>
   );
 
+  const hasClearableFilters =
+    activeFilterChips.length > 0 ||
+    advancedFilterCount > 0 ||
+    statusValues.length > 0 ||
+    countryValues.length > 0 ||
+    paymentTypeValues.length > 0;
+
   return (
     <div
       className={[
-        "adm-orders-filters-bar",
-        "adm-orders-filters-bar--split",
-        "adm-orders-filters-bar--compact",
-        "adm-orders-filters-bar--v3",
-        "adm-orders-filters-bar--v4",
-        filterOpen ? "adm-orders-filters-bar--advanced-open" : "",
-        mobileFilterOpen ? "adm-orders-filters-bar--mobile-open" : "",
+        "adm-orders-filters-card",
+        filterOpen ? "adm-orders-filters-card--advanced-open" : "",
+        mobileFilterOpen ? "adm-orders-filters-card--mobile-open" : "",
       ]
         .filter(Boolean)
         .join(" ")}
     >
-      <div className="adm-orders-toolbar-row adm-orders-toolbar-row--primary" dir="rtl">
-        <div className="adm-orders-toolbar-primary-filters">
-          {searchField}
-          {weekControl}
-          <div className="adm-orders-toolbar-primary-selects">
-            {countryField}
-            {paymentField}
-            {statusField}
-          </div>
-        </div>
-        <div className="adm-orders-toolbar-mobile-quick">
-          {searchField}
-          {weekControl}
+      <div className="adm-orders-filters-card__filters" dir="rtl">
+        {searchField}
+        {countryField}
+        {paymentField}
+        {statusField}
+        {weekControl}
+      </div>
+
+      <div className="adm-orders-filters-card__mobile" dir="rtl">
+        {searchField}
+        <div className="adm-orders-filters-card__mobile-bar">
           <button
             type="button"
-            className="adm-btn adm-btn--ghost adm-btn--xs adm-orders-mobile-filter-btn"
+            className="adm-btn adm-btn--ghost adm-btn--xs adm-orders-filters-card__mobile-filters-btn"
             aria-expanded={mobileFilterOpen}
             onClick={toggleMobileDrawer}
           >
             <Settings size={15} strokeWidth={2} aria-hidden />
-            סינון{mobileFilterCount > 0 ? ` (${mobileFilterCount})` : ""}
+            מסננים{mobileFilterCount > 0 ? ` (${mobileFilterCount})` : ""}
           </button>
+          {weekControl}
+          {leadingActions}
         </div>
       </div>
 
-      <div className="adm-orders-toolbar-row adm-orders-toolbar-row--actions" dir="rtl">
-        <div className="adm-orders-filter-actions">
+      <div className="adm-orders-filters-card__actions" dir="rtl">
+        <div className="adm-orders-filters-card__actions-primary">
           {leadingActions}
           {exportActions}
+        </div>
+        <div className="adm-orders-filters-card__actions-secondary">
           <button
             type="button"
-            className="adm-btn adm-btn--ghost adm-btn--xs adm-orders-advanced-toggle"
+            className="adm-btn adm-btn--ghost adm-btn--xs adm-orders-filters-card__advanced-btn"
             aria-expanded={filterOpen}
             onClick={toggleAdvancedPanel}
           >
             <Settings size={15} strokeWidth={2} aria-hidden />
             סינון מתקדם{advancedFilterCount > 0 ? ` (${advancedFilterCount})` : ""}
           </button>
-          <button type="button" className="adm-btn adm-btn--ghost adm-btn--xs" onClick={clearFilters}>
+          <button
+            type="button"
+            className="adm-btn adm-btn--ghost adm-btn--xs adm-orders-filters-card__clear-btn"
+            onClick={clearFilters}
+            disabled={!hasClearableFilters}
+          >
             נקה סינונים
           </button>
         </div>
       </div>
 
       {activeFilterChips.length > 0 ? (
-        <div className="adm-orders-active-filters" dir="rtl" aria-label="סינונים פעילים">
-          <span className="adm-orders-active-filters__label">פעילים:</span>
-          <div className="adm-orders-active-filters__chips">
+        <div className="adm-orders-filters-card__chips" dir="rtl" aria-label="סינונים פעילים">
+          <span className="adm-orders-filters-card__chips-label">פעילים:</span>
+          <div className="adm-orders-filters-card__chips-list">
             {activeFilterChips.map((chip) => (
               <button
                 key={chip.key}
@@ -1054,13 +1064,15 @@ export function OrdersListToolbar({
               </button>
             ))}
           </div>
-          <button type="button" className="adm-orders-active-filters__clear" onClick={clearFilters}>
+          <button type="button" className="adm-orders-filters-card__chips-clear" onClick={clearFilters}>
             נקה הכל
           </button>
         </div>
       ) : null}
 
-      {filterOpen ? advancedFiltersPanel : null}
+      {filterOpen ? (
+        <div className="adm-orders-filters-card__advanced">{advancedFiltersPanel}</div>
+      ) : null}
 
       {mobileFilterOpen ? (
         <>
