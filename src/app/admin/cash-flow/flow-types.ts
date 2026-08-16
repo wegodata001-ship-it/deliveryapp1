@@ -189,6 +189,10 @@ export type FlowWeekPayload = {
   ilFxPurchaseIls: string;
   /** יתרת מזומן PS אחרי רכישות PS */
   ilsRemainingAfterFx: string;
+  /** קליטות תשלום לפי ערוץ — לסיכום שבועי בבקרת תזרים */
+  weekPaymentIntake: import("@/lib/cash-control-daily").CashDailyIntakeTotals;
+  /** ספירת קופה מצטברת לפי ערוץ — לסיכום שבועי */
+  drawerChannelTotals: import("@/lib/cash-control-daily").CashDailyIntakeTotals;
 };
 
 /** עמודות טבלת קליטות — מטבע רלוונטי בלבד לכל אמצעי תשלום */

@@ -256,7 +256,7 @@ export const getDashboardHighBalanceCount = cache(
     )(),
 );
 
-async function loadDashboardStatsCore(
+export async function loadDashboardStatsCore(
   range: DashboardStatsRange,
   showStaff: boolean,
   scope: CountryScope,

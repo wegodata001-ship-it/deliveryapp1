@@ -1,0 +1,363 @@
+{
+  "phase": "baseline",
+  "measuredAt": "2026-08-16T07:52:58.793Z",
+  "environment": {
+    "nodeEnv": "development",
+    "note": "Direct server/service benchmarks against live DB — not browser timing"
+  },
+  "dataset": {
+    "batches": {
+      "TR": "47d304c4-c7e4-40e1-a60a-1f9d5dd18202"
+    },
+    "activeWeek": "AH-136",
+    "flowWeeks": [
+      "AH-132",
+      "AH-133",
+      "AH-134",
+      "AH-135",
+      "AH-136",
+      "AH-137",
+      "AH-138",
+      "AH-139",
+      "AH-140"
+    ]
+  },
+  "results": [
+    {
+      "id": "dashboard.stats",
+      "module": "Dashboard",
+      "operation": "Stats core (month range)",
+      "coldMs": 1002.06,
+      "warmMedianMs": 412.34,
+      "warmP95Ms": 412.7,
+      "coldQueries": 12,
+      "warmMedianQueries": 12,
+      "rowCount": 0
+    },
+    {
+      "id": "shipments.listBatches.turkey",
+      "module": "Shipments",
+      "operation": "List batches (turkey)",
+      "coldMs": 923.63,
+      "warmMedianMs": 762.45,
+      "warmP95Ms": 838.56,
+      "coldQueries": 6,
+      "warmMedianQueries": 6,
+      "rowCount": 13
+    },
+    {
+      "id": "shipments.listRecords.turkey",
+      "module": "Shipments",
+      "operation": "List packages (turkey)",
+      "coldMs": 3174.39,
+      "warmMedianMs": 2333,
+      "warmP95Ms": 2339.83,
+      "coldQueries": 30,
+      "warmMedianQueries": 24,
+      "rowCount": 25
+    },
+    {
+      "id": "shipments.batchDetail.turkey",
+      "module": "Shipments",
+      "operation": "Batch detail SSR (turkey)",
+      "coldMs": 2400.04,
+      "warmMedianMs": 2322.87,
+      "warmP95Ms": 2352.5,
+      "coldQueries": 41,
+      "warmMedianQueries": 38,
+      "rowCount": 84
+    },
+    {
+      "id": "shipments.locations.turkey",
+      "module": "Shipments",
+      "operation": "Locations admin (turkey)",
+      "coldMs": 1105.75,
+      "warmMedianMs": 905.01,
+      "warmP95Ms": 1095.21,
+      "coldQueries": 16,
+      "warmMedianQueries": 16,
+      "rowCount": 1281
+    },
+    {
+      "id": "shipments.locationsCleanup.turkey",
+      "module": "Shipments",
+      "operation": "Locations cleanup (turkey)",
+      "coldMs": 790.25,
+      "warmMedianMs": 789.99,
+      "warmP95Ms": 863.09,
+      "coldQueries": 8,
+      "warmMedianQueries": 8,
+      "rowCount": 0
+    },
+    {
+      "id": "shipments.manual.turkey",
+      "module": "Shipments",
+      "operation": "Manual entry list (turkey)",
+      "coldMs": 398.07,
+      "warmMedianMs": 394.86,
+      "warmP95Ms": 394.96,
+      "coldQueries": 4,
+      "warmMedianQueries": 4,
+      "rowCount": 5
+    },
+    {
+      "id": "shipments.control.turkey",
+      "module": "Shipments",
+      "operation": "Control data load (turkey)",
+      "coldMs": 1097.19,
+      "warmMedianMs": 804.21,
+      "warmP95Ms": 807.82,
+      "coldQueries": 24,
+      "warmMedianQueries": 16,
+      "rowCount": 569
+    },
+    {
+      "id": "shipments.listBatches.china",
+      "module": "Shipments",
+      "operation": "List batches (china)",
+      "coldMs": 391.65,
+      "warmMedianMs": 392.6,
+      "warmP95Ms": 392.61,
+      "coldQueries": 4,
+      "warmMedianQueries": 4,
+      "rowCount": 0
+    },
+    {
+      "id": "shipments.locations.china",
+      "module": "Shipments",
+      "operation": "Locations admin (china)",
+      "coldMs": 408.77,
+      "warmMedianMs": 406.31,
+      "warmP95Ms": 406.38,
+      "coldQueries": 12,
+      "warmMedianQueries": 12,
+      "rowCount": 0
+    },
+    {
+      "id": "shipments.locationsCleanup.china",
+      "module": "Shipments",
+      "operation": "Locations cleanup (china)",
+      "coldMs": 821.17,
+      "warmMedianMs": 819.17,
+      "warmP95Ms": 822.49,
+      "coldQueries": 8,
+      "warmMedianQueries": 8,
+      "rowCount": 0
+    },
+    {
+      "id": "shipments.manual.china",
+      "module": "Shipments",
+      "operation": "Manual entry list (china)",
+      "coldMs": 410.16,
+      "warmMedianMs": 411.92,
+      "warmP95Ms": 420.93,
+      "coldQueries": 4,
+      "warmMedianQueries": 4,
+      "rowCount": 1
+    },
+    {
+      "id": "shipments.control.china",
+      "module": "Shipments",
+      "operation": "Control data load (china)",
+      "coldMs": 995.25,
+      "warmMedianMs": 793.81,
+      "warmP95Ms": 797.87,
+      "coldQueries": 22,
+      "warmMedianQueries": 16,
+      "rowCount": 0
+    },
+    {
+      "id": "shipments.listBatches.uae",
+      "module": "Shipments",
+      "operation": "List batches (uae)",
+      "coldMs": 390.84,
+      "warmMedianMs": 395.02,
+      "warmP95Ms": 396.26,
+      "coldQueries": 4,
+      "warmMedianQueries": 4,
+      "rowCount": 0
+    },
+    {
+      "id": "shipments.locations.uae",
+      "module": "Shipments",
+      "operation": "Locations admin (uae)",
+      "coldMs": 492.94,
+      "warmMedianMs": 405.7,
+      "warmP95Ms": 406.85,
+      "coldQueries": 14,
+      "warmMedianQueries": 12,
+      "rowCount": 0
+    },
+    {
+      "id": "shipments.locationsCleanup.uae",
+      "module": "Shipments",
+      "operation": "Locations cleanup (uae)",
+      "coldMs": 816.93,
+      "warmMedianMs": 816.79,
+      "warmP95Ms": 817.07,
+      "coldQueries": 8,
+      "warmMedianQueries": 8,
+      "rowCount": 0
+    },
+    {
+      "id": "shipments.manual.uae",
+      "module": "Shipments",
+      "operation": "Manual entry list (uae)",
+      "coldMs": 411,
+      "warmMedianMs": 412.07,
+      "warmP95Ms": 414.01,
+      "coldQueries": 4,
+      "warmMedianQueries": 4,
+      "rowCount": 0
+    },
+    {
+      "id": "shipments.control.uae",
+      "module": "Shipments",
+      "operation": "Control data load (uae)",
+      "coldMs": 1407.15,
+      "warmMedianMs": 792.5,
+      "warmP95Ms": 798.96,
+      "coldQueries": 22,
+      "warmMedianQueries": 16,
+      "rowCount": 0
+    },
+    {
+      "id": "cash.aggregates",
+      "module": "Cash Control",
+      "operation": "Week aggregates",
+      "coldMs": 409.67,
+      "warmMedianMs": 407.59,
+      "warmP95Ms": 474.83,
+      "coldQueries": 12,
+      "warmMedianQueries": 12,
+      "rowCount": 1
+    },
+    {
+      "id": "cash.summary",
+      "module": "Cash Control",
+      "operation": "Week summary",
+      "coldMs": 408.38,
+      "warmMedianMs": 408.19,
+      "warmP95Ms": 414.1,
+      "coldQueries": 12,
+      "warmMedianQueries": 12,
+      "rowCount": 8
+    },
+    {
+      "id": "cash.pageLoad",
+      "module": "Cash Control",
+      "operation": "Summary + balance (separate)",
+      "coldMs": 1202.86,
+      "warmMedianMs": 1219.01,
+      "warmP95Ms": 1304.19,
+      "coldQueries": 28,
+      "warmMedianQueries": 28,
+      "rowCount": 9
+    },
+    {
+      "id": "cash.weekBalance",
+      "module": "Cash Control",
+      "operation": "Week balance state",
+      "coldMs": 821.23,
+      "warmMedianMs": 816.38,
+      "warmP95Ms": 818.08,
+      "coldQueries": 16,
+      "warmMedianQueries": 16,
+      "rowCount": 1
+    },
+    {
+      "id": "cashflow.overview",
+      "module": "Cash Flow",
+      "operation": "Weeks overview (8 weeks)",
+      "coldMs": 16284.88,
+      "warmMedianMs": 16335.46,
+      "warmP95Ms": 16366.63,
+      "coldQueries": 473,
+      "warmMedianQueries": 473,
+      "rowCount": 9
+    },
+    {
+      "id": "cashExpenses.list",
+      "module": "Cash Expenses",
+      "operation": "List active expenses",
+      "coldMs": 396.12,
+      "warmMedianMs": 400.27,
+      "warmP95Ms": 406.67,
+      "coldQueries": 4,
+      "warmMedianQueries": 4,
+      "rowCount": 0
+    },
+    {
+      "id": "customers.list",
+      "module": "Customers",
+      "operation": "List page (50)",
+      "coldMs": 884.88,
+      "warmMedianMs": 806.36,
+      "warmP95Ms": 889.41,
+      "coldQueries": 13,
+      "warmMedianQueries": 12,
+      "rowCount": 50
+    },
+    {
+      "id": "customers.search",
+      "module": "Customers",
+      "operation": "Search 'ats'",
+      "coldMs": 808.64,
+      "warmMedianMs": 808.13,
+      "warmP95Ms": 819.28,
+      "coldQueries": 12,
+      "warmMedianQueries": 12,
+      "rowCount": 50
+    },
+    {
+      "id": "orders.list",
+      "module": "Orders",
+      "operation": "SSR list page data",
+      "coldMs": 2560.17,
+      "warmMedianMs": 1.76,
+      "warmP95Ms": 3.46,
+      "coldQueries": 41,
+      "warmMedianQueries": 0,
+      "rowCount": 0
+    },
+    {
+      "id": "documents.list",
+      "module": "Documents",
+      "operation": "Archive list (50)",
+      "coldMs": 418.07,
+      "warmMedianMs": 410.38,
+      "warmP95Ms": 413.33,
+      "coldQueries": 4,
+      "warmMedianQueries": 4,
+      "rowCount": 7
+    },
+    {
+      "id": "balances.list",
+      "module": "Balances",
+      "operation": "Customer balance calc (100)",
+      "coldMs": 816.79,
+      "warmMedianMs": 818.85,
+      "warmP95Ms": 821.44,
+      "coldQueries": 12,
+      "warmMedianQueries": 12,
+      "rowCount": 96
+    }
+  ],
+  "summary": {
+    "operations": 29,
+    "medianWarmMs": 789.99,
+    "slowest": {
+      "id": "cashflow.overview",
+      "module": "Cash Flow",
+      "operation": "Weeks overview (8 weeks)",
+      "coldMs": 16284.88,
+      "warmMedianMs": 16335.46,
+      "warmP95Ms": 16366.63,
+      "coldQueries": 473,
+      "warmMedianQueries": 473,
+      "rowCount": 9
+    },
+    "over1s": 4,
+    "over2s": 3
+  }
+}

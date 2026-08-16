@@ -15,9 +15,10 @@ import { InlineValueCell } from "@/components/admin/shipments/InlineValueCell";
 import { ZoneAssignModal } from "@/components/admin/shipments/ZoneAssignModal";
 import { isInvalidCustomerName } from "@/lib/shipment-customer-name-quality";
 import { sumCollectedByPaymentMethod } from "@/lib/shipment-payment-method-filter";
+import { DeliveryAddressCell } from "@/components/admin/shipments/DeliveryAddressCell";
+import { ShipmentRowActionsMenu } from "@/components/admin/shipments/ShipmentRowActionsMenu";
 import {
-  getEffectiveDeliveryPlaceFromRecord,
-  shipmentOriginalDeliveryPlace,
+  getEffectiveDeliveryAddressFromRecord,
 } from "@/lib/shipment-delivery-place";
 
 const STATUS_OPTIONS: { value: ShipmentStatus; label: string }[] = (
@@ -75,14 +76,6 @@ function collectLabel(
   if (r.paymentStatus === "PAID") return "נגבה";
   if (r.paymentStatus === "PARTIAL") return "נגבה חלקית";
   return "לא נגבה";
-}
-
-function Trunc({ text }: { text: string }) {
-  return (
-    <span className="shp-trunc" title={text}>
-      {text}
-    </span>
-  );
 }
 
 export type ShipmentRecordsEditableTableProps = {
@@ -188,313 +181,349 @@ export function ShipmentRecordsEditableTable({
   }
 
   return (
-    <div className="shp-daily-wrap">
-      <table className="shp-table shp-table--daily shp-table--ship-rows">
-        <thead>
-          <tr>
-            <th className="c-check">
-              <input type="checkbox" checked={allSelected} onChange={onToggleAll} aria-label="בחר הכל" />
-            </th>
-            <th className="c-arrive">תאריך הגעה</th>
-            <th className="c-ship">מספר משלוח</th>
-            <th className="c-code">קוד לקוח</th>
-            <th className="c-name">שם לקוח</th>
-            <th className="c-phone">טלפון</th>
-            <th className="c-addr">כתובת</th>
-            <th className="c-loc">מקום מסירה</th>
-            <th className="c-zone">אזור חלוקה</th>
-            <th className="c-courier">שליח</th>
-            <th className="c-boxes">מספר קרטונים</th>
-            <th className="c-fee">דמי משלוח</th>
-            <th className="c-pay">גובה תשלום</th>
-            <th className="c-bal">יתרת לקוח</th>
-            <th className="c-status">סטטוס</th>
-            <th className="c-act">פעולות</th>
-          </tr>
-        </thead>
-        <tbody>
-          {records.length === 0 && (
+    <div className="shp-packages-table-host">
+      <div className="shp-daily-wrap shp-daily-wrap--packages">
+        <table className="shp-table shp-table--daily shp-table--ship-rows shp-table--packages">
+          <thead>
             <tr>
-              <td colSpan={16} className="shp-daily-empty">
-                אין שורות להצגה
-              </td>
+              <th className="c-check shp-sticky-col shp-sticky-col--0">
+                <input type="checkbox" checked={allSelected} onChange={onToggleAll} aria-label="בחר הכל" />
+              </th>
+              <th className="c-ship shp-sticky-col shp-sticky-col--1">מספר משלוח</th>
+              <th className="c-code shp-sticky-col shp-sticky-col--2">קוד לקוח</th>
+              <th className="c-name shp-sticky-col shp-sticky-col--3">שם לקוח</th>
+              <th className="c-phone">טלפון</th>
+              <th className="c-delivery">כתובת מסירה</th>
+              <th className="c-zone">אזור חלוקה</th>
+              <th className="c-courier">שליח</th>
+              <th className="c-boxes">קרטונים</th>
+              <th className="c-act">פעולות</th>
+              <th className="c-arrive shp-col-secondary">תאריך הגעה</th>
+              <th className="c-fee shp-col-secondary">דמי משלוח</th>
+              <th className="c-pay shp-col-secondary">גובה תשלום</th>
+              <th className="c-bal shp-col-secondary">יתרת לקוח</th>
+              <th className="c-status shp-col-secondary">סטטוס</th>
             </tr>
-          )}
-          {records.map((r) => {
-            const feeAmount = r.deliveryFeeAmount ?? r.deliveryFeeIls ?? 0;
-            const zoneLabel = r.zoneName?.trim() || null;
-            const nameInvalid = isInvalidCustomerName(r.customerName);
-            const bal = r.customerBalanceUsd;
-            const hasMethodFilter = Array.isArray(paymentMethodFilter)
-              ? paymentMethodFilter.length > 0
-              : Boolean(paymentMethodFilter);
-            const methodPaid = hasMethodFilter
-              ? sumCollectedByPaymentMethod(r.payments, paymentMethodFilter)
-              : r.paidAmountIls;
-            const payCls = hasMethodFilter
-              ? methodPaid > 0.005
-                ? "shp-pay-tag--paid"
-                : "shp-pay-tag--unpaid"
-              : r.paymentStatus === "PAID"
-                ? "shp-pay-tag--paid"
-                : r.paymentStatus === "PARTIAL"
-                  ? "shp-pay-tag--partial"
-                  : "shp-pay-tag--unpaid";
-            return (
-              <tr key={r.id} className={selected.has(r.id) ? "shp-row--selected" : undefined}>
-                <td className="c-check">
-                  <input
-                    type="checkbox"
-                    checked={selected.has(r.id)}
-                    onChange={() => onToggle(r.id)}
-                  />
-                </td>
-                <td className="c-arrive shp-daily-center">{formatDate(r.arrivalDate)}</td>
-                <td className="c-ship">
-                  <Trunc text={shipmentLabel(r)} />
-                </td>
-                <td className="c-code shp-daily-center" dir="ltr">
-                  <Trunc text={r.customerCode || "—"} />
-                </td>
-                <td
-                  className={["c-name", nameInvalid ? "shp-name-cell--invalid" : ""]
-                    .filter(Boolean)
-                    .join(" ")}
-                  title={nameInvalid ? "שם הלקוח דורש תיקון" : undefined}
-                >
-                  {nameInvalid ? (
-                    <button
-                      type="button"
-                      className="shp-name-fix-btn"
-                      title="שם הלקוח דורש תיקון"
-                      onClick={() => setNameFixRecord(r)}
-                    >
-                      <AlertTriangle size={14} aria-hidden />
-                      <span className="shp-trunc">
-                        {r.customerName?.trim() || "שם ריק"}
-                      </span>
-                    </button>
-                  ) : (
-                    <InlineValueCell
-                      value={r.customerName}
-                      type="text"
-                      placeholder="שם לקוח"
-                      onSave={(value) =>
-                        onSavePatch(
-                          r.id,
-                          { customerName: (value as string | null) || null },
-                          { customerName: (value as string | null) || null },
-                        )
-                      }
-                    />
-                  )}
-                </td>
-                <td className="c-phone" dir="ltr">
-                  <Trunc text={fmtPhone(r.customerPhone, r.customerPhone2)} />
-                </td>
-                <td className="c-addr">
-                  <Trunc text={r.address || "—"} />
-                </td>
-                <td className="c-loc">
-                  <button
-                    type="button"
-                    className="shp-loc-link"
-                    title={
-                      shipmentOriginalDeliveryPlace(r)
-                        ? `תיקון מקום מסירה (מקור מהייבוא: ${shipmentOriginalDeliveryPlace(r)})`
-                        : "תיקון מקום מסירה"
-                    }
-                    onClick={() => onFixLocation(r)}
-                  >
-                    <Trunc text={getEffectiveDeliveryPlaceFromRecord(r) || "—"} />
-                  </button>
-                </td>
-                <td className="c-zone">
-                  {zoneLabel ? (
-                    <button
-                      type="button"
-                      className="shp-zone-tag shp-zone-tag--btn"
-                      title="שנה אזור חלוקה"
-                      onClick={() => setZoneAssignRecord(r)}
-                    >
-                      {zoneLabel}
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="shp-zone-tag shp-zone-tag--missing"
-                      title="הגדר אזור חלוקה"
-                      onClick={() => setZoneAssignRecord(r)}
-                    >
-                      לא הוגדר
-                    </button>
-                  )}
-                </td>
-                <td className="c-courier">
-                  {courierEditId === r.id ? (
-                    <select
-                      className="shp-inline-select"
-                      autoFocus
-                      value={r.courierId ?? ""}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        if (val === "__ADD_NEW__") {
-                          openAddCourierModal(r.id);
-                          return;
-                        }
-                        const id = val || null;
-                        const c = activeCouriers.find((x) => x.id === id) ?? null;
-                        setCourierEditId(null);
-                        void onCourierSelect(r.id, c ? { id: c.id, name: c.name } : null);
-                      }}
-                      onBlur={() => setCourierEditId(null)}
-                    >
-                      <option value="">ללא שליח</option>
-                      {activeCouriers.map((c) => (
-                        <option key={c.id} value={c.id}>{c.name}</option>
-                      ))}
-                      <option value="__ADD_NEW__">➕ הוסף שליח חדש</option>
-                    </select>
-                  ) : r.courierName ? (
-                    <button
-                      type="button"
-                      className="shp-courier-tag"
-                      title="שנה שליח"
-                      onClick={() => setCourierEditId(r.id)}
-                    >
-                      {r.courierName}
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="shp-courier-tag--missing"
-                      title="הגדר שליח"
-                      onClick={() => setCourierEditId(r.id)}
-                    >
-                      ללא שליח
-                    </button>
-                  )}
-                </td>
-                <td className="c-boxes shp-daily-center">
-                  <InlineValueCell
-                    value={r.boxes}
-                    type="number"
-                    min={0}
-                    step={1}
-                    placeholder="0"
-                    onSave={(value) =>
-                      onSavePatch(r.id, { boxes: value as number | null }, { boxes: value as number | null })
-                    }
-                  />
-                </td>
-                <td className="c-fee shp-daily-money shp-daily-center">
-                  <InlineValueCell
-                    value={r.deliveryFeeAmount ?? r.deliveryFeeIls}
-                    type="number"
-                    min={0}
-                    step={0.01}
-                    placeholder="—"
-                    format={(v) =>
-                      v == null ? "—" : fmtIls(typeof v === "number" ? v : Number(v))
-                    }
-                    onSave={(value) => {
-                      const amount = value as number | null;
-                      const paymentStatus =
-                        amount == null || amount <= 0
-                          ? "UNPAID"
-                          : r.paidAmountIls >= amount
-                            ? "PAID"
-                            : r.paidAmountIls > 0
-                              ? "PARTIAL"
-                              : "UNPAID";
-                      return onSavePatch(
-                        r.id,
-                        { deliveryFeeAmount: amount, deliveryFeeCurrency: "ILS" },
-                        {
-                          deliveryFeeAmount: amount,
-                          deliveryFeeCurrency: "ILS",
-                          deliveryFeeIls: amount,
-                          remainingFeeIls: Math.max(0, (amount ?? 0) - r.paidAmountIls),
-                          paymentStatus,
-                        },
-                      );
-                    }}
-                  />
-                </td>
-                <td className="c-pay shp-daily-center">
-                  <button
-                    type="button"
-                    className={`shp-pay-tag ${payCls}`}
-                    disabled={feeAmount <= 0}
-                    onClick={() => onCollect(r)}
-                    title={
-                      hasMethodFilter
-                        ? `נגבה באמצעי שנבחר: ${fmtIls(methodPaid)}`
-                        : undefined
-                    }
-                  >
-                    {collectLabel(r, paymentMethodFilter)}
-                  </button>
-                </td>
-                <td
-                  className="c-bal shp-daily-money shp-daily-center"
-                  title="יתרת לקוח חיה ממערכת הלקוחות (SSOT)"
-                  style={{
-                    color:
-                      (bal ?? 0) > 0.005
-                        ? "#b91c1c"
-                        : (bal ?? 0) < -0.005
-                          ? "#15803d"
-                          : "#475569",
-                    fontWeight: 600,
-                  }}
-                >
-                  {fmtCustomerBalance(bal)}
-                </td>
-                <td className="c-status">
-                  <select
-                    className="shp-inline-select"
-                    value={r.status}
-                    onChange={(e) => onStatusChange(r.id, e.target.value as ShipmentStatus)}
-                  >
-                    {STATUS_OPTIONS.map((s) => (
-                      <option key={s.value} value={s.value}>
-                        {s.label}
-                      </option>
-                    ))}
-                  </select>
-                </td>
-                <td className="c-act">
-                  <div className="shp-row-actions">
-                    {onAddPackage ? (
-                      <button
-                        type="button"
-                        className="shp-btn shp-btn--sm shp-btn--ghost"
-                        onClick={() => onAddPackage(r)}
-                        title="הוסף חבילה ללקוח זה עם כל פרטי השורה"
-                      >
-                        + הוסף חבילה
-                      </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="shp-btn shp-btn--sm"
-                      onClick={() => onFixLocation(r)}
-                      title={
-                        shipmentOriginalDeliveryPlace(r)
-                          ? `תיקון מקום מסירה (מקור: ${shipmentOriginalDeliveryPlace(r)})`
-                          : "תיקון מקום מסירה"
-                      }
-                    >
-                      תיקון
-                    </button>
-                  </div>
+          </thead>
+          <tbody>
+            {records.length === 0 && (
+              <tr>
+                <td colSpan={15} className="shp-daily-empty">
+                  אין שורות להצגה
                 </td>
               </tr>
+            )}
+            {records.map((r) => {
+              const feeAmount = r.deliveryFeeAmount ?? r.deliveryFeeIls ?? 0;
+              const zoneLabel = r.zoneName?.trim() || null;
+              const nameInvalid = isInvalidCustomerName(r.customerName);
+              const bal = r.customerBalanceUsd;
+              const deliveryAddress = getEffectiveDeliveryAddressFromRecord(r);
+              const hasMethodFilter = Array.isArray(paymentMethodFilter)
+                ? paymentMethodFilter.length > 0
+                : Boolean(paymentMethodFilter);
+              const methodPaid = hasMethodFilter
+                ? sumCollectedByPaymentMethod(r.payments, paymentMethodFilter)
+                : r.paidAmountIls;
+              const payCls = hasMethodFilter
+                ? methodPaid > 0.005
+                  ? "shp-pay-tag--paid"
+                  : "shp-pay-tag--unpaid"
+                : r.paymentStatus === "PAID"
+                  ? "shp-pay-tag--paid"
+                  : r.paymentStatus === "PARTIAL"
+                    ? "shp-pay-tag--partial"
+                    : "shp-pay-tag--unpaid";
+              return (
+                <tr key={r.id} className={selected.has(r.id) ? "shp-row--selected" : undefined}>
+                  <td className="c-check shp-sticky-col shp-sticky-col--0">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(r.id)}
+                      onChange={() => onToggle(r.id)}
+                    />
+                  </td>
+                  <td className="c-ship shp-sticky-col shp-sticky-col--1" dir="ltr">
+                    <span className="shp-cell-ltr">{shipmentLabel(r)}</span>
+                  </td>
+                  <td className="c-code shp-sticky-col shp-sticky-col--2 shp-daily-center" dir="ltr">
+                    <span className="shp-cell-ltr">{r.customerCode || "—"}</span>
+                  </td>
+                  <td
+                    className={[
+                      "c-name",
+                      "shp-sticky-col",
+                      "shp-sticky-col--3",
+                      "shp-cell-multiline",
+                      nameInvalid ? "shp-name-cell--invalid" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    dir="auto"
+                    title={nameInvalid ? "שם הלקוח דורש תיקון" : r.customerName ?? undefined}
+                  >
+                    {nameInvalid ? (
+                      <button
+                        type="button"
+                        className="shp-name-fix-btn"
+                        title="שם הלקוח דורש תיקון"
+                        onClick={() => setNameFixRecord(r)}
+                      >
+                        <AlertTriangle size={14} aria-hidden />
+                        <span className="shp-cell-multiline__text">{r.customerName?.trim() || "שם ריק"}</span>
+                      </button>
+                    ) : (
+                      <InlineValueCell
+                        value={r.customerName}
+                        type="text"
+                        placeholder="שם לקוח"
+                        onSave={(value) =>
+                          onSavePatch(
+                            r.id,
+                            { customerName: (value as string | null) || null },
+                            { customerName: (value as string | null) || null },
+                          )
+                        }
+                      />
+                    )}
+                  </td>
+                  <td className="c-phone" dir="ltr">
+                    <span className="shp-cell-ltr">{fmtPhone(r.customerPhone, r.customerPhone2)}</span>
+                  </td>
+                  <td className="c-delivery">
+                    <DeliveryAddressCell address={deliveryAddress} />
+                  </td>
+                  <td className="c-zone">
+                    {zoneLabel ? (
+                      <button
+                        type="button"
+                        className="shp-zone-tag shp-zone-tag--btn"
+                        title="שנה אזור חלוקה"
+                        onClick={() => setZoneAssignRecord(r)}
+                      >
+                        {zoneLabel}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="shp-zone-tag shp-zone-tag--missing"
+                        title="הגדר אזור חלוקה"
+                        onClick={() => setZoneAssignRecord(r)}
+                      >
+                        לא הוגדר
+                      </button>
+                    )}
+                  </td>
+                  <td className="c-courier">
+                    {courierEditId === r.id ? (
+                      <select
+                        className="shp-inline-select"
+                        autoFocus
+                        value={r.courierId ?? ""}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (val === "__ADD_NEW__") {
+                            openAddCourierModal(r.id);
+                            return;
+                          }
+                          const id = val || null;
+                          const c = activeCouriers.find((x) => x.id === id) ?? null;
+                          setCourierEditId(null);
+                          void onCourierSelect(r.id, c ? { id: c.id, name: c.name } : null);
+                        }}
+                        onBlur={() => setCourierEditId(null)}
+                      >
+                        <option value="">ללא שליח</option>
+                        {activeCouriers.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name}
+                          </option>
+                        ))}
+                        <option value="__ADD_NEW__">➕ הוסף שליח חדש</option>
+                      </select>
+                    ) : r.courierName ? (
+                      <button
+                        type="button"
+                        className="shp-courier-tag"
+                        title="שנה שליח"
+                        onClick={() => setCourierEditId(r.id)}
+                      >
+                        {r.courierName}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="shp-courier-tag--missing"
+                        title="הגדר שליח"
+                        onClick={() => setCourierEditId(r.id)}
+                      >
+                        ללא שליח
+                      </button>
+                    )}
+                  </td>
+                  <td className="c-boxes shp-daily-center">
+                    <InlineValueCell
+                      value={r.boxes}
+                      type="number"
+                      min={0}
+                      step={1}
+                      placeholder="0"
+                      onSave={(value) =>
+                        onSavePatch(r.id, { boxes: value as number | null }, { boxes: value as number | null })
+                      }
+                    />
+                  </td>
+                  <td className="c-act">
+                    <ShipmentRowActionsMenu
+                      record={r}
+                      feeAmount={feeAmount}
+                      onFixLocation={onFixLocation}
+                      onCollect={onCollect}
+                      onAddPackage={onAddPackage}
+                      onAssignZone={setZoneAssignRecord}
+                      onAssignCourier={(rec) => setCourierEditId(rec.id)}
+                    />
+                  </td>
+                  <td className="c-arrive shp-col-secondary shp-daily-center">{formatDate(r.arrivalDate)}</td>
+                  <td className="c-fee shp-col-secondary shp-daily-money shp-daily-center">
+                    <InlineValueCell
+                      value={r.deliveryFeeAmount ?? r.deliveryFeeIls}
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      placeholder="—"
+                      format={(v) =>
+                        v == null ? "—" : fmtIls(typeof v === "number" ? v : Number(v))
+                      }
+                      onSave={(value) => {
+                        const amount = value as number | null;
+                        const paymentStatus =
+                          amount == null || amount <= 0
+                            ? "UNPAID"
+                            : r.paidAmountIls >= amount
+                              ? "PAID"
+                              : r.paidAmountIls > 0
+                                ? "PARTIAL"
+                                : "UNPAID";
+                        return onSavePatch(
+                          r.id,
+                          { deliveryFeeAmount: amount, deliveryFeeCurrency: "ILS" },
+                          {
+                            deliveryFeeAmount: amount,
+                            deliveryFeeCurrency: "ILS",
+                            deliveryFeeIls: amount,
+                            remainingFeeIls: Math.max(0, (amount ?? 0) - r.paidAmountIls),
+                            paymentStatus,
+                          },
+                        );
+                      }}
+                    />
+                  </td>
+                  <td className="c-pay shp-col-secondary shp-daily-center">
+                    <button
+                      type="button"
+                      className={`shp-pay-tag ${payCls}`}
+                      disabled={feeAmount <= 0}
+                      onClick={() => onCollect(r)}
+                      title={
+                        hasMethodFilter
+                          ? `נגבה באמצעי שנבחר: ${fmtIls(methodPaid)}`
+                          : undefined
+                      }
+                    >
+                      {collectLabel(r, paymentMethodFilter)}
+                    </button>
+                  </td>
+                  <td
+                    className="c-bal shp-col-secondary shp-daily-money shp-daily-center"
+                    title="יתרת לקוח חיה ממערכת הלקוחות (SSOT)"
+                    style={{
+                      color:
+                        (bal ?? 0) > 0.005
+                          ? "#b91c1c"
+                          : (bal ?? 0) < -0.005
+                            ? "#15803d"
+                            : "#475569",
+                      fontWeight: 600,
+                    }}
+                  >
+                    {fmtCustomerBalance(bal)}
+                  </td>
+                  <td className="c-status shp-col-secondary">
+                    <select
+                      className="shp-inline-select"
+                      value={r.status}
+                      onChange={(e) => onStatusChange(r.id, e.target.value as ShipmentStatus)}
+                    >
+                      {STATUS_OPTIONS.map((s) => (
+                        <option key={s.value} value={s.value}>
+                          {s.label}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="shp-packages-cards">
+        {records.length === 0 ? (
+          <div className="shp-packages-cards__empty">אין שורות להצגה</div>
+        ) : (
+          records.map((r) => {
+            const deliveryAddress = getEffectiveDeliveryAddressFromRecord(r);
+            const zoneLabel = r.zoneName?.trim() || "לא הוגדר";
+            return (
+              <article key={r.id} className="shp-package-card">
+                <header className="shp-package-card__head">
+                  <div>
+                    <strong dir="auto">{r.customerName?.trim() || "—"}</strong>
+                    <div className="shp-package-card__meta" dir="ltr">
+                      {r.customerCode || "—"} · {shipmentLabel(r)}
+                    </div>
+                  </div>
+                  <ShipmentRowActionsMenu
+                    record={r}
+                    feeAmount={r.deliveryFeeAmount ?? r.deliveryFeeIls ?? 0}
+                    onFixLocation={onFixLocation}
+                    onCollect={onCollect}
+                    onAddPackage={onAddPackage}
+                    onAssignZone={setZoneAssignRecord}
+                    onAssignCourier={(rec) => setCourierEditId(rec.id)}
+                  />
+                </header>
+                <dl className="shp-package-card__grid">
+                  <div>
+                    <dt>טלפון</dt>
+                    <dd dir="ltr">{fmtPhone(r.customerPhone, r.customerPhone2)}</dd>
+                  </div>
+                  <div className="shp-package-card__full">
+                    <dt>כתובת מסירה</dt>
+                    <dd>
+                      <DeliveryAddressCell address={deliveryAddress} />
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>אזור</dt>
+                    <dd>{zoneLabel}</dd>
+                  </div>
+                  <div>
+                    <dt>קרטונים</dt>
+                    <dd>{r.boxes ?? "—"}</dd>
+                  </div>
+                  <div>
+                    <dt>שליח</dt>
+                    <dd dir="auto">{r.courierName || "ללא שליח"}</dd>
+                  </div>
+                </dl>
+              </article>
             );
-          })}
-        </tbody>
-      </table>
+          })
+        )}
+      </div>
 
       {zoneAssignRecord ? (
         <ZoneAssignModal

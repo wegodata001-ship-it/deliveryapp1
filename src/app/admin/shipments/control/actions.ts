@@ -271,40 +271,36 @@ export async function getShipmentControlDataAction(
 
     const recordWhere = buildWhere(filter);
 
-    // Fetch all records with payments + expenses
-    const rawRecords = await prisma.shipmentRecord.findMany({
-      where: recordWhere,
-      orderBy: [{ batch: { batchNumber: "desc" } }, { rowIndex: "asc" }],
-      include: {
-        batch: { select: { batchNumber: true, containerNumber: true } },
-        zone: { select: { id: true, name: true } },
-        courier: { select: { id: true, name: true } },
-        deliveryLocation: { select: { displayName: true } },
-        payments: { orderBy: { createdAt: "asc" } },
-        expenses: { orderBy: [{ expenseDate: "desc" }, { createdAt: "desc" }] },
-      },
-    });
-
-    const aliasByKey = await loadAliasLookupMap();
-
-    // Fetch all batches for the filter sidebar
-    const allBatches = await prisma.shipmentBatch.findMany({
-      where: buildBatchWhere(filter),
-      select: { id: true, batchNumber: true, containerNumber: true },
-      orderBy: { batchNumber: "desc" },
-    });
-
-    const allZones = await prisma.shipmentDeliveryZone.findMany({
-      where: shipmentZoneWhere(filter.workCountry),
-      select: { id: true, name: true },
-      orderBy: { sortOrder: "asc" },
-    });
-
-    const allCouriers = await prisma.shipmentCourier.findMany({
-      where: { isActive: true, ...shipmentCourierWhere(filter.workCountry) },
-      select: { id: true, name: true },
-      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
-    });
+    const [rawRecords, aliasByKey, allBatches, allZones, allCouriers] = await Promise.all([
+      prisma.shipmentRecord.findMany({
+        where: recordWhere,
+        orderBy: [{ batch: { batchNumber: "desc" } }, { rowIndex: "asc" }],
+        include: {
+          batch: { select: { batchNumber: true, containerNumber: true } },
+          zone: { select: { id: true, name: true } },
+          courier: { select: { id: true, name: true } },
+          deliveryLocation: { select: { displayName: true } },
+          payments: { orderBy: { createdAt: "asc" } },
+          expenses: { orderBy: [{ expenseDate: "desc" }, { createdAt: "desc" }] },
+        },
+      }),
+      loadAliasLookupMap(),
+      prisma.shipmentBatch.findMany({
+        where: buildBatchWhere(filter),
+        select: { id: true, batchNumber: true, containerNumber: true },
+        orderBy: { batchNumber: "desc" },
+      }),
+      prisma.shipmentDeliveryZone.findMany({
+        where: shipmentZoneWhere(filter.workCountry),
+        select: { id: true, name: true },
+        orderBy: { sortOrder: "asc" },
+      }),
+      prisma.shipmentCourier.findMany({
+        where: { isActive: true, ...shipmentCourierWhere(filter.workCountry) },
+        select: { id: true, name: true },
+        orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+      }),
+    ]);
 
     // Map records — batch expenses loaded first for user-name lookup
     const batchIdsInScope = [...new Set(rawRecords.map((r) => r.batchId))];

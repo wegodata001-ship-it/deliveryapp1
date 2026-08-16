@@ -5,6 +5,7 @@ import { notFound } from "next/navigation";
 import {
   SHIPMENT_COUNTRY_SLUGS,
   buildShipmentCountryContext,
+  getShipmentRoute,
   isShipmentCountrySlug,
   resolveShipmentNavHref,
   shipmentBatchNumberKey,
@@ -13,6 +14,7 @@ import {
   shipmentCountrySlugFromWorkCountry,
   workCountryFromShipmentSlug,
   type ShipmentCountryContext,
+  type ShipmentCountryPage,
   type ShipmentCountrySlug,
 } from "@/lib/shipment-country-scope.shared";
 import { resolveWorkCountryParam } from "@/lib/country-data-scope";
@@ -21,6 +23,7 @@ import type { WorkCountryCode } from "@/lib/work-country";
 export {
   SHIPMENT_COUNTRY_SLUGS,
   buildShipmentCountryContext,
+  getShipmentRoute,
   isShipmentCountrySlug,
   shipmentBatchNumberKey,
   shipmentCountryBasePath,
@@ -29,6 +32,7 @@ export {
   workCountryFromShipmentSlug,
   resolveShipmentNavHref,
   type ShipmentCountryContext,
+  type ShipmentCountryPage,
   type ShipmentCountrySlug,
 };
 

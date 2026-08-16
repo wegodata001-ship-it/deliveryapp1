@@ -217,6 +217,8 @@ export async function loadFlowWeek(
     turkeyBalanceStatus: turkeyBalance.usd.status,
     ilFxPurchaseIls: money(fxIl.ils),
     ilsRemainingAfterFx: money(calc.ilsRemainingAfterFx),
+    weekPaymentIntake: weekIntake,
+    drawerChannelTotals: approvedSummary.drawerChannelTotals,
   };
 }
 

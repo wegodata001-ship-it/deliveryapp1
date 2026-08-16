@@ -5,7 +5,7 @@
 
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { loadCashControlWeekAggregates } from "@/app/admin/cash-control/daily-service";
+import { loadCashControlWeekAggregates, type CashControlWeekAggregates } from "@/app/admin/cash-control/daily-service";
 import type { WeekBalanceStateDto } from "@/lib/cash-control/week-balance-types";
 import { WEEK_BALANCE_STATUS_LABELS } from "@/lib/cash-control/week-balance-types";
 import { formatAhWeekLabel } from "@/lib/weeks/ah-week";
@@ -23,10 +23,13 @@ export {
   type WeekBalanceAggregatesInput,
 } from "@/lib/cash-control/week-balance-calculation";
 
-export async function loadWeekBalanceState(weekCode: string): Promise<WeekBalanceStateDto | null> {
+export async function loadWeekBalanceState(
+  weekCode: string,
+  aggregates?: CashControlWeekAggregates | null,
+): Promise<WeekBalanceStateDto | null> {
   const wk = weekCode.trim();
-  const aggregates = await loadCashControlWeekAggregates(wk);
-  const snapshot = computeWeekBalanceSnapshot(aggregates);
+  const agg = aggregates ?? (await loadCashControlWeekAggregates(wk));
+  const snapshot = computeWeekBalanceSnapshot(agg);
   if (!snapshot) return null;
 
   const flow = await prisma.cashWeekFlow.findUnique({
@@ -42,7 +45,7 @@ export async function loadWeekBalanceState(weekCode: string): Promise<WeekBalanc
 
   return {
     weekCode: wk,
-    weekLabel: aggregates?.weekLabel ?? formatAhWeekLabel(wk),
+    weekLabel: agg?.weekLabel ?? formatAhWeekLabel(wk),
     status,
     statusLabel: WEEK_BALANCE_STATUS_LABELS[status],
     snapshot,

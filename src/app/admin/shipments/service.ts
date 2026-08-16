@@ -255,9 +255,10 @@ function mapRecord(r: {
 async function mapShipmentRecords<T extends Parameters<typeof mapRecord>[0]>(
   records: T[],
   userNames: ReadonlyMap<string, string>,
+  aliasByKey?: Awaited<ReturnType<typeof loadAliasLookupMap>>,
 ): Promise<ShipmentRecordDto[]> {
-  const aliasByKey = await loadAliasLookupMap();
-  return records.map((record) => mapRecord(record, userNames, aliasByKey));
+  const alias = aliasByKey ?? (await loadAliasLookupMap());
+  return records.map((record) => mapRecord(record, userNames, alias));
 }
 
 /** וарианты קוד לקוח — ATS21932 / 21932 וכו׳ */
@@ -964,13 +965,16 @@ export async function listShipmentRecords(
   workCountry: WorkCountryCode,
 ): Promise<ShipmentRecordDto[]> {
   await assertBatchCountry(batchId, workCountry);
-  const records = await prisma.shipmentRecord.findMany({
-    where: { batchId },
-    orderBy: { rowIndex: "asc" },
-    include: shipmentRecordInclude,
-  });
+  const [records, aliasByKey] = await Promise.all([
+    prisma.shipmentRecord.findMany({
+      where: { batchId },
+      orderBy: { rowIndex: "asc" },
+      include: shipmentRecordInclude,
+    }),
+    loadAliasLookupMap(),
+  ]);
   const userNames = await loadPaymentUserNames(records);
-  const mapped = await mapShipmentRecords(records, userNames);
+  const mapped = await mapShipmentRecords(records, userNames, aliasByKey);
   return attachCustomerBalances(mapped);
 }
 
@@ -988,13 +992,16 @@ export async function listShipmentRecordsByBatchIds(
   const scopedIds = batches.map((b) => b.id);
   if (scopedIds.length === 0) return [];
 
-  const records = await prisma.shipmentRecord.findMany({
-    where: { batchId: { in: scopedIds } },
-    orderBy: [{ batchId: "asc" }, { rowIndex: "asc" }],
-    include: shipmentRecordInclude,
-  });
+  const [records, aliasByKey] = await Promise.all([
+    prisma.shipmentRecord.findMany({
+      where: { batchId: { in: scopedIds } },
+      orderBy: [{ batchId: "asc" }, { rowIndex: "asc" }],
+      include: shipmentRecordInclude,
+    }),
+    loadAliasLookupMap(),
+  ]);
   const userNames = await loadPaymentUserNames(records);
-  const mapped = await mapShipmentRecords(records, userNames);
+  const mapped = await mapShipmentRecords(records, userNames, aliasByKey);
   return attachCustomerBalances(mapped);
 }
 

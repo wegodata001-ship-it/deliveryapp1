@@ -22,7 +22,9 @@
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
     "brand:icons": "node scripts/generate-brand-icons.mjs",
-    "embed-pdf-fonts": "node scripts/embed-pdf-fonts.mjs"
+    "embed-pdf-fonts": "node scripts/embed-pdf-fonts.mjs",
+    "perf:audit": "node -r ./scripts/shims/register-server-only.cjs --import tsx scripts/perf-audit.ts",
+    "perf:audit:after": "node -r ./scripts/shims/register-server-only.cjs --import tsx scripts/perf-audit.ts -- --phase=after"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

@@ -33,18 +33,83 @@ export function shipmentOriginalDeliveryPlace(
  * מקום מעודכן (אם קיים) → אחרת המקורי מהייבוא.
  */
 export function getEffectiveDeliveryPlace(input: EffectiveDeliveryPlaceInput): string | null {
+  const original = shipmentOriginalDeliveryPlace(input);
+
   const updated =
     input.updatedDeliveryPlace?.trim() ||
     input.resolvedDeliveryPlace?.trim() ||
     input.updatedDeliveryLocation?.trim() ||
     null;
-  if (updated) return updated;
+  if (updated && (!original || updated !== original)) return updated;
 
   if (input.locationMatchStatus === "MANUALLY_FIXED" && input.city?.trim()) {
     return input.city.trim();
   }
 
-  return shipmentOriginalDeliveryPlace(input);
+  const city = input.city?.trim() || null;
+  if (city && original && city !== original) {
+    return city;
+  }
+
+  return original || city;
+}
+
+export type EffectiveDeliveryAddress = {
+  /** כתובת מסירה מלאה לתצוגה: רחוב + מקום א.effective */
+  display: string;
+  street: string | null;
+  place: string | null;
+  originalDisplay: string;
+  originalPlace: string | null;
+  isPlaceUpdated: boolean;
+};
+
+function joinStreetAndPlace(street: string | null, place: string | null): string {
+  const parts = [street, place].filter(Boolean);
+  return parts.length > 0 ? parts.join(", ") : "—";
+}
+
+/** SSOT לכתובת מסירה מלאה (רחוב + מקום) — לכל מסך תפעולי */
+export function getEffectiveDeliveryAddress(
+  input: EffectiveDeliveryPlaceInput,
+): EffectiveDeliveryAddress {
+  const street = input.address?.trim() || null;
+  const originalPlace = shipmentOriginalDeliveryPlace(input);
+  const effectivePlace = getEffectiveDeliveryPlace(input);
+  const originalDisplay = joinStreetAndPlace(street, originalPlace);
+  const display = joinStreetAndPlace(street, effectivePlace);
+  const isPlaceUpdated = Boolean(
+    effectivePlace &&
+      originalPlace &&
+      effectivePlace.trim() !== originalPlace.trim(),
+  );
+  return {
+    display,
+    street,
+    place: effectivePlace,
+    originalDisplay,
+    originalPlace,
+    isPlaceUpdated,
+  };
+}
+
+export function getEffectiveDeliveryAddressFromRecord(
+  record: Pick<
+    ShipmentRecordDto,
+    | "address"
+    | "updatedDeliveryLocation"
+    | "originalDeliveryLocation"
+    | "city"
+    | "locationMatchStatus"
+  >,
+): EffectiveDeliveryAddress {
+  return getEffectiveDeliveryAddress({
+    address: record.address,
+    originalDeliveryLocation: record.originalDeliveryLocation,
+    updatedDeliveryLocation: record.updatedDeliveryLocation,
+    city: record.city,
+    locationMatchStatus: record.locationMatchStatus,
+  });
 }
 
 export function getEffectiveDeliveryPlaceFromRecord(

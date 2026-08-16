@@ -225,7 +225,7 @@ export function ShipmentListClient({
   function openSelected() {
     if (selected.size === 0) return;
     const ids = [...selected].join(",");
-    router.push(`/admin/shipments/combined?ids=${encodeURIComponent(ids)}`);
+    router.push(`${basePath}/combined?ids=${encodeURIComponent(ids)}`);
   }
 
   async function handleBulkDelete() {

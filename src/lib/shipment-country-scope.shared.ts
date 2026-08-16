@@ -53,6 +53,32 @@ export function shipmentCountryBasePath(slug: ShipmentCountrySlug): string {
   return `/admin/shipments/${slug}`;
 }
 
+/** עמודים תחת /admin/shipments/{country} */
+export type ShipmentCountryPage =
+  | "import"
+  | "manual"
+  | "control"
+  | "locations"
+  | "cash-control"
+  | "combined";
+
+/** SSOT לבניית נתיבי משלוחים — לא לבנות URL ידנית ב-Components */
+export function getShipmentRoute(
+  workCountry: WorkCountryCode,
+  page?: ShipmentCountryPage | "",
+  query?: Record<string, string | undefined | null>,
+): string {
+  const base = shipmentCountryBasePath(shipmentCountrySlugFromWorkCountry(workCountry));
+  const path = page ? `${base}/${page}` : base;
+  if (!query) return path;
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(query)) {
+    if (v != null && String(v).trim()) qs.set(k, String(v).trim());
+  }
+  const s = qs.toString();
+  return s ? `${path}?${s}` : path;
+}
+
 export function buildShipmentCountryContext(workCountry: WorkCountryCode): ShipmentCountryContext {
   const slug = shipmentCountrySlugFromWorkCountry(workCountry);
   return {
@@ -71,6 +97,7 @@ export function shipmentCountrySlugFromPathname(pathname: string | null | undefi
   return isShipmentCountrySlug(m[1]) ? m[1] : null;
 }
 
+/** מחליף slug בתבנית Sidebar (/admin/shipments/turkey/import) לפי מדינת ההקשר הנוכחית */
 export function resolveShipmentNavHref(
   href: string,
   pathname: string | null | undefined,
@@ -80,8 +107,14 @@ export function resolveShipmentNavHref(
   }
   const slug = shipmentCountrySlugFromPathname(pathname);
   if (!slug) return "/admin/shipments";
-  const suffix = href.replace(/^\/admin\/shipments\/?/, "");
-  if (!suffix || suffix === slug) {
+
+  let suffix = href.replace(/^\/admin\/shipments\/?/, "");
+  const parts = suffix.split("/").filter(Boolean);
+  if (parts.length > 0 && isShipmentCountrySlug(parts[0]!)) {
+    suffix = parts.slice(1).join("/");
+  }
+
+  if (!suffix) {
     return shipmentCountryBasePath(slug);
   }
   return `${shipmentCountryBasePath(slug)}/${suffix}`;

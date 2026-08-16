@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  getEffectiveDeliveryAddress,
   getEffectiveDeliveryPlace,
   getEffectiveDeliveryPlaceFromRecord,
   shipmentOriginalDeliveryPlace,
@@ -38,6 +39,17 @@ describe("getEffectiveDeliveryPlace", () => {
     assert.ok(!value?.includes("yafa"));
   });
 
+  it("city שונה מהמקור ללא alias — מציג city", () => {
+    assert.equal(
+      getEffectiveDeliveryPlace({
+        originalDeliveryLocation: "NASRAH Nasrah",
+        city: "נצרת",
+        updatedDeliveryLocation: "NASRAH Nasrah",
+      }),
+      "נצרת",
+    );
+  });
+
   it("MANUALLY_FIXED עם city כגיבוי", () => {
     assert.equal(
       getEffectiveDeliveryPlace({
@@ -47,6 +59,30 @@ describe("getEffectiveDeliveryPlace", () => {
       }),
       "נצרת",
     );
+  });
+});
+
+describe("getEffectiveDeliveryAddress", () => {
+  it("מחבר רחוב + מקום מעודכן", () => {
+    const addr = getEffectiveDeliveryAddress({
+      address: "NASRAH Nasrah Street 12",
+      originalDeliveryLocation: "NASRAH Nasrah",
+      city: "נצרת",
+      updatedDeliveryLocation: "נצרת",
+    });
+    assert.equal(addr.display, "NASRAH Nasrah Street 12, נצרת");
+    assert.equal(addr.isPlaceUpdated, true);
+    assert.equal(addr.originalDisplay, "NASRAH Nasrah Street 12, NASRAH Nasrah");
+  });
+
+  it("ללא עדכון — מציג מקור בלבד", () => {
+    const addr = getEffectiveDeliveryAddress({
+      address: "רחוב 1",
+      originalDeliveryLocation: "חיפה",
+      city: "חיפה",
+    });
+    assert.equal(addr.display, "רחוב 1, חיפה");
+    assert.equal(addr.isPlaceUpdated, false);
   });
 });
 

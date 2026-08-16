@@ -35,6 +35,7 @@ export type FlowWeekCashCountSummary = {
   approved: Record<CashWeekFlowLineId, FlowWeekApprovedLine>;
   totalApprovedIls: number;
   hasAnyCount: boolean;
+  drawerChannelTotals: CashDailyIntakeTotals;
 };
 
 function round2(n: number): number {
@@ -129,9 +130,16 @@ export async function loadFlowWeekCashCountSummary(
   ) as Record<CashWeekFlowLineId, FlowWeekApprovedLine>;
 
   let hasAnyCount = false;
+  const drawerChannelTotals = emptyDailyIntake();
 
   for (const row of drawerRows) {
     const drawer = drawerFromDb(row);
+    for (const channel of allCashControlChannels()) {
+      const v = drawer[channel];
+      if (v != null && v > 0) {
+        drawerChannelTotals[channel] = round2(drawerChannelTotals[channel] + v);
+      }
+    }
     if (!hasDrawerData(drawer)) continue;
     hasAnyCount = true;
     for (const method of allCashControlChannels()) {
@@ -152,7 +160,7 @@ export async function loadFlowWeekCashCountSummary(
       approved.BANK_TRANSFER.amount,
   );
 
-  return { approved, totalApprovedIls, hasAnyCount };
+  return { approved, totalApprovedIls, hasAnyCount, drawerChannelTotals };
 }
 
 /** טבלה שבועית — נתונים מאושרים מספירת קופה בלבד */

@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { ACTIVE_WORK_WEEK_CODE } from "@/lib/active-work-week";
 import { goToNextWeek, goToPrevWeek, parseAhWeekNumber, toAhWeekCode } from "@/lib/weeks/ah-week-nav";
-import { getCashControlWeekSummaryAction } from "@/app/admin/cash-control/week-summary-action";
+import { getCashControlWeekPageDataAction, getCashControlWeekSummaryAction } from "@/app/admin/cash-control/week-summary-action";
 import { getCashControlDayDetailAction } from "@/app/admin/cash-control/day-detail-action";
 import { listCashControlDayIntakesAction } from "@/app/admin/cash-control/day-intakes-action";
 import type {
@@ -215,14 +215,15 @@ export function CashControlClient({
       if (detail) setDayDetail(detail);
       return;
     }
-    const [summaryData, detail] = await Promise.all([
-      getCashControlWeekSummaryAction(week),
+    const [pageData, detail] = await Promise.all([
+      getCashControlWeekPageDataAction(week),
       selectedDay ? getCashControlDayDetailAction({ week, dateYmd: selectedDay }) : Promise.resolve(null),
     ]);
-    setSummary(summaryData);
+    setSummary(pageData.summary);
+    setWeekBalance(pageData.weekBalance);
+    setWeekBalanceLoading(false);
     if (detail) setDayDetail(detail);
-    await reloadWeekBalance();
-  }, [isShipping, reloadWeekBalance, selectedDay, shippingCountry, week]);
+  }, [isShipping, selectedDay, shippingCountry, week]);
 
   const ensureDay = useCallback(
     async (dateYmd: string) => {
@@ -261,19 +262,19 @@ export function CashControlClient({
     } catch {
       setWeekBalanceDismissed(false);
     }
-    void Promise.all(
-      isShipping
-        ? [getShipmentCashControlWeekSummaryAction(shippingCountry, week)]
-        : [getCashControlWeekSummaryAction(week), getWeekBalanceStateAction(week)],
-    ).then((results) => {
-      if (cancelled) return;
-      setSummary(results[0] as CashDailyWeekSummaryPayload | null);
-      if (!isShipping) {
-        setWeekBalance(results[1] as WeekBalanceStateDto | null);
-        setWeekBalanceLoading(false);
-      }
-      setLoading(false);
-    });
+    void (isShipping
+      ? getShipmentCashControlWeekSummaryAction(shippingCountry, week).then((summaryData) => {
+          if (cancelled) return;
+          setSummary(summaryData);
+          setLoading(false);
+        })
+      : getCashControlWeekPageDataAction(week).then((pageData) => {
+          if (cancelled) return;
+          setSummary(pageData.summary);
+          setWeekBalance(pageData.weekBalance);
+          setWeekBalanceLoading(false);
+          setLoading(false);
+        }));
     return () => {
       cancelled = true;
     };

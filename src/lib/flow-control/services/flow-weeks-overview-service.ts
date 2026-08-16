@@ -8,24 +8,14 @@ import { prisma } from "@/lib/prisma";
 import { loadFlowWeek } from "@/app/admin/cash-flow/week-flow-service";
 import type { FlowWeekOverviewRow } from "@/app/admin/cash-flow/flow-types";
 import type { CashDailyMethodId } from "@/lib/cash-control-daily";
-import { emptyDailyIntake } from "@/lib/cash-control-daily";
-import { allCashControlChannels, CHANNEL_DRAWER_FIELD } from "@/lib/cash-control-channel";
-import { cashControlWeekReconciliationPaymentsWhere } from "@/lib/cash-control-week-payments";
-import { buildFlowPaymentDailyRows } from "@/lib/flow-control/services/cashflow-received-table.service";
-import {
-  computePaymentsTotalReceivedIls,
-} from "@/lib/flow-control/flow-calculation-service";
-import { loadTurkeyBalanceForWeek } from "@/lib/flow-control/turkey-transfer-balance-service";
-import { loadFlowWeekCashCountSummary } from "@/lib/flow-control/services/cash-count-summary-service";
+import { allCashControlChannels } from "@/lib/cash-control-channel";
 import { formatAhWeekLabel } from "@/lib/weeks/ah-week";
 import type { CashWeekFlowLineId } from "@/lib/cash-control-week-flow";
 import { groupByActivePayments } from "@/lib/payment-record-status";
 import { computeOrderLedgerView, resolveOrderTotalUsd } from "@/lib/order-remaining-debt";
 import { OrderStatus as OS } from "@prisma/client";
 import {
-  cashDrawerCountWhere,
   mergeOrderWhere,
-  mergePaymentWhere,
   resolveCountryScopeFromCode,
   type CountryScope,
 } from "@/lib/country-data-scope";
@@ -45,33 +35,8 @@ async function loadOneWeekOverview(
   scope: CountryScope,
 ): Promise<FlowWeekOverviewRow | null> {
   const wk = weekCode.trim();
-  const [approved, flow, drawerRows, turkeyBalance, payments, orderRows] = await Promise.all([
-    loadFlowWeekCashCountSummary(wk, scope.workCountry),
+  const [flow, orderRows] = await Promise.all([
     loadFlowWeek(wk, scope.workCountry),
-    prisma.cashDailyDrawerCount.findMany({
-      where: cashDrawerCountWhere(scope, wk),
-    }),
-    loadTurkeyBalanceForWeek(wk, scope.workCountry),
-    prisma.payment.findMany({
-      where: mergePaymentWhere(cashControlWeekReconciliationPaymentsWhere(wk), scope),
-      select: {
-        id: true,
-        paymentCode: true,
-        amountIls: true,
-        amountUsd: true,
-        paymentMethod: true,
-        usdPaymentMethod: true,
-        ilsPaymentMethod: true,
-        exchangeRate: true,
-        amountWithoutVat: true,
-        totalIlsWithoutVat: true,
-        totalIlsWithVat: true,
-        methodAllocations: { select: { method: true, currency: true, sourceAmount: true } },
-        intakeDate: true,
-        paymentDate: true,
-        createdAt: true,
-      },
-    }),
     prisma.order.findMany({
       where: mergeOrderWhere({ weekCode: wk, deletedAt: null }, scope),
       select: {
@@ -85,10 +50,8 @@ async function loadOneWeekOverview(
   ]);
   if (!flow) return null;
 
-  const paymentDaily = buildFlowPaymentDailyRows(wk, payments);
-  const paymentWeekTotal = paymentDaily.find((row) => row.isTotal)?.intake ?? emptyDailyIntake();
-  /** מקור יחיד: קליטות תשלום (Payment) — לא ספירת קופה / CashWeekFlow */
-  const paymentIntakeIls = money(computePaymentsTotalReceivedIls(payments));
+  const paymentWeekTotal = flow.weekPaymentIntake;
+  const paymentIntakeIls = flow.kpis.totalReceivedIls;
   const totalReceivedIls = paymentIntakeIls;
 
   const orderIds = orderRows.map((o) => o.id);
@@ -127,37 +90,26 @@ async function loadOneWeekOverview(
   remainingToPayUsd = round2(remainingToPayUsd);
   totalOrdersUsd = round2(totalOrdersUsd);
 
-  const drawerTotals = emptyDailyIntake();
-  for (const row of drawerRows) {
-    for (const channel of allCashControlChannels()) {
-      const field = CHANNEL_DRAWER_FIELD[channel];
-      const raw = row[field as keyof typeof row];
-      if (raw == null) continue;
-      const v = Number(raw.toString());
-      if (!Number.isFinite(v)) continue;
-      drawerTotals[channel] = round2(drawerTotals[channel] + v);
-    }
-  }
-
   const drawerDto = Object.fromEntries(
-    allCashControlChannels().map((k) => [k, money(drawerTotals[k])]),
+    allCashControlChannels().map((k) => [k, money(flow.drawerChannelTotals[k])]),
   ) as Record<CashDailyMethodId, string>;
 
   let maxDays = 0;
-  for (const line of Object.values(approved.approved)) {
-    if (line.daysCounted > maxDays) maxDays = line.daysCounted;
+  for (const line of Object.values(flow.received)) {
+    if (line.paymentCount > maxDays) maxDays = line.paymentCount;
   }
 
   const lastFx = flow.fxPurchases.length > 0 ? flow.fxPurchases[flow.fxPurchases.length - 1] : null;
-  const hasPaymentData = paymentDaily.some((r) => !r.isTotal);
+  const hasPaymentData = Object.values(flow.weekPaymentIntake).some((v) => v > 0);
   const hasManagerCount = (["CASH_ILS", "CASH_USD", "CREDIT", "CHECK", "BANK_TRANSFER"] as CashWeekFlowLineId[]).some(
     (id) => flow.counted[id] != null,
   );
+  const turkeyBalance = flow.turkeyBalance;
 
   return {
     week: wk,
     weekLabel: formatAhWeekLabel(wk),
-    hasData: orderRows.length > 0 || hasPaymentData || approved.hasAnyCount || hasManagerCount,
+    hasData: orderRows.length > 0 || hasPaymentData || maxDays > 0 || hasManagerCount,
     totalOrders: orderRows.length,
     totalOrdersUsd: money(totalOrdersUsd),
     remainingToPayUsd: money(remainingToPayUsd),

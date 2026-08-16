@@ -228,38 +228,62 @@ export type CashControlWeekAggregates = {
   weekExpenses: CashDailyExpenseTotals;
 };
 
-export async function loadCashControlWeekAggregates(
-  week: string,
-): Promise<CashControlWeekAggregates | null> {
+type CashControlWeekRaw = {
+  wk: string;
+  range: { from: string; to: string };
+  payments: Awaited<ReturnType<typeof loadCashControlWeekPayments>>;
+  drawerRows: Awaited<ReturnType<typeof loadCashControlWeekDrawerRows>>;
+  expenseRows: Awaited<ReturnType<typeof loadCashControlWeekExpenseRows>>;
+};
+
+async function loadCashControlWeekPayments(weekCode: string) {
+  return prisma.payment.findMany({
+    where: cashControlWeekReconciliationPaymentsWhere(weekCode),
+    select: {
+      amountIls: true,
+      amountUsd: true,
+      paymentMethod: true,
+      usdPaymentMethod: true,
+      ilsPaymentMethod: true,
+      exchangeRate: true,
+      methodAllocations: { select: { method: true, currency: true, sourceAmount: true } },
+      intakeDate: true,
+      paymentDate: true,
+      createdAt: true,
+    },
+  });
+}
+
+async function loadCashControlWeekDrawerRows(weekCode: string) {
+  return prisma.cashDailyDrawerCount.findMany({
+    where: { weekCode: weekCode, countryCode: "TR" },
+    include: { updatedBy: { select: { fullName: true } } },
+  });
+}
+
+async function loadCashControlWeekExpenseRows(weekCode: string) {
+  return prisma.cashExpense.findMany({
+    where: { weekCode: weekCode, status: "ACTIVE" },
+    select: { expenseDate: true, currency: true, amount: true, paymentMethod: true },
+  });
+}
+
+async function loadCashControlWeekRaw(week: string): Promise<CashControlWeekRaw | null> {
   const wk = week.trim();
   const range = getAhWeekRange(wk);
   if (!range) return null;
 
   const [payments, drawerRows, expenseRows] = await Promise.all([
-    prisma.payment.findMany({
-      where: cashControlWeekReconciliationPaymentsWhere(wk),
-      select: {
-        amountIls: true,
-        amountUsd: true,
-        paymentMethod: true,
-        usdPaymentMethod: true,
-        ilsPaymentMethod: true,
-        exchangeRate: true,
-        methodAllocations: { select: { method: true, currency: true, sourceAmount: true } },
-        intakeDate: true,
-        paymentDate: true,
-        createdAt: true,
-      },
-    }),
-    prisma.cashDailyDrawerCount.findMany({
-      where: { weekCode: wk, countryCode: "TR" },
-    }),
-    prisma.cashExpense.findMany({
-      where: { weekCode: wk, status: "ACTIVE" },
-      select: { expenseDate: true, currency: true, amount: true, paymentMethod: true },
-    }),
+    loadCashControlWeekPayments(wk),
+    loadCashControlWeekDrawerRows(wk),
+    loadCashControlWeekExpenseRows(wk),
   ]);
 
+  return { wk, range, payments, drawerRows, expenseRows };
+}
+
+function buildCashControlWeekAggregates(raw: CashControlWeekRaw): CashControlWeekAggregates {
+  const { wk, payments, drawerRows, expenseRows } = raw;
   const intakeByDay = aggregateDailyIntakes(payments);
   const drawerByDay = new Map(drawerRows.map((d) => [d.countDate, drawerFromDb(d)]));
   const expenseByDay = aggregateWeekExpenses(expenseRows);
@@ -285,36 +309,8 @@ export async function loadCashControlWeekAggregates(
   };
 }
 
-export async function loadCashControlWeekSummary(week: string): Promise<CashDailyWeekSummaryPayload | null> {
-  const wk = week.trim();
-  const range = getAhWeekRange(wk);
-  if (!range) return null;
-
-  const [payments, drawerRows, expenseRows] = await Promise.all([
-    prisma.payment.findMany({
-      where: cashControlWeekReconciliationPaymentsWhere(wk),
-      select: {
-        amountIls: true,
-        amountUsd: true,
-        paymentMethod: true,
-        usdPaymentMethod: true,
-        ilsPaymentMethod: true,
-        exchangeRate: true,
-        methodAllocations: { select: { method: true, currency: true, sourceAmount: true } },
-        intakeDate: true,
-        paymentDate: true,
-        createdAt: true,
-      },
-    }),
-    prisma.cashDailyDrawerCount.findMany({
-      where: { weekCode: wk, countryCode: "TR" },
-      include: { updatedBy: { select: { fullName: true } } },
-    }),
-    prisma.cashExpense.findMany({
-      where: { weekCode: wk, status: "ACTIVE" },
-      select: { expenseDate: true, currency: true, amount: true, paymentMethod: true },
-    }),
-  ]);
+function buildCashControlWeekSummary(raw: CashControlWeekRaw): CashDailyWeekSummaryPayload {
+  const { wk, range, payments, drawerRows, expenseRows } = raw;
 
   const intakeByDay = aggregateDailyIntakes(payments);
   const drawerRowByDay = new Map(drawerRows.map((d) => [d.countDate, d]));
@@ -396,6 +392,30 @@ export async function loadCashControlWeekSummary(week: string): Promise<CashDail
     to: range.to,
     rows: dayRows,
     kpi,
+  };
+}
+
+export async function loadCashControlWeekAggregates(
+  week: string,
+): Promise<CashControlWeekAggregates | null> {
+  const raw = await loadCashControlWeekRaw(week);
+  return raw ? buildCashControlWeekAggregates(raw) : null;
+}
+
+export async function loadCashControlWeekSummary(week: string): Promise<CashDailyWeekSummaryPayload | null> {
+  const raw = await loadCashControlWeekRaw(week);
+  return raw ? buildCashControlWeekSummary(raw) : null;
+}
+
+export async function loadCashControlWeekPageData(week: string): Promise<{
+  summary: CashDailyWeekSummaryPayload | null;
+  aggregates: CashControlWeekAggregates | null;
+}> {
+  const raw = await loadCashControlWeekRaw(week);
+  if (!raw) return { summary: null, aggregates: null };
+  return {
+    summary: buildCashControlWeekSummary(raw),
+    aggregates: buildCashControlWeekAggregates(raw),
   };
 }
 
