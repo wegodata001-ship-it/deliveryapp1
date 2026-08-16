@@ -26,7 +26,7 @@ import type {
   CashDailyWeekSummaryPayload,
 } from "@/app/admin/cash-control/daily-types";
 import { setPaymentCashAuditReviewAction } from "@/app/admin/cash-control/review-action";
-import { getCashExpenseCapabilitiesAction } from "@/app/admin/cash-expenses/capabilities-action";
+import { getCashExpenseCapabilitiesAction } from "@/app/admin/cash-expenses/actions";
 import type { CashExpenseCapabilities } from "@/app/admin/cash-expenses/types";
 import type { CashCurrency } from "@/app/admin/cash-control/constants";
 import {
