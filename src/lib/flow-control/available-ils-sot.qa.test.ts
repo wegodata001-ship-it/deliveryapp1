@@ -14,6 +14,7 @@ import {
   resolveAvailablePsIlsForFx,
 } from "@/components/admin/manager-count/manager-count-utils";
 import type { FlowWeekPayload, FxPurchaseRecord } from "@/app/admin/cash-flow/flow-types";
+import { emptyDailyIntake } from "@/lib/cash-control-daily";
 
 function fx(
   ilsAmount: number,
@@ -148,6 +149,9 @@ function flowFromCalc(
     turkeyBalanceStatus: "NO_COUNT",
     ilFxPurchaseIls: money(calc.ilFxPurchaseIls),
     ilsRemainingAfterFx: money(calc.ilsRemainingAfterFx),
+    weekPaymentIntake: emptyDailyIntake(),
+    managerCountExpected: [],
+    drawerChannelTotals: emptyDailyIntake(),
   };
 }
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BarChart3, BookOpen, FileSpreadsheet, FileText, RefreshCw, Search, X } from "lucide-react";
+import { BarChart3, BookOpen, Coins, FileSpreadsheet, FileText, RefreshCw, Search, X } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   exportCustomerBalancesAction,
@@ -49,6 +49,7 @@ import {
   parseBalancesWeekFromSearchParams,
 } from "@/lib/balances-week-filter";
 import { downloadBase64File, handleSourceTableExportResult } from "@/lib/pdf-export-client";
+import { CustomerCommissionResetModal } from "@/components/admin/CustomerCommissionResetModal";
 
 const LIMIT = 25;
 const FILTER_DEBOUNCE_MS = 350;
@@ -214,7 +215,11 @@ function parseStructuralFromSearchParams(sp: URLSearchParams): BalancesFiltersSt
   };
 }
 
-export function CustomerBalancesClient() {
+export function CustomerBalancesClient({
+  canResetViaCommissions = false,
+}: {
+  canResetViaCommissions?: boolean;
+}) {
   useEnsureActiveWorkWeekOnEnter("balances");
   const router = useRouter();
   const pathname = usePathname();
@@ -247,6 +252,13 @@ export function CustomerBalancesClient() {
   const staleCheckGenRef = useRef(0);
   const [insightsExpanded, setInsightsExpanded] = useState(false);
   const balancesScopeKeyRef = useRef<string | null>(null);
+  const [commissionResetRow, setCommissionResetRow] = useState<CustomerBalanceRow | null>(null);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+
+  const showToast = useCallback((msg: string) => {
+    setToastMsg(msg);
+    window.setTimeout(() => setToastMsg(null), 3800);
+  }, []);
 
   /** מקור יחיד לשאילתה — מסונכרן עם תצוגת השבוע (לא ממתין לעדכון URL) */
   const balancesQueryScope = useMemo(() => {
@@ -1106,17 +1118,32 @@ export function CustomerBalancesClient() {
                         <span className={statusChipClass(ui.tone)}>{ui.label}</span>
                       </td>
                       <td className="adm-balances-td-actions">
-                        <button
-                          type="button"
-                          className="adm-btn adm-btn--ghost adm-btn--xs adm-balances-ledger-btn"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openCustomerCard(r);
-                          }}
-                        >
-                          <BookOpen size={14} strokeWidth={2.2} aria-hidden />
-                          כרטסת
-                        </button>
+                        <div className="adm-balances-row-actions">
+                          <button
+                            type="button"
+                            className="adm-btn adm-btn--ghost adm-btn--xs adm-balances-ledger-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openCustomerCard(r);
+                            }}
+                          >
+                            <BookOpen size={14} strokeWidth={2.2} aria-hidden />
+                            כרטסת
+                          </button>
+                          {canResetViaCommissions && ui.tone === "debt" ? (
+                            <button
+                              type="button"
+                              className="adm-btn adm-btn--ghost adm-btn--xs adm-balances-ledger-btn adm-balances-commission-reset-btn"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setCommissionResetRow(r);
+                              }}
+                            >
+                              <Coins size={14} strokeWidth={2.2} aria-hidden />
+                              איפוס עמלות
+                            </button>
+                          ) : null}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -1178,6 +1205,23 @@ export function CustomerBalancesClient() {
           </nav>
         </footer>
       </div>
+
+      <CustomerCommissionResetModal
+        open={commissionResetRow != null}
+        customerId={commissionResetRow?.customerId ?? null}
+        customerName={commissionResetRow?.customerName ?? ""}
+        onClose={() => setCommissionResetRow(null)}
+        onSuccess={(msg) => {
+          showToast(msg);
+          window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
+        }}
+      />
+
+      {toastMsg ? (
+        <div className="adm-toast adm-toast--success" role="status" aria-live="polite">
+          {toastMsg}
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -7,6 +7,7 @@ import { dispatchOrdersListRefresh } from "@/lib/orders-list-refresh-bus";
 import {
   allocatePaymentAcrossOrders,
   buildAllocationsFromMatch,
+  computeCustomerResetBalanceMetrics,
   debtStatus,
   matchPaymentToOrders,
   orderLedgerBalanceUsd,
@@ -574,6 +575,7 @@ export function PaymentModalUpdated({
   const [postSavePrimaryPaymentId, setPostSavePrimaryPaymentId] = useState("");
   const [shortfallModalOpen, setShortfallModalOpen] = useState(false);
   const [postSaveRemainingUsd, setPostSaveRemainingUsd] = useState(0);
+  const [postSaveCommissionBalanceUsd, setPostSaveCommissionBalanceUsd] = useState(0);
   const [postSaveTargetOrderIds, setPostSaveTargetOrderIds] = useState<string[]>([]);
   const [postSaveBusyAction, setPostSaveBusyAction] =
     useState<PaymentShortfallResolution | null>(null);
@@ -2646,6 +2648,20 @@ export function PaymentModalUpdated({
     if (postSave?.needsShortfallResolution && postSave.remainingDebtUsd > 0.02) {
       setPostSaveRemainingUsd(postSave.remainingDebtUsd);
       setPostSaveTargetOrderIds(postSave.targetOrderIds);
+      const idSet = new Set(postSave.targetOrderIds);
+      const targetRows = orders.filter((o) => idSet.has(o.id));
+      const commissionPct = Number(commissionPercentStr) || 0;
+      setPostSaveCommissionBalanceUsd(
+        computeCustomerResetBalanceMetrics(
+          targetRows.map((o) => ({
+            amountUsd: Number(o.amountUsd) || 0,
+            commissionUsd: Number(o.commissionUsd) || 0,
+            totalAmountUsd: Number(o.totalAmountUsd) || 0,
+            dbPaidUsd: Number(o.dbPaidUsd) || 0,
+          })),
+          commissionPct,
+        ).availableCommission,
+      );
       setPostSaveError(null);
       setShortfallModalOpen(true);
       return;
@@ -2690,15 +2706,34 @@ export function PaymentModalUpdated({
     }
   }
 
+  function mapShortfallResetError(raw: string): string {
+    const msg = raw.trim();
+    if (!msg) return "האיפוס נכשל — נסה שוב";
+    if (msg.includes("אין הרשאת מנהל")) return "נדרשת הרשאת מנהל לאיפוס דרך עמלות";
+    if (msg.includes("לא נמצאו הזמנות") || msg.includes("אין יתרה פתוחה")) {
+      return "לא ניתן לאפס כרגע — רענן את המסך ונסה שוב";
+    }
+    if (msg.includes("נתוני ההזמנה השתנו")) return "נתוני ההזמנה השתנו — רענן ונסה שוב";
+    return "האיפוס נכשל — נסה שוב";
+  }
+
+  function onShortfallDismiss() {
+    if (postSaveBusyAction) return;
+    setShortfallModalOpen(false);
+    setPostSaveError(null);
+  }
+
   async function onShortfallAfterSaveResolve(resolution: PaymentShortfallResolution) {
     if (!customer || postSaveBusyAction) return;
     if (resolution === "leave_open") {
       setPostSaveBusyAction("leave_open");
       setShortfallModalOpen(false);
+      setPostSaveError(null);
       const mode = postSaveMode;
       const code = postSavePaymentCode;
       setPostSaveMode(null);
       setPostSaveRemainingUsd(0);
+      setPostSaveCommissionBalanceUsd(0);
       setPostSaveTargetOrderIds([]);
       if (mode === "new" && code) await finishSaveAndNew(code);
       else if (mode === "close") closeTop();
@@ -2706,15 +2741,14 @@ export function PaymentModalUpdated({
       return;
     }
 
-    setPostSaveBusyAction(resolution);
+    setPostSaveBusyAction("reset_commission");
     setPostSaveError(null);
-    const allowNegativeCommission = resolution === "reset_commission";
     const result = await resetCustomerOutstandingBalancesAction({
       customerId: customer.id,
       weekCode: intakeWeekCode,
       commissionPercent: commissionPercentStr,
       orderIds: postSaveTargetOrderIds,
-      allowNegativeCommission,
+      allowNegativeCommission: true,
       paymentCaptureContext:
         postSavePaymentCode && postSavePaymentNumber
           ? { primaryPaymentCode: postSavePaymentCode, paymentNumber: postSavePaymentNumber }
@@ -2722,23 +2756,21 @@ export function PaymentModalUpdated({
     });
     if (!result.ok) {
       setPostSaveBusyAction(null);
-      setPostSaveError(result.error);
+      setPostSaveError(mapShortfallResetError(result.error));
       return;
     }
-    onToast(
-      allowNegativeCommission
-        ? "היתרה אופסה דרך התאמת עמלה"
-        : "היתרה אופסה — Adjustment / סגירת יתרה",
-    );
+    onToast("היתרה אופסה בהצלחה דרך העמלות");
     window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
     await loadCustomerWorkspaceInBackground(customer.id, intakeWeekCode, {
       perfLabel: "postSaveShortfallRefresh",
     });
     setShortfallModalOpen(false);
+    setPostSaveError(null);
     const mode = postSaveMode;
     const code = postSavePaymentCode;
     setPostSaveMode(null);
     setPostSaveRemainingUsd(0);
+    setPostSaveCommissionBalanceUsd(0);
     setPostSaveTargetOrderIds([]);
     setPostSaveBusyAction(null);
     if (mode === "new" && code) await finishSaveAndNew(code);
@@ -4111,9 +4143,10 @@ export function PaymentModalUpdated({
       <PaymentShortfallAfterSaveModal
         open={shortfallModalOpen}
         remainingUsd={postSaveRemainingUsd}
+        commissionBalanceUsd={postSaveCommissionBalanceUsd}
         busy={postSaveBusyAction !== null}
         error={postSaveError}
-        canResetViaCommission={viewerIsAdmin}
+        onDismiss={onShortfallDismiss}
         onResolve={(resolution) => void onShortfallAfterSaveResolve(resolution)}
       />
       <OrderEditModal
@@ -4293,12 +4326,6 @@ export function PaymentModalUpdated({
                   setCommissionResetIds((prev) => {
                     if (prev.includes(commissionResetTarget.orderId)) return prev;
                     return [...prev, commissionResetTarget.orderId];
-                  });
-                  console.log("[commission.reset.preview]", {
-                    orderNumber: commissionResetTarget.orderNumber,
-                    remainingUsd: commissionResetTarget.remainingUsd,
-                    oldCommissionUsd: commissionResetTarget.oldCommissionUsd,
-                    newCommissionUsd: commissionResetTarget.newCommissionUsd,
                   });
                   setCommissionResetTarget(null);
                 }}

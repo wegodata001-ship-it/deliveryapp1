@@ -2,41 +2,41 @@
   {
     "id": "customers.list@1",
     "concurrency": 1,
-    "avgMs": 587.8,
-    "p95Ms": 1021.07,
-    "maxMs": 1021.07,
+    "avgMs": 1594.27,
+    "p95Ms": 3131.43,
+    "maxMs": 3131.43,
     "successRate": 100
   },
   {
     "id": "customers.list@5",
     "concurrency": 5,
-    "avgMs": 628.8,
-    "p95Ms": 1116.43,
-    "maxMs": 1116.43,
+    "avgMs": 1655.94,
+    "p95Ms": 2416.63,
+    "maxMs": 2416.63,
     "successRate": 100
   },
   {
     "id": "customers.list@10",
     "concurrency": 10,
-    "avgMs": 842.34,
-    "p95Ms": 1498.74,
-    "maxMs": 1499.14,
+    "avgMs": 2823.03,
+    "p95Ms": 4013.15,
+    "maxMs": 4090.46,
     "successRate": 100
   },
   {
     "id": "cashflow.overview4w@1",
     "concurrency": 1,
-    "avgMs": 4915.78,
-    "p95Ms": 4943.43,
-    "maxMs": 4943.43,
+    "avgMs": 2324.04,
+    "p95Ms": 5332.41,
+    "maxMs": 5332.41,
     "successRate": 100
   },
   {
     "id": "cashflow.overview4w@5",
     "concurrency": 5,
-    "avgMs": 15115.35,
-    "p95Ms": 15228.72,
-    "maxMs": 15228.72,
-    "successRate": 0
+    "avgMs": 3765.71,
+    "p95Ms": 4159.02,
+    "maxMs": 4159.02,
+    "successRate": 100
   }
 ]

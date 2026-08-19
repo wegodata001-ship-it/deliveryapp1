@@ -1,41 +1,51 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
+import { formatSignedUsdDisplay } from "@/lib/payment-adjustment-fee";
 import { formatUsdDisplay } from "@/lib/money-format";
 
-export type PaymentShortfallResolution =
-  | "leave_open"
-  | "reset_commission"
-  | "reset_adjustment";
+export type PaymentShortfallResolution = "leave_open" | "reset_commission";
 
 type Props = {
   open: boolean;
   remainingUsd: number;
+  commissionBalanceUsd: number;
   busy?: boolean;
   error?: string | null;
-  canResetViaCommission?: boolean;
   onResolve: (resolution: PaymentShortfallResolution) => void;
+  onDismiss: () => void;
 };
 
 function money(value: number): string {
   return `$${formatUsdDisplay(value)}`;
 }
 
+function signedMoney(value: number): string {
+  return formatSignedUsdDisplay(value);
+}
+
 export function PaymentShortfallAfterSaveModal({
   open,
   remainingUsd,
+  commissionBalanceUsd,
   busy,
   error,
-  canResetViaCommission = true,
   onResolve,
+  onDismiss,
 }: Props) {
-  const [step, setStep] = useState<"choose" | "reset_method">("choose");
-
   useEffect(() => {
-    if (open) setStep("choose");
-  }, [open]);
+    if (!open) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape" && !busy) onDismiss();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [open, busy, onDismiss]);
 
   if (!open || remainingUsd <= 0.01) return null;
+
+  const resetUsd = -remainingUsd;
+  const commissionAfterUsd = commissionBalanceUsd + resetUsd;
 
   return (
     <div className="adm-mini-modal-layer" role="presentation">
@@ -47,70 +57,74 @@ export function PaymentShortfallAfterSaveModal({
         dir="rtl"
         onClick={(e) => e.stopPropagation()}
       >
+        <button
+          type="button"
+          className="adm-payment-shortfall-close"
+          aria-label="סגור"
+          disabled={busy}
+          onClick={onDismiss}
+        >
+          ×
+        </button>
+
         <h2 id="payment-shortfall-title" className="adm-mini-modal-title">
           נשארו {money(remainingUsd)} לתשלום
         </h2>
         <p className="adm-payment-shortfall-lead">
-          התשלום נשמר בהצלחה, אך נשארה יתרה פתוחה בהזמנה.
+          התשלום נשמר בהצלחה.
+          <br />
+          אפשר להשאיר את הסכום כחוב פתוח או לסגור אותו דרך העמלות.
         </p>
 
-        {step === "choose" ? (
-          <>
-            <p className="adm-payment-shortfall-q">מה תרצה לעשות?</p>
-            {error ? <div className="payment-modal-save-error">{error}</div> : null}
-            <div className="adm-mini-modal-actions adm-payment-shortfall-actions">
-              <button
-                type="button"
-                className="adm-btn adm-btn--primary"
-                disabled={busy}
-                onClick={() => onResolve("leave_open")}
-              >
-                {busy ? "מסיים…" : "השאר כחוב"}
-              </button>
-              <button
-                type="button"
-                className="adm-btn adm-btn--ghost"
-                disabled={busy}
-                onClick={() => setStep("reset_method")}
-              >
-                אפס יתרה וסגור הזמנה
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            <p className="adm-payment-shortfall-q">אופן האיפוס</p>
-            {error ? <div className="payment-modal-save-error">{error}</div> : null}
-            <div className="adm-mini-modal-actions adm-payment-shortfall-actions">
-              {canResetViaCommission ? (
-                <button
-                  type="button"
-                  className="adm-btn adm-btn--primary"
-                  disabled={busy}
-                  onClick={() => onResolve("reset_commission")}
-                >
-                  {busy ? "מבצע…" : "איפוס דרך עמלות"}
-                </button>
-              ) : null}
-              <button
-                type="button"
-                className="adm-btn adm-btn--ghost"
-                disabled={busy}
-                onClick={() => onResolve("reset_adjustment")}
-              >
-                {busy ? "מבצע…" : "Adjustment / סגירת יתרה"}
-              </button>
-              <button
-                type="button"
-                className="adm-btn adm-btn--ghost adm-payment-shortfall-back"
-                disabled={busy}
-                onClick={() => setStep("choose")}
-              >
-                חזרה
-              </button>
-            </div>
-          </>
-        )}
+        <div className="adm-payment-shortfall-ledger" aria-label="תצוגת עמלות לאיפוס">
+          <div className="adm-payment-shortfall-ledger-row">
+            <span>יתרת עמלות לפני</span>
+            <strong dir="ltr">{money(commissionBalanceUsd)}</strong>
+          </div>
+          <div className="adm-payment-shortfall-ledger-row">
+            <span>איפוס יתרה</span>
+            <strong dir="ltr" className="adm-payment-fee-amt--debit">
+              {signedMoney(resetUsd)}
+            </strong>
+          </div>
+          <div className="adm-payment-shortfall-ledger-divider" aria-hidden />
+          <div className="adm-payment-shortfall-ledger-row adm-payment-shortfall-ledger-row--after">
+            <span>יתרת עמלות אחרי</span>
+            <strong
+              dir="ltr"
+              className={
+                commissionAfterUsd < -0.001
+                  ? "adm-payment-fee-amt--debit"
+                  : commissionAfterUsd > 0.001
+                    ? "adm-payment-fee-amt--credit"
+                    : undefined
+              }
+            >
+              {signedMoney(commissionAfterUsd)}
+            </strong>
+          </div>
+        </div>
+
+        {error ? <div className="adm-payment-shortfall-error">{error}</div> : null}
+
+        <div className="adm-mini-modal-actions adm-payment-shortfall-actions">
+          <button
+            type="button"
+            className="adm-btn adm-btn--primary"
+            disabled={busy}
+            onClick={() => onResolve("reset_commission")}
+          >
+            {busy ? "מבצע…" : `אפס ${money(remainingUsd)} דרך עמלות`}
+          </button>
+          <button
+            type="button"
+            className="adm-btn adm-btn--ghost"
+            disabled={busy}
+            onClick={() => onResolve("leave_open")}
+          >
+            השאר כחוב
+          </button>
+        </div>
       </div>
     </div>
   );

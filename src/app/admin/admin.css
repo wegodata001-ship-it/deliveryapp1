@@ -15611,14 +15611,92 @@ select.payment-modal-inline-input {
 }
 
 .adm-payment-shortfall-modal.adm-mini-modal {
-  width: min(420px, 94vw);
-  padding: 18px;
+  position: relative;
+  width: min(400px, 94vw);
+  padding: 20px 18px 18px;
+}
+
+.adm-payment-shortfall-close {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #64748b;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.adm-payment-shortfall-close:hover:not(:disabled) {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.adm-payment-shortfall-close:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .adm-payment-shortfall-lead {
-  margin: 0 0 8px;
+  margin: 0 0 14px;
   color: #475569;
-  line-height: 1.45;
+  line-height: 1.5;
+  font-size: 0.92rem;
+  text-align: center;
+}
+
+.adm-payment-shortfall-ledger {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  display: grid;
+  gap: 8px;
+}
+
+.adm-payment-shortfall-ledger-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.adm-payment-shortfall-ledger-row span {
+  color: #64748b;
+  font-weight: 700;
+}
+
+.adm-payment-shortfall-ledger-row strong {
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.adm-payment-shortfall-ledger-row--after span {
+  color: #0f172a;
+}
+
+.adm-payment-shortfall-ledger-divider {
+  height: 1px;
+  background: #cbd5e1;
+  margin: 2px 0;
+}
+
+.adm-payment-shortfall-error {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #b91c1c;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
 }
 
 .adm-payment-shortfall-q {
@@ -15640,6 +15718,73 @@ select.payment-modal-inline-input {
 .adm-payment-shortfall-back {
   font-size: 0.875rem;
   opacity: 0.85;
+}
+
+.adm-commission-reset-modal .adm-mini-modal-title {
+  padding-inline-end: 2rem;
+}
+
+.adm-commission-reset-detail {
+  margin-top: 0.75rem;
+}
+
+.adm-commission-reset-detail-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.45rem 0.5rem;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.04);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.adm-commission-reset-detail-toggle:hover:not(:disabled) {
+  background: rgba(15, 23, 42, 0.07);
+}
+
+.adm-commission-reset-detail-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+}
+
+.adm-commission-reset-detail-list li {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.45rem 0.65rem;
+  font-size: 0.875rem;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.adm-commission-reset-detail-list li:last-child {
+  border-bottom: 0;
+}
+
+.adm-commission-reset-detail-meta {
+  color: rgba(15, 23, 42, 0.55);
+  font-size: 0.8125rem;
+}
+
+.adm-balances-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: flex-start;
+}
+
+.adm-balances-commission-reset-btn {
+  white-space: nowrap;
 }
 
 .adm-payment-overage-stats--overpayment dd {

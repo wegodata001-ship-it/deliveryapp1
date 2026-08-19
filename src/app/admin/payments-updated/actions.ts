@@ -2284,12 +2284,11 @@ async function applyCustomerOutstandingBalanceResetInTx(
     where: {
       customerId: cid,
       deletedAt: null,
-      ...(weekDateWhere ?? {}),
       ...(params.orderIds && params.orderIds.length > 0
         ? { id: { in: params.orderIds } }
-        : {}),
+        : (weekDateWhere ?? {})),
     },
-    orderBy: [{ orderDate: "desc" }, { createdAt: "desc" }],
+    orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],
     select: {
       id: true,
       orderNumber: true,
@@ -2857,11 +2856,13 @@ export async function resetCustomerOutstandingBalancesAction(input: {
 > {
   const me = await requireAuth();
   const allowNegativeCommission = Boolean(input.allowNegativeCommission);
-  if (allowNegativeCommission && !isAdminUser(me)) {
-    return { ok: false, error: "אין הרשאת מנהל לאישור עמלה שלילית" };
-  }
-  if (!isAdminUser(me) && !userHasAnyPermission(me, ["receive_payments"])) {
+  const canResetViaCommissions =
+    isAdminUser(me) || userHasAnyPermission(me, ["receive_payments"]);
+  if (!canResetViaCommissions) {
     return { ok: false, error: "אין הרשאה לקיזוז יתרה מעמלות" };
+  }
+  if (allowNegativeCommission && !canResetViaCommissions) {
+    return { ok: false, error: "אין הרשאה ליצירת עמלה שלילית" };
   }
 
   const cid = (input.customerId || "").trim();

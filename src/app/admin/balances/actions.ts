@@ -2,7 +2,7 @@
 
 import { unstable_noStore as noStore } from "next/cache";
 import { OrderSourceCountry, Prisma } from "@prisma/client";
-import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
+import { requireAuth, userHasAnyPermission, isAdminUser } from "@/lib/admin-auth";
 import { perfEnabled } from "@/lib/perf-log";
 import { logDbEnvDiagnostics } from "@/lib/db-env-diagnostics";
 import { prisma } from "@/lib/prisma";
@@ -32,6 +32,8 @@ import {
 } from "@/lib/customer-balance-order-status";
 import { computeSignedFromTotals } from "@/lib/customer-balance";
 import { calculateCustomerBalances, type CustomerBalanceCalculation } from "@/lib/customer-balance-calculator";
+import { buildCustomerCommissionResetPreview } from "@/lib/customer-commission-balance";
+import { resetCustomerOutstandingBalancesAction } from "@/app/admin/payments-updated/actions";
 import {
   orderStatusesForBalanceFilter,
   parseCustomerBalanceOrderStatusFilter,
@@ -751,12 +753,14 @@ function computeBalanceStats(rows: CustomerBalanceRow[]): CustomerBalancesPayloa
 
 export async function listCustomerBalancesAction(query: CustomerBalanceQuery): Promise<CustomerBalancesPayload> {
   noStore();
-  console.log("[balances-report-query]", {
-    week: query.weekCode?.trim() || null,
-    country: query.sourceCountry?.trim() || null,
-    from: query.fromYmd?.trim() || null,
-    to: query.toYmd?.trim() || null,
-  });
+  if (perfEnabled()) {
+    console.log("[balances-report-query]", {
+      week: query.weekCode?.trim() || null,
+      country: query.sourceCountry?.trim() || null,
+      from: query.fromYmd?.trim() || null,
+      to: query.toYmd?.trim() || null,
+    });
+  }
   logDbEnvDiagnostics("server /admin/balances listCustomerBalancesAction");
   const perfT0 = Date.now();
   let fetchCustomersMs = 0;
@@ -895,16 +899,18 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   const cachedPayload = query.skipCache ? null : getCachedBalancesPayload(cacheKey);
   if (cachedPayload) {
     const totalMs = Date.now() - perfT0;
-    console.table({
-      customersQueryMs: 0,
-      ordersQueryMs: 0,
-      paymentsQueryMs: 0,
-      totalMs,
-      customersCount: cachedPayload.totalRows,
-      ordersCount: 0,
-      paymentsCount: 0,
-      cacheHit: true,
-    });
+    if (perfEnabled()) {
+      console.table({
+        customersQueryMs: 0,
+        ordersQueryMs: 0,
+        paymentsQueryMs: 0,
+        totalMs,
+        customersCount: cachedPayload.totalRows,
+        ordersCount: 0,
+        paymentsCount: 0,
+        cacheHit: true,
+      });
+    }
     return cachedPayload;
   }
 
@@ -959,19 +965,21 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   const customerIds = customers.map((c) => c.id);
   customersTransformMs += Date.now() - customersTransformT0;
   if (customerIds.length === 0) {
-    console.log("[balances-report]", {
-      ...balancesReportLogBase,
-      ordersFound: 0,
-      paymentsFound: 0,
-      balancesFound: 0,
-      reason: "no_customers",
-    });
-    console.log({
-      customersCount: 0,
-      ordersCount: 0,
-      paymentsCount: 0,
-      balancesCount: 0,
-    });
+    if (perfEnabled()) {
+      console.log("[balances-report]", {
+        ...balancesReportLogBase,
+        ordersFound: 0,
+        paymentsFound: 0,
+        balancesFound: 0,
+        reason: "no_customers",
+      });
+      console.log({
+        customersCount: 0,
+        ordersCount: 0,
+        paymentsCount: 0,
+        balancesCount: 0,
+      });
+    }
     if (perfEnabled()) {
       const totalMs = Date.now() - perfT0;
       console.table({
@@ -1064,13 +1072,15 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   const scopedCustomers = customers.filter((c) => scopedCustomerIdSet.has(c.id));
 
   if (scopedCustomerIds.length === 0) {
-    console.log("[balances-report]", {
-      ...balancesReportLogBase,
-      ordersFound: 0,
-      paymentsFound: 0,
-      balancesFound: 0,
-      reason: "no_customers_after_balance_scope",
-    });
+    if (perfEnabled()) {
+      console.log("[balances-report]", {
+        ...balancesReportLogBase,
+        ordersFound: 0,
+        paymentsFound: 0,
+        balancesFound: 0,
+        reason: "no_customers_after_balance_scope",
+      });
+    }
     return emptyBalancesPayload(limit);
   }
 
@@ -1298,20 +1308,6 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     const lastDt = lastOrderDateByCustomer.get(c.id);
     const maxN = maxAhByCustomer.get(c.id) ?? 0;
     const lifetimeUsd = lifetimeOrdersUsdByCustomer.get(c.id) ?? new Prisma.Decimal(0);
-    if (c.customerCode === "90006") {
-      console.info("[getCustomerBalanceReport.balance]", {
-        customerId: c.id,
-        customerCode: c.customerCode,
-        sourceCountry: orderCountryPrisma ?? null,
-        fromYmd: query.fromYmd?.trim() || null,
-        toYmd: query.toYmd?.trim() || null,
-        ordersCount: shared?.ordersCount ?? oc,
-        ordersTotal: (shared?.totalOrders ?? expectedUsd).toFixed(2),
-        withdrawalsTotal: (shared?.totalWithdrawals ?? new Prisma.Decimal(0)).toFixed(2),
-        paymentsTotal: (shared?.totalPayments ?? receivedUsd).toFixed(2),
-        balance: balUsdDec.toFixed(2),
-      });
-    }
     return {
       customerId: c.id,
       customerName: primaryCustomerDisplayName({
@@ -1510,32 +1506,21 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     ...(reportModalStats ? { reportModalStats } : {}),
   };
 
-  console.log("[balances-report]", {
-    ...balancesReportLogBase,
-    ordersFound: orderRows.length,
-    paymentsFound: paymentRows.length + generalCreditRows.length,
-    balancesFound: sorted.length,
-    debtFilter,
-  });
-  console.log({
-    customersCount: customers.length,
-    ordersCount: orderRows.length,
-    paymentsCount: paymentRows.length + generalCreditRows.length,
-    balancesCount: sorted.length,
-  });
-  const totalMsForLog = Date.now() - perfT0;
-  console.table({
-    customersQueryMs,
-    ordersQueryMs,
-    paymentsQueryMs,
-    totalMs: totalMsForLog,
-    customersCount: customers.length,
-    ordersCount: orderRows.length,
-    paymentsCount: paymentRows.length + generalCreditRows.length,
-  });
-
   if (perfEnabled()) {
     const totalMs = Date.now() - perfT0;
+    console.log("[balances-report]", {
+      ...balancesReportLogBase,
+      ordersFound: orderRows.length,
+      paymentsFound: paymentRows.length + generalCreditRows.length,
+      balancesFound: sorted.length,
+      debtFilter,
+    });
+    console.log({
+      customersCount: customers.length,
+      ordersCount: orderRows.length,
+      paymentsCount: paymentRows.length + generalCreditRows.length,
+      balancesCount: sorted.length,
+    });
     console.table({
       fetchCustomersMs,
       fetchOrdersMs,
@@ -1552,6 +1537,8 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       renderMs,
       serializeMs,
       totalMs,
+      ordersCount: orderRows.length,
+      paymentsCount: paymentRows.length + generalCreditRows.length,
     });
     console.log("[balances-report-prisma-query-count]", {
       prismaQueryCount,
@@ -1788,6 +1775,106 @@ export async function exportCustomerBalancesAction(
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "ייצוא נכשל" };
   }
+}
+
+export type CustomerCommissionResetPreviewDto = {
+  customerId: string;
+  customerName: string;
+  openDebtUsd: number;
+  commissionBalanceUsd: number;
+  resetUsd: number;
+  commissionAfterUsd: number;
+  orders: Array<{
+    orderId: string;
+    orderNumber: string;
+    remainingUsd: number;
+    orderDateYmd: string;
+  }>;
+};
+
+function canResetCustomerDebtViaCommissions(me: Awaited<ReturnType<typeof requireAuth>>): boolean {
+  return isAdminUser(me) || userHasAnyPermission(me, ["receive_payments"]);
+}
+
+/** תצוגה מקדימה — חוב פתוח (FIFO) + יתרת עמלות SSOT */
+export async function getCustomerCommissionResetPreviewAction(input: {
+  customerId: string;
+  customerName?: string | null;
+}): Promise<
+  | { ok: true; preview: CustomerCommissionResetPreviewDto }
+  | { ok: false; error: string }
+> {
+  noStore();
+  const me = await requireAuth();
+  if (!canResetCustomerDebtViaCommissions(me)) {
+    return { ok: false, error: "אין הרשאה לאיפוס עמלות" };
+  }
+
+  const cid = (input.customerId || "").trim();
+  if (!cid) return { ok: false, error: "חסר מזהה לקוח" };
+
+  const built = await buildCustomerCommissionResetPreview(cid);
+  if (!built) return { ok: false, error: "לקוח לא נמצא" };
+  if (built.openDebtUsd <= 0.01) {
+    return { ok: false, error: "אין חוב פתוח לאיפוס" };
+  }
+
+  return {
+    ok: true,
+    preview: {
+      customerId: built.customerId,
+      customerName: (input.customerName || "").trim() || "לקוח",
+      openDebtUsd: built.openDebtUsd,
+      commissionBalanceUsd: built.commissionBalanceUsd,
+      resetUsd: built.resetUsd,
+      commissionAfterUsd: built.commissionAfterUsd,
+      orders: built.orders.map((o) => ({
+        orderId: o.orderId,
+        orderNumber: o.orderNumber,
+        remainingUsd: o.remainingUsd,
+        orderDateYmd: o.orderDateYmd,
+      })),
+    },
+  };
+}
+
+/** איפוס חוב פתוח דרך עמלות — מסך יתרות */
+export async function resetCustomerDebtViaCommissionsAction(input: {
+  customerId: string;
+}): Promise<
+  | { ok: true; totalResetUsd: string; commissionAfterUsd: number }
+  | { ok: false; error: string }
+> {
+  noStore();
+  const me = await requireAuth();
+  if (!canResetCustomerDebtViaCommissions(me)) {
+    return { ok: false, error: "אין הרשאה לאיפוס עמלות" };
+  }
+
+  const cid = (input.customerId || "").trim();
+  if (!cid) return { ok: false, error: "חסר מזהה לקוח" };
+
+  const built = await buildCustomerCommissionResetPreview(cid);
+  if (!built || built.openDebtUsd <= 0.01) {
+    return { ok: false, error: "אין חוב פתוח לאיפוס" };
+  }
+
+  const orderIds = built.orders.map((o) => o.orderId);
+  const result = await resetCustomerOutstandingBalancesAction({
+    customerId: cid,
+    weekCode: null,
+    orderIds,
+    allowNegativeCommission: true,
+  });
+
+  if (!result.ok) return result;
+
+  const afterPreview = await buildCustomerCommissionResetPreview(cid);
+  return {
+    ok: true,
+    totalResetUsd: result.totalResetUsd,
+    commissionAfterUsd: afterPreview?.commissionBalanceUsd ?? built.commissionAfterUsd,
+  };
 }
 
 /** בדיקה קלה — האם יש נתונים חדשים מאשר התצוגה הנוכחית */
