@@ -191,6 +191,8 @@ export type FlowWeekPayload = {
   ilsRemainingAfterFx: string;
   /** קליטות תשלום לפי ערוץ — לסיכום שבועי בבקרת תזרים */
   weekPaymentIntake: import("@/lib/cash-control-daily").CashDailyIntakeTotals;
+  /** צפוי ספירת מנהל + פירוט תשלומים — מקליטה בפועל */
+  managerCountExpected: import("@/lib/flow-control/services/manager-count-expected-service").ManagerCountExpectedLine[];
   /** ספירת קופה מצטברת לפי ערוץ — לסיכום שבועי */
   drawerChannelTotals: import("@/lib/cash-control-daily").CashDailyIntakeTotals;
 };

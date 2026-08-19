@@ -467,6 +467,48 @@ export function OrdersListToolbar({
 
   const activeFilterChips = useMemo((): ActiveFilterChip[] => {
     const chips: ActiveFilterChip[] = [];
+    const weekCode =
+      normalizeAhWeekCode(week) ??
+      normalizeAhWeekCode(ordersWeekFromUrl) ??
+      normalizeAhWeekCode(ahWeekSelect) ??
+      "";
+
+    if (weekCode) {
+      chips.push({
+        key: "week",
+        label: `שבוע ${weekCode}`,
+        onRemove: () => {
+          goToActiveWeek();
+        },
+      });
+    }
+
+    const ordersCompleted = searchParams.get("ordersCompleted");
+    if (ordersCompleted === "done") {
+      chips.push({
+        key: "ordersCompleted",
+        label: "הושלמו בלבד",
+        onRemove: () => {
+          const base = new URLSearchParams(searchParams.toString());
+          base.delete("ordersCompleted");
+          base.delete("page");
+          const qs = base.toString();
+          router.replace(qs ? `/admin/orders?${qs}` : "/admin/orders");
+        },
+      });
+    } else if (ordersCompleted === "not_done") {
+      chips.push({
+        key: "ordersCompleted",
+        label: "לא הושלמו",
+        onRemove: () => {
+          const base = new URLSearchParams(searchParams.toString());
+          base.delete("ordersCompleted");
+          base.delete("page");
+          const qs = base.toString();
+          router.replace(qs ? `/admin/orders?${qs}` : "/admin/orders");
+        },
+      });
+    }
 
     if (customerDraft.trim()) {
       chips.push({
@@ -655,6 +697,11 @@ export function OrdersListToolbar({
     uiLocale,
     week,
     weekRange,
+    ahWeekSelect,
+    goToActiveWeek,
+    ordersWeekFromUrl,
+    router,
+    searchParams,
   ]);
 
   const mobileFilterCount = useMemo(() => {
@@ -689,29 +736,29 @@ export function OrdersListToolbar({
   }, []);
 
   const weekControl = (
-    <label className="adm-orders-filter-field adm-orders-filter-field--week">
-      <span className="adm-orders-filter-label">שבוע</span>
-      <div className="adm-week-control" dir="ltr">
-        <AhWeekNavPrevButton className="adm-week-step" onClick={() => shiftWeekNav(-1)} />
+    <div className="adm-orders-filter-field adm-orders-filter-field--week adm-orders-week-compact">
+      <div className="adm-week-control adm-week-control--compact" dir="ltr">
+        <AhWeekNavPrevButton className="adm-week-step adm-week-step--compact" onClick={() => shiftWeekNav(-1)} />
         <input
           type="text"
           inputMode="text"
           value={week}
           dir="ltr"
+          aria-label="שבוע עבודה"
           onChange={(e) => setWeek(e.target.value.toUpperCase())}
           onBlur={(e) => onWeekCommitted(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") onWeekCommitted((e.target as HTMLInputElement).value);
           }}
-          className="adm-week-inp"
-          placeholder="AH-119"
+          className="adm-week-inp adm-week-inp--compact"
+          placeholder="AH-136"
           spellCheck={false}
           autoComplete="off"
         />
-        <AhWeekNavNextButton className="adm-week-step" onClick={() => shiftWeekNav(1)} />
-        <CurrentWorkWeekButton className="adm-week-current" weekCode={week} onClick={goToActiveWeek} />
+        <AhWeekNavNextButton className="adm-week-step adm-week-step--compact" onClick={() => shiftWeekNav(1)} />
       </div>
-    </label>
+      <CurrentWorkWeekButton className="adm-week-current adm-week-current--compact" weekCode={week} onClick={goToActiveWeek} />
+    </div>
   );
 
   const searchField = (
@@ -739,7 +786,7 @@ export function OrdersListToolbar({
             }
           }}
           className="adm-orders-filter-inp adm-orders-filter-inp--search"
-          placeholder="לקוח / קוד לקוח / מספר הזמנה"
+          placeholder="חיפוש לפי לקוח / קוד לקוח / מספר הזמנה / טלפון"
           autoComplete="off"
         />
       </span>

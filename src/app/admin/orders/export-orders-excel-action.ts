@@ -17,6 +17,8 @@ import {
   orderDisplayUsdSigned,
 } from "@/lib/debt-withdrawal-order";
 import { getOrderStatusLabelMap, labelFromMap } from "@/lib/order-status-registry";
+import { computeOrderLedgerView } from "@/lib/order-remaining-debt";
+import { groupByActivePayments } from "@/lib/payment-record-status";
 
 const EXPORT_MAX_ROWS = 15_000;
 
@@ -53,6 +55,7 @@ export async function exportOrdersListExcelCsvAction(
       orderBy: [{ orderDate: "desc" }, { createdAt: "desc" }],
       take: EXPORT_MAX_ROWS + 1,
       select: {
+        id: true,
         orderNumber: true,
         orderDate: true,
         weekCode: true,
@@ -85,6 +88,16 @@ export async function exportOrdersListExcelCsvAction(
     return { ok: false, error: ordersExportNoDataMessage(preset, "excel") };
   }
 
+  const paySums = await groupByActivePayments(
+    "orderId",
+    { orderId: { in: rows.map((r) => r.id) }, amountUsd: { not: null } },
+    { amountUsd: true },
+  );
+  const paidByOrder = new Map<string, number>();
+  for (const p of paySums as Array<{ orderId: string | null; _sum: { amountUsd: unknown } }>) {
+    if (p.orderId) paidByOrder.set(p.orderId, Number(p._sum.amountUsd ?? 0));
+  }
+
   const intakeLocationNameById = (id: string | null | undefined): string | null => {
     if (!id) return null;
     return intakeLocationRows.find((x) => x.id === id)?.name?.trim() || null;
@@ -98,7 +111,8 @@ export async function exportOrdersListExcelCsvAction(
     "שם לקוח",
     "סכום לפני עמלה ($)",
     "סכום כולל עמלה ($)",
-    "סכום בשקל (₪)",
+    "שולם ($)",
+    "יתרה ($)",
     "סטטוס הזמנה",
     "צורת תשלום",
     "מקום תשלום",
@@ -127,7 +141,13 @@ export async function exportOrdersListExcelCsvAction(
       debtWithdrawalUsd: r.debtWithdrawalUsd,
     });
     const dealNum = r.amountUsd != null ? Number(r.amountUsd) : 0;
-    const totalIlsRaw = Number(r.totalIlsWithVat ?? r.totalIls ?? 0);
+    const ledger = computeOrderLedgerView({
+      orderId: r.id,
+      totalUsd: r.totalUsd,
+      amountUsd: r.amountUsd,
+      commissionUsd: r.commissionUsd,
+      paidUsd: isWithdrawal ? 0 : paidByOrder.get(r.id) ?? 0,
+    });
     const od = r.orderDate ? new Date(r.orderDate) : null;
     const dateStr = od
       ? `${String(od.getDate()).padStart(2, "0")}/${String(od.getMonth() + 1).padStart(2, "0")}/${od.getFullYear()} ${String(od.getHours()).padStart(2, "0")}:${String(od.getMinutes()).padStart(2, "0")}`
@@ -142,9 +162,12 @@ export async function exportOrdersListExcelCsvAction(
           minimumFractionDigits: 2,
           maximumFractionDigits: 2,
         });
-    const totalIls = isWithdrawal
-      ? `-${Math.abs(totalIlsRaw).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-      : totalIlsRaw.toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const paidUsd = isWithdrawal
+      ? "0.00"
+      : ledger.paidUsd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const remainingUsd = isWithdrawal
+      ? "0.00"
+      : ledger.remainingUsd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
     lines.push(
       [
@@ -155,7 +178,8 @@ export async function exportOrdersListExcelCsvAction(
         customerName,
         dealUsd,
         totalUsd,
-        totalIls,
+        paidUsd,
+        remainingUsd,
         labelFromMap(statusMap, r.status),
         paymentTypeLabel(r.paymentMethod as string | null, paymentMethodMap),
         paymentLocationName ?? "—",

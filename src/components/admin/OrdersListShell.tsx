@@ -48,8 +48,18 @@ import {
   type OrderStatusKpiKey,
 } from "@/lib/orders-status-kpi-filter";
 import { adjustStatusSummaryForStatusChange } from "@/lib/orders-status-kpi-optimistic";
+import { OrderRowActionsMenu, OrderPaymentStatusBadge } from "@/components/admin/orders/OrderRowActionsMenu";
+import { WEGO_ORDERS_LIST_REFRESH_EVENT } from "@/lib/orders-list-refresh-bus";
 
 type CompletedFilter = "not_done" | "done" | "all";
+
+type ListEmptyContent = {
+  kind: "error" | "loading" | "filtered" | "empty";
+  title: string;
+  body: string;
+  action?: (() => void) | null;
+  actionLabel: string;
+};
 
 export type OrderListRow = {
   id: string;
@@ -75,9 +85,12 @@ export type OrderListRow = {
   dealAmountUsd: string | null;
   commissionAmountUsd: string | null;
   totalAmountUsd: string | null;
-  /** יתרה בדולרים (סה״כ − שולם) — לא מוצגת כעמודה, אך נשמרת לתאימות */
+  /** סכום ששולם ב-USD (Ledger) */
+  paidAmountUsd: string | null;
+  /** יתרה פתוחה ב-USD */
   balanceUsd: string | null;
-  totalAmountIls: string | null;
+  /** @deprecated — תצוגה היסטורית בלבד, לא SSOT */
+  totalAmountIls?: string | null;
   paymentStatus: "unpaid" | "partial" | "paid";
   /** סימון בקשת עריכה / נעילה — הזמנות מוכנות (COMPLETED) או מבוטלות */
   editBadge?: "pending" | "unlock" | "rejected" | "locked" | null;
@@ -178,9 +191,9 @@ function fmtUsd(n: number): string {
 }
 
 function readCompletedFilterFromLocation(): CompletedFilter {
-  if (typeof window === "undefined") return "not_done";
+  if (typeof window === "undefined") return "all";
   const v = new URLSearchParams(window.location.search).get("ordersCompleted");
-  return v === "done" || v === "all" || v === "not_done" ? v : "not_done";
+  return v === "done" || v === "all" || v === "not_done" ? v : "all";
 }
 
 function formatOrdersListMoney(
@@ -239,11 +252,12 @@ type Props = {
   orders: OrderListRow[];
   statusSummary: OrdersStatusSummary;
   pagination: OrdersListPagination;
-  /** ADMIN במערכת = מנהל/אחראי — עוקף נעילת עריכה */
   viewerIsAdmin: boolean;
   canCreateOrders: boolean;
   canEditOrders: boolean;
+  canReceivePayments: boolean;
   canViewCustomerCard: boolean;
+  loadError?: string | null;
   dateRange: ParsedDateFilter;
   paymentLocationOptions: { id: string; label: string }[];
   toolbarProps: OrdersListToolbarProps;
@@ -256,7 +270,9 @@ export function OrdersListShell({
   viewerIsAdmin,
   canCreateOrders,
   canEditOrders,
+  canReceivePayments,
   canViewCustomerCard,
+  loadError = null,
   dateRange,
   paymentLocationOptions,
   toolbarProps,
@@ -277,7 +293,7 @@ export function OrdersListShell({
   const [refreshLoading, setRefreshLoading] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const recentLocalStatusRef = useRef(new Map<string, { status: string; isCompleted: boolean; at: number }>());
-  const [listErr, setListErr] = useState<string | null>(null);
+  const [listErr, setListErr] = useState<string | null>(loadError);
   const [lockModal, setLockModal] = useState<OrderEditLockGatePayload | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
@@ -291,7 +307,7 @@ export function OrdersListShell({
     setActiveStatusFilters((prev) => toggleStatusKpiFilter(prev, key));
   }, []);
 
-  const clearStatusKpiFilters = useCallback(() => {
+  const clearStatusKpiFilters = useCallback((): void => {
     setActiveStatusFilters([]);
     setCompletedFilter("all");
     const sp = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
@@ -387,6 +403,10 @@ export function OrdersListShell({
   }, [paginationLive, activeStatusFilters.length, tableRows.length]);
 
   useEffect(() => {
+    setListErr(loadError);
+  }, [loadError]);
+
+  useEffect(() => {
     const pending = recentLocalStatusRef.current;
     setRows((cur) => {
       const curById = new Map(cur.map((r) => [r.id, r]));
@@ -422,7 +442,7 @@ export function OrdersListShell({
     (next: CompletedFilter) => {
       setCompletedFilter(next);
       const sp = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
-      if (next === "not_done") sp.delete("ordersCompleted");
+      if (next === "all") sp.delete("ordersCompleted");
       else sp.set("ordersCompleted", next);
       sp.delete("page");
       const q = sp.toString();
@@ -472,6 +492,14 @@ export function OrdersListShell({
       setRefreshLoading(false);
     }
   }, [refreshLoading, readExportSearchParams, showToast]);
+
+  useEffect(() => {
+    const onOrdersRefresh = () => {
+      void refreshList();
+    };
+    window.addEventListener(WEGO_ORDERS_LIST_REFRESH_EVENT, onOrdersRefresh);
+    return () => window.removeEventListener(WEGO_ORDERS_LIST_REFRESH_EVENT, onOrdersRefresh);
+  }, [refreshList]);
 
   const openOrderOverlay = useCallback(
     (orderId: string, row?: OrderListRow) => {
@@ -838,36 +866,121 @@ export function OrdersListShell({
     toolbarPropsLive.countryFilterOptions,
   ]);
 
-  const filterLeadingActions = (
-    <>
+  const openPaymentForOrder = useCallback(
+    (row: OrderListRow) => {
+      if (!canReceivePayments) return;
+      openWindow({
+        type: "paymentsUpdated",
+        props: {
+          orderId: row.id,
+          orderNumber: row.orderNumber,
+          customerId: row.customerId,
+          customerName: row.customerName,
+        },
+      });
+    },
+    [canReceivePayments, openWindow],
+  );
+
+  const hasUrlFilters = useCallback((): boolean => {
+    if (typeof window === "undefined") return false;
+    const sp = new URLSearchParams(window.location.search);
+    const filterKeys = [
+      "ordersCustomer",
+      "ordersOrderNum",
+      "ordersPhone",
+      "status",
+      "ordersCountry",
+      "paymentType",
+      "paymentLocation",
+      "createdBy",
+      "amountMin",
+      "amountMax",
+    ];
+    if (filterKeys.some((k) => sp.get(k))) return true;
+    if (sp.get("ordersOpenOnly") === "1" || sp.get("ordersReadyOnly") === "1") return true;
+    const oc = sp.get("ordersCompleted");
+    if (oc === "done" || oc === "not_done") return true;
+    return false;
+  }, []);
+
+  const listEmptyContent = useMemo((): ListEmptyContent | null => {
+    if (listErr) {
+      return {
+        kind: "error",
+        title: "לא הצלחנו לטעון את ההזמנות",
+        body: listErr,
+        action: () => {
+          void refreshList();
+        },
+        actionLabel: "נסה שוב",
+      };
+    }
+    if (refreshLoading && rows.length === 0) {
+      return { kind: "loading" as const, title: "טוען הזמנות…", body: "", action: null, actionLabel: "" };
+    }
+    if (rows.length === 0) {
+      if (hasUrlFilters() || completedFilter !== "all" || activeStatusFilters.length > 0) {
+        return {
+          kind: "filtered" as const,
+          title: "לא נמצאו הזמנות לפי הסינון הנוכחי",
+          body: "נסו לנקות מסננים או לעבור לשבוע אחר.",
+          action: clearStatusKpiFilters,
+          actionLabel: "נקה הכל",
+        };
+      }
+      return {
+        kind: "empty" as const,
+        title: `אין הזמנות בשבוע ${dateRange.ahWeekSelect || dateRange.weekCode || ""}`,
+        body: "ניתן ליצור הזמנה חדשה או לעבור לשבוע אחר.",
+        action: canCreateOrders ? newOrder : undefined,
+        actionLabel: canCreateOrders ? "+ הזמנה חדשה" : "",
+      };
+    }
+    if (tableRows.length === 0) {
+      return {
+        kind: "filtered" as const,
+        title: "אין הזמנות לפי סינון הסטטוס שנבחר",
+        body: "לחצו על «הכל» או נקו את המסננים.",
+        action: clearStatusKpiFilters,
+        actionLabel: "נקה הכל",
+      };
+    }
+    return null;
+  }, [
+    listErr,
+    refreshLoading,
+    rows.length,
+    tableRows.length,
+    hasUrlFilters,
+    completedFilter,
+    activeStatusFilters.length,
+    clearStatusKpiFilters,
+    dateRange.ahWeekSelect,
+    dateRange.weekCode,
+    canCreateOrders,
+    newOrder,
+    refreshList,
+  ]);
+
+  const pageHeaderActions = (
+    <div className="adm-orders-page-header__actions" role="group" aria-label="פעולות רשימה">
       {canCreateOrders ? (
-        <button
-          type="button"
-          className="adm-btn adm-btn--primary adm-btn--dense adm-orders-top-btn adm-orders-top-btn--new"
-          onClick={newOrder}
-        >
+        <button type="button" className="adm-btn adm-btn--primary adm-btn--dense" onClick={newOrder}>
           <Plus size={15} strokeWidth={2.2} aria-hidden />
           הזמנה חדשה
         </button>
       ) : null}
       <button
         type="button"
-        className="adm-orders-btn adm-orders-btn--refresh"
+        className="adm-btn adm-btn--ghost adm-btn--dense"
         onClick={() => void refreshList()}
         disabled={refreshLoading}
-        title="רענון רשימה"
         aria-busy={refreshLoading}
       >
-        {refreshLoading ? (
-          <span className="payment-modal-save-spinner adm-orders-refresh-spinner" aria-hidden />
-        ) : null}
+        {refreshLoading ? <span className="payment-modal-save-spinner adm-orders-refresh-spinner" aria-hidden /> : null}
         רענון
       </button>
-    </>
-  );
-
-  const kpiExportActions = (
-    <div className="adm-orders-kpi-export-actions" role="group" aria-label="ייצוא רשימה">
       <OrdersListExportSplitButton
         variant="pdf"
         disabled={pdfLoading}
@@ -883,8 +996,17 @@ export function OrdersListShell({
     </div>
   );
 
+  const filterLeadingActions = null;
+
+  const kpiExportActions = null;
+
   return (
-    <div className="adm-orders-work">
+    <div className="adm-orders-work adm-orders-work--v3">
+      <header className="adm-orders-page-header" dir="rtl">
+        <h1 className="adm-orders-page-header__title">רשימת הזמנות</h1>
+        {pageHeaderActions}
+      </header>
+
       <div className="adm-orders-filters-row">
         <Suspense fallback={<div className="adm-orders-toolbar-skel" aria-hidden />}>
           <OrdersListToolbar
@@ -942,14 +1064,42 @@ export function OrdersListShell({
           </div>
         </div>
 
-        {listErr ? (
-          <p className="adm-orders-inline-err" role="alert">
-            {listErr}
-          </p>
+        {listErr && !listEmptyContent?.kind ? (
+          <div className="adm-orders-inline-err adm-orders-inline-err--block" role="alert">
+            <strong>לא הצלחנו לטעון את ההזמנות</strong>
+            <p>{listErr}</p>
+            <button type="button" className="adm-btn adm-btn--ghost adm-btn--dense" onClick={() => void refreshList()}>
+              נסה שוב
+            </button>
+          </div>
+        ) : null}
+
+        {listEmptyContent && rows.length === 0 ? (
+          <div className={`adm-orders-empty adm-orders-empty--${listEmptyContent.kind}`} role="status">
+            <strong>{listEmptyContent.title}</strong>
+            {listEmptyContent.body ? <p>{listEmptyContent.body}</p> : null}
+            {listEmptyContent.action ? (
+              <button type="button" className="adm-btn adm-btn--primary adm-btn--dense" onClick={listEmptyContent.action}>
+                {listEmptyContent.actionLabel}
+              </button>
+            ) : null}
+          </div>
         ) : null}
 
         <div className="adm-orders-table-host mobile-table-wrapper adm-table-excel-wrap adm-table-excel-wrap--orders">
-        <table className="adm-table-excel adm-table-excel--orders adm-table-excel--orders-v2">
+        {listEmptyContent && tableRows.length === 0 && rows.length > 0 ? (
+          <div className="adm-orders-empty adm-orders-empty--filtered" role="status">
+            <strong>{listEmptyContent.title}</strong>
+            {listEmptyContent.body ? <p>{listEmptyContent.body}</p> : null}
+            {listEmptyContent.action ? (
+              <button type="button" className="adm-btn adm-btn--ghost adm-btn--dense" onClick={listEmptyContent.action}>
+                {listEmptyContent.actionLabel}
+              </button>
+            ) : null}
+          </div>
+        ) : (
+        <>
+        <table className="adm-table-excel adm-table-excel--orders adm-table-excel--orders-v3">
           <thead>
             <tr>
               <th className="adm-ord-col-num">מזהה הזמנה</th>
@@ -969,40 +1119,19 @@ export function OrdersListShell({
                   <span>עמלה ($)</span>
                 </span>
               </th>
-              <th className="adm-ord-col-money adm-ord-col-ils" dir="ltr">
-                <span className="adm-ord-th-stack">
-                  <span>סכום</span>
-                  <span>בשקל (₪)</span>
-                </span>
-              </th>
-              <th className="adm-ord-col-status">
-                <span className="adm-ord-th-stack">
-                  <span>סטטוס</span>
-                  <span>הזמנה</span>
-                </span>
-              </th>
-              <th className="adm-ord-col-completed">הושלם</th>
-              <th className="adm-ord-col-meta adm-ord-col-pay">
-                <span className="adm-ord-th-stack">
-                  <span>צורת</span>
-                  <span>תשלום</span>
-                </span>
-              </th>
-              <th className="adm-ord-col-meta adm-ord-col-payloc">
-                <span className="adm-ord-th-stack">
-                  <span>מקום</span>
-                  <span>תשלום</span>
-                </span>
-              </th>
+              <th className="adm-ord-col-money adm-ord-col-money--paid" dir="ltr">שולם ($)</th>
+              <th className="adm-ord-col-money adm-ord-col-money--balance" dir="ltr">יתרה ($)</th>
+              <th className="adm-ord-col-status">סטטוס הזמנה</th>
+              <th className="adm-ord-col-paid">שולם</th>
+              <th className="adm-ord-col-meta adm-ord-col-pay">צורת תשלום</th>
+              <th className="adm-ord-col-actions">פעולות</th>
             </tr>
           </thead>
           <tbody>
             {tableRows.length === 0 ? (
               <tr>
                 <td colSpan={12} className="adm-table-empty">
-                  {rows.length === 0
-                    ? "אין הזמנות בטווח הנבחר."
-                    : "אין הזמנות בעמוד הנוכחי לפי ריבועי הסטטוס שנבחרו."}
+                  {rows.length === 0 ? "—" : "אין הזמנות לפי הסינון בעמוד זה"}
                 </td>
               </tr>
             ) : (
@@ -1106,14 +1235,29 @@ export function OrdersListShell({
                       dir="ltr"
                       className={[
                         "adm-table-excel-money",
-                        "adm-table-excel-money--ils",
-                        "adm-ord-col-ils",
-                        formatOrdersListMoney(o, "ils").debtWithdrawal ? "adm-ord-money--debt-withdrawal" : "",
+                        "adm-table-excel-money--usd",
+                        "adm-ord-col-money",
+                        "adm-ord-col-money--paid",
                       ]
                         .filter(Boolean)
                         .join(" ")}
                     >
-                      {formatOrdersListMoney(o, "ils").text}
+                      {o.paidAmountUsd ?? "—"}
+                    </td>
+                    <td
+                      dir="ltr"
+                      className={[
+                        "adm-table-excel-money",
+                        "adm-table-excel-money--usd",
+                        "adm-table-excel-money--strong",
+                        "adm-ord-col-money",
+                        "adm-ord-col-money--balance",
+                        o.balanceUsd && parseNumeric(o.balanceUsd) === 0 ? "adm-ord-money--zero" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                    >
+                      {o.balanceUsd ?? "—"}
                     </td>
                     <td className="adm-table-excel-status-cell adm-ord-col-status" onClick={(e) => e.stopPropagation()}>
                       <OrderStatusSelect
@@ -1126,34 +1270,8 @@ export function OrdersListShell({
                         onChange={(v) => void onRowStatusChange(o.id, v)}
                       />
                     </td>
-                    <td className="adm-ord-col-completed" onClick={(e) => e.stopPropagation()}>
-                      <label
-                        className={[
-                          "adm-order-completed-check",
-                          o.isCompleted ? "adm-order-completed-check--done" : "",
-                          o.status !== OS.COMPLETED || !viewerIsAdmin ? "adm-order-completed-check--disabled" : "",
-                        ]
-                          .filter(Boolean)
-                          .join(" ")}
-                        title={
-                          o.status !== OS.COMPLETED
-                            ? "ניתן לסמן הושלם רק כשההזמנה בוצעה"
-                            : !viewerIsAdmin
-                              ? "קריאה בלבד"
-                              : o.isCompleted
-                                ? "בטל הושלם"
-                                : "סמן הושלם"
-                        }
-                      >
-                        <input
-                          type="checkbox"
-                          checked={o.isCompleted}
-                          disabled={o.status !== OS.COMPLETED || !viewerIsAdmin || busyId === o.id}
-                          onChange={(e) => void onRowCompletedChange(o.id, e.target.checked)}
-                          aria-label="הושלם"
-                        />
-                        <span aria-hidden>{o.isCompleted ? "✅" : "⬜"}</span>
-                      </label>
+                    <td className="adm-ord-col-paid">
+                      <OrderPaymentStatusBadge status={o.paymentStatus} />
                     </td>
                     <td className="adm-ord-col-meta adm-ord-col-pay" onClick={(e) => e.stopPropagation()}>
                       <select
@@ -1171,27 +1289,14 @@ export function OrdersListShell({
                         ))}
                       </select>
                     </td>
-                    <td className="adm-ord-col-meta adm-ord-col-payloc" onClick={(e) => e.stopPropagation()}>
-                      <IntakeLocationCombobox
-                        variant="table"
-                        value={o.paymentLocationId ?? ""}
-                        label={o.paymentLocationName ?? paymentLocationLabelById.get(o.paymentLocationId ?? "") ?? ""}
-                        disabled={!canEditOrders || busyId === o.id || !!o.quickStatusLocked}
-                        onChange={(id, label) => {
-                          if (id && !paymentLocationLabelById.has(id)) {
-                            setExtraPaymentLocationOptions((prev) => {
-                              if (prev.some((p) => p.id === id)) return prev;
-                              return [...prev, { id, label }];
-                            });
-                          }
-                          void onRowPaymentLocationChange(o.id, id);
-                        }}
-                        onOptionCreated={(opt) => {
-                          setExtraPaymentLocationOptions((prev) => {
-                            if (prev.some((p) => p.id === opt.id)) return prev;
-                            return [...prev, opt];
-                          });
-                        }}
+                    <td className="adm-ord-col-actions" onClick={(e) => e.stopPropagation()}>
+                      <OrderRowActionsMenu
+                        row={o}
+                        canEditOrders={canEditOrders}
+                        canReceivePayments={canReceivePayments}
+                        onView={(row) => openOrderOverlay(row.id, row)}
+                        onEdit={(row) => openOrderOverlay(row.id, row)}
+                        onPayment={openPaymentForOrder}
                       />
                     </td>
                   </tr>
@@ -1200,7 +1305,52 @@ export function OrdersListShell({
             )}
           </tbody>
         </table>
-      </div>
+
+        <div className="adm-orders-mobile-cards" aria-label="רשימת הזמנות">
+          {tableRows.length === 0 ? (
+            <p className="adm-orders-mobile-cards__empty">
+              {rows.length === 0 ? "—" : "אין הזמנות לפי הסינון בעמוד זה"}
+            </p>
+          ) : (
+            tableRows.map((o) => (
+              <article key={`m-${o.id}`} className="adm-orders-mobile-card">
+                <div className="adm-orders-mobile-card__head">
+                  <button type="button" className="adm-orders-mobile-card__num" onClick={() => openOrderOverlay(o.id, o)}>
+                    {o.orderNumber ?? "—"}
+                  </button>
+                  <OrderPaymentStatusBadge status={o.paymentStatus} />
+                </div>
+                <div className="adm-orders-mobile-card__cust">{o.customerName ?? "—"}</div>
+                <div className="adm-orders-mobile-card__meta">
+                  <span>{o.orderDateYmd ?? "—"}</span>
+                  <span dir="ltr">{formatOrdersListMoney(o, "total").text}</span>
+                </div>
+                <div className="adm-orders-mobile-card__foot">
+                  <OrderStatusSelect
+                    variant="table"
+                    className="adm-table-status-sel"
+                    value={o.status?.trim() ? o.status : OS.OPEN}
+                    includeCurrentValue
+                    disabled={!canEditOrders || !!o.quickStatusLocked}
+                    aria-label="סטטוס הזמנה"
+                    onChange={(v) => void onRowStatusChange(o.id, v)}
+                  />
+                  <OrderRowActionsMenu
+                    row={o}
+                    canEditOrders={canEditOrders}
+                    canReceivePayments={canReceivePayments}
+                    onView={(row) => openOrderOverlay(row.id, row)}
+                    onEdit={(row) => openOrderOverlay(row.id, row)}
+                    onPayment={openPaymentForOrder}
+                  />
+                </div>
+              </article>
+            ))
+          )}
+        </div>
+        </>
+        )}
+        </div>
 
         <OrdersListPaginationBar pagination={paginationLive} label={paginationLabel} />
 

@@ -303,9 +303,25 @@ export type OrderCapturePaymentLineInput = {
 function parseOrderPaymentLines(
   lines: OrderCapturePaymentLineInput[] | undefined,
   finalNisPerUsd: Prisma.Decimal,
-): { ok: true; parsed: { method: string; amount: Prisma.Decimal }[]; sum: Prisma.Decimal } | { ok: false; error: string } {
+):
+  | {
+      ok: true;
+      parsed: {
+        method: string;
+        amountUsd: Prisma.Decimal;
+        sourceCurrency: "USD" | "ILS";
+        sourceAmount: Prisma.Decimal;
+      }[];
+      sum: Prisma.Decimal;
+    }
+  | { ok: false; error: string } {
   if (!lines?.length) return { ok: true, parsed: [], sum: new Prisma.Decimal(0) };
-  const parsed: { method: string; amount: Prisma.Decimal }[] = [];
+  const parsed: {
+    method: string;
+    amountUsd: Prisma.Decimal;
+    sourceCurrency: "USD" | "ILS";
+    sourceAmount: Prisma.Decimal;
+  }[] = [];
   let sum = new Prisma.Decimal(0);
   for (const line of lines) {
     const raw = (line.amountUsd || "").trim().replace(",", ".");
@@ -326,16 +342,18 @@ function parseOrderPaymentLines(
     }
     const cur = (line.currency || "USD").trim().toUpperCase();
     let amtUsd: Prisma.Decimal;
+    let sourceCurrency: "USD" | "ILS" = "USD";
     if (cur === "ILS" || cur === "NIS" || cur === "₪") {
       if (finalNisPerUsd.lte(0)) {
         return { ok: false, error: "שער דולר לא תקין לחישוב תשלומים בשקלים" };
       }
+      sourceCurrency = "ILS";
       amtUsd = amtInput.div(finalNisPerUsd).toDecimalPlaces(4, 4);
     } else {
       amtUsd = amtInput;
     }
     sum = sum.add(amtUsd);
-    parsed.push({ method, amount: amtUsd });
+    parsed.push({ method, amountUsd: amtUsd, sourceCurrency, sourceAmount: amtInput });
   }
   return { ok: true, parsed, sum };
 }
@@ -371,7 +389,12 @@ async function appendParsedPaymentsForOrder(
     customerId: string;
     weekCode: string | null;
     paymentDate: Date;
-    parsed: { method: string; amount: Prisma.Decimal }[];
+    parsed: {
+      method: string;
+      amountUsd: Prisma.Decimal;
+      sourceCurrency: "USD" | "ILS";
+      sourceAmount: Prisma.Decimal;
+    }[];
     base: Prisma.Decimal;
     fee: Prisma.Decimal;
     final: Prisma.Decimal;
@@ -388,22 +411,25 @@ async function appendParsedPaymentsForOrder(
     vatRate: params.vatRate,
   };
   const data = params.parsed.map((row) => {
-    const totals = computeFromUsdAmount(row.amount, snapIn);
+    const totals = computeFromUsdAmount(row.amountUsd, snapIn);
+    const isIlsSource = row.sourceCurrency === "ILS";
     return {
       orderId: params.orderId,
       customerId: params.customerId,
       weekCode: params.weekCode,
       paymentDate: params.paymentDate,
-      currency: "USD" as const,
-      amountUsd: row.amount,
-      amountIls: totals.totalIlsWithVat,
+      currency: isIlsSource ? ("ILS" as const) : ("USD" as const),
+      amountUsd: row.amountUsd,
+      amountIls: isIlsSource ? row.sourceAmount : totals.totalIlsWithVat,
+      sourceCurrency: row.sourceCurrency,
+      sourceAmount: row.sourceAmount,
       exchangeRate: params.final,
       vatRate: params.vatRate,
       amountWithoutVat: totals.totalIlsWithoutVat,
       snapshotBaseDollarRate: totals.snapshotBaseDollarRate,
       snapshotDollarFee: totals.snapshotDollarFee,
       snapshotFinalDollarRate: totals.snapshotFinalDollarRate,
-      totalIlsWithVat: totals.totalIlsWithVat,
+      totalIlsWithVat: isIlsSource ? row.sourceAmount : totals.totalIlsWithVat,
       totalIlsWithoutVat: totals.totalIlsWithoutVat,
       vatAmount: totals.vatAmount,
       manualDateChanged: false,
@@ -1685,11 +1711,10 @@ async function captureOrderActionInner(
       return { ok: false, error: "הזמנת משיכה מחוב אינה כוללת שורות תשלום — הסכום מקטין חוב בלבד" };
     }
   } else if (payParse.parsed.length > 0) {
-    const diff = payParse.sum.sub(totalUsd).abs();
-    if (diff.gt(new Prisma.Decimal("0.01"))) {
+    if (payParse.sum.gt(totalUsd.add(new Prisma.Decimal("0.01")))) {
       return {
         ok: false,
-        error: "סכום שורות התשלום חייב להיות שווה לסה״כ ההזמנה בדולר (סטייה מקסימלית 0.01)",
+        error: "סכום התשלום חורג מסה״כ ההזמנה בדולר",
       };
     }
   }
@@ -1927,7 +1952,7 @@ async function captureOrderActionInner(
       totalUsd: totalUsd.toFixed(2),
       payments: payParse.parsed.map((p) => ({
         paymentMethod: p.method,
-        amountUsd: p.amount.toFixed(2),
+        amountUsd: p.amountUsd.toFixed(2),
       })),
     },
     orderNumber: order.orderNumber ?? orderNumber,
@@ -1938,6 +1963,8 @@ async function captureOrderActionInner(
   }));
   capturePerfTimeEnd("capture.response");
   perf.logSummary({ mode: "create", orderId: order.id, orderNumber });
+  invalidateOrdersListDataCache();
+  revalidatePath("/admin/orders");
   return out;
 }
 
@@ -2524,6 +2551,89 @@ export async function updateOrderListPaymentMethodAction(
   }
 
   await prisma.order.update({ where: { id }, data: { paymentMethod: method } });
+  return { ok: true };
+}
+
+/** עדכון אוטומטי של אמצעי תשלום מתוכנן — תרחיש swap פשוט (הזמנה + שורת חלוקה אחת). */
+export async function applyIntakePaymentMethodSwapAction(params: {
+  orderId: string;
+  fromMethod: string;
+  toMethod: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["edit_orders"])) {
+    return { ok: false, error: "אין הרשאה" };
+  }
+  if (!isAdminUser(me)) {
+    return { ok: false, error: "עדכון הזמנה דורש אישור מנהל. פתחו את ההזמנה ושלחו בקשת עדכון." };
+  }
+  const orderId = params.orderId.trim();
+  if (!orderId) return { ok: false, error: "חסר מזהה הזמנה" };
+  const fromMethod = params.fromMethod.trim();
+  const toMethod = params.toMethod.trim();
+  if (!PAYMENT_METHODS.has(fromMethod) || !PAYMENT_METHODS.has(toMethod)) {
+    return { ok: false, error: "אמצעי תשלום לא תקין" };
+  }
+  if (fromMethod === toMethod) return { ok: false, error: "אין שינוי לביצוע" };
+
+  const existing = await prisma.order.findFirst({
+    where: { id: orderId, deletedAt: null },
+    select: {
+      id: true,
+      status: true,
+      editUnlockedForUserId: true,
+      editUnlockedUntil: true,
+      totalUsd: true,
+      exchangeRate: true,
+      snapshotFinalDollarRate: true,
+      usdRateUsed: true,
+      weekCode: true,
+      paymentBreakdown: {
+        select: { paymentMethod: true, amount: true, currency: true, paidAmount: true },
+      },
+    },
+  });
+  if (!existing) return { ok: false, error: "הזמנה לא נמצאה" };
+  if (!canUserEditCompletedOrder(me, existing)) {
+    return { ok: false, error: "הזמנה במצב ״בוצע״ או ״מבוטל״ נעולה — שינוי דורש אישור מנהל." };
+  }
+  if (existing.paymentBreakdown.length !== 1) {
+    return { ok: false, error: "עדכון אוטומטי זמין רק להזמנה עם אמצעי תשלום מתוכנן אחד. ערכו ידנית." };
+  }
+  const line = existing.paymentBreakdown[0]!;
+  if (line.paymentMethod !== fromMethod) {
+    return { ok: false, error: "אמצעי התשלום המתוכנן השתנה — רעננו ונסו שוב." };
+  }
+
+  const totalUsd = Number(existing.totalUsd?.toString?.() ?? existing.totalUsd ?? 0);
+  const rateN = Number(
+    existing.usdRateUsed?.toString?.() ??
+      existing.snapshotFinalDollarRate?.toString?.() ??
+      existing.exchangeRate?.toString?.() ??
+      0,
+  );
+  const amountStr = line.amount?.toString?.() ?? String(line.amount ?? totalUsd);
+  const currency = line.currency?.toUpperCase() === "ILS" ? "ILS" : "USD";
+
+  const parsed = parseOrderBreakdown(
+    [{ paymentMethod: toMethod, amount: amountStr, currency }],
+    new Prisma.Decimal(totalUsd),
+    new Prisma.Decimal(rateN > 0 ? rateN : 0),
+  );
+  if (!parsed.ok) return { ok: false, error: parsed.error };
+
+  await prisma.$transaction(async (tx) => {
+    await writeOrderBreakdown(tx, orderId, parsed.rows, {
+      userId: me.id,
+      intakeWeekCode: existing.weekCode,
+      rateN: rateN > 0 ? rateN : undefined,
+    });
+    await tx.order.update({ where: { id: orderId }, data: { paymentMethod: toMethod } });
+  });
+
+  invalidateOrdersListDataCache();
+  revalidatePath("/admin/orders");
+  revalidatePath("/admin/payments");
   return { ok: true };
 }
 

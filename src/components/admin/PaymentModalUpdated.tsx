@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { PaymentMethod } from "@prisma/client";
 import { logPaymentAllocationPreSave } from "@/lib/payment-allocation-debug";
+import { dispatchOrdersListRefresh } from "@/lib/orders-list-refresh-bus";
 import {
   allocatePaymentAcrossOrders,
   buildAllocationsFromMatch,
@@ -24,10 +25,14 @@ import {
   type PaymentIntakeCustomerPayload,
   type PaymentIntakeCustomerPaymentRow,
 } from "@/app/admin/payments/intake/actions";
+import {
+  applyIntakePaymentMethodSwapAction,
+} from "@/app/admin/capture/actions";
 import { sumCustomerPaymentsUsd } from "@/lib/payment-intake-customer-kpi";
 import { aggregateLivePaymentFormKpis } from "@/lib/payment-intake-live-kpi";
 import { buildPostSaveRemainingSummary } from "@/lib/payment-intake-method-control";
 import { PaymentMethodControlModal } from "@/components/admin/PaymentMethodControlModal";
+import { PaymentIntakeDeviationModal } from "@/components/admin/PaymentIntakeDeviationModal";
 import { usePaymentIntakePlanningViews } from "@/hooks/usePaymentIntakePlanningViews";
 import { computeOrderOpenDebtUsd } from "@/lib/order-remaining-debt";
 import { softRefreshPaymentIntakeOrders } from "@/lib/payment-intake-orders-source";
@@ -44,10 +49,11 @@ import {
   intakeHasRateMismatch,
   intakeHasOpenBalanceShortfall,
   intakeDeviationModalRows,
-  buildDeviationComparisonRows,
+  buildIntakeDeviationModalView,
+  bucketKeyToDbMethod,
   classifyMethodIntakeGate,
   type IntakeSaveDeviationRow,
-  type DeviationComparisonRow,
+  type IntakeDeviationModalView,
 } from "@/lib/cash-control-intake-breakdown";
 import { PaymentLiveSummaryCards } from "@/components/admin/PaymentLiveSummaryCards";
 import {
@@ -566,6 +572,7 @@ export function PaymentModalUpdated({
   const [overageAfterDebtClosure, setOverageAfterDebtClosure] = useState(false);
   const [intakeDevModalOpen, setIntakeDevModalOpen] = useState(false);
   const [intakeDevRows, setIntakeDevRows] = useState<IntakeSaveDeviationRow[]>([]);
+  const [intakeDevAutoFixBusy, setIntakeDevAutoFixBusy] = useState(false);
   const [methodControlOpen, setMethodControlOpen] = useState(false);
   /** רענון מקור ההזמנות המשותף (טבלה ראשית + חלון מתוכננים) */
   const [sharedOrdersRefreshing, setSharedOrdersRefreshing] = useState(false);
@@ -997,11 +1004,26 @@ export function PaymentModalUpdated({
     () => intakeHasOpenBalanceShortfall(liveIntakeDevRows),
     [liveIntakeDevRows],
   );
-  /** טבלת השוואה מפורטת לחלון חריגת אמצעי תשלום */
-  const deviationComparisonRows = useMemo<DeviationComparisonRow[]>(() => {
-    if (!intakeDevModalOpen || !hasMethodMismatchLive) return [];
-    return buildDeviationComparisonRows(orders, includedIds, buildEnteredByBucket(liveFormKpis));
-  }, [intakeDevModalOpen, hasMethodMismatchLive, orders, includedIds, liveFormKpis]);
+  /** מודל תצוגה לחלון חריגת אמצעי תשלום */
+  const intakeDeviationView = useMemo<IntakeDeviationModalView | null>(() => {
+    if (!intakeDevModalOpen || intakeDeviationModalRows(intakeDevRows).length === 0) return null;
+    const kpis = liveFormKpis;
+    return buildIntakeDeviationModalView({
+      orders,
+      includedOrderIds: includedIds,
+      enteredByBucket: buildEnteredByBucket(kpis),
+      totalPaymentUsd: totals.totalUsd,
+      devRows: intakeDevRows,
+      formRateN: rateN,
+      enteredIlsByBucket: {
+        CASH: kpis.cash.enteredIls,
+        BANK_TRANSFER: kpis.bankTransfer.enteredIls,
+        CREDIT: kpis.credit.enteredIls,
+        CHECK: kpis.checks.enteredIls,
+        OTHER: kpis.other.enteredIls,
+      },
+    });
+  }, [intakeDevModalOpen, intakeDevRows, orders, includedIds, liveFormKpis, totals.totalUsd, rateN]);
 
   /** אמצעי תואם + נשאר סכום קטן — לא חריגה, מציעים טיפול ביתרה */
   const showOpenBalanceActions = useMemo(() => {
@@ -2661,6 +2683,7 @@ export function PaymentModalUpdated({
     mode: "new" | "close",
     result: Extract<Awaited<ReturnType<typeof performSave>>, { ok: true }>,
   ) {
+    dispatchOrdersListRefresh();
     // תשלום תקין נשמר מיד — ללא מסך «סיכום תשלום» ביניים.
     if (mode === "new") await finishSaveAndNew(result.primaryPaymentCode);
     else closeTop();
@@ -2715,6 +2738,30 @@ export function PaymentModalUpdated({
     intakeDevPendingSaveRef.current = false;
     saveAfterOverageRef.current = null;
     saveSurplusPendingRef.current = false;
+  }
+
+  async function onIntakeDevAutoFix() {
+    const fix = intakeDeviationView?.autoFix;
+    if (!fix) return;
+    setIntakeDevAutoFixBusy(true);
+    try {
+      const res = await applyIntakePaymentMethodSwapAction({
+        orderId: fix.orderId,
+        fromMethod: bucketKeyToDbMethod(fix.fromBucket),
+        toMethod: bucketKeyToDbMethod(fix.toBucket),
+      });
+      if (!res.ok) {
+        onToast(res.error);
+        return;
+      }
+      onToast("אמצעי התשלום עודכן — ניתן לשמור את התשלום");
+      setIntakeDevModalOpen(false);
+      intakeDevPendingSaveRef.current = false;
+      dispatchOrdersListRefresh();
+      await refreshSharedPaymentIntakeOrders();
+    } finally {
+      setIntakeDevAutoFixBusy(false);
+    }
   }
 
   function onOverageCancel() {
@@ -2777,6 +2824,7 @@ export function PaymentModalUpdated({
     const reopen = reopenMethodControlAfterOrderEditRef.current;
     reopenMethodControlAfterOrderEditRef.current = false;
     if (refresh) {
+      dispatchOrdersListRefresh();
       void (async () => {
         await refreshSharedPaymentIntakeOrders();
         if (reopen) setMethodControlOpen(true);
@@ -4232,123 +4280,16 @@ export function PaymentModalUpdated({
         onConfirm={(disposition) => void onOverageConfirm(disposition)}
         onCancel={onOverageCancel}
       />
-      {intakeDevModalOpen && intakeDeviationModalRows(intakeDevRows).length > 0 ? (
-        <div className="adm-cash-modal-backdrop" role="presentation" onClick={onIntakeDevCancel}>
-          <div
-            className="adm-cash-modal adm-cash-modal--xl payment-intake-dev-modal"
-            dir="rtl"
-            onClick={(e) => e.stopPropagation()}
-            role="dialog"
-            aria-labelledby="intake-dev-title"
-          >
-            <div className="adm-cash-modal__head">
-              <h3 id="intake-dev-title">
-                {intakeHasRateMismatch(intakeDevRows) && !intakeHasMethodMismatch(intakeDevRows)
-                  ? "חריגת שער דולר"
-                  : "חריגה באמצעי התשלום"}
-              </h3>
-            </div>
-            <div className="adm-cash-modal__body">
-              {intakeHasRateMismatch(intakeDevRows) && !intakeHasMethodMismatch(intakeDevRows) ? (
-                <p className="payment-intake-dev-modal__lead">
-                  שער הדולר בקליטה שונה משער ההזמנה — יש לעדכן את ההזמנה או את השער.
-                </p>
-              ) : (
-                <>
-                  <p className="payment-intake-dev-modal__lead">
-                    אמצעי התשלום שנקלטו אינם תואמים לאמצעי שתוכננו במסמך.
-                    <br />
-                    כל אמצעי עומד בפני עצמו — <strong>אין העברת חוב בין אמצעים</strong>.
-                    <br />
-                    <strong>תשלום חלקי (סכום נמוך מהמתוכנן) אינו חריגה</strong> — הוא ישאיר יתרה פתוחה.
-                    <br />
-                    לשינוי אמצעי: פתחו «אמצעי תשלום מתוכננים», עדכנו שם, ואז חזרו לקליטה.
-                  </p>
-                  {deviationComparisonRows.length > 0 ? (
-                    <div className="payment-intake-dev-modal__scroll">
-                      <table className="adm-table-excel payment-intake-dev-modal__tbl payment-intake-dev-modal__tbl--comparison">
-                        <thead>
-                          <tr>
-                            <th>אמצעי תשלום</th>
-                            <th className="pmc-num">תוכנן (יתרה)</th>
-                            <th className="pmc-num">נקלט</th>
-                            <th className="pmc-num">נותר</th>
-                            <th>סטטוס</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {deviationComparisonRows.map((row) => (
-                            <tr
-                              key={row.bucket}
-                              className={[
-                                "payment-intake-dev-modal__row",
-                                row.isBlocking ? "is-excess" : row.status === "partial" ? "is-partial" : row.status === "pending" ? "is-pending" : "",
-                              ].filter(Boolean).join(" ")}
-                            >
-                              <td className="payment-intake-dev-modal__method">{row.methodLabel}</td>
-                              <td className="pmc-num" dir="ltr">
-                                {row.plannedUsd > 0.005 ? `$${row.plannedUsd.toFixed(2)}` : "—"}
-                              </td>
-                              <td className="pmc-num" dir="ltr">
-                                {row.enteredUsd > 0.005 ? `$${row.enteredUsd.toFixed(2)}` : "—"}
-                              </td>
-                              <td className="pmc-num" dir="ltr">
-                                {row.remainingUsd > 0.005 ? `$${row.remainingUsd.toFixed(2)}` : "—"}
-                              </td>
-                              <td className="payment-intake-dev-modal__status">{row.statusLabel}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : null}
-                </>
-              )}
-              {intakeHasRateMismatch(intakeDevRows) && !intakeHasMethodMismatch(intakeDevRows) ? (
-                <div className="payment-intake-dev-modal__scroll">
-                  <table className="adm-table-excel payment-intake-dev-modal__tbl">
-                    <thead>
-                      <tr>
-                        <th>אמצעי מתוכנן</th>
-                        <th>אמצעי שנקלט</th>
-                        <th>סכום</th>
-                        <th>גובה החריגה</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {intakeDeviationModalRows(intakeDevRows).map((row) => (
-                        <tr key={row.id} className={`payment-intake-dev-modal__row is-${row.rowTone}`}>
-                          <td>{row.id.startsWith("unplanned:") ? "—" : row.typeLabel}</td>
-                          <td>{row.typeLabel}</td>
-                          <td dir="ltr">{row.receivedDisplay}</td>
-                          <td dir="ltr" className="payment-intake-dev-modal__diff">{row.diffDisplay}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : null}
-              {!viewerIsAdmin && !canEditOrders ? (
-                <p className="payment-intake-dev-modal__employee-hint">
-                  לעריכת ההזמנה יש לשלוח בקשת אישור מנהל מתוך טופס העריכה.
-                </p>
-              ) : null}
-            </div>
-            <div className="adm-cash-modal__foot payment-intake-dev-modal__foot">
-              <button type="button" className="adm-btn payment-intake-dev-modal__btn-back" onClick={onIntakeDevCancel}>
-                ביטול
-              </button>
-              <button
-                type="button"
-                className="adm-btn adm-btn--primary payment-intake-dev-modal__btn-edit"
-                onClick={onIntakeDevEditOrder}
-              >
-                עריכת ההזמנה
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <PaymentIntakeDeviationModal
+        open={intakeDevModalOpen && intakeDeviationModalRows(intakeDevRows).length > 0}
+        view={intakeDeviationView}
+        rateRows={intakeDevRows}
+        onClose={onIntakeDevCancel}
+        onEditOrder={onIntakeDevEditOrder}
+        onAutoFix={intakeDeviationView?.autoFix ? onIntakeDevAutoFix : undefined}
+        autoFixBusy={intakeDevAutoFixBusy}
+        showEmployeeHint={!viewerIsAdmin && !canEditOrders}
+      />
     </>
   );
 }

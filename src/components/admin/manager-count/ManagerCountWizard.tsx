@@ -4,11 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
-  Banknote,
   CheckCircle,
   Coins,
   History,
   Plane,
+  RefreshCw,
   X,
 } from "lucide-react";
 import type {
@@ -30,19 +30,30 @@ import {
 } from "@/lib/flow-control/flow-calculation-service";
 import { dispatchCashControlRefresh } from "@/lib/cash-control-refresh-bus";
 import { ManagerCountFxPurchaseFlow } from "@/components/admin/manager-count/ManagerCountFxPurchaseFlow";
+import { ManagerCountLineField } from "@/components/admin/manager-count/ManagerCountLineField";
 import {
   computeAutoTurkeyIls,
   computeAutoTurkeyUsd,
   formFromFlow,
+  hasSavedManagerCount,
   ilSourcePoolFromForm,
+  initializeManagerCountForm,
   isTurkeyIlManual,
   isTurkeyManual,
   resolveAvailableIlIlsForFx,
   resolveAvailablePsIlsForFx,
   syncAutoTurkey,
 } from "@/components/admin/manager-count/manager-count-utils";
+import {
+  expectedAmountsFromIntake,
+  formatWeekRangeLabel,
+  managerCountLineStatus,
+  sumExpectedByRoute,
+} from "@/lib/flow-control/services/manager-count-expected-service";
 import { fcNum } from "@/components/admin/flow-control/shared";
 import { parseAhWeekNumber } from "@/lib/weeks/ah-week-nav";
+import { getAhWeekRange } from "@/lib/weeks/ah-week";
+import type { CashWeekFlowLineId } from "@/lib/cash-control-week-flow";
 import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
 
@@ -70,6 +81,14 @@ export type ManagerCountWizardProps = {
   onSaved: () => void;
 };
 
+const COUNT_FORM_KEYS: (keyof ManagerCountForm)[] = [
+  "countedCashIls",
+  "countedCashUsd",
+  "countedTransferIls",
+  "countedCreditIls",
+  "countedChecksIls",
+];
+
 function emptyForm(): ManagerCountForm {
   return {
     countedCashUsd: "",
@@ -93,6 +112,10 @@ function fmtN(n: number, currency: "ILS" | "USD"): string {
   return fmtDailyMoney(currency, n);
 }
 
+function roundSummary(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
 export function ManagerCountWizard({
   open,
   week,
@@ -109,10 +132,13 @@ export function ManagerCountWizard({
   const prevOpenRef = useRef(false);
   const turkeyManualRef = useRef(false);
   const turkeyIlManualRef = useRef(false);
+  const touchedCountFieldsRef = useRef<Set<string>>(new Set());
+  const expectedSnapshotRef = useRef<Partial<Record<CashWeekFlowLineId, number>>>({});
   const [view, setView] = useState<WizardView>("wizard");
   const [step, setStep] = useState<WizardStep>(1);
   const [flow, setFlow] = useState<FlowWeekPayload | null>(initialFlow);
   const [form, setForm] = useState<ManagerCountForm>(emptyForm());
+  const [refreshNotice, setRefreshNotice] = useState<string | null>(null);
   const [turkeyManual, setTurkeyManual] = useState(false);
   const [turkeyIlManual, setTurkeyIlManual] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -129,9 +155,19 @@ export function ManagerCountWizard({
   }, [turkeyIlManual]);
 
   const mergeFormFromFlow = useCallback(
-    (data: FlowWeekPayload, prev: ManagerCountForm): ManagerCountForm => {
-      const nextForm = formFromFlow(data);
-      let merged = nextForm;
+    (data: FlowWeekPayload, prev: ManagerCountForm, opts?: { preserveCounted?: boolean }): ManagerCountForm => {
+      const saved = formFromFlow(data);
+      const init = initializeManagerCountForm(data);
+      let merged = opts?.preserveCounted ? { ...prev } : { ...init };
+      if (opts?.preserveCounted) {
+        for (const key of COUNT_FORM_KEYS) {
+          if (!touchedCountFieldsRef.current.has(key)) {
+            merged[key] = hasSavedManagerCount(data.counted) ? saved[key] : init[key];
+          }
+        }
+        merged.commissionUsd = saved.commissionUsd;
+        merged.commissionIls = saved.commissionIls;
+      }
       if (turkeyManualRef.current) merged = { ...merged, turkeyTransferUsd: prev.turkeyTransferUsd };
       if (turkeyIlManualRef.current) merged = { ...merged, turkeyTransferIls: prev.turkeyTransferIls };
       if (!turkeyManualRef.current || !turkeyIlManualRef.current) {
@@ -151,20 +187,47 @@ export function ManagerCountWizard({
     [],
   );
 
+  const snapshotExpected = useCallback((data: FlowWeekPayload | null): Partial<Record<CashWeekFlowLineId, number>> => {
+    if (!data) return {};
+    return expectedAmountsFromIntake(data.weekPaymentIntake);
+  }, []);
+
+  const applyFlowData = useCallback(
+    (data: FlowWeekPayload, opts?: { preserveCounted?: boolean }) => {
+      const prevExpected = expectedSnapshotRef.current;
+      const nextExpected = snapshotExpected(data);
+      let expectedChanged = false;
+      for (const key of Object.keys(nextExpected) as CashWeekFlowLineId[]) {
+        const prev = prevExpected[key] ?? 0;
+        const next = nextExpected[key] ?? 0;
+        if (Math.abs(prev - next) > 0.02) {
+          expectedChanged = true;
+          break;
+        }
+      }
+      if (expectedChanged && touchedCountFieldsRef.current.size > 0) {
+        setRefreshNotice("הצפוי עודכן מקליטות תשלום — הספירה שלך לא שונתה.");
+      } else if (!expectedChanged) {
+        setRefreshNotice(null);
+      }
+      expectedSnapshotRef.current = nextExpected;
+      setFlow(data);
+      setForm((prev) => mergeFormFromFlow(data, prev, opts));
+      if (!turkeyManualRef.current) setTurkeyManual(isTurkeyManual(formFromFlow(data), data));
+      if (!turkeyIlManualRef.current) setTurkeyIlManual(isTurkeyIlManual(formFromFlow(data), data));
+    },
+    [mergeFormFromFlow, snapshotExpected],
+  );
+
   const reloadFlow = useCallback(async () => {
     setLoading(true);
     try {
       const data = await getFlowWeekAction(week, workCountry);
-      if (data) {
-        setFlow(data);
-        setForm((prev) => mergeFormFromFlow(data, prev));
-        if (!turkeyManualRef.current) setTurkeyManual(isTurkeyManual(formFromFlow(data), data));
-        if (!turkeyIlManualRef.current) setTurkeyIlManual(isTurkeyIlManual(formFromFlow(data), data));
-      }
+      if (data) applyFlowData(data, { preserveCounted: true });
     } finally {
       setLoading(false);
     }
-  }, [week, mergeFormFromFlow]);
+  }, [week, workCountry, applyFlowData]);
 
   useEffect(() => {
     if (open && !prevOpenRef.current) {
@@ -172,9 +235,12 @@ export function ManagerCountWizard({
       setStep(1);
       setFxTrack(null);
       setFxEditPurchase(null);
+      setRefreshNotice(null);
+      touchedCountFieldsRef.current = new Set();
       if (initialFlow) {
-        setFlow(initialFlow);
-        const f = formFromFlow(initialFlow);
+        expectedSnapshotRef.current = snapshotExpected(initialFlow);
+        applyFlowData(initialFlow);
+        const f = initializeManagerCountForm(initialFlow);
         setForm(syncAutoTurkey(f, initialFlow));
         setTurkeyManual(isTurkeyManual(f, initialFlow));
         setTurkeyIlManual(isTurkeyIlManual(f, initialFlow));
@@ -183,13 +249,12 @@ export function ManagerCountWizard({
       }
     }
     prevOpenRef.current = open;
-  }, [open, initialFlow, reloadFlow]);
+  }, [open, initialFlow, reloadFlow, applyFlowData, snapshotExpected]);
 
   useEffect(() => {
     if (!open || !initialFlow) return;
-    setFlow(initialFlow);
-    setForm((prev) => mergeFormFromFlow(initialFlow, prev));
-  }, [open, initialFlow, mergeFormFromFlow]);
+    applyFlowData(initialFlow, { preserveCounted: true });
+  }, [open, initialFlow, applyFlowData]);
 
   const fxPs = flow ? sumFxPurchases(flow.fxPurchases, "PS") : { ils: 0, usd: 0 };
   const fxIl = flow ? sumFxPurchases(flow.fxPurchases, "IL") : { ils: 0, usd: 0 };
@@ -220,6 +285,9 @@ export function ManagerCountWizard({
   const ilTurkeyRemainingIls = computeTurkeyIlRemainingIls(ilAvailableIls, turkeyIls, commIls);
 
   const patch = (key: keyof ManagerCountForm, value: string) => {
+    if (COUNT_FORM_KEYS.includes(key)) {
+      touchedCountFieldsRef.current.add(key);
+    }
     setForm((prev) => {
       const next = { ...prev, [key]: value };
       if (key === "commissionUsd" || key === "commissionIls") {
@@ -336,24 +404,49 @@ export function ManagerCountWizard({
 
   const psPurchases = flow?.fxPurchases.filter((p) => p.track !== "IL") ?? [];
   const ilPurchases = flow?.fxPurchases.filter((p) => p.track === "IL") ?? [];
+  const expectedLines = flow?.managerCountExpected ?? [];
+  const psLines = expectedLines.filter((l) => l.route === "PS");
+  const ilLines = expectedLines.filter((l) => l.route === "IL");
+  const weekRange = getAhWeekRange(week);
+  const weekRangeLabel = weekRange
+    ? formatWeekRangeLabel(weekRange.from, weekRange.to)
+    : null;
+  const expectedPsIls = sumExpectedByRoute(expectedLines, "PS", "ILS");
+  const expectedPsUsd = sumExpectedByRoute(expectedLines, "PS", "USD");
+  const expectedIlIls = sumExpectedByRoute(expectedLines, "IL", "ILS");
+  const totalExpectedIls = roundSummary(expectedPsIls + expectedIlIls);
+  const totalCountedIls = roundSummary(cashIls + ilPool);
+  const summaryIlsStatus = managerCountLineStatus(totalExpectedIls, totalCountedIls, "ILS");
+  const summaryUsdStatus = managerCountLineStatus(expectedPsUsd, cashUsd, "USD");
 
   return (
     <>
       <div className="mcw-backdrop" role="presentation" onClick={onClose}>
         <div
-          className="mcw-dialog"
+          className="mcw-modal mcw-modal--workspace"
           role="dialog"
           aria-modal="true"
           onClick={(e) => e.stopPropagation()}
         >
-          <header className="mcw-head">
-            <div>
+          <header className="mcw-head mcw-head--compact">
+            <div className="mcw-head__main">
               <h2>ספירת מנהל</h2>
-              <p>
-                שבוע <span dir="ltr">{displayWeek}</span> · מסלולי PS ו-IL נפרדים לחלוטין
-              </p>
+              <div className="mcw-head__meta">
+                <span dir="ltr">שבוע {displayWeek}</span>
+                {weekRangeLabel ? <span>{weekRangeLabel}</span> : null}
+                <span className="mcw-head__meta-note">צפוי מקליטת תשלום בפועל</span>
+              </div>
             </div>
             <div className="mcw-head__actions">
+              <button
+                type="button"
+                className="fc-btn fc-btn--ghost"
+                disabled={loading}
+                onClick={() => void reloadFlow()}
+              >
+                <RefreshCw size={15} />
+                רענון
+              </button>
               <button
                 type="button"
                 className="fc-btn fc-btn--ghost"
@@ -425,91 +518,84 @@ export function ManagerCountWizard({
               ) : (
                 <>
                   {step === 1 && (
-                    <div className="mcw-body">
-                      <p className="mcw-body__desc">
-                        <Banknote size={16} />
-                        ספירת מה שיש בפועל בקופה — ללא רכישת מט״ח, העברה או עמלות
-                      </p>
-                      <div className="mcw-dual-grid">
+                    <div className="mcw-body mcw-body--step1">
+                      {refreshNotice ? (
+                        <p className="mcw-notice" role="status">
+                          {refreshNotice}
+                        </p>
+                      ) : null}
+                      <div className="mcw-summary-bar">
+                        <div className="mcw-summary-bar__col">
+                          <span>צפוי לפי המערכת</span>
+                          <strong dir="ltr">
+                            {fmtN(totalExpectedIls, "ILS")} · {fmtN(expectedPsUsd, "USD")}
+                          </strong>
+                        </div>
+                        <div className="mcw-summary-bar__col">
+                          <span>נספר בפועל</span>
+                          <strong dir="ltr">
+                            {fmtN(totalCountedIls, "ILS")} · {fmtN(cashUsd, "USD")}
+                          </strong>
+                        </div>
+                        <div className="mcw-summary-bar__col">
+                          <span>סטטוס</span>
+                          <strong className={`is-${summaryIlsStatus.kind}`}>
+                            {summaryIlsStatus.kind === "ok" && summaryUsdStatus.kind === "ok"
+                              ? "🟢 הספירה תואמת למערכת"
+                              : `${summaryIlsStatus.label} · ${summaryUsdStatus.label}`}
+                          </strong>
+                        </div>
+                      </div>
+                      <div className="mcw-dual-grid mcw-dual-grid--wide">
                         <section className="mcw-track mcw-track--ps">
-                          <h3>ספירת PS — מזומן פיזי</h3>
+                          <h3>מסלול PS — מזומן פיזי</h3>
                           <p className="mcw-hint mcw-hint--section">
-                            כמה ₪ וכמה $ נמצאים פיזית במסלול PS
+                            הצפוי מגיע מקליטת תשלום (CASH PS) — ניתן לערוך את הספירה בפועל
                           </p>
-                          <table className="mcw-count-tbl">
-                            <tbody>
-                              {(
-                                [
-                                  ["countedCashIls", "מזומן בשקלים — PS", "ILS"],
-                                  ["countedCashUsd", "מזומן בדולרים — PS", "USD"],
-                                ] as const
-                              ).map(([key, label]) => (
-                                <tr key={key}>
-                                  <td>{label}</td>
-                                  <td>
-                                    <input
-                                      type="text"
-                                      inputMode="decimal"
-                                      className="mcw-input"
-                                      value={form[key]}
-                                      disabled={!canEdit || saving}
-                                      onChange={(e) => patch(key, e.target.value)}
-                                      aria-label={label}
-                                    />
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                            <tfoot>
-                              <tr className="mcw-count-tbl__total">
-                                <td>סה״כ ₪ במסלול PS</td>
-                                <td dir="ltr">{fmtN(cashIls, "ILS")}</td>
-                              </tr>
-                              <tr className="mcw-count-tbl__total mcw-count-tbl__total--usd">
-                                <td>סה״כ $ במסלול PS</td>
-                                <td dir="ltr">{fmtN(cashUsd, "USD")}</td>
-                              </tr>
-                            </tfoot>
-                          </table>
+                          <div className="mcw-line-stack">
+                            {psLines.map((line) => (
+                              <ManagerCountLineField
+                                key={line.lineId}
+                                line={line}
+                                countedValue={form[line.formKey]}
+                                disabled={!canEdit || saving}
+                                onCountedChange={(v) => patch(line.formKey, v)}
+                                onCountedTouched={() => touchedCountFieldsRef.current.add(line.formKey)}
+                              />
+                            ))}
+                          </div>
+                          <div className="mcw-track-total">
+                            <span>סה״כ PS</span>
+                            <span dir="ltr">
+                              {fmtN(cashIls, "ILS")} · {fmtN(cashUsd, "USD")}
+                            </span>
+                          </div>
                         </section>
 
                         <section className="mcw-track mcw-track--il">
-                          <h3>ספירת IL — מסלול בנקאי</h3>
+                          <h3>מסלול IL — מסלול בנקאי</h3>
                           <p className="mcw-hint mcw-hint--section">
-                            מקורות כסף IL בלבד — ללא עמלות (עמלה תוזן בשלב העברה לטורקיה)
+                            העברות, אשראי וצ׳קים — לפי מה שנקלט בפועל בקליטה
                           </p>
-                          <table className="mcw-count-tbl">
-                            <tbody>
-                              {(
-                                [
-                                  ["countedTransferIls", "העברות בנקאיות", "ILS"],
-                                  ["countedCreditIls", "אשראי", "ILS"],
-                                  ["countedChecksIls", "צ׳קים", "ILS"],
-                                ] as const
-                              ).map(([key, label]) => (
-                                <tr key={key}>
-                                  <td>{label}</td>
-                                  <td>
-                                    <input
-                                      type="text"
-                                      inputMode="decimal"
-                                      className="mcw-input"
-                                      value={form[key]}
-                                      disabled={!canEdit || saving}
-                                      onChange={(e) => patch(key, e.target.value)}
-                                      aria-label={label}
-                                    />
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                            <tfoot>
-                              <tr className="mcw-count-tbl__total">
-                                <td>סה״כ שקלים במסלול IL</td>
-                                <td dir="ltr">{fmtN(ilPool, "ILS")}</td>
-                              </tr>
-                            </tfoot>
-                          </table>
+                          <div className="mcw-line-stack">
+                            {ilLines.map((line) => (
+                              <ManagerCountLineField
+                                key={line.lineId}
+                                line={line}
+                                countedValue={form[line.formKey]}
+                                disabled={!canEdit || saving}
+                                onCountedChange={(v) => patch(line.formKey, v)}
+                                onCountedTouched={() => touchedCountFieldsRef.current.add(line.formKey)}
+                              />
+                            ))}
+                          </div>
+                          <div className="mcw-track-total">
+                            <span>סה״כ IL</span>
+                            <span dir="ltr">{fmtN(ilPool, "ILS")}</span>
+                            <small>
+                              צפוי {fmtN(expectedIlIls, "ILS")}
+                            </small>
+                          </div>
                         </section>
                       </div>
                     </div>

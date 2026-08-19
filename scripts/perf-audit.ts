@@ -39,6 +39,8 @@ async function loadServices() {
     flow,
     documents,
     orders,
+    weekFlow,
+    reports,
   ] = await Promise.all([
     import("../src/app/admin/shipments/service"),
     import("../src/app/admin/cash-control/daily-service"),
@@ -50,8 +52,10 @@ async function loadServices() {
     import("../src/lib/flow-control/services/flow-weeks-overview-service"),
     import("../src/lib/documents/service"),
     import("../src/lib/orders-list-data"),
+    import("../src/app/admin/cash-flow/week-flow-service"),
+    import("../src/app/admin/reports/actions"),
   ]);
-  return { shipments, daily, weekBalance, locations, manual, customers, dashboard, flow, documents, orders };
+  return { shipments, daily, weekBalance, locations, manual, customers, dashboard, flow, documents, orders, weekFlow, reports };
 }
 
 async function main() {
@@ -275,6 +279,25 @@ async function main() {
     const { calculateCustomerBalances } = await import("../src/lib/customer-balance-calculator");
     const balances = await calculateCustomerBalances(customers.map((c) => c.id));
     return { rowCount: balances.size };
+  });
+
+  // Cash flow — single week drill (manager count source)
+  await bench("cashflow.week", "Cash Flow", "Single week loadFlowWeek", async () => {
+    const data = await services.weekFlow.loadFlowWeek(ACTIVE_WORK_WEEK_CODE, "TR");
+    return { rowCount: data ? 1 : 0 };
+  });
+
+  // Reports dashboard
+  await bench("reports.dashboard", "Reports", "Dashboard KPIs", async () => {
+    const now = new Date();
+    const from = new Date(now.getFullYear(), now.getMonth(), 1);
+    const to = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    const pad = (d: Date) => d.toISOString().slice(0, 10);
+    const res = await services.reports.getReportsDashboardAction({
+      dateFrom: pad(from),
+      dateTo: pad(to),
+    });
+    return { rowCount: res.reports.length };
   });
 
   await disconnect();

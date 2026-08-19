@@ -4,6 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PM } from "@/lib/payment-method-slugs";
 import { isDebtWithdrawalOrderStatus } from "@/lib/debt-withdrawal-order";
 import { OS } from "@/lib/order-status-slugs";
+import { dispatchOrdersListRefresh } from "@/lib/orders-list-refresh-bus";
+import {
+  convertPaymentInputToUsdCredit,
+  usdBalanceToIlsDisplay,
+  type PaymentInputCurrency,
+} from "@/lib/order-usd-payment-model";
 import {
   CalendarDays,
   DollarSign,
@@ -513,7 +519,9 @@ export function OrderCreatePanel({
   const [notes, setNotes] = useState("");
 
   const [dealUsdStr, setDealUsdStr] = useState("");
-  const [dealIlsStr, setDealIlsStr] = useState("");
+  const [paymentCurrency, setPaymentCurrency] = useState<PaymentInputCurrency>("USD");
+  const [capturePaymentStr, setCapturePaymentStr] = useState("");
+  const [editPaidUsd, setEditPaidUsd] = useState(0);
 
   const [isSaving, setIsSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -629,7 +637,9 @@ export function OrderCreatePanel({
       setPaymentPointQuery(row.locationName ?? "");
       setNotes(row.notes);
       setDealUsdStr(row.amountUsd);
-      setDealIlsStr("");
+      setCapturePaymentStr("");
+      setPaymentCurrency("USD");
+      setEditPaidUsd(parseNum(row.existingPaymentsUsdSum) ?? 0);
       setFinalRateStr(row.usdRateUsed?.trim() ? row.usdRateUsed.trim() : finalRateStr);
       setCommissionPercentStr(row.commissionPercent?.trim() ? row.commissionPercent.trim() : systemDefaultCommissionStr);
       commissionPercentTouchedRef.current = true;
@@ -726,47 +736,45 @@ export function OrderCreatePanel({
   }, [openWindow, selectedCustomer]);
 
   const dealUsdNum = useMemo(() => parseNum(dealUsdStr), [dealUsdStr]);
-  const dealIlsNum = useMemo(() => parseNum(dealIlsStr), [dealIlsStr]);
+  const capturePaymentNum = useMemo(() => parseNum(capturePaymentStr), [capturePaymentStr]);
 
   const safeRate = useMemo(() => (Number.isFinite(finalRate) && finalRate > 0 ? finalRate : 0), [finalRate]);
-  const ilsInput = useMemo(() => (Number.isFinite(dealIlsNum) && dealIlsNum > 0 ? dealIlsNum : 0), [dealIlsNum]);
   const usdInput = useMemo(() => (Number.isFinite(dealUsdNum) && dealUsdNum > 0 ? dealUsdNum : 0), [dealUsdNum]);
 
-  /** שווי תצוגה בלבד (לא מסנכרן שדות) */
-  const eqUsdFromIls = useMemo(() => (safeRate > 0 ? ilsInput / safeRate : 0), [ilsInput, safeRate]);
-  const eqIlsFromUsd = useMemo(() => (safeRate > 0 ? usdInput * safeRate : 0), [usdInput, safeRate]);
-
-  /** הסכום הכולל (עסקה) לפי שני השדות */
-  const dealUsdTotal = useMemo(() => (safeRate > 0 ? usdInput + ilsInput / safeRate : usdInput), [usdInput, ilsInput, safeRate]);
-  const dealIlsTotal = useMemo(() => (safeRate > 0 ? ilsInput + usdInput * safeRate : ilsInput), [ilsInput, usdInput, safeRate]);
+  /** סכום עסקה ב-USD — מקור האמת ליצירת הזמנה */
+  const dealUsdTotal = useMemo(() => usdInput, [usdInput]);
 
   const commissionUsdCalc = useMemo(() => {
     if (!Number.isFinite(dealUsdTotal) || dealUsdTotal <= 0) return 0;
     return roundMoney2(dealUsdTotal * (commissionPct / 100));
   }, [dealUsdTotal, commissionPct]);
 
-  const commissionIlsCalc = useMemo(() => {
-    if (!Number.isFinite(dealIlsTotal) || dealIlsTotal <= 0) return 0;
-    return roundMoney2(dealIlsTotal * (commissionPct / 100));
-  }, [dealIlsTotal, commissionPct]);
-
   const commissionUsdEffective = useMemo(() => commissionUsdCalc, [commissionUsdCalc]);
-
-  const commissionIlsEffective = useMemo(() => commissionIlsCalc, [commissionIlsCalc]);
-
-  const totalBeforeVatIls = useMemo(() => {
-    if (!Number.isFinite(dealIlsTotal) || dealIlsTotal <= 0) return 0;
-    return roundMoney2(dealIlsTotal + commissionIlsEffective);
-  }, [dealIlsTotal, commissionIlsEffective]);
-
-  const vatAmountIls = useMemo(() => roundMoney2(totalBeforeVatIls * VAT_RATE), [totalBeforeVatIls]);
-
-  const finalTotalIls = useMemo(() => roundMoney2(totalBeforeVatIls + vatAmountIls), [totalBeforeVatIls, vatAmountIls]);
 
   const totalUsdCalc = useMemo(() => {
     if (!Number.isFinite(dealUsdTotal) || dealUsdTotal <= 0) return 0;
     return roundMoney2(dealUsdTotal + commissionUsdEffective);
   }, [dealUsdTotal, commissionUsdEffective]);
+
+  const referenceIlsTotal = useMemo(
+    () => (safeRate > 0 && totalUsdCalc > 0 ? usdBalanceToIlsDisplay(totalUsdCalc, safeRate) : 0),
+    [safeRate, totalUsdCalc],
+  );
+
+  const capturePaymentPreview = useMemo(() => {
+    if (!Number.isFinite(capturePaymentNum) || capturePaymentNum <= 0 || safeRate <= 0) return null;
+    return convertPaymentInputToUsdCredit(capturePaymentNum, paymentCurrency, safeRate);
+  }, [capturePaymentNum, paymentCurrency, safeRate]);
+
+  const projectedPaidUsd = useMemo(() => {
+    const newPay = capturePaymentPreview?.amountUsd ?? 0;
+    return roundMoney2((isEdit ? editPaidUsd : 0) + newPay);
+  }, [capturePaymentPreview, editPaidUsd, isEdit]);
+
+  const projectedRemainingUsd = useMemo(() => {
+    if (totalUsdCalc <= 0) return 0;
+    return roundMoney2(Math.max(0, totalUsdCalc - projectedPaidUsd));
+  }, [totalUsdCalc, projectedPaidUsd]);
 
   const isDebtWithdrawalCapture = isDebtWithdrawalOrderStatus(orderStatus);
   const displayTotalUsd = isDebtWithdrawalCapture ? -Math.abs(totalUsdCalc) : totalUsdCalc;
@@ -976,7 +984,9 @@ export function OrderCreatePanel({
     setPhoneStr("");
     setNotes("");
     setDealUsdStr("");
-    setDealIlsStr("");
+    setCapturePaymentStr("");
+    setPaymentCurrency("USD");
+    setEditPaidUsd(0);
     setCommissionPercentStr(systemDefaultCommissionStr);
     commissionPercentTouchedRef.current = false;
     finalRateTouchedRef.current = false;
@@ -1049,6 +1059,9 @@ export function OrderCreatePanel({
     orderCountries,
     finalRate,
     displayWeekCode,
+    paymentCurrency,
+    capturePaymentStr,
+    isDebtWithdrawalCapture,
   });
   performSaveStateRef.current = {
     isSaving,
@@ -1081,6 +1094,9 @@ export function OrderCreatePanel({
     orderCountries,
     finalRate,
     displayWeekCode,
+    paymentCurrency,
+    capturePaymentStr,
+    isDebtWithdrawalCapture,
   };
 
   const saveNeedsSensitiveApproval = useMemo(() => {
@@ -1208,6 +1224,23 @@ export function OrderCreatePanel({
         const payable = roundMoney2(s.dealUsdTotal + s.commissionUsdEffective);
         const breakdownForSave = paymentBreakdownForSave(s.paymentMethod, s.paymentBreakdown, payable);
 
+        const buildCapturePaymentLines = () => {
+          if (s.isDebtWithdrawalCapture || isCompositePaymentMethod(s.paymentMethod)) return undefined;
+          const raw = (s.capturePaymentStr || "").trim().replace(",", ".");
+          if (!raw) return undefined;
+          const n = Number(raw);
+          if (!Number.isFinite(n) || n <= 0) return undefined;
+          if (s.paymentCurrency === "ILS" && s.finalRate <= 0) return undefined;
+          return [
+            {
+              paymentMethod: s.paymentMethod,
+              amountUsd: raw,
+              currency: s.paymentCurrency,
+            },
+          ];
+        };
+        const paymentLinesForSave = buildCapturePaymentLines();
+
         const savePayload = (feeStr: string) =>
           s.isEdit
             ? {
@@ -1230,7 +1263,7 @@ export function OrderCreatePanel({
                 locationId: s.paymentPointId.trim() || null,
                 intakeLocationDraftName:
                   !s.paymentPointId.trim() && s.paymentPointQuery.trim() ? s.paymentPointQuery.trim() : undefined,
-                paymentLines: undefined,
+                paymentLines: paymentLinesForSave,
                 sourceCountry: countryForSave,
                 draftNameAr: s.nameArStr.trim() || null,
                 draftNameEn: s.nameEnStr.trim() || null,
@@ -1255,7 +1288,7 @@ export function OrderCreatePanel({
                 intakeLocationDraftName:
                   !s.paymentPointId.trim() && s.paymentPointQuery.trim() ? s.paymentPointQuery.trim() : undefined,
                 vatPercent: String(VAT_RATE_PERCENT),
-                paymentLines: undefined,
+                paymentLines: paymentLinesForSave,
                 sourceCountry: countryForSave,
                 draftNameAr: s.nameArStr.trim() || null,
                 draftNameEn: s.nameEnStr.trim() || null,
@@ -1309,6 +1342,10 @@ export function OrderCreatePanel({
           }
           queueMicrotask(() => {
             window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
+            dispatchOrdersListRefresh({
+              orderId: res.saved?.orderId,
+              orderNumber: res.orderNumber ?? undefined,
+            });
             onSaved?.();
           });
         } else {
@@ -1330,6 +1367,10 @@ export function OrderCreatePanel({
           }
           queueMicrotask(() => {
             window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
+            dispatchOrdersListRefresh({
+              orderId: res.saved?.orderId,
+              orderNumber: res.orderNumber ?? undefined,
+            });
             onSaved?.();
           });
         }
@@ -2065,128 +2106,13 @@ export function OrderCreatePanel({
                     }}
                   />
                 </div>
-                <div className="adm-oc-legacy-side-field">
-                  <label htmlFor={idp("pay-m")}>צורת תשלום</label>
-                  <select
-                    id={idp("pay-m")}
-                    ref={paymentMethodRef}
-                    className="adm-oc-legacy-side-sel"
-                    disabled={fieldDisabled}
-                    value={paymentMethod}
-                    onFocus={closeCustomerDropdown}
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      if (isCompositePaymentMethod(value)) {
-                        if (!isCompositePaymentMethod(paymentMethod)) setPaymentMethodBeforeComposite(paymentMethod);
-                        setPaymentMethod(COMPOSITE_PM);
-                        setBreakdownModalOpen(true);
-                      } else {
-                        setPaymentMethod(value);
-                        setPaymentBreakdown([]);
-                      }
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        void performSave(false);
-                      }
-                    }}
-                  >
-                    {paymentMethodOptionsForValue(
-                      isCompositePaymentMethod(paymentMethod) ? undefined : paymentMethod,
-                    ).map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
-                      </option>
-                    ))}
-                    <option value={COMPOSITE_PM}>{COMPOSITE_PM_LABEL}</option>
-                  </select>
-                  {isCompositePaymentMethod(paymentMethod) ? (
-                    <button
-                      type="button"
-                      className="adm-oc-pbd-edit"
-                      disabled={fieldDisabled}
-                      onClick={() => setBreakdownModalOpen(true)}
-                    >
-                      {paymentBreakdown.length > 0
-                        ? `חלוקה: ${paymentBreakdown.length} אמצעים · ערוך`
-                        : "הגדר חלוקת תשלום"}
-                    </button>
-                  ) : null}
-                </div>
               </aside>
             </Card>
           </div>
 
-          <div className="modal-summary adm-oc-pro-money" dir="ltr">
-            <Card className="summary-info adm-oc-legacy-card adm-oc-card--ils adm-oc-pro-card adm-oc-pro-card--ils">
-              <div className="adm-oc-card-title adm-oc-pro-card-title adm-oc-pro-card-title--ils">₪ שקלים</div>
-              <div className="adm-field adm-oc-field adm-oc-legacy-fin-field">
-                <label htmlFor={idp("dils")}>סכום בשקלים</label>
-                <MoneyInput
-                  id={idp("dils")}
-                  className="adm-oc-inp adm-oc-legacy-fin-inp"
-                  disabled={fieldDisabled}
-                  placeholder="הקלד סכום..."
-                  value={(() => {
-                    const n = parseNum(dealIlsStr);
-                    return Number.isFinite(n) ? n : null;
-                  })()}
-                  onChange={(n) => setDealIlsStr(n == null ? "" : String(n))}
-                />
-              </div>
-              <div className="adm-oc-xrate" dir="rtl" aria-live="polite">
-                <span className="adm-oc-xrate-lbl">שווי בדולרים</span>
-                <AnimatedMoneyValue
-                  className="adm-oc-xrate-val money-amount"
-                  dir="ltr"
-                  value={`$${formatMoneyAmount(roundMoney2(eqUsdFromIls))}`}
-                />
-              </div>
-              <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2 adm-oc-money-line--commission">
-                <span className="adm-oc-money-label commission-label">עמלה</span>
-                <AnimatedMoneyValue
-                  className="adm-oc-money-value adm-oc-money-value--ils commission-value"
-                  dir="ltr"
-                  value={`${formatMoneyAmount(commissionIlsEffective)} ₪`}
-                />
-              </div>
-              <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2 adm-oc-money-line--neutral">
-                <span className="adm-oc-money-label">סה״כ לפני עמלה</span>
-                <AnimatedMoneyValue
-                  className="adm-oc-money-value adm-oc-money-value--ils"
-                  dir="ltr"
-                  value={`${formatMoneyAmount(roundMoney2(dealIlsTotal))} ₪`}
-                />
-              </div>
-              <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2 adm-oc-money-line--primary">
-                <span className="adm-oc-money-label summary-primary-label">סה״כ לפני מע״מ</span>
-                <AnimatedMoneyValue
-                  className="adm-oc-money-value adm-oc-money-value--ils summary-primary-value"
-                  dir="ltr"
-                  value={`${formatMoneyAmount(totalBeforeVatIls)} ₪`}
-                />
-              </div>
-              <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2 adm-oc-money-line--vat">
-                <span className="adm-oc-money-label">{formatVatPercentLabel()}</span>
-                <AnimatedMoneyValue
-                  className="adm-oc-money-value adm-oc-money-value--ils"
-                  dir="ltr"
-                  value={`${formatMoneyAmount(vatAmountIls)} ₪`}
-                />
-              </div>
-              <div className="adm-oc-line adm-oc-line--total adm-oc-pro-final adm-oc-money-line adm-oc-money-line--hero summary-total">
-                <span className="adm-oc-money-label summary-total-label">סה״כ סופי</span>
-                <AnimatedMoneyValue
-                  className="adm-oc-money-value adm-oc-money-value--ils summary-total-value"
-                  dir="ltr"
-                  value={`${formatMoneyAmount(finalTotalIls)} ₪`}
-                />
-              </div>
-            </Card>
-
-            <Card className="summary-success adm-oc-legacy-card adm-oc-card--usd adm-oc-pro-card adm-oc-pro-card--usd">
-              <div className="adm-oc-card-title adm-oc-pro-card-title adm-oc-pro-card-title--usd">$ דולרים</div>
+          <div className="modal-summary adm-oc-pro-money adm-oc-usd-model" dir="ltr">
+            <Card className="summary-success adm-oc-legacy-card adm-oc-card--usd adm-oc-pro-card adm-oc-pro-card--order-total">
+              <div className="adm-oc-card-title adm-oc-pro-card-title adm-oc-pro-card-title--usd">סכום הזמנה ($)</div>
               <div className="adm-field adm-oc-field adm-oc-legacy-fin-field">
                 <label htmlFor={idp("dusd")}>סכום בדולר</label>
                 <MoneyInput
@@ -2194,7 +2120,7 @@ export function OrderCreatePanel({
                   ref={usdInputRef}
                   className="adm-oc-inp adm-oc-legacy-fin-inp"
                   disabled={fieldDisabled}
-                  placeholder="הקלד סכום..."
+                  placeholder="120.00"
                   value={(() => {
                     const n = parseNum(dealUsdStr);
                     return Number.isFinite(n) ? n : null;
@@ -2213,24 +2139,145 @@ export function OrderCreatePanel({
                 <AnimatedMoneyValue
                   className="adm-oc-money-value adm-oc-money-value--usd commission-value"
                   dir="ltr"
-                  value={`${formatMoneyAmount(commissionUsdEffective)} $`}
+                  value={`$${formatMoneyAmount(commissionUsdEffective)}`}
                 />
               </div>
-              <div className="adm-oc-line adm-oc-line--total adm-oc-money-line adm-oc-money-line--hero summary-total">
-                <span className="adm-oc-money-label summary-total-label">סה״כ</span>
+              <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2">
+                <span className="adm-oc-money-label">סה״כ $</span>
                 <AnimatedMoneyValue
-                  className={[
-                    "adm-oc-money-value",
-                    "adm-oc-money-value--usd",
-                    "summary-total-value",
-                    isDebtWithdrawalCapture ? "adm-oc-money-value--debt-withdrawal" : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" ")}
+                  className="adm-oc-money-value adm-oc-money-value--usd"
                   dir="ltr"
-                  value={`${formatMoneyAmount(displayTotalUsd)} $`}
+                  value={`$${formatMoneyAmount(displayTotalUsd)}`}
                 />
               </div>
+              <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2">
+                <span className="adm-oc-money-label">שולם $</span>
+                <AnimatedMoneyValue
+                  className="adm-oc-money-value adm-oc-money-value--usd"
+                  dir="ltr"
+                  value={`$${formatMoneyAmount(projectedPaidUsd)}`}
+                />
+              </div>
+              <div className="adm-oc-line adm-oc-line--total adm-oc-money-line adm-oc-money-line--hero">
+                <span className="adm-oc-money-label summary-total-label">יתרה $</span>
+                <AnimatedMoneyValue
+                  className="adm-oc-money-value adm-oc-money-value--usd summary-total-value"
+                  dir="ltr"
+                  value={`$${formatMoneyAmount(projectedRemainingUsd)}`}
+                />
+              </div>
+              {referenceIlsTotal > 0 ? (
+                <p className="adm-oc-usd-model-ref" dir="rtl">
+                  שווי בשקלים (למידע בלבד): ₪{formatMoneyAmount(referenceIlsTotal)} לפי שער {formatMoneyAmount(safeRate)}
+                </p>
+              ) : null}
+            </Card>
+
+            <Card className="adm-oc-pay-card adm-oc-pro-card adm-oc-pro-card--payment adm-oc-pro-card--capture-pay">
+              <h3 className="adm-oc-pro-card-title adm-oc-pro-card-title--payment">תשלום</h3>
+              {!isDebtWithdrawalCapture ? (
+                <div className="adm-oc-capture-pay-grid" dir="rtl">
+                  <div className="adm-field adm-oc-field">
+                    <label htmlFor={idp("pay-m")}>צורת תשלום</label>
+                    <select
+                      id={idp("pay-m")}
+                      ref={paymentMethodRef}
+                      className="adm-oc-legacy-side-sel"
+                      disabled={fieldDisabled}
+                      value={paymentMethod}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        if (isCompositePaymentMethod(value)) {
+                          if (!isCompositePaymentMethod(paymentMethod)) setPaymentMethodBeforeComposite(paymentMethod);
+                          setPaymentMethod(COMPOSITE_PM);
+                          setBreakdownModalOpen(true);
+                        } else {
+                          setPaymentMethod(value);
+                          setPaymentBreakdown([]);
+                        }
+                      }}
+                    >
+                      {paymentMethodOptionsForValue(
+                        isCompositePaymentMethod(paymentMethod) ? undefined : paymentMethod,
+                      ).map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                      <option value={COMPOSITE_PM}>{COMPOSITE_PM_LABEL}</option>
+                    </select>
+                  </div>
+                  <div className="adm-field adm-oc-field">
+                    <span className="adm-oc-pro-lbl">מטבע תשלום</span>
+                    <div className="adm-oc-currency-toggle" role="group" aria-label="מטבע תשלום">
+                      <button
+                        type="button"
+                        className={paymentCurrency === "USD" ? "is-active" : ""}
+                        disabled={fieldDisabled}
+                        onClick={() => setPaymentCurrency("USD")}
+                      >
+                        $ דולר
+                      </button>
+                      <button
+                        type="button"
+                        className={paymentCurrency === "ILS" ? "is-active" : ""}
+                        disabled={fieldDisabled}
+                        onClick={() => setPaymentCurrency("ILS")}
+                      >
+                        ₪ שקל
+                      </button>
+                    </div>
+                  </div>
+                  {!isCompositePaymentMethod(paymentMethod) ? (
+                    <div className="adm-field adm-oc-field adm-oc-field--full">
+                      <label htmlFor={idp("pay-amt")}>
+                        {paymentCurrency === "ILS" ? "סכום ששולם ₪" : "סכום ששולם $"}
+                      </label>
+                      <MoneyInput
+                        id={idp("pay-amt")}
+                        className="adm-oc-inp adm-oc-legacy-fin-inp"
+                        disabled={fieldDisabled}
+                        placeholder={paymentCurrency === "ILS" ? "450" : "120"}
+                        value={Number.isFinite(capturePaymentNum) && capturePaymentNum > 0 ? capturePaymentNum : null}
+                        onChange={(n) => setCapturePaymentStr(n == null ? "" : String(n))}
+                      />
+                    </div>
+                  ) : null}
+                  {paymentCurrency === "ILS" && capturePaymentPreview && !isCompositePaymentMethod(paymentMethod) ? (
+                    <div className="adm-oc-capture-pay-conv" dir="rtl">
+                      <p>
+                        יתרה לתשלום: <strong dir="ltr">${formatMoneyAmount(projectedRemainingUsd + capturePaymentPreview.amountUsd)}</strong>
+                      </p>
+                      <p>
+                        שער דולר: <strong dir="ltr">{formatMoneyAmount(safeRate)}</strong>
+                      </p>
+                      <p>
+                        תשלום זה יכסה: <strong dir="ltr">${formatMoneyAmount(capturePaymentPreview.amountUsd)}</strong>
+                      </p>
+                      <p className="adm-oc-capture-pay-conv__eq" dir="ltr">
+                        ₪{formatMoneyAmount(capturePaymentPreview.originalAmount)} = ${formatMoneyAmount(capturePaymentPreview.amountUsd)}
+                      </p>
+                      <p>
+                        יתרה לאחר תשלום: <strong dir="ltr">${formatMoneyAmount(projectedRemainingUsd)}</strong>
+                      </p>
+                    </div>
+                  ) : null}
+                  {isCompositePaymentMethod(paymentMethod) ? (
+                    <button
+                      type="button"
+                      className="adm-oc-pbd-edit"
+                      disabled={fieldDisabled}
+                      onClick={() => setBreakdownModalOpen(true)}
+                    >
+                      {paymentBreakdown.length > 0
+                        ? `חלוקה: ${paymentBreakdown.length} אמצעים · ערוך`
+                        : "הגדר חלוקת תשלום"}
+                    </button>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="adm-oc-debt-withdrawal-hint">הזמנת משיכה מחוב — ללא תשלום בקליטה.</p>
+              )}
             </Card>
           </div>
         </div>
@@ -2351,12 +2398,8 @@ export function OrderCreatePanel({
           open={breakdownModalOpen}
           payableTotalUsd={roundMoney2(dealUsdTotal + commissionUsdEffective)}
           nisPerUsd={finalRate}
-          availableUsd={
-            usdInput > 0 ? roundMoney2(usdInput + usdInput * (commissionPct / 100)) : 0
-          }
-          availableIls={
-            ilsInput > 0 ? roundMoney2(ilsInput + ilsInput * (commissionPct / 100)) : 0
-          }
+          availableUsd={totalUsdCalc > 0 ? totalUsdCalc : 0}
+          availableIls={referenceIlsTotal > 0 ? referenceIlsTotal : 0}
           methodOptions={paymentMethodOptions.map((o) => ({ value: o.value, label: o.label }))}
           initialLines={paymentBreakdown}
           idPrefix={windowId}

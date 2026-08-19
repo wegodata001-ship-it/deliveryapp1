@@ -12,6 +12,7 @@ import {
   intakeHasMethodMismatch,
   intakeHasOpenBalanceShortfall,
   intakeDeviationModalRows,
+  buildIntakeDeviationModalView,
   classifyMethodIntakeGate,
 } from "@/lib/cash-control-intake-breakdown";
 import {
@@ -268,6 +269,30 @@ describe("QA-5 אמצעי שונה מהמתוכנן (מזומן בהזמנה / �
     const bank = rows.find((r) => r.bucket === "BANK_TRANSFER");
     assert.equal(bank?.status, "excess");
     assert.equal(rows.some((r) => r.status === "excess"), true);
+  });
+
+  it("מודל UX — סכום מאוזן, בעיית אמצעי בלבד", () => {
+    const devRows = computeIntakeSaveDeviations({
+      orders,
+      includedOrderIds: null,
+      enteredByBucket: enteredBank(500),
+      formRateN: 3.7,
+      totalPaymentUsd: 500,
+    });
+    const view = buildIntakeDeviationModalView({
+      orders,
+      includedOrderIds: null,
+      enteredByBucket: enteredBank(500),
+      totalPaymentUsd: 500,
+      devRows,
+    });
+    assert.equal(view.problemKind, "method_mismatch_only");
+    assert.equal(view.remainingUsd, 0);
+    assert.equal(view.balanceBanner.tone, "green");
+    assert.ok(view.headlineProblem?.includes("העברה בנקאית"));
+    assert.ok(view.autoFix?.question.includes("מזומן"));
+    const pending = view.methodCards.find((c) => c.status === "pending");
+    assert.ok(pending?.statusLabel.includes("🟠"));
   });
 });
 

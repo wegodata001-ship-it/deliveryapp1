@@ -1,0 +1,42 @@
+[
+  {
+    "id": "customers.list@1",
+    "concurrency": 1,
+    "avgMs": 587.8,
+    "p95Ms": 1021.07,
+    "maxMs": 1021.07,
+    "successRate": 100
+  },
+  {
+    "id": "customers.list@5",
+    "concurrency": 5,
+    "avgMs": 628.8,
+    "p95Ms": 1116.43,
+    "maxMs": 1116.43,
+    "successRate": 100
+  },
+  {
+    "id": "customers.list@10",
+    "concurrency": 10,
+    "avgMs": 842.34,
+    "p95Ms": 1498.74,
+    "maxMs": 1499.14,
+    "successRate": 100
+  },
+  {
+    "id": "cashflow.overview4w@1",
+    "concurrency": 1,
+    "avgMs": 4915.78,
+    "p95Ms": 4943.43,
+    "maxMs": 4943.43,
+    "successRate": 100
+  },
+  {
+    "id": "cashflow.overview4w@5",
+    "concurrency": 5,
+    "avgMs": 15115.35,
+    "p95Ms": 15228.72,
+    "maxMs": 15228.72,
+    "successRate": 0
+  }
+]

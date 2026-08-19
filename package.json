@@ -24,6 +24,10 @@
     "brand:icons": "node scripts/generate-brand-icons.mjs",
     "embed-pdf-fonts": "node scripts/embed-pdf-fonts.mjs",
     "perf:audit": "node -r ./scripts/shims/register-server-only.cjs --import tsx scripts/perf-audit.ts",
+    "qa:all": "node -r ./scripts/shims/register-server-only.cjs --import tsx scripts/run-qa-tests.ts",
+    "audit:load": "node -r ./scripts/shims/register-server-only.cjs --import tsx scripts/audit-load-test.ts",
+    "audit:reports": "node -r ./scripts/shims/register-server-only.cjs --import tsx scripts/generate-audit-reports.ts",
+    "audit:full": "node -r ./scripts/shims/register-server-only.cjs --import tsx scripts/full-system-audit.ts",
     "perf:audit:after": "node -r ./scripts/shims/register-server-only.cjs --import tsx scripts/perf-audit.ts -- --phase=after"
   },
   "prisma": {

@@ -306,7 +306,9 @@ export function buildDeviationComparisonRows(
   orders: PaymentIntakeOrderRow[],
   includedOrderIds: string[] | null,
   enteredByBucket: EnteredBucketUsd[],
+  options?: { orderDebtCovered?: boolean },
 ): DeviationComparisonRow[] {
+  const orderDebtCovered = options?.orderDebtCovered ?? false;
   const plan = buildIntakeBreakdownPlan(orders, includedOrderIds);
   const planMap = new Map(plan.map((p) => [p.bucket, p]));
   const enteredMap = new Map(
@@ -329,7 +331,9 @@ export function buildDeviationComparisonRows(
 
     if (plannedUsd <= CASH_CONTROL_EPS && enteredUsd > CASH_CONTROL_EPS) {
       status = "unplanned";
-      statusLabel = `🔴 אמצעי תשלום לא מתוכנן ($${enteredUsd.toFixed(2)} ב-${PAYMENT_BUCKET_LABELS[bucket]})`;
+      statusLabel = orderDebtCovered
+        ? "🟠 דורש תיקון"
+        : "🔴 דורש תיקון";
       isBlocking = true;
     } else if (enteredUsd > plannedUsd + CASH_CONTROL_EPS) {
       status = "excess";
@@ -337,7 +341,9 @@ export function buildDeviationComparisonRows(
       isBlocking = true;
     } else if (enteredUsd <= CASH_CONTROL_EPS && plannedUsd > CASH_CONTROL_EPS) {
       status = "pending";
-      statusLabel = "🔴 לא שולם — חוב פתוח";
+      statusLabel = orderDebtCovered
+        ? "🟠 עדיין לא שולם"
+        : "🔴 נשאר לתשלום";
       isBlocking = false;
     } else if (remainingUsd <= CASH_CONTROL_EPS) {
       status = "cleared";
@@ -577,4 +583,336 @@ export function classifyMethodIntakeGate(params: {
   }
 
   return { kind: "ALLOW" };
+}
+
+// ─── Deviation modal view model (UX) ─────────────────────────────────────────
+
+export function formatIntakeUsdDisplay(n: number): string {
+  const r = round2(n);
+  return `$${r.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+export function formatIntakeSignedUsdDisplay(n: number): string {
+  const r = round2(n);
+  if (Math.abs(r) <= CASH_CONTROL_EPS) return formatIntakeUsdDisplay(0);
+  return r > 0 ? `+${formatIntakeUsdDisplay(r)}` : `-${formatIntakeUsdDisplay(Math.abs(r))}`;
+}
+
+export type IntakeDeviationProblemKind =
+  | "missing_money"
+  | "method_mismatch_only"
+  | "both"
+  | "rate";
+
+export type IntakeDeviationMethodCard = {
+  bucket: PaymentBucketKey;
+  methodLabel: string;
+  plannedUsd: number;
+  enteredUsd: number;
+  diffUsd: number;
+  /** positive = over entered vs planned, negative = short vs planned */
+  diffLabel: string;
+  status: DeviationComparisonRow["status"];
+  statusLabel: string;
+  tone: "ok" | "method" | "missing" | "info";
+  hint?: string;
+};
+
+export type IntakeDeviationAutoFixSuggestion = {
+  orderId: string;
+  fromBucket: PaymentBucketKey;
+  fromLabel: string;
+  toBucket: PaymentBucketKey;
+  toLabel: string;
+  amountUsd: number;
+  question: string;
+};
+
+export type IntakeDeviationModalView = {
+  mode: "method" | "rate";
+  orderTotalUsd: number;
+  capturedUsd: number;
+  remainingUsd: number;
+  problemKind: IntakeDeviationProblemKind;
+  balanceBanner: { tone: "green" | "orange" | "red"; text: string };
+  subtitle: string;
+  headlineProblem?: string;
+  primaryBlocking?: {
+    methodLabel: string;
+    plannedUsd: number;
+    enteredUsd: number;
+    diffUsd: number;
+    explanation: string;
+  };
+  methodCards: IntakeDeviationMethodCard[];
+  autoFix?: IntakeDeviationAutoFixSuggestion;
+  ilsPaymentInfo?: {
+    methodLabel: string;
+    amountIls: number;
+    rate: number;
+    creditedUsd: number;
+  };
+  showHowItWorks: boolean;
+};
+
+function sumIncludedOrderDebtUsd(
+  orders: PaymentIntakeOrderRow[],
+  includedOrderIds: string[] | null,
+): number {
+  const idSet = includedOrderIds ? new Set(includedOrderIds) : null;
+  let total = 0;
+  for (const o of orders) {
+    if (idSet && !idSet.has(o.id)) continue;
+    total += Math.max(0, Number(o.dbRemainingUsd) || 0);
+  }
+  return round2(total);
+}
+
+function comparisonRowTone(
+  row: DeviationComparisonRow,
+  orderDebtCovered: boolean,
+): IntakeDeviationMethodCard["tone"] {
+  if (row.status === "cleared") return "ok";
+  if (row.isBlocking || row.status === "unplanned" || row.status === "excess") {
+    return orderDebtCovered ? "method" : "missing";
+  }
+  if (row.status === "pending" || row.status === "partial") {
+    return orderDebtCovered ? "method" : "missing";
+  }
+  return "info";
+}
+
+function methodCardDiffLabel(row: DeviationComparisonRow): { diffUsd: number; diffLabel: string } {
+  const over = round2(Math.max(0, row.enteredUsd - row.plannedUsd));
+  const short = round2(Math.max(0, row.plannedUsd - row.enteredUsd));
+  if (over > CASH_CONTROL_EPS) {
+    return { diffUsd: over, diffLabel: `הפרש: ${formatIntakeSignedUsdDisplay(over)}` };
+  }
+  if (short > CASH_CONTROL_EPS) {
+    return { diffUsd: -short, diffLabel: `חסר: ${formatIntakeUsdDisplay(short)}` };
+  }
+  return { diffUsd: 0, diffLabel: "מאוזן" };
+}
+
+function methodCardHint(
+  row: DeviationComparisonRow,
+  orderDebtCovered: boolean,
+): string | undefined {
+  if (row.status === "unplanned" && row.enteredUsd > CASH_CONTROL_EPS) {
+    return `נקלט תשלום של ${formatIntakeUsdDisplay(row.enteredUsd)} ב${row.methodLabel}, אבל אמצעי התשלום הזה לא הוגדר כך בהזמנה.`;
+  }
+  if (row.status === "pending" && row.plannedUsd > CASH_CONTROL_EPS && orderDebtCovered) {
+    return `הוגדר ${formatIntakeUsdDisplay(row.plannedUsd)} ב${row.methodLabel}, אבל התשלום נקלט באמצעי אחר.`;
+  }
+  if (row.status === "excess") {
+    return `נקלט יותר ממה שהוגדר ל${row.methodLabel}.`;
+  }
+  if (row.status === "partial") {
+    return `נקלט חלק מהסכום — עדיין חסר ${formatIntakeUsdDisplay(row.remainingUsd)} ב${row.methodLabel}.`;
+  }
+  return undefined;
+}
+
+function buildHeadlineProblem(
+  cards: IntakeDeviationMethodCard[],
+  orderDebtCovered: boolean,
+): string | undefined {
+  const enteredWrong = cards.find((c) => c.status === "unplanned" || c.status === "excess");
+  const missedPlanned = cards.find((c) => c.status === "pending" && c.plannedUsd > CASH_CONTROL_EPS);
+  if (enteredWrong && missedPlanned && orderDebtCovered) {
+    return `התשלום נקלט ב${enteredWrong.methodLabel} במקום ב${missedPlanned.methodLabel}.`;
+  }
+  if (enteredWrong) {
+    return `נקלט תשלום ב${enteredWrong.methodLabel} שלא הוגדר כך בהזמנה.`;
+  }
+  if (missedPlanned && orderDebtCovered) {
+    return `הסכום שולם, אבל לא דרך ${missedPlanned.methodLabel} כפי שהוגדר בהזמנה.`;
+  }
+  return undefined;
+}
+
+function detectIntakeMethodAutoFix(params: {
+  orders: PaymentIntakeOrderRow[];
+  includedOrderIds: string[] | null;
+  comparisonRows: DeviationComparisonRow[];
+  orderDebtCovered: boolean;
+}): IntakeDeviationAutoFixSuggestion | undefined {
+  if (!params.orderDebtCovered) return undefined;
+
+  const idSet = params.includedOrderIds ? new Set(params.includedOrderIds) : null;
+  const included = params.orders.filter((o) => !idSet || idSet.has(o.id));
+  if (included.length !== 1) return undefined;
+
+  const pending = params.comparisonRows.filter(
+    (r) => r.status === "pending" && r.plannedUsd > CASH_CONTROL_EPS,
+  );
+  const unplanned = params.comparisonRows.filter(
+    (r) => (r.status === "unplanned" || r.status === "excess") && r.enteredUsd > CASH_CONTROL_EPS,
+  );
+  if (pending.length !== 1 || unplanned.length !== 1) return undefined;
+
+  const from = pending[0]!;
+  const to = unplanned[0]!;
+  const amountUsd = round2(Math.min(from.plannedUsd, to.enteredUsd));
+  if (amountUsd <= CASH_CONTROL_EPS) return undefined;
+  if (Math.abs(from.plannedUsd - to.enteredUsd) > CASH_CONTROL_EPS) return undefined;
+
+  const order = included[0]!;
+  if (order.breakdown.length !== 1) return undefined;
+  const line = order.breakdown[0]!;
+  if (paymentMethodBucketKey(line.method) !== from.bucket) return undefined;
+
+  return {
+    orderId: order.id,
+    fromBucket: from.bucket,
+    fromLabel: from.methodLabel,
+    toBucket: to.bucket,
+    toLabel: to.methodLabel,
+    amountUsd,
+    question: `האם לעדכן את אמצעי התשלום מ${from.methodLabel} ל${to.methodLabel}?`,
+  };
+}
+
+export function buildIntakeDeviationModalView(params: {
+  orders: PaymentIntakeOrderRow[];
+  includedOrderIds: string[] | null;
+  enteredByBucket: EnteredBucketUsd[];
+  totalPaymentUsd: number;
+  devRows: IntakeSaveDeviationRow[];
+  /** סכום שקל שהוזן בטופס (לתצוגה בלבד) */
+  enteredIlsByBucket?: Partial<Record<PaymentBucketKey, number>>;
+  formRateN?: number;
+}): IntakeDeviationModalView {
+  const { orders, includedOrderIds, enteredByBucket, totalPaymentUsd, devRows } = params;
+  const orderTotalUsd = sumIncludedOrderDebtUsd(orders, includedOrderIds);
+  const capturedUsd = round2(Math.max(0, totalPaymentUsd));
+  const remainingUsd = round2(Math.max(0, orderTotalUsd - capturedUsd));
+  const orderDebtCovered = capturedUsd >= orderTotalUsd - CASH_CONTROL_EPS;
+  const hasMethodMismatch = intakeHasMethodMismatch(devRows);
+  const hasRateMismatch = intakeHasRateMismatch(devRows);
+  const hasMoneyShortfall = remainingUsd > CASH_CONTROL_EPS;
+
+  if (hasRateMismatch && !hasMethodMismatch) {
+    return {
+      mode: "rate",
+      orderTotalUsd,
+      capturedUsd,
+      remainingUsd,
+      problemKind: "rate",
+      balanceBanner: {
+        tone: hasMoneyShortfall ? "red" : "orange",
+        text: hasMoneyShortfall
+          ? `נשאר לתשלום ${formatIntakeUsdDisplay(remainingUsd)}`
+          : "🟠 שער הדולר בקליטה שונה משער ההזמנה",
+      },
+      subtitle: "שער הדולר בקליטה שונה משער ההזמנה — יש לעדכן את ההזמנה או את השער.",
+      methodCards: [],
+      showHowItWorks: false,
+    };
+  }
+
+  const comparisonRows = buildDeviationComparisonRows(
+    orders,
+    includedOrderIds,
+    enteredByBucket,
+    { orderDebtCovered: orderDebtCovered },
+  );
+
+  const methodCards: IntakeDeviationMethodCard[] = comparisonRows
+    .filter((r) => r.plannedUsd > CASH_CONTROL_EPS || r.enteredUsd > CASH_CONTROL_EPS)
+    .map((row) => {
+      const { diffUsd, diffLabel } = methodCardDiffLabel(row);
+      return {
+        bucket: row.bucket,
+        methodLabel: row.methodLabel,
+        plannedUsd: row.plannedUsd,
+        enteredUsd: row.enteredUsd,
+        diffUsd,
+        diffLabel,
+        status: row.status,
+        statusLabel: row.statusLabel,
+        tone: comparisonRowTone(row, orderDebtCovered),
+        hint: methodCardHint(row, orderDebtCovered),
+      };
+    });
+
+  let problemKind: IntakeDeviationProblemKind;
+  if (hasMoneyShortfall && hasMethodMismatch) problemKind = "both";
+  else if (hasMoneyShortfall) problemKind = "missing_money";
+  else problemKind = "method_mismatch_only";
+
+  let balanceBanner: IntakeDeviationModalView["balanceBanner"];
+  if (problemKind === "missing_money") {
+    balanceBanner = {
+      tone: "red",
+      text: `🔴 נשאר לתשלום ${formatIntakeUsdDisplay(remainingUsd)}`,
+    };
+  } else if (problemKind === "method_mismatch_only") {
+    balanceBanner = {
+      tone: "green",
+      text: "🟢 מבחינת הסכום הכולל ההזמנה מאוזנת",
+    };
+  } else {
+    balanceBanner = {
+      tone: "orange",
+      text: `🟠 הסכום שולם במלואו, אבל אמצעי התשלום שונה מהמתוכנן`,
+    };
+  }
+
+  const blocking = comparisonRows.find((r) => r.isBlocking);
+  const primaryBlocking = blocking
+    ? {
+        methodLabel: blocking.methodLabel,
+        plannedUsd: blocking.plannedUsd,
+        enteredUsd: blocking.enteredUsd,
+        diffUsd: round2(Math.max(0, blocking.enteredUsd - blocking.plannedUsd, blocking.plannedUsd - blocking.enteredUsd)),
+        explanation:
+          blocking.status === "unplanned"
+            ? `נקלט תשלום של ${formatIntakeUsdDisplay(blocking.enteredUsd)} ב${blocking.methodLabel}, אבל אמצעי התשלום הזה לא הוגדר כך בהזמנה.`
+            : `נקלט יותר ממה שהוגדר ל${blocking.methodLabel}.`,
+      }
+    : undefined;
+
+  let ilsPaymentInfo: IntakeDeviationModalView["ilsPaymentInfo"];
+  const rate = params.formRateN && params.formRateN > 0 ? params.formRateN : 0;
+  if (params.enteredIlsByBucket && rate > 0) {
+    for (const bucket of ["CASH", "BANK_TRANSFER", "CREDIT", "CHECK", "OTHER"] as PaymentBucketKey[]) {
+      const ils = params.enteredIlsByBucket[bucket] ?? 0;
+      if (ils <= CASH_CONTROL_EPS) continue;
+      const enteredUsd =
+        enteredByBucket.find((e) => e.bucket === bucket)?.enteredUsd ?? 0;
+      if (enteredUsd <= CASH_CONTROL_EPS) continue;
+      ilsPaymentInfo = {
+        methodLabel: PAYMENT_BUCKET_LABELS[bucket],
+        amountIls: round2(ils),
+        rate,
+        creditedUsd: round2(enteredUsd),
+      };
+      break;
+    }
+  }
+
+  return {
+    mode: "method",
+    orderTotalUsd,
+    capturedUsd,
+    remainingUsd,
+    problemKind,
+    balanceBanner,
+    subtitle:
+      problemKind === "method_mismatch_only"
+        ? "אמצעי התשלום שנקלטו אינם תואמים למה שהוגדר בהזמנה."
+        : "סכום התשלומים שהוזן אינו תואם לסכום ההזמנה.",
+    headlineProblem: buildHeadlineProblem(methodCards, orderDebtCovered),
+    primaryBlocking,
+    methodCards,
+    autoFix: detectIntakeMethodAutoFix({
+      orders,
+      includedOrderIds,
+      comparisonRows,
+      orderDebtCovered,
+    }),
+    ilsPaymentInfo,
+    showHowItWorks: false,
+  };
 }

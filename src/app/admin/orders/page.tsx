@@ -31,12 +31,45 @@ export default async function OrdersListPage({
     (typeof sp.preset === "string" ? sp.preset : null);
 
   const fetchT0 = Date.now();
-  const { orders, statusSummary, createdByOptions, countryFilterOptions, paymentLocationOptions, pagination } =
-    await fetchOrdersListPageData(sp, me);
+  let orders: Awaited<ReturnType<typeof fetchOrdersListPageData>>["orders"] = [];
+  let statusSummary: Awaited<ReturnType<typeof fetchOrdersListPageData>>["statusSummary"];
+  let createdByOptions: Awaited<ReturnType<typeof fetchOrdersListPageData>>["createdByOptions"] = [];
+  let countryFilterOptions: Awaited<ReturnType<typeof fetchOrdersListPageData>>["countryFilterOptions"] = [];
+  let paymentLocationOptions: Awaited<ReturnType<typeof fetchOrdersListPageData>>["paymentLocationOptions"] = [];
+  let pagination: Awaited<ReturnType<typeof fetchOrdersListPageData>>["pagination"] = {
+    page: 1,
+    pageSize: 50,
+    totalCount: 0,
+    totalPages: 0,
+  };
+  let loadError: string | null = null;
+
+  try {
+    const data = await fetchOrdersListPageData(sp, me);
+    orders = data.orders;
+    statusSummary = data.statusSummary;
+    createdByOptions = data.createdByOptions;
+    countryFilterOptions = data.countryFilterOptions;
+    paymentLocationOptions = data.paymentLocationOptions;
+    pagination = data.pagination;
+  } catch (err) {
+    loadError = err instanceof Error ? err.message : "שגיאה בטעינת רשימת ההזמנות";
+    console.error("[orders-list] fetchOrdersListPageData failed", err);
+    statusSummary = {
+      all: { count: "0", totalUsd: "0.00" },
+      open: { count: "0", totalUsd: "0.00" },
+      inProgress: { count: "0", totalUsd: "0.00" },
+      completed: { count: "0", totalUsd: "0.00" },
+      cancelled: { count: "0", totalUsd: "0.00" },
+      debtWithdrawal: { count: "0", totalUsd: "0.00" },
+      operationalCompleted: { count: "0", totalUsd: "0.00" },
+    };
+  }
   const fetchMs = Date.now() - fetchT0;
 
   const canCreateOrders = userHasAnyPermission(me, ["create_orders"]);
   const canEditOrders = userHasAnyPermission(me, ["edit_orders"]);
+  const canReceivePayments = userHasAnyPermission(me, ["receive_payments"]);
   const canViewCustomerCard = userHasAnyPermission(me, ["view_customer_card"]);
 
   const toolbarProps = {
@@ -71,7 +104,9 @@ export default async function OrdersListPage({
         viewerIsAdmin={isAdminUser(me)}
         canCreateOrders={canCreateOrders}
         canEditOrders={canEditOrders}
+        canReceivePayments={canReceivePayments}
         canViewCustomerCard={canViewCustomerCard}
+        loadError={loadError}
         dateRange={range}
         paymentLocationOptions={paymentLocationOptions}
         toolbarProps={toolbarProps}

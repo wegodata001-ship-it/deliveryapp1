@@ -3,7 +3,7 @@ import { mergeOrderWhere, resolveCountryScope } from "@/lib/country-data-scope";
 import { ORDER_COUNTRY_CODES, type OrderCountryCode } from "@/lib/order-countries";
 import { readMultiParam } from "@/lib/orders-list-filter-params";
 import { OS } from "@/lib/order-status-slugs";
-import { parseOrdersListDateFilterFromSearchParams } from "@/lib/work-week";
+import { normalizeAhWeekCode, parseOrdersListDateFilterFromSearchParams } from "@/lib/work-week";
 
 function readTextParam(sp: Record<string, string | string[] | undefined>, key: string): string {
   const v = sp[key];
@@ -136,7 +136,9 @@ export function buildOrdersListWhereFromSearchParams(
   const completedFilter =
     completedFilterRaw === "all" || completedFilterRaw === "done" || completedFilterRaw === "not_done"
       ? completedFilterRaw
-      : "not_done";
+      : "all";
+
+  const ordersWeekCode = normalizeAhWeekCode(readTextParam(sp, "ordersWeek"));
 
   const statusValues = openOnly
     ? [OS.OPEN]
@@ -179,9 +181,13 @@ export function buildOrdersListWhereFromSearchParams(
     };
   }
 
+  const weekScope: Prisma.OrderWhereInput = ordersWeekCode
+    ? { weekCode: ordersWeekCode }
+    : { orderDate: { gte: range.fromStart, lte: range.toEnd } };
+
   const base: Prisma.OrderWhereInput = {
     deletedAt: null,
-    orderDate: { gte: range.fromStart, lte: range.toEnd },
+    ...weekScope,
     ...(completedFilter === "done"
       ? { isCompleted: true }
       : completedFilter === "not_done"

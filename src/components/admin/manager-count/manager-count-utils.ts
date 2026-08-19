@@ -1,5 +1,12 @@
 import type { FlowWeekPayload, ManagerCountForm } from "@/app/admin/cash-flow/flow-types";
 import {
+  initializeManagerCountFormFields,
+  hasSavedManagerCount,
+  managerCountLineStatus,
+  MANAGER_COUNT_LINE_IDS,
+  type ManagerCountExpectedLine,
+} from "@/lib/flow-control/services/manager-count-expected-service";
+import {
   computeTurkeyAllocationFromCashCount,
   computeTurkeyIlAllocationIls,
   sumFxPurchases,
@@ -23,6 +30,23 @@ export function formFromFlow(flow: FlowWeekPayload): ManagerCountForm {
     turkeyTransferIls: flow.turkeyTransferIls ?? "",
   };
 }
+
+/** טופס ראשוני — ממלא מצפוי קליטה כשאין ספירה שמורה */
+export function initializeManagerCountForm(flow: FlowWeekPayload): ManagerCountForm {
+  const base = formFromFlow(flow);
+  const lines = flow.managerCountExpected ?? [];
+  const expected = Object.fromEntries(
+    lines.map((l) => [l.lineId, l.expectedAmount] as const),
+  ) as Partial<Record<(typeof MANAGER_COUNT_LINE_IDS)[number], number>>;
+  const prefill = initializeManagerCountFormFields(flow.counted, expected as Record<
+    import("@/lib/cash-control-week-flow").CashWeekFlowLineId,
+    number
+  >);
+  return { ...base, ...prefill };
+}
+
+export { hasSavedManagerCount, managerCountLineStatus };
+export type { ManagerCountExpectedLine };
 
 function snapshotFromFlow(
   flow: FlowWeekPayload,

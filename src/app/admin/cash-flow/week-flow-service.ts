@@ -31,6 +31,7 @@ import type { FlowWeekPayload } from "@/app/admin/cash-flow/flow-types";
 import type { WorkCountryCode } from "@/lib/work-country";
 import { DEFAULT_WORK_COUNTRY } from "@/lib/work-country";
 import { mergePaymentWhere, resolveCountryScopeFromCode, cashExpenseWhereForCountryScope } from "@/lib/country-data-scope";
+import { buildManagerCountExpectedLines } from "@/lib/flow-control/services/manager-count-expected-service";
 
 function money(n: number | Prisma.Decimal): string {
   const d = n instanceof Prisma.Decimal ? n : new Prisma.Decimal(n);
@@ -87,6 +88,8 @@ export async function loadFlowWeek(
           intakeDate: true,
           paymentDate: true,
           createdAt: true,
+          customer: { select: { displayName: true } },
+          order: { select: { orderNumber: true } },
         },
       }),
     ]);
@@ -218,6 +221,7 @@ export async function loadFlowWeek(
     ilFxPurchaseIls: money(fxIl.ils),
     ilsRemainingAfterFx: money(calc.ilsRemainingAfterFx),
     weekPaymentIntake: weekIntake,
+    managerCountExpected: buildManagerCountExpectedLines(payments),
     drawerChannelTotals: approvedSummary.drawerChannelTotals,
   };
 }
