@@ -36,10 +36,10 @@ import { PaymentIntakeDeviationModal } from "@/components/admin/PaymentIntakeDev
 import { usePaymentIntakePlanningViews } from "@/hooks/usePaymentIntakePlanningViews";
 import {
   computeOrderOpenDebtUsd,
+  computePaymentBalanceUsd,
   derivePaymentBalanceDisplay,
   formatPaymentBalanceIlsLine,
   formatPaymentBalanceUsdLine,
-  sumFormRemainingSignedUsd,
   type PaymentBalanceDisplay,
 } from "@/lib/order-remaining-debt";
 import { softRefreshPaymentIntakeOrders } from "@/lib/payment-intake-orders-source";
@@ -63,11 +63,7 @@ import {
   type IntakeDeviationModalView,
 } from "@/lib/cash-control-intake-breakdown";
 import { PaymentLiveSummaryCards } from "@/components/admin/PaymentLiveSummaryCards";
-import {
-  PaymentPostSaveSummaryModal,
-  type PaymentPostSaveSummary,
-  type PaymentShortageResolution,
-} from "@/components/admin/PaymentPostSaveSummaryModal";
+import type { PaymentPostSaveSummary } from "@/components/admin/PaymentPostSaveSummaryModal";
 import { BalanceResetConfirmModal } from "@/components/admin/BalanceResetConfirmModal";
 import { DebtBreakdownModal } from "@/components/admin/debt-breakdown/DebtBreakdownModal";
 import { PriorWeekOpenDebtsPanel } from "@/components/admin/PriorWeekOpenDebtsPanel";
@@ -155,8 +151,7 @@ import { PaymentLineDualCard } from "@/components/admin/PaymentLineDualCard";
 import { validatePaymentCheckLines } from "@/lib/payment-checks";
 import { formatCommissionPercentValue, parseCommissionPercentString } from "@/lib/commission-percent";
 import {
-  applyCustomerCreditToOpenOrdersAction,
-  previewCustomerPaymentOverageAction,
+  applyPaymentSurplusDispositionAction,
   resetCustomerOutstandingBalancesAction,
   savePaymentUpdatedAction,
 } from "@/app/admin/payments-updated/actions";
@@ -166,11 +161,12 @@ import {
   type PaymentCancelRequestHint,
 } from "@/app/admin/invoice-cancel-requests/actions";
 import { CustomerPaymentOverageModal, type SurplusDisposition } from "@/components/admin/CustomerPaymentOverageModal";
-import { PaymentOverpaymentWarningCard } from "@/components/admin/PaymentOverpaymentWarningCard";
+import { PaymentIntakeCorrectionBanner } from "@/components/admin/PaymentIntakeCorrectionBanner";
 import {
-  computePaymentOverpayment,
-  sumEnteredIlsFromFormKpis,
-} from "@/lib/payment-overpayment";
+  PaymentShortfallAfterSaveModal,
+  type PaymentShortfallResolution,
+} from "@/components/admin/PaymentShortfallAfterSaveModal";
+import { computePaymentOverpayment } from "@/lib/payment-overpayment";
 import { BalanceResetCreditConfirmModal } from "@/components/admin/BalanceResetCreditConfirmModal";
 import { dispatchCashControlRefresh } from "@/lib/cash-control-refresh-bus";
 import {
@@ -572,16 +568,19 @@ export function PaymentModalUpdated({
   const [saveJustSaved, setSaveJustSaved] = useState(false);
   const saveJustSavedTimerRef = useRef<number | null>(null);
   const [saveErr, setSaveErr] = useState<string | null>(null);
-  const [postSaveSummary, setPostSaveSummary] = useState<PaymentPostSaveSummary | null>(null);
   const [postSaveMode, setPostSaveMode] = useState<"new" | "close" | null>(null);
   const [postSavePaymentCode, setPostSavePaymentCode] = useState("");
+  const [postSavePaymentNumber, setPostSavePaymentNumber] = useState<number | null>(null);
+  const [postSavePrimaryPaymentId, setPostSavePrimaryPaymentId] = useState("");
+  const [shortfallModalOpen, setShortfallModalOpen] = useState(false);
+  const [postSaveRemainingUsd, setPostSaveRemainingUsd] = useState(0);
+  const [postSaveTargetOrderIds, setPostSaveTargetOrderIds] = useState<string[]>([]);
   const [postSaveBusyAction, setPostSaveBusyAction] =
-    useState<PaymentShortageResolution | null>(null);
+    useState<PaymentShortfallResolution | null>(null);
   const [postSaveError, setPostSaveError] = useState<string | null>(null);
   const [overageModalOpen, setOverageModalOpen] = useState(false);
   const [overagePreview, setOveragePreview] = useState<PaymentOveragePreview | null>(null);
-  /** true = חלון "עודף לאחר סגירת חוב" (לא חריגת אמצעי) */
-  const [overageAfterDebtClosure, setOverageAfterDebtClosure] = useState(false);
+  const [postSaveOverageMode, setPostSaveOverageMode] = useState(false);
   const [intakeDevModalOpen, setIntakeDevModalOpen] = useState(false);
   const [intakeDevRows, setIntakeDevRows] = useState<IntakeSaveDeviationRow[]>([]);
   const [intakeDevAutoFixBusy, setIntakeDevAutoFixBusy] = useState(false);
@@ -1017,26 +1016,6 @@ export function PaymentModalUpdated({
     () => intakeHasOpenBalanceShortfall(liveIntakeDevRows),
     [liveIntakeDevRows],
   );
-  /** מודל תצוגה לחלון חריגת אמצעי תשלום */
-  const intakeDeviationView = useMemo<IntakeDeviationModalView | null>(() => {
-    if (!intakeDevModalOpen || intakeDeviationModalRows(intakeDevRows).length === 0) return null;
-    const kpis = liveFormKpis;
-    return buildIntakeDeviationModalView({
-      orders,
-      includedOrderIds: includedIds,
-      enteredByBucket: buildEnteredByBucket(kpis),
-      totalPaymentUsd: totals.totalUsd,
-      devRows: intakeDevRows,
-      formRateN: rateN,
-      enteredIlsByBucket: {
-        CASH: kpis.cash.enteredIls,
-        BANK_TRANSFER: kpis.bankTransfer.enteredIls,
-        CREDIT: kpis.credit.enteredIls,
-        CHECK: kpis.checks.enteredIls,
-        OTHER: kpis.other.enteredIls,
-      },
-    });
-  }, [intakeDevModalOpen, intakeDevRows, orders, includedIds, liveFormKpis, totals.totalUsd, rateN]);
 
   /** אמצעי תואם + נשאר סכום קטן — לא חריגה, מציעים טיפול ביתרה */
   const showOpenBalanceActions = useMemo(() => {
@@ -1053,24 +1032,31 @@ export function PaymentModalUpdated({
   ]);
 
   /** SSOT — יתרה חתומה לאחר הקצאת התשלום (USD); KPI + כרטיס תחתון */
-  const paymentBalanceDisplay = useMemo((): PaymentBalanceDisplay => {
-    if (customerBalanceResetPending) {
-      return derivePaymentBalanceDisplay(0, rateN);
-    }
-    const signed = sumFormRemainingSignedUsd(orderViews);
-    return derivePaymentBalanceDisplay(signed, rateN);
-  }, [customerBalanceResetPending, orderViews, rateN]);
-
   const totalDebtBeforePaymentUsd = useMemo(() => {
     if (customerBalanceResetPending) return 0;
-    return roundMoney2(orderViews.reduce((s, o) => s + o.dbRemainingUsd, 0));
-  }, [customerBalanceResetPending, orderViews]);
+    const idSet = includedIds ? new Set(includedIds) : null;
+    return roundMoney2(
+      orders.reduce((sum, o) => {
+        if (idSet && !idSet.has(o.id)) return sum;
+        return sum + Math.max(0, Number(o.dbRemainingUsd) || 0);
+      }, 0),
+    );
+  }, [customerBalanceResetPending, orders, includedIds]);
+
+  const paymentBalanceSignedUsd = useMemo(() => {
+    if (customerBalanceResetPending) return 0;
+    return computePaymentBalanceUsd(totalDebtBeforePaymentUsd, totals.totalUsd);
+  }, [customerBalanceResetPending, totalDebtBeforePaymentUsd, totals.totalUsd]);
+
+  const paymentBalanceDisplay = useMemo((): PaymentBalanceDisplay => {
+    return derivePaymentBalanceDisplay(paymentBalanceSignedUsd, rateN);
+  }, [paymentBalanceSignedUsd, rateN]);
 
   /** תצוגה חיה — יתרה לאחר הקצאת התשלום (חתום: שלילי = עודף) */
   const openDebtAfterPaymentPreview = useMemo(() => {
     const currentOpenBalance = totalDebtBeforePaymentUsd;
     const enteredPaymentAmount = roundMoney2(totals.totalUsd);
-    const remainingAfterPayment = paymentBalanceDisplay.balanceUsdSigned;
+    const remainingAfterPayment = paymentBalanceSignedUsd;
     let openCommissionUsd = 0;
     for (const o of orders) {
       const rem = computeOrderOpenDebtUsd(Number(o.totalAmountUsd), Number(o.dbPaidUsd));
@@ -1092,29 +1078,41 @@ export function PaymentModalUpdated({
   }, [
     totalDebtBeforePaymentUsd,
     totals.totalUsd,
+    paymentBalanceSignedUsd,
     paymentBalanceDisplay,
     orders,
   ]);
 
   const intakeStripOpenDebtUsd = customerOpenDebtDisplayUsd;
 
-  /** P1 — תשלום יתר חי (USD SSOT) לפני שמירה */
-  const liveOverpaymentPreview = useMemo(() => {
-    if (!customer || customerBalanceResetPending || totals.totalUsd <= 0.005) return null;
-    const preview = computePaymentOverpayment(totalDebtBeforePaymentUsd, totals.totalUsd);
-    if (!preview.hasOverpayment) return null;
-    const enteredIls = sumEnteredIlsFromFormKpis(liveFormKpis);
-    return {
-      preview,
-      enteredIlsTotal: enteredIls > 0.01 ? enteredIls : null,
-    };
-  }, [
-    customer,
-    customerBalanceResetPending,
-    totals.totalUsd,
-    totalDebtBeforePaymentUsd,
-    liveFormKpis,
-  ]);
+  /** שורות חוסמות — אמצעי / שער (לא תשלום יתר) */
+  const intakeCorrectionRows = useMemo(
+    () => liveIntakeDevRows.filter((r) => r.rowTone === "excess" || r.rowTone === "rate"),
+    [liveIntakeDevRows],
+  );
+
+  const intakeDeviationViewLive = useMemo<IntakeDeviationModalView | null>(() => {
+    const modalRows = intakeDeviationModalRows(
+      intakeDevRows.length > 0 ? intakeDevRows : liveIntakeDevRows,
+    );
+    if (modalRows.length === 0) return null;
+    const kpis = liveFormKpis;
+    return buildIntakeDeviationModalView({
+      orders,
+      includedOrderIds: includedIds,
+      enteredByBucket: buildEnteredByBucket(kpis),
+      totalPaymentUsd: totals.totalUsd,
+      devRows: modalRows,
+      formRateN: rateN,
+      enteredIlsByBucket: {
+        CASH: kpis.cash.enteredIls,
+        BANK_TRANSFER: kpis.bankTransfer.enteredIls,
+        CREDIT: kpis.credit.enteredIls,
+        CHECK: kpis.checks.enteredIls,
+        OTHER: kpis.other.enteredIls,
+      },
+    });
+  }, [intakeDevRows, liveIntakeDevRows, orders, includedIds, liveFormKpis, totals.totalUsd, rateN]);
 
   const canApplyResetCustomerBalance = useMemo(() => {
     if (customerBalanceResetPending) return true;
@@ -1246,9 +1244,9 @@ export function PaymentModalUpdated({
       customerId: string,
       weekCode?: string | null,
       opts?: { perfLabel?: string; cacheSnapshotPaymentId?: string },
-    ) => {
+    ): Promise<void> => {
       const cid = customerId.trim();
-      if (!cid) return;
+      if (!cid) return Promise.resolve();
 
       const gen = ++customerWorkspaceGenRef.current;
       const weekForFetch = weekCode?.trim() || null;
@@ -1303,7 +1301,7 @@ export function PaymentModalUpdated({
         return { paymentsLoadMs, ok: true as const };
       });
 
-      void Promise.all([ordersP, balancesP, paymentsP]).then(([ordersRes, balancesRes, paymentsRes]) => {
+      return Promise.all([ordersP, balancesP, paymentsP]).then(([ordersRes, balancesRes, paymentsRes]) => {
         if (gen !== customerWorkspaceGenRef.current) return;
         const customerFoundMs = customerSearchPerfRef.current ?? undefined;
         customerSearchPerfRef.current = null;
@@ -2338,8 +2336,19 @@ export function PaymentModalUpdated({
     | {
         ok: true;
         primaryPaymentCode: string;
+        primaryPaymentId: string;
+        paymentNumber: number | null;
         customerBalanceUsd: string;
         summary: PaymentPostSaveSummary;
+        postSave: {
+          remainingDebtUsd: number;
+          surplusUsd: number;
+          needsSurplusDisposition: boolean;
+          needsShortfallResolution: boolean;
+          targetOrderIds: string[];
+          deferredSurplusUsd: number;
+          paymentTotalUsd: number;
+        } | null;
       }
     | { ok: false }
   > {
@@ -2373,31 +2382,13 @@ export function PaymentModalUpdated({
       totalPaymentUsd: totals.totalUsd,
     });
     if (methodGate.kind === "METHOD_DEVIATION" || methodGate.kind === "DEBT_TRANSFER") {
-      // DEBT_TRANSFER לא אמור לחזור מהשער החדש — מטופל כחריגת אמצעי.
       setIntakeDevRows(liveIntakeDevRows);
-      setIntakeDevModalOpen(true);
-      return { ok: false };
-    }
-    if (methodGate.kind === "SURPLUS_AFTER_CLOSURE" && !surplusDisposition) {
-      const over = computePaymentOverpayment(methodGate.totalDebtUsd, methodGate.totalPaymentUsd);
-      setOveragePreview({
-        openDebtIls: roundMoney2(methodGate.totalDebtUsd * rateN),
-        openDebtUsd: over.openDebtUsd,
-        paymentIls: roundMoney2(methodGate.totalPaymentUsd * rateN),
-        paymentUsd: over.incomingPaymentUsd,
-        closesDebtUsd: over.closesDebtUsd,
-        closesDebtIls: roundMoney2(Math.min(methodGate.totalPaymentUsd * rateN, methodGate.totalDebtUsd * rateN)),
-        surplusIls: roundMoney2(over.overpaymentUsd * rateN),
-        surplusUsd: over.overpaymentUsd,
-        hasOverage: true,
-      });
-      setOverageAfterDebtClosure(true);
-      setOverageModalOpen(true);
+      setSaveErr("יש תשלום שדורש תיקון — ראה ההתראה למעלה");
       return { ok: false };
     }
     if (intakeHasRateMismatch(liveIntakeDevRows)) {
       setIntakeDevRows(liveIntakeDevRows);
-      setIntakeDevModalOpen(true);
+      setSaveErr("יש תשלום שדורש תיקון — ראה ההתראה למעלה");
       return { ok: false };
     }
     // חשוב: קרדיט קיים ללקוח לא אומר שצריך "לכפות" תשלום כיתרת זכות.
@@ -2423,47 +2414,11 @@ export function PaymentModalUpdated({
       unallocatedUsd: allocDiag.unallocatedUsd,
     };
     const hasAlloc = allocDiag.allocationTargets.length > 0;
-    const saveAsCredit = surplusDisposition === "credit";
-    const saveAsFee = surplusDisposition === "commission";
-    // עודף אמיתי בלבד: סה״כ תשלום > חוב פתוח. לא נפתח חלון על בסיס unallocated
-    // מ-FIFO בלבד (עלול ליצור «יתרת זכות» כוזבת כשהסכום תקין מול החוב).
-    const openDebtUsd = roundMoney2(Math.max(0, allocDiag.openBalanceUsd));
-    const over = computePaymentOverpayment(openDebtUsd, totals.totalUsd);
-    if (
-      totals.totalUsd > 0.02 &&
-      over.hasOverpayment &&
-      !surplusDisposition &&
-      !customerBalanceResetPending
-    ) {
-      const prev = await previewCustomerPaymentOverageAction({
-        customerId: customer.id,
-        totalPaymentUsd: totals.totalUsd,
-        dollarRate,
-        weekCode: intakeWeekCode,
-      });
-      const preview: PaymentOveragePreview =
-        prev.ok && prev.preview.hasOverage
-          ? prev.preview
-          : {
-              openDebtIls: roundMoney2(openDebtUsd * rateN),
-              openDebtUsd: over.openDebtUsd,
-              paymentIls: roundMoney2(totals.totalUsd * rateN),
-              paymentUsd: over.incomingPaymentUsd,
-              closesDebtUsd: over.closesDebtUsd,
-              closesDebtIls: roundMoney2(Math.min(totals.totalUsd * rateN, openDebtUsd * rateN)),
-              surplusIls: roundMoney2(over.overpaymentUsd * rateN),
-              surplusUsd: over.overpaymentUsd,
-              hasOverage: true,
-            };
-      setOveragePreview(preview);
-      setOverageModalOpen(true);
-      return { ok: false };
-    }
     // Block only when we KNOW there are no open orders at all.
     // If bases has orders with open debt but client-FIFO returned empty (edge case),
     // let the server attempt allocation rather than blocking here with a misleading error.
     const hasOpenOrders = bases.some((b) => orderLedgerBalanceUsd(b) > 0.02);
-    if (!hasAlloc && !hasOpenOrders && !(saveAsCredit && unallocatedUsd > 0.02) && !(saveAsFee && unallocatedUsd > 0.02)) {
+    if (!hasAlloc && !hasOpenOrders) {
       setSaveErr("לא נמצאו הזמנות עם יתרת חוב פתוחה — ייתכן שהמסמך כבר שולם במלואו");
       return { ok: false };
     }
@@ -2491,7 +2446,8 @@ export function PaymentModalUpdated({
       draftNameAr: draftCustomer.nameAr.trim() || null,
       draftNameEn: draftCustomer.nameEn.trim() || null,
       draftPhone: draftCustomer.phone.trim() || null,
-      saveSurplusAsCredit: saveAsCredit,
+      deferSurplusDisposition: !surplusDisposition,
+      saveSurplusAsCredit: surplusDisposition === "credit",
       surplusDisposition: surplusDisposition ?? null,
     });
     const savePaymentMs = Math.round(performance.now() - saveStart);
@@ -2590,8 +2546,7 @@ export function PaymentModalUpdated({
     onToast(buildPostSaveRemainingSummary(updatedOrdersForSummary, null));
     setMethodControlOpen(false);
     // Silent refresh (authoritative rebuild): orders + balances + payments.
-    // No page refresh; the workspace reload overrides optimistic state when it arrives.
-    loadCustomerWorkspaceInBackground(customer.id, weekForSave, {
+    await loadCustomerWorkspaceInBackground(customer.id, weekForSave, {
       perfLabel: "postSaveSilentRefresh",
       cacheSnapshotPaymentId: savedPaymentId || undefined,
     });
@@ -2628,8 +2583,11 @@ export function PaymentModalUpdated({
     return {
       ok: true,
       primaryPaymentCode,
+      primaryPaymentId: savedPaymentId,
+      paymentNumber: res.saved.paymentNumber ?? null,
       customerBalanceUsd: res.saved.customerBalanceUsd,
       summary: postSavePaymentSummary,
+      postSave: res.saved.postSave ?? null,
     };
   }
 
@@ -2653,86 +2611,138 @@ export function PaymentModalUpdated({
     finishSaveAndNewOptimistic(savedCode);
   }
 
-  function openPostSaveSummary(
-    mode: "new" | "close",
-    result: Extract<Awaited<ReturnType<typeof performSave>>, { ok: true }>,
-  ) {
-    setPostSaveMode(mode);
-    setPostSavePaymentCode(result.primaryPaymentCode);
-    setPostSaveError(null);
-    setPostSaveBusyAction(null);
-    setPostSaveSummary(result.summary);
-  }
-
-  async function finishPostSaveFlow() {
-    const mode = postSaveMode;
-    const savedCode = postSavePaymentCode;
-    setPostSaveSummary(null);
-    setPostSaveMode(null);
-    setPostSavePaymentCode("");
-    setPostSaveError(null);
-    setPostSaveBusyAction(null);
-    if (mode === "new" && savedCode) await finishSaveAndNew(savedCode);
-    else if (mode === "close") closeTop();
-  }
-
-  async function onPostSaveResolve(resolution: PaymentShortageResolution) {
-    if (!customer || !postSaveSummary || postSaveBusyAction) return;
-    if (resolution === "leave_open" || postSaveSummary.remainingUsd <= 0.01) {
-      setPostSaveBusyAction("leave_open");
-      await finishPostSaveFlow();
-      return;
-    }
-
-    setPostSaveBusyAction(resolution);
-    setPostSaveError(null);
-    const result =
-      resolution === "credit"
-        ? await applyCustomerCreditToOpenOrdersAction({
-            customerId: customer.id,
-            maxUsd: postSaveSummary.remainingUsd.toFixed(2),
-            orderIds: postSaveSummary.targetOrderIds,
-          })
-        : await resetCustomerOutstandingBalancesAction({
-            customerId: customer.id,
-            weekCode: intakeWeekCode,
-            commissionPercent: commissionPercentStr,
-            orderIds: postSaveSummary.targetOrderIds,
-            allowNegativeCommission: resolution === "negative_commission",
-          });
-
-    if (!result.ok) {
-      setPostSaveBusyAction(null);
-      setPostSaveError(result.error);
-      return;
-    }
-
-    onToast(
-      resolution === "credit"
-        ? "יתרת הזכות הוחלה על החוב הפתוח"
-        : resolution === "negative_commission"
-          ? "החוב נסגר באמצעות עמלה שלילית"
-          : "החוב קוזז מהעמלות",
-    );
-    window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
-    await loadCustomerWorkspaceInBackground(customer.id, intakeWeekCode, {
-      perfLabel: "postSaveResolutionRefresh",
-    });
-    await finishPostSaveFlow();
-  }
-
-  /**
-   * "שמור וחדש" — שומר את התשלום, מעדכן יתרות מקומית, ומאפס את הטופס
-   * לתשלום הבא — בלי רענון מלא של המערכת.
-   */
   async function finishAfterSuccessfulSave(
     mode: "new" | "close",
     result: Extract<Awaited<ReturnType<typeof performSave>>, { ok: true }>,
   ) {
     dispatchOrdersListRefresh();
-    // תשלום תקין נשמר מיד — ללא מסך «סיכום תשלום» ביניים.
+    setPostSaveMode(mode);
+    setPostSavePaymentCode(result.primaryPaymentCode);
+    setPostSavePaymentNumber(result.paymentNumber);
+    setPostSavePrimaryPaymentId(result.primaryPaymentId);
+
+    const postSave = result.postSave;
+    if (postSave?.needsSurplusDisposition && postSave.surplusUsd > 0.02) {
+      const over = computePaymentOverpayment(
+        roundMoney2(postSave.paymentTotalUsd - postSave.surplusUsd),
+        postSave.paymentTotalUsd,
+      );
+      setOveragePreview({
+        openDebtIls: roundMoney2(over.openDebtUsd * rateN),
+        openDebtUsd: over.openDebtUsd,
+        paymentIls: roundMoney2(postSave.paymentTotalUsd * rateN),
+        paymentUsd: postSave.paymentTotalUsd,
+        closesDebtUsd: over.closesDebtUsd,
+        closesDebtIls: roundMoney2(Math.min(postSave.paymentTotalUsd * rateN, over.openDebtUsd * rateN)),
+        surplusIls: roundMoney2(postSave.surplusUsd * rateN),
+        surplusUsd: postSave.surplusUsd,
+        hasOverage: true,
+      });
+      setPostSaveOverageMode(true);
+      setOverageModalOpen(true);
+      return;
+    }
+
+    if (postSave?.needsShortfallResolution && postSave.remainingDebtUsd > 0.02) {
+      setPostSaveRemainingUsd(postSave.remainingDebtUsd);
+      setPostSaveTargetOrderIds(postSave.targetOrderIds);
+      setPostSaveError(null);
+      setShortfallModalOpen(true);
+      return;
+    }
+
     if (mode === "new") await finishSaveAndNew(result.primaryPaymentCode);
     else closeTop();
+  }
+
+  async function onPostSaveSurplusConfirm(disposition: SurplusDisposition) {
+    if (!customer || !postSavePrimaryPaymentId) return;
+    setSaveBusy(true);
+    setOverageModalOpen(false);
+    try {
+      const res = await applyPaymentSurplusDispositionAction({
+        customerId: customer.id,
+        primaryPaymentId: postSavePrimaryPaymentId,
+        disposition,
+      });
+      if (!res.ok) {
+        setSaveErr(res.error);
+        setOverageModalOpen(true);
+        return;
+      }
+      setCustomer((cur) =>
+        cur ? { ...cur, customerBalanceUsd: res.customerBalanceUsd } : cur,
+      );
+      window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
+      dispatchOrdersListRefresh();
+      await loadCustomerWorkspaceInBackground(customer.id, intakeWeekCode, {
+        perfLabel: "postSaveSurplusRefresh",
+      });
+      setPostSaveOverageMode(false);
+      setOveragePreview(null);
+      const mode = postSaveMode;
+      setPostSaveMode(null);
+      setPostSavePrimaryPaymentId("");
+      if (mode === "new") await finishSaveAndNew(postSavePaymentCode);
+      else if (mode === "close") closeTop();
+    } finally {
+      setSaveBusy(false);
+    }
+  }
+
+  async function onShortfallAfterSaveResolve(resolution: PaymentShortfallResolution) {
+    if (!customer || postSaveBusyAction) return;
+    if (resolution === "leave_open") {
+      setPostSaveBusyAction("leave_open");
+      setShortfallModalOpen(false);
+      const mode = postSaveMode;
+      const code = postSavePaymentCode;
+      setPostSaveMode(null);
+      setPostSaveRemainingUsd(0);
+      setPostSaveTargetOrderIds([]);
+      if (mode === "new" && code) await finishSaveAndNew(code);
+      else if (mode === "close") closeTop();
+      setPostSaveBusyAction(null);
+      return;
+    }
+
+    setPostSaveBusyAction(resolution);
+    setPostSaveError(null);
+    const allowNegativeCommission = resolution === "reset_commission";
+    const result = await resetCustomerOutstandingBalancesAction({
+      customerId: customer.id,
+      weekCode: intakeWeekCode,
+      commissionPercent: commissionPercentStr,
+      orderIds: postSaveTargetOrderIds,
+      allowNegativeCommission,
+      paymentCaptureContext:
+        postSavePaymentCode && postSavePaymentNumber
+          ? { primaryPaymentCode: postSavePaymentCode, paymentNumber: postSavePaymentNumber }
+          : null,
+    });
+    if (!result.ok) {
+      setPostSaveBusyAction(null);
+      setPostSaveError(result.error);
+      return;
+    }
+    onToast(
+      allowNegativeCommission
+        ? "היתרה אופסה דרך התאמת עמלה"
+        : "היתרה אופסה — Adjustment / סגירת יתרה",
+    );
+    window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
+    await loadCustomerWorkspaceInBackground(customer.id, intakeWeekCode, {
+      perfLabel: "postSaveShortfallRefresh",
+    });
+    setShortfallModalOpen(false);
+    const mode = postSaveMode;
+    const code = postSavePaymentCode;
+    setPostSaveMode(null);
+    setPostSaveRemainingUsd(0);
+    setPostSaveTargetOrderIds([]);
+    setPostSaveBusyAction(null);
+    if (mode === "new" && code) await finishSaveAndNew(code);
+    else if (mode === "close") closeTop();
   }
 
   async function onSaveAndNew() {
@@ -2756,8 +2766,11 @@ export function PaymentModalUpdated({
   }
 
   async function onOverageConfirm(disposition: SurplusDisposition) {
+    if (postSaveOverageMode) {
+      await onPostSaveSurplusConfirm(disposition);
+      return;
+    }
     setOverageModalOpen(false);
-    setOverageAfterDebtClosure(false);
     const mode = saveAfterOverageRef.current;
     const res = await performSave(disposition);
     if (!res.ok) return;
@@ -2787,7 +2800,7 @@ export function PaymentModalUpdated({
   }
 
   async function onIntakeDevAutoFix() {
-    const fix = intakeDeviationView?.autoFix;
+    const fix = intakeDeviationViewLive?.autoFix;
     if (!fix) return;
     setIntakeDevAutoFixBusy(true);
     try {
@@ -2812,9 +2825,11 @@ export function PaymentModalUpdated({
 
   function onOverageCancel() {
     setOverageModalOpen(false);
-    setOverageAfterDebtClosure(false);
+    setPostSaveOverageMode(false);
     saveAfterOverageRef.current = null;
     setOveragePreview(null);
+    setPostSaveMode(null);
+    setPostSavePrimaryPaymentId("");
   }
 
   function openCustomerLedger() {
@@ -3614,9 +3629,7 @@ export function PaymentModalUpdated({
                         "payment-balance-summary__balance-duo",
                         openDebtAfterPaymentPreview.paymentBalanceDisplay.state === "debt"
                           ? "payment-balance-summary__balance-duo--debt"
-                          : openDebtAfterPaymentPreview.paymentBalanceDisplay.state === "surplus"
-                            ? "payment-balance-summary__balance-duo--surplus"
-                            : "payment-balance-summary__balance-duo--cleared",
+                          : "payment-balance-summary__balance-duo--cleared",
                       ].join(" ")}
                       dir="ltr"
                     >
@@ -3635,13 +3648,21 @@ export function PaymentModalUpdated({
                         )}
                       />
                     </span>
+                    {openDebtAfterPaymentPreview.paymentBalanceDisplay.statusHint ? (
+                      <span className="payment-balance-summary__status-hint">
+                        {openDebtAfterPaymentPreview.paymentBalanceDisplay.statusHint}
+                      </span>
+                    ) : null}
                   </span>
                 </div>
               ) : null}
-              {liveOverpaymentPreview ? (
-                <PaymentOverpaymentWarningCard
-                  preview={liveOverpaymentPreview.preview}
-                  enteredIlsTotal={liveOverpaymentPreview.enteredIlsTotal}
+              {intakeCorrectionRows.length > 0 ? (
+                <PaymentIntakeCorrectionBanner
+                  rows={intakeCorrectionRows}
+                  onShowDetail={() => {
+                    setIntakeDevRows(liveIntakeDevRows);
+                    setIntakeDevModalOpen(true);
+                  }}
                 />
               ) : null}
               <PriorWeekOpenDebtsPanel
@@ -4087,13 +4108,13 @@ export function PaymentModalUpdated({
         </div>
       </div>
 
-      <PaymentPostSaveSummaryModal
-        open={postSaveSummary !== null}
-        summary={postSaveSummary}
-        canApproveNegativeCommission={viewerIsAdmin}
-        busyAction={postSaveBusyAction}
+      <PaymentShortfallAfterSaveModal
+        open={shortfallModalOpen}
+        remainingUsd={postSaveRemainingUsd}
+        busy={postSaveBusyAction !== null}
         error={postSaveError}
-        onResolve={(resolution) => void onPostSaveResolve(resolution)}
+        canResetViaCommission={viewerIsAdmin}
+        onResolve={(resolution) => void onShortfallAfterSaveResolve(resolution)}
       />
       <OrderEditModal
         orderId={orderEditId}
@@ -4344,17 +4365,16 @@ export function PaymentModalUpdated({
         open={overageModalOpen}
         preview={overagePreview}
         busy={saveBusy}
-        afterDebtClosure={overageAfterDebtClosure}
         onConfirm={(disposition) => void onOverageConfirm(disposition)}
         onCancel={onOverageCancel}
       />
       <PaymentIntakeDeviationModal
-        open={intakeDevModalOpen && intakeDeviationModalRows(intakeDevRows).length > 0}
-        view={intakeDeviationView}
+        open={intakeDevModalOpen && intakeDeviationViewLive != null}
+        view={intakeDevModalOpen ? intakeDeviationViewLive : null}
         rateRows={intakeDevRows}
         onClose={onIntakeDevCancel}
         onEditOrder={onIntakeDevEditOrder}
-        onAutoFix={intakeDeviationView?.autoFix ? onIntakeDevAutoFix : undefined}
+        onAutoFix={intakeDeviationViewLive?.autoFix ? onIntakeDevAutoFix : undefined}
         autoFixBusy={intakeDevAutoFixBusy}
         showEmployeeHint={!viewerIsAdmin && !canEditOrders}
       />

@@ -353,3 +353,44 @@ describe("בחירה ב'הוסף לעמלות' — לא חוסם שמירה (dev
     assert.equal(shouldBlock, false);
   });
 });
+
+describe("Payment fee display helpers", () => {
+  it("formatSignedUsdDisplay preserves sign", () => {
+    const { formatSignedUsdDisplay, derivePaymentFeeAmountKind, derivePaymentFeeTypeLabel } =
+      require("@/lib/payment-adjustment-fee") as typeof import("@/lib/payment-adjustment-fee");
+    assert.equal(formatSignedUsdDisplay(7.28), "+$7.28");
+    assert.equal(formatSignedUsdDisplay(-2.72), "-$2.72");
+    assert.equal(derivePaymentFeeAmountKind(7.28), "CREDIT");
+    assert.equal(derivePaymentFeeAmountKind(-2.72), "DEBIT");
+    assert.equal(derivePaymentFeeTypeLabel(7.28), "עמלה / זכות למערכת");
+    assert.equal(derivePaymentFeeTypeLabel(-2.72), "קיזוז / איפוס חוב");
+  });
+
+  it("derivePaymentFeeSourceKind maps surplus and balance reset", () => {
+    const { derivePaymentFeeSourceKind } = require("@/lib/payment-adjustment-fee") as typeof import("@/lib/payment-adjustment-fee");
+    assert.equal(
+      derivePaymentFeeSourceKind({ reason: "PAYMENT_SURPLUS", userChoice: "commission", paymentId: "p1" }),
+      "PAYMENT_SURPLUS",
+    );
+    assert.equal(
+      derivePaymentFeeSourceKind({ reason: "MANUAL_ADJUST", userChoice: "fee_adjustment_negative", paymentId: "p1" }),
+      "BALANCE_RESET",
+    );
+  });
+
+  it("parsePaymentFeeContextNotes reads structured notes", () => {
+    const { parsePaymentFeeContextNotes, buildBalanceResetFeeNotes } =
+      require("@/lib/payment-adjustment-fee") as typeof import("@/lib/payment-adjustment-fee");
+    const notes = buildBalanceResetFeeNotes({
+      debtBeforeUsd: 52.72,
+      paidUsd: 50,
+      resetUsd: 2.72,
+      feeUsd: -2.72,
+    });
+    const parsed = parsePaymentFeeContextNotes(notes);
+    assert.equal(parsed.debtBeforeUsd, 52.72);
+    assert.equal(parsed.paidUsd, 50);
+    assert.equal(parsed.resetUsd, 2.72);
+    assert.equal(parsed.feeUsd, -2.72);
+  });
+});

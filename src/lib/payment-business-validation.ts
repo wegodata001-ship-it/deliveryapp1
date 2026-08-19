@@ -103,6 +103,10 @@ export type PaymentBusinessValidationInput = {
    * כלל התאמת אמצעי התשלום וכללי העודף עדיין נאכפים לפני השמירה.
    */
   deferShortageResolution?: boolean;
+  /**
+   * save-first לעודף: התשלום נשמר, טיפול ביתרה נדחה לחלון שלאחר השמירה.
+   */
+  deferSurplusDisposition?: boolean;
   surplusDisposition?: "credit" | "commission" | "forfeit" | null;
   /**
    * העברות חוב בין אמצעי תשלום שאושרו במפורש ע״י המשתמש.
@@ -316,7 +320,11 @@ export function evaluatePaymentBusinessRules(
     );
   }
 
-  if (overpayment.hasOverpayment && !input.surplusDisposition) {
+  if (
+    overpayment.hasOverpayment &&
+    !input.surplusDisposition &&
+    !input.deferSurplusDisposition
+  ) {
     return result(
       "CHOOSE_SURPLUS_DISPOSITION",
       `קיים עודף של $${surplusUsd.toFixed(2)}. יש לבחור: יתרת זכות ללקוח או העברה לעמלות.`,

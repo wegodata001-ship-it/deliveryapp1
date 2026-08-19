@@ -12543,12 +12543,114 @@ select.payment-modal-inline-input {
   color: #15803d;
 }
 
-.payment-balance-summary__balance-duo--surplus .payment-balance-summary__v--hero {
-  color: #0369a1;
+.payment-balance-summary__status-hint {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #15803d;
+  margin-inline-start: 4px;
 }
 
-.payment-balance-summary__balance-duo--surplus .payment-balance-summary__v--ils {
-  color: #0284c7;
+.payment-balance-summary__balance-duo--debt + .payment-balance-summary__status-hint {
+  color: #c2410c;
+}
+
+.payment-intake-correction-banner {
+  margin: 10px 8px 12px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 2px solid #fca5a5;
+  background: linear-gradient(180deg, #fef2f2 0%, #fff1f2 100%);
+  box-shadow: 0 2px 8px rgba(220, 38, 38, 0.12);
+}
+
+.payment-intake-correction-banner__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.payment-intake-correction-banner__title {
+  font-size: 1.05rem;
+  font-weight: 900;
+  color: #991b1b;
+}
+
+.payment-intake-correction-banner__detail-btn {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid #fca5a5;
+  background: #fff;
+  color: #991b1b;
+  font-size: 0.82rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.payment-intake-correction-banner__detail-btn:hover {
+  background: #fee2e2;
+}
+
+.payment-intake-correction-banner__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.payment-intake-correction-banner__item {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid #fecaca;
+}
+
+.payment-intake-correction-banner__method {
+  font-size: 0.92rem;
+  font-weight: 800;
+  color: #7f1d1d;
+  margin-bottom: 6px;
+}
+
+.payment-intake-correction-banner__stats {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.payment-intake-correction-banner__stats > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.84rem;
+}
+
+.payment-intake-correction-banner__stats dt {
+  margin: 0;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.payment-intake-correction-banner__stats dd {
+  margin: 0;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: #0f172a;
+}
+
+.payment-modal-live-kpi__status-hint {
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: #15803d;
+  margin-top: 2px;
+}
+
+.payment-remaining-to-pay--surplus .payment-modal-live-kpi__status-hint {
+  color: #15803d;
 }
 
 .payment-modal-live-kpi__sub-ils {
@@ -15506,6 +15608,38 @@ select.payment-modal-inline-input {
 .adm-payment-overage-stats--surplus dd {
   color: var(--adm-success, #15803d);
   font-weight: 700;
+}
+
+.adm-payment-shortfall-modal.adm-mini-modal {
+  width: min(420px, 94vw);
+  padding: 18px;
+}
+
+.adm-payment-shortfall-lead {
+  margin: 0 0 8px;
+  color: #475569;
+  line-height: 1.45;
+}
+
+.adm-payment-shortfall-q {
+  margin: 0 0 14px;
+  font-weight: 800;
+  font-size: 0.95rem;
+}
+
+.adm-payment-shortfall-actions {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.adm-payment-shortfall-actions .adm-btn {
+  width: 100%;
+  justify-content: center;
+}
+
+.adm-payment-shortfall-back {
+  font-size: 0.875rem;
+  opacity: 0.85;
 }
 
 .adm-payment-overage-stats--overpayment dd {
@@ -22340,6 +22474,212 @@ select.adm-balances-input {
 .adm-payments-source-row--expanded td {
   background: #eff6ff !important;
   border-bottom-color: #bfdbfe;
+}
+
+/* ── Payment fees source table ── */
+.adm-payment-fees-source {
+  display: grid;
+  gap: 10px;
+}
+
+.adm-payment-fees-kpi-row .adm-payments-source-kpi-card strong.adm-payment-fee-amt--credit {
+  color: #15803d;
+}
+
+.adm-payment-fees-kpi-row .adm-payments-source-kpi-card strong.adm-payment-fee-amt--debit {
+  color: #b91c1c;
+}
+
+.adm-payment-fees-compact-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 8px;
+  align-items: end;
+  padding: 10px 12px;
+  border: 1px solid var(--adm-border);
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.adm-payment-fees-compact-filters label {
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--adm-muted);
+}
+
+.adm-payment-fees-compact-filters input,
+.adm-payment-fees-compact-filters select {
+  min-height: 34px;
+  font-size: 13px;
+}
+
+.adm-payment-fees-table-wrap {
+  max-height: min(72vh, 760px);
+}
+
+.adm-payment-fees-table {
+  min-width: 1100px;
+}
+
+.adm-payment-fees-table th:nth-child(1),
+.adm-payment-fees-table td:nth-child(1) {
+  width: 92px;
+}
+
+.adm-payment-fees-table th:nth-child(6),
+.adm-payment-fees-table td:nth-child(6) {
+  width: 96px;
+  text-align: center;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.adm-payment-fees-cell-customer {
+  text-align: right !important;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+
+.adm-payment-fees-cell-customer strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.adm-payment-fees-cell-reason {
+  max-width: 140px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.adm-payment-fee-amt--credit {
+  color: #15803d;
+  font-weight: 800;
+}
+
+.adm-payment-fee-amt--debit {
+  color: #b91c1c;
+  font-weight: 800;
+}
+
+.adm-payment-fee-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.adm-payment-fee-badge--payment_intake {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-color: #bfdbfe;
+}
+
+.adm-payment-fee-badge--payment_surplus {
+  background: #ecfdf5;
+  color: #047857;
+  border-color: #a7f3d0;
+}
+
+.adm-payment-fee-badge--balance_reset {
+  background: #fff7ed;
+  color: #c2410c;
+  border-color: #fed7aa;
+}
+
+.adm-payment-fee-badge--manual {
+  background: #f5f3ff;
+  color: #6d28d9;
+  border-color: #ddd6fe;
+}
+
+.adm-payment-fee-badge--correction {
+  background: #fefce8;
+  color: #a16207;
+  border-color: #fde68a;
+}
+
+.adm-payment-fee-badge--other {
+  background: #f1f5f9;
+  color: #475569;
+  border-color: #e2e8f0;
+}
+
+.adm-payment-fee-badge--credit {
+  background: #ecfdf5;
+  color: #047857;
+  border-color: #a7f3d0;
+}
+
+.adm-payment-fee-badge--debit {
+  background: #fef2f2;
+  color: #b91c1c;
+  border-color: #fecaca;
+}
+
+.adm-payment-fees-row {
+  cursor: pointer;
+}
+
+.adm-payment-fee-detail-modal.adm-mini-modal {
+  max-width: 440px;
+}
+
+.adm-payment-fee-detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 14px;
+  margin: 12px 0;
+}
+
+.adm-payment-fee-detail-grid dt {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--adm-muted);
+}
+
+.adm-payment-fee-detail-grid dd {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.adm-payment-fee-detail-flow {
+  padding: 12px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  display: grid;
+  gap: 6px;
+}
+
+.adm-payment-fee-detail-flow p {
+  margin: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.adm-payment-fee-detail-notes {
+  margin: 10px 0 0;
+  padding: 10px;
+  border-radius: 8px;
+  background: #fff;
+  border: 1px dashed #cbd5e1;
+  font-size: 12px;
+  white-space: pre-wrap;
+  direction: rtl;
+  font-family: inherit;
 }
 
 .adm-payments-code-cell {

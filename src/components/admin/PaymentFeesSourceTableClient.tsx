@@ -2,58 +2,53 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePaymentMethodCatalog } from "@/components/admin/PaymentMethodCatalogProvider";
+import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
+import { PaymentFeeDetailModal } from "@/components/admin/PaymentFeeDetailModal";
+import { PaymentFeeRowActionsMenu } from "@/components/admin/PaymentFeeRowActionsMenu";
 import {
   exportPaymentFeesSourceAction,
+  getPaymentFeeDetailAction,
   listPaymentFeesSourceTableAction,
   type PaymentFeesSourceListPayload,
 } from "@/app/admin/source-tables/payment-fees-actions";
 import { TableEmpty, TableError, TableSkeleton } from "@/components/ui/data-table";
 import { downloadBase64File, handleSourceTableExportResult } from "@/lib/pdf-export-client";
-import { FileSpreadsheet, FileText, Search } from "lucide-react";
-import type { PaymentAdjustmentReason, PaymentAdjustmentStatus } from "@prisma/client";
+import { formatSignedUsdDisplay } from "@/lib/payment-adjustment-fee";
+import type { PaymentFeeDetail } from "@/lib/payment-fees-source-table";
+import type { PaymentFeeSourceKind } from "@/lib/payment-adjustment-fee";
+import { FileSpreadsheet, FileText, Hash, Search, TrendingDown, TrendingUp } from "lucide-react";
 
 const PAGE_LIMIT = 25;
 const SEARCH_DEBOUNCE_MS = 350;
 
-type AdvancedFilters = {
-  customerCode: string;
-  sourceDocument: string;
-  paymentMethod: string;
-  status: "" | PaymentAdjustmentStatus;
-  reason: "" | PaymentAdjustmentReason;
+type CompactFilters = {
   fromYmd: string;
   toYmd: string;
-  amountMin: string;
-  amountMax: string;
+  customerCode: string;
+  orderNumber: string;
+  sourceKind: "" | PaymentFeeSourceKind;
+  amountKind: "" | "CREDIT" | "DEBIT";
+  paymentMethod: string;
 };
 
-const EMPTY_FILTERS: AdvancedFilters = {
-  customerCode: "",
-  sourceDocument: "",
-  paymentMethod: "",
-  status: "",
-  reason: "",
+const EMPTY_FILTERS: CompactFilters = {
   fromYmd: "",
   toYmd: "",
-  amountMin: "",
-  amountMax: "",
+  customerCode: "",
+  orderNumber: "",
+  sourceKind: "",
+  amountKind: "",
+  paymentMethod: "",
 };
 
-const REASON_OPTIONS: Array<{ value: PaymentAdjustmentReason; label: string }> = [
-  { value: "PAYMENT_SURPLUS", label: "הפרש תשלום" },
-  { value: "METHOD_DEVIATION", label: "חריגת אמצעי תשלום" },
-  { value: "BANK_FEE", label: "עמלת בנק" },
-  { value: "FX_DIFF", label: "הפרש שער" },
-  { value: "ROUNDING", label: "עיגול" },
-  { value: "MANUAL_ADJUST", label: "התאמה ידנית" },
+const SOURCE_OPTIONS: Array<{ value: PaymentFeeSourceKind; label: string }> = [
+  { value: "PAYMENT_INTAKE", label: "קליטת תשלום" },
+  { value: "PAYMENT_SURPLUS", label: "תשלום יתר" },
+  { value: "BALANCE_RESET", label: "איפוס יתרה" },
+  { value: "MANUAL", label: "הזנה ידנית" },
+  { value: "CORRECTION", label: "תיקון" },
   { value: "OTHER", label: "אחר" },
 ];
-
-function fmtUsd(n: string): string {
-  const v = Number(n);
-  if (!Number.isFinite(v)) return `$${n}`;
-  return `$${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
 
 function formatDateDisplay(ymd: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd.trim());
@@ -61,12 +56,16 @@ function formatDateDisplay(ymd: string): string {
   return `${m[3]}/${m[2]}/${m[1]}`;
 }
 
+function sourceBadgeClass(kind: PaymentFeeSourceKind): string {
+  return `adm-payment-fee-badge adm-payment-fee-badge--${kind.toLowerCase()}`;
+}
+
 export function PaymentFeesSourceTableClient({ initialSearch = "" }: { initialSearch?: string }) {
+  const { openWindow } = useAdminWindows();
   const { options: paymentMethodFilterOptions } = usePaymentMethodCatalog();
   const [searchInput, setSearchInput] = useState(initialSearch);
   const [debouncedSearch, setDebouncedSearch] = useState(initialSearch);
-  const [filters, setFilters] = useState<AdvancedFilters>(EMPTY_FILTERS);
-  const [filterOpen, setFilterOpen] = useState(true);
+  const [filters, setFilters] = useState<CompactFilters>(EMPTY_FILTERS);
   const [page, setPage] = useState(1);
   const [sortKey, setSortKey] = useState("date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -74,6 +73,9 @@ export function PaymentFeesSourceTableClient({ initialSearch = "" }: { initialSe
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [exportBusy, setExportBusy] = useState<"pdf" | "excel" | "csv" | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailBusy, setDetailBusy] = useState(false);
+  const [detail, setDetail] = useState<PaymentFeeDetail | null>(null);
   const fetchGen = useRef(0);
 
   useEffect(() => {
@@ -89,15 +91,13 @@ export function PaymentFeesSourceTableClient({ initialSearch = "" }: { initialSe
       sortDir,
       search: debouncedSearch,
       filters: {
-        customerCode: filters.customerCode || undefined,
-        sourceDocument: filters.sourceDocument || undefined,
-        paymentMethod: filters.paymentMethod || undefined,
-        status: filters.status || undefined,
-        reason: filters.reason || undefined,
         fromYmd: filters.fromYmd || undefined,
         toYmd: filters.toYmd || undefined,
-        amountMin: filters.amountMin || undefined,
-        amountMax: filters.amountMax || undefined,
+        customerCode: filters.customerCode || undefined,
+        orderNumber: filters.orderNumber || undefined,
+        sourceKind: filters.sourceKind || undefined,
+        amountKind: filters.amountKind || undefined,
+        paymentMethod: filters.paymentMethod || undefined,
       },
     }),
     [debouncedSearch, filters, sortDir, sortKey],
@@ -143,196 +143,244 @@ export function PaymentFeesSourceTableClient({ initialSearch = "" }: { initialSe
     }
   }
 
+  const openOrder = useCallback(
+    (orderId: string) => {
+      openWindow({ type: "orderCapture", props: { mode: "edit", orderId } });
+    },
+    [openWindow],
+  );
+
+  const openPayment = useCallback(
+    (paymentId: string) => {
+      openWindow({ type: "paymentsUpdated", props: { paymentId } });
+    },
+    [openWindow],
+  );
+
+  async function showDetail(rowId: string) {
+    setDetailBusy(true);
+    setDetailOpen(true);
+    const res = await getPaymentFeeDetailAction(rowId);
+    setDetailBusy(false);
+    if (!res.ok) {
+      setLoadError(res.error);
+      setDetailOpen(false);
+      return;
+    }
+    setDetail(res.detail);
+  }
+
   const rows = payload?.rows ?? [];
   const kpis = payload?.kpis;
 
   return (
-    <div className="adm-source-pro" dir="rtl">
-      <div className="adm-source-pro__toolbar">
-        <div className="adm-source-pro__search">
-          <Search size={16} aria-hidden />
-          <input
-            type="search"
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="חיפוש לפי מסמך, לקוח או קוד לקוח…"
-            aria-label="חיפוש עמלות"
-          />
+    <div className="adm-source-pro adm-payment-fees-source" dir="rtl">
+      {kpis ? (
+        <div className="adm-payments-source-kpi-row adm-payment-fees-kpi-row" aria-label="סיכום עמלות">
+          <div className="adm-payments-source-kpi-card">
+            <span className="adm-payments-source-kpi-lbl">
+              <TrendingUp size={16} strokeWidth={1.75} aria-hidden /> סה&quot;כ עמלות חיוביות
+            </span>
+            <strong dir="ltr" className="adm-payment-fee-amt--credit">
+              {formatSignedUsdDisplay(kpis.positiveTotalUsd)}
+            </strong>
+          </div>
+          <div className="adm-payments-source-kpi-card">
+            <span className="adm-payments-source-kpi-lbl">
+              <TrendingDown size={16} strokeWidth={1.75} aria-hidden /> סה&quot;כ קיזוזים / איפוסים
+            </span>
+            <strong dir="ltr" className="adm-payment-fee-amt--debit">
+              {formatSignedUsdDisplay(kpis.negativeTotalUsd)}
+            </strong>
+          </div>
+          <div className="adm-payments-source-kpi-card">
+            <span className="adm-payments-source-kpi-lbl">נטו עמלות</span>
+            <strong dir="ltr">{formatSignedUsdDisplay(kpis.netTotalUsd)}</strong>
+          </div>
+          <div className="adm-payments-source-kpi-card">
+            <span className="adm-payments-source-kpi-lbl">
+              <Hash size={16} strokeWidth={1.75} aria-hidden /> מספר פעולות
+            </span>
+            <strong>{kpis.operationCount.toLocaleString("he-IL")}</strong>
+          </div>
         </div>
-        <div className="adm-source-pro__export">
-          <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" disabled={!!exportBusy} onClick={() => void runExport("excel")}>
-            <FileSpreadsheet size={14} aria-hidden /> {exportBusy === "excel" ? "…" : "Excel"}
-          </button>
-          <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" disabled={!!exportBusy} onClick={() => void runExport("csv")}>
-            CSV
-          </button>
-          <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" disabled={!!exportBusy} onClick={() => void runExport("pdf")}>
-            <FileText size={14} aria-hidden /> {exportBusy === "pdf" ? "…" : "PDF"}
-          </button>
-          <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" onClick={() => setFilterOpen((v) => !v)}>
-            {filterOpen ? "הסתר סינון" : "סינון"}
-          </button>
-        </div>
+      ) : null}
+
+      <div className="adm-source-pro-toolbar adm-source-pro-toolbar--sticky adm-payment-fees-toolbar">
+        <input
+          type="search"
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          placeholder="חיפוש חופשי: לקוח, הזמנה, תשלום, הערות…"
+          aria-label="חיפוש עמלות"
+          disabled={loading && !payload}
+        />
+        <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" disabled={!!exportBusy} onClick={() => void runExport("excel")}>
+          <FileSpreadsheet size={14} aria-hidden /> Excel
+        </button>
+        <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" disabled={!!exportBusy} onClick={() => void runExport("csv")}>
+          CSV
+        </button>
+        <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" disabled={!!exportBusy} onClick={() => void runExport("pdf")}>
+          <FileText size={14} aria-hidden /> PDF
+        </button>
       </div>
 
-      {kpis ? (
-        <div className="adm-source-pro__kpi-row" aria-label="סיכום עמלות">
-          <div className="adm-source-pro__kpi">
-            <span>פתוח</span>
-            <strong>{kpis.openCount}</strong>
-          </div>
-          <div className="adm-source-pro__kpi">
-            <span>סכום פתוח</span>
-            <strong dir="ltr">{fmtUsd(kpis.openAmountUsd)}</strong>
-          </div>
-          <div className="adm-source-pro__kpi">
-            <span>נסגר</span>
-            <strong>{kpis.closedCount}</strong>
-          </div>
-          <div className="adm-source-pro__kpi">
-            <span>בוטל</span>
-            <strong>{kpis.cancelledCount}</strong>
-          </div>
-        </div>
-      ) : null}
-
-      {filterOpen ? (
-        <div className="adm-source-pro__filters">
-          <label>
-            קוד לקוח
-            <input value={filters.customerCode} onChange={(e) => setFilters((f) => ({ ...f, customerCode: e.target.value }))} />
-          </label>
-          <label>
-            מסמך / קליטה
-            <input value={filters.sourceDocument} onChange={(e) => setFilters((f) => ({ ...f, sourceDocument: e.target.value }))} />
-          </label>
-          <label>
-            אמצעי תשלום
-            <select value={filters.paymentMethod} onChange={(e) => setFilters((f) => ({ ...f, paymentMethod: e.target.value }))}>
-              <option value="">הכל</option>
-              {paymentMethodFilterOptions.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            סטטוס
-            <select
-              value={filters.status}
-              onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value as AdvancedFilters["status"] }))}
-            >
-              <option value="">הכל</option>
-              <option value="OPEN">פתוח</option>
-              <option value="CLOSED">נסגר</option>
-              <option value="CANCELLED">בוטל</option>
-            </select>
-          </label>
-          <label>
-            סיבה
-            <select
-              value={filters.reason}
-              onChange={(e) => setFilters((f) => ({ ...f, reason: e.target.value as AdvancedFilters["reason"] }))}
-            >
-              <option value="">הכל</option>
-              {REASON_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            מתאריך
-            <input type="date" value={filters.fromYmd} onChange={(e) => setFilters((f) => ({ ...f, fromYmd: e.target.value }))} />
-          </label>
-          <label>
-            עד תאריך
-            <input type="date" value={filters.toYmd} onChange={(e) => setFilters((f) => ({ ...f, toYmd: e.target.value }))} />
-          </label>
-          <label>
-            סכום מ־
-            <input value={filters.amountMin} onChange={(e) => setFilters((f) => ({ ...f, amountMin: e.target.value }))} inputMode="decimal" />
-          </label>
-          <label>
-            סכום עד
-            <input value={filters.amountMax} onChange={(e) => setFilters((f) => ({ ...f, amountMax: e.target.value }))} inputMode="decimal" />
-          </label>
-          <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" onClick={() => setFilters(EMPTY_FILTERS)}>
-            נקה
-          </button>
-        </div>
-      ) : null}
+      <div className="adm-payment-fees-compact-filters" aria-label="סינון עמלות">
+        <label>
+          <span>תאריך מ</span>
+          <input type="date" value={filters.fromYmd} onChange={(e) => setFilters((f) => ({ ...f, fromYmd: e.target.value }))} />
+        </label>
+        <label>
+          <span>עד</span>
+          <input type="date" value={filters.toYmd} onChange={(e) => setFilters((f) => ({ ...f, toYmd: e.target.value }))} />
+        </label>
+        <label>
+          <span>לקוח</span>
+          <input value={filters.customerCode} placeholder="קוד" onChange={(e) => setFilters((f) => ({ ...f, customerCode: e.target.value }))} />
+        </label>
+        <label>
+          <span>הזמנה</span>
+          <input value={filters.orderNumber} placeholder="#" onChange={(e) => setFilters((f) => ({ ...f, orderNumber: e.target.value }))} />
+        </label>
+        <label>
+          <span>מקור</span>
+          <select value={filters.sourceKind} onChange={(e) => setFilters((f) => ({ ...f, sourceKind: e.target.value as CompactFilters["sourceKind"] }))}>
+            <option value="">הכל</option>
+            {SOURCE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>סוג</span>
+          <select value={filters.amountKind} onChange={(e) => setFilters((f) => ({ ...f, amountKind: e.target.value as CompactFilters["amountKind"] }))}>
+            <option value="">הכל</option>
+            <option value="CREDIT">חיובי</option>
+            <option value="DEBIT">שלילי</option>
+          </select>
+        </label>
+        <label>
+          <span>אמצעי</span>
+          <select value={filters.paymentMethod} onChange={(e) => setFilters((f) => ({ ...f, paymentMethod: e.target.value }))}>
+            <option value="">הכל</option>
+            {paymentMethodFilterOptions.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" onClick={() => setFilters(EMPTY_FILTERS)}>
+          <Search size={14} aria-hidden /> נקה
+        </button>
+      </div>
 
       {loading && !payload ? (
-        <TableSkeleton columnCount={9} rowCount={8} />
+        <TableSkeleton columnCount={10} rowCount={8} />
       ) : loadError ? (
         <TableError message={loadError} />
       ) : rows.length === 0 ? (
         <TableEmpty message="אין רשומות עמלות / הפרשי התאמה" />
       ) : (
-        <div className="adm-source-pro__table-wrap">
-          <table className="adm-source-pro__table">
+        <div className="adm-payments-source-table-wrap adm-payment-fees-table-wrap">
+          <table className="adm-payments-source-table adm-payment-fees-table">
             <thead>
               <tr>
                 <th>
-                  <button type="button" onClick={() => toggleSort("date")}>
+                  <button type="button" className="adm-source-sort-btn" onClick={() => toggleSort("date")}>
                     תאריך
                   </button>
                 </th>
                 <th>
-                  <button type="button" onClick={() => toggleSort("customer")}>
+                  <button type="button" className="adm-source-sort-btn" onClick={() => toggleSort("customer")}>
                     לקוח
                   </button>
                 </th>
-                <th>מסמך מקור</th>
-                <th>אמצעי תשלום</th>
                 <th>
-                  <button type="button" onClick={() => toggleSort("amount")}>
+                  <button type="button" className="adm-source-sort-btn" onClick={() => toggleSort("order")}>
+                    הזמנה
+                  </button>
+                </th>
+                <th>
+                  <button type="button" className="adm-source-sort-btn" onClick={() => toggleSort("source")}>
+                    מקור
+                  </button>
+                </th>
+                <th>סיבת העמלה</th>
+                <th>
+                  <button type="button" className="adm-source-sort-btn" onClick={() => toggleSort("amount")}>
                     סכום
                   </button>
                 </th>
-                <th>
-                  <button type="button" onClick={() => toggleSort("reason")}>
-                    סיבה
-                  </button>
-                </th>
-                <th>
-                  <button type="button" onClick={() => toggleSort("status")}>
-                    סטטוס
-                  </button>
-                </th>
-                <th>משתמש</th>
-                <th>תאריך סגירה</th>
+                <th>סוג</th>
+                <th>אמצעי תשלום</th>
+                <th>נוצר ע&quot;י</th>
+                <th>פעולות</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.id}>
+                <tr
+                  key={r.id}
+                  className="adm-source-pro-row adm-payment-fees-row"
+                  onClick={() => void showDetail(r.id)}
+                >
                   <td>{formatDateDisplay(r.createdAtYmd)}</td>
-                  <td>
-                    <div className="adm-source-pro__cell-stack">
-                      <strong>{r.customerName}</strong>
-                      <span className="cc-muted">{r.customerCode}</span>
-                    </div>
+                  <td className="adm-payment-fees-cell-customer">
+                    <strong>{r.customerName}</strong>
+                    <span className="cc-muted">{r.customerCode}</span>
                   </td>
                   <td>
-                    <div className="adm-source-pro__cell-stack">
-                      <span>{r.sourceDocumentCode}</span>
-                      <span className="cc-muted">{r.paymentCaptureCode}</span>
-                    </div>
+                    {r.orderId ? (
+                      <button
+                        type="button"
+                        className="adm-source-primary-link"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openOrder(r.orderId!);
+                        }}
+                      >
+                        #{r.orderNumber}
+                      </button>
+                    ) : (
+                      r.orderNumber
+                    )}
                   </td>
-                  <td>{r.paymentMethodLabel}</td>
-                  <td dir="ltr">{fmtUsd(r.amountUsd)}</td>
-                  <td>{r.reasonLabel}</td>
                   <td>
-                    <span className={`adm-badge adm-badge--${r.status === "OPEN" ? "warn" : r.status === "CLOSED" ? "ok" : "muted"}`}>
-                      {r.statusLabel}
+                    <span className={sourceBadgeClass(r.sourceKind)}>{r.sourceLabel}</span>
+                  </td>
+                  <td className="adm-payment-fees-cell-reason">{r.reasonLabel}</td>
+                  <td
+                    dir="ltr"
+                    className={r.amountKind === "DEBIT" ? "adm-payment-fee-amt--debit" : "adm-payment-fee-amt--credit"}
+                  >
+                    {r.amountDisplay}
+                  </td>
+                  <td>
+                    <span
+                      className={`adm-payment-fee-badge adm-payment-fee-badge--${r.amountKind === "DEBIT" ? "debit" : "credit"}`}
+                    >
+                      {r.typeLabel}
                     </span>
                   </td>
+                  <td>{r.paymentMethodLabel}</td>
                   <td>{r.createdByName}</td>
-                  <td>{r.closedAtYmd === "—" ? "—" : formatDateDisplay(r.closedAtYmd)}</td>
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <PaymentFeeRowActionsMenu
+                      row={r}
+                      onShowDetail={() => void showDetail(r.id)}
+                      onOpenOrder={openOrder}
+                      onOpenPayment={openPayment}
+                      onCancel={
+                        r.isAutomatic
+                          ? () => setLoadError("עמלה אוטומטית מתשלום — יש לבצע Reversal דרך ביטול/תיקון התשלום")
+                          : undefined
+                      }
+                    />
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -341,7 +389,7 @@ export function PaymentFeesSourceTableClient({ initialSearch = "" }: { initialSe
       )}
 
       {payload && payload.totalPages > 1 ? (
-        <div className="adm-source-pro__pager">
+        <div className="adm-source-pro-pager">
           <button type="button" className="adm-btn adm-btn--ghost adm-btn--sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
             הקודם
           </button>
@@ -358,6 +406,18 @@ export function PaymentFeesSourceTableClient({ initialSearch = "" }: { initialSe
           </button>
         </div>
       ) : null}
+
+      <PaymentFeeDetailModal
+        open={detailOpen}
+        detail={detail}
+        busy={detailBusy}
+        onClose={() => {
+          setDetailOpen(false);
+          setDetail(null);
+        }}
+        onOpenOrder={openOrder}
+        onOpenPayment={openPayment}
+      />
     </div>
   );
 }

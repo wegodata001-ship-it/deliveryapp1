@@ -16,7 +16,7 @@ type Props = {
 };
 
 export function RemainingToPayCard({ display }: Props) {
-  const { state, title } = display;
+  const { state, title, statusHint } = display;
   const usdLine = formatPaymentBalanceUsdLine(display);
   const ilsLine = formatPaymentBalanceIlsLine(display);
 
@@ -26,13 +26,13 @@ export function RemainingToPayCard({ display }: Props) {
         "payment-modal-live-kpi",
         "payment-remaining-to-pay",
         state === "debt" ? "payment-remaining-to-pay--due" : "",
-        state === "cleared" ? "payment-remaining-to-pay--ok" : "",
-        state === "surplus" ? "payment-modal-live-kpi--order-summary--surplus" : "",
+        state === "cleared" || state === "surplus" ? "payment-remaining-to-pay--ok" : "",
+        state === "surplus" ? "payment-remaining-to-pay--surplus" : "",
       ]
         .filter(Boolean)
         .join(" ")}
       role="status"
-      aria-label={title}
+      aria-label={statusHint ? `${title} — ${statusHint}` : title}
     >
       <div className="payment-modal-live-kpi__lbl">{title}</div>
       <AnimatedMoneyValue
@@ -40,9 +40,7 @@ export function RemainingToPayCard({ display }: Props) {
           "payment-modal-live-kpi__hero-v",
           state === "debt"
             ? "payment-modal-live-kpi__hero-v--due"
-            : state === "cleared"
-              ? "payment-modal-live-kpi__hero-v--ok"
-              : "payment-modal-live-kpi__hero-v--surplus",
+            : "payment-modal-live-kpi__hero-v--ok",
         ].join(" ")}
         dir="ltr"
         value={usdLine}
@@ -53,6 +51,9 @@ export function RemainingToPayCard({ display }: Props) {
           dir="ltr"
           value={ilsLine}
         />
+        {statusHint ? (
+          <span className="payment-modal-live-kpi__status-hint">{statusHint}</span>
+        ) : null}
       </div>
     </div>
   );

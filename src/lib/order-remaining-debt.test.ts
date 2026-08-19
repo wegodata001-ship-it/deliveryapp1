@@ -156,7 +156,8 @@ describe("computePaymentBalanceUsd — תצוגת יתרה בקליטה", () => 
   it("$100 debt, $100 paid → cleared", () => {
     const d = derivePaymentBalanceDisplay(computePaymentBalanceUsd(100, 100), rate);
     assert.equal(d.state, "cleared");
-    assert.equal(d.title, "שולם במלואו");
+    assert.equal(d.title, "נשאר לתשלום");
+    assert.equal(d.statusHint, "שולם במלואו");
     assert.equal(d.displayUsd, 0);
     assert.equal(d.displayIls, 0);
   });
@@ -164,7 +165,8 @@ describe("computePaymentBalanceUsd — תצוגת יתרה בקליטה", () => 
   it("$100 debt, $110 paid → surplus +$10 +₪30", () => {
     const d = derivePaymentBalanceDisplay(computePaymentBalanceUsd(100, 110), rate);
     assert.equal(d.state, "surplus");
-    assert.equal(d.title, "יתרה / תשלום עודף");
+    assert.equal(d.title, "נשאר לתשלום");
+    assert.equal(d.statusHint, "תשלום יתר");
     assert.equal(d.displayUsd, 10);
     assert.equal(d.displayIls, 30);
     assert.equal(formatPaymentBalanceUsdLine(d), "+$10.00");

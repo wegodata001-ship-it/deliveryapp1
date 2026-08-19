@@ -147,6 +147,8 @@ export type PaymentBalanceState = "debt" | "cleared" | "surplus";
 export type PaymentBalanceDisplay = {
   state: PaymentBalanceState;
   title: string;
+  /** טקסט משני — למשל «תשלום יתר» / «שולם במלואו» */
+  statusHint?: string;
   /** חתום: חיובי=חוב, 0=נסגר, שלילי=עודף */
   balanceUsdSigned: number;
   displayUsd: number;
@@ -177,7 +179,8 @@ export function derivePaymentBalanceDisplay(
   if (Math.abs(signed) <= eps) {
     return {
       state: "cleared",
-      title: "שולם במלואו",
+      title: "נשאר לתשלום",
+      statusHint: "שולם במלואו",
       balanceUsdSigned: 0,
       displayUsd: 0,
       displayIls: 0,
@@ -196,7 +199,8 @@ export function derivePaymentBalanceDisplay(
   const surplus = roundOrderMoney2(Math.abs(signed));
   return {
     state: "surplus",
-    title: "יתרה / תשלום עודף",
+    title: "נשאר לתשלום",
+    statusHint: "תשלום יתר",
     balanceUsdSigned: roundOrderMoney2(-surplus),
     displayUsd: surplus,
     displayIls: exchangeRate > 0 ? roundOrderMoney2(surplus * exchangeRate) : 0,

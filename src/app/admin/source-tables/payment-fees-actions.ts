@@ -2,6 +2,7 @@
 
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import {
+  getPaymentFeeDetail,
   getPaymentFeesSourceKpis,
   listPaymentFeesSourceForExport,
   listPaymentFeesSourceTable,
@@ -37,6 +38,22 @@ export async function listPaymentFeesSourceTableAction(
   return { ...list, kpis };
 }
 
+export async function getPaymentFeeDetailAction(
+  id: string,
+): Promise<
+  | { ok: true; detail: NonNullable<Awaited<ReturnType<typeof getPaymentFeeDetail>>> }
+  | { ok: false; error: string }
+> {
+  try {
+    await ensureAccess();
+    const detail = await getPaymentFeeDetail(id.trim());
+    if (!detail) return { ok: false, error: "עמלה לא נמצאה" };
+    return { ok: true, detail };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "טעינה נכשלה" };
+  }
+}
+
 export type PaymentFeesExportKind = "excel" | "pdf" | "csv";
 
 export async function exportPaymentFeesSourceAction(
@@ -58,27 +75,27 @@ export async function exportPaymentFeesSourceAction(
       "תאריך",
       "לקוח",
       "קוד לקוח",
-      "מסמך מקור",
-      "קליטת תשלום",
+      "הזמנה",
+      "מקור",
+      "סיבת העמלה",
+      "סכום",
+      "סוג",
       "אמצעי תשלום",
-      "סכום ($)",
-      "סיבת יצירה",
-      "סטטוס",
-      "משתמש יוצר",
-      "תאריך סגירה",
+      "נוצר ע\"י",
+      "קליטת תשלום",
     ];
     const data = rows.map((r) => [
       r.createdAtYmd,
       r.customerName,
       r.customerCode,
-      r.sourceDocumentCode,
-      r.paymentCaptureCode,
-      r.paymentMethodLabel,
-      r.amountUsd,
+      r.orderNumber,
+      r.sourceLabel,
       r.reasonLabel,
-      r.statusLabel,
+      r.amountDisplay,
+      r.typeLabel,
+      r.paymentMethodLabel,
       r.createdByName,
-      r.closedAtYmd,
+      r.paymentCode,
     ]);
     const stamp = new Date().toISOString().slice(0, 10);
 
