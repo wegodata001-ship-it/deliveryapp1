@@ -19,10 +19,13 @@ export async function saveFxPurchaseAction(input: {
   remainderBankAccountId?: string | null;
   note?: string | null;
 }): Promise<{ ok: boolean; error?: string; auditId?: string }> {
+  const authStart = Date.now();
   const me = await requireAuth();
+  const authMs = Date.now() - authStart;
   if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS)) {
     return { ok: false, error: "אין הרשאה" };
   }
+  console.info("[fx-purchase-perf:action]", JSON.stringify({ authMs }));
   return persistFxPurchase({
     ...input,
     track: input.track === "IL" ? "IL" : "PS",

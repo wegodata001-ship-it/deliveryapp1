@@ -1,19 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Coins, X } from "lucide-react";
 import { fmtDailyMoney } from "@/lib/cash-control-daily";
-import { previewFxPurchaseAction } from "@/app/admin/cash-flow/preview-fx-purchase-action";
 import { previewFxIntakeAllocationAction } from "@/app/admin/cash-flow/preview-fx-intake-allocation-action";
 import { saveFxPurchaseAction } from "@/app/admin/cash-flow/save-fx-purchase-action";
 import { updateFxPurchaseAction } from "@/app/admin/cash-flow/update-fx-purchase-action";
 import { getFxPurchaseContextAction } from "@/app/admin/cash-flow/get-fx-purchase-balance-action";
 import { getFxRemainderBankTargetsAction } from "@/app/admin/cash-flow/get-fx-remainder-bank-targets-action";
 import type { FxPurchaseRecord, FxPurchaseTrack } from "@/app/admin/cash-flow/flow-types";
+import { validateFxRemainderSplit } from "@/lib/flow-control/flow-calculation-service";
 import { fcNum } from "@/components/admin/flow-control/shared";
 import {
   computeFxPurchaseFormPreview,
+  FX_PURCHASE_AMOUNT_REQUIRED_ERROR,
   FX_PURCHASE_OVER_LIMIT_ERROR,
+  validateFxPurchaseFormInput,
 } from "@/components/admin/manager-count/manager-count-utils";
 import {
   pickDefaultBankTarget,
@@ -79,11 +81,12 @@ export function ManagerCountFxPurchaseFlow({
   const [busy, setBusy] = useState(false);
   const [availableIls, setAvailableIls] = useState<number | null>(null);
   const [contextLoading, setContextLoading] = useState(false);
-  const [validationError, setValidationError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [bankTargets, setBankTargets] = useState<FxRemainderBankTarget[]>([]);
   const [bankTargetsLoading, setBankTargetsLoading] = useState(false);
   const [selectedBankKey, setSelectedBankKey] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveInFlightRef = useRef(false);
 
   const reset = useCallback(() => {
     setIlsAmount("");
@@ -95,7 +98,7 @@ export function ManagerCountFxPurchaseFlow({
     setAllocation(null);
     setBusy(false);
     setAvailableIls(null);
-    setValidationError(null);
+    setSubmitError(null);
     setBankTargets([]);
     setSelectedBankKey(null);
   }, []);
@@ -143,6 +146,25 @@ export function ManagerCountFxPurchaseFlow({
   const isNegativePurchase = trimmedIls !== "" && ilsNum < -0.02;
   const hasRemainder = !isZeroPurchase && ilsNum > 0.005 && preview.remainingIlsAfter > 0.02;
 
+  const clientValidationError = useMemo(
+    () =>
+      validateFxPurchaseFormInput({
+        trimmedIls,
+        ilsNum,
+        rateNum,
+        availNum,
+        isZeroPurchase,
+        isNegativePurchase,
+      }),
+    [trimmedIls, ilsNum, rateNum, availNum, isZeroPurchase, isNegativePurchase],
+  );
+
+  const displayError = submitError ?? clientValidationError;
+
+  const clearSubmitError = useCallback(() => {
+    setSubmitError(null);
+  }, []);
+
   useEffect(() => {
     if (!open || !hasRemainder) {
       setBankTargets([]);
@@ -172,16 +194,6 @@ export function ManagerCountFxPurchaseFlow({
           paymentCount: 0,
         }
       : null);
-
-  useEffect(() => {
-    if (isNegativePurchase) {
-      setValidationError("סכום רכישה לא יכול להיות שלילי");
-    } else if (ilsNum > availNum + 0.02) {
-      setValidationError(FX_PURCHASE_OVER_LIMIT_ERROR);
-    } else {
-      setValidationError(null);
-    }
-  }, [ilsNum, availNum, isNegativePurchase]);
 
   useEffect(() => {
     if (remainderMode === "cash") {
@@ -222,15 +234,41 @@ export function ManagerCountFxPurchaseFlow({
   };
 
   const handleSave = async () => {
+    if (saveInFlightRef.current || busy || saving) return;
+
+    const validationStart =
+      typeof performance !== "undefined" ? performance.now() : Date.now();
+
     if (trimmedIls === "") {
-      setValidationError("יש להזין סכום ₪ (0 = ללא רכישת מט״ח)");
+      setSubmitError(FX_PURCHASE_AMOUNT_REQUIRED_ERROR);
       return;
     }
-    if (isNegativePurchase) {
-      setValidationError("סכום רכישה לא יכול להיות שלילי");
+
+    const liveValidation = validateFxPurchaseFormInput({
+      trimmedIls,
+      ilsNum,
+      rateNum,
+      availNum,
+      isZeroPurchase,
+      isNegativePurchase,
+    });
+    if (liveValidation) {
+      setSubmitError(liveValidation);
       return;
     }
+
+    if (typeof performance !== "undefined") {
+      console.info(
+        "[fx-purchase-perf:client]",
+        JSON.stringify({
+          clientValidationMs: Math.round(performance.now() - validationStart),
+        }),
+      );
+    }
+
+    setSubmitError(null);
     if (isZeroPurchase) {
+      saveInFlightRef.current = true;
       setBusy(true);
       try {
         if (editPurchase) {
@@ -244,7 +282,7 @@ export function ManagerCountFxPurchaseFlow({
             remainderBankIls: 0,
           });
           if (!res.ok) {
-            setValidationError(res.error ?? "עדכון נכשל");
+            setSubmitError(res.error ?? "עדכון נכשל");
             return;
           }
         }
@@ -252,15 +290,8 @@ export function ManagerCountFxPurchaseFlow({
         handleClose();
       } finally {
         setBusy(false);
+        saveInFlightRef.current = false;
       }
-      return;
-    }
-    if (rateNum <= 0) {
-      setValidationError("יש להזין שער רכישה");
-      return;
-    }
-    if (ilsNum > availNum + 0.02) {
-      setValidationError(FX_PURCHASE_OVER_LIMIT_ERROR);
       return;
     }
 
@@ -279,30 +310,26 @@ export function ManagerCountFxPurchaseFlow({
 
     if (remainderBankIls > 0.02) {
       if (bankTargets.length === 0 && !editPurchase?.remainderBankKey) {
-        setValidationError("לא נמצאו קליטות בנק בשבוע — לא ניתן להעביר יתרה לבנק");
+        setSubmitError("לא נמצאו קליטות בנק בשבוע — לא ניתן להעביר יתרה לבנק");
         return;
       }
       if (!selectedBank?.bankKey) {
-        setValidationError("יש לבחור בנק יעד להעברת יתרה");
+        setSubmitError("יש לבחור בנק יעד להעברת יתרה");
         return;
       }
     }
 
-    const splitPreview = await previewFxPurchaseAction({
-      week,
-      track,
-      ilsAmount: ilsNum,
-      rate: rateNum,
-      remainderCashIls,
-      remainderBankIls,
-    });
-    if (!splitPreview?.splitValid && preview.remainingIlsAfter > 0.02) {
-      setValidationError(
+    if (
+      preview.remainingIlsAfter > 0.02 &&
+      !validateFxRemainderSplit(remainderCashIls, remainderBankIls, preview.remainingIlsAfter)
+    ) {
+      setSubmitError(
         `סכום היתרה חייב להשוות ל-${preview.remainingIlsAfter.toLocaleString("he-IL")} ₪`,
       );
       return;
     }
 
+    saveInFlightRef.current = true;
     setBusy(true);
     try {
       const payload = {
@@ -323,13 +350,14 @@ export function ManagerCountFxPurchaseFlow({
         ? await updateFxPurchaseAction({ ...payload, purchaseId: editPurchase.id })
         : await saveFxPurchaseAction(payload);
       if (!res.ok) {
-        setValidationError(res.error ?? "שמירה נכשלה");
+        setSubmitError(res.error ?? "שמירה נכשלה");
         return;
       }
       onSaved();
       handleClose();
     } finally {
       setBusy(false);
+      saveInFlightRef.current = false;
     }
   };
 
@@ -366,7 +394,10 @@ export function ManagerCountFxPurchaseFlow({
                   className="fc-input mc-fx-row__input"
                   value={ilsAmount}
                   disabled={saving || busy || contextLoading}
-                  onChange={(e) => setIlsAmount(e.target.value)}
+                  onChange={(e) => {
+                    setIlsAmount(e.target.value);
+                    clearSubmitError();
+                  }}
                   autoFocus
                 />
               }
@@ -381,7 +412,10 @@ export function ManagerCountFxPurchaseFlow({
                   value={rate}
                   disabled={saving || busy || isZeroPurchase}
                   placeholder={isZeroPurchase ? "—" : undefined}
-                  onChange={(e) => setRate(e.target.value)}
+                  onChange={(e) => {
+                    setRate(e.target.value);
+                    clearSubmitError();
+                  }}
                 />
               }
             />
@@ -415,7 +449,7 @@ export function ManagerCountFxPurchaseFlow({
             )}
           </section>
 
-          {validationError ? <p className="fc-error">{validationError}</p> : null}
+          {displayError ? <p className="fc-error">{displayError}</p> : null}
 
           {hasRemainder ? (
             <section className="mc-fx-card mc-fx-card--remainder">
@@ -519,7 +553,10 @@ export function ManagerCountFxPurchaseFlow({
                       inputMode="decimal"
                       className="fc-input"
                       value={remainderCash}
-                      onChange={(e) => setRemainderCash(e.target.value)}
+                      onChange={(e) => {
+                        setRemainderCash(e.target.value);
+                        clearSubmitError();
+                      }}
                     />
                   </label>
                   <label className="fc-field">
@@ -529,7 +566,10 @@ export function ManagerCountFxPurchaseFlow({
                       inputMode="decimal"
                       className="fc-input"
                       value={remainderBank}
-                      onChange={(e) => setRemainderBank(e.target.value)}
+                      onChange={(e) => {
+                        setRemainderBank(e.target.value);
+                        clearSubmitError();
+                      }}
                     />
                   </label>
                 </div>
@@ -592,10 +632,16 @@ export function ManagerCountFxPurchaseFlow({
             <button
               type="button"
               className="fc-btn fc-btn--primary"
-              disabled={busy || saving || contextLoading || !!validationError}
+              disabled={busy || saving || contextLoading || !!clientValidationError}
               onClick={() => void handleSave()}
             >
-              {isEdit ? "שמירת עריכה" : isZeroPurchase ? "המשך ללא רכישה" : "אישור ושמירה"}
+              {busy
+                ? "שומר רכישת מט״ח…"
+                : isEdit
+                  ? "שמירת עריכה"
+                  : isZeroPurchase
+                    ? "המשך ללא רכישה"
+                    : "אישור ושמירה"}
             </button>
           </div>
         </div>

@@ -13,6 +13,7 @@ import {
   type ShipmentCashExpenseCategory,
 } from "@/app/admin/shipments/cash-control/types";
 import { PAYMENT_METHODS } from "@/app/admin/shipments/types";
+import { ShipmentConfirmModal } from "@/components/admin/shipments/ShipmentConfirmModal";
 
 function fmtIls(n: number) {
   return (
@@ -218,6 +219,8 @@ export function ShipmentExpensesListModal({
   const [formOpen, setFormOpen] = useState<"create" | ShipmentRecordExpenseDto | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [deleteConfirmError, setDeleteConfirmError] = useState<string | null>(null);
 
   const total = items.reduce((s, e) => s + e.amountIls, 0);
 
@@ -226,17 +229,19 @@ export function ShipmentExpensesListModal({
     onChanged(next);
   }
 
-  async function handleDelete(id: string) {
-    if (!window.confirm("למחוק הוצאה זו?")) return;
-    setBusyId(id);
+  async function confirmDelete() {
+    if (!deleteConfirmId) return;
+    setBusyId(deleteConfirmId);
+    setDeleteConfirmError(null);
     setError(null);
-    const res = await deleteShipmentRecordExpenseAction(id);
+    const res = await deleteShipmentRecordExpenseAction(deleteConfirmId);
     setBusyId(null);
     if (!res.ok) {
-      setError(res.error);
+      setDeleteConfirmError(res.error);
       return;
     }
-    sync(items.filter((e) => e.id !== id));
+    sync(items.filter((e) => e.id !== deleteConfirmId));
+    setDeleteConfirmId(null);
   }
 
   return (
@@ -319,7 +324,10 @@ export function ShipmentExpensesListModal({
                             type="button"
                             className="shp-btn shp-btn--sm shp-btn--danger"
                             disabled={busyId === e.id}
-                            onClick={() => void handleDelete(e.id)}
+                            onClick={() => {
+                              setDeleteConfirmError(null);
+                              setDeleteConfirmId(e.id);
+                            }}
                             title="מחיקה"
                           >
                             <Trash2 size={12} />
@@ -355,6 +363,25 @@ export function ShipmentExpensesListModal({
           }}
         />
       )}
+
+      <ShipmentConfirmModal
+        open={deleteConfirmId != null}
+        title="מחיקת הוצאה"
+        icon="trash"
+        variant="danger"
+        message="האם למחוק הוצאה זו?"
+        confirmLabel="מחק הוצאה"
+        confirmBusyLabel="מוחק…"
+        busy={busyId === deleteConfirmId}
+        error={deleteConfirmError}
+        onCancel={() => {
+          if (busyId !== deleteConfirmId) {
+            setDeleteConfirmId(null);
+            setDeleteConfirmError(null);
+          }
+        }}
+        onConfirm={() => void confirmDelete()}
+      />
     </>
   );
 }

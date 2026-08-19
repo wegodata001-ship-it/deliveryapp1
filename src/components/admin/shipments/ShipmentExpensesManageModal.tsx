@@ -22,6 +22,7 @@ import {
   updateShipmentRecordExpenseAction,
 } from "@/app/admin/shipments/control/actions";
 import { PAYMENT_METHODS } from "@/app/admin/shipments/types";
+import { ShipmentConfirmModal } from "@/components/admin/shipments/ShipmentConfirmModal";
 
 const EXPENSE_PAYMENT_METHODS = PAYMENT_METHODS.filter((m) =>
   ["CASH", "BANK_TRANSFER", "CREDIT", "CHECK", "CREDIT_NOTE", "CODE_DEDUCTION"].includes(m.value),
@@ -155,6 +156,8 @@ export function ShipmentExpensesManageModal({
   const [formState, setFormState] = useState<ExpenseFormState | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [deleteConfirmRow, setDeleteConfirmRow] = useState<ShipmentExpenseManageRow | null>(null);
+  const [deleteConfirmError, setDeleteConfirmError] = useState<string | null>(null);
 
   useEffect(() => {
     setLocalRecords(records);
@@ -213,15 +216,17 @@ export function ShipmentExpensesManageModal({
     return localBatchExpenses.find((b) => b.batchId === batchId)?.expenses ?? [];
   }
 
-  async function handleDelete(row: ShipmentExpenseManageRow) {
-    if (!window.confirm("למחוק הוצאה זו?")) return;
+  async function confirmDelete() {
+    const row = deleteConfirmRow;
+    if (!row) return;
     setBusyId(row.id);
+    setDeleteConfirmError(null);
     setError(null);
     if (row.source === "batch") {
       const res = await deleteShipmentBatchExpenseAction(row.id);
       setBusyId(null);
       if (!res.ok) {
-        setError(res.error);
+        setDeleteConfirmError(res.error);
         return;
       }
       syncBatch(row.batchId, batchExpensesFor(row.batchId).filter((e) => e.id !== row.id));
@@ -229,12 +234,13 @@ export function ShipmentExpensesManageModal({
       const res = await deleteShipmentRecordExpenseAction(row.id);
       setBusyId(null);
       if (!res.ok) {
-        setError(res.error);
+        setDeleteConfirmError(res.error);
         return;
       }
       const rec = localRecords.find((r) => r.id === row.recordId);
       if (rec) syncRecord(row.recordId, rec.expenses.filter((e) => e.id !== row.id));
     }
+    setDeleteConfirmRow(null);
   }
 
   return (
@@ -324,7 +330,10 @@ export function ShipmentExpensesManageModal({
                               className="shp-btn shp-btn--sm shp-btn--danger"
                               disabled={busyId === row.id}
                               title="מחיקה"
-                              onClick={() => void handleDelete(row)}
+                              onClick={() => {
+                                setDeleteConfirmError(null);
+                                setDeleteConfirmRow(row);
+                              }}
                             >
                               <Trash2 size={12} />
                             </button>
@@ -369,6 +378,25 @@ export function ShipmentExpensesManageModal({
           onError={setError}
         />
       )}
+
+      <ShipmentConfirmModal
+        open={deleteConfirmRow != null}
+        title="מחיקת הוצאה"
+        icon="trash"
+        variant="danger"
+        message="האם למחוק הוצאה זו?"
+        confirmLabel="מחק הוצאה"
+        confirmBusyLabel="מוחק…"
+        busy={busyId === deleteConfirmRow?.id}
+        error={deleteConfirmError}
+        onCancel={() => {
+          if (busyId !== deleteConfirmRow?.id) {
+            setDeleteConfirmRow(null);
+            setDeleteConfirmError(null);
+          }
+        }}
+        onConfirm={() => void confirmDelete()}
+      />
     </>
   );
 }

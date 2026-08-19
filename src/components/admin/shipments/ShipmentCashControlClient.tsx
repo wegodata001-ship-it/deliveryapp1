@@ -29,6 +29,7 @@ import {
   type ShipmentCashMethodLine,
 } from "@/app/admin/shipments/cash-control/types";
 import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
+import { ShipmentConfirmModal } from "@/components/admin/shipments/ShipmentConfirmModal";
 
 type Props = {
   initialData: ShipmentCashControlPayload;
@@ -86,6 +87,10 @@ export function ShipmentCashControlClient({
     useState<ShipmentCashExpenseCategory>("FUEL");
   const [expenseAmount, setExpenseAmount] = useState("");
   const [expenseNotes, setExpenseNotes] = useState("");
+  const [closeDayOpen, setCloseDayOpen] = useState(false);
+  const [closeDayError, setCloseDayError] = useState<string | null>(null);
+  const [deleteExpenseId, setDeleteExpenseId] = useState<string | null>(null);
+  const [deleteExpenseError, setDeleteExpenseError] = useState<string | null>(null);
 
   void viewerIsAdmin; // הרשאות כתיבה נאכפות בשרת
   const dayOpen = data.day?.status === "OPEN";
@@ -138,15 +143,16 @@ export function ShipmentCashControlClient({
     await refresh(dayDate);
   }
 
-  async function closeDay() {
-    if (!window.confirm("לסגור את יום העבודה?")) return;
+  async function confirmCloseDay() {
     setBusy(true);
+    setCloseDayError(null);
     const res = await closeShipmentCashDayAction(workCountry, dayDate);
     setBusy(false);
     if (!res.ok) {
-      setError(res.error);
+      setCloseDayError(res.error);
       return;
     }
+    setCloseDayOpen(false);
     setMsg("היום נסגר");
     await refresh();
   }
@@ -212,15 +218,17 @@ export function ShipmentCashControlClient({
     await refresh();
   }
 
-  async function removeExpense(id: string) {
-    if (!window.confirm("למחוק הוצאה?")) return;
+  async function confirmRemoveExpense() {
+    if (!deleteExpenseId) return;
     setBusy(true);
-    const res = await deleteShipmentCashExpenseAction(id);
+    setDeleteExpenseError(null);
+    const res = await deleteShipmentCashExpenseAction(deleteExpenseId);
     setBusy(false);
     if (!res.ok) {
-      setError(res.error);
+      setDeleteExpenseError(res.error);
       return;
     }
+    setDeleteExpenseId(null);
     await refresh();
   }
 
@@ -344,7 +352,10 @@ export function ShipmentCashControlClient({
               type="button"
               className="shp-btn shp-btn--secondary shp-btn--sm"
               disabled={busy}
-              onClick={() => void closeDay()}
+              onClick={() => {
+                setCloseDayError(null);
+                setCloseDayOpen(true);
+              }}
             >
               סגור יום
             </button>
@@ -484,7 +495,10 @@ export function ShipmentCashControlClient({
                       type="button"
                       className="shp-btn shp-btn--sm shp-btn--danger"
                       disabled={busy || dayClosed}
-                      onClick={() => void removeExpense(e.id)}
+                      onClick={() => {
+                        setDeleteExpenseError(null);
+                        setDeleteExpenseId(e.id);
+                      }}
                     >
                       <Trash2 size={12} />
                     </button>
@@ -600,6 +614,44 @@ export function ShipmentCashControlClient({
           </div>
         </div>
       )}
+
+      <ShipmentConfirmModal
+        open={closeDayOpen}
+        title="סגירת יום עבודה"
+        icon="lock"
+        message="האם לסגור את יום העבודה?"
+        infoRows={[{ label: "תאריך", value: dayDate }]}
+        confirmLabel="סגור יום"
+        confirmBusyLabel="סוגר…"
+        busy={busy}
+        error={closeDayError}
+        onCancel={() => {
+          if (!busy) {
+            setCloseDayOpen(false);
+            setCloseDayError(null);
+          }
+        }}
+        onConfirm={() => void confirmCloseDay()}
+      />
+
+      <ShipmentConfirmModal
+        open={deleteExpenseId != null}
+        title="מחיקת הוצאה"
+        icon="trash"
+        variant="danger"
+        message="האם למחוק הוצאה?"
+        confirmLabel="מחק הוצאה"
+        confirmBusyLabel="מוחק…"
+        busy={busy}
+        error={deleteExpenseError}
+        onCancel={() => {
+          if (!busy) {
+            setDeleteExpenseId(null);
+            setDeleteExpenseError(null);
+          }
+        }}
+        onConfirm={() => void confirmRemoveExpense()}
+      />
     </div>
   );
 }

@@ -5,6 +5,9 @@ import { X } from "lucide-react";
 import { AnimatedMoneyValue } from "@/components/ui/AnimatedMoneyValue";
 import { RemainingToPayCard } from "@/components/admin/RemainingToPayCard";
 import {
+  type PaymentBalanceDisplay,
+} from "@/lib/order-remaining-debt";
+import {
   LIVE_PAYMENT_KPI_CARDS,
   liveKpiBucket,
   type LivePaymentFormKpis,
@@ -25,10 +28,9 @@ type Props = {
   openDebtUsd?: number;
   onOpenDebtClick?: () => void;
   /**
-   * «נשאר לתשלום» — ערך מוכן ממקור האמת של המסך (סכום יתרות בטבלה).
-   * הכרטיס לא מחשב מחדש.
+   * כרטיס יתרה — derivePaymentBalanceDisplay ממקור האמת של המסך.
    */
-  remainingToPayUsd?: number | null;
+  paymentBalanceDisplay?: PaymentBalanceDisplay | null;
   /** Part 3 — שורות התשלום הנוכחיות, לצורך Drill-down */
   lines?: PaymentLine[];
   rate?: number;
@@ -102,14 +104,15 @@ export function PaymentLiveSummaryCards({
   kpis,
   openDebtUsd = 0,
   onOpenDebtClick,
-  remainingToPayUsd = null,
+  paymentBalanceDisplay = null,
   lines,
   rate = 0,
 }: Props) {
   const showOpenDebt = openDebtUsd > 0.01;
   const methodCards = LIVE_PAYMENT_KPI_CARDS.filter((c) => !c.isTotal);
   const canDrill = Array.isArray(lines) && lines.length > 0;
-  const showRemainingToPay = remainingToPayUsd != null && Number.isFinite(remainingToPayUsd);
+  const showBalanceCard =
+    paymentBalanceDisplay != null && Number.isFinite(paymentBalanceDisplay.displayUsd);
 
   const [drill, setDrill] = useState<{ title: string; method: PaymentLineMethod | null } | null>(
     null,
@@ -209,7 +212,7 @@ export function PaymentLiveSummaryCards({
           </button>
         ) : null}
 
-        {showRemainingToPay ? <RemainingToPayCard amountUsd={remainingToPayUsd!} /> : null}
+        {showBalanceCard ? <RemainingToPayCard display={paymentBalanceDisplay!} /> : null}
 
         {drill && canDrill ? (
           <PaymentSummaryDrillModal

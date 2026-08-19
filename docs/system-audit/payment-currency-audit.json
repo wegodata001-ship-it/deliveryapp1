@@ -1,0 +1,267 @@
+{
+  "tag": "AUDIT-FX-1787140801827",
+  "generatedAt": "2026-08-19T12:00:11.761Z",
+  "executive": {
+    "paymentCurrencyArchitecture": "PASS",
+    "usdDebtSsot": "PASS",
+    "ilsReceiptPreservation": "PASS",
+    "cashControl": "PASS",
+    "mixedPayments": "PASS",
+    "historicalFx": "PASS",
+    "editDeleteReversal": "PARTIAL",
+    "plannedPaymentValidation": "PASS"
+  },
+  "schemaMapping": [
+    {
+      "business": "receivedAmount",
+      "model": "Payment",
+      "field": "sourceAmount",
+      "exists": true,
+      "correct": true
+    },
+    {
+      "business": "receivedCurrency",
+      "model": "Payment",
+      "field": "sourceCurrency",
+      "exists": true,
+      "correct": true
+    },
+    {
+      "business": "exchangeRateAtPayment",
+      "model": "Payment",
+      "field": "exchangeRate",
+      "exists": true,
+      "correct": true
+    },
+    {
+      "business": "appliedAmountUsd",
+      "model": "Payment",
+      "field": "amountUsd",
+      "exists": true,
+      "correct": true
+    },
+    {
+      "business": "per-method receipt",
+      "model": "PaymentMethodAllocation",
+      "field": "sourceAmount+currency+amountUsd",
+      "exists": true,
+      "correct": true
+    }
+  ],
+  "codeAudit": [
+    {
+      "file": "src/app/admin/payments-updated/actions.ts",
+      "function": "Cash control uses sourceAmount from allocations",
+      "currentLogic": "Cash control uses sourceAmount from allocations",
+      "currencySafe": "YES",
+      "severity": "—",
+      "action": "Keep — correct SSOT for physical receipt"
+    },
+    {
+      "file": "src/app/admin/payments-updated/actions.ts",
+      "function": "Payment save stores amountUsd for ILS lines",
+      "currentLogic": "Payment save stores amountUsd for ILS lines",
+      "currencySafe": "YES",
+      "severity": "—",
+      "action": "Keep — applied USD separate from sourceAmount"
+    },
+    {
+      "file": "src/lib/cash-control-daily.ts",
+      "function": "Cash control uses sourceAmount from allocations",
+      "currentLogic": "Cash control uses sourceAmount from allocations",
+      "currencySafe": "YES",
+      "severity": "—",
+      "action": "Keep — correct SSOT for physical receipt"
+    },
+    {
+      "file": "src/lib/payment-intake-order-analysis.ts",
+      "function": "Intake method attribution splits ILS/USD pools strictly",
+      "currentLogic": "Intake method attribution splits ILS/USD pools strictly",
+      "currencySafe": "PARTIAL",
+      "severity": "P1",
+      "action": "PMC display only; order FIFO uses totalUsd"
+    },
+    {
+      "file": "src/app/admin/shipments/cash-control/service.ts",
+      "function": "paid += input.amountIls",
+      "currentLogic": "Shipment courier fees — ILS domain only",
+      "currencySafe": "N/A",
+      "severity": "—",
+      "action": "Out of scope for order USD debt audit"
+    }
+  ],
+  "tests": [
+    {
+      "test": "Unit tests (matching + debt + usd model)",
+      "expected": "all pass",
+      "actual": "PASS",
+      "dbEvidence": "",
+      "verdict": "PASS"
+    },
+    {
+      "test": "TEST A — appliedAmountUsd",
+      "expected": "~33.33",
+      "actual": "33.33",
+      "dbEvidence": "Payment.id=1da995b2-9b97-4184-8a4c-2d68739cb182 amountUsd=33.33 sourceAmount=100 sourceCurrency=ILS exchangeRate=3",
+      "verdict": "PASS"
+    },
+    {
+      "test": "TEST A — receivedAmount ILS",
+      "expected": "100 ILS",
+      "actual": "100 ILS",
+      "dbEvidence": "alloc=[{\"c\":\"ILS\",\"src\":\"100\",\"usd\":\"33.33\"}]",
+      "verdict": "PASS"
+    },
+    {
+      "test": "TEST A — openDebtUsd",
+      "expected": "~66.67",
+      "actual": "66.67",
+      "dbEvidence": "sum(amountUsd)=33.33",
+      "verdict": "PASS"
+    },
+    {
+      "test": "TEST A — Cash ILS",
+      "expected": "₪100",
+      "actual": "₪100",
+      "dbEvidence": "cashIls=100 cashUsd=0",
+      "verdict": "PASS"
+    },
+    {
+      "test": "TEST B — openDebtUsd=0",
+      "expected": "0",
+      "actual": "0",
+      "dbEvidence": "sum(amountUsd)=100",
+      "verdict": "PASS"
+    },
+    {
+      "test": "TEST B — Cash totals",
+      "expected": "ILS ₪100 + USD $66.67",
+      "actual": "ILS ₪100 USD $66.67",
+      "dbEvidence": "{\"cashIls\":100,\"cashUsd\":66.67,\"cardIls\":0,\"transferUsd\":0}",
+      "verdict": "PASS"
+    },
+    {
+      "test": "TEST C — Mixed applied USD total",
+      "expected": "200",
+      "actual": "200",
+      "dbEvidence": "appliedLines=[{\"orderId\":\"0c8d0b8a-479d-4e90-94b2-cba373f33174\",\"bucket\":\"BANK_TRANSFER\",\"method\":\"BANK_TRANSFER\",\"currency\":\"USD\",\"amount\":50},{\"orderId\":\"0c8d0b8a-479d-4e90-94b2-cba373f33174\",\"bucket\":\"CASH\",\"method\":\"CASH\",\"currency\":\"ILS\",\"amount\":150},{\"orderId\":\"0c8d0b8a-479d-4e90-94b2-cba373f33174\",\"bucket\":\"CREDIT\",\"method\":\"CREDIT\",\"currency\":\"ILS\",\"amount\":300}]",
+      "verdict": "PASS"
+    },
+    {
+      "test": "TEST 6 — Historical applied frozen at capture rate",
+      "expected": "applied=$50, debt=$50 after ₪150@3",
+      "actual": "applied=$50 debt=$50; wrongRecalc@3.5=$42.86",
+      "dbEvidence": "amountUsd stored on Payment; not recomputed from current rate",
+      "verdict": "PASS"
+    },
+    {
+      "test": "TEST 8 — Partial ILS",
+      "expected": "applied=$30 remaining=$70",
+      "actual": "applied=$30 remaining=$70",
+      "dbEvidence": "Formula check",
+      "verdict": "PASS"
+    },
+    {
+      "test": "TEST 9 — Overpayment on same method (current rule)",
+      "expected": "INVALID_METHODS (method excess blocks before surplus)",
+      "actual": "INVALID_METHODS",
+      "dbEvidence": "אמצעי התשלום שנקלטו אינם תואמים לאמצעי התשלום שתוכננו במסמך. יש לעדכן את תכנון התשלום בהזמנה לפני ביצוע קליטת התשלום. (מזומן: תוכנן $100.00, הוזן $110.00)",
+      "verdict": "PASS"
+    },
+    {
+      "test": "TEST 10 — CASH ₪300 + BANK ₪300 @3 on CASH $100 + BANK $100",
+      "expected": "READY (method-matched USD-equiv, not receipt currency)",
+      "actual": "READY",
+      "dbEvidence": "enteredUsd from totalUsd per bucket (ILS converted)",
+      "verdict": "PASS"
+    },
+    {
+      "test": "TEST 11 — CASH ₪600 @3 only (total USD matches debt)",
+      "expected": "INVALID_METHODS (CASH +$100 excess, BANK missing $100)",
+      "actual": "INVALID_METHODS",
+      "dbEvidence": "אמצעי התשלום שנקלטו אינם תואמים לאמצעי התשלום שתוכננו במסמך. יש לעדכן את תכנון התשלום בהזמנה לפני ביצוע קליטת התשלום. (מזומן: תוכנן $100.00, הוזן $200.00)",
+      "verdict": "PASS"
+    },
+    {
+      "test": "TEST 11b — Matching engine: CASH ₪600 does not close BANK",
+      "expected": "CASH paid=$100 BANK remaining=$100 applied=$100 surplusIls=300",
+      "actual": "cashPaid=100 bankRem=100 applied=100 surplusIls=300",
+      "dbEvidence": "Bucket matching only — no cross-method FIFO",
+      "verdict": "PASS"
+    },
+    {
+      "test": "TEST 9 — Overpayment no plan + disposition",
+      "expected": "READY with surplusDisposition=credit",
+      "actual": "READY",
+      "dbEvidence": "כל חוקי קליטת התשלום עברו בהצלחה.",
+      "verdict": "PASS"
+    },
+    {
+      "test": "TEST 10 — ILS cash matches USD planned CASH bucket",
+      "expected": "allocation > 0 (not blocked)",
+      "actual": "33.33",
+      "dbEvidence": "surplusIls=0",
+      "verdict": "PASS"
+    },
+    {
+      "test": "TEST 10 — Business rules allow partial ILS-equivalent cash",
+      "expected": "READY",
+      "actual": "READY",
+      "dbEvidence": "כל חוקי קליטת התשלום עברו בהצלחה.",
+      "verdict": "PASS"
+    },
+    {
+      "test": "TEST 7 — Cancel excludes from debt sum",
+      "expected": "paid ~33.33 (only payA)",
+      "actual": "33.33",
+      "dbEvidence": "cancelled payment 7ad0abe8-a4b7-41b0-8541-d0df85cf07df",
+      "verdict": "PASS"
+    },
+    {
+      "test": "ROUNDING — 3×₪100@3 vs $100 debt",
+      "expected": "paid sum ~99.99–100.00 (policy: 2dp)",
+      "actual": "3×33.33=99.99",
+      "dbEvidence": "Uses round2 at each step; residual ≤ $0.01 acceptable per ORDER_DEBT_EPS=0.02",
+      "verdict": "PASS"
+    }
+  ],
+  "bugs": [
+    {
+      "id": "BUG-CANCEL-STUB",
+      "severity": "P1",
+      "module": "payments-updated/actions",
+      "problem": "cancelPaymentAction returns hard error — no runtime cancel/reversal path",
+      "rootCause": "Stub awaiting invoice cancel workflow",
+      "file": "src/app/admin/payments-updated/actions.ts:2499"
+    }
+  ],
+  "dbSamples": [
+    {
+      "id": "981a5ba8-c7bf-4b1b-941b-cc0957ef7d1f",
+      "sourceAmount": "100",
+      "sourceCurrency": "USD",
+      "exchangeRate": "3",
+      "amountUsd": "100",
+      "allocations": []
+    },
+    {
+      "id": "a92d5ba9-78a2-4395-be90-4fa2d88ef330",
+      "sourceAmount": "102",
+      "sourceCurrency": "USD",
+      "exchangeRate": "3",
+      "amountUsd": "102",
+      "allocations": []
+    }
+  ],
+  "performance": [
+    {
+      "op": "Create Payment ILS",
+      "ms": 939.98
+    },
+    {
+      "op": "Create Payment USD",
+      "ms": 924.54
+    }
+  ],
+  "canAcceptScenario": "YES — $100 order, ₪100 cash @3 reduces debt ~$33.33 and cash ILS +₪100 (proven in TEST A)"
+}

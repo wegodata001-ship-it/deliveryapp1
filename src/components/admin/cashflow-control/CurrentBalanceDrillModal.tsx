@@ -7,6 +7,7 @@ import type {
   CurrentBalanceDrillKind,
   CurrentBalanceDrillResult,
 } from "@/lib/flow-control/services/current-financial-balances-types";
+import { NetAvailableWaterfall } from "@/components/admin/cashflow-control/NetAvailableWaterfall";
 import type { WorkCountryCode } from "@/lib/work-country";
 
 export function CurrentBalanceDrillModal({
@@ -49,7 +50,7 @@ export function CurrentBalanceDrillModal({
   return (
     <div className="cfc-kpi-modal-backdrop" role="presentation" onClick={onClose}>
       <div
-        className="cfc-kpi-modal"
+        className="cfc-kpi-modal cfc-kpi-modal--wide"
         role="dialog"
         aria-modal="true"
         aria-labelledby="cfc-balance-drill-title"
@@ -72,15 +73,31 @@ export function CurrentBalanceDrillModal({
             <p className="cfc-kpi-modal__state cfc-kpi-modal__state--err">{error}</p>
           ) : data ? (
             <>
-              {data.summaryLines.length > 0 && (
+              {data.alertMessage ? (
+                <p className="cfc-kpi-modal__alert">{data.alertMessage}</p>
+              ) : null}
+
+              {data.waterfallLines && data.waterfallLines.length > 0 ? (
+                <div className="cfc-kpi-modal__waterfall">
+                  <h3>פירוט חשבונאי</h3>
+                  <NetAvailableWaterfall lines={data.waterfallLines} />
+                  {data.formulaHe ? (
+                    <p className="cfc-kpi-modal__formula">{data.formulaHe}</p>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {data.summaryLines.length > 0 && !data.waterfallLines?.length ? (
                 <ul className="cfc-balance-drill__summary">
                   {data.summaryLines.map((line) => (
                     <li key={line}>{line}</li>
                   ))}
                 </ul>
-              )}
+              ) : null}
+
               {data.rows.length > 0 ? (
                 <div className="cfc-kpi-modal__table-wrap">
+                  <h3>יומן תנועות</h3>
                   <table className="cfc-kpi-modal__table">
                     <thead>
                       <tr>

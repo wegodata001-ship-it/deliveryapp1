@@ -15,6 +15,11 @@ const planned: PlannedBucketUsd[] = [
   { bucket: "CREDIT", label: "אשראי", plannedUsd: 200, remainingUsd: 200 },
 ];
 
+const cashBankPlanned: PlannedBucketUsd[] = [
+  { bucket: "CASH", label: "מזומן", plannedUsd: 100, remainingUsd: 100 },
+  { bucket: "BANK_TRANSFER", label: "העברה", plannedUsd: 100, remainingUsd: 100 },
+];
+
 function entered(cash: number, credit: number): EnteredBucketUsd[] {
   return [
     { bucket: "CASH", label: "מזומן", enteredUsd: cash },
@@ -57,6 +62,37 @@ describe("Business validation — אמצעי תשלום מתוכננים", () =>
     assert.equal(violations.length, 1);
     assert.equal(violations[0]?.bucket, "CHECK");
     assert.equal(violations[0]?.plannedUsd, 0);
+  });
+
+  it("Acceptance: CASH ₪300 + BANK ₪300 @3 — $100 per method (ILS receipt, USD plan)", () => {
+    const decision = evaluatePaymentBusinessRules({
+      plannedByMethod: cashBankPlanned,
+      enteredByMethod: [
+        { bucket: "CASH", label: "מזומן", enteredUsd: 100 },
+        { bucket: "BANK_TRANSFER", label: "העברה", enteredUsd: 100 },
+      ],
+      totalDebtUsd: 200,
+      totalPaymentUsd: 200,
+    });
+
+    assert.equal(decision.code, "READY");
+    assert.equal(decision.ok, true);
+    assert.equal(decision.methodViolations.length, 0);
+  });
+
+  it("Acceptance: CASH ₪600 @3 alone — blocked despite total USD = $200 debt", () => {
+    const decision = evaluatePaymentBusinessRules({
+      plannedByMethod: cashBankPlanned,
+      enteredByMethod: [{ bucket: "CASH", label: "מזומן", enteredUsd: 200 }],
+      totalDebtUsd: 200,
+      totalPaymentUsd: 200,
+    });
+
+    assert.equal(decision.code, "INVALID_METHODS");
+    assert.equal(decision.ok, false);
+    assert.equal(decision.methodViolations.length, 1);
+    assert.equal(decision.methodViolations[0]?.bucket, "CASH");
+    assert.equal(decision.methodViolations[0]?.excessUsd, 100);
   });
 
   it("מאשר התאמה מדויקת לתכנון", () => {

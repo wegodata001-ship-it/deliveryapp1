@@ -33,7 +33,14 @@ export function CashflowReceivedTable({ rows, loading, onAmountClick }: Cashflow
   const totalRow = rows.find((r) => r.isTotal);
 
   if (loading) {
-    return <p className="ft-empty">טוען קליטות…</p>;
+    return (
+      <div className="ft-table-wrap ft-table-wrap--skeleton" aria-busy="true" aria-label="טוען קליטות">
+        <div className="ft-skeleton-head" />
+        {Array.from({ length: 3 }).map((_, i) => (
+          <div key={i} className="ft-skeleton-row" />
+        ))}
+      </div>
+    );
   }
 
   if (dataRows.length === 0) {

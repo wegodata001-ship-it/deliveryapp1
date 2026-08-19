@@ -183,7 +183,7 @@ export function ShipmentRecordsEditableTable({
   return (
     <div className="shp-packages-table-host">
       <div className="shp-daily-wrap shp-daily-wrap--packages">
-        <table className="shp-table shp-table--daily shp-table--ship-rows shp-table--packages">
+        <table className="shp-table shp-table--daily shp-table--ship-rows shp-table--packages" dir="rtl">
           <thead>
             <tr>
               <th className="c-check shp-sticky-col shp-sticky-col--0">
@@ -197,12 +197,12 @@ export function ShipmentRecordsEditableTable({
               <th className="c-zone">אזור חלוקה</th>
               <th className="c-courier">שליח</th>
               <th className="c-boxes">קרטונים</th>
-              <th className="c-act">פעולות</th>
               <th className="c-arrive shp-col-secondary">תאריך הגעה</th>
               <th className="c-fee shp-col-secondary">דמי משלוח</th>
               <th className="c-pay shp-col-secondary">גובה תשלום</th>
               <th className="c-bal shp-col-secondary">יתרת לקוח</th>
               <th className="c-status shp-col-secondary">סטטוס</th>
+              <th className="c-act shp-sticky-col shp-sticky-col--actions">פעולות</th>
             </tr>
           </thead>
           <tbody>
@@ -373,17 +373,6 @@ export function ShipmentRecordsEditableTable({
                       }
                     />
                   </td>
-                  <td className="c-act">
-                    <ShipmentRowActionsMenu
-                      record={r}
-                      feeAmount={feeAmount}
-                      onFixLocation={onFixLocation}
-                      onCollect={onCollect}
-                      onAddPackage={onAddPackage}
-                      onAssignZone={setZoneAssignRecord}
-                      onAssignCourier={(rec) => setCourierEditId(rec.id)}
-                    />
-                  </td>
                   <td className="c-arrive shp-col-secondary shp-daily-center">{formatDate(r.arrivalDate)}</td>
                   <td className="c-fee shp-col-secondary shp-daily-money shp-daily-center">
                     <InlineValueCell
@@ -461,6 +450,17 @@ export function ShipmentRecordsEditableTable({
                         </option>
                       ))}
                     </select>
+                  </td>
+                  <td className="c-act shp-sticky-col shp-sticky-col--actions">
+                    <ShipmentRowActionsMenu
+                      record={r}
+                      feeAmount={feeAmount}
+                      onFixLocation={onFixLocation}
+                      onCollect={onCollect}
+                      onAddPackage={onAddPackage}
+                      onAssignZone={setZoneAssignRecord}
+                      onAssignCourier={(rec) => setCourierEditId(rec.id)}
+                    />
                   </td>
                 </tr>
               );

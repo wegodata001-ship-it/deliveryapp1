@@ -92,21 +92,30 @@ export async function loadAliasLookupMap(): Promise<AliasLookupMaps> {
  * 2) FK ל-DeliveryLocation (גיבוי)
  * 3) שם מקורי מהמשלוח
  */
+/** מקור ייבוא קשיח — לא city/address (עלולים להיות מלוכלכים). */
+export function shipmentStrictOriginalDeliveryLocation(
+  input: Pick<ShipmentDeliveryLocationInput, "originalDeliveryLocation">,
+): string | null {
+  return input.originalDeliveryLocation?.trim() || null;
+}
+
 export function resolveUpdatedDeliveryLocationDisplay(
   input: ShipmentDeliveryLocationInput,
   maps: AliasLookupMaps,
 ): string | null {
-  const original = shipmentOriginalDeliveryLocationName(input);
+  const strictOriginal = shipmentStrictOriginalDeliveryLocation(input);
+  const lookupKey = strictOriginal || shipmentOriginalDeliveryLocationName(input);
 
-  if (original) {
-    const hit = lookupAliasRow(original, maps);
-    if (hit?.displayName?.trim()) return hit.displayName.trim();
+  if (lookupKey) {
+    const hit = lookupAliasRow(lookupKey, maps);
+    const mapped = hit?.displayName?.trim();
+    if (mapped && (!strictOriginal || mapped !== strictOriginal)) return mapped;
   }
 
   const fromFk = input.deliveryLocation?.displayName?.trim();
-  if (fromFk) return fromFk;
+  if (fromFk && (!strictOriginal || fromFk !== strictOriginal)) return fromFk;
 
-  return original;
+  return null;
 }
 
 let aliasCache: { loadedAt: number; rows: AliasCacheRow[] } | null = null;

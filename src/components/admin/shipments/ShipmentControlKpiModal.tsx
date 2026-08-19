@@ -22,6 +22,7 @@ import {
 } from "@/app/admin/shipments/actions";
 import { getEffectiveDeliveryPlace } from "@/lib/shipment-delivery-place";
 import { ShipmentPaymentModal } from "@/components/admin/shipments/ShipmentPaymentModal";
+import { ShipmentConfirmModal } from "@/components/admin/shipments/ShipmentConfirmModal";
 import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
 
 export type KpiDrillKey =
@@ -160,6 +161,8 @@ export function ShipmentControlKpiModal({
   const [newCourierName, setNewCourierName] = useState("");
   const [localZones, setLocalZones] = useState(zones);
   const [localCouriers, setLocalCouriers] = useState(courierOptions);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [deleteConfirmError, setDeleteConfirmError] = useState<string | null>(null);
 
   const baseRecords = useMemo(
     () => filterRecordsForKpi(records, kpiKey),
@@ -284,13 +287,25 @@ export function ShipmentControlKpiModal({
     });
   }
 
-  async function handleDelete(recordId: string) {
+  function openDeleteConfirm(recordId: string) {
     if (!canWrite) return;
-    if (!window.confirm("למחוק את המשלוח ואת כל הגביות שלו?")) return;
-    await withBusy(recordId, async () => {
-      const res = await deleteShipmentRecordAction(workCountry, recordId);
-      if (!res.ok) throw new Error(res.error);
-    });
+    setDeleteConfirmError(null);
+    setDeleteConfirmId(recordId);
+  }
+
+  async function confirmDelete() {
+    if (!deleteConfirmId) return;
+    setDeleteConfirmError(null);
+    setBusyId(deleteConfirmId);
+    setError(null);
+    const res = await deleteShipmentRecordAction(workCountry, deleteConfirmId);
+    setBusyId(null);
+    if (!res.ok) {
+      setDeleteConfirmError(res.error);
+      return;
+    }
+    setDeleteConfirmId(null);
+    onChanged();
   }
 
   async function openPayment(recordId: string) {
@@ -664,7 +679,7 @@ export function ShipmentControlKpiModal({
                                 className="shp-btn shp-btn--icon"
                                 title="מחק"
                                 disabled={busyId === r.id}
-                                onClick={() => void handleDelete(r.id)}
+                                onClick={() => openDeleteConfirm(r.id)}
                               >
                                 <Trash2 size={13} />
                               </button>
@@ -724,6 +739,26 @@ export function ShipmentControlKpiModal({
           }}
         />
       )}
+
+      <ShipmentConfirmModal
+        open={deleteConfirmId != null}
+        title="מחיקת משלוח"
+        icon="trash"
+        variant="danger"
+        message="האם למחוק את המשלוח ואת כל הגביות שלו?"
+        warning="פעולה זו אינה ניתנת לביטול."
+        confirmLabel="מחק משלוח"
+        confirmBusyLabel="מוחק…"
+        busy={busyId === deleteConfirmId}
+        error={deleteConfirmError}
+        onCancel={() => {
+          if (busyId !== deleteConfirmId) {
+            setDeleteConfirmId(null);
+            setDeleteConfirmError(null);
+          }
+        }}
+        onConfirm={() => void confirmDelete()}
+      />
     </>
   );
 }

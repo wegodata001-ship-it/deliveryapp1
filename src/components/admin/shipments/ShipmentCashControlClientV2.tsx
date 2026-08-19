@@ -45,6 +45,7 @@ import {
   saveShipmentCashCountsAction,
 } from "@/app/admin/shipments/cash-control/actions";
 import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
+import { ShipmentConfirmModal } from "@/components/admin/shipments/ShipmentConfirmModal";
 
 function fmtIls(n: number): string {
   return n.toLocaleString("he-IL", { style: "currency", currency: "ILS", minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -92,6 +93,8 @@ export function ShipmentCashControlClient() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [deleteExpenseId, setDeleteExpenseId] = useState<string | null>(null);
+  const [deleteExpenseError, setDeleteExpenseError] = useState<string | null>(null);
 
   const loadDay = useCallback(async (date: string) => {
     setBusy(true);
@@ -180,12 +183,17 @@ export function ShipmentCashControlClient() {
     setDrilldown(res.data);
   }
 
-  async function handleDeleteExpense(id: string) {
-    if (!confirm("למחוק את ההוצאה?")) return;
+  async function confirmDeleteExpense() {
+    if (!deleteExpenseId) return;
     setBusy(true);
-    const res = await deleteShipmentCashExpenseAction(id);
+    setDeleteExpenseError(null);
+    const res = await deleteShipmentCashExpenseAction(deleteExpenseId);
     setBusy(false);
-    if (!res.ok) { setError(res.error); return; }
+    if (!res.ok) {
+      setDeleteExpenseError(res.error);
+      return;
+    }
+    setDeleteExpenseId(null);
     void loadDay(dayDate);
   }
 
@@ -247,7 +255,10 @@ export function ShipmentCashControlClient() {
           onCancelCountEdit={() => setCountEditing(false)}
           onDrilldown={(method, type) => handleDrilldown(dayDate, method, type)}
           onAddExpense={() => setExpenseOpen(true)}
-          onDeleteExpense={handleDeleteExpense}
+          onDeleteExpense={(id) => {
+            setDeleteExpenseError(null);
+            setDeleteExpenseId(id);
+          }}
         />
       )}
 
@@ -277,6 +288,25 @@ export function ShipmentCashControlClient() {
           onClose={() => setDrilldown(null)}
         />
       )}
+
+      <ShipmentConfirmModal
+        open={deleteExpenseId != null}
+        title="מחיקת הוצאה"
+        icon="trash"
+        variant="danger"
+        message="האם למחוק את ההוצאה?"
+        confirmLabel="מחק הוצאה"
+        confirmBusyLabel="מוחק…"
+        busy={busy}
+        error={deleteExpenseError}
+        onCancel={() => {
+          if (!busy) {
+            setDeleteExpenseId(null);
+            setDeleteExpenseError(null);
+          }
+        }}
+        onConfirm={() => void confirmDeleteExpense()}
+      />
     </div>
   );
 }

@@ -41,6 +41,11 @@ import { ShipmentRecordsEditableTable } from "@/components/admin/shipments/Shipm
 import { CourierPdfModal } from "@/components/admin/shipments/CourierPdfModal";
 import { CustomShipmentPdfModal } from "@/components/admin/shipments/CustomShipmentPdfModal";
 import { CourierDebtCloseModal } from "@/components/admin/shipments/CourierDebtCloseModal";
+import {
+  AssignCourierConfirmModal,
+  countSelectedWithExistingCourier,
+} from "@/components/admin/shipments/AssignCourierConfirmModal";
+import { ShipmentConfirmModal } from "@/components/admin/shipments/ShipmentConfirmModal";
 import { ShipmentMultiSelectFilter } from "@/components/admin/shipments/ShipmentMultiSelectFilter";
 import {
   filterRecordsByPaymentMethod,
@@ -137,6 +142,10 @@ export function ShipmentCombinedClient({
   const [bulkZoneId, setBulkZoneId] = useState("");
   const [bulkCourierId, setBulkCourierId] = useState("");
   const [bulkStatus, setBulkStatus] = useState<ShipmentStatus | "">("");
+  const [assignCourierOpen, setAssignCourierOpen] = useState(false);
+  const [assignCourierError, setAssignCourierError] = useState<string | null>(null);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleteConfirmError, setDeleteConfirmError] = useState<string | null>(null);
 
   const batchNumbers = useMemo(
     () => [...new Set(initialBatches.map((b) => b.batchNumber))],
@@ -419,24 +428,57 @@ export function ShipmentCombinedClient({
     clearMsg();
   }
 
-  async function bulkCourier() {
+  function openBulkCourierConfirm() {
+    if (!bulkCourierId || selected.size === 0) return;
+    setAssignCourierError(null);
+    setAssignCourierOpen(true);
+  }
+
+  async function confirmBulkCourier() {
     if (!bulkCourierId || selected.size === 0) return;
     const courierName = couriers.find((c) => c.id === bulkCourierId)?.name ?? "—";
     const count = selected.size;
-    if (!confirm(`האם לשייך את השליח ${courierName} ל-${count} משלוחים?`)) return;
     setBusy(true);
+    setAssignCourierError(null);
     const res = await assignCourierAction(workCountry, {
       recordIds: [...selected],
       courierId: bulkCourierId,
     });
     setBusy(false);
     if (res.ok) {
-      setMsg(`שויך שליח ${courierName} ל-${count} רשומות`);
+      setAssignCourierOpen(false);
+      setMsg(`✓ ${count} משלוחים שויכו בהצלחה ל${courierName}`);
       setSelected(new Set());
       setBulkCourierId("");
       await refresh();
-    } else setMsg(res.error);
+    } else {
+      setAssignCourierError(res.error);
+    }
     clearMsg();
+  }
+
+  function openBulkDeleteConfirm() {
+    if (selected.size === 0) return;
+    setDeleteConfirmError(null);
+    setDeleteConfirmOpen(true);
+  }
+
+  async function confirmBulkDelete() {
+    if (selected.size === 0) return;
+    setBusy(true);
+    setDeleteConfirmError(null);
+    for (const id of selected) {
+      const res = await deleteShipmentRecordAction(workCountry, id);
+      if (!res.ok) {
+        setDeleteConfirmError(res.error);
+        setBusy(false);
+        return;
+      }
+    }
+    setBusy(false);
+    setDeleteConfirmOpen(false);
+    setSelected(new Set());
+    await refresh();
   }
 
   async function runBulkStatus() {
@@ -455,17 +497,6 @@ export function ShipmentCombinedClient({
     clearMsg();
   }
 
-  async function bulkDelete() {
-    if (selected.size === 0) return;
-    if (!confirm(`למחוק ${selected.size} משלוחים?`)) return;
-    setBusy(true);
-    for (const id of selected) {
-      await deleteShipmentRecordAction(workCountry, id);
-    }
-    setBusy(false);
-    setSelected(new Set());
-    await refresh();
-  }
 
   return (
     <div className="shp-page shp-page--wide">
@@ -673,7 +704,7 @@ export function ShipmentCombinedClient({
               </option>
             ))}
           </select>
-          <button type="button" className="shp-btn shp-btn--sm" onClick={() => void bulkCourier()}>
+          <button type="button" className="shp-btn shp-btn--sm" onClick={openBulkCourierConfirm}>
             שייך שליח
           </button>
           <select
@@ -690,7 +721,7 @@ export function ShipmentCombinedClient({
           <button type="button" className="shp-btn shp-btn--sm" onClick={() => void runBulkStatus()}>
             עדכן סטטוס
           </button>
-          <button type="button" className="shp-btn shp-btn--sm shp-btn--danger" onClick={() => void bulkDelete()}>
+          <button type="button" className="shp-btn shp-btn--sm shp-btn--danger" onClick={openBulkDeleteConfirm}>
             <Trash2 size={13} />
             מחק
           </button>
@@ -785,6 +816,47 @@ export function ShipmentCombinedClient({
           }}
         />
       )}
+
+      <AssignCourierConfirmModal
+        open={assignCourierOpen}
+        courierName={couriers.find((c) => c.id === bulkCourierId)?.name ?? "—"}
+        shipmentCount={selected.size}
+        withExistingCourierCount={countSelectedWithExistingCourier(records, selected)}
+        busy={busy}
+        error={assignCourierError}
+        onCancel={() => {
+          if (!busy) {
+            setAssignCourierOpen(false);
+            setAssignCourierError(null);
+          }
+        }}
+        onConfirm={() => void confirmBulkCourier()}
+      />
+
+      <ShipmentConfirmModal
+        open={deleteConfirmOpen}
+        title="מחיקת משלוחים"
+        icon="trash"
+        variant="danger"
+        message={
+          <>
+            האם למחוק <strong>{selected.size}</strong>{" "}
+            {selected.size === 1 ? "משלוח" : "משלוחים"}?
+          </>
+        }
+        warning="פעולה זו אינה ניתנת לביטול."
+        confirmLabel={selected.size === 1 ? "מחק משלוח" : `מחק ${selected.size} משלוחים`}
+        confirmBusyLabel="מוחק…"
+        busy={busy}
+        error={deleteConfirmError}
+        onCancel={() => {
+          if (!busy) {
+            setDeleteConfirmOpen(false);
+            setDeleteConfirmError(null);
+          }
+        }}
+        onConfirm={() => void confirmBulkDelete()}
+      />
     </div>
   );
 }

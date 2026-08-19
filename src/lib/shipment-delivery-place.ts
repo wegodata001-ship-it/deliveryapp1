@@ -12,20 +12,41 @@ export type EffectiveDeliveryPlaceInput = {
   locationMatchStatus?: ShipmentRecordDto["locationMatchStatus"];
 };
 
-/** שם מקום המסירה המקורי מהייבוא — לעולם לא מחליף את originalDeliveryLocation/Place ב-DB. */
+/**
+ * שם מקום המסירה המקורי מהייבוא בלבד — לעולם לא city/address (עלולים להיות מלוכלכים אחרי ייבוא).
+ */
 export function shipmentOriginalDeliveryPlace(
   input: Pick<
     EffectiveDeliveryPlaceInput,
-    "originalDeliveryPlace" | "originalDeliveryLocation" | "city" | "address"
+    "originalDeliveryPlace" | "originalDeliveryLocation"
   >,
 ): string | null {
-  return (
-    input.originalDeliveryPlace?.trim() ||
-    input.originalDeliveryLocation?.trim() ||
-    input.city?.trim() ||
-    input.address?.trim() ||
-    null
-  );
+  return input.originalDeliveryPlace?.trim() || input.originalDeliveryLocation?.trim() || null;
+}
+
+function resolveUpdatedDeliveryDisplay(input: EffectiveDeliveryPlaceInput): string | null {
+  const original = shipmentOriginalDeliveryPlace(input);
+
+  const fromField =
+    input.updatedDeliveryLocation?.trim() ||
+    input.updatedDeliveryPlace?.trim() ||
+    input.resolvedDeliveryPlace?.trim() ||
+    null;
+
+  if (fromField) {
+    if (!original || fromField !== original) return fromField;
+  }
+
+  if (
+    input.locationMatchStatus === "MANUALLY_FIXED" &&
+    input.city?.trim() &&
+    original &&
+    input.city.trim() !== original
+  ) {
+    return input.city.trim();
+  }
+
+  return null;
 }
 
 /**
@@ -34,33 +55,19 @@ export function shipmentOriginalDeliveryPlace(
  */
 export function getEffectiveDeliveryPlace(input: EffectiveDeliveryPlaceInput): string | null {
   const original = shipmentOriginalDeliveryPlace(input);
-
-  const updated =
-    input.updatedDeliveryPlace?.trim() ||
-    input.resolvedDeliveryPlace?.trim() ||
-    input.updatedDeliveryLocation?.trim() ||
-    null;
-  if (updated && (!original || updated !== original)) return updated;
-
-  if (input.locationMatchStatus === "MANUALLY_FIXED" && input.city?.trim()) {
-    return input.city.trim();
-  }
-
-  const city = input.city?.trim() || null;
-  if (city && original && city !== original) {
-    return city;
-  }
-
-  return original || city;
+  const updated = resolveUpdatedDeliveryDisplay(input);
+  if (updated) return updated;
+  return original || input.city?.trim() || input.address?.trim() || null;
 }
 
 export type EffectiveDeliveryAddress = {
-  /** כתובת מסירה מלאה לתצוגה: רחוב + מקום א.effective */
+  /** כתובת מסירה לתצוגה בטבלה */
   display: string;
   street: string | null;
   place: string | null;
   originalDisplay: string;
   originalPlace: string | null;
+  updatedDisplay: string | null;
   isPlaceUpdated: boolean;
 };
 
@@ -69,26 +76,39 @@ function joinStreetAndPlace(street: string | null, place: string | null): string
   return parts.length > 0 ? parts.join(", ") : "—";
 }
 
-/** SSOT לכתובת מסירה מלאה (רחוב + מקום) — לכל מסך תפעולי */
+function buildOriginalDisplay(
+  originalPlace: string | null,
+  street: string | null,
+  city: string | null,
+): string {
+  if (originalPlace) {
+    if (street && street !== originalPlace && !street.includes(originalPlace)) {
+      return joinStreetAndPlace(street, originalPlace);
+    }
+    return originalPlace;
+  }
+  return street || city || "—";
+}
+
+/** SSOT לכתובת מסירה — לכל מסך תפעולי */
 export function getEffectiveDeliveryAddress(
   input: EffectiveDeliveryPlaceInput,
 ): EffectiveDeliveryAddress {
   const street = input.address?.trim() || null;
+  const city = input.city?.trim() || null;
   const originalPlace = shipmentOriginalDeliveryPlace(input);
-  const effectivePlace = getEffectiveDeliveryPlace(input);
-  const originalDisplay = joinStreetAndPlace(street, originalPlace);
-  const display = joinStreetAndPlace(street, effectivePlace);
-  const isPlaceUpdated = Boolean(
-    effectivePlace &&
-      originalPlace &&
-      effectivePlace.trim() !== originalPlace.trim(),
-  );
+  const updatedDisplay = resolveUpdatedDeliveryDisplay(input);
+  const originalDisplay = buildOriginalDisplay(originalPlace, street, city);
+  const isPlaceUpdated = Boolean(updatedDisplay);
+  const display = updatedDisplay ?? originalDisplay;
+
   return {
     display,
     street,
-    place: effectivePlace,
+    place: updatedDisplay ?? originalPlace ?? city,
     originalDisplay,
     originalPlace,
+    updatedDisplay,
     isPlaceUpdated,
   };
 }

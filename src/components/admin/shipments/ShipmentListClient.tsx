@@ -42,6 +42,7 @@ import {
 import type { ShipmentCashControlPayload } from "@/app/admin/shipments/cash-control/types";
 import { ShipmentCashControlClient } from "@/components/admin/shipments/ShipmentCashControlClient";
 import { LocationAliasImportModal } from "@/components/admin/shipments/LocationAliasImportModal";
+import { ShipmentConfirmModal } from "@/components/admin/shipments/ShipmentConfirmModal";
 import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
 
 type DashboardView = "list" | "cash-control";
@@ -168,6 +169,10 @@ export function ShipmentListClient({
   const [editCourierId, setEditCourierId] = useState<string | null>(null);
   const [editCourierName, setEditCourierName] = useState("");
   const [courierLoading, setCourierLoading] = useState(false);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [bulkDeleteError, setBulkDeleteError] = useState<string | null>(null);
+  const [deleteCourierTarget, setDeleteCourierTarget] = useState<ShipmentCourierDto | null>(null);
+  const [deleteCourierError, setDeleteCourierError] = useState<string | null>(null);
 
   const filteredBatches = useMemo(
     () => batches.filter((b) => matchesFilters(b, filters)),
@@ -228,19 +233,23 @@ export function ShipmentListClient({
     router.push(`${basePath}/combined?ids=${encodeURIComponent(ids)}`);
   }
 
-  async function handleBulkDelete() {
+  function openBulkDeleteConfirm() {
     if (selected.size === 0) return;
-    const count = selected.size;
-    if (!confirm(`למחוק ${count} משלוחים מסומנים?\nכל החבילות והתשלומים שלהם יימחקו. פעולה זו אינה ניתנת לביטול.`)) {
-      return;
-    }
+    setBulkDeleteError(null);
+    setBulkDeleteOpen(true);
+  }
+
+  async function confirmBulkDelete() {
+    if (selected.size === 0) return;
     setLoading(true);
+    setBulkDeleteError(null);
     const res = await deleteShipmentBatchesAction(workCountry, [...selected]);
     setLoading(false);
     if (!res.ok) {
-      showMsg(res.error, true);
+      setBulkDeleteError(res.error);
       return;
     }
+    setBulkDeleteOpen(false);
     setSelected(new Set());
     showMsg(`נמחקו ${res.deleted} משלוחים`);
     await refresh();
@@ -344,15 +353,24 @@ export function ShipmentListClient({
     } else showMsg(res.error, true);
   }
 
-  async function handleDeleteCourier(id: string) {
-    if (!confirm("למחוק את השליח? השיוך יוסר מהמשלוחים הקיימים.")) return;
+  function openDeleteCourierConfirm(courier: ShipmentCourierDto) {
+    setDeleteCourierError(null);
+    setDeleteCourierTarget(courier);
+  }
+
+  async function confirmDeleteCourier() {
+    if (!deleteCourierTarget) return;
     setCourierLoading(true);
-    const res = await deleteCourierAction(workCountry, id);
+    setDeleteCourierError(null);
+    const res = await deleteCourierAction(workCountry, deleteCourierTarget.id);
     setCourierLoading(false);
     if (res.ok) {
-      setCouriers((previous) => previous.filter((courier) => courier.id !== id));
+      setCouriers((previous) => previous.filter((c) => c.id !== deleteCourierTarget.id));
+      setDeleteCourierTarget(null);
       showMsg("השליח נמחק");
-    } else showMsg(res.error, true);
+    } else {
+      setDeleteCourierError(res.error);
+    }
   }
 
   if (view === "cash-control" && cashControlInitialData && cashControlDayDate) {
@@ -507,7 +525,7 @@ export function ShipmentListClient({
                     <button type="button" className="shp-zone-chip__del" onClick={() => handleToggleCourier(c)}>
                       {c.isActive ? <UserCheck size={11} /> : <UserX size={11} />}
                     </button>
-                    <button type="button" className="shp-zone-chip__del" onClick={() => handleDeleteCourier(c.id)}>
+                    <button type="button" className="shp-zone-chip__del" onClick={() => openDeleteCourierConfirm(c)}>
                       <Trash2 size={11} />
                     </button>
                   </>
@@ -575,7 +593,7 @@ export function ShipmentListClient({
                     type="button"
                     className="atf-btn"
                     disabled={loading}
-                    onClick={() => void handleBulkDelete()}
+                    onClick={openBulkDeleteConfirm}
                   >
                     <Trash2 size={14} />
                     מחק
@@ -596,7 +614,7 @@ export function ShipmentListClient({
                 type="button"
                 className="shp-btn shp-btn--danger shp-btn--sm"
                 disabled={loading}
-                onClick={() => void handleBulkDelete()}
+                onClick={openBulkDeleteConfirm}
               >
                 <Trash2 size={14} />
                 מחק משלוחים
@@ -823,6 +841,55 @@ export function ShipmentListClient({
           }}
         />
       )}
+
+      <ShipmentConfirmModal
+        open={bulkDeleteOpen}
+        title="מחיקת משלוחים"
+        icon="trash"
+        variant="danger"
+        message={
+          <>
+            האם למחוק <strong>{selected.size}</strong>{" "}
+            {selected.size === 1 ? "משלוח מסומן" : "משלוחים מסומנים"}?
+          </>
+        }
+        warning="כל החבילות והתשלומים שלהם יימחקו. פעולה זו אינה ניתנת לביטול."
+        confirmLabel={selected.size === 1 ? "מחק משלוח" : `מחק ${selected.size} משלוחים`}
+        confirmBusyLabel="מוחק…"
+        busy={loading}
+        error={bulkDeleteError}
+        onCancel={() => {
+          if (!loading) {
+            setBulkDeleteOpen(false);
+            setBulkDeleteError(null);
+          }
+        }}
+        onConfirm={() => void confirmBulkDelete()}
+      />
+
+      <ShipmentConfirmModal
+        open={deleteCourierTarget != null}
+        title="מחיקת שליח"
+        icon="trash"
+        variant="danger"
+        message={
+          <>
+            האם למחוק את השליח <strong>&quot;{deleteCourierTarget?.name ?? ""}&quot;</strong>?
+          </>
+        }
+        warning="השיוך יוסר מהמשלוחים הקיימים."
+        confirmLabel="מחק שליח"
+        confirmBusyLabel="מוחק…"
+        busy={courierLoading}
+        error={deleteCourierError}
+        onCancel={() => {
+          if (!courierLoading) {
+            setDeleteCourierTarget(null);
+            setDeleteCourierError(null);
+          }
+        }}
+        onConfirm={() => void confirmDeleteCourier()}
+      />
     </div>
   );
 }

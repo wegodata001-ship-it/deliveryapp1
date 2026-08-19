@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getAhWeekRange } from "@/lib/weeks/ah-week";
 import { executeFxPurchase, updateFxPurchase } from "@/lib/flow-control/fx-purchase/service";
+import { createFxPerfTimer, logFxPurchasePerf } from "@/lib/flow-control/fx-purchase/perf";
 import { saveFlowWeekCashCount } from "@/lib/flow-control/services/cash-count-service";
 import { syncCashCountTurkeyAllocationInTx } from "@/lib/flow-control/turkey-transfer-balance-service";
 import type { ManagerCountForm } from "@/app/admin/cash-flow/flow-types";
@@ -95,6 +96,7 @@ export async function persistFxPurchase(input: {
   const wk = input.week.trim();
   if (!getAhWeekRange(wk)) return { ok: false, error: "שבוע לא תקין" };
 
+  const perf = createFxPerfTimer();
   const res = await executeFxPurchase({
     weekCode: wk,
     track: input.track,
@@ -110,8 +112,14 @@ export async function persistFxPurchase(input: {
     updatedById: input.updatedById,
     createdByName: input.createdByName,
   });
+  perf.mark("execute");
 
-  if (res.ok) revalidatePath("/admin/cash-flow");
+  if (res.ok) {
+    revalidatePath("/admin/cash-flow");
+    perf.mark("revalidate");
+  }
+  logFxPurchasePerf("persist", perf.finish());
+
   return res;
 }
 

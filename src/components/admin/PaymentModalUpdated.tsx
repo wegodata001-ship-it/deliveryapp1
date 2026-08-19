@@ -34,7 +34,14 @@ import { buildPostSaveRemainingSummary } from "@/lib/payment-intake-method-contr
 import { PaymentMethodControlModal } from "@/components/admin/PaymentMethodControlModal";
 import { PaymentIntakeDeviationModal } from "@/components/admin/PaymentIntakeDeviationModal";
 import { usePaymentIntakePlanningViews } from "@/hooks/usePaymentIntakePlanningViews";
-import { computeOrderOpenDebtUsd } from "@/lib/order-remaining-debt";
+import {
+  computeOrderOpenDebtUsd,
+  derivePaymentBalanceDisplay,
+  formatPaymentBalanceIlsLine,
+  formatPaymentBalanceUsdLine,
+  sumFormRemainingSignedUsd,
+  type PaymentBalanceDisplay,
+} from "@/lib/order-remaining-debt";
 import { softRefreshPaymentIntakeOrders } from "@/lib/payment-intake-orders-source";
 import { PaymentDocumentRateIcons } from "@/components/admin/PaymentDocumentRateIcons";
 import { attachDraftDocumentsAction } from "@/app/admin/documents/actions";
@@ -977,6 +984,7 @@ export function PaymentModalUpdated({
     methodControlRows,
     methodViews,
     orderRemainingToPayUsd,
+    orderViews,
     showMethodControl,
   } = usePaymentIntakePlanningViews(orders, includedIds, liveFormKpis, totals.totalUsd);
 
@@ -1039,23 +1047,25 @@ export function PaymentModalUpdated({
     hasOpenBalanceShortfallLive,
   ]);
 
-  /**
-   * «נשאר לתשלום» — מקור אמת יחיד: sumRemainingToPayUsd(orderViews) דרך planning views.
-   * זהה לסכום עמודת «יתרת חוב ($)» בטבלה (matched.remainingAmount).
-   */
-  const remainingToPayUsd = customerBalanceResetPending ? 0 : orderRemainingToPayUsd;
+  /** SSOT — יתרה חתומה לאחר הקצאת התשלום (USD); KPI + כרטיס תחתון */
+  const paymentBalanceDisplay = useMemo((): PaymentBalanceDisplay => {
+    if (customerBalanceResetPending) {
+      return derivePaymentBalanceDisplay(0, rateN);
+    }
+    const signed = sumFormRemainingSignedUsd(orderViews);
+    return derivePaymentBalanceDisplay(signed, rateN);
+  }, [customerBalanceResetPending, orderViews, rateN]);
 
-  /** תצוגה חיה בלבד — יתרה לאחר שמירה = חוב נוכחי − סכום בהקלדה */
+  const totalDebtBeforePaymentUsd = useMemo(() => {
+    if (customerBalanceResetPending) return 0;
+    return roundMoney2(orderViews.reduce((s, o) => s + o.dbRemainingUsd, 0));
+  }, [customerBalanceResetPending, orderViews]);
+
+  /** תצוגה חיה — יתרה לאחר הקצאת התשלום (חתום: שלילי = עודף) */
   const openDebtAfterPaymentPreview = useMemo(() => {
-    const currentOpenBalance = customerBalanceResetPending
-      ? 0
-      : customerOpenDebtSignedUsd > 0.01
-        ? roundMoney2(customerOpenDebtSignedUsd)
-        : 0;
+    const currentOpenBalance = totalDebtBeforePaymentUsd;
     const enteredPaymentAmount = roundMoney2(totals.totalUsd);
-    const remainingAfterPayment = customerBalanceResetPending
-      ? 0
-      : roundMoney2(Math.max(0, currentOpenBalance - enteredPaymentAmount));
+    const remainingAfterPayment = paymentBalanceDisplay.balanceUsdSigned;
     let openCommissionUsd = 0;
     for (const o of orders) {
       const rem = computeOrderOpenDebtUsd(Number(o.totalAmountUsd), Number(o.dbPaidUsd));
@@ -1063,15 +1073,23 @@ export function PaymentModalUpdated({
       openCommissionUsd += Number(o.commissionUsd) || 0;
     }
     openCommissionUsd = roundMoney2(openCommissionUsd);
-    const afterCommissionUsd = roundMoney2(openCommissionUsd - remainingAfterPayment);
+    const afterCommissionUsd = roundMoney2(
+      openCommissionUsd - Math.max(0, remainingAfterPayment),
+    );
     return {
       currentOpenBalance,
       enteredPaymentAmount,
       remainingAfterPayment,
+      paymentBalanceDisplay,
       openCommissionUsd,
       afterCommissionUsd,
     };
-  }, [customerBalanceResetPending, customerOpenDebtSignedUsd, totals.totalUsd, orders]);
+  }, [
+    totalDebtBeforePaymentUsd,
+    totals.totalUsd,
+    paymentBalanceDisplay,
+    orders,
+  ]);
 
   const intakeStripOpenDebtUsd = customerOpenDebtDisplayUsd;
 
@@ -3560,19 +3578,35 @@ export function PaymentModalUpdated({
                     •
                   </span>
                   <span className="payment-balance-summary__item">
-                    <span className="payment-balance-summary__k">חוב לאחר התשלום:</span>
-                    <AnimatedMoneyValue
+                    <span className="payment-balance-summary__k">
+                      {openDebtAfterPaymentPreview.paymentBalanceDisplay.title}:
+                    </span>
+                    <span
                       className={[
-                        "payment-balance-summary__v",
-                        openDebtAfterPaymentPreview.remainingAfterPayment > 0.01
-                          ? "payment-balance-summary__v--debt"
-                          : openDebtAfterPaymentPreview.remainingAfterPayment < -0.01
-                            ? "payment-balance-summary__v--credit"
-                            : "payment-balance-summary__v--cleared",
+                        "payment-balance-summary__balance-duo",
+                        openDebtAfterPaymentPreview.paymentBalanceDisplay.state === "debt"
+                          ? "payment-balance-summary__balance-duo--debt"
+                          : openDebtAfterPaymentPreview.paymentBalanceDisplay.state === "surplus"
+                            ? "payment-balance-summary__balance-duo--surplus"
+                            : "payment-balance-summary__balance-duo--cleared",
                       ].join(" ")}
                       dir="ltr"
-                      value={`$${fmtUsdDisplay(openDebtAfterPaymentPreview.remainingAfterPayment)}`}
-                    />
+                    >
+                      <AnimatedMoneyValue
+                        className="payment-balance-summary__v payment-balance-summary__v--hero"
+                        dir="ltr"
+                        value={formatPaymentBalanceUsdLine(
+                          openDebtAfterPaymentPreview.paymentBalanceDisplay,
+                        )}
+                      />
+                      <AnimatedMoneyValue
+                        className="payment-balance-summary__v payment-balance-summary__v--ils"
+                        dir="ltr"
+                        value={formatPaymentBalanceIlsLine(
+                          openDebtAfterPaymentPreview.paymentBalanceDisplay,
+                        )}
+                      />
+                    </span>
                   </span>
                 </div>
               ) : null}
@@ -3592,7 +3626,7 @@ export function PaymentModalUpdated({
                       <th className="pm-num pm-th-amt">סכום מקור ($)</th>
                       <th className="pm-num pm-th-commission">עמלה ($)</th>
                       <th className="pm-num">שולם ($)</th>
-                      <th className="pm-num pm-th-total">יתרת חוב ($)</th>
+                      <th className="pm-num pm-th-total">נשאר לתשלום</th>
                       <th>תשלום אחרון</th>
                       <th>סטטוס</th>
                       <th className="payment-modal-th-check" aria-label="עדיפות לסגירה" />
@@ -3795,7 +3829,7 @@ export function PaymentModalUpdated({
                     kpis={liveFormKpis}
                     openDebtUsd={customerOpenDebtDisplayUsd}
                     onOpenDebtClick={() => setDebtBreakdownOpen(true)}
-                    remainingToPayUsd={remainingToPayUsd}
+                    paymentBalanceDisplay={paymentBalanceDisplay}
                     lines={payments}
                     rate={rateN}
                   />

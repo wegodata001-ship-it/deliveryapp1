@@ -1007,8 +1007,7 @@ export function OrdersListShell({
         {pageHeaderActions}
       </header>
 
-      <div className="adm-orders-filters-row">
-        <Suspense fallback={<div className="adm-orders-toolbar-skel" aria-hidden />}>
+      <Suspense fallback={<div className="ofb-skel" aria-hidden />}>
           <OrdersListToolbar
             key={`${toolbarPropsLive.ahWeekSelect}|${toolbarPropsLive.fromYmd}|${toolbarPropsLive.toYmd}`}
             {...toolbarPropsLive}
@@ -1018,7 +1017,6 @@ export function OrdersListShell({
             exportActions={kpiExportActions}
           />
         </Suspense>
-      </div>
 
       <div className="adm-orders-main-panel" dir="rtl">
         <div className="adm-orders-action-kpi-row">
@@ -1074,31 +1072,7 @@ export function OrdersListShell({
           </div>
         ) : null}
 
-        {listEmptyContent && rows.length === 0 ? (
-          <div className={`adm-orders-empty adm-orders-empty--${listEmptyContent.kind}`} role="status">
-            <strong>{listEmptyContent.title}</strong>
-            {listEmptyContent.body ? <p>{listEmptyContent.body}</p> : null}
-            {listEmptyContent.action ? (
-              <button type="button" className="adm-btn adm-btn--primary adm-btn--dense" onClick={listEmptyContent.action}>
-                {listEmptyContent.actionLabel}
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-
         <div className="adm-orders-table-host mobile-table-wrapper adm-table-excel-wrap adm-table-excel-wrap--orders">
-        {listEmptyContent && tableRows.length === 0 && rows.length > 0 ? (
-          <div className="adm-orders-empty adm-orders-empty--filtered" role="status">
-            <strong>{listEmptyContent.title}</strong>
-            {listEmptyContent.body ? <p>{listEmptyContent.body}</p> : null}
-            {listEmptyContent.action ? (
-              <button type="button" className="adm-btn adm-btn--ghost adm-btn--dense" onClick={listEmptyContent.action}>
-                {listEmptyContent.actionLabel}
-              </button>
-            ) : null}
-          </div>
-        ) : (
-        <>
         <table className="adm-table-excel adm-table-excel--orders adm-table-excel--orders-v3">
           <thead>
             <tr>
@@ -1130,8 +1104,24 @@ export function OrdersListShell({
           <tbody>
             {tableRows.length === 0 ? (
               <tr>
-                <td colSpan={12} className="adm-table-empty">
-                  {rows.length === 0 ? "—" : "אין הזמנות לפי הסינון בעמוד זה"}
+                <td colSpan={12} className="adm-table-empty adm-table-empty--rich">
+                  {listEmptyContent ? (
+                    <div className={`adm-orders-empty-in-table adm-orders-empty-in-table--${listEmptyContent.kind}`} role="status">
+                      <strong>{listEmptyContent.title}</strong>
+                      {listEmptyContent.body ? <p>{listEmptyContent.body}</p> : null}
+                      {listEmptyContent.action && listEmptyContent.actionLabel ? (
+                        <button
+                          type="button"
+                          className={`adm-btn adm-btn--${listEmptyContent.kind === "empty" ? "primary" : "ghost"} adm-btn--dense`}
+                          onClick={listEmptyContent.action}
+                        >
+                          {listEmptyContent.actionLabel}
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : (
+                    "—"
+                  )}
                 </td>
               </tr>
             ) : (
@@ -1308,9 +1298,23 @@ export function OrdersListShell({
 
         <div className="adm-orders-mobile-cards" aria-label="רשימת הזמנות">
           {tableRows.length === 0 ? (
-            <p className="adm-orders-mobile-cards__empty">
-              {rows.length === 0 ? "—" : "אין הזמנות לפי הסינון בעמוד זה"}
-            </p>
+            listEmptyContent ? (
+              <div className={`adm-orders-empty-in-table adm-orders-empty-in-table--${listEmptyContent.kind}`} role="status">
+                <strong>{listEmptyContent.title}</strong>
+                {listEmptyContent.body ? <p>{listEmptyContent.body}</p> : null}
+                {listEmptyContent.action && listEmptyContent.actionLabel ? (
+                  <button
+                    type="button"
+                    className={`adm-btn adm-btn--${listEmptyContent.kind === "empty" ? "primary" : "ghost"} adm-btn--dense`}
+                    onClick={listEmptyContent.action}
+                  >
+                    {listEmptyContent.actionLabel}
+                  </button>
+                ) : null}
+              </div>
+            ) : (
+              <p className="adm-orders-mobile-cards__empty">—</p>
+            )
           ) : (
             tableRows.map((o) => (
               <article key={`m-${o.id}`} className="adm-orders-mobile-card">
@@ -1348,8 +1352,6 @@ export function OrdersListShell({
             ))
           )}
         </div>
-        </>
-        )}
         </div>
 
         <OrdersListPaginationBar pagination={paginationLive} label={paginationLabel} />

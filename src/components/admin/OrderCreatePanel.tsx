@@ -5,11 +5,12 @@ import { PM } from "@/lib/payment-method-slugs";
 import { isDebtWithdrawalOrderStatus } from "@/lib/debt-withdrawal-order";
 import { OS } from "@/lib/order-status-slugs";
 import { dispatchOrdersListRefresh } from "@/lib/orders-list-refresh-bus";
+import { computeOrderCaptureMoneyBreakdown } from "@/lib/order-usd-payment-model";
+import { parseSplitPaymentMethodRaw } from "@/lib/order-capture-payment-methods";
 import {
-  convertPaymentInputToUsdCredit,
-  usdBalanceToIlsDisplay,
-  type PaymentInputCurrency,
-} from "@/lib/order-usd-payment-model";
+  type OrderCapturePaymentLineCurrency,
+  type OrderCapturePaymentRow,
+} from "@/components/admin/OrderCapturePaymentsSection";
 import {
   CalendarDays,
   DollarSign,
@@ -43,8 +44,9 @@ import { MoneyInput } from "@/components/ui/MoneyInput";
 import { AnimatedMoneyValue } from "@/components/ui/AnimatedMoneyValue";
 import { CustomerBalanceView } from "@/components/ui/CustomerBalanceView";
 import { parseBalanceAmountString } from "@/lib/customer-balance";
-import { formatMoneyAmount, parseMoneyString } from "@/lib/money-format";
+import { formatMoneyAmount, formatUsdDisplay, parseMoneyString } from "@/lib/money-format";
 import type { OrderCaptureWindowProps } from "@/lib/admin-windows";
+import { newWindowId } from "@/lib/admin-windows";
 
 import { orderCountryLabel, ORDER_COUNTRY_CODES, coerceOrderCountryForForm, type OrderCountryCode } from "@/lib/order-countries";
 import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
@@ -96,6 +98,7 @@ import {
   isCompositePaymentMethod,
   paymentBreakdownForSave,
   validateBreakdown,
+  type BreakdownCurrency,
   type OrderBreakdownLineInput,
 } from "@/lib/payment-breakdown-shared";
 import { OrderStatusSelect } from "@/components/admin/OrderStatusSelect";
@@ -130,6 +133,31 @@ function parseNum(s: string): number {
 function roundMoney2(n: number): number {
   if (!Number.isFinite(n)) return 0;
   return Math.round(n * 100) / 100;
+}
+
+function paymentRowUsdEquivalent(r: OrderCapturePaymentRow, nisPerUsd: number): number {
+  const v = parseNum(r.amount);
+  if (!Number.isFinite(v) || v <= 0) return 0;
+  const cur: OrderCapturePaymentLineCurrency = r.currency ?? "USD";
+  if (cur === "ILS") {
+    if (!Number.isFinite(nisPerUsd) || nisPerUsd <= 0) return NaN;
+    return roundMoney2(v / nisPerUsd);
+  }
+  return roundMoney2(v);
+}
+
+function buildPaymentLinesFromRows(rows: OrderCapturePaymentRow[]) {
+  return rows
+    .filter((r) => r.amount.trim())
+    .map((r) => {
+      const cur = r.currency ?? "USD";
+      const method = parseSplitPaymentMethodRaw(r.paymentMethod) ?? r.paymentMethod;
+      return {
+        paymentMethod: method,
+        amountUsd: r.amount.trim(),
+        ...(cur === "ILS" ? { currency: "ILS" as const } : {}),
+      };
+    });
 }
 
 async function loadCustomerExtrasFast(
@@ -299,7 +327,7 @@ export function OrderCreatePanel({
   const { openWindow, openCreateCustomerForOrder } = useAdminWindows();
   const { globalWeek, globalCountry } = useAdminGlobal();
   useOrderStatusCatalog();
-  const { optionsForValue: paymentMethodOptionsForValue, options: paymentMethodOptions } = usePaymentMethodCatalog();
+  const { optionsForValue } = usePaymentMethodCatalog();
   const idp = (s: string) => `${windowId}-${s}`;
 
   const isEdit = target.mode === "edit";
@@ -502,25 +530,21 @@ export function OrderCreatePanel({
   const [phoneStr, setPhoneStr] = useState("");
   const [orderStatus, setOrderStatus] = useState<string>(OS.OPEN);
   const [paymentMethod, setPaymentMethod] = useState<string>(PM.CASH);
-  /** חלוקת "תשלום מורכב" — רלוונטי רק כאשר paymentMethod === COMPOSITE_PM */
+  /** חלוקת תשלום מורכב — ממלאת שורות תשלום דרך Modal */
   const [paymentBreakdown, setPaymentBreakdown] = useState<OrderBreakdownLineInput[]>([]);
   const [breakdownModalOpen, setBreakdownModalOpen] = useState(false);
-  /** ערך אמצעי התשלום לפני מעבר ל"תשלום מורכב" — לשחזור בביטול ה-Modal */
-  const [paymentMethodBeforeComposite, setPaymentMethodBeforeComposite] = useState<string>(PM.CASH);
   const [isSearching, setIsSearching] = useState(false);
   /** אחרי חיפוש קוד שלא נמצא — הצעה להוספת לקוח */
   const [customerCodeMissing, setCustomerCodeMissing] = useState(false);
 
   const customerCodeInputRef = useRef<HTMLInputElement | null>(null);
   const usdInputRef = useRef<HTMLInputElement | null>(null);
-  const paymentMethodRef = useRef<HTMLSelectElement | null>(null);
   const [paymentPointId, setPaymentPointId] = useState("");
   const [paymentPointQuery, setPaymentPointQuery] = useState("");
   const [notes, setNotes] = useState("");
 
   const [dealUsdStr, setDealUsdStr] = useState("");
-  const [paymentCurrency, setPaymentCurrency] = useState<PaymentInputCurrency>("USD");
-  const [capturePaymentStr, setCapturePaymentStr] = useState("");
+  const [paymentRows, setPaymentRows] = useState<OrderCapturePaymentRow[]>([]);
   const [editPaidUsd, setEditPaidUsd] = useState(0);
 
   const [isSaving, setIsSaving] = useState(false);
@@ -630,15 +654,11 @@ export function OrderCreatePanel({
           currency: b.currency,
         })),
       );
-      setPaymentMethodBeforeComposite(
-        isCompositePaymentMethod(row.paymentMethod) ? PM.CASH : row.paymentMethod,
-      );
+      setPaymentRows([]);
       setPaymentPointId(row.locationId ?? row.paymentPointId ?? "");
       setPaymentPointQuery(row.locationName ?? "");
       setNotes(row.notes);
       setDealUsdStr(row.amountUsd);
-      setCapturePaymentStr("");
-      setPaymentCurrency("USD");
       setEditPaidUsd(parseNum(row.existingPaymentsUsdSum) ?? 0);
       setFinalRateStr(row.usdRateUsed?.trim() ? row.usdRateUsed.trim() : finalRateStr);
       setCommissionPercentStr(row.commissionPercent?.trim() ? row.commissionPercent.trim() : systemDefaultCommissionStr);
@@ -736,7 +756,6 @@ export function OrderCreatePanel({
   }, [openWindow, selectedCustomer]);
 
   const dealUsdNum = useMemo(() => parseNum(dealUsdStr), [dealUsdStr]);
-  const capturePaymentNum = useMemo(() => parseNum(capturePaymentStr), [capturePaymentStr]);
 
   const safeRate = useMemo(() => (Number.isFinite(finalRate) && finalRate > 0 ? finalRate : 0), [finalRate]);
   const usdInput = useMemo(() => (Number.isFinite(dealUsdNum) && dealUsdNum > 0 ? dealUsdNum : 0), [dealUsdNum]);
@@ -757,24 +776,141 @@ export function OrderCreatePanel({
   }, [dealUsdTotal, commissionUsdEffective]);
 
   const referenceIlsTotal = useMemo(
-    () => (safeRate > 0 && totalUsdCalc > 0 ? usdBalanceToIlsDisplay(totalUsdCalc, safeRate) : 0),
+    () => (safeRate > 0 && totalUsdCalc > 0 ? roundMoney2(totalUsdCalc * safeRate) : 0),
     [safeRate, totalUsdCalc],
   );
 
-  const capturePaymentPreview = useMemo(() => {
-    if (!Number.isFinite(capturePaymentNum) || capturePaymentNum <= 0 || safeRate <= 0) return null;
-    return convertPaymentInputToUsdCredit(capturePaymentNum, paymentCurrency, safeRate);
-  }, [capturePaymentNum, paymentCurrency, safeRate]);
+  const balanceBeforeCaptureUsd = useMemo(() => {
+    const paid = isEdit ? editPaidUsd : 0;
+    if (totalUsdCalc <= 0) return 0;
+    return roundMoney2(Math.max(0, totalUsdCalc - paid));
+  }, [totalUsdCalc, editPaidUsd, isEdit]);
 
-  const projectedPaidUsd = useMemo(() => {
-    const newPay = capturePaymentPreview?.amountUsd ?? 0;
-    return roundMoney2((isEdit ? editPaidUsd : 0) + newPay);
-  }, [capturePaymentPreview, editPaidUsd, isEdit]);
+  const referenceIlsRemaining = useMemo(
+    () =>
+      safeRate > 0 && balanceBeforeCaptureUsd > 0
+        ? roundMoney2(balanceBeforeCaptureUsd * safeRate)
+        : 0,
+    [safeRate, balanceBeforeCaptureUsd],
+  );
+
+  const formPaymentsUsd = useMemo(
+    () =>
+      paymentRows.reduce((acc, r) => {
+        const eq = paymentRowUsdEquivalent(r, safeRate);
+        if (Number.isNaN(eq)) return acc;
+        return acc + eq;
+      }, 0),
+    [paymentRows, safeRate],
+  );
+
+  const capturePaymentMethodOptions = useMemo(() => {
+    const base = optionsForValue(paymentMethod).filter((o) => !isCompositePaymentMethod(o.value));
+    if (base.some((o) => o.value === COMPOSITE_PM)) return base;
+    return [...base, { value: COMPOSITE_PM, label: COMPOSITE_PM_LABEL }];
+  }, [optionsForValue, paymentMethod]);
+
+  const breakdownMethodOptions = useMemo(
+    () => capturePaymentMethodOptions.filter((o) => !isCompositePaymentMethod(o.value)),
+    [capturePaymentMethodOptions],
+  );
+
+  const paymentMethodSelectValue = isCompositePaymentMethod(paymentMethod)
+    ? COMPOSITE_PM
+    : paymentMethod;
+
+  const compositeSummaryUsd = useMemo(() => {
+    if (!isCompositePaymentMethod(paymentMethod) || paymentBreakdown.length === 0) return 0;
+    if (totalUsdCalc <= 0) return 0;
+    return validateBreakdown(paymentBreakdown, totalUsdCalc, safeRate).sumUsd;
+  }, [paymentMethod, paymentBreakdown, totalUsdCalc, safeRate]);
+
+  const paymentRowParseError = useMemo(() => {
+    for (const r of paymentRows) {
+      if (!r.amount.trim()) continue;
+      const v = parseNum(r.amount);
+      if (!Number.isFinite(v) || v <= 0) return "סכום בשורת תשלום לא תקין.";
+      if ((r.currency ?? "USD") === "ILS" && safeRate <= 0) {
+        return "שער דולר חיובי נדרש לשורות תשלום בשקלים.";
+      }
+    }
+    return null;
+  }, [paymentRows, safeRate]);
+
+  const paymentTotalError = useMemo(() => {
+    if (isCompositePaymentMethod(paymentMethod)) {
+      if (paymentBreakdown.length === 0) {
+        return "יש להגדיר חלוקת תשלום מורכב לפני שמירה";
+      }
+      if (totalUsdCalc <= 0) {
+        return "יש להזין סכום USD תקין בהזמנה כדי לשמור תשלום מורכב";
+      }
+      const v = validateBreakdown(paymentBreakdown, totalUsdCalc, safeRate);
+      if (!v.ok) {
+        return "חלוקת התשלום המורכב חייבת להיות שווה לסה״כ ההזמנה";
+      }
+    }
+    const hasRowAmount = paymentRows.some((r) => r.amount.trim().length > 0);
+    if (hasRowAmount && totalUsdCalc <= 0) {
+      return "יש להזין סכום USD תקין בהזמנה כדי לשמור שורות תשלום.";
+    }
+    if (totalUsdCalc <= 0) return null;
+    const totalPaid = (isEdit ? editPaidUsd : 0) + formPaymentsUsd;
+    if (totalPaid > totalUsdCalc + 1e-6) {
+      return `סכום התשלומים (${totalPaid.toFixed(2)}) חורג מסה״כ ההזמנה (${totalUsdCalc.toFixed(2)}) USD.`;
+    }
+    if (!isEdit && hasRowAmount && totalPaid < totalUsdCalc - 0.01) {
+      return `חסר תשלום: סה״כ השורות חייב לסגור את ${totalUsdCalc.toFixed(2)} USD (נותר ${(totalUsdCalc - totalPaid).toFixed(2)}).`;
+    }
+    return null;
+  }, [
+    paymentMethod,
+    paymentBreakdown,
+    safeRate,
+    paymentRows,
+    formPaymentsUsd,
+    editPaidUsd,
+    isEdit,
+    totalUsdCalc,
+  ]);
+
+  const paymentBlockError = paymentRowParseError || paymentTotalError;
+
+  const paymentRemainingUsd = useMemo(() => {
+    if (totalUsdCalc <= 0) return null;
+    return Math.max(0, totalUsdCalc - (isEdit ? editPaidUsd : 0) - formPaymentsUsd);
+  }, [totalUsdCalc, editPaidUsd, formPaymentsUsd, isEdit]);
+
+  const projectedPaidUsd = useMemo(
+    () => roundMoney2((isEdit ? editPaidUsd : 0) + formPaymentsUsd),
+    [formPaymentsUsd, editPaidUsd, isEdit],
+  );
 
   const projectedRemainingUsd = useMemo(() => {
     if (totalUsdCalc <= 0) return 0;
     return roundMoney2(Math.max(0, totalUsdCalc - projectedPaidUsd));
   }, [totalUsdCalc, projectedPaidUsd]);
+
+  const moneyBreakdown = useMemo(
+    () =>
+      computeOrderCaptureMoneyBreakdown({
+        dealUsd: dealUsdTotal,
+        commissionUsd: commissionUsdEffective,
+        commissionPct: commissionPct,
+        rate: safeRate,
+        paidUsd: projectedPaidUsd,
+        remainingUsd: projectedRemainingUsd,
+        vatPercent: VAT_RATE_PERCENT,
+      }),
+    [
+      commissionPct,
+      commissionUsdEffective,
+      dealUsdTotal,
+      projectedPaidUsd,
+      projectedRemainingUsd,
+      safeRate,
+    ],
+  );
 
   const isDebtWithdrawalCapture = isDebtWithdrawalOrderStatus(orderStatus);
   const displayTotalUsd = isDebtWithdrawalCapture ? -Math.abs(totalUsdCalc) : totalUsdCalc;
@@ -984,8 +1120,7 @@ export function OrderCreatePanel({
     setPhoneStr("");
     setNotes("");
     setDealUsdStr("");
-    setCapturePaymentStr("");
-    setPaymentCurrency("USD");
+    setPaymentRows([]);
     setEditPaidUsd(0);
     setCommissionPercentStr(systemDefaultCommissionStr);
     commissionPercentTouchedRef.current = false;
@@ -995,7 +1130,6 @@ export function OrderCreatePanel({
     setIsSearching(false);
     setErr(null);
     setPaymentMethod(PM.CASH);
-    setPaymentMethodBeforeComposite(PM.CASH);
     setPaymentBreakdown([]);
     setBreakdownModalOpen(false);
     setOrderStatus(OS.OPEN);
@@ -1051,6 +1185,8 @@ export function OrderCreatePanel({
     intakeTimeHm,
     paymentMethod,
     paymentBreakdown,
+    paymentRows,
+    paymentBlockError,
     orderStatus,
     notes,
     nameArStr,
@@ -1059,8 +1195,6 @@ export function OrderCreatePanel({
     orderCountries,
     finalRate,
     displayWeekCode,
-    paymentCurrency,
-    capturePaymentStr,
     isDebtWithdrawalCapture,
   });
   performSaveStateRef.current = {
@@ -1086,6 +1220,8 @@ export function OrderCreatePanel({
     intakeTimeHm,
     paymentMethod,
     paymentBreakdown,
+    paymentRows,
+    paymentBlockError,
     orderStatus,
     notes,
     nameArStr,
@@ -1094,8 +1230,6 @@ export function OrderCreatePanel({
     orderCountries,
     finalRate,
     displayWeekCode,
-    paymentCurrency,
-    capturePaymentStr,
     isDebtWithdrawalCapture,
   };
 
@@ -1107,7 +1241,7 @@ export function OrderCreatePanel({
       amountUsd: roundMoney2(dealUsdTotal).toFixed(2),
       feeUsd: commissionUsdEffective.toFixed(2),
       commissionPercent: commissionPercentStr,
-      paymentMethod,
+      paymentMethod: isCompositePaymentMethod(paymentMethod) ? COMPOSITE_PM : paymentMethod,
       status: orderStatus,
       notes: notes.trim(),
       sourceCountry:
@@ -1128,7 +1262,7 @@ export function OrderCreatePanel({
     dealUsdTotal,
     commissionUsdEffective,
     commissionPercentStr,
-    paymentMethod,
+    paymentRows,
     orderStatus,
     notes,
     sourceCountry,
@@ -1201,18 +1335,9 @@ export function OrderCreatePanel({
         return;
       }
 
-      if (isCompositePaymentMethod(s.paymentMethod)) {
-        const payable = roundMoney2(s.dealUsdTotal + s.commissionUsdEffective);
-        const v = validateBreakdown(s.paymentBreakdown, payable, s.finalRate);
-        if (!v.ok) {
-          setErr(
-            v.validCount < 1
-              ? "תשלום מורכב: יש להגדיר חלוקת תשלום"
-              : "תשלום מורכב: סכום החלוקה אינו תואם לסך ההזמנה",
-          );
-          setBreakdownModalOpen(true);
-          return;
-        }
+      if (s.paymentBlockError && !s.isDebtWithdrawalCapture) {
+        setErr(s.paymentBlockError);
+        return;
       }
 
       try {
@@ -1222,24 +1347,19 @@ export function OrderCreatePanel({
         const extras = captureExtrasFromPanel(s.financial, s.finalRate, cust, s.orderCountries);
 
         const payable = roundMoney2(s.dealUsdTotal + s.commissionUsdEffective);
-        const breakdownForSave = paymentBreakdownForSave(s.paymentMethod, s.paymentBreakdown, payable);
-
-        const buildCapturePaymentLines = () => {
-          if (s.isDebtWithdrawalCapture || isCompositePaymentMethod(s.paymentMethod)) return undefined;
-          const raw = (s.capturePaymentStr || "").trim().replace(",", ".");
-          if (!raw) return undefined;
-          const n = Number(raw);
-          if (!Number.isFinite(n) || n <= 0) return undefined;
-          if (s.paymentCurrency === "ILS" && s.finalRate <= 0) return undefined;
-          return [
-            {
-              paymentMethod: s.paymentMethod,
-              amountUsd: raw,
-              currency: s.paymentCurrency,
-            },
-          ];
-        };
-        const paymentLinesForSave = buildCapturePaymentLines();
+        const primaryPaymentMethod = isCompositePaymentMethod(s.paymentMethod)
+          ? COMPOSITE_PM
+          : (s.paymentMethod.trim() || PM.CASH);
+        const breakdownForSave = isCompositePaymentMethod(s.paymentMethod)
+          ? s.paymentBreakdown
+          : paymentBreakdownForSave(primaryPaymentMethod, [], payable);
+        const paymentLinesForSave = s.isDebtWithdrawalCapture
+          ? undefined
+          : (() => {
+              if (!isCompositePaymentMethod(s.paymentMethod)) return undefined;
+              const lines = buildPaymentLinesFromRows(s.paymentRows);
+              return lines.length > 0 ? lines : undefined;
+            })();
 
         const savePayload = (feeStr: string) =>
           s.isEdit
@@ -1255,7 +1375,7 @@ export function OrderCreatePanel({
                 feeUsd: feeStr,
                 commissionPercent: s.commissionPercentStr,
                 finalRateOverride: s.finalRate > 0 ? String(s.finalRate) : null,
-                paymentMethod: s.paymentMethod,
+                paymentMethod: primaryPaymentMethod,
                 paymentBreakdown: breakdownForSave,
                 status: s.orderStatus,
                 notes: s.notes.trim() || undefined,
@@ -1279,7 +1399,7 @@ export function OrderCreatePanel({
                 feeUsd: feeStr,
                 commissionPercent: s.commissionPercentStr,
                 finalRateOverride: s.finalRate > 0 ? String(s.finalRate) : null,
-                paymentMethod: s.paymentMethod,
+                paymentMethod: primaryPaymentMethod,
                 paymentBreakdown: breakdownForSave,
                 status: s.orderStatus,
                 notes: s.notes.trim() || undefined,
@@ -1306,7 +1426,7 @@ export function OrderCreatePanel({
               amountUsd: roundMoney2(s.dealUsdTotal).toFixed(2),
               feeUsd: feeStr,
               commissionPercent: s.commissionPercentStr,
-              paymentMethod: s.paymentMethod,
+              paymentMethod: isCompositePaymentMethod(s.paymentMethod) ? COMPOSITE_PM : s.paymentMethod,
               status: s.orderStatus,
               notes: s.notes.trim(),
               sourceCountry: countryForSave,
@@ -1442,6 +1562,21 @@ export function OrderCreatePanel({
     setDropdownField(null);
     setHits([]);
   }, []);
+
+  const handlePaymentMethodChange = useCallback(
+    (method: string) => {
+      closeCustomerDropdown();
+      if (!method.trim()) return;
+      if (isCompositePaymentMethod(method)) {
+        setBreakdownModalOpen(true);
+        return;
+      }
+      setPaymentMethod(method);
+      setPaymentBreakdown([]);
+      setPaymentRows([]);
+    },
+    [closeCustomerDropdown],
+  );
 
   if (target.mode === "create" && !canCreateOrders) return null;
   if (target.mode === "edit" && !canEditOrders) return null;
@@ -2106,15 +2241,58 @@ export function OrderCreatePanel({
                     }}
                   />
                 </div>
+                {!isDebtWithdrawalCapture ? (
+                <div className="adm-oc-legacy-side-field">
+                  <label htmlFor={idp("pay-pm")}>צורת תשלום</label>
+                  <select
+                    id={idp("pay-pm")}
+                    className="adm-oc-legacy-side-sel"
+                    disabled={fieldDisabled}
+                    value={paymentMethodSelectValue}
+                    onChange={(e) => handlePaymentMethodChange(e.target.value)}
+                  >
+                    <option value="">בחר צורת תשלום</option>
+                    {capturePaymentMethodOptions.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                  {isCompositePaymentMethod(paymentMethod) && paymentBreakdown.length > 0 ? (
+                    <div className="adm-oc-composite-summary">
+                      <div className="adm-oc-composite-summary__head">
+                        <span>{COMPOSITE_PM_LABEL}</span>
+                        <span className="adm-oc-composite-summary__check" aria-hidden>
+                          ✓
+                        </span>
+                      </div>
+                      <div className="adm-oc-composite-summary__meta" dir="ltr">
+                        {paymentBreakdown.length} אמצעי תשלום · {formatUsdDisplay(compositeSummaryUsd)}
+                      </div>
+                      <button
+                        type="button"
+                        className="adm-oc-pbd-edit"
+                        disabled={fieldDisabled}
+                        onClick={() => setBreakdownModalOpen(true)}
+                      >
+                        עריכת חלוקה
+                      </button>
+                    </div>
+                  ) : null}
+                  {paymentBlockError ? (
+                    <div className="adm-error adm-error--compact adm-pay-err">{paymentBlockError}</div>
+                  ) : null}
+                </div>
+                ) : null}
               </aside>
             </Card>
           </div>
 
           <div className="modal-summary adm-oc-pro-money adm-oc-usd-model" dir="ltr">
-            <Card className="summary-success adm-oc-legacy-card adm-oc-card--usd adm-oc-pro-card adm-oc-pro-card--order-total">
+            <Card className="summary-success adm-oc-legacy-card adm-oc-card--usd adm-oc-pro-card adm-oc-pro-card--usd adm-oc-pro-card--order-total">
               <div className="adm-oc-card-title adm-oc-pro-card-title adm-oc-pro-card-title--usd">סכום הזמנה ($)</div>
               <div className="adm-field adm-oc-field adm-oc-legacy-fin-field">
-                <label htmlFor={idp("dusd")}>סכום בדולר</label>
+                <label htmlFor={idp("dusd")}>סכום לפני עמלה</label>
                 <MoneyInput
                   id={idp("dusd")}
                   ref={usdInputRef}
@@ -2129,27 +2307,64 @@ export function OrderCreatePanel({
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       e.preventDefault();
-                      paymentMethodRef.current?.focus();
                     }
                   }}
                 />
               </div>
               <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2 adm-oc-money-line--commission">
-                <span className="adm-oc-money-label commission-label">עמלה</span>
+                <span className="adm-oc-money-label commission-label">
+                  עמלה
+                  {commissionPct > 0 ? (
+                    <span className="adm-oc-money-pct" dir="ltr">
+                      {commissionPct}%
+                    </span>
+                  ) : null}
+                </span>
                 <AnimatedMoneyValue
                   className="adm-oc-money-value adm-oc-money-value--usd commission-value"
                   dir="ltr"
                   value={`$${formatMoneyAmount(commissionUsdEffective)}`}
                 />
               </div>
-              <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2">
-                <span className="adm-oc-money-label">סה״כ $</span>
-                <AnimatedMoneyValue
-                  className="adm-oc-money-value adm-oc-money-value--usd"
-                  dir="ltr"
-                  value={`$${formatMoneyAmount(displayTotalUsd)}`}
-                />
-              </div>
+              {moneyBreakdown ? (
+                <>
+                  <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2 adm-oc-money-line--pretax">
+                    <span className="adm-oc-money-label">סה״כ לפני מע״מ</span>
+                    <AnimatedMoneyValue
+                      className="adm-oc-money-value adm-oc-money-value--usd"
+                      dir="ltr"
+                      value={`$${formatMoneyAmount(moneyBreakdown.totalUsd)}`}
+                    />
+                  </div>
+                  <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2 adm-oc-money-line--vat">
+                    <span className="adm-oc-money-label">
+                      {formatVatPercentLabel()}
+                    </span>
+                    <AnimatedMoneyValue
+                      className="adm-oc-money-value adm-oc-money-value--usd adm-oc-money-value--vat"
+                      dir="ltr"
+                      value={`$${formatMoneyAmount(moneyBreakdown.vatUsd)}`}
+                    />
+                  </div>
+                  <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2 adm-oc-money-line--gross">
+                    <span className="adm-oc-money-label">סה״כ כולל מע״מ</span>
+                    <AnimatedMoneyValue
+                      className="adm-oc-money-value adm-oc-money-value--usd adm-oc-money-value--gross"
+                      dir="ltr"
+                      value={`$${formatMoneyAmount(moneyBreakdown.totalUsd)}`}
+                    />
+                  </div>
+                </>
+              ) : (
+                <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2">
+                  <span className="adm-oc-money-label">סה״כ $</span>
+                  <AnimatedMoneyValue
+                    className="adm-oc-money-value adm-oc-money-value--usd"
+                    dir="ltr"
+                    value={`$${formatMoneyAmount(displayTotalUsd)}`}
+                  />
+                </div>
+              )}
               <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2">
                 <span className="adm-oc-money-label">שולם $</span>
                 <AnimatedMoneyValue
@@ -2158,7 +2373,12 @@ export function OrderCreatePanel({
                   value={`$${formatMoneyAmount(projectedPaidUsd)}`}
                 />
               </div>
-              <div className="adm-oc-line adm-oc-line--total adm-oc-money-line adm-oc-money-line--hero">
+              <div
+                className={[
+                  "adm-oc-line adm-oc-line--total adm-oc-money-line adm-oc-money-line--hero",
+                  projectedRemainingUsd <= 0 ? "adm-oc-money-line--balance-zero" : "adm-oc-money-line--balance-due",
+                ].join(" ")}
+              >
                 <span className="adm-oc-money-label summary-total-label">יתרה $</span>
                 <AnimatedMoneyValue
                   className="adm-oc-money-value adm-oc-money-value--usd summary-total-value"
@@ -2166,122 +2386,104 @@ export function OrderCreatePanel({
                   value={`$${formatMoneyAmount(projectedRemainingUsd)}`}
                 />
               </div>
-              {referenceIlsTotal > 0 ? (
-                <p className="adm-oc-usd-model-ref" dir="rtl">
-                  שווי בשקלים (למידע בלבד): ₪{formatMoneyAmount(referenceIlsTotal)} לפי שער {formatMoneyAmount(safeRate)}
-                </p>
+            </Card>
+
+            <Card className="summary-success adm-oc-legacy-card adm-oc-card--ils adm-oc-pro-card adm-oc-pro-card--ils adm-oc-ils-converter">
+              <div className="adm-oc-card-title adm-oc-pro-card-title adm-oc-pro-card-title--ils">
+                המרה / תשלום בשקלים (₪)
+              </div>
+              <p className="adm-oc-ils-converter__hint" dir="rtl">
+                פירוט ההזמנה בשקלים לפי שער הדולר הנוכחי
+              </p>
+
+              <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2 adm-oc-ils-rate">
+                <span className="adm-oc-money-label">שער דולר</span>
+                <AnimatedMoneyValue
+                  className="adm-oc-money-value adm-oc-xrate-val"
+                  dir="ltr"
+                  value={safeRate > 0 ? formatMoneyAmount(safeRate) : "—"}
+                />
+              </div>
+
+              {moneyBreakdown ? (
+                <div className="adm-oc-ils-breakdown" dir="rtl">
+                  <div className="adm-oc-ils-breakdown__title">שווי ההזמנה בשקלים</div>
+                  <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2 adm-oc-money-line--base">
+                    <span className="adm-oc-money-label">סכום לפני עמלה</span>
+                    <AnimatedMoneyValue
+                      className="adm-oc-money-value adm-oc-money-value--ils"
+                      dir="ltr"
+                      value={`₪${formatMoneyAmount(moneyBreakdown.dealIls)}`}
+                    />
+                  </div>
+                  <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2 adm-oc-money-line--commission">
+                    <span className="adm-oc-money-label commission-label">
+                      עמלה
+                      {moneyBreakdown.commissionPct > 0 ? (
+                        <span className="adm-oc-money-pct" dir="ltr">
+                          {moneyBreakdown.commissionPct}%
+                        </span>
+                      ) : null}
+                    </span>
+                    <AnimatedMoneyValue
+                      className="adm-oc-money-value adm-oc-money-value--ils commission-value"
+                      dir="ltr"
+                      value={`₪${formatMoneyAmount(moneyBreakdown.commissionIls)}`}
+                    />
+                  </div>
+                  <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2 adm-oc-money-line--pretax">
+                    <span className="adm-oc-money-label">סה״כ אחרי עמלה / לפני מע״מ</span>
+                    <AnimatedMoneyValue
+                      className="adm-oc-money-value adm-oc-money-value--ils"
+                      dir="ltr"
+                      value={`₪${formatMoneyAmount(moneyBreakdown.afterCommissionIls)}`}
+                    />
+                  </div>
+                  <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2 adm-oc-money-line--vat">
+                    <span className="adm-oc-money-label">{formatVatPercentLabel()}</span>
+                    <AnimatedMoneyValue
+                      className="adm-oc-money-value adm-oc-money-value--ils adm-oc-money-value--vat"
+                      dir="ltr"
+                      value={`₪${formatMoneyAmount(moneyBreakdown.vatIls)}`}
+                    />
+                  </div>
+                  <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2 adm-oc-money-line--gross">
+                    <span className="adm-oc-money-label">סה״כ כולל מע״מ</span>
+                    <AnimatedMoneyValue
+                      className="adm-oc-money-value adm-oc-money-value--ils adm-oc-money-value--gross"
+                      dir="ltr"
+                      value={`₪${formatMoneyAmount(moneyBreakdown.totalWithVatIls)}`}
+                    />
+                  </div>
+                  <div className="adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2">
+                    <span className="adm-oc-money-label">שולם בשקלים</span>
+                    <AnimatedMoneyValue
+                      className="adm-oc-money-value adm-oc-money-value--ils"
+                      dir="ltr"
+                      value={`₪${formatMoneyAmount(moneyBreakdown.paidIls)}`}
+                    />
+                  </div>
+                  <div
+                    className={[
+                      "adm-oc-line adm-oc-money-line adm-oc-money-line--tier-2",
+                      moneyBreakdown.remainingIls <= 0
+                        ? "adm-oc-money-line--balance-zero"
+                        : "adm-oc-money-line--balance-due",
+                    ].join(" ")}
+                  >
+                    <span className="adm-oc-money-label">יתרה לתשלום בשקלים</span>
+                    <AnimatedMoneyValue
+                      className="adm-oc-money-value adm-oc-money-value--ils"
+                      dir="ltr"
+                      value={`₪${formatMoneyAmount(moneyBreakdown.remainingIls)}`}
+                    />
+                  </div>
+                </div>
               ) : null}
             </Card>
-
-            <Card className="adm-oc-pay-card adm-oc-pro-card adm-oc-pro-card--payment adm-oc-pro-card--capture-pay">
-              <h3 className="adm-oc-pro-card-title adm-oc-pro-card-title--payment">תשלום</h3>
-              {!isDebtWithdrawalCapture ? (
-                <div className="adm-oc-capture-pay-grid" dir="rtl">
-                  <div className="adm-field adm-oc-field">
-                    <label htmlFor={idp("pay-m")}>צורת תשלום</label>
-                    <select
-                      id={idp("pay-m")}
-                      ref={paymentMethodRef}
-                      className="adm-oc-legacy-side-sel"
-                      disabled={fieldDisabled}
-                      value={paymentMethod}
-                      onChange={(e) => {
-                        const value = e.target.value;
-                        if (isCompositePaymentMethod(value)) {
-                          if (!isCompositePaymentMethod(paymentMethod)) setPaymentMethodBeforeComposite(paymentMethod);
-                          setPaymentMethod(COMPOSITE_PM);
-                          setBreakdownModalOpen(true);
-                        } else {
-                          setPaymentMethod(value);
-                          setPaymentBreakdown([]);
-                        }
-                      }}
-                    >
-                      {paymentMethodOptionsForValue(
-                        isCompositePaymentMethod(paymentMethod) ? undefined : paymentMethod,
-                      ).map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                      <option value={COMPOSITE_PM}>{COMPOSITE_PM_LABEL}</option>
-                    </select>
-                  </div>
-                  <div className="adm-field adm-oc-field">
-                    <span className="adm-oc-pro-lbl">מטבע תשלום</span>
-                    <div className="adm-oc-currency-toggle" role="group" aria-label="מטבע תשלום">
-                      <button
-                        type="button"
-                        className={paymentCurrency === "USD" ? "is-active" : ""}
-                        disabled={fieldDisabled}
-                        onClick={() => setPaymentCurrency("USD")}
-                      >
-                        $ דולר
-                      </button>
-                      <button
-                        type="button"
-                        className={paymentCurrency === "ILS" ? "is-active" : ""}
-                        disabled={fieldDisabled}
-                        onClick={() => setPaymentCurrency("ILS")}
-                      >
-                        ₪ שקל
-                      </button>
-                    </div>
-                  </div>
-                  {!isCompositePaymentMethod(paymentMethod) ? (
-                    <div className="adm-field adm-oc-field adm-oc-field--full">
-                      <label htmlFor={idp("pay-amt")}>
-                        {paymentCurrency === "ILS" ? "סכום ששולם ₪" : "סכום ששולם $"}
-                      </label>
-                      <MoneyInput
-                        id={idp("pay-amt")}
-                        className="adm-oc-inp adm-oc-legacy-fin-inp"
-                        disabled={fieldDisabled}
-                        placeholder={paymentCurrency === "ILS" ? "450" : "120"}
-                        value={Number.isFinite(capturePaymentNum) && capturePaymentNum > 0 ? capturePaymentNum : null}
-                        onChange={(n) => setCapturePaymentStr(n == null ? "" : String(n))}
-                      />
-                    </div>
-                  ) : null}
-                  {paymentCurrency === "ILS" && capturePaymentPreview && !isCompositePaymentMethod(paymentMethod) ? (
-                    <div className="adm-oc-capture-pay-conv" dir="rtl">
-                      <p>
-                        יתרה לתשלום: <strong dir="ltr">${formatMoneyAmount(projectedRemainingUsd + capturePaymentPreview.amountUsd)}</strong>
-                      </p>
-                      <p>
-                        שער דולר: <strong dir="ltr">{formatMoneyAmount(safeRate)}</strong>
-                      </p>
-                      <p>
-                        תשלום זה יכסה: <strong dir="ltr">${formatMoneyAmount(capturePaymentPreview.amountUsd)}</strong>
-                      </p>
-                      <p className="adm-oc-capture-pay-conv__eq" dir="ltr">
-                        ₪{formatMoneyAmount(capturePaymentPreview.originalAmount)} = ${formatMoneyAmount(capturePaymentPreview.amountUsd)}
-                      </p>
-                      <p>
-                        יתרה לאחר תשלום: <strong dir="ltr">${formatMoneyAmount(projectedRemainingUsd)}</strong>
-                      </p>
-                    </div>
-                  ) : null}
-                  {isCompositePaymentMethod(paymentMethod) ? (
-                    <button
-                      type="button"
-                      className="adm-oc-pbd-edit"
-                      disabled={fieldDisabled}
-                      onClick={() => setBreakdownModalOpen(true)}
-                    >
-                      {paymentBreakdown.length > 0
-                        ? `חלוקה: ${paymentBreakdown.length} אמצעים · ערוך`
-                        : "הגדר חלוקת תשלום"}
-                    </button>
-                  ) : null}
-                </div>
-              ) : (
-                <p className="adm-oc-debt-withdrawal-hint">הזמנת משיכה מחוב — ללא תשלום בקליטה.</p>
-              )}
-            </Card>
           </div>
-        </div>
 
+        </div>
         </div>
 
         <div className="adm-modal-actions adm-modal-actions--capture adm-oc-legacy-actions adm-oc-pro-actions">
@@ -2400,19 +2602,27 @@ export function OrderCreatePanel({
           nisPerUsd={finalRate}
           availableUsd={totalUsdCalc > 0 ? totalUsdCalc : 0}
           availableIls={referenceIlsTotal > 0 ? referenceIlsTotal : 0}
-          methodOptions={paymentMethodOptions.map((o) => ({ value: o.value, label: o.label }))}
+          methodOptions={breakdownMethodOptions.map((o) => ({ value: o.value, label: o.label }))}
           initialLines={paymentBreakdown}
           idPrefix={windowId}
           onClose={() => {
             setBreakdownModalOpen(false);
-            // אם אין חלוקה תקפה — חזרה לאמצעי הקודם
-            if (paymentBreakdown.length === 0) {
-              setPaymentMethod(paymentMethodBeforeComposite);
-            }
           }}
           onConfirm={(lines) => {
             setPaymentBreakdown(lines);
             setPaymentMethod(COMPOSITE_PM);
+            if (!isEdit) {
+              setPaymentRows(
+                lines.map((line) => ({
+                  id: `pay-${newWindowId()}`,
+                  paymentMethod: line.paymentMethod,
+                  currency: line.currency,
+                  amount: line.amount,
+                })),
+              );
+            } else {
+              setPaymentRows([]);
+            }
             setBreakdownModalOpen(false);
           }}
         />

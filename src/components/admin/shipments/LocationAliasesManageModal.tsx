@@ -9,6 +9,7 @@ import {
   updateLocationAliasOriginalNameAction,
 } from "@/app/admin/shipments/location-actions";
 import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
+import { ShipmentConfirmModal } from "@/components/admin/shipments/ShipmentConfirmModal";
 
 type Props = {
   location: DeliveryLocationDto;
@@ -24,6 +25,8 @@ export function LocationAliasesManageModal({ location, onClose, onChanged }: Pro
   const [editValue, setEditValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; label: string } | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const sorted = useMemo(
     () => [...aliases].sort((a, b) => a.originalName.localeCompare(b.originalName, "he")),
@@ -86,21 +89,24 @@ export function LocationAliasesManageModal({ location, onClose, onChanged }: Pro
     onChanged();
   }
 
-  async function onDelete(aliasId: string, label: string) {
-    if (!window.confirm(`למחוק את הכינוי "${label}"?`)) return;
+  async function confirmDelete() {
+    if (!deleteTarget) return;
     setBusy(true);
+    setDeleteError(null);
     setError(null);
-    const res = await deleteLocationAliasAction(workCountry, aliasId);
+    const res = await deleteLocationAliasAction(workCountry, deleteTarget.id);
     setBusy(false);
     if (!res.ok) {
-      setError(res.error);
+      setDeleteError(res.error);
       return;
     }
-    setAliases((prev) => prev.filter((a) => a.id !== aliasId));
+    setAliases((prev) => prev.filter((a) => a.id !== deleteTarget.id));
+    setDeleteTarget(null);
     onChanged();
   }
 
   return (
+    <>
     <div className="shp-modal-backdrop" onClick={() => !busy && onClose()}>
       <div
         className="shp-modal"
@@ -216,7 +222,10 @@ export function LocationAliasesManageModal({ location, onClose, onChanged }: Pro
                               className="shp-icon-btn"
                               title="מחיקה"
                               disabled={busy}
-                              onClick={() => void onDelete(a.id, a.originalName)}
+                              onClick={() => {
+                                setDeleteError(null);
+                                setDeleteTarget({ id: a.id, label: a.originalName });
+                              }}
                             >
                               <Trash2 size={14} />
                             </button>
@@ -238,5 +247,29 @@ export function LocationAliasesManageModal({ location, onClose, onChanged }: Pro
         </div>
       </div>
     </div>
+
+      <ShipmentConfirmModal
+        open={deleteTarget != null}
+        title="מחיקת כינוי"
+        icon="trash"
+        variant="danger"
+        message={
+          <>
+            האם למחוק את הכינוי <strong>&quot;{deleteTarget?.label ?? ""}&quot;</strong>?
+          </>
+        }
+        confirmLabel="מחק כינוי"
+        confirmBusyLabel="מוחק…"
+        busy={busy}
+        error={deleteError}
+        onCancel={() => {
+          if (!busy) {
+            setDeleteTarget(null);
+            setDeleteError(null);
+          }
+        }}
+        onConfirm={() => void confirmDelete()}
+      />
+    </>
   );
 }

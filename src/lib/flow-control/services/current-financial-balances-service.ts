@@ -30,6 +30,7 @@ import {
   type BalanceFlowRow,
   type CumulativeBalanceInput,
 } from "@/lib/flow-control/services/current-financial-balances.shared";
+import { buildNetAvailableBreakdown } from "@/lib/flow-control/services/net-available-breakdown.shared";
 import { sumFxPurchases } from "@/lib/flow-control/flow-calculation-service";
 
 function dec(v: { toString(): string } | null | undefined): number {
@@ -397,23 +398,39 @@ export async function loadCurrentBalanceDrill(
 
   if (kind === "netIls") {
     const pos = balances.cashPosition;
-    summaryLines.push(`יתרה ברוטו: ${fmtMoney("ILS", pos.grossAvailableIls)}`);
-    summaryLines.push(`יתרת בנק: ${fmtMoney("ILS", pos.bankBalanceIls)}`);
-    if (pos.bankDebtIls > 0) {
-      summaryLines.push(`חוב בנק: ${fmtMoney("ILS", -pos.bankDebtIls)}`);
-      summaryLines.push(`כיסוי ממזומן: ${fmtMoney("ILS", pos.debtCoverageFromCashIls)}`);
-      summaryLines.push(`בנק אחרי כיסוי: ${fmtMoney("ILS", pos.effectiveBankBalanceIls)}`);
-    }
-    summaryLines.push(`רכישות מט״ח: ${fmtMoney("ILS", pos.fxPurchasesIls)}`);
+    const breakdown = balances.netBreakdown ?? buildNetAvailableBreakdown(
+      input,
+      pos.grossAvailableIls,
+      pos.bankBalanceIls,
+      pos.netAvailableIls,
+    );
+
+    const deficit = pos.netAvailableIls < -0.005 ? round2(-pos.netAvailableIls) : 0;
+    const alertMessage =
+      deficit > 0
+        ? `קיימת חריגה של ${fmtMoney("ILS", deficit)} – יצאו יותר שקלים מהסכום שהיה זמין.`
+        : null;
 
     return {
       kind,
-      title: "יתרה נטו זמינה",
-      subtitle: "ברוטו + בנק (חתום)",
+      title: "יתרת שקלים זמינה",
+      subtitle: breakdown.formulaHe,
       currency: "ILS",
       rows,
-      summaryLines,
+      summaryLines: [
+        `ברוטו מזומן: ${fmtMoney("ILS", pos.grossAvailableIls)}`,
+        `יתרת בנק: ${fmtMoney("ILS", pos.bankBalanceIls)}`,
+        ...(pos.bankDebtIls > 0
+          ? [
+              `חוב בנק: ${fmtMoney("ILS", -pos.bankDebtIls)}`,
+              `כיסוי ממזומן: ${fmtMoney("ILS", pos.debtCoverageFromCashIls)}`,
+            ]
+          : []),
+      ],
       closingBalance: fmtMoney("ILS", pos.netAvailableIls),
+      waterfallLines: breakdown.lines,
+      formulaHe: breakdown.formulaHe,
+      alertMessage,
     };
   }
 

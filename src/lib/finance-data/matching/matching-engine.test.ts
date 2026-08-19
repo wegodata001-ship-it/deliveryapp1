@@ -185,4 +185,30 @@ describe("finance-data Matching Engine — currency isolation", () => {
     assert.equal(dual.balances.find((b) => b.currency === "ILS")!.remaining, 400);
     assert.ok(dual.transfersApplied.every((t) => t.currency === "USD"));
   });
+
+  it("ILS cash against USD debt — acceptance @ rate 3", () => {
+    const dual = applyDualCurrencyMatching({
+      balances: [
+        bal({
+          breakdownId: "c",
+          orderId: "o1",
+          method: "CASH",
+          bucket: "CASH",
+          currency: "USD",
+          planned: 100,
+          paid: 0,
+          remaining: 100,
+        }),
+      ],
+      enteredByBucket: [
+        { bucket: "CASH", label: "Cash", currency: "ILS", entered: 100 },
+      ],
+      orderIdsOldestFirst: ["o1"],
+      rateByOrderId: new Map([["o1", 3]]),
+    });
+    const cash = dual.balances.find((b) => b.bucket === "CASH")!;
+    assert.equal(cash.paid, 33.33);
+    assert.equal(cash.remaining, 66.67);
+    assert.equal(dual.amountUsdByOrderId.get("o1"), 33.33);
+  });
 });

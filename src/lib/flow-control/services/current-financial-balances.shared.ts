@@ -14,6 +14,7 @@ import {
   computeCurrentCashPosition,
   round2,
 } from "@/lib/flow-control/services/current-cash-position.shared";
+import { buildNetAvailableBreakdown } from "@/lib/flow-control/services/net-available-breakdown.shared";
 import type { WorkCountryCode } from "@/lib/work-country";
 
 export { round2 } from "@/lib/flow-control/services/current-cash-position.shared";
@@ -210,6 +211,13 @@ export function computeCurrentFinancialBalancesFromInput(
     totalFxUsd,
   });
 
+  const netBreakdown = buildNetAvailableBreakdown(
+    input,
+    cashPosition.grossAvailableIls,
+    cashPosition.bankBalanceIls,
+    cashPosition.netAvailableIls,
+  );
+
   return {
     asOfWeek: asOfWeek.trim(),
     workCountry,
@@ -229,6 +237,7 @@ export function computeCurrentFinancialBalancesFromInput(
     grossStatus: cashPosition.grossStatus,
     bankStatus: cashPosition.bankStatus,
     netStatus: cashPosition.netStatus,
+    netBreakdown,
   };
 }
 

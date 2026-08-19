@@ -44,6 +44,7 @@ import {
   manualShipmentPaymentFromRow,
 } from "@/lib/manual-shipment-payment";
 import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
+import { ShipmentConfirmModal } from "@/components/admin/shipments/ShipmentConfirmModal";
 
 type Mode = "create" | "edit" | "view" | null;
 type FormState = Record<ManualColumnKey, string>;
@@ -275,6 +276,10 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
   const [form, setForm] = useState<FormState>(emptyForm);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const [deleteOneId, setDeleteOneId] = useState<string | null>(null);
+  const [deleteOneError, setDeleteOneError] = useState<string | null>(null);
+  const [deleteSelectedOpen, setDeleteSelectedOpen] = useState(false);
+  const [deleteSelectedError, setDeleteSelectedError] = useState<string | null>(null);
 
   const [draft, setDraft] = useState<FormState | null>(null);
   const [focusCell, setFocusCell] = useState<EditTarget>(null);
@@ -827,27 +832,41 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
     });
   }
 
-  function onDelete(id: string) {
-    if (!confirm("למחוק את המשלוח הידני?")) return;
+  function openDeleteOne(id: string) {
+    setDeleteOneError(null);
+    setDeleteOneId(id);
+  }
+
+  function confirmDeleteOne() {
+    if (!deleteOneId) return;
     startTransition(async () => {
-      const res = await deleteManualShipmentAction(workCountry, id);
+      setDeleteOneError(null);
+      const res = await deleteManualShipmentAction(workCountry, deleteOneId);
       if (!res.ok) {
-        alert(res.error);
+        setDeleteOneError(res.error);
         return;
       }
+      setDeleteOneId(null);
       refresh();
     });
   }
 
-  function onDeleteSelected() {
+  function openDeleteSelected() {
     if (!selected.size) return;
-    if (!confirm(`למחוק ${selected.size} רשומות מסומנות?`)) return;
+    setDeleteSelectedError(null);
+    setDeleteSelectedOpen(true);
+  }
+
+  function confirmDeleteSelected() {
+    if (!selected.size) return;
     startTransition(async () => {
+      setDeleteSelectedError(null);
       const res = await deleteManualShipmentsAction(workCountry, [...selected]);
       if (!res.ok) {
-        alert(res.error);
+        setDeleteSelectedError(res.error);
         return;
       }
+      setDeleteSelectedOpen(false);
       refresh();
     });
   }
@@ -1093,7 +1112,7 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
         <button
           type="button"
           className="shp-btn shp-btn--danger"
-          onClick={onDeleteSelected}
+          onClick={openDeleteSelected}
           disabled={!selected.size || pending}
         >
           מחק מסומנים ({selected.size})
@@ -1222,7 +1241,7 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
                           <button
                             className="msh-ctx-danger"
                             disabled={pending}
-                            onClick={() => { onDelete(r.id); setCtxMenuRow(null); }}
+                            onClick={() => { openDeleteOne(r.id); setCtxMenuRow(null); }}
                           >
                             🗑️ מחיקה
                           </button>
@@ -1383,6 +1402,48 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
           setMode("edit");
           setError(null);
         }}
+      />
+
+      <ShipmentConfirmModal
+        open={deleteOneId != null}
+        title="מחיקת משלוח ידני"
+        icon="trash"
+        variant="danger"
+        message="האם למחוק את המשלוח הידני?"
+        confirmLabel="מחק משלוח"
+        confirmBusyLabel="מוחק…"
+        busy={pending}
+        error={deleteOneError}
+        onCancel={() => {
+          if (!pending) {
+            setDeleteOneId(null);
+            setDeleteOneError(null);
+          }
+        }}
+        onConfirm={confirmDeleteOne}
+      />
+
+      <ShipmentConfirmModal
+        open={deleteSelectedOpen}
+        title="מחיקת רשומות"
+        icon="trash"
+        variant="danger"
+        message={
+          <>
+            האם למחוק <strong>{selected.size}</strong> רשומות מסומנות?
+          </>
+        }
+        confirmLabel={selected.size === 1 ? "מחק רשומה" : `מחק ${selected.size} רשומות`}
+        confirmBusyLabel="מוחק…"
+        busy={pending}
+        error={deleteSelectedError}
+        onCancel={() => {
+          if (!pending) {
+            setDeleteSelectedOpen(false);
+            setDeleteSelectedError(null);
+          }
+        }}
+        onConfirm={confirmDeleteSelected}
       />
     </div>
   );

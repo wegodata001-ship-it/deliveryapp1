@@ -30,6 +30,7 @@ import {
   createFxPurchaseAuditId,
   resolveBlockReason,
 } from "@/lib/flow-control/fx-purchase/audit";
+import { createFxPerfTimer, logFxPurchasePerf } from "@/lib/flow-control/fx-purchase/perf";
 import {
   availableIlsForTrack,
   buildBalanceSourceAudit,
@@ -223,10 +224,21 @@ export async function executeFxPurchase(
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     auditFxTransactionBegin(auditId, attempt);
+    const txnTimings = {
+      snapshotMs: 0,
+      receiptsMs: 0,
+      allocationMs: 0,
+      gateMs: 0,
+      auditDbMs: 0,
+      upsertMs: 0,
+    };
+    const txnWallStart = Date.now();
     try {
       const result = await prisma.$transaction(
         async (tx) => {
+          let step = Date.now();
           const snapshot = await loadCashControlSnapshot(wk, tx);
+          txnTimings.snapshotMs = Date.now() - step;
           const balances = computeFxAvailableBalances(snapshot);
           const availableBefore = availableIlsForTrack(balances, track);
           const sourceAudit = buildBalanceSourceAudit(snapshot);
@@ -244,12 +256,16 @@ export async function executeFxPurchase(
             activeTrack: track,
           });
 
+          step = Date.now();
           const receipts = await loadWeekIntakeReceipts(wk, track, snapshot, tx);
+          txnTimings.receiptsMs = Date.now() - step;
+          step = Date.now();
           const allocation = allocateFxIntakeReceipts(
             receipts,
             input.ilsAmount,
             input.rate,
           );
+          txnTimings.allocationMs = Date.now() - step;
           const allocationAvailable = receipts.reduce(
             (sum, receipt) => sum + receipt.remainingIls,
             0,
@@ -267,6 +283,7 @@ export async function executeFxPurchase(
             allocationAvailable,
           });
 
+          step = Date.now();
           const gate = evaluateFxPurchaseGate(availableBefore, input.ilsAmount);
           const remainderAfter = computeFxRemainderAfterPurchase(
             availableBefore,
@@ -277,6 +294,7 @@ export async function executeFxPurchase(
             input.remainderBankIls,
             remainderAfter,
           );
+          txnTimings.gateMs = Date.now() - step;
 
           const blockReason = resolveBlockReason({
             gateOk: gate.ok,
@@ -318,10 +336,6 @@ export async function executeFxPurchase(
             return { ok: false as const, error };
           }
 
-          const row = await tx.cashWeekFlow.findUnique({
-            where: { countryCode_weekCode: { countryCode: "TR", weekCode: wk } },
-          });
-
           const record: FxPurchaseRecord = {
             id: auditId,
             track,
@@ -333,8 +347,8 @@ export async function executeFxPurchase(
             ...remainderMetaFromInput(input),
             availableIlsBefore: availableBefore,
             remainingIlsAfter: remainderAfter,
-            commissionUsd: decimalNumber(row?.commissionUsd),
-            commissionIls: decimalNumber(row?.commissionIls),
+            commissionUsd: snapshot.commissionUsd,
+            commissionIls: snapshot.commissionIls,
             intakeAllocations: allocation.lines,
             intakeProfitIls: allocation.totalProfitIls,
             intakeLossIls: allocation.totalLossIls,
@@ -344,12 +358,15 @@ export async function executeFxPurchase(
             createdAt: performedAt,
           };
 
+          step = Date.now();
           await persistFxRemainderAudit(tx, input, record, wk);
+          txnTimings.auditDbMs = Date.now() - step;
 
           const all = [...snapshot.fxPurchases, record];
           const totals = sumFxPurchases(all, "PS");
           const balanceAfter = Math.max(0, availableBefore - input.ilsAmount);
 
+          step = Date.now();
           await tx.cashWeekFlow.upsert({
             where: { countryCode_weekCode: { countryCode: "TR", weekCode: wk } },
             create: {
@@ -371,6 +388,7 @@ export async function executeFxPurchase(
               updatedById: input.updatedById,
             },
           });
+          txnTimings.upsertMs = Date.now() - step;
 
           auditFxTransactionCommit(auditId);
           auditFxDecision({
@@ -388,6 +406,12 @@ export async function executeFxPurchase(
         },
         { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
       );
+
+      logFxPurchasePerf("save", {
+        ...txnTimings,
+        transactionMs: Date.now() - txnWallStart,
+        totalMs: Date.now() - txnWallStart,
+      });
 
       return { ...result, auditId };
     } catch (error) {

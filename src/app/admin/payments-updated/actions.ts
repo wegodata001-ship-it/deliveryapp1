@@ -741,20 +741,17 @@ export async function savePaymentUpdatedAction(
           for (const p of priorPays) {
             if (!p.orderId) continue;
             for (const a of p.methodAllocations) {
-              const cur = a.currency?.toUpperCase() === "ILS" ? "ILS" : "USD";
               const bucket = paymentMethodBucketKey(a.method);
-              const amt =
-                cur === "ILS"
-                  ? Number(a.sourceAmount.toString())
-                  : Number(a.amountUsd.toString());
-              if (!Number.isFinite(amt) || amt <= 0) continue;
+              // חוב breakdown ב-USD — גם קליטת ILS מקטינה paid ב-USD (amountUsd)
+              const appliedUsd = Number(a.amountUsd.toString());
+              if (!Number.isFinite(appliedUsd) || appliedUsd <= 0) continue;
               let m = paidByOrderKey.get(p.orderId);
               if (!m) {
                 m = new Map();
                 paidByOrderKey.set(p.orderId, m);
               }
-              const key = `${cur}:${bucket}`;
-              m.set(key, roundMoney2((m.get(key) ?? 0) + amt));
+              const key = `USD:${bucket}`;
+              m.set(key, roundMoney2((m.get(key) ?? 0) + appliedUsd));
             }
           }
           if (paidByOrderKey.size > 0) {
@@ -793,8 +790,10 @@ export async function savePaymentUpdatedAction(
         allocationEntries = [...matchingResult.amountUsdByOrderId.entries()]
           .filter(([, amountUsd]) => amountUsd > ALLOC_EPS)
           .map(([orderId, amountUsd]) => [orderId, amountUsd] as [string, number]);
-        // עודף לטיפול משתמש: כרגע מסלול העודף הקיים ב-USD (ILS נשמר בנפרד ב-matchingResult)
         unallocatedUsd = matchingResult.surplusUsd;
+        if (matchingResult.surplusIls > ALLOC_EPS && rateN > 0) {
+          unallocatedUsd = roundMoney2(unallocatedUsd + matchingResult.surplusIls / rateN);
+        }
 
         logPaymentAllocationPreSave({
           source: "payment-save-matching-engine",
@@ -884,7 +883,6 @@ export async function savePaymentUpdatedAction(
         return { ok: false, error: "לא נמצאו הזמנות ללקוח זה — לא ניתן לבצע הקצאה" };
       }
       if (ledgerOpenUsd > ALLOC_EPS) {
-        // לקוח 105 ודומים: יש חוב Ledger אך Matching לא הקצה (אמצעי נעול/לא תואם)
         return {
           ok: false,
           error:

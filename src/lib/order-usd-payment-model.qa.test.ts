@@ -2,12 +2,41 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   computeOpenDebtUsd,
+  computeOrderCaptureMoneyBreakdown,
   convertIlsPaymentToUsdCredit,
   convertPaymentInputToUsdCredit,
   convertUsdPaymentToUsdCredit,
 } from "@/lib/order-usd-payment-model";
 
 describe("order-usd-payment-model", () => {
+  it("breakdown — $1,000 @ 3.00 with 1% commission", () => {
+    const b = computeOrderCaptureMoneyBreakdown({
+      dealUsd: 1000,
+      commissionUsd: 10,
+      commissionPct: 1,
+      rate: 3,
+    });
+    assert.ok(b);
+    assert.equal(b.dealIls, 3000);
+    assert.equal(b.commissionIls, 30);
+    assert.equal(b.afterCommissionIls, 3030);
+    assert.equal(b.totalWithVatIls, 3030);
+    assert.equal(b.vatIls, 462.2);
+    assert.equal(b.beforeVatIls, 2567.8);
+  });
+
+  it("breakdown — ILS payment ₪450 @ 3.00 credits $150", () => {
+    const snap = convertPaymentInputToUsdCredit(450, "ILS", 3);
+    assert.equal(snap.amountUsd, 150);
+  });
+
+  it("breakdown — USD payment $1,800 converts to ₪5,400 display", () => {
+    const snap = convertPaymentInputToUsdCredit(1800, "USD", 3);
+    assert.equal(snap.amountUsd, 1800);
+    const ils = 1800 * 3;
+    assert.equal(ils, 5400);
+  });
+
   it("Test 1 — full payment in USD", () => {
     const paid = convertUsdPaymentToUsdCredit(120);
     const ledger = computeOpenDebtUsd({ orderId: "t1", totalUsd: 120, paidUsd: paid });

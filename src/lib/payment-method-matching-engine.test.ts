@@ -229,3 +229,187 @@ describe("Matching Engine — הפרדת מטבעות", () => {
     assert.ok(dual.transfersApplied.every((t) => t.currency === "USD"));
   });
 });
+
+describe("Matching Engine — קליטת ILS מול חוב USD", () => {
+  const orderCashUsd = (remaining: number, paid = 0): MethodBalanceRow =>
+    bal({
+      breakdownId: "cash-usd",
+      orderId: "o1",
+      method: "CASH",
+      bucket: "CASH",
+      currency: "USD",
+      planned: 100,
+      paid,
+      remaining,
+    });
+
+  it("Acceptance: הזמנה $100, מזומן ₪100 @3 → applied $33.33, יתרה $66.67", () => {
+    const dual = applyDualCurrencyMatching({
+      balances: [orderCashUsd(100)],
+      enteredByBucket: [
+        { bucket: "CASH", label: "מזומן", currency: "ILS", entered: 100 },
+      ],
+      orderIdsOldestFirst: ["o1"],
+      rateByOrderId: new Map([["o1", 3]]),
+    });
+
+    const cash = dual.balances.find((b) => b.currency === "USD" && b.bucket === "CASH")!;
+    assert.equal(cash.paid, 33.33);
+    assert.equal(cash.remaining, 66.67);
+    assert.equal(dual.amountUsdByOrderId.get("o1"), 33.33);
+    assert.equal(dual.appliedLines.length, 1);
+    assert.equal(dual.appliedLines[0]!.currency, "ILS");
+    assert.equal(dual.appliedLines[0]!.amount, 100);
+    assert.equal(dual.surplusIls, 0);
+  });
+
+  it("Acceptance: אחרי ₪100, תשלום $66.67 USD — חוב נסגר", () => {
+    const dual = applyDualCurrencyMatching({
+      balances: [orderCashUsd(66.67, 33.33)],
+      enteredByBucket: [
+        { bucket: "CASH", label: "מזומן", currency: "USD", entered: 66.67 },
+      ],
+      orderIdsOldestFirst: ["o1"],
+      rateByOrderId: new Map([["o1", 3]]),
+    });
+
+    const cash = dual.balances.find((b) => b.currency === "USD" && b.bucket === "CASH")!;
+    assert.equal(cash.remaining, 0);
+    assert.equal(dual.amountUsdByOrderId.get("o1"), 66.67);
+  });
+
+  it("Acceptance: CASH $100 + BANK $100 — CASH ₪300 + BANK ₪300 @3 → $100 per method", () => {
+    const dual = applyDualCurrencyMatching({
+      balances: [
+        bal({
+          breakdownId: "cash",
+          orderId: "o1",
+          method: "CASH",
+          bucket: "CASH",
+          currency: "USD",
+          planned: 100,
+          paid: 0,
+          remaining: 100,
+        }),
+        bal({
+          breakdownId: "bank",
+          orderId: "o1",
+          method: "BANK_TRANSFER",
+          bucket: "BANK_TRANSFER",
+          currency: "USD",
+          planned: 100,
+          paid: 0,
+          remaining: 100,
+        }),
+      ],
+      enteredByBucket: [
+        { bucket: "CASH", label: "מזומן", currency: "ILS", entered: 300 },
+        { bucket: "BANK_TRANSFER", label: "העברה", currency: "ILS", entered: 300 },
+      ],
+      orderIdsOldestFirst: ["o1"],
+      rateByOrderId: new Map([["o1", 3]]),
+    });
+
+    const cash = dual.balances.find((b) => b.bucket === "CASH")!;
+    const bank = dual.balances.find((b) => b.bucket === "BANK_TRANSFER")!;
+    assert.equal(cash.paid, 100);
+    assert.equal(cash.remaining, 0);
+    assert.equal(bank.paid, 100);
+    assert.equal(bank.remaining, 0);
+    assert.equal(dual.amountUsdByOrderId.get("o1"), 200);
+    assert.equal(dual.surplusIls, 0);
+  });
+
+  it("Acceptance: CASH ₪600 @3 on CASH $100 + BANK $100 — CASH capped, BANK open, surplus ₪300", () => {
+    const dual = applyDualCurrencyMatching({
+      balances: [
+        bal({
+          breakdownId: "cash",
+          orderId: "o1",
+          method: "CASH",
+          bucket: "CASH",
+          currency: "USD",
+          planned: 100,
+          paid: 0,
+          remaining: 100,
+        }),
+        bal({
+          breakdownId: "bank",
+          orderId: "o1",
+          method: "BANK_TRANSFER",
+          bucket: "BANK_TRANSFER",
+          currency: "USD",
+          planned: 100,
+          paid: 0,
+          remaining: 100,
+        }),
+      ],
+      enteredByBucket: [
+        { bucket: "CASH", label: "מזומן", currency: "ILS", entered: 600 },
+      ],
+      orderIdsOldestFirst: ["o1"],
+      rateByOrderId: new Map([["o1", 3]]),
+    });
+
+    const cash = dual.balances.find((b) => b.bucket === "CASH")!;
+    const bank = dual.balances.find((b) => b.bucket === "BANK_TRANSFER")!;
+    assert.equal(cash.paid, 100);
+    assert.equal(cash.remaining, 0);
+    assert.equal(bank.paid, 0);
+    assert.equal(bank.remaining, 100);
+    assert.equal(dual.amountUsdByOrderId.get("o1"), 100);
+    assert.equal(dual.surplusIls, 300);
+  });
+
+  it("תשלום מורכב: ₪150+₪300 מזומן/אשראי + $50 מזומן @3 → $200", () => {
+    const dual = applyDualCurrencyMatching({
+      balances: [
+        bal({
+          breakdownId: "c",
+          orderId: "o1",
+          method: "CASH",
+          bucket: "CASH",
+          currency: "USD",
+          planned: 100,
+          paid: 0,
+          remaining: 100,
+        }),
+        bal({
+          breakdownId: "cr",
+          orderId: "o1",
+          method: "CREDIT",
+          bucket: "CREDIT",
+          currency: "USD",
+          planned: 100,
+          paid: 0,
+          remaining: 100,
+        }),
+      ],
+      enteredByBucket: [
+        { bucket: "CASH", label: "מזומן", currency: "ILS", entered: 150 },
+        { bucket: "CREDIT", label: "אשראי", currency: "ILS", entered: 300 },
+        { bucket: "CASH", label: "מזומן", currency: "USD", entered: 50 },
+      ],
+      orderIdsOldestFirst: ["o1"],
+      rateByOrderId: new Map([["o1", 3]]),
+    });
+
+    assert.equal(dual.amountUsdByOrderId.get("o1"), 200);
+    const cashUsd = dual.balances.find((b) => b.bucket === "CASH")!;
+    const creditUsd = dual.balances.find((b) => b.bucket === "CREDIT")!;
+    assert.equal(cashUsd.remaining, 0);
+    assert.equal(creditUsd.remaining, 0);
+    assert.equal(
+      dual.appliedLines.filter((l) => l.currency === "ILS" && l.bucket === "CASH")[0]?.amount,
+      150,
+    );
+    assert.equal(
+      dual.appliedLines.filter((l) => l.currency === "ILS" && l.bucket === "CREDIT")[0]?.amount,
+      300,
+    );
+    assert.equal(
+      dual.appliedLines.filter((l) => l.currency === "USD" && l.bucket === "CASH")[0]?.amount,
+      50,
+    );
+  });
+});

@@ -8,7 +8,11 @@ import {
   computeOrderOpenDebtSignedUsd,
   computeOrderOpenDebtUsd,
   computeOrderLedgerView,
+  computePaymentBalanceUsd,
   deriveOrderPaymentDisplayStatus,
+  derivePaymentBalanceDisplay,
+  formatPaymentBalanceIlsLine,
+  formatPaymentBalanceUsdLine,
   reconcileOrderBreakdownWithLedger,
   sumRemainingToPayUsd,
 } from "@/lib/order-remaining-debt";
@@ -134,5 +138,57 @@ describe("order-remaining-debt SSOT", () => {
     const fromViews = sumRemainingToPayUsd(orderViews);
     assert.equal(fromViews, fromMatched);
     assert.equal(fromViews, 33.45);
+  });
+});
+
+describe("computePaymentBalanceUsd — תצוגת יתרה בקליטה", () => {
+  const rate = 3;
+
+  it("$100 debt, $30 paid → remaining $70 + ₪210", () => {
+    const signed = computePaymentBalanceUsd(100, 30);
+    const d = derivePaymentBalanceDisplay(signed, rate);
+    assert.equal(d.state, "debt");
+    assert.equal(d.title, "נשאר לתשלום");
+    assert.equal(d.displayUsd, 70);
+    assert.equal(d.displayIls, 210);
+  });
+
+  it("$100 debt, $100 paid → cleared", () => {
+    const d = derivePaymentBalanceDisplay(computePaymentBalanceUsd(100, 100), rate);
+    assert.equal(d.state, "cleared");
+    assert.equal(d.title, "שולם במלואו");
+    assert.equal(d.displayUsd, 0);
+    assert.equal(d.displayIls, 0);
+  });
+
+  it("$100 debt, $110 paid → surplus +$10 +₪30", () => {
+    const d = derivePaymentBalanceDisplay(computePaymentBalanceUsd(100, 110), rate);
+    assert.equal(d.state, "surplus");
+    assert.equal(d.title, "יתרה / תשלום עודף");
+    assert.equal(d.displayUsd, 10);
+    assert.equal(d.displayIls, 30);
+    assert.equal(formatPaymentBalanceUsdLine(d), "+$10.00");
+    assert.equal(formatPaymentBalanceIlsLine(d), "+₪30.00");
+  });
+
+  it("$100 debt, ₪100 @3 → remaining $66.67", () => {
+    const appliedUsd = 33.33;
+    const d = derivePaymentBalanceDisplay(computePaymentBalanceUsd(100, appliedUsd), rate);
+    assert.equal(d.state, "debt");
+    assert.equal(d.displayUsd, 66.67);
+    assert.equal(d.displayIls, 200.01);
+  });
+
+  it("$100 debt, ₪300 @3 → cleared", () => {
+    const d = derivePaymentBalanceDisplay(computePaymentBalanceUsd(100, 100), rate);
+    assert.equal(d.state, "cleared");
+  });
+
+  it("$100 debt, ₪330 @3 → surplus +$10", () => {
+    const appliedUsd = 110;
+    const d = derivePaymentBalanceDisplay(computePaymentBalanceUsd(100, appliedUsd), rate);
+    assert.equal(d.state, "surplus");
+    assert.equal(d.displayUsd, 10);
+    assert.equal(d.displayIls, 30);
   });
 });

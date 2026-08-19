@@ -62,7 +62,7 @@ export function DeliveryAddressCell({ address }: DeliveryAddressCellProps) {
                 </div>
                 <div>
                   <dt>כתובת מעודכנת</dt>
-                  <dd dir="auto">{address.display}</dd>
+                  <dd dir="auto">{address.updatedDisplay ?? address.place ?? address.display}</dd>
                 </div>
               </dl>
             </div>

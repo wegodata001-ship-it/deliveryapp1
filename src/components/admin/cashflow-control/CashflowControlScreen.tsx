@@ -28,7 +28,10 @@ import {
   weekDateRange,
 } from "@/components/admin/cashflow-control/cashflow-control-helpers";
 import "@/components/admin/cashflow-control/cashflow-control.css";
+import { WeekMovementJournal } from "@/components/admin/cashflow-control/WeekMovementJournal";
+import { buildWeekMovementJournal } from "@/lib/flow-control/services/week-movement-journal.shared";
 import { ManagerCountWizard } from "@/components/admin/manager-count/ManagerCountWizard";
+import { money } from "@/components/admin/cashflow-control/cashflow-control-helpers";
 import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import { WEGO_COUNTRY_CHANGED } from "@/lib/country-switch-bus";
 import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
@@ -276,6 +279,23 @@ export function CashflowControlScreen({
     [overview, filteredRows, selectedWeek],
   );
 
+  const movementJournal = useMemo(
+    () => (drill ? buildWeekMovementJournal(drill) : []),
+    [drill],
+  );
+
+  const weekStatusCards = useMemo(() => {
+    if (!selectedRow) return null;
+    const fxPsIls = Number(selectedRow.fxPurchaseIls) || 0;
+    const expenses = Number(selectedRow.expensesIls) || 0;
+    const outflows = fxPsIls + expenses + (Number(selectedRow.turkeyTransferredUsd) || 0);
+    return {
+      receipts: Number(selectedRow.totalReceivedIls) || 0,
+      outflows,
+      netHint: selectedRow.drawerRemainingIls,
+    };
+  }, [selectedRow]);
+
   const selectWeek = useCallback((week: string) => {
     const wk = week.trim();
     if (!wk) return;
@@ -453,6 +473,31 @@ export function CashflowControlScreen({
               agg={rangeAgg}
               focusWeek={selectedWeek}
               weekRows={filteredRows}
+            />
+
+            {!isRange && weekStatusCards ? (
+              <section className="cfc-week-status" aria-label="מצב השבוע">
+                <div className="cfc-week-status__grid">
+                  <div className="cfc-week-status__card">
+                    <span>סה״כ תקבולים</span>
+                    <strong dir="ltr">{money("ILS", weekStatusCards.receipts)}</strong>
+                  </div>
+                  <div className="cfc-week-status__card cfc-week-status__card--out">
+                    <span>סה״כ יציאות (הוצאות + מט״ח + TR)</span>
+                    <strong dir="ltr">{money("ILS", weekStatusCards.outflows)}</strong>
+                  </div>
+                  <div className="cfc-week-status__card">
+                    <span>מזומן ₪ בקופה (SSOT)</span>
+                    <strong dir="ltr">₪{weekStatusCards.netHint}</strong>
+                  </div>
+                </div>
+              </section>
+            ) : null}
+
+            <WeekMovementJournal
+              entries={movementJournal}
+              weekCode={selectedWeek}
+              loading={drillLoading}
             />
 
             <FlowWeekTablesSection

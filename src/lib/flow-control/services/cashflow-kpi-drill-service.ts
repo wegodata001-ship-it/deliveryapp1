@@ -16,6 +16,7 @@ import {
   type CashflowReceiptSummaryBucket,
 } from "@/lib/flow-control/flow-calculation-service";
 import { loadTurkeyBalanceForWeek } from "@/lib/flow-control/turkey-transfer-balance-service";
+import { buildTurkeyClosingWaterfall } from "@/lib/flow-control/services/net-available-breakdown.shared";
 import { TURKEY_MOVEMENT_TYPE_LABELS } from "@/lib/flow-control/turkey-transfer-balance-types";
 import { formatAhWeekLabel } from "@/lib/weeks/ah-week";
 import { groupByActivePayments } from "@/lib/payment-record-status";
@@ -872,14 +873,18 @@ async function loadFxPs(weeks: string[]): Promise<CashflowKpiDrillResult> {
       totalIls += p.ilsAmount;
       totalUsd += p.usdReceived;
       const dt = new Date(p.createdAt);
+      const before = p.availableIlsBefore ?? null;
+      const after = p.remainingIlsAfter ?? (before != null ? before - p.ilsAmount : null);
       rows.push({
         date: dt.toLocaleDateString("he-IL"),
-        week: flow.weekCode,
-        rate: p.rate.toFixed(4),
+        source: "קופת PS",
         ils: moneyIls(p.ilsAmount),
+        rate: p.rate.toFixed(4),
         usd: moneyUsd(p.usdReceived),
+        target: "מט״ח PS",
+        before: before != null ? moneyIls(before) : "—",
+        after: after != null ? moneyIls(after) : "—",
         user: p.createdByName || "—",
-        note: p.note?.trim() || "—",
       });
     }
   }
@@ -890,16 +895,20 @@ async function loadFxPs(weeks: string[]): Promise<CashflowKpiDrillResult> {
     subtitle: weekSubtitle(weeks),
     columns: [
       { key: "date", header: "תאריך" },
-      { key: "week", header: "שבוע" },
+      { key: "source", header: "מקור" },
+      { key: "ils", header: "₪ ששולמו" },
       { key: "rate", header: "שער" },
-      { key: "ils", header: "סכום ₪" },
-      { key: "usd", header: "סכום $" },
-      { key: "user", header: "מי ביצע" },
-      { key: "note", header: "הערה" },
+      { key: "usd", header: "$ שנרכשו" },
+      { key: "target", header: "יעד" },
+      { key: "before", header: "לפני" },
+      { key: "after", header: "אחרי" },
+      { key: "user", header: "מבצע" },
     ],
     rows,
-    totalLabel: "סה״כ מט״ח PS",
-    totalValue: `${moneyIls(Math.round(totalIls * 100) / 100)} · ${moneyUsd(Math.round(totalUsd * 100) / 100)}`,
+    footerTotals: [
+      { label: 'סה"כ יצא מהקופה', value: moneyIls(Math.round(totalIls * 100) / 100) },
+      { label: 'סה"כ מט״ח שנרכש', value: moneyUsd(Math.round(totalUsd * 100) / 100) },
+    ],
   };
 }
 
@@ -1034,13 +1043,29 @@ async function loadTurkey(
   });
 
   const closing = balance.usd.closingBalance;
+  const footerTotals: CashflowKpiDrillFooterTotal[] = [];
+
+  if (kind === "turkeyClosing") {
+    const wf = buildTurkeyClosingWaterfall(balance);
+    for (const line of wf.lines) {
+      if (line.sign === "subtotal") {
+        footerTotals.push({ label: line.label, value: moneyUsd(line.amount) });
+      } else {
+        const prefix = line.sign === "+" ? "+" : line.sign === "−" ? "−" : "";
+        footerTotals.push({
+          label: `${prefix} ${line.label}`.trim(),
+          value: moneyUsd(line.amount),
+        });
+      }
+    }
+  }
 
   return {
     kind,
     title:
       kind === "turkeyTransferred"
         ? "הועבר לטורקיה — פירוט תנועות"
-        : "יתרת טורקיה — פירוט תנועות שהרכיבו את היתרה",
+        : "יתרת טורקיה — פירוט",
     subtitle: `${weekSubtitle(weeks)} · ${formatAhWeekLabel(newest) ?? newest}`,
     columns: [
       { key: "date", header: "תאריך" },
@@ -1057,6 +1082,7 @@ async function loadTurkey(
       kind === "turkeyTransferred"
         ? moneyUsd(Math.round(transferred * 100) / 100)
         : moneyUsd(Math.round(closing * 100) / 100),
+    footerTotals: footerTotals.length > 0 ? footerTotals : undefined,
   };
 }
 

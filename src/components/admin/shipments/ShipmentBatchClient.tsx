@@ -56,6 +56,11 @@ import { QuickAddPackageSourcePicker } from "@/components/admin/shipments/QuickA
 import { CourierPdfModal } from "@/components/admin/shipments/CourierPdfModal";
 import { CustomShipmentPdfModal } from "@/components/admin/shipments/CustomShipmentPdfModal";
 import { CourierDebtCloseModal } from "@/components/admin/shipments/CourierDebtCloseModal";
+import {
+  AssignCourierConfirmModal,
+  countSelectedWithExistingCourier,
+} from "@/components/admin/shipments/AssignCourierConfirmModal";
+import { ShipmentConfirmModal } from "@/components/admin/shipments/ShipmentConfirmModal";
 import type { ShipmentControlRecord } from "@/app/admin/shipments/control/types";
 import { exportShipmentReportExcel } from "@/lib/shipment-report-export";
 import { ShipmentMultiSelectFilter } from "@/components/admin/shipments/ShipmentMultiSelectFilter";
@@ -236,6 +241,10 @@ export function ShipmentBatchClient({
   // Bulk assign
   const [bulkZoneId, setBulkZoneId] = useState("");
   const [bulkCourierId, setBulkCourierId] = useState("");
+  const [assignCourierOpen, setAssignCourierOpen] = useState(false);
+  const [assignCourierError, setAssignCourierError] = useState<string | null>(null);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleteConfirmError, setDeleteConfirmError] = useState<string | null>(null);
   const [bulkStatus, setBulkStatus] = useState<ShipmentStatus | "">("");
 
   const shipmentLabel = batchShipmentLabel(batch);
@@ -359,24 +368,31 @@ export function ShipmentBatchClient({
     clearMsg();
   }
 
-  async function handleBulkCourier() {
+  function openBulkCourierConfirm() {
+    if (!bulkCourierId || selected.size === 0) return;
+    setAssignCourierError(null);
+    setAssignCourierOpen(true);
+  }
+
+  async function confirmBulkCourier() {
     if (!bulkCourierId || selected.size === 0) return;
     const courierName = couriers.find((c) => c.id === bulkCourierId)?.name ?? "—";
     const count = selected.size;
-    if (!confirm(`האם לשייך את השליח ${courierName} ל-${count} משלוחים?`)) return;
     setLoading(true);
+    setAssignCourierError(null);
     const res = await assignCourierAction(workCountry, {
       recordIds: Array.from(selected),
       courierId: bulkCourierId,
     });
     setLoading(false);
     if (res.ok) {
-      setSuccess(`שויך שליח ${courierName} ל-${count} משלוחים`);
+      setAssignCourierOpen(false);
+      setSuccess(`✓ ${count} משלוחים שויכו בהצלחה ל${courierName}`);
       setSelected(new Set());
       setBulkCourierId("");
       await refresh();
     } else {
-      setError(res.error);
+      setAssignCourierError(res.error);
     }
     clearMsg();
   }
@@ -396,25 +412,31 @@ export function ShipmentBatchClient({
     clearMsg();
   }
 
-  async function handleBulkDelete() {
+  function openBulkDeleteConfirm() {
+    if (selected.size === 0) return;
+    setDeleteConfirmError(null);
+    setDeleteConfirmOpen(true);
+  }
+
+  async function confirmBulkDelete() {
     if (selected.size === 0) return;
     const count = selected.size;
-    if (!confirm(`למחוק ${count} משלוחים מסומנים?\nפעולה זו אינה ניתנת לביטול.`)) return;
     setLoading(true);
+    setDeleteConfirmError(null);
     const ids = Array.from(selected);
-    const errors: string[] = [];
     for (const id of ids) {
       const res = await deleteShipmentRecordAction(workCountry, id);
-      if (!res.ok) errors.push(res.error);
+      if (!res.ok) {
+        setDeleteConfirmError(res.error);
+        setLoading(false);
+        return;
+      }
     }
     setLoading(false);
+    setDeleteConfirmOpen(false);
     setSelected(new Set());
     await refresh();
-    if (errors.length) {
-      setError(`נמחקו חלקית. שגיאות: ${errors.slice(0, 2).join("; ")}`);
-    } else {
-      setSuccess(`נמחקו ${count} משלוחים`);
-    }
+    setSuccess(`נמחקו ${count} משלוחים`);
     clearMsg();
   }
 
@@ -944,7 +966,7 @@ export function ShipmentBatchClient({
               <option key={courier.id} value={courier.id}>{courier.name}</option>
             ))}
           </select>
-          <button className="shp-btn shp-btn--primary shp-btn--sm" onClick={handleBulkCourier} disabled={!bulkCourierId || loading}>
+          <button className="shp-btn shp-btn--primary shp-btn--sm" onClick={openBulkCourierConfirm} disabled={!bulkCourierId || loading}>
             <Users size={13} />
             שייך שליח
           </button>
@@ -961,7 +983,7 @@ export function ShipmentBatchClient({
             type="button"
             className="shp-btn shp-btn--danger shp-btn--sm"
             disabled={loading}
-            onClick={() => void handleBulkDelete()}
+            onClick={openBulkDeleteConfirm}
           >
             <Trash2 size={13} />
             מחק משלוחים
@@ -1334,6 +1356,47 @@ export function ShipmentBatchClient({
           }}
         />
       )}
+
+      <AssignCourierConfirmModal
+        open={assignCourierOpen}
+        courierName={couriers.find((c) => c.id === bulkCourierId)?.name ?? "—"}
+        shipmentCount={selected.size}
+        withExistingCourierCount={countSelectedWithExistingCourier(records, selected)}
+        busy={loading}
+        error={assignCourierError}
+        onCancel={() => {
+          if (!loading) {
+            setAssignCourierOpen(false);
+            setAssignCourierError(null);
+          }
+        }}
+        onConfirm={() => void confirmBulkCourier()}
+      />
+
+      <ShipmentConfirmModal
+        open={deleteConfirmOpen}
+        title="מחיקת משלוחים"
+        icon="trash"
+        variant="danger"
+        message={
+          <>
+            האם למחוק <strong>{selected.size}</strong>{" "}
+            {selected.size === 1 ? "משלוח מסומן" : "משלוחים מסומנים"}?
+          </>
+        }
+        warning="כל החבילות והתשלומים שלהם יימחקו. פעולה זו אינה ניתנת לביטול."
+        confirmLabel={selected.size === 1 ? "מחק משלוח" : `מחק ${selected.size} משלוחים`}
+        confirmBusyLabel="מוחק…"
+        busy={loading}
+        error={deleteConfirmError}
+        onCancel={() => {
+          if (!loading) {
+            setDeleteConfirmOpen(false);
+            setDeleteConfirmError(null);
+          }
+        }}
+        onConfirm={() => void confirmBulkDelete()}
+      />
     </div>
   );
 }

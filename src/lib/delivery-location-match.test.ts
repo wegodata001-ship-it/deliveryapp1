@@ -79,12 +79,12 @@ describe("delivery-location-match", () => {
     assert.equal(out, "בית לחם");
   });
 
-  it("falls back to original when no alias", () => {
+  it("returns null when no alias and no FK update", () => {
     const out = resolveUpdatedDeliveryLocationDisplay(
       { originalDeliveryLocation: "ירושלים", city: "ירושלים", address: null },
       maps,
     );
-    assert.equal(out, "ירושלים");
+    assert.equal(out, null);
   });
 
   it("original name prefers originalDeliveryLocation field", () => {

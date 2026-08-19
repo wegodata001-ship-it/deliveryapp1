@@ -38,6 +38,8 @@ import { LocationAliasesManageModal } from "@/components/admin/shipments/Locatio
 import { LocationAliasImportModal } from "@/components/admin/shipments/LocationAliasImportModal";
 import { aliasLookupKey } from "@/lib/delivery-location-normalize";
 import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
+import { ShipmentConfirmModal } from "@/components/admin/shipments/ShipmentConfirmModal";
+import { ShipmentPromptModal } from "@/components/admin/shipments/ShipmentPromptModal";
 
 type Props = {
   initialMappings: AliasMappingRow[];
@@ -68,6 +70,13 @@ export function LocationsAdminClient({
   const [createOpen, setCreateOpen] = useState(false);
   const [editingRow, setEditingRow] = useState<AliasMappingRow | null>(null);
   const [aliasesLocation, setAliasesLocation] = useState<DeliveryLocationDto | null>(null);
+  const [deleteMappingTarget, setDeleteMappingTarget] = useState<AliasMappingRow | null>(null);
+  const [deleteMappingError, setDeleteMappingError] = useState<string | null>(null);
+  const [deleteZoneTarget, setDeleteZoneTarget] = useState<ShipmentZoneDto | null>(null);
+  const [deleteZoneError, setDeleteZoneError] = useState<string | null>(null);
+  const [renameZoneTarget, setRenameZoneTarget] = useState<ShipmentZoneDto | null>(null);
+  const [renameZoneError, setRenameZoneError] = useState<string | null>(null);
+  const [renameZoneBusy, setRenameZoneBusy] = useState(false);
 
   const activeZones = useMemo(
     () => zones.filter((z) => z.isActive).sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "he")),
@@ -146,21 +155,69 @@ export function LocationsAdminClient({
     } else setMsg(res.error || "שמירת אזור נכשלה");
   }
 
-  async function deleteSelected() {
+  function openDeleteMapping(row: AliasMappingRow) {
+    setDeleteMappingError(null);
+    setDeleteMappingTarget(row);
+  }
+
+  async function confirmDeleteMapping() {
+    if (!deleteMappingTarget) return;
+    setBusy(true);
+    setDeleteMappingError(null);
+    const res = await deleteLocationAliasAction(workCountry, deleteMappingTarget.aliasId);
+    setBusy(false);
+    if (!res.ok) {
+      setDeleteMappingError(res.error);
+      return;
+    }
+    if (selectedId === deleteMappingTarget.aliasId) setSelectedId(null);
+    setDeleteMappingTarget(null);
+    setMsg("ההתאמה נמחקה");
+    await refresh();
+  }
+
+  function deleteSelected() {
     if (!selected) {
       setMsg("בחרו שורה לעריכה/מחיקה");
       return;
     }
-    if (!window.confirm(`למחוק התאמה "${selected.originalName}"?`)) return;
+    openDeleteMapping(selected);
+  }
+
+  async function confirmDeleteZone() {
+    if (!deleteZoneTarget) return;
     setBusy(true);
-    const res = await deleteLocationAliasAction(workCountry, selected.aliasId);
+    setDeleteZoneError(null);
+    const res = await deleteZoneForLocationsAction(workCountry, deleteZoneTarget.id);
     setBusy(false);
-    if (!res.ok) setMsg(res.error);
-    else {
-      setSelectedId(null);
-      setMsg("ההתאמה נמחקה");
-      await refresh();
+    if (!res.ok) {
+      setDeleteZoneError(res.error);
+      return;
     }
+    setZones((prev) => prev.filter((x) => x.id !== deleteZoneTarget.id));
+    setDeleteZoneTarget(null);
+    await refresh();
+  }
+
+  async function confirmRenameZone(name: string) {
+    if (!renameZoneTarget) return;
+    const validationError = distributionAreaValidationError(name);
+    if (validationError) {
+      setRenameZoneError(validationError);
+      return;
+    }
+    setRenameZoneBusy(true);
+    setRenameZoneError(null);
+    const res = await updateZoneForLocationsAction(workCountry, renameZoneTarget.id, { name });
+    setRenameZoneBusy(false);
+    if (!res.ok) {
+      setRenameZoneError(res.error ?? "עדכון אזור נכשל");
+      return;
+    }
+    setZones((prev) =>
+      prev.map((x) => (x.id === renameZoneTarget.id ? { ...x, name } : x)),
+    );
+    setRenameZoneTarget(null);
   }
 
   function openEdit(row?: AliasMappingRow | null) {
@@ -399,15 +456,9 @@ export function LocationsAdminClient({
                         type="button"
                         className="shp-btn shp-btn--sm"
                         title="מחק התאמה"
-                        onClick={async (e) => {
+                        onClick={(e) => {
                           e.stopPropagation();
-                          if (!window.confirm(`למחוק התאמה "${m.originalName}"?`)) return;
-                          const res = await deleteLocationAliasAction(workCountry, m.aliasId);
-                          if (!res.ok) setMsg(res.error);
-                          else {
-                            if (selectedId === m.aliasId) setSelectedId(null);
-                            await refresh();
-                          }
+                          openDeleteMapping(m);
                         }}
                       >
                         <Trash2 size={12} />
@@ -552,18 +603,9 @@ export function LocationsAdminClient({
                             <button
                               type="button"
                               className="shp-btn shp-btn--sm"
-                              onClick={async () => {
-                                const name = window.prompt("שם אזור", z.name);
-                                if (!name?.trim()) return;
-                                const validationError = distributionAreaValidationError(name.trim());
-                                if (validationError) {
-                                  setMsg(validationError);
-                                  return;
-                                }
-                                await updateZoneForLocationsAction(workCountry, z.id, { name: name.trim() });
-                                setZones((prev) =>
-                                  prev.map((x) => (x.id === z.id ? { ...x, name: name.trim() } : x)),
-                                );
+                              onClick={() => {
+                                setRenameZoneError(null);
+                                setRenameZoneTarget(z);
                               }}
                             >
                               עריכה
@@ -598,11 +640,9 @@ export function LocationsAdminClient({
                             <button
                               type="button"
                               className="shp-btn shp-btn--sm"
-                              onClick={async () => {
-                                if (!window.confirm("למחוק אזור?")) return;
-                                await deleteZoneForLocationsAction(workCountry, z.id);
-                                setZones((prev) => prev.filter((x) => x.id !== z.id));
-                                await refresh();
+                              onClick={() => {
+                                setDeleteZoneError(null);
+                                setDeleteZoneTarget(z);
                               }}
                             >
                               <Trash2 size={12} />
@@ -636,6 +676,70 @@ export function LocationsAdminClient({
           }}
         />
       )}
+
+      <ShipmentConfirmModal
+        open={deleteMappingTarget != null}
+        title="מחיקת התאמה"
+        icon="trash"
+        variant="danger"
+        message={
+          <>
+            האם למחוק התאמה <strong>&quot;{deleteMappingTarget?.originalName ?? ""}&quot;</strong>?
+          </>
+        }
+        confirmLabel="מחק התאמה"
+        confirmBusyLabel="מוחק…"
+        busy={busy}
+        error={deleteMappingError}
+        onCancel={() => {
+          if (!busy) {
+            setDeleteMappingTarget(null);
+            setDeleteMappingError(null);
+          }
+        }}
+        onConfirm={() => void confirmDeleteMapping()}
+      />
+
+      <ShipmentConfirmModal
+        open={deleteZoneTarget != null}
+        title="מחיקת אזור"
+        icon="trash"
+        variant="danger"
+        message={
+          <>
+            האם למחוק את האזור <strong>&quot;{deleteZoneTarget?.name ?? ""}&quot;</strong>?
+          </>
+        }
+        confirmLabel="מחק אזור"
+        confirmBusyLabel="מוחק…"
+        busy={busy}
+        error={deleteZoneError}
+        onCancel={() => {
+          if (!busy) {
+            setDeleteZoneTarget(null);
+            setDeleteZoneError(null);
+          }
+        }}
+        onConfirm={() => void confirmDeleteZone()}
+      />
+
+      <ShipmentPromptModal
+        open={renameZoneTarget != null}
+        title="עריכת שם אזור"
+        label="שם אזור"
+        initialValue={renameZoneTarget?.name ?? ""}
+        confirmLabel="שמור"
+        confirmBusyLabel="שומר…"
+        busy={renameZoneBusy}
+        error={renameZoneError}
+        onCancel={() => {
+          if (!renameZoneBusy) {
+            setRenameZoneTarget(null);
+            setRenameZoneError(null);
+          }
+        }}
+        onConfirm={(name) => void confirmRenameZone(name)}
+      />
     </div>
   );
 }

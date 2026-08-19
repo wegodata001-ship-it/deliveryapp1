@@ -189,3 +189,27 @@ export function computeFxPurchaseFormPreview(
 
 export const FX_PURCHASE_OVER_LIMIT_ERROR =
   "לא ניתן לרכוש סכום גבוה מהיתרה הזמינה בקופה";
+
+export const FX_PURCHASE_RATE_REQUIRED_ERROR = "יש להזין שער רכישה";
+
+export const FX_PURCHASE_AMOUNT_REQUIRED_ERROR =
+  "יש להזין סכום ₪ (0 = ללא רכישת מט״ח)";
+
+/** ולידציה חיה — תמיד מחושבת מערכי הטופס הנוכחיים (לא מ-state ישן). */
+export function validateFxPurchaseFormInput(params: {
+  trimmedIls: string;
+  ilsNum: number;
+  rateNum: number;
+  availNum: number;
+  isZeroPurchase: boolean;
+  isNegativePurchase: boolean;
+}): string | null {
+  const { trimmedIls, ilsNum, rateNum, availNum, isZeroPurchase, isNegativePurchase } = params;
+  if (trimmedIls === "") return null;
+  if (isNegativePurchase) return "סכום רכישה לא יכול להיות שלילי";
+  if (ilsNum > availNum + 0.02) return FX_PURCHASE_OVER_LIMIT_ERROR;
+  if (!isZeroPurchase && !(Number.isFinite(rateNum) && rateNum > 0)) {
+    return FX_PURCHASE_RATE_REQUIRED_ERROR;
+  }
+  return null;
+}

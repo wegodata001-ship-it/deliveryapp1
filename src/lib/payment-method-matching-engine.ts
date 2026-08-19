@@ -1,10 +1,11 @@
 /**
  * Payment Method Matching Engine — מקור אמת יחיד לאמצעי תשלום.
  *
- * כלל עסקי קריטי: הפרדה מלאה בין מטבעות.
- *   Matching Engine USD ↔ רק אמצעי/תשלומי USD
- *   Matching Engine ILS ↔ רק אמצעי/תשלומי ILS
- * אין קיזוז, העברת חוב, Remaining או עודף בין מטבעות.
+ * חוב הזמנה (planned / remaining / paid על breakdown) — תמיד ב-USD.
+ * תשלום USD — נסגר מול שורות USD באותו bucket (מטבע מקור = USD).
+ * תשלום ILS — נסגר מול שורות USD באותו bucket; remaining יורד ב-USD,
+ *   appliedLines שומרים את סכום הקליטה בשקלים (קופה פיזית).
+ * שורות ILS legacy (אם קיימות) — נסגרות בשקלים ישירות.
  */
 
 import {
@@ -60,6 +61,8 @@ export type MatchingEngineInput = {
   debtTransfers?: DebtTransferInput[] | null;
   /** אם מוגדר — מריצים רק על מטבע זה */
   currency?: BreakdownCurrency;
+  /** שער לפי הזמנה — נדרש לקליטת ILS מול חוב USD */
+  rateByOrderId?: Map<string, number>;
   eps?: number;
 };
 
@@ -195,12 +198,123 @@ export function applyDebtTransfersToBalances(
 }
 
 /**
+ * קליטת ILS — מקטין חוב USD (אותו bucket), appliedLines בשקלים.
+ */
+function applyIlsPaymentMatching(input: MatchingEngineInput): MatchingEngineResult {
+  const eps = input.eps ?? MATCHING_EPS;
+  const rateByOrderId = input.rateByOrderId ?? new Map<string, number>();
+
+  let usdWorking = input.balances
+    .filter((b) => b.currency === "USD")
+    .map((b) => withMethodStatus({ ...b }));
+  let ilsWorking = input.balances
+    .filter((b) => b.currency === "ILS")
+    .map((b) => withMethodStatus({ ...b }));
+
+  let transfersApplied: DebtTransferInput[] = [];
+  const scopedTransfers = (input.debtTransfers ?? []).filter((t) => t.currency === "ILS");
+  if (scopedTransfers.length > 0) {
+    const tr = applyDebtTransfersToBalances(
+      ilsWorking,
+      scopedTransfers,
+      input.orderIdsOldestFirst,
+      eps,
+    );
+    ilsWorking = tr.balances;
+    transfersApplied = tr.transfersApplied;
+  }
+
+  const appliedLines: MethodApplyLine[] = [];
+  const amountByOrderId = new Map<string, number>();
+  let surplus = 0;
+
+  const enteredScoped = input.enteredByBucket.filter(
+    (e) => e.currency === "ILS" && e.entered > eps,
+  );
+
+  for (const entered of enteredScoped) {
+    let leftIls = round2(entered.entered);
+
+    for (const orderId of input.orderIdsOldestFirst) {
+      if (leftIls <= eps) break;
+      const rate = rateByOrderId.get(orderId) ?? 0;
+
+      if (rate > eps) {
+        const usdIdx = usdWorking.findIndex(
+          (r) => r.orderId === orderId && r.bucket === entered.bucket && r.remaining > eps,
+        );
+        if (usdIdx >= 0) {
+          const row = usdWorking[usdIdx]!;
+          const maxIls = round2(row.remaining * rate);
+          const takeIls = round2(Math.min(leftIls, maxIls));
+          if (takeIls > eps) {
+            const takeUsd = round2(takeIls / rate);
+            row.paid = round2(row.paid + takeUsd);
+            row.remaining = round2(Math.max(0, row.remaining - takeUsd));
+            usdWorking[usdIdx] = withMethodStatus(row);
+            appliedLines.push({
+              orderId,
+              bucket: entered.bucket,
+              method: row.method,
+              currency: "ILS",
+              amount: takeIls,
+            });
+            amountByOrderId.set(orderId, round2((amountByOrderId.get(orderId) ?? 0) + takeIls));
+            leftIls = round2(leftIls - takeIls);
+          }
+        }
+      }
+
+      if (leftIls <= eps) break;
+
+      const ilsIdx = ilsWorking.findIndex(
+        (r) => r.orderId === orderId && r.bucket === entered.bucket && r.remaining > eps,
+      );
+      if (ilsIdx < 0) continue;
+      const row = ilsWorking[ilsIdx]!;
+      const takeIls = round2(Math.min(leftIls, row.remaining));
+      if (takeIls <= eps) continue;
+
+      row.paid = round2(row.paid + takeIls);
+      row.remaining = round2(Math.max(0, row.remaining - takeIls));
+      ilsWorking[ilsIdx] = withMethodStatus(row);
+      appliedLines.push({
+        orderId,
+        bucket: entered.bucket,
+        method: row.method,
+        currency: "ILS",
+        amount: takeIls,
+      });
+      amountByOrderId.set(orderId, round2((amountByOrderId.get(orderId) ?? 0) + takeIls));
+      leftIls = round2(leftIls - takeIls);
+    }
+
+    if (leftIls > eps) {
+      surplus = round2(surplus + leftIls);
+    }
+  }
+
+  return {
+    balances: [...usdWorking, ...ilsWorking].map(withMethodStatus),
+    appliedLines,
+    amountByOrderId,
+    surplus,
+    surplusCurrency: "ILS",
+    transfersApplied,
+  };
+}
+
+/**
  * Matching Engine למטבע יחיד.
- * מתעלם מיתרות/הקלדות/העברות של מטבע אחר.
+ * USD — מול שורות USD. ILS — מול חוב USD (המרה) + legacy ILS.
  */
 export function applyPaymentMethodMatching(input: MatchingEngineInput): MatchingEngineResult {
   const eps = input.eps ?? MATCHING_EPS;
   const currency = input.currency ?? "USD";
+
+  if (currency === "ILS") {
+    return applyIlsPaymentMatching(input);
+  }
 
   let working = input.balances
     .filter((b) => b.currency === currency)
@@ -280,8 +394,7 @@ export function applyPaymentMethodMatching(input: MatchingEngineInput): Matching
 }
 
 /**
- * מריץ שני מנועים נפרדים ומאחד תוצאות.
- * rateByOrderId — רק להמרת ILS→USD לצורך רשומת Payment על ההזמנה (לא ל-Matching).
+ * מריץ USD ואז ILS; rateByOrderId משמש להמרת קליטת ILS לחוב USD.
  */
 export function applyDualCurrencyMatching(params: {
   balances: MethodBalanceRow[];
@@ -300,6 +413,7 @@ export function applyDualCurrencyMatching(params: {
     enteredByBucket: params.enteredByBucket,
     orderIdsOldestFirst: params.orderIdsOldestFirst,
     debtTransfers: params.debtTransfers,
+    rateByOrderId: params.rateByOrderId,
     currency: "ILS",
     eps: params.eps,
   });
