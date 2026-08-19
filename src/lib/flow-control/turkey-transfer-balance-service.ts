@@ -3,7 +3,7 @@
  */
 
 import { Prisma, TurkeyTransferCurrency as DbCurrency, TurkeyTransferMovementType as DbType } from "@prisma/client";
-import { parseAhWeekNumber } from "@/lib/weeks/ah-week-nav";
+import { parseAhWeekNumber, listAhWeekCodesUpTo } from "@/lib/weeks/ah-week-nav";
 import {
   type TurkeyTransferBalanceResult,
   type TurkeyTransferBalanceWeekSummary,
@@ -190,8 +190,9 @@ export async function loadTurkeyMovementsUpToWeek(
   const targetWeek = parseAhWeekNumber(weekCode);
   if (targetWeek == null) return [];
 
+  const weekCodes = listAhWeekCodesUpTo(weekCode);
   const rows = await prisma.turkeyTransferMovement.findMany({
-    where: { countryCode },
+    where: { countryCode, weekCode: { in: weekCodes } },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     select: {
       id: true,
@@ -208,12 +209,7 @@ export async function loadTurkeyMovementsUpToWeek(
     },
   });
 
-  return rows
-    .filter((r) => {
-      const wn = parseAhWeekNumber(r.weekCode);
-      return wn != null && wn <= targetWeek;
-    })
-    .map(toDto);
+  return rows.map(toDto);
 }
 
 export function computeOpeningBalanceBeforeWeek(

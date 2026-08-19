@@ -9,6 +9,7 @@
  */
 
 import { Prisma } from "@prisma/client";
+import { computePaymentOverpayment } from "@/lib/payment-overpayment";
 
 const EPS = 0.01;
 
@@ -29,6 +30,8 @@ export type PaymentOveragePreview = {
   openDebtUsd: number;
   paymentIls: number;
   paymentUsd: number;
+  closesDebtUsd: number;
+  closesDebtIls: number;
   surplusIls: number;
   surplusUsd: number;
   hasOverage: boolean;
@@ -200,15 +203,18 @@ export function computePaymentOveragePreview(params: {
   paymentIls: number;
   paymentUsd: number;
 }): PaymentOveragePreview {
+  const usd = computePaymentOverpayment(params.openDebtUsd, params.paymentUsd);
+  const closesDebtIls = round2(Math.min(params.paymentIls, params.openDebtIls));
   const surplusIls = round2(Math.max(0, params.paymentIls - params.openDebtIls));
-  const surplusUsd = round2(Math.max(0, params.paymentUsd - params.openDebtUsd));
   return {
     openDebtIls: params.openDebtIls,
-    openDebtUsd: params.openDebtUsd,
+    openDebtUsd: usd.openDebtUsd,
     paymentIls: params.paymentIls,
-    paymentUsd: params.paymentUsd,
+    paymentUsd: usd.incomingPaymentUsd,
+    closesDebtUsd: usd.closesDebtUsd,
+    closesDebtIls,
     surplusIls,
-    surplusUsd,
-    hasOverage: surplusIls > EPS || surplusUsd > EPS,
+    surplusUsd: usd.overpaymentUsd,
+    hasOverage: usd.hasOverpayment,
   };
 }

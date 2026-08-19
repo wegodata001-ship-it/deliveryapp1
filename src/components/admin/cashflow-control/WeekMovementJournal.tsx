@@ -25,10 +25,14 @@ export function WeekMovementJournal({
   entries,
   weekCode,
   loading,
+  error,
+  onRetry,
 }: {
   entries: WeekMovementJournalEntry[];
   weekCode: string;
   loading?: boolean;
+  error?: string | null;
+  onRetry?: () => void;
 }) {
   if (loading) {
     return (
@@ -41,6 +45,25 @@ export function WeekMovementJournal({
           {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="cfc-journal__skeleton-row" />
           ))}
+        </div>
+      </section>
+    );
+  }
+
+  if (error) {
+    return (
+      <section className="cfc-journal" aria-label="יומן תנועות">
+        <header className="cfc-journal__head">
+          <h2>יומן תנועות השבוע</h2>
+          <p dir="ltr">{weekCode}</p>
+        </header>
+        <div className="cfc-journal__empty cfc-journal__empty--error">
+          <p>{error}</p>
+          {onRetry ? (
+            <button type="button" className="cfc-btn cfc-btn--ghost" onClick={onRetry}>
+              נסה שוב
+            </button>
+          ) : null}
         </div>
       </section>
     );

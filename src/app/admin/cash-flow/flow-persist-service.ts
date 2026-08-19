@@ -115,6 +115,8 @@ export async function persistFxPurchase(input: {
   perf.mark("execute");
 
   if (res.ok) {
+    const { invalidateFlowWeekLoadCache } = await import("@/lib/flow-control/flow-week-load-cache");
+    invalidateFlowWeekLoadCache(wk);
     revalidatePath("/admin/cash-flow");
     perf.mark("revalidate");
   }
@@ -159,7 +161,11 @@ export async function persistFxPurchaseUpdate(input: {
     createdByName: input.createdByName,
   });
 
-  if (res.ok) revalidatePath("/admin/cash-flow");
+  if (res.ok) {
+    const { invalidateFlowWeekLoadCache } = await import("@/lib/flow-control/flow-week-load-cache");
+    invalidateFlowWeekLoadCache(wk);
+    revalidatePath("/admin/cash-flow");
+  }
   return res;
 }
 

@@ -14,6 +14,13 @@ export function invalidateCustomerCaptureIndex(): void {
   indexPromise = null;
 }
 
+/** הוספת לקוח חדש לזיכרון — בלי refetch של כל האינדקס */
+export function prependCustomerToCaptureIndex(row: CustomerSearchRow): void {
+  if (!indexRows) return;
+  if (indexRows.some((r) => r.id === row.id || (r.code && r.code === row.code))) return;
+  indexRows = [row, ...indexRows];
+}
+
 /** טעינה מראש בפתיחת קליטת הזמנה — חיפוש ראשון מיידי מהזיכרון (לפי מדינה) */
 export function preloadCustomerCaptureIndex(
   workCountry?: string | null,

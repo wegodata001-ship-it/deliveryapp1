@@ -17,6 +17,7 @@ import {
   computeOrderLedgerView,
   deriveOrderPaymentDisplayStatus,
 } from "@/lib/order-remaining-debt";
+import { resolveOrderPaymentFormDisplay } from "@/lib/order-payment-form-display";
 import { groupByActivePayments } from "@/lib/payment-record-status";
 
 function fmtUsd2(n: unknown): string | null {
@@ -94,6 +95,10 @@ const orderListSelect = {
   createdById: true,
   createdBy: { select: { fullName: true, username: true } },
   customer: { select: { phone: true, phone2: true } },
+  paymentBreakdown: {
+    select: { paymentMethod: true, amount: true, currency: true },
+    orderBy: { createdAt: "asc" as const },
+  },
 } as const;
 
 type OrderListDbRow = Prisma.OrderGetPayload<{ select: typeof orderListSelect }>;
@@ -580,6 +585,17 @@ export async function fetchOrdersListPageData(
         (r.locationId ? intakeById.get(r.locationId) ?? null : null) ||
         null;
 
+      const paymentForm = resolveOrderPaymentFormDisplay({
+        orderPaymentMethod: r.paymentMethod,
+        breakdownLines: r.paymentBreakdown.map((b) => ({
+          paymentMethod: b.paymentMethod,
+          amount: b.amount,
+          currency: b.currency,
+        })),
+        paidUsd: ledger.paidUsd,
+        hasPaymentActivity: ledger.paidUsd > 0.01,
+      });
+
       return {
         id: r.id,
         orderNumber: r.orderNumber,
@@ -594,6 +610,8 @@ export async function fetchOrdersListPageData(
         isCompleted: Boolean(r.isCompleted),
         sourceCountry: r.sourceCountry,
         paymentType: r.paymentMethod,
+        paymentFormTooltip:
+          paymentForm.tooltipLines.length > 0 ? paymentForm.tooltipLines.join("\n") : null,
         paymentLocationId,
         paymentLocationName,
         createdById: r.createdById,

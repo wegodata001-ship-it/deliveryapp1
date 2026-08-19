@@ -5,7 +5,8 @@
  */
 
 import { prisma } from "@/lib/prisma";
-import { loadFlowWeek } from "@/app/admin/cash-flow/week-flow-service";
+import { loadFlowWeekCached } from "@/lib/flow-control/flow-week-load-cache";
+import { sumFxPurchases, normalizeFxTrack } from "@/lib/flow-control/flow-calculation-service";
 import type { FlowWeekOverviewRow } from "@/app/admin/cash-flow/flow-types";
 import type { CashDailyMethodId } from "@/lib/cash-control-daily";
 import { allCashControlChannels } from "@/lib/cash-control-channel";
@@ -36,7 +37,7 @@ async function loadOneWeekOverview(
 ): Promise<FlowWeekOverviewRow | null> {
   const wk = weekCode.trim();
   const [flow, orderRows] = await Promise.all([
-    loadFlowWeek(wk, scope.workCountry),
+    loadFlowWeekCached(wk, scope.workCountry),
     prisma.order.findMany({
       where: mergeOrderWhere({ weekCode: wk, deletedAt: null }, scope),
       select: {
@@ -99,6 +100,10 @@ async function loadOneWeekOverview(
     if (line.paymentCount > maxDays) maxDays = line.paymentCount;
   }
 
+  const fxPs = sumFxPurchases(flow.fxPurchases, "PS");
+  const fxIl = sumFxPurchases(flow.fxPurchases, "IL");
+  const lastPsFx = [...flow.fxPurchases].reverse().find((p) => normalizeFxTrack(p.track) === "PS") ?? null;
+  const lastIlFx = [...flow.fxPurchases].reverse().find((p) => normalizeFxTrack(p.track) === "IL") ?? null;
   const lastFx = flow.fxPurchases.length > 0 ? flow.fxPurchases[flow.fxPurchases.length - 1] : null;
   const hasPaymentData = Object.values(flow.weekPaymentIntake).some((v) => v > 0);
   const hasManagerCount = (["CASH_ILS", "CASH_USD", "CREDIT", "CHECK", "BANK_TRANSFER"] as CashWeekFlowLineId[]).some(
@@ -134,8 +139,12 @@ async function loadOneWeekOverview(
     turkeyTransferredUsd: money(turkeyBalance.usd.transferred - turkeyBalance.usd.reversed),
     turkeyClosingUsd: money(turkeyBalance.usd.closingBalance),
     turkeyBalanceStatus: turkeyBalance.usd.status,
-    fxPurchaseIls: flow.fxPurchaseIls,
-    fxPurchaseUsd: flow.fxPurchaseUsd,
+    fxPurchaseIls: fxPs.ils > 0 ? money(fxPs.ils) : null,
+    fxPurchaseUsd: fxPs.usd > 0 ? money(fxPs.usd) : null,
+    ilFxPurchaseIls: fxIl.ils > 0 ? money(fxIl.ils) : null,
+    ilFxPurchaseUsd: fxIl.usd > 0 ? money(fxIl.usd) : null,
+    fxPsRate: lastPsFx ? lastPsFx.rate.toFixed(4) : null,
+    fxIlRate: lastIlFx ? lastIlFx.rate.toFixed(4) : null,
     fxRemainderCashIls: lastFx ? money(lastFx.remainderCashIls) : flow.fxRemainderCashIls,
     fxRemainderBankIls: lastFx ? money(lastFx.remainderBankIls) : flow.fxRemainderBankIls,
     fxPurchaseCount: flow.fxPurchases.length,

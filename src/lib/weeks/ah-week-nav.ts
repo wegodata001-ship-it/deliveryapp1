@@ -15,6 +15,15 @@ export function toAhWeekCode(n: number): string {
   return `AH-${Math.max(1, Math.floor(n))}`;
 }
 
+/** כל קודי AH-1 … AH-N (כולל) — לסינון DB */
+export function listAhWeekCodesUpTo(weekCode: string): string[] {
+  const target = parseAhWeekNumber(weekCode);
+  if (target == null) return [];
+  const out: string[] = [];
+  for (let n = 1; n <= target; n += 1) out.push(toAhWeekCode(n));
+  return out;
+}
+
 /**
  * הזזת מספר שבוע בזמן:
  * delta -1 = שבוע קודם (אחורה), +1 = שבוע הבא (קדימה).

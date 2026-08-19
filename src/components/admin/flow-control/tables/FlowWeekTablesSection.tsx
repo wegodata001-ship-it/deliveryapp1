@@ -16,6 +16,8 @@ import { getFlowWeekVarianceLines } from "@/lib/flow-control/services/flow-varia
 export type FlowWeekTablesSectionProps = {
   drill: FlowWeekDrillPayload | null;
   loading: boolean;
+  error?: string | null;
+  onRetry?: () => void;
   /** פתיחת מודל חריגות מבחוץ (תג בראש המסך) */
   varianceOpenExternal?: boolean;
   onVarianceOpenChange?: (open: boolean) => void;
@@ -24,6 +26,8 @@ export type FlowWeekTablesSectionProps = {
 export function FlowWeekTablesSection({
   drill,
   loading,
+  error,
+  onRetry,
   varianceOpenExternal,
   onVarianceOpenChange,
 }: FlowWeekTablesSectionProps) {
@@ -94,6 +98,8 @@ export function FlowWeekTablesSection({
         <CashflowReceivedTable
           rows={drill?.paymentDailyRows ?? []}
           loading={loading}
+          error={error}
+          onRetry={onRetry}
           onAmountClick={(dateYmd, method) => void openIntakeDrill(dateYmd, method)}
         />
         {intakeDrillMethod && intakeDrillDay ? (

@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   createClientAction,
@@ -8,6 +8,8 @@ import {
   suggestNextCustomerCodeAction,
 } from "@/app/admin/customers/ledger-actions";
 import type { ClientCreateResult, ClientLedgerPayload } from "@/app/admin/customers/ledger-types";
+import { useFormEnterNavigation } from "@/hooks/useFormEnterNavigation";
+import { consumePrefetchedCustomerCode, prefetchNextCustomerCode } from "@/lib/customer-code-prefetch.client";
 import {
   getCustomerLedgerAction,
   updateCustomerCardDetailsAction,
@@ -1123,48 +1125,28 @@ const EMPTY_NEW_CUSTOMER_FORM = {
 export function CreateCustomerWindowBody({ initialCustomerCode }: { initialCustomerCode?: string }) {
   const { closeTop, completeCustomerCreate } = useAdminWindows();
   const router = useRouter();
+  const codeRef = useRef<HTMLInputElement>(null);
   const nameArRef = useRef<HTMLInputElement>(null);
-  /** true אחרי שהמשתמש ערך את קוד הלקוח ידנית — לא לדרוס באוטומט */
+  const nameEnRef = useRef<HTMLInputElement>(null);
+  const phoneRef = useRef<HTMLInputElement>(null);
+  const phone2Ref = useRef<HTMLInputElement>(null);
+  const emailRef = useRef<HTMLInputElement>(null);
+  const placeRef = useRef<HTMLInputElement>(null);
+  const saveInFlightRef = useRef(false);
   const customerCodeTouchedRef = useRef(false);
   const [form, setForm] = useState({ ...EMPTY_NEW_CUSTOMER_FORM });
   const [busy, setBusy] = useState(false);
   const [codeBusy, setCodeBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [standaloneDone, setStandaloneDone] = useState<ClientCreateResult | null>(null);
+  const [saveOkFlash, setSaveOkFlash] = useState(false);
 
-  async function loadSuggestedCode(opts?: { force?: boolean }) {
-    if (codeBusy) return;
-    if (!opts?.force && customerCodeTouchedRef.current) return;
-    setCodeBusy(true);
-    setErr(null);
-    const res = await suggestNextCustomerCodeAction();
-    setCodeBusy(false);
-    if (!res.ok) {
-      setErr(res.error);
-      return;
-    }
-    setForm((f) => ({ ...f, customerCode: res.code }));
-  }
-
-  useEffect(() => {
-    const seed = initialCustomerCode?.trim() ?? "";
-    if (seed) {
-      customerCodeTouchedRef.current = true;
-      setForm((f) => ({ ...f, customerCode: seed }));
-      const t = window.setTimeout(() => nameArRef.current?.focus(), 0);
-      return () => window.clearTimeout(t);
-    }
-    void loadSuggestedCode();
-    const t = window.setTimeout(() => nameArRef.current?.focus(), 0);
-    return () => window.clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount בלבד
-  }, [initialCustomerCode]);
-
-  async function performSave(): Promise<ClientCreateResult | null> {
-    if (busy) return null;
+  const performSave = useCallback(async (): Promise<ClientCreateResult | null> => {
+    if (saveInFlightRef.current || busy) return null;
     setErr(null);
     if (!form.customerCode.trim()) {
       setErr("יש להזין קוד לקוח");
+      codeRef.current?.focus();
       return null;
     }
     if (!form.nameAr.trim()) {
@@ -1172,34 +1154,108 @@ export function CreateCustomerWindowBody({ initialCustomerCode }: { initialCusto
       nameArRef.current?.focus();
       return null;
     }
+    saveInFlightRef.current = true;
     setBusy(true);
-    const res = await createClientAction({
-      customerCode: form.customerCode,
-      nameAr: form.nameAr,
-      nameEn: form.nameEn || null,
-      phone: form.phone.trim() || null,
-      phone2: form.phone2.trim() || null,
-      country: form.country || null,
-      email: form.email || null,
-      notes: null,
-    });
-    setBusy(false);
-    if (!res.ok) {
-      setErr(res.error);
-      return null;
+    const saveStart = typeof performance !== "undefined" ? performance.now() : Date.now();
+    try {
+      const res = await createClientAction({
+        customerCode: form.customerCode,
+        nameAr: form.nameAr,
+        nameEn: form.nameEn || null,
+        phone: form.phone.trim() || null,
+        phone2: form.phone2.trim() || null,
+        country: form.country || null,
+        email: form.email || null,
+        notes: null,
+      });
+      if (typeof performance !== "undefined") {
+        console.info("[customer-create-perf:client]", {
+          saveApiMs: Math.round(performance.now() - saveStart),
+        });
+      }
+      if (!res.ok) {
+        setErr(res.error);
+        return null;
+      }
+      return res.client;
+    } finally {
+      setBusy(false);
+      saveInFlightRef.current = false;
     }
-    return res.client;
-  }
+  }, [busy, form]);
 
-  async function onSave() {
+  const onSave = useCallback(async () => {
     const client = await performSave();
     if (!client) return;
+    setSaveOkFlash(true);
     const appliedToOrder = completeCustomerCreate(client);
-    if (!appliedToOrder) {
-      setStandaloneDone(client);
-      router.refresh();
+    if (appliedToOrder) return;
+    setStandaloneDone(client);
+    router.refresh();
+  }, [completeCustomerCreate, performSave, router]);
+
+  const { handleEnterKeyDown } = useFormEnterNavigation(
+    [
+      { ref: codeRef },
+      { ref: nameArRef },
+      { ref: nameEnRef },
+      { ref: phoneRef },
+      { ref: phone2Ref },
+      {
+        ref: emailRef,
+        onEnter: (e) => {
+          e.preventDefault();
+          placeRef.current?.focus();
+          return true;
+        },
+      },
+    ],
+    () => void onSave(),
+  );
+
+  const advanceFromPlace = useCallback(() => {
+    void onSave();
+  }, [onSave]);
+
+  async function loadSuggestedCode(opts?: { force?: boolean }) {
+    if (codeBusy) return;
+    if (!opts?.force && customerCodeTouchedRef.current) return;
+    setCodeBusy(true);
+    setErr(null);
+    let resolved: string | null = null;
+    if (opts?.force) {
+      const res = await suggestNextCustomerCodeAction();
+      resolved = res.ok ? res.code : null;
+    } else {
+      resolved = await consumePrefetchedCustomerCode();
+      if (!resolved) {
+        const res = await suggestNextCustomerCodeAction();
+        resolved = res.ok ? res.code : null;
+      }
     }
+    setCodeBusy(false);
+    if (!resolved) {
+      setErr("לא ניתן לטעון קוד לקוח");
+      return;
+    }
+    setForm((f) => ({ ...f, customerCode: resolved }));
+    prefetchNextCustomerCode();
   }
+
+  useEffect(() => {
+    prefetchNextCustomerCode();
+    const seed = initialCustomerCode?.trim() ?? "";
+    if (seed) {
+      customerCodeTouchedRef.current = true;
+      setForm((f) => ({ ...f, customerCode: seed }));
+      const t = window.setTimeout(() => nameArRef.current?.focus(), 0);
+      return () => window.clearTimeout(t);
+    }
+    void loadSuggestedCode().then(() => {
+      window.setTimeout(() => nameArRef.current?.focus(), 0);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount בלבד
+  }, [initialCustomerCode]);
 
   return (
     <div className="adm-client-create-shell">
@@ -1223,12 +1279,14 @@ export function CreateCustomerWindowBody({ initialCustomerCode }: { initialCusto
                   </button>
                 </div>
                 <input
+                  ref={codeRef}
                   id="new-customer-code"
                   dir="ltr"
                   placeholder="55"
                   value={form.customerCode}
                   disabled={busy}
                   autoComplete="off"
+                  onKeyDown={handleEnterKeyDown(0)}
                   onChange={(e) => {
                     customerCodeTouchedRef.current = true;
                     setForm((f) => ({ ...f, customerCode: e.target.value }));
@@ -1245,48 +1303,56 @@ export function CreateCustomerWindowBody({ initialCustomerCode }: { initialCusto
                   value={form.nameAr}
                   disabled={busy}
                   autoComplete="off"
+                  onKeyDown={handleEnterKeyDown(1)}
                   onChange={(e) => setForm((f) => ({ ...f, nameAr: e.target.value }))}
                 />
               </div>
               <div className="adm-field adm-client-create-field--name-en">
                 <label htmlFor="new-customer-name-en">שם אנגלית</label>
                 <input
+                  ref={nameEnRef}
                   id="new-customer-name-en"
                   dir="ltr"
                   placeholder="wego data"
                   value={form.nameEn}
                   disabled={busy}
                   autoComplete="off"
+                  onKeyDown={handleEnterKeyDown(2)}
                   onChange={(e) => setForm((f) => ({ ...f, nameEn: e.target.value }))}
                 />
               </div>
               <div className="adm-field">
                 <label htmlFor="new-customer-phone">טלפון</label>
                 <input
+                  ref={phoneRef}
                   id="new-customer-phone"
                   dir="ltr"
                   placeholder="050-0000000"
                   value={form.phone}
                   disabled={busy}
                   autoComplete="off"
+                  onKeyDown={handleEnterKeyDown(3)}
                   onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
                 />
               </div>
               <div className="adm-field">
                 <label htmlFor="new-customer-phone2">טלפון נוסף</label>
                 <input
+                  ref={phone2Ref}
                   id="new-customer-phone2"
                   dir="ltr"
                   placeholder="050-0000000"
                   value={form.phone2}
                   disabled={busy}
                   autoComplete="off"
+                  onKeyDown={handleEnterKeyDown(4)}
                   onChange={(e) => setForm((f) => ({ ...f, phone2: e.target.value }))}
                 />
               </div>
               <div className="adm-field">
                 <label htmlFor="new-customer-email">אימייל</label>
                 <input
+                  ref={emailRef}
                   id="new-customer-email"
                   dir="ltr"
                   type="email"
@@ -1294,6 +1360,7 @@ export function CreateCustomerWindowBody({ initialCustomerCode }: { initialCusto
                   value={form.email}
                   disabled={busy}
                   autoComplete="off"
+                  onKeyDown={handleEnterKeyDown(5)}
                   onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
                 />
               </div>
@@ -1301,8 +1368,10 @@ export function CreateCustomerWindowBody({ initialCustomerCode }: { initialCusto
                 <label htmlFor="new-customer-place">עיר / מקום</label>
                 <CustomerPlaceCombo
                   id="new-customer-place"
+                  inputRef={placeRef}
                   value={form.country}
                   disabled={busy}
+                  onEnterAdvance={advanceFromPlace}
                   onChange={(place) => setForm((f) => ({ ...f, country: place }))}
                 />
               </div>
@@ -1319,11 +1388,20 @@ export function CreateCustomerWindowBody({ initialCustomerCode }: { initialCusto
             </button>
             <button
               type="button"
-              className="adm-btn adm-btn--primary"
+              className="adm-btn adm-btn--primary adm-client-create-save-new"
               disabled={busy || codeBusy}
               onClick={() => void onSave()}
             >
-              {busy ? "שומר לקוח…" : "שמור לקוח"}
+              {busy ? (
+                <>
+                  <span className="payment-modal-save-spinner" aria-hidden />
+                  שומר לקוח…
+                </>
+              ) : saveOkFlash ? (
+                "✓ הלקוח נשמר"
+              ) : (
+                "שמור לקוח"
+              )}
             </button>
           </footer>
         </>

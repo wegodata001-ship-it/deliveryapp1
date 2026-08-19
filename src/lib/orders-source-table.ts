@@ -3,6 +3,7 @@ import { unstable_cache } from "next/cache";
 import { normalizeOrderSourceCountry, orderCountryLabel } from "@/lib/order-countries";
 import { getOrderStatusLabelMap } from "@/lib/order-status-registry";
 import { OS } from "@/lib/order-status-slugs";
+import { resolveOrderPaymentFormDisplay } from "@/lib/order-payment-form-display";
 import { prisma } from "@/lib/prisma";
 import { ordersPerfEnd, ordersPerfRun, ordersPerfStart } from "@/lib/orders-source-perf";
 import { orderWhereForCountryScope, resolveCountryScopeFromCode } from "@/lib/country-data-scope";
@@ -21,6 +22,7 @@ const PAYMENT_METHOD_LABELS: Record<string, string> = {
   CHECK: "צ׳ק",
   CREDIT: "אשראי",
   OTHER: "אחר",
+  COMPOSITE: "תשלום מורכב",
 };
 
 export type OrderStatusOption = { value: string; label: string };
@@ -226,6 +228,9 @@ const orderListSelect = {
   totalIlsWithVat: true,
   status: true,
   paymentMethod: true,
+  paymentBreakdown: {
+    select: { paymentMethod: true, amount: true, currency: true },
+  },
 } as const;
 
 async function loadStatusOptions(): Promise<OrderStatusOption[]> {
@@ -245,7 +250,15 @@ function mapOrderRow(
 ): OrdersSourceRow {
   const c = countryLabel(r.sourceCountry);
   const statusId = r.status;
-  const pm = r.paymentMethod;
+  const paymentForm = resolveOrderPaymentFormDisplay({
+    orderPaymentMethod: r.paymentMethod,
+    breakdownLines: r.paymentBreakdown.map((b) => ({
+      paymentMethod: b.paymentMethod,
+      amount: b.amount,
+      currency: b.currency,
+    })),
+    labelMap: PAYMENT_METHOD_LABELS,
+  });
   return {
     id: r.id,
     orderNumber: r.orderNumber ?? "—",
@@ -257,7 +270,7 @@ function mapOrderRow(
     orderDateYmd: r.orderDate ? formatLocalYmd(r.orderDate) : "—",
     usd: fmtMoney(r.totalUsd),
     ils: fmtMoney(r.totalIlsWithVat),
-    paymentLabel: pm ? PAYMENT_METHOD_LABELS[pm] ?? pm : "אין תשלום",
+    paymentLabel: paymentForm.displayLabel,
     statusId,
     statusLabel: labels[statusId] ?? statusId,
     tone: orderStatusTone(statusId),
@@ -381,6 +394,9 @@ export async function getOrderSourcePreview(orderId: string): Promise<OrdersSour
           status: true,
           paymentMethod: true,
           notes: true,
+          paymentBreakdown: {
+            select: { paymentMethod: true, amount: true, currency: true },
+          },
         },
       }),
       getOrderStatusLabelMap(),
@@ -393,7 +409,16 @@ export async function getOrderSourcePreview(orderId: string): Promise<OrdersSour
 
     if (!order) return null;
     const c = countryLabel(order.sourceCountry);
-    const pm = latestPay?.paymentMethod ?? order.paymentMethod;
+    const paymentForm = resolveOrderPaymentFormDisplay({
+      orderPaymentMethod: latestPay?.paymentMethod ?? order.paymentMethod,
+      breakdownLines: order.paymentBreakdown.map((b) => ({
+        paymentMethod: b.paymentMethod,
+        amount: b.amount,
+        currency: b.currency,
+      })),
+      hasPaymentActivity: !!latestPay,
+      labelMap: PAYMENT_METHOD_LABELS,
+    });
 
     return {
       id: order.id,
@@ -405,7 +430,7 @@ export async function getOrderSourcePreview(orderId: string): Promise<OrdersSour
       ils: fmtMoney(order.totalIlsWithVat),
       statusLabel: labels[order.status] ?? order.status,
       paymentCode: latestPay?.paymentCode ?? "—",
-      paymentMethod: pm ? PAYMENT_METHOD_LABELS[pm] ?? pm : "—",
+      paymentMethod: paymentForm.displayLabel,
       notes: (order.notes ?? "").trim() || "—",
     };
   });

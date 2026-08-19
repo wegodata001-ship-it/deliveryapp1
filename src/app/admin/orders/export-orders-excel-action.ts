@@ -3,7 +3,8 @@
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
-import { getPaymentMethodLabelMap, paymentMethodLabelFromMap } from "@/lib/payment-method-registry";
+import { getPaymentMethodLabelMap } from "@/lib/payment-method-registry";
+import { resolveOrderPaymentFormDisplay } from "@/lib/order-payment-form-display";
 import {
   buildOrdersExportWhereFromPreset,
   orderMatchesExportKpiAfterFetch,
@@ -22,9 +23,22 @@ import { groupByActivePayments } from "@/lib/payment-record-status";
 
 const EXPORT_MAX_ROWS = 15_000;
 
-function paymentTypeLabel(m: string | null | undefined, labelMap: Record<string, string>): string {
-  if (!m) return "—";
-  return paymentMethodLabelFromMap(labelMap, m);
+function paymentTypeLabel(
+  r: {
+    paymentMethod: string | null;
+    paymentBreakdown?: Array<{ paymentMethod: string; amount: unknown; currency: string }>;
+  },
+  labelMap: Record<string, string>,
+): string {
+  return resolveOrderPaymentFormDisplay({
+    orderPaymentMethod: r.paymentMethod,
+    breakdownLines: r.paymentBreakdown?.map((b) => ({
+      paymentMethod: b.paymentMethod,
+      amount: b.amount,
+      currency: b.currency,
+    })),
+    labelMap,
+  }).displayLabel;
 }
 
 function escapeCsv(v: string | null | undefined): string {
@@ -63,6 +77,9 @@ export async function exportOrdersListExcelCsvAction(
         customerCodeSnapshot: true,
         customerNameSnapshot: true,
         paymentMethod: true,
+        paymentBreakdown: {
+          select: { paymentMethod: true, amount: true, currency: true },
+        },
         paymentPointId: true,
         locationId: true,
         paymentPoint: { select: { pointName: true } },
@@ -181,7 +198,7 @@ export async function exportOrdersListExcelCsvAction(
         paidUsd,
         remainingUsd,
         labelFromMap(statusMap, r.status),
-        paymentTypeLabel(r.paymentMethod as string | null, paymentMethodMap),
+        paymentTypeLabel(r, paymentMethodMap),
         paymentLocationName ?? "—",
       ]
         .map(escapeCsv)

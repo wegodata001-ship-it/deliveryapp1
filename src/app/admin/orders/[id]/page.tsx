@@ -8,6 +8,7 @@ import { orderBusinessStatusDisplay } from "@/lib/order-business-status";
 import { orderCountryBadgeClass, orderCountryLabel } from "@/lib/order-countries";
 import { OrderDetailActions } from "@/components/admin/OrderDetailActions";
 import { DocumentsPanel } from "@/components/admin/DocumentsPanel";
+import { resolveOrderPaymentFormDisplay } from "@/lib/order-payment-form-display";
 import { isCompositePaymentMethod } from "@/lib/payment-breakdown-shared";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 import { computeOrderLedgerView } from "@/lib/order-remaining-debt";
@@ -60,9 +61,6 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
   });
   if (!order) notFound();
 
-  const isComposite = isCompositePaymentMethod(order.paymentMethod);
-  const methodLabel = (m: string) => PAYMENT_METHOD_LABELS[m] ?? m;
-
   let editEntryHint: OrderEditEntryHint = { kind: "direct" };
   if (userHasAnyPermission(me, ["edit_orders"])) {
     editEntryHint = await getOrderEditEntryHintAction(order.id);
@@ -74,9 +72,20 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
   });
   const paidUsd = Number(paidAgg._sum.amountUsd ?? 0);
 
+  const paymentFormDisplay = resolveOrderPaymentFormDisplay({
+    orderPaymentMethod: order.paymentMethod,
+    breakdownLines: order.paymentBreakdown.map((b) => ({
+      paymentMethod: b.paymentMethod,
+      amount: b.amount,
+      currency: b.currency,
+    })),
+    paidUsd,
+    hasPaymentActivity: paidUsd > 0.01,
+  });
+
   // בוצע בפועל לכל אמצעי (USD) — לצורך הצגת מתוכנן מול בפועל בהזמנה מורכבת
   const actualByMethod = new Map<string, number>();
-  if (isComposite) {
+  if (paymentFormDisplay.kind === "composite") {
     const methodPayments = await prisma.payment.findMany({
       where: { orderId: order.id, status: "ACTIVE", amountUsd: { not: null } },
       select: { amountUsd: true, paymentMethod: true, usdPaymentMethod: true, ilsPaymentMethod: true },
@@ -101,6 +110,9 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
   const st = orderBusinessStatusDisplay(order.status);
 
   const orderDateYmd = order.orderDate ? formatLocalYmd(new Date(order.orderDate)) : "—";
+  const methodLabel = (m: string) => PAYMENT_METHOD_LABELS[m] ?? m;
+  const showBreakdownTable =
+    paymentFormDisplay.kind === "composite" && order.paymentBreakdown.length > 0;
 
   return (
     <div className="adm-order-detail-page">
@@ -146,8 +158,8 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
             </div>
             <div>
               <dt>אמצעי תשלום</dt>
-              <dd>
-                {order.paymentMethod ? methodLabel(order.paymentMethod) : "—"}
+              <dd title={paymentFormDisplay.tooltipLines.join("\n") || undefined}>
+                {paymentFormDisplay.displayLabel}
               </dd>
             </div>
           </dl>
@@ -178,7 +190,7 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
         </section>
       </div>
 
-      {isComposite && order.paymentBreakdown.length > 0 ? (
+      {showBreakdownTable ? (
         <section className="adm-order-detail-card">
           <h2 className="adm-order-detail-h">
             חלוקת תשלום — מתוכנן מול בפועל

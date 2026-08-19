@@ -19,22 +19,35 @@ export {
 } from "@/lib/customer-code.shared";
 
 /**
- * הקוד הבא — מקסימום על כל הקודים (WGP-C- ומספריים נקיים). לקוחות חדשים מקבלים מספר בלבד.
+ * הקוד הבא — מקסימום על קודים מספריים/legacy. לא טוען אלפי שורות.
  */
 export async function suggestNextCustomerCode(): Promise<string> {
-  const rows = await prisma.customer.findMany({
-    where: { deletedAt: null, customerCode: { not: null } },
-    select: { customerCode: true },
-    take: 5000,
-  });
+  const [recent, byCodeDesc] = await Promise.all([
+    prisma.customer.findMany({
+      where: { deletedAt: null, customerCode: { not: null } },
+      select: { customerCode: true },
+      orderBy: { createdAt: "desc" },
+      take: 400,
+    }),
+    prisma.customer.findMany({
+      where: { deletedAt: null, customerCode: { not: null } },
+      select: { customerCode: true },
+      orderBy: { customerCode: "desc" },
+      take: 80,
+    }),
+  ]);
 
   let maxN = getFirstCustomerNumber() - 1;
-  for (const r of rows) {
+  const seen = new Set<string>();
+  for (const r of [...recent, ...byCodeDesc]) {
+    const key = r.customerCode?.trim() ?? "";
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
     const n = parseCustomerNumberFromCode(r.customerCode);
     if (n != null) maxN = Math.max(maxN, n);
   }
 
-  for (let bump = 0; bump < 400; bump++) {
+  for (let bump = 0; bump < 12; bump += 1) {
     const code = formatNewCustomerCode(maxN + 1 + bump);
     const dup = await prisma.customer.findFirst({
       where: { customerCode: { equals: code, mode: "insensitive" }, deletedAt: null },
@@ -43,7 +56,7 @@ export async function suggestNextCustomerCode(): Promise<string> {
     if (!dup) return code;
   }
 
-  return formatNewCustomerCode(maxN + 401);
+  return formatNewCustomerCode(maxN + 13);
 }
 
 export async function isCustomerCodeTaken(code: string, excludeCustomerId?: string): Promise<boolean> {

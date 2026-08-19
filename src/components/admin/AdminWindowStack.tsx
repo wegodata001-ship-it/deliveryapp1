@@ -5,6 +5,7 @@ import { useEffect } from "react";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { OrderCreatePanel } from "@/components/admin/OrderCreatePanel";
 import { PaymentModalUpdated } from "@/components/admin/PaymentModalUpdated";
+import { CreateCustomerWindowBody } from "@/components/admin/AdminWindowBodies";
 
 const CustomerCardWindowBody = dynamic(
   () => import("@/components/admin/AdminWindowBodies").then((m) => ({ default: m.CustomerCardWindowBody })),
@@ -18,17 +19,6 @@ const CustomerCardWindowBody = dynamic(
   },
 );
 
-const CreateCustomerWindowBody = dynamic(
-  () => import("@/components/admin/AdminWindowBodies").then((m) => ({ default: m.CreateCustomerWindowBody })),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="adm-win-scroll-body" aria-busy="true">
-        <p className="adm-win-meta">טוען…</p>
-      </div>
-    ),
-  },
-);
 import type { AdminToastFn } from "@/components/admin/AdminNavShell";
 import type { SerializedFinancial } from "@/lib/financial-settings.shared";
 import type { AdminWindowEntry } from "@/lib/admin-windows";

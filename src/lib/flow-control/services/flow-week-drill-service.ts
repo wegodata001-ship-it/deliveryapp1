@@ -3,25 +3,22 @@
  */
 
 import { Prisma } from "@prisma/client";
-import { loadFlowWeek } from "@/app/admin/cash-flow/week-flow-service";
 import type { FlowWeekDrillExpenseRow, FlowWeekDrillPayload } from "@/app/admin/cash-flow/flow-types";
 import { CASH_EXPENSE_REASONS } from "@/app/admin/cash-control/constants";
 import { paymentDayKeyJerusalem, emptyDailyIntake } from "@/lib/cash-control-daily";
-import { cashControlWeekReconciliationPaymentsWhere } from "@/lib/cash-control-week-payments";
 import { aggregateFlowIntakesByDay } from "@/lib/flow-control/flow-calculation-service";
 import { loadFlowWeekApprovedSummary } from "@/lib/flow-control/services/cash-count-summary-service";
 import { buildFlowPaymentDailyRows } from "@/lib/flow-control/services/cashflow-received-table.service";
 import { normalizePaymentMethod, paymentMethodLabel } from "@/lib/cash-expense-payment-method";
 import { formatAhWeekLabel, formatYmdJerusalem } from "@/lib/weeks/ah-week";
 import { prisma } from "@/lib/prisma";
-import {
-  cashExpenseWhereForCountryScope,
-  mergePaymentWhere,
-  resolveCountryScopeFromCode,
-} from "@/lib/country-data-scope";
+import { cashExpenseWhereForCountryScope, resolveCountryScopeFromCode } from "@/lib/country-data-scope";
 import { flowWeekCompositeKey, type FlowWorkScope } from "@/lib/flow-control/flow-country-scope";
 import type { WorkCountryCode } from "@/lib/work-country";
 import { DEFAULT_WORK_COUNTRY } from "@/lib/work-country";
+import { loadFlowWeekCached } from "@/lib/flow-control/flow-week-load-cache";
+import { getFlowWeekPaymentsCached } from "@/lib/flow-control/flow-week-payments-cache";
+import { cashFlowPerfTimed } from "@/lib/flow-control/cash-flow-perf";
 
 function money(n: number | Prisma.Decimal): string {
   const d = n instanceof Prisma.Decimal ? n : new Prisma.Decimal(n);
@@ -39,34 +36,26 @@ export async function loadFlowWeekDrill(
   const wk = week.trim();
   const scope = resolveCountryScopeFromCode(workCountry);
   const flowScope: FlowWorkScope = { workCountry: scope.workCountry };
+
   const [flow, dailySummary, expenses, payments, flowRow] = await Promise.all([
-    loadFlowWeek(wk, workCountry),
+    loadFlowWeekCached(wk, workCountry),
     loadFlowWeekApprovedSummary(wk),
-    prisma.cashExpense.findMany({
-      where: { ...cashExpenseWhereForCountryScope(scope), weekCode: wk, status: "ACTIVE" },
-      orderBy: { expenseDate: "asc" },
-      include: { createdBy: { select: { fullName: true } } },
-    }),
-    prisma.payment.findMany({
-      where: mergePaymentWhere(cashControlWeekReconciliationPaymentsWhere(wk), scope),
-      select: {
-        id: true,
-        paymentCode: true,
-        amountIls: true,
-        amountUsd: true,
-        paymentMethod: true,
-        usdPaymentMethod: true,
-        ilsPaymentMethod: true,
-        exchangeRate: true,
-        methodAllocations: { select: { method: true, currency: true, sourceAmount: true } },
-        amountWithoutVat: true,
-        totalIlsWithoutVat: true,
-        totalIlsWithVat: true,
-        intakeDate: true,
-        paymentDate: true,
-        createdAt: true,
-      },
-    }),
+    cashFlowPerfTimed("cashFlow.weeklyMovements", () =>
+      prisma.cashExpense.findMany({
+        where: { ...cashExpenseWhereForCountryScope(scope), weekCode: wk, status: "ACTIVE" },
+        orderBy: { expenseDate: "asc" },
+        select: {
+          id: true,
+          expenseDate: true,
+          reason: true,
+          currency: true,
+          paymentMethod: true,
+          amount: true,
+          createdBy: { select: { fullName: true } },
+        },
+      }),
+    ),
+    getFlowWeekPaymentsCached(wk, scope),
     prisma.cashWeekFlow.findUnique({
       where: flowWeekCompositeKey(flowScope, wk),
       include: { updatedBy: { select: { fullName: true } } },

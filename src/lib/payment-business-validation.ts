@@ -6,6 +6,7 @@ import {
   type PlannedBucketUsd,
 } from "@/lib/payment-breakdown-shared";
 import { roundMoney2 } from "@/lib/payment-intake";
+import { computePaymentOverpayment } from "@/lib/payment-overpayment";
 
 export const PAYMENT_BUSINESS_EPS = 0.02;
 
@@ -272,7 +273,8 @@ export function evaluatePaymentBusinessRules(
   }
 
   let shortageUsd = roundMoney2(Math.max(0, totalDebtUsd - totalPaymentUsd));
-  const surplusUsd = roundMoney2(Math.max(0, totalPaymentUsd - totalDebtUsd));
+  const overpayment = computePaymentOverpayment(totalDebtUsd, totalPaymentUsd, eps);
+  const surplusUsd = overpayment.overpaymentUsd;
   let creditAppliedUsd = 0;
   let commissionAppliedUsd = 0;
   // סולם הסגירה (זכות → עמלות → עמלה שלילית) מופעל אך ורק בניסיון סגירה.
@@ -314,7 +316,7 @@ export function evaluatePaymentBusinessRules(
     );
   }
 
-  if (surplusUsd > eps && !input.surplusDisposition) {
+  if (overpayment.hasOverpayment && !input.surplusDisposition) {
     return result(
       "CHOOSE_SURPLUS_DISPOSITION",
       `קיים עודף של $${surplusUsd.toFixed(2)}. יש לבחור: יתרת זכות ללקוח או העברה לעמלות.`,

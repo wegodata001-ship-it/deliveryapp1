@@ -244,8 +244,14 @@ export type FlowWeekOverviewRow = {
   turkeyTransferredUsd: string | null;
   turkeyClosingUsd: string | null;
   turkeyBalanceStatus: import("@/lib/flow-control/turkey-transfer-balance-types").TurkeyWeekStatus;
+  /** רכישות מט״ח PS — ₪ / $ */
   fxPurchaseIls: string | null;
   fxPurchaseUsd: string | null;
+  /** רכישות מט״ח IL — נפרד מ-PS */
+  ilFxPurchaseIls: string | null;
+  ilFxPurchaseUsd: string | null;
+  fxPsRate: string | null;
+  fxIlRate: string | null;
   fxRemainderCashIls: string | null;
   fxRemainderBankIls: string | null;
   fxPurchaseCount: number;

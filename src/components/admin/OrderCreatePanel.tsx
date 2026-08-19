@@ -177,10 +177,11 @@ async function loadCustomerExtrasFast(
 
 import {
   findCustomerCaptureIndexExact,
-  invalidateCustomerCaptureIndex,
+  prependCustomerToCaptureIndex,
   preloadCustomerCaptureIndex,
   searchCustomerCaptureIndexLocal,
 } from "@/lib/customer-capture-index";
+import { prefetchNextCustomerCode } from "@/lib/customer-code-prefetch.client";
 import { invalidateCustomerSearchClientCache } from "@/lib/customer-search-client";
 import {
   CUSTOMER_CODE_SEARCH_DEBOUNCE_MS,
@@ -585,6 +586,7 @@ export function OrderCreatePanel({
       setOrderCountries(countries);
     });
     void preloadCustomerCaptureIndex(previewWorkCountry);
+    prefetchNextCustomerCode();
     return () => {
       cancelled = true;
     };
@@ -974,7 +976,8 @@ export function OrderCreatePanel({
         balanceUsdNegative: false,
       });
       invalidateCustomerSearchClientCache();
-      invalidateCustomerCaptureIndex();
+      prependCustomerToCaptureIndex(row);
+      prefetchNextCustomerCode();
       queueMicrotask(() => {
         skipSearchRef.current = false;
       });
@@ -999,6 +1002,7 @@ export function OrderCreatePanel({
       if (!canCreateOrders) return;
       const code = (presetCode ?? codeStr).trim();
       setErr(null);
+      prefetchNextCustomerCode();
       openCreateCustomerForOrder(applyCreatedCustomer, code ? { initialCustomerCode: code } : undefined);
     },
     [canCreateOrders, codeStr, openCreateCustomerForOrder, applyCreatedCustomer],

@@ -4,7 +4,6 @@ import { countLineDiff, WEEK_FLOW_LINE_CHANNEL, type CashWeekFlowLineId } from "
 import { aggregateExpensesByMethod } from "@/lib/cash-expense-payment-method";
 import { formatAhWeekLabel, getAhWeekRange } from "@/lib/weeks/ah-week";
 import { emptyDailyIntake, paymentDayKeyJerusalem } from "@/lib/cash-control-daily";
-import { cashControlWeekReconciliationPaymentsWhere } from "@/lib/cash-control-week-payments";
 import {
   aggregateFlowIntakesByDay,
   computeBankReceiptsIlsFromIntake,
@@ -30,8 +29,10 @@ import { loadTurkeyBalanceForWeek } from "@/lib/flow-control/turkey-transfer-bal
 import type { FlowWeekPayload } from "@/app/admin/cash-flow/flow-types";
 import type { WorkCountryCode } from "@/lib/work-country";
 import { DEFAULT_WORK_COUNTRY } from "@/lib/work-country";
-import { mergePaymentWhere, resolveCountryScopeFromCode, cashExpenseWhereForCountryScope } from "@/lib/country-data-scope";
+import { resolveCountryScopeFromCode, cashExpenseWhereForCountryScope } from "@/lib/country-data-scope";
 import { buildManagerCountExpectedLines } from "@/lib/flow-control/services/manager-count-expected-service";
+import { getFlowWeekPaymentsCached } from "@/lib/flow-control/flow-week-payments-cache";
+import { cashFlowPerfTimed } from "@/lib/flow-control/cash-flow-perf";
 
 function money(n: number | Prisma.Decimal): string {
   const d = n instanceof Prisma.Decimal ? n : new Prisma.Decimal(n);
@@ -60,38 +61,17 @@ export async function loadFlowWeek(
 
   const [approvedSummary, cashCount, fxPurchases, turkeyAllocationUsd, bankTx, turkeyBalance, expenseRows, payments] =
     await Promise.all([
-      loadFlowWeekCashCountSummary(wk, workCountry),
+      cashFlowPerfTimed("cashFlow.openingBalances", () => loadFlowWeekCashCountSummary(wk, workCountry)),
       loadFlowWeekCashCount(wk, workCountry),
-      loadFlowWeekFxPurchases(wk),
+      cashFlowPerfTimed("cashFlow.fxPurchases", () => loadFlowWeekFxPurchases(wk)),
       loadFlowWeekTurkeyTransfer(wk),
-      loadFlowWeekBankTransactions(wk),
+      cashFlowPerfTimed("cashFlow.bankBalances", () => loadFlowWeekBankTransactions(wk)),
       loadTurkeyBalanceForWeek(wk, workCountry),
       prisma.cashExpense.findMany({
         where: { ...cashExpenseWhereForCountryScope(countryScope), weekCode: wk, status: "ACTIVE" },
         select: { currency: true, amount: true, paymentMethod: true },
       }),
-      prisma.payment.findMany({
-        where: mergePaymentWhere(cashControlWeekReconciliationPaymentsWhere(wk), countryScope),
-        select: {
-          id: true,
-          paymentCode: true,
-          amountIls: true,
-          amountUsd: true,
-          paymentMethod: true,
-          usdPaymentMethod: true,
-          ilsPaymentMethod: true,
-          exchangeRate: true,
-          methodAllocations: { select: { method: true, currency: true, sourceAmount: true } },
-          amountWithoutVat: true,
-          totalIlsWithoutVat: true,
-          totalIlsWithVat: true,
-          intakeDate: true,
-          paymentDate: true,
-          createdAt: true,
-          customer: { select: { displayName: true } },
-          order: { select: { orderNumber: true } },
-        },
-      }),
+      cashFlowPerfTimed("cashFlow.paymentReceipts", () => getFlowWeekPaymentsCached(wk, countryScope)),
     ]);
 
   const weekExpensesByMethod = aggregateExpensesByMethod(

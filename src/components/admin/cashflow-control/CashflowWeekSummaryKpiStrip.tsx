@@ -36,6 +36,21 @@ type KpiCard =
       clickable: true;
     };
 
+const KPI_CARD_META: Record<
+  string,
+  { tone: string; kind?: ClickableKpiKind | "static" }
+> = {
+  'סה"כ הזמנות': { tone: "cfc-week-summary-kpis__card--orders" },
+  'סה"כ דוח': { tone: "cfc-week-summary-kpis__card--report" },
+  "נקלט מקליטת תשלום": { tone: "cfc-week-summary-kpis__card--intake" },
+  'סה"כ מזומן ₪': { tone: "cfc-week-summary-kpis__card--cash-ils", kind: "managerCashIls" },
+  'סה"כ דולר': { tone: "cfc-week-summary-kpis__card--cash-usd", kind: "managerCashUsd" },
+  'סה"כ העברות': { tone: "cfc-week-summary-kpis__card--transfer", kind: "managerTransferIls" },
+  'סה"כ באשראי': { tone: "cfc-week-summary-kpis__card--credit", kind: "managerCreditIls" },
+  "סה\"כ בצ'קים": { tone: "cfc-week-summary-kpis__card--checks", kind: "managerChecksIls" },
+  "נשאר לתשלום": { tone: "cfc-week-summary-kpis__card--debt", kind: "remainingToPay" },
+};
+
 const KPI_CARDS: KpiCard[] = [
   {
     kind: "static",
@@ -108,7 +123,16 @@ export function CashflowWeekSummaryKpiStrip({ rows }: CashflowWeekSummaryKpiStri
           const value = card.renderValue(totals);
           if (card.kind === "static") {
             return (
-              <div key={card.label} className="cfc-week-summary-kpis__card cfc-week-summary-kpis__card--static">
+              <div
+                key={card.label}
+                className={[
+                  "cfc-week-summary-kpis__card",
+                  "cfc-week-summary-kpis__card--static",
+                  KPI_CARD_META[card.label]?.tone ?? "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+              >
                 <span>{card.label}</span>
                 <strong dir="ltr">{value}</strong>
               </div>
@@ -118,9 +142,13 @@ export function CashflowWeekSummaryKpiStrip({ rows }: CashflowWeekSummaryKpiStri
             <button
               key={card.kind}
               type="button"
-              className={`cfc-week-summary-kpis__card${
-                card.kind === "remainingToPay" ? " cfc-week-summary-kpis__card--debt" : ""
-              }`}
+              className={[
+                "cfc-week-summary-kpis__card",
+                KPI_CARD_META[card.label]?.tone ?? "",
+                card.kind === "remainingToPay" ? "cfc-week-summary-kpis__card--debt" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
               onClick={() => setDrillKind(card.kind)}
               title="לחץ לפירוט"
             >

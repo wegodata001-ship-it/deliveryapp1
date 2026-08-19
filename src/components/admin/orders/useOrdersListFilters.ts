@@ -3,6 +3,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useOrderStatusCatalog } from "@/components/admin/OrderStatusCatalogProvider";
+import { COMPOSITE_PM, COMPOSITE_PM_LABEL } from "@/lib/payment-breakdown-shared";
 import { usePaymentMethodCatalog } from "@/components/admin/PaymentMethodCatalogProvider";
 import { ACTIVE_WORK_WEEK_CODE } from "@/lib/active-work-week";
 import {
@@ -287,6 +288,10 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
             ? m.nameEn
             : m.nameHe,
     }));
+    opts.push({
+      value: COMPOSITE_PM,
+      label: COMPOSITE_PM_LABEL,
+    });
     opts.push({
       value: "NONE",
       label: uiLocale === "ar" ? "بدون" : uiLocale === "en" ? "None" : "ללא",

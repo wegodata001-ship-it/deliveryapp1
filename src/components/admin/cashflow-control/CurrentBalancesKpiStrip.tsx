@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ChevronLeft } from "lucide-react";
 import { getCurrentFinancialBalancesAction } from "@/app/admin/cash-flow/get-current-financial-balances-action";
 import type { CurrentFinancialBalances } from "@/lib/flow-control/services/current-financial-balances-types";
 import type { CurrentBalanceDrillKind } from "@/lib/flow-control/services/current-financial-balances-types";
@@ -8,83 +9,104 @@ import { balanceStatusLabelHe } from "@/lib/flow-control/services/current-cash-p
 import type { BalanceSignStatus } from "@/lib/flow-control/services/current-cash-position.shared";
 import { money, signedMoney } from "@/components/admin/cashflow-control/cashflow-control-helpers";
 import { CurrentBalanceDrillModal } from "@/components/admin/cashflow-control/CurrentBalanceDrillModal";
-import {
-  NetAvailableHelpTooltip,
-  NetAvailableWaterfall,
-} from "@/components/admin/cashflow-control/NetAvailableWaterfall";
+import { NetAvailableHelpTooltip } from "@/components/admin/cashflow-control/NetAvailableWaterfall";
 import type { WorkCountryCode } from "@/lib/work-country";
+import { summarizeWeekFxTracks } from "@/lib/flow-control/services/fx-week-summary.shared";
+
+type WeekFxTracks = ReturnType<typeof summarizeWeekFxTracks>;
+
+type CardTone = "hero" | "cash" | "bank" | "fx" | "warn";
 
 type CardDef = {
   kind: CurrentBalanceDrillKind;
   label: string;
   value: (b: CurrentFinancialBalances) => string;
   status?: (b: CurrentFinancialBalances) => BalanceSignStatus | null;
-  hint?: (b: CurrentFinancialBalances) => string | null;
-  tone?: "in" | "out" | "transfer" | "neutral";
+  badge?: (b: CurrentFinancialBalances) => string | null;
+  hint?: (b: CurrentFinancialBalances, weekFx?: WeekFxTracks) => string | null;
+  footnote?: (b: CurrentFinancialBalances) => string | null;
+  tone: CardTone | ((b: CurrentFinancialBalances) => CardTone);
+  hero?: boolean;
 };
 
 const ROW1: CardDef[] = [
   {
+    kind: "netIls",
+    label: "יתרת שקלים זמינה",
+    value: (b) => signedMoney("ILS", b.netAvailableIls),
+    status: (b) => b.netStatus,
+    badge: (b) =>
+      b.netAvailableIls < -0.005
+        ? "⚠ קיימת חריגה"
+        : b.netAvailableIls > 0.005
+          ? "✓ יתרה זמינה"
+          : null,
+    footnote: () => "לחץ לצפייה בחישוב",
+    tone: (b) => (b.netAvailableIls < -0.005 ? "warn" : b.netAvailableIls > 0.005 ? "hero" : "hero"),
+    hero: true,
+  },
+  {
     kind: "cashIls",
-    label: "ברוטו מזומן ₪",
+    label: "מזומן ₪",
     value: (b) => signedMoney("ILS", b.grossAvailableIls),
     status: (b) => b.grossStatus,
-    tone: "neutral",
+    tone: "cash",
   },
   {
     kind: "bankIls",
     label: "יתרת בנק ₪",
     value: (b) => signedMoney("ILS", b.bankBalanceIls),
     status: (b) => b.bankStatus,
-    tone: "neutral",
+    tone: (b) => (b.bankBalanceIls < -0.005 ? "bank" : "bank"),
   },
 ];
 
 const ROW2: CardDef[] = [
   {
-    kind: "cashIls",
-    label: "מזומן ₪",
-    value: (b) => signedMoney("ILS", b.grossAvailableIls),
-    tone: "in",
-  },
-  {
     kind: "psFx",
     label: "מזומן $ (PS)",
     value: (b) => signedMoney("USD", b.psFx.available),
-    hint: (b) =>
-      b.psFx.purchased > 0 ? `נרכש ${money("USD", b.psFx.purchased)}` : null,
-    tone: "in",
+    tone: "cash",
   },
-  {
-    kind: "bankIls",
-    label: "בנק ₪",
-    value: (b) => signedMoney("ILS", b.bankBalanceIls),
-    tone: "neutral",
-  },
-];
-
-const ROW3: CardDef[] = [
   {
     kind: "psFx",
     label: 'מט״ח PS',
-    value: (b) => `${signedMoney("ILS", b.cashPosition.fxPurchasesPsIls)} · ${money("USD", b.psFx.purchased)}`,
-    hint: (b) => `זמין ${signedMoney("USD", b.psFx.available)}`,
-    tone: "transfer",
+    value: (b) => money("USD", b.psFx.purchased),
+    hint: (b, weekFx) => {
+      if (weekFx?.ps.hasData) {
+        return `${money("ILS", weekFx.ps.ils)} · שער ${weekFx.ps.lastRate?.toFixed(4) ?? "—"} · זמין ${signedMoney("USD", b.psFx.available)}`;
+      }
+      return b.cashPosition.fxPurchasesPsIls > 0
+        ? `${money("ILS", b.cashPosition.fxPurchasesPsIls)} נרכשו · זמין ${signedMoney("USD", b.psFx.available)}`
+        : `זמין ${signedMoney("USD", b.psFx.available)}`;
+    },
+    tone: "fx",
   },
   {
     kind: "ilFx",
     label: 'מט״ח IL',
-    value: (b) => `${signedMoney("ILS", b.cashPosition.fxPurchasesIlIls)} · ${money("USD", b.ilFx.purchased)}`,
-    hint: (b) => `זמין ${signedMoney("USD", b.ilFx.available)}`,
-    tone: "transfer",
+    value: (b) => money("USD", b.ilFx.purchased),
+    hint: (b, weekFx) => {
+      if (weekFx?.il.hasData) {
+        return `${money("ILS", weekFx.il.ils)} · שער ${weekFx.il.lastRate?.toFixed(4) ?? "—"} · זמין ${signedMoney("USD", b.ilFx.available)}`;
+      }
+      return b.cashPosition.fxPurchasesIlIls > 0
+        ? `${money("ILS", b.cashPosition.fxPurchasesIlIls)} נרכשו · זמין ${signedMoney("USD", b.ilFx.available)}`
+        : `זמין ${signedMoney("USD", b.ilFx.available)}`;
+    },
+    tone: "fx",
   },
   {
     kind: "turkeyFx",
     label: 'מט״ח בטורקיה',
     value: (b) => money("USD", b.turkeyFxBalanceUsd),
-    tone: "transfer",
+    tone: "fx",
   },
 ];
+
+function resolveTone(card: CardDef, balances: CurrentFinancialBalances): CardTone {
+  return typeof card.tone === "function" ? card.tone(balances) : card.tone;
+}
 
 function statusClass(status: BalanceSignStatus): string {
   switch (status) {
@@ -97,49 +119,101 @@ function statusClass(status: BalanceSignStatus): string {
   }
 }
 
-function toneClass(tone?: CardDef["tone"]): string {
+function toneClass(tone: CardTone, balances?: CurrentFinancialBalances): string {
+  if (tone === "bank" && balances && balances.bankBalanceIls < -0.005) {
+    return "cfc-current-balances__card--negative";
+  }
+  if (tone === "hero" && balances && balances.netAvailableIls < -0.005) {
+    return "cfc-current-balances__card--warn";
+  }
+  if (tone === "hero" && balances && balances.netAvailableIls > 0.005) {
+    return "cfc-current-balances__card--positive";
+  }
   switch (tone) {
-    case "in":
-      return "cfc-current-balances__card--in";
-    case "out":
-      return "cfc-current-balances__card--out";
-    case "transfer":
-      return "cfc-current-balances__card--transfer";
+    case "cash":
+      return "cfc-current-balances__card--cash";
+    case "bank":
+      return balances && balances.bankBalanceIls > 0.005
+        ? "cfc-current-balances__card--positive"
+        : "cfc-current-balances__card--bank";
+    case "fx":
+      return "cfc-current-balances__card--fx";
+    case "warn":
+      return "cfc-current-balances__card--warn";
+    case "hero":
+      return "cfc-current-balances__card--hero-tone";
     default:
       return "";
   }
 }
 
-function KpiCardButton({
+function KpiCard({
   card,
+  cardKey,
   balances,
   loading,
+  weekFx,
   onDrill,
 }: {
   card: CardDef;
+  cardKey: string;
   balances: CurrentFinancialBalances | null;
   loading: boolean;
+  weekFx?: WeekFxTracks;
   onDrill: (kind: CurrentBalanceDrillKind) => void;
 }) {
   const status = balances && card.status ? card.status(balances) : null;
+  const badge = balances && card.badge ? card.badge(balances) : null;
+  const tone: CardTone = balances
+    ? resolveTone(card, balances)
+    : typeof card.tone === "function"
+      ? "hero"
+      : card.tone;
+  const needsManagerCount = card.kind !== "turkeyFx";
+  const disabled = !balances || (needsManagerCount && !balances.hasManagerCount);
+
   return (
     <button
       type="button"
-      className={`cfc-current-balances__card ${toneClass(card.tone)}`}
+      key={cardKey}
+      className={[
+        "cfc-current-balances__card",
+        card.hero ? "cfc-current-balances__card--hero" : "",
+        toneClass(tone, balances ?? undefined),
+      ]
+        .filter(Boolean)
+        .join(" ")}
       onClick={() => onDrill(card.kind)}
-      disabled={!balances?.hasManagerCount && card.kind !== "turkeyFx"}
-      title="לחץ לפירוט"
+      disabled={disabled}
+      aria-label={`${card.label} — הצג פירוט`}
     >
-      <span>{card.label}</span>
-      <strong dir="ltr">{loading ? "…" : balances ? card.value(balances) : "—"}</strong>
-      {!loading && status ? (
+      <span className="cfc-current-balances__card-label">
+        {card.label}
+        {card.hero ? <NetAvailableHelpTooltip /> : null}
+      </span>
+      <strong dir="ltr" className="cfc-current-balances__card-value">
+        {loading ? "…" : balances ? card.value(balances) : "—"}
+      </strong>
+      {!loading && badge ? (
+        <em className="cfc-current-balances__badge">{badge}</em>
+      ) : null}
+      {!loading && status && !badge ? (
         <em className={`cfc-current-balances__status ${statusClass(status)}`}>
           {balanceStatusLabelHe(status)}
         </em>
       ) : null}
-      {!loading && balances && card.hint?.(balances) ? (
-        <small dir="ltr">{card.hint(balances)}</small>
+      {!loading && balances && card.hint?.(balances, weekFx) ? (
+        <small dir="ltr" className="cfc-current-balances__card-hint">
+          {card.hint(balances, weekFx)}
+        </small>
       ) : null}
+      {!loading && balances && card.footnote?.(balances) ? (
+        <small className="cfc-current-balances__card-footnote">{card.footnote(balances)}</small>
+      ) : null}
+      <span className="cfc-current-balances__card-drill">
+        פירוט
+        <ChevronLeft size={14} aria-hidden />
+      </span>
     </button>
   );
 }
@@ -148,27 +222,37 @@ export function CurrentBalancesKpiStrip({
   workCountry,
   asOfWeek,
   refreshKey,
+  weekFxPurchases,
+  weekFxLoading,
 }: {
   workCountry: WorkCountryCode;
   asOfWeek: string;
   refreshKey: number;
+  /** רכישות מט״ח לשבוע הנבחר — מ-drill (ללא request נוסף) */
+  weekFxPurchases?: import("@/app/admin/cash-flow/flow-types").FxPurchaseRecord[];
+  weekFxLoading?: boolean;
 }) {
   const [balances, setBalances] = useState<CurrentFinancialBalances | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [drillKind, setDrillKind] = useState<CurrentBalanceDrillKind | null>(null);
+  const weekFx = useMemo(() => summarizeWeekFxTracks(weekFxPurchases), [weekFxPurchases]);
+
+  const loadBalances = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    void getCurrentFinancialBalancesAction(workCountry, asOfWeek)
+      .then((res) => {
+        setBalances(res);
+        if (!res) setError("לא ניתן לטעון את הנתונים — נסה שוב");
+      })
+      .catch(() => setError("לא ניתן לטעון את הנתונים — נסה שוב"))
+      .finally(() => setLoading(false));
+  }, [workCountry, asOfWeek]);
 
   useEffect(() => {
-    setLoading(true);
-    void getCurrentFinancialBalancesAction(workCountry, asOfWeek).then((res) => {
-      setBalances(res);
-      setLoading(false);
-    });
-  }, [workCountry, asOfWeek, refreshKey]);
-
-  const netDeficit =
-    balances && balances.netAvailableIls < -0.005
-      ? Math.abs(balances.netAvailableIls)
-      : 0;
+    loadBalances();
+  }, [loadBalances, refreshKey]);
 
   return (
     <section
@@ -179,83 +263,46 @@ export function CurrentBalancesKpiStrip({
         <div>
           <h2>יתרות נוכחיות</h2>
           <p>
-            {balances?.hasManagerCount
-              ? `עד ${asOfWeek}${balances.anchorWeek ? ` · בסיס ספירה ${balances.anchorWeek}` : ""}`
-              : "טרם בוצעה ספירת מנהל — יתרות יוצגו לאחר ספירה ראשונה"}
+            {error
+              ? error
+              : balances?.hasManagerCount
+                ? `עד ${asOfWeek}${balances.anchorWeek ? ` · בסיס ספירה ${balances.anchorWeek}` : ""}`
+                : "טרם בוצעה ספירת מנהל — יתרות יוצגו לאחר ספירה ראשונה"}
           </p>
         </div>
+        {error ? (
+          <button type="button" className="cfc-btn cfc-btn--ghost" onClick={loadBalances}>
+            נסה שוב
+          </button>
+        ) : null}
       </header>
 
-      {/* שורה 1 — יתרת שקלים זמינה עם waterfall */}
-      <div className="cfc-current-balances__section">
-        <h3 className="cfc-current-balances__section-title">מצב שקלים</h3>
-        <div className="cfc-net-hero">
-          <button
-            type="button"
-            className={`cfc-net-hero__main${netDeficit > 0 ? " cfc-net-hero__main--debt" : ""}`}
-            onClick={() => setDrillKind("netIls")}
-            disabled={!balances?.hasManagerCount}
-          >
-            <span className="cfc-net-hero__label">
-              יתרת שקלים זמינה
-              <NetAvailableHelpTooltip />
-            </span>
-            <strong dir="ltr">
-              {loading ? "…" : balances ? signedMoney("ILS", balances.netAvailableIls) : "—"}
-            </strong>
-            {!loading && netDeficit > 0 ? (
-              <em className="cfc-net-hero__alert">
-                קיימת חריגה של {money("ILS", netDeficit)} – יצאו יותר שקלים מהסכום שהיה זמין
-              </em>
-            ) : null}
-          </button>
-          {!loading && balances?.netBreakdown ? (
-            <NetAvailableWaterfall lines={balances.netBreakdown.lines} compact />
-          ) : null}
-        </div>
-        <div className="cfc-current-balances__grid cfc-current-balances__grid--3">
-          {ROW1.map((card) => (
-            <KpiCardButton
-              key={`r1-${card.kind}-${card.label}`}
-              card={card}
-              balances={balances}
-              loading={loading}
-              onDrill={setDrillKind}
-            />
-          ))}
-        </div>
+      <div className="cfc-current-balances__grid cfc-current-balances__grid--row1">
+        {ROW1.map((card) => (
+          <KpiCard
+            key={`r1-${card.kind}-${card.label}`}
+            cardKey={`r1-${card.kind}-${card.label}`}
+            card={card}
+            balances={balances}
+            loading={loading}
+            weekFx={weekFx}
+            onDrill={setDrillKind}
+          />
+        ))}
       </div>
 
-      {/* שורה 2 — איפה הכסף */}
-      <div className="cfc-current-balances__section">
-        <h3 className="cfc-current-balances__section-title">איפה הכסף נמצא</h3>
-        <div className="cfc-current-balances__grid cfc-current-balances__grid--3">
-          {ROW2.map((card) => (
-            <KpiCardButton
-              key={`r2-${card.kind}-${card.label}`}
-              card={card}
-              balances={balances}
-              loading={loading}
-              onDrill={setDrillKind}
-            />
-          ))}
-        </div>
-      </div>
-
-      {/* שורה 3 — מט״ח */}
-      <div className="cfc-current-balances__section">
-        <h3 className="cfc-current-balances__section-title">מט״ח</h3>
-        <div className="cfc-current-balances__grid cfc-current-balances__grid--3">
-          {ROW3.map((card) => (
-            <KpiCardButton
-              key={`r3-${card.kind}-${card.label}`}
-              card={card}
-              balances={balances}
-              loading={loading}
-              onDrill={setDrillKind}
-            />
-          ))}
-        </div>
+      <div className="cfc-current-balances__grid cfc-current-balances__grid--row2">
+        {ROW2.map((card, idx) => (
+          <KpiCard
+            key={`r2-${card.kind}-${idx}`}
+            cardKey={`r2-${card.kind}-${idx}`}
+            card={card}
+            balances={balances}
+            loading={loading}
+            weekFx={weekFx}
+            onDrill={setDrillKind}
+          />
+        ))}
       </div>
 
       <CurrentBalanceDrillModal

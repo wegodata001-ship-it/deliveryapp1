@@ -25,10 +25,18 @@ function totalUsd(row: FlowPaymentDailyRow): string {
 export type CashflowReceivedTableProps = {
   rows: FlowPaymentDailyRow[];
   loading?: boolean;
+  error?: string | null;
+  onRetry?: () => void;
   onAmountClick?: (dateYmd: string, method: CashDailyMethodId) => void;
 };
 
-export function CashflowReceivedTable({ rows, loading, onAmountClick }: CashflowReceivedTableProps) {
+export function CashflowReceivedTable({
+  rows,
+  loading,
+  error,
+  onRetry,
+  onAmountClick,
+}: CashflowReceivedTableProps) {
   const dataRows = rows.filter((r) => !r.isTotal);
   const totalRow = rows.find((r) => r.isTotal);
 
@@ -39,6 +47,19 @@ export function CashflowReceivedTable({ rows, loading, onAmountClick }: Cashflow
         {Array.from({ length: 3 }).map((_, i) => (
           <div key={i} className="ft-skeleton-row" />
         ))}
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="ft-empty ft-empty--box ft-empty--error">
+        <p>{error}</p>
+        {onRetry ? (
+          <button type="button" className="cfc-btn cfc-btn--ghost" onClick={onRetry}>
+            נסה שוב
+          </button>
+        ) : null}
       </div>
     );
   }

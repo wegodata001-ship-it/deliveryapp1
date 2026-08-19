@@ -3,59 +3,131 @@
 import { useMemo, useState, type ReactNode } from "react";
 import type { FlowRangeAggregate } from "@/components/admin/cashflow-control/cashflow-control-helpers";
 import { money } from "@/components/admin/cashflow-control/cashflow-control-helpers";
+import { fcNum } from "@/components/admin/flow-control/shared";
 import type { FlowWeekOverviewRow } from "@/app/admin/cash-flow/flow-types";
 import {
   CashflowKpiDrillModal,
   type CashflowKpiUiKind,
 } from "@/components/admin/cashflow-control/CashflowKpiDrillModal";
 
+const CARD_TONE: Partial<Record<CashflowKpiUiKind, string>> = {
+  receipts: "cfc-range-summary__card--in",
+  fxPs: "cfc-range-summary__card--fx-ps",
+  fxIl: "cfc-range-summary__card--fx-il",
+  fxProfit: "cfc-range-summary__card--fx-profit",
+  expenses: "cfc-range-summary__card--out",
+  turkeyTransferred: "cfc-range-summary__card--transfer",
+  turkeyClosing: "cfc-range-summary__card--transfer",
+};
+
+function FxSummaryValue({
+  usd,
+  ils,
+  rate,
+  loading,
+}: {
+  usd: number;
+  ils: number;
+  rate: string | null | undefined;
+  loading?: boolean;
+}) {
+  if (loading) return <strong dir="ltr">…</strong>;
+  if (usd <= 0.005 && ils <= 0.005) {
+    return <span className="cfc-range-summary__empty">אין רכישות</span>;
+  }
+  return (
+    <span className="cfc-range-summary__fx-value">
+      <strong dir="ltr">{money("USD", usd)}</strong>
+      <small dir="ltr">
+        {money("ILS", ils)} · {rate ? `שער ${rate}` : ""}
+      </small>
+    </span>
+  );
+}
+
 export function CashflowRangeSummary({
   agg,
   focusWeek,
   weekRows,
+  focusRow,
+  loading,
 }: {
   agg: FlowRangeAggregate;
   focusWeek: string;
   weekRows: FlowWeekOverviewRow[];
+  focusRow?: FlowWeekOverviewRow | null;
+  loading?: boolean;
 }) {
   const single = agg.fromWeek === agg.toWeek;
   const [drillKind, setDrillKind] = useState<CashflowKpiUiKind | null>(null);
   const weekCodes = useMemo(() => weekRows.map((r) => r.week), [weekRows]);
 
+  const psUsd = single && focusRow ? fcNum(focusRow.fxPurchaseUsd) : agg.fxPurchaseUsd;
+  const psIls = single && focusRow ? fcNum(focusRow.fxPurchaseIls) : agg.fxPurchaseIls;
+  const ilUsd = single && focusRow ? fcNum(focusRow.ilFxPurchaseUsd) : agg.ilFxPurchaseUsd;
+  const ilIls = single && focusRow ? fcNum(focusRow.ilFxPurchaseIls) : agg.ilFxPurchaseIls;
+  const psRate = single && focusRow ? focusRow.fxPsRate : null;
+  const ilRate = single && focusRow ? focusRow.fxIlRate : null;
+
   const cards: { kind: CashflowKpiUiKind; label: string; value: ReactNode }[] = [
     {
       kind: "receipts",
-      label: "קליטות ₪",
-      value: <strong dir="ltr">{money("ILS", agg.totalReceivedIls)}</strong>,
+      label: "① קליטות ₪",
+      value: loading ? (
+        <strong dir="ltr">…</strong>
+      ) : (
+        <strong dir="ltr">{money("ILS", agg.totalReceivedIls)}</strong>
+      ),
     },
     {
       kind: "fxPs",
-      label: "מט״ח PS",
+      label: "② מט״ח PS",
       value: (
-        <strong dir="ltr">
-          {money("ILS", agg.fxPurchaseIls)} · {money("USD", agg.fxPurchaseUsd)}
-        </strong>
+        <FxSummaryValue usd={psUsd} ils={psIls} rate={psRate} loading={loading} />
+      ),
+    },
+    {
+      kind: "fxIl",
+      label: "② מט״ח IL",
+      value: (
+        <FxSummaryValue usd={ilUsd} ils={ilIls} rate={ilRate} loading={loading} />
       ),
     },
     {
       kind: "fxProfit",
       label: "רווח שער",
-      value: <strong dir="ltr">{money("ILS", agg.fxNetIls)}</strong>,
+      value: loading ? (
+        <strong dir="ltr">…</strong>
+      ) : (
+        <strong dir="ltr">{money("ILS", agg.fxNetIls)}</strong>
+      ),
     },
     {
       kind: "expenses",
-      label: "הוצאות",
-      value: <strong dir="ltr">{money("ILS", agg.expensesIls)}</strong>,
+      label: "③ הוצאות",
+      value: loading ? (
+        <strong dir="ltr">…</strong>
+      ) : (
+        <strong dir="ltr">{money("ILS", agg.expensesIls)}</strong>
+      ),
     },
     {
       kind: "turkeyTransferred",
       label: "הועבר לטורקיה",
-      value: <strong dir="ltr">{money("USD", agg.turkeyTransferredUsd)}</strong>,
+      value: loading ? (
+        <strong dir="ltr">…</strong>
+      ) : (
+        <strong dir="ltr">{money("USD", agg.turkeyTransferredUsd)}</strong>
+      ),
     },
     {
       kind: "turkeyClosing",
-      label: "יתרת טורקיה (סגירה)",
-      value: <strong dir="ltr">{money("USD", agg.turkeyClosingUsd)}</strong>,
+      label: "④ יתרת טורקיה",
+      value: loading ? (
+        <strong dir="ltr">…</strong>
+      ) : (
+        <strong dir="ltr">{money("USD", agg.turkeyClosingUsd)}</strong>
+      ),
     },
     {
       kind: "weeksOk",
@@ -79,7 +151,7 @@ export function CashflowRangeSummary({
         <h2>
           {single ? (
             <>
-              שבוע <span dir="ltr">{agg.fromWeek}</span>
+              שבוע <span dir="ltr">{focusWeek || agg.fromWeek}</span>
             </>
           ) : (
             <>
@@ -103,7 +175,7 @@ export function CashflowRangeSummary({
           <button
             key={card.kind}
             type="button"
-            className="cfc-range-summary__card"
+            className={["cfc-range-summary__card", CARD_TONE[card.kind] ?? ""].filter(Boolean).join(" ")}
             onClick={() => setDrillKind(card.kind)}
           >
             <span>{card.label}</span>

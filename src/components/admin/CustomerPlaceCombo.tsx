@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDown, Search } from "lucide-react";
 import {
@@ -14,14 +14,17 @@ type Props = {
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
+  inputRef?: RefObject<HTMLInputElement | null>;
+  onEnterAdvance?: () => void;
 };
 
-export function CustomerPlaceCombo({ id, value, onChange, disabled }: Props) {
+export function CustomerPlaceCombo({ id, value, onChange, disabled, inputRef: externalInputRef, onEnterAdvance }: Props) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState(value);
-  const [listStyle, setListStyle] = useState<React.CSSProperties>({});
+  const [listStyle, setListStyle] = useState<CSSProperties>({});
   const wrapRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const localInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = externalInputRef ?? localInputRef;
 
   useEffect(() => {
     setQuery(value);
@@ -72,15 +75,16 @@ export function CustomerPlaceCombo({ id, value, onChange, disabled }: Props) {
   const showCreate =
     trimmed.length > 0 && !hits.some((h) => h.toLowerCase() === trimmed.toLowerCase());
 
-  function commit(next: string, close = true) {
+  function commit(next: string, close = true, advance = false) {
     const norm = normalizeCustomerPlaceInput(next) ?? "";
     onChange(norm);
     setQuery(norm);
     if (close) setOpen(false);
+    if (advance) window.setTimeout(() => onEnterAdvance?.(), 0);
   }
 
-  function pick(place: string) {
-    commit(place);
+  function pick(place: string, advance = false) {
+    commit(place, true, advance);
   }
 
   function openList() {
@@ -180,11 +184,12 @@ export function CustomerPlaceCombo({ id, value, onChange, disabled }: Props) {
             if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
             e.preventDefault();
             if (showCreate) {
-              commit(trimmed);
+              commit(trimmed, true, true);
               return;
             }
-            if (hits[0]) pick(hits[0]);
-            else if (trimmed) commit(trimmed);
+            if (hits[0]) pick(hits[0], true);
+            else if (trimmed) commit(trimmed, true, true);
+            else onEnterAdvance?.();
           }}
         />
         <button

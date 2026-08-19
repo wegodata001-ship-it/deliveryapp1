@@ -46,6 +46,7 @@ export type CashflowKpiKind =
   | "remainingToPay"
   | "turkeyReceipts"
   | "fxPs"
+  | "fxIl"
   | "fxProfit"
   | "expenses"
   | "turkeyTransferred"
@@ -856,6 +857,58 @@ async function loadTurkeyReceiptsDrill(weeks: string[]): Promise<CashflowKpiDril
   };
 }
 
+async function loadFxIl(weeks: string[]): Promise<CashflowKpiDrillResult> {
+  const flows = await prisma.cashWeekFlow.findMany({
+    where: { countryCode: "TR", weekCode: { in: weeks } },
+    select: { weekCode: true, fxPurchases: true },
+  });
+
+  const rows: CashflowKpiDrillRow[] = [];
+  let totalIls = 0;
+  let totalUsd = 0;
+  for (const flow of flows) {
+    const purchases = parseFxPurchasesJson(flow.fxPurchases).filter(
+      (p) => normalizeFxTrack(p.track) === "IL",
+    );
+    for (const p of purchases) {
+      totalIls += p.ilsAmount;
+      totalUsd += p.usdReceived;
+      const dt = new Date(p.createdAt);
+      rows.push({
+        date: dt.toLocaleDateString("he-IL"),
+        week: flow.weekCode,
+        source: "מאגר IL / בנק",
+        ils: moneyIls(p.ilsAmount),
+        rate: p.rate.toFixed(4),
+        usd: moneyUsd(p.usdReceived),
+        target: "מט״ח IL",
+        user: p.createdByName || "—",
+      });
+    }
+  }
+
+  return {
+    kind: "fxIl",
+    title: "מט״ח IL — פירוט רכישות",
+    subtitle: weekSubtitle(weeks),
+    columns: [
+      { key: "date", header: "תאריך" },
+      { key: "week", header: "שבוע" },
+      { key: "source", header: "מקור" },
+      { key: "ils", header: "₪ ששולמו" },
+      { key: "rate", header: "שער" },
+      { key: "usd", header: "$ שנרכשו" },
+      { key: "target", header: "יעד" },
+      { key: "user", header: "מבצע" },
+    ],
+    rows,
+    footerTotals: [
+      { label: 'סה"כ יצא מהמאגר', value: moneyIls(Math.round(totalIls * 100) / 100) },
+      { label: 'סה"כ מט״ח שנרכש', value: moneyUsd(Math.round(totalUsd * 100) / 100) },
+    ],
+  };
+}
+
 async function loadFxPs(weeks: string[]): Promise<CashflowKpiDrillResult> {
   const flows = await prisma.cashWeekFlow.findMany({
     where: { countryCode: "TR", weekCode: { in: weeks } },
@@ -970,7 +1023,15 @@ async function loadExpenses(weeks: string[]): Promise<CashflowKpiDrillResult> {
   const expenses = await prisma.cashExpense.findMany({
     where: { weekCode: { in: weeks }, status: "ACTIVE" },
     orderBy: { expenseDate: "desc" },
-    include: { createdBy: { select: { fullName: true } } },
+    select: {
+      expenseDate: true,
+      weekCode: true,
+      reason: true,
+      paymentMethod: true,
+      currency: true,
+      amount: true,
+      createdBy: { select: { fullName: true } },
+    },
     take: 5000,
   });
 
@@ -1130,6 +1191,8 @@ export async function loadCashflowKpiDrill(
       return loadTurkeyReceiptsDrill(weeks);
     case "fxPs":
       return loadFxPs(weeks);
+    case "fxIl":
+      return loadFxIl(weeks);
     case "fxProfit":
       return loadFxProfit(weeks);
     case "expenses":

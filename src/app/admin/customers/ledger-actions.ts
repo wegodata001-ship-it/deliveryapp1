@@ -11,7 +11,7 @@ import {
 import { normalizeCustomerPlaceInput } from "@/lib/customer-place";
 import { prisma } from "@/lib/prisma";
 import { recordActivityAudit } from "@/lib/activity-audit";
-import { revalidateAfterCustomerCreate } from "@/lib/revalidate-customer-create";
+import { scheduleRevalidateAfterCustomerCreate } from "@/lib/revalidate-customer-create";
 import { perfEnabled } from "@/lib/perf-log";
 import type { ClientCreateInput, ClientCreateResult, ClientLedgerPayload } from "@/app/admin/customers/ledger-types";
 
@@ -38,7 +38,9 @@ export async function suggestNextCustomerCodeAction(): Promise<{ ok: true; code:
 export async function createClientAction(
   input: ClientCreateInput,
 ): Promise<{ ok: true; client: ClientCreateResult } | { ok: false; error: string }> {
+  const t0 = Date.now();
   const me = await requireAuth();
+  const authMs = Date.now() - t0;
   if (!userHasAnyPermission(me, ["create_orders", "view_customers", "edit_orders"])) {
     return { ok: false, error: "אין הרשאה" };
   }
@@ -54,10 +56,13 @@ export async function createClientAction(
   if (!customerCode) return { ok: false, error: "יש להזין קוד לקוח" };
   if (!nameAr) return { ok: false, error: "שם ערבית חובה" };
 
+  const dupStart = Date.now();
   if (await isCustomerCodeTaken(customerCode)) {
     return { ok: false, error: "קוד לקוח כבר קיים במערכת" };
   }
+  const dupCheckMs = Date.now() - dupStart;
 
+  const createStart = Date.now();
   const created = await prisma.customer.create({
     data: {
       customerCode,
@@ -84,8 +89,9 @@ export async function createClientAction(
       createdAt: true,
     },
   });
+  const createMs = Date.now() - createStart;
 
-  revalidateAfterCustomerCreate(created.id);
+  scheduleRevalidateAfterCustomerCreate(created.id);
 
   recordActivityAudit({
     userId: me.id,
@@ -114,15 +120,15 @@ export async function createClientAction(
     createdAt: created.createdAt.toISOString(),
   };
 
-  console.info("Customer created:", {
-    id: created.id,
-    code: client.customerCode,
-    name: client.name,
-  });
-  const totalInTable = await prisma.customer.count({ where: { deletedAt: null } });
-  if (perfEnabled()) {
-    console.info("[customer] customers in Customer table (deletedAt=null):", totalInTable);
-    console.info("[customer] customer found in ledger:", await isCustomerVisibleInLedgerList(created.id));
+  const totalMs = Date.now() - t0;
+  if (perfEnabled() || totalMs > 500) {
+    console.info("[customer-create-perf]", {
+      authMs,
+      dupCheckMs,
+      createMs,
+      totalMs,
+      customerId: created.id,
+    });
   }
 
   return { ok: true, client };

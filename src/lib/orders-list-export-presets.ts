@@ -2,7 +2,7 @@ import type { Prisma } from "@prisma/client";
 import { PM } from "@/lib/payment-method-slugs";
 import { buildOrdersListWhereFromSearchParams } from "@/app/admin/orders/orders-list-where";
 import { isDebtWithdrawalOrderStatus } from "@/lib/debt-withdrawal-order";
-import { orderCaptureSplitMethodLabel } from "@/lib/order-capture-payment-methods";
+import { resolveOrderPaymentFormDisplay } from "@/lib/order-payment-form-display";
 import { OS } from "@/lib/order-status-slugs";
 import {
   orderStatusBelongsToKpiBucket,
@@ -56,6 +56,7 @@ export const PAYMENT_METHOD_REPORT_GROUP_ORDER = [
   "מזומן",
   "העברה בנקאית",
   "אשראי",
+  "תשלום מורכב",
   "משיכה מחוב",
   "צ׳ק",
   "ללא צורת תשלום",
@@ -64,10 +65,16 @@ export const PAYMENT_METHOD_REPORT_GROUP_ORDER = [
 export function paymentPlaceReportGroupKey(
   status: string,
   paymentMethod: string | null | undefined,
+  breakdownLines?: Array<{ paymentMethod: string; amount?: unknown; currency?: string | null }>,
 ): string {
   if (isDebtWithdrawalOrderStatus(status)) return "משיכה מחוב";
-  if (!paymentMethod) return "ללא צורת תשלום";
-  return orderCaptureSplitMethodLabel(paymentMethod);
+  const display = resolveOrderPaymentFormDisplay({
+    orderPaymentMethod: paymentMethod,
+    breakdownLines,
+  });
+  if (display.kind === "unpaid") return "ללא צורת תשלום";
+  if (display.kind === "unknown") return "ללא צורת תשלום";
+  return display.displayLabel;
 }
 
 export function sortPaymentPlaceReportGroupKeys(keys: string[]): string[] {

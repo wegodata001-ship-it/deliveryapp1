@@ -1,5 +1,7 @@
 /** טיפוסים — בטוח לייבוא מ-client */
 
+import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
+
 export type PaymentMethodTag = {
   id: string;
   nameHe: string;
@@ -32,7 +34,8 @@ export const PAYMENT_METHOD_COLOR_PRESETS = [
 
 export function paymentMethodLabelFromMap(map: Record<string, string>, id: string | null | undefined): string {
   if (!id?.trim()) return "—";
-  return map[id.trim()] ?? "אמצעי לא ידוע";
+  const key = id.trim();
+  return map[key] ?? PAYMENT_METHOD_LABELS[key] ?? "אמצעי לא ידוע";
 }
 
 export function buildPaymentMethodSelectOptions(rows: PaymentMethodTag[]): PaymentMethodSelectOption[] {
@@ -49,5 +52,5 @@ export function paymentMethodOptionsIncludingValue(
 ): PaymentMethodSelectOption[] {
   const v = currentValue?.trim();
   if (!v || options.some((o) => o.value === v)) return options;
-  return [{ value: v, label: labelById[v] ?? "אמצעי לא ידוע" }, ...options];
+  return [{ value: v, label: labelById[v] ?? PAYMENT_METHOD_LABELS[v] ?? "אמצעי לא ידוע" }, ...options];
 }

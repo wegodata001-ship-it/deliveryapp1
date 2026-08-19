@@ -76,6 +76,8 @@ export type OrderListRow = {
   isCompleted: boolean;
   sourceCountry: string | null;
   paymentType: string | null;
+  /** tooltip לתשלום מורכב — שורות מופרדות ב-\n */
+  paymentFormTooltip: string | null;
   /** מקום תשלום — IntakeLocation / PaymentPoint id (לסינון) */
   paymentLocationId: string | null;
   /** מקום תשלום — שם להצגה */
@@ -1173,17 +1175,20 @@ export function OrdersListShell({
                     <td dir="ltr" className="adm-ord-col-ccode adm-table-excel-ccode">
                       {o.customerCode ?? "—"}
                     </td>
-                    <td className="adm-table-excel-cust adm-ord-col-cust" title={o.customerPhone ? `טלפון: ${o.customerPhone}` : undefined}>
+                    <td className="adm-table-excel-cust adm-ord-col-cust" title={[o.customerName, o.customerPhone ? `טלפון: ${o.customerPhone}` : null].filter(Boolean).join(" · ") || undefined}>
                       {canViewCustomerCard && o.customerId ? (
                         <button
                           type="button"
-                          className="adm-table-excel-cust-btn"
+                          className="adm-table-excel-cust-btn adm-ord-ellipsis"
+                          title={o.customerName ?? undefined}
                           onClick={(e) => openCustomerFromCell(e, o.customerId)}
                         >
                           {o.customerName ?? "—"}
                         </button>
                       ) : (
-                        <strong className="adm-table-excel-cust-strong">{o.customerName ?? "—"}</strong>
+                        <strong className="adm-table-excel-cust-strong adm-ord-ellipsis" title={o.customerName ?? undefined}>
+                          {o.customerName ?? "—"}
+                        </strong>
                       )}
                     </td>
                     <td
@@ -1269,9 +1274,10 @@ export function OrdersListShell({
                         value={(o.paymentType as string | null) ?? ""}
                         disabled={!canEditOrders || busyId === o.id || !!o.quickStatusLocked}
                         aria-label="צורת תשלום"
+                        title={o.paymentFormTooltip ?? undefined}
                         onChange={(e) => void onRowPaymentMethodChange(o.id, e.target.value)}
                       >
-                        <option value="">—</option>
+                        <option value="">לא שולם</option>
                         {paymentMethodOptionsForValue((o.paymentType as string | null) ?? undefined).map((opt) => (
                           <option key={opt.value} value={opt.value}>
                             {opt.label}

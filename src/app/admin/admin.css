@@ -15508,6 +15508,68 @@ select.payment-modal-inline-input {
   font-weight: 700;
 }
 
+.adm-payment-overage-stats--overpayment dd {
+  color: #c2410c;
+  font-weight: 800;
+}
+
+.payment-overpayment-warning {
+  margin: 10px 0 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid #fdba74;
+  background: linear-gradient(180deg, #fff7ed 0%, #ffedd5 100%);
+  box-shadow: 0 1px 0 rgba(251, 146, 60, 0.15);
+}
+
+.payment-overpayment-warning__title {
+  margin: 0 0 10px;
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: #9a3412;
+}
+
+.payment-overpayment-warning__stats {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.payment-overpayment-warning__stats > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.payment-overpayment-warning__stats dt {
+  margin: 0;
+  font-size: 0.88rem;
+  color: #7c2d12;
+}
+
+.payment-overpayment-warning__stats dd {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.payment-overpayment-warning__stats-row--surplus dd {
+  color: #c2410c;
+  font-weight: 800;
+}
+
+.payment-overpayment-warning__ils-note {
+  margin: 8px 0 0;
+  font-size: 0.82rem;
+  color: #9a3412;
+  font-weight: 600;
+}
+
 .adm-payment-overage-note {
   margin: 0 0 12px;
   font-size: 0.88rem;
@@ -38777,62 +38839,267 @@ button.adm-cash-kpi:hover {
 }
 
 .adm-table-excel--orders-v3 {
+  --ord-col-num: 130px;
+  --ord-col-date: 125px;
+  --ord-col-week: 90px;
+  --ord-col-ccode: 90px;
+  --ord-col-cust: 150px;
+  --ord-col-money-deal: 125px;
+  --ord-col-money-total: 120px;
+  --ord-col-money-paid: 100px;
+  --ord-col-money-balance: 100px;
+  --ord-col-status: 120px;
+  --ord-col-paid: 90px;
+  --ord-col-pay: 145px;
+  --ord-col-actions: 60px;
+  --ord-table-min: 1445px;
+  --ord-border: #e2e8f0;
+  --ord-zebra: #f8fafc;
+  --ord-hover: #eff6ff;
+
   table-layout: fixed;
-  width: 100%;
-  min-width: 1180px;
+  width: max(100%, var(--ord-table-min));
+  min-width: var(--ord-table-min);
   font-size: 13px;
   border-spacing: 0;
+  border-collapse: separate;
+}
+
+.adm-table-excel--orders-v3 thead th,
+.adm-table-excel--orders-v3 tbody td {
+  padding-inline: 12px;
+  padding-block: 10px;
+  border-inline-end: 1px solid var(--ord-border);
+  box-sizing: border-box;
 }
 
 .adm-table-excel--orders-v3 thead th {
   position: sticky;
   top: 0;
   z-index: 3;
-  height: auto;
-  min-height: 44px;
-  padding: 7px 8px;
-  font-size: 11px;
+  min-height: 48px;
+  padding-block: 10px;
+  font-size: 12px;
   font-weight: 700;
-  line-height: 1.2;
-  white-space: normal;
+  line-height: 1.25;
+  white-space: nowrap;
   vertical-align: middle;
   text-align: center;
   background: #1e3a8a;
   color: #fff;
-  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.12);
+  border-inline-end-color: rgba(255, 255, 255, 0.18);
+  border-bottom: 2px solid #0b1220;
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.1);
 }
 
 .adm-table-excel--orders-v3 tbody td {
-  height: 44px;
-  padding: 5px 7px;
   font-size: 12px;
-  line-height: 1.25;
+  line-height: 1.35;
   vertical-align: middle;
+  border-bottom: 1px solid var(--ord-border);
+  background: #fff;
+}
+
+/* column widths — fixed min, no auto squeeze */
+.adm-table-excel--orders-v3 .adm-ord-col-num {
+  width: var(--ord-col-num);
+  min-width: var(--ord-col-num);
+  max-width: var(--ord-col-num);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.adm-table-excel--orders-v3 .adm-ord-col-date {
+  width: var(--ord-col-date);
+  min-width: var(--ord-col-date);
+  max-width: var(--ord-col-date);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.adm-table-excel--orders-v3 .adm-ord-col-week {
+  width: var(--ord-col-week);
+  min-width: var(--ord-col-week);
+  max-width: var(--ord-col-week);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: #475569;
+}
+.adm-table-excel--orders-v3 .adm-ord-col-ccode {
+  width: var(--ord-col-ccode);
+  min-width: var(--ord-col-ccode);
+  max-width: var(--ord-col-ccode);
+  text-align: center;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #0f172a;
+}
+.adm-table-excel--orders-v3 .adm-ord-col-cust {
+  width: var(--ord-col-cust);
+  min-width: var(--ord-col-cust);
+  max-width: var(--ord-col-cust);
+  text-align: start;
+}
+.adm-table-excel--orders-v3 .adm-ord-col-money--deal {
+  width: var(--ord-col-money-deal);
+  min-width: var(--ord-col-money-deal);
+  max-width: var(--ord-col-money-deal);
+}
+.adm-table-excel--orders-v3 .adm-ord-col-money--total {
+  width: var(--ord-col-money-total);
+  min-width: var(--ord-col-money-total);
+  max-width: var(--ord-col-money-total);
+}
+.adm-table-excel--orders-v3 .adm-ord-col-money--paid {
+  width: var(--ord-col-money-paid);
+  min-width: var(--ord-col-money-paid);
+  max-width: var(--ord-col-money-paid);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: #15803d;
+  font-weight: 700;
+}
+.adm-table-excel--orders-v3 .adm-ord-col-money--balance {
+  width: var(--ord-col-money-balance);
+  min-width: var(--ord-col-money-balance);
+  max-width: var(--ord-col-money-balance);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: #b45309;
+  font-weight: 700;
+}
+.adm-table-excel--orders-v3 .adm-ord-col-money {
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.adm-table-excel--orders-v3 .adm-ord-money--zero { color: #64748b; font-weight: 600; }
+.adm-table-excel--orders-v3 .adm-ord-col-ils { display: none; }
+.adm-table-excel--orders-v3 .adm-ord-col-status {
+  width: var(--ord-col-status);
+  min-width: var(--ord-col-status);
+  max-width: var(--ord-col-status);
+  text-align: center;
+}
+.adm-table-excel--orders-v3 .adm-ord-col-paid {
+  width: var(--ord-col-paid);
+  min-width: var(--ord-col-paid);
+  max-width: var(--ord-col-paid);
+  text-align: center;
+}
+.adm-table-excel--orders-v3 .adm-ord-col-pay {
+  width: var(--ord-col-pay);
+  min-width: var(--ord-col-pay);
+  max-width: var(--ord-col-pay);
+  text-align: center;
+}
+.adm-table-excel--orders-v3 .adm-ord-col-actions {
+  width: var(--ord-col-actions);
+  min-width: var(--ord-col-actions);
+  max-width: var(--ord-col-actions);
+  text-align: center;
+  padding-inline: 8px;
+}
+
+/* zebra + hover — subtle ERP grid */
+.adm-table-excel--orders-v3 tbody tr:nth-child(even) td {
+  background: var(--ord-zebra);
+}
+.adm-table-excel--orders-v3 tbody tr:hover td {
+  background: var(--ord-hover) !important;
+}
+.adm-table-excel--orders-v3 tbody tr.adm-table-excel-row[class*="adm-order-row--"] td {
+  box-shadow: none;
+}
+
+/* sticky — מזהה (ימין ב-RTL) + פעולות (שמאל) */
+.adm-table-excel--orders-v3 .adm-ord-col-num {
+  position: sticky;
+  inset-inline-end: 0;
+  z-index: 2;
+}
+.adm-table-excel--orders-v3 thead th.adm-ord-col-num {
+  z-index: 5;
+  background: #1e3a8a;
+  box-shadow: -4px 0 8px rgba(15, 23, 42, 0.06);
+}
+.adm-table-excel--orders-v3 tbody td.adm-ord-col-num {
+  box-shadow: -4px 0 8px rgba(15, 23, 42, 0.04);
+}
+.adm-table-excel--orders-v3 .adm-ord-col-actions {
+  position: sticky;
+  inset-inline-start: 0;
+  z-index: 2;
+  box-shadow: 4px 0 8px rgba(15, 23, 42, 0.04);
+}
+.adm-table-excel--orders-v3 thead th.adm-ord-col-actions {
+  z-index: 5;
+  background: #1e3a8a;
+  box-shadow: 4px 0 8px rgba(15, 23, 42, 0.06);
+}
+
+/* sticky bg follows zebra/hover */
+.adm-table-excel--orders-v3 tbody tr:nth-child(odd) td.adm-ord-col-num,
+.adm-table-excel--orders-v3 tbody tr:nth-child(odd) td.adm-ord-col-actions {
+  background: #fff;
+}
+.adm-table-excel--orders-v3 tbody tr:nth-child(even) td.adm-ord-col-num,
+.adm-table-excel--orders-v3 tbody tr:nth-child(even) td.adm-ord-col-actions {
+  background: var(--ord-zebra);
+}
+.adm-table-excel--orders-v3 tbody tr:hover td.adm-ord-col-num,
+.adm-table-excel--orders-v3 tbody tr:hover td.adm-ord-col-actions {
+  background: var(--ord-hover) !important;
+}
+
+/* ellipsis + tooltips for long text */
+.adm-table-excel--orders-v3 tbody td.adm-ord-col-cust,
+.adm-table-excel--orders-v3 tbody td.adm-table-excel-cust,
+.adm-table-excel--orders-v3 tbody td.adm-ord-col-pay,
+.adm-table-excel--orders-v3 tbody td.adm-ord-col-status {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.adm-table-excel--orders-v3 .adm-ord-col-num { width: 8%; }
-.adm-table-excel--orders-v3 .adm-ord-col-date { width: 9%; }
-.adm-table-excel--orders-v3 .adm-ord-col-week { width: 6%; text-align: center; font-variant-numeric: tabular-nums; }
-.adm-table-excel--orders-v3 .adm-ord-col-ccode { width: 7%; font-weight: 700; font-variant-numeric: tabular-nums; }
-.adm-table-excel--orders-v3 .adm-ord-col-cust { width: 14%; min-width: 0; max-width: 14%; }
-.adm-table-excel--orders-v3 .adm-ord-col-money { width: 8%; text-align: end; font-variant-numeric: tabular-nums; }
-.adm-table-excel--orders-v3 .adm-ord-col-money--paid { width: 7%; text-align: end; font-variant-numeric: tabular-nums; color: #15803d; font-weight: 700; }
-.adm-table-excel--orders-v3 .adm-ord-col-money--balance { width: 7%; text-align: end; font-variant-numeric: tabular-nums; color: #b45309; font-weight: 700; }
-.adm-table-excel--orders-v3 .adm-ord-money--zero { color: #64748b; font-weight: 600; }
-.adm-table-excel--orders-v3 .adm-ord-col-ils { display: none; }
-.adm-table-excel--orders-v3 .adm-ord-col-status { width: 9%; }
-.adm-table-excel--orders-v3 .adm-ord-col-paid { width: 6%; text-align: center; }
-.adm-table-excel--orders-v3 .adm-ord-col-pay { width: 8%; }
-.adm-table-excel--orders-v3 .adm-ord-col-actions { width: 4%; min-width: 44px; text-align: center; }
-
-.adm-table-excel--orders-v3 tbody td.adm-ord-col-cust,
-.adm-table-excel--orders-v3 tbody td.adm-table-excel-cust {
-  white-space: nowrap;
+.adm-table-excel--orders-v3 tbody td.adm-ord-col-cust .adm-table-excel-cust-btn,
+.adm-table-excel--orders-v3 tbody td.adm-ord-col-cust .adm-table-excel-cust-strong {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.adm-table-excel--orders-v3 .adm-pay-sel {
+  max-width: 100%;
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adm-table-excel--orders-v3 .adm-ord-th-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+.adm-table-excel--orders-v3 tbody tr.adm-table-excel-row:focus-visible {
+  outline: 2px solid #93c5fd;
+  outline-offset: -2px;
+}
+
+.adm-orders-work--v3 .adm-table-excel-wrap--orders {
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+}
+
+.adm-orders-work--v3 .adm-table-excel--orders {
+  min-width: var(--ord-table-min, 1445px);
 }
 
 .adm-ord-pay-badge {

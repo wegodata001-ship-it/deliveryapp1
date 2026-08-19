@@ -166,6 +166,11 @@ import {
   type PaymentCancelRequestHint,
 } from "@/app/admin/invoice-cancel-requests/actions";
 import { CustomerPaymentOverageModal, type SurplusDisposition } from "@/components/admin/CustomerPaymentOverageModal";
+import { PaymentOverpaymentWarningCard } from "@/components/admin/PaymentOverpaymentWarningCard";
+import {
+  computePaymentOverpayment,
+  sumEnteredIlsFromFormKpis,
+} from "@/lib/payment-overpayment";
 import { BalanceResetCreditConfirmModal } from "@/components/admin/BalanceResetCreditConfirmModal";
 import { dispatchCashControlRefresh } from "@/lib/cash-control-refresh-bus";
 import {
@@ -1092,6 +1097,24 @@ export function PaymentModalUpdated({
   ]);
 
   const intakeStripOpenDebtUsd = customerOpenDebtDisplayUsd;
+
+  /** P1 — תשלום יתר חי (USD SSOT) לפני שמירה */
+  const liveOverpaymentPreview = useMemo(() => {
+    if (!customer || customerBalanceResetPending || totals.totalUsd <= 0.005) return null;
+    const preview = computePaymentOverpayment(totalDebtBeforePaymentUsd, totals.totalUsd);
+    if (!preview.hasOverpayment) return null;
+    const enteredIls = sumEnteredIlsFromFormKpis(liveFormKpis);
+    return {
+      preview,
+      enteredIlsTotal: enteredIls > 0.01 ? enteredIls : null,
+    };
+  }, [
+    customer,
+    customerBalanceResetPending,
+    totals.totalUsd,
+    totalDebtBeforePaymentUsd,
+    liveFormKpis,
+  ]);
 
   const canApplyResetCustomerBalance = useMemo(() => {
     if (customerBalanceResetPending) return true;
@@ -2356,13 +2379,16 @@ export function PaymentModalUpdated({
       return { ok: false };
     }
     if (methodGate.kind === "SURPLUS_AFTER_CLOSURE" && !surplusDisposition) {
+      const over = computePaymentOverpayment(methodGate.totalDebtUsd, methodGate.totalPaymentUsd);
       setOveragePreview({
         openDebtIls: roundMoney2(methodGate.totalDebtUsd * rateN),
-        openDebtUsd: methodGate.totalDebtUsd,
+        openDebtUsd: over.openDebtUsd,
         paymentIls: roundMoney2(methodGate.totalPaymentUsd * rateN),
-        paymentUsd: methodGate.totalPaymentUsd,
-        surplusIls: roundMoney2(methodGate.surplusUsd * rateN),
-        surplusUsd: methodGate.surplusUsd,
+        paymentUsd: over.incomingPaymentUsd,
+        closesDebtUsd: over.closesDebtUsd,
+        closesDebtIls: roundMoney2(Math.min(methodGate.totalPaymentUsd * rateN, methodGate.totalDebtUsd * rateN)),
+        surplusIls: roundMoney2(over.overpaymentUsd * rateN),
+        surplusUsd: over.overpaymentUsd,
         hasOverage: true,
       });
       setOverageAfterDebtClosure(true);
@@ -2402,10 +2428,10 @@ export function PaymentModalUpdated({
     // עודף אמיתי בלבד: סה״כ תשלום > חוב פתוח. לא נפתח חלון על בסיס unallocated
     // מ-FIFO בלבד (עלול ליצור «יתרת זכות» כוזבת כשהסכום תקין מול החוב).
     const openDebtUsd = roundMoney2(Math.max(0, allocDiag.openBalanceUsd));
-    const realSurplusUsd = roundMoney2(Math.max(0, totals.totalUsd - openDebtUsd));
+    const over = computePaymentOverpayment(openDebtUsd, totals.totalUsd);
     if (
       totals.totalUsd > 0.02 &&
-      realSurplusUsd > 0.02 &&
+      over.hasOverpayment &&
       !surplusDisposition &&
       !customerBalanceResetPending
     ) {
@@ -2420,11 +2446,13 @@ export function PaymentModalUpdated({
           ? prev.preview
           : {
               openDebtIls: roundMoney2(openDebtUsd * rateN),
-              openDebtUsd,
+              openDebtUsd: over.openDebtUsd,
               paymentIls: roundMoney2(totals.totalUsd * rateN),
-              paymentUsd: roundMoney2(totals.totalUsd),
-              surplusIls: roundMoney2(realSurplusUsd * rateN),
-              surplusUsd: realSurplusUsd,
+              paymentUsd: over.incomingPaymentUsd,
+              closesDebtUsd: over.closesDebtUsd,
+              closesDebtIls: roundMoney2(Math.min(totals.totalUsd * rateN, openDebtUsd * rateN)),
+              surplusIls: roundMoney2(over.overpaymentUsd * rateN),
+              surplusUsd: over.overpaymentUsd,
               hasOverage: true,
             };
       setOveragePreview(preview);
@@ -3609,6 +3637,12 @@ export function PaymentModalUpdated({
                     </span>
                   </span>
                 </div>
+              ) : null}
+              {liveOverpaymentPreview ? (
+                <PaymentOverpaymentWarningCard
+                  preview={liveOverpaymentPreview.preview}
+                  enteredIlsTotal={liveOverpaymentPreview.enteredIlsTotal}
+                />
               ) : null}
               <PriorWeekOpenDebtsPanel
                 orders={priorWeekOpenOrders}

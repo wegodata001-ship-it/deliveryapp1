@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { PaymentOveragePreview } from "@/lib/customer-balance";
+import { formatOverpaymentUsdSigned } from "@/lib/payment-overpayment";
 import { formatUsdDisplay } from "@/lib/money-format";
 
 /** אפשרויות טיפול בעודף בתצוגה — יתרת זכות או עמלות בלבד */
@@ -35,6 +36,7 @@ export function CustomerPaymentOverageModal({
 
   if (!open || !preview) return null;
 
+  const closesDebtUsd = preview.closesDebtUsd ?? Math.min(preview.paymentUsd, preview.openDebtUsd);
   const surplusUsd = preview.surplusUsd;
   const canConfirm = choice !== null && !busy;
 
@@ -49,10 +51,29 @@ export function CustomerPaymentOverageModal({
         dir="rtl"
       >
         <h2 id="payment-overage-title" className="adm-mini-modal-title">
-          נשאר עודף תשלום: <span dir="ltr">{formatUsdDisplay(surplusUsd)}</span>
+          תשלום גבוה מהחוב
         </h2>
 
-        <p className="adm-payment-overage-lead">כיצד ברצונך לטפל בעודף?</p>
+        <dl className="adm-payment-overage-stats">
+          <div>
+            <dt>החוב הפתוח של הלקוח הוא</dt>
+            <dd dir="ltr">{formatUsdDisplay(preview.openDebtUsd)}</dd>
+          </div>
+          <div>
+            <dt>הוזן תשלום בסך</dt>
+            <dd dir="ltr">{formatUsdDisplay(preview.paymentUsd)}</dd>
+          </div>
+          <div>
+            <dt>סכום שיסגור את החוב</dt>
+            <dd dir="ltr">{formatUsdDisplay(closesDebtUsd)}</dd>
+          </div>
+          <div className="adm-payment-overage-stats--overpayment">
+            <dt>יתרה נוספת</dt>
+            <dd dir="ltr">{formatOverpaymentUsdSigned(surplusUsd)}</dd>
+          </div>
+        </dl>
+
+        <p className="adm-payment-overage-lead">כיצד ברצונך לטפל ביתרה?</p>
 
         <div className="adm-payment-overage-options" role="radiogroup" aria-label="טיפול בעודף">
           <label className="adm-payment-overage-option adm-payment-overage-option--card">

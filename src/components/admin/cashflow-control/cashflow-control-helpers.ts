@@ -164,6 +164,8 @@ export type FlowRangeAggregate = {
   totalReceivedIls: number;
   fxPurchaseIls: number;
   fxPurchaseUsd: number;
+  ilFxPurchaseIls: number;
+  ilFxPurchaseUsd: number;
   fxProfitIls: number;
   fxLossIls: number;
   fxNetIls: number;
@@ -279,6 +281,8 @@ export function aggregateOverviewRange(rows: FlowWeekOverviewRow[]): FlowRangeAg
   let totalReceivedIls = 0;
   let fxPurchaseIls = 0;
   let fxPurchaseUsd = 0;
+  let ilFxPurchaseIls = 0;
+  let ilFxPurchaseUsd = 0;
   let fxProfitIls = 0;
   let fxLossIls = 0;
   let expensesIls = 0;
@@ -291,6 +295,8 @@ export function aggregateOverviewRange(rows: FlowWeekOverviewRow[]): FlowRangeAg
     totalReceivedIls += fcNum(r.totalReceivedIls);
     fxPurchaseIls += fcNum(r.fxPurchaseIls);
     fxPurchaseUsd += fcNum(r.fxPurchaseUsd);
+    ilFxPurchaseIls += fcNum(r.ilFxPurchaseIls);
+    ilFxPurchaseUsd += fcNum(r.ilFxPurchaseUsd);
     fxProfitIls += fcNum(r.fxProfitIls);
     fxLossIls += fcNum(r.fxLossIls);
     expensesIls += fcNum(r.expensesIls);
@@ -309,6 +315,8 @@ export function aggregateOverviewRange(rows: FlowWeekOverviewRow[]): FlowRangeAg
     totalReceivedIls: round2(totalReceivedIls),
     fxPurchaseIls: round2(fxPurchaseIls),
     fxPurchaseUsd: round2(fxPurchaseUsd),
+    ilFxPurchaseIls: round2(ilFxPurchaseIls),
+    ilFxPurchaseUsd: round2(ilFxPurchaseUsd),
     fxProfitIls: round2(fxProfitIls),
     fxLossIls: round2(fxLossIls),
     fxNetIls: round2(fxProfitIls - fxLossIls),

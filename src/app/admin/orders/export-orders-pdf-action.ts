@@ -5,7 +5,8 @@ import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
 import { formatLocalYmd, parseOrdersListDateFilterFromSearchParams } from "@/lib/work-week";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
-import { getPaymentMethodLabelMap, paymentMethodLabelFromMap } from "@/lib/payment-method-registry";
+import { getPaymentMethodLabelMap } from "@/lib/payment-method-registry";
+import { resolveOrderPaymentFormDisplay } from "@/lib/order-payment-form-display";
 import { getOrderStatusLabelMap, labelFromMap } from "@/lib/order-status-registry";
 import {
   buildOrdersExportWhereFromPreset,
@@ -67,9 +68,22 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-function paymentTypeLabel(m: string | null | undefined, labelMap: Record<string, string>): string {
-  if (!m) return "—";
-  return paymentMethodLabelFromMap(labelMap, m);
+function paymentTypeLabel(
+  r: {
+    paymentMethod: string | null;
+    paymentBreakdown?: Array<{ paymentMethod: string; amount: unknown; currency: string }>;
+  },
+  labelMap: Record<string, string>,
+): string {
+  return resolveOrderPaymentFormDisplay({
+    orderPaymentMethod: r.paymentMethod,
+    breakdownLines: r.paymentBreakdown?.map((b) => ({
+      paymentMethod: b.paymentMethod,
+      amount: b.amount,
+      currency: b.currency,
+    })),
+    labelMap,
+  }).displayLabel;
 }
 
 /** מפתח קבוצה ל־PDF "לפי מקום" — זהה לעמודת "מקום תשלום" ברשימה */
@@ -498,6 +512,9 @@ export async function exportOrdersListPdfHtmlAction(
         customerCodeSnapshot: true,
         customerNameSnapshot: true,
         paymentMethod: true,
+        paymentBreakdown: {
+          select: { paymentMethod: true, amount: true, currency: true },
+        },
         paymentPointId: true,
         locationId: true,
         paymentPoint: { select: { pointName: true } },
@@ -569,7 +586,7 @@ export async function exportOrdersListPdfHtmlAction(
         sourceUsdNum: sourceSigned,
         commissionUsdNum: commSigned,
         totalIlsNum,
-        paymentPlaceKey: paymentPlaceReportGroupKey(r.status, r.paymentMethod),
+        paymentPlaceKey: paymentPlaceReportGroupKey(r.status, r.paymentMethod, r.paymentBreakdown),
         orderDateSort: od,
       };
     });
@@ -639,7 +656,7 @@ ${renderPaymentPlacesReportBody(paymentRows)}
       commissionUsdNum: commSigned,
       statusHe: labelFromMap(statusMap, r.status),
       status: r.status,
-      paymentType: paymentTypeLabel(r.paymentMethod as string | null, paymentMethodMap),
+      paymentType: paymentTypeLabel(r, paymentMethodMap),
       paymentLocation: paymentLocationName ?? "—",
       orderDate: od,
       placeKey,

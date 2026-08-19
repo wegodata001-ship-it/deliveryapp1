@@ -5,11 +5,11 @@
  */
 
 import { prisma } from "@/lib/prisma";
-import { parseAhWeekNumber } from "@/lib/weeks/ah-week-nav";
+import { parseAhWeekNumber, listAhWeekCodesUpTo } from "@/lib/weeks/ah-week-nav";
 import { ACTIVE_WORK_WEEK_CODE } from "@/lib/active-work-week";
 import type { FxPurchaseRecord } from "@/app/admin/cash-flow/flow-types";
 import { parseFxPurchasesJson } from "@/lib/flow-control/flow-calculation-service";
-import { loadTurkeyMovementsUpToWeek } from "@/lib/flow-control/turkey-transfer-balance-service";
+import { loadTurkeyMovementsUpToWeekCached } from "@/lib/flow-control/flow-week-load-cache";
 import type { TurkeyTransferMovementDto } from "@/lib/flow-control/turkey-transfer-balance-types";
 import { cashExpenseWhereForCountryScope, resolveCountryScopeFromCode } from "@/lib/country-data-scope";
 import { aggregateExpensesByMethod, cashDrawerExpenseTotals } from "@/lib/cash-expense-payment-method";
@@ -32,6 +32,7 @@ import {
 } from "@/lib/flow-control/services/current-financial-balances.shared";
 import { buildNetAvailableBreakdown } from "@/lib/flow-control/services/net-available-breakdown.shared";
 import { sumFxPurchases } from "@/lib/flow-control/flow-calculation-service";
+import { cashFlowPerfTimed } from "@/lib/flow-control/cash-flow-perf";
 
 function dec(v: { toString(): string } | null | undefined): number {
   const n = Number(v?.toString() ?? 0);
@@ -73,8 +74,9 @@ async function loadFlowRowsUpToWeek(
   const target = parseAhWeekNumber(asOfWeek);
   if (target == null) return [];
 
+  const weekCodes = listAhWeekCodesUpTo(asOfWeek);
   const raw = await prisma.cashWeekFlow.findMany({
-    where: { countryCode: workCountry },
+    where: { countryCode: workCountry, weekCode: { in: weekCodes } },
     select: {
       weekCode: true,
       countedCashIls: true,
@@ -160,7 +162,9 @@ export async function buildCumulativeBalanceInput(
   const scopeRows = rowsFromAnchor(rows, anchor);
   const mergedFx = mergeFxPurchases(scopeRows);
   const commissions = sumCommissions(scopeRows);
-  const turkeyMovements = await loadTurkeyMovementsUpToWeek(asOfWeek, workCountry);
+  const turkeyMovements = await cashFlowPerfTimed("cashFlow.turkeyMovements", () =>
+    loadTurkeyMovementsUpToWeekCached(asOfWeek, workCountry),
+  );
 
   const countryScope = resolveCountryScopeFromCode(workCountry);
   const weekCodes = scopeRows.map((r) => r.weekCode);
@@ -179,10 +183,12 @@ export async function buildCumulativeBalanceInput(
     cashDrawerExpenseTotals(aggregateExpensesByMethod(expenseRows)).ils,
   );
 
+  const bankTxResults = await cashFlowPerfTimed("cashFlow.bankBalances", () =>
+    Promise.all(weekCodes.map((wk) => loadFlowWeekBankTransactions(wk))),
+  );
   let bankDepositsIls = 0;
   let bankWithdrawalsIls = 0;
-  for (const wk of weekCodes) {
-    const tx = await loadFlowWeekBankTransactions(wk);
+  for (const tx of bankTxResults) {
     bankDepositsIls = round2(bankDepositsIls + tx.depositsIls);
     bankWithdrawalsIls = round2(bankWithdrawalsIls + tx.withdrawalsIls);
   }
@@ -205,7 +211,9 @@ export async function getCurrentFinancialBalances(params: {
 }): Promise<CurrentFinancialBalances> {
   const workCountry = params.workCountry ?? DEFAULT_WORK_COUNTRY;
   const asOfWeek = (params.asOfWeek ?? ACTIVE_WORK_WEEK_CODE).trim();
-  const input = await buildCumulativeBalanceInput(workCountry, asOfWeek);
+  const input = await cashFlowPerfTimed("cashFlow.currentBalances", () =>
+    buildCumulativeBalanceInput(workCountry, asOfWeek),
+  );
 
   if (!input) {
     return emptyCurrentFinancialBalances(workCountry, asOfWeek);
@@ -234,9 +242,9 @@ export async function loadCurrentBalanceDrill(
   workCountry: WorkCountryCode,
   asOfWeek: string,
 ): Promise<CurrentBalanceDrillResult | null> {
-  const balances = await getCurrentFinancialBalances({ workCountry, asOfWeek });
   const input = await buildCumulativeBalanceInput(workCountry, asOfWeek);
   if (!input) return null;
+  const balances = computeCurrentFinancialBalancesFromInput(workCountry, asOfWeek, input);
 
   const { anchor, mergedFx, totalExpensesIls, turkeyMovements } = input;
   const rows: CurrentBalanceLedgerRow[] = [];
