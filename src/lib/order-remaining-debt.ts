@@ -249,10 +249,23 @@ export function reconcileOrderBreakdownWithLedger(
 
   const usdRows = rows.filter((r) => (r.currency ?? "USD") === "USD");
   const sumUsdRem = roundOrderMoney2(usdRows.reduce((s, r) => s + (r.remaining ?? 0), 0));
-  if (Math.abs(sumUsdRem - targetOpen) <= 0.005) return rows;
-
-  distributeUsdRemainingToMatchOpenDebt(usdRows, targetOpen);
+  if (Math.abs(sumUsdRem - targetOpen) > 0.005) {
+    distributeUsdRemainingToMatchOpenDebt(usdRows, targetOpen);
+  }
+  syncBreakdownPaidFromRemaining(rows);
   return rows;
+}
+
+function syncBreakdownPaidFromRemaining(rows: OrderBreakdownMethodRow[]): void {
+  for (const r of rows) {
+    const planned = roundOrderMoney2(Math.max(0, r.planned ?? r.plannedUsd ?? 0));
+    const remaining = roundOrderMoney2(Math.max(0, r.remaining ?? r.remainingUsd ?? 0));
+    r.paid = roundOrderMoney2(Math.max(0, planned - remaining));
+    if ((r.currency ?? "USD") === "USD") {
+      r.paidUsd = r.paid;
+      r.remainingUsd = remaining;
+    }
+  }
 }
 
 function distributeUsdRemainingToMatchOpenDebt(

@@ -39331,8 +39331,8 @@ button.adm-cash-kpi:hover {
   --ord-col-cust: 150px;
   --ord-col-money-deal: 125px;
   --ord-col-money-total: 120px;
-  --ord-col-money-paid: 100px;
   --ord-col-money-balance: 100px;
+  --ord-col-completed: 126px;
   --ord-col-status: 120px;
   --ord-col-paid: 90px;
   --ord-col-pay: 145px;
@@ -39433,15 +39433,6 @@ button.adm-cash-kpi:hover {
   min-width: var(--ord-col-money-total);
   max-width: var(--ord-col-money-total);
 }
-.adm-table-excel--orders-v3 .adm-ord-col-money--paid {
-  width: var(--ord-col-money-paid);
-  min-width: var(--ord-col-money-paid);
-  max-width: var(--ord-col-money-paid);
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-  color: #15803d;
-  font-weight: 700;
-}
 .adm-table-excel--orders-v3 .adm-ord-col-money--balance {
   width: var(--ord-col-money-balance);
   min-width: var(--ord-col-money-balance);
@@ -39467,6 +39458,12 @@ button.adm-cash-kpi:hover {
   width: var(--ord-col-paid);
   min-width: var(--ord-col-paid);
   max-width: var(--ord-col-paid);
+  text-align: center;
+}
+.adm-table-excel--orders-v3 .adm-ord-col-completed {
+  width: var(--ord-col-completed);
+  min-width: var(--ord-col-completed);
+  max-width: var(--ord-col-completed);
   text-align: center;
 }
 .adm-table-excel--orders-v3 .adm-ord-col-pay {
@@ -39736,6 +39733,7 @@ button.adm-cash-kpi:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
 }
 

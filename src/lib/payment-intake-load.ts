@@ -198,6 +198,14 @@ function mapOrderToIntakeRow(
       }
     }
 
+    // SSOT: paid במסלול אמצעי = planned − remaining; לא paidAmount ב-DB כשאין Payment
+    if (paidN <= 0.005) {
+      for (const e of plannedEntries) {
+        e.paid = 0;
+        e.remaining = e.planned;
+      }
+    }
+
     breakdown = plannedEntries.map((e) => {
       const asUsd =
         e.currency === "ILS" && rateN > 0 ? round2(e.planned / rateN) : e.planned;

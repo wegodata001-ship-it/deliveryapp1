@@ -17,12 +17,11 @@ export async function AdminSidebarWithBadges({ groups, homeItem, showPendingBadg
   if (!showPendingBadge) {
     return <AdminSidebar groups={groups} homeItem={homeItem} />;
   }
-  const [pendingOrderEdits, pendingInvoiceCancels] = await adminLayoutPerfRun("layout.kpi", () =>
-    Promise.all([
-      getPendingOrderEditRequestCount().catch(() => 0),
-      getPendingInvoiceCancelRequestCount().catch(() => 0),
-    ]),
-  );
+  const [pendingOrderEdits, pendingInvoiceCancels] = await adminLayoutPerfRun("layout.kpi", async () => {
+    const pendingOrderEdits = await getPendingOrderEditRequestCount().catch(() => 0);
+    const pendingInvoiceCancels = await getPendingInvoiceCancelRequestCount().catch(() => 0);
+    return [pendingOrderEdits, pendingInvoiceCancels] as const;
+  });
   const navBadges =
     pendingOrderEdits > 0 || pendingInvoiceCancels > 0
       ? {

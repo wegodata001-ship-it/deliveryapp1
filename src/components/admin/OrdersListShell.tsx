@@ -48,7 +48,7 @@ import {
   type OrderStatusKpiKey,
 } from "@/lib/orders-status-kpi-filter";
 import { adjustStatusSummaryForStatusChange } from "@/lib/orders-status-kpi-optimistic";
-import { OrderRowActionsMenu, OrderPaymentStatusBadge } from "@/components/admin/orders/OrderRowActionsMenu";
+import { OrderRowActionsMenu } from "@/components/admin/orders/OrderRowActionsMenu";
 import { WEGO_ORDERS_LIST_REFRESH_EVENT } from "@/lib/orders-list-refresh-bus";
 
 type CompletedFilter = "not_done" | "done" | "all";
@@ -192,6 +192,28 @@ function fmtUsd(n: number): string {
   return formatMoneyAmount(n);
 }
 
+function parseCountValue(value: string): number {
+  const parsed = Number(value.replace(/,/g, "").trim());
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function adjustOperationalCompletedSummary(
+  summary: OrdersStatusSummary,
+  params: { wasCompleted: boolean; nextCompleted: boolean; totalUsd: number },
+): OrdersStatusSummary {
+  const deltaCount = (params.nextCompleted ? 1 : 0) - (params.wasCompleted ? 1 : 0);
+  if (deltaCount === 0) return summary;
+  const nextCount = Math.max(0, parseCountValue(summary.operationalCompleted.count) + deltaCount);
+  const nextTotal = Math.max(0, (parseNumeric(summary.operationalCompleted.totalUsd) ?? 0) + deltaCount * params.totalUsd);
+  return {
+    ...summary,
+    operationalCompleted: {
+      count: nextCount.toLocaleString("he-IL"),
+      totalUsd: nextTotal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+    },
+  };
+}
+
 function readCompletedFilterFromLocation(): CompletedFilter {
   if (typeof window === "undefined") return "all";
   const v = new URLSearchParams(window.location.search).get("ordersCompleted");
@@ -313,13 +335,13 @@ export function OrdersListShell({
     setActiveStatusFilters([]);
     setCompletedFilter("all");
     const sp = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
-    sp.set("ordersCompleted", "all");
+    sp.delete("ordersCompleted");
     sp.delete("page");
     const q = sp.toString();
     router.replace(q ? `/admin/orders?${q}` : "/admin/orders", { scroll: false });
   }, [router]);
 
-  const statusKpiAllActive = activeStatusFilters.length === 0;
+  const statusKpiAllActive = activeStatusFilters.length === 0 && completedFilter === "all";
 
   const mergedPaymentLocationOptions = useMemo(() => {
     const m = new Map<string, string>();
@@ -335,8 +357,13 @@ export function OrdersListShell({
   }, [mergedPaymentLocationOptions]);
 
   const tableRows = useMemo(
-    () => rows.filter((o) => orderMatchesStatusKpiFilters(o.status, activeStatusFilters)),
-    [rows, activeStatusFilters],
+    () =>
+      rows.filter((o) => {
+        if (completedFilter === "done" && !o.isCompleted) return false;
+        if (completedFilter === "not_done" && o.isCompleted) return false;
+        return orderMatchesStatusKpiFilters(o.status, activeStatusFilters);
+      }),
+    [rows, activeStatusFilters, completedFilter],
   );
 
   const statusKpiCards = useMemo(
@@ -366,7 +393,7 @@ export function OrdersListShell({
         {
           key: "operationalCompleted" as const,
           tone: "adm-status-card--operational-completed",
-          title: "הושלמו",
+          title: "הושלם",
           icon: CheckSquare,
           bucket: statusSummaryLive.operationalCompleted,
         },
@@ -568,6 +595,13 @@ export function OrdersListShell({
     setStatusSummaryLive((summary) =>
       adjustStatusSummaryForStatusChange(summary, prevRow.status, next, orderTotalUsd),
     );
+    setStatusSummaryLive((summary) =>
+      adjustOperationalCompletedSummary(summary, {
+        wasCompleted: prevRow.isCompleted,
+        nextCompleted: nextIsCompleted,
+        totalUsd: orderTotalUsd,
+      }),
+    );
     statusUpdateUiMs += now() - uiT0;
     const dbT0 = now();
     const res = await fetch("/api/orders/status", {
@@ -585,6 +619,13 @@ export function OrdersListShell({
       setRows(prevSnapshot);
       setStatusSummaryLive((summary) =>
         adjustStatusSummaryForStatusChange(summary, next, prevRow.status, orderTotalUsd),
+      );
+      setStatusSummaryLive((summary) =>
+        adjustOperationalCompletedSummary(summary, {
+          wasCompleted: nextIsCompleted,
+          nextCompleted: prevRow.isCompleted,
+          totalUsd: orderTotalUsd,
+        }),
       );
       statusUpdateUiMs += now() - uiRollbackT0;
       setListErr(res.error ?? "שגיאה בשמירה");
@@ -641,6 +682,7 @@ export function OrdersListShell({
       }
       setListErr(null);
       const prevSnapshot = rows;
+      const rowTotalUsd = parseNumeric(row.totalAmountUsd) ?? 0;
       setRows((cur) =>
         cur
           .map((r) => (r.id === orderId ? { ...r, isCompleted: next } : r))
@@ -650,11 +692,25 @@ export function OrdersListShell({
             return !r.isCompleted;
           }),
       );
+      setStatusSummaryLive((summary) =>
+        adjustOperationalCompletedSummary(summary, {
+          wasCompleted: row.isCompleted,
+          nextCompleted: next,
+          totalUsd: rowTotalUsd,
+        }),
+      );
       setBusyId(orderId);
       const res = await updateOrderCompletedFlagAction(orderId, next);
       setBusyId(null);
       if (!res.ok) {
         setRows(prevSnapshot);
+        setStatusSummaryLive((summary) =>
+          adjustOperationalCompletedSummary(summary, {
+            wasCompleted: next,
+            nextCompleted: row.isCompleted,
+            totalUsd: rowTotalUsd,
+          }),
+        );
         setListErr(res.error);
       } else {
         showToast(next ? "ההזמנה סומנה כהושלמה" : "סימון הושלם בוטל");
@@ -1039,7 +1095,7 @@ export function OrdersListShell({
             />
             {statusKpiCards.map((card) => {
               const operational = card.key === "operationalCompleted";
-              const active = !operational && activeStatusFilters.includes(card.key);
+              const active = operational ? completedFilter === "done" : activeStatusFilters.includes(card.key);
               return (
                 <OrderStatusKpiButton
                   key={card.key}
@@ -1055,7 +1111,7 @@ export function OrdersListShell({
                   }}
                   ariaLabel={
                     operational
-                      ? "הושלמו — לחיצה להצגת הזמנות שסומנו הושלם"
+                      ? "הושלם — לחיצה להצגת הזמנות שסומנו הושלם"
                       : `${card.title} — ${active ? "סינון פעיל, לחיצה לביטול" : "לחיצה לסינון לפי סטטוס זה"}`
                   }
                 />
@@ -1095,10 +1151,9 @@ export function OrdersListShell({
                   <span>עמלה ($)</span>
                 </span>
               </th>
-              <th className="adm-ord-col-money adm-ord-col-money--paid" dir="ltr">שולם ($)</th>
               <th className="adm-ord-col-money adm-ord-col-money--balance" dir="ltr">יתרה ($)</th>
+              <th className="adm-ord-col-completed">הושלם</th>
               <th className="adm-ord-col-status">סטטוס הזמנה</th>
-              <th className="adm-ord-col-paid">שולם</th>
               <th className="adm-ord-col-meta adm-ord-col-pay">צורת תשלום</th>
               <th className="adm-ord-col-actions">פעולות</th>
             </tr>
@@ -1106,7 +1161,7 @@ export function OrdersListShell({
           <tbody>
             {tableRows.length === 0 ? (
               <tr>
-                <td colSpan={12} className="adm-table-empty adm-table-empty--rich">
+                <td colSpan={11} className="adm-table-empty adm-table-empty--rich">
                   {listEmptyContent ? (
                     <div className={`adm-orders-empty-in-table adm-orders-empty-in-table--${listEmptyContent.kind}`} role="status">
                       <strong>{listEmptyContent.title}</strong>
@@ -1231,19 +1286,6 @@ export function OrdersListShell({
                       className={[
                         "adm-table-excel-money",
                         "adm-table-excel-money--usd",
-                        "adm-ord-col-money",
-                        "adm-ord-col-money--paid",
-                      ]
-                        .filter(Boolean)
-                        .join(" ")}
-                    >
-                      {o.paidAmountUsd ?? "—"}
-                    </td>
-                    <td
-                      dir="ltr"
-                      className={[
-                        "adm-table-excel-money",
-                        "adm-table-excel-money--usd",
                         "adm-table-excel-money--strong",
                         "adm-ord-col-money",
                         "adm-ord-col-money--balance",
@@ -1253,6 +1295,28 @@ export function OrdersListShell({
                         .join(" ")}
                     >
                       {o.balanceUsd ?? "—"}
+                    </td>
+                    <td className="adm-ord-col-completed" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        className={[
+                          "adm-order-completed-check",
+                          o.isCompleted ? "adm-order-completed-check--done" : "",
+                          !canEditOrders || busyId === o.id || !!o.quickStatusLocked || o.status !== OS.COMPLETED
+                            ? "adm-order-completed-check--disabled"
+                            : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" ")}
+                        disabled={!canEditOrders || busyId === o.id || !!o.quickStatusLocked || o.status !== OS.COMPLETED}
+                        aria-pressed={o.isCompleted}
+                        aria-label={o.isCompleted ? "סמן כהזמנה לא הושלמה" : "סמן כהזמנה שהושלמה"}
+                        title={o.status !== OS.COMPLETED ? "אפשר לסמן הושלם רק להזמנה בסטטוס בוצע" : undefined}
+                        onClick={() => void onRowCompletedChange(o.id, !o.isCompleted)}
+                      >
+                        <span aria-hidden>{o.isCompleted ? "☑" : "☐"}</span>
+                        <span>{o.isCompleted ? "הושלם" : "לא הושלם"}</span>
+                      </button>
                     </td>
                     <td className="adm-table-excel-status-cell adm-ord-col-status" onClick={(e) => e.stopPropagation()}>
                       <OrderStatusSelect
@@ -1265,9 +1329,6 @@ export function OrdersListShell({
                         onChange={(v) => void onRowStatusChange(o.id, v)}
                       />
                     </td>
-                    <td className="adm-ord-col-paid">
-                      <OrderPaymentStatusBadge status={o.paymentStatus} />
-                    </td>
                     <td className="adm-ord-col-meta adm-ord-col-pay" onClick={(e) => e.stopPropagation()}>
                       <select
                         className="adm-pay-sel adm-pay-sel--neutral"
@@ -1277,7 +1338,7 @@ export function OrdersListShell({
                         title={o.paymentFormTooltip ?? undefined}
                         onChange={(e) => void onRowPaymentMethodChange(o.id, e.target.value)}
                       >
-                        <option value="">לא שולם</option>
+                        <option value="">בחר צורת תשלום</option>
                         {paymentMethodOptionsForValue((o.paymentType as string | null) ?? undefined).map((opt) => (
                           <option key={opt.value} value={opt.value}>
                             {opt.label}
@@ -1328,7 +1389,6 @@ export function OrdersListShell({
                   <button type="button" className="adm-orders-mobile-card__num" onClick={() => openOrderOverlay(o.id, o)}>
                     {o.orderNumber ?? "—"}
                   </button>
-                  <OrderPaymentStatusBadge status={o.paymentStatus} />
                 </div>
                 <div className="adm-orders-mobile-card__cust">{o.customerName ?? "—"}</div>
                 <div className="adm-orders-mobile-card__meta">
@@ -1336,6 +1396,25 @@ export function OrdersListShell({
                   <span dir="ltr">{formatOrdersListMoney(o, "total").text}</span>
                 </div>
                 <div className="adm-orders-mobile-card__foot">
+                  <button
+                    type="button"
+                    className={[
+                      "adm-order-completed-check",
+                      o.isCompleted ? "adm-order-completed-check--done" : "",
+                      !canEditOrders || busyId === o.id || !!o.quickStatusLocked || o.status !== OS.COMPLETED
+                        ? "adm-order-completed-check--disabled"
+                        : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    disabled={!canEditOrders || busyId === o.id || !!o.quickStatusLocked || o.status !== OS.COMPLETED}
+                    aria-pressed={o.isCompleted}
+                    aria-label={o.isCompleted ? "סמן כהזמנה לא הושלמה" : "סמן כהזמנה שהושלמה"}
+                    onClick={() => void onRowCompletedChange(o.id, !o.isCompleted)}
+                  >
+                    <span aria-hidden>{o.isCompleted ? "☑" : "☐"}</span>
+                    <span>{o.isCompleted ? "הושלם" : "לא הושלם"}</span>
+                  </button>
                   <OrderStatusSelect
                     variant="table"
                     className="adm-table-status-sel"

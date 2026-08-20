@@ -52,6 +52,7 @@ import {
 } from "@/lib/ledger-payment-detail";
 import {
   prepareLedgerRowsForDisplay,
+  type CustomerLedgerDateSort,
   type CustomerLedgerQuickFilter,
 } from "@/lib/customer-ledger-display";
 import { LedgerDualAmountDisplay } from "@/components/admin/LedgerDualAmountDisplay";
@@ -191,6 +192,7 @@ export function CustomerCardWindowBody({
   const [ledgerPdfModalOpen, setLedgerPdfModalOpen] = useState(false);
   const [expandedLedgerPayments, setExpandedLedgerPayments] = useState<Set<string>>(() => new Set());
   const [ledgerQuickFilter, setLedgerQuickFilter] = useState<CustomerLedgerQuickFilter>("all");
+  const [ledgerSort, setLedgerSort] = useState<CustomerLedgerDateSort>("new_old");
   const [fromYmd, setFromYmd] = useState(ledgerFromYmd?.trim() ?? "");
   const [toYmd, setToYmd] = useState(ledgerToYmd?.trim() ?? "");
   const [form, setForm] = useState(() => (initialSnap ? formFromSnap(initialSnap) : {
@@ -310,8 +312,8 @@ export function CustomerCardWindowBody({
 
   /** חייב להיות לפני כל early return — אחרת React #310 ב-production */
   const displayLedgerRows = useMemo(
-    () => prepareLedgerRowsForDisplay(ledger?.rows ?? [], ledgerQuickFilter),
-    [ledger?.rows, ledgerQuickFilter],
+    () => prepareLedgerRowsForDisplay(ledger?.rows ?? [], ledgerQuickFilter, ledgerSort),
+    [ledger?.rows, ledgerQuickFilter, ledgerSort],
   );
 
   useEffect(() => {
@@ -321,9 +323,10 @@ export function CustomerCardWindowBody({
       rows: ledger?.rows?.length ?? 0,
       displayRows: displayLedgerRows.length,
       filter: ledgerQuickFilter,
+      sort: ledgerSort,
       loading: ledgerLoading,
     });
-  }, [activeTab, customerId, ledger?.rows, displayLedgerRows.length, ledgerQuickFilter, ledgerLoading]);
+  }, [activeTab, customerId, ledger?.rows, displayLedgerRows.length, ledgerQuickFilter, ledgerSort, ledgerLoading]);
 
   function resetFormFromSnap(row: CustomerCardSnapshot) {
     setForm(formFromSnap(row));
@@ -544,6 +547,13 @@ export function CustomerCardWindowBody({
         <div className="adm-field">
           <label htmlFor="ledger-to">תאריך סיום</label>
           <input id="ledger-to" type="date" value={toYmd} onChange={(e) => setToYmd(e.target.value)} />
+        </div>
+        <div className="adm-field">
+          <label htmlFor="ledger-sort">מיון</label>
+          <select id="ledger-sort" value={ledgerSort} onChange={(e) => setLedgerSort(e.target.value as CustomerLedgerDateSort)}>
+            <option value="new_old">חדש → ישן</option>
+            <option value="old_new">ישן → חדש</option>
+          </select>
         </div>
       </div>
       <div className="adm-cust-ledger-export-actions" role="group" aria-label="ייצוא כרטסת">

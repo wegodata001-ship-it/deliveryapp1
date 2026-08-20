@@ -6,7 +6,6 @@ import { isDebtWithdrawalOrderStatus } from "@/lib/debt-withdrawal-order";
 import { OS } from "@/lib/order-status-slugs";
 import { dispatchOrdersListRefresh } from "@/lib/orders-list-refresh-bus";
 import { computeOrderCaptureMoneyBreakdown } from "@/lib/order-usd-payment-model";
-import { parseSplitPaymentMethodRaw } from "@/lib/order-capture-payment-methods";
 import {
   type OrderCapturePaymentLineCurrency,
   type OrderCapturePaymentRow,
@@ -144,20 +143,6 @@ function paymentRowUsdEquivalent(r: OrderCapturePaymentRow, nisPerUsd: number): 
     return roundMoney2(v / nisPerUsd);
   }
   return roundMoney2(v);
-}
-
-function buildPaymentLinesFromRows(rows: OrderCapturePaymentRow[]) {
-  return rows
-    .filter((r) => r.amount.trim())
-    .map((r) => {
-      const cur = r.currency ?? "USD";
-      const method = parseSplitPaymentMethodRaw(r.paymentMethod) ?? r.paymentMethod;
-      return {
-        paymentMethod: method,
-        amountUsd: r.amount.trim(),
-        ...(cur === "ILS" ? { currency: "ILS" as const } : {}),
-      };
-    });
 }
 
 async function loadCustomerExtrasFast(
@@ -707,6 +692,7 @@ export function OrderCreatePanel({
 
   const loadCustomerExtras = useCallback(
     async (customerId: string) => {
+      if (isSaving) return;
       const req = ++customerExtrasReqRef.current;
       try {
         const ex = await loadCustomerExtrasFast(customerId, previewWorkCountry);
@@ -724,7 +710,7 @@ export function OrderCreatePanel({
         setErr("טעינת נתונים נכשלה");
       }
     },
-    [applyExtras, previewWorkCountry],
+    [applyExtras, isSaving, previewWorkCountry],
   );
 
   useEffect(() => {
@@ -738,12 +724,13 @@ export function OrderCreatePanel({
 
   useEffect(() => {
     const onBalancesRefresh = () => {
+      if (isSaving) return;
       const cid = selectedCustomer?.id?.trim();
       if (cid) void loadCustomerExtras(cid);
     };
     window.addEventListener("wego:balances-refresh", onBalancesRefresh);
     return () => window.removeEventListener("wego:balances-refresh", onBalancesRefresh);
-  }, [selectedCustomer?.id, loadCustomerExtras]);
+  }, [isSaving, selectedCustomer?.id, loadCustomerExtras]);
 
   const openCustomerCard = useCallback(() => {
     if (!selectedCustomer) return;
@@ -1357,13 +1344,6 @@ export function OrderCreatePanel({
         const breakdownForSave = isCompositePaymentMethod(s.paymentMethod)
           ? s.paymentBreakdown
           : paymentBreakdownForSave(primaryPaymentMethod, [], payable);
-        const paymentLinesForSave = s.isDebtWithdrawalCapture
-          ? undefined
-          : (() => {
-              if (!isCompositePaymentMethod(s.paymentMethod)) return undefined;
-              const lines = buildPaymentLinesFromRows(s.paymentRows);
-              return lines.length > 0 ? lines : undefined;
-            })();
 
         const savePayload = (feeStr: string) =>
           s.isEdit
@@ -1387,7 +1367,6 @@ export function OrderCreatePanel({
                 locationId: s.paymentPointId.trim() || null,
                 intakeLocationDraftName:
                   !s.paymentPointId.trim() && s.paymentPointQuery.trim() ? s.paymentPointQuery.trim() : undefined,
-                paymentLines: paymentLinesForSave,
                 sourceCountry: countryForSave,
                 draftNameAr: s.nameArStr.trim() || null,
                 draftNameEn: s.nameEnStr.trim() || null,
@@ -1412,7 +1391,6 @@ export function OrderCreatePanel({
                 intakeLocationDraftName:
                   !s.paymentPointId.trim() && s.paymentPointQuery.trim() ? s.paymentPointQuery.trim() : undefined,
                 vatPercent: String(VAT_RATE_PERCENT),
-                paymentLines: paymentLinesForSave,
                 sourceCountry: countryForSave,
                 draftNameAr: s.nameArStr.trim() || null,
                 draftNameEn: s.nameEnStr.trim() || null,

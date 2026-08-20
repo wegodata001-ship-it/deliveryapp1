@@ -10,7 +10,7 @@ function defaultConnectionLimit(): string {
   if (process.env.PRISMA_CONNECTION_LIMIT?.trim()) {
     return process.env.PRISMA_CONNECTION_LIMIT.trim();
   }
-  return process.env.NODE_ENV === "production" ? "5" : "3";
+  return process.env.NODE_ENV === "production" ? "5" : "5";
 }
 
 /** מוסיף פרמטרי pool חסרים ל-DATABASE_URL (לא דורס ערכים קיימים). */

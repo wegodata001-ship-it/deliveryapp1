@@ -313,10 +313,8 @@ export async function fetchOrdersListPageData(
   const countCacheKey = `${fullCacheKey}|count`;
 
   const [statusGroups, completedGroups, intakeLocationRows, totalCount, createdByOptions, countryFilterOptions] =
-    await withPerfTimer(
-    "orders.page.fetchOrders",
-    async () => {
-      const statusP = cachedTimed("ordersKpiStore", ordersKpiStore, scopeCacheKey, (ms) => (kpiMs += ms), async () =>
+    await withPerfTimer("orders.page.fetchOrders", async () => {
+      const statusGroups = await cachedTimed("ordersKpiStore", ordersKpiStore, scopeCacheKey, (ms) => (kpiMs += ms), async () =>
         (await (prisma.order.groupBy as unknown as (args: {
           by: ["status"];
           where: Prisma.OrderWhereInput;
@@ -330,32 +328,46 @@ export async function fetchOrdersListPageData(
         })) as StatusGroupRow[],
         { bypass: options.refreshStats },
       );
-      const completedP = cachedTimed("ordersCompletedKpiStore", ordersCompletedKpiStore, `${scopeCacheKey}|completed`, (ms) => (kpiMs += ms), async () =>
-        (await (prisma.order.groupBy as unknown as (args: {
-          by: ["isCompleted"];
-          where: Prisma.OrderWhereInput;
-          _count: { _all: true };
-          _sum: { totalUsd: true };
-        }) => Promise<CompletedGroupRow[]>)({
-          by: ["isCompleted"],
-          where: statsWhere,
-          _count: { _all: true },
-          _sum: { totalUsd: true },
-        })) as CompletedGroupRow[],
+      const completedGroups = await cachedTimed(
+        "ordersCompletedKpiStore",
+        ordersCompletedKpiStore,
+        `${scopeCacheKey}|completed`,
+        (ms) => (kpiMs += ms),
+        async () =>
+          (await (prisma.order.groupBy as unknown as (args: {
+            by: ["isCompleted"];
+            where: Prisma.OrderWhereInput;
+            _count: { _all: true };
+            _sum: { totalUsd: true };
+          }) => Promise<CompletedGroupRow[]>)({
+            by: ["isCompleted"],
+            where: statsWhere,
+            _count: { _all: true },
+            _sum: { totalUsd: true },
+          })) as CompletedGroupRow[],
         { bypass: options.refreshStats },
       );
-      const locationsP = cachedTimed("ordersStatsStore", ordersStatsStore, "intakeLocations:v1", (ms) => (statsMs += ms), () =>
-        prisma.intakeLocation.findMany({
-          select: { id: true, name: true },
-          orderBy: { name: "asc" },
-          take: 500,
-        }),
+      const intakeLocationRows = await cachedTimed(
+        "ordersStatsStore",
+        ordersStatsStore,
+        "intakeLocations:v1",
+        (ms) => (statsMs += ms),
+        () =>
+          prisma.intakeLocation.findMany({
+            select: { id: true, name: true },
+            orderBy: { name: "asc" },
+            take: 500,
+          }),
         { bypass: options.refreshStats },
       );
-      const countP = cachedTimed("ordersCountStore", ordersCountStore, countCacheKey, (ms) => (ordersCountMs += ms), () =>
-        prisma.order.count({ where }),
+      const totalCount = await cachedTimed(
+        "ordersCountStore",
+        ordersCountStore,
+        countCacheKey,
+        (ms) => (ordersCountMs += ms),
+        () => prisma.order.count({ where }),
       );
-      const creatorsP = cachedTimed(
+      const createdByOptions = await cachedTimed(
         "ordersCreatorsStore",
         ordersCreatorsStore,
         "orderCreators:v1",
@@ -363,7 +375,7 @@ export async function fetchOrdersListPageData(
         loadOrderCreatorFilterOptions,
         { bypass: options.refreshStats },
       );
-      const countriesP = cachedTimed(
+      const countryFilterOptions = await cachedTimed(
         "ordersCountryOptionsStore",
         ordersCountryOptionsStore,
         `${scopeCacheKey}|countryOptions`,
@@ -371,9 +383,15 @@ export async function fetchOrdersListPageData(
         () => loadOrderCountryFilterOptions(countryOptionsWhere),
         { bypass: options.refreshStats },
       );
-      return Promise.all([statusP, completedP, locationsP, countP, creatorsP, countriesP]);
-    },
-  );
+      return [
+        statusGroups,
+        completedGroups,
+        intakeLocationRows,
+        totalCount,
+        createdByOptions,
+        countryFilterOptions,
+      ] as const;
+    });
 
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const safePage = Math.min(page, totalPages);
@@ -408,18 +426,16 @@ export async function fetchOrdersListPageData(
       `editRequests:${pageOrderIds.slice().sort().join(",")}:take=${editTake}`,
       (ms) => (statsMs += ms),
       async () => {
-        const [pendingRows, recentRequests] = await Promise.all([
-          prisma.orderEditRequest.findMany({
-            where: { orderId: { in: pageOrderIds }, status: OrderEditRequestStatus.PENDING },
-            select: { orderId: true, requestedByUserId: true },
-          }),
-          prisma.orderEditRequest.findMany({
-            where: { orderId: { in: pageOrderIds } },
-            orderBy: { createdAt: "desc" },
-            select: { orderId: true, status: true, requestedByUserId: true },
-            take: editTake,
-          }),
-        ]);
+        const pendingRows = await prisma.orderEditRequest.findMany({
+          where: { orderId: { in: pageOrderIds }, status: OrderEditRequestStatus.PENDING },
+          select: { orderId: true, requestedByUserId: true },
+        });
+        const recentRequests = await prisma.orderEditRequest.findMany({
+          where: { orderId: { in: pageOrderIds } },
+          orderBy: { createdAt: "desc" },
+          select: { orderId: true, status: true, requestedByUserId: true },
+          take: editTake,
+        });
         return { pendingRows, recentRequests };
       },
     );

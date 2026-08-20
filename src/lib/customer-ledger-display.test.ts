@@ -64,6 +64,22 @@ describe("sortLedgerRowsForDisplay", () => {
     ]);
   });
 
+  it("sorts by date asc then document asc", () => {
+    const rows: CustomerLedgerRow[] = [
+      row({ id: "a", dateYmd: "2026-06-10", document: "TR-126-0004" }),
+      row({ id: "b", dateYmd: "2026-06-16", document: "TR-127-0001" }),
+      row({ id: "c", dateYmd: "2026-06-14", document: "TR-P-00012", kind: "PAYMENT", typeLabel: "תשלום" }),
+      row({ id: "d", dateYmd: "2026-06-13", document: "TR-P-00010", kind: "PAYMENT", typeLabel: "תשלום" }),
+    ];
+    const sorted = sortLedgerRowsForDisplay(rows, "old_new").map((r) => `${r.dateYmd}:${r.document}`);
+    assert.deepEqual(sorted, [
+      "2026-06-10:TR-126-0004",
+      "2026-06-13:TR-P-00010",
+      "2026-06-14:TR-P-00012",
+      "2026-06-16:TR-127-0001",
+    ]);
+  });
+
   it("same day — newer document number first", () => {
     const rows: CustomerLedgerRow[] = [
       row({ id: "a", dateYmd: "2026-06-14", document: "TR-P-00010", kind: "PAYMENT", typeLabel: "תשלום" }),
@@ -71,6 +87,15 @@ describe("sortLedgerRowsForDisplay", () => {
     ];
     const sorted = sortLedgerRowsForDisplay(rows).map((r) => r.document);
     assert.deepEqual(sorted, ["TR-P-00012", "TR-P-00010"]);
+  });
+
+  it("same day asc — older document number first", () => {
+    const rows: CustomerLedgerRow[] = [
+      row({ id: "a", dateYmd: "2026-06-14", document: "TR-P-00010", kind: "PAYMENT", typeLabel: "תשלום" }),
+      row({ id: "b", dateYmd: "2026-06-14", document: "TR-P-00012", kind: "PAYMENT", typeLabel: "תשלום" }),
+    ];
+    const sorted = sortLedgerRowsForDisplay(rows, "old_new").map((r) => r.document);
+    assert.deepEqual(sorted, ["TR-P-00010", "TR-P-00012"]);
   });
 });
 
@@ -83,5 +108,15 @@ describe("prepareLedgerRowsForDisplay", () => {
     ];
     const out = prepareLedgerRowsForDisplay(rows, "orders").map((r) => r.id);
     assert.deepEqual(out, ["o-new", "o-old"]);
+  });
+
+  it("supports payments filter with old_new sort", () => {
+    const rows: CustomerLedgerRow[] = [
+      row({ id: "o1", dateYmd: "2026-06-01", document: "TR-120-0001" }),
+      row({ id: "p-new", dateYmd: "2026-06-16", document: "TR-P-00012", kind: "PAYMENT", typeLabel: "תשלום" }),
+      row({ id: "p-old", dateYmd: "2026-06-04", document: "TR-P-00002", kind: "PAYMENT", typeLabel: "תשלום" }),
+    ];
+    const out = prepareLedgerRowsForDisplay(rows, "payments", "old_new").map((r) => r.id);
+    assert.deepEqual(out, ["p-old", "p-new"]);
   });
 });

@@ -26,6 +26,7 @@ let countriesCache: { list: OrderCountryCode[]; expires: number } | null = null;
 
 let paymentMethodIdsCache: { set: Set<string>; expires: number } | null = null;
 let paymentMethodWarmInFlight: Promise<Set<string>> | null = null;
+let hotPathWarmInFlight: Promise<void> | null = null;
 
 /** validation סינכרוני — cache חם או seed; ללא await */
 export function getActivePaymentMethodIdsSync(): Set<string> {
@@ -160,16 +161,25 @@ export function invalidateCaptureHotPathCache(): void {
 
 /** רענון cache ברקע — לא חוסם validation */
 export function warmCaptureHotPathCaches(): void {
-  if (!statusWarmInFlight) {
-    statusWarmInFlight = getActiveOrderStatusIdsCached().finally(() => {
-      statusWarmInFlight = null;
-    });
-  }
-  if (!paymentMethodWarmInFlight) {
-    paymentMethodWarmInFlight = getActivePaymentMethodIdsCached().finally(() => {
-      paymentMethodWarmInFlight = null;
-    });
-  }
-  void getCaptureFinancialSettingsCached();
-  void getSelectedCountriesForCaptureCached();
+  if (hotPathWarmInFlight) return;
+  hotPathWarmInFlight = (async () => {
+    if (!statusWarmInFlight) {
+      statusWarmInFlight = getActiveOrderStatusIdsCached().finally(() => {
+        statusWarmInFlight = null;
+      });
+    }
+    await statusWarmInFlight;
+
+    if (!paymentMethodWarmInFlight) {
+      paymentMethodWarmInFlight = getActivePaymentMethodIdsCached().finally(() => {
+        paymentMethodWarmInFlight = null;
+      });
+    }
+    await paymentMethodWarmInFlight;
+
+    await getCaptureFinancialSettingsCached();
+    await getSelectedCountriesForCaptureCached();
+  })().finally(() => {
+    hotPathWarmInFlight = null;
+  });
 }

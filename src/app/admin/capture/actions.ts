@@ -104,6 +104,10 @@ import {
   type OrderBreakdownLineInput,
 } from "@/lib/payment-breakdown-shared";
 import { parseSplitPaymentMethodRaw } from "@/lib/order-capture-payment-methods";
+import {
+  hasActualPaymentLinesInOrderCapture,
+  orderCaptureActualPaymentError,
+} from "@/lib/order-capture-actual-payment-guard";
 import { getSelectedCountriesForOrdersInternal } from "@/app/admin/settings/actions";
 import { ORDER_COUNTRY_CODES, coerceOrderCountryForForm, normalizeOrderSourceCountry, type OrderCountryCode } from "@/lib/order-countries";
 import {
@@ -300,64 +304,6 @@ export type OrderCapturePaymentLineInput = {
   currency?: string;
 };
 
-function parseOrderPaymentLines(
-  lines: OrderCapturePaymentLineInput[] | undefined,
-  finalNisPerUsd: Prisma.Decimal,
-):
-  | {
-      ok: true;
-      parsed: {
-        method: string;
-        amountUsd: Prisma.Decimal;
-        sourceCurrency: "USD" | "ILS";
-        sourceAmount: Prisma.Decimal;
-      }[];
-      sum: Prisma.Decimal;
-    }
-  | { ok: false; error: string } {
-  if (!lines?.length) return { ok: true, parsed: [], sum: new Prisma.Decimal(0) };
-  const parsed: {
-    method: string;
-    amountUsd: Prisma.Decimal;
-    sourceCurrency: "USD" | "ILS";
-    sourceAmount: Prisma.Decimal;
-  }[] = [];
-  let sum = new Prisma.Decimal(0);
-  for (const line of lines) {
-    const raw = (line.amountUsd || "").trim().replace(",", ".");
-    if (!raw) continue;
-    let amtInput: Prisma.Decimal;
-    try {
-      amtInput = new Prisma.Decimal(raw);
-    } catch {
-      return { ok: false, error: "סכום בשורת תשלום לא תקין" };
-    }
-    if (amtInput.lte(0)) continue;
-    const method = parseSplitPaymentMethodRaw(line.paymentMethod);
-    if (!method || !PAYMENT_METHODS.has(method)) {
-      return {
-        ok: false,
-        error: "אמצעי בשורת תשלום לא תקין",
-      };
-    }
-    const cur = (line.currency || "USD").trim().toUpperCase();
-    let amtUsd: Prisma.Decimal;
-    let sourceCurrency: "USD" | "ILS" = "USD";
-    if (cur === "ILS" || cur === "NIS" || cur === "₪") {
-      if (finalNisPerUsd.lte(0)) {
-        return { ok: false, error: "שער דולר לא תקין לחישוב תשלומים בשקלים" };
-      }
-      sourceCurrency = "ILS";
-      amtUsd = amtInput.div(finalNisPerUsd).toDecimalPlaces(4, 4);
-    } else {
-      amtUsd = amtInput;
-    }
-    sum = sum.add(amtUsd);
-    parsed.push({ method, amountUsd: amtUsd, sourceCurrency, sourceAmount: amtInput });
-  }
-  return { ok: true, parsed, sum };
-}
-
 type CaptureDbClient = typeof prisma | Prisma.TransactionClient;
 
 type CaptureActorResult = AppUser | { error: string };
@@ -380,65 +326,6 @@ async function resolveCaptureActor(
     throw e;
   }
   return user;
-}
-
-async function appendParsedPaymentsForOrder(
-  params: {
-    meId: string;
-    orderId: string;
-    customerId: string;
-    weekCode: string | null;
-    paymentDate: Date;
-    parsed: {
-      method: string;
-      amountUsd: Prisma.Decimal;
-      sourceCurrency: "USD" | "ILS";
-      sourceAmount: Prisma.Decimal;
-    }[];
-    base: Prisma.Decimal;
-    fee: Prisma.Decimal;
-    final: Prisma.Decimal;
-    vatRate: Prisma.Decimal;
-  },
-  db: CaptureDbClient = prisma,
-): Promise<void> {
-  if (params.parsed.length === 0) return;
-  await assertCreatedByUserExists(params.meId, db);
-  const snapIn = {
-    baseDollarRate: params.base,
-    dollarFee: params.fee,
-    finalDollarRate: params.final,
-    vatRate: params.vatRate,
-  };
-  const data = params.parsed.map((row) => {
-    const totals = computeFromUsdAmount(row.amountUsd, snapIn);
-    const isIlsSource = row.sourceCurrency === "ILS";
-    return {
-      orderId: params.orderId,
-      customerId: params.customerId,
-      weekCode: params.weekCode,
-      paymentDate: params.paymentDate,
-      currency: isIlsSource ? ("ILS" as const) : ("USD" as const),
-      amountUsd: row.amountUsd,
-      amountIls: isIlsSource ? row.sourceAmount : totals.totalIlsWithVat,
-      sourceCurrency: row.sourceCurrency,
-      sourceAmount: row.sourceAmount,
-      exchangeRate: params.final,
-      vatRate: params.vatRate,
-      amountWithoutVat: totals.totalIlsWithoutVat,
-      snapshotBaseDollarRate: totals.snapshotBaseDollarRate,
-      snapshotDollarFee: totals.snapshotDollarFee,
-      snapshotFinalDollarRate: totals.snapshotFinalDollarRate,
-      totalIlsWithVat: isIlsSource ? row.sourceAmount : totals.totalIlsWithVat,
-      totalIlsWithoutVat: totals.totalIlsWithoutVat,
-      vatAmount: totals.vatAmount,
-      manualDateChanged: false,
-      paymentMethod: row.method,
-      isPaid: true,
-      createdById: params.meId,
-    };
-  });
-  await db.payment.createMany({ data });
 }
 
 type ParsedBreakdownRow = { paymentMethod: string; amount: Prisma.Decimal; currency: BreakdownCurrency };
@@ -1592,13 +1479,7 @@ async function captureOrderActionInner(
 
   const countriesFromClient = parseEnabledCountriesFromForm(form.enabledCountries);
 
-  const [
-    customerResolved,
-    allowedCountriesPre,
-    allocated,
-    requestedExists,
-    resolvedLoc,
-  ] = await perf.time("phase1Ms", () =>
+  const [customerResolved, allowedCountriesPre, requestedExists] = await perf.time("phase1Ms", () =>
     capturePerfTimed("capture.phase1", () =>
       Promise.all([
         loadCustomerForCapture(form.customerId, form.customerSnapshot, {
@@ -1609,26 +1490,27 @@ async function captureOrderActionInner(
           ? Promise.resolve(countriesFromClient)
           : loadCaptureSettingsCountries(),
         requestedOrderNumber && requestedOrderNumber !== "—"
-          ? Promise.resolve(null)
-          : capturePerfTimed("capture.generateOrderNumber", () =>
-              generateNextOrderNumber(
-                wcEarly,
-                workCountryFromOrderSourceCountry(form.sourceCountry),
-              ),
-            ),
-        requestedOrderNumber && requestedOrderNumber !== "—"
           ? prisma.order.findUnique({
               where: { orderNumber: requestedOrderNumber },
               select: { id: true, isActive: true },
             }).then((o) => (o?.isActive ? o : null))
           : Promise.resolve(null),
-        resolveOrderIntakeLocationColumnValue({
-          fieldId: (form.paymentPointId?.trim() || form.locationId?.trim() || "") || undefined,
-          draftName: form.intakeLocationDraftName,
-        }),
       ]),
     ),
   );
+  const resolvedLoc = await resolveOrderIntakeLocationColumnValue({
+    fieldId: (form.paymentPointId?.trim() || form.locationId?.trim() || "") || undefined,
+    draftName: form.intakeLocationDraftName,
+  });
+  const allocated =
+    requestedOrderNumber && requestedOrderNumber !== "—"
+      ? null
+      : await capturePerfTimed("capture.generateOrderNumber", () =>
+          generateNextOrderNumber(
+            wcEarly,
+            workCountryFromOrderSourceCountry(form.sourceCountry),
+          ),
+        );
   if (!customerResolved) return { ok: false, error: "לקוח לא נמצא" };
   const customer = customerResolved.customer;
   if (customerResolved.created) {
@@ -1704,19 +1586,11 @@ async function captureOrderActionInner(
   const bdResolved = resolveOrderBreakdownRows(form, totalUsd, finalRate);
   if (!bdResolved.ok) return bdResolved;
   const breakdownRows = bdResolved.rows;
-  const payParse = parseOrderPaymentLines(form.paymentLines, finalRate);
-  if (!payParse.ok) return payParse;
-  if (isDebtWithdrawalOrderStatus(status)) {
-    if (payParse.parsed.length > 0) {
-      return { ok: false, error: "הזמנת משיכה מחוב אינה כוללת שורות תשלום — הסכום מקטין חוב בלבד" };
-    }
-  } else if (payParse.parsed.length > 0) {
-    if (payParse.sum.gt(totalUsd.add(new Prisma.Decimal("0.01")))) {
-      return {
-        ok: false,
-        error: "סכום התשלום חורג מסה״כ ההזמנה בדולר",
-      };
-    }
+  if (hasActualPaymentLinesInOrderCapture(form.paymentLines)) {
+    return {
+      ok: false,
+      error: orderCaptureActualPaymentError(),
+    };
   }
 
   const totals = computeFromUsdAmount(totalUsd, {
@@ -1830,28 +1704,6 @@ async function captureOrderActionInner(
       });
       perf.add("createOrderMs", Date.now() - tOrder);
 
-      if (payParse.parsed.length > 0) {
-        const tItems = Date.now();
-        await capturePerfTimed("capture.insertItems", () =>
-          appendParsedPaymentsForOrder(
-            {
-              meId: me.id,
-              orderId: created.id,
-              customerId: customer.id,
-              weekCode,
-              paymentDate: orderDate,
-              parsed: payParse.parsed,
-              base,
-              fee,
-              final: finalRate,
-              vatRate,
-            },
-            tx,
-          ),
-        );
-        perf.add("createItemsMs", Date.now() - tItems);
-      }
-
       if (breakdownRows.length > 0 && !isDebtWithdrawalOrderStatus(status)) {
         await writeOrderBreakdown(tx, created.id, breakdownRows, {
           userId: me.id,
@@ -1950,10 +1802,7 @@ async function captureOrderActionInner(
       orderNumber: order.orderNumber ?? "",
       customerLabel: customer.displayName,
       totalUsd: totalUsd.toFixed(2),
-      payments: payParse.parsed.map((p) => ({
-        paymentMethod: p.method,
-        amountUsd: p.amountUsd.toFixed(2),
-      })),
+      payments: [],
     },
     orderNumber: order.orderNumber ?? orderNumber,
     nextOrderNumberPreview: nextPreview,
@@ -2823,13 +2672,7 @@ async function updateOrderWorkPanelActionInner(
 
   const countriesFromClient = parseEnabledCountriesFromForm(form.enabledCountries);
 
-  const [
-    existing,
-    paidAgg,
-    customerResolved,
-    allowedCountriesPre,
-    resolvedUp,
-  ] = await perf.time("phase1Ms", () =>
+  const [existing, paidAgg, customerResolved] = await perf.time("phase1Ms", () =>
     capturePerfTimed("capture.phase1", () =>
       Promise.all([
         prisma.order.findFirst({
@@ -2852,16 +2695,16 @@ async function updateOrderWorkPanelActionInner(
           draftNameAr: form.draftNameAr,
           draftNameEn: form.draftNameEn,
         }, me.id),
-        countriesFromClient
-          ? Promise.resolve(countriesFromClient)
-          : loadCaptureSettingsCountries(),
-        resolveOrderIntakeLocationColumnValue({
-          fieldId: (form.paymentPointId?.trim() || form.locationId?.trim() || "") || undefined,
-          draftName: form.intakeLocationDraftName,
-        }),
       ]),
     ),
   );
+  const allowedCountriesPre = countriesFromClient
+    ? countriesFromClient
+    : await loadCaptureSettingsCountries();
+  const resolvedUp = await resolveOrderIntakeLocationColumnValue({
+    fieldId: (form.paymentPointId?.trim() || form.locationId?.trim() || "") || undefined,
+    draftName: form.intakeLocationDraftName,
+  });
   if (!existing) return { ok: false, error: "הזמנה לא נמצאה" };
   if (!customerResolved) return { ok: false, error: "לקוח לא נמצא" };
   const customer = customerResolved.customer;
@@ -2932,17 +2775,11 @@ async function updateOrderWorkPanelActionInner(
   const bdResolved = resolveOrderBreakdownRows(form, totalUsd, final);
   if (!bdResolved.ok) return bdResolved;
   const breakdownRows = bdResolved.rows;
-  const payParse = parseOrderPaymentLines(form.paymentLines, final);
-  if (!payParse.ok) return payParse;
-  if (isDebtWithdrawalOrderStatus(status)) {
-    if (payParse.parsed.length > 0) {
-      return { ok: false, error: "הזמנת משיכה מחוב אינה כוללת שורות תשלום — הסכום מקטין חוב בלבד" };
-    }
-  } else if (payParse.parsed.length > 0) {
-    const combined = existingPaidUsd.add(payParse.sum);
-    if (combined.gt(totalUsd)) {
-      return { ok: false, error: "סכום התשלומים (קיים + חדש) חורג מסה״כ ההזמנה בדולר" };
-    }
+  if (hasActualPaymentLinesInOrderCapture(form.paymentLines)) {
+    return {
+      ok: false,
+      error: orderCaptureActualPaymentError(),
+    };
   }
 
   const totals = computeFromUsdAmount(totalUsd, {
@@ -3057,28 +2894,6 @@ async function updateOrderWorkPanelActionInner(
         select: { id: true },
       });
       perf.add("createOrderMs", Date.now() - tOrder);
-
-      if (payParse.parsed.length > 0) {
-        const tItems = Date.now();
-        await capturePerfTimed("capture.insertItems", () =>
-          appendParsedPaymentsForOrder(
-            {
-              meId: me.id,
-              orderId: existing.id,
-              customerId: customer.id,
-              weekCode,
-              paymentDate: orderDate,
-              parsed: payParse.parsed,
-              base,
-              fee,
-              final,
-              vatRate,
-            },
-            tx,
-          ),
-        );
-        perf.add("createItemsMs", Date.now() - tItems);
-      }
 
       // תשלום מורכב: כתיבה מחדש של החלוקה (composite=rows, אחרת ניקוי)
       await writeOrderBreakdown(tx, existing.id, breakdownRows, {
