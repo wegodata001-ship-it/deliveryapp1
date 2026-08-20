@@ -25,6 +25,8 @@ export function computePaymentIntakePostSaveOutcome(params: {
     remainingDebtUsd,
     surplusUsd: pendingSurplusUsd,
     needsSurplusDisposition: pendingSurplusUsd > eps,
-    needsShortfallResolution: remainingDebtUsd > eps && pendingSurplusUsd <= eps,
+    // Partial payment is a valid business outcome: keep the remaining debt open.
+    // Only real overpayment requires a follow-up disposition flow.
+    needsShortfallResolution: false,
   };
 }

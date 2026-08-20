@@ -23,14 +23,45 @@ describe("Post-save payment intake outcome", () => {
     assert.equal(o.needsShortfallResolution, false);
   });
 
-  it("partial $2.72 remaining — shortfall modal after save", () => {
+  it("partial payment keeps remaining debt open without correction flow", () => {
     const o = computePaymentIntakePostSaveOutcome({
       remainingDebtUsd: 2.72,
       deferredSurplusUsd: 0,
     });
-    assert.equal(o.needsShortfallResolution, true);
+    assert.equal(o.needsShortfallResolution, false);
     assert.equal(o.remainingDebtUsd, 2.72);
     assert.equal(o.needsSurplusDisposition, false);
+  });
+
+  it("debt $1,500 + payment $500 => remaining $1,000 without error", () => {
+    const o = computePaymentIntakePostSaveOutcome({
+      remainingDebtUsd: 1000,
+      deferredSurplusUsd: 0,
+    });
+    assert.equal(o.remainingDebtUsd, 1000);
+    assert.equal(o.needsShortfallResolution, false);
+    assert.equal(o.needsSurplusDisposition, false);
+  });
+
+  it("debt $1,500 + payment $1,400 => remaining $100 without error", () => {
+    const o = computePaymentIntakePostSaveOutcome({
+      remainingDebtUsd: 100,
+      deferredSurplusUsd: 0,
+    });
+    assert.equal(o.remainingDebtUsd, 100);
+    assert.equal(o.needsShortfallResolution, false);
+    assert.equal(o.needsSurplusDisposition, false);
+  });
+
+  it("debt $1,500 + payment $1,600 => overpayment $100 requires surplus flow", () => {
+    const o = computePaymentIntakePostSaveOutcome({
+      remainingDebtUsd: 0,
+      deferredSurplusUsd: 100,
+    });
+    assert.equal(o.remainingDebtUsd, 0);
+    assert.equal(o.surplusUsd, 100);
+    assert.equal(o.needsShortfallResolution, false);
+    assert.equal(o.needsSurplusDisposition, true);
   });
 
   it("deferSurplusDisposition allows save without disposition", () => {
