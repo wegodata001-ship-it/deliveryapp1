@@ -10,7 +10,6 @@ import type { PaymentIntakeCustomerPaymentRow } from "@/lib/payment-intake-custo
 export type { PaymentIntakeCustomerPaymentRow } from "@/lib/payment-intake-customer-kpi";
 import {
   searchCustomersForOrderAction,
-  resolveCustomerForCaptureAction,
   listPaymentLocationsForPaymentAction,
   type CustomerSearchRow,
   type PaymentLocationOptionRow,
@@ -32,7 +31,7 @@ export async function calculatePaymentCaptureCustomerBalanceUsd(
   return getCustomerInternalBalanceUsd(customerId, openDebtScopeForWorkCountry(workCountryRaw));
 }
 
-/** חיפוש לקוח: עדיפות ל-id / קוד מדויק, אחר כך רשימה */
+/** חיפוש לקוח: רשימת הצעות בלבד, בלי בחירה אוטומטית */
 export async function searchCustomersPaymentIntakeAction(
   raw: string,
   workCountryRaw?: string | null,
@@ -42,10 +41,6 @@ export async function searchCustomersPaymentIntakeAction(
 
   const q = raw.trim();
   if (!q) return [];
-
-  const exact = await resolveCustomerForCaptureAction(q, workCountryRaw);
-  if (exact) return [exact];
-
   return searchCustomersForOrderAction(q, workCountryRaw);
 }
 

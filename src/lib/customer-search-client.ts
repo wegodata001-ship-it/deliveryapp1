@@ -156,6 +156,69 @@ export async function resolveCustomerFastClient(
   );
 }
 
+function scoreCustomerSearchRow(row: CustomerSearchRow, lower: string): number {
+  const code = (row.code ?? "").trim().toLowerCase();
+  const oldCode = (row.oldCustomerCode ?? "").trim().toLowerCase();
+  const label = row.label.trim().toLowerCase();
+  const nameAr = (row.nameAr ?? "").trim().toLowerCase();
+  const nameEn = (row.nameEn ?? "").trim().toLowerCase();
+  const phone = (row.phone ?? row.phone2 ?? "").trim().toLowerCase();
+  if (code === lower) return 0;
+  if (oldCode === lower) return 1;
+  if (code.startsWith(lower)) return 2;
+  if (oldCode.startsWith(lower)) return 3;
+  if (label === lower || nameAr === lower || nameEn === lower) return 4;
+  if (phone === lower) return 5;
+  if (code.includes(lower)) return 6;
+  if (oldCode.includes(lower)) return 7;
+  if (label.includes(lower) || nameAr.includes(lower) || nameEn.includes(lower)) return 8;
+  if (phone.includes(lower)) return 9;
+  return 10;
+}
+
+export function prioritizeCustomerSearchRows(
+  rows: CustomerSearchRow[],
+  query: string,
+  limit = 10,
+): CustomerSearchRow[] {
+  const lower = query.trim().toLowerCase();
+  if (!lower) return [];
+  const seen = new Set<string>();
+  const unique = rows.filter((row) => {
+    if (!row.id || seen.has(row.id)) return false;
+    seen.add(row.id);
+    return true;
+  });
+  return unique
+    .map((row, index) => ({ row, index, score: scoreCustomerSearchRow(row, lower) }))
+    .sort((a, b) => (a.score - b.score) || (a.index - b.index))
+    .slice(0, limit)
+    .map((entry) => entry.row);
+}
+
+export async function searchCustomerSuggestionsClient(
+  query: string,
+  opts?: {
+    field?: "code" | "text";
+    signal?: AbortSignal;
+    workCountry?: string | null;
+    limit?: number;
+  },
+): Promise<CustomerSearchRow[]> {
+  const q = query.trim();
+  if (!customerSearchMinQueryLength(q, opts?.field === "code")) return [];
+  const limit = opts?.limit ?? 10;
+  if (opts?.field === "code") {
+    const [exact, partial] = await Promise.all([
+      searchCustomerCodeExactClient(q, { signal: opts?.signal, workCountry: opts?.workCountry }),
+      searchCustomersFastClient(q, { signal: opts?.signal, workCountry: opts?.workCountry }),
+    ]);
+    return prioritizeCustomerSearchRows([...exact, ...partial], q, limit);
+  }
+  const rows = await searchCustomersFastClient(q, { signal: opts?.signal, workCountry: opts?.workCountry });
+  return prioritizeCustomerSearchRows(rows, q, limit);
+}
+
 /** בחירה אוטומטית כשיש תוצאה יחידה או התאמת קוד מדויקת */
 export function pickAutoCustomerHit(
   rows: CustomerSearchRow[],

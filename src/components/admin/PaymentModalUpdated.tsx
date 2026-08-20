@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import type { PaymentMethod } from "@prisma/client";
 import { logPaymentAllocationPreSave } from "@/lib/payment-allocation-debug";
 import { dispatchOrdersListRefresh } from "@/lib/orders-list-refresh-bus";
@@ -184,10 +192,7 @@ import {
   cancelCustomerSearch,
   CUSTOMER_SEARCH_DEBOUNCE_MS,
   customerSearchMinQueryLength,
-  pickAutoCustomerHit,
-  resolveCustomerFastClient,
-  searchCustomerCodeExactClient,
-  searchCustomersFastClient,
+  searchCustomerSuggestionsClient,
 } from "@/lib/customer-search-client";
 
 const COUNTRY_BADGE_SHORT: Record<OrderCountryCode, string> = {
@@ -516,6 +521,7 @@ export function PaymentModalUpdated({
   const [custSearchField, setCustSearchField] = useState<CustFieldKey | null>(null);
   const [searchTick, setSearchTick] = useState(0);
   const [customerHits, setCustomerHits] = useState<CustomerSearchRow[]>([]);
+  const [custActiveIndex, setCustActiveIndex] = useState(-1);
   const [customer, setCustomer] = useState<PaymentIntakeCustomerPayload | null>(null);
   const [customerPayments, setCustomerPayments] = useState<PaymentIntakeCustomerPaymentRow[]>([]);
   const [orders, setOrders] = useState<PaymentIntakeOrderRow[]>([]);
@@ -1879,22 +1885,47 @@ export function PaymentModalUpdated({
   const pickCustHit = useCallback(
     (row: CustomerSearchRow) => {
       custSearchGenRef.current += 1;
+      setCustActiveIndex(-1);
       selectCustomerQuick(row, { focusAmount: true });
     },
     [selectCustomerQuick],
   );
 
+  const clearCustomerSelectionFromDraftEdit = useCallback((field: CustFieldKey, value: string) => {
+    setCustomer(null);
+    setCustomerPayments([]);
+    setOrders([]);
+    setIncludedIds(null);
+    setCustomerOpenDebtSignedUsd(0);
+    setOrderEditId(null);
+    setLoadErr(null);
+    setCustSearchNoHits(false);
+    setCustomerHits([]);
+    setCustActiveIndex(-1);
+    setDraftCustomer({
+      ...EMPTY_CUSTOMER_DRAFT,
+      [field]: value,
+    });
+  }, []);
+
   const onDraftCustomerChange = useCallback((field: CustFieldKey, value: string) => {
     lastEditedFieldRef.current = field;
-    setDraftCustomer((prev) => ({ ...prev, [field]: value }));
+    const prevValue = draftCustomerRef.current[field];
+    if (customer && value !== prevValue) {
+      clearCustomerSelectionFromDraftEdit(field, value);
+    } else {
+      setDraftCustomer((prev) => ({ ...prev, [field]: value }));
+    }
     setSearchTick((n) => n + 1);
     setCustDdOpen(field !== "phone");
-  }, []);
+    setCustActiveIndex(-1);
+  }, [clearCustomerSelectionFromDraftEdit, customer]);
 
   const triggerFieldSearch = useCallback((field: CustFieldKey) => {
     lastEditedFieldRef.current = field;
     setSearchTick((n) => n + 1);
     setCustDdOpen(true);
+    setCustActiveIndex(-1);
   }, []);
 
   /** פוקוס לקוד לקוח בפתיחה — פעם אחת; לא חוזר אחרי טעינת קוד תשלום ברקע */
@@ -1903,53 +1934,40 @@ export function PaymentModalUpdated({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional mount-only
   }, []);
 
-  async function resolveCustomerFromFieldEnter(field: CustFieldKey = "code") {
-    const q = draftCustomerRef.current[field].trim();
-    if (!q) return;
-    if (!customerSearchMinQueryLength(q, true)) {
-      if (field === "code") onToast("הזן לפחות 2 תווים לחיפוש");
+  const handleCustomerFieldKeyDown = useCallback((field: CustFieldKey, e: ReactKeyboardEvent<HTMLInputElement>) => {
+    const hitsCount = customerHits.length;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      setCustDdOpen(false);
+      setCustActiveIndex(-1);
       return;
     }
-    custSearchGenRef.current += 1;
-    cancelCustomerSearch();
-    lastEditedFieldRef.current = field;
-    setCustomerCodeEnterBusy(true);
-    setCustSearchNoHits(false);
-    setLoadErr(null);
-    const searchStartedAt = performance.now();
-    try {
-      const row = await resolveCustomerFastClient(q, { workCountry: intakeDocumentWorkCountry });
-      if (row) {
-        selectCustomerQuick(row, { focusAmount: true, searchStartedAt });
-        return;
-      }
-      if (field === "code" && /^\d+$/.test(q)) {
-        setCustomerHits([]);
-        setCustDdOpen(false);
-        setCustSearchNoHits(true);
-        return;
-      }
-      const rows = await searchCustomersFastClient(q, { workCountry: intakeDocumentWorkCountry });
-      const auto = pickAutoCustomerHit(rows, q);
-      if (auto) {
-        selectCustomerQuick(auto, { focusAmount: true, searchStartedAt });
-        return;
-      }
-      if (rows.length === 0) {
-        setCustomerHits([]);
-        setCustDdOpen(false);
-        setCustSearchNoHits(true);
-        return;
-      }
-      setCustomerHits(rows);
-      setCustDdOpen(true);
-    } catch (e) {
-      if (e instanceof DOMException && e.name === "AbortError") return;
-      setLoadErr("בעיה בחיבור לשרת");
-    } finally {
-      setCustomerCodeEnterBusy(false);
+    if (e.key === "ArrowDown") {
+      if (hitsCount === 0) return;
+      e.preventDefault();
+      setCustDdOpen(field !== "phone");
+      setCustActiveIndex((prev) => Math.min(prev + 1, hitsCount - 1));
+      return;
     }
-  }
+    if (e.key === "ArrowUp") {
+      if (hitsCount === 0) return;
+      e.preventDefault();
+      setCustDdOpen(field !== "phone");
+      setCustActiveIndex((prev) => (prev <= 0 ? -1 : prev - 1));
+      return;
+    }
+    if (e.key === "Enter") {
+      if (custDdOpen && custActiveIndex >= 0 && customerHits[custActiveIndex]) {
+        e.preventDefault();
+        pickCustHit(customerHits[custActiveIndex]!);
+        return;
+      }
+      e.preventDefault();
+      if (field === "code" && draftCustomerRef.current.code.trim() && !customerIdRef.current) {
+        onToast("יש לבחור לקוח מהרשימה");
+      }
+    }
+  }, [custActiveIndex, custDdOpen, customerHits, onToast, pickCustHit]);
 
   function syncBaselineSoon() {
     window.setTimeout(() => {
@@ -2185,51 +2203,45 @@ export function PaymentModalUpdated({
             setCustDdOpen(false);
             setCustSearchNoHits(false);
             setCustSearching(false);
+            setCustActiveIndex(-1);
             if (allEmpty) {
               setCustomer(null);
+              setCustomerPayments([]);
               setOrders([]);
+              setIncludedIds(null);
+              setCustomerOpenDebtSignedUsd(0);
               setLoadErr(null);
             }
           }
           return;
         }
-        if (!customerSearchMinQueryLength(q)) {
+        if (!customerSearchMinQueryLength(q, field === "code")) {
           setCustomerHits([]);
           setCustDdOpen(false);
           setCustSearchNoHits(false);
           setCustSearching(false);
+          setCustActiveIndex(-1);
           return;
         }
 
-        const searchStartedAt = performance.now();
         setCustSearching(true);
         setCustSearchField(field);
         setCustSearchNoHits(false);
         try {
           const searchWc = intakeDocumentWorkCountry;
-          const rows =
-            field === "code" && /^\d+$/.test(q)
-              ? await searchCustomerCodeExactClient(q, {
-                  signal: abort.signal,
-                  workCountry: searchWc,
-                })
-              : await searchCustomersFastClient(q, {
-                  signal: abort.signal,
-                  workCountry: searchWc,
-                });
+          const rows = await searchCustomerSuggestionsClient(q, {
+            field: field === "code" ? "code" : "text",
+            signal: abort.signal,
+            workCountry: searchWc,
+          });
           if (cancelled || gen !== custSearchGenRef.current) return;
 
           const still = draftCustomerRef.current[lastEditedFieldRef.current].trim() === q;
           if (!still) return;
 
-          const auto = pickAutoCustomerHit(rows, q);
-          if (auto) {
-            selectCustomerQuick(auto, { focusAmount: false, searchStartedAt });
-            return;
-          }
-
           setCustSearchNoHits(rows.length === 0);
           setCustomerHits(rows);
+          setCustActiveIndex(-1);
           setCustDdOpen(rows.length > 0 && field !== "phone");
         } catch (e) {
           if (e instanceof DOMException && e.name === "AbortError") return;
@@ -2252,7 +2264,7 @@ export function PaymentModalUpdated({
       abort.abort();
       window.clearTimeout(t);
     };
-  }, [searchTick, selectCustomerQuick]);
+  }, [searchTick, intakeDocumentWorkCountry]);
 
   useEffect(() => () => cancelCustomerSearch(), []);
 
@@ -2364,7 +2376,7 @@ export function PaymentModalUpdated({
     setSaveErr(null);
     setHighlightInvalidCheckFields(false);
     if (!customer) {
-      setSaveErr("יש לבחור לקוח");
+      setSaveErr("יש לבחור לקוח מהרשימה");
       return { ok: false };
     }
     if (totals.totalUsd <= 0) {
@@ -3064,7 +3076,7 @@ export function PaymentModalUpdated({
     }
   }
 
-  function badgeKeyFinish(e: KeyboardEvent<HTMLInputElement | HTMLSelectElement>) {
+  function badgeKeyFinish(e: ReactKeyboardEvent<HTMLInputElement | HTMLSelectElement>) {
     if (e.key === "Enter") {
       e.preventDefault();
       e.currentTarget.blur();
@@ -3176,12 +3188,7 @@ export function PaymentModalUpdated({
                         dir="ltr"
                         value={draftCustomer.code}
                         onChange={(e) => onDraftCustomerChange("code", e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            void resolveCustomerFromFieldEnter("code");
-                          }
-                        }}
+                        onKeyDown={(e) => handleCustomerFieldKeyDown("code", e)}
                       />
                       {customerCodeEnterBusy || (custSearching && custSearchField === "code") ? (
                         <span className="payment-modal-cust-code-busy-spin" aria-hidden>
@@ -3208,12 +3215,7 @@ export function PaymentModalUpdated({
                       className="payment-modal-cust-inp payment-modal-cust-inp--name"
                       value={draftCustomer.displayName}
                       onChange={(e) => onDraftCustomerChange("displayName", e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          void resolveCustomerFromFieldEnter("displayName");
-                        }
-                      }}
+                      onKeyDown={(e) => handleCustomerFieldKeyDown("displayName", e)}
                     />
                   </label>
                   <label className="payment-modal-cust-inp-wrap">
@@ -3226,12 +3228,7 @@ export function PaymentModalUpdated({
                       placeholder="Enter English name"
                       value={draftCustomer.nameEn}
                       onChange={(e) => onDraftCustomerChange("nameEn", e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          void resolveCustomerFromFieldEnter("nameEn");
-                        }
-                      }}
+                      onKeyDown={(e) => handleCustomerFieldKeyDown("nameEn", e)}
                     />
                   </label>
                   <label className="payment-modal-cust-inp-wrap">
@@ -3254,12 +3251,7 @@ export function PaymentModalUpdated({
                       placeholder="הזן שם בערבית"
                       value={draftCustomer.nameAr}
                       onChange={(e) => onDraftCustomerChange("nameAr", e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          void resolveCustomerFromFieldEnter("nameAr");
-                        }
-                      }}
+                      onKeyDown={(e) => handleCustomerFieldKeyDown("nameAr", e)}
                     />
                   </label>
                 <label className="payment-modal-cust-inp-wrap">
@@ -3272,12 +3264,7 @@ export function PaymentModalUpdated({
                     placeholder="הוסף טלפון אם חסר"
                     value={draftCustomer.phone}
                     onChange={(e) => onDraftCustomerChange("phone", e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        void resolveCustomerFromFieldEnter("phone");
-                      }
-                    }}
+                    onKeyDown={(e) => handleCustomerFieldKeyDown("phone", e)}
                   />
                 </label>
                   <label className="payment-modal-cust-inp-wrap">
@@ -3299,12 +3286,7 @@ export function PaymentModalUpdated({
                       dir="ltr"
                       value={draftCustomer.index}
                       onChange={(e) => onDraftCustomerChange("index", e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          void resolveCustomerFromFieldEnter("index");
-                        }
-                      }}
+                      onKeyDown={(e) => handleCustomerFieldKeyDown("index", e)}
                     />
                   </label>
                   <button
@@ -3320,9 +3302,15 @@ export function PaymentModalUpdated({
                 </div>
                 {custDdOpen && customerHits.length > 0 ? (
                   <ul className="payment-modal-dd payment-modal-dd--custstrip" role="listbox">
-                    {customerHits.map((row) => (
+                    {customerHits.map((row, idx) => (
                       <li key={row.id}>
-                        <button type="button" className="payment-modal-dd-item" onMouseDown={() => void pickCustHit(row)}>
+                        <button
+                          type="button"
+                          className={`payment-modal-dd-item${idx === custActiveIndex ? " is-active" : ""}`}
+                          aria-selected={idx === custActiveIndex}
+                          onMouseEnter={() => setCustActiveIndex(idx)}
+                          onMouseDown={() => void pickCustHit(row)}
+                        >
                           <span>{row.label}</span>
                           <span className="payment-modal-dd-meta" dir="ltr">
                             {row.code ?? row.id.slice(0, 8)}
@@ -3335,7 +3323,7 @@ export function PaymentModalUpdated({
                 ) : null}
                 {custSearchNoHits && !loadingCustomer && !custSearching ? (
                   <p className="payment-modal-cust-notfound" role="status">
-                    לקוח לא נמצא
+                    לא נמצאו לקוחות מתאימים
                   </p>
                 ) : null}
                 {customer ? (

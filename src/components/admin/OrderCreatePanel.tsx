@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { PM } from "@/lib/payment-method-slugs";
 import { isDebtWithdrawalOrderStatus } from "@/lib/debt-withdrawal-order";
 import { OS } from "@/lib/order-status-slugs";
@@ -161,20 +161,17 @@ async function loadCustomerExtrasFast(
 }
 
 import {
-  findCustomerCaptureIndexExact,
   prependCustomerToCaptureIndex,
   preloadCustomerCaptureIndex,
   searchCustomerCaptureIndexLocal,
 } from "@/lib/customer-capture-index";
 import { prefetchNextCustomerCode } from "@/lib/customer-code-prefetch.client";
-import { invalidateCustomerSearchClientCache } from "@/lib/customer-search-client";
 import {
+  invalidateCustomerSearchClientCache,
   CUSTOMER_CODE_SEARCH_DEBOUNCE_MS,
   CUSTOMER_NAME_SEARCH_DEBOUNCE_MS,
-  pickAutoCustomerHit,
-  resolveCustomerFastClient,
-  searchCustomerCodeExactClient,
-  searchCustomersFastClient,
+  prioritizeCustomerSearchRows,
+  searchCustomerSuggestionsClient,
 } from "@/lib/customer-search-client";
 import { CUSTOMER_SEARCH_UUID_RE } from "@/lib/customer-search-shared";
 
@@ -505,6 +502,13 @@ export function OrderCreatePanel({
 
   const [hits, setHits] = useState<CustomerSearchRow[]>([]);
   const [dropdownField, setDropdownField] = useState<ComboField | null>(null);
+  const [activeHitIndex, setActiveHitIndex] = useState(-1);
+  const hitsRef = useRef<CustomerSearchRow[]>([]);
+  hitsRef.current = hits;
+  const dropdownFieldRef = useRef<ComboField | null>(null);
+  dropdownFieldRef.current = dropdownField;
+  const activeHitIndexRef = useRef(-1);
+  activeHitIndexRef.current = activeHitIndex;
   const focusedComboRef = useRef<ComboField>("code");
   const skipSearchRef = useRef(false);
   const searchGenRef = useRef(0);
@@ -915,6 +919,7 @@ export function OrderCreatePanel({
     setPhoneStr(row.phone ?? row.phone2 ?? "");
     setHits([]);
     setDropdownField(null);
+    setActiveHitIndex(-1);
     setIsSearching(false);
     window.setTimeout(() => {
       skipSearchRef.current = false;
@@ -929,6 +934,28 @@ export function OrderCreatePanel({
       }
     }, 0);
   }, [applyExtras]);
+
+  const clearSelectedCustomerFromTyping = useCallback((field: ComboField, value: string) => {
+    setSelectedCustomer(null);
+    setExtras(null);
+    setPhoneStr("");
+    setHits([]);
+    setDropdownField(field);
+    setActiveHitIndex(-1);
+    if (field === "code") {
+      setCodeStr(value);
+      setNameArStr("");
+      setNameEnStr("");
+    } else if (field === "nameAr") {
+      setCodeStr("");
+      setNameArStr(value);
+      setNameEnStr("");
+    } else {
+      setCodeStr("");
+      setNameArStr("");
+      setNameEnStr(value);
+    }
+  }, []);
 
   const applyCreatedCustomer = useCallback(
     (client: ClientCreateResult) => {
@@ -1012,6 +1039,7 @@ export function OrderCreatePanel({
     const debounceMs =
       field === "code" ? CUSTOMER_CODE_SEARCH_DEBOUNCE_MS : CUSTOMER_NAME_SEARCH_DEBOUNCE_MS;
     const gen = ++searchGenRef.current;
+    const abort = new AbortController();
     setIsSearching(true);
 
     const t = window.setTimeout(() => {
@@ -1019,36 +1047,25 @@ export function OrderCreatePanel({
         const useConsoleTimer = typeof console !== "undefined" && typeof console.time === "function";
         if (useConsoleTimer) console.time("customer-search");
         try {
-          let rows: CustomerSearchRow[] = searchCustomerCaptureIndexLocal(trimmed, field);
+          const localRows: CustomerSearchRow[] = searchCustomerCaptureIndexLocal(trimmed, field);
 
           const searchWc = previewWorkCountry;
-          if (field === "code" && (isNumericCode || isUuid)) {
-            if (rows.length === 0) {
-              rows = await searchCustomerCodeExactClient(trimmed, { workCountry: searchWc });
-            }
-          } else if (rows.length === 0) {
-            if (field === "code") {
-              const exact = await searchCustomerCodeExactClient(trimmed, { workCountry: searchWc });
-              rows =
-                exact.length > 0
-                  ? exact
-                  : await searchCustomersFastClient(trimmed, { workCountry: searchWc });
-            } else {
-              rows = await searchCustomersFastClient(trimmed, { workCountry: searchWc });
-            }
-          }
+          const remoteRows = await searchCustomerSuggestionsClient(trimmed, {
+            field: field === "code" ? "code" : "text",
+            signal: abort.signal,
+            workCountry: searchWc,
+            limit: 10,
+          });
+          const rows = prioritizeCustomerSearchRows([...localRows, ...remoteRows], trimmed, 10);
 
           if (searchGenRef.current !== gen) return;
 
-          const auto = pickAutoCustomerHit(rows, trimmed);
-          if (auto && field === "code" && (isNumericCode || isUuid || rows.length === 1)) {
-            pickCustomer(auto);
-            return;
-          }
-
           setHits(rows);
+          setActiveHitIndex(-1);
           setDropdownField(field);
-        } catch {
+          setCustomerCodeMissing(field === "code" && rows.length === 0);
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "AbortError") return;
           if (searchGenRef.current !== gen) return;
           setErr("טעינת נתונים נכשלה");
           setHits([]);
@@ -1059,47 +1076,19 @@ export function OrderCreatePanel({
       })();
     }, debounceMs);
 
-    return () => window.clearTimeout(t);
+    return () => {
+      abort.abort();
+      window.clearTimeout(t);
+    };
   }, [codeStr, nameArStr, nameEnStr, pickCustomer, previewWorkCountry]);
 
   const openFullList = useCallback(async (field: ComboField) => {
     focusedComboRef.current = field;
     const rows = await listCustomersForOrderQuickPickAction(previewWorkCountry);
-    setHits(rows);
+    setHits(rows.slice(0, 10));
     setDropdownField(field);
+    setActiveHitIndex(-1);
   }, [previewWorkCountry]);
-
-  const resolveExactCode = useCallback(
-    async (opts?: { openCreateIfMissing?: boolean }) => {
-      setErr(null);
-      const raw = codeStr.trim();
-      if (!raw) {
-        setCustomerCodeMissing(false);
-        setErr("הזינו קוד לקוח");
-        return;
-      }
-      setIsSearching(true);
-      try {
-        const local = findCustomerCaptureIndexExact(raw);
-        if (local) {
-          pickCustomer(local);
-          return;
-        }
-        const row = await resolveCustomerFastClient(raw);
-        if (row) {
-          pickCustomer(row);
-          return;
-        }
-        setCustomerCodeMissing(true);
-        if (opts?.openCreateIfMissing && canCreateOrders) {
-          openNewCustomerModal(raw);
-        }
-      } finally {
-        setIsSearching(false);
-      }
-    },
-    [codeStr, pickCustomer, canCreateOrders, openNewCustomerModal],
-  );
 
   const resetFormForNew = useCallback(() => {
     skipSearchRef.current = true;
@@ -1274,16 +1263,9 @@ export function OrderCreatePanel({
         return;
       }
 
-      let cust = s.selectedCustomer;
-      if (!cust && s.codeStr.trim()) {
-        const row = await resolveCustomerFastClient(s.codeStr.trim());
-        if (row) {
-          pickCustomer(row);
-          cust = row;
-        }
-      }
+      const cust = s.selectedCustomer;
       if (!cust) {
-        setErr("יש לבחור לקוח באחד משדות החיפוש");
+        setErr("יש לבחור לקוח מהרשימה");
         return;
       }
 
@@ -1537,13 +1519,59 @@ export function OrderCreatePanel({
   }, [selectedCustomer, extras, nameEnStr, nameArStr, phoneStr]);
 
   function blurCloseDropdown() {
-    window.setTimeout(() => setDropdownField(null), 180);
+    window.setTimeout(() => {
+      setDropdownField(null);
+      setActiveHitIndex(-1);
+    }, 180);
   }
 
   const closeCustomerDropdown = useCallback(() => {
     setDropdownField(null);
     setHits([]);
+    setActiveHitIndex(-1);
   }, []);
+
+  const handleCustomerSearchKeyDown = useCallback((field: ComboField, e: ReactKeyboardEvent<HTMLInputElement>) => {
+    const hitsCount = hitsRef.current.length;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeCustomerDropdown();
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      if (hitsCount === 0) return;
+      e.preventDefault();
+      setDropdownField(field);
+      const nextIndex = Math.min(activeHitIndexRef.current + 1, hitsCount - 1);
+      activeHitIndexRef.current = nextIndex;
+      setActiveHitIndex(nextIndex);
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      if (hitsCount === 0) return;
+      e.preventDefault();
+      setDropdownField(field);
+      const nextIndex = activeHitIndexRef.current <= 0 ? -1 : activeHitIndexRef.current - 1;
+      activeHitIndexRef.current = nextIndex;
+      setActiveHitIndex(nextIndex);
+      return;
+    }
+    if (e.key === "Enter") {
+      if (
+        dropdownFieldRef.current === field &&
+        activeHitIndexRef.current >= 0 &&
+        hitsRef.current[activeHitIndexRef.current]
+      ) {
+        e.preventDefault();
+        pickCustomer(hitsRef.current[activeHitIndexRef.current]!);
+        return;
+      }
+      e.preventDefault();
+      if (field === "code" && codeStr.trim() && !selectedCustomer) {
+        setErr("יש לבחור לקוח מהרשימה");
+      }
+    }
+  }, [closeCustomerDropdown, codeStr, pickCustomer, selectedCustomer]);
 
   const handlePaymentMethodChange = useCallback(
     (method: string) => {
@@ -1932,13 +1960,12 @@ export function OrderCreatePanel({
                   placeholder="קוד / שם / טלפון"
                   onChange={(e) => {
                     const v = e.target.value;
-                    setCodeStr(v);
                     setCustomerCodeMissing(false);
                     const curCode = selectedCustomer?.code?.trim() || "";
                     if (selectedCustomer && v.trim() !== curCode && v.trim() !== selectedCustomer.id) {
-                      setSelectedCustomer(null);
-                      setExtras(null);
-                      setPhoneStr("");
+                      clearSelectedCustomerFromTyping("code", v);
+                    } else {
+                      setCodeStr(v);
                     }
                   }}
                   onFocus={() => {
@@ -1946,15 +1973,8 @@ export function OrderCreatePanel({
                   }}
                   onBlur={() => {
                     blurCloseDropdown();
-                    if (dropdownField === "code" && hits.length > 0) return;
-                    void resolveExactCode();
                   }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      void resolveExactCode({ openCreateIfMissing: true });
-                    }
-                  }}
+                  onKeyDown={(e) => handleCustomerSearchKeyDown("code", e)}
                 />
                 {isSearching ? <span className="adm-oc-inline-spinner" aria-hidden /> : null}
                 <button
@@ -1969,11 +1989,13 @@ export function OrderCreatePanel({
                 </button>
                 {dropdownField === "code" && hits.length > 0 ? (
                   <ul className="adm-oc-legacy-dd adm-oc-legacy-dd--main" role="listbox">
-                    {hits.map((row) => (
+                    {hits.map((row, idx) => (
                       <li key={row.id}>
                         <button
                           type="button"
-                          className="adm-oc-legacy-dd-item"
+                          className={`adm-oc-legacy-dd-item${idx === activeHitIndex ? " is-active" : ""}`}
+                          aria-selected={idx === activeHitIndex}
+                          onMouseEnter={() => setActiveHitIndex(idx)}
                           onMouseDown={(e) => {
                             e.preventDefault();
                             pickCustomer(row);
@@ -2003,7 +2025,7 @@ export function OrderCreatePanel({
             </div>
             {!isEdit && customerCodeMissing && codeStr.trim() && !selectedCustomer && canCreateOrders ? (
               <div className="adm-oc-missing-customer" role="status" aria-live="polite">
-                <p className="adm-oc-missing-customer__msg">הלקוח לא קיים — להוסיף לקוח חדש?</p>
+                <p className="adm-oc-missing-customer__msg">לא נמצאו לקוחות מתאימים. להוסיף לקוח חדש?</p>
                 <button
                   type="button"
                   className="adm-oc-missing-customer__btn"
@@ -2049,13 +2071,17 @@ export function OrderCreatePanel({
                     placeholder="הזן שם בערבית"
                     value={nameArStr}
                     onChange={(e) => {
-                      setNameArStr(e.target.value);
-                      setSelectedCustomer(null);
+                      if (selectedCustomer && e.target.value !== nameArStr) {
+                        clearSelectedCustomerFromTyping("nameAr", e.target.value);
+                      } else {
+                        setNameArStr(e.target.value);
+                      }
                     }}
                     onFocus={() => {
                       focusedComboRef.current = "nameAr";
                     }}
                     onBlur={blurCloseDropdown}
+                    onKeyDown={(e) => handleCustomerSearchKeyDown("nameAr", e)}
                   />
                   <button
                     type="button"
@@ -2071,11 +2097,13 @@ export function OrderCreatePanel({
                 </div>
                 {dropdownField === "nameAr" && hits.length > 0 ? (
                   <ul className="adm-oc-legacy-dd" role="listbox">
-                    {hits.map((row) => (
+                    {hits.map((row, idx) => (
                       <li key={row.id}>
                         <button
                           type="button"
-                          className="adm-oc-legacy-dd-item"
+                          className={`adm-oc-legacy-dd-item${idx === activeHitIndex ? " is-active" : ""}`}
+                          aria-selected={idx === activeHitIndex}
+                          onMouseEnter={() => setActiveHitIndex(idx)}
                           onMouseDown={(e) => {
                             e.preventDefault();
                             pickCustomer(row);
@@ -2120,13 +2148,17 @@ export function OrderCreatePanel({
                     placeholder="Enter English name"
                     value={nameEnStr}
                     onChange={(e) => {
-                      setNameEnStr(e.target.value);
-                      setSelectedCustomer(null);
+                      if (selectedCustomer && e.target.value !== nameEnStr) {
+                        clearSelectedCustomerFromTyping("nameEn", e.target.value);
+                      } else {
+                        setNameEnStr(e.target.value);
+                      }
                     }}
                     onFocus={() => {
                       focusedComboRef.current = "nameEn";
                     }}
                     onBlur={blurCloseDropdown}
+                    onKeyDown={(e) => handleCustomerSearchKeyDown("nameEn", e)}
                   />
                   <button
                     type="button"
@@ -2142,11 +2174,13 @@ export function OrderCreatePanel({
                 </div>
                 {dropdownField === "nameEn" && hits.length > 0 ? (
                   <ul className="adm-oc-legacy-dd" role="listbox">
-                    {hits.map((row) => (
+                    {hits.map((row, idx) => (
                       <li key={row.id}>
                         <button
                           type="button"
-                          className="adm-oc-legacy-dd-item"
+                          className={`adm-oc-legacy-dd-item${idx === activeHitIndex ? " is-active" : ""}`}
+                          aria-selected={idx === activeHitIndex}
+                          onMouseEnter={() => setActiveHitIndex(idx)}
                           onMouseDown={(e) => {
                             e.preventDefault();
                             pickCustomer(row);
