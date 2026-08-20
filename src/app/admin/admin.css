@@ -10368,6 +10368,18 @@ select.payment-modal-inline-input {
   color: #1d4ed8;
 }
 
+.payment-balance-summary__badge-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+}
+
+.payment-balance-summary__badge-btn:hover {
+  color: #1e40af;
+  text-decoration: underline;
+}
+
 .payment-modal-rate-strip-inp--ro {
   display: inline-flex;
   align-items: center;

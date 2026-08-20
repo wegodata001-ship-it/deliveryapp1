@@ -166,7 +166,7 @@ describe("computePaymentBalanceUsd — תצוגת יתרה בקליטה", () => 
     const d = derivePaymentBalanceDisplay(computePaymentBalanceUsd(100, 110), rate);
     assert.equal(d.state, "surplus");
     assert.equal(d.title, "תשלום יתר");
-    assert.equal(d.statusHint, "מאושר לשמירה");
+    assert.equal(d.statusHint, undefined);
     assert.equal(d.displayUsd, 10);
     assert.equal(d.displayIls, 30);
     assert.equal(formatPaymentBalanceUsdLine(d), "+$10.00");

@@ -1,6 +1,4 @@
 "use client";
-
-import { useEffect, useState } from "react";
 import type { PaymentOveragePreview } from "@/lib/customer-balance";
 import { formatOverpaymentUsdSigned } from "@/lib/payment-overpayment";
 import { formatUsdDisplay } from "@/lib/money-format";
@@ -11,6 +9,7 @@ export type SurplusDisposition = "credit" | "commission";
 type Props = {
   open: boolean;
   preview: PaymentOveragePreview | null;
+  commissionBalanceUsd?: number;
   busy?: boolean;
   /**
    * true = כל החוב נסגר ויש עודף — חלון "עודף לאחר סגירת חוב"
@@ -18,27 +17,24 @@ type Props = {
    */
   afterDebtClosure?: boolean;
   onConfirm: (disposition: SurplusDisposition) => void;
+  onEditOrder?: () => void;
   onCancel: () => void;
 };
 
 export function CustomerPaymentOverageModal({
   open,
   preview,
+  commissionBalanceUsd = 0,
   busy,
   onConfirm,
+  onEditOrder,
   onCancel,
 }: Props) {
-  const [choice, setChoice] = useState<SurplusDisposition | null>(null);
-
-  useEffect(() => {
-    if (open) setChoice(null);
-  }, [open]);
-
   if (!open || !preview) return null;
 
   const closesDebtUsd = preview.closesDebtUsd ?? Math.min(preview.paymentUsd, preview.openDebtUsd);
   const surplusUsd = preview.surplusUsd;
-  const canConfirm = choice !== null && !busy;
+  const commissionAfterUsd = commissionBalanceUsd + surplusUsd;
 
   return (
     <div className="adm-mini-modal-layer" role="presentation" onClick={onCancel}>
@@ -51,7 +47,7 @@ export function CustomerPaymentOverageModal({
         dir="rtl"
       >
         <h2 id="payment-overage-title" className="adm-mini-modal-title">
-          תשלום גבוה מהחוב
+          התקבל תשלום יתר
         </h2>
 
         <dl className="adm-payment-overage-stats">
@@ -68,59 +64,48 @@ export function CustomerPaymentOverageModal({
             <dd dir="ltr">{formatUsdDisplay(closesDebtUsd)}</dd>
           </div>
           <div className="adm-payment-overage-stats--overpayment">
-            <dt>יתרה נוספת</dt>
+            <dt>תשלום יתר</dt>
             <dd dir="ltr">{formatOverpaymentUsdSigned(surplusUsd)}</dd>
           </div>
         </dl>
 
-        <p className="adm-payment-overage-lead">כיצד ברצונך לטפל ביתרה?</p>
+        <p className="adm-payment-overage-lead">
+          התקבלו <strong dir="ltr">{formatOverpaymentUsdSigned(surplusUsd)}</strong> יותר מהחוב הפתוח.
+          <br />
+          מה לעשות עם ההפרש?
+        </p>
 
-        <div className="adm-payment-overage-options" role="radiogroup" aria-label="טיפול בעודף">
-          <label className="adm-payment-overage-option adm-payment-overage-option--card">
-            <input
-              type="radio"
-              name="surplus-disposition"
-              value="credit"
-              checked={choice === "credit"}
-              onChange={() => setChoice("credit")}
-            />
-            <span>
-              <strong>צור יתרת זכות ללקוח</strong>
-              <small>
-                העודף יישמר בכרטיס הלקוח כיתרת זכות, וניתן יהיה לקזז אותו בתשלומים עתידיים.
-              </small>
-            </span>
-          </label>
-          <label className="adm-payment-overage-option adm-payment-overage-option--card">
-            <input
-              type="radio"
-              name="surplus-disposition"
-              value="commission"
-              checked={choice === "commission"}
-              onChange={() => setChoice("commission")}
-            />
-            <span>
-              <strong>העבר לעמלות</strong>
-              <small>
-                העודף יירשם כהכנסה מעמלות ולא יישמר כיתרת זכות ללקוח.
-              </small>
-            </span>
-          </label>
+        <div className="adm-payment-shortfall-ledger" aria-label="תצוגת הוספה לעמלות">
+          <div className="adm-payment-shortfall-ledger-row">
+            <span>תשלום יתר</span>
+            <strong dir="ltr" className="adm-payment-fee-amt--credit">
+              {formatOverpaymentUsdSigned(surplusUsd)}
+            </strong>
+          </div>
+          <div className="adm-payment-shortfall-ledger-row">
+            <span>יתרת עמלות לפני</span>
+            <strong dir="ltr">${formatUsdDisplay(commissionBalanceUsd)}</strong>
+          </div>
+          <div className="adm-payment-shortfall-ledger-divider" aria-hidden />
+          <div className="adm-payment-shortfall-ledger-row adm-payment-shortfall-ledger-row--after">
+            <span>יתרת עמלות אחרי</span>
+            <strong dir="ltr" className="adm-payment-fee-amt--credit">
+              ${formatUsdDisplay(commissionAfterUsd)}
+            </strong>
+          </div>
         </div>
 
         <div className="adm-mini-modal-actions">
+          {onEditOrder ? (
+            <button type="button" className="adm-btn adm-btn--ghost" disabled={busy} onClick={onEditOrder}>
+              עריכת הזמנה
+            </button>
+          ) : null}
           <button type="button" className="adm-btn adm-btn--ghost" disabled={busy} onClick={onCancel}>
-            ביטול / הפחת סכום
+            חזרה לקליטה
           </button>
-          <button
-            type="button"
-            className="adm-btn adm-btn--primary"
-            disabled={!canConfirm}
-            onClick={() => {
-              if (choice) onConfirm(choice);
-            }}
-          >
-            {busy ? "שומר…" : "אישור"}
+          <button type="button" className="adm-btn adm-btn--primary" disabled={busy} onClick={() => onConfirm("commission")}>
+            {busy ? "שומר…" : "אישור והוספה לעמלות"}
           </button>
         </div>
       </div>

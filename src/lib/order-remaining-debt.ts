@@ -200,7 +200,6 @@ export function derivePaymentBalanceDisplay(
   return {
     state: "surplus",
     title: "תשלום יתר",
-    statusHint: "מאושר לשמירה",
     balanceUsdSigned: roundOrderMoney2(-surplus),
     displayUsd: surplus,
     displayIls: exchangeRate > 0 ? roundOrderMoney2(surplus * exchangeRate) : 0,

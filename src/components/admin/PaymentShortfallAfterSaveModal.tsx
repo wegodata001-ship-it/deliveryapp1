@@ -11,6 +11,7 @@ type Props = {
   remainingUsd: number;
   commissionBalanceUsd: number;
   mode?: "preview" | "post_save";
+  saveIntent?: boolean;
   busy?: boolean;
   error?: string | null;
   onResolve: (resolution: PaymentShortfallResolution) => void;
@@ -30,6 +31,7 @@ export function PaymentShortfallAfterSaveModal({
   remainingUsd,
   commissionBalanceUsd,
   mode = "post_save",
+  saveIntent = false,
   busy,
   error,
   onResolve,
@@ -75,7 +77,9 @@ export function PaymentShortfallAfterSaveModal({
           <strong dir="ltr">נשאר לתשלום: {money(remainingUsd)}</strong>
           <br />
           {previewMode
-            ? "אפשר להשאיר את הסכום כחוב פתוח, או לשמור את התשלום ולהשלים את היתרה דרך העמלות."
+            ? saveIntent
+              ? `התשלום נמוך מהחוב הפתוח ב-${money(remainingUsd)}. מה תרצה לעשות?`
+              : "אפשר להשאיר את הסכום כחוב פתוח, או לשמור את התשלום ולהשלים את היתרה דרך העמלות."
             : "התשלום נשמר בהצלחה. אפשר להשאיר את הסכום כחוב פתוח או לסגור אותו דרך העמלות."}
         </p>
 
@@ -117,7 +121,13 @@ export function PaymentShortfallAfterSaveModal({
             disabled={busy}
             onClick={() => onResolve("reset_commission")}
           >
-            {busy ? "מבצע…" : previewMode ? `שמור תשלום ואפס ${money(remainingUsd)}` : `אפס ${money(remainingUsd)} דרך עמלות`}
+            {busy
+              ? "מבצע…"
+              : previewMode
+                ? saveIntent
+                  ? "אישור איפוס ושמירת תשלום"
+                  : `שמור תשלום ואפס ${money(remainingUsd)}`
+                : `אפס ${money(remainingUsd)} דרך עמלות`}
           </button>
           <button
             type="button"
@@ -125,7 +135,7 @@ export function PaymentShortfallAfterSaveModal({
             disabled={busy}
             onClick={() => onResolve("leave_open")}
           >
-            {previewMode ? "חזרה לקליטה" : "השאר כחוב"}
+            {previewMode ? (saveIntent ? "השאר כחוב פתוח" : "חזרה לקליטה") : "השאר כחוב"}
           </button>
         </div>
       </div>
