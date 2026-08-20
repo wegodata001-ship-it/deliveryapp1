@@ -25,6 +25,8 @@ export type CustomerLedgerExportMeta = {
   workEnvironmentLabel?: string | null;
   fromYmd: string;
   toYmd: string;
+  quickFilterLabel?: string | null;
+  sortLabel?: string | null;
 };
 
 export type LedgerExportTableRow = {

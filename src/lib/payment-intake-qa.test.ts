@@ -427,7 +427,7 @@ describe("QA-11 יתרה כוללת בלבד — תשלום שני בצ'ק אח�
     totalIls: "0",
     totalAmountUsd: "2020.00",
     dbPaidUsd: "1215.00",
-    dbRemainingUsd: "505.00",
+    dbRemainingUsd: "805.00",
     status: "partial",
     lastPaymentDateYmd: "2026-07-11",
     sourceCountry: null,
@@ -462,7 +462,7 @@ describe("QA-11 יתרה כוללת בלבד — תשלום שני בצ'ק אח�
     hasMethodDeviation: false,
   };
 
-  it("תשלום שני בצ'ק 505 — אין חריגת אמצעי, אין חסימה", () => {
+  it("תשלום שני בצ'ק 505 — תקין לפי האמצעי, נשאר חוב פתוח", () => {
     const devRows = computeIntakeSaveDeviations({
       orders: [afterFirstPayment],
       includedOrderIds: null,
@@ -475,10 +475,10 @@ describe("QA-11 יתרה כוללת בלבד — תשלום שני בצ'ק אח�
     assert.equal(intakeSaveHasDeviations(devRows), false);
     assert.equal(intakeHasMethodMismatch(devRows), false);
     assert.ok(!devRows.some((r) => r.rowTone === "excess"));
-    assert.equal(intakeHasOpenBalanceShortfall(devRows), false);
+    assert.equal(intakeHasOpenBalanceShortfall(devRows), true);
   });
 
-  it("PMC — צ'ק סוגר את היתרה הכוללת ללא חריגה", () => {
+  it("PMC — צ'ק $505 הוא תשלום חלקי תקין על האמצעי הפתוח", () => {
     const views = buildIntakeOrderViews(
       [afterFirstPayment],
       null,
@@ -486,12 +486,13 @@ describe("QA-11 יתרה כוללת בלבד — תשלום שני בצ'ק אח�
       505,
     );
     const ov = views[0]!;
-    assert.equal(ov.dbRemainingUsd, 505);
+    assert.equal(ov.dbRemainingUsd, 805);
     assert.equal(ov.formAllocationUsd, 505);
-    assert.equal(ov.formRemainingUsd, 0);
-    assert.equal(ov.orderStatus, "cleared");
-    // אין שורת "חריגה" על אמצעי שלא תוכנן לתשלום הנוכחי
-    assert.ok(ov.methodViews.every((m) => m.status !== "open"));
+    assert.equal(ov.formRemainingUsd, 300);
+    assert.equal(ov.orderStatus, "partial");
+    const checkView = ov.methodViews.find((m) => m.bucket === "CHECK");
+    assert.equal(checkView?.status, "partial");
+    assert.equal(checkView?.formRemainingUsd, 300);
   });
 
   it("הודעת אחרי שמירה — יתרה כוללת בלבד (לא פר-אמצעי)", () => {
@@ -514,7 +515,7 @@ describe("QA-11 יתרה כוללת בלבד — תשלום שני בצ'ק אח�
 
   it("הודעת יתרה חלקית — סכום אחד בלבד", () => {
     const msg = buildPostSaveRemainingSummary([afterFirstPayment], null);
-    assert.equal(msg, "התשלום נשמר\nיתרה לתשלום: $505.00");
+    assert.equal(msg, "התשלום נשמר\nיתרה לתשלום: $805.00");
     assert.ok(!msg.includes("מזומן"));
     assert.ok(!msg.includes("העברה"));
   });

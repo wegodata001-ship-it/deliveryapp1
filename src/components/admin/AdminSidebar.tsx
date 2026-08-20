@@ -212,7 +212,11 @@ function NavItemLink({
   pathname: string;
   sp: URLSearchParams;
   openWindow: (p: AdminWindowPayload) => void;
-  navBadges?: { pendingOrderEditRequests?: number; pendingInvoiceCancelRequests?: number };
+  navBadges?: {
+    pendingOrderEditRequests?: number;
+    pendingInvoiceCancelRequests?: number;
+    pendingPaymentMethodAdjustments?: number;
+  };
   onNavigate?: () => void;
   nested?: boolean;
 }) {
@@ -261,6 +265,8 @@ function NavItemLink({
   const editReqBadge =
     item.href === "/admin/edit-requests"
       ? (navBadges?.pendingOrderEditRequests ?? 0) + (navBadges?.pendingInvoiceCancelRequests ?? 0)
+      : item.href === "/admin/payment-method-adjustments" && navBadges?.pendingPaymentMethodAdjustments
+        ? navBadges.pendingPaymentMethodAdjustments
       : item.href === "/admin/order-edit-requests" && navBadges?.pendingOrderEditRequests
         ? navBadges.pendingOrderEditRequests
         : item.href === "/admin/invoice-cancel-requests" && navBadges?.pendingInvoiceCancelRequests
@@ -305,7 +311,11 @@ function NavAccordionGroup({
   pathname: string;
   sp: URLSearchParams;
   openWindow: (p: AdminWindowPayload) => void;
-  navBadges?: { pendingOrderEditRequests?: number; pendingInvoiceCancelRequests?: number };
+  navBadges?: {
+    pendingOrderEditRequests?: number;
+    pendingInvoiceCancelRequests?: number;
+    pendingPaymentMethodAdjustments?: number;
+  };
   onNavigate?: () => void;
 }) {
   const activeGroupId = navGroupIdForPathname(pathname);
@@ -353,7 +363,11 @@ export function AdminSidebar({
 }: {
   groups: NavGroupDef[];
   homeItem?: NavItemDef | null;
-  navBadges?: { pendingOrderEditRequests?: number; pendingInvoiceCancelRequests?: number };
+  navBadges?: {
+    pendingOrderEditRequests?: number;
+    pendingInvoiceCancelRequests?: number;
+    pendingPaymentMethodAdjustments?: number;
+  };
 }) {
   const pathname = usePathname();
   const sp = useHydratedSearchParams();
@@ -438,7 +452,11 @@ export function AdminSidebarLegacy({
   navBadges,
 }: {
   sections: { title: string; items: NavItemDef[] }[];
-  navBadges?: { pendingOrderEditRequests?: number; pendingInvoiceCancelRequests?: number };
+  navBadges?: {
+    pendingOrderEditRequests?: number;
+    pendingInvoiceCancelRequests?: number;
+    pendingPaymentMethodAdjustments?: number;
+  };
 }) {
   const homeSection = sections.find((s) => s.title === "ראשי");
   const homeItem = homeSection?.items[0] ?? null;

@@ -13,13 +13,13 @@ export function PaymentIntakeCorrectionBanner({ rows, onShowDetail }: Props) {
   return (
     <div className="payment-intake-correction-banner" dir="rtl" role="alert" aria-live="polite">
       <div className="payment-intake-correction-banner__head">
-        <strong className="payment-intake-correction-banner__title">🔴 תשלום דורש תיקון</strong>
+        <strong className="payment-intake-correction-banner__title">🔴 נדרש עדכון חלוקת אמצעי תשלום</strong>
         <button
           type="button"
           className="payment-intake-correction-banner__detail-btn"
           onClick={onShowDetail}
         >
-          הצג פירוט
+          פתח פירוט
         </button>
       </div>
       <ul className="payment-intake-correction-banner__list">

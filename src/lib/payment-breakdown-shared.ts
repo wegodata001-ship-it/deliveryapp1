@@ -150,6 +150,20 @@ export type BreakdownEnforcementViolation = {
   excessUsd: number;
 };
 
+export type BreakdownPaidLine = {
+  paymentMethod: string;
+  currency: BreakdownCurrency;
+  paidAmount: number;
+};
+
+export type PlannedBelowPaidViolation = {
+  paymentMethod: string;
+  currency: BreakdownCurrency;
+  label: string;
+  paidAmount: number;
+  nextPlannedAmount: number;
+};
+
 function round2pos(n: number): number {
   const r = Math.round(n * 100) / 100;
   return r < 0 ? 0 : r;
@@ -205,6 +219,56 @@ export function breakdownViolationMessage(v: BreakdownEnforcementViolation): str
     return `${v.label} לא הוגדר בהזמנה.\n${v.label} שהוזן: $${v.enteredUsd.toFixed(2)}`;
   }
   return `${v.label} בהזמנה: $${v.allowedUsd.toFixed(2)}\n${v.label} שהוזן: $${v.enteredUsd.toFixed(2)}\nחריגה: $${v.excessUsd.toFixed(2)}`;
+}
+
+function breakdownPaidKey(paymentMethod: string, currency: BreakdownCurrency): string {
+  return `${currency}:${normalizePaymentMethodSlug(paymentMethod)}`;
+}
+
+function paymentBucketLabel(method: string): string {
+  return PAYMENT_BUCKET_LABELS[paymentMethodBucketKey(method)];
+}
+
+export function validatePlannedBreakdownAgainstPaid(
+  existingPaid: BreakdownPaidLine[],
+  nextLines: OrderBreakdownLineInput[],
+  eps = BREAKDOWN_EPS,
+): PlannedBelowPaidViolation[] {
+  const paidByKey = new Map<string, number>();
+  for (const row of existingPaid) {
+    const paid = round2pos(row.paidAmount);
+    if (paid <= eps) continue;
+    const key = breakdownPaidKey(row.paymentMethod, row.currency);
+    paidByKey.set(key, round2pos((paidByKey.get(key) ?? 0) + paid));
+  }
+
+  const plannedByKey = new Map<string, number>();
+  for (const row of nextLines) {
+    const amount = round2pos(Number((row.amount || "").trim().replace(",", ".")));
+    if (amount <= eps) continue;
+    const key = breakdownPaidKey(row.paymentMethod, row.currency);
+    plannedByKey.set(key, round2pos((plannedByKey.get(key) ?? 0) + amount));
+  }
+
+  const violations: PlannedBelowPaidViolation[] = [];
+  for (const [key, paidAmount] of paidByKey) {
+    const nextPlannedAmount = round2pos(plannedByKey.get(key) ?? 0);
+    if (nextPlannedAmount + eps >= paidAmount) continue;
+    const [currency, paymentMethod] = key.split(":", 2);
+    violations.push({
+      paymentMethod,
+      currency: currency === "ILS" ? "ILS" : "USD",
+      label: paymentBucketLabel(paymentMethod),
+      paidAmount,
+      nextPlannedAmount,
+    });
+  }
+  return violations;
+}
+
+export function plannedBelowPaidMessage(v: PlannedBelowPaidViolation): string {
+  const money = v.currency === "ILS" ? `₪${v.paidAmount.toFixed(2)}` : `$${v.paidAmount.toFixed(2)}`;
+  return `לא ניתן להגדיר ל${v.label} סכום נמוך מ־${money}, מכיוון שכבר נקלטו ${money} ב${v.label}.`;
 }
 
 /** מאמת את חלוקת התשלום מול סך ההזמנה ב-USD */

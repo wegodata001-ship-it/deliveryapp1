@@ -501,6 +501,13 @@ export function CustomerCardWindowBody({
         sourceCountry: effectiveLedgerCountry,
         fromYmd,
         toYmd,
+        quickFilterLabel:
+          ledgerQuickFilter === "payments"
+            ? "תשלומים"
+            : ledgerQuickFilter === "orders"
+              ? "הזמנות"
+              : "הכל",
+        sortLabel: ledgerSort === "old_new" ? "ישן → חדש" : "חדש → ישן",
       }
     : null;
 
@@ -514,7 +521,9 @@ export function CustomerCardWindowBody({
     setExportBusy(kind);
     setLedgerGateToast(kind === "pdf" ? "מייצא PDF…" : "מייצא Excel…");
     try {
-      if (kind === "pdf") await exportCustomerLedgerPdf(exportMeta, ledger, { mode: pdfMode });
+      if (kind === "pdf") {
+        await exportCustomerLedgerPdf(exportMeta, { ...ledger, rows: displayLedgerRows }, { mode: pdfMode });
+      }
       else await exportCustomerLedgerExcel(exportMeta, ledger);
       setLedgerGateToast(kind === "pdf" ? "PDF מוכן לתצוגה" : "Excel הורד בהצלחה");
       setLedgerPdfModalOpen(false);

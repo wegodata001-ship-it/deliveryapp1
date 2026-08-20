@@ -332,8 +332,8 @@ export function buildDeviationComparisonRows(
     if (plannedUsd <= CASH_CONTROL_EPS && enteredUsd > CASH_CONTROL_EPS) {
       status = "unplanned";
       statusLabel = orderDebtCovered
-        ? "🟠 דורש תיקון"
-        : "🔴 דורש תיקון";
+        ? "🟠 נדרש עדכון חלוקה"
+        : "🔴 נדרש עדכון חלוקה";
       isBlocking = true;
     } else if (enteredUsd > plannedUsd + CASH_CONTROL_EPS) {
       status = "excess";

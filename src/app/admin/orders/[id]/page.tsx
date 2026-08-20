@@ -10,6 +10,7 @@ import { OrderDetailActions } from "@/components/admin/OrderDetailActions";
 import { DocumentsPanel } from "@/components/admin/DocumentsPanel";
 import { resolveOrderPaymentFormDisplay } from "@/lib/order-payment-form-display";
 import { isCompositePaymentMethod } from "@/lib/payment-breakdown-shared";
+import { ORDER_PAYMENT_METHOD_ADJUSTED_ACTION, parseOrderPaymentMethodAdjustedAuditMetadata } from "@/lib/payment-method-adjustment-audit";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 import { computeOrderLedgerView } from "@/lib/order-remaining-debt";
 import { activePaidPaymentWhere } from "@/lib/payment-record-status-shared";
@@ -71,6 +72,15 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
     _sum: { amountUsd: true },
   });
   const paidUsd = Number(paidAgg._sum.amountUsd ?? 0);
+  const adjustmentAudits = await prisma.auditLog.findMany({
+    where: {
+      entityType: "Order",
+      entityId: order.id,
+      actionType: ORDER_PAYMENT_METHOD_ADJUSTED_ACTION,
+    },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, createdAt: true, metadata: true },
+  });
 
   const paymentFormDisplay = resolveOrderPaymentFormDisplay({
     orderPaymentMethod: order.paymentMethod,
@@ -255,6 +265,38 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
             canDelete={docCanDelete}
             canDownload={docCanDownload}
           />
+        </section>
+      ) : null}
+
+      {adjustmentAudits.length > 0 ? (
+        <section className="adm-order-detail-card">
+          <h2 className="adm-order-detail-h">התאמות אמצעי תשלום</h2>
+          <table className="adm-table">
+            <thead>
+              <tr>
+                <th>תאריך</th>
+                <th>שינוי</th>
+                <th>סכום</th>
+                <th>סיבה</th>
+                <th>בוצע על ידי</th>
+              </tr>
+            </thead>
+            <tbody>
+              {adjustmentAudits.map((audit) => {
+                const meta = parseOrderPaymentMethodAdjustedAuditMetadata(audit.metadata);
+                if (!meta) return null;
+                return (
+                  <tr key={audit.id}>
+                    <td dir="ltr">{formatLocalYmd(audit.createdAt)}</td>
+                    <td>{PAYMENT_METHOD_LABELS[meta.fromPaymentMethod] ?? meta.fromPaymentMethod} → {PAYMENT_METHOD_LABELS[meta.toPaymentMethod] ?? meta.toPaymentMethod}</td>
+                    <td dir="ltr">${meta.movedUsd}</td>
+                    <td>{meta.reasonText}</td>
+                    <td>{meta.employeeName}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </section>
       ) : null}
     </div>

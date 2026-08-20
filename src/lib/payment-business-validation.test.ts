@@ -6,9 +6,12 @@ import {
   validatePaymentMethods,
 } from "@/lib/payment-business-validation";
 import type {
+  BreakdownPaidLine,
   EnteredBucketUsd,
+  OrderBreakdownLineInput,
   PlannedBucketUsd,
 } from "@/lib/payment-breakdown-shared";
+import { plannedBelowPaidMessage, validatePlannedBreakdownAgainstPaid } from "@/lib/payment-breakdown-shared";
 
 const planned: PlannedBucketUsd[] = [
   { bucket: "CASH", label: "מזומן", plannedUsd: 200, remainingUsd: 200 },
@@ -48,8 +51,8 @@ describe("Business validation — אמצעי תשלום מתוכננים", () =>
     assert.equal(decision.ok, false);
     assert.equal(decision.methodViolations.length, 1);
     assert.equal(decision.methodViolations[0]?.bucket, "CASH");
-    assert.ok(decision.message.includes("אינם תואמים לאמצעי התשלום שתוכננו במסמך"));
-    assert.ok(decision.message.includes("יש לעדכן את תכנון התשלום בהזמנה"));
+    assert.ok(decision.message.includes("הסכום במזומן גבוה"));
+    assert.ok(decision.message.includes("יש לעדכן קודם את ההזמנה"));
   });
 
   it("חוסם אמצעי שלא תוכנן כלל (צ'ק במקום מזומן)", () => {
@@ -146,14 +149,14 @@ describe("כוונת קליטה — תשלום חלקי מול ניסיון סג
     assert.equal(decision.commissionAppliedUsd, 0);
   });
 
-  it("מצב 2: מזומן $200 + אשראי $195 (חסר $5) — ניסיון סגירה, נדרש סולם הסגירה", () => {
+  it("מצב 2: מזומן $200 + אשראי $195 (חסר $5) — תשלום חלקי תקין, לא ניסיון סגירה", () => {
     const intent = classifySettlementIntent({
       plannedByMethod: planned,
       enteredByMethod: entered(200, 195),
       totalDebtUsd: 400,
       totalPaymentUsd: 395,
     });
-    assert.equal(intent, "CLOSURE_ATTEMPT");
+    assert.equal(intent, "PARTIAL_PAYMENT");
 
     const decision = evaluatePaymentBusinessRules({
       plannedByMethod: planned,
@@ -164,12 +167,14 @@ describe("כוונת קליטה — תשלום חלקי מול ניסיון סג
       availableCommissionUsd: 50,
     });
 
-    assert.equal(decision.settlementIntent, "CLOSURE_ATTEMPT");
-    assert.equal(decision.code, "USE_CREDIT");
+    assert.equal(decision.settlementIntent, "PARTIAL_PAYMENT");
+    assert.equal(decision.code, "READY");
     assert.equal(decision.shortageUsd, 5);
+    assert.equal(decision.creditAppliedUsd, 0);
+    assert.equal(decision.commissionAppliedUsd, 0);
   });
 
-  it("זרימת save-first שומרת ניסיון סגירה עם חוסר כחוב פתוח", () => {
+  it("זרימת save-first שומרת partial-by-method כחוב פתוח ללא flow סגירה", () => {
     const decision = evaluatePaymentBusinessRules({
       plannedByMethod: planned,
       enteredByMethod: entered(200, 195),
@@ -180,19 +185,20 @@ describe("כוונת קליטה — תשלום חלקי מול ניסיון סג
       deferShortageResolution: true,
     });
 
-    assert.equal(decision.settlementIntent, "CLOSURE_ATTEMPT");
+    assert.equal(decision.settlementIntent, "PARTIAL_PAYMENT");
     assert.equal(decision.code, "READY");
     assert.equal(decision.shortageUsd, 5);
     assert.equal(decision.creditAppliedUsd, 0);
     assert.equal(decision.commissionAppliedUsd, 0);
   });
 
-  it("סולם הסגירה: זכות → עמלות → עמלה שלילית — לפי הסדר", () => {
+  it("סולם הסגירה: זכות → עמלות → עמלה שלילית — רק בסגירה מפורשת", () => {
     const base = {
       plannedByMethod: planned,
       enteredByMethod: entered(200, 195),
       totalDebtUsd: 400,
       totalPaymentUsd: 395,
+      explicitClosureRequested: true,
     };
 
     // אין יתרת זכות — מדלגים ישר לעמלות
@@ -261,5 +267,39 @@ describe("כוונת קליטה — תשלום חלקי מול ניסיון סג
       totalPaymentUsd: 400,
     });
     assert.equal(intent, "CLOSURE_ATTEMPT");
+  });
+});
+
+describe("planned breakdown edit guard", () => {
+  it("blocks lowering a method below already-paid amount", () => {
+    const existingPaid: BreakdownPaidLine[] = [
+      { paymentMethod: "CASH", currency: "USD", paidAmount: 300 },
+    ];
+    const nextLines: OrderBreakdownLineInput[] = [
+      { paymentMethod: "CASH", amount: "200", currency: "USD" },
+      { paymentMethod: "BANK_TRANSFER", amount: "800", currency: "USD" },
+    ];
+
+    const violations = validatePlannedBreakdownAgainstPaid(existingPaid, nextLines);
+    assert.equal(violations.length, 1);
+    assert.equal(violations[0]?.label, "מזומן");
+    assert.equal(violations[0]?.paidAmount, 300);
+    assert.equal(
+      plannedBelowPaidMessage(violations[0]!),
+      "לא ניתן להגדיר למזומן סכום נמוך מ־$300.00, מכיוון שכבר נקלטו $300.00 במזומן.",
+    );
+  });
+
+  it("allows editing when new planned stays above already-paid amount", () => {
+    const existingPaid: BreakdownPaidLine[] = [
+      { paymentMethod: "CASH", currency: "USD", paidAmount: 300 },
+    ];
+    const nextLines: OrderBreakdownLineInput[] = [
+      { paymentMethod: "CASH", amount: "500", currency: "USD" },
+      { paymentMethod: "BANK_TRANSFER", amount: "500", currency: "USD" },
+    ];
+
+    const violations = validatePlannedBreakdownAgainstPaid(existingPaid, nextLines);
+    assert.equal(violations.length, 0);
   });
 });

@@ -9,7 +9,6 @@ export const SENSITIVE_ORDER_EDIT_FIELDS: ReadonlySet<keyof OrderEditSnapshot> =
   "customerCode",
   "weekCode",
   "sourceCountry",
-  "paymentMethod",
   "notes",
   "locationName",
 ]);

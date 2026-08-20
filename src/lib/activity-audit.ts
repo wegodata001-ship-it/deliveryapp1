@@ -55,6 +55,10 @@ export function activityActionLabelHe(actionType: string): string {
       return "ביטול העברה לטורקיה";
     case "PAYMENT_SURPLUS_TO_COMMISSION":
       return "העודף הועבר לעמלה";
+    case "PAYMENT_METHOD_AUTO_ADJUSTED":
+      return "התאמה אוטומטית של אמצעי תשלום";
+    case "ORDER_PAYMENT_METHOD_ADJUSTED":
+      return "עודכנה חלוקת אמצעי תשלום";
     case "PAYMENT_RECEIVED":
     case "PAYMENT_INTAKE_BATCH":
       return "קלט תשלום";

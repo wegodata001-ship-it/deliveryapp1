@@ -53,6 +53,7 @@ export function PaymentMethodControlModal({
   methodViews,
   orderRemainingToPayUsd,
   onClose,
+  onAutoAdjust,
   onOrderEdit,
   onOrderView,
   onRefresh,
@@ -64,6 +65,7 @@ export function PaymentMethodControlModal({
   /** «נשאר לתשלום» — מקור אמת יחיד (זהה למסך קליטה) */
   orderRemainingToPayUsd: number;
   onClose: () => void;
+  onAutoAdjust?: () => void;
   onOrderEdit?: (orderId: string) => void;
   onOrderView?: (orderId: string) => void;
   onRefresh?: () => void;
@@ -129,6 +131,15 @@ export function PaymentMethodControlModal({
             <p>הכרטיסים, סיכום האמצעים והטבלה מאותן שורות · מתעדכן מיד עם כל שינוי</p>
           </div>
           <div className="pmc-header__actions">
+            {onAutoAdjust ? (
+              <button
+                type="button"
+                className="pmc-btn pmc-btn--ghost"
+                onClick={onAutoAdjust}
+              >
+                התאמה אוטומטית
+              </button>
+            ) : null}
             <button
               type="button"
               className="pmc-btn pmc-btn--ghost"

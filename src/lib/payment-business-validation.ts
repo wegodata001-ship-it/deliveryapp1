@@ -46,13 +46,11 @@ export type SettlementIntent = "PARTIAL_PAYMENT" | "CLOSURE_ATTEMPT";
  * 1. המשתמש ביקש סגירה מפורשת (איפוס יתרה, איפוס עמלה, סגירה עם עמלה) —
  *    `explicitClosureRequested`.
  * 2. אין חוסר — התשלום מכסה את מלוא החוב (או יותר). המסמך נסגר ממילא.
- * 3. קיים תכנון אמצעי תשלום, וקיים אמצעי ששולם *חלקית* — הוזן בו סכום
- *    חיובי אך קטן מהיתרה המתוכננת לאותו אמצעי. תשלום כזה מעיד שהלקוח
- *    ניסה לשלם את האמצעי אך חסר כסף (למשל: תוכנן אשראי $200, הוזן $195).
  *
  * בכל מקרה אחר הקליטה היא PARTIAL_PAYMENT — תשלום חלקי רגיל:
- * כל אמצעי ששולם, שולם במלואו לפי התכנון, ואמצעים שלא שולמו כלל
- * (הוזן 0) נשארים כיתרה פתוחה (למשל: "אני משלם היום רק את המזומן").
+ * מותר לשלם פחות מהיתרה המתוכננת לאותו אמצעי, כל עוד לא חורגים מהיתרה
+ * של האמצעי ולא עוברים לאמצעי אחר ללא עדכון הזמנה. לדוגמה:
+ * תוכנן מזומן $500, הוזן מזומן $495 → תקין, נשאר $5 במזומן.
  *
  * מסמכים ללא תכנון אמצעים: אין ממה להסיק כוונת סגירה, ולכן חוסר נחשב
  * תשלום חלקי — סגירה מחייבת פעולה מפורשת של המשתמש.
@@ -69,16 +67,6 @@ export function classifySettlementIntent(params: {
   if (params.explicitClosureRequested) return "CLOSURE_ATTEMPT";
   const shortageUsd = params.totalDebtUsd - params.totalPaymentUsd;
   if (shortageUsd <= eps) return "CLOSURE_ATTEMPT";
-  if (params.plannedByMethod.length === 0) return "PARTIAL_PAYMENT";
-
-  const planByBucket = new Map(params.plannedByMethod.map((p) => [p.bucket, p]));
-  for (const entered of params.enteredByMethod) {
-    if (!Number.isFinite(entered.enteredUsd) || entered.enteredUsd <= eps) continue;
-    const plan = planByBucket.get(entered.bucket);
-    // אמצעי שלא תוכנן נחסם קודם לכן ב-INVALID_METHODS — לא משפיע על הכוונה.
-    if (!plan) continue;
-    if (entered.enteredUsd < plan.remainingUsd - eps) return "CLOSURE_ATTEMPT";
-  }
   return "PARTIAL_PAYMENT";
 }
 
@@ -143,12 +131,26 @@ function nonNegative(value: number): number {
 
 /** הודעת החסימה הקנונית לחריגת אמצעי תשלום — זהה בכל מסלולי הקליטה. */
 export function paymentMethodMismatchMessage(violations: PaymentMethodViolation[]): string {
+  if (violations.length === 1) {
+    const v = violations[0]!;
+    if (v.plannedUsd <= PAYMENT_BUSINESS_EPS) {
+      return (
+        `אמצעי התשלום בפועל שונים מאמצעי התשלום שהוגדרו בהזמנה. ` +
+        `ניסית לקלוט ${v.label} בסך $${v.enteredUsd.toFixed(2)}, אך ${v.label} לא תוכנן במסמך. ` +
+        "יש לעדכן את חלוקת התשלום בהזמנה לפני הקליטה."
+      );
+    }
+    return (
+      `הסכום ב${v.label} גבוה ב־$${v.excessUsd.toFixed(2)} מהיתרה שהוגדרה לאמצעי זה בהזמנה. ` +
+      "אם הלקוח שינה את חלוקת אמצעי התשלום, יש לעדכן קודם את ההזמנה."
+    );
+  }
   const detail = violations
     .map((v) => `${v.label}: תוכנן $${v.plannedUsd.toFixed(2)}, הוזן $${v.enteredUsd.toFixed(2)}`)
     .join(" · ");
   return (
-    "אמצעי התשלום שנקלטו אינם תואמים לאמצעי התשלום שתוכננו במסמך. " +
-    "יש לעדכן את תכנון התשלום בהזמנה לפני ביצוע קליטת התשלום." +
+    "אמצעי התשלום בפועל שונים מאמצעי התשלום שהוגדרו בהזמנה. " +
+    "יש לעדכן את חלוקת התשלום בהזמנה לפני ביצוע קליטת התשלום." +
     (detail ? ` (${detail})` : "")
   );
 }

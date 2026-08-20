@@ -1,5 +1,6 @@
 import { unstable_cache } from "next/cache";
 import { prisma } from "@/lib/prisma";
+import { PAYMENT_METHOD_AUTO_ADJUSTED_ACTION, parsePaymentMethodAutoAdjustedAuditMetadata } from "@/lib/payment-method-adjustment-audit";
 import {
   getCurrentFinancialSettingsWithUser,
   serializeFinancialSettings,
@@ -70,5 +71,20 @@ export const getPendingInvoiceCancelRequestCount = unstable_cache(
     }
   },
   ["wego-pending-invoice-cancel-requests"],
+  { revalidate: 45 },
+);
+
+export const getPendingPaymentMethodAdjustmentCount = unstable_cache(
+  async (): Promise<number> => {
+    const logs = await prisma.auditLog.findMany({
+      where: { actionType: PAYMENT_METHOD_AUTO_ADJUSTED_ACTION },
+      select: { metadata: true },
+    });
+    return logs.reduce((sum, log) => {
+      const details = parsePaymentMethodAutoAdjustedAuditMetadata(log.metadata);
+      return sum + (details && !details.reviewedAtIso ? 1 : 0);
+    }, 0);
+  },
+  ["wego-pending-payment-method-adjustments"],
   { revalidate: 45 },
 );

@@ -182,6 +182,12 @@ export const SIDEBAR_GROUPS: NavGroupDef[] = [
         anyOf: ["invoice.cancel.approve"],
       },
       {
+        href: "/admin/payment-method-adjustments",
+        label: "התאמות אמצעי תשלום",
+        icon: "editRequests",
+        anyOf: ["manage_users"],
+      },
+      {
         href: "/admin/my-requests",
         label: "הבקשות שלי",
         icon: "editRequests",
@@ -239,6 +245,7 @@ const CONTROLS_PATH_PREFIXES = [
   "/admin/cash-control",
   "/admin/cash-flow",
   "/admin/edit-requests",
+  "/admin/payment-method-adjustments",
   "/admin/order-edit-requests",
   "/admin/invoice-cancel-requests",
   "/admin/my-requests",

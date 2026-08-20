@@ -10,6 +10,7 @@ export type OrderEditSnapshot = {
   feeUsd: string;
   commissionPercent: string;
   paymentMethod: string;
+  paymentBreakdown: string;
   status: string;
   notes: string;
   sourceCountry: string;
@@ -34,6 +35,7 @@ const FIELD_LABELS: Record<keyof OrderEditSnapshot, string> = {
   feeUsd: "עמלה ($)",
   commissionPercent: "אחוז עמלה",
   paymentMethod: "אמצעי תשלום",
+  paymentBreakdown: "חלוקת אמצעי תשלום",
   status: "סטטוס",
   notes: "הערות",
   sourceCountry: "מדינת מקור",
@@ -43,6 +45,26 @@ const FIELD_LABELS: Record<keyof OrderEditSnapshot, string> = {
   intakeTimeHm: "שעת הזנה",
   weekCode: "שבוע",
 };
+
+function formatPaymentBreakdown(
+  rows: Array<{ paymentMethod: string; amount: string; currency?: string | null }> | null | undefined,
+): string {
+  if (!rows || rows.length === 0) return "—";
+  const parts = rows
+    .map((row) => {
+      const method = PAYMENT_METHOD_LABELS[row.paymentMethod] ?? row.paymentMethod;
+      const amount = (row.amount ?? "").trim();
+      const currency = (row.currency ?? "USD").trim().toUpperCase() === "ILS" ? "₪" : "$";
+      if (!amount) return method;
+      const n = Number(amount);
+      const display = Number.isFinite(n)
+        ? n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        : amount;
+      return `${method} ${currency}${display}`;
+    })
+    .filter(Boolean);
+  return parts.length > 0 ? parts.join(" | ") : "—";
+}
 
 function fmtMoneyUsd(v: string): string {
   const n = Number(v);
@@ -77,6 +99,7 @@ export function snapshotFromWorkPanel(row: {
   feeUsd: string;
   commissionPercent: string;
   paymentMethod: string;
+  paymentBreakdown?: Array<{ paymentMethod: string; amount: string; currency?: string | null }>;
   status: string;
   notes: string;
   sourceCountry: string | null;
@@ -93,6 +116,7 @@ export function snapshotFromWorkPanel(row: {
     feeUsd: row.feeUsd.trim(),
     commissionPercent: row.commissionPercent.trim(),
     paymentMethod: row.paymentMethod,
+    paymentBreakdown: formatPaymentBreakdown(row.paymentBreakdown),
     status: row.status,
     notes: row.notes.trim(),
     sourceCountry: row.sourceCountry?.trim() || "—",
@@ -111,6 +135,7 @@ export function snapshotFromUpdateForm(form: {
   feeUsd: string;
   commissionPercent?: string | null;
   paymentMethod: string;
+  paymentBreakdown?: Array<{ paymentMethod: string; amount: string; currency?: string | null }>;
   status: string;
   notes?: string;
   sourceCountry?: string | null;
@@ -127,6 +152,7 @@ export function snapshotFromUpdateForm(form: {
     feeUsd: (form.feeUsd || "").trim(),
     commissionPercent: (form.commissionPercent ?? "").trim(),
     paymentMethod: form.paymentMethod,
+    paymentBreakdown: formatPaymentBreakdown(form.paymentBreakdown),
     status: form.status,
     notes: (form.notes ?? "").trim(),
     sourceCountry: form.sourceCountry?.trim() || "—",
@@ -170,6 +196,7 @@ export function parseOrderEditSnapshot(raw: unknown): OrderEditSnapshot | null {
     feeUsd: String(o.feeUsd ?? ""),
     commissionPercent: String(o.commissionPercent ?? ""),
     paymentMethod: String(o.paymentMethod ?? ""),
+    paymentBreakdown: String(o.paymentBreakdown ?? ""),
     status: String(o.status ?? ""),
     notes: String(o.notes ?? ""),
     sourceCountry: String(o.sourceCountry ?? ""),

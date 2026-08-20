@@ -126,6 +126,7 @@ import { normalizeCustomerPlaceInput } from "@/lib/customer-place";
 import { canUserEditCompletedOrder } from "@/lib/order-edit-lock";
 import { ensureOrderCompletionColumnOnce } from "@/lib/order-completion";
 import { searchCustomersPrisma } from "@/lib/customer-search-prisma";
+import { writeOrderBreakdownInTx } from "@/lib/order-breakdown-write";
 import {
   clearExpiredOrderEditUnlockForOrder,
   markApprovedEditRequestUsedAndClearUnlock,
@@ -407,44 +408,7 @@ async function writeOrderBreakdown(
   rows: ParsedBreakdownRow[],
   opts?: { userId?: string | null; intakeWeekCode?: string | null; rateN?: number },
 ): Promise<void> {
-  // שימור paidAmount לפי אמצעי+מטבע לפני מחיקה
-  const existing = await db.orderPaymentBreakdown.findMany({
-    where: { orderId },
-    select: { paymentMethod: true, currency: true, paidAmount: true },
-  });
-  const paidByMethodCur = new Map<string, number>();
-  for (const e of existing) {
-    const n = Number(e.paidAmount?.toString?.() ?? e.paidAmount ?? 0);
-    if (Number.isFinite(n) && n > 0) {
-      const cur = e.currency?.toUpperCase() === "ILS" ? "ILS" : "USD";
-      const key = `${cur}:${e.paymentMethod}`;
-      paidByMethodCur.set(key, (paidByMethodCur.get(key) ?? 0) + n);
-    }
-  }
-
-  await db.orderPaymentBreakdown.deleteMany({ where: { orderId } });
-  if (rows.length === 0) return;
-
-  const rateN = opts?.rateN && opts.rateN > 0 ? opts.rateN : 0;
-  await db.orderPaymentBreakdown.createMany({
-    data: rows.map((r) => {
-      const plannedNative = Number(r.amount.toString());
-      const cur = r.currency === "ILS" ? "ILS" : "USD";
-      const paidAmount = paidByMethodCur.get(`${cur}:${r.paymentMethod}`) ?? 0;
-      const remainingAmount = Math.max(0, Math.round((plannedNative - paidAmount) * 100) / 100);
-      return {
-        orderId,
-        paymentMethod: r.paymentMethod,
-        amount: r.amount,
-        currency: r.currency,
-        paidAmount: new Prisma.Decimal(paidAmount.toFixed(4)),
-        remainingAmount: new Prisma.Decimal(remainingAmount.toFixed(4)),
-      };
-    }),
-  });
-  const { syncPaymentPlanAfterBreakdownWrite } = await import("@/lib/payment-plan-service");
-  await syncPaymentPlanAfterBreakdownWrite(db, {
-    orderId,
+  await writeOrderBreakdownInTx(db, orderId, rows, {
     userId: opts?.userId,
     intakeWeekCode: opts?.intakeWeekCode,
   });
@@ -2812,6 +2776,7 @@ async function updateOrderWorkPanelActionInner(
       feeUsd: form.feeUsd,
       commissionPercent: form.commissionPercent,
       paymentMethod: form.paymentMethod,
+      paymentBreakdown: form.paymentBreakdown,
       status,
       notes: form.notes,
       sourceCountry: sourceCountryUpdate,
@@ -3048,6 +3013,7 @@ export async function submitOrderUpdateRequestAction(
     feeUsd: form.feeUsd,
     commissionPercent: form.commissionPercent,
     paymentMethod: form.paymentMethod,
+    paymentBreakdown: form.paymentBreakdown,
     status: form.status ?? beforePanel.status,
     notes: form.notes,
     sourceCountry: form.sourceCountry ?? beforePanel.sourceCountry,
@@ -3063,7 +3029,7 @@ export async function submitOrderUpdateRequestAction(
   if (!orderEditDiffRequiresApproval(diff)) {
     return {
       ok: false,
-      error: "לא נמצא שינוי בשדות שדורשים אישור מנהל (סכום, עמלה, לקוח, שבוע, מדינה, תשלום, הערות, מקום תשלום)",
+      error: "לא נמצא שינוי בשדות שדורשים אישור מנהל (סכום, עמלה, לקוח, שבוע, מדינה, הערות, מקום תשלום)",
     };
   }
 

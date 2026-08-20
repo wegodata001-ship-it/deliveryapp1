@@ -33,6 +33,7 @@ import { sumCustomerPaymentsUsd } from "@/lib/payment-intake-customer-kpi";
 import { aggregateLivePaymentFormKpis } from "@/lib/payment-intake-live-kpi";
 import { buildPostSaveRemainingSummary } from "@/lib/payment-intake-method-control";
 import { PaymentMethodControlModal } from "@/components/admin/PaymentMethodControlModal";
+import { PaymentMethodAutoAdjustModal } from "@/components/admin/PaymentMethodAutoAdjustModal";
 import { PaymentIntakeDeviationModal } from "@/components/admin/PaymentIntakeDeviationModal";
 import { usePaymentIntakePlanningViews } from "@/hooks/usePaymentIntakePlanningViews";
 import {
@@ -587,6 +588,7 @@ export function PaymentModalUpdated({
   const [intakeDevRows, setIntakeDevRows] = useState<IntakeSaveDeviationRow[]>([]);
   const [intakeDevAutoFixBusy, setIntakeDevAutoFixBusy] = useState(false);
   const [methodControlOpen, setMethodControlOpen] = useState(false);
+  const [autoAdjustOpen, setAutoAdjustOpen] = useState(false);
   /** רענון מקור ההזמנות המשותף (טבלה ראשית + חלון מתוכננים) */
   const [sharedOrdersRefreshing, setSharedOrdersRefreshing] = useState(false);
   /** חזרה לחלון אמצעי מתוכננים אחרי עריכת הזמנה שנפתחה ממנו */
@@ -2390,12 +2392,12 @@ export function PaymentModalUpdated({
     });
     if (methodGate.kind === "METHOD_DEVIATION" || methodGate.kind === "DEBT_TRANSFER") {
       setIntakeDevRows(liveIntakeDevRows);
-      setSaveErr("יש תשלום שדורש תיקון — ראה ההתראה למעלה");
+      setSaveErr("אמצעי התשלום בפועל שונים מהחלוקה שהוגדרה. יש לעדכן את ההזמנה לפני הקליטה.");
       return { ok: false };
     }
     if (intakeHasRateMismatch(liveIntakeDevRows)) {
       setIntakeDevRows(liveIntakeDevRows);
-      setSaveErr("יש תשלום שדורש תיקון — ראה ההתראה למעלה");
+      setSaveErr("שער הדולר שנקלט שונה מהשער של ההזמנה. יש לבדוק את הנתונים לפני שמירה.");
       return { ok: false };
     }
     // חשוב: קרדיט קיים ללקוח לא אומר שצריך "לכפות" תשלום כיתרת זכות.
@@ -4016,10 +4018,30 @@ export function PaymentModalUpdated({
                   canEditOrders={canEditOrders}
                   refreshing={sharedOrdersRefreshing}
                   onClose={() => setMethodControlOpen(false)}
+                  onAutoAdjust={canEditOrders ? () => setAutoAdjustOpen(true) : undefined}
                   onRefresh={() => void refreshSharedPaymentIntakeOrders()}
                   onOrderEdit={(orderId) => openOrderForEdit(orderId, { fromMethodControl: true })}
                   onOrderView={(orderId) => void openPaymentHistory(orderId)}
                 />
+                {customer ? (
+                  <PaymentMethodAutoAdjustModal
+                    open={autoAdjustOpen}
+                    customerId={customer.id}
+                    customerName={customer.displayName}
+                    customerCode={customer.customerCode ?? null}
+                    openDebtUsd={orderRemainingToPayUsd}
+                    weekCode={intakeWeekCode}
+                    workCountry={intakeDocumentWorkCountry}
+                    onClose={() => setAutoAdjustOpen(false)}
+                    onApplied={({ affectedOrders }) => {
+                      setAutoAdjustOpen(false);
+                      onToast(`בוצעה התאמה אוטומטית ב־${affectedOrders} הזמנות`);
+                      void refreshSharedPaymentIntakeOrders();
+                      window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
+                      dispatchOrdersListRefresh();
+                    }}
+                  />
+                ) : null}
 
                 <div
                   ref={paymentLinesContainerRef}

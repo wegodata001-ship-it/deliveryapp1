@@ -51,7 +51,7 @@ export function PaymentIntakeDeviationModal({
       >
         <div className="adm-cash-modal__head payment-intake-dev-modal__head">
           <h3 id="intake-dev-title">
-            {isRateOnly ? "חריגת שער דולר" : "יש תשלום שדורש תיקון"}
+            {isRateOnly ? "חריגת שער דולר" : "נדרש עדכון חלוקת אמצעי תשלום"}
           </h3>
           <p className="payment-intake-dev-modal__subtitle">{view.subtitle}</p>
         </div>
@@ -207,7 +207,7 @@ export function PaymentIntakeDeviationModal({
 
           {showEmployeeHint ? (
             <p className="payment-intake-dev-modal__employee-hint">
-              לעריכת ההזמנה יש לשלוח בקשת אישור מנהל מתוך טופס העריכה.
+              למשתמש ללא הרשאת עריכה יש לפנות למנהל או למשתמש שמורשה לערוך את ההזמנה.
             </p>
           ) : null}
 
@@ -216,8 +216,8 @@ export function PaymentIntakeDeviationModal({
               <h4>איך תרצה לתקן?</h4>
               <p>
                 {view.problemKind === "method_mismatch_only" || view.problemKind === "both"
-                  ? "אם בפועל התקבל תשלום באמצעי אחר — עדכנו את אמצעי התשלום בהזמנה."
-                  : "יש להשלים את הסכום החסר או לעדכן את ההזמנה."}
+                  ? "אם בפועל התקבל תשלום באמצעי אחר או בסכום גבוה מהיתרה לאותו אמצעי, יש לעדכן קודם את חלוקת אמצעי התשלום בהזמנה."
+                  : "יש להשלים את הסכום החסר או לעדכן את חלוקת אמצעי התשלום בהזמנה."}
               </p>
             </section>
           ) : null}
@@ -233,7 +233,7 @@ export function PaymentIntakeDeviationModal({
             onClick={onEditOrder}
           >
             {view.problemKind === "method_mismatch_only" || view.problemKind === "both"
-              ? "תקן את אמצעי התשלום"
+              ? "עריכת הזמנה"
               : "עריכת ההזמנה"}
           </button>
         </div>
