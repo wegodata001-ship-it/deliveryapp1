@@ -11,6 +11,7 @@ import {
 import type { WorkCountryCode } from "@/lib/work-country";
 import { endOfLocalDay, normalizeAhWeekCode, parseLocalDate } from "@/lib/work-week";
 import { getWeekRangeFromAH } from "@/lib/weeks/order-week-dates";
+import { logPaymentCapturePerf } from "@/lib/payment-capture-perf";
 
 export {
   CAPTURE_PAYMENT_NAV_COUNTRIES,
@@ -130,7 +131,7 @@ export async function listCustomerCapturePaymentsForNav(
     customerId: cid,
     workCountry: wc,
   });
-  console.log("PAYMENT CAPTURE PERF", {
+  logPaymentCapturePerf({
     label: "navigation.list",
     navigationQueryMs: Date.now() - navQueryStart,
     customerId: cid,

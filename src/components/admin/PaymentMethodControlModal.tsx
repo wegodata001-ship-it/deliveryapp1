@@ -35,7 +35,7 @@ const METHOD_FILTERS: { value: "" | PaymentBucketKey; label: string }[] = [
 ];
 
 const STATUS_FILTERS: { value: "" | PaymentViewStatus; label: string }[] = [
-  { value: "", label: "כל הסטטוסים" },
+  { value: "", label: "ברירת מחדל: פתוחים בלבד" },
   { value: "cleared", label: "הושלם" },
   { value: "partial", label: "חלקי" },
   { value: "pending", label: "ממתין" },
@@ -78,10 +78,12 @@ export function PaymentMethodControlModal({
   const { tableRows, summary, methodSummary } = useMemo(() => {
     const needle = q.trim().toLowerCase();
     const rows = methodViews.filter((r) => {
+      const remaining = r.remaining ?? r.dbRemainingUsd;
       if (needle && !r.orderNumber.toLowerCase().includes(needle)) return false;
       if (methodFilter && r.bucket !== methodFilter) return false;
       if (statusFilter && r.status !== statusFilter) return false;
       if (dateFilter && r.dateYmd !== dateFilter) return false;
+      if (!statusFilter && remaining <= 0.01) return false;
       return true;
     });
     const methodSummary = summarizePaymentMethodLines(
@@ -273,7 +275,6 @@ export function PaymentMethodControlModal({
                 <th>אמצעי תשלום</th>
                 <th>מטבע</th>
                 <th className="pmc-num">מתוכנן</th>
-                <th className="pmc-num">שולם</th>
                 <th className="pmc-num">נותר</th>
                 <th>סטטוס</th>
                 <th>תאריך יעד</th>
@@ -283,7 +284,7 @@ export function PaymentMethodControlModal({
             <tbody>
               {tableRows.length === 0 ? (
                 <tr className="pmc-row pmc-row--empty">
-                  <td colSpan={9} className="pmc-empty">
+                  <td colSpan={8} className="pmc-empty">
                     אין שורות להצגה לפי הסינון הנוכחי.
                   </td>
                 </tr>
@@ -309,9 +310,6 @@ export function PaymentMethodControlModal({
                   </th>
                   <td className="pmc-num" dir="ltr">
                     {fmtDualMoney(summary.plannedUsd, summary.plannedIls)}
-                  </td>
-                  <td className="pmc-num" dir="ltr">
-                    {fmtDualMoney(summary.enteredUsd, summary.enteredIls)}
                   </td>
                   <td className="pmc-num pmc-rem" dir="ltr">
                     {fmtDualMoney(summary.remainingUsd, summary.remainingIls)}
@@ -385,9 +383,6 @@ function GridRow({
       <td>{(row.currency ?? "USD") === "ILS" ? "₪ ILS" : "$ USD"}</td>
       <td className="pmc-num" dir="ltr">
         {fmtMethodAmount(row.currency ?? "USD", row.planned ?? row.plannedUsd)}
-      </td>
-      <td className="pmc-num" dir="ltr">
-        {fmtMethodAmount(row.currency ?? "USD", row.paid ?? row.dbPaidUsd)}
       </td>
       <td className={`pmc-num${(row.remaining ?? row.dbRemainingUsd) > 0.01 ? " pmc-rem" : ""}`} dir="ltr">
         {fmtMethodAmount(row.currency ?? "USD", row.remaining ?? row.dbRemainingUsd)}

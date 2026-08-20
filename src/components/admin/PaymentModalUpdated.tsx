@@ -1673,8 +1673,12 @@ export function PaymentModalUpdated({
       const tableScroll = tableScrollRef.current?.scrollTop ?? 0;
       const snap = clonePaymentCaptureSnapshot(snapshot);
 
-      console.log({ paymentId: snap.paymentId, paymentCode: snap.paymentCode, source: "CACHE" });
-      console.log("NAV→FORM APPLIED", snap.paymentId, snap.paymentCode);
+      logPaymentCapturePerf({
+        label: "navigation.applySnapshot",
+        paymentId: snap.paymentId,
+        paymentCode: snap.paymentCode,
+        source: "CACHE",
+      });
 
       custSearchGenRef.current += 1;
       setCommissionResetIds(snap.commissionResetIds);
@@ -1762,10 +1766,11 @@ export function PaymentModalUpdated({
           return;
         }
 
-        console.log("PAYMENT SEARCH", {
+        logPaymentCapturePerf({
+          label: "navigation.searchByCode",
           paymentCode: res.paymentCode,
           paymentId: res.paymentId,
-          source: "CODE",
+          source: "NETWORK",
         });
 
         const ok = await loadPaymentRef.current(res.paymentId, { forceNetwork: true });

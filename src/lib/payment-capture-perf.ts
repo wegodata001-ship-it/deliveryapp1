@@ -25,6 +25,8 @@ export type PaymentCapturePerfMetrics = {
   source?: "CACHE" | "NETWORK";
   paymentId?: string;
   paymentCode?: string;
+  customerId?: string;
+  rowCount?: number;
   label?: string;
 };
 

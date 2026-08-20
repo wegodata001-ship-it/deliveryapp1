@@ -5,7 +5,7 @@ import { OrdersListToolbar, type OrdersListToolbarProps } from "@/components/adm
 import { useRouter } from "next/navigation";
 import { PaymentMethod } from "@prisma/client";
 import { OS } from "@/lib/order-status-slugs";
-import { computeOrderOpenDebtUsd, deriveOrderPaymentDisplayStatus } from "@/lib/order-remaining-debt";
+import { computeOrderOpenDebtUsd } from "@/lib/order-remaining-debt";
 import { useOrderStatusCatalog } from "@/components/admin/OrderStatusCatalogProvider";
 import { OrderStatusSelect } from "@/components/admin/OrderStatusSelect";
 import {
@@ -87,13 +87,8 @@ export type OrderListRow = {
   dealAmountUsd: string | null;
   commissionAmountUsd: string | null;
   totalAmountUsd: string | null;
-  /** סכום ששולם ב-USD (Ledger) */
-  paidAmountUsd: string | null;
   /** יתרה פתוחה ב-USD */
   balanceUsd: string | null;
-  /** @deprecated — תצוגה היסטורית בלבד, לא SSOT */
-  totalAmountIls?: string | null;
-  paymentStatus: "unpaid" | "partial" | "paid";
   /** סימון בקשת עריכה / נעילה — הזמנות מוכנות (COMPLETED) או מבוטלות */
   editBadge?: "pending" | "unlock" | "rejected" | "locked" | null;
   /** כש־editBadge=pending — האם הבקשה הממתינה היא של המשתמש הנוכחי */
@@ -222,25 +217,14 @@ function readCompletedFilterFromLocation(): CompletedFilter {
 
 function formatOrdersListMoney(
   o: OrderListRow,
-  field: "deal" | "total" | "ils",
+  field: "deal" | "total",
 ): { text: string; debtWithdrawal: boolean } {
   const debtWithdrawal = isDebtWithdrawalOrderStatus(o.status);
-  if (field === "ils") {
-    const raw = parseNumeric(o.totalAmountIls);
-    if (raw == null) return { text: "—", debtWithdrawal };
-    if (!debtWithdrawal) return { text: o.totalAmountIls ?? "—", debtWithdrawal: false };
-    return { text: `-${formatMoneyAmount(Math.abs(raw))}`, debtWithdrawal: true };
-  }
   const rawStr = field === "deal" ? o.dealAmountUsd : o.totalAmountUsd;
   const raw = parseNumeric(rawStr);
   if (raw == null) return { text: "—", debtWithdrawal };
   if (!debtWithdrawal) return { text: rawStr ?? "—", debtWithdrawal: false };
   return { text: `$${formatSignedUsdDisplay(-Math.abs(raw))}`, debtWithdrawal: true };
-}
-
-function signedExportMoney(o: OrderListRow, field: "deal" | "total" | "ils"): string {
-  const { text } = formatOrdersListMoney(o, field);
-  return text === "—" ? "" : text;
 }
 
 function orderEditBadgeLabel(
@@ -650,10 +634,6 @@ export function OrdersListShell({
           const newBalance = computeOrderOpenDebtUsd(total, withdrawn);
           return {
             ...r,
-            paymentStatus: deriveOrderPaymentDisplayStatus({
-              totalUsd: total,
-              paidUsd: withdrawn,
-            }),
             balanceUsd: fmtUsd(newBalance),
           };
         }),

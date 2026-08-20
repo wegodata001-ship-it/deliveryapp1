@@ -42,7 +42,3 @@ export function parseSplitPaymentMethodRaw(raw: unknown): string | null {
   return byHebrewLabel[cleaned] ?? null;
 }
 
-export function orderCaptureSplitMethodLabel(m: string, labelMap?: Record<string, string>): string {
-  if (labelMap?.[m]) return labelMap[m];
-  return ORDER_CAPTURE_PAYMENT_SPLIT_OPTIONS.find((o) => o.value === m)?.label ?? m;
-}

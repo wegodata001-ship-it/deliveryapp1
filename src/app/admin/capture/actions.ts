@@ -876,30 +876,6 @@ export async function getCustomerDetailsForPaymentAction(
   };
 }
 
-/** @deprecated הוחלף ב-savePaymentUpdatedAction — נשמר רק כדי למנוע קריאות ישנות. */
-export async function capturePaymentAction(_form: {
-  paymentDateYmd: string;
-  paymentTimeHm?: string;
-  receivedToday: boolean;
-  paymentMethod: string;
-  notes?: string;
-  orderId?: string | null;
-  customerId?: string | null;
-  paymentPlace?: string | null;
-  amountUsd: string;
-  amountIls: string;
-  amountTransferIls: string;
-}): Promise<PaymentCaptureState> {
-  const me = await requireAuth();
-  if (!userHasAnyPermission(me, ["receive_payments"])) {
-    return { ok: false, error: "אין הרשאה" };
-  }
-  return {
-    ok: false,
-    error: "מסלול קליטת תשלום זה הוצא משימוש. יש להשתמש בקליטת התשלומים המעודכנת.",
-  };
-}
-
 export async function searchCustomersForOrderAction(
   query: string,
   workCountryRaw?: string | null,

@@ -15,7 +15,6 @@ import { formatMoneyAmount } from "@/lib/money-format";
 import { ensureOrderCompletionColumnOnce } from "@/lib/order-completion";
 import {
   computeOrderLedgerView,
-  deriveOrderPaymentDisplayStatus,
 } from "@/lib/order-remaining-debt";
 import { resolveOrderPaymentFormDisplay } from "@/lib/order-payment-form-display";
 import { groupByActivePayments } from "@/lib/payment-record-status";
@@ -572,13 +571,6 @@ export async function fetchOrdersListPageData(
         paidUsd: paid,
       });
       const balanceUsd = isDebtWithdrawal ? 0 : ledger.remainingUsd;
-      const paymentStatus: OrderListRow["paymentStatus"] = isDebtWithdrawal
-        ? "paid"
-        : deriveOrderPaymentDisplayStatus({
-            totalUsd: ledger.totalUsd,
-            paidUsd: ledger.paidUsd,
-          });
-
       let editBadge: OrderListRow["editBadge"] = null;
       let pendingEditOwnedByMe = false;
       if (pendingEditOrderIds.has(r.id)) {
@@ -635,9 +627,7 @@ export async function fetchOrdersListPageData(
         dealAmountUsd: fmtUsd2(r.amountUsd),
         commissionAmountUsd: fmtUsd2(r.commissionUsd),
         totalAmountUsd: fmtUsd2(r.totalUsd),
-        paidAmountUsd: fmtUsd2(ledger.paidUsd),
         balanceUsd: fmtUsd2(balanceUsd),
-        paymentStatus,
         editBadge,
         pendingEditOwnedByMe: editBadge === "pending" ? pendingEditOwnedByMe : undefined,
         quickStatusLocked,

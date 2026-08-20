@@ -91,14 +91,3 @@ export function OrderRowActionsMenu({
   );
 }
 
-function paymentStatusLabel(status: OrderListRow["paymentStatus"]): string {
-  if (status === "paid") return "שולם";
-  if (status === "partial") return "חלקי";
-  return "לא שולם";
-}
-
-export function OrderPaymentStatusBadge({ status }: { status: OrderListRow["paymentStatus"] }) {
-  return (
-    <span className={`adm-ord-pay-badge adm-ord-pay-badge--${status}`}>{paymentStatusLabel(status)}</span>
-  );
-}
