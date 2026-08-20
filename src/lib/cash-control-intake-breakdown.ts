@@ -64,6 +64,24 @@ function fmtSignedUsd(n: number): string {
   return r > 0 ? `+${fmtUsd(r)}` : `-${fmtUsd(Math.abs(r))}`;
 }
 
+function canTreatViolationsAsPureSurplus(params: {
+  openPlan: PlannedBucketUsd[];
+  enteredByBucket: EnteredBucketUsd[];
+  totalDebtUsd: number;
+  totalPaymentUsd: number;
+  surplusUsd: number;
+  eps: number;
+}): boolean {
+  const coversAllDebt = params.totalPaymentUsd >= params.totalDebtUsd - params.eps;
+  if (!coversAllDebt || params.surplusUsd <= params.eps) return false;
+  const enteredMap = new Map(params.enteredByBucket.map((e) => [e.bucket, e.enteredUsd] as const));
+  const openUnpaidOtherMethod = params.openPlan.some((p) => {
+    if (p.remainingUsd <= params.eps) return false;
+    return (enteredMap.get(p.bucket) ?? 0) <= params.eps;
+  });
+  return !openUnpaidOtherMethod;
+}
+
 /**
  * בדיקות חריגה לקליטת תשלום — מופעלות רק בניסיון שמירה (לא בזמן הקלדה).
  *
@@ -84,20 +102,6 @@ export function computeIntakeSaveDeviations(params: {
 
   const methodPlan = buildIntakeBreakdownPlan(orders, includedOrderIds);
   const methodViolations = enforceBreakdownAgainstEntered(methodPlan, enteredByBucket);
-  for (const violation of methodViolations) {
-    rows.push({
-      id: `method:${violation.bucket}`,
-      typeLabel: violation.label,
-      plannedDisplay: fmtUsd(violation.allowedUsd),
-      receivedDisplay: fmtUsd(violation.enteredUsd),
-      diffDisplay: fmtSignedUsd(violation.excessUsd),
-      statusLabel:
-        violation.type === "not-planned"
-          ? "🔴 אמצעי תשלום לא תוכנן"
-          : "🔴 חריגה מהתכנון",
-      rowTone: "excess",
-    });
-  }
 
   let totalRemaining = 0;
   for (const o of includedOrders) {
@@ -105,6 +109,31 @@ export function computeIntakeSaveDeviations(params: {
   }
   totalRemaining = round2(totalRemaining);
   const globalOverageUsd = round2(Math.max(0, totalPaymentUsd - totalRemaining));
+  const pureSurplusOverMethodPlan = canTreatViolationsAsPureSurplus({
+    openPlan: methodPlan,
+    enteredByBucket,
+    totalDebtUsd: totalRemaining,
+    totalPaymentUsd,
+    surplusUsd: globalOverageUsd,
+    eps: CASH_CONTROL_EPS,
+  });
+
+  if (!pureSurplusOverMethodPlan) {
+    for (const violation of methodViolations) {
+      rows.push({
+        id: `method:${violation.bucket}`,
+        typeLabel: violation.label,
+        plannedDisplay: fmtUsd(violation.allowedUsd),
+        receivedDisplay: fmtUsd(violation.enteredUsd),
+        diffDisplay: fmtSignedUsd(violation.excessUsd),
+        statusLabel:
+          violation.type === "not-planned"
+            ? "🔴 אמצעי תשלום לא תוכנן"
+            : "🔴 חריגה מהתכנון",
+        rowTone: "excess",
+      });
+    }
+  }
 
   // תשלום חלקי — יתרה פתוחה ברמת המסמך (לא חריגה, לא חוסם)
   if (
@@ -544,24 +573,23 @@ export function classifyMethodIntakeGate(params: {
   totalDebtUsd = round2(totalDebtUsd);
   const totalPaymentUsd = round2(Math.max(0, params.totalPaymentUsd));
   const surplusUsd = round2(Math.max(0, totalPaymentUsd - totalDebtUsd));
-  const coversAllDebt = totalPaymentUsd >= totalDebtUsd - eps;
 
   // אין העברת חוב — אכיפה מול האמצעים הפתוחים כפי שתוכננו בלבד
   const violations = enforceBreakdownAgainstEntered(openPlan, entered, eps);
 
-  const enteredMap = new Map(
-    entered.map((e) => [e.bucket, e.enteredUsd] as const),
-  );
-  /** אמצעי פתוח שלא קיבל תשלום כלל — אי־אפשר «לסגור» אותו דרך עודף באמצעי אחר */
-  const openUnpaidOtherMethod = openPlan.some((p) => {
-    if (p.remainingUsd <= eps) return false;
-    return (enteredMap.get(p.bucket) ?? 0) <= eps;
-  });
-
   if (violations.length > 0) {
     // עודף אמיתי על האמצעי ששולם (למשל מזומן $120 על חוב $100) — לא חריגת אמצעי.
     // אבל אם נשאר אמצעי אחר פתוח שלא שולם — זו חריגה, לא העברת חוב.
-    if (coversAllDebt && surplusUsd > eps && !openUnpaidOtherMethod) {
+    if (
+      canTreatViolationsAsPureSurplus({
+        openPlan,
+        enteredByBucket: entered,
+        totalDebtUsd,
+        totalPaymentUsd,
+        surplusUsd,
+        eps,
+      })
+    ) {
       return {
         kind: "SURPLUS_AFTER_CLOSURE",
         surplusUsd,
@@ -573,7 +601,7 @@ export function classifyMethodIntakeGate(params: {
   }
 
   // עודף אמיתי בלבד: סכום התשלום גבוה מסך החוב הפתוח
-  if (coversAllDebt && surplusUsd > eps) {
+  if (totalPaymentUsd >= totalDebtUsd - eps && surplusUsd > eps) {
     return {
       kind: "SURPLUS_AFTER_CLOSURE",
       surplusUsd,

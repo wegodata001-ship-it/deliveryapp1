@@ -10,6 +10,7 @@ type Props = {
   open: boolean;
   remainingUsd: number;
   commissionBalanceUsd: number;
+  mode?: "preview" | "post_save";
   busy?: boolean;
   error?: string | null;
   onResolve: (resolution: PaymentShortfallResolution) => void;
@@ -28,6 +29,7 @@ export function PaymentShortfallAfterSaveModal({
   open,
   remainingUsd,
   commissionBalanceUsd,
+  mode = "post_save",
   busy,
   error,
   onResolve,
@@ -46,6 +48,7 @@ export function PaymentShortfallAfterSaveModal({
 
   const resetUsd = -remainingUsd;
   const commissionAfterUsd = commissionBalanceUsd + resetUsd;
+  const previewMode = mode === "preview";
 
   return (
     <div className="adm-mini-modal-layer" role="presentation">
@@ -67,13 +70,13 @@ export function PaymentShortfallAfterSaveModal({
           ×
         </button>
 
-        <h2 id="payment-shortfall-title" className="adm-mini-modal-title">
-          נשארו {money(remainingUsd)} לתשלום
-        </h2>
+        <h2 id="payment-shortfall-title" className="adm-mini-modal-title">איפוס יתרה</h2>
         <p className="adm-payment-shortfall-lead">
-          התשלום נשמר בהצלחה.
+          <strong dir="ltr">נשאר לתשלום: {money(remainingUsd)}</strong>
           <br />
-          אפשר להשאיר את הסכום כחוב פתוח או לסגור אותו דרך העמלות.
+          {previewMode
+            ? "אפשר להשאיר את הסכום כחוב פתוח, או לשמור את התשלום ולהשלים את היתרה דרך העמלות."
+            : "התשלום נשמר בהצלחה. אפשר להשאיר את הסכום כחוב פתוח או לסגור אותו דרך העמלות."}
         </p>
 
         <div className="adm-payment-shortfall-ledger" aria-label="תצוגת עמלות לאיפוס">
@@ -114,7 +117,7 @@ export function PaymentShortfallAfterSaveModal({
             disabled={busy}
             onClick={() => onResolve("reset_commission")}
           >
-            {busy ? "מבצע…" : `אפס ${money(remainingUsd)} דרך עמלות`}
+            {busy ? "מבצע…" : previewMode ? `שמור תשלום ואפס ${money(remainingUsd)}` : `אפס ${money(remainingUsd)} דרך עמלות`}
           </button>
           <button
             type="button"
@@ -122,7 +125,7 @@ export function PaymentShortfallAfterSaveModal({
             disabled={busy}
             onClick={() => onResolve("leave_open")}
           >
-            השאר כחוב
+            {previewMode ? "חזרה לקליטה" : "השאר כחוב"}
           </button>
         </div>
       </div>

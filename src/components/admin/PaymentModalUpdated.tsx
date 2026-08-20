@@ -581,6 +581,7 @@ export function PaymentModalUpdated({
   const [postSavePaymentNumber, setPostSavePaymentNumber] = useState<number | null>(null);
   const [postSavePrimaryPaymentId, setPostSavePrimaryPaymentId] = useState("");
   const [shortfallModalOpen, setShortfallModalOpen] = useState(false);
+  const [shortfallModalMode, setShortfallModalMode] = useState<"preview" | "post_save">("post_save");
   const [postSaveRemainingUsd, setPostSaveRemainingUsd] = useState(0);
   const [postSaveCommissionBalanceUsd, setPostSaveCommissionBalanceUsd] = useState(0);
   const [postSaveTargetOrderIds, setPostSaveTargetOrderIds] = useState<string[]>([]);
@@ -1151,6 +1152,37 @@ export function PaymentModalUpdated({
     orderRemainderAfterPaymentUsd,
     customerBalanceResetPending,
     balanceResetFromCredit,
+  ]);
+
+  const computeShortfallCommissionBalanceUsd = useCallback((targetOrderIds: string[]) => {
+    if (targetOrderIds.length === 0) return 0;
+    const idSet = new Set(targetOrderIds);
+    const targetRows = orders.filter((o) => idSet.has(o.id));
+    const commissionPct = Number(commissionPercentStr) || 0;
+    return computeCustomerResetBalanceMetrics(
+      targetRows.map((o) => ({
+        amountUsd: Number(o.amountUsd) || 0,
+        commissionUsd: Number(o.commissionUsd) || 0,
+        totalAmountUsd: Number(o.totalAmountUsd) || 0,
+        dbPaidUsd: Number(o.dbPaidUsd) || 0,
+      })),
+      commissionPct,
+    ).availableCommission;
+  }, [commissionPercentStr, orders]);
+
+  const showInlineShortfallResetBtn = useMemo(() => {
+    if (!customer || customerWorkspaceLoading) return false;
+    if (intakeCorrectionRows.length > 0) return false;
+    if (orderRemainderAfterPaymentUsd <= 0.01) return false;
+    if (orderOverpaymentAfterPaymentUsd > 0.01) return false;
+    return orderBalanceResetSummary.totalShortfallUsd > 0.01;
+  }, [
+    customer,
+    customerWorkspaceLoading,
+    intakeCorrectionRows.length,
+    orderRemainderAfterPaymentUsd,
+    orderOverpaymentAfterPaymentUsd,
+    orderBalanceResetSummary.totalShortfallUsd,
   ]);
 
   const paymentCaptureIsDirty = useCallback(
@@ -2736,24 +2768,100 @@ export function PaymentModalUpdated({
     return "האיפוס נכשל — נסה שוב";
   }
 
+  function clearShortfallFlowState() {
+    setShortfallModalOpen(false);
+    setShortfallModalMode("post_save");
+    setPostSaveError(null);
+    setPostSaveMode(null);
+    setPostSavePaymentCode("");
+    setPostSavePaymentNumber(null);
+    setPostSavePrimaryPaymentId("");
+    setPostSaveRemainingUsd(0);
+    setPostSaveCommissionBalanceUsd(0);
+    setPostSaveTargetOrderIds([]);
+  }
+
+  function openInlineShortfallResetModal() {
+    if (!customer || orderRemainderAfterPaymentUsd <= 0.01) return;
+    const targetOrderIds = orderBalanceResetSummary.rows
+      .filter((row) => row.calc.adjustmentType === "SHORTFALL")
+      .map((row) => row.orderId);
+    if (targetOrderIds.length === 0) {
+      onToast("לא נמצאה יתרה פתוחה לאיפוס");
+      return;
+    }
+    setShortfallModalMode("preview");
+    setPostSaveMode(null);
+    setPostSavePaymentCode("");
+    setPostSavePaymentNumber(null);
+    setPostSavePrimaryPaymentId("");
+    setPostSaveRemainingUsd(orderRemainderAfterPaymentUsd);
+    setPostSaveCommissionBalanceUsd(computeShortfallCommissionBalanceUsd(targetOrderIds));
+    setPostSaveTargetOrderIds(targetOrderIds);
+    setPostSaveError(null);
+    setShortfallModalOpen(true);
+  }
+
   function onShortfallDismiss() {
     if (postSaveBusyAction) return;
-    setShortfallModalOpen(false);
-    setPostSaveError(null);
+    clearShortfallFlowState();
   }
 
   async function onShortfallAfterSaveResolve(resolution: PaymentShortfallResolution) {
     if (!customer || postSaveBusyAction) return;
+    if (shortfallModalMode === "preview") {
+      if (resolution === "leave_open") {
+        clearShortfallFlowState();
+        return;
+      }
+      setPostSaveBusyAction("reset_commission");
+      setPostSaveError(null);
+      const saveResult = await performSave(null);
+      if (!saveResult.ok) {
+        setPostSaveBusyAction(null);
+        return;
+      }
+      const targetOrderIds = saveResult.postSave?.targetOrderIds ?? postSaveTargetOrderIds;
+      setPostSavePaymentCode(saveResult.primaryPaymentCode);
+      setPostSavePaymentNumber(saveResult.paymentNumber);
+      setPostSavePrimaryPaymentId(saveResult.primaryPaymentId);
+      setPostSaveRemainingUsd(saveResult.postSave?.remainingDebtUsd ?? postSaveRemainingUsd);
+      setPostSaveTargetOrderIds(targetOrderIds);
+      setPostSaveCommissionBalanceUsd(computeShortfallCommissionBalanceUsd(targetOrderIds));
+      const result = await resetCustomerOutstandingBalancesAction({
+        customerId: customer.id,
+        weekCode: intakeWeekCode,
+        commissionPercent: commissionPercentStr,
+        orderIds: targetOrderIds,
+        allowNegativeCommission: true,
+        paymentCaptureContext:
+          saveResult.primaryPaymentCode && saveResult.paymentNumber
+            ? { primaryPaymentCode: saveResult.primaryPaymentCode, paymentNumber: saveResult.paymentNumber }
+            : null,
+      });
+      if (!result.ok) {
+        setPostSaveBusyAction(null);
+        setPostSaveError(mapShortfallResetError(result.error));
+        return;
+      }
+      onToast("התשלום נשמר והיתרה אופסה בהצלחה דרך העמלות");
+      window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
+      await loadPayment(saveResult.primaryPaymentId, { forceNetwork: true });
+      await loadCustomerWorkspaceInBackground(customer.id, intakeWeekCode, {
+        perfLabel: "inlineShortfallResetRefresh",
+      });
+      setPostSaveBusyAction(null);
+      clearShortfallFlowState();
+      return;
+    }
+
     if (resolution === "leave_open") {
       setPostSaveBusyAction("leave_open");
       setShortfallModalOpen(false);
       setPostSaveError(null);
       const mode = postSaveMode;
       const code = postSavePaymentCode;
-      setPostSaveMode(null);
-      setPostSaveRemainingUsd(0);
-      setPostSaveCommissionBalanceUsd(0);
-      setPostSaveTargetOrderIds([]);
+      clearShortfallFlowState();
       if (mode === "new" && code) await finishSaveAndNew(code);
       else if (mode === "close") closeTop();
       setPostSaveBusyAction(null);
@@ -2783,14 +2891,9 @@ export function PaymentModalUpdated({
     await loadCustomerWorkspaceInBackground(customer.id, intakeWeekCode, {
       perfLabel: "postSaveShortfallRefresh",
     });
-    setShortfallModalOpen(false);
-    setPostSaveError(null);
     const mode = postSaveMode;
     const code = postSavePaymentCode;
-    setPostSaveMode(null);
-    setPostSaveRemainingUsd(0);
-    setPostSaveCommissionBalanceUsd(0);
-    setPostSaveTargetOrderIds([]);
+    clearShortfallFlowState();
     setPostSaveBusyAction(null);
     if (mode === "new" && code) await finishSaveAndNew(code);
     else if (mode === "close") closeTop();
@@ -3691,6 +3794,15 @@ export function PaymentModalUpdated({
                         {openDebtAfterPaymentPreview.paymentBalanceDisplay.statusHint}
                       </span>
                     ) : null}
+                    {showInlineShortfallResetBtn ? (
+                      <button
+                        type="button"
+                        className="adm-btn adm-btn--ghost pm-reset-balance-btn pm-reset-balance-btn--inline"
+                        onClick={openInlineShortfallResetModal}
+                      >
+                        איפוס יתרה
+                      </button>
+                    ) : null}
                   </span>
                 </div>
               ) : null}
@@ -4170,6 +4282,7 @@ export function PaymentModalUpdated({
         open={shortfallModalOpen}
         remainingUsd={postSaveRemainingUsd}
         commissionBalanceUsd={postSaveCommissionBalanceUsd}
+        mode={shortfallModalMode}
         busy={postSaveBusyAction !== null}
         error={postSaveError}
         onDismiss={onShortfallDismiss}

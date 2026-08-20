@@ -198,7 +198,7 @@ describe("QA-2 תשלום חלקי ($500 / $300)", () => {
 describe("QA-3 עודף תשלום ($500 / $520)", () => {
   const orders = [order({ remaining: 500, total: 500 })];
 
-  it("עודף מעבר לתכנון מסומן גם כחריגת אמצעי", () => {
+  it("עודף מעבר לחוב מסומן כ-surplus בלבד", () => {
     const devRows = computeIntakeSaveDeviations({
       orders,
       includedOrderIds: null,
@@ -206,9 +206,10 @@ describe("QA-3 עודף תשלום ($500 / $520)", () => {
       formRateN: 3.7,
       totalPaymentUsd: 520,
     });
-    assert.equal(intakeSaveHasDeviations(devRows), true);
+    assert.equal(intakeSaveHasDeviations(devRows), false);
     assert.equal(intakeSaveHasSurplus(devRows), true);
     assert.ok(devRows.some((r) => r.rowTone === "surplus"));
+    assert.ok(!devRows.some((r) => r.rowTone === "excess"));
   });
 
   it("בקרת אמצעי — surplus ולא excess", () => {
@@ -712,6 +713,30 @@ describe("QA-8 — נעילת אמצעי סגור + חסימת שינוי אמצ
     if (gate.kind === "SURPLUS_AFTER_CLOSURE") {
       assert.equal(gate.surplusUsd, 20);
     }
+  });
+
+  it("עודף תשלום טהור לא מייצר חריגת אמצעי אדומה", () => {
+    const orderOneOpen: PaymentIntakeOrderRow = {
+      ...orderPartialTransfer,
+      id: "ord-one-open-dev",
+      totalAmountUsd: "100",
+      dbPaidUsd: "0",
+      dbRemainingUsd: "100",
+      breakdown: [
+        { method: "CASH", label: "מזומן", plannedUsd: 100, paidUsd: 0, remainingUsd: 100 },
+      ],
+    };
+    const deviations = computeIntakeSaveDeviations({
+      orders: [orderOneOpen],
+      includedOrderIds: null,
+      enteredByBucket: [{ bucket: "CASH", label: "מזומן", enteredUsd: 120 }],
+      formRateN: 3.7,
+      totalPaymentUsd: 120,
+    });
+    assert.equal(intakeHasMethodMismatch(deviations), false);
+    assert.equal(intakeSaveHasDeviations(deviations), false);
+    assert.ok(deviations.some((row) => row.rowTone === "surplus"));
+    assert.ok(!deviations.some((row) => row.rowTone === "excess"));
   });
 
   it("תשלום חלקי תקין על אמצעי פתוח → ALLOW", () => {
