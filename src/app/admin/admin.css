@@ -9693,6 +9693,14 @@ select.payment-modal-inline-input {
   border-color: #93c5fd;
 }
 
+.payment-upd-planned-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  align-items: center;
+}
+
 .payment-upd-planned-btn__info {
   color: #2563eb;
   font-weight: 700;
@@ -10277,6 +10285,38 @@ select.payment-modal-inline-input {
 .payment-upd-planned-btn:hover {
   background: #eff6ff;
   border-color: #93c5fd;
+}
+
+.payment-upd-auto-adjust-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 2px 12px;
+  border: 1px solid #a5b4fc;
+  border-radius: 8px;
+  background: #f5f3ff;
+  color: #4338ca;
+  font-size: 0.82rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.payment-upd-auto-adjust-btn:hover {
+  background: #ede9fe;
+  border-color: #818cf8;
+}
+
+.payment-upd-auto-adjust-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+  background: #f8fafc;
+  border-color: #cbd5e1;
+  color: #64748b;
+}
+
+.payment-upd-auto-adjust-btn--top {
+  order: 0;
 }
 .payment-upd-planned-btn.has-warn {
   border-color: #fca5a5;

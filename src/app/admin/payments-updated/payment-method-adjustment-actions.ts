@@ -195,7 +195,7 @@ export async function applyPaymentMethodAutoAdjustmentAction(params: {
           } as Prisma.InputJsonValue,
         },
       });
-    });
+    }, { maxWait: 10_000, timeout: 30_000 });
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : "התאמה אוטומטית נכשלה" };
   }

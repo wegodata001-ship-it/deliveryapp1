@@ -3079,6 +3079,17 @@ export function PaymentModalUpdated({
             <div className="payment-modal-rate-strip" dir="rtl">
               <PaymentNavigator {...paymentNavigatorProps} />
               <div className="payment-modal-rate-strip-rates">
+                {canEditOrders ? (
+                  <button
+                    type="button"
+                    className="payment-upd-auto-adjust-btn payment-upd-auto-adjust-btn--top"
+                    onClick={() => setAutoAdjustOpen(true)}
+                    disabled={!customer || captureReadOnly}
+                    title={!customer ? "יש לבחור לקוח לפני ביצוע התאמה" : "התאמה אוטומטית"}
+                  >
+                    ⚙ התאמה אוטומטית
+                  </button>
+                ) : null}
                 <span className="payment-modal-rate-strip-lead">תאריך ביצוע קליטת תשלום:</span>
                 <input
                   type="date"
