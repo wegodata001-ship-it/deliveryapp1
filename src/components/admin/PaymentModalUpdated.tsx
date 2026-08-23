@@ -202,7 +202,6 @@ const COUNTRY_BADGE_SHORT: Record<OrderCountryCode, string> = {
 };
 
 type BadgeEditField = "week" | "country" | "date" | "time" | null;
-type OverpaymentResolutionState = null | "ADD_TO_COMMISSIONS" | "EDIT_ORDER";
 
 type CustFieldKey = "code" | "displayName" | "nameEn" | "nameAr" | "phone" | "index";
 
@@ -504,6 +503,7 @@ export function PaymentModalUpdated({
   const firstAmountInputRef = useRef<HTMLInputElement | null>(null);
   const saveAndNewButtonRef = useRef<HTMLButtonElement | null>(null);
   const savePrimaryButtonRef = useRef<HTMLButtonElement | null>(null);
+  const overageConfirmInFlightRef = useRef(false);
 
   const [draftCustomer, setDraftCustomer] = useState<Record<CustFieldKey, string>>(() => ({
     ...EMPTY_CUSTOMER_DRAFT,
@@ -592,8 +592,6 @@ export function PaymentModalUpdated({
   const [postSaveError, setPostSaveError] = useState<string | null>(null);
   const [overageModalOpen, setOverageModalOpen] = useState(false);
   const [overagePreview, setOveragePreview] = useState<PaymentOveragePreview | null>(null);
-  const [overpaymentResolution, setOverpaymentResolution] = useState<OverpaymentResolutionState>(null);
-  const [resolvedOverpaymentUsd, setResolvedOverpaymentUsd] = useState(0);
   const [postSaveOverageMode, setPostSaveOverageMode] = useState(false);
   const [intakeDevModalOpen, setIntakeDevModalOpen] = useState(false);
   const [intakeDevRows, setIntakeDevRows] = useState<IntakeSaveDeviationRow[]>([]);
@@ -1192,45 +1190,8 @@ export function PaymentModalUpdated({
   const showInlineOverpaymentBtn = useMemo(() => {
     if (!customer || customerWorkspaceLoading) return false;
     if (intakeCorrectionRows.length > 0) return false;
-    if (orderOverpaymentAfterPaymentUsd <= 0.01) return false;
-    return !(
-      overpaymentResolution === "ADD_TO_COMMISSIONS"
-      && Math.abs(resolvedOverpaymentUsd - orderOverpaymentAfterPaymentUsd) <= 0.01
-    );
-  }, [
-    customer,
-    customerWorkspaceLoading,
-    intakeCorrectionRows.length,
-    orderOverpaymentAfterPaymentUsd,
-    overpaymentResolution,
-    resolvedOverpaymentUsd,
-  ]);
-
-  const overpaymentApprovedForCommission = useMemo(
-    () =>
-      orderOverpaymentAfterPaymentUsd > 0.01
-      && overpaymentResolution === "ADD_TO_COMMISSIONS"
-      && Math.abs(resolvedOverpaymentUsd - orderOverpaymentAfterPaymentUsd) <= 0.01,
-    [orderOverpaymentAfterPaymentUsd, overpaymentResolution, resolvedOverpaymentUsd],
-  );
-
-  useEffect(() => {
-    if (orderOverpaymentAfterPaymentUsd <= 0.01) {
-      if (overpaymentResolution !== null || resolvedOverpaymentUsd > 0) {
-        clearOverpaymentResolutionState();
-      }
-      return;
-    }
-    if (
-      overpaymentResolution === "ADD_TO_COMMISSIONS"
-      && Math.abs(resolvedOverpaymentUsd - orderOverpaymentAfterPaymentUsd) <= 0.01
-    ) {
-      return;
-    }
-    if (overpaymentResolution !== null) {
-      clearOverpaymentResolutionState();
-    }
-  }, [orderOverpaymentAfterPaymentUsd, overpaymentResolution, resolvedOverpaymentUsd]);
+    return orderOverpaymentAfterPaymentUsd > 0.01;
+  }, [customer, customerWorkspaceLoading, intakeCorrectionRows.length, orderOverpaymentAfterPaymentUsd]);
 
   const paymentCaptureIsDirty = useCallback(
     () => baselineSigRef.current !== "" && baselineSigRef.current !== currentDraftSig,
@@ -2866,11 +2827,6 @@ export function PaymentModalUpdated({
     };
   }
 
-  function clearOverpaymentResolutionState() {
-    setOverpaymentResolution(null);
-    setResolvedOverpaymentUsd(0);
-  }
-
   function openInlineOverageModal(mode: "new" | "close" | null = null): boolean {
     const preview = buildInlineOveragePreview();
     if (!preview) return false;
@@ -3005,7 +2961,7 @@ export function PaymentModalUpdated({
   }
 
   async function onSaveAndNew() {
-    if (orderOverpaymentAfterPaymentUsd > 0.01 && !overpaymentApprovedForCommission) {
+    if (orderOverpaymentAfterPaymentUsd > 0.01) {
       openInlineOverageModal("new");
       return;
     }
@@ -3014,9 +2970,8 @@ export function PaymentModalUpdated({
       return;
     }
     saveAfterOverageRef.current = "new";
-    const res = await performSave(overpaymentApprovedForCommission ? "commission" : null);
+    const res = await performSave(null);
     if (!res.ok) return;
-    clearOverpaymentResolutionState();
     saveAfterOverageRef.current = null;
     await finishAfterSuccessfulSave("new", res);
   }
@@ -3026,7 +2981,7 @@ export function PaymentModalUpdated({
    * זהו ה־flow הסופי / רגיל.
    */
   async function onSaveAndClose() {
-    if (orderOverpaymentAfterPaymentUsd > 0.01 && !overpaymentApprovedForCommission) {
+    if (orderOverpaymentAfterPaymentUsd > 0.01) {
       openInlineOverageModal("close");
       return;
     }
@@ -3035,9 +2990,8 @@ export function PaymentModalUpdated({
       return;
     }
     saveAfterOverageRef.current = "close";
-    const res = await performSave(overpaymentApprovedForCommission ? "commission" : null);
+    const res = await performSave(null);
     if (!res.ok) return;
-    clearOverpaymentResolutionState();
     saveAfterOverageRef.current = null;
     await finishAfterSuccessfulSave("close", res);
   }
@@ -3047,11 +3001,26 @@ export function PaymentModalUpdated({
       await onPostSaveSurplusConfirm(disposition);
       return;
     }
-    if (disposition === "commission") {
-      setOverpaymentResolution("ADD_TO_COMMISSIONS");
-      setResolvedOverpaymentUsd(roundMoney2(orderOverpaymentAfterPaymentUsd));
+    if (!customer || saveBusy || overageConfirmInFlightRef.current) return;
+    overageConfirmInFlightRef.current = true;
+    try {
+      const mode = saveAfterOverageRef.current;
+      const res = await performSave(disposition);
+      if (!res.ok) return;
       setOverageModalOpen(false);
-      onToast(`תשלום היתר ${formatPaymentBalanceUsdLine(openDebtAfterPaymentPreview.paymentBalanceDisplay)} יתווסף לעמלות בעת שמירת התשלום`);
+      setOveragePreview(null);
+      saveAfterOverageRef.current = null;
+      if (mode === "new" || mode === "close") {
+        await finishAfterSuccessfulSave(mode, res);
+        return;
+      }
+      onToast(`${formatPaymentBalanceUsdLine(openDebtAfterPaymentPreview.paymentBalanceDisplay)} נוספו לעמלות`);
+      await loadPayment(res.primaryPaymentId, { forceNetwork: true });
+      await loadCustomerWorkspaceInBackground(customer.id, intakeWeekCode, {
+        perfLabel: "inlineOverpaymentRefresh",
+      });
+    } finally {
+      overageConfirmInFlightRef.current = false;
     }
   }
 
@@ -3060,8 +3029,6 @@ export function PaymentModalUpdated({
     setPostSaveOverageMode(false);
     saveAfterOverageRef.current = null;
     setOveragePreview(null);
-    setOverpaymentResolution("EDIT_ORDER");
-    setResolvedOverpaymentUsd(0);
     const idSet = includedIds ? new Set(includedIds) : null;
     const target =
       matched.find((row) => (!idSet || idSet.has(row.id)) && row.allocationUsd > 0.01)
@@ -3937,11 +3904,7 @@ export function PaymentModalUpdated({
                         )}
                       />
                     </span>
-                    {overpaymentApprovedForCommission ? (
-                      <span className="payment-balance-summary__status-hint">
-                        ✓ תשלום היתר בסך {formatPaymentBalanceUsdLine(openDebtAfterPaymentPreview.paymentBalanceDisplay)} יתווסף לעמלות בעת שמירת התשלום
-                      </span>
-                    ) : openDebtAfterPaymentPreview.paymentBalanceDisplay.statusHint ? (
+                    {openDebtAfterPaymentPreview.paymentBalanceDisplay.statusHint ? (
                       <span className="payment-balance-summary__status-hint">
                         {openDebtAfterPaymentPreview.paymentBalanceDisplay.statusHint}
                       </span>
