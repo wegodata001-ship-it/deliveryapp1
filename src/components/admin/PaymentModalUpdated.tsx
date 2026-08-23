@@ -4657,6 +4657,7 @@ export function PaymentModalUpdated({
         preview={overagePreview}
         commissionBalanceUsd={liveIntakeTotals.commissionsUsd}
         busy={saveBusy}
+        error={saveErr}
         onConfirm={(disposition) => void onOverageConfirm(disposition)}
         onEditOrder={canEditOrders ? onOverageEditOrder : undefined}
         onCancel={onOverageCancel}

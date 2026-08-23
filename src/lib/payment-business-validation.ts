@@ -219,6 +219,31 @@ function applyApprovedTransfersToPlanned(
 }
 
 /**
+ * עודף טהור מעל חוב שנסגר במלואו — לא חריגת אמצעי.
+ * תואם ל-classifyMethodIntakeGate בצד הלקוח:
+ * כל האמצעים הפתוחים שולמו (אין אמצעי פתוח שלא הוזן), והתשלום > החוב.
+ */
+export function canTreatMethodViolationsAsPureSurplus(params: {
+  plannedByMethod: PlannedBucketUsd[];
+  enteredByMethod: EnteredBucketUsd[];
+  totalDebtUsd: number;
+  totalPaymentUsd: number;
+  eps?: number;
+}): boolean {
+  const eps = params.eps ?? PAYMENT_BUSINESS_EPS;
+  const surplusUsd = roundMoney2(Math.max(0, params.totalPaymentUsd - params.totalDebtUsd));
+  if (params.totalPaymentUsd < params.totalDebtUsd - eps || surplusUsd <= eps) return false;
+  const enteredMap = new Map(
+    params.enteredByMethod.map((e) => [e.bucket, e.enteredUsd] as const),
+  );
+  const openUnpaidOtherMethod = params.plannedByMethod.some((p) => {
+    if (p.remainingUsd <= eps) return false;
+    return (enteredMap.get(p.bucket) ?? 0) <= eps;
+  });
+  return !openUnpaidOtherMethod;
+}
+
+/**
  * מקור אמת יחיד להחלטה אם קליטת תשלום רשאית להגיע ל-FIFO ולשמירה.
  *
  * סדר החוקים קבוע:
@@ -269,8 +294,19 @@ export function evaluatePaymentBusinessRules(
     surplusUsd: values.surplusUsd ?? 0,
   });
 
-  // חריגת אמצעי — חסימה תמיד. אין «העברת חוב» ואין עקיפה בעודף.
-  if (violations.length > 0) {
+  // חריגת אמצעי — חסימה, למעט עודף טהור לאחר סגירת כל החוב
+  // (אותו כלל כמו classifyMethodIntakeGate בצד הלקוח). אחרת Confirm של
+  // "הוספה לעמלות" נחסם בשרת אחרי שה-Modal כבר הציג Preview תקין.
+  if (
+    violations.length > 0 &&
+    !canTreatMethodViolationsAsPureSurplus({
+      plannedByMethod: plannedRows,
+      enteredByMethod: input.enteredByMethod,
+      totalDebtUsd,
+      totalPaymentUsd,
+      eps,
+    })
+  ) {
     return result("INVALID_METHODS", paymentMethodMismatchMessage(violations));
   }
 

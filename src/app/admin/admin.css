@@ -40775,3 +40775,15 @@ button.adm-cash-kpi:hover {
   }
 }
 
+
+
+.adm-mini-modal-error {
+  margin: 0.75rem 0 0;
+  padding: 0.65rem 0.75rem;
+  border-radius: 8px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}

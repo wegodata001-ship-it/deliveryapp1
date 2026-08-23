@@ -11,6 +11,8 @@ type Props = {
   preview: PaymentOveragePreview | null;
   commissionBalanceUsd?: number;
   busy?: boolean;
+  /** שגיאת שמירה מהשרת — מוצגת בתוך המודל כדי לא להסתיר אותה מאחוריו */
+  error?: string | null;
   /**
    * true = כל החוב נסגר ויש עודף — חלון "עודף לאחר סגירת חוב"
    * (לא חריגת אמצעי תשלום).
@@ -26,6 +28,7 @@ export function CustomerPaymentOverageModal({
   preview,
   commissionBalanceUsd = 0,
   busy,
+  error,
   onConfirm,
   onEditOrder,
   onCancel,
@@ -94,6 +97,14 @@ export function CustomerPaymentOverageModal({
             </strong>
           </div>
         </div>
+
+        {error ? (
+          <p className="adm-mini-modal-error" role="alert">
+            לא ניתן היה לשמור את התשלום.
+            <br />
+            {error}
+          </p>
+        ) : null}
 
         <div className="adm-mini-modal-actions">
           {onEditOrder ? (

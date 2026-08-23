@@ -4,7 +4,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { computePaymentOverpayment } from "@/lib/payment-overpayment";
-import { evaluatePaymentBusinessRules } from "@/lib/payment-business-validation";
+import {
+  canTreatMethodViolationsAsPureSurplus,
+  evaluatePaymentBusinessRules,
+} from "@/lib/payment-business-validation";
 import { classifyMethodIntakeGate } from "@/lib/cash-control-intake-breakdown";
 import { PAYMENT_BUCKET_LABELS } from "@/lib/payment-breakdown-shared";
 import type { PaymentIntakeOrderRow } from "@/lib/payment-intake";
@@ -155,4 +158,50 @@ describe("P1 Overpayment — composite payments (method gate + business rules)",
     assert.equal(withDisposition.code, "READY");
     assert.equal(withDisposition.surplusUsd, 10);
   });
+  it("Confirm add-to-commission: debt $500.22 pay $501 must not be blocked by INVALID_METHODS", () => {
+    const plannedByMethod = [
+      {
+        bucket: "CASH" as const,
+        label: PAYMENT_BUCKET_LABELS.CASH,
+        plannedUsd: 500.22,
+        remainingUsd: 500.22,
+      },
+    ];
+    const enteredByMethod = [
+      { bucket: "CASH" as const, label: PAYMENT_BUCKET_LABELS.CASH, enteredUsd: 501 },
+    ];
+
+    assert.equal(
+      canTreatMethodViolationsAsPureSurplus({
+        plannedByMethod,
+        enteredByMethod,
+        totalDebtUsd: 500.22,
+        totalPaymentUsd: 501,
+      }),
+      true,
+    );
+
+    const withoutDisposition = evaluatePaymentBusinessRules({
+      plannedByMethod,
+      enteredByMethod,
+      totalDebtUsd: 500.22,
+      totalPaymentUsd: 501,
+    });
+    assert.notEqual(withoutDisposition.code, "INVALID_METHODS");
+    assert.equal(withoutDisposition.code, "CHOOSE_SURPLUS_DISPOSITION");
+    assert.equal(withoutDisposition.ok, false);
+    assert.equal(Number(withoutDisposition.surplusUsd.toFixed(2)), 0.78);
+
+    const withCommission = evaluatePaymentBusinessRules({
+      plannedByMethod,
+      enteredByMethod,
+      totalDebtUsd: 500.22,
+      totalPaymentUsd: 501,
+      surplusDisposition: "commission",
+    });
+    assert.equal(withCommission.code, "READY");
+    assert.equal(withCommission.ok, true);
+    assert.equal(Number(withCommission.surplusUsd.toFixed(2)), 0.78);
+  });
+
 });
