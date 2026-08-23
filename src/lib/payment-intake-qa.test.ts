@@ -10,6 +10,7 @@ import {
   intakeSaveHasDeviations,
   intakeSaveHasSurplus,
   intakeHasMethodMismatch,
+  filterIntakeCorrectionRowsForDisplay,
   intakeHasOpenBalanceShortfall,
   intakeDeviationModalRows,
   buildIntakeDeviationModalView,
@@ -737,6 +738,33 @@ describe("QA-8 — נעילת אמצעי סגור + חסימת שינוי אמצ
     assert.equal(intakeSaveHasDeviations(deviations), false);
     assert.ok(deviations.some((row) => row.rowTone === "surplus"));
     assert.ok(!deviations.some((row) => row.rowTone === "excess"));
+  });
+
+  it("עודף תשלום — באנר חלוקת אמצעים מוסתר גם כשיש excess גולמי", () => {
+    const raw = [
+      {
+        id: "method:CASH",
+        typeLabel: "מזומן",
+        plannedDisplay: "$500.22",
+        receivedDisplay: "$501.00",
+        diffDisplay: "+$0.78",
+        statusLabel: "חריגה",
+        rowTone: "excess" as const,
+      },
+      {
+        id: "balance:surplus",
+        typeLabel: "עודף",
+        plannedDisplay: "$500.22",
+        receivedDisplay: "$501.00",
+        diffDisplay: "+$0.78",
+        statusLabel: "עודף",
+        rowTone: "surplus" as const,
+      },
+    ];
+    assert.equal(filterIntakeCorrectionRowsForDisplay(raw, "surplus").length, 0);
+    const debtView = filterIntakeCorrectionRowsForDisplay(raw, "debt");
+    assert.equal(debtView.length, 1);
+    assert.equal(debtView[0].rowTone, "excess");
   });
 
   it("תשלום חלקי תקין על אמצעי פתוח → ALLOW", () => {

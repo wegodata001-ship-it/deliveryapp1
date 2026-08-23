@@ -186,6 +186,25 @@ export function computeIntakeSaveDeviations(params: {
 }
 
 /** חריגת אמצעי תשלום שחוסמת שמירה. */
+
+/**
+ * באנר «נדרש עדכון חלוקת אמצעי תשלום» בקליטת תשלום:
+ * כשיש עודף תשלום (payment > debt) — excess לא מוצג; מטופל בחלון תשלום היתר בלבד.
+ * חריגת שער עדיין מוצגת.
+ */
+export function filterIntakeCorrectionRowsForDisplay(
+  rows: IntakeSaveDeviationRow[],
+  paymentBalanceState: "debt" | "cleared" | "surplus",
+): IntakeSaveDeviationRow[] {
+  const hasPaymentSurplus = paymentBalanceState === "surplus";
+  return rows.filter((r) => {
+    if (r.rowTone === "rate") return true;
+    if (r.rowTone !== "excess") return false;
+    if (hasPaymentSurplus) return false;
+    return true;
+  });
+}
+
 export function intakeHasMethodMismatch(rows: IntakeSaveDeviationRow[]): boolean {
   return rows.some((r) => r.rowTone === "excess" || r.id.startsWith("unplanned:"));
 }

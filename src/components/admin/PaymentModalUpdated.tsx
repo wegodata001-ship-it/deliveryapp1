@@ -63,6 +63,7 @@ import {
   computeIntakeSaveDeviations,
   intakeSaveHasDeviations,
   intakeHasMethodMismatch,
+  filterIntakeCorrectionRowsForDisplay,
   intakeHasRateMismatch,
   intakeHasOpenBalanceShortfall,
   intakeDeviationModalRows,
@@ -1098,10 +1099,15 @@ export function PaymentModalUpdated({
 
   const intakeStripOpenDebtUsd = customerOpenDebtDisplayUsd;
 
-  /** שורות חוסמות — אמצעי / שער (לא תשלום יתר) */
+  /**
+   * שורות חוסמות לתצוגה — אמצעי / שער.
+   * תשלום יתר (payment > openDebt) מטופל רק בחלון «התקבל תשלום יתר».
+   * אין להציג באנר «נדרש עדכון חלוקת אמצעי תשלום» על excess במצב עודף.
+   * חשוב: להשתמש ב-SSOT של יתרת התשלום (paymentBalance), לא בסיכום איפוס יתרה.
+   */
   const intakeCorrectionRows = useMemo(
-    () => liveIntakeDevRows.filter((r) => r.rowTone === "excess" || r.rowTone === "rate"),
-    [liveIntakeDevRows],
+    () => filterIntakeCorrectionRowsForDisplay(liveIntakeDevRows, paymentBalanceDisplay.state),
+    [liveIntakeDevRows, paymentBalanceDisplay.state],
   );
 
   const intakeDeviationViewLive = useMemo<IntakeDeviationModalView | null>(() => {
@@ -1189,9 +1195,18 @@ export function PaymentModalUpdated({
 
   const showInlineOverpaymentBtn = useMemo(() => {
     if (!customer || customerWorkspaceLoading) return false;
-    if (intakeCorrectionRows.length > 0) return false;
-    return orderOverpaymentAfterPaymentUsd > 0.01;
-  }, [customer, customerWorkspaceLoading, intakeCorrectionRows.length, orderOverpaymentAfterPaymentUsd]);
+    // חריגת שער עדיין חוסמת; excess על עודף תשלום כבר סונן מ-intakeCorrectionRows
+    if (intakeCorrectionRows.some((r) => r.rowTone === "rate")) return false;
+    return (
+      paymentBalanceDisplay.state === "surplus" || orderOverpaymentAfterPaymentUsd > 0.01
+    );
+  }, [
+    customer,
+    customerWorkspaceLoading,
+    intakeCorrectionRows,
+    paymentBalanceDisplay.state,
+    orderOverpaymentAfterPaymentUsd,
+  ]);
 
   const paymentCaptureIsDirty = useCallback(
     () => baselineSigRef.current !== "" && baselineSigRef.current !== currentDraftSig,
@@ -2442,11 +2457,24 @@ export function PaymentModalUpdated({
       enteredByBucket: buildEnteredByBucket(liveFormKpis),
       totalPaymentUsd: totals.totalUsd,
     });
-    if (methodGate.kind === "METHOD_DEVIATION" || methodGate.kind === "DEBT_TRANSFER") {
+    // תשלום יתר שאושר (commission/credit) + כיסוי מלא של החוב:
+    // excess על אמצעי נספג כעודף ולא כחריגת חלוקה. DEBT_TRANSFER עדיין נחסם.
+    const surplusApproved =
+      surplusDisposition === "commission" || surplusDisposition === "credit";
+    const paymentCoversDebt = totals.totalUsd + 0.01 >= totalDebtBeforePaymentUsd;
+    const allowMethodExcessAsApprovedSurplus =
+      surplusApproved &&
+      paymentCoversDebt &&
+      methodGate.kind === "METHOD_DEVIATION";
+    if (
+      (methodGate.kind === "METHOD_DEVIATION" || methodGate.kind === "DEBT_TRANSFER") &&
+      !allowMethodExcessAsApprovedSurplus
+    ) {
       setIntakeDevRows(liveIntakeDevRows);
       setSaveErr("אמצעי התשלום בפועל שונים מהחלוקה שהוגדרה. יש לעדכן את ההזמנה לפני הקליטה.");
       return { ok: false };
     }
+
     if (intakeHasRateMismatch(liveIntakeDevRows)) {
       setIntakeDevRows(liveIntakeDevRows);
       setSaveErr("שער הדולר שנקלט שונה מהשער של ההזמנה. יש לבדוק את הנתונים לפני שמירה.");
@@ -2961,7 +2989,7 @@ export function PaymentModalUpdated({
   }
 
   async function onSaveAndNew() {
-    if (orderOverpaymentAfterPaymentUsd > 0.01) {
+    if (paymentBalanceDisplay.state === "surplus" || orderOverpaymentAfterPaymentUsd > 0.01) {
       openInlineOverageModal("new");
       return;
     }
@@ -2981,7 +3009,7 @@ export function PaymentModalUpdated({
    * זהו ה־flow הסופי / רגיל.
    */
   async function onSaveAndClose() {
-    if (orderOverpaymentAfterPaymentUsd > 0.01) {
+    if (paymentBalanceDisplay.state === "surplus" || orderOverpaymentAfterPaymentUsd > 0.01) {
       openInlineOverageModal("close");
       return;
     }
