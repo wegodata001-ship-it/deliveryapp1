@@ -11,6 +11,7 @@ export type ManualColumnKey =
   | "shipmentDetails"
   | "status"
   | "city"
+  | "caseFileNumber"
   | "orderNumber"
   | "vatAmount"
   | "amountTotal"
@@ -18,9 +19,7 @@ export type ManualColumnKey =
   | "paymentAmount"
   | "makasa"
   | "makasaNumber"
-  | "amountPaid"
-  | "inlandHaulage"
-  | "portHaulage";
+  | "amountPaid";
 
 export type ManualColumnInput =
   | "date"
@@ -82,37 +81,29 @@ export const MANUAL_SHIPMENT_COLUMNS: ManualColumnDef[] = [
   { key: "city", label: "עיר", input: "select", sticky: true, options: CITY_OPTIONS, group: "shipment" },
 
   // ─── קבוצה 3: נתונים פיננסיים ─────────────────────────────────────────────
+  // סדר טבלה: עיר | מספר תיק | מספר רישומון | …
+  { key: "caseFileNumber", label: "מספר תיק", input: "text", clearOnDuplicate: true, group: "financial" },
   { key: "orderNumber", label: "מספר רישומון", input: "text", clearOnDuplicate: true, group: "financial" },
   { key: "vatAmount", label: 'מע"מ', input: "number", step: "0.01", group: "financial" },
-  { key: "amountTotal", label: "סכום רידומין", input: "number", step: "0.01", group: "financial" },
-  { key: "airjetInvoice", label: "חש איירגט", input: "text", group: "financial" },
+  { key: "amountTotal", label: "סכום רישומון", input: "number", step: "0.01", group: "financial" },
+  { key: "airjetInvoice", label: "חשבונית אירגט", input: "text", group: "financial" },
   { key: "paymentAmount", label: "סכום התשלום", input: "number", step: "0.01", group: "financial" },
   { key: "makasa", label: "מקאסה", input: "number", step: "0.01", group: "financial" },
   { key: "makasaNumber", label: "מספר מקאסה", input: "text", clearOnDuplicate: true, group: "financial" },
-  { key: "amountPaid", label: "תשלום", input: "calculated", group: "financial" },
-  {
-    key: "inlandHaulage",
-    label: "הובלה פנים",
-    input: "number",
-    step: "0.01",
-    group: "financial",
-    showInTable: false,
-  },
-  {
-    key: "portHaulage",
-    label: "הובלה נמל",
-    input: "number",
-    step: "0.01",
-    group: "financial",
-    showInTable: false,
-  },
+  { key: "amountPaid", label: "יתרה", input: "calculated", group: "financial" },
 ];
 
 export const MANUAL_SHIPMENT_TABLE_COLUMNS = MANUAL_SHIPMENT_COLUMNS.filter(
   (c) => c.showInTable !== false,
 );
 
-export const MANUAL_PAYMENT_DRIVER_KEYS = ["paymentAmount", "amountTotal", "makasa"] as const;
+/** שדות שמפעילים חישוב מחדש של יתרה */
+export const MANUAL_PAYMENT_DRIVER_KEYS = [
+  "paymentAmount",
+  "vatAmount",
+  "airjetInvoice",
+  "makasa",
+] as const;
 
 export const STICKY_COLUMN_KEYS = MANUAL_SHIPMENT_COLUMNS.filter((c) => c.sticky).map((c) => c.key);
 export const AUTOCOMPLETE_COLUMN_KEYS = MANUAL_SHIPMENT_COLUMNS.filter((c) => c.autocomplete).map(

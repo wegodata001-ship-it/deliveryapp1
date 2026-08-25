@@ -2,7 +2,7 @@
 
 import { useMemo, useState, Fragment } from "react";
 import {
-  X, Search, Banknote, Trash2, Plus, Save, Eye,
+  X, Search, Banknote, Trash2, Plus, Save, Eye, ExternalLink,
 } from "lucide-react";
 import type { ShipmentControlRecord } from "@/app/admin/shipments/control/types";
 import type { ShipmentRecordDto, ShipmentStatus } from "@/app/admin/shipments/types";
@@ -24,6 +24,8 @@ import { getEffectiveDeliveryPlace } from "@/lib/shipment-delivery-place";
 import { ShipmentPaymentModal } from "@/components/admin/shipments/ShipmentPaymentModal";
 import { ShipmentConfirmModal } from "@/components/admin/shipments/ShipmentConfirmModal";
 import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
+import { workEnvironmentLabelHe } from "@/lib/work-country";
+import { hasValidShipmentDeliveryFee } from "@/lib/shipment-control-aggregation";
 
 export type KpiDrillKey =
   | "all"
@@ -43,10 +45,9 @@ export type KpiDrillKey =
   | "unpaid"
   | "partial"
   | "paid"
+  | "missing_fee"
   | "boxes"
-  | "weight"
-  | "delivered_boxes"
-  | "not_delivered_boxes";
+  | "weight";
 
 export const KPI_DRILL_TITLES: Record<KpiDrillKey, string> = {
   all: "סה״כ משלוחים",
@@ -66,10 +67,9 @@ export const KPI_DRILL_TITLES: Record<KpiDrillKey, string> = {
   unpaid: "לא שולמו",
   partial: "שולמו חלקית",
   paid: "שולמו",
-  boxes: "קרטונים",
+  missing_fee: "לקוחות ללא דמי משלוח",
+  boxes: "חבילות",
   weight: "משקל",
-  delivered_boxes: "קרטונים שנמסרו",
-  not_delivered_boxes: "קרטונים שלא נמסרו",
 };
 
 const STATUS_OPTIONS: ShipmentStatus[] = [
@@ -133,10 +133,8 @@ export function filterRecordsForKpi(
       return records.filter((r) => r.paymentStatus === "PARTIAL");
     case "paid":
       return records.filter((r) => r.paymentStatus === "PAID");
-    case "delivered_boxes":
-      return records.filter((r) => r.status === "DELIVERED" || r.status === "COMPLETED");
-    case "not_delivered_boxes":
-      return records.filter((r) => r.status === "NOT_DELIVERED" || r.status === "RETURNED");
+    case "missing_fee":
+      return records.filter((r) => !hasValidShipmentDeliveryFee(r));
     default:
       return records;
   }
@@ -151,7 +149,7 @@ export function ShipmentControlKpiModal({
   onClose,
   onChanged,
 }: Props) {
-  const { workCountry } = useShipmentCountry();
+  const { workCountry, basePath } = useShipmentCountry();
   const [search, setSearch] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -357,17 +355,18 @@ export function ShipmentControlKpiModal({
   }
 
   const cols = {
+    missingFee: kpiKey === "missing_fee",
     zone: kpiKey === "no_zone" || kpiKey === "all" || kpiKey === "zones",
     courier: kpiKey === "no_courier" || kpiKey === "in_transit" || kpiKey === "all" || kpiKey === "couriers",
-    boxes: kpiKey === "boxes" || kpiKey === "delivered_boxes" || kpiKey === "not_delivered_boxes" || kpiKey === "all",
+    boxes: kpiKey === "boxes" || kpiKey === "all",
     weight: kpiKey === "weight" || kpiKey === "boxes",
-    fee: ["to_charge", "remaining", "unpaid", "partial", "paid", "collected", "credit", "all"].includes(kpiKey),
+    fee: ["to_charge", "remaining", "unpaid", "partial", "paid", "collected", "credit", "missing_fee", "all"].includes(kpiKey),
     paid: ["paid", "partial", "collected", "credit", "remaining", "unpaid"].includes(kpiKey),
     remaining: ["unpaid", "partial", "remaining", "to_charge"].includes(kpiKey),
     status: ["in_transit", "returned", "not_delivered", "all"].includes(kpiKey),
     payment: ["unpaid", "partial", "paid", "collected", "credit", "remaining", "to_charge"].includes(kpiKey),
     notes: kpiKey === "returned",
-    feeEdit: kpiKey === "to_charge" || kpiKey === "remaining" || kpiKey === "all",
+    feeEdit: kpiKey === "to_charge" || kpiKey === "remaining" || kpiKey === "missing_fee" || kpiKey === "all",
     weightEdit: kpiKey === "weight" || kpiKey === "boxes",
     collect: ["unpaid", "partial", "remaining", "to_charge", "all", "paid", "collected", "credit"].includes(kpiKey),
   };
@@ -398,8 +397,8 @@ export function ShipmentControlKpiModal({
                 <span>דמי משלוח: <strong>{fmtIls(summary.fee)}</strong></span>
                 <span>נגבה: <strong>{fmtIls(summary.paid)}</strong></span>
                 <span>יתרה: <strong>{fmtIls(summary.remaining)}</strong></span>
-                {(kpiKey === "boxes" || kpiKey === "delivered_boxes" || kpiKey === "not_delivered_boxes") && (
-                  <span>קרטונים: <strong>{summary.boxes}</strong></span>
+                {(kpiKey === "boxes") && (
+                  <span>חבילות: <strong>{summary.boxes}</strong></span>
                 )}
                 {kpiKey === "weight" && (
                   <span>משקל: <strong>{summary.weight.toLocaleString("he-IL")} ק״ג</strong></span>
@@ -449,10 +448,13 @@ export function ShipmentControlKpiModal({
                   <tr>
                     <th>משלוח</th>
                     <th>לקוח</th>
+                    {cols.missingFee && <th>קוד לקוח</th>}
+                    {cols.missingFee && <th>קונטיינר</th>}
+                    {cols.missingFee && <th>מדינה</th>}
                     {(cols.zone) && <th>אזור</th>}
                     {(cols.courier) && <th>שליח</th>}
                     {cols.boxes && (
-                      <th>קרטונים</th>
+                      <th>חבילות</th>
                     )}
                     {cols.weight && <th>משקל</th>}
                     {(cols.fee) && (
@@ -485,6 +487,9 @@ export function ShipmentControlKpiModal({
                           <div style={{ fontWeight: 600 }}>{r.customerName || "—"}</div>
                           <div style={{ fontSize: "0.72rem", color: "#64748b" }}>{r.customerPhone || ""}{r.customerPhone2 ? ` / ${r.customerPhone2}` : ""}</div>
                         </td>
+                        {cols.missingFee && <td>{r.customerCode || "—"}</td>}
+                        {cols.missingFee && <td>{r.containerNumber || "—"}</td>}
+                        {cols.missingFee && <td>{workEnvironmentLabelHe(workCountry)}</td>}
 
                         {(cols.zone) && (
                           <td>
@@ -580,15 +585,20 @@ export function ShipmentControlKpiModal({
                                 type="number"
                                 min={0}
                                 step={0.01}
-                                defaultValue={r.deliveryFeeIls ?? ""}
+                                defaultValue={
+                                  hasValidShipmentDeliveryFee(r) ? (r.deliveryFeeIls ?? "") : ""
+                                }
+                                placeholder="חסר"
                                 onBlur={(e) => {
                                   const v = e.target.value === "" ? null : Number(e.target.value);
                                   if (v === r.deliveryFeeIls) return;
                                   void handleFee(r.id, v);
                                 }}
                               />
+                            ) : hasValidShipmentDeliveryFee(r) ? (
+                              fmtIls(r.deliveryFeeIls ?? r.deliveryFeeAmount)
                             ) : (
-                              fmtIls(r.deliveryFeeIls)
+                              <span style={{ color: "#dc2626" }}>—</span>
                             )}
                           </td>
                         )}
@@ -663,6 +673,16 @@ export function ShipmentControlKpiModal({
                             >
                               <Eye size={13} />
                             </button>
+                            {cols.missingFee && (
+                              <a
+                                className="shp-btn shp-btn--sm shp-btn--secondary"
+                                href={`${basePath}/${r.batchId}`}
+                                title="פתח משלוח לעריכה"
+                              >
+                                <ExternalLink size={12} />
+                                פתח
+                              </a>
+                            )}
                             {cols.collect && (r.deliveryFeeIls ?? 0) > 0 && (
                               <button
                                 className="shp-btn shp-btn--sm shp-btn--primary"
@@ -697,7 +717,7 @@ export function ShipmentControlKpiModal({
                                   {[r.address, getEffectiveDeliveryPlace(r)].filter(Boolean).join(", ") || "—"}
                                 </div>
                                 <div><span className="sc-expand-label">קונטיינר:</span> {r.containerNumber || "—"}</div>
-                                <div><span className="sc-expand-label">קרטונים:</span> {r.boxes ?? "—"} {r.cartonDetails ? `(${r.cartonDetails})` : ""}</div>
+                                <div><span className="sc-expand-label">חבילות:</span> {r.boxes ?? "—"} {r.cartonDetails ? `(${r.cartonDetails})` : ""}</div>
                                 <div><span className="sc-expand-label">משקל:</span> {r.weight != null ? `${r.weight} ק״ג` : "—"}</div>
                                 <div><span className="sc-expand-label">הערות:</span> {r.notes || "—"}</div>
                                 <div>
@@ -722,7 +742,10 @@ export function ShipmentControlKpiModal({
             </button>
             {canWrite && (
               <span className="sc-kpi-modal-hint">
-                <Save size={13} /> שינויים נשמרים אוטומטית
+                <Save size={13} />{" "}
+                {kpiKey === "missing_fee"
+                  ? "ניתן לערוך דמי משלוח ישירות בעמודה, או לפתוח את המשלוח"
+                  : "שינויים נשמרים אוטומטית"}
               </span>
             )}
           </div>

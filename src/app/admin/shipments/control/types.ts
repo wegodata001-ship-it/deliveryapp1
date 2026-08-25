@@ -42,6 +42,11 @@ export type ShipmentBatchExpenseCategory =
   | "UNLOADING"
   | "OTHER";
 
+/**
+ * @deprecated מקור האמת הוא `ShipmentExpenseType` ב-DB
+ * (`src/lib/shipment-expense-types.ts` + expense-types-actions).
+ * נשמר כ-fallback לתצוגה בלבד.
+ */
 export const SHIPMENT_BATCH_EXPENSE_LABELS: Record<ShipmentBatchExpenseCategory, string> = {
   FUEL: "דלק",
   ROAD6: "כביש 6",
@@ -52,7 +57,7 @@ export const SHIPMENT_BATCH_EXPENSE_LABELS: Record<ShipmentBatchExpenseCategory,
   OTHER: "אחר",
 };
 
-/** קטגוריות לניהול הוצאות משלוחים (כולל חניה) */
+/** @deprecated ראה `ShipmentExpenseType` / `SHIPMENT_EXPENSE_TYPE_SEED` */
 export const SHIPMENT_MANAGE_EXPENSE_LABELS: Record<string, string> = {
   FUEL: "דלק",
   ROAD6: "כביש 6",
@@ -137,11 +142,9 @@ export type ShipmentKpis = {
   unassignedCourier: number;
   noZone: number;
 
-  // Cartons / weight
+  // Packages / weight — `totalBoxes` is the SSOT quantity (חבילות ≡ קרטונים)
   totalBoxes: number;
   totalWeightKg: number;
-  deliveredBoxes: number;
-  notDeliveredBoxes: number;
 
   // Payment status counts
   unpaidCount: number;
@@ -150,6 +153,13 @@ export type ShipmentKpis = {
 
   /** סה״כ הוצאות משלוחים לפי הסינון הפעיל */
   totalExpensesIls: number;
+  /**
+   * סה״כ יתרה = SUM(התקבל − הוצאות) למשלוחים המסוננים
+   * SSOT זהה לעמודת «יתרה» בטבלת הסיכום
+   */
+  totalBalanceIls: number;
+  /** לקוחות בתוצאה המסוננת ללא דמי משלוח חיוביים */
+  missingDeliveryFeeCount: number;
 };
 
 // ─── Record (per-shipment row) ─────────────────────────────────────────────
@@ -255,7 +265,15 @@ export type ShipmentControlPayload = {
   byCourier: CourierSummary[];
   byZone: ZoneSummary[];
   exceptions: ShipmentException[];
-  batches: { id: string; batchNumber: string; containerNumber: string | null }[];
+  batches: {
+    id: string;
+    batchNumber: string;
+    containerNumber: string | null;
+    countryCode?: string | null;
+    arrivalDate?: string | null;
+    shippingDate?: string | null;
+    createdAt?: string | null;
+  }[];
   /** הוצאות קונטיינר/אצוות לפי הסינון הפעיל */
   batchExpenses: ShipmentBatchExpenseSummary[];
   zones: { id: string; name: string }[];

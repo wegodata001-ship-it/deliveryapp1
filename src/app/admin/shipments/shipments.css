@@ -1801,6 +1801,50 @@
   flex-wrap: wrap;
 }
 
+.sc-kpi-row--shipments-7,
+.sc-kpi-row--finance-6 {
+  display: grid;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.sc-kpi-row--shipments-7 {
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.sc-kpi-row--finance-6 {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.sc-kpi-row--shipments-7 > .sc-kpi-card,
+.sc-kpi-row--finance-6 > .sc-kpi-card {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  flex: none;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+@media (max-width: 1100px) {
+  .sc-kpi-row--shipments-7 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .sc-kpi-row--finance-6 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .sc-kpi-row--shipments-7,
+  .sc-kpi-row--finance-6 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 /* ??? KPI Card ????????????????????????????????????????????????????????????????? */
 .sc-kpi-card {
   /* full reset of native <button> styling so the card looks like the old div */
@@ -1888,6 +1932,45 @@
 /* ??? Record expand ???????????????????????????????????????????????????????????? */
 .sc-record-row:hover td {
   background: #f0f9ff;
+}
+
+.sc-container-row {
+  cursor: pointer;
+}
+
+.sc-container-row:hover td {
+  background: #f0f9ff;
+}
+
+.sc-container-drill__head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.sc-container-drill__title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 180px;
+}
+
+.sc-container-drill__title strong {
+  font-size: 1.05rem;
+  color: #1d4ed8;
+}
+
+.sc-container-drill__title span {
+  font-size: 0.82rem;
+  color: #64748b;
+}
+
+.shp-badge--mixed {
+  background: #f1f5f9;
+  color: #475569;
 }
 
 .sc-record-expand td {
@@ -3254,9 +3337,30 @@ tr.msh-row--cancel td:first-child { box-shadow: inset 3px 0 0 #ef4444; }
   margin-bottom: 10px;
 }
 
+.msh-status-mgmt__subtitle {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #64748b;
+  margin: 8px 0 6px;
+}
+
+.msh-status-mgmt__built-in {
+  margin-bottom: 8px;
+}
+
+.msh-status-mgmt__empty {
+  font-size: 0.78rem;
+  color: #94a3b8;
+}
+
+.msh-status-mgmt__item--readonly {
+  opacity: 0.85;
+}
+
 .msh-status-mgmt__list {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  flex-wrap: nowrap;
   gap: 8px;
   margin-bottom: 12px;
 }
@@ -3264,11 +3368,26 @@ tr.msh-row--cancel td:first-child { box-shadow: inset 3px 0 0 #ef4444; }
 .msh-status-mgmt__item {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
-  padding: 4px 10px;
+  padding: 6px 10px;
   background: #f1f5f9;
   border-radius: 6px;
   font-size: 0.8rem;
+}
+
+.msh-status-mgmt__item input {
+  min-width: 110px;
+  padding: 4px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  font-size: 0.8rem;
+}
+
+.msh-excel-hint__actions {
+  display: inline-flex;
+  gap: 10px;
+  margin-inline-start: 12px;
 }
 
 .msh-status-mgmt__item button {
@@ -4699,6 +4818,70 @@ tr.msh-row--cancel td:first-child { box-shadow: inset 3px 0 0 #ef4444; }
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   font-size: 0.9rem;
+}
+
+.sc-expense-type-select {
+  display: grid;
+  gap: 8px;
+}
+
+.sc-expense-type-select__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sc-expense-type-select__add {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+}
+
+.sc-expense-type-select__add-btns {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.sc-expense-type-select__manage {
+  display: grid;
+  gap: 6px;
+  max-height: 180px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.sc-expense-type-select__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px;
+}
+
+.sc-expense-type-select__row--inactive {
+  opacity: 0.65;
+}
+
+.sc-expense-type-select__name {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.85rem;
+  color: #0f172a;
+}
+
+.sc-expense-type-select__edit-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  font-size: 0.85rem;
 }
 
 .sc-expense-list-summary {

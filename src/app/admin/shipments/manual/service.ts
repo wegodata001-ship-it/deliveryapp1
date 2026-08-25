@@ -8,7 +8,7 @@ import type {
   ManualShipmentFilters,
   ManualShipmentInput,
 } from "@/app/admin/shipments/manual/types";
-import { calculateManualShipmentPayment } from "@/lib/manual-shipment-payment";
+import { calculateManualShipmentBalance } from "@/lib/manual-shipment-payment";
 
 function dec(n: number | null | undefined): Prisma.Decimal | null {
   if (n == null || Number.isNaN(n)) return null;
@@ -49,6 +49,7 @@ function toDto(row: {
   shipmentDetails: string | null;
   status: string;
   city: string | null;
+  caseFileNumber: string | null;
   orderNumber: string | null;
   boxes: number | null;
   totalWeight: Prisma.Decimal | null;
@@ -75,10 +76,13 @@ function toDto(row: {
 }): ManualShipmentDto {
   const amountTotal = num(row.amountTotal);
   const paymentAmount = num(row.paymentAmount);
+  const vatAmount = num(row.vatAmount);
+  const airjetInvoice = row.airjetInvoice;
   const makasa = row.makasa;
-  const computed = calculateManualShipmentPayment({
+  const computed = calculateManualShipmentBalance({
     paymentAmount,
-    ridominAmount: amountTotal,
+    vatAmount,
+    airjetInvoice,
     makasaAmount: makasa,
   });
 
@@ -92,6 +96,7 @@ function toDto(row: {
     shipmentDetails: row.shipmentDetails,
     status: row.status,
     city: row.city,
+    caseFileNumber: row.caseFileNumber,
     orderNumber: row.orderNumber,
     boxes: row.boxes,
     totalWeight: num(row.totalWeight),
@@ -102,13 +107,13 @@ function toDto(row: {
     distributionStartDate: isoDate(row.distributionStartDate),
     amountTotal,
     paymentAmount,
-    amountPaid: computed.payment,
-    amountRemaining: num(row.amountRemaining),
+    amountPaid: computed.balance,
+    amountRemaining: computed.balance,
     internalCode: row.internalCode,
     notes: row.notes,
     cpm: row.cpm,
-    vatAmount: num(row.vatAmount),
-    airjetInvoice: row.airjetInvoice,
+    vatAmount,
+    airjetInvoice,
     makasa,
     makasaNumber: row.makasaNumber,
     inlandHaulage: num(row.inlandHaulage),
@@ -120,9 +125,10 @@ function toDto(row: {
 
 function buildData(input: ManualShipmentInput, workCountry: WorkCountryCode) {
   const entryDate = parseDate(input.entryDate);
-  const computed = calculateManualShipmentPayment({
+  const computed = calculateManualShipmentBalance({
     paymentAmount: input.paymentAmount,
-    ridominAmount: input.amountTotal,
+    vatAmount: input.vatAmount,
+    airjetInvoice: input.airjetInvoice,
     makasaAmount: input.makasa,
   });
 
@@ -136,6 +142,7 @@ function buildData(input: ManualShipmentInput, workCountry: WorkCountryCode) {
     shipmentDetails: input.shipmentDetails?.trim() || null,
     status: (input.status?.trim() || "NEW").toUpperCase(),
     city: input.city?.trim() || null,
+    caseFileNumber: input.caseFileNumber?.trim() || null,
     orderNumber: input.orderNumber?.trim() || null,
     boxes: input.boxes ?? null,
     totalWeight: dec(input.totalWeight),
@@ -146,8 +153,8 @@ function buildData(input: ManualShipmentInput, workCountry: WorkCountryCode) {
     distributionStartDate: parseDate(input.distributionStartDate),
     amountTotal: dec(input.amountTotal),
     paymentAmount: dec(input.paymentAmount),
-    amountPaid: dec(computed.payment),
-    amountRemaining: null,
+    amountPaid: dec(computed.balance),
+    amountRemaining: dec(computed.balance),
     internalCode: input.internalCode?.trim() || null,
     notes: input.notes?.trim() || null,
     cpm: input.cpm?.trim() || null,
@@ -157,8 +164,9 @@ function buildData(input: ManualShipmentInput, workCountry: WorkCountryCode) {
       ? String(input.makasa).trim()
       : null,
     makasaNumber: input.makasaNumber?.trim() || null,
-    inlandHaulage: dec(input.inlandHaulage),
-    portHaulage: dec(input.portHaulage),
+    // Preserve existing inland/port when omitted from UI input
+    ...(input.inlandHaulage !== undefined ? { inlandHaulage: dec(input.inlandHaulage) } : {}),
+    ...(input.portHaulage !== undefined ? { portHaulage: dec(input.portHaulage) } : {}),
   };
 }
 
@@ -246,6 +254,7 @@ function dtoToInput(row: ManualShipmentDto): ManualShipmentInput {
     shipmentDetails: row.shipmentDetails,
     status: row.status,
     city: row.city,
+    caseFileNumber: row.caseFileNumber,
     orderNumber: row.orderNumber,
     boxes: row.boxes,
     totalWeight: row.totalWeight,
@@ -290,6 +299,38 @@ export async function updateManualShipment(
   });
 }
 
+export async function countManualShipmentsByStatus(
+  workCountry: WorkCountryCode,
+  status: string,
+): Promise<number> {
+  return prisma.manualShipment.count({
+    where: {
+      deletedAt: null,
+      ...manualShipmentWhere(workCountry),
+      status: status.trim().toUpperCase(),
+    },
+  });
+}
+
+export async function reassignManualShipmentStatus(
+  workCountry: WorkCountryCode,
+  fromStatus: string,
+  toStatus: string,
+): Promise<number> {
+  const from = fromStatus.trim().toUpperCase();
+  const to = toStatus.trim().toUpperCase() || "NEW";
+  if (!from || from === to) return 0;
+  const result = await prisma.manualShipment.updateMany({
+    where: {
+      deletedAt: null,
+      ...manualShipmentWhere(workCountry),
+      status: from,
+    },
+    data: { status: to },
+  });
+  return result.count;
+}
+
 export async function softDeleteManualShipment(
   id: string,
   workCountry: WorkCountryCode,
@@ -327,6 +368,13 @@ export async function duplicateManualShipment(
   });
   if (!src) return null;
 
+  const computed = calculateManualShipmentBalance({
+    paymentAmount: num(src.paymentAmount),
+    vatAmount: num(src.vatAmount),
+    airjetInvoice: src.airjetInvoice,
+    makasaAmount: src.makasa,
+  });
+
   const copy = await prisma.manualShipment.create({
     data: {
       countryCode: workCountry,
@@ -338,6 +386,7 @@ export async function duplicateManualShipment(
       shipmentDetails: src.shipmentDetails,
       status: src.status,
       city: src.city,
+      caseFileNumber: null,
       orderNumber: null,
       boxes: src.boxes,
       totalWeight: src.totalWeight,
@@ -348,8 +397,8 @@ export async function duplicateManualShipment(
       distributionStartDate: src.distributionStartDate,
       amountTotal: src.amountTotal,
       paymentAmount: src.paymentAmount,
-      amountPaid: src.amountPaid,
-      amountRemaining: null,
+      amountPaid: dec(computed.balance),
+      amountRemaining: dec(computed.balance),
       internalCode: src.internalCode,
       notes: src.notes,
       cpm: src.cpm,

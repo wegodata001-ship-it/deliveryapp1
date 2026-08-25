@@ -26,11 +26,9 @@ import type {
   CashDrilldownPayload,
   CashDrilldownPaymentRow,
   ShipmentCashControlPayload,
-  ShipmentCashExpenseCategory,
   ShipmentCashExpenseDto,
   ShipmentCashMethodLine,
 } from "@/app/admin/shipments/cash-control/types";
-import { SHIPMENT_CASH_EXPENSE_LABELS } from "@/app/admin/shipments/cash-control/types";
 import {
   addShipmentCashExpenseAction,
   closeShipmentCashDayAction,
@@ -46,6 +44,7 @@ import {
 } from "@/app/admin/shipments/cash-control/actions";
 import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
 import { ShipmentConfirmModal } from "@/components/admin/shipments/ShipmentConfirmModal";
+import { ShipmentExpenseTypeSelect } from "@/components/admin/shipments/ShipmentExpenseTypeSelect";
 
 function fmtIls(n: number): string {
   return n.toLocaleString("he-IL", { style: "currency", currency: "ILS", minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -527,7 +526,7 @@ function ExpenseModal({ workCountry, dayDate, busy, onClose, onSaved }: {
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [category, setCategory] = useState<ShipmentCashExpenseCategory>("FUEL");
+  const [category, setCategory] = useState("FUEL");
   const [paymentMethod, setPaymentMethod] = useState<string>("CASH");
   const [amount, setAmount] = useState("");
   const [notes, setNotes] = useState("");
@@ -553,14 +552,11 @@ function ExpenseModal({ workCountry, dayDate, busy, onClose, onSaved }: {
           <button type="button" className="shp-icon-btn" onClick={onClose}><X size={16} /></button>
         </div>
         <div className="shp-modal__body" style={{ display: "grid", gap: 12 }}>
-          <label className="sc-expense-field">
-            <span>סוג הוצאה</span>
-            <select value={category} onChange={(e) => setCategory(e.target.value as ShipmentCashExpenseCategory)}>
-              {Object.entries(SHIPMENT_CASH_EXPENSE_LABELS).map(([k, v]) => (
-                <option key={k} value={k}>{v}</option>
-              ))}
-            </select>
-          </label>
+          <ShipmentExpenseTypeSelect
+            value={category}
+            onChange={setCategory}
+            disabled={saving || busy}
+          />
           <label className="sc-expense-field">
             <span>אמצעי תשלום</span>
             <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>

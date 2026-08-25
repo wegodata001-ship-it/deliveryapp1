@@ -2,18 +2,21 @@ import { roundMoney2 } from "@/lib/finance-data/types/money";
 
 export const MANUAL_SHIPMENT_MAKASA_VAT_RATE = 0.18;
 
-export type ManualShipmentPaymentInput = {
+export type ManualShipmentBalanceInput = {
   paymentAmount?: number | string | null;
-  ridominAmount?: number | string | null;
+  vatAmount?: number | string | null;
+  airjetInvoice?: number | string | null;
   makasaAmount?: number | string | null;
 };
 
-export type ManualShipmentPaymentBreakdown = {
+export type ManualShipmentBalanceBreakdown = {
   paymentAmount: number;
-  ridominAmount: number;
+  vatAmount: number;
+  airjetInvoice: number;
   makasaAmount: number;
   makasaVat: number;
-  payment: number;
+  /** יתרה מחושבת */
+  balance: number;
 };
 
 export function parseManualShipmentMoney(value: number | string | null | undefined): number {
@@ -25,45 +28,53 @@ export function parseManualShipmentMoney(value: number | string | null | undefin
   return Number.isFinite(n) ? n : 0;
 }
 
-/** תשלום = סכום התשלום − סכום רידומין + (מקאסה × 18%) */
-export function calculateManualShipmentPayment(
-  input: ManualShipmentPaymentInput,
-): ManualShipmentPaymentBreakdown {
+/**
+ * יתרה = סכום התשלום + מע״מ − חשבונית אירגט − (מקאסה × 18%)
+ * מקור אמת יחיד לטופס, טבלה ושמירה.
+ */
+export function calculateManualShipmentBalance(
+  input: ManualShipmentBalanceInput,
+): ManualShipmentBalanceBreakdown {
   const paymentAmount = roundMoney2(parseManualShipmentMoney(input.paymentAmount));
-  const ridominAmount = roundMoney2(parseManualShipmentMoney(input.ridominAmount));
+  const vatAmount = roundMoney2(parseManualShipmentMoney(input.vatAmount));
+  const airjetInvoice = roundMoney2(parseManualShipmentMoney(input.airjetInvoice));
   const makasaAmount = roundMoney2(parseManualShipmentMoney(input.makasaAmount));
   const makasaVat = roundMoney2(makasaAmount * MANUAL_SHIPMENT_MAKASA_VAT_RATE);
-  const payment = roundMoney2(paymentAmount - ridominAmount + makasaVat);
+  const balance = roundMoney2(paymentAmount + vatAmount - airjetInvoice - makasaVat);
   return {
     paymentAmount,
-    ridominAmount,
+    vatAmount,
+    airjetInvoice,
     makasaAmount,
     makasaVat,
-    payment,
+    balance,
   };
 }
 
-export function manualShipmentPaymentFromRow(row: {
+export function manualShipmentBalanceFromRow(row: {
   paymentAmount?: number | null;
-  amountTotal?: number | null;
+  vatAmount?: number | null;
+  airjetInvoice?: string | null;
   makasa?: string | null;
-}): ManualShipmentPaymentBreakdown {
-  return calculateManualShipmentPayment({
+}): ManualShipmentBalanceBreakdown {
+  return calculateManualShipmentBalance({
     paymentAmount: row.paymentAmount,
-    ridominAmount: row.amountTotal,
+    vatAmount: row.vatAmount,
+    airjetInvoice: row.airjetInvoice,
     makasaAmount: row.makasa,
   });
 }
 
-export function formatManualShipmentPaymentBreakdown(
-  breakdown: ManualShipmentPaymentBreakdown,
+export function formatManualShipmentBalanceBreakdown(
+  breakdown: ManualShipmentBalanceBreakdown,
 ): string {
   const lines = [
-    `סכום תשלום\t${breakdown.paymentAmount.toLocaleString("he-IL", { maximumFractionDigits: 2 })}`,
-    `פחות רידומין\t-${breakdown.ridominAmount.toLocaleString("he-IL", { maximumFractionDigits: 2 })}`,
-    `מע"מ מקאסה 18%\t+${breakdown.makasaVat.toLocaleString("he-IL", { maximumFractionDigits: 2 })}`,
+    `סכום התשלום\t${breakdown.paymentAmount.toLocaleString("he-IL", { maximumFractionDigits: 2 })}`,
+    `מע"מ\t+${breakdown.vatAmount.toLocaleString("he-IL", { maximumFractionDigits: 2 })}`,
+    `חשבונית אירגט\t-${breakdown.airjetInvoice.toLocaleString("he-IL", { maximumFractionDigits: 2 })}`,
+    `מע"מ מקאסה 18%\t-${breakdown.makasaVat.toLocaleString("he-IL", { maximumFractionDigits: 2 })}`,
     "────────────────────",
-    `סה"כ\t${breakdown.payment.toLocaleString("he-IL", { maximumFractionDigits: 2 })}`,
+    `יתרה\t${breakdown.balance.toLocaleString("he-IL", { maximumFractionDigits: 2 })}`,
   ];
   return lines.join("\n");
 }

@@ -15,7 +15,6 @@ import type {
   ShipmentCashControlPayload,
   ShipmentCashControlRow,
   ShipmentCashDayDto,
-  ShipmentCashExpenseCategory,
   ShipmentCashExpenseDto,
   ShipmentCashHistoryEntry,
 } from "@/app/admin/shipments/cash-control/types";
@@ -211,7 +210,7 @@ export async function addShipmentCashExpenseAction(
   workCountry: WorkCountryCode,
   input: {
     dayDate: string;
-    category: ShipmentCashExpenseCategory;
+    category: string;
     paymentMethod: string;
     amountIls: number;
     notes?: string | null;

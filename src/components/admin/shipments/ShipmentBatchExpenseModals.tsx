@@ -2,20 +2,21 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Plus, X } from "lucide-react";
+import { Pencil, Plus, Trash2, X } from "lucide-react";
 import type { ShipmentBatchExpenseDto } from "@/app/admin/shipments/control/types";
 import {
-  SHIPMENT_MANAGE_EXPENSE_CATEGORIES,
-  SHIPMENT_MANAGE_EXPENSE_LABELS,
-} from "@/app/admin/shipments/control/types";
-import { createShipmentBatchExpenseAction } from "@/app/admin/shipments/control/actions";
+  createShipmentBatchExpenseAction,
+  deleteShipmentBatchExpenseAction,
+  updateShipmentBatchExpenseAction,
+} from "@/app/admin/shipments/control/actions";
 import { PAYMENT_METHODS } from "@/app/admin/shipments/types";
+import { ShipmentExpenseTypeSelect } from "@/components/admin/shipments/ShipmentExpenseTypeSelect";
 
 const EXPENSE_PAYMENT_METHODS = PAYMENT_METHODS.filter((m) =>
   ["CASH", "BANK_TRANSFER", "CREDIT", "CHECK", "CREDIT_NOTE", "CODE_DEDUCTION"].includes(m.value),
 );
 
-type ModalLayer = "nested" | "nested-deep";
+type ModalLayer = "root" | "nested" | "nested-deep";
 
 function ShipmentNestedModalPortal({
   layer,
@@ -37,7 +38,9 @@ function ShipmentNestedModalPortal({
   const layerClass =
     layer === "nested-deep"
       ? "shp-modal-backdrop shp-modal-backdrop--nested-deep"
-      : "shp-modal-backdrop shp-modal-backdrop--nested";
+      : layer === "nested"
+        ? "shp-modal-backdrop shp-modal-backdrop--nested"
+        : "shp-modal-backdrop";
 
   return createPortal(
     <div
@@ -73,26 +76,34 @@ function fmtExpenseTotals(totalIls: number, totalUsd: number) {
 }
 
 type FormProps = {
-  batchId: string;
+  batchId?: string;
   batchLabel: string;
+  batchOptions?: { id: string; label: string }[];
+  initial?: ShipmentBatchExpenseDto | null;
   layer?: ModalLayer;
   onClose: () => void;
-  onSaved: (expense: ShipmentBatchExpenseDto) => void;
+  onSaved: (expense: ShipmentBatchExpenseDto, isEdit: boolean) => void;
 };
 
 export function ShipmentBatchExpenseFormModal({
   batchId,
   batchLabel,
+  batchOptions,
+  initial = null,
   layer = "nested",
   onClose,
   onSaved,
 }: FormProps) {
-  const [category, setCategory] = useState<string>("FUEL");
-  const [amount, setAmount] = useState("");
-  const [currency, setCurrency] = useState<"ILS" | "USD">("ILS");
-  const [notes, setNotes] = useState("");
-  const [paymentMethod, setPaymentMethod] = useState("");
-  const [expenseDate, setExpenseDate] = useState(todayYmd());
+  const isEdit = Boolean(initial);
+  const [selectedBatchId, setSelectedBatchId] = useState(
+    batchId ?? batchOptions?.[0]?.id ?? "",
+  );
+  const [category, setCategory] = useState<string>(initial?.category ?? "FUEL");
+  const [amount, setAmount] = useState(initial ? String(initial.amount) : "");
+  const [currency, setCurrency] = useState<"ILS" | "USD">(initial?.currency === "USD" ? "USD" : "ILS");
+  const [notes, setNotes] = useState(initial?.notes ?? "");
+  const [paymentMethod, setPaymentMethod] = useState(initial?.paymentMethod ?? "");
+  const [expenseDate, setExpenseDate] = useState(initial?.expenseDate ?? todayYmd());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -107,8 +118,28 @@ export function ShipmentBatchExpenseFormModal({
   async function handleSave() {
     setBusy(true);
     setError(null);
+    if (isEdit && initial) {
+      const res = await updateShipmentBatchExpenseAction({
+        id: initial.id,
+        category,
+        amount: Number(amount),
+        currency,
+        notes: notes || null,
+        paymentMethod: paymentMethod || null,
+        expenseDate,
+      });
+      setBusy(false);
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      onSaved(res.expense, true);
+      onClose();
+      return;
+    }
+
     const res = await createShipmentBatchExpenseAction({
-      batchId,
+      batchId: selectedBatchId,
       category,
       amount: Number(amount),
       currency,
@@ -121,7 +152,7 @@ export function ShipmentBatchExpenseFormModal({
       setError(res.error);
       return;
     }
-    onSaved(res.expense);
+    onSaved(res.expense, false);
     onClose();
   }
 
@@ -140,7 +171,9 @@ export function ShipmentBatchExpenseFormModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="shp-modal__header">
-          <strong id="shp-batch-expense-form-title">הוספת הוצאה</strong>
+          <strong id="shp-batch-expense-form-title">
+            {isEdit ? "עריכת הוצאה" : "הוספת הוצאה"}
+          </strong>
           <span style={{ fontSize: 12, color: "#64748b", marginInlineStart: 8 }}>
             {batchLabel}
           </span>
@@ -149,21 +182,30 @@ export function ShipmentBatchExpenseFormModal({
           </button>
         </div>
         <div className="shp-modal__body" style={{ display: "grid", gap: 10 }}>
-          <label className="sc-expense-field">
-            <span>סוג הוצאה</span>
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              disabled={busy}
-              autoFocus
-            >
-              {SHIPMENT_MANAGE_EXPENSE_CATEGORIES.map((key) => (
-                <option key={key} value={key}>
-                  {SHIPMENT_MANAGE_EXPENSE_LABELS[key]}
-                </option>
-              ))}
-            </select>
-          </label>
+          {batchOptions && batchOptions.length > 0 && !isEdit && (
+            <label className="sc-expense-field">
+              <span>מספר משלוח</span>
+              <select
+                value={selectedBatchId}
+                onChange={(e) => setSelectedBatchId(e.target.value)}
+                disabled={busy}
+                autoFocus
+              >
+                {batchOptions.map((batch) => (
+                  <option key={batch.id} value={batch.id}>
+                    {batch.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <ShipmentExpenseTypeSelect
+            value={category}
+            onChange={setCategory}
+            disabled={busy}
+            autoFocus={!batchOptions?.length}
+            includeCode={initial?.category}
+          />
           <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8 }}>
             <label className="sc-expense-field">
               <span>סכום</span>
@@ -190,15 +232,6 @@ export function ShipmentBatchExpenseFormModal({
             </label>
           </div>
           <label className="sc-expense-field">
-            <span>הערה</span>
-            <input
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="אופציונלי"
-              disabled={busy}
-            />
-          </label>
-          <label className="sc-expense-field">
             <span>תאריך</span>
             <input
               type="date"
@@ -214,13 +247,25 @@ export function ShipmentBatchExpenseFormModal({
               onChange={(e) => setPaymentMethod(e.target.value)}
               disabled={busy}
             >
-              <option value="">— אופציונלי —</option>
+              <option value="">— ללא —</option>
               {EXPENSE_PAYMENT_METHODS.map((m) => (
-                <option key={m.value} value={m.value}>{m.label}</option>
+                <option key={m.value} value={m.value}>
+                  {m.label}
+                </option>
               ))}
             </select>
           </label>
-          {error && <div className="shp-alert shp-alert--error">{error}</div>}
+          <label className="sc-expense-field">
+            <span>תיאור</span>
+            <textarea
+              rows={2}
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              disabled={busy}
+              placeholder="אופציונלי"
+            />
+          </label>
+          {error && <div className="shp-error">{error}</div>}
         </div>
         <div className="shp-modal__footer">
           <button type="button" className="shp-btn" disabled={busy} onClick={onClose}>
@@ -229,10 +274,10 @@ export function ShipmentBatchExpenseFormModal({
           <button
             type="button"
             className="shp-btn shp-btn--primary"
-            disabled={busy || !amount}
+            disabled={busy || !selectedBatchId || !amount.trim()}
             onClick={() => void handleSave()}
           >
-            {busy ? "שומר..." : "שמור"}
+            {busy ? "שומר…" : isEdit ? "שמור שינויים" : "שמור הוצאה"}
           </button>
         </div>
       </div>
@@ -241,105 +286,193 @@ export function ShipmentBatchExpenseFormModal({
 }
 
 type DetailProps = {
+  batchId: string;
   batchLabel: string;
   expenses: ShipmentBatchExpenseDto[];
   totalIls: number;
   totalUsd: number;
   onClose: () => void;
-  onAdd: () => void;
+  onExpensesChanged: (expenses: ShipmentBatchExpenseDto[]) => void;
 };
 
 export function ShipmentBatchExpensesDetailModal({
+  batchId,
   batchLabel,
-  expenses,
-  totalIls,
-  totalUsd,
+  expenses: initialExpenses,
+  totalIls: _totalIls,
+  totalUsd: _totalUsd,
   onClose,
-  onAdd,
+  onExpensesChanged,
 }: DetailProps) {
+  const [expenses, setExpenses] = useState(initialExpenses);
+  const [formOpen, setFormOpen] = useState(false);
+  const [editing, setEditing] = useState<ShipmentBatchExpenseDto | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setExpenses(initialExpenses);
+  }, [initialExpenses]);
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape" && !formOpen) onClose();
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, formOpen]);
+
+  const totalIls = Math.round(
+    expenses.filter((e) => e.currency !== "USD").reduce((s, e) => s + e.amount, 0) * 100,
+  ) / 100;
+  const totalUsd = Math.round(
+    expenses.filter((e) => e.currency === "USD").reduce((s, e) => s + e.amount, 0) * 100,
+  ) / 100;
+
+  function sync(next: ShipmentBatchExpenseDto[]) {
+    setExpenses(next);
+    onExpensesChanged(next);
+  }
+
+  async function handleDelete(expense: ShipmentBatchExpenseDto) {
+    if (!window.confirm("למחוק את ההוצאה?")) return;
+    setBusyId(expense.id);
+    setError(null);
+    const res = await deleteShipmentBatchExpenseAction(expense.id);
+    setBusyId(null);
+    if (!res.ok) {
+      setError(res.error);
+      return;
+    }
+    sync(expenses.filter((e) => e.id !== expense.id));
+  }
 
   return (
-    <ShipmentNestedModalPortal layer="nested" onBackdropClick={onClose}>
-      <div
-        className="shp-modal"
-        style={{ maxWidth: 640, width: "96vw" }}
-        dir="rtl"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="shp-batch-expense-detail-title"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="shp-modal__header">
-          <strong id="shp-batch-expense-detail-title">פירוט הוצאות</strong>
-          <span style={{ fontSize: 12, color: "#64748b", marginInlineStart: 8 }}>
-            {batchLabel}
-          </span>
-          <button type="button" className="shp-icon-btn" onClick={onClose}>
-            <X size={16} />
-          </button>
-        </div>
-        <div className="shp-modal__body" style={{ display: "grid", gap: 12 }}>
-          <div className="sc-expense-list-summary">
-            <button type="button" className="shp-btn shp-btn--primary shp-btn--sm" onClick={onAdd}>
-              <Plus size={13} />
-              הוסף הוצאה
+    <>
+      <ShipmentNestedModalPortal layer="nested" onBackdropClick={onClose}>
+        <div
+          className="shp-modal"
+          style={{ maxWidth: 720, width: "96vw" }}
+          dir="rtl"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="shp-batch-expense-detail-title"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="shp-modal__header">
+            <strong id="shp-batch-expense-detail-title">הוצאות המשלוח</strong>
+            <span style={{ fontSize: 12, color: "#64748b", marginInlineStart: 8 }}>
+              {batchLabel}
+            </span>
+            <button type="button" className="shp-icon-btn" onClick={onClose}>
+              <X size={16} />
             </button>
           </div>
-          <div className="shp-table-wrap" style={{ maxHeight: 360 }}>
-            <table className="shp-table shp-table--compact">
-              <thead>
-                <tr>
-                  <th>תאריך</th>
-                  <th>סוג הוצאה</th>
-                  <th>סכום</th>
-                  <th>מטבע</th>
-                  <th>הערה</th>
-                </tr>
-              </thead>
-              <tbody>
-                {expenses.length === 0 ? (
+          <div className="shp-modal__body" style={{ display: "grid", gap: 12 }}>
+            <div className="sc-expense-list-summary">
+              <button
+                type="button"
+                className="shp-btn shp-btn--primary shp-btn--sm"
+                onClick={() => {
+                  setEditing(null);
+                  setFormOpen(true);
+                }}
+              >
+                <Plus size={13} />
+                הוסף הוצאה
+              </button>
+              <span style={{ fontWeight: 700, color: "#b45309", whiteSpace: "pre-line" }}>
+                {fmtExpenseTotals(totalIls, totalUsd)}
+              </span>
+            </div>
+            {error && <div className="shp-error">{error}</div>}
+            <div className="shp-table-wrap" style={{ maxHeight: 380 }}>
+              <table className="shp-table shp-table--compact">
+                <thead>
                   <tr>
-                    <td colSpan={5} style={{ textAlign: "center", color: "#94a3b8", padding: 20 }}>
-                      אין הוצאות
-                    </td>
+                    <th>תאריך</th>
+                    <th>סוג</th>
+                    <th>תיאור</th>
+                    <th>סכום</th>
+                    <th>מי הזין</th>
+                    <th style={{ width: 88 }}></th>
                   </tr>
-                ) : (
-                  expenses.map((e) => (
-                    <tr key={e.id}>
-                      <td>{e.expenseDate}</td>
-                      <td>{e.categoryLabel}</td>
-                      <td style={{ fontWeight: 600 }}>{fmtMoney(e.currency, e.amount)}</td>
-                      <td>{e.currency === "USD" ? "$" : "₪"}</td>
-                      <td style={{ color: "#64748b", fontSize: "0.8rem" }}>{e.notes || "—"}</td>
+                </thead>
+                <tbody>
+                  {expenses.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} style={{ textAlign: "center", color: "#94a3b8", padding: 20 }}>
+                        אין הוצאות
+                      </td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-              <tfoot>
-                <tr style={{ fontWeight: 800, background: "#fff7ed" }}>
-                  <td colSpan={2}>סה״כ הוצאות</td>
-                  <td colSpan={3} style={{ whiteSpace: "pre-line" }}>
-                    {fmtExpenseTotals(totalIls, totalUsd)}
-                  </td>
-                </tr>
-              </tfoot>
-            </table>
+                  ) : (
+                    expenses.map((e) => (
+                      <tr key={e.id}>
+                        <td>{e.expenseDate}</td>
+                        <td>{e.categoryLabel}</td>
+                        <td style={{ color: "#64748b", fontSize: "0.8rem" }}>{e.notes || "—"}</td>
+                        <td style={{ fontWeight: 600 }}>{fmtMoney(e.currency, e.amount)}</td>
+                        <td style={{ fontSize: "0.8rem" }}>{e.createdByName || "—"}</td>
+                        <td>
+                          <div style={{ display: "inline-flex", gap: 4 }}>
+                            <button
+                              type="button"
+                              className="shp-icon-btn"
+                              title="עריכה"
+                              disabled={busyId === e.id}
+                              onClick={() => {
+                                setEditing(e);
+                                setFormOpen(true);
+                              }}
+                            >
+                              <Pencil size={14} />
+                            </button>
+                            <button
+                              type="button"
+                              className="shp-icon-btn"
+                              title="מחיקה"
+                              disabled={busyId === e.id}
+                              onClick={() => void handleDelete(e)}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div className="shp-modal__footer">
+            <button type="button" className="shp-btn" onClick={onClose}>
+              סגור
+            </button>
           </div>
         </div>
-        <div className="shp-modal__footer">
-          <button type="button" className="shp-btn" onClick={onClose}>
-            סגור
-          </button>
-        </div>
-      </div>
-    </ShipmentNestedModalPortal>
+      </ShipmentNestedModalPortal>
+
+      {formOpen && (
+        <ShipmentBatchExpenseFormModal
+          batchId={batchId}
+          batchLabel={batchLabel}
+          initial={editing}
+          layer="nested-deep"
+          onClose={() => {
+            setFormOpen(false);
+            setEditing(null);
+          }}
+          onSaved={(expense, isEdit) => {
+            if (isEdit) {
+              sync(expenses.map((e) => (e.id === expense.id ? expense : e)));
+            } else {
+              sync([expense, ...expenses]);
+            }
+          }}
+        />
+      )}
+    </>
   );
 }
 

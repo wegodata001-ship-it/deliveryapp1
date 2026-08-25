@@ -4,11 +4,8 @@ import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import type { WorkCountryCode } from "@/lib/work-country";
 import { addShipmentCashExpenseAction } from "@/app/admin/shipments/cash-control/actions";
-import {
-  SHIPMENT_CASH_EXPENSE_LABELS,
-  type ShipmentCashExpenseCategory,
-} from "@/app/admin/shipments/cash-control/types";
 import { CASH_CONTROL_METHODS } from "@/app/admin/shipments/types";
+import { ShipmentExpenseTypeSelect } from "@/components/admin/shipments/ShipmentExpenseTypeSelect";
 
 export type ShipmentCashExpenseQuickModalProps = {
   open: boolean;
@@ -27,7 +24,7 @@ export function ShipmentCashExpenseQuickModal({
   workCountry,
   onSaved,
 }: ShipmentCashExpenseQuickModalProps) {
-  const [category, setCategory] = useState<ShipmentCashExpenseCategory>("FUEL");
+  const [category, setCategory] = useState("FUEL");
   const [paymentMethod, setPaymentMethod] = useState("CASH");
   const [amount, setAmount] = useState("");
   const [notes, setNotes] = useState("");
@@ -103,20 +100,11 @@ export function ShipmentCashExpenseQuickModal({
             <p className="cc-muted">אין הרשאה להוספת הוצאות.</p>
           ) : (
             <>
-              <label className="adm-cash-field">
-                <span>סוג הוצאה</span>
-                <select
-                  className="cc-input"
-                  value={category}
-                  onChange={(e) => setCategory(e.target.value as ShipmentCashExpenseCategory)}
-                >
-                  {Object.entries(SHIPMENT_CASH_EXPENSE_LABELS).map(([k, v]) => (
-                    <option key={k} value={k}>
-                      {v}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <ShipmentExpenseTypeSelect
+                value={category}
+                onChange={setCategory}
+                disabled={saving}
+              />
               <label className="adm-cash-field">
                 <span>אמצעי תשלום</span>
                 <select

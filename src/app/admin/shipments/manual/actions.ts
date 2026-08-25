@@ -15,6 +15,8 @@ import {
   softDeleteManualShipments,
   duplicateManualShipment,
   getManualShipment,
+  countManualShipmentsByStatus,
+  reassignManualShipmentStatus,
 } from "@/app/admin/shipments/manual/service";
 import type {
   ManualShipmentDto,
@@ -152,6 +154,42 @@ export async function getManualShipmentAction(
     const row = await getManualShipment(id, workCountry);
     if (!row) return { ok: false, error: "הרשומה לא נמצאה" };
     return { ok: true, row };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+export async function countManualShipmentsByStatusAction(
+  workCountry: WorkCountryCode,
+  status: string,
+): Promise<{ ok: true; count: number } | { ok: false; error: string }> {
+  try {
+    const me = await requireAuth();
+    if (!isAdminUser(me) && !userHasAnyPermission(me, VIEW_PERMS)) {
+      return { ok: false, error: "אין הרשאה" };
+    }
+    requireShipmentCountryScope(workCountry);
+    const count = await countManualShipmentsByStatus(workCountry, status);
+    return { ok: true, count };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+export async function reassignManualShipmentStatusAction(
+  workCountry: WorkCountryCode,
+  fromStatus: string,
+  toStatus: string,
+): Promise<{ ok: true; count: number } | { ok: false; error: string }> {
+  try {
+    const me = await requireAuth();
+    if (!isAdminUser(me) && !userHasAnyPermission(me, WRITE_PERMS)) {
+      return { ok: false, error: "אין הרשאה" };
+    }
+    requireShipmentCountryScope(workCountry);
+    const count = await reassignManualShipmentStatus(workCountry, fromStatus, toStatus);
+    revalidate(workCountry);
+    return { ok: true, count };
   } catch (e) {
     return { ok: false, error: String(e) };
   }

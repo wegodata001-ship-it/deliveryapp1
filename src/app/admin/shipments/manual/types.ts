@@ -19,7 +19,9 @@ export type ManualShipmentDto = {
   shipmentDetails: string | null;
   status: string;
   city: string | null;
-  /** מספר רישומין */
+  /** מספר תיק */
+  caseFileNumber: string | null;
+  /** מספר רישומון */
   orderNumber: string | null;
   boxes: number | null;
   totalWeight: number | null;
@@ -28,11 +30,11 @@ export type ManualShipmentDto = {
   shippingDate: string | null;
   arrivalDate: string | null;
   distributionStartDate: string | null;
-  /** סכום רידומין */
+  /** סכום רישומון */
   amountTotal: number | null;
   /** סכום התשלום (קלט) */
   paymentAmount: number | null;
-  /** תשלום מחושב */
+  /** יתרה מחושבת */
   amountPaid: number | null;
   amountRemaining: number | null;
   internalCode: string | null;
@@ -57,6 +59,7 @@ export type ManualShipmentInput = {
   shipmentDetails?: string | null;
   status?: string | null;
   city?: string | null;
+  caseFileNumber?: string | null;
   orderNumber?: string | null;
   boxes?: number | null;
   totalWeight?: number | null;
@@ -91,4 +94,8 @@ export type ManualShipmentFilters = {
 
 export function statusLabel(status: string): string {
   return MANUAL_SHIPMENT_STATUSES.find((s) => s.value === status)?.label ?? status;
+}
+
+export function isBuiltInManualStatus(value: string): boolean {
+  return MANUAL_SHIPMENT_STATUSES.some((s) => s.value === value);
 }

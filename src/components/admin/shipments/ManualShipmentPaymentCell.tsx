@@ -1,13 +1,13 @@
 "use client";
 
 import {
-  formatManualShipmentPaymentBreakdown,
-  manualShipmentPaymentFromRow,
+  formatManualShipmentBalanceBreakdown,
+  manualShipmentBalanceFromRow,
 } from "@/lib/manual-shipment-payment";
 import type { ManualShipmentDto } from "@/app/admin/shipments/manual/types";
 
 type Props = {
-  row: Pick<ManualShipmentDto, "paymentAmount" | "amountTotal" | "makasa">;
+  row: Pick<ManualShipmentDto, "paymentAmount" | "vatAmount" | "airjetInvoice" | "makasa">;
   className?: string;
   onOpenDetail?: () => void;
 };
@@ -17,13 +17,13 @@ function fmtMoney(v: number): string {
 }
 
 export function ManualShipmentPaymentCell({ row, className, onOpenDetail }: Props) {
-  const breakdown = manualShipmentPaymentFromRow(row);
-  const tooltip = formatManualShipmentPaymentBreakdown(breakdown);
+  const breakdown = manualShipmentBalanceFromRow(row);
+  const tooltip = formatManualShipmentBalanceBreakdown(breakdown);
 
   return (
     <div className={["msh-payment-cell", className].filter(Boolean).join(" ")}>
       <span className="msh-payment-cell__value" title={tooltip}>
-        {fmtMoney(breakdown.payment)}
+        {fmtMoney(breakdown.balance)}
       </span>
       {onOpenDetail ? (
         <button type="button" className="msh-payment-cell__link" onClick={onOpenDetail}>

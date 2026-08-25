@@ -19,6 +19,8 @@ import {
   deleteManualShipmentAction,
   deleteManualShipmentsAction,
   listManualShipmentsAction,
+  countManualShipmentsByStatusAction,
+  reassignManualShipmentStatusAction,
 } from "@/app/admin/shipments/manual/actions";
 import {
   AUTOCOMPLETE_COLUMN_KEYS,
@@ -35,13 +37,14 @@ import {
 } from "@/app/admin/shipments/manual/columns";
 import {
   MANUAL_SHIPMENT_STATUSES,
+  isBuiltInManualStatus,
   statusLabel,
   type ManualShipmentDto,
   type ManualShipmentFilters,
   type ManualShipmentInput,
 } from "@/app/admin/shipments/manual/types";
 import {
-  manualShipmentPaymentFromRow,
+  manualShipmentBalanceFromRow,
 } from "@/lib/manual-shipment-payment";
 import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
 import { ShipmentConfirmModal } from "@/components/admin/shipments/ShipmentConfirmModal";
@@ -55,7 +58,7 @@ type CellFeedback = "saving" | "saved" | "error";
 const DRAFT_ID = "__draft__";
 const TABLE_COL_KEYS = MANUAL_SHIPMENT_TABLE_COLUMNS.map((c) => c.key);
 const COL_KEYS = MANUAL_SHIPMENT_COLUMNS.map((c) => c.key);
-const COL_COUNT = MANUAL_SHIPMENT_TABLE_COLUMNS.length + 2;
+const COL_COUNT = MANUAL_SHIPMENT_TABLE_COLUMNS.length + 1;
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -79,8 +82,6 @@ const NUM_KEYS: Set<ManualColumnKey> = new Set([
   "vatAmount",
   "amountTotal",
   "paymentAmount",
-  "inlandHaulage",
-  "portHaulage",
 ]);
 
 const emptyForm = (): FormState => {
@@ -101,6 +102,7 @@ function dtoToForm(row: ManualShipmentDto): FormState {
     shipmentDetails: row.shipmentDetails ?? "",
     status: row.status || "NEW",
     city: row.city ?? "",
+    caseFileNumber: row.caseFileNumber ?? "",
     orderNumber: row.orderNumber ?? "",
     vatAmount: row.vatAmount != null ? String(row.vatAmount) : "",
     amountTotal: row.amountTotal != null ? String(row.amountTotal) : "",
@@ -109,8 +111,6 @@ function dtoToForm(row: ManualShipmentDto): FormState {
     amountPaid: "",
     makasa: row.makasa ?? "",
     makasaNumber: row.makasaNumber ?? "",
-    inlandHaulage: row.inlandHaulage != null ? String(row.inlandHaulage) : "",
-    portHaulage: row.portHaulage != null ? String(row.portHaulage) : "",
   };
 }
 
@@ -130,6 +130,7 @@ function formToInput(f: FormState): ManualShipmentInput {
     shipmentDetails: f.shipmentDetails || null,
     status: f.status || "NEW",
     city: f.city || null,
+    caseFileNumber: f.caseFileNumber || null,
     orderNumber: f.orderNumber || null,
     vatAmount: n(f.vatAmount),
     amountTotal: n(f.amountTotal),
@@ -137,8 +138,6 @@ function formToInput(f: FormState): ManualShipmentInput {
     paymentAmount: n(f.paymentAmount),
     makasa: f.makasa.trim() ? f.makasa.trim() : null,
     makasaNumber: f.makasaNumber || null,
-    inlandHaulage: n(f.inlandHaulage),
-    portHaulage: n(f.portHaulage),
   };
 }
 
@@ -161,10 +160,12 @@ function fmtMoney(v: number | null | undefined): string {
   return v.toLocaleString("he-IL", { maximumFractionDigits: 2 });
 }
 
-function syncComputedPayment(row: ManualShipmentDto): ManualShipmentDto {
+function syncComputedBalance(row: ManualShipmentDto): ManualShipmentDto {
+  const balance = manualShipmentBalanceFromRow(row).balance;
   return {
     ...row,
-    amountPaid: manualShipmentPaymentFromRow(row).payment,
+    amountPaid: balance,
+    amountRemaining: balance,
   };
 }
 
@@ -308,29 +309,154 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
   const [showStatusMgmt, setShowStatusMgmt] = useState(false);
   const [newStatusValue, setNewStatusValue] = useState("");
   const [newStatusLabel, setNewStatusLabel] = useState("");
+  const [editingStatusValue, setEditingStatusValue] = useState<string | null>(null);
+  const [editStatusCode, setEditStatusCode] = useState("");
+  const [editStatusLabel, setEditStatusLabel] = useState("");
+  const [statusMgmtError, setStatusMgmtError] = useState<string | null>(null);
 
   const allStatuses = useMemo(() => [
     ...MANUAL_SHIPMENT_STATUSES,
     ...customStatuses,
   ], [customStatuses]);
 
-  function addCustomStatus() {
-    if (!newStatusValue.trim() || !newStatusLabel.trim()) return;
-    const next = [...customStatuses, { value: newStatusValue.trim().toUpperCase(), label: newStatusLabel.trim() }];
+  function persistCustomStatuses(next: { value: string; label: string }[]) {
     setCustomStatuses(next);
     localStorage.setItem(CUSTOM_STATUSES_KEY, JSON.stringify(next));
+  }
+
+  function addCustomStatus() {
+    setStatusMgmtError(null);
+    const code = newStatusValue.trim().toUpperCase();
+    const label = newStatusLabel.trim();
+    if (!code || !label) return;
+    if (allStatuses.some((s) => s.value === code)) {
+      setStatusMgmtError("קוד סטטוס כבר קיים");
+      return;
+    }
+    persistCustomStatuses([...customStatuses, { value: code, label }]);
     setNewStatusValue("");
     setNewStatusLabel("");
   }
 
-  function removeCustomStatus(value: string) {
-    const next = customStatuses.filter((s) => s.value !== value);
-    setCustomStatuses(next);
-    localStorage.setItem(CUSTOM_STATUSES_KEY, JSON.stringify(next));
+  function startEditCustomStatus(s: { value: string; label: string }) {
+    setStatusMgmtError(null);
+    setEditingStatusValue(s.value);
+    setEditStatusCode(s.value);
+    setEditStatusLabel(s.label);
+  }
+
+  function cancelEditCustomStatus() {
+    setEditingStatusValue(null);
+    setEditStatusCode("");
+    setEditStatusLabel("");
+    setStatusMgmtError(null);
+  }
+
+  async function saveEditCustomStatus() {
+    if (!editingStatusValue) return;
+    setStatusMgmtError(null);
+    const oldCode = editingStatusValue;
+    const newCode = editStatusCode.trim().toUpperCase();
+    const newLabel = editStatusLabel.trim();
+    if (!newCode || !newLabel) {
+      setStatusMgmtError("נא למלא קוד ותצוגה");
+      return;
+    }
+    if (
+      newCode !== oldCode &&
+      (isBuiltInManualStatus(newCode) || customStatuses.some((s) => s.value === newCode))
+    ) {
+      setStatusMgmtError("קוד סטטוס כבר קיים");
+      return;
+    }
+
+    if (newCode !== oldCode) {
+      const countRes = await countManualShipmentsByStatusAction(workCountry, oldCode);
+      if (!countRes.ok) {
+        setStatusMgmtError(countRes.error);
+        return;
+      }
+      if (countRes.count > 0) {
+        const ok = window.confirm(
+          `הסטטוס "${oldCode}" בשימוש ב-${countRes.count} משלוחים.\n` +
+            `לעדכן את כל המשלוחים לקוד החדש "${newCode}"?`,
+        );
+        if (!ok) return;
+        const reassignRes = await reassignManualShipmentStatusAction(
+          workCountry,
+          oldCode,
+          newCode,
+        );
+        if (!reassignRes.ok) {
+          setStatusMgmtError(reassignRes.error);
+          return;
+        }
+        setRows((prev) =>
+          prev.map((r) => (r.status === oldCode ? { ...r, status: newCode } : r)),
+        );
+        if (form.status === oldCode) setForm((f) => ({ ...f, status: newCode }));
+        if (draft?.status === oldCode) setDraft((d) => (d ? { ...d, status: newCode } : d));
+      }
+    }
+
+    persistCustomStatuses(
+      customStatuses.map((s) =>
+        s.value === oldCode ? { value: newCode, label: newLabel } : s,
+      ),
+    );
+    cancelEditCustomStatus();
+  }
+
+  async function removeCustomStatus(value: string) {
+    setStatusMgmtError(null);
+    if (isBuiltInManualStatus(value)) {
+      setStatusMgmtError("לא ניתן למחוק סטטוס מערכתי");
+      return;
+    }
+    const countRes = await countManualShipmentsByStatusAction(workCountry, value);
+    if (!countRes.ok) {
+      setStatusMgmtError(countRes.error);
+      return;
+    }
+    if (countRes.count > 0) {
+      const replacement = window.prompt(
+        `הסטטוס "${value}" בשימוש ב-${countRes.count} משלוחים.\n` +
+          `הזן קוד סטטוס חלופי (ברירת מחדל: NEW), או בטל.`,
+        "NEW",
+      );
+      if (replacement == null) return;
+      const toStatus = replacement.trim().toUpperCase() || "NEW";
+      if (toStatus === value) {
+        setStatusMgmtError("יש לבחור סטטוס חלופי שונה");
+        return;
+      }
+      const ok = window.confirm(
+        `להחליף את כל המשלוחים עם הסטטוס "${value}" ל-"${toStatus}" ואז להסיר את הסטטוס מהרשימה?`,
+      );
+      if (!ok) return;
+      const reassignRes = await reassignManualShipmentStatusAction(
+        workCountry,
+        value,
+        toStatus,
+      );
+      if (!reassignRes.ok) {
+        setStatusMgmtError(reassignRes.error);
+        return;
+      }
+      setRows((prev) =>
+        prev.map((r) => (r.status === value ? { ...r, status: toStatus } : r)),
+      );
+      if (form.status === value) setForm((f) => ({ ...f, status: toStatus }));
+      if (draft?.status === value) setDraft((d) => (d ? { ...d, status: toStatus } : d));
+    } else {
+      const ok = window.confirm(`למחוק את הסטטוס "${value}"?`);
+      if (!ok) return;
+    }
+    persistCustomStatuses(customStatuses.filter((s) => s.value !== value));
+    if (editingStatusValue === value) cancelEditCustomStatus();
   }
 
   // ─── Context menu state ───
-  const [ctxMenuRow, setCtxMenuRow] = useState<string | null>(null);
   const [paymentDetailRow, setPaymentDetailRow] = useState<ManualShipmentDto | null>(null);
 
   // ─── Multi-select filters ───
@@ -351,12 +477,12 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
   const totals = useMemo(() => {
     return displayRows.reduce(
       (acc, r) => {
-        const payment = manualShipmentPaymentFromRow(r);
+        const balance = manualShipmentBalanceFromRow(r);
         acc.amountTotal += r.amountTotal ?? 0;
         acc.paymentAmount += r.paymentAmount ?? 0;
-        acc.amountPaid += payment.payment;
+        acc.amountPaid += balance.balance;
         acc.vatAmount += r.vatAmount ?? 0;
-        acc.makasa += payment.makasaAmount;
+        acc.makasa += balance.makasaAmount;
         return acc;
       },
       { amountTotal: 0, paymentAmount: 0, amountPaid: 0, vatAmount: 0, makasa: 0 },
@@ -416,16 +542,6 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
       try { el.select(); } catch { /* ignore */ }
     }
   }, [focusCell, editingCell]);
-
-  useEffect(() => {
-    if (!ctxMenuRow) return;
-    const handler = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest(".msh-ctx-wrapper")) setCtxMenuRow(null);
-    };
-    document.addEventListener("click", handler);
-    return () => document.removeEventListener("click", handler);
-  }, [ctxMenuRow]);
 
   function refKey(rowId: string, colIndex: number) {
     return `${rowId}:${colIndex}`;
@@ -553,13 +669,6 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
     setFocusCell({ rowId, colIndex });
   }
 
-  function startRowEdit(rowId: string) {
-    setEditingCell(null);
-    setFocusCell(null);
-    setEditingRowId((prev) => (prev === rowId ? null : rowId));
-    setCtxMenuRow(null);
-  }
-
   function cancelCellEdit(rowId: string, key: ManualColumnKey) {
     const origForm = originalValues.current.get(rowId);
     if (origForm) patchRowLocal(rowId, key, origForm[key]);
@@ -609,7 +718,7 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
             updated.monthKey = value.slice(0, 7);
           }
         }
-        return syncComputedPayment(updated);
+        return syncComputedBalance(updated);
       }) as ManualShipmentDto[],
     );
   }
@@ -737,8 +846,9 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
       return (
         <div className="msh-payment-cell msh-payment-cell--modal">
           <ManualShipmentPaymentCell row={{
-            paymentAmount: form.paymentAmount.trim() ? Number(form.paymentAmount) : null,
-            amountTotal: form.amountTotal.trim() ? Number(form.amountTotal) : null,
+            paymentAmount: form.paymentAmount.trim() ? Number(form.paymentAmount.replace(/,/g, "")) : null,
+            vatAmount: form.vatAmount.trim() ? Number(form.vatAmount.replace(/,/g, "")) : null,
+            airjetInvoice: form.airjetInvoice,
             makasa: form.makasa,
           }} />
         </div>
@@ -926,7 +1036,8 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
         <ManualShipmentPaymentCell
           row={{
             paymentAmount: draftForm.paymentAmount.trim() ? Number(draftForm.paymentAmount.replace(/,/g, "")) : null,
-            amountTotal: draftForm.amountTotal.trim() ? Number(draftForm.amountTotal.replace(/,/g, "")) : null,
+            vatAmount: draftForm.vatAmount.trim() ? Number(draftForm.vatAmount.replace(/,/g, "")) : null,
+            airjetInvoice: draftForm.airjetInvoice,
             makasa: draftForm.makasa,
           }}
         />
@@ -1124,6 +1235,19 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
       {draft && (
         <div className="msh-excel-hint">
           שורה חדשה פתוחה · Tab / Enter למעבר · Esc לביטול
+          <span className="msh-excel-hint__actions">
+            <button
+              type="button"
+              className="msh-link msh-link--ok"
+              disabled={pending}
+              onClick={() => void saveDraft()}
+            >
+              ✔ שמירה
+            </button>
+            <button type="button" className="msh-link" onClick={cancelDraft}>
+              ביטול
+            </button>
+          </span>
         </div>
       )}
 
@@ -1144,7 +1268,6 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
               {MANUAL_SHIPMENT_TABLE_COLUMNS.map((col) => (
                 <th key={col.key}>{col.label}</th>
               ))}
-              <th className="msh-col-actions"></th>
             </tr>
           </thead>
           <tbody>
@@ -1156,19 +1279,6 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
                     {renderDraftCell(colIndex, draft[col.key], (v) => patchDraft(col.key, v), draft)}
                   </td>
                 ))}
-                <td className="msh-actions">
-                  <button
-                    type="button"
-                    className="msh-link msh-link--ok"
-                    disabled={pending}
-                    onClick={() => void saveDraft()}
-                  >
-                    ✔ שמירה
-                  </button>
-                  <button type="button" className="msh-link" onClick={cancelDraft}>
-                    ביטול
-                  </button>
-                </td>
               </tr>
             )}
 
@@ -1209,46 +1319,12 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
                       className={[
                         col.input === "number" || col.input === "calculated" ? "msh-num" : "",
                         col.key === "shipmentDetails" ? "msh-clamp" : "",
-                        ["shipmentNumber", "containerNumber", "orderNumber", "city", "country"].includes(col.key) ? "msh-bold" : "",
+                        ["shipmentNumber", "containerNumber", "orderNumber", "caseFileNumber", "city", "country"].includes(col.key) ? "msh-bold" : "",
                       ].filter(Boolean).join(" ") || undefined}
                     >
                       {renderInlineCell(r, colIndex)}
                     </td>
                   ))}
-                  <td className="msh-col-actions">
-                    <div className="msh-ctx-wrapper">
-                      <button
-                        type="button"
-                        className="msh-ctx-trigger"
-                        onClick={() => setCtxMenuRow(ctxMenuRow === r.id ? null : r.id)}
-                      >
-                        ⋮
-                      </button>
-                      {ctxMenuRow === r.id && (
-                        <div className="msh-ctx-menu">
-                          <button onClick={() => { setPaymentDetailRow(r); setCtxMenuRow(null); }}>
-                            📊 צפה בפירוט
-                          </button>
-                          <button onClick={() => { openView(r); setCtxMenuRow(null); }}>
-                            👁️ צפייה
-                          </button>
-                          <button onClick={() => startRowEdit(r.id)}>
-                            {editingRowId === r.id ? "✔ סיום עריכת שורה" : "✏️ עריכת שורה"}
-                          </button>
-                          <button onClick={() => { duplicateAsDraft(r); setCtxMenuRow(null); }}>
-                            📋 שכפול
-                          </button>
-                          <button
-                            className="msh-ctx-danger"
-                            disabled={pending}
-                            onClick={() => { openDeleteOne(r.id); setCtxMenuRow(null); }}
-                          >
-                            🗑️ מחיקה
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </td>
                 </tr>
               ))
             )}
@@ -1265,7 +1341,6 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
                     </td>
                   );
                 })}
-                <td />
               </tr>
             </tfoot>
           )}
@@ -1321,11 +1396,62 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
                 {showStatusMgmt && (
                   <div className="msh-status-mgmt">
                     <div className="msh-status-mgmt__title">ניהול סטטוסים</div>
+                    {statusMgmtError && <div className="msh-error">{statusMgmtError}</div>}
+                    <div className="msh-status-mgmt__built-in">
+                      <div className="msh-status-mgmt__subtitle">סטטוסים מערכתיים</div>
+                      {MANUAL_SHIPMENT_STATUSES.map((s) => (
+                        <div key={s.value} className="msh-status-mgmt__item msh-status-mgmt__item--readonly">
+                          <span>{s.label} ({s.value})</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="msh-status-mgmt__subtitle">סטטוסים מותאמים</div>
                     <div className="msh-status-mgmt__list">
+                      {customStatuses.length === 0 && (
+                        <div className="msh-status-mgmt__empty">אין סטטוסים מותאמים</div>
+                      )}
                       {customStatuses.map((s) => (
                         <div key={s.value} className="msh-status-mgmt__item">
-                          <span>{s.label} ({s.value})</span>
-                          <button type="button" onClick={() => removeCustomStatus(s.value)}>✕</button>
+                          {editingStatusValue === s.value ? (
+                            <>
+                              <input
+                                value={editStatusCode}
+                                onChange={(e) => setEditStatusCode(e.target.value)}
+                                placeholder="קוד (אנגלית)"
+                                aria-label="קוד סטטוס"
+                              />
+                              <input
+                                value={editStatusLabel}
+                                onChange={(e) => setEditStatusLabel(e.target.value)}
+                                placeholder="תצוגה (עברית)"
+                                aria-label="תצוגה בעברית"
+                              />
+                              <button
+                                type="button"
+                                className="shp-btn shp-btn--primary"
+                                onClick={() => void saveEditCustomStatus()}
+                              >
+                                שמור
+                              </button>
+                              <button type="button" className="shp-btn" onClick={cancelEditCustomStatus}>
+                                ביטול
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <span>{s.label} ({s.value})</span>
+                              <button type="button" className="shp-btn" onClick={() => startEditCustomStatus(s)}>
+                                עריכה
+                              </button>
+                              <button
+                                type="button"
+                                className="shp-btn"
+                                onClick={() => void removeCustomStatus(s.value)}
+                              >
+                                מחיקה
+                              </button>
+                            </>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -1341,7 +1467,7 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
                         onChange={(e) => setNewStatusLabel(e.target.value)}
                       />
                       <button type="button" className="shp-btn shp-btn--primary" onClick={addCustomStatus}>
-                        הוסף
+                        הוסף סטטוס
                       </button>
                     </div>
                   </div>
@@ -1357,10 +1483,12 @@ export function ShipmentManualEntryClient({ initialRows }: Props) {
                       <span className="msh-field-label">{col.label}</span>
                       {renderModalField(col)}
                       {col.key === "vatAmount" && (
-                        <span className="msh-hint">הזן מע״מ ← סכום רידומין יחושב אוטומטית</span>
+                        <span className="msh-hint">הזן מע״מ ← סכום רישומון יחושב אוטומטית</span>
                       )}
                       {col.key === "amountPaid" && (
-                        <span className="msh-hint">מחושב: סכום התשלום − רידומין + 18% ממקאסה</span>
+                        <span className="msh-hint">
+                          מחושב: סכום התשלום + מע״מ − חשבונית אירגט − (מקאסה × 18%)
+                        </span>
                       )}
                     </label>
                   ))}

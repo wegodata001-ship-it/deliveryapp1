@@ -11,10 +11,6 @@ import type {
   ShipmentRecordExpenseDto,
 } from "@/app/admin/shipments/control/types";
 import {
-  SHIPMENT_MANAGE_EXPENSE_CATEGORIES,
-  SHIPMENT_MANAGE_EXPENSE_LABELS,
-} from "@/app/admin/shipments/control/types";
-import {
   createShipmentBatchExpenseAction,
   deleteShipmentBatchExpenseAction,
   deleteShipmentRecordExpenseAction,
@@ -23,6 +19,7 @@ import {
 } from "@/app/admin/shipments/control/actions";
 import { PAYMENT_METHODS } from "@/app/admin/shipments/types";
 import { ShipmentConfirmModal } from "@/components/admin/shipments/ShipmentConfirmModal";
+import { ShipmentExpenseTypeSelect } from "@/components/admin/shipments/ShipmentExpenseTypeSelect";
 
 const EXPENSE_PAYMENT_METHODS = PAYMENT_METHODS.filter((m) =>
   ["CASH", "BANK_TRANSFER", "CREDIT", "CHECK", "CREDIT_NOTE", "CODE_DEDUCTION"].includes(m.value),
@@ -538,16 +535,13 @@ function ExpenseFormModal({
               <input value={initial?.batchNumber ?? ""} disabled />
             </label>
           )}
-          <label className="sc-expense-field">
-            <span>סוג הוצאה</span>
-            <select value={category} onChange={(e) => setCategory(e.target.value)} disabled={busy} autoFocus>
-              {SHIPMENT_MANAGE_EXPENSE_CATEGORIES.map((key) => (
-                <option key={key} value={key}>
-                  {SHIPMENT_MANAGE_EXPENSE_LABELS[key]}
-                </option>
-              ))}
-            </select>
-          </label>
+          <ShipmentExpenseTypeSelect
+            value={category}
+            onChange={setCategory}
+            disabled={busy}
+            autoFocus
+            includeCode={initial?.category}
+          />
           <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8 }}>
             <label className="sc-expense-field">
               <span>סכום</span>

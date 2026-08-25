@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import {
-  manualShipmentPaymentFromRow,
+  manualShipmentBalanceFromRow,
 } from "@/lib/manual-shipment-payment";
 import { statusLabel, type ManualShipmentDto } from "@/app/admin/shipments/manual/types";
 
@@ -37,7 +37,7 @@ export function ManualShipmentPaymentDetailModal({ open, row, onClose, onEdit }:
 
   if (!open || !row) return null;
 
-  const breakdown = manualShipmentPaymentFromRow(row);
+  const breakdown = manualShipmentBalanceFromRow(row);
   const title =
     [row.shipmentDetails, row.containerNumber].filter(Boolean).join(" · ") ||
     row.shipmentNumber ||
@@ -54,7 +54,7 @@ export function ManualShipmentPaymentDetailModal({ open, row, onClose, onEdit }:
       >
         <header className="msh-detail-modal__head">
           <div>
-            <h2 id="msh-detail-modal-title">פירוט תשלום</h2>
+            <h2 id="msh-detail-modal-title">פירוט יתרה</h2>
             <p className="msh-detail-modal__sub">{title}</p>
           </div>
           <button type="button" className="msh-detail-modal__close" onClick={onClose} aria-label="סגור">
@@ -78,6 +78,12 @@ export function ManualShipmentPaymentDetailModal({ open, row, onClose, onEdit }:
                   <dd>{row.containerNumber}</dd>
                 </>
               ) : null}
+              {row.caseFileNumber ? (
+                <>
+                  <dt>מספר תיק</dt>
+                  <dd>{row.caseFileNumber}</dd>
+                </>
+              ) : null}
               {row.shipmentDetails ? (
                 <>
                   <dt>פרטי משלוח</dt>
@@ -96,24 +102,28 @@ export function ManualShipmentPaymentDetailModal({ open, row, onClose, onEdit }:
           </section>
 
           <section className="msh-detail-modal__section">
-            <h3>חישוב התשלום</h3>
+            <h3>חישוב היתרה</h3>
             <div className="msh-detail-modal__formula">
               <div className="msh-detail-modal__line">
-                <span>סכום תשלום</span>
+                <span>סכום התשלום</span>
                 <span>{fmtMoney(breakdown.paymentAmount)}</span>
               </div>
-              <div className="msh-detail-modal__line msh-detail-modal__line--minus">
-                <span>פחות רידומין</span>
-                <span>-{fmtMoneyPlain(breakdown.ridominAmount)} ₪</span>
-              </div>
               <div className="msh-detail-modal__line msh-detail-modal__line--plus">
+                <span>מע״מ</span>
+                <span>+{fmtMoneyPlain(breakdown.vatAmount)} ₪</span>
+              </div>
+              <div className="msh-detail-modal__line msh-detail-modal__line--minus">
+                <span>חשבונית אירגט</span>
+                <span>-{fmtMoneyPlain(breakdown.airjetInvoice)} ₪</span>
+              </div>
+              <div className="msh-detail-modal__line msh-detail-modal__line--minus">
                 <span>מע״מ מקאסה 18%</span>
-                <span>+{fmtMoneyPlain(breakdown.makasaVat)} ₪</span>
+                <span>-{fmtMoneyPlain(breakdown.makasaVat)} ₪</span>
               </div>
               <div className="msh-detail-modal__divider" />
               <div className="msh-detail-modal__line msh-detail-modal__line--total">
-                <span>סה״כ</span>
-                <span>{fmtMoney(breakdown.payment)}</span>
+                <span>יתרה</span>
+                <span>{fmtMoney(breakdown.balance)}</span>
               </div>
             </div>
           </section>

@@ -28,7 +28,6 @@ import {
   round2,
 } from "@/app/admin/shipments/cash-control/ssot";
 import {
-  SHIPMENT_CASH_EXPENSE_LABELS,
   type CashControlDayRow,
   type CashControlWeekPayload,
   type CashDrilldownExpenseRow,
@@ -42,6 +41,11 @@ import {
   type ShipmentCashExpenseDto,
   type ShipmentCashHistoryEntry,
 } from "@/app/admin/shipments/cash-control/types";
+import {
+  getShipmentExpenseTypeLabelMap,
+  isValidShipmentExpenseTypeCode,
+} from "@/app/admin/shipments/expense-types-actions";
+import { resolveExpenseTypeLabel } from "@/lib/shipment-expense-types";
 
 const HE_DAYS = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"];
 
@@ -198,12 +202,13 @@ export async function listShipmentCashExpenses(dayId: string): Promise<ShipmentC
     ? await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, fullName: true } })
     : [];
   const names = new Map(users.map((u) => [u.id, u.fullName]));
+  const labelMap = await getShipmentExpenseTypeLabelMap();
 
   return expenses.map((e) => ({
     id: e.id,
     dayId: e.dayId,
     category: e.category as ShipmentCashExpenseCategory,
-    categoryLabel: SHIPMENT_CASH_EXPENSE_LABELS[e.category as ShipmentCashExpenseCategory] ?? e.category,
+    categoryLabel: resolveExpenseTypeLabel(e.category, labelMap),
     paymentMethod: e.paymentMethod,
     paymentMethodLabel: CASH_CONTROL_METHOD_LABELS[e.paymentMethod] ?? PAYMENT_METHOD_LABELS[e.paymentMethod] ?? e.paymentMethod,
     amountIls: e.amountIls.toNumber(),
@@ -216,7 +221,7 @@ export async function listShipmentCashExpenses(dayId: string): Promise<ShipmentC
 
 export async function addShipmentCashExpense(input: {
   dayDate: string;
-  category: ShipmentCashExpenseCategory;
+  category: string;
   paymentMethod: string;
   amountIls: number;
   notes?: string | null;
@@ -226,7 +231,7 @@ export async function addShipmentCashExpense(input: {
   if (!Number.isFinite(input.amountIls) || input.amountIls <= 0) {
     throw new Error("סכום ההוצאה חייב להיות גדול מאפס");
   }
-  if (!(input.category in SHIPMENT_CASH_EXPENSE_LABELS)) {
+  if (!(await isValidShipmentExpenseTypeCode(input.category))) {
     throw new Error("קטגוריית הוצאה לא חוקית");
   }
   const day = await getOrOpenShipmentCashDay(input.dayDate, input.createdById, input.workCountry);
@@ -618,12 +623,13 @@ export async function drilldownExpenses(
   let totalIls = 0;
 
   if (dayRow) {
+    const labelMap = await getShipmentExpenseTypeLabelMap();
     for (const e of dayRow.expenses) {
       const amount = e.amountIls.toNumber();
       rows.push({
         id: e.id,
         category: e.category,
-        categoryLabel: SHIPMENT_CASH_EXPENSE_LABELS[e.category as ShipmentCashExpenseCategory] ?? e.category,
+        categoryLabel: resolveExpenseTypeLabel(e.category, labelMap),
         amountIls: amount,
         notes: e.notes,
         createdAt: e.createdAt.toISOString(),
@@ -719,6 +725,7 @@ export async function loadShipmentCashHistory(shipmentRecordId: string): Promise
   for (const a of audits) if (a.userId) userIds.add(a.userId);
   const users = userIds.size ? await prisma.user.findMany({ where: { id: { in: [...userIds] } }, select: { id: true, fullName: true } }) : [];
   const names = new Map(users.map((u) => [u.id, u.fullName]));
+  const labelMap = await getShipmentExpenseTypeLabelMap();
 
   const entries: ShipmentCashHistoryEntry[] = [];
   for (const p of payments) {
@@ -727,7 +734,7 @@ export async function loadShipmentCashHistory(shipmentRecordId: string): Promise
   for (const a of audits) {
     if (a.actionType === "SHIPMENT_FEE_INTAKE") continue;
     const newVal = (a.newValue ?? {}) as Record<string, unknown>;
-    entries.push({ id: `audit-${a.id}`, at: a.createdAt.toISOString(), actionType: a.actionType, actionLabel: HISTORY_ACTION_LABELS[a.actionType] ?? a.actionType, userName: a.userId ? names.get(a.userId) ?? null : null, amountIls: typeof newVal.amountIls === "number" ? newVal.amountIls : null, notes: typeof newVal.notes === "string" ? newVal.notes : null, detail: typeof newVal.category === "string" ? (SHIPMENT_CASH_EXPENSE_LABELS[newVal.category as ShipmentCashExpenseCategory] ?? String(newVal.category)) : typeof newVal.dayDate === "string" ? `יום ${newVal.dayDate}` : null });
+    entries.push({ id: `audit-${a.id}`, at: a.createdAt.toISOString(), actionType: a.actionType, actionLabel: HISTORY_ACTION_LABELS[a.actionType] ?? a.actionType, userName: a.userId ? names.get(a.userId) ?? null : null, amountIls: typeof newVal.amountIls === "number" ? newVal.amountIls : null, notes: typeof newVal.notes === "string" ? newVal.notes : null, detail: typeof newVal.category === "string" ? resolveExpenseTypeLabel(String(newVal.category), labelMap) : typeof newVal.dayDate === "string" ? `יום ${newVal.dayDate}` : null });
   }
   entries.sort((a, b) => (a.at < b.at ? 1 : -1));
   return entries;

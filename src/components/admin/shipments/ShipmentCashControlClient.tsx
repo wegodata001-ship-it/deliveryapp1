@@ -22,14 +22,13 @@ import {
   saveShipmentCashCountsAction,
 } from "@/app/admin/shipments/cash-control/actions";
 import {
-  SHIPMENT_CASH_EXPENSE_LABELS,
   type CashVarianceStatus,
   type ShipmentCashControlPayload,
-  type ShipmentCashExpenseCategory,
   type ShipmentCashMethodLine,
 } from "@/app/admin/shipments/cash-control/types";
 import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
 import { ShipmentConfirmModal } from "@/components/admin/shipments/ShipmentConfirmModal";
+import { ShipmentExpenseTypeSelect } from "@/components/admin/shipments/ShipmentExpenseTypeSelect";
 
 type Props = {
   initialData: ShipmentCashControlPayload;
@@ -83,8 +82,7 @@ export function ShipmentCashControlClient({
     ),
   );
   const [expenseOpen, setExpenseOpen] = useState(false);
-  const [expenseCategory, setExpenseCategory] =
-    useState<ShipmentCashExpenseCategory>("FUEL");
+  const [expenseCategory, setExpenseCategory] = useState("FUEL");
   const [expenseAmount, setExpenseAmount] = useState("");
   const [expenseNotes, setExpenseNotes] = useState("");
   const [closeDayOpen, setCloseDayOpen] = useState(false);
@@ -562,23 +560,10 @@ export function ShipmentCashControlClient({
               </button>
             </div>
             <div className="shp-modal__body" style={{ display: "grid", gap: 10 }}>
-              <label className="sc-expense-field">
-                <span>סוג הוצאה</span>
-                <select
-                  value={expenseCategory}
-                  onChange={(e) =>
-                    setExpenseCategory(e.target.value as ShipmentCashExpenseCategory)
-                  }
-                >
-                  {(Object.keys(SHIPMENT_CASH_EXPENSE_LABELS) as ShipmentCashExpenseCategory[]).map(
-                    (key) => (
-                      <option key={key} value={key}>
-                        {SHIPMENT_CASH_EXPENSE_LABELS[key]}
-                      </option>
-                    ),
-                  )}
-                </select>
-              </label>
+              <ShipmentExpenseTypeSelect
+                value={expenseCategory}
+                onChange={setExpenseCategory}
+              />
               <label className="sc-expense-field">
                 <span>סכום</span>
                 <input

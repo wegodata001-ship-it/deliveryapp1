@@ -39,6 +39,13 @@ import {
   exportShipmentReportPdf,
 } from "@/lib/shipment-report-export";
 import { useShipmentCountry } from "@/components/admin/shipments/ShipmentCountryProvider";
+import { workEnvironmentLabelHe } from "@/lib/work-country";
+import type { WorkCountryCode } from "@/lib/work-country";
+import {
+  aggregateShipmentFinancials,
+  sumShipmentBalances,
+  type ShipmentFinancialAggregation,
+} from "@/lib/shipment-control-aggregation";
 
 type Tab = "overview" | "payments" | "couriers" | "zones" | "exceptions";
 
@@ -63,6 +70,75 @@ function fmtIls(n: number | null | undefined) {
 function formatDate(iso: string | null | undefined) {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString("he-IL");
+}
+
+type ContainerSummaryRow = {
+  batchId: string;
+  batchNumber: string;
+  containerNumber: string | null;
+  countryLabel: string;
+  arrivalDateIso: string | null;
+  customerCount: number;
+  recordCount: number;
+  finance: ShipmentFinancialAggregation;
+  expenseTotalUsd: number;
+  expenses: ShipmentBatchExpenseDto[];
+};
+
+function buildContainerSummaries(
+  records: ShipmentControlRecord[],
+  batches: ShipmentControlPayload["batches"],
+  batchExpenses: ShipmentBatchExpenseSummary[],
+  workCountry: WorkCountryCode,
+): ContainerSummaryRow[] {
+  const batchMeta = new Map(batches.map((b) => [b.id, b]));
+  const expenseByBatch = new Map(batchExpenses.map((b) => [b.batchId, b]));
+  const byBatch = new Map<string, ShipmentControlRecord[]>();
+  for (const r of records) {
+    const list = byBatch.get(r.batchId) ?? [];
+    list.push(r);
+    byBatch.set(r.batchId, list);
+  }
+
+  const rows: ContainerSummaryRow[] = [];
+  for (const [batchId, recs] of byBatch) {
+    const meta = batchMeta.get(batchId);
+    const exp = expenseByBatch.get(batchId);
+    const expenses = exp?.expenses ?? [];
+    const finance = aggregateShipmentFinancials(recs, expenses);
+    const customers = new Set<string>();
+    for (const r of recs) {
+      customers.add(r.customerCode?.trim() || r.customerName?.trim() || r.id);
+    }
+    const arrivalDateIso =
+      meta?.arrivalDate ||
+      meta?.shippingDate ||
+      meta?.createdAt ||
+      recs.map((r) => r.createdAt).sort().at(-1) ||
+      null;
+    rows.push({
+      batchId,
+      batchNumber: meta?.batchNumber ?? recs[0]?.batchNumber ?? "—",
+      containerNumber: meta?.containerNumber ?? recs[0]?.containerNumber ?? null,
+      countryLabel: workEnvironmentLabelHe(
+        (meta?.countryCode as WorkCountryCode | undefined) ?? workCountry,
+      ),
+      arrivalDateIso,
+      customerCount: customers.size,
+      recordCount: recs.length,
+      finance,
+      expenseTotalUsd: exp?.totalUsd ?? 0,
+      expenses,
+    });
+  }
+
+  rows.sort((a, b) => {
+    const da = a.arrivalDateIso ?? "";
+    const db = b.arrivalDateIso ?? "";
+    if (da !== db) return db.localeCompare(da);
+    return a.batchNumber.localeCompare(b.batchNumber, "he");
+  });
+  return rows;
 }
 
 // ─── KPI Card ─────────────────────────────────────────────────────────────────
@@ -96,6 +172,9 @@ function KpiCard({
 // ─── Status badge ─────────────────────────────────────────────────────────────
 
 function StatusBadge({ status }: { status: string }) {
+  if (status === "MIXED") {
+    return <span className="shp-badge shp-badge--mixed">מעורב</span>;
+  }
   const cls = `shp-badge shp-badge--${status.toLowerCase()}`;
   return <span className={cls}>{SHIPMENT_STATUS_LABELS[status as ShipmentStatus] ?? status}</span>;
 }
@@ -181,7 +260,6 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
   const [data, setData] = useState(initialData);
   const [activeTab, setActiveTab] = useState<Tab>("overview");
   const [isPending, startTransition] = useTransition();
-  const [showCount, setShowCount] = useState(50);
 
   // Filters
   const now = new Date();
@@ -201,6 +279,9 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
   const [shipmentsModalOpen, setShipmentsModalOpen] = useState(false);
   const [containersModalOpen, setContainersModalOpen] = useState(false);
   const [expensesManageModalOpen, setExpensesManageModalOpen] = useState(false);
+  const [quickExpenseOpen, setQuickExpenseOpen] = useState(false);
+  const [overviewBatchId, setOverviewBatchId] = useState<string | null>(null);
+  const [overviewExpenseBatchId, setOverviewExpenseBatchId] = useState<string | null>(null);
 
   const currentFilter = useCallback((): ShipmentControlFilter => ({
     workCountry,
@@ -218,7 +299,10 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
     (filter: ShipmentControlFilter) => {
       startTransition(async () => {
         const res = await getShipmentControlDataAction(filter);
-        if (res.ok) { setData(res.data); setShowCount(50); }
+        if (res.ok) {
+          setData(res.data);
+          setOverviewBatchId(null);
+        }
       });
     },
     []
@@ -257,6 +341,20 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
     return Math.round((recordIls + batchIls) * 100) / 100;
   }
 
+  function recalcTotalBalanceIls(
+    recs: ShipmentControlRecord[],
+    batchExp: ShipmentBatchExpenseSummary[],
+  ) {
+    const flat = batchExp.flatMap((b) =>
+      b.expenses.map((e) => ({
+        batchId: b.batchId,
+        amount: e.amount,
+        currency: e.currency,
+      })),
+    );
+    return sumShipmentBalances(recs, flat);
+  }
+
   const handleBatchExpenseChanged = useCallback(
     (batchId: string, expenses: ShipmentBatchExpenseDto[]) => {
       setData((prev) => {
@@ -289,6 +387,7 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
           kpis: {
             ...prev.kpis,
             totalExpensesIls: recalcTotalExpensesIls(prev.records, newBatchExpenses),
+            totalBalanceIls: recalcTotalBalanceIls(prev.records, newBatchExpenses),
           },
         };
       });
@@ -316,6 +415,7 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
           kpis: {
             ...prev.kpis,
             totalExpensesIls: recalcTotalExpensesIls(newRecords, prev.batchExpenses),
+            totalBalanceIls: recalcTotalBalanceIls(newRecords, prev.batchExpenses),
           },
         };
       });
@@ -326,8 +426,20 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
   const { kpis, records, byCourier, byZone, exceptions, batches, batchExpenses, zones, couriers } = data;
   const courierOptions = data.courierOptions ?? [];
 
-  const visibleRecords = records.slice(0, showCount);
-  const hasMore = records.length > showCount;
+  const containerSummaries = useMemo(
+    () => buildContainerSummaries(records, batches, batchExpenses, workCountry),
+    [records, batches, batchExpenses, workCountry],
+  );
+
+  const overviewDrillRecords = useMemo(() => {
+    if (!overviewBatchId) return [];
+    return records.filter((r) => r.batchId === overviewBatchId);
+  }, [records, overviewBatchId]);
+
+  const overviewDrillSummary = useMemo(
+    () => containerSummaries.find((c) => c.batchId === overviewBatchId) ?? null,
+    [containerSummaries, overviewBatchId],
+  );
 
   // payment-control tab records (all, sorted by remaining desc)
   const paymentRecords = useMemo(
@@ -354,6 +466,16 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
         <Truck size={22} style={{ color: "#2563eb" }} />
         <h1>בקרת משלוחים</h1>
         <div className="shp-header-actions">
+          <button
+            type="button"
+            className="shp-btn shp-btn--primary"
+            onClick={() => setQuickExpenseOpen(true)}
+            disabled={isPending || batches.length === 0}
+            title={batches.length === 0 ? "אין משלוחים בתוצאה המסוננת" : "הוספת הוצאה למשלוח"}
+          >
+            <Plus size={16} />
+            הוצאה חדשה
+          </button>
           <button
             className="shp-btn shp-btn--secondary shp-btn--sm"
             onClick={refreshCurrent}
@@ -424,28 +546,20 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
 
       {/* ── KPI Cards row ───────────────────────────────────────────────────── */}
       <div className="sc-kpi-grid">
-        {/* Containers group */}
+        {/* משלוחים + חבילות + סטטוסים */}
         <div className="sc-kpi-group">
-          <div className="sc-kpi-group__title"><Truck size={14} /> משלוחים (קונטיינרים)</div>
-          <div className="sc-kpi-row">
+          <div className="sc-kpi-group__title"><Package size={14} /> משלוחים וחבילות</div>
+          <div className="sc-kpi-row sc-kpi-row--shipments-7">
             <KpiCard
               label="משלוחים"
               value={batches.length}
               icon={<Truck size={18} />}
               color="#6366f1"
-              sub={`${batches.filter((b) => b.containerNumber).length} עם מספר קונטיינר`}
               onClick={() => setContainersModalOpen(true)}
             />
-          </div>
-        </div>
-
-        {/* Shipments/packages group */}
-        <div className="sc-kpi-group">
-          <div className="sc-kpi-group__title"><Package size={14} /> חבילות</div>
-          <div className="sc-kpi-row">
             <KpiCard
               label="חבילות"
-              value={kpis.total}
+              value={kpis.totalBoxes.toLocaleString()}
               icon={<Package size={18} />}
               onClick={() => setShipmentsModalOpen(true)}
             />
@@ -460,10 +574,15 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
         {/* Financial group */}
         <div className="sc-kpi-group">
           <div className="sc-kpi-group__title"><Banknote size={14} /> כספים</div>
-          <div className="sc-kpi-row">
+          <div className="sc-kpi-row sc-kpi-row--finance-6">
             <KpiCard label="לחיוב" value={fmtIls(kpis.totalFeeIls)} icon={<Banknote size={18} />} onClick={() => setActiveKpi("to_charge")} />
             <KpiCard label="נגבה" value={fmtIls(kpis.totalPaidIls)} color="#15803d" icon={<TrendingUp size={18} />} onClick={() => setActiveKpi("collected")} />
-            <KpiCard label="יתרה" value={fmtIls(kpis.totalRemainingIls)} color={kpis.totalRemainingIls > 0 ? "#dc2626" : "#15803d"} onClick={() => setActiveKpi("remaining")} />
+            <KpiCard
+              label="יתרה לתשלום"
+              value={fmtIls(kpis.totalRemainingIls)}
+              color={kpis.totalRemainingIls > 0 ? "#dc2626" : "#15803d"}
+              onClick={() => setActiveKpi("remaining")}
+            />
             <KpiCard
               label="סה״כ הוצאות משלוחים"
               value={fmtIls(kpis.totalExpensesIls ?? 0)}
@@ -471,41 +590,19 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
               icon={<Banknote size={18} />}
               onClick={() => setExpensesManageModalOpen(true)}
             />
-            {kpis.totalCreditIls > 0 && (
-              <KpiCard label="יתרת זכות" value={fmtIls(kpis.totalCreditIls)} color="#7c3aed" onClick={() => setActiveKpi("credit")} />
-            )}
-          </div>
-        </div>
-
-        {/* Distribution group */}
-        <div className="sc-kpi-group">
-          <div className="sc-kpi-group__title"><Users size={14} /> חלוקה</div>
-          <div className="sc-kpi-row">
-            <KpiCard label="אזורים" value={kpis.totalZones} icon={<MapPin size={18} />} onClick={() => setActiveKpi("zones")} />
-            <KpiCard label="שליחים" value={kpis.totalCouriers} icon={<Users size={18} />} onClick={() => setActiveKpi("couriers")} />
-            <KpiCard label="ללא שליח" value={kpis.unassignedCourier} color={kpis.unassignedCourier > 0 ? "#dc2626" : "#15803d"} onClick={() => setActiveKpi("no_courier")} />
-            <KpiCard label="ללא אזור" value={kpis.noZone} color={kpis.noZone > 0 ? "#d97706" : "#15803d"} onClick={() => setActiveKpi("no_zone")} />
-          </div>
-        </div>
-
-        {/* Payments group */}
-        <div className="sc-kpi-group">
-          <div className="sc-kpi-group__title"><CheckCircle size={14} /> תשלומים</div>
-          <div className="sc-kpi-row">
-            <KpiCard label="לא שולמו" value={kpis.unpaidCount} color="#dc2626" onClick={() => setActiveKpi("unpaid")} />
-            <KpiCard label="חלקי" value={kpis.partialCount} color="#d97706" onClick={() => setActiveKpi("partial")} />
-            <KpiCard label="שולמו" value={kpis.paidCount} color="#15803d" onClick={() => setActiveKpi("paid")} />
-          </div>
-        </div>
-
-        {/* Cartons group */}
-        <div className="sc-kpi-group">
-          <div className="sc-kpi-group__title"><Package size={14} /> קרטונים</div>
-          <div className="sc-kpi-row">
-            <KpiCard label="קרטונים" value={kpis.totalBoxes.toLocaleString()} onClick={() => setActiveKpi("boxes")} />
-            <KpiCard label={`משקל (ק"ג)`} value={kpis.totalWeightKg.toLocaleString()} onClick={() => setActiveKpi("weight")} />
-            <KpiCard label="נמסרו" value={kpis.deliveredBoxes} color="#15803d" onClick={() => setActiveKpi("delivered_boxes")} />
-            <KpiCard label="לא נמסרו" value={kpis.notDeliveredBoxes} color="#dc2626" onClick={() => setActiveKpi("not_delivered_boxes")} />
+            <KpiCard
+              label="סה״כ יתרה"
+              value={fmtIls(kpis.totalBalanceIls ?? 0)}
+              color={(kpis.totalBalanceIls ?? 0) < -0.01 ? "#dc2626" : "#0f766e"}
+              icon={<TrendingUp size={18} />}
+            />
+            <KpiCard
+              label="לקוחות ללא דמי משלוח"
+              value={kpis.missingDeliveryFeeCount}
+              color={kpis.missingDeliveryFeeCount > 0 ? "#dc2626" : "#15803d"}
+              icon={<AlertTriangle size={18} />}
+              onClick={() => setActiveKpi("missing_fee")}
+            />
           </div>
         </div>
       </div>
@@ -516,7 +613,10 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
           <button
             key={t.id}
             className={`shp-tab ${activeTab === t.id ? "shp-tab--active" : ""}`}
-            onClick={() => setActiveTab(t.id)}
+            onClick={() => {
+              setActiveTab(t.id);
+              if (t.id !== "overview") setOverviewBatchId(null);
+            }}
           >
             {t.icon}
             {t.label}
@@ -530,49 +630,167 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
       {/* ── Tab: Overview ───────────────────────────────────────────────────── */}
       {activeTab === "overview" && (
         <div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-            <span style={{ fontSize: "0.85rem", color: "#64748b" }}>
-              מציג {visibleRecords.length} מתוך {data.totalRecordCount} משלוחים
-            </span>
-          </div>
-          <div className="shp-table-wrap">
-            <table className="shp-table">
-              <thead>
-                <tr>
-                  <th style={{ width: 28 }}></th>
-                  <th>מספר משלוח</th>
-                  <th>לקוח</th>
-                  <th>אזור</th>
-                  <th>שליח</th>
-                  <th>קרטונים</th>
-                  <th>משקל</th>
-                  <th>דמי משלוח</th>
-                  <th>שולם</th>
-                  <th>יתרה</th>
-                  <th>סטטוס</th>
-                  <th>תשלום</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleRecords.length === 0 && (
-                  <tr>
-                    <td colSpan={12} style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>
-                      אין נתונים לפי הסינון הנוכחי
-                    </td>
-                  </tr>
-                )}
-                {visibleRecords.map((r) => <RecordRow key={r.id} r={r} />)}
-              </tbody>
-            </table>
-          </div>
-          {hasMore && (
-            <div style={{ textAlign: "center", marginTop: 12 }}>
-              <button
-                className="shp-btn shp-btn--secondary"
-                onClick={() => setShowCount((n) => n + 50)}
-              >
-                טען עוד ({records.length - showCount} נוספים)
-              </button>
+          {overviewBatchId && overviewDrillSummary ? (
+            <div className="sc-container-drill">
+              <div className="sc-container-drill__head">
+                <button
+                  type="button"
+                  className="shp-btn shp-btn--secondary shp-btn--sm"
+                  onClick={() => setOverviewBatchId(null)}
+                >
+                  ← חזרה לסיכום משלוחים
+                </button>
+                <div className="sc-container-drill__title">
+                  <strong>{overviewDrillSummary.batchNumber}</strong>
+                  <span>
+                    {overviewDrillSummary.containerNumber
+                      ? `קונטיינר ${overviewDrillSummary.containerNumber} · `
+                      : ""}
+                    {overviewDrillSummary.countryLabel}
+                    {" · "}
+                    הגעה {formatDate(overviewDrillSummary.arrivalDateIso)}
+                    {" · "}
+                    {overviewDrillSummary.customerCount} לקוחות
+                  </span>
+                </div>
+              </div>
+              <div style={{ fontSize: "0.85rem", color: "#64748b", marginBottom: 10 }}>
+                מציג {overviewDrillRecords.length} לקוחות במשלוח
+              </div>
+              <div className="shp-table-wrap">
+                <table className="shp-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: 28 }}></th>
+                      <th>מספר משלוח</th>
+                      <th>לקוח</th>
+                      <th>אזור</th>
+                      <th>שליח</th>
+                      <th>חבילות</th>
+                      <th>משקל</th>
+                      <th>דמי משלוח</th>
+                      <th>שולם</th>
+                      <th>יתרה</th>
+                      <th>סטטוס</th>
+                      <th>תשלום</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {overviewDrillRecords.length === 0 ? (
+                      <tr>
+                        <td colSpan={12} style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>
+                          אין לקוחות במשלוח לפי הסינון הנוכחי
+                        </td>
+                      </tr>
+                    ) : (
+                      overviewDrillRecords.map((r) => <RecordRow key={r.id} r={r} />)
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                <span style={{ fontSize: "0.85rem", color: "#64748b" }}>
+                  מציג {containerSummaries.length} משלוחים · {data.totalRecordCount} לקוחות
+                </span>
+              </div>
+              <div className="shp-table-wrap">
+                <table className="shp-table sc-container-table">
+                  <thead>
+                    <tr>
+                      <th>מספר משלוח</th>
+                      <th>תאריך הגעה</th>
+                      <th style={{ textAlign: "center" }}>סה״כ דמי משלוח</th>
+                      <th style={{ textAlign: "center" }}>מזומן</th>
+                      <th style={{ textAlign: "center" }}>העברה</th>
+                      <th style={{ textAlign: "center" }}>צ׳ק</th>
+                      <th style={{ textAlign: "center" }}>הוצאות</th>
+                      <th style={{ textAlign: "center" }}>יתרה לתשלום</th>
+                      <th style={{ textAlign: "center" }}>יתרה</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {containerSummaries.length === 0 ? (
+                      <tr>
+                        <td colSpan={9} style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>
+                          אין נתונים לפי הסינון הנוכחי
+                        </td>
+                      </tr>
+                    ) : (
+                      containerSummaries.map((c) => {
+                        const f = c.finance;
+                        return (
+                          <tr key={c.batchId} className="sc-container-row">
+                            <td>
+                              <button
+                                type="button"
+                                className="shp-btn shp-btn--link"
+                                style={{ fontWeight: 700, color: "#1d4ed8", fontSize: "0.92rem", padding: 0 }}
+                                onClick={() => setOverviewBatchId(c.batchId)}
+                                title="פתח פירוט לקוחות"
+                              >
+                                {c.batchNumber}
+                              </button>
+                              {c.containerNumber ? (
+                                <span style={{ display: "block", fontSize: "0.72rem", color: "#64748b" }}>
+                                  קונטיינר {c.containerNumber}
+                                </span>
+                              ) : null}
+                            </td>
+                            <td>{formatDate(c.arrivalDateIso)}</td>
+                            <td style={{ textAlign: "center", fontWeight: 600 }}>
+                              {fmtIls(f.shipmentTotalDeliveryFees)}
+                            </td>
+                            <td style={{ textAlign: "center", color: "#15803d", fontWeight: 600 }}>
+                              {fmtIls(f.shipmentCashReceived)}
+                            </td>
+                            <td style={{ textAlign: "center", color: "#15803d", fontWeight: 600 }}>
+                              {fmtIls(f.shipmentTransferReceived)}
+                            </td>
+                            <td style={{ textAlign: "center", color: "#15803d", fontWeight: 600 }}>
+                              {fmtIls(f.shipmentCheckReceived)}
+                            </td>
+                            <td style={{ textAlign: "center" }}>
+                              <button
+                                type="button"
+                                className="shp-btn shp-btn--link"
+                                style={{ fontWeight: 700, color: "#b45309", padding: "2px 6px" }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setOverviewExpenseBatchId(c.batchId);
+                                }}
+                                title="ניהול הוצאות המשלוח"
+                              >
+                                {fmtExpenseTotals(f.shipmentExpenses, c.expenseTotalUsd)}
+                              </button>
+                            </td>
+                            <td
+                              style={{
+                                textAlign: "center",
+                                fontWeight: 700,
+                                color: f.shipmentOutstandingDeliveryFees > 0.01 ? "#dc2626" : "#15803d",
+                              }}
+                            >
+                              {fmtIls(f.shipmentOutstandingDeliveryFees)}
+                            </td>
+                            <td
+                              style={{
+                                textAlign: "center",
+                                fontWeight: 700,
+                                color: f.shipmentBalance < -0.01 ? "#dc2626" : "#0f766e",
+                              }}
+                            >
+                              {fmtIls(f.shipmentBalance)}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>
@@ -800,6 +1018,53 @@ export function ShipmentControlClient({ initialData, generatedBy }: Props) {
           onRecordExpensesChanged={handleRecordExpenseChanged}
         />
       )}
+
+      {quickExpenseOpen && (
+        <ShipmentBatchExpenseFormModal
+          batchId={batchId || undefined}
+          batchLabel={
+            batchId
+              ? (batches.find((b) => b.id === batchId)?.batchNumber ?? "משלוח")
+              : "בחר משלוח"
+          }
+          batchOptions={batches.map((batch) => ({
+            id: batch.id,
+            label: batch.containerNumber
+              ? `${batch.batchNumber} · ${batch.containerNumber}`
+              : batch.batchNumber,
+          }))}
+          layer="root"
+          onClose={() => setQuickExpenseOpen(false)}
+          onSaved={(expense) => {
+            const prev = batchExpenses.find((b) => b.batchId === expense.batchId)?.expenses ?? [];
+            const next = prev.some((e) => e.id === expense.id)
+              ? prev.map((e) => (e.id === expense.id ? expense : e))
+              : [...prev, expense];
+            handleBatchExpenseChanged(expense.batchId, next);
+            refreshCurrent();
+          }}
+        />
+      )}
+
+      {overviewExpenseBatchId && (() => {
+        const row = containerSummaries.find((c) => c.batchId === overviewExpenseBatchId);
+        if (!row) return null;
+        return (
+          <ShipmentBatchExpensesDetailModal
+            batchId={row.batchId}
+            batchLabel={
+              row.containerNumber
+                ? `${row.batchNumber} · ${row.containerNumber}`
+                : row.batchNumber
+            }
+            expenses={row.expenses}
+            totalIls={row.finance.shipmentExpenses}
+            totalUsd={row.expenseTotalUsd}
+            onClose={() => setOverviewExpenseBatchId(null)}
+            onExpensesChanged={(expenses) => handleBatchExpenseChanged(row.batchId, expenses)}
+          />
+        );
+      })()}
     </div>
   );
 }
@@ -835,7 +1100,6 @@ function ContainersModal({
   onClose: () => void;
 }) {
   const [batchExpenses, setBatchExpenses] = useState(initialBatchExpenses);
-  const [addFor, setAddFor] = useState<BatchSummary | null>(null);
   const [detailFor, setDetailFor] = useState<BatchSummary | null>(null);
 
   useEffect(() => {
@@ -906,56 +1170,30 @@ function ContainersModal({
       : s.batchNumber;
   }
 
-  function applyExpense(batchId: string, expense: ShipmentBatchExpenseDto) {
-    setBatchExpenses((prev) => {
-      const existing = prev.find((b) => b.batchId === batchId);
-      const expenses = existing
-        ? [expense, ...existing.expenses]
-        : [expense];
-      let totalIls = 0;
-      let totalUsd = 0;
-      for (const e of expenses) {
-        if (e.currency === "USD") totalUsd += e.amount;
-        else totalIls += e.amount;
-      }
-      const summary: ShipmentBatchExpenseSummary = {
-        batchId,
-        expenses,
-        totalIls: Math.round(totalIls * 100) / 100,
-        totalUsd: Math.round(totalUsd * 100) / 100,
-        count: expenses.length,
-      };
-      const next = prev.some((b) => b.batchId === batchId)
+  function syncExpenses(batchId: string, expenses: ShipmentBatchExpenseDto[]) {
+    let totalIls = 0;
+    let totalUsd = 0;
+    for (const e of expenses) {
+      if (e.currency === "USD") totalUsd += e.amount;
+      else totalIls += e.amount;
+    }
+    const summary: ShipmentBatchExpenseSummary = {
+      batchId,
+      expenses,
+      totalIls: Math.round(totalIls * 100) / 100,
+      totalUsd: Math.round(totalUsd * 100) / 100,
+      count: expenses.length,
+    };
+    setBatchExpenses((prev) =>
+      prev.some((b) => b.batchId === batchId)
         ? prev.map((b) => (b.batchId === batchId ? summary : b))
-        : [...prev, summary];
-      onBatchExpenseChanged(batchId, expenses);
-      return next;
-    });
-    setDetailFor((prev) =>
-      prev && prev.id === batchId
-        ? {
-            ...prev,
-            expenses: [expense, ...prev.expenses],
-            expenseTotalIls:
-              expense.currency === "ILS"
-                ? Math.round((prev.expenseTotalIls + expense.amount) * 100) / 100
-                : prev.expenseTotalIls,
-            expenseTotalUsd:
-              expense.currency === "USD"
-                ? Math.round((prev.expenseTotalUsd + expense.amount) * 100) / 100
-                : prev.expenseTotalUsd,
-          }
-        : prev,
+        : [...prev, summary],
     );
+    onBatchExpenseChanged(batchId, expenses);
   }
 
   function fm(n: number) {
     return "₪" + n.toLocaleString("he-IL", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-  }
-
-  function openExpenseFlow(s: BatchSummary) {
-    if (s.expenses.length > 0) setDetailFor(s);
-    else setAddFor(s);
   }
 
   return (
@@ -965,7 +1203,7 @@ function ContainersModal({
           <div className="shp-modal__header">
             <strong>פירוט משלוחים (קונטיינרים)</strong>
             <span style={{ fontSize: "0.82rem", color: "#64748b", marginInlineStart: 8 }}>
-              {summaries.length} משלוחים · {totals.recordCount} חבילות
+              {summaries.length} משלוחים · {totals.totalBoxes} חבילות
             </span>
             <button type="button" className="shp-icon-btn" onClick={onClose}>
               <X size={16} />
@@ -978,7 +1216,6 @@ function ContainersModal({
                   <th>מספר משלוח</th>
                   <th>מספר קונטיינר</th>
                   <th style={{ textAlign: "center" }}>חבילות</th>
-                  <th style={{ textAlign: "center" }}>קרטונים</th>
                   <th style={{ textAlign: "center" }}>נמסרו</th>
                   <th style={{ textAlign: "center" }}>דמי משלוח</th>
                   <th style={{ textAlign: "center" }}>נגבה</th>
@@ -991,7 +1228,6 @@ function ContainersModal({
                   <tr key={s.id}>
                     <td style={{ fontWeight: 700, color: "#1d4ed8" }}>{s.batchNumber}</td>
                     <td style={{ fontWeight: 600 }}>{s.containerNumber || "—"}</td>
-                    <td style={{ textAlign: "center" }}>{s.recordCount}</td>
                     <td style={{ textAlign: "center" }}>{s.totalBoxes}</td>
                     <td style={{ textAlign: "center", color: "#15803d", fontWeight: 600 }}>{s.deliveredCount}</td>
                     <td style={{ textAlign: "center", fontWeight: 600 }}>{fm(s.totalFeeIls)}</td>
@@ -1003,18 +1239,10 @@ function ContainersModal({
                           type="button"
                           className="shp-btn shp-btn--link"
                           style={{ padding: "2px 6px", fontWeight: 700, color: "#b45309", whiteSpace: "pre-line" }}
-                          onClick={() => openExpenseFlow(s)}
-                          title={s.expenses.length > 0 ? "הצג פירוט הוצאות" : "הוסף הוצאה"}
+                          onClick={() => setDetailFor(s)}
+                          title="ניהול הוצאות"
                         >
                           {fmtExpenseTotals(s.expenseTotalIls, s.expenseTotalUsd)}
-                        </button>
-                        <button
-                          type="button"
-                          className="shp-btn shp-btn--sm"
-                          title="הוסף הוצאה"
-                          onClick={() => setAddFor(s)}
-                        >
-                          <Plus size={12} />
                         </button>
                       </div>
                     </td>
@@ -1024,7 +1252,6 @@ function ContainersModal({
               <tfoot>
                 <tr style={{ fontWeight: 800, background: "#f1f5f9" }}>
                   <td colSpan={2} style={{ fontWeight: 800 }}>סה״כ ({summaries.length} משלוחים)</td>
-                  <td style={{ textAlign: "center" }}>{totals.recordCount}</td>
                   <td style={{ textAlign: "center" }}>{totals.totalBoxes}</td>
                   <td style={{ textAlign: "center", color: "#15803d" }}>{totals.deliveredCount}</td>
                   <td style={{ textAlign: "center" }}>{fm(totals.totalFeeIls)}</td>
@@ -1043,29 +1270,21 @@ function ContainersModal({
         </div>
       </div>
 
-      {addFor && (
-        <ShipmentBatchExpenseFormModal
-          batchId={addFor.id}
-          batchLabel={batchLabel(addFor)}
-          layer={detailFor ? "nested-deep" : "nested"}
-          onClose={() => setAddFor(null)}
-          onSaved={(expense) => {
-            applyExpense(addFor.id, expense);
-            setAddFor(null);
-          }}
-        />
-      )}
-
       {detailFor && (
         <ShipmentBatchExpensesDetailModal
+          batchId={detailFor.id}
           batchLabel={batchLabel(detailFor)}
-          expenses={detailFor.expenses}
-          totalIls={detailFor.expenseTotalIls}
-          totalUsd={detailFor.expenseTotalUsd}
+          expenses={
+            summaries.find((s) => s.id === detailFor.id)?.expenses ?? detailFor.expenses
+          }
+          totalIls={
+            summaries.find((s) => s.id === detailFor.id)?.expenseTotalIls ?? detailFor.expenseTotalIls
+          }
+          totalUsd={
+            summaries.find((s) => s.id === detailFor.id)?.expenseTotalUsd ?? detailFor.expenseTotalUsd
+          }
           onClose={() => setDetailFor(null)}
-          onAdd={() => {
-            setAddFor(detailFor);
-          }}
+          onExpensesChanged={(expenses) => syncExpenses(detailFor.id, expenses)}
         />
       )}
     </>

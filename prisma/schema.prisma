@@ -1227,6 +1227,24 @@ model ShipmentBatchExpense {
   @@map("ShipmentBatchExpense")
 }
 
+/// מקור אמת לסוגי הוצאות משלוח (בקרת משלוחים / קופה / חבילות)
+model ShipmentExpenseType {
+  id          String   @id @default(uuid())
+  /// קוד יציב שנשמר בהוצאות (FUEL, ROAD6, C_… וכו')
+  code        String   @unique
+  label       String
+  isActive    Boolean  @default(true)
+  /// סוג מערכת שנזרע במיגרציה — לא מוחקים בהיסטוריה
+  isSystem    Boolean  @default(false)
+  sortOrder   Int      @default(0)
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isActive, sortOrder])
+  @@map("ShipmentExpenseType")
+}
+
 /// אזור חלוקה (DistributionArea) — ניתן להגדרה חופשית על ידי המנהל
 model ShipmentDeliveryZone {
   id          String          @id @default(uuid())
@@ -1630,6 +1648,8 @@ model ManualShipment {
   shipmentDetails       String?
   status                String    @default("NEW")
   city                  String?
+  /// מספר תיק
+  caseFileNumber        String?
   orderNumber           String?
   boxes                 Int?
   totalWeight           Decimal?  @db.Decimal(12, 3)

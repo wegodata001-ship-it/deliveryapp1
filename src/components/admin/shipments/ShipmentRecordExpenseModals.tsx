@@ -8,12 +8,9 @@ import {
   deleteShipmentRecordExpenseAction,
   updateShipmentRecordExpenseAction,
 } from "@/app/admin/shipments/control/actions";
-import {
-  SHIPMENT_CASH_EXPENSE_LABELS,
-  type ShipmentCashExpenseCategory,
-} from "@/app/admin/shipments/cash-control/types";
 import { PAYMENT_METHODS } from "@/app/admin/shipments/types";
 import { ShipmentConfirmModal } from "@/components/admin/shipments/ShipmentConfirmModal";
+import { ShipmentExpenseTypeSelect } from "@/components/admin/shipments/ShipmentExpenseTypeSelect";
 
 function fmtIls(n: number) {
   return (
@@ -122,22 +119,12 @@ export function ShipmentExpenseFormModal({
           </button>
         </div>
         <div className="shp-modal__body" style={{ display: "grid", gap: 10 }}>
-          <label className="sc-expense-field">
-            <span>סוג הוצאה</span>
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              disabled={busy}
-            >
-              {(Object.keys(SHIPMENT_CASH_EXPENSE_LABELS) as ShipmentCashExpenseCategory[]).map(
-                (key) => (
-                  <option key={key} value={key}>
-                    {SHIPMENT_CASH_EXPENSE_LABELS[key]}
-                  </option>
-                ),
-              )}
-            </select>
-          </label>
+          <ShipmentExpenseTypeSelect
+            value={category}
+            onChange={setCategory}
+            disabled={busy}
+            includeCode={initial?.category}
+          />
           <label className="sc-expense-field">
             <span>סכום</span>
             <input

@@ -24,32 +24,30 @@ import type {
   ShipmentRecordExpenseDto,
   ShipmentBatchExpenseDto,
   ShipmentBatchExpenseSummary,
-  ShipmentBatchExpenseCategory,
   CourierSummary,
   ZoneSummary,
   ShipmentException,
   ExceptionType,
 } from "@/app/admin/shipments/control/types";
 import {
-  SHIPMENT_CASH_EXPENSE_LABELS,
-  type ShipmentCashExpenseCategory,
-} from "@/app/admin/shipments/cash-control/types";
+  getShipmentExpenseTypeLabelMap,
+  isValidShipmentExpenseTypeCode,
+} from "@/app/admin/shipments/expense-types-actions";
 import {
-  SHIPMENT_BATCH_EXPENSE_LABELS,
-  SHIPMENT_MANAGE_EXPENSE_LABELS,
-} from "@/app/admin/shipments/control/types";
+  countMissingShipmentDeliveryFees,
+  sumShipmentBalances,
+} from "@/lib/shipment-control-aggregation";
+import { resolveExpenseTypeLabel } from "@/lib/shipment-expense-types";
 
 const VIEW_PERMS = ["manage_shipments", "view_shipments"];
 const WRITE_PERMS = ["manage_shipments"];
 
-function expenseCategoryLabel(category: string): string {
-  return (
-    SHIPMENT_CASH_EXPENSE_LABELS[category as ShipmentCashExpenseCategory] ?? category
-  );
+function expenseCategoryLabel(category: string, labelMap?: Map<string, string>) {
+  return resolveExpenseTypeLabel(category, labelMap);
 }
 
-function manageExpenseCategoryLabel(category: string): string {
-  return SHIPMENT_MANAGE_EXPENSE_LABELS[category] ?? category;
+function manageExpenseCategoryLabel(category: string, labelMap?: Map<string, string>) {
+  return resolveExpenseTypeLabel(category, labelMap);
 }
 
 function mapExpense(
@@ -65,12 +63,13 @@ function mapExpense(
     createdAt: Date;
   },
   userNames: Map<string, string | null>,
+  labelMap?: Map<string, string>,
 ): ShipmentRecordExpenseDto {
   return {
     id: e.id,
     shipmentRecordId: e.shipmentRecordId,
     category: e.category,
-    categoryLabel: expenseCategoryLabel(e.category),
+    categoryLabel: expenseCategoryLabel(e.category, labelMap),
     amountIls: e.amountIls.toNumber(),
     notes: e.notes,
     paymentMethod: e.paymentMethod,
@@ -82,8 +81,8 @@ function mapExpense(
   };
 }
 
-function batchExpenseCategoryLabel(category: string): string {
-  return manageExpenseCategoryLabel(category);
+function batchExpenseCategoryLabel(category: string, labelMap?: Map<string, string>) {
+  return manageExpenseCategoryLabel(category, labelMap);
 }
 
 function mapBatchExpense(
@@ -100,13 +99,14 @@ function mapBatchExpense(
     createdAt: Date;
   },
   userNames: Map<string, string | null>,
+  labelMap?: Map<string, string>,
 ): ShipmentBatchExpenseDto {
   const currency = e.currency === "USD" ? "USD" : "ILS";
   return {
     id: e.id,
     batchId: e.batchId,
     category: e.category,
-    categoryLabel: batchExpenseCategoryLabel(e.category),
+    categoryLabel: batchExpenseCategoryLabel(e.category, labelMap),
     amount: e.amount.toNumber(),
     currency,
     notes: e.notes,
@@ -151,12 +151,13 @@ function buildBatchExpenseSummaries(
     createdAt: Date;
   }>,
   userNames: Map<string, string | null>,
+  labelMap?: Map<string, string>,
 ): ShipmentBatchExpenseSummary[] {
   const byBatch = new Map<string, ShipmentBatchExpenseDto[]>();
   for (const id of batchIds) byBatch.set(id, []);
   for (const row of raw) {
     const list = byBatch.get(row.batchId) ?? [];
-    list.push(mapBatchExpense(row, userNames));
+    list.push(mapBatchExpense(row, userNames, labelMap));
     byBatch.set(row.batchId, list);
   }
   return batchIds.map((batchId) => {
@@ -175,10 +176,6 @@ function buildBatchExpenseSummaries(
       count: expenses.length,
     };
   });
-}
-
-function isManageExpenseCategory(category: string): boolean {
-  return category in SHIPMENT_MANAGE_EXPENSE_LABELS;
 }
 
 function sumBatchExpensesIls(summaries: ShipmentBatchExpenseSummary[]): number {
@@ -287,7 +284,15 @@ export async function getShipmentControlDataAction(
       loadAliasLookupMap(),
       prisma.shipmentBatch.findMany({
         where: buildBatchWhere(filter),
-        select: { id: true, batchNumber: true, containerNumber: true },
+        select: {
+          id: true,
+          batchNumber: true,
+          containerNumber: true,
+          countryCode: true,
+          arrivalDate: true,
+          shippingDate: true,
+          createdAt: true,
+        },
         orderBy: { batchNumber: "desc" },
       }),
       prisma.shipmentDeliveryZone.findMany({
@@ -312,12 +317,18 @@ export async function getShipmentControlDataAction(
       : [];
     const allRecordExpenses = rawRecords.flatMap((r) => r.expenses);
     const userNames = await loadExpenseUserNames(allRecordExpenses, rawBatchExpenses);
-    const batchExpenses = buildBatchExpenseSummaries(batchIdsInScope, rawBatchExpenses, userNames);
+    const expenseTypeLabels = await getShipmentExpenseTypeLabelMap();
+    const batchExpenses = buildBatchExpenseSummaries(
+      batchIdsInScope,
+      rawBatchExpenses,
+      userNames,
+      expenseTypeLabels,
+    );
 
     const records: ShipmentControlRecord[] = rawRecords.map((r) => {
       const paidAmountIls = r.payments.reduce((s, p) => s + p.amountIls.toNumber(), 0);
       const fee = r.deliveryFeeIls?.toNumber() ?? 0;
-      const expenses = r.expenses.map((e) => mapExpense(e, userNames));
+      const expenses = r.expenses.map((e) => mapExpense(e, userNames, expenseTypeLabels));
       const expensesTotalIls =
         Math.round(expenses.reduce((s, e) => s + e.amountIls, 0) * 100) / 100;
       return {
@@ -399,7 +410,15 @@ export async function getShipmentControlDataAction(
         byCourier,
         byZone,
         exceptions,
-        batches: allBatches,
+        batches: allBatches.map((b) => ({
+          id: b.id,
+          batchNumber: b.batchNumber,
+          containerNumber: b.containerNumber,
+          countryCode: b.countryCode,
+          arrivalDate: b.arrivalDate ? b.arrivalDate.toISOString().slice(0, 10) : null,
+          shippingDate: b.shippingDate ? b.shippingDate.toISOString().slice(0, 10) : null,
+          createdAt: b.createdAt.toISOString(),
+        })),
         batchExpenses,
         zones: allZones,
         couriers,
@@ -421,7 +440,7 @@ function computeKpis(
   let delivered = 0, inTransit = 0, notDelivered = 0, returned = 0, completed = 0;
   let newCount = 0, received = 0, assigned = 0;
   let totalFeeIls = 0, totalPaidIls = 0, totalCreditIls = 0;
-  let totalBoxes = 0, totalWeightKg = 0, deliveredBoxes = 0, notDeliveredBoxes = 0;
+  let totalBoxes = 0, totalWeightKg = 0;
   let unpaidCount = 0, partialCount = 0, paidCount = 0;
   let totalExpensesIls = 0;
   const zones = new Set<string>();
@@ -445,10 +464,9 @@ function computeKpis(
     totalPaidIls += r.paidAmountIls;
     if (r.paidAmountIls > fee + 0.01) totalCreditIls += r.paidAmountIls - fee;
 
+    // SSOT: חבילות/קרטונים — סכום שדה boxes בלבד
     if (r.boxes) totalBoxes += r.boxes;
     if (r.weight) totalWeightKg += r.weight;
-    if (r.status === "DELIVERED" || r.status === "COMPLETED") deliveredBoxes += r.boxes ?? 0;
-    if (r.status === "NOT_DELIVERED" || r.status === "RETURNED") notDeliveredBoxes += r.boxes ?? 0;
 
     switch (r.paymentStatus) {
       case "UNPAID": unpaidCount++; break;
@@ -465,14 +483,26 @@ function computeKpis(
 
   const totalRemaining = Math.max(0, totalFeeIls - totalPaidIls);
 
+  const flatExpenses = batchExpenses.flatMap((b) =>
+    b.expenses.map((e) => ({
+      batchId: b.batchId,
+      amount: e.amount,
+      currency: e.currency,
+    })),
+  );
+  const totalBalanceIls = sumShipmentBalances(records, flatExpenses);
+  const missingDeliveryFeeCount = countMissingShipmentDeliveryFees(records);
+
   return {
     total: records.length, delivered, inTransit, notDelivered, returned, completed,
     newCount, received, assigned,
     totalFeeIls, totalPaidIls, totalRemainingIls: totalRemaining, totalCreditIls,
     totalZones: zones.size, totalCouriers: couriers.size, unassignedCourier, noZone,
-    totalBoxes, totalWeightKg, deliveredBoxes, notDeliveredBoxes,
+    totalBoxes, totalWeightKg,
     unpaidCount, partialCount, paidCount,
     totalExpensesIls: Math.round((totalExpensesIls + sumBatchExpensesIls(batchExpenses)) * 100) / 100,
+    totalBalanceIls,
+    missingDeliveryFeeCount,
   };
 }
 
@@ -594,9 +624,11 @@ function emptyPayload(
     newCount: 0, received: 0, assigned: 0,
     totalFeeIls: 0, totalPaidIls: 0, totalRemainingIls: 0, totalCreditIls: 0,
     totalZones: 0, totalCouriers: 0, unassignedCourier: 0, noZone: 0,
-    totalBoxes: 0, totalWeightKg: 0, deliveredBoxes: 0, notDeliveredBoxes: 0,
+    totalBoxes: 0, totalWeightKg: 0,
     unpaidCount: 0, partialCount: 0, paidCount: 0,
     totalExpensesIls: 0,
+    totalBalanceIls: 0,
+    missingDeliveryFeeCount: 0,
   };
   return { kpis: emptyKpis, records: [], totalRecordCount: 0, byCourier: [], byZone: [], exceptions: [], batches, batchExpenses: [], zones, couriers, courierOptions: [], filter };
 }
@@ -623,7 +655,7 @@ export async function createShipmentRecordExpenseAction(input: {
       return { ok: false, error: "אין הרשאה" };
     }
     const category = input.category.trim();
-    if (!(category in SHIPMENT_CASH_EXPENSE_LABELS)) {
+    if (!(await isValidShipmentExpenseTypeCode(category))) {
       return { ok: false, error: "סוג הוצאה לא תקין" };
     }
     const amount = Number(input.amountIls);
@@ -677,7 +709,7 @@ export async function createShipmentRecordExpenseAction(input: {
       });
       return expense;
     });
-    return { ok: true, expense: mapExpense(created, selfUserNames(me)) };
+    return { ok: true, expense: mapExpense(created, selfUserNames(me), await getShipmentExpenseTypeLabelMap()) };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
@@ -705,7 +737,7 @@ export async function updateShipmentRecordExpenseAction(input: {
     const data: Record<string, unknown> = {};
     if (input.category !== undefined) {
       const category = input.category.trim();
-      if (!isManageExpenseCategory(category) && !(category in SHIPMENT_CASH_EXPENSE_LABELS)) {
+      if (!(await isValidShipmentExpenseTypeCode(category, { allowInactive: true }))) {
         return { ok: false, error: "סוג הוצאה לא תקין" };
       }
       data.category = category;
@@ -774,7 +806,7 @@ export async function updateShipmentRecordExpenseAction(input: {
       });
       names.set(updated.createdById, u?.fullName ?? null);
     }
-    return { ok: true, expense: mapExpense(updated, names) };
+    return { ok: true, expense: mapExpense(updated, names, await getShipmentExpenseTypeLabelMap()) };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
@@ -839,7 +871,7 @@ export async function createShipmentBatchExpenseAction(input: {
       return { ok: false, error: "אין הרשאה" };
     }
     const category = input.category.trim();
-    if (!isManageExpenseCategory(category)) {
+    if (!(await isValidShipmentExpenseTypeCode(category))) {
       return { ok: false, error: "סוג הוצאה לא תקין" };
     }
     const amount = Number(input.amount);
@@ -901,7 +933,7 @@ export async function createShipmentBatchExpenseAction(input: {
       return expense;
     });
 
-    return { ok: true, expense: mapBatchExpense(created, selfUserNames(me)) };
+    return { ok: true, expense: mapBatchExpense(created, selfUserNames(me), await getShipmentExpenseTypeLabelMap()) };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
@@ -930,7 +962,7 @@ export async function updateShipmentBatchExpenseAction(input: {
     const data: Record<string, unknown> = {};
     if (input.category !== undefined) {
       const category = input.category.trim();
-      if (!isManageExpenseCategory(category)) {
+      if (!(await isValidShipmentExpenseTypeCode(category, { allowInactive: true }))) {
         return { ok: false, error: "סוג הוצאה לא תקין" };
       }
       data.category = category;
@@ -1004,7 +1036,7 @@ export async function updateShipmentBatchExpenseAction(input: {
       });
       names.set(updated.createdById, u?.fullName ?? null);
     }
-    return { ok: true, expense: mapBatchExpense(updated, names) };
+    return { ok: true, expense: mapBatchExpense(updated, names, await getShipmentExpenseTypeLabelMap()) };
   } catch (e) {
     return { ok: false, error: String(e) };
   }

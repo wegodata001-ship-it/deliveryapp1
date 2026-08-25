@@ -13,6 +13,7 @@ export type ShipmentCashExpenseCategory =
   | "CUSTOMER_REFUND"
   | "OTHER";
 
+/** @deprecated מקור האמת: `ShipmentExpenseType` ב-DB */
 export const SHIPMENT_CASH_EXPENSE_LABELS: Record<ShipmentCashExpenseCategory, string> = {
   FUEL: "דלק",
   ROAD6: "כביש 6",
