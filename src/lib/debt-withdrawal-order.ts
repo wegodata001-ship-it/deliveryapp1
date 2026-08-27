@@ -30,6 +30,13 @@ export function orderCustomerChargeUsd(o: OrderMoneyUsdFields): number {
   return Math.max(0, orderUsdTotalValue(o));
 }
 
+/** סכום מקור לפני עמלה (amountUsd) — הזמנה רגילה בלבד. */
+export function orderBeforeCommissionUsd(o: OrderMoneyUsdFields): number {
+  if (isDebtWithdrawalOrderStatus(o.status)) return 0;
+  const deal = Number(o.amountUsd ?? 0);
+  return Number.isFinite(deal) ? Math.max(0, deal) : 0;
+}
+
 /** סכום USD שמקטין חוב (משיכה מחוב — זיכוי). */
 export function orderCustomerCreditUsd(o: OrderMoneyUsdFields): number {
   if (!isDebtWithdrawalOrderStatus(o.status)) return 0;

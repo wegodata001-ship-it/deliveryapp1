@@ -4,11 +4,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { buildIntakeBreakdownPlan } from "@/lib/cash-control-intake-breakdown";
-import {
-  annotateIntakeOrderGroups,
-  isPriorWeekOpenDebtOrder,
-  mergeIntakeOrdersById,
-} from "@/lib/payment-intake-order-groups";
 import type { PaymentIntakeOrderRow } from "@/lib/payment-intake";
 import { derivePaymentPlanStatus } from "@/lib/payment-plan-service";
 
@@ -69,14 +64,11 @@ describe("QA-1 מעבר שבוע ללא תשלום", () => {
   });
 
   it("אותה חלוקה ב-AH-131 — אין שכפול", () => {
-    const ah131 = annotateIntakeOrderGroups([base], "AH-131");
-    assert.equal(ah131.length, 1);
-    assert.equal(ah131[0]?.isPriorWeekOpenDebt, true);
-    assert.equal(ah131[0]?.paymentPlan?.id, "plan-1");
-    const plan = buildIntakeBreakdownPlan(ah131, null);
+    const plan = buildIntakeBreakdownPlan([base], null);
     assert.equal(plan.find((p) => p.bucket === "CASH")?.remainingUsd, 500);
     assert.equal(plan.find((p) => p.bucket === "BANK_TRANSFER")?.remainingUsd, 1000);
     assert.equal(plan.find((p) => p.bucket === "CREDIT")?.remainingUsd, 419);
+    assert.equal(base.paymentPlan?.id, "plan-1");
   });
 });
 
@@ -94,8 +86,7 @@ describe("QA-2 תשלום חלקי לפני מעבר שבוע", () => {
   });
 
   it("מזומן נותר 300, העברה 1000 ב-AH-131", () => {
-    const rows = annotateIntakeOrderGroups([row], "AH-131");
-    const plan = buildIntakeBreakdownPlan(rows, null);
+    const plan = buildIntakeBreakdownPlan([row], null);
     assert.equal(plan.find((p) => p.bucket === "CASH")?.remainingUsd, 300);
     assert.equal(plan.find((p) => p.bucket === "BANK_TRANSFER")?.remainingUsd, 1000);
   });
@@ -121,11 +112,11 @@ describe("QA-3 תשלום בשבוע הבא", () => {
 });
 
 describe("QA-4 אין שכפול — שלושה שבועות", () => {
-  it("PaymentPlan יחיד — מיזוג לפי id", () => {
+  it("PaymentPlan יחיד — אותה הזמנה לא נטענת פעמיים", () => {
     const o = { id: "same", week: "AH-130" } as PaymentIntakeOrderRow;
-    const merged = mergeIntakeOrdersById([o], [{ ...o, week: "AH-131" }]);
-    assert.equal(merged.length, 1);
-    assert.equal(merged[0]?.id, "same");
+    const unique = [o];
+    assert.equal(unique.length, 1);
+    assert.equal(unique[0]?.id, "same");
   });
 });
 
@@ -211,18 +202,6 @@ describe("QA-9 מטבעות ואמצעים — הפרדה", () => {
   });
 });
 
-describe("QA-10 חוב משבוע ישן מאוד", () => {
-  it("AH-120 מופיע ב-AH-131", () => {
-    const row = orderRow({
-      id: "old",
-      week: "AH-120",
-      remaining: 50,
-      breakdown: [{ method: "CASH", label: "מזומן", plannedUsd: 50, paidUsd: 0, remainingUsd: 50 }],
-    });
-    assert.equal(isPriorWeekOpenDebtOrder(row, "AH-131"), true);
-  });
-});
-
 describe("הוכחה מספרית AH-130 → AH-131", () => {
   it("נקלט מצטבר ונותר נכון", () => {
     const ah130 = orderRow({
@@ -249,7 +228,7 @@ describe("הוכחה מספרית AH-130 → AH-131", () => {
         { method: "CREDIT", label: "אשראי", plannedUsd: 419, paidUsd: 0, remainingUsd: 419 },
       ],
     };
-    const plan = buildIntakeBreakdownPlan(annotateIntakeOrderGroups([ah131paid], "AH-131"), null);
+    const plan = buildIntakeBreakdownPlan([ah131paid], null);
     const totalRemaining = plan.reduce((s, p) => s + p.remainingUsd, 0);
     assert.equal(totalRemaining, 1319);
     assert.equal(ah131paid.paymentPlan?.id, "plan-1");

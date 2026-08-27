@@ -12,7 +12,6 @@ import { reconcileOrderBreakdownWithLedger } from "@/lib/order-remaining-debt";
 import { computeOrderMethodDeviation, isCompositePaymentMethod, paymentMethodBucketKey } from "@/lib/payment-breakdown-shared";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 import type { PaymentIntakeCustomerPaymentRow } from "@/lib/payment-intake-customer-kpi";
-import { annotateIntakeOrderGroups, mergeIntakeOrdersById } from "@/lib/payment-intake-order-groups";
 import { paymentIntakeOrderDateThroughAhWeekEnd } from "@/lib/payment-intake-order-filter";
 import { loadPaymentPlanSummariesByOrderId } from "@/lib/payment-plan-service";
 import { DEFAULT_WORK_COUNTRY, normalizeWorkCountryCode, type WorkCountryCode } from "@/lib/work-country";
@@ -109,21 +108,6 @@ function intakeOrderBaseWhere(cid: string, paymentWorkCountry: WorkCountryCode):
     status: { notIn: ["DEBT_WITHDRAWAL", "CANCELLED"] },
     countryCode: paymentWorkCountry,
   };
-}
-
-/** הזמנות פתוחות עם חלוקת תשלום — ללא סינון שבוע (מניעת אובדן חלוקה במעבר שבוע) */
-async function loadOpenOrdersWithBreakdown(
-  cid: string,
-  paymentWorkCountry: WorkCountryCode,
-): Promise<IntakeOrderRecord[]> {
-  return prisma.order.findMany({
-    where: {
-      ...intakeOrderBaseWhere(cid, paymentWorkCountry),
-      paymentBreakdown: { some: {} },
-    },
-    orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],
-    select: INTAKE_ORDER_SELECT,
-  });
 }
 
 function mapOrderToIntakeRow(
@@ -260,7 +244,6 @@ function mapOrderToIntakeRow(
 
 async function attachPaymentsAndMapRows(
   orders: IntakeOrderRecord[],
-  intakeWeekCode: string | null | undefined,
 ): Promise<PaymentIntakeOrderRow[]> {
   const orderIds = orders.map((o) => o.id);
   const paidByOrder = new Map<string, Prisma.Decimal>();
@@ -358,10 +341,10 @@ async function attachPaymentsAndMapRows(
       paymentPlan: planByOrder.get(o.id) ?? null,
     }));
 
-    return annotateIntakeOrderGroups(rows, intakeWeekCode);
+    return rows;
   }
 
-  return annotateIntakeOrderGroups([], intakeWeekCode);
+  return [];
 }
 
 /** הזמנות לקוח בלבד — לטעינה ברקע */
@@ -375,29 +358,18 @@ export async function loadPaymentIntakeOrdersForCustomer(
   if (!cust) return { ok: false, error: "לקוח לא נמצא" };
 
   const intakeWeekCode = params.weekCodeForOpenBalances?.trim() || null;
+  /** שבוע מקור ההזמנות — סינון orderDate עד סוף שבוע AH (לא שבוע הקליטה) */
   const weekDateWhere = paymentIntakeOrderDateThroughAhWeekEnd(intakeWeekCode);
   const paymentWorkCountry = normalizeWorkCountryCode(params.paymentWorkCountryRaw) ?? DEFAULT_WORK_COUNTRY;
   const baseWhere = intakeOrderBaseWhere(cid, paymentWorkCountry);
 
-  const [weekOrders, openBreakdownOrders] = await Promise.all([
-    prisma.order.findMany({
-      where: { ...baseWhere, ...(weekDateWhere ?? {}) },
-      orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],
-      select: INTAKE_ORDER_SELECT,
-    }),
-    weekDateWhere
-      ? loadOpenOrdersWithBreakdown(cid, paymentWorkCountry)
-      : Promise.resolve([] as IntakeOrderRecord[]),
-  ]);
-
-  const mergedOrders = mergeIntakeOrdersById(weekOrders, openBreakdownOrders).sort((a, b) => {
-    const ad = a.orderDate?.getTime() ?? 0;
-    const bd = b.orderDate?.getTime() ?? 0;
-    if (ad !== bd) return ad - bd;
-    return a.createdAt.getTime() - b.createdAt.getTime();
+  const weekOrders = await prisma.order.findMany({
+    where: { ...baseWhere, ...(weekDateWhere ?? {}) },
+    orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],
+    select: INTAKE_ORDER_SELECT,
   });
 
-  const rows = await attachPaymentsAndMapRows(mergedOrders, intakeWeekCode);
+  const rows = await attachPaymentsAndMapRows(weekOrders);
 
   void (async () => {
     try {
@@ -460,6 +432,8 @@ export async function loadPaymentIntakeBalancesForCustomer(
       customerBalanceUsd: string;
       openDebtSignedUsd: number;
       internalSignedUsd: string;
+      commissionBalanceUsd: number;
+      creditBalanceUsd: number;
     }
   | { ok: false; error: string }
 > {
@@ -469,12 +443,20 @@ export async function loadPaymentIntakeBalancesForCustomer(
   const paymentWorkCountry = normalizeWorkCountryCode(params.paymentWorkCountryRaw) ?? DEFAULT_WORK_COUNTRY;
   const { getCustomerOpenDebt, openDebtScopeForWorkCountry } = await import("@/lib/customer-open-debt");
 
-  const [customerBalanceUsd, debt] = await Promise.all([
+  const [customerBalanceUsd, debt, commissionBalanceUsd, creditBalanceUsd] = await Promise.all([
     (async () => {
       const { getCustomerInternalBalanceUsd } = await import("@/lib/customer-open-debt");
       return getCustomerInternalBalanceUsd(cid, openDebtScopeForWorkCountry(paymentWorkCountry));
     })(),
     getCustomerOpenDebt(cid, openDebtScopeForWorkCountry(paymentWorkCountry)),
+    (async () => {
+      const { getCustomerCommissionBalanceUsd } = await import("@/lib/customer-commission-balance");
+      return getCustomerCommissionBalanceUsd(cid);
+    })(),
+    (async () => {
+      const { getCustomerCreditBalanceUsd } = await import("@/lib/customer-credit-balance");
+      return getCustomerCreditBalanceUsd(cid, openDebtScopeForWorkCountry(paymentWorkCountry));
+    })(),
   ]);
 
   return {
@@ -482,6 +464,8 @@ export async function loadPaymentIntakeBalancesForCustomer(
     customerBalanceUsd: customerBalanceUsd.toFixed(2),
     openDebtSignedUsd: Number(debt.signedBalanceUsd.toString()),
     internalSignedUsd: debt.internalSignedUsd.toFixed(2),
+    commissionBalanceUsd,
+    creditBalanceUsd,
   };
 }
 

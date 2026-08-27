@@ -1,6 +1,6 @@
 import type { CustomerLedgerPayload, CustomerLedgerRow } from "@/app/admin/capture/actions";
-import { ledgerPaymentMethodDisplayLines, shouldShowLedgerPaymentMethodSubrows } from "@/lib/ledger-payment-detail";
-import { formatLedgerAmountDisplay } from "@/lib/ledger-payment-display";
+import { ledgerPaymentExpandLines, shouldShowLedgerPaymentMethodSubrows } from "@/lib/ledger-payment-detail";
+import { formatLedgerPaymentTotalUsd } from "@/lib/ledger-payment-display";
 import { ATLAS_BRAND_TITLE, getSafeAtlasPdfLogoDataUrl } from "@/lib/atlas-pdf-logo";
 import { ledgerPdfFontFamily } from "@/lib/pdfFonts";
 import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
@@ -322,10 +322,7 @@ export function atlasPdfPageDefaults(): Pick<TDocumentDefinitions, "pageSize" | 
 function paymentUsdDisplay(row: CustomerLedgerRow): string {
   const n = parseMoneyStringOrZero(row.paymentUsd);
   if (n <= 0) return "—";
-  if (row.paymentDetail) {
-    return formatLedgerAmountDisplay(row.paymentDetail.totalIls, row.paymentDetail.totalUsd).singleLine;
-  }
-  return atlasFmtUsd(row.paymentUsd);
+  return formatLedgerPaymentTotalUsd(row.paymentDetail?.totalUsd ?? row.paymentUsd);
 }
 
 /** טבלת תשלומים עם פירוט אמצעי תשלום — מכרטסת */
@@ -356,7 +353,7 @@ export function buildAtlasPaymentsDetailTableBody(
 
     const detail = r.paymentDetail;
     if (detail && shouldShowLedgerPaymentMethodSubrows(detail)) {
-      for (const line of ledgerPaymentMethodDisplayLines(detail)) {
+      for (const line of ledgerPaymentExpandLines(detail)) {
         const subZebra = rowIndex % 2 === 1 ? "#f1f5f9" : "#f8fafc";
         rowIndex++;
         body.push(
@@ -364,7 +361,7 @@ export function buildAtlasPaymentsDetailTableBody(
             atlasPdfCell("", { fillColor: subZebra }),
             atlasPdfCell("", { fillColor: subZebra }),
             atlasPdfCell(`${line.label}:`, { fillColor: subZebra, fontSize: 8.5 }),
-            atlasPdfCell(formatLedgerAmountDisplay(line.amountIls, line.amountUsd).singleLine, {
+            atlasPdfCell(line.display, {
               ltr: true,
               fillColor: subZebra,
               fontSize: 8.5,
@@ -373,6 +370,21 @@ export function buildAtlasPaymentsDetailTableBody(
           ].reverse() as Content[],
         );
       }
+      const totalZebra = rowIndex % 2 === 1 ? "#f1f5f9" : "#f8fafc";
+      rowIndex++;
+      body.push(
+        [
+          atlasPdfCell("", { fillColor: totalZebra }),
+          atlasPdfCell("", { fillColor: totalZebra }),
+          atlasPdfCell('סה"כ תשלום:', { fillColor: totalZebra, fontSize: 8.5 }),
+          atlasPdfCell(formatLedgerPaymentTotalUsd(detail.totalUsd), {
+            ltr: true,
+            fillColor: totalZebra,
+            fontSize: 8.5,
+            alignment: "right",
+          }),
+        ].reverse() as Content[],
+      );
     }
   }
 

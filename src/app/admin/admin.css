@@ -1,11 +1,16 @@
 .payment-method-adjust-modal {
-  width: min(980px, 96vw);
-  max-height: 88vh;
+  width: min(960px, 90vw);
+  max-height: 90vh;
   padding: 0;
   overflow: hidden;
   background: #f8fafc;
   display: flex;
   flex-direction: column;
+}
+
+.pm-adjust-backdrop {
+  align-items: flex-start;
+  padding-top: 3vh;
 }
 
 .payment-method-adjust-modal__head {
@@ -356,6 +361,293 @@
   backdrop-filter: blur(8px);
 }
 
+/* ── התאמה אוטומטית — אזורים חדשים ── */
+.pm-adjust-zone {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 18px;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.04);
+  padding: 18px 20px;
+}
+
+.pm-adjust-zone--customer {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.pm-adjust-customer-stat {
+  display: grid;
+  gap: 4px;
+}
+
+.pm-adjust-customer-stat span {
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.pm-adjust-customer-stat strong {
+  font-size: 1.02rem;
+  color: #0f172a;
+}
+
+.pm-adjust-zone__title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.pm-adjust-zone__title-row h4,
+.pm-adjust-balances-col h5 {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 900;
+  color: #0f172a;
+}
+
+.pm-adjust-zone__title-row p {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.82rem;
+}
+
+.pm-adjust-balances-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.pm-adjust-balances-col {
+  display: grid;
+  gap: 10px;
+}
+
+.pm-adjust-balances-col h5 {
+  font-size: 0.88rem;
+  color: #475569;
+}
+
+.pm-adjust-balance-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.pm-adjust-balance-card {
+  border-radius: 16px;
+  border: 1px solid #dbe4f0;
+  padding: 14px 16px;
+  display: grid;
+  gap: 12px;
+  min-height: 110px;
+}
+
+.pm-adjust-balance-card--captured {
+  background: linear-gradient(145deg, #eff6ff 0%, #ffffff 70%);
+}
+
+.pm-adjust-balance-card--planned {
+  background: linear-gradient(145deg, #fff7ed 0%, #ffffff 70%);
+}
+
+.pm-adjust-balance-card__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pm-adjust-balance-card__icon {
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
+.pm-adjust-balance-card__head strong {
+  display: block;
+  font-size: 0.95rem;
+  color: #0f172a;
+}
+
+.pm-adjust-balance-card__head span {
+  display: block;
+  font-size: 0.74rem;
+  color: #64748b;
+}
+
+.pm-adjust-balance-card__amounts {
+  display: grid;
+  gap: 8px;
+}
+
+.pm-adjust-balance-card__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pm-adjust-balance-card__cur {
+  font-size: 0.76rem;
+  font-weight: 800;
+  color: #64748b;
+  letter-spacing: 0.04em;
+}
+
+.pm-adjust-balance-card__row strong {
+  font-size: 1.05rem;
+  color: #0f172a;
+}
+
+.pm-adjust-form-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.pm-adjust-calc-btn {
+  min-height: 42px;
+  white-space: nowrap;
+}
+
+.pm-adjust-loading,
+.pm-adjust-empty {
+  color: #64748b;
+  font-size: 0.88rem;
+  padding: 12px 0;
+}
+
+.pm-adjust-suggestion-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  border-radius: 16px;
+  border: 1px solid #bfdbfe;
+  background: linear-gradient(135deg, #eff6ff, #ffffff);
+}
+
+.pm-adjust-suggestion-card strong {
+  display: block;
+  color: #1d4ed8;
+}
+
+.pm-adjust-suggestion-card p {
+  margin: 4px 0 0;
+  color: #334155;
+  font-size: 0.88rem;
+}
+
+.pm-adjust-flow-card {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 18px;
+  padding: 18px 20px;
+  display: grid;
+  gap: 14px;
+}
+
+.pm-adjust-flow-card h4 {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 900;
+}
+
+.pm-adjust-flow-grid {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 16px;
+  align-items: stretch;
+}
+
+.pm-adjust-flow-col {
+  border-radius: 14px;
+  border: 1px solid #e2e8f0;
+  padding: 14px 16px;
+  background: #f8fafc;
+  display: grid;
+  gap: 10px;
+}
+
+.pm-adjust-flow-col--after {
+  background: #ecfdf5;
+  border-color: #bbf7d0;
+}
+
+.pm-adjust-flow-label {
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: #64748b;
+}
+
+.pm-adjust-flow-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pm-adjust-flow-row span {
+  color: #334155;
+  font-weight: 700;
+}
+
+.pm-adjust-flow-row strong {
+  font-size: 1.05rem;
+  color: #0f172a;
+}
+
+.pm-adjust-flow-arrow {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #64748b;
+  min-width: 120px;
+}
+
+.pm-adjust-flow-change {
+  text-align: center;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  display: grid;
+  gap: 4px;
+}
+
+.pm-adjust-flow-change span {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #9a3412;
+}
+
+.pm-adjust-flow-change strong {
+  font-size: 1.1rem;
+  color: #c2410c;
+}
+
+.pm-adjust-flow-change small {
+  color: #64748b;
+  font-size: 0.76rem;
+}
+
+.pm-adjust-total-note {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 0.86rem;
+}
+
+.pm-adjust-total-note strong {
+  color: #0f172a;
+}
+
 .pm-adjust-page {
   display: grid;
   gap: 16px;
@@ -650,8 +942,16 @@
   .payment-method-adjust-modal__customer-card,
   .payment-method-adjust-modal__summary-strip,
   .payment-method-adjust-modal__delta-card,
+  .pm-adjust-zone--customer,
+  .pm-adjust-balances-grid,
+  .pm-adjust-flow-grid,
+  .pm-adjust-form-grid,
   .pm-adjust-page__kpis,
   .pm-adjust-page__detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pm-adjust-form-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -671,9 +971,19 @@
   .payment-method-adjust-modal__summary-strip,
   .payment-method-adjust-modal__delta-card,
   .payment-method-adjust-modal__form,
+  .pm-adjust-zone--customer,
+  .pm-adjust-balances-grid,
+  .pm-adjust-flow-grid,
+  .pm-adjust-form-grid,
   .pm-adjust-page__kpis,
   .pm-adjust-page__detail-grid {
     grid-template-columns: 1fr;
+  }
+
+  .pm-adjust-flow-arrow {
+    flex-direction: row;
+    min-width: 0;
+    padding: 8px 0;
   }
 
   .pm-adjust-page__filters {
@@ -12504,6 +12814,212 @@ select.payment-modal-inline-input {
   color: #b45309;
 }
 
+.payment-modal-cust-summary__commission-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+.payment-modal-cust-summary__commission-btn:hover:not(:disabled) {
+  color: #047857;
+}
+
+.payment-modal-cust-summary__commission-btn:disabled {
+  cursor: default;
+  text-decoration: none;
+}
+
+.payment-modal-cust-summary__total--credit .payment-modal-cust-summary__total-v,
+.payment-modal-cust-summary__total--credit svg {
+  color: #15803d;
+}
+
+.payment-modal-cust-summary__credit-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  font: inherit;
+  color: #15803d;
+  font-weight: 900;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+.payment-modal-cust-summary__credit-btn:hover:not(:disabled) {
+  color: #047857;
+}
+
+.payment-modal-cust-summary__credit-btn:disabled {
+  cursor: default;
+  text-decoration: none;
+}
+
+.credit-balance-popover__total {
+  color: #15803d;
+  font-weight: 900;
+}
+
+.adm-payment-overage-modal--wide.adm-mini-modal {
+  width: min(520px, 94vw);
+}
+
+.adm-payment-overage-options--stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 14px;
+}
+
+.adm-payment-overage-option-btn {
+  width: 100%;
+  justify-content: center;
+  padding: 12px 16px;
+  font-weight: 700;
+}
+
+.adm-payment-overage-option-btn--credit {
+  border-color: #86efac;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.adm-payment-overage-option-btn--credit:hover:not(:disabled) {
+  background: #dcfce7;
+}
+
+.adm-payment-overage-option-btn--commission {
+  border-color: #fdba74;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.adm-payment-overage-preview {
+  margin: 0 0 14px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.adm-payment-overage-preview h3 {
+  margin: 0 0 10px;
+  font-size: 0.95rem;
+}
+
+.adm-payment-overage-preview__rows {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.adm-payment-overage-preview__rows > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.commission-balance-popover {
+  max-width: min(720px, 96vw);
+  width: 100%;
+}
+
+.commission-balance-popover__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.commission-balance-popover__table-wrap {
+  overflow: auto;
+  max-height: min(360px, 50vh);
+  margin-bottom: 12px;
+}
+
+.commission-balance-popover__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.commission-balance-popover__table th,
+.commission-balance-popover__table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #e2e8f0;
+  text-align: right;
+}
+
+.commission-balance-popover__table th.pm-num,
+.commission-balance-popover__table td.pm-num {
+  text-align: left;
+}
+
+.commission-balance-popover__footer {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #e2e8f0;
+  font-weight: 700;
+}
+
+.commission-balance-popover__preview-hint {
+  font-weight: 500;
+  color: #64748b;
+  font-size: 0.78rem;
+}
+
+.commission-movement--credit {
+  color: #059669;
+  font-weight: 700;
+}
+
+.commission-movement--debit {
+  color: #dc2626;
+  font-weight: 700;
+}
+
+.payment-modal-order-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-inline-start: 8px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  font-size: 0.78rem;
+  color: #475569;
+}
+
+.payment-modal-order-source__label {
+  font-weight: 700;
+  color: #334155;
+}
+
+.payment-modal-order-source__week {
+  font-weight: 700;
+  color: #0f766e;
+}
+
+.payment-modal-order-source__date-btn {
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+.payment-modal-order-source__date {
+  max-width: 9.5rem;
+}
+
 .payment-modal-cust-summary__total--balance-zero .payment-modal-cust-summary__total-v,
 .payment-modal-cust-summary__total--balance-zero svg {
   color: #15803d;
@@ -13040,6 +13556,43 @@ select.payment-modal-inline-input {
   font-size: 0.72rem;
   font-weight: 900;
   letter-spacing: 0.02em;
+}
+
+.payment-modal-existing-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #0f766e;
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+}
+
+.payment-modal-existing-badge--side {
+  margin-top: 4px;
+}
+
+.payment-modal-existing-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 8px 0 12px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #ecfdf5;
+  border: 1px solid #99f6e4;
+  color: #115e59;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.payment-upd-linecard-tag--saved {
+  background: #0f766e;
+  color: #fff;
 }
 
 .payment-modal-cancel-pending-banner {
@@ -14527,92 +15080,6 @@ select.payment-modal-inline-input {
 
 .payment-modal-table tbody tr.payment-modal-tr--commission-closure td {
   background: linear-gradient(90deg, rgba(255, 237, 213, 0.4), rgba(237, 233, 254, 0.45));
-}
-
-.payment-modal-table tbody tr.payment-modal-tr--prior-week td {
-  background: color-mix(in srgb, #f1f5f9 75%, transparent);
-}
-
-.payment-modal-prior-week-badge {
-  display: inline-block;
-  margin-inline-end: 0.35rem;
-  padding: 0.1rem 0.4rem;
-  border-radius: 4px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  background: #e8edf3;
-  color: #44566a;
-}
-
-.payment-prior-debts {
-  margin: 0.75rem 0 0.5rem;
-  border: 1px solid #d8e0ea;
-  border-radius: 8px;
-  background: #f8fafc;
-  overflow: hidden;
-}
-
-.payment-prior-debts__head {
-  padding: 0.65rem 0.85rem 0.45rem;
-  border-bottom: 1px solid #e2e8f0;
-}
-
-.payment-prior-debts__title {
-  margin: 0;
-  font-size: 0.95rem;
-  font-weight: 700;
-}
-
-.payment-prior-debts__sub {
-  margin: 0.25rem 0 0;
-  font-size: 0.78rem;
-  color: #64748b;
-}
-
-.payment-prior-debts__scroll {
-  overflow-x: auto;
-}
-
-.payment-prior-debts__table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.82rem;
-}
-
-.payment-prior-debts__table th,
-.payment-prior-debts__table td {
-  padding: 0.45rem 0.55rem;
-  border-bottom: 1px solid #e8edf3;
-  white-space: nowrap;
-}
-
-.payment-prior-debts__row {
-  cursor: pointer;
-}
-
-.payment-prior-debts__row:hover td {
-  background: #eef3f8;
-}
-
-.payment-prior-debts__badge {
-  display: inline-block;
-  margin-inline-end: 0.35rem;
-  padding: 0.08rem 0.35rem;
-  border-radius: 4px;
-  font-size: 0.68rem;
-  font-weight: 600;
-  background: #dfe8f2;
-  color: #3d5166;
-}
-
-.payment-prior-debts__status {
-  font-weight: 600;
-}
-
-.payment-prior-debts__meta {
-  display: block;
-  font-size: 0.72rem;
-  color: #64748b;
 }
 
 .payment-modal-table tbody tr.payment-modal-tr--status-credit td {
@@ -21670,7 +22137,7 @@ select.adm-balances-input {
 
 .adm-balances-fcc-kpi {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 10px;
   margin: 0;
   flex-shrink: 0;
@@ -21739,6 +22206,15 @@ select.adm-balances-input {
 
 .adm-balances-fcc-kpi__card--balance .adm-balances-fcc-kpi__value {
   color: #92400e;
+}
+
+.adm-balances-fcc-kpi__card--code-withdrawal {
+  border-color: rgba(124, 58, 237, 0.2);
+  background: linear-gradient(180deg, #fff 0%, #f5f3ff 100%);
+}
+
+.adm-balances-fcc-kpi__card--code-withdrawal .adm-balances-fcc-kpi__value {
+  color: #6d28d9;
 }
 
 .adm-balances-page--fcc .adm-balances-scope-line {
@@ -21855,6 +22331,12 @@ select.adm-balances-input {
 .adm-balances-page--fcc .adm-balances-foot {
   margin-top: 4px;
   padding: 4px 0 2px;
+}
+
+@media (max-width: 1200px) {
+  .adm-balances-fcc-kpi {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 960px) {

@@ -5,7 +5,6 @@ import {
   computeOrderOpenDebtUsd,
   deriveOrderPaymentDisplayStatus,
 } from "@/lib/order-remaining-debt";
-import type { PaymentIntakeOrderGroup } from "@/lib/payment-intake-order-groups";
 import type { PaymentPlanIntakeSummary } from "@/lib/payment-plan-types";
 
 export type PaymentIntakeOrderStatus = "unpaid" | "partial" | "paid";
@@ -255,10 +254,6 @@ export type PaymentIntakeOrderRow = {
   actualMethods: { method: string; label: string; usd: number }[];
   /** חריגת אמצעי תשלום: שולם בפועל באמצעי ששונה מהמתוכנן */
   hasMethodDeviation: boolean;
-  /** קבוצת תצוגה במסך קליטה — שבוע נוכחי / חוב משבוע קודם */
-  intakeGroup?: PaymentIntakeOrderGroup;
-  /** חוב פתוח משבוע קודם עם חלוקה פעילה */
-  isPriorWeekOpenDebt?: boolean;
   /** מטא-דאטה לחלוקת תשלום פעילה (אותו PaymentPlan ID בכל שבוע) */
   paymentPlan?: PaymentPlanIntakeSummary | null;
 };

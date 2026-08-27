@@ -48,6 +48,8 @@ export async function fetchPaymentIntakeBalancesClient(
       customerBalanceUsd: string;
       openDebtSignedUsd: number;
       internalSignedUsd: string;
+      commissionBalanceUsd: number;
+      creditBalanceUsd: number;
     }
   | { ok: false; error: string }
 > {
@@ -61,5 +63,47 @@ export async function fetchPaymentIntakeBalancesClient(
     customerBalanceUsd: string;
     openDebtSignedUsd: number;
     internalSignedUsd: string;
+    commissionBalanceUsd: number;
+    creditBalanceUsd: number;
   };
+}
+
+export async function fetchCustomerCreditLedgerClient(
+  customerId: string,
+  workCountry?: string | null,
+): Promise<
+  | { ok: true; currentBalanceUsd: number; movements: import("@/lib/customer-credit-balance").CustomerCreditMovementRow[] }
+  | { ok: false; error: string }
+> {
+  const params = new URLSearchParams({ customerId: customerId.trim() });
+  if (workCountry?.trim()) params.set("country", workCountry.trim());
+  const res = await fetch(`/api/payment-intake/credit-ledger?${params}`, NO_STORE);
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    return { ok: false, error: body?.error ?? "טעינת כרטסת יתרת זכות נכשלה" };
+  }
+  const body = (await res.json()) as {
+    currentBalanceUsd: number;
+    movements: import("@/lib/customer-credit-balance").CustomerCreditMovementRow[];
+  };
+  return { ok: true, currentBalanceUsd: body.currentBalanceUsd, movements: body.movements };
+}
+
+export async function fetchCustomerCommissionLedgerClient(
+  customerId: string,
+): Promise<
+  | { ok: true; currentBalanceUsd: number; movements: import("@/lib/customer-commission-ledger").CommissionMovementRow[] }
+  | { ok: false; error: string }
+> {
+  const params = new URLSearchParams({ customerId: customerId.trim() });
+  const res = await fetch(`/api/payment-intake/commission-ledger?${params}`, NO_STORE);
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    return { ok: false, error: body?.error ?? "טעינת כרטסת עמלה נכשלה" };
+  }
+  const body = (await res.json()) as {
+    currentBalanceUsd: number;
+    movements: import("@/lib/customer-commission-ledger").CommissionMovementRow[];
+  };
+  return { ok: true, currentBalanceUsd: body.currentBalanceUsd, movements: body.movements };
 }

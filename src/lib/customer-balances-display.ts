@@ -5,20 +5,16 @@ export type CustomerOrdersUsdSplit = {
   beforeUsd: number;
   commissionUsd: number;
   includingUsd: number;
+  withdrawalUsd: number;
 };
 
-/** פיצול תצוגתי ב-USD מנתוני שורה קיימים (מקורי + עמלה בש״ח, סה״כ הזמנות ב-USD) */
+/** פיצול תצוגתי ב-USD — מנתוני שורה (SSOT מהשרת). */
 export function rowOrdersUsdSplit(row: CustomerBalanceRow): CustomerOrdersUsdSplit {
+  const beforeUsd = parseMoneyStringOrZero(row.ordersBeforeCommissionUSD);
   const includingUsd = parseMoneyStringOrZero(row.totalOrdersUSD);
-  const dealsIls = parseMoneyStringOrZero(row.totalDealsILS);
-  const commissionsIls = parseMoneyStringOrZero(row.totalCommissionsILS);
-  const baseIls = dealsIls + commissionsIls;
-  if (baseIls <= 0.01) {
-    return { beforeUsd: includingUsd, commissionUsd: 0, includingUsd };
-  }
-  const beforeUsd = (includingUsd * dealsIls) / baseIls;
-  const commissionUsd = (includingUsd * commissionsIls) / baseIls;
-  return { beforeUsd, commissionUsd, includingUsd };
+  const withdrawalUsd = parseMoneyStringOrZero(row.codeWithdrawalUSD);
+  const commissionUsd = Math.max(0, includingUsd - beforeUsd);
+  return { beforeUsd, commissionUsd, includingUsd, withdrawalUsd };
 }
 
 export const OPEN_BALANCE_EPS = 0.01;
@@ -41,11 +37,13 @@ export function sumOrdersUsdSplit(rows: readonly CustomerBalanceRow[]): Customer
   let beforeUsd = 0;
   let commissionUsd = 0;
   let includingUsd = 0;
+  let withdrawalUsd = 0;
   for (const row of rows) {
     const s = rowOrdersUsdSplit(row);
     beforeUsd += s.beforeUsd;
     commissionUsd += s.commissionUsd;
     includingUsd += s.includingUsd;
+    withdrawalUsd += s.withdrawalUsd;
   }
-  return { beforeUsd, commissionUsd, includingUsd };
+  return { beforeUsd, commissionUsd, includingUsd, withdrawalUsd };
 }

@@ -215,6 +215,7 @@ async function main() {
               paymentCode: "TR-P-000012",
               totalUsd: "600.00",
               totalIls: null,
+              components: [],
               methods: [
                 { method: "CASH", label: "מזומן", amountIls: null, amountUsd: "100.00" },
                 { method: "BANK_TRANSFER", label: "העברה בנקאית", amountIls: null, amountUsd: "200.00" },

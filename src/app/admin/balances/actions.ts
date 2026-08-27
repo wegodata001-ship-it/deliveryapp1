@@ -135,7 +135,12 @@ export type CustomerBalanceRow = {
   lifetimeOrdersUSD: string;
   /** מספר הזמנות שנכנסו לחישוב בטווח */
   ordersCount: number;
+  /** מידע עסקי: Σ amountUsd — הזמנות רגילות בטווח (לפני עמלה). */
+  ordersBeforeCommissionUSD: string;
+  /** Σ totalUsd / charge — הזמנות רגילות בטווח (אחרי עמלה). */
   totalOrdersUSD: string;
+  /** Σ משיכה מקוד (DEBT_WITHDRAWAL) בטווח. */
+  codeWithdrawalUSD: string;
   totalPaymentsUSD: string;
   totalBalanceUSD: string;
   totalOrdersILS: string;
@@ -196,10 +201,14 @@ export type CustomerBalancesPayload = {
     highDebtCount: number;
     /** לקוחות עם תשלומים בטווח */
     withPaymentsCount: number;
-    /** סיכום תצוגה — סכום שדות שורה (אותה קבוצה מסוננת) */
-    totalLifetimeOrdersUsd: string;
+    /** סיכום תצוגה — Σ ordersBeforeCommissionUSD */
+    totalOrdersBeforeCommissionUsd: string;
     totalOrdersAfterCommissionUsd: string;
+    /** Σ codeWithdrawalUSD */
+    totalCodeWithdrawalUsd: string;
     totalNetBalanceUsd: string;
+    /** @deprecated — lifetime totalUsd; לא ל-KPI */
+    totalLifetimeOrdersUsd: string;
   };
   /** KPI נוספים למודאל דוח יתרות (לפי אותה קבוצה מסוננת לפני pagination) */
   reportModalStats?: {
@@ -617,9 +626,11 @@ function emptyBalancesPayload(limit: number): CustomerBalancesPayload {
       notPaidCount: 0,
       highDebtCount: 0,
       withPaymentsCount: 0,
-      totalLifetimeOrdersUsd: z,
+      totalOrdersBeforeCommissionUsd: z,
       totalOrdersAfterCommissionUsd: z,
+      totalCodeWithdrawalUsd: z,
       totalNetBalanceUsd: z,
+      totalLifetimeOrdersUsd: z,
     },
     statusBalanceKpis: emptyStatusBalanceKpis(),
     activeOrderStatusFilter: "ALL",
@@ -699,7 +710,9 @@ function computeBalanceStats(rows: CustomerBalanceRow[]): CustomerBalancesPayloa
   let highDebt = 0;
   let withPayments = 0;
   let totalLifetimeOrdersUsd = new Prisma.Decimal(0);
+  let totalOrdersBeforeCommissionUsd = new Prisma.Decimal(0);
   let totalOrdersAfterCommissionUsd = new Prisma.Decimal(0);
+  let totalCodeWithdrawalUsd = new Prisma.Decimal(0);
   let totalNetBalanceUsd = new Prisma.Decimal(0);
   const eps = 0.01;
   for (const r of rows) {
@@ -709,8 +722,14 @@ function computeBalanceStats(rows: CustomerBalanceRow[]): CustomerBalancesPayloa
     totalLifetimeOrdersUsd = totalLifetimeOrdersUsd.add(
       new Prisma.Decimal(rowBalanceUsdNumber(r.lifetimeOrdersUSD).toFixed(4)),
     );
+    totalOrdersBeforeCommissionUsd = totalOrdersBeforeCommissionUsd.add(
+      new Prisma.Decimal(rowBalanceUsdNumber(r.ordersBeforeCommissionUSD).toFixed(4)),
+    );
     totalOrdersAfterCommissionUsd = totalOrdersAfterCommissionUsd.add(
       new Prisma.Decimal(rowOrdersTotalNumber(r.totalOrdersUSD).toFixed(4)),
+    );
+    totalCodeWithdrawalUsd = totalCodeWithdrawalUsd.add(
+      new Prisma.Decimal(rowBalanceUsdNumber(r.codeWithdrawalUSD).toFixed(4)),
     );
     totalNetBalanceUsd = totalNetBalanceUsd.add(new Prisma.Decimal(businessBalUsd.toFixed(4)));
     totalPayments = totalPayments.add(new Prisma.Decimal(rowPaymentsTotalNumber(r.totalPaymentsUSD).toFixed(4)));
@@ -746,7 +765,9 @@ function computeBalanceStats(rows: CustomerBalanceRow[]): CustomerBalancesPayloa
     highDebtCount: highDebt,
     withPaymentsCount: withPayments,
     totalLifetimeOrdersUsd: money(totalLifetimeOrdersUsd),
+    totalOrdersBeforeCommissionUsd: money(totalOrdersBeforeCommissionUsd),
     totalOrdersAfterCommissionUsd: money(totalOrdersAfterCommissionUsd),
+    totalCodeWithdrawalUsd: money(totalCodeWithdrawalUsd),
     totalNetBalanceUsd: money(totalNetBalanceUsd),
   };
 }
@@ -1308,6 +1329,9 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     const lastDt = lastOrderDateByCustomer.get(c.id);
     const maxN = maxAhByCustomer.get(c.id) ?? 0;
     const lifetimeUsd = lifetimeOrdersUsdByCustomer.get(c.id) ?? new Prisma.Decimal(0);
+    const ordersBeforeUsd = shared?.totalOrdersBeforeCommission ?? new Prisma.Decimal(0);
+    const ordersAfterUsd = shared?.totalOrders ?? expectedUsd;
+    const codeWithdrawalUsd = shared?.totalWithdrawals ?? new Prisma.Decimal(0);
     return {
       customerId: c.id,
       customerName: primaryCustomerDisplayName({
@@ -1319,7 +1343,9 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       customerCode: c.customerCode,
       lifetimeOrdersUSD: money(lifetimeUsd),
       ordersCount: oc,
-      totalOrdersUSD: money(expectedUsd),
+      ordersBeforeCommissionUSD: money(ordersBeforeUsd),
+      totalOrdersUSD: money(ordersAfterUsd),
+      codeWithdrawalUSD: money(codeWithdrawalUsd),
       totalPaymentsUSD: money(paymentsUsdOnly),
       totalBalanceUSD: money(balUsdDec),
       totalOrdersILS: money(expectedIls),
@@ -1717,15 +1743,25 @@ export async function exportCustomerBalancesAction(
     const payload = await listCustomerBalancesAction({ ...query, page: 1, limit: 10000 });
     if (payload.rows.length === 0) return { ok: false, error: "אין שורות לייצוא" };
 
-    const headers = ["קוד לקוח", "שם לקוח", "סה\"כ הזמנות מצטבר ($)", "סה\"כ הזמנות ($)", "סה\"כ תשלומים ($)", "יתרה ($)", "סטטוס"];
+    const headers = [
+      "קוד לקוח",
+      "שם לקוח",
+      "לפני עמלה ($)",
+      "אחרי עמלה ($)",
+      "משיכה מקוד ($)",
+      "סה\"כ תשלומים ($)",
+      "יתרה ($)",
+      "סטטוס",
+    ];
     const data = payload.rows.map((r) => {
       const b = rowBalanceUsdNumber(r.totalBalanceUSD);
       const status = b > 0.01 ? "חוב פתוח" : b < -0.01 ? "יתרת זכות" : "מאוזן";
       return [
         r.customerCode ?? "—",
         r.customerName,
-        r.lifetimeOrdersUSD,
+        r.ordersBeforeCommissionUSD,
         r.totalOrdersUSD,
+        r.codeWithdrawalUSD,
         r.totalPaymentsUSD,
         r.totalBalanceUSD,
         status,

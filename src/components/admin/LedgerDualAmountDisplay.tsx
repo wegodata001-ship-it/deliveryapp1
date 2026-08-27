@@ -1,6 +1,6 @@
 "use client";
 
-import { formatLedgerAmountDisplay } from "@/lib/ledger-payment-display";
+import { formatLedgerAmountDisplay, formatLedgerPaymentTotalUsd } from "@/lib/ledger-payment-display";
 
 type Props = {
   amountIls: string | null | undefined;
@@ -24,10 +24,8 @@ export function LedgerDualAmountDisplay({ amountIls, amountUsd, className }: Pro
 
 export function ledgerPaymentCellDisplay(
   paymentUsd: string,
-  detail?: { totalIls: string | null; totalUsd: string } | null,
+  detail?: { totalUsd: string } | null,
 ): { lines: string[] } {
-  if (detail) {
-    return formatLedgerAmountDisplay(detail.totalIls, detail.totalUsd);
-  }
-  return formatLedgerAmountDisplay(null, paymentUsd);
+  const total = formatLedgerPaymentTotalUsd(detail?.totalUsd ?? paymentUsd);
+  return { lines: [total] };
 }

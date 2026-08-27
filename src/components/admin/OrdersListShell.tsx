@@ -639,6 +639,7 @@ export function OrdersListShell({
         }),
       );
       statusUpdateUiMs += now() - uiDwT0;
+      window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
     }
 
     const totalMs = Math.round(now() - t0);

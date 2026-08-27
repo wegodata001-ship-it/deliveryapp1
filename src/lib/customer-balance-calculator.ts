@@ -1,4 +1,8 @@
 import { Prisma, type OrderSourceCountry } from "@prisma/client";
+import {
+  isDebtWithdrawalOrderStatus,
+  orderBeforeCommissionUsd,
+} from "@/lib/debt-withdrawal-order";
 import { OS } from "@/lib/order-status-slugs";
 import { prisma } from "@/lib/prisma";
 import { findActiveCustomerPayments } from "@/lib/payment-record-status";
@@ -23,7 +27,11 @@ export type CustomerBalanceScope = {
 export type CustomerBalanceCalculation = {
   customerId: string;
   ordersCount: number;
+  /** Σ amountUsd — הזמנות רגילות בלבד */
+  totalOrdersBeforeCommission: Prisma.Decimal;
+  /** Σ totalUsd (אחרי עמלה) — הזמנות רגילות בלבד */
   totalOrders: Prisma.Decimal;
+  /** Σ משיכה מקוד (DEBT_WITHDRAWAL) */
   totalWithdrawals: Prisma.Decimal;
   totalPayments: Prisma.Decimal;
   balance: Prisma.Decimal;
@@ -69,6 +77,7 @@ export async function calculateCustomerBalances(
     out.set(id, {
       customerId: id,
       ordersCount: 0,
+      totalOrdersBeforeCommission: new Prisma.Decimal(0),
       totalOrders: new Prisma.Decimal(0),
       totalWithdrawals: new Prisma.Decimal(0),
       totalPayments: new Prisma.Decimal(0),
@@ -139,10 +148,13 @@ export async function calculateCustomerBalances(
     if (!o.customerId) continue;
     const row = out.get(o.customerId);
     if (!row) continue;
-    if (o.status === OS.DEBT_WITHDRAWAL) {
+    if (isDebtWithdrawalOrderStatus(o.status)) {
       row.totalWithdrawals = row.totalWithdrawals.add(withdrawalUsd(o));
     } else {
       row.ordersCount += 1;
+      row.totalOrdersBeforeCommission = row.totalOrdersBeforeCommission.add(
+        new Prisma.Decimal(orderBeforeCommissionUsd(o).toFixed(4)),
+      );
       row.totalOrders = row.totalOrders.add(orderUsd(o));
     }
   }
@@ -174,6 +186,7 @@ export async function calculateCustomerBalance(
     map.get(id) ?? {
       customerId: id,
       ordersCount: 0,
+      totalOrdersBeforeCommission: new Prisma.Decimal(0),
       totalOrders: new Prisma.Decimal(0),
       totalWithdrawals: new Prisma.Decimal(0),
       totalPayments: new Prisma.Decimal(0),

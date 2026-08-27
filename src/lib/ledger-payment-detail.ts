@@ -1,5 +1,9 @@
 import type { PaymentBusinessType, PaymentRecordStatus, Prisma } from "@prisma/client";
-import { formatLedgerAmountDisplay } from "@/lib/ledger-payment-display";
+import {
+  formatLedgerAmountDisplay,
+  formatLedgerPaymentComponentDisplay,
+  formatLedgerPaymentTotalUsd,
+} from "@/lib/ledger-payment-display";
 import { normalizePaymentMethodId } from "@/lib/payment-method-slugs";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 import {
@@ -31,14 +35,33 @@ export type LedgerPaymentCheckLine = {
   amountUsd: string;
 };
 
+export type LedgerPaymentCurrencyComponent = {
+  currency: "USD" | "ILS";
+  /** תווית בעברית — דולר / שקל */
+  label: string;
+  /** סכום מקורי במטבע — כפי שנקלט */
+  amount: string;
+};
+
+export type LedgerPaymentExpandLine = {
+  label: string;
+  display: string;
+};
+
 export type LedgerPaymentDetail = {
   paymentCode: string;
   totalUsd: string;
   /** סה״כ שקלים שנרשמו בקליטה */
   totalIls: string | null;
+  /** רכיבי מטבע מקוריים — לא שווי דולרי מומר */
+  components: LedgerPaymentCurrencyComponent[];
   methods: LedgerPaymentMethodBucket[];
   checks: LedgerPaymentCheckLine[];
   orders: LedgerPaymentOrderAllocation[];
+  /** סכום שנסגר לחוב (הקצאות להזמנות) */
+  debtClosedUsd?: string | null;
+  /** עודף שנשמר כיתרת זכות — נפרד מעמלה */
+  creditSurplusUsd?: string | null;
 };
 
 export type LedgerPaymentMethodDisplayLine = {
@@ -231,6 +254,15 @@ function bucketsFromPaymentLines(lines: PaymentLine[], exchangeRate: number): Ma
   return buckets;
 }
 
+function isInternalLedgerPaymentRow(row: LedgerPaymentBatchRow): boolean {
+  return (
+    row.businessType === "CUSTOMER_CREDIT" ||
+    row.businessType === "ADJUSTMENT_FEE" ||
+    row.businessType === "CREDIT_APPLICATION" ||
+    row.businessType === "BALANCE_RESET"
+  );
+}
+
 function paymentRowUsdEquivalent(row: LedgerPaymentBatchRow): number {
   const usd = Number(row.amountUsd ?? 0);
   if (Number.isFinite(usd) && usd > 0.005) return roundMoney2(usd);
@@ -271,7 +303,7 @@ function bucketsFromIntakeNotesBreakdown(
 function bucketsFromBatchRows(batchRows: LedgerPaymentBatchRow[]): Map<string, MethodAmountAcc> {
   const buckets = new Map<string, MethodAmountAcc>();
   for (const row of batchRows) {
-    if (row.status === "CANCELLED") continue;
+    if (row.status === "CANCELLED" || isInternalLedgerPaymentRow(row)) continue;
     const rate = Number(row.exchangeRate ?? 0);
     const usdAmt = Number(row.amountUsd ?? 0);
     if (Number.isFinite(usdAmt) && usdAmt > 0) {
@@ -376,6 +408,39 @@ function notesHaveMethodBreakdown(notes: string): boolean {
   });
 }
 
+function buildPaymentCurrencyComponents(
+  parsedLines: PaymentLine[],
+  bucketMap: Map<string, MethodAmountAcc>,
+): LedgerPaymentCurrencyComponent[] {
+  let usdNative = 0;
+  let ilsNative = 0;
+
+  if (parsedLines.length > 0) {
+    for (const line of parsedLines) {
+      const n = normalizePaymentLine(line);
+      if (typeof n.usdAmount === "number" && n.usdAmount > 0) usdNative += n.usdAmount;
+      if (typeof n.ilsAmount === "number" && n.ilsAmount > 0) ilsNative += n.ilsAmount;
+    }
+  } else {
+    for (const acc of bucketMap.values()) {
+      if (acc.ils > 0.005) ilsNative += acc.ils;
+      if (acc.ils <= 0.005 && acc.usd > 0.005) usdNative += acc.usd;
+    }
+  }
+
+  usdNative = roundMoney2(usdNative);
+  ilsNative = roundMoney2(ilsNative);
+
+  const out: LedgerPaymentCurrencyComponent[] = [];
+  if (usdNative > 0.005) {
+    out.push({ currency: "USD", label: "דולר", amount: usdNative.toFixed(2) });
+  }
+  if (ilsNative > 0.005) {
+    out.push({ currency: "ILS", label: "שקל", amount: ilsNative.toFixed(2) });
+  }
+  return out;
+}
+
 export function buildLedgerPaymentDetail(params: {
   batchRows: LedgerPaymentBatchRow[];
   orderNumberById: Map<string, string>;
@@ -420,27 +485,40 @@ export function buildLedgerPaymentDetail(params: {
   }
 
   let totalUsd = 0;
+  let creditSurplusUsd = 0;
   for (const row of batchRows) {
     if (row.status === "CANCELLED") continue;
-    totalUsd += paymentRowUsdEquivalent(row);
+    const rowUsd = paymentRowUsdEquivalent(row);
+    totalUsd += rowUsd;
+    if (row.businessType === "CUSTOMER_CREDIT") {
+      creditSurplusUsd += rowUsd;
+    }
   }
   totalUsd = roundMoney2(totalUsd);
+  creditSurplusUsd = roundMoney2(creditSurplusUsd);
 
   if (bucketMap.size === 0 && totalUsd > 0.005) {
-    addBucket(bucketMap, defaultMethod, { usd: totalUsd });
+    addBucket(bucketMap, defaultMethod, { usd: roundMoney2(totalUsd - creditSurplusUsd) });
   }
 
-  const totalIlsN = sumBatchIls(batchRows);
+  const totalIlsN = sumBatchIls(batchRows.filter((r) => !isInternalLedgerPaymentRow(r)));
   const orders = mergeOrderAllocations(batchRows, orderNumberById);
+  const debtClosedUsd = roundMoney2(
+    orders.reduce((sum, o) => sum + Number(o.amountUsd), 0),
+  );
   const checks = checksByPaymentId?.get(primary.id) ?? [];
+  const components = buildPaymentCurrencyComponents(parsedLines, bucketMap);
 
   return {
     paymentCode,
     totalUsd: totalUsd.toFixed(2),
     totalIls: totalIlsN > 0.005 ? totalIlsN.toFixed(2) : null,
+    components,
     methods: sortedMethodBuckets(bucketMap),
     checks,
     orders,
+    debtClosedUsd: debtClosedUsd > 0.005 ? debtClosedUsd.toFixed(2) : null,
+    creditSurplusUsd: creditSurplusUsd > 0.005 ? creditSurplusUsd.toFixed(2) : null,
   };
 }
 
@@ -486,25 +564,97 @@ export function ledgerPaymentMethodDisplayLines(
   return out;
 }
 
+function methodLineNativeDisplay(line: LedgerPaymentMethodDisplayLine): string {
+  if (line.amountIls != null && Number(line.amountIls) > 0.005) {
+    return formatLedgerPaymentComponentDisplay("ILS", line.amountIls);
+  }
+  return formatLedgerPaymentComponentDisplay("USD", line.amountUsd);
+}
+
+/** שורות פירוט לפתיחה — רכיבי מטבע או אמצעי תשלום (לא סה״כ דולרי) */
+function ledgerPaymentAllocationExpandLines(detail: LedgerPaymentDetail): LedgerPaymentExpandLine[] {
+  const out: LedgerPaymentExpandLine[] = [];
+  const debtClosed = Number(detail.debtClosedUsd ?? 0);
+  if (debtClosed > 0.005) {
+    out.push({
+      label: "סגירת חוב",
+      display: formatLedgerPaymentComponentDisplay("USD", debtClosed.toFixed(2)),
+    });
+  }
+  const creditSurplus = Number(detail.creditSurplusUsd ?? 0);
+  if (creditSurplus > 0.005) {
+    out.push({
+      label: "יתרת זכות מתשלום יתר",
+      display: `+${formatLedgerPaymentComponentDisplay("USD", creditSurplus.toFixed(2)).replace(/^\$?\s?/, "$")}`,
+    });
+  }
+  return out;
+}
+
+export function ledgerPaymentExpandLines(
+  detail: LedgerPaymentDetail | undefined | null,
+): LedgerPaymentExpandLine[] {
+  if (!detail) return [];
+
+  const allocationLines = ledgerPaymentAllocationExpandLines(detail);
+
+  const components = detail.components ?? [];
+  if (components.length >= 2) {
+    return [
+      ...components.map((c) => ({
+        label: c.label,
+        display: formatLedgerPaymentComponentDisplay(c.currency, c.amount),
+      })),
+      ...allocationLines,
+    ];
+  }
+  if (components.length === 1 && components[0].currency === "ILS") {
+    return [
+      ...components.map((c) => ({
+        label: c.label,
+        display: formatLedgerPaymentComponentDisplay(c.currency, c.amount),
+      })),
+      ...allocationLines,
+    ];
+  }
+
+  const methodLines = ledgerPaymentMethodDisplayLines(detail);
+  if (methodLines.length > 1) {
+    return [
+      ...methodLines.map((m) => ({
+        label: m.label,
+        display: methodLineNativeDisplay(m),
+      })),
+      ...allocationLines,
+    ];
+  }
+  if (methodLines.length === 1) {
+    const only = methodLines[0];
+    if (only.amountIls != null && Number(only.amountIls) > 0.005) {
+      return [
+        { label: "שקל", display: formatLedgerPaymentComponentDisplay("ILS", only.amountIls) },
+        ...allocationLines,
+      ];
+    }
+  }
+
+  if (allocationLines.length > 0) return allocationLines;
+
+  return [];
+}
+
 export function shouldShowLedgerPaymentMethodSubrows(
   detail: LedgerPaymentDetail | undefined | null,
 ): boolean {
-  const lines = ledgerPaymentMethodDisplayLines(detail);
-  if (lines.length > 1) return true;
-  if (lines.length === 1) {
-    const only = lines[0];
-    return only.amountIls != null && Number(only.amountIls) > 0.005;
-  }
-  return false;
+  return ledgerPaymentExpandLines(detail).length > 0;
 }
 
 export function formatLedgerPaymentDetailLines(detail: LedgerPaymentDetail | undefined | null): string[] {
   if (!detail) return [];
-  const totalDisp = formatLedgerAmountDisplay(detail.totalIls, detail.totalUsd);
-  const lines: string[] = [`${detail.paymentCode} · סה״כ ${totalDisp.singleLine}`];
-  for (const m of ledgerPaymentMethodDisplayLines(detail)) {
-    const disp = formatLedgerAmountDisplay(m.amountIls, m.amountUsd);
-    lines.push(`↳ ${m.label}: ${disp.singleLine}`);
+  const totalDisp = formatLedgerPaymentTotalUsd(detail.totalUsd);
+  const lines: string[] = [`${detail.paymentCode} · סה״כ ${totalDisp}`];
+  for (const row of ledgerPaymentExpandLines(detail)) {
+    lines.push(`↳ ${row.label}: ${row.display}`);
   }
   for (const o of detail.orders) {
     lines.push(`${o.orderNumber} → $${o.amountUsd}`);

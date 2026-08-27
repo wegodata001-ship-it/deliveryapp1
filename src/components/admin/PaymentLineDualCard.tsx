@@ -190,6 +190,8 @@ export type PaymentLineDualCardProps = {
   line: PaymentLine;
   ordinal: number;
   isLatest: boolean;
+  /** false לתשלום קיים — לא להציג תג «חדש» */
+  showNewTag?: boolean;
   rateN: number;
   highlightInvalidChecks: boolean;
   firstAmountInputRef?: Ref<HTMLInputElement>;
@@ -204,6 +206,7 @@ export function PaymentLineDualCard({
   line,
   ordinal,
   isLatest,
+  showNewTag = true,
   rateN,
   highlightInvalidChecks,
   firstAmountInputRef,
@@ -281,7 +284,10 @@ export function PaymentLineDualCard({
       <div className="payment-upd-linecard-head">
         <div className="payment-upd-linecard-title">
           תשלום {ordinal}
-          {isLatest ? <span className="payment-upd-linecard-tag">חדש</span> : null}
+          {isLatest && showNewTag ? <span className="payment-upd-linecard-tag">חדש</span> : null}
+          {isLatest && !showNewTag ? (
+            <span className="payment-upd-linecard-tag payment-upd-linecard-tag--saved">שמור</span>
+          ) : null}
         </div>
         <button type="button" className="payment-upd-del" aria-label="מחיקת תשלום" onClick={onRemove}>
           <X size={16} strokeWidth={1.75} aria-hidden />

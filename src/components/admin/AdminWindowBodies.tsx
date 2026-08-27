@@ -47,7 +47,7 @@ import {
   type LedgerPdfMode,
 } from "@/lib/customer-ledger-export";
 import {
-  ledgerPaymentMethodDisplayLines,
+  ledgerPaymentExpandLines,
   shouldShowLedgerPaymentMethodSubrows,
 } from "@/lib/ledger-payment-detail";
 import {
@@ -55,7 +55,7 @@ import {
   type CustomerLedgerDateSort,
   type CustomerLedgerQuickFilter,
 } from "@/lib/customer-ledger-display";
-import { LedgerDualAmountDisplay } from "@/components/admin/LedgerDualAmountDisplay";
+import { formatLedgerPaymentTotalUsd } from "@/lib/ledger-payment-display";
 import { LedgerPaymentExpandButton } from "@/components/admin/LedgerPaymentExpandButton";
 import { CustomerLedgerErrorBoundary } from "@/components/admin/CustomerLedgerErrorBoundary";
 import { formatLocalYmd } from "@/lib/work-week";
@@ -893,11 +893,11 @@ export function CustomerCardWindowBody({
                       const isCancelledOrder = !!r.isOrderCancelled;
                       const isOrderUpdated = !!r.isOrderUpdated;
                       const orderUpdateSubrows = isOrderUpdated && r.orderUpdateDetail ? r.orderUpdateDetail.changes : [];
-                      const paymentMethodSubrows =
+                      const paymentExpandLines =
                         isPayment && !isCancelledPayment && shouldShowLedgerPaymentMethodSubrows(r.paymentDetail)
-                          ? ledgerPaymentMethodDisplayLines(r.paymentDetail)
+                          ? ledgerPaymentExpandLines(r.paymentDetail)
                           : [];
-                      const paymentExpandable = paymentMethodSubrows.length > 0;
+                      const paymentExpandable = paymentExpandLines.length > 0;
                       const paymentExpanded = expandedLedgerPayments.has(r.id);
                       const togglePaymentExpanded = () => {
                         setExpandedLedgerPayments((prev) => {
@@ -991,14 +991,9 @@ export function CustomerCardWindowBody({
                               </span>
                             ) : paymentNum > 0 ? (
                               <span className="adm-ledger-payment-cell-inner">
-                                {r.paymentDetail ? (
-                                  <LedgerDualAmountDisplay
-                                    amountIls={r.paymentDetail.totalIls}
-                                    amountUsd={r.paymentDetail.totalUsd}
-                                  />
-                                ) : (
-                                  <span>{fmtUsd(r.paymentUsd)}</span>
-                                )}
+                                <span dir="ltr">
+                                  {formatLedgerPaymentTotalUsd(r.paymentDetail?.totalUsd ?? r.paymentUsd)}
+                                </span>
                                 {paymentExpandable ? (
                                   <LedgerPaymentExpandButton
                                     expanded={paymentExpanded}
@@ -1015,7 +1010,7 @@ export function CustomerCardWindowBody({
                         {paymentExpanded
                           ? (
                             <>
-                            {paymentMethodSubrows.map((line, subIdx) => (
+                            {paymentExpandLines.map((line, subIdx) => (
                           <tr
                             key={`${r.id}-pay-meth-${subIdx}`}
                             className="adm-ledger-row--payment-method-sub"
@@ -1026,23 +1021,18 @@ export function CustomerCardWindowBody({
                               {line.label}:
                             </td>
                             <td>—</td>
-                            <td dir="ltr">
-                              <LedgerDualAmountDisplay amountIls={line.amountIls} amountUsd={line.amountUsd} />
-                            </td>
+                            <td dir="ltr">{line.display}</td>
                             <td />
                           </tr>
                         ))}
-                            {paymentMethodSubrows.length > 1 && r.paymentDetail ? (
+                            {paymentExpandLines.length > 0 && r.paymentDetail ? (
                               <tr key={`${r.id}-pay-meth-total`} className="adm-ledger-row--payment-method-sub adm-ledger-row--payment-method-total">
                                 <td />
                                 <td />
-                                <td className="adm-ledger-payment-method-sub-type">סה״כ:</td>
+                                <td className="adm-ledger-payment-method-sub-type">סה״כ תשלום:</td>
                                 <td>—</td>
                                 <td dir="ltr">
-                                  <LedgerDualAmountDisplay
-                                    amountIls={r.paymentDetail.totalIls}
-                                    amountUsd={r.paymentDetail.totalUsd}
-                                  />
+                                  {formatLedgerPaymentTotalUsd(r.paymentDetail.totalUsd)}
                                 </td>
                                 <td />
                               </tr>

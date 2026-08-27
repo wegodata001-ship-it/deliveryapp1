@@ -17,6 +17,7 @@ export type SoftRefreshPaymentIntakeOrdersResult =
       customerBalanceUsd: string;
       openDebtSignedUsd: number;
       internalSignedUsd: string;
+      commissionBalanceUsd: number;
     }
   | { ok: false; error: string };
 
@@ -45,6 +46,7 @@ export async function softRefreshPaymentIntakeOrders(params: {
       customerBalanceUsd: "0",
       openDebtSignedUsd: 0,
       internalSignedUsd: "0",
+      commissionBalanceUsd: 0,
     };
   }
 
@@ -54,5 +56,6 @@ export async function softRefreshPaymentIntakeOrders(params: {
     customerBalanceUsd: balancesRes.customerBalanceUsd,
     openDebtSignedUsd: balancesRes.openDebtSignedUsd,
     internalSignedUsd: balancesRes.internalSignedUsd,
+    commissionBalanceUsd: balancesRes.commissionBalanceUsd,
   };
 }

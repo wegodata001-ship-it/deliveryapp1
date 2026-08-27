@@ -1,13 +1,15 @@
 /**
  * SSOT — יתרת עמלות ללקוח (חיובי / שלילי / אפס).
  * סכום commissionUsd מהזמנות + תנועות עמלה עצמאיות (עודף→עמלות וכו').
- * תנועות fee_adjustment_negative מקושרות להזמנה — כבר משוקפות ב-commissionUsd; לא מכפילים.
+ * תנועות fee_adjustment_negative (legacy) — כבר משוקפות ב-commissionUsd; לא מכפילים.
+ * תנועות commission_pool_debit (חדש) — מקוזזות מיתרת העמלה בלבד; כלולות בסכום.
  */
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { activePaidPaymentWhere } from "@/lib/payment-record-status-shared";
 import { computeOrderOpenDebtUsd, roundOrderMoney2 } from "@/lib/order-remaining-debt";
 import { computeCommissionResetPreviewNumbers } from "@/lib/customer-commission-reset-preview";
+import { isLegacyCommissionOrderMutationFee } from "@/lib/customer-commission-balance-shared";
 import { OrderStatus as OS } from "@prisma/client";
 
 export type CustomerOpenDebtOrderRow = {
@@ -40,18 +42,18 @@ export async function getCustomerCommissionBalanceUsd(customerId: string): Promi
       where: { customerId: cid, deletedAt: null },
       _sum: { commissionUsd: true },
     }),
-    prisma.paymentAdjustmentFee.aggregate({
-      where: {
-        customerId: cid,
-        status: { not: "CANCELLED" },
-        NOT: { userChoice: "fee_adjustment_negative" },
-      },
-      _sum: { amountUsd: true },
+    prisma.paymentAdjustmentFee.findMany({
+      where: { customerId: cid, status: { not: "CANCELLED" } },
+      select: { amountUsd: true, userChoice: true },
     }),
   ]);
 
   const orderCommission = Number(orderAgg._sum.commissionUsd ?? 0);
-  const feeSum = Number(feeAgg._sum.amountUsd ?? 0);
+  let feeSum = 0;
+  for (const row of feeAgg) {
+    if (isLegacyCommissionOrderMutationFee(row.userChoice)) continue;
+    feeSum += Number(row.amountUsd ?? 0);
+  }
   return roundOrderMoney2(orderCommission + feeSum);
 }
 

@@ -6,12 +6,20 @@ import { revalidatePath } from "next/cache";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { writeOrderBreakdownInTx } from "@/lib/order-breakdown-write";
 import {
+  buildPaymentMethodAdjustmentBootstrap,
   buildPaymentMethodAutoAdjustmentPreview,
   paymentMethodForBreakdown,
   PAYMENT_METHOD_ADJUSTMENT_REASON_OPTIONS,
   type PaymentMethodAdjustmentPreview,
   type PaymentMethodAdjustmentReasonCode,
 } from "@/lib/payment-method-auto-adjustment";
+import {
+  suggestPaymentMethodAdjustment,
+  type MethodBalanceCard,
+  type MethodCurrencyAmount,
+  type PaymentBalanceCurrency,
+  type PaymentMethodAdjustmentSuggestion,
+} from "@/lib/payment-method-captured-balances";
 import {
   ORDER_PAYMENT_METHOD_ADJUSTED_ACTION,
   parsePaymentMethodAutoAdjustedAuditMetadata,
@@ -42,6 +50,9 @@ async function loadPreview(params: {
   fromPaymentMethod: string;
   toPaymentMethod: string;
   amountUsd: number;
+  currency?: PaymentBalanceCurrency | null;
+  amountNative?: number | null;
+  exchangeRate?: number | null;
 }) {
   const customerId = params.customerId.trim();
   if (!customerId) return { ok: false as const, error: "חסר לקוח" };
@@ -53,17 +64,68 @@ async function loadPreview(params: {
   if (!workspace.ok) return workspace;
   const preview = buildPaymentMethodAutoAdjustmentPreview({
     orders: workspace.orders,
+    customerPayments: workspace.customerPayments,
     fromMethod: params.fromPaymentMethod,
     toMethod: params.toPaymentMethod,
     amountUsd: params.amountUsd,
+    currency: params.currency,
+    amountNative: params.amountNative,
+    exchangeRate: params.exchangeRate,
   });
   if (!preview.ok) return preview;
   return {
     ok: true as const,
     customer: workspace.customer,
     orders: workspace.orders,
+    customerPayments: workspace.customerPayments,
     preview: preview.preview,
   };
+}
+
+export async function loadPaymentMethodAdjustmentBootstrapAction(params: {
+  customerId: string;
+  weekCode?: string | null;
+  workCountry?: string | null;
+  exchangeRate?: number | null;
+  fromPaymentMethod?: string | null;
+  toPaymentMethod?: string | null;
+  currency?: PaymentBalanceCurrency | null;
+}): Promise<
+  | {
+      ok: true;
+      capturedBalances: MethodCurrencyAmount[];
+      plannedOpenBalances: MethodCurrencyAmount[];
+      capturedCards: MethodBalanceCard[];
+      plannedCards: MethodBalanceCard[];
+      capturedTotalUsd: number;
+      customerOpenDebtUsd: number;
+      suggestion: PaymentMethodAdjustmentSuggestion | null;
+    }
+  | { ok: false; error: string }
+> {
+  await ensureAdjustmentPermission();
+  const customerId = params.customerId.trim();
+  if (!customerId) return { ok: false, error: "חסר לקוח" };
+  const workspace = await loadPaymentIntakeCustomerWorkspace({
+    customerId,
+    weekCodeForOpenBalances: params.weekCode ?? undefined,
+    paymentWorkCountryRaw: normalizeWorkCountryCode(params.workCountry ?? null),
+  });
+  if (!workspace.ok) return { ok: false, error: workspace.error };
+  const bootstrap = buildPaymentMethodAdjustmentBootstrap({
+    orders: workspace.orders,
+    customerPayments: workspace.customerPayments,
+    exchangeRate: params.exchangeRate,
+  });
+  const suggestion = suggestPaymentMethodAdjustment({
+    captured: bootstrap.capturedBalances,
+    planned: bootstrap.plannedOpenBalances,
+    fromMethod: params.fromPaymentMethod?.trim() || "CASH",
+    toMethod: params.toPaymentMethod?.trim() || "BANK_TRANSFER",
+    currency: params.currency === "ILS" ? "ILS" : "USD",
+    exchangeRate: params.exchangeRate,
+  });
+  return { ok: true, ...bootstrap, suggestion };
 }
 
 export async function previewPaymentMethodAutoAdjustmentAction(params: {
@@ -73,6 +135,9 @@ export async function previewPaymentMethodAutoAdjustmentAction(params: {
   fromPaymentMethod: string;
   toPaymentMethod: string;
   amountUsd: number;
+  currency?: PaymentBalanceCurrency | null;
+  amountNative?: number | null;
+  exchangeRate?: number | null;
 }): Promise<
   | {
       ok: true;
@@ -108,6 +173,9 @@ export async function applyPaymentMethodAutoAdjustmentAction(params: {
   fromPaymentMethod: string;
   toPaymentMethod: string;
   amountUsd: number;
+  currency?: PaymentBalanceCurrency | null;
+  amountNative?: number | null;
+  exchangeRate?: number | null;
   reasonCode: PaymentMethodAdjustmentReasonCode;
   reasonText: string;
 }): Promise<{ ok: true; adjustmentId: string; affectedOrders: number } | { ok: false; error: string }> {
@@ -151,7 +219,15 @@ export async function applyPaymentMethodAutoAdjustmentAction(params: {
               orderNumber: affected.orderNumber,
               fromPaymentMethod: loaded.preview.fromMethod,
               toPaymentMethod: loaded.preview.toMethod,
+              sourceCurrency: loaded.preview.currency,
+              targetCurrency: loaded.preview.currency,
+              amountOriginalCurrency: moneyUsd(loaded.preview.amountNative),
               movedUsd: moneyUsd(affected.moveUsd),
+              exchangeRate: loaded.preview.exchangeRate?.toFixed(4) ?? null,
+              beforeSourceBalance: moneyUsd(loaded.preview.currentFromOpenNative),
+              afterSourceBalance: moneyUsd(loaded.preview.afterFromOpenNative),
+              beforeTargetBalance: moneyUsd(loaded.preview.currentToOpenNative),
+              afterTargetBalance: moneyUsd(loaded.preview.afterToOpenNative),
               reasonCode: params.reasonCode,
               reasonText,
               employeeId: me.id,
@@ -179,7 +255,16 @@ export async function applyPaymentMethodAutoAdjustmentAction(params: {
             createdAtIso,
             fromPaymentMethod: loaded.preview.fromMethod,
             toPaymentMethod: loaded.preview.toMethod,
+            sourceCurrency: loaded.preview.currency,
+            targetCurrency: loaded.preview.currency,
+            amountOriginalCurrency: moneyUsd(loaded.preview.amountNative),
             amountUsd: moneyUsd(loaded.preview.requestedAmountUsd),
+            exchangeRate: loaded.preview.exchangeRate?.toFixed(4) ?? null,
+            beforeSourceBalance: moneyUsd(loaded.preview.currentFromOpenNative),
+            afterSourceBalance: moneyUsd(loaded.preview.afterFromOpenNative),
+            beforeTargetBalance: moneyUsd(loaded.preview.currentToOpenNative),
+            afterTargetBalance: moneyUsd(loaded.preview.afterToOpenNative),
+            capturedTotalUsd: moneyUsd(loaded.preview.capturedTotalUsd),
             reasonCode: params.reasonCode,
             reasonText,
             affectedOrders: loaded.preview.affectedOrders.map((row) => ({

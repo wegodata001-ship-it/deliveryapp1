@@ -55,6 +55,13 @@ export function computePaymentIntakeLiveTotals(params: {
   customerBalanceResetPreview?: CommissionResetOrderPreview[];
   customerPaymentsUsd: number;
   formPaymentUsd: number;
+  /**
+   * חוב פתוח לקוח מ-getCustomerOpenDebt (כולל משיכות מחוב).
+   * כשמוגדר — balanceUsd = חוב נוכחי − customerApplyPaymentUsd.
+   */
+  customerSignedOpenDebtUsd?: number;
+  /** סכום שמשפיע על החוב: מלא לחדש, delta לעריכת תשלום קיים */
+  customerApplyPaymentUsd?: number;
 }): PaymentIntakeLiveTotals {
   const commissionReset = new Set(params.commissionResetOrderIds);
   const commissionPreviewById = new Map((params.commissionResetPreview ?? []).map((r) => [r.id, r]));
@@ -78,8 +85,20 @@ export function computePaymentIntakeLiveTotals(params: {
   const paymentsUsd = roundMoney2(
     Math.max(0, params.customerPaymentsUsd) + Math.max(0, params.formPaymentUsd),
   );
-  const balanceUsd = roundMoney2(chargesUsd + commissionsUsd - paymentsUsd);
   const balanceResetActive = (params.customerBalanceResetPreview ?? []).length > 0;
+  const ssotDebt =
+    params.customerSignedOpenDebtUsd != null && Number.isFinite(params.customerSignedOpenDebtUsd)
+      ? roundMoney2(Math.max(0, params.customerSignedOpenDebtUsd))
+      : null;
+  const applyUsd =
+    params.customerApplyPaymentUsd != null && Number.isFinite(params.customerApplyPaymentUsd)
+      ? roundMoney2(params.customerApplyPaymentUsd)
+      : roundMoney2(Math.max(0, params.formPaymentUsd));
+  const balanceUsd = balanceResetActive
+    ? 0
+    : ssotDebt != null
+      ? roundMoney2(ssotDebt - applyUsd)
+      : roundMoney2(chargesUsd + commissionsUsd - paymentsUsd);
   const hasDebt = balanceResetActive ? false : balanceUsd > EPS;
   const hasCredit = balanceResetActive ? false : balanceUsd < -EPS;
   const balanceLabel = balanceResetActive ? "מאוזן" : hasCredit ? "יתרת זכות ללקוח" : hasDebt ? "חוב פתוח" : "מאוזן";

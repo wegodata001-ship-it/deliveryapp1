@@ -33,7 +33,7 @@ export type PaymentIntakePlanningViews = {
   methodViews: IntakeMethodView[];
   /** Summary for the PMC summary cards */
   methodViewSummary: MethodViewSummary;
-  /** «נשאר לתשלום» — סכום יתרות הזמנה (זהה למסך קליטה) */
+  /** «נשאר לתשלום» ברמת הזמנה — סכום יתרות שורות (הקצאה). לתצוגת חוב לקוח — paymentIntakeCustomerOpenDebtUsd. */
   orderRemainingToPayUsd: number;
   /** Full order business model — consumed by the main intake table */
   orderViews: IntakeOrderView[];

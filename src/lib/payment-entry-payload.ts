@@ -14,6 +14,8 @@ export type PaymentEntryPayload = {
   id: string;
   paymentCode: string | null;
   paymentNumber: number | null;
+  /** שבוע קליטה/עבודה (AH-N) — נפרד מתאריך התשלום */
+  weekCode: string | null;
   paymentDateYmd: string;
   paymentTimeHm: string;
   dollarRate: string | null;
@@ -68,6 +70,7 @@ function transformPaymentEntryRow(row: {
   id: string;
   paymentCode: string | null;
   paymentNumber: number | null;
+  weekCode: string | null;
   paymentDate: Date | null;
   exchangeRate: { toString(): string } | null;
   commissionPercent: { toString(): string } | null;
@@ -110,6 +113,7 @@ function transformPaymentEntryRow(row: {
       id: row.id,
       paymentCode: row.paymentCode ?? null,
       paymentNumber: row.paymentNumber ?? null,
+      weekCode: row.weekCode?.trim() || null,
       paymentDateYmd: formatLocalYmd(paymentDate),
       paymentTimeHm: formatLocalHm(paymentDate),
       dollarRate: Number(row.exchangeRate ?? 0) > 0 ? Number(row.exchangeRate).toFixed(4) : null,
@@ -136,6 +140,7 @@ const paymentEntrySelect = {
   id: true,
   paymentCode: true,
   paymentNumber: true,
+  weekCode: true,
   paymentDate: true,
   exchangeRate: true,
   commissionPercent: true,

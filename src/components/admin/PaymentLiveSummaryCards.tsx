@@ -24,13 +24,15 @@ import { formatIlsDisplay, formatUsdDisplay, formatUsdPlain } from "@/lib/money-
 
 type Props = {
   kpis: LivePaymentFormKpis;
-  /** סה״כ יתרות פתוחות על הזמנות (DB) — כרטיס «חוב פתוח» */
+  /** סה״כ יתרות פתוחות על הזמנות (DB) — legacy; לתצוגת חוב לקוח השתמשו ב-openDebtUsd */
   openDebtUsd?: number;
   onOpenDebtClick?: () => void;
   /**
    * כרטיס יתרה — derivePaymentBalanceDisplay ממקור האמת של המסך.
    */
   paymentBalanceDisplay?: PaymentBalanceDisplay | null;
+  /** תשלום קיים ללא שינוי — מצב היסטוריה, ללא KPI «נשאר לתשלום» */
+  historicalPaymentView?: boolean;
   /** Part 3 — שורות התשלום הנוכחיות, לצורך Drill-down */
   lines?: PaymentLine[];
   rate?: number;
@@ -105,6 +107,7 @@ export function PaymentLiveSummaryCards({
   openDebtUsd = 0,
   onOpenDebtClick,
   paymentBalanceDisplay = null,
+  historicalPaymentView = false,
   lines,
   rate = 0,
 }: Props) {
@@ -112,7 +115,9 @@ export function PaymentLiveSummaryCards({
   const methodCards = LIVE_PAYMENT_KPI_CARDS.filter((c) => !c.isTotal);
   const canDrill = Array.isArray(lines) && lines.length > 0;
   const showBalanceCard =
-    paymentBalanceDisplay != null && Number.isFinite(paymentBalanceDisplay.displayUsd);
+    !historicalPaymentView &&
+    paymentBalanceDisplay != null &&
+    Number.isFinite(paymentBalanceDisplay.displayUsd);
 
   const [drill, setDrill] = useState<{ title: string; method: PaymentLineMethod | null } | null>(
     null,
@@ -126,7 +131,9 @@ export function PaymentLiveSummaryCards({
   return (
     <div className="payment-modal-live-kpis-wrap" dir="rtl">
       <div className="payment-modal-live-total-banner" role="status" aria-live="polite">
-        <span className="payment-modal-live-total-banner__lbl">סה״כ תשלום נוכחי</span>
+        <span className="payment-modal-live-total-banner__lbl">
+          {historicalPaymentView ? "סה״כ תשלום שמור" : "סה״כ תשלום נוכחי"}
+        </span>
         <AnimatedMoneyValue
           className="payment-modal-live-total-banner__usd"
           dir="ltr"

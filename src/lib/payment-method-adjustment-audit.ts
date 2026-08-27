@@ -13,7 +13,16 @@ export type PaymentMethodAutoAdjustedAuditMetadata = {
   createdAtIso: string;
   fromPaymentMethod: string;
   toPaymentMethod: string;
+  sourceCurrency?: string | null;
+  targetCurrency?: string | null;
+  amountOriginalCurrency?: string | null;
   amountUsd: string;
+  exchangeRate?: string | null;
+  beforeSourceBalance?: string | null;
+  afterSourceBalance?: string | null;
+  beforeTargetBalance?: string | null;
+  afterTargetBalance?: string | null;
+  capturedTotalUsd?: string | null;
   reasonCode: PaymentMethodAdjustmentReasonCode;
   reasonText: string;
   affectedOrders: Array<{

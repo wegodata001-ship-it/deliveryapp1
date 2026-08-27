@@ -649,7 +649,7 @@ export function CustomerBalancesClient({
     }
   }
 
-  const colCount = 8;
+  const colCount = 9;
   const stats = payload?.stats;
 
   const heroActions = (
@@ -981,13 +981,19 @@ export function CustomerBalancesClient({
           <article className="adm-balances-fcc-kpi__card adm-balances-fcc-kpi__card--before-commission">
             <span className="adm-balances-fcc-kpi__label">סה״כ לפני עמלה</span>
             <strong className="adm-balances-fcc-kpi__value" dir="ltr">
-              {usdStatDisplay(stats.totalLifetimeOrdersUsd)}
+              {usdStatDisplay(stats.totalOrdersBeforeCommissionUsd)}
             </strong>
           </article>
           <article className="adm-balances-fcc-kpi__card adm-balances-fcc-kpi__card--after-commission">
             <span className="adm-balances-fcc-kpi__label">סה״כ אחרי עמלה</span>
             <strong className="adm-balances-fcc-kpi__value" dir="ltr">
               {usdStatDisplay(stats.totalOrdersAfterCommissionUsd)}
+            </strong>
+          </article>
+          <article className="adm-balances-fcc-kpi__card adm-balances-fcc-kpi__card--code-withdrawal">
+            <span className="adm-balances-fcc-kpi__label">סה״כ משיכה מקוד</span>
+            <strong className="adm-balances-fcc-kpi__value" dir="ltr">
+              {usdStatDisplay(stats.totalCodeWithdrawalUsd)}
             </strong>
           </article>
           <article className="adm-balances-fcc-kpi__card adm-balances-fcc-kpi__card--payments">
@@ -1060,6 +1066,7 @@ export function CustomerBalancesClient({
                 <th className="adm-balances-th-name">שם לקוח</th>
                 <th className="adm-balances-th-num adm-balances-th-num--before">לפני עמלה ($)</th>
                 <th className="adm-balances-th-num adm-balances-th-num--including">אחרי עמלה ($)</th>
+                <th className="adm-balances-th-num adm-balances-th-num--withdrawal">משיכה מקוד ($)</th>
                 <th className="adm-balances-th-num adm-balances-th-num--payments">תשלומים ($)</th>
                 <th className="adm-balances-th-num adm-balances-th-num--balance">יתרה נוכחית ($)</th>
                 <th className="adm-balances-th-status">מצב חשבון</th>
@@ -1104,6 +1111,9 @@ export function CustomerBalancesClient({
                       </td>
                       <td className="adm-balances-td-num adm-balances-td-num--including" dir="ltr">
                         {formatUsdDisplay(ordersUsd.includingUsd)}
+                      </td>
+                      <td className="adm-balances-td-num adm-balances-td-num--withdrawal" dir="ltr">
+                        {formatUsdDisplay(ordersUsd.withdrawalUsd)}
                       </td>
                       <td className="adm-balances-td-num adm-balances-td-num--payments" dir="ltr">
                         {moneyUsdCell(r.totalPaymentsUSD)}

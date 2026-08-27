@@ -9,7 +9,10 @@ export function defaultPaymentIntakeWeekCode(fromCurrentWeek: string = DEFAULT_W
   return goToPrevWeek(fromCurrentWeek) ?? fromCurrentWeek;
 }
 
-/** תאריך תשלום ברירת מחדל — סוף שבוע AH שנסגר (יום שבת). */
+/**
+ * @deprecated השתמש ב-`defaultOrderSourceDateYmdForIntakeWeek` לתאריך הזמנות,
+ * וב-`formatLocalYmd(new Date())` לתאריך ביצוע תשלום.
+ */
 export function defaultPaymentIntakeDateYmd(forWeekCode?: string): string {
   const week = forWeekCode?.trim() || defaultPaymentIntakeWeekCode();
   const to = getAhWeekRange(week)?.to;

@@ -2,8 +2,8 @@ import type { Prisma } from "@prisma/client";
 import { endOfLocalDay, getAhWeekRange, normalizeAhWeekCode } from "@/lib/work-week";
 
 /**
- * תנאי Prisma לקליטת תשלום: הזמנות עם orderDate עד סוף שבוע AH (שבת כולל),
- * כולל שבועות קודמים. הזמנות ללא תאריך נשארות בתוצאה (לא לנעול חוב בשקט).
+ * תנאי Prisma לקליטת תשלום: הזמנות עם orderDate עד סוף שבוע מקור AH (שבת כולל),
+ * כולל שבועות קודמים. weekCodeRaw = שבוע מקור ההזמנות (לא שבוע הקליטה).
  */
 export function paymentIntakeOrderDateThroughAhWeekEnd(
   weekCodeRaw: string | null | undefined,

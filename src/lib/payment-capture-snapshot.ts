@@ -45,6 +45,8 @@ export type PaymentCaptureSnapshot = {
   paymentDateYmd: string;
   paymentTimeHm: string;
   weekDraft: string;
+  /** תאריך מקור ההזמנות (שבת שבוע מקור) */
+  orderSourceDateYmd?: string;
   dollarRate: string;
   commissionPercentStr: string;
   payments: PaymentLine[];

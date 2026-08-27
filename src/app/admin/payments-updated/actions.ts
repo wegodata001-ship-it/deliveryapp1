@@ -101,6 +101,9 @@ import {
   planCommissionSurplusAbsorption,
   planBalanceResetToZero,
 } from "@/lib/commission-debt-closure";
+import { applyCommissionPoolDebtClosureInTx } from "@/lib/commission-pool-closure";
+import { getCustomerCommissionBalanceUsd } from "@/lib/customer-commission-balance";
+import { computeCommissionResetPreviewNumbers } from "@/lib/customer-commission-reset-preview";
 
 type FlatCheckInsert = { checkNumber: string; dueDate: Date; amount: Prisma.Decimal };
 
@@ -1599,7 +1602,7 @@ export async function savePaymentUpdatedAction(
       }
 
       if (commissionResetOrdersPrefetch.length > 0) {
-        const resetUpdates: Prisma.PrismaPromise<unknown>[] = [];
+        const closedCommissionResetIds: string[] = [];
 
         for (const o of commissionResetOrdersPrefetch) {
           const deal = o.amountUsd ?? new Prisma.Decimal(0);
@@ -1614,50 +1617,29 @@ export async function savePaymentUpdatedAction(
             paidUsd: paid,
           });
 
-          resetUpdates.push(
-            tx.order.update({
-              where: { id: o.id },
-              data: {
-                commissionUsd: plan.afterCommissionUsd,
-                totalUsd: plan.afterTotalUsd,
-                status: OS.COMPLETED,
-              },
-            }),
-          );
-
-          pendingAudits.push({
+          const closure = await applyCommissionPoolDebtClosureInTx(tx, {
+            customerId: cid,
+            orderId: o.id,
+            orderNumber: o.orderNumber,
+            resetUsd: plan.remainingUsd,
             userId: me.id,
-            actionType: "ORDER_COMMISSION_RESET",
-            entityType: "Order",
-            entityId: o.id,
-            oldValue: {
-              commissionUsd: plan.beforeCommissionUsd.toString(),
-              totalUsd: plan.beforeTotalUsd.toString(),
-              paidUsd: paid.toString(),
-              remainingUsd: plan.remainingUsd.toString(),
-            } as Prisma.InputJsonValue,
-            newValue: {
-              commissionUsd: plan.afterCommissionUsd.toString(),
-              totalUsd: plan.afterTotalUsd.toString(),
-              remainingUsd: "0",
-              status: OS.COMPLETED,
-            } as Prisma.InputJsonValue,
-            metadata: {
-              orderNumber: o.orderNumber ?? null,
-              paymentPrimaryCode: primaryCode,
-              ledgerLabel: COMMISSION_DEBT_CLOSURE_LEDGER_LABEL,
-              beforeCommissionUsd: plan.beforeCommissionUsd.toString(),
-              afterCommissionUsd: plan.afterCommissionUsd.toString(),
-              beforeRemainingUsd: plan.remainingUsd.toString(),
-              afterRemainingUsd: "0",
-            } as Prisma.InputJsonValue,
+            paymentCaptureContext: {
+              primaryPaymentCode: primaryCode,
+              paymentNumber: allocated.paymentNumber,
+              payWorkCountry,
+              weekCode,
+              paymentDate,
+              intakeDate,
+              manualDateChanged,
+            },
           });
+          pendingAudits.push(...closure.auditEntries);
+          closedCommissionResetIds.push(o.id);
         }
 
-        if (resetUpdates.length > 0) {
-          await Promise.all(resetUpdates);
+        if (closedCommissionResetIds.length > 0) {
           await closePaymentPlansForOrdersInTx(tx, {
-            orderIds: commissionResetOrdersPrefetch.map((o) => o.id),
+            orderIds: closedCommissionResetIds,
             closureType: "BALANCE_RESET",
             userId: me.id,
             weekCode,
@@ -1689,6 +1671,11 @@ export async function savePaymentUpdatedAction(
           paymentCaptureContext: {
             primaryPaymentCode: primaryCode,
             paymentNumber: allocated.paymentNumber,
+            payWorkCountry,
+            weekCode,
+            paymentDate,
+            intakeDate,
+            manualDateChanged,
           },
         });
         balanceResetAudits = resetResult.auditEntries;
@@ -2268,6 +2255,11 @@ async function applyCustomerOutstandingBalanceResetInTx(
     paymentCaptureContext?: {
       primaryPaymentCode: string;
       paymentNumber: number;
+      payWorkCountry?: string | null;
+      weekCode?: string | null;
+      paymentDate?: Date;
+      intakeDate?: Date;
+      manualDateChanged?: boolean;
     };
   },
 ): Promise<{
@@ -2383,11 +2375,65 @@ async function applyCustomerOutstandingBalanceResetInTx(
 
   if (
     params.allowNegativeCommission === false &&
-    orderResets.some((row) => Number(row.plan.afterCommissionUsd) < -BALANCE_RESET_TOLERANCE_USD)
+    orderResets.some((row) => row.calc.adjustmentType === "SHORTFALL")
   ) {
-    throw new Error(
-      "אין מספיק עמלות לסגירת החוב. נדרש אישור נפרד ליצירת עמלה שלילית.",
+    const shortfallTotal = roundMoney2(
+      orderResets
+        .filter((row) => row.calc.adjustmentType === "SHORTFALL")
+        .reduce((acc, row) => acc + Math.abs(row.calc.balanceBeforeUsd), 0),
     );
+    if (shortfallTotal > BALANCE_RESET_TOLERANCE_USD) {
+      const commissionBal = await getCustomerCommissionBalanceUsd(cid);
+      const after = computeCommissionResetPreviewNumbers(shortfallTotal, commissionBal).commissionAfterUsd;
+      if (after < -BALANCE_RESET_TOLERANCE_USD) {
+        throw new Error(
+          "אין מספיק עמלות לסגירת החוב. נדרש אישור נפרד ליצירת עמלה שלילית.",
+        );
+      }
+    }
+  }
+
+  const captureCtx = params.paymentCaptureContext;
+  let poolClosureCtx =
+    captureCtx?.paymentDate && captureCtx?.intakeDate
+      ? {
+          primaryPaymentCode: captureCtx.primaryPaymentCode,
+          paymentNumber: captureCtx.paymentNumber,
+          payWorkCountry: captureCtx.payWorkCountry ?? DEFAULT_WORK_COUNTRY,
+          weekCode: captureCtx.weekCode ?? weekCode,
+          paymentDate: captureCtx.paymentDate,
+          intakeDate: captureCtx.intakeDate,
+          manualDateChanged: captureCtx.manualDateChanged ?? false,
+        }
+      : undefined;
+
+  if (!poolClosureCtx && captureCtx?.paymentNumber) {
+    const capPay = await tx.payment.findFirst({
+      where: {
+        customerId: cid,
+        paymentNumber: captureCtx.paymentNumber,
+        status: PAYMENT_RECORD_STATUS_ACTIVE,
+      },
+      orderBy: { createdAt: "asc" },
+      select: {
+        paymentDate: true,
+        intakeDate: true,
+        weekCode: true,
+        countryCode: true,
+        manualDateChanged: true,
+      },
+    });
+    if (capPay?.paymentDate) {
+      poolClosureCtx = {
+        primaryPaymentCode: captureCtx.primaryPaymentCode,
+        paymentNumber: captureCtx.paymentNumber,
+        payWorkCountry: normalizeWorkCountryCode(capPay.countryCode) ?? DEFAULT_WORK_COUNTRY,
+        weekCode: capPay.weekCode ?? weekCode,
+        paymentDate: capPay.paymentDate,
+        intakeDate: capPay.intakeDate ?? capPay.paymentDate,
+        manualDateChanged: capPay.manualDateChanged ?? false,
+      };
+    }
   }
 
   const totalRemaining = orderResets.reduce(
@@ -2395,18 +2441,95 @@ async function applyCustomerOutstandingBalanceResetInTx(
     new Prisma.Decimal(0),
   );
 
-  await Promise.all(
-    orderResets.map((row) =>
-      tx.order.update({
-        where: { id: row.orderId },
-        data: {
-          commissionUsd: row.plan.afterCommissionUsd,
-          totalUsd: row.plan.afterTotalUsd,
-          status: OS.COMPLETED,
-        },
-      }),
-    ),
-  );
+  const performedAt = new Date().toISOString();
+  const auditEntries: Prisma.AuditLogCreateManyInput[] = [];
+
+  for (const row of orderResets) {
+    if (
+      row.calc.adjustmentType === "SHORTFALL" &&
+      row.calc.differenceUsd < -BALANCE_RESET_TOLERANCE_USD
+    ) {
+      const resetUsd = new Prisma.Decimal(Math.abs(row.calc.balanceBeforeUsd).toFixed(4));
+      const closure = await applyCommissionPoolDebtClosureInTx(tx, {
+        customerId: cid,
+        orderId: row.orderId,
+        orderNumber: row.orderNumber,
+        resetUsd,
+        userId: params.userId,
+        paymentCaptureContext: poolClosureCtx,
+      });
+      auditEntries.push(...closure.auditEntries);
+      continue;
+    }
+
+    if (
+      row.calc.adjustmentType === "OVERPAYMENT" &&
+      row.calc.differenceUsd > BALANCE_RESET_TOLERANCE_USD
+    ) {
+      const overUsd = new Prisma.Decimal(row.calc.differenceUsd.toFixed(4));
+      let capturePaymentId: string | null = null;
+      if (captureCtx?.paymentNumber) {
+        const cap = await tx.payment.findFirst({
+          where: {
+            customerId: cid,
+            paymentNumber: captureCtx.paymentNumber,
+            status: PAYMENT_RECORD_STATUS_ACTIVE,
+          },
+          orderBy: { createdAt: "asc" },
+          select: { id: true },
+        });
+        capturePaymentId = cap?.id ?? null;
+      }
+      const feeRow = await tx.paymentAdjustmentFee.create({
+        data: buildPaymentAdjustmentFeeCreateData({
+          customerId: cid,
+          orderId: row.orderId,
+          paymentId: capturePaymentId,
+          paymentCaptureCode: captureCtx?.primaryPaymentCode ?? null,
+          sourceDocumentCode: row.orderNumber,
+          paymentMethod: null,
+          amountUsd: overUsd,
+          reason: "MANUAL_ADJUST",
+          status: "OPEN",
+          notes: [
+            balanceResetLedgerLabel(row.calc.adjustmentType),
+            `עודף: $${overUsd.toFixed(2)}`,
+            captureCtx?.primaryPaymentCode ? `קשור לקליטה ${captureCtx.primaryPaymentCode}` : null,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+          userChoice: "commission",
+          createdById: params.userId,
+        }),
+      });
+      auditEntries.push({
+        userId: params.userId,
+        actionType: "PAYMENT_SURPLUS_TO_COMMISSION",
+        entityType: "PaymentAdjustmentFee",
+        entityId: feeRow.id,
+        oldValue: Prisma.JsonNull,
+        newValue: {
+          amountUsd: overUsd.toFixed(2),
+          orderId: row.orderId,
+          status: "OPEN",
+        } as Prisma.InputJsonValue,
+        metadata: {
+          customerId: cid,
+          orderNumber: row.orderNumber ?? null,
+          paymentCaptureCode: captureCtx?.primaryPaymentCode ?? null,
+          paymentId: capturePaymentId,
+          ledgerLabel: balanceResetLedgerLabel(row.calc.adjustmentType),
+          movementType: "BALANCE_RESET_OVERPAYMENT_TO_COMMISSION",
+          orderAmountUnchanged: true,
+        } as Prisma.InputJsonValue,
+      });
+    }
+
+    await tx.order.update({
+      where: { id: row.orderId },
+      data: { status: OS.COMPLETED },
+    });
+  }
 
   const closedIds = orderResets.map((x) => x.orderId);
   await closePaymentPlansForOrdersInTx(tx, {
@@ -2416,71 +2539,6 @@ async function applyCustomerOutstandingBalanceResetInTx(
     weekCode: params.weekCode,
     reason: "איפוס יתרה",
   });
-
-  let capturePaymentId: string | null = null;
-  if (params.paymentCaptureContext?.paymentNumber) {
-    const cap = await tx.payment.findFirst({
-      where: {
-        customerId: cid,
-        paymentNumber: params.paymentCaptureContext.paymentNumber,
-        status: PAYMENT_RECORD_STATUS_ACTIVE,
-      },
-      orderBy: { createdAt: "asc" },
-      select: { id: true },
-    });
-    capturePaymentId = cap?.id ?? null;
-  }
-
-  const performedAt = new Date().toISOString();
-  const auditEntries: Prisma.AuditLogCreateManyInput[] = [];
-
-  for (const row of orderResets) {
-    if (row.calc.adjustmentType !== "SHORTFALL" || row.calc.differenceUsd >= -BALANCE_RESET_TOLERANCE_USD) {
-      continue;
-    }
-    const feeUsd = row.calc.differenceUsd;
-    const resetUsd = Math.abs(row.calc.balanceBeforeUsd);
-    const feeRow = await tx.paymentAdjustmentFee.create({
-      data: buildPaymentAdjustmentFeeCreateData({
-        customerId: cid,
-        orderId: row.orderId,
-        paymentId: capturePaymentId,
-        paymentCaptureCode: params.paymentCaptureContext?.primaryPaymentCode ?? null,
-        sourceDocumentCode: row.orderNumber,
-        paymentMethod: null,
-        amountUsd: new Prisma.Decimal(feeUsd.toFixed(4)),
-        reason: "MANUAL_ADJUST",
-        status: "OPEN",
-        notes: buildBalanceResetFeeNotes({
-          debtBeforeUsd: row.calc.balanceBeforeUsd,
-          paidUsd: Number(row.paidUsd),
-          resetUsd,
-          feeUsd,
-        }),
-        userChoice: "fee_adjustment_negative",
-        createdById: params.userId,
-      }),
-    });
-    auditEntries.push({
-      userId: params.userId,
-      actionType: "PAYMENT_FEE_ADJUSTMENT",
-      entityType: "PaymentAdjustmentFee",
-      entityId: feeRow.id,
-      oldValue: Prisma.JsonNull,
-      newValue: {
-        amountUsd: feeUsd.toFixed(2),
-        orderId: row.orderId,
-        status: "OPEN",
-      } as Prisma.InputJsonValue,
-      metadata: {
-        customerId: cid,
-        orderNumber: row.orderNumber ?? null,
-        paymentCaptureCode: params.paymentCaptureContext?.primaryPaymentCode ?? null,
-        paymentId: capturePaymentId,
-        ledgerLabel: balanceResetLedgerLabel(row.calc.adjustmentType),
-      } as Prisma.InputJsonValue,
-    });
-  }
 
   for (const row of orderResets) {
     const payload = buildOrderBalanceResetAuditPayload({
@@ -2509,8 +2567,8 @@ async function applyCustomerOutstandingBalanceResetInTx(
       } as Prisma.InputJsonValue,
       newValue: {
         amountUsd: row.amountUsd.toString(),
-        commissionUsd: row.plan.afterCommissionUsd.toString(),
-        totalUsd: row.plan.afterTotalUsd.toString(),
+        commissionUsd: row.commissionBeforeUsd.toString(),
+        totalUsd: row.totalBeforeUsd.toString(),
         status: OS.COMPLETED,
         remainingUsd: "0",
       } as Prisma.InputJsonValue,
@@ -2520,6 +2578,13 @@ async function applyCustomerOutstandingBalanceResetInTx(
         ledgerLabel: balanceResetLedgerLabel(row.calc.adjustmentType),
         performedBy: params.userId,
         performedAt,
+        orderAmountUnchanged: true,
+        commissionPoolMovementUsd:
+          row.calc.adjustmentType === "SHORTFALL"
+            ? (-Math.abs(row.calc.balanceBeforeUsd)).toFixed(2)
+            : row.calc.adjustmentType === "OVERPAYMENT"
+              ? row.calc.differenceUsd.toFixed(2)
+              : "0.00",
       } as Prisma.InputJsonValue,
     });
   }
@@ -2568,8 +2633,8 @@ async function applyCustomerOutstandingBalanceResetInTx(
     closedOrderIds: closedIds,
     affectedOrderUpdates: orderResets.map((x) => ({
       orderId: x.orderId,
-      newCommissionUsd: x.plan.afterCommissionUsd.toFixed(2),
-      newTotalUsd: x.plan.afterTotalUsd.toFixed(2),
+      newCommissionUsd: x.commissionBeforeUsd.toFixed(2),
+      newTotalUsd: x.totalBeforeUsd.toFixed(2),
     })),
     auditEntries,
   };

@@ -50,7 +50,6 @@ function sampleOrder(
     ],
     actualMethods: [],
     hasMethodDeviation: false,
-    isPriorWeekOpenDebt: false,
     ...rest,
   };
 }

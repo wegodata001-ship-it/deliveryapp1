@@ -54,18 +54,7 @@ function StatCard({
 
 export function CustomerBalancesInsightsBar({ stats, rows, totalRows, totalPages, expanded }: Props) {
   const paginated = totalPages > 1;
-  const splitTotals = useMemo(() => {
-    const page = sumOrdersUsdSplit(rows);
-    const globalIncluding = parseMoneyStringOrZero(stats.totalOrdersAfterCommissionUsd);
-    if (!paginated || page.includingUsd <= 0.01) return page;
-    const beforeShare = page.beforeUsd / page.includingUsd;
-    const commissionShare = page.commissionUsd / page.includingUsd;
-    return {
-      beforeUsd: globalIncluding * beforeShare,
-      commissionUsd: globalIncluding * commissionShare,
-      includingUsd: globalIncluding,
-    };
-  }, [rows, stats.totalOrdersAfterCommissionUsd, paginated]);
+  const splitTotals = useMemo(() => sumOrdersUsdSplit(rows), [rows]);
 
   if (!expanded) return null;
 
@@ -97,8 +86,9 @@ export function CustomerBalancesInsightsBar({ stats, rows, totalRows, totalPages
           dir="rtl"
         />
         <StatCard variant="payments" label="תשלומים" value={usd(stats.totalPaymentsUsd)} />
-        <StatCard variant="before-commission" label="לפני עמלה" value={usdAmount(splitTotals.beforeUsd)} />
+        <StatCard variant="before-commission" label="לפני עמלה" value={usd(stats.totalOrdersBeforeCommissionUsd)} />
         <StatCard variant="after-commission" label="אחרי עמלה" value={usd(stats.totalOrdersAfterCommissionUsd)} />
+        <StatCard variant="commissions" label="משיכה מקוד" value={usd(stats.totalCodeWithdrawalUsd)} />
         <StatCard variant="commissions" label="עמלות" value={usdAmount(splitTotals.commissionUsd)} />
       </div>
     </div>

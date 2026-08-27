@@ -1,10 +1,10 @@
 import type { CustomerLedgerPayload, CustomerLedgerRow } from "@/app/admin/capture/actions";
 import { parseBalanceAmountString } from "@/lib/customer-balance";
 import {
-  ledgerPaymentMethodDisplayLines,
+  ledgerPaymentExpandLines,
   shouldShowLedgerPaymentMethodSubrows,
 } from "@/lib/ledger-payment-detail";
-import { formatLedgerAmountDisplay } from "@/lib/ledger-payment-display";
+import { formatLedgerPaymentTotalUsd } from "@/lib/ledger-payment-display";
 import { openPdfPreview } from "@/lib/pdf-preview";
 import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
 import { formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate } from "@/lib/work-week";
@@ -87,17 +87,14 @@ function formatChargeCell(row: CustomerLedgerRow): string {
   return n > 0 ? fmtUsd(row.chargeUsd) : "—";
 }
 
-function formatPaymentCell(row: CustomerLedgerRow, includePaymentDetails: boolean): string {
+function formatPaymentCell(row: CustomerLedgerRow): string {
   if (row.kind === "OPENING_BALANCE" || row.isOrderUpdated) return "—";
   if (row.isCommissionDebtClosure) {
     return `יתרת עמלה: ${fmtUsd(row.commissionAfterUsd ?? "0")}`;
   }
   const n = parseMoneyStringOrZero(row.paymentUsd);
   if (n <= 0) return "—";
-  if (includePaymentDetails && row.paymentDetail) {
-    return formatLedgerAmountDisplay(row.paymentDetail.totalIls, row.paymentDetail.totalUsd).singleLine;
-  }
-  return fmtUsd(row.paymentUsd);
+  return formatLedgerPaymentTotalUsd(row.paymentDetail?.totalUsd ?? row.paymentUsd);
 }
 
 function pushPaymentDetailExportRows(out: LedgerExportTableRow[], row: CustomerLedgerRow): void {
@@ -105,13 +102,13 @@ function pushPaymentDetailExportRows(out: LedgerExportTableRow[], row: CustomerL
   if (!detail || row.isPaymentCancelled) return;
   if (!shouldShowLedgerPaymentMethodSubrows(detail)) return;
 
-  for (const line of ledgerPaymentMethodDisplayLines(detail)) {
+  for (const line of ledgerPaymentExpandLines(detail)) {
     out.push({
       dateYmd: "",
       document: "",
       typeLabel: `${line.label}:`,
       chargeUsd: "—",
-      paymentUsd: formatLedgerAmountDisplay(line.amountIls, line.amountUsd).singleLine,
+      paymentUsd: line.display,
       balance: "—",
       isOpening: false,
       isPaymentDetailRow: true,
@@ -122,7 +119,7 @@ function pushPaymentDetailExportRows(out: LedgerExportTableRow[], row: CustomerL
     document: "",
     typeLabel: 'סה"כ תשלום:',
     chargeUsd: "—",
-    paymentUsd: formatLedgerAmountDisplay(detail.totalIls, detail.totalUsd).singleLine,
+    paymentUsd: formatLedgerPaymentTotalUsd(detail.totalUsd),
     balance: "—",
     isOpening: false,
     isPaymentDetailRow: true,
@@ -204,7 +201,7 @@ export function buildLedgerExportTableRows(
       document: r.document,
       typeLabel: r.typeLabel,
       chargeUsd: formatChargeCell(r),
-      paymentUsd: formatPaymentCell(r, includePaymentDetails),
+      paymentUsd: formatPaymentCell(r),
       balance: formatLedgerRunningBalance(r.balanceUsd),
       isOpening: r.kind === "OPENING_BALANCE",
     });
