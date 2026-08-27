@@ -16,27 +16,21 @@ import {
   persistGlobalCountry,
   resolveGlobalCountry,
 } from "@/lib/current-country";
-import { DEFAULT_WEEK_CODE } from "@/lib/work-week";
+import { resolveGlobalWorkWeekScope } from "@/lib/global-work-week";
 import { coerceOrderCountryForForm, type OrderCountryCode } from "@/lib/order-countries";
 import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
 
 type AdminGlobalState = {
   globalWeek: string;
+  /** שבוע מקור לקליטת תשלום / יתרות — prevWeekCode(globalWeek) */
+  sourceWeekCode: string | null;
+  /** שבת שבוע המקור — snapshot ליתרות ותאריך הזמנות בקליטה */
+  sourceSnapshotToYmd: string;
   globalCountry: OrderCountryCode;
   setGlobalCountry: (country: OrderCountryCode) => void;
 };
 
 const Ctx = createContext<AdminGlobalState | null>(null);
-
-function normalizeWeek(raw: string | null | undefined): string | null {
-  const t = (raw || "").trim().toUpperCase();
-  if (!t) return null;
-  const m = /^AH-(\d{1,4})$/.exec(t);
-  if (!m?.[1]) return null;
-  const n = Number(m[1]);
-  if (!Number.isFinite(n) || n <= 0) return null;
-  return `AH-${Math.floor(n)}`;
-}
 
 export function AdminGlobalProvider({ children }: { children: React.ReactNode }) {
   const sp = useSearchParams();
@@ -44,10 +38,14 @@ export function AdminGlobalProvider({ children }: { children: React.ReactNode })
   const router = useRouter();
   const hydratingRef = useRef(false);
 
-  const globalWeek = useMemo(
-    () => normalizeWeek(sp.get("week")) ?? DEFAULT_WEEK_CODE,
+  const globalWeekScope = useMemo(
+    () => resolveGlobalWorkWeekScope(sp.get("week")),
     [sp],
   );
+
+  const globalWeek = globalWeekScope.globalWorkWeek;
+  const sourceWeekCode = globalWeekScope.sourceWeekCode;
+  const sourceSnapshotToYmd = globalWeekScope.sourceSnapshotToYmd;
 
   const urlCountryRaw = sp.get("country");
   const [globalCountry, setGlobalCountryState] = useState<OrderCountryCode>(() =>
@@ -99,10 +97,12 @@ export function AdminGlobalProvider({ children }: { children: React.ReactNode })
   const value = useMemo(
     () => ({
       globalWeek,
+      sourceWeekCode,
+      sourceSnapshotToYmd,
       globalCountry,
       setGlobalCountry,
     }),
-    [globalWeek, globalCountry, setGlobalCountry],
+    [globalWeek, sourceWeekCode, sourceSnapshotToYmd, globalCountry, setGlobalCountry],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
@@ -111,8 +111,11 @@ export function AdminGlobalProvider({ children }: { children: React.ReactNode })
 export function useAdminGlobal(): AdminGlobalState {
   const v = useContext(Ctx);
   if (!v) {
+    const fallback = resolveGlobalWorkWeekScope(null);
     return {
-      globalWeek: DEFAULT_WEEK_CODE,
+      globalWeek: fallback.globalWorkWeek,
+      sourceWeekCode: fallback.sourceWeekCode,
+      sourceSnapshotToYmd: fallback.sourceSnapshotToYmd,
       globalCountry: resolveGlobalCountry(null),
       setGlobalCountry: () => {},
     };

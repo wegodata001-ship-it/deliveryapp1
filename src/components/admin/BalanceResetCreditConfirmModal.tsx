@@ -19,7 +19,9 @@ export function BalanceResetCreditConfirmModal({
 }: Props) {
   if (!open) return null;
 
-  const afterUsd = Math.max(0, creditUsd - requiredUsd);
+  const applyUsd = Math.min(creditUsd, requiredUsd);
+  const remainingToPayUsd = Math.max(0, requiredUsd - applyUsd);
+  const creditAfterUsd = Math.max(0, creditUsd - applyUsd);
 
   return (
     <div className="adm-mini-modal-layer" role="presentation" onClick={onCancel}>
@@ -32,24 +34,34 @@ export function BalanceResetCreditConfirmModal({
         dir="rtl"
       >
         <h2 id="balance-reset-credit-title" className="adm-mini-modal-title">
-          איפוס יתרה מתוך יתרת זכות
+          שימוש ביתרת זכות
         </h2>
         <dl className="adm-balance-reset-credit-stats">
           <div>
-            <dt>ללקוח קיימת יתרת זכות</dt>
+            <dt>יתרת זכות זמינה</dt>
             <dd dir="ltr">{formatUsdDisplay(creditUsd)}</dd>
           </div>
           <div>
-            <dt>נדרש לאפס</dt>
+            <dt>נותר לסגירה לאחר התשלום בטופס</dt>
             <dd dir="ltr">{formatUsdDisplay(requiredUsd)}</dd>
           </div>
+          <div className="adm-balance-reset-credit-stats--apply">
+            <dt>יוחל מיתרת זכות</dt>
+            <dd dir="ltr" className="adm-payment-fee-amt--credit">
+              {formatUsdDisplay(applyUsd)}
+            </dd>
+          </div>
+          <div>
+            <dt>יישאר לתשלום</dt>
+            <dd dir="ltr">{formatUsdDisplay(remainingToPayUsd)}</dd>
+          </div>
           <div className="adm-balance-reset-credit-stats--after">
-            <dt>לאחר האיפוס תישאר יתרת זכות</dt>
-            <dd dir="ltr">{formatUsdDisplay(afterUsd)}</dd>
+            <dt>יתרת זכות אחרי</dt>
+            <dd dir="ltr">{formatUsdDisplay(creditAfterUsd)}</dd>
           </div>
         </dl>
         <p className="adm-muted-keys adm-balance-reset-credit-note">
-          האיפוס יוחל רק בשמירת קליטת התשלום.
+          הקיזוז יוחל בשמירת קליטת התשלום — ללא שינוי סכומי ההזמנה.
         </p>
         <div className="adm-mini-modal-actions">
           <button type="button" className="adm-btn adm-btn--ghost" onClick={onCancel}>

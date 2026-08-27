@@ -20,9 +20,12 @@ export type BalancesWeekScope = {
   rangeToYmd: string;
 };
 
-/** קריאת פילטר שבוע יתרות מ-URL — לא קורא `week` / `to` הגלובליים */
+/** קריאת פילטר שבוע יתרות מ-URL — balancesWeek מקומי, או שבוע גלובלי `week` */
 export function parseBalancesWeekFromSearchParams(sp: URLSearchParams): BalancesWeekScope {
-  const weekRaw = sp.get(BALANCES_WEEK_PARAM)?.trim() || "";
+  const weekRaw =
+    sp.get(BALANCES_WEEK_PARAM)?.trim() ||
+    sp.get("week")?.trim() ||
+    "";
   const weekCode = normalizeAhWeekCode(weekRaw) ?? ACTIVE_WORK_WEEK_CODE;
 
   const toParam = sp.get(BALANCES_TO_PARAM)?.trim() || "";

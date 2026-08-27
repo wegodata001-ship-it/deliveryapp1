@@ -12866,6 +12866,33 @@ select.payment-modal-inline-input {
   font-weight: 900;
 }
 
+.payment-credit-apply-preview {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  font-size: 0.9rem;
+}
+
+.payment-credit-apply-preview > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.payment-credit-apply-preview strong {
+  color: #15803d;
+  font-weight: 800;
+}
+
+.adm-balance-reset-credit-stats--apply dd {
+  color: #15803d;
+  font-weight: 800;
+}
+
 .adm-payment-overage-modal--wide.adm-mini-modal {
   width: min(520px, 94vw);
 }
@@ -12986,6 +13013,13 @@ select.payment-modal-inline-input {
 .commission-movement--debit {
   color: #dc2626;
   font-weight: 700;
+}
+
+.payment-modal-week-context-hint {
+  margin-inline-start: 8px;
+  font-size: 0.74rem;
+  color: #64748b;
+  white-space: nowrap;
 }
 
 .payment-modal-order-source {

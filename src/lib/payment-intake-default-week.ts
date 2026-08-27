@@ -1,12 +1,11 @@
-import { DEFAULT_WEEK_CODE, getAhWeekRange } from "@/lib/work-week";
-import { goToPrevWeek } from "@/lib/weeks/ah-week-nav";
+import { DEFAULT_WEEK_CODE, getAhWeekRange, normalizeAhWeekCode } from "@/lib/work-week";
 
 /**
- * ברירת מחדל לשבוע בקליטת תשלום בלבד:
- * השבוע שסגר (currentWeek - 1), כי תשלומים מתבצעים על השבוע שהסתיים.
+ * ברירת מחדל לשבוע קליטה = שבוע העבודה הגלובלי (לא שבוע המקור).
+ * נתוני ההזמנות נגזרים בנפרד דרך resolveOrderSourceWeekCode / prevWeekCode.
  */
-export function defaultPaymentIntakeWeekCode(fromCurrentWeek: string = DEFAULT_WEEK_CODE): string {
-  return goToPrevWeek(fromCurrentWeek) ?? fromCurrentWeek;
+export function defaultPaymentIntakeWeekCode(fromGlobalWeek: string = DEFAULT_WEEK_CODE): string {
+  return normalizeAhWeekCode(fromGlobalWeek) ?? DEFAULT_WEEK_CODE;
 }
 
 /**

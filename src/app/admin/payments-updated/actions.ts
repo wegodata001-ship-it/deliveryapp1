@@ -38,6 +38,7 @@ import {
   openDebtScopeForWorkCountry,
   persistCustomerBalanceSnapshot,
 } from "@/lib/customer-open-debt";
+import { getCustomerCreditBalanceUsd } from "@/lib/customer-credit-balance";
 import { formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate, parseLocalDateTime } from "@/lib/work-week";
 import {
   calculatePaymentLine,
@@ -1153,8 +1154,8 @@ export async function savePaymentUpdatedAction(
   let balanceResetAudits: Prisma.AuditLogCreateManyInput[] = [];
 
   const debtScope = openDebtScopeForWorkCountry(payWorkCountry);
-  const creditBeforeSave = await getCustomerInternalBalanceUsd(cid, debtScope);
-  const creditAvailableUsd = creditBeforeSave.gt(BALANCE_EPS) ? creditBeforeSave : new Prisma.Decimal(0);
+  const creditPoolUsd = await getCustomerCreditBalanceUsd(cid, debtScope);
+  const creditAvailableUsd = new Prisma.Decimal(Math.max(0, creditPoolUsd).toFixed(2));
 
   if (form.applyCustomerBalanceReset && form.applyCustomerBalanceResetFromCredit) {
     return { ok: false, error: "לא ניתן לשלב שני סוגי איפוס יתרה" };

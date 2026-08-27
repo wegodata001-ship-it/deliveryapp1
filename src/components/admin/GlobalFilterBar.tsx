@@ -146,14 +146,18 @@ export function GlobalFilterBar({ financial = null, canManageFinancial = false }
     return [...merged].filter(Boolean).sort((a, b) => {
       const na = Number(a.replace(/^AH-/i, "")) || 0;
       const nb = Number(b.replace(/^AH-/i, "")) || 0;
-      return na - nb;
+      return nb - na;
     });
   }, [weekInput]);
 
   const weekSuggestions = useMemo(() => {
     const q = weekInput.trim().toUpperCase();
-    if (!q) return weekOptions;
-    return weekOptions.filter((w) => w.includes(q));
+    const list = !q ? weekOptions : weekOptions.filter((w) => w.includes(q));
+    return [...list].sort((a, b) => {
+      const na = Number(a.replace(/^AH-/i, "")) || 0;
+      const nb = Number(b.replace(/^AH-/i, "")) || 0;
+      return nb - na;
+    });
   }, [weekInput, weekOptions]);
 
   const apply = useCallback(
@@ -380,7 +384,9 @@ export function GlobalFilterBar({ financial = null, canManageFinancial = false }
                           if (r) applyValues(code, r.from, r.to);
                         }}
                       >
-                        <span className="adm-combo-item-title">{code}</span>
+                        <span className="adm-combo-item-title">
+                          {code === week ? `${code} ✓` : code}
+                        </span>
                       </button>
                     </li>
                   ))

@@ -4,9 +4,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown, LogOut } from "lucide-react";
-import { getActiveWorkWeekRange } from "@/lib/active-work-week";
 import { BALANCES_TO_PARAM, BALANCES_WEEK_PARAM } from "@/lib/balances-week-filter";
-import { balancesSnapshotToYmd } from "@/lib/work-week";
+import { resolveGlobalWorkWeekScope } from "@/lib/global-work-week";
+import { balancesSnapshotToYmd, getAhWeekRange } from "@/lib/work-week";
 import { useHydratedSearchParams } from "@/lib/use-hydrated-search-params";
 import type { NavGroupDef, NavIconId, NavItemDef } from "@/lib/sidebar-nav";
 import { navGroupIdForPathname } from "@/lib/sidebar-nav";
@@ -105,25 +105,32 @@ const ORDERS_LIST_KEYS = [
 
 const ACTIVE_WEEK_NAV_PATHS = new Set(["/admin/orders", "/admin/balances"]);
 
-function applyActiveWorkWeekToParams(out: URLSearchParams, pathname: string, globalSp: URLSearchParams): void {
-  const active = getActiveWorkWeekRange();
+function applyGlobalWorkWeekToScopedParams(
+  out: URLSearchParams,
+  pathname: string,
+  globalSp: URLSearchParams,
+): void {
+  const globalScope = resolveGlobalWorkWeekScope(globalSp.get("week"));
+  const { globalWorkWeek, fromYmd, toYmd } = globalScope;
+  const range = getAhWeekRange(globalWorkWeek);
+
+  for (const key of ["week", "from", "to"] as const) {
+    if (key === "week") out.set(key, globalWorkWeek);
+    else if (key === "from") out.set(key, fromYmd || range?.from || "");
+    else out.set(key, toYmd || range?.to || "");
+  }
+
   if (pathname === "/admin/balances") {
-    for (const key of ["week", "from", "to"] as const) {
-      const v = globalSp.get(key);
-      if (v) out.set(key, v);
-    }
-    out.set(BALANCES_WEEK_PARAM, active.weekCode);
-    out.set(BALANCES_TO_PARAM, balancesSnapshotToYmd(active.weekCode));
+    out.set(BALANCES_WEEK_PARAM, globalWorkWeek);
+    out.set(BALANCES_TO_PARAM, balancesSnapshotToYmd(globalWorkWeek));
     out.delete("upto");
     return;
   }
-  out.set("week", active.weekCode);
-  out.set("from", active.fromYmd);
-  out.set("to", active.toYmd);
+
   if (pathname === "/admin/orders") {
-    out.set("ordersWeek", active.weekCode);
-    out.set("ordersFrom", active.fromYmd);
-    out.set("ordersTo", active.toYmd);
+    out.set("ordersWeek", globalWorkWeek);
+    out.set("ordersFrom", fromYmd || range?.from || "");
+    out.set("ordersTo", toYmd || range?.to || "");
     out.delete("ordersPreset");
     out.delete("preset");
   }
@@ -158,7 +165,7 @@ function resolveNavHref(item: NavItemDef, sp: URLSearchParams, pathname: string)
         : u.pathname;
     const out = new URLSearchParams(u.search);
     if (ACTIVE_WEEK_NAV_PATHS.has(u.pathname)) {
-      applyActiveWorkWeekToParams(out, u.pathname, sp);
+      applyGlobalWorkWeekToScopedParams(out, u.pathname, sp);
       out.set("country", resolveGlobalCountry(sp.get("country")));
     } else {
       for (const [k, v] of globals.entries()) out.set(k, v);

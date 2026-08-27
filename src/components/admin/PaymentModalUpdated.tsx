@@ -150,8 +150,7 @@ import {
   parseLocalDate,
 } from "@/lib/work-week";
 import { AhWeekNavNextButton, AhWeekNavPrevButton } from "@/components/admin/AhWeekNavButtons";
-import { isActiveWorkWeekCode } from "@/lib/active-work-week";
-import { goToNextWeekNumber, goToPrevWeekNumber } from "@/lib/weeks/ah-week-nav";
+import { getNextAhWeek, getPrevAhWeek } from "@/lib/weeks/ah-week";
 import {
   defaultPaymentIntakeWeekCode,
 } from "@/lib/payment-intake-default-week";
@@ -173,6 +172,7 @@ import { PaymentLineDualCard } from "@/components/admin/PaymentLineDualCard";
 import { validatePaymentCheckLines } from "@/lib/payment-checks";
 import { formatCommissionPercentValue, parseCommissionPercentString } from "@/lib/commission-percent";
 import {
+  applyCustomerCreditToOpenOrdersAction,
   applyPaymentSurplusDispositionAction,
   resetCustomerOutstandingBalancesAction,
   savePaymentUpdatedAction,
@@ -514,7 +514,7 @@ export function PaymentModalUpdated({
   canCreateOrders = true,
   viewerIsAdmin = false,
 }: Props) {
-  const { globalWeek, globalCountry } = useAdminGlobal();
+  const { globalWeek, sourceWeekCode, globalCountry } = useAdminGlobal();
   const [financeLive, setFinanceLive] = useState<SerializedFinancial | null>(null);
   const financeEffective = financeLive ?? financial;
 
@@ -583,13 +583,13 @@ export function PaymentModalUpdated({
   const [paymentDateYmd, setPaymentDateYmd] = useState(() => formatLocalYmd(new Date()));
   /** תאריך מקור ההזמנות (שבת שבוע מקור) — נפרד מתאריך ביצוע התשלום */
   const [orderSourceDateYmd, setOrderSourceDateYmd] = useState(() =>
-    defaultOrderSourceDateYmdForIntakeWeek(defaultPaymentIntakeWeekCode()),
+    defaultOrderSourceDateYmdForIntakeWeek(globalWeek),
   );
   const [editingOrderSourceDate, setEditingOrderSourceDate] = useState(false);
   /** תאריך ביצוע קליטת תשלום — לבקרת קופה בלבד (ברירת מחדל: היום) */
   const [intakeDateYmd, setIntakeDateYmd] = useState(() => formatLocalYmd(new Date()));
   const [paymentTimeHm, setPaymentTimeHm] = useState(() => formatLocalHm(new Date()));
-  const [weekDraft, setWeekDraft] = useState(() => defaultPaymentIntakeWeekCode());
+  const [weekDraft, setWeekDraft] = useState(() => defaultPaymentIntakeWeekCode(globalWeek));
   const [weekInputErr, setWeekInputErr] = useState<string | null>(null);
 
   const dollarRateTouchedRef = useRef(false);
@@ -1088,6 +1088,26 @@ export function PaymentModalUpdated({
     [displayCreditBalanceUsd],
   );
 
+  const pendingCreditApplyUsd = useMemo(() => {
+    if (!balanceResetFromCredit || !customerBalanceResetPending) return 0;
+    return roundMoney2(Math.min(creditAvailableForResetUsd, orderRemainderAfterPaymentUsd));
+  }, [
+    balanceResetFromCredit,
+    customerBalanceResetPending,
+    creditAvailableForResetUsd,
+    orderRemainderAfterPaymentUsd,
+  ]);
+
+  const displayCreditBalanceAfterApplyUsd = useMemo(() => {
+    if (pendingCreditApplyUsd <= 0.01) return displayCreditBalanceUsd;
+    return roundMoney2(Math.max(0, displayCreditBalanceUsd - pendingCreditApplyUsd));
+  }, [displayCreditBalanceUsd, pendingCreditApplyUsd]);
+
+  const remainderAfterCreditApplyUsd = useMemo(() => {
+    if (pendingCreditApplyUsd <= 0.01) return orderRemainderAfterPaymentUsd;
+    return roundMoney2(Math.max(0, orderRemainderAfterPaymentUsd - pendingCreditApplyUsd));
+  }, [orderRemainderAfterPaymentUsd, pendingCreditApplyUsd]);
+
   /** מחשבון חי — רק שורות התשלום בטופס (onChange) */
   const liveFormKpis = useMemo(
     () => aggregateLivePaymentFormKpis(payments, rateN),
@@ -1263,11 +1283,11 @@ export function PaymentModalUpdated({
   const showCreditBalanceResetBtn = useMemo(() => {
     if (!viewerIsAdmin || !customer) return false;
     if (customerBalanceResetPending && balanceResetFromCredit) return false;
+    if (orderOverpaymentAfterPaymentUsd > 0.01) return false;
     return (
       showOpenBalanceActions &&
       creditAvailableForResetUsd > 0.01 &&
-      orderRemainderAfterPaymentUsd > 0.01 &&
-      creditAvailableForResetUsd >= orderRemainderAfterPaymentUsd - 0.01
+      orderRemainderAfterPaymentUsd > 0.01
     );
   }, [
     viewerIsAdmin,
@@ -1275,6 +1295,7 @@ export function PaymentModalUpdated({
     showOpenBalanceActions,
     creditAvailableForResetUsd,
     orderRemainderAfterPaymentUsd,
+    orderOverpaymentAfterPaymentUsd,
     customerBalanceResetPending,
     balanceResetFromCredit,
   ]);
@@ -1985,20 +2006,23 @@ export function PaymentModalUpdated({
 
   const shiftIntakeWeek = useCallback(
     (delta: -1 | 1) => {
-      const cur =
-        parseWeekNumber(weekDraft) ??
-        parseWeekNumber(weekSelectValue) ??
-        parseWeekNumber(DEFAULT_WEEK_CODE) ??
-        1;
-      const num = delta === -1 ? goToPrevWeekNumber(cur) : goToNextWeekNumber(cur);
-      applyIntakeWeekCode(toWeekCode(num), { reloadOrders: true });
+      const cur = normalizeAhWeekCode(weekDraft) ?? normalizeAhWeekCode(globalWeek) ?? DEFAULT_WEEK_CODE;
+      const next =
+        delta === -1 ? getPrevAhWeek(cur)?.code : getNextAhWeek(cur)?.code;
+      if (next) applyIntakeWeekCode(next, { reloadOrders: true });
     },
-    [weekDraft, weekSelectValue, applyIntakeWeekCode],
+    [weekDraft, globalWeek, applyIntakeWeekCode],
   );
 
   const goToCurrentWorkWeek = useCallback(() => {
-    applyIntakeWeekCode(DEFAULT_WEEK_CODE, { reloadOrders: true });
-  }, [applyIntakeWeekCode]);
+    applyIntakeWeekCode(globalWeek, { reloadOrders: true });
+  }, [applyIntakeWeekCode, globalWeek]);
+
+  useEffect(() => {
+    const isNewCapture = !loadedPayment.id?.trim();
+    if (!isNewCapture) return;
+    applyIntakeWeekCode(globalWeek, { reloadOrders: !!customer?.id?.trim() });
+  }, [globalWeek]); // eslint-disable-line react-hooks/exhaustive-deps -- sync intake week to global selection only
 
   /** בחירת לקוח מיידית — פוקוס לסכום; הזמנות נטענות ברקע בלי לאפס את הטבלה */
   const selectCustomerQuick = useCallback(
@@ -2168,7 +2192,7 @@ export function PaymentModalUpdated({
     commissionPercentTouchedRef.current = false;
     setDollarRate(parseFinalRate(financial).toFixed(4));
     setCommissionPercentStr(systemCommissionPercentStr);
-    const defWeek = defaultPaymentIntakeWeekCode();
+    const defWeek = defaultPaymentIntakeWeekCode(globalWeek);
     setWeekDraft(defWeek);
     setWeekInputErr(null);
     setPaymentDateYmd(formatLocalYmd(new Date()));
@@ -2202,6 +2226,7 @@ export function PaymentModalUpdated({
   }, [
     financial,
     systemCommissionPercentStr,
+    globalWeek,
     refreshPaymentCodePreview,
     clearPaymentEntryCaches,
     focusCustomerCodeInput,
@@ -2682,6 +2707,25 @@ export function PaymentModalUpdated({
       setSaveJustSaved(false);
       saveJustSavedTimerRef.current = null;
     }, 2000);
+
+    const creditApplyUsd =
+      balanceResetFromCredit && customerBalanceResetPending
+        ? roundMoney2(Math.min(creditAvailableForResetUsd, orderRemainderAfterPaymentUsd))
+        : 0;
+    if (creditApplyUsd > 0.01) {
+      const creditRes = await applyCustomerCreditToOpenOrdersAction({
+        customerId: customer.id,
+        maxUsd: creditApplyUsd.toFixed(2),
+        orderIds: includedIds ?? undefined,
+      });
+      if (!creditRes.ok) {
+        setSaveErr(creditRes.error);
+        return { ok: false };
+      }
+      onToast(`נוצלה יתרת זכות: $${creditApplyUsd.toFixed(2)}`);
+      setBalanceResetFromCredit(false);
+    }
+
     dispatchCashControlRefresh(weekForSave);
     window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
 
@@ -2744,7 +2788,7 @@ export function PaymentModalUpdated({
       remainingUsd,
       statusLabel:
         remainingUsd <= 0.01 ? "שולם" : paidUsd > 0.01 ? "שולם חלקית — חוב פתוח" : "לא שולם",
-      creditAvailableUsd: Math.max(0, customerBalanceUsd),
+      creditAvailableUsd: creditAvailableForResetUsd,
       commissionAvailableUsd: roundMoney2(
         summaryRows.reduce(
           (sum, order) => sum + Math.max(0, Number(order.commissionUsd) || 0),
@@ -3771,7 +3815,11 @@ export function PaymentModalUpdated({
                               aria-label="פירוט יתרת זכות"
                               disabled={!customer?.id}
                             >
-                              +{fmtUsdDisplay(displayCreditBalanceUsd)}
+                              +{fmtUsdDisplay(
+                                balanceResetFromCredit && customerBalanceResetPending
+                                  ? displayCreditBalanceAfterApplyUsd
+                                  : displayCreditBalanceUsd,
+                              )}
                             </button>
                           </div>
                         ) : null}
@@ -3873,7 +3921,7 @@ export function PaymentModalUpdated({
                     className="payment-modal-week-arrow"
                     aria-label="שבוע נוכחי"
                     title="שבוע נוכחי"
-                    disabled={isActiveWorkWeekCode(intakeWeekCode)}
+                    disabled={normalizeAhWeekCode(intakeWeekCode) === normalizeAhWeekCode(globalWeek)}
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={goToCurrentWorkWeek}
                   >
@@ -3931,6 +3979,16 @@ export function PaymentModalUpdated({
                       <option key={c} value={c} />
                     ))}
                   </datalist>
+                </div>
+
+                <div className="payment-modal-week-context-hint" dir="rtl">
+                  שבוע עבודה: <span dir="ltr">{globalWeek}</span>
+                  {sourceWeekCode ? (
+                    <>
+                      {" "}
+                      · מקור הזמנות/יתרות: <span dir="ltr">{sourceWeekCode}</span>
+                    </>
+                  ) : null}
                 </div>
 
                 <div className="payment-modal-order-source" dir="rtl" aria-label="מקור הזמנות">
@@ -3999,6 +4057,18 @@ export function PaymentModalUpdated({
                     ) : null}{" "}
                     ניתן לשמור תשלום חלקי, לאפס יתרה, או להשתמש ביתרת זכות.
                   </p>
+                  {balanceResetFromCredit && customerBalanceResetPending && pendingCreditApplyUsd > 0.01 ? (
+                    <div className="payment-credit-apply-preview" role="status">
+                      <div>
+                        <span>נוצלה יתרת זכות:</span>
+                        <strong dir="ltr">${fmtUsdDisplay(pendingCreditApplyUsd)}</strong>
+                      </div>
+                      <div>
+                        <span>נשאר לתשלום:</span>
+                        <strong dir="ltr">${fmtUsdDisplay(remainderAfterCreditApplyUsd)}</strong>
+                      </div>
+                    </div>
+                  ) : null}
                   {viewerIsAdmin ? (
                     <div className="payment-open-balance-panel__actions">
                       {showCreditBalanceResetBtn ? (
