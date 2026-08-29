@@ -16,6 +16,8 @@ const EPS = new Prisma.Decimal("0.01");
 
 export type CustomerOpenDebtResult = {
   customerId: string;
+  /** סה״כ הזמנות (עסקה בלבד, לפני עמלה) — ללא מבוטלות וללא משיכות מחוב */
+  totalOrdersBeforeCommissionUsd: Prisma.Decimal;
   /** סה״כ הזמנות (עסקה+עמלה) — ללא מבוטלות וללא משיכות מחוב */
   totalOrdersUsd: Prisma.Decimal;
   /** תשלומים שנקלטו בפועל (פעילים) */
@@ -55,6 +57,7 @@ export async function getCustomerOpenDebt(
 
   return {
     customerId: id,
+    totalOrdersBeforeCommissionUsd: calc.totalOrdersBeforeCommission,
     totalOrdersUsd: calc.totalOrders,
     totalPaymentsUsd: calc.totalPayments,
     totalWithdrawalsUsd: calc.totalWithdrawals,

@@ -50,6 +50,10 @@ export async function fetchPaymentIntakeBalancesClient(
       internalSignedUsd: string;
       commissionBalanceUsd: number;
       creditBalanceUsd: number;
+      totalOrdersBeforeCommissionUsd: number;
+      totalOrdersUsd: number;
+      totalPaymentsUsd: number;
+      totalWithdrawalsUsd: number;
     }
   | { ok: false; error: string }
 > {
@@ -65,6 +69,10 @@ export async function fetchPaymentIntakeBalancesClient(
     internalSignedUsd: string;
     commissionBalanceUsd: number;
     creditBalanceUsd: number;
+    totalOrdersBeforeCommissionUsd: number;
+    totalOrdersUsd: number;
+    totalPaymentsUsd: number;
+    totalWithdrawalsUsd: number;
   };
 }
 

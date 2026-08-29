@@ -12805,6 +12805,11 @@ select.payment-modal-inline-input {
   color: #15803d;
 }
 
+.payment-modal-cust-summary__total--withdrawals .payment-modal-cust-summary__total-v,
+.payment-modal-cust-summary__total--withdrawals svg {
+  color: #7c3aed;
+}
+
 .payment-modal-cust-summary__total--commissions .payment-modal-cust-summary__total-v,
 .payment-modal-cust-summary__total--commissions svg {
   color: #b45309;

@@ -1283,8 +1283,10 @@ export async function fetchCustomerOpenDebtAction(
       openDebtUsd: string;
       signedBalanceUsd: string;
       internalSignedUsd: string;
+      totalOrdersBeforeCommissionUsd: string;
       totalOrdersUsd: string;
       totalPaymentsUsd: string;
+      totalWithdrawalsUsd: string;
     }
   | { ok: false; error: string }
 > {
@@ -1302,8 +1304,10 @@ export async function fetchCustomerOpenDebtAction(
     openDebtUsd: debt.openDebtUsd.toFixed(2),
     signedBalanceUsd: debt.signedBalanceUsd.toFixed(2),
     internalSignedUsd: debt.internalSignedUsd.toFixed(2),
+    totalOrdersBeforeCommissionUsd: debt.totalOrdersBeforeCommissionUsd.toFixed(2),
     totalOrdersUsd: debt.totalOrdersUsd.toFixed(2),
     totalPaymentsUsd: debt.totalPaymentsUsd.toFixed(2),
+    totalWithdrawalsUsd: debt.totalWithdrawalsUsd.toFixed(2),
   };
 }
 

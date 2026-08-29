@@ -423,7 +423,7 @@ export async function loadPaymentIntakeCustomerPaymentsForCustomer(
   };
 }
 
-/** יתרה פנימית + חוב פתוח — לטעינה ברקע */
+/** יתרה פנימית + חוב פתוח — לטעינה ברקע (SSOT זהה לכרטסת / יתרות) */
 export async function loadPaymentIntakeBalancesForCustomer(
   params: IntakeLoadParams,
 ): Promise<
@@ -434,6 +434,13 @@ export async function loadPaymentIntakeBalancesForCustomer(
       internalSignedUsd: string;
       commissionBalanceUsd: number;
       creditBalanceUsd: number;
+      /** Σ amountUsd — הזמנות רגילות (ללא משיכות מחוב) */
+      totalOrdersBeforeCommissionUsd: number;
+      /** Σ totalUsd (עסקה+עמלה) — כרטסת «סה״כ הזמנות» */
+      totalOrdersUsd: number;
+      totalPaymentsUsd: number;
+      /** Σ משיכות מחוב (DEBT_WITHDRAWAL) */
+      totalWithdrawalsUsd: number;
     }
   | { ok: false; error: string }
 > {
@@ -466,6 +473,10 @@ export async function loadPaymentIntakeBalancesForCustomer(
     internalSignedUsd: debt.internalSignedUsd.toFixed(2),
     commissionBalanceUsd,
     creditBalanceUsd,
+    totalOrdersBeforeCommissionUsd: Number(debt.totalOrdersBeforeCommissionUsd.toFixed(2)),
+    totalOrdersUsd: Number(debt.totalOrdersUsd.toFixed(2)),
+    totalPaymentsUsd: Number(debt.totalPaymentsUsd.toFixed(2)),
+    totalWithdrawalsUsd: Number(debt.totalWithdrawalsUsd.toFixed(2)),
   };
 }
 

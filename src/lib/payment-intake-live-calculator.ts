@@ -11,10 +11,13 @@ export type CommissionResetOrderPreview = {
 };
 
 export type PaymentIntakeLiveTotals = {
+  /** חייבים / עסקאות — לפני עמלה (SSOT או סכום שורות) */
   chargesUsd: number;
   commissionsUsd: number;
   paymentsUsd: number;
-  /** חיובים + עמלות − תשלומים. חיובי = חוב פתוח, שלילי = יתרת זכות */
+  /** משיכות מחוב (DEBT_WITHDRAWAL) — מקטינות חוב; 0 אם אין */
+  withdrawalsUsd: number;
+  /** חיובים + עמלות − תשלומים − משיכות. חיובי = חוב פתוח, שלילי = יתרת זכות */
   balanceUsd: number;
   hasDebt: boolean;
   hasCredit: boolean;
@@ -62,16 +65,23 @@ export function computePaymentIntakeLiveTotals(params: {
   customerSignedOpenDebtUsd?: number;
   /** סכום שמשפיע על החוב: מלא לחדש, delta לעריכת תשלום קיים */
   customerApplyPaymentUsd?: number;
+  /**
+   * SSOT מ-getCustomerOpenDebt / calculateCustomerBalance —
+   * כשמוגדרים, חייבים/תשלומים/משיכות אינם נגזרים מרשימת הזמנות המסוננת בקליטה.
+   */
+  customerTotalChargesUsd?: number;
+  customerTotalPaymentsUsd?: number;
+  customerTotalWithdrawalsUsd?: number;
 }): PaymentIntakeLiveTotals {
   const commissionReset = new Set(params.commissionResetOrderIds);
   const commissionPreviewById = new Map((params.commissionResetPreview ?? []).map((r) => [r.id, r]));
   const balanceResetPreviewById = new Map(
     (params.customerBalanceResetPreview ?? []).map((r) => [r.id, r]),
   );
-  let chargesUsd = 0;
+  let ordersChargesUsd = 0;
   let commissionsUsd = 0;
   for (const o of params.orders) {
-    chargesUsd += Number.isFinite(o.amountUsd) ? o.amountUsd : 0;
+    ordersChargesUsd += Number.isFinite(o.amountUsd) ? o.amountUsd : 0;
     if (balanceResetPreviewById.has(o.id)) {
       commissionsUsd += commissionUsdAfterClosurePreview(o, balanceResetPreviewById, true);
     } else if (commissionReset.has(o.id)) {
@@ -80,25 +90,43 @@ export function computePaymentIntakeLiveTotals(params: {
       commissionsUsd += Number.isFinite(o.commissionUsd) ? o.commissionUsd : 0;
     }
   }
-  chargesUsd = roundMoney2(chargesUsd);
+  ordersChargesUsd = roundMoney2(ordersChargesUsd);
   commissionsUsd = roundMoney2(commissionsUsd);
-  const paymentsUsd = roundMoney2(
-    Math.max(0, params.customerPaymentsUsd) + Math.max(0, params.formPaymentUsd),
-  );
+
+  const hasSsotCharges =
+    params.customerTotalChargesUsd != null && Number.isFinite(params.customerTotalChargesUsd);
+  const hasSsotPayments =
+    params.customerTotalPaymentsUsd != null && Number.isFinite(params.customerTotalPaymentsUsd);
+  const hasSsotWithdrawals =
+    params.customerTotalWithdrawalsUsd != null && Number.isFinite(params.customerTotalWithdrawalsUsd);
+
+  const chargesUsd = hasSsotCharges
+    ? roundMoney2(Math.max(0, params.customerTotalChargesUsd!))
+    : ordersChargesUsd;
+
+  const withdrawalsUsd = hasSsotWithdrawals
+    ? roundMoney2(Math.max(0, params.customerTotalWithdrawalsUsd!))
+    : 0;
+
+  const applyUsd =
+    params.customerApplyPaymentUsd != null && Number.isFinite(params.customerApplyPaymentUsd)
+      ? roundMoney2(params.customerApplyPaymentUsd)
+      : roundMoney2(Math.max(0, params.formPaymentUsd));
+
+  const paymentsUsd = hasSsotPayments
+    ? roundMoney2(Math.max(0, params.customerTotalPaymentsUsd!) + applyUsd)
+    : roundMoney2(Math.max(0, params.customerPaymentsUsd) + Math.max(0, params.formPaymentUsd));
+
   const balanceResetActive = (params.customerBalanceResetPreview ?? []).length > 0;
   const ssotDebt =
     params.customerSignedOpenDebtUsd != null && Number.isFinite(params.customerSignedOpenDebtUsd)
       ? roundMoney2(Math.max(0, params.customerSignedOpenDebtUsd))
       : null;
-  const applyUsd =
-    params.customerApplyPaymentUsd != null && Number.isFinite(params.customerApplyPaymentUsd)
-      ? roundMoney2(params.customerApplyPaymentUsd)
-      : roundMoney2(Math.max(0, params.formPaymentUsd));
   const balanceUsd = balanceResetActive
     ? 0
     : ssotDebt != null
       ? roundMoney2(ssotDebt - applyUsd)
-      : roundMoney2(chargesUsd + commissionsUsd - paymentsUsd);
+      : roundMoney2(chargesUsd + commissionsUsd - paymentsUsd - withdrawalsUsd);
   const hasDebt = balanceResetActive ? false : balanceUsd > EPS;
   const hasCredit = balanceResetActive ? false : balanceUsd < -EPS;
   const balanceLabel = balanceResetActive ? "מאוזן" : hasCredit ? "יתרת זכות ללקוח" : hasDebt ? "חוב פתוח" : "מאוזן";
@@ -106,6 +134,7 @@ export function computePaymentIntakeLiveTotals(params: {
     chargesUsd,
     commissionsUsd,
     paymentsUsd,
+    withdrawalsUsd,
     balanceUsd: balanceResetActive ? 0 : balanceUsd,
     hasDebt,
     hasCredit,

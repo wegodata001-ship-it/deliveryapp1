@@ -673,6 +673,10 @@ export function PaymentModalUpdated({
   /** סה״כ USD של תשלום קיים בזמן הטעינה — לחישוב delta בעריכה */
   const [savedBaselinePaymentTotalUsd, setSavedBaselinePaymentTotalUsd] = useState(0);
   const [customerOpenDebtSignedUsd, setCustomerOpenDebtSignedUsd] = useState(0);
+  /** SSOT מ-getCustomerOpenDebt — זהה לכרטסת / יתרות (כולל משיכות מחוב) */
+  const [customerLedgerChargesUsd, setCustomerLedgerChargesUsd] = useState(0);
+  const [customerLedgerPaymentsUsd, setCustomerLedgerPaymentsUsd] = useState(0);
+  const [customerLedgerWithdrawalsUsd, setCustomerLedgerWithdrawalsUsd] = useState(0);
   const [serverCommissionBalanceUsd, setServerCommissionBalanceUsd] = useState(0);
   const [serverCreditBalanceUsd, setServerCreditBalanceUsd] = useState(0);
   const [commissionPopoverOpen, setCommissionPopoverOpen] = useState(false);
@@ -962,6 +966,9 @@ export function PaymentModalUpdated({
     const cid = customerId.trim();
     if (!cid) {
       setCustomerOpenDebtSignedUsd(0);
+      setCustomerLedgerChargesUsd(0);
+      setCustomerLedgerPaymentsUsd(0);
+      setCustomerLedgerWithdrawalsUsd(0);
       return;
     }
     const gen = ++customerOpenDebtFetchGenRef.current;
@@ -969,6 +976,9 @@ export function PaymentModalUpdated({
     if (gen !== customerOpenDebtFetchGenRef.current) return;
     if (res.ok) {
       setCustomerOpenDebtSignedUsd(parseMoneyStringOrZero(res.signedBalanceUsd));
+      setCustomerLedgerChargesUsd(parseMoneyStringOrZero(res.totalOrdersBeforeCommissionUsd));
+      setCustomerLedgerPaymentsUsd(parseMoneyStringOrZero(res.totalPaymentsUsd));
+      setCustomerLedgerWithdrawalsUsd(parseMoneyStringOrZero(res.totalWithdrawalsUsd));
       setCustomer((cur) =>
         cur?.id === cid ? { ...cur, customerBalanceUsd: res.internalSignedUsd } : cur,
       );
@@ -976,7 +986,12 @@ export function PaymentModalUpdated({
   }, [intakeDocumentWorkCountry]);
 
   useEffect(() => {
-    if (!customer?.id?.trim()) setCustomerOpenDebtSignedUsd(0);
+    if (!customer?.id?.trim()) {
+      setCustomerOpenDebtSignedUsd(0);
+      setCustomerLedgerChargesUsd(0);
+      setCustomerLedgerPaymentsUsd(0);
+      setCustomerLedgerWithdrawalsUsd(0);
+    }
   }, [customer?.id]);
 
   useEffect(() => {
@@ -1028,6 +1043,9 @@ export function PaymentModalUpdated({
         formPaymentUsd: totals.totalUsd,
         customerSignedOpenDebtUsd: customerOpenDebtSignedUsd,
         customerApplyPaymentUsd: paymentApplyUsd,
+        customerTotalChargesUsd: customerLedgerChargesUsd,
+        customerTotalPaymentsUsd: customerLedgerPaymentsUsd,
+        customerTotalWithdrawalsUsd: customerLedgerWithdrawalsUsd,
       }),
     [
       orders,
@@ -1038,6 +1056,9 @@ export function PaymentModalUpdated({
       totals.totalUsd,
       customerOpenDebtSignedUsd,
       paymentApplyUsd,
+      customerLedgerChargesUsd,
+      customerLedgerPaymentsUsd,
+      customerLedgerWithdrawalsUsd,
     ],
   );
 
@@ -1473,6 +1494,9 @@ export function PaymentModalUpdated({
         setBalancesLoading(false);
         if (!res.ok) return { balancesLoadMs, ok: false as const };
         setCustomerOpenDebtSignedUsd(parseMoneyStringOrZero(String(res.openDebtSignedUsd)));
+        setCustomerLedgerChargesUsd(Number(res.totalOrdersBeforeCommissionUsd) || 0);
+        setCustomerLedgerPaymentsUsd(Number(res.totalPaymentsUsd) || 0);
+        setCustomerLedgerWithdrawalsUsd(Number(res.totalWithdrawalsUsd) || 0);
         setServerCommissionBalanceUsd(Number(res.commissionBalanceUsd) || 0);
         setServerCreditBalanceUsd(Number(res.creditBalanceUsd) || 0);
         setCustomer((cur) =>
@@ -1608,6 +1632,9 @@ export function PaymentModalUpdated({
       setCustSearchNoHits(false);
       if (balances.ok) {
         setCustomerOpenDebtSignedUsd(parseMoneyStringOrZero(String(balances.openDebtSignedUsd)));
+        setCustomerLedgerChargesUsd(Number(balances.totalOrdersBeforeCommissionUsd) || 0);
+        setCustomerLedgerPaymentsUsd(Number(balances.totalPaymentsUsd) || 0);
+        setCustomerLedgerWithdrawalsUsd(Number(balances.totalWithdrawalsUsd) || 0);
         setServerCommissionBalanceUsd(Number(balances.commissionBalanceUsd) || 0);
         setServerCreditBalanceUsd(Number(balances.creditBalanceUsd) || 0);
         setCustomer((cur) =>
@@ -2095,6 +2122,9 @@ export function PaymentModalUpdated({
     setOrders([]);
     setIncludedIds(null);
     setCustomerOpenDebtSignedUsd(0);
+    setCustomerLedgerChargesUsd(0);
+    setCustomerLedgerPaymentsUsd(0);
+    setCustomerLedgerWithdrawalsUsd(0);
     setOrderEditId(null);
     setLoadErr(null);
     setCustSearchNoHits(false);
@@ -2206,6 +2236,9 @@ export function PaymentModalUpdated({
     setCommissionResetIds([]);
     setCustomerBalanceResetPending(false);
     setCustomerOpenDebtSignedUsd(0);
+    setCustomerLedgerChargesUsd(0);
+    setCustomerLedgerPaymentsUsd(0);
+    setCustomerLedgerWithdrawalsUsd(0);
     setSavedBaselinePaymentTotalUsd(0);
     setOrdersLoading(false);
     setBalancesLoading(false);
@@ -2409,6 +2442,9 @@ export function PaymentModalUpdated({
               setOrders([]);
               setIncludedIds(null);
               setCustomerOpenDebtSignedUsd(0);
+              setCustomerLedgerChargesUsd(0);
+              setCustomerLedgerPaymentsUsd(0);
+              setCustomerLedgerWithdrawalsUsd(0);
               setLoadErr(null);
             }
           }
@@ -3328,7 +3364,13 @@ export function PaymentModalUpdated({
       if (!res.ok) return;
       setOrders(res.orders);
       setCustomerOpenDebtSignedUsd(parseMoneyStringOrZero(String(res.openDebtSignedUsd)));
+      setCustomerLedgerChargesUsd(Number(res.totalOrdersBeforeCommissionUsd) || 0);
+      setCustomerLedgerPaymentsUsd(Number(res.totalPaymentsUsd) || 0);
+      setCustomerLedgerWithdrawalsUsd(Number(res.totalWithdrawalsUsd) || 0);
       setServerCommissionBalanceUsd(Number(res.commissionBalanceUsd) || 0);
+      if (res.creditBalanceUsd != null) {
+        setServerCreditBalanceUsd(Number(res.creditBalanceUsd) || 0);
+      }
       setCustomer((cur) =>
         cur?.id === cid
           ? { ...cur, customerBalanceUsd: res.internalSignedUsd || res.customerBalanceUsd }
@@ -3767,7 +3809,7 @@ export function PaymentModalUpdated({
                       >
                         <div className="payment-modal-cust-summary__total payment-modal-cust-summary__total--charges">
                           <DollarSign size={16} strokeWidth={1.75} aria-hidden />
-                          <span className="payment-modal-cust-summary__total-k">חיובים:</span>
+                          <span className="payment-modal-cust-summary__total-k">חייבים:</span>
                           <strong className="payment-modal-cust-summary__total-v" dir="ltr">
                             {fmtUsdDisplay(liveIntakeTotals.chargesUsd)}
                           </strong>
@@ -3779,9 +3821,18 @@ export function PaymentModalUpdated({
                             {fmtUsdDisplay(liveIntakeTotals.paymentsUsd)}
                           </strong>
                         </div>
+                        {liveIntakeTotals.withdrawalsUsd > 0.01 ? (
+                          <div className="payment-modal-cust-summary__total payment-modal-cust-summary__total--withdrawals">
+                            <TrendingDown size={16} strokeWidth={1.75} aria-hidden />
+                            <span className="payment-modal-cust-summary__total-k">משיכה מחוב:</span>
+                            <strong className="payment-modal-cust-summary__total-v" dir="ltr">
+                              -{fmtUsdDisplay(liveIntakeTotals.withdrawalsUsd)}
+                            </strong>
+                          </div>
+                        ) : null}
                         <div className="payment-modal-cust-summary__total payment-modal-cust-summary__total--commissions">
                           <TrendingDown size={16} strokeWidth={1.75} aria-hidden />
-                          <span className="payment-modal-cust-summary__total-k">עמלה:</span>
+                          <span className="payment-modal-cust-summary__total-k">עמלות:</span>
                           <button
                             type="button"
                             className={[

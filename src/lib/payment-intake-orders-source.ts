@@ -18,6 +18,11 @@ export type SoftRefreshPaymentIntakeOrdersResult =
       openDebtSignedUsd: number;
       internalSignedUsd: string;
       commissionBalanceUsd: number;
+      creditBalanceUsd?: number;
+      totalOrdersBeforeCommissionUsd?: number;
+      totalOrdersUsd?: number;
+      totalPaymentsUsd?: number;
+      totalWithdrawalsUsd?: number;
     }
   | { ok: false; error: string };
 
@@ -47,6 +52,11 @@ export async function softRefreshPaymentIntakeOrders(params: {
       openDebtSignedUsd: 0,
       internalSignedUsd: "0",
       commissionBalanceUsd: 0,
+      creditBalanceUsd: 0,
+      totalOrdersBeforeCommissionUsd: 0,
+      totalOrdersUsd: 0,
+      totalPaymentsUsd: 0,
+      totalWithdrawalsUsd: 0,
     };
   }
 
@@ -57,5 +67,10 @@ export async function softRefreshPaymentIntakeOrders(params: {
     openDebtSignedUsd: balancesRes.openDebtSignedUsd,
     internalSignedUsd: balancesRes.internalSignedUsd,
     commissionBalanceUsd: balancesRes.commissionBalanceUsd,
+    creditBalanceUsd: balancesRes.creditBalanceUsd,
+    totalOrdersBeforeCommissionUsd: balancesRes.totalOrdersBeforeCommissionUsd,
+    totalOrdersUsd: balancesRes.totalOrdersUsd,
+    totalPaymentsUsd: balancesRes.totalPaymentsUsd,
+    totalWithdrawalsUsd: balancesRes.totalWithdrawalsUsd,
   };
 }

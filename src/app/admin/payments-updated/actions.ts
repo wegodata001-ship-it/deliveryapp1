@@ -278,6 +278,7 @@ async function loadOrdersForPaymentAllocation(
       customerId,
       deletedAt: null,
       countryCode: wc,
+      status: { notIn: [OS.DEBT_WITHDRAWAL, OS.CANCELLED] },
       ...(weekDateWhere ?? {}),
     },
     orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],
