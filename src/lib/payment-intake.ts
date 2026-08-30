@@ -18,6 +18,12 @@ export type PaymentIntakeOrderBase = {
   rate: number;
   amountUsd: number;
   commissionUsd: number;
+  /** Order.commissionUsd בסיס — אופציונלי לתצוגת פירוט עמלה */
+  commissionBaseUsd?: number;
+  /** Σ התאמות עמלה — אופציונלי לתצוגה */
+  commissionAdjustmentsUsd?: number;
+  /** האם יש תנועות עמלה מעבר לבסיס */
+  commissionHasAdjustments?: boolean;
   totalIls: number;
   /** סה״כ חוב בהזמנה ב-USD (עסקה + עמלה) */
   totalAmountUsd: number;
@@ -271,6 +277,9 @@ export type PaymentIntakeOrderRow = {
 export function toPaymentIntakeBases(rows: PaymentIntakeOrderRow[]): PaymentIntakeOrderBase[] {
   return rows.map((r) => {
     const rateNum = Number((r.rate || "").replace(",", "."));
+    const commissionUsd = Number(r.commissionUsd);
+    const baseRaw = r.commissionBaseUsd != null ? Number(r.commissionBaseUsd) : NaN;
+    const adjRaw = r.commissionAdjustmentsUsd != null ? Number(r.commissionAdjustmentsUsd) : NaN;
     return {
       id: r.id,
       orderNumber: r.orderNumber,
@@ -279,7 +288,10 @@ export function toPaymentIntakeBases(rows: PaymentIntakeOrderRow[]): PaymentInta
       week: r.week,
       rate: Number.isFinite(rateNum) ? rateNum : 0,
       amountUsd: Number(r.amountUsd),
-      commissionUsd: Number(r.commissionUsd),
+      commissionUsd,
+      commissionBaseUsd: Number.isFinite(baseRaw) ? baseRaw : undefined,
+      commissionAdjustmentsUsd: Number.isFinite(adjRaw) ? adjRaw : undefined,
+      commissionHasAdjustments: r.commissionHasAdjustments === true,
       totalIls: Number(r.totalIls),
       totalAmountUsd: Number(r.totalAmountUsd),
       dbPaidUsd: Number(r.dbPaidUsd),

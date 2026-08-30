@@ -9,7 +9,11 @@ import { computeOrderOpenDebtUsd } from "@/lib/order-remaining-debt";
 const ALLOC_EPS = 0.02;
 
 export type PaymentAllocationDebugInput = {
-  source: "payment-modal" | "payment-save-server" | "payment-save-matching-engine";
+  source:
+    | "payment-modal"
+    | "payment-save-server"
+    | "payment-save-matching-engine"
+    | "payment-save-server-ssot-debt";
   customerId: string | null;
   customerLoaded: boolean;
   ordersLoading?: boolean;

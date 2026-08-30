@@ -476,7 +476,7 @@ export async function loadPaymentMethodAdjustmentTrailAction(
       atIso: details.reviewedAtIso,
       title: "סומן כנבדק",
       detail: null,
-      actorName: details.reviewedByName,
+      actorName: details.reviewedByName ?? null,
     });
   }
 

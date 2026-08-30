@@ -1765,7 +1765,7 @@ async function captureOrderActionInner(
       );
       await refreshCustomerBalanceSnapshotFromSsot(
         customer.id,
-        openDebtScopeForWorkCountry(String(customer.countryCode)),
+        openDebtScopeForWorkCountry(workCountryFromOrderSourceCountry(sourceCountryCreate)),
       );
     } catch {
       /* snapshot best-effort */
