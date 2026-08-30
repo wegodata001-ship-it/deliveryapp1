@@ -173,7 +173,7 @@ function computeMethodOpenUsd(rows: PaymentIntakeOrderRow[], bucket: PaymentBuck
   );
 }
 
-function buildAdjustedBreakdownForOrder(params: {
+export function buildAdjustedBreakdownForOrder(params: {
   order: PaymentIntakeOrderRow;
   fromMethod: string;
   toMethod: string;

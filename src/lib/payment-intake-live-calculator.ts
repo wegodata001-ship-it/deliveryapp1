@@ -61,17 +61,19 @@ export function computePaymentIntakeLiveTotals(params: {
   /**
    * חוב פתוח לקוח מ-getCustomerOpenDebt (כולל משיכות מחוב).
    * כשמוגדר — balanceUsd = חוב נוכחי − customerApplyPaymentUsd.
+   * `null` = SSOT עדיין לא נטען (אין לפרש כ־0 מאוזן).
    */
-  customerSignedOpenDebtUsd?: number;
+  customerSignedOpenDebtUsd?: number | null;
   /** סכום שמשפיע על החוב: מלא לחדש, delta לעריכת תשלום קיים */
   customerApplyPaymentUsd?: number;
   /**
    * SSOT מ-getCustomerOpenDebt / calculateCustomerBalance —
    * כשמוגדרים, חייבים/תשלומים/משיכות אינם נגזרים מרשימת הזמנות המסוננת בקליטה.
+   * `null` = לא נטען עדיין (0 הוא ערך SSOT תקין).
    */
-  customerTotalChargesUsd?: number;
-  customerTotalPaymentsUsd?: number;
-  customerTotalWithdrawalsUsd?: number;
+  customerTotalChargesUsd?: number | null;
+  customerTotalPaymentsUsd?: number | null;
+  customerTotalWithdrawalsUsd?: number | null;
 }): PaymentIntakeLiveTotals {
   const commissionReset = new Set(params.commissionResetOrderIds);
   const commissionPreviewById = new Map((params.commissionResetPreview ?? []).map((r) => [r.id, r]));

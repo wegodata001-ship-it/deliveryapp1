@@ -100,7 +100,15 @@ export async function fetchCustomerCreditLedgerClient(
 export async function fetchCustomerCommissionLedgerClient(
   customerId: string,
 ): Promise<
-  | { ok: true; currentBalanceUsd: number; movements: import("@/lib/customer-commission-ledger").CommissionMovementRow[] }
+  | {
+      ok: true;
+      currentBalanceUsd: number;
+      movements: import("@/lib/customer-commission-ledger").CommissionMovementRow[];
+      orderRows: Array<
+        import("@/lib/order-commission-ssot").OrderCommissionBreakdown & { orderNumber: string }
+      >;
+      orderSummary: { baseUsd: number; adjustmentsUsd: number; currentUsd: number };
+    }
   | { ok: false; error: string }
 > {
   const params = new URLSearchParams({ customerId: customerId.trim() });
@@ -112,6 +120,16 @@ export async function fetchCustomerCommissionLedgerClient(
   const body = (await res.json()) as {
     currentBalanceUsd: number;
     movements: import("@/lib/customer-commission-ledger").CommissionMovementRow[];
+    orderRows?: Array<
+      import("@/lib/order-commission-ssot").OrderCommissionBreakdown & { orderNumber: string }
+    >;
+    orderSummary?: { baseUsd: number; adjustmentsUsd: number; currentUsd: number };
   };
-  return { ok: true, currentBalanceUsd: body.currentBalanceUsd, movements: body.movements };
+  return {
+    ok: true,
+    currentBalanceUsd: body.currentBalanceUsd,
+    movements: body.movements,
+    orderRows: body.orderRows ?? [],
+    orderSummary: body.orderSummary ?? { baseUsd: 0, adjustmentsUsd: 0, currentUsd: 0 },
+  };
 }

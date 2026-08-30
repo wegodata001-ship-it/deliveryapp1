@@ -1,31 +1,105 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowLeftRight, Sparkles, X } from "lucide-react";
+import { X } from "lucide-react";
 import {
   applyPaymentMethodAutoAdjustmentAction,
   loadPaymentMethodAdjustmentBootstrapAction,
-  previewPaymentMethodAutoAdjustmentAction,
+  previewPaymentIntentAutoAdjustmentAction,
 } from "@/app/admin/payments-updated/payment-method-adjustment-actions";
-import {
-  PAYMENT_METHOD_ADJUSTMENT_REASON_OPTIONS,
-  type PaymentMethodAdjustmentPreview,
-  type PaymentMethodAdjustmentReasonCode,
-} from "@/lib/payment-method-auto-adjustment";
-import type { MethodBalanceCard, PaymentBalanceCurrency } from "@/lib/payment-method-captured-balances";
+import type { PaymentBalanceCurrency } from "@/lib/payment-method-captured-balances";
+import { intentsFromDraftPaymentLines } from "@/lib/payment-method-payment-intent";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 
-const METHOD_OPTIONS = ["CASH", "BANK_TRANSFER", "CREDIT", "CHECK"] as const;
+/** רק העברה + מזומן — זה כל ה-INPUT שהמשתמש מזין */
+const METHOD_CARDS = [
+  {
+    key: "BANK_TRANSFER" as const,
+    title: "העברה בנקאית",
+    prompt: "כמה הלקוח רוצה לשלם בהעברה?",
+  },
+  {
+    key: "CASH" as const,
+    title: "מזומן",
+    prompt: "כמה הלקוח רוצה לשלם במזומן?",
+  },
+];
+
+type MethodKey = (typeof METHOD_CARDS)[number]["key"];
+
+const DEFAULT_REASON =
+  "הלקוח רוצה לשלם באמצעי תשלום שונה מהמתוכנן בהזמנות הפתוחות";
 
 function fmtMoney(currency: PaymentBalanceCurrency, n: number): string {
   const safe = Number.isFinite(n) ? n : 0;
-  const formatted = safe.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const formatted = safe.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
   return currency === "ILS" ? `₪${formatted}` : `$${formatted}`;
 }
 
 function fmtUsd(n: number): string {
   return fmtMoney("USD", n);
 }
+
+function parseAmount(raw: string): number {
+  const n = Number(String(raw).replace(/,/g, "").trim());
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function toUsd(amount: number, currency: PaymentBalanceCurrency, rate: number | null): number | null {
+  if (!(amount > 0)) return 0;
+  if (currency === "USD") return Math.round(amount * 100) / 100;
+  if (!rate || !(rate > 0)) return null;
+  return Math.round((amount / rate) * 100) / 100;
+}
+
+type DraftPaymentSeed = {
+  usdAmount?: number | "" | null;
+  ilsAmount?: number | "" | null;
+  usdPaymentMethod?: string | null;
+  ilsPaymentMethod?: string | null;
+  paymentMethod?: string | null;
+};
+
+type IntentDraft = {
+  amount: string;
+  currency: PaymentBalanceCurrency;
+};
+
+type PreviewState = {
+  openDebtUsd: number;
+  totalPayUsd: number;
+  intents: Array<{
+    method: string;
+    currency: PaymentBalanceCurrency;
+    amountNative: number;
+    amountUsd: number;
+  }>;
+  moves: Array<{
+    fromMethod: string;
+    toMethod: string;
+    fromLabel: string;
+    toLabel: string;
+    currency: PaymentBalanceCurrency;
+    amountNative: number;
+    amountUsd: number;
+    exchangeRate: number | null;
+  }>;
+  orderChanges: Array<{
+    orderId: string;
+    orderNumber: string;
+    dateYmd: string;
+    fromMethod: string;
+    fromLabel: string;
+    toMethod: string;
+    toLabel: string;
+    moveUsd: number;
+    availableUsd: number;
+    partial: boolean;
+  }>;
+};
 
 type Props = {
   open: boolean;
@@ -36,45 +110,31 @@ type Props = {
   weekCode: string;
   workCountry: string;
   exchangeRate?: string | null;
+  /** טיוטת תשלום נוכחית מקליטת התשלום — אם קיימת */
+  draftPaymentLines?: DraftPaymentSeed[];
   onClose: () => void;
   onApplied: (result: { adjustmentId: string; affectedOrders: number }) => void;
 };
 
-function BalanceCard({
-  card,
-  tone,
-  subtitle,
-}: {
-  card: MethodBalanceCard;
-  tone: "captured" | "planned";
-  subtitle: string;
-}) {
-  const currencies = (["USD", "ILS"] as const).filter((c) => (card.byCurrency[c] ?? 0) > 0.001);
-  if (currencies.length === 0) return null;
-
-  return (
-    <article className={`pm-adjust-balance-card pm-adjust-balance-card--${tone}`}>
-      <header className="pm-adjust-balance-card__head">
-        <span className="pm-adjust-balance-card__icon" aria-hidden>{card.icon}</span>
-        <div>
-          <strong>{card.methodLabel}</strong>
-          <span>{subtitle}</span>
-        </div>
-      </header>
-      <div className="pm-adjust-balance-card__amounts">
-        {currencies.map((currency) => (
-          <div key={currency} className="pm-adjust-balance-card__row">
-            <span className="pm-adjust-balance-card__cur">{currency}</span>
-            <strong dir="ltr">{fmtMoney(currency, card.byCurrency[currency] ?? 0)}</strong>
-          </div>
-        ))}
-      </div>
-    </article>
-  );
+function emptyDrafts(): Record<MethodKey, IntentDraft> {
+  return {
+    BANK_TRANSFER: { amount: "", currency: "ILS" },
+    CASH: { amount: "", currency: "USD" },
+  };
 }
 
-function MethodBadge({ label, tone }: { label: string; tone: "from" | "to" }) {
-  return <span className={`payment-method-adjust-modal__method-badge payment-method-adjust-modal__method-badge--${tone}`}>{label}</span>;
+function seedFromDraftLines(lines: DraftPaymentSeed[] | undefined): Record<MethodKey, IntentDraft> {
+  const drafts = emptyDrafts();
+  if (!lines?.length) return drafts;
+  const intents = intentsFromDraftPaymentLines(lines);
+  for (const intent of intents) {
+    if (intent.method !== "BANK_TRANSFER" && intent.method !== "CASH") continue;
+    drafts[intent.method] = {
+      amount: String(intent.amountNative),
+      currency: intent.currency,
+    };
+  }
+  return drafts;
 }
 
 export function PaymentMethodAutoAdjustModal({
@@ -86,25 +146,15 @@ export function PaymentMethodAutoAdjustModal({
   weekCode,
   workCountry,
   exchangeRate,
+  draftPaymentLines,
   onClose,
   onApplied,
 }: Props) {
-  const [fromPaymentMethod, setFromPaymentMethod] = useState("CASH");
-  const [toPaymentMethod, setToPaymentMethod] = useState("BANK_TRANSFER");
-  const [currency, setCurrency] = useState<PaymentBalanceCurrency>("USD");
-  const [amountNative, setAmountNative] = useState("");
-  const [reasonCode, setReasonCode] = useState<PaymentMethodAdjustmentReasonCode>("CUSTOMER_REQUEST");
-  const [reasonText, setReasonText] = useState("");
-  const [bootstrap, setBootstrap] = useState<{
-    capturedCards: MethodBalanceCard[];
-    plannedCards: MethodBalanceCard[];
-    capturedTotalUsd: number;
-    suggestion: PaymentMethodAdjustmentPreview["suggestion"];
-  } | null>(null);
-  const [preview, setPreview] = useState<PaymentMethodAdjustmentPreview | null>(null);
+  const [drafts, setDrafts] = useState<Record<MethodKey, IntentDraft>>(() => emptyDrafts());
+  const [preview, setPreview] = useState<PreviewState | null>(null);
+  const [bootstrapDebt, setBootstrapDebt] = useState(openDebtUsd);
   const [busy, setBusy] = useState<"bootstrap" | "preview" | "apply" | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const rateN = useMemo(() => {
     const raw = (exchangeRate ?? "").replace(",", ".");
@@ -112,79 +162,89 @@ export function PaymentMethodAutoAdjustModal({
     return Number.isFinite(n) && n > 0 ? n : null;
   }, [exchangeRate]);
 
-  const amountNumber = useMemo(() => Number(amountNative.replace(/,/g, "")) || 0, [amountNative]);
-  const fromLabel = PAYMENT_METHOD_LABELS[fromPaymentMethod] ?? fromPaymentMethod;
-  const toLabel = PAYMENT_METHOD_LABELS[toPaymentMethod] ?? toPaymentMethod;
-  const canProceed = reasonText.trim().length >= 5;
-  const initialLoadRef = useRef(false);
+  const liveLines = useMemo(() => {
+    return METHOD_CARDS.map((card) => {
+      const draft = drafts[card.key];
+      const amount = parseAmount(draft.amount);
+      const usd = toUsd(amount, draft.currency, rateN);
+      return {
+        key: card.key,
+        title: card.title,
+        amount,
+        currency: draft.currency,
+        usd,
+        active: amount > 0,
+      };
+    });
+  }, [drafts, rateN]);
+
+  const liveTotalUsd = useMemo(() => {
+    let total = 0;
+    for (const line of liveLines) {
+      if (!line.active) continue;
+      if (line.usd == null) return null;
+      total += line.usd;
+    }
+    return Math.round(total * 100) / 100;
+  }, [liveLines]);
+
+  const hasIls = liveLines.some((line) => line.active && line.currency === "ILS");
+  const canCompute = liveTotalUsd != null && liveTotalUsd > 0 && (!hasIls || rateN != null);
+
+  const draftLinesRef = useRef(draftPaymentLines);
+  draftLinesRef.current = draftPaymentLines;
 
   useEffect(() => {
     if (!open) {
-      initialLoadRef.current = false;
       setPreview(null);
-      setBootstrap(null);
       setErr(null);
-      setConfirmOpen(false);
-      setReasonText("");
-      setReasonCode("CUSTOMER_REQUEST");
-      setAmountNative("");
-      setFromPaymentMethod("CASH");
-      setToPaymentMethod("BANK_TRANSFER");
-      setCurrency("USD");
+      setDrafts(emptyDrafts());
       return;
     }
 
-    const isInitial = !initialLoadRef.current;
-    initialLoadRef.current = true;
+    setDrafts(seedFromDraftLines(draftLinesRef.current));
+    setPreview(null);
+    setErr(null);
     setBusy("bootstrap");
     void loadPaymentMethodAdjustmentBootstrapAction({
       customerId,
       weekCode,
       workCountry,
       exchangeRate: rateN,
-      fromPaymentMethod,
-      toPaymentMethod,
-      currency,
     }).then((res) => {
       setBusy(null);
       if (!res.ok) {
         setErr(res.error);
         return;
       }
-      setBootstrap({
-        capturedCards: res.capturedCards,
-        plannedCards: res.plannedCards,
-        capturedTotalUsd: res.capturedTotalUsd,
-        suggestion: res.suggestion,
-      });
-      if (isInitial && res.suggestion) {
-        setAmountNative(String(res.suggestion.amount));
-        setCurrency(res.suggestion.currency);
-      }
+      setBootstrapDebt(res.customerOpenDebtUsd);
     });
-  }, [open, customerId, weekCode, workCountry, rateN, fromPaymentMethod, toPaymentMethod, currency]);
+  }, [open, customerId, weekCode, workCountry, rateN]);
 
-  if (!open) return null;
+  function updateDraft(key: MethodKey, patch: Partial<IntentDraft>) {
+    setDrafts((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
+    setPreview(null);
+    setErr(null);
+  }
 
-  async function runPreview(override?: { amount?: number; cur?: PaymentBalanceCurrency }) {
+  function buildIntents() {
+    return METHOD_CARDS.map((card) => ({
+      method: card.key,
+      currency: drafts[card.key].currency,
+      amountNative: parseAmount(drafts[card.key].amount),
+    })).filter((row) => row.amountNative > 0);
+  }
+
+  async function runCompute() {
     setBusy("preview");
     setErr(null);
-    setConfirmOpen(false);
-
-    const cur = override?.cur ?? currency;
-    const amt = override?.amount ?? amountNumber;
-    const amountUsd = cur === "USD" ? amt : rateN ? amt / rateN : amt;
-
-    const res = await previewPaymentMethodAutoAdjustmentAction({
+    const intents = buildIntents();
+    const res = await previewPaymentIntentAutoAdjustmentAction({
       customerId,
       weekCode,
       workCountry,
-      fromPaymentMethod,
-      toPaymentMethod,
-      amountUsd,
-      currency: cur,
-      amountNative: amt,
       exchangeRate: rateN,
+      intents,
     });
     setBusy(null);
     if (!res.ok) {
@@ -192,50 +252,89 @@ export function PaymentMethodAutoAdjustModal({
       setErr(res.error);
       return;
     }
-    setPreview(res.preview);
-    if (override) {
-      setAmountNative(String(override.amount));
-      setCurrency(override.cur!);
-    } else if (res.preview.suggestion && !amountNative.trim()) {
-      setAmountNative(String(res.preview.suggestion.amount));
-      setCurrency(res.preview.suggestion.currency);
-    }
+    setPreview(res);
   }
 
-  async function apply() {
-    if (!preview) return;
+  function backToEdit() {
+    setPreview(null);
+    setErr(null);
+  }
+
+  async function applyAll() {
+    if (!preview || preview.moves.length === 0) return;
     setBusy("apply");
     setErr(null);
-    const res = await applyPaymentMethodAutoAdjustmentAction({
-      customerId,
-      weekCode,
-      workCountry,
-      fromPaymentMethod,
-      toPaymentMethod,
-      amountUsd: preview.requestedAmountUsd,
-      currency: preview.currency,
-      amountNative: preview.amountNative,
-      exchangeRate: rateN,
-      reasonCode,
-      reasonText,
-    });
-    setBusy(null);
-    if (!res.ok) {
-      setErr(res.error);
-      return;
+
+    const audit = {
+      current: [] as Array<{ methodKey: string; currency: string; amount: number }>,
+      desired: preview.intents.map((i) => ({
+        methodKey: i.method,
+        currency: i.currency,
+        amount: i.amountNative,
+      })),
+      deltas: preview.moves.map((m) => ({
+        methodKey: `${m.fromMethod}->${m.toMethod}`,
+        currency: m.currency,
+        delta: m.amountUsd,
+      })),
+      moves: preview.moves.map((m) => ({
+        fromMethod: m.fromMethod,
+        toMethod: m.toMethod,
+        currency: m.currency,
+        amountNative: m.amountNative,
+        amountUsd: m.amountUsd,
+      })),
+    };
+
+    let totalAffected = 0;
+    let lastId = "";
+    for (let i = 0; i < preview.moves.length; i++) {
+      const move = preview.moves[i]!;
+      const res = await applyPaymentMethodAutoAdjustmentAction({
+        customerId,
+        weekCode,
+        workCountry,
+        fromPaymentMethod: move.fromMethod,
+        toPaymentMethod: move.toMethod,
+        amountUsd: move.amountUsd,
+        currency: move.currency,
+        amountNative: move.amountNative,
+        exchangeRate: rateN,
+        reasonCode: "CUSTOMER_REQUEST",
+        reasonText: DEFAULT_REASON,
+        desiredAllocationAudit: i === 0 ? audit : null,
+      });
+      if (!res.ok) {
+        setBusy(null);
+        setErr(
+          i > 0
+            ? `חלק מההתאמות בוצעו (${i}/${preview.moves.length}), ואז נכשל: ${res.error}`
+            : res.error,
+        );
+        return;
+      }
+      totalAffected += res.affectedOrders;
+      lastId = res.adjustmentId;
     }
-    setConfirmOpen(false);
-    onApplied({ adjustmentId: res.adjustmentId, affectedOrders: res.affectedOrders });
+
+    setBusy(null);
+    onApplied({ adjustmentId: lastId, affectedOrders: totalAffected });
   }
 
-  const capturedCards = preview?.capturedCards ?? bootstrap?.capturedCards ?? [];
-  const plannedCards = preview?.plannedCards ?? bootstrap?.plannedCards ?? [];
-  const capturedTotalUsd = preview?.capturedTotalUsd ?? bootstrap?.capturedTotalUsd ?? 0;
+  if (!open) return null;
+
+  const debt = preview?.openDebtUsd ?? bootstrapDebt ?? openDebtUsd;
+  const customerLabel = customerCode
+    ? `${customerName || "—"} #${customerCode}`
+    : customerName || "—";
+  const adjustTotal = preview
+    ? Math.round(preview.orderChanges.reduce((s, row) => s + row.moveUsd, 0) * 100) / 100
+    : 0;
 
   return (
     <div className="adm-cash-modal-backdrop pm-adjust-backdrop" role="presentation" onClick={onClose}>
       <div
-        className="adm-cash-modal payment-method-adjust-modal"
+        className="adm-cash-modal payment-method-adjust-modal payment-method-adjust-modal--paynow"
         dir="rtl"
         role="dialog"
         aria-modal="true"
@@ -245,7 +344,6 @@ export function PaymentMethodAutoAdjustModal({
         <div className="payment-method-adjust-modal__head">
           <div>
             <h3 id="payment-method-adjust-title">התאמה אוטומטית של אמצעי תשלום</h3>
-            <p>צפייה במצב הקופות בפועל, חישוב התאמה, ואישור לפני ביצוע</p>
           </div>
           <button type="button" className="payment-method-adjust-modal__close" aria-label="סגור" onClick={onClose}>
             <X size={18} />
@@ -253,313 +351,187 @@ export function PaymentMethodAutoAdjustModal({
         </div>
 
         <div className="payment-method-adjust-modal__body">
-          {/* אזור א — לקוח */}
-          <section className="pm-adjust-zone pm-adjust-zone--customer">
-            <div className="pm-adjust-customer-stat">
-              <span>לקוח</span>
-              <strong>{customerName || "—"}</strong>
-            </div>
-            <div className="pm-adjust-customer-stat">
-              <span>קוד</span>
-              <strong dir="ltr">{customerCode || "—"}</strong>
-            </div>
-            <div className="pm-adjust-customer-stat">
-              <span>חוב פתוח</span>
-              <strong dir="ltr">{fmtUsd(openDebtUsd)}</strong>
-            </div>
-            <div className="pm-adjust-customer-stat">
-              <span>סה״כ תשלומים שנקלטו</span>
-              <strong dir="ltr">{fmtUsd(capturedTotalUsd)}</strong>
-            </div>
-          </section>
+          <div className="pm-paynow-topbar">
+            <span className="pm-paynow-topbar__customer">{customerLabel}</span>
+            <span dir="ltr">חוב פתוח: {fmtUsd(debt)}</span>
+            {rateN ? <span dir="ltr">שער דולר: {rateN.toFixed(4)}</span> : null}
+          </div>
 
-          {/* אזור ב — מצב קופות */}
-          <section className="pm-adjust-zone pm-adjust-zone--balances">
-            <div className="pm-adjust-zone__title-row">
-              <h4>מצב הקופות</h4>
-              <p>סכומים לפי מטבע מקור — ללא המרה</p>
-            </div>
-            <div className="pm-adjust-balances-grid">
-              <div className="pm-adjust-balances-col">
-                <h5>בפועל — תשלומים שנקלטו</h5>
-                <div className="pm-adjust-balance-cards">
-                  {busy === "bootstrap" ? (
-                    <p className="pm-adjust-loading">טוען מצב קופות...</p>
-                  ) : capturedCards.length > 0 ? (
-                    capturedCards.map((card) => (
-                      <BalanceCard key={`c-${card.methodKey}`} card={card} tone="captured" subtitle="נקלט בפועל" />
-                    ))
-                  ) : (
-                    <p className="pm-adjust-empty">אין תשלומים שנקלטו</p>
-                  )}
+          {!preview ? (
+            <section className="pm-paynow-panel">
+              <h4>כמה הלקוח רוצה לשלם?</h4>
+
+              <div className="pm-paynow-cards">
+                {METHOD_CARDS.map((card) => {
+                  const draft = drafts[card.key];
+                  return (
+                    <article key={card.key} className="pm-paynow-card">
+                      <header>
+                        <strong>{card.title}</strong>
+                        <span>{card.prompt}</span>
+                      </header>
+                      <div className="pm-paynow-card__row">
+                        <label className="pm-paynow-amount">
+                          <span className="sr-only">סכום {card.title}</span>
+                          <span className="pm-paynow-amount__prefix" aria-hidden>
+                            {draft.currency === "ILS" ? "₪" : "$"}
+                          </span>
+                          <input
+                            dir="ltr"
+                            inputMode="decimal"
+                            value={draft.amount}
+                            placeholder="סכום"
+                            disabled={busy != null}
+                            onChange={(e) => updateDraft(card.key, { amount: e.target.value })}
+                          />
+                        </label>
+                        <select
+                          value={draft.currency}
+                          disabled={busy != null}
+                          onChange={(e) =>
+                            updateDraft(card.key, { currency: e.target.value as PaymentBalanceCurrency })
+                          }
+                          aria-label={`מטבע ${card.title}`}
+                        >
+                          <option value="USD">$ USD</option>
+                          <option value="ILS">₪ ILS</option>
+                        </select>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+
+              <div className="pm-paynow-totals">
+                {rateN ? <div dir="ltr">שער דולר: {rateN.toFixed(4)}</div> : null}
+                {liveLines
+                  .filter((line) => line.active)
+                  .map((line) => (
+                    <div key={line.key} className="pm-paynow-totals__line">
+                      <span>{line.title}:</span>
+                      <span dir="ltr">
+                        {fmtMoney(line.currency, line.amount)}
+                        {line.currency === "ILS" && line.usd != null ? ` = ${fmtUsd(line.usd)}` : null}
+                        {line.currency === "ILS" && line.usd == null ? " — נדרש שער דולר" : null}
+                      </span>
+                    </div>
+                  ))}
+                <div className="pm-paynow-totals__sum">
+                  <span>סה״כ שהלקוח רוצה לשלם:</span>
+                  <strong dir="ltr">{liveTotalUsd != null ? fmtUsd(liveTotalUsd) : "—"}</strong>
                 </div>
               </div>
-              <div className="pm-adjust-balances-col">
-                <h5>לפי הזמנות — יתרה מתוכננת פתוחה</h5>
-                <div className="pm-adjust-balance-cards">
-                  {plannedCards.length > 0 ? (
-                    plannedCards.map((card) => (
-                      <BalanceCard key={`p-${card.methodKey}`} card={card} tone="planned" subtitle="יתרה פתוחה" />
-                    ))
-                  ) : (
-                    <p className="pm-adjust-empty">אין יתרה פתוחה מתוכננת</p>
-                  )}
-                </div>
+
+              {err ? <p className="payment-method-adjust-modal__err">{err}</p> : null}
+
+              <div className="pm-paynow-compute">
+                <button
+                  type="button"
+                  className="adm-btn adm-btn--primary"
+                  disabled={busy != null || !canCompute}
+                  onClick={() => void runCompute()}
+                >
+                  {busy === "preview" ? "מחשב התאמה..." : "חשב התאמה"}
+                </button>
               </div>
-            </div>
-          </section>
-
-          {/* אזור ג — התאמה */}
-          <section className="pm-adjust-zone pm-adjust-zone--adjust">
-            <div className="pm-adjust-zone__title-row">
-              <h4>הגדרת התאמה</h4>
-            </div>
-            <div className="pm-adjust-form-grid">
-              <label className="adm-field">
-                <span>מאמצעי תשלום</span>
-                <select value={fromPaymentMethod} onChange={(e) => { setFromPaymentMethod(e.target.value); setPreview(null); }}>
-                  {METHOD_OPTIONS.map((value) => (
-                    <option key={value} value={value}>{PAYMENT_METHOD_LABELS[value] ?? value}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="adm-field">
-                <span>לאמצעי תשלום</span>
-                <select value={toPaymentMethod} onChange={(e) => { setToPaymentMethod(e.target.value); setPreview(null); }}>
-                  {METHOD_OPTIONS.map((value) => (
-                    <option key={value} value={value}>{PAYMENT_METHOD_LABELS[value] ?? value}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="adm-field">
-                <span>מטבע</span>
-                <select value={currency} onChange={(e) => { setCurrency(e.target.value as PaymentBalanceCurrency); setPreview(null); }}>
-                  <option value="USD">USD — דולר</option>
-                  <option value="ILS">ILS — שקל</option>
-                </select>
-              </label>
-              <label className="adm-field">
-                <span>סכום לשינוי ({currency})</span>
-                <input
-                  dir="ltr"
-                  inputMode="decimal"
-                  value={amountNative}
-                  onChange={(e) => { setAmountNative(e.target.value); setPreview(null); }}
-                  placeholder={currency === "USD" ? "15000" : "45000"}
-                />
-              </label>
-              <button
-                type="button"
-                className="adm-btn adm-btn--primary pm-adjust-calc-btn"
-                disabled={busy != null}
-                onClick={() => void runPreview()}
-              >
-                {busy === "preview" ? "מחשב התאמה..." : "חשב התאמה"}
-              </button>
-            </div>
-
-            <div className="payment-method-adjust-modal__direction" aria-live="polite">
-              <MethodBadge label={fromLabel} tone="from" />
-              <ArrowLeftRight size={18} aria-hidden />
-              <MethodBadge label={toLabel} tone="to" />
-              <span className="payment-method-adjust-modal__impact-note">
-                {currency} · {preview ? `${preview.affectedOrdersCount} הזמנות יושפעו` : "לחצי חשב התאמה לקבלת הצעה"}
-              </span>
-            </div>
-          </section>
-
-          {err ? <p className="payment-method-adjust-modal__err">{err}</p> : null}
-
-          {preview?.suggestion && !confirmOpen ? (
-            <section className="pm-adjust-suggestion-card">
-              <Sparkles size={16} aria-hidden />
-              <div>
-                <strong>הצעה אוטומטית</strong>
-                <p>{preview.suggestion.reason}</p>
-                <p dir="ltr">
-                  {preview.suggestion.fromLabel} → {preview.suggestion.toLabel}: {fmtMoney(preview.suggestion.currency, preview.suggestion.amount)}
-                </p>
-              </div>
-              <button
-                type="button"
-                className="adm-btn adm-btn--ghost"
-                onClick={() => {
-                  const s = preview.suggestion!;
-                  void runPreview({ amount: s.amount, cur: s.currency });
-                }}
-              >
-                השתמש בהצעה
-              </button>
             </section>
-          ) : bootstrap?.suggestion && !preview ? (
-            <section className="pm-adjust-suggestion-card">
-              <Sparkles size={16} aria-hidden />
-              <div>
-                <strong>הצעה אוטומטית</strong>
-                <p>{bootstrap.suggestion.reason}</p>
-                <p dir="ltr">
-                  {bootstrap.suggestion.fromLabel} → {bootstrap.suggestion.toLabel}: {fmtMoney(bootstrap.suggestion.currency, bootstrap.suggestion.amount)}
-                </p>
+          ) : (
+            <section className="pm-paynow-panel pm-paynow-panel--preview">
+              <h4>התאמה מוצעת</h4>
+              <p className="pm-paynow-panel__hint">
+                המערכת חישבה לפי FIFO אילו הזמנות לעדכן. עדיין לא נשמר שינוי — רק לאחר אישור.
+              </p>
+
+              <div className="pm-paynow-table-wrap">
+                <table className="pm-paynow-table">
+                  <thead>
+                    <tr>
+                      <th>הזמנה</th>
+                      <th>סכום פתוח</th>
+                      <th>אמצעי נוכחי</th>
+                      <th>אמצעי חדש</th>
+                      <th>סכום להתאמה</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {preview.orderChanges.map((row) => (
+                      <tr key={row.orderId}>
+                        <td className="pm-paynow-table__order" dir="ltr">
+                          {row.orderNumber}
+                        </td>
+                        <td dir="ltr">{fmtUsd(row.availableUsd)}</td>
+                        <td>{row.fromLabel}</td>
+                        <td>{row.toLabel}</td>
+                        <td dir="ltr" className="pm-paynow-table__move">
+                          {fmtUsd(row.moveUsd)}
+                          {row.partial ? (
+                            <small>
+                              מתוך {fmtUsd(row.availableUsd)}
+                            </small>
+                          ) : null}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-              <button
-                type="button"
-                className="adm-btn adm-btn--ghost"
-                onClick={() => {
-                  const s = bootstrap.suggestion!;
-                  void runPreview({ amount: s.amount, cur: s.currency });
-                }}
-              >
-                חשב לפי הצעה
-              </button>
-            </section>
-          ) : null}
 
-          {preview ? (
-            <>
-              {/* לפני → שינוי → אחרי */}
-              <section className="pm-adjust-flow-card">
-                <h4>תצוגת לפני / אחרי</h4>
-                <div className="pm-adjust-flow-grid">
-                  <div className="pm-adjust-flow-col">
-                    <span className="pm-adjust-flow-label">לפני — יתרה מתוכננת</span>
-                    <div className="pm-adjust-flow-row">
-                      <span>{preview.fromLabel}</span>
-                      <strong dir="ltr">{fmtMoney(preview.currency, preview.currentFromOpenNative)}</strong>
-                    </div>
-                    <div className="pm-adjust-flow-row">
-                      <span>{preview.toLabel}</span>
-                      <strong dir="ltr">{fmtMoney(preview.currency, preview.currentToOpenNative)}</strong>
-                    </div>
-                  </div>
-
-                  <div className="pm-adjust-flow-arrow" aria-hidden>
-                    <ArrowDown size={20} />
-                    <div className="pm-adjust-flow-change">
-                      <span>{preview.fromLabel} → {preview.toLabel}</span>
-                      <strong dir="ltr">-{fmtMoney(preview.currency, preview.amountNative)}</strong>
-                      {preview.currency === "ILS" && preview.exchangeRate ? (
-                        <small dir="ltr">שער {preview.exchangeRate.toFixed(4)} · ≈ {fmtUsd(preview.requestedAmountUsd)}</small>
+              <div className="pm-paynow-result-summary">
+                <div className="pm-paynow-result-summary__block">
+                  <strong>התשלום שהוזן</strong>
+                  {preview.intents.map((intent) => (
+                    <div key={`${intent.method}-${intent.currency}`}>
+                      {PAYMENT_METHOD_LABELS[intent.method] ?? intent.method}:{" "}
+                      <span dir="ltr">{fmtMoney(intent.currency, intent.amountNative)}</span>
+                      {intent.currency === "ILS" && rateN ? (
+                        <span dir="ltr">
+                          {" "}
+                          · שווי לפי שער {rateN.toFixed(4)}: {fmtUsd(intent.amountUsd)}
+                        </span>
                       ) : null}
                     </div>
-                    <ArrowDown size={20} />
-                  </div>
-
-                  <div className="pm-adjust-flow-col pm-adjust-flow-col--after">
-                    <span className="pm-adjust-flow-label">אחרי — יתרה מתוכננת</span>
-                    <div className="pm-adjust-flow-row">
-                      <span>{preview.fromLabel}</span>
-                      <strong dir="ltr">{fmtMoney(preview.currency, preview.afterFromOpenNative)}</strong>
-                    </div>
-                    <div className="pm-adjust-flow-row">
-                      <span>{preview.toLabel}</span>
-                      <strong dir="ltr">{fmtMoney(preview.currency, preview.afterToOpenNative)}</strong>
-                    </div>
-                  </div>
+                  ))}
                 </div>
-
-                <p className="pm-adjust-total-note">
-                  סה״כ תשלומים שנקלטו נשאר <strong dir="ltr">{fmtUsd(preview.capturedTotalUsd)}</strong> — משתנה רק שיוך אמצעי התשלום בהזמנות
-                </p>
-              </section>
-
-              <section className="payment-method-adjust-modal__table-card">
-                <div className="payment-method-adjust-modal__table-head">
+                <div className="pm-paynow-result-summary__kpis">
                   <div>
-                    <h4>Preview — הזמנות שיושפעו</h4>
-                    <p>
-                      סה״כ: <strong dir="ltr">{fmtMoney(preview.currency, preview.amountNative)}</strong>
-                      {preview.currency === "ILS" ? <> · <strong dir="ltr">≈ {fmtUsd(preview.requestedAmountUsd)}</strong></> : null}
-                    </p>
+                    <span>הזמנות שיושפעו</span>
+                    <strong>{preview.orderChanges.length}</strong>
                   </div>
-                  <span className="payment-method-adjust-modal__table-count">{preview.affectedOrdersCount} הזמנות</span>
+                  <div>
+                    <span>סה״כ התאמה</span>
+                    <strong dir="ltr">{fmtUsd(adjustTotal)}</strong>
+                  </div>
                 </div>
-                <div className="payment-method-adjust-modal__table-wrap">
-                  <table className="payment-method-adjust-modal__table">
-                    <thead>
-                      <tr>
-                        <th>הזמנה</th>
-                        <th>יתרה לפני</th>
-                        <th>שינוי</th>
-                        <th>אמצעי קודם</th>
-                        <th>אמצעי חדש</th>
-                        <th>יתרה לאחר</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {preview.affectedOrders.map((row) => (
-                        <tr key={row.orderId}>
-                          <td className="payment-method-adjust-modal__order-cell" dir="ltr">{row.orderNumber}</td>
-                          <td dir="ltr">{fmtUsd(row.availableUsd)}</td>
-                          <td className="payment-method-adjust-modal__money-strong" dir="ltr">{fmtUsd(row.moveUsd)}</td>
-                          <td><MethodBadge label={row.currentMethodLabel} tone="from" /></td>
-                          <td><MethodBadge label={row.newMethodLabel} tone="to" /></td>
-                          <td dir="ltr">{fmtUsd(row.sourceRemainingAfterUsd)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
+                <p className="pm-adjust-not-payment">
+                  ההתאמה משנה רק אמצעי תשלום מתוכנן בהזמנות. היא אינה תשלום ואינה סוגרת חוב.
+                </p>
+              </div>
 
-              {confirmOpen ? (
-                <section className="payment-method-adjust-modal__reason-card">
-                  <h4>אישור וביצוע</h4>
-                  <label className="adm-field">
-                    <span>סיבת השינוי <em>חובה</em></span>
-                    <select value={reasonCode} onChange={(e) => setReasonCode(e.target.value as PaymentMethodAdjustmentReasonCode)}>
-                      {PAYMENT_METHOD_ADJUSTMENT_REASON_OPTIONS.map((row) => (
-                        <option key={row.code} value={row.code}>{row.label}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="adm-field">
-                    <span>פירוט <em>חובה</em></span>
-                    <textarea
-                      value={reasonText}
-                      onChange={(e) => setReasonText(e.target.value)}
-                      rows={4}
-                      placeholder="לדוגמה: הלקוח שילם במזומן אך ההזמנות מתוכננות להעברה — מעבירים שיוך"
-                    />
-                  </label>
-                  <section className="payment-method-adjust-modal__confirm-card is-ready">
-                    <Sparkles size={16} aria-hidden />
-                    <div>
-                      <strong>
-                        שינוי <span dir="ltr">{fmtMoney(preview.currency, preview.amountNative)}</span> מ{preview.fromLabel} ל{preview.toLabel}
-                      </strong>
-                      <p>לא ייווצרו תשלומים חדשים — רק שיוך אמצעי תשלום בהזמנות</p>
-                    </div>
-                  </section>
-                </section>
-              ) : null}
-            </>
-          ) : null}
+              {err ? <p className="payment-method-adjust-modal__err">{err}</p> : null}
+            </section>
+          )}
         </div>
 
         <div className="payment-method-adjust-modal__footer">
-          <button type="button" className="adm-btn" disabled={busy != null} onClick={onClose}>
-            ביטול
-          </button>
-          {preview ? (
-            confirmOpen ? (
+          {!preview ? (
+            <button type="button" className="adm-btn" disabled={busy != null} onClick={onClose}>
+              ביטול
+            </button>
+          ) : (
+            <>
+              <button type="button" className="adm-btn" disabled={busy != null} onClick={backToEdit}>
+                חזרה לעריכה
+              </button>
               <button
                 type="button"
                 className="adm-btn adm-btn--primary"
-                disabled={busy === "apply" || !canProceed}
-                onClick={() => void apply()}
+                disabled={busy === "apply"}
+                onClick={() => void applyAll()}
               >
-                {busy === "apply" ? "מבצע התאמה..." : "אישור וביצוע"}
+                {busy === "apply" ? "מבצע התאמה..." : "אישור וביצוע התאמה"}
               </button>
-            ) : (
-              <button
-                type="button"
-                className="adm-btn adm-btn--primary"
-                onClick={() => setConfirmOpen(true)}
-              >
-                המשך לאישור
-              </button>
-            )
-          ) : null}
+            </>
+          )}
         </div>
       </div>
     </div>

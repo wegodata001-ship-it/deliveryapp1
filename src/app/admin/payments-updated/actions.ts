@@ -35,9 +35,14 @@ import { allocateNextPaymentCapture, resolvePaymentWorkCountry } from "@/lib/pay
 import { DEFAULT_WORK_COUNTRY, normalizeWorkCountryCode, type WorkCountryCode } from "@/lib/work-country";
 import {
   getCustomerInternalBalanceUsd,
+  getCustomerOpenDebtUsdNumber,
   openDebtScopeForWorkCountry,
   persistCustomerBalanceSnapshot,
 } from "@/lib/customer-open-debt";
+import {
+  alignAllocationToCustomerDebtSurplus,
+  canSaveSurplusWithoutOrderAllocation,
+} from "@/lib/payment-debt-surplus-split";
 import { getCustomerCreditBalanceUsd } from "@/lib/customer-credit-balance";
 import { formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate, parseLocalDateTime } from "@/lib/work-week";
 import {
@@ -67,6 +72,7 @@ import {
 import { evaluatePaymentBusinessRules } from "@/lib/payment-business-validation";
 import { computePaymentIntakePostSaveOutcome, type PaymentIntakePostSaveOutcome } from "@/lib/payment-intake-post-save";
 import { loadPaymentIntakeOrdersForCustomer } from "@/lib/payment-intake-load";
+import { weekCodeForPaymentIntakeOrders } from "@/lib/payment-intake-week-context";
 import { VAT_RATE } from "@/lib/vat";
 import { prismaVatRatePercent } from "@/lib/vat-prisma";
 import { recordActivityAudit } from "@/lib/activity-audit";
@@ -96,15 +102,17 @@ import {
   BALANCE_RESET_FROM_CREDIT_LEDGER_LABEL,
   BALANCE_RESET_LEDGER_LABEL,
   COMMISSION_DEBT_CLOSURE_LEDGER_LABEL,
-  PAYMENT_SMALL_OVERAGE_COMMISSION_ABSORPTION_LABEL,
   PAYMENT_SURPLUS_TO_COMMISSION_LEDGER_LABEL,
   planCommissionDebtClosure,
-  planCommissionSurplusAbsorption,
   planBalanceResetToZero,
 } from "@/lib/commission-debt-closure";
 import { applyCommissionPoolDebtClosureInTx } from "@/lib/commission-pool-closure";
 import { getCustomerCommissionBalanceUsd } from "@/lib/customer-commission-balance";
 import { computeCommissionResetPreviewNumbers } from "@/lib/customer-commission-reset-preview";
+import { resolveSurplusFeeTargetOrderId } from "@/lib/payment-surplus-fee-order";
+
+/** Reason code for audit / fee notes — overpayment added to commission pool */
+const PAYMENT_OVERPAYMENT_TO_FEE_REASON = "PAYMENT_OVERPAYMENT_TO_FEE";
 
 type FlatCheckInsert = { checkNumber: string; dueDate: Date; amount: Prisma.Decimal };
 
@@ -450,9 +458,12 @@ export async function savePaymentUpdatedAction(
   if (checkValidationErr) return { ok: false, error: checkValidationErr };
 
   // חוק עסקי ראשון — אימות אמצעי התשלום המתוכננים לפני כל חישוב הקצאה/FIFO.
+  // form.weekCode = שבוע קליטה; הזמנות נטענות משבוע המקור (הקודם).
+  const ordersSourceWeek =
+    weekCodeForPaymentIntakeOrders(form.weekCode) ?? form.weekCode?.trim() ?? null;
   const intakeOrdersResult = await loadPaymentIntakeOrdersForCustomer({
     customerId: cid,
-    weekCodeForOpenBalances: form.weekCode,
+    weekCodeForOpenBalances: ordersSourceWeek,
     paymentWorkCountryRaw: form.workCountry,
   });
   if (!intakeOrdersResult.ok) return intakeOrdersResult;
@@ -491,12 +502,12 @@ export async function savePaymentUpdatedAction(
   const selectedIntakeOrders = intakeOrdersResult.orders.filter(
     (order) => selectedOrderIds == null || selectedOrderIds.has(order.id),
   );
-  const totalDebtUsd = roundMoney2(
-    selectedIntakeOrders.reduce(
-      (sum, order) => sum + Math.max(0, Number(order.dbRemainingUsd) || 0),
-      0,
-    ),
+  /** חוב SSOT של הלקוח — לא סכום יתרות הזמנה בטבלה (משיכה מחוב / זכות) */
+  const customerOpenDebtUsd = await getCustomerOpenDebtUsdNumber(
+    cid,
+    openDebtScopeForWorkCountry(form.workCountry),
   );
+  const totalDebtUsd = customerOpenDebtUsd;
   const availableCreditUsd = Math.max(
     0,
     Number(
@@ -645,8 +656,6 @@ export async function savePaymentUpdatedAction(
 
   let allocationEntries: [string, number][] = [];
   let unallocatedUsd = 0;
-  let surplusCommissionAbsorbedUsd = 0;
-  let surplusCommissionOrderId: string | null = null;
   /** עודף שהמשתמש בחר להעביר לעמלות/הפרשי התאמה — ללא הקצאה נוספת */
   let surplusFeeUsd = 0;
   /** Matching Engine — מצב אמצעים לשמירה ב-DB (דו-מטבעי) */
@@ -655,7 +664,7 @@ export async function savePaymentUpdatedAction(
   let usedMethodMatching = false;
   /** סכום יתרות אמצעים פתוחים אחרי Matching/seed — לזיהוי הודעת שגיאה מדויקת */
   let openMethodRemainingUsd = 0;
-  /** ויתור על עודף → הוספה לעמלת הזמנה */
+  /** ויתור על עודף → הוספה לעמלות (PaymentAdjustmentFee) — בלי שינוי Order.commissionUsd */
   let forfeitToCommissionUsd = 0;
   let forfeitCommissionOrderId: string | null = null;
   const surplusAsCredit =
@@ -669,15 +678,13 @@ export async function savePaymentUpdatedAction(
     !surplusForfeit;
   let deferredSurplusUsd = 0;
 
-  const resolveForfeitOrderId = (): string | null => {
-    if (allocationEntries.length > 0) {
-      return allocationEntries[allocationEntries.length - 1]![0];
-    }
-    const idSet =
-      form.includedOrderIds == null ? null : new Set(form.includedOrderIds.filter(Boolean));
-    const list = intakeOrdersResult.orders.filter((o) => idSet == null || idSet.has(o.id));
-    return list.length > 0 ? list[list.length - 1]!.id : null;
-  };
+  const resolveFeeTargetOrderId = (fallbackNewestOrderId: string | null): string | null =>
+    resolveSurplusFeeTargetOrderId({
+      allocationOrderIds: allocationEntries.map(([id]) => id),
+      includedOrderIds: form.includedOrderIds ?? null,
+      intakeOrderIdsOldestFirst: intakeOrdersResult.orders.map((o) => o.id),
+      fallbackNewestOrderId,
+    });
 
   if (totals.totalUsd > ALLOC_EPS) {
     if (forceCreditPayment) {
@@ -881,10 +888,68 @@ export async function savePaymentUpdatedAction(
         );
       }
     }
-    const canSaveWithoutAllocTarget =
-      (surplusAsCredit && unallocatedUsd > ALLOC_EPS) ||
-      (surplusToCommission && unallocatedUsd > ALLOC_EPS) ||
-      (surplusForfeit && unallocatedUsd > ALLOC_EPS);
+
+    /**
+     * A) הקצאה לחוב לקוח SSOT — חייבת הזמנות פתוחות.
+     * B) עודף → יתרת זכות / עמלות — לא דורש הזמנה פתוחה נוספת.
+     */
+    {
+      const debtToClose = roundMoney2(Math.min(customerOpenDebtUsd, totals.totalUsd));
+      let allocatedSum = roundMoney2(
+        allocationEntries.reduce((sum, [, amountUsd]) => sum + amountUsd, 0),
+      );
+      const debtShortfall = roundMoney2(debtToClose - allocatedSum);
+      if (debtShortfall > ALLOC_EPS) {
+        const fifoDiag = logPaymentAllocationPreSave({
+          source: "payment-save-server-ssot-debt",
+          customerId: cid,
+          customerLoaded: true,
+          ordersCount: orders.length,
+          paymentAmountUsd: debtShortfall,
+          selectedOrderIds: form.includedOrderIds ?? null,
+          weekCode: weekCode,
+          bases,
+          prioritizedOrderIds: prioritized,
+          forceCustomerCreditPayment: false,
+        });
+        for (const target of fifoDiag.allocationTargets) {
+          const idx = allocationEntries.findIndex(([orderId]) => orderId === target.orderId);
+          if (idx >= 0) {
+            allocationEntries[idx] = [
+              target.orderId,
+              roundMoney2(allocationEntries[idx]![1] + target.amountUsd),
+            ];
+          } else {
+            allocationEntries.push([target.orderId, target.amountUsd]);
+          }
+        }
+      }
+
+      if (surplusAsCredit || surplusToCommission || surplusForfeit || deferSurplus) {
+        const aligned = alignAllocationToCustomerDebtSurplus({
+          allocationEntries,
+          customerOpenDebtUsd,
+          paymentUsd: totals.totalUsd,
+        });
+        allocationEntries = aligned.allocationEntries;
+        unallocatedUsd = aligned.unallocatedUsd;
+      } else {
+        const allocatedAfter = roundMoney2(
+          allocationEntries.reduce((sum, [, amountUsd]) => sum + amountUsd, 0),
+        );
+        unallocatedUsd = roundMoney2(Math.max(0, totals.totalUsd - allocatedAfter));
+      }
+    }
+
+    // יתרת זכות/עמלה על עודף מותרת בלי הזמנה רק כשאין חוב פתוח שדורש הקצאה.
+    // כשיש חוב + עודף: חייבות להיות שורות הקצאה לחוב; העודף ב-unallocated בנפרד.
+    const canSaveWithoutAllocTarget = canSaveSurplusWithoutOrderAllocation({
+      surplusAsCredit,
+      surplusToCommission,
+      surplusForfeit,
+      unallocatedUsd,
+      customerOpenDebtUsd,
+    });
     if (allocationEntries.length === 0 && !canSaveWithoutAllocTarget) {
       const ledgerOpenUsd = roundMoney2(
         bases.reduce((s, b) => s + computeOrderOpenDebtUsd(b.totalAmountUsd, b.dbPaidUsd), 0),
@@ -894,6 +959,10 @@ export async function savePaymentUpdatedAction(
         ordersCount: orders.length,
         basesCount: bases.length,
         paymentAmountUsd: totals.totalUsd,
+        customerOpenDebtUsd,
+        unallocatedUsd,
+        surplusAsCredit,
+        surplusToCommission,
         weekCode,
         includedOrderIds: form.includedOrderIds,
         prioritized: prioritized ? [...prioritized] : null,
@@ -905,7 +974,7 @@ export async function savePaymentUpdatedAction(
       if (orders.length === 0) {
         return { ok: false, error: "לא נמצאו הזמנות ללקוח זה — לא ניתן לבצע הקצאה" };
       }
-      if (ledgerOpenUsd > ALLOC_EPS) {
+      if (ledgerOpenUsd > ALLOC_EPS || customerOpenDebtUsd > ALLOC_EPS) {
         return {
           ok: false,
           error:
@@ -948,7 +1017,6 @@ export async function savePaymentUpdatedAction(
       unallocatedUsd = 0;
     } else if (!deferSurplus && surplusForfeit && unallocatedUsd > ALLOC_EPS) {
       forfeitToCommissionUsd = roundMoney2(unallocatedUsd);
-      forfeitCommissionOrderId = resolveForfeitOrderId();
       unallocatedUsd = 0;
     } else if (
       form.applyCustomerBalanceReset &&
@@ -1050,9 +1118,6 @@ export async function savePaymentUpdatedAction(
     "קליטת תשלום מעודכן (דו-מטבעי)",
     lineNotes ? `הערה: ${lineNotes}` : null,
     `totalPaymentUsd: $${totals.totalUsd.toFixed(2)}`,
-    surplusCommissionAbsorbedUsd > ALLOC_EPS
-      ? `${PAYMENT_SURPLUS_TO_COMMISSION_LEDGER_LABEL}: $${surplusCommissionAbsorbedUsd.toFixed(2)}`
-      : null,
     surplusFeeUsd > ALLOC_EPS
       ? `${PAYMENT_SURPLUS_TO_COMMISSION_LEDGER_LABEL}: $${surplusFeeUsd.toFixed(2)}`
       : null,
@@ -1100,10 +1165,26 @@ export async function savePaymentUpdatedAction(
     ).map((o) => [o.id, o] as const),
   );
 
-  const overageOrderPrefetch =
-    surplusCommissionOrderId && surplusCommissionAbsorbedUsd > ALLOC_EPS
+  const feeTargetOrderIdCandidate =
+    surplusFeeUsd > ALLOC_EPS || forfeitToCommissionUsd > ALLOC_EPS
+      ? resolveFeeTargetOrderId(
+          (
+            await prisma.order.findFirst({
+              where: { customerId: cid, deletedAt: null },
+              orderBy: { createdAt: "desc" },
+              select: { id: true },
+            })
+          )?.id ?? null,
+        )
+      : null;
+  if (forfeitToCommissionUsd > ALLOC_EPS) {
+    forfeitCommissionOrderId = feeTargetOrderIdCandidate;
+  }
+
+  const feeTargetOrderPrefetch =
+    feeTargetOrderIdCandidate
       ? await prisma.order.findFirst({
-          where: { id: surplusCommissionOrderId, customerId: cid, deletedAt: null },
+          where: { id: feeTargetOrderIdCandidate, customerId: cid, deletedAt: null },
           select: {
             id: true,
             orderNumber: true,
@@ -1115,18 +1196,7 @@ export async function savePaymentUpdatedAction(
       : null;
 
   const forfeitOrderPrefetch =
-    forfeitCommissionOrderId && forfeitToCommissionUsd > ALLOC_EPS
-      ? await prisma.order.findFirst({
-          where: { id: forfeitCommissionOrderId, customerId: cid, deletedAt: null },
-          select: {
-            id: true,
-            orderNumber: true,
-            amountUsd: true,
-            commissionUsd: true,
-            totalUsd: true,
-          },
-        })
-      : null;
+    forfeitCommissionOrderId && forfeitToCommissionUsd > ALLOC_EPS ? feeTargetOrderPrefetch : null;
 
   const commissionResetIds = (form.commissionResetOrderIds ?? []).map((x) => x.trim()).filter(Boolean);
   const commissionResetOrdersPrefetch =
@@ -1321,11 +1391,21 @@ export async function savePaymentUpdatedAction(
                 },
               ];
 
-        // Source order/document (last allocated order, or primary code)
-        const sourceOrderId =
-          allocationEntries.length > 0 ? allocationEntries[allocationEntries.length - 1][0] : null;
-        const sourceOrder = sourceOrderId ? allocOrdersById.get(sourceOrderId) : null;
+        // Source order/document — always attach to an order when possible (SSOT history)
+        const sourceOrderId = feeTargetOrderPrefetch?.id ?? feeTargetOrderIdCandidate;
+        const sourceOrder = sourceOrderId
+          ? allocOrdersById.get(sourceOrderId) ??
+            (feeTargetOrderPrefetch?.id === sourceOrderId
+              ? { orderNumber: feeTargetOrderPrefetch.orderNumber }
+              : null)
+          : null;
         const sourceDocumentCode = sourceOrder?.orderNumber ?? primaryCode;
+
+        if (!sourceOrderId) {
+          throw new Error(
+            "לא ניתן לרשום הוספה לעמלות ללא הזמנה מקושרת — בחרו הזמנה או ודאו שללקוח יש הזמנה",
+          );
+        }
 
         // Create ONE summary Payment row for the total surplus amount
         const feeUsd = new Prisma.Decimal(surplusFeeUsd.toFixed(4));
@@ -1410,7 +1490,7 @@ export async function savePaymentUpdatedAction(
               amountIls: entryTotals.totalIlsWithVat,
               reason: "PAYMENT_SURPLUS",
               status: "OPEN",
-              notes: `עודף מתשלום · אמצעי: ${entry.label} · בחירת משתמש: הוסף לעמלות`,
+              notes: `עודף מתשלום · אמצעי: ${entry.label} · בחירת משתמש: הוסף לעמלות · ${PAYMENT_OVERPAYMENT_TO_FEE_REASON}`,
               userChoice: "commission",
               createdById: me.id,
             }),
@@ -1426,6 +1506,8 @@ export async function savePaymentUpdatedAction(
               amountUsd: entryUsd.toFixed(2),
               status: "OPEN",
               reason: "PAYMENT_SURPLUS",
+              reasonCode: PAYMENT_OVERPAYMENT_TO_FEE_REASON,
+              direction: "ADD",
             } as Prisma.InputJsonValue,
             metadata: {
               customerId: cid,
@@ -1438,10 +1520,115 @@ export async function savePaymentUpdatedAction(
               totalSurplusUsd: surplusFeeUsd.toFixed(2),
               perMethodCount: surplusEntries.length,
               userChoice: "commission",
+              reasonCode: PAYMENT_OVERPAYMENT_TO_FEE_REASON,
+              direction: "ADD",
               ledgerLabel: PAYMENT_SURPLUS_TO_COMMISSION_LEDGER_LABEL,
             } as Prisma.InputJsonValue,
           });
         }
+      }
+
+      // ויתור על עודף → תנועת עמלה (PaymentAdjustmentFee) בלבד — ללא שינוי Order.commissionUsd/totalUsd
+      if (forfeitToCommissionUsd > ALLOC_EPS) {
+        if (!forfeitOrderPrefetch) {
+          throw new Error(
+            "לא ניתן לרשום ויתור על עודף לעמלה ללא הזמנה מקושרת — בחרו הזמנה או ודאו שללקוח יש הזמנה",
+          );
+        }
+        const forfeitOrder = forfeitOrderPrefetch;
+        const waivedDec = new Prisma.Decimal(forfeitToCommissionUsd.toFixed(4));
+        const feeTotals = computeFromUsdAmount(waivedDec, {
+          baseDollarRate: base,
+          dollarFee: fee,
+          finalDollarRate: finalUse,
+          vatRate,
+        });
+        const createdFeePayment = await tx.payment.create({
+          data: {
+            countryCode: payWorkCountry,
+            paymentCode: null,
+            paymentNumber: allocated.paymentNumber,
+            orderId: null,
+            customerId: cid,
+            weekCode,
+            paymentDate,
+            intakeDate,
+            paymentPlace: null,
+            currency: "USD",
+            amountUsd: waivedDec,
+            amountIls: null,
+            sourceCurrency: "USD",
+            sourceAmount: waivedDec,
+            exchangeRate: finalUse,
+            vatRate,
+            commissionPercent: commissionPctDec,
+            amountWithoutVat: feeTotals.totalIlsWithoutVat,
+            snapshotBaseDollarRate: feeTotals.snapshotBaseDollarRate,
+            snapshotDollarFee: feeTotals.snapshotDollarFee,
+            snapshotFinalDollarRate: feeTotals.snapshotFinalDollarRate,
+            totalIlsWithVat: feeTotals.totalIlsWithVat,
+            totalIlsWithoutVat: feeTotals.totalIlsWithoutVat,
+            vatAmount: feeTotals.vatAmount,
+            manualDateChanged,
+            paymentMethod: payMethodDb,
+            usdPaymentMethod: usdMethod,
+            ilsPaymentMethod: ilsMethod,
+            usdNote: null,
+            ilsNote: null,
+            isPaid: true,
+            businessType: "ADJUSTMENT_FEE",
+            notes: [
+              PAYMENT_ADJUSTMENT_FEE_NOTE_PREFIX,
+              `קשור לקליטה ${primaryCode}`,
+              `מסמך מקור: ${forfeitOrder.orderNumber ?? primaryCode}`,
+              `ויתור על עודף: $${forfeitToCommissionUsd.toFixed(2)}`,
+              PAYMENT_OVERPAYMENT_TO_FEE_REASON,
+            ].join("\n"),
+            createdById: me.id,
+          },
+        });
+        savedCount += 1;
+        const feeRow = await tx.paymentAdjustmentFee.create({
+          data: buildPaymentAdjustmentFeeCreateData({
+            customerId: cid,
+            orderId: forfeitOrder.id,
+            paymentId: createdFeePayment.id,
+            paymentCaptureCode: primaryCode,
+            sourceDocumentCode: forfeitOrder.orderNumber ?? primaryCode,
+            paymentMethod: String(payMethodDb),
+            amountUsd: waivedDec,
+            amountIls: feeTotals.totalIlsWithVat,
+            reason: "PAYMENT_SURPLUS",
+            status: "OPEN",
+            notes: `ויתור על עודף → עמלה · ${PAYMENT_OVERPAYMENT_TO_FEE_REASON}`,
+            userChoice: "forfeit",
+            createdById: me.id,
+          }),
+        });
+        pendingAudits.push({
+          userId: me.id,
+          actionType: "PAYMENT_SURPLUS_FORFEIT_TO_COMMISSION",
+          entityType: "PaymentAdjustmentFee",
+          entityId: feeRow.id,
+          oldValue: Prisma.JsonNull,
+          newValue: {
+            amountUsd: waivedDec.toFixed(2),
+            status: "OPEN",
+            reasonCode: PAYMENT_OVERPAYMENT_TO_FEE_REASON,
+            direction: "ADD",
+          } as Prisma.InputJsonValue,
+          metadata: {
+            customerId: cid,
+            orderId: forfeitOrder.id,
+            orderNumber: forfeitOrder.orderNumber ?? null,
+            paymentCaptureCode: primaryCode,
+            paymentId: createdFeePayment.id,
+            waivedUsd: forfeitToCommissionUsd.toFixed(2),
+            userChoice: "forfeit",
+            reasonCode: PAYMENT_OVERPAYMENT_TO_FEE_REASON,
+            direction: "ADD",
+          } as Prisma.InputJsonValue,
+        });
       }
 
       if (primaryPaymentId && structuredMethodAllocations.length > 0) {
@@ -1512,95 +1699,6 @@ export async function savePaymentUpdatedAction(
             } as Prisma.InputJsonValue,
           });
         }
-      }
-
-      if (overageOrderPrefetch) {
-        const overageOrder = overageOrderPrefetch;
-        const deal = overageOrder.amountUsd ?? new Prisma.Decimal(0);
-        const oldCom = overageOrder.commissionUsd ?? new Prisma.Decimal(0);
-        const oldTotal = overageOrder.totalUsd ?? deal.add(oldCom).toDecimalPlaces(4, 4);
-        const surplusDec = new Prisma.Decimal(surplusCommissionAbsorbedUsd.toFixed(4));
-        const plan = planCommissionSurplusAbsorption({
-          commissionUsd: oldCom,
-          totalUsd: oldTotal,
-          surplusUsd: surplusDec,
-        });
-        await tx.order.update({
-          where: { id: overageOrder.id },
-          data: {
-            commissionUsd: plan.afterCommissionUsd,
-            totalUsd: plan.afterTotalUsd,
-            status: OS.COMPLETED,
-          },
-        });
-        pendingAudits.push({
-            userId: me.id,
-            actionType: surplusToCommission
-              ? "PAYMENT_SURPLUS_TO_COMMISSION"
-              : "ORDER_COMMISSION_SMALL_OVERAGE_ABSORBED",
-            entityType: "Order",
-            entityId: overageOrder.id,
-            oldValue: {
-              commissionUsd: plan.beforeCommissionUsd.toString(),
-              totalUsd: plan.beforeTotalUsd.toString(),
-            } as Prisma.InputJsonValue,
-            newValue: {
-              commissionUsd: plan.afterCommissionUsd.toString(),
-              totalUsd: plan.afterTotalUsd.toString(),
-              status: OS.COMPLETED,
-              remainingUsd: "0",
-            } as Prisma.InputJsonValue,
-            metadata: {
-              orderNumber: overageOrder.orderNumber ?? null,
-              paymentPrimaryCode: primaryCode,
-              surplusUsd: surplusCommissionAbsorbedUsd.toFixed(2),
-              ledgerLabel: surplusToCommission
-                ? PAYMENT_SURPLUS_TO_COMMISSION_LEDGER_LABEL
-                : PAYMENT_SMALL_OVERAGE_COMMISSION_ABSORPTION_LABEL,
-              userChoice: surplusToCommission ? "commission" : "auto_small_overage",
-            } as Prisma.InputJsonValue,
-          });
-      }
-
-      // ויתור על עודף → עמלה חדשה = עמלה קיימת + סכום הוויתור
-      if (forfeitOrderPrefetch && forfeitToCommissionUsd > ALLOC_EPS) {
-        const forfeitOrder = forfeitOrderPrefetch;
-        const deal = forfeitOrder.amountUsd ?? new Prisma.Decimal(0);
-        const oldCom = forfeitOrder.commissionUsd ?? new Prisma.Decimal(0);
-        const oldTotal = forfeitOrder.totalUsd ?? deal.add(oldCom).toDecimalPlaces(4, 4);
-        const waivedDec = new Prisma.Decimal(forfeitToCommissionUsd.toFixed(4));
-        const plan = planCommissionSurplusAbsorption({
-          commissionUsd: oldCom,
-          totalUsd: oldTotal,
-          surplusUsd: waivedDec,
-        });
-        await tx.order.update({
-          where: { id: forfeitOrder.id },
-          data: {
-            commissionUsd: plan.afterCommissionUsd,
-            totalUsd: plan.afterTotalUsd,
-          },
-        });
-        pendingAudits.push({
-          userId: me.id,
-          actionType: "PAYMENT_SURPLUS_FORFEIT_TO_COMMISSION",
-          entityType: "Order",
-          entityId: forfeitOrder.id,
-          oldValue: {
-            commissionUsd: plan.beforeCommissionUsd.toString(),
-            totalUsd: plan.beforeTotalUsd.toString(),
-          } as Prisma.InputJsonValue,
-          newValue: {
-            commissionUsd: plan.afterCommissionUsd.toString(),
-            totalUsd: plan.afterTotalUsd.toString(),
-          } as Prisma.InputJsonValue,
-          metadata: {
-            orderNumber: forfeitOrder.orderNumber ?? null,
-            paymentCaptureCode: primaryCode,
-            waivedUsd: forfeitToCommissionUsd.toFixed(2),
-            userChoice: "forfeit",
-          } as Prisma.InputJsonValue,
-        });
       }
 
       if (commissionResetOrdersPrefetch.length > 0) {
@@ -2782,6 +2880,32 @@ export async function applyPaymentSurplusDispositionAction(input: {
           finalDollarRate: finalUse,
           vatRate,
         });
+        const allocatedOrderIds = captureRows
+          .filter((r) => r.orderId && r.businessType !== "CUSTOMER_CREDIT" && r.businessType !== "ADJUSTMENT_FEE")
+          .map((r) => r.orderId!)
+          .filter(Boolean);
+        const newestOrder = await tx.order.findFirst({
+          where: { customerId: cid, deletedAt: null },
+          orderBy: { createdAt: "desc" },
+          select: { id: true, orderNumber: true },
+        });
+        const targetOrderId = resolveSurplusFeeTargetOrderId({
+          allocationOrderIds: allocatedOrderIds,
+          includedOrderIds: null,
+          intakeOrderIdsOldestFirst: allocatedOrderIds,
+          fallbackNewestOrderId: newestOrder?.id ?? null,
+        });
+        if (!targetOrderId) {
+          throw new Error("לא ניתן לרשום הוספה לעמלות ללא הזמנה מקושרת");
+        }
+        const targetOrder =
+          newestOrder?.id === targetOrderId
+            ? newestOrder
+            : await tx.order.findFirst({
+                where: { id: targetOrderId, customerId: cid, deletedAt: null },
+                select: { id: true, orderNumber: true },
+              });
+        const sourceDocumentCode = targetOrder?.orderNumber ?? primaryCode;
         const createdFeePayment = await tx.payment.create({
           data: {
             countryCode: primary.countryCode ?? DEFAULT_WORK_COUNTRY,
@@ -2817,8 +2941,10 @@ export async function applyPaymentSurplusDispositionAction(input: {
             notes: [
               PAYMENT_ADJUSTMENT_FEE_NOTE_PREFIX,
               `קשור לקליטה ${primaryCode}`,
+              `מסמך מקור: ${sourceDocumentCode}`,
               `עודף: $${surplusUsd.toFixed(2)}`,
               PAYMENT_SURPLUS_TO_COMMISSION_LEDGER_LABEL,
+              PAYMENT_OVERPAYMENT_TO_FEE_REASON,
             ].join("\n"),
             createdById: me.id,
           },
@@ -2826,10 +2952,10 @@ export async function applyPaymentSurplusDispositionAction(input: {
         await tx.paymentAdjustmentFee.create({
           data: buildPaymentAdjustmentFeeCreateData({
             customerId: cid,
-            orderId: null,
+            orderId: targetOrderId,
             paymentId: createdFeePayment.id,
             paymentCaptureCode: primaryCode,
-            sourceDocumentCode: primaryCode,
+            sourceDocumentCode,
             paymentMethod: String(primary.paymentMethod),
             amountUsd: feeUsd,
             amountIls: feeTotals.totalIlsWithVat,
@@ -2840,7 +2966,7 @@ export async function applyPaymentSurplusDispositionAction(input: {
               paymentUsd: totalCapturedUsd,
               surplusUsd,
               captureCode: primaryCode,
-            }),
+            }) + `\n${PAYMENT_OVERPAYMENT_TO_FEE_REASON}`,
             userChoice: "commission",
             createdById: me.id,
           }),

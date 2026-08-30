@@ -18,6 +18,8 @@ import {
 } from "@/lib/order-remaining-debt";
 import { resolveOrderPaymentFormDisplay } from "@/lib/order-payment-form-display";
 import { groupByActivePayments } from "@/lib/payment-record-status";
+import { readMultiParam } from "@/lib/orders-list-filter-params";
+import { resolveOrderIdsForPaymentStatusFilter } from "@/lib/orders-list-payment-status-where";
 
 function fmtUsd2(n: unknown): string | null {
   if (n == null) return null;
@@ -298,6 +300,14 @@ export async function fetchOrdersListPageData(
   };
 
   const where = buildOrdersListWhereFromSearchParams(sp);
+  const paymentStatusValues = readMultiParam(sp, "paymentStatus");
+  const paymentStatusIds = await resolveOrderIdsForPaymentStatusFilter(where, paymentStatusValues);
+  const listWhere: Prisma.OrderWhereInput =
+    paymentStatusIds == null
+      ? where
+      : paymentStatusIds.length === 0
+        ? { AND: [where, { id: { in: [] } }] }
+        : { AND: [where, { id: { in: paymentStatusIds } }] };
   const statsScopeParams = buildOrdersStatsScopeParams(sp);
   const statsWhere = buildOrdersListWhereFromSearchParams(statsScopeParams);
   const countryOptionsWhere = buildOrdersListWhereFromSearchParams({
@@ -308,8 +318,8 @@ export async function fetchOrdersListPageData(
   const scopeCacheKey = ordersScopeCacheKey(sp);
   const page = readPageParam(sp);
   const pageSize = ORDERS_LIST_PAGE_SIZE;
-  const ordersPageCacheKey = `${fullCacheKey}|page=${page}|pageSize=${pageSize}|user=${me.id}`;
-  const countCacheKey = `${fullCacheKey}|count`;
+  const ordersPageCacheKey = `${fullCacheKey}|page=${page}|pageSize=${pageSize}|user=${me.id}|payStatus=${paymentStatusValues.join(",")}`;
+  const countCacheKey = `${fullCacheKey}|count|payStatus=${paymentStatusValues.join(",")}`;
 
   const [statusGroups, completedGroups, intakeLocationRows, totalCount, createdByOptions, countryFilterOptions] =
     await withPerfTimer("orders.page.fetchOrders", async () => {
@@ -364,7 +374,7 @@ export async function fetchOrdersListPageData(
         ordersCountStore,
         countCacheKey,
         (ms) => (ordersCountMs += ms),
-        () => prisma.order.count({ where }),
+        () => prisma.order.count({ where: listWhere }),
       );
       const createdByOptions = await cachedTimed(
         "ordersCreatorsStore",
@@ -398,7 +408,7 @@ export async function fetchOrdersListPageData(
 
   const rows = await cachedTimed("ordersStore", ordersStore, ordersPageCacheKey, (ms) => (ordersQueryMs += ms), () =>
     prisma.order.findMany({
-      where,
+      where: listWhere,
       orderBy: [{ orderDate: "desc" }, { createdAt: "desc" }],
       skip,
       take: Math.min(pageSize, ORDERS_LIST_MAX_PAGE_SIZE),

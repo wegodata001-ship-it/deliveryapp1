@@ -128,43 +128,82 @@ export async function loadPaymentMethodAdjustmentBootstrapAction(params: {
   return { ok: true, ...bootstrap, suggestion };
 }
 
-export async function previewPaymentMethodAutoAdjustmentAction(params: {
+export async function previewPaymentIntentAutoAdjustmentAction(params: {
   customerId: string;
   weekCode?: string | null;
   workCountry?: string | null;
-  fromPaymentMethod: string;
-  toPaymentMethod: string;
-  amountUsd: number;
-  currency?: PaymentBalanceCurrency | null;
-  amountNative?: number | null;
   exchangeRate?: number | null;
+  intents: Array<{ method: string; currency: PaymentBalanceCurrency; amountNative: number }>;
 }): Promise<
   | {
       ok: true;
-      customer: {
-        id: string;
-        displayName: string;
-        customerCode: string | null;
-        customerBalanceUsd: string;
-      };
-      preview: PaymentMethodAdjustmentPreview;
+      openDebtUsd: number;
+      totalPayUsd: number;
+      intents: Array<{ method: string; currency: PaymentBalanceCurrency; amountNative: number; amountUsd: number }>;
+      moves: Array<{
+        fromMethod: string;
+        toMethod: string;
+        fromLabel: string;
+        toLabel: string;
+        currency: PaymentBalanceCurrency;
+        amountNative: number;
+        amountUsd: number;
+        exchangeRate: number | null;
+      }>;
+      orderChanges: Array<{
+        orderId: string;
+        orderNumber: string;
+        dateYmd: string;
+        fromMethod: string;
+        fromLabel: string;
+        toMethod: string;
+        toLabel: string;
+        moveUsd: number;
+        availableUsd: number;
+        partial: boolean;
+      }>;
     }
   | { ok: false; error: string }
 > {
   await ensureAdjustmentPermission();
-  const result = await loadPreview(params);
-  if (!result.ok) return { ok: false, error: result.error };
+  const customerId = params.customerId.trim();
+  if (!customerId) return { ok: false, error: "חסר לקוח" };
+  const workspace = await loadPaymentIntakeCustomerWorkspace({
+    customerId,
+    weekCodeForOpenBalances: params.weekCode ?? undefined,
+    paymentWorkCountryRaw: normalizeWorkCountryCode(params.workCountry ?? null),
+  });
+  if (!workspace.ok) return { ok: false, error: workspace.error };
+
+  const { planPaymentIntentAdjustments } = await import("@/lib/payment-method-payment-intent");
+  const plan = planPaymentIntentAdjustments({
+    orders: workspace.orders,
+    intents: params.intents,
+    exchangeRate: params.exchangeRate,
+  });
+  if (!plan.ok) return plan;
+
   return {
     ok: true,
-    customer: {
-      id: result.customer.id,
-      displayName: result.customer.displayName,
-      customerCode: result.customer.customerCode,
-      customerBalanceUsd: result.customer.customerBalanceUsd,
-    },
-    preview: result.preview,
+    openDebtUsd: plan.openDebtUsd,
+    totalPayUsd: plan.totalPayUsd,
+    intents: plan.intents,
+    moves: plan.moves,
+    orderChanges: plan.orderChanges.map((row) => ({
+      orderId: row.orderId,
+      orderNumber: row.orderNumber,
+      dateYmd: row.dateYmd,
+      fromMethod: row.fromMethod,
+      fromLabel: row.fromLabel,
+      toMethod: row.toMethod,
+      toLabel: row.toLabel,
+      moveUsd: row.moveUsd,
+      availableUsd: row.availableUsd,
+      partial: row.partial,
+    })),
   };
 }
+
 
 export async function applyPaymentMethodAutoAdjustmentAction(params: {
   customerId: string;
@@ -178,6 +217,19 @@ export async function applyPaymentMethodAutoAdjustmentAction(params: {
   exchangeRate?: number | null;
   reasonCode: PaymentMethodAdjustmentReasonCode;
   reasonText: string;
+  /** Audit לתשלום שהלקוח רוצה לבצע עכשיו (לא מצב קופה) */
+  desiredAllocationAudit?: {
+    current: Array<{ methodKey: string; currency: string; amount: number }>;
+    desired: Array<{ methodKey: string; currency: string; amount: number }>;
+    deltas: Array<{ methodKey: string; currency: string; delta: number }>;
+    moves: Array<{
+      fromMethod: string;
+      toMethod: string;
+      currency: string;
+      amountNative: number;
+      amountUsd: number;
+    }>;
+  } | null;
 }): Promise<{ ok: true; adjustmentId: string; affectedOrders: number } | { ok: false; error: string }> {
   const me = await ensureAdjustmentPermission();
   const reasonText = params.reasonText.trim();
@@ -267,6 +319,13 @@ export async function applyPaymentMethodAutoAdjustmentAction(params: {
             capturedTotalUsd: moneyUsd(loaded.preview.capturedTotalUsd),
             reasonCode: params.reasonCode,
             reasonText,
+            desiredAllocation: params.desiredAllocationAudit ?? null,
+            paymentIntent: params.desiredAllocationAudit
+              ? {
+                  intents: params.desiredAllocationAudit.desired,
+                  moves: params.desiredAllocationAudit.moves,
+                }
+              : null,
             affectedOrders: loaded.preview.affectedOrders.map((row) => ({
               orderId: row.orderId,
               orderNumber: row.orderNumber,
@@ -301,6 +360,8 @@ export type PaymentMethodAdjustmentAdminRow = {
   employeeName: string;
   customerName: string;
   customerCode: string | null;
+  fromMethod: string;
+  toMethod: string;
   fromLabel: string;
   toLabel: string;
   amountUsd: string;
@@ -308,6 +369,13 @@ export type PaymentMethodAdjustmentAdminRow = {
   affectedOrdersCount: number;
   reviewed: boolean;
   details: NonNullable<ReturnType<typeof parsePaymentMethodAutoAdjustedAuditMetadata>>;
+};
+
+export type PaymentMethodAdjustmentTrailEvent = {
+  atIso: string;
+  title: string;
+  detail: string | null;
+  actorName: string | null;
 };
 
 export async function listPaymentMethodAutoAdjustmentsAction(): Promise<
@@ -331,6 +399,8 @@ export async function listPaymentMethodAutoAdjustmentsAction(): Promise<
         employeeName: details.employeeName,
         customerName: details.customerName,
         customerCode: details.customerCode,
+        fromMethod: details.fromPaymentMethod,
+        toMethod: details.toPaymentMethod,
         fromLabel: PAYMENT_METHOD_LABELS[details.fromPaymentMethod] ?? details.fromPaymentMethod,
         toLabel: PAYMENT_METHOD_LABELS[details.toPaymentMethod] ?? details.toPaymentMethod,
         amountUsd: details.amountUsd,
@@ -342,6 +412,76 @@ export async function listPaymentMethodAutoAdjustmentsAction(): Promise<
     })
     .filter((row): row is PaymentMethodAdjustmentAdminRow => Boolean(row));
   return { ok: true, rows };
+}
+
+/** היסטוריית פעולה מ־Audit קיים בלבד — ללא המצאת אירועים */
+export async function loadPaymentMethodAdjustmentTrailAction(
+  adjustmentAuditLogId: string,
+): Promise<{ ok: true; events: PaymentMethodAdjustmentTrailEvent[] } | { ok: false; error: string }> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["manage_users"])) return { ok: false, error: "אין הרשאה" };
+  const id = adjustmentAuditLogId.trim();
+  if (!id) return { ok: false, error: "חסר מזהה" };
+
+  const parent = await prisma.auditLog.findUnique({
+    where: { id },
+    select: { id: true, actionType: true, metadata: true, createdAt: true },
+  });
+  if (!parent || parent.actionType !== PAYMENT_METHOD_AUTO_ADJUSTED_ACTION) {
+    return { ok: false, error: "רשומת התאמה לא נמצאה" };
+  }
+  const details = parsePaymentMethodAutoAdjustedAuditMetadata(parent.metadata);
+  if (!details) return { ok: false, error: "מטא־דאטה לא תקין" };
+
+  const orderLogs = await prisma.auditLog.findMany({
+    where: {
+      actionType: ORDER_PAYMENT_METHOD_ADJUSTED_ACTION,
+      metadata: { path: ["adjustmentId"], equals: details.adjustmentId },
+    },
+    orderBy: { createdAt: "asc" },
+    select: { createdAt: true, metadata: true },
+  });
+
+  const events: PaymentMethodAdjustmentTrailEvent[] = [];
+
+  events.push({
+    atIso: details.createdAtIso || parent.createdAt.toISOString(),
+    title: "ההתאמה בוצעה",
+    detail: `${PAYMENT_METHOD_LABELS[details.fromPaymentMethod] ?? details.fromPaymentMethod} → ${
+      PAYMENT_METHOD_LABELS[details.toPaymentMethod] ?? details.toPaymentMethod
+    } · $${details.amountUsd} · ${details.affectedOrders.length} הזמנות`,
+    actorName: details.employeeName,
+  });
+
+  for (const log of orderLogs) {
+    const meta = log.metadata;
+    const orderNumber =
+      meta && typeof meta === "object" && !Array.isArray(meta) && typeof (meta as { orderNumber?: unknown }).orderNumber === "string"
+        ? String((meta as { orderNumber: string }).orderNumber)
+        : null;
+    const movedUsd =
+      meta && typeof meta === "object" && !Array.isArray(meta) && typeof (meta as { movedUsd?: unknown }).movedUsd === "string"
+        ? String((meta as { movedUsd: string }).movedUsd)
+        : null;
+    events.push({
+      atIso: log.createdAt.toISOString(),
+      title: orderNumber ? `עודכנה הזמנה ${orderNumber}` : "עודכנה הזמנה",
+      detail: movedUsd ? `סכום שהועבר: $${movedUsd}` : null,
+      actorName: details.employeeName,
+    });
+  }
+
+  if (details.reviewedAtIso) {
+    events.push({
+      atIso: details.reviewedAtIso,
+      title: "סומן כנבדק",
+      detail: null,
+      actorName: details.reviewedByName,
+    });
+  }
+
+  events.sort((a, b) => new Date(a.atIso).getTime() - new Date(b.atIso).getTime());
+  return { ok: true, events };
 }
 
 export async function getPendingPaymentMethodAutoAdjustmentCount(): Promise<number> {

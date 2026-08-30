@@ -1,8 +1,14 @@
 /**
  * שבוע עבודה גלובלי (SSOT) — נגזר מפרמטר URL `week`.
  *
- * כל המסכים משתמשים ב-globalWorkWeek, למעט:
- * - קליטת תשלום / יתרות — נתוני ההזמנות/יתרות מגיעים משבוע המקור (הקודם כרונולוגית).
+ * globalWorkWeek = שבוע שנבחר בבית (שבוע הזמנות / דשבורד / יתרות לפי מסך).
+ *
+ * קליטת תשלום בלבד: paymentCaptureWeek = nextWeek(globalWorkWeek);
+ * מקור הזמנות בקליטה = previousWeek(paymentCaptureWeek) — ראו payment-intake-default-week /
+ * payment-intake-week-context. אין לשנות את השבוע הגלובלי בעת כניסה לקליטה.
+ *
+ * sourceWeekCode כאן נשאר prev(global) לתאימות יתרות/snapshot קיימים — לא משמש
+ * כברירת מחדל לשבוע הקליטה.
  */
 import {
   balancesSnapshotToYmd,

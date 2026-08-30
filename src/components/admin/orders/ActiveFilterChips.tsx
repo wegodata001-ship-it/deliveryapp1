@@ -28,7 +28,7 @@ export function ActiveFilterChips({ activeFilterChips, clearAllFilters, hasClear
       ))}
       {hasClearableFilters ? (
         <button type="button" className="ofb-chips__clear" onClick={clearAllFilters}>
-          נקה הכל
+          איפוס הכל
         </button>
       ) : null}
     </div>

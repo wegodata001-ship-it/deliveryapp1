@@ -236,7 +236,17 @@ export type PaymentIntakeOrderRow = {
   week: string | null;
   rate: string;
   amountUsd: string;
+  /**
+   * עמלה נוכחית לתצוגה = commissionBaseUsd + Σ התאמות.
+   * מקור אמת יחיד עם יתרת עמלות הלקוח.
+   */
   commissionUsd: string;
+  /** Order.commissionUsd — בסיס / מקורית */
+  commissionBaseUsd?: string;
+  /** Σ PaymentAdjustmentFee (ללא legacy) */
+  commissionAdjustmentsUsd?: string;
+  /** האם יש תנועות עמלה מעבר לבסיס */
+  commissionHasAdjustments?: boolean;
   totalIls: string;
   totalAmountUsd: string;
   dbPaidUsd: string;

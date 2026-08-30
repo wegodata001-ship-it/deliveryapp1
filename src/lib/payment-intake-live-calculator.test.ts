@@ -48,6 +48,44 @@ describe("computePaymentIntakeLiveTotals — משיכה מחוב SSOT", () => {
     assert.equal(totals.balanceUsd, 70);
   });
 
+  it("null SSOT ≠ 0 — לא מציג מאוזן לפני טעינה כשיש הזמנות", () => {
+    const totals = computePaymentIntakeLiveTotals({
+      orders: [
+        { id: "a", amountUsd: 21055, commissionUsd: 210.55 },
+        { id: "b", amountUsd: 1600, commissionUsd: 16 },
+      ],
+      commissionResetOrderIds: [],
+      customerPaymentsUsd: 0,
+      formPaymentUsd: 0,
+      customerSignedOpenDebtUsd: null,
+      customerTotalChargesUsd: null,
+      customerTotalPaymentsUsd: null,
+      customerTotalWithdrawalsUsd: null,
+    });
+    assert.equal(totals.chargesUsd, 22655);
+    assert.equal(totals.commissionsUsd, 226.55);
+    assert.equal(totals.balanceUsd, 22881.55);
+    assert.equal(totals.hasDebt, true);
+  });
+
+  it("SSOT טעון עם 0 חוב — מאוזן באמת (לקוח 102 אחרי כיסוי)", () => {
+    const totals = computePaymentIntakeLiveTotals({
+      orders: [{ id: "o1", amountUsd: 4240, commissionUsd: 42.4 }],
+      commissionResetOrderIds: [],
+      customerPaymentsUsd: 0,
+      formPaymentUsd: 0,
+      customerSignedOpenDebtUsd: -252.5,
+      customerTotalChargesUsd: 4240,
+      customerTotalPaymentsUsd: 4282.4,
+      customerTotalWithdrawalsUsd: 252.5,
+      customerApplyPaymentUsd: 0,
+    });
+    assert.equal(totals.withdrawalsUsd, 252.5);
+    assert.equal(totals.paymentsUsd, 4282.4);
+    assert.equal(totals.balanceUsd, 0);
+    assert.equal(totals.hasDebt, false);
+  });
+
   it("תשלום בטופס מתווסף מעל SSOT payments בלי לספור משיכה פעמיים", () => {
     const totals = computePaymentIntakeLiveTotals({
       orders: [],

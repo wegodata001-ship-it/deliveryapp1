@@ -234,30 +234,47 @@ export function ShipmentMultiSelectFilter({
   return (
     <div className="shp-ms" dir={dir}>
       <span className="shp-ms__label">{label}</span>
-      <button
-        ref={triggerRef}
-        type="button"
-        className={[
-          "shp-ms__trigger",
-          values.length ? "is-active" : "",
-        ]
-          .filter(Boolean)
-          .join(" ")}
-        disabled={disabled}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <span className="shp-ms__summary">{summary}</span>
-        <ChevronDown
-          size={14}
-          aria-hidden
-          style={{
-            transition: "transform 0.15s",
-            transform: open ? "rotate(180deg)" : undefined,
-          }}
-        />
-      </button>
+      <div className={["shp-ms__trigger-wrap", values.length ? "is-active" : ""].filter(Boolean).join(" ")}>
+        <button
+          ref={triggerRef}
+          type="button"
+          className={[
+            "shp-ms__trigger",
+            values.length ? "is-active" : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          disabled={disabled}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+        >
+          <span className="shp-ms__summary">{summary}</span>
+          <ChevronDown
+            size={14}
+            aria-hidden
+            style={{
+              transition: "transform 0.15s",
+              transform: open ? "rotate(180deg)" : undefined,
+            }}
+          />
+        </button>
+        {values.length > 0 && !disabled ? (
+          <button
+            type="button"
+            className="shp-ms__clear"
+            aria-label={`נקה ${label}`}
+            title={`נקה ${label}`}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onChange([]);
+            }}
+          >
+            <X size={12} strokeWidth={2.5} aria-hidden />
+          </button>
+        ) : null}
+      </div>
       {panel}
     </div>
   );

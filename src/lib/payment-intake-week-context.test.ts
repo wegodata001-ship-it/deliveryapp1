@@ -14,6 +14,14 @@ describe("payment-intake-week-context", () => {
     assert.equal(resolveOrderSourceWeekCode("AH-135"), "AH-134");
   });
 
+  it("ניווט קליטה AH-139 → הזמנות AH-138", () => {
+    assert.equal(resolveOrderSourceWeekCode("AH-139"), "AH-138");
+    const ctx = resolvePaymentIntakeWeekContext("AH-139");
+    assert.ok(ctx);
+    assert.equal(ctx.intakeWeekCode, "AH-139");
+    assert.equal(ctx.orderSourceWeekCode, "AH-138");
+  });
+
   it("AH-135 → תאריך מקור = שבת AH-134", () => {
     const ctx = resolvePaymentIntakeWeekContext("AH-135");
     assert.ok(ctx);

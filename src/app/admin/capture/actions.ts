@@ -1758,6 +1758,19 @@ async function captureOrderActionInner(
   perf.logSummary({ mode: "create", orderId: order.id, orderNumber });
   invalidateOrdersListDataCache();
   revalidatePath("/admin/orders");
+  void (async () => {
+    try {
+      const { refreshCustomerBalanceSnapshotFromSsot, openDebtScopeForWorkCountry } = await import(
+        "@/lib/customer-open-debt"
+      );
+      await refreshCustomerBalanceSnapshotFromSsot(
+        customer.id,
+        openDebtScopeForWorkCountry(String(customer.countryCode)),
+      );
+    } catch {
+      /* snapshot best-effort */
+    }
+  })();
   return out;
 }
 
@@ -2024,6 +2037,14 @@ async function applyDebtWithdrawalForOrder(params: {
     where: { id: orderId },
     data: { status: OS.DEBT_WITHDRAWAL, debtWithdrawalUsd: toWithdrawDec, isCompleted: false },
   });
+  void (async () => {
+    try {
+      const { refreshCustomerBalanceSnapshotFromSsot } = await import("@/lib/customer-open-debt");
+      await refreshCustomerBalanceSnapshotFromSsot(params.customerId);
+    } catch {
+      /* snapshot best-effort */
+    }
+  })();
   return { ok: true, debtWithdrawalUsd: toWithdraw };
 }
 

@@ -39,6 +39,9 @@ type Props = Pick<
   | "paymentLocationOptions"
   | "msStrings"
   | "msDir"
+  | "countryValues"
+  | "setCountryValues"
+  | "countryOptions"
 >;
 
 export function AdvancedOrdersFilters(props: Props) {
@@ -75,11 +78,28 @@ export function AdvancedOrdersFilters(props: Props) {
     paymentLocationOptions,
     msStrings,
     msDir,
+    countryValues,
+    setCountryValues,
+    countryOptions,
   } = props;
 
   return (
     <div className="ofb-adv" dir="rtl">
       <div className="ofb-adv__grid">
+        <div className="ofb-adv__field">
+          <ShipmentMultiSelectFilter
+            label="מדינה"
+            options={countryOptions}
+            values={countryValues}
+            onChange={(next) => {
+              setCountryValues(next);
+              pushFilters({ country: next });
+            }}
+            strings={msStrings}
+            dir={msDir}
+          />
+        </div>
+
         <label className="ofb-adv__field">
           <span className="ofb-adv__label">מתאריך</span>
           <input

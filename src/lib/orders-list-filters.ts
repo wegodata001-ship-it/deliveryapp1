@@ -19,6 +19,8 @@ export type OrderFilters = {
   search: string;
   country: string[];
   paymentMethod: string[];
+  /** unpaid | partial | paid | overpaid */
+  paymentStatus: string[];
   status: string[];
   orderNumber: string;
   phone: string;
@@ -47,6 +49,7 @@ export const ORDERS_FILTER_URL_KEYS = [
   "ordersCountry",
   "createdBy",
   "paymentType",
+  "paymentStatus",
   "paymentLocation",
   "amountMin",
   "amountMax",
@@ -82,6 +85,9 @@ export function parseOrderFiltersFromSearchParams(
     search: resolveOrdersListCustomerQuery(sp),
     country: readMultiParam(sp, "ordersCountry"),
     paymentMethod: readMultiParam(sp, "paymentType"),
+    paymentStatus: readMultiParam(sp, "paymentStatus").filter((v) =>
+      ["unpaid", "partial", "paid", "overpaid"].includes(v),
+    ),
     status: readMultiParam(sp, "status"),
     orderNumber: readTextParam(sp, "ordersOrderNum"),
     phone: readTextParam(sp, "ordersPhone"),
@@ -114,9 +120,15 @@ export function buildOrdersListSearchParams(
   const week = filters.week.trim();
   if (week && getAhWeekRange(week)) {
     const r = getAhWeekRange(week)!;
+    const fromYmd = (filters.dateFrom.trim() || r.from).slice(0, 10);
+    const toYmd = (filters.dateTo.trim() || r.to).slice(0, 10);
     base.set("ordersWeek", week);
-    base.set("ordersFrom", (filters.dateFrom.trim() || r.from).slice(0, 10));
-    base.set("ordersTo", (filters.dateTo.trim() || r.to).slice(0, 10));
+    base.set("ordersFrom", fromYmd);
+    base.set("ordersTo", toYmd);
+    // שבוע גלובלי = אותו שבוע שנבחר ברשימת הזמנות (SSOT URL)
+    base.set("week", week);
+    base.set("from", fromYmd);
+    base.set("to", toYmd);
   } else {
     if (filters.dateFrom.trim()) base.set("ordersFrom", filters.dateFrom.trim());
     if (filters.dateTo.trim()) base.set("ordersTo", filters.dateTo.trim());
@@ -139,6 +151,7 @@ export function buildOrdersListSearchParams(
   setMultiParam(base, "ordersCountry", filters.country);
   setMultiParam(base, "createdBy", filters.createdBy);
   setMultiParam(base, "paymentType", filters.paymentMethod);
+  setMultiParam(base, "paymentStatus", filters.paymentStatus);
 
   if (filters.paymentLocation.trim()) base.set("paymentLocation", filters.paymentLocation.trim());
   if (filters.minAmountUsd.trim()) base.set("amountMin", filters.minAmountUsd.trim());

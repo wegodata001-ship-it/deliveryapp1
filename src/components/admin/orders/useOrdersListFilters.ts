@@ -26,12 +26,18 @@ import {
   getAhWeekRange,
   normalizeAhWeekCode,
 } from "@/lib/work-week";
+import { persistGlobalFilterWeek } from "@/lib/global-filter-persist";
+import { resolveGlobalCountry } from "@/lib/current-country";
 import {
   goToNextWeekNumber,
   goToPrevWeekNumber,
   parseAhWeekNumber,
   toAhWeekCode,
 } from "@/lib/weeks/ah-week-nav";
+import {
+  ORDER_PAYMENT_STATUS_FILTER_OPTIONS,
+  orderPaymentStatusFilterLabel,
+} from "@/lib/order-payment-status-filter";
 
 export type OrdersCreatedByOption = { id: string; label: string };
 export type OrdersPaymentLocationOption = { id: string; label: string };
@@ -50,6 +56,7 @@ export type UseOrdersListFiltersInput = {
   createdByOptions: OrdersCreatedByOption[];
   countryFilterOptions: OrdersCountryFilterOption[];
   paymentTypes: string[];
+  paymentStatuses: string[];
   paymentLocation: string;
   paymentLocationOptions: OrdersPaymentLocationOption[];
   amountMin: string;
@@ -108,6 +115,7 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
   const [countryValues, setCountryValues] = useState(input.countryFilter);
   const [createdByValues, setCreatedByValues] = useState(input.createdByIds);
   const [paymentTypeValues, setPaymentTypeValues] = useState(input.paymentTypes);
+  const [paymentStatusValues, setPaymentStatusValues] = useState(input.paymentStatuses);
   const [payLoc, setPayLoc] = useState(input.paymentLocation);
   const [minAmount, setMinAmount] = useState(input.amountMin);
   const [maxAmount, setMaxAmount] = useState(input.amountMax);
@@ -131,6 +139,7 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
     setCountryValues(input.countryFilter);
     setCreatedByValues(input.createdByIds);
     setPaymentTypeValues(input.paymentTypes);
+    setPaymentStatusValues(input.paymentStatuses);
     setPayLoc(input.paymentLocation);
     setMinAmount(input.amountMin);
     setMaxAmount(input.amountMax);
@@ -146,6 +155,7 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
     input.ordersOrderNum,
     input.ordersReadyOnly,
     input.paymentLocation,
+    input.paymentStatuses,
     input.paymentTypes,
     input.statusFilter,
   ]);
@@ -169,6 +179,7 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
       search: searchDraft,
       country: countryValues,
       paymentMethod: paymentTypeValues,
+      paymentStatus: paymentStatusValues,
       status: statusValues,
       orderNumber: orderNumDraft,
       phone: phoneDraft,
@@ -193,6 +204,7 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
       orderNumDraft,
       parsed.ordersCompleted,
       payLoc,
+      paymentStatusValues,
       paymentTypeValues,
       phoneDraft,
       searchDraft,
@@ -247,13 +259,21 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
       const norm = normalizeAhWeekCode(code);
       if (norm) {
         const range = setRangeFromWeekCode(norm);
-        if (range) pushFilters(range, { refresh: true });
+        if (range) {
+          persistGlobalFilterWeek(
+            range.week,
+            range.dateFrom,
+            range.dateTo,
+            resolveGlobalCountry(searchParams.get("country")),
+          );
+          pushFilters(range, { refresh: true });
+        }
       } else {
         setWeek("");
         pushFilters({ week: "" }, { refresh: true });
       }
     },
-    [pushFilters, setRangeFromWeekCode],
+    [pushFilters, searchParams, setRangeFromWeekCode],
   );
 
   const shiftWeekNav = useCallback(
@@ -268,15 +288,31 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
       if (n == null) return;
       const next = toAhWeekCode(delta === -1 ? goToPrevWeekNumber(n) : goToNextWeekNumber(n));
       const range = setRangeFromWeekCode(next);
-      if (range) pushFilters(range, { refresh: true });
+      if (range) {
+        persistGlobalFilterWeek(
+          range.week,
+          range.dateFrom,
+          range.dateTo,
+          resolveGlobalCountry(searchParams.get("country")),
+        );
+        pushFilters(range, { refresh: true });
+      }
     },
-    [input.ahWeekSelect, ordersWeekFromUrl, pushFilters, setRangeFromWeekCode, week],
+    [input.ahWeekSelect, ordersWeekFromUrl, pushFilters, searchParams, setRangeFromWeekCode, week],
   );
 
   const goToActiveWeek = useCallback(() => {
     const range = setRangeFromWeekCode(ACTIVE_WORK_WEEK_CODE);
-    if (range) pushFilters(range, { refresh: true });
-  }, [pushFilters, setRangeFromWeekCode]);
+    if (range) {
+      persistGlobalFilterWeek(
+        range.week,
+        range.dateFrom,
+        range.dateTo,
+        resolveGlobalCountry(searchParams.get("country")),
+      );
+      pushFilters(range, { refresh: true });
+    }
+  }, [pushFilters, searchParams, setRangeFromWeekCode]);
 
   const paymentFilterOptions = useMemo(() => {
     const opts = PAYMENT_METHODS.filter((m) => m.isActive).map((m) => ({
@@ -373,10 +409,21 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
     if (!openOnly && !completedOnly && statusValues.length > 0) {
       chips.push({
         key: "status",
-        label: `סטטוס: ${statusValues.map(statusLabelByValue).join(", ")}`,
+        label: `סטטוס הזמנה: ${statusValues.map(statusLabelByValue).join(", ")}`,
         onRemove: () => {
           setStatusValues([]);
           pushFilters({ status: [] });
+        },
+      });
+    }
+
+    if (paymentStatusValues.length > 0) {
+      chips.push({
+        key: "paymentStatus",
+        label: `סטטוס תשלום: ${paymentStatusValues.map(orderPaymentStatusFilterLabel).join(", ")}`,
+        onRemove: () => {
+          setPaymentStatusValues([]);
+          pushFilters({ paymentStatus: [] });
         },
       });
     }
@@ -395,7 +442,7 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
     if (paymentTypeValues.length > 0) {
       chips.push({
         key: "payment",
-        label: `תשלום: ${paymentTypeValues.map(paymentLabelByValue).join(", ")}`,
+        label: `צורת תשלום: ${paymentTypeValues.map(paymentLabelByValue).join(", ")}`,
         onRemove: () => {
           setPaymentTypeValues([]);
           pushFilters({ paymentMethod: [] });
@@ -534,6 +581,7 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
     parsed.ordersCompleted,
     payLoc,
     paymentLabelByValue,
+    paymentStatusValues,
     paymentTypeValues,
     phoneDraft,
     pushFilters,
@@ -553,6 +601,7 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
     if (statusValues.length > 0 || openOnly || completedOnly) count++;
     if (countryValues.length > 0) count++;
     if (paymentTypeValues.length > 0) count++;
+    if (paymentStatusValues.length > 0) count++;
     if (searchDraft.trim()) count++;
     return count;
   }, [
@@ -560,6 +609,7 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
     completedOnly,
     countryValues.length,
     openOnly,
+    paymentStatusValues.length,
     paymentTypeValues.length,
     searchDraft,
     statusValues.length,
@@ -586,6 +636,9 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
     setCreatedByValues,
     paymentTypeValues,
     setPaymentTypeValues,
+    paymentStatusValues,
+    setPaymentStatusValues,
+    paymentStatusOptions: ORDER_PAYMENT_STATUS_FILTER_OPTIONS,
     payLoc,
     setPayLoc,
     minAmount,

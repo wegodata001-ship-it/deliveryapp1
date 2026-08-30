@@ -34,8 +34,8 @@ export function isExistingPaymentUnchanged(applyUsd: number): boolean {
 }
 
 export type PaymentIntakeCustomerDebtInput = {
-  /** signedBalanceUsd מ-getCustomerOpenDebt — חיובי = חוב */
-  customerOpenDebtSignedUsd: number;
+  /** signedBalanceUsd מ-getCustomerOpenDebt — חיובי = חוב; null = SSOT לא נטען */
+  customerOpenDebtSignedUsd: number | null;
   customerBalanceResetPending?: boolean;
 };
 
@@ -44,6 +44,7 @@ export function paymentIntakeCustomerOpenDebtUsd(
   input: PaymentIntakeCustomerDebtInput,
 ): number {
   if (input.customerBalanceResetPending) return 0;
+  if (input.customerOpenDebtSignedUsd == null) return 0;
   const n = Number(input.customerOpenDebtSignedUsd);
   if (!Number.isFinite(n) || n <= EPS) return 0;
   return roundMoney2(n);
@@ -58,13 +59,14 @@ export function paymentIntakeDebtBeforePaymentUsd(
 
 /** יתרה חתומה לאחר הקצאת תשלום בטופס (שלילי = עודף) */
 export function paymentIntakeDebtAfterPaymentUsd(params: {
-  customerOpenDebtSignedUsd: number;
+  customerOpenDebtSignedUsd: number | null;
   formPaymentUsd: number;
   customerBalanceResetPending?: boolean;
   isExistingPayment?: boolean;
   savedBaselineTotalUsd?: number;
 }): number {
   if (params.customerBalanceResetPending) return 0;
+  if (params.customerOpenDebtSignedUsd == null) return 0;
   const before = paymentIntakeDebtBeforePaymentUsd(params);
   const applyUsd = params.isExistingPayment
     ? computePaymentIntakeApplyUsd({

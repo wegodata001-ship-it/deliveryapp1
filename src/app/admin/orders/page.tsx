@@ -86,6 +86,7 @@ export default async function OrdersListPage({
     createdByOptions,
     countryFilterOptions,
     paymentTypes: readMultiParam(sp, "paymentType"),
+    paymentStatuses: readMultiParam(sp, "paymentStatus"),
     paymentLocation: readTextParam(sp, "paymentLocation"),
     paymentLocationOptions,
     amountMin: readTextParam(sp, "amountMin"),

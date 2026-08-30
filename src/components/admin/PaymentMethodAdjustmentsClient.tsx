@@ -1,51 +1,120 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { Eye, FilterX, RefreshCw, X } from "lucide-react";
+import { ArrowDown, Eye, FilterX, Info, RefreshCw, X } from "lucide-react";
 import {
   listPaymentMethodAutoAdjustmentsAction,
+  loadPaymentMethodAdjustmentTrailAction,
   markPaymentMethodAutoAdjustmentReviewedAction,
   type PaymentMethodAdjustmentAdminRow,
+  type PaymentMethodAdjustmentTrailEvent,
 } from "@/app/admin/payments-updated/payment-method-adjustment-actions";
 import { PAYMENT_METHOD_ADJUSTMENT_REASON_OPTIONS } from "@/lib/payment-method-auto-adjustment";
-import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 
 function fmtDateTime(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString("he-IL");
+  return d.toLocaleString("he-IL", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function fmtDatePart(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("he-IL", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
+
+function fmtTimePart(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" });
 }
 
 function fmtDateInput(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
-  return d.toISOString().slice(0, 10);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
-function fmtUsd(amount: string): string {
-  return `$${Number(amount).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+function fmtUsd(amount: string | number): string {
+  const n = typeof amount === "number" ? amount : Number(amount);
+  if (!Number.isFinite(n)) return String(amount);
+  return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function fmtIls(amount: string | number): string {
+  const n = typeof amount === "number" ? amount : Number(amount);
+  if (!Number.isFinite(n)) return String(amount);
+  return `₪${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function reasonLabel(code: string): string {
   return PAYMENT_METHOD_ADJUSTMENT_REASON_OPTIONS.find((row) => row.code === code)?.label ?? code;
 }
 
-function MethodBadge({ label, tone }: { label: string; tone: "from" | "to" }) {
-  return <span className={`pm-adjust-page__method-badge pm-adjust-page__method-badge--${tone}`}>{label}</span>;
+function hasRealBalanceSnapshot(details: PaymentMethodAdjustmentAdminRow["details"]): boolean {
+  return Boolean(
+    details.beforeSourceBalance != null &&
+      details.afterSourceBalance != null &&
+      details.beforeTargetBalance != null &&
+      details.afterTargetBalance != null,
+  );
 }
 
-function DetailLine({ label, value, ltr = false }: { label: string; value: string; ltr?: boolean }) {
+function StatusBadge({ reviewed }: { reviewed: boolean }) {
   return (
-    <div className="pm-adjust-page__detail-line">
-      <span>{label}</span>
-      <strong dir={ltr ? "ltr" : undefined}>{value}</strong>
+    <span className={`pm-adjust-page__status-badge${reviewed ? " is-reviewed" : " is-new"}`}>
+      {reviewed ? "בוצע / נבדק" : "חדש"}
+    </span>
+  );
+}
+
+function MethodChangeCell({
+  fromLabel,
+  toLabel,
+  compact = false,
+}: {
+  fromLabel: string;
+  toLabel: string;
+  compact?: boolean;
+}) {
+  return (
+    <div className={`pm-adjust-page__method-change${compact ? " is-compact" : ""}`}>
+      <div className="pm-adjust-page__method-change-col pm-adjust-page__method-change-col--from">
+        <span className="pm-adjust-page__method-change-label">מקור</span>
+        <strong>{fromLabel}</strong>
+      </div>
+      <div className="pm-adjust-page__method-change-arrow" aria-hidden>
+        <ArrowDown size={14} />
+      </div>
+      <div className="pm-adjust-page__method-change-col pm-adjust-page__method-change-col--to">
+        <span className="pm-adjust-page__method-change-label">חדש</span>
+        <strong>{toLabel}</strong>
+      </div>
     </div>
   );
+}
+
+function humanSummary(row: PaymentMethodAdjustmentAdminRow): string {
+  const n = row.affectedOrdersCount;
+  const ordersWord = n === 1 ? "הזמנה אחת" : `${n} הזמנות`;
+  return `אמצעי התשלום של ${ordersWord} בסכום ${fmtUsd(row.amountUsd)} שונה מ${row.fromLabel} ל${row.toLabel}.`;
 }
 
 export function PaymentMethodAdjustmentsClient() {
   const [rows, setRows] = useState<PaymentMethodAdjustmentAdminRow[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [trail, setTrail] = useState<PaymentMethodAdjustmentTrailEvent[]>([]);
+  const [trailLoading, setTrailLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -55,6 +124,7 @@ export function PaymentMethodAdjustmentsClient() {
   const [toFilter, setToFilter] = useState("");
   const [employeeFilter, setEmployeeFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const [marking, setMarking] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -72,6 +142,23 @@ export function PaymentMethodAdjustmentsClient() {
     void load();
   }, []);
 
+  useEffect(() => {
+    if (!selectedId) {
+      setTrail([]);
+      return;
+    }
+    let cancelled = false;
+    setTrailLoading(true);
+    void loadPaymentMethodAdjustmentTrailAction(selectedId).then((res) => {
+      if (cancelled) return;
+      setTrailLoading(false);
+      setTrail(res.ok ? res.events : []);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId]);
+
   const employeeOptions = useMemo(
     () => [...new Set(rows.map((row) => row.employeeName).filter(Boolean))],
     [rows],
@@ -83,6 +170,10 @@ export function PaymentMethodAdjustmentsClient() {
   const toOptions = useMemo(
     () => [...new Set(rows.map((row) => row.toLabel).filter(Boolean))],
     [rows],
+  );
+
+  const filtersActive = Boolean(
+    search.trim() || dateFrom || dateTo || fromFilter || toFilter || employeeFilter || statusFilter,
   );
 
   const filteredRows = useMemo(() => {
@@ -110,21 +201,17 @@ export function PaymentMethodAdjustmentsClient() {
   );
 
   const kpis = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
     const todaysRows = filteredRows.filter((row) => fmtDateInput(row.createdAtIso) === today);
     const amountToday = todaysRows.reduce((sum, row) => sum + Number(row.amountUsd), 0);
     const ordersToday = todaysRows.reduce((sum, row) => sum + row.affectedOrdersCount, 0);
-    const mostCommonTarget = filteredRows.reduce<Record<string, number>>((acc, row) => {
-      acc[row.toLabel] = (acc[row.toLabel] ?? 0) + 1;
-      return acc;
-    }, {});
-    const topTarget =
-      Object.entries(mostCommonTarget).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "—";
+    const pendingReview = filteredRows.filter((row) => !row.reviewed).length;
     return {
       todayCount: todaysRows.length,
       todayAmount: amountToday.toFixed(2),
       ordersToday,
-      topTarget,
+      pendingReview,
     };
   }, [filteredRows]);
 
@@ -138,84 +225,120 @@ export function PaymentMethodAdjustmentsClient() {
     setStatusFilter("");
   }
 
+  async function markReviewed() {
+    if (!selectedRow || selectedRow.reviewed) return;
+    setMarking(true);
+    const res = await markPaymentMethodAutoAdjustmentReviewedAction(selectedRow.id);
+    setMarking(false);
+    if (res.ok) {
+      setSelectedId(null);
+      void load();
+    }
+  }
+
   return (
-    <div className="pm-adjust-page adm-page--page-scroll">
+    <div className="pm-adjust-page adm-page--page-scroll" dir="rtl">
       <section className="pm-adjust-page__hero">
-        <div>
-          <h1 className="adm-page-title adm-page-title--sm">התאמות אמצעי תשלום</h1>
-          <p className="adm-order-detail-sub">בקרה ואודיט להתאמות אוטומטיות שבוצעו בקליטת תשלום.</p>
+        <div className="pm-adjust-page__hero-copy">
+          <p className="pm-adjust-page__eyebrow">בקרות</p>
+          <h1 className="pm-adjust-page__title">התאמות אמצעי תשלום</h1>
+          <p className="pm-adjust-page__lead">
+            מעקב ובקרה אחר שינויים באמצעי התשלום של הזמנות.
+            כאן ניתן לראות מה היה אמצעי התשלום המקורי, לאיזה אמצעי התבקש שינוי,
+            מי ביצע את הפעולה, אילו הזמנות הושפעו ומה הייתה הסיבה לשינוי.
+          </p>
+          <p className="pm-adjust-page__info">
+            <Info size={15} aria-hidden />
+            <span>התאמה משנה את שיוך אמצעי התשלום בלבד ואינה משנה את סכום התשלום הכולל.</span>
+          </p>
         </div>
-        <button type="button" className="adm-btn" onClick={() => void load()} disabled={loading}>
+        <button type="button" className="adm-btn pm-adjust-page__refresh" onClick={() => void load()} disabled={loading}>
           <RefreshCw size={15} aria-hidden />
           רענן
         </button>
       </section>
 
-      <section className="pm-adjust-page__kpis">
-        <article className="pm-adjust-page__kpi">
+      <section className="pm-adjust-page__kpis" aria-label="סיכום">
+        <article className="pm-adjust-page__kpi pm-adjust-page__kpi--today">
           <span>התאמות היום</span>
           <strong>{kpis.todayCount}</strong>
         </article>
-        <article className="pm-adjust-page__kpi">
+        <article className="pm-adjust-page__kpi pm-adjust-page__kpi--amount">
           <span>סכום שהותאם היום</span>
           <strong dir="ltr">{fmtUsd(kpis.todayAmount)}</strong>
         </article>
-        <article className="pm-adjust-page__kpi">
+        <article className="pm-adjust-page__kpi pm-adjust-page__kpi--orders">
           <span>הזמנות שהושפעו</span>
           <strong>{kpis.ordersToday}</strong>
         </article>
-        <article className="pm-adjust-page__kpi">
-          <span>אמצעי נפוץ בשינויים</span>
-          <strong>{kpis.topTarget}</strong>
+        <article className="pm-adjust-page__kpi pm-adjust-page__kpi--pending">
+          <span>ממתינות לאישור / בדיקה</span>
+          <strong>{kpis.pendingReview}</strong>
         </article>
       </section>
 
-      <section className="pm-adjust-page__filters">
-        <label className="adm-field">
-          <span>חיפוש לקוח / קוד</span>
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="שם לקוח או #קוד" />
+      <section className="pm-adjust-page__filters" aria-label="מסננים">
+        <label className="pm-adjust-page__filter">
+          <span>מלקוח / קוד</span>
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="חיפוש..." />
         </label>
-        <label className="adm-field">
+        <label className="pm-adjust-page__filter">
           <span>מתאריך</span>
           <input type="date" dir="ltr" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
         </label>
-        <label className="adm-field">
+        <label className="pm-adjust-page__filter">
           <span>עד תאריך</span>
           <input type="date" dir="ltr" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
         </label>
-        <label className="adm-field">
-          <span>מאמצעי</span>
+        <label className="pm-adjust-page__filter">
+          <span>אמצעי מקור</span>
           <select value={fromFilter} onChange={(e) => setFromFilter(e.target.value)}>
             <option value="">הכול</option>
-            {fromOptions.map((value) => <option key={value} value={value}>{value}</option>)}
+            {fromOptions.map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
           </select>
         </label>
-        <label className="adm-field">
-          <span>לאמצעי</span>
+        <label className="pm-adjust-page__filter">
+          <span>אמצעי יעד</span>
           <select value={toFilter} onChange={(e) => setToFilter(e.target.value)}>
             <option value="">הכול</option>
-            {toOptions.map((value) => <option key={value} value={value}>{value}</option>)}
+            {toOptions.map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
           </select>
         </label>
-        <label className="adm-field">
+        <label className="pm-adjust-page__filter">
           <span>עובד</span>
           <select value={employeeFilter} onChange={(e) => setEmployeeFilter(e.target.value)}>
             <option value="">הכול</option>
-            {employeeOptions.map((value) => <option key={value} value={value}>{value}</option>)}
+            {employeeOptions.map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
           </select>
         </label>
-        <label className="adm-field">
+        <label className="pm-adjust-page__filter">
           <span>סטטוס</span>
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
             <option value="">הכול</option>
             <option value="new">חדש</option>
-            <option value="reviewed">נבדק</option>
+            <option value="reviewed">בוצע / נבדק</option>
           </select>
         </label>
-        <button type="button" className="adm-btn" onClick={clearFilters}>
-          <FilterX size={15} aria-hidden />
-          נקה סינונים
-        </button>
+        {filtersActive ? (
+          <button type="button" className="adm-btn pm-adjust-page__clear-filters" onClick={clearFilters}>
+            <FilterX size={15} aria-hidden />
+            נקה סינונים
+          </button>
+        ) : (
+          <div className="pm-adjust-page__filter-spacer" aria-hidden />
+        )}
       </section>
 
       {err ? <p className="adm-inline-error">{err}</p> : null}
@@ -224,7 +347,9 @@ export function PaymentMethodAdjustmentsClient() {
         <div className="pm-adjust-page__table-head">
           <div>
             <h2>רשימת התאמות</h2>
-            <p>{filteredRows.length} רשומות מוצגות כרגע</p>
+            <p>
+              {loading ? "טוען..." : `${filteredRows.length} רשומות מוצגות`}
+            </p>
           </div>
         </div>
 
@@ -233,52 +358,71 @@ export function PaymentMethodAdjustmentsClient() {
             <thead>
               <tr>
                 <th>תאריך</th>
-                <th>עובד</th>
                 <th>לקוח</th>
                 <th>שינוי אמצעי</th>
                 <th>סכום</th>
                 <th>הזמנות</th>
                 <th>סיבה</th>
+                <th>בוצע ע״י</th>
                 <th>סטטוס</th>
-                <th>פעולה</th>
+                <th>פעולות</th>
               </tr>
             </thead>
             <tbody>
               {!loading && filteredRows.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="adm-table-empty">אין התאמות אמצעי תשלום להצגה.</td>
-                </tr>
-              ) : filteredRows.map((row) => (
-                <tr key={row.id}>
-                  <td dir="ltr">{fmtDateTime(row.createdAtIso)}</td>
-                  <td>{row.employeeName}</td>
-                  <td>
-                    <strong>{row.customerName}</strong>
-                    {row.customerCode ? <div dir="ltr" className="pm-adjust-page__customer-code">#{row.customerCode}</div> : null}
-                  </td>
-                  <td>
-                    <div className="pm-adjust-page__method-flow">
-                      <MethodBadge label={row.fromLabel} tone="from" />
-                      <span aria-hidden>→</span>
-                      <MethodBadge label={row.toLabel} tone="to" />
-                    </div>
-                  </td>
-                  <td className="pm-adjust-page__money-strong" dir="ltr">{fmtUsd(row.amountUsd)}</td>
-                  <td>{row.affectedOrdersCount}</td>
-                  <td>{reasonLabel(row.details.reasonCode)}</td>
-                  <td>
-                    <span className={`pm-adjust-page__status-badge${row.reviewed ? " is-reviewed" : " is-new"}`}>
-                      {row.reviewed ? "נבדק" : "חדש"}
-                    </span>
-                  </td>
-                  <td>
-                    <button type="button" className="adm-btn" onClick={() => setSelectedId(row.id)}>
-                      <Eye size={15} aria-hidden />
-                      צפייה
-                    </button>
+                  <td colSpan={9} className="adm-table-empty">
+                    אין התאמות אמצעי תשלום להצגה.
                   </td>
                 </tr>
-              ))}
+              ) : (
+                filteredRows.map((row) => (
+                  <tr key={row.id} className="pm-adjust-page__row">
+                    <td>
+                      <div className="pm-adjust-page__date-cell" dir="ltr">
+                        <strong>{fmtDatePart(row.createdAtIso)}</strong>
+                        <span>{fmtTimePart(row.createdAtIso)}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <strong>{row.customerName}</strong>
+                      {row.customerCode ? (
+                        <div dir="ltr" className="pm-adjust-page__customer-code">
+                          #{row.customerCode}
+                        </div>
+                      ) : null}
+                    </td>
+                    <td>
+                      <MethodChangeCell fromLabel={row.fromLabel} toLabel={row.toLabel} compact />
+                    </td>
+                    <td className="pm-adjust-page__money-strong" dir="ltr">
+                      {fmtUsd(row.amountUsd)}
+                    </td>
+                    <td>
+                      {row.affectedOrdersCount === 1
+                        ? "1 הזמנה"
+                        : `${row.affectedOrdersCount} הזמנות`}
+                    </td>
+                    <td className="pm-adjust-page__reason-cell">
+                      <span title={row.reasonText}>{reasonLabel(row.details.reasonCode)}</span>
+                    </td>
+                    <td>{row.employeeName}</td>
+                    <td>
+                      <StatusBadge reviewed={row.reviewed} />
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="adm-btn adm-btn--primary pm-adjust-page__view-btn"
+                        onClick={() => setSelectedId(row.id)}
+                      >
+                        <Eye size={15} aria-hidden />
+                        צפייה
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
@@ -289,19 +433,27 @@ export function PaymentMethodAdjustmentsClient() {
               <div className="pm-adjust-page__mobile-head">
                 <div>
                   <strong>{row.customerName}</strong>
-                  {row.customerCode ? <div dir="ltr" className="pm-adjust-page__customer-code">#{row.customerCode}</div> : null}
+                  {row.customerCode ? (
+                    <div dir="ltr" className="pm-adjust-page__customer-code">
+                      #{row.customerCode}
+                    </div>
+                  ) : null}
+                  <div className="pm-adjust-page__mobile-meta" dir="ltr">
+                    {fmtDateTime(row.createdAtIso)}
+                  </div>
                 </div>
-                <span className={`pm-adjust-page__status-badge${row.reviewed ? " is-reviewed" : " is-new"}`}>
-                  {row.reviewed ? "נבדק" : "חדש"}
-                </span>
+                <StatusBadge reviewed={row.reviewed} />
               </div>
-              <div className="pm-adjust-page__method-flow">
-                <MethodBadge label={row.fromLabel} tone="from" />
-                <span aria-hidden>→</span>
-                <MethodBadge label={row.toLabel} tone="to" />
-              </div>
-              <p dir="ltr" className="pm-adjust-page__money-strong">{fmtUsd(row.amountUsd)}</p>
-              <button type="button" className="adm-btn" onClick={() => setSelectedId(row.id)}>
+              <MethodChangeCell fromLabel={row.fromLabel} toLabel={row.toLabel} />
+              <p dir="ltr" className="pm-adjust-page__money-strong">
+                {fmtUsd(row.amountUsd)}
+              </p>
+              <p className="pm-adjust-page__mobile-reason">{reasonLabel(row.details.reasonCode)}</p>
+              <button
+                type="button"
+                className="adm-btn adm-btn--primary"
+                onClick={() => setSelectedId(row.id)}
+              >
                 <Eye size={15} aria-hidden />
                 צפייה
               </button>
@@ -311,87 +463,241 @@ export function PaymentMethodAdjustmentsClient() {
       </section>
 
       {selectedRow ? (
-        <div className="adm-cash-modal-backdrop" role="presentation" onClick={() => setSelectedId(null)}>
-          <div className="adm-cash-modal pm-adjust-page__detail-modal" dir="rtl" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="adm-cash-modal-backdrop pm-adjust-page__backdrop"
+          role="presentation"
+          onClick={() => setSelectedId(null)}
+        >
+          <div
+            className="adm-cash-modal pm-adjust-page__detail-modal"
+            dir="rtl"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="pm-adjust-detail-title"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="pm-adjust-page__detail-head">
               <div>
-                <h3>פרטי התאמה</h3>
-                <p>צפייה מלאה בנתוני ההתאמה וההזמנות שהושפעו.</p>
+                <h3 id="pm-adjust-detail-title">פרטי התאמת אמצעי תשלום</h3>
+                <p className="pm-adjust-page__detail-sub">
+                  <strong>
+                    {selectedRow.customerName}
+                    {selectedRow.customerCode ? ` #${selectedRow.customerCode}` : ""}
+                  </strong>
+                  <span aria-hidden> · </span>
+                  <span dir="ltr">
+                    {fmtDatePart(selectedRow.createdAtIso)} • {fmtTimePart(selectedRow.createdAtIso)}
+                  </span>
+                  <span aria-hidden> · </span>
+                  <span>בוצע על ידי {selectedRow.employeeName}</span>
+                </p>
               </div>
-              <button type="button" className="pm-adjust-page__detail-close" aria-label="סגור" onClick={() => setSelectedId(null)}>
+              <button
+                type="button"
+                className="pm-adjust-page__detail-close"
+                aria-label="סגור"
+                onClick={() => setSelectedId(null)}
+              >
                 <X size={18} />
               </button>
             </div>
 
             <div className="pm-adjust-page__detail-body">
-              <section className="pm-adjust-page__detail-grid">
-                <DetailLine label="תאריך ושעה" value={fmtDateTime(selectedRow.createdAtIso)} ltr />
-                <DetailLine label="עובד" value={selectedRow.employeeName} />
-                <DetailLine label="לקוח" value={selectedRow.customerName} />
-                <DetailLine label="קוד לקוח" value={selectedRow.customerCode ? `#${selectedRow.customerCode}` : "—"} ltr />
-                <DetailLine label="סכום כולל" value={fmtUsd(selectedRow.amountUsd)} ltr />
-                <DetailLine label="מספר הזמנות" value={String(selectedRow.affectedOrdersCount)} />
+              <section className="pm-adjust-page__story">
+                <p className="pm-adjust-page__story-text">{humanSummary(selectedRow)}</p>
+                <div className="pm-adjust-page__story-reason">
+                  <span>סיבת השינוי</span>
+                  <strong>{reasonLabel(selectedRow.details.reasonCode)}</strong>
+                  {selectedRow.reasonText.trim() &&
+                  selectedRow.reasonText.trim() !== reasonLabel(selectedRow.details.reasonCode) ? (
+                    <p>{selectedRow.reasonText}</p>
+                  ) : null}
+                </div>
+                <p className="pm-adjust-page__not-payment-note">
+                  התאמה זו אינה יוצרת תשלום חדש. היא משנה רק את שיוך אמצעי התשלום של הסכום שנבחר.
+                </p>
               </section>
 
-              <section className="pm-adjust-page__detail-flow">
-                <MethodBadge label={selectedRow.fromLabel} tone="from" />
-                <span aria-hidden>→</span>
-                <MethodBadge label={selectedRow.toLabel} tone="to" />
+              <section className="pm-adjust-page__before-after" aria-label="לפני שינוי אחרי">
+                <div className="pm-adjust-page__ba-card pm-adjust-page__ba-card--before">
+                  <span>לפני ההתאמה</span>
+                  <strong>{selectedRow.fromLabel}</strong>
+                  <em dir="ltr">{fmtUsd(selectedRow.amountUsd)}</em>
+                </div>
+                <div className="pm-adjust-page__ba-arrow" aria-hidden>
+                  <ArrowDown size={18} />
+                </div>
+                <div className="pm-adjust-page__ba-card pm-adjust-page__ba-card--change">
+                  <span>השינוי</span>
+                  <strong>
+                    {selectedRow.fromLabel} → {selectedRow.toLabel}
+                  </strong>
+                  <em dir="ltr">{fmtUsd(selectedRow.amountUsd)}</em>
+                </div>
+                <div className="pm-adjust-page__ba-arrow" aria-hidden>
+                  <ArrowDown size={18} />
+                </div>
+                <div className="pm-adjust-page__ba-card pm-adjust-page__ba-card--after">
+                  <span>אחרי ההתאמה</span>
+                  <strong>{selectedRow.toLabel}</strong>
+                  <em dir="ltr">{fmtUsd(selectedRow.amountUsd)}</em>
+                </div>
               </section>
+
+              {hasRealBalanceSnapshot(selectedRow.details) ? (
+                <section className="pm-adjust-page__detail-card">
+                  <h4>יתרות אמצעי תשלום (בשעת ההתאמה)</h4>
+                  <div className="pm-adjust-page__balances-grid">
+                    <div>
+                      <span>לפני — {selectedRow.fromLabel}</span>
+                      <strong dir="ltr">
+                        {selectedRow.details.sourceCurrency === "ILS"
+                          ? fmtIls(selectedRow.details.beforeSourceBalance!)
+                          : fmtUsd(selectedRow.details.beforeSourceBalance!)}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>לפני — {selectedRow.toLabel}</span>
+                      <strong dir="ltr">
+                        {selectedRow.details.targetCurrency === "ILS"
+                          ? fmtIls(selectedRow.details.beforeTargetBalance!)
+                          : fmtUsd(selectedRow.details.beforeTargetBalance!)}
+                      </strong>
+                    </div>
+                    <div className="pm-adjust-page__balances-delta">
+                      <span>שינוי</span>
+                      <strong dir="ltr">
+                        −{fmtUsd(selectedRow.amountUsd)} {selectedRow.fromLabel}
+                      </strong>
+                      <strong dir="ltr">
+                        +{fmtUsd(selectedRow.amountUsd)} {selectedRow.toLabel}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>אחרי — {selectedRow.fromLabel}</span>
+                      <strong dir="ltr">
+                        {selectedRow.details.sourceCurrency === "ILS"
+                          ? fmtIls(selectedRow.details.afterSourceBalance!)
+                          : fmtUsd(selectedRow.details.afterSourceBalance!)}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>אחרי — {selectedRow.toLabel}</span>
+                      <strong dir="ltr">
+                        {selectedRow.details.targetCurrency === "ILS"
+                          ? fmtIls(selectedRow.details.afterTargetBalance!)
+                          : fmtUsd(selectedRow.details.afterTargetBalance!)}
+                      </strong>
+                    </div>
+                  </div>
+                </section>
+              ) : null}
 
               <section className="pm-adjust-page__detail-card">
-                <h4>סיבה</h4>
-                <p>{reasonLabel(selectedRow.details.reasonCode)}</p>
-                <h4>פירוט</h4>
-                <p>{selectedRow.reasonText}</p>
+                <h4>פירוט כספי ומטבע</h4>
+                <div className="pm-adjust-page__money-meta">
+                  <div>
+                    <span>סכום ההתאמה</span>
+                    <strong dir="ltr">{fmtUsd(selectedRow.amountUsd)} USD</strong>
+                  </div>
+                  <div>
+                    <span>מטבע מקור</span>
+                    <strong dir="ltr">{selectedRow.details.sourceCurrency ?? "USD"}</strong>
+                  </div>
+                  {selectedRow.details.sourceCurrency === "ILS" && selectedRow.details.amountOriginalCurrency ? (
+                    <div>
+                      <span>סכום מקורי</span>
+                      <strong dir="ltr">{fmtIls(selectedRow.details.amountOriginalCurrency)}</strong>
+                    </div>
+                  ) : null}
+                  {selectedRow.details.exchangeRate ? (
+                    <div>
+                      <span>שער המרה (בעת ההתאמה)</span>
+                      <strong dir="ltr">{selectedRow.details.exchangeRate}</strong>
+                    </div>
+                  ) : null}
+                </div>
               </section>
 
               <section className="pm-adjust-page__detail-card">
                 <div className="pm-adjust-page__detail-table-head">
                   <h4>הזמנות שהושפעו</h4>
-                  {!selectedRow.reviewed ? (
-                    <button
-                      type="button"
-                      className="adm-btn adm-btn--primary"
-                      onClick={async () => {
-                        const res = await markPaymentMethodAutoAdjustmentReviewedAction(selectedRow.id);
-                        if (res.ok) {
-                          setSelectedId(null);
-                          void load();
-                        }
-                      }}
-                    >
-                      סמן כנבדק
-                    </button>
-                  ) : null}
+                  <StatusBadge reviewed={selectedRow.reviewed} />
                 </div>
                 <div className="pm-adjust-page__detail-table-wrap">
                   <table className="adm-table">
                     <thead>
                       <tr>
-                        <th>מספר הזמנה</th>
+                        <th>הזמנה</th>
+                        <th>לקוח</th>
+                        <th>סכום</th>
                         <th>לפני</th>
-                        <th>שינוי</th>
                         <th>אחרי</th>
                       </tr>
                     </thead>
                     <tbody>
                       {selectedRow.details.affectedOrders.map((order) => (
                         <tr key={order.orderId}>
-                          <td dir="ltr"><strong>{order.orderNumber}</strong></td>
                           <td dir="ltr">
-                            {order.beforeAllocation.map((line) => `${PAYMENT_METHOD_LABELS[line.paymentMethod] ?? line.paymentMethod} ${line.amount}`).join(" | ") || "—"}
+                            <Link
+                              href={`/admin/orders/${order.orderId}`}
+                              className="pm-adjust-page__order-link"
+                            >
+                              {order.orderNumber}
+                            </Link>
                           </td>
-                          <td dir="ltr" className="pm-adjust-page__money-strong">{fmtUsd(order.movedUsd)}</td>
-                          <td dir="ltr">
-                            {order.afterAllocation.map((line) => `${PAYMENT_METHOD_LABELS[line.paymentMethod] ?? line.paymentMethod} ${line.amount}`).join(" | ") || "—"}
+                          <td>{selectedRow.customerName}</td>
+                          <td dir="ltr" className="pm-adjust-page__money-strong">
+                            {fmtUsd(order.movedUsd)}
                           </td>
+                          <td>{selectedRow.fromLabel}</td>
+                          <td>{selectedRow.toLabel}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
               </section>
+
+              <section className="pm-adjust-page__detail-card">
+                <h4>היסטוריית הפעולה</h4>
+                {trailLoading ? (
+                  <p className="pm-adjust-page__trail-empty">טוען היסטוריה...</p>
+                ) : trail.length === 0 ? (
+                  <p className="pm-adjust-page__trail-empty">אין רשומות Audit נוספות להצגה.</p>
+                ) : (
+                  <ol className="pm-adjust-page__trail">
+                    {trail.map((event, idx) => (
+                      <li key={`${event.atIso}-${idx}`}>
+                        <div className="pm-adjust-page__trail-time" dir="ltr">
+                          {fmtDateTime(event.atIso)}
+                        </div>
+                        <div className="pm-adjust-page__trail-body">
+                          <strong>{event.title}</strong>
+                          {event.detail ? <p>{event.detail}</p> : null}
+                          {event.actorName ? <span>{event.actorName}</span> : null}
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </section>
+            </div>
+
+            <div className="pm-adjust-page__detail-footer">
+              {!selectedRow.reviewed ? (
+                <button
+                  type="button"
+                  className="adm-btn adm-btn--primary"
+                  disabled={marking}
+                  onClick={() => void markReviewed()}
+                >
+                  סמן כנבדק
+                </button>
+              ) : null}
+              <button type="button" className="adm-btn" onClick={() => setSelectedId(null)}>
+                סגור
+              </button>
             </div>
           </div>
         </div>

@@ -26,6 +26,7 @@ export type OrdersFiltersProps = {
   createdByOptions: OrdersCreatedByOption[];
   countryFilterOptions: OrdersCountryFilterOption[];
   paymentTypes: string[];
+  paymentStatuses: string[];
   paymentLocation: string;
   paymentLocationOptions: OrdersPaymentLocationOption[];
   amountMin: string;
@@ -51,6 +52,7 @@ export function OrdersFilters(props: OrdersFiltersProps) {
     createdByOptions,
     countryFilterOptions,
     paymentTypes,
+    paymentStatuses = [],
     paymentLocation,
     paymentLocationOptions,
     amountMin,
@@ -74,6 +76,7 @@ export function OrdersFilters(props: OrdersFiltersProps) {
     createdByOptions,
     countryFilterOptions,
     paymentTypes,
+    paymentStatuses,
     paymentLocation,
     paymentLocationOptions,
     amountMin,

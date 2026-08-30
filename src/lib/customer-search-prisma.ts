@@ -203,6 +203,26 @@ async function findPartialCustomers(
   return partialHits.map(toSearchRow);
 }
 
+async function enrichSearchRowsWithSsotBalance(
+  rows: CustomerSearchRow[],
+  workCountry?: string | null,
+): Promise<CustomerSearchRow[]> {
+  if (rows.length === 0) return rows;
+  const { calculateCustomerBalances } = await import("@/lib/customer-balance-calculator");
+  const { openDebtScopeForWorkCountry } = await import("@/lib/customer-open-debt");
+  const map = await calculateCustomerBalances(
+    rows.map((r) => r.id),
+    openDebtScopeForWorkCountry(workCountry),
+  );
+  return rows.map((r) => {
+    const b = map.get(r.id);
+    if (!b) return r;
+    // Customer.balanceUsd convention = internal (payments + withdrawals − orders)
+    const internal = b.totalPayments.add(b.totalWithdrawals).sub(b.totalOrders);
+    return { ...r, balanceUsd: Number(internal.toFixed(2)) };
+  });
+}
+
 /**
  * exact=1 — customerCode + oldCustomerCode (external) + UUID.
  * Fallback: contains → cross-country exact → normalized digits.
@@ -220,14 +240,14 @@ async function searchCustomersExact(
     const mapped = toSearchRow(row);
     console.log({ customersFound: 1 });
     logFoundCustomer(mapped);
-    return [mapped];
+    return enrichSearchRowsWithSsotBalance([mapped], workCountry);
   }
 
   const partial = await findPartialCustomers(q, Math.max(limit, 5), workCountry);
   if (partial.length > 0) {
     console.log({ customersFound: partial.length, fallback: "contains" });
     logFoundCustomer(partial[0]!);
-    return partial.slice(0, limit);
+    return enrichSearchRowsWithSsotBalance(partial.slice(0, limit), workCountry);
   }
 
   row = await findExactCustomerRow(q, workCountry, false);
@@ -240,13 +260,13 @@ async function searchCustomersExact(
       foundCountry: mapped.countryCode,
     });
     logFoundCustomer(mapped);
-    return [mapped];
+    return enrichSearchRowsWithSsotBalance([mapped], workCountry);
   }
 
   const digitHits = await searchByNormalizedCodeDigits(q, limit, workCountry);
   console.log({ customersFound: digitHits.length, fallback: digitHits.length ? "digits" : "none" });
   if (digitHits[0]) logFoundCustomer(digitHits[0]);
-  return digitHits.slice(0, limit);
+  return enrichSearchRowsWithSsotBalance(digitHits.slice(0, limit), workCountry);
 }
 
 export type CustomerPrismaSearchOptions = {
@@ -282,18 +302,18 @@ export async function searchCustomersPrisma(
     const mapped = toSearchRow(codeHit);
     console.log({ customersFound: 1 });
     logFoundCustomer(mapped);
-    return [mapped];
+    return enrichSearchRowsWithSsotBalance([mapped], workCountry);
   }
 
   const partialHits = await findPartialCustomers(q, limit, workCountry);
   if (partialHits.length > 0) {
     console.log({ customersFound: partialHits.length });
     logFoundCustomer(partialHits[0]!);
-    return partialHits;
+    return enrichSearchRowsWithSsotBalance(partialHits, workCountry);
   }
 
   const digitHits = await searchByNormalizedCodeDigits(q, limit, workCountry);
   console.log({ customersFound: digitHits.length });
   if (digitHits[0]) logFoundCustomer(digitHits[0]);
-  return digitHits;
+  return enrichSearchRowsWithSsotBalance(digitHits, workCountry);
 }

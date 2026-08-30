@@ -4617,6 +4617,37 @@ tr.msh-row--cancel td:first-child { box-shadow: inset 3px 0 0 #ef4444; }
   font-weight: 600;
 }
 
+.shp-ms__trigger-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.shp-ms__clear {
+  position: absolute;
+  inset-inline-end: 22px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #475569;
+  cursor: pointer;
+  padding: 0;
+  z-index: 1;
+}
+
+.shp-ms__clear:hover {
+  background: #cbd5e1;
+  color: #0f172a;
+}
+
 .shp-ms__trigger:disabled {
   opacity: 0.55;
   cursor: not-allowed;

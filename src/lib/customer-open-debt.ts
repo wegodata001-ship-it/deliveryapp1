@@ -120,3 +120,16 @@ export async function persistCustomerBalanceSnapshot(
     WHERE "id" = ${customerId}
   `;
 }
+
+/**
+ * רענון snapshot מ־SSOT (לא תיקון ידני לפי customerId).
+ * נקרא אחרי יצירת/עדכון הזמנה ובעת טעינת יתרות לקליטה.
+ */
+export async function refreshCustomerBalanceSnapshotFromSsot(
+  customerId: string,
+  scope: CustomerBalanceScope = {},
+): Promise<Prisma.Decimal> {
+  const bal = await getCustomerInternalBalanceUsd(customerId, scope);
+  await persistCustomerBalanceSnapshot(customerId, bal);
+  return bal;
+}

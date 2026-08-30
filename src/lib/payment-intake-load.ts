@@ -17,6 +17,8 @@ import { loadPaymentPlanSummariesByOrderId } from "@/lib/payment-plan-service";
 import { DEFAULT_WORK_COUNTRY, normalizeWorkCountryCode, type WorkCountryCode } from "@/lib/work-country";
 import { formatLocalYmd } from "@/lib/work-week";
 import { findActiveCustomerPayments, groupByActivePayments } from "@/lib/payment-record-status";
+import { computeOrderCommissionBreakdown } from "@/lib/order-commission-ssot";
+import { isLegacyCommissionOrderMutationFee } from "@/lib/customer-commission-balance-shared";
 
 export type PaymentIntakeCustomerPayload = {
   id: string;
@@ -341,10 +343,49 @@ async function attachPaymentsAndMapRows(
       paymentPlan: planByOrder.get(o.id) ?? null,
     }));
 
-    return rows;
+    return enrichIntakeOrdersWithCommissionSsot(rows);
   }
 
   return [];
+}
+
+/** מחיל currentFee = base + Σ fees על שורות קליטה */
+async function enrichIntakeOrdersWithCommissionSsot(
+  rows: PaymentIntakeOrderRow[],
+): Promise<PaymentIntakeOrderRow[]> {
+  if (rows.length === 0) return rows;
+  const orderIds = rows.map((r) => r.id);
+  const fees = await prisma.paymentAdjustmentFee.findMany({
+    where: {
+      orderId: { in: orderIds },
+      status: { not: "CANCELLED" },
+    },
+    select: { orderId: true, amountUsd: true, userChoice: true },
+  });
+  const feesByOrder = new Map<string, Array<{ amountUsd: number; userChoice: string | null }>>();
+  for (const fee of fees) {
+    if (!fee.orderId) continue;
+    if (isLegacyCommissionOrderMutationFee(fee.userChoice)) continue;
+    const list = feesByOrder.get(fee.orderId) ?? [];
+    list.push({ amountUsd: Number(fee.amountUsd ?? 0), userChoice: fee.userChoice });
+    feesByOrder.set(fee.orderId, list);
+  }
+
+  return rows.map((row) => {
+    const base = Number(row.commissionUsd) || 0;
+    const breakdown = computeOrderCommissionBreakdown({
+      orderId: row.id,
+      baseCommissionUsd: base,
+      fees: feesByOrder.get(row.id) ?? [],
+    });
+    return {
+      ...row,
+      commissionBaseUsd: breakdown.baseCommissionUsd.toFixed(2),
+      commissionAdjustmentsUsd: breakdown.adjustmentsUsd.toFixed(2),
+      commissionHasAdjustments: breakdown.hasAdjustments,
+      commissionUsd: breakdown.currentCommissionUsd.toFixed(2),
+    };
+  });
 }
 
 /** הזמנות לקוח בלבד — לטעינה ברקע */
@@ -465,6 +506,14 @@ export async function loadPaymentIntakeBalancesForCustomer(
       return getCustomerCreditBalanceUsd(cid, openDebtScopeForWorkCountry(paymentWorkCountry));
     })(),
   ]);
+
+  // סנכרון snapshot מ־SSOT (לא תיקון ידני ללקוח) — מונע יתרת DB ישנה בחיפוש
+  try {
+    const { persistCustomerBalanceSnapshot } = await import("@/lib/customer-open-debt");
+    await persistCustomerBalanceSnapshot(cid, customerBalanceUsd);
+  } catch {
+    /* snapshot best-effort */
+  }
 
   return {
     ok: true,

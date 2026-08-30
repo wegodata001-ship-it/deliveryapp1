@@ -5,11 +5,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Search, Settings, X } from "lucide-react";
 import { ShipmentMultiSelectFilter } from "@/components/admin/shipments/ShipmentMultiSelectFilter";
-import { AhWeekNavNextButton, AhWeekNavPrevButton } from "@/components/admin/AhWeekNavButtons";
 import { CurrentWorkWeekButton } from "@/components/admin/CurrentWorkWeekButton";
 import { OS } from "@/lib/order-status-slugs";
 import { AdvancedOrdersFilters } from "./AdvancedOrdersFilters";
 import { ActiveFilterChips } from "./ActiveFilterChips";
+import { OrdersWeekPicker } from "./OrdersWeekPicker";
 import type { UseOrdersListFiltersReturn } from "./useOrdersListFilters";
 
 type Props = UseOrdersListFiltersReturn & {
@@ -29,6 +29,9 @@ export function OrdersFilterBar(props: Props) {
     setCountryValues,
     paymentTypeValues,
     setPaymentTypeValues,
+    paymentStatusValues,
+    setPaymentStatusValues,
+    paymentStatusOptions,
     statusValues,
     setStatusValues,
     openOnly,
@@ -36,7 +39,6 @@ export function OrdersFilterBar(props: Props) {
     completedOnly,
     setCompletedOnly,
     week,
-    setWeek,
     onWeekCommitted,
     shiftWeekNav,
     goToActiveWeek,
@@ -71,6 +73,7 @@ export function OrdersFilterBar(props: Props) {
     createdByFilterOptions,
     paymentLocationOptions,
     getAhWeekCodeFromDateRange,
+    setWeek,
     leadingActions,
     exportActions,
   } = props;
@@ -153,6 +156,9 @@ export function OrdersFilterBar(props: Props) {
       paymentLocationOptions={paymentLocationOptions}
       msStrings={msStrings}
       msDir={msDir}
+      countryValues={countryValues}
+      setCountryValues={setCountryValues}
+      countryOptions={countryOptions}
     />
   );
 
@@ -210,14 +216,31 @@ export function OrdersFilterBar(props: Props) {
           />
         </label>
 
-        <div className="ofb__select ofb__select--country">
+        <div className="ofb__select ofb__select--status">
           <ShipmentMultiSelectFilter
-            label="מדינה"
-            options={countryOptions}
-            values={countryValues}
+            label="סטטוס הזמנה"
+            options={statusOptions.map((s) => ({ value: s.value, label: s.label }))}
+            values={openOnly ? [OS.OPEN] : completedOnly ? [OS.COMPLETED] : statusValues}
             onChange={(next) => {
-              setCountryValues(next);
-              pushFilters({ country: next });
+              setOpenOnly(false);
+              setCompletedOnly(false);
+              setStatusValues(next);
+              pushFilters({ status: next, openOnly: false, completedOnly: false });
+            }}
+            disabled={openOnly || completedOnly}
+            strings={msStrings}
+            dir={msDir}
+          />
+        </div>
+
+        <div className="ofb__select ofb__select--pay-status">
+          <ShipmentMultiSelectFilter
+            label="סטטוס תשלום"
+            options={paymentStatusOptions.map((o) => ({ value: o.value, label: o.label }))}
+            values={paymentStatusValues}
+            onChange={(next) => {
+              setPaymentStatusValues(next);
+              pushFilters({ paymentStatus: next }, { refresh: true });
             }}
             strings={msStrings}
             dir={msDir}
@@ -238,43 +261,11 @@ export function OrdersFilterBar(props: Props) {
           />
         </div>
 
-        <div className="ofb__select ofb__select--status">
-          <ShipmentMultiSelectFilter
-            label="סטטוס"
-            options={statusOptions.map((s) => ({ value: s.value, label: s.label }))}
-            values={openOnly ? [OS.OPEN] : completedOnly ? [OS.COMPLETED] : statusValues}
-            onChange={(next) => {
-              setOpenOnly(false);
-              setCompletedOnly(false);
-              setStatusValues(next);
-              pushFilters({ status: next, openOnly: false, completedOnly: false });
-            }}
-            disabled={openOnly || completedOnly}
-            strings={msStrings}
-            dir={msDir}
-          />
-        </div>
-
-        <div className="ofb__week" dir="ltr">
-          <AhWeekNavPrevButton className="ofb__week-btn" onClick={() => shiftWeekNav(-1)} aria-label="שבוע קודם" />
-          <input
-            type="text"
-            inputMode="text"
-            value={week}
-            dir="ltr"
-            aria-label="שבוע עבודה"
-            onChange={(e) => setWeek(e.target.value.toUpperCase())}
-            onBlur={(e) => onWeekCommitted(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") onWeekCommitted((e.target as HTMLInputElement).value);
-            }}
-            className="ofb__week-inp"
-            placeholder="AH-136"
-            spellCheck={false}
-            autoComplete="off"
-          />
-          <AhWeekNavNextButton className="ofb__week-btn" onClick={() => shiftWeekNav(1)} aria-label="שבוע הבא" />
-        </div>
+        <OrdersWeekPicker
+          weekCode={week}
+          onWeekChange={onWeekCommitted}
+          onShift={shiftWeekNav}
+        />
 
         <CurrentWorkWeekButton className="ofb__week-current" weekCode={week} onClick={goToActiveWeek} />
 
@@ -294,7 +285,7 @@ export function OrdersFilterBar(props: Props) {
 
         {hasClearableFilters ? (
           <button type="button" className="ofb__btn ofb__btn--ghost" onClick={clearAllFilters}>
-            נקה
+            איפוס
           </button>
         ) : null}
 
@@ -336,14 +327,30 @@ export function OrdersFilterBar(props: Props) {
               </button>
             </div>
             <div className="ofb-drawer__body">
-              <div className="ofb__select ofb__select--country">
+              <div className="ofb__select ofb__select--status">
                 <ShipmentMultiSelectFilter
-                  label="מדינה"
-                  options={countryOptions}
-                  values={countryValues}
+                  label="סטטוס הזמנה"
+                  options={statusOptions.map((s) => ({ value: s.value, label: s.label }))}
+                  values={openOnly ? [OS.OPEN] : completedOnly ? [OS.COMPLETED] : statusValues}
                   onChange={(next) => {
-                    setCountryValues(next);
-                    pushFilters({ country: next });
+                    setOpenOnly(false);
+                    setCompletedOnly(false);
+                    setStatusValues(next);
+                    pushFilters({ status: next, openOnly: false, completedOnly: false });
+                  }}
+                  disabled={openOnly || completedOnly}
+                  strings={msStrings}
+                  dir={msDir}
+                />
+              </div>
+              <div className="ofb__select ofb__select--pay-status">
+                <ShipmentMultiSelectFilter
+                  label="סטטוס תשלום"
+                  options={paymentStatusOptions.map((o) => ({ value: o.value, label: o.label }))}
+                  values={paymentStatusValues}
+                  onChange={(next) => {
+                    setPaymentStatusValues(next);
+                    pushFilters({ paymentStatus: next }, { refresh: true });
                   }}
                   strings={msStrings}
                   dir={msDir}
@@ -362,28 +369,17 @@ export function OrdersFilterBar(props: Props) {
                   dir={msDir}
                 />
               </div>
-              <div className="ofb__select ofb__select--status">
-                <ShipmentMultiSelectFilter
-                  label="סטטוס"
-                  options={statusOptions.map((s) => ({ value: s.value, label: s.label }))}
-                  values={openOnly ? [OS.OPEN] : completedOnly ? [OS.COMPLETED] : statusValues}
-                  onChange={(next) => {
-                    setOpenOnly(false);
-                    setCompletedOnly(false);
-                    setStatusValues(next);
-                    pushFilters({ status: next, openOnly: false, completedOnly: false });
-                  }}
-                  disabled={openOnly || completedOnly}
-                  strings={msStrings}
-                  dir={msDir}
-                />
-              </div>
+              <OrdersWeekPicker
+                weekCode={week}
+                onWeekChange={onWeekCommitted}
+                onShift={shiftWeekNav}
+              />
               {advancedPanel}
             </div>
             <div className="ofb-drawer__foot">
               {hasClearableFilters ? (
                 <button type="button" className="ofb__btn ofb__btn--ghost" onClick={clearAllFilters}>
-                  נקה הכל
+                  איפוס הכל
                 </button>
               ) : null}
               <button type="button" className="ofb__btn ofb__btn--primary" onClick={() => setMobileOpen(false)}>

@@ -1,8 +1,15 @@
 /**
  * הקשר שבועות בקליטת תשלום — ממוקד למסך הקליטה בלבד.
  *
- * שבוע עבודה (קליטה) AH-N → הזמנות משבוע מקור AH-(N-1) → שבת AH-(N-1).
+ * מודל:
+ * - selectedWorkWeek (בית / ?week=) = שבוע ההזמנות
+ * - paymentCaptureWeek (שבוע הקליטה במסך) = nextWeek(selectedWorkWeek)
+ * - orderSourceWeek = previousWeek(paymentCaptureWeek) = selectedWorkWeek
+ *
+ * ניווט ידני בתוך הקליטה על paymentWeek P → הזמנות = previousWeek(P).
  * תאריך התשלום (paymentDateYmd) נפרד — לא נגזר מהשבוע.
+ *
+ * לא משנים את השבוע הגלובלי במסך הבית.
  */
 import {
   balancesSnapshotToYmd,

@@ -1,4 +1,4 @@
-/* Orders filter bar — single row, zero layout footprint when advanced closed */
+/* Orders filter bar — compact labeled filters + week picker */
 
 .ofb {
   display: block;
@@ -8,15 +8,16 @@
 
 .ofb__row {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 6px;
   min-height: 56px;
-  max-height: 64px;
+  max-height: 72px;
   flex-wrap: nowrap;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: visible;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: thin;
+  padding-block: 2px 4px;
 }
 
 .ofb__search {
@@ -26,6 +27,8 @@
   flex: 1 1 220px;
   min-width: 140px;
   max-width: 420px;
+  align-self: flex-end;
+  margin-bottom: 0;
 }
 
 .ofb__search-icon {
@@ -67,46 +70,105 @@
   min-width: 0;
 }
 
-.ofb__select--country,
-.ofb__select--payment,
-.ofb__select--status {
-  width: 118px;
+.ofb__select--status,
+.ofb__select--pay-status,
+.ofb__select--payment {
+  width: 132px;
 }
 
 .ofb__select .shp-ms {
   min-width: 0;
+  gap: 2px;
 }
 
 .ofb__select .shp-ms__label {
-  position: absolute;
-  width: 1px;
-  height: 1px;
+  display: block;
+  position: static;
+  width: auto;
+  height: auto;
+  margin: 0;
   padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
+  overflow: visible;
+  clip: auto;
   white-space: nowrap;
   border: 0;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: #64748b;
+}
+
+.ofb__select .shp-ms__trigger-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
 }
 
 .ofb__select .shp-ms__trigger {
   height: 36px;
   min-height: 36px;
   max-height: 36px;
-  padding: 0 8px;
+  padding: 0 28px 0 8px;
   font-size: 12px;
   border-radius: 8px;
 }
 
-.ofb__week {
+.ofb__select .shp-ms__clear {
+  position: absolute;
+  inset-inline-end: 22px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #475569;
+  cursor: pointer;
+  padding: 0;
+  z-index: 1;
+}
+
+.ofb__select .shp-ms__clear:hover {
+  background: #cbd5e1;
+  color: #0f172a;
+}
+
+.ofb__select .shp-ms__trigger.is-active {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.ofb-field__label {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: #64748b;
+  margin-bottom: 2px;
+  white-space: nowrap;
+}
+
+.ofb-week-picker {
+  position: relative;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.ofb-week-picker__control {
   display: inline-flex;
   align-items: center;
   gap: 1px;
-  flex: 0 0 auto;
   border: 1px solid #cbd5e1;
   border-radius: 8px;
   background: #fff;
   padding: 2px;
+  height: 36px;
+  box-sizing: border-box;
 }
 
 .ofb__week-btn {
@@ -122,23 +184,120 @@
   cursor: pointer;
 }
 
-.ofb__week-btn:hover {
+.ofb__week-btn:hover:not(:disabled) {
   background: #f1f5f9;
 }
 
-.ofb__week-inp {
-  width: 68px;
+.ofb__week-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ofb-week-picker__chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 78px;
   height: 28px;
+  padding: 0 6px;
   border: none;
+  border-radius: 6px;
   background: transparent;
-  text-align: center;
+  font-size: 12px;
+  font-weight: 800;
+  color: #0f172a;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+.ofb-week-picker__chip:hover:not(:disabled),
+.ofb-week-picker__chip.is-open {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.ofb-week-picker__caret {
+  font-size: 10px;
+  font-weight: 700;
+  opacity: 0.75;
+}
+
+.ofb-week-picker__dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  inset-inline-start: 0;
+  z-index: 160;
+  width: 220px;
+  max-height: 320px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.14);
+  overflow: hidden;
+}
+
+.ofb-week-picker__search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border-bottom: 1px solid #e2e8f0;
+  color: #94a3b8;
+}
+
+.ofb-week-picker__search input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ofb-week-picker__list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  overflow: auto;
+  max-height: 260px;
+}
+
+.ofb-week-picker__opt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
   font-size: 12px;
   font-weight: 700;
   color: #0f172a;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
 }
 
-.ofb__week-inp:focus {
-  outline: none;
+.ofb-week-picker__opt:hover {
+  background: #f1f5f9;
+}
+
+.ofb-week-picker__opt.is-active {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.ofb-week-picker__empty {
+  padding: 12px;
+  text-align: center;
+  font-size: 12px;
+  color: #94a3b8;
 }
 
 .ofb__week-current {
@@ -147,6 +306,7 @@
   min-height: 36px;
   font-size: 11px;
   white-space: nowrap;
+  align-self: flex-end;
 }
 
 .ofb__btn {
@@ -165,6 +325,7 @@
   color: #334155;
   cursor: pointer;
   white-space: nowrap;
+  align-self: flex-end;
 }
 
 .ofb__btn:hover {
@@ -222,7 +383,6 @@
   padding: 0 4px;
 }
 
-/* Advanced — portal popover, no document flow height */
 .ofb-popover-backdrop {
   position: fixed;
   inset: 0;
@@ -310,7 +470,6 @@
   min-width: 72px;
 }
 
-/* Mobile drawer */
 .ofb-drawer-backdrop {
   position: fixed;
   inset: 0;
@@ -354,15 +513,16 @@
   padding: 10px 12px;
 }
 
-.ofb-drawer__body .ofb__select {
+.ofb-drawer__body .ofb__select,
+.ofb-drawer__body .ofb-week-picker {
   display: block;
   width: 100%;
   margin-bottom: 8px;
 }
 
-.ofb-drawer__body .ofb__select--country,
-.ofb-drawer__body .ofb__select--payment,
-.ofb-drawer__body .ofb__select--status {
+.ofb-drawer__body .ofb__select--status,
+.ofb-drawer__body .ofb__select--pay-status,
+.ofb-drawer__body .ofb__select--payment {
   width: 100%;
 }
 
@@ -370,7 +530,6 @@
   grid-template-columns: 1fr;
 }
 
-/* Table empty state */
 .adm-orders-empty-in-table {
   padding: 20px 16px;
   text-align: center;
@@ -402,6 +561,7 @@
     min-height: 0;
     row-gap: 6px;
     padding: 4px 0;
+    align-items: flex-end;
   }
 
   .ofb-adv__grid {
@@ -414,10 +574,10 @@
     display: inline-flex;
   }
 
-  .ofb__select--country,
-  .ofb__select--payment,
   .ofb__select--status,
-  .ofb__week,
+  .ofb__select--pay-status,
+  .ofb__select--payment,
+  .ofb-week-picker,
   .ofb__week-current,
   .ofb__btn:not(.ofb__btn--mobile):not(.ofb__btn--ghost) {
     display: none;
