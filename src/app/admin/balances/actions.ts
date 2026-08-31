@@ -32,6 +32,12 @@ import {
 } from "@/lib/customer-balance-order-status";
 import { computeSignedFromTotals } from "@/lib/customer-balance";
 import { calculateCustomerBalances, type CustomerBalanceCalculation } from "@/lib/customer-balance-calculator";
+import {
+  customerAccountSignedUsd,
+  customerAccountStatusLabel,
+} from "@/lib/customer-account-balances-shared";
+import { getCustomerCreditBalancesUsdMany } from "@/lib/customer-credit-balance";
+import { getCustomerCommissionBalancesUsdMany } from "@/lib/customer-commission-balance";
 import { buildCustomerCommissionResetPreview } from "@/lib/customer-commission-balance";
 import { resetCustomerOutstandingBalancesAction } from "@/app/admin/payments-updated/actions";
 import {
@@ -143,6 +149,10 @@ export type CustomerBalanceRow = {
   codeWithdrawalUSD: string;
   totalPaymentsUSD: string;
   totalBalanceUSD: string;
+  /** SSOT — יתרת זכות נפרדת מהחוב */
+  availableCreditUSD: string;
+  /** SSOT — יתרת עמלות נפרדת מהחוב */
+  commissionBalanceUSD: string;
   totalOrdersILS: string;
   totalPaymentsILS: string;
   /** סכום עסקאות מקורי (לפני עמלה) בש״ח */
@@ -442,20 +452,26 @@ function sharedBalanceDecimal(
   return sharedBalances.get(customerId)?.balance ?? new Prisma.Decimal(0);
 }
 
+function openDebtFromShared(shared: CustomerBalanceCalculation | undefined): number {
+  const signed = Number((shared?.balance ?? new Prisma.Decimal(0)).toFixed(2));
+  return signed > BALANCE_ZERO_EPS ? signed : 0;
+}
+
 /** סינון מוקדם ב-DB — לפני שליפת הזמנות/תשלומים מפורטים */
 function filterCustomerIdsByBalanceScope(
   customerIds: string[],
   sharedBalances: Map<string, CustomerBalanceCalculation>,
+  creditByCustomer: Map<string, number>,
   debtFilter: CustomerBalanceDebtFilter,
   showBalanced: boolean,
 ): string[] {
   return customerIds.filter((id) => {
-    const bal = sharedBalanceDecimal(id, sharedBalances);
-    const absBal = bal.abs();
-    const isZero = absBal.lte(BALANCE_ZERO_EPS_DECIMAL);
+    const openDebt = openDebtFromShared(sharedBalances.get(id));
+    const credit = creditByCustomer.get(id) ?? 0;
+    const isZero = openDebt <= BALANCE_ZERO_EPS && credit <= BALANCE_ZERO_EPS;
 
-    if (debtFilter === "OWES") return bal.gt(BALANCE_ZERO_EPS_DECIMAL);
-    if (debtFilter === "CREDIT") return bal.lt(BALANCE_ZERO_EPS_DECIMAL.neg());
+    if (debtFilter === "OWES") return openDebt > BALANCE_ZERO_EPS;
+    if (debtFilter === "CREDIT") return credit > BALANCE_ZERO_EPS && openDebt <= BALANCE_ZERO_EPS;
     if (debtFilter === "BALANCED") return isZero;
 
     if (!showBalanced && isZero) return false;
@@ -466,6 +482,7 @@ function filterCustomerIdsByBalanceScope(
 function rowHasNonZeroBalance(row: CustomerBalanceRow): boolean {
   const signed = rowBalanceUsdNumber(row.signedUsd);
   if (Math.abs(signed) > BALANCE_ZERO_EPS) return true;
+  if (rowBalanceUsdNumber(row.availableCreditUSD) > BALANCE_ZERO_EPS) return true;
   return Math.abs(rowBalanceUsdNumber(row.totalBalanceUSD)) > BALANCE_ZERO_EPS;
 }
 
@@ -484,10 +501,11 @@ function matchesDebtFilter(row: CustomerBalanceRow, filter: CustomerBalanceDebtF
   const signed = rowSignedIlsNumber(row);
   const auto = row.autoStatus;
   const eps = 0.01;
-  const businessBal = rowBalanceUsdNumber(row.totalBalanceUSD);
-  if (filter === "OWES") return businessBal > eps;
-  if (filter === "CREDIT") return businessBal < -eps;
-  if (filter === "BALANCED") return Math.abs(businessBal) <= eps;
+  const openDebt = Math.max(0, rowBalanceUsdNumber(row.totalBalanceUSD));
+  const credit = rowBalanceUsdNumber(row.availableCreditUSD);
+  if (filter === "OWES") return openDebt > eps;
+  if (filter === "CREDIT") return credit > eps && openDebt <= eps;
+  if (filter === "BALANCED") return openDebt <= eps && credit <= eps;
   if (filter === "PAID_FULL") return auto === "PAID" && Math.abs(signed) <= eps;
   if (filter === "PARTIAL") return auto === "PARTIAL";
   if (filter === "NOT_PAID") return auto === "NOT_PAID";
@@ -716,8 +734,10 @@ function computeBalanceStats(rows: CustomerBalanceRow[]): CustomerBalancesPayloa
   let totalNetBalanceUsd = new Prisma.Decimal(0);
   const eps = 0.01;
   for (const r of rows) {
-    const businessBal = rowBalanceUsdNumber(r.totalBalanceUSD);
-    const businessBalUsd = rowBalanceUsdNumber(r.totalBalanceUSD);
+    const openDebt = Math.max(0, rowBalanceUsdNumber(r.totalBalanceUSD));
+    const creditUsd = rowBalanceUsdNumber(r.availableCreditUSD);
+    const businessBal = openDebt > eps ? openDebt : creditUsd > eps ? -creditUsd : 0;
+    const businessBalUsd = businessBal;
     const signed = rowSignedIlsNumber(r);
     totalLifetimeOrdersUsd = totalLifetimeOrdersUsd.add(
       new Prisma.Decimal(rowBalanceUsdNumber(r.lifetimeOrdersUSD).toFixed(4)),
@@ -1060,7 +1080,8 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   const debtFilter = resolveDebtFilter(query);
   const showBalanced = query.filters?.showBalanced === true;
 
-  const sharedBalances = await calculateCustomerBalances(customerIds, {
+  const [sharedBalances, creditByCustomerAll, commissionByCustomerAll] = await Promise.all([
+    calculateCustomerBalances(customerIds, {
     from: scopeFrom ?? null,
     to: scopeTo ?? null,
     sourceCountry: orderCountryPrisma ?? null,
@@ -1081,11 +1102,19 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
         else paymentsTransformMs += ms;
       },
     },
-  });
+    }),
+    getCustomerCreditBalancesUsdMany(customerIds, {
+      from: scopeFrom ?? null,
+      to: scopeTo ?? null,
+      sourceCountry: orderCountryPrisma ?? null,
+    }),
+    getCustomerCommissionBalancesUsdMany(customerIds),
+  ]);
 
   const scopedCustomerIds = filterCustomerIdsByBalanceScope(
     customerIds,
     sharedBalances,
+    creditByCustomerAll,
     debtFilter,
     showBalanced,
   );
@@ -1159,6 +1188,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
           where: {
             ...activePaidPaymentWhere,
             orderId: null,
+            businessType: "CUSTOMER_CREDIT",
             customerId: { in: chunk },
             countryCode: countryScope.workCountry,
             ...(!lifetime && !cumulativeThrough && !dateRangeFilterActive && query.weekCode?.trim()
@@ -1302,29 +1332,26 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
     const receivedUsd = shared
       ? shared.totalPayments.add(shared.totalWithdrawals)
       : receivedUsdByCustomer.get(c.id) ?? new Prisma.Decimal(0);
+    const availableCreditUsd = creditByCustomerAll.get(c.id) ?? 0;
+    const commissionBalanceUsd = commissionByCustomerAll.get(c.id) ?? 0;
     const signedIlsN = computeSignedFromTotals(
       Number(expectedIls.toFixed(4)),
       Number(receivedIls.toFixed(4)),
       Number(creditsIls.toFixed(4)),
     );
-    const signedUsdN = computeSignedFromTotals(
-      Number(expectedUsd.toFixed(4)),
-      Number(receivedUsd.toFixed(4)),
-      Number(creditsUsd.toFixed(4)),
-    );
     const calculated = autoStatus(expectedIls, receivedIls);
     const override = overrideMap.get(c.id) ?? null;
     const oc = shared?.ordersCount ?? orderCountByCustomer.get(c.id) ?? 0;
-    let balUsdDec =
+    const rawDebt =
       shared?.balance ??
       expectedUsd.sub(paymentsUsdOnly).sub(shared?.totalWithdrawals ?? new Prisma.Decimal(0));
-    if (creditsUsd.gt(0)) {
-      balUsdDec = balUsdDec.sub(creditsUsd);
-    }
-    if (balUsdDec.lt(0)) {
-      balUsdDec = new Prisma.Decimal(0);
-    }
-    const debtUsdPos = balUsdDec.gt(0) ? Number(balUsdDec.toFixed(4)) : 0;
+    const openDebtUsd = Number(rawDebt.toFixed(2)) > BALANCE_ZERO_EPS ? Number(rawDebt.toFixed(2)) : 0;
+    const signedUsdN = customerAccountSignedUsd({
+      openDebtUsd,
+      availableCreditUsd,
+    });
+    const balUsdDec = new Prisma.Decimal(openDebtUsd.toFixed(2));
+    const debtUsdPos = openDebtUsd;
     const paymentFlow = computePaymentFlow(calculated, debtUsdPos);
     const lastDt = lastOrderDateByCustomer.get(c.id);
     const maxN = maxAhByCustomer.get(c.id) ?? 0;
@@ -1348,6 +1375,8 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       codeWithdrawalUSD: money(codeWithdrawalUsd),
       totalPaymentsUSD: money(paymentsUsdOnly),
       totalBalanceUSD: money(balUsdDec),
+      availableCreditUSD: money(new Prisma.Decimal(availableCreditUsd.toFixed(2))),
+      commissionBalanceUSD: money(new Prisma.Decimal(commissionBalanceUsd.toFixed(2))),
       totalOrdersILS: money(expectedIls),
       totalPaymentsILS: money(receivedIls),
       totalDealsILS: money(dealsIls),
@@ -1359,7 +1388,7 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
       balanceILS: money(balanceIls),
       signedIls: money(new Prisma.Decimal(String(signedIlsN))),
       balanceUSD: money(balUsdDec),
-      signedUsd: money(new Prisma.Decimal(String(signedUsdN))),
+      signedUsd: money(new Prisma.Decimal(signedUsdN.toFixed(2))),
       expectedILS: money(expectedIls),
       receivedILS: money(receivedIls),
       status: override ?? calculated,
@@ -1754,8 +1783,18 @@ export async function exportCustomerBalancesAction(
       "סטטוס",
     ];
     const data = payload.rows.map((r) => {
-      const b = rowBalanceUsdNumber(r.totalBalanceUSD);
-      const status = b > 0.01 ? "חוב פתוח" : b < -0.01 ? "יתרת זכות" : "מאוזן";
+      const openDebt = Math.max(0, rowBalanceUsdNumber(r.totalBalanceUSD));
+      const credit = rowBalanceUsdNumber(r.availableCreditUSD);
+      const status = customerAccountStatusLabel({
+        openDebtUsd: openDebt,
+        availableCreditUsd: credit,
+      });
+      const displayBalance =
+        openDebt > 0.01
+          ? r.totalBalanceUSD
+          : credit > 0.01
+            ? r.availableCreditUSD
+            : r.totalBalanceUSD;
       return [
         r.customerCode ?? "—",
         r.customerName,
@@ -1763,7 +1802,7 @@ export async function exportCustomerBalancesAction(
         r.totalOrdersUSD,
         r.codeWithdrawalUSD,
         r.totalPaymentsUSD,
-        r.totalBalanceUSD,
+        displayBalance,
         status,
       ];
     });

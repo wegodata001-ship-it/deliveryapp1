@@ -20,6 +20,7 @@ import { resolveOrderPaymentFormDisplay } from "@/lib/order-payment-form-display
 import { groupByActivePayments } from "@/lib/payment-record-status";
 import { readMultiParam } from "@/lib/orders-list-filter-params";
 import { resolveOrderIdsForPaymentStatusFilter } from "@/lib/orders-list-payment-status-where";
+import { indexOrderCommissionBreakdowns } from "@/lib/order-commission-ssot";
 
 function fmtUsd2(n: unknown): string | null {
   if (n == null) return null;
@@ -554,7 +555,11 @@ export async function fetchOrdersListPageData(
       ? await cachedTimed("ordersPaymentSumsStore", ordersPaymentSumsStore, `paySums:${ids.slice().sort().join(",")}`, (ms) => (statsMs += ms), async () =>
           (await groupByActivePayments(
             "orderId",
-            { orderId: { in: ids }, amountUsd: { not: null } },
+            {
+              orderId: { in: ids },
+              amountUsd: { not: null },
+              NOT: { businessType: { in: ["ADJUSTMENT_FEE", "CUSTOMER_CREDIT"] } },
+            },
             { amountUsd: true },
           )) as PaymentSumRow[],
         )
@@ -565,6 +570,22 @@ export async function fetchOrdersListPageData(
       paidByOrder.set(p.orderId, Number(p._sum.amountUsd ?? 0));
     }
   }
+
+  const commissionFees =
+    ids.length > 0
+      ? await prisma.paymentAdjustmentFee.findMany({
+          where: { orderId: { in: ids }, status: { not: "CANCELLED" } },
+          select: { orderId: true, amountUsd: true, userChoice: true },
+        })
+      : [];
+  const commissionByOrder = indexOrderCommissionBreakdowns(
+    rows.map((r) => ({ id: r.id, commissionUsd: Number(r.commissionUsd ?? 0) })),
+    commissionFees.map((f) => ({
+      orderId: f.orderId,
+      amountUsd: Number(f.amountUsd ?? 0),
+      userChoice: f.userChoice,
+    })),
+  );
 
   const canEditOrders = userHasAnyPermission(me, ["edit_orders"]);
 
@@ -635,7 +656,11 @@ export async function fetchOrdersListPageData(
         createdById: r.createdById,
         createdByName: r.createdBy?.fullName || r.createdBy?.username || null,
         dealAmountUsd: fmtUsd2(r.amountUsd),
-        commissionAmountUsd: fmtUsd2(r.commissionUsd),
+        commissionAmountUsd: fmtUsd2(
+          commissionByOrder.get(r.id)?.currentCommissionUsd ?? r.commissionUsd,
+        ),
+        commissionBaseUsd: fmtUsd2(commissionByOrder.get(r.id)?.baseCommissionUsd ?? r.commissionUsd),
+        commissionHasAdjustments: commissionByOrder.get(r.id)?.hasAdjustments === true,
         totalAmountUsd: fmtUsd2(r.totalUsd),
         balanceUsd: fmtUsd2(balanceUsd),
         editBadge,

@@ -59,6 +59,9 @@ import { formatLedgerPaymentTotalUsd } from "@/lib/ledger-payment-display";
 import { LedgerPaymentExpandButton } from "@/components/admin/LedgerPaymentExpandButton";
 import { CustomerLedgerErrorBoundary } from "@/components/admin/CustomerLedgerErrorBoundary";
 import { formatLocalYmd } from "@/lib/work-week";
+import { CommissionAmountButton } from "@/components/admin/CommissionAmountButton";
+import { CommissionBalancePopover } from "@/components/admin/CommissionBalancePopover";
+import { OrderCommissionDetailModal } from "@/components/admin/OrderCommissionDetailModal";
 
 function displayCustomerCode(s: CustomerCardSnapshot): string {
   const c = s.customerCode?.trim();
@@ -191,6 +194,11 @@ export function CustomerCardWindowBody({
   const [exportBusy, setExportBusy] = useState<"pdf" | "excel" | null>(null);
   const [ledgerPdfModalOpen, setLedgerPdfModalOpen] = useState(false);
   const [expandedLedgerPayments, setExpandedLedgerPayments] = useState<Set<string>>(() => new Set());
+  const [commissionPopoverOpen, setCommissionPopoverOpen] = useState(false);
+  const [orderCommissionDetail, setOrderCommissionDetail] = useState<{
+    orderId: string;
+    orderNumber: string | null;
+  } | null>(null);
   const [ledgerQuickFilter, setLedgerQuickFilter] = useState<CustomerLedgerQuickFilter>("all");
   const [ledgerSort, setLedgerSort] = useState<CustomerLedgerDateSort>("new_old");
   const [fromYmd, setFromYmd] = useState(ledgerFromYmd?.trim() ?? "");
@@ -655,7 +663,19 @@ export function CustomerCardWindowBody({
               {formatLedgerRunningBalance(ledger.balanceUsd)}
             </div>
           </button>
-          <span>יתרה סופית</span>
+          <span>
+            {ledger && Number(ledger.availableCreditUsd ?? 0) > 0.01 && Number(ledger.openDebtUsd ?? 0) <= 0.01
+              ? `יתרת זכות $${Number(ledger.availableCreditUsd).toFixed(2)}`
+              : "יתרה סופית"}
+          </span>
+        </div>
+        <div className="summary-card commission-summary-card">
+          <CommissionAmountButton
+            amountUsd={Number(ledger.commissionBalanceUsd ?? 0)}
+            showLabel
+            onClick={() => setCommissionPopoverOpen(true)}
+          />
+          <span>יתרת עמלות</span>
         </div>
       </div>
     ) : null;
@@ -1013,15 +1033,40 @@ export function CustomerCardWindowBody({
                             {paymentExpandLines.map((line, subIdx) => (
                           <tr
                             key={`${r.id}-pay-meth-${subIdx}`}
-                            className="adm-ledger-row--payment-method-sub"
+                            className={[
+                              "adm-ledger-row--payment-method-sub",
+                              line.tone === "commission" ? "adm-ledger-row--commission-fee" : "",
+                            ]
+                              .filter(Boolean)
+                              .join(" ")}
                           >
                             <td />
-                            <td />
+                            <td dir="ltr">
+                              {line.tone === "commission" && line.orderNumber ? line.orderNumber : ""}
+                            </td>
                             <td className="adm-ledger-payment-method-sub-type">
                               {line.label}:
                             </td>
                             <td>—</td>
-                            <td dir="ltr">{line.display}</td>
+                            <td dir="ltr">
+                              {line.tone === "commission" && line.orderId ? (
+                                <button
+                                  type="button"
+                                  className="commission-lineage-link"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setOrderCommissionDetail({
+                                      orderId: line.orderId!,
+                                      orderNumber: line.orderNumber ?? null,
+                                    });
+                                  }}
+                                >
+                                  {line.display}
+                                </button>
+                              ) : (
+                                line.display
+                              )}
+                            </td>
                             <td />
                           </tr>
                         ))}
@@ -1116,6 +1161,31 @@ export function CustomerCardWindowBody({
           if (exportBusy !== "pdf") setLedgerPdfModalOpen(false);
         }}
         onExport={(mode) => void runLedgerExport("pdf", mode)}
+      />
+      <CommissionBalancePopover
+        open={commissionPopoverOpen}
+        customerId={customerId}
+        customerLabel={snap?.displayName || customerName || null}
+        previewBalanceUsd={ledger ? Number(ledger.commissionBalanceUsd ?? 0) : null}
+        onClose={() => setCommissionPopoverOpen(false)}
+        onOpenOrderDetail={(orderId, orderNumber) => {
+          setCommissionPopoverOpen(false);
+          setOrderCommissionDetail({ orderId, orderNumber });
+        }}
+        onOpenPayment={(paymentId) => {
+          setCommissionPopoverOpen(false);
+          openWindow({ type: "paymentsUpdated", props: { paymentId } });
+        }}
+      />
+      <OrderCommissionDetailModal
+        open={orderCommissionDetail != null}
+        orderId={orderCommissionDetail?.orderId ?? null}
+        orderNumber={orderCommissionDetail?.orderNumber}
+        onClose={() => setOrderCommissionDetail(null)}
+        onOpenPayment={(paymentId) => {
+          setOrderCommissionDetail(null);
+          openWindow({ type: "paymentsUpdated", props: { paymentId } });
+        }}
       />
     </div>
   );

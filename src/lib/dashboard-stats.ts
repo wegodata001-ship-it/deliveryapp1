@@ -225,13 +225,20 @@ export async function countHighBalanceCustomers(
           COALESCE((
             SELECT SUM(COALESCE(o."totalIlsWithVat", o."totalIls", 0)::numeric)
             FROM "Order" o
-            WHERE o."customerId" = c.id AND o."isActive" = true AND o."countryCode" = ${workCountry}::"WorkCountryCode"
+            WHERE o."customerId" = c.id
+              AND o."deletedAt" IS NULL
+              AND o."status" <> 'CANCELLED'
+              AND o."countryCode" = ${workCountry}::"WorkCountryCode"
           ), 0)
           -
           COALESCE((
             SELECT SUM(COALESCE(p."totalIlsWithVat", p."amountIls", 0)::numeric)
             FROM "Payment" p
-            WHERE p."customerId" = c.id AND p."isPaid" = true AND p."countryCode" = ${workCountry}::"WorkCountryCode"
+            WHERE p."customerId" = c.id
+              AND p."isPaid" = true
+              AND (p."status" IS NULL OR p."status" <> 'CANCELLED')
+              AND (p."businessType" IS NULL OR p."businessType" NOT IN ('ADJUSTMENT_FEE', 'CUSTOMER_CREDIT'))
+              AND p."countryCode" = ${workCountry}::"WorkCountryCode"
           ), 0)
         ) > ${HIGH_BALANCE_THRESHOLD_ILS}
       ) AS sub
@@ -251,7 +258,7 @@ export const getDashboardHighBalanceCount = cache(
           return 0;
         }
       },
-      ["wego-dashboard-high-balance-v3", workCountry],
+      ["wego-dashboard-high-balance-v4", workCountry],
       { revalidate: DASHBOARD_CACHE_SECONDS, tags: [DASHBOARD_HIGH_BALANCE_TAG] },
     )(),
 );

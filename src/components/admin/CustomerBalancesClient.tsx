@@ -50,6 +50,9 @@ import {
 } from "@/lib/balances-week-filter";
 import { downloadBase64File, handleSourceTableExportResult } from "@/lib/pdf-export-client";
 import { CustomerCommissionResetModal } from "@/components/admin/CustomerCommissionResetModal";
+import { CommissionAmountButton } from "@/components/admin/CommissionAmountButton";
+import { CommissionBalancePopover } from "@/components/admin/CommissionBalancePopover";
+import { OrderCommissionDetailModal } from "@/components/admin/OrderCommissionDetailModal";
 
 const LIMIT = 25;
 const FILTER_DEBOUNCE_MS = 350;
@@ -80,11 +83,23 @@ function moneyUsdCell(value: string): string {
   return formatUsdDisplay(parseMoneyStringOrZero(value));
 }
 
-function balanceUiFromUsd(totalBalanceUsd: string): { label: string; tone: BalanceUiTone } {
-  const n = parseMoneyStringOrZero(totalBalanceUsd);
-  if (n > 0.01) return { label: "חוב פתוח", tone: "debt" };
-  if (n < -0.01) return { label: "יתרת זכות", tone: "credit" };
-  return { label: "מאוזן", tone: "balanced" };
+function balanceUiFromRow(row: {
+  totalBalanceUSD: string;
+  availableCreditUSD?: string;
+}): { label: string; tone: BalanceUiTone; amount: string } {
+  const openDebt = Math.max(0, parseMoneyStringOrZero(row.totalBalanceUSD));
+  const credit = Math.max(0, parseMoneyStringOrZero(row.availableCreditUSD ?? "0"));
+  if (openDebt > 0.01) {
+    return { label: "חוב פתוח", tone: "debt", amount: formatUsdDisplay(openDebt) };
+  }
+  if (credit > 0.01) {
+    return {
+      label: `יתרת זכות $${credit.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+      tone: "credit",
+      amount: formatUsdDisplay(credit),
+    };
+  }
+  return { label: "מאוזן", tone: "balanced", amount: formatUsdDisplay(0) };
 }
 
 function usdStatDisplay(value: string): string {
@@ -253,6 +268,15 @@ export function CustomerBalancesClient({
   const [insightsExpanded, setInsightsExpanded] = useState(false);
   const balancesScopeKeyRef = useRef<string | null>(null);
   const [commissionResetRow, setCommissionResetRow] = useState<CustomerBalanceRow | null>(null);
+  const [commissionDetailCustomer, setCommissionDetailCustomer] = useState<{
+    customerId: string;
+    customerName: string;
+    commissionUsd: number;
+  } | null>(null);
+  const [orderCommissionDetail, setOrderCommissionDetail] = useState<{
+    orderId: string;
+    orderNumber: string | null;
+  } | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   const showToast = useCallback((msg: string) => {
@@ -649,7 +673,7 @@ export function CustomerBalancesClient({
     }
   }
 
-  const colCount = 9;
+  const colCount = 10;
   const stats = payload?.stats;
 
   const heroActions = (
@@ -1068,6 +1092,7 @@ export function CustomerBalancesClient({
                 <th className="adm-balances-th-num adm-balances-th-num--including">אחרי עמלה ($)</th>
                 <th className="adm-balances-th-num adm-balances-th-num--withdrawal">משיכה מקוד ($)</th>
                 <th className="adm-balances-th-num adm-balances-th-num--payments">תשלומים ($)</th>
+                <th className="adm-balances-th-num adm-balances-th-num--commission">עמלות ($)</th>
                 <th className="adm-balances-th-num adm-balances-th-num--balance">יתרה נוכחית ($)</th>
                 <th className="adm-balances-th-status">מצב חשבון</th>
                 <th className="adm-balances-th-actions">פעולות</th>
@@ -1082,7 +1107,7 @@ export function CustomerBalancesClient({
                 </tr>
               ) : (
                 payload?.rows.map((r) => {
-                  const ui = balanceUiFromUsd(r.totalBalanceUSD);
+                  const ui = balanceUiFromRow(r);
                   const ordersUsd = rowOrdersUsdSplit(r);
                   return (
                     <tr
@@ -1119,10 +1144,26 @@ export function CustomerBalancesClient({
                         {moneyUsdCell(r.totalPaymentsUSD)}
                       </td>
                       <td
+                        className="adm-balances-td-num adm-balances-td-num--commission"
+                        dir="ltr"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <CommissionAmountButton
+                          amountUsd={parseMoneyStringOrZero(r.commissionBalanceUSD)}
+                          onClick={() =>
+                            setCommissionDetailCustomer({
+                              customerId: r.customerId,
+                              customerName: r.customerName,
+                              commissionUsd: parseMoneyStringOrZero(r.commissionBalanceUSD),
+                            })
+                          }
+                        />
+                      </td>
+                      <td
                         className={`adm-balances-td-num adm-balances-td-num--hero ${balanceToneClass(ui.tone)}`}
                         dir="ltr"
                       >
-                        {moneyUsdCell(r.totalBalanceUSD)}
+                        {ui.amount}
                       </td>
                       <td className="adm-balances-td-status">
                         <span className={statusChipClass(ui.tone)}>{ui.label}</span>
@@ -1224,6 +1265,31 @@ export function CustomerBalancesClient({
         onSuccess={(msg) => {
           showToast(msg);
           window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
+        }}
+      />
+      <CommissionBalancePopover
+        open={commissionDetailCustomer != null}
+        customerId={commissionDetailCustomer?.customerId ?? null}
+        customerLabel={commissionDetailCustomer?.customerName ?? null}
+        previewBalanceUsd={commissionDetailCustomer?.commissionUsd ?? null}
+        onClose={() => setCommissionDetailCustomer(null)}
+        onOpenOrderDetail={(orderId, orderNumber) => {
+          setCommissionDetailCustomer(null);
+          setOrderCommissionDetail({ orderId, orderNumber });
+        }}
+        onOpenPayment={(paymentId) => {
+          setCommissionDetailCustomer(null);
+          openWindow({ type: "paymentsUpdated", props: { paymentId } });
+        }}
+      />
+      <OrderCommissionDetailModal
+        open={orderCommissionDetail != null}
+        orderId={orderCommissionDetail?.orderId ?? null}
+        orderNumber={orderCommissionDetail?.orderNumber}
+        onClose={() => setOrderCommissionDetail(null)}
+        onOpenPayment={(paymentId) => {
+          setOrderCommissionDetail(null);
+          openWindow({ type: "paymentsUpdated", props: { paymentId } });
         }}
       />
 

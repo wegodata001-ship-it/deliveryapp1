@@ -15,6 +15,11 @@ import {
   type PaymentLine,
   type PaymentLineMethod,
 } from "@/lib/payment-updated";
+import {
+  COMMISSION_ADD_TO_BALANCE_LABEL,
+  COMMISSION_REMOVE_FROM_BALANCE_LABEL,
+  formatCommissionSignedCompact,
+} from "@/lib/commission-lineage-view";
 
 export type LedgerPaymentMethodBucket = {
   method: string;
@@ -46,6 +51,15 @@ export type LedgerPaymentCurrencyComponent = {
 export type LedgerPaymentExpandLine = {
   label: string;
   display: string;
+  tone?: "commission";
+  orderId?: string | null;
+  orderNumber?: string | null;
+};
+
+export type LedgerPaymentCommissionFee = {
+  amountUsd: string;
+  orderId: string | null;
+  orderNumber: string | null;
 };
 
 export type LedgerPaymentDetail = {
@@ -62,6 +76,9 @@ export type LedgerPaymentDetail = {
   debtClosedUsd?: string | null;
   /** עודף שנשמר כיתרת זכות — נפרד מעמלה */
   creditSurplusUsd?: string | null;
+  /** תוספת/הפחתה לעמלות שנוצרה מתשלום זה */
+  commissionToFeeUsd?: string | null;
+  commissionFees?: LedgerPaymentCommissionFee[];
 };
 
 export type LedgerPaymentMethodDisplayLine = {
@@ -446,6 +463,11 @@ export function buildLedgerPaymentDetail(params: {
   orderNumberById: Map<string, string>;
   checkAmountUsdByPaymentId?: Map<string, number>;
   checksByPaymentId?: Map<string, LedgerPaymentCheckLine[]>;
+  commissionFees?: Array<{
+    amountUsd: number;
+    orderId: string | null;
+    orderNumber?: string | null;
+  }>;
 }): LedgerPaymentDetail | null {
   const { batchRows, orderNumberById, checkAmountUsdByPaymentId, checksByPaymentId } = params;
   if (batchRows.length === 0) return null;
@@ -509,6 +531,33 @@ export function buildLedgerPaymentDetail(params: {
   const checks = checksByPaymentId?.get(primary.id) ?? [];
   const components = buildPaymentCurrencyComponents(parsedLines, bucketMap);
 
+  const commissionFees: LedgerPaymentCommissionFee[] = [];
+  let commissionToFeeUsd = 0;
+  for (const fee of params.commissionFees ?? []) {
+    const amt = roundMoney2(Number(fee.amountUsd) || 0);
+    if (Math.abs(amt) <= 0.005) continue;
+    commissionToFeeUsd += amt;
+    commissionFees.push({
+      amountUsd: amt.toFixed(2),
+      orderId: fee.orderId,
+      orderNumber: fee.orderNumber ?? (fee.orderId ? orderNumberById.get(fee.orderId) ?? null : null),
+    });
+  }
+  if (commissionFees.length === 0) {
+    for (const row of batchRows) {
+      if (row.status === "CANCELLED" || row.businessType !== "ADJUSTMENT_FEE") continue;
+      const amt = paymentRowUsdEquivalent(row);
+      if (Math.abs(amt) <= 0.005) continue;
+      commissionToFeeUsd += amt;
+      commissionFees.push({
+        amountUsd: amt.toFixed(2),
+        orderId: row.orderId,
+        orderNumber: row.orderId ? orderNumberById.get(row.orderId) ?? null : null,
+      });
+    }
+  }
+  commissionToFeeUsd = roundMoney2(commissionToFeeUsd);
+
   return {
     paymentCode,
     totalUsd: totalUsd.toFixed(2),
@@ -519,6 +568,8 @@ export function buildLedgerPaymentDetail(params: {
     orders,
     debtClosedUsd: debtClosedUsd > 0.005 ? debtClosedUsd.toFixed(2) : null,
     creditSurplusUsd: creditSurplusUsd > 0.005 ? creditSurplusUsd.toFixed(2) : null,
+    commissionToFeeUsd: Math.abs(commissionToFeeUsd) > 0.005 ? commissionToFeeUsd.toFixed(2) : null,
+    commissionFees: commissionFees.length > 0 ? commissionFees : undefined,
   };
 }
 
@@ -586,6 +637,17 @@ function ledgerPaymentAllocationExpandLines(detail: LedgerPaymentDetail): Ledger
     out.push({
       label: "יתרת זכות מתשלום יתר",
       display: `+${formatLedgerPaymentComponentDisplay("USD", creditSurplus.toFixed(2)).replace(/^\$?\s?/, "$")}`,
+    });
+  }
+  for (const fee of detail.commissionFees ?? []) {
+    const amt = Number(fee.amountUsd);
+    if (!Number.isFinite(amt) || Math.abs(amt) <= 0.005) continue;
+    out.push({
+      label: amt >= 0 ? COMMISSION_ADD_TO_BALANCE_LABEL : COMMISSION_REMOVE_FROM_BALANCE_LABEL,
+      display: formatCommissionSignedCompact(amt),
+      tone: "commission",
+      orderId: fee.orderId,
+      orderNumber: fee.orderNumber,
     });
   }
   return out;

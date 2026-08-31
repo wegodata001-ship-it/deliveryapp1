@@ -1,6 +1,8 @@
 import { Prisma, type OrderSourceCountry } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { calculateCustomerBalance } from "@/lib/customer-balance-calculator";
+import { getCustomerAccountBalances } from "@/lib/customer-account-balances";
+import { isPaymentAdjustmentFeePayment } from "@/lib/payment-adjustment-fee";
 import {
   BALANCE_RESET_LEDGER_LABEL,
   BALANCE_RESET_FROM_CREDIT_LEDGER_LABEL,
@@ -96,6 +98,9 @@ export type CustomerLedgerPayload = {
   /** סה"כ משיכות מחוב (USD) */
   totalWithdrawalsUsd: string;
   balanceUsd: string;
+  openDebtUsd: string;
+  availableCreditUsd: string;
+  commissionBalanceUsd: string;
   perf?: {
     fetchOrdersMs: number;
     fetchPaymentsMs: number;
@@ -236,6 +241,11 @@ export async function buildCustomerAccountLedger(params: {
     to,
     sourceCountry,
   });
+  const accountBalancesPromise = getCustomerAccountBalances(id, {
+    from: fromFilterSet ? from : null,
+    to,
+    sourceCountry,
+  });
 
   const [
     preOrders,
@@ -265,11 +275,16 @@ export async function buildCustomerAccountLedger(params: {
     fromFilterSet
       ? timed((ms) => (fetchPaymentsMs += ms), () =>
           prisma.payment.findMany({
-            where: { ...paymentActiveScopeWhere, paymentDate: { lt: from } },
+            where: {
+              ...paymentActiveScopeWhere,
+              paymentDate: { lt: from },
+              NOT: { businessType: "ADJUSTMENT_FEE" },
+            },
             select: {
               amountUsd: true,
               amountIls: true,
               exchangeRate: true,
+              businessType: true,
             },
           }),
         )
@@ -396,7 +411,10 @@ export async function buildCustomerAccountLedger(params: {
       }),
     ),
   ]);
-  const sharedBalance = await sharedBalancePromise;
+  const [sharedBalance, accountBalances] = await Promise.all([
+    sharedBalancePromise,
+    accountBalancesPromise,
+  ]);
 
   const orderIdSet = new Set(orders.map((o) => o.id));
   const orderNumberById = new Map(
@@ -521,10 +539,56 @@ export async function buildCustomerAccountLedger(params: {
   const paymentBatches = new Map<string, LedgerPaymentBatchRow[]>();
   for (const p of payments) {
     if (isCreditBalanceResetPayment(p)) continue;
+    if (isPaymentAdjustmentFeePayment(p.businessType)) continue;
     const key = paymentBatchGroupKey(p);
     const list = paymentBatches.get(key) ?? [];
     list.push(p);
     paymentBatches.set(key, list);
+  }
+
+  const paymentIds = payments.map((p) => p.id);
+  const paymentCodes = payments
+    .map((p) => p.paymentCode?.trim())
+    .filter((code): code is string => Boolean(code));
+  const commissionFeeRows =
+    paymentIds.length > 0
+      ? await prisma.paymentAdjustmentFee.findMany({
+          where: {
+            customerId: id,
+            status: { not: "CANCELLED" },
+            OR: [
+              { paymentId: { in: paymentIds } },
+              ...(paymentCodes.length > 0 ? [{ paymentCaptureCode: { in: paymentCodes } }] : []),
+            ],
+          },
+          select: {
+            paymentId: true,
+            paymentCaptureCode: true,
+            amountUsd: true,
+            orderId: true,
+            userChoice: true,
+          },
+        })
+      : [];
+  const commissionFeesByPaymentKey = new Map<
+    string,
+    Array<{ amountUsd: number; orderId: string | null; orderNumber?: string | null }>
+  >();
+  for (const fee of commissionFeeRows) {
+    const keys = new Set<string>();
+    if (fee.paymentId) keys.add(`id:${fee.paymentId}`);
+    const capture = fee.paymentCaptureCode?.trim();
+    if (capture) keys.add(`code:${capture}`);
+    const row = {
+      amountUsd: Number(fee.amountUsd ?? 0),
+      orderId: fee.orderId,
+      orderNumber: fee.orderId ? orderNumberById.get(fee.orderId) ?? undefined : undefined,
+    };
+    for (const key of keys) {
+      const list = commissionFeesByPaymentKey.get(key) ?? [];
+      list.push(row);
+      commissionFeesByPaymentKey.set(key, list);
+    }
   }
   const closureByOrderId = new Map<string, ClosureAuditMeta>();
   const closureEvents: LedgerEvent[] = [];
@@ -769,6 +833,24 @@ export async function buildCustomerAccountLedger(params: {
         orderNumberById,
         checkAmountUsdByPaymentId,
         checksByPaymentId,
+        commissionFees: (() => {
+          const seen = new Set<string>();
+          const out: Array<{ amountUsd: number; orderId: string | null; orderNumber?: string | null }> = [];
+          for (const row of batchRows) {
+            const keys = [`id:${row.id}`];
+            const code = row.paymentCode?.trim();
+            if (code) keys.push(`code:${code}`);
+            for (const key of keys) {
+              for (const fee of commissionFeesByPaymentKey.get(key) ?? []) {
+                const dedupe = `${fee.orderId ?? ""}:${fee.amountUsd}`;
+                if (seen.has(dedupe)) continue;
+                seen.add(dedupe);
+                out.push(fee);
+              }
+            }
+          }
+          return out;
+        })(),
       });
       return {
         id: `pb-${batchKey}`,
@@ -811,7 +893,7 @@ export async function buildCustomerAccountLedger(params: {
   }
 
   for (const ev of events) {
-    if (!ev.isOrderUpdated) {
+    if (!ev.isOrderUpdated && !ev.isCommissionDebtClosure) {
       balance = balance.add(ev.charge).sub(ev.payment);
     }
     if (ev.isDebtWithdrawal) {
@@ -879,12 +961,17 @@ export async function buildCustomerAccountLedger(params: {
     });
   }
 
+  const headerSigned = accountBalances.openDebtUsd - accountBalances.availableCreditUsd;
+
   return {
     rows,
     totalChargesUsd: sharedBalance.totalOrders.toFixed(2),
     totalPaymentsUsd: sharedBalance.totalPayments.toFixed(2),
     totalWithdrawalsUsd: sharedBalance.totalWithdrawals.toFixed(2),
-    balanceUsd: sharedBalance.balance.toFixed(2),
+    balanceUsd: headerSigned.toFixed(2),
+    openDebtUsd: accountBalances.openDebtUsd.toFixed(2),
+    availableCreditUsd: accountBalances.availableCreditUsd.toFixed(2),
+    commissionBalanceUsd: accountBalances.commissionBalanceUsd.toFixed(2),
     perf,
   };
 }

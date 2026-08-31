@@ -140,4 +140,28 @@ describe("buildLedgerPaymentDetail", () => {
     assert.ok(expand.some((l) => l.label === "סגירת חוב"));
     assert.ok(expand.some((l) => l.label.includes("יתרת זכות")));
   });
+
+  it("shows commission-to-fee lineage without changing debt/credit", () => {
+    const rows: LedgerPaymentBatchRow[] = [
+      batchRow({
+        id: "p-009",
+        paymentCode: "TR-P-000009",
+        orderId: "o1",
+        amountUsd: { toString: () => "3.00", toNumber: () => 3 } as never,
+      }),
+    ];
+    const detail = buildLedgerPaymentDetail({
+      batchRows: rows,
+      orderNumberById: new Map([["o1", "TR-137-0006"]]),
+      commissionFees: [{ amountUsd: 3, orderId: "o1", orderNumber: "TR-137-0006" }],
+    });
+    assert.ok(detail);
+    assert.equal(detail.commissionToFeeUsd, "3.00");
+    assert.equal(detail.creditSurplusUsd, null);
+    const expand = ledgerPaymentExpandLines(detail);
+    const feeLine = expand.find((l) => l.tone === "commission");
+    assert.ok(feeLine);
+    assert.equal(feeLine!.label, "הוספה לעמלות");
+    assert.equal(feeLine!.orderNumber, "TR-137-0006");
+  });
 });

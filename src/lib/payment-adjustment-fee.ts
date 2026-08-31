@@ -19,6 +19,26 @@ export const customerBalanceExcludeAdjustmentFeePaymentsWhere = {
   },
 } satisfies Prisma.PaymentWhereInput;
 
+/**
+ * תשלומים שלא סוגרים חוב פתוח:
+ * ADJUSTMENT_FEE = חשבון עמלות; CUSTOMER_CREDIT = חשבון יתרת זכות.
+ */
+export const CUSTOMER_DEBT_EXCLUDED_PAYMENT_TYPES = ["ADJUSTMENT_FEE", "CUSTOMER_CREDIT"] as const;
+
+export const customerDebtPaymentsWhere = {
+  NOT: {
+    businessType: { in: [...CUSTOMER_DEBT_EXCLUDED_PAYMENT_TYPES] },
+  },
+} satisfies Prisma.PaymentWhereInput;
+
+export function isCustomerDebtExcludedPayment(
+  businessType: string | null | undefined,
+): boolean {
+  return (
+    businessType === "ADJUSTMENT_FEE" || businessType === "CUSTOMER_CREDIT"
+  );
+}
+
 export const PAYMENT_ADJUSTMENT_REASON_LABELS: Record<PaymentAdjustmentReason, string> = {
   PAYMENT_SURPLUS: "הפרש תשלום",
   METHOD_DEVIATION: "חריגת אמצעי תשלום",

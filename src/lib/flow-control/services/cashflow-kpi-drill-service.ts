@@ -398,7 +398,11 @@ async function loadRemainingToPayDrill(weeks: string[]): Promise<CashflowKpiDril
     orderIds.length > 0
       ? ((await groupByActivePayments(
           "orderId",
-          { orderId: { in: orderIds }, amountUsd: { not: null } },
+          {
+            orderId: { in: orderIds },
+            amountUsd: { not: null },
+            NOT: { businessType: { in: ["ADJUSTMENT_FEE", "CUSTOMER_CREDIT"] } },
+          },
           { amountUsd: true },
         )) as Array<{ orderId: string | null; _sum: { amountUsd: unknown } }>)
       : [];

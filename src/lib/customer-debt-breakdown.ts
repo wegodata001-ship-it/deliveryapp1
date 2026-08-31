@@ -181,7 +181,15 @@ export async function buildCustomerDebtBreakdown(input: {
   const lastPaymentByOrder = new Map<string, string>();
   if (orderIds.length > 0) {
     const [sums, payRows] = await Promise.all([
-      groupByActivePayments("orderId", { orderId: { in: orderIds }, amountUsd: { not: null } }, { amountUsd: true }),
+      groupByActivePayments(
+        "orderId",
+        {
+          orderId: { in: orderIds },
+          amountUsd: { not: null },
+          NOT: { businessType: { in: ["ADJUSTMENT_FEE", "CUSTOMER_CREDIT"] } },
+        },
+        { amountUsd: true },
+      ),
       findActiveCustomerPayments({
         where: { orderId: { in: orderIds } },
         orderBy: [{ paymentDate: "desc" }, { createdAt: "desc" }],

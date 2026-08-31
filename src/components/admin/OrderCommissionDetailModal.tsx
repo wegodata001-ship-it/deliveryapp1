@@ -3,24 +3,22 @@
 import { useCallback, useEffect, useState } from "react";
 import { History, X } from "lucide-react";
 import type { OrderCommissionDetailView } from "@/lib/order-commission-ssot";
-import { formatSignedUsdDisplay } from "@/lib/payment-adjustment-fee";
 import { formatUsdDisplay } from "@/lib/money-format";
-
-function fmtSigned(n: number): string {
-  return formatSignedUsdDisplay(n);
-}
+import { formatCommissionSignedCompact } from "@/lib/commission-lineage-view";
+import { CommissionLineageTable } from "@/components/admin/CommissionLineageTable";
 
 type Props = {
   open: boolean;
   orderId: string | null;
   orderNumber?: string | null;
-  /** תצוגה מיידית מטבלת הקליטה לפני טעינת השרת */
   preview?: {
     baseCommissionUsd: number;
     adjustmentsUsd: number;
     currentCommissionUsd: number;
   } | null;
   onClose: () => void;
+  onOpenPayment?: (paymentId: string, paymentCode: string) => void;
+  onOpenOrder?: (orderId: string, orderNumber: string) => void;
 };
 
 export function OrderCommissionDetailModal({
@@ -29,6 +27,8 @@ export function OrderCommissionDetailModal({
   orderNumber,
   preview,
   onClose,
+  onOpenPayment,
+  onOpenOrder,
 }: Props) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -76,7 +76,7 @@ export function OrderCommissionDetailModal({
   return (
     <div className="adm-mini-modal-layer adm-mini-modal-layer--payment-overage" role="presentation" onClick={onClose}>
       <div
-        className="adm-mini-modal order-commission-detail-modal"
+        className="adm-mini-modal order-commission-detail-modal order-commission-detail-modal--wide"
         role="dialog"
         aria-modal="true"
         aria-labelledby="order-commission-detail-title"
@@ -85,7 +85,7 @@ export function OrderCommissionDetailModal({
       >
         <div className="order-commission-detail-modal__head">
           <div>
-            <h3 id="order-commission-detail-title">פירוט עמלה</h3>
+            <h3 id="order-commission-detail-title">פירוט עמלות</h3>
             <p dir="ltr">{titleNumber}</p>
           </div>
           <button type="button" className="payment-method-adjust-modal__close" aria-label="סגור" onClick={onClose}>
@@ -103,7 +103,7 @@ export function OrderCommissionDetailModal({
           </div>
           <div>
             <dt>שינויים</dt>
-            <dd dir="ltr">{fmtSigned(adjustments)}</dd>
+            <dd dir="ltr">{formatCommissionSignedCompact(adjustments)}</dd>
           </div>
           <div className="order-commission-detail-modal__stats--current">
             <dt>עמלה נוכחית</dt>
@@ -116,51 +116,17 @@ export function OrderCommissionDetailModal({
           תנועות עמלה
         </h4>
 
-        {!busy && !(view?.hasAdjustments) ? (
+        {!busy && !view?.hasAdjustments ? (
           <p className="payment-modal-hint">אין שינויים — העמלה הנוכחית זהה למקורית.</p>
         ) : null}
 
         {(view?.movements.length ?? 0) > 0 ? (
-          <ul className="order-commission-detail-modal__movements">
-            {view!.movements.map((m) => (
-              <li key={m.id}>
-                <div className="order-commission-detail-modal__move-main">
-                  <strong>{m.label}</strong>
-                  <span
-                    dir="ltr"
-                    className={
-                      m.amountUsd >= 0
-                        ? "commission-movement--credit"
-                        : "commission-movement--debit"
-                    }
-                  >
-                    {fmtSigned(m.amountUsd)}
-                  </span>
-                </div>
-                <div className="order-commission-detail-modal__move-meta">
-                  <span dir="ltr">{m.dateYmd.replace(/-/g, "/")}</span>
-                  {m.sourceDocument ? <span dir="ltr">{m.sourceDocument}</span> : null}
-                  {m.createdByName ? <span>{m.createdByName}</span> : null}
-                </div>
-              </li>
-            ))}
-          </ul>
+          <CommissionLineageTable
+            rows={view!.movements}
+            onOpenOrder={onOpenOrder}
+            onOpenPayment={onOpenPayment}
+          />
         ) : null}
-
-        <div className="order-commission-detail-modal__footer-sum">
-          <div>
-            <span>עמלה מקורית</span>
-            <strong dir="ltr">{formatUsdDisplay(base)}</strong>
-          </div>
-          <div>
-            <span>שינויים</span>
-            <strong dir="ltr">{fmtSigned(adjustments)}</strong>
-          </div>
-          <div className="order-commission-detail-modal__footer-sum--total">
-            <span>עמלה נוכחית</span>
-            <strong dir="ltr">{formatUsdDisplay(current)}</strong>
-          </div>
-        </div>
 
         <div className="adm-mini-modal-actions">
           <button type="button" className="adm-btn" onClick={onClose}>

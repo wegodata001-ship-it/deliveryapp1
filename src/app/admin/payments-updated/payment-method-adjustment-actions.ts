@@ -139,7 +139,15 @@ export async function previewPaymentIntentAutoAdjustmentAction(params: {
       ok: true;
       openDebtUsd: number;
       totalPayUsd: number;
-      intents: Array<{ method: string; currency: PaymentBalanceCurrency; amountNative: number; amountUsd: number }>;
+      intents: Array<{
+        method: string;
+        currency: PaymentBalanceCurrency;
+        amountNative: number;
+        amountUsd: number;
+        grossIls: number | null;
+        vatIls: number;
+        netIls: number | null;
+      }>;
       moves: Array<{
         fromMethod: string;
         toMethod: string;
@@ -220,7 +228,15 @@ export async function applyPaymentMethodAutoAdjustmentAction(params: {
   /** Audit לתשלום שהלקוח רוצה לבצע עכשיו (לא מצב קופה) */
   desiredAllocationAudit?: {
     current: Array<{ methodKey: string; currency: string; amount: number }>;
-    desired: Array<{ methodKey: string; currency: string; amount: number }>;
+    desired: Array<{
+      methodKey: string;
+      currency: string;
+      amount: number;
+      grossIls?: number | null;
+      vatIls?: number;
+      netIls?: number | null;
+      amountUsd?: number;
+    }>;
     deltas: Array<{ methodKey: string; currency: string; delta: number }>;
     moves: Array<{
       fromMethod: string;

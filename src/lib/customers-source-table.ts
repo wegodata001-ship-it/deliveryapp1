@@ -4,6 +4,11 @@ import { prisma } from "@/lib/prisma";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { customersPerfRun, customersPerfStart, customersPerfEnd } from "@/lib/customers-source-perf";
 import { formatLocalYmd } from "@/lib/work-week";
+import {
+  ACTIVE_PAID_PAYMENT_SQL,
+  CUSTOMER_CREDIT_PAYMENT_BUSINESS_SQL,
+  CUSTOMER_DEBT_PAYMENT_BUSINESS_SQL,
+} from "@/lib/payment-record-status-sql";
 
 export type CustomersSourceFilters = {
   search?: string;
@@ -238,20 +243,27 @@ type CustomerBalanceAggRow = {
 
 async function fetchBalancesUsdForCustomers(customerIds: string[]): Promise<Map<string, Prisma.Decimal>> {
   if (customerIds.length === 0) return new Map();
-  const { calculateCustomerBalances } = await import("@/lib/customer-balance-calculator");
-  const map = await calculateCustomerBalances(customerIds);
+  const { getCustomerAccountBalancesMany, customerAccountSignedUsd } = await import(
+    "@/lib/customer-account-balances"
+  );
+  const map = await getCustomerAccountBalancesMany(customerIds);
   const out = new Map<string, Prisma.Decimal>();
   for (const [id, row] of map) {
-    out.set(id, row.balance);
+    out.set(id, new Prisma.Decimal(customerAccountSignedUsd(row).toFixed(2)));
   }
   return out;
 }
 
+function balanceExprSql(): Prisma.Sql {
+  return Prisma.sql`(COALESCE(o.orders_usd,0) - COALESCE(p.payments_usd,0) - COALESCE(w.withdrawals_usd,0) - COALESCE(cr.credit_usd,0))`;
+}
+
 function balanceFilterSql(sign: string | null): Prisma.Sql {
   const s = (sign ?? "").trim();
-  if (s === "owes") return Prisma.sql`(COALESCE(o.orders_usd,0) - COALESCE(p.payments_usd,0) - COALESCE(w.withdrawals_usd,0)) > 0.0001`;
-  if (s === "credit") return Prisma.sql`(COALESCE(o.orders_usd,0) - COALESCE(p.payments_usd,0) - COALESCE(w.withdrawals_usd,0)) < -0.0001`;
-  if (s === "zero") return Prisma.sql`ABS(COALESCE(o.orders_usd,0) - COALESCE(p.payments_usd,0) - COALESCE(w.withdrawals_usd,0)) <= 0.0001`;
+  const expr = balanceExprSql();
+  if (s === "owes") return Prisma.sql`${expr} > 0.0001`;
+  if (s === "credit") return Prisma.sql`${expr} < -0.0001`;
+  if (s === "zero") return Prisma.sql`ABS(${expr}) <= 0.0001`;
   return Prisma.sql`TRUE`;
 }
 
@@ -276,7 +288,7 @@ export async function listCustomersSourceTable(
           COALESCE(o.orders_usd, 0) AS "ordersUsd",
           COALESCE(w.withdrawals_usd, 0) AS "withdrawalsUsd",
           COALESCE(p.payments_usd, 0) AS "paymentsUsd",
-          (COALESCE(o.orders_usd,0) - COALESCE(p.payments_usd,0) - COALESCE(w.withdrawals_usd,0)) AS "balanceUsd"
+          (COALESCE(o.orders_usd,0) - COALESCE(p.payments_usd,0) - COALESCE(w.withdrawals_usd,0) - COALESCE(cr.credit_usd,0)) AS "balanceUsd"
         FROM "Customer" c
         LEFT JOIN (
           SELECT "customerId", SUM(COALESCE("totalUsd",0)) AS orders_usd
@@ -293,9 +305,18 @@ export async function listCustomersSourceTable(
         LEFT JOIN (
           SELECT "customerId", SUM(COALESCE("amountUsd",0)) AS payments_usd
           FROM "Payment"
-          WHERE "isPaid" = TRUE AND ("status" IS NULL OR "status" <> 'CANCELLED')
+          WHERE ${ACTIVE_PAID_PAYMENT_SQL}
+            AND ${CUSTOMER_DEBT_PAYMENT_BUSINESS_SQL}
           GROUP BY "customerId"
         ) p ON p."customerId" = c.id
+        LEFT JOIN (
+          SELECT "customerId", SUM(COALESCE("amountUsd",0)) AS credit_usd
+          FROM "Payment"
+          WHERE ${ACTIVE_PAID_PAYMENT_SQL}
+            AND ${CUSTOMER_CREDIT_PAYMENT_BUSINESS_SQL}
+            AND "orderId" IS NULL
+          GROUP BY "customerId"
+        ) cr ON cr."customerId" = c.id
         WHERE c."deletedAt" IS NULL
         AND c.id IN (SELECT id FROM "Customer" WHERE ${where})
         AND ${balanceFilterSql(query.filters?.balanceSign ?? null)}
@@ -385,6 +406,7 @@ async function loadCustomersSourceKpisUncached(): Promise<CustomersSourceKpis> {
                 WHERE p."customerId" = c.id
                   AND p."isPaid" = true
                   AND p."orderId" IS NOT NULL
+                  AND (p."businessType" IS NULL OR p."businessType" NOT IN ('ADJUSTMENT_FEE', 'CUSTOMER_CREDIT'))
               ), 0) + 0.01
           )
       `,
@@ -428,12 +450,14 @@ export async function getCustomerSourcePreview(customerId: string): Promise<Cust
     });
     if (!cust) return null;
 
-    const { getCustomerOpenDebt } = await import("@/lib/customer-open-debt");
-    const [orderCount, debt] = await Promise.all([
+    const { getCustomerAccountBalances, customerAccountSignedUsd } = await import(
+      "@/lib/customer-account-balances"
+    );
+    const [orderCount, accounts] = await Promise.all([
       prisma.order.count({ where: { customerId: id, deletedAt: null } }),
-      getCustomerOpenDebt(id),
+      getCustomerAccountBalances(id),
     ]);
-    const balance = Number(debt.openDebtUsd.toFixed(2));
+    const balance = customerAccountSignedUsd(accounts);
 
     return {
       id: cust.id,

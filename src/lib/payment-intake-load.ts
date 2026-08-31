@@ -255,7 +255,15 @@ async function attachPaymentsAndMapRows(
 
   if (orderIds.length > 0) {
     const [sums, payRows, planByOrder] = await Promise.all([
-      groupByActivePayments("orderId", { orderId: { in: orderIds }, amountUsd: { not: null } }, { amountUsd: true }),
+      groupByActivePayments(
+        "orderId",
+        {
+          orderId: { in: orderIds },
+          amountUsd: { not: null },
+          NOT: { businessType: { in: ["ADJUSTMENT_FEE", "CUSTOMER_CREDIT"] } },
+        },
+        { amountUsd: true },
+      ),
       prisma.payment.findMany({
         where: { orderId: { in: orderIds } },
         orderBy: [{ paymentDate: "desc" }, { createdAt: "desc" }],
@@ -490,38 +498,29 @@ export async function loadPaymentIntakeBalancesForCustomer(
 
   const paymentWorkCountry = normalizeWorkCountryCode(params.paymentWorkCountryRaw) ?? DEFAULT_WORK_COUNTRY;
   const { getCustomerOpenDebt, openDebtScopeForWorkCountry } = await import("@/lib/customer-open-debt");
+  const { getCustomerAccountBalances } = await import("@/lib/customer-account-balances");
+  const debtScope = openDebtScopeForWorkCountry(paymentWorkCountry);
 
-  const [customerBalanceUsd, debt, commissionBalanceUsd, creditBalanceUsd] = await Promise.all([
-    (async () => {
-      const { getCustomerInternalBalanceUsd } = await import("@/lib/customer-open-debt");
-      return getCustomerInternalBalanceUsd(cid, openDebtScopeForWorkCountry(paymentWorkCountry));
-    })(),
-    getCustomerOpenDebt(cid, openDebtScopeForWorkCountry(paymentWorkCountry)),
-    (async () => {
-      const { getCustomerCommissionBalanceUsd } = await import("@/lib/customer-commission-balance");
-      return getCustomerCommissionBalanceUsd(cid);
-    })(),
-    (async () => {
-      const { getCustomerCreditBalanceUsd } = await import("@/lib/customer-credit-balance");
-      return getCustomerCreditBalanceUsd(cid, openDebtScopeForWorkCountry(paymentWorkCountry));
-    })(),
+  const [accounts, debt] = await Promise.all([
+    getCustomerAccountBalances(cid, debtScope),
+    getCustomerOpenDebt(cid, debtScope),
   ]);
 
   // סנכרון snapshot מ־SSOT (לא תיקון ידני ללקוח) — מונע יתרת DB ישנה בחיפוש
   try {
     const { persistCustomerBalanceSnapshot } = await import("@/lib/customer-open-debt");
-    await persistCustomerBalanceSnapshot(cid, customerBalanceUsd);
+    await persistCustomerBalanceSnapshot(cid, debt.internalSignedUsd);
   } catch {
     /* snapshot best-effort */
   }
 
   return {
     ok: true,
-    customerBalanceUsd: customerBalanceUsd.toFixed(2),
-    openDebtSignedUsd: Number(debt.signedBalanceUsd.toString()),
+    customerBalanceUsd: debt.internalSignedUsd.toFixed(2),
+    openDebtSignedUsd: accounts.openDebtUsd,
     internalSignedUsd: debt.internalSignedUsd.toFixed(2),
-    commissionBalanceUsd,
-    creditBalanceUsd,
+    commissionBalanceUsd: accounts.commissionBalanceUsd,
+    creditBalanceUsd: accounts.availableCreditUsd,
     totalOrdersBeforeCommissionUsd: Number(debt.totalOrdersBeforeCommissionUsd.toFixed(2)),
     totalOrdersUsd: Number(debt.totalOrdersUsd.toFixed(2)),
     totalPaymentsUsd: Number(debt.totalPaymentsUsd.toFixed(2)),

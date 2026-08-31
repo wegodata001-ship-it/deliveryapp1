@@ -9,8 +9,13 @@
 import { roundOrderMoney2 } from "@/lib/order-remaining-debt";
 import { isLegacyCommissionOrderMutationFee } from "@/lib/customer-commission-balance-shared";
 import {
-  COMMISSION_POOL_DEBIT_USER_CHOICE,
-} from "@/lib/customer-commission-balance-shared";
+  commissionKindFromAmount,
+  commissionReasonLabel,
+  commissionTypeLabel,
+  COMMISSION_TYPE_ORIGINAL,
+  type CommissionLineageRow,
+  type CommissionMovementKind,
+} from "@/lib/commission-lineage-view";
 
 const EPS = 0.01;
 
@@ -20,8 +25,11 @@ export type OrderCommissionFeeMovementInput = {
   userChoice: string | null;
   reason?: string | null;
   createdAt?: string | Date | null;
+  paymentId?: string | null;
   paymentCaptureCode?: string | null;
   paymentCode?: string | null;
+  orderId?: string | null;
+  orderNumber?: string | null;
   notes?: string | null;
   createdByName?: string | null;
 };
@@ -37,13 +45,8 @@ export type OrderCommissionBreakdown = {
   hasAdjustments: boolean;
 };
 
-export type OrderCommissionMovementView = {
-  id: string;
-  dateYmd: string;
+export type OrderCommissionMovementView = CommissionLineageRow & {
   label: string;
-  amountUsd: number;
-  sourceDocument: string | null;
-  createdByName: string | null;
   notes: string | null;
 };
 
@@ -82,14 +85,8 @@ export function computeOrderCommissionBreakdown(params: {
   };
 }
 
-function feeMovementLabel(userChoice: string | null | undefined, amountUsd: number): string {
-  const choice = (userChoice ?? "").trim();
-  if (choice === "commission") return "הוספה מתשלום יתר";
-  if (choice === "forfeit") return "ויתור על עודף לעמלה";
-  if (choice === COMMISSION_POOL_DEBIT_USER_CHOICE) return "איפוס חוב באמצעות עמלה";
-  if (choice === "fee_adjustment_negative") return "התאמת עמלה (legacy)";
-  if (amountUsd >= 0) return "הוספה לעמלה";
-  return "הפחתה מעמלה";
+function feeMovementKind(amountUsd: number): CommissionMovementKind {
+  return commissionKindFromAmount(amountUsd, false);
 }
 
 function toYmd(raw: string | Date | null | undefined): string {
@@ -115,9 +112,16 @@ export function buildOrderCommissionDetailView(params: {
     movements.push({
       id: `base:${params.orderId}`,
       dateYmd: "",
-      label: "עמלה מקורית",
+      kind: "ORIGINAL",
+      typeLabel: COMMISSION_TYPE_ORIGINAL,
+      label: COMMISSION_TYPE_ORIGINAL,
       amountUsd: breakdown.baseCommissionUsd,
       sourceDocument: params.orderNumber,
+      orderId: params.orderId,
+      orderNumber: params.orderNumber,
+      paymentId: null,
+      paymentCode: null,
+      reason: null,
       createdByName: null,
       notes: null,
     });
@@ -127,15 +131,25 @@ export function buildOrderCommissionDetailView(params: {
     if (isLegacyCommissionOrderMutationFee(fee.userChoice)) continue;
     const amountUsd = roundOrderMoney2(Number(fee.amountUsd) || 0);
     if (Math.abs(amountUsd) <= EPS) continue;
+    const kind = feeMovementKind(amountUsd);
+    const typeLabel = commissionTypeLabel(kind);
+    const paymentCode =
+      fee.paymentCaptureCode?.trim() ||
+      fee.paymentCode?.trim() ||
+      null;
     feeMovements.push({
       id: fee.id,
       dateYmd: toYmd(fee.createdAt),
-      label: feeMovementLabel(fee.userChoice, amountUsd),
+      kind,
+      typeLabel,
+      label: typeLabel,
       amountUsd,
-      sourceDocument:
-        fee.paymentCaptureCode?.trim() ||
-        fee.paymentCode?.trim() ||
-        null,
+      sourceDocument: paymentCode ?? params.orderNumber,
+      orderId: fee.orderId ?? params.orderId,
+      orderNumber: fee.orderNumber ?? params.orderNumber,
+      paymentId: fee.paymentId ?? null,
+      paymentCode,
+      reason: commissionReasonLabel({ reason: fee.reason, userChoice: fee.userChoice }),
       createdByName: fee.createdByName?.trim() || null,
       notes: fee.notes?.trim() || null,
     });
@@ -149,6 +163,32 @@ export function buildOrderCommissionDetailView(params: {
     orderNumber: params.orderNumber,
     movements,
   };
+}
+
+/** מפת הזמנה → פירוט עמלה נוכחית */
+export function indexOrderCommissionBreakdowns(
+  orders: Array<{ id: string; commissionUsd: number }>,
+  fees: Array<{ orderId: string | null; amountUsd: number; userChoice?: string | null }>,
+): Map<string, OrderCommissionBreakdown> {
+  const feesByOrder = new Map<string, Array<{ amountUsd: number; userChoice?: string | null }>>();
+  for (const fee of fees) {
+    if (!fee.orderId) continue;
+    const list = feesByOrder.get(fee.orderId) ?? [];
+    list.push({ amountUsd: fee.amountUsd, userChoice: fee.userChoice });
+    feesByOrder.set(fee.orderId, list);
+  }
+  const out = new Map<string, OrderCommissionBreakdown>();
+  for (const order of orders) {
+    out.set(
+      order.id,
+      computeOrderCommissionBreakdown({
+        orderId: order.id,
+        baseCommissionUsd: order.commissionUsd,
+        fees: feesByOrder.get(order.id) ?? [],
+      }),
+    );
+  }
+  return out;
 }
 
 /** אגרגציה לרמת לקוח מפירוטי הזמנות */

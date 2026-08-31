@@ -10,9 +10,10 @@ import { paymentMethodStyle } from "@/lib/payment-method-style";
 
 type Props = {
   detail: LedgerPaymentDetail;
+  onOpenCommissionOrder?: (orderId: string, orderNumber: string) => void;
 };
 
-export function LedgerPaymentDetailBlock({ detail }: Props) {
+export function LedgerPaymentDetailBlock({ detail, onOpenCommissionOrder }: Props) {
   const expandLines = ledgerPaymentExpandLines(detail);
   const methodLines = ledgerPaymentMethodDisplayLines(detail);
   const showMethodSection =
@@ -34,9 +35,24 @@ export function LedgerPaymentDetailBlock({ detail }: Props) {
           <h4 className="adm-ledger-payment-detail-section-title">פירוט תשלום</h4>
           <ul className="adm-ledger-payment-detail-list">
             {expandLines.map((line, idx) => (
-              <li key={`${line.label}-${idx}`}>
+              <li
+                key={`${line.label}-${idx}`}
+                className={line.tone === "commission" ? "adm-ledger-payment-detail-line--commission" : undefined}
+              >
                 <span>{line.label}:</span>
-                <span dir="ltr">{line.display}</span>
+                {line.tone === "commission" && line.orderId && onOpenCommissionOrder ? (
+                  <button
+                    type="button"
+                    className="commission-lineage-link"
+                    dir="ltr"
+                    onClick={() => onOpenCommissionOrder(line.orderId!, line.orderNumber ?? "")}
+                  >
+                    {line.display}
+                    {line.orderNumber ? ` → ${line.orderNumber}` : ""}
+                  </button>
+                ) : (
+                  <span dir="ltr">{line.display}</span>
+                )}
               </li>
             ))}
           </ul>

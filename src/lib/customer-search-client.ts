@@ -235,3 +235,57 @@ export function pickAutoCustomerHit(
   if (rows.length === 1 && CUSTOMER_SEARCH_UUID_RE.test(q) && rows[0]!.id === q) return rows[0]!;
   return null;
 }
+
+export type CustomerEnterSelection =
+  | { action: "pick"; row: CustomerSearchRow }
+  | { action: "lookup" }
+  | { action: "none" };
+
+/**
+ * החלטת ENTER בשדה לקוח — בלי side-effects.
+ * highlighted → exact/single → first (אם הרשימה עדכנית) → lookup / none.
+ */
+export function resolveCustomerEnterSelection(params: {
+  query: string;
+  hits: CustomerSearchRow[];
+  activeIndex: number;
+  hitsQuery: string | null;
+  field?: "code" | "text";
+  alreadySelected?: { id: string; code: string | null } | null;
+}): CustomerEnterSelection {
+  const q = params.query.trim();
+  if (!q) return { action: "none" };
+
+  const selected = params.alreadySelected;
+  if (selected && params.activeIndex < 0) {
+    const selectedCode = (selected.code ?? "").trim().toLowerCase();
+    if (selectedCode && selectedCode === q.toLowerCase()) {
+      return { action: "none" };
+    }
+  }
+
+  if (params.activeIndex >= 0 && params.hits[params.activeIndex]) {
+    return { action: "pick", row: params.hits[params.activeIndex]! };
+  }
+
+  const hitsFresh = (params.hitsQuery ?? "").trim() === q;
+  if (hitsFresh) {
+    const auto = pickAutoCustomerHit(params.hits, q);
+    if (auto) return { action: "pick", row: auto };
+    if (params.hits.length > 0) return { action: "pick", row: params.hits[0]! };
+    return { action: "none" };
+  }
+
+  const lower = q.toLowerCase();
+  const exactOnStale =
+    params.hits.find((r) => (r.code ?? "").trim().toLowerCase() === lower) ??
+    params.hits.find((r) => (r.oldCustomerCode ?? "").trim().toLowerCase() === lower) ??
+    null;
+  if (exactOnStale) return { action: "pick", row: exactOnStale };
+
+  if (params.field === "text") {
+    return { action: "none" };
+  }
+
+  return { action: "lookup" };
+}

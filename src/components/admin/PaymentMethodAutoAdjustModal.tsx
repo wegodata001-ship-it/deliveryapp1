@@ -9,6 +9,7 @@ import {
 } from "@/app/admin/payments-updated/payment-method-adjustment-actions";
 import type { PaymentBalanceCurrency } from "@/lib/payment-method-captured-balances";
 import { intentsFromDraftPaymentLines } from "@/lib/payment-method-payment-intent";
+import { calculatePaymentIntentDeduction } from "@/lib/payment-intent-vat";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 
 /** רק העברה + מזומן — זה כל ה-INPUT שהמשתמש מזין */
@@ -48,13 +49,6 @@ function parseAmount(raw: string): number {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-function toUsd(amount: number, currency: PaymentBalanceCurrency, rate: number | null): number | null {
-  if (!(amount > 0)) return 0;
-  if (currency === "USD") return Math.round(amount * 100) / 100;
-  if (!rate || !(rate > 0)) return null;
-  return Math.round((amount / rate) * 100) / 100;
-}
-
 type DraftPaymentSeed = {
   usdAmount?: number | "" | null;
   ilsAmount?: number | "" | null;
@@ -76,6 +70,9 @@ type PreviewState = {
     currency: PaymentBalanceCurrency;
     amountNative: number;
     amountUsd: number;
+    grossIls: number | null;
+    vatIls: number;
+    netIls: number | null;
   }>;
   moves: Array<{
     fromMethod: string;
@@ -166,13 +163,20 @@ export function PaymentMethodAutoAdjustModal({
     return METHOD_CARDS.map((card) => {
       const draft = drafts[card.key];
       const amount = parseAmount(draft.amount);
-      const usd = toUsd(amount, draft.currency, rateN);
+      const deduction = calculatePaymentIntentDeduction({
+        amountNative: amount,
+        currency: draft.currency,
+        exchangeRate: rateN,
+      });
       return {
         key: card.key,
         title: card.title,
         amount,
         currency: draft.currency,
-        usd,
+        grossIls: draft.currency === "ILS" ? deduction.grossNative : null,
+        vatIls: deduction.vatIls,
+        netIls: draft.currency === "ILS" ? deduction.netNative : null,
+        usd: deduction.amountUsd,
         active: amount > 0,
       };
     });
@@ -190,6 +194,28 @@ export function PaymentMethodAutoAdjustModal({
 
   const hasIls = liveLines.some((line) => line.active && line.currency === "ILS");
   const canCompute = liveTotalUsd != null && liveTotalUsd > 0 && (!hasIls || rateN != null);
+  const liveTotals = useMemo(() => {
+    let grossIls = 0;
+    let vatIls = 0;
+    let netIls = 0;
+    let grossUsd = 0;
+    for (const line of liveLines) {
+      if (!line.active) continue;
+      if (line.currency === "ILS") {
+        grossIls += line.grossIls ?? 0;
+        vatIls += line.vatIls;
+        netIls += line.netIls ?? 0;
+      } else {
+        grossUsd += line.amount;
+      }
+    }
+    return {
+      grossIls: Math.round(grossIls * 100) / 100,
+      vatIls: Math.round(vatIls * 100) / 100,
+      netIls: Math.round(netIls * 100) / 100,
+      grossUsd: Math.round(grossUsd * 100) / 100,
+    };
+  }, [liveLines]);
 
   const draftLinesRef = useRef(draftPaymentLines);
   draftLinesRef.current = draftPaymentLines;
@@ -271,6 +297,10 @@ export function PaymentMethodAutoAdjustModal({
         methodKey: i.method,
         currency: i.currency,
         amount: i.amountNative,
+        grossIls: i.grossIls,
+        vatIls: i.vatIls,
+        netIls: i.netIls,
+        amountUsd: i.amountUsd,
       })),
       deltas: preview.moves.map((m) => ({
         methodKey: `${m.fromMethod}->${m.toMethod}`,
@@ -327,10 +357,6 @@ export function PaymentMethodAutoAdjustModal({
   const customerLabel = customerCode
     ? `${customerName || "—"} #${customerCode}`
     : customerName || "—";
-  const adjustTotal = preview
-    ? Math.round(preview.orderChanges.reduce((s, row) => s + row.moveUsd, 0) * 100) / 100
-    : 0;
-
   return (
     <div className="adm-cash-modal-backdrop pm-adjust-backdrop" role="presentation" onClick={onClose}>
       <div
@@ -411,13 +437,37 @@ export function PaymentMethodAutoAdjustModal({
                       <span>{line.title}:</span>
                       <span dir="ltr">
                         {fmtMoney(line.currency, line.amount)}
-                        {line.currency === "ILS" && line.usd != null ? ` = ${fmtUsd(line.usd)}` : null}
+                        {line.currency === "ILS" && line.usd != null
+                          ? ` כולל מע"מ → ${fmtMoney("ILS", line.netIls ?? 0)} נטו → ${fmtUsd(line.usd)}`
+                          : null}
                         {line.currency === "ILS" && line.usd == null ? " — נדרש שער דולר" : null}
                       </span>
                     </div>
                   ))}
+                {liveTotals.grossIls > 0 ? (
+                  <>
+                    <div className="pm-paynow-totals__line">
+                      <span>סה״כ הלקוח מוסר בשקלים:</span>
+                      <span dir="ltr">{fmtMoney("ILS", liveTotals.grossIls)}</span>
+                    </div>
+                    <div className="pm-paynow-totals__line">
+                      <span>סה״כ מע״מ 18% שנוטרל:</span>
+                      <span dir="ltr">-{fmtMoney("ILS", liveTotals.vatIls)}</span>
+                    </div>
+                    <div className="pm-paynow-totals__line">
+                      <span>סה״כ נטו לפני מע״מ:</span>
+                      <span dir="ltr">{fmtMoney("ILS", liveTotals.netIls)}</span>
+                    </div>
+                  </>
+                ) : null}
+                {liveTotals.grossUsd > 0 ? (
+                  <div className="pm-paynow-totals__line">
+                    <span>סה״כ הלקוח מוסר בדולר:</span>
+                    <span dir="ltr">{fmtMoney("USD", liveTotals.grossUsd)}</span>
+                  </div>
+                ) : null}
                 <div className="pm-paynow-totals__sum">
-                  <span>סה״כ שהלקוח רוצה לשלם:</span>
+                  <span>סה״כ בדולר לקיזוז מהחוב:</span>
                   <strong dir="ltr">{liveTotalUsd != null ? fmtUsd(liveTotalUsd) : "—"}</strong>
                 </div>
               </div>
@@ -481,25 +531,88 @@ export function PaymentMethodAutoAdjustModal({
                   <strong>התשלום שהוזן</strong>
                   {preview.intents.map((intent) => (
                     <div key={`${intent.method}-${intent.currency}`}>
-                      {PAYMENT_METHOD_LABELS[intent.method] ?? intent.method}:{" "}
-                      <span dir="ltr">{fmtMoney(intent.currency, intent.amountNative)}</span>
-                      {intent.currency === "ILS" && rateN ? (
-                        <span dir="ltr">
-                          {" "}
-                          · שווי לפי שער {rateN.toFixed(4)}: {fmtUsd(intent.amountUsd)}
-                        </span>
+                      <strong>{PAYMENT_METHOD_LABELS[intent.method] ?? intent.method}</strong>
+                      <div>
+                        הוזן:{" "}
+                        <span dir="ltr">{fmtMoney(intent.currency, intent.amountNative)}</span>
+                      </div>
+                      {intent.currency === "ILS" ? (
+                        <>
+                          <div>
+                            מע״מ 18%:{" "}
+                            <span dir="ltr">-{fmtMoney("ILS", intent.vatIls)}</span>
+                          </div>
+                          <div>
+                            לפני מע״מ:{" "}
+                            <span dir="ltr">{fmtMoney("ILS", intent.netIls ?? 0)}</span>
+                          </div>
+                          <div>
+                            שווי לפי שער <span dir="ltr">{rateN?.toFixed(4) ?? "—"}</span>:{" "}
+                            <span dir="ltr">{fmtUsd(intent.amountUsd)}</span>
+                          </div>
+                        </>
                       ) : null}
+                      <div>
+                        לקיזוז מהחוב: <strong dir="ltr">{fmtUsd(intent.amountUsd)}</strong>
+                      </div>
                     </div>
                   ))}
                 </div>
                 <div className="pm-paynow-result-summary__kpis">
                   <div>
-                    <span>הזמנות שיושפעו</span>
-                    <strong>{preview.orderChanges.length}</strong>
+                    <span>סה״כ הלקוח מוסר</span>
+                    <strong dir="ltr">
+                      {[
+                        preview.intents.some((row) => row.currency === "ILS")
+                          ? fmtMoney(
+                              "ILS",
+                              preview.intents.reduce((sum, row) => sum + (row.grossIls ?? 0), 0),
+                            )
+                          : null,
+                        preview.intents.some((row) => row.currency === "USD")
+                          ? fmtMoney(
+                              "USD",
+                              preview.intents
+                                .filter((row) => row.currency === "USD")
+                                .reduce((sum, row) => sum + row.amountNative, 0),
+                            )
+                          : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" + ")}
+                    </strong>
                   </div>
                   <div>
-                    <span>סה״כ התאמה</span>
-                    <strong dir="ltr">{fmtUsd(adjustTotal)}</strong>
+                    <span>סה״כ מע״מ שנוטרל</span>
+                    <strong dir="ltr">
+                      -{fmtMoney(
+                        "ILS",
+                        preview.intents.reduce((sum, row) => sum + row.vatIls, 0),
+                      )}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>סה״כ נטו בשקלים</span>
+                    <strong dir="ltr">
+                      {fmtMoney(
+                        "ILS",
+                        preview.intents.reduce((sum, row) => sum + (row.netIls ?? 0), 0),
+                      )}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>סה״כ בדולר לקיזוז מהחוב</span>
+                    <strong dir="ltr">{fmtUsd(preview.totalPayUsd)}</strong>
+                  </div>
+                  <div>
+                    <span>חוב לפני</span>
+                    <strong dir="ltr">{fmtUsd(preview.openDebtUsd)}</strong>
+                  </div>
+                  <div>
+                    <span>חוב אחרי</span>
+                    <strong dir="ltr">
+                      {fmtUsd(Math.max(0, preview.openDebtUsd - preview.totalPayUsd))}
+                    </strong>
                   </div>
                 </div>
                 <p className="pm-adjust-not-payment">

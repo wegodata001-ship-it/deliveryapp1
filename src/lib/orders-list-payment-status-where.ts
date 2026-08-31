@@ -46,7 +46,11 @@ export async function resolveOrderIdsForPaymentStatusFilter(
     ids.length > 0
       ? ((await groupByActivePayments(
           "orderId",
-          { orderId: { in: ids }, amountUsd: { not: null } },
+          {
+            orderId: { in: ids },
+            amountUsd: { not: null },
+            NOT: { businessType: { in: ["ADJUSTMENT_FEE", "CUSTOMER_CREDIT"] } },
+          },
           { amountUsd: true },
         )) as PaymentSumRow[])
       : [];

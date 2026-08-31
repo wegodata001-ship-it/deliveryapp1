@@ -15,6 +15,13 @@ import {
   summarizeCustomerOrderCommissions,
   type OrderCommissionBreakdown,
 } from "@/lib/order-commission-ssot";
+import {
+  COMMISSION_TYPE_ORIGINAL,
+  commissionKindFromAmount,
+  commissionReasonLabel,
+  commissionTypeLabel,
+  type CommissionMovementKind,
+} from "@/lib/commission-lineage-view";
 import { formatLocalYmd } from "@/lib/work-week";
 
 export type CommissionMovementType =
@@ -32,11 +39,14 @@ export type CommissionMovementRow = {
   dateYmd: string;
   createdAt: string;
   type: CommissionMovementType;
+  kind: CommissionMovementKind;
   actionLabel: string;
   sourceType: "ORDER" | "PAYMENT" | "FEE" | "MANUAL";
   sourceId: string | null;
   paymentId: string | null;
+  paymentCode: string | null;
   orderId: string | null;
+  orderNumber: string | null;
   sourceDocument: string;
   amountUsd: number;
   direction: CommissionMovementDirection;
@@ -79,23 +89,12 @@ function feeMovementType(input: {
     : "DEBT_RESET_FROM_COMMISSION";
 }
 
-function feeActionLabel(type: CommissionMovementType): string {
-  switch (type) {
-    case "OVERPAYMENT_TO_COMMISSION":
-      return "הוספה מתשלום יתר";
-    case "DEBT_RESET_FROM_COMMISSION":
-      return "איפוס חוב באמצעות עמלה";
-    case "MANUAL_COMMISSION_ADJUSTMENT":
-      return "התאמת עמלה";
-    case "BALANCE_RESET_OVERPAYMENT_TO_COMMISSION":
-      return "איפוס יתרה — תוספת לעמלה";
-    default:
-      return "עמלה";
-  }
+function feeActionLabel(amountUsd: number): string {
+  return commissionTypeLabel(commissionKindFromAmount(amountUsd, false));
 }
 
 function orderActionLabel(): string {
-  return "עמלה מהזמנה";
+  return COMMISSION_TYPE_ORIGINAL;
 }
 
 /** בונה תנועות עמלה — לא כולל fee_adjustment_negative legacy (כבר ב-order.commissionUsd). */
@@ -150,23 +149,30 @@ export async function buildCustomerCommissionLedger(
   type RawMovement = Omit<CommissionMovementRow, "balanceAfterUsd"> & { sortDate: Date };
 
   const raw: RawMovement[] = [];
+  const orderNumberById = new Map(
+    orders.map((o) => [o.id, o.orderNumber?.trim() || o.id.slice(0, 8)] as const),
+  );
 
   for (const o of orders) {
     const com = roundOrderMoney2(Number(o.commissionUsd ?? 0));
     if (Math.abs(com) <= EPS) continue;
     const sortDate = o.orderDate ?? o.createdAt;
+    const orderNumber = o.orderNumber?.trim() || o.id.slice(0, 8);
     raw.push({
       id: `order-${o.id}`,
       customerId: cid,
       dateYmd: formatLocalYmd(sortDate),
       createdAt: sortDate.toISOString(),
       type: "ORDER_COMMISSION",
+      kind: "ORIGINAL",
       actionLabel: orderActionLabel(),
       sourceType: "ORDER",
       sourceId: o.id,
       paymentId: null,
+      paymentCode: null,
       orderId: o.id,
-      sourceDocument: o.orderNumber?.trim() || o.id.slice(0, 8),
+      orderNumber,
+      sourceDocument: orderNumber,
       amountUsd: com,
       direction: "CREDIT",
       reason: null,
@@ -185,26 +191,30 @@ export async function buildCustomerCommissionLedger(
       reason: f.reason,
       userChoice: f.userChoice,
     });
-    const sourceDoc =
+    const paymentCode =
       f.paymentCaptureCode?.trim() ||
       f.payment?.paymentCode?.trim() ||
       f.sourceDocumentCode?.trim() ||
-      f.id.slice(0, 8);
+      null;
+    const orderNumber = f.orderId ? (orderNumberById.get(f.orderId) ?? null) : null;
     raw.push({
       id: `fee-${f.id}`,
       customerId: cid,
       dateYmd: formatLocalYmd(f.createdAt),
       createdAt: f.createdAt.toISOString(),
       type,
-      actionLabel: feeActionLabel(type),
+      kind: commissionKindFromAmount(amount, false),
+      actionLabel: feeActionLabel(amount),
       sourceType: f.paymentId ? "PAYMENT" : f.orderId ? "ORDER" : "FEE",
       sourceId: f.paymentId ?? f.orderId ?? f.id,
       paymentId: f.paymentId,
+      paymentCode,
       orderId: f.orderId,
-      sourceDocument: sourceDoc,
+      orderNumber,
+      sourceDocument: paymentCode || orderNumber || f.id.slice(0, 8),
       amountUsd: amount,
       direction: movementDirection(amount),
-      reason: f.notes?.trim() || null,
+      reason: commissionReasonLabel({ reason: f.reason, userChoice: f.userChoice }),
       createdById: f.createdById,
       createdByName: f.createdBy?.fullName?.trim() || null,
       sortDate: f.createdAt,

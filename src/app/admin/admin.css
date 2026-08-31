@@ -1,3 +1,12 @@
+:root {
+  --commission: #b45309;
+  --commission-strong: #92400e;
+  --commission-bg: #fffbeb;
+  --commission-bg-strong: #fef3c7;
+  --commission-border: #f59e0b;
+  --commission-border-soft: rgba(180, 83, 9, 0.38);
+}
+
 .payment-method-adjust-modal {
   width: min(1000px, 92vw);
   max-width: 1000px;
@@ -13807,11 +13816,11 @@ select.payment-modal-inline-input {
 
 .payment-modal-cust-summary__total--commissions .payment-modal-cust-summary__total-v,
 .payment-modal-cust-summary__total--commissions svg {
-  color: #b45309;
+  color: var(--commission);
 }
 
 .payment-modal-cust-summary__total-v--commission-neg {
-  color: #b45309;
+  color: var(--commission);
 }
 
 .payment-modal-cust-summary__commission-btn {
@@ -13826,7 +13835,7 @@ select.payment-modal-inline-input {
 }
 
 .payment-modal-cust-summary__commission-btn:hover:not(:disabled) {
-  color: #047857;
+  color: var(--commission-strong);
 }
 
 .payment-modal-cust-summary__commission-btn:disabled {
@@ -16278,7 +16287,7 @@ select.payment-modal-inline-input {
 
 .pm-num--commission {
   font-weight: 800;
-  color: #b45309;
+  color: var(--commission);
 }
 
 .pm-commission-cell {
@@ -16306,23 +16315,146 @@ select.payment-modal-inline-input {
 }
 
 .pm-commission-value-btn--updated {
-  color: #5b21b6;
-  background: rgba(167, 139, 250, 0.12);
-  border: 1px solid rgba(167, 139, 250, 0.35);
+  color: var(--commission-strong);
+  background: var(--commission-bg);
+  border: 1px solid var(--commission-border-soft);
   padding: 3px 8px;
 }
 
 .pm-commission-value-btn--updated:hover {
-  background: rgba(167, 139, 250, 0.2);
+  background: var(--commission-bg-strong);
 }
 
 .pm-commission-updated-badge {
   font-size: 0.68rem;
   font-weight: 800;
-  color: #6d28d9;
-  background: rgba(237, 233, 254, 0.95);
+  color: var(--commission-strong);
+  background: var(--commission-bg-strong);
   border-radius: 999px;
   padding: 1px 7px;
+}
+
+.commission-amount-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 0;
+  background: transparent;
+  padding: 2px 4px;
+  border-radius: 999px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  color: var(--commission);
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+.commission-amount-btn:hover:not(:disabled) {
+  background: rgba(251, 146, 60, 0.12);
+}
+
+.commission-amount-btn:disabled {
+  cursor: default;
+}
+
+.commission-amount-btn--changed {
+  background: var(--commission-bg);
+  border: 1px solid var(--commission-border-soft);
+  color: var(--commission-strong);
+  padding: 3px 8px;
+}
+
+.commission-amount-btn--changed:hover:not(:disabled) {
+  background: var(--commission-bg-strong);
+}
+
+.commission-amount-btn__k,
+.commission-amount-btn__changed {
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.commission-amount-btn__dot {
+  opacity: 0.55;
+  font-weight: 700;
+}
+
+.commission-amount-btn__v {
+  unicode-bidi: isolate;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+}
+
+.commission-amount-btn--compact {
+  gap: 4px;
+  padding: 2px 7px;
+  font-size: 0.7rem;
+  letter-spacing: 0.01em;
+}
+
+.commission-amount-btn--compact .commission-amount-btn__k,
+.commission-amount-btn--compact .commission-amount-btn__changed {
+  font-size: 0.68rem;
+}
+
+.adm-ord-total-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.adm-table-excel--orders-v3 tbody td.adm-ord-col-money--total {
+  overflow: visible;
+}
+
+.summary-card.commission-summary-card,
+.adm-ledger-row--commission-fee td,
+.adm-ledger-payment-detail-line--commission {
+  color: var(--commission-strong);
+}
+
+.summary-card.commission-summary-card {
+  background: var(--commission-bg);
+  border-color: var(--commission-border-soft);
+}
+
+.adm-balances-td-num--commission .commission-amount-btn {
+  color: var(--commission);
+}
+
+.commission-lineage-total {
+  margin: 0 0 10px;
+  font-weight: 800;
+  color: var(--commission-strong);
+}
+
+.commission-lineage-equation {
+  margin: 10px 0 0;
+  font-weight: 800;
+  color: var(--commission-strong);
+  text-align: start;
+}
+
+.commission-lineage-link {
+  color: var(--commission);
+  font-weight: 800;
+}
+
+.order-commission-detail-modal--wide {
+  width: min(920px, 96vw);
+}
+
+.order-commission-detail-modal__stats--current {
+  background: var(--commission-bg);
+  border-color: var(--commission-border-soft);
+}
+
+.order-commission-detail-modal__stats--current dd {
+  color: var(--commission-strong);
 }
 
 .order-commission-detail-modal {
@@ -16380,8 +16512,8 @@ select.payment-modal-inline-input {
 }
 
 .order-commission-detail-modal__stats--current {
-  background: #f5f3ff;
-  border-color: #ddd6fe;
+  background: var(--commission-bg);
+  border-color: var(--commission-border-soft);
 }
 
 .order-commission-detail-modal__section-title {
@@ -22229,23 +22361,23 @@ html.adm-app-shell .adm-chrome-main:has(.adm-balances-excel-page) {
 }
 
 .adm-balances-stat-card--after-commission {
-  background: #f5f3ff;
-  border-color: #ddd6fe;
-  color: #5b21b6;
+  background: var(--commission-bg);
+  border-color: var(--commission-border-soft);
+  color: var(--commission-strong);
 }
 
 .adm-balances-stat-card--after-commission .adm-balances-stat-card__val {
-  color: #6d28d9;
+  color: var(--commission);
 }
 
 .adm-balances-stat-card--commissions {
-  background: #fffbeb;
-  border-color: #fde68a;
-  color: #92400e;
+  background: var(--commission-bg);
+  border-color: var(--commission-border-soft);
+  color: var(--commission-strong);
 }
 
 .adm-balances-stat-card--commissions .adm-balances-stat-card__val {
-  color: #b45309;
+  color: var(--commission);
 }
 
 @media (max-width: 1280px) {
@@ -41897,7 +42029,7 @@ button.adm-cash-kpi:hover {
   --ord-col-ccode: 90px;
   --ord-col-cust: 150px;
   --ord-col-money-deal: 125px;
-  --ord-col-money-total: 120px;
+  --ord-col-money-total: 158px;
   --ord-col-money-balance: 100px;
   --ord-col-completed: 126px;
   --ord-col-status: 120px;

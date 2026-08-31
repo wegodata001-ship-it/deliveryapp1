@@ -2,7 +2,10 @@ import "server-only";
 
 import { Prisma } from "@prisma/client";
 import { ORDER_STATUS_META } from "@/constants/order-status";
-import { calculateCustomerBalances } from "@/lib/customer-balance-calculator";
+import {
+  customerAccountSignedUsd,
+  getCustomerAccountBalancesMany,
+} from "@/lib/customer-account-balances";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { isDebtWithdrawalOrderStatus } from "@/lib/debt-withdrawal-order";
 import type {
@@ -126,13 +129,16 @@ export async function listCustomersModule(
   const ids = slice.map((c) => c.id);
   if (ids.length === 0) return { rows: [], page, limit, hasMore: false };
 
-  const balances = await calculateCustomerBalances(ids, balanceScope);
+  const balances = await getCustomerAccountBalancesMany(ids, balanceScope);
 
   const rows = slice.map((c) => {
     const b = balances.get(c.id);
-    const ordersUsd = b?.totalOrders ?? new Prisma.Decimal(0);
-    const paymentsUsd = b?.totalPayments ?? new Prisma.Decimal(0);
-    const balanceUsd = b?.balance ?? new Prisma.Decimal(0);
+    const ordersUsd = new Prisma.Decimal((b?.totalOrdersUsd ?? 0).toFixed(2));
+    const paymentsUsd = new Prisma.Decimal((b?.totalPaymentsUsd ?? 0).toFixed(2));
+    const balanceUsd = new Prisma.Decimal(customerAccountSignedUsd(b ?? {
+      openDebtUsd: 0,
+      availableCreditUsd: 0,
+    }).toFixed(2));
     return mapCustomerRow(c, { ordersUsd, paymentsUsd, balanceUsd });
   });
 
@@ -166,13 +172,16 @@ export async function listCustomersModuleForExport(opts: {
       select: customerSelect,
     });
     if (!customer) return [];
-    const balances = await calculateCustomerBalances([cid], balanceScope);
+    const balances = await getCustomerAccountBalancesMany([cid], balanceScope);
     const b = balances.get(cid);
     return [
       mapCustomerRow(customer, {
-        ordersUsd: b?.totalOrders ?? new Prisma.Decimal(0),
-        paymentsUsd: b?.totalPayments ?? new Prisma.Decimal(0),
-        balanceUsd: b?.balance ?? new Prisma.Decimal(0),
+        ordersUsd: new Prisma.Decimal((b?.totalOrdersUsd ?? 0).toFixed(2)),
+        paymentsUsd: new Prisma.Decimal((b?.totalPaymentsUsd ?? 0).toFixed(2)),
+        balanceUsd: new Prisma.Decimal(customerAccountSignedUsd(b ?? {
+          openDebtUsd: 0,
+          availableCreditUsd: 0,
+        }).toFixed(2)),
       }),
     ];
   }
@@ -184,7 +193,7 @@ export async function listCustomersModuleForExport(opts: {
   });
   if (!customers.length) return [];
 
-  const balances = await calculateCustomerBalances(
+  const balances = await getCustomerAccountBalancesMany(
     customers.map((c) => c.id),
     balanceScope,
   );
@@ -192,9 +201,12 @@ export async function listCustomersModuleForExport(opts: {
   let rows = customers.map((c) => {
     const b = balances.get(c.id);
     return mapCustomerRow(c, {
-      ordersUsd: b?.totalOrders ?? new Prisma.Decimal(0),
-      paymentsUsd: b?.totalPayments ?? new Prisma.Decimal(0),
-      balanceUsd: b?.balance ?? new Prisma.Decimal(0),
+      ordersUsd: new Prisma.Decimal((b?.totalOrdersUsd ?? 0).toFixed(2)),
+      paymentsUsd: new Prisma.Decimal((b?.totalPaymentsUsd ?? 0).toFixed(2)),
+      balanceUsd: new Prisma.Decimal(customerAccountSignedUsd(b ?? {
+        openDebtUsd: 0,
+        availableCreditUsd: 0,
+      }).toFixed(2)),
     });
   });
 
@@ -260,6 +272,7 @@ export async function listCustomerWorkspaceOrders(
         amountUsd: { not: null },
         countryCode: workCountry,
         ...activePaidPaymentWhere,
+        NOT: { businessType: { in: ["ADJUSTMENT_FEE", "CUSTOMER_CREDIT"] } },
       },
       _sum: { amountUsd: true },
     });

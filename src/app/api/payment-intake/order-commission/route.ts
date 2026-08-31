@@ -27,6 +27,8 @@ export async function GET(req: NextRequest) {
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     select: {
       id: true,
+      orderId: true,
+      paymentId: true,
       amountUsd: true,
       userChoice: true,
       reason: true,
@@ -34,7 +36,7 @@ export async function GET(req: NextRequest) {
       paymentCaptureCode: true,
       notes: true,
       createdBy: { select: { fullName: true } },
-      payment: { select: { paymentCode: true } },
+      payment: { select: { id: true, paymentCode: true } },
     },
   });
 
@@ -48,8 +50,11 @@ export async function GET(req: NextRequest) {
       userChoice: f.userChoice,
       reason: f.reason,
       createdAt: f.createdAt,
+      paymentId: f.paymentId ?? f.payment?.id ?? null,
       paymentCaptureCode: f.paymentCaptureCode,
       paymentCode: f.payment?.paymentCode ?? null,
+      orderId: f.orderId ?? order.id,
+      orderNumber: order.orderNumber,
       notes: f.notes,
       createdByName: f.createdBy?.fullName ?? null,
     })),

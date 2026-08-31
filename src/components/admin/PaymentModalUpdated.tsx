@@ -206,6 +206,8 @@ import {
   cancelCustomerSearch,
   CUSTOMER_SEARCH_DEBOUNCE_MS,
   customerSearchMinQueryLength,
+  pickAutoCustomerHit,
+  resolveCustomerEnterSelection,
   searchCustomerSuggestionsClient,
 } from "@/lib/customer-search-client";
 
@@ -549,6 +551,14 @@ export function PaymentModalUpdated({
   const draftCustomerRef = useRef(draftCustomer);
   draftCustomerRef.current = draftCustomer;
   const custSearchGenRef = useRef(0);
+  const customerHitsRef = useRef<CustomerSearchRow[]>([]);
+  const custActiveIndexRef = useRef(-1);
+  const custHitsQueryRef = useRef<string | null>(null);
+  const custPendingSearchRef = useRef<{ field: CustFieldKey; query: string; gen: number } | null>(null);
+  const pendingEnterSelectRef = useRef(false);
+  const customerCodeEnterBusyRef = useRef(false);
+  const customerCodeEnterGenRef = useRef(0);
+  const selectedCustomerRef = useRef<{ id: string; code: string | null } | null>(null);
 
   const [editingBadge, setEditingBadge] = useState<BadgeEditField>(null);
   const [countryOverride, setCountryOverride] = useState<"AUTO" | OrderCountryCode>("AUTO");
@@ -702,6 +712,11 @@ export function PaymentModalUpdated({
 
   const customerIdRef = useRef<string | null>(null);
   customerIdRef.current = customer?.id ?? null;
+  customerHitsRef.current = customerHits;
+  custActiveIndexRef.current = custActiveIndex;
+  selectedCustomerRef.current = customer
+    ? { id: customer.id, code: customer.customerCode ?? null }
+    : null;
 
   const paymentEntryCacheRef = useRef<Map<string, PaymentEntryResponse>>(new Map());
   const customerHydrateCacheRef = useRef<Map<string, PaymentCustomerHydrateCache>>(new Map());
@@ -2140,11 +2155,27 @@ export function PaymentModalUpdated({
   const pickCustHit = useCallback(
     (row: CustomerSearchRow) => {
       custSearchGenRef.current += 1;
+      pendingEnterSelectRef.current = false;
+      customerCodeEnterBusyRef.current = false;
+      setCustomerCodeEnterBusy(false);
+      custHitsQueryRef.current = null;
       setCustActiveIndex(-1);
       selectCustomerQuick(row, { focusAmount: true });
     },
     [selectCustomerQuick],
   );
+
+  const showCustomerCodeNotFound = useCallback(() => {
+    setCustomerHits([]);
+    setCustDdOpen(false);
+    setCustActiveIndex(-1);
+    setCustSearchNoHits(true);
+    onToast("לא נמצא לקוח עם קוד זה");
+  }, [onToast]);
+  const pickCustHitRef = useRef(pickCustHit);
+  pickCustHitRef.current = pickCustHit;
+  const showCustomerCodeNotFoundRef = useRef(showCustomerCodeNotFound);
+  showCustomerCodeNotFoundRef.current = showCustomerCodeNotFound;
 
   const clearCustomerSelectionFromDraftEdit = useCallback((field: CustFieldKey, value: string) => {
     setCustomer(null);
@@ -2158,6 +2189,7 @@ export function PaymentModalUpdated({
     setOrderEditId(null);
     setLoadErr(null);
     setCustSearchNoHits(false);
+    custHitsQueryRef.current = null;
     setCustomerHits([]);
     setCustActiveIndex(-1);
     setDraftCustomer({
@@ -2168,6 +2200,11 @@ export function PaymentModalUpdated({
 
   const onDraftCustomerChange = useCallback((field: CustFieldKey, value: string) => {
     lastEditedFieldRef.current = field;
+    pendingEnterSelectRef.current = false;
+    if (customerCodeEnterBusyRef.current) {
+      customerCodeEnterBusyRef.current = false;
+      setCustomerCodeEnterBusy(false);
+    }
     const prevValue = draftCustomerRef.current[field];
     if (customer && value !== prevValue) {
       clearCustomerSelectionFromDraftEdit(field, value);
@@ -2192,10 +2229,82 @@ export function PaymentModalUpdated({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional mount-only
   }, []);
 
+  const commitCustomerFromEnter = useCallback(
+    async (field: CustFieldKey) => {
+      const query = draftCustomerRef.current[field].trim();
+      const decision = resolveCustomerEnterSelection({
+        query,
+        hits: customerHitsRef.current,
+        activeIndex: custActiveIndexRef.current,
+        hitsQuery: lastEditedFieldRef.current === field ? custHitsQueryRef.current : null,
+        field: field === "code" ? "code" : "text",
+        alreadySelected: selectedCustomerRef.current,
+      });
+
+      if (decision.action === "pick") {
+        pickCustHit(decision.row);
+        return;
+      }
+
+      if (decision.action === "none") {
+        if (field === "code" && query && !selectedCustomerRef.current) {
+          showCustomerCodeNotFound();
+        }
+        return;
+      }
+
+      if (field !== "code") return;
+
+      const pending = custPendingSearchRef.current;
+      if (pending && pending.field === field && pending.query === query) {
+        pendingEnterSelectRef.current = true;
+        customerCodeEnterBusyRef.current = true;
+        setCustomerCodeEnterBusy(true);
+        return;
+      }
+
+      if (customerCodeEnterBusyRef.current) return;
+      customerCodeEnterBusyRef.current = true;
+      const enterGen = ++customerCodeEnterGenRef.current;
+      setCustomerCodeEnterBusy(true);
+      const searchGen = ++custSearchGenRef.current;
+      try {
+        const rows = await searchCustomerSuggestionsClient(query, {
+          field: "code",
+          workCountry: intakeDocumentWorkCountry,
+        });
+        if (enterGen !== customerCodeEnterGenRef.current) return;
+        if (searchGen !== custSearchGenRef.current) return;
+        if (draftCustomerRef.current.code.trim() !== query) return;
+
+        const chosen = pickAutoCustomerHit(rows, query) ?? rows[0] ?? null;
+        if (chosen) {
+          pickCustHit(chosen);
+          return;
+        }
+        custHitsQueryRef.current = query;
+        showCustomerCodeNotFound();
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        if (enterGen === customerCodeEnterGenRef.current) {
+          setLoadErr("בעיה בחיבור לשרת");
+        }
+      } finally {
+        if (enterGen === customerCodeEnterGenRef.current) {
+          customerCodeEnterBusyRef.current = false;
+          setCustomerCodeEnterBusy(false);
+        }
+      }
+    },
+    [intakeDocumentWorkCountry, pickCustHit, showCustomerCodeNotFound],
+  );
+
   const handleCustomerFieldKeyDown = useCallback((field: CustFieldKey, e: ReactKeyboardEvent<HTMLInputElement>) => {
-    const hitsCount = customerHits.length;
+    const hitsCount = customerHitsRef.current.length;
     if (e.key === "Escape") {
       e.preventDefault();
+      e.stopPropagation();
+      pendingEnterSelectRef.current = false;
       setCustDdOpen(false);
       setCustActiveIndex(-1);
       return;
@@ -2203,29 +2312,33 @@ export function PaymentModalUpdated({
     if (e.key === "ArrowDown") {
       if (hitsCount === 0) return;
       e.preventDefault();
+      e.stopPropagation();
       setCustDdOpen(field !== "phone");
-      setCustActiveIndex((prev) => Math.min(prev + 1, hitsCount - 1));
+      setCustActiveIndex((prev) => {
+        const next = prev < 0 ? 0 : Math.min(prev + 1, hitsCount - 1);
+        custActiveIndexRef.current = next;
+        return next;
+      });
       return;
     }
     if (e.key === "ArrowUp") {
       if (hitsCount === 0) return;
       e.preventDefault();
+      e.stopPropagation();
       setCustDdOpen(field !== "phone");
-      setCustActiveIndex((prev) => (prev <= 0 ? -1 : prev - 1));
+      setCustActiveIndex((prev) => {
+        const next = prev <= 0 ? 0 : prev - 1;
+        custActiveIndexRef.current = next;
+        return next;
+      });
       return;
     }
     if (e.key === "Enter") {
-      if (custDdOpen && custActiveIndex >= 0 && customerHits[custActiveIndex]) {
-        e.preventDefault();
-        pickCustHit(customerHits[custActiveIndex]!);
-        return;
-      }
       e.preventDefault();
-      if (field === "code" && draftCustomerRef.current.code.trim() && !customerIdRef.current) {
-        onToast("יש לבחור לקוח מהרשימה");
-      }
+      e.stopPropagation();
+      void commitCustomerFromEnter(field);
     }
-  }, [custActiveIndex, custDdOpen, customerHits, onToast, pickCustHit]);
+  }, [commitCustomerFromEnter]);
 
   function syncBaselineSoon() {
     window.setTimeout(() => {
@@ -2241,6 +2354,10 @@ export function PaymentModalUpdated({
     setCustomerPayments([]);
     setOrders([]);
     setDraftCustomer({ ...EMPTY_CUSTOMER_DRAFT });
+    pendingEnterSelectRef.current = false;
+    customerCodeEnterBusyRef.current = false;
+    setCustomerCodeEnterBusy(false);
+    custHitsQueryRef.current = null;
     setCustomerHits([]);
     setCustDdOpen(false);
     setIncludedIds(null);
@@ -2448,6 +2565,9 @@ export function PaymentModalUpdated({
     let cancelled = false;
     const gen = ++custSearchGenRef.current;
     const abort = new AbortController();
+    const pendingField = lastEditedFieldRef.current;
+    const pendingQuery = draftCustomerRef.current[pendingField].trim();
+    custPendingSearchRef.current = { field: pendingField, query: pendingQuery, gen };
 
     const t = window.setTimeout(() => {
       void (async () => {
@@ -2461,11 +2581,17 @@ export function PaymentModalUpdated({
 
         if (!q) {
           if (!cancelled && gen === custSearchGenRef.current) {
+            custHitsQueryRef.current = null;
             setCustomerHits([]);
             setCustDdOpen(false);
             setCustSearchNoHits(false);
             setCustSearching(false);
             setCustActiveIndex(-1);
+            if (pendingEnterSelectRef.current) {
+              pendingEnterSelectRef.current = false;
+              customerCodeEnterBusyRef.current = false;
+              setCustomerCodeEnterBusy(false);
+            }
             if (allEmpty) {
               setCustomer(null);
               setCustomerPayments([]);
@@ -2481,11 +2607,18 @@ export function PaymentModalUpdated({
           return;
         }
         if (!customerSearchMinQueryLength(q, field === "code")) {
+          custHitsQueryRef.current = q;
           setCustomerHits([]);
           setCustDdOpen(false);
           setCustSearchNoHits(false);
           setCustSearching(false);
           setCustActiveIndex(-1);
+            if (pendingEnterSelectRef.current && field === "code") {
+            pendingEnterSelectRef.current = false;
+            customerCodeEnterBusyRef.current = false;
+            setCustomerCodeEnterBusy(false);
+            showCustomerCodeNotFoundRef.current();
+          }
           return;
         }
 
@@ -2504,21 +2637,55 @@ export function PaymentModalUpdated({
           const still = draftCustomerRef.current[lastEditedFieldRef.current].trim() === q;
           if (!still) return;
 
+          custHitsQueryRef.current = q;
+          customerHitsRef.current = rows;
+
+          if (pendingEnterSelectRef.current && field === lastEditedFieldRef.current) {
+            pendingEnterSelectRef.current = false;
+            customerCodeEnterBusyRef.current = false;
+            setCustomerCodeEnterBusy(false);
+            const chosen = pickAutoCustomerHit(rows, q) ?? rows[0] ?? null;
+            if (chosen) {
+              pickCustHitRef.current(chosen);
+              return;
+            }
+            if (field === "code") {
+              showCustomerCodeNotFoundRef.current();
+              return;
+            }
+            setCustSearchNoHits(true);
+            setCustomerHits([]);
+            setCustDdOpen(false);
+            setCustActiveIndex(-1);
+            return;
+          }
+
           setCustSearchNoHits(rows.length === 0);
           setCustomerHits(rows);
-          setCustActiveIndex(-1);
+          const nextActive = rows.length > 0 ? 0 : -1;
+          custActiveIndexRef.current = nextActive;
+          setCustActiveIndex(nextActive);
           setCustDdOpen(rows.length > 0 && field !== "phone");
         } catch (e) {
           if (e instanceof DOMException && e.name === "AbortError") return;
           if (!cancelled && gen === custSearchGenRef.current) {
+            custHitsQueryRef.current = null;
             setCustomerHits([]);
             setCustSearchNoHits(false);
             setLoadErr("בעיה בחיבור לשרת");
+            if (pendingEnterSelectRef.current) {
+              pendingEnterSelectRef.current = false;
+              customerCodeEnterBusyRef.current = false;
+              setCustomerCodeEnterBusy(false);
+            }
           }
         } finally {
           if (!cancelled && gen === custSearchGenRef.current) {
             setCustSearching(false);
             setCustSearchField(null);
+            if (custPendingSearchRef.current?.gen === gen) {
+              custPendingSearchRef.current = null;
+            }
           }
         }
       })();
@@ -2528,6 +2695,9 @@ export function PaymentModalUpdated({
       cancelled = true;
       abort.abort();
       window.clearTimeout(t);
+      if (custPendingSearchRef.current?.gen === gen) {
+        custPendingSearchRef.current = null;
+      }
     };
   }, [searchTick, intakeDocumentWorkCountry]);
 
@@ -3817,9 +3987,11 @@ export function PaymentModalUpdated({
                     ))}
                   </ul>
                 ) : null}
-                {custSearchNoHits && !loadingCustomer && !custSearching ? (
+                {custSearchNoHits && !loadingCustomer && !custSearching && !customerCodeEnterBusy ? (
                   <p className="payment-modal-cust-notfound" role="status">
-                    לא נמצאו לקוחות מתאימים
+                    {lastEditedFieldRef.current === "code"
+                      ? "לא נמצא לקוח עם קוד זה"
+                      : "לא נמצאו לקוחות מתאימים"}
                   </p>
                 ) : null}
                 {customer ? (
@@ -4495,7 +4667,7 @@ export function PaymentModalUpdated({
                                   <span dir="ltr">{fmtUsdDisplay(displayCommissionUsd)}</span>
                                 )}
                                 {row.commissionHasAdjustments && !isCommissionResetPreview ? (
-                                  <span className="pm-commission-updated-badge">עודכן</span>
+                                  <span className="pm-commission-updated-badge">שונתה</span>
                                 ) : null}
                               </button>
                               {customer && viewerIsAdmin && orderRowLedgerBalance(row) > 0.01 && !isCommissionResetPreview ? (
@@ -5141,6 +5313,10 @@ export function PaymentModalUpdated({
             currentCommissionUsd: current,
           });
         }}
+        onOpenPayment={(paymentId) => {
+          setCommissionPopoverOpen(false);
+          openWindow({ type: "paymentsUpdated", props: { paymentId } });
+        }}
       />
       <OrderCommissionDetailModal
         open={orderCommissionDetail != null}
@@ -5156,6 +5332,10 @@ export function PaymentModalUpdated({
             : null
         }
         onClose={() => setOrderCommissionDetail(null)}
+        onOpenPayment={(paymentId) => {
+          setOrderCommissionDetail(null);
+          openWindow({ type: "paymentsUpdated", props: { paymentId } });
+        }}
       />
       <CreditBalancePopover
         open={creditPopoverOpen}

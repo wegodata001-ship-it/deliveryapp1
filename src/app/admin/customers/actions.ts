@@ -26,6 +26,7 @@ import { isDebtWithdrawalOrderStatus } from "@/lib/debt-withdrawal-order";
 import { paymentRecordUsdEquivalent } from "@/lib/payment-usd-equivalent";
 import type { CustomersPdfScope } from "@/lib/customers-module-types";
 import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
+import { indexOrderCommissionBreakdowns } from "@/lib/order-commission-ssot";
 
 function canViewCustomersModule(me: Awaited<ReturnType<typeof requireAuth>>): boolean {
   return userHasAnyPermission(me, ["view_customers", "view_customer_card", "view_reports"]);
@@ -152,16 +153,36 @@ export async function getCustomerProfileAction(
 
   const orderIds = orders.map((o) => o.id);
   const paidByOrder = new Map<string, Prisma.Decimal>();
-  if (orderIds.length > 0) {
-    const paySums = await prisma.payment.groupBy({
-      by: ["orderId"],
-      where: { orderId: { in: orderIds }, amountUsd: { not: null }, ...activePaidPaymentWhere },
-      _sum: { amountUsd: true },
-    });
-    for (const s of paySums) {
-      if (s.orderId) paidByOrder.set(s.orderId, s._sum.amountUsd ?? new Prisma.Decimal(0));
-    }
+  const [paySums, commissionFees] =
+    orderIds.length > 0
+      ? await Promise.all([
+          prisma.payment.groupBy({
+            by: ["orderId"],
+            where: {
+              orderId: { in: orderIds },
+              amountUsd: { not: null },
+              ...activePaidPaymentWhere,
+              NOT: { businessType: { in: ["ADJUSTMENT_FEE", "CUSTOMER_CREDIT"] } },
+            },
+            _sum: { amountUsd: true },
+          }),
+          prisma.paymentAdjustmentFee.findMany({
+            where: { orderId: { in: orderIds }, status: { not: "CANCELLED" } },
+            select: { orderId: true, amountUsd: true, userChoice: true },
+          }),
+        ])
+      : [[], []];
+  for (const s of paySums) {
+    if (s.orderId) paidByOrder.set(s.orderId, s._sum.amountUsd ?? new Prisma.Decimal(0));
   }
+  const commissionByOrder = indexOrderCommissionBreakdowns(
+    orders.map((o) => ({ id: o.id, commissionUsd: Number(o.commissionUsd ?? 0) })),
+    commissionFees.map((f) => ({
+      orderId: f.orderId,
+      amountUsd: Number(f.amountUsd ?? 0),
+      userChoice: f.userChoice,
+    })),
+  );
 
   let ordersTotal = new Prisma.Decimal(0);
   let dealsTotal = new Prisma.Decimal(0);
@@ -186,7 +207,9 @@ export async function getCustomerProfileAction(
       orderNumber: o.orderNumber?.trim() || "—",
       dateYmd: o.orderDate ? formatLocalYmd(new Date(o.orderDate)) : "—",
       amountUsd: deal.toDecimalPlaces(2, 4).toFixed(2),
-      commissionUsd: com.toDecimalPlaces(2, 4).toFixed(2),
+      commissionUsd: (commissionByOrder.get(o.id)?.currentCommissionUsd ?? Number(com)).toFixed(2),
+      commissionBaseUsd: (commissionByOrder.get(o.id)?.baseCommissionUsd ?? Number(com)).toFixed(2),
+      commissionHasAdjustments: commissionByOrder.get(o.id)?.hasAdjustments === true,
       balanceUsd: remaining.toFixed(2),
       status: o.status,
       statusLabel: meta?.label ?? o.status,
@@ -194,6 +217,44 @@ export async function getCustomerProfileAction(
   });
 
   let paymentsTotal = new Prisma.Decimal(0);
+  const paymentIds = payments.map((p) => p.id);
+  const paymentCodes = payments
+    .map((p) => p.paymentCode?.trim())
+    .filter((code): code is string => Boolean(code));
+  const paymentCommissionFees =
+    paymentIds.length > 0
+      ? await prisma.paymentAdjustmentFee.findMany({
+          where: {
+            customerId: id,
+            status: { not: "CANCELLED" },
+            OR: [
+              { paymentId: { in: paymentIds } },
+              ...(paymentCodes.length > 0 ? [{ paymentCaptureCode: { in: paymentCodes } }] : []),
+            ],
+          },
+          select: { paymentId: true, paymentCaptureCode: true, amountUsd: true, orderId: true },
+        })
+      : [];
+  const commissionToFeeByPayment = new Map<string, { amountUsd: number; orderId: string | null }>();
+  for (const fee of paymentCommissionFees) {
+    const amt = Number(fee.amountUsd ?? 0);
+    const row = { amountUsd: amt, orderId: fee.orderId };
+    if (fee.paymentId) {
+      const prev = commissionToFeeByPayment.get(fee.paymentId);
+      commissionToFeeByPayment.set(fee.paymentId, {
+        amountUsd: (prev?.amountUsd ?? 0) + amt,
+        orderId: fee.orderId ?? prev?.orderId ?? null,
+      });
+    }
+    const code = fee.paymentCaptureCode?.trim();
+    if (code) {
+      const prev = commissionToFeeByPayment.get(`code:${code}`);
+      commissionToFeeByPayment.set(`code:${code}`, {
+        amountUsd: (prev?.amountUsd ?? 0) + amt,
+        orderId: fee.orderId ?? prev?.orderId ?? null,
+      });
+    }
+  }
   const paymentRows = payments.map((p) => {
     const usd = paymentRecordUsdEquivalent(p);
     paymentsTotal = paymentsTotal.add(usd);
@@ -202,9 +263,15 @@ export async function getCustomerProfileAction(
     const currencyLabel = hasUsd && hasIls ? "USD+ILS" : hasIls ? "ILS" : "USD";
     const method = p.paymentMethod;
     const note = (p.notes ?? p.usdNote ?? p.ilsNote ?? "").trim() || "—";
+    const code = p.paymentCode?.trim() || "";
+    const fee =
+      commissionToFeeByPayment.get(p.id) ??
+      (code ? commissionToFeeByPayment.get(`code:${code}`) : undefined);
+    const feeUsd = fee?.amountUsd ?? 0;
+    const feeOrder = fee?.orderId ? orders.find((o) => o.id === fee.orderId) : null;
     return {
       id: p.id,
-      paymentCode: p.paymentCode?.trim() || "—",
+      paymentCode: code || "—",
       dateYmd: p.paymentDate ? formatLocalYmd(new Date(p.paymentDate)) : "—",
       amountUsd: hasUsd ? p.amountUsd!.toDecimalPlaces(2, 4).toFixed(2) : "0.00",
       amountIls: hasIls ? p.amountIls!.toDecimalPlaces(2, 4).toFixed(2) : "0.00",
@@ -212,11 +279,18 @@ export async function getCustomerProfileAction(
       paymentMethod: method ?? null,
       methodLabel: method ? PAYMENT_METHOD_LABELS[method] ?? method : "—",
       note,
+      commissionToFeeUsd: Math.abs(feeUsd) > 0.01 ? feeUsd.toFixed(2) : null,
+      commissionFeeOrderId: fee?.orderId ?? null,
+      commissionFeeOrderNumber: feeOrder?.orderNumber?.trim() || null,
     };
   });
 
-  const { getCustomerInternalBalanceUsd } = await import("@/lib/customer-open-debt");
-  const balance = (await getCustomerInternalBalanceUsd(id)).toDecimalPlaces(2, 4);
+  const { getCustomerAccountBalances, customerAccountSignedUsd } = await import(
+    "@/lib/customer-account-balances"
+  );
+  const accounts = await getCustomerAccountBalances(id);
+  const signed = customerAccountSignedUsd(accounts);
+  const balance = new Prisma.Decimal((-signed).toFixed(2));
 
   return {
     customer: {
@@ -236,6 +310,9 @@ export async function getCustomerProfileAction(
       ordersTotalUsd: ordersTotal.toFixed(2),
       paymentsTotalUsd: paymentsTotal.toFixed(2),
       balanceUsd: balance.toFixed(2),
+      openDebtUsd: accounts.openDebtUsd.toFixed(2),
+      availableCreditUsd: accounts.availableCreditUsd.toFixed(2),
+      commissionBalanceUsd: accounts.commissionBalanceUsd.toFixed(2),
       dealsTotalUsd: dealsTotal.toFixed(2),
       commissionTotalUsd: commissionTotal.toFixed(2),
     },

@@ -55,15 +55,18 @@ describe("planPaymentIntentAdjustments", () => {
     });
     assert.equal(plan.ok, true);
     if (!plan.ok) return;
-    assert.equal(plan.totalPayUsd, 6666.67);
+    assert.equal(plan.totalPayUsd, 5649.72);
+    assert.equal(plan.intents[0]!.grossIls, 20000);
+    assert.equal(plan.intents[0]!.vatIls, 3050.85);
+    assert.equal(plan.intents[0]!.netIls, 16949.15);
     assert.equal(plan.moves.length, 1);
     assert.equal(plan.moves[0]!.fromMethod, "CASH");
     assert.equal(plan.moves[0]!.toMethod, "BANK_TRANSFER");
-    assert.equal(plan.moves[0]!.amountUsd, 6666.67);
+    assert.equal(plan.moves[0]!.amountUsd, 5649.72);
     assert.equal(plan.orderChanges.length, 3);
     assert.equal(plan.orderChanges[0]!.moveUsd, 2000);
     assert.equal(plan.orderChanges[1]!.moveUsd, 3000);
-    assert.equal(plan.orderChanges[2]!.moveUsd, 1666.67);
+    assert.equal(plan.orderChanges[2]!.moveUsd, 649.72);
     assert.equal(plan.orderChanges[2]!.partial, true);
   });
 
@@ -83,8 +86,8 @@ describe("planPaymentIntentAdjustments", () => {
     });
     assert.equal(plan.ok, true);
     if (!plan.ok) return;
-    assert.equal(plan.totalPayUsd, 5000);
-    assert.equal(plan.moves[0]!.amountUsd, 3000);
+    assert.equal(plan.totalPayUsd, 4542.37);
+    assert.equal(plan.moves[0]!.amountUsd, 2542.37);
     assert.equal(plan.moves[0]!.toMethod, "BANK_TRANSFER");
   });
 

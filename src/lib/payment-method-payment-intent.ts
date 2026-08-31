@@ -8,6 +8,7 @@ import { buildAdjustedBreakdownForOrder } from "@/lib/payment-method-auto-adjust
 import type { PaymentBalanceCurrency } from "@/lib/payment-method-captured-balances";
 import type { PaymentMethodKpiKey } from "@/lib/payment-intake-customer-kpi";
 import { PAYMENT_METHOD_KPI_META } from "@/lib/payment-intake-customer-kpi";
+import { calculatePaymentIntentDeduction } from "@/lib/payment-intent-vat";
 
 const EPS = 0.02;
 
@@ -15,6 +16,16 @@ export type PaymentIntentLine = {
   method: string;
   currency: PaymentBalanceCurrency;
   amountNative: number;
+};
+
+export type CalculatedPaymentIntentLine = PaymentIntentLine & {
+  amountUsd: number;
+  /** ILS gross entered by the user; null for USD. */
+  grossIls: number | null;
+  /** Included 18% VAT removed from gross ILS; zero for USD. */
+  vatIls: number;
+  /** ILS before VAT; null for USD. */
+  netIls: number | null;
 };
 
 export type PaymentIntentMove = {
@@ -46,7 +57,7 @@ export type PaymentIntentOrderChange = {
 export type PaymentIntentPlan =
   | {
       ok: true;
-      intents: Array<PaymentIntentLine & { amountUsd: number }>;
+      intents: CalculatedPaymentIntentLine[];
       totalPayUsd: number;
       openDebtUsd: number;
       moves: PaymentIntentMove[];
@@ -77,13 +88,33 @@ function intentToUsd(
   amountNative: number,
   currency: PaymentBalanceCurrency,
   rate: number | null,
-): { ok: true; amountUsd: number } | { ok: false; error: string } {
-  if (!(amountNative > EPS)) return { ok: true, amountUsd: 0 };
-  if (currency === "USD") return { ok: true, amountUsd: roundMoney2(amountNative) };
-  if (!rate || !(rate > 0)) {
+):
+  | {
+      ok: true;
+      amountUsd: number;
+      grossIls: number | null;
+      vatIls: number;
+      netIls: number | null;
+    }
+  | { ok: false; error: string } {
+  if (!(amountNative > EPS)) {
+    return { ok: true, amountUsd: 0, grossIls: null, vatIls: 0, netIls: null };
+  }
+  const deduction = calculatePaymentIntentDeduction({
+    amountNative,
+    currency,
+    exchangeRate: rate,
+  });
+  if (deduction.amountUsd == null) {
     return { ok: false, error: "נדרש שער דולר להזנת סכום בשקלים" };
   }
-  return { ok: true, amountUsd: roundMoney2(amountNative / rate) };
+  return {
+    ok: true,
+    amountUsd: deduction.amountUsd,
+    grossIls: currency === "ILS" ? deduction.grossNative : null,
+    vatIls: deduction.vatIls,
+    netIls: currency === "ILS" ? deduction.netNative : null,
+  };
 }
 
 function toEditableBreakdownLines(rows: OrderBreakdownMethodRow[]): OrderBreakdownLineInput[] {
@@ -134,7 +165,7 @@ export function planPaymentIntentAdjustments(params: {
 
   const openDebtUsd = roundMoney2(sortedOrders.reduce((sum, order) => sum + orderRemainingUsd(order), 0));
 
-  const normalized: Array<PaymentIntentLine & { amountUsd: number }> = [];
+  const normalized: CalculatedPaymentIntentLine[] = [];
   for (const intent of params.intents) {
     const amountNative = roundMoney2(Math.max(0, Number(intent.amountNative) || 0));
     if (!(amountNative > EPS)) continue;
@@ -148,6 +179,9 @@ export function planPaymentIntentAdjustments(params: {
       currency: intent.currency,
       amountNative,
       amountUsd: usd.amountUsd,
+      grossIls: usd.grossIls,
+      vatIls: usd.vatIls,
+      netIls: usd.netIls,
     });
   }
 

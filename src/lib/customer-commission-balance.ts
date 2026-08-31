@@ -36,25 +36,45 @@ export { computeCommissionResetPreviewNumbers } from "@/lib/customer-commission-
 export async function getCustomerCommissionBalanceUsd(customerId: string): Promise<number> {
   const cid = customerId.trim();
   if (!cid) return 0;
+  const map = await getCustomerCommissionBalancesUsdMany([cid]);
+  return map.get(cid) ?? 0;
+}
 
-  const [orderAgg, feeAgg] = await Promise.all([
-    prisma.order.aggregate({
-      where: { customerId: cid, deletedAt: null },
+export async function getCustomerCommissionBalancesUsdMany(
+  customerIds: string[],
+): Promise<Map<string, number>> {
+  const ids = Array.from(new Set(customerIds.map((id) => id.trim()).filter(Boolean)));
+  const out = new Map<string, number>();
+  for (const id of ids) out.set(id, 0);
+  if (ids.length === 0) return out;
+
+  const [orderAggs, feeRows] = await Promise.all([
+    prisma.order.groupBy({
+      by: ["customerId"],
+      where: { customerId: { in: ids }, deletedAt: null },
       _sum: { commissionUsd: true },
     }),
     prisma.paymentAdjustmentFee.findMany({
-      where: { customerId: cid, status: { not: "CANCELLED" } },
-      select: { amountUsd: true, userChoice: true },
+      where: { customerId: { in: ids }, status: { not: "CANCELLED" } },
+      select: { customerId: true, amountUsd: true, userChoice: true },
     }),
   ]);
 
-  const orderCommission = Number(orderAgg._sum.commissionUsd ?? 0);
-  let feeSum = 0;
-  for (const row of feeAgg) {
-    if (isLegacyCommissionOrderMutationFee(row.userChoice)) continue;
-    feeSum += Number(row.amountUsd ?? 0);
+  for (const row of orderAggs) {
+    const cid = row.customerId?.trim();
+    if (!cid) continue;
+    out.set(cid, Number(row._sum.commissionUsd ?? 0));
   }
-  return roundOrderMoney2(orderCommission + feeSum);
+  for (const row of feeRows) {
+    if (isLegacyCommissionOrderMutationFee(row.userChoice)) continue;
+    const cid = row.customerId?.trim();
+    if (!cid) continue;
+    out.set(cid, (out.get(cid) ?? 0) + Number(row.amountUsd ?? 0));
+  }
+  for (const [id, value] of out) {
+    out.set(id, roundOrderMoney2(value));
+  }
+  return out;
 }
 
 export async function loadCustomerOpenDebtOrdersFifo(
@@ -82,9 +102,15 @@ export async function loadCustomerOpenDebtOrdersFifo(
   if (orders.length === 0) return [];
 
   const orderIds = orders.map((o) => o.id);
+  const { customerDebtPaymentsWhere } = await import("@/lib/payment-adjustment-fee");
   const paidAgg = await prisma.payment.groupBy({
     by: ["orderId"],
-    where: { orderId: { in: orderIds }, amountUsd: { not: null }, ...activePaidPaymentWhere },
+    where: {
+      orderId: { in: orderIds },
+      amountUsd: { not: null },
+      ...activePaidPaymentWhere,
+      ...customerDebtPaymentsWhere,
+    },
     _sum: { amountUsd: true },
   });
   const paidByOrder = new Map<string, number>();

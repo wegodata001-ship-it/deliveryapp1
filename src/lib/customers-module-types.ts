@@ -38,6 +38,9 @@ export type CustomerProfileKpis = {
   ordersTotalUsd: string;
   paymentsTotalUsd: string;
   balanceUsd: string;
+  openDebtUsd?: string;
+  availableCreditUsd?: string;
+  commissionBalanceUsd?: string;
   dealsTotalUsd: string;
   commissionTotalUsd: string;
 };
@@ -48,6 +51,8 @@ export type CustomerProfileOrderRow = {
   dateYmd: string;
   amountUsd: string;
   commissionUsd: string;
+  commissionBaseUsd?: string;
+  commissionHasAdjustments?: boolean;
   /** יתרת הזמנה (total − שולם) */
   balanceUsd: string;
   status: string;
@@ -65,6 +70,9 @@ export type CustomerProfilePaymentRow = {
   paymentMethod: string | null;
   methodLabel: string;
   note: string;
+  commissionToFeeUsd?: string | null;
+  commissionFeeOrderId?: string | null;
+  commissionFeeOrderNumber?: string | null;
 };
 
 export type CustomerProfilePayload = {

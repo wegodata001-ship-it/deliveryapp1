@@ -65,21 +65,36 @@ export async function getCustomerCreditBalanceUsd(
 ): Promise<number> {
   const cid = customerId.trim();
   if (!cid) return 0;
+  const map = await getCustomerCreditBalancesUsdMany([cid], scope);
+  return map.get(cid) ?? 0;
+}
+
+export async function getCustomerCreditBalancesUsdMany(
+  customerIds: string[],
+  scope: CustomerBalanceScope = {},
+): Promise<Map<string, number>> {
+  const ids = Array.from(new Set(customerIds.map((id) => id.trim()).filter(Boolean)));
+  const out = new Map<string, number>();
+  for (const id of ids) out.set(id, 0);
+  if (ids.length === 0) return out;
+
   const rows = await findActiveCustomerPayments({
     where: {
-      customerId: cid,
+      customerId: { in: ids },
       orderId: null,
       businessType: "CUSTOMER_CREDIT",
       ...workCountryWhere(scope),
     },
-    select: { amountUsd: true },
+    select: { customerId: true, amountUsd: true },
   });
-  let total = 0;
   for (const row of rows) {
+    const cid = row.customerId?.trim();
+    if (!cid) continue;
     const n = Number(row.amountUsd ?? 0);
-    if (Number.isFinite(n) && n > 0) total += n;
+    if (!Number.isFinite(n) || n <= 0) continue;
+    out.set(cid, roundMoney2((out.get(cid) ?? 0) + n));
   }
-  return roundMoney2(total);
+  return out;
 }
 
 function parseSourcePaymentCode(notes: string | null): string | null {

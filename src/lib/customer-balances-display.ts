@@ -24,6 +24,10 @@ export function rowOpenBalanceUsd(row: CustomerBalanceRow): number {
   return Math.max(0, parseMoneyStringOrZero(row.totalBalanceUSD));
 }
 
+export function rowAvailableCreditUsd(row: CustomerBalanceRow): number {
+  return Math.max(0, parseMoneyStringOrZero(row.availableCreditUSD ?? "0"));
+}
+
 export function customerHasOpenBalance(row: CustomerBalanceRow): boolean {
   return rowOpenBalanceUsd(row) > OPEN_BALANCE_EPS;
 }

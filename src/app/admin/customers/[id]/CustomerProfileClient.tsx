@@ -4,9 +4,13 @@ import { useState } from "react";
 import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { CustomerDocumentsPanel } from "@/components/admin/customers/CustomerDocumentsPanel";
+import { CommissionAmountButton } from "@/components/admin/CommissionAmountButton";
+import { CommissionBalancePopover } from "@/components/admin/CommissionBalancePopover";
+import { OrderCommissionDetailModal } from "@/components/admin/OrderCommissionDetailModal";
 import type { CustomerProfilePayload } from "@/lib/customers-module-types";
 import { formatFromInternalSigned } from "@/lib/customer-balance";
 import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
+import { formatCommissionSignedCompact } from "@/lib/commission-lineage-view";
 import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
 
 type TabId = "orders" | "payments" | "docs";
@@ -30,6 +34,14 @@ export function CustomerProfileClient({ profile }: Props) {
   const workCountry = workCountryFromOrderSourceCountry(globalCountry);
   const [tab, setTab] = useState<TabId>("orders");
   const [toast, setToast] = useState<string | null>(null);
+  const [commissionPopoverOpen, setCommissionPopoverOpen] = useState(false);
+  const [orderCommissionDetail, setOrderCommissionDetail] = useState<{
+    orderId: string;
+    orderNumber: string | null;
+    baseCommissionUsd: number;
+    adjustmentsUsd: number;
+    currentCommissionUsd: number;
+  } | null>(null);
 
   const { customer, kpis, orders, payments } = profile;
   const balanceView = formatFromInternalSigned(parseMoneyStringOrZero(kpis.balanceUsd), "USD");
@@ -50,9 +62,24 @@ export function CustomerProfileClient({ profile }: Props) {
         <span className="adm-cust-module-strip__item">
           <span className="adm-cust-module-strip__k">יתרה</span>
           <strong dir="ltr" className={balanceView.kind === "debt" ? "adm-cust-strip--debt" : balanceView.kind === "credit" ? "adm-cust-strip--credit" : ""}>
-            {balanceView.amountFormatted}
+            {balanceView.primaryText}
           </strong>
         </span>
+        {kpis.availableCreditUsd && parseMoneyStringOrZero(kpis.availableCreditUsd) > 0.01 ? (
+          <span className="adm-cust-module-strip__item">
+            <span className="adm-cust-module-strip__k">יתרת זכות</span>
+            <strong dir="ltr">{fmtUsd(kpis.availableCreditUsd)}</strong>
+          </span>
+        ) : null}
+        {kpis.commissionBalanceUsd != null ? (
+          <span className="adm-cust-module-strip__item">
+            <span className="adm-cust-module-strip__k">יתרת עמלות</span>
+            <CommissionAmountButton
+              amountUsd={parseMoneyStringOrZero(kpis.commissionBalanceUsd)}
+              onClick={() => setCommissionPopoverOpen(true)}
+            />
+          </span>
+        ) : null}
         <span className="adm-cust-module-strip__item">
           <span className="adm-cust-module-strip__k">סה״כ הזמנות</span>
           <strong dir="ltr">{fmtUsd(kpis.ordersTotalUsd)}</strong>
@@ -122,7 +149,24 @@ export function CustomerProfileClient({ profile }: Props) {
                         <td dir="ltr">{o.orderNumber}</td>
                         <td dir="ltr">{o.dateYmd}</td>
                         <td dir="ltr">{fmtUsd(o.amountUsd)}</td>
-                        <td dir="ltr">{fmtUsd(o.commissionUsd)}</td>
+                        <td dir="ltr" onClick={(e) => e.stopPropagation()}>
+                          <CommissionAmountButton
+                            amountUsd={parseMoneyStringOrZero(o.commissionUsd)}
+                            changed={o.commissionHasAdjustments === true}
+                            showLabel={o.commissionHasAdjustments === true}
+                            onClick={() => {
+                              const current = parseMoneyStringOrZero(o.commissionUsd);
+                              const base = parseMoneyStringOrZero(o.commissionBaseUsd ?? o.commissionUsd);
+                              setOrderCommissionDetail({
+                                orderId: o.id,
+                                orderNumber: o.orderNumber,
+                                baseCommissionUsd: base,
+                                adjustmentsUsd: Math.round((current - base) * 100) / 100,
+                                currentCommissionUsd: current,
+                              });
+                            }}
+                          />
+                        </td>
                         <td dir="ltr" className={orderBalanceClass(o.balanceUsd)}>
                           {fmtUsd(o.balanceUsd)}
                         </td>
@@ -173,7 +217,35 @@ export function CustomerProfileClient({ profile }: Props) {
                         <td dir="ltr">{p.dateYmd}</td>
                         <td dir="ltr">{fmtUsd(p.amountUsd)}</td>
                         <td>{p.methodLabel}</td>
-                        <td>{p.note}</td>
+                        <td>
+                          {p.commissionToFeeUsd ? (
+                            <button
+                              type="button"
+                              className="commission-lineage-link"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const order =
+                                  orders.find((o) => o.id === p.commissionFeeOrderId) ??
+                                  orders.find((o) => o.commissionHasAdjustments);
+                                if (order) {
+                                  const current = parseMoneyStringOrZero(order.commissionUsd);
+                                  const base = parseMoneyStringOrZero(order.commissionBaseUsd ?? order.commissionUsd);
+                                  setOrderCommissionDetail({
+                                    orderId: order.id,
+                                    orderNumber: order.orderNumber,
+                                    baseCommissionUsd: base,
+                                    adjustmentsUsd: Math.round((current - base) * 100) / 100,
+                                    currentCommissionUsd: current,
+                                  });
+                                }
+                              }}
+                            >
+                              הוספה לעמלות: {formatCommissionSignedCompact(parseMoneyStringOrZero(p.commissionToFeeUsd))}
+                            </button>
+                          ) : (
+                            p.note
+                          )}
+                        </td>
                       </tr>
                     ))
                   )}
@@ -210,6 +282,51 @@ export function CustomerProfileClient({ profile }: Props) {
           {toast}
         </div>
       ) : null}
+      <CommissionBalancePopover
+        open={commissionPopoverOpen}
+        customerId={customer.id}
+        customerLabel={`${customer.name} #${customer.code}`}
+        previewBalanceUsd={
+          kpis.commissionBalanceUsd != null ? parseMoneyStringOrZero(kpis.commissionBalanceUsd) : null
+        }
+        onClose={() => setCommissionPopoverOpen(false)}
+        onOpenOrderDetail={(orderId, orderNumber) => {
+          setCommissionPopoverOpen(false);
+          const order = orders.find((o) => o.id === orderId);
+          const current = parseMoneyStringOrZero(order?.commissionUsd ?? "0");
+          const base = parseMoneyStringOrZero(order?.commissionBaseUsd ?? order?.commissionUsd ?? "0");
+          setOrderCommissionDetail({
+            orderId,
+            orderNumber,
+            baseCommissionUsd: base,
+            adjustmentsUsd: Math.round((current - base) * 100) / 100,
+            currentCommissionUsd: current,
+          });
+        }}
+        onOpenPayment={(paymentId) => {
+          setCommissionPopoverOpen(false);
+          openWindow({ type: "paymentsUpdated", props: { paymentId } });
+        }}
+      />
+      <OrderCommissionDetailModal
+        open={orderCommissionDetail != null}
+        orderId={orderCommissionDetail?.orderId ?? null}
+        orderNumber={orderCommissionDetail?.orderNumber}
+        preview={
+          orderCommissionDetail
+            ? {
+                baseCommissionUsd: orderCommissionDetail.baseCommissionUsd,
+                adjustmentsUsd: orderCommissionDetail.adjustmentsUsd,
+                currentCommissionUsd: orderCommissionDetail.currentCommissionUsd,
+              }
+            : null
+        }
+        onClose={() => setOrderCommissionDetail(null)}
+        onOpenPayment={(paymentId) => {
+          setOrderCommissionDetail(null);
+          openWindow({ type: "paymentsUpdated", props: { paymentId } });
+        }}
+      />
     </div>
   );
 }

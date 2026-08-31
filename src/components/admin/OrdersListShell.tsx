@@ -30,7 +30,10 @@ import { openPdfPreview } from "@/lib/pdf-preview";
 import { OrdersListExportSplitButton } from "@/components/admin/OrdersListExportSplitButton";
 import type { OrdersListExportPreset } from "@/lib/orders-list-export-presets";
 import { OrderEditLockGateModal, type OrderEditLockGatePayload } from "@/components/admin/OrderEditLockGateModal";
+import { CommissionAmountButton } from "@/components/admin/CommissionAmountButton";
+import { OrderCommissionDetailModal } from "@/components/admin/OrderCommissionDetailModal";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
+import { parseMoneyStringOrZero } from "@/lib/money-format";
 import { usePaymentMethodCatalog } from "@/components/admin/PaymentMethodCatalogProvider";
 import { orderListRowToneClass } from "@/constants/order-status";
 import { useEnsureActiveWorkWeekOnEnter } from "@/hooks/useEnsureActiveWorkWeekOnEnter";
@@ -86,6 +89,9 @@ export type OrderListRow = {
   createdByName: string | null;
   dealAmountUsd: string | null;
   commissionAmountUsd: string | null;
+  /** עמלה מקורית על ההזמנה — לא נדרסת */
+  commissionBaseUsd?: string | null;
+  commissionHasAdjustments?: boolean;
   totalAmountUsd: string | null;
   /** יתרה פתוחה ב-USD */
   balanceUsd: string | null;
@@ -303,7 +309,26 @@ export function OrdersListShell({
   const recentLocalStatusRef = useRef(new Map<string, { status: string; isCompleted: boolean; at: number }>());
   const [listErr, setListErr] = useState<string | null>(loadError);
   const [lockModal, setLockModal] = useState<OrderEditLockGatePayload | null>(null);
+  const [orderCommissionDetail, setOrderCommissionDetail] = useState<{
+    orderId: string;
+    orderNumber: string | null;
+    baseCommissionUsd: number;
+    adjustmentsUsd: number;
+    currentCommissionUsd: number;
+  } | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+
+  const openCommissionDetail = useCallback((o: OrderListRow) => {
+    const current = parseMoneyStringOrZero(o.commissionAmountUsd ?? "0");
+    const base = parseMoneyStringOrZero(o.commissionBaseUsd ?? o.commissionAmountUsd ?? "0");
+    setOrderCommissionDetail({
+      orderId: o.id,
+      orderNumber: o.orderNumber,
+      baseCommissionUsd: base,
+      adjustmentsUsd: Math.round((current - base) * 100) / 100,
+      currentCommissionUsd: current,
+    });
+  }, []);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [excelLoading, setExcelLoading] = useState(false);
   const [completedFilter, setCompletedFilter] = useState<CompletedFilter>(() => readCompletedFilterFromLocation());
@@ -1239,7 +1264,11 @@ export function OrdersListShell({
                         .filter(Boolean)
                         .join(" ")}
                       title={
-                        o.commissionAmountUsd ? `עמלה: ${o.commissionAmountUsd}` : undefined
+                        o.commissionBaseUsd
+                          ? `עמלה מקורית: ${o.commissionBaseUsd}`
+                          : o.commissionAmountUsd
+                            ? `עמלה: ${o.commissionAmountUsd}`
+                            : undefined
                       }
                     >
                       {formatOrdersListMoney(o, "deal").text}
@@ -1256,11 +1285,20 @@ export function OrdersListShell({
                       ]
                         .filter(Boolean)
                         .join(" ")}
-                      title={
-                        o.commissionAmountUsd ? `כולל עמלה: ${o.commissionAmountUsd}` : undefined
-                      }
                     >
-                      {formatOrdersListMoney(o, "total").text}
+                      <div className="adm-ord-total-stack">
+                        <span>{formatOrdersListMoney(o, "total").text}</span>
+                        {o.commissionHasAdjustments && o.commissionAmountUsd ? (
+                          <CommissionAmountButton
+                            amountUsd={parseMoneyStringOrZero(o.commissionAmountUsd)}
+                            changed
+                            showLabel
+                            compact
+                            title="פירוט עמלות"
+                            onClick={() => openCommissionDetail(o)}
+                          />
+                        ) : null}
+                      </div>
                     </td>
                     <td
                       dir="ltr"
@@ -1375,6 +1413,16 @@ export function OrdersListShell({
                 <div className="adm-orders-mobile-card__meta">
                   <span>{o.orderDateYmd ?? "—"}</span>
                   <span dir="ltr">{formatOrdersListMoney(o, "total").text}</span>
+                  {o.commissionHasAdjustments && o.commissionAmountUsd ? (
+                    <CommissionAmountButton
+                      amountUsd={parseMoneyStringOrZero(o.commissionAmountUsd)}
+                      changed
+                      showLabel
+                      compact
+                      title="פירוט עמלות"
+                      onClick={() => openCommissionDetail(o)}
+                    />
+                  ) : null}
                 </div>
                 <div className="adm-orders-mobile-card__foot">
                   <button
@@ -1437,6 +1485,25 @@ export function OrdersListShell({
         onClose={() => setLockModal(null)}
         onToast={showToast}
         onAfterRequestSent={() => router.refresh()}
+      />
+      <OrderCommissionDetailModal
+        open={orderCommissionDetail != null}
+        orderId={orderCommissionDetail?.orderId ?? null}
+        orderNumber={orderCommissionDetail?.orderNumber}
+        preview={
+          orderCommissionDetail
+            ? {
+                baseCommissionUsd: orderCommissionDetail.baseCommissionUsd,
+                adjustmentsUsd: orderCommissionDetail.adjustmentsUsd,
+                currentCommissionUsd: orderCommissionDetail.currentCommissionUsd,
+              }
+            : null
+        }
+        onClose={() => setOrderCommissionDetail(null)}
+        onOpenPayment={(paymentId) => {
+          setOrderCommissionDetail(null);
+          openWindow({ type: "paymentsUpdated", props: { paymentId } });
+        }}
       />
       {toastMsg ? (
         <div className="adm-toast" role="status" aria-live="polite">

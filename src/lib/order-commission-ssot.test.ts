@@ -5,6 +5,7 @@ import {
   computeOrderCommissionBreakdown,
   summarizeCustomerOrderCommissions,
 } from "@/lib/order-commission-ssot";
+import { formatCommissionEquation } from "@/lib/commission-lineage-view";
 
 describe("computeOrderCommissionBreakdown", () => {
   it("START $10 + overpayment +$5 → current $15", () => {
@@ -89,10 +90,15 @@ describe("buildOrderCommissionDetailView", () => {
     assert.equal(d.currentCommissionUsd, 11);
     assert.equal(d.movements[0]!.label, "עמלה מקורית");
     assert.equal(d.movements[0]!.amountUsd, 10);
-    assert.equal(d.movements[1]!.label, "הוספה מתשלום יתר");
+    assert.equal(d.movements[1]!.label, "תוספת עמלה");
+    assert.equal(d.movements[1]!.paymentCode, "TR-P-9");
     assert.equal(d.movements[1]!.amountUsd, 5);
-    assert.equal(d.movements[2]!.label, "איפוס חוב באמצעות עמלה");
+    assert.equal(d.movements[2]!.label, "הפחתת עמלה");
     assert.equal(d.movements[2]!.amountUsd, -4);
+    assert.equal(
+      formatCommissionEquation(d.movements.map((m) => m.amountUsd)),
+      "$10 + $5 − $4 = $11",
+    );
   });
 });
 

@@ -4,12 +4,12 @@ import { useCallback, useEffect, useState } from "react";
 import type { CommissionMovementRow } from "@/lib/customer-commission-ledger";
 import type { OrderCommissionBreakdown } from "@/lib/order-commission-ssot";
 import { fetchCustomerCommissionLedgerClient } from "@/lib/payment-intake-client";
-import { formatSignedUsdDisplay } from "@/lib/payment-adjustment-fee";
 import { formatUsdDisplay } from "@/lib/money-format";
-
-function fmtUsd(amountUsd: number): string {
-  return formatSignedUsdDisplay(amountUsd).replace(/^\+\$/, "$ ").replace(/^-\$/, "-$ ");
-}
+import {
+  formatCommissionSignedCompact,
+  toCommissionLineageRow,
+} from "@/lib/commission-lineage-view";
+import { CommissionLineageTable } from "@/components/admin/CommissionLineageTable";
 
 type Props = {
   open: boolean;
@@ -18,6 +18,7 @@ type Props = {
   previewBalanceUsd?: number | null;
   onClose: () => void;
   onOpenOrderDetail?: (orderId: string, orderNumber: string) => void;
+  onOpenPayment?: (paymentId: string, paymentCode: string) => void;
 };
 
 export function CommissionBalancePopover({
@@ -27,6 +28,7 @@ export function CommissionBalancePopover({
   previewBalanceUsd,
   onClose,
   onOpenOrderDetail,
+  onOpenPayment,
 }: Props) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -70,6 +72,23 @@ export function CommissionBalancePopover({
       ? previewBalanceUsd
       : savedBalanceUsd;
 
+  const lineageRows = movements.map((row) =>
+    toCommissionLineageRow({
+      id: row.id,
+      dateYmd: row.dateYmd,
+      kind: row.kind ?? (row.type === "ORDER_COMMISSION" ? "ORIGINAL" : row.amountUsd >= 0 ? "ADD" : "REMOVE"),
+      typeLabel: row.actionLabel,
+      amountUsd: row.amountUsd,
+      sourceDocument: row.sourceDocument,
+      orderId: row.orderId,
+      orderNumber: row.orderNumber,
+      paymentId: row.paymentId,
+      paymentCode: row.paymentCode,
+      reason: row.reason,
+      createdByName: row.createdByName,
+    }),
+  );
+
   return (
     <div className="adm-oc-edit-request-backdrop" role="presentation" onClick={onClose}>
       <div
@@ -92,6 +111,11 @@ export function CommissionBalancePopover({
 
         {!busy && !err ? (
           <>
+            <p className="commission-lineage-total">
+              סה״כ עמלות נוכחי:{" "}
+              <strong dir="ltr">{formatUsdDisplay(footerBalance)}</strong>
+            </p>
+
             {orderRows.length > 0 ? (
               <div className="commission-balance-popover__table-wrap">
                 <table className="commission-balance-popover__table" dir="rtl">
@@ -133,7 +157,7 @@ export function CommissionBalancePopover({
                                 : "",
                           ].join(" ")}
                         >
-                          {row.hasAdjustments ? fmtUsd(row.adjustmentsUsd) : "$0.00"}
+                          {row.hasAdjustments ? formatCommissionSignedCompact(row.adjustmentsUsd) : "$0"}
                         </td>
                         <td dir="ltr" className="pm-num pm-num--strong">
                           {formatUsdDisplay(row.currentCommissionUsd)}
@@ -152,7 +176,7 @@ export function CommissionBalancePopover({
               </div>
               <div>
                 <span>שינויים</span>
-                <strong dir="ltr">{fmtUsd(orderSummary.adjustmentsUsd)}</strong>
+                <strong dir="ltr">{formatCommissionSignedCompact(orderSummary.adjustmentsUsd)}</strong>
               </div>
               <div>
                 <span>עמלות נוכחיות</span>
@@ -160,53 +184,12 @@ export function CommissionBalancePopover({
               </div>
             </div>
 
-            <h5 className="commission-balance-popover__subhead">תנועות יתרת עמלה</h5>
-            {movements.length === 0 ? (
-              <p className="payment-modal-hint">אין תנועות עמלה ללקוח זה</p>
-            ) : (
-              <div className="commission-balance-popover__table-wrap">
-                <table className="commission-balance-popover__table" dir="rtl">
-                  <thead>
-                    <tr>
-                      <th>תאריך</th>
-                      <th>פעולה</th>
-                      <th>מקור</th>
-                      <th className="pm-num">שינוי</th>
-                      <th className="pm-num">יתרה</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {movements.map((row) => (
-                      <tr key={row.id}>
-                        <td dir="ltr">{row.dateYmd.replace(/-/g, "/").slice(5)}</td>
-                        <td>{row.actionLabel}</td>
-                        <td dir="ltr" className="pm-mono">
-                          {row.sourceDocument}
-                        </td>
-                        <td
-                          dir="ltr"
-                          className={[
-                            "pm-num",
-                            row.direction === "CREDIT"
-                              ? "commission-movement--credit"
-                              : "commission-movement--debit",
-                          ].join(" ")}
-                        >
-                          {fmtUsd(row.amountUsd)}
-                        </td>
-                        <td dir="ltr" className="pm-num">
-                          {fmtUsd(row.balanceAfterUsd).replace(/^\+/, "")}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            <p className="commission-balance-popover__footer" dir="ltr">
-              יתרה נוכחית: {formatUsdDisplay(footerBalance)}
-            </p>
+            <h5 className="commission-balance-popover__subhead">תנועות</h5>
+            <CommissionLineageTable
+              rows={lineageRows}
+              onOpenOrder={onOpenOrderDetail}
+              onOpenPayment={onOpenPayment}
+            />
           </>
         ) : null}
       </div>
