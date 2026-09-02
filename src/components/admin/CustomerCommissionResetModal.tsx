@@ -1,12 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronUp } from "lucide-react";
 import {
   getCustomerCommissionResetPreviewAction,
   resetCustomerDebtViaCommissionsAction,
   type CustomerCommissionResetPreviewDto,
 } from "@/app/admin/balances/actions";
+import {
+  ACCOUNT_RESET_CONFIRM_LABEL,
+  ACCOUNT_RESET_EMPTY_MESSAGE,
+  ACCOUNT_RESET_UI_LABEL,
+} from "@/lib/customer-account-reset";
 import { formatSignedUsdDisplay } from "@/lib/payment-adjustment-fee";
 import { formatUsdDisplay } from "@/lib/money-format";
 
@@ -45,7 +49,6 @@ export function CustomerCommissionResetModal({
 }: Props) {
   const [preview, setPreview] = useState<CustomerCommissionResetPreviewDto | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
-  const [detailOpen, setDetailOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [localBusy, setLocalBusy] = useState(false);
 
@@ -54,7 +57,6 @@ export function CustomerCommissionResetModal({
   useEffect(() => {
     if (!open) {
       setPreview(null);
-      setDetailOpen(false);
       setError(null);
       return;
     }
@@ -93,6 +95,7 @@ export function CustomerCommissionResetModal({
 
   async function onConfirm() {
     if (!customerId || !preview || busy) return;
+    if (preview.kind !== "DEBT" && preview.kind !== "CREDIT") return;
     setError(null);
     setLocalBusy(true);
     onBusyChange?.(true);
@@ -103,16 +106,14 @@ export function CustomerCommissionResetModal({
       setError(result.error);
       return;
     }
-    onSuccess("היתרה אופסה בהצלחה מעמלות");
+    onSuccess("האיפוס בוצע בהצלחה");
     onClose();
   }
 
   if (!open || !customerId) return null;
 
-  const resetUsd = preview?.resetUsd ?? 0;
-  const commissionBefore = preview?.commissionBalanceUsd ?? 0;
-  const commissionAfter = preview?.commissionAfterUsd ?? 0;
-  const openDebt = preview?.openDebtUsd ?? 0;
+  const kind = preview?.kind ?? "NONE";
+  const canConfirm = kind === "DEBT" || kind === "CREDIT";
 
   return (
     <div className="adm-mini-modal-layer" role="presentation">
@@ -135,68 +136,57 @@ export function CustomerCommissionResetModal({
         </button>
 
         <h2 id="commission-reset-title" className="adm-mini-modal-title">
-          איפוס יתרה מעמלות
+          {ACCOUNT_RESET_UI_LABEL}
         </h2>
 
         {previewBusy && !preview ? (
           <p className="adm-payment-shortfall-lead">טוען נתונים…</p>
-        ) : preview ? (
-          <>
-            <div className="adm-payment-shortfall-ledger" aria-label="פירוט איפוס מעמלות">
-              <div className="adm-payment-shortfall-ledger-row">
-                <span>יתרת חוב</span>
-                <strong dir="ltr">{money(openDebt)}</strong>
-              </div>
-              <div className="adm-payment-shortfall-ledger-row">
-                <span>יתרת עמלות לפני</span>
-                <strong dir="ltr">{money(commissionBefore)}</strong>
-              </div>
-              <div className="adm-payment-shortfall-ledger-row">
-                <span>סכום לאיפוס</span>
-                <strong dir="ltr">{money(resetUsd)}</strong>
-              </div>
-              <div className="adm-payment-shortfall-ledger-divider" aria-hidden />
-              <div className="adm-payment-shortfall-ledger-row adm-payment-shortfall-ledger-row--after">
-                <span>יתרת עמלות אחרי</span>
-                <strong dir="ltr" className={commissionToneClass(commissionAfter)}>
-                  {signedMoney(commissionAfter)}
-                </strong>
-              </div>
+        ) : preview && kind === "DEBT" ? (
+          <div className="adm-payment-shortfall-ledger" aria-label="תצוגת איפוס חוב">
+            <div className="adm-payment-shortfall-ledger-row">
+              <span>חוב פתוח</span>
+              <strong dir="ltr">{money(preview.openDebtUsd)}</strong>
             </div>
-
-            {preview.orders.length > 0 ? (
-              <div className="adm-commission-reset-detail">
-                <button
-                  type="button"
-                  className="adm-commission-reset-detail-toggle"
-                  disabled={busy}
-                  onClick={() => setDetailOpen((v) => !v)}
-                >
-                  <span>
-                    סה&quot;כ חוב לאיפוס: {money(openDebt)}
-                    {" · "}
-                    {detailOpen ? "הסתר פירוט" : "הצג פירוט"}
-                  </span>
-                  {detailOpen ? (
-                    <ChevronUp size={16} aria-hidden />
-                  ) : (
-                    <ChevronDown size={16} aria-hidden />
-                  )}
-                </button>
-                {detailOpen ? (
-                  <ul className="adm-commission-reset-detail-list">
-                    {preview.orders.map((o) => (
-                      <li key={o.orderId}>
-                        <span dir="ltr">{o.orderNumber}</span>
-                        <span className="adm-commission-reset-detail-meta">{o.orderDateYmd}</span>
-                        <strong dir="ltr">{money(o.remainingUsd)}</strong>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-              </div>
-            ) : null}
-          </>
+            <div className="adm-payment-shortfall-ledger-row">
+              <span>יתרת עמלות לפני</span>
+              <strong dir="ltr">{signedMoney(preview.commissionBalanceUsd)}</strong>
+            </div>
+            <div className="adm-payment-shortfall-ledger-divider" aria-hidden />
+            <div className="adm-payment-shortfall-ledger-row adm-payment-shortfall-ledger-row--after">
+              <span>לאחר האיפוס — חוב פתוח</span>
+              <strong dir="ltr">{money(preview.openDebtAfterUsd)}</strong>
+            </div>
+            <div className="adm-payment-shortfall-ledger-row adm-payment-shortfall-ledger-row--after">
+              <span>יתרת עמלות</span>
+              <strong dir="ltr" className={commissionToneClass(preview.commissionAfterUsd)}>
+                {signedMoney(preview.commissionAfterUsd)}
+              </strong>
+            </div>
+          </div>
+        ) : preview && kind === "CREDIT" ? (
+          <div className="adm-payment-shortfall-ledger" aria-label="תצוגת איפוס יתרת זכות">
+            <div className="adm-payment-shortfall-ledger-row">
+              <span>יתרת זכות</span>
+              <strong dir="ltr">{money(preview.availableCreditUsd)}</strong>
+            </div>
+            <div className="adm-payment-shortfall-ledger-row">
+              <span>יתרת עמלות לפני</span>
+              <strong dir="ltr">{signedMoney(preview.commissionBalanceUsd)}</strong>
+            </div>
+            <div className="adm-payment-shortfall-ledger-divider" aria-hidden />
+            <div className="adm-payment-shortfall-ledger-row adm-payment-shortfall-ledger-row--after">
+              <span>לאחר האיפוס — יתרת זכות</span>
+              <strong dir="ltr">{money(preview.creditAfterUsd)}</strong>
+            </div>
+            <div className="adm-payment-shortfall-ledger-row adm-payment-shortfall-ledger-row--after">
+              <span>יתרת עמלות</span>
+              <strong dir="ltr" className={commissionToneClass(preview.commissionAfterUsd)}>
+                {signedMoney(preview.commissionAfterUsd)}
+              </strong>
+            </div>
+          </div>
+        ) : preview ? (
+          <p className="adm-payment-shortfall-lead">{preview.message ?? ACCOUNT_RESET_EMPTY_MESSAGE}</p>
         ) : null}
 
         {error ? <div className="adm-payment-shortfall-error">{error}</div> : null}
@@ -205,10 +195,10 @@ export function CustomerCommissionResetModal({
           <button
             type="button"
             className="adm-btn adm-btn--primary"
-            disabled={busy || previewBusy || !preview || openDebt <= 0.01}
+            disabled={busy || previewBusy || !canConfirm}
             onClick={() => void onConfirm()}
           >
-            {busy ? "מבצע…" : `אפס ${money(resetUsd)} מעמלות`}
+            {busy ? "מבצע…" : ACCOUNT_RESET_CONFIRM_LABEL}
           </button>
           <button type="button" className="adm-btn adm-btn--ghost" disabled={busy} onClick={onClose}>
             ביטול

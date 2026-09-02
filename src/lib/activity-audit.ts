@@ -38,7 +38,7 @@ export function activityActionLabelHe(actionType: string): string {
     case "ORDER_BALANCE_RESET":
       return "סגירת חוב באמצעות עמלה";
     case "CUSTOMER_BALANCES_RESET":
-      return "איפוס יתרות לקוח";
+      return "איפוס";
     case "CUSTOMER_BALANCE_RESET_FROM_CREDIT":
       return "איפוס יתרה מתוך יתרת זכות";
     case "PAYMENT_PLAN_CREATED":

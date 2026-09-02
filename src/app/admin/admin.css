@@ -753,6 +753,17 @@
   font-size: 0.84rem;
 }
 
+.pm-adjust-overpay {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid #86efac;
+  background: #f0fdf4;
+  color: #166534;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
 .pm-paynow-topbar {
   display: flex;
   flex-wrap: wrap;
@@ -13240,9 +13251,63 @@ select.payment-modal-inline-input {
   color: #0f172a;
 }
 
+.adm-ledger-row--balance-reset td {
+  background: #f5f3ff;
+}
+
+.adm-ledger-row--balance-reset .adm-ledger-type-cell {
+  color: #6d28d9;
+  font-weight: 700;
+}
+
+.adm-ledger-row--fee-capture td {
+  background: #fffbeb;
+}
+
 .adm-ledger-row--order-updated .adm-ledger-payment-method-sub-type {
   color: #1d4ed8;
   font-weight: 700;
+}
+
+.adm-ledger-row--order-updated td {
+  background: #eff6ff;
+}
+
+.adm-ledger-row--order-updated-active td {
+  background: #dbeafe;
+}
+
+.adm-ledger-row--superseded td {
+  color: #94a3b8;
+}
+
+.adm-ledger-row--superseded .adm-ledger-doc-link {
+  color: #94a3b8;
+}
+
+.adm-ledger-charge--superseded {
+  text-decoration: line-through;
+  text-decoration-color: #94a3b8;
+  color: #94a3b8;
+}
+
+.adm-ledger-type-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.adm-ledger-version-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #64748b;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
 }
 
 .adm-ledger-order-update-detail {
@@ -23520,6 +23585,15 @@ select.adm-balances-input {
   gap: 10px;
   margin: 0;
   flex-shrink: 0;
+}
+
+.adm-balances-fcc-kpi--skeleton .adm-balances-fcc-kpi__card--skel {
+  opacity: 0.55;
+}
+
+.adm-balances-fcc-kpi--skeleton .adm-balances-fcc-kpi__value {
+  color: #94a3b8;
+  letter-spacing: 0.12em;
 }
 
 .adm-balances-fcc-kpi__card {

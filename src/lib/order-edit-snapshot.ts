@@ -11,6 +11,7 @@ export type OrderEditSnapshot = {
   commissionPercent: string;
   paymentMethod: string;
   paymentBreakdown: string;
+  usdRateUsed: string;
   status: string;
   notes: string;
   sourceCountry: string;
@@ -36,6 +37,7 @@ const FIELD_LABELS: Record<keyof OrderEditSnapshot, string> = {
   commissionPercent: "אחוז עמלה",
   paymentMethod: "אמצעי תשלום",
   paymentBreakdown: "חלוקת אמצעי תשלום",
+  usdRateUsed: "שער המרה",
   status: "סטטוס",
   notes: "הערות",
   sourceCountry: "מדינת מקור",
@@ -81,6 +83,8 @@ function displayValue(key: keyof OrderEditSnapshot, raw: string | null | undefin
       return fmtMoneyUsd(v);
     case "commissionPercent":
       return v.endsWith("%") ? v : `${v}%`;
+    case "usdRateUsed":
+      return v;
     case "paymentMethod":
       return PAYMENT_METHOD_LABELS[v] ?? v;
     case "status":
@@ -100,6 +104,7 @@ export function snapshotFromWorkPanel(row: {
   commissionPercent: string;
   paymentMethod: string;
   paymentBreakdown?: Array<{ paymentMethod: string; amount: string; currency?: string | null }>;
+  usdRateUsed?: string;
   status: string;
   notes: string;
   sourceCountry: string | null;
@@ -117,6 +122,7 @@ export function snapshotFromWorkPanel(row: {
     commissionPercent: row.commissionPercent.trim(),
     paymentMethod: row.paymentMethod,
     paymentBreakdown: formatPaymentBreakdown(row.paymentBreakdown),
+    usdRateUsed: (row.usdRateUsed ?? "").trim(),
     status: row.status,
     notes: row.notes.trim(),
     sourceCountry: row.sourceCountry?.trim() || "—",
@@ -136,6 +142,7 @@ export function snapshotFromUpdateForm(form: {
   commissionPercent?: string | null;
   paymentMethod: string;
   paymentBreakdown?: Array<{ paymentMethod: string; amount: string; currency?: string | null }>;
+  usdRateUsed?: string;
   status: string;
   notes?: string;
   sourceCountry?: string | null;
@@ -153,6 +160,7 @@ export function snapshotFromUpdateForm(form: {
     commissionPercent: (form.commissionPercent ?? "").trim(),
     paymentMethod: form.paymentMethod,
     paymentBreakdown: formatPaymentBreakdown(form.paymentBreakdown),
+    usdRateUsed: (form.usdRateUsed ?? "").trim(),
     status: form.status,
     notes: (form.notes ?? "").trim(),
     sourceCountry: form.sourceCountry?.trim() || "—",
@@ -197,6 +205,7 @@ export function parseOrderEditSnapshot(raw: unknown): OrderEditSnapshot | null {
     commissionPercent: String(o.commissionPercent ?? ""),
     paymentMethod: String(o.paymentMethod ?? ""),
     paymentBreakdown: String(o.paymentBreakdown ?? ""),
+    usdRateUsed: String(o.usdRateUsed ?? ""),
     status: String(o.status ?? ""),
     notes: String(o.notes ?? ""),
     sourceCountry: String(o.sourceCountry ?? ""),

@@ -368,7 +368,7 @@ export async function executePaymentIntake(params: {
               amountUsd: amt,
               amountIls: ilsOnRow,
               sourceCurrency: ilsOnRow ? "MIXED" : "USD",
-              sourceAmount: ilsOnRow ?? amt,
+              sourceAmount: ilsOnRow ?? (isPrimary ? new Prisma.Decimal(receivedUsd.toFixed(4)) : amt),
               exchangeRate: finalUse,
               vatRate,
               commissionPercent: new Prisma.Decimal(0),

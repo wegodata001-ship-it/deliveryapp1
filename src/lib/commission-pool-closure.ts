@@ -119,6 +119,39 @@ export async function applyCommissionPoolDebtClosureInTx(
     closurePaymentId = pay.id;
   }
 
+  if (!closurePaymentId) {
+    const order = await tx.order.findUnique({
+      where: { id: input.orderId },
+      select: { countryCode: true, weekCode: true },
+    });
+    const now = new Date();
+    const pay = await tx.payment.create({
+      data: {
+        countryCode: (normalizeWorkCountryCode(order?.countryCode) ?? DEFAULT_WORK_COUNTRY) as WorkCountryCode,
+        paymentCode: null,
+        paymentNumber: null,
+        orderId: input.orderId,
+        customerId: input.customerId,
+        weekCode: order?.weekCode ?? null,
+        paymentDate: now,
+        intakeDate: now,
+        currency: "USD",
+        amountUsd: resetUsd,
+        sourceCurrency: "USD",
+        sourceAmount: resetUsd,
+        isPaid: true,
+        businessType: "BALANCE_RESET",
+        notes: [
+          COMMISSION_DEBT_CLOSURE_LEDGER_LABEL,
+          `סכום: $${resetUsd.toFixed(2)}`,
+          "מקור: איפוס",
+        ].join("\n"),
+        createdById: input.userId,
+      },
+    });
+    closurePaymentId = pay.id;
+  }
+
   await tx.order.update({
     where: { id: input.orderId },
     data: { status: OS.COMPLETED },

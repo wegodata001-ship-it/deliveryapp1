@@ -18,10 +18,11 @@ import {
 import {
   COMMISSION_TYPE_ORIGINAL,
   commissionKindFromAmount,
+  commissionMovementActionLabel,
   commissionReasonLabel,
-  commissionTypeLabel,
   type CommissionMovementKind,
 } from "@/lib/commission-lineage-view";
+import { CREDIT_TO_COMMISSION_USER_CHOICE } from "@/lib/customer-account-reset";
 import { formatLocalYmd } from "@/lib/work-week";
 
 export type CommissionMovementType =
@@ -29,7 +30,8 @@ export type CommissionMovementType =
   | "OVERPAYMENT_TO_COMMISSION"
   | "DEBT_RESET_FROM_COMMISSION"
   | "MANUAL_COMMISSION_ADJUSTMENT"
-  | "BALANCE_RESET_OVERPAYMENT_TO_COMMISSION";
+  | "BALANCE_RESET_OVERPAYMENT_TO_COMMISSION"
+  | "CREDIT_RESET_TO_COMMISSION";
 
 export type CommissionMovementDirection = "CREDIT" | "DEBIT";
 
@@ -80,6 +82,9 @@ function feeMovementType(input: {
   if (choice === "commission" || input.reason === "PAYMENT_SURPLUS") {
     return "OVERPAYMENT_TO_COMMISSION";
   }
+  if (choice === CREDIT_TO_COMMISSION_USER_CHOICE) {
+    return "CREDIT_RESET_TO_COMMISSION";
+  }
   if (choice === COMMISSION_POOL_DEBIT_USER_CHOICE || choice === "fee_adjustment_negative") {
     return "DEBT_RESET_FROM_COMMISSION";
   }
@@ -89,8 +94,8 @@ function feeMovementType(input: {
     : "DEBT_RESET_FROM_COMMISSION";
 }
 
-function feeActionLabel(amountUsd: number): string {
-  return commissionTypeLabel(commissionKindFromAmount(amountUsd, false));
+function feeActionLabel(amountUsd: number, userChoice?: string | null): string {
+  return commissionMovementActionLabel({ amountUsd, userChoice });
 }
 
 function orderActionLabel(): string {
@@ -204,7 +209,7 @@ export async function buildCustomerCommissionLedger(
       createdAt: f.createdAt.toISOString(),
       type,
       kind: commissionKindFromAmount(amount, false),
-      actionLabel: feeActionLabel(amount),
+      actionLabel: feeActionLabel(amount, f.userChoice),
       sourceType: f.paymentId ? "PAYMENT" : f.orderId ? "ORDER" : "FEE",
       sourceId: f.paymentId ?? f.orderId ?? f.id,
       paymentId: f.paymentId,

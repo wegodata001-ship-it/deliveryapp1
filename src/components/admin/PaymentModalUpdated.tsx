@@ -377,6 +377,25 @@ function createDefaultLine(): PaymentLine {
   return createDefaultPaymentLine(newLineId());
 }
 
+function paymentLinesFromAutoAdjustIntents(
+  intents: Array<{
+    method: string;
+    currency: "USD" | "ILS";
+    amountNative: number;
+  }>,
+): PaymentLine[] {
+  return intents
+    .filter((intent) => intent.amountNative > 0)
+    .map((intent) => ({
+      ...createDefaultPaymentLine(newLineId()),
+      usdAmount: intent.currency === "USD" ? intent.amountNative : "",
+      ilsAmount: intent.currency === "ILS" ? intent.amountNative : "",
+      paymentMethod: intent.method,
+      usdPaymentMethod: intent.method,
+      ilsPaymentMethod: intent.method,
+    }));
+}
+
 type Props = {
   financial: SerializedFinancial | null;
   onToast: (msg: string) => void;
@@ -656,6 +675,29 @@ export function PaymentModalUpdated({
   const reopenMethodControlAfterOrderEditRef = useRef(false);
   const saveAfterOverageRef = useRef<"new" | "close" | null>(null);
   const saveSurplusPendingRef = useRef(false);
+  const pendingAutoAdjustCreditSaveRef = useRef(false);
+  const [autoAdjustCreditSaveTick, setAutoAdjustCreditSaveTick] = useState(0);
+  const performSaveRef = useRef<
+    ((surplusDisposition?: SurplusDisposition | null) => ReturnType<typeof performSave>) | null
+  >(null);
+  const finishAfterSuccessfulSaveRef = useRef<
+    ((
+      mode: "new" | "close",
+      result: Extract<Awaited<ReturnType<typeof performSave>>, { ok: true }>,
+    ) => Promise<void>) | null
+  >(null);
+  useEffect(() => {
+    if (autoAdjustCreditSaveTick === 0) return;
+    if (!pendingAutoAdjustCreditSaveRef.current) return;
+    pendingAutoAdjustCreditSaveRef.current = false;
+    const save = performSaveRef.current;
+    const finish = finishAfterSuccessfulSaveRef.current;
+    if (!save || !finish) return;
+    void (async () => {
+      const saved = await save("credit");
+      if (saved.ok) await finish("new", saved);
+    })();
+  }, [autoAdjustCreditSaveTick]);
   const intakeDevPendingSaveRef = useRef(false);
   /** אחרי ניסיון שמירה שנכשל באימות צ׳יקים — מסמן שדות חסרים */
   const [highlightInvalidCheckFields, setHighlightInvalidCheckFields] = useState(false);
@@ -3164,6 +3206,9 @@ export function PaymentModalUpdated({
     else closeTop();
   }
 
+  performSaveRef.current = performSave;
+  finishAfterSuccessfulSaveRef.current = finishAfterSuccessfulSave;
+
   async function onPostSaveSurplusConfirm(disposition: SurplusDisposition) {
     if (!customer || !postSavePrimaryPaymentId) return;
     setSaveBusy(true);
@@ -4072,26 +4117,6 @@ export function PaymentModalUpdated({
                               : fmtUsdDisplay(displayCommissionBalanceUsd)}
                           </button>
                         </div>
-                        {displayCreditBalanceUsd > 0.01 ? (
-                          <div className="payment-modal-cust-summary__total payment-modal-cust-summary__total--credit">
-                            <Wallet size={16} strokeWidth={1.75} aria-hidden />
-                            <span className="payment-modal-cust-summary__total-k">יתרת זכות:</span>
-                            <button
-                              type="button"
-                              className="payment-modal-cust-summary__total-v payment-modal-cust-summary__credit-btn"
-                              dir="ltr"
-                              onClick={() => setCreditPopoverOpen(true)}
-                              aria-label="פירוט יתרת זכות"
-                              disabled={!customer?.id}
-                            >
-                              +{fmtUsdDisplay(
-                                balanceResetFromCredit && customerBalanceResetPending
-                                  ? displayCreditBalanceAfterApplyUsd
-                                  : displayCreditBalanceUsd,
-                              )}
-                            </button>
-                          </div>
-                        ) : null}
                         <div
                           className={[
                             "payment-modal-cust-summary__total",
@@ -4110,6 +4135,24 @@ export function PaymentModalUpdated({
                           <strong className="payment-modal-cust-summary__total-v" dir="ltr">
                             {fmtUsdDisplay(intakeStripOpenDebtUsd)}
                           </strong>
+                        </div>
+                        <div className="payment-modal-cust-summary__total payment-modal-cust-summary__total--credit">
+                          <Wallet size={16} strokeWidth={1.75} aria-hidden />
+                          <span className="payment-modal-cust-summary__total-k">יתרת זכות:</span>
+                          <button
+                            type="button"
+                            className="payment-modal-cust-summary__total-v payment-modal-cust-summary__credit-btn"
+                            dir="ltr"
+                            onClick={() => setCreditPopoverOpen(true)}
+                            aria-label="פירוט יתרת זכות"
+                            disabled={!customer?.id}
+                          >
+                            +{fmtUsdDisplay(
+                              balanceResetFromCredit && customerBalanceResetPending
+                                ? displayCreditBalanceAfterApplyUsd
+                                : displayCreditBalanceUsd,
+                            )}
+                          </button>
                         </div>
                       </div>
                     ) : null}
@@ -4410,6 +4453,9 @@ export function PaymentModalUpdated({
                       ) : (
                         <> · אין חוב פתוח</>
                       )}
+                      {" · "}
+                      יתרת זכות{" "}
+                      <strong dir="ltr">+{fmtUsdDisplay(displayCreditBalanceUsd)}</strong>
                     </span>
                   </div>
                 ) : (
@@ -4875,12 +4921,24 @@ export function PaymentModalUpdated({
                     exchangeRate={dollarRate}
                     draftPaymentLines={payments}
                     onClose={() => setAutoAdjustOpen(false)}
-                    onApplied={({ affectedOrders }) => {
+                    onApplied={(result) => {
                       setAutoAdjustOpen(false);
-                      onToast(`בוצעה התאמה אוטומטית ב־${affectedOrders} הזמנות`);
-                      void refreshSharedPaymentIntakeOrders();
-                      window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
-                      dispatchOrdersListRefresh();
+                      const nextLines = paymentLinesFromAutoAdjustIntents(result.intents);
+                      if (nextLines.length > 0) setPayments(nextLines);
+                      onToast(
+                        result.hasOverpayment
+                          ? `בוצעה התאמה — החוב ייסגר והעודף יישמר כיתרת זכות`
+                          : `בוצעה התאמה אוטומטית ב־${result.affectedOrders} הזמנות`,
+                      );
+                      pendingAutoAdjustCreditSaveRef.current = result.hasOverpayment;
+                      void (async () => {
+                        await refreshSharedPaymentIntakeOrders();
+                        window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
+                        dispatchOrdersListRefresh();
+                        if (result.hasOverpayment) {
+                          setAutoAdjustCreditSaveTick((n) => n + 1);
+                        }
+                      })();
                     }}
                   />
                 ) : null}

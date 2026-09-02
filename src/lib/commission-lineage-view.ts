@@ -4,6 +4,12 @@
  */
 import { roundOrderMoney2 } from "@/lib/order-remaining-debt";
 import { COMMISSION_POOL_DEBIT_USER_CHOICE } from "@/lib/customer-commission-balance-shared";
+import {
+  ACCOUNT_RESET_CREDIT_LEDGER_LABEL,
+  ACCOUNT_RESET_DEBT_COMMISSION_LABEL,
+  CREDIT_TO_COMMISSION_USER_CHOICE,
+  accountResetCommissionActionLabel,
+} from "@/lib/customer-account-reset";
 
 export type CommissionMovementKind = "ORIGINAL" | "ADD" | "REMOVE";
 
@@ -35,6 +41,16 @@ export function commissionTypeLabel(kind: CommissionMovementKind): string {
   return COMMISSION_TYPE_REMOVE;
 }
 
+export function commissionMovementActionLabel(input: {
+  amountUsd: number;
+  userChoice?: string | null;
+  isOriginal?: boolean;
+}): string {
+  const resetLabel = accountResetCommissionActionLabel(input.userChoice);
+  if (resetLabel) return resetLabel;
+  return commissionTypeLabel(commissionKindFromAmount(input.amountUsd, input.isOriginal === true));
+}
+
 export function commissionKindFromAmount(
   amountUsd: number,
   isOriginal = false,
@@ -51,9 +67,10 @@ export function commissionReasonLabel(input: {
   const reason = (input.reason ?? "").trim();
   if (choice === "commission" || reason === "PAYMENT_SURPLUS") return "עודף מתשלום";
   if (choice === "forfeit") return "ויתור על עודף";
-  if (choice === COMMISSION_POOL_DEBIT_USER_CHOICE) return "איפוס חוב";
+  if (choice === COMMISSION_POOL_DEBIT_USER_CHOICE) return ACCOUNT_RESET_DEBT_COMMISSION_LABEL;
+  if (choice === CREDIT_TO_COMMISSION_USER_CHOICE) return ACCOUNT_RESET_CREDIT_LEDGER_LABEL;
   if (reason === "MANUAL_ADJUST" || choice === "MANUAL_ADJUST") return "התאמה ידנית";
-  if (reason === "BALANCE_RESET") return "איפוס יתרה";
+  if (reason === "BALANCE_RESET") return "איפוס";
   return reason || null;
 }
 

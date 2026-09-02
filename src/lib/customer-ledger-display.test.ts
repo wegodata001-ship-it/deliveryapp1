@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { CustomerLedgerRow } from "@/lib/customer-account-ledger";
 import {
+  DEFAULT_CUSTOMER_LEDGER_DATE_SORT,
   filterLedgerRowsForDisplay,
   prepareLedgerRowsForDisplay,
   sortLedgerRowsForDisplay,
@@ -34,6 +35,22 @@ describe("filterLedgerRowsForDisplay", () => {
     assert.equal(filterLedgerRowsForDisplay(rows, "all").length, 4);
   });
 
+  it("all — keeps balance reset as its own movement", () => {
+    const withReset = [
+      ...rows,
+      row({
+        id: "br1",
+        kind: "BALANCE_RESET",
+        typeLabel: "איפוס יתרה",
+        isBalanceReset: true,
+        document: "איפוס יתרה",
+      }),
+    ];
+    const out = filterLedgerRowsForDisplay(withReset, "all");
+    assert.ok(out.some((r) => r.id === "br1"));
+    assert.equal(filterLedgerRowsForDisplay(withReset, "payments").some((r) => r.id === "br1"), false);
+  });
+
   it("payments — only regular payments", () => {
     const out = filterLedgerRowsForDisplay(rows, "payments");
     assert.equal(out.length, 1);
@@ -45,10 +62,26 @@ describe("filterLedgerRowsForDisplay", () => {
     assert.equal(out.length, 1);
     assert.equal(out[0]?.id, "o1");
   });
+
+  it("orders filter keeps order-update history rows", () => {
+    const withUpdate = [
+      ...rows,
+      row({
+        id: "u1",
+        kind: "ORDER",
+        typeLabel: "עדכון הזמנה",
+        isOrderUpdated: true,
+        document: "TR-126-0004",
+      }),
+    ];
+    const out = filterLedgerRowsForDisplay(withUpdate, "orders");
+    assert.deepEqual(out.map((r) => r.id), ["o1", "u1"]);
+  });
 });
 
 describe("sortLedgerRowsForDisplay", () => {
-  it("sorts by date desc then document desc", () => {
+  it("default is old → new (ישן → חדש)", () => {
+    assert.equal(DEFAULT_CUSTOMER_LEDGER_DATE_SORT, "old_new");
     const rows: CustomerLedgerRow[] = [
       row({ id: "a", dateYmd: "2026-06-10", document: "TR-126-0004" }),
       row({ id: "b", dateYmd: "2026-06-16", document: "TR-127-0001" }),
@@ -57,45 +90,78 @@ describe("sortLedgerRowsForDisplay", () => {
     ];
     const sorted = sortLedgerRowsForDisplay(rows).map((r) => `${r.dateYmd}:${r.document}`);
     assert.deepEqual(sorted, [
-      "2026-06-16:TR-127-0001",
-      "2026-06-14:TR-P-00012",
-      "2026-06-13:TR-P-00010",
       "2026-06-10:TR-126-0004",
+      "2026-06-13:TR-P-00010",
+      "2026-06-14:TR-P-00012",
+      "2026-06-16:TR-127-0001",
     ]);
   });
 
-  it("sorts by date asc then document asc", () => {
+  it("sorts by date desc then document desc when asked", () => {
     const rows: CustomerLedgerRow[] = [
       row({ id: "a", dateYmd: "2026-06-10", document: "TR-126-0004" }),
       row({ id: "b", dateYmd: "2026-06-16", document: "TR-127-0001" }),
       row({ id: "c", dateYmd: "2026-06-14", document: "TR-P-00012", kind: "PAYMENT", typeLabel: "תשלום" }),
       row({ id: "d", dateYmd: "2026-06-13", document: "TR-P-00010", kind: "PAYMENT", typeLabel: "תשלום" }),
     ];
-    const sorted = sortLedgerRowsForDisplay(rows, "old_new").map((r) => `${r.dateYmd}:${r.document}`);
+    const sorted = sortLedgerRowsForDisplay(rows, "new_old").map((r) => `${r.dateYmd}:${r.document}`);
     assert.deepEqual(sorted, [
-      "2026-06-10:TR-126-0004",
-      "2026-06-13:TR-P-00010",
-      "2026-06-14:TR-P-00012",
       "2026-06-16:TR-127-0001",
+      "2026-06-14:TR-P-00012",
+      "2026-06-13:TR-P-00010",
+      "2026-06-10:TR-126-0004",
     ]);
   });
 
-  it("same day — newer document number first", () => {
+  it("same day — older document number first (default)", () => {
     const rows: CustomerLedgerRow[] = [
       row({ id: "a", dateYmd: "2026-06-14", document: "TR-P-00010", kind: "PAYMENT", typeLabel: "תשלום" }),
       row({ id: "b", dateYmd: "2026-06-14", document: "TR-P-00012", kind: "PAYMENT", typeLabel: "תשלום" }),
     ];
     const sorted = sortLedgerRowsForDisplay(rows).map((r) => r.document);
-    assert.deepEqual(sorted, ["TR-P-00012", "TR-P-00010"]);
+    assert.deepEqual(sorted, ["TR-P-00010", "TR-P-00012"]);
   });
 
-  it("same day asc — older document number first", () => {
+  it("same day — createdAt / timestamp wins over document number", () => {
     const rows: CustomerLedgerRow[] = [
-      row({ id: "a", dateYmd: "2026-06-14", document: "TR-P-00010", kind: "PAYMENT", typeLabel: "תשלום" }),
-      row({ id: "b", dateYmd: "2026-06-14", document: "TR-P-00012", kind: "PAYMENT", typeLabel: "תשלום" }),
+      row({
+        id: "later-doc",
+        dateYmd: "2026-06-14",
+        document: "TR-P-00001",
+        kind: "PAYMENT",
+        typeLabel: "תשלום",
+        occurredAtMs: Date.parse("2026-06-14T18:00:00.000Z"),
+      }),
+      row({
+        id: "earlier-doc",
+        dateYmd: "2026-06-14",
+        document: "TR-P-00099",
+        kind: "PAYMENT",
+        typeLabel: "תשלום",
+        occurredAtMs: Date.parse("2026-06-14T09:00:00.000Z"),
+      }),
     ];
-    const sorted = sortLedgerRowsForDisplay(rows, "old_new").map((r) => r.document);
-    assert.deepEqual(sorted, ["TR-P-00010", "TR-P-00012"]);
+    const sorted = sortLedgerRowsForDisplay(rows, "old_new").map((r) => r.id);
+    assert.deepEqual(sorted, ["earlier-doc", "later-doc"]);
+  });
+
+  it("same day new_old — later timestamp first", () => {
+    const rows: CustomerLedgerRow[] = [
+      row({
+        id: "morning",
+        dateYmd: "2026-06-14",
+        document: "TR-P-00010",
+        occurredAtMs: Date.parse("2026-06-14T09:00:00.000Z"),
+      }),
+      row({
+        id: "evening",
+        dateYmd: "2026-06-14",
+        document: "TR-P-00011",
+        occurredAtMs: Date.parse("2026-06-14T18:00:00.000Z"),
+      }),
+    ];
+    const sorted = sortLedgerRowsForDisplay(rows, "new_old").map((r) => r.id);
+    assert.deepEqual(sorted, ["evening", "morning"]);
   });
 });
 
@@ -107,7 +173,7 @@ describe("prepareLedgerRowsForDisplay", () => {
       row({ id: "p1", dateYmd: "2026-06-14", document: "TR-P-00012", kind: "PAYMENT", typeLabel: "תשלום" }),
     ];
     const out = prepareLedgerRowsForDisplay(rows, "orders").map((r) => r.id);
-    assert.deepEqual(out, ["o-new", "o-old"]);
+    assert.deepEqual(out, ["o-old", "o-new"]);
   });
 
   it("supports payments filter with old_new sort", () => {

@@ -139,6 +139,11 @@ export async function previewPaymentIntentAutoAdjustmentAction(params: {
       ok: true;
       openDebtUsd: number;
       totalPayUsd: number;
+      closesDebtUsd: number;
+      overpaymentUsd: number;
+      hasOverpayment: boolean;
+      existingCreditUsd: number;
+      resultingCreditUsd: number;
       intents: Array<{
         method: string;
         currency: PaymentBalanceCurrency;
@@ -183,7 +188,9 @@ export async function previewPaymentIntentAutoAdjustmentAction(params: {
   });
   if (!workspace.ok) return { ok: false, error: workspace.error };
 
-  const { planPaymentIntentAdjustments } = await import("@/lib/payment-method-payment-intent");
+  const { planPaymentIntentAdjustments, resultingCustomerCreditUsd } = await import(
+    "@/lib/payment-method-payment-intent"
+  );
   const plan = planPaymentIntentAdjustments({
     orders: workspace.orders,
     intents: params.intents,
@@ -191,10 +198,24 @@ export async function previewPaymentIntentAutoAdjustmentAction(params: {
   });
   if (!plan.ok) return plan;
 
+  const { getCustomerCreditBalanceUsd, creditScopeFromWorkCountry } = await import(
+    "@/lib/customer-credit-balance"
+  );
+  const existingCreditUsd = await getCustomerCreditBalanceUsd(
+    workspace.customer.id,
+    creditScopeFromWorkCountry(normalizeWorkCountryCode(params.workCountry ?? null)),
+  );
+  const resultingCreditUsd = resultingCustomerCreditUsd(existingCreditUsd, plan.overpaymentUsd);
+
   return {
     ok: true,
     openDebtUsd: plan.openDebtUsd,
     totalPayUsd: plan.totalPayUsd,
+    closesDebtUsd: plan.closesDebtUsd,
+    overpaymentUsd: plan.overpaymentUsd,
+    hasOverpayment: plan.hasOverpayment,
+    existingCreditUsd,
+    resultingCreditUsd,
     intents: plan.intents,
     moves: plan.moves,
     orderChanges: plan.orderChanges.map((row) => ({

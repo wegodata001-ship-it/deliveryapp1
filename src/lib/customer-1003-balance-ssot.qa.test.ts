@@ -50,6 +50,18 @@ describe("customer 1003 balance SSOT", () => {
       );
     }
 
+    const paymentDocs = ledger.rows
+      .filter((r) => r.kind === "PAYMENT" && !r.isPaymentCancelled)
+      .map((r) => r.document);
+    assert.ok(paymentDocs.includes("TR-P-000008"), "primary capture must stay on the card");
+    assert.ok(paymentDocs.includes("TR-P-000009"), "second coded capture must stay on the card");
+    assert.ok(paymentDocs.includes("TR-P-000010"), "third coded capture must stay on the card");
+    assert.equal(
+      ledger.rows.filter((r) => r.kind === "BALANCE_RESET" || r.isBalanceReset).length,
+      0,
+      "Mohammad has no persisted direct reset — do not invent one",
+    );
+
     const order = await prisma.order.findFirst({
       where: { orderNumber: "TR-137-0006", deletedAt: null },
       select: { id: true, totalUsd: true, amountUsd: true, commissionUsd: true },

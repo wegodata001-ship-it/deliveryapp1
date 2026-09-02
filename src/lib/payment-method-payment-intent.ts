@@ -9,6 +9,7 @@ import type { PaymentBalanceCurrency } from "@/lib/payment-method-captured-balan
 import type { PaymentMethodKpiKey } from "@/lib/payment-intake-customer-kpi";
 import { PAYMENT_METHOD_KPI_META } from "@/lib/payment-intake-customer-kpi";
 import { calculatePaymentIntentDeduction } from "@/lib/payment-intent-vat";
+import { computePaymentOverpayment, type PaymentOverpaymentPreview } from "@/lib/payment-overpayment";
 
 const EPS = 0.02;
 
@@ -60,6 +61,10 @@ export type PaymentIntentPlan =
       intents: CalculatedPaymentIntentLine[];
       totalPayUsd: number;
       openDebtUsd: number;
+      closesDebtUsd: number;
+      overpaymentUsd: number;
+      hasOverpayment: boolean;
+      allocation: PaymentOverpaymentPreview;
       moves: PaymentIntentMove[];
       orderChanges: PaymentIntentOrderChange[];
     }
@@ -148,7 +153,8 @@ function orderRemainingUsd(order: PaymentIntakeOrderRow): number {
 
 /**
  * מתשלום שהלקוח רוצה לבצע עכשיו → העברות אמצעי מתוכנן בהזמנות (FIFO).
- * לא סוגר חוב ולא יוצר תשלום — רק מתכנן שינוי שיוך אמצעי.
+ * אמצעי התשלום שנקלטו נשמרים במלואם. תשלום מעל החוב אינו נחסם:
+ * החוב נסגר עד $0 והעודף מיועד ליתרת זכות (SSOT: computePaymentOverpayment).
  */
 export function planPaymentIntentAdjustments(params: {
   orders: PaymentIntakeOrderRow[];
@@ -190,12 +196,10 @@ export function planPaymentIntentAdjustments(params: {
   }
 
   const totalPayUsd = roundMoney2(normalized.reduce((sum, row) => sum + row.amountUsd, 0));
-  if (totalPayUsd > openDebtUsd + EPS) {
-    return {
-      ok: false,
-      error: `סכום התשלום ($${totalPayUsd.toFixed(2)}) גבוה מהחוב הפתוח ($${openDebtUsd.toFixed(2)}). ההתאמה מתאימה רק אמצעי מתוכנן — לא יוצרת תשלום/חוב חדש.`,
-    };
-  }
+  const allocation = computePaymentOverpayment(openDebtUsd, totalPayUsd, EPS);
+  const closesDebtUsd = allocation.closesDebtUsd;
+  const overpaymentUsd = allocation.overpaymentUsd;
+  const hasOverpayment = allocation.hasOverpayment;
 
   const needByTo = new Map<string, number>();
   for (const row of normalized) {
@@ -221,6 +225,20 @@ export function planPaymentIntentAdjustments(params: {
   }
 
   if (convertNeedByTo.size === 0) {
+    if (hasOverpayment) {
+      return {
+        ok: true,
+        intents: normalized,
+        totalPayUsd,
+        openDebtUsd,
+        closesDebtUsd,
+        overpaymentUsd,
+        hasOverpayment,
+        allocation,
+        moves: [],
+        orderChanges: [],
+      };
+    }
     return {
       ok: false,
       error:
@@ -330,15 +348,18 @@ export function planPaymentIntentAdjustments(params: {
     }
 
     if (left > EPS) {
-      return {
-        ok: false,
-        error: `אין מספיק יתרה מתוכננת באמצעים אחרים כדי להתאים ${methodLabel(toKey)} בסכום $${left.toFixed(2)}`,
-      };
+      // עודף מעל החוב אינו דורש יתרה מתוכננת בהזמנות — הוא יתרת זכות.
+      if (left > overpaymentUsd + EPS) {
+        return {
+          ok: false,
+          error: `אין מספיק יתרה מתוכננת באמצעים אחרים כדי להתאים ${methodLabel(toKey)} בסכום $${left.toFixed(2)}`,
+        };
+      }
     }
   }
 
   const moves = [...moveAgg.values()];
-  if (moves.length === 0) {
+  if (moves.length === 0 && !hasOverpayment) {
     return { ok: false, error: "לא זוהתה התאמה נדרשת" };
   }
 
@@ -351,9 +372,21 @@ export function planPaymentIntentAdjustments(params: {
     intents: normalized,
     totalPayUsd,
     openDebtUsd,
+    closesDebtUsd,
+    overpaymentUsd,
+    hasOverpayment,
+    allocation,
     moves,
     orderChanges,
   };
+}
+
+/** יתרת זכות אחרי תשלום יתר — מוסיפה לעודף החדש, לא דורסת זכות קיימת. */
+export function resultingCustomerCreditUsd(
+  existingCreditUsd: number,
+  newSurplusUsd: number,
+): number {
+  return roundMoney2(Math.max(0, existingCreditUsd) + Math.max(0, newSurplusUsd));
 }
 
 /** מאגד שורות טיוטת תשלום מטופס הקליטה ל-intents */

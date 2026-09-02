@@ -7,8 +7,10 @@ import {
   exportCustomerBalancesAction,
   getCustomerBalancePreviewAction,
   getCustomerBalancesRevisionAction,
+  invalidateCustomerBalancesCacheAction,
   listCustomerBalancesAction,
   type CustomerBalanceDebtFilter,
+  type CustomerBalanceQuery,
   type CustomerBalanceRow,
   type CustomerBalanceSort,
   type CustomerBalancesPayload,
@@ -40,6 +42,14 @@ import {
   normalizeAhWeekCode,
   prevWeekCode,
 } from "@/lib/work-week";
+import { goToNextWeek, goToPrevWeek } from "@/lib/weeks/ah-week-nav";
+import {
+  balancesListCacheKey,
+  fetchBalancesListCached,
+  getBalancesListCache,
+  invalidateBalancesListCache,
+} from "@/lib/balances-client-cache";
+import { invalidateCustomerCardSnapshotClient } from "@/lib/customer-card-snapshot-client";
 import {
   BALANCES_FROM_PARAM,
   BALANCES_RANGE_TO_PARAM,
@@ -166,6 +176,71 @@ function isBalancesDateRangeActive(filters: Pick<BalancesFiltersState, "rangeFro
   return Boolean(filters.rangeFromYmd.trim() || filters.rangeToYmd.trim());
 }
 
+function resolveBalancesQueryScope(filters: Pick<BalancesFiltersState, "weekCode" | "toYmd" | "sourceCountry">) {
+  const week = normalizeAhWeekCode(filters.weekCode) ?? ACTIVE_WORK_WEEK_CODE;
+  return {
+    week,
+    snapshotWeek: prevWeekCode(week),
+    country: filters.sourceCountry,
+    snapshotTo: filters.toYmd?.trim() || balancesSnapshotToYmd(week),
+  };
+}
+
+function buildCustomerBalancesListQuery(
+  page: number,
+  filters: BalancesFiltersState,
+  search: BalancesSearchDraft,
+  scope: ReturnType<typeof resolveBalancesQueryScope>,
+): CustomerBalanceQuery {
+  const dateRangeActive = isBalancesDateRangeActive(filters);
+  return {
+    page,
+    limit: LIMIT,
+    weekCode: scope.week,
+    ...(dateRangeActive
+      ? {
+          fromYmd: filters.rangeFromYmd.trim() || undefined,
+          toYmd: filters.rangeToYmd.trim() || formatLocalYmd(new Date()),
+        }
+      : {
+          uptoWeekCode: scope.snapshotWeek ?? undefined,
+          toYmd: scope.snapshotTo,
+        }),
+    sourceCountry: scope.country,
+    filters: {
+      code: search.code.trim() || undefined,
+      name: search.name.trim() || undefined,
+      phone: search.phone.trim() || undefined,
+      balanceDebtStatus: search.balanceStatus,
+      orderStatus: search.orderStatus,
+      minBalanceIls: search.minBalanceIls,
+      maxBalanceIls: search.maxBalanceIls,
+      showBalanced: search.showBalanced || undefined,
+      sort: filters.sort,
+    },
+  };
+}
+
+function prefetchAdjacentBalanceWeeks(
+  week: string,
+  filters: BalancesFiltersState,
+  search: BalancesSearchDraft,
+): void {
+  if (isBalancesDateRangeActive(filters)) return;
+  for (const adj of [goToPrevWeek(week), goToNextWeek(week)]) {
+    if (!adj) continue;
+    const adjFilters: BalancesFiltersState = {
+      ...filters,
+      weekCode: adj,
+      toYmd: balancesSnapshotToYmd(adj),
+    };
+    const query = buildCustomerBalancesListQuery(1, adjFilters, search, resolveBalancesQueryScope(adjFilters));
+    const key = balancesListCacheKey(query);
+    if (getBalancesListCache(key)) continue;
+    void fetchBalancesListCached(key, () => listCustomerBalancesAction(query));
+  }
+}
+
 export type BalancesFiltersState = {
   /** שבוע עבודה שנבחר ב-UI (למשל AH-125) */
   weekCode: string;
@@ -263,10 +338,11 @@ export function CustomerBalancesClient({
   const [manualRefreshBusy, setManualRefreshBusy] = useState(false);
   const [newDataAvailable, setNewDataAvailable] = useState(false);
   const softRefreshPendingRef = useRef(false);
+  const skipCacheNextRef = useRef(false);
   const payloadRevisionRef = useRef("");
   const staleCheckGenRef = useRef(0);
   const [insightsExpanded, setInsightsExpanded] = useState(false);
-  const balancesScopeKeyRef = useRef<string | null>(null);
+  const [displayedQueryKey, setDisplayedQueryKey] = useState<string | null>(null);
   const [commissionResetRow, setCommissionResetRow] = useState<CustomerBalanceRow | null>(null);
   const [commissionDetailCustomer, setCommissionDetailCustomer] = useState<{
     customerId: string;
@@ -285,17 +361,25 @@ export function CustomerBalancesClient({
   }, []);
 
   /** מקור יחיד לשאילתה — מסונכרן עם תצוגת השבוע (לא ממתין לעדכון URL) */
-  const balancesQueryScope = useMemo(() => {
-    const week = normalizeAhWeekCode(balancesFilters.weekCode) ?? ACTIVE_WORK_WEEK_CODE;
-    const snapshotTo = balancesFilters.toYmd?.trim() || balancesSnapshotToYmd(week);
-    const snapshotWeek = prevWeekCode(week);
-    const urlCountry = orderCountryCodeForWorkCountry(resolveWorkCountryFromSearchParams(sp));
-    const country = balancesFilters.sourceCountry || urlCountry;
-    return { week, snapshotWeek, country, snapshotTo };
-  }, [balancesFilters.weekCode, balancesFilters.toYmd, balancesFilters.sourceCountry, sp]);
+  const balancesQueryScope = useMemo(
+    () => resolveBalancesQueryScope(balancesFilters),
+    [balancesFilters.weekCode, balancesFilters.toYmd, balancesFilters.sourceCountry],
+  );
 
   useEffect(() => {
-    setBalancesFilters(parseStructuralFromSearchParams(new URLSearchParams(sp.toString())));
+    const parsed = parseStructuralFromSearchParams(new URLSearchParams(sp.toString()));
+    setBalancesFilters((f) => {
+      if (
+        f.weekCode === parsed.weekCode &&
+        f.toYmd === parsed.toYmd &&
+        f.rangeFromYmd === parsed.rangeFromYmd &&
+        f.rangeToYmd === parsed.rangeToYmd &&
+        f.sourceCountry === parsed.sourceCountry
+      ) {
+        return f;
+      }
+      return { ...parsed, sort: f.sort };
+    });
     setUrlReady(true);
   }, [sp]);
 
@@ -308,16 +392,20 @@ export function CustomerBalancesClient({
   }, [searchDraft]);
 
   const refetchBalances = useCallback(() => {
-    setPayload(null);
+    skipCacheNextRef.current = true;
+    invalidateBalancesListCache();
     setPage(1);
     setErr(null);
     setNewDataAvailable(false);
+    void invalidateCustomerBalancesCacheAction();
     setRefreshSig((s) => s + 1);
-    router.refresh();
-  }, [router]);
+  }, []);
 
   const softRefreshBalances = useCallback(() => {
     softRefreshPendingRef.current = true;
+    skipCacheNextRef.current = true;
+    invalidateBalancesListCache();
+    void invalidateCustomerBalancesCacheAction();
     setNewDataAvailable(false);
     setErr(null);
     setRefreshSig((s) => s + 1);
@@ -337,6 +425,9 @@ export function CustomerBalancesClient({
       if (document.hidden) {
         hiddenAt = Date.now();
       } else if (hiddenAt !== null && Date.now() - hiddenAt > 10_000) {
+        skipCacheNextRef.current = true;
+        invalidateBalancesListCache();
+        void invalidateCustomerBalancesCacheAction();
         setRefreshSig((s) => s + 1);
         hiddenAt = null;
       }
@@ -346,91 +437,73 @@ export function CustomerBalancesClient({
   }, []);
 
   const buildListQuery = useCallback(
-    (p: number) => {
-      const snapshotTo = balancesQueryScope.snapshotTo;
-      const dateRangeActive = isBalancesDateRangeActive(balancesFilters);
-      return {
-        page: p,
-        limit: LIMIT,
-        weekCode: balancesQueryScope.week,
-        ...(dateRangeActive
-          ? {
-              fromYmd: balancesFilters.rangeFromYmd.trim() || undefined,
-              toYmd: balancesFilters.rangeToYmd.trim() || formatLocalYmd(new Date()),
-            }
-          : {
-              uptoWeekCode: balancesQueryScope.snapshotWeek ?? undefined,
-              toYmd: snapshotTo,
-            }),
-        sourceCountry: balancesQueryScope.country,
-        filters: {
-          code: debouncedSearch.code.trim() || undefined,
-          name: debouncedSearch.name.trim() || undefined,
-          phone: debouncedSearch.phone.trim() || undefined,
-          balanceDebtStatus: debouncedSearch.balanceStatus,
-          orderStatus: debouncedSearch.orderStatus,
-          minBalanceIls: debouncedSearch.minBalanceIls,
-          maxBalanceIls: debouncedSearch.maxBalanceIls,
-          showBalanced: debouncedSearch.showBalanced || undefined,
-          sort: balancesFilters.sort,
-        },
-      };
-    },
-    [
-      balancesFilters.rangeFromYmd,
-      balancesFilters.rangeToYmd,
-      balancesFilters.sort,
-      balancesQueryScope,
-      debouncedSearch,
-    ],
+    (p: number) => buildCustomerBalancesListQuery(p, balancesFilters, debouncedSearch, balancesQueryScope),
+    [balancesFilters, balancesQueryScope, debouncedSearch],
   );
-
-  const { week: scopeWeek, country: scopeCountry, snapshotTo: scopeTo, snapshotWeek: scopeSnapshotWeek } =
-    balancesQueryScope;
-
-  useEffect(() => {
-    console.log({
-      week: scopeWeek,
-      country: scopeCountry,
-      snapshotWeek: scopeSnapshotWeek,
-      to: scopeTo,
-    });
-    const key = `${scopeWeek}|${scopeCountry}|${scopeSnapshotWeek ?? ""}|${scopeTo}|${balancesFilters.rangeFromYmd}|${balancesFilters.rangeToYmd}`;
-    if (balancesScopeKeyRef.current !== null && balancesScopeKeyRef.current !== key) {
-      refetchBalances();
-    }
-    balancesScopeKeyRef.current = key;
-  }, [scopeWeek, scopeCountry, scopeSnapshotWeek, scopeTo, balancesFilters.rangeFromYmd, balancesFilters.rangeToYmd, refetchBalances]);
 
   useEffect(() => {
     if (!urlReady) return;
     const gen = ++fetchGenRef.current;
     const query = buildListQuery(page);
+    const cacheKey = balancesListCacheKey(query);
+    const skipCache = skipCacheNextRef.current;
+    skipCacheNextRef.current = false;
     const isSoftRefresh = softRefreshPendingRef.current;
     if (isSoftRefresh) {
       softRefreshPendingRef.current = false;
       setManualRefreshBusy(true);
-    } else {
-      setTableLoading(true);
     }
+
+    if (!skipCache) {
+      const cached = getBalancesListCache(cacheKey);
+      if (cached) {
+        setPayload(cached);
+        setDisplayedQueryKey(cacheKey);
+        payloadRevisionRef.current = customerBalancesDataRevision(cached);
+        setNewDataAvailable(false);
+        setTableLoading(false);
+        setManualRefreshBusy(false);
+        console.log("[balances-client-fetch]", {
+          week: query.weekCode,
+          country: query.sourceCountry,
+          page: query.page,
+          cacheHit: true,
+          ms: 0,
+        });
+        prefetchAdjacentBalanceWeeks(balancesQueryScope.week, balancesFilters, debouncedSearch);
+        return;
+      }
+    }
+
+    if (!isSoftRefresh) setTableLoading(true);
+    const t0 = typeof performance !== "undefined" ? performance.now() : Date.now();
     console.log("[balances-client-fetch]", {
       week: query.weekCode,
-      uptoWeek: "uptoWeekCode" in query ? query.uptoWeekCode : undefined,
-      from: "fromYmd" in query ? query.fromYmd : undefined,
+      uptoWeek: query.uptoWeekCode,
+      from: query.fromYmd,
       country: query.sourceCountry,
       to: query.toYmd,
       page: query.page,
       refreshSig,
       soft: isSoftRefresh,
+      cacheHit: false,
     });
     setErr(null);
-    void listCustomerBalancesAction(query)
+    void fetchBalancesListCached(cacheKey, () => listCustomerBalancesAction({ ...query, skipCache }), {
+      skipCache,
+    })
       .then((next) => {
         if (gen !== fetchGenRef.current) return;
         setPayload(next);
+        setDisplayedQueryKey(cacheKey);
         payloadRevisionRef.current = customerBalancesDataRevision(next);
         setNewDataAvailable(false);
         if (page > 1 && next.rows.length === 0) setPage(1);
+        prefetchAdjacentBalanceWeeks(balancesQueryScope.week, balancesFilters, debouncedSearch);
+        console.log("[balances-client-fetch-done]", {
+          week: query.weekCode,
+          ms: Math.round((typeof performance !== "undefined" ? performance.now() : Date.now()) - t0),
+        });
       })
       .catch(() => {
         if (gen !== fetchGenRef.current) return;
@@ -441,10 +514,13 @@ export function CustomerBalancesClient({
         setTableLoading(false);
         setManualRefreshBusy(false);
       });
-  }, [urlReady, page, buildListQuery, refreshSig]);
+  }, [urlReady, page, buildListQuery, refreshSig, balancesFilters, balancesQueryScope.week, debouncedSearch]);
 
   const searchPending = JSON.stringify(searchDraft) !== JSON.stringify(debouncedSearch);
-  const tableBusy = !urlReady || (tableLoading && !payload);
+  const currentListQueryKey = balancesListCacheKey(buildListQuery(page));
+  const displayPayload = payload && displayedQueryKey === currentListQueryKey ? payload : null;
+  const tableBusy = !urlReady || (tableLoading && !displayPayload);
+  const weekNavLocked = !urlReady || !!exportBusy;
   const urlModalOpen = Boolean(sp.get("modal")?.trim());
   const overlayBlocksAutoCheck =
     adminWindowStack.length > 0 || urlModalOpen || Boolean(exportBusy) || manualRefreshBusy || tableLoading;
@@ -515,7 +591,7 @@ export function CustomerBalancesClient({
         balancesFilters.rangeToYmd,
       ),
     );
-    router.replace(nextHref);
+    router.replace(nextHref, { scroll: false });
   }, [
     balancesFilters.rangeFromYmd,
     balancesFilters.rangeToYmd,
@@ -537,16 +613,32 @@ export function CustomerBalancesClient({
     syncUrl,
   ]);
 
-  const pages = useMemo(() => pageNumbers(payload?.page ?? page, payload?.totalPages ?? 1), [payload?.page, payload?.totalPages, page]);
+  const pages = useMemo(
+    () => pageNumbers(displayPayload?.page ?? page, displayPayload?.totalPages ?? 1),
+    [displayPayload?.page, displayPayload?.totalPages, page],
+  );
 
   const onBalancesWeekChange = useCallback((normalizedWeek: string) => {
-    setBalancesFilters((f) => ({
-      ...f,
+    const nextFilters: BalancesFiltersState = {
+      ...balancesFilters,
       weekCode: normalizedWeek,
       toYmd: balancesSnapshotToYmd(normalizedWeek),
-    }));
+    };
+    setBalancesFilters(nextFilters);
     setPage(1);
-  }, []);
+    const query = buildCustomerBalancesListQuery(1, nextFilters, debouncedSearch, resolveBalancesQueryScope(nextFilters));
+    const key = balancesListCacheKey(query);
+    const cached = getBalancesListCache(key);
+    if (cached) {
+      setPayload(cached);
+      setDisplayedQueryKey(key);
+      payloadRevisionRef.current = customerBalancesDataRevision(cached);
+      setTableLoading(false);
+    } else {
+      setPayload(null);
+      setDisplayedQueryKey(null);
+    }
+  }, [balancesFilters, debouncedSearch]);
 
   function clearPageFilters() {
     setBalancesFilters(defaultBalancesFilters());
@@ -674,7 +766,7 @@ export function CustomerBalancesClient({
   }
 
   const colCount = 10;
-  const stats = payload?.stats;
+  const stats = displayPayload?.stats;
 
   const heroActions = (
     <div className="adm-balances-hero__actions" role="group" aria-label="פעולות מסך">
@@ -911,7 +1003,7 @@ export function CustomerBalancesClient({
             <div className="adm-balances-week-wrap">
               <ReportWeekNav
                 weekCode={balancesFilters.weekCode}
-                disabled={tableBusy}
+                disabled={weekNavLocked}
                 onWeekChange={onBalancesWeekChange}
               />
             </div>
@@ -1000,7 +1092,7 @@ export function CustomerBalancesClient({
         <section className="adm-balances-fcc-kpi" dir="rtl" aria-label="סיכום פיננסי">
           <article className="adm-balances-fcc-kpi__card">
             <span className="adm-balances-fcc-kpi__label">סה״כ לקוחות</span>
-            <strong className="adm-balances-fcc-kpi__value">{(payload?.totalRows ?? 0).toLocaleString("he-IL")}</strong>
+            <strong className="adm-balances-fcc-kpi__value">{(displayPayload?.totalRows ?? 0).toLocaleString("he-IL")}</strong>
           </article>
           <article className="adm-balances-fcc-kpi__card adm-balances-fcc-kpi__card--before-commission">
             <span className="adm-balances-fcc-kpi__label">סה״כ לפני עמלה</span>
@@ -1033,7 +1125,16 @@ export function CustomerBalancesClient({
             </strong>
           </article>
         </section>
-      ) : null}
+      ) : (
+        <section className="adm-balances-fcc-kpi adm-balances-fcc-kpi--skeleton" dir="rtl" aria-busy="true" aria-label="טוען סיכום">
+          {["לקוחות", "לפני עמלה", "אחרי עמלה", "משיכה מקוד", "תשלומים", "יתרות"].map((label) => (
+            <article key={label} className="adm-balances-fcc-kpi__card adm-balances-fcc-kpi__card--skel">
+              <span className="adm-balances-fcc-kpi__label">{label}</span>
+              <strong className="adm-balances-fcc-kpi__value">—</strong>
+            </article>
+          ))}
+        </section>
+      )}
 
       <div className="adm-balances-work">
         {balancesScopeSubtitle(
@@ -1051,10 +1152,10 @@ export function CustomerBalancesClient({
             )}
           </p>
         ) : null}
-        {payload?.activeOrderStatusFilter && payload.activeOrderStatusFilter !== "ALL" ? (
+        {displayPayload?.activeOrderStatusFilter && displayPayload.activeOrderStatusFilter !== "ALL" ? (
           <p className="adm-balances-scope-line adm-balances-scope-line--filter" role="note">
             חישוב יתרה לפי הזמנות בסטטוס «
-            {CUSTOMER_BALANCE_ORDER_STATUS_OPTIONS.find((o) => o.value === payload.activeOrderStatusFilter)?.label}» ·
+            {CUSTOMER_BALANCE_ORDER_STATUS_OPTIONS.find((o) => o.value === displayPayload.activeOrderStatusFilter)?.label}» ·
             תשלומים לפי כל ההזמנות בטווח
           </p>
         ) : null}
@@ -1062,9 +1163,9 @@ export function CustomerBalancesClient({
         {stats && insightsExpanded ? (
           <CustomerBalancesInsightsBar
             stats={stats}
-            rows={payload?.rows ?? []}
-            totalRows={payload?.totalRows ?? 0}
-            totalPages={payload?.totalPages ?? 1}
+            rows={displayPayload?.rows ?? []}
+            totalRows={displayPayload?.totalRows ?? 0}
+            totalPages={displayPayload?.totalPages ?? 1}
             expanded={insightsExpanded}
           />
         ) : null}
@@ -1072,13 +1173,13 @@ export function CustomerBalancesClient({
         <div
           className={[
             "adm-balances-table-wrap",
-            tableLoading && payload ? "adm-balances-table-wrap--loading" : "",
+            tableLoading && displayPayload ? "adm-balances-table-wrap--loading" : "",
           ]
             .filter(Boolean)
             .join(" ")}
           aria-busy={tableLoading}
         >
-          {tableLoading && payload ? (
+          {tableLoading && displayPayload ? (
             <div className="adm-balances-table-overlay" role="status" aria-label="טוען נתונים">
               <span className="adm-balances-table-spinner" />
             </div>
@@ -1099,14 +1200,14 @@ export function CustomerBalancesClient({
               </tr>
             </thead>
             <tbody>
-              {tableBusy && !payload ? (
+              {tableBusy && !displayPayload ? (
                 <TableSkeleton rows={10} columns={colCount} />
-              ) : payload && payload.rows.length === 0 ? (
+              ) : displayPayload && displayPayload.rows.length === 0 ? (
                 <tr>
                   <td colSpan={colCount}>אין תוצאות</td>
                 </tr>
               ) : (
-                payload?.rows.map((r) => {
+                displayPayload?.rows.map((r) => {
                   const ui = balanceUiFromRow(r);
                   const ordersUsd = rowOrdersUsdSplit(r);
                   return (
@@ -1181,7 +1282,7 @@ export function CustomerBalancesClient({
                             <BookOpen size={14} strokeWidth={2.2} aria-hidden />
                             כרטסת
                           </button>
-                          {canResetViaCommissions && ui.tone === "debt" ? (
+                          {canResetViaCommissions && (ui.tone === "debt" || ui.tone === "credit") ? (
                             <button
                               type="button"
                               className="adm-btn adm-btn--ghost adm-btn--xs adm-balances-ledger-btn adm-balances-commission-reset-btn"
@@ -1191,7 +1292,7 @@ export function CustomerBalancesClient({
                               }}
                             >
                               <Coins size={14} strokeWidth={2.2} aria-hidden />
-                              איפוס עמלות
+                              איפוס
                             </button>
                           ) : null}
                         </div>
@@ -1224,7 +1325,7 @@ export function CustomerBalancesClient({
         ) : null}
 
         <footer className="adm-balances-foot">
-          <span className="adm-balances-page-meta">{payload?.totalRows ?? 0} לקוחות</span>
+          <span className="adm-balances-page-meta">{displayPayload?.totalRows ?? 0} לקוחות</span>
           <nav className="adm-balances-pager" aria-label="עימוד">
             <button
               type="button"
@@ -1238,7 +1339,7 @@ export function CustomerBalancesClient({
               <button
                 key={n}
                 type="button"
-                className={n === (payload?.page ?? page) ? "adm-btn adm-btn--xs adm-btn--primary" : "adm-btn adm-btn--ghost adm-btn--xs"}
+                className={n === (displayPayload?.page ?? page) ? "adm-btn adm-btn--xs adm-btn--primary" : "adm-btn adm-btn--ghost adm-btn--xs"}
                 disabled={tableBusy}
                 onClick={() => setPage(n)}
               >
@@ -1248,7 +1349,7 @@ export function CustomerBalancesClient({
             <button
               type="button"
               className="adm-btn adm-btn--ghost adm-btn--xs"
-              disabled={!payload || page >= (payload?.totalPages ?? 1) || tableBusy}
+              disabled={!displayPayload || page >= (displayPayload?.totalPages ?? 1) || tableBusy}
               onClick={() => setPage((p) => p + 1)}
             >
               הבא
@@ -1264,6 +1365,9 @@ export function CustomerBalancesClient({
         onClose={() => setCommissionResetRow(null)}
         onSuccess={(msg) => {
           showToast(msg);
+          if (commissionResetRow?.customerId) {
+            invalidateCustomerCardSnapshotClient(commissionResetRow.customerId);
+          }
           window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
         }}
       />

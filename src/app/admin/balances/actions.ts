@@ -1,6 +1,6 @@
 "use server";
 
-import { unstable_noStore as noStore } from "next/cache";
+import { revalidatePath, unstable_noStore as noStore } from "next/cache";
 import { OrderSourceCountry, Prisma } from "@prisma/client";
 import { requireAuth, userHasAnyPermission, isAdminUser } from "@/lib/admin-auth";
 import { perfEnabled } from "@/lib/perf-log";
@@ -39,7 +39,20 @@ import {
 import { getCustomerCreditBalancesUsdMany } from "@/lib/customer-credit-balance";
 import { getCustomerCommissionBalancesUsdMany } from "@/lib/customer-commission-balance";
 import { buildCustomerCommissionResetPreview } from "@/lib/customer-commission-balance";
+import { getCustomerAccountBalances } from "@/lib/customer-account-balances";
 import { resetCustomerOutstandingBalancesAction } from "@/app/admin/payments-updated/actions";
+import { applyCustomerCreditToCommission } from "@/lib/apply-customer-credit-to-commission";
+import {
+  ACCOUNT_RESET_EMPTY_MESSAGE,
+  planCustomerAccountReset,
+  type CustomerAccountResetKind,
+} from "@/lib/customer-account-reset";
+import {
+  getCustomerInternalBalanceUsd,
+  persistCustomerBalanceSnapshot,
+} from "@/lib/customer-open-debt";
+import { revalidateAllKpiCaches } from "@/lib/kpi-cache-revalidate";
+import { scheduleRevalidateAfterPaymentSave } from "@/lib/revalidate-after-payment-save";
 import {
   orderStatusesForBalanceFilter,
   parseCustomerBalanceOrderStatusFilter,
@@ -517,7 +530,7 @@ function matchesDebtFilter(row: CustomerBalanceRow, filter: CustomerBalanceDebtF
 }
 
 const ID_CHUNK = 4000;
-const BALANCES_CACHE_TTL_MS = 30_000;
+const BALANCES_CACHE_TTL_MS = 120_000;
 
 let statusOverrideTableReady: Promise<void> | null = null;
 const balancesPayloadCache = new Map<string, { ts: number; payload: CustomerBalancesPayload }>();
@@ -565,6 +578,10 @@ function setCachedBalancesPayload(key: string, payload: CustomerBalancesPayload)
     const oldest = [...balancesPayloadCache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0]?.[0];
     if (oldest) balancesPayloadCache.delete(oldest);
   }
+}
+
+export async function invalidateCustomerBalancesCacheAction(): Promise<void> {
+  balancesPayloadCache.clear();
 }
 
 function buildCustomerWhere(query: CustomerBalanceQuery): Prisma.CustomerWhereInput {
@@ -940,6 +957,13 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   const cachedPayload = query.skipCache ? null : getCachedBalancesPayload(cacheKey);
   if (cachedPayload) {
     const totalMs = Date.now() - perfT0;
+    console.log("[balances-list]", {
+      week: query.weekCode?.trim() || null,
+      country: countryScope.workCountry,
+      cacheHit: true,
+      totalMs,
+      prismaQueryCount: 0,
+    });
     if (perfEnabled()) {
       console.table({
         customersQueryMs: 0,
@@ -1603,6 +1627,15 @@ export async function listCustomerBalancesAction(query: CustomerBalanceQuery): P
   }
 
   setCachedBalancesPayload(cacheKey, out);
+  console.log("[balances-list]", {
+    week: query.weekCode?.trim() || null,
+    country: countryScope.workCountry,
+    cacheHit: false,
+    totalMs: Date.now() - perfT0,
+    prismaQueryCount,
+    customers: customers.length,
+    rows: out.totalRows,
+  });
   return out;
 }
 
@@ -1855,10 +1888,15 @@ export async function exportCustomerBalancesAction(
 export type CustomerCommissionResetPreviewDto = {
   customerId: string;
   customerName: string;
+  kind: CustomerAccountResetKind;
   openDebtUsd: number;
+  openDebtAfterUsd: number;
+  availableCreditUsd: number;
+  creditAfterUsd: number;
   commissionBalanceUsd: number;
   resetUsd: number;
   commissionAfterUsd: number;
+  message: string | null;
   orders: Array<{
     orderId: string;
     orderNumber: string;
@@ -1882,33 +1920,47 @@ export async function getCustomerCommissionResetPreviewAction(input: {
   noStore();
   const me = await requireAuth();
   if (!canResetCustomerDebtViaCommissions(me)) {
-    return { ok: false, error: "אין הרשאה לאיפוס עמלות" };
+    return { ok: false, error: "אין הרשאה לאיפוס" };
   }
 
   const cid = (input.customerId || "").trim();
   if (!cid) return { ok: false, error: "חסר מזהה לקוח" };
 
-  const built = await buildCustomerCommissionResetPreview(cid);
+  const [accounts, built] = await Promise.all([
+    getCustomerAccountBalances(cid),
+    buildCustomerCommissionResetPreview(cid),
+  ]);
   if (!built) return { ok: false, error: "לקוח לא נמצא" };
-  if (built.openDebtUsd <= 0.01) {
-    return { ok: false, error: "אין חוב פתוח לאיפוס" };
-  }
+
+  const plan = planCustomerAccountReset({
+    openDebtUsd: accounts.openDebtUsd,
+    availableCreditUsd: accounts.availableCreditUsd,
+    commissionBalanceUsd: accounts.commissionBalanceUsd,
+  });
 
   return {
     ok: true,
     preview: {
       customerId: built.customerId,
       customerName: (input.customerName || "").trim() || "לקוח",
-      openDebtUsd: built.openDebtUsd,
-      commissionBalanceUsd: built.commissionBalanceUsd,
-      resetUsd: built.resetUsd,
-      commissionAfterUsd: built.commissionAfterUsd,
-      orders: built.orders.map((o) => ({
-        orderId: o.orderId,
-        orderNumber: o.orderNumber,
-        remainingUsd: o.remainingUsd,
-        orderDateYmd: o.orderDateYmd,
-      })),
+      kind: plan.kind,
+      openDebtUsd: plan.openDebtBeforeUsd,
+      openDebtAfterUsd: plan.openDebtAfterUsd,
+      availableCreditUsd: plan.creditBeforeUsd,
+      creditAfterUsd: plan.creditAfterUsd,
+      commissionBalanceUsd: plan.commissionBeforeUsd,
+      resetUsd: plan.amountToResetUsd,
+      commissionAfterUsd: plan.commissionAfterUsd,
+      message: plan.message,
+      orders:
+        plan.kind === "DEBT"
+          ? built.orders.map((o) => ({
+              orderId: o.orderId,
+              orderNumber: o.orderNumber,
+              remainingUsd: o.remainingUsd,
+              orderDateYmd: o.orderDateYmd,
+            }))
+          : [],
     },
   };
 }
@@ -1923,32 +1975,75 @@ export async function resetCustomerDebtViaCommissionsAction(input: {
   noStore();
   const me = await requireAuth();
   if (!canResetCustomerDebtViaCommissions(me)) {
-    return { ok: false, error: "אין הרשאה לאיפוס עמלות" };
+    return { ok: false, error: "אין הרשאה לאיפוס" };
   }
 
   const cid = (input.customerId || "").trim();
   if (!cid) return { ok: false, error: "חסר מזהה לקוח" };
 
-  const built = await buildCustomerCommissionResetPreview(cid);
-  if (!built || built.openDebtUsd <= 0.01) {
-    return { ok: false, error: "אין חוב פתוח לאיפוס" };
+  const [accounts, built] = await Promise.all([
+    getCustomerAccountBalances(cid),
+    buildCustomerCommissionResetPreview(cid),
+  ]);
+  if (!built) return { ok: false, error: "לקוח לא נמצא" };
+
+  const plan = planCustomerAccountReset({
+    openDebtUsd: accounts.openDebtUsd,
+    availableCreditUsd: accounts.availableCreditUsd,
+    commissionBalanceUsd: accounts.commissionBalanceUsd,
+  });
+
+  if (plan.kind === "NONE") {
+    return { ok: false, error: plan.message ?? ACCOUNT_RESET_EMPTY_MESSAGE };
+  }
+  if (plan.kind === "CONFLICT") {
+    return { ok: false, error: plan.message ?? ACCOUNT_RESET_EMPTY_MESSAGE };
+  }
+
+  if (plan.kind === "CREDIT") {
+    try {
+      const creditResult = await applyCustomerCreditToCommission({
+        customerId: cid,
+        userId: me.id,
+        plan,
+      });
+      const customerBalanceUsd = await getCustomerInternalBalanceUsd(cid);
+      await persistCustomerBalanceSnapshot(cid, customerBalanceUsd);
+      revalidateAllKpiCaches();
+      revalidatePath("/admin/balances");
+      revalidatePath("/admin/orders");
+      revalidatePath("/admin/source-tables/payment-fees");
+      scheduleRevalidateAfterPaymentSave();
+      return {
+        ok: true,
+        totalResetUsd: creditResult.totalResetUsd,
+        commissionAfterUsd: plan.commissionAfterUsd,
+      };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : "האיפוס נכשל" };
+    }
   }
 
   const orderIds = built.orders.map((o) => o.orderId);
+  if (orderIds.length === 0) {
+    return { ok: false, error: ACCOUNT_RESET_EMPTY_MESSAGE };
+  }
   const result = await resetCustomerOutstandingBalancesAction({
     customerId: cid,
     weekCode: null,
     orderIds,
     allowNegativeCommission: true,
+    ledgerLabel: plan.ledgerLabel,
+    commissionBalanceBeforeUsd: plan.commissionBeforeUsd,
   });
 
   if (!result.ok) return result;
 
-  const afterPreview = await buildCustomerCommissionResetPreview(cid);
+  const afterAccounts = await getCustomerAccountBalances(cid);
   return {
     ok: true,
     totalResetUsd: result.totalResetUsd,
-    commissionAfterUsd: afterPreview?.commissionBalanceUsd ?? built.commissionAfterUsd,
+    commissionAfterUsd: afterAccounts.commissionBalanceUsd,
   };
 }
 
@@ -1961,7 +2056,6 @@ export async function getCustomerBalancesRevisionAction(
     ...query,
     page: 1,
     limit: 1,
-    skipCache: true,
   });
   return customerBalancesDataRevision(payload);
 }

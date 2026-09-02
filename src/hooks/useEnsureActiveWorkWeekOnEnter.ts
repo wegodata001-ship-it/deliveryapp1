@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { resolveGlobalCountry } from "@/lib/current-country";
 import { withQuery } from "@/lib/admin-url-query";
@@ -11,6 +11,7 @@ import {
   BALANCES_TO_PARAM,
   BALANCES_WEEK_PARAM,
   balancesWeekQueryPatch,
+  shouldResyncBalancesLocalWeek,
 } from "@/lib/balances-week-filter";
 
 export type WorkWeekScreenScope = "orders" | "balances";
@@ -22,11 +23,13 @@ function scopeMatchesPath(scope: WorkWeekScreenScope, pathname: string): boolean
 
 /**
  * מסנכרן פרמטרי מסך (ordersWeek / balancesWeek) לשבוע העבודה הגלובלי (?week=).
+ * בדוח יתרות: balancesWeek הוא פילטר מקומי — לא לדרוס ניווט שבוע מקומי.
  */
 export function useEnsureActiveWorkWeekOnEnter(scope: WorkWeekScreenScope): void {
   const pathname = usePathname();
   const router = useRouter();
   const sp = useSearchParams();
+  const lastGlobalWeekRef = useRef<string | null>(null);
 
   const globalWeekRaw = sp.get("week") ?? "";
 
@@ -62,18 +65,19 @@ export function useEnsureActiveWorkWeekOnEnter(scope: WorkWeekScreenScope): void
     }
 
     const cur = normalizeAhWeekCode(sp.get(BALANCES_WEEK_PARAM) || "") ?? "";
-    const snap = balancesSnapshotToYmd(globalWorkWeek);
     const curTo = sp.get(BALANCES_TO_PARAM) || "";
-    if (cur === globalWorkWeek && curTo === snap) return;
+    const action = shouldResyncBalancesLocalWeek({
+      currentBalancesWeek: cur,
+      currentBalancesTo: curTo,
+      globalWorkWeek,
+      previousGlobalWorkWeek: lastGlobalWeekRef.current,
+    });
+    lastGlobalWeekRef.current = globalWorkWeek;
+    if (action === "skip") return;
 
-    const next = new URLSearchParams(sp.toString());
-    next.set("week", globalWorkWeek);
-    next.set("from", fromYmd || range?.from || "");
-    next.set("to", toYmd || range?.to || "");
-    router.replace(
-      withQuery(pathname, next, balancesWeekQueryPatch(globalWorkWeek, snap)),
-      { scroll: false },
-    );
+    const week = action === "ensure-to" ? cur || globalWorkWeek : globalWorkWeek;
+    const snap = balancesSnapshotToYmd(week);
+    router.replace(withQuery(pathname, sp, balancesWeekQueryPatch(week, snap)), { scroll: false });
   }, [pathname, router, scope, sp, globalWeekRaw]);
 }
 

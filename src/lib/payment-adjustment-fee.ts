@@ -67,7 +67,7 @@ export type PaymentFeeSourceKind =
 export const PAYMENT_FEE_SOURCE_LABELS: Record<PaymentFeeSourceKind, string> = {
   PAYMENT_INTAKE: "קליטת תשלום",
   PAYMENT_SURPLUS: "תשלום יתר",
-  BALANCE_RESET: "איפוס יתרה",
+  BALANCE_RESET: "איפוס",
   MANUAL: "הזנה ידנית",
   CORRECTION: "תיקון",
   OTHER: "אחר",
@@ -83,7 +83,7 @@ export function derivePaymentFeeSourceKind(input: {
   const choice = (input.userChoice ?? "").trim();
   if (choice === "commission" || input.reason === "PAYMENT_SURPLUS") return "PAYMENT_SURPLUS";
   if (choice === "fee_adjustment_negative" || choice === "close_remainder_fee") return "BALANCE_RESET";
-  if (choice === "commission_pool_debit") return "BALANCE_RESET";
+  if (choice === "commission_pool_debit" || choice === "credit_to_commission") return "BALANCE_RESET";
   if (input.reason === "MANUAL_ADJUST") return "MANUAL";
   if (
     input.reason === "METHOD_DEVIATION" ||
@@ -127,7 +127,8 @@ export function derivePaymentFeeReasonLabel(input: {
 }): string {
   if (input.sourceKind === "PAYMENT_SURPLUS") return "תשלום יתר";
   if (input.userChoice === "fee_adjustment_negative") return "איפוס חוב — עמלה שלילית";
-  if (input.userChoice === "commission_pool_debit") return "איפוס חוב מיתרת עמלה";
+  if (input.userChoice === "commission_pool_debit") return "איפוס חוב";
+  if (input.userChoice === "credit_to_commission") return "איפוס יתרת זכות לעמלות";
   if (input.userChoice === "close_remainder_fee") return "סגירת יתרה";
   if (input.userChoice === "commission") return "תשלום יתר → עמלות";
   return PAYMENT_ADJUSTMENT_REASON_LABELS[input.reason] ?? input.reason;

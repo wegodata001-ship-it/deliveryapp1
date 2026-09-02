@@ -314,7 +314,7 @@ describe("QA-6 עריכת הזמנה — אמצעי תואם", () => {
 
 describe("QA-7 כרטסת — תוויות פעולות", () => {
   it("תוויות Audit ידועות", () => {
-    assert.equal(activityActionLabelHe("CUSTOMER_BALANCES_RESET"), "איפוס יתרות לקוח");
+    assert.equal(activityActionLabelHe("CUSTOMER_BALANCES_RESET"), "איפוס");
     assert.equal(
       activityActionLabelHe("CUSTOMER_BALANCE_RESET_FROM_CREDIT"),
       "איפוס יתרה מתוך יתרת זכות",

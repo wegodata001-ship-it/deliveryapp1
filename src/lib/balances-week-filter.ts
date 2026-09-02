@@ -57,3 +57,25 @@ export function balancesWeekQueryPatch(
     modal: null,
   };
 }
+
+export type BalancesLocalWeekResync = "seed" | "sync-global" | "ensure-to" | "skip";
+
+/**
+ * balancesWeek הוא פילטר מקומי. לסנכרן ל-week הגלובלי רק בכניסה ראשונה
+ * בלי פרמטר, או כשהשבוע הגלובלי עצמו השתנה — לא כשהמשתמש מנווט מקומית.
+ */
+export function shouldResyncBalancesLocalWeek(input: {
+  currentBalancesWeek: string;
+  currentBalancesTo: string;
+  globalWorkWeek: string;
+  previousGlobalWorkWeek: string | null;
+}): BalancesLocalWeekResync {
+  const firstEnter = input.previousGlobalWorkWeek === null;
+  if (firstEnter) {
+    if (!input.currentBalancesWeek) return "seed";
+    if (!input.currentBalancesTo) return "ensure-to";
+    return "skip";
+  }
+  if (input.previousGlobalWorkWeek !== input.globalWorkWeek) return "sync-global";
+  return "skip";
+}

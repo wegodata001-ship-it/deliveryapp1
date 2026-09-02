@@ -65,6 +65,11 @@ type IntentDraft = {
 type PreviewState = {
   openDebtUsd: number;
   totalPayUsd: number;
+  closesDebtUsd: number;
+  overpaymentUsd: number;
+  hasOverpayment: boolean;
+  existingCreditUsd: number;
+  resultingCreditUsd: number;
   intents: Array<{
     method: string;
     currency: PaymentBalanceCurrency;
@@ -110,7 +115,17 @@ type Props = {
   /** טיוטת תשלום נוכחית מקליטת התשלום — אם קיימת */
   draftPaymentLines?: DraftPaymentSeed[];
   onClose: () => void;
-  onApplied: (result: { adjustmentId: string; affectedOrders: number }) => void;
+  onApplied: (result: {
+    adjustmentId: string;
+    affectedOrders: number;
+    intents: PreviewState["intents"];
+    hasOverpayment: boolean;
+    overpaymentUsd: number;
+    closesDebtUsd: number;
+    openDebtUsd: number;
+    existingCreditUsd: number;
+    resultingCreditUsd: number;
+  }) => void;
 };
 
 function emptyDrafts(): Record<MethodKey, IntentDraft> {
@@ -286,8 +301,28 @@ export function PaymentMethodAutoAdjustModal({
     setErr(null);
   }
 
+  function appliedPayload(adjustmentId: string, affectedOrders: number) {
+    if (!preview) return null;
+    return {
+      adjustmentId,
+      affectedOrders,
+      intents: preview.intents,
+      hasOverpayment: preview.hasOverpayment,
+      overpaymentUsd: preview.overpaymentUsd,
+      closesDebtUsd: preview.closesDebtUsd,
+      openDebtUsd: preview.openDebtUsd,
+      existingCreditUsd: preview.existingCreditUsd,
+      resultingCreditUsd: preview.resultingCreditUsd,
+    };
+  }
+
   async function applyAll() {
-    if (!preview || preview.moves.length === 0) return;
+    if (!preview) return;
+    if (preview.moves.length === 0) {
+      const payload = appliedPayload("", 0);
+      if (payload) onApplied(payload);
+      return;
+    }
     setBusy("apply");
     setErr(null);
 
@@ -348,7 +383,8 @@ export function PaymentMethodAutoAdjustModal({
     }
 
     setBusy(null);
-    onApplied({ adjustmentId: lastId, affectedOrders: totalAffected });
+    const payload = appliedPayload(lastId, totalAffected);
+    if (payload) onApplied(payload);
   }
 
   if (!open) return null;
@@ -487,11 +523,14 @@ export function PaymentMethodAutoAdjustModal({
             </section>
           ) : (
             <section className="pm-paynow-panel pm-paynow-panel--preview">
-              <h4>התאמה מוצעת</h4>
+              <h4>{preview.hasOverpayment ? "תשלום גבוה מהחוב" : "התאמה מוצעת"}</h4>
               <p className="pm-paynow-panel__hint">
-                המערכת חישבה לפי FIFO אילו הזמנות לעדכן. עדיין לא נשמר שינוי — רק לאחר אישור.
+                {preview.hasOverpayment
+                  ? "התשלום גבוה מהחוב הפתוח. החוב ייסגר במלואו והעודף יישמר ללקוח כיתרת זכות."
+                  : "המערכת חישבה לפי FIFO אילו הזמנות לעדכן. עדיין לא נשמר שינוי — רק לאחר אישור."}
               </p>
 
+              {preview.orderChanges.length > 0 ? (
               <div className="pm-paynow-table-wrap">
                 <table className="pm-paynow-table">
                   <thead>
@@ -525,6 +564,7 @@ export function PaymentMethodAutoAdjustModal({
                   </tbody>
                 </table>
               </div>
+              ) : null}
 
               <div className="pm-paynow-result-summary">
                 <div className="pm-paynow-result-summary__block">
@@ -604,20 +644,62 @@ export function PaymentMethodAutoAdjustModal({
                     <span>סה״כ בדולר לקיזוז מהחוב</span>
                     <strong dir="ltr">{fmtUsd(preview.totalPayUsd)}</strong>
                   </div>
-                  <div>
-                    <span>חוב לפני</span>
-                    <strong dir="ltr">{fmtUsd(preview.openDebtUsd)}</strong>
-                  </div>
-                  <div>
-                    <span>חוב אחרי</span>
-                    <strong dir="ltr">
-                      {fmtUsd(Math.max(0, preview.openDebtUsd - preview.totalPayUsd))}
-                    </strong>
-                  </div>
+                  {preview.hasOverpayment ? (
+                    <>
+                      <div>
+                        <span>חוב פתוח</span>
+                        <strong dir="ltr">{fmtUsd(preview.openDebtUsd)}</strong>
+                      </div>
+                      <div>
+                        <span>סה״כ לקיזוז</span>
+                        <strong dir="ltr">{fmtUsd(preview.totalPayUsd)}</strong>
+                      </div>
+                      <div>
+                        <span>סגירת חוב</span>
+                        <strong dir="ltr">{fmtUsd(preview.closesDebtUsd)}</strong>
+                      </div>
+                      <div>
+                        <span>יתרת זכות חדשה</span>
+                        <strong dir="ltr">{fmtUsd(preview.overpaymentUsd)}</strong>
+                      </div>
+                      {preview.existingCreditUsd > 0.01 ? (
+                        <>
+                          <div>
+                            <span>יתרת זכות קיימת</span>
+                            <strong dir="ltr">{fmtUsd(preview.existingCreditUsd)}</strong>
+                          </div>
+                          <div>
+                            <span>יתרת זכות אחרי</span>
+                            <strong dir="ltr">{fmtUsd(preview.resultingCreditUsd)}</strong>
+                          </div>
+                        </>
+                      ) : null}
+                    </>
+                  ) : (
+                    <>
+                      <div>
+                        <span>חוב לפני</span>
+                        <strong dir="ltr">{fmtUsd(preview.openDebtUsd)}</strong>
+                      </div>
+                      <div>
+                        <span>חוב אחרי</span>
+                        <strong dir="ltr">
+                          {fmtUsd(Math.max(0, preview.openDebtUsd - preview.totalPayUsd))}
+                        </strong>
+                      </div>
+                    </>
+                  )}
                 </div>
-                <p className="pm-adjust-not-payment">
-                  ההתאמה משנה רק אמצעי תשלום מתוכנן בהזמנות. היא אינה תשלום ואינה סוגרת חוב.
-                </p>
+                {preview.hasOverpayment ? (
+                  <p className="pm-adjust-overpay">
+                    התשלום גבוה מהחוב הפתוח.
+                    החוב ייסגר במלואו והעודף יישמר ללקוח כיתרת זכות.
+                  </p>
+                ) : (
+                  <p className="pm-adjust-not-payment">
+                    ההתאמה משנה רק אמצעי תשלום מתוכנן בהזמנות. היא אינה תשלום ואינה סוגרת חוב.
+                  </p>
+                )}
               </div>
 
               {err ? <p className="payment-method-adjust-modal__err">{err}</p> : null}
@@ -641,7 +723,7 @@ export function PaymentMethodAutoAdjustModal({
                 disabled={busy === "apply"}
                 onClick={() => void applyAll()}
               >
-                {busy === "apply" ? "מבצע התאמה..." : "אישור וביצוע התאמה"}
+                {busy === "apply" ? "מבצע התאמה..." : "אשר התאמה"}
               </button>
             </>
           )}

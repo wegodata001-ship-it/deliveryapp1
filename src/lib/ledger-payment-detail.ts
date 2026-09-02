@@ -370,9 +370,20 @@ function sortMethodKeys(keys: string[]): string[] {
 
 function sortedMethodBuckets(raw: Map<string, MethodAmountAcc>): LedgerPaymentMethodBucket[] {
   const out: LedgerPaymentMethodBucket[] = [];
-  for (const method of sortMethodKeys([...raw.keys()])) {
-    const acc = raw.get(method);
+  const keys = [...raw.keys()].sort((a, b) => {
+    const baseA = a.split("::")[0] ?? a;
+    const baseB = b.split("::")[0] ?? b;
+    const ia = METHOD_SORT_ORDER.indexOf(baseA);
+    const ib = METHOD_SORT_ORDER.indexOf(baseB);
+    const ra = ia === -1 ? 999 : ia;
+    const rb = ib === -1 ? 999 : ib;
+    if (ra !== rb) return ra - rb;
+    return a.localeCompare(b, "he");
+  });
+  for (const key of keys) {
+    const acc = raw.get(key);
     if (!acc || (acc.ils <= 0.005 && acc.usd <= 0.005)) continue;
+    const method = key.split("::")[0] ?? key;
     out.push({
       method,
       label: ledgerPaymentMethodLabel(method),
@@ -382,6 +393,13 @@ function sortedMethodBuckets(raw: Map<string, MethodAmountAcc>): LedgerPaymentMe
   }
   return out;
 }
+
+export type LedgerPaymentMethodAllocationRow = {
+  method: string;
+  currency: string;
+  sourceAmount: Prisma.Decimal | number;
+  amountUsd: Prisma.Decimal | number;
+};
 
 export type LedgerPaymentBatchRow = {
   id: string;
@@ -398,7 +416,62 @@ export type LedgerPaymentBatchRow = {
   notes: string | null;
   status: PaymentRecordStatus;
   businessType?: PaymentBusinessType;
+  /** כסף שהתקבל בפועל — SSOT לקליטה, לא סכום FIFO לחוב */
+  methodAllocations?: LedgerPaymentMethodAllocationRow[];
 };
+
+function decNum(v: Prisma.Decimal | number | null | undefined): number {
+  if (v == null) return 0;
+  const n = typeof v === "number" ? v : Number(v.toString());
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * מלוא התשלום שנקלט — מ-PaymentMethodAllocation של שורת הקליטה הראשית.
+ * לא מסכום שורות FIFO (allocation לחוב) ולא מהמרה מחדש של ₪/שער.
+ */
+function receivedFromMethodAllocations(batchRows: LedgerPaymentBatchRow[]): {
+  methods: Map<string, MethodAmountAcc>;
+  totalUsd: number;
+  totalIls: number;
+  usdNative: number;
+  ilsNative: number;
+} | null {
+  const primary =
+    batchRows.find((r) => r.paymentCode?.trim() && (r.methodAllocations?.length ?? 0) > 0) ??
+    batchRows.find((r) => (r.methodAllocations?.length ?? 0) > 0);
+  const allocs = primary?.methodAllocations;
+  if (!allocs?.length) return null;
+
+  const methods = new Map<string, MethodAmountAcc>();
+  let totalUsd = 0;
+  let ilsNative = 0;
+  let usdNative = 0;
+  for (const a of allocs) {
+    const src = roundMoney2(Math.max(0, decNum(a.sourceAmount)));
+    const usd = roundMoney2(Math.max(0, decNum(a.amountUsd)));
+    const currency = String(a.currency ?? "").toUpperCase() === "ILS" ? "ILS" : "USD";
+    const displayKey = `${methodKey(a.method)}::${currency}`;
+    const prev = methods.get(displayKey) ?? emptyAcc();
+    if (currency === "ILS") {
+      methods.set(displayKey, {
+        ils: roundMoney2(prev.ils + src),
+        usd: roundMoney2(prev.usd + usd),
+      });
+      ilsNative = roundMoney2(ilsNative + src);
+    } else {
+      const native = src > 0.005 ? src : usd;
+      methods.set(displayKey, {
+        ils: prev.ils,
+        usd: roundMoney2(prev.usd + native),
+      });
+      usdNative = roundMoney2(usdNative + native);
+    }
+    totalUsd = roundMoney2(totalUsd + usd);
+  }
+  if (totalUsd <= 0.005 && ilsNative <= 0.005 && usdNative <= 0.005) return null;
+  return { methods, totalUsd, totalIls: ilsNative, usdNative, ilsNative };
+}
 
 export function paymentBatchGroupKey(p: LedgerPaymentBatchRow): string {
   if (p.paymentNumber != null) return `n:${p.paymentNumber}`;
@@ -480,6 +553,8 @@ export function buildLedgerPaymentDetail(params: {
     primary.usdPaymentMethod ?? primary.ilsPaymentMethod ?? primary.paymentMethod,
   );
 
+  const received = receivedFromMethodAllocations(batchRows);
+
   const fromIntakeRegex = bucketsFromIntakeNotesBreakdown(notes, rate);
   const parsedLines = parsePaymentLinesFromNotes(notes);
   const fromParsed = bucketsFromPaymentLines(parsedLines, rate);
@@ -496,40 +571,55 @@ export function buildLedgerPaymentDetail(params: {
     );
   }
 
-  const bucketMap = mergeBucketMaps(
-    fromNotes,
-    notesHaveMethodBreakdown(notes) ? new Map() : bucketsFromBatchRows(batchRows),
-  );
+  const bucketMap =
+    received?.methods ??
+    mergeBucketMaps(
+      fromNotes,
+      notesHaveMethodBreakdown(notes) ? new Map() : bucketsFromBatchRows(batchRows),
+    );
 
   const checkUsd = checkAmountUsdByPaymentId?.get(primary.id) ?? 0;
   if (checkUsd > 0.005) {
     addBucket(bucketMap, "CHECK", { usd: checkUsd });
   }
 
-  let totalUsd = 0;
+  let allocatedUsd = 0;
   let creditSurplusUsd = 0;
   for (const row of batchRows) {
     if (row.status === "CANCELLED") continue;
     const rowUsd = paymentRowUsdEquivalent(row);
-    totalUsd += rowUsd;
+    allocatedUsd += rowUsd;
     if (row.businessType === "CUSTOMER_CREDIT") {
       creditSurplusUsd += rowUsd;
     }
   }
-  totalUsd = roundMoney2(totalUsd);
+  allocatedUsd = roundMoney2(allocatedUsd);
   creditSurplusUsd = roundMoney2(creditSurplusUsd);
+  // מלוא הקליטה — allocations; FIFO rows הם רק הקצאה לחוב/זכות.
+  const totalUsd = received ? received.totalUsd : allocatedUsd;
 
   if (bucketMap.size === 0 && totalUsd > 0.005) {
     addBucket(bucketMap, defaultMethod, { usd: roundMoney2(totalUsd - creditSurplusUsd) });
   }
 
-  const totalIlsN = sumBatchIls(batchRows.filter((r) => !isInternalLedgerPaymentRow(r)));
+  const totalIlsN = received
+    ? received.totalIls
+    : sumBatchIls(batchRows.filter((r) => !isInternalLedgerPaymentRow(r)));
   const orders = mergeOrderAllocations(batchRows, orderNumberById);
   const debtClosedUsd = roundMoney2(
     orders.reduce((sum, o) => sum + Number(o.amountUsd), 0),
   );
   const checks = checksByPaymentId?.get(primary.id) ?? [];
-  const components = buildPaymentCurrencyComponents(parsedLines, bucketMap);
+  const components = received
+    ? ([
+        ...(received.usdNative > 0.005
+          ? [{ currency: "USD" as const, label: "דולר", amount: received.usdNative.toFixed(2) }]
+          : []),
+        ...(received.ilsNative > 0.005
+          ? [{ currency: "ILS" as const, label: "שקל", amount: received.ilsNative.toFixed(2) }]
+          : []),
+      ] satisfies LedgerPaymentCurrencyComponent[])
+    : buildPaymentCurrencyComponents(parsedLines, bucketMap);
 
   const commissionFees: LedgerPaymentCommissionFee[] = [];
   let commissionToFeeUsd = 0;
@@ -660,26 +750,6 @@ export function ledgerPaymentExpandLines(
 
   const allocationLines = ledgerPaymentAllocationExpandLines(detail);
 
-  const components = detail.components ?? [];
-  if (components.length >= 2) {
-    return [
-      ...components.map((c) => ({
-        label: c.label,
-        display: formatLedgerPaymentComponentDisplay(c.currency, c.amount),
-      })),
-      ...allocationLines,
-    ];
-  }
-  if (components.length === 1 && components[0].currency === "ILS") {
-    return [
-      ...components.map((c) => ({
-        label: c.label,
-        display: formatLedgerPaymentComponentDisplay(c.currency, c.amount),
-      })),
-      ...allocationLines,
-    ];
-  }
-
   const methodLines = ledgerPaymentMethodDisplayLines(detail);
   if (methodLines.length > 1) {
     return [
@@ -690,6 +760,18 @@ export function ledgerPaymentExpandLines(
       ...allocationLines,
     ];
   }
+
+  const components = detail.components ?? [];
+  if (components.length >= 2) {
+    return [
+      ...components.map((c) => ({
+        label: c.label,
+        display: formatLedgerPaymentComponentDisplay(c.currency, c.amount),
+      })),
+      ...allocationLines,
+    ];
+  }
+
   if (methodLines.length === 1) {
     const only = methodLines[0];
     if (only.amountIls != null && Number(only.amountIls) > 0.005) {

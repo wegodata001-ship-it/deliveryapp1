@@ -8,6 +8,7 @@ import { formatLedgerPaymentTotalUsd } from "@/lib/ledger-payment-display";
 import { openPdfPreview } from "@/lib/pdf-preview";
 import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
 import { formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate } from "@/lib/work-week";
+import { balanceResetSourceLabelHe } from "@/lib/ledger-balance-reset";
 
 export type LedgerPdfMode = "regular" | "detailed";
 
@@ -78,11 +79,15 @@ function fmtUsd(s: string): string {
 }
 
 function formatChargeCell(row: CustomerLedgerRow): string {
-  if (row.kind === "OPENING_BALANCE" || row.isOrderUpdated) return "—";
+  if (row.kind === "OPENING_BALANCE") return "—";
   if (row.isCommissionDebtClosure) {
     return `יתרת הזמנה: ${fmtUsd(row.orderBalanceAfterUsd ?? "0")}`;
   }
   const n = parseMoneyStringOrZero(row.chargeUsd);
+  if (row.isOrderUpdated) {
+    if (Math.abs(n) <= 0.005) return "—";
+    return n < 0 ? `-${fmtUsd(String(Math.abs(n)))}` : `+${fmtUsd(String(n))}`;
+  }
   if (row.isDebtWithdrawal || n < -0.005) return fmtUsd(row.chargeUsd);
   return n > 0 ? fmtUsd(row.chargeUsd) : "—";
 }
@@ -91,6 +96,10 @@ function formatPaymentCell(row: CustomerLedgerRow): string {
   if (row.kind === "OPENING_BALANCE" || row.isOrderUpdated) return "—";
   if (row.isCommissionDebtClosure) {
     return `יתרת עמלה: ${fmtUsd(row.commissionAfterUsd ?? "0")}`;
+  }
+  if (row.isBalanceReset || row.kind === "BALANCE_RESET") {
+    const n = parseMoneyStringOrZero(row.paymentUsd);
+    return n > 0 ? fmtUsd(row.paymentUsd) : "—";
   }
   const n = parseMoneyStringOrZero(row.paymentUsd);
   if (n <= 0) return "—";
@@ -147,6 +156,35 @@ function pushOrderCancelDetailExportRows(out: LedgerExportTableRow[], row: Custo
   push("יתרה אחרי", detail.balanceAfterUsd === "—" ? "—" : fmtUsd(detail.balanceAfterUsd), "balance");
   push("מאשר", detail.approvedBy);
   if (detail.reason?.trim()) push("סיבת הביטול", detail.reason.trim());
+}
+
+function pushBalanceResetDetailExportRows(out: LedgerExportTableRow[], row: CustomerLedgerRow): void {
+  const detail = row.balanceResetDetail;
+  if (!detail) return;
+  const push = (label: string, value: string) => {
+    out.push({
+      dateYmd: "",
+      document: value,
+      typeLabel: label,
+      chargeUsd: "—",
+      paymentUsd: "—",
+      balance: "—",
+      isOpening: false,
+      isPaymentDetailRow: true,
+    });
+  };
+  if (detail.openDebtBeforeUsd) push("חוב לפני", fmtUsd(detail.openDebtBeforeUsd));
+  if (detail.openDebtAfterUsd) push("חוב אחרי", fmtUsd(detail.openDebtAfterUsd));
+  if (detail.creditBeforeUsd) push("יתרת זכות לפני", fmtUsd(detail.creditBeforeUsd));
+  if (detail.creditAfterUsd) push("יתרת זכות אחרי", fmtUsd(detail.creditAfterUsd));
+  push("סכום שאופס", fmtUsd(detail.amountResetUsd));
+  if (detail.commissionBeforeUsd) push("עמלות לפני", fmtUsd(detail.commissionBeforeUsd));
+  if (detail.commissionAfterUsd) push("עמלות אחרי", fmtUsd(detail.commissionAfterUsd));
+  if (!detail.commissionBeforeUsd) push("לפני איפוס", fmtUsd(detail.amountBeforeUsd));
+  if (!detail.commissionAfterUsd) push("אחרי איפוס", fmtUsd(detail.amountAfterUsd));
+  push("מי ביצע", detail.performedBy ?? "—");
+  push("מתי", row.dateYmd);
+  push("מקור", balanceResetSourceLabelHe(detail.source));
 }
 
 function pushOrderUpdateDetailExportRows(out: LedgerExportTableRow[], row: CustomerLedgerRow): void {
@@ -213,6 +251,9 @@ export function buildLedgerExportTableRows(
     }
     if (r.isOrderUpdated) {
       pushOrderUpdateDetailExportRows(out, r);
+    }
+    if (r.isBalanceReset || r.kind === "BALANCE_RESET") {
+      pushBalanceResetDetailExportRows(out, r);
     }
   }
   return out;

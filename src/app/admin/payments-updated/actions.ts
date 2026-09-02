@@ -110,6 +110,10 @@ import { applyCommissionPoolDebtClosureInTx } from "@/lib/commission-pool-closur
 import { getCustomerCommissionBalanceUsd } from "@/lib/customer-commission-balance";
 import { computeCommissionResetPreviewNumbers } from "@/lib/customer-commission-reset-preview";
 import { resolveSurplusFeeTargetOrderId } from "@/lib/payment-surplus-fee-order";
+import {
+  DIRECT_RESET_SOURCE,
+  PAYMENT_CAPTURE_RESET_SOURCE,
+} from "@/lib/ledger-balance-reset";
 
 /** Reason code for audit / fee notes — overpayment added to commission pool */
 const PAYMENT_OVERPAYMENT_TO_FEE_REASON = "PAYMENT_OVERPAYMENT_TO_FEE";
@@ -1274,7 +1278,12 @@ export async function savePaymentUpdatedAction(
             amountUsd: amt,
             amountIls: ilsOnRow,
             sourceCurrency: ilsOnRow && totalIlsEntered > ALLOC_EPS ? "MIXED" : "USD",
-            sourceAmount: ilsOnRow && totalIlsEntered > ALLOC_EPS ? ilsOnRow : amt,
+            sourceAmount:
+              ilsOnRow && totalIlsEntered > ALLOC_EPS
+                ? ilsOnRow
+                : isPrimary
+                  ? new Prisma.Decimal(totals.totalUsd.toFixed(4))
+                  : amt,
             exchangeRate: finalUse,
             vatRate,
             commissionPercent: commissionPctDec,
@@ -2342,6 +2351,97 @@ async function cancelOverpaymentCreditsFromCaptureInTx(
   return removed.toDecimalPlaces(2, 4);
 }
 
+/**
+ * איפוס יתרת זכות קיימת — לא מוחק Payment היסטורי, רק מבטל את שורות CUSTOMER_CREDIT
+ * וכותב אירוע CUSTOMER_BALANCES_RESET (source=DIRECT_RESET).
+ */
+async function tryApplyCustomerCreditDirectResetInTx(
+  tx: Prisma.TransactionClient,
+  params: {
+    customerId: string;
+    userId: string;
+    weekCode: string | null;
+    source: string;
+  },
+): Promise<{
+  totalResetUsd: string;
+  closedOrderIds: string[];
+  affectedOrderUpdates: { orderId: string; newCommissionUsd: string; newTotalUsd: string }[];
+  auditEntries: Prisma.AuditLogCreateManyInput[];
+} | null> {
+  const credits = await tx.payment.findMany({
+    where: {
+      customerId: params.customerId,
+      orderId: null,
+      businessType: "CUSTOMER_CREDIT",
+      ...activePaidPaymentWhere,
+    },
+    select: { id: true, amountUsd: true, notes: true },
+    orderBy: { createdAt: "asc" },
+  });
+  let creditTotal = new Prisma.Decimal(0);
+  const creditIds: string[] = [];
+  for (const row of credits) {
+    const amt = row.amountUsd ?? new Prisma.Decimal(0);
+    if (amt.lte(new Prisma.Decimal(String(BALANCE_RESET_TOLERANCE_USD)))) continue;
+    creditTotal = creditTotal.add(amt);
+    creditIds.push(row.id);
+  }
+  if (creditIds.length === 0 || creditTotal.lte(new Prisma.Decimal(String(BALANCE_RESET_TOLERANCE_USD)))) {
+    return null;
+  }
+
+  const performedAt = new Date().toISOString();
+  const amountBefore = creditTotal.toFixed(2);
+  for (const row of credits) {
+    if (!creditIds.includes(row.id)) continue;
+    await tx.payment.update({
+      where: { id: row.id },
+      data: {
+        status: PAYMENT_RECORD_STATUS_CANCELLED,
+        notes: `${row.notes ?? ""}\n[איפוס יתרה — יתרת זכות אופסה]`.trim(),
+      },
+    });
+  }
+
+  return {
+    totalResetUsd: amountBefore,
+    closedOrderIds: [],
+    affectedOrderUpdates: [],
+    auditEntries: [
+      {
+        userId: params.userId,
+        actionType: "CUSTOMER_BALANCES_RESET",
+        entityType: "Customer",
+        entityId: params.customerId,
+        oldValue: {
+          availableCreditUsd: amountBefore,
+          weekCode: params.weekCode,
+        } as Prisma.InputJsonValue,
+        newValue: {
+          availableCreditUsd: "0.00",
+          totalResetUsd: amountBefore,
+          creditPaymentIds: creditIds,
+        } as Prisma.InputJsonValue,
+        metadata: {
+          ledgerLabel: BALANCE_RESET_LEDGER_LABEL,
+          source: params.source,
+          resetKind: "CREDIT",
+          amountBeforeUsd: amountBefore,
+          amountResetUsd: amountBefore,
+          amountAfterUsd: "0.00",
+          totalResetUsd: amountBefore,
+          creditPaymentIds: creditIds,
+          closedOrders: [],
+          performedBy: params.userId,
+          performedAt,
+          reason: "איפוס ישר — יתרת זכות",
+        } as Prisma.InputJsonValue,
+      },
+    ],
+  };
+}
+
 /** איפוס יתרה לכל הזמנות פתוחות של לקוח — בתוך transaction קיימת */
 async function applyCustomerOutstandingBalanceResetInTx(
   tx: Prisma.TransactionClient,
@@ -2361,6 +2461,8 @@ async function applyCustomerOutstandingBalanceResetInTx(
       intakeDate?: Date;
       manualDateChanged?: boolean;
     };
+    ledgerLabel?: string | null;
+    commissionBalanceBeforeUsd?: number | null;
   },
 ): Promise<{
   totalResetUsd: string;
@@ -2371,6 +2473,9 @@ async function applyCustomerOutstandingBalanceResetInTx(
   const cid = params.customerId;
   const weekCode = params.weekCode?.trim() || null;
   const weekDateWhere = paymentIntakeOrderDateThroughAhWeekEnd(weekCode);
+  const resetSource = params.paymentCaptureContext
+    ? PAYMENT_CAPTURE_RESET_SOURCE
+    : DIRECT_RESET_SOURCE;
 
   const orders = await tx.order.findMany({
     where: {
@@ -2389,7 +2494,16 @@ async function applyCustomerOutstandingBalanceResetInTx(
       totalUsd: true,
     },
   });
-  if (orders.length === 0) throw new Error("לא נמצאו הזמנות ללקוח");
+  if (orders.length === 0) {
+    const creditOnly = await tryApplyCustomerCreditDirectResetInTx(tx, {
+      customerId: cid,
+      userId: params.userId,
+      weekCode,
+      source: resetSource,
+    });
+    if (creditOnly) return creditOnly;
+    throw new Error("לא נמצאו הזמנות ללקוח");
+  }
 
   const orderIds = orders.map((o) => o.id);
   const sums = await tx.payment.groupBy({
@@ -2470,6 +2584,13 @@ async function applyCustomerOutstandingBalanceResetInTx(
   }
 
   if (orderResets.length === 0) {
+    const creditOnly = await tryApplyCustomerCreditDirectResetInTx(tx, {
+      customerId: cid,
+      userId: params.userId,
+      weekCode,
+      source: resetSource,
+    });
+    if (creditOnly) return creditOnly;
     throw new Error("אין יתרה פתוחה לאיפוס");
   }
 
@@ -2704,7 +2825,22 @@ async function applyCustomerOutstandingBalanceResetInTx(
       totalResetUsd: totalRemaining.toString(),
     } as Prisma.InputJsonValue,
     metadata: {
-      ledgerLabel: BALANCE_RESET_LEDGER_LABEL,
+      ledgerLabel: params.ledgerLabel?.trim() || BALANCE_RESET_LEDGER_LABEL,
+      source: resetSource,
+      resetKind: "DEBT",
+      amountBeforeUsd: totalRemaining.toFixed(2),
+      amountResetUsd: totalRemaining.toFixed(2),
+      amountAfterUsd: "0.00",
+      openDebtBeforeUsd: totalRemaining.toFixed(2),
+      openDebtAfterUsd: "0.00",
+      commissionBeforeUsd:
+        params.commissionBalanceBeforeUsd != null
+          ? Number(params.commissionBalanceBeforeUsd).toFixed(2)
+          : undefined,
+      commissionAfterUsd:
+        params.commissionBalanceBeforeUsd != null
+          ? (Number(params.commissionBalanceBeforeUsd) - Number(totalRemaining)).toFixed(2)
+          : undefined,
       closedOrders: orderResets.map((x) => ({
         orderId: x.orderId,
         orderNumber: x.orderNumber ?? null,
@@ -2725,6 +2861,7 @@ async function applyCustomerOutstandingBalanceResetInTx(
       totalResetUsd: totalRemaining.toString(),
       performedBy: params.userId,
       performedAt,
+      reason: resetSource === DIRECT_RESET_SOURCE ? "איפוס ישר" : "איפוס יתרה מקליטת תשלום",
     } as Prisma.InputJsonValue,
   });
 
@@ -3038,7 +3175,9 @@ export async function resetCustomerOutstandingBalancesAction(input: {
     primaryPaymentCode: string;
     paymentNumber: number;
   } | null;
-}): Promise<
+  ledgerLabel?: string | null;
+  commissionBalanceBeforeUsd?: number | null;
+}): Promise<{
   | {
       ok: true;
       totalResetUsd: string;
@@ -3073,6 +3212,8 @@ export async function resetCustomerOutstandingBalancesAction(input: {
         orderIds,
         allowNegativeCommission,
         paymentCaptureContext: input.paymentCaptureContext ?? undefined,
+        ledgerLabel: input.ledgerLabel,
+        commissionBalanceBeforeUsd: input.commissionBalanceBeforeUsd,
       });
       await tx.auditLog.createMany({ data: resetResult.auditEntries });
       return resetResult;

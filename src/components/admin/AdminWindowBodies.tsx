@@ -51,6 +51,7 @@ import {
   shouldShowLedgerPaymentMethodSubrows,
 } from "@/lib/ledger-payment-detail";
 import {
+  DEFAULT_CUSTOMER_LEDGER_DATE_SORT,
   prepareLedgerRowsForDisplay,
   type CustomerLedgerDateSort,
   type CustomerLedgerQuickFilter,
@@ -62,6 +63,7 @@ import { formatLocalYmd } from "@/lib/work-week";
 import { CommissionAmountButton } from "@/components/admin/CommissionAmountButton";
 import { CommissionBalancePopover } from "@/components/admin/CommissionBalancePopover";
 import { OrderCommissionDetailModal } from "@/components/admin/OrderCommissionDetailModal";
+import { balanceResetSourceLabelHe } from "@/lib/ledger-balance-reset";
 
 function displayCustomerCode(s: CustomerCardSnapshot): string {
   const c = s.customerCode?.trim();
@@ -78,6 +80,13 @@ function fmtUsdSignedPrefix(s: string): string {
   const abs = formatMoneyAmount(Math.abs(n), 2);
   if (n < -0.005) return `-$${abs}`;
   return `$${abs}`;
+}
+
+function fmtUsdDelta(s: string): string {
+  const n = parseMoneyStringOrZero(s);
+  if (Math.abs(n) <= 0.005) return "—";
+  const abs = formatMoneyAmount(Math.abs(n), 2);
+  return n < 0 ? `-$${abs}` : `+$${abs}`;
 }
 
 function rowBalanceNum(balanceUsd: string): number {
@@ -200,7 +209,7 @@ export function CustomerCardWindowBody({
     orderNumber: string | null;
   } | null>(null);
   const [ledgerQuickFilter, setLedgerQuickFilter] = useState<CustomerLedgerQuickFilter>("all");
-  const [ledgerSort, setLedgerSort] = useState<CustomerLedgerDateSort>("new_old");
+  const [ledgerSort, setLedgerSort] = useState<CustomerLedgerDateSort>(DEFAULT_CUSTOMER_LEDGER_DATE_SORT);
   const [fromYmd, setFromYmd] = useState(ledgerFromYmd?.trim() ?? "");
   const [toYmd, setToYmd] = useState(ledgerToYmd?.trim() ?? "");
   const [form, setForm] = useState(() => (initialSnap ? formFromSnap(initialSnap) : {
@@ -213,6 +222,10 @@ export function CustomerCardWindowBody({
     customerCode: "",
     address: "",
   }));
+
+  useEffect(() => {
+    setLedgerSort(DEFAULT_CUSTOMER_LEDGER_DATE_SORT);
+  }, [customerId]);
 
   useEffect(() => {
     if (!customerId?.trim()) {
@@ -482,6 +495,15 @@ export function CustomerCardWindowBody({
 
   async function onLedgerTableRowActivate(r: CustomerLedgerRow) {
     if (r.kind === "OPENING_BALANCE") return;
+    if (r.kind === "BALANCE_RESET" || r.isBalanceReset) {
+      setExpandedLedgerPayments((prev) => {
+        const next = new Set(prev);
+        if (next.has(r.id)) next.delete(r.id);
+        else next.add(r.id);
+        return next;
+      });
+      return;
+    }
     if (r.paymentId) {
       openWindow({ type: "paymentsUpdated", props: { paymentId: r.paymentId } });
       return;
@@ -568,8 +590,8 @@ export function CustomerCardWindowBody({
         <div className="adm-field">
           <label htmlFor="ledger-sort">מיון</label>
           <select id="ledger-sort" value={ledgerSort} onChange={(e) => setLedgerSort(e.target.value as CustomerLedgerDateSort)}>
-            <option value="new_old">חדש → ישן</option>
             <option value="old_new">ישן → חדש</option>
+            <option value="new_old">חדש → ישן</option>
           </select>
         </div>
       </div>
@@ -664,8 +686,10 @@ export function CustomerCardWindowBody({
             </div>
           </button>
           <span>
-            {ledger && Number(ledger.availableCreditUsd ?? 0) > 0.01 && Number(ledger.openDebtUsd ?? 0) <= 0.01
-              ? `יתרת זכות $${Number(ledger.availableCreditUsd).toFixed(2)}`
+            {ledger && Number(ledger.availableCreditUsd ?? 0) > 0.01
+              ? Number(ledger.openDebtUsd ?? 0) > 0.01
+                ? `חוב $${Number(ledger.openDebtUsd).toFixed(2)} · זכות $${Number(ledger.availableCreditUsd).toFixed(2)}`
+                : `יתרת זכות $${Number(ledger.availableCreditUsd).toFixed(2)}`
               : "יתרה סופית"}
           </span>
         </div>
@@ -903,8 +927,10 @@ export function CustomerCardWindowBody({
                   ) : (
                     (displayLedgerRows ?? []).map((r) => {
                       const isCommissionClosure = !!r.isCommissionDebtClosure;
+                      const isBalanceReset = r.kind === "BALANCE_RESET" || !!r.isBalanceReset;
                       const clickable =
-                        r.kind !== "OPENING_BALANCE" && !!(r.orderId || r.paymentId);
+                        isBalanceReset ||
+                        (r.kind !== "OPENING_BALANCE" && !!(r.orderId || r.paymentId));
                       const chargeNum = parseMoneyStringOrZero(r.chargeUsd);
                       const paymentNum = parseMoneyStringOrZero(r.paymentUsd);
                       const isPayment = r.kind === "PAYMENT";
@@ -912,13 +938,16 @@ export function CustomerCardWindowBody({
                       const isCancelledPayment = !!r.isPaymentCancelled;
                       const isCancelledOrder = !!r.isOrderCancelled;
                       const isOrderUpdated = !!r.isOrderUpdated;
+                      const isSuperseded = !!r.isSupersededOrderVersion;
+                      const isLatestUpdate = !!r.isLatestOrderUpdate;
                       const orderUpdateSubrows = isOrderUpdated && r.orderUpdateDetail ? r.orderUpdateDetail.changes : [];
                       const paymentExpandLines =
                         isPayment && !isCancelledPayment && shouldShowLedgerPaymentMethodSubrows(r.paymentDetail)
                           ? ledgerPaymentExpandLines(r.paymentDetail)
                           : [];
-                      const paymentExpandable = paymentExpandLines.length > 0;
+                      const paymentExpandable = paymentExpandLines.length > 0 || isBalanceReset;
                       const paymentExpanded = expandedLedgerPayments.has(r.id);
+                      const resetDetail = isBalanceReset ? r.balanceResetDetail : undefined;
                       const togglePaymentExpanded = () => {
                         setExpandedLedgerPayments((prev) => {
                           const next = new Set(prev);
@@ -936,8 +965,12 @@ export function CustomerCardWindowBody({
                             isCancelledPayment ? "adm-ledger-row--payment-cancelled" : "",
                             isCancelledOrder ? "adm-ledger-row--payment-cancelled" : "",
                             isOrderUpdated ? "adm-ledger-row--order-updated" : "",
+                            isLatestUpdate ? "adm-ledger-row--order-updated-active" : "",
+                            isSuperseded ? "adm-ledger-row--superseded" : "",
                             isWithdrawal ? "adm-ledger-row--withdrawal" : "",
                             isCommissionClosure ? "adm-ledger-row--commission-closure" : "",
+                            isBalanceReset ? "adm-ledger-row--balance-reset" : "",
+                            r.isAdjustmentFeeCapture ? "adm-ledger-row--fee-capture" : "",
                             clickable ? "clickable" : "",
                           ]
                             .filter(Boolean)
@@ -972,7 +1005,14 @@ export function CustomerCardWindowBody({
                               )}
                             </span>
                           </td>
-                          <td>{r.typeLabel}</td>
+                          <td>
+                            <span className="adm-ledger-type-cell">
+                              {r.typeLabel}
+                              {isSuperseded ? (
+                                <span className="adm-ledger-version-badge">גרסה קודמת</span>
+                              ) : null}
+                            </span>
+                          </td>
                           <td
                             dir="ltr"
                             className={[
@@ -987,6 +1027,10 @@ export function CustomerCardWindowBody({
                                 <span className="adm-ledger-closure-delta-lbl">יתרת הזמנה</span>
                                 {fmtUsd(r.orderBalanceAfterUsd ?? "0")}
                               </span>
+                            ) : isOrderUpdated ? (
+                              fmtUsdDelta(r.chargeUsd)
+                            ) : isSuperseded && chargeNum > 0 ? (
+                              <span className="adm-ledger-charge--superseded">{fmtUsd(r.chargeUsd)}</span>
                             ) : r.isDebtWithdrawal || chargeNum < -0.005 ? (
                               fmtUsdSignedPrefix(r.chargeUsd)
                             ) : chargeNum > 0 ? (
@@ -1008,6 +1052,14 @@ export function CustomerCardWindowBody({
                               <span className="adm-ledger-closure-delta">
                                 <span className="adm-ledger-closure-delta-lbl">יתרת עמלה</span>
                                 {fmtUsd(r.commissionAfterUsd ?? "0")}
+                              </span>
+                            ) : isBalanceReset ? (
+                              <span className="adm-ledger-payment-cell-inner">
+                                <span dir="ltr">{fmtUsd(r.paymentUsd)}</span>
+                                <LedgerPaymentExpandButton
+                                  expanded={paymentExpanded}
+                                  onToggle={togglePaymentExpanded}
+                                />
                               </span>
                             ) : paymentNum > 0 ? (
                               <span className="adm-ledger-payment-cell-inner">
@@ -1118,14 +1170,148 @@ export function CustomerCardWindowBody({
                             ])
                           : null}
                         {isOrderUpdated && r.orderUpdateDetail ? (
-                          <tr key={`${r.id}-upd-approved`} className="adm-ledger-row--payment-method-sub">
-                            <td />
-                            <td>{r.orderUpdateDetail.approvedBy}</td>
-                            <td className="adm-ledger-payment-method-sub-type">אושר ע&quot;י</td>
-                            <td>—</td>
-                            <td>—</td>
-                            <td />
-                          </tr>
+                          <>
+                            <tr key={`${r.id}-upd-when`} className="adm-ledger-row--payment-method-sub">
+                              <td />
+                              <td dir="ltr">{r.dateYmd}</td>
+                              <td className="adm-ledger-payment-method-sub-type">מתי</td>
+                              <td>—</td>
+                              <td>—</td>
+                              <td />
+                            </tr>
+                            {r.orderUpdateDetail.requestedBy && r.orderUpdateDetail.requestedBy !== "—" ? (
+                              <tr key={`${r.id}-upd-requested`} className="adm-ledger-row--payment-method-sub">
+                                <td />
+                                <td>{r.orderUpdateDetail.requestedBy}</td>
+                                <td className="adm-ledger-payment-method-sub-type">מבקש</td>
+                                <td>—</td>
+                                <td>—</td>
+                                <td />
+                              </tr>
+                            ) : null}
+                            <tr key={`${r.id}-upd-approved`} className="adm-ledger-row--payment-method-sub">
+                              <td />
+                              <td>{r.orderUpdateDetail.approvedBy}</td>
+                              <td className="adm-ledger-payment-method-sub-type">אושר ע&quot;י</td>
+                              <td>—</td>
+                              <td>—</td>
+                              <td />
+                            </tr>
+                          </>
+                        ) : null}
+                        {isBalanceReset && paymentExpanded && resetDetail ? (
+                          <>
+                            {resetDetail.openDebtBeforeUsd != null ? (
+                              <tr key={`${r.id}-rst-debt-before`} className="adm-ledger-row--payment-method-sub">
+                                <td />
+                                <td dir="ltr">{fmtUsd(resetDetail.openDebtBeforeUsd)}</td>
+                                <td className="adm-ledger-payment-method-sub-type">חוב לפני</td>
+                                <td>—</td>
+                                <td>—</td>
+                                <td />
+                              </tr>
+                            ) : null}
+                            {resetDetail.openDebtAfterUsd != null ? (
+                              <tr key={`${r.id}-rst-debt-after`} className="adm-ledger-row--payment-method-sub">
+                                <td />
+                                <td dir="ltr">{fmtUsd(resetDetail.openDebtAfterUsd)}</td>
+                                <td className="adm-ledger-payment-method-sub-type">חוב אחרי</td>
+                                <td>—</td>
+                                <td>—</td>
+                                <td />
+                              </tr>
+                            ) : null}
+                            {resetDetail.creditBeforeUsd != null ? (
+                              <tr key={`${r.id}-rst-credit-before`} className="adm-ledger-row--payment-method-sub">
+                                <td />
+                                <td dir="ltr">{fmtUsd(resetDetail.creditBeforeUsd)}</td>
+                                <td className="adm-ledger-payment-method-sub-type">יתרת זכות לפני</td>
+                                <td>—</td>
+                                <td>—</td>
+                                <td />
+                              </tr>
+                            ) : null}
+                            {resetDetail.creditAfterUsd != null ? (
+                              <tr key={`${r.id}-rst-credit-after`} className="adm-ledger-row--payment-method-sub">
+                                <td />
+                                <td dir="ltr">{fmtUsd(resetDetail.creditAfterUsd)}</td>
+                                <td className="adm-ledger-payment-method-sub-type">יתרת זכות אחרי</td>
+                                <td>—</td>
+                                <td>—</td>
+                                <td />
+                              </tr>
+                            ) : null}
+                            <tr key={`${r.id}-rst-amt`} className="adm-ledger-row--payment-method-sub">
+                              <td />
+                              <td dir="ltr">{fmtUsd(resetDetail.amountResetUsd)}</td>
+                              <td className="adm-ledger-payment-method-sub-type">סכום שאופס</td>
+                              <td>—</td>
+                              <td>—</td>
+                              <td />
+                            </tr>
+                            {resetDetail.commissionBeforeUsd != null ? (
+                              <tr key={`${r.id}-rst-fee-before`} className="adm-ledger-row--payment-method-sub">
+                                <td />
+                                <td dir="ltr">{fmtUsd(resetDetail.commissionBeforeUsd)}</td>
+                                <td className="adm-ledger-payment-method-sub-type">עמלות לפני</td>
+                                <td>—</td>
+                                <td>—</td>
+                                <td />
+                              </tr>
+                            ) : (
+                              <tr key={`${r.id}-rst-before`} className="adm-ledger-row--payment-method-sub">
+                                <td />
+                                <td dir="ltr">{fmtUsd(resetDetail.amountBeforeUsd)}</td>
+                                <td className="adm-ledger-payment-method-sub-type">לפני איפוס</td>
+                                <td>—</td>
+                                <td>—</td>
+                                <td />
+                              </tr>
+                            )}
+                            {resetDetail.commissionAfterUsd != null ? (
+                              <tr key={`${r.id}-rst-fee-after`} className="adm-ledger-row--payment-method-sub adm-ledger-row--payment-method-total">
+                                <td />
+                                <td dir="ltr">{fmtUsd(resetDetail.commissionAfterUsd)}</td>
+                                <td className="adm-ledger-payment-method-sub-type">עמלות אחרי</td>
+                                <td>—</td>
+                                <td>—</td>
+                                <td />
+                              </tr>
+                            ) : (
+                              <tr key={`${r.id}-rst-after`} className="adm-ledger-row--payment-method-sub adm-ledger-row--payment-method-total">
+                                <td />
+                                <td dir="ltr">{fmtUsd(resetDetail.amountAfterUsd)}</td>
+                                <td className="adm-ledger-payment-method-sub-type">אחרי איפוס</td>
+                                <td>—</td>
+                                <td>—</td>
+                                <td />
+                              </tr>
+                            )}
+                            <tr key={`${r.id}-rst-who`} className="adm-ledger-row--payment-method-sub">
+                              <td />
+                              <td dir="ltr">{resetDetail.performedBy ?? "—"}</td>
+                              <td className="adm-ledger-payment-method-sub-type">מי ביצע</td>
+                              <td>—</td>
+                              <td>—</td>
+                              <td />
+                            </tr>
+                            <tr key={`${r.id}-rst-when`} className="adm-ledger-row--payment-method-sub">
+                              <td />
+                              <td dir="ltr">{r.dateYmd}</td>
+                              <td className="adm-ledger-payment-method-sub-type">מתי</td>
+                              <td>—</td>
+                              <td>—</td>
+                              <td />
+                            </tr>
+                            <tr key={`${r.id}-rst-src`} className="adm-ledger-row--payment-method-sub">
+                              <td />
+                              <td>{balanceResetSourceLabelHe(resetDetail.source)}</td>
+                              <td className="adm-ledger-payment-method-sub-type">מקור</td>
+                              <td>—</td>
+                              <td>—</td>
+                              <td />
+                            </tr>
+                          </>
                         ) : null}
                         </Fragment>
                       );
