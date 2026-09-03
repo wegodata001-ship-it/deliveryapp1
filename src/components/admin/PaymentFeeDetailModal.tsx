@@ -108,6 +108,14 @@ export function PaymentFeeDetailModal({
             <dt>תאריך</dt>
             <dd>{detail.createdAtYmd}</dd>
           </div>
+          <div>
+            <dt>אמצעי</dt>
+            <dd>{detail.paymentMethodLabel || detail.paymentMethod || "—"}</dd>
+          </div>
+          <div>
+            <dt>סטטוס</dt>
+            <dd>{detail.statusLabel}</dd>
+          </div>
         </dl>
 
         <div className="adm-payment-fee-detail-flow">

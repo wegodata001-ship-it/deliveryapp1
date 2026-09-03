@@ -55,6 +55,19 @@ export type PaymentIntentOrderChange = {
   afterBreakdown: OrderBreakdownLineInput[];
 };
 
+export type PaymentIntentMethodAllocation = {
+  method: string;
+  label: string;
+  currency: PaymentBalanceCurrency;
+  amountNative: number;
+  amountUsd: number;
+  appliedUsd: number;
+  excessUsd: number;
+  grossIls: number | null;
+  vatIls: number;
+  netIls: number | null;
+};
+
 export type PaymentIntentPlan =
   | {
       ok: true;
@@ -65,10 +78,14 @@ export type PaymentIntentPlan =
       overpaymentUsd: number;
       hasOverpayment: boolean;
       allocation: PaymentOverpaymentPreview;
+      methodAllocation: PaymentIntentMethodAllocation[];
       moves: PaymentIntentMove[];
       orderChanges: PaymentIntentOrderChange[];
     }
   | { ok: false; error: string };
+
+/** סדר הקצאת חוב/עודף — מזומן קודם, אחר כך העברה (כמו דוגמת SSOT). */
+const DEBT_ALLOCATION_METHOD_ORDER = ["CASH", "BANK_TRANSFER", "CHECK", "CREDIT", "OTHER"] as const;
 
 function methodLabel(method: string): string {
   return PAYMENT_BUCKET_LABELS[paymentMethodBucketKey(method)];
@@ -152,9 +169,61 @@ function orderRemainingUsd(order: PaymentIntakeOrderRow): number {
 }
 
 /**
+ * מחלק כל אמצעי תשלום ל־Applied (סגירת חוב) מול Excess.
+ * לא מקטינים את התשלום — העודף נשמר עם provenance של האמצעי.
+ */
+export function allocatePaymentIntentsAgainstDebt(
+  intents: CalculatedPaymentIntentLine[],
+  openDebtUsd: number,
+): PaymentIntentMethodAllocation[] {
+  let left = roundMoney2(Math.max(0, openDebtUsd));
+  const sorted = [...intents].sort((a, b) => {
+    const ia = DEBT_ALLOCATION_METHOD_ORDER.indexOf(
+      paymentMethodBucketKey(a.method) as (typeof DEBT_ALLOCATION_METHOD_ORDER)[number],
+    );
+    const ib = DEBT_ALLOCATION_METHOD_ORDER.indexOf(
+      paymentMethodBucketKey(b.method) as (typeof DEBT_ALLOCATION_METHOD_ORDER)[number],
+    );
+    const oa = ia >= 0 ? ia : 99;
+    const ob = ib >= 0 ? ib : 99;
+    if (oa !== ob) return oa - ob;
+    return a.currency.localeCompare(b.currency);
+  });
+  return sorted.map((intent) => {
+    const appliedUsd = roundMoney2(Math.min(left, Math.max(0, intent.amountUsd)));
+    const excessUsd = roundMoney2(Math.max(0, intent.amountUsd - appliedUsd));
+    left = roundMoney2(Math.max(0, left - appliedUsd));
+    return {
+      method: paymentMethodBucketKey(intent.method),
+      label: methodLabel(intent.method),
+      currency: intent.currency,
+      amountNative: intent.amountNative,
+      amountUsd: intent.amountUsd,
+      appliedUsd,
+      excessUsd,
+      grossIls: intent.grossIls,
+      vatIls: intent.vatIls,
+      netIls: intent.netIls,
+    };
+  });
+}
+
+export function applyIntentOrderChangesToIntakeOrders<
+  T extends { id: string; breakdown: PaymentIntakeOrderRow["breakdown"] },
+>(orders: T[], changes: PaymentIntentOrderChange[]): T[] {
+  if (changes.length === 0) return orders;
+  const byId = new Map(changes.map((change) => [change.orderId, change]));
+  return orders.map((order) => {
+    const change = byId.get(order.id);
+    if (!change) return order;
+    return { ...order, breakdown: breakdownLinesToOrderRows(change.afterBreakdown) };
+  });
+}
+
+/**
  * מתשלום שהלקוח רוצה לבצע עכשיו → העברות אמצעי מתוכנן בהזמנות (FIFO).
  * אמצעי התשלום שנקלטו נשמרים במלואם. תשלום מעל החוב אינו נחסם:
- * החוב נסגר עד $0 והעודף מיועד ליתרת זכות (SSOT: computePaymentOverpayment).
+ * החוב נסגר עד $0 והעודף נשמר בנפרד (זכות או עמלות) לפי בחירת המשתמש.
  */
 export function planPaymentIntentAdjustments(params: {
   orders: PaymentIntakeOrderRow[];
@@ -206,6 +275,7 @@ export function planPaymentIntentAdjustments(params: {
   const closesDebtUsd = allocation.closesDebtUsd;
   const overpaymentUsd = allocation.overpaymentUsd;
   const hasOverpayment = allocation.hasOverpayment;
+  const methodAllocation = allocatePaymentIntentsAgainstDebt(normalized, openDebtUsd);
 
   const needByTo = new Map<string, number>();
   for (const row of normalized) {
@@ -241,6 +311,7 @@ export function planPaymentIntentAdjustments(params: {
         overpaymentUsd,
         hasOverpayment,
         allocation,
+        methodAllocation,
         moves: [],
         orderChanges: [],
       };
@@ -382,6 +453,7 @@ export function planPaymentIntentAdjustments(params: {
     overpaymentUsd,
     hasOverpayment,
     allocation,
+    methodAllocation,
     moves,
     orderChanges,
   };
@@ -393,6 +465,14 @@ export function resultingCustomerCreditUsd(
   newSurplusUsd: number,
 ): number {
   return roundMoney2(Math.max(0, existingCreditUsd) + Math.max(0, newSurplusUsd));
+}
+
+/** יתרת עמלות אחרי תשלום יתר — מוסיפה לעודף החדש, לא דורסת עמלות קיימות. */
+export function resultingCustomerFeeUsd(
+  existingFeeUsd: number,
+  newSurplusUsd: number,
+): number {
+  return resultingCustomerCreditUsd(existingFeeUsd, newSurplusUsd);
 }
 
 /** מאגד שורות טיוטת תשלום מטופס הקליטה ל-intents */

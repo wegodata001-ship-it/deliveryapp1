@@ -65,7 +65,7 @@ export function commissionReasonLabel(input: {
 }): string | null {
   const choice = (input.userChoice ?? "").trim();
   const reason = (input.reason ?? "").trim();
-  if (choice === "commission" || reason === "PAYMENT_SURPLUS") return "עודף מתשלום";
+  if (choice === "commission" || reason === "PAYMENT_SURPLUS") return "תוספת מתשלום יתר";
   if (choice === "forfeit") return "ויתור על עודף";
   if (choice === COMMISSION_POOL_DEBIT_USER_CHOICE) return ACCOUNT_RESET_DEBT_COMMISSION_LABEL;
   if (choice === CREDIT_TO_COMMISSION_USER_CHOICE) return ACCOUNT_RESET_CREDIT_LEDGER_LABEL;

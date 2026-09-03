@@ -8,6 +8,16 @@ function formatRateField(raw: string | null | undefined): string | null {
   return t;
 }
 
+/** שער סופי מספרי — SSOT להמרת תצוגה USD → ₪ */
+export function displayDollarRateNumber(financial: SerializedFinancial | null | undefined): number {
+  const raw =
+    financial?.finalDollarRate?.trim() ||
+    financial?.baseDollarRate?.trim() ||
+    "";
+  const n = Number(raw.replace(",", "."));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
 /** תצוגת שער דולר בכרטיס/header — ללא חישוב מחדש, רק ערכים שכבר נטענו */
 export function displayDollarRate(financial: SerializedFinancial | null | undefined): string {
   return (

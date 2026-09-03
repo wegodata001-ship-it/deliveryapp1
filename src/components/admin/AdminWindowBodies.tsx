@@ -36,21 +36,23 @@ import { OrderEditLockGateModal } from "@/components/admin/OrderEditLockGateModa
 import type { CustomerCardWindowProps } from "@/lib/admin-windows";
 import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
+import { useDisplayExchangeRate } from "@/components/admin/DisplayExchangeRateContext";
+import { UsdBalanceIlsGrossText } from "@/components/admin/UsdBalanceIlsGrossText";
 import { CustomerPlaceCombo } from "@/components/admin/CustomerPlaceCombo";
-import { LedgerPdfExportModal } from "@/components/admin/LedgerPdfExportModal";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { formatMoneyAmount, formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
 import { CustomerBalanceView } from "@/components/ui/CustomerBalanceView";
 import { formatCustomerBalanceDisplay, parseBalanceAmountString } from "@/lib/customer-balance";
 import {
+  LEDGER_PDF_FAILED_MESSAGE,
   buildLedgerExportFilename,
+  buildLedgerPdfDownloadFilename,
   exportCustomerLedgerExcel,
   exportCustomerLedgerManualPdf,
   exportCustomerLedgerPdf,
   formatLedgerRunningBalance,
   ledgerHasExportRows,
   type CustomerLedgerExportMeta,
-  type LedgerPdfMode,
 } from "@/lib/customer-ledger-export";
 import {
   DEFAULT_CUSTOMER_LEDGER_DATE_SORT,
@@ -126,6 +128,7 @@ export function CustomerCardWindowBody({
   const { globalCountry } = useAdminGlobal();
   const effectiveLedgerCountry = ledgerSourceCountry ?? globalCountry;
   const { openWindow } = useAdminWindows();
+  const exchangeRate = useDisplayExchangeRate();
   const router = useRouter();
   const [listPayload, setListPayload] = useState<ClientLedgerPayload | null>(null);
   const [listQuery, setListQuery] = useState("");
@@ -199,7 +202,6 @@ export function CustomerCardWindowBody({
   const [ledgerOrderLock, setLedgerOrderLock] = useState<OrderEditLockGatePayload | null>(null);
   const [ledgerGateToast, setLedgerGateToast] = useState<string | null>(null);
   const [exportBusy, setExportBusy] = useState<"pdf" | "excel" | "manual-pdf" | null>(null);
-  const [ledgerPdfModalOpen, setLedgerPdfModalOpen] = useState(false);
   const [manualPdfMode, setManualPdfMode] = useState(false);
   const [selectedLedgerRowIds, setSelectedLedgerRowIds] = useState<string[]>([]);
   const lastManualPdfClickId = useRef<string | null>(null);
@@ -570,6 +572,10 @@ export function CustomerCardWindowBody({
 
   const balanceNum = ledger ? parseBalanceAmountString(ledger.balanceUsd ?? "0") : 0;
   const balanceSummaryView = formatCustomerBalanceDisplay(balanceNum, "USD");
+  const cardIlsUsd =
+    Number(ledger?.openDebtUsd ?? 0) > 0.01
+      ? Number(ledger?.openDebtUsd)
+      : Number(ledger?.availableCreditUsd ?? 0);
 
   const exportMeta: CustomerLedgerExportMeta | null = snap
     ? {
@@ -591,7 +597,7 @@ export function CustomerCardWindowBody({
       }
     : null;
 
-  async function runLedgerExport(kind: "pdf" | "excel", pdfMode: LedgerPdfMode = "regular") {
+  async function runLedgerExport(kind: "pdf" | "excel") {
     if (exportBusy || ledgerLoading) return;
     if (!ledger || !exportMeta || !ledgerHasExportRows(ledger)) {
       setLedgerGateToast("אין נתונים לייצוא");
@@ -599,17 +605,23 @@ export function CustomerCardWindowBody({
       return;
     }
     setExportBusy(kind);
-    setLedgerGateToast(kind === "pdf" ? "מייצא PDF…" : "מייצא Excel…");
+    setLedgerGateToast(kind === "pdf" ? "מוריד PDF..." : "מייצא Excel…");
     try {
       if (kind === "pdf") {
-        await exportCustomerLedgerPdf(exportMeta, { ...ledger, rows: displayLedgerRows }, { mode: pdfMode });
+        await exportCustomerLedgerPdf(exportMeta, { ...ledger, rows: displayLedgerRows });
+        setLedgerGateToast("הקובץ הורד");
+      } else {
+        await exportCustomerLedgerExcel(exportMeta, { ...ledger, rows: displayLedgerRows });
+        setLedgerGateToast("Excel הורד בהצלחה");
       }
-      else await exportCustomerLedgerExcel(exportMeta, { ...ledger, rows: displayLedgerRows });
-      setLedgerGateToast(kind === "pdf" ? "PDF מוכן לתצוגה" : "Excel הורד בהצלחה");
-      setLedgerPdfModalOpen(false);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "ייצוא נכשל";
-      setLedgerGateToast(msg);
+      setLedgerGateToast(
+        kind === "pdf"
+          ? LEDGER_PDF_FAILED_MESSAGE
+          : e instanceof Error
+            ? e.message
+            : "ייצוא נכשל",
+      );
     } finally {
       setExportBusy(null);
       window.setTimeout(() => setLedgerGateToast(null), 3200);
@@ -631,7 +643,7 @@ export function CustomerCardWindowBody({
       return;
     }
     setExportBusy("manual-pdf");
-    setLedgerGateToast("מייצא PDF ידני…");
+    setLedgerGateToast("מוריד PDF...");
     try {
       await exportCustomerLedgerManualPdf({
         customerId: resolvedCustomerId,
@@ -641,24 +653,14 @@ export function CustomerCardWindowBody({
         sourceCountry: effectiveLedgerCountry,
         meta: exportMeta,
       });
-      setLedgerGateToast("PDF ידני מוכן לתצוגה");
+      setLedgerGateToast("הקובץ הורד");
       exitManualPdfMode();
-    } catch (e) {
-      setLedgerGateToast(e instanceof Error ? e.message : "ייצוא PDF ידני נכשל");
+    } catch {
+      setLedgerGateToast(LEDGER_PDF_FAILED_MESSAGE);
     } finally {
       setExportBusy(null);
       window.setTimeout(() => setLedgerGateToast(null), 3200);
     }
-  }
-
-  function openLedgerPdfModal() {
-    if (exportBusy || ledgerLoading) return;
-    if (!ledger || !exportMeta || !ledgerHasExportRows(ledger)) {
-      setLedgerGateToast("אין נתונים לייצוא");
-      window.setTimeout(() => setLedgerGateToast(null), 3200);
-      return;
-    }
-    setLedgerPdfModalOpen(true);
   }
 
   const ledgerFilters = (
@@ -699,15 +701,15 @@ export function CustomerCardWindowBody({
           disabled={!!exportBusy || ledgerLoading || !ledgerHasExportRows(ledger) || manualPdfMode}
           title={
             ledgerHasExportRows(ledger)
-              ? `PDF מלא · ${buildLedgerExportFilename(exportMeta?.customerCode ?? "customer", "pdf")}`
+              ? `הורדת PDF · ${buildLedgerPdfDownloadFilename({ customerCode: exportMeta?.customerCode ?? "customer" })}`
               : "אין נתונים לייצוא"
           }
-          onClick={openLedgerPdfModal}
+          onClick={() => void runLedgerExport("pdf")}
         >
           {exportBusy === "pdf" ? (
             <>
               <span className="payment-modal-save-spinner" aria-hidden />
-              מייצא PDF…
+              מוריד PDF...
             </>
           ) : (
             "PDF מלא"
@@ -797,6 +799,11 @@ export function CustomerCardWindowBody({
           >
             <div className="summary-card-amount" dir="ltr">
               {formatLedgerRunningBalance(ledger.balanceUsd)}
+              <UsdBalanceIlsGrossText
+                usd={cardIlsUsd}
+                exchangeRate={exchangeRate}
+                className="adm-balances-ils-gross"
+              />
             </div>
           </button>
           <span>
@@ -1253,9 +1260,7 @@ export function CustomerCardWindowBody({
                     disabled={!customerId || selectedLedgerRowIds.length === 0 || !!exportBusy}
                     onClick={() => void runManualPdfExport()}
                   >
-                    {exportBusy === "manual-pdf"
-                      ? "מייצא…"
-                      : `צור PDF מ-${selectedVisibleCount} שורות`}
+                    {exportBusy === "manual-pdf" ? "מוריד PDF..." : "הורד PDF"}
                   </button>
                 </div>
               </div>
@@ -1279,14 +1284,6 @@ export function CustomerCardWindowBody({
           {ledgerGateToast}
         </div>
       ) : null}
-      <LedgerPdfExportModal
-        open={ledgerPdfModalOpen}
-        busy={exportBusy === "pdf"}
-        onClose={() => {
-          if (exportBusy !== "pdf") setLedgerPdfModalOpen(false);
-        }}
-        onExport={(mode) => void runLedgerExport("pdf", mode)}
-      />
       <CommissionBalancePopover
         open={commissionPopoverOpen}
         customerId={customerId}

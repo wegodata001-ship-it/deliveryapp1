@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   BALANCES_WEEK_PARAM,
+  isBalancesWeekReady,
   parseBalancesWeekFromSearchParams,
   shouldResyncBalancesLocalWeek,
 } from "@/lib/balances-week-filter";
@@ -86,12 +87,17 @@ describe("parseBalancesWeekFromSearchParams", () => {
     assert.equal(parseBalancesWeekFromSearchParams(sp).weekCode, "AH-136");
   });
 
-  it("falls back to global week when balancesWeek is missing", () => {
+  it("ignores global week= — balancesWeek is the only local SSOT", () => {
     const sp = new URLSearchParams("week=AH-138&country=TURKEY");
-    assert.equal(parseBalancesWeekFromSearchParams(sp).weekCode, "AH-138");
+    assert.equal(parseBalancesWeekFromSearchParams(sp).weekCode, "");
   });
 
   it("official param name is balancesWeek", () => {
     assert.equal(BALANCES_WEEK_PARAM, "balancesWeek");
+  });
+
+  it("is ready only after balancesWeek exists", () => {
+    assert.equal(isBalancesWeekReady(new URLSearchParams("week=AH-138")), false);
+    assert.equal(isBalancesWeekReady(new URLSearchParams("balancesWeek=AH-139")), true);
   });
 });

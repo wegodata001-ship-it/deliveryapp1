@@ -1,5 +1,7 @@
 export { TableFiltersBar } from "@/components/admin/filters/TableFiltersBar";
 export type { TableFiltersBarProps } from "@/components/admin/filters/TableFiltersBar";
+export { ExpandableAdvancedFilters } from "@/components/admin/filters/ExpandableAdvancedFilters";
+export type { ExpandableAdvancedFiltersProps } from "@/components/admin/filters/ExpandableAdvancedFilters";
 export { useTableFilters } from "@/components/admin/filters/useTableFilters";
 export { TableFilterAutocomplete } from "@/components/admin/filters/TableFilterAutocomplete";
 export {

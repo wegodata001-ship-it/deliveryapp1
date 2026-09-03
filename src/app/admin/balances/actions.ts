@@ -38,6 +38,9 @@ import {
 } from "@/lib/customer-account-balances-shared";
 import { getCustomerCreditBalancesUsdMany } from "@/lib/customer-credit-balance";
 import { getCustomerCommissionBalancesUsdMany } from "@/lib/customer-commission-balance";
+import { getLayoutFinancialSettings } from "@/lib/admin-layout-cache";
+import { displayDollarRateNumber } from "@/lib/display-dollar-rate";
+import { convertDebtUsdToIlsIncludingVat } from "@/lib/usd-balance-ils-vat";
 import { buildCustomerCommissionResetPreview } from "@/lib/customer-commission-balance";
 import { getCustomerAccountBalances } from "@/lib/customer-account-balances";
 import { resetCustomerOutstandingBalancesAction } from "@/app/admin/payments-updated/actions";
@@ -1813,8 +1816,11 @@ export async function exportCustomerBalancesAction(
       "משיכה מקוד ($)",
       "סה\"כ תשלומים ($)",
       "יתרה ($)",
+      "יתרה (₪ כולל מע״מ)",
       "סטטוס",
     ];
+    const financial = await getLayoutFinancialSettings();
+    const exportRate = displayDollarRateNumber(financial);
     const data = payload.rows.map((r) => {
       const openDebt = Math.max(0, rowBalanceUsdNumber(r.totalBalanceUSD));
       const credit = rowBalanceUsdNumber(r.availableCreditUSD);
@@ -1822,12 +1828,18 @@ export async function exportCustomerBalancesAction(
         openDebtUsd: openDebt,
         availableCreditUsd: credit,
       });
+      const displayUsd =
+        openDebt > 0.01 ? openDebt : credit > 0.01 ? credit : 0;
       const displayBalance =
         openDebt > 0.01
           ? r.totalBalanceUSD
           : credit > 0.01
             ? r.availableCreditUSD
             : r.totalBalanceUSD;
+      const ilsGross =
+        displayUsd > 0.01 && exportRate > 0
+          ? convertDebtUsdToIlsIncludingVat(displayUsd, exportRate).toFixed(2)
+          : "";
       return [
         r.customerCode ?? "—",
         r.customerName,
@@ -1836,6 +1848,7 @@ export async function exportCustomerBalancesAction(
         r.codeWithdrawalUSD,
         r.totalPaymentsUSD,
         displayBalance,
+        ilsGross,
         status,
       ];
     });

@@ -5,6 +5,8 @@ import { createPortal } from "react-dom";
 import type { PaymentOveragePreview } from "@/lib/customer-balance";
 import { formatOverpaymentUsdSigned } from "@/lib/payment-overpayment";
 import { formatUsdDisplay } from "@/lib/money-format";
+import { useDisplayExchangeRate } from "@/components/admin/DisplayExchangeRateContext";
+import { UsdBalanceIlsGrossText } from "@/components/admin/UsdBalanceIlsGrossText";
 
 /** אפשרויות טיפול בעודף */
 export type SurplusDisposition = "credit" | "commission";
@@ -32,6 +34,7 @@ export function CustomerPaymentOverageModal({
   onEditOrder,
   onCancel,
 }: Props) {
+  const exchangeRate = useDisplayExchangeRate();
   const [pendingDisposition, setPendingDisposition] = useState<SurplusDisposition | null>(null);
 
   useEffect(() => {
@@ -77,7 +80,14 @@ export function CustomerPaymentOverageModal({
         <dl className="adm-payment-overage-stats">
           <div>
             <dt>החוב הפתוח של הלקוח הוא</dt>
-            <dd dir="ltr">{formatUsdDisplay(preview.openDebtUsd)}</dd>
+            <dd dir="ltr">
+              {formatUsdDisplay(preview.openDebtUsd)}
+              <UsdBalanceIlsGrossText
+                usd={preview.openDebtUsd}
+                exchangeRate={exchangeRate}
+                className="adm-balances-ils-gross"
+              />
+            </dd>
           </div>
           <div>
             <dt>הוזן תשלום בסך</dt>

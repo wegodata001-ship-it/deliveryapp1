@@ -218,7 +218,14 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
       const next = toOrderFilters(overrides);
       const base = buildOrdersListSearchParams(next, new URLSearchParams(searchParams.toString()));
       const qs = base.toString();
-      router.replace(qs ? `/admin/orders?${qs}` : "/admin/orders", { scroll: false });
+      const href = qs ? `/admin/orders?${qs}` : "/admin/orders";
+      const current =
+        typeof window !== "undefined"
+          ? `${window.location.pathname}${window.location.search}`
+          : "";
+      if (current !== href) {
+        router.replace(href, { scroll: false });
+      }
       if (opts?.refresh) router.refresh();
     },
     [router, searchParams, toOrderFilters],
@@ -235,13 +242,66 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
     [pushFilters],
   );
 
+  const applyAdvancedFilters = useCallback(() => {
+    const wk = getAhWeekCodeFromDateRange(dateFrom, dateTo);
+    const nextWeek = wk ?? "";
+    setWeek(nextWeek);
+    pushFilters({
+      week: nextWeek,
+      dateFrom,
+      dateTo,
+      orderNumber: orderNumDraft,
+      phone: phoneDraft,
+      minAmountUsd: minAmount,
+      maxAmountUsd: maxAmount,
+      paymentLocation: payLoc,
+      createdBy: createdByValues,
+      country: countryValues,
+      openOnly,
+      completedOnly,
+      status: openOnly ? [OS.OPEN] : completedOnly ? [OS.COMPLETED] : statusValues,
+    });
+  }, [
+    completedOnly,
+    countryValues,
+    createdByValues,
+    dateFrom,
+    dateTo,
+    maxAmount,
+    minAmount,
+    openOnly,
+    orderNumDraft,
+    payLoc,
+    phoneDraft,
+    pushFilters,
+    statusValues,
+  ]);
+
   const clearAllFilters = useCallback(() => {
     const base = clearOrdersFiltersSearchParams(new URLSearchParams(searchParams.toString()));
     const qs = base.toString();
     router.replace(qs ? `/admin/orders?${qs}` : "/admin/orders", { scroll: false });
-    setAdvancedOpen(false);
     setMobileOpen(false);
-  }, [router, searchParams]);
+    setSearchDraft("");
+    setOrderNumDraft("");
+    setPhoneDraft("");
+    setMinAmount("");
+    setMaxAmount("");
+    setPayLoc("");
+    setCreatedByValues([]);
+    setCountryValues([]);
+    setStatusValues([]);
+    setPaymentTypeValues([]);
+    setPaymentStatusValues([]);
+    setOpenOnly(false);
+    setCompletedOnly(false);
+    const code = normalizeAhWeekCode(ordersWeekFromUrl) || normalizeAhWeekCode(week);
+    const range = code ? getAhWeekRange(code) : null;
+    if (range) {
+      setDateFrom(range.from);
+      setDateTo(range.to);
+    }
+  }, [ordersWeekFromUrl, router, searchParams, week]);
 
   const setRangeFromWeekCode = useCallback((code: string) => {
     const norm = normalizeAhWeekCode(code);
@@ -369,13 +429,16 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
     return dateFrom !== weekRange.from || dateTo !== weekRange.to;
   }, [dateFrom, dateTo, weekRange]);
 
+  const appliedDatesDifferFromWeek = useMemo(() => {
+    const code = normalizeAhWeekCode(parsed.week) ?? parsed.week;
+    const range = code ? getAhWeekRange(code) : null;
+    if (!range) return Boolean(parsed.dateFrom.trim() || parsed.dateTo.trim());
+    return parsed.dateFrom !== range.from || parsed.dateTo !== range.to;
+  }, [parsed.dateFrom, parsed.dateTo, parsed.week]);
+
   const advancedFilterCount = useMemo(
-    () =>
-      countAdvancedFilters(
-        toOrderFilters(),
-        datesDifferFromWeek,
-      ),
-    [datesDifferFromWeek, toOrderFilters],
+    () => countAdvancedFilters(parsed, appliedDatesDifferFromWeek),
+    [appliedDatesDifferFromWeek, parsed],
   );
 
   const activeFilterChips = useMemo((): ActiveFilterChip[] => {
@@ -651,6 +714,7 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
     setCompletedOnly,
     pushFilters,
     schedulePush,
+    applyAdvancedFilters,
     clearAllFilters,
     advancedOpen,
     setAdvancedOpen,

@@ -16,7 +16,6 @@ import {
   type PaymentLineMethod,
 } from "@/lib/payment-updated";
 import {
-  COMMISSION_ADD_TO_BALANCE_LABEL,
   COMMISSION_REMOVE_FROM_BALANCE_LABEL,
   formatCommissionSignedCompact,
 } from "@/lib/commission-lineage-view";
@@ -726,7 +725,7 @@ function ledgerPaymentAllocationExpandLines(detail: LedgerPaymentDetail): Ledger
   const creditSurplus = Number(detail.creditSurplusUsd ?? 0);
   if (creditSurplus > 0.005) {
     out.push({
-      label: "יתרת זכות מתשלום יתר",
+      label: "תשלום יתר → יתרת זכות",
       display: `+${formatLedgerPaymentComponentDisplay("USD", creditSurplus.toFixed(2)).replace(/^\$?\s?/, "$")}`,
     });
   }
@@ -734,7 +733,7 @@ function ledgerPaymentAllocationExpandLines(detail: LedgerPaymentDetail): Ledger
     const amt = Number(fee.amountUsd);
     if (!Number.isFinite(amt) || Math.abs(amt) <= 0.005) continue;
     out.push({
-      label: amt >= 0 ? COMMISSION_ADD_TO_BALANCE_LABEL : COMMISSION_REMOVE_FROM_BALANCE_LABEL,
+      label: amt >= 0 ? "תשלום יתר → עמלות" : COMMISSION_REMOVE_FROM_BALANCE_LABEL,
       display: formatCommissionSignedCompact(amt),
       tone: "commission",
       orderId: fee.orderId,

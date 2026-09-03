@@ -144,6 +144,20 @@ export async function previewPaymentIntentAutoAdjustmentAction(params: {
       hasOverpayment: boolean;
       existingCreditUsd: number;
       resultingCreditUsd: number;
+      existingCommissionUsd: number;
+      resultingCommissionUsd: number;
+      methodAllocation: Array<{
+        method: string;
+        label: string;
+        currency: PaymentBalanceCurrency;
+        amountNative: number;
+        amountUsd: number;
+        appliedUsd: number;
+        excessUsd: number;
+        grossIls: number | null;
+        vatIls: number;
+        netIls: number | null;
+      }>;
       intents: Array<{
         method: string;
         currency: PaymentBalanceCurrency;
@@ -188,9 +202,8 @@ export async function previewPaymentIntentAutoAdjustmentAction(params: {
   });
   if (!workspace.ok) return { ok: false, error: workspace.error };
 
-  const { planPaymentIntentAdjustments, resultingCustomerCreditUsd } = await import(
-    "@/lib/payment-method-payment-intent"
-  );
+  const { planPaymentIntentAdjustments, resultingCustomerCreditUsd, resultingCustomerFeeUsd } =
+    await import("@/lib/payment-method-payment-intent");
   const { getCustomerOpenDebtUsdNumber, openDebtScopeForWorkCountry } = await import(
     "@/lib/customer-open-debt"
   );
@@ -213,7 +226,10 @@ export async function previewPaymentIntentAutoAdjustmentAction(params: {
     workspace.customer.id,
     creditScopeFromWorkCountry(normalizeWorkCountryCode(params.workCountry ?? null)),
   );
+  const { getCustomerCommissionBalanceUsd } = await import("@/lib/customer-commission-balance");
+  const existingCommissionUsd = await getCustomerCommissionBalanceUsd(workspace.customer.id);
   const resultingCreditUsd = resultingCustomerCreditUsd(existingCreditUsd, plan.overpaymentUsd);
+  const resultingCommissionUsd = resultingCustomerFeeUsd(existingCommissionUsd, plan.overpaymentUsd);
 
   return {
     ok: true,
@@ -224,6 +240,9 @@ export async function previewPaymentIntentAutoAdjustmentAction(params: {
     hasOverpayment: plan.hasOverpayment,
     existingCreditUsd,
     resultingCreditUsd,
+    existingCommissionUsd,
+    resultingCommissionUsd,
+    methodAllocation: plan.methodAllocation,
     intents: plan.intents,
     moves: plan.moves,
     orderChanges: plan.orderChanges.map((row) => ({
@@ -241,6 +260,141 @@ export async function previewPaymentIntentAutoAdjustmentAction(params: {
   };
 }
 
+
+const DEFAULT_INTENT_PLAN_REASON =
+  "הלקוח רוצה לשלם באמצעי תשלום שונה מהמתוכנן בהזמנות הפתוחות";
+
+export async function applyPaymentIntentPlanAction(params: {
+  customerId: string;
+  weekCode?: string | null;
+  workCountry?: string | null;
+  exchangeRate?: number | null;
+  intents: Array<{ method: string; currency: PaymentBalanceCurrency; amountNative: number }>;
+  reasonText?: string;
+}): Promise<{ ok: true; adjustmentId: string; affectedOrders: number } | { ok: false; error: string }> {
+  const me = await ensureAdjustmentPermission();
+  const customerId = params.customerId.trim();
+  if (!customerId) return { ok: false, error: "חסר לקוח" };
+  const workspace = await loadPaymentIntakeCustomerWorkspace({
+    customerId,
+    weekCodeForOpenBalances: params.weekCode ?? undefined,
+    paymentWorkCountryRaw: normalizeWorkCountryCode(params.workCountry ?? null),
+  });
+  if (!workspace.ok) return { ok: false, error: workspace.error };
+
+  const { planPaymentIntentAdjustments } = await import("@/lib/payment-method-payment-intent");
+  const { getCustomerOpenDebtUsdNumber, openDebtScopeForWorkCountry } = await import(
+    "@/lib/customer-open-debt"
+  );
+  const customerOpenDebtUsd = await getCustomerOpenDebtUsdNumber(
+    workspace.customer.id,
+    openDebtScopeForWorkCountry(normalizeWorkCountryCode(params.workCountry ?? null)),
+  );
+  const plan = planPaymentIntentAdjustments({
+    orders: workspace.orders,
+    intents: params.intents,
+    exchangeRate: params.exchangeRate,
+    customerOpenDebtUsd,
+  });
+  if (!plan.ok) return plan;
+  if (plan.hasOverpayment) {
+    return { ok: false, error: "תשלום יתר מחייב בחירת יעד לעודף ושמירה אטומית יחד עם התשלום" };
+  }
+  if (plan.orderChanges.length === 0) {
+    return { ok: true, adjustmentId: "", affectedOrders: 0 };
+  }
+
+  const adjustmentId = randomUUID();
+  const createdAtIso = new Date().toISOString();
+  const reasonText = (params.reasonText ?? "").trim() || DEFAULT_INTENT_PLAN_REASON;
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      for (const affected of plan.orderChanges) {
+        const rows = affected.afterBreakdown.map((line) => ({
+          paymentMethod: line.paymentMethod,
+          amount: new Prisma.Decimal(line.amount).toDecimalPlaces(4, 4),
+          currency: line.currency,
+        }));
+        await tx.order.update({
+          where: { id: affected.orderId },
+          data: { paymentMethod: paymentMethodForBreakdown(affected.afterBreakdown) || null },
+        });
+        await writeOrderBreakdownInTx(tx, affected.orderId, rows, {
+          userId: me.id,
+          intakeWeekCode: params.weekCode ?? null,
+        });
+        await tx.auditLog.create({
+          data: {
+            userId: me.id,
+            actionType: ORDER_PAYMENT_METHOD_ADJUSTED_ACTION,
+            entityType: "Order",
+            entityId: affected.orderId,
+            metadata: {
+              adjustmentId,
+              orderId: affected.orderId,
+              orderNumber: affected.orderNumber,
+              fromPaymentMethod: affected.fromMethod,
+              toPaymentMethod: affected.toMethod,
+              movedUsd: moneyUsd(affected.moveUsd),
+              reasonCode: "CUSTOMER_REQUEST",
+              reasonText,
+              employeeId: me.id,
+              employeeName: me.fullName,
+              beforeAllocation: affected.beforeBreakdown,
+              afterAllocation: affected.afterBreakdown,
+            } as Prisma.InputJsonValue,
+          },
+        });
+      }
+
+      await tx.auditLog.create({
+        data: {
+          userId: me.id,
+          actionType: PAYMENT_METHOD_AUTO_ADJUSTED_ACTION,
+          entityType: "PaymentMethodAdjustment",
+          entityId: adjustmentId,
+          metadata: {
+            adjustmentId,
+            customerId: workspace.customer.id,
+            customerName: workspace.customer.displayName,
+            customerCode: workspace.customer.customerCode ?? null,
+            employeeId: me.id,
+            employeeName: me.fullName,
+            createdAtIso,
+            fromPaymentMethod: plan.moves[0]?.fromMethod ?? "",
+            toPaymentMethod: plan.moves[0]?.toMethod ?? "",
+            amountUsd: moneyUsd(plan.moves.reduce((sum, move) => sum + move.amountUsd, 0)),
+            reasonCode: "CUSTOMER_REQUEST",
+            reasonText,
+            paymentIntent: {
+              intents: plan.intents,
+              moves: plan.moves,
+              methodAllocation: plan.methodAllocation,
+            },
+            affectedOrders: plan.orderChanges.map((row) => ({
+              orderId: row.orderId,
+              orderNumber: row.orderNumber,
+              movedUsd: moneyUsd(row.moveUsd),
+              beforeAllocation: row.beforeBreakdown,
+              afterAllocation: row.afterBreakdown,
+            })),
+            reviewedAtIso: null,
+            reviewedByUserId: null,
+            reviewedByName: null,
+          } as Prisma.InputJsonValue,
+        },
+      });
+    }, { maxWait: 10_000, timeout: 30_000 });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "התאמה אוטומטית נכשלה" };
+  }
+
+  revalidatePath("/admin/payment-method-adjustments");
+  revalidatePath("/admin/activity");
+  revalidatePath("/admin/orders");
+  return { ok: true, adjustmentId, affectedOrders: plan.orderChanges.length };
+}
 
 export async function applyPaymentMethodAutoAdjustmentAction(params: {
   customerId: string;

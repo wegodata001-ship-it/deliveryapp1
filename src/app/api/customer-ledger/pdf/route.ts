@@ -5,7 +5,9 @@ import type { CustomerLedgerPayload } from "@/app/admin/capture/actions";
 import { requireAuth } from "@/lib/admin-auth";
 import { buildCustomerLedgerPdfHtml } from "@/lib/customer-ledger-pdf-html";
 import {
-  buildLedgerExportFilename,
+  LEDGER_PDF_FAILED_MESSAGE,
+  buildLedgerPdfDownloadFilename,
+  ledgerPdfContentDisposition,
   type CustomerLedgerExportMeta,
   type LedgerPdfMode,
 } from "@/lib/customer-ledger-export";
@@ -66,33 +68,29 @@ export async function POST(req: Request): Promise<Response> {
       },
     });
 
-    const filename = buildLedgerExportFilename(body.meta.customerCode, "pdf", mode);
+    const filename = buildLedgerPdfDownloadFilename({
+      customerCode: body.meta.customerCode,
+      variant: "full",
+    });
     const pdfBytes = await renderHtmlToPdf(html);
 
-    if (pdfBytes) {
-      return new Response(Buffer.from(pdfBytes), {
-        headers: {
-          "Content-Type": "application/pdf",
-          "Content-Disposition": `inline; filename="${filename}"`,
-          "Cache-Control": "no-store",
-        },
+    if (!pdfBytes) {
+      console.error("[customer-ledger-pdf] chromium returned no PDF bytes", {
+        customerCode: body.meta.customerCode,
+        rowCount: body.ledger.rows?.length ?? 0,
       });
+      return NextResponse.json({ ok: false, error: LEDGER_PDF_FAILED_MESSAGE }, { status: 500 });
     }
 
-    const htmlFilename = filename.replace(/\.pdf$/i, ".html");
-    return new Response(html, {
+    return new Response(Buffer.from(pdfBytes), {
       headers: {
-        "Content-Type": "text/html; charset=utf-8",
-        "Content-Disposition": `inline; filename="${htmlFilename}"`,
-        "X-Ledger-Pdf-Fallback": "html",
+        "Content-Type": "application/pdf",
+        "Content-Disposition": ledgerPdfContentDisposition(filename),
         "Cache-Control": "no-store",
       },
     });
   } catch (e) {
     console.error("[customer-ledger-pdf] failed", e);
-    return NextResponse.json(
-      { ok: false, error: e instanceof Error ? e.message : "PDF generation failed" },
-      { status: 500 },
-    );
+    return NextResponse.json({ ok: false, error: LEDGER_PDF_FAILED_MESSAGE }, { status: 500 });
   }
 }

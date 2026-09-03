@@ -188,6 +188,7 @@ export function countAdvancedFilters(
   if (filters.minAmountUsd.trim()) n++;
   if (filters.maxAmountUsd.trim()) n++;
   if (filters.orderNumber.trim()) n++;
+  if (filters.country.length > 0) n++;
   if (filters.openOnly) n++;
   if (filters.completedOnly) n++;
   if (datesDifferFromWeek) n++;

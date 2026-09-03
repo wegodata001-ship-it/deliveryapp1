@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { resolveGlobalCountry } from "@/lib/current-country";
-import { withQuery } from "@/lib/admin-url-query";
+import { currentSearchHref, withQuery } from "@/lib/admin-url-query";
 import { isActiveWorkWeekCode } from "@/lib/active-work-week";
 import { resolveGlobalWorkWeekScope } from "@/lib/global-work-week";
 import { balancesSnapshotToYmd, getAhWeekRange, normalizeAhWeekCode } from "@/lib/work-week";
@@ -32,23 +32,28 @@ export function useEnsureActiveWorkWeekOnEnter(scope: WorkWeekScreenScope): void
   const lastGlobalWeekRef = useRef<string | null>(null);
 
   const globalWeekRaw = sp.get("week") ?? "";
+  const balancesWeekRaw = sp.get(BALANCES_WEEK_PARAM) ?? "";
+  const balancesToRaw = sp.get(BALANCES_TO_PARAM) ?? "";
+  const countryRaw = sp.get("country") ?? "";
+  const searchKey = sp.toString();
 
   useEffect(() => {
     if (!pathname || !scopeMatchesPath(scope, pathname)) return;
+    const current = new URLSearchParams(searchKey);
 
     const globalScope = resolveGlobalWorkWeekScope(globalWeekRaw);
     const { globalWorkWeek, fromYmd, toYmd } = globalScope;
     const range = getAhWeekRange(globalWorkWeek);
-    const country = resolveGlobalCountry(sp.get("country"));
+    const country = resolveGlobalCountry(countryRaw);
 
     if (scope === "orders") {
       const cur =
-        normalizeAhWeekCode(sp.get("ordersWeek") || "") ??
-        normalizeAhWeekCode(sp.get("week") || "") ??
+        normalizeAhWeekCode(current.get("ordersWeek") || "") ??
+        normalizeAhWeekCode(current.get("week") || "") ??
         "";
       if (cur === globalWorkWeek) return;
 
-      const next = new URLSearchParams(sp.toString());
+      const next = new URLSearchParams(searchKey);
       next.set("week", globalWorkWeek);
       next.set("from", fromYmd || range?.from || "");
       next.set("to", toYmd || range?.to || "");
@@ -59,16 +64,17 @@ export function useEnsureActiveWorkWeekOnEnter(scope: WorkWeekScreenScope): void
       next.delete("preset");
       next.set("country", country);
       const qs = next.toString();
-      router.replace(qs ? `/admin/orders?${qs}` : "/admin/orders", { scroll: false });
+      const href = qs ? `/admin/orders?${qs}` : "/admin/orders";
+      if (href === currentSearchHref(pathname, current)) return;
+      router.replace(href, { scroll: false });
       router.refresh();
       return;
     }
 
-    const cur = normalizeAhWeekCode(sp.get(BALANCES_WEEK_PARAM) || "") ?? "";
-    const curTo = sp.get(BALANCES_TO_PARAM) || "";
+    const cur = normalizeAhWeekCode(balancesWeekRaw) ?? "";
     const action = shouldResyncBalancesLocalWeek({
       currentBalancesWeek: cur,
-      currentBalancesTo: curTo,
+      currentBalancesTo: balancesToRaw,
       globalWorkWeek,
       previousGlobalWorkWeek: lastGlobalWeekRef.current,
     });
@@ -77,8 +83,19 @@ export function useEnsureActiveWorkWeekOnEnter(scope: WorkWeekScreenScope): void
 
     const week = action === "ensure-to" ? cur || globalWorkWeek : globalWorkWeek;
     const snap = balancesSnapshotToYmd(week);
-    router.replace(withQuery(pathname, sp, balancesWeekQueryPatch(week, snap)), { scroll: false });
-  }, [pathname, router, scope, sp, globalWeekRaw]);
+    const href = withQuery(pathname, current, balancesWeekQueryPatch(week, snap));
+    if (href === currentSearchHref(pathname, current)) return;
+    router.replace(href, { scroll: false });
+  }, [
+    pathname,
+    router,
+    scope,
+    searchKey,
+    globalWeekRaw,
+    balancesWeekRaw,
+    balancesToRaw,
+    countryRaw,
+  ]);
 }
 
 export function shouldShowCurrentWeekButton(weekCode: string | null | undefined): boolean {

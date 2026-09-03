@@ -675,10 +675,14 @@ export function PaymentModalUpdated({
   const reopenMethodControlAfterOrderEditRef = useRef(false);
   const saveAfterOverageRef = useRef<"new" | "close" | null>(null);
   const saveSurplusPendingRef = useRef(false);
-  const pendingAutoAdjustCreditSaveRef = useRef(false);
-  const [autoAdjustCreditSaveTick, setAutoAdjustCreditSaveTick] = useState(0);
   const performSaveRef = useRef<
-    ((surplusDisposition?: SurplusDisposition | null) => ReturnType<typeof performSave>) | null
+    ((
+      surplusDisposition?: SurplusDisposition | null,
+      options?: {
+        paymentsOverride?: PaymentLine[];
+        autoAdjustIntents?: Array<{ method: string; currency: "USD" | "ILS"; amountNative: number }>;
+      },
+    ) => ReturnType<typeof performSave>) | null
   >(null);
   const finishAfterSuccessfulSaveRef = useRef<
     ((
@@ -686,18 +690,6 @@ export function PaymentModalUpdated({
       result: Extract<Awaited<ReturnType<typeof performSave>>, { ok: true }>,
     ) => Promise<void>) | null
   >(null);
-  useEffect(() => {
-    if (autoAdjustCreditSaveTick === 0) return;
-    if (!pendingAutoAdjustCreditSaveRef.current) return;
-    pendingAutoAdjustCreditSaveRef.current = false;
-    const save = performSaveRef.current;
-    const finish = finishAfterSuccessfulSaveRef.current;
-    if (!save || !finish) return;
-    void (async () => {
-      const saved = await save("credit");
-      if (saved.ok) await finish("new", saved);
-    })();
-  }, [autoAdjustCreditSaveTick]);
   const intakeDevPendingSaveRef = useRef(false);
   /** אחרי ניסיון שמירה שנכשל באימות צ׳יקים — מסמן שדות חסרים */
   const [highlightInvalidCheckFields, setHighlightInvalidCheckFields] = useState(false);
@@ -2830,6 +2822,10 @@ export function PaymentModalUpdated({
    */
   async function performSave(
     surplusDisposition?: SurplusDisposition | null,
+    options?: {
+      paymentsOverride?: PaymentLine[];
+      autoAdjustIntents?: Array<{ method: string; currency: "USD" | "ILS"; amountNative: number }>;
+    },
   ): Promise<
     | {
         ok: true;
@@ -2852,11 +2848,16 @@ export function PaymentModalUpdated({
   > {
     setSaveErr(null);
     setHighlightInvalidCheckFields(false);
+    if (saveBusy) return { ok: false };
     if (!customer) {
       setSaveErr("יש לבחור לקוח מהרשימה");
       return { ok: false };
     }
-    if (totals.totalUsd <= 0) {
+    const saveLines = options?.paymentsOverride ?? payments;
+    const saveTotals = options?.paymentsOverride
+      ? calculateTotals(saveLines, rateN, DEFAULT_VAT_RATE)
+      : totals;
+    if (saveTotals.totalUsd <= 0) {
       setSaveErr("יש להוסיף סכום בדולר ו/או בשקל (נדרש שער דולר להמרת שקל)");
       return { ok: false };
     }
@@ -2864,7 +2865,7 @@ export function PaymentModalUpdated({
       setSaveErr("שער דולר חיובי");
       return { ok: false };
     }
-    const checkErr = validatePaymentCheckLines(payments);
+    const checkErr = validatePaymentCheckLines(saveLines);
     if (checkErr) {
       setSaveErr(checkErr);
       setHighlightInvalidCheckFields(true);
@@ -2885,7 +2886,7 @@ export function PaymentModalUpdated({
       surplusDisposition === "commission" || surplusDisposition === "credit";
     const paymentCoversDebt = isExistingPayment
       ? paymentApplyUsd + 0.01 >= totalDebtBeforePaymentUsd || isExistingPaymentUnchanged(paymentApplyUsd)
-      : totals.totalUsd + 0.01 >= totalDebtBeforePaymentUsd;
+      : saveTotals.totalUsd + 0.01 >= totalDebtBeforePaymentUsd;
     const allowMethodExcessAsApprovedSurplus =
       surplusApproved &&
       paymentCoversDebt &&
@@ -2913,7 +2914,7 @@ export function PaymentModalUpdated({
       customerLoaded: Boolean(customer),
       ordersLoading,
       ordersCount: orders.length,
-      paymentAmountUsd: totals.totalUsd,
+      paymentAmountUsd: saveTotals.totalUsd,
       selectedOrderIds: includedIds,
       weekCode: intakeWeekCode,
       bases,
@@ -2953,7 +2954,7 @@ export function PaymentModalUpdated({
       workCountry: captureWorkCountry,
       dollarRate,
       commissionPercent: commissionPercentStr,
-      payments,
+      payments: saveLines,
       includedOrderIds: includedIds,
       // פעולות סגירת חוסר אינן חלק מהשמירה הראשונית — חוב חלקי נשאר פתוח.
       commissionResetOrderIds: null,
@@ -2965,6 +2966,7 @@ export function PaymentModalUpdated({
       deferSurplusDisposition: !surplusDisposition,
       saveSurplusAsCredit: surplusDisposition === "credit",
       surplusDisposition: surplusDisposition ?? null,
+      autoAdjustIntents: options?.autoAdjustIntents ?? null,
     });
     const savePaymentMs = Math.round(performance.now() - saveStart);
     if (!res.ok) {
@@ -4921,24 +4923,33 @@ export function PaymentModalUpdated({
                     exchangeRate={dollarRate}
                     draftPaymentLines={payments}
                     onClose={() => setAutoAdjustOpen(false)}
-                    onApplied={(result) => {
-                      setAutoAdjustOpen(false);
+                    onApplied={async (result) => {
                       const nextLines = paymentLinesFromAutoAdjustIntents(result.intents);
                       if (nextLines.length > 0) setPayments(nextLines);
-                      onToast(
-                        result.hasOverpayment
-                          ? `בוצעה התאמה — החוב ייסגר והעודף יישמר כיתרת זכות`
-                          : `בוצעה התאמה אוטומטית ב־${result.affectedOrders} הזמנות`,
-                      );
-                      pendingAutoAdjustCreditSaveRef.current = result.hasOverpayment;
-                      void (async () => {
-                        await refreshSharedPaymentIntakeOrders();
-                        window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
-                        dispatchOrdersListRefresh();
-                        if (result.hasOverpayment) {
-                          setAutoAdjustCreditSaveTick((n) => n + 1);
-                        }
-                      })();
+                      if (result.hasOverpayment && result.surplusDisposition) {
+                        const saved = await performSave(result.surplusDisposition, {
+                          paymentsOverride: nextLines,
+                          autoAdjustIntents: result.intents.map((intent) => ({
+                            method: intent.method,
+                            currency: intent.currency,
+                            amountNative: intent.amountNative,
+                          })),
+                        });
+                        if (!saved.ok) return false;
+                        setAutoAdjustOpen(false);
+                        const destLabel =
+                          result.surplusDisposition === "commission" ? "עמלות" : "יתרת זכות";
+                        onToast(`תשלום יתר: $${result.overpaymentUsd.toFixed(2)} הועבר ל${destLabel}`);
+                        const finish = finishAfterSuccessfulSaveRef.current;
+                        if (finish) await finish("new", saved);
+                        return true;
+                      }
+                      setAutoAdjustOpen(false);
+                      onToast(`בוצעה התאמה אוטומטית ב־${result.affectedOrders} הזמנות`);
+                      await refreshSharedPaymentIntakeOrders();
+                      window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
+                      dispatchOrdersListRefresh();
+                      return true;
                     }}
                   />
                 ) : null}

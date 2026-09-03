@@ -1,4 +1,3 @@
-import { ACTIVE_WORK_WEEK_CODE } from "@/lib/active-work-week";
 import {
   balancesSnapshotToYmd,
   normalizeAhWeekCode,
@@ -20,16 +19,20 @@ export type BalancesWeekScope = {
   rangeToYmd: string;
 };
 
-/** קריאת פילטר שבוע יתרות מ-URL — balancesWeek מקומי, או שבוע גלובלי `week` */
+/**
+ * קריאת פילטר שבוע יתרות מ-URL.
+ * SSOT מקומי: balancesWeek בלבד. לא לקרוא week=/from=/to= הגלובליים —
+ * אחרת שני מקורות מתקנים אחד את השני בלולאה.
+ */
 export function parseBalancesWeekFromSearchParams(sp: URLSearchParams): BalancesWeekScope {
-  const weekRaw =
-    sp.get(BALANCES_WEEK_PARAM)?.trim() ||
-    sp.get("week")?.trim() ||
-    "";
-  const weekCode = normalizeAhWeekCode(weekRaw) ?? ACTIVE_WORK_WEEK_CODE;
+  const weekCode = normalizeAhWeekCode(sp.get(BALANCES_WEEK_PARAM)?.trim() || "") ?? "";
 
   const toParam = sp.get(BALANCES_TO_PARAM)?.trim() || "";
-  const toYmd = YMD_RE.test(toParam) ? toParam : balancesSnapshotToYmd(weekCode);
+  const toYmd = weekCode
+    ? YMD_RE.test(toParam)
+      ? toParam
+      : balancesSnapshotToYmd(weekCode)
+    : "";
 
   const fromRaw = sp.get(BALANCES_FROM_PARAM)?.trim() || "";
   const rangeToRaw = sp.get(BALANCES_RANGE_TO_PARAM)?.trim() || "";
@@ -40,6 +43,10 @@ export function parseBalancesWeekFromSearchParams(sp: URLSearchParams): Balances
     rangeFromYmd: YMD_RE.test(fromRaw) ? fromRaw : "",
     rangeToYmd: YMD_RE.test(rangeToRaw) ? rangeToRaw : "",
   };
+}
+
+export function isBalancesWeekReady(sp: Pick<URLSearchParams, "get">): boolean {
+  return Boolean(normalizeAhWeekCode(sp.get(BALANCES_WEEK_PARAM)?.trim() || ""));
 }
 
 export function balancesWeekQueryPatch(

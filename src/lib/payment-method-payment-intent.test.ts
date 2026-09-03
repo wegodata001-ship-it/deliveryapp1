@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  allocatePaymentIntentsAgainstDebt,
   intentsFromDraftPaymentLines,
   planPaymentIntentAdjustments,
   resultingCustomerCreditUsd,
+  resultingCustomerFeeUsd,
 } from "@/lib/payment-method-payment-intent";
 import { computePaymentOverpayment } from "@/lib/payment-overpayment";
 import { classifyCustomerAccountStatus } from "@/lib/customer-account-balances-shared";
@@ -261,6 +263,162 @@ describe("תשלום מעל/מתחת/שווה לחוב — allocation + credit S
     );
   });
 });
+
+describe("התאמה אוטומטית — תשלום יתר / allocation / יעד עודף", () => {
+  it("TEST 1 — exact: תשלום = חוב → אין עודף", () => {
+    const split = computePaymentOverpayment(1000, 1000);
+    assert.equal(split.hasOverpayment, false);
+    assert.equal(split.closesDebtUsd, 1000);
+    assert.equal(split.overpaymentUsd, 0);
+    const rows = allocatePaymentIntentsAgainstDebt(
+      [
+        {
+          method: "CASH",
+          currency: "USD",
+          amountNative: 1000,
+          amountUsd: 1000,
+          grossIls: null,
+          vatIls: 0,
+          netIls: null,
+        },
+      ],
+      1000,
+    );
+    assert.equal(rows[0]!.appliedUsd, 1000);
+    assert.equal(rows[0]!.excessUsd, 0);
+  });
+
+  it("TEST 2 — partial: תשלום < חוב → חוב נשאר, אין עודף", () => {
+    const split = computePaymentOverpayment(1000, 600);
+    assert.equal(split.hasOverpayment, false);
+    assert.equal(split.closesDebtUsd, 600);
+    assert.equal(split.overpaymentUsd, 0);
+    assert.equal(roundRemain(1000, 600), 400);
+    const rows = allocatePaymentIntentsAgainstDebt(
+      [
+        {
+          method: "BANK_TRANSFER",
+          currency: "USD",
+          amountNative: 600,
+          amountUsd: 600,
+          grossIls: null,
+          vatIls: 0,
+          netIls: null,
+        },
+      ],
+      1000,
+    );
+    assert.equal(rows[0]!.appliedUsd, 600);
+    assert.equal(rows[0]!.excessUsd, 0);
+  });
+
+  it("TEST 3 — excess → Credit: התשלום נשאר מלא והעודף מתווסף לזכות", () => {
+    const split = computePaymentOverpayment(1000, 1200);
+    assert.equal(split.hasOverpayment, true);
+    assert.equal(split.closesDebtUsd, 1000);
+    assert.equal(split.overpaymentUsd, 200);
+    assert.equal(resultingCustomerCreditUsd(0, 200), 200);
+    assert.equal(roundRemain(1000, 1200), 0);
+  });
+
+  it("TEST 4 — excess → Fees: התשלום נשאר מלא והעודף מתווסף לעמלות", () => {
+    const split = computePaymentOverpayment(1000, 1200);
+    assert.equal(split.overpaymentUsd, 200);
+    assert.equal(resultingCustomerFeeUsd(0, 200), 200);
+    assert.equal(resultingCustomerFeeUsd(75, 200), 275);
+  });
+
+  it("TEST 5 — existing credit אינו נסגר אוטומטית על החוב (אין double application)", () => {
+    const existingCredit = 50;
+    const split = computePaymentOverpayment(1000, 1200);
+    assert.equal(split.closesDebtUsd, 1000);
+    assert.equal(split.overpaymentUsd, 200);
+    assert.equal(resultingCustomerCreditUsd(existingCredit, split.overpaymentUsd), 250);
+    assert.notEqual(split.closesDebtUsd, 950);
+  });
+
+  it("TEST 6 — multi-method: מזומן נסגר קודם, העודף מההעברה", () => {
+    const rows = allocatePaymentIntentsAgainstDebt(
+      [
+        {
+          method: "BANK_TRANSFER",
+          currency: "USD",
+          amountNative: 4000,
+          amountUsd: 4000,
+          grossIls: null,
+          vatIls: 0,
+          netIls: null,
+        },
+        {
+          method: "CASH",
+          currency: "USD",
+          amountNative: 2000,
+          amountUsd: 2000,
+          grossIls: null,
+          vatIls: 0,
+          netIls: null,
+        },
+      ],
+      5000,
+    );
+    const cash = rows.find((row) => row.method === "CASH");
+    const bank = rows.find((row) => row.method === "BANK_TRANSFER");
+    assert.ok(cash);
+    assert.ok(bank);
+    assert.equal(cash.appliedUsd, 2000);
+    assert.equal(cash.excessUsd, 0);
+    assert.equal(bank.appliedUsd, 3000);
+    assert.equal(bank.excessUsd, 1000);
+    assert.equal(
+      rows.reduce((sum, row) => sum + row.excessUsd, 0),
+      1000,
+    );
+  });
+
+  it("TEST 6b — עודף מורכב מכמה אמצעים נשמר בפירוט", () => {
+    const rows = allocatePaymentIntentsAgainstDebt(
+      [
+        {
+          method: "CASH",
+          currency: "USD",
+          amountNative: 800,
+          amountUsd: 800,
+          grossIls: null,
+          vatIls: 0,
+          netIls: null,
+        },
+        {
+          method: "BANK_TRANSFER",
+          currency: "USD",
+          amountNative: 900,
+          amountUsd: 900,
+          grossIls: null,
+          vatIls: 0,
+          netIls: null,
+        },
+      ],
+      700,
+    );
+    const cash = rows.find((row) => row.method === "CASH");
+    const bank = rows.find((row) => row.method === "BANK_TRANSFER");
+    assert.equal(cash?.appliedUsd, 700);
+    assert.equal(cash?.excessUsd, 100);
+    assert.equal(bank?.appliedUsd, 0);
+    assert.equal(bank?.excessUsd, 900);
+  });
+
+  it("חוב אחרי תשלום יתר אינו שלילי", () => {
+    const split = computePaymentOverpayment(5762.9, 7300);
+    assert.equal(split.closesDebtUsd, 5762.9);
+    assert.equal(split.overpaymentUsd, 1537.1);
+    assert.equal(Math.max(0, split.openDebtUsd - split.incomingPaymentUsd), 0);
+    assert.ok(split.openDebtUsd >= 0);
+  });
+});
+
+function roundRemain(debt: number, pay: number): number {
+  return Math.max(0, Number((debt - pay).toFixed(2)));
+}
 
 describe("intentsFromDraftPaymentLines", () => {
   it("מאגד טיוטת תשלום דו-מטבעית", () => {

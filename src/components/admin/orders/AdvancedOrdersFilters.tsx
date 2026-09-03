@@ -28,13 +28,9 @@ type Props = Pick<
   | "completedOnly"
   | "setCompletedOnly"
   | "setStatusValues"
-  | "setWeek"
-  | "pushFilters"
-  | "schedulePush"
+  | "applyAdvancedFilters"
   | "clearAllFilters"
   | "hasClearableFilters"
-  | "setAdvancedOpen"
-  | "getAhWeekCodeFromDateRange"
   | "createdByFilterOptions"
   | "paymentLocationOptions"
   | "msStrings"
@@ -67,13 +63,9 @@ export function AdvancedOrdersFilters(props: Props) {
     completedOnly,
     setCompletedOnly,
     setStatusValues,
-    setWeek,
-    pushFilters,
-    schedulePush,
+    applyAdvancedFilters,
     clearAllFilters,
     hasClearableFilters,
-    setAdvancedOpen,
-    getAhWeekCodeFromDateRange,
     createdByFilterOptions,
     paymentLocationOptions,
     msStrings,
@@ -86,33 +78,12 @@ export function AdvancedOrdersFilters(props: Props) {
   return (
     <div className="ofb-adv" dir="rtl">
       <div className="ofb-adv__grid">
-        <div className="ofb-adv__field">
-          <ShipmentMultiSelectFilter
-            label="מדינה"
-            options={countryOptions}
-            values={countryValues}
-            onChange={(next) => {
-              setCountryValues(next);
-              pushFilters({ country: next });
-            }}
-            strings={msStrings}
-            dir={msDir}
-          />
-        </div>
-
         <label className="ofb-adv__field">
           <span className="ofb-adv__label">מתאריך</span>
           <input
             type="date"
             value={dateFrom}
-            onChange={(e) => {
-              const nextFrom = e.target.value;
-              setDateFrom(nextFrom);
-              const wk = getAhWeekCodeFromDateRange(nextFrom, dateTo);
-              const nextWeek = wk ?? "";
-              setWeek(nextWeek);
-              pushFilters({ dateFrom: nextFrom, week: nextWeek });
-            }}
+            onChange={(e) => setDateFrom(e.target.value)}
             className="ofb-adv__input"
           />
         </label>
@@ -122,46 +93,7 @@ export function AdvancedOrdersFilters(props: Props) {
           <input
             type="date"
             value={dateTo}
-            onChange={(e) => {
-              const nextTo = e.target.value;
-              setDateTo(nextTo);
-              const wk = getAhWeekCodeFromDateRange(dateFrom, nextTo);
-              const nextWeek = wk ?? "";
-              setWeek(nextWeek);
-              pushFilters({ dateTo: nextTo, week: nextWeek });
-            }}
-            className="ofb-adv__input"
-          />
-        </label>
-
-        <label className="ofb-adv__field">
-          <span className="ofb-adv__label">סכום מינימום ($)</span>
-          <input
-            type="text"
-            inputMode="decimal"
-            value={minAmount}
-            dir="ltr"
-            onChange={(e) => {
-              const v = e.target.value;
-              setMinAmount(v);
-              schedulePush({ minAmountUsd: v });
-            }}
-            className="ofb-adv__input"
-          />
-        </label>
-
-        <label className="ofb-adv__field">
-          <span className="ofb-adv__label">סכום מקסימום ($)</span>
-          <input
-            type="text"
-            inputMode="decimal"
-            value={maxAmount}
-            dir="ltr"
-            onChange={(e) => {
-              const v = e.target.value;
-              setMaxAmount(v);
-              schedulePush({ maxAmountUsd: v });
-            }}
+            onChange={(e) => setDateTo(e.target.value)}
             className="ofb-adv__input"
           />
         </label>
@@ -172,11 +104,7 @@ export function AdvancedOrdersFilters(props: Props) {
             type="text"
             value={orderNumDraft}
             dir="ltr"
-            onChange={(e) => {
-              const v = e.target.value;
-              setOrderNumDraft(v);
-              schedulePush({ orderNumber: v });
-            }}
+            onChange={(e) => setOrderNumDraft(e.target.value)}
             className="ofb-adv__input"
             autoComplete="off"
           />
@@ -188,13 +116,55 @@ export function AdvancedOrdersFilters(props: Props) {
             type="tel"
             value={phoneDraft}
             dir="ltr"
-            onChange={(e) => {
-              const v = e.target.value;
-              setPhoneDraft(v);
-              schedulePush({ phone: v });
-            }}
+            onChange={(e) => setPhoneDraft(e.target.value)}
             className="ofb-adv__input"
             autoComplete="off"
+          />
+        </label>
+
+        <div className="ofb-adv__field">
+          <ShipmentMultiSelectFilter
+            label="מדינה"
+            options={countryOptions}
+            values={countryValues}
+            onChange={setCountryValues}
+            strings={msStrings}
+            dir={msDir}
+          />
+        </div>
+
+        <div className="ofb-adv__field">
+          <ShipmentMultiSelectFilter
+            label="עובד שפתח הזמנה"
+            options={createdByFilterOptions}
+            values={createdByValues}
+            onChange={setCreatedByValues}
+            strings={msStrings}
+            dir={msDir}
+          />
+        </div>
+
+        <label className="ofb-adv__field">
+          <span className="ofb-adv__label">סכום מינימום ($)</span>
+          <input
+            type="text"
+            inputMode="decimal"
+            value={minAmount}
+            dir="ltr"
+            onChange={(e) => setMinAmount(e.target.value)}
+            className="ofb-adv__input"
+          />
+        </label>
+
+        <label className="ofb-adv__field">
+          <span className="ofb-adv__label">סכום מקסימום ($)</span>
+          <input
+            type="text"
+            inputMode="decimal"
+            value={maxAmount}
+            dir="ltr"
+            onChange={(e) => setMaxAmount(e.target.value)}
+            className="ofb-adv__input"
           />
         </label>
 
@@ -214,67 +184,41 @@ export function AdvancedOrdersFilters(props: Props) {
             allowEmpty
             emptyLabel="הכל"
             extraEmptyOptions={[{ value: "NONE", label: "ללא" }]}
-            onChange={(id) => {
-              setPayLoc(id);
-              pushFilters({ paymentLocation: id });
-            }}
+            onChange={setPayLoc}
           />
         </label>
+      </div>
 
-        <div className="ofb-adv__field">
-          <ShipmentMultiSelectFilter
-            label="עובד שפתח הזמנה"
-            options={createdByFilterOptions}
-            values={createdByValues}
-            onChange={(next) => {
-              setCreatedByValues(next);
-              pushFilters({ createdBy: next });
+      <div className="ofb-adv__checks">
+        <label className="ofb-adv__check">
+          <input
+            type="checkbox"
+            checked={openOnly}
+            onChange={(e) => {
+              const checked = e.target.checked;
+              setOpenOnly(checked);
+              if (checked) {
+                setCompletedOnly(false);
+                setStatusValues([OS.OPEN]);
+              }
             }}
-            strings={msStrings}
-            dir={msDir}
           />
-        </div>
-
-        <label className="ofb-adv__field ofb-adv__field--check">
-          <span className="ofb-adv__check">
-            <input
-              type="checkbox"
-              checked={openOnly}
-              onChange={(e) => {
-                const checked = e.target.checked;
-                setOpenOnly(checked);
-                if (checked) {
-                  setCompletedOnly(false);
-                  setStatusValues([OS.OPEN]);
-                  pushFilters({ openOnly: true, completedOnly: false, status: [OS.OPEN] });
-                } else {
-                  pushFilters({ openOnly: false });
-                }
-              }}
-            />
-            הזמנות פתוחות בלבד
-          </span>
+          הזמנות פתוחות בלבד
         </label>
-
-        <label className="ofb-adv__field ofb-adv__field--check">
-          <span className="ofb-adv__check">
-            <input
-              type="checkbox"
-              checked={completedOnly}
-              onChange={(e) => {
-                const checked = e.target.checked;
-                setCompletedOnly(checked);
-                if (checked) {
-                  setOpenOnly(false);
-                  setStatusValues([OS.COMPLETED]);
-                  pushFilters({ completedOnly: true, openOnly: false, status: [OS.COMPLETED] });
-                } else {
-                  pushFilters({ completedOnly: false });
-                }
-              }}
-            />
-            הזמנות שבוצעו בלבד
-          </span>
+        <label className="ofb-adv__check">
+          <input
+            type="checkbox"
+            checked={completedOnly}
+            onChange={(e) => {
+              const checked = e.target.checked;
+              setCompletedOnly(checked);
+              if (checked) {
+                setOpenOnly(false);
+                setStatusValues([OS.COMPLETED]);
+              }
+            }}
+          />
+          הזמנות שבוצעו בלבד
         </label>
       </div>
 
@@ -287,11 +231,8 @@ export function AdvancedOrdersFilters(props: Props) {
         >
           נקה
         </button>
-        <button type="button" className="ofb__btn ofb__btn--primary" onClick={() => setAdvancedOpen(false)}>
+        <button type="button" className="ofb__btn ofb__btn--primary" onClick={applyAdvancedFilters}>
           החל
-        </button>
-        <button type="button" className="ofb__btn ofb__btn--ghost" onClick={() => setAdvancedOpen(false)}>
-          סגור
         </button>
       </div>
     </div>

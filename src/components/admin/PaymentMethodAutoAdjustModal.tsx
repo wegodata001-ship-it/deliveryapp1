@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import {
-  applyPaymentMethodAutoAdjustmentAction,
+  applyPaymentIntentPlanAction,
   loadPaymentMethodAdjustmentBootstrapAction,
   previewPaymentIntentAutoAdjustmentAction,
 } from "@/app/admin/payments-updated/payment-method-adjustment-actions";
@@ -11,6 +11,7 @@ import type { PaymentBalanceCurrency } from "@/lib/payment-method-captured-balan
 import { intentsFromDraftPaymentLines } from "@/lib/payment-method-payment-intent";
 import { calculatePaymentIntentDeduction } from "@/lib/payment-intent-vat";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
+import { UsdBalanceIlsGrossText } from "@/components/admin/UsdBalanceIlsGrossText";
 
 /** רק העברה + מזומן — זה כל ה-INPUT שהמשתמש מזין */
 const METHOD_CARDS = [
@@ -62,6 +63,8 @@ type IntentDraft = {
   currency: PaymentBalanceCurrency;
 };
 
+type ExcessDestination = "credit" | "commission";
+
 type PreviewState = {
   openDebtUsd: number;
   totalPayUsd: number;
@@ -70,6 +73,20 @@ type PreviewState = {
   hasOverpayment: boolean;
   existingCreditUsd: number;
   resultingCreditUsd: number;
+  existingCommissionUsd: number;
+  resultingCommissionUsd: number;
+  methodAllocation: Array<{
+    method: string;
+    label: string;
+    currency: PaymentBalanceCurrency;
+    amountNative: number;
+    amountUsd: number;
+    appliedUsd: number;
+    excessUsd: number;
+    grossIls: number | null;
+    vatIls: number;
+    netIls: number | null;
+  }>;
   intents: Array<{
     method: string;
     currency: PaymentBalanceCurrency;
@@ -125,7 +142,10 @@ type Props = {
     openDebtUsd: number;
     existingCreditUsd: number;
     resultingCreditUsd: number;
-  }) => void;
+    existingCommissionUsd: number;
+    resultingCommissionUsd: number;
+    surplusDisposition: ExcessDestination | null;
+  }) => void | Promise<void | boolean>;
 };
 
 function emptyDrafts(): Record<MethodKey, IntentDraft> {
@@ -167,6 +187,9 @@ export function PaymentMethodAutoAdjustModal({
   const [bootstrapDebt, setBootstrapDebt] = useState(openDebtUsd);
   const [busy, setBusy] = useState<"bootstrap" | "preview" | "apply" | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [excessDestination, setExcessDestination] = useState<ExcessDestination | null>(null);
+  const [excessConfirmed, setExcessConfirmed] = useState(false);
+  const applyingRef = useRef(false);
 
   const rateN = useMemo(() => {
     const raw = (exchangeRate ?? "").replace(",", ".");
@@ -240,12 +263,17 @@ export function PaymentMethodAutoAdjustModal({
       setPreview(null);
       setErr(null);
       setDrafts(emptyDrafts());
+      setExcessDestination(null);
+      setExcessConfirmed(false);
+      applyingRef.current = false;
       return;
     }
 
     setDrafts(seedFromDraftLines(draftLinesRef.current));
     setPreview(null);
     setErr(null);
+    setExcessDestination(null);
+    setExcessConfirmed(false);
     setBusy("bootstrap");
     void loadPaymentMethodAdjustmentBootstrapAction({
       customerId,
@@ -294,11 +322,15 @@ export function PaymentMethodAutoAdjustModal({
       return;
     }
     setPreview(res);
+    setExcessDestination(null);
+    setExcessConfirmed(false);
   }
 
   function backToEdit() {
     setPreview(null);
     setErr(null);
+    setExcessDestination(null);
+    setExcessConfirmed(false);
   }
 
   function appliedPayload(adjustmentId: string, affectedOrders: number) {
@@ -313,78 +345,65 @@ export function PaymentMethodAutoAdjustModal({
       openDebtUsd: preview.openDebtUsd,
       existingCreditUsd: preview.existingCreditUsd,
       resultingCreditUsd: preview.resultingCreditUsd,
+      existingCommissionUsd: preview.existingCommissionUsd,
+      resultingCommissionUsd: preview.resultingCommissionUsd,
+      surplusDisposition: preview.hasOverpayment ? excessDestination : null,
     };
   }
 
   async function applyAll() {
-    if (!preview) return;
-    if (preview.moves.length === 0) {
-      const payload = appliedPayload("", 0);
-      if (payload) onApplied(payload);
+    if (!preview || applyingRef.current || busy === "apply") return;
+    if (preview.hasOverpayment && !excessDestination) {
+      setErr("יש לבחור לאן להעביר את העודף");
       return;
     }
+    if (preview.hasOverpayment && !excessConfirmed) {
+      setErr("יש לאשר במפורש את העברת העודף");
+      return;
+    }
+    applyingRef.current = true;
     setBusy("apply");
     setErr(null);
 
-    const audit = {
-      current: [] as Array<{ methodKey: string; currency: string; amount: number }>,
-      desired: preview.intents.map((i) => ({
-        methodKey: i.method,
-        currency: i.currency,
-        amount: i.amountNative,
-        grossIls: i.grossIls,
-        vatIls: i.vatIls,
-        netIls: i.netIls,
-        amountUsd: i.amountUsd,
-      })),
-      deltas: preview.moves.map((m) => ({
-        methodKey: `${m.fromMethod}->${m.toMethod}`,
-        currency: m.currency,
-        delta: m.amountUsd,
-      })),
-      moves: preview.moves.map((m) => ({
-        fromMethod: m.fromMethod,
-        toMethod: m.toMethod,
-        currency: m.currency,
-        amountNative: m.amountNative,
-        amountUsd: m.amountUsd,
-      })),
-    };
-
-    let totalAffected = 0;
-    let lastId = "";
-    for (let i = 0; i < preview.moves.length; i++) {
-      const move = preview.moves[i]!;
-      const res = await applyPaymentMethodAutoAdjustmentAction({
-        customerId,
-        weekCode,
-        workCountry,
-        fromPaymentMethod: move.fromMethod,
-        toPaymentMethod: move.toMethod,
-        amountUsd: move.amountUsd,
-        currency: move.currency,
-        amountNative: move.amountNative,
-        exchangeRate: rateN,
-        reasonCode: "CUSTOMER_REQUEST",
-        reasonText: DEFAULT_REASON,
-        desiredAllocationAudit: i === 0 ? audit : null,
-      });
-      if (!res.ok) {
+    if (preview.hasOverpayment) {
+      const payload = appliedPayload("", preview.orderChanges.length);
+      if (!payload) {
+        applyingRef.current = false;
         setBusy(null);
-        setErr(
-          i > 0
-            ? `חלק מההתאמות בוצעו (${i}/${preview.moves.length}), ואז נכשל: ${res.error}`
-            : res.error,
-        );
         return;
       }
-      totalAffected += res.affectedOrders;
-      lastId = res.adjustmentId;
+      const ok = await onApplied(payload);
+      if (ok === false) {
+        applyingRef.current = false;
+        setBusy(null);
+        setErr("השמירה נכשלה — העודף לא נשמר. אפשר לנסות שוב.");
+        return;
+      }
+      setBusy(null);
+      return;
     }
 
+    const res = await applyPaymentIntentPlanAction({
+      customerId,
+      weekCode,
+      workCountry,
+      exchangeRate: rateN,
+      intents: preview.intents.map((intent) => ({
+        method: intent.method,
+        currency: intent.currency,
+        amountNative: intent.amountNative,
+      })),
+      reasonText: DEFAULT_REASON,
+    });
+    if (!res.ok) {
+      applyingRef.current = false;
+      setBusy(null);
+      setErr(res.error);
+      return;
+    }
+    const payload = appliedPayload(res.adjustmentId, res.affectedOrders);
+    if (payload) await onApplied(payload);
     setBusy(null);
-    const payload = appliedPayload(lastId, totalAffected);
-    if (payload) onApplied(payload);
   }
 
   if (!open) return null;
@@ -406,7 +425,7 @@ export function PaymentMethodAutoAdjustModal({
         <div className="payment-method-adjust-modal__head">
           <div>
             <h3 id="payment-method-adjust-title">התאמה אוטומטית של אמצעי תשלום</h3>
-            <p>בדיקת התשלום, סגירת החוב וחישוב יתרת הזכות</p>
+            <p>בדיקת התשלום, סגירת החוב וטיפול בעודף לאחר סגירת החוב</p>
           </div>
           <button type="button" className="payment-method-adjust-modal__close" aria-label="סגור" onClick={onClose}>
             <X size={18} />
@@ -421,7 +440,10 @@ export function PaymentMethodAutoAdjustModal({
             </div>
             <div className={debt <= 0.01 ? "pm-paynow-stat pm-paynow-stat--ok" : "pm-paynow-stat"}>
               <span>חוב פתוח</span>
-              <strong dir="ltr">{fmtUsd(debt)}</strong>
+              <strong dir="ltr">
+                {fmtUsd(debt)}
+                <UsdBalanceIlsGrossText usd={debt} exchangeRate={rateN ?? 0} className="adm-balances-ils-gross" />
+              </strong>
             </div>
             {rateN ? (
               <div className="pm-paynow-stat">
@@ -537,11 +559,8 @@ export function PaymentMethodAutoAdjustModal({
             <section className="pm-paynow-panel pm-paynow-panel--preview">
               {preview.hasOverpayment ? (
                 <div className="pm-adjust-status pm-adjust-status--overpay">
-                  <strong>תשלום גבוה מהחוב</strong>
-                  <p>
-                    החוב ייסגר במלואו והעודף יישמר ללקוח כ
-                    <span className="pm-adjust-credit-em">יתרת זכות</span>.
-                  </p>
+                  <strong>תשלום יתר: {fmtUsd(preview.overpaymentUsd)}</strong>
+                  <p>עודף לאחר סגירת החוב. זה מצב עסקי חוקי — יש לבחור לאן להעביר את העודף.</p>
                 </div>
               ) : (
                 <div className="pm-adjust-status pm-adjust-status--info">
@@ -621,7 +640,7 @@ export function PaymentMethodAutoAdjustModal({
                         </>
                       ) : null}
                       <div className="pm-adjust-intake__rows--total">
-                        <span>לקיזוז מהחוב</span>
+                        <span>התקבל</span>
                         <strong dir="ltr">{fmtUsd(intent.amountUsd)}</strong>
                       </div>
                     </div>
@@ -650,7 +669,14 @@ export function PaymentMethodAutoAdjustModal({
                 </div>
                 <div className={preview.openDebtUsd <= 0.01 ? "pm-adjust-kpi pm-adjust-kpi--debt is-zero" : "pm-adjust-kpi pm-adjust-kpi--debt"}>
                   <span>חוב פתוח</span>
-                  <strong dir="ltr">{fmtUsd(preview.openDebtUsd)}</strong>
+                  <strong dir="ltr">
+                    {fmtUsd(preview.openDebtUsd)}
+                    <UsdBalanceIlsGrossText
+                      usd={preview.openDebtUsd}
+                      exchangeRate={rateN ?? 0}
+                      className="adm-balances-ils-gross"
+                    />
+                  </strong>
                 </div>
                 <div className="pm-adjust-kpi pm-adjust-kpi--offset">
                   <span>סכום לקיזוז</span>
@@ -678,12 +704,141 @@ export function PaymentMethodAutoAdjustModal({
               </div>
 
               {preview.hasOverpayment ? (
-                <div className="pm-adjust-hero">
-                  <span>יתרת זכות חדשה</span>
-                  <strong dir="ltr">{fmtUsd(preview.overpaymentUsd)}</strong>
-                  <em>תישמר לזכות הלקוח</em>
-                  {preview.existingCreditUsd > 0.01 ? (
-                    <small dir="ltr">אחרי: {fmtUsd(preview.resultingCreditUsd)}</small>
+                <div className="pm-adjust-excess">
+                  <div className="pm-adjust-excess__summary">
+                    <div>
+                      <span>חוב לסגירה</span>
+                      <strong dir="ltr">{fmtUsd(preview.closesDebtUsd)}</strong>
+                    </div>
+                    <div>
+                      <span>התקבל</span>
+                      <strong dir="ltr">{fmtUsd(preview.totalPayUsd)}</strong>
+                    </div>
+                    <div>
+                      <span>עודף לאחר סגירת החוב</span>
+                      <strong dir="ltr">{fmtUsd(preview.overpaymentUsd)}</strong>
+                    </div>
+                  </div>
+
+                  <h4>לאן להעביר את העודף?</h4>
+                  <div className="pm-adjust-excess__destinations" role="radiogroup" aria-label="יעד העודף">
+                    <label className={excessDestination === "credit" ? "is-selected" : undefined}>
+                      <input
+                        type="radio"
+                        name="pm-excess-destination"
+                        checked={excessDestination === "credit"}
+                        disabled={busy != null}
+                        onChange={() => {
+                          setExcessDestination("credit");
+                          setExcessConfirmed(false);
+                          setErr(null);
+                        }}
+                      />
+                      <span>יתרת זכות ללקוח</span>
+                    </label>
+                    <label className={excessDestination === "commission" ? "is-selected" : undefined}>
+                      <input
+                        type="radio"
+                        name="pm-excess-destination"
+                        checked={excessDestination === "commission"}
+                        disabled={busy != null}
+                        onChange={() => {
+                          setExcessDestination("commission");
+                          setExcessConfirmed(false);
+                          setErr(null);
+                        }}
+                      />
+                      <span>הוסף לעמלות</span>
+                    </label>
+                  </div>
+
+                  {excessDestination ? (
+                    <div className="pm-adjust-excess__preview">
+                      <h4>Preview לפני אישור</h4>
+                      <dl>
+                        <div>
+                          <dt>חוב לפני</dt>
+                          <dd dir="ltr">{fmtUsd(preview.openDebtUsd)}</dd>
+                        </div>
+                        <div>
+                          <dt>סה״כ התקבל</dt>
+                          <dd dir="ltr">{fmtUsd(preview.totalPayUsd)}</dd>
+                        </div>
+                        <div>
+                          <dt>נסגר מהחוב</dt>
+                          <dd dir="ltr">{fmtUsd(preview.closesDebtUsd)}</dd>
+                        </div>
+                        <div>
+                          <dt>עודף</dt>
+                          <dd dir="ltr">{fmtUsd(preview.overpaymentUsd)}</dd>
+                        </div>
+                        <div>
+                          <dt>יעד העודף</dt>
+                          <dd>{excessDestination === "credit" ? "יתרת זכות ללקוח" : "עמלות"}</dd>
+                        </div>
+                        <div>
+                          <dt>חוב אחרי</dt>
+                          <dd dir="ltr">{fmtUsd(0)}</dd>
+                        </div>
+                        <div>
+                          <dt>יתרת זכות אחרי</dt>
+                          <dd dir="ltr">
+                            {fmtUsd(
+                              excessDestination === "credit"
+                                ? preview.resultingCreditUsd
+                                : preview.existingCreditUsd,
+                            )}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>עמלות אחרי</dt>
+                          <dd dir="ltr">
+                            {fmtUsd(
+                              excessDestination === "commission"
+                                ? preview.resultingCommissionUsd
+                                : preview.existingCommissionUsd,
+                            )}
+                          </dd>
+                        </div>
+                      </dl>
+                      {preview.existingCreditUsd > 0.01 ? (
+                        <p className="pm-adjust-excess__note">
+                          יתרת זכות קיימת {fmtUsd(preview.existingCreditUsd)} לא נסגרת על החוב הזה —
+                          העודף מתווסף אליה
+                          {excessDestination === "credit"
+                            ? ` ויהיה ${fmtUsd(preview.resultingCreditUsd)}`
+                            : ""}
+                          .
+                        </p>
+                      ) : null}
+                      <div className="pm-adjust-excess__breakdown">
+                        <strong>פירוט העודף לפי אמצעי תשלום</strong>
+                        {preview.methodAllocation
+                          .filter((row) => row.excessUsd > 0.01)
+                          .map((row) => (
+                            <div key={`${row.method}-${row.currency}`}>
+                              <span>{row.label}</span>
+                              <span dir="ltr">{fmtUsd(row.excessUsd)}</span>
+                            </div>
+                          ))}
+                      </div>
+                      <label className="pm-adjust-excess__confirm">
+                        <input
+                          type="checkbox"
+                          checked={excessConfirmed}
+                          disabled={busy != null}
+                          onChange={(e) => {
+                            setExcessConfirmed(e.target.checked);
+                            setErr(null);
+                          }}
+                        />
+                        <span>
+                          {excessDestination === "credit"
+                            ? `אני מאשר/ת להעביר ${fmtUsd(preview.overpaymentUsd)} ליתרת זכות`
+                            : `אני מאשר/ת להוסיף ${fmtUsd(preview.overpaymentUsd)} לעמלות`}
+                        </span>
+                      </label>
+                    </div>
                   ) : null}
                 </div>
               ) : (
@@ -710,7 +865,10 @@ export function PaymentMethodAutoAdjustModal({
               <button
                 type="button"
                 className="adm-btn adm-btn--primary"
-                disabled={busy === "apply"}
+                disabled={
+                  busy === "apply" ||
+                  (Boolean(preview?.hasOverpayment) && (!excessDestination || !excessConfirmed))
+                }
                 onClick={() => void applyAll()}
               >
                 {busy === "apply" ? "מבצע התאמה..." : "אשר התאמה"}

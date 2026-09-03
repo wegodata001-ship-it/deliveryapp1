@@ -383,34 +383,25 @@
   padding: 0 4px;
 }
 
-.ofb-popover-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 140;
-  border: none;
-  background: transparent;
-  cursor: default;
+.ofb__btn--advanced.is-open {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
 }
 
-.ofb-popover {
-  position: fixed;
-  z-index: 141;
-  width: min(720px, calc(100vw - 24px));
-  max-height: min(420px, calc(100vh - 120px));
-  overflow: auto;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  background: #fff;
-  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.16);
+.ofb__chevron {
+  font-size: 9px;
+  line-height: 1;
+  margin-inline-start: 2px;
 }
 
 .ofb-adv {
-  padding: 12px 14px;
+  padding: 0;
 }
 
 .ofb-adv__grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 8px 10px;
 }
 
@@ -438,8 +429,12 @@
   box-sizing: border-box;
 }
 
-.ofb-adv__field--check {
-  justify-content: flex-end;
+.ofb-adv__checks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  margin-top: 8px;
 }
 
 .ofb-adv__check {
@@ -447,7 +442,7 @@
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  min-height: 34px;
+  min-height: 28px;
   cursor: pointer;
 }
 
@@ -467,6 +462,7 @@
 }
 
 .ofb-adv__foot .ofb__btn {
+  display: inline-flex;
   min-width: 72px;
 }
 
@@ -526,10 +522,6 @@
   width: 100%;
 }
 
-.ofb-drawer__body .ofb-adv__grid {
-  grid-template-columns: 1fr;
-}
-
 .adm-orders-empty-in-table {
   padding: 20px 16px;
   text-align: center;
@@ -574,12 +566,12 @@
     display: inline-flex;
   }
 
-  .ofb__select--status,
-  .ofb__select--pay-status,
-  .ofb__select--payment,
-  .ofb-week-picker,
-  .ofb__week-current,
-  .ofb__btn:not(.ofb__btn--mobile):not(.ofb__btn--ghost) {
+  .ofb__row > .ofb__select--status,
+  .ofb__row > .ofb__select--pay-status,
+  .ofb__row > .ofb__select--payment,
+  .ofb__row > .ofb-week-picker,
+  .ofb__row > .ofb__week-current,
+  .ofb__row > .ofb__btn:not(.ofb__btn--mobile):not(.ofb__btn--ghost):not(.ofb__btn--advanced) {
     display: none;
   }
 
@@ -595,6 +587,6 @@
 
 @media (max-width: 480px) {
   .ofb-adv__grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

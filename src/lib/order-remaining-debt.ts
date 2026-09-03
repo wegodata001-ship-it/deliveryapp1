@@ -13,6 +13,7 @@ import {
 } from "@/lib/finance-data/ledger";
 import type { OrderBreakdownMethodRow } from "@/lib/payment-intake";
 import { formatMoneyAmount } from "@/lib/money-format";
+import { convertDebtUsdToIlsIncludingVat } from "@/lib/usd-balance-ils-vat";
 
 export { computeOpenDebtUsd, ledgerStatus };
 export type { LedgerBalanceStatus, OrderLedgerSnapshot };
@@ -221,8 +222,7 @@ export function derivePaymentBalanceDisplay(
       title: "נשאר לתשלום",
       balanceUsdSigned: signed,
       displayUsd: signed,
-      displayIls:
-        exchangeRate > 0 ? roundOrderMoney2(signed * exchangeRate) : 0,
+      displayIls: convertDebtUsdToIlsIncludingVat(signed, exchangeRate),
     };
   }
   const surplus = roundOrderMoney2(Math.abs(signed));
@@ -231,7 +231,7 @@ export function derivePaymentBalanceDisplay(
     title: "תשלום יתר",
     balanceUsdSigned: roundOrderMoney2(-surplus),
     displayUsd: surplus,
-    displayIls: exchangeRate > 0 ? roundOrderMoney2(surplus * exchangeRate) : 0,
+    displayIls: convertDebtUsdToIlsIncludingVat(surplus, exchangeRate),
   };
 }
 
@@ -244,8 +244,9 @@ export function formatPaymentBalanceUsdLine(display: PaymentBalanceDisplay): str
 
 export function formatPaymentBalanceIlsLine(display: PaymentBalanceDisplay): string {
   const amt = formatMoneyAmount(display.displayIls);
-  if (display.state === "surplus") return `+₪${amt}`;
-  return `₪${amt}`;
+  const suffix = display.displayIls > 0.005 ? " כולל מע״מ" : "";
+  if (display.state === "surplus") return `+₪${amt}${suffix}`;
+  return `₪${amt}${suffix}`;
 }
 
 /**

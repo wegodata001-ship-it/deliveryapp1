@@ -29,6 +29,14 @@ import {
 import type { PaymentOveragePreview } from "@/lib/customer-balance";
 import { paymentIntakeOrderDateThroughAhWeekEnd } from "@/lib/payment-intake-order-filter";
 import { closePaymentPlansForOrdersInTx } from "@/lib/payment-plan-service";
+import { writeOrderBreakdownInTx } from "@/lib/order-breakdown-write";
+import { paymentMethodForBreakdown } from "@/lib/payment-method-auto-adjustment";
+import {
+  applyIntentOrderChangesToIntakeOrders,
+  planPaymentIntentAdjustments,
+  type PaymentIntentMethodAllocation,
+  type PaymentIntentOrderChange,
+} from "@/lib/payment-method-payment-intent";
 import { validatePaymentCheckLines } from "@/lib/payment-checks";
 import { prisma } from "@/lib/prisma";
 import { allocateNextPaymentCapture, resolvePaymentWorkCountry } from "@/lib/payment-capture-code";
@@ -263,6 +271,15 @@ export type PaymentUpdatedSaveInput = {
   }> | null;
   /** מדינת קליטה מהמסך — מקצה TR-P / CN-P / AE-P נפרד */
   workCountry?: string | null;
+  /**
+   * תשלומים שהוזנו בחלון «התאמה אוטומטית» — השרת מחשב מחדש את תכנון האמצעים
+   * ומיישם אותם באותה טרנזקציה עם הקליטה / העודף.
+   */
+  autoAdjustIntents?: Array<{
+    method: string;
+    currency: "USD" | "ILS";
+    amountNative: number;
+  }> | null;
 };
 
 const ALLOC_EPS = 0.02;
@@ -471,7 +488,7 @@ export async function savePaymentUpdatedAction(
     paymentWorkCountryRaw: form.workCountry,
   });
   if (!intakeOrdersResult.ok) return intakeOrdersResult;
-  const plannedMethods = buildIntakeBreakdownPlan(
+  let plannedMethods = buildIntakeBreakdownPlan(
     intakeOrdersResult.orders,
     form.includedOrderIds,
   );
@@ -511,6 +528,27 @@ export async function savePaymentUpdatedAction(
     cid,
     openDebtScopeForWorkCountry(form.workCountry),
   );
+  let pendingAutoAdjustChanges: PaymentIntentOrderChange[] = [];
+  let autoAdjustMethodAllocation: PaymentIntentMethodAllocation[] = [];
+  let intakeOrdersForPlan = intakeOrdersResult.orders;
+  if (form.autoAdjustIntents && form.autoAdjustIntents.length > 0) {
+    const plan = planPaymentIntentAdjustments({
+      orders: intakeOrdersResult.orders,
+      intents: form.autoAdjustIntents,
+      exchangeRate: rateN,
+      customerOpenDebtUsd,
+    });
+    if (!plan.ok) return { ok: false, error: plan.error };
+    pendingAutoAdjustChanges = plan.orderChanges;
+    autoAdjustMethodAllocation = plan.methodAllocation;
+    if (plan.orderChanges.length > 0) {
+      intakeOrdersForPlan = applyIntentOrderChangesToIntakeOrders(
+        intakeOrdersResult.orders,
+        plan.orderChanges,
+      );
+      plannedMethods = buildIntakeBreakdownPlan(intakeOrdersForPlan, form.includedOrderIds);
+    }
+  }
   const totalDebtUsd = customerOpenDebtUsd;
   const availableCreditUsd = Math.max(
     0,
@@ -741,7 +779,7 @@ export async function savePaymentUpdatedAction(
             return [o.id, r > 0 ? r : rateN] as const;
           }),
         );
-        const balances = dbLines.map((line) =>
+        let balances = dbLines.map((line) =>
           methodBalanceFromBreakdownRow({
             breakdownId: line.id,
             orderId: line.orderId,
@@ -798,6 +836,45 @@ export async function savePaymentUpdatedAction(
                 bal.remaining <= ALLOC_EPS ? "paid" : paid > ALLOC_EPS ? "partial" : "open";
             }
           }
+        }
+
+        if (pendingAutoAdjustChanges.length > 0) {
+          const patchByOrder = new Map(
+            pendingAutoAdjustChanges.map((change) => [change.orderId, change.afterBreakdown]),
+          );
+          const paidByOrderMethod = new Map<string, number>();
+          for (const bal of balances) {
+            paidByOrderMethod.set(`${bal.orderId}::${bal.currency}::${bal.bucket}`, bal.paid);
+          }
+          const rebuilt: typeof balances = [];
+          const seen = new Set<string>();
+          for (const bal of balances) {
+            const patch = patchByOrder.get(bal.orderId);
+            if (!patch) {
+              rebuilt.push(bal);
+              continue;
+            }
+            if (seen.has(bal.orderId)) continue;
+            seen.add(bal.orderId);
+            for (const line of patch) {
+              const amount = Number(line.amount) || 0;
+              const currency = line.currency === "ILS" ? "ILS" : "USD";
+              const bucket = paymentMethodBucketKey(line.paymentMethod);
+              const paid = paidByOrderMethod.get(`${bal.orderId}::${currency}::${bucket}`) ?? 0;
+              rebuilt.push(
+                methodBalanceFromBreakdownRow({
+                  breakdownId: `auto-adjust:${bal.orderId}:${line.paymentMethod}:${currency}`,
+                  orderId: bal.orderId,
+                  paymentMethod: line.paymentMethod,
+                  amount,
+                  currency,
+                  paidAmount: paid,
+                  remainingAmount: Math.max(0, amount - paid),
+                }),
+              );
+            }
+          }
+          balances = rebuilt;
         }
 
         openMethodRemainingUsd = roundMoney2(
@@ -1244,6 +1321,44 @@ export async function savePaymentUpdatedAction(
 
   try {
     await prisma.$transaction(async (tx) => {
+      if (pendingAutoAdjustChanges.length > 0) {
+        for (const affected of pendingAutoAdjustChanges) {
+          const rows = affected.afterBreakdown.map((line) => ({
+            paymentMethod: line.paymentMethod,
+            amount: new Prisma.Decimal(line.amount).toDecimalPlaces(4, 4),
+            currency: line.currency,
+          }));
+          await tx.order.update({
+            where: { id: affected.orderId },
+            data: { paymentMethod: paymentMethodForBreakdown(affected.afterBreakdown) || null },
+          });
+          await writeOrderBreakdownInTx(tx, affected.orderId, rows, {
+            userId: me.id,
+            intakeWeekCode: weekCode,
+          });
+          await tx.auditLog.create({
+            data: {
+              userId: me.id,
+              actionType: "ORDER_PAYMENT_METHOD_ADJUSTED",
+              entityType: "Order",
+              entityId: affected.orderId,
+              metadata: {
+                orderId: affected.orderId,
+                orderNumber: affected.orderNumber,
+                fromPaymentMethod: affected.fromMethod,
+                toPaymentMethod: affected.toMethod,
+                movedUsd: affected.moveUsd.toFixed(2),
+                reasonCode: "CUSTOMER_REQUEST",
+                reasonText: "התאמת אמצעי תשלום יחד עם קליטת תשלום יתר",
+                beforeAllocation: affected.beforeBreakdown,
+                afterAllocation: affected.afterBreakdown,
+                atomicWithPayment: true,
+              } as Prisma.InputJsonValue,
+            },
+          });
+        }
+      }
+
       let allocIndex = 0;
       for (const [orderId, allocUsd] of allocationEntries) {
         const amt = new Prisma.Decimal(allocUsd.toFixed(4));
@@ -1327,11 +1442,19 @@ export async function savePaymentUpdatedAction(
           finalDollarRate: finalUse,
           vatRate,
         });
+        const excessByMethod = autoAdjustMethodAllocation
+          .filter((row) => row.excessUsd > ALLOC_EPS)
+          .map((row) => `${row.label} $${row.excessUsd.toFixed(2)}`)
+          .join(" · ");
         const creditNotes = [
-          "יתרת זכות ללקוח — עודף מתשלום",
+          CUSTOMER_CREDIT_SURPLUS_NOTE_PREFIX,
+          "תשלום יתר → יתרת זכות",
           `קשור לקליטה ${primaryCode}`,
           `עודף: $${unallocatedUsd.toFixed(2)} (≈ ₪${Number(creditTotals.totalIlsWithVat).toFixed(2)})`,
-        ].join("\n");
+          excessByMethod ? `לפי אמצעי: ${excessByMethod}` : null,
+        ]
+          .filter(Boolean)
+          .join("\n");
         await tx.payment.create({
           data: {
             countryCode: payWorkCountry,
@@ -1377,7 +1500,7 @@ export async function savePaymentUpdatedAction(
         const allocatedOrderIds = allocationEntries.map(([id]) => id);
         type SurplusEntry = { dbMethod: string; label: string; surplusUsd: number };
         const computedSurplus = computePerMethodSurplus({
-          orders: intakeOrdersResult.orders,
+          orders: intakeOrdersForPlan,
           includedOrderIds: allocatedOrderIds,
           enteredByBucket: enteredMethodsUsdCompat,
           eps: ALLOC_EPS,
@@ -1499,7 +1622,7 @@ export async function savePaymentUpdatedAction(
               amountIls: entryTotals.totalIlsWithVat,
               reason: "PAYMENT_SURPLUS",
               status: "OPEN",
-              notes: `עודף מתשלום · אמצעי: ${entry.label} · בחירת משתמש: הוסף לעמלות · ${PAYMENT_OVERPAYMENT_TO_FEE_REASON}`,
+              notes: `תוספת מתשלום יתר · אמצעי: ${entry.label} · בחירת משתמש: הוסף לעמלות · ${PAYMENT_OVERPAYMENT_TO_FEE_REASON}`,
               userChoice: "commission",
               createdById: me.id,
             }),

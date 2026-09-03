@@ -10,7 +10,7 @@ import {
   useState,
 } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { withQuery } from "@/lib/admin-url-query";
+import { currentSearchHref, withQuery } from "@/lib/admin-url-query";
 import { dispatchCountryChanged } from "@/lib/country-switch-bus";
 import {
   persistGlobalCountry,
@@ -38,9 +38,11 @@ export function AdminGlobalProvider({ children }: { children: React.ReactNode })
   const router = useRouter();
   const hydratingRef = useRef(false);
 
+  const weekParam = sp.get("week");
+  const searchKey = sp.toString();
   const globalWeekScope = useMemo(
-    () => resolveGlobalWorkWeekScope(sp.get("week")),
-    [sp],
+    () => resolveGlobalWorkWeekScope(weekParam),
+    [weekParam],
   );
 
   const globalWeek = globalWeekScope.globalWorkWeek;
@@ -68,18 +70,16 @@ export function AdminGlobalProvider({ children }: { children: React.ReactNode })
     if (coerceOrderCountryForForm(urlCountryRaw)) return;
 
     const stored = resolveGlobalCountry(null);
+    const current = new URLSearchParams(searchKey);
+    const next = withQuery(pathname, current, { country: stored });
+    if (next === currentSearchHref(pathname, current)) return;
 
     hydratingRef.current = true;
-    const next = withQuery(pathname, sp, { country: stored });
     router.replace(next, { scroll: false });
     window.setTimeout(() => {
       hydratingRef.current = false;
     }, 0);
-  }, [pathname, urlCountryRaw, sp, router]);
-
-  useEffect(() => {
-    console.log("[COUNTRY]", pathname, globalCountry);
-  }, [pathname, globalCountry]);
+  }, [pathname, urlCountryRaw, searchKey, router]);
 
   const setGlobalCountry = useCallback(
     (country: OrderCountryCode) => {
@@ -87,11 +87,13 @@ export function AdminGlobalProvider({ children }: { children: React.ReactNode })
       setGlobalCountryState(country);
       dispatchCountryChanged(workCountryFromOrderSourceCountry(country));
       if (pathname?.startsWith("/admin")) {
-        const next = withQuery(pathname, sp, { country });
+        const current = new URLSearchParams(searchKey);
+        const next = withQuery(pathname, current, { country });
+        if (next === currentSearchHref(pathname, current)) return;
         router.replace(next, { scroll: false });
       }
     },
-    [pathname, sp, router],
+    [pathname, searchKey, router],
   );
 
   const value = useMemo(

@@ -5,7 +5,6 @@ import {
   shouldShowLedgerPaymentMethodSubrows,
 } from "@/lib/ledger-payment-detail";
 import { formatLedgerPaymentTotalUsd } from "@/lib/ledger-payment-display";
-import { openPdfPreview } from "@/lib/pdf-preview";
 import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
 import { formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate } from "@/lib/work-week";
 import { formatLedgerActorDisplay } from "@/lib/ledger-actor-display";
@@ -56,23 +55,37 @@ function sanitizeFileCode(code: string): string {
   return t || "customer";
 }
 
+export const LEDGER_PDF_FAILED_MESSAGE = "לא ניתן ליצור את קובץ ה-PDF. נסה שוב.";
+
 export function buildLedgerExportFilename(
   customerCode: string,
   ext: "pdf" | "xlsx",
-  pdfMode?: LedgerPdfMode,
+  _pdfMode?: LedgerPdfMode,
   variant?: "full" | "manual",
 ): string {
-  const code = sanitizeFileCode(customerCode);
-  if (ext === "pdf" && variant === "manual") {
-    return `ledger_${code}_manual.pdf`;
-  }
-  if (ext === "pdf" && pdfMode === "detailed") {
-    return `ledger_${code}_detailed.pdf`;
-  }
   if (ext === "pdf") {
-    return `ledger_${code}.pdf`;
+    return buildLedgerPdfDownloadFilename({ customerCode, variant: variant === "manual" ? "manual" : "full" });
   }
+  const code = sanitizeFileCode(customerCode);
   return `ledger_${code}_${todayYmd()}.${ext}`;
+}
+
+/** ASCII-safe download name — Hebrew stays inside the PDF. */
+export function buildLedgerPdfDownloadFilename(params: {
+  customerCode?: string | null;
+  variant?: "full" | "manual";
+}): string {
+  const code = sanitizeFileCode(params.customerCode ?? "customer");
+  const date = todayYmd();
+  if (params.variant === "manual") {
+    return `customer-ledger-${code}-selected-${date}.pdf`;
+  }
+  return `customer-ledger-${code}-${date}.pdf`;
+}
+
+export function ledgerPdfContentDisposition(filename: string): string {
+  const ascii = filename.replace(/[^\x20-\x7E]+/g, "_").replace(/"/g, "");
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
 }
 
 export function ledgerHasExportRows(ledger: CustomerLedgerPayload | null | undefined): boolean {
@@ -298,6 +311,23 @@ function triggerBlobDownload(blob: Blob, filename: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
+async function downloadLedgerPdfResponse(res: Response, filename: string): Promise<void> {
+  if (!res.ok) {
+    if (res.status >= 500) throw new Error(LEDGER_PDF_FAILED_MESSAGE);
+    const msg = await res
+      .json()
+      .then((body) => (typeof body?.error === "string" ? body.error : null))
+      .catch(() => null);
+    throw new Error(msg || LEDGER_PDF_FAILED_MESSAGE);
+  }
+  const contentType = (res.headers.get("content-type") ?? "").split(";")[0]?.trim() ?? "";
+  if (!contentType.includes("application/pdf")) {
+    throw new Error(LEDGER_PDF_FAILED_MESSAGE);
+  }
+  const blob = await res.blob();
+  triggerBlobDownload(blob, filename);
+}
+
 export async function exportCustomerLedgerManualPdf(params: {
   customerId: string;
   selectedRowIds: string[];
@@ -311,22 +341,10 @@ export async function exportCustomerLedgerManualPdf(params: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params),
   });
-  if (!res.ok) {
-    const msg = await res
-      .json()
-      .then((body) => (typeof body?.error === "string" ? body.error : null))
-      .catch(() => null);
-    throw new Error(msg ?? "ייצוא PDF ידני נכשל");
-  }
-  const blob = await res.blob();
-  const contentType = (res.headers.get("content-type") ?? "application/pdf").split(";")[0]?.trim() ?? "application/pdf";
-  const isHtml = contentType.includes("text/html");
-  const pdfFilename = buildLedgerExportFilename(params.meta.customerCode, "pdf", "regular", "manual");
-  openPdfPreview({
-    blob,
-    filename: isHtml ? pdfFilename.replace(/\.pdf$/i, ".html") : pdfFilename,
-    mime: contentType,
-  });
+  await downloadLedgerPdfResponse(
+    res,
+    buildLedgerPdfDownloadFilename({ customerCode: params.meta.customerCode, variant: "manual" }),
+  );
 }
 
 export async function exportCustomerLedgerPdf(
@@ -340,22 +358,10 @@ export async function exportCustomerLedgerPdf(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ meta, ledger, mode }),
   });
-  if (!res.ok) {
-    const msg = await res
-      .json()
-      .then((body) => (typeof body?.error === "string" ? body.error : null))
-      .catch(() => null);
-    throw new Error(msg ?? "ייצוא PDF נכשל");
-  }
-  const blob = await res.blob();
-  const contentType = (res.headers.get("content-type") ?? "application/pdf").split(";")[0]?.trim() ?? "application/pdf";
-  const isHtml = contentType.includes("text/html");
-  const pdfFilename = buildLedgerExportFilename(meta.customerCode, "pdf", mode);
-  openPdfPreview({
-    blob,
-    filename: isHtml ? pdfFilename.replace(/\.pdf$/i, ".html") : pdfFilename,
-    mime: contentType,
-  });
+  await downloadLedgerPdfResponse(
+    res,
+    buildLedgerPdfDownloadFilename({ customerCode: meta.customerCode, variant: "full" }),
+  );
 }
 
 export async function exportCustomerLedgerExcel(

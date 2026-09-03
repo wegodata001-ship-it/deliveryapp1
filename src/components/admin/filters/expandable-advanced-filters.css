@@ -1,0 +1,40 @@
+/* Full-width expandable filter row — not a modal, drawer, or floating panel. */
+
+.adm-expand-adv {
+  display: grid;
+  grid-template-rows: 0fr;
+  width: 100%;
+  transition: grid-template-rows 0.18s ease;
+}
+
+.adm-expand-adv.is-open {
+  grid-template-rows: 1fr;
+}
+
+.adm-expand-adv__clip {
+  overflow: hidden;
+  min-height: 0;
+}
+
+.adm-expand-adv__inner {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0 0 8px;
+  padding: 10px 12px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.adm-expand-adv:not(.is-open) .adm-expand-adv__inner {
+  margin: 0;
+  padding-block: 0;
+  border-width: 0;
+}
+
+.adm-expand-adv__title {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+}

@@ -144,13 +144,13 @@ describe("order-remaining-debt SSOT", () => {
 describe("computePaymentBalanceUsd — תצוגת יתרה בקליטה", () => {
   const rate = 3;
 
-  it("$100 debt, $30 paid → remaining $70 + ₪210", () => {
+  it("$100 debt, $30 paid → remaining $70 + ₪247.80 כולל מע״מ", () => {
     const signed = computePaymentBalanceUsd(100, 30);
     const d = derivePaymentBalanceDisplay(signed, rate);
     assert.equal(d.state, "debt");
     assert.equal(d.title, "נשאר לתשלום");
     assert.equal(d.displayUsd, 70);
-    assert.equal(d.displayIls, 210);
+    assert.equal(d.displayIls, 247.8);
   });
 
   it("$100 debt, $100 paid → cleared", () => {
@@ -162,15 +162,15 @@ describe("computePaymentBalanceUsd — תצוגת יתרה בקליטה", () => 
     assert.equal(d.displayIls, 0);
   });
 
-  it("$100 debt, $110 paid → surplus +$10 +₪30", () => {
+  it("$100 debt, $110 paid → surplus +$10 +₪35.40 כולל מע״מ", () => {
     const d = derivePaymentBalanceDisplay(computePaymentBalanceUsd(100, 110), rate);
     assert.equal(d.state, "surplus");
     assert.equal(d.title, "תשלום יתר");
     assert.equal(d.statusHint, undefined);
     assert.equal(d.displayUsd, 10);
-    assert.equal(d.displayIls, 30);
+    assert.equal(d.displayIls, 35.4);
     assert.equal(formatPaymentBalanceUsdLine(d), "+$10.00");
-    assert.equal(formatPaymentBalanceIlsLine(d), "+₪30.00");
+    assert.equal(formatPaymentBalanceIlsLine(d), "+₪35.40 כולל מע״מ");
   });
 
   it("$100 debt, ₪100 @3 → remaining $66.67", () => {
@@ -178,7 +178,7 @@ describe("computePaymentBalanceUsd — תצוגת יתרה בקליטה", () => 
     const d = derivePaymentBalanceDisplay(computePaymentBalanceUsd(100, appliedUsd), rate);
     assert.equal(d.state, "debt");
     assert.equal(d.displayUsd, 66.67);
-    assert.equal(d.displayIls, 200.01);
+    assert.equal(d.displayIls, 236.01);
   });
 
   it("$100 debt, ₪300 @3 → cleared", () => {
@@ -191,6 +191,6 @@ describe("computePaymentBalanceUsd — תצוגת יתרה בקליטה", () => 
     const d = derivePaymentBalanceDisplay(computePaymentBalanceUsd(100, appliedUsd), rate);
     assert.equal(d.state, "surplus");
     assert.equal(d.displayUsd, 10);
-    assert.equal(d.displayIls, 30);
+    assert.equal(d.displayIls, 35.4);
   });
 });

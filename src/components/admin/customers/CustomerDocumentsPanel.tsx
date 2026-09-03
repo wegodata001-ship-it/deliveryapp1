@@ -236,7 +236,7 @@ export function CustomerDocumentsPanel({
 
       await exportCustomerLedgerPdf(ledgerExportMeta, ledger!, { mode });
 
-      onToast("PDF מוכן לתצוגה");
+      onToast("הקובץ הורד");
 
       setLedgerPdfModalOpen(false);
 

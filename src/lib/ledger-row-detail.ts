@@ -124,6 +124,9 @@ export function buildLedgerRowDetailView(row: CustomerLedgerRow): LedgerRowDetai
         push(fields, line.label, line.display);
       }
     }
+    push(fields, "התקבל", formatLedgerPaymentTotalUsd(detail.totalUsd));
+    if (detail.creditSurplusUsd) push(fields, "יעד עודף", "יתרת זכות");
+    if (detail.commissionToFeeUsd) push(fields, "יעד עודף", "עמלות");
     push(fields, "סה״כ תשלום", formatLedgerPaymentTotalUsd(detail.totalUsd));
     push(fields, "תאריך", displayDate(row.dateYmd));
   } else if (row.isAdjustmentFeeCapture) {

@@ -27,6 +27,11 @@ function normalizeFromToSearchParams(sp: URLSearchParams): void {
   }
 }
 
+export function currentSearchHref(pathname: string, current: URLSearchParams): string {
+  const qs = current.toString();
+  return qs ? `${pathname}?${qs}` : pathname;
+}
+
 export function withQuery(
   pathname: string,
   current: URLSearchParams,

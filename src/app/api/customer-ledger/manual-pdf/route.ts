@@ -4,7 +4,12 @@ import { NextResponse } from "next/server";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { buildCustomerLedgerPdfHtml } from "@/lib/customer-ledger-pdf-html";
 import { applyManualLedgerSelection } from "@/lib/customer-ledger-manual-pdf";
-import { buildLedgerExportFilename, type CustomerLedgerExportMeta } from "@/lib/customer-ledger-export";
+import {
+  LEDGER_PDF_FAILED_MESSAGE,
+  buildLedgerPdfDownloadFilename,
+  ledgerPdfContentDisposition,
+  type CustomerLedgerExportMeta,
+} from "@/lib/customer-ledger-export";
 import { renderHtmlToPdf } from "@/lib/pdf/browser";
 
 export const runtime = "nodejs";
@@ -88,31 +93,28 @@ export async function POST(req: Request): Promise<Response> {
       },
     });
 
-    const filename = buildLedgerExportFilename(exportMeta.customerCode || "customer", "pdf", "regular", "manual");
+    const filename = buildLedgerPdfDownloadFilename({
+      customerCode: exportMeta.customerCode || "customer",
+      variant: "manual",
+    });
     const pdfBytes = await renderHtmlToPdf(html);
-    if (pdfBytes) {
-      return new Response(Buffer.from(pdfBytes), {
-        headers: {
-          "Content-Type": "application/pdf",
-          "Content-Disposition": `inline; filename="${filename}"`,
-          "Cache-Control": "no-store",
-        },
+    if (!pdfBytes) {
+      console.error("[customer-ledger-manual-pdf] chromium returned no PDF bytes", {
+        customerId,
+        selectedCount: selectedRowIds.length,
       });
+      return NextResponse.json({ ok: false, error: LEDGER_PDF_FAILED_MESSAGE }, { status: 500 });
     }
 
-    return new Response(html, {
+    return new Response(Buffer.from(pdfBytes), {
       headers: {
-        "Content-Type": "text/html; charset=utf-8",
-        "Content-Disposition": `inline; filename="${filename.replace(/\.pdf$/i, ".html")}"`,
-        "X-Ledger-Pdf-Fallback": "html",
+        "Content-Type": "application/pdf",
+        "Content-Disposition": ledgerPdfContentDisposition(filename),
         "Cache-Control": "no-store",
       },
     });
   } catch (e) {
     console.error("[customer-ledger-manual-pdf] failed", e);
-    return NextResponse.json(
-      { ok: false, error: e instanceof Error ? e.message : "PDF generation failed" },
-      { status: 500 },
-    );
+    return NextResponse.json({ ok: false, error: LEDGER_PDF_FAILED_MESSAGE }, { status: 500 });
   }
 }

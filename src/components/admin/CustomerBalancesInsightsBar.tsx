@@ -1,9 +1,11 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import type { CustomerBalanceRow, CustomerBalancesPayload } from "@/app/admin/balances/actions";
 import { sumOrdersUsdSplit } from "@/lib/customer-balances-display";
 import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
+import { UsdBalanceIlsGrossText } from "@/components/admin/UsdBalanceIlsGrossText";
+import { useDisplayExchangeRate } from "@/components/admin/DisplayExchangeRateContext";
 
 type Props = {
   stats: CustomerBalancesPayload["stats"];
@@ -36,11 +38,13 @@ function StatCard({
   label,
   value,
   dir = "ltr",
+  sub,
 }: {
   variant: StatCardVariant;
   label: string;
   value: string;
   dir?: "ltr" | "rtl";
+  sub?: ReactNode;
 }) {
   return (
     <article className={`adm-balances-stat-card adm-balances-stat-card--${variant}`}>
@@ -48,6 +52,7 @@ function StatCard({
       <strong className="adm-balances-stat-card__val" dir={dir}>
         {value}
       </strong>
+      {sub ? <span className="adm-balances-stat-card__ils">{sub}</span> : null}
     </article>
   );
 }
@@ -55,6 +60,8 @@ function StatCard({
 export function CustomerBalancesInsightsBar({ stats, rows, totalRows, totalPages, expanded }: Props) {
   const paginated = totalPages > 1;
   const splitTotals = useMemo(() => sumOrdersUsdSplit(rows), [rows]);
+  const exchangeRate = useDisplayExchangeRate();
+  const openDebtUsd = parseMoneyStringOrZero(stats.totalDebtUsd);
 
   if (!expanded) return null;
 
@@ -66,7 +73,12 @@ export function CustomerBalancesInsightsBar({ stats, rows, totalRows, totalPages
         </p>
       ) : null}
       <div className="adm-balances-stat-cards" role="region" aria-label="סטטיסטיקת יתרות">
-        <StatCard variant="open-debt" label="חוב פתוח" value={usd(stats.totalDebtUsd)} />
+        <StatCard
+          variant="open-debt"
+          label="חוב פתוח"
+          value={usd(stats.totalDebtUsd)}
+          sub={<UsdBalanceIlsGrossText usd={openDebtUsd} exchangeRate={exchangeRate} />}
+        />
         <StatCard
           variant="debt-customers"
           label="לקוחות בחוב"

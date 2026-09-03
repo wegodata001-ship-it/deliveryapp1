@@ -161,7 +161,7 @@ export async function buildCustomerCreditLedger(
         dateYmd: p.paymentDate ? formatLocalYmd(new Date(p.paymentDate)) : formatLocalYmd(p.createdAt),
         createdAt: p.createdAt.toISOString(),
         type: "OVERPAYMENT_CREDIT",
-        actionLabel: "יתרת זכות מתשלום יתר",
+        actionLabel: "תשלום יתר → יתרת זכות",
         sourceDocument: linkedCode,
         paymentId: p.id,
         paymentCode: p.paymentCode,
@@ -169,7 +169,9 @@ export async function buildCustomerCreditLedger(
         orderNumber: null,
         amountUsd: roundMoney2(amt),
         direction: "CREDIT",
-        reason: p.notes?.includes(CUSTOMER_CREDIT_SURPLUS_NOTE_PREFIX) ? "עודף מתשלום" : p.notes?.trim() || null,
+        reason: p.notes?.includes(CUSTOMER_CREDIT_SURPLUS_NOTE_PREFIX)
+          ? "תשלום יתר → יתרת זכות"
+          : p.notes?.trim() || null,
         createdById: p.createdById,
       });
     } else {

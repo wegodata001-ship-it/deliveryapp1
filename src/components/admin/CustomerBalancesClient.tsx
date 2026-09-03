@@ -24,7 +24,9 @@ import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { TableSkeleton } from "@/components/ui/loading";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { formatUsdDisplay, parseMoneyString, parseMoneyStringOrZero } from "@/lib/money-format";
-import { withQuery } from "@/lib/admin-url-query";
+import { useDisplayExchangeRate } from "@/components/admin/DisplayExchangeRateContext";
+import { UsdBalanceIlsGrossText } from "@/components/admin/UsdBalanceIlsGrossText";
+import { currentSearchHref, withQuery } from "@/lib/admin-url-query";
 import { CustomerBalancesInsightsBar } from "@/components/admin/CustomerBalancesInsightsBar";
 import { rowOrdersUsdSplit } from "@/lib/customer-balances-display";
 import { ReportWeekNav } from "@/components/admin/ReportWeekNav";
@@ -56,9 +58,10 @@ import {
   BALANCES_TO_PARAM,
   BALANCES_WEEK_PARAM,
   balancesWeekQueryPatch,
+  isBalancesWeekReady,
   parseBalancesWeekFromSearchParams,
 } from "@/lib/balances-week-filter";
-import { downloadBase64File, handleSourceTableExportResult } from "@/lib/pdf-export-client";
+import { downloadBase64File } from "@/lib/pdf-export-client";
 import { CustomerCommissionResetModal } from "@/components/admin/CustomerCommissionResetModal";
 import { CommissionAmountButton } from "@/components/admin/CommissionAmountButton";
 import { CommissionBalancePopover } from "@/components/admin/CommissionBalancePopover";
@@ -96,20 +99,21 @@ function moneyUsdCell(value: string): string {
 function balanceUiFromRow(row: {
   totalBalanceUSD: string;
   availableCreditUSD?: string;
-}): { label: string; tone: BalanceUiTone; amount: string } {
+}): { label: string; tone: BalanceUiTone; amount: string; usd: number } {
   const openDebt = Math.max(0, parseMoneyStringOrZero(row.totalBalanceUSD));
   const credit = Math.max(0, parseMoneyStringOrZero(row.availableCreditUSD ?? "0"));
   if (openDebt > 0.01) {
-    return { label: "חוב פתוח", tone: "debt", amount: formatUsdDisplay(openDebt) };
+    return { label: "חוב פתוח", tone: "debt", amount: formatUsdDisplay(openDebt), usd: openDebt };
   }
   if (credit > 0.01) {
     return {
       label: `יתרת זכות $${credit.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
       tone: "credit",
       amount: formatUsdDisplay(credit),
+      usd: credit,
     };
   }
-  return { label: "מאוזן", tone: "balanced", amount: formatUsdDisplay(0) };
+  return { label: "מאוזן", tone: "balanced", amount: formatUsdDisplay(0), usd: 0 };
 }
 
 function usdStatDisplay(value: string): string {
@@ -315,11 +319,20 @@ export function CustomerBalancesClient({
   const pathname = usePathname();
   const sp = useSearchParams();
   const { openWindow, stack: adminWindowStack } = useAdminWindows();
+  const exchangeRate = useDisplayExchangeRate();
   const [tableLoading, setTableLoading] = useState(false);
   const fetchGenRef = useRef(0);
 
-  const [urlReady, setUrlReady] = useState(false);
+  const balancesWeekParam = sp.get(BALANCES_WEEK_PARAM) ?? "";
+  const balancesToParam = sp.get(BALANCES_TO_PARAM) ?? "";
+  const balancesFromParam = sp.get(BALANCES_FROM_PARAM) ?? "";
+  const balancesRangeToParam = sp.get(BALANCES_RANGE_TO_PARAM) ?? "";
+  const countryParam = sp.get("country") ?? "";
+  const searchKey = sp.toString();
+  const urlReady = isBalancesWeekReady(sp);
+  const urlWeekCode = normalizeAhWeekCode(balancesWeekParam) ?? "";
   const [balancesFilters, setBalancesFilters] = useState<BalancesFiltersState>(defaultBalancesFilters);
+  const filtersMatchUrl = urlReady && balancesFilters.weekCode === urlWeekCode;
   const [searchDraft, setSearchDraft] = useState<BalancesSearchDraft>(defaultSearchDraft);
   const [debouncedSearch, setDebouncedSearch] = useState<BalancesSearchDraft>(defaultSearchDraft);
   const [filterOpen, setFilterOpen] = useState(false);
@@ -367,7 +380,17 @@ export function CustomerBalancesClient({
   );
 
   useEffect(() => {
-    const parsed = parseStructuralFromSearchParams(new URLSearchParams(sp.toString()));
+    if (!urlReady) return;
+    const parsed = parseStructuralFromSearchParams(
+      new URLSearchParams({
+        [BALANCES_WEEK_PARAM]: balancesWeekParam,
+        [BALANCES_TO_PARAM]: balancesToParam,
+        [BALANCES_FROM_PARAM]: balancesFromParam,
+        [BALANCES_RANGE_TO_PARAM]: balancesRangeToParam,
+        country: countryParam,
+      }),
+    );
+    if (!parsed.weekCode) return;
     setBalancesFilters((f) => {
       if (
         f.weekCode === parsed.weekCode &&
@@ -380,26 +403,28 @@ export function CustomerBalancesClient({
       }
       return { ...parsed, sort: f.sort };
     });
-    setUrlReady(true);
-  }, [sp]);
+  }, [
+    urlReady,
+    balancesWeekParam,
+    balancesToParam,
+    balancesFromParam,
+    balancesRangeToParam,
+    countryParam,
+  ]);
 
   useEffect(() => {
     const t = window.setTimeout(() => {
-      setDebouncedSearch(searchDraft);
-      setPage(1);
+      setDebouncedSearch((prev) => {
+        if (JSON.stringify(prev) === JSON.stringify(searchDraft)) return prev;
+        return searchDraft;
+      });
     }, FILTER_DEBOUNCE_MS);
     return () => window.clearTimeout(t);
   }, [searchDraft]);
 
-  const refetchBalances = useCallback(() => {
-    skipCacheNextRef.current = true;
-    invalidateBalancesListCache();
+  useEffect(() => {
     setPage(1);
-    setErr(null);
-    setNewDataAvailable(false);
-    void invalidateCustomerBalancesCacheAction();
-    setRefreshSig((s) => s + 1);
-  }, []);
+  }, [debouncedSearch]);
 
   const softRefreshBalances = useCallback(() => {
     softRefreshPendingRef.current = true;
@@ -413,11 +438,11 @@ export function CustomerBalancesClient({
 
   useEffect(() => {
     function onBalancesRefresh() {
-      refetchBalances();
+      softRefreshBalances();
     }
     window.addEventListener("wego:balances-refresh", onBalancesRefresh);
     return () => window.removeEventListener("wego:balances-refresh", onBalancesRefresh);
-  }, [refetchBalances]);
+  }, [softRefreshBalances]);
 
   useEffect(() => {
     let hiddenAt: number | null = null;
@@ -425,16 +450,13 @@ export function CustomerBalancesClient({
       if (document.hidden) {
         hiddenAt = Date.now();
       } else if (hiddenAt !== null && Date.now() - hiddenAt > 10_000) {
-        skipCacheNextRef.current = true;
-        invalidateBalancesListCache();
-        void invalidateCustomerBalancesCacheAction();
-        setRefreshSig((s) => s + 1);
+        softRefreshBalances();
         hiddenAt = null;
       }
     }
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => document.removeEventListener("visibilitychange", onVisibilityChange);
-  }, []);
+  }, [softRefreshBalances]);
 
   const buildListQuery = useCallback(
     (p: number) => buildCustomerBalancesListQuery(p, balancesFilters, debouncedSearch, balancesQueryScope),
@@ -442,7 +464,7 @@ export function CustomerBalancesClient({
   );
 
   useEffect(() => {
-    if (!urlReady) return;
+    if (!filtersMatchUrl) return;
     const gen = ++fetchGenRef.current;
     const query = buildListQuery(page);
     const cacheKey = balancesListCacheKey(query);
@@ -514,25 +536,39 @@ export function CustomerBalancesClient({
         setTableLoading(false);
         setManualRefreshBusy(false);
       });
-  }, [urlReady, page, buildListQuery, refreshSig, balancesFilters, balancesQueryScope.week, debouncedSearch]);
+  }, [
+    filtersMatchUrl,
+    page,
+    refreshSig,
+    balancesQueryScope.week,
+    balancesQueryScope.snapshotTo,
+    balancesQueryScope.country,
+    balancesFilters.rangeFromYmd,
+    balancesFilters.rangeToYmd,
+    balancesFilters.sort,
+    debouncedSearch,
+    buildListQuery,
+  ]);
 
   const searchPending = JSON.stringify(searchDraft) !== JSON.stringify(debouncedSearch);
   const currentListQueryKey = balancesListCacheKey(buildListQuery(page));
-  const displayPayload = payload && displayedQueryKey === currentListQueryKey ? payload : null;
-  const tableBusy = !urlReady || (tableLoading && !displayPayload);
+  const queryMatchesView = displayedQueryKey === currentListQueryKey;
+  const displayPayload = payload;
+  const initialLoading = !urlReady || (!payload && tableLoading);
+  const refreshing = tableLoading && !!payload;
+  const tableBusy = initialLoading;
   const weekNavLocked = !urlReady || !!exportBusy;
   const urlModalOpen = Boolean(sp.get("modal")?.trim());
-  const overlayBlocksAutoCheck =
+  const overlayBlocksAutoCheckRef = useRef(false);
+  overlayBlocksAutoCheckRef.current =
     adminWindowStack.length > 0 || urlModalOpen || Boolean(exportBusy) || manualRefreshBusy || tableLoading;
 
   useEffect(() => {
-    if (!urlReady || !payload || overlayBlocksAutoCheck) return;
+    if (!urlReady || !payload) return;
 
     const checkForNewData = () => {
       if (document.hidden) return;
-      if (adminWindowStack.length > 0 || urlModalOpen || exportBusy || manualRefreshBusy || tableLoading) {
-        return;
-      }
+      if (overlayBlocksAutoCheckRef.current) return;
       const gen = ++staleCheckGenRef.current;
       const query = buildListQuery(page);
       void getCustomerBalancesRevisionAction(query)
@@ -553,37 +589,15 @@ export function CustomerBalancesClient({
 
     const id = window.setInterval(checkForNewData, BALANCES_AUTO_CHECK_MS);
     return () => window.clearInterval(id);
-  }, [
-    urlReady,
-    payload,
-    buildListQuery,
-    page,
-    adminWindowStack.length,
-    urlModalOpen,
-    exportBusy,
-    manualRefreshBusy,
-    tableLoading,
-    overlayBlocksAutoCheck,
-  ]);
+  }, [urlReady, payload, buildListQuery, page]);
 
-  const syncUrl = useCallback(() => {
-    if (!urlReady) return;
+  useEffect(() => {
+    if (!urlReady || !balancesFilters.weekCode) return;
     const snapshotTo = balancesFilters.toYmd?.trim() || balancesSnapshotToYmd(balancesFilters.weekCode);
-    const curTo = sp.get(BALANCES_TO_PARAM) ?? "";
-    const curWeek = sp.get(BALANCES_WEEK_PARAM) ?? "";
-    const curFrom = sp.get(BALANCES_FROM_PARAM) ?? "";
-    const curRangeTo = sp.get(BALANCES_RANGE_TO_PARAM) ?? "";
-    if (
-      curTo === snapshotTo &&
-      curWeek === balancesFilters.weekCode &&
-      curFrom === balancesFilters.rangeFromYmd &&
-      curRangeTo === balancesFilters.rangeToYmd
-    ) {
-      return;
-    }
+    const current = new URLSearchParams(searchKey);
     const nextHref = withQuery(
       pathname,
-      sp,
+      current,
       balancesWeekQueryPatch(
         balancesFilters.weekCode,
         snapshotTo,
@@ -591,26 +605,21 @@ export function CustomerBalancesClient({
         balancesFilters.rangeToYmd,
       ),
     );
+    if (nextHref === currentSearchHref(pathname, current)) return;
     router.replace(nextHref, { scroll: false });
   }, [
+    urlReady,
+    balancesFilters.weekCode,
+    balancesFilters.toYmd,
     balancesFilters.rangeFromYmd,
     balancesFilters.rangeToYmd,
-    balancesFilters.toYmd,
-    balancesFilters.weekCode,
     pathname,
     router,
-    sp,
-    urlReady,
-  ]);
-
-  useEffect(() => {
-    syncUrl();
-  }, [
-    balancesFilters.toYmd,
-    balancesFilters.weekCode,
-    balancesFilters.rangeFromYmd,
-    balancesFilters.rangeToYmd,
-    syncUrl,
+    balancesWeekParam,
+    balancesToParam,
+    balancesFromParam,
+    balancesRangeToParam,
+    searchKey,
   ]);
 
   const pages = useMemo(
@@ -634,9 +643,6 @@ export function CustomerBalancesClient({
       setDisplayedQueryKey(key);
       payloadRevisionRef.current = customerBalancesDataRevision(cached);
       setTableLoading(false);
-    } else {
-      setPayload(null);
-      setDisplayedQueryKey(null);
     }
   }, [balancesFilters, debouncedSearch]);
 
@@ -753,16 +759,7 @@ export function CustomerBalancesClient({
       setErr(res.error);
       return;
     }
-    if (kind === "pdf") {
-      handleSourceTableExportResult(
-        "pdf",
-        { ok: true, base64: res.base64, filename: res.filename, mime: res.mime },
-        setErr,
-        downloadBase64File,
-      );
-    } else {
-      downloadBase64File(res.base64, res.filename, res.mime);
-    }
+    downloadBase64File(res.base64, res.filename, res.mime);
   }
 
   const colCount = 10;
@@ -786,7 +783,10 @@ export function CustomerBalancesClient({
         disabled={!!exportBusy || tableBusy || manualRefreshBusy}
         title="רענון נתוני הדוח"
         aria-label="רענון נתוני הדוח"
-        onClick={() => softRefreshBalances()}
+        onClick={() => {
+          if (manualRefreshBusy || tableLoading) return;
+          softRefreshBalances();
+        }}
       >
         <RefreshCw
           size={15}
@@ -1081,7 +1081,10 @@ export function CustomerBalancesClient({
             type="button"
             className="adm-btn adm-btn--secondary adm-btn--xs"
             disabled={manualRefreshBusy || tableLoading}
-            onClick={() => softRefreshBalances()}
+            onClick={() => {
+              if (manualRefreshBusy || tableLoading) return;
+              softRefreshBalances();
+            }}
           >
             רענן עכשיו
           </button>
@@ -1170,17 +1173,23 @@ export function CustomerBalancesClient({
           />
         ) : null}
 
+        {refreshing || (payload && !queryMatchesView) ? (
+          <p className="adm-balances-refresh-hint" role="status">
+            מרענן...
+          </p>
+        ) : null}
+
         <div
           className={[
             "adm-balances-table-wrap",
-            tableLoading && displayPayload ? "adm-balances-table-wrap--loading" : "",
+            refreshing ? "adm-balances-table-wrap--loading" : "",
           ]
             .filter(Boolean)
             .join(" ")}
           aria-busy={tableLoading}
         >
-          {tableLoading && displayPayload ? (
-            <div className="adm-balances-table-overlay" role="status" aria-label="טוען נתונים">
+          {refreshing ? (
+            <div className="adm-balances-table-overlay" role="status" aria-label="מרענן נתונים">
               <span className="adm-balances-table-spinner" />
             </div>
           ) : null}
@@ -1264,7 +1273,12 @@ export function CustomerBalancesClient({
                         className={`adm-balances-td-num adm-balances-td-num--hero ${balanceToneClass(ui.tone)}`}
                         dir="ltr"
                       >
-                        {ui.amount}
+                        <span className="adm-balances-hero-usd">{ui.amount}</span>
+                        <UsdBalanceIlsGrossText
+                          usd={ui.usd}
+                          exchangeRate={exchangeRate}
+                          className="adm-balances-ils-gross"
+                        />
                       </td>
                       <td className="adm-balances-td-status">
                         <span className={statusChipClass(ui.tone)}>{ui.label}</span>

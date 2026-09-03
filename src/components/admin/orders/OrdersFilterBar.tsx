@@ -1,9 +1,9 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { useEffect } from "react";
 import { Search, Settings, X } from "lucide-react";
+import { ExpandableAdvancedFilters } from "@/components/admin/filters/ExpandableAdvancedFilters";
 import { ShipmentMultiSelectFilter } from "@/components/admin/shipments/ShipmentMultiSelectFilter";
 import { CurrentWorkWeekButton } from "@/components/admin/CurrentWorkWeekButton";
 import { OS } from "@/lib/order-status-slugs";
@@ -45,6 +45,7 @@ export function OrdersFilterBar(props: Props) {
     advancedOpen,
     setAdvancedOpen,
     advancedFilterCount,
+    applyAdvancedFilters,
     clearAllFilters,
     hasClearableFilters,
     mobileOpen,
@@ -72,40 +73,9 @@ export function OrdersFilterBar(props: Props) {
     setCreatedByValues,
     createdByFilterOptions,
     paymentLocationOptions,
-    getAhWeekCodeFromDateRange,
-    setWeek,
     leadingActions,
     exportActions,
   } = props;
-
-  const advancedBtnRef = useRef<HTMLButtonElement>(null);
-  const popoverRef = useRef<HTMLDivElement>(null);
-  const [popoverPos, setPopoverPos] = useState<{ top: number; insetInlineEnd: number } | null>(null);
-
-  const updatePopoverPos = useCallback(() => {
-    const btn = advancedBtnRef.current;
-    if (!btn) return;
-    const r = btn.getBoundingClientRect();
-    setPopoverPos({
-      top: r.bottom + 6,
-      insetInlineEnd: window.innerWidth - r.right,
-    });
-  }, []);
-
-  useEffect(() => {
-    if (!advancedOpen) {
-      setPopoverPos(null);
-      return;
-    }
-    updatePopoverPos();
-    const onResize = () => updatePopoverPos();
-    window.addEventListener("resize", onResize);
-    window.addEventListener("scroll", onResize, true);
-    return () => {
-      window.removeEventListener("resize", onResize);
-      window.removeEventListener("scroll", onResize, true);
-    };
-  }, [advancedOpen, updatePopoverPos]);
 
   useEffect(() => {
     if (!advancedOpen) return;
@@ -115,12 +85,6 @@ export function OrdersFilterBar(props: Props) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [advancedOpen, setAdvancedOpen]);
-
-  const closeAdvanced = () => setAdvancedOpen(false);
-  const toggleAdvanced = () => {
-    setAdvancedOpen((v) => !v);
-    setMobileOpen(false);
-  };
 
   const advancedPanel = (
     <AdvancedOrdersFilters
@@ -145,13 +109,9 @@ export function OrdersFilterBar(props: Props) {
       completedOnly={completedOnly}
       setCompletedOnly={setCompletedOnly}
       setStatusValues={setStatusValues}
-      setWeek={setWeek}
-      pushFilters={pushFilters}
-      schedulePush={schedulePush}
+      applyAdvancedFilters={applyAdvancedFilters}
       clearAllFilters={clearAllFilters}
       hasClearableFilters={hasClearableFilters}
-      setAdvancedOpen={setAdvancedOpen}
-      getAhWeekCodeFromDateRange={getAhWeekCodeFromDateRange}
       createdByFilterOptions={createdByFilterOptions}
       paymentLocationOptions={paymentLocationOptions}
       msStrings={msStrings}
@@ -161,32 +121,6 @@ export function OrdersFilterBar(props: Props) {
       countryOptions={countryOptions}
     />
   );
-
-  const popover =
-    advancedOpen && popoverPos && typeof document !== "undefined"
-      ? createPortal(
-          <>
-            <button
-              type="button"
-              className="ofb-popover-backdrop"
-              aria-label="סגור סינון מתקדם"
-              onClick={closeAdvanced}
-            />
-            <div
-              ref={popoverRef}
-              className="ofb-popover"
-              role="dialog"
-              aria-modal="true"
-              aria-label="סינון מתקדם"
-              dir="rtl"
-              style={{ top: popoverPos.top, insetInlineEnd: popoverPos.insetInlineEnd }}
-            >
-              {advancedPanel}
-            </div>
-          </>,
-          document.body,
-        )
-      : null;
 
   return (
     <div className="ofb">
@@ -273,14 +207,17 @@ export function OrdersFilterBar(props: Props) {
         {exportActions}
 
         <button
-          ref={advancedBtnRef}
           type="button"
-          className="ofb__btn"
+          className={`ofb__btn ofb__btn--advanced${advancedOpen ? " is-open" : ""}`}
           aria-expanded={advancedOpen}
-          onClick={toggleAdvanced}
+          onClick={() => setAdvancedOpen((v) => !v)}
         >
           <Settings size={14} strokeWidth={2} aria-hidden />
-          סינון מתקדם{advancedFilterCount > 0 ? ` (${advancedFilterCount})` : ""}
+          סינון מתקדם
+          {advancedFilterCount > 0 ? ` (${advancedFilterCount})` : ""}
+          <span className="ofb__chevron" aria-hidden>
+            {advancedOpen ? "▲" : "▼"}
+          </span>
         </button>
 
         {hasClearableFilters ? (
@@ -293,23 +230,20 @@ export function OrdersFilterBar(props: Props) {
           type="button"
           className="ofb__btn ofb__btn--mobile"
           aria-expanded={mobileOpen}
-          onClick={() => {
-            setMobileOpen((v) => !v);
-            setAdvancedOpen(false);
-          }}
+          onClick={() => setMobileOpen((v) => !v)}
         >
           <Settings size={14} strokeWidth={2} aria-hidden />
           מסננים{mobileFilterCount > 0 ? ` (${mobileFilterCount})` : ""}
         </button>
       </div>
 
+      <ExpandableAdvancedFilters open={advancedOpen}>{advancedPanel}</ExpandableAdvancedFilters>
+
       <ActiveFilterChips
         activeFilterChips={activeFilterChips}
         clearAllFilters={clearAllFilters}
         hasClearableFilters={hasClearableFilters}
       />
-
-      {popover}
 
       {mobileOpen ? (
         <>
@@ -374,7 +308,6 @@ export function OrdersFilterBar(props: Props) {
                 onWeekChange={onWeekCommitted}
                 onShift={shiftWeekNav}
               />
-              {advancedPanel}
             </div>
             <div className="ofb-drawer__foot">
               {hasClearableFilters ? (

@@ -21,6 +21,7 @@ import {
   type PaymentLineMethod,
 } from "@/lib/payment-updated";
 import { formatIlsDisplay, formatUsdDisplay, formatUsdPlain } from "@/lib/money-format";
+import { UsdBalanceIlsGrossText } from "@/components/admin/UsdBalanceIlsGrossText";
 
 type Props = {
   kpis: LivePaymentFormKpis;
@@ -214,6 +215,11 @@ export function PaymentLiveSummaryCards({
               className="payment-modal-live-kpi__amount-v payment-modal-live-kpi__amount-v--usd payment-modal-live-kpi__amount-v--solo"
               dir="ltr"
               value={formatUsdPlain(openDebtUsd)}
+            />
+            <UsdBalanceIlsGrossText
+              usd={openDebtUsd}
+              exchangeRate={rate}
+              className="payment-modal-live-kpi__sub-ils"
             />
             <span className="payment-modal-live-kpi__hint">לחץ לפירוט</span>
           </button>

@@ -8,6 +8,7 @@ import { AdminWindowStackGate } from "@/components/admin/AdminWindowStackGate";
 import { AdminLoadingProvider } from "@/components/admin/AdminLoadingProvider";
 import { NavigationProgress } from "@/components/admin/NavigationProgress";
 import { AdminGlobalProvider } from "@/components/admin/AdminGlobalContext";
+import { DisplayExchangeRateProvider } from "@/components/admin/DisplayExchangeRateContext";
 import { OrderStatusCatalogProvider } from "@/components/admin/OrderStatusCatalogProvider";
 import { PaymentMethodCatalogProvider } from "@/components/admin/PaymentMethodCatalogProvider";
 import { PdfPreviewProvider } from "@/components/admin/PdfPreviewProvider";
@@ -90,11 +91,13 @@ export function AdminChrome({
   return (
     <AdminLoadingProvider>
       <AdminGlobalProvider>
-        <OrderStatusCatalogProvider>
-          <PaymentMethodCatalogProvider>
-            <PdfPreviewProvider>{chromeBody}</PdfPreviewProvider>
-          </PaymentMethodCatalogProvider>
-        </OrderStatusCatalogProvider>
+        <DisplayExchangeRateProvider financial={financial}>
+          <OrderStatusCatalogProvider>
+            <PaymentMethodCatalogProvider>
+              <PdfPreviewProvider>{chromeBody}</PdfPreviewProvider>
+            </PaymentMethodCatalogProvider>
+          </OrderStatusCatalogProvider>
+        </DisplayExchangeRateProvider>
       </AdminGlobalProvider>
     </AdminLoadingProvider>
   );

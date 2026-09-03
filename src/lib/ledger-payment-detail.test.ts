@@ -161,7 +161,7 @@ describe("buildLedgerPaymentDetail", () => {
     const expand = ledgerPaymentExpandLines(detail);
     const feeLine = expand.find((l) => l.tone === "commission");
     assert.ok(feeLine);
-    assert.equal(feeLine!.label, "הוספה לעמלות");
+    assert.equal(feeLine!.label, "תשלום יתר → עמלות");
     assert.equal(feeLine!.orderNumber, "TR-137-0006");
   });
 
