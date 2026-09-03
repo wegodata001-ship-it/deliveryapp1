@@ -1,13 +1,18 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   createClientAction,
   listClientsLedgerAction,
   suggestNextCustomerCodeAction,
 } from "@/app/admin/customers/ledger-actions";
-import type { ClientCreateResult, ClientLedgerPayload } from "@/app/admin/customers/ledger-types";
+import {
+  DEFAULT_CLIENT_LEDGER_LIST_SORT,
+  type ClientCreateResult,
+  type ClientLedgerListSort,
+  type ClientLedgerPayload,
+} from "@/app/admin/customers/ledger-types";
 import { useFormEnterNavigation } from "@/hooks/useFormEnterNavigation";
 import { consumePrefetchedCustomerCode, prefetchNextCustomerCode } from "@/lib/customer-code-prefetch.client";
 import {
@@ -40,6 +45,7 @@ import { formatCustomerBalanceDisplay, parseBalanceAmountString } from "@/lib/cu
 import {
   buildLedgerExportFilename,
   exportCustomerLedgerExcel,
+  exportCustomerLedgerManualPdf,
   exportCustomerLedgerPdf,
   formatLedgerRunningBalance,
   ledgerHasExportRows,
@@ -47,29 +53,28 @@ import {
   type LedgerPdfMode,
 } from "@/lib/customer-ledger-export";
 import {
-  ledgerPaymentExpandLines,
-  shouldShowLedgerPaymentMethodSubrows,
-} from "@/lib/ledger-payment-detail";
-import {
   DEFAULT_CUSTOMER_LEDGER_DATE_SORT,
   prepareLedgerRowsForDisplay,
   type CustomerLedgerDateSort,
   type CustomerLedgerQuickFilter,
 } from "@/lib/customer-ledger-display";
 import { formatLedgerPaymentTotalUsd } from "@/lib/ledger-payment-display";
-import { LedgerPaymentExpandButton } from "@/components/admin/LedgerPaymentExpandButton";
+import { ledgerRowMatchesManualPick, type ManualLedgerPickKind } from "@/lib/customer-ledger-manual-pdf";
+import { hasLedgerRowDetail } from "@/lib/ledger-row-detail";
+import { LedgerRowDetailModal } from "@/components/admin/LedgerRowDetailModal";
 import { CustomerLedgerErrorBoundary } from "@/components/admin/CustomerLedgerErrorBoundary";
 import { formatLocalYmd } from "@/lib/work-week";
 import { CommissionAmountButton } from "@/components/admin/CommissionAmountButton";
 import { CommissionBalancePopover } from "@/components/admin/CommissionBalancePopover";
 import { OrderCommissionDetailModal } from "@/components/admin/OrderCommissionDetailModal";
-import { balanceResetSourceLabelHe } from "@/lib/ledger-balance-reset";
 
 function displayCustomerCode(s: CustomerCardSnapshot): string {
   const c = s.customerCode?.trim();
   if (c) return c;
   return "—";
 }
+
+const CLIENT_LEDGER_LIST_SIZE = 500;
 
 function fmtUsd(s: string): string {
   return formatUsdDisplay(parseMoneyStringOrZero(s));
@@ -127,8 +132,7 @@ export function CustomerCardWindowBody({
   const [listQueryDebounced, setListQueryDebounced] = useState("");
   const [listFrom, setListFrom] = useState("");
   const [listTo, setListTo] = useState("");
-  const [listSort, setListSort] = useState<"new_old" | "old_new" | "name_az">("new_old");
-  const [listPage, setListPage] = useState(1);
+  const [listSort, setListSort] = useState<ClientLedgerListSort>(DEFAULT_CLIENT_LEDGER_LIST_SORT);
   const [listLoading, setListLoading] = useState(false);
   const [snap, setSnap] = useState<CustomerCardSnapshot | null>(() =>
     customerId?.trim() && initialSnap ? initialSnap : null,
@@ -144,8 +148,8 @@ export function CustomerCardWindowBody({
     setListLoading(true);
     void listClientsLedgerAction({
       query: listQueryDebounced,
-      page: listPage,
-      pageSize: 8,
+      page: 1,
+      pageSize: CLIENT_LEDGER_LIST_SIZE,
       fromYmd: listFrom || undefined,
       toYmd: listTo || undefined,
       sort: listSort,
@@ -157,19 +161,18 @@ export function CustomerCardWindowBody({
     return () => {
       cancelled = true;
     };
-  }, [customerId, listQueryDebounced, listPage, listFrom, listTo, listSort]);
+  }, [customerId, listQueryDebounced, listFrom, listTo, listSort]);
 
   useEffect(() => {
     if (customerId?.trim()) return;
     const onCreated = (e: Event) => {
       const client = (e as CustomEvent<CustomerCreatedDetail>).detail;
       if (!client?.id) return;
-      setListPage(1);
       setListLoading(true);
       void listClientsLedgerAction({
         query: listQueryDebounced,
         page: 1,
-        pageSize: 8,
+        pageSize: CLIENT_LEDGER_LIST_SIZE,
         fromYmd: listFrom || undefined,
         toYmd: listTo || undefined,
         sort: listSort,
@@ -183,12 +186,7 @@ export function CustomerCardWindowBody({
     return () => window.removeEventListener(WEGO_CUSTOMER_CREATED_EVENT, onCreated);
   }, [customerId, listQueryDebounced, listFrom, listTo, listSort, router]);
 
-  const pagedClients = listPayload?.rows ?? [];
-  const filteredTotalPages = listPayload?.totalPages ?? 1;
-
-  useEffect(() => {
-    setListPage(1);
-  }, [listQueryDebounced, listFrom, listTo, listSort]);
+  const listClients = listPayload?.rows ?? [];
 
   const [ledger, setLedger] = useState<CustomerLedgerPayload | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>(() => (initialTab === "ledger" ? "ledger" : "details"));
@@ -200,9 +198,12 @@ export function CustomerCardWindowBody({
   const [editMode, setEditMode] = useState(false);
   const [ledgerOrderLock, setLedgerOrderLock] = useState<OrderEditLockGatePayload | null>(null);
   const [ledgerGateToast, setLedgerGateToast] = useState<string | null>(null);
-  const [exportBusy, setExportBusy] = useState<"pdf" | "excel" | null>(null);
+  const [exportBusy, setExportBusy] = useState<"pdf" | "excel" | "manual-pdf" | null>(null);
   const [ledgerPdfModalOpen, setLedgerPdfModalOpen] = useState(false);
-  const [expandedLedgerPayments, setExpandedLedgerPayments] = useState<Set<string>>(() => new Set());
+  const [manualPdfMode, setManualPdfMode] = useState(false);
+  const [selectedLedgerRowIds, setSelectedLedgerRowIds] = useState<string[]>([]);
+  const lastManualPdfClickId = useRef<string | null>(null);
+  const [ledgerDetailRow, setLedgerDetailRow] = useState<CustomerLedgerRow | null>(null);
   const [commissionPopoverOpen, setCommissionPopoverOpen] = useState(false);
   const [orderCommissionDetail, setOrderCommissionDetail] = useState<{
     orderId: string;
@@ -225,6 +226,9 @@ export function CustomerCardWindowBody({
 
   useEffect(() => {
     setLedgerSort(DEFAULT_CUSTOMER_LEDGER_DATE_SORT);
+    setManualPdfMode(false);
+    setSelectedLedgerRowIds([]);
+    lastManualPdfClickId.current = null;
   }, [customerId]);
 
   useEffect(() => {
@@ -336,6 +340,51 @@ export function CustomerCardWindowBody({
     () => prepareLedgerRowsForDisplay(ledger?.rows ?? [], ledgerQuickFilter, ledgerSort),
     [ledger?.rows, ledgerQuickFilter, ledgerSort],
   );
+  const displayLedgerRowIds = useMemo(() => displayLedgerRows.map((r) => r.id), [displayLedgerRows]);
+  const selectedVisibleCount = useMemo(
+    () => selectedLedgerRowIds.filter((id) => displayLedgerRowIds.includes(id)).length,
+    [selectedLedgerRowIds, displayLedgerRowIds],
+  );
+  const allVisibleSelected =
+    displayLedgerRowIds.length > 0 && displayLedgerRowIds.every((id) => selectedLedgerRowIds.includes(id));
+
+  useEffect(() => {
+    if (!manualPdfMode) return;
+    const visible = new Set(displayLedgerRowIds);
+    setSelectedLedgerRowIds((prev) => {
+      const next = prev.filter((id) => visible.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [manualPdfMode, displayLedgerRowIds]);
+
+  function exitManualPdfMode() {
+    setManualPdfMode(false);
+    setSelectedLedgerRowIds([]);
+    lastManualPdfClickId.current = null;
+  }
+
+  function toggleManualPdfRow(rowId: string, shiftKey: boolean) {
+    const visibleIds = displayLedgerRowIds;
+    if (shiftKey && lastManualPdfClickId.current) {
+      const from = visibleIds.indexOf(lastManualPdfClickId.current);
+      const to = visibleIds.indexOf(rowId);
+      if (from >= 0 && to >= 0) {
+        const [start, end] = from < to ? [from, to] : [to, from];
+        const range = visibleIds.slice(start, end + 1);
+        setSelectedLedgerRowIds((prev) => Array.from(new Set([...prev, ...range])));
+        lastManualPdfClickId.current = rowId;
+        return;
+      }
+    }
+    setSelectedLedgerRowIds((prev) => (prev.includes(rowId) ? prev.filter((id) => id !== rowId) : [...prev, rowId]));
+    lastManualPdfClickId.current = rowId;
+  }
+
+  function selectManualPdfKind(kind: ManualLedgerPickKind) {
+    const ids = displayLedgerRows.filter((row) => ledgerRowMatchesManualPick(row, kind)).map((row) => row.id);
+    setSelectedLedgerRowIds(ids);
+    lastManualPdfClickId.current = ids[ids.length - 1] ?? null;
+  }
 
   useEffect(() => {
     if (activeTab !== "ledger" || !customerId?.trim()) return;
@@ -404,16 +453,28 @@ export function CustomerCardWindowBody({
           <h3>כרטסת לקוחות</h3>
           <div className="adm-client-ledger-filters-row">
             <input
-              className="adm-filter-input"
-              placeholder="חיפוש לפי קוד לקוח / שם / טלפון / אימייל"
+              className="adm-filter-input adm-client-ledger-search"
+              placeholder="חיפוש לקוח לפי קוד / שם / טלפון / אימייל"
+              aria-label="חיפוש לקוח"
               value={listQuery}
               onChange={(e) => setListQuery(e.target.value)}
             />
-            <input className="adm-filter-input" type="date" value={listFrom} onChange={(e) => setListFrom(e.target.value)} />
-            <input className="adm-filter-input" type="date" value={listTo} onChange={(e) => setListTo(e.target.value)} />
-            <select className="adm-filter-input" value={listSort} onChange={(e) => setListSort(e.target.value as "new_old" | "old_new" | "name_az")}>
-              <option value="new_old">חדש → ישן</option>
+            <label className="adm-client-ledger-date">
+              <span>מתאריך</span>
+              <input className="adm-filter-input" type="date" value={listFrom} onChange={(e) => setListFrom(e.target.value)} />
+            </label>
+            <label className="adm-client-ledger-date">
+              <span>עד תאריך</span>
+              <input className="adm-filter-input" type="date" value={listTo} onChange={(e) => setListTo(e.target.value)} />
+            </label>
+            <select
+              className="adm-filter-input"
+              aria-label="מיון"
+              value={listSort}
+              onChange={(e) => setListSort(e.target.value as ClientLedgerListSort)}
+            >
               <option value="old_new">ישן → חדש</option>
+              <option value="new_old">חדש → ישן</option>
               <option value="name_az">לפי שם (A-Z)</option>
             </select>
             <button
@@ -423,13 +484,13 @@ export function CustomerCardWindowBody({
                 setListQuery("");
                 setListFrom("");
                 setListTo("");
-                setListSort("new_old");
+                setListSort(DEFAULT_CLIENT_LEDGER_LIST_SORT);
               }}
             >
               נקה
             </button>
           </div>
-          {listQuery || listFrom || listTo || listSort !== "new_old" ? (
+          {listQuery || listFrom || listTo || listSort !== DEFAULT_CLIENT_LEDGER_LIST_SORT ? (
             <small className="adm-muted-keys">מצב מסונן</small>
           ) : null}
         </div>
@@ -447,11 +508,15 @@ export function CustomerCardWindowBody({
             <tbody>
               {listLoading ? (
                 <tr><td colSpan={5}>טוען…</td></tr>
-              ) : pagedClients.length === 0 ? (
+              ) : listClients.length === 0 ? (
                 <tr><td colSpan={5}>לא נמצאו לקוחות</td></tr>
               ) : (
-                pagedClients.map((r) => (
-                  <tr key={r.id} onClick={() => openWindow({ type: "customerCard", props: { customerId: r.id, customerName: r.name, initialTab: "ledger" } })}>
+                listClients.map((r) => (
+                  <tr
+                    key={r.id}
+                    className="adm-client-ledger-row"
+                    onClick={() => openWindow({ type: "customerCard", props: { customerId: r.id, customerName: r.name, initialTab: "ledger" } })}
+                  >
                     <td dir="ltr">{r.customerCode || "—"}</td>
                     <td>
                       {r.name} {r.isNew ? <span className="adm-client-new-tag">חדש</span> : null}
@@ -467,20 +532,6 @@ export function CustomerCardWindowBody({
             </tbody>
           </table>
         </div>
-        <div className="adm-client-ledger-pager">
-          <button type="button" className="adm-btn adm-btn--ghost adm-btn--xs" disabled={listPage <= 1} onClick={() => setListPage((p) => Math.max(1, p - 1))}>
-            קודם
-          </button>
-          <span>{listPayload?.page ?? listPage} / {filteredTotalPages}</span>
-          <button
-            type="button"
-            className="adm-btn adm-btn--ghost adm-btn--xs"
-            disabled={listPage >= filteredTotalPages}
-            onClick={() => setListPage((p) => Math.min(filteredTotalPages, p + 1))}
-          >
-            הבא
-          </button>
-        </div>
       </div>
     );
   }
@@ -493,17 +544,7 @@ export function CustomerCardWindowBody({
     );
   }
 
-  async function onLedgerTableRowActivate(r: CustomerLedgerRow) {
-    if (r.kind === "OPENING_BALANCE") return;
-    if (r.kind === "BALANCE_RESET" || r.isBalanceReset) {
-      setExpandedLedgerPayments((prev) => {
-        const next = new Set(prev);
-        if (next.has(r.id)) next.delete(r.id);
-        else next.add(r.id);
-        return next;
-      });
-      return;
-    }
+  async function openLedgerDocument(r: CustomerLedgerRow) {
     if (r.paymentId) {
       openWindow({ type: "paymentsUpdated", props: { paymentId: r.paymentId } });
       return;
@@ -516,6 +557,15 @@ export function CustomerCardWindowBody({
       }
       openWindow({ type: "orderCapture", props: { mode: "edit", orderId: r.orderId } });
     }
+  }
+
+  function onLedgerTableRowActivate(r: CustomerLedgerRow) {
+    if (r.kind === "OPENING_BALANCE") return;
+    if (hasLedgerRowDetail(r)) {
+      setLedgerDetailRow(r);
+      return;
+    }
+    void openLedgerDocument(r);
   }
 
   const balanceNum = ledger ? parseBalanceAmountString(ledger.balanceUsd ?? "0") : 0;
@@ -554,12 +604,35 @@ export function CustomerCardWindowBody({
       if (kind === "pdf") {
         await exportCustomerLedgerPdf(exportMeta, { ...ledger, rows: displayLedgerRows }, { mode: pdfMode });
       }
-      else await exportCustomerLedgerExcel(exportMeta, ledger);
+      else await exportCustomerLedgerExcel(exportMeta, { ...ledger, rows: displayLedgerRows });
       setLedgerGateToast(kind === "pdf" ? "PDF מוכן לתצוגה" : "Excel הורד בהצלחה");
       setLedgerPdfModalOpen(false);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "ייצוא נכשל";
       setLedgerGateToast(msg);
+    } finally {
+      setExportBusy(null);
+      window.setTimeout(() => setLedgerGateToast(null), 3200);
+    }
+  }
+
+  async function runManualPdfExport() {
+    if (exportBusy || ledgerLoading || !exportMeta || selectedVisibleCount === 0) return;
+    setExportBusy("manual-pdf");
+    setLedgerGateToast("מייצא PDF ידני…");
+    try {
+      await exportCustomerLedgerManualPdf({
+        customerId,
+        selectedRowIds: selectedLedgerRowIds.filter((id) => displayLedgerRowIds.includes(id)),
+        fromYmd,
+        toYmd,
+        sourceCountry: effectiveLedgerCountry,
+        meta: exportMeta,
+      });
+      setLedgerGateToast("PDF ידני מוכן לתצוגה");
+      exitManualPdfMode();
+    } catch (e) {
+      setLedgerGateToast(e instanceof Error ? e.message : "ייצוא PDF ידני נכשל");
     } finally {
       setExportBusy(null);
       window.setTimeout(() => setLedgerGateToast(null), 3200);
@@ -594,15 +667,27 @@ export function CustomerCardWindowBody({
             <option value="new_old">חדש → ישן</option>
           </select>
         </div>
+        <button
+          type="button"
+          className="adm-btn adm-btn--ghost adm-btn--xs"
+          onClick={() => {
+            setFromYmd(ledgerFromYmd?.trim() ?? "");
+            setToYmd(ledgerToYmd?.trim() ?? "");
+            setLedgerSort(DEFAULT_CUSTOMER_LEDGER_DATE_SORT);
+            setLedgerQuickFilter("all");
+          }}
+        >
+          נקה
+        </button>
       </div>
       <div className="adm-cust-ledger-export-actions" role="group" aria-label="ייצוא כרטסת">
         <button
           type="button"
           className="adm-export-btn adm-export-btn--pdf adm-cust-ledger-export-btn"
-          disabled={!!exportBusy || ledgerLoading || !ledgerHasExportRows(ledger)}
+          disabled={!!exportBusy || ledgerLoading || !ledgerHasExportRows(ledger) || manualPdfMode}
           title={
             ledgerHasExportRows(ledger)
-              ? `ייצוא PDF · ${buildLedgerExportFilename(exportMeta?.customerCode ?? "customer", "pdf")}`
+              ? `PDF מלא · ${buildLedgerExportFilename(exportMeta?.customerCode ?? "customer", "pdf")}`
               : "אין נתונים לייצוא"
           }
           onClick={openLedgerPdfModal}
@@ -613,13 +698,30 @@ export function CustomerCardWindowBody({
               מייצא PDF…
             </>
           ) : (
-            <>PDF · ייצוא PDF</>
+            "PDF מלא"
           )}
         </button>
         <button
           type="button"
+          className={`adm-export-btn adm-export-btn--pdf adm-cust-ledger-export-btn ${manualPdfMode ? "is-active" : ""}`}
+          disabled={!!exportBusy || ledgerLoading || displayLedgerRows.length === 0}
+          title="בחירת שורות ל-PDF"
+          onClick={() => {
+            if (manualPdfMode) {
+              exitManualPdfMode();
+              return;
+            }
+            setManualPdfMode(true);
+            setSelectedLedgerRowIds([]);
+            lastManualPdfClickId.current = null;
+          }}
+        >
+          PDF ידני
+        </button>
+        <button
+          type="button"
           className="adm-export-btn adm-export-btn--excel adm-cust-ledger-export-btn"
-          disabled={!!exportBusy || ledgerLoading || !ledgerHasExportRows(ledger)}
+          disabled={!!exportBusy || ledgerLoading || !ledgerHasExportRows(ledger) || manualPdfMode}
           title={
             ledgerHasExportRows(ledger)
               ? `ייצוא Excel · ${buildLedgerExportFilename(exportMeta?.customerCode ?? "customer", "xlsx")}`
@@ -633,7 +735,7 @@ export function CustomerCardWindowBody({
               מייצא Excel…
             </>
           ) : (
-            <>Excel · ייצוא Excel</>
+            "Excel"
           )}
         </button>
       </div>
@@ -699,7 +801,13 @@ export function CustomerCardWindowBody({
             showLabel
             onClick={() => setCommissionPopoverOpen(true)}
           />
-          <span>יתרת עמלות</span>
+          <button
+            type="button"
+            className="summary-card-amount-btn"
+            onClick={() => setCommissionPopoverOpen(true)}
+          >
+            <span>יתרת עמלות</span>
+          </button>
         </div>
       </div>
     ) : null;
@@ -899,10 +1007,46 @@ export function CustomerCardWindowBody({
                 הזמנות
               </button>
             </div>
+            {manualPdfMode ? (
+              <div className="adm-ledger-manual-pdf-tools" role="group" aria-label="בחירת שורות ל-PDF">
+                <span className="adm-ledger-manual-pdf-count">נבחרו {selectedVisibleCount} שורות</span>
+                <button type="button" className="adm-btn adm-btn--ghost adm-btn--xs" onClick={() => selectManualPdfKind("orders")}>
+                  הזמנות
+                </button>
+                <button type="button" className="adm-btn adm-btn--ghost adm-btn--xs" onClick={() => selectManualPdfKind("payments")}>
+                  תשלומים
+                </button>
+                <button type="button" className="adm-btn adm-btn--ghost adm-btn--xs" onClick={() => selectManualPdfKind("fees_resets")}>
+                  עמלות/איפוסים
+                </button>
+                <button type="button" className="adm-btn adm-btn--ghost adm-btn--xs" onClick={() => selectManualPdfKind("all")}>
+                  הכל
+                </button>
+                <button type="button" className="adm-btn adm-btn--ghost adm-btn--xs" onClick={() => setSelectedLedgerRowIds([])}>
+                  נקה בחירה
+                </button>
+              </div>
+            ) : null}
             <div className="adm-cust-card-table-scroll">
-              <table className="adm-cust-card-orders-table adm-ledger-table-saas">
+              <table className={`adm-cust-card-orders-table adm-ledger-table-saas ${manualPdfMode ? "adm-ledger-table-saas--select" : ""}`}>
                 <thead>
                   <tr>
+                    {manualPdfMode ? (
+                      <th className="adm-ledger-select-col">
+                        <label className="adm-ledger-select-all">
+                          <input
+                            type="checkbox"
+                            checked={allVisibleSelected}
+                            disabled={displayLedgerRowIds.length === 0}
+                            onChange={() => {
+                              setSelectedLedgerRowIds(allVisibleSelected ? [] : [...displayLedgerRowIds]);
+                            }}
+                            aria-label="בחר הכל"
+                          />
+                          <span>בחר הכל</span>
+                        </label>
+                      </th>
+                    ) : null}
                     <th>תאריך</th>
                     <th>מסמך</th>
                     <th>סוג</th>
@@ -914,22 +1058,23 @@ export function CustomerCardWindowBody({
                 <tbody>
                   {ledgerLoading ? (
                     <tr>
-                      <td colSpan={6}>טוען…</td>
+                      <td colSpan={manualPdfMode ? 7 : 6}>טוען…</td>
                     </tr>
                   ) : !ledger || (ledger.rows ?? []).length === 0 ? (
                     <tr>
-                      <td colSpan={6}>אין תנועות בטווח.</td>
+                      <td colSpan={manualPdfMode ? 7 : 6}>אין תנועות בטווח.</td>
                     </tr>
                   ) : displayLedgerRows.length === 0 ? (
                     <tr>
-                      <td colSpan={6}>אין תנועות בסינון הנוכחי.</td>
+                      <td colSpan={manualPdfMode ? 7 : 6}>אין תנועות בסינון הנוכחי.</td>
                     </tr>
                   ) : (
                     (displayLedgerRows ?? []).map((r) => {
                       const isCommissionClosure = !!r.isCommissionDebtClosure;
                       const isBalanceReset = r.kind === "BALANCE_RESET" || !!r.isBalanceReset;
+                      const hasDetail = hasLedgerRowDetail(r);
                       const clickable =
-                        isBalanceReset ||
+                        hasDetail ||
                         (r.kind !== "OPENING_BALANCE" && !!(r.orderId || r.paymentId));
                       const chargeNum = parseMoneyStringOrZero(r.chargeUsd);
                       const paymentNum = parseMoneyStringOrZero(r.paymentUsd);
@@ -940,25 +1085,11 @@ export function CustomerCardWindowBody({
                       const isOrderUpdated = !!r.isOrderUpdated;
                       const isSuperseded = !!r.isSupersededOrderVersion;
                       const isLatestUpdate = !!r.isLatestOrderUpdate;
-                      const orderUpdateSubrows = isOrderUpdated && r.orderUpdateDetail ? r.orderUpdateDetail.changes : [];
-                      const paymentExpandLines =
-                        isPayment && !isCancelledPayment && shouldShowLedgerPaymentMethodSubrows(r.paymentDetail)
-                          ? ledgerPaymentExpandLines(r.paymentDetail)
-                          : [];
-                      const paymentExpandable = paymentExpandLines.length > 0 || isBalanceReset;
-                      const paymentExpanded = expandedLedgerPayments.has(r.id);
-                      const resetDetail = isBalanceReset ? r.balanceResetDetail : undefined;
-                      const togglePaymentExpanded = () => {
-                        setExpandedLedgerPayments((prev) => {
-                          const next = new Set(prev);
-                          if (next.has(r.id)) next.delete(r.id);
-                          else next.add(r.id);
-                          return next;
-                        });
-                      };
+                      const isPdfSelected = selectedLedgerRowIds.includes(r.id);
                       return (
-                        <Fragment key={r.id}>
                         <tr
+                          key={r.id}
+                          title={manualPdfMode ? "לחץ לבחירה ל-PDF" : hasDetail ? "לחץ לפירוט" : undefined}
                           className={[
                             r.kind === "OPENING_BALANCE" ? "adm-ledger-row--opening" : "",
                             isPayment ? "adm-ledger-row--payment" : "",
@@ -971,31 +1102,55 @@ export function CustomerCardWindowBody({
                             isCommissionClosure ? "adm-ledger-row--commission-closure" : "",
                             isBalanceReset ? "adm-ledger-row--balance-reset" : "",
                             r.isAdjustmentFeeCapture ? "adm-ledger-row--fee-capture" : "",
-                            clickable ? "clickable" : "",
+                            clickable && !manualPdfMode ? "clickable" : "",
+                            manualPdfMode ? "adm-ledger-row--pdf-pick" : "",
+                            isPdfSelected ? "adm-ledger-row--pdf-selected" : "",
                           ]
                             .filter(Boolean)
                             .join(" ")}
-                          tabIndex={clickable ? 0 : undefined}
-                          role={clickable ? "button" : undefined}
-                          onClick={() => clickable && void onLedgerTableRowActivate(r)}
-                          onKeyDown={(e) => {
-                            if (!clickable) return;
-                            if (e.key === "Enter" || e.key === " ") {
-                              e.preventDefault();
-                              void onLedgerTableRowActivate(r);
+                          tabIndex={manualPdfMode || clickable ? 0 : undefined}
+                          role={manualPdfMode || clickable ? "button" : undefined}
+                          onClick={(e) => {
+                            if (manualPdfMode) {
+                              toggleManualPdfRow(r.id, e.shiftKey);
+                              return;
                             }
+                            if (clickable) void onLedgerTableRowActivate(r);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key !== "Enter" && e.key !== " ") return;
+                            e.preventDefault();
+                            if (manualPdfMode) {
+                              toggleManualPdfRow(r.id, e.shiftKey);
+                              return;
+                            }
+                            if (clickable) void onLedgerTableRowActivate(r);
                           }}
                         >
+                          {manualPdfMode ? (
+                            <td className="adm-ledger-select-col" onClick={(e) => e.stopPropagation()}>
+                              <input
+                                type="checkbox"
+                                checked={isPdfSelected}
+                                onChange={() => toggleManualPdfRow(r.id, false)}
+                                aria-label={`בחירה ${r.document}`}
+                              />
+                            </td>
+                          ) : null}
                           <td dir="ltr">{r.dateYmd}</td>
                           <td dir="ltr" className="adm-ledger-doc-cell">
                             <span className="adm-ledger-doc-cell-inner">
-                              {clickable ? (
+                              {clickable && !manualPdfMode ? (
                                 <button
                                   type="button"
                                   className="adm-ledger-doc-link"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    void onLedgerTableRowActivate(r);
+                                    if (r.paymentId || r.orderId) {
+                                      void openLedgerDocument(r);
+                                      return;
+                                    }
+                                    onLedgerTableRowActivate(r);
                                   }}
                                 >
                                   {r.document}
@@ -1054,266 +1209,15 @@ export function CustomerCardWindowBody({
                                 {fmtUsd(r.commissionAfterUsd ?? "0")}
                               </span>
                             ) : isBalanceReset ? (
-                              <span className="adm-ledger-payment-cell-inner">
-                                <span dir="ltr">{fmtUsd(r.paymentUsd)}</span>
-                                <LedgerPaymentExpandButton
-                                  expanded={paymentExpanded}
-                                  onToggle={togglePaymentExpanded}
-                                />
-                              </span>
+                              fmtUsd(r.paymentUsd)
                             ) : paymentNum > 0 ? (
-                              <span className="adm-ledger-payment-cell-inner">
-                                <span dir="ltr">
-                                  {formatLedgerPaymentTotalUsd(r.paymentDetail?.totalUsd ?? r.paymentUsd)}
-                                </span>
-                                {paymentExpandable ? (
-                                  <LedgerPaymentExpandButton
-                                    expanded={paymentExpanded}
-                                    onToggle={togglePaymentExpanded}
-                                  />
-                                ) : null}
-                              </span>
+                              formatLedgerPaymentTotalUsd(r.paymentDetail?.totalUsd ?? r.paymentUsd)
                             ) : (
                               "—"
                             )}
                           </td>
                           <td dir="ltr">{formatLedgerRunningBalance(r.balanceUsd)}</td>
                         </tr>
-                        {paymentExpanded
-                          ? (
-                            <>
-                            {paymentExpandLines.map((line, subIdx) => (
-                          <tr
-                            key={`${r.id}-pay-meth-${subIdx}`}
-                            className={[
-                              "adm-ledger-row--payment-method-sub",
-                              line.tone === "commission" ? "adm-ledger-row--commission-fee" : "",
-                            ]
-                              .filter(Boolean)
-                              .join(" ")}
-                          >
-                            <td />
-                            <td dir="ltr">
-                              {line.tone === "commission" && line.orderNumber ? line.orderNumber : ""}
-                            </td>
-                            <td className="adm-ledger-payment-method-sub-type">
-                              {line.label}:
-                            </td>
-                            <td>—</td>
-                            <td dir="ltr">
-                              {line.tone === "commission" && line.orderId ? (
-                                <button
-                                  type="button"
-                                  className="commission-lineage-link"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setOrderCommissionDetail({
-                                      orderId: line.orderId!,
-                                      orderNumber: line.orderNumber ?? null,
-                                    });
-                                  }}
-                                >
-                                  {line.display}
-                                </button>
-                              ) : (
-                                line.display
-                              )}
-                            </td>
-                            <td />
-                          </tr>
-                        ))}
-                            {paymentExpandLines.length > 0 && r.paymentDetail ? (
-                              <tr key={`${r.id}-pay-meth-total`} className="adm-ledger-row--payment-method-sub adm-ledger-row--payment-method-total">
-                                <td />
-                                <td />
-                                <td className="adm-ledger-payment-method-sub-type">סה״כ תשלום:</td>
-                                <td>—</td>
-                                <td dir="ltr">
-                                  {formatLedgerPaymentTotalUsd(r.paymentDetail.totalUsd)}
-                                </td>
-                                <td />
-                              </tr>
-                            ) : null}
-                            </>
-                          )
-                          : null}
-                        {isOrderUpdated
-                          ? orderUpdateSubrows.flatMap((change, subIdx) => [
-                              <tr key={`${r.id}-upd-${subIdx}-before`} className="adm-ledger-row--payment-method-sub">
-                                <td />
-                                <td dir="ltr">{change.before}</td>
-                                <td className="adm-ledger-payment-method-sub-type">{change.label} קודם</td>
-                                <td>—</td>
-                                <td>—</td>
-                                <td />
-                              </tr>,
-                              <tr key={`${r.id}-upd-${subIdx}-after`} className="adm-ledger-row--payment-method-sub">
-                                <td />
-                                <td dir="ltr">{change.after}</td>
-                                <td className="adm-ledger-payment-method-sub-type">{change.label} חדש</td>
-                                <td>—</td>
-                                <td>—</td>
-                                <td />
-                              </tr>,
-                              ...(change.deltaUsd
-                                ? [
-                                    <tr key={`${r.id}-upd-${subIdx}-delta`} className="adm-ledger-row--payment-method-sub adm-ledger-row--payment-method-total">
-                                      <td />
-                                      <td dir="ltr">{change.deltaUsd}</td>
-                                      <td className="adm-ledger-payment-method-sub-type">שינוי</td>
-                                      <td>—</td>
-                                      <td>—</td>
-                                      <td />
-                                    </tr>,
-                                  ]
-                                : []),
-                            ])
-                          : null}
-                        {isOrderUpdated && r.orderUpdateDetail ? (
-                          <>
-                            <tr key={`${r.id}-upd-when`} className="adm-ledger-row--payment-method-sub">
-                              <td />
-                              <td dir="ltr">{r.dateYmd}</td>
-                              <td className="adm-ledger-payment-method-sub-type">מתי</td>
-                              <td>—</td>
-                              <td>—</td>
-                              <td />
-                            </tr>
-                            {r.orderUpdateDetail.requestedBy && r.orderUpdateDetail.requestedBy !== "—" ? (
-                              <tr key={`${r.id}-upd-requested`} className="adm-ledger-row--payment-method-sub">
-                                <td />
-                                <td>{r.orderUpdateDetail.requestedBy}</td>
-                                <td className="adm-ledger-payment-method-sub-type">מבקש</td>
-                                <td>—</td>
-                                <td>—</td>
-                                <td />
-                              </tr>
-                            ) : null}
-                            <tr key={`${r.id}-upd-approved`} className="adm-ledger-row--payment-method-sub">
-                              <td />
-                              <td>{r.orderUpdateDetail.approvedBy}</td>
-                              <td className="adm-ledger-payment-method-sub-type">אושר ע&quot;י</td>
-                              <td>—</td>
-                              <td>—</td>
-                              <td />
-                            </tr>
-                          </>
-                        ) : null}
-                        {isBalanceReset && paymentExpanded && resetDetail ? (
-                          <>
-                            {resetDetail.openDebtBeforeUsd != null ? (
-                              <tr key={`${r.id}-rst-debt-before`} className="adm-ledger-row--payment-method-sub">
-                                <td />
-                                <td dir="ltr">{fmtUsd(resetDetail.openDebtBeforeUsd)}</td>
-                                <td className="adm-ledger-payment-method-sub-type">חוב לפני</td>
-                                <td>—</td>
-                                <td>—</td>
-                                <td />
-                              </tr>
-                            ) : null}
-                            {resetDetail.openDebtAfterUsd != null ? (
-                              <tr key={`${r.id}-rst-debt-after`} className="adm-ledger-row--payment-method-sub">
-                                <td />
-                                <td dir="ltr">{fmtUsd(resetDetail.openDebtAfterUsd)}</td>
-                                <td className="adm-ledger-payment-method-sub-type">חוב אחרי</td>
-                                <td>—</td>
-                                <td>—</td>
-                                <td />
-                              </tr>
-                            ) : null}
-                            {resetDetail.creditBeforeUsd != null ? (
-                              <tr key={`${r.id}-rst-credit-before`} className="adm-ledger-row--payment-method-sub">
-                                <td />
-                                <td dir="ltr">{fmtUsd(resetDetail.creditBeforeUsd)}</td>
-                                <td className="adm-ledger-payment-method-sub-type">יתרת זכות לפני</td>
-                                <td>—</td>
-                                <td>—</td>
-                                <td />
-                              </tr>
-                            ) : null}
-                            {resetDetail.creditAfterUsd != null ? (
-                              <tr key={`${r.id}-rst-credit-after`} className="adm-ledger-row--payment-method-sub">
-                                <td />
-                                <td dir="ltr">{fmtUsd(resetDetail.creditAfterUsd)}</td>
-                                <td className="adm-ledger-payment-method-sub-type">יתרת זכות אחרי</td>
-                                <td>—</td>
-                                <td>—</td>
-                                <td />
-                              </tr>
-                            ) : null}
-                            <tr key={`${r.id}-rst-amt`} className="adm-ledger-row--payment-method-sub">
-                              <td />
-                              <td dir="ltr">{fmtUsd(resetDetail.amountResetUsd)}</td>
-                              <td className="adm-ledger-payment-method-sub-type">סכום שאופס</td>
-                              <td>—</td>
-                              <td>—</td>
-                              <td />
-                            </tr>
-                            {resetDetail.commissionBeforeUsd != null ? (
-                              <tr key={`${r.id}-rst-fee-before`} className="adm-ledger-row--payment-method-sub">
-                                <td />
-                                <td dir="ltr">{fmtUsd(resetDetail.commissionBeforeUsd)}</td>
-                                <td className="adm-ledger-payment-method-sub-type">עמלות לפני</td>
-                                <td>—</td>
-                                <td>—</td>
-                                <td />
-                              </tr>
-                            ) : (
-                              <tr key={`${r.id}-rst-before`} className="adm-ledger-row--payment-method-sub">
-                                <td />
-                                <td dir="ltr">{fmtUsd(resetDetail.amountBeforeUsd)}</td>
-                                <td className="adm-ledger-payment-method-sub-type">לפני איפוס</td>
-                                <td>—</td>
-                                <td>—</td>
-                                <td />
-                              </tr>
-                            )}
-                            {resetDetail.commissionAfterUsd != null ? (
-                              <tr key={`${r.id}-rst-fee-after`} className="adm-ledger-row--payment-method-sub adm-ledger-row--payment-method-total">
-                                <td />
-                                <td dir="ltr">{fmtUsd(resetDetail.commissionAfterUsd)}</td>
-                                <td className="adm-ledger-payment-method-sub-type">עמלות אחרי</td>
-                                <td>—</td>
-                                <td>—</td>
-                                <td />
-                              </tr>
-                            ) : (
-                              <tr key={`${r.id}-rst-after`} className="adm-ledger-row--payment-method-sub adm-ledger-row--payment-method-total">
-                                <td />
-                                <td dir="ltr">{fmtUsd(resetDetail.amountAfterUsd)}</td>
-                                <td className="adm-ledger-payment-method-sub-type">אחרי איפוס</td>
-                                <td>—</td>
-                                <td>—</td>
-                                <td />
-                              </tr>
-                            )}
-                            <tr key={`${r.id}-rst-who`} className="adm-ledger-row--payment-method-sub">
-                              <td />
-                              <td dir="ltr">{resetDetail.performedBy ?? "—"}</td>
-                              <td className="adm-ledger-payment-method-sub-type">מי ביצע</td>
-                              <td>—</td>
-                              <td>—</td>
-                              <td />
-                            </tr>
-                            <tr key={`${r.id}-rst-when`} className="adm-ledger-row--payment-method-sub">
-                              <td />
-                              <td dir="ltr">{r.dateYmd}</td>
-                              <td className="adm-ledger-payment-method-sub-type">מתי</td>
-                              <td>—</td>
-                              <td>—</td>
-                              <td />
-                            </tr>
-                            <tr key={`${r.id}-rst-src`} className="adm-ledger-row--payment-method-sub">
-                              <td />
-                              <td>{balanceResetSourceLabelHe(resetDetail.source)}</td>
-                              <td className="adm-ledger-payment-method-sub-type">מקור</td>
-                              <td>—</td>
-                              <td>—</td>
-                              <td />
-                            </tr>
-                          </>
-                        ) : null}
-                        </Fragment>
                       );
                     })
                   )}
@@ -1321,6 +1225,29 @@ export function CustomerCardWindowBody({
               </table>
             </div>
             {summaryGrid}
+            {manualPdfMode ? (
+              <div className="adm-ledger-manual-pdf-footer" role="status">
+                <span>נבחרו: {selectedVisibleCount} שורות</span>
+                <div className="adm-ledger-manual-pdf-footer__actions">
+                  <button type="button" className="adm-btn adm-btn--ghost" onClick={exitManualPdfMode}>
+                    ביטול
+                  </button>
+                  <button type="button" className="adm-btn adm-btn--ghost" onClick={() => setSelectedLedgerRowIds([])}>
+                    נקה
+                  </button>
+                  <button
+                    type="button"
+                    className="adm-btn adm-btn--primary adm-export-btn--pdf"
+                    disabled={selectedVisibleCount === 0 || exportBusy === "manual-pdf"}
+                    onClick={() => void runManualPdfExport()}
+                  >
+                    {exportBusy === "manual-pdf"
+                      ? "מייצא…"
+                      : `צור PDF מ-${selectedVisibleCount} שורות`}
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </section>
           </CustomerLedgerErrorBoundary>
         ) : null}
@@ -1361,6 +1288,25 @@ export function CustomerCardWindowBody({
         onOpenPayment={(paymentId) => {
           setCommissionPopoverOpen(false);
           openWindow({ type: "paymentsUpdated", props: { paymentId } });
+        }}
+      />
+      <LedgerRowDetailModal
+        row={ledgerDetailRow}
+        onClose={() => setLedgerDetailRow(null)}
+        onOpenPayment={(paymentId) => {
+          setLedgerDetailRow(null);
+          openWindow({ type: "paymentsUpdated", props: { paymentId } });
+        }}
+        onOpenOrder={(orderId) => {
+          setLedgerDetailRow(null);
+          void (async () => {
+            const hint = await getOrderEditEntryHintAction(orderId);
+            if (hint.kind === "prelock") {
+              setLedgerOrderLock(hint);
+              return;
+            }
+            openWindow({ type: "orderCapture", props: { mode: "edit", orderId } });
+          })();
         }}
       />
       <OrderCommissionDetailModal

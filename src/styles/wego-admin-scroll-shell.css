@@ -278,10 +278,17 @@ html.adm-app-shell .adm-win-layer {
   inset: 0;
 }
 
-html.adm-app-shell .adm-win-body,
-html.adm-app-shell .adm-win-scroll-body {
+html.adm-app-shell .adm-win-body {
   overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* לא scrollport — אחרת wheel נבלע ולא מגיע ל-.adm-win-body */
+html.adm-app-shell .adm-win-scroll-body {
+  overflow: visible;
+  overscroll-behavior: auto;
 }
 
 @media (max-width: 768px) {

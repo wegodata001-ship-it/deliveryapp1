@@ -376,9 +376,27 @@ body.adm-nav-scroll-lock {
     overflow: hidden;
   }
 
-  .adm-win-body,
-  .adm-win-scroll-body {
+  .adm-win-panel.adm-win-panel--customer-card.adm-win-panel--customer-list {
+    width: calc(100vw - 16px) !important;
+    max-width: none !important;
+    height: min(94dvh, calc(100dvh - 16px)) !important;
+    max-height: 94dvh !important;
+  }
+
+  .adm-win-body {
     overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .adm-win-scroll-body {
+    overflow: visible;
+  }
+
+  .adm-win-body--customer-list {
+    overflow: hidden;
+  }
+
+  .adm-win-body--customer-list .adm-client-ledger-table-wrap {
     -webkit-overflow-scrolling: touch;
   }
 

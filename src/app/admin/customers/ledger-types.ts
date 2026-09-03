@@ -35,6 +35,11 @@ export type ClientLedgerRow = {
   isNew: boolean;
 };
 
+export type ClientLedgerListSort = "new_old" | "old_new" | "name_az";
+
+/** ברירת מחדל ברשימת כרטסת לקוחות: ישן → חדש */
+export const DEFAULT_CLIENT_LEDGER_LIST_SORT: ClientLedgerListSort = "old_new";
+
 export type ClientLedgerPayload = {
   rows: ClientLedgerRow[];
   total: number;

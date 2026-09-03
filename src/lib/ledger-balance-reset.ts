@@ -218,7 +218,7 @@ export function buildCustomerBalanceResetLedgerDraft(input: {
 /** רצועת קליטת תשלום — חוב וזכות תמיד שני שדות, גם כשאחד מהם $0. */
 export function balanceResetSourceLabelHe(source: string | null | undefined): string {
   if ((source ?? "").trim() === PAYMENT_CAPTURE_RESET_SOURCE) return "קליטת תשלום";
-  return "איפוס ישר";
+  return "איפוס ידני";
 }
 
 export function paymentIntakeDebtCreditStrip(input: {

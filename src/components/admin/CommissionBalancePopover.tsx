@@ -72,22 +72,23 @@ export function CommissionBalancePopover({
       ? previewBalanceUsd
       : savedBalanceUsd;
 
-  const lineageRows = movements.map((row) =>
-    toCommissionLineageRow({
+  const lineageRows = movements.map((row) => ({
+    ...toCommissionLineageRow({
       id: row.id,
       dateYmd: row.dateYmd,
       kind: row.kind ?? (row.type === "ORDER_COMMISSION" ? "ORIGINAL" : row.amountUsd >= 0 ? "ADD" : "REMOVE"),
-      typeLabel: row.actionLabel,
+      typeLabel: row.isCancelled ? `${row.actionLabel} (מבוטל)` : row.actionLabel,
       amountUsd: row.amountUsd,
       sourceDocument: row.sourceDocument,
       orderId: row.orderId,
       orderNumber: row.orderNumber,
       paymentId: row.paymentId,
       paymentCode: row.paymentCode,
-      reason: row.reason,
+      reason: row.isCancelled ? "מבוטל" : row.reason,
       createdByName: row.createdByName,
     }),
-  );
+    isCancelled: row.isCancelled,
+  }));
 
   return (
     <div className="adm-oc-edit-request-backdrop" role="presentation" onClick={onClose}>

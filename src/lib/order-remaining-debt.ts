@@ -113,6 +113,35 @@ export function computeOrderRemainingAfterAllocationUsd(
   return roundOrderMoney2(Math.max(0, open - alloc));
 }
 
+/**
+ * משיכת חוב ברמת לקוח נסגרת FIFO על יתרות הזמנה (הישן קודם).
+ * לא משנה תשלומים שנקלטו — רק כמה נשאר לגבייה.
+ */
+export function applyDebtWithdrawalFifoToRemainders(
+  remaindersUsd: number[],
+  withdrawalUsd: number,
+): number[] {
+  let left = roundOrderMoney2(Math.max(0, Number(withdrawalUsd) || 0));
+  return remaindersUsd.map((raw) => {
+    const remaining = roundOrderMoney2(Math.max(0, Number(raw) || 0));
+    if (left <= ORDER_DEBT_EPS || remaining <= ORDER_DEBT_EPS) return remaining;
+    const take = Math.min(remaining, left);
+    left = roundOrderMoney2(left - take);
+    return roundOrderMoney2(remaining - take);
+  });
+}
+
+/** חוב פתוח לגבייה = Σ יתרות אחרי תשלומים − משיכות מחוב. */
+export function collectibleOpenDebtAfterWithdrawalUsd(
+  remaindersAfterPaymentsUsd: number[],
+  withdrawalUsd: number,
+): number {
+  const sum = roundOrderMoney2(
+    remaindersAfterPaymentsUsd.reduce((s, n) => s + roundOrderMoney2(Math.max(0, Number(n) || 0)), 0),
+  );
+  return roundOrderMoney2(Math.max(0, sum - roundOrderMoney2(Math.max(0, Number(withdrawalUsd) || 0))));
+}
+
 /** «נשאר לתשלום» — סכום עמודת יתרת החוב (matched / orderViews) */
 export function sumRemainingToPayUsd(
   rows: Array<{ remainingAmount?: number; formRemainingUsd?: number }>,

@@ -105,8 +105,10 @@ export function formatCommissionEquation(amounts: number[]): string {
   return `${parts.join(" ")} = ${formatCommissionUsdCompact(total)}`;
 }
 
-export function equationFromLineageRows(rows: Array<{ amountUsd: number }>): string {
-  return formatCommissionEquation(rows.map((r) => r.amountUsd));
+export function equationFromLineageRows(
+  rows: Array<{ amountUsd: number; isCancelled?: boolean }>,
+): string {
+  return formatCommissionEquation(rows.filter((r) => !r.isCancelled).map((r) => r.amountUsd));
 }
 
 export function toCommissionLineageRow(input: {

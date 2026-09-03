@@ -3,6 +3,7 @@ import "server-only";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
+  applyDebtWithdrawalToIntakeOrders,
   debtStatus,
   orderLedgerBalanceUsd,
   type OrderBreakdownMethodRow,
@@ -17,6 +18,8 @@ import { loadPaymentPlanSummariesByOrderId } from "@/lib/payment-plan-service";
 import { DEFAULT_WORK_COUNTRY, normalizeWorkCountryCode, type WorkCountryCode } from "@/lib/work-country";
 import { formatLocalYmd } from "@/lib/work-week";
 import { findActiveCustomerPayments, groupByActivePayments } from "@/lib/payment-record-status";
+import { OS } from "@/lib/order-status-slugs";
+import { orderCustomerCreditUsd } from "@/lib/debt-withdrawal-order";
 import { computeOrderCommissionBreakdown } from "@/lib/order-commission-ssot";
 import { isLegacyCommissionOrderMutationFee } from "@/lib/customer-commission-balance-shared";
 
@@ -418,7 +421,11 @@ export async function loadPaymentIntakeOrdersForCustomer(
     select: INTAKE_ORDER_SELECT,
   });
 
-  const rows = await attachPaymentsAndMapRows(weekOrders);
+  const [rows, withdrawalUsd] = await Promise.all([
+    attachPaymentsAndMapRows(weekOrders),
+    loadCustomerDebtWithdrawalUsd(cid, paymentWorkCountry),
+  ]);
+  const collectibleRows = applyDebtWithdrawalToIntakeOrders(rows, withdrawalUsd);
 
   void (async () => {
     try {
@@ -429,14 +436,36 @@ export async function loadPaymentIntakeOrdersForCustomer(
       const { toLegacyParityOrders } = await import("@/lib/payment-intake-parity-adapter");
       await runPaymentIntakeParity({
         customerId: cid,
-        legacyOrders: toLegacyParityOrders(rows),
+        legacyOrders: toLegacyParityOrders(collectibleRows),
       });
     } catch (err) {
       console.error("[finance-intake-parity] failed", err);
     }
   })();
 
-  return { ok: true, orders: rows };
+  return { ok: true, orders: collectibleRows };
+}
+
+async function loadCustomerDebtWithdrawalUsd(
+  customerId: string,
+  paymentWorkCountry: WorkCountryCode,
+): Promise<number> {
+  const rows = await prisma.order.findMany({
+    where: {
+      customerId,
+      deletedAt: null,
+      status: OS.DEBT_WITHDRAWAL,
+      countryCode: paymentWorkCountry,
+    },
+    select: {
+      status: true,
+      totalUsd: true,
+      amountUsd: true,
+      commissionUsd: true,
+      debtWithdrawalUsd: true,
+    },
+  });
+  return rows.reduce((sum, row) => sum + orderCustomerCreditUsd(row), 0);
 }
 
 /** שורות תשלומי לקוח (למחשבון) — לטעינה ברקע */

@@ -10,6 +10,8 @@ import { activePaidPaymentWhere } from "@/lib/payment-record-status-shared";
 import { computeOrderOpenDebtUsd, roundOrderMoney2 } from "@/lib/order-remaining-debt";
 import { computeCommissionResetPreviewNumbers } from "@/lib/customer-commission-reset-preview";
 import { isLegacyCommissionOrderMutationFee } from "@/lib/customer-commission-balance-shared";
+import { getCustomerCommissionMovements } from "@/lib/customer-commission-ledger";
+import { sumActiveCommissionMovementUsd } from "@/lib/customer-commission-movements";
 import { OrderStatus as OS } from "@prisma/client";
 
 export type CustomerOpenDebtOrderRow = {
@@ -36,8 +38,8 @@ export { computeCommissionResetPreviewNumbers } from "@/lib/customer-commission-
 export async function getCustomerCommissionBalanceUsd(customerId: string): Promise<number> {
   const cid = customerId.trim();
   if (!cid) return 0;
-  const map = await getCustomerCommissionBalancesUsdMany([cid]);
-  return map.get(cid) ?? 0;
+  const movements = await getCustomerCommissionMovements(cid);
+  return sumActiveCommissionMovementUsd(movements);
 }
 
 export async function getCustomerCommissionBalancesUsdMany(

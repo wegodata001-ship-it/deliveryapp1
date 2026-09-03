@@ -13,7 +13,13 @@ import { prisma } from "@/lib/prisma";
 import { recordActivityAudit } from "@/lib/activity-audit";
 import { scheduleRevalidateAfterCustomerCreate } from "@/lib/revalidate-customer-create";
 import { perfEnabled } from "@/lib/perf-log";
-import type { ClientCreateInput, ClientCreateResult, ClientLedgerPayload } from "@/app/admin/customers/ledger-types";
+import {
+  DEFAULT_CLIENT_LEDGER_LIST_SORT,
+  type ClientCreateInput,
+  type ClientCreateResult,
+  type ClientLedgerListSort,
+  type ClientLedgerPayload,
+} from "@/app/admin/customers/ledger-types";
 
 function customerLedgerListWhere(): Prisma.CustomerWhereInput {
   return { deletedAt: null, isActive: true };
@@ -140,19 +146,19 @@ export async function listClientsLedgerAction(params: {
   pageSize?: number;
   fromYmd?: string;
   toYmd?: string;
-  sort?: "new_old" | "old_new" | "name_az";
+  sort?: ClientLedgerListSort;
 }): Promise<ClientLedgerPayload> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["view_customer_card", "view_customers", "create_orders", "edit_orders"])) {
     return { rows: [], total: 0, page: 1, pageSize: 8, totalPages: 1 };
   }
 
-  const pageSize = Math.min(50, Math.max(1, Math.floor(params.pageSize || 8)));
+  const pageSize = Math.min(500, Math.max(1, Math.floor(params.pageSize || 8)));
   const requestedPage = Math.max(1, Math.floor(params.page || 1));
   const q = params.query?.trim() || "";
   const fromYmd = params.fromYmd?.trim() || "";
   const toYmd = params.toYmd?.trim() || "";
-  const sort = params.sort ?? "new_old";
+  const sort = params.sort ?? DEFAULT_CLIENT_LEDGER_LIST_SORT;
 
   const createdAtFilter =
     fromYmd || toYmd

@@ -1,9 +1,11 @@
 /** קליטת תשלום — חישובי תצוגה ומנוע התאמה (ללא Prisma) */
 
 import {
+  applyDebtWithdrawalFifoToRemainders,
   computeOrderOpenDebtSignedUsd,
   computeOrderOpenDebtUsd,
   deriveOrderPaymentDisplayStatus,
+  reconcileOrderBreakdownWithLedger,
 } from "@/lib/order-remaining-debt";
 import type { PaymentPlanIntakeSummary } from "@/lib/payment-plan-types";
 
@@ -329,4 +331,33 @@ export function verifyTotalUsdAgainstInputs(form: {
     }),
   );
   return Math.abs(calc - roundMoney2(form.totalUsdReported)) <= ALLOC_EPS;
+}
+
+/**
+ * משיכת חוב של הלקוח סוגרת יתרות הזמנה FIFO — אותה יתרה לגבייה כמו getCustomerOpenDebt.
+ * dbPaidUsd נשאר סכום התשלומים שנקלטו (לא ממציאים תשלום).
+ */
+export function applyDebtWithdrawalToIntakeOrders(
+  orders: PaymentIntakeOrderRow[],
+  withdrawalUsd: number,
+): PaymentIntakeOrderRow[] {
+  if (!(withdrawalUsd > ALLOC_EPS) || orders.length === 0) return orders;
+  const before = orders.map((o) => Number(o.dbRemainingUsd) || 0);
+  const after = applyDebtWithdrawalFifoToRemainders(before, withdrawalUsd);
+  return orders.map((order, i) => {
+    const nextRemaining = after[i] ?? 0;
+    if (Math.abs(nextRemaining - (before[i] ?? 0)) <= ALLOC_EPS) return order;
+    const total = Number(order.totalAmountUsd) || 0;
+    const paid = Number(order.dbPaidUsd) || 0;
+    const breakdown = reconcileOrderBreakdownWithLedger(order.breakdown, nextRemaining);
+    return {
+      ...order,
+      dbRemainingUsd: nextRemaining.toFixed(2),
+      status: deriveOrderPaymentDisplayStatus({
+        totalUsd: total,
+        paidUsd: Math.max(paid, total - nextRemaining),
+      }),
+      breakdown,
+    };
+  });
 }

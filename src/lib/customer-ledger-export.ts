@@ -8,6 +8,7 @@ import { formatLedgerPaymentTotalUsd } from "@/lib/ledger-payment-display";
 import { openPdfPreview } from "@/lib/pdf-preview";
 import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
 import { formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate } from "@/lib/work-week";
+import { formatLedgerActorDisplay } from "@/lib/ledger-actor-display";
 import { balanceResetSourceLabelHe } from "@/lib/ledger-balance-reset";
 
 export type LedgerPdfMode = "regular" | "detailed";
@@ -59,8 +60,12 @@ export function buildLedgerExportFilename(
   customerCode: string,
   ext: "pdf" | "xlsx",
   pdfMode?: LedgerPdfMode,
+  variant?: "full" | "manual",
 ): string {
   const code = sanitizeFileCode(customerCode);
+  if (ext === "pdf" && variant === "manual") {
+    return `ledger_${code}_manual.pdf`;
+  }
   if (ext === "pdf" && pdfMode === "detailed") {
     return `ledger_${code}_detailed.pdf`;
   }
@@ -173,18 +178,21 @@ function pushBalanceResetDetailExportRows(out: LedgerExportTableRow[], row: Cust
       isPaymentDetailRow: true,
     });
   };
-  if (detail.openDebtBeforeUsd) push("חוב לפני", fmtUsd(detail.openDebtBeforeUsd));
-  if (detail.openDebtAfterUsd) push("חוב אחרי", fmtUsd(detail.openDebtAfterUsd));
-  if (detail.creditBeforeUsd) push("יתרת זכות לפני", fmtUsd(detail.creditBeforeUsd));
-  if (detail.creditAfterUsd) push("יתרת זכות אחרי", fmtUsd(detail.creditAfterUsd));
   push("סכום שאופס", fmtUsd(detail.amountResetUsd));
-  if (detail.commissionBeforeUsd) push("עמלות לפני", fmtUsd(detail.commissionBeforeUsd));
-  if (detail.commissionAfterUsd) push("עמלות אחרי", fmtUsd(detail.commissionAfterUsd));
-  if (!detail.commissionBeforeUsd) push("לפני איפוס", fmtUsd(detail.amountBeforeUsd));
-  if (!detail.commissionAfterUsd) push("אחרי איפוס", fmtUsd(detail.amountAfterUsd));
-  push("מי ביצע", detail.performedBy ?? "—");
-  push("מתי", row.dateYmd);
-  push("מקור", balanceResetSourceLabelHe(detail.source));
+  if (detail.creditBeforeUsd != null || detail.creditAfterUsd != null) {
+    push("יתרת זכות", `${fmtUsd(detail.creditBeforeUsd ?? "0")} → ${fmtUsd(detail.creditAfterUsd ?? "0")}`);
+  }
+  const debtBefore = parseMoneyStringOrZero(detail.openDebtBeforeUsd ?? "0");
+  const debtAfter = parseMoneyStringOrZero(detail.openDebtAfterUsd ?? "0");
+  if (debtBefore > 0.005 || debtAfter > 0.005) {
+    push("חוב פתוח", `${fmtUsd(detail.openDebtBeforeUsd ?? "0")} → ${fmtUsd(detail.openDebtAfterUsd ?? "0")}`);
+  }
+  if (detail.commissionBeforeUsd != null || detail.commissionAfterUsd != null) {
+    push("יתרת עמלות", `${fmtUsd(detail.commissionBeforeUsd ?? "0")} → ${fmtUsd(detail.commissionAfterUsd ?? "0")}`);
+  }
+  push("בוצע על ידי", formatLedgerActorDisplay(detail.performedBy));
+  push("תאריך", row.dateYmd);
+  push("סוג פעולה", balanceResetSourceLabelHe(detail.source));
 }
 
 function pushOrderUpdateDetailExportRows(out: LedgerExportTableRow[], row: CustomerLedgerRow): void {
@@ -288,6 +296,37 @@ function triggerBlobDownload(blob: Blob, filename: string) {
   a.click();
   a.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+export async function exportCustomerLedgerManualPdf(params: {
+  customerId: string;
+  selectedRowIds: string[];
+  fromYmd?: string | null;
+  toYmd?: string | null;
+  sourceCountry?: string | null;
+  meta: CustomerLedgerExportMeta;
+}): Promise<void> {
+  const res = await fetch("/api/customer-ledger/manual-pdf", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) {
+    const msg = await res
+      .json()
+      .then((body) => (typeof body?.error === "string" ? body.error : null))
+      .catch(() => null);
+    throw new Error(msg ?? "ייצוא PDF ידני נכשל");
+  }
+  const blob = await res.blob();
+  const contentType = (res.headers.get("content-type") ?? "application/pdf").split(";")[0]?.trim() ?? "application/pdf";
+  const isHtml = contentType.includes("text/html");
+  const pdfFilename = buildLedgerExportFilename(params.meta.customerCode, "pdf", "regular", "manual");
+  openPdfPreview({
+    blob,
+    filename: isHtml ? pdfFilename.replace(/\.pdf$/i, ".html") : pdfFilename,
+    mime: contentType,
+  });
 }
 
 export async function exportCustomerLedgerPdf(

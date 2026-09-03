@@ -406,6 +406,7 @@ export function PaymentMethodAutoAdjustModal({
         <div className="payment-method-adjust-modal__head">
           <div>
             <h3 id="payment-method-adjust-title">התאמה אוטומטית של אמצעי תשלום</h3>
+            <p>בדיקת התשלום, סגירת החוב וחישוב יתרת הזכות</p>
           </div>
           <button type="button" className="payment-method-adjust-modal__close" aria-label="סגור" onClick={onClose}>
             <X size={18} />
@@ -414,9 +415,20 @@ export function PaymentMethodAutoAdjustModal({
 
         <div className="payment-method-adjust-modal__body">
           <div className="pm-paynow-topbar">
-            <span className="pm-paynow-topbar__customer">{customerLabel}</span>
-            <span dir="ltr">חוב פתוח: {fmtUsd(debt)}</span>
-            {rateN ? <span dir="ltr">שער דולר: {rateN.toFixed(4)}</span> : null}
+            <div className="pm-paynow-stat">
+              <span>לקוח</span>
+              <strong>{customerLabel}</strong>
+            </div>
+            <div className={debt <= 0.01 ? "pm-paynow-stat pm-paynow-stat--ok" : "pm-paynow-stat"}>
+              <span>חוב פתוח</span>
+              <strong dir="ltr">{fmtUsd(debt)}</strong>
+            </div>
+            {rateN ? (
+              <div className="pm-paynow-stat">
+                <span>שער דולר</span>
+                <strong dir="ltr">{rateN.toFixed(4)}</strong>
+              </div>
+            ) : null}
           </div>
 
           {!preview ? (
@@ -523,12 +535,20 @@ export function PaymentMethodAutoAdjustModal({
             </section>
           ) : (
             <section className="pm-paynow-panel pm-paynow-panel--preview">
-              <h4>{preview.hasOverpayment ? "תשלום גבוה מהחוב" : "התאמה מוצעת"}</h4>
-              <p className="pm-paynow-panel__hint">
-                {preview.hasOverpayment
-                  ? "התשלום גבוה מהחוב הפתוח. החוב ייסגר במלואו והעודף יישמר ללקוח כיתרת זכות."
-                  : "המערכת חישבה לפי FIFO אילו הזמנות לעדכן. עדיין לא נשמר שינוי — רק לאחר אישור."}
-              </p>
+              {preview.hasOverpayment ? (
+                <div className="pm-adjust-status pm-adjust-status--overpay">
+                  <strong>תשלום גבוה מהחוב</strong>
+                  <p>
+                    החוב ייסגר במלואו והעודף יישמר ללקוח כ
+                    <span className="pm-adjust-credit-em">יתרת זכות</span>.
+                  </p>
+                </div>
+              ) : (
+                <div className="pm-adjust-status pm-adjust-status--info">
+                  <strong>התאמה מוצעת</strong>
+                  <p>המערכת חישבה לפי FIFO אילו הזמנות לעדכן. עדיין לא נשמר שינוי — רק לאחר אישור.</p>
+                </div>
+              )}
 
               {preview.orderChanges.length > 0 ? (
               <div className="pm-paynow-table-wrap">
@@ -566,141 +586,111 @@ export function PaymentMethodAutoAdjustModal({
               </div>
               ) : null}
 
-              <div className="pm-paynow-result-summary">
-                <div className="pm-paynow-result-summary__block">
-                  <strong>התשלום שהוזן</strong>
-                  {preview.intents.map((intent) => (
-                    <div key={`${intent.method}-${intent.currency}`}>
-                      <strong>{PAYMENT_METHOD_LABELS[intent.method] ?? intent.method}</strong>
+              <div className="pm-adjust-intake">
+                <div className="pm-adjust-intake__head">
+                  <h4>התשלום שהוזן</h4>
+                </div>
+                {preview.intents.map((intent) => (
+                  <div key={`${intent.method}-${intent.currency}`} className="pm-adjust-intake__method">
+                    <span className="pm-adjust-badge">
+                      {PAYMENT_METHOD_LABELS[intent.method] ?? intent.method}
+                    </span>
+                    <div className="pm-adjust-intake__rows">
                       <div>
-                        הוזן:{" "}
-                        <span dir="ltr">{fmtMoney(intent.currency, intent.amountNative)}</span>
+                        <span>סכום שהוזן</span>
+                        <strong dir="ltr">{fmtMoney(intent.currency, intent.amountNative)}</strong>
                       </div>
                       {intent.currency === "ILS" ? (
                         <>
                           <div>
-                            מע״מ 18%:{" "}
-                            <span dir="ltr">-{fmtMoney("ILS", intent.vatIls)}</span>
+                            <span>מע״מ 18%</span>
+                            <strong dir="ltr">-{fmtMoney("ILS", intent.vatIls)}</strong>
                           </div>
                           <div>
-                            לפני מע״מ:{" "}
-                            <span dir="ltr">{fmtMoney("ILS", intent.netIls ?? 0)}</span>
+                            <span>סכום נטו</span>
+                            <strong dir="ltr">{fmtMoney("ILS", intent.netIls ?? 0)}</strong>
                           </div>
                           <div>
-                            שווי לפי שער <span dir="ltr">{rateN?.toFixed(4) ?? "—"}</span>:{" "}
-                            <span dir="ltr">{fmtUsd(intent.amountUsd)}</span>
+                            <span>שער דולר</span>
+                            <strong dir="ltr">{rateN?.toFixed(4) ?? "—"}</strong>
+                          </div>
+                          <div>
+                            <span>שווי בדולר</span>
+                            <strong dir="ltr">{fmtUsd(intent.amountUsd)}</strong>
                           </div>
                         </>
                       ) : null}
-                      <div>
-                        לקיזוז מהחוב: <strong dir="ltr">{fmtUsd(intent.amountUsd)}</strong>
+                      <div className="pm-adjust-intake__rows--total">
+                        <span>לקיזוז מהחוב</span>
+                        <strong dir="ltr">{fmtUsd(intent.amountUsd)}</strong>
                       </div>
                     </div>
-                  ))}
+                  </div>
+                ))}
+              </div>
+
+              <div className="pm-adjust-kpis">
+                <div className="pm-adjust-kpi pm-adjust-kpi--vat">
+                  <span>מע״מ שנוטרל</span>
+                  <strong dir="ltr">
+                    -{fmtMoney(
+                      "ILS",
+                      preview.intents.reduce((sum, row) => sum + row.vatIls, 0),
+                    )}
+                  </strong>
                 </div>
-                <div className="pm-paynow-result-summary__kpis">
-                  <div>
-                    <span>סה״כ הלקוח מוסר</span>
-                    <strong dir="ltr">
-                      {[
-                        preview.intents.some((row) => row.currency === "ILS")
-                          ? fmtMoney(
-                              "ILS",
-                              preview.intents.reduce((sum, row) => sum + (row.grossIls ?? 0), 0),
-                            )
-                          : null,
-                        preview.intents.some((row) => row.currency === "USD")
-                          ? fmtMoney(
-                              "USD",
-                              preview.intents
-                                .filter((row) => row.currency === "USD")
-                                .reduce((sum, row) => sum + row.amountNative, 0),
-                            )
-                          : null,
-                      ]
-                        .filter(Boolean)
-                        .join(" + ")}
-                    </strong>
-                  </div>
-                  <div>
-                    <span>סה״כ מע״מ שנוטרל</span>
-                    <strong dir="ltr">
-                      -{fmtMoney(
-                        "ILS",
-                        preview.intents.reduce((sum, row) => sum + row.vatIls, 0),
-                      )}
-                    </strong>
-                  </div>
-                  <div>
-                    <span>סה״כ נטו בשקלים</span>
-                    <strong dir="ltr">
-                      {fmtMoney(
-                        "ILS",
-                        preview.intents.reduce((sum, row) => sum + (row.netIls ?? 0), 0),
-                      )}
-                    </strong>
-                  </div>
-                  <div>
-                    <span>סה״כ בדולר לקיזוז מהחוב</span>
-                    <strong dir="ltr">{fmtUsd(preview.totalPayUsd)}</strong>
-                  </div>
-                  {preview.hasOverpayment ? (
-                    <>
-                      <div>
-                        <span>חוב פתוח</span>
-                        <strong dir="ltr">{fmtUsd(preview.openDebtUsd)}</strong>
-                      </div>
-                      <div>
-                        <span>סה״כ לקיזוז</span>
-                        <strong dir="ltr">{fmtUsd(preview.totalPayUsd)}</strong>
-                      </div>
-                      <div>
-                        <span>סגירת חוב</span>
-                        <strong dir="ltr">{fmtUsd(preview.closesDebtUsd)}</strong>
-                      </div>
-                      <div>
-                        <span>יתרת זכות חדשה</span>
-                        <strong dir="ltr">{fmtUsd(preview.overpaymentUsd)}</strong>
-                      </div>
-                      {preview.existingCreditUsd > 0.01 ? (
-                        <>
-                          <div>
-                            <span>יתרת זכות קיימת</span>
-                            <strong dir="ltr">{fmtUsd(preview.existingCreditUsd)}</strong>
-                          </div>
-                          <div>
-                            <span>יתרת זכות אחרי</span>
-                            <strong dir="ltr">{fmtUsd(preview.resultingCreditUsd)}</strong>
-                          </div>
-                        </>
-                      ) : null}
-                    </>
-                  ) : (
-                    <>
-                      <div>
-                        <span>חוב לפני</span>
-                        <strong dir="ltr">{fmtUsd(preview.openDebtUsd)}</strong>
-                      </div>
-                      <div>
-                        <span>חוב אחרי</span>
-                        <strong dir="ltr">
-                          {fmtUsd(Math.max(0, preview.openDebtUsd - preview.totalPayUsd))}
-                        </strong>
-                      </div>
-                    </>
-                  )}
+                <div className="pm-adjust-kpi pm-adjust-kpi--net">
+                  <span>סכום נטו בשקלים</span>
+                  <strong dir="ltr">
+                    {fmtMoney(
+                      "ILS",
+                      preview.intents.reduce((sum, row) => sum + (row.netIls ?? 0), 0),
+                    )}
+                  </strong>
+                </div>
+                <div className={preview.openDebtUsd <= 0.01 ? "pm-adjust-kpi pm-adjust-kpi--debt is-zero" : "pm-adjust-kpi pm-adjust-kpi--debt"}>
+                  <span>חוב פתוח</span>
+                  <strong dir="ltr">{fmtUsd(preview.openDebtUsd)}</strong>
+                </div>
+                <div className="pm-adjust-kpi pm-adjust-kpi--offset">
+                  <span>סכום לקיזוז</span>
+                  <strong dir="ltr">{fmtUsd(preview.totalPayUsd)}</strong>
                 </div>
                 {preview.hasOverpayment ? (
-                  <p className="pm-adjust-overpay">
-                    התשלום גבוה מהחוב הפתוח.
-                    החוב ייסגר במלואו והעודף יישמר ללקוח כיתרת זכות.
-                  </p>
+                  <div className="pm-adjust-kpi pm-adjust-kpi--close">
+                    <span>סגירת חוב</span>
+                    <strong dir="ltr">{fmtUsd(preview.closesDebtUsd)}</strong>
+                  </div>
                 ) : (
-                  <p className="pm-adjust-not-payment">
-                    ההתאמה משנה רק אמצעי תשלום מתוכנן בהזמנות. היא אינה תשלום ואינה סוגרת חוב.
-                  </p>
+                  <div className="pm-adjust-kpi pm-adjust-kpi--debt">
+                    <span>חוב אחרי</span>
+                    <strong dir="ltr">
+                      {fmtUsd(Math.max(0, preview.openDebtUsd - preview.totalPayUsd))}
+                    </strong>
+                  </div>
                 )}
+                {preview.existingCreditUsd > 0.01 ? (
+                  <div className="pm-adjust-kpi pm-adjust-kpi--credit">
+                    <span>יתרת זכות קיימת</span>
+                    <strong dir="ltr">{fmtUsd(preview.existingCreditUsd)}</strong>
+                  </div>
+                ) : null}
               </div>
+
+              {preview.hasOverpayment ? (
+                <div className="pm-adjust-hero">
+                  <span>יתרת זכות חדשה</span>
+                  <strong dir="ltr">{fmtUsd(preview.overpaymentUsd)}</strong>
+                  <em>תישמר לזכות הלקוח</em>
+                  {preview.existingCreditUsd > 0.01 ? (
+                    <small dir="ltr">אחרי: {fmtUsd(preview.resultingCreditUsd)}</small>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="pm-adjust-not-payment">
+                  ההתאמה משנה רק אמצעי תשלום מתוכנן בהזמנות. היא אינה תשלום ואינה סוגרת חוב.
+                </p>
+              )}
 
               {err ? <p className="payment-method-adjust-modal__err">{err}</p> : null}
             </section>

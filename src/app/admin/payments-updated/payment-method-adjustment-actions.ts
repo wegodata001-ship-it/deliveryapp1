@@ -191,10 +191,18 @@ export async function previewPaymentIntentAutoAdjustmentAction(params: {
   const { planPaymentIntentAdjustments, resultingCustomerCreditUsd } = await import(
     "@/lib/payment-method-payment-intent"
   );
+  const { getCustomerOpenDebtUsdNumber, openDebtScopeForWorkCountry } = await import(
+    "@/lib/customer-open-debt"
+  );
+  const customerOpenDebtUsd = await getCustomerOpenDebtUsdNumber(
+    workspace.customer.id,
+    openDebtScopeForWorkCountry(normalizeWorkCountryCode(params.workCountry ?? null)),
+  );
   const plan = planPaymentIntentAdjustments({
     orders: workspace.orders,
     intents: params.intents,
     exchangeRate: params.exchangeRate,
+    customerOpenDebtUsd,
   });
   if (!plan.ok) return plan;
 

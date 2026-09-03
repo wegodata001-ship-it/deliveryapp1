@@ -4,6 +4,8 @@ import {
   buildLedgerExportTableRows,
   formatLedgerRunningBalance,
 } from "@/lib/customer-ledger-export";
+import type { ManualLedgerSelectionSummary } from "@/lib/customer-ledger-manual-pdf";
+import { formatUsdDisplay } from "@/lib/money-format";
 import { formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate } from "@/lib/work-week";
 
 type HtmlFont = {
@@ -87,15 +89,20 @@ export function buildCustomerLedgerPdfHtml(params: {
   ledger: CustomerLedgerPayload;
   font: HtmlFont;
   mode?: LedgerPdfMode;
+  selection?: ManualLedgerSelectionSummary | null;
 }): string {
-  const { meta, ledger, font, mode = "regular" } = params;
+  const { meta, ledger, font, mode = "regular", selection = null } = params;
   const rows = buildLedgerExportTableRows(ledger, {
     includePaymentDetails: mode === "detailed",
   });
   const currentBalance = formatLedgerRunningBalance(ledger.balanceUsd);
-  const periodLabel = formatDateRangeLabel(meta.fromYmd, meta.toYmd);
+  const periodLabel = formatDateRangeLabel(
+    selection?.fromYmd || meta.fromYmd,
+    selection?.toYmd || meta.toYmd,
+  );
   const weekLabel = resolveAhWeekLabel(meta.fromYmd, meta.toYmd);
   const generatedAtLabel = formatDisplayDate(todayYmd());
+  const isManual = !!selection;
 
   const tableRows = rows
     .map((r, idx) => {
@@ -383,9 +390,9 @@ export function buildCustomerLedgerPdfHtml(params: {
         <div class="doc-meta">
           ${chip("שבוע עבודה", weekLabel, true)}
           ${chip("תאריך הפקה", generatedAtLabel, true)}
-          ${periodLabel ? chip("תקופה", periodLabel, true) : ""}
-          ${chip("תצוגה", meta.quickFilterLabel)}
-          ${chip("מיון", meta.sortLabel)}
+          ${periodLabel ? chip(isManual ? "טווח שורות שנבחרו" : "תקופה", periodLabel, true) : ""}
+          ${isManual ? chip("שורות שנבחרו", String(selection.selectedCount), true) : chip("תצוגה", meta.quickFilterLabel)}
+          ${chip("מיון", isManual ? "ישן → חדש" : meta.sortLabel)}
         </div>
       </section>
       <aside class="customer-panel">
@@ -401,16 +408,16 @@ export function buildCustomerLedgerPdfHtml(params: {
 
     <section class="summary-row">
       <div class="summary-card">
-        <span class="summary-card__label">סה״כ הזמנות</span>
-        <strong class="summary-card__value">${escapeHtml(ledger.totalChargesUsd)}</strong>
+        <span class="summary-card__label">${isManual ? "סה״כ חיובים שנבחרו" : "סה״כ הזמנות"}</span>
+        <strong class="summary-card__value">${escapeHtml(isManual ? formatUsdDisplay(selection.selectedChargesUsd) : ledger.totalChargesUsd)}</strong>
       </div>
       <div class="summary-card">
-        <span class="summary-card__label">סה״כ תשלומים</span>
-        <strong class="summary-card__value">${escapeHtml(ledger.totalPaymentsUsd)}</strong>
+        <span class="summary-card__label">${isManual ? "סה״כ תשלומים/זיכויים שנבחרו" : "סה״כ תשלומים"}</span>
+        <strong class="summary-card__value">${escapeHtml(isManual ? formatUsdDisplay(selection.selectedPaymentsUsd) : ledger.totalPaymentsUsd)}</strong>
       </div>
       <div class="summary-card">
-        <span class="summary-card__label">יתרה נוכחית</span>
-        <strong class="summary-card__value">${escapeHtml(currentBalance)}</strong>
+        <span class="summary-card__label">${isManual ? "יתרה לאחר התנועה האחרונה שנבחרה" : "יתרה נוכחית"}</span>
+        <strong class="summary-card__value">${escapeHtml(isManual ? formatLedgerRunningBalance(selection.lastSelectedBalanceUsd) : currentBalance)}</strong>
       </div>
     </section>
 
@@ -429,7 +436,7 @@ export function buildCustomerLedgerPdfHtml(params: {
     </table>
 
     <p class="legend">
-      ${mode === "detailed" ? "PDF מפורט — כולל פירוט אמצעי תשלום" : "PDF רגיל — ללא פירוט אמצעי תשלום"}
+      ${isManual ? "PDF ידני — רק השורות שנבחרו · הייתרה היא ההיסטורית מהכרטסת, לא חישוב מחדש" : mode === "detailed" ? "PDF מפורט — כולל פירוט אמצעי תשלום" : "PDF רגיל — ללא פירוט אמצעי תשלום"}
       · יתרה רצה נשמרת לפי הלוגיקה הקיימת של הכרטסת
     </p>
   </main>

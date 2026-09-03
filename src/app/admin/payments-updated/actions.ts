@@ -3177,7 +3177,7 @@ export async function resetCustomerOutstandingBalancesAction(input: {
   } | null;
   ledgerLabel?: string | null;
   commissionBalanceBeforeUsd?: number | null;
-}): Promise<{
+}): Promise<
   | {
       ok: true;
       totalResetUsd: string;

@@ -49,6 +49,12 @@ import {
   sumDeltasOnOrAfter,
 } from "@/lib/ledger-order-version-charge";
 import { formatLocalYmd, parseLocalDate } from "@/lib/work-week";
+import { collectLedgerActorIds, formatLedgerActorDisplay } from "@/lib/ledger-actor-display";
+import { replayCustomerLedgerRunning, type LedgerRunningKind } from "@/lib/ledger-running-replay";
+import {
+  resetOperationId,
+  resetOperationAffectsRunningDebt,
+} from "@/lib/ledger-reset-grouping";
 
 export type CustomerLedgerRowKind =
   | "OPENING_BALANCE"
@@ -177,6 +183,9 @@ type LedgerEvent = {
   isBalanceReset?: boolean;
   balanceResetDetail?: BalanceResetLedgerDetail;
   affectsRunningBalance?: boolean;
+  /** פעולת איפוס עסקית — כמה audit records באותה טרנזקציה */
+  operationId?: string;
+  orderAmountUnchanged?: boolean;
 };
 
 const COMMISSION_CLOSURE_AUDIT_TYPES = [
@@ -213,6 +222,66 @@ function decStr(v: unknown): string | null {
   if (v == null) return null;
   const s = String(v).trim();
   return s || null;
+}
+
+function skipLedgerRunning(ev: LedgerEvent): boolean {
+  return (
+    !!ev.isCommissionDebtClosure ||
+    !!ev.isAdjustmentFeeCapture ||
+    !!ev.isPaymentCancelled ||
+    ev.affectsRunningBalance === false ||
+    (!!ev.isBalanceReset && !ev.affectsRunningBalance)
+  );
+}
+
+function ledgerRunningKind(ev: LedgerEvent): LedgerRunningKind {
+  if (skipLedgerRunning(ev)) return "SKIP";
+  if (ev.isDebtWithdrawal) return "WITHDRAWAL";
+  if (ev.charge.abs().gt(0)) return "CHARGE";
+  if (ev.payment.abs().gt(0)) return "PAYMENT";
+  return "SKIP";
+}
+
+function ledgerRunningAmount(ev: LedgerEvent): number {
+  if (ev.isDebtWithdrawal) return Math.abs(Number(ev.charge.toFixed(4)));
+  if (ev.charge.abs().gt(0)) return Number(ev.charge.toFixed(4));
+  return Number(ev.payment.toFixed(4));
+}
+
+function compareLedgerEvents(a: LedgerEvent, b: LedgerEvent): number {
+  const dt = a.date.getTime() - b.date.getTime();
+  if (dt !== 0) return dt;
+  const sa = (a.sortAt ?? a.date).getTime();
+  const sb = (b.sortAt ?? b.date).getTime();
+  if (sa !== sb) return sa - sb;
+  return a.id.localeCompare(b.id);
+}
+
+/** כמה audit records מאותה פעולת איפוס → שורה אחת בכרטסת. */
+function collapseResetOperationEvents(events: LedgerEvent[]): LedgerEvent[] {
+  const byOp = new Map<string, LedgerEvent[]>();
+  const passthrough: LedgerEvent[] = [];
+  for (const ev of events) {
+    if (ev.operationId && (ev.isCommissionDebtClosure || ev.isBalanceReset)) {
+      const list = byOp.get(ev.operationId) ?? [];
+      list.push(ev);
+      byOp.set(ev.operationId, list);
+    } else {
+      passthrough.push(ev);
+    }
+  }
+  const collapsed: LedgerEvent[] = [];
+  for (const group of byOp.values()) {
+    const primary = group.find((e) => e.isBalanceReset) ?? group[0]!;
+    const unchanged = group.some((e) => e.orderAmountUnchanged);
+    collapsed.push({
+      ...primary,
+      affectsRunningBalance: unchanged ? false : primary.affectsRunningBalance,
+      payment:
+        unchanged && primary.isBalanceReset ? new Prisma.Decimal(0) : primary.payment,
+    });
+  }
+  return [...passthrough, ...collapsed];
 }
 
 
@@ -478,6 +547,29 @@ export async function buildCustomerAccountLedger(params: {
     }
   }
 
+  const actorIds = collectLedgerActorIds([
+    ...customerBulkResets.map((log) => log.userId),
+    ...customerCreditResets.map((log) => log.userId),
+    ...customerBulkResets.map((log) => decStr(parseJsonRecord(log.metadata)?.performedBy)),
+    ...customerCreditResets.map((log) => decStr(parseJsonRecord(log.metadata)?.performedBy)),
+    ...orderCancelAuditLogs.map((log) => decStr(parseJsonRecord(log.metadata)?.approvedBy)),
+    ...orderUpdateAuditLogs.flatMap((log) => {
+      const meta = parseJsonRecord(log.metadata);
+      return [decStr(meta?.approvedBy), decStr(meta?.requestedBy)];
+    }),
+  ]);
+  const actorNameById = new Map<string, string>();
+  if (actorIds.length > 0) {
+    const actors = await prisma.user.findMany({
+      where: { id: { in: actorIds } },
+      select: { id: true, fullName: true, username: true },
+    });
+    for (const actor of actors) {
+      const name = actor.fullName.trim() || actor.username?.trim() || "";
+      if (name) actorNameById.set(actor.id, name);
+    }
+  }
+
   const orderCancelByOrderId = new Map<
     string,
     {
@@ -510,7 +602,7 @@ export async function buildCustomerAccountLedger(params: {
       amountUsd: amount,
       balanceBeforeUsd: balanceBefore,
       balanceAfterUsd: balanceBefore ? balanceBefore.add(amount) : null,
-      approvedBy: decStr(meta?.approvedBy),
+      approvedBy: formatLedgerActorDisplay(decStr(meta?.approvedBy), actorNameById),
       reason: decStr(meta?.cancelReason),
       logId: log.id,
     });
@@ -555,7 +647,11 @@ export async function buildCustomerAccountLedger(params: {
       orderId: oid,
       paymentId: null,
       isOrderUpdated: true,
-      orderUpdateDetail: detail,
+      orderUpdateDetail: {
+        ...detail,
+        approvedBy: formatLedgerActorDisplay(detail.approvedBy, actorNameById),
+        requestedBy: formatLedgerActorDisplay(detail.requestedBy, actorNameById),
+      },
     });
   }
   const latestUpdateEventIdByOrderId = new Map<string, string>();
@@ -711,6 +807,8 @@ export async function buildCustomerAccountLedger(params: {
       commissionAfterUsd: afterCom,
       orderBalanceBeforeUsd: remaining.toFixed(2),
       orderBalanceAfterUsd: afterRemaining,
+      operationId: resetOperationId(log),
+      orderAmountUnchanged: meta?.orderAmountUnchanged === true,
     });
   }
 
@@ -764,6 +862,8 @@ export async function buildCustomerAccountLedger(params: {
         commissionAfterUsd: afterCom,
         orderBalanceBeforeUsd: remaining.toFixed(2),
         orderBalanceAfterUsd: afterRemaining,
+        operationId: resetOperationId(log),
+        orderAmountUnchanged: co.orderAmountUnchanged === true || meta?.orderAmountUnchanged === true,
       });
     }
   }
@@ -825,8 +925,16 @@ export async function buildCustomerAccountLedger(params: {
       orderId: null,
       paymentId: null,
       isBalanceReset: true,
-      balanceResetDetail: draft.detail,
-      affectsRunningBalance: draft.affectsRunningBalance,
+      balanceResetDetail: {
+        ...draft.detail,
+        performedBy: formatLedgerActorDisplay(draft.detail.performedBy, actorNameById),
+      },
+      operationId: resetOperationId(log),
+      orderAmountUnchanged: parseJsonRecord(log.metadata)?.orderAmountUnchanged === true,
+      affectsRunningBalance: resetOperationAffectsRunningDebt({
+        audits: [{ metadata: log.metadata }],
+        draftAffectsRunningBalance: draft.affectsRunningBalance,
+      }),
     });
   }
   for (const log of customerCreditResets) {
@@ -852,7 +960,11 @@ export async function buildCustomerAccountLedger(params: {
       orderId: null,
       paymentId: null,
       isBalanceReset: true,
-      balanceResetDetail: { ...draft.detail, resetKind: "CREDIT" },
+      balanceResetDetail: {
+        ...draft.detail,
+        resetKind: "CREDIT",
+        performedBy: formatLedgerActorDisplay(draft.detail.performedBy, actorNameById),
+      },
       affectsRunningBalance: false,
     });
   }
@@ -885,7 +997,7 @@ export async function buildCustomerAccountLedger(params: {
     openingBalance = preCharges.sub(prePaid);
   }
 
-  const events: LedgerEvent[] = [
+  const rawEvents: LedgerEvent[] = [
     ...orders.map((o) => {
       if (isDebtWithdrawalOrderStatus(o.status)) {
         const credit = orderCustomerCreditUsd(o);
@@ -1020,10 +1132,17 @@ export async function buildCustomerAccountLedger(params: {
     ...closureEvents,
     ...balanceResetEvents,
     ...orderUpdateEvents,
-  ].sort((a, b) => a.date.getTime() - b.date.getTime() || a.id.localeCompare(b.id));
+  ];
+  const events = collapseResetOperationEvents(rawEvents).sort(compareLedgerEvents);
+  const replay = replayCustomerLedgerRunning(
+    events.map((ev) => ({
+      kind: ledgerRunningKind(ev),
+      amountUsd: ledgerRunningAmount(ev),
+    })),
+    Number(openingBalance.toFixed(4)),
+  );
 
   const rows: CustomerLedgerRow[] = [];
-  let balance = openingBalance;
   let totalCharges = new Prisma.Decimal(0);
   let totalPayments = new Prisma.Decimal(0);
   let totalWithdrawals = new Prisma.Decimal(0);
@@ -1037,22 +1156,15 @@ export async function buildCustomerAccountLedger(params: {
       typeLabel: "יתרת פתיחה",
       chargeUsd: "0.00",
       paymentUsd: "0.00",
-      balanceUsd: balance.toFixed(2),
+      balanceUsd: openingBalance.toFixed(2),
       document: "יתרת פתיחה",
       orderId: null,
       paymentId: null,
     });
   }
 
-  for (const ev of events) {
-    const skipRunningBalance =
-      !!ev.isCommissionDebtClosure ||
-      !!ev.isAdjustmentFeeCapture ||
-      ev.affectsRunningBalance === false ||
-      (!!ev.isBalanceReset && !ev.affectsRunningBalance);
-    if (!skipRunningBalance) {
-      balance = balance.add(ev.charge).sub(ev.payment);
-    }
+  for (const [index, ev] of events.entries()) {
+    const balance = new Prisma.Decimal((replay.balances[index] ?? 0).toFixed(2));
     if (ev.isDebtWithdrawal) {
       // charge is negative here: sum as absolute withdrawal amount
       totalWithdrawals = totalWithdrawals.add(new Prisma.Decimal(Math.abs(Number(ev.charge.toFixed(4))).toFixed(4)));

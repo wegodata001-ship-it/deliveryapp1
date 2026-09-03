@@ -145,6 +145,31 @@ describe("sortLedgerRowsForDisplay", () => {
     assert.deepEqual(sorted, ["earlier-doc", "later-doc"]);
   });
 
+  it("same day + same timestamp — stable id tie-breaker", () => {
+    const rows: CustomerLedgerRow[] = [
+      row({ id: "z-later", dateYmd: "2026-06-14", document: "TR-P-00010", occurredAtMs: 1_000 }),
+      row({ id: "a-earlier", dateYmd: "2026-06-14", document: "TR-P-00010", occurredAtMs: 1_000 }),
+    ];
+    const sorted = sortLedgerRowsForDisplay(rows).map((r) => r.id);
+    assert.deepEqual(sorted, ["a-earlier", "z-later"]);
+  });
+
+  it("opening balance stays first in default old → new", () => {
+    const rows: CustomerLedgerRow[] = [
+      row({ id: "o1", dateYmd: "2026-06-01", document: "TR-120-0001" }),
+      row({
+        id: "opening",
+        dateYmd: "2026-06-01",
+        kind: "OPENING_BALANCE",
+        typeLabel: "יתרת פתיחה",
+        document: "יתרת פתיחה",
+        occurredAtMs: 0,
+      }),
+    ];
+    const sorted = sortLedgerRowsForDisplay(rows).map((r) => r.id);
+    assert.deepEqual(sorted, ["opening", "o1"]);
+  });
+
   it("same day new_old — later timestamp first", () => {
     const rows: CustomerLedgerRow[] = [
       row({

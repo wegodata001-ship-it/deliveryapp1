@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { OrderCreatePanel } from "@/components/admin/OrderCreatePanel";
 import { PaymentModalUpdated } from "@/components/admin/PaymentModalUpdated";
@@ -52,6 +52,10 @@ type Props = {
   viewerIsAdmin: boolean;
 };
 
+function isCustomerListWindow(w: AdminWindowEntry): boolean {
+  return w.type === "customerCard" && !w.props.customerId?.trim();
+}
+
 export function AdminWindowStack({
   financial,
   onToast,
@@ -63,6 +67,32 @@ export function AdminWindowStack({
   viewerIsAdmin,
 }: Props) {
   const { stack, closeWindow, closeTop } = useAdminWindows();
+  const topBodyRef = useRef<HTMLDivElement | null>(null);
+  const topId = stack[stack.length - 1]?.id ?? null;
+
+  useEffect(() => {
+    if (stack.length === 0) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [stack.length]);
+
+  useEffect(() => {
+    if (!topId) return;
+    const node = topBodyRef.current;
+    if (!node) return;
+    const active = document.activeElement;
+    if (
+      !active ||
+      active === document.body ||
+      active === document.documentElement ||
+      active.classList.contains("adm-win-layer-backdrop")
+    ) {
+      node.focus({ preventScroll: true });
+    }
+  }, [topId]);
 
   useEffect(() => {
     if (stack.length === 0) return;
@@ -103,6 +133,7 @@ export function AdminWindowStack({
                 w.type === "payments" ? "adm-win-panel--payment-capture" : "",
                 w.type === "paymentsUpdated" ? "adm-win-panel--payment-capture-updated" : "",
                 w.type === "customerCard" ? "adm-win-panel--customer-card" : "",
+                isCustomerListWindow(w) ? "adm-win-panel--customer-list" : "",
                 w.type === "createCustomer" ? "adm-win-panel--create-customer" : "",
               ]
                 .filter(Boolean)
@@ -134,9 +165,13 @@ export function AdminWindowStack({
                   w.type === "payments" ? "adm-win-body--payment-capture" : "",
                   w.type === "paymentsUpdated" ? "adm-win-body--payment-capture" : "",
                   w.type === "createCustomer" ? "adm-win-body--create-customer" : "",
+                  isCustomerListWindow(w) ? "adm-win-body--customer-list" : "",
+                  w.type === "customerCard" && !isCustomerListWindow(w) ? "adm-win-body--customer-card" : "",
                 ]
                   .filter(Boolean)
                   .join(" ")}
+                tabIndex={-1}
+                ref={isTop ? topBodyRef : undefined}
               >
                 {w.type === "orderCapture" && (canCreateOrders || canEditOrders) ? (
                   <OrderCreatePanel

@@ -55,6 +55,9 @@ export function sortLedgerRowsForDisplay(
 ): CustomerLedgerRow[] {
   const dir = sort === "old_new" ? 1 : -1;
   return [...(rows ?? [])].sort((a, b) => {
+    const aOpen = a.kind === "OPENING_BALANCE" ? 1 : 0;
+    const bOpen = b.kind === "OPENING_BALANCE" ? 1 : 0;
+    if (aOpen !== bOpen) return (bOpen - aOpen) * dir;
     const byDate = compareLedgerDateAsc(a.dateYmd, b.dateYmd);
     if (byDate !== 0) return byDate * dir;
     const aMs = ledgerOccurredAtMs(a);
