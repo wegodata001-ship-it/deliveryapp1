@@ -617,13 +617,25 @@ export function CustomerCardWindowBody({
   }
 
   async function runManualPdfExport() {
-    if (exportBusy || ledgerLoading || !exportMeta || selectedVisibleCount === 0) return;
+    if (exportBusy || ledgerLoading || !exportMeta) return;
+    const resolvedCustomerId = typeof customerId === "string" ? customerId.trim() : "";
+    if (!resolvedCustomerId) {
+      setLedgerGateToast("חסר לקוח");
+      window.setTimeout(() => setLedgerGateToast(null), 3200);
+      return;
+    }
+    const validSelectedRowIds = selectedLedgerRowIds.filter((id) => displayLedgerRowIds.includes(id));
+    if (validSelectedRowIds.length === 0) {
+      setLedgerGateToast("לא נבחרו שורות");
+      window.setTimeout(() => setLedgerGateToast(null), 3200);
+      return;
+    }
     setExportBusy("manual-pdf");
     setLedgerGateToast("מייצא PDF ידני…");
     try {
       await exportCustomerLedgerManualPdf({
-        customerId,
-        selectedRowIds: selectedLedgerRowIds.filter((id) => displayLedgerRowIds.includes(id)),
+        customerId: resolvedCustomerId,
+        selectedRowIds: validSelectedRowIds,
         fromYmd,
         toYmd,
         sourceCountry: effectiveLedgerCountry,
@@ -1238,7 +1250,7 @@ export function CustomerCardWindowBody({
                   <button
                     type="button"
                     className="adm-btn adm-btn--primary adm-export-btn--pdf"
-                    disabled={selectedVisibleCount === 0 || exportBusy === "manual-pdf"}
+                    disabled={!customerId || selectedLedgerRowIds.length === 0 || !!exportBusy}
                     onClick={() => void runManualPdfExport()}
                   >
                     {exportBusy === "manual-pdf"
