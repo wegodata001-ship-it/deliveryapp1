@@ -11,7 +11,7 @@ import {
   ordersExportNoDataMessage,
   type OrdersListExportPreset,
 } from "@/lib/orders-list-export-presets";
-import type { OrderStatusKpiKey } from "@/lib/orders-status-kpi-filter";
+import type { OrdersKpiFilterKey } from "@/lib/orders-status-kpi-filter";
 import {
   formatSignedUsdDisplay,
   isDebtWithdrawalOrderStatus,
@@ -49,7 +49,7 @@ function escapeCsv(v: string | null | undefined): string {
 export async function exportOrdersListExcelCsvAction(
   sp: Record<string, string | string[] | undefined>,
   preset: OrdersListExportPreset,
-  kpiStatusFilters: OrderStatusKpiKey[] = [],
+  kpiStatusFilters: OrdersKpiFilterKey[] = [],
 ): Promise<{ ok: true; csv: string; filenameHint: string } | { ok: false; error: string }> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["view_orders"])) {
@@ -74,6 +74,7 @@ export async function exportOrdersListExcelCsvAction(
         orderDate: true,
         weekCode: true,
         status: true,
+        isCompleted: true,
         customerCodeSnapshot: true,
         customerNameSnapshot: true,
         paymentMethod: true,
@@ -99,7 +100,7 @@ export async function exportOrdersListExcelCsvAction(
   ]);
 
   let rows = raw.length > EXPORT_MAX_ROWS ? raw.slice(0, EXPORT_MAX_ROWS) : raw;
-  rows = rows.filter((r) => orderMatchesExportKpiAfterFetch(r.status, preset, kpiStatusFilters));
+  rows = rows.filter((r) => orderMatchesExportKpiAfterFetch(r, preset, kpiStatusFilters));
 
   if (rows.length === 0) {
     return { ok: false, error: ordersExportNoDataMessage(preset, "excel") };

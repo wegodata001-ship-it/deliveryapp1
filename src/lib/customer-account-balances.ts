@@ -19,9 +19,12 @@ import {
   getCustomerCreditBalancesUsdMany,
 } from "@/lib/customer-credit-balance";
 import {
+  buildCustomerFinancialState,
   classifyCustomerAccountStatus,
   customerAccountSignedUsd,
   customerAccountStatusLabel,
+  customerFinancialStatus,
+  type CustomerFinancialState,
 } from "@/lib/customer-account-balances-shared";
 
 const EPS = 0.01;
@@ -37,11 +40,21 @@ export type CustomerAccountBalances = {
 };
 
 export {
+  buildCustomerFinancialState,
   classifyCustomerAccountStatus,
   customerAccountSignedUsd,
   customerAccountStatusLabel,
+  customerFinancialStatus,
 };
-export type { CustomerAccountStatusKind } from "@/lib/customer-account-balances-shared";
+export type { CustomerAccountStatusKind, CustomerFinancialState, CustomerFinancialStatus } from "@/lib/customer-account-balances-shared";
+
+export function financialStateFromAccounts(accounts: CustomerAccountBalances): CustomerFinancialState {
+  return buildCustomerFinancialState({
+    openDebtUsd: accounts.openDebtUsd,
+    availableCreditUsd: accounts.availableCreditUsd,
+    commissionBalanceUsd: accounts.commissionBalanceUsd,
+  });
+}
 
 export async function getCustomerAccountBalances(
   customerId: string,

@@ -43,6 +43,7 @@ import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { formatMoneyAmount, formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
 import { CustomerBalanceView } from "@/components/ui/CustomerBalanceView";
 import { formatCustomerBalanceDisplay, parseBalanceAmountString } from "@/lib/customer-balance";
+import { buildCustomerFinancialState } from "@/lib/customer-account-balances-shared";
 import {
   LEDGER_PDF_FAILED_MESSAGE,
   buildLedgerExportFilename,
@@ -570,12 +571,14 @@ export function CustomerCardWindowBody({
     void openLedgerDocument(r);
   }
 
-  const balanceNum = ledger ? parseBalanceAmountString(ledger.balanceUsd ?? "0") : 0;
+  const customerFinancial = buildCustomerFinancialState({
+    openDebtUsd: Number(ledger?.openDebtUsd ?? 0),
+    availableCreditUsd: Number(ledger?.availableCreditUsd ?? 0),
+    commissionBalanceUsd: Number(ledger?.commissionBalanceUsd ?? 0),
+  });
+  const balanceNum = customerFinancial.displaySignedUsd;
   const balanceSummaryView = formatCustomerBalanceDisplay(balanceNum, "USD");
-  const cardIlsUsd =
-    Number(ledger?.openDebtUsd ?? 0) > 0.01
-      ? Number(ledger?.openDebtUsd)
-      : Number(ledger?.availableCreditUsd ?? 0);
+  const cardIlsUsd = customerFinancial.displayAmountUsd;
 
   const exportMeta: CustomerLedgerExportMeta | null = snap
     ? {
@@ -798,7 +801,7 @@ export function CustomerCardWindowBody({
             }
           >
             <div className="summary-card-amount" dir="ltr">
-              {formatLedgerRunningBalance(ledger.balanceUsd)}
+              {customerFinancial.amountFormatted}
               <UsdBalanceIlsGrossText
                 usd={cardIlsUsd}
                 exchangeRate={exchangeRate}
@@ -807,11 +810,11 @@ export function CustomerCardWindowBody({
             </div>
           </button>
           <span>
-            {ledger && Number(ledger.availableCreditUsd ?? 0) > 0.01
-              ? Number(ledger.openDebtUsd ?? 0) > 0.01
-                ? `חוב $${Number(ledger.openDebtUsd).toFixed(2)} · זכות $${Number(ledger.availableCreditUsd).toFixed(2)}`
-                : `יתרת זכות $${Number(ledger.availableCreditUsd).toFixed(2)}`
-              : "יתרה סופית"}
+            {`חוב פתוח $${Number(ledger.openDebtUsd ?? 0).toFixed(2)} · יתרת זכות ${
+              Number(ledger.availableCreditUsd ?? 0) > 0.01
+                ? `+$${Number(ledger.availableCreditUsd).toFixed(2)}`
+                : "$0.00"
+            } · ${customerFinancial.headline}`}
           </span>
         </div>
         <div className="summary-card commission-summary-card">

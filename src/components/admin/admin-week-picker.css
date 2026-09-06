@@ -1,0 +1,138 @@
+/* Shared compact week picker — overlay only, never expands the filter row */
+
+.awp {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+
+.adm-report-week-nav .awp {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.awp__label {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: #64748b;
+  margin-bottom: 2px;
+  white-space: nowrap;
+}
+
+.awp__control {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  min-width: 0;
+}
+
+.awp__chip-loading {
+  font-size: 10px;
+  font-weight: 700;
+  color: #2563eb;
+  white-space: nowrap;
+}
+
+.awp__dropdown {
+  width: 228px;
+  max-height: 340px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
+  overflow: hidden;
+}
+
+.awp__search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border-bottom: 1px solid #e2e8f0;
+  color: #94a3b8;
+  flex: 0 0 auto;
+}
+
+.awp__search input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.awp__search input:focus {
+  outline: 2px solid #3b82f6;
+  outline-offset: 0;
+  border-color: #3b82f6;
+}
+
+.awp__list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  max-height: 280px;
+  overscroll-behavior: contain;
+}
+
+.awp__opt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 700;
+  color: #0f172a;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  text-align: start;
+}
+
+.awp__opt:hover {
+  background: #f1f5f9;
+}
+
+.awp__opt.is-active {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.awp__opt.is-current:not(.is-active) {
+  background: #f8fafc;
+}
+
+.awp__opt-meta {
+  font-size: 10px;
+  font-weight: 700;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.awp__opt.is-active .awp__opt-meta {
+  color: #2563eb;
+}
+
+.awp__empty {
+  padding: 12px;
+  text-align: center;
+  font-size: 12px;
+  color: #94a3b8;
+}

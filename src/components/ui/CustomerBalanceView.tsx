@@ -6,13 +6,35 @@ import {
   formatFromInternalSignedString,
   type CustomerBalanceDisplayView,
 } from "@/lib/customer-balance";
+import { buildCustomerFinancialState } from "@/lib/customer-account-balances-shared";
 
 type Props =
+  | { openDebtUsd: number; customerCreditUsd: number; currency?: "ILS" | "USD"; compact?: boolean }
   | { businessSigned: number; currency?: "ILS" | "USD"; compact?: boolean }
   | { internalSigned: number; currency?: "ILS" | "USD"; compact?: boolean }
   | { internalSignedRaw: string; currency?: "ILS" | "USD"; compact?: boolean };
 
 function resolveView(props: Props): CustomerBalanceDisplayView {
+  if ("openDebtUsd" in props && "customerCreditUsd" in props) {
+    const state = buildCustomerFinancialState({
+      openDebtUsd: props.openDebtUsd,
+      availableCreditUsd: props.customerCreditUsd,
+    });
+    const className =
+      state.tone === "debt"
+        ? "adm-balance-kind adm-balance-kind--debt"
+        : state.tone === "credit"
+          ? "adm-balance-kind adm-balance-kind--credit"
+          : "adm-balance-kind adm-balance-kind--even";
+    return {
+      kind: state.statusKind,
+      badge: state.financialStatus === "DEBT" ? "חוב" : state.financialStatus === "CREDIT" ? "זכות" : "מאוזן",
+      label: state.statusLabel,
+      className,
+      primaryText: state.headline,
+      amountFormatted: state.amountFormatted,
+    };
+  }
   if ("businessSigned" in props) {
     return formatCustomerBalanceDisplay(props.businessSigned, props.currency ?? "ILS");
   }

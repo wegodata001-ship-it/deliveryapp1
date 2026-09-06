@@ -42,6 +42,7 @@ export function OrdersFilterBar(props: Props) {
     onWeekCommitted,
     shiftWeekNav,
     goToActiveWeek,
+    weekSwitching,
     advancedOpen,
     setAdvancedOpen,
     advancedFilterCount,
@@ -197,6 +198,7 @@ export function OrdersFilterBar(props: Props) {
 
         <OrdersWeekPicker
           weekCode={week}
+          loading={weekSwitching}
           onWeekChange={onWeekCommitted}
           onShift={shiftWeekNav}
         />
@@ -305,6 +307,7 @@ export function OrdersFilterBar(props: Props) {
               </div>
               <OrdersWeekPicker
                 weekCode={week}
+                loading={weekSwitching}
                 onWeekChange={onWeekCommitted}
                 onShift={shiftWeekNav}
               />

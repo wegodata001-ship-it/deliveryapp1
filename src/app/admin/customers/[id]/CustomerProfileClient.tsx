@@ -8,7 +8,7 @@ import { CommissionAmountButton } from "@/components/admin/CommissionAmountButto
 import { CommissionBalancePopover } from "@/components/admin/CommissionBalancePopover";
 import { OrderCommissionDetailModal } from "@/components/admin/OrderCommissionDetailModal";
 import type { CustomerProfilePayload } from "@/lib/customers-module-types";
-import { formatFromInternalSigned } from "@/lib/customer-balance";
+import { buildCustomerFinancialState } from "@/lib/customer-account-balances-shared";
 import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
 import { formatCommissionSignedCompact } from "@/lib/commission-lineage-view";
 import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
@@ -44,7 +44,11 @@ export function CustomerProfileClient({ profile }: Props) {
   } | null>(null);
 
   const { customer, kpis, orders, payments } = profile;
-  const balanceView = formatFromInternalSigned(parseMoneyStringOrZero(kpis.balanceUsd), "USD");
+  const financial = buildCustomerFinancialState({
+    openDebtUsd: parseMoneyStringOrZero(kpis.openDebtUsd ?? "0"),
+    availableCreditUsd: parseMoneyStringOrZero(kpis.availableCreditUsd ?? "0"),
+    commissionBalanceUsd: parseMoneyStringOrZero(kpis.commissionBalanceUsd ?? "0"),
+  });
 
   function showToast(msg: string) {
     setToast(msg);
@@ -61,8 +65,8 @@ export function CustomerProfileClient({ profile }: Props) {
         </span>
         <span className="adm-cust-module-strip__item">
           <span className="adm-cust-module-strip__k">יתרה</span>
-          <strong dir="ltr" className={balanceView.kind === "debt" ? "adm-cust-strip--debt" : balanceView.kind === "credit" ? "adm-cust-strip--credit" : ""}>
-            {balanceView.primaryText}
+          <strong dir="ltr" className={financial.tone === "debt" ? "adm-cust-strip--debt" : financial.tone === "credit" ? "adm-cust-strip--credit" : ""}>
+            {financial.headline}
           </strong>
         </span>
         {kpis.availableCreditUsd && parseMoneyStringOrZero(kpis.availableCreditUsd) > 0.01 ? (

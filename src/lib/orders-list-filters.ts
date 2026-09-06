@@ -1,5 +1,6 @@
 /**
  * Source of truth — סינון רשימת הזמנות (URL ↔ state).
+ * שבוע הרשימה = ordersWeek. week=/from=/to= הם שיקוף לכרום בלבד.
  */
 
 import { readMultiParam, setMultiParam } from "@/lib/orders-list-filter-params";
@@ -9,6 +10,12 @@ import {
   normalizeAhWeekCode,
 } from "@/lib/work-week";
 import { resolveOrdersListCustomerQuery } from "@/app/admin/orders/orders-list-where";
+import {
+  ORDERS_KPI_PARAM,
+  parseOrdersKpiFilters,
+  serializeOrdersKpiFilters,
+  type OrdersKpiFilterKey,
+} from "@/lib/orders-status-kpi-filter";
 
 export type OrdersCompletedFilter = "all" | "done" | "not_done";
 
@@ -31,6 +38,8 @@ export type OrderFilters = {
   openOnly: boolean;
   completedOnly: boolean;
   ordersCompleted: OrdersCompletedFilter;
+  /** ריבועי KPI — נפרד מ-status= של מסנן «סטטוס הזמנה» */
+  kpiStatuses: OrdersKpiFilterKey[];
 };
 
 export const ORDERS_FILTER_URL_KEYS = [
@@ -56,6 +65,7 @@ export const ORDERS_FILTER_URL_KEYS = [
   "ordersOpenOnly",
   "ordersReadyOnly",
   "ordersCompleted",
+  "ordersKpi",
   "page",
 ] as const;
 
@@ -98,6 +108,7 @@ export function parseOrderFiltersFromSearchParams(
     openOnly: readTextParam(sp, "ordersOpenOnly") === "1",
     completedOnly: readTextParam(sp, "ordersReadyOnly") === "1",
     ordersCompleted,
+    kpiStatuses: parseOrdersKpiFilters(sp),
   };
 }
 
@@ -159,6 +170,10 @@ export function buildOrdersListSearchParams(
 
   if (filters.ordersCompleted === "done") base.set("ordersCompleted", "done");
   else if (filters.ordersCompleted === "not_done") base.set("ordersCompleted", "not_done");
+
+  const kpi = serializeOrdersKpiFilters(filters.kpiStatuses ?? []);
+  if (kpi) base.set(ORDERS_KPI_PARAM, kpi);
+  else base.delete(ORDERS_KPI_PARAM);
 
   base.delete("page");
   return base;

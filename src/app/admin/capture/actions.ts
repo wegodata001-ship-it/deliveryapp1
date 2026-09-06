@@ -1230,6 +1230,10 @@ export async function getCustomerOrderFormExtrasAction(
   address: string | null;
   balanceUsdDisplay: string;
   balanceUsdNegative: boolean;
+  openDebtUsd: number;
+  customerCreditUsd: number;
+  feeBalanceUsd: number;
+  financialStatus: "DEBT" | "BALANCED" | "CREDIT";
 } | null> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["create_orders", "edit_orders"])) return null;
@@ -1253,9 +1257,12 @@ export async function getCustomerOrderFormExtrasAction(
   });
   if (!cust) return null;
 
-  const { getCustomerOpenDebt, openDebtScopeForWorkCountry } = await import("@/lib/customer-open-debt");
-  const debt = await getCustomerOpenDebt(id, openDebtScopeForWorkCountry(workCountryRaw));
-  const businessSigned = Number(debt.signedBalanceUsd.toFixed(2));
+  const { openDebtScopeForWorkCountry } = await import("@/lib/customer-open-debt");
+  const { getCustomerAccountBalances, financialStateFromAccounts } = await import(
+    "@/lib/customer-account-balances"
+  );
+  const accounts = await getCustomerAccountBalances(id, openDebtScopeForWorkCountry(workCountryRaw));
+  const state = financialStateFromAccounts(accounts);
   const indexLabel = cust.oldCustomerCode?.trim() || cust.customerCode?.trim() || null;
 
   return {
@@ -1265,11 +1272,15 @@ export async function getCustomerOrderFormExtrasAction(
     indexLabel,
     city: cust.city?.trim() || null,
     address: cust.address?.trim() || null,
-    balanceUsdDisplay: businessSigned.toLocaleString("en-US", {
+    balanceUsdDisplay: state.displaySignedUsd.toLocaleString("en-US", {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     }),
-    balanceUsdNegative: businessSigned < -0.005,
+    balanceUsdNegative: state.financialStatus === "CREDIT",
+    openDebtUsd: state.openDebtUsd,
+    customerCreditUsd: state.customerCreditUsd,
+    feeBalanceUsd: state.feeBalanceUsd,
+    financialStatus: state.financialStatus,
   };
 }
 
@@ -1283,6 +1294,9 @@ export async function fetchCustomerOpenDebtAction(
       openDebtUsd: string;
       signedBalanceUsd: string;
       internalSignedUsd: string;
+      customerCreditUsd: string;
+      feeBalanceUsd: string;
+      financialStatus: "DEBT" | "BALANCED" | "CREDIT";
       totalOrdersBeforeCommissionUsd: string;
       totalOrdersUsd: string;
       totalPaymentsUsd: string;
@@ -1298,12 +1312,23 @@ export async function fetchCustomerOpenDebtAction(
   if (!id) return { ok: false, error: "חסר לקוח" };
 
   const { getCustomerOpenDebt, openDebtScopeForWorkCountry } = await import("@/lib/customer-open-debt");
-  const debt = await getCustomerOpenDebt(id, openDebtScopeForWorkCountry(workCountryRaw));
+  const { getCustomerAccountBalances, financialStateFromAccounts } = await import(
+    "@/lib/customer-account-balances"
+  );
+  const scope = openDebtScopeForWorkCountry(workCountryRaw);
+  const [debt, accounts] = await Promise.all([
+    getCustomerOpenDebt(id, scope),
+    getCustomerAccountBalances(id, scope),
+  ]);
+  const state = financialStateFromAccounts(accounts);
   return {
     ok: true,
-    openDebtUsd: debt.openDebtUsd.toFixed(2),
+    openDebtUsd: state.openDebtUsd.toFixed(2),
     signedBalanceUsd: debt.signedBalanceUsd.toFixed(2),
     internalSignedUsd: debt.internalSignedUsd.toFixed(2),
+    customerCreditUsd: state.customerCreditUsd.toFixed(2),
+    feeBalanceUsd: state.feeBalanceUsd.toFixed(2),
+    financialStatus: state.financialStatus,
     totalOrdersBeforeCommissionUsd: debt.totalOrdersBeforeCommissionUsd.toFixed(2),
     totalOrdersUsd: debt.totalOrdersUsd.toFixed(2),
     totalPaymentsUsd: debt.totalPaymentsUsd.toFixed(2),

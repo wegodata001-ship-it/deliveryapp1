@@ -1,12 +1,12 @@
 import type { Prisma } from "@prisma/client";
 import { PM } from "@/lib/payment-method-slugs";
-import { buildOrdersListWhereFromSearchParams } from "@/app/admin/orders/orders-list-where";
+import { buildOrdersKpiWhere, buildOrdersListWhereFromSearchParams } from "@/app/admin/orders/orders-list-where";
 import { isDebtWithdrawalOrderStatus } from "@/lib/debt-withdrawal-order";
 import { resolveOrderPaymentFormDisplay } from "@/lib/order-payment-form-display";
 import { OS } from "@/lib/order-status-slugs";
 import {
-  orderStatusBelongsToKpiBucket,
-  type OrderStatusKpiKey,
+  orderMatchesOrdersKpiFilters,
+  type OrdersKpiFilterKey,
 } from "@/lib/orders-status-kpi-filter";
 import { getWeekCodeForLocalDate, parseOrdersListDateFilterFromSearchParams } from "@/lib/work-week";
 
@@ -156,48 +156,15 @@ export function pdfLayoutModeForPreset(preset: OrdersListExportPreset): OrdersPd
 
 /** סינון KPI מהריבועים בעמוד — רק ל־screen_filter */
 export function buildOrderStatusWhereForKpiKeys(
-  keys: OrderStatusKpiKey[],
+  keys: OrdersKpiFilterKey[],
 ): Prisma.OrderWhereInput | undefined {
-  if (keys.length === 0) return undefined;
-  const orParts: Prisma.OrderWhereInput[] = [];
-  for (const key of keys) {
-    switch (key) {
-      case "open":
-        orParts.push({ status: OS.OPEN });
-        break;
-      case "completed":
-        orParts.push({ status: OS.COMPLETED });
-        break;
-      case "cancelled":
-        orParts.push({ status: OS.CANCELLED });
-        break;
-      case "debtWithdrawal":
-        orParts.push({ status: OS.DEBT_WITHDRAWAL });
-        break;
-      case "inProgress":
-        orParts.push({
-          status: {
-            in: [
-              OS.WAITING_FOR_EXECUTION,
-              OS.WITHDRAWAL_FROM_SUPPLIER,
-              OS.SENT,
-              OS.WAITING_FOR_CHINA_EXECUTION,
-            ],
-          },
-        });
-        break;
-      default:
-        break;
-    }
-  }
-  if (orParts.length === 0) return undefined;
-  return orParts.length === 1 ? orParts[0]! : { OR: orParts };
+  return buildOrdersKpiWhere(keys);
 }
 
 /** סינון מלא מהמסך (שבוע, לקוח, סטטוס, תאריכים, וכו׳) + ריבועי KPI */
 export function buildOrdersExportScreenWhere(
   sp: Record<string, string | string[] | undefined>,
-  kpiStatusFilters: OrderStatusKpiKey[] = [],
+  kpiStatusFilters: OrdersKpiFilterKey[] = [],
 ): Prisma.OrderWhereInput {
   const base = buildOrdersListWhereFromSearchParams(sp);
   const kpiWhere = buildOrderStatusWhereForKpiKeys(kpiStatusFilters);
@@ -224,7 +191,7 @@ function paymentPlaceExtraWhere(preset: OrdersListExportPreset): Prisma.OrderWhe
 export function buildOrdersExportWhereFromPreset(
   sp: Record<string, string | string[] | undefined>,
   preset: OrdersListExportPreset,
-  kpiStatusFilters: OrderStatusKpiKey[] = [],
+  kpiStatusFilters: OrdersKpiFilterKey[] = [],
 ): Prisma.OrderWhereInput {
   const range = parseOrdersListDateFilterFromSearchParams(sp);
 
@@ -268,9 +235,9 @@ export function buildOrdersExportWhereFromPreset(
 
 /** סינון שורות אחרי שליפה — משלים KPI שלא ממופה ל-Prisma (סטטוסים מותאמים ב־inProgress) */
 export function orderMatchesExportKpiAfterFetch(
-  orderStatus: string,
+  order: { status: string; isCompleted?: boolean } | string,
   preset: OrdersListExportPreset,
-  kpiStatusFilters: OrderStatusKpiKey[],
+  kpiStatusFilters: OrdersKpiFilterKey[],
 ): boolean {
   const usesScreen =
     preset === "screen_filter" ||
@@ -279,6 +246,7 @@ export function orderMatchesExportKpiAfterFetch(
     preset === "by_customer" ||
     isPaymentPlaceOnScreenPreset(preset);
   if (!usesScreen || kpiStatusFilters.length === 0) return true;
-  return kpiStatusFilters.some((key) => orderStatusBelongsToKpiBucket(orderStatus, key));
+  const row = typeof order === "string" ? { status: order } : order;
+  return orderMatchesOrdersKpiFilters(row, kpiStatusFilters);
 }
 

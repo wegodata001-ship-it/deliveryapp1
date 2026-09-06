@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BarChart3, BookOpen, Coins, FileSpreadsheet, FileText, RefreshCw, Search, X } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
@@ -29,6 +29,7 @@ import { UsdBalanceIlsGrossText } from "@/components/admin/UsdBalanceIlsGrossTex
 import { currentSearchHref, withQuery } from "@/lib/admin-url-query";
 import { CustomerBalancesInsightsBar } from "@/components/admin/CustomerBalancesInsightsBar";
 import { rowOrdersUsdSplit } from "@/lib/customer-balances-display";
+import { buildCustomerFinancialState } from "@/lib/customer-account-balances-shared";
 import { ReportWeekNav } from "@/components/admin/ReportWeekNav";
 import { ORDER_COUNTRY_CODES, orderCountryLabel, type OrderCountryCode } from "@/lib/order-countries";
 import { ACTIVE_WORK_WEEK_CODE } from "@/lib/active-work-week";
@@ -100,20 +101,16 @@ function balanceUiFromRow(row: {
   totalBalanceUSD: string;
   availableCreditUSD?: string;
 }): { label: string; tone: BalanceUiTone; amount: string; usd: number } {
-  const openDebt = Math.max(0, parseMoneyStringOrZero(row.totalBalanceUSD));
-  const credit = Math.max(0, parseMoneyStringOrZero(row.availableCreditUSD ?? "0"));
-  if (openDebt > 0.01) {
-    return { label: "חוב פתוח", tone: "debt", amount: formatUsdDisplay(openDebt), usd: openDebt };
-  }
-  if (credit > 0.01) {
-    return {
-      label: `יתרת זכות $${credit.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-      tone: "credit",
-      amount: formatUsdDisplay(credit),
-      usd: credit,
-    };
-  }
-  return { label: "מאוזן", tone: "balanced", amount: formatUsdDisplay(0), usd: 0 };
+  const state = buildCustomerFinancialState({
+    openDebtUsd: Math.max(0, parseMoneyStringOrZero(row.totalBalanceUSD)),
+    availableCreditUsd: Math.max(0, parseMoneyStringOrZero(row.availableCreditUSD ?? "0")),
+  });
+  return {
+    label: state.statusLabel,
+    tone: state.tone,
+    amount: state.amountFormatted,
+    usd: state.displayAmountUsd,
+  };
 }
 
 function usdStatDisplay(value: string): string {
@@ -606,7 +603,9 @@ export function CustomerBalancesClient({
       ),
     );
     if (nextHref === currentSearchHref(pathname, current)) return;
-    router.replace(nextHref, { scroll: false });
+    startTransition(() => {
+      router.replace(nextHref, { scroll: false });
+    });
   }, [
     urlReady,
     balancesFilters.weekCode,
@@ -1004,6 +1003,7 @@ export function CustomerBalancesClient({
               <ReportWeekNav
                 weekCode={balancesFilters.weekCode}
                 disabled={weekNavLocked}
+                loading={tableLoading}
                 onWeekChange={onBalancesWeekChange}
               />
             </div>

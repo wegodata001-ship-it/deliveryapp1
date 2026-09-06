@@ -988,6 +988,10 @@ export function OrderCreatePanel({
         address: null,
         balanceUsdDisplay: "0.00",
         balanceUsdNegative: false,
+        openDebtUsd: 0,
+        customerCreditUsd: 0,
+        feeBalanceUsd: 0,
+        financialStatus: "BALANCED",
       });
       invalidateCustomerSearchClientCache();
       prependCustomerToCaptureIndex(row);
@@ -2047,7 +2051,8 @@ export function OrderCreatePanel({
                 {extras ? (
                   <span dir="ltr" className="adm-oc-legacy-customer-mini-bal">
                     <CustomerBalanceView
-                      businessSigned={parseBalanceAmountString(extras.balanceUsdDisplay)}
+                      openDebtUsd={extras.openDebtUsd ?? 0}
+                      customerCreditUsd={extras.customerCreditUsd ?? 0}
                       currency="USD"
                     />
                   </span>

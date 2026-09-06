@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { startTransition, useEffect, useRef } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { resolveGlobalCountry } from "@/lib/current-country";
 import { currentSearchHref, withQuery } from "@/lib/admin-url-query";
@@ -13,6 +13,11 @@ import {
   balancesWeekQueryPatch,
   shouldResyncBalancesLocalWeek,
 } from "@/lib/balances-week-filter";
+import {
+  ORDERS_WEEK_PARAM,
+  ordersWeekRangePatch,
+  shouldResyncOrdersLocalWeek,
+} from "@/lib/orders-week-filter";
 
 export type WorkWeekScreenScope = "orders" | "balances";
 
@@ -23,7 +28,7 @@ function scopeMatchesPath(scope: WorkWeekScreenScope, pathname: string): boolean
 
 /**
  * מסנכרן פרמטרי מסך (ordersWeek / balancesWeek) לשבוע העבודה הגלובלי (?week=).
- * בדוח יתרות: balancesWeek הוא פילטר מקומי — לא לדרוס ניווט שבוע מקומי.
+ * בכל מסך הפילטר המקומי הוא SSOT — לא לדרוס ניווט שבוע מקומי, ולא לקרוא refresh.
  */
 export function useEnsureActiveWorkWeekOnEnter(scope: WorkWeekScreenScope): void {
   const pathname = usePathname();
@@ -32,6 +37,7 @@ export function useEnsureActiveWorkWeekOnEnter(scope: WorkWeekScreenScope): void
   const lastGlobalWeekRef = useRef<string | null>(null);
 
   const globalWeekRaw = sp.get("week") ?? "";
+  const ordersWeekRaw = sp.get(ORDERS_WEEK_PARAM) ?? "";
   const balancesWeekRaw = sp.get(BALANCES_WEEK_PARAM) ?? "";
   const balancesToRaw = sp.get(BALANCES_TO_PARAM) ?? "";
   const countryRaw = sp.get("country") ?? "";
@@ -47,27 +53,47 @@ export function useEnsureActiveWorkWeekOnEnter(scope: WorkWeekScreenScope): void
     const country = resolveGlobalCountry(countryRaw);
 
     if (scope === "orders") {
-      const cur =
-        normalizeAhWeekCode(current.get("ordersWeek") || "") ??
-        normalizeAhWeekCode(current.get("week") || "") ??
-        "";
-      if (cur === globalWorkWeek) return;
+      const cur = normalizeAhWeekCode(ordersWeekRaw) ?? "";
+      const action = shouldResyncOrdersLocalWeek({
+        currentOrdersWeek: cur,
+        globalWorkWeek,
+        previousGlobalWorkWeek: lastGlobalWeekRef.current,
+      });
+      lastGlobalWeekRef.current = globalWorkWeek;
+      if (action === "skip") return;
 
       const next = new URLSearchParams(searchKey);
-      next.set("week", globalWorkWeek);
-      next.set("from", fromYmd || range?.from || "");
-      next.set("to", toYmd || range?.to || "");
-      next.set("ordersWeek", globalWorkWeek);
-      next.set("ordersFrom", fromYmd || range?.from || "");
-      next.set("ordersTo", toYmd || range?.to || "");
+      if (action === "seed") {
+        const patch = ordersWeekRangePatch(globalWorkWeek);
+        next.set("week", globalWorkWeek);
+        next.set("from", fromYmd || range?.from || patch.from);
+        next.set("to", toYmd || range?.to || patch.to);
+        next.set(ORDERS_WEEK_PARAM, globalWorkWeek);
+        next.set("ordersFrom", fromYmd || range?.from || patch.ordersFrom);
+        next.set("ordersTo", toYmd || range?.to || patch.ordersTo);
+      } else if (action === "align-chrome") {
+        const patch = ordersWeekRangePatch(cur);
+        next.set(ORDERS_WEEK_PARAM, cur);
+        next.set("week", patch.week);
+        next.set("from", patch.from);
+        next.set("to", patch.to);
+        if (!next.get("ordersFrom") && patch.ordersFrom) next.set("ordersFrom", patch.ordersFrom);
+        if (!next.get("ordersTo") && patch.ordersTo) next.set("ordersTo", patch.ordersTo);
+      } else {
+        const patch = ordersWeekRangePatch(globalWorkWeek);
+        for (const [k, v] of Object.entries(patch)) {
+          if (v) next.set(k, v);
+        }
+      }
       next.delete("ordersPreset");
       next.delete("preset");
       next.set("country", country);
       const qs = next.toString();
       const href = qs ? `/admin/orders?${qs}` : "/admin/orders";
       if (href === currentSearchHref(pathname, current)) return;
-      router.replace(href, { scroll: false });
-      router.refresh();
+      startTransition(() => {
+        router.replace(href, { scroll: false });
+      });
       return;
     }
 
@@ -85,13 +111,16 @@ export function useEnsureActiveWorkWeekOnEnter(scope: WorkWeekScreenScope): void
     const snap = balancesSnapshotToYmd(week);
     const href = withQuery(pathname, current, balancesWeekQueryPatch(week, snap));
     if (href === currentSearchHref(pathname, current)) return;
-    router.replace(href, { scroll: false });
+    startTransition(() => {
+      router.replace(href, { scroll: false });
+    });
   }, [
     pathname,
     router,
     scope,
     searchKey,
     globalWeekRaw,
+    ordersWeekRaw,
     balancesWeekRaw,
     balancesToRaw,
     countryRaw,

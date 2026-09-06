@@ -512,6 +512,7 @@ export async function loadPaymentIntakeBalancesForCustomer(
       internalSignedUsd: string;
       commissionBalanceUsd: number;
       creditBalanceUsd: number;
+      financialStatus: "DEBT" | "BALANCED" | "CREDIT";
       /** Σ amountUsd — הזמנות רגילות (ללא משיכות מחוב) */
       totalOrdersBeforeCommissionUsd: number;
       /** Σ totalUsd (עסקה+עמלה) — כרטסת «סה״כ הזמנות» */
@@ -527,13 +528,16 @@ export async function loadPaymentIntakeBalancesForCustomer(
 
   const paymentWorkCountry = normalizeWorkCountryCode(params.paymentWorkCountryRaw) ?? DEFAULT_WORK_COUNTRY;
   const { getCustomerOpenDebt, openDebtScopeForWorkCountry } = await import("@/lib/customer-open-debt");
-  const { getCustomerAccountBalances } = await import("@/lib/customer-account-balances");
+  const { getCustomerAccountBalances, financialStateFromAccounts } = await import(
+    "@/lib/customer-account-balances"
+  );
   const debtScope = openDebtScopeForWorkCountry(paymentWorkCountry);
 
   const [accounts, debt] = await Promise.all([
     getCustomerAccountBalances(cid, debtScope),
     getCustomerOpenDebt(cid, debtScope),
   ]);
+  const financial = financialStateFromAccounts(accounts);
 
   // סנכרון snapshot מ־SSOT (לא תיקון ידני ללקוח) — מונע יתרת DB ישנה בחיפוש
   try {
@@ -550,6 +554,7 @@ export async function loadPaymentIntakeBalancesForCustomer(
     internalSignedUsd: debt.internalSignedUsd.toFixed(2),
     commissionBalanceUsd: accounts.commissionBalanceUsd,
     creditBalanceUsd: accounts.availableCreditUsd,
+    financialStatus: financial.financialStatus,
     totalOrdersBeforeCommissionUsd: Number(debt.totalOrdersBeforeCommissionUsd.toFixed(2)),
     totalOrdersUsd: Number(debt.totalOrdersUsd.toFixed(2)),
     totalPaymentsUsd: Number(debt.totalPaymentsUsd.toFixed(2)),

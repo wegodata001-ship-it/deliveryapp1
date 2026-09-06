@@ -14,6 +14,10 @@ export type CustomerExtrasPayload = {
   address: string | null;
   balanceUsdDisplay: string;
   balanceUsdNegative: boolean;
+  openDebtUsd: number;
+  customerCreditUsd: number;
+  feeBalanceUsd: number;
+  financialStatus: "DEBT" | "BALANCED" | "CREDIT";
 };
 
 export async function GET(req: Request) {
@@ -45,9 +49,12 @@ export async function GET(req: Request) {
       if (!cust) return NextResponse.json(null);
 
       const country = searchParams.get("country");
-      const { getCustomerOpenDebt, openDebtScopeForWorkCountry } = await import("@/lib/customer-open-debt");
-      const debt = await getCustomerOpenDebt(id, openDebtScopeForWorkCountry(country));
-      const businessSigned = Number(debt.signedBalanceUsd.toFixed(2));
+      const { openDebtScopeForWorkCountry } = await import("@/lib/customer-open-debt");
+      const { getCustomerAccountBalances, financialStateFromAccounts } = await import(
+        "@/lib/customer-account-balances"
+      );
+      const accounts = await getCustomerAccountBalances(id, openDebtScopeForWorkCountry(country));
+      const state = financialStateFromAccounts(accounts);
       const indexLabel = cust.oldCustomerCode?.trim() || cust.customerCode?.trim() || null;
 
       const payload: CustomerExtrasPayload = {
@@ -57,11 +64,15 @@ export async function GET(req: Request) {
         indexLabel,
         city: cust.city?.trim() || null,
         address: cust.address?.trim() || null,
-        balanceUsdDisplay: businessSigned.toLocaleString("en-US", {
+        balanceUsdDisplay: state.displaySignedUsd.toLocaleString("en-US", {
           minimumFractionDigits: 2,
           maximumFractionDigits: 2,
         }),
-        balanceUsdNegative: businessSigned < -0.005,
+        balanceUsdNegative: state.financialStatus === "CREDIT",
+        openDebtUsd: state.openDebtUsd,
+        customerCreditUsd: state.customerCreditUsd,
+        feeBalanceUsd: state.feeBalanceUsd,
+        financialStatus: state.financialStatus,
       };
       return NextResponse.json(payload);
     } catch (error) {

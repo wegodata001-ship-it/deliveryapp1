@@ -42,6 +42,7 @@ export default async function OrdersListPage({
     totalCount: 0,
     totalPages: 0,
   };
+  let resultSummary: Awaited<ReturnType<typeof fetchOrdersListPageData>>["resultSummary"] = null;
   let loadError: string | null = null;
 
   try {
@@ -52,6 +53,7 @@ export default async function OrdersListPage({
     countryFilterOptions = data.countryFilterOptions;
     paymentLocationOptions = data.paymentLocationOptions;
     pagination = data.pagination;
+    resultSummary = data.resultSummary;
   } catch (err) {
     loadError = err instanceof Error ? err.message : "שגיאה בטעינת רשימת ההזמנות";
     console.error("[orders-list] fetchOrdersListPageData failed", err);
@@ -102,6 +104,7 @@ export default async function OrdersListPage({
         orders={orders}
         statusSummary={statusSummary}
         pagination={pagination}
+        resultSummary={resultSummary}
         viewerIsAdmin={isAdminUser(me)}
         canCreateOrders={canCreateOrders}
         canEditOrders={canEditOrders}

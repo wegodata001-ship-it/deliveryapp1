@@ -1,8 +1,8 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { OrdersListToolbar, type OrdersListToolbarProps } from "@/components/admin/OrdersListToolbar";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { PaymentMethod } from "@prisma/client";
 import { OS } from "@/lib/order-status-slugs";
 import { computeOrderOpenDebtUsd } from "@/lib/order-remaining-debt";
@@ -38,6 +38,8 @@ import { usePaymentMethodCatalog } from "@/components/admin/PaymentMethodCatalog
 import { orderListRowToneClass } from "@/constants/order-status";
 import { useEnsureActiveWorkWeekOnEnter } from "@/hooks/useEnsureActiveWorkWeekOnEnter";
 import type { ParsedDateFilter } from "@/lib/work-week";
+import { normalizeAhWeekCode } from "@/lib/work-week";
+import { ORDERS_WEEK_PARAM } from "@/lib/orders-week-filter";
 import { IntakeLocationCombobox } from "@/components/admin/IntakeLocationCombobox";
 import { OrdersListPaginationBar } from "@/components/admin/OrdersListPaginationBar";
 import {
@@ -46,13 +48,20 @@ import {
 } from "@/lib/debt-withdrawal-order";
 import { formatMoneyAmount } from "@/lib/money-format";
 import {
-  orderMatchesStatusKpiFilters,
-  toggleStatusKpiFilter,
+  ORDERS_KPI_PARAM,
+  orderMatchesOrdersKpiFilters,
+  ordersKpiLabel,
+  parseOrdersKpiFilters,
+  serializeOrdersKpiFilters,
+  toggleOrdersKpiFilter,
   type OrderStatusKpiKey,
+  type OrdersKpiFilterKey,
 } from "@/lib/orders-status-kpi-filter";
 import { adjustStatusSummaryForStatusChange } from "@/lib/orders-status-kpi-optimistic";
 import { OrderRowActionsMenu } from "@/components/admin/orders/OrderRowActionsMenu";
 import { WEGO_ORDERS_LIST_REFRESH_EVENT } from "@/lib/orders-list-refresh-bus";
+import { OrdersResultSummaryTable } from "@/components/admin/orders/OrdersResultSummary";
+import type { OrdersResultSummary } from "@/lib/orders-list-result-summary";
 
 type CompletedFilter = "not_done" | "done" | "all";
 
@@ -172,7 +181,10 @@ function OrderStatusKpiButton({
     >
       <span className="adm-status-card__head">
         <Icon className="adm-status-card__icon" size={14} strokeWidth={2.25} aria-hidden />
-        <span className="adm-status-card-title">{title}</span>
+        <span className="adm-status-card-title">
+          {active && !isAll ? "✓ " : ""}
+          {title}
+        </span>
       </span>
       <strong className="adm-status-card-count">{count}</strong>
       <span className="adm-status-card-amount" dir="ltr">
@@ -266,6 +278,7 @@ type Props = {
   orders: OrderListRow[];
   statusSummary: OrdersStatusSummary;
   pagination: OrdersListPagination;
+  resultSummary?: OrdersResultSummary | null;
   viewerIsAdmin: boolean;
   canCreateOrders: boolean;
   canEditOrders: boolean;
@@ -281,6 +294,7 @@ export function OrdersListShell({
   orders,
   statusSummary,
   pagination,
+  resultSummary = null,
   viewerIsAdmin,
   canCreateOrders,
   canEditOrders,
@@ -293,12 +307,17 @@ export function OrdersListShell({
 }: Props) {
   useEnsureActiveWorkWeekOnEnter("orders");
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const urlWeek = normalizeAhWeekCode(searchParams.get(ORDERS_WEEK_PARAM)) ?? "";
+  const dataWeek = normalizeAhWeekCode(dateRange.ahWeekSelect) ?? "";
+  const weekDataPending = Boolean(urlWeek && dataWeek && urlWeek !== dataWeek);
   const { openWindow } = useAdminWindows();
   useOrderStatusCatalog();
   const { optionsForValue: paymentMethodOptionsForValue } = usePaymentMethodCatalog();
   const [rows, setRows] = useState<OrderListRow[]>(orders);
   const [statusSummaryLive, setStatusSummaryLive] = useState(statusSummary);
   const [paginationLive, setPaginationLive] = useState(pagination);
+  const [resultSummaryLive, setResultSummaryLive] = useState(resultSummary);
   const [filterOptionsLive, setFilterOptionsLive] = useState({
     createdByOptions: toolbarProps.createdByOptions,
     countryFilterOptions: toolbarProps.countryFilterOptions,
@@ -332,25 +351,61 @@ export function OrdersListShell({
   const [pdfLoading, setPdfLoading] = useState(false);
   const [excelLoading, setExcelLoading] = useState(false);
   const [completedFilter, setCompletedFilter] = useState<CompletedFilter>(() => readCompletedFilterFromLocation());
-  const [activeStatusFilters, setActiveStatusFilters] = useState<OrderStatusKpiKey[]>([]);
+  const [activeKpiFilters, setActiveKpiFilters] = useState<OrdersKpiFilterKey[]>(() =>
+    typeof window === "undefined" ? [] : parseOrdersKpiFilters(new URLSearchParams(window.location.search)),
+  );
   const [extraPaymentLocationOptions, setExtraPaymentLocationOptions] = useState<
     { id: string; label: string }[]
   >([]);
-  const toggleStatusFilter = useCallback((key: OrderStatusKpiKey) => {
-    setActiveStatusFilters((prev) => toggleStatusKpiFilter(prev, key));
-  }, []);
+
+  const writeKpiFiltersToUrl = useCallback(
+    (next: OrdersKpiFilterKey[]) => {
+      const sp = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
+      const serialized = serializeOrdersKpiFilters(next);
+      if (serialized) sp.set(ORDERS_KPI_PARAM, serialized);
+      else sp.delete(ORDERS_KPI_PARAM);
+      sp.delete("page");
+      const q = sp.toString();
+      const href = q ? `/admin/orders?${q}` : "/admin/orders";
+      startTransition(() => {
+        router.replace(href, { scroll: false });
+      });
+    },
+    [router],
+  );
+
+  const toggleKpiFilter = useCallback(
+    (key: OrdersKpiFilterKey) => {
+      const next = toggleOrdersKpiFilter(activeKpiFilters, key);
+      setActiveKpiFilters(next);
+      writeKpiFiltersToUrl(next);
+    },
+    [activeKpiFilters, writeKpiFiltersToUrl],
+  );
 
   const clearStatusKpiFilters = useCallback((): void => {
-    setActiveStatusFilters([]);
+    setActiveKpiFilters([]);
     setCompletedFilter("all");
     const sp = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
+    sp.delete(ORDERS_KPI_PARAM);
     sp.delete("ordersCompleted");
     sp.delete("page");
     const q = sp.toString();
-    router.replace(q ? `/admin/orders?${q}` : "/admin/orders", { scroll: false });
+    startTransition(() => {
+      router.replace(q ? `/admin/orders?${q}` : "/admin/orders", { scroll: false });
+    });
   }, [router]);
 
-  const statusKpiAllActive = activeStatusFilters.length === 0 && completedFilter === "all";
+  const statusKpiAllActive = activeKpiFilters.length === 0 && completedFilter === "all";
+
+  const kpiFromUrlKey = searchParams.get(ORDERS_KPI_PARAM) ?? "";
+  useEffect(() => {
+    const fromUrl = parseOrdersKpiFilters(searchParams);
+    setActiveKpiFilters((prev) => {
+      if (prev.length === fromUrl.length && prev.every((k, i) => k === fromUrl[i])) return prev;
+      return fromUrl;
+    });
+  }, [kpiFromUrlKey, searchParams]);
 
   const mergedPaymentLocationOptions = useMemo(() => {
     const m = new Map<string, string>();
@@ -370,9 +425,9 @@ export function OrdersListShell({
       rows.filter((o) => {
         if (completedFilter === "done" && !o.isCompleted) return false;
         if (completedFilter === "not_done" && o.isCompleted) return false;
-        return orderMatchesStatusKpiFilters(o.status, activeStatusFilters);
+        return orderMatchesOrdersKpiFilters(o, activeKpiFilters);
       }),
-    [rows, activeStatusFilters, completedFilter],
+    [rows, activeKpiFilters, completedFilter],
   );
 
   const statusKpiCards = useMemo(
@@ -436,15 +491,16 @@ export function OrdersListShell({
     const from = (page - 1) * pageSize + 1;
     const to = Math.min(page * pageSize, totalCount);
     const base = `מציג ${from.toLocaleString("he-IL")}–${to.toLocaleString("he-IL")} מתוך ${totalCount.toLocaleString("he-IL")}`;
-    if (activeStatusFilters.length === 0) return base;
+    if (activeKpiFilters.length === 0) return base;
     return `${base} · ${tableRows.length.toLocaleString("he-IL")} לאחר סינון ריבועים בעמוד`;
-  }, [paginationLive, activeStatusFilters.length, tableRows.length]);
+  }, [paginationLive, activeKpiFilters.length, tableRows.length]);
 
   useEffect(() => {
     setListErr(loadError);
   }, [loadError]);
 
   useEffect(() => {
+    if (loadError) return;
     const pending = recentLocalStatusRef.current;
     setRows((cur) => {
       const curById = new Map(cur.map((r) => [r.id, r]));
@@ -460,12 +516,13 @@ export function OrdersListShell({
     });
     setStatusSummaryLive(statusSummary);
     setPaginationLive(pagination);
+    setResultSummaryLive(resultSummary);
     setFilterOptionsLive({
       createdByOptions: toolbarProps.createdByOptions,
       countryFilterOptions: toolbarProps.countryFilterOptions,
       paymentLocationOptions,
     });
-  }, [orders, statusSummary, pagination, toolbarProps.createdByOptions, toolbarProps.countryFilterOptions, paymentLocationOptions]);
+  }, [loadError, orders, statusSummary, pagination, resultSummary, toolbarProps.createdByOptions, toolbarProps.countryFilterOptions, paymentLocationOptions]);
 
   const readExportSearchParams = useCallback((): Record<string, string | string[] | undefined> => {
     const sp = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
@@ -476,18 +533,14 @@ export function OrdersListShell({
     return raw;
   }, []);
 
-  const setCompletedFilterInUrl = useCallback(
-    (next: CompletedFilter) => {
-      setCompletedFilter(next);
-      const sp = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
-      if (next === "all") sp.delete("ordersCompleted");
-      else sp.set("ordersCompleted", next);
-      sp.delete("page");
-      const q = sp.toString();
-      router.replace(q ? `/admin/orders?${q}` : "/admin/orders", { scroll: false });
-    },
-    [router],
-  );
+  const completedFromUrl = searchParams.get("ordersCompleted") ?? "";
+  useEffect(() => {
+    setCompletedFilter(
+      completedFromUrl === "done" || completedFromUrl === "not_done" || completedFromUrl === "all"
+        ? completedFromUrl
+        : "all",
+    );
+  }, [completedFromUrl]);
 
   const newOrder = useCallback(() => {
     if (!canCreateOrders) return;
@@ -518,6 +571,7 @@ export function OrdersListShell({
       setRows(data.orders);
       setStatusSummaryLive(data.statusSummary);
       setPaginationLive(data.pagination);
+      setResultSummaryLive(data.resultSummary);
       setFilterOptionsLive({
         createdByOptions: data.createdByOptions,
         countryFilterOptions: data.countryFilterOptions,
@@ -842,7 +896,7 @@ export function OrdersListShell({
         const res = await exportOrdersListPdfHtmlAction(
           readExportSearchParams(),
           preset,
-          activeStatusFilters,
+          activeKpiFilters,
         );
         if (!res.ok) {
           setListErr(res.error);
@@ -855,7 +909,7 @@ export function OrdersListShell({
         setPdfLoading(false);
       }
     },
-    [previewOrdersPdfHtml, readExportSearchParams, activeStatusFilters, exportFilenameBase],
+    [previewOrdersPdfHtml, readExportSearchParams, activeKpiFilters, exportFilenameBase],
   );
 
   const runExcelExport = useCallback(
@@ -866,7 +920,7 @@ export function OrdersListShell({
         const res = await exportOrdersListExcelCsvAction(
           readExportSearchParams(),
           preset,
-          activeStatusFilters,
+          activeKpiFilters,
         );
         if (!res.ok) {
           setListErr(res.error);
@@ -879,7 +933,7 @@ export function OrdersListShell({
         setExcelLoading(false);
       }
     },
-    [downloadCsv, readExportSearchParams, activeStatusFilters],
+    [downloadCsv, readExportSearchParams, activeKpiFilters],
   );
 
   const toolbarPropsLive = useMemo(
@@ -960,6 +1014,7 @@ export function OrdersListShell({
       "createdBy",
       "amountMin",
       "amountMax",
+      ORDERS_KPI_PARAM,
     ];
     if (filterKeys.some((k) => sp.get(k))) return true;
     if (sp.get("ordersOpenOnly") === "1" || sp.get("ordersReadyOnly") === "1") return true;
@@ -969,10 +1024,10 @@ export function OrdersListShell({
   }, []);
 
   const listEmptyContent = useMemo((): ListEmptyContent | null => {
-    if (listErr) {
+    if (listErr && rows.length === 0) {
       return {
         kind: "error",
-        title: "לא הצלחנו לטעון את ההזמנות",
+        title: "לא ניתן לטעון את הזמנות השבוע.",
         body: listErr,
         action: () => {
           void refreshList();
@@ -980,14 +1035,15 @@ export function OrdersListShell({
         actionLabel: "נסה שוב",
       };
     }
-    if (refreshLoading && rows.length === 0) {
+    if ((refreshLoading || weekDataPending) && rows.length === 0) {
       return { kind: "loading" as const, title: "טוען הזמנות…", body: "", action: null, actionLabel: "" };
     }
+    if (weekDataPending) return null;
     if (rows.length === 0) {
-      if (hasUrlFilters() || completedFilter !== "all" || activeStatusFilters.length > 0) {
+      if (hasUrlFilters() || completedFilter !== "all" || activeKpiFilters.length > 0) {
         return {
           kind: "filtered" as const,
-          title: "לא נמצאו הזמנות לפי הסינון הנוכחי",
+          title: "אין הזמנות בהתאם לסינון הנוכחי",
           body: "נסו לנקות מסננים או לעבור לשבוע אחר.",
           action: clearStatusKpiFilters,
           actionLabel: "נקה הכל",
@@ -1014,11 +1070,12 @@ export function OrdersListShell({
   }, [
     listErr,
     refreshLoading,
+    weekDataPending,
     rows.length,
     tableRows.length,
     hasUrlFilters,
     completedFilter,
-    activeStatusFilters.length,
+    activeKpiFilters.length,
     clearStatusKpiFilters,
     dateRange.ahWeekSelect,
     dateRange.weekCode,
@@ -1100,8 +1157,7 @@ export function OrdersListShell({
               ariaLabel={`הכל — ${statusKpiAllActive ? "מציג את כל ההזמנות" : "לחיצה לאיפוס סינון סטטוס והצגת כל ההזמנות"}`}
             />
             {statusKpiCards.map((card) => {
-              const operational = card.key === "operationalCompleted";
-              const active = operational ? completedFilter === "done" : activeStatusFilters.includes(card.key);
+              const active = activeKpiFilters.includes(card.key);
               return (
                 <OrderStatusKpiButton
                   key={card.key}
@@ -1111,24 +1167,35 @@ export function OrdersListShell({
                   totalUsd={card.bucket.totalUsd}
                   active={active}
                   icon={card.icon}
-                  onClick={() => {
-                    if (operational) setCompletedFilterInUrl("done");
-                    else toggleStatusFilter(card.key);
-                  }}
-                  ariaLabel={
-                    operational
-                      ? "הושלם — לחיצה להצגת הזמנות שסומנו הושלם"
-                      : `${card.title} — ${active ? "סינון פעיל, לחיצה לביטול" : "לחיצה לסינון לפי סטטוס זה"}`
-                  }
+                  onClick={() => toggleKpiFilter(card.key)}
+                  ariaLabel={`${card.title} — ${active ? "סינון פעיל, לחיצה לביטול" : "לחיצה להוספה לסינון"}`}
                 />
               );
             })}
           </div>
         </div>
 
-        {listErr && !listEmptyContent?.kind ? (
+        {activeKpiFilters.length > 0 ? (
+          <div className="ofb-chips adm-orders-kpi-chips" dir="rtl" aria-label="מסנני סטטוס פעילים">
+            <span className="adm-orders-kpi-chips__label">מסננים פעילים:</span>
+            {activeKpiFilters.map((key) => (
+              <button
+                key={key}
+                type="button"
+                className="ofb-chips__chip"
+                onClick={() => toggleKpiFilter(key)}
+                title="הסר סינון"
+              >
+                <span>{ordersKpiLabel(key)}</span>
+                <span aria-hidden>×</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+
+        {listErr && rows.length > 0 ? (
           <div className="adm-orders-inline-err adm-orders-inline-err--block" role="alert">
-            <strong>לא הצלחנו לטעון את ההזמנות</strong>
+            <strong>לא ניתן לטעון את הזמנות השבוע.</strong>
             <p>{listErr}</p>
             <button type="button" className="adm-btn adm-btn--ghost adm-btn--dense" onClick={() => void refreshList()}>
               נסה שוב
@@ -1136,7 +1203,10 @@ export function OrdersListShell({
           </div>
         ) : null}
 
-        <div className="adm-orders-table-host mobile-table-wrapper adm-table-excel-wrap adm-table-excel-wrap--orders">
+        <div
+          className="adm-orders-table-host mobile-table-wrapper adm-table-excel-wrap adm-table-excel-wrap--orders"
+          aria-busy={weekDataPending || refreshLoading}
+        >
         <table className="adm-table-excel adm-table-excel--orders adm-table-excel--orders-v3">
           <thead>
             <tr>
@@ -1467,6 +1537,10 @@ export function OrdersListShell({
           )}
         </div>
         </div>
+
+        {resultSummaryLive && !listEmptyContent ? (
+          <OrdersResultSummaryTable summary={resultSummaryLive} />
+        ) : null}
 
         <OrdersListPaginationBar pagination={paginationLive} label={paginationLabel} />
 

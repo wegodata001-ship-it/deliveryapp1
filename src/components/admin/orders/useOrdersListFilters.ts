@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useOrderStatusCatalog } from "@/components/admin/OrderStatusCatalogProvider";
 import { COMPOSITE_PM, COMPOSITE_PM_LABEL } from "@/lib/payment-breakdown-shared";
 import { usePaymentMethodCatalog } from "@/components/admin/PaymentMethodCatalogProvider";
@@ -190,6 +190,7 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
       openOnly,
       completedOnly,
       ordersCompleted: parsed.ordersCompleted,
+      kpiStatuses: parsed.kpiStatuses,
       ...overrides,
     }),
     [
@@ -202,6 +203,7 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
       maxAmount,
       openOnly,
       orderNumDraft,
+      parsed.kpiStatuses,
       parsed.ordersCompleted,
       payLoc,
       paymentStatusValues,
@@ -214,7 +216,7 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
   );
 
   const pushFilters = useCallback(
-    (overrides?: Partial<OrderFilters>, opts?: { refresh?: boolean }) => {
+    (overrides?: Partial<OrderFilters>, _opts?: { refresh?: boolean }) => {
       const next = toOrderFilters(overrides);
       const base = buildOrdersListSearchParams(next, new URLSearchParams(searchParams.toString()));
       const qs = base.toString();
@@ -224,19 +226,20 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
           ? `${window.location.pathname}${window.location.search}`
           : "";
       if (current !== href) {
-        router.replace(href, { scroll: false });
+        startTransition(() => {
+          router.replace(href, { scroll: false });
+        });
       }
-      if (opts?.refresh) router.refresh();
     },
     [router, searchParams, toOrderFilters],
   );
 
   const schedulePush = useCallback(
-    (overrides?: Partial<OrderFilters>, opts?: { refresh?: boolean }) => {
+    (overrides?: Partial<OrderFilters>, _opts?: { refresh?: boolean }) => {
       if (debounceRef.current !== undefined) window.clearTimeout(debounceRef.current);
       debounceRef.current = window.setTimeout(() => {
         debounceRef.current = undefined;
-        pushFilters(overrides, opts);
+        pushFilters(overrides);
       }, 300);
     },
     [pushFilters],
@@ -326,11 +329,11 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
             range.dateTo,
             resolveGlobalCountry(searchParams.get("country")),
           );
-          pushFilters(range, { refresh: true });
+          pushFilters(range);
         }
       } else {
         setWeek("");
-        pushFilters({ week: "" }, { refresh: true });
+        pushFilters({ week: "" });
       }
     },
     [pushFilters, searchParams, setRangeFromWeekCode],
@@ -355,7 +358,7 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
           range.dateTo,
           resolveGlobalCountry(searchParams.get("country")),
         );
-        pushFilters(range, { refresh: true });
+        pushFilters(range);
       }
     },
     [input.ahWeekSelect, ordersWeekFromUrl, pushFilters, searchParams, setRangeFromWeekCode, week],
@@ -370,7 +373,7 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
         range.dateTo,
         resolveGlobalCountry(searchParams.get("country")),
       );
-      pushFilters(range, { refresh: true });
+      pushFilters(range);
     }
   }, [pushFilters, searchParams, setRangeFromWeekCode]);
 
@@ -657,6 +660,12 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
     ordersWeekFromUrl,
   ]);
 
+  const weekSwitching = Boolean(
+    normalizeAhWeekCode(week) &&
+      normalizeAhWeekCode(input.ahWeekSelect) &&
+      normalizeAhWeekCode(week) !== normalizeAhWeekCode(input.ahWeekSelect),
+  );
+
   const hasClearableFilters = activeFilterChips.length > 0;
 
   const mobileFilterCount = useMemo(() => {
@@ -723,6 +732,7 @@ export function useOrdersListFilters(input: UseOrdersListFiltersInput) {
     onWeekCommitted,
     shiftWeekNav,
     goToActiveWeek,
+    weekSwitching,
     weekRange,
     datesDifferFromWeek,
     advancedFilterCount,

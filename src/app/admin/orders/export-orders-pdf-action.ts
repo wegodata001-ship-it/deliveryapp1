@@ -19,7 +19,7 @@ import {
   type OrdersListExportPreset,
   type OrdersPdfLayoutMode,
 } from "@/lib/orders-list-export-presets";
-import type { OrderStatusKpiKey } from "@/lib/orders-status-kpi-filter";
+import type { OrdersKpiFilterKey } from "@/lib/orders-status-kpi-filter";
 import { atlasExportHtmlStyles, atlasHtmlHeadBlock } from "@/lib/atlas-export-html";
 import {
   formatSignedUsdDisplay,
@@ -479,7 +479,7 @@ function renderByCustomerBody(rows: PdfRow[]): string {
 export async function exportOrdersListPdfHtmlAction(
   sp: Record<string, string | string[] | undefined>,
   preset: OrdersListExportPreset,
-  kpiStatusFilters: OrderStatusKpiKey[] = [],
+  kpiStatusFilters: OrdersKpiFilterKey[] = [],
 ): Promise<{ ok: true; html: string } | { ok: false; error: string }> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["view_orders"])) {
@@ -509,6 +509,7 @@ export async function exportOrdersListPdfHtmlAction(
         orderDate: true,
         weekCode: true,
         status: true,
+        isCompleted: true,
         customerCodeSnapshot: true,
         customerNameSnapshot: true,
         paymentMethod: true,
@@ -541,7 +542,7 @@ export async function exportOrdersListPdfHtmlAction(
   const truncated = raw.length > PDF_EXPORT_MAX_ROWS;
   let rowsRaw = truncated ? raw.slice(0, PDF_EXPORT_MAX_ROWS) : raw;
   rowsRaw = rowsRaw.filter((r) =>
-    orderMatchesExportKpiAfterFetch(r.status, preset, kpiStatusFilters),
+    orderMatchesExportKpiAfterFetch(r, preset, kpiStatusFilters),
   );
 
   if (rowsRaw.length === 0) {

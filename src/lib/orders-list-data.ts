@@ -21,6 +21,11 @@ import { groupByActivePayments } from "@/lib/payment-record-status";
 import { readMultiParam } from "@/lib/orders-list-filter-params";
 import { resolveOrderIdsForPaymentStatusFilter } from "@/lib/orders-list-payment-status-where";
 import { indexOrderCommissionBreakdowns } from "@/lib/order-commission-ssot";
+import { parseOrdersKpiFilters } from "@/lib/orders-status-kpi-filter";
+import {
+  buildOrdersResultSummary,
+  type OrdersResultSummary,
+} from "@/lib/orders-list-result-summary";
 
 function fmtUsd2(n: unknown): string | null {
   if (n == null) return null;
@@ -69,6 +74,7 @@ export type OrdersListPageData = {
     totalCount: number;
     totalPages: number;
   };
+  resultSummary: OrdersResultSummary | null;
 };
 
 const orderListSelect = {
@@ -108,6 +114,14 @@ type StatusGroupRow = { status: string; _count: { _all: number }; _sum: { totalU
 type CompletedGroupRow = { isCompleted: boolean; _count: { _all: number }; _sum: { totalUsd: unknown } };
 type IntakeLocationRow = { id: string; name: string };
 type PaymentSumRow = { orderId: string | null; _sum: { amountUsd: unknown } };
+type ResultSummaryLeanRow = {
+  id: string;
+  status: string;
+  isCompleted: boolean;
+  amountUsd: unknown;
+  commissionUsd: unknown;
+  totalUsd: unknown;
+};
 type EditRequestsPayload = {
   pendingRows: { orderId: string; requestedByUserId: string }[];
   recentRequests: { orderId: string; status: OrderEditRequestStatus; requestedByUserId: string }[];
@@ -125,6 +139,7 @@ const ordersCountryOptionsStore = new Map<string, CacheEntry<OrdersCountryFilter
 const ordersKpiStore = new Map<string, CacheEntry<StatusGroupRow[]>>();
 const ordersCompletedKpiStore = new Map<string, CacheEntry<CompletedGroupRow[]>>();
 const ordersPaymentSumsStore = new Map<string, CacheEntry<PaymentSumRow[]>>();
+const ordersResultSummaryLeanStore = new Map<string, CacheEntry<ResultSummaryLeanRow[]>>();
 const ordersEditRequestsStore = new Map<string, CacheEntry<EditRequestsPayload>>();
 
 export function invalidateOrdersListDataCache(): void {
@@ -136,6 +151,7 @@ export function invalidateOrdersListDataCache(): void {
   ordersKpiStore.clear();
   ordersCompletedKpiStore.clear();
   ordersPaymentSumsStore.clear();
+  ordersResultSummaryLeanStore.clear();
   ordersEditRequestsStore.clear();
 }
 
@@ -322,86 +338,99 @@ export async function fetchOrdersListPageData(
   const ordersPageCacheKey = `${fullCacheKey}|page=${page}|pageSize=${pageSize}|user=${me.id}|payStatus=${paymentStatusValues.join(",")}`;
   const countCacheKey = `${fullCacheKey}|count|payStatus=${paymentStatusValues.join(",")}`;
 
-  const [statusGroups, completedGroups, intakeLocationRows, totalCount, createdByOptions, countryFilterOptions] =
-    await withPerfTimer("orders.page.fetchOrders", async () => {
-      const statusGroups = await cachedTimed("ordersKpiStore", ordersKpiStore, scopeCacheKey, (ms) => (kpiMs += ms), async () =>
-        (await (prisma.order.groupBy as unknown as (args: {
-          by: ["status"];
-          where: Prisma.OrderWhereInput;
-          _count: { _all: true };
-          _sum: { totalUsd: true };
-        }) => Promise<StatusGroupRow[]>)({
-          by: ["status"],
-          where: statsWhere,
-          _count: { _all: true },
-          _sum: { totalUsd: true },
-        })) as StatusGroupRow[],
-        { bypass: options.refreshStats },
-      );
-      const completedGroups = await cachedTimed(
-        "ordersCompletedKpiStore",
-        ordersCompletedKpiStore,
-        `${scopeCacheKey}|completed`,
-        (ms) => (kpiMs += ms),
-        async () =>
+  const [statusGroups, completedGroups, intakeLocationRows, totalCount, createdByOptions, countryFilterOptions, summaryLean] =
+    await withPerfTimer("orders.page.fetchOrders", () =>
+      Promise.all([
+        cachedTimed("ordersKpiStore", ordersKpiStore, scopeCacheKey, (ms) => (kpiMs += ms), async () =>
           (await (prisma.order.groupBy as unknown as (args: {
-            by: ["isCompleted"];
+            by: ["status"];
             where: Prisma.OrderWhereInput;
             _count: { _all: true };
             _sum: { totalUsd: true };
-          }) => Promise<CompletedGroupRow[]>)({
-            by: ["isCompleted"],
+          }) => Promise<StatusGroupRow[]>)({
+            by: ["status"],
             where: statsWhere,
             _count: { _all: true },
             _sum: { totalUsd: true },
-          })) as CompletedGroupRow[],
-        { bypass: options.refreshStats },
-      );
-      const intakeLocationRows = await cachedTimed(
-        "ordersStatsStore",
-        ordersStatsStore,
-        "intakeLocations:v1",
-        (ms) => (statsMs += ms),
-        () =>
-          prisma.intakeLocation.findMany({
-            select: { id: true, name: true },
-            orderBy: { name: "asc" },
-            take: 500,
-          }),
-        { bypass: options.refreshStats },
-      );
-      const totalCount = await cachedTimed(
-        "ordersCountStore",
-        ordersCountStore,
-        countCacheKey,
-        (ms) => (ordersCountMs += ms),
-        () => prisma.order.count({ where: listWhere }),
-      );
-      const createdByOptions = await cachedTimed(
-        "ordersCreatorsStore",
-        ordersCreatorsStore,
-        "orderCreators:v1",
-        (ms) => (statsMs += ms),
-        loadOrderCreatorFilterOptions,
-        { bypass: options.refreshStats },
-      );
-      const countryFilterOptions = await cachedTimed(
-        "ordersCountryOptionsStore",
-        ordersCountryOptionsStore,
-        `${scopeCacheKey}|countryOptions`,
-        (ms) => (statsMs += ms),
-        () => loadOrderCountryFilterOptions(countryOptionsWhere),
-        { bypass: options.refreshStats },
-      );
-      return [
-        statusGroups,
-        completedGroups,
-        intakeLocationRows,
-        totalCount,
-        createdByOptions,
-        countryFilterOptions,
-      ] as const;
-    });
+          })) as StatusGroupRow[],
+          { bypass: options.refreshStats },
+        ),
+        cachedTimed(
+          "ordersCompletedKpiStore",
+          ordersCompletedKpiStore,
+          `${scopeCacheKey}|completed`,
+          (ms) => (kpiMs += ms),
+          async () =>
+            (await (prisma.order.groupBy as unknown as (args: {
+              by: ["isCompleted"];
+              where: Prisma.OrderWhereInput;
+              _count: { _all: true };
+              _sum: { totalUsd: true };
+            }) => Promise<CompletedGroupRow[]>)({
+              by: ["isCompleted"],
+              where: statsWhere,
+              _count: { _all: true },
+              _sum: { totalUsd: true },
+            })) as CompletedGroupRow[],
+          { bypass: options.refreshStats },
+        ),
+        cachedTimed(
+          "ordersStatsStore",
+          ordersStatsStore,
+          "intakeLocations:v1",
+          (ms) => (statsMs += ms),
+          () =>
+            prisma.intakeLocation.findMany({
+              select: { id: true, name: true },
+              orderBy: { name: "asc" },
+              take: 500,
+            }),
+          { bypass: options.refreshStats },
+        ),
+        cachedTimed(
+          "ordersCountStore",
+          ordersCountStore,
+          countCacheKey,
+          (ms) => (ordersCountMs += ms),
+          () => prisma.order.count({ where: listWhere }),
+        ),
+        cachedTimed(
+          "ordersCreatorsStore",
+          ordersCreatorsStore,
+          "orderCreators:v1",
+          (ms) => (statsMs += ms),
+          loadOrderCreatorFilterOptions,
+          { bypass: options.refreshStats },
+        ),
+        cachedTimed(
+          "ordersCountryOptionsStore",
+          ordersCountryOptionsStore,
+          `${scopeCacheKey}|countryOptions`,
+          (ms) => (statsMs += ms),
+          () => loadOrderCountryFilterOptions(countryOptionsWhere),
+          { bypass: options.refreshStats },
+        ),
+        cachedTimed(
+          "ordersResultSummaryLeanStore",
+          ordersResultSummaryLeanStore,
+          `${countCacheKey}|summaryLean`,
+          (ms) => (ordersQueryMs += ms),
+          () =>
+            prisma.order.findMany({
+              where: listWhere,
+              select: {
+                id: true,
+                status: true,
+                isCompleted: true,
+                amountUsd: true,
+                commissionUsd: true,
+                totalUsd: true,
+              },
+              take: 5_000,
+            }) as Promise<ResultSummaryLeanRow[]>,
+        ),
+      ]),
+    );
 
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const safePage = Math.min(page, totalPages);
@@ -550,18 +579,25 @@ export async function fetchOrdersListPageData(
   };
 
   const ids = rows.map((r) => r.id);
+  const summaryIds = summaryLean.map((r) => r.id);
+  const paymentIds = summaryIds.length > 0 ? summaryIds : ids;
   const paySums =
-    ids.length > 0
-      ? await cachedTimed("ordersPaymentSumsStore", ordersPaymentSumsStore, `paySums:${ids.slice().sort().join(",")}`, (ms) => (statsMs += ms), async () =>
-          (await groupByActivePayments(
-            "orderId",
-            {
-              orderId: { in: ids },
-              amountUsd: { not: null },
-              NOT: { businessType: { in: ["ADJUSTMENT_FEE", "CUSTOMER_CREDIT"] } },
-            },
-            { amountUsd: true },
-          )) as PaymentSumRow[],
+    paymentIds.length > 0
+      ? await cachedTimed(
+          "ordersPaymentSumsStore",
+          ordersPaymentSumsStore,
+          `paySums:${countCacheKey}`,
+          (ms) => (statsMs += ms),
+          async () =>
+            (await groupByActivePayments(
+              "orderId",
+              {
+                orderId: { in: paymentIds },
+                amountUsd: { not: null },
+                NOT: { businessType: { in: ["ADJUSTMENT_FEE", "CUSTOMER_CREDIT"] } },
+              },
+              { amountUsd: true },
+            )) as PaymentSumRow[],
         )
       : [];
   const paidByOrder = new Map<string, number>();
@@ -670,6 +706,19 @@ export async function fetchOrdersListPageData(
     }),
   );
 
+  const resultSummary = buildOrdersResultSummary(
+    summaryLean.map((r) => ({
+      id: r.id,
+      status: r.status,
+      isCompleted: Boolean(r.isCompleted),
+      amountUsd: r.amountUsd,
+      commissionUsd: r.commissionUsd,
+      totalUsd: r.totalUsd,
+      paidUsd: paidByOrder.get(r.id) ?? 0,
+    })),
+    parseOrdersKpiFilters(sp),
+  );
+
   if (perfEnabled()) {
     const totalMs = Date.now() - perfT0;
     console.table({
@@ -704,5 +753,6 @@ export async function fetchOrdersListPageData(
       totalCount,
       totalPages,
     },
+    resultSummary,
   };
 }

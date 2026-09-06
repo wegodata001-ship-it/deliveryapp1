@@ -3,7 +3,52 @@ import { mergeOrderWhere, resolveCountryScope } from "@/lib/country-data-scope";
 import { ORDER_COUNTRY_CODES, type OrderCountryCode } from "@/lib/order-countries";
 import { readMultiParam } from "@/lib/orders-list-filter-params";
 import { OS } from "@/lib/order-status-slugs";
+import {
+  parseOrdersKpiFilters,
+  type OrdersKpiFilterKey,
+} from "@/lib/orders-status-kpi-filter";
 import { normalizeAhWeekCode, parseOrdersListDateFilterFromSearchParams } from "@/lib/work-week";
+
+/** OR בין ריבועי KPI. הושלם = isCompleted, לא status enum. */
+export function buildOrdersKpiWhere(keys: OrdersKpiFilterKey[]): Prisma.OrderWhereInput | undefined {
+  if (keys.length === 0) return undefined;
+  const orParts: Prisma.OrderWhereInput[] = [];
+  for (const key of keys) {
+    switch (key) {
+      case "open":
+        orParts.push({ status: OS.OPEN });
+        break;
+      case "completed":
+        orParts.push({ status: OS.COMPLETED });
+        break;
+      case "cancelled":
+        orParts.push({ status: OS.CANCELLED });
+        break;
+      case "debtWithdrawal":
+        orParts.push({ status: OS.DEBT_WITHDRAWAL });
+        break;
+      case "inProgress":
+        orParts.push({
+          status: {
+            in: [
+              OS.WAITING_FOR_EXECUTION,
+              OS.WITHDRAWAL_FROM_SUPPLIER,
+              OS.SENT,
+              OS.WAITING_FOR_CHINA_EXECUTION,
+            ],
+          },
+        });
+        break;
+      case "operationalCompleted":
+        orParts.push({ isCompleted: true });
+        break;
+      default:
+        break;
+    }
+  }
+  if (orParts.length === 0) return undefined;
+  return orParts.length === 1 ? orParts[0] : { OR: orParts };
+}
 
 function readTextParam(sp: Record<string, string | string[] | undefined>, key: string): string {
   const v = sp[key];
@@ -165,6 +210,8 @@ export function buildOrdersListWhereFromSearchParams(
   if (phoneWhere) filterParts.push(phoneWhere);
 
   const statusWhere = buildInOrSingle(statusValues, "status");
+  const kpiWhere = buildOrdersKpiWhere(parseOrdersKpiFilters(sp));
+  if (kpiWhere) filterParts.push(kpiWhere);
   const createdByWhere = buildInOrSingle(createdByIds, "createdById");
   const paymentMethodWhere = buildPaymentMethodWhere(paymentTypes);
 

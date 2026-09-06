@@ -59,6 +59,7 @@ import {
   paymentIntakeDebtAfterPaymentUsd,
   paymentIntakeDebtBeforePaymentUsd,
 } from "@/lib/payment-intake-customer-debt";
+import { buildCustomerFinancialState } from "@/lib/customer-account-balances-shared";
 import { softRefreshPaymentIntakeOrders } from "@/lib/payment-intake-orders-source";
 import { PaymentDocumentRateIcons } from "@/components/admin/PaymentDocumentRateIcons";
 import { attachDraftDocumentsAction } from "@/app/admin/documents/actions";
@@ -1034,10 +1035,12 @@ export function PaymentModalUpdated({
     const res = await fetchCustomerOpenDebtAction(cid, intakeDocumentWorkCountry);
     if (gen !== customerOpenDebtFetchGenRef.current) return;
     if (res.ok) {
-      setCustomerOpenDebtSignedUsd(parseMoneyStringOrZero(res.signedBalanceUsd));
+      setCustomerOpenDebtSignedUsd(parseMoneyStringOrZero(res.openDebtUsd));
       setCustomerLedgerChargesUsd(parseMoneyStringOrZero(res.totalOrdersBeforeCommissionUsd));
       setCustomerLedgerPaymentsUsd(parseMoneyStringOrZero(res.totalPaymentsUsd));
       setCustomerLedgerWithdrawalsUsd(parseMoneyStringOrZero(res.totalWithdrawalsUsd));
+      setServerCreditBalanceUsd(parseMoneyStringOrZero(res.customerCreditUsd));
+      setServerCommissionBalanceUsd(parseMoneyStringOrZero(res.feeBalanceUsd));
       setCustomer((cur) =>
         cur?.id === cid ? { ...cur, customerBalanceUsd: res.internalSignedUsd } : cur,
       );
@@ -1069,7 +1072,6 @@ export function PaymentModalUpdated({
     () => parseMoneyStringOrZero(customer?.customerBalanceUsd ?? "0"),
     [customer?.customerBalanceUsd],
   );
-  const customerHasCredit = customerBalanceUsd > 0.01;
   const customerOpenDebtDisplayUsd = paymentIntakeCustomerOpenDebtUsd({
     customerOpenDebtSignedUsd,
     customerBalanceResetPending,
@@ -1161,6 +1163,16 @@ export function PaymentModalUpdated({
   const displayCreditBalanceUsd = useMemo(
     () => roundMoney2(serverCreditBalanceUsd),
     [serverCreditBalanceUsd],
+  );
+  const customerHasCredit = displayCreditBalanceUsd > 0.01;
+  const customerFinancial = useMemo(
+    () =>
+      buildCustomerFinancialState({
+        openDebtUsd: customerOpenDebtDisplayUsd,
+        availableCreditUsd: displayCreditBalanceUsd,
+        commissionBalanceUsd: displayCommissionBalanceUsd,
+      }),
+    [customerOpenDebtDisplayUsd, displayCreditBalanceUsd, displayCommissionBalanceUsd],
   );
 
   const creditAvailableForResetUsd = useMemo(
@@ -4123,11 +4135,11 @@ export function PaymentModalUpdated({
                           className={[
                             "payment-modal-cust-summary__total",
                             "payment-modal-cust-summary__total--balance",
-                            customerBalanceResetPending || intakeStripOpenDebtUsd <= 0.01
-                              ? (customerOpenDebtSignedUsd ?? 0) < -0.01
-                                ? "payment-modal-cust-summary__total--balance-credit"
-                                : "payment-modal-cust-summary__total--balance-zero"
-                              : "payment-modal-cust-summary__total--balance-debt",
+                            customerFinancial.tone === "credit"
+                              ? "payment-modal-cust-summary__total--balance-credit"
+                              : customerFinancial.tone === "debt"
+                                ? "payment-modal-cust-summary__total--balance-debt"
+                                : "payment-modal-cust-summary__total--balance-zero",
                           ].join(" ")}
                         >
                           <Scale size={16} strokeWidth={1.75} aria-hidden />
@@ -4155,6 +4167,18 @@ export function PaymentModalUpdated({
                                 : displayCreditBalanceUsd,
                             )}
                           </button>
+                        </div>
+                        <div
+                          className={[
+                            "payment-modal-cust-summary__total",
+                            "payment-modal-cust-summary__total--status",
+                            `payment-modal-cust-summary__total--status-${customerFinancial.tone}`,
+                          ].join(" ")}
+                        >
+                          <span className="payment-modal-cust-summary__total-k">מצב:</span>
+                          <strong className="payment-modal-cust-summary__total-v" dir="ltr">
+                            {customerFinancial.headline}
+                          </strong>
                         </div>
                       </div>
                     ) : null}
@@ -4809,6 +4833,7 @@ export function PaymentModalUpdated({
                   <PaymentLiveSummaryCards
                     kpis={liveFormKpis}
                     openDebtUsd={customerOpenDebtDisplayUsd}
+                    creditUsd={displayCreditBalanceUsd}
                     onOpenDebtClick={() => setDebtBreakdownOpen(true)}
                     paymentBalanceDisplay={isHistoricalPaymentView ? null : paymentBalanceDisplay}
                     historicalPaymentView={isHistoricalPaymentView}
@@ -4918,6 +4943,7 @@ export function PaymentModalUpdated({
                     customerName={customer.displayName}
                     customerCode={customer.customerCode ?? null}
                     openDebtUsd={customerOpenDebtDisplayUsd}
+                    creditUsd={displayCreditBalanceUsd}
                     weekCode={intakeWeekCode}
                     workCountry={intakeDocumentWorkCountry}
                     exchangeRate={dollarRate}
