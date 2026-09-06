@@ -126,6 +126,7 @@ type Props = {
   customerName: string;
   customerCode: string | null;
   openDebtUsd: number;
+  creditUsd: number;
   weekCode: string;
   workCountry: string;
   exchangeRate?: string | null;
@@ -175,6 +176,7 @@ export function PaymentMethodAutoAdjustModal({
   customerName,
   customerCode,
   openDebtUsd,
+  creditUsd,
   weekCode,
   workCountry,
   exchangeRate,
@@ -409,6 +411,7 @@ export function PaymentMethodAutoAdjustModal({
   if (!open) return null;
 
   const debt = preview?.openDebtUsd ?? bootstrapDebt ?? openDebtUsd;
+  const credit = preview?.existingCreditUsd ?? creditUsd;
   const customerLabel = customerCode
     ? `${customerName || "—"} #${customerCode}`
     : customerName || "—";
@@ -444,6 +447,10 @@ export function PaymentMethodAutoAdjustModal({
                 {fmtUsd(debt)}
                 <UsdBalanceIlsGrossText usd={debt} exchangeRate={rateN ?? 0} className="adm-balances-ils-gross" />
               </strong>
+            </div>
+            <div className={credit > 0.01 ? "pm-paynow-stat pm-paynow-stat--ok" : "pm-paynow-stat"}>
+              <span>יתרת זכות</span>
+              <strong dir="ltr">{credit > 0.01 ? `+${fmtUsd(credit)}` : fmtUsd(0)}</strong>
             </div>
             {rateN ? (
               <div className="pm-paynow-stat">
