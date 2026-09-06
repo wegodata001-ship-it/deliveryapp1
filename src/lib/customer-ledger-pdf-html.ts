@@ -91,6 +91,7 @@ export function buildCustomerLedgerPdfHtml(params: {
         <td class="col-money">${moneyCell(r.chargeUsd)}</td>
         <td class="col-money">${moneyCell(r.paymentUsd)}</td>
         <td class="col-money">${moneyCell(r.balance)}</td>
+        <td class="col-money">${moneyCell(r.orderRemainingUsd)}</td>
       </tr>`;
     })
     .join("");
@@ -311,10 +312,11 @@ export function buildCustomerLedgerPdfHtml(params: {
           <th class="col-type">סוג</th>
           <th class="col-money">חיוב</th>
           <th class="col-money">תשלום / זיכוי</th>
-          <th class="col-money">יתרה</th>
+          <th class="col-money">יתרה לאחר תנועה</th>
+          <th class="col-money">נשאר להזמנה</th>
         </tr>
       </thead>
-      <tbody>${tableRows || `<tr><td colspan="6" class="empty-state">אין תנועות בכרטסת</td></tr>`}</tbody>
+      <tbody>${tableRows || `<tr><td colspan="7" class="empty-state">אין תנועות בכרטסת</td></tr>`}</tbody>
     </table>
 
     <section class="summary-row">
@@ -345,7 +347,7 @@ export function buildCustomerLedgerPdfHtml(params: {
     </section>
 
     <p class="legend">
-      ${isManual ? "PDF ידני — רק השורות שנבחרו · היתרה בכל שורה היא ההיסטורית מהכרטסת, לא חישוב מחדש" : "כרטסת לקוח"}
+      ${isManual ? "PDF ידני — רק השורות שנבחרו · יתרה לאחר תנועה היא היסטורית מהכרטסת, לא יתרת הזמנה נוכחית" : "יתרה לאחר תנועה היא היסטורית. נשאר להזמנה הוא החוב הפתוח הנוכחי של אותה הזמנה."}
     </p>
   </main>
 </body>

@@ -77,3 +77,23 @@ export function paymentIntakeDebtAfterPaymentUsd(params: {
     : roundMoney2(Math.max(0, params.formPaymentUsd));
   return roundMoney2(before - applyUsd);
 }
+
+/**
+ * ספרי לקוח אחרי הקצאת תשלום בטופס — תצוגה בלבד.
+ * Credit גדל רק מעודף שמתווסף לספר הזכות, לא מ-signed שלילי.
+ */
+export function customerBooksAfterPaymentApply(params: {
+  openDebtUsd: number;
+  availableCreditUsd: number;
+  applyUsd: number;
+  surplusToCredit: boolean;
+}): { openDebtUsd: number; availableCreditUsd: number } {
+  const debt = roundMoney2(Math.max(0, Number(params.openDebtUsd) || 0));
+  const credit = roundMoney2(Math.max(0, Number(params.availableCreditUsd) || 0));
+  const apply = roundMoney2(Math.max(0, Number(params.applyUsd) || 0));
+  const remainingDebt = roundMoney2(Math.max(0, debt - apply));
+  const excess = roundMoney2(Math.max(0, apply - debt));
+  const nextCredit =
+    params.surplusToCredit && excess > 0.01 ? roundMoney2(credit + excess) : credit;
+  return { openDebtUsd: remainingDebt, availableCreditUsd: nextCredit };
+}

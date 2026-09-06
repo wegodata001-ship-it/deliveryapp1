@@ -229,8 +229,8 @@ export function planPaymentIntentAdjustments(params: {
   orders: PaymentIntakeOrderRow[];
   intents: PaymentIntentLine[];
   exchangeRate?: number | null;
-  /** חוב פתוח SSOT — אם חסר, Σ יתרות הזמנה אחרי משיכות */
-  customerOpenDebtUsd?: number | null;
+  /** חוב פתוח מ-getCustomerAccountBalances / getCustomerOpenDebt — לא Σ remaining */
+  customerOpenDebtUsd: number;
 }): PaymentIntentPlan {
   const rate = params.exchangeRate && params.exchangeRate > 0 ? params.exchangeRate : null;
   const sortedOrders = [...params.orders]
@@ -240,11 +240,7 @@ export function planPaymentIntentAdjustments(params: {
     }))
     .sort(byOldestFirst);
 
-  const remainingUsd = roundMoney2(sortedOrders.reduce((sum, order) => sum + orderRemainingUsd(order), 0));
-  const openDebtUsd =
-    params.customerOpenDebtUsd != null && Number.isFinite(params.customerOpenDebtUsd)
-      ? roundMoney2(Math.max(0, params.customerOpenDebtUsd))
-      : remainingUsd;
+  const openDebtUsd = roundMoney2(Math.max(0, Number(params.customerOpenDebtUsd) || 0));
 
   const normalized: CalculatedPaymentIntentLine[] = [];
   for (const intent of params.intents) {

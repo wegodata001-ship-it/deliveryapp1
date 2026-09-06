@@ -59,6 +59,7 @@ describe("planPaymentIntentAdjustments", () => {
       orders,
       intents: [{ method: "BANK_TRANSFER", currency: "ILS", amountNative: 20000 }],
       exchangeRate: 3,
+      customerOpenDebtUsd: 9000,
     });
     assert.equal(plan.ok, true);
     if (!plan.ok) return;
@@ -90,6 +91,7 @@ describe("planPaymentIntentAdjustments", () => {
         { method: "BANK_TRANSFER", currency: "ILS", amountNative: 9000 },
       ],
       exchangeRate: 3,
+      customerOpenDebtUsd: 9000,
     });
     assert.equal(plan.ok, true);
     if (!plan.ok) return;
@@ -103,6 +105,7 @@ describe("planPaymentIntentAdjustments", () => {
     const plan = planPaymentIntentAdjustments({
       orders,
       intents: [{ method: "CASH", currency: "USD", amountNative: 500 }],
+      customerOpenDebtUsd: 100,
     });
     assert.equal(plan.ok, true);
     if (!plan.ok) return;
@@ -126,6 +129,7 @@ describe("תשלום מעל/מתחת/שווה לחוב — allocation + credit S
     const plan = planPaymentIntentAdjustments({
       orders: [order({ id: "a", orderNumber: "TR-1", dateYmd: "2026-08-01", remainingUsd: DEBT })],
       intents: [{ method: "BANK_TRANSFER", currency: "USD", amountNative: DEBT }],
+      customerOpenDebtUsd: DEBT,
     });
     assert.equal(plan.ok, true);
     if (!plan.ok) return;
@@ -145,6 +149,7 @@ describe("תשלום מעל/מתחת/שווה לחוב — allocation + credit S
     const plan = planPaymentIntentAdjustments({
       orders: [order({ id: "a", orderNumber: "TR-1", dateYmd: "2026-08-01", remainingUsd: DEBT })],
       intents: [{ method: "BANK_TRANSFER", currency: "USD", amountNative: pay }],
+      customerOpenDebtUsd: DEBT,
     });
     assert.equal(plan.ok, true);
     if (!plan.ok) return;
@@ -164,6 +169,7 @@ describe("תשלום מעל/מתחת/שווה לחוב — allocation + credit S
     const plan = planPaymentIntentAdjustments({
       orders: [order({ id: "a", orderNumber: "TR-1", dateYmd: "2026-08-01", remainingUsd: DEBT })],
       intents: [{ method: "CASH", currency: "USD", amountNative: pay }],
+      customerOpenDebtUsd: DEBT,
     });
     assert.equal(plan.ok, true);
     if (!plan.ok) return;
@@ -181,6 +187,7 @@ describe("תשלום מעל/מתחת/שווה לחוב — allocation + credit S
         { method: "BANK_TRANSFER", currency: "ILS", amountNative: 6000 },
       ],
       exchangeRate: 3,
+      customerOpenDebtUsd: DEBT,
     });
     assert.equal(plan.ok, true);
     if (!plan.ok) return;
@@ -243,6 +250,7 @@ describe("תשלום מעל/מתחת/שווה לחוב — allocation + credit S
         { method: "BANK_TRANSFER", currency: "ILS", amountNative: 6000 },
       ],
       exchangeRate: 3,
+      customerOpenDebtUsd: DEBT,
     });
     assert.equal(plan.ok, true);
     if (!plan.ok) return;

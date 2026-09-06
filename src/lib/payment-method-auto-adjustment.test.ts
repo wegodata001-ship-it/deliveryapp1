@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildPaymentMethodAutoAdjustmentPreview } from "@/lib/payment-method-auto-adjustment";
+import {
+  buildPaymentMethodAdjustmentBootstrap,
+  buildPaymentMethodAutoAdjustmentPreview,
+} from "@/lib/payment-method-auto-adjustment";
 import type { PaymentIntakeOrderRow } from "@/lib/payment-intake";
 
 function order(params: {
@@ -67,6 +70,7 @@ test("auto-adjustment uses FIFO oldest to newest", () => {
     fromMethod: "CASH",
     toMethod: "BANK_TRANSFER",
     amountUsd: 250,
+    customerOpenDebtUsd: 300,
   });
   assert.equal(result.ok, true);
   if (!result.ok) return;
@@ -89,6 +93,7 @@ test("auto-adjustment partially updates the last order to hit exact target", () 
     fromMethod: "CASH",
     toMethod: "BANK_TRANSFER",
     amountUsd: 6000,
+    customerOpenDebtUsd: 14040,
   });
   assert.equal(result.ok, true);
   if (!result.ok) return;
@@ -101,4 +106,31 @@ test("auto-adjustment partially updates the last order to hit exact target", () 
   assert.equal(transferLine?.amount, "1960.00");
   assert.equal(result.preview.afterFromOpenUsd, 8040);
   assert.equal(result.preview.afterToOpenUsd, 6000);
+});
+
+test("preview uses injected SSOT debt, not Σ dbRemainingUsd", () => {
+  const result = buildPaymentMethodAutoAdjustmentPreview({
+    orders: [
+      order({ id: "1", orderNumber: "TR-1", dateYmd: "2026-08-01", cashRemainingUsd: 400 }),
+    ],
+    fromMethod: "CASH",
+    toMethod: "BANK_TRANSFER",
+    amountUsd: 100,
+    customerOpenDebtUsd: 0,
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.preview.customerOpenDebtUsd, 0);
+  assert.equal(result.preview.affectedOrders.length, 1);
+  assert.equal(result.preview.affectedOrders[0]!.moveUsd, 100);
+});
+
+test("bootstrap does not treat Σ order remaining as customer open debt", () => {
+  const bootstrap = buildPaymentMethodAdjustmentBootstrap({
+    orders: [
+      order({ id: "1", orderNumber: "TR-1", dateYmd: "2026-08-01", cashRemainingUsd: 400 }),
+    ],
+    customerPayments: [],
+  });
+  assert.equal("customerOpenDebtUsd" in bootstrap, false);
 });

@@ -5105,78 +5105,266 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
 }
 
 .adm-orders-result-summary {
-  margin: 0.55rem 0 0;
-  padding: 0.7rem 0.75rem 0.65rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  background: #fff;
+  width: 100%;
+  margin: 12px 0 12px;
+  min-height: 86px;
 }
 
-.adm-orders-result-summary__title {
-  margin: 0 0 0.45rem;
-  font-size: 0.82rem;
+.adm-orders-result-summary__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.orsb-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.orsb {
+  display: grid;
+  grid-template-columns: minmax(168px, 1.15fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  width: 100%;
+  min-height: 88px;
+  padding: 14px 18px;
+  border: 1px solid #e2e8f0;
+  border-radius: 13px;
+  background: linear-gradient(180deg, #fcfdff 0%, #ffffff 100%);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+  border-inline-start-width: 3px;
+  transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.orsb__status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding-inline-end: 16px;
+}
+
+.orsb__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #475569;
+  flex-shrink: 0;
+}
+
+.orsb__sigma {
+  font-size: 15px;
   font-weight: 800;
+  line-height: 1;
+}
+
+.orsb__status-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.orsb__title {
+  font-size: 19px;
+  font-weight: 800;
+  line-height: 1.15;
   color: #0f172a;
 }
 
-.adm-orders-result-summary__wrap {
-  overflow-x: auto;
+.orsb__count {
+  font-size: 13px;
+  font-weight: 600;
+  color: #64748b;
 }
 
-.adm-orders-result-summary__table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.78rem;
-  font-variant-numeric: tabular-nums;
+.orsb__metric {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding-inline: 16px;
+  border-inline-start: 1px solid #e8edf3;
 }
 
-.adm-orders-result-summary__table th,
-.adm-orders-result-summary__table td {
-  padding: 0.38rem 0.5rem;
-  text-align: right;
-  border-bottom: 1px solid #e2e8f0;
+.orsb__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #64748b;
 }
 
-.adm-orders-result-summary__table th {
-  font-size: 0.72rem;
+.orsb__value {
+  font-size: 20px;
   font-weight: 800;
-  color: #475569;
-  background: #f8fafc;
+  line-height: 1.15;
+  color: #0f172a;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
 }
 
-.adm-orders-result-summary__status {
+.orsb__value--zero {
+  color: #94a3b8;
   font-weight: 700;
 }
 
-.adm-orders-result-summary__row--open {
-  background: #f8fbff;
-}
-
-.adm-orders-result-summary__row--progress {
-  background: #fffaf5;
-}
-
-.adm-orders-result-summary__row--completed {
-  background: #f6fdf8;
-}
-
-.adm-orders-result-summary__row--operational {
-  background: #f5f9ff;
-}
-
-.adm-orders-result-summary__row--withdrawal {
-  background: #faf7ff;
-}
-
-.adm-orders-result-summary__row--cancelled {
-  background: #fff7f7;
-}
-
-.adm-orders-result-summary__total td {
-  border-bottom: 0;
-  font-weight: 900;
+.orsb__metric--balance .orsb__value:not(.orsb__value--zero) {
   color: #0f172a;
+}
+
+.orsb--open {
+  border-inline-start-color: #2563eb;
+  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 78%);
+}
+.orsb--open .orsb__icon {
+  color: #2563eb;
+  background: #eff6ff;
+}
+
+.orsb--progress {
+  border-inline-start-color: #ea580c;
+  background: linear-gradient(180deg, #fffaf5 0%, #ffffff 78%);
+}
+.orsb--progress .orsb__icon {
+  color: #c2410c;
+  background: #fff7ed;
+}
+
+.orsb--completed {
+  border-inline-start-color: #16a34a;
+  background: linear-gradient(180deg, #f7fdf8 0%, #ffffff 78%);
+}
+.orsb--completed .orsb__icon {
+  color: #15803d;
+  background: #f0fdf4;
+}
+
+.orsb--operational {
+  border-inline-start-color: #2563eb;
+  background: linear-gradient(180deg, #f5f9ff 0%, #ffffff 78%);
+}
+.orsb--operational .orsb__icon {
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+
+.orsb--withdrawal {
+  border-inline-start-color: #7c3aed;
+  background: linear-gradient(180deg, #faf7ff 0%, #ffffff 78%);
+}
+.orsb--withdrawal .orsb__icon {
+  color: #6d28d9;
+  background: #f5f3ff;
+}
+
+.orsb--cancelled {
+  border-inline-start-color: #dc2626;
+  background: linear-gradient(180deg, #fff8f8 0%, #ffffff 78%);
+}
+.orsb--cancelled .orsb__icon {
+  color: #b91c1c;
+  background: #fef2f2;
+}
+
+.orsb--grand {
+  border-inline-start-color: #475569;
   background: #eef2f7;
+  box-shadow: 0 3px 12px rgba(15, 23, 42, 0.05);
+  font-weight: 800;
+}
+.orsb--grand .orsb__title,
+.orsb--grand .orsb__value {
+  font-weight: 800;
+}
+.orsb--grand .orsb__icon {
+  color: #334155;
+  background: #e2e8f0;
+}
+
+.orsb--compact {
+  min-height: 68px;
+  padding: 10px 16px;
+}
+.orsb--compact .orsb__title {
+  font-size: 16px;
+}
+.orsb--compact .orsb__value {
+  font-size: 17px;
+}
+
+@media (max-width: 980px) {
+  .orsb {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      "status deal"
+      "gross balance";
+    min-height: 0;
+    gap: 10px 0;
+    padding: 14px 16px;
+  }
+  .orsb__status {
+    grid-area: status;
+    padding-inline-end: 12px;
+  }
+  .orsb__metric--deal {
+    grid-area: deal;
+  }
+  .orsb__metric--gross {
+    grid-area: gross;
+    border-inline-start: 0;
+    padding-inline-start: 0;
+    padding-top: 8px;
+    border-top: 1px solid #e8edf3;
+  }
+  .orsb__metric--balance {
+    grid-area: balance;
+    padding-top: 8px;
+    border-top: 1px solid #e8edf3;
+  }
+}
+
+@media (max-width: 640px) {
+  .orsb {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      "status status"
+      "deal gross"
+      "balance balance";
+    min-height: 0;
+  }
+  .orsb__status {
+    padding-inline-end: 0;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #e8edf3;
+  }
+  .orsb__metric,
+  .orsb__metric--gross,
+  .orsb__metric--balance {
+    border-inline-start: 0;
+    border-top: 0;
+    padding: 8px 0 0;
+  }
+  .orsb__metric--gross {
+    padding-inline-start: 12px;
+    border-inline-start: 1px solid #e8edf3;
+  }
+  .orsb__title {
+    font-size: 18px;
+  }
+  .orsb__value {
+    font-size: 18px;
+  }
 }
 
 @keyframes adm-shimmer {
@@ -6757,7 +6945,8 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
 
 .adm-orders-excel-page .adm-orders-result-summary {
   flex-shrink: 0;
-  margin-top: 6px;
+  width: 100%;
+  margin: 12px 0 12px;
 }
 
 .adm-orders-excel-page .adm-orders-hint {

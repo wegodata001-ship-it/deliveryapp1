@@ -275,6 +275,8 @@ export function buildPaymentMethodAutoAdjustmentPreview(params: {
   currency?: PaymentBalanceCurrency | null;
   amountNative?: number | null;
   exchangeRate?: number | null;
+  /** חוב לקוח מ-getCustomerAccountBalances().openDebtUsd — לא Σ dbRemainingUsd */
+  customerOpenDebtUsd: number;
 }): { ok: true; preview: PaymentMethodAdjustmentPreview } | { ok: false; error: string } {
   const fromMethod = params.fromMethod.trim();
   const toMethod = params.toMethod.trim();
@@ -309,7 +311,7 @@ export function buildPaymentMethodAutoAdjustmentPreview(params: {
   const fromBucket = paymentMethodBucketKey(fromMethod);
   const toBucket = paymentMethodBucketKey(toMethod);
   const sortedOrders = [...params.orders].sort(byOldestFirst);
-  const customerOpenDebtUsd = roundMoney2(sortedOrders.reduce((sum, order) => sum + Math.max(0, Number(order.dbRemainingUsd) || 0), 0));
+  const customerOpenDebtUsd = roundMoney2(Math.max(0, Number(params.customerOpenDebtUsd) || 0));
 
   const capturedBalances = aggregateCapturedPaymentsByMethodCurrency(params.customerPayments ?? []);
   const plannedOpenBalances = aggregateOrderPlannedOpenByMethodCurrency(sortedOrders);
@@ -445,7 +447,6 @@ export function buildPaymentMethodAdjustmentBootstrap(params: {
   capturedCards: MethodBalanceCard[];
   plannedCards: MethodBalanceCard[];
   capturedTotalUsd: number;
-  customerOpenDebtUsd: number;
 } {
   const sortedOrders = [...params.orders].sort(byOldestFirst);
   const rateN = params.exchangeRate && params.exchangeRate > 0 ? params.exchangeRate : null;
@@ -453,7 +454,6 @@ export function buildPaymentMethodAdjustmentBootstrap(params: {
   const plannedOpenBalances = aggregateOrderPlannedOpenByMethodCurrency(sortedOrders);
   const capturedCards = buildMethodBalanceCards({ captured: capturedBalances, planned: plannedOpenBalances, rate: rateN });
   const plannedCards = buildMethodBalanceCards({ captured: plannedOpenBalances, planned: plannedOpenBalances, rate: rateN });
-  const customerOpenDebtUsd = roundMoney2(sortedOrders.reduce((sum, order) => sum + Math.max(0, Number(order.dbRemainingUsd) || 0), 0));
   const capturedTotalUsd = roundMoney2(
     capturedBalances.reduce((sum, row) => {
       if (row.currency === "USD") return sum + row.amount;
@@ -467,6 +467,5 @@ export function buildPaymentMethodAdjustmentBootstrap(params: {
     capturedCards,
     plannedCards,
     capturedTotalUsd,
-    customerOpenDebtUsd,
   };
 }

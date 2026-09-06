@@ -132,6 +132,18 @@ export function applyDebtWithdrawalFifoToRemainders(
   });
 }
 
+/** יתרה לגבייה לפי הזמנה אחרי תשלומים + משיכת חוב FIFO. לא running ledger. */
+export function collectibleRemainingUsdByOrderId(
+  rows: Array<{ orderId: string; remainingAfterPaymentsUsd: number }>,
+  withdrawalUsd: number,
+): Map<string, number> {
+  const after = applyDebtWithdrawalFifoToRemainders(
+    rows.map((row) => row.remainingAfterPaymentsUsd),
+    withdrawalUsd,
+  );
+  return new Map(rows.map((row, index) => [row.orderId, after[index] ?? 0]));
+}
+
 /** חוב פתוח לגבייה = Σ יתרות אחרי תשלומים − משיכות מחוב. */
 export function collectibleOpenDebtAfterWithdrawalUsd(
   remaindersAfterPaymentsUsd: number[],
@@ -172,7 +184,7 @@ export function sumFormRemainingSignedUsd(
   return roundOrderMoney2(sum);
 }
 
-export type PaymentBalanceState = "debt" | "cleared" | "surplus";
+export type PaymentBalanceState = "debt" | "cleared" | "surplus" | "credit";
 
 export type PaymentBalanceDisplay = {
   state: PaymentBalanceState;
@@ -235,17 +247,56 @@ export function derivePaymentBalanceDisplay(
   };
 }
 
+/**
+ * כרטיס מצב לקוח בקליטת תשלום — Debt / Credit / Balanced.
+ * לא משתמש ב-signedBalance. Credit רק מ-availableCreditUsd.
+ */
+export function deriveCustomerAccountBalanceDisplay(
+  books: { openDebtUsd: number; availableCreditUsd: number },
+  exchangeRate: number,
+  eps = ORDER_DEBT_EPS,
+): PaymentBalanceDisplay {
+  const openDebtUsd = roundOrderMoney2(Math.max(0, Number(books.openDebtUsd) || 0));
+  const availableCreditUsd = roundOrderMoney2(Math.max(0, Number(books.availableCreditUsd) || 0));
+  if (openDebtUsd > eps) {
+    return {
+      state: "debt",
+      title: "נשאר לתשלום",
+      balanceUsdSigned: openDebtUsd,
+      displayUsd: openDebtUsd,
+      displayIls: convertDebtUsdToIlsIncludingVat(openDebtUsd, exchangeRate),
+    };
+  }
+  if (availableCreditUsd > eps) {
+    return {
+      state: "credit",
+      title: "יתרת זכות",
+      balanceUsdSigned: roundOrderMoney2(-availableCreditUsd),
+      displayUsd: availableCreditUsd,
+      displayIls: convertDebtUsdToIlsIncludingVat(availableCreditUsd, exchangeRate),
+    };
+  }
+  return {
+    state: "cleared",
+    title: "נשאר לתשלום",
+    statusHint: "מאוזן",
+    balanceUsdSigned: 0,
+    displayUsd: 0,
+    displayIls: 0,
+  };
+}
+
 /** מחרוזות תצוגה — + לעודף, ללא −0.00 */
 export function formatPaymentBalanceUsdLine(display: PaymentBalanceDisplay): string {
   const amt = formatMoneyAmount(display.displayUsd);
-  if (display.state === "surplus") return `+$${amt}`;
+  if (display.state === "surplus" || display.state === "credit") return `+$${amt}`;
   return `$${amt}`;
 }
 
 export function formatPaymentBalanceIlsLine(display: PaymentBalanceDisplay): string {
   const amt = formatMoneyAmount(display.displayIls);
   const suffix = display.displayIls > 0.005 ? " כולל מע״מ" : "";
-  if (display.state === "surplus") return `+₪${amt}${suffix}`;
+  if (display.state === "surplus" || display.state === "credit") return `+₪${amt}${suffix}`;
   return `₪${amt}${suffix}`;
 }
 

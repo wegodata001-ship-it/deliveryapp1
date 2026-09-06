@@ -45,6 +45,14 @@ describe("customer account SSOT — three separate books", () => {
     assert.notEqual(state.displayAmountUsd, 370);
   });
 
+  it("Omar leftover signed is not customer credit", () => {
+    const state = buildCustomerFinancialState({ openDebtUsd: 0, availableCreditUsd: 0 });
+    assert.equal(state.financialStatus, "BALANCED");
+    assert.equal(state.customerCreditUsd, 0);
+    assert.equal(state.headline, "$0.00");
+    assert.notEqual(state.amountFormatted, "+$252.50");
+  });
+
   it("does not represent credit as negative open debt", () => {
     const state = buildCustomerFinancialState({ openDebtUsd: 0, availableCreditUsd: 773.83 });
     assert.equal(state.openDebtUsd, 0);

@@ -26,8 +26,11 @@ export function RemainingToPayCard({ display }: Props) {
         "payment-modal-live-kpi",
         "payment-remaining-to-pay",
         state === "debt" ? "payment-remaining-to-pay--due" : "",
-        state === "cleared" || state === "surplus" ? "payment-remaining-to-pay--ok" : "",
+        state === "cleared" || state === "surplus" || state === "credit"
+          ? "payment-remaining-to-pay--ok"
+          : "",
         state === "surplus" ? "payment-remaining-to-pay--surplus" : "",
+        state === "credit" ? "payment-remaining-to-pay--credit" : "",
       ]
         .filter(Boolean)
         .join(" ")}

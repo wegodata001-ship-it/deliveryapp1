@@ -187,6 +187,7 @@ export function PaymentMethodAutoAdjustModal({
   const [drafts, setDrafts] = useState<Record<MethodKey, IntentDraft>>(() => emptyDrafts());
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const [bootstrapDebt, setBootstrapDebt] = useState(openDebtUsd);
+  const [bootstrapCredit, setBootstrapCredit] = useState(creditUsd);
   const [busy, setBusy] = useState<"bootstrap" | "preview" | "apply" | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [excessDestination, setExcessDestination] = useState<ExcessDestination | null>(null);
@@ -289,6 +290,7 @@ export function PaymentMethodAutoAdjustModal({
         return;
       }
       setBootstrapDebt(res.customerOpenDebtUsd);
+      setBootstrapCredit(res.creditUsd);
     });
   }, [open, customerId, weekCode, workCountry, rateN]);
 
@@ -411,7 +413,7 @@ export function PaymentMethodAutoAdjustModal({
   if (!open) return null;
 
   const debt = preview?.openDebtUsd ?? bootstrapDebt ?? openDebtUsd;
-  const credit = preview?.existingCreditUsd ?? creditUsd;
+  const credit = preview?.existingCreditUsd ?? bootstrapCredit ?? creditUsd;
   const customerLabel = customerCode
     ? `${customerName || "—"} #${customerCode}`
     : customerName || "—";

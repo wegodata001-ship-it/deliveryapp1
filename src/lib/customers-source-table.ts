@@ -328,15 +328,14 @@ export async function listCustomersSourceTable(
 
       const hasMore = rowsSql.length > limit;
       const sliceAgg = hasMore ? rowsSql.slice(0, limit) : rowsSql;
-      const balMap = new Map(sliceAgg.map((r) => [r.customerId ?? "", r.balanceUsd ?? new Prisma.Decimal(0)]));
-
       const ids = sliceAgg.map((r) => r.customerId!).filter(Boolean);
       const rawCustomers = await prisma.customer.findMany({
         where: { id: { in: ids } },
         select: customerListSelect,
       });
       const rawById = new Map(rawCustomers.map((c) => [c.id, c]));
-      const rows = ids.map((id) => mapRow({ ...rawById.get(id)!, balanceUsd: balMap.get(id) ?? 0 }));
+      const ssotMap = await fetchBalancesUsdForCustomers(ids);
+      const rows = ids.map((id) => mapRow({ ...rawById.get(id)!, balanceUsd: ssotMap.get(id) ?? 0 }));
       return { rows, page, limit, hasMore };
     }
 

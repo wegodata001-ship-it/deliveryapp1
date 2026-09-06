@@ -194,7 +194,7 @@ export function computeIntakeSaveDeviations(params: {
  */
 export function filterIntakeCorrectionRowsForDisplay(
   rows: IntakeSaveDeviationRow[],
-  paymentBalanceState: "debt" | "cleared" | "surplus",
+  paymentBalanceState: "debt" | "cleared" | "surplus" | "credit",
 ): IntakeSaveDeviationRow[] {
   const hasPaymentSurplus = paymentBalanceState === "surplus";
   return rows.filter((r) => {

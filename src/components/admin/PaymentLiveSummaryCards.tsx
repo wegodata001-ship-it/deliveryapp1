@@ -115,7 +115,8 @@ export function PaymentLiveSummaryCards({
   rate = 0,
 }: Props) {
   const showOpenDebt = openDebtUsd > 0.01;
-  const showCredit = !showOpenDebt && creditUsd > 0.01;
+  const unifiedShowsCredit = paymentBalanceDisplay?.state === "credit";
+  const showCredit = !unifiedShowsCredit && !showOpenDebt && creditUsd > 0.01;
   const methodCards = LIVE_PAYMENT_KPI_CARDS.filter((c) => !c.isTotal);
   const canDrill = Array.isArray(lines) && lines.length > 0;
   const showBalanceCard =

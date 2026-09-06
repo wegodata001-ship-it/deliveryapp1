@@ -1,8 +1,9 @@
 "use client";
 
+import { Check } from "lucide-react";
 import { formatMoneyAmount } from "@/lib/money-format";
 import { formatSignedUsdDisplay } from "@/lib/debt-withdrawal-order";
-import type { OrdersResultSummary } from "@/lib/orders-list-result-summary";
+import type { OrdersResultSummary, OrdersResultSummaryLine } from "@/lib/orders-list-result-summary";
 import type { OrdersKpiFilterKey } from "@/lib/orders-status-kpi-filter";
 
 function moneyCell(n: number): string {
@@ -11,61 +12,89 @@ function moneyCell(n: number): string {
 }
 
 const TONE: Record<OrdersKpiFilterKey, string> = {
-  open: "adm-orders-result-summary__row--open",
-  inProgress: "adm-orders-result-summary__row--progress",
-  completed: "adm-orders-result-summary__row--completed",
-  operationalCompleted: "adm-orders-result-summary__row--operational",
-  debtWithdrawal: "adm-orders-result-summary__row--withdrawal",
-  cancelled: "adm-orders-result-summary__row--cancelled",
+  open: "orsb--open",
+  inProgress: "orsb--progress",
+  completed: "orsb--completed",
+  operationalCompleted: "orsb--operational",
+  debtWithdrawal: "orsb--withdrawal",
+  cancelled: "orsb--cancelled",
 };
 
-export function OrdersResultSummaryTable({ summary }: { summary: OrdersResultSummary }) {
+function SummaryBar({
+  line,
+  compact = false,
+  isTotal = false,
+}: {
+  line: OrdersResultSummaryLine;
+  compact?: boolean;
+  isTotal?: boolean;
+}) {
+  const tone = isTotal || line.key === "total" ? "orsb--grand" : TONE[line.key];
+  const countLabel = `${line.count.toLocaleString("he-IL")} הזמנות`;
+  const balanceZero = Math.abs(line.balanceUsd) <= 0.01;
+
+  return (
+    <article
+      className={["orsb", tone, compact ? "orsb--compact" : ""].filter(Boolean).join(" ")}
+      data-summary-key={line.key}
+      data-total-count={isTotal || line.key === "total" ? line.count : undefined}
+    >
+      <div className="orsb__status">
+        <span className="orsb__icon" aria-hidden>
+          {isTotal ? <span className="orsb__sigma">Σ</span> : <Check size={18} strokeWidth={2.4} />}
+        </span>
+        <div className="orsb__status-text">
+          <strong className="orsb__title">{isTotal ? "סה״כ" : line.label}</strong>
+          <span className="orsb__count">{countLabel}</span>
+        </div>
+      </div>
+      <div className="orsb__metric orsb__metric--deal">
+        <span className="orsb__label">לפני עמלה</span>
+        <strong className="orsb__value" dir="ltr">
+          {moneyCell(line.dealUsd)}
+        </strong>
+      </div>
+      <div className="orsb__metric orsb__metric--gross">
+        <span className="orsb__label">כולל עמלה</span>
+        <strong className="orsb__value" dir="ltr">
+          {moneyCell(line.totalUsd)}
+        </strong>
+      </div>
+      <div className="orsb__metric orsb__metric--balance">
+        <span className="orsb__label">יתרה</span>
+        <strong className={["orsb__value", balanceZero ? "orsb__value--zero" : ""].filter(Boolean).join(" ")} dir="ltr">
+          {moneyCell(line.balanceUsd)}
+        </strong>
+      </div>
+    </article>
+  );
+}
+
+export function OrdersResultSummaryTable({
+  summary,
+  selectedCount = 0,
+}: {
+  summary: OrdersResultSummary;
+  selectedCount?: number;
+}) {
+  const showTotal = selectedCount !== 1;
+  const allMode = selectedCount === 0;
+
   return (
     <section
       className="adm-orders-result-summary"
       dir="rtl"
       aria-label="סיכום התוצאות"
       data-testid="orders-result-summary"
+      data-total-count={summary.total.count}
     >
-      <h2 className="adm-orders-result-summary__title">סיכום התוצאות</h2>
-      <div className="adm-orders-result-summary__wrap">
-        <table className="adm-orders-result-summary__table">
-          <thead>
-            <tr>
-              <th>סטטוס</th>
-              <th>הזמנות</th>
-              <th>לפני עמלה</th>
-              <th>כולל עמלה</th>
-              <th>יתרה</th>
-            </tr>
-          </thead>
-          <tbody>
-            {summary.lines.map((line) => (
-              <tr
-                key={line.key}
-                className={line.key === "total" ? "" : TONE[line.key]}
-                data-summary-key={line.key}
-              >
-                <td>
-                  <span className="adm-orders-result-summary__status">✓ {line.label}</span>
-                </td>
-                <td>{line.count.toLocaleString("he-IL")}</td>
-                <td dir="ltr">{moneyCell(line.dealUsd)}</td>
-                <td dir="ltr">{moneyCell(line.totalUsd)}</td>
-                <td dir="ltr">{moneyCell(line.balanceUsd)}</td>
-              </tr>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr className="adm-orders-result-summary__total" data-summary-key="total" data-total-count={summary.total.count}>
-              <td>{summary.total.label}</td>
-              <td>{summary.total.count.toLocaleString("he-IL")}</td>
-              <td dir="ltr">{moneyCell(summary.total.dealUsd)}</td>
-              <td dir="ltr">{moneyCell(summary.total.totalUsd)}</td>
-              <td dir="ltr">{moneyCell(summary.total.balanceUsd)}</td>
-            </tr>
-          </tfoot>
-        </table>
+      <h2 className="adm-orders-result-summary__sr">סיכום התוצאות</h2>
+      <div className="orsb-stack">
+        {allMode ? <SummaryBar line={{ ...summary.total, label: "סה״כ" }} isTotal /> : null}
+        {summary.lines.map((line) => (
+          <SummaryBar key={line.key} line={line} compact={allMode} />
+        ))}
+        {showTotal && !allMode ? <SummaryBar line={summary.total} isTotal /> : null}
       </div>
     </section>
   );

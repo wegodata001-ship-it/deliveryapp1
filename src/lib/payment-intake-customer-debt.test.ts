@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   computePaymentIntakeApplyUsd,
+  customerBooksAfterPaymentApply,
   isExistingPaymentUnchanged,
   paymentIntakeCustomerOpenDebtUsd,
   paymentIntakeDebtAfterPaymentUsd,
@@ -128,5 +129,62 @@ describe("paymentIntakeDebtAfterPaymentUsd", () => {
       }),
       3250,
     );
+  });
+});
+
+describe("customerBooksAfterPaymentApply", () => {
+  it("Khalil: debt 0 + credit 1273.83 stays credit", () => {
+    const books = customerBooksAfterPaymentApply({
+      openDebtUsd: 0,
+      availableCreditUsd: 1273.83,
+      applyUsd: 0,
+      surplusToCredit: true,
+    });
+    assert.equal(books.openDebtUsd, 0);
+    assert.equal(books.availableCreditUsd, 1273.83);
+  });
+
+  it("400 debt + 500 payment to credit → debt 0 credit 100", () => {
+    const books = customerBooksAfterPaymentApply({
+      openDebtUsd: 400,
+      availableCreditUsd: 0,
+      applyUsd: 500,
+      surplusToCredit: true,
+    });
+    assert.equal(books.openDebtUsd, 0);
+    assert.equal(books.availableCreditUsd, 100);
+  });
+
+  it("400 debt + 500 payment to fees → debt 0 credit 0", () => {
+    const books = customerBooksAfterPaymentApply({
+      openDebtUsd: 400,
+      availableCreditUsd: 0,
+      applyUsd: 500,
+      surplusToCredit: false,
+    });
+    assert.equal(books.openDebtUsd, 0);
+    assert.equal(books.availableCreditUsd, 0);
+  });
+
+  it("Omar: openDebt 0 + credit 0 is not credit even if apply is 0", () => {
+    const books = customerBooksAfterPaymentApply({
+      openDebtUsd: 0,
+      availableCreditUsd: 0,
+      applyUsd: 0,
+      surplusToCredit: true,
+    });
+    assert.equal(books.openDebtUsd, 0);
+    assert.equal(books.availableCreditUsd, 0);
+  });
+
+  it("existing credit plus new excess is added, not replaced", () => {
+    const books = customerBooksAfterPaymentApply({
+      openDebtUsd: 0,
+      availableCreditUsd: 400,
+      applyUsd: 50,
+      surplusToCredit: true,
+    });
+    assert.equal(books.openDebtUsd, 0);
+    assert.equal(books.availableCreditUsd, 450);
   });
 });

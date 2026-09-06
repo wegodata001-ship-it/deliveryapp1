@@ -37,14 +37,23 @@ export type LedgerExportTableRow = {
   chargeUsd: string;
   paymentUsd: string;
   balance: string;
+  orderRemainingUsd: string;
   isOpening: boolean;
   /** שורת פירוט תשלום (PDF/Excel) — לא משנה יתרה מצטברת */
   isPaymentDetailRow?: boolean;
   isPaymentDetailSection?: boolean;
 };
 
-/** סדר עמודות בגיליון Excel (ימין→שמאל): תאריך | מסמך | סוג | חיוב לקוח | תשלום/זיכוי | יתרה */
-export const LEDGER_EXPORT_HEADERS = ["תאריך", "מסמך", "סוג", "חיוב לקוח ($)", "תשלום/זיכוי ($)", "יתרה ($)"] as const;
+/** סדר עמודות בגיליון Excel: תאריך | מסמך | סוג | חיוב | תשלום | יתרה לאחר תנועה | נשאר להזמנה */
+export const LEDGER_EXPORT_HEADERS = [
+  "תאריך",
+  "מסמך",
+  "סוג",
+  "חיוב לקוח ($)",
+  "תשלום/זיכוי ($)",
+  "יתרה לאחר תנועה ($)",
+  "נשאר להזמנה ($)",
+] as const;
 
 function todayYmd(): string {
   return formatLocalYmd(new Date());
@@ -137,6 +146,7 @@ function pushPaymentDetailExportRows(out: LedgerExportTableRow[], row: CustomerL
       chargeUsd: "—",
       paymentUsd: line.display,
       balance: "—",
+      orderRemainingUsd: "—",
       isOpening: false,
       isPaymentDetailRow: true,
     });
@@ -148,6 +158,7 @@ function pushPaymentDetailExportRows(out: LedgerExportTableRow[], row: CustomerL
     chargeUsd: "—",
     paymentUsd: formatLedgerPaymentTotalUsd(detail.totalUsd),
     balance: "—",
+    orderRemainingUsd: "—",
     isOpening: false,
     isPaymentDetailRow: true,
   });
@@ -164,6 +175,7 @@ function pushOrderCancelDetailExportRows(out: LedgerExportTableRow[], row: Custo
       chargeUsd: "—",
       paymentUsd: target === "payment" ? value : "—",
       balance: target === "balance" ? value : "—",
+      orderRemainingUsd: "—",
       isOpening: false,
       isPaymentDetailRow: true,
     });
@@ -187,6 +199,7 @@ function pushBalanceResetDetailExportRows(out: LedgerExportTableRow[], row: Cust
       chargeUsd: "—",
       paymentUsd: "—",
       balance: "—",
+      orderRemainingUsd: "—",
       isOpening: false,
       isPaymentDetailRow: true,
     });
@@ -219,6 +232,7 @@ function pushOrderUpdateDetailExportRows(out: LedgerExportTableRow[], row: Custo
       chargeUsd: "—",
       paymentUsd: "—",
       balance: "—",
+      orderRemainingUsd: "—",
       isOpening: false,
       isPaymentDetailRow: true,
     });
@@ -262,6 +276,10 @@ export function buildLedgerExportTableRows(
       chargeUsd: formatChargeCell(r),
       paymentUsd: formatPaymentCell(r),
       balance: formatLedgerRunningBalance(r.balanceUsd),
+      orderRemainingUsd:
+        r.kind === "ORDER" && !r.isDebtWithdrawal && r.orderOpenRemainingUsd != null
+          ? formatUsdDisplay(parseMoneyStringOrZero(r.orderOpenRemainingUsd))
+          : "—",
       isOpening: r.kind === "OPENING_BALANCE",
     });
     if (includePaymentDetails && r.kind === "PAYMENT" && r.paymentDetail) {
@@ -442,6 +460,7 @@ export async function exportCustomerLedgerExcel(
       r.chargeUsd,
       r.paymentUsd,
       r.balance,
+      r.orderRemainingUsd,
     ]),
   ];
 
@@ -468,7 +487,7 @@ export async function exportCustomerLedgerExcel(
   setCellStyle(11, 0, { ...kpiLabelStyle, fill: { fgColor: { rgb: "EFF6FF" } } });
   setCellStyle(11, 1, { ...kpiValueStyle, font: { bold: true, sz: 11, color: { rgb: "1D4ED8" } } });
 
-  for (let c = 0; c < 6; c++) setCellStyle(headRow, c, tableHeadStyle);
+  for (let c = 0; c < 7; c++) setCellStyle(headRow, c, tableHeadStyle);
   const detailSectionStyle = {
     ...tableCellStyle,
     font: { bold: true, sz: 9, color: { rgb: "475569" } },
@@ -491,7 +510,7 @@ export async function exportCustomerLedgerExcel(
           : i % 2 === 1
             ? zebraStyle
             : tableCellStyle;
-    for (let c = 0; c < 6; c++) setCellStyle(dataStart + i, c, style);
+    for (let c = 0; c < 7; c++) setCellStyle(dataStart + i, c, style);
   }
 
   ws["!cols"] = [
@@ -500,6 +519,7 @@ export async function exportCustomerLedgerExcel(
     { wch: 14 },
     { wch: 12 },
     { wch: 12 },
+    { wch: 20 },
     { wch: 16 },
   ];
 

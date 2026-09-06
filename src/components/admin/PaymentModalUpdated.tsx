@@ -46,6 +46,7 @@ import { PaymentIntakeDeviationModal } from "@/components/admin/PaymentIntakeDev
 import { usePaymentIntakePlanningViews } from "@/hooks/usePaymentIntakePlanningViews";
 import {
   computeOrderOpenDebtUsd,
+  deriveCustomerAccountBalanceDisplay,
   derivePaymentBalanceDisplay,
   formatPaymentBalanceIlsLine,
   formatPaymentBalanceUsdLine,
@@ -53,6 +54,7 @@ import {
 } from "@/lib/order-remaining-debt";
 import {
   computePaymentIntakeApplyUsd,
+  customerBooksAfterPaymentApply,
   isExistingPaymentUnchanged,
   isExistingSavedPayment,
   paymentIntakeCustomerOpenDebtUsd,
@@ -1288,6 +1290,33 @@ export function PaymentModalUpdated({
     return derivePaymentBalanceDisplay(paymentBalanceSignedUsd, rateN);
   }, [paymentBalanceSignedUsd, rateN]);
 
+  const accountStatusDisplay = useMemo((): PaymentBalanceDisplay => {
+    const applyUsd = isHistoricalPaymentView
+      ? 0
+      : isExistingPayment
+        ? computePaymentIntakeApplyUsd({
+            isExistingPayment: true,
+            formTotalUsd: totals.totalUsd,
+            savedBaselineTotalUsd: savedBaselinePaymentTotalUsd,
+          })
+        : roundMoney2(Math.max(0, totals.totalUsd));
+    const books = customerBooksAfterPaymentApply({
+      openDebtUsd: customerOpenDebtDisplayUsd,
+      availableCreditUsd: displayCreditBalanceAfterApplyUsd,
+      applyUsd,
+      surplusToCredit: true,
+    });
+    return deriveCustomerAccountBalanceDisplay(books, rateN);
+  }, [
+    isHistoricalPaymentView,
+    isExistingPayment,
+    totals.totalUsd,
+    savedBaselinePaymentTotalUsd,
+    customerOpenDebtDisplayUsd,
+    displayCreditBalanceAfterApplyUsd,
+    rateN,
+  ]);
+
   /** תצוגה חיה — יתרה לאחר הקצאת התשלום (חתום: שלילי = עודף) */
   const openDebtAfterPaymentPreview = useMemo(() => {
     const currentOpenBalance = totalDebtBeforePaymentUsd;
@@ -1311,7 +1340,7 @@ export function PaymentModalUpdated({
       currentOpenBalance,
       enteredPaymentAmount,
       remainingAfterPayment,
-      paymentBalanceDisplay,
+      paymentBalanceDisplay: accountStatusDisplay,
       openCommissionUsd,
       afterCommissionUsd,
     };
@@ -1323,6 +1352,7 @@ export function PaymentModalUpdated({
     isHistoricalPaymentView,
     paymentBalanceSignedUsd,
     paymentBalanceDisplay,
+    accountStatusDisplay,
     orders,
   ]);
 
@@ -4545,7 +4575,9 @@ export function PaymentModalUpdated({
                         "payment-balance-summary__balance-duo",
                         openDebtAfterPaymentPreview.paymentBalanceDisplay.state === "debt"
                           ? "payment-balance-summary__balance-duo--debt"
-                          : "payment-balance-summary__balance-duo--cleared",
+                          : openDebtAfterPaymentPreview.paymentBalanceDisplay.state === "credit"
+                            ? "payment-balance-summary__balance-duo--cleared"
+                            : "payment-balance-summary__balance-duo--cleared",
                       ].join(" ")}
                       dir="ltr"
                     >
@@ -4835,7 +4867,7 @@ export function PaymentModalUpdated({
                     openDebtUsd={customerOpenDebtDisplayUsd}
                     creditUsd={displayCreditBalanceUsd}
                     onOpenDebtClick={() => setDebtBreakdownOpen(true)}
-                    paymentBalanceDisplay={isHistoricalPaymentView ? null : paymentBalanceDisplay}
+                    paymentBalanceDisplay={isHistoricalPaymentView ? null : accountStatusDisplay}
                     historicalPaymentView={isHistoricalPaymentView}
                     lines={payments}
                     rate={rateN}

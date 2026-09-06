@@ -62,6 +62,12 @@ async function loadPreview(params: {
     paymentWorkCountryRaw: normalizeWorkCountryCode(params.workCountry ?? null),
   });
   if (!workspace.ok) return workspace;
+  const { getCustomerAccountBalances } = await import("@/lib/customer-account-balances");
+  const { openDebtScopeForWorkCountry } = await import("@/lib/customer-open-debt");
+  const accounts = await getCustomerAccountBalances(
+    workspace.customer.id,
+    openDebtScopeForWorkCountry(params.workCountry),
+  );
   const preview = buildPaymentMethodAutoAdjustmentPreview({
     orders: workspace.orders,
     customerPayments: workspace.customerPayments,
@@ -71,6 +77,7 @@ async function loadPreview(params: {
     currency: params.currency,
     amountNative: params.amountNative,
     exchangeRate: params.exchangeRate,
+    customerOpenDebtUsd: accounts.openDebtUsd,
   });
   if (!preview.ok) return preview;
   return {
@@ -99,6 +106,8 @@ export async function loadPaymentMethodAdjustmentBootstrapAction(params: {
       plannedCards: MethodBalanceCard[];
       capturedTotalUsd: number;
       customerOpenDebtUsd: number;
+      creditUsd: number;
+      commissionBalanceUsd: number;
       suggestion: PaymentMethodAdjustmentSuggestion | null;
     }
   | { ok: false; error: string }
@@ -112,6 +121,12 @@ export async function loadPaymentMethodAdjustmentBootstrapAction(params: {
     paymentWorkCountryRaw: normalizeWorkCountryCode(params.workCountry ?? null),
   });
   if (!workspace.ok) return { ok: false, error: workspace.error };
+  const { getCustomerAccountBalances } = await import("@/lib/customer-account-balances");
+  const { openDebtScopeForWorkCountry } = await import("@/lib/customer-open-debt");
+  const accounts = await getCustomerAccountBalances(
+    customerId,
+    openDebtScopeForWorkCountry(params.workCountry),
+  );
   const bootstrap = buildPaymentMethodAdjustmentBootstrap({
     orders: workspace.orders,
     customerPayments: workspace.customerPayments,
@@ -125,7 +140,14 @@ export async function loadPaymentMethodAdjustmentBootstrapAction(params: {
     currency: params.currency === "ILS" ? "ILS" : "USD",
     exchangeRate: params.exchangeRate,
   });
-  return { ok: true, ...bootstrap, suggestion };
+  return {
+    ok: true,
+    ...bootstrap,
+    customerOpenDebtUsd: accounts.openDebtUsd,
+    creditUsd: accounts.availableCreditUsd,
+    commissionBalanceUsd: accounts.commissionBalanceUsd,
+    suggestion,
+  };
 }
 
 export async function previewPaymentIntentAutoAdjustmentAction(params: {

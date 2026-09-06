@@ -28,8 +28,15 @@ import { normalizeOrderSourceCountry } from "@/lib/order-countries";
 import { workCountryFromOrderSourceCountry, type WorkCountryCode } from "@/lib/work-country";
 import {
   activePaidPaymentWhere,
+  groupByActivePayments,
   PAYMENT_RECORD_STATUS_CANCELLED,
 } from "@/lib/payment-record-status";
+import { customerDebtPaymentsWhere } from "@/lib/payment-adjustment-fee";
+import {
+  collectibleRemainingUsdByOrderId,
+  computeOrderOpenDebtUsd,
+  resolveOrderTotalUsd,
+} from "@/lib/order-remaining-debt";
 import { paymentRecordUsdEquivalent as paymentUsdEquivalent } from "@/lib/payment-usd-equivalent";
 import {
   buildLedgerPaymentDetail,
@@ -107,6 +114,11 @@ export type CustomerLedgerRow = {
   /** תצוגה: יתרת הזמנה לאחר הפעולה */
   orderBalanceBeforeUsd?: string;
   orderBalanceAfterUsd?: string;
+  /**
+   * יתרה פתוחה נוכחית של ההזמנה (אחרי תשלומים + משיכת חוב FIFO).
+   * רק לשורות ORDER רגילות — לא running ledger.
+   */
+  orderOpenRemainingUsd?: string | null;
   /** פירוט תשלום — אמצעי תשלום והקצאות להזמנות */
   paymentDetail?: LedgerPaymentDetail;
   /** קליטת עמלה עם קוד מסמך — מוצגת, לא סוגרת חוב */
@@ -363,6 +375,8 @@ export async function buildCustomerAccountLedger(params: {
               amountUsd: true,
               commissionUsd: true,
               debtWithdrawalUsd: true,
+              orderDate: true,
+              createdAt: true,
             },
           }),
         )
@@ -526,6 +540,39 @@ export async function buildCustomerAccountLedger(params: {
     sharedBalancePromise,
     accountBalancesPromise,
   ]);
+
+  const remainingSourceOrders = [...preOrders, ...orders]
+    .filter((o) => !isDebtWithdrawalOrderStatus(o.status))
+    .sort((a, b) => {
+      const ta = (a.orderDate ?? a.createdAt ?? new Date(0)).getTime();
+      const tb = (b.orderDate ?? b.createdAt ?? new Date(0)).getTime();
+      if (ta !== tb) return ta - tb;
+      return a.id.localeCompare(b.id);
+    });
+  const remainingPaidByOrder = new Map<string, number>();
+  if (remainingSourceOrders.length > 0) {
+    const paidSums = await groupByActivePayments(
+      "orderId",
+      {
+        orderId: { in: remainingSourceOrders.map((o) => o.id) },
+        ...customerDebtPaymentsWhere,
+      },
+      { amountUsd: true },
+    );
+    for (const row of paidSums) {
+      if (row.orderId) remainingPaidByOrder.set(row.orderId, Number(row._sum.amountUsd ?? 0));
+    }
+  }
+  const collectibleRemainingByOrderId = collectibleRemainingUsdByOrderId(
+    remainingSourceOrders.map((o) => ({
+      orderId: o.id,
+      remainingAfterPaymentsUsd: computeOrderOpenDebtUsd(
+        resolveOrderTotalUsd(o),
+        remainingPaidByOrder.get(o.id) ?? 0,
+      ),
+    })),
+    Number(sharedBalance.totalWithdrawals),
+  );
 
   const orderIdSet = new Set(orders.map((o) => o.id));
   const orderNumberById = new Map(
@@ -1185,6 +1232,10 @@ export async function buildCustomerAccountLedger(params: {
       document: ev.document,
       orderId: ev.orderId,
       paymentId: ev.paymentId,
+      orderOpenRemainingUsd:
+        ev.kind === "ORDER" && ev.orderId && !ev.isDebtWithdrawal && !ev.isOrderCancelled
+          ? (collectibleRemainingByOrderId.get(ev.orderId) ?? 0).toFixed(2)
+          : null,
       isDebtWithdrawal: ev.isDebtWithdrawal,
       isPaymentCancelled: ev.isPaymentCancelled,
       isOrderCancelled: ev.isOrderCancelled,

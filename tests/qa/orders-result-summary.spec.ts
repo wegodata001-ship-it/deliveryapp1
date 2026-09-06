@@ -23,13 +23,13 @@ test.describe("Orders result summary", () => {
     await expect(summary).toBeVisible();
     await expect(summary.locator('[data-summary-key="completed"]')).toHaveCount(1);
     await expect(summary.locator('[data-summary-key="operationalCompleted"]')).toHaveCount(0);
-    await expect(summary.locator('[data-summary-key="total"]')).toHaveCount(1);
+    await expect(summary.locator('[data-summary-key="total"]')).toHaveCount(0);
 
     await kpi("הושלם").click();
     await expect(page).toHaveURL(/ordersKpi=.*completed.*operationalCompleted|ordersKpi=.*operationalCompleted.*completed/);
     await expect(summary.locator('[data-summary-key="completed"]')).toHaveCount(1);
     await expect(summary.locator('[data-summary-key="operationalCompleted"]')).toHaveCount(1);
-    await expect(summary.locator("tbody tr")).toHaveCount(2);
+    await expect(summary.locator(".orsb:not(.orsb--grand)")).toHaveCount(2);
     await expect(summary.locator('[data-summary-key="total"]')).toHaveCount(1);
 
     await kpi("הכל").click();
@@ -48,7 +48,7 @@ test.describe("Orders result summary", () => {
     const summary = page.getByTestId("orders-result-summary");
     await expect(summary).toBeVisible({ timeout: 60_000 });
 
-    const totalCount = Number(await summary.locator('[data-summary-key="total"]').getAttribute("data-total-count"));
+    const totalCount = Number(await summary.getAttribute("data-total-count"));
     expect(totalCount).toBeGreaterThan(0);
 
     const label = await page.locator(".adm-orders-pagination__label, .adm-orders-pagination").first().innerText();

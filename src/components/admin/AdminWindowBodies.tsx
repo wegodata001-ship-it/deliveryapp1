@@ -322,6 +322,27 @@ export function CustomerCardWindowBody({
   }, [customerId, activeTab, fromYmd, toYmd, effectiveLedgerCountry]);
 
   useEffect(() => {
+    if (!customerId?.trim()) return;
+    let gen = 0;
+    const onBalancesRefresh = () => {
+      const cid = customerId.trim();
+      if (!cid) return;
+      const thisGen = ++gen;
+      void getCustomerLedgerAction({
+        customerId: cid,
+        fromYmd,
+        toYmd,
+        sourceCountry: effectiveLedgerCountry,
+      }).then((row) => {
+        if (thisGen !== gen) return;
+        if (row) setLedger(row);
+      });
+    };
+    window.addEventListener("wego:balances-refresh", onBalancesRefresh);
+    return () => window.removeEventListener("wego:balances-refresh", onBalancesRefresh);
+  }, [customerId, fromYmd, toYmd, effectiveLedgerCountry]);
+
+  useEffect(() => {
     if (!customerId?.trim() || activeTab !== "ledger") return;
     const onError = (event: ErrorEvent) => {
       if (!String(event.message ?? "").includes("CustomerLedger")) return;
@@ -770,7 +791,7 @@ export function CustomerCardWindowBody({
         </div>
         <div className="summary-card purple">
           <div dir="ltr" className="summary-card-amount">
-            {fmtUsd((ledger as any).totalWithdrawalsUsd ?? "0")}
+            {fmtUsd(ledger.totalWithdrawalsUsd ?? "0")}
           </div>
           <span>סה״כ משיכות מחוב</span>
         </div>
@@ -1074,21 +1095,28 @@ export function CustomerCardWindowBody({
                     <th>סוג</th>
                     <th>חיוב לקוח</th>
                     <th>תשלום/זיכוי</th>
-                    <th>יתרה</th>
+                    <th
+                      title="יתרת הלקוח כפי שהייתה לאחר תנועה זו. זהו נתון היסטורי ואינו החוב הפתוח הנוכחי."
+                    >
+                      יתרה לאחר תנועה
+                    </th>
+                    <th title="כמה נשאר היום לגבייה על הזמנה זו, אחרי תשלומים ומשיכת חוב.">
+                      נשאר להזמנה
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {ledgerLoading ? (
                     <tr>
-                      <td colSpan={manualPdfMode ? 7 : 6}>טוען…</td>
+                      <td colSpan={manualPdfMode ? 8 : 7}>טוען…</td>
                     </tr>
                   ) : !ledger || (ledger.rows ?? []).length === 0 ? (
                     <tr>
-                      <td colSpan={manualPdfMode ? 7 : 6}>אין תנועות בטווח.</td>
+                      <td colSpan={manualPdfMode ? 8 : 7}>אין תנועות בטווח.</td>
                     </tr>
                   ) : displayLedgerRows.length === 0 ? (
                     <tr>
-                      <td colSpan={manualPdfMode ? 7 : 6}>אין תנועות בסינון הנוכחי.</td>
+                      <td colSpan={manualPdfMode ? 8 : 7}>אין תנועות בסינון הנוכחי.</td>
                     </tr>
                   ) : (
                     (displayLedgerRows ?? []).map((r) => {
@@ -1239,6 +1267,11 @@ export function CustomerCardWindowBody({
                             )}
                           </td>
                           <td dir="ltr">{formatLedgerRunningBalance(r.balanceUsd)}</td>
+                          <td dir="ltr">
+                            {r.kind === "ORDER" && !r.isDebtWithdrawal && r.orderOpenRemainingUsd != null
+                              ? fmtUsd(r.orderOpenRemainingUsd)
+                              : "—"}
+                          </td>
                         </tr>
                       );
                     })

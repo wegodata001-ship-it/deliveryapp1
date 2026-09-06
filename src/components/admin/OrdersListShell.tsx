@@ -1539,7 +1539,10 @@ export function OrdersListShell({
         </div>
 
         {resultSummaryLive && !listEmptyContent ? (
-          <OrdersResultSummaryTable summary={resultSummaryLive} />
+          <OrdersResultSummaryTable
+            summary={resultSummaryLive}
+            selectedCount={activeKpiFilters.length}
+          />
         ) : null}
 
         <OrdersListPaginationBar pagination={paginationLive} label={paginationLabel} />

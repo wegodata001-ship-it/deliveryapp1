@@ -10,10 +10,12 @@ import {
   computeOrderLedgerView,
   computePaymentBalanceUsd,
   deriveOrderPaymentDisplayStatus,
+  deriveCustomerAccountBalanceDisplay,
   derivePaymentBalanceDisplay,
   formatPaymentBalanceIlsLine,
   formatPaymentBalanceUsdLine,
   reconcileOrderBreakdownWithLedger,
+  collectibleRemainingUsdByOrderId,
   sumRemainingToPayUsd,
 } from "@/lib/order-remaining-debt";
 
@@ -129,6 +131,21 @@ describe("order-remaining-debt SSOT", () => {
     assert.equal(views.orderRemainingToPayUsd, 53.45);
   });
 
+  it("collectible remaining is FIFO after withdrawal, not running balance", () => {
+    const remaining = collectibleRemainingUsdByOrderId(
+      [
+        { orderId: "TR-137-0004", remainingAfterPaymentsUsd: 703.53 },
+        { orderId: "TR-134-0005", remainingAfterPaymentsUsd: 0 },
+        { orderId: "TR-134-0011", remainingAfterPaymentsUsd: 508.47 },
+      ],
+      1212,
+    );
+    assert.equal(remaining.get("TR-137-0004"), 0);
+    assert.equal(remaining.get("TR-134-0005"), 0);
+    assert.equal(remaining.get("TR-134-0011"), 0);
+    assert.notEqual(8342.6, remaining.get("TR-137-0004"));
+  });
+
   it("partial form payment reduces remaining equally on both paths", () => {
     const orders = [sampleOrder()];
     const bases = toPaymentIntakeBases(orders);
@@ -192,5 +209,41 @@ describe("computePaymentBalanceUsd — תצוגת יתרה בקליטה", () => 
     assert.equal(d.state, "surplus");
     assert.equal(d.displayUsd, 10);
     assert.equal(d.displayIls, 35.4);
+  });
+});
+
+describe("deriveCustomerAccountBalanceDisplay — three books", () => {
+  const rate = 3;
+
+  it("Khalil: debt 0 credit 1273.83 → יתרת זכות", () => {
+    const d = deriveCustomerAccountBalanceDisplay(
+      { openDebtUsd: 0, availableCreditUsd: 1273.83 },
+      rate,
+    );
+    assert.equal(d.state, "credit");
+    assert.equal(d.title, "יתרת זכות");
+    assert.equal(d.displayUsd, 1273.83);
+    assert.equal(formatPaymentBalanceUsdLine(d), "+$1,273.83");
+  });
+
+  it("Hanan: debt 0 credit 28.05 → יתרת זכות", () => {
+    const d = deriveCustomerAccountBalanceDisplay({ openDebtUsd: 0, availableCreditUsd: 28.05 }, rate);
+    assert.equal(d.state, "credit");
+    assert.equal(formatPaymentBalanceUsdLine(d), "+$28.05");
+  });
+
+  it("Afnan: debt 7362.90 credit 0 → נשאר לתשלום", () => {
+    const d = deriveCustomerAccountBalanceDisplay({ openDebtUsd: 7362.9, availableCreditUsd: 0 }, rate);
+    assert.equal(d.state, "debt");
+    assert.equal(d.title, "נשאר לתשלום");
+    assert.equal(d.displayUsd, 7362.9);
+  });
+
+  it("Kamel / Omar: debt 0 credit 0 → מאוזן, not credit", () => {
+    const d = deriveCustomerAccountBalanceDisplay({ openDebtUsd: 0, availableCreditUsd: 0 }, rate);
+    assert.equal(d.state, "cleared");
+    assert.equal(d.title, "נשאר לתשלום");
+    assert.equal(d.statusHint, "מאוזן");
+    assert.equal(d.displayUsd, 0);
   });
 });
