@@ -104,8 +104,31 @@ export function cashControlReconciliationLineWhere(
           {
             OR: [
               { ilsPaymentMethod: { in: BANK_METHODS } },
+              {
+                AND: [
+                  { paymentMethod: { in: BANK_METHODS } },
+                  { amountIls: { not: null } },
+                  { OR: [{ ilsPaymentMethod: null }, { ilsPaymentMethod: "" }] },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+    case "BANK_TRANSFER_USD":
+      return {
+        AND: [
+          base,
+          {
+            OR: [
               { usdPaymentMethod: { in: BANK_METHODS } },
-              { paymentMethod: { in: BANK_METHODS } },
+              {
+                AND: [
+                  { paymentMethod: { in: BANK_METHODS } },
+                  { amountUsd: { not: null } },
+                  { OR: [{ usdPaymentMethod: null }, { usdPaymentMethod: "" }] },
+                ],
+              },
             ],
           },
         ],

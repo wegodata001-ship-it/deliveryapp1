@@ -46,14 +46,16 @@ export type ManagerCountLineStatus = {
   label: string;
 };
 
-const LINE_META: Record<
-  CashWeekFlowLineId,
-  {
-    label: string;
-    route: "PS" | "IL";
-    currency: "ILS" | "USD";
-    formKey: keyof ManagerCountForm;
-  }
+const LINE_META: Partial<
+  Record<
+    CashWeekFlowLineId,
+    {
+      label: string;
+      route: "PS" | "IL";
+      currency: "ILS" | "USD";
+      formKey: keyof ManagerCountForm;
+    }
+  >
 > = {
   CASH_ILS: {
     label: "מזומן בשקלים — PS",
@@ -157,6 +159,7 @@ export function expectedAmountsFromIntake(
     CASH_ILS: round2(intake.CASH_ILS ?? 0),
     CASH_USD: round2(intake.CASH_USD ?? 0),
     BANK_TRANSFER: round2(intake.BANK_TRANSFER_ILS ?? 0),
+    BANK_TRANSFER_USD: round2(intake.BANK_TRANSFER_USD ?? 0),
     CREDIT: round2(intake.CREDIT_CARD_ILS ?? 0),
     CHECK: round2(intake.CHECK_ILS ?? 0),
   };
@@ -194,6 +197,7 @@ export function buildManagerCountExpectedLines(
       const lineId = channelToLineId(c.column);
       if (!lineId || c.amount <= CASH_CONTROL_EPS) continue;
       const meta = LINE_META[lineId];
+      if (!meta) continue;
       const bucket = buckets.get(lineId)!;
       bucket.expected = round2(bucket.expected + c.amount);
       bucket.payments.push({
@@ -216,7 +220,7 @@ export function buildManagerCountExpectedLines(
   }
 
   return MANAGER_COUNT_LINE_IDS.map((lineId) => {
-    const meta = LINE_META[lineId];
+    const meta = LINE_META[lineId]!;
     const bucket = buckets.get(lineId)!;
     return {
       lineId,
@@ -275,6 +279,7 @@ export function initializeManagerCountFormFields(
   const out: Partial<ManagerCountForm> = {};
   for (const lineId of MANAGER_COUNT_LINE_IDS) {
     const meta = LINE_META[lineId];
+    if (!meta) continue;
     out[meta.formKey] = formatManagerCountInput(expected[lineId] ?? 0);
   }
   return out;

@@ -135,7 +135,7 @@ export async function getCashWeekFlowAction(week: string): Promise<CashWeekFlowP
 
   const counted = lineFromFlow(flowRow);
   const countDiff: Partial<Record<CashWeekFlowLineId, string | null>> = {};
-  for (const lineId of ["CASH_ILS", "CASH_USD", "CREDIT", "CHECK", "BANK_TRANSFER"] as CashWeekFlowLineId[]) {
+  for (const lineId of ["CASH_ILS", "CASH_USD", "CREDIT", "CHECK", "BANK_TRANSFER", "BANK_TRANSFER_USD"] as CashWeekFlowLineId[]) {
     const rec = Number(received[lineId]?.amount ?? 0);
     const cnt = counted[lineId] != null ? Number(counted[lineId]) : null;
     const channel = WEEK_FLOW_LINE_CHANNEL[lineId];

@@ -32,7 +32,7 @@ function drillToIntake(drill: FlowWeekDrillPayload): CashDailyIntakeTotals {
 /** ספירת מנהל שבועית (5 שורות) → ערוצי בקרת קופה */
 function drillToDrawer(drill: FlowWeekDrillPayload): CashDailyDrawerValues {
   const c = drill.flow.counted;
-  const line = (id: "CASH_ILS" | "CASH_USD" | "CREDIT" | "CHECK" | "BANK_TRANSFER") => {
+  const line = (id: "CASH_ILS" | "CASH_USD" | "CREDIT" | "CHECK" | "BANK_TRANSFER" | "BANK_TRANSFER_USD") => {
     const raw = c[id];
     if (raw == null || raw === "") return null;
     return parseMoney(raw);
@@ -43,6 +43,7 @@ function drillToDrawer(drill: FlowWeekDrillPayload): CashDailyDrawerValues {
     CREDIT_CARD_ILS: line("CREDIT"),
     CHECK_ILS: line("CHECK"),
     BANK_TRANSFER_ILS: line("BANK_TRANSFER"),
+    BANK_TRANSFER_USD: line("BANK_TRANSFER_USD"),
   };
 }
 

@@ -1,6 +1,8 @@
+import { resolvePaymentIntakeAccountingPeriod } from "@/lib/payment-intake-accounting-period";
 import {
   DEFAULT_WEEK_CODE,
   getAhWeekRange,
+  getBusinessWeekClosingDate,
   nextWeekCode,
   normalizeAhWeekCode,
 } from "@/lib/work-week";
@@ -20,12 +22,10 @@ export function defaultPaymentIntakeWeekCode(fromHomeWeek: string = DEFAULT_WEEK
   return nextWeekCode(home) ?? home;
 }
 
-/**
- * @deprecated השתמש ב-`defaultOrderSourceDateYmdForIntakeWeek` לתאריך הזמנות,
- * וב-`formatLocalYmd(new Date())` לתאריך ביצוע תשלום.
- */
+/** תאריך ביצוע קליטה = שבת השבוע הפיננסי (הקודם לשבוע הקליטה במסך). לא תאריך היום. */
 export function defaultPaymentIntakeDateYmd(forWeekCode?: string): string {
   const week = forWeekCode?.trim() || defaultPaymentIntakeWeekCode();
-  const to = getAhWeekRange(week)?.to;
-  return to ?? getAhWeekRange(DEFAULT_WEEK_CODE)?.from ?? "";
+  const period = resolvePaymentIntakeAccountingPeriod(week);
+  if (period) return period.businessDate;
+  return getBusinessWeekClosingDate(week) || getAhWeekRange(DEFAULT_WEEK_CODE)?.to || "";
 }

@@ -17,6 +17,7 @@ export type PaymentEntryPayload = {
   /** שבוע קליטה/עבודה (AH-N) — נפרד מתאריך התשלום */
   weekCode: string | null;
   paymentDateYmd: string;
+  intakeDateYmd: string | null;
   paymentTimeHm: string;
   dollarRate: string | null;
   commissionPercent: string;
@@ -72,6 +73,7 @@ function transformPaymentEntryRow(row: {
   paymentNumber: number | null;
   weekCode: string | null;
   paymentDate: Date | null;
+  intakeDate: Date | null;
   exchangeRate: { toString(): string } | null;
   commissionPercent: { toString(): string } | null;
   amountUsd: { toString(): string } | null;
@@ -105,6 +107,7 @@ function transformPaymentEntryRow(row: {
 
     const parsedLines = parsePaymentLinesFromNotes(row.notes);
     const paymentDate = row.paymentDate ?? new Date();
+    const intakeDate = row.intakeDate ?? row.paymentDate;
     const cpNum = Number(row.commissionPercent ?? 0);
     const commissionPercentStr = Number.isFinite(cpNum) && cpNum > 0 ? String(cpNum) : "0";
     const lines = parsedLines.length > 0 ? parsedLines : [lineFromDbRow(row)];
@@ -115,6 +118,7 @@ function transformPaymentEntryRow(row: {
       paymentNumber: row.paymentNumber ?? null,
       weekCode: row.weekCode?.trim() || null,
       paymentDateYmd: formatLocalYmd(paymentDate),
+      intakeDateYmd: intakeDate ? formatLocalYmd(intakeDate) : null,
       paymentTimeHm: formatLocalHm(paymentDate),
       dollarRate: Number(row.exchangeRate ?? 0) > 0 ? Number(row.exchangeRate).toFixed(4) : null,
       commissionPercent: commissionPercentStr,
@@ -142,6 +146,7 @@ const paymentEntrySelect = {
   paymentNumber: true,
   weekCode: true,
   paymentDate: true,
+  intakeDate: true,
   exchangeRate: true,
   commissionPercent: true,
   amountUsd: true,

@@ -13,6 +13,7 @@ export type CashReconciliationLineId =
   | "CASH_USD"
   | "CREDIT"
   | "BANK_TRANSFER"
+  | "BANK_TRANSFER_USD"
   | "CHECK";
 
 export type CashReconciliationCurrency = "ILS" | "USD";
@@ -30,7 +31,8 @@ export const CASH_RECONCILIATION_LINES: CashReconciliationLineMeta[] = [
   { id: "CASH_ILS", label: "מזומן ₪", icon: "💵", currency: "ILS" },
   { id: "CASH_USD", label: "מזומן $", icon: "💵", currency: "USD" },
   { id: "CREDIT", label: "אשראי", icon: "💳", currency: "ILS" },
-  { id: "BANK_TRANSFER", label: "העברה בנקאית", icon: "🏦", currency: "ILS" },
+  { id: "BANK_TRANSFER", label: "העברה בנקאית ₪", icon: "🏦", currency: "ILS" },
+  { id: "BANK_TRANSFER_USD", label: "העברה בנקאית $", icon: "🏦", currency: "USD" },
   { id: "CHECK", label: "צ׳קים", icon: "🧾", currency: "ILS" },
 ];
 
@@ -75,7 +77,7 @@ function num(v: { toString(): string } | null | undefined): number {
 function bucketToLineId(bucket: PaymentBucketKey, side: "ILS" | "USD"): CashReconciliationLineId | null {
   if (bucket === "CASH") return side === "ILS" ? "CASH_ILS" : "CASH_USD";
   if (bucket === "CREDIT") return "CREDIT";
-  if (bucket === "BANK_TRANSFER") return "BANK_TRANSFER";
+  if (bucket === "BANK_TRANSFER") return side === "USD" ? "BANK_TRANSFER_USD" : "BANK_TRANSFER";
   if (bucket === "CHECK") return "CHECK";
   return null;
 }

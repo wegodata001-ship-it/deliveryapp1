@@ -110,7 +110,8 @@ export function intakeDistribution(drill: FlowWeekDrillPayload): { label: string
   const labels: Record<string, string> = {
     CASH_ILS: "מזומן ₪",
     CASH_USD: "מזומן $",
-    BANK_TRANSFER: "העברות",
+    BANK_TRANSFER: "העברות ₪",
+    BANK_TRANSFER_USD: "העברות $",
     CHECK: "צ'קים",
     CREDIT: "אשראי",
     OTHER: "אחר",

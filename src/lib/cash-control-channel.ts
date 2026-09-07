@@ -54,6 +54,7 @@ export const CASH_RECEIPT_TABLE_COLUMNS: CashControlChannel[] = [
   "CASH_ILS",
   "CASH_USD",
   "BANK_TRANSFER_ILS",
+  "BANK_TRANSFER_USD",
   "CREDIT_CARD_ILS",
   "CHECK_ILS",
   "OTHER_USD",

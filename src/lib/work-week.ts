@@ -58,6 +58,11 @@ export function getAhWeekRange(code: string | null | undefined): WorkWeekRange |
   return r ? { from: r.from, to: r.to } : null;
 }
 
+/** שבת סגירת שבוע AH — תאריך ביצוע עסקי של קליטת תשלום. לא createdAt. */
+export function getBusinessWeekClosingDate(code: string | null | undefined): string {
+  return getAhWeekRange(code)?.to ?? "";
+}
+
 export function getAhWeekCodeFromDateRange(
   fromYmd: string | null | undefined,
   toYmd: string | null | undefined,

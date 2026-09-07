@@ -21,8 +21,11 @@ export const CASH_WEEK_FLOW_LINES: CashWeekFlowLineMeta[] = [
   { id: "CASH_USD", label: "$ מזומן", currency: "USD" },
   { id: "CREDIT", label: "אשראי", currency: "ILS" },
   { id: "CHECK", label: "צ'קים", currency: "ILS" },
-  { id: "BANK_TRANSFER", label: "העברות", currency: "ILS" },
+  { id: "BANK_TRANSFER", label: "העברות ₪", currency: "ILS" },
+  { id: "BANK_TRANSFER_USD", label: "העברות $", currency: "USD" },
 ];
+
+export const CASH_WEEK_FLOW_LINE_IDS: CashWeekFlowLineId[] = CASH_WEEK_FLOW_LINES.map((l) => l.id);
 
 /** מיפוי שורת ספירת מנהל → ערוץ בקרת קופה (להוצאות) */
 export const WEEK_FLOW_LINE_CHANNEL: Record<CashWeekFlowLineId, CashDailyMethodId> = {
@@ -31,6 +34,7 @@ export const WEEK_FLOW_LINE_CHANNEL: Record<CashWeekFlowLineId, CashDailyMethodI
   CREDIT: "CREDIT_CARD_ILS",
   CHECK: "CHECK_ILS",
   BANK_TRANSFER: "BANK_TRANSFER_ILS",
+  BANK_TRANSFER_USD: "BANK_TRANSFER_USD",
 };
 
 export type CashWeekFlowCountedValues = Partial<Record<CashWeekFlowLineId, number | null>>;

@@ -1,6 +1,11 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { countLineDiff, WEEK_FLOW_LINE_CHANNEL, type CashWeekFlowLineId } from "@/lib/cash-control-week-flow";
+import {
+  CASH_WEEK_FLOW_LINE_IDS,
+  countLineDiff,
+  WEEK_FLOW_LINE_CHANNEL,
+  type CashWeekFlowLineId,
+} from "@/lib/cash-control-week-flow";
 import { aggregateExpensesByMethod } from "@/lib/cash-expense-payment-method";
 import { formatAhWeekLabel, getAhWeekRange } from "@/lib/weeks/ah-week";
 import { emptyDailyIntake, paymentDayKeyJerusalem } from "@/lib/cash-control-daily";
@@ -43,7 +48,7 @@ function formatCounted(
   lines: Partial<Record<CashWeekFlowLineId, number | null>>,
 ): Partial<Record<CashWeekFlowLineId, string | null>> {
   const out: Partial<Record<CashWeekFlowLineId, string | null>> = {};
-  for (const id of ["CASH_ILS", "CASH_USD", "CREDIT", "CHECK", "BANK_TRANSFER"] as CashWeekFlowLineId[]) {
+  for (const id of CASH_WEEK_FLOW_LINE_IDS) {
     const v = lines[id];
     out[id] = v != null ? money(v) : null;
   }
@@ -108,7 +113,7 @@ export async function loadFlowWeek(
   const counted = formatCounted(countedLines);
 
   const countDiff: Partial<Record<CashWeekFlowLineId, string | null>> = {};
-  for (const lineId of ["CASH_ILS", "CASH_USD", "CREDIT", "CHECK", "BANK_TRANSFER"] as CashWeekFlowLineId[]) {
+  for (const lineId of CASH_WEEK_FLOW_LINE_IDS) {
     const rec = approvedSummary.approved[lineId]?.amount ?? 0;
     const cnt = countedLines[lineId] ?? null;
     const channel = WEEK_FLOW_LINE_CHANNEL[lineId];

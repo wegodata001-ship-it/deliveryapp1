@@ -7,7 +7,7 @@
  * - orderSourceWeek = previousWeek(paymentCaptureWeek) = selectedWorkWeek
  *
  * ניווט ידני בתוך הקליטה על paymentWeek P → הזמנות = previousWeek(P).
- * תאריך התשלום (paymentDateYmd) נפרד — לא נגזר מהשבוע.
+ * תאריך ביצוע הקליטה (intakeDate / paymentDate) = שבת השבוע הפיננסי (P − 1).
  *
  * לא משנים את השבוע הגלובלי במסך הבית.
  */

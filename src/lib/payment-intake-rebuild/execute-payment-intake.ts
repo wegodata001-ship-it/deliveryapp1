@@ -14,6 +14,7 @@ import { computeFromUsdAmount } from "@/lib/financial-calc";
 import { loadFinanceSettingsSerialized } from "@/lib/financial-settings";
 import { prismaVatRatePercent } from "@/lib/vat-prisma";
 import { normalizeWorkCountryCode } from "@/lib/work-country";
+import { resolvePaymentIntakeAccountingPeriod } from "@/lib/payment-intake-accounting-period";
 import { parseLocalDateTime } from "@/lib/work-week";
 import {
   getCustomerInternalBalanceUsd,
@@ -274,7 +275,9 @@ export async function executePaymentIntake(params: {
   const { primary, usdMethod, ilsMethod } = summarizeMethods(input.methods);
 
   const hm = (input.paymentTimeHm ?? "").trim() || "12:00";
-  const paymentDate = parseLocalDateTime(input.paymentDateYmd, hm) ?? new Date();
+  const accounting = resolvePaymentIntakeAccountingPeriod(weekCode);
+  const businessYmd = input.paymentDateYmd.trim() || accounting?.businessDate || "";
+  const paymentDate = parseLocalDateTime(businessYmd, hm);
   const totalIlsDec = totalIls > INTAKE_EPS ? new Prisma.Decimal(totalIls.toFixed(4)) : null;
 
   const firstOrderId = byOrderId.keys().next().value ?? feeAllocEntries[0]?.[0] ?? null;

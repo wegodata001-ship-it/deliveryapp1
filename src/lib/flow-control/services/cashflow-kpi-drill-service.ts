@@ -179,9 +179,11 @@ async function loadPaymentIntakeDrill(weeks: string[]): Promise<CashflowKpiDrill
   };
 }
 
-const MANAGER_COUNT_DB_FIELD: Record<
-  CashWeekFlowLineId,
-  "countedCashIls" | "countedCashUsd" | "countedTransferIls" | "countedCreditIls" | "countedChecksIls"
+const MANAGER_COUNT_DB_FIELD: Partial<
+  Record<
+    CashWeekFlowLineId,
+    "countedCashIls" | "countedCashUsd" | "countedTransferIls" | "countedCreditIls" | "countedChecksIls"
+  >
 > = {
   CASH_ILS: "countedCashIls",
   CASH_USD: "countedCashUsd",
@@ -190,7 +192,7 @@ const MANAGER_COUNT_DB_FIELD: Record<
   CHECK: "countedChecksIls",
 };
 
-const MANAGER_COUNT_KPI_KIND: Record<CashWeekFlowLineId, CashflowKpiKind> = {
+const MANAGER_COUNT_KPI_KIND: Partial<Record<CashWeekFlowLineId, CashflowKpiKind>> = {
   CASH_ILS: "managerCashIls",
   CASH_USD: "managerCashUsd",
   BANK_TRANSFER: "managerTransferIls",
@@ -204,6 +206,17 @@ async function loadManagerCountLineDrill(
 ): Promise<CashflowKpiDrillResult> {
   const meta = CASH_WEEK_FLOW_LINES.find((l) => l.id === lineId)!;
   const field = MANAGER_COUNT_DB_FIELD[lineId];
+  if (!field) {
+    return {
+      kind: MANAGER_COUNT_KPI_KIND[lineId] ?? "managerTransferIls",
+      title: meta.label,
+      subtitle: "אין עמודת ספירת מנהל שבועית לשורה זו",
+      columns: [],
+      rows: [],
+      totalLabel: "סה״כ",
+      totalValue: meta.currency === "USD" ? "$0" : "₪0",
+    };
+  }
 
   const flows = await prisma.cashWeekFlow.findMany({
     where: { countryCode: "TR", weekCode: { in: weeks } },
@@ -248,7 +261,7 @@ async function loadManagerCountLineDrill(
   }
 
   return {
-    kind: MANAGER_COUNT_KPI_KIND[lineId],
+    kind: MANAGER_COUNT_KPI_KIND[lineId] ?? "managerTransferIls",
     title: `${meta.label} — ספירת מנהל`,
     subtitle: weekSubtitle(weeks),
     columns: [

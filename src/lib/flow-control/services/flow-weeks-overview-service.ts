@@ -11,7 +11,7 @@ import type { FlowWeekOverviewRow } from "@/app/admin/cash-flow/flow-types";
 import type { CashDailyMethodId } from "@/lib/cash-control-daily";
 import { allCashControlChannels } from "@/lib/cash-control-channel";
 import { formatAhWeekLabel } from "@/lib/weeks/ah-week";
-import type { CashWeekFlowLineId } from "@/lib/cash-control-week-flow";
+import { CASH_WEEK_FLOW_LINE_IDS } from "@/lib/cash-control-week-flow";
 import { groupByActivePayments } from "@/lib/payment-record-status";
 import { computeOrderLedgerView, resolveOrderTotalUsd } from "@/lib/order-remaining-debt";
 import { OrderStatus as OS } from "@prisma/client";
@@ -110,7 +110,7 @@ async function loadOneWeekOverview(
   const lastIlFx = [...flow.fxPurchases].reverse().find((p) => normalizeFxTrack(p.track) === "IL") ?? null;
   const lastFx = flow.fxPurchases.length > 0 ? flow.fxPurchases[flow.fxPurchases.length - 1] : null;
   const hasPaymentData = Object.values(flow.weekPaymentIntake).some((v) => v > 0);
-  const hasManagerCount = (["CASH_ILS", "CASH_USD", "CREDIT", "CHECK", "BANK_TRANSFER"] as CashWeekFlowLineId[]).some(
+  const hasManagerCount = CASH_WEEK_FLOW_LINE_IDS.some(
     (id) => flow.counted[id] != null,
   );
   const turkeyBalance = flow.turkeyBalance;

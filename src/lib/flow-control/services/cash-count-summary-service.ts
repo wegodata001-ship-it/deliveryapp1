@@ -5,7 +5,7 @@
 
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import type { CashWeekFlowLineId } from "@/lib/cash-control-week-flow";
+import { CASH_WEEK_FLOW_LINE_IDS, type CashWeekFlowLineId } from "@/lib/cash-control-week-flow";
 import { allCashControlChannels, CHANNEL_DRAWER_FIELD } from "@/lib/cash-control-channel";
 import {
   dayNameHe,
@@ -104,7 +104,7 @@ function hasDrawerData(drawer: CashDailyDrawerValues): boolean {
   return Object.values(drawer).some((v) => v != null && v > 0);
 }
 
-const LINE_IDS = ["CASH_ILS", "CASH_USD", "CREDIT", "CHECK", "BANK_TRANSFER"] as CashWeekFlowLineId[];
+const LINE_IDS = CASH_WEEK_FLOW_LINE_IDS;
 
 /** מיפוי ערוץ יומי → שורת ספירת מנהל שבועית (ILS בלבד, מזומן לפי מטבע) */
 function methodToLineId(method: CashDailyMethodId): CashWeekFlowLineId | null {
@@ -112,6 +112,7 @@ function methodToLineId(method: CashDailyMethodId): CashWeekFlowLineId | null {
   if (method === "CREDIT_CARD_ILS") return "CREDIT";
   if (method === "CHECK_ILS") return "CHECK";
   if (method === "BANK_TRANSFER_ILS") return "BANK_TRANSFER";
+  if (method === "BANK_TRANSFER_USD") return "BANK_TRANSFER_USD";
   return null;
 }
 

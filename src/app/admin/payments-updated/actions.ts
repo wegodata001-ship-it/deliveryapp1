@@ -52,7 +52,12 @@ import {
   canSaveSurplusWithoutOrderAllocation,
 } from "@/lib/payment-debt-surplus-split";
 import { getCustomerCreditBalanceUsd } from "@/lib/customer-credit-balance";
-import { formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate, parseLocalDateTime } from "@/lib/work-week";
+import { resolvePaymentIntakeAccountingPeriod } from "@/lib/payment-intake-accounting-period";
+import {
+  getWeekCodeForLocalDate,
+  parseLocalDate,
+  parseLocalDateTime,
+} from "@/lib/work-week";
 import {
   calculatePaymentLine,
   calculateTotals,
@@ -231,7 +236,7 @@ export type PaymentUpdatedSaveInput = {
   paymentTimeHm: string;
   /**
    * תאריך ביצוע קליטת תשלום (YYYY-MM-DD) — לבקרת קופה בלבד.
-   * ברירת מחדל: היום. לא משנה weekCode / FIFO / הזמנות.
+   * ברירת מחדל: שבת סגירת שבוע הקליטה. לא createdAt / לא היום.
    */
   intakeDateYmd?: string | null;
   weekCode: string | null;
@@ -600,27 +605,26 @@ export async function savePaymentUpdatedAction(
   const flatChecksForPrimary = flattenChecksFromPayments(form.payments ?? []);
 
   const today = new Date();
-  const todayYmd = formatLocalYmd(today);
   const hm = (form.paymentTimeHm ?? "").trim();
 
+  const weekCodeHint = form.weekCode?.trim() || null;
+  const accounting = resolvePaymentIntakeAccountingPeriod(weekCodeHint);
+  const defaultBusinessYmd = accounting?.businessDate ?? "";
+
   let paymentDate: Date;
-  if (form.receivedToday) {
-    paymentDate = hm ? parseLocalDateTime(todayYmd, hm) : today;
-  } else {
-    const d = form.paymentDateYmd.trim();
-    if (!d) return { ok: false, error: "יש לבחור תאריך תשלום" };
-    paymentDate = hm ? parseLocalDateTime(d, hm) : parseLocalDate(d);
-  }
+  const explicitPaymentYmd = form.paymentDateYmd.trim() || defaultBusinessYmd;
+  if (!explicitPaymentYmd) return { ok: false, error: "יש לבחור תאריך תשלום" };
+  paymentDate = hm ? parseLocalDateTime(explicitPaymentYmd, hm) : parseLocalDate(explicitPaymentYmd);
 
   const manualDateChanged =
     paymentDate.getFullYear() !== today.getFullYear() ||
     paymentDate.getMonth() !== today.getMonth() ||
     paymentDate.getDate() !== today.getDate();
 
-  const intakeYmd = (form.intakeDateYmd ?? "").trim() || todayYmd;
+  const intakeYmd = (form.intakeDateYmd ?? "").trim() || defaultBusinessYmd || explicitPaymentYmd;
   const intakeDate = hm ? parseLocalDateTime(intakeYmd, hm) : parseLocalDate(intakeYmd);
 
-  const weekCode = (form.weekCode?.trim() || getWeekCodeForLocalDate(paymentDate)).trim() || null;
+  const weekCode = (weekCodeHint || getWeekCodeForLocalDate(paymentDate)).trim() || null;
 
   const weekDateWhere = paymentIntakeOrderDateThroughAhWeekEnd(weekCode);
   // חשוב: יתרת זכות קיימת לא "כופה" תשלום כקרדיט.

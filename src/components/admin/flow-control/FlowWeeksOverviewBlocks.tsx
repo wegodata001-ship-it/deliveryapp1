@@ -16,6 +16,7 @@ const MANAGER_COLS: CashWeekFlowLineId[] = [
   "CHECK",
   "CREDIT",
   "BANK_TRANSFER",
+  "BANK_TRANSFER_USD",
 ];
 
 const COL_LABEL = channelColLabels();
@@ -26,6 +27,7 @@ const MANAGER_LABEL: Record<CashWeekFlowLineId, string> = {
   CHECK: "צ'קים ₪",
   CREDIT: "אשראי ₪",
   BANK_TRANSFER: "העברה ₪",
+  BANK_TRANSFER_USD: "העברה $",
 };
 
 function cell(value: string | null | undefined, currency: "ILS" | "USD" = "ILS"): string {

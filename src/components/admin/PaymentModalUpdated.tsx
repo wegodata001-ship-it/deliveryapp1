@@ -155,7 +155,9 @@ import {
 } from "@/lib/work-week";
 import { AhWeekNavNextButton, AhWeekNavPrevButton } from "@/components/admin/AhWeekNavButtons";
 import { getNextAhWeek, getPrevAhWeek } from "@/lib/weeks/ah-week";
+import { resolvePaymentIntakeAccountingPeriod } from "@/lib/payment-intake-accounting-period";
 import {
+  defaultPaymentIntakeDateYmd,
   defaultPaymentIntakeWeekCode,
 } from "@/lib/payment-intake-default-week";
 import {
@@ -415,9 +417,11 @@ type PaymentEntryResponse = {
   id: string;
   paymentCode: string | null;
   paymentNumber?: number | null;
-  /** שבוע קליטה/עבודה — נפרד מתאריך התשלום */
+  /** שבוע קליטה/עבודה — נפרד מ-createdAt */
   weekCode?: string | null;
   paymentDateYmd: string;
+  /** תאריך ביצוע קליטה לבקרת קופה — שבת השבוע, לא createdAt */
+  intakeDateYmd?: string | null;
   paymentTimeHm: string;
   dollarRate: string | null;
   /** אחוז עמלה שנשמר בקליטה — לתצוגה בטבלה; אופציונלי בטעינה ישנה */
@@ -441,10 +445,14 @@ const NEW_CAPTURE_ROW_ID = "";
 
 function createNewCaptureLoadedPayment(paymentCode: string): PaymentEntryResponse {
   const now = new Date();
+  const week = defaultPaymentIntakeWeekCode();
+  const closing = defaultPaymentIntakeDateYmd(week);
   return {
     id: NEW_CAPTURE_ROW_ID,
     paymentCode,
-    paymentDateYmd: formatLocalYmd(now),
+    weekCode: week,
+    paymentDateYmd: closing,
+    intakeDateYmd: closing,
     paymentTimeHm: formatLocalHm(now),
     dollarRate: null,
     customer: {
@@ -614,14 +622,18 @@ export function PaymentModalUpdated({
   /** קוד תשלום לתצוגה בלבד — נטען ברקע, לא מעדכן את loadedPayment (מונע remount / איבוד פוקוס) */
   const [previewPaymentCode, setPreviewPaymentCode] = useState<string | null>(null);
   const [paymentCodePreviewPending, setPaymentCodePreviewPending] = useState(true);
-  const [paymentDateYmd, setPaymentDateYmd] = useState(() => formatLocalYmd(new Date()));
+  const [paymentDateYmd, setPaymentDateYmd] = useState(() =>
+    defaultPaymentIntakeDateYmd(defaultPaymentIntakeWeekCode(globalWeek)),
+  );
   /** תאריך מקור ההזמנות (שבת שבוע מקור) — נפרד מתאריך ביצוע התשלום */
   const [orderSourceDateYmd, setOrderSourceDateYmd] = useState(() =>
     defaultOrderSourceDateYmdForIntakeWeek(defaultPaymentIntakeWeekCode(globalWeek)),
   );
   const [editingOrderSourceDate, setEditingOrderSourceDate] = useState(false);
-  /** תאריך ביצוע קליטת תשלום — לבקרת קופה בלבד (ברירת מחדל: היום) */
-  const [intakeDateYmd, setIntakeDateYmd] = useState(() => formatLocalYmd(new Date()));
+  /** תאריך ביצוע קליטת תשלום — שבת סגירת שבוע הקליטה, לא היום */
+  const [intakeDateYmd, setIntakeDateYmd] = useState(() =>
+    defaultPaymentIntakeDateYmd(defaultPaymentIntakeWeekCode(globalWeek)),
+  );
   const [paymentTimeHm, setPaymentTimeHm] = useState(() => formatLocalHm(new Date()));
   const [weekDraft, setWeekDraft] = useState(() => defaultPaymentIntakeWeekCode(globalWeek));
   const [weekInputErr, setWeekInputErr] = useState<string | null>(null);
@@ -1828,6 +1840,7 @@ export function PaymentModalUpdated({
       }
 
       setPaymentDateYmd(snap.paymentDateYmd);
+      setIntakeDateYmd(snap.intakeDateYmd?.trim() || snap.paymentDateYmd);
       setWeekDraft(intakeWeek);
       setOrderSourceDateYmd(defaultOrderSourceDateYmdForIntakeWeek(intakeWeek));
       setLoadedPayment(snap);
@@ -2136,6 +2149,9 @@ export function PaymentModalUpdated({
       }
       setWeekDraft(norm);
       setWeekInputErr(null);
+      const closing = defaultPaymentIntakeDateYmd(norm);
+      setIntakeDateYmd(closing);
+      setPaymentDateYmd(closing);
       setOrderSourceDateYmd(defaultOrderSourceDateYmdForIntakeWeek(norm));
       if (opts?.reloadOrders && customer?.id) {
         const srcWeek = weekCodeForPaymentIntakeOrders(norm) ?? resolveOrderSourceWeekCode(norm);
@@ -2448,9 +2464,10 @@ export function PaymentModalUpdated({
     const defWeek = defaultPaymentIntakeWeekCode(globalWeek);
     setWeekDraft(defWeek);
     setWeekInputErr(null);
-    setPaymentDateYmd(formatLocalYmd(new Date()));
+    const closing = defaultPaymentIntakeDateYmd(defWeek);
+    setPaymentDateYmd(closing);
     setOrderSourceDateYmd(defaultOrderSourceDateYmdForIntakeWeek(defWeek));
-    setIntakeDateYmd(formatLocalYmd(new Date()));
+    setIntakeDateYmd(closing);
     setPaymentTimeHm(formatLocalHm(new Date()));
     setPaymentNavLoading(false);
     setLoadErr(null);
@@ -2982,14 +2999,13 @@ export function PaymentModalUpdated({
       return { ok: false };
     }
     setSaveBusy(true);
-    const receivedTodaySave = isTodayYmd(paymentDateYmd);
     const hm = (paymentTimeHm || "").trim() || formatLocalHm(new Date());
     const weekForSave = intakeWeekCode;
     const saveStart = performance.now();
     const res = await savePaymentUpdatedAction({
       customerId: customer.id,
-      receivedToday: receivedTodaySave,
-      paymentDateYmd: receivedTodaySave ? formatLocalYmd(new Date()) : paymentDateYmd,
+      receivedToday: false,
+      paymentDateYmd,
       paymentTimeHm: hm,
       intakeDateYmd,
       weekCode: weekForSave,
@@ -3051,11 +3067,13 @@ export function PaymentModalUpdated({
       setBalanceResetFromCredit(false);
     }
 
-    dispatchCashControlRefresh(weekForSave);
+    dispatchCashControlRefresh(
+      resolvePaymentIntakeAccountingPeriod(weekForSave)?.financialWeek ?? weekForSave,
+    );
     window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
 
     const refreshStart = performance.now();
-    const savedDateYmd = receivedTodaySave ? formatLocalYmd(new Date()) : paymentDateYmd;
+    const savedDateYmd = paymentDateYmd;
     const savedPaymentId = res.saved.primaryPaymentId?.trim() ?? savedCapturePaymentId ?? "";
     const resetIds = [...commissionResetIds];
     const updatedOrdersForSummary = orders.map((o) => {
@@ -3863,7 +3881,11 @@ export function PaymentModalUpdated({
                   dir="ltr"
                   className="payment-modal-rate-strip-inp payment-modal-rate-strip-inp--date"
                   value={intakeDateYmd}
-                  onChange={(e) => setIntakeDateYmd(e.target.value)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setIntakeDateYmd(v);
+                    setPaymentDateYmd(v);
+                  }}
                   aria-label="תאריך ביצוע קליטת תשלום"
                   title="תאריך קבלת הכסף בפועל — לבקרת קופה בלבד"
                   readOnly={captureReadOnly}
@@ -4241,7 +4263,11 @@ export function PaymentModalUpdated({
                     dir="ltr"
                     autoFocus
                     value={paymentDateYmd}
-                    onChange={(e) => setPaymentDateYmd(e.target.value)}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setPaymentDateYmd(v);
+                      setIntakeDateYmd(v);
+                    }}
                     onBlur={() => setEditingBadge(null)}
                     onKeyDown={badgeKeyFinish}
                     aria-label="תאריך ביצוע תשלום"
