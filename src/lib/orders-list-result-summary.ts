@@ -15,6 +15,8 @@ export type OrdersResultSummaryMoneyRow = {
   commissionUsd: unknown;
   totalUsd: unknown;
   paidUsd: number;
+  /** יתרה לגבייה אחרי משיכת חוב FIFO. אם חסר — total−paid. */
+  collectibleRemainingUsd?: number | null;
 };
 
 export type OrdersResultSummaryLine = {
@@ -60,10 +62,14 @@ export function moneyFromFilteredOrder(row: OrdersResultSummaryMoneyRow): {
       balanceUsd: 0,
     };
   }
+  const collectible =
+    row.collectibleRemainingUsd != null && Number.isFinite(Number(row.collectibleRemainingUsd))
+      ? roundOrderMoney2(Math.max(0, Number(row.collectibleRemainingUsd)))
+      : ledger.remainingUsd;
   return {
     dealUsd: roundOrderMoney2(dealRaw),
     totalUsd: roundOrderMoney2(totalRaw),
-    balanceUsd: ledger.remainingUsd,
+    balanceUsd: collectible,
   };
 }
 
@@ -80,7 +86,7 @@ function addMoney(line: OrdersResultSummaryLine, money: ReturnType<typeof moneyF
 
 /**
  * סיכום לפי ריבועי KPI מאותו dataset מסונן של הטבלה.
- * שורות הסטטוס יכולות לחפוף (בוצע ∩ הושלם). סה״כ הוא ייחודי.
+ * בוצע ו-הושלם זרים; בחירה בשניהם היא UNION. סה״כ ייחודי.
  */
 export function buildOrdersResultSummary(
   rows: OrdersResultSummaryMoneyRow[],

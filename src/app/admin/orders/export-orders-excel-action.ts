@@ -19,6 +19,7 @@ import {
 } from "@/lib/debt-withdrawal-order";
 import { getOrderStatusLabelMap, labelFromMap } from "@/lib/order-status-registry";
 import { computeOrderLedgerView } from "@/lib/order-remaining-debt";
+import { loadCollectibleRemainingUsdByOrderId } from "@/lib/orders-list-collectible-remaining";
 import { groupByActivePayments } from "@/lib/payment-record-status";
 
 const EXPORT_MAX_ROWS = 15_000;
@@ -75,6 +76,7 @@ export async function exportOrdersListExcelCsvAction(
         weekCode: true,
         status: true,
         isCompleted: true,
+        customerId: true,
         customerCodeSnapshot: true,
         customerNameSnapshot: true,
         paymentMethod: true,
@@ -115,6 +117,9 @@ export async function exportOrdersListExcelCsvAction(
   for (const p of paySums as Array<{ orderId: string | null; _sum: { amountUsd: unknown } }>) {
     if (p.orderId) paidByOrder.set(p.orderId, Number(p._sum.amountUsd ?? 0));
   }
+  const collectibleRemainingByOrderId = await loadCollectibleRemainingUsdByOrderId(
+    rows.map((r) => r.customerId).filter((id): id is string => !!id),
+  );
 
   const intakeLocationNameById = (id: string | null | undefined): string | null => {
     if (!id) return null;
@@ -185,7 +190,10 @@ export async function exportOrdersListExcelCsvAction(
       : ledger.paidUsd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const remainingUsd = isWithdrawal
       ? "0.00"
-      : ledger.remainingUsd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      : (collectibleRemainingByOrderId.get(r.id) ?? ledger.remainingUsd).toLocaleString("en-US", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        });
 
     lines.push(
       [

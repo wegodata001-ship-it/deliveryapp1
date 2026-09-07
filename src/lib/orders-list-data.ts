@@ -26,6 +26,7 @@ import {
   buildOrdersResultSummary,
   type OrdersResultSummary,
 } from "@/lib/orders-list-result-summary";
+import { loadCollectibleRemainingUsdByOrderId } from "@/lib/orders-list-collectible-remaining";
 
 function fmtUsd2(n: unknown): string | null {
   if (n == null) return null;
@@ -116,6 +117,7 @@ type IntakeLocationRow = { id: string; name: string };
 type PaymentSumRow = { orderId: string | null; _sum: { amountUsd: unknown } };
 type ResultSummaryLeanRow = {
   id: string;
+  customerId: string | null;
   status: string;
   isCompleted: boolean;
   amountUsd: unknown;
@@ -331,8 +333,8 @@ export async function fetchOrdersListPageData(
     ...statsScopeParams,
     ordersCountry: undefined,
   });
-  const fullCacheKey = stableSearchParamsKey(sp);
-  const scopeCacheKey = ordersScopeCacheKey(sp);
+  const fullCacheKey = `${stableSearchParamsKey(sp)}|kpiExactV1`;
+  const scopeCacheKey = `${ordersScopeCacheKey(sp)}|kpiExactV1`;
   const page = readPageParam(sp);
   const pageSize = ORDERS_LIST_PAGE_SIZE;
   const ordersPageCacheKey = `${fullCacheKey}|page=${page}|pageSize=${pageSize}|user=${me.id}|payStatus=${paymentStatusValues.join(",")}`;
@@ -413,13 +415,14 @@ export async function fetchOrdersListPageData(
         cachedTimed(
           "ordersResultSummaryLeanStore",
           ordersResultSummaryLeanStore,
-          `${countCacheKey}|summaryLean`,
+          `${countCacheKey}|summaryLean|v2`,
           (ms) => (ordersQueryMs += ms),
           () =>
             prisma.order.findMany({
               where: listWhere,
               select: {
                 id: true,
+                customerId: true,
                 status: true,
                 isCompleted: true,
                 amountUsd: true,
@@ -541,6 +544,14 @@ export async function fetchOrdersListPageData(
         break;
     }
   }
+  statusSummaryAcc.completed.count = Math.max(
+    0,
+    statusSummaryAcc.completed.count - statusSummaryAcc.operationalCompleted.count,
+  );
+  statusSummaryAcc.completed.totalUsd = Math.max(
+    0,
+    statusSummaryAcc.completed.totalUsd - statusSummaryAcc.operationalCompleted.totalUsd,
+  );
   const fmtUsdCompact = (n: number) =>
     n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   let allTotalUsd = 0;
@@ -607,6 +618,12 @@ export async function fetchOrdersListPageData(
     }
   }
 
+  const collectibleRemainingByOrderId = await loadCollectibleRemainingUsdByOrderId(
+    [...rows.map((r) => r.customerId), ...summaryLean.map((r) => r.customerId)].filter(
+      (id): id is string => !!id,
+    ),
+  );
+
   const commissionFees =
     ids.length > 0
       ? await prisma.paymentAdjustmentFee.findMany({
@@ -637,7 +654,9 @@ export async function fetchOrdersListPageData(
         commissionUsd: r.commissionUsd,
         paidUsd: paid,
       });
-      const balanceUsd = isDebtWithdrawal ? 0 : ledger.remainingUsd;
+      const balanceUsd = isDebtWithdrawal
+        ? 0
+        : (collectibleRemainingByOrderId.get(r.id) ?? ledger.remainingUsd);
       let editBadge: OrderListRow["editBadge"] = null;
       let pendingEditOwnedByMe = false;
       if (pendingEditOrderIds.has(r.id)) {
@@ -715,6 +734,7 @@ export async function fetchOrdersListPageData(
       commissionUsd: r.commissionUsd,
       totalUsd: r.totalUsd,
       paidUsd: paidByOrder.get(r.id) ?? 0,
+      collectibleRemainingUsd: collectibleRemainingByOrderId.get(r.id) ?? null,
     })),
     parseOrdersKpiFilters(sp),
   );

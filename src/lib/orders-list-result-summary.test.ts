@@ -52,7 +52,7 @@ describe("buildOrdersResultSummary", () => {
     assert.equal(summary.total.count, 1);
   });
 
-  it("בוצע + הושלם: overlapping rows, unique grand total", () => {
+  it("בוצע + הושלם: disjoint lines, unique grand total", () => {
     const rows = [
       row("done", OS.COMPLETED, { isCompleted: false, amount: 10, total: 11, paid: 0 }),
       row("both", OS.COMPLETED, { isCompleted: true, amount: 6, total: 7, paid: 0 }),
@@ -60,11 +60,11 @@ describe("buildOrdersResultSummary", () => {
     const summary = buildOrdersResultSummary(rows, ["completed", "operationalCompleted"]);
     assert.ok(summary);
     assert.equal(summary.lines.length, 2);
-    assert.equal(summary.lines.find((l) => l.key === "completed")?.count, 2);
+    assert.equal(summary.lines.find((l) => l.key === "completed")?.count, 1);
     assert.equal(summary.lines.find((l) => l.key === "operationalCompleted")?.count, 1);
     assert.equal(summary.total.count, 2);
     assert.equal(summary.total.dealUsd, 16);
-    assert.equal(summary.lines.find((l) => l.key === "completed")?.dealUsd, 16);
+    assert.equal(summary.lines.find((l) => l.key === "completed")?.dealUsd, 10);
     assert.equal(summary.lines.find((l) => l.key === "operationalCompleted")?.dealUsd, 6);
   });
 
@@ -88,7 +88,8 @@ describe("buildOrdersResultSummary", () => {
   it("הכל shows only buckets with results", () => {
     const rows = [
       row("1", OS.OPEN),
-      row("2", OS.COMPLETED, { isCompleted: true }),
+      row("2", OS.COMPLETED, { isCompleted: false }),
+      row("3", OS.COMPLETED, { isCompleted: true }),
     ];
     const summary = buildOrdersResultSummary(rows, []);
     assert.ok(summary);
@@ -97,7 +98,7 @@ describe("buildOrdersResultSummary", () => {
     assert.ok(keys.includes("completed"));
     assert.ok(keys.includes("operationalCompleted"));
     assert.ok(!keys.includes("cancelled"));
-    assert.equal(summary.total.count, 2);
+    assert.equal(summary.total.count, 3);
   });
 
   it("empty dataset has no summary", () => {
@@ -120,5 +121,14 @@ describe("buildOrdersResultSummary", () => {
     assert.equal(money.dealUsd, 100);
     assert.equal(money.totalUsd, 110);
     assert.equal(money.balanceUsd, 70);
+  });
+
+  it("collectible remaining after withdrawal wins over total-paid leftover", () => {
+    const money = moneyFromFilteredOrder({
+      ...row("TR-134-0011", OS.OPEN, { amount: 2100, total: 2121, commission: 21, paid: 1612.53 }),
+      collectibleRemainingUsd: 0,
+    });
+    assert.equal(money.totalUsd, 2121);
+    assert.equal(money.balanceUsd, 0);
   });
 });

@@ -218,8 +218,14 @@ function adjustOperationalCompletedSummary(
   if (deltaCount === 0) return summary;
   const nextCount = Math.max(0, parseCountValue(summary.operationalCompleted.count) + deltaCount);
   const nextTotal = Math.max(0, (parseNumeric(summary.operationalCompleted.totalUsd) ?? 0) + deltaCount * params.totalUsd);
+  const completedCount = Math.max(0, parseCountValue(summary.completed.count) - deltaCount);
+  const completedTotal = Math.max(0, (parseNumeric(summary.completed.totalUsd) ?? 0) - deltaCount * params.totalUsd);
   return {
     ...summary,
+    completed: {
+      count: completedCount.toLocaleString("he-IL"),
+      totalUsd: completedTotal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+    },
     operationalCompleted: {
       count: nextCount.toLocaleString("he-IL"),
       totalUsd: nextTotal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
@@ -241,7 +247,7 @@ function formatOrdersListMoney(
   const rawStr = field === "deal" ? o.dealAmountUsd : o.totalAmountUsd;
   const raw = parseNumeric(rawStr);
   if (raw == null) return { text: "—", debtWithdrawal };
-  if (!debtWithdrawal) return { text: rawStr ?? "—", debtWithdrawal: false };
+  if (!debtWithdrawal) return { text: `$${formatMoneyAmount(raw)}`, debtWithdrawal: false };
   return { text: `$${formatSignedUsdDisplay(-Math.abs(raw))}`, debtWithdrawal: true };
 }
 
@@ -1216,9 +1222,9 @@ export function OrdersListShell({
               <th className="adm-ord-col-ccode">קוד לקוח</th>
               <th className="adm-ord-col-cust">שם לקוח</th>
               <th className="adm-ord-col-money adm-ord-col-money--deal" dir="ltr">
-                <span className="adm-ord-th-stack">
-                  <span>סכום לפני</span>
-                  <span>עמלה ($)</span>
+                <span className="adm-ord-th-stack adm-ord-th-stack--deal">
+                  <span>סכום לפני עמלה</span>
+                  <span>($)</span>
                 </span>
               </th>
               <th className="adm-ord-col-money adm-ord-col-money--total" dir="ltr">
@@ -1227,7 +1233,6 @@ export function OrdersListShell({
                   <span>עמלה ($)</span>
                 </span>
               </th>
-              <th className="adm-ord-col-money adm-ord-col-money--balance" dir="ltr">יתרה ($)</th>
               <th className="adm-ord-col-completed">הושלם</th>
               <th className="adm-ord-col-status">סטטוס הזמנה</th>
               <th className="adm-ord-col-meta adm-ord-col-pay">צורת תשלום</th>
@@ -1237,7 +1242,7 @@ export function OrdersListShell({
           <tbody>
             {tableRows.length === 0 ? (
               <tr>
-                <td colSpan={11} className="adm-table-empty adm-table-empty--rich">
+                <td colSpan={10} className="adm-table-empty adm-table-empty--rich">
                   {listEmptyContent ? (
                     <div className={`adm-orders-empty-in-table adm-orders-empty-in-table--${listEmptyContent.kind}`} role="status">
                       <strong>{listEmptyContent.title}</strong>
@@ -1326,7 +1331,6 @@ export function OrdersListShell({
                       dir="ltr"
                       className={[
                         "adm-table-excel-money",
-                        "adm-table-excel-money--usd",
                         "adm-ord-col-money",
                         "adm-ord-col-money--deal",
                         formatOrdersListMoney(o, "deal").debtWithdrawal ? "adm-ord-money--debt-withdrawal" : "",
@@ -1341,7 +1345,7 @@ export function OrdersListShell({
                             : undefined
                       }
                     >
-                      {formatOrdersListMoney(o, "deal").text}
+                      <strong className="adm-ord-deal-amount">{formatOrdersListMoney(o, "deal").text}</strong>
                     </td>
                     <td
                       dir="ltr"
@@ -1369,21 +1373,6 @@ export function OrdersListShell({
                           />
                         ) : null}
                       </div>
-                    </td>
-                    <td
-                      dir="ltr"
-                      className={[
-                        "adm-table-excel-money",
-                        "adm-table-excel-money--usd",
-                        "adm-table-excel-money--strong",
-                        "adm-ord-col-money",
-                        "adm-ord-col-money--balance",
-                        o.balanceUsd && parseNumeric(o.balanceUsd) === 0 ? "adm-ord-money--zero" : "",
-                      ]
-                        .filter(Boolean)
-                        .join(" ")}
-                    >
-                      {o.balanceUsd ?? "—"}
                     </td>
                     <td className="adm-ord-col-completed" onClick={(e) => e.stopPropagation()}>
                       <button
@@ -1480,6 +1469,10 @@ export function OrdersListShell({
                   </button>
                 </div>
                 <div className="adm-orders-mobile-card__cust">{o.customerName ?? "—"}</div>
+                <div className="adm-orders-mobile-card__deal" dir="ltr">
+                  <span>סכום לפני עמלה</span>
+                  <strong className="adm-ord-deal-amount">{formatOrdersListMoney(o, "deal").text}</strong>
+                </div>
                 <div className="adm-orders-mobile-card__meta">
                   <span>{o.orderDateYmd ?? "—"}</span>
                   <span dir="ltr">{formatOrdersListMoney(o, "total").text}</span>

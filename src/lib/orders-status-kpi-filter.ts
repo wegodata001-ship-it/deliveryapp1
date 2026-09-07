@@ -57,6 +57,11 @@ export function serializeOrdersKpiFilters(keys: OrdersKpiFilterKey[]): string {
   return [...new Set(keys.filter(isOrdersKpiFilterKey))].join(",");
 }
 
+/** בוצע = COMPLETED שעדיין לא סומן הושלם. הושלם = isCompleted. */
+export function orderMatchesCompletedKpi(order: { status: string; isCompleted?: boolean }): boolean {
+  return order.status === OS.COMPLETED && !order.isCompleted;
+}
+
 /** האם order.status שייך לריבוע KPI (אותה לוגיקה כמו סיכום העליון) */
 export function orderStatusBelongsToKpiBucket(
   orderStatus: string,
@@ -93,6 +98,7 @@ export function orderMatchesOrdersKpiFilters(
   if (activeFilters.length === 0) return true;
   return activeFilters.some((key) => {
     if (key === "operationalCompleted") return Boolean(order.isCompleted);
+    if (key === "completed") return orderMatchesCompletedKpi(order);
     return orderStatusBelongsToKpiBucket(order.status, key);
   });
 }

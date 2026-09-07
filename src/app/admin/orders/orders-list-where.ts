@@ -9,7 +9,7 @@ import {
 } from "@/lib/orders-status-kpi-filter";
 import { normalizeAhWeekCode, parseOrdersListDateFilterFromSearchParams } from "@/lib/work-week";
 
-/** OR בין ריבועי KPI. הושלם = isCompleted, לא status enum. */
+/** OR בין ריבועי KPI. בוצע ≠ הושלם; שניהם יחד = איחוד מפורש. */
 export function buildOrdersKpiWhere(keys: OrdersKpiFilterKey[]): Prisma.OrderWhereInput | undefined {
   if (keys.length === 0) return undefined;
   const orParts: Prisma.OrderWhereInput[] = [];
@@ -19,7 +19,7 @@ export function buildOrdersKpiWhere(keys: OrdersKpiFilterKey[]): Prisma.OrderWhe
         orParts.push({ status: OS.OPEN });
         break;
       case "completed":
-        orParts.push({ status: OS.COMPLETED });
+        orParts.push({ status: OS.COMPLETED, isCompleted: false });
         break;
       case "cancelled":
         orParts.push({ status: OS.CANCELLED });

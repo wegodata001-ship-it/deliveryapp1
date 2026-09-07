@@ -5223,6 +5223,22 @@ html.adm-app-shell .adm-chrome-main:has(.adm-orders-excel-page) {
   color: #0f172a;
 }
 
+.orsb__metric--deal {
+  background: rgba(37, 99, 235, 0.06);
+}
+.orsb__metric--deal .orsb__label {
+  color: var(--adm-primary, #2563eb);
+  font-weight: 700;
+}
+.orsb__metric--deal .orsb__value {
+  color: var(--adm-primary, #2563eb);
+  font-weight: 700;
+}
+.orsb--grand .orsb__metric--deal .orsb__value {
+  color: var(--adm-primary, #2563eb);
+  font-weight: 700;
+}
+
 .orsb--open {
   border-inline-start-color: #2563eb;
   background: linear-gradient(180deg, #f8fbff 0%, #ffffff 78%);
@@ -43154,16 +43170,15 @@ button.adm-cash-kpi:hover {
   --ord-col-date: 125px;
   --ord-col-week: 90px;
   --ord-col-ccode: 90px;
-  --ord-col-cust: 150px;
-  --ord-col-money-deal: 125px;
-  --ord-col-money-total: 158px;
-  --ord-col-money-balance: 100px;
+  --ord-col-cust: 175px;
+  --ord-col-money-deal: 168px;
+  --ord-col-money-total: 168px;
   --ord-col-completed: 126px;
   --ord-col-status: 120px;
   --ord-col-paid: 90px;
   --ord-col-pay: 145px;
   --ord-col-actions: 60px;
-  --ord-table-min: 1445px;
+  --ord-table-min: 1380px;
   --ord-border: #e2e8f0;
   --ord-zebra: #f8fafc;
   --ord-hover: #eff6ff;
@@ -43259,14 +43274,27 @@ button.adm-cash-kpi:hover {
   min-width: var(--ord-col-money-total);
   max-width: var(--ord-col-money-total);
 }
-.adm-table-excel--orders-v3 .adm-ord-col-money--balance {
-  width: var(--ord-col-money-balance);
-  min-width: var(--ord-col-money-balance);
-  max-width: var(--ord-col-money-balance);
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-  color: #b45309;
+.adm-table-excel--orders-v3 thead th.adm-ord-col-money--deal,
+.adm-table-excel--orders-v3 thead th.adm-ord-col-money--deal .adm-ord-th-stack--deal {
+  background: var(--adm-primary, #2563eb);
+  color: #fff;
   font-weight: 700;
+}
+.adm-table-excel--orders-v3 .adm-ord-deal-amount {
+  font-weight: 700;
+  color: var(--adm-primary, #2563eb);
+}
+.adm-table-excel--orders-v3 tbody td.adm-ord-col-money--deal {
+  background: rgba(37, 99, 235, 0.06);
+}
+.adm-table-excel--orders-v3 tbody tr:nth-child(even) td.adm-ord-col-money--deal {
+  background: rgba(37, 99, 235, 0.07);
+}
+.adm-table-excel--orders-v3 tbody tr:hover td.adm-ord-col-money--deal {
+  background: rgba(37, 99, 235, 0.1) !important;
+}
+.adm-table-excel--orders-v3 td.adm-ord-money--debt-withdrawal .adm-ord-deal-amount {
+  color: inherit;
 }
 .adm-table-excel--orders-v3 .adm-ord-col-money {
   text-align: center;
@@ -43545,6 +43573,19 @@ button.adm-cash-kpi:hover {
 .adm-orders-mobile-card__cust {
   font-weight: 700;
   color: #0f172a;
+}
+
+.adm-orders-mobile-card__deal {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  background: rgba(37, 99, 235, 0.06);
+}
+.adm-orders-mobile-card__deal strong,
+.adm-orders-mobile-card__deal .adm-ord-deal-amount {
+  font-weight: 700;
+  color: var(--adm-primary, #2563eb);
 }
 
 .adm-orders-mobile-card__meta {
