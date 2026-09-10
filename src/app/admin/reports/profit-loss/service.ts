@@ -8,6 +8,7 @@ import { formatYmdJerusalem, parseAhWeekNumber } from "@/lib/weeks/ah-week";
 import { toAhWeekCode } from "@/lib/weeks/ah-week-nav";
 import { exchangeProfitPeriodKey } from "@/lib/flow-control/exchange-profit-period";
 import { rebuildProfitLossTimeline } from "@/lib/profit-loss-timeline";
+import { normalizeCashControlMovement } from "@/lib/cash-control-movement";
 import type {
   ProfitLossCompositionSlice,
   ProfitLossDashboard,
@@ -408,7 +409,7 @@ export async function loadProfitLossDashboard(
         expenseDate: { gte: from, lte: to },
         ...(weekCodes.length ? { weekCode: { in: weekCodes } } : {}),
       },
-      select: { amount: true, currency: true },
+      select: { amount: true, currency: true, direction: true },
     }),
     prisma.shipmentRecord.findMany({
       where: {
@@ -459,13 +460,7 @@ export async function loadProfitLossDashboard(
 
   let expensesIls = 0;
   for (const e of expensesRaw) {
-    const a = num(e.amount);
-    if (e.currency === "USD") {
-      // המרה גסה לפי שער ממוצע מההזמנות — תחושב אחרי
-      expensesIls += a;
-    } else {
-      expensesIls += a;
-    }
+    expensesIls += normalizeCashControlMovement({ amount: e.amount, direction: e.direction }).expenseTerm;
   }
   expensesIls = round2(expensesIls);
 

@@ -6,13 +6,11 @@ import { prisma } from "@/lib/prisma";
 import { getAhWeekRange } from "@/lib/weeks/ah-week";
 import { cashControlWeekCashPaymentsWhere } from "@/lib/cash-control-week-payments";
 import { paymentDayKeyJerusalem } from "@/lib/cash-control-daily";
-import { CASH_EXPENSE_REASONS } from "./constants";
+import { normalizeCashControlMovement } from "@/lib/cash-control-movement";
+import { getCashExpenseTypeLabelMap } from "@/app/admin/cash-expenses/type-service";
+import { resolveCashExpenseTypeLabel } from "@/lib/cash-expense-types";
 
 const Z = new Prisma.Decimal(0);
-
-const REASON_LABEL: Record<string, string> = Object.fromEntries(
-  CASH_EXPENSE_REASONS.map((r) => [r.value, r.label]),
-);
 
 function money(n: Prisma.Decimal): string {
   return n.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toFixed(2);
@@ -105,7 +103,7 @@ export async function getCashExportData(weekRaw: string): Promise<CashExportData
   const week = weekRaw.trim();
   const range = getAhWeekRange(week);
 
-  const [ilsReceipts, usdReceipts, expenseRows, lastCount, countRows] = await Promise.all([
+  const [ilsReceipts, usdReceipts, expenseRows, lastCount, countRows, reasonLabels] = await Promise.all([
     prisma.payment.findMany({
       where: cashControlWeekCashPaymentsWhere(week, "ILS"),
       select: { amountIls: true, intakeDate: true, paymentDate: true, createdAt: true },
@@ -120,6 +118,7 @@ export async function getCashExportData(weekRaw: string): Promise<CashExportData
         expenseDate: true,
         currency: true,
         amount: true,
+        direction: true,
         reason: true,
         notes: true,
         createdBy: { select: { fullName: true } },
@@ -139,6 +138,7 @@ export async function getCashExportData(weekRaw: string): Promise<CashExportData
         approvedBy: { select: { fullName: true } },
       },
     }),
+    getCashExpenseTypeLabelMap(),
   ]);
 
   const buckets = new Map<string, DayBucket>();
@@ -169,7 +169,9 @@ export async function getCashExportData(weekRaw: string): Promise<CashExportData
     bucket(k).recUsd = bucket(k).recUsd.add(amt);
   }
   for (const e of expenseRows) {
-    const amt = e.amount ?? Z;
+    const amt = new Prisma.Decimal(
+      normalizeCashControlMovement({ amount: e.amount, direction: e.direction }).expenseTerm,
+    );
     const b = bucket(dayKey(e.expenseDate));
     if (e.currency === "USD") {
       expensesUsd = expensesUsd.add(amt);
@@ -235,8 +237,12 @@ export async function getCashExportData(weekRaw: string): Promise<CashExportData
     expenses: expenseRows.map((e) => ({
       date: e.expenseDate.toISOString(),
       currency: e.currency === "USD" ? "USD" : "ILS",
-      amount: money(e.amount ?? Z),
-      reasonLabel: REASON_LABEL[e.reason] ?? "אחר",
+      amount: money(
+        new Prisma.Decimal(
+          normalizeCashControlMovement({ amount: e.amount, direction: e.direction }).netEffect,
+        ),
+      ),
+      reasonLabel: resolveCashExpenseTypeLabel(e.reason, reasonLabels),
       notes: e.notes,
       createdByName: e.createdBy?.fullName ?? null,
     })),

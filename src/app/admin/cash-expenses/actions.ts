@@ -22,8 +22,10 @@ import type {
   CashExpenseListFilter,
   CashExpenseRowDto,
 } from "@/app/admin/cash-expenses/types";
-import type { CashCurrency, CashExpenseReason } from "@/app/admin/cash-control/constants";
+import type { CashCurrency } from "@/app/admin/cash-control/constants";
 import type { CashExpensePaymentMethod } from "@/lib/cash-expense-payment-method";
+import { listCashExpenseTypes } from "@/app/admin/cash-expenses/type-service";
+import type { CashExpenseTypeDto } from "@/lib/cash-expense-types";
 
 const REVALIDATE_PATHS = ["/admin/cash-control", "/admin/cash-expenses", "/admin/cash-flow"] as const;
 
@@ -106,10 +108,26 @@ export async function getDayExpenseTotalsAction(input: {
   return getDayExpenseTotals(input);
 }
 
+export async function listCashExpenseTypesAction(): Promise<
+  { ok: true; types: CashExpenseTypeDto[] } | { ok: false; error: string }
+> {
+  const me = await requireAuth();
+  if (!canCreateCashExpense(me) && !canManageAllCashExpenses(me)) {
+    return { ok: false, error: "אין הרשאה" };
+  }
+  try {
+    return { ok: true, types: await listCashExpenseTypes() };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "שגיאה בטעינת סוגי הוצאה" };
+  }
+}
+
 export async function createCashExpenseAction(input: {
   amount: number | string;
   currency: CashCurrency;
-  reason: CashExpenseReason;
+  direction?: string | null;
+  reason?: string;
+  newTypeLabel?: string;
   paymentMethod?: CashExpensePaymentMethod;
   notes?: string;
   dateYmd?: string;
@@ -117,7 +135,7 @@ export async function createCashExpenseAction(input: {
   week?: string;
   draftKey?: string;
   expenseOwnerUserId?: string;
-}): Promise<{ ok: boolean; error?: string; id?: string }> {
+}): Promise<{ ok: boolean; error?: string; id?: string; reasonCode?: string; typeCreated?: boolean }> {
   const me = await requireAuth();
   if (!canCreateCashExpense(me)) return { ok: false, error: "אין הרשאה" };
 
@@ -128,11 +146,13 @@ export async function createCashExpenseAction(input: {
   const res = await createCashExpense({
     amount: input.amount,
     currency: input.currency,
+    direction: input.direction,
     reason: input.reason,
+    newTypeLabel: input.newTypeLabel,
     paymentMethod: input.paymentMethod ?? "CASH",
     notes: input.notes,
-    dateYmd: manager ? input.dateYmd : undefined,
-    timeHm: manager ? input.timeHm : undefined,
+    dateYmd: input.dateYmd,
+    timeHm: input.timeHm,
     week: input.week,
     draftKey: manager ? input.draftKey : undefined,
     createdById: me.id,
@@ -146,7 +166,9 @@ export async function updateCashExpenseAction(input: {
   id: string;
   amount: number | string;
   currency: CashCurrency;
-  reason: CashExpenseReason;
+  direction?: string | null;
+  reason?: string;
+  newTypeLabel?: string;
   paymentMethod: CashExpensePaymentMethod;
   notes?: string;
   dateYmd?: string;

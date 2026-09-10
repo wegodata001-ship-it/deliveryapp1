@@ -4,7 +4,8 @@
 
 import { Prisma } from "@prisma/client";
 import type { FlowWeekDrillExpenseRow, FlowWeekDrillPayload } from "@/app/admin/cash-flow/flow-types";
-import { CASH_EXPENSE_REASONS } from "@/app/admin/cash-control/constants";
+import { getCashExpenseTypeLabelMap } from "@/app/admin/cash-expenses/type-service";
+import { resolveCashExpenseTypeLabel } from "@/lib/cash-expense-types";
 import { paymentDayKeyJerusalem, emptyDailyIntake } from "@/lib/cash-control-daily";
 import { aggregateFlowIntakesByDay } from "@/lib/flow-control/flow-calculation-service";
 import { loadFlowWeekApprovedSummary } from "@/lib/flow-control/services/cash-count-summary-service";
@@ -25,10 +26,6 @@ function money(n: number | Prisma.Decimal): string {
   return d.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toFixed(2);
 }
 
-function reasonLabel(reason: string): string {
-  return CASH_EXPENSE_REASONS.find((r) => r.value === reason)?.label ?? reason;
-}
-
 export async function loadFlowWeekDrill(
   week: string,
   workCountry: WorkCountryCode = DEFAULT_WORK_COUNTRY,
@@ -37,7 +34,7 @@ export async function loadFlowWeekDrill(
   const scope = resolveCountryScopeFromCode(workCountry);
   const flowScope: FlowWorkScope = { workCountry: scope.workCountry };
 
-  const [flow, dailySummary, expenses, payments, flowRow] = await Promise.all([
+  const [flow, dailySummary, expenses, payments, flowRow, reasonLabels] = await Promise.all([
     loadFlowWeekCached(wk, workCountry),
     loadFlowWeekApprovedSummary(wk),
     cashFlowPerfTimed("cashFlow.weeklyMovements", () =>
@@ -51,6 +48,7 @@ export async function loadFlowWeekDrill(
           currency: true,
           paymentMethod: true,
           amount: true,
+          direction: true,
           createdBy: { select: { fullName: true } },
         },
       }),
@@ -60,6 +58,7 @@ export async function loadFlowWeekDrill(
       where: flowWeekCompositeKey(flowScope, wk),
       include: { updatedBy: { select: { fullName: true } } },
     }),
+    getCashExpenseTypeLabelMap(),
   ]);
 
   if (!flow) return null;
@@ -79,11 +78,12 @@ export async function loadFlowWeekDrill(
       id: e.id,
       dateYmd: formatYmdJerusalem(when),
       timeHm: when.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", hour12: false }),
-      reasonLabel: reasonLabel(e.reason),
+      reasonLabel: resolveCashExpenseTypeLabel(e.reason, reasonLabels),
       currency: e.currency as "ILS" | "USD",
       paymentMethod: pm,
       paymentMethodLabel: paymentMethodLabel(pm),
       amount: money(e.amount),
+      direction: e.direction,
       createdByName: e.createdBy?.fullName ?? null,
     };
   });

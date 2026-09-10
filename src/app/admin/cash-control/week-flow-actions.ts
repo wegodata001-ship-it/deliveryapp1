@@ -13,6 +13,7 @@ import {
   type CashWeekFlowLineId,
 } from "@/lib/cash-control-week-flow";
 import { aggregateExpensesByMethod } from "@/lib/cash-expense-payment-method";
+import { normalizeCashControlMovement } from "@/lib/cash-control-movement";
 import { formatAhWeekLabel, getAhWeekRange } from "@/lib/weeks/ah-week";
 
 const READ_PERMS = ["view_payment_control"];
@@ -100,7 +101,7 @@ export async function getCashWeekFlowAction(week: string): Promise<CashWeekFlowP
     }),
     prisma.cashExpense.findMany({
       where: { weekCode: wk, status: "ACTIVE" },
-      select: { currency: true, amount: true, paymentMethod: true },
+      select: { currency: true, amount: true, paymentMethod: true, direction: true },
     }),
     prisma.cashWeekFlow.findUnique({
       where: { countryCode_weekCode: { countryCode: "TR", weekCode: wk } },
@@ -120,7 +121,7 @@ export async function getCashWeekFlowAction(week: string): Promise<CashWeekFlowP
   let expensesIls = 0;
   let expensesUsd = 0;
   for (const e of expenses) {
-    const amt = numDec(e.amount);
+    const amt = normalizeCashControlMovement({ amount: e.amount, direction: e.direction }).expenseTerm;
     if (e.currency === "USD") expensesUsd += amt;
     else expensesIls += amt;
   }
@@ -130,6 +131,7 @@ export async function getCashWeekFlowAction(week: string): Promise<CashWeekFlowP
       currency: e.currency,
       amount: e.amount,
       paymentMethod: e.paymentMethod,
+      direction: e.direction,
     })),
   );
 

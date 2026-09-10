@@ -651,6 +651,12 @@ model CashExpense {
   expenseDate DateTime            @default(now())
   currency    String              @default("ILS")
   amount      Decimal             @db.Decimal(19, 4)
+  /**
+   * כיוון תנועה מפורש לרשומות חדשות: INCOME | EXPENSE.
+   * null = legacy CashExpense — המשמעות לפי הנוסחה הישנה (received − amount).
+   * אסור להסיק כיוון מ-sign בלבד, ואין backfill.
+   */
+  direction     String?
   reason        String              @default("OTHER")
   paymentMethod String              @default("CASH")
   notes         String?
@@ -670,6 +676,22 @@ model CashExpense {
   @@index([status])
   @@index([paymentMethod])
   @@index([expenseOwnerUserId])
+}
+
+/// מקור אמת לסוגי הוצאות קופה. CashExpense.reason שומר את code.
+model CashExpenseType {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  label       String
+  isActive    Boolean  @default(true)
+  isSystem    Boolean  @default(false)
+  sortOrder   Int      @default(0)
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isActive, sortOrder])
+  @@map("CashExpenseType")
 }
 
 /**

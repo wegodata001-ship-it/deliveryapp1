@@ -33,6 +33,23 @@ const jerusalemWeekdayFormatter = new Intl.DateTimeFormat("en-US", {
   weekday: "short",
 });
 
+const jerusalemHmFormatter = new Intl.DateTimeFormat("en-GB", {
+  timeZone: AH_WEEK_TIMEZONE,
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+const jerusalemDateTimePartsFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: AH_WEEK_TIMEZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
 const WEEKDAY_TO_INDEX: Record<string, number> = {
   Sun: 0,
   Mon: 1,
@@ -50,6 +67,40 @@ export function isValidYmd(ymd: string | null | undefined): ymd is string {
 /** YYYY-MM-DD לפי לוח שנה בירושלים */
 export function formatYmdJerusalem(instant: Date = new Date()): string {
   return jerusalemYmdFormatter.format(instant);
+}
+
+/** HH:MM לפי שעון ירושלים (לא UTC / לא אזור הדפדפן) */
+export function formatHmJerusalem(instant: Date = new Date()): string {
+  return jerusalemHmFormatter.format(instant);
+}
+
+/**
+ * רגע UTC שמתאים לתאריך+שעה כשעון קיר בירושלים.
+ * שומר את היום העסקי גם סביב חצות (לא ISO slice ב-UTC).
+ */
+export function instantFromJerusalemYmdHm(ymd: string, hm?: string | null): Date {
+  if (!isValidYmd(ymd)) return new Date();
+  const t = (hm ?? "").trim();
+  const match = /^(\d{1,2}):(\d{2})$/.exec(t);
+  const hh = match ? Math.min(23, Math.max(0, Number(match[1]))) : 12;
+  const mm = match ? Math.min(59, Math.max(0, Number(match[2]))) : 0;
+  const [y, mo, d] = ymd.split("-").map(Number);
+  let utc = Date.UTC(y, mo - 1, d, hh, mm, 0, 0);
+  for (let i = 0; i < 8; i++) {
+    const parts = jerusalemDateTimePartsFormatter.formatToParts(new Date(utc));
+    const val = (type: Intl.DateTimeFormatPartTypes) =>
+      Number(parts.find((p) => p.type === type)?.value);
+    const gotY = val("year");
+    const gotM = val("month");
+    const gotD = val("day");
+    const gotH = val("hour");
+    const gotMin = val("minute");
+    const deltaMin =
+      (Date.UTC(gotY, gotM - 1, gotD, gotH, gotMin) - Date.UTC(y, mo - 1, d, hh, mm)) / 60_000;
+    if (deltaMin === 0) break;
+    utc -= deltaMin * 60_000;
+  }
+  return new Date(utc);
 }
 
 /** יום בשבוע בירושלים: 0=ראשון … 6=שבת */

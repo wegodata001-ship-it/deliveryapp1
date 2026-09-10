@@ -4,10 +4,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Eye, Plus, Trash2, X } from "lucide-react";
 import {
-  CASH_EXPENSE_REASONS,
   type CashCurrency,
-  type CashExpenseReason,
 } from "@/app/admin/cash-control/constants";
+import { CashExpenseReasonSelect } from "@/components/admin/cash-control/CashExpenseReasonSelect";
+import { formatHmJerusalem, formatYmdJerusalem } from "@/lib/weeks/ah-week";
 import { createCashExpenseAction, deleteCashExpenseAction, listCashExpensesFullAction, listCashExpenseEmployeeOptionsAction } from "@/app/admin/cash-expenses/actions";
 import { ExpenseOwnerSelect } from "@/components/admin/cash-expenses/ExpenseOwnerSelect";
 import type { CashExpenseRowDto } from "@/app/admin/cash-expenses/types";
@@ -42,15 +42,11 @@ export type CashExpenseQuickModalProps = {
 };
 
 function todayYmd(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  return formatYmdJerusalem();
 }
 
 function nowTimeHm(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${p(d.getHours())}:${p(d.getMinutes())}`;
+  return formatHmJerusalem();
 }
 
 function formatExpenseTime(iso: string): string {
@@ -69,7 +65,8 @@ function formatExpenseTime(iso: string): string {
 function resetFormFields(dateYmd: string) {
   return {
     dateYmd,
-    reason: "FUEL" as CashExpenseReason,
+    reason: "FUEL",
+    reasonQuery: "",
     currency: "ILS" as CashCurrency,
     paymentMethod: "CASH" as CashExpensePaymentMethod,
     amount: "",
@@ -104,6 +101,7 @@ export function CashExpenseQuickModal({
   const [ownerOptions, setOwnerOptions] = useState<{ id: string; label: string }[]>([]);
   const [ownersLoading, setOwnersLoading] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const [typesTick, setTypesTick] = useState(0);
 
   const listDate = form.dateYmd.trim() || defaultDate;
 
@@ -183,8 +181,9 @@ export function CashExpenseQuickModal({
 
   const canSubmit = useMemo(() => {
     const amt = Number(form.amount.replace(",", "."));
-    return Number.isFinite(amt) && amt !== 0 && !!form.reason && !!form.paymentMethod;
-  }, [form.amount, form.paymentMethod, form.reason]);
+    const hasType = Boolean(form.reason || form.reasonQuery.trim());
+    return Number.isFinite(amt) && amt !== 0 && hasType && !!form.paymentMethod;
+  }, [form.amount, form.paymentMethod, form.reason, form.reasonQuery]);
 
   async function confirmDelete() {
     if (!deleteTarget) return;
@@ -242,7 +241,8 @@ export function CashExpenseQuickModal({
       const res = await createCashExpenseAction({
         amount: form.amount,
         currency: form.currency,
-        reason: form.reason,
+        reason: form.reason || undefined,
+        newTypeLabel: form.reason ? undefined : form.reasonQuery,
         paymentMethod: form.paymentMethod,
         notes: form.notes,
         dateYmd: datePart,
@@ -254,6 +254,7 @@ export function CashExpenseQuickModal({
         setErr(res.error ?? "שמירה נכשלה");
         return;
       }
+      if (res.typeCreated) setTypesTick((n) => n + 1);
       setForm(resetFormFields(datePart));
       await loadRows();
       const detail = await getCashControlDayDetailAction({ week, dateYmd: datePart });
@@ -304,20 +305,14 @@ export function CashExpenseQuickModal({
               <section className="ce-modal-v2__section">
                 <h4 className="ce-modal-v2__section-title">פרטי ההוצאה</h4>
                 <div className="ce-modal-v2__grid">
-                  <label className="adm-cash-field">
-                    <span>סוג הוצאה</span>
-                    <select
-                      className="cc-input"
-                      value={form.reason}
-                      onChange={(e) => setForm((f) => ({ ...f, reason: e.target.value as CashExpenseReason }))}
-                    >
-                      {CASH_EXPENSE_REASONS.map((r) => (
-                        <option key={r.value} value={r.value}>
-                          {r.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                  <CashExpenseReasonSelect
+                    value={form.reason}
+                    query={form.reasonQuery}
+                    reloadToken={typesTick}
+                    onChange={({ reason, query }) =>
+                      setForm((f) => ({ ...f, reason, reasonQuery: query }))
+                    }
+                  />
                   <label className="adm-cash-field">
                     <span>סכום</span>
                     <input
@@ -329,6 +324,9 @@ export function CashExpenseQuickModal({
                       dir="ltr"
                       onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
                     />
+                    {Number(form.amount.replace(",", ".")) < 0 ? (
+                      <span className="ce-amount-hint">סכום שלילי מחזיר סכום לקופה</span>
+                    ) : null}
                   </label>
                   <label className="adm-cash-field">
                     <span>מטבע</span>

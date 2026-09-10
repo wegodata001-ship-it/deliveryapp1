@@ -317,6 +317,13 @@ export function fmtDailyMoney(currency: CashControlCurrency, amount: number): st
   return amount < 0 ? `-${body}` : body;
 }
 
+/** תצוגת תנועת קופה: +₪400 כניסה, −₪200 הוצאה */
+export function fmtSignedDailyMoney(currency: CashControlCurrency, netEffect: number): string {
+  const body = fmtDailyMoney(currency, netEffect);
+  if (netEffect > 0 && !body.startsWith("+")) return `+${body}`;
+  return body;
+}
+
 /** סכום ערוצי ₪ (לסיכומי שבוע בבקרת תזרים) — כולל ערוצים היסטוריים שלא מוצגים */
 export function sumIlsChannelIntake(intake: CashDailyIntakeTotals): number {
   return round2(

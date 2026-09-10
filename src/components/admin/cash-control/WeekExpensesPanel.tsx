@@ -80,6 +80,38 @@ function computeSummary(rows: CashExpenseRowDto[]): WeekExpensesSummary {
   return { ils, usd, ilsCount, usdCount, totalCount: rows.length };
 }
 
+function weekHeaderMeta(
+  weekLabel?: string | null,
+  week?: string,
+  weekDateRange?: string | null,
+): string {
+  const label = weekLabel?.trim() || week?.trim() || "";
+  if (/\d{2}\/\d{2}\/\d{4}/.test(label) || /\d{4}-\d{2}-\d{2}/.test(label)) return label;
+  const range = (weekDateRange ?? "").trim().replace(/\s+[–-]\s+/g, "–");
+  return [label, range].filter(Boolean).join(" · ");
+}
+
+function displayPersonName(...names: Array<string | null | undefined>): string {
+  for (const name of names) {
+    const t = name?.trim() ?? "";
+    if (!t) continue;
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(t)) continue;
+    return t;
+  }
+  return "";
+}
+
+function amountTone(amount: number): "correction" | "expense" | "neutral" {
+  if (amount > 0) return "expense";
+  if (amount < 0) return "correction";
+  return "neutral";
+}
+
+function cellText(value: string | null | undefined): string {
+  const t = value?.trim() ?? "";
+  return t || "";
+}
+
 export const WeekExpensesPanel = forwardRef<WeekExpensesPanelHandle, Props>(function WeekExpensesPanel(
   {
     week,
@@ -183,12 +215,7 @@ export const WeekExpensesPanel = forwardRef<WeekExpensesPanelHandle, Props>(func
     }
   }, [deleteTarget, handleSaved]);
 
-  const headerMeta = [
-    weekLabel?.trim() || week.trim(),
-    weekDateRange?.trim(),
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const headerMeta = weekHeaderMeta(weekLabel, week, weekDateRange);
 
   const collapseSummary = [
     fmtDailyMoney("ILS", totals.ils),
@@ -255,8 +282,19 @@ export const WeekExpensesPanel = forwardRef<WeekExpensesPanelHandle, Props>(func
                 : "אין הוצאות קופה בשבוע זה"}
             </p>
           ) : (
-            <div className="cc-summary__scroll">
+            <div className="cc-week-expenses__scroll">
               <table className="cc-table cc-table--week-expenses">
+                <colgroup>
+                  <col className="we-col-date" />
+                  <col className="we-col-type" />
+                  <col className="we-col-desc" />
+                  <col className="we-col-cur" />
+                  <col className="we-col-amt" />
+                  <col className="we-col-pm" />
+                  <col className="we-col-user" />
+                  <col className="we-col-note" />
+                  <col className="we-col-act" />
+                </colgroup>
                 <thead>
                   <tr>
                     <th>תאריך</th>
@@ -271,86 +309,109 @@ export const WeekExpensesPanel = forwardRef<WeekExpensesPanelHandle, Props>(func
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredRows.map((r) => (
-                    <tr key={r.id}>
-                      <td dir="ltr">{r.dateDisplay}</td>
-                      <td>{r.reasonLabel}</td>
-                      <td>{r.notes?.trim() || "—"}</td>
-                      <td>{r.currency === "USD" ? "$" : "₪"}</td>
-                      <td dir="ltr" className="cc-num">
-                        {fmtDailyMoney(r.currency, num(r.amount))}
-                      </td>
-                      <td>
-                        <PaymentMethodColorDot
-                          method={r.paymentMethod}
-                          label={r.paymentMethodLabel}
-                          size={7}
-                        />
-                      </td>
-                      <td>{r.createdByName ?? "—"}</td>
-                      <td>—</td>
-                      <td className="cc-icon-cell">
-                        <div className="cc-row-actions">
-                          {caps.canEdit || caps.canView ? (
-                            <button
-                              type="button"
-                              className="cc-iconbtn"
-                              title={caps.canEdit ? "עריכה" : "צפייה"}
-                              onClick={() => {
-                                setEditing({
-                                  id: r.id,
-                                  dateYmd: r.dateYmd,
-                                  timeHm: timeFromIso(r.expenseDateIso),
-                                  reason: r.reason,
-                                  notes: r.notes,
-                                  currency: r.currency,
-                                  amount: r.amount,
-                                  paymentMethod: r.paymentMethod,
-                                });
-                                setModalOpen(true);
-                              }}
-                            >
-                              <Pencil size={14} />
-                            </button>
-                          ) : null}
-                          {caps.canDelete ? (
-                            <button
-                              type="button"
-                              className="cc-iconbtn cc-iconbtn--danger"
-                              title="מחיקה"
-                              disabled={busyId === r.id}
-                              onClick={() =>
-                                setDeleteTarget({
-                                  id: r.id,
-                                  reasonLabel: r.reasonLabel,
-                                  amount: r.amount,
-                                  currency: r.currency,
-                                  dateDisplay: r.dateDisplay,
-                                  weekCode: r.weekCode,
-                                  notes: r.notes,
-                                })
-                              }
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          ) : null}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                  {filteredRows.map((r) => {
+                    const amt = num(r.amount);
+                    const tone = amountTone(amt);
+                    const desc = cellText(r.notes);
+                    const who = displayPersonName(r.recordedByName, r.createdByName, r.expenseOwnerName);
+                    return (
+                      <tr key={r.id}>
+                        <td className="we-date" dir="ltr">
+                          {r.dateDisplay || <span className="we-empty">—</span>}
+                        </td>
+                        <td>
+                          {r.reasonLabel ? (
+                            <span className="we-type" title={r.reasonLabel}>
+                              {r.reasonLabel}
+                            </span>
+                          ) : (
+                            <span className="we-empty">—</span>
+                          )}
+                        </td>
+                        <td className="we-desc" title={desc || undefined}>
+                          {desc ? desc : <span className="we-empty">—</span>}
+                        </td>
+                        <td>
+                          <span className="we-currency">
+                            {r.currency === "USD" ? "$ USD" : "₪ ILS"}
+                          </span>
+                        </td>
+                        <td dir="ltr" className={`cc-num we-amount is-${tone}`}>
+                          {fmtDailyMoney(r.currency, amt)}
+                        </td>
+                        <td className="we-pm">
+                          <PaymentMethodColorDot
+                            method={r.paymentMethod}
+                            label={r.paymentMethodLabel}
+                            size={7}
+                          />
+                        </td>
+                        <td>
+                          {who ? <span className="we-user">{who}</span> : <span className="we-empty">—</span>}
+                        </td>
+                        <td className="we-note">
+                          <span className="we-empty">—</span>
+                        </td>
+                        <td className="cc-icon-cell">
+                          <div className="we-actions">
+                            {caps.canEdit || caps.canView ? (
+                              <button
+                                type="button"
+                                className="cc-iconbtn"
+                                title={caps.canEdit ? "עריכה" : "צפייה"}
+                                onClick={() => {
+                                  setEditing({
+                                    id: r.id,
+                                    dateYmd: r.dateYmd,
+                                    timeHm: timeFromIso(r.expenseDateIso),
+                                    reason: r.reason,
+                                    notes: r.notes,
+                                    currency: r.currency,
+                                    amount: r.amount,
+                                    paymentMethod: r.paymentMethod,
+                                  });
+                                  setModalOpen(true);
+                                }}
+                              >
+                                <Pencil size={14} />
+                              </button>
+                            ) : null}
+                            {caps.canDelete ? (
+                              <button
+                                type="button"
+                                className="cc-iconbtn cc-iconbtn--danger"
+                                title="מחיקה"
+                                disabled={busyId === r.id}
+                                onClick={() =>
+                                  setDeleteTarget({
+                                    id: r.id,
+                                    reasonLabel: r.reasonLabel,
+                                    amount: r.amount,
+                                    currency: r.currency,
+                                    dateDisplay: r.dateDisplay,
+                                    weekCode: r.weekCode,
+                                    notes: r.notes,
+                                  })
+                                }
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           )}
 
-          <footer className="cc-week-expenses__foot">
-            <div dir="ltr">
-              <span className="cc-week-expenses__foot-label">סה״כ ₪:</span>{" "}
-              <strong>{fmtDailyMoney("ILS", filteredTotals.ils)}</strong>
-            </div>
-            <div dir="ltr">
-              <span className="cc-week-expenses__foot-label">סה״כ $:</span>{" "}
-              <strong>{fmtDailyMoney("USD", filteredTotals.usd)}</strong>
+          <footer className="cc-week-expenses__summary">
+            <span className="cc-week-expenses__summary-title">סה״כ השבוע</span>
+            <div className="cc-week-expenses__summary-vals">
+              <strong dir="ltr">{fmtDailyMoney("ILS", filteredTotals.ils)}</strong>
+              <strong dir="ltr">{fmtDailyMoney("USD", filteredTotals.usd)}</strong>
             </div>
           </footer>
         </div>

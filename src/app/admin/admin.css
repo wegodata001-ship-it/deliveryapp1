@@ -35450,6 +35450,65 @@ button.adm-cash-kpi:hover {
   grid-column: 1 / -1;
 }
 
+.ce-reason-select {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ce-reason-combo__list {
+  position: absolute;
+  top: calc(100% - 2px);
+  right: 0;
+  left: 0;
+  z-index: 30;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  max-height: 220px;
+  overflow: auto;
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+}
+
+.ce-reason-combo__opt {
+  display: block;
+  width: 100%;
+  text-align: right;
+  border: 0;
+  background: transparent;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.ce-reason-combo__opt:hover,
+.ce-reason-combo__opt.is-active {
+  background: #fff7ed;
+}
+
+.ce-reason-combo__opt--new {
+  color: #9a3412;
+  font-weight: 600;
+}
+
+.ce-reason-combo__empty {
+  padding: 8px 12px;
+  color: #64748b;
+}
+
+.adm-expense-entry-modal .ce-reason-select {
+  width: 100%;
+  gap: 0;
+}
+
+.adm-expense-entry-modal .ce-reason-select .adm-cash-field {
+  display: block;
+  margin: 0;
+}
+
 .ce-modal-v2__day-summary {
   display: flex;
   flex-wrap: wrap;
@@ -38764,9 +38823,10 @@ button.adm-cash-kpi:hover {
 
 .cc-week-expenses__toggle-text {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 12px;
   min-width: 0;
 }
 
@@ -38779,6 +38839,7 @@ button.adm-cash-kpi:hover {
   font-size: 12px;
   font-weight: 600;
   color: #64748b;
+  white-space: nowrap;
 }
 
 .cc-week-expenses__collapsed-summary {
@@ -38797,35 +38858,211 @@ button.adm-cash-kpi:hover {
 }
 
 .cc-week-expenses__body {
-  padding: 10px 12px 12px;
+  padding: 0;
 }
 
 .cc-week-expenses__filter-note {
-  margin: 0 0 10px;
+  margin: 0;
+  padding: 8px 12px 0;
   font-size: 12px;
   font-weight: 700;
   color: #2563eb;
 }
 
-.cc-table--week-expenses thead th {
-  background: #334155;
-  font-size: 12px;
+.cc-week-expenses__scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
 }
 
-.cc-week-expenses__foot {
+.cc-table--week-expenses {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 980px;
+  font-size: 12.5px;
+}
+
+.cc-table--week-expenses .we-col-date { width: 96px; }
+.cc-table--week-expenses .we-col-type { width: 140px; }
+.cc-table--week-expenses .we-col-desc { width: auto; }
+.cc-table--week-expenses .we-col-cur { width: 68px; }
+.cc-table--week-expenses .we-col-amt { width: 120px; }
+.cc-table--week-expenses .we-col-pm { width: 120px; }
+.cc-table--week-expenses .we-col-user { width: 130px; }
+.cc-table--week-expenses .we-col-note { width: 110px; }
+.cc-table--week-expenses .we-col-act { width: 86px; }
+
+.cc-table--week-expenses thead th {
+  height: 42px;
+  padding: 8px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  background: #334155;
+  color: #f8fafc;
+  vertical-align: middle;
+}
+
+.cc-table--week-expenses td {
+  height: 46px;
+  max-height: 48px;
+  padding: 6px 8px;
+  vertical-align: middle;
+}
+
+.cc-table--week-expenses tbody tr {
+  cursor: default;
+}
+
+.cc-table--week-expenses tbody > tr:hover > td {
+  background: #f1f5f9;
+}
+
+.cc-table--week-expenses .we-date {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: #334155;
+}
+
+.cc-table--week-expenses .we-type {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.cc-table--week-expenses .we-desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cc-table--week-expenses .we-note {
+  text-align: center;
+}
+
+.cc-table--week-expenses .we-empty {
+  display: block;
+  text-align: center;
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.cc-table--week-expenses .we-currency {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  font-size: 11px;
+  font-weight: 700;
+  color: #334155;
+  white-space: nowrap;
+}
+
+.cc-table--week-expenses .we-amount {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cc-table--week-expenses .we-amount.is-expense { color: #b91c1c; }
+.cc-table--week-expenses .we-amount.is-correction { color: #0f766e; }
+.cc-table--week-expenses .we-amount.is-neutral { color: #0f172a; }
+
+.ce-amount-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #0f766e;
+}
+
+.cc-table--week-expenses .we-pm .pm-color-dot-wrap {
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.cc-table--week-expenses .we-user {
+  display: block;
+  font-size: 12px;
+  color: #475569;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cc-table--week-expenses .we-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.cc-table--week-expenses .we-actions .cc-iconbtn {
+  width: 32px;
+  height: 32px;
+}
+
+.cc-week-expenses__foot,
+.cc-week-expenses__summary {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   justify-content: space-between;
-  gap: 10px 16px;
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px dashed #cbd5e1;
+  gap: 8px 16px;
+  margin: 0;
+  padding: 10px 14px;
+  background: #e2e8f0;
+  border-top: 2px solid #94a3b8;
   font-size: 13px;
+}
+
+.cc-week-expenses__summary-title {
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.cc-week-expenses__summary-vals {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 22px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cc-week-expenses__summary-block {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
 }
 
 .cc-week-expenses__foot-label {
   color: #64748b;
   font-weight: 700;
+}
+
+.cc-week-expenses .cc-loading,
+.cc-week-expenses .cc-empty {
+  margin: 0;
+  padding: 16px 14px;
+}
+
+@media (max-width: 900px) {
+  .cc-week-expenses__scroll {
+    -webkit-overflow-scrolling: touch;
+  }
 }
 
 .cc-btn--sm {

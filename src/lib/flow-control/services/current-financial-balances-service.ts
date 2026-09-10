@@ -176,7 +176,7 @@ export async function buildCumulativeBalanceInput(
             weekCode: { in: weekCodes },
             status: "ACTIVE",
           },
-          select: { amount: true, currency: true, paymentMethod: true },
+          select: { amount: true, currency: true, paymentMethod: true, direction: true },
         })
       : [];
   const totalExpensesIls = round2(

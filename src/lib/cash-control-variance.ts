@@ -8,6 +8,7 @@
  * הפרש שלילי = חסר · הפרש חיובי = עודף
  */
 
+import { normalizeCashControlMovement } from "@/lib/cash-control-movement";
 import {
   CASH_CONTROL_EPS,
   calculateCashControlVariance,
@@ -198,6 +199,7 @@ export function previewExpenseVarianceImpact(
   currency: "ILS" | "USD",
   proposedExpenseAmount: number,
   dailyMethod?: CashDailyMethodId,
+  _direction?: string | null,
 ): ExpenseVariancePreview {
   const method: CashDailyMethodId = dailyMethod ?? "CASH_ILS";
   const line = lines.find((l) => l.method === method);
@@ -225,8 +227,11 @@ export function previewExpenseVarianceImpact(
     return emptyPreview("no_cash_line", "אין נתוני התאמה לערוץ זה ביום הנבחר");
   }
 
-  const amt = round2(proposedExpenseAmount);
-  if (amt === 0) {
+  const normalized = normalizeCashControlMovement({
+    amount: proposedExpenseAmount,
+  });
+  const amt = round2(normalized.expenseTerm);
+  if (amt === 0 && normalized.netEffect === 0) {
     return emptyPreview("invalid_amount", "הזן סכום הוצאה כדי לראות את ההשפעה על בקרת הקופה");
   }
 

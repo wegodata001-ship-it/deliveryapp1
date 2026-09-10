@@ -310,5 +310,6 @@ export type FlowWeekDrillExpenseRow = {
   paymentMethod: string;
   paymentMethodLabel: string;
   amount: string;
+  direction?: string | null;
   createdByName: string | null;
 };

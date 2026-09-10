@@ -835,7 +835,7 @@ export function CashControlClient({
           weekDateRange={summary?.from && summary?.to ? `${summary.from} – ${summary.to}` : null}
           caps={expenseCaps}
           balancedWeekLabel={balancedWeekLabel}
-          defaultDateYmd={selectedDay}
+          defaultDateYmd={null}
           currencyFilter={expenseCurrencyFilter}
           onCurrencyFilterChange={setExpenseCurrencyFilter}
           onSummaryChange={handleWeekExpenseSummaryChange}

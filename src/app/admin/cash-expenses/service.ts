@@ -13,12 +13,15 @@ import {
 import { invalidateWeekBalanceIfBalanced } from "@/lib/cash-control/week-balance-service";
 import { ensureDocumentsTable } from "@/lib/documents/ensure";
 import { formatYmdJerusalem } from "@/lib/weeks/ah-week";
-import { deriveAhWeekCodeFromOrderDateYmd } from "@/lib/weeks/order-week-dates";
+import { resolveCashExpenseBusinessPeriod } from "@/lib/cash-expense-period";
+import { type CashCurrency } from "@/app/admin/cash-control/constants";
+import { resolveCashExpenseTypeLabel } from "@/lib/cash-expense-types";
+import { ensureCashExpenseTypesTable } from "@/lib/cash-expense-types.ensure";
 import {
-  CASH_EXPENSE_REASONS,
-  type CashCurrency,
-  type CashExpenseReason,
-} from "@/app/admin/cash-control/constants";
+  normalizeCashControlMovement,
+  resolveCreateCashMovement,
+} from "@/lib/cash-control-movement";
+import { getCashExpenseTypeLabelMap, resolveCashExpenseReasonCode } from "@/app/admin/cash-expenses/type-service";
 import {
   normalizePaymentMethod,
   paymentMethodLabel,
@@ -26,10 +29,6 @@ import {
 } from "@/lib/cash-expense-payment-method";
 import type { CashExpenseListFilter, CashExpenseRowDto } from "@/app/admin/cash-expenses/types";
 import { aggregateExpensesByMethod, cashDrawerExpenseTotals } from "@/lib/cash-expense-payment-method";
-
-const REASON_LABEL: Record<string, string> = Object.fromEntries(
-  CASH_EXPENSE_REASONS.map((r) => [r.value, r.label]),
-);
 
 const Z = new Prisma.Decimal(0);
 
@@ -46,20 +45,6 @@ function dec(v: number | string | null | undefined): Prisma.Decimal {
   } catch {
     return Z;
   }
-}
-
-function expenseDateFromInput(dateYmd?: string, timeHm?: string): Date {
-  const raw = (dateYmd ?? "").trim();
-  if (!raw) return new Date();
-  if (raw.length > 10) return new Date(raw);
-  const time = (timeHm ?? "").trim();
-  if (time && /^\d{1,2}:\d{2}$/.test(time)) {
-    const [h, m] = time.split(":").map((p) => Number(p));
-    const hh = String(h).padStart(2, "0");
-    const mm = String(m).padStart(2, "0");
-    return new Date(`${raw}T${hh}:${mm}:00`);
-  }
-  return new Date(`${raw}T12:00:00`);
 }
 
 function toDateDisplay(ymd: string): string {
@@ -111,6 +96,7 @@ export async function listCashExpensesFull(
   });
 
   const docCounts = await documentCountByExpense(rows.map((r) => r.id));
+  const reasonLabels = await getCashExpenseTypeLabelMap();
 
   const search = filter.search?.trim().toLowerCase() ?? "";
   const dayFilter = filter.dateYmd?.trim() ?? "";
@@ -119,7 +105,7 @@ export async function listCashExpensesFull(
   for (const e of rows) {
     const dateYmd = formatYmdJerusalem(e.expenseDate);
     if (dayFilter && dateYmd !== dayFilter) continue;
-    const reasonLabel = REASON_LABEL[e.reason] ?? "אחר";
+    const reasonLabel = resolveCashExpenseTypeLabel(e.reason, reasonLabels);
     const recordedByName = e.createdBy?.fullName ?? null;
     const expenseOwnerName = e.expenseOwner?.fullName ?? recordedByName;
     if (search) {
@@ -133,13 +119,15 @@ export async function listCashExpensesFull(
       dateYmd,
       dateDisplay: toDateDisplay(dateYmd),
       weekCode: e.weekCode,
-      reason: (e.reason as CashExpenseReason) ?? "OTHER",
+      reason: e.reason || "OTHER",
       reasonLabel,
       paymentMethod: pm,
       paymentMethodLabel: paymentMethodLabel(pm),
       notes: e.notes,
       currency: e.currency === "USD" ? "USD" : "ILS",
       amount: money(e.amount ?? Z),
+      direction: normalizeCashControlMovement({ amount: e.amount, direction: e.direction }).direction,
+      netEffect: money(normalizeCashControlMovement({ amount: e.amount, direction: e.direction }).netEffect),
       expenseOwnerName,
       recordedByName,
       createdByName: expenseOwnerName,
@@ -164,7 +152,7 @@ export async function getDayExpenseTotals(input: {
       weekCode: wk,
       status: "ACTIVE",
     },
-    select: { expenseDate: true, currency: true, amount: true, paymentMethod: true },
+    select: { expenseDate: true, currency: true, amount: true, paymentMethod: true, direction: true },
   });
   const dayRows = rows.filter((r) => formatYmdJerusalem(r.expenseDate) === day);
   const byMethod = aggregateExpensesByMethod(dayRows);
@@ -174,7 +162,9 @@ export async function getDayExpenseTotals(input: {
 export async function createCashExpense(input: {
   amount: number | string;
   currency: CashCurrency;
-  reason: CashExpenseReason;
+  direction?: string | null;
+  reason?: string;
+  newTypeLabel?: string;
   paymentMethod: CashExpensePaymentMethod;
   notes?: string;
   dateYmd?: string;
@@ -184,32 +174,56 @@ export async function createCashExpense(input: {
   createdById: string;
   expenseOwnerUserId: string;
   workCountry?: string;
-}): Promise<{ ok: boolean; error?: string; id?: string }> {
-  const amount = dec(input.amount);
-  if (amount.eq(0)) return { ok: false, error: "יש להזין סכום שונה מאפס" };
+}): Promise<{ ok: boolean; error?: string; id?: string; reasonCode?: string; typeCreated?: boolean }> {
+  const persisted = resolveCreateCashMovement({
+    amount: input.amount,
+  });
+  if (!persisted.ok) return { ok: false, error: persisted.error };
+  const amount = dec(persisted.amount);
 
-  const raw = (input.dateYmd ?? "").trim();
-  const expenseDate = expenseDateFromInput(raw || undefined, input.timeHm);
-  const dateYmd = formatYmdJerusalem(expenseDate);
-  const weekCode = input.week?.trim() || deriveAhWeekCodeFromOrderDateYmd(dateYmd) || null;
+  const period = resolveCashExpenseBusinessPeriod({
+    dateYmd: input.dateYmd,
+    timeHm: input.timeHm,
+  });
+  const expenseDate = period.expenseDate;
+  const dateYmd = period.dateYmd;
+  const weekCode = period.weekCode;
   const paymentMethod = normalizePaymentMethod(input.paymentMethod);
   const countryScope = resolveCountryScopeFromCode(resolveWorkCountryParam(input.workCountry));
+  await ensureCashExpenseTypesTable();
 
-  const created = await prisma.cashExpense.create({
-    data: {
-      countryCode: countryScope.workCountry,
-      weekCode,
-      currency: input.currency === "USD" ? "USD" : "ILS",
-      amount,
-      reason: input.reason,
-      paymentMethod,
-      notes: input.notes?.trim() || null,
-      expenseDate,
-      createdById: input.createdById,
-      expenseOwnerUserId: input.expenseOwnerUserId,
-    },
-    select: { id: true },
+  let reasonCode = "";
+  let typeCreated = false;
+  const created = await prisma.$transaction(async (tx) => {
+    const resolved = await resolveCashExpenseReasonCode(
+      tx,
+      { reason: input.reason, newTypeLabel: input.newTypeLabel },
+      input.createdById,
+    );
+    if (!resolved.ok) throw new Error(resolved.error);
+    reasonCode = resolved.code;
+    typeCreated = resolved.created;
+    return tx.cashExpense.create({
+      data: {
+        countryCode: countryScope.workCountry,
+        weekCode,
+        currency: input.currency === "USD" ? "USD" : "ILS",
+        amount,
+        reason: reasonCode,
+        paymentMethod,
+        notes: input.notes?.trim() || null,
+        expenseDate,
+        createdById: input.createdById,
+        expenseOwnerUserId: input.expenseOwnerUserId,
+      },
+      select: { id: true },
+    });
+  }).catch((e: unknown) => {
+    const message = e instanceof Error ? e.message : "שמירה נכשלה";
+    return { error: message };
   });
+
+  if ("error" in created) return { ok: false, error: created.error };
 
   if (weekCode) {
     await invalidateWeekBalanceIfBalanced({
@@ -229,14 +243,16 @@ export async function createCashExpense(input: {
     });
   }
 
-  return { ok: true, id: created.id };
+  return { ok: true, id: created.id, reasonCode, typeCreated };
 }
 
 export async function updateCashExpense(input: {
   id: string;
   amount: number | string;
   currency: CashCurrency;
-  reason: CashExpenseReason;
+  direction?: string | null;
+  reason?: string;
+  newTypeLabel?: string;
   paymentMethod: CashExpensePaymentMethod;
   notes?: string;
   dateYmd?: string;
@@ -250,21 +266,30 @@ export async function updateCashExpense(input: {
   const existing = await prisma.cashExpense.findUnique({ where: { id } });
   if (!existing) return { ok: false, error: "ההוצאה לא נמצאה" };
 
-  const amount = dec(input.amount);
-  if (amount.eq(0)) return { ok: false, error: "יש להזין סכום שונה מאפס" };
+  const persisted = resolveCreateCashMovement({ amount: input.amount });
+  if (!persisted.ok) return { ok: false, error: persisted.error };
+  const amount = dec(persisted.amount);
+
+  await ensureCashExpenseTypesTable();
+  const resolved = await resolveCashExpenseReasonCode(
+    prisma,
+    { reason: input.reason, newTypeLabel: input.newTypeLabel },
+    input.updatedById,
+  );
+  if (!resolved.ok) return { ok: false, error: resolved.error };
 
   const data: Prisma.CashExpenseUpdateInput = {
     currency: input.currency === "USD" ? "USD" : "ILS",
     amount,
-    reason: input.reason,
+    reason: resolved.code,
     paymentMethod: normalizePaymentMethod(input.paymentMethod),
     notes: input.notes?.trim() || null,
   };
   const raw = (input.dateYmd ?? "").trim();
   if (raw) {
-    const expenseDate = expenseDateFromInput(raw, input.timeHm);
-    data.expenseDate = expenseDate;
-    data.weekCode = deriveAhWeekCodeFromOrderDateYmd(formatYmdJerusalem(expenseDate)) || undefined;
+    const period = resolveCashExpenseBusinessPeriod({ dateYmd: raw, timeHm: input.timeHm });
+    data.expenseDate = period.expenseDate;
+    data.weekCode = period.weekCode || undefined;
   }
 
   if (input.expenseOwnerUserId?.trim()) {
@@ -285,7 +310,7 @@ export async function updateCashExpense(input: {
   const newValue = {
     amount: amount.toString(),
     currency: data.currency,
-    reason: input.reason,
+    reason: resolved.code,
     paymentMethod: normalizePaymentMethod(input.paymentMethod),
     notes: input.notes?.trim() || null,
     weekCode:

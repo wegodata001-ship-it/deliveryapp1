@@ -38,7 +38,10 @@ import {
   normalizePaymentMethod,
   paymentMethodLabel,
 } from "@/lib/cash-expense-payment-method";
-import { CASH_EXPENSE_REASONS } from "@/app/admin/cash-control/constants";
+import { getCashExpenseTypeLabelMap } from "@/app/admin/cash-expenses/type-service";
+import { resolveCashExpenseTypeLabel } from "@/lib/cash-expense-types";
+import { ensureCashExpenseDirectionColumn } from "@/lib/cash-expense-types.ensure";
+import { normalizeCashControlMovement } from "@/lib/cash-control-movement";
 import type {
   CashDailyDayDetailPayload,
   CashDailyExpenseRowDto,
@@ -96,10 +99,6 @@ function emptyDocumentHint(): PaymentDocumentHint {
   return { hasDocument: false, documentPreviewable: false, previewDocumentId: null };
 }
 
-
-const EXPENSE_REASON_LABEL: Record<string, string> = Object.fromEntries(
-  CASH_EXPENSE_REASONS.map((r) => [r.value, r.label]),
-);
 
 export const CASH_CONTROL_COUNTRY_LABEL = "טורקיה";
 
@@ -174,6 +173,7 @@ function aggregateWeekExpenses(
     currency: string;
     amount: Prisma.Decimal | null;
     paymentMethod?: string | null;
+    direction?: string | null;
   }>,
 ): Map<string, CashDailyExpenseTotals> {
   const map = new Map<string, CashDailyExpenseTotals>();
@@ -185,7 +185,13 @@ function aggregateWeekExpenses(
       map.set(day, t);
     }
     const amt = numDec(r.amount);
-    t = addExpenseToMethodTotals(t, r.paymentMethod, r.currency === "USD" ? "USD" : "ILS", amt);
+    t = addExpenseToMethodTotals(
+      t,
+      r.paymentMethod,
+      r.currency === "USD" ? "USD" : "ILS",
+      amt,
+      r.direction,
+    );
     map.set(day, t);
   }
   return map;
@@ -264,7 +270,7 @@ async function loadCashControlWeekDrawerRows(weekCode: string) {
 async function loadCashControlWeekExpenseRows(weekCode: string) {
   return prisma.cashExpense.findMany({
     where: { weekCode: weekCode, status: "ACTIVE" },
-    select: { expenseDate: true, currency: true, amount: true, paymentMethod: true },
+    select: { expenseDate: true, currency: true, amount: true, paymentMethod: true, direction: true },
   });
 }
 
@@ -273,6 +279,7 @@ async function loadCashControlWeekRaw(week: string): Promise<CashControlWeekRaw 
   const range = getAhWeekRange(wk);
   if (!range) return null;
 
+  await ensureCashExpenseDirectionColumn();
   const [payments, drawerRows, expenseRows] = await Promise.all([
     loadCashControlWeekPayments(wk),
     loadCashControlWeekDrawerRows(wk),
@@ -426,7 +433,8 @@ export async function loadCashControlDayDetail(input: {
   const wk = input.week.trim();
   const dateYmd = input.dateYmd.trim();
 
-  const [payments, drawerRow, expenseRows] = await Promise.all([
+  await ensureCashExpenseDirectionColumn();
+  const [payments, drawerRow, expenseRows, reasonLabels] = await Promise.all([
     prisma.payment.findMany({
       where: cashControlWeekReconciliationPaymentsWhere(wk),
       select: {
@@ -451,6 +459,7 @@ export async function loadCashControlDayDetail(input: {
       orderBy: { expenseDate: "asc" },
       include: { createdBy: { select: { fullName: true } } },
     }),
+    getCashExpenseTypeLabelMap(),
   ]);
 
   const intakeByDay = aggregateDailyIntakes(payments);
@@ -464,6 +473,7 @@ export async function loadCashControlDayDetail(input: {
       currency: e.currency,
       amount: e.amount,
       paymentMethod: e.paymentMethod,
+      direction: e.direction,
     })),
   );
   const expCur = expensesCurrencyTotals(expenseTotals);
@@ -499,12 +509,14 @@ export async function loadCashControlDayDetail(input: {
         id: e.id,
         timeHm: when.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", hour12: false }),
         reason: e.reason,
-        reasonLabel: EXPENSE_REASON_LABEL[e.reason] ?? "אחר",
+        reasonLabel: resolveCashExpenseTypeLabel(e.reason, reasonLabels),
         notes: e.notes,
         currency: e.currency === "USD" ? "USD" : "ILS",
         paymentMethod: pm,
         paymentMethodLabel: paymentMethodLabel(pm),
         amount: money(e.amount ?? new Prisma.Decimal(0)),
+        direction: normalizeCashControlMovement({ amount: e.amount, direction: e.direction }).direction,
+        netEffect: money(normalizeCashControlMovement({ amount: e.amount, direction: e.direction }).netEffect),
         createdByName: e.createdBy?.fullName ?? null,
         documentCount: docCount.get(e.id) ?? 0,
         status: e.status === "CANCELLED" ? "CANCELLED" : "ACTIVE",

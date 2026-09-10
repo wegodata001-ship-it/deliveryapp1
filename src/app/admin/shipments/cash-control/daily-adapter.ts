@@ -20,6 +20,7 @@ import type {
   ShipmentCashControlPayload,
 } from "@/app/admin/shipments/cash-control/types";
 import { SHIPPING_CASH_TABLE_METHODS } from "@/components/admin/cash-control/shipping-table-config";
+import { normalizeCashControlMovement } from "@/lib/cash-control-movement";
 
 function money(n: number): string {
   return round2(n).toFixed(2);
@@ -217,20 +218,25 @@ export function mapShippingDayToDailyDetail(
     countedByName: null,
     expensesIls: money(payload.summary.expensesIls),
     expensesUsd: "0.00",
-    expenses: payload.expenses.map((e) => ({
-      id: e.id,
-      timeHm: e.createdAt.slice(11, 16),
-      reason: e.category,
-      reasonLabel: e.categoryLabel,
-      notes: e.notes,
-      currency: "ILS" as const,
-      paymentMethod: e.paymentMethod,
-      paymentMethodLabel: e.paymentMethodLabel,
-      amount: money(e.amountIls),
-      createdByName: e.createdByName,
-      documentCount: 0,
-      status: "ACTIVE" as const,
-    })),
+    expenses: payload.expenses.map((e) => {
+      const moved = normalizeCashControlMovement({ amount: e.amountIls, direction: "EXPENSE" });
+      return {
+        id: e.id,
+        timeHm: e.createdAt.slice(11, 16),
+        reason: e.category,
+        reasonLabel: e.categoryLabel,
+        notes: e.notes,
+        currency: "ILS" as const,
+        paymentMethod: e.paymentMethod,
+        paymentMethodLabel: e.paymentMethodLabel,
+        amount: money(e.amountIls),
+        direction: "EXPENSE" as const,
+        netEffect: money(moved.netEffect),
+        createdByName: e.createdByName,
+        documentCount: 0,
+        status: "ACTIVE" as const,
+      };
+    }),
     reconciliation,
   };
 }

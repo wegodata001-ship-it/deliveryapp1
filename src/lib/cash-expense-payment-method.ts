@@ -16,6 +16,7 @@ import {
   resolveCashControlChannel,
   type CashExpensePaymentMethod,
 } from "@/lib/cash-control-channel";
+import { normalizeCashControlMovement } from "@/lib/cash-control-movement";
 
 export type { CashExpensePaymentMethod } from "@/lib/cash-control-channel";
 export { normalizeExpensePaymentMethod as normalizePaymentMethod } from "@/lib/cash-control-channel";
@@ -73,9 +74,11 @@ export function addExpenseToMethodTotals(
   paymentMethod: CashExpensePaymentMethod | string | null | undefined,
   currency: CashCurrency | string,
   amount: number,
+  direction?: string | null,
 ): CashDailyExpensesByMethod {
   const col = expenseToDailyMethodId(paymentMethod, currency);
-  return { ...totals, [col]: round2((totals[col] ?? 0) + amount) };
+  const { expenseTerm } = normalizeCashControlMovement({ amount, direction });
+  return { ...totals, [col]: round2((totals[col] ?? 0) + expenseTerm) };
 }
 
 export function aggregateExpensesByMethod(
@@ -83,6 +86,7 @@ export function aggregateExpensesByMethod(
     currency: string;
     amount: number | { toString(): string } | null;
     paymentMethod?: string | null;
+    direction?: string | null;
   }>,
 ): CashDailyExpensesByMethod {
   let totals = emptyExpensesByMethod();
@@ -90,7 +94,7 @@ export function aggregateExpensesByMethod(
     const amt = Number(r.amount?.toString() ?? 0);
     if (!Number.isFinite(amt) || amt === 0) continue;
     const currency = normalizeCashControlCurrency(r.currency);
-    totals = addExpenseToMethodTotals(totals, r.paymentMethod, currency, amt);
+    totals = addExpenseToMethodTotals(totals, r.paymentMethod, currency, amt, r.direction);
   }
   return totals;
 }

@@ -178,7 +178,9 @@ export type CashControlResult = {
 
 /**
  * מקור אמת יחיד — הפרש בקרת קופה לערוץ בודד.
- * צפוי נטו = התקבל − הוצאות (קיימות + חדשה)
+ *
+ * existingExpensesAmount / newExpenseAmount = SUM(CashExpense.amount) החתום.
+ * צפוי נטו = התקבל − Σ amount
  * הפרש = נספר − צפוי נטו
  */
 export function calculateCashControlVariance(input: CashControlInput): CashControlResult {

@@ -30,7 +30,7 @@ export async function POST(req: Request): Promise<Response> {
         r.reasonLabel,
         r.paymentMethodLabel,
         r.notes ?? "—",
-        n(r.amount),
+        n(r.netEffect),
         r.currency === "USD" ? "$" : "₪",
         r.weekCode ?? "—",
         r.expenseOwnerName ?? r.createdByName ?? "—",
@@ -38,8 +38,8 @@ export async function POST(req: Request): Promise<Response> {
         r.documentCount,
       ]),
     ];
-    const totalIls = rows.filter((r) => r.currency === "ILS").reduce((s, r) => s + n(r.amount), 0);
-    const totalUsd = rows.filter((r) => r.currency === "USD").reduce((s, r) => s + n(r.amount), 0);
+    const totalIls = rows.filter((r) => r.currency === "ILS").reduce((s, r) => s + n(r.netEffect), 0);
+    const totalUsd = rows.filter((r) => r.currency === "USD").reduce((s, r) => s + n(r.netEffect), 0);
     aoa.push([]);
     aoa.push(['סה"כ ₪', "", "", Math.round(totalIls * 100) / 100]);
     aoa.push(['סה"כ $', "", "", Math.round(totalUsd * 100) / 100]);

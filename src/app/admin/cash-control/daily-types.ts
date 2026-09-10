@@ -69,6 +69,8 @@ export type CashDailyExpenseRowDto = {
   paymentMethod: string;
   paymentMethodLabel: string;
   amount: string;
+  direction: "INCOME" | "EXPENSE" | null;
+  netEffect: string;
   createdByName: string | null;
   documentCount: number;
   status: "ACTIVE" | "CANCELLED";

@@ -53,6 +53,7 @@ function drillToExpenses(drill: FlowWeekDrillPayload): CashDailyIntakeTotals {
       currency: e.currency,
       amount: e.amount,
       paymentMethod: e.paymentMethod,
+      direction: e.direction,
     })),
   );
 }

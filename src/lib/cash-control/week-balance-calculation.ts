@@ -35,7 +35,7 @@ function lineHasActivity(
 ): boolean {
   return (
     line.expectedAmount > CASH_CONTROL_EPS ||
-    line.expensesAmount > CASH_CONTROL_EPS ||
+    Math.abs(line.expensesAmount) > CASH_CONTROL_EPS ||
     (line.countedAmount != null && Math.abs(line.countedAmount) > CASH_CONTROL_EPS)
   );
 }
@@ -45,7 +45,7 @@ function lineNeedsCount(
 ): boolean {
   return (
     line.countedAmount == null &&
-    (line.expectedAmount > CASH_CONTROL_EPS || line.expensesAmount > CASH_CONTROL_EPS)
+    (line.expectedAmount > CASH_CONTROL_EPS || Math.abs(line.expensesAmount) > CASH_CONTROL_EPS)
   );
 }
 

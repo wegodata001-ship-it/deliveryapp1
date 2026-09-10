@@ -50,7 +50,7 @@ export async function loadFlowWeekCashCount(
     }),
     prisma.cashExpense.findMany({
       where: { ...cashExpenseWhereForCountryScope(countryScope), weekCode: wk, status: "ACTIVE" },
-      select: { currency: true, amount: true, paymentMethod: true },
+      select: { currency: true, amount: true, paymentMethod: true, direction: true },
     }),
   ]);
 

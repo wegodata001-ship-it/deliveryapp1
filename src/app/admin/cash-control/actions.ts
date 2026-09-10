@@ -37,17 +37,20 @@ import {
   cashControlWeekReconciliationPaymentsWhere,
 } from "@/lib/cash-control-week-payments";
 import { paymentDayKeyJerusalem } from "@/lib/cash-control-daily";
+import { normalizeCashControlMovement, resolveCreateCashMovement } from "@/lib/cash-control-movement";
+import { resolveCashExpenseBusinessPeriod } from "@/lib/cash-expense-period";
 import { groupByActivePayments } from "@/lib/payment-record-status";
 import {
   computeCashControlDeviations,
   computeMethodDeviationsLegacy,
 } from "@/lib/cash-control-deviations";
 import {
-  CASH_EXPENSE_REASONS,
   type CashCurrency,
   type CashExpenseReason,
 } from "./constants";
 import { invalidateWeekBalanceIfBalanced } from "@/lib/cash-control/week-balance-service";
+import { getCashExpenseTypeLabelMap } from "@/app/admin/cash-expenses/type-service";
+import { resolveCashExpenseTypeLabel } from "@/lib/cash-expense-types";
 
 const READ_PERMS = ["view_payment_control"];
 const Z = new Prisma.Decimal(0);
@@ -215,10 +218,6 @@ function dayKey(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-const REASON_LABEL: Record<string, string> = Object.fromEntries(
-  CASH_EXPENSE_REASONS.map((r) => [r.value, r.label]),
-);
-
 type DayBucket = {
   recIls: Prisma.Decimal;
   recUsd: Prisma.Decimal;
@@ -251,7 +250,7 @@ async function computeExpected(week: string): Promise<{
     }),
     prisma.cashExpense.findMany({
       where: { weekCode: week, status: "ACTIVE" },
-      select: { currency: true, amount: true, expenseDate: true },
+      select: { currency: true, amount: true, direction: true, expenseDate: true },
     }),
   ]);
 
@@ -285,7 +284,7 @@ async function computeExpected(week: string): Promise<{
     b.recIds.add(p.id);
   }
   for (const e of expenses) {
-    const amt = e.amount ?? Z;
+    const amt = dec(normalizeCashControlMovement({ amount: e.amount, direction: e.direction }).expenseTerm);
     const b = bucket(dayKey(e.expenseDate));
     if (e.currency === "USD") {
       expensesUsd = expensesUsd.add(amt);
@@ -700,18 +699,22 @@ export async function listCashDetailAction(
       /* טבלת מסמכים לא זמינה — ממשיכים ללא מסמכים */
     }
   }
-  const expenses = await prisma.cashExpense.findMany({
-    where: { weekCode: wk, status: "ACTIVE", currency },
-    select: {
-      id: true,
-      expenseDate: true,
-      amount: true,
-      reason: true,
-      notes: true,
-      createdBy: { select: { fullName: true } },
-    },
-    orderBy: { expenseDate: "asc" },
-  });
+  const [expenses, reasonLabels] = await Promise.all([
+    prisma.cashExpense.findMany({
+      where: { weekCode: wk, status: "ACTIVE", currency },
+      select: {
+        id: true,
+        expenseDate: true,
+        amount: true,
+        direction: true,
+        reason: true,
+        notes: true,
+        createdBy: { select: { fullName: true } },
+      },
+      orderBy: { expenseDate: "asc" },
+    }),
+    getCashExpenseTypeLabelMap(),
+  ]);
 
   const rows: CashDetailRow[] = [];
   let receipts = Z;
@@ -749,9 +752,10 @@ export async function listCashDetailAction(
   let expensesTotal = Z;
   for (const e of expenses) {
     if (day && dayKey(e.expenseDate) !== day) continue;
-    const amt = e.amount ?? Z;
-    expensesTotal = expensesTotal.add(amt);
-    const reasonLabel = REASON_LABEL[e.reason] ?? "אחר";
+    const moved = normalizeCashControlMovement({ amount: e.amount, direction: e.direction });
+    expensesTotal = expensesTotal.add(dec(moved.expenseTerm));
+    const reasonLabel = resolveCashExpenseTypeLabel(e.reason, reasonLabels);
+    const net = dec(moved.netEffect);
     rows.push({
       id: e.id,
       kind: "EXPENSE",
@@ -767,9 +771,9 @@ export async function listCashDetailAction(
       reasonLabel,
       notes: e.notes,
       userName: e.createdBy?.fullName ?? null,
-      amount: money(amt.neg()),
-      amountUsd: currency === "USD" ? money(amt.neg()) : null,
-      amountIls: currency === "ILS" ? money(amt.neg()) : null,
+      amount: money(net),
+      amountUsd: currency === "USD" ? money(net) : null,
+      amountIls: currency === "ILS" ? money(net) : null,
       documents: [],
     });
   }
@@ -796,17 +800,20 @@ export async function saveCashExpenseAction(input: {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, READ_PERMS)) return { ok: false, error: "אין הרשאה" };
 
-  const amount = dec(input.amount);
-  if (amount.eq(0)) return { ok: false, error: "יש להזין סכום שונה מאפס" };
+  const persisted = resolveCreateCashMovement({ amount: input.amount });
+  if (!persisted.ok) return { ok: false, error: persisted.error };
+  const period = resolveCashExpenseBusinessPeriod({
+    dateYmd: input.expenseDate,
+  });
 
   await prisma.cashExpense.create({
     data: {
-      weekCode: input.week.trim() || null,
+      weekCode: period.weekCode || input.week.trim() || null,
       currency: input.currency === "USD" ? "USD" : "ILS",
-      amount,
+      amount: dec(persisted.amount),
       reason: input.reason,
       notes: input.notes?.trim() || null,
-      expenseDate: input.expenseDate ? new Date(input.expenseDate) : new Date(),
+      expenseDate: period.expenseDate,
       createdById: me.id,
     },
   });
@@ -835,17 +842,20 @@ export async function listCashExpensesAction(week: string): Promise<
 > {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, READ_PERMS)) return [];
-  const rows = await prisma.cashExpense.findMany({
-    where: { weekCode: week.trim(), status: "ACTIVE" },
-    orderBy: { expenseDate: "desc" },
-    include: { createdBy: { select: { fullName: true } } },
-  });
+  const [rows, reasonLabels] = await Promise.all([
+    prisma.cashExpense.findMany({
+      where: { weekCode: week.trim(), status: "ACTIVE" },
+      orderBy: { expenseDate: "desc" },
+      include: { createdBy: { select: { fullName: true } } },
+    }),
+    getCashExpenseTypeLabelMap(),
+  ]);
   return rows.map((e) => ({
     id: e.id,
     expenseDate: e.expenseDate.toISOString(),
     currency: e.currency === "USD" ? "USD" : "ILS",
     amount: money(e.amount ?? Z),
-    reasonLabel: REASON_LABEL[e.reason] ?? "אחר",
+    reasonLabel: resolveCashExpenseTypeLabel(e.reason, reasonLabels),
     notes: e.notes,
     createdByName: e.createdBy?.fullName ?? null,
   }));

@@ -1,20 +1,19 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { X } from "lucide-react";
-import {
-  EMPLOYEE_CASH_EXPENSE_REASONS,
-  type CashCurrency,
-  type CashExpenseReason,
-} from "@/app/admin/cash-control/constants";
+import { type CashCurrency } from "@/app/admin/cash-control/constants";
 import {
   createCashExpenseAction,
   listCashExpenseEmployeeOptionsAction,
 } from "@/app/admin/cash-expenses/actions";
 import { CashExpensePaymentMethodSelect } from "@/components/admin/cash-control/CashExpensePaymentMethodSelect";
+import { CashExpenseReasonSelect } from "@/components/admin/cash-control/CashExpenseReasonSelect";
 import { ExpenseOwnerSelect } from "@/components/admin/cash-expenses/ExpenseOwnerSelect";
 import { ACTIVE_WORK_WEEK_CODE } from "@/lib/active-work-week";
+import { CASH_EXPENSE_AMOUNT_ERROR } from "@/lib/cash-control-movement";
 import type { CashExpensePaymentMethod } from "@/lib/cash-expense-payment-method";
+import { formatYmdJerusalem } from "@/lib/weeks/ah-week";
 
 export type EmployeeExpenseEntryModalProps = {
   open: boolean;
@@ -28,16 +27,7 @@ export type EmployeeExpenseEntryModalProps = {
 };
 
 function todayYmd(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-
-function buildNotes(reason: CashExpenseReason, otherDetail: string, note: string): string | undefined {
-  const parts: string[] = [];
-  if (reason === "OTHER" && otherDetail.trim()) parts.push(otherDetail.trim());
-  if (note.trim()) parts.push(note.trim());
-  return parts.length ? parts.join(" — ") : undefined;
+  return formatYmdJerusalem();
 }
 
 export function EmployeeExpenseEntryModal({
@@ -49,8 +39,9 @@ export function EmployeeExpenseEntryModal({
   allowDate = false,
 }: EmployeeExpenseEntryModalProps) {
   const [amount, setAmount] = useState("");
-  const [reason, setReason] = useState<CashExpenseReason | "">("");
-  const [otherDetail, setOtherDetail] = useState("");
+  const [reason, setReason] = useState("");
+  const [reasonQuery, setReasonQuery] = useState("");
+  const [typesTick, setTypesTick] = useState(0);
   const [notes, setNotes] = useState("");
   const [currency, setCurrency] = useState<CashCurrency>("ILS");
   const [paymentMethod, setPaymentMethod] = useState<CashExpensePaymentMethod>("CASH");
@@ -65,7 +56,7 @@ export function EmployeeExpenseEntryModal({
     if (!open) return;
     setAmount("");
     setReason("");
-    setOtherDetail("");
+    setReasonQuery("");
     setNotes("");
     setCurrency("ILS");
     setPaymentMethod("CASH");
@@ -87,29 +78,17 @@ export function EmployeeExpenseEntryModal({
       .finally(() => setOwnersLoading(false));
   }, [open, canSelectExpenseOwner, currentUserId]);
 
-  const reasonOptions = useMemo(
-    () =>
-      canSelectExpenseOwner
-        ? EMPLOYEE_CASH_EXPENSE_REASONS
-        : EMPLOYEE_CASH_EXPENSE_REASONS,
-    [canSelectExpenseOwner],
-  );
-
   if (!open) return null;
 
   async function submit() {
     setErr(null);
-    if (!reason) {
-      setErr("יש לבחור סיבת הוצאה");
-      return;
-    }
-    if (reason === "OTHER" && !otherDetail.trim()) {
-      setErr("יש לפרט את ההוצאה");
+    if (!reason && !reasonQuery.trim()) {
+      setErr("יש לבחור או לכתוב סוג הוצאה");
       return;
     }
     const amt = Number(amount.replace(",", "."));
     if (!Number.isFinite(amt) || amt === 0) {
-      setErr("יש להזין סכום שונה מאפס");
+      setErr(CASH_EXPENSE_AMOUNT_ERROR);
       return;
     }
 
@@ -118,9 +97,10 @@ export function EmployeeExpenseEntryModal({
       const res = await createCashExpenseAction({
         amount,
         currency,
-        reason,
+        reason: reason || undefined,
+        newTypeLabel: reason ? undefined : reasonQuery,
         paymentMethod,
-        notes: buildNotes(reason, otherDetail, notes),
+        notes: notes.trim() || undefined,
         dateYmd: allowDate ? dateYmd : undefined,
         week: ACTIVE_WORK_WEEK_CODE,
         expenseOwnerUserId: canSelectExpenseOwner ? expenseOwnerUserId : undefined,
@@ -129,6 +109,7 @@ export function EmployeeExpenseEntryModal({
         setErr(res.error ?? "שמירה נכשלה");
         return;
       }
+      if (res.typeCreated) setTypesTick((n) => n + 1);
       onSaved();
       onClose();
     } finally {
@@ -168,21 +149,20 @@ export function EmployeeExpenseEntryModal({
             </label>
           ) : null}
 
-          <label className="adm-expense-entry-modal__field">
-            <span className="adm-expense-entry-modal__label">סוג הוצאה</span>
-            <select
-              className="adm-expense-entry-modal__select"
-              value={reason}
-              onChange={(e) => setReason(e.target.value as CashExpenseReason | "")}
-            >
-              <option value="">בחר סיבה…</option>
-              {reasonOptions.map((r) => (
-                <option key={r.value} value={r.value}>
-                  {r.label}
-                </option>
-              ))}
-            </select>
-          </label>
+          <CashExpenseReasonSelect
+            scope="employee"
+            value={reason}
+            query={reasonQuery}
+            reloadToken={typesTick}
+            showPlaceholder
+            fieldLabel="סוג הוצאה"
+            inputClassName="adm-expense-entry-modal__input"
+            labelClassName="adm-expense-entry-modal__label"
+            onChange={({ reason: nextReason, query }) => {
+              setReason(nextReason);
+              setReasonQuery(query);
+            }}
+          />
 
           <div className="adm-expense-entry-modal__currency">
             <button
@@ -212,31 +192,21 @@ export function EmployeeExpenseEntryModal({
                 inputMode="decimal"
                 className="adm-expense-entry-modal__amount-input"
                 value={amount}
-                placeholder="0.00"
+                placeholder="0.00 (ניתן להזין תיקון שלילי)"
                 onChange={(e) => setAmount(e.target.value)}
                 dir="ltr"
                 autoFocus={!canSelectExpenseOwner}
               />
             </div>
+            {Number(amount.replace(",", ".")) < 0 ? (
+              <span className="ce-amount-hint">סכום שלילי מחזיר סכום לקופה</span>
+            ) : null}
           </label>
 
           <label className="adm-expense-entry-modal__field">
             <span className="adm-expense-entry-modal__label">אמצעי תשלום</span>
             <CashExpensePaymentMethodSelect value={paymentMethod} onChange={setPaymentMethod} />
           </label>
-
-          {reason === "OTHER" ? (
-            <label className="adm-expense-entry-modal__field">
-              <span className="adm-expense-entry-modal__label">פירוט ההוצאה</span>
-              <input
-                type="text"
-                className="adm-expense-entry-modal__input"
-                value={otherDetail}
-                placeholder="פרט את סוג ההוצאה"
-                onChange={(e) => setOtherDetail(e.target.value)}
-              />
-            </label>
-          ) : null}
 
           <label className="adm-expense-entry-modal__field">
             <span className="adm-expense-entry-modal__label">הערה</span>
@@ -272,7 +242,7 @@ export function EmployeeExpenseEntryModal({
             type="button"
             className="cc-btn cc-btn--primary"
             onClick={() => void submit()}
-            disabled={saving || !amount.trim() || !reason}
+            disabled={saving || !amount.trim() || (!reason && !reasonQuery.trim())}
           >
             {saving ? "שומר…" : "שמור הוצאה"}
           </button>

@@ -74,7 +74,7 @@ export async function loadFlowWeek(
       loadTurkeyBalanceForWeek(wk, workCountry),
       prisma.cashExpense.findMany({
         where: { ...cashExpenseWhereForCountryScope(countryScope), weekCode: wk, status: "ACTIVE" },
-        select: { currency: true, amount: true, paymentMethod: true },
+        select: { currency: true, amount: true, paymentMethod: true, direction: true },
       }),
       cashFlowPerfTimed("cashFlow.paymentReceipts", () => getFlowWeekPaymentsCached(wk, countryScope)),
     ]);
@@ -84,6 +84,7 @@ export async function loadFlowWeek(
       currency: e.currency,
       amount: e.amount,
       paymentMethod: e.paymentMethod,
+      direction: e.direction,
     })),
   );
 

@@ -17,6 +17,7 @@ import {
   parseFxPurchasesJson,
   sumFxPurchases,
 } from "@/lib/flow-control/flow-calculation-service";
+import { normalizeCashControlMovement } from "@/lib/cash-control-movement";
 
 function weekCodesInRange(fromWeek: string, toWeek: string): string[] {
   let a = parseAhWeekNumber(fromWeek) ?? 1;
@@ -297,7 +298,7 @@ export async function buildProfitLossReport(
         expenseDate: { gte: from, lte: to },
         ...(weekCodes.length ? { weekCode: { in: weekCodes } } : {}),
       },
-      select: { amount: true, currency: true },
+      select: { amount: true, currency: true, direction: true },
     }),
   ]);
 
@@ -337,7 +338,7 @@ export async function buildProfitLossReport(
 
   let expensesIls = 0;
   for (const e of expensesRaw) {
-    expensesIls += num(e.amount);
+    expensesIls += normalizeCashControlMovement({ amount: e.amount, direction: e.direction }).expenseTerm;
   }
   expensesIls = round2(expensesIls);
 

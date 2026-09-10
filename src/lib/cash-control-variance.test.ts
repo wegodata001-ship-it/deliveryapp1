@@ -164,7 +164,7 @@ describe("תיקון הוצאה באמצעות סכום שלילי", () => {
     const intake = { ...emptyDailyIntake(), CASH_ILS: 1000 };
     const existing = addExpenseToMethodTotals(emptyDailyExpenses(), "CASH", "ILS", 100);
     const day = computeCashVarianceDay(intake, { CASH_ILS: 1000 }, existing);
-    const preview = previewExpenseVarianceImpact(day.lines, "ILS", -100, "CASH_ILS");
+    const preview = previewExpenseVarianceImpact(day.lines, "ILS", -100, "CASH_ILS", null);
 
     assert.equal(preview.proposedExpenseAmount, -100);
     assert.equal(preview.afterExpensesAmount, 0);

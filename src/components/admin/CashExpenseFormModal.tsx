@@ -2,11 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Wallet, X } from "lucide-react";
-import {
-  CASH_EXPENSE_REASONS,
-  type CashCurrency,
-  type CashExpenseReason,
-} from "@/app/admin/cash-control/constants";
+import { type CashCurrency } from "@/app/admin/cash-control/constants";
+import { CashExpenseReasonSelect } from "@/components/admin/cash-control/CashExpenseReasonSelect";
+import { CASH_EXPENSE_AMOUNT_ERROR } from "@/lib/cash-control-movement";
+import { formatHmJerusalem, formatYmdJerusalem } from "@/lib/weeks/ah-week";
 import {
   createCashExpenseAction,
   updateCashExpenseAction,
@@ -25,7 +24,7 @@ export type CashExpenseEditable = {
   id: string;
   dateYmd: string;
   timeHm?: string;
-  reason: CashExpenseReason;
+  reason: string;
   notes: string | null;
   currency: CashCurrency;
   amount: string;
@@ -57,15 +56,11 @@ function newDraftKey(): string {
 }
 
 function todayYmd(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  return formatYmdJerusalem();
 }
 
 function nowTimeHm(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${p(d.getHours())}:${p(d.getMinutes())}`;
+  return formatHmJerusalem();
 }
 
 function timeFromIso(iso: string): string {
@@ -94,7 +89,9 @@ export function CashExpenseFormModal({
   const isEdit = !!expense;
   const [dateYmd, setDateYmd] = useState("");
   const [timeHm, setTimeHm] = useState("");
-  const [reason, setReason] = useState<CashExpenseReason>("FUEL");
+  const [reason, setReason] = useState("FUEL");
+  const [reasonQuery, setReasonQuery] = useState("");
+  const [typesTick, setTypesTick] = useState(0);
   const [currency, setCurrency] = useState<CashCurrency>("ILS");
   const [paymentMethod, setPaymentMethod] = useState<CashExpensePaymentMethod>("CASH");
   const [amount, setAmount] = useState("");
@@ -112,6 +109,7 @@ export function CashExpenseFormModal({
       setDateYmd(expense.dateYmd || todayYmd());
       setTimeHm(expense.timeHm ?? "12:00");
       setReason(expense.reason);
+      setReasonQuery("");
       setCurrency(expense.currency);
       setPaymentMethod(normalizePaymentMethod(expense.paymentMethod));
       setAmount(expense.amount);
@@ -120,6 +118,7 @@ export function CashExpenseFormModal({
       setDateYmd(defaultDateYmd || todayYmd());
       setTimeHm(nowTimeHm());
       setReason("FUEL");
+      setReasonQuery("");
       setCurrency("ILS");
       setPaymentMethod("CASH");
       setAmount("");
@@ -146,7 +145,11 @@ export function CashExpenseFormModal({
     setErr(null);
     const amt = Number(amount.replace(",", "."));
     if (!Number.isFinite(amt) || amt === 0) {
-      setErr("יש להזין סכום שונה מאפס");
+      setErr(CASH_EXPENSE_AMOUNT_ERROR);
+      return;
+    }
+    if (!reason && !reasonQuery.trim()) {
+      setErr("יש לבחור או לכתוב סוג הוצאה");
       return;
     }
     setSaving(true);
@@ -156,7 +159,8 @@ export function CashExpenseFormModal({
             id: expense!.id,
             amount: amount,
             currency,
-            reason,
+            reason: reason || undefined,
+            newTypeLabel: reason ? undefined : reasonQuery,
             paymentMethod,
             notes,
             dateYmd,
@@ -165,7 +169,8 @@ export function CashExpenseFormModal({
         : await createCashExpenseAction({
             amount,
             currency,
-            reason,
+            reason: reason || undefined,
+            newTypeLabel: reason ? undefined : reasonQuery,
             paymentMethod,
             notes,
             dateYmd,
@@ -177,6 +182,7 @@ export function CashExpenseFormModal({
         setErr(res.error ?? "שמירה נכשלה");
         return;
       }
+      if ("typeCreated" in res && res.typeCreated) setTypesTick((n) => n + 1);
       onSaved();
       onClose();
     } finally {
@@ -207,16 +213,15 @@ export function CashExpenseFormModal({
           <section className="ce-modal-v2__section">
             <h4 className="ce-modal-v2__section-title">פרטי ההוצאה</h4>
             <div className="ce-modal-v2__grid">
-              <label className="adm-cash-field">
-                <span>סוג הוצאה</span>
-                <select className="cc-input" value={reason} onChange={(e) => setReason(e.target.value as CashExpenseReason)}>
-                  {CASH_EXPENSE_REASONS.map((r) => (
-                    <option key={r.value} value={r.value}>
-                      {r.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <CashExpenseReasonSelect
+                value={reason}
+                query={reasonQuery}
+                reloadToken={typesTick}
+                onChange={({ reason: nextReason, query }) => {
+                  setReason(nextReason);
+                  setReasonQuery(query);
+                }}
+              />
             <label className="adm-cash-field">
               <span>סכום</span>
               <input
@@ -228,6 +233,9 @@ export function CashExpenseFormModal({
                 onChange={(e) => setAmount(e.target.value)}
                 dir="ltr"
               />
+              {Number(amount.replace(",", ".")) < 0 ? (
+                <span className="ce-amount-hint">סכום שלילי מחזיר סכום לקופה</span>
+              ) : null}
             </label>
             <label className="adm-cash-field">
               <span>מטבע</span>
