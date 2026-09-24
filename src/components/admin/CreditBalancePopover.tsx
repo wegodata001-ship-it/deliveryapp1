@@ -119,7 +119,7 @@ export function CreditBalancePopover({
         ) : null}
 
         <footer className="commission-balance-popover__footer">
-          <span>יתרת זכות נוכחית</span>
+          <span>יתרת זכות</span>
           <strong dir="ltr" className="credit-balance-popover__total">
             +{fmtUsd(footerBalance).replace(/^\+?\$?\s?/, "$")}
           </strong>

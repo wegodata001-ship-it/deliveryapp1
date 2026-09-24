@@ -102,6 +102,25 @@ describe("balances client cache", () => {
     invalidateBalancesListCache();
   });
 
+  it("timeout drops hung inflight so a retry is not stuck forever", async () => {
+    invalidateBalancesListCache();
+    const key = balancesListCacheKey({ page: 1, weekCode: "AH-140" });
+    let calls = 0;
+    const hung = () =>
+      new Promise<CustomerBalancesPayload>(() => {
+        calls += 1;
+      });
+    await assert.rejects(() => fetchBalancesListCached(key, hung, { timeoutMs: 20 }), /נמשכת זמן רב/);
+    const ok = () => {
+      calls += 1;
+      return Promise.resolve(emptyPayload("140"));
+    };
+    const next = await fetchBalancesListCached(key, ok, { skipCache: true, timeoutMs: 50 });
+    assert.equal(next.stats.totalDebtIls, "140");
+    assert.equal(calls, 2);
+    invalidateBalancesListCache();
+  });
+
   it("invalidate clears so a later week cannot see stale data", () => {
     invalidateBalancesListCache();
     const key = balancesListCacheKey({ page: 1, weekCode: "AH-138" });

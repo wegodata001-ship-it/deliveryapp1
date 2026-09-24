@@ -2,30 +2,28 @@
  * הקשר שבועות בקליטת תשלום — ממוקד למסך הקליטה בלבד.
  *
  * מודל:
- * - selectedWorkWeek (בית / ?week=) = שבוע ההזמנות
- * - paymentCaptureWeek (שבוע הקליטה במסך) = nextWeek(selectedWorkWeek)
- * - orderSourceWeek = previousWeek(paymentCaptureWeek) = selectedWorkWeek
+ * - selectedWorkWeek (בית / ?week= / בורר הקליטה) = שבוע הקליטה
+ * - orderSourceWeek = אותו שבוע (לא previousWeek)
  *
- * ניווט ידני בתוך הקליטה על paymentWeek P → הזמנות = previousWeek(P).
- * תאריך ביצוע הקליטה (intakeDate / paymentDate) = שבת השבוע הפיננסי (P − 1).
+ * ניווט ידני בתוך הקליטה על שבוע P → הזמנות = P.
+ * תאריך ביצוע ברירת מחדל (intakeDate / paymentDate) נשאר שבת השבוע הפיננסי (P − 1)
+ * לצורך בקרת קופה — בלי לשנות את שבוע הקליטה השמור.
  *
  * לא משנים את השבוע הגלובלי במסך הבית.
  */
 import {
-  balancesSnapshotToYmd,
   getAhWeekRange,
   getWeekCodeForLocalDate,
   normalizeAhWeekCode,
   parseLocalDate,
-  prevWeekCode,
 } from "@/lib/work-week";
 
 export type PaymentIntakeWeekContext = {
   /** שבוע ביצוע הקליטה / שמירת התשלום */
   intakeWeekCode: string;
-  /** שבוע מקור ההזמנות (שבוע קודם) */
+  /** שבוע מקור ההזמנות — זהה לשבוע הקליטה */
   orderSourceWeekCode: string;
-  /** שבת שבוע מקור ההזמנות — ברירת מחדל לתאריך הזמנות */
+  /** שבת שבוע הקליטה — ברירת מחדל לתאריך הזמנות */
   orderSourceDateYmd: string;
 };
 
@@ -33,20 +31,17 @@ export function resolveOrderSourceWeekCode(
   intakeWeekCodeRaw: string | null | undefined,
 ): string | null {
   const intake = normalizeAhWeekCode(intakeWeekCodeRaw ?? "");
-  if (!intake) return null;
-  return prevWeekCode(intake);
+  if (!intake || !getAhWeekRange(intake)) return null;
+  return intake;
 }
 
-/** שבת (סוף שבוע) של שבוע מקור ההזמנות עבור שבוע קליטה AH-N */
+/** שבת (סוף שבוע) של שבוע הקליטה / מקור ההזמנות */
 export function defaultOrderSourceDateYmdForIntakeWeek(
   intakeWeekCodeRaw: string | null | undefined,
 ): string {
   const intake = normalizeAhWeekCode(intakeWeekCodeRaw ?? "");
   if (!intake) return "";
-  const snap = balancesSnapshotToYmd(intake);
-  if (snap) return snap;
-  const src = resolveOrderSourceWeekCode(intake);
-  return src ? (getAhWeekRange(src)?.to ?? "") : "";
+  return getAhWeekRange(intake)?.to ?? "";
 }
 
 export function resolvePaymentIntakeWeekContext(
@@ -68,7 +63,7 @@ export function orderSourceWeekCodeFromDateYmd(ymd: string): string | null {
   return normalizeAhWeekCode(getWeekCodeForLocalDate(parseLocalDate(t)));
 }
 
-/** week query לטעינת הזמנות — שבוע מקור, לא שבוע קליטה */
+/** week query לטעינת הזמנות — שבוע הקליטה, אלא אם נבחר תאריך מקור ידני */
 export function weekCodeForPaymentIntakeOrders(
   intakeWeekCodeRaw: string | null | undefined,
   orderSourceDateYmd?: string | null,

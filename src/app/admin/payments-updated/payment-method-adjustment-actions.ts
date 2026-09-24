@@ -63,10 +63,10 @@ async function loadPreview(params: {
   });
   if (!workspace.ok) return workspace;
   const { getCustomerAccountBalances } = await import("@/lib/customer-account-balances");
-  const { openDebtScopeForWorkCountry } = await import("@/lib/customer-open-debt");
+  const { currentCustomerFinancialScopeForWorkCountry } = await import("@/lib/customer-financial-scope");
   const accounts = await getCustomerAccountBalances(
     workspace.customer.id,
-    openDebtScopeForWorkCountry(params.workCountry),
+    currentCustomerFinancialScopeForWorkCountry(params.workCountry),
   );
   const preview = buildPaymentMethodAutoAdjustmentPreview({
     orders: workspace.orders,
@@ -122,10 +122,10 @@ export async function loadPaymentMethodAdjustmentBootstrapAction(params: {
   });
   if (!workspace.ok) return { ok: false, error: workspace.error };
   const { getCustomerAccountBalances } = await import("@/lib/customer-account-balances");
-  const { openDebtScopeForWorkCountry } = await import("@/lib/customer-open-debt");
+  const { currentCustomerFinancialScopeForWorkCountry } = await import("@/lib/customer-financial-scope");
   const accounts = await getCustomerAccountBalances(
     customerId,
-    openDebtScopeForWorkCountry(params.workCountry),
+    currentCustomerFinancialScopeForWorkCountry(params.workCountry),
   );
   const bootstrap = buildPaymentMethodAdjustmentBootstrap({
     orders: workspace.orders,

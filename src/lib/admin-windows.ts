@@ -20,6 +20,10 @@ export type CustomerCardWindowProps = {
   ledgerFromYmd?: string | null;
   ledgerToYmd?: string | null;
   ledgerSourceCountry?: string | null;
+  /** שבוע שנבחר במסך האב (למשל AH-141) — תצוגה בלבד */
+  ledgerSelectedWeekCode?: string | null;
+  /** שבוע ה-cutoff בפועל (למשל AH-140) — תצוגה בלבד */
+  ledgerCutoffWeekCode?: string | null;
   /** נתונים שנטענו בשרת — מונע POST /admin בכניסה לדף */
   initialSnap?: CustomerCardSnapshot | null;
 };

@@ -18,7 +18,7 @@ import type {
   CustomerWorkspacePaymentRow,
 } from "@/lib/customers-module-types";
 import { CUSTOMER_WORKSPACE_ROW_LIMIT } from "@/lib/customers-module-types";
-import { scopeFromWorkCountryParam } from "@/lib/customer-open-debt";
+import { currentCustomerFinancialScopeForWorkCountry } from "@/lib/customer-financial-scope";
 import {
   customerWhereForCountryScope,
   mergeCustomerWhere,
@@ -113,7 +113,7 @@ export async function listCustomersModule(
   const skip = (page - 1) * limit;
   const search = (opts.search ?? "").trim();
   const workCountry = opts.workCountry ?? DEFAULT_WORK_COUNTRY;
-  const balanceScope = scopeFromWorkCountryParam(workCountry);
+  const balanceScope = currentCustomerFinancialScopeForWorkCountry(workCountry);
   const countryScope = resolveCountryScopeFromCode(workCountry);
 
   const customers = await prisma.customer.findMany({
@@ -161,7 +161,7 @@ export async function listCustomersModuleForExport(opts: {
   customerId?: string | null;
 }): Promise<CustomersModuleListRow[]> {
   const workCountry = opts.workCountry ?? DEFAULT_WORK_COUNTRY;
-  const balanceScope = scopeFromWorkCountryParam(workCountry);
+  const balanceScope = currentCustomerFinancialScopeForWorkCountry(workCountry);
   const countryScope = resolveCountryScopeFromCode(workCountry);
 
   if (opts.scope === "current") {

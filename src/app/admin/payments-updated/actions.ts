@@ -54,10 +54,10 @@ import {
 import { getCustomerCreditBalanceUsd } from "@/lib/customer-credit-balance";
 import { resolvePaymentIntakeAccountingPeriod } from "@/lib/payment-intake-accounting-period";
 import {
-  getWeekCodeForLocalDate,
-  parseLocalDate,
-  parseLocalDateTime,
-} from "@/lib/work-week";
+  PAYMENT_WORK_WEEK_REQUIRED_ERROR,
+  resolveSubmittedPaymentWorkWeek,
+} from "@/lib/payment-work-week";
+import { parseLocalDate, parseLocalDateTime } from "@/lib/work-week";
 import {
   calculatePaymentLine,
   calculateTotals,
@@ -484,7 +484,7 @@ export async function savePaymentUpdatedAction(
   if (checkValidationErr) return { ok: false, error: checkValidationErr };
 
   // חוק עסקי ראשון — אימות אמצעי התשלום המתוכננים לפני כל חישוב הקצאה/FIFO.
-  // form.weekCode = שבוע קליטה; הזמנות נטענות משבוע המקור (הקודם).
+  // form.weekCode = שבוע קליטה שנבחר במסך; הזמנות מאותו שבוע.
   const ordersSourceWeek =
     weekCodeForPaymentIntakeOrders(form.weekCode) ?? form.weekCode?.trim() ?? null;
   const intakeOrdersResult = await loadPaymentIntakeOrdersForCustomer({
@@ -607,7 +607,9 @@ export async function savePaymentUpdatedAction(
   const today = new Date();
   const hm = (form.paymentTimeHm ?? "").trim();
 
-  const weekCodeHint = form.weekCode?.trim() || null;
+  const weekCode = resolveSubmittedPaymentWorkWeek(form.weekCode);
+  if (!weekCode) return { ok: false, error: PAYMENT_WORK_WEEK_REQUIRED_ERROR };
+  const weekCodeHint = weekCode;
   const accounting = resolvePaymentIntakeAccountingPeriod(weekCodeHint);
   const defaultBusinessYmd = accounting?.businessDate ?? "";
 
@@ -623,8 +625,6 @@ export async function savePaymentUpdatedAction(
 
   const intakeYmd = (form.intakeDateYmd ?? "").trim() || defaultBusinessYmd || explicitPaymentYmd;
   const intakeDate = hm ? parseLocalDateTime(intakeYmd, hm) : parseLocalDate(intakeYmd);
-
-  const weekCode = (weekCodeHint || getWeekCodeForLocalDate(paymentDate)).trim() || null;
 
   const weekDateWhere = paymentIntakeOrderDateThroughAhWeekEnd(weekCode);
   // חשוב: יתרת זכות קיימת לא "כופה" תשלום כקרדיט.

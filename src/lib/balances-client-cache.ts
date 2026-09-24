@@ -1,4 +1,5 @@
 import type { CustomerBalancesPayload } from "@/app/admin/balances/actions";
+import { BALANCES_TIMEOUT_MESSAGE, withTimeout } from "@/lib/balances-list-load";
 
 const TTL_MS = 120_000;
 const MAX_ENTRIES = 24;
@@ -77,23 +78,32 @@ export function balancesListCacheSize(): number {
 export async function fetchBalancesListCached(
   key: string,
   fetcher: () => Promise<CustomerBalancesPayload>,
-  opts?: { skipCache?: boolean },
+  opts?: { skipCache?: boolean; timeoutMs?: number },
 ): Promise<CustomerBalancesPayload> {
   if (!opts?.skipCache) {
     const hit = getBalancesListCache(key);
     if (hit) return hit;
     const pending = inflight.get(key);
     if (pending) return pending;
+  } else {
+    inflight.delete(key);
   }
 
-  const pending = fetcher()
-    .then((payload) => {
-      setBalancesListCache(key, payload);
-      return payload;
-    })
-    .finally(() => {
-      if (inflight.get(key) === pending) inflight.delete(key);
-    });
+  const work = fetcher().then((payload) => {
+    setBalancesListCache(key, payload);
+    return payload;
+  });
+  work.catch(() => {
+    /* swallow if the caller already raced out via timeout */
+  });
+
+  const pending = (
+    opts?.timeoutMs && opts.timeoutMs > 0
+      ? withTimeout(work, opts.timeoutMs, BALANCES_TIMEOUT_MESSAGE)
+      : work
+  ).finally(() => {
+    if (inflight.get(key) === pending) inflight.delete(key);
+  });
   inflight.set(key, pending);
   return pending;
 }

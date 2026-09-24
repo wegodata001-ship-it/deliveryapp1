@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   BALANCES_WEEK_PARAM,
+  balancesCardOpenProps,
+  balancesCumulativeCutoffCaption,
+  customerCardBalancesCutoffCaption,
+  customerCardLedgerViewMode,
   isBalancesWeekReady,
   parseBalancesWeekFromSearchParams,
   shouldResyncBalancesLocalWeek,
@@ -77,6 +81,61 @@ describe("shouldResyncBalancesLocalWeek", () => {
         previousGlobalWorkWeek: "AH-138",
       }),
       "sync-global",
+    );
+  });
+});
+
+describe("balances cutoff captions", () => {
+  it("AH-141 screen text uses AH-140 + 19/09/2026, not today", () => {
+    const text = balancesCumulativeCutoffCaption({
+      selectedWeekCode: "AH-141",
+      cutoffWeekCode: "AH-140",
+      cutoffYmd: "2026-09-19",
+    });
+    assert.equal(text, "יתרות מצטברות עד סוף AH-140 · 19/09/2026");
+    assert.equal(text.includes("היום"), false);
+  });
+
+  it("card opened from AH-141 names the parent week and cutoff date", () => {
+    assert.equal(
+      customerCardBalancesCutoffCaption({
+        selectedWeekCode: "AH-141",
+        cutoffYmd: "2026-09-19",
+      }),
+      "כרטסת עד 19/09/2026 — לפי שבוע עבודה AH-141",
+    );
+  });
+
+  it("AH-141 card open props inherit snapshot cutoff 19/09, not today", () => {
+    const props = balancesCardOpenProps({
+      weekCode: "AH-141",
+      snapshotToYmd: "2026-09-19",
+      sourceCountry: "TURKEY",
+    });
+    assert.deepEqual(props, {
+      ledgerFromYmd: null,
+      ledgerToYmd: "2026-09-19",
+      ledgerSelectedWeekCode: "AH-141",
+      ledgerCutoffWeekCode: "AH-140",
+      ledgerSourceCountry: "TURKEY",
+    });
+    assert.equal(
+      customerCardLedgerViewMode({
+        parentToYmd: props.ledgerToYmd,
+        parentFromYmd: props.ledgerFromYmd,
+        currentFromYmd: "",
+        currentToYmd: props.ledgerToYmd ?? "",
+      }),
+      "parent-cutoff",
+    );
+    assert.equal(
+      customerCardLedgerViewMode({
+        parentToYmd: props.ledgerToYmd,
+        parentFromYmd: props.ledgerFromYmd,
+        currentFromYmd: "",
+        currentToYmd: "",
+      }),
+      "lifetime",
     );
   });
 });

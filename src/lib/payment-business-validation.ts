@@ -326,7 +326,7 @@ export function evaluatePaymentBusinessRules(
   if (shortageUsd > eps) {
     const availableCreditUsd = nonNegative(input.availableCreditUsd ?? 0);
     if (mustSettleShortage && availableCreditUsd > eps && !input.useCredit) {
-      return result("USE_CREDIT", "קיימת יתרת זכות זמינה. יש לבחור אם להשתמש בה לפני המשך הקליטה.", {
+      return result("USE_CREDIT", "קיימת יתרת זכות. יש לבחור אם להשתמש בה לפני המשך הקליטה.", {
         shortageUsd,
       });
     }

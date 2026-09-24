@@ -208,18 +208,16 @@ async function enrichSearchRowsWithSsotBalance(
   workCountry?: string | null,
 ): Promise<CustomerSearchRow[]> {
   if (rows.length === 0) return rows;
-  const { calculateCustomerBalances } = await import("@/lib/customer-balance-calculator");
-  const { openDebtScopeForWorkCountry } = await import("@/lib/customer-open-debt");
-  const map = await calculateCustomerBalances(
+  const { getCustomerAccountBalancesMany } = await import("@/lib/customer-account-balances");
+  const { currentCustomerFinancialScopeForWorkCountry } = await import("@/lib/customer-financial-scope");
+  const map = await getCustomerAccountBalancesMany(
     rows.map((r) => r.id),
-    openDebtScopeForWorkCountry(workCountry),
+    currentCustomerFinancialScopeForWorkCountry(workCountry),
   );
   return rows.map((r) => {
     const b = map.get(r.id);
     if (!b) return r;
-    // Customer.balanceUsd convention = internal (payments + withdrawals − orders)
-    const internal = b.totalPayments.add(b.totalWithdrawals).sub(b.totalOrders);
-    return { ...r, balanceUsd: Number(internal.toFixed(2)) };
+    return { ...r, balanceUsd: b.openDebtUsd };
   });
 }
 

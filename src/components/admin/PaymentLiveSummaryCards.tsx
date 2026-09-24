@@ -25,9 +25,11 @@ import { UsdBalanceIlsGrossText } from "@/components/admin/UsdBalanceIlsGrossTex
 
 type Props = {
   kpis: LivePaymentFormKpis;
-  /** סה״כ יתרות פתוחות על הזמנות (DB) — legacy; לתצוגת חוב לקוח השתמשו ב-openDebtUsd */
+  /** חוב פתוח מ-getCustomerAccountBalances — לא Σ יתרות הזמנה */
   openDebtUsd?: number;
+  /** נשמר לתאימות קריאה — לא מציגים ריבוע Credit נפרד בשורת ה-KPI */
   creditUsd?: number;
+  commissionUsd?: number;
   onOpenDebtClick?: () => void;
   /**
    * כרטיס יתרה — derivePaymentBalanceDisplay ממקור האמת של המסך.
@@ -107,7 +109,8 @@ function KpiMethodAmounts({
 export function PaymentLiveSummaryCards({
   kpis,
   openDebtUsd = 0,
-  creditUsd = 0,
+  creditUsd: _creditUsd = 0,
+  commissionUsd = 0,
   onOpenDebtClick,
   paymentBalanceDisplay = null,
   historicalPaymentView = false,
@@ -115,14 +118,15 @@ export function PaymentLiveSummaryCards({
   rate = 0,
 }: Props) {
   const showOpenDebt = openDebtUsd > 0.01;
-  const unifiedShowsCredit = paymentBalanceDisplay?.state === "credit";
-  const showCredit = !unifiedShowsCredit && !showOpenDebt && creditUsd > 0.01;
+  const showCommission = Math.abs(commissionUsd) > 0.01;
   const methodCards = LIVE_PAYMENT_KPI_CARDS.filter((c) => !c.isTotal);
   const canDrill = Array.isArray(lines) && lines.length > 0;
   const showBalanceCard =
     !historicalPaymentView &&
     paymentBalanceDisplay != null &&
+    paymentBalanceDisplay.state !== "credit" &&
     Number.isFinite(paymentBalanceDisplay.displayUsd);
+  const extraAccountCards = Number(showOpenDebt) + Number(showCommission) + Number(showBalanceCard);
 
   const [drill, setDrill] = useState<{ title: string; method: PaymentLineMethod | null } | null>(
     null,
@@ -155,7 +159,7 @@ export function PaymentLiveSummaryCards({
         className={[
           "payment-modal-live-kpis",
           "payment-modal-live-kpis--inline-row",
-          showOpenDebt || showCredit ? "payment-modal-live-kpis--with-open-debt" : "",
+          extraAccountCards > 0 ? "payment-modal-live-kpis--with-account" : "",
         ]
           .filter(Boolean)
           .join(" ")}
@@ -229,16 +233,16 @@ export function PaymentLiveSummaryCards({
           </button>
         ) : null}
 
-        {showCredit ? (
-          <div className="payment-modal-live-kpi payment-modal-live-kpi--credit" role="status">
-            <div className="payment-modal-live-kpi__lbl">יתרת זכות</div>
+        {showCommission ? (
+          <div className="payment-modal-live-kpi" role="status">
+            <div className="payment-modal-live-kpi__lbl">עמלות</div>
             <AnimatedMoneyValue
               className="payment-modal-live-kpi__amount-v payment-modal-live-kpi__amount-v--usd payment-modal-live-kpi__amount-v--solo"
               dir="ltr"
-              value={`+${formatUsdPlain(creditUsd)}`}
+              value={formatUsdPlain(commissionUsd)}
             />
             <UsdBalanceIlsGrossText
-              usd={creditUsd}
+              usd={commissionUsd}
               exchangeRate={rate}
               className="payment-modal-live-kpi__sub-ils"
             />

@@ -347,11 +347,17 @@ export async function buildCustomerAccountLedger(params: {
     to,
     sourceCountry,
   });
-  const accountBalancesPromise = getCustomerAccountBalances(id, {
-    from: fromFilterSet ? from : null,
-    to,
-    sourceCountry,
-  });
+  const accountBalancesPromise = getCustomerAccountBalances(
+    id,
+    params.toYmd?.trim()
+      ? {
+          kind: "HISTORICAL",
+          cutoffYmd: params.toYmd.trim(),
+          fromYmd: fromFilterSet ? params.fromYmd?.trim() || null : null,
+          sourceCountry,
+        }
+      : { kind: "CURRENT", sourceCountry },
+  );
 
   const [
     preOrders,

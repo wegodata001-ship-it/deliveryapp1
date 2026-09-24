@@ -49,11 +49,11 @@ export async function GET(req: Request) {
       if (!cust) return NextResponse.json(null);
 
       const country = searchParams.get("country");
-      const { openDebtScopeForWorkCountry } = await import("@/lib/customer-open-debt");
       const { getCustomerAccountBalances, financialStateFromAccounts } = await import(
         "@/lib/customer-account-balances"
       );
-      const accounts = await getCustomerAccountBalances(id, openDebtScopeForWorkCountry(country));
+      const { currentCustomerFinancialScopeForWorkCountry } = await import("@/lib/customer-financial-scope");
+      const accounts = await getCustomerAccountBalances(id, currentCustomerFinancialScopeForWorkCountry(country));
       const state = financialStateFromAccounts(accounts);
       const indexLabel = cust.oldCustomerCode?.trim() || cust.customerCode?.trim() || null;
 

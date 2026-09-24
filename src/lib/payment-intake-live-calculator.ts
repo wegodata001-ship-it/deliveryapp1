@@ -21,7 +21,7 @@ export type PaymentIntakeLiveTotals = {
   balanceUsd: number;
   hasDebt: boolean;
   hasCredit: boolean;
-  balanceLabel: "חוב פתוח" | "יתרת זכות ללקוח" | "מאוזן";
+  balanceLabel: "חוב פתוח" | "יתרת זכות" | "מאוזן";
 };
 
 /**
@@ -131,7 +131,7 @@ export function computePaymentIntakeLiveTotals(params: {
       : roundMoney2(chargesUsd + commissionsUsd - paymentsUsd - withdrawalsUsd);
   const hasDebt = balanceResetActive ? false : balanceUsd > EPS;
   const hasCredit = balanceResetActive ? false : balanceUsd < -EPS;
-  const balanceLabel = balanceResetActive ? "מאוזן" : hasCredit ? "יתרת זכות ללקוח" : hasDebt ? "חוב פתוח" : "מאוזן";
+  const balanceLabel = balanceResetActive ? "מאוזן" : hasCredit ? "יתרת זכות" : hasDebt ? "חוב פתוח" : "מאוזן";
   return {
     chargesUsd,
     commissionsUsd,

@@ -64,17 +64,17 @@ export function CustomerProfileClient({ profile }: Props) {
           <strong dir="ltr">{customer.code}</strong>
         </span>
         <span className="adm-cust-module-strip__item">
-          <span className="adm-cust-module-strip__k">יתרה</span>
-          <strong dir="ltr" className={financial.tone === "debt" ? "adm-cust-strip--debt" : financial.tone === "credit" ? "adm-cust-strip--credit" : ""}>
-            {financial.headline}
+          <span className="adm-cust-module-strip__k">חוב פתוח</span>
+          <strong dir="ltr" className={financial.tone === "debt" ? "adm-cust-strip--debt" : ""}>
+            {fmtUsd(kpis.openDebtUsd ?? "0")}
           </strong>
         </span>
-        {kpis.availableCreditUsd && parseMoneyStringOrZero(kpis.availableCreditUsd) > 0.01 ? (
-          <span className="adm-cust-module-strip__item">
-            <span className="adm-cust-module-strip__k">יתרת זכות</span>
-            <strong dir="ltr">{fmtUsd(kpis.availableCreditUsd)}</strong>
-          </span>
-        ) : null}
+        <span className="adm-cust-module-strip__item">
+          <span className="adm-cust-module-strip__k">יתרת זכות</span>
+          <strong dir="ltr" className={parseMoneyStringOrZero(kpis.availableCreditUsd ?? "0") > 0.01 ? "adm-cust-strip--credit" : ""}>
+            {fmtUsd(kpis.availableCreditUsd ?? "0")}
+          </strong>
+        </span>
         {kpis.commissionBalanceUsd != null ? (
           <span className="adm-cust-module-strip__item">
             <span className="adm-cust-module-strip__k">יתרת עמלות</span>

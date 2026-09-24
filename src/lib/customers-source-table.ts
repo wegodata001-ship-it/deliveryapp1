@@ -20,7 +20,7 @@ export type CustomersSourceFilters = {
   isActive?: string;
   fromYmd?: string;
   toYmd?: string;
-  /** "" | "owes" | "credit" | "zero" — סינון לפי סימן יתרה (USD) */
+  /** "" | "owes" | "credit" | "zero" — openDebt / availableCredit / both ~0 */
   balanceSign?: string;
 };
 
@@ -40,7 +40,7 @@ export type CustomersSourceRow = {
   nameAr: string;
   phone: string;
   email: string;
-  /** יתרת לקוח (USD): חיובי=חוב, שלילי=זכות */
+  /** מצב נטו informational (openDebt − credit). חיובי=חוב, שלילי=זכות */
   balanceUsd: string;
   city: string;
   type: string;
@@ -238,7 +238,8 @@ type CustomerBalanceAggRow = {
   ordersUsd: Prisma.Decimal;
   withdrawalsUsd: Prisma.Decimal;
   paymentsUsd: Prisma.Decimal;
-  balanceUsd: Prisma.Decimal;
+  openDebtUsd: Prisma.Decimal;
+  creditUsd: Prisma.Decimal;
 };
 
 async function fetchBalancesUsdForCustomers(customerIds: string[]): Promise<Map<string, Prisma.Decimal>> {
@@ -246,7 +247,8 @@ async function fetchBalancesUsdForCustomers(customerIds: string[]): Promise<Map<
   const { getCustomerAccountBalancesMany, customerAccountSignedUsd } = await import(
     "@/lib/customer-account-balances"
   );
-  const map = await getCustomerAccountBalancesMany(customerIds);
+  const { currentCustomerFinancialScope } = await import("@/lib/customer-financial-scope");
+  const map = await getCustomerAccountBalancesMany(customerIds, currentCustomerFinancialScope());
   const out = new Map<string, Prisma.Decimal>();
   for (const [id, row] of map) {
     out.set(id, new Prisma.Decimal(customerAccountSignedUsd(row).toFixed(2)));
@@ -254,16 +256,22 @@ async function fetchBalancesUsdForCustomers(customerIds: string[]): Promise<Map<
   return out;
 }
 
-function balanceExprSql(): Prisma.Sql {
-  return Prisma.sql`(COALESCE(o.orders_usd,0) - COALESCE(p.payments_usd,0) - COALESCE(w.withdrawals_usd,0) - COALESCE(cr.credit_usd,0))`;
+/** חוב פתוח בלבד — לא מערבבים זכות. */
+function openDebtExprSql(): Prisma.Sql {
+  return Prisma.sql`(COALESCE(o.orders_usd,0) - COALESCE(p.payments_usd,0) - COALESCE(w.withdrawals_usd,0))`;
+}
+
+function creditExprSql(): Prisma.Sql {
+  return Prisma.sql`COALESCE(cr.credit_usd,0)`;
 }
 
 function balanceFilterSql(sign: string | null): Prisma.Sql {
   const s = (sign ?? "").trim();
-  const expr = balanceExprSql();
-  if (s === "owes") return Prisma.sql`${expr} > 0.0001`;
-  if (s === "credit") return Prisma.sql`${expr} < -0.0001`;
-  if (s === "zero") return Prisma.sql`ABS(${expr}) <= 0.0001`;
+  const openDebt = openDebtExprSql();
+  const credit = creditExprSql();
+  if (s === "owes") return Prisma.sql`${openDebt} > 0.0001`;
+  if (s === "credit") return Prisma.sql`${credit} > 0.0001 AND ${openDebt} <= 0.0001`;
+  if (s === "zero") return Prisma.sql`ABS(${openDebt}) <= 0.0001 AND ${credit} <= 0.0001`;
   return Prisma.sql`TRUE`;
 }
 
@@ -288,7 +296,8 @@ export async function listCustomersSourceTable(
           COALESCE(o.orders_usd, 0) AS "ordersUsd",
           COALESCE(w.withdrawals_usd, 0) AS "withdrawalsUsd",
           COALESCE(p.payments_usd, 0) AS "paymentsUsd",
-          (COALESCE(o.orders_usd,0) - COALESCE(p.payments_usd,0) - COALESCE(w.withdrawals_usd,0) - COALESCE(cr.credit_usd,0)) AS "balanceUsd"
+          (COALESCE(o.orders_usd,0) - COALESCE(p.payments_usd,0) - COALESCE(w.withdrawals_usd,0)) AS "openDebtUsd",
+          COALESCE(cr.credit_usd, 0) AS "creditUsd"
         FROM "Customer" c
         LEFT JOIN (
           SELECT "customerId", SUM(COALESCE("totalUsd",0)) AS orders_usd
@@ -320,7 +329,7 @@ export async function listCustomersSourceTable(
         WHERE c."deletedAt" IS NULL
         AND c.id IN (SELECT id FROM "Customer" WHERE ${where})
         AND ${balanceFilterSql(query.filters?.balanceSign ?? null)}
-        ORDER BY "balanceUsd" ${Prisma.raw(sortDir)}
+        ORDER BY "openDebtUsd" ${Prisma.raw(sortDir)}
         OFFSET ${skip}
         LIMIT ${limit + 1}
       `);
@@ -376,7 +385,8 @@ export async function listCustomersSourceForExport(
     take: maxRows,
     select: customerListSelect,
   });
-  return rows.map(mapRow);
+  const balancesMap = await fetchBalancesUsdForCustomers(rows.map((c) => c.id));
+  return rows.map((c) => mapRow({ ...c, balanceUsd: balancesMap.get(c.id) ?? 0 }));
 }
 
 async function loadCustomersSourceKpisUncached(): Promise<CustomersSourceKpis> {
@@ -389,25 +399,29 @@ async function loadCustomersSourceKpisUncached(): Promise<CustomersSourceKpis> {
       prisma.customer.count({ where: { ...base, isActive: true } }),
       prisma.customer.count({ where: { ...base, createdAt: { gte: monthStart } } }),
       prisma.$queryRaw<[{ count: bigint }]>`
-        SELECT COUNT(DISTINCT c.id)::bigint AS count
+        SELECT COUNT(*)::bigint AS count
         FROM "Customer" c
+        LEFT JOIN (
+          SELECT "customerId", SUM(COALESCE("totalUsd",0)) AS orders_usd
+          FROM "Order"
+          WHERE "deletedAt" IS NULL AND "status" <> 'DEBT_WITHDRAWAL' AND "status" <> 'CANCELLED'
+          GROUP BY "customerId"
+        ) o ON o."customerId" = c.id
+        LEFT JOIN (
+          SELECT "customerId", SUM(COALESCE("debtWithdrawalUsd",0)) AS withdrawals_usd
+          FROM "Order"
+          WHERE "deletedAt" IS NULL AND "status" = 'DEBT_WITHDRAWAL'
+          GROUP BY "customerId"
+        ) w ON w."customerId" = c.id
+        LEFT JOIN (
+          SELECT "customerId", SUM(COALESCE("amountUsd",0)) AS payments_usd
+          FROM "Payment"
+          WHERE ${ACTIVE_PAID_PAYMENT_SQL}
+            AND ${CUSTOMER_DEBT_PAYMENT_BUSINESS_SQL}
+          GROUP BY "customerId"
+        ) p ON p."customerId" = c.id
         WHERE c."deletedAt" IS NULL
-          AND EXISTS (
-            SELECT 1
-            FROM "Order" o
-            WHERE o."customerId" = c.id
-              AND o."deletedAt" IS NULL
-            GROUP BY o."customerId"
-            HAVING COALESCE(SUM(COALESCE(o."totalUsd", o."amountUsd", 0)), 0)
-              > COALESCE((
-                SELECT SUM(COALESCE(p."amountUsd", 0))
-                FROM "Payment" p
-                WHERE p."customerId" = c.id
-                  AND p."isPaid" = true
-                  AND p."orderId" IS NOT NULL
-                  AND (p."businessType" IS NULL OR p."businessType" NOT IN ('ADJUSTMENT_FEE', 'CUSTOMER_CREDIT'))
-              ), 0) + 0.01
-          )
+          AND ${openDebtExprSql()} > 0.0001
       `,
     ]);
 
@@ -424,7 +438,7 @@ export const CUSTOMERS_SOURCE_KPIS_TAG = "customers-source-kpis";
 
 export const getCustomersSourceKpisCached = unstable_cache(
   () => loadCustomersSourceKpisUncached(),
-  ["customers-source-kpis-v1"],
+  ["customers-source-kpis-v2"],
   { revalidate: 120, tags: [CUSTOMERS_SOURCE_KPIS_TAG] },
 );
 
@@ -452,9 +466,10 @@ export async function getCustomerSourcePreview(customerId: string): Promise<Cust
     const { getCustomerAccountBalances, customerAccountSignedUsd } = await import(
       "@/lib/customer-account-balances"
     );
+    const { currentCustomerFinancialScope } = await import("@/lib/customer-financial-scope");
     const [orderCount, accounts] = await Promise.all([
       prisma.order.count({ where: { customerId: id, deletedAt: null } }),
-      getCustomerAccountBalances(id),
+      getCustomerAccountBalances(id, currentCustomerFinancialScope()),
     ]);
     const balance = customerAccountSignedUsd(accounts);
 

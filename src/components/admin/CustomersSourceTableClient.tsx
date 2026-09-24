@@ -214,7 +214,7 @@ export function CustomersSourceTableClient({ initialSearch = "" }: { initialSear
             <strong>{kpis.active.toLocaleString("he-IL")}</strong>
           </div>
           <div className="adm-customers-kpi-card">
-            <span className="adm-customers-kpi-lbl">לקוחות עם יתרה</span>
+            <span className="adm-customers-kpi-lbl">לקוחות עם חוב פתוח</span>
             <strong>{kpis.withBalance.toLocaleString("he-IL")}</strong>
           </div>
           <div className="adm-customers-kpi-card">
@@ -285,7 +285,7 @@ export function CustomersSourceTableClient({ initialSearch = "" }: { initialSear
             </select>
           </label>
           <label>
-            יתרה
+            חוב / זכות
             <select
               value={filters.balanceSign}
               onChange={(e) => setFilters((f) => ({ ...f, balanceSign: e.target.value as AdvancedFilters["balanceSign"] }))}
@@ -326,7 +326,7 @@ export function CustomersSourceTableClient({ initialSearch = "" }: { initialSear
                 { key: "nameAr", label: "שם בערבית", sortable: false },
                 { key: "phone", label: "טלפון", sortable: true },
                 { key: "email", label: "אימייל", sortable: false },
-                { key: "balance", label: "יתרת לקוח", sortable: true },
+                { key: "balance", label: "מצב נטו", sortable: true },
                 { key: "created", label: "הצטרפות", sortable: true },
               ].map((col) => (
                 <th key={col.key}>
@@ -440,7 +440,7 @@ export function CustomersSourceTableClient({ initialSearch = "" }: { initialSear
                 <span>הזמנות</span> {preview.orderCount}
               </p>
               <p>
-                <span>יתרה</span> <span dir="ltr">${preview.balanceUsd}</span>
+                <span>מצב נטו</span> <span dir="ltr">${preview.balanceUsd}</span>
               </p>
             </>
           ) : null}

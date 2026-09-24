@@ -132,7 +132,7 @@ export function PaymentPostSaveSummaryModal({
 
               {/* Credit card */}
               <div className={`pss-balance-card${!hasCredit ? " pss-balance-card--zero" : ""}`}>
-                <span className="pss-balance-card__label">יתרת זכות זמינה</span>
+                <span className="pss-balance-card__label">יתרת זכות</span>
                 <strong
                   className={`pss-balance-card__value ${
                     hasCredit ? "br-reset-amt--ok" : "br-reset-amt--muted"
@@ -178,8 +178,8 @@ export function PaymentPostSaveSummaryModal({
                   disabled={disabled || !hasCredit}
                   title={
                     hasCredit
-                      ? `יתרת זכות זמינה: ${money(summary.creditAvailableUsd)}`
-                      : "אין יתרת זכות זמינה"
+                      ? `יתרת זכות: ${money(summary.creditAvailableUsd)}`
+                      : "אין יתרת זכות"
                   }
                   onClick={() => onResolve("credit")}
                 >

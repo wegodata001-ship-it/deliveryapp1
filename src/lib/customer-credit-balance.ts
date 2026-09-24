@@ -14,7 +14,8 @@ import { CUSTOMER_CREDIT_SURPLUS_NOTE_PREFIX } from "@/lib/cash-control-internal
 export type CustomerCreditMovementType =
   | "OVERPAYMENT_CREDIT"
   | "CREDIT_APPLIED"
-  | "CREDIT_ADJUSTMENT";
+  | "CREDIT_ADJUSTMENT"
+  | "CREDIT_CANCELLED";
 
 export type CustomerCreditMovementRow = {
   id: string;
@@ -33,6 +34,9 @@ export type CustomerCreditMovementRow = {
   reason: string | null;
   balanceAfterUsd: number;
   createdById: string | null;
+  /** שורת ביטול — מוצגת, לא משנה running */
+  voidedUsd?: number;
+  affectsBalance?: boolean;
 };
 
 export type CustomerCreditLedgerPayload = {
@@ -78,12 +82,21 @@ export async function getCustomerCreditBalancesUsdMany(
   for (const id of ids) out.set(id, 0);
   if (ids.length === 0) return out;
 
+  const paymentDate =
+    scope.from || scope.to
+      ? {
+          ...(scope.from ? { gte: scope.from } : {}),
+          ...(scope.to ? { lte: scope.to } : {}),
+        }
+      : undefined;
+
   const rows = await findActiveCustomerPayments({
     where: {
       customerId: { in: ids },
       orderId: null,
       businessType: "CUSTOMER_CREDIT",
       ...workCountryWhere(scope),
+      ...(paymentDate ? { paymentDate } : {}),
     },
     select: { customerId: true, amountUsd: true },
   });
@@ -128,6 +141,7 @@ export async function buildCustomerCreditLedger(
         status: true,
         notes: true,
         createdById: true,
+        cancelReason: true,
       },
     }),
     prisma.auditLog.findMany({
@@ -173,24 +187,27 @@ export async function buildCustomerCreditLedger(
           ? "תשלום יתר → יתרת זכות"
           : p.notes?.trim() || null,
         createdById: p.createdById,
+        affectsBalance: true,
       });
     } else {
       raw.push({
-        id: `credit-used-${p.id}`,
+        id: `credit-cancelled-${p.id}`,
         customerId: cid,
-        dateYmd: formatLocalYmd(p.createdAt),
+        dateYmd: p.paymentDate ? formatLocalYmd(new Date(p.paymentDate)) : formatLocalYmd(p.createdAt),
         createdAt: p.createdAt.toISOString(),
-        type: "CREDIT_APPLIED",
-        actionLabel: "ניצול יתרת זכות",
+        type: "CREDIT_CANCELLED",
+        actionLabel: "יתרת זכות שבוטלה",
         sourceDocument: linkedCode,
         paymentId: p.id,
         paymentCode: p.paymentCode,
         orderId: null,
         orderNumber: null,
-        amountUsd: roundMoney2(-amt),
-        direction: "DEBIT",
-        reason: "יתרה נוצלה",
+        amountUsd: 0,
+        direction: "CREDIT",
+        reason: p.cancelReason?.trim() || "בוטל",
         createdById: p.createdById,
+        voidedUsd: roundMoney2(amt),
+        affectsBalance: false,
       });
     }
   }
@@ -229,8 +246,9 @@ export async function buildCustomerCreditLedger(
 
   let running = 0;
   const movements: CustomerCreditMovementRow[] = raw.map((row) => {
-    running = roundMoney2(running + row.amountUsd);
-    return { ...row, balanceAfterUsd: running };
+    const affects = row.affectsBalance !== false && row.type !== "CREDIT_CANCELLED";
+    if (affects) running = roundMoney2(running + row.amountUsd);
+    return { ...row, affectsBalance: affects, balanceAfterUsd: running };
   });
 
   const currentBalanceUsd = await getCustomerCreditBalanceUsd(cid, scope);

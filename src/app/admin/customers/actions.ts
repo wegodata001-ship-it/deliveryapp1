@@ -288,7 +288,8 @@ export async function getCustomerProfileAction(
   const { getCustomerAccountBalances, customerAccountSignedUsd } = await import(
     "@/lib/customer-account-balances"
   );
-  const accounts = await getCustomerAccountBalances(id);
+  const { currentCustomerFinancialScope } = await import("@/lib/customer-financial-scope");
+  const accounts = await getCustomerAccountBalances(id, currentCustomerFinancialScope());
   const signed = customerAccountSignedUsd(accounts);
   const balance = new Prisma.Decimal((-signed).toFixed(2));
 

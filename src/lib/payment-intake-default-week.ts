@@ -3,23 +3,19 @@ import {
   DEFAULT_WEEK_CODE,
   getAhWeekRange,
   getBusinessWeekClosingDate,
-  nextWeekCode,
   normalizeAhWeekCode,
 } from "@/lib/work-week";
 
 /**
- * ברירת מחדל לשבוע קליטת תשלום מתוך שבוע הבית / השבוע הגלובלי שנבחר.
+ * ברירת מחדל לשבוע קליטת תשלום = שבוע העבודה הפעיל/הנבחר.
  *
- * selectedWorkWeek (בית) = שבוע ההזמנות
- * paymentCaptureWeek = nextWeek(selectedWorkWeek)
+ * selectedWorkWeek (בית / בורר הקליטה) = שבוע הקליטה = שבוע ההזמנות.
+ * דוגמה: בית AH-141 → קליטה AH-141 → הזמנות AH-141
  *
- * דוגמה: בית AH-136 → קליטה AH-137 → הזמנות AH-136
- *
- * לא משנה את השבוע הגלובלי — רק מחשב שבוע קליטה מקומי למסך הקליטה.
+ * paymentDate לא קובע שבוע. לא nextWeek.
  */
 export function defaultPaymentIntakeWeekCode(fromHomeWeek: string = DEFAULT_WEEK_CODE): string {
-  const home = normalizeAhWeekCode(fromHomeWeek) ?? DEFAULT_WEEK_CODE;
-  return nextWeekCode(home) ?? home;
+  return normalizeAhWeekCode(fromHomeWeek) ?? DEFAULT_WEEK_CODE;
 }
 
 /** תאריך ביצוע קליטה = שבת השבוע הפיננסי (הקודם לשבוע הקליטה במסך). לא תאריך היום. */

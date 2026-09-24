@@ -38,7 +38,7 @@ export function BalanceResetCreditConfirmModal({
         </h2>
         <dl className="adm-balance-reset-credit-stats">
           <div>
-            <dt>יתרת זכות זמינה</dt>
+            <dt>יתרת זכות</dt>
             <dd dir="ltr">{formatUsdDisplay(creditUsd)}</dd>
           </div>
           <div>

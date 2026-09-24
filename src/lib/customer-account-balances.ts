@@ -4,6 +4,7 @@
  * openDebtUsd          = הזמנות פעילות − תשלומים שסוגרים חוב − משיכות
  * availableCreditUsd   = CUSTOMER_CREDIT פעיל שלא קוזז
  * commissionBalanceUsd = עמלות הזמנה + תנועות עמלה (לא תשלום שסוגר חוב)
+ * netPositionUsd       = informational בלבד (openDebt − credit) — לא קיזוז
  */
 import type { CustomerBalanceScope } from "@/lib/customer-balance-calculator";
 import {
@@ -26,6 +27,12 @@ import {
   customerFinancialStatus,
   type CustomerFinancialState,
 } from "@/lib/customer-account-balances-shared";
+import {
+  informationalNetPositionUsd,
+  normalizeCustomerAccountBalanceQuery,
+  type CustomerFinancialScope,
+  type CustomerFinancialScopeKind,
+} from "@/lib/customer-financial-scope";
 
 const EPS = 0.01;
 
@@ -37,6 +44,12 @@ export type CustomerAccountBalances = {
   totalOrdersUsd: number;
   totalPaymentsUsd: number;
   totalWithdrawalsUsd: number;
+  totalOrdersBeforeCommissionUsd: number;
+  ordersCount: number;
+  /** informational בלבד — לא מקזז זכות ולא סוגר חוב */
+  netPositionUsd: number;
+  scopeKind: CustomerFinancialScopeKind;
+  cutoffDate: string | null;
 };
 
 export {
@@ -47,6 +60,13 @@ export {
   customerFinancialStatus,
 };
 export type { CustomerAccountStatusKind, CustomerFinancialState, CustomerFinancialStatus } from "@/lib/customer-account-balances-shared";
+export {
+  currentCustomerFinancialScope,
+  currentCustomerFinancialScopeForWorkCountry,
+  historicalCustomerFinancialScope,
+  informationalNetPositionUsd,
+} from "@/lib/customer-financial-scope";
+export type { CustomerFinancialScope, CustomerFinancialScopeKind } from "@/lib/customer-financial-scope";
 
 export function financialStateFromAccounts(accounts: CustomerAccountBalances): CustomerFinancialState {
   return buildCustomerFinancialState({
@@ -56,67 +76,111 @@ export function financialStateFromAccounts(accounts: CustomerAccountBalances): C
   });
 }
 
+function assembleCustomerAccountBalances(input: {
+  customerId: string;
+  openDebtSigned: number;
+  availableCreditUsd: number;
+  commissionBalanceUsd: number;
+  totalOrdersUsd: number;
+  totalPaymentsUsd: number;
+  totalWithdrawalsUsd: number;
+  totalOrdersBeforeCommissionUsd: number;
+  ordersCount: number;
+  financial: CustomerFinancialScope;
+}): CustomerAccountBalances {
+  const openDebtUsd = input.openDebtSigned > EPS ? Number(input.openDebtSigned.toFixed(2)) : 0;
+  const availableCreditUsd = Number(input.availableCreditUsd.toFixed(2));
+  return {
+    customerId: input.customerId,
+    openDebtUsd,
+    availableCreditUsd,
+    commissionBalanceUsd: Number(input.commissionBalanceUsd.toFixed(2)),
+    totalOrdersUsd: Number(input.totalOrdersUsd.toFixed(2)),
+    totalPaymentsUsd: Number(input.totalPaymentsUsd.toFixed(2)),
+    totalWithdrawalsUsd: Number(input.totalWithdrawalsUsd.toFixed(2)),
+    totalOrdersBeforeCommissionUsd: Number(input.totalOrdersBeforeCommissionUsd.toFixed(2)),
+    ordersCount: input.ordersCount,
+    netPositionUsd: informationalNetPositionUsd(openDebtUsd, availableCreditUsd),
+    scopeKind: input.financial.kind,
+    cutoffDate: input.financial.kind === "HISTORICAL" ? (input.financial.cutoffYmd ?? null) : null,
+  };
+}
+
+function emptyAccounts(customerId: string, financial: CustomerFinancialScope): CustomerAccountBalances {
+  return assembleCustomerAccountBalances({
+    customerId,
+    openDebtSigned: 0,
+    availableCreditUsd: 0,
+    commissionBalanceUsd: 0,
+    totalOrdersUsd: 0,
+    totalPaymentsUsd: 0,
+    totalWithdrawalsUsd: 0,
+    totalOrdersBeforeCommissionUsd: 0,
+    ordersCount: 0,
+    financial,
+  });
+}
+
 export async function getCustomerAccountBalances(
   customerId: string,
-  scope: CustomerBalanceScope = {},
+  scope?: CustomerFinancialScope | CustomerBalanceScope,
 ): Promise<CustomerAccountBalances> {
+  const { financial, calc } = normalizeCustomerAccountBalanceQuery(scope);
   const cid = customerId.trim();
-  if (!cid) {
-    return {
-      customerId: "",
-      openDebtUsd: 0,
-      availableCreditUsd: 0,
-      commissionBalanceUsd: 0,
-      totalOrdersUsd: 0,
-      totalPaymentsUsd: 0,
-      totalWithdrawalsUsd: 0,
-    };
-  }
+  if (!cid) return emptyAccounts("", financial);
 
-  const [calc, availableCreditUsd, commissionBalanceUsd] = await Promise.all([
-    calculateCustomerBalance(cid, scope),
-    getCustomerCreditBalanceUsd(cid, scope),
+  const [calcRow, availableCreditUsd, commissionBalanceUsd] = await Promise.all([
+    calculateCustomerBalance(cid, calc),
+    getCustomerCreditBalanceUsd(cid, calc),
     getCustomerCommissionBalanceUsd(cid),
   ]);
 
-  const signed = Number(calc.balance.toFixed(2));
-  return {
+  return assembleCustomerAccountBalances({
     customerId: cid,
-    openDebtUsd: signed > EPS ? signed : 0,
+    openDebtSigned: Number(calcRow.balance.toFixed(2)),
     availableCreditUsd,
     commissionBalanceUsd,
-    totalOrdersUsd: Number(calc.totalOrders.toFixed(2)),
-    totalPaymentsUsd: Number(calc.totalPayments.toFixed(2)),
-    totalWithdrawalsUsd: Number(calc.totalWithdrawals.toFixed(2)),
-  };
+    totalOrdersUsd: Number(calcRow.totalOrders.toFixed(2)),
+    totalPaymentsUsd: Number(calcRow.totalPayments.toFixed(2)),
+    totalWithdrawalsUsd: Number(calcRow.totalWithdrawals.toFixed(2)),
+    totalOrdersBeforeCommissionUsd: Number(calcRow.totalOrdersBeforeCommission.toFixed(2)),
+    ordersCount: calcRow.ordersCount,
+    financial,
+  });
 }
 
 export async function getCustomerAccountBalancesMany(
   customerIds: string[],
-  scope: CustomerBalanceScope = {},
+  scope?: CustomerFinancialScope | CustomerBalanceScope,
 ): Promise<Map<string, CustomerAccountBalances>> {
+  const { financial, calc } = normalizeCustomerAccountBalanceQuery(scope);
   const ids = Array.from(new Set(customerIds.map((id) => id.trim()).filter(Boolean)));
   const out = new Map<string, CustomerAccountBalances>();
   if (ids.length === 0) return out;
 
   const [calcs, credits, commissions] = await Promise.all([
-    calculateCustomerBalances(ids, scope),
-    getCustomerCreditBalancesUsdMany(ids, scope),
+    calculateCustomerBalances(ids, calc),
+    getCustomerCreditBalancesUsdMany(ids, calc),
     getCustomerCommissionBalancesUsdMany(ids),
   ]);
 
   for (const id of ids) {
-    const calc = calcs.get(id);
-    const signed = Number((calc?.balance ?? 0).toFixed(2));
-    out.set(id, {
-      customerId: id,
-      openDebtUsd: signed > EPS ? signed : 0,
-      availableCreditUsd: credits.get(id) ?? 0,
-      commissionBalanceUsd: commissions.get(id) ?? 0,
-      totalOrdersUsd: Number((calc?.totalOrders ?? 0).toFixed(2)),
-      totalPaymentsUsd: Number((calc?.totalPayments ?? 0).toFixed(2)),
-      totalWithdrawalsUsd: Number((calc?.totalWithdrawals ?? 0).toFixed(2)),
-    });
+    const row = calcs.get(id);
+    out.set(
+      id,
+      assembleCustomerAccountBalances({
+        customerId: id,
+        openDebtSigned: Number((row?.balance ?? 0).toFixed(2)),
+        availableCreditUsd: credits.get(id) ?? 0,
+        commissionBalanceUsd: commissions.get(id) ?? 0,
+        totalOrdersUsd: Number((row?.totalOrders ?? 0).toFixed(2)),
+        totalPaymentsUsd: Number((row?.totalPayments ?? 0).toFixed(2)),
+        totalWithdrawalsUsd: Number((row?.totalWithdrawals ?? 0).toFixed(2)),
+        totalOrdersBeforeCommissionUsd: Number((row?.totalOrdersBeforeCommission ?? 0).toFixed(2)),
+        ordersCount: row?.ordersCount ?? 0,
+        financial,
+      }),
+    );
   }
   return out;
 }

@@ -420,7 +420,7 @@ type PaymentEntryResponse = {
   /** שבוע קליטה/עבודה — נפרד מ-createdAt */
   weekCode?: string | null;
   paymentDateYmd: string;
-  /** תאריך ביצוע קליטה לבקרת קופה — שבת השבוע, לא createdAt */
+  /** תאריך ביצוע קליטה לבקרת קופה — שבת השבוע הפיננסי (N−1), לא createdAt */
   intakeDateYmd?: string | null;
   paymentTimeHm: string;
   dollarRate: string | null;
@@ -443,9 +443,12 @@ type PaymentEntryResponse = {
 /** קליטה חדשה — עדיין אין שורת DB; השרת מקצה קוד מספרי לפני שמירה */
 const NEW_CAPTURE_ROW_ID = "";
 
-function createNewCaptureLoadedPayment(paymentCode: string): PaymentEntryResponse {
+function createNewCaptureLoadedPayment(
+  paymentCode: string,
+  homeWeek?: string,
+): PaymentEntryResponse {
   const now = new Date();
-  const week = defaultPaymentIntakeWeekCode();
+  const week = defaultPaymentIntakeWeekCode(homeWeek);
   const closing = defaultPaymentIntakeDateYmd(week);
   return {
     id: NEW_CAPTURE_ROW_ID,
@@ -618,7 +621,9 @@ export function PaymentModalUpdated({
   const [paymentHistoryErr, setPaymentHistoryErr] = useState<string | null>(null);
 
   /** קליטה שנטענה מ־GET /api/payments/entry או מעטפת קליטה חדשה */
-  const [loadedPayment, setLoadedPayment] = useState<PaymentEntryResponse>(() => createNewCaptureLoadedPayment(""));
+  const [loadedPayment, setLoadedPayment] = useState<PaymentEntryResponse>(() =>
+    createNewCaptureLoadedPayment("", globalWeek),
+  );
   /** קוד תשלום לתצוגה בלבד — נטען ברקע, לא מעדכן את loadedPayment (מונע remount / איבוד פוקוס) */
   const [previewPaymentCode, setPreviewPaymentCode] = useState<string | null>(null);
   const [paymentCodePreviewPending, setPaymentCodePreviewPending] = useState(true);
@@ -630,7 +635,7 @@ export function PaymentModalUpdated({
     defaultOrderSourceDateYmdForIntakeWeek(defaultPaymentIntakeWeekCode(globalWeek)),
   );
   const [editingOrderSourceDate, setEditingOrderSourceDate] = useState(false);
-  /** תאריך ביצוע קליטת תשלום — שבת סגירת שבוע הקליטה, לא היום */
+  /** תאריך ביצוע קליטת תשלום — שבת השבוע הפיננסי (N−1), לא שבת שבוע הקליטה */
   const [intakeDateYmd, setIntakeDateYmd] = useState(() =>
     defaultPaymentIntakeDateYmd(defaultPaymentIntakeWeekCode(globalWeek)),
   );
@@ -2182,7 +2187,7 @@ export function PaymentModalUpdated({
     applyIntakeWeekCode(defaultPaymentIntakeWeekCode(globalWeek), {
       reloadOrders: !!customer?.id?.trim(),
     });
-  }, [globalWeek]); // eslint-disable-line react-hooks/exhaustive-deps -- sync intake week to home→next mapping only
+  }, [globalWeek]); // eslint-disable-line react-hooks/exhaustive-deps -- sync new-capture intake week to selected work week
 
   /** בחירת לקוח מיידית — פוקוס לסכום; הזמנות נטענות ברקע בלי לאפס את הטבלה */
   const selectCustomerQuick = useCallback(
@@ -2490,7 +2495,7 @@ export function PaymentModalUpdated({
     setCancelReasonDraft("");
     setCancelNotesDraft("");
     setCancelRequestHint({ status: "none" });
-    setLoadedPayment(createNewCaptureLoadedPayment(""));
+    setLoadedPayment(createNewCaptureLoadedPayment("", globalWeek));
     clearPaymentEntryCaches();
     baselineSigRef.current = "";
     refreshPaymentCodePreview();
@@ -3201,7 +3206,7 @@ export function PaymentModalUpdated({
     setCustomerBalanceResetPending(false);
     setCommissionResetIds([]);
     setSaveErr(null);
-    setLoadedPayment(createNewCaptureLoadedPayment(savedCode));
+    setLoadedPayment(createNewCaptureLoadedPayment(savedCode, intakeWeekCode));
     setDocDraftKey(makeDocDraftKey());
     syncBaselineSoon();
     focusFirstAmountInput();
@@ -4220,6 +4225,7 @@ export function PaymentModalUpdated({
                             )}
                           </button>
                         </div>
+                        {customerFinancial.tone !== "credit" ? (
                         <div
                           className={[
                             "payment-modal-cust-summary__total",
@@ -4232,6 +4238,7 @@ export function PaymentModalUpdated({
                             {customerFinancial.headline}
                           </strong>
                         </div>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>
@@ -4314,7 +4321,7 @@ export function PaymentModalUpdated({
                     type="button"
                     className="payment-modal-week-arrow"
                     aria-label="שבוע קליטה לפי בית"
-                    title="חזרה לשבוע הקליטה לפי שבוע הבית (+1)"
+                    title="חזרה לשבוע העבודה הנבחר"
                     disabled={
                       normalizeAhWeekCode(intakeWeekCode) ===
                       normalizeAhWeekCode(defaultPaymentIntakeWeekCode(globalWeek))
@@ -4891,9 +4898,13 @@ export function PaymentModalUpdated({
                   <PaymentLiveSummaryCards
                     kpis={liveFormKpis}
                     openDebtUsd={customerOpenDebtDisplayUsd}
-                    creditUsd={displayCreditBalanceUsd}
+                    commissionUsd={displayCommissionBalanceUsd}
                     onOpenDebtClick={() => setDebtBreakdownOpen(true)}
-                    paymentBalanceDisplay={isHistoricalPaymentView ? null : accountStatusDisplay}
+                    paymentBalanceDisplay={
+                      isHistoricalPaymentView || accountStatusDisplay.state === "credit"
+                        ? null
+                        : accountStatusDisplay
+                    }
                     historicalPaymentView={isHistoricalPaymentView}
                     lines={payments}
                     rate={rateN}

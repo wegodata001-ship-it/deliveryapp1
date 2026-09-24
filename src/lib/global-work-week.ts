@@ -3,9 +3,10 @@
  *
  * globalWorkWeek = שבוע שנבחר בבית (שבוע הזמנות / דשבורד / יתרות לפי מסך).
  *
- * קליטת תשלום בלבד: paymentCaptureWeek = nextWeek(globalWorkWeek);
- * מקור הזמנות בקליטה = previousWeek(paymentCaptureWeek) — ראו payment-intake-default-week /
+ * קליטת תשלום: שבוע הקליטה = globalWorkWeek (השבוע הנבחר).
+ * מקור הזמנות בקליטה = אותו שבוע — ראו payment-intake-default-week /
  * payment-intake-week-context. אין לשנות את השבוע הגלובלי בעת כניסה לקליטה.
+ * paymentDate אינו קובע שבוע קליטה.
  *
  * sourceWeekCode כאן נשאר prev(global) לתאימות יתרות/snapshot קיימים — לא משמש
  * כברירת מחדל לשבוע הקליטה.

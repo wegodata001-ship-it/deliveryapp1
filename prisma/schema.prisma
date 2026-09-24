@@ -220,6 +220,7 @@ model Customer {
   @@index([country])
   @@index([oldCustomerCode])
   @@index([isActive, createdAt])
+  @@index([countryCode, isActive, deletedAt])
   @@index([createdAt])
   @@index([city])
 }

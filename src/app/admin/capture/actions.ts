@@ -610,9 +610,14 @@ export async function listCapturePaymentIdsForNavAction(
   return { ok: true, ids };
 }
 
-function intakeWeekCodeFromPaymentDateYmd(ymd: string): string {
-  const norm = normalizeAhWeekCode(deriveAhWeekCodeFromOrderDateYmd(ymd.trim()));
-  return norm ?? DEFAULT_WEEK_CODE;
+function intakeWeekCodeFromPaymentEntry(entry: {
+  weekCode?: string | null;
+  paymentDateYmd?: string | null;
+}): string {
+  const fromWeek = normalizeAhWeekCode(entry.weekCode ?? "");
+  if (fromWeek) return fromWeek;
+  const fromDate = normalizeAhWeekCode(deriveAhWeekCodeFromOrderDateYmd(entry.paymentDateYmd ?? ""));
+  return fromDate ?? DEFAULT_WEEK_CODE;
 }
 
 /** טעינה מרוכזת לניווט — קודי קליטה במדינה + שבוע AH + workspace לכל מסמך (פעם אחת בפתיחה) */
@@ -635,14 +640,11 @@ export async function preloadCapturePaymentNavigationCacheAction(
 
   /** רשימת ניווט — כל קודי הקליטה במדינה (לא מסונן לפי שבוע) */
   const navCodes = await listCapturePaymentCodesOrdered(wc as CapturePaymentNavCountry);
-  const entries: PaymentNavigationCacheEntryPayload[] = [];
+  const drafts: Array<PaymentNavigationCacheEntryPayload & { customerId: string }> = [];
   const hydrateByCustomerWeek = new Map<
     string,
     Awaited<ReturnType<typeof fetchPaymentIntakeCustomerOrdersAction>>
   >();
-  const { getCustomerOpenDebt, openDebtScopeForWorkCountry } = await import("@/lib/customer-open-debt");
-  const debtScope = openDebtScopeForWorkCountry(wc);
-  const openDebtByCustomer = new Map<string, number>();
 
   for (const code of navCodes) {
     const paymentId = await findCapturePaymentIdByCode(code, wc);
@@ -653,7 +655,7 @@ export async function preloadCapturePaymentNavigationCacheAction(
     const customerId = entry.customer.id?.trim();
     if (!customerId) continue;
 
-    const intakeWeekCode = intakeWeekCodeFromPaymentDateYmd(entry.paymentDateYmd);
+    const intakeWeekCode = intakeWeekCodeFromPaymentEntry(entry);
     const hydrateKey = `${customerId}|${intakeWeekCode}|${wc}`;
     let hydrate = hydrateByCustomerWeek.get(hydrateKey);
     if (!hydrate) {
@@ -662,24 +664,34 @@ export async function preloadCapturePaymentNavigationCacheAction(
     }
     if (!hydrate.ok) continue;
 
-    let openDebtSignedUsd = openDebtByCustomer.get(customerId);
-    if (openDebtSignedUsd === undefined) {
-      const debt = await getCustomerOpenDebt(customerId, debtScope);
-      openDebtSignedUsd = Number(debt.signedBalanceUsd.toFixed(2));
-      openDebtByCustomer.set(customerId, openDebtSignedUsd);
-    }
-
-    entries.push({
+    drafts.push({
       paymentCode: code,
       paymentId: entry.id,
       entry,
+      customerId,
       customerData: hydrate.customer,
       orders: hydrate.orders,
       customerPayments: hydrate.customerPayments,
       intakeWeekCode,
-      openDebtSignedUsd,
     });
   }
+
+  const { getCustomerAccountBalancesMany } = await import("@/lib/customer-account-balances");
+  const { currentCustomerFinancialScopeForWorkCountry } = await import("@/lib/customer-financial-scope");
+  const accountsByCustomer = await getCustomerAccountBalancesMany(
+    drafts.map((d) => d.customerId),
+    currentCustomerFinancialScopeForWorkCountry(wc),
+  );
+  const entries: PaymentNavigationCacheEntryPayload[] = drafts.map((d) => ({
+    paymentCode: d.paymentCode,
+    paymentId: d.paymentId,
+    entry: d.entry,
+    customerData: d.customerData,
+    orders: d.orders,
+    customerPayments: d.customerPayments,
+    intakeWeekCode: d.intakeWeekCode,
+    openDebtSignedUsd: accountsByCustomer.get(d.customerId)?.openDebtUsd ?? 0,
+  }));
 
   return { ok: true, week: weekNorm, codes: navCodes, entries };
 }
@@ -1257,11 +1269,11 @@ export async function getCustomerOrderFormExtrasAction(
   });
   if (!cust) return null;
 
-  const { openDebtScopeForWorkCountry } = await import("@/lib/customer-open-debt");
   const { getCustomerAccountBalances, financialStateFromAccounts } = await import(
     "@/lib/customer-account-balances"
   );
-  const accounts = await getCustomerAccountBalances(id, openDebtScopeForWorkCountry(workCountryRaw));
+  const { currentCustomerFinancialScopeForWorkCountry } = await import("@/lib/customer-financial-scope");
+  const accounts = await getCustomerAccountBalances(id, currentCustomerFinancialScopeForWorkCountry(workCountryRaw));
   const state = financialStateFromAccounts(accounts);
   const indexLabel = cust.oldCustomerCode?.trim() || cust.customerCode?.trim() || null;
 
@@ -1315,10 +1327,11 @@ export async function fetchCustomerOpenDebtAction(
   const { getCustomerAccountBalances, financialStateFromAccounts } = await import(
     "@/lib/customer-account-balances"
   );
+  const { currentCustomerFinancialScopeForWorkCountry } = await import("@/lib/customer-financial-scope");
   const scope = openDebtScopeForWorkCountry(workCountryRaw);
   const [debt, accounts] = await Promise.all([
     getCustomerOpenDebt(id, scope),
-    getCustomerAccountBalances(id, scope),
+    getCustomerAccountBalances(id, currentCustomerFinancialScopeForWorkCountry(workCountryRaw)),
   ]);
   const state = financialStateFromAccounts(accounts);
   return {

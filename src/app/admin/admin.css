@@ -16866,7 +16866,8 @@ select.payment-modal-inline-input {
 
 .payment-modal-orders-summary--methods .payment-modal-live-kpis,
 .payment-modal-orders-summary--methods .payment-modal-live-kpis--inline-row,
-.payment-modal-orders-summary--methods .payment-modal-live-kpis--with-open-debt {
+.payment-modal-orders-summary--methods .payment-modal-live-kpis--with-open-debt,
+.payment-modal-orders-summary--methods .payment-modal-live-kpis--with-account {
   display: flex;
   flex-flow: row nowrap;
   align-items: stretch;
@@ -17787,8 +17788,9 @@ select.payment-modal-inline-input {
   margin-top: 0;
 }
 
-.payment-modal-live-kpis--with-open-debt {
-  grid-template-columns: repeat(5, minmax(0, 1fr)) minmax(0, 1.1fr) minmax(0, 1.15fr);
+.payment-modal-live-kpis--with-open-debt,
+.payment-modal-live-kpis--with-account {
+  grid-template-columns: repeat(auto-fit, minmax(6rem, 1fr));
 }
 
 .payment-modal-live-kpi--open-debt {
@@ -18774,7 +18776,8 @@ select.payment-modal-inline-input {
   }
 
   .payment-modal-summary-row .payment-modal-live-kpis,
-  .payment-modal-summary-row .payment-modal-live-kpis--with-open-debt {
+  .payment-modal-summary-row .payment-modal-live-kpis--with-open-debt,
+  .payment-modal-summary-row .payment-modal-live-kpis--with-account {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
@@ -21338,6 +21341,26 @@ select.payment-modal-inline-input {
   width: min(620px, 94vw);
 }
 
+.adm-cust-card-scope {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+}
+
+.adm-cust-card-scope__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 800;
+  color: #1e3a8a;
+}
+
 .adm-cust-ledger-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -22619,6 +22642,10 @@ html.adm-app-shell .adm-chrome-main:has(.adm-balances-excel-page) {
 .adm-balances-error {
   flex-shrink: 0;
   margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .adm-balances-search-hint {
@@ -23293,7 +23320,9 @@ html.adm-app-shell .adm-chrome-main:has(.adm-balances-excel-page) {
 }
 
 .adm-balances-th-num--balance,
-.adm-balances-td-num--hero {
+.adm-balances-td-num--hero,
+.adm-balances-th-num--credit,
+.adm-balances-td-num--credit {
   width: auto;
   min-width: 5.25rem;
 }

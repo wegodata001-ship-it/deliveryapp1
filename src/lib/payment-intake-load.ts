@@ -533,8 +533,9 @@ export async function loadPaymentIntakeBalancesForCustomer(
   );
   const debtScope = openDebtScopeForWorkCountry(paymentWorkCountry);
 
+  const { currentCustomerFinancialScopeForWorkCountry } = await import("@/lib/customer-financial-scope");
   const [accounts, debt] = await Promise.all([
-    getCustomerAccountBalances(cid, debtScope),
+    getCustomerAccountBalances(cid, currentCustomerFinancialScopeForWorkCountry(paymentWorkCountry)),
     getCustomerOpenDebt(cid, debtScope),
   ]);
   const financial = financialStateFromAccounts(accounts);

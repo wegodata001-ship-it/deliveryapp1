@@ -67,6 +67,10 @@ import { hasLedgerRowDetail } from "@/lib/ledger-row-detail";
 import { LedgerRowDetailModal } from "@/components/admin/LedgerRowDetailModal";
 import { CustomerLedgerErrorBoundary } from "@/components/admin/CustomerLedgerErrorBoundary";
 import { formatLocalYmd } from "@/lib/work-week";
+import {
+  customerCardBalancesCutoffCaption,
+  customerCardLedgerViewMode,
+} from "@/lib/balances-week-filter";
 import { CommissionAmountButton } from "@/components/admin/CommissionAmountButton";
 import { CommissionBalancePopover } from "@/components/admin/CommissionBalancePopover";
 import { OrderCommissionDetailModal } from "@/components/admin/OrderCommissionDetailModal";
@@ -123,6 +127,8 @@ export function CustomerCardWindowBody({
   ledgerFromYmd = null,
   ledgerToYmd = null,
   ledgerSourceCountry = null,
+  ledgerSelectedWeekCode = null,
+  ledgerCutoffWeekCode = null,
   initialSnap = null,
 }: CustomerCardWindowProps) {
   const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
@@ -216,6 +222,39 @@ export function CustomerCardWindowBody({
   const [ledgerSort, setLedgerSort] = useState<CustomerLedgerDateSort>(DEFAULT_CUSTOMER_LEDGER_DATE_SORT);
   const [fromYmd, setFromYmd] = useState(ledgerFromYmd?.trim() ?? "");
   const [toYmd, setToYmd] = useState(ledgerToYmd?.trim() ?? "");
+  const parentFromYmd = ledgerFromYmd?.trim() ?? "";
+  const parentToYmd = ledgerToYmd?.trim() ?? "";
+  const parentSelectedWeek = ledgerSelectedWeekCode?.trim() ?? "";
+  const parentHasScope = Boolean(parentFromYmd || parentToYmd || parentSelectedWeek);
+  const ledgerViewMode = customerCardLedgerViewMode({
+    parentFromYmd,
+    parentToYmd,
+    currentFromYmd: fromYmd,
+    currentToYmd: toYmd,
+  });
+  const applyParentLedgerScope = useCallback(() => {
+    setFromYmd(parentFromYmd);
+    setToYmd(parentToYmd);
+    setActiveTab("ledger");
+  }, [parentFromYmd, parentToYmd]);
+  const showFullLedger = useCallback(() => {
+    setFromYmd("");
+    setToYmd("");
+    setActiveTab("ledger");
+  }, []);
+  const cardScopeTitle =
+    ledgerViewMode === "lifetime"
+      ? "כרטסת מלאה — כל ההיסטוריה"
+      : ledgerViewMode === "parent-cutoff" && parentSelectedWeek && parentToYmd && !parentFromYmd
+        ? customerCardBalancesCutoffCaption({
+            selectedWeekCode: parentSelectedWeek,
+            cutoffYmd: parentToYmd,
+          })
+        : ledgerViewMode === "parent-cutoff" && (parentFromYmd || parentToYmd)
+          ? `כרטסת ${parentFromYmd ? parentFromYmd.split("-").reverse().join("/") : "מתחילת ההיסטוריה"} — ${
+              parentToYmd ? parentToYmd.split("-").reverse().join("/") : "היום"
+            }`
+          : null;
   const [form, setForm] = useState(() => (initialSnap ? formFromSnap(initialSnap) : {
     displayName: "",
     nameAr: "",
@@ -910,6 +949,28 @@ export function CustomerCardWindowBody({
             כרטסת לקוח
           </button>
         </div>
+
+        {parentHasScope && cardScopeTitle ? (
+          <div
+            className="adm-cust-card-scope"
+            role="note"
+            data-ledger-view={ledgerViewMode}
+            data-cutoff-week={ledgerCutoffWeekCode ?? ""}
+            data-cutoff-date={parentToYmd}
+            data-selected-week={parentSelectedWeek}
+          >
+            <p className="adm-cust-card-scope__title">{cardScopeTitle}</p>
+            {ledgerViewMode === "parent-cutoff" ? (
+              <button type="button" className="adm-btn adm-btn--ghost adm-btn--xs" onClick={showFullLedger}>
+                הצג כרטסת מלאה
+              </button>
+            ) : (
+              <button type="button" className="adm-btn adm-btn--ghost adm-btn--xs" onClick={applyParentLedgerScope}>
+                {parentSelectedWeek ? `חזור לכרטסת לפי ${parentSelectedWeek}` : "חזור לכרטסת לפי שבוע העבודה"}
+              </button>
+            )}
+          </div>
+        ) : null}
 
         {msg ? <div className="adm-pay-success">{msg}</div> : null}
         {err ? <div className="adm-error adm-error--compact">{err}</div> : null}

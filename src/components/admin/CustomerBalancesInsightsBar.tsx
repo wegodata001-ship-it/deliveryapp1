@@ -80,6 +80,11 @@ export function CustomerBalancesInsightsBar({ stats, rows, totalRows, totalPages
           sub={<UsdBalanceIlsGrossText usd={openDebtUsd} exchangeRate={exchangeRate} />}
         />
         <StatCard
+          variant="credit-customers"
+          label="יתרת זכות"
+          value={usdAmount(rows.reduce((sum, r) => sum + parseMoneyStringOrZero(r.availableCreditUSD ?? "0"), 0))}
+        />
+        <StatCard
           variant="debt-customers"
           label="לקוחות בחוב"
           value={stats.withDebtCount.toLocaleString("he-IL")}

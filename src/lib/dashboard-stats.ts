@@ -209,41 +209,28 @@ async function queryUserDashboardAggregates(): Promise<{ registeredUsers: number
   });
 }
 
-/** שאילתה כבדה — Suspense נפרד; לפי מדינת עבודה בלבד */
+/** שאילתה כבדה — Suspense נפרד; לפי מדינת עבודה בלבד. אותו SSOT כמו מסך לקוח. */
 export async function countHighBalanceCustomers(
   workCountry: WorkCountryCode = DEFAULT_WORK_COUNTRY,
 ): Promise<number> {
   return withPerfTimer("dashboard.query.highBalance", async () => {
-    const rows = await prisma.$queryRaw<[{ count: bigint }]>`
-      SELECT COUNT(*)::bigint AS count
-      FROM (
-        SELECT c.id
-        FROM "Customer" c
-        WHERE c."isActive" = true
-        GROUP BY c.id
-        HAVING (
-          COALESCE((
-            SELECT SUM(COALESCE(o."totalIlsWithVat", o."totalIls", 0)::numeric)
-            FROM "Order" o
-            WHERE o."customerId" = c.id
-              AND o."deletedAt" IS NULL
-              AND o."status" <> 'CANCELLED'
-              AND o."countryCode" = ${workCountry}::"WorkCountryCode"
-          ), 0)
-          -
-          COALESCE((
-            SELECT SUM(COALESCE(p."totalIlsWithVat", p."amountIls", 0)::numeric)
-            FROM "Payment" p
-            WHERE p."customerId" = c.id
-              AND p."isPaid" = true
-              AND (p."status" IS NULL OR p."status" <> 'CANCELLED')
-              AND (p."businessType" IS NULL OR p."businessType" NOT IN ('ADJUSTMENT_FEE', 'CUSTOMER_CREDIT'))
-              AND p."countryCode" = ${workCountry}::"WorkCountryCode"
-          ), 0)
-        ) > ${HIGH_BALANCE_THRESHOLD_ILS}
-      ) AS sub
-    `;
-    return Number(rows[0]?.count ?? 0);
+    const customers = await prisma.customer.findMany({
+      where: { isActive: true, deletedAt: null },
+      select: { id: true },
+    });
+    if (customers.length === 0) return 0;
+    const { getCustomerAccountBalancesMany } = await import("@/lib/customer-account-balances");
+    const { currentCustomerFinancialScopeForWorkCountry } = await import("@/lib/customer-financial-scope");
+    const map = await getCustomerAccountBalancesMany(
+      customers.map((c) => c.id),
+      currentCustomerFinancialScopeForWorkCountry(workCountry),
+    );
+    const thresholdUsd = HIGH_BALANCE_THRESHOLD_ILS / 3;
+    let count = 0;
+    for (const row of map.values()) {
+      if (row.openDebtUsd > thresholdUsd) count += 1;
+    }
+    return count;
   });
 }
 

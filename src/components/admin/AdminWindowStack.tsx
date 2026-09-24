@@ -204,6 +204,8 @@ export function AdminWindowStack({
                     ledgerFromYmd={w.props.ledgerFromYmd}
                     ledgerToYmd={w.props.ledgerToYmd}
                     ledgerSourceCountry={w.props.ledgerSourceCountry}
+                    ledgerSelectedWeekCode={w.props.ledgerSelectedWeekCode}
+                    ledgerCutoffWeekCode={w.props.ledgerCutoffWeekCode}
                   />
                 ) : null}
                 {w.type === "createCustomer" && canCreateCustomer ? (

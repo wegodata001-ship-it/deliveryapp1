@@ -8,26 +8,25 @@ import { resolveOrderSourceWeekCode } from "@/lib/payment-intake-week-context";
 import { getAhWeekRange, getBusinessWeekClosingDate } from "@/lib/work-week";
 
 describe("defaultPaymentIntakeWeekCode", () => {
-  it("בית AH-136 → קליטה AH-137 → הזמנות AH-136", () => {
+  it("בית AH-141 → קליטה AH-141 → הזמנות AH-141", () => {
+    const payment = defaultPaymentIntakeWeekCode("AH-141");
+    assert.equal(payment, "AH-141");
+    assert.equal(resolveOrderSourceWeekCode(payment), "AH-141");
+  });
+
+  it("בית AH-136 → קליטה AH-136 (לא +1)", () => {
     const payment = defaultPaymentIntakeWeekCode("AH-136");
-    assert.equal(payment, "AH-137");
+    assert.equal(payment, "AH-136");
     assert.equal(resolveOrderSourceWeekCode(payment), "AH-136");
+    assert.notEqual(payment, "AH-137");
   });
 
-  it("בית AH-137 → קליטה AH-138 → הזמנות AH-137", () => {
-    const payment = defaultPaymentIntakeWeekCode("AH-137");
-    assert.equal(payment, "AH-138");
-    assert.equal(resolveOrderSourceWeekCode(payment), "AH-137");
-  });
-
-  it("בית AH-138 → קליטה AH-139 → הזמנות AH-138", () => {
-    const payment = defaultPaymentIntakeWeekCode("AH-138");
-    assert.equal(payment, "AH-139");
-    assert.equal(resolveOrderSourceWeekCode(payment), "AH-138");
+  it("בית AH-137 → קליטה AH-137", () => {
+    assert.equal(defaultPaymentIntakeWeekCode("AH-137"), "AH-137");
   });
 
   it("נורמליזציה של קלט", () => {
-    assert.equal(defaultPaymentIntakeWeekCode(" ah-136 "), "AH-137");
+    assert.equal(defaultPaymentIntakeWeekCode(" ah-141 "), "AH-141");
   });
 });
 
