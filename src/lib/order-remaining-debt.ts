@@ -11,6 +11,7 @@ import {
   type LedgerBalanceStatus,
   type OrderLedgerSnapshot,
 } from "@/lib/finance-data/ledger";
+import { normalizeExclusiveCustomerBooks } from "@/lib/customer-account-balances-shared";
 import type { OrderBreakdownMethodRow } from "@/lib/payment-intake";
 import { formatMoneyAmount } from "@/lib/money-format";
 import { convertDebtUsdToIlsIncludingVat } from "@/lib/usd-balance-ils-vat";
@@ -64,12 +65,20 @@ export function deriveOrderPaymentDisplayStatus(params: {
   totalUsd: number;
   paidUsd: number;
   isDebtWithdrawal?: boolean;
+  /** יתרה לגבייה אחרי משיכות + זכות — גובר על total−paid */
+  effectiveRemainingUsd?: number;
   eps?: number;
 }): OrderPaymentDisplayStatus {
   if (params.isDebtWithdrawal) return "paid";
   const eps = params.eps ?? ORDER_DEBT_EPS;
-  const total = roundOrderMoney2(params.totalUsd);
   const paid = roundOrderMoney2(params.paidUsd);
+  if (params.effectiveRemainingUsd != null && Number.isFinite(params.effectiveRemainingUsd)) {
+    const rem = roundOrderMoney2(Math.max(0, params.effectiveRemainingUsd));
+    if (rem <= eps) return "paid";
+    if (paid <= eps) return "unpaid";
+    return "partial";
+  }
+  const total = roundOrderMoney2(params.totalUsd);
   const open = computeOrderOpenDebtSignedUsd(total, paid);
   if (open <= eps) return "paid";
   if (paid <= eps) return "unpaid";
@@ -132,27 +141,90 @@ export function applyDebtWithdrawalFifoToRemainders(
   });
 }
 
-/** יתרה לגבייה לפי הזמנה אחרי תשלומים + משיכת חוב FIFO. לא running ledger. */
+/**
+ * כמה CUSTOMER_CREDIT מותר להקצות וירטואלית להזמנות.
+ * אותם כללי זכאות כמו normalizeExclusiveCustomerBooks:
+ * min(ספר הזכות הפעיל של ה-SSOT, יתרה לגבייה אחרי משיכות).
+ * לא משתמשים ביתרת זכות שאחרי exclusive — שם 101 כבר 0.
+ */
+export function creditUsdEligibleForOrderFifo(input: {
+  remainingAfterWithdrawalUsd: number;
+  availableCreditUsd: number;
+}): number {
+  const remaining = roundOrderMoney2(Math.max(0, Number(input.remainingAfterWithdrawalUsd) || 0));
+  const credit = roundOrderMoney2(Math.max(0, Number(input.availableCreditUsd) || 0));
+  const books = normalizeExclusiveCustomerBooks({
+    openDebtUsd: remaining,
+    availableCreditUsd: credit,
+  });
+  return roundOrderMoney2(Math.max(0, remaining - books.openDebtUsd));
+}
+
+function applyCollectibleBooksFifo(
+  remaindersUsd: number[],
+  withdrawalUsd: number,
+  availableCreditUsd = 0,
+): number[] {
+  const afterWithdrawal = applyDebtWithdrawalFifoToRemainders(remaindersUsd, withdrawalUsd);
+  const creditToApply = creditUsdEligibleForOrderFifo({
+    remainingAfterWithdrawalUsd: afterWithdrawal.reduce(
+      (s, n) => s + roundOrderMoney2(Math.max(0, n)),
+      0,
+    ),
+    availableCreditUsd,
+  });
+  return applyDebtWithdrawalFifoToRemainders(afterWithdrawal, creditToApply);
+}
+
+/** יתרה לגבייה לפי הזמנה אחרי תשלומים + משיכת חוב FIFO + זכות לקוח זמינה. */
 export function collectibleRemainingUsdByOrderId(
   rows: Array<{ orderId: string; remainingAfterPaymentsUsd: number }>,
   withdrawalUsd: number,
+  availableCreditUsd = 0,
 ): Map<string, number> {
-  const after = applyDebtWithdrawalFifoToRemainders(
+  const after = applyCollectibleBooksFifo(
     rows.map((row) => row.remainingAfterPaymentsUsd),
     withdrawalUsd,
+    availableCreditUsd,
   );
   return new Map(rows.map((row, index) => [row.orderId, after[index] ?? 0]));
 }
 
-/** חוב פתוח לגבייה = Σ יתרות אחרי תשלומים − משיכות מחוב. */
+/** כמה זכות הוקצתה וירטואלית לכל הזמנה (FIFO אחרי משיכות). לא כותב ל-DB. */
+export function virtualCustomerCreditAppliedUsdByOrderId(
+  rows: Array<{ orderId: string; remainingAfterPaymentsUsd: number }>,
+  withdrawalUsd: number,
+  availableCreditUsd: number,
+): Map<string, number> {
+  const afterWithdrawal = applyDebtWithdrawalFifoToRemainders(
+    rows.map((row) => row.remainingAfterPaymentsUsd),
+    withdrawalUsd,
+  );
+  const afterCredit = applyCollectibleBooksFifo(
+    rows.map((row) => row.remainingAfterPaymentsUsd),
+    withdrawalUsd,
+    availableCreditUsd,
+  );
+  return new Map(
+    rows.map((row, index) => [
+      row.orderId,
+      roundOrderMoney2(Math.max(0, (afterWithdrawal[index] ?? 0) - (afterCredit[index] ?? 0))),
+    ]),
+  );
+}
+
+/** חוב פתוח לגבייה = Σ יתרות אחרי תשלומים − משיכות − זכות זמינה. */
 export function collectibleOpenDebtAfterWithdrawalUsd(
   remaindersAfterPaymentsUsd: number[],
   withdrawalUsd: number,
+  availableCreditUsd = 0,
 ): number {
-  const sum = roundOrderMoney2(
-    remaindersAfterPaymentsUsd.reduce((s, n) => s + roundOrderMoney2(Math.max(0, Number(n) || 0)), 0),
+  const after = applyCollectibleBooksFifo(
+    remaindersAfterPaymentsUsd,
+    withdrawalUsd,
+    availableCreditUsd,
   );
-  return roundOrderMoney2(Math.max(0, sum - roundOrderMoney2(Math.max(0, Number(withdrawalUsd) || 0))));
+  return roundOrderMoney2(after.reduce((s, n) => s + roundOrderMoney2(Math.max(0, n)), 0));
 }
 
 /** «נשאר לתשלום» — סכום עמודת יתרת החוב (matched / orderViews) */
@@ -256,8 +328,9 @@ export function deriveCustomerAccountBalanceDisplay(
   exchangeRate: number,
   eps = ORDER_DEBT_EPS,
 ): PaymentBalanceDisplay {
-  const openDebtUsd = roundOrderMoney2(Math.max(0, Number(books.openDebtUsd) || 0));
-  const availableCreditUsd = roundOrderMoney2(Math.max(0, Number(books.availableCreditUsd) || 0));
+  const exclusive = normalizeExclusiveCustomerBooks(books);
+  const openDebtUsd = exclusive.openDebtUsd;
+  const availableCreditUsd = exclusive.availableCreditUsd;
   if (openDebtUsd > eps) {
     return {
       state: "debt",

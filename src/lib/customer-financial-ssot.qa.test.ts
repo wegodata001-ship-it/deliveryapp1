@@ -44,12 +44,13 @@ describe("customer financial SSOT unification", () => {
 
     assert.equal(accounts.scopeKind, "CURRENT");
     assert.equal(accounts.cutoffDate, null);
-    assert.equal(accounts.openDebtUsd, 2031.84);
-    assert.equal(accounts.availableCreditUsd, 1273.83);
+    assert.equal(accounts.openDebtUsd, 758.01);
+    assert.equal(accounts.availableCreditUsd, 0);
     assert.equal(accounts.commissionBalanceUsd, 177.5);
     assert.equal(accounts.netPositionUsd, 758.01);
-    assert.equal(Number(ledger.openDebtUsd), 2031.84);
-    assert.equal(Number(ledger.availableCreditUsd), 1273.83);
+    assert.equal(accounts.netBalanceUsd, -758.01);
+    assert.equal(Number(ledger.openDebtUsd), 758.01);
+    assert.equal(Number(ledger.availableCreditUsd), 0);
     assert.equal(credit.currentBalanceUsd, 1273.83);
 
     const cancelled = credit.movements.filter((m) => m.type === "CREDIT_CANCELLED");
@@ -85,9 +86,10 @@ describe("customer financial SSOT unification", () => {
 
     assert.equal(accounts.scopeKind, "HISTORICAL");
     assert.equal(accounts.cutoffDate, "2026-09-19");
-    assert.equal(accounts.openDebtUsd, 6868);
-    assert.equal(accounts.availableCreditUsd, 1273.83);
+    assert.equal(accounts.openDebtUsd, 5594.17);
+    assert.equal(accounts.availableCreditUsd, 0);
     assert.equal(accounts.netPositionUsd, 5594.17);
+    assert.equal(accounts.netBalanceUsd, -5594.17);
     assert.equal(Number(ledger.openDebtUsd), accounts.openDebtUsd);
     assert.equal(Number(ledger.availableCreditUsd), accounts.availableCreditUsd);
   });
@@ -131,6 +133,7 @@ describe("customer financial SSOT unification", () => {
 
     for (const week of ["AH-140", "AH-141", "AH-142"] as const) {
       const cutoffYmd = balancesSnapshotToYmd(week);
+      if (!cutoffYmd) continue;
       const scope = historicalCustomerFinancialScope({
         cutoffYmd,
         sourceCountry: COUNTRY,

@@ -18,6 +18,7 @@ import {
 } from "@/lib/customers-module";
 import { activePaidPaymentWhere, findActiveCustomerPayments } from "@/lib/payment-record-status";
 import { computeOrderOpenDebtUsd } from "@/lib/order-remaining-debt";
+import { loadCollectibleRemainingUsdByOrderId } from "@/lib/orders-list-collectible-remaining";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 import { prisma } from "@/lib/prisma";
 import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
@@ -114,7 +115,7 @@ export async function getCustomerProfileAction(
   });
   if (!customer) return null;
 
-  const [orders, payments] = await Promise.all([
+  const [orders, payments, collectibleByOrder] = await Promise.all([
     prisma.order.findMany({
       where: { customerId: id, deletedAt: null },
       orderBy: [{ orderDate: "desc" }, { createdAt: "desc" }],
@@ -149,6 +150,7 @@ export async function getCustomerProfileAction(
         ilsNote: true,
       },
     }),
+    loadCollectibleRemainingUsdByOrderId([id]),
   ]);
 
   const orderIds = orders.map((o) => o.id);
@@ -193,8 +195,13 @@ export async function getCustomerProfileAction(
     const com = o.commissionUsd ?? new Prisma.Decimal(0);
     const total = o.totalUsd ?? deal.add(com);
     const paid = paidByOrder.get(o.id) ?? new Prisma.Decimal(0);
+    const afterPayments = computeOrderOpenDebtUsd(Number(total), Number(paid));
     const remaining = new Prisma.Decimal(
-      computeOrderOpenDebtUsd(Number(total), Number(paid)).toFixed(2),
+      (
+        isDebtWithdrawalOrderStatus(o.status)
+          ? 0
+          : (collectibleByOrder.get(o.id) ?? afterPayments)
+      ).toFixed(2),
     );
     if (!isDebtWithdrawalOrderStatus(o.status)) {
       ordersTotal = ordersTotal.add(total);

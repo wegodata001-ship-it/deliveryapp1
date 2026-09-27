@@ -5,7 +5,6 @@ import {
   type PaymentIntakeMatchResult,
   type PaymentIntakeOrderBase,
 } from "@/lib/payment-intake";
-import { computeOrderOpenDebtUsd } from "@/lib/order-remaining-debt";
 
 const ALLOC_EPS = 0.02;
 
@@ -103,5 +102,8 @@ export function buildPaymentAllocationPreview(
 
 /** יתרה לפני הקצאת התשלום הנוכחי (מ-DB) */
 export function orderBalanceBeforeAllocation(row: PaymentIntakeMatchResult): number {
-  return roundMoney2(computeOrderOpenDebtUsd(row.totalAmountUsd, row.dbPaidUsd));
+  if (row.collectibleRemainingUsd != null && Number.isFinite(row.collectibleRemainingUsd)) {
+    return roundMoney2(Math.max(0, row.collectibleRemainingUsd));
+  }
+  return roundMoney2(Math.max(0, row.remainingAmount + (row.allocationUsd ?? 0)));
 }

@@ -24,12 +24,13 @@ import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { TableSkeleton } from "@/components/ui/loading";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { formatUsdDisplay, parseMoneyString, parseMoneyStringOrZero } from "@/lib/money-format";
-import { useDisplayExchangeRate } from "@/components/admin/DisplayExchangeRateContext";
-import { UsdBalanceIlsGrossText } from "@/components/admin/UsdBalanceIlsGrossText";
 import { currentSearchHref, withQuery } from "@/lib/admin-url-query";
 import { CustomerBalancesInsightsBar } from "@/components/admin/CustomerBalancesInsightsBar";
-import { rowOrdersUsdSplit } from "@/lib/customer-balances-display";
-import { buildCustomerFinancialState } from "@/lib/customer-account-balances-shared";
+import { rowNetBalanceUsd, rowOrdersUsdSplit } from "@/lib/customer-balances-display";
+import {
+  customerNetBalanceTone,
+  formatCustomerNetBalanceUsd,
+} from "@/lib/customer-account-balances-shared";
 import { ReportWeekNav } from "@/components/admin/ReportWeekNav";
 import { ORDER_COUNTRY_CODES, orderCountryLabel, type OrderCountryCode } from "@/lib/order-countries";
 import { ACTIVE_WORK_WEEK_CODE } from "@/lib/active-work-week";
@@ -43,8 +44,8 @@ import {
   balancesSnapshotToYmd,
   formatLocalYmd,
   normalizeAhWeekCode,
-  prevWeekCode,
 } from "@/lib/work-week";
+import { resolveBalancesWeekFinancialScope } from "@/lib/customer-financial-scope";
 import {
   balancesListCacheKey,
   fetchBalancesListCached,
@@ -67,6 +68,7 @@ import {
   balancesWeekQueryPatch,
   isBalancesWeekReady,
   parseBalancesWeekFromSearchParams,
+  shouldWriteBalancesLocalWeek,
 } from "@/lib/balances-week-filter";
 import { downloadBase64File } from "@/lib/pdf-export-client";
 import { CustomerCommissionResetModal } from "@/components/admin/CustomerCommissionResetModal";
@@ -87,8 +89,8 @@ const BALANCE_STATUS_OPTIONS: { value: CustomerBalanceDebtFilter; label: string 
 ];
 
 const SORT_LABELS: Record<CustomerBalanceSort, string> = {
-  balance_desc: "חוב פתוח: גבוה → נמוך",
-  balance_asc: "חוב פתוח: נמוך → גבוה",
+  balance_desc: "יתרה: חוב גדול → זכות",
+  balance_asc: "יתרה: זכות גדולה → חוב",
   name: "שם לקוח",
   orders_total: 'סה"כ הזמנות ($)',
   week_desc: "שבוע AH: גבוה → נמוך",
@@ -103,19 +105,16 @@ function moneyUsdCell(value: string): string {
   return formatUsdDisplay(parseMoneyStringOrZero(value));
 }
 
-function balanceUiFromRow(row: {
-  totalBalanceUSD: string;
-  availableCreditUSD?: string;
-}): { label: string; tone: BalanceUiTone; amount: string; usd: number } {
-  const state = buildCustomerFinancialState({
-    openDebtUsd: Math.max(0, parseMoneyStringOrZero(row.totalBalanceUSD)),
-    availableCreditUsd: Math.max(0, parseMoneyStringOrZero(row.availableCreditUSD ?? "0")),
-  });
+function balanceUiFromRow(row: CustomerBalanceRow): {
+  tone: BalanceUiTone;
+  amount: string;
+  usd: number;
+} {
+  const usd = rowNetBalanceUsd(row);
   return {
-    label: state.statusLabel,
-    tone: state.tone,
-    amount: state.amountFormatted,
-    usd: state.displayAmountUsd,
+    tone: customerNetBalanceTone(usd),
+    amount: formatCustomerNetBalanceUsd(usd),
+    usd,
   };
 }
 
@@ -123,11 +122,10 @@ function usdStatDisplay(value: string): string {
   return formatUsdDisplay(parseMoneyStringOrZero(value));
 }
 
-
-function statusChipClass(tone: BalanceUiTone): string {
-  if (tone === "debt") return "adm-bal-badge adm-bal-badge--debt";
-  if (tone === "credit") return "adm-bal-badge adm-bal-badge--credit";
-  return "adm-bal-badge adm-bal-badge--balanced";
+function netBalanceClass(tone: BalanceUiTone): string {
+  if (tone === "debt") return "adm-bal-amt--debt";
+  if (tone === "credit") return "adm-bal-amt--credit";
+  return "adm-bal-amt--balanced";
 }
 
 function balanceRowClass(tone: BalanceUiTone): string {
@@ -164,10 +162,12 @@ function balancesScopeSubtitle(
   const week = (weekCode || "").trim();
   const to = (snapshotToYmd || "").trim();
   if (week && to && /^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    const resolved = resolveBalancesWeekFinancialScope({ selectedWeekCode: week });
     return balancesCumulativeCutoffCaption({
       selectedWeekCode: week,
-      cutoffWeekCode: prevWeekCode(week),
-      cutoffYmd: to,
+      cutoffWeekCode: resolved.cutoffWeekCode || week,
+      cutoffYmd: resolved.financial.kind === "HISTORICAL" ? resolved.cutoffYmd || to : to,
+      scopeKind: resolved.financial.kind,
     });
   }
   if (to && /^\d{4}-\d{2}-\d{2}$/.test(to)) {
@@ -185,11 +185,13 @@ function isBalancesDateRangeActive(filters: Pick<BalancesFiltersState, "rangeFro
 
 function resolveBalancesQueryScope(filters: Pick<BalancesFiltersState, "weekCode" | "toYmd" | "sourceCountry">) {
   const week = normalizeAhWeekCode(filters.weekCode) ?? ACTIVE_WORK_WEEK_CODE;
+  const resolved = resolveBalancesWeekFinancialScope({ selectedWeekCode: week });
   return {
     week,
-    snapshotWeek: prevWeekCode(week),
+    snapshotWeek: week,
     country: filters.sourceCountry,
-    snapshotTo: filters.toYmd?.trim() || balancesSnapshotToYmd(week),
+    snapshotTo: resolved.cutoffYmd || filters.toYmd?.trim() || balancesSnapshotToYmd(week),
+    scopeKind: resolved.financial.kind,
   };
 }
 
@@ -210,7 +212,7 @@ function buildCustomerBalancesListQuery(
           toYmd: filters.rangeToYmd.trim() || formatLocalYmd(new Date()),
         }
       : {
-          uptoWeekCode: scope.snapshotWeek ?? undefined,
+          uptoWeekCode: scope.week,
           toYmd: scope.snapshotTo,
         }),
     sourceCountry: scope.country,
@@ -222,7 +224,7 @@ function buildCustomerBalancesListQuery(
       orderStatus: search.orderStatus,
       minBalanceIls: search.minBalanceIls,
       maxBalanceIls: search.maxBalanceIls,
-      showBalanced: search.showBalanced || undefined,
+      showBalanced: true,
       sort: filters.sort,
     },
   };
@@ -232,7 +234,7 @@ function buildCustomerBalancesListQuery(
 export type BalancesFiltersState = {
   /** שבוע עבודה שנבחר ב-UI (למשל AH-125) */
   weekCode: string;
-  /** תאריך סיום snapshot — סוף השבוע הקודם */
+  /** תאריך סיום snapshot — שבת של השבוע שנבחר */
   toYmd: string;
   /** טווח תאריכים — מתאריך (ריק = כל ההיסטוריה) */
   rangeFromYmd: string;
@@ -250,7 +252,7 @@ export type BalancesSearchDraft = {
   orderStatus: CustomerBalanceOrderStatusFilter;
   minBalanceIls: string;
   maxBalanceIls: string;
-  /** ברירת מחדל: false — לא מציג לקוחות מאוזנים */
+  /** שמור לתאימות API — «הכל» תמיד כולל מאוזנים */
   showBalanced: boolean;
 };
 
@@ -275,7 +277,7 @@ function defaultSearchDraft(): BalancesSearchDraft {
     orderStatus: "ALL",
     minBalanceIls: "",
     maxBalanceIls: "",
-    showBalanced: false,
+    showBalanced: true,
   };
 }
 
@@ -293,6 +295,12 @@ function parseStructuralFromSearchParams(sp: URLSearchParams): BalancesFiltersSt
   };
 }
 
+function initialBalancesFilters(sp: URLSearchParams): BalancesFiltersState {
+  const parsed = parseStructuralFromSearchParams(sp);
+  if (parsed.weekCode) return parsed;
+  return defaultBalancesFilters();
+}
+
 export function CustomerBalancesClient({
   canResetViaCommissions = false,
 }: {
@@ -303,7 +311,6 @@ export function CustomerBalancesClient({
   const pathname = usePathname();
   const sp = useSearchParams();
   const { openWindow, stack: adminWindowStack } = useAdminWindows();
-  const exchangeRate = useDisplayExchangeRate();
   const [tableLoading, setTableLoading] = useState(true);
   const fetchGenRef = useRef(0);
 
@@ -314,7 +321,8 @@ export function CustomerBalancesClient({
   const countryParam = sp.get("country") ?? "";
   const searchKey = sp.toString();
   const urlReady = isBalancesWeekReady(sp);
-  const [balancesFilters, setBalancesFilters] = useState<BalancesFiltersState>(defaultBalancesFilters);
+  const [balancesFilters, setBalancesFilters] = useState<BalancesFiltersState>(() => initialBalancesFilters(sp));
+  const localWeekDirtyRef = useRef(false);
   const [searchDraft, setSearchDraft] = useState<BalancesSearchDraft>(defaultSearchDraft);
   const [debouncedSearch, setDebouncedSearch] = useState<BalancesSearchDraft>(defaultSearchDraft);
   const [filterOpen, setFilterOpen] = useState(false);
@@ -363,6 +371,7 @@ export function CustomerBalancesClient({
 
   useEffect(() => {
     if (!urlReady) return;
+    if (localWeekDirtyRef.current) return;
     const parsed = parseStructuralFromSearchParams(
       new URLSearchParams({
         [BALANCES_WEEK_PARAM]: balancesWeekParam,
@@ -591,6 +600,17 @@ export function CustomerBalancesClient({
   useEffect(() => {
     if (!balancesFilters.weekCode) return;
     const snapshotTo = balancesFilters.toYmd?.trim() || balancesSnapshotToYmd(balancesFilters.weekCode);
+    const urlWeekDiffers = shouldWriteBalancesLocalWeek({
+      urlBalancesWeek: balancesWeekParam,
+      stateWeekCode: balancesFilters.weekCode,
+      userChangedLocalWeek: localWeekDirtyRef.current,
+    });
+    const rangeDirty =
+      localWeekDirtyRef.current &&
+      (balancesFromParam !== (balancesFilters.rangeFromYmd || "") ||
+        balancesRangeToParam !== (balancesFilters.rangeToYmd || "") ||
+        balancesToParam !== snapshotTo);
+    if (!urlWeekDiffers && !rangeDirty) return;
     const current = new URLSearchParams(searchKey);
     const nextHref = withQuery(
       pathname,
@@ -603,6 +623,7 @@ export function CustomerBalancesClient({
       ),
     );
     if (nextHref === currentSearchHref(pathname, current)) return;
+    localWeekDirtyRef.current = false;
     startTransition(() => {
       router.replace(nextHref, { scroll: false });
     });
@@ -631,6 +652,7 @@ export function CustomerBalancesClient({
       weekCode: normalizedWeek,
       toYmd: balancesSnapshotToYmd(normalizedWeek),
     };
+    localWeekDirtyRef.current = true;
     setBalancesFilters(nextFilters);
     setPage(1);
     const query = buildCustomerBalancesListQuery(1, nextFilters, debouncedSearch, resolveBalancesQueryScope(nextFilters));
@@ -645,6 +667,7 @@ export function CustomerBalancesClient({
   }, [balancesFilters, debouncedSearch]);
 
   function clearPageFilters() {
+    localWeekDirtyRef.current = true;
     setBalancesFilters(defaultBalancesFilters());
     setSearchDraft(defaultSearchDraft());
     setDebouncedSearch(defaultSearchDraft());
@@ -652,6 +675,7 @@ export function CustomerBalancesClient({
   }
 
   function clearAdvancedFilters() {
+    localWeekDirtyRef.current = true;
     setBalancesFilters((f) => ({
       ...f,
       rangeFromYmd: "",
@@ -664,14 +688,14 @@ export function CustomerBalancesClient({
       phone: "",
       minBalanceIls: "",
       maxBalanceIls: "",
-      showBalanced: false,
+      showBalanced: true,
     }));
     setDebouncedSearch((s) => ({
       ...s,
       phone: "",
       minBalanceIls: "",
       maxBalanceIls: "",
-      showBalanced: false,
+      showBalanced: true,
     }));
     setPage(1);
   }
@@ -680,7 +704,6 @@ export function CustomerBalancesClient({
     let count = 0;
     if (balancesFilters.rangeFromYmd.trim()) count += 1;
     if (balancesFilters.rangeToYmd.trim()) count += 1;
-    if (debouncedSearch.showBalanced) count += 1;
     if (debouncedSearch.phone.trim()) count += 1;
     if (debouncedSearch.minBalanceIls.trim()) count += 1;
     if (debouncedSearch.maxBalanceIls.trim()) count += 1;
@@ -699,7 +722,6 @@ export function CustomerBalancesClient({
     balancesFilters.sort,
     debouncedSearch.minBalanceIls,
     debouncedSearch.phone,
-    debouncedSearch.showBalanced,
     debouncedSearch.maxBalanceIls,
   ]);
 
@@ -789,7 +811,7 @@ export function CustomerBalancesClient({
     }
   }
 
-  const colCount = 11;
+  const colCount = 9;
   const stats = displayPayload?.stats;
 
   const heroActions = (
@@ -860,6 +882,7 @@ export function CustomerBalancesClient({
               type="date"
               value={balancesFilters.rangeFromYmd}
               onChange={(e) => {
+                localWeekDirtyRef.current = true;
                 setBalancesFilters((f) => ({ ...f, rangeFromYmd: e.target.value }));
                 setPage(1);
               }}
@@ -873,6 +896,7 @@ export function CustomerBalancesClient({
               type="date"
               value={balancesFilters.rangeToYmd}
               onChange={(e) => {
+                localWeekDirtyRef.current = true;
                 setBalancesFilters((f) => ({ ...f, rangeToYmd: e.target.value }));
                 setPage(1);
               }}
@@ -891,25 +915,6 @@ export function CustomerBalancesClient({
             />
           </label>
         </div>
-      </div>
-
-      <div className="adm-balances-filters-card__advanced-section">
-        <h3 className="adm-balances-filters-card__advanced-title">מצב לקוחות</h3>
-        <label className="adm-balances-field adm-balances-field--inline adm-balances-field--checkbox-adv">
-          <span className="adm-balances-checkbox-wrap">
-            <input
-              type="checkbox"
-              checked={searchDraft.showBalanced}
-              onChange={(e) => {
-                const showBalanced = e.target.checked;
-                setSearchDraft((s) => ({ ...s, showBalanced }));
-                setDebouncedSearch((s) => ({ ...s, showBalanced }));
-              }}
-            />
-            <span>הצג גם לקוחות מאוזנים</span>
-          </span>
-          <span className="adm-balances-field-hint">כולל לקוחות שחוב פתוח ויתרת זכות שלהם $0</span>
-        </label>
       </div>
 
       <div className="adm-balances-filters-card__advanced-section">
@@ -1139,53 +1144,49 @@ export function CustomerBalancesClient({
         </div>
       ) : null}
 
-      {stats ? (
-        <section className="adm-balances-fcc-kpi" dir="rtl" aria-label="סיכום פיננסי">
-          <article className="adm-balances-fcc-kpi__card">
-            <span className="adm-balances-fcc-kpi__label">סה״כ לקוחות</span>
-            <strong className="adm-balances-fcc-kpi__value">{(displayPayload?.totalRows ?? 0).toLocaleString("he-IL")}</strong>
-          </article>
-          <article className="adm-balances-fcc-kpi__card adm-balances-fcc-kpi__card--before-commission">
-            <span className="adm-balances-fcc-kpi__label">סה״כ לפני עמלה</span>
-            <strong className="adm-balances-fcc-kpi__value" dir="ltr">
-              {usdStatDisplay(stats.totalOrdersBeforeCommissionUsd)}
-            </strong>
-          </article>
-          <article className="adm-balances-fcc-kpi__card adm-balances-fcc-kpi__card--after-commission">
-            <span className="adm-balances-fcc-kpi__label">סה״כ אחרי עמלה</span>
-            <strong className="adm-balances-fcc-kpi__value" dir="ltr">
-              {usdStatDisplay(stats.totalOrdersAfterCommissionUsd)}
-            </strong>
-          </article>
-          <article className="adm-balances-fcc-kpi__card adm-balances-fcc-kpi__card--code-withdrawal">
-            <span className="adm-balances-fcc-kpi__label">סה״כ משיכה מקוד</span>
-            <strong className="adm-balances-fcc-kpi__value" dir="ltr">
-              {usdStatDisplay(stats.totalCodeWithdrawalUsd)}
-            </strong>
-          </article>
-          <article className="adm-balances-fcc-kpi__card adm-balances-fcc-kpi__card--payments">
-            <span className="adm-balances-fcc-kpi__label">סה״כ תשלומים</span>
-            <strong className="adm-balances-fcc-kpi__value" dir="ltr">
-              {usdStatDisplay(stats.totalPaymentsUsd)}
-            </strong>
-          </article>
-          <article className="adm-balances-fcc-kpi__card adm-balances-fcc-kpi__card--balance">
-            <span className="adm-balances-fcc-kpi__label">סה״כ יתרות</span>
-            <strong className="adm-balances-fcc-kpi__value" dir="ltr">
-              {usdStatDisplay(stats.totalNetBalanceUsd)}
-            </strong>
-          </article>
-        </section>
-      ) : (
-        <section className="adm-balances-fcc-kpi adm-balances-fcc-kpi--skeleton" dir="rtl" aria-busy="true" aria-label="טוען סיכום">
-          {["לקוחות", "לפני עמלה", "אחרי עמלה", "משיכה מקוד", "תשלומים", "יתרות"].map((label) => (
-            <article key={label} className="adm-balances-fcc-kpi__card adm-balances-fcc-kpi__card--skel">
-              <span className="adm-balances-fcc-kpi__label">{label}</span>
-              <strong className="adm-balances-fcc-kpi__value">—</strong>
-            </article>
-          ))}
-        </section>
-      )}
+      <section
+        className={["adm-balances-fcc-kpi", stats ? "" : "adm-balances-fcc-kpi--skeleton"].filter(Boolean).join(" ")}
+        dir="rtl"
+        aria-busy={!stats}
+        aria-label="סיכום פיננסי"
+      >
+        <article className="adm-balances-fcc-kpi__card">
+          <span className="adm-balances-fcc-kpi__label">סה״כ לקוחות</span>
+          <strong className="adm-balances-fcc-kpi__value">{(displayPayload?.totalRows ?? 0).toLocaleString("he-IL")}</strong>
+        </article>
+        <article className="adm-balances-fcc-kpi__card adm-balances-fcc-kpi__card--before-commission">
+          <span className="adm-balances-fcc-kpi__label">סה״כ לפני עמלה</span>
+          <strong className="adm-balances-fcc-kpi__value" dir="ltr">
+            {usdStatDisplay(stats?.totalOrdersBeforeCommissionUsd ?? "0.00")}
+          </strong>
+        </article>
+        <article className="adm-balances-fcc-kpi__card adm-balances-fcc-kpi__card--after-commission">
+          <span className="adm-balances-fcc-kpi__label">סה״כ אחרי עמלה</span>
+          <strong className="adm-balances-fcc-kpi__value" dir="ltr">
+            {usdStatDisplay(stats?.totalOrdersAfterCommissionUsd ?? "0.00")}
+          </strong>
+        </article>
+        <article className="adm-balances-fcc-kpi__card adm-balances-fcc-kpi__card--code-withdrawal">
+          <span className="adm-balances-fcc-kpi__label">סה״כ משיכה מקוד</span>
+          <strong className="adm-balances-fcc-kpi__value" dir="ltr">
+            {usdStatDisplay(stats?.totalCodeWithdrawalUsd ?? "0.00")}
+          </strong>
+        </article>
+        <article className="adm-balances-fcc-kpi__card adm-balances-fcc-kpi__card--payments">
+          <span className="adm-balances-fcc-kpi__label">סה״כ תשלומים</span>
+          <strong className="adm-balances-fcc-kpi__value" dir="ltr">
+            {usdStatDisplay(stats?.totalPaymentsUsd ?? "0.00")}
+          </strong>
+        </article>
+        <article
+          className={`adm-balances-fcc-kpi__card adm-balances-fcc-kpi__card--balance adm-balances-fcc-kpi__card--net-${customerNetBalanceTone(parseMoneyStringOrZero(stats?.totalNetBalanceUsd ?? "0"))}`}
+        >
+          <span className="adm-balances-fcc-kpi__label">סה״כ יתרות</span>
+          <strong className={`adm-balances-fcc-kpi__value ${netBalanceClass(customerNetBalanceTone(parseMoneyStringOrZero(stats?.totalNetBalanceUsd ?? "0")))}`} dir="ltr">
+            {formatCustomerNetBalanceUsd(parseMoneyStringOrZero(stats?.totalNetBalanceUsd ?? "0"))}
+          </strong>
+        </article>
+      </section>
 
       <div className="adm-balances-work">
         {balancesScopeSubtitle(
@@ -1251,9 +1252,7 @@ export function CustomerBalancesClient({
                 <th className="adm-balances-th-num adm-balances-th-num--withdrawal">משיכה מקוד ($)</th>
                 <th className="adm-balances-th-num adm-balances-th-num--payments">תשלומים ($)</th>
                 <th className="adm-balances-th-num adm-balances-th-num--commission">עמלות ($)</th>
-                <th className="adm-balances-th-num adm-balances-th-num--balance">חוב פתוח ($)</th>
-                <th className="adm-balances-th-num adm-balances-th-num--credit">יתרת זכות ($)</th>
-                <th className="adm-balances-th-status">מצב חשבון</th>
+                <th className="adm-balances-th-num adm-balances-th-num--balance">יתרה ($)</th>
                 <th className="adm-balances-th-actions">פעולות</th>
               </tr>
             </thead>
@@ -1323,34 +1322,10 @@ export function CustomerBalancesClient({
                         />
                       </td>
                       <td
-                        className={`adm-balances-td-num adm-balances-td-num--hero ${
-                          parseMoneyStringOrZero(r.totalBalanceUSD) > 0.01
-                            ? "adm-bal-amt--debt"
-                            : "adm-bal-amt--balanced"
-                        }`}
+                        className={`adm-balances-td-num adm-balances-td-num--hero ${netBalanceClass(ui.tone)}`}
                         dir="ltr"
                       >
-                        <span className="adm-balances-hero-usd">
-                          {formatUsdDisplay(parseMoneyStringOrZero(r.totalBalanceUSD))}
-                        </span>
-                        <UsdBalanceIlsGrossText
-                          usd={parseMoneyStringOrZero(r.totalBalanceUSD)}
-                          exchangeRate={exchangeRate}
-                          className="adm-balances-ils-gross"
-                        />
-                      </td>
-                      <td
-                        className={`adm-balances-td-num adm-balances-td-num--credit ${
-                          parseMoneyStringOrZero(r.availableCreditUSD ?? "0") > 0.01
-                            ? "adm-bal-amt--credit"
-                            : "adm-bal-amt--balanced"
-                        }`}
-                        dir="ltr"
-                      >
-                        {formatUsdDisplay(parseMoneyStringOrZero(r.availableCreditUSD ?? "0"))}
-                      </td>
-                      <td className="adm-balances-td-status">
-                        <span className={statusChipClass(ui.tone)}>{ui.label}</span>
+                        <span className="adm-balances-hero-usd">{ui.amount}</span>
                       </td>
                       <td className="adm-balances-td-actions">
                         <div className="adm-balances-row-actions">
@@ -1398,11 +1373,10 @@ export function CustomerBalancesClient({
                 <p className="adm-balances-preview-meta">
                   <span>הזמנות</span> {preview.ordersCount}
                   <span className="adm-balances-preview-sep">·</span>
-                  <span>חוב פתוח</span>{" "}
-                  <span dir="ltr">{formatUsdDisplay(parseMoneyStringOrZero(hoverRow?.totalBalanceUSD ?? "0"))}</span>
-                  <span className="adm-balances-preview-sep">·</span>
-                  <span>יתרת זכות</span>{" "}
-                  <span dir="ltr">{formatUsdDisplay(parseMoneyStringOrZero(hoverRow?.availableCreditUSD ?? "0"))}</span>
+                  <span>יתרה</span>{" "}
+                  <span dir="ltr">
+                    {hoverRow ? formatCustomerNetBalanceUsd(rowNetBalanceUsd(hoverRow)) : "$0.00"}
+                  </span>
                 </p>
                 <p className="adm-balances-preview-meta">{preview.lastPaymentLabel}</p>
               </>
@@ -1462,6 +1436,11 @@ export function CustomerBalancesClient({
         customerId={commissionDetailCustomer?.customerId ?? null}
         customerLabel={commissionDetailCustomer?.customerName ?? null}
         previewBalanceUsd={commissionDetailCustomer?.commissionUsd ?? null}
+        toYmd={
+          resolveBalancesQueryScope(balancesFilters).scopeKind === "HISTORICAL"
+            ? resolveBalancesQueryScope(balancesFilters).snapshotTo
+            : null
+        }
         onClose={() => setCommissionDetailCustomer(null)}
         onOpenOrderDetail={(orderId, orderNumber) => {
           setCommissionDetailCustomer(null);

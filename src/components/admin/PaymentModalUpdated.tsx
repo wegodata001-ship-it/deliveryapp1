@@ -46,7 +46,6 @@ import { PaymentIntakeDeviationModal } from "@/components/admin/PaymentIntakeDev
 import { usePaymentIntakePlanningViews } from "@/hooks/usePaymentIntakePlanningViews";
 import {
   computeOrderOpenDebtUsd,
-  deriveCustomerAccountBalanceDisplay,
   derivePaymentBalanceDisplay,
   formatPaymentBalanceIlsLine,
   formatPaymentBalanceUsdLine,
@@ -54,7 +53,6 @@ import {
 } from "@/lib/order-remaining-debt";
 import {
   computePaymentIntakeApplyUsd,
-  customerBooksAfterPaymentApply,
   isExistingPaymentUnchanged,
   isExistingSavedPayment,
   paymentIntakeCustomerOpenDebtUsd,
@@ -62,6 +60,8 @@ import {
   paymentIntakeDebtBeforePaymentUsd,
 } from "@/lib/payment-intake-customer-debt";
 import { buildCustomerFinancialState } from "@/lib/customer-account-balances-shared";
+import { buildPaymentPreview } from "@/lib/payment-intake-preview";
+import { convertDebtUsdToIlsIncludingVat } from "@/lib/usd-balance-ils-vat";
 import { softRefreshPaymentIntakeOrders } from "@/lib/payment-intake-orders-source";
 import { PaymentDocumentRateIcons } from "@/components/admin/PaymentDocumentRateIcons";
 import { attachDraftDocumentsAction } from "@/app/admin/documents/actions";
@@ -1307,32 +1307,48 @@ export function PaymentModalUpdated({
     return derivePaymentBalanceDisplay(paymentBalanceSignedUsd, rateN);
   }, [paymentBalanceSignedUsd, rateN]);
 
+  const paymentPreview = useMemo(
+    () =>
+      buildPaymentPreview({
+        financialState: {
+          openDebtUsd: customerBalanceResetPending ? 0 : customerOpenDebtSignedUsd,
+          availableCreditUsd: displayCreditBalanceUsd,
+          commissionBalanceUsd: displayCommissionBalanceUsd,
+        },
+        draftPaymentUsd: isHistoricalPaymentView
+          ? 0
+          : isExistingPayment
+            ? Math.max(0, paymentApplyUsd)
+            : Math.max(0, totals.totalUsd),
+        selectedOrders: customerBalanceResetPending ? [] : orders,
+        selectedOrdersRemainingUsd: customerBalanceResetPending ? 0 : undefined,
+        useExistingCredit: pendingCreditApplyUsd > 0.01,
+      }),
+    [
+      customerBalanceResetPending,
+      customerOpenDebtSignedUsd,
+      displayCreditBalanceUsd,
+      displayCommissionBalanceUsd,
+      isHistoricalPaymentView,
+      isExistingPayment,
+      paymentApplyUsd,
+      totals.totalUsd,
+      orders,
+      pendingCreditApplyUsd,
+    ],
+  );
+
   const accountStatusDisplay = useMemo((): PaymentBalanceDisplay => {
-    const applyUsd = isHistoricalPaymentView
-      ? 0
-      : isExistingPayment
-        ? computePaymentIntakeApplyUsd({
-            isExistingPayment: true,
-            formTotalUsd: totals.totalUsd,
-            savedBaselineTotalUsd: savedBaselinePaymentTotalUsd,
-          })
-        : roundMoney2(Math.max(0, totals.totalUsd));
-    const books = customerBooksAfterPaymentApply({
-      openDebtUsd: customerOpenDebtDisplayUsd,
-      availableCreditUsd: displayCreditBalanceAfterApplyUsd,
-      applyUsd,
-      surplusToCredit: true,
-    });
-    return deriveCustomerAccountBalanceDisplay(books, rateN);
-  }, [
-    isHistoricalPaymentView,
-    isExistingPayment,
-    totals.totalUsd,
-    savedBaselinePaymentTotalUsd,
-    customerOpenDebtDisplayUsd,
-    displayCreditBalanceAfterApplyUsd,
-    rateN,
-  ]);
+    const remaining = paymentPreview.remainingDebt;
+    return {
+      state: remaining > 0.01 ? "debt" : "cleared",
+      title: "נשאר לתשלום",
+      statusHint: remaining > 0.01 ? undefined : "אין יתרה פתוחה",
+      balanceUsdSigned: remaining,
+      displayUsd: remaining,
+      displayIls: convertDebtUsdToIlsIncludingVat(remaining, rateN),
+    };
+  }, [paymentPreview.remainingDebt, rateN]);
 
   /** תצוגה חיה — יתרה לאחר הקצאת התשלום (חתום: שלילי = עודף) */
   const openDebtAfterPaymentPreview = useMemo(() => {
@@ -1345,7 +1361,9 @@ export function PaymentModalUpdated({
     const remainingAfterPayment = paymentBalanceSignedUsd;
     let openCommissionUsd = 0;
     for (const o of orders) {
-      const rem = computeOrderOpenDebtUsd(Number(o.totalAmountUsd), Number(o.dbPaidUsd));
+      const rem = Number.isFinite(Number(o.dbRemainingUsd))
+        ? Math.max(0, Number(o.dbRemainingUsd))
+        : computeOrderOpenDebtUsd(Number(o.totalAmountUsd), Number(o.dbPaidUsd));
       if (rem <= 0.01) continue;
       openCommissionUsd += Number(o.commissionUsd) || 0;
     }
@@ -3099,13 +3117,14 @@ export function PaymentModalUpdated({
       if (alloc > 0.001) {
         const newPaid = roundMoney2(parseMoneyStringOrZero(o.dbPaidUsd) + alloc);
         const total = parseMoneyStringOrZero(o.totalAmountUsd);
-        const newRem = computeOrderOpenDebtUsd(total, newPaid);
+        const prevRem = parseMoneyStringOrZero(o.dbRemainingUsd);
+        const newRem = roundMoney2(Math.max(0, prevRem - alloc));
         row = {
           ...row,
           dbPaidUsd: newPaid.toFixed(2),
           dbRemainingUsd: newRem.toFixed(2),
           lastPaymentDateYmd: savedDateYmd,
-          status: debtStatus(newPaid, total),
+          status: debtStatus(newPaid, total, newRem),
         };
       }
       return row;
@@ -3160,7 +3179,7 @@ export function PaymentModalUpdated({
     setCustomerBalanceResetPending(false);
     setIncludedIds(null);
     setCustomer((cur) => (cur ? { ...cur, customerBalanceUsd: res.saved.customerBalanceUsd } : cur));
-    setCustomerOpenDebtSignedUsd(Math.max(0, openDebtAfterPaymentPreview.remainingAfterPayment));
+    if (customer.id) void refreshCustomerOpenDebt(customer.id);
 
     if (savedPaymentId) {
       // קישור מסמכים שהועלו תחת מפתח טיוטה ל-paymentId האמיתי (לפני remount של הפאנל).
@@ -4900,11 +4919,8 @@ export function PaymentModalUpdated({
                     openDebtUsd={customerOpenDebtDisplayUsd}
                     commissionUsd={displayCommissionBalanceUsd}
                     onOpenDebtClick={() => setDebtBreakdownOpen(true)}
-                    paymentBalanceDisplay={
-                      isHistoricalPaymentView || accountStatusDisplay.state === "credit"
-                        ? null
-                        : accountStatusDisplay
-                    }
+                    paymentBalanceDisplay={accountStatusDisplay}
+                    overpaymentUsd={paymentPreview.projectedOverpayment}
                     historicalPaymentView={isHistoricalPaymentView}
                     lines={payments}
                     rate={rateN}

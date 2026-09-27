@@ -3,9 +3,31 @@
  * netPosition הוא מידע בלבד; לא מקזז זכות מחוב.
  */
 import type { OrderSourceCountry } from "@prisma/client";
-import type { CustomerBalanceScope } from "@/lib/customer-balance-calculator";
-import { endOfLocalDay, formatLocalYmd, parseLocalDate } from "@/lib/work-week";
-import { openDebtScopeForWorkCountry } from "@/lib/customer-open-debt";
+import {
+  endOfLocalDay,
+  formatLocalYmd,
+  getAhWeekRange,
+  getWeekCodeForLocalDate,
+  normalizeAhWeekCode,
+  parseLocalDate,
+} from "@/lib/work-week";
+import {
+  DEFAULT_WORK_COUNTRY,
+  normalizeWorkCountryCode,
+  orderSourceCountryFromWorkCountry,
+} from "@/lib/work-country";
+
+/** תואם CustomerBalanceScope — בלי לייבא את מנוע החישוב (server-only). */
+export type CustomerFinancialCalcScope = {
+  from?: Date | null;
+  to?: Date | null;
+  sourceCountry?: OrderSourceCountry | null;
+  orderStatuses?: string[] | null;
+  metrics?: {
+    onQuery?: (kind: "orders" | "payments", ms: number) => void;
+    onTransform?: (kind: "orders" | "payments", ms: number) => void;
+  };
+};
 
 export type CustomerFinancialScopeKind = "CURRENT" | "HISTORICAL";
 
@@ -16,7 +38,7 @@ export type CustomerFinancialScope = {
   fromYmd?: string | null;
   sourceCountry?: OrderSourceCountry | null;
   orderStatuses?: string[] | null;
-  metrics?: CustomerBalanceScope["metrics"];
+  metrics?: CustomerFinancialCalcScope["metrics"];
 };
 
 export function currentCustomerFinancialScope(
@@ -30,7 +52,9 @@ export function currentCustomerFinancialScopeForWorkCountry(
 ): CustomerFinancialScope {
   return {
     kind: "CURRENT",
-    sourceCountry: openDebtScopeForWorkCountry(workCountry).sourceCountry ?? null,
+    sourceCountry: orderSourceCountryFromWorkCountry(
+      normalizeWorkCountryCode(workCountry) ?? DEFAULT_WORK_COUNTRY,
+    ),
   };
 }
 
@@ -39,7 +63,7 @@ export function historicalCustomerFinancialScope(input: {
   fromYmd?: string | null;
   sourceCountry?: OrderSourceCountry | null;
   orderStatuses?: string[] | null;
-  metrics?: CustomerBalanceScope["metrics"];
+  metrics?: CustomerFinancialCalcScope["metrics"];
 }): CustomerFinancialScope {
   return {
     kind: "HISTORICAL",
@@ -51,6 +75,50 @@ export function historicalCustomerFinancialScope(input: {
   };
 }
 
+export type BalancesWeekFinancialScope = {
+  weekCode: string;
+  cutoffYmd: string;
+  cutoffWeekCode: string;
+  financial: CustomerFinancialScope;
+};
+
+/**
+ * חוזה שבוע יתרות: בחירת AH-N => cutoff שבת של N.
+ * שבוע נוכחי/עתידי = CURRENT. שבוע שעבר = HISTORICAL עד 23:59:59 של השבת.
+ */
+export function resolveBalancesWeekFinancialScope(input: {
+  selectedWeekCode: string;
+  sourceCountry?: OrderSourceCountry | null;
+  orderStatuses?: string[] | null;
+  metrics?: CustomerFinancialCalcScope["metrics"];
+  now?: Date;
+}): BalancesWeekFinancialScope {
+  const weekCode = normalizeAhWeekCode(input.selectedWeekCode) ?? "";
+  const cutoffYmd = weekCode ? (getAhWeekRange(weekCode)?.to ?? "") : "";
+  const now = input.now ?? new Date();
+  const today = formatLocalYmd(now);
+  const currentWeek = getWeekCodeForLocalDate(now);
+  const isLive = !weekCode || !cutoffYmd || cutoffYmd >= today || weekCode === currentWeek;
+  const financial = isLive
+    ? {
+        ...currentCustomerFinancialScope(input.sourceCountry),
+        orderStatuses: input.orderStatuses ?? null,
+        metrics: input.metrics,
+      }
+    : historicalCustomerFinancialScope({
+        cutoffYmd,
+        sourceCountry: input.sourceCountry ?? null,
+        orderStatuses: input.orderStatuses ?? null,
+        metrics: input.metrics,
+      });
+  return {
+    weekCode,
+    cutoffYmd,
+    cutoffWeekCode: weekCode,
+    financial,
+  };
+}
+
 export function informationalNetPositionUsd(openDebtUsd: number, availableCreditUsd: number): number {
   const debt = Number.isFinite(openDebtUsd) ? openDebtUsd : 0;
   const credit = Number.isFinite(availableCreditUsd) ? availableCreditUsd : 0;
@@ -58,13 +126,13 @@ export function informationalNetPositionUsd(openDebtUsd: number, availableCredit
 }
 
 export function isCustomerFinancialScope(
-  scope: CustomerFinancialScope | CustomerBalanceScope | null | undefined,
+  scope: CustomerFinancialScope | CustomerFinancialCalcScope | null | undefined,
 ): scope is CustomerFinancialScope {
   return Boolean(scope && typeof scope === "object" && "kind" in scope);
 }
 
 /** המרת חוזה פיננסי ל-scope של מנוע החישוב (אותם כללים). */
-export function toCustomerBalanceCalcScope(scope: CustomerFinancialScope): CustomerBalanceScope {
+export function toCustomerBalanceCalcScope(scope: CustomerFinancialScope): CustomerFinancialCalcScope {
   if (scope.kind === "CURRENT") {
     return {
       sourceCountry: scope.sourceCountry ?? null,
@@ -88,8 +156,8 @@ export function toCustomerBalanceCalcScope(scope: CustomerFinancialScope): Custo
  * `to` בלי kind → HISTORICAL. בלי תאריך → CURRENT.
  */
 export function normalizeCustomerAccountBalanceQuery(
-  scope?: CustomerFinancialScope | CustomerBalanceScope | null,
-): { financial: CustomerFinancialScope; calc: CustomerBalanceScope } {
+  scope?: CustomerFinancialScope | CustomerFinancialCalcScope | null,
+): { financial: CustomerFinancialScope; calc: CustomerFinancialCalcScope } {
   if (!scope) {
     const financial = currentCustomerFinancialScope();
     return { financial, calc: toCustomerBalanceCalcScope(financial) };

@@ -3,6 +3,7 @@
  * יתרה נוכחית = SUM(getCustomerCommissionMovements הפעילים).
  */
 import { prisma } from "@/lib/prisma";
+import type { CustomerBalanceScope } from "@/lib/customer-balance-calculator";
 import { isLegacyCommissionOrderMutationFee } from "@/lib/customer-commission-balance-shared";
 import {
   computeOrderCommissionBreakdown,
@@ -25,15 +26,29 @@ export {
   sumActiveCommissionMovementUsd,
 } from "@/lib/customer-commission-movements";
 
+function commissionDateFilter(scope: CustomerBalanceScope = {}): { gte?: Date; lte?: Date } | undefined {
+  if (!scope.from && !scope.to) return undefined;
+  return {
+    ...(scope.from ? { gte: scope.from } : {}),
+    ...(scope.to ? { lte: scope.to } : {}),
+  };
+}
+
 export async function getCustomerCommissionMovements(
   customerId: string,
+  scope: CustomerBalanceScope = {},
 ): Promise<CommissionMovementRow[]> {
   const cid = customerId.trim();
   if (!cid) return [];
+  const dateFilter = commissionDateFilter(scope);
 
   const [orders, fees] = await Promise.all([
     prisma.order.findMany({
-      where: { customerId: cid, deletedAt: null },
+      where: {
+        customerId: cid,
+        deletedAt: null,
+        ...(dateFilter ? { orderDate: dateFilter } : {}),
+      },
       orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],
       select: {
         id: true,
@@ -44,7 +59,10 @@ export async function getCustomerCommissionMovements(
       },
     }),
     prisma.paymentAdjustmentFee.findMany({
-      where: { customerId: cid },
+      where: {
+        customerId: cid,
+        ...(dateFilter ? { createdAt: dateFilter } : {}),
+      },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       select: {
         id: true,
@@ -89,6 +107,7 @@ const EPS = 0.001;
 /** בונה תנועות עמלה מאותו מקור כמו Fee SSOT. */
 export async function buildCustomerCommissionLedger(
   customerId: string,
+  scope: CustomerBalanceScope = {},
 ): Promise<CustomerCommissionLedgerPayload> {
   const cid = customerId.trim();
   if (!cid) {
@@ -101,10 +120,15 @@ export async function buildCustomerCommissionLedger(
     };
   }
 
+  const dateFilter = commissionDateFilter(scope);
   const [movements, orders, fees] = await Promise.all([
-    getCustomerCommissionMovements(cid),
+    getCustomerCommissionMovements(cid, scope),
     prisma.order.findMany({
-      where: { customerId: cid, deletedAt: null },
+      where: {
+        customerId: cid,
+        deletedAt: null,
+        ...(dateFilter ? { orderDate: dateFilter } : {}),
+      },
       orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],
       select: {
         id: true,
@@ -113,7 +137,11 @@ export async function buildCustomerCommissionLedger(
       },
     }),
     prisma.paymentAdjustmentFee.findMany({
-      where: { customerId: cid, status: { not: "CANCELLED" } },
+      where: {
+        customerId: cid,
+        status: { not: "CANCELLED" },
+        ...(dateFilter ? { createdAt: dateFilter } : {}),
+      },
       select: {
         orderId: true,
         amountUsd: true,

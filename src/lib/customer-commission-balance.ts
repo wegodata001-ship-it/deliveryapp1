@@ -6,6 +6,7 @@
  */
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import type { CustomerBalanceScope } from "@/lib/customer-balance-calculator";
 import { activePaidPaymentWhere } from "@/lib/payment-record-status-shared";
 import { computeOrderOpenDebtUsd, roundOrderMoney2 } from "@/lib/order-remaining-debt";
 import { computeCommissionResetPreviewNumbers } from "@/lib/customer-commission-reset-preview";
@@ -13,6 +14,14 @@ import { isLegacyCommissionOrderMutationFee } from "@/lib/customer-commission-ba
 import { getCustomerCommissionMovements } from "@/lib/customer-commission-ledger";
 import { sumActiveCommissionMovementUsd } from "@/lib/customer-commission-movements";
 import { OrderStatus as OS } from "@prisma/client";
+
+function commissionDateFilter(scope: CustomerBalanceScope = {}): { gte?: Date; lte?: Date } | undefined {
+  if (!scope.from && !scope.to) return undefined;
+  return {
+    ...(scope.from ? { gte: scope.from } : {}),
+    ...(scope.to ? { lte: scope.to } : {}),
+  };
+}
 
 export type CustomerOpenDebtOrderRow = {
   orderId: string;
@@ -35,29 +44,42 @@ const EPS = 0.01;
 
 export { computeCommissionResetPreviewNumbers } from "@/lib/customer-commission-reset-preview";
 
-export async function getCustomerCommissionBalanceUsd(customerId: string): Promise<number> {
+export async function getCustomerCommissionBalanceUsd(
+  customerId: string,
+  scope: CustomerBalanceScope = {},
+): Promise<number> {
   const cid = customerId.trim();
   if (!cid) return 0;
-  const movements = await getCustomerCommissionMovements(cid);
+  const movements = await getCustomerCommissionMovements(cid, scope);
   return sumActiveCommissionMovementUsd(movements);
 }
 
 export async function getCustomerCommissionBalancesUsdMany(
   customerIds: string[],
+  scope: CustomerBalanceScope = {},
 ): Promise<Map<string, number>> {
   const ids = Array.from(new Set(customerIds.map((id) => id.trim()).filter(Boolean)));
   const out = new Map<string, number>();
   for (const id of ids) out.set(id, 0);
   if (ids.length === 0) return out;
 
+  const dateFilter = commissionDateFilter(scope);
   const [orderAggs, feeRows] = await Promise.all([
     prisma.order.groupBy({
       by: ["customerId"],
-      where: { customerId: { in: ids }, deletedAt: null },
+      where: {
+        customerId: { in: ids },
+        deletedAt: null,
+        ...(dateFilter ? { orderDate: dateFilter } : {}),
+      },
       _sum: { commissionUsd: true },
     }),
     prisma.paymentAdjustmentFee.findMany({
-      where: { customerId: { in: ids }, status: { not: "CANCELLED" } },
+      where: {
+        customerId: { in: ids },
+        status: { not: "CANCELLED" },
+        ...(dateFilter ? { createdAt: dateFilter } : {}),
+      },
       select: { customerId: true, amountUsd: true, userChoice: true },
     }),
   ]);
@@ -119,6 +141,10 @@ export async function loadCustomerOpenDebtOrdersFifo(
   for (const row of paidAgg) {
     if (row.orderId) paidByOrder.set(row.orderId, Number(row._sum.amountUsd ?? 0));
   }
+  const { loadCollectibleRemainingUsdByOrderId } = await import(
+    "@/lib/orders-list-collectible-remaining"
+  );
+  const collectibleByOrder = await loadCollectibleRemainingUsdByOrderId([cid]);
 
   const open: CustomerOpenDebtOrderRow[] = [];
   for (const o of orders) {
@@ -126,7 +152,9 @@ export async function loadCustomerOpenDebtOrdersFifo(
     const com = Number(o.commissionUsd ?? 0);
     const total = Number(o.totalUsd ?? deal + com);
     const paid = paidByOrder.get(o.id) ?? 0;
-    const remaining = roundOrderMoney2(computeOrderOpenDebtUsd(total, paid));
+    const remaining = roundOrderMoney2(
+      collectibleByOrder.get(o.id) ?? computeOrderOpenDebtUsd(total, paid),
+    );
     if (remaining <= EPS) continue;
     open.push({
       orderId: o.id,

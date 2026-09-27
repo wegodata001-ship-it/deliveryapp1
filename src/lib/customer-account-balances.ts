@@ -1,10 +1,11 @@
 /**
- * SSOT יחיד לחשבונות לקוח — שלושה חשבונות נפרדים, בלי ערבוב.
+ * SSOT יחיד לחשבונות לקוח.
  *
- * openDebtUsd          = הזמנות פעילות − תשלומים שסוגרים חוב − משיכות
- * availableCreditUsd   = CUSTOMER_CREDIT פעיל שלא קוזז
- * commissionBalanceUsd = עמלות הזמנה + תנועות עמלה (לא תשלום שסוגר חוב)
- * netPositionUsd       = informational בלבד (openDebt − credit) — לא קיזוז
+ * grossDebt            = הזמנות פעילות − תשלומים שסוגרים חוב − משיכות
+ *   (CUSTOMER_CREDIT לא נספר כאן — אין double-count)
+ * grossCredit          = CUSTOMER_CREDIT פעיל שלא קוזז
+ * אחרי קיזוז: חוב או זכות, לעולם לא שניהם.
+ * commissionBalanceUsd = ספר עמלות נפרד
  */
 import type { CustomerBalanceScope } from "@/lib/customer-balance-calculator";
 import {
@@ -25,6 +26,10 @@ import {
   customerAccountSignedUsd,
   customerAccountStatusLabel,
   customerFinancialStatus,
+  normalizeExclusiveCustomerBooks,
+  assertExclusiveCustomerBooks,
+  formatCustomerNetBalanceUsd,
+  customerNetBalanceTone,
   type CustomerFinancialState,
 } from "@/lib/customer-account-balances-shared";
 import {
@@ -46,8 +51,10 @@ export type CustomerAccountBalances = {
   totalWithdrawalsUsd: number;
   totalOrdersBeforeCommissionUsd: number;
   ordersCount: number;
-  /** informational בלבד — לא מקזז זכות ולא סוגר חוב */
+  /** debt − credit אחרי קיזוז (חיובי = חוב, שלילי = זכות) */
   netPositionUsd: number;
+  /** יתרה לתצוגה: שלילי = חוב, חיובי = זכות */
+  netBalanceUsd: number;
   scopeKind: CustomerFinancialScopeKind;
   cutoffDate: string | null;
 };
@@ -58,6 +65,10 @@ export {
   customerAccountSignedUsd,
   customerAccountStatusLabel,
   customerFinancialStatus,
+  normalizeExclusiveCustomerBooks,
+  assertExclusiveCustomerBooks,
+  formatCustomerNetBalanceUsd,
+  customerNetBalanceTone,
 };
 export type { CustomerAccountStatusKind, CustomerFinancialState, CustomerFinancialStatus } from "@/lib/customer-account-balances-shared";
 export {
@@ -65,8 +76,13 @@ export {
   currentCustomerFinancialScopeForWorkCountry,
   historicalCustomerFinancialScope,
   informationalNetPositionUsd,
+  resolveBalancesWeekFinancialScope,
 } from "@/lib/customer-financial-scope";
-export type { CustomerFinancialScope, CustomerFinancialScopeKind } from "@/lib/customer-financial-scope";
+export type {
+  BalancesWeekFinancialScope,
+  CustomerFinancialScope,
+  CustomerFinancialScopeKind,
+} from "@/lib/customer-financial-scope";
 
 export function financialStateFromAccounts(accounts: CustomerAccountBalances): CustomerFinancialState {
   return buildCustomerFinancialState({
@@ -88,19 +104,23 @@ function assembleCustomerAccountBalances(input: {
   ordersCount: number;
   financial: CustomerFinancialScope;
 }): CustomerAccountBalances {
-  const openDebtUsd = input.openDebtSigned > EPS ? Number(input.openDebtSigned.toFixed(2)) : 0;
-  const availableCreditUsd = Number(input.availableCreditUsd.toFixed(2));
+  const grossDebt = input.openDebtSigned > EPS ? Number(input.openDebtSigned.toFixed(2)) : 0;
+  const books = normalizeExclusiveCustomerBooks({
+    openDebtUsd: grossDebt,
+    availableCreditUsd: input.availableCreditUsd,
+  });
   return {
     customerId: input.customerId,
-    openDebtUsd,
-    availableCreditUsd,
+    openDebtUsd: books.openDebtUsd,
+    availableCreditUsd: books.availableCreditUsd,
     commissionBalanceUsd: Number(input.commissionBalanceUsd.toFixed(2)),
     totalOrdersUsd: Number(input.totalOrdersUsd.toFixed(2)),
     totalPaymentsUsd: Number(input.totalPaymentsUsd.toFixed(2)),
     totalWithdrawalsUsd: Number(input.totalWithdrawalsUsd.toFixed(2)),
     totalOrdersBeforeCommissionUsd: Number(input.totalOrdersBeforeCommissionUsd.toFixed(2)),
     ordersCount: input.ordersCount,
-    netPositionUsd: informationalNetPositionUsd(openDebtUsd, availableCreditUsd),
+    netPositionUsd: books.netPositionUsd,
+    netBalanceUsd: books.netBalanceUsd,
     scopeKind: input.financial.kind,
     cutoffDate: input.financial.kind === "HISTORICAL" ? (input.financial.cutoffYmd ?? null) : null,
   };
@@ -132,7 +152,7 @@ export async function getCustomerAccountBalances(
   const [calcRow, availableCreditUsd, commissionBalanceUsd] = await Promise.all([
     calculateCustomerBalance(cid, calc),
     getCustomerCreditBalanceUsd(cid, calc),
-    getCustomerCommissionBalanceUsd(cid),
+    getCustomerCommissionBalanceUsd(cid, calc),
   ]);
 
   return assembleCustomerAccountBalances({
@@ -161,7 +181,7 @@ export async function getCustomerAccountBalancesMany(
   const [calcs, credits, commissions] = await Promise.all([
     calculateCustomerBalances(ids, calc),
     getCustomerCreditBalancesUsdMany(ids, calc),
-    getCustomerCommissionBalancesUsdMany(ids),
+    getCustomerCommissionBalancesUsdMany(ids, calc),
   ]);
 
   for (const id of ids) {

@@ -16,6 +16,7 @@ type Props = {
   customerId: string | null;
   customerLabel?: string | null;
   previewBalanceUsd?: number | null;
+  toYmd?: string | null;
   onClose: () => void;
   onOpenOrderDetail?: (orderId: string, orderNumber: string) => void;
   onOpenPayment?: (paymentId: string, paymentCode: string) => void;
@@ -26,6 +27,7 @@ export function CommissionBalancePopover({
   customerId,
   customerLabel,
   previewBalanceUsd,
+  toYmd,
   onClose,
   onOpenOrderDetail,
   onOpenPayment,
@@ -48,7 +50,7 @@ export function CommissionBalancePopover({
     if (!cid) return;
     setBusy(true);
     setErr(null);
-    const res = await fetchCustomerCommissionLedgerClient(cid);
+    const res = await fetchCustomerCommissionLedgerClient(cid, toYmd);
     setBusy(false);
     if (!res.ok) {
       setErr(res.error);
@@ -58,7 +60,7 @@ export function CommissionBalancePopover({
     setOrderRows(res.orderRows);
     setOrderSummary(res.orderSummary);
     setSavedBalanceUsd(res.currentBalanceUsd);
-  }, [customerId]);
+  }, [customerId, toYmd]);
 
   useEffect(() => {
     if (!open || !customerId?.trim()) return;

@@ -27,8 +27,8 @@ function scopeMatchesPath(scope: WorkWeekScreenScope, pathname: string): boolean
 }
 
 /**
- * מסנכרן פרמטרי מסך (ordersWeek / balancesWeek) לשבוע העבודה הגלובלי (?week=).
- * בכל מסך הפילטר המקומי הוא SSOT — לא לדרוס ניווט שבוע מקומי, ולא לקרוא refresh.
+ * זורע פרמטרי מסך (ordersWeek / balancesWeek) אם חסרים.
+ * יתרות: אחרי שיש balancesWeek — לא לגעת בו, גם אם week= הגלובלי שונה.
  */
 export function useEnsureActiveWorkWeekOnEnter(scope: WorkWeekScreenScope): void {
   const pathname = usePathname();

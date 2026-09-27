@@ -16867,15 +16867,15 @@ select.payment-modal-inline-input {
 .payment-modal-orders-summary--methods .payment-modal-live-kpis,
 .payment-modal-orders-summary--methods .payment-modal-live-kpis--inline-row,
 .payment-modal-orders-summary--methods .payment-modal-live-kpis--with-open-debt,
-.payment-modal-orders-summary--methods .payment-modal-live-kpis--with-account {
-  display: flex;
-  flex-flow: row nowrap;
+.payment-modal-orders-summary--methods .payment-modal-live-kpis--with-account,
+.payment-modal-orders-summary--methods .payment-modal-live-kpis--fixed-six {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   align-items: stretch;
   width: 100%;
-  min-width: min-content;
   gap: 6px;
   margin: 0;
-  grid-template-columns: unset;
+  overflow: hidden;
 }
 
 .payment-modal-orders-summary--methods .payment-modal-live-kpi {
@@ -17789,8 +17789,20 @@ select.payment-modal-inline-input {
 }
 
 .payment-modal-live-kpis--with-open-debt,
-.payment-modal-live-kpis--with-account {
-  grid-template-columns: repeat(auto-fit, minmax(6rem, 1fr));
+.payment-modal-live-kpis--with-account,
+.payment-modal-live-kpis--fixed-six {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.payment-modal-live-overpay {
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #ecfdf5;
+  color: #047857;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  text-align: center;
 }
 
 .payment-modal-live-kpi--open-debt {
@@ -18806,8 +18818,9 @@ select.payment-modal-inline-input {
     font-size: 1.1rem;
   }
 
-  .payment-modal-orders-summary--methods .payment-modal-live-kpis {
-    flex-wrap: nowrap;
+  .payment-modal-orders-summary--methods .payment-modal-live-kpis,
+  .payment-modal-orders-summary--methods .payment-modal-live-kpis--fixed-six {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 
   .payment-modal-orders-summary--methods .payment-modal-live-kpi__amount-k {
@@ -24757,6 +24770,18 @@ select.adm-balances-input {
 
 .adm-balances-fcc-kpi__card--balance .adm-balances-fcc-kpi__value {
   color: #92400e;
+}
+
+.adm-balances-fcc-kpi__card--net-debt .adm-balances-fcc-kpi__value {
+  color: #dc2626;
+}
+
+.adm-balances-fcc-kpi__card--net-credit .adm-balances-fcc-kpi__value {
+  color: #15803d;
+}
+
+.adm-balances-fcc-kpi__card--net-balanced .adm-balances-fcc-kpi__value {
+  color: #475569;
 }
 
 .adm-balances-fcc-kpi__card--code-withdrawal {

@@ -10,7 +10,6 @@ import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import {
   endOfLocalDay,
   formatLocalYmd,
-  getAhWeekRange,
   normalizeAhWeekCode,
   normalizeYmdRangePair,
   parseLocalDate,
@@ -37,17 +36,19 @@ import {
 } from "@/lib/customer-balances-reconciliation";
 import {
   customerAccountSignedUsd,
-  customerAccountStatusLabel,
+  formatCustomerNetBalanceUsd,
+  matchesCustomerNetBalanceFilter,
 } from "@/lib/customer-account-balances-shared";
 import {
   getCustomerAccountBalances,
   getCustomerAccountBalancesMany,
   type CustomerAccountBalances,
 } from "@/lib/customer-account-balances";
-import { historicalCustomerFinancialScope } from "@/lib/customer-financial-scope";
-import { getLayoutFinancialSettings } from "@/lib/admin-layout-cache";
-import { displayDollarRateNumber } from "@/lib/display-dollar-rate";
-import { convertDebtUsdToIlsIncludingVat } from "@/lib/usd-balance-ils-vat";
+import {
+  currentCustomerFinancialScope,
+  historicalCustomerFinancialScope,
+  resolveBalancesWeekFinancialScope,
+} from "@/lib/customer-financial-scope";
 import { buildCustomerCommissionResetPreview } from "@/lib/customer-commission-balance";
 import { resetCustomerOutstandingBalancesAction } from "@/app/admin/payments-updated/actions";
 import { applyCustomerCreditToCommission } from "@/lib/apply-customer-credit-to-commission";
@@ -173,8 +174,10 @@ export type CustomerBalanceRow = {
   /** תשלום שהתקבל בפועל בטווח: סגירת חוב + יתרת זכות מתשלום יתר. לא clamp. */
   totalPaymentsUSD: string;
   totalBalanceUSD: string;
-  /** SSOT — יתרת זכות נפרדת מהחוב */
+  /** SSOT — יתרת זכות נפרדת מהחוב (פנימי / audit) */
   availableCreditUSD: string;
+  /** SSOT — יתרה אחת לתצוגה: שלילי = חוב, חיובי = זכות */
+  netBalanceUsd: string;
   /** SSOT — יתרת עמלות נפרדת מהחוב */
   commissionBalanceUSD: string;
   totalOrdersILS: string;
@@ -291,9 +294,6 @@ const ORDER_PHASE_FILTER_VALUES = new Set<CustomerBalanceOrderPhaseFilter>([
 
 /** חוב בדולר מתחת לסף — "יתרה נמוכה" */
 const LOW_DEBT_USD = 5;
-/** סף יתרה מאוזנת — ABS(balance) ≤ EPS נחשב 0 */
-const BALANCE_ZERO_EPS = 0.0001;
-const BALANCE_ZERO_EPS_DECIMAL = new Prisma.Decimal(String(BALANCE_ZERO_EPS));
 /** חוב בש״ח מעליו — נספר ב־KPI "יתרה גבוהה" */
 const HIGH_DEBT_ILS = 15_000;
 
@@ -469,33 +469,15 @@ function resolveDebtFilter(query: CustomerBalanceQuery): CustomerBalanceDebtFilt
     : "ALL";
 }
 
-/** סינון מוקדם — לפי SSOT, לא נוסחה מקומית */
+/** סינון UI בלבד — אחרי רשימת הלקוחות + SSOT. «הכל» לא מעלים מאוזנים. */
 function filterCustomerIdsByBalanceScope(
   customerIds: string[],
   accountsByCustomer: Map<string, CustomerAccountBalances>,
   debtFilter: CustomerBalanceDebtFilter,
-  showBalanced: boolean,
 ): string[] {
-  return customerIds.filter((id) => {
-    const accounts = accountsByCustomer.get(id);
-    const openDebt = accounts?.openDebtUsd ?? 0;
-    const credit = accounts?.availableCreditUsd ?? 0;
-    const isZero = openDebt <= BALANCE_ZERO_EPS && credit <= BALANCE_ZERO_EPS;
-
-    if (debtFilter === "OWES") return openDebt > BALANCE_ZERO_EPS;
-    if (debtFilter === "CREDIT") return credit > BALANCE_ZERO_EPS && openDebt <= BALANCE_ZERO_EPS;
-    if (debtFilter === "BALANCED") return isZero;
-
-    if (!showBalanced && isZero) return false;
-    return true;
-  });
-}
-
-function rowHasNonZeroBalance(row: CustomerBalanceRow): boolean {
-  const signed = rowBalanceUsdNumber(row.signedUsd);
-  if (Math.abs(signed) > BALANCE_ZERO_EPS) return true;
-  if (rowBalanceUsdNumber(row.availableCreditUSD) > BALANCE_ZERO_EPS) return true;
-  return Math.abs(rowBalanceUsdNumber(row.totalBalanceUSD)) > BALANCE_ZERO_EPS;
+  return customerIds.filter((id) =>
+    matchesCustomerNetBalanceFilter(accountsByCustomer.get(id)?.netBalanceUsd ?? 0, debtFilter),
+  );
 }
 
 function rowOrdersTotalNumber(totalOrdersUSD: string): number {
@@ -513,11 +495,10 @@ function matchesDebtFilter(row: CustomerBalanceRow, filter: CustomerBalanceDebtF
   const signed = rowSignedIlsNumber(row);
   const auto = row.autoStatus;
   const eps = 0.01;
-  const openDebt = Math.max(0, rowBalanceUsdNumber(row.totalBalanceUSD));
-  const credit = rowBalanceUsdNumber(row.availableCreditUSD);
-  if (filter === "OWES") return openDebt > eps;
-  if (filter === "CREDIT") return credit > eps && openDebt <= eps;
-  if (filter === "BALANCED") return openDebt <= eps && credit <= eps;
+  const net = rowBalanceUsdNumber(row.netBalanceUsd);
+  if (filter === "OWES" || filter === "CREDIT" || filter === "BALANCED") {
+    return matchesCustomerNetBalanceFilter(net, filter);
+  }
   if (filter === "PAID_FULL") return auto === "PAID" && Math.abs(signed) <= eps;
   if (filter === "PARTIAL") return auto === "PARTIAL";
   if (filter === "NOT_PAID") return auto === "NOT_PAID";
@@ -559,7 +540,7 @@ function stableCacheValue(value: unknown): unknown {
 }
 
 function stableCacheKey(value: unknown): string {
-  return JSON.stringify(stableCacheValue(value));
+  return `v4-all-customers:${JSON.stringify(stableCacheValue(value))}`;
 }
 
 function getCachedBalancesPayload(key: string): CustomerBalancesPayload | null {
@@ -751,10 +732,8 @@ function computeBalanceStats(rows: CustomerBalanceRow[]): CustomerBalancesPayloa
   let totalNetBalanceUsd = new Prisma.Decimal(0);
   const eps = 0.01;
   for (const r of rows) {
-    const openDebt = Math.max(0, rowBalanceUsdNumber(r.totalBalanceUSD));
-    const creditUsd = rowBalanceUsdNumber(r.availableCreditUSD);
-    const businessBal = openDebt > eps ? openDebt : creditUsd > eps ? -creditUsd : 0;
-    const businessBalUsd = businessBal;
+    const net = rowBalanceUsdNumber(r.netBalanceUsd);
+    const businessBalUsd = net;
     const signed = rowSignedIlsNumber(r);
     totalLifetimeOrdersUsd = totalLifetimeOrdersUsd.add(
       new Prisma.Decimal(rowBalanceUsdNumber(r.lifetimeOrdersUSD).toFixed(4)),
@@ -771,20 +750,20 @@ function computeBalanceStats(rows: CustomerBalanceRow[]): CustomerBalancesPayloa
     totalNetBalanceUsd = totalNetBalanceUsd.add(new Prisma.Decimal(businessBalUsd.toFixed(4)));
     totalPayments = totalPayments.add(new Prisma.Decimal(rowPaymentsTotalNumber(r.totalPaymentsUSD).toFixed(4)));
     totalPaymentsUsd = totalPaymentsUsd.add(new Prisma.Decimal(rowBalanceUsdNumber(r.totalPaymentsUSD).toFixed(4)));
-    if (businessBal > eps) {
-      totalDebt = totalDebt.add(new Prisma.Decimal(businessBal.toFixed(4)));
+    if (net < -eps) {
+      totalDebt = totalDebt.add(new Prisma.Decimal(Math.abs(net).toFixed(4)));
       withDebt++;
-      if (businessBal > HIGH_DEBT_ILS) highDebt++;
-    } else if (businessBal < -eps) {
-      totalCredit = totalCredit.add(new Prisma.Decimal(Math.abs(businessBal).toFixed(4)));
+      if (Math.abs(net) > HIGH_DEBT_ILS) highDebt++;
+    } else if (net > eps) {
+      totalCredit = totalCredit.add(new Prisma.Decimal(net.toFixed(4)));
       withCredit++;
     } else {
       noDebt++;
     }
-    if (businessBalUsd > eps) totalDebtUsd = totalDebtUsd.add(new Prisma.Decimal(businessBalUsd.toFixed(4)));
-    else if (businessBalUsd < -eps) totalCreditUsd = totalCreditUsd.add(new Prisma.Decimal(Math.abs(businessBalUsd).toFixed(4)));
+    if (net < -eps) totalDebtUsd = totalDebtUsd.add(new Prisma.Decimal(Math.abs(net).toFixed(4)));
+    else if (net > eps) totalCreditUsd = totalCreditUsd.add(new Prisma.Decimal(net.toFixed(4)));
     if (r.autoStatus === "PARTIAL") partial++;
-    if (r.autoStatus === "NOT_PAID" && businessBal > eps) notPaid++;
+    if (r.autoStatus === "NOT_PAID" && net < -eps) notPaid++;
     if (rowPaymentsTotalNumber(r.totalPaymentsUSD) > eps) withPayments++;
   }
   const afterFeesN = Number(totalOrdersAfterCommissionUsd.toFixed(4));
@@ -937,35 +916,21 @@ async function listCustomerBalancesActionImpl(
 
   const filterParseT0 = Date.now();
   const lifetime = query.lifetime === true;
-  const uptoNorm = normalizeAhWeekCode(query.uptoWeekCode?.trim() || null);
-  const uptoRange = uptoNorm ? getAhWeekRange(uptoNorm) : null;
-  const cumulativeThrough = uptoRange?.to ? endOfLocalDay(uptoRange.to) : null;
-  const userToEnd = query.toYmd?.trim() ? endOfLocalDay(query.toYmd.trim()) : undefined;
+  const weekNorm = normalizeAhWeekCode(query.weekCode?.trim() || null);
+  const dateRangeFilterActive =
+    !lifetime && Boolean(query.fromYmd?.trim() || (query.toYmd?.trim() && !weekNorm));
 
   let orderDateFilter: Prisma.DateTimeFilter | undefined;
   let paymentDateFilter: Prisma.DateTimeFilter | undefined;
-
-  const dateRangeFilterActive =
-    !lifetime &&
-    !cumulativeThrough &&
-    Boolean(query.fromYmd?.trim() || query.toYmd?.trim());
+  let weekFinancial = weekNorm
+    ? resolveBalancesWeekFinancialScope({ selectedWeekCode: weekNorm })
+    : null;
 
   if (lifetime) {
-    /** דוח יתרות חי — תשלומים/הזמנות עד היום; toYmd ב-URL הוא תווית שבוע בלבד */
-    const lteBound = endOfLocalDay(formatLocalYmd(new Date()));
-    orderDateFilter = { lte: lteBound };
-    paymentDateFilter = { lte: lteBound };
-  } else if (cumulativeThrough) {
-    const lteBound = userToEnd != null && userToEnd.getTime() < cumulativeThrough.getTime() ? userToEnd : cumulativeThrough;
-    orderDateFilter = {
-      ...(query.fromYmd?.trim() ? { gte: parseLocalDate(query.fromYmd.trim()) } : {}),
-      lte: lteBound,
-    };
-    paymentDateFilter = {
-      ...(query.fromYmd?.trim() ? { gte: parseLocalDate(query.fromYmd.trim()) } : {}),
-      lte: lteBound,
-    };
-  } else if (query.fromYmd?.trim() || query.toYmd?.trim()) {
+    weekFinancial = null;
+    orderDateFilter = undefined;
+    paymentDateFilter = undefined;
+  } else if (dateRangeFilterActive) {
     let fromYmd = query.fromYmd?.trim() ?? "";
     let toYmd = query.toYmd?.trim() ?? "";
     if (fromYmd && toYmd) {
@@ -981,6 +946,11 @@ async function listCustomerBalancesActionImpl(
       ...(fromYmd ? { gte: parseLocalDate(fromYmd) } : {}),
       ...(toYmd ? { lte: endOfLocalDay(toYmd) } : {}),
     };
+    weekFinancial = null;
+  } else if (weekFinancial?.financial.kind === "HISTORICAL" && weekFinancial.cutoffYmd) {
+    const lteBound = endOfLocalDay(weekFinancial.cutoffYmd);
+    orderDateFilter = { lte: lteBound };
+    paymentDateFilter = { lte: lteBound };
   }
 
   const countryNorm = normalizeOrderSourceCountry(query.sourceCountry || null);
@@ -1010,7 +980,8 @@ async function listCustomerBalancesActionImpl(
     country: countryScope.workCountry,
     sourceCountry: countryScope.sourceCountry,
     week: query.weekCode?.trim() || null,
-    uptoWeek: uptoNorm,
+    scopeKind: weekFinancial?.financial.kind ?? (dateRangeFilterActive ? "HISTORICAL" : "CURRENT"),
+    cutoff: weekFinancial?.cutoffYmd ?? query.toYmd?.trim() ?? null,
     from: query.fromYmd?.trim() || null,
     to: query.toYmd?.trim() || null,
     lifetime,
@@ -1049,9 +1020,6 @@ async function listCustomerBalancesActionImpl(
     deletedAt: null,
     countryCode: countryScope.workCountry,
     sourceCountry: countryScope.sourceCountry,
-    ...(!lifetime && !cumulativeThrough && !dateRangeFilterActive && query.weekCode?.trim()
-      ? { weekCode: query.weekCode.trim() }
-      : {}),
     ...(orderDateFilter ? { orderDate: orderDateFilter } : {}),
   };
 
@@ -1059,9 +1027,6 @@ async function listCustomerBalancesActionImpl(
     ...activePaidPaymentWhere,
     countryCode: countryScope.workCountry,
     orderId: { not: null },
-    ...(!lifetime && !cumulativeThrough && !dateRangeFilterActive && query.weekCode?.trim()
-      ? { weekCode: query.weekCode.trim() }
-      : {}),
     ...(paymentDateFilter ? { paymentDate: paymentDateFilter } : {}),
     order: {
       deletedAt: null,
@@ -1169,49 +1134,53 @@ async function listCustomerBalancesActionImpl(
   } as const;
 
   const debtFilter = resolveDebtFilter(query);
-  const showBalanced = query.filters?.showBalanced === true;
 
-  const cutoffYmd = scopeTo ? formatLocalYmd(scopeTo) : "";
-  const fromYmd = scopeFrom ? formatLocalYmd(scopeFrom) : "";
-  const feesT0 = Date.now();
-  const accountsByCustomer = await getCustomerAccountBalancesMany(
-    customerIds,
-    cutoffYmd
-      ? historicalCustomerFinancialScope({
-          cutoffYmd,
-          fromYmd: fromYmd || null,
+  const ssotMetrics = {
+    onQuery: (kind: "orders" | "payments", ms: number) => {
+      countPrismaQuery(`calculateCustomerBalances.${kind}`);
+      if (kind === "orders") {
+        fetchOrdersMs += ms;
+        ordersQueryMs += ms;
+      } else {
+        fetchPaymentsMs += ms;
+        paymentsQueryMs += ms;
+      }
+    },
+    onTransform: (kind: "orders" | "payments", ms: number) => {
+      if (kind === "orders") ordersTransformMs += ms;
+      else paymentsTransformMs += ms;
+    },
+  };
+  const rangeFromYmd = scopeFrom ? formatLocalYmd(scopeFrom) : "";
+  const rangeToYmd = scopeTo ? formatLocalYmd(scopeTo) : "";
+  const accountsScope = dateRangeFilterActive && rangeToYmd
+    ? historicalCustomerFinancialScope({
+        cutoffYmd: rangeToYmd,
+        fromYmd: rangeFromYmd || null,
+        sourceCountry: orderCountryPrisma ?? null,
+        orderStatuses: orderStatusList,
+        metrics: ssotMetrics,
+      })
+    : weekNorm && !lifetime
+      ? resolveBalancesWeekFinancialScope({
+          selectedWeekCode: weekNorm,
           sourceCountry: orderCountryPrisma ?? null,
           orderStatuses: orderStatusList,
-          metrics: {
-            onQuery: (kind, ms) => {
-              countPrismaQuery(`calculateCustomerBalances.${kind}`);
-              if (kind === "orders") {
-                fetchOrdersMs += ms;
-                ordersQueryMs += ms;
-              } else {
-                fetchPaymentsMs += ms;
-                paymentsQueryMs += ms;
-              }
-            },
-            onTransform: (kind, ms) => {
-              if (kind === "orders") ordersTransformMs += ms;
-              else paymentsTransformMs += ms;
-            },
-          },
-        })
+          metrics: ssotMetrics,
+        }).financial
       : {
-          kind: "CURRENT",
-          sourceCountry: orderCountryPrisma ?? null,
+          ...currentCustomerFinancialScope(orderCountryPrisma ?? null),
           orderStatuses: orderStatusList,
-        },
-  );
+          metrics: ssotMetrics,
+        };
+  const feesT0 = Date.now();
+  const accountsByCustomer = await getCustomerAccountBalancesMany(customerIds, accountsScope);
   feesQueryMs = Date.now() - feesT0;
 
   const scopedCustomerIds = filterCustomerIdsByBalanceScope(
     customerIds,
     accountsByCustomer,
     debtFilter,
-    showBalanced,
   );
   const scopedCustomerIdSet = new Set(scopedCustomerIds);
   const scopedCustomers = customers.filter((c) => scopedCustomerIdSet.has(c.id));
@@ -1287,9 +1256,6 @@ async function listCustomerBalancesActionImpl(
             businessType: "CUSTOMER_CREDIT",
             customerId: { in: chunk },
             countryCode: countryScope.workCountry,
-            ...(!lifetime && !cumulativeThrough && !dateRangeFilterActive && query.weekCode?.trim()
-              ? { weekCode: query.weekCode.trim() }
-              : {}),
             ...(paymentDateFilter ? { paymentDate: paymentDateFilter } : {}),
           },
           select: {
@@ -1472,6 +1438,7 @@ async function listCustomerBalancesActionImpl(
       totalPaymentsUSD: money(new Prisma.Decimal(actualPaymentsUsd.toFixed(2))),
       totalBalanceUSD: money(balUsdDec),
       availableCreditUSD: money(new Prisma.Decimal(availableCreditUsd.toFixed(2))),
+      netBalanceUsd: money(new Prisma.Decimal((accounts?.netBalanceUsd ?? 0).toFixed(2))),
       commissionBalanceUSD: money(new Prisma.Decimal(commissionBalanceUsd.toFixed(2))),
       totalOrdersILS: money(expectedIls),
       totalPaymentsILS: money(receivedIls),
@@ -1499,10 +1466,6 @@ async function listCustomerBalancesActionImpl(
   calculateBalancesMs += Date.now() - calcT0;
 
   let filtered = rows.filter((r) => matchesDebtFilter(r, debtFilter));
-
-  if (!showBalanced && debtFilter !== "BALANCED") {
-    filtered = filtered.filter((r) => rowHasNonZeroBalance(r));
-  }
 
   if (query.filters?.hasPayments) {
     const epsPay = 0.01;
@@ -1595,8 +1558,8 @@ async function listCustomerBalancesActionImpl(
 
   const totalsT0 = Date.now();
   const sorted = [...working].sort((a, b) => {
-    if (sort === "balance_desc") return rowSignedIlsNumber(b) - rowSignedIlsNumber(a);
-    if (sort === "balance_asc") return rowSignedIlsNumber(a) - rowSignedIlsNumber(b);
+    if (sort === "balance_desc") return rowBalanceUsdNumber(a.netBalanceUsd) - rowBalanceUsdNumber(b.netBalanceUsd);
+    if (sort === "balance_asc") return rowBalanceUsdNumber(b.netBalanceUsd) - rowBalanceUsdNumber(a.netBalanceUsd);
     if (sort === "orders_total") return rowOrdersTotalNumber(b.totalOrdersUSD) - rowOrdersTotalNumber(a.totalOrdersUSD);
     if (sort === "week_desc") return (b.maxAhWeekNum || 0) - (a.maxAhWeekNum || 0) || a.customerName.localeCompare(b.customerName, "he");
     if (sort === "week_asc") return (a.maxAhWeekNum || 0) - (b.maxAhWeekNum || 0) || a.customerName.localeCompare(b.customerName, "he");
@@ -1892,24 +1855,10 @@ export async function exportCustomerBalancesAction(
       "אחרי עמלה ($)",
       "משיכה מקוד ($)",
       "סה\"כ תשלומים ($)",
-      "חוב פתוח ($)",
-      "יתרת זכות ($)",
-      "חוב פתוח (₪ כולל מע״מ)",
-      "סטטוס",
+      "עמלות ($)",
+      "יתרה ($)",
     ];
-    const financial = await getLayoutFinancialSettings();
-    const exportRate = displayDollarRateNumber(financial);
     const data = payload.rows.map((r) => {
-      const openDebt = Math.max(0, rowBalanceUsdNumber(r.totalBalanceUSD));
-      const credit = rowBalanceUsdNumber(r.availableCreditUSD);
-      const status = customerAccountStatusLabel({
-        openDebtUsd: openDebt,
-        availableCreditUsd: credit,
-      });
-      const ilsGross =
-        openDebt > 0.01 && exportRate > 0
-          ? convertDebtUsdToIlsIncludingVat(openDebt, exportRate).toFixed(2)
-          : "";
       return [
         r.customerCode ?? "—",
         r.customerName,
@@ -1917,10 +1866,8 @@ export async function exportCustomerBalancesAction(
         r.totalOrdersUSD,
         r.codeWithdrawalUSD,
         r.totalPaymentsUSD,
-        r.totalBalanceUSD,
-        r.availableCreditUSD,
-        ilsGross,
-        status,
+        r.commissionBalanceUSD,
+        formatCustomerNetBalanceUsd(rowBalanceUsdNumber(r.netBalanceUsd)),
       ];
     });
 
@@ -1944,7 +1891,7 @@ export async function exportCustomerBalancesAction(
     for (const r of payload.rows) {
       ordersSum += rowOrdersTotalNumber(r.totalOrdersUSD);
       paymentsSum += rowPaymentsTotalNumber(r.totalPaymentsUSD);
-      balanceSum += rowSignedUsdNumber(r);
+      balanceSum += rowBalanceUsdNumber(r.netBalanceUsd);
     }
     const html = buildAtlasExportHtml({
       title: `דוח יתרות לקוחות · ${stamp}`,

@@ -51,10 +51,10 @@ describe("paymentIntakeDebtCreditStrip", () => {
     assert.equal(strip.creditBalanceUsd, 150);
   });
 
-  it("shows both fields when both exist", () => {
+  it("nets both fields: 200 − 50 = 150 debt, 0 credit", () => {
     const strip = paymentIntakeDebtCreditStrip({ openDebtUsd: 200, creditBalanceUsd: 50 });
-    assert.equal(strip.openDebtUsd, 200);
-    assert.equal(strip.creditBalanceUsd, 50);
+    assert.equal(strip.openDebtUsd, 150);
+    assert.equal(strip.creditBalanceUsd, 0);
   });
 });
 

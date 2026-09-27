@@ -1,6 +1,11 @@
 import { PaymentMethod, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { calculateCustomerBalances } from "@/lib/customer-balance-calculator";
+import { getCustomerAccountBalancesMany } from "@/lib/customer-account-balances";
+import {
+  currentCustomerFinancialScope,
+  historicalCustomerFinancialScope,
+} from "@/lib/customer-financial-scope";
 import { primaryCustomerDisplayName } from "@/lib/customer-names";
 import { isDebtWithdrawalOrderStatus, orderCustomerCreditUsd } from "@/lib/debt-withdrawal-order";
 import { normalizeOrderSourceCountry } from "@/lib/order-countries";
@@ -163,6 +168,19 @@ export async function getCustomerBalancesReport(filters: CustomerBalancesReportF
   const countryEnum = filters.sourceCountry?.trim()
     ? normalizeOrderSourceCountry(filters.sourceCountry.trim())
     : null;
+  const toYmd = filters.dateTo?.trim() || "";
+  const fromYmd = filters.dateFrom?.trim() || "";
+  const looksUnbounded = !toYmd || (to && to.getFullYear() >= 2900);
+  const accountsByCustomer = await getCustomerAccountBalancesMany(
+    customerIds,
+    looksUnbounded
+      ? currentCustomerFinancialScope(countryEnum)
+      : historicalCustomerFinancialScope({
+          cutoffYmd: toYmd,
+          fromYmd: fromYmd || null,
+          sourceCountry: countryEnum,
+        }),
+  );
   const sharedBalances = await calculateCustomerBalances(customerIds, {
     from,
     to,
@@ -203,7 +221,10 @@ export async function getCustomerBalancesReport(filters: CustomerBalancesReportF
       : c.payments
           .reduce((sum, p) => sum.add(paymentUsd(p)), new Prisma.Decimal(0))
           .add(withdrawalReceivedUsd);
-    const remainingUsd = shared?.balance ?? expectedUsd.sub(receivedUsd);
+    const accounts = accountsByCustomer.get(c.id);
+    const remainingUsd = accounts
+      ? new Prisma.Decimal(accounts.openDebtUsd.toFixed(2))
+      : (shared?.balance ?? expectedUsd.sub(receivedUsd));
     if (c.customerCode === "90006") {
       console.info("[getCustomerBalancesReport.balance]", {
         customerId: c.id,

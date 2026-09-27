@@ -8,7 +8,9 @@ import {
   customerCardLedgerViewMode,
   isBalancesWeekReady,
   parseBalancesWeekFromSearchParams,
+  resolveBalancesWeekForNav,
   shouldResyncBalancesLocalWeek,
+  shouldWriteBalancesLocalWeek,
 } from "@/lib/balances-week-filter";
 
 describe("shouldResyncBalancesLocalWeek", () => {
@@ -72,7 +74,7 @@ describe("shouldResyncBalancesLocalWeek", () => {
     );
   });
 
-  it("global week change syncs the local filter", () => {
+  it("global week change does not overwrite a ready local week", () => {
     assert.equal(
       shouldResyncBalancesLocalWeek({
         currentBalancesWeek: "AH-137",
@@ -80,43 +82,76 @@ describe("shouldResyncBalancesLocalWeek", () => {
         globalWorkWeek: "AH-139",
         previousGlobalWorkWeek: "AH-138",
       }),
-      "sync-global",
+      "skip",
+    );
+  });
+
+  it("AH-142 global vs AH-143 local never ping-pongs (remount / first enter)", () => {
+    assert.equal(
+      shouldResyncBalancesLocalWeek({
+        currentBalancesWeek: "AH-143",
+        currentBalancesTo: "2026-10-10",
+        globalWorkWeek: "AH-142",
+        previousGlobalWorkWeek: null,
+      }),
+      "skip",
+    );
+    assert.equal(
+      shouldResyncBalancesLocalWeek({
+        currentBalancesWeek: "AH-142",
+        currentBalancesTo: "2026-10-03",
+        globalWorkWeek: "AH-142",
+        previousGlobalWorkWeek: null,
+      }),
+      "skip",
     );
   });
 });
 
 describe("balances cutoff captions", () => {
-  it("AH-141 screen text uses AH-140 + 19/09/2026, not today", () => {
+  it("AH-141 screen text uses AH-141 + 26/09/2026, not previous week", () => {
     const text = balancesCumulativeCutoffCaption({
       selectedWeekCode: "AH-141",
-      cutoffWeekCode: "AH-140",
-      cutoffYmd: "2026-09-19",
+      cutoffWeekCode: "AH-141",
+      cutoffYmd: "2026-09-26",
     });
-    assert.equal(text, "יתרות מצטברות עד סוף AH-140 · 19/09/2026");
+    assert.equal(text, "יתרות מצטברות עד סוף 26/09/2026 · AH-141");
     assert.equal(text.includes("היום"), false);
+  });
+
+  it("current week caption does not use a historical Saturday", () => {
+    assert.equal(
+      balancesCumulativeCutoffCaption({
+        selectedWeekCode: "AH-142",
+        cutoffWeekCode: "AH-142",
+        cutoffYmd: "2026-10-03",
+        scopeKind: "CURRENT",
+      }),
+      "מצב יתרות נוכחי · AH-142",
+    );
   });
 
   it("card opened from AH-141 names the parent week and cutoff date", () => {
     assert.equal(
       customerCardBalancesCutoffCaption({
         selectedWeekCode: "AH-141",
-        cutoffYmd: "2026-09-19",
+        cutoffYmd: "2026-09-26",
       }),
-      "כרטסת עד 19/09/2026 — לפי שבוע עבודה AH-141",
+      "כרטסת עד 26/09/2026 — לפי שבוע עבודה AH-141",
     );
   });
 
-  it("AH-141 card open props inherit snapshot cutoff 19/09, not today", () => {
+  it("AH-141 card open props inherit snapshot cutoff 26/09, not previous Saturday", () => {
     const props = balancesCardOpenProps({
       weekCode: "AH-141",
-      snapshotToYmd: "2026-09-19",
+      snapshotToYmd: "2026-09-26",
       sourceCountry: "TURKEY",
     });
     assert.deepEqual(props, {
       ledgerFromYmd: null,
-      ledgerToYmd: "2026-09-19",
+      ledgerToYmd: "2026-09-26",
       ledgerSelectedWeekCode: "AH-141",
-      ledgerCutoffWeekCode: "AH-140",
+      ledgerCutoffWeekCode: "AH-141",
       ledgerSourceCountry: "TURKEY",
     });
     assert.equal(
@@ -158,5 +193,48 @@ describe("parseBalancesWeekFromSearchParams", () => {
   it("is ready only after balancesWeek exists", () => {
     assert.equal(isBalancesWeekReady(new URLSearchParams("week=AH-138")), false);
     assert.equal(isBalancesWeekReady(new URLSearchParams("balancesWeek=AH-139")), true);
+  });
+});
+
+describe("resolveBalancesWeekForNav / shouldWriteBalancesLocalWeek", () => {
+  it("sidebar keeps an existing local week instead of week=", () => {
+    assert.equal(resolveBalancesWeekForNav("AH-143", "AH-142"), "AH-143");
+    assert.equal(resolveBalancesWeekForNav("", "AH-142"), "AH-142");
+    assert.equal(resolveBalancesWeekForNav(null, "AH-142"), "AH-142");
+  });
+
+  it("client default must not overwrite a ready URL week", () => {
+    assert.equal(
+      shouldWriteBalancesLocalWeek({
+        urlBalancesWeek: "AH-142",
+        stateWeekCode: "AH-143",
+        userChangedLocalWeek: false,
+      }),
+      false,
+    );
+    assert.equal(
+      shouldWriteBalancesLocalWeek({
+        urlBalancesWeek: "AH-142",
+        stateWeekCode: "AH-143",
+        userChangedLocalWeek: true,
+      }),
+      true,
+    );
+    assert.equal(
+      shouldWriteBalancesLocalWeek({
+        urlBalancesWeek: "",
+        stateWeekCode: "AH-142",
+        userChangedLocalWeek: false,
+      }),
+      false,
+    );
+    assert.equal(
+      shouldWriteBalancesLocalWeek({
+        urlBalancesWeek: "",
+        stateWeekCode: "AH-143",
+        userChangedLocalWeek: true,
+      }),
+      true,
+    );
   });
 });

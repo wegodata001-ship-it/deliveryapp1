@@ -243,7 +243,9 @@ export function buildIntakeOrderViews(
   };
 
   const drafts: OrderDraft[] = orders.map((o) => {
-    const dbRem = computeOrderOpenDebtUsd(Number(o.totalAmountUsd), Number(o.dbPaidUsd));
+    const dbRem = Number.isFinite(Number(o.dbRemainingUsd))
+      ? Math.max(0, Number(o.dbRemainingUsd))
+      : computeOrderOpenDebtUsd(Number(o.totalAmountUsd), Number(o.dbPaidUsd));
     const formAlloc = roundMoney2(byOrderId.get(o.id) ?? 0);
     const formRem = roundMoney2(dbRem - formAlloc);
     const allBreakdown = o.breakdown;

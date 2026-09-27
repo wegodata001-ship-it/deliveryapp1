@@ -177,6 +177,28 @@ describe("customerBooksAfterPaymentApply", () => {
     assert.equal(books.availableCreditUsd, 0);
   });
 
+  it("customer 101: nets 2031.84 − 1273.83 then applies $100 → 658.01 / 0", () => {
+    const books = customerBooksAfterPaymentApply({
+      openDebtUsd: 2031.84,
+      availableCreditUsd: 1273.83,
+      applyUsd: 100,
+      surplusToCredit: true,
+    });
+    assert.equal(books.openDebtUsd, 658.01);
+    assert.equal(books.availableCreditUsd, 0);
+  });
+
+  it("customer 101: $1000 over net debt → 0 / 241.99", () => {
+    const books = customerBooksAfterPaymentApply({
+      openDebtUsd: 2031.84,
+      availableCreditUsd: 1273.83,
+      applyUsd: 1000,
+      surplusToCredit: true,
+    });
+    assert.equal(books.openDebtUsd, 0);
+    assert.equal(books.availableCreditUsd, 241.99);
+  });
+
   it("existing credit plus new excess is added, not replaced", () => {
     const books = customerBooksAfterPaymentApply({
       openDebtUsd: 0,

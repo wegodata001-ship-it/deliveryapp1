@@ -99,6 +99,7 @@ export async function fetchCustomerCreditLedgerClient(
 
 export async function fetchCustomerCommissionLedgerClient(
   customerId: string,
+  toYmd?: string | null,
 ): Promise<
   | {
       ok: true;
@@ -112,6 +113,7 @@ export async function fetchCustomerCommissionLedgerClient(
   | { ok: false; error: string }
 > {
   const params = new URLSearchParams({ customerId: customerId.trim() });
+  if (toYmd?.trim()) params.set("toYmd", toYmd.trim());
   const res = await fetch(`/api/payment-intake/commission-ledger?${params}`, NO_STORE);
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string } | null;

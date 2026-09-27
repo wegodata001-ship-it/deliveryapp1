@@ -7,6 +7,7 @@
  * אין לחשב חוב לקוח מסכום יתרות הזמנה בלבד — משיכה מחוב אינה שורת הזמנה בקליטה.
  */
 
+import { normalizeExclusiveCustomerBooks } from "@/lib/customer-account-balances-shared";
 import { roundMoney2 } from "@/lib/payment-intake";
 
 const EPS = 0.02;
@@ -88,12 +89,19 @@ export function customerBooksAfterPaymentApply(params: {
   applyUsd: number;
   surplusToCredit: boolean;
 }): { openDebtUsd: number; availableCreditUsd: number } {
-  const debt = roundMoney2(Math.max(0, Number(params.openDebtUsd) || 0));
-  const credit = roundMoney2(Math.max(0, Number(params.availableCreditUsd) || 0));
+  const books = normalizeExclusiveCustomerBooks({
+    openDebtUsd: params.openDebtUsd,
+    availableCreditUsd: params.availableCreditUsd,
+  });
   const apply = roundMoney2(Math.max(0, Number(params.applyUsd) || 0));
-  const remainingDebt = roundMoney2(Math.max(0, debt - apply));
-  const excess = roundMoney2(Math.max(0, apply - debt));
+  const remainingDebt = roundMoney2(Math.max(0, books.openDebtUsd - apply));
+  const excess = roundMoney2(Math.max(0, apply - books.openDebtUsd));
   const nextCredit =
-    params.surplusToCredit && excess > 0.01 ? roundMoney2(credit + excess) : credit;
-  return { openDebtUsd: remainingDebt, availableCreditUsd: nextCredit };
+    params.surplusToCredit && excess > 0.01
+      ? roundMoney2(books.availableCreditUsd + excess)
+      : books.availableCreditUsd;
+  return normalizeExclusiveCustomerBooks({
+    openDebtUsd: remainingDebt,
+    availableCreditUsd: nextCredit,
+  });
 }

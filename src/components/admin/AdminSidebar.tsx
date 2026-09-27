@@ -4,7 +4,11 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown, LogOut } from "lucide-react";
-import { BALANCES_TO_PARAM, BALANCES_WEEK_PARAM } from "@/lib/balances-week-filter";
+import {
+  BALANCES_TO_PARAM,
+  BALANCES_WEEK_PARAM,
+  resolveBalancesWeekForNav,
+} from "@/lib/balances-week-filter";
 import { resolveGlobalWorkWeekScope } from "@/lib/global-work-week";
 import { balancesSnapshotToYmd, getAhWeekRange } from "@/lib/work-week";
 import { useHydratedSearchParams } from "@/lib/use-hydrated-search-params";
@@ -121,8 +125,9 @@ function applyGlobalWorkWeekToScopedParams(
   }
 
   if (pathname === "/admin/balances") {
-    out.set(BALANCES_WEEK_PARAM, globalWorkWeek);
-    out.set(BALANCES_TO_PARAM, balancesSnapshotToYmd(globalWorkWeek));
+    const localWeek = resolveBalancesWeekForNav(globalSp.get(BALANCES_WEEK_PARAM), globalWorkWeek);
+    out.set(BALANCES_WEEK_PARAM, localWeek);
+    out.set(BALANCES_TO_PARAM, balancesSnapshotToYmd(localWeek));
     out.delete("upto");
     return;
   }
@@ -279,7 +284,11 @@ function NavItemLink({
         : item.href === "/admin/invoice-cancel-requests" && navBadges?.pendingInvoiceCancelRequests
           ? navBadges.pendingInvoiceCancelRequests
           : 0;
-  const disablePrefetch = item.href === "/admin" || item.href === "/admin/";
+  const disablePrefetch =
+    item.href === "/admin" ||
+    item.href === "/admin/" ||
+    item.href === "/admin/balances" ||
+    item.href === "/admin/orders";
 
   return (
     <Link

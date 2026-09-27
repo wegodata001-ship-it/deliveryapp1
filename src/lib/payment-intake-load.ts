@@ -421,11 +421,16 @@ export async function loadPaymentIntakeOrdersForCustomer(
     select: INTAKE_ORDER_SELECT,
   });
 
-  const [rows, withdrawalUsd] = await Promise.all([
+  const [rows, withdrawalUsd, availableCreditUsd] = await Promise.all([
     attachPaymentsAndMapRows(weekOrders),
     loadCustomerDebtWithdrawalUsd(cid, paymentWorkCountry),
+    loadCustomerCreditUsd(cid, paymentWorkCountry),
   ]);
-  const collectibleRows = applyDebtWithdrawalToIntakeOrders(rows, withdrawalUsd);
+  const collectibleRows = applyDebtWithdrawalToIntakeOrders(
+    rows,
+    withdrawalUsd,
+    availableCreditUsd,
+  );
 
   void (async () => {
     try {
@@ -466,6 +471,16 @@ async function loadCustomerDebtWithdrawalUsd(
     },
   });
   return rows.reduce((sum, row) => sum + orderCustomerCreditUsd(row), 0);
+}
+
+async function loadCustomerCreditUsd(
+  customerId: string,
+  paymentWorkCountry: WorkCountryCode,
+): Promise<number> {
+  const { getCustomerCreditBalanceUsd, creditScopeFromWorkCountry } = await import(
+    "@/lib/customer-credit-balance"
+  );
+  return getCustomerCreditBalanceUsd(customerId, creditScopeFromWorkCountry(paymentWorkCountry));
 }
 
 /** שורות תשלומי לקוח (למחשבון) — לטעינה ברקע */

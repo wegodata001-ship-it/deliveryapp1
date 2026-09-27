@@ -14,7 +14,8 @@ import {
 import { balancesSnapshotToYmd, formatLocalYmd, prevWeekCode } from "@/lib/work-week";
 
 const FUTURE_PAYMENT_CODE = "TR-P-000025";
-const AH141_CUTOFF_YMD = "2026-09-19";
+const AH141_CUTOFF_YMD = "2026-09-26";
+const AH140_CUTOFF_YMD = "2026-09-19";
 const SOURCE_COUNTRY = "TURKEY";
 
 function ledgerHasDoc(ledger: { rows: { document: string }[] }, code: string): boolean {
@@ -29,12 +30,11 @@ async function customerByCode(code: string) {
 }
 
 describe("customer card inherits balances week cutoff", () => {
-  it("AH-141 parent and card default share 19/09/2026", () => {
+  it("AH-141 parent and card default share 26/09/2026", () => {
     const selectedWeekCode = "AH-141";
     const cutoffYmd = balancesSnapshotToYmd(selectedWeekCode);
-    const cutoffWeekCode = prevWeekCode(selectedWeekCode);
     assert.equal(cutoffYmd, AH141_CUTOFF_YMD);
-    assert.equal(cutoffWeekCode, "AH-140");
+    assert.equal(prevWeekCode(selectedWeekCode), "AH-140");
 
     const props = balancesCardOpenProps({
       weekCode: selectedWeekCode,
@@ -44,14 +44,14 @@ describe("customer card inherits balances week cutoff", () => {
     assert.equal(props.ledgerToYmd, cutoffYmd);
     assert.equal(props.ledgerFromYmd, null);
     assert.equal(props.ledgerSelectedWeekCode, selectedWeekCode);
-    assert.equal(props.ledgerCutoffWeekCode, cutoffWeekCode);
+    assert.equal(props.ledgerCutoffWeekCode, selectedWeekCode);
     assert.equal(
-      balancesCumulativeCutoffCaption({ selectedWeekCode, cutoffWeekCode, cutoffYmd }),
-      "יתרות מצטברות עד סוף AH-140 · 19/09/2026",
+      balancesCumulativeCutoffCaption({ selectedWeekCode, cutoffWeekCode: selectedWeekCode, cutoffYmd }),
+      "יתרות מצטברות עד סוף 26/09/2026 · AH-141",
     );
     assert.equal(
       customerCardBalancesCutoffCaption({ selectedWeekCode, cutoffYmd }),
-      "כרטסת עד 19/09/2026 — לפי שבוע עבודה AH-141",
+      "כרטסת עד 26/09/2026 — לפי שבוע עבודה AH-141",
     );
   });
 
@@ -65,7 +65,7 @@ describe("customer card inherits balances week cutoff", () => {
     const [scoped, full] = await Promise.all([
       buildCustomerAccountLedger({
         customerId: customer.id,
-        toYmd: AH141_CUTOFF_YMD,
+        toYmd: AH140_CUTOFF_YMD,
         sourceCountry: SOURCE_COUNTRY,
       }),
       buildCustomerAccountLedger({
@@ -76,12 +76,12 @@ describe("customer card inherits balances week cutoff", () => {
 
     assert.equal(Number(scoped.totalChargesUsd), 17927.5);
     assert.equal(Number(scoped.totalPaymentsUsd), 11059.5);
-    assert.equal(Number(scoped.openDebtUsd), 6868);
+    assert.equal(Number(scoped.openDebtUsd), 5594.17);
     assert.equal(ledgerHasDoc(scoped, FUTURE_PAYMENT_CODE), false);
 
     assert.equal(Number(full.totalChargesUsd), 17927.5);
     assert.equal(Number(full.totalPaymentsUsd), 15895.66);
-    assert.equal(Number(full.openDebtUsd), 2031.84);
+    assert.equal(Number(full.openDebtUsd), 758.01);
     assert.equal(ledgerHasDoc(full, FUTURE_PAYMENT_CODE), true);
   });
 
@@ -108,7 +108,7 @@ describe("customer card inherits balances week cutoff", () => {
     const [beforeCreatedDay, onCreatedDay, onPaymentDay] = await Promise.all([
       buildCustomerAccountLedger({
         customerId: customer.id,
-        toYmd: AH141_CUTOFF_YMD,
+        toYmd: AH140_CUTOFF_YMD,
         sourceCountry: SOURCE_COUNTRY,
       }),
       buildCustomerAccountLedger({
@@ -157,7 +157,7 @@ describe("customer card inherits balances week cutoff", () => {
           customerId: customer.id,
           isPaid: true,
           paymentCode: { not: null },
-          paymentDate: { gt: new Date(2026, 8, 19, 23, 59, 59, 999) },
+          paymentDate: { gt: new Date(2026, 8, 26, 23, 59, 59, 999) },
         },
         select: { paymentCode: true },
       });

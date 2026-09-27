@@ -5,6 +5,7 @@ import {
   historicalCustomerFinancialScope,
   informationalNetPositionUsd,
   normalizeCustomerAccountBalanceQuery,
+  resolveBalancesWeekFinancialScope,
   toCustomerBalanceCalcScope,
 } from "@/lib/customer-financial-scope";
 
@@ -34,6 +35,33 @@ describe("customer financial scope contract", () => {
   it("net position is informational only — does not clamp books", () => {
     assert.equal(informationalNetPositionUsd(2031.84, 1273.83), 758.01);
     assert.equal(informationalNetPositionUsd(6868, 1273.83), 5594.17);
+  });
+
+  it("selected week AH-141 cutoff is Saturday 26/09, not previous week", () => {
+    const now = new Date(2026, 8, 27, 12, 0, 0, 0);
+    const resolved = resolveBalancesWeekFinancialScope({
+      selectedWeekCode: "AH-141",
+      sourceCountry: "TURKEY",
+      now,
+    });
+    assert.equal(resolved.weekCode, "AH-141");
+    assert.equal(resolved.cutoffYmd, "2026-09-26");
+    assert.equal(resolved.cutoffWeekCode, "AH-141");
+    assert.equal(resolved.financial.kind, "HISTORICAL");
+    assert.equal(resolved.financial.cutoffYmd, "2026-09-26");
+  });
+
+  it("selected current week AH-142 is CURRENT, not previous Saturday", () => {
+    const now = new Date(2026, 8, 27, 12, 0, 0, 0);
+    const resolved = resolveBalancesWeekFinancialScope({
+      selectedWeekCode: "AH-142",
+      sourceCountry: "TURKEY",
+      now,
+    });
+    assert.equal(resolved.weekCode, "AH-142");
+    assert.equal(resolved.cutoffYmd, "2026-10-03");
+    assert.equal(resolved.financial.kind, "CURRENT");
+    assert.equal(resolved.financial.cutoffYmd ?? null, null);
   });
 
   it("legacy {to} without kind becomes HISTORICAL", () => {

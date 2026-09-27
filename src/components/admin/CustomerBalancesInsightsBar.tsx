@@ -4,8 +4,10 @@ import { useMemo, type ReactNode } from "react";
 import type { CustomerBalanceRow, CustomerBalancesPayload } from "@/app/admin/balances/actions";
 import { sumOrdersUsdSplit } from "@/lib/customer-balances-display";
 import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
-import { UsdBalanceIlsGrossText } from "@/components/admin/UsdBalanceIlsGrossText";
-import { useDisplayExchangeRate } from "@/components/admin/DisplayExchangeRateContext";
+import {
+  customerNetBalanceTone,
+  formatCustomerNetBalanceUsd,
+} from "@/lib/customer-account-balances-shared";
 
 type Props = {
   stats: CustomerBalancesPayload["stats"];
@@ -60,8 +62,8 @@ function StatCard({
 export function CustomerBalancesInsightsBar({ stats, rows, totalRows, totalPages, expanded }: Props) {
   const paginated = totalPages > 1;
   const splitTotals = useMemo(() => sumOrdersUsdSplit(rows), [rows]);
-  const exchangeRate = useDisplayExchangeRate();
-  const openDebtUsd = parseMoneyStringOrZero(stats.totalDebtUsd);
+  const netUsd = parseMoneyStringOrZero(stats.totalNetBalanceUsd);
+  const netTone = customerNetBalanceTone(netUsd);
 
   if (!expanded) return null;
 
@@ -74,15 +76,9 @@ export function CustomerBalancesInsightsBar({ stats, rows, totalRows, totalPages
       ) : null}
       <div className="adm-balances-stat-cards" role="region" aria-label="סטטיסטיקת יתרות">
         <StatCard
-          variant="open-debt"
-          label="חוב פתוח"
-          value={usd(stats.totalDebtUsd)}
-          sub={<UsdBalanceIlsGrossText usd={openDebtUsd} exchangeRate={exchangeRate} />}
-        />
-        <StatCard
-          variant="credit-customers"
-          label="יתרת זכות"
-          value={usdAmount(rows.reduce((sum, r) => sum + parseMoneyStringOrZero(r.availableCreditUSD ?? "0"), 0))}
+          variant={netTone === "credit" ? "credit-customers" : "open-debt"}
+          label="סה״כ יתרות"
+          value={formatCustomerNetBalanceUsd(netUsd)}
         />
         <StatCard
           variant="debt-customers"

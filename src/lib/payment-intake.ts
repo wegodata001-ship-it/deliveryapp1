@@ -4,6 +4,7 @@ import {
   applyDebtWithdrawalFifoToRemainders,
   computeOrderOpenDebtSignedUsd,
   computeOrderOpenDebtUsd,
+  creditUsdEligibleForOrderFifo,
   deriveOrderPaymentDisplayStatus,
   reconcileOrderBreakdownWithLedger,
 } from "@/lib/order-remaining-debt";
@@ -31,6 +32,11 @@ export type PaymentIntakeOrderBase = {
   totalAmountUsd: number;
   /** שולם עד כה (DB) ב-USD */
   dbPaidUsd: number;
+  /**
+   * יתרה לגבייה אחרי תשלומים + משיכת חוב FIFO.
+   * אם חסר — נופלים ל-total − paid (בלי משיכה).
+   */
+  collectibleRemainingUsd?: number;
   lastPaymentDateYmd: string | null;
 };
 
@@ -46,8 +52,17 @@ export type PaymentIntakeMatchResult = PaymentIntakeOrderBase & {
 
 const EPS = 1e-6;
 
-export function debtStatus(dbPaid: number, total: number): PaymentIntakeOrderStatus {
-  return deriveOrderPaymentDisplayStatus({ totalUsd: total, paidUsd: dbPaid, eps: EPS });
+export function debtStatus(
+  dbPaid: number,
+  total: number,
+  effectiveRemainingUsd?: number,
+): PaymentIntakeOrderStatus {
+  return deriveOrderPaymentDisplayStatus({
+    totalUsd: total,
+    paidUsd: dbPaid,
+    effectiveRemainingUsd,
+    eps: EPS,
+  });
 }
 
 /** Part 6 — המרה ל-USD לפי שער */
@@ -109,7 +124,10 @@ export function computeEffectiveRowCommissionUsd(
 
 /** סכום עמלות זמינות ויתרה פתוחה לפי שורות טבלת הקליטה (לא סיכום גלובלי שגוי). */
 export function computeCustomerResetBalanceMetrics(
-  rows: Pick<PaymentIntakeOrderBase, "commissionUsd" | "amountUsd" | "totalAmountUsd" | "dbPaidUsd">[],
+  rows: Pick<
+    PaymentIntakeOrderBase,
+    "commissionUsd" | "amountUsd" | "totalAmountUsd" | "dbPaidUsd" | "collectibleRemainingUsd"
+  >[],
   commissionPercent = 0,
 ): { availableCommission: number; remainingAmount: number } {
   let availableCommission = 0;
@@ -120,11 +138,7 @@ export function computeCustomerResetBalanceMetrics(
       row.commissionUsd,
       commissionPercent,
     );
-    const total = Number(row.totalAmountUsd);
-    const paid = Number(row.dbPaidUsd);
-    if (Number.isFinite(total) && Number.isFinite(paid)) {
-      remainingAmount += computeOrderOpenDebtUsd(total, paid);
-    }
+    remainingAmount += orderRemainingUsd(row as PaymentIntakeOrderBase);
   }
   return {
     availableCommission: roundMoney2(availableCommission),
@@ -132,7 +146,11 @@ export function computeCustomerResetBalanceMetrics(
   };
 }
 
+/** יתרה לגבייה — collectible אחרי משיכת חוב, לא total−paid בלבד. */
 function orderRemainingUsd(o: PaymentIntakeOrderBase): number {
+  if (o.collectibleRemainingUsd != null && Number.isFinite(o.collectibleRemainingUsd)) {
+    return roundMoney2(Math.max(0, o.collectibleRemainingUsd));
+  }
   return computeOrderOpenDebtUsd(o.totalAmountUsd, o.dbPaidUsd);
 }
 
@@ -297,6 +315,9 @@ export function toPaymentIntakeBases(rows: PaymentIntakeOrderRow[]): PaymentInta
       totalIls: Number(r.totalIls),
       totalAmountUsd: Number(r.totalAmountUsd),
       dbPaidUsd: Number(r.dbPaidUsd),
+      collectibleRemainingUsd: Number.isFinite(Number(r.dbRemainingUsd))
+        ? Number(r.dbRemainingUsd)
+        : undefined,
       lastPaymentDateYmd: r.lastPaymentDateYmd,
     };
   });
@@ -334,16 +355,29 @@ export function verifyTotalUsdAgainstInputs(form: {
 }
 
 /**
- * משיכת חוב של הלקוח סוגרת יתרות הזמנה FIFO — אותה יתרה לגבייה כמו getCustomerOpenDebt.
- * dbPaidUsd נשאר סכום התשלומים שנקלטו (לא ממציאים תשלום).
+ * משיכת חוב + זכות לקוח זמינה סוגרות יתרות הזמנה FIFO.
+ * dbPaidUsd נשאר סכום התשלומים שנקלטו (לא ממציאים תשלום / לא כותבים זכות).
  */
 export function applyDebtWithdrawalToIntakeOrders(
   orders: PaymentIntakeOrderRow[],
   withdrawalUsd: number,
+  availableCreditUsd = 0,
 ): PaymentIntakeOrderRow[] {
-  if (!(withdrawalUsd > ALLOC_EPS) || orders.length === 0) return orders;
+  const credit = Number(availableCreditUsd) || 0;
+  if (
+    (!(withdrawalUsd > ALLOC_EPS) && !(credit > ALLOC_EPS)) ||
+    orders.length === 0
+  ) {
+    return orders;
+  }
   const before = orders.map((o) => Number(o.dbRemainingUsd) || 0);
-  const after = applyDebtWithdrawalFifoToRemainders(before, withdrawalUsd);
+  const afterWithdrawal = applyDebtWithdrawalFifoToRemainders(before, withdrawalUsd);
+  const remainingAfterWithdrawal = afterWithdrawal.reduce((s, n) => s + n, 0);
+  const creditToApply = creditUsdEligibleForOrderFifo({
+    remainingAfterWithdrawalUsd: remainingAfterWithdrawal,
+    availableCreditUsd: credit,
+  });
+  const after = applyDebtWithdrawalFifoToRemainders(afterWithdrawal, creditToApply);
   return orders.map((order, i) => {
     const nextRemaining = after[i] ?? 0;
     if (Math.abs(nextRemaining - (before[i] ?? 0)) <= ALLOC_EPS) return order;
@@ -355,7 +389,8 @@ export function applyDebtWithdrawalToIntakeOrders(
       dbRemainingUsd: nextRemaining.toFixed(2),
       status: deriveOrderPaymentDisplayStatus({
         totalUsd: total,
-        paidUsd: Math.max(paid, total - nextRemaining),
+        paidUsd: paid,
+        effectiveRemainingUsd: nextRemaining,
       }),
       breakdown,
     };

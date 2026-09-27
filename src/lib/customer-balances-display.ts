@@ -28,6 +28,11 @@ export function rowAvailableCreditUsd(row: CustomerBalanceRow): number {
   return Math.max(0, parseMoneyStringOrZero(row.availableCreditUSD ?? "0"));
 }
 
+/** SSOT netBalanceUsd בלבד — לא debt − credit ב-UI. */
+export function rowNetBalanceUsd(row: CustomerBalanceRow): number {
+  return parseMoneyStringOrZero(row.netBalanceUsd);
+}
+
 export function customerHasOpenBalance(row: CustomerBalanceRow): boolean {
   return rowOpenBalanceUsd(row) > OPEN_BALANCE_EPS;
 }

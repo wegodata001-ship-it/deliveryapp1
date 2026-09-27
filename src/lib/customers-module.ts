@@ -25,6 +25,7 @@ import {
   resolveCountryScopeFromCode,
 } from "@/lib/country-data-scope";
 import { computeOrderOpenDebtUsd } from "@/lib/order-remaining-debt";
+import { loadCollectibleRemainingUsdByOrderId } from "@/lib/orders-list-collectible-remaining";
 import { prisma } from "@/lib/prisma";
 import { activePaidPaymentWhere } from "@/lib/payment-record-status-shared";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
@@ -281,6 +282,10 @@ export async function listCustomerWorkspaceOrders(
     }
   }
 
+  const collectibleByOrder = await loadCollectibleRemainingUsdByOrderId(
+    [...new Set(orders.map((o) => o.customerId).filter((id): id is string => !!id))],
+  );
+
   return orders
     .filter((o) => o.customerId && o.customer)
     .map((o) => {
@@ -289,9 +294,11 @@ export async function listCustomerWorkspaceOrders(
       const com = o.commissionUsd ?? new Prisma.Decimal(0);
       const total = o.totalUsd ?? deal.add(com);
       const paid = paidByOrder.get(o.id) ?? new Prisma.Decimal(0);
-      const remaining = new Prisma.Decimal(
-        computeOrderOpenDebtUsd(Number(total), Number(paid)).toFixed(2),
-      );
+      const afterPayments = computeOrderOpenDebtUsd(Number(total), Number(paid));
+      const remainingUsd = isDebtWithdrawalOrderStatus(o.status)
+        ? 0
+        : (collectibleByOrder.get(o.id) ?? afterPayments);
+      const remaining = new Prisma.Decimal(remainingUsd.toFixed(2));
       const meta = ORDER_STATUS_META[o.status];
       return {
         id: o.id,

@@ -9,6 +9,7 @@ import { paymentIntakeOrderDateThroughAhWeekEnd } from "@/lib/payment-intake-ord
 import { type PaymentIntakeOrderStatus } from "@/lib/payment-intake";
 import { findActiveCustomerPayments, groupByActivePayments } from "@/lib/payment-record-status";
 import { computeOrderOpenDebtUsd, deriveOrderPaymentDisplayStatus } from "@/lib/order-remaining-debt";
+import { loadCollectibleRemainingUsdByOrderId } from "@/lib/orders-list-collectible-remaining";
 import { paymentRecordUsdEquivalent as paymentUsd } from "@/lib/payment-usd-equivalent";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 import { OS } from "@/lib/order-status-slugs";
@@ -82,7 +83,7 @@ export async function buildCustomerDebtBreakdown(input: {
   const weekCode = input.weekCode?.trim() || null;
   const weekDateWhere = paymentIntakeOrderDateThroughAhWeekEnd(weekCode);
 
-  const [debt, orders, withdrawals, payments, cancelledPayments] = await Promise.all([
+  const [debt, orders, withdrawals, payments, cancelledPayments, collectibleByOrder] = await Promise.all([
     getCustomerOpenDebt(customerId, scope),
     prisma.order.findMany({
       where: {
@@ -174,6 +175,7 @@ export async function buildCustomerDebtBreakdown(input: {
         order: { select: { orderNumber: true } },
       },
     }),
+    loadCollectibleRemainingUsdByOrderId([customerId]),
   ]);
 
   const orderIds = orders.map((o) => o.id);
@@ -237,12 +239,13 @@ export async function buildCustomerDebtBreakdown(input: {
     const commission = round2(dec(o.commissionUsd));
     const totalDue = orderTotalUsd(o);
     const paid = round2(paidByOrder.get(o.id) ?? 0);
-    const remaining = computeOrderOpenDebtUsd(totalDue, paid);
+    const remaining = collectibleByOrder.get(o.id) ?? computeOrderOpenDebtUsd(totalDue, paid);
     if (remaining <= EPS) continue;
 
     const status: PaymentIntakeOrderStatus = deriveOrderPaymentDisplayStatus({
       totalUsd: totalDue,
       paidUsd: paid,
+      effectiveRemainingUsd: remaining,
     });
 
     const visible = visibleOrderIds.has(o.id);

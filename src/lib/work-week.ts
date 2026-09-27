@@ -125,14 +125,10 @@ export function prevWeekCode(code: string): string | null {
 }
 
 /**
- * דוח יתרות: כשבוחרים שבוע AH-N — ה-snapshot הוא סוף שבוע AH-(N-1), לא תנועות של N.
+ * דוח יתרות: שבוע שנבחר AH-N = cutoff של אותו שבוע (שבת של N), לא AH-(N-1).
  */
 export function balancesSnapshotToYmd(selectedWeekCode: string | null | undefined): string {
-  const norm = normalizeAhWeekCode(selectedWeekCode);
-  if (!norm) return "";
-  const prev = getPrevAhWeek(norm);
-  if (prev) return prev.to;
-  return getAhWeekRange(norm)?.to ?? "";
+  return getBusinessWeekClosingDate(selectedWeekCode);
 }
 
 /** מיישר טווח YMD — אם from > to מחליף (מונע URL / סינון הפוך) */

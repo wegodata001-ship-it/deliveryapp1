@@ -37,6 +37,7 @@ function stableValue(value: unknown): unknown {
 export function balancesListCacheKey(query: BalancesListCacheQuery): string {
   return JSON.stringify(
     stableValue({
+      v: "v4-all-customers",
       page: Math.max(1, Math.floor(query.page || 1)),
       limit: query.limit ?? 25,
       week: query.weekCode?.trim() || "",

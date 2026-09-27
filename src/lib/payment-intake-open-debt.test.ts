@@ -4,7 +4,12 @@ import {
   applyDebtWithdrawalFifoToRemainders,
   collectibleOpenDebtAfterWithdrawalUsd,
 } from "@/lib/order-remaining-debt";
-import { applyDebtWithdrawalToIntakeOrders, type PaymentIntakeOrderRow } from "@/lib/payment-intake";
+import {
+  applyDebtWithdrawalToIntakeOrders,
+  matchPaymentToOrders,
+  toPaymentIntakeBases,
+  type PaymentIntakeOrderRow,
+} from "@/lib/payment-intake";
 import { planPaymentIntentAdjustments } from "@/lib/payment-method-payment-intent";
 import { computePaymentOverpayment } from "@/lib/payment-overpayment";
 import { paymentIntakeOrderDateThroughAhWeekEnd } from "@/lib/payment-intake-order-filter";
@@ -75,6 +80,23 @@ describe("customer 105 leftover vs debt withdrawal", () => {
     assert.deepEqual(applyDebtWithdrawalFifoToRemainders(remainders, 1212), [0, 0]);
   });
 
+  it("matchPaymentToOrders uses collectible remaining, not total−paid", () => {
+    const orders = applyDebtWithdrawalToIntakeOrders(
+      [
+        row({ id: "TR-134-0011", orderNumber: "TR-134-0011", dbRemainingUsd: "508.47" }),
+        row({ id: "TR-137-0004", orderNumber: "TR-137-0004", dbRemainingUsd: "703.53" }),
+      ],
+      1212,
+    );
+    const matched = matchPaymentToOrders(toPaymentIntakeBases(orders), 0, null);
+    assert.equal(matched.find((m) => m.id === "TR-137-0004")?.remainingAmount, 0);
+    assert.equal(matched.find((m) => m.id === "TR-134-0011")?.remainingAmount, 0);
+    assert.equal(
+      matched.reduce((s, m) => s + m.remainingAmount, 0),
+      0,
+    );
+  });
+
   it("intake rows and auto-adjust use the same $0 after withdrawal FIFO", () => {
     const orders = applyDebtWithdrawalToIntakeOrders(
       [
@@ -96,6 +118,37 @@ describe("customer 105 leftover vs debt withdrawal", () => {
       assert.equal(plan.closesDebtUsd, 0);
       assert.equal(plan.overpaymentUsd, 1000);
     }
+  });
+});
+
+describe("invariants: customer debt vs effective order remaining", () => {
+  it("TEST 1 — customerDebt === SUM(effectiveRemaining)", () => {
+    const remainders = [703.53, 0, 508.47];
+    const customerDebt = collectibleOpenDebtAfterWithdrawalUsd(remainders, 1212);
+    const effective = applyDebtWithdrawalFifoToRemainders(remainders, 1212);
+    assert.equal(customerDebt, effective.reduce((s, n) => s + n, 0));
+    assert.equal(customerDebt, 0);
+  });
+
+  it("TEST 2 — effectiveRemaining === 0 is not open", () => {
+    const orders = applyDebtWithdrawalToIntakeOrders(
+      [
+        row({ id: "TR-137-0004", dbRemainingUsd: "703.53" }),
+        row({ id: "TR-134-0011", dbRemainingUsd: "508.47" }),
+      ],
+      1212,
+    );
+    const matched = matchPaymentToOrders(toPaymentIntakeBases(orders), 0, null);
+    for (const m of matched) {
+      assert.equal(m.remainingAmount, 0);
+      assert.equal(m.status, "paid");
+    }
+  });
+
+  it("TEST 3 — customerDebt === 0 => SUM(order remaining) === 0", () => {
+    const remainders = [703.53, 508.47];
+    assert.equal(collectibleOpenDebtAfterWithdrawalUsd(remainders, 1212), 0);
+    assert.deepEqual(applyDebtWithdrawalFifoToRemainders(remainders, 1212), [0, 0]);
   });
 });
 

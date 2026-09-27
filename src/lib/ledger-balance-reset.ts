@@ -3,6 +3,7 @@
  * DEBT ו-CREDIT נשארים שני חשבונות נפרדים.
  */
 import { BALANCE_RESET_LEDGER_LABEL } from "@/lib/commission-debt-closure";
+import { normalizeExclusiveCustomerBooks } from "@/lib/customer-account-balances-shared";
 import { isPaymentAdjustmentFeePayment } from "@/lib/payment-adjustment-fee";
 
 export const DIRECT_RESET_SOURCE = "DIRECT_RESET";
@@ -225,11 +226,12 @@ export function paymentIntakeDebtCreditStrip(input: {
   openDebtUsd: number;
   creditBalanceUsd: number;
 }): { openDebtUsd: number; creditBalanceUsd: number } {
-  const debt = Number(input.openDebtUsd);
-  const credit = Number(input.creditBalanceUsd);
+  const books = normalizeExclusiveCustomerBooks({
+    openDebtUsd: input.openDebtUsd,
+    availableCreditUsd: input.creditBalanceUsd,
+  });
   return {
-    openDebtUsd: Number.isFinite(debt) && debt > 0 ? Math.round((debt + Number.EPSILON) * 100) / 100 : 0,
-    creditBalanceUsd:
-      Number.isFinite(credit) && credit > 0 ? Math.round((credit + Number.EPSILON) * 100) / 100 : 0,
+    openDebtUsd: books.openDebtUsd,
+    creditBalanceUsd: books.availableCreditUsd,
   };
 }

@@ -37,6 +37,7 @@ import {
   computeOrderOpenDebtUsd,
   resolveOrderTotalUsd,
 } from "@/lib/order-remaining-debt";
+import { getCustomerCreditBalanceUsd } from "@/lib/customer-credit-balance";
 import { paymentRecordUsdEquivalent as paymentUsdEquivalent } from "@/lib/payment-usd-equivalent";
 import {
   buildLedgerPaymentDetail,
@@ -569,6 +570,11 @@ export async function buildCustomerAccountLedger(params: {
       if (row.orderId) remainingPaidByOrder.set(row.orderId, Number(row._sum.amountUsd ?? 0));
     }
   }
+  const availableCreditUsd = await getCustomerCreditBalanceUsd(id, {
+    from: fromFilterSet ? from : null,
+    to,
+    sourceCountry,
+  });
   const collectibleRemainingByOrderId = collectibleRemainingUsdByOrderId(
     remainingSourceOrders.map((o) => ({
       orderId: o.id,
@@ -578,6 +584,7 @@ export async function buildCustomerAccountLedger(params: {
       ),
     })),
     Number(sharedBalance.totalWithdrawals),
+    availableCreditUsd,
   );
 
   const orderIdSet = new Set(orders.map((o) => o.id));

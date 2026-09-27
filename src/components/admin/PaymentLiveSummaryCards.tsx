@@ -20,8 +20,7 @@ import {
   type PaymentLine,
   type PaymentLineMethod,
 } from "@/lib/payment-updated";
-import { formatIlsDisplay, formatUsdDisplay, formatUsdPlain } from "@/lib/money-format";
-import { UsdBalanceIlsGrossText } from "@/components/admin/UsdBalanceIlsGrossText";
+import { formatIlsDisplay, formatUsdDisplay } from "@/lib/money-format";
 
 type Props = {
   kpis: LivePaymentFormKpis;
@@ -32,10 +31,11 @@ type Props = {
   commissionUsd?: number;
   onOpenDebtClick?: () => void;
   /**
-   * כרטיס יתרה — derivePaymentBalanceDisplay ממקור האמת של המסך.
+   * כרטיס יתרה — תמיד «נשאר לתשלום» מ-buildPaymentPreview.
    */
   paymentBalanceDisplay?: PaymentBalanceDisplay | null;
-  /** תשלום קיים ללא שינוי — מצב היסטוריה, ללא KPI «נשאר לתשלום» */
+  /** עודף מהטיוטה — מעל הגריד, לא כרטיס נוסף */
+  overpaymentUsd?: number;
   historicalPaymentView?: boolean;
   /** Part 3 — שורות התשלום הנוכחיות, לצורך Drill-down */
   lines?: PaymentLine[];
@@ -113,20 +113,24 @@ export function PaymentLiveSummaryCards({
   commissionUsd = 0,
   onOpenDebtClick,
   paymentBalanceDisplay = null,
+  overpaymentUsd = 0,
   historicalPaymentView = false,
   lines,
   rate = 0,
 }: Props) {
-  const showOpenDebt = openDebtUsd > 0.01;
-  const showCommission = Math.abs(commissionUsd) > 0.01;
+  void openDebtUsd;
+  void commissionUsd;
+  void historicalPaymentView;
+  void onOpenDebtClick;
   const methodCards = LIVE_PAYMENT_KPI_CARDS.filter((c) => !c.isTotal);
   const canDrill = Array.isArray(lines) && lines.length > 0;
-  const showBalanceCard =
-    !historicalPaymentView &&
-    paymentBalanceDisplay != null &&
-    paymentBalanceDisplay.state !== "credit" &&
-    Number.isFinite(paymentBalanceDisplay.displayUsd);
-  const extraAccountCards = Number(showOpenDebt) + Number(showCommission) + Number(showBalanceCard);
+  const remainingDisplay: PaymentBalanceDisplay = paymentBalanceDisplay ?? {
+    state: "cleared",
+    title: "נשאר לתשלום",
+    balanceUsdSigned: 0,
+    displayUsd: 0,
+    displayIls: 0,
+  };
 
   const [drill, setDrill] = useState<{ title: string; method: PaymentLineMethod | null } | null>(
     null,
@@ -155,14 +159,14 @@ export function PaymentLiveSummaryCards({
         />
       </div>
 
+      {overpaymentUsd > 0.01 ? (
+        <p className="payment-modal-live-overpay" role="status">
+          עודף מהתשלום הנוכחי: +{formatUsdDisplay(overpaymentUsd)} — לא נשאר לתשלום שלילי
+        </p>
+      ) : null}
+
       <div
-        className={[
-          "payment-modal-live-kpis",
-          "payment-modal-live-kpis--inline-row",
-          extraAccountCards > 0 ? "payment-modal-live-kpis--with-account" : "",
-        ]
-          .filter(Boolean)
-          .join(" ")}
+        className="payment-modal-live-kpis payment-modal-live-kpis--fixed-six"
         role="region"
         aria-label="סיכום תשלום לפי אמצעי תשלום"
         aria-live="polite"
@@ -211,45 +215,7 @@ export function PaymentLiveSummaryCards({
           );
         })}
 
-        {showOpenDebt ? (
-          <button
-            type="button"
-            className="payment-modal-live-kpi payment-modal-live-kpi--open-debt"
-            onClick={onOpenDebtClick}
-            title="לחץ לפירוט חובות פתוחים"
-          >
-            <div className="payment-modal-live-kpi__lbl">חוב פתוח</div>
-            <AnimatedMoneyValue
-              className="payment-modal-live-kpi__amount-v payment-modal-live-kpi__amount-v--usd payment-modal-live-kpi__amount-v--solo"
-              dir="ltr"
-              value={formatUsdPlain(openDebtUsd)}
-            />
-            <UsdBalanceIlsGrossText
-              usd={openDebtUsd}
-              exchangeRate={rate}
-              className="payment-modal-live-kpi__sub-ils"
-            />
-            <span className="payment-modal-live-kpi__hint">לחץ לפירוט</span>
-          </button>
-        ) : null}
-
-        {showCommission ? (
-          <div className="payment-modal-live-kpi" role="status">
-            <div className="payment-modal-live-kpi__lbl">עמלות</div>
-            <AnimatedMoneyValue
-              className="payment-modal-live-kpi__amount-v payment-modal-live-kpi__amount-v--usd payment-modal-live-kpi__amount-v--solo"
-              dir="ltr"
-              value={formatUsdPlain(commissionUsd)}
-            />
-            <UsdBalanceIlsGrossText
-              usd={commissionUsd}
-              exchangeRate={rate}
-              className="payment-modal-live-kpi__sub-ils"
-            />
-          </div>
-        ) : null}
-
-        {showBalanceCard ? <RemainingToPayCard display={paymentBalanceDisplay!} /> : null}
+        <RemainingToPayCard display={{ ...remainingDisplay, title: "נשאר לתשלום", state: remainingDisplay.displayUsd > 0.01 ? "debt" : "cleared" }} />
 
         {drill && canDrill ? (
           <PaymentSummaryDrillModal

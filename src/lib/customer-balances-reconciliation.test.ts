@@ -48,7 +48,7 @@ describe("customer balances KPI reconciliation", () => {
     });
     assert.equal(row.actualPaymentsUsd, 15_895.66);
     assert.equal(row.expectedBalanceUsd, 2_031.84);
-    assert.equal(customerAccountSignedUsd({ openDebtUsd: 2_031.84, availableCreditUsd: 1_273.83 }), 2_031.84);
+    assert.equal(customerAccountSignedUsd({ openDebtUsd: 2_031.84, availableCreditUsd: 1_273.83 }), 758.01);
   });
 
   it("CASE B — overpayment stays in payments, not clamped to debt", () => {
