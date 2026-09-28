@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildPaymentPreview } from "@/lib/payment-intake-preview";
+import { buildPaymentPreview, toPaymentPreviewOrders } from "@/lib/payment-intake-preview";
 
 function preview(input: {
   debt: number | null;
@@ -119,5 +119,32 @@ describe("buildPaymentPreview", () => {
     const p = preview({ debt: 80, payment: 100 });
     assert.equal(p.remainingDebt, 0);
     assert.ok(p.projectedOverpayment > 0);
+  });
+});
+
+describe("toPaymentPreviewOrders", () => {
+  it("converts intake string money to finite numbers and rejects invalid", () => {
+    const previewOrders = toPaymentPreviewOrders([
+      {
+        totalAmountUsd: "758.01",
+        amountUsd: "700",
+        commissionUsd: "58.01",
+        dbPaidUsd: "0",
+        dbRemainingUsd: "758.01",
+        status: "unpaid",
+      },
+      {
+        totalAmountUsd: "invalid",
+        dbPaidUsd: "",
+        dbRemainingUsd: "not-a-number",
+        status: "paid",
+      },
+    ]);
+    assert.equal(previewOrders[0]?.totalAmountUsd, 758.01);
+    assert.equal(previewOrders[0]?.collectibleRemainingUsd, 758.01);
+    assert.equal(previewOrders[1]?.totalAmountUsd, 0);
+    assert.equal(previewOrders[1]?.dbPaidUsd, 0);
+    assert.equal(previewOrders[1]?.collectibleRemainingUsd, 0);
+    assert.ok(previewOrders.every((o) => Number.isFinite(o.totalAmountUsd ?? 0)));
   });
 });

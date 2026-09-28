@@ -5,6 +5,7 @@
  * Fees לא נכנסות לחוב.
  */
 import { normalizeExclusiveCustomerBooks } from "@/lib/customer-account-balances-shared";
+import { parseMoneyStringOrZero } from "@/lib/money-format";
 import { computeOrderOpenDebtUsd, resolveOrderTotalUsd, roundOrderMoney2 } from "@/lib/order-remaining-debt";
 
 export type PaymentPreviewFinancialState = {
@@ -23,6 +24,41 @@ export type PaymentPreviewOrder = {
   isDebtWithdrawal?: boolean;
   status?: string;
 };
+
+type PaymentPreviewOrderSource = {
+  totalAmountUsd?: string | number | null;
+  totalUsd?: string | number | null;
+  amountUsd?: string | number | null;
+  commissionUsd?: string | number | null;
+  dbPaidUsd?: string | number | null;
+  dbRemainingUsd?: string | number | null;
+  collectibleRemainingUsd?: string | number | null;
+  isDebtWithdrawal?: boolean;
+  status?: string;
+};
+
+function previewMoneyUsd(value: string | number | null | undefined): number {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  return parseMoneyStringOrZero(value);
+}
+
+/** Intake rows (string money) → preview orders (finite numbers). */
+export function toPaymentPreviewOrders(
+  rows: readonly PaymentPreviewOrderSource[],
+): PaymentPreviewOrder[] {
+  return rows.map((order) => ({
+    totalAmountUsd: previewMoneyUsd(order.totalAmountUsd),
+    totalUsd: previewMoneyUsd(order.totalUsd),
+    amountUsd: previewMoneyUsd(order.amountUsd),
+    commissionUsd: previewMoneyUsd(order.commissionUsd),
+    dbPaidUsd: previewMoneyUsd(order.dbPaidUsd),
+    collectibleRemainingUsd: previewMoneyUsd(
+      order.collectibleRemainingUsd ?? order.dbRemainingUsd,
+    ),
+    isDebtWithdrawal: order.isDebtWithdrawal === true,
+    status: order.status,
+  }));
+}
 
 export type PaymentIntakePreview = {
   debtBefore: number;

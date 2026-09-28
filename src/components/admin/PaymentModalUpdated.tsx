@@ -60,7 +60,7 @@ import {
   paymentIntakeDebtBeforePaymentUsd,
 } from "@/lib/payment-intake-customer-debt";
 import { buildCustomerFinancialState } from "@/lib/customer-account-balances-shared";
-import { buildPaymentPreview } from "@/lib/payment-intake-preview";
+import { buildPaymentPreview, toPaymentPreviewOrders } from "@/lib/payment-intake-preview";
 import { convertDebtUsdToIlsIncludingVat } from "@/lib/usd-balance-ils-vat";
 import { softRefreshPaymentIntakeOrders } from "@/lib/payment-intake-orders-source";
 import { PaymentDocumentRateIcons } from "@/components/admin/PaymentDocumentRateIcons";
@@ -1320,7 +1320,7 @@ export function PaymentModalUpdated({
           : isExistingPayment
             ? Math.max(0, paymentApplyUsd)
             : Math.max(0, totals.totalUsd),
-        selectedOrders: customerBalanceResetPending ? [] : orders,
+        selectedOrders: customerBalanceResetPending ? [] : toPaymentPreviewOrders(orders),
         selectedOrdersRemainingUsd: customerBalanceResetPending ? 0 : undefined,
         useExistingCredit: pendingCreditApplyUsd > 0.01,
       }),
