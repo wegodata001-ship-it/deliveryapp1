@@ -93,6 +93,18 @@ function money2(n: number): number {
   return roundOrderMoney2(Number.isFinite(n) ? n : 0);
 }
 
+/** Preview only — min(SSOT credit, eligible remaining). 0 when unused or nothing to cover. */
+export function computePendingCreditApplyUsd(input: {
+  availableCreditUsd: number;
+  eligibleAmountToPayUsd: number;
+  useExistingCredit: boolean;
+}): number {
+  if (!input.useExistingCredit) return 0;
+  const credit = money2(Math.max(0, input.availableCreditUsd));
+  const eligible = money2(Math.max(0, input.eligibleAmountToPayUsd));
+  return money2(Math.min(credit, eligible));
+}
+
 /**
  * חוב ל-preview:
  * 1. SSOT לקוח כשנטען — גם אם $0 (חוב נטו אחרי קיזוז).

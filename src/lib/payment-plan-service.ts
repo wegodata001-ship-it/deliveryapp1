@@ -7,6 +7,7 @@ import {
   type PaymentPlanStatus,
 } from "@/lib/payment-plan-types";
 import { computeOrderOpenDebtUsd } from "@/lib/order-remaining-debt";
+import { loadCollectibleRemainingUsdByOrderId } from "@/lib/orders-list-collectible-remaining";
 import { activePaidPaymentWhere } from "@/lib/payment-record-status-shared";
 
 const MONEY_EPS = 0.02;
@@ -244,7 +245,11 @@ export async function syncPaymentPlanAfterBreakdownWrite(
     _sum: { amountUsd: true },
   });
   const paidUsd = Number(paidAgg._sum.amountUsd?.toString() ?? "0");
-  const remainingUsd = computeOrderOpenDebtUsd(totalUsd, paidUsd);
+  // B: persisted remaining is shown later as effective remaining → collectible.
+  const collectible = await loadCollectibleRemainingUsdByOrderId([order.customerId]);
+  const remainingUsd = collectible.has(order.id)
+    ? collectible.get(order.id)!
+    : computeOrderOpenDebtUsd(totalUsd, paidUsd);
 
   const week = order.weekCode?.trim() || params.intakeWeekCode?.trim() || "AH-0";
   await ensurePaymentPlanInTx(db, {

@@ -9,6 +9,7 @@ import { getCustomerAccountBalancesMany } from "@/lib/customer-account-balances"
 import { currentCustomerFinancialScopeForWorkCountry } from "@/lib/customer-financial-scope";
 import { loadCollectibleRemainingUsdByOrderId } from "@/lib/orders-list-collectible-remaining";
 import { loadPaymentIntakeOrdersForCustomer } from "@/lib/payment-intake-load";
+import { buildCustomerAccountLedger } from "@/lib/customer-account-ledger";
 import { virtualCustomerCreditAppliedUsdByOrderId } from "@/lib/order-remaining-debt";
 import { calculateCustomerBalances } from "@/lib/customer-balance-calculator";
 import { getCustomerCreditBalancesUsdMany } from "@/lib/customer-credit-balance";
@@ -61,6 +62,82 @@ describe("order remaining reconciles with customer SSOT", () => {
     }
     assert.deepEqual(mismatches, []);
     assert.equal(customers.length, 12);
+  });
+
+  it("all four views: Ledger / Balances / Payment Intake / Order Remaining", async () => {
+    const customers = await prisma.customer.findMany({
+      where: { deletedAt: null, isActive: true },
+      select: { id: true, customerCode: true },
+      orderBy: { customerCode: "asc" },
+    });
+    const ids = customers.map((c) => c.id);
+    const scope = currentCustomerFinancialScopeForWorkCountry("TR");
+    const [accounts, collectible] = await Promise.all([
+      getCustomerAccountBalancesMany(ids, scope),
+      loadCollectibleRemainingUsdByOrderId(ids),
+    ]);
+    const orders = await prisma.order.findMany({
+      where: { customerId: { in: ids }, deletedAt: null, status: { not: OS.CANCELLED } },
+      select: { id: true, customerId: true, status: true },
+    });
+    const remainingByCustomer = new Map<string, number>();
+    for (const o of orders) {
+      if (!o.customerId || isDebtWithdrawalOrderStatus(o.status)) continue;
+      remainingByCustomer.set(
+        o.customerId,
+        r2((remainingByCustomer.get(o.customerId) ?? 0) + (collectible.get(o.id) ?? 0)),
+      );
+    }
+
+    const expected: Record<string, number> = { "101": 758.01, "102": 0, "105": 0 };
+    const mismatches: string[] = [];
+    let ledgerPass = 0;
+    let balancesPass = 0;
+    let intakePass = 0;
+    let remainingPass = 0;
+    let allFour = 0;
+
+    for (const c of customers) {
+      const balances = r2(accounts.get(c.id)?.openDebtUsd ?? 0);
+      const ledger = await buildCustomerAccountLedger({
+        customerId: c.id,
+        sourceCountry: "TURKEY",
+      });
+      const ledgerDebt = r2(Number(ledger.openDebtUsd));
+      const intake = await loadPaymentIntakeOrdersForCustomer({
+        customerId: c.id,
+        paymentWorkCountryRaw: "TURKEY",
+      });
+      const intakeSum = intake.ok
+        ? r2(intake.orders.reduce((s, o) => s + Number(o.dbRemainingUsd), 0))
+        : NaN;
+      const orderSum = remainingByCustomer.get(c.id) ?? 0;
+
+      const ledgerOk = Math.abs(ledgerDebt - balances) <= EPS;
+      const balancesOk = true;
+      const intakeOk = Math.abs(intakeSum - balances) <= EPS;
+      const remainingOk = Math.abs(orderSum - balances) <= EPS;
+      if (ledgerOk) ledgerPass += 1;
+      else mismatches.push(`${c.customerCode} ledger ${ledgerDebt} vs balances ${balances}`);
+      if (balancesOk) balancesPass += 1;
+      if (intakeOk) intakePass += 1;
+      else mismatches.push(`${c.customerCode} intake ${intakeSum} vs balances ${balances}`);
+      if (remainingOk) remainingPass += 1;
+      else mismatches.push(`${c.customerCode} remaining ${orderSum} vs balances ${balances}`);
+      if (ledgerOk && intakeOk && remainingOk) allFour += 1;
+
+      const exp = expected[c.customerCode ?? ""];
+      if (exp != null && Math.abs(balances - exp) > EPS) {
+        mismatches.push(`${c.customerCode} expected ${exp} got ${balances}`);
+      }
+    }
+
+    assert.deepEqual(mismatches, []);
+    assert.equal(ledgerPass, 12);
+    assert.equal(balancesPass, 12);
+    assert.equal(intakePass, 12);
+    assert.equal(remainingPass, 12);
+    assert.equal(allFour, 12);
   });
 
   it("customer 101 virtual credit FIFO and intake remaining", async () => {

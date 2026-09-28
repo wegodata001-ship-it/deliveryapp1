@@ -61,6 +61,26 @@ describe("customer financial SSOT unification", () => {
     assert.equal(lastAffecting?.balanceAfterUsd, 1273.83);
   });
 
+  it("customers 107 / 100 CURRENT credit books", async () => {
+    for (const [code, creditUsd] of [
+      ["107", 28.05],
+      ["100", 3530],
+    ] as const) {
+      const customer = await prisma.customer.findFirst({
+        where: { customerCode: code, deletedAt: null },
+        select: { id: true },
+      });
+      if (!customer) {
+        console.warn(`skip: customer ${code} missing`);
+        continue;
+      }
+      const accounts = await getCustomerAccountBalances(customer.id, CURRENT);
+      assert.equal(accounts.openDebtUsd, 0, `${code} debt`);
+      assert.equal(accounts.availableCreditUsd, creditUsd, `${code} credit`);
+      assert.equal(accounts.netBalanceUsd, creditUsd, `${code} net`);
+    }
+  });
+
   it("customer 101 HISTORICAL 19/09 matches balances + card", async () => {
     const customer = await prisma.customer.findFirst({
       where: { customerCode: "101", deletedAt: null },

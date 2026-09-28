@@ -13,11 +13,12 @@ import { loadFinanceSettingsSerialized } from "@/lib/financial-settings";
 import { logFinanceSaveTarget } from "@/lib/finance-log";
 import { logPaymentAllocationPreSave } from "@/lib/payment-allocation-debug";
 import {
-  orderLedgerBalanceUsd,
+  paymentIntakeOrderRemainingUsd,
   roundMoney2,
   toPaymentIntakeBases,
 } from "@/lib/payment-intake";
 import { computeOrderOpenDebtUsd } from "@/lib/order-remaining-debt";
+import { loadCollectibleRemainingUsdByOrderId } from "@/lib/orders-list-collectible-remaining";
 import {
   computePaymentOveragePreview,
   orderExpectedIlsValue,
@@ -383,11 +384,10 @@ export async function previewCustomerPaymentOverageAction(input: {
       paidIls: o.paidIls,
     })),
   );
+  const collectible = await loadCollectibleRemainingUsdByOrderId([cid]);
   let openDebtUsd = 0;
   for (const o of orders) {
-    const total = Number(orderUsdTotal(o).toFixed(4));
-    const paid = Number(o.paidUsd.toFixed(4));
-    openDebtUsd += computeOrderOpenDebtUsd(total, paid);
+    openDebtUsd += collectible.get(o.id) ?? 0;
   }
   openDebtUsd = roundMoney2(openDebtUsd);
 
@@ -658,13 +658,20 @@ export async function savePaymentUpdatedAction(
     }
   }
 
+  // B: save/preview/reset/apply-credit use effective remaining → collectible.
+  const collectibleByOrder = await loadCollectibleRemainingUsdByOrderId([cid]);
   const bases = toPaymentIntakeBases(
     orders.map((o) => {
       const deal = o.amountUsd ?? new Prisma.Decimal(0);
       const com = o.commissionUsd ?? new Prisma.Decimal(0);
       const totalUsdVal = o.totalUsd ?? deal.add(com).toDecimalPlaces(4, 4);
       const paidSum = paidByOrder.get(o.id) ?? new Prisma.Decimal(0);
-      const remDec = totalUsdVal.sub(paidSum).toDecimalPlaces(2, 4);
+      const remDec = new Prisma.Decimal(
+        (
+          collectibleByOrder.get(o.id) ??
+          computeOrderOpenDebtUsd(Number(totalUsdVal), Number(paidSum))
+        ).toFixed(2),
+      );
       return {
         id: o.id,
         orderNumber: null,
@@ -930,7 +937,7 @@ export async function savePaymentUpdatedAction(
          */
         if (allocationEntries.length === 0) {
           const ledgerOpenUsd = roundMoney2(
-            bases.reduce((s, b) => s + computeOrderOpenDebtUsd(b.totalAmountUsd, b.dbPaidUsd), 0),
+            bases.reduce((s, b) => s + paymentIntakeOrderRemainingUsd(b), 0),
           );
           if (ledgerOpenUsd > ALLOC_EPS && openMethodRemainingUsd <= ALLOC_EPS) {
             usedMethodMatching = false;
@@ -1037,7 +1044,7 @@ export async function savePaymentUpdatedAction(
     });
     if (allocationEntries.length === 0 && !canSaveWithoutAllocTarget) {
       const ledgerOpenUsd = roundMoney2(
-        bases.reduce((s, b) => s + computeOrderOpenDebtUsd(b.totalAmountUsd, b.dbPaidUsd), 0),
+        bases.reduce((s, b) => s + paymentIntakeOrderRemainingUsd(b), 0),
       );
       console.error("[payment-save] Matching/FIFO returned no allocation targets", {
         customerId: cid,
@@ -2009,29 +2016,13 @@ export async function savePaymentUpdatedAction(
       deletedAt: null,
       ...(targetOrderIdSet ? { id: { in: [...targetOrderIdSet] } } : {}),
     },
-    select: { id: true, totalUsd: true, amountUsd: true, commissionUsd: true },
+    select: { id: true },
   });
-  const paidAgg = await prisma.payment.groupBy({
-    by: ["orderId"],
-    where: {
-      customerId: cid,
-      orderId: { in: remainingOrders.map((o) => o.id) },
-      amountUsd: { not: null },
-      ...activePaidPaymentWhere,
-    },
-    _sum: { amountUsd: true },
-  });
-  const postSavePaidByOrder = new Map(
-    paidAgg.filter((r) => r.orderId).map((r) => [r.orderId!, Number(r._sum.amountUsd ?? 0)] as const),
-  );
+  const postSaveCollectible = await loadCollectibleRemainingUsdByOrderId([cid]);
   let remainingDebtUsd = 0;
   const targetOrderIds: string[] = [];
   for (const o of remainingOrders) {
-    const total = Number(
-      o.totalUsd ?? new Prisma.Decimal(Number(o.amountUsd ?? 0) + Number(o.commissionUsd ?? 0)),
-    );
-    const paid = postSavePaidByOrder.get(o.id) ?? 0;
-    const open = computeOrderOpenDebtUsd(total, paid);
+    const open = postSaveCollectible.get(o.id) ?? 0;
     if (open > ALLOC_EPS) {
       remainingDebtUsd = roundMoney2(remainingDebtUsd + open);
       targetOrderIds.push(o.id);
@@ -2288,23 +2279,9 @@ async function applyCustomerBalanceResetFromCreditInTx(
     select: {
       id: true,
       orderNumber: true,
-      amountUsd: true,
-      commissionUsd: true,
-      totalUsd: true,
     },
   });
   if (orders.length === 0) throw new Error("לא נמצאו הזמנות ללקוח");
-
-  const orderIds = orders.map((o) => o.id);
-  const sums = await tx.payment.groupBy({
-    by: ["orderId"],
-    where: { orderId: { in: orderIds }, amountUsd: { not: null }, ...activePaidPaymentWhere },
-    _sum: { amountUsd: true },
-  });
-  const paidByOrder = new Map<string, Prisma.Decimal>();
-  for (const s of sums) {
-    if (s.orderId) paidByOrder.set(s.orderId, s._sum.amountUsd ?? new Prisma.Decimal(0));
-  }
 
   const toClose: Array<{
     orderId: string;
@@ -2312,14 +2289,9 @@ async function applyCustomerBalanceResetFromCreditInTx(
     remainingUsd: Prisma.Decimal;
   }> = [];
 
+  const collectible = await loadCollectibleRemainingUsdByOrderId([cid]);
   for (const o of orders) {
-    const amount = o.amountUsd ?? new Prisma.Decimal(0);
-    const commissionStored = o.commissionUsd ?? new Prisma.Decimal(0);
-    const total = o.totalUsd ?? amount.add(commissionStored).toDecimalPlaces(4, 4);
-    const paid = paidByOrder.get(o.id) ?? new Prisma.Decimal(0);
-    const remaining = new Prisma.Decimal(
-      computeOrderOpenDebtUsd(Number(total), Number(paid)).toFixed(4),
-    );
+    const remaining = new Prisma.Decimal((collectible.get(o.id) ?? 0).toFixed(4));
     if (remaining.abs().lte(EPS)) continue;
     toClose.push({
       orderId: o.id,
@@ -3537,30 +3509,14 @@ export async function applyCustomerCreditToOpenOrdersAction(input: {
           ...(requestedOrderIds.length > 0 ? { id: { in: requestedOrderIds } } : {}),
         },
         orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],
-        select: { id: true, orderNumber: true, amountUsd: true, commissionUsd: true, totalUsd: true, weekCode: true, countryCode: true },
+        select: { id: true, orderNumber: true, weekCode: true, countryCode: true },
       });
       if (orders.length === 0) throw new Error("אין הזמנות ללקוח");
 
-      const orderIds = orders.map((o) => o.id);
-      const paidAgg = await tx.payment.groupBy({
-        by: ["orderId"],
-        where: { orderId: { in: orderIds }, amountUsd: { not: null }, ...activePaidPaymentWhere },
-        _sum: { amountUsd: true },
-      });
-      const paidByOrder = new Map<string, Prisma.Decimal>();
-      for (const p of paidAgg) {
-        if (p.orderId) paidByOrder.set(p.orderId, p._sum.amountUsd ?? new Prisma.Decimal(0));
-      }
-
+      const collectible = await loadCollectibleRemainingUsdByOrderId([cid]);
       const openOrders = orders
         .map((o) => {
-          const deal = o.amountUsd ?? new Prisma.Decimal(0);
-          const com = o.commissionUsd ?? new Prisma.Decimal(0);
-          const total = o.totalUsd ?? deal.add(com).toDecimalPlaces(4, 4);
-          const paid = paidByOrder.get(o.id) ?? new Prisma.Decimal(0);
-          const remaining = new Prisma.Decimal(
-            computeOrderOpenDebtUsd(Number(total), Number(paid)).toFixed(4),
-          );
+          const remaining = new Prisma.Decimal((collectible.get(o.id) ?? 0).toFixed(4));
           return {
             orderId: o.id,
             orderNumber: o.orderNumber?.trim() || null,

@@ -6,9 +6,15 @@
 
 import { PaymentMethod, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { allocatePaymentAcrossOrders, roundMoney2, toPaymentIntakeBases } from "@/lib/payment-intake";
+import {
+  allocatePaymentAcrossOrders,
+  paymentIntakeOrderRemainingUsd,
+  roundMoney2,
+  toPaymentIntakeBases,
+} from "@/lib/payment-intake";
 import { activePaidPaymentWhere } from "@/lib/payment-record-status-shared";
 import { computeOrderOpenDebtUsd } from "@/lib/order-remaining-debt";
+import { loadCollectibleRemainingUsdByOrderId } from "@/lib/orders-list-collectible-remaining";
 import { allocateNextPaymentCapture, resolvePaymentWorkCountry } from "@/lib/payment-capture-code";
 import { computeFromUsdAmount } from "@/lib/financial-calc";
 import { loadFinanceSettingsSerialized } from "@/lib/financial-settings";
@@ -167,6 +173,8 @@ export async function executePaymentIntake(params: {
     }
   }
 
+  // B: rebuild allocates against effective remaining → collectible, not leftover.
+  const collectible = await loadCollectibleRemainingUsdByOrderId([cid]);
   const bases = toPaymentIntakeBases(
     filteredOrders.map((o) => {
       const deal = o.amountUsd ?? new Prisma.Decimal(0);
@@ -174,7 +182,10 @@ export async function executePaymentIntake(params: {
       const totalUsdVal = o.totalUsd ?? deal.add(com).toDecimalPlaces(4, 4);
       const paidSum = paidByOrder.get(o.id) ?? new Prisma.Decimal(0);
       const remDec = new Prisma.Decimal(
-        computeOrderOpenDebtUsd(Number(totalUsdVal), Number(paidSum)).toFixed(2),
+        (
+          collectible.get(o.id) ??
+          computeOrderOpenDebtUsd(Number(totalUsdVal), Number(paidSum))
+        ).toFixed(2),
       );
       return {
         id: o.id,
@@ -201,7 +212,7 @@ export async function executePaymentIntake(params: {
   );
 
   const debtUsd = roundMoney2(
-    bases.reduce((s, b) => s + computeOrderOpenDebtUsd(b.totalAmountUsd, b.dbPaidUsd), 0),
+    bases.reduce((s, b) => s + paymentIntakeOrderRemainingUsd(b), 0),
   );
   const compare = compareReceivedToDebt(debtUsd, receivedUsd);
 

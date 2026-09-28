@@ -146,12 +146,16 @@ export function computeCustomerResetBalanceMetrics(
   };
 }
 
-/** יתרה לגבייה — collectible אחרי משיכת חוב, לא total−paid בלבד. */
-function orderRemainingUsd(o: PaymentIntakeOrderBase): number {
+/** יתרה לגבייה — collectible אחרי משיכת חוב + זכות, לא total−paid בלבד. */
+export function paymentIntakeOrderRemainingUsd(o: PaymentIntakeOrderBase): number {
   if (o.collectibleRemainingUsd != null && Number.isFinite(o.collectibleRemainingUsd)) {
     return roundMoney2(Math.max(0, o.collectibleRemainingUsd));
   }
   return computeOrderOpenDebtUsd(o.totalAmountUsd, o.dbPaidUsd);
+}
+
+function orderRemainingUsd(o: PaymentIntakeOrderBase): number {
+  return paymentIntakeOrderRemainingUsd(o);
 }
 
 type ClosureDebtRow = { o: PaymentIntakeOrderBase; idx: number; remaining: number };

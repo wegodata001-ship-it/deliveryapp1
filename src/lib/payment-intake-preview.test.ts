@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildPaymentPreview, toPaymentPreviewOrders } from "@/lib/payment-intake-preview";
+import {
+  buildPaymentPreview,
+  computePendingCreditApplyUsd,
+  toPaymentPreviewOrders,
+} from "@/lib/payment-intake-preview";
 
 function preview(input: {
   debt: number | null;
@@ -119,6 +123,49 @@ describe("buildPaymentPreview", () => {
     const p = preview({ debt: 80, payment: 100 });
     assert.equal(p.remainingDebt, 0);
     assert.ok(p.projectedOverpayment > 0);
+  });
+});
+
+describe("computePendingCreditApplyUsd", () => {
+  it("customer 107: credit $28.05 and no eligible remaining → $0", () => {
+    assert.equal(
+      computePendingCreditApplyUsd({
+        availableCreditUsd: 28.05,
+        eligibleAmountToPayUsd: 0,
+        useExistingCredit: true,
+      }),
+      0,
+    );
+  });
+
+  it("caps apply to eligible amount", () => {
+    assert.equal(
+      computePendingCreditApplyUsd({
+        availableCreditUsd: 28.05,
+        eligibleAmountToPayUsd: 10,
+        useExistingCredit: true,
+      }),
+      10,
+    );
+    assert.equal(
+      computePendingCreditApplyUsd({
+        availableCreditUsd: 28.05,
+        eligibleAmountToPayUsd: 100,
+        useExistingCredit: true,
+      }),
+      28.05,
+    );
+  });
+
+  it("does not apply until the user opts in", () => {
+    assert.equal(
+      computePendingCreditApplyUsd({
+        availableCreditUsd: 28.05,
+        eligibleAmountToPayUsd: 100,
+        useExistingCredit: false,
+      }),
+      0,
+    );
   });
 });
 

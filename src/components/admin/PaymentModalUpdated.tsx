@@ -60,7 +60,11 @@ import {
   paymentIntakeDebtBeforePaymentUsd,
 } from "@/lib/payment-intake-customer-debt";
 import { buildCustomerFinancialState } from "@/lib/customer-account-balances-shared";
-import { buildPaymentPreview, toPaymentPreviewOrders } from "@/lib/payment-intake-preview";
+import {
+  buildPaymentPreview,
+  computePendingCreditApplyUsd,
+  toPaymentPreviewOrders,
+} from "@/lib/payment-intake-preview";
 import { convertDebtUsdToIlsIncludingVat } from "@/lib/usd-balance-ils-vat";
 import { softRefreshPaymentIntakeOrders } from "@/lib/payment-intake-orders-source";
 import { PaymentDocumentRateIcons } from "@/components/admin/PaymentDocumentRateIcons";
@@ -1199,15 +1203,34 @@ export function PaymentModalUpdated({
     [displayCreditBalanceUsd],
   );
 
-  const pendingCreditApplyUsd = useMemo(() => {
-    if (!balanceResetFromCredit || !customerBalanceResetPending) return 0;
-    return roundMoney2(Math.min(creditAvailableForResetUsd, orderRemainderAfterPaymentUsd));
+  const eligibleCreditCoverUsd = useMemo(() => {
+    if (isHistoricalPaymentView) return 0;
+    const draftPay = isExistingPayment
+      ? Math.max(0, paymentApplyUsd)
+      : Math.max(0, totals.totalUsd);
+    return roundMoney2(Math.max(0, customerOpenDebtDisplayUsd - draftPay));
   }, [
-    balanceResetFromCredit,
-    customerBalanceResetPending,
-    creditAvailableForResetUsd,
-    orderRemainderAfterPaymentUsd,
+    isHistoricalPaymentView,
+    isExistingPayment,
+    paymentApplyUsd,
+    totals.totalUsd,
+    customerOpenDebtDisplayUsd,
   ]);
+
+  const pendingCreditApplyUsd = useMemo(
+    () =>
+      computePendingCreditApplyUsd({
+        availableCreditUsd: creditAvailableForResetUsd,
+        eligibleAmountToPayUsd: eligibleCreditCoverUsd,
+        useExistingCredit: balanceResetFromCredit,
+      }),
+    [creditAvailableForResetUsd, eligibleCreditCoverUsd, balanceResetFromCredit],
+  );
+
+  const canUseExistingCredit =
+    !isHistoricalPaymentView &&
+    creditAvailableForResetUsd > 0.01 &&
+    eligibleCreditCoverUsd > 0.01;
 
   const displayCreditBalanceAfterApplyUsd = useMemo(() => {
     if (pendingCreditApplyUsd <= 0.01) return displayCreditBalanceUsd;
@@ -1215,9 +1238,9 @@ export function PaymentModalUpdated({
   }, [displayCreditBalanceUsd, pendingCreditApplyUsd]);
 
   const remainderAfterCreditApplyUsd = useMemo(() => {
-    if (pendingCreditApplyUsd <= 0.01) return orderRemainderAfterPaymentUsd;
-    return roundMoney2(Math.max(0, orderRemainderAfterPaymentUsd - pendingCreditApplyUsd));
-  }, [orderRemainderAfterPaymentUsd, pendingCreditApplyUsd]);
+    if (pendingCreditApplyUsd <= 0.01) return eligibleCreditCoverUsd;
+    return roundMoney2(Math.max(0, eligibleCreditCoverUsd - pendingCreditApplyUsd));
+  }, [eligibleCreditCoverUsd, pendingCreditApplyUsd]);
 
   /** מחשבון חי — רק שורות התשלום בטופס (onChange) */
   const liveFormKpis = useMemo(
@@ -1339,7 +1362,7 @@ export function PaymentModalUpdated({
   );
 
   const accountStatusDisplay = useMemo((): PaymentBalanceDisplay => {
-    const remaining = paymentPreview.remainingDebt;
+    const remaining = remainderAfterCreditApplyUsd;
     return {
       state: remaining > 0.01 ? "debt" : "cleared",
       title: "נשאר לתשלום",
@@ -1348,7 +1371,7 @@ export function PaymentModalUpdated({
       displayUsd: remaining,
       displayIls: convertDebtUsdToIlsIncludingVat(remaining, rateN),
     };
-  }, [paymentPreview.remainingDebt, rateN]);
+  }, [remainderAfterCreditApplyUsd, rateN]);
 
   /** תצוגה חיה — יתרה לאחר הקצאת התשלום (חתום: שלילי = עודף) */
   const openDebtAfterPaymentPreview = useMemo(() => {
@@ -1633,6 +1656,7 @@ export function PaymentModalUpdated({
         setOrders(res.orders);
         setCommissionResetIds([]);
         setCustomerBalanceResetPending(false);
+        setBalanceResetFromCredit(false);
         setIncludedIds(null);
         return { ordersLoadMs, ok: true as const };
       });
@@ -1754,6 +1778,7 @@ export function PaymentModalUpdated({
         setOrders([]);
         setCommissionResetIds([]);
         setCustomerBalanceResetPending(false);
+        setBalanceResetFromCredit(false);
         setLoadErr(workspace.error);
         logPaymentCapturePerf({
           label: "customerWorkspaceAwait",
@@ -1768,6 +1793,7 @@ export function PaymentModalUpdated({
       setOrders(workspace.orders);
       setCommissionResetIds([]);
       setCustomerBalanceResetPending(false);
+      setBalanceResetFromCredit(false);
       setDraftCustomer({
         code: workspace.customer.customerCode ?? "",
         displayName: workspace.customer.displayName ?? "",
@@ -1948,6 +1974,7 @@ export function PaymentModalUpdated({
         });
         setCommissionResetIds([]);
         setCustomerBalanceResetPending(false);
+        setBalanceResetFromCredit(false);
         setIncludedIds(null);
         return true;
       }
@@ -1970,6 +1997,7 @@ export function PaymentModalUpdated({
       setOrders(res.orders);
       setCommissionResetIds([]);
       setCustomerBalanceResetPending(false);
+      setBalanceResetFromCredit(false);
       setDraftCustomer({
         code: res.customer.customerCode ?? "",
         displayName: res.customer.displayName ?? "",
@@ -2222,6 +2250,7 @@ export function PaymentModalUpdated({
       setLoadErr(null);
       setCommissionResetIds([]);
       setCustomerBalanceResetPending(false);
+      setBalanceResetFromCredit(false);
       setOrders([]);
       setCustomerPayments([]);
       setCustomerOpenDebtSignedUsd(null);
@@ -2498,6 +2527,7 @@ export function PaymentModalUpdated({
     setHighlightInvalidCheckFields(false);
     setCommissionResetIds([]);
     setCustomerBalanceResetPending(false);
+    setBalanceResetFromCredit(false);
     setCustomerOpenDebtSignedUsd(null);
     setCustomerLedgerChargesUsd(null);
     setCustomerLedgerPaymentsUsd(null);
@@ -3072,10 +3102,7 @@ export function PaymentModalUpdated({
       saveJustSavedTimerRef.current = null;
     }, 2000);
 
-    const creditApplyUsd =
-      balanceResetFromCredit && customerBalanceResetPending
-        ? roundMoney2(Math.min(creditAvailableForResetUsd, orderRemainderAfterPaymentUsd))
-        : 0;
+    const creditApplyUsd = pendingCreditApplyUsd;
     if (creditApplyUsd > 0.01) {
       const creditRes = await applyCustomerCreditToOpenOrdersAction({
         customerId: customer.id,
@@ -3177,6 +3204,7 @@ export function PaymentModalUpdated({
     );
     setCommissionResetIds([]);
     setCustomerBalanceResetPending(false);
+    setBalanceResetFromCredit(false);
     setIncludedIds(null);
     setCustomer((cur) => (cur ? { ...cur, customerBalanceUsd: res.saved.customerBalanceUsd } : cur));
     if (customer.id) void refreshCustomerOpenDebt(customer.id);
@@ -4237,12 +4265,34 @@ export function PaymentModalUpdated({
                             aria-label="פירוט יתרת זכות"
                             disabled={!customer?.id}
                           >
-                            +{fmtUsdDisplay(
-                              balanceResetFromCredit && customerBalanceResetPending
-                                ? displayCreditBalanceAfterApplyUsd
-                                : displayCreditBalanceUsd,
-                            )}
+                            +{fmtUsdDisplay(displayCreditBalanceAfterApplyUsd)}
                           </button>
+                          {customerHasCredit && !isHistoricalPaymentView ? (
+                            <button
+                              type="button"
+                              className="payment-modal-cust-summary__credit-btn"
+                              disabled={!canUseExistingCredit && pendingCreditApplyUsd <= 0.01}
+                              onClick={() => {
+                                if (pendingCreditApplyUsd > 0.01) {
+                                  setBalanceResetFromCredit(false);
+                                  onToast("שימוש ביתרת זכות בוטל");
+                                  return;
+                                }
+                                if (!canUseExistingCredit) return;
+                                setBalanceResetFromCredit(true);
+                                onToast("יתרת זכות תנוצל בשמירת התשלום");
+                              }}
+                              aria-label={
+                                pendingCreditApplyUsd > 0.01
+                                  ? "בטל שימוש ביתרת זכות"
+                                  : canUseExistingCredit
+                                    ? `השתמש ביתרת זכות $${fmtUsdDisplay(creditAvailableForResetUsd)}`
+                                    : "אין סכום לכיסוי ביתרת זכות"
+                              }
+                            >
+                              {pendingCreditApplyUsd > 0.01 ? "בטל" : "+ השתמש"}
+                            </button>
+                          ) : null}
                         </div>
                         {customerFinancial.tone !== "credit" ? (
                         <div

@@ -5,7 +5,6 @@ import { OrdersListToolbar, type OrdersListToolbarProps } from "@/components/adm
 import { useRouter, useSearchParams } from "next/navigation";
 import { PaymentMethod } from "@prisma/client";
 import { OS } from "@/lib/order-status-slugs";
-import { computeOrderOpenDebtUsd } from "@/lib/order-remaining-debt";
 import { useOrderStatusCatalog } from "@/components/admin/OrderStatusCatalogProvider";
 import { OrderStatusSelect } from "@/components/admin/OrderStatusSelect";
 import {
@@ -710,16 +709,14 @@ export function OrdersListShell({
       return;
     }
     if (next === OS.DEBT_WITHDRAWAL && "debtWithdrawalUsd" in res && typeof res.debtWithdrawalUsd === "number") {
-      const withdrawn = res.debtWithdrawalUsd;
       const uiDwT0 = now();
       setRows((cur) =>
         cur.map((r) => {
           if (r.id !== orderId) return r;
-          const total = parseNumeric(r.totalAmountUsd) ?? 0;
-          const newBalance = computeOrderOpenDebtUsd(total, withdrawn);
+          // B: DW remaining display = collectible 0 (same as orders-list-data).
           return {
             ...r,
-            balanceUsd: fmtUsd(newBalance),
+            balanceUsd: fmtUsd(0),
           };
         }),
       );

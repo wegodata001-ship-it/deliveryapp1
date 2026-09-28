@@ -1,10 +1,9 @@
 import {
   allocatePaymentAcrossOrders,
-  orderLedgerBalanceUsd,
+  paymentIntakeOrderRemainingUsd,
   roundMoney2,
   type PaymentIntakeOrderBase,
 } from "@/lib/payment-intake";
-import { computeOrderOpenDebtUsd } from "@/lib/order-remaining-debt";
 
 const ALLOC_EPS = 0.02;
 
@@ -38,18 +37,19 @@ export type PaymentAllocationDebugResult = {
   emptyReasons: string[];
 };
 
+/** B: open filter must use collectible remaining so leftover cannot re-open FIFO. */
 function openDebtOrders(bases: PaymentIntakeOrderBase[]): PaymentIntakeOrderBase[] {
-  return bases.filter((o) => orderLedgerBalanceUsd(o) > ALLOC_EPS);
+  return bases.filter((o) => paymentIntakeOrderRemainingUsd(o) > ALLOC_EPS);
 }
 
 function closedOrdersCount(bases: PaymentIntakeOrderBase[]): number {
-  return bases.filter((o) => orderLedgerBalanceUsd(o) <= ALLOC_EPS).length;
+  return bases.filter((o) => paymentIntakeOrderRemainingUsd(o) <= ALLOC_EPS).length;
 }
 
 export function diagnosePaymentAllocation(input: PaymentAllocationDebugInput): PaymentAllocationDebugResult {
   const openOrders = openDebtOrders(input.bases);
   const openBalanceUsd = roundMoney2(
-    openOrders.reduce((sum, o) => sum + computeOrderOpenDebtUsd(o.totalAmountUsd, o.dbPaidUsd), 0),
+    openOrders.reduce((sum, o) => sum + paymentIntakeOrderRemainingUsd(o), 0),
   );
 
   const alloc =

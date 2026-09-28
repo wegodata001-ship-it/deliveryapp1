@@ -395,6 +395,11 @@ export async function getSystemStatsAction(): Promise<SystemStats> {
 
   const totalOrdersUsd = Number(openOrdersAgg._sum?.totalUsd ?? 0);
   const totalPaidUsd = Number(paidOrdersAgg._sum?.amountUsd ?? 0);
+  /**
+   * A — intentional step-1 (Σ totals − Σ payments).
+   * Settings KPI is a system-wide rollup, not per-order collectible remaining.
+   * Withdrawal/credit FIFO does not apply to this aggregate.
+   */
   const openBalancesUsd = computeOrderOpenDebtUsd(totalOrdersUsd, totalPaidUsd);
 
   return {
