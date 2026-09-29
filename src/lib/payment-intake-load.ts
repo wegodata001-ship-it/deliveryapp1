@@ -13,7 +13,10 @@ import { reconcileOrderBreakdownWithLedger } from "@/lib/order-remaining-debt";
 import { computeOrderMethodDeviation, isCompositePaymentMethod, paymentMethodBucketKey } from "@/lib/payment-breakdown-shared";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 import type { PaymentIntakeCustomerPaymentRow } from "@/lib/payment-intake-customer-kpi";
-import { paymentIntakeOrderDateThroughAhWeekEnd } from "@/lib/payment-intake-order-filter";
+import {
+  paymentIntakeOrderDateThroughAhWeekEnd,
+  sumPaymentIntakeWeekScopedRemainingUsd,
+} from "@/lib/payment-intake-order-filter";
 import { loadPaymentPlanSummariesByOrderId } from "@/lib/payment-plan-service";
 import { DEFAULT_WORK_COUNTRY, normalizeWorkCountryCode, type WorkCountryCode } from "@/lib/work-country";
 import { formatLocalYmd } from "@/lib/work-week";
@@ -222,7 +225,7 @@ function mapOrderToIntakeRow(
       })),
       actualMethods.map((a) => ({ method: a.method, usd: a.usd })),
     ).hasDeviation;
-    breakdown = reconcileOrderBreakdownWithLedger(breakdown, remainingN);
+    breakdown = reconcileOrderBreakdownWithLedger(breakdown, remainingN, { preservePaid: true });
   }
   return {
     id: o.id,
@@ -410,19 +413,18 @@ export async function loadPaymentIntakeOrdersForCustomer(
   if (!cust) return { ok: false, error: "לקוח לא נמצא" };
 
   const intakeWeekCode = params.weekCodeForOpenBalances?.trim() || null;
-  /** שבוע מקור ההזמנות — סינון orderDate עד סוף שבוע AH (לא שבוע הקליטה) */
   const weekDateWhere = paymentIntakeOrderDateThroughAhWeekEnd(intakeWeekCode);
   const paymentWorkCountry = normalizeWorkCountryCode(params.paymentWorkCountryRaw) ?? DEFAULT_WORK_COUNTRY;
   const baseWhere = intakeOrderBaseWhere(cid, paymentWorkCountry);
 
-  const weekOrders = await prisma.order.findMany({
+  const eligibleOrders = await prisma.order.findMany({
     where: { ...baseWhere, ...(weekDateWhere ?? {}) },
     orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],
     select: INTAKE_ORDER_SELECT,
   });
 
   const [rows, withdrawalUsd, availableCreditUsd] = await Promise.all([
-    attachPaymentsAndMapRows(weekOrders),
+    attachPaymentsAndMapRows(eligibleOrders),
     loadCustomerDebtWithdrawalUsd(cid, paymentWorkCountry),
     loadCustomerCreditUsd(cid, paymentWorkCountry),
   ]);
@@ -449,6 +451,20 @@ export async function loadPaymentIntakeOrdersForCustomer(
   })();
 
   return { ok: true, orders: collectibleRows };
+}
+
+/** יקום יחיד לקליטת תשלום: טבלה / נשאר לתשלום / התאמה / הקצאה */
+export async function getPaymentIntakeEligibleOrders(params: IntakeLoadParams): Promise<
+  | { ok: true; orders: PaymentIntakeOrderRow[]; weekScopedRemainingUsd: number }
+  | { ok: false; error: string }
+> {
+  const loaded = await loadPaymentIntakeOrdersForCustomer(params);
+  if (!loaded.ok) return loaded;
+  return {
+    ok: true,
+    orders: loaded.orders,
+    weekScopedRemainingUsd: sumPaymentIntakeWeekScopedRemainingUsd(loaded.orders),
+  };
 }
 
 async function loadCustomerDebtWithdrawalUsd(

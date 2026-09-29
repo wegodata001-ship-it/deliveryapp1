@@ -139,7 +139,7 @@ describe("P1 Overpayment — composite payments (method gate + business rules)",
     assert.equal(preview.overpaymentUsd, 10);
   });
 
-  it("Cash ₪150@3 ($50) + Transfer $60 vs debt $100 → overpayment +$10", () => {
+  it("Cash ₪150@3 ($50) + Transfer $60 vs remaining 70/30 → method mismatch + overpayment", () => {
     const gate = classifyMethodIntakeGate({
       orders: [cashBankOrder],
       includedOrderIds: null,
@@ -149,7 +149,7 @@ describe("P1 Overpayment — composite payments (method gate + business rules)",
       ],
       totalPaymentUsd: 110,
     });
-    assert.equal(gate.kind, "SURPLUS_AFTER_CLOSURE");
+    assert.equal(gate.kind, "METHOD_DEVIATION");
     const preview = computePaymentOverpayment(100, 110);
     assert.equal(preview.overpaymentUsd, 10);
   });

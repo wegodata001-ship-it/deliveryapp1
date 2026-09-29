@@ -1,8 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  assertPlannedBreakdownPreserved,
+  buildAdjustedBreakdownForOrder,
   buildPaymentMethodAdjustmentBootstrap,
   buildPaymentMethodAutoAdjustmentPreview,
+  plannedBreakdownTotalAmount,
+  plannedBreakdownWasWiped,
+  verifyPlannedBreakdownAfterAdjustment,
 } from "@/lib/payment-method-auto-adjustment";
 import type { PaymentIntakeOrderRow } from "@/lib/payment-intake";
 
@@ -133,4 +138,46 @@ test("bootstrap does not treat Σ order remaining as customer open debt", () => 
     customerPayments: [],
   });
   assert.equal("customerOpenDebtUsd" in bootstrap, false);
+});
+
+test("auto-adjustment reallocates planned methods and never wipes them", () => {
+  const source = order({
+    id: "tr-140-0001",
+    orderNumber: "TR-140-0001",
+    dateYmd: "2026-09-01",
+    cashRemainingUsd: 500,
+    extraBreakdown: [{ method: "BANK_TRANSFER", planned: 300, remaining: 300 }],
+  });
+  const before = [
+    { paymentMethod: "CASH", amount: "500.00", currency: "USD" as const },
+    { paymentMethod: "BANK_TRANSFER", amount: "300.00", currency: "USD" as const },
+  ];
+  const after = buildAdjustedBreakdownForOrder({
+    order: source,
+    fromMethod: "CASH",
+    toMethod: "BANK_TRANSFER",
+    moveUsd: 85,
+  });
+  assert.equal(plannedBreakdownWasWiped(before, after), false);
+  assert.ok(after.length >= 1);
+  assert.equal(plannedBreakdownTotalAmount(after), 800);
+  assert.throws(() => assertPlannedBreakdownPreserved(before, []));
+  const verified = verifyPlannedBreakdownAfterAdjustment({
+    orderId: source.id,
+    orderNumber: "TR-140-0001",
+    before,
+    expected: after,
+    afterDb: after,
+  });
+  assert.equal(verified.match, true);
+  assert.equal(
+    verifyPlannedBreakdownAfterAdjustment({
+      orderId: source.id,
+      orderNumber: "TR-140-0001",
+      before,
+      expected: after,
+      afterDb: before,
+    }).match,
+    false,
+  );
 });

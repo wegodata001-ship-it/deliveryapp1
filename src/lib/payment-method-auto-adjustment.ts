@@ -162,6 +162,97 @@ function toEditableBreakdownLines(rows: OrderBreakdownMethodRow[]): OrderBreakdo
   }));
 }
 
+export function plannedBreakdownTotalAmount(lines: OrderBreakdownLineInput[]): number {
+  return roundMoney2(lines.reduce((sum, line) => sum + (Number(line.amount) || 0), 0));
+}
+
+export function plannedBreakdownWasWiped(
+  before: OrderBreakdownLineInput[],
+  after: OrderBreakdownLineInput[],
+): boolean {
+  const beforeTotal = plannedBreakdownTotalAmount(before);
+  const afterTotal = plannedBreakdownTotalAmount(after);
+  return beforeTotal > EPS && (after.length === 0 || afterTotal <= EPS);
+}
+
+export function plannedBreakdownLinesEqual(
+  left: OrderBreakdownLineInput[],
+  right: OrderBreakdownLineInput[],
+): boolean {
+  const signature = (lines: OrderBreakdownLineInput[]) =>
+    lines
+      .map(
+        (line) =>
+          `${line.currency}:${line.paymentMethod}:${roundMoney2(Number(line.amount) || 0).toFixed(2)}`,
+      )
+      .sort()
+      .join("|");
+  return signature(left) === signature(right);
+}
+
+export function assertPlannedBreakdownPreserved(
+  before: OrderBreakdownLineInput[],
+  after: OrderBreakdownLineInput[],
+): void {
+  if (plannedBreakdownWasWiped(before, after)) {
+    throw new Error("התאמה אוטומטית אינה רשאית למחוק או לאפס את חלוקת אמצעי התשלום המתוכננת");
+  }
+  const beforeByCurrency = new Map<string, number>();
+  const afterByCurrency = new Map<string, number>();
+  for (const line of before) {
+    const key = line.currency;
+    beforeByCurrency.set(key, roundMoney2((beforeByCurrency.get(key) ?? 0) + (Number(line.amount) || 0)));
+  }
+  for (const line of after) {
+    const key = line.currency;
+    afterByCurrency.set(key, roundMoney2((afterByCurrency.get(key) ?? 0) + (Number(line.amount) || 0)));
+  }
+  for (const [currency, beforeTotal] of beforeByCurrency) {
+    if (!(beforeTotal > EPS)) continue;
+    const afterTotal = afterByCurrency.get(currency) ?? 0;
+    if (Math.abs(afterTotal - beforeTotal) > EPS) {
+      throw new Error("התאמה אוטומטית חייבת לשמור על סך התכנון ולשנות רק את החלוקה");
+    }
+  }
+}
+
+export type PlannedBreakdownReloadReport = {
+  orderId: string;
+  orderNumber: string;
+  before: OrderBreakdownLineInput[];
+  expected: OrderBreakdownLineInput[];
+  after: OrderBreakdownLineInput[];
+  match: boolean;
+  wiped: boolean;
+  unchanged: boolean;
+};
+
+export function verifyPlannedBreakdownAfterAdjustment(params: {
+  orderId: string;
+  orderNumber: string;
+  before: OrderBreakdownLineInput[];
+  expected: OrderBreakdownLineInput[];
+  afterDb: OrderBreakdownLineInput[];
+}): PlannedBreakdownReloadReport {
+  const wiped = plannedBreakdownWasWiped(params.before, params.afterDb);
+  const unchanged = plannedBreakdownLinesEqual(params.before, params.afterDb);
+  const expectedChanged = !plannedBreakdownLinesEqual(params.before, params.expected);
+  const match =
+    !wiped &&
+    plannedBreakdownLinesEqual(params.expected, params.afterDb) &&
+    (!expectedChanged || !unchanged);
+  return {
+    orderId: params.orderId,
+    orderNumber: params.orderNumber,
+    before: params.before,
+    expected: params.expected,
+    after: params.afterDb,
+    match,
+    wiped,
+    unchanged,
+  };
+}
+
 function computeMethodOpenUsd(rows: PaymentIntakeOrderRow[], bucket: PaymentBucketKey): number {
   return roundMoney2(
     rows.reduce(
@@ -193,6 +284,7 @@ export function buildAdjustedBreakdownForOrder(params: {
           ? roundMoney2(params.moveUsd * rateN)
           : roundMoney2(params.moveUsd);
 
+  const beforeLines = toEditableBreakdownLines(params.order.breakdown);
   const rows = params.order.breakdown.map((row) => ({
     paymentMethod: row.method,
     currency: row.currency === "ILS" ? "ILS" as const : "USD" as const,
@@ -222,6 +314,15 @@ export function buildAdjustedBreakdownForOrder(params: {
     additions.set(row.currency, roundMoney2((additions.get(row.currency) ?? 0) + takeNative));
     leftNative = roundMoney2(leftNative - takeNative);
     leftUsd = roundMoney2(leftUsd - takeUsd);
+
+    if (row.remainingUsd <= EPS) {
+      const leftoverPhysical = roundMoney2(Math.max(0, row.plannedNative - row.paidNative));
+      if (leftoverPhysical > EPS) {
+        row.plannedNative = row.paidNative;
+        row.remainingNative = 0;
+        additions.set(row.currency, roundMoney2((additions.get(row.currency) ?? 0) + leftoverPhysical));
+      }
+    }
   }
 
   if (leftNative > EPS || leftUsd > EPS) {
@@ -252,13 +353,15 @@ export function buildAdjustedBreakdownForOrder(params: {
     });
   }
 
-  return rows
+  const after = rows
     .filter((row) => row.plannedNative > EPS)
     .map((row) => ({
       paymentMethod: row.paymentMethod,
       amount: row.plannedNative.toFixed(2),
       currency: row.currency,
     }));
+  assertPlannedBreakdownPreserved(beforeLines, after);
+  return after;
 }
 
 export function paymentMethodForBreakdown(lines: OrderBreakdownLineInput[]): string {

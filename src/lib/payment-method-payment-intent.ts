@@ -40,6 +40,14 @@ export type PaymentIntentMove = {
   exchangeRate: number | null;
 };
 
+export type PaymentIntentMethodLineChange = {
+  method: string;
+  label: string;
+  beforeRemainingUsd: number;
+  afterRemainingUsd: number;
+  changeUsd: number;
+};
+
 export type PaymentIntentOrderChange = {
   orderId: string;
   orderNumber: string;
@@ -53,6 +61,7 @@ export type PaymentIntentOrderChange = {
   partial: boolean;
   beforeBreakdown: OrderBreakdownLineInput[];
   afterBreakdown: OrderBreakdownLineInput[];
+  methodLines: PaymentIntentMethodLineChange[];
 };
 
 export type PaymentIntentMethodAllocation = {
@@ -147,25 +156,73 @@ function toEditableBreakdownLines(rows: OrderBreakdownMethodRow[]): OrderBreakdo
   }));
 }
 
-function breakdownLinesToOrderRows(lines: OrderBreakdownLineInput[]): OrderBreakdownMethodRow[] {
+function breakdownLinesToOrderRows(
+  lines: OrderBreakdownLineInput[],
+  source?: OrderBreakdownMethodRow[],
+): OrderBreakdownMethodRow[] {
   return lines.map((line) => {
     const amount = roundMoney2(Number(line.amount) || 0);
+    const currency = line.currency === "ILS" ? "ILS" : "USD";
+    const prev = source?.find(
+      (row) =>
+        paymentMethodBucketKey(row.method) === paymentMethodBucketKey(line.paymentMethod) &&
+        (row.currency === "ILS" ? "ILS" : "USD") === currency,
+    );
+    const paid = roundMoney2(Math.max(0, prev?.paid ?? prev?.paidUsd ?? 0));
+    const remaining = roundMoney2(Math.max(0, amount - paid));
     return {
       method: line.paymentMethod,
       label: methodLabel(line.paymentMethod),
-      currency: line.currency === "ILS" ? "ILS" : "USD",
+      currency,
       planned: amount,
       plannedUsd: amount,
-      paid: 0,
-      paidUsd: 0,
-      remaining: amount,
-      remainingUsd: amount,
+      paid,
+      paidUsd: paid,
+      remaining,
+      remainingUsd: remaining,
     };
   });
 }
 
 function orderRemainingUsd(order: PaymentIntakeOrderRow): number {
   return roundMoney2(order.breakdown.reduce((sum, row) => sum + Math.max(0, row.remainingUsd), 0));
+}
+
+function remainingByBucket(order: PaymentIntakeOrderRow): Map<string, number> {
+  const byBucket = new Map<string, number>();
+  for (const row of order.breakdown) {
+    const rem = roundMoney2(Math.max(0, row.remainingUsd));
+    if (!(rem > EPS)) continue;
+    const key = paymentMethodBucketKey(row.method);
+    byBucket.set(key, roundMoney2((byBucket.get(key) ?? 0) + rem));
+  }
+  return byBucket;
+}
+
+function methodLinesFromRemaining(
+  before: Map<string, number>,
+  after: Map<string, number>,
+): PaymentIntentMethodLineChange[] {
+  const keys = new Set([...before.keys(), ...after.keys()]);
+  return [...keys]
+    .sort((a, b) => kpiOrderIndex(a) - kpiOrderIndex(b))
+    .map((key) => {
+      const beforeRemainingUsd = before.get(key) ?? 0;
+      const afterRemainingUsd = after.get(key) ?? 0;
+      return {
+        method: key,
+        label: methodLabel(key),
+        beforeRemainingUsd,
+        afterRemainingUsd,
+        changeUsd: roundMoney2(afterRemainingUsd - beforeRemainingUsd),
+      };
+    })
+    .filter(
+      (line) =>
+        Math.abs(line.changeUsd) > EPS ||
+        line.beforeRemainingUsd > EPS ||
+        line.afterRemainingUsd > EPS,
+    );
 }
 
 /**
@@ -216,7 +273,10 @@ export function applyIntentOrderChangesToIntakeOrders<
   return orders.map((order) => {
     const change = byId.get(order.id);
     if (!change) return order;
-    return { ...order, breakdown: breakdownLinesToOrderRows(change.afterBreakdown) };
+    return {
+      ...order,
+      breakdown: breakdownLinesToOrderRows(change.afterBreakdown, order.breakdown),
+    };
   });
 }
 
@@ -274,9 +334,10 @@ export function planPaymentIntentAdjustments(params: {
   const methodAllocation = allocatePaymentIntentsAgainstDebt(normalized, openDebtUsd);
 
   const needByTo = new Map<string, number>();
-  for (const row of normalized) {
+  for (const row of methodAllocation) {
+    if (!(row.appliedUsd > EPS)) continue;
     const key = paymentMethodBucketKey(row.method);
-    needByTo.set(key, roundMoney2((needByTo.get(key) ?? 0) + row.amountUsd));
+    needByTo.set(key, roundMoney2((needByTo.get(key) ?? 0) + row.appliedUsd));
   }
 
   const plannedByMethod = new Map<string, number>();
@@ -321,6 +382,7 @@ export function planPaymentIntentAdjustments(params: {
 
   const moveAgg = new Map<string, PaymentIntentMove>();
   const orderChangeMap = new Map<string, PaymentIntentOrderChange>();
+  const beforeRemainingByOrder = new Map<string, Map<string, number>>();
 
   const toKeys = [...convertNeedByTo.keys()].sort((a, b) => kpiOrderIndex(a) - kpiOrderIndex(b));
 
@@ -329,6 +391,9 @@ export function planPaymentIntentAdjustments(params: {
 
     for (const order of sortedOrders) {
       if (left <= EPS) break;
+      if (!beforeRemainingByOrder.has(order.id)) {
+        beforeRemainingByOrder.set(order.id, remainingByBucket(order));
+      }
       const beforeBreakdown = toEditableBreakdownLines(order.breakdown);
       const availableBefore = orderRemainingUsd(order);
 
@@ -415,19 +480,17 @@ export function planPaymentIntentAdjustments(params: {
             partial: availableBefore - orderTake > EPS,
             beforeBreakdown,
             afterBreakdown,
+            methodLines: [],
           });
         }
       }
     }
 
     if (left > EPS) {
-      // עודף מעל החוב אינו דורש יתרה מתוכננת בהזמנות — הוא יתרת זכות.
-      if (left > overpaymentUsd + EPS) {
-        return {
-          ok: false,
-          error: `אין מספיק יתרה מתוכננת באמצעים אחרים כדי להתאים ${methodLabel(toKey)} בסכום $${left.toFixed(2)}`,
-        };
-      }
+      return {
+        ok: false,
+        error: `אין מספיק יתרה מתוכננת באמצעים אחרים כדי להתאים ${methodLabel(toKey)} בסכום $${left.toFixed(2)}`,
+      };
     }
   }
 
@@ -436,9 +499,19 @@ export function planPaymentIntentAdjustments(params: {
     return { ok: false, error: "לא זוהתה התאמה נדרשת" };
   }
 
-  const orderChanges = [...orderChangeMap.values()].sort(
-    (a, b) => a.dateYmd.localeCompare(b.dateYmd) || a.orderNumber.localeCompare(b.orderNumber),
-  );
+  const orderById = new Map(sortedOrders.map((order) => [order.id, order]));
+  const orderChanges = [...orderChangeMap.values()]
+    .map((change) => {
+      const order = orderById.get(change.orderId);
+      return {
+        ...change,
+        methodLines: methodLinesFromRemaining(
+          beforeRemainingByOrder.get(change.orderId) ?? new Map(),
+          order ? remainingByBucket(order) : new Map(),
+        ),
+      };
+    })
+    .sort((a, b) => a.dateYmd.localeCompare(b.dateYmd) || a.orderNumber.localeCompare(b.orderNumber));
 
   return {
     ok: true,

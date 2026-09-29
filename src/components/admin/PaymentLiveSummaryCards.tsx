@@ -7,6 +7,7 @@ import { RemainingToPayCard } from "@/components/admin/RemainingToPayCard";
 import {
   type PaymentBalanceDisplay,
 } from "@/lib/order-remaining-debt";
+import { remainingToPayCardDisplayFromOverpayment } from "@/lib/payment-intake-preview";
 import {
   LIVE_PAYMENT_KPI_CARDS,
   liveKpiBucket,
@@ -31,7 +32,8 @@ type Props = {
   commissionUsd?: number;
   onOpenDebtClick?: () => void;
   /**
-   * כרטיס יתרה — תמיד «נשאר לתשלום» מ-buildPaymentPreview.
+   * אותו כרטיס «נשאר לתשלום» — VALUE/LABEL לפי יתרה חתומה (חוב / אפס / יתרת זכות).
+   * Preview בלבד; לא מעדכן CUSTOMER_CREDIT בזמן הקלדה.
    */
   paymentBalanceDisplay?: PaymentBalanceDisplay | null;
   /** עודף מהטיוטה — מעל הגריד, לא כרטיס נוסף */
@@ -124,13 +126,11 @@ export function PaymentLiveSummaryCards({
   void onOpenDebtClick;
   const methodCards = LIVE_PAYMENT_KPI_CARDS.filter((c) => !c.isTotal);
   const canDrill = Array.isArray(lines) && lines.length > 0;
-  const remainingDisplay: PaymentBalanceDisplay = paymentBalanceDisplay ?? {
-    state: "cleared",
-    title: "נשאר לתשלום",
-    balanceUsdSigned: 0,
-    displayUsd: 0,
-    displayIls: 0,
-  };
+  const remainingDisplay: PaymentBalanceDisplay = remainingToPayCardDisplayFromOverpayment(
+    overpaymentUsd,
+    paymentBalanceDisplay,
+    rate,
+  );
 
   const [drill, setDrill] = useState<{ title: string; method: PaymentLineMethod | null } | null>(
     null,
@@ -161,7 +161,7 @@ export function PaymentLiveSummaryCards({
 
       {overpaymentUsd > 0.01 ? (
         <p className="payment-modal-live-overpay" role="status">
-          עודף מהתשלום הנוכחי: +{formatUsdDisplay(overpaymentUsd)} — לא נשאר לתשלום שלילי
+          עודף מהתשלום הנוכחי: +{formatUsdDisplay(overpaymentUsd)}
         </p>
       ) : null}
 
@@ -215,7 +215,7 @@ export function PaymentLiveSummaryCards({
           );
         })}
 
-        <RemainingToPayCard display={{ ...remainingDisplay, title: "נשאר לתשלום", state: remainingDisplay.displayUsd > 0.01 ? "debt" : "cleared" }} />
+        <RemainingToPayCard display={remainingDisplay} />
 
         {drill && canDrill ? (
           <PaymentSummaryDrillModal

@@ -12,7 +12,12 @@ export async function writeOrderBreakdownInTx(
   db: Prisma.TransactionClient,
   orderId: string,
   rows: BreakdownWriteRow[],
-  opts?: { userId?: string | null; intakeWeekCode?: string | null },
+  opts?: {
+    userId?: string | null;
+    intakeWeekCode?: string | null;
+    /** התאמת אמצעי — אסור למחוק/לאפס תכנון קיים כדי לעקוף validation */
+    preserveExistingPlan?: boolean;
+  },
 ): Promise<void> {
   const existing = await db.orderPaymentBreakdown.findMany({
     where: { orderId },
@@ -41,6 +46,10 @@ export async function writeOrderBreakdownInTx(
   );
   if (plannedBelowPaid.length > 0) {
     throw new Error(plannedBelowPaidMessage(plannedBelowPaid[0]!));
+  }
+
+  if (opts?.preserveExistingPlan && existing.length > 0 && rows.length === 0) {
+    throw new Error("התאמה אוטומטית אינה רשאית למחוק את חלוקת אמצעי התשלום המתוכננת");
   }
 
   await db.orderPaymentBreakdown.deleteMany({ where: { orderId } });

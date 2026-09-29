@@ -387,7 +387,9 @@ export function applyDebtWithdrawalToIntakeOrders(
     if (Math.abs(nextRemaining - (before[i] ?? 0)) <= ALLOC_EPS) return order;
     const total = Number(order.totalAmountUsd) || 0;
     const paid = Number(order.dbPaidUsd) || 0;
-    const breakdown = reconcileOrderBreakdownWithLedger(order.breakdown, nextRemaining);
+    const breakdown = reconcileOrderBreakdownWithLedger(order.breakdown, nextRemaining, {
+      preservePaid: true,
+    });
     return {
       ...order,
       dbRemainingUsd: nextRemaining.toFixed(2),

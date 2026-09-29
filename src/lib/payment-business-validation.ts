@@ -1,5 +1,6 @@
 import {
   enforceBreakdownAgainstEntered,
+  isPureSurplusOverRemainingPlan,
   PAYMENT_BUCKET_LABELS,
   type EnteredBucketUsd,
   type PaymentBucketKey,
@@ -230,17 +231,13 @@ export function canTreatMethodViolationsAsPureSurplus(params: {
   totalPaymentUsd: number;
   eps?: number;
 }): boolean {
-  const eps = params.eps ?? PAYMENT_BUSINESS_EPS;
-  const surplusUsd = roundMoney2(Math.max(0, params.totalPaymentUsd - params.totalDebtUsd));
-  if (params.totalPaymentUsd < params.totalDebtUsd - eps || surplusUsd <= eps) return false;
-  const enteredMap = new Map(
-    params.enteredByMethod.map((e) => [e.bucket, e.enteredUsd] as const),
-  );
-  const openUnpaidOtherMethod = params.plannedByMethod.some((p) => {
-    if (p.remainingUsd <= eps) return false;
-    return (enteredMap.get(p.bucket) ?? 0) <= eps;
+  return isPureSurplusOverRemainingPlan({
+    planned: params.plannedByMethod,
+    entered: params.enteredByMethod,
+    totalDebtUsd: params.totalDebtUsd,
+    totalPaymentUsd: params.totalPaymentUsd,
+    eps: params.eps ?? PAYMENT_BUSINESS_EPS,
   });
-  return !openUnpaidOtherMethod;
 }
 
 /**

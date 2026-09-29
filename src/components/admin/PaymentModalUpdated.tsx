@@ -46,7 +46,6 @@ import { PaymentIntakeDeviationModal } from "@/components/admin/PaymentIntakeDev
 import { usePaymentIntakePlanningViews } from "@/hooks/usePaymentIntakePlanningViews";
 import {
   computeOrderOpenDebtUsd,
-  derivePaymentBalanceDisplay,
   formatPaymentBalanceIlsLine,
   formatPaymentBalanceUsdLine,
   type PaymentBalanceDisplay,
@@ -56,13 +55,13 @@ import {
   isExistingPaymentUnchanged,
   isExistingSavedPayment,
   paymentIntakeCustomerOpenDebtUsd,
-  paymentIntakeDebtAfterPaymentUsd,
-  paymentIntakeDebtBeforePaymentUsd,
 } from "@/lib/payment-intake-customer-debt";
 import { buildCustomerFinancialState } from "@/lib/customer-account-balances-shared";
+import { sumPaymentIntakeWeekScopedRemainingUsd } from "@/lib/payment-intake-order-filter";
 import {
   buildPaymentPreview,
   computePendingCreditApplyUsd,
+  remainingToPayCardDisplayFromPreview,
   toPaymentPreviewOrders,
 } from "@/lib/payment-intake-preview";
 import { convertDebtUsdToIlsIncludingVat } from "@/lib/usd-balance-ils-vat";
@@ -83,7 +82,6 @@ import {
   intakeDeviationModalRows,
   buildIntakeDeviationModalView,
   bucketKeyToDbMethod,
-  classifyMethodIntakeGate,
   type IntakeSaveDeviationRow,
   type IntakeDeviationModalView,
 } from "@/lib/cash-control-intake-breakdown";
@@ -200,6 +198,7 @@ import {
   type PaymentShortfallResolution,
 } from "@/components/admin/PaymentShortfallAfterSaveModal";
 import { computePaymentOverpayment, formatOverpaymentUsdSigned } from "@/lib/payment-overpayment";
+import { evaluatePaymentIntakeSaveGates } from "@/lib/payment-intake-save-gates";
 import { BalanceResetCreditConfirmModal } from "@/components/admin/BalanceResetCreditConfirmModal";
 import { dispatchCashControlRefresh } from "@/lib/cash-control-refresh-bus";
 import {
@@ -384,25 +383,6 @@ function checkFieldMissingAmount(ch: PaymentLineCheck): boolean {
 
 function createDefaultLine(): PaymentLine {
   return createDefaultPaymentLine(newLineId());
-}
-
-function paymentLinesFromAutoAdjustIntents(
-  intents: Array<{
-    method: string;
-    currency: "USD" | "ILS";
-    amountNative: number;
-  }>,
-): PaymentLine[] {
-  return intents
-    .filter((intent) => intent.amountNative > 0)
-    .map((intent) => ({
-      ...createDefaultPaymentLine(newLineId()),
-      usdAmount: intent.currency === "USD" ? intent.amountNative : "",
-      ilsAmount: intent.currency === "ILS" ? intent.amountNative : "",
-      paymentMethod: intent.method,
-      usdPaymentMethod: intent.method,
-      ilsPaymentMethod: intent.method,
-    }));
 }
 
 type Props = {
@@ -1099,6 +1079,12 @@ export function PaymentModalUpdated({
     customerOpenDebtSignedUsd,
     customerBalanceResetPending,
   });
+  /** נשאר לתשלום לשבוע הנבחר — אותו יקום כמו טבלת ההזמנות. לא CURRENT SSOT. */
+  const weekScopedRemainingUsd = useMemo(
+    () =>
+      customerBalanceResetPending ? 0 : sumPaymentIntakeWeekScopedRemainingUsd(orders),
+    [customerBalanceResetPending, orders],
+  );
 
   /** יתרה שנותרת על הזמנות לאחר הקצאת התשלום הנוכחי (חוסר בלבד — תאימות לאחור) */
   const orderRemainderAfterPaymentUsd = useMemo(() => {
@@ -1208,13 +1194,13 @@ export function PaymentModalUpdated({
     const draftPay = isExistingPayment
       ? Math.max(0, paymentApplyUsd)
       : Math.max(0, totals.totalUsd);
-    return roundMoney2(Math.max(0, customerOpenDebtDisplayUsd - draftPay));
+    return roundMoney2(Math.max(0, weekScopedRemainingUsd - draftPay));
   }, [
     isHistoricalPaymentView,
     isExistingPayment,
     paymentApplyUsd,
     totals.totalUsd,
-    customerOpenDebtDisplayUsd,
+    weekScopedRemainingUsd,
   ]);
 
   const pendingCreditApplyUsd = useMemo(
@@ -1299,42 +1285,13 @@ export function PaymentModalUpdated({
     isHistoricalPaymentView,
   ]);
 
-  /** SSOT — יתרת לקוח מ-getCustomerOpenDebt (כולל משיכות מחוב); KPI + כרטיס תחתון */
-  const totalDebtBeforePaymentUsd = useMemo(
-    () =>
-      paymentIntakeDebtBeforePaymentUsd({
-        customerOpenDebtSignedUsd,
-        customerBalanceResetPending,
-      }),
-    [customerOpenDebtSignedUsd, customerBalanceResetPending],
-  );
-
-  const paymentBalanceSignedUsd = useMemo(() => {
-    if (customerBalanceResetPending) return 0;
-    return paymentIntakeDebtAfterPaymentUsd({
-      customerOpenDebtSignedUsd,
-      formPaymentUsd: totals.totalUsd,
-      customerBalanceResetPending,
-      isExistingPayment,
-      savedBaselineTotalUsd: savedBaselinePaymentTotalUsd,
-    });
-  }, [
-    customerBalanceResetPending,
-    customerOpenDebtSignedUsd,
-    totals.totalUsd,
-    isExistingPayment,
-    savedBaselinePaymentTotalUsd,
-  ]);
-
-  const paymentBalanceDisplay = useMemo((): PaymentBalanceDisplay => {
-    return derivePaymentBalanceDisplay(paymentBalanceSignedUsd, rateN);
-  }, [paymentBalanceSignedUsd, rateN]);
+  const totalDebtBeforePaymentUsd = weekScopedRemainingUsd;
 
   const paymentPreview = useMemo(
     () =>
       buildPaymentPreview({
         financialState: {
-          openDebtUsd: customerBalanceResetPending ? 0 : customerOpenDebtSignedUsd,
+          openDebtUsd: weekScopedRemainingUsd,
           availableCreditUsd: displayCreditBalanceUsd,
           commissionBalanceUsd: displayCommissionBalanceUsd,
         },
@@ -1349,7 +1306,7 @@ export function PaymentModalUpdated({
       }),
     [
       customerBalanceResetPending,
-      customerOpenDebtSignedUsd,
+      weekScopedRemainingUsd,
       displayCreditBalanceUsd,
       displayCommissionBalanceUsd,
       isHistoricalPaymentView,
@@ -1361,17 +1318,11 @@ export function PaymentModalUpdated({
     ],
   );
 
-  const accountStatusDisplay = useMemo((): PaymentBalanceDisplay => {
-    const remaining = remainderAfterCreditApplyUsd;
-    return {
-      state: remaining > 0.01 ? "debt" : "cleared",
-      title: "נשאר לתשלום",
-      statusHint: remaining > 0.01 ? undefined : "אין יתרה פתוחה",
-      balanceUsdSigned: remaining,
-      displayUsd: remaining,
-      displayIls: convertDebtUsdToIlsIncludingVat(remaining, rateN),
-    };
-  }, [remainderAfterCreditApplyUsd, rateN]);
+  const paymentBalanceDisplay = useMemo((): PaymentBalanceDisplay => {
+    return remainingToPayCardDisplayFromPreview(paymentPreview, rateN);
+  }, [paymentPreview, rateN]);
+
+  const accountStatusDisplay = paymentBalanceDisplay;
 
   /** תצוגה חיה — יתרה לאחר הקצאת התשלום (חתום: שלילי = עודף) */
   const openDebtAfterPaymentPreview = useMemo(() => {
@@ -1381,7 +1332,7 @@ export function PaymentModalUpdated({
       : isExistingPayment
         ? roundMoney2(paymentApplyUsd)
         : roundMoney2(totals.totalUsd);
-    const remainingAfterPayment = paymentBalanceSignedUsd;
+    const remainingAfterPayment = paymentPreview.signedRemainingUsd;
     let openCommissionUsd = 0;
     for (const o of orders) {
       const rem = Number.isFinite(Number(o.dbRemainingUsd))
@@ -1408,7 +1359,7 @@ export function PaymentModalUpdated({
     paymentApplyUsd,
     isExistingPayment,
     isHistoricalPaymentView,
-    paymentBalanceSignedUsd,
+    paymentPreview.signedRemainingUsd,
     paymentBalanceDisplay,
     accountStatusDisplay,
     orders,
@@ -2956,7 +2907,7 @@ export function PaymentModalUpdated({
           paymentTotalUsd: number;
         } | null;
       }
-    | { ok: false }
+    | { ok: false; needsOverageResolution?: boolean; overpaymentUsd?: number }
   > {
     setSaveErr(null);
     setHighlightInvalidCheckFields(false);
@@ -2986,37 +2937,58 @@ export function PaymentModalUpdated({
     // חוק עסקי ראשון — אמצעי התשלום המתוכננים מחייבים.
     // אין העברת חוב בין אמצעים; שינוי אמצעי — רק במסך אמצעי מתוכננים.
     // עודף אמיתי לאחר סגירת כל החוב — חלון ייעודי.
-    const methodGate = classifyMethodIntakeGate({
-      orders,
+    const freshOrders = await reloadIntakeOrdersPreserveForm();
+    const ordersForGate = freshOrders ?? orders;
+    const enteredForGate = buildEnteredByBucket(
+      options?.paymentsOverride
+        ? aggregateLivePaymentFormKpis(saveLines, rateN)
+        : liveFormKpis,
+    );
+    const applyUsdForGate = options?.paymentsOverride
+      ? computePaymentIntakeApplyUsd({
+          isExistingPayment,
+          formTotalUsd: saveTotals.totalUsd,
+          savedBaselineTotalUsd: savedBaselinePaymentTotalUsd,
+        })
+      : paymentApplyUsd;
+    const freshDevRows = computeIntakeSaveDeviations({
+      orders: ordersForGate,
       includedOrderIds: includedIds,
-      enteredByBucket: buildEnteredByBucket(liveFormKpis),
-      totalPaymentUsd: paymentApplyUsd,
+      enteredByBucket: enteredForGate,
+      formRateN: rateN,
+      totalPaymentUsd: applyUsdForGate,
     });
-    // תשלום יתר שאושר (commission/credit) + כיסוי מלא של החוב:
-    // excess על אמצעי נספג כעודף ולא כחריגת חלוקה. DEBT_TRANSFER עדיין נחסם.
-    const surplusApproved =
-      surplusDisposition === "commission" || surplusDisposition === "credit";
-    const paymentCoversDebt = isExistingPayment
-      ? paymentApplyUsd + 0.01 >= totalDebtBeforePaymentUsd || isExistingPaymentUnchanged(paymentApplyUsd)
-      : saveTotals.totalUsd + 0.01 >= totalDebtBeforePaymentUsd;
-    const allowMethodExcessAsApprovedSurplus =
-      surplusApproved &&
-      paymentCoversDebt &&
-      methodGate.kind === "METHOD_DEVIATION";
-    if (
-      (methodGate.kind === "METHOD_DEVIATION" || methodGate.kind === "DEBT_TRANSFER") &&
-      !allowMethodExcessAsApprovedSurplus
-    ) {
-      setIntakeDevRows(liveIntakeDevRows);
+    const saveGates = evaluatePaymentIntakeSaveGates({
+      orders: ordersForGate,
+      includedOrderIds: includedIds,
+      enteredByBucket: enteredForGate,
+      totalPaymentUsd: applyUsdForGate,
+      openDebtUsd: totalDebtBeforePaymentUsd,
+      surplusDisposition: surplusDisposition ?? null,
+    });
+    if (!saveGates.methodCheck.ok) {
+      setIntakeDevRows(freshDevRows);
       setSaveErr("אמצעי התשלום בפועל שונים מהחלוקה שהוגדרה. יש לעדכן את ההזמנה לפני הקליטה.");
       return { ok: false };
     }
+    if (!saveGates.overpaymentCheck.ok) {
+      setSaveErr(
+        `קיים עודף של $${saveGates.overpaymentCheck.overpaymentUsd.toFixed(2)}. יש לבחור: יתרת זכות ללקוח או העברה לעמלות.`,
+      );
+      return {
+        ok: false,
+        needsOverageResolution: true,
+        overpaymentUsd: saveGates.overpaymentCheck.overpaymentUsd,
+      };
+    }
 
-    if (intakeHasRateMismatch(liveIntakeDevRows)) {
-      setIntakeDevRows(liveIntakeDevRows);
+    if (intakeHasRateMismatch(freshDevRows)) {
+      setIntakeDevRows(freshDevRows);
       setSaveErr("שער הדולר שנקלט שונה מהשער של ההזמנה. יש לבדוק את הנתונים לפני שמירה.");
       return { ok: false };
     }
+    setIntakeDevRows([]);
+    const basesForSave = toPaymentIntakeBases(ordersForGate);
     // חשוב: קרדיט קיים ללקוח לא אומר שצריך "לכפות" תשלום כיתרת זכות.
     // תמיד מנסים Allocation (FIFO) קודם; רק עודף מטופל כקרדיט/עמלה לפי בחירת משתמש.
     const forceCustomerCreditPayment = false;
@@ -3025,11 +2997,11 @@ export function PaymentModalUpdated({
       customerId: customer?.id ?? null,
       customerLoaded: Boolean(customer),
       ordersLoading,
-      ordersCount: orders.length,
+      ordersCount: ordersForGate.length,
       paymentAmountUsd: saveTotals.totalUsd,
       selectedOrderIds: includedIds,
       weekCode: intakeWeekCode,
-      bases,
+      bases: basesForSave,
       prioritizedOrderIds: prioritizedSet,
       forceCustomerCreditPayment,
       lastCustomerSearchExactOnly: lastEditedFieldRef.current === "code",
@@ -3044,7 +3016,7 @@ export function PaymentModalUpdated({
     // If bases has orders with open debt but client-FIFO returned empty (edge case),
     // let the server attempt allocation rather than blocking here with a misleading error.
     // מסלול יתרת זכות / עמלות לעודף — לא חוסמים כאן: השרת מקצה לחוב ושומר עודף בנפרד.
-    const hasOpenOrders = bases.some((b) => orderLedgerBalanceUsd(b) > 0.02);
+    const hasOpenOrders = basesForSave.some((b) => orderLedgerBalanceUsd(b) > 0.02);
     const surplusPath =
       surplusDisposition === "credit" || surplusDisposition === "commission";
     if (!hasAlloc && !hasOpenOrders && !surplusPath) {
@@ -3410,8 +3382,9 @@ export function PaymentModalUpdated({
    * לא לפי סיכום איפוס יתרה להזמנות (שעלול להיות 0 כשיש משיכה מחוב / פער Ledger).
    */
   function buildInlineOveragePreview(): PaymentOveragePreview | null {
-    const openDebtUsd = roundMoney2(openDebtAfterPaymentPreview.currentOpenBalance);
-    const paymentUsd = roundMoney2(openDebtAfterPaymentPreview.enteredPaymentAmount);
+    if (paymentPreview.projectedOverpayment <= 0.01) return null;
+    const openDebtUsd = paymentPreview.debtBefore;
+    const paymentUsd = paymentPreview.draftPaymentTotal;
     const openDebtIls = rateN > 0 ? roundMoney2(openDebtUsd * rateN) : 0;
     const paymentIls = rateN > 0 ? roundMoney2(paymentUsd * rateN) : 0;
     const preview = computePaymentOveragePreview({
@@ -3557,6 +3530,18 @@ export function PaymentModalUpdated({
   }
 
   async function onSaveAndNew() {
+    const saveGates = evaluatePaymentIntakeSaveGates({
+      orders,
+      includedOrderIds: includedIds,
+      enteredByBucket: buildEnteredByBucket(liveFormKpis),
+      totalPaymentUsd: paymentApplyUsd,
+      openDebtUsd: totalDebtBeforePaymentUsd,
+    });
+    if (!saveGates.methodCheck.ok) {
+      setIntakeDevRows(liveIntakeDevRows);
+      setSaveErr("אמצעי התשלום בפועל שונים מהחלוקה שהוגדרה. יש לעדכן את ההזמנה לפני הקליטה.");
+      return;
+    }
     const overagePreview = buildInlineOveragePreview();
     if (overagePreview) {
       if (!openInlineOverageModal("new")) {
@@ -3570,7 +3555,10 @@ export function PaymentModalUpdated({
     }
     saveAfterOverageRef.current = "new";
     const res = await performSave(null);
-    if (!res.ok) return;
+    if (!res.ok) {
+      if (res.needsOverageResolution) openInlineOverageModal("new");
+      return;
+    }
     saveAfterOverageRef.current = null;
     await finishAfterSuccessfulSave("new", res);
   }
@@ -3580,6 +3568,18 @@ export function PaymentModalUpdated({
    * זהו ה־flow הסופי / רגיל.
    */
   async function onSaveAndClose() {
+    const saveGates = evaluatePaymentIntakeSaveGates({
+      orders,
+      includedOrderIds: includedIds,
+      enteredByBucket: buildEnteredByBucket(liveFormKpis),
+      totalPaymentUsd: paymentApplyUsd,
+      openDebtUsd: totalDebtBeforePaymentUsd,
+    });
+    if (!saveGates.methodCheck.ok) {
+      setIntakeDevRows(liveIntakeDevRows);
+      setSaveErr("אמצעי התשלום בפועל שונים מהחלוקה שהוגדרה. יש לעדכן את ההזמנה לפני הקליטה.");
+      return;
+    }
     const overagePreview = buildInlineOveragePreview();
     if (overagePreview) {
       if (!openInlineOverageModal("close")) {
@@ -3593,7 +3593,10 @@ export function PaymentModalUpdated({
     }
     saveAfterOverageRef.current = "close";
     const res = await performSave(null);
-    if (!res.ok) return;
+    if (!res.ok) {
+      if (res.needsOverageResolution) openInlineOverageModal("close");
+      return;
+    }
     saveAfterOverageRef.current = null;
     await finishAfterSuccessfulSave("close", res);
   }
@@ -3608,7 +3611,13 @@ export function PaymentModalUpdated({
     try {
       const mode = saveAfterOverageRef.current;
       const res = await performSave(disposition);
-      if (!res.ok) return;
+      if (!res.ok) {
+        if (!res.needsOverageResolution) {
+          setOverageModalOpen(false);
+          setOveragePreview(null);
+        }
+        return;
+      }
       setOverageModalOpen(false);
       setOveragePreview(null);
       saveAfterOverageRef.current = null;
@@ -3724,9 +3733,9 @@ export function PaymentModalUpdated({
    * רענון אחד למקור ההזמנות המשותף — מעדכן את טבלת הקליטה ואת חלון האמצעים יחד.
    * לא מאפס בחירת הזמנות / טופס תשלום / טיוטת לקוח.
    */
-  async function refreshSharedPaymentIntakeOrders() {
+  async function refreshSharedPaymentIntakeOrders(): Promise<PaymentIntakeOrderRow[] | null> {
     const cid = customer?.id?.trim();
-    if (!cid) return;
+    if (!cid) return null;
     setSharedOrdersRefreshing(true);
     try {
       // ביטול cache ישן — KPI והטבלה חייבים להיגזר מנתונים טריים בלבד.
@@ -3736,8 +3745,9 @@ export function PaymentModalUpdated({
         weekCode: orderSourceWeekCode,
         workCountry: intakeDocumentWorkCountry,
       });
-      if (!res.ok) return;
+      if (!res.ok) return null;
       setOrders(res.orders);
+      setIntakeDevRows([]);
       setCustomerOpenDebtSignedUsd(parseMoneyStringOrZero(String(res.openDebtSignedUsd)));
       setCustomerLedgerChargesUsd(Number(res.totalOrdersBeforeCommissionUsd) || 0);
       setCustomerLedgerPaymentsUsd(Number(res.totalPaymentsUsd) || 0);
@@ -3751,9 +3761,14 @@ export function PaymentModalUpdated({
           ? { ...cur, customerBalanceUsd: res.internalSignedUsd || res.customerBalanceUsd }
           : cur,
       );
+      return res.orders;
     } finally {
       setSharedOrdersRefreshing(false);
     }
+  }
+
+  async function reloadIntakeOrdersPreserveForm(): Promise<PaymentIntakeOrderRow[] | null> {
+    return refreshSharedPaymentIntakeOrders();
   }
 
   function finishOrderEditAndRestore(refresh: boolean) {
@@ -4677,7 +4692,8 @@ export function PaymentModalUpdated({
                         "payment-balance-summary__balance-duo",
                         openDebtAfterPaymentPreview.paymentBalanceDisplay.state === "debt"
                           ? "payment-balance-summary__balance-duo--debt"
-                          : openDebtAfterPaymentPreview.paymentBalanceDisplay.state === "credit"
+                          : openDebtAfterPaymentPreview.paymentBalanceDisplay.state === "surplus" ||
+                              openDebtAfterPaymentPreview.paymentBalanceDisplay.state === "credit"
                             ? "payment-balance-summary__balance-duo--cleared"
                             : "payment-balance-summary__balance-duo--cleared",
                       ].join(" ")}
@@ -5062,7 +5078,7 @@ export function PaymentModalUpdated({
                 <PaymentMethodControlModal
                   open={methodControlOpen && showMethodControl}
                   methodViews={methodViews}
-                  orderRemainingToPayUsd={customerOpenDebtDisplayUsd}
+                  orderRemainingToPayUsd={weekScopedRemainingUsd}
                   canEditOrders={canEditOrders}
                   refreshing={sharedOrdersRefreshing}
                   onClose={() => setMethodControlOpen(false)}
@@ -5077,39 +5093,62 @@ export function PaymentModalUpdated({
                     customerId={customer.id}
                     customerName={customer.displayName}
                     customerCode={customer.customerCode ?? null}
-                    openDebtUsd={customerOpenDebtDisplayUsd}
+                    openDebtUsd={weekScopedRemainingUsd}
                     creditUsd={displayCreditBalanceUsd}
-                    weekCode={intakeWeekCode}
+                    weekCode={orderSourceWeekCode}
                     workCountry={intakeDocumentWorkCountry}
                     exchangeRate={dollarRate}
                     draftPaymentLines={payments}
                     onClose={() => setAutoAdjustOpen(false)}
                     onApplied={async (result) => {
-                      const nextLines = paymentLinesFromAutoAdjustIntents(result.intents);
-                      if (nextLines.length > 0) setPayments(nextLines);
-                      if (result.hasOverpayment && result.surplusDisposition) {
-                        const saved = await performSave(result.surplusDisposition, {
-                          paymentsOverride: nextLines,
-                          autoAdjustIntents: result.intents.map((intent) => ({
-                            method: intent.method,
-                            currency: intent.currency,
-                            amountNative: intent.amountNative,
-                          })),
-                        });
-                        if (!saved.ok) return false;
+                      const reloaded = await reloadIntakeOrdersPreserveForm();
+                      if (!reloaded) {
+                        setSaveErr(
+                          "ADJUSTMENT FAILED — לא ניתן לרענן את ההזמנות אחרי ההתאמה. שמירה חסומה.",
+                        );
+                        return false;
+                      }
+                      const ordersForGate = reloaded;
+                      const enteredForGate = buildEnteredByBucket(liveFormKpis);
+                      const saveGates = evaluatePaymentIntakeSaveGates({
+                        orders: ordersForGate,
+                        includedOrderIds: includedIds,
+                        enteredByBucket: enteredForGate,
+                        totalPaymentUsd: paymentApplyUsd,
+                        openDebtUsd: totalDebtBeforePaymentUsd,
+                        surplusDisposition: result.surplusDisposition,
+                      });
+                      if (!saveGates.methodCheck.ok) {
+                        setSaveErr(
+                          result.affectedOrders > 0
+                            ? "ADJUSTMENT FAILED — אמצעי התשלום המתוכננים לא תואמים לאחר עדכון ההזמנות. שמירה חסומה."
+                            : "אמצעי התשלום בפועל שונים מהחלוקה שהוגדרה. יש לעדכן את ההזמנה לפני הקליטה.",
+                        );
+                        return false;
+                      }
+                      setIntakeDevRows([]);
+                      window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
+                      dispatchOrdersListRefresh();
+                      if (result.affectedOrders > 0) {
+                        onToast(`בוצעה התאמה אוטומטית ב־${result.affectedOrders} הזמנות`);
+                      }
+                      if (saveGates.overpaymentCheck.detected) {
+                        if (result.surplusDisposition && saveGates.overpaymentCheck.ok) {
+                          const saved = await performSave(result.surplusDisposition);
+                          if (!saved.ok) return false;
+                          setAutoAdjustOpen(false);
+                          const destLabel =
+                            result.surplusDisposition === "commission" ? "עמלות" : "יתרת זכות";
+                          onToast(`תשלום יתר: $${result.overpaymentUsd.toFixed(2)} הועבר ל${destLabel}`);
+                          const finish = finishAfterSuccessfulSaveRef.current;
+                          if (finish) await finish("new", saved);
+                          return true;
+                        }
                         setAutoAdjustOpen(false);
-                        const destLabel =
-                          result.surplusDisposition === "commission" ? "עמלות" : "יתרת זכות";
-                        onToast(`תשלום יתר: $${result.overpaymentUsd.toFixed(2)} הועבר ל${destLabel}`);
-                        const finish = finishAfterSuccessfulSaveRef.current;
-                        if (finish) await finish("new", saved);
+                        openInlineOverageModal(saveAfterOverageRef.current ?? "close");
                         return true;
                       }
                       setAutoAdjustOpen(false);
-                      onToast(`בוצעה התאמה אוטומטית ב־${result.affectedOrders} הזמנות`);
-                      await refreshSharedPaymentIntakeOrders();
-                      window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
-                      dispatchOrdersListRefresh();
                       return true;
                     }}
                   />

@@ -12,7 +12,11 @@ import {
 } from "@/lib/payment-intake";
 import { planPaymentIntentAdjustments } from "@/lib/payment-method-payment-intent";
 import { computePaymentOverpayment } from "@/lib/payment-overpayment";
-import { paymentIntakeOrderDateThroughAhWeekEnd } from "@/lib/payment-intake-order-filter";
+import {
+  intakeOrderEligibleForSelectedWeek,
+  paymentIntakeOrderDateThroughAhWeekEnd,
+  sumPaymentIntakeWeekScopedRemainingUsd,
+} from "@/lib/payment-intake-order-filter";
 import { getAhWeekRange } from "@/lib/work-week";
 
 function row(partial: Partial<PaymentIntakeOrderRow> & Pick<PaymentIntakeOrderRow, "id" | "dbRemainingUsd">): PaymentIntakeOrderRow {
@@ -59,6 +63,44 @@ describe("week does not erase open debt", () => {
     const lte = (where as { OR?: Array<{ orderDate?: { lte?: Date } }> }).OR?.find((c) => c.orderDate?.lte);
     assert.ok(lte?.orderDate?.lte);
     assert.ok(!JSON.stringify(where).includes('"weekCode"'));
+  });
+
+  it("AH-134/AH-137 must not include TR-140-0001 even when it has $758.01 remaining", () => {
+    const laterOpen = new Date("2026-09-13T00:00:00.000Z");
+    const earlierPaid = new Date("2026-08-02T00:00:00.000Z");
+    assert.equal(
+      intakeOrderEligibleForSelectedWeek({
+        orderDate: laterOpen,
+        weekCodeRaw: "AH-134",
+      }),
+      false,
+    );
+    assert.equal(
+      intakeOrderEligibleForSelectedWeek({
+        orderDate: laterOpen,
+        weekCodeRaw: "AH-137",
+      }),
+      false,
+    );
+    assert.equal(
+      intakeOrderEligibleForSelectedWeek({
+        orderDate: earlierPaid,
+        weekCodeRaw: "AH-137",
+      }),
+      true,
+    );
+    assert.equal(
+      sumPaymentIntakeWeekScopedRemainingUsd([
+        { dbRemainingUsd: "0.00" },
+        { dbRemainingUsd: "0.00" },
+        { dbRemainingUsd: "0.00" },
+      ]),
+      0,
+    );
+    assert.equal(
+      sumPaymentIntakeWeekScopedRemainingUsd([{ dbRemainingUsd: "758.01" }]),
+      758.01,
+    );
   });
 
   it("AH-134 remainder $500 is still collectible in AH-139 / AH-140", () => {
