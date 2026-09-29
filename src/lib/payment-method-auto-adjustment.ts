@@ -116,6 +116,9 @@ function nativePlanned(row: OrderBreakdownMethodRow): number {
 }
 
 function nativePaid(row: OrderBreakdownMethodRow): number {
+  if (typeof row.physicalPaid === "number" && Number.isFinite(row.physicalPaid)) {
+    return roundMoney2(Math.max(0, row.physicalPaid));
+  }
   if (typeof row.paid === "number" && Number.isFinite(row.paid)) return roundMoney2(Math.max(0, row.paid));
   return roundMoney2(Math.max(0, row.paidUsd));
 }

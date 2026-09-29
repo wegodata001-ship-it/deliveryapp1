@@ -245,20 +245,20 @@ describe("computePaymentBalanceUsd — תצוגת יתרה בקליטה", () => 
     const d = derivePaymentBalanceDisplay(computePaymentBalanceUsd(100, 110), rate);
     assert.equal(d.state, "surplus");
     assert.equal(d.title, "נשאר לתשלום");
-    assert.equal(d.statusHint, "יתרת זכות");
+    assert.equal(d.statusHint, "תשלום יתר");
     assert.equal(d.displayUsd, 10);
     assert.equal(d.displayIls, 35.4);
     assert.equal(formatPaymentBalanceUsdLine(d), "+$10.00");
     assert.equal(formatPaymentBalanceIlsLine(d), "+₪35.40 כולל מע״מ");
   });
 
-  it("customer 101: $758.01 debt, $800 paid → +$41.99 יתרת זכות", () => {
+  it("customer 101: $758.01 debt, $800 paid → +$41.99 תשלום יתר", () => {
     const signed = computePaymentBalanceUsd(758.01, 800);
     assert.equal(signed, -41.99);
     const d = derivePaymentBalanceDisplay(signed, rate);
     assert.equal(d.state, "surplus");
     assert.equal(d.title, "נשאר לתשלום");
-    assert.equal(d.statusHint, "יתרת זכות");
+    assert.equal(d.statusHint, "תשלום יתר");
     assert.equal(d.displayUsd, 41.99);
     assert.equal(d.balanceUsdSigned, -41.99);
     assert.equal(formatPaymentBalanceUsdLine(d), "+$41.99");
@@ -282,12 +282,12 @@ describe("computePaymentBalanceUsd — תצוגת יתרה בקליטה", () => 
     assert.equal(formatPaymentBalanceUsdLine(d), "$0.00");
   });
 
-  it("$750 debt, $800 paid → +$50.00 יתרת זכות", () => {
+  it("$750 debt, $800 paid → +$50.00 תשלום יתר", () => {
     const d = derivePaymentBalanceDisplay(computePaymentBalanceUsd(750, 800), rate);
     assert.equal(d.state, "surplus");
     assert.equal(d.displayUsd, 50);
     assert.equal(formatPaymentBalanceUsdLine(d), "+$50.00");
-    assert.equal(d.statusHint, "יתרת זכות");
+    assert.equal(d.statusHint, "תשלום יתר");
   });
 
   it("$100 debt, ₪100 @3 → remaining $66.67", () => {

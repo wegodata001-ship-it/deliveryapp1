@@ -168,16 +168,19 @@ function breakdownLinesToOrderRows(
         paymentMethodBucketKey(row.method) === paymentMethodBucketKey(line.paymentMethod) &&
         (row.currency === "ILS" ? "ILS" : "USD") === currency,
     );
-    const paid = roundMoney2(Math.max(0, prev?.paid ?? prev?.paidUsd ?? 0));
-    const remaining = roundMoney2(Math.max(0, amount - paid));
+    const physicalPaid = roundMoney2(
+      Math.max(0, prev?.physicalPaid ?? prev?.paid ?? prev?.paidUsd ?? 0),
+    );
+    const remaining = roundMoney2(Math.max(0, amount - physicalPaid));
     return {
       method: line.paymentMethod,
       label: methodLabel(line.paymentMethod),
       currency,
       planned: amount,
       plannedUsd: amount,
-      paid,
-      paidUsd: paid,
+      paid: physicalPaid,
+      physicalPaid,
+      paidUsd: physicalPaid,
       remaining,
       remainingUsd: remaining,
     };
@@ -430,7 +433,7 @@ export function planPaymentIntentAdjustments(params: {
             sourceCurrency: "USD",
             moveNative: take,
           });
-          order.breakdown = breakdownLinesToOrderRows(after);
+          order.breakdown = breakdownLinesToOrderRows(after, order.breakdown);
         } catch (e) {
           return { ok: false, error: e instanceof Error ? e.message : "חישוב התאמה נכשל" };
         }

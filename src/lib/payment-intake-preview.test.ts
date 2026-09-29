@@ -145,6 +145,14 @@ describe("buildPaymentPreview", () => {
     assert.equal(p.remainingDebt, 0);
     assert.equal(p.projectedOverpayment, 41.99);
     assert.equal(p.existingCredit, 0);
+    assert.equal(p.projectedCredit, 41.99);
+  });
+
+  it("customer 101 exclusive books: available credit $0 so overpay credit is $41.99 not $1,315.82", () => {
+    const p = preview({ debt: 758.01, credit: 0, payment: 800 });
+    assert.equal(p.existingCredit, 0);
+    assert.equal(p.projectedCredit, 41.99);
+    assert.notEqual(p.projectedCredit, 1315.82);
   });
 
   it("remaining card never uses clamped $0 when overpayment is $41.99", () => {
@@ -160,7 +168,7 @@ describe("buildPaymentPreview", () => {
     assert.equal(d.state, "surplus");
     assert.equal(d.displayUsd, 41.99);
     assert.equal(formatPaymentBalanceUsdLine(d), "+$41.99");
-    assert.equal(d.statusHint, "יתרת זכות");
+    assert.equal(d.statusHint, "תשלום יתר");
     assert.notEqual(formatPaymentBalanceUsdLine(d), "$0.00");
   });
 
@@ -169,8 +177,8 @@ describe("buildPaymentPreview", () => {
     const cases = [
       { payment: 700, value: "$58.01", hint: "יתרה פתוחה" },
       { payment: 758.01, value: "$0.00", hint: "אין יתרה פתוחה" },
-      { payment: 760, value: "+$1.99", hint: "יתרת זכות" },
-      { payment: 800, value: "+$41.99", hint: "יתרת זכות" },
+      { payment: 760, value: "+$1.99", hint: "תשלום יתר" },
+      { payment: 800, value: "+$41.99", hint: "תשלום יתר" },
     ] as const;
     for (const row of cases) {
       const p = preview({ debt: 758.01, payment: row.payment });
@@ -180,7 +188,7 @@ describe("buildPaymentPreview", () => {
     }
     const fifty = remainingToPayCardDisplayFromPreview(preview({ debt: 750, payment: 800 }), rate);
     assert.equal(formatPaymentBalanceUsdLine(fifty), "+$50.00");
-    assert.equal(fifty.statusHint, "יתרת זכות");
+    assert.equal(fifty.statusHint, "תשלום יתר");
   });
 
   it("customer 101: $758.01 debt + $500 payment → signed +$258.01 debt remaining", () => {

@@ -16,6 +16,11 @@ import { computePaymentOverpayment } from "@/lib/payment-overpayment";
 
 export type IntakeSurplusDisposition = "credit" | "commission";
 
+export type PaymentIntakeFailureReason =
+  | "METHOD_RECONCILIATION_FAILED"
+  | "OVERPAYMENT_DESTINATION_MISSING"
+  | null;
+
 export type PaymentIntakeSaveGates = {
   methodCheck: {
     ok: boolean;
@@ -27,6 +32,7 @@ export type PaymentIntakeSaveGates = {
     overpaymentUsd: number;
   };
   saveAllowed: boolean;
+  reason: PaymentIntakeFailureReason;
 };
 
 export function evaluatePaymentIntakeSaveGates(params: {
@@ -49,6 +55,11 @@ export function evaluatePaymentIntakeSaveGates(params: {
   const overpaymentResolved =
     disposition === "credit" || disposition === "commission";
   const overpaymentOk = !overpay.hasOverpayment || overpaymentResolved;
+  const reason: PaymentIntakeFailureReason = !methodOk
+    ? "METHOD_RECONCILIATION_FAILED"
+    : overpay.hasOverpayment && !overpaymentResolved
+      ? "OVERPAYMENT_DESTINATION_MISSING"
+      : null;
   return {
     methodCheck: { ok: methodOk, kind: methodGate.kind },
     overpaymentCheck: {
@@ -57,6 +68,7 @@ export function evaluatePaymentIntakeSaveGates(params: {
       overpaymentUsd: overpay.overpaymentUsd,
     },
     saveAllowed: methodOk && overpaymentOk,
+    reason,
   };
 }
 

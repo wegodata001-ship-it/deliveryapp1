@@ -199,6 +199,10 @@ import {
 } from "@/components/admin/PaymentShortfallAfterSaveModal";
 import { computePaymentOverpayment, formatOverpaymentUsdSigned } from "@/lib/payment-overpayment";
 import { evaluatePaymentIntakeSaveGates } from "@/lib/payment-intake-save-gates";
+import {
+  applyIntentOrderChangesToIntakeOrders,
+  planPaymentIntentAdjustments,
+} from "@/lib/payment-method-payment-intent";
 import { BalanceResetCreditConfirmModal } from "@/components/admin/BalanceResetCreditConfirmModal";
 import { dispatchCashControlRefresh } from "@/lib/cash-control-refresh-bus";
 import {
@@ -673,6 +677,9 @@ export function PaymentModalUpdated({
   const [intakeDevAutoFixBusy, setIntakeDevAutoFixBusy] = useState(false);
   const [methodControlOpen, setMethodControlOpen] = useState(false);
   const [autoAdjustOpen, setAutoAdjustOpen] = useState(false);
+  const [pendingAutoAdjustIntents, setPendingAutoAdjustIntents] = useState<
+    Array<{ method: string; currency: "USD" | "ILS"; amountNative: number }> | null
+  >(null);
   /** רענון מקור ההזמנות המשותף (טבלה ראשית + חלון מתוכננים) */
   const [sharedOrdersRefreshing, setSharedOrdersRefreshing] = useState(false);
   /** חזרה לחלון אמצעי מתוכננים אחרי עריכת הזמנה שנפתחה ממנו */
@@ -2938,7 +2945,25 @@ export function PaymentModalUpdated({
     // אין העברת חוב בין אמצעים; שינוי אמצעי — רק במסך אמצעי מתוכננים.
     // עודף אמיתי לאחר סגירת כל החוב — חלון ייעודי.
     const freshOrders = await reloadIntakeOrdersPreserveForm();
-    const ordersForGate = freshOrders ?? orders;
+    let ordersForGate = freshOrders ?? orders;
+    const autoAdjustIntents =
+      options?.autoAdjustIntents ?? pendingAutoAdjustIntents ?? null;
+    if (autoAdjustIntents && autoAdjustIntents.length > 0) {
+      const plan = planPaymentIntentAdjustments({
+        orders: ordersForGate,
+        intents: autoAdjustIntents,
+        exchangeRate: rateN,
+        customerOpenDebtUsd: totalDebtBeforePaymentUsd,
+      });
+      if (!plan.ok) {
+        console.error("[payment-intake] ADJUSTMENT_WRITE_FAILED", plan.error);
+        setSaveErr(plan.error);
+        return { ok: false };
+      }
+      if (plan.orderChanges.length > 0) {
+        ordersForGate = applyIntentOrderChangesToIntakeOrders(ordersForGate, plan.orderChanges);
+      }
+    }
     const enteredForGate = buildEnteredByBucket(
       options?.paymentsOverride
         ? aggregateLivePaymentFormKpis(saveLines, rateN)
@@ -2967,13 +2992,20 @@ export function PaymentModalUpdated({
       surplusDisposition: surplusDisposition ?? null,
     });
     if (!saveGates.methodCheck.ok) {
+      console.error("[payment-intake]", saveGates.reason ?? "METHOD_RECONCILIATION_FAILED", {
+        debtUsd: totalDebtBeforePaymentUsd,
+        paymentUsd: applyUsdForGate,
+      });
       setIntakeDevRows(freshDevRows);
       setSaveErr("אמצעי התשלום בפועל שונים מהחלוקה שהוגדרה. יש לעדכן את ההזמנה לפני הקליטה.");
       return { ok: false };
     }
     if (!saveGates.overpaymentCheck.ok) {
+      console.error("[payment-intake] OVERPAYMENT_DESTINATION_MISSING", {
+        overpaymentUsd: saveGates.overpaymentCheck.overpaymentUsd,
+      });
       setSaveErr(
-        `קיים עודף של $${saveGates.overpaymentCheck.overpaymentUsd.toFixed(2)}. יש לבחור: יתרת זכות ללקוח או העברה לעמלות.`,
+        `יש תשלום יתר של $${saveGates.overpaymentCheck.overpaymentUsd.toFixed(2)}. יש לבחור יתרת זכות או הוספה לעמלות.`,
       );
       return {
         ok: false,
@@ -3049,7 +3081,7 @@ export function PaymentModalUpdated({
       deferSurplusDisposition: !surplusDisposition,
       saveSurplusAsCredit: surplusDisposition === "credit",
       surplusDisposition: surplusDisposition ?? null,
-      autoAdjustIntents: options?.autoAdjustIntents ?? null,
+      autoAdjustIntents: autoAdjustIntents,
     });
     const savePaymentMs = Math.round(performance.now() - saveStart);
     if (!res.ok) {
@@ -3065,6 +3097,7 @@ export function PaymentModalUpdated({
     }
 
     setSaveBusy(false);
+    setPendingAutoAdjustIntents(null);
     if (saveJustSavedTimerRef.current != null) {
       window.clearTimeout(saveJustSavedTimerRef.current);
     }
@@ -5101,15 +5134,33 @@ export function PaymentModalUpdated({
                     draftPaymentLines={payments}
                     onClose={() => setAutoAdjustOpen(false)}
                     onApplied={async (result) => {
-                      const reloaded = await reloadIntakeOrdersPreserveForm();
-                      if (!reloaded) {
-                        setSaveErr(
-                          "ADJUSTMENT FAILED — לא ניתן לרענן את ההזמנות אחרי ההתאמה. שמירה חסומה.",
-                        );
-                        return false;
-                      }
-                      const ordersForGate = reloaded;
+                      const intents = result.intents.map((intent) => ({
+                        method: intent.method,
+                        currency: intent.currency,
+                        amountNative: intent.amountNative,
+                      }));
+                      setPendingAutoAdjustIntents(intents.length > 0 ? intents : null);
                       const enteredForGate = buildEnteredByBucket(liveFormKpis);
+                      let ordersForGate = orders;
+                      if (intents.length > 0) {
+                        const plan = planPaymentIntentAdjustments({
+                          orders,
+                          intents,
+                          exchangeRate: rateN,
+                          customerOpenDebtUsd: totalDebtBeforePaymentUsd,
+                        });
+                        if (!plan.ok) {
+                          console.error("[payment-intake] ADJUSTMENT_WRITE_FAILED", plan.error);
+                          setSaveErr(plan.error);
+                          return false;
+                        }
+                        if (plan.orderChanges.length > 0) {
+                          ordersForGate = applyIntentOrderChangesToIntakeOrders(
+                            orders,
+                            plan.orderChanges,
+                          );
+                        }
+                      }
                       const saveGates = evaluatePaymentIntakeSaveGates({
                         orders: ordersForGate,
                         includedOrderIds: includedIds,
@@ -5119,6 +5170,11 @@ export function PaymentModalUpdated({
                         surplusDisposition: result.surplusDisposition,
                       });
                       if (!saveGates.methodCheck.ok) {
+                        console.error(
+                          "[payment-intake]",
+                          saveGates.reason ?? "METHOD_RECONCILIATION_FAILED",
+                          { debtUsd: totalDebtBeforePaymentUsd, paymentUsd: paymentApplyUsd },
+                        );
                         setSaveErr(
                           result.affectedOrders > 0
                             ? "ADJUSTMENT FAILED — אמצעי התשלום המתוכננים לא תואמים לאחר עדכון ההזמנות. שמירה חסומה."
@@ -5127,14 +5183,11 @@ export function PaymentModalUpdated({
                         return false;
                       }
                       setIntakeDevRows([]);
-                      window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
-                      dispatchOrdersListRefresh();
-                      if (result.affectedOrders > 0) {
-                        onToast(`בוצעה התאמה אוטומטית ב־${result.affectedOrders} הזמנות`);
-                      }
                       if (saveGates.overpaymentCheck.detected) {
                         if (result.surplusDisposition && saveGates.overpaymentCheck.ok) {
-                          const saved = await performSave(result.surplusDisposition);
+                          const saved = await performSave(result.surplusDisposition, {
+                            autoAdjustIntents: intents,
+                          });
                           if (!saved.ok) return false;
                           setAutoAdjustOpen(false);
                           const destLabel =
@@ -5144,11 +5197,18 @@ export function PaymentModalUpdated({
                           if (finish) await finish("new", saved);
                           return true;
                         }
-                        setAutoAdjustOpen(false);
-                        openInlineOverageModal(saveAfterOverageRef.current ?? "close");
-                        return true;
+                        console.error("[payment-intake] OVERPAYMENT_DESTINATION_MISSING", {
+                          overpaymentUsd: saveGates.overpaymentCheck.overpaymentUsd,
+                        });
+                        setSaveErr(
+                          `יש תשלום יתר של $${saveGates.overpaymentCheck.overpaymentUsd.toFixed(2)}. יש לבחור יתרת זכות או הוספה לעמלות.`,
+                        );
+                        return false;
                       }
                       setAutoAdjustOpen(false);
+                      if (result.affectedOrders > 0) {
+                        onToast(`התאמת האמצעים תישמר יחד עם התשלום`);
+                      }
                       return true;
                     }}
                   />

@@ -314,7 +314,7 @@ export function derivePaymentBalanceDisplay(
   return {
     state: "surplus",
     title: "נשאר לתשלום",
-    statusHint: "יתרת זכות",
+    statusHint: "תשלום יתר",
     balanceUsdSigned: roundOrderMoney2(-surplus),
     displayUsd: surplus,
     displayIls: convertDebtUsdToIlsIncludingVat(surplus, exchangeRate),
@@ -410,7 +410,15 @@ export function reconcileOrderBreakdownWithLedger(
   }
   if (opts?.preservePaid) {
     for (const r of rows) {
-      if ((r.currency ?? "USD") === "USD") r.remainingUsd = r.remaining;
+      const physical =
+        typeof r.physicalPaid === "number" && Number.isFinite(r.physicalPaid)
+          ? roundOrderMoney2(Math.max(0, r.physicalPaid))
+          : roundOrderMoney2(Math.max(0, r.paid ?? r.paidUsd ?? 0));
+      r.paid = physical;
+      if ((r.currency ?? "USD") === "USD") {
+        r.paidUsd = physical;
+        r.remainingUsd = r.remaining;
+      }
     }
   } else {
     syncBreakdownPaidFromRemaining(rows);

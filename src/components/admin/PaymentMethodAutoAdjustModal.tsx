@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import {
-  applyPaymentIntentPlanAction,
   loadPaymentMethodAdjustmentBootstrapAction,
   previewPaymentIntentAutoAdjustmentAction,
 } from "@/app/admin/payments-updated/payment-method-adjustment-actions";
@@ -28,9 +27,6 @@ const METHOD_CARDS = [
 ];
 
 type MethodKey = (typeof METHOD_CARDS)[number]["key"];
-
-const DEFAULT_REASON =
-  "הלקוח רוצה לשלם באמצעי תשלום שונה מהמתוכנן בהזמנות הפתוחות";
 
 function fmtMoney(currency: PaymentBalanceCurrency, n: number): string {
   const safe = Number.isFinite(n) ? n : 0;
@@ -376,36 +372,8 @@ export function PaymentMethodAutoAdjustModal({
     setBusy("apply");
     setErr(null);
 
-    let adjustmentId = "";
-    let affectedOrders = 0;
-    if (preview.orderChanges.length > 0) {
-      const res = await applyPaymentIntentPlanAction({
-        customerId,
-        weekCode,
-        workCountry,
-        exchangeRate: rateN,
-        intents: preview.intents.map((intent) => ({
-          method: intent.method,
-          currency: intent.currency,
-          amountNative: intent.amountNative,
-        })),
-        reasonText: DEFAULT_REASON,
-      });
-      if (!res.ok) {
-        applyingRef.current = false;
-        setBusy(null);
-        setErr(res.error);
-        return;
-      }
-      if (res.verification.some((row) => !row.match)) {
-        applyingRef.current = false;
-        setBusy(null);
-        setErr("ADJUSTMENT FAILED — אמצעי התשלום המתוכננים לא עודכנו במסד הנתונים");
-        return;
-      }
-      adjustmentId = res.adjustmentId;
-      affectedOrders = res.affectedOrders;
-    }
+    const adjustmentId = "";
+    const affectedOrders = preview.orderChanges.length;
 
     const payload = appliedPayload(adjustmentId, affectedOrders);
     if (!payload) {

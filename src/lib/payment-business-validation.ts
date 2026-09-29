@@ -1,5 +1,6 @@
 import {
   enforceBreakdownAgainstEntered,
+  enteredUsdAppliedToOpenDebt,
   isPureSurplusOverRemainingPlan,
   PAYMENT_BUCKET_LABELS,
   type EnteredBucketUsd,
@@ -257,7 +258,9 @@ export function evaluatePaymentBusinessRules(
   // שינוי אמצעי מתוכנן נעשה במסך «אמצעי תשלום מתוכננים», לא בזמן קליטה.
   // approvedDebtTransfers נשאר בטיפוס לתאימות לאחור אך אינו מיושם.
   const plannedRows = input.plannedByMethod;
-  const violations = validatePaymentMethods(plannedRows, input.enteredByMethod, eps);
+  const debtToCloseUsd = roundMoney2(Math.min(totalPaymentUsd, totalDebtUsd));
+  const enteredForDebt = enteredUsdAppliedToOpenDebt(input.enteredByMethod, debtToCloseUsd, eps);
+  const violations = validatePaymentMethods(plannedRows, enteredForDebt, eps);
 
   const settlementIntent = classifySettlementIntent({
     plannedByMethod: plannedRows,

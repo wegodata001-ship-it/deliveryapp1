@@ -299,15 +299,8 @@ export async function previewPaymentIntentAutoAdjustmentAction(params: {
   });
   if (!plan.ok) return plan;
 
-  const { getCustomerCreditBalanceUsd, creditScopeFromWorkCountry } = await import(
-    "@/lib/customer-credit-balance"
-  );
-  const existingCreditUsd = await getCustomerCreditBalanceUsd(
-    workspace.customer.id,
-    creditScopeFromWorkCountry(normalizeWorkCountryCode(params.workCountry ?? null)),
-  );
-  const { getCustomerCommissionBalanceUsd } = await import("@/lib/customer-commission-balance");
-  const existingCommissionUsd = await getCustomerCommissionBalanceUsd(workspace.customer.id);
+  const existingCreditUsd = workspace.availableCreditUsd;
+  const existingCommissionUsd = workspace.commissionBalanceUsd;
   const resultingCreditUsd = resultingCustomerCreditUsd(existingCreditUsd, plan.overpaymentUsd);
   const resultingCommissionUsd = resultingCustomerFeeUsd(existingCommissionUsd, plan.overpaymentUsd);
 

@@ -75,6 +75,17 @@ describe("P1 Overpayment — SSOT computePaymentOverpayment", () => {
     assert.equal(r.hasOverpayment, true);
     assert.equal(r.overpaymentUsd, 10);
     assert.equal(r.closesDebtUsd, 100);
+    assert.equal(r.debtToCloseUsd, 100);
+    assert.equal(r.paymentTotalUsd, 110);
+    assert.equal(r.remainingDebtUsd, 0);
+  });
+
+  it("customer 101: $758.01 debt + $800 payment → close $758.01, overpay $41.99", () => {
+    const r = computePaymentOverpayment(758.01, 800);
+    assert.equal(r.paymentTotalUsd, 800);
+    assert.equal(r.debtToCloseUsd, 758.01);
+    assert.equal(r.overpaymentUsd, 41.99);
+    assert.equal(r.remainingDebtUsd, 0);
   });
 
   it("Debt $1,515 + Payment $1,530 → overpayment +$15 (customer SSOT case)", () => {

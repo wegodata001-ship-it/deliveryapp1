@@ -15,6 +15,8 @@ import { plannedBreakdownWasWiped } from "@/lib/payment-method-auto-adjustment";
 import {
   applyIntentOrderChangesToIntakeOrders,
   planPaymentIntentAdjustments,
+  resultingCustomerCreditUsd,
+  resultingCustomerFeeUsd,
 } from "@/lib/payment-method-payment-intent";
 import { computePaymentOverpayment } from "@/lib/payment-overpayment";
 import type { PaymentIntakeOrderRow } from "@/lib/payment-intake";
@@ -674,5 +676,82 @@ describe("independent payment intake save gates — customer 101", () => {
     assert.equal(gates.methodCheck.ok, true);
     assert.equal(gates.overpaymentCheck.detected, false);
     assert.equal(gates.saveAllowed, true);
+  });
+
+  it("101 physicalPaid wins over collectible-derived paid so $800 COMMISSION save is allowed", () => {
+    const order = {
+      ...order101({
+        breakdown: [
+          { method: "CASH", label: "מזומן", plannedUsd: 3922.54 },
+          { method: "BANK_TRANSFER", label: "העברה בנקאית", plannedUsd: 2945.46 },
+        ],
+      }),
+      breakdown: [
+        {
+          method: "CASH",
+          label: "מזומן",
+          currency: "USD" as const,
+          planned: 3922.54,
+          plannedUsd: 3922.54,
+          paid: 3578.37,
+          paidUsd: 3578.37,
+          physicalPaid: 3000,
+          remaining: 344.17,
+          remainingUsd: 344.17,
+        },
+        {
+          method: "BANK_TRANSFER",
+          label: "העברה בנקאית",
+          currency: "USD" as const,
+          planned: 2945.46,
+          plannedUsd: 2945.46,
+          paid: 2531.62,
+          paidUsd: 2531.62,
+          physicalPaid: 1836.16,
+          remaining: 413.84,
+          remainingUsd: 413.84,
+        },
+      ],
+    } as PaymentIntakeOrderRow;
+    const plan = planPaymentIntentAdjustments({
+      orders: [structuredClone(order)],
+      intents: [{ method: "CASH", currency: "USD", amountNative: 800 }],
+      customerOpenDebtUsd: DEBT,
+    });
+    assert.equal(plan.ok, true);
+    if (!plan.ok) return;
+    assert.equal(plan.closesDebtUsd, DEBT);
+    assert.equal(plan.overpaymentUsd, 41.99);
+    const bank = plan.orderChanges[0]!.afterBreakdown.find((row) => row.paymentMethod === "BANK_TRANSFER");
+    const cash = plan.orderChanges[0]!.afterBreakdown.find((row) => row.paymentMethod === "CASH");
+    assert.equal(Number(bank?.amount), 1836.16);
+    assert.equal(Number(cash?.amount), 5031.84);
+
+    const fresh = applyIntentOrderChangesToIntakeOrders([structuredClone(order)], plan.orderChanges);
+    assert.equal(fresh[0]!.breakdown.find((row) => row.method === "BANK_TRANSFER")?.remainingUsd, 0);
+    const credit = evaluatePaymentIntakeSaveGates({
+      orders: fresh,
+      includedOrderIds: null,
+      enteredByBucket: [{ bucket: "CASH", label: "מזומן", enteredUsd: 800 }],
+      totalPaymentUsd: 800,
+      openDebtUsd: DEBT,
+      surplusDisposition: "credit",
+    });
+    assert.equal(credit.methodCheck.ok, true);
+    assert.equal(credit.overpaymentCheck.overpaymentUsd, 41.99);
+    assert.equal(credit.saveAllowed, true);
+    assert.equal(credit.reason, null);
+    const commission = evaluatePaymentIntakeSaveGates({
+      orders: fresh,
+      includedOrderIds: null,
+      enteredByBucket: [{ bucket: "CASH", label: "מזומן", enteredUsd: 800 }],
+      totalPaymentUsd: 800,
+      openDebtUsd: DEBT,
+      surplusDisposition: "commission",
+    });
+    assert.equal(commission.saveAllowed, true);
+    assert.equal(resultingCustomerCreditUsd(0, 41.99), 41.99);
+    assert.notEqual(resultingCustomerCreditUsd(0, 41.99), 1315.82);
+    assert.equal(resultingCustomerFeeUsd(177.5, 41.99), 219.49);
   });
 });

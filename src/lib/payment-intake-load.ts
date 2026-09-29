@@ -211,6 +211,7 @@ function mapOrderToIntakeRow(
         currency: e.currency,
         planned: e.planned,
         paid: e.paid,
+        physicalPaid: e.paid,
         remaining: e.remaining,
         // תאימות לשערים/גשרים ישנים שעדיין מצפים ל-USD
         plannedUsd: asUsd,
@@ -603,6 +604,9 @@ export async function loadPaymentIntakeCustomerWorkspace(
       customer: PaymentIntakeCustomerPayload;
       orders: PaymentIntakeOrderRow[];
       customerPayments: PaymentIntakeCustomerPaymentRow[];
+      /** Exclusive SSOT books — not gross CUSTOMER_CREDIT */
+      availableCreditUsd: number;
+      commissionBalanceUsd: number;
     }
   | { ok: false; error: string }
 > {
@@ -627,5 +631,7 @@ export async function loadPaymentIntakeCustomerWorkspace(
     customer: customerPayloadFromRow(cust, balancesRes.customerBalanceUsd),
     orders: ordersRes.orders,
     customerPayments: paymentsRes.customerPayments,
+    availableCreditUsd: balancesRes.creditBalanceUsd,
+    commissionBalanceUsd: balancesRes.commissionBalanceUsd,
   };
 }
