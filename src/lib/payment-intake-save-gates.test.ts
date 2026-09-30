@@ -9,6 +9,7 @@ import {
 import { compareRemainingPlannedToEntered } from "@/lib/payment-breakdown-shared";
 import {
   canProceedToOverpaymentResolution,
+  describePostAdjustmentValidation,
   evaluatePaymentIntakeSaveGates,
 } from "@/lib/payment-intake-save-gates";
 import { plannedBreakdownWasWiped } from "@/lib/payment-method-auto-adjustment";
@@ -753,5 +754,15 @@ describe("independent payment intake save gates — customer 101", () => {
     assert.equal(resultingCustomerCreditUsd(0, 41.99), 41.99);
     assert.notEqual(resultingCustomerCreditUsd(0, 41.99), 1315.82);
     assert.equal(resultingCustomerFeeUsd(177.5, 41.99), 219.49);
+    const debug = describePostAdjustmentValidation({
+      orders: fresh,
+      includedOrderIds: null,
+      enteredByBucket: [{ bucket: "CASH", label: "מזומן", enteredUsd: 800 }],
+      totalPaymentUsd: 800,
+      openDebtUsd: DEBT,
+    });
+    assert.equal(debug.debtToCloseUsd, DEBT);
+    assert.equal(debug.overpaymentUsd, 41.99);
+    assert.notEqual(debug.validatorExpected, 800);
   });
 });

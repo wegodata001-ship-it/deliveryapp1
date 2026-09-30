@@ -299,7 +299,11 @@ export async function previewPaymentIntentAutoAdjustmentAction(params: {
   });
   if (!plan.ok) return plan;
 
-  const existingCreditUsd = workspace.availableCreditUsd;
+  const { availableCreditForWeekScopedPayable } = await import("@/lib/payment-intake-preview");
+  const existingCreditUsd = availableCreditForWeekScopedPayable({
+    weekScopedDebtUsd: customerOpenDebtUsd,
+    ssotAvailableCreditUsd: workspace.availableCreditUsd,
+  });
   const existingCommissionUsd = workspace.commissionBalanceUsd;
   const resultingCreditUsd = resultingCustomerCreditUsd(existingCreditUsd, plan.overpaymentUsd);
   const resultingCommissionUsd = resultingCustomerFeeUsd(existingCommissionUsd, plan.overpaymentUsd);

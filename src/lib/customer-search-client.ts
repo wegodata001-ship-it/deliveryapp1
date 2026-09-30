@@ -68,46 +68,41 @@ async function fetchSearchFast(
   if (opts.exact) params.set("exact", "1");
   if (opts.workCountry?.trim()) params.set("country", opts.workCountry.trim());
 
-  const useConsoleTimer = typeof console !== "undefined" && typeof console.time === "function";
-  if (useConsoleTimer) console.time("customer-search");
+  const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+  const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
-  try {
-    const t0 = typeof performance !== "undefined" ? performance.now() : Date.now();
-    const res = await fetch(`/api/customers/search-fast?${params.toString()}`, {
-      credentials: "include",
-      cache: "no-store",
-      signal,
+  const res = await fetch(`/api/customers/search-fast?${params.toString()}`, {
+    credentials: "include",
+    cache: "no-store",
+    signal,
+  });
+  const fetchMs = Math.round(
+    (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt,
+  );
+
+  if (typeof window !== "undefined" && process.env.NODE_ENV === "development" && fetchMs > 300) {
+    console.debug("[searchFast.client]", {
+      requestId,
+      q,
+      exact: !!opts.exact,
+      status: res.status,
+      fetchMs,
     });
-    const fetchMs = Math.round(
-      (typeof performance !== "undefined" ? performance.now() : Date.now()) - t0,
-    );
-
-    if (typeof window !== "undefined" && (process.env.NODE_ENV === "development" || fetchMs > 300)) {
-      console.log("[searchFast.client]", {
-        q,
-        exact: !!opts.exact,
-        status: res.status,
-        fetchMs,
-        hint: fetchMs > 300 ? "Check Network: waiting=TTFB/server; content=JSON parse" : undefined,
-      });
-    }
-
-    if (res.status === 401) throw new Error("Unauthorized");
-    if (!res.ok) throw new Error("טעינת נתונים נכשלה");
-
-    let rows: CustomerSearchRow[];
-    if (opts.exact) {
-      const row = (await res.json()) as CustomerSearchRow | null;
-      rows = row ? [row] : [];
-    } else {
-      rows = (await res.json()) as CustomerSearchRow[];
-    }
-
-    if (rows.length > 0) writeCache(key, rows);
-    return rows;
-  } finally {
-    if (useConsoleTimer) console.timeEnd("customer-search");
   }
+
+  if (res.status === 401) throw new Error("Unauthorized");
+  if (!res.ok) throw new Error("טעינת נתונים נכשלה");
+
+  let rows: CustomerSearchRow[];
+  if (opts.exact) {
+    const row = (await res.json()) as CustomerSearchRow | null;
+    rows = row ? [row] : [];
+  } else {
+    rows = (await res.json()) as CustomerSearchRow[];
+  }
+
+  if (rows.length > 0) writeCache(key, rows);
+  return rows;
 }
 
 export async function searchCustomersFastClient(

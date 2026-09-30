@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  availableCreditForWeekScopedPayable,
   buildPaymentPreview,
   computePendingCreditApplyUsd,
   remainingToPayCardDisplayFromOverpayment,
@@ -146,6 +147,30 @@ describe("buildPaymentPreview", () => {
     assert.equal(p.projectedOverpayment, 41.99);
     assert.equal(p.existingCredit, 0);
     assert.equal(p.projectedCredit, 41.99);
+  });
+
+  it("week-scoped payable never shows gross $1,273.83 as available credit", () => {
+    assert.equal(
+      availableCreditForWeekScopedPayable({
+        weekScopedDebtUsd: 758.01,
+        ssotAvailableCreditUsd: 0,
+      }),
+      0,
+    );
+    assert.equal(
+      availableCreditForWeekScopedPayable({
+        weekScopedDebtUsd: 758.01,
+        ssotAvailableCreditUsd: 1273.83,
+      }),
+      0,
+    );
+    assert.equal(
+      availableCreditForWeekScopedPayable({
+        weekScopedDebtUsd: 0,
+        ssotAvailableCreditUsd: 41.99,
+      }),
+      41.99,
+    );
   });
 
   it("customer 101 exclusive books: available credit $0 so overpay credit is $41.99 not $1,315.82", () => {

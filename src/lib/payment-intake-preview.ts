@@ -15,6 +15,21 @@ import {
   type PaymentBalanceDisplay,
 } from "@/lib/order-remaining-debt";
 
+/**
+ * יתרת זכות זמינה לקליטה בשבוע שנבחר.
+ * אם יש חוב שבועי לגבייה — הזכות כבר קוזזה ב-FIFO collectible remaining.
+ * אסור להציג gross CUSTOMER_CREDIT כיתרת זכות קיימת ליד החוב השבועי.
+ */
+export function availableCreditForWeekScopedPayable(params: {
+  weekScopedDebtUsd: number;
+  ssotAvailableCreditUsd: number;
+}): number {
+  const weekDebt = roundOrderMoney2(Math.max(0, params.weekScopedDebtUsd));
+  const ssotCredit = roundOrderMoney2(Math.max(0, params.ssotAvailableCreditUsd));
+  if (weekDebt > 0.01) return 0;
+  return ssotCredit;
+}
+
 export type PaymentPreviewFinancialState = {
   openDebtUsd: number | null;
   availableCreditUsd: number;

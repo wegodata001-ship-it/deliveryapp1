@@ -198,7 +198,10 @@ import {
   type PaymentShortfallResolution,
 } from "@/components/admin/PaymentShortfallAfterSaveModal";
 import { computePaymentOverpayment, formatOverpaymentUsdSigned } from "@/lib/payment-overpayment";
-import { evaluatePaymentIntakeSaveGates } from "@/lib/payment-intake-save-gates";
+import {
+  describePostAdjustmentValidation,
+  evaluatePaymentIntakeSaveGates,
+} from "@/lib/payment-intake-save-gates";
 import {
   applyIntentOrderChangesToIntakeOrders,
   planPaymentIntentAdjustments,
@@ -2944,10 +2947,15 @@ export function PaymentModalUpdated({
     // חוק עסקי ראשון — אמצעי התשלום המתוכננים מחייבים.
     // אין העברת חוב בין אמצעים; שינוי אמצעי — רק במסך אמצעי מתוכננים.
     // עודף אמיתי לאחר סגירת כל החוב — חלון ייעודי.
-    const freshOrders = await reloadIntakeOrdersPreserveForm();
-    let ordersForGate = freshOrders ?? orders;
     const autoAdjustIntents =
       options?.autoAdjustIntents ?? pendingAutoAdjustIntents ?? null;
+    const freshOrders = await reloadIntakeOrdersPreserveForm();
+    if (autoAdjustIntents && autoAdjustIntents.length > 0 && !freshOrders) {
+      console.error("[payment-intake] ADJUSTMENT_RELOAD_MISMATCH");
+      setSaveErr("ADJUSTMENT FAILED — לא ניתן לרענן את ההזמנות לפני השמירה. שמירה חסומה.");
+      return { ok: false };
+    }
+    let ordersForGate = freshOrders ?? orders;
     if (autoAdjustIntents && autoAdjustIntents.length > 0) {
       const plan = planPaymentIntentAdjustments({
         orders: ordersForGate,
@@ -2993,8 +3001,14 @@ export function PaymentModalUpdated({
     });
     if (!saveGates.methodCheck.ok) {
       console.error("[payment-intake]", saveGates.reason ?? "METHOD_RECONCILIATION_FAILED", {
-        debtUsd: totalDebtBeforePaymentUsd,
-        paymentUsd: applyUsdForGate,
+        ...describePostAdjustmentValidation({
+          orders: ordersForGate,
+          includedOrderIds: includedIds,
+          enteredByBucket: enteredForGate,
+          totalPaymentUsd: applyUsdForGate,
+          openDebtUsd: totalDebtBeforePaymentUsd,
+        }),
+        week: orderSourceWeekCode,
       });
       setIntakeDevRows(freshDevRows);
       setSaveErr("אמצעי התשלום בפועל שונים מהחלוקה שהוגדרה. יש לעדכן את ההזמנה לפני הקליטה.");
@@ -5140,75 +5154,29 @@ export function PaymentModalUpdated({
                         amountNative: intent.amountNative,
                       }));
                       setPendingAutoAdjustIntents(intents.length > 0 ? intents : null);
-                      const enteredForGate = buildEnteredByBucket(liveFormKpis);
-                      let ordersForGate = orders;
-                      if (intents.length > 0) {
-                        const plan = planPaymentIntentAdjustments({
-                          orders,
-                          intents,
-                          exchangeRate: rateN,
-                          customerOpenDebtUsd: totalDebtBeforePaymentUsd,
-                        });
-                        if (!plan.ok) {
-                          console.error("[payment-intake] ADJUSTMENT_WRITE_FAILED", plan.error);
-                          setSaveErr(plan.error);
-                          return false;
-                        }
-                        if (plan.orderChanges.length > 0) {
-                          ordersForGate = applyIntentOrderChangesToIntakeOrders(
-                            orders,
-                            plan.orderChanges,
-                          );
-                        }
-                      }
-                      const saveGates = evaluatePaymentIntakeSaveGates({
-                        orders: ordersForGate,
-                        includedOrderIds: includedIds,
-                        enteredByBucket: enteredForGate,
-                        totalPaymentUsd: paymentApplyUsd,
-                        openDebtUsd: totalDebtBeforePaymentUsd,
-                        surplusDisposition: result.surplusDisposition,
-                      });
-                      if (!saveGates.methodCheck.ok) {
-                        console.error(
-                          "[payment-intake]",
-                          saveGates.reason ?? "METHOD_RECONCILIATION_FAILED",
-                          { debtUsd: totalDebtBeforePaymentUsd, paymentUsd: paymentApplyUsd },
-                        );
-                        setSaveErr(
-                          result.affectedOrders > 0
-                            ? "ADJUSTMENT FAILED — אמצעי התשלום המתוכננים לא תואמים לאחר עדכון ההזמנות. שמירה חסומה."
-                            : "אמצעי התשלום בפועל שונים מהחלוקה שהוגדרה. יש לעדכן את ההזמנה לפני הקליטה.",
-                        );
-                        return false;
-                      }
-                      setIntakeDevRows([]);
-                      if (saveGates.overpaymentCheck.detected) {
-                        if (result.surplusDisposition && saveGates.overpaymentCheck.ok) {
-                          const saved = await performSave(result.surplusDisposition, {
-                            autoAdjustIntents: intents,
-                          });
-                          if (!saved.ok) return false;
-                          setAutoAdjustOpen(false);
-                          const destLabel =
-                            result.surplusDisposition === "commission" ? "עמלות" : "יתרת זכות";
-                          onToast(`תשלום יתר: $${result.overpaymentUsd.toFixed(2)} הועבר ל${destLabel}`);
-                          const finish = finishAfterSuccessfulSaveRef.current;
-                          if (finish) await finish("new", saved);
-                          return true;
-                        }
+                      if (result.hasOverpayment && !result.surplusDisposition) {
                         console.error("[payment-intake] OVERPAYMENT_DESTINATION_MISSING", {
-                          overpaymentUsd: saveGates.overpaymentCheck.overpaymentUsd,
+                          overpaymentUsd: result.overpaymentUsd,
                         });
                         setSaveErr(
-                          `יש תשלום יתר של $${saveGates.overpaymentCheck.overpaymentUsd.toFixed(2)}. יש לבחור יתרת זכות או הוספה לעמלות.`,
+                          `יש תשלום יתר של $${result.overpaymentUsd.toFixed(2)}. יש לבחור יתרת זכות או הוספה לעמלות.`,
                         );
                         return false;
                       }
+                      const saved = await performSave(result.surplusDisposition, {
+                        autoAdjustIntents: intents,
+                      });
+                      if (!saved.ok) return false;
                       setAutoAdjustOpen(false);
-                      if (result.affectedOrders > 0) {
-                        onToast(`התאמת האמצעים תישמר יחד עם התשלום`);
+                      if (result.hasOverpayment && result.surplusDisposition) {
+                        const destLabel =
+                          result.surplusDisposition === "commission" ? "עמלות" : "יתרת זכות";
+                        onToast(`תשלום יתר: $${result.overpaymentUsd.toFixed(2)} הועבר ל${destLabel}`);
+                      } else if (result.affectedOrders > 0) {
+                        onToast(`התאמת האמצעים נשמרה עם התשלום`);
                       }
+                      const finish = finishAfterSuccessfulSaveRef.current;
+                      if (finish) await finish("new", saved);
                       return true;
                     }}
                   />

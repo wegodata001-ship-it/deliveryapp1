@@ -7,10 +7,14 @@
  */
 
 import {
+  buildOpenMethodPlan,
   classifyMethodIntakeGate,
   type MethodIntakeGate,
 } from "@/lib/cash-control-intake-breakdown";
-import type { EnteredBucketUsd } from "@/lib/payment-breakdown-shared";
+import {
+  enteredUsdAppliedToOpenDebt,
+  type EnteredBucketUsd,
+} from "@/lib/payment-breakdown-shared";
 import type { PaymentIntakeOrderRow } from "@/lib/payment-intake";
 import { computePaymentOverpayment } from "@/lib/payment-overpayment";
 
@@ -75,4 +79,32 @@ export function evaluatePaymentIntakeSaveGates(params: {
 /** חלון תשלום יתר נפתח רק אחרי שערי אמצעי עברו. */
 export function canProceedToOverpaymentResolution(gates: PaymentIntakeSaveGates): boolean {
   return gates.methodCheck.ok && gates.overpaymentCheck.detected;
+}
+
+/** Debug — השוואת אמצעי חוב בלבד מול יתרות מתוכננות פתוחות. */
+export function describePostAdjustmentValidation(params: {
+  orders: PaymentIntakeOrderRow[];
+  includedOrderIds: string[] | null;
+  enteredByBucket: EnteredBucketUsd[];
+  totalPaymentUsd: number;
+  openDebtUsd: number;
+}) {
+  const overpay = computePaymentOverpayment(params.openDebtUsd, params.totalPaymentUsd);
+  const enteredForDebt = enteredUsdAppliedToOpenDebt(
+    params.enteredByBucket,
+    overpay.debtToCloseUsd,
+  );
+  const openPlan = buildOpenMethodPlan(params.orders, params.includedOrderIds);
+  return {
+    paymentTotalUsd: overpay.paymentTotalUsd,
+    weekScopedDebtUsd: overpay.openDebtUsd,
+    debtToCloseUsd: overpay.debtToCloseUsd,
+    overpaymentUsd: overpay.overpaymentUsd,
+    remainingDebtUsd: overpay.remainingDebtUsd,
+    eligibleOrderIds: params.orders.map((order) => order.id),
+    plannedOpenAfter: Object.fromEntries(openPlan.map((row) => [row.bucket, row.remainingUsd])),
+    enteredDebtPortion: Object.fromEntries(enteredForDebt.map((row) => [row.bucket, row.enteredUsd])),
+    validatorExpected: overpay.debtToCloseUsd,
+    validatorActual: openPlan.reduce((sum, row) => sum + row.remainingUsd, 0),
+  };
 }
