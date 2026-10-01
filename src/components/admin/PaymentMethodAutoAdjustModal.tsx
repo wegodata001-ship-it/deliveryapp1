@@ -385,11 +385,7 @@ export function PaymentMethodAutoAdjustModal({
     if (ok === false) {
       applyingRef.current = false;
       setBusy(null);
-      setErr(
-        preview.hasOverpayment
-          ? "ההתאמה או טיפול העודף נכשלו. אפשר לנסות שוב."
-          : "ההתאמה נכשלה. אפשר לנסות שוב.",
-      );
+      setErr("לא ניתן היה לשמור את ההתאמה. לא בוצעו שינויים.");
       return;
     }
     setBusy(null);

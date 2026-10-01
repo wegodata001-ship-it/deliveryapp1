@@ -14,12 +14,19 @@ import { computeOrderMethodDeviation, isCompositePaymentMethod, paymentMethodBuc
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 import type { PaymentIntakeCustomerPaymentRow } from "@/lib/payment-intake-customer-kpi";
 import {
+  intakeOrderWeekNotAfterSelected,
   paymentIntakeOrderDateThroughAhWeekEnd,
   sumPaymentIntakeWeekScopedRemainingUsd,
 } from "@/lib/payment-intake-order-filter";
+import { availableCreditForWeekScopedPayable } from "@/lib/payment-intake-preview";
 import { loadPaymentPlanSummariesByOrderId } from "@/lib/payment-plan-service";
 import { DEFAULT_WORK_COUNTRY, normalizeWorkCountryCode, type WorkCountryCode } from "@/lib/work-country";
 import { formatLocalYmd } from "@/lib/work-week";
+import {
+  resolvePaymentIntakeFinancialScope,
+  toCustomerBalanceCalcScope,
+  type CustomerFinancialScope,
+} from "@/lib/customer-financial-scope";
 import { findActiveCustomerPayments, groupByActivePayments } from "@/lib/payment-record-status";
 import { OS } from "@/lib/order-status-slugs";
 import { orderCustomerCreditUsd } from "@/lib/debt-withdrawal-order";
@@ -251,8 +258,13 @@ function mapOrderToIntakeRow(
   };
 }
 
+function asOfPaymentDateWhere(cutoff: Date | null | undefined): { paymentDate?: { lte: Date } } {
+  return cutoff ? { paymentDate: { lte: cutoff } } : {};
+}
+
 async function attachPaymentsAndMapRows(
   orders: IntakeOrderRecord[],
+  commissionAsOfTo: Date | null = null,
 ): Promise<PaymentIntakeOrderRow[]> {
   const orderIds = orders.map((o) => o.id);
   const paidByOrder = new Map<string, Prisma.Decimal>();
@@ -358,7 +370,7 @@ async function attachPaymentsAndMapRows(
       paymentPlan: planByOrder.get(o.id) ?? null,
     }));
 
-    return enrichIntakeOrdersWithCommissionSsot(rows);
+    return enrichIntakeOrdersWithCommissionSsot(rows, commissionAsOfTo);
   }
 
   return [];
@@ -367,6 +379,7 @@ async function attachPaymentsAndMapRows(
 /** מחיל currentFee = base + Σ fees על שורות קליטה */
 async function enrichIntakeOrdersWithCommissionSsot(
   rows: PaymentIntakeOrderRow[],
+  asOfTo: Date | null = null,
 ): Promise<PaymentIntakeOrderRow[]> {
   if (rows.length === 0) return rows;
   const orderIds = rows.map((r) => r.id);
@@ -374,6 +387,7 @@ async function enrichIntakeOrdersWithCommissionSsot(
     where: {
       orderId: { in: orderIds },
       status: { not: "CANCELLED" },
+      ...(asOfTo ? { createdAt: { lte: asOfTo } } : {}),
     },
     select: { orderId: true, amountUsd: true, userChoice: true },
   });
@@ -403,6 +417,24 @@ async function enrichIntakeOrdersWithCommissionSsot(
   });
 }
 
+function intakeScopeFromParams(params: IntakeLoadParams): {
+  financial: CustomerFinancialScope;
+  calcTo: Date | null;
+  paymentWorkCountry: WorkCountryCode;
+} {
+  const paymentWorkCountry = normalizeWorkCountryCode(params.paymentWorkCountryRaw) ?? DEFAULT_WORK_COUNTRY;
+  const resolved = resolvePaymentIntakeFinancialScope({
+    weekCode: params.weekCodeForOpenBalances,
+    workCountry: paymentWorkCountry,
+  });
+  const calc = toCustomerBalanceCalcScope(resolved.financial);
+  return {
+    financial: resolved.financial,
+    calcTo: calc.to ?? null,
+    paymentWorkCountry,
+  };
+}
+
 /** הזמנות לקוח בלבד — לטעינה ברקע */
 export async function loadPaymentIntakeOrdersForCustomer(
   params: IntakeLoadParams,
@@ -415,17 +447,19 @@ export async function loadPaymentIntakeOrdersForCustomer(
 
   const intakeWeekCode = params.weekCodeForOpenBalances?.trim() || null;
   const weekDateWhere = paymentIntakeOrderDateThroughAhWeekEnd(intakeWeekCode);
-  const paymentWorkCountry = normalizeWorkCountryCode(params.paymentWorkCountryRaw) ?? DEFAULT_WORK_COUNTRY;
+  const { calcTo, paymentWorkCountry } = intakeScopeFromParams(params);
   const baseWhere = intakeOrderBaseWhere(cid, paymentWorkCountry);
 
-  const eligibleOrders = await prisma.order.findMany({
-    where: { ...baseWhere, ...(weekDateWhere ?? {}) },
-    orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],
-    select: INTAKE_ORDER_SELECT,
-  });
+  const eligibleOrders = (
+    await prisma.order.findMany({
+      where: { ...baseWhere, ...(weekDateWhere ?? {}) },
+      orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],
+      select: INTAKE_ORDER_SELECT,
+    })
+  ).filter((o) => intakeOrderWeekNotAfterSelected(o.weekCode, intakeWeekCode));
 
   const [rows, withdrawalUsd, availableCreditUsd] = await Promise.all([
-    attachPaymentsAndMapRows(eligibleOrders),
+    attachPaymentsAndMapRows(eligibleOrders, calcTo),
     loadCustomerDebtWithdrawalUsd(cid, paymentWorkCountry),
     loadCustomerCreditUsd(cid, paymentWorkCountry),
   ]);
@@ -471,6 +505,7 @@ export async function getPaymentIntakeEligibleOrders(params: IntakeLoadParams): 
 async function loadCustomerDebtWithdrawalUsd(
   customerId: string,
   paymentWorkCountry: WorkCountryCode,
+  asOfTo: Date | null = null,
 ): Promise<number> {
   const rows = await prisma.order.findMany({
     where: {
@@ -478,6 +513,7 @@ async function loadCustomerDebtWithdrawalUsd(
       deletedAt: null,
       status: OS.DEBT_WITHDRAWAL,
       countryCode: paymentWorkCountry,
+      ...(asOfTo ? { orderDate: { lte: asOfTo } } : {}),
     },
     select: {
       status: true,
@@ -493,10 +529,14 @@ async function loadCustomerDebtWithdrawalUsd(
 async function loadCustomerCreditUsd(
   customerId: string,
   paymentWorkCountry: WorkCountryCode,
+  financial?: CustomerFinancialScope,
 ): Promise<number> {
   const { getCustomerCreditBalanceUsd, creditScopeFromWorkCountry } = await import(
     "@/lib/customer-credit-balance"
   );
+  if (financial) {
+    return getCustomerCreditBalanceUsd(customerId, toCustomerBalanceCalcScope(financial));
+  }
   return getCustomerCreditBalanceUsd(customerId, creditScopeFromWorkCountry(paymentWorkCountry));
 }
 
@@ -507,9 +547,13 @@ export async function loadPaymentIntakeCustomerPaymentsForCustomer(
   const cid = params.customerId.trim();
   if (!cid) return { ok: false, error: "חסר לקוח" };
 
-  const paymentWorkCountry = normalizeWorkCountryCode(params.paymentWorkCountryRaw) ?? DEFAULT_WORK_COUNTRY;
+  const { calcTo, paymentWorkCountry } = intakeScopeFromParams(params);
   const customerPaymentRows = await findActiveCustomerPayments({
-    where: { customerId: cid, countryCode: paymentWorkCountry },
+    where: {
+      customerId: cid,
+      countryCode: paymentWorkCountry,
+      ...asOfPaymentDateWhere(calcTo),
+    },
     select: {
       amountUsd: true,
       amountIls: true,
@@ -558,36 +602,49 @@ export async function loadPaymentIntakeBalancesForCustomer(
   const cid = params.customerId.trim();
   if (!cid) return { ok: false, error: "חסר לקוח" };
 
-  const paymentWorkCountry = normalizeWorkCountryCode(params.paymentWorkCountryRaw) ?? DEFAULT_WORK_COUNTRY;
-  const { getCustomerOpenDebt, openDebtScopeForWorkCountry } = await import("@/lib/customer-open-debt");
+  const { financial } = intakeScopeFromParams(params);
+  const { getCustomerOpenDebt } = await import("@/lib/customer-open-debt");
   const { getCustomerAccountBalances, financialStateFromAccounts } = await import(
     "@/lib/customer-account-balances"
   );
-  const debtScope = openDebtScopeForWorkCountry(paymentWorkCountry);
+  const calcScope = toCustomerBalanceCalcScope(financial);
 
-  const { currentCustomerFinancialScopeForWorkCountry } = await import("@/lib/customer-financial-scope");
-  const [accounts, debt] = await Promise.all([
-    getCustomerAccountBalances(cid, currentCustomerFinancialScopeForWorkCountry(paymentWorkCountry)),
-    getCustomerOpenDebt(cid, debtScope),
+  const [accounts, debt, ordersRes] = await Promise.all([
+    getCustomerAccountBalances(cid, financial),
+    getCustomerOpenDebt(cid, calcScope),
+    loadPaymentIntakeOrdersForCustomer(params),
   ]);
-  const financial = financialStateFromAccounts(accounts);
+  const weekScopedRemainingUsd = ordersRes.ok
+    ? sumPaymentIntakeWeekScopedRemainingUsd(ordersRes.orders)
+    : 0;
+  const weekScopedCreditUsd = availableCreditForWeekScopedPayable({
+    weekScopedDebtUsd: weekScopedRemainingUsd,
+    ssotAvailableCreditUsd: accounts.availableCreditUsd,
+  });
+  const state = financialStateFromAccounts({
+    ...accounts,
+    openDebtUsd: weekScopedRemainingUsd,
+    availableCreditUsd: weekScopedCreditUsd,
+  });
 
-  // סנכרון snapshot מ־SSOT (לא תיקון ידני ללקוח) — מונע יתרת DB ישנה בחיפוש
-  try {
-    const { persistCustomerBalanceSnapshot } = await import("@/lib/customer-open-debt");
-    await persistCustomerBalanceSnapshot(cid, debt.internalSignedUsd);
-  } catch {
-    /* snapshot best-effort */
+  // Snapshot = CURRENT only. Historical intake must not overwrite live Customer.balanceUsd.
+  if (financial.kind === "CURRENT") {
+    try {
+      const { persistCustomerBalanceSnapshot } = await import("@/lib/customer-open-debt");
+      await persistCustomerBalanceSnapshot(cid, debt.internalSignedUsd);
+    } catch {
+      /* snapshot best-effort */
+    }
   }
 
   return {
     ok: true,
     customerBalanceUsd: debt.internalSignedUsd.toFixed(2),
-    openDebtSignedUsd: accounts.openDebtUsd,
+    openDebtSignedUsd: weekScopedRemainingUsd,
     internalSignedUsd: debt.internalSignedUsd.toFixed(2),
     commissionBalanceUsd: accounts.commissionBalanceUsd,
-    creditBalanceUsd: accounts.availableCreditUsd,
-    financialStatus: financial.financialStatus,
+    creditBalanceUsd: weekScopedCreditUsd,
+    financialStatus: state.financialStatus,
     totalOrdersBeforeCommissionUsd: Number(debt.totalOrdersBeforeCommissionUsd.toFixed(2)),
     totalOrdersUsd: Number(debt.totalOrdersUsd.toFixed(2)),
     totalPaymentsUsd: Number(debt.totalPaymentsUsd.toFixed(2)),

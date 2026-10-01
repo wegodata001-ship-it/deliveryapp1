@@ -77,6 +77,7 @@ export {
   historicalCustomerFinancialScope,
   informationalNetPositionUsd,
   resolveBalancesWeekFinancialScope,
+  resolvePaymentIntakeFinancialScope,
 } from "@/lib/customer-financial-scope";
 export type {
   BalancesWeekFinancialScope,

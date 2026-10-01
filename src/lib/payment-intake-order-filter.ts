@@ -51,10 +51,30 @@ export function orderDateIsThroughAhWeekEnd(
  * הזמנה זכאית לשבוע הקליטה שנבחר — לפי תאריך בלבד.
  * יתרה פתוחה בשבוע עתידי אינה מרחיבה את הסקופ.
  */
+export function ahWeekSequence(code: string | null | undefined): number | null {
+  const c = normalizeAhWeekCode(code ?? "");
+  if (!c) return null;
+  const n = Number(c.replace(/^AH-/i, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+/** הזמנת AH-140 לא נכנסת לשבוע קליטה AH-137 גם אם תאריך חסר/שגוי. */
+export function intakeOrderWeekNotAfterSelected(
+  orderWeekCode: string | null | undefined,
+  selectedWeekCode: string | null | undefined,
+): boolean {
+  const selected = ahWeekSequence(selectedWeekCode);
+  const order = ahWeekSequence(orderWeekCode);
+  if (selected == null || order == null) return true;
+  return order <= selected;
+}
+
 export function intakeOrderEligibleForSelectedWeek(params: {
   orderDate: Date | string | null | undefined;
   weekCodeRaw: string | null | undefined;
+  orderWeekCode?: string | null;
 }): boolean {
+  if (!intakeOrderWeekNotAfterSelected(params.orderWeekCode, params.weekCodeRaw)) return false;
   return orderDateIsThroughAhWeekEnd(params.orderDate, params.weekCodeRaw);
 }
 

@@ -101,7 +101,6 @@ import {
   summarizeOrderBalanceResetRows,
 } from "@/lib/balance-reset-calculation";
 import {
-  fetchCustomerOpenDebtAction,
   fetchOrderForPaymentContextAction,
   previewPaymentCodeForCaptureAction,
   resolveCapturePaymentByCodeQueryAction,
@@ -436,10 +435,10 @@ const NEW_CAPTURE_ROW_ID = "";
 
 function createNewCaptureLoadedPayment(
   paymentCode: string,
-  homeWeek?: string,
+  intakeWeek?: string,
 ): PaymentEntryResponse {
   const now = new Date();
-  const week = defaultPaymentIntakeWeekCode(homeWeek);
+  const week = normalizeAhWeekCode(intakeWeek) ?? defaultPaymentIntakeWeekCode();
   const closing = defaultPaymentIntakeDateYmd(week);
   return {
     id: NEW_CAPTURE_ROW_ID,
@@ -613,25 +612,25 @@ export function PaymentModalUpdated({
 
   /** קליטה שנטענה מ־GET /api/payments/entry או מעטפת קליטה חדשה */
   const [loadedPayment, setLoadedPayment] = useState<PaymentEntryResponse>(() =>
-    createNewCaptureLoadedPayment("", globalWeek),
+    createNewCaptureLoadedPayment(""),
   );
   /** קוד תשלום לתצוגה בלבד — נטען ברקע, לא מעדכן את loadedPayment (מונע remount / איבוד פוקוס) */
   const [previewPaymentCode, setPreviewPaymentCode] = useState<string | null>(null);
   const [paymentCodePreviewPending, setPaymentCodePreviewPending] = useState(true);
   const [paymentDateYmd, setPaymentDateYmd] = useState(() =>
-    defaultPaymentIntakeDateYmd(defaultPaymentIntakeWeekCode(globalWeek)),
+    defaultPaymentIntakeDateYmd(defaultPaymentIntakeWeekCode()),
   );
   /** תאריך מקור ההזמנות (שבת שבוע מקור) — נפרד מתאריך ביצוע התשלום */
   const [orderSourceDateYmd, setOrderSourceDateYmd] = useState(() =>
-    defaultOrderSourceDateYmdForIntakeWeek(defaultPaymentIntakeWeekCode(globalWeek)),
+    defaultOrderSourceDateYmdForIntakeWeek(defaultPaymentIntakeWeekCode()),
   );
   const [editingOrderSourceDate, setEditingOrderSourceDate] = useState(false);
   /** תאריך ביצוע קליטת תשלום — שבת השבוע הפיננסי (N−1), לא שבת שבוע הקליטה */
   const [intakeDateYmd, setIntakeDateYmd] = useState(() =>
-    defaultPaymentIntakeDateYmd(defaultPaymentIntakeWeekCode(globalWeek)),
+    defaultPaymentIntakeDateYmd(defaultPaymentIntakeWeekCode()),
   );
   const [paymentTimeHm, setPaymentTimeHm] = useState(() => formatLocalHm(new Date()));
-  const [weekDraft, setWeekDraft] = useState(() => defaultPaymentIntakeWeekCode(globalWeek));
+  const [weekDraft, setWeekDraft] = useState(() => defaultPaymentIntakeWeekCode());
   const [weekInputErr, setWeekInputErr] = useState<string | null>(null);
 
   const dollarRateTouchedRef = useRef(false);
@@ -918,7 +917,7 @@ export function PaymentModalUpdated({
 
   /** שבוע עבודה / קליטה — מהבורר בלבד */
   const intakeWeekCode = useMemo(() => {
-    return normalizeAhWeekCode(weekDraft.trim()) ?? DEFAULT_WEEK_CODE;
+    return normalizeAhWeekCode(weekDraft.trim()) ?? defaultPaymentIntakeWeekCode();
   }, [weekDraft]);
 
   /** שבוע מקור ההזמנות — שבוע קודם לקליטה, או לפי תאריך מקור ידני */
@@ -1045,20 +1044,23 @@ export function PaymentModalUpdated({
       return;
     }
     const gen = ++customerOpenDebtFetchGenRef.current;
-    const res = await fetchCustomerOpenDebtAction(cid, intakeDocumentWorkCountry);
+    const weekForFetch = orderSourceWeekForIntakeWeek(intakeWeekCode, orderSourceDateYmd);
+    const res = await fetchPaymentIntakeBalancesClient(cid, intakeDocumentWorkCountry, weekForFetch);
     if (gen !== customerOpenDebtFetchGenRef.current) return;
     if (res.ok) {
-      setCustomerOpenDebtSignedUsd(parseMoneyStringOrZero(res.openDebtUsd));
-      setCustomerLedgerChargesUsd(parseMoneyStringOrZero(res.totalOrdersBeforeCommissionUsd));
-      setCustomerLedgerPaymentsUsd(parseMoneyStringOrZero(res.totalPaymentsUsd));
-      setCustomerLedgerWithdrawalsUsd(parseMoneyStringOrZero(res.totalWithdrawalsUsd));
-      setServerCreditBalanceUsd(parseMoneyStringOrZero(res.customerCreditUsd));
-      setServerCommissionBalanceUsd(parseMoneyStringOrZero(res.feeBalanceUsd));
+      setCustomerOpenDebtSignedUsd(parseMoneyStringOrZero(String(res.openDebtSignedUsd)));
+      setCustomerLedgerChargesUsd(Number(res.totalOrdersBeforeCommissionUsd) || 0);
+      setCustomerLedgerPaymentsUsd(Number(res.totalPaymentsUsd) || 0);
+      setCustomerLedgerWithdrawalsUsd(Number(res.totalWithdrawalsUsd) || 0);
+      setServerCreditBalanceUsd(Number(res.creditBalanceUsd) || 0);
+      setServerCommissionBalanceUsd(Number(res.commissionBalanceUsd) || 0);
       setCustomer((cur) =>
-        cur?.id === cid ? { ...cur, customerBalanceUsd: res.internalSignedUsd } : cur,
+        cur?.id === cid
+          ? { ...cur, customerBalanceUsd: res.internalSignedUsd || res.customerBalanceUsd }
+          : cur,
       );
     }
-  }, [intakeDocumentWorkCountry]);
+  }, [intakeDocumentWorkCountry, intakeWeekCode, orderSourceDateYmd]);
 
   useEffect(() => {
     if (!customer?.id?.trim()) {
@@ -1085,16 +1087,16 @@ export function PaymentModalUpdated({
     () => parseMoneyStringOrZero(customer?.customerBalanceUsd ?? "0"),
     [customer?.customerBalanceUsd],
   );
-  const customerOpenDebtDisplayUsd = paymentIntakeCustomerOpenDebtUsd({
-    customerOpenDebtSignedUsd,
-    customerBalanceResetPending,
-  });
   /** נשאר לתשלום לשבוע הנבחר — אותו יקום כמו טבלת ההזמנות. לא CURRENT SSOT. */
   const weekScopedRemainingUsd = useMemo(
     () =>
       customerBalanceResetPending ? 0 : sumPaymentIntakeWeekScopedRemainingUsd(orders),
     [customerBalanceResetPending, orders],
   );
+  const customerOpenDebtDisplayUsd = paymentIntakeCustomerOpenDebtUsd({
+    customerOpenDebtSignedUsd: weekScopedRemainingUsd,
+    customerBalanceResetPending,
+  });
 
   /** יתרה שנותרת על הזמנות לאחר הקצאת התשלום הנוכחי (חוסר בלבד — תאימות לאחור) */
   const orderRemainderAfterPaymentUsd = useMemo(() => {
@@ -1121,7 +1123,7 @@ export function PaymentModalUpdated({
         customerBalanceResetPreview: customerBalanceResetPreviewForLive,
         customerPaymentsUsd: sumCustomerPaymentsUsd(customerPayments),
         formPaymentUsd: totals.totalUsd,
-        customerSignedOpenDebtUsd: customerOpenDebtSignedUsd,
+        customerSignedOpenDebtUsd: weekScopedRemainingUsd,
         customerApplyPaymentUsd: paymentApplyUsd,
         customerTotalChargesUsd: customerLedgerChargesUsd,
         customerTotalPaymentsUsd: customerLedgerPaymentsUsd,
@@ -1134,7 +1136,7 @@ export function PaymentModalUpdated({
       customerBalanceResetPreviewForLive,
       customerPayments,
       totals.totalUsd,
-      customerOpenDebtSignedUsd,
+      weekScopedRemainingUsd,
       paymentApplyUsd,
       customerLedgerChargesUsd,
       customerLedgerPaymentsUsd,
@@ -1622,7 +1624,7 @@ export function PaymentModalUpdated({
         return { ordersLoadMs, ok: true as const };
       });
 
-      const balancesP = fetchPaymentIntakeBalancesClient(cid, wc).then((res) => {
+      const balancesP = fetchPaymentIntakeBalancesClient(cid, wc, weekForFetch).then((res) => {
         const balancesLoadMs = Math.round(performance.now() - balancesStart);
         if (gen !== customerWorkspaceGenRef.current) return { balancesLoadMs, ok: true as const };
         setBalancesLoading(false);
@@ -1641,7 +1643,7 @@ export function PaymentModalUpdated({
         return { balancesLoadMs, ok: true as const };
       });
 
-      const paymentsP = fetchPaymentIntakeCustomerPaymentsClient(cid, wc).then((res) => {
+      const paymentsP = fetchPaymentIntakeCustomerPaymentsClient(cid, wc, weekForFetch).then((res) => {
         const paymentsLoadMs = Math.round(performance.now() - paymentsStart);
         if (gen !== customerWorkspaceGenRef.current) return { paymentsLoadMs, ok: true as const };
         setPaymentsLoading(false);
@@ -1718,7 +1720,7 @@ export function PaymentModalUpdated({
           res: r,
           ms: Math.round(performance.now() - workspaceStart),
         })),
-        fetchPaymentIntakeBalancesClient(cid, wc).then((r) => ({
+        fetchPaymentIntakeBalancesClient(cid, wc, weekForFetch).then((r) => ({
           res: r,
           ms: Math.round(performance.now() - balancesStart),
         })),
@@ -2176,25 +2178,26 @@ export function PaymentModalUpdated({
   const shiftIntakeWeek = useCallback(
     (delta: -1 | 1) => {
       const cur =
-        normalizeAhWeekCode(weekDraft) ?? defaultPaymentIntakeWeekCode(globalWeek);
+        normalizeAhWeekCode(weekDraft) ?? defaultPaymentIntakeWeekCode();
       const next =
         delta === -1 ? getPrevAhWeek(cur)?.code : getNextAhWeek(cur)?.code;
       if (next) applyIntakeWeekCode(next, { reloadOrders: true });
     },
-    [weekDraft, globalWeek, applyIntakeWeekCode],
+    [weekDraft, applyIntakeWeekCode],
   );
 
   const goToCurrentWorkWeek = useCallback(() => {
-    applyIntakeWeekCode(defaultPaymentIntakeWeekCode(globalWeek), { reloadOrders: true });
-  }, [applyIntakeWeekCode, globalWeek]);
+    applyIntakeWeekCode(defaultPaymentIntakeWeekCode(), { reloadOrders: true });
+  }, [applyIntakeWeekCode]);
 
   useEffect(() => {
     const isNewCapture = !loadedPayment.id?.trim();
     if (!isNewCapture) return;
-    applyIntakeWeekCode(defaultPaymentIntakeWeekCode(globalWeek), {
+    applyIntakeWeekCode(defaultPaymentIntakeWeekCode(), {
       reloadOrders: !!customer?.id?.trim(),
     });
-  }, [globalWeek]); // eslint-disable-line react-hooks/exhaustive-deps -- sync new-capture intake week to selected work week
+    // Default previous-week only on a new capture identity — not after manual week change.
+  }, [loadedPayment.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** בחירת לקוח מיידית — פוקוס לסכום; הזמנות נטענות ברקע בלי לאפס את הטבלה */
   const selectCustomerQuick = useCallback(
@@ -2474,7 +2477,7 @@ export function PaymentModalUpdated({
     commissionPercentTouchedRef.current = false;
     setDollarRate(parseFinalRate(financial).toFixed(4));
     setCommissionPercentStr(systemCommissionPercentStr);
-    const defWeek = defaultPaymentIntakeWeekCode(globalWeek);
+    const defWeek = defaultPaymentIntakeWeekCode();
     setWeekDraft(defWeek);
     setWeekInputErr(null);
     const closing = defaultPaymentIntakeDateYmd(defWeek);
@@ -2504,7 +2507,7 @@ export function PaymentModalUpdated({
     setCancelReasonDraft("");
     setCancelNotesDraft("");
     setCancelRequestHint({ status: "none" });
-    setLoadedPayment(createNewCaptureLoadedPayment("", globalWeek));
+    setLoadedPayment(createNewCaptureLoadedPayment(""));
     clearPaymentEntryCaches();
     baselineSigRef.current = "";
     refreshPaymentCodePreview();
@@ -2513,7 +2516,6 @@ export function PaymentModalUpdated({
   }, [
     financial,
     systemCommissionPercentStr,
-    globalWeek,
     refreshPaymentCodePreview,
     clearPaymentEntryCaches,
     focusCustomerCodeInput,
@@ -3323,6 +3325,7 @@ export function PaymentModalUpdated({
         const balRes = await fetchPaymentIntakeBalancesClient(
           customer.id,
           intakeDocumentWorkCountry,
+          orderSourceWeekCode,
         );
         if (balRes.ok) {
           commissionBal = Number(balRes.commissionBalanceUsd) || 0;
@@ -4455,7 +4458,7 @@ export function PaymentModalUpdated({
                     title="חזרה לשבוע העבודה הנבחר"
                     disabled={
                       normalizeAhWeekCode(intakeWeekCode) ===
-                      normalizeAhWeekCode(defaultPaymentIntakeWeekCode(globalWeek))
+                      normalizeAhWeekCode(defaultPaymentIntakeWeekCode())
                     }
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={goToCurrentWorkWeek}
@@ -4485,7 +4488,7 @@ export function PaymentModalUpdated({
                       const num = parseWeekNumber(curRaw);
                       if (num == null) {
                         setWeekInputErr(null);
-                        setWeekDraft(intakeWeekCode || defaultPaymentIntakeWeekCode(globalWeek));
+                        setWeekDraft(intakeWeekCode || defaultPaymentIntakeWeekCode());
                         return;
                       }
                       applyIntakeWeekCode(toWeekCode(num));

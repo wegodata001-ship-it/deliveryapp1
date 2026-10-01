@@ -6,6 +6,10 @@ import { revalidatePath } from "next/cache";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { writeOrderBreakdownInTx } from "@/lib/order-breakdown-write";
 import {
+  ADJUSTMENT_SAVE_FAILED_USER_MESSAGE,
+  isPrismaMissingRecordError,
+} from "@/lib/order-breakdown-paid-persist";
+import {
   assertPlannedBreakdownPreserved,
   buildPaymentMethodAdjustmentBootstrap,
   buildPaymentMethodAutoAdjustmentPreview,
@@ -460,6 +464,10 @@ export async function applyPaymentIntentPlanAction(params: {
       });
     }, { maxWait: 10_000, timeout: 30_000 });
   } catch (error) {
+    if (isPrismaMissingRecordError(error)) {
+      console.error("[payment-intake] ADJUSTMENT_INTENT_PERSIST_FAILED", error);
+      return { ok: false, error: ADJUSTMENT_SAVE_FAILED_USER_MESSAGE };
+    }
     return { ok: false, error: error instanceof Error ? error.message : "התאמה אוטומטית נכשלה" };
   }
 
@@ -610,6 +618,10 @@ export async function applyPaymentMethodAutoAdjustmentAction(params: {
       });
     }, { maxWait: 10_000, timeout: 30_000 });
   } catch (error) {
+    if (isPrismaMissingRecordError(error)) {
+      console.error("[payment-intake] ADJUSTMENT_AUTO_PERSIST_FAILED", error);
+      return { ok: false, error: ADJUSTMENT_SAVE_FAILED_USER_MESSAGE };
+    }
     return { ok: false, error: error instanceof Error ? error.message : "התאמה אוטומטית נכשלה" };
   }
 

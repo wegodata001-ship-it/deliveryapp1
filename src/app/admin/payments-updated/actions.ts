@@ -32,6 +32,11 @@ import { paymentIntakeOrderDateThroughAhWeekEnd } from "@/lib/payment-intake-ord
 import { closePaymentPlansForOrdersInTx } from "@/lib/payment-plan-service";
 import { writeOrderBreakdownInTx } from "@/lib/order-breakdown-write";
 import {
+  ADJUSTMENT_SAVE_FAILED_USER_MESSAGE,
+  isPrismaMissingRecordError,
+  persistMatchingBreakdownPaidInTx,
+} from "@/lib/order-breakdown-paid-persist";
+import {
   assertPlannedBreakdownPreserved,
   paymentMethodForBreakdown,
 } from "@/lib/payment-method-auto-adjustment";
@@ -870,7 +875,6 @@ export async function savePaymentUpdatedAction(
               const paid = paidByOrderMethod.get(`${bal.orderId}::${currency}::${bucket}`) ?? 0;
               rebuilt.push(
                 methodBalanceFromBreakdownRow({
-                  breakdownId: `auto-adjust:${bal.orderId}:${line.paymentMethod}:${currency}`,
                   orderId: bal.orderId,
                   paymentMethod: line.paymentMethod,
                   amount,
@@ -1795,29 +1799,13 @@ export async function savePaymentUpdatedAction(
         });
       }
 
-      // Matching Engine → Persist SSOT במטבע המקורי של כל שורה
+      // Matching Engine → Persist SSOT. Reload by orderId+method+currency — never stale IDs.
       if (matchingResult) {
-        for (const bal of matchingResult.balances) {
-          const paidDec = new Prisma.Decimal(bal.paid.toFixed(4));
-          const remDec = new Prisma.Decimal(Math.max(0, bal.remaining).toFixed(4));
-          if (bal.breakdownId) {
-            await tx.orderPaymentBreakdown.update({
-              where: { id: bal.breakdownId },
-              data: { paidAmount: paidDec, remainingAmount: remDec },
-            });
-          } else {
-            await tx.orderPaymentBreakdown.create({
-              data: {
-                orderId: bal.orderId,
-                paymentMethod: bal.method,
-                amount: new Prisma.Decimal(Math.max(0, bal.planned).toFixed(4)),
-                currency: bal.currency,
-                paidAmount: paidDec,
-                remainingAmount: remDec,
-              },
-            });
-          }
-        }
+        await persistMatchingBreakdownPaidInTx(tx, matchingResult.balances, {
+          paymentId: primaryPaymentId,
+          paymentCode: primaryCode,
+          weekCode,
+        });
         if (matchingResult.transfersApplied.length > 0) {
           pendingAudits.push({
             userId: me.id,
@@ -1931,6 +1919,23 @@ export async function savePaymentUpdatedAction(
       }
     });
   } catch (e) {
+    if (
+      isPrismaMissingRecordError(e) ||
+      (pendingAutoAdjustChanges.length > 0 &&
+        /orderPaymentBreakdown/i.test(e instanceof Error ? e.message : ""))
+    ) {
+      console.error("[payment-intake] ADJUSTMENT_BREAKDOWN_PERSIST_FAILED", {
+        paymentCode: primaryCode,
+        weekCode,
+        customerId: cid,
+        pendingAdjustOrders: pendingAutoAdjustChanges.map((row) => ({
+          orderId: row.orderId,
+          orderNumber: row.orderNumber,
+        })),
+        error: e,
+      });
+      return { ok: false, error: ADJUSTMENT_SAVE_FAILED_USER_MESSAGE };
+    }
     const msg = e instanceof Error ? e.message : "שמירה נכשלה";
     return { ok: false, error: msg };
   }

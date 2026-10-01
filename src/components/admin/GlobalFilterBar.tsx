@@ -211,7 +211,7 @@ export function GlobalFilterBar({ financial = null, canManageFinancial = false }
     }
   }, []);
 
-  // URL חסר / לא מיושר — שבוע שמור ב-localStorage או שבוע עבודה פעיל
+  // URL חסר / לא מיושר — שבוע עסקי חי (לא שבוע היסטורי מ-localStorage)
   useEffect(() => {
     const urlCountry = sp.get("country") || "";
     if (isGlobalFilterUrlReady(sp.get("week"), sp.get("from"), sp.get("to"), urlCountry)) return;
