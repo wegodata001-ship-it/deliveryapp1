@@ -442,7 +442,7 @@ export function applyDualCurrencyMatching(params: {
 }
 
 export function methodBalanceFromBreakdownRow(params: {
-  breakdownId: string;
+  breakdownId?: string;
   orderId: string;
   paymentMethod: string;
   amount: number;
@@ -459,7 +459,7 @@ export function methodBalanceFromBreakdownRow(params: {
       : round2(Math.max(0, planned - paid));
   const bucket = paymentMethodBucketKey(params.paymentMethod);
   return withMethodStatus({
-    breakdownId: params.breakdownId,
+    ...(params.breakdownId?.trim() ? { breakdownId: params.breakdownId.trim() } : {}),
     orderId: params.orderId,
     method: params.paymentMethod,
     bucket,

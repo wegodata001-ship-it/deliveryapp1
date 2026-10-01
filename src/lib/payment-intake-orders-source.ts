@@ -40,7 +40,7 @@ export async function softRefreshPaymentIntakeOrders(params: {
 
   const [ordersRes, balancesRes] = await Promise.all([
     fetchPaymentIntakeOrdersClient(cid, params.weekCode, params.workCountry),
-    fetchPaymentIntakeBalancesClient(cid, params.workCountry),
+    fetchPaymentIntakeBalancesClient(cid, params.workCountry, params.weekCode),
   ]);
 
   if (!ordersRes.ok) return { ok: false, error: ordersRes.error };

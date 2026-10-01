@@ -740,7 +740,7 @@ describe("QA-8 — נעילת אמצעי סגור + חסימת שינוי אמצ
     assert.ok(!deviations.some((row) => row.rowTone === "excess"));
   });
 
-  it("עודף תשלום — באנר חלוקת אמצעים מוסתר גם כשיש excess גולמי", () => {
+  it("חריגת אמצעי נשארת גלויה גם כשיש עודף סכום", () => {
     const raw = [
       {
         id: "method:CASH",
@@ -761,10 +761,12 @@ describe("QA-8 — נעילת אמצעי סגור + חסימת שינוי אמצ
         rowTone: "surplus" as const,
       },
     ];
-    assert.equal(filterIntakeCorrectionRowsForDisplay(raw, "surplus").length, 0);
+    const surplusView = filterIntakeCorrectionRowsForDisplay(raw, "surplus");
+    assert.equal(surplusView.length, 1);
+    assert.equal(surplusView[0]!.rowTone, "excess");
     const debtView = filterIntakeCorrectionRowsForDisplay(raw, "debt");
     assert.equal(debtView.length, 1);
-    assert.equal(debtView[0].rowTone, "excess");
+    assert.equal(debtView[0]!.rowTone, "excess");
   });
 
   it("תשלום חלקי תקין על אמצעי פתוח → ALLOW", () => {
@@ -775,5 +777,62 @@ describe("QA-8 — נעילת אמצעי סגור + חסימת שינוי אמצ
       totalPaymentUsd: 50,
     });
     assert.equal(gate.kind, "ALLOW");
+  });
+
+  it("101 $725 cash+bank: stale planned methods block, fresh adjusted methods allow", () => {
+    const entered = [
+      { bucket: "CASH" as const, label: "מזומן", enteredUsd: 310 },
+      { bucket: "BANK_TRANSFER" as const, label: "העברה בנקאית", enteredUsd: 415 },
+    ];
+    const stale: PaymentIntakeOrderRow = {
+      ...orderPartialTransfer,
+      id: "ord-101",
+      totalAmountUsd: "2031.84",
+      dbPaidUsd: "1273.83",
+      dbRemainingUsd: "758.01",
+      breakdown: [
+        { method: "CREDIT", label: "אשראי", plannedUsd: 758.01, paidUsd: 0, remainingUsd: 758.01 },
+      ],
+    };
+    const fresh: PaymentIntakeOrderRow = {
+      ...stale,
+      breakdown: [
+        { method: "CASH", label: "מזומן", plannedUsd: 310, paidUsd: 0, remainingUsd: 310 },
+        {
+          method: "BANK_TRANSFER",
+          label: "העברה בנקאית",
+          plannedUsd: 448.01,
+          paidUsd: 0,
+          remainingUsd: 448.01,
+        },
+      ],
+    };
+    assert.equal(
+      classifyMethodIntakeGate({
+        orders: [stale],
+        includedOrderIds: null,
+        enteredByBucket: entered,
+        totalPaymentUsd: 725,
+      }).kind,
+      "METHOD_DEVIATION",
+    );
+    const after = classifyMethodIntakeGate({
+      orders: [fresh],
+      includedOrderIds: null,
+      enteredByBucket: entered,
+      totalPaymentUsd: 725,
+    });
+    assert.equal(after.kind, "ALLOW");
+    const banner = filterIntakeCorrectionRowsForDisplay(
+      computeIntakeSaveDeviations({
+        orders: [fresh],
+        includedOrderIds: null,
+        enteredByBucket: entered,
+        formRateN: 3.7,
+        totalPaymentUsd: 725,
+      }),
+      "debt",
+    );
+    assert.equal(banner.length, 0);
   });
 });

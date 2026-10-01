@@ -235,7 +235,20 @@ export function comparePaymentIntakeParity(params: {
       }
     }
 
-    const v2Methods = v2MethodsByOrder.get(leg.orderId) ?? [];
+    const v2MethodsRaw = v2MethodsByOrder.get(leg.orderId) ?? [];
+    const v2UsdRemainingSum = money(
+      v2MethodsRaw.filter((m) => m.currency === "USD").reduce((s, m) => s + m.remaining, 0),
+    );
+    const collectibleUsd = money(Math.max(0, leg.openDebtUsd));
+    const remainingScale =
+      v2UsdRemainingSum > PARITY_EPS && collectibleUsd + PARITY_EPS < v2UsdRemainingSum
+        ? collectibleUsd / v2UsdRemainingSum
+        : 1;
+    const v2Methods = v2MethodsRaw.map((m) =>
+      m.currency === "USD" && remainingScale !== 1
+        ? { ...m, remaining: money(m.remaining * remainingScale) }
+        : m,
+    );
     const v2ByKey = new Map(
       v2Methods.map((m) => [`${m.currency}:${m.paymentMethod}`, m]),
     );

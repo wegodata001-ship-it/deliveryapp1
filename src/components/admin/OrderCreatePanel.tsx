@@ -1048,8 +1048,6 @@ export function OrderCreatePanel({
 
     const t = window.setTimeout(() => {
       void (async () => {
-        const useConsoleTimer = typeof console !== "undefined" && typeof console.time === "function";
-        if (useConsoleTimer) console.time("customer-search");
         try {
           const localRows: CustomerSearchRow[] = searchCustomerCaptureIndexLocal(trimmed, field);
 
@@ -1074,7 +1072,6 @@ export function OrderCreatePanel({
           setErr("טעינת נתונים נכשלה");
           setHits([]);
         } finally {
-          if (useConsoleTimer) console.timeEnd("customer-search");
           if (searchGenRef.current === gen) setIsSearching(false);
         }
       })();

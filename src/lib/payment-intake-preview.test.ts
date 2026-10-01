@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  availableCreditForWeekScopedPayable,
   buildPaymentPreview,
   computePendingCreditApplyUsd,
+  remainingToPayCardDisplayFromOverpayment,
+  remainingToPayCardDisplayFromPreview,
   toPaymentPreviewOrders,
 } from "@/lib/payment-intake-preview";
+import { formatPaymentBalanceUsdLine } from "@/lib/order-remaining-debt";
 
 function preview(input: {
   debt: number | null;
@@ -55,6 +59,7 @@ describe("buildPaymentPreview", () => {
 
   it("CASE 4 — overpayment: remaining 0, projected credit 50", () => {
     const p = preview({ debt: 100, payment: 150 });
+    assert.equal(p.signedRemainingUsd, -50);
     assert.equal(p.remainingDebt, 0);
     assert.equal(p.projectedOverpayment, 50);
     assert.equal(p.projectedCredit, 50);
@@ -86,11 +91,18 @@ describe("buildPaymentPreview", () => {
     assert.equal(p.selectedOrdersRemaining, 1112);
   });
 
-  it("SSOT loaded with $0 debt is the net remaining, not order leftover", () => {
-    const p = preview({ debt: 0, selectedRemaining: 1112, payment: 100 });
+  it("week-scoped remaining wins over CURRENT SSOT (AH-134 vs AH-140 debt)", () => {
+    const p = preview({ debt: 758.01, selectedRemaining: 0, payment: 100 });
+    assert.equal(p.debtBefore, 0);
     assert.equal(p.remainingDebt, 0);
-    assert.equal(p.draftPaymentTotal, 100);
-    assert.equal(p.projectedCredit, 100);
+    assert.equal(p.projectedOverpayment, 100);
+    assert.equal(p.selectedOrdersRemaining, 0);
+  });
+
+  it("AH-140 week remaining $758.01 is the payable, not a second CURRENT source", () => {
+    const p = preview({ debt: 758.01, selectedRemaining: 758.01, payment: 0 });
+    assert.equal(p.debtBefore, 758.01);
+    assert.equal(p.remainingDebt, 758.01);
   });
 
   it("customer 101: 2031.84 − 1273.83 = 758.01 remaining, credit 0", () => {
@@ -119,10 +131,96 @@ describe("buildPaymentPreview", () => {
     assert.equal(p.projectedCredit, 300);
   });
 
-  it("never returns negative remaining", () => {
+  it("never returns negative remainingDebt; signed remaining keeps the overpayment", () => {
     const p = preview({ debt: 80, payment: 100 });
     assert.equal(p.remainingDebt, 0);
+    assert.equal(p.signedRemainingUsd, -20);
     assert.ok(p.projectedOverpayment > 0);
+  });
+
+  it("customer 101: $758.01 debt + $800 payment → signed −$41.99 preview credit", () => {
+    const p = preview({ debt: 758.01, payment: 800 });
+    assert.equal(p.debtBefore, 758.01);
+    assert.equal(p.draftPaymentTotal, 800);
+    assert.equal(p.signedRemainingUsd, -41.99);
+    assert.equal(p.remainingDebt, 0);
+    assert.equal(p.projectedOverpayment, 41.99);
+    assert.equal(p.existingCredit, 0);
+    assert.equal(p.projectedCredit, 41.99);
+  });
+
+  it("week-scoped payable never shows gross $1,273.83 as available credit", () => {
+    assert.equal(
+      availableCreditForWeekScopedPayable({
+        weekScopedDebtUsd: 758.01,
+        ssotAvailableCreditUsd: 0,
+      }),
+      0,
+    );
+    assert.equal(
+      availableCreditForWeekScopedPayable({
+        weekScopedDebtUsd: 758.01,
+        ssotAvailableCreditUsd: 1273.83,
+      }),
+      0,
+    );
+    assert.equal(
+      availableCreditForWeekScopedPayable({
+        weekScopedDebtUsd: 0,
+        ssotAvailableCreditUsd: 41.99,
+      }),
+      41.99,
+    );
+  });
+
+  it("customer 101 exclusive books: available credit $0 so overpay credit is $41.99 not $1,315.82", () => {
+    const p = preview({ debt: 758.01, credit: 0, payment: 800 });
+    assert.equal(p.existingCredit, 0);
+    assert.equal(p.projectedCredit, 41.99);
+    assert.notEqual(p.projectedCredit, 1315.82);
+  });
+
+  it("remaining card never uses clamped $0 when overpayment is $41.99", () => {
+    const clampedZero = {
+      state: "cleared" as const,
+      title: "נשאר לתשלום",
+      statusHint: "אין יתרה פתוחה",
+      balanceUsdSigned: 0,
+      displayUsd: 0,
+      displayIls: 0,
+    };
+    const d = remainingToPayCardDisplayFromOverpayment(41.99, clampedZero, 3);
+    assert.equal(d.state, "surplus");
+    assert.equal(d.displayUsd, 41.99);
+    assert.equal(formatPaymentBalanceUsdLine(d), "+$41.99");
+    assert.equal(d.statusHint, "תשלום יתר");
+    assert.notEqual(formatPaymentBalanceUsdLine(d), "$0.00");
+  });
+
+  it("remaining card cases for customer 101 preview", () => {
+    const rate = 3;
+    const cases = [
+      { payment: 700, value: "$58.01", hint: "יתרה פתוחה" },
+      { payment: 758.01, value: "$0.00", hint: "אין יתרה פתוחה" },
+      { payment: 760, value: "+$1.99", hint: "תשלום יתר" },
+      { payment: 800, value: "+$41.99", hint: "תשלום יתר" },
+    ] as const;
+    for (const row of cases) {
+      const p = preview({ debt: 758.01, payment: row.payment });
+      const d = remainingToPayCardDisplayFromPreview(p, rate);
+      assert.equal(formatPaymentBalanceUsdLine(d), row.value, `pay ${row.payment}`);
+      assert.equal(d.statusHint, row.hint, `hint ${row.payment}`);
+    }
+    const fifty = remainingToPayCardDisplayFromPreview(preview({ debt: 750, payment: 800 }), rate);
+    assert.equal(formatPaymentBalanceUsdLine(fifty), "+$50.00");
+    assert.equal(fifty.statusHint, "תשלום יתר");
+  });
+
+  it("customer 101: $758.01 debt + $500 payment → signed +$258.01 debt remaining", () => {
+    const p = preview({ debt: 758.01, payment: 500 });
+    assert.equal(p.signedRemainingUsd, 258.01);
+    assert.equal(p.remainingDebt, 258.01);
+    assert.equal(p.projectedOverpayment, 0);
   });
 });
 

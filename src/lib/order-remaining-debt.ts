@@ -261,7 +261,7 @@ export type PaymentBalanceState = "debt" | "cleared" | "surplus" | "credit";
 export type PaymentBalanceDisplay = {
   state: PaymentBalanceState;
   title: string;
-  /** טקסט משני — למשל «תשלום יתר» / «שולם במלואו» */
+  /** טקסט משני — יתרה פתוחה / אין יתרה פתוחה / יתרת זכות */
   statusHint?: string;
   /** חתום: חיובי=חוב, 0=נסגר, שלילי=עודף */
   balanceUsdSigned: number;
@@ -294,7 +294,7 @@ export function derivePaymentBalanceDisplay(
     return {
       state: "cleared",
       title: "נשאר לתשלום",
-      statusHint: "שולם במלואו",
+      statusHint: "אין יתרה פתוחה",
       balanceUsdSigned: 0,
       displayUsd: 0,
       displayIls: 0,
@@ -304,6 +304,7 @@ export function derivePaymentBalanceDisplay(
     return {
       state: "debt",
       title: "נשאר לתשלום",
+      statusHint: "יתרה פתוחה",
       balanceUsdSigned: signed,
       displayUsd: signed,
       displayIls: convertDebtUsdToIlsIncludingVat(signed, exchangeRate),
@@ -312,7 +313,8 @@ export function derivePaymentBalanceDisplay(
   const surplus = roundOrderMoney2(Math.abs(signed));
   return {
     state: "surplus",
-    title: "תשלום יתר",
+    title: "נשאר לתשלום",
+    statusHint: "תשלום יתר",
     balanceUsdSigned: roundOrderMoney2(-surplus),
     displayUsd: surplus,
     displayIls: convertDebtUsdToIlsIncludingVat(surplus, exchangeRate),
@@ -380,6 +382,7 @@ export function formatPaymentBalanceIlsLine(display: PaymentBalanceDisplay): str
 export function reconcileOrderBreakdownWithLedger(
   breakdown: OrderBreakdownMethodRow[],
   openDebtUsd: number,
+  opts?: { preservePaid?: boolean },
 ): OrderBreakdownMethodRow[] {
   if (breakdown.length === 0) return breakdown;
   const targetOpen = roundOrderMoney2(Math.max(0, openDebtUsd));
@@ -405,7 +408,21 @@ export function reconcileOrderBreakdownWithLedger(
   if (Math.abs(sumUsdRem - targetOpen) > 0.005) {
     distributeUsdRemainingToMatchOpenDebt(usdRows, targetOpen);
   }
-  syncBreakdownPaidFromRemaining(rows);
+  if (opts?.preservePaid) {
+    for (const r of rows) {
+      const physical =
+        typeof r.physicalPaid === "number" && Number.isFinite(r.physicalPaid)
+          ? roundOrderMoney2(Math.max(0, r.physicalPaid))
+          : roundOrderMoney2(Math.max(0, r.paid ?? r.paidUsd ?? 0));
+      r.paid = physical;
+      if ((r.currency ?? "USD") === "USD") {
+        r.paidUsd = physical;
+        r.remainingUsd = r.remaining;
+      }
+    }
+  } else {
+    syncBreakdownPaidFromRemaining(rows);
+  }
   return rows;
 }
 

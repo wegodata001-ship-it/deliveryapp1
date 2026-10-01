@@ -29,7 +29,6 @@ import {
 import { buildPaymentAdjustmentFeeCreateData } from "@/lib/payment-adjustment-fee";
 import { scheduleRevalidateAfterPaymentSave } from "@/lib/revalidate-after-payment-save";
 import { invalidateWeekBalanceIfBalanced } from "@/lib/cash-control/week-balance-service";
-import { paymentIntakeOrderDateThroughAhWeekEnd } from "@/lib/payment-intake-order-filter";
 import { OrderStatus as OS } from "@prisma/client";
 import { compareReceivedToDebt, computeReceivedUsd } from "@/lib/payment-intake-rebuild/compare";
 import { INTAKE_EPS, type IntakeSaveInput } from "@/lib/payment-intake-rebuild/types";
@@ -105,7 +104,6 @@ export async function executePaymentIntake(params: {
   const rateN = Number(input.dollarRate);
   const { receivedUsd, totalIls } = computeReceivedUsd(input.methods, rateN);
   const weekCode = input.weekCode.trim();
-  const weekDateWhere = paymentIntakeOrderDateThroughAhWeekEnd(weekCode);
 
   // חוק עסקי ראשון — אמצעי התשלום נבדקים מול התכנון לפני טעינת מנוע FIFO.
   const intakeOrdersResult = await loadPaymentIntakeOrdersForCustomer({
@@ -137,12 +135,13 @@ export async function executePaymentIntake(params: {
     return { ok: false, error: paymentMethodMismatchMessage(methodViolations) };
   }
 
+  const intakeOrderIds = intakeOrdersResult.orders.map((o) => o.id);
   const orders = await prisma.order.findMany({
     where: {
       customerId: cid,
       deletedAt: null,
       status: { not: OS.DEBT_WITHDRAWAL },
-      ...(weekDateWhere ?? {}),
+      ...(intakeOrderIds.length > 0 ? { id: { in: intakeOrderIds } } : { id: { in: [] } }),
     },
     orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],
     select: { id: true, orderNumber: true, totalUsd: true, amountUsd: true, commissionUsd: true },

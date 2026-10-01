@@ -121,6 +121,16 @@ describe("paymentIntakeDebtAfterPaymentUsd", () => {
     );
   });
 
+  it("customer 101: $758.01 debt − $800 payment = −$41.99 signed remaining", () => {
+    assert.equal(
+      paymentIntakeDebtAfterPaymentUsd({
+        customerOpenDebtSignedUsd: 758.01,
+        formPaymentUsd: 800,
+      }),
+      -41.99,
+    );
+  });
+
   it("4250 after multiple withdrawals and 1000 payment", () => {
     assert.equal(
       paymentIntakeDebtAfterPaymentUsd({

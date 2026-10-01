@@ -14,10 +14,12 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const customerId = (searchParams.get("customerId") ?? "").trim();
   const country = searchParams.get("country")?.trim() || null;
+  const week = searchParams.get("week")?.trim() || null;
   if (!customerId) return NextResponse.json({ error: "Missing customerId" }, { status: 400 });
 
   const res = await loadPaymentIntakeBalancesForCustomer({
     customerId,
+    weekCodeForOpenBalances: week,
     paymentWorkCountryRaw: country,
   });
   if (!res.ok) return NextResponse.json({ error: res.error }, { status: 404 });

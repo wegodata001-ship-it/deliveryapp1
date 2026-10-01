@@ -2,10 +2,10 @@
  * שבוע עבודה גלובלי (SSOT) — נגזר מפרמטר URL `week`.
  *
  * globalWorkWeek = שבוע שנבחר בבית (שבוע הזמנות / דשבורד / יתרות לפי מסך).
+ * בלי week ב-URL / כניסה חדשה: getCurrentBusinessWeek().
  *
- * קליטת תשלום: שבוע הקליטה = globalWorkWeek (השבוע הנבחר).
- * מקור הזמנות בקליטה = אותו שבוע — ראו payment-intake-default-week /
- * payment-intake-week-context. אין לשנות את השבוע הגלובלי בעת כניסה לקליטה.
+ * קליטת תשלום: ברירת המחדל בפתיחה = previous business week
+ * (ראו payment-intake-default-week). אין לשנות את השבוע הגלובלי בעת כניסה לקליטה.
  * paymentDate אינו קובע שבוע קליטה.
  *
  * sourceWeekCode כאן נשאר prev(global) לתאימות יתרות/snapshot קיימים — לא משמש
@@ -13,8 +13,8 @@
  */
 import {
   balancesSnapshotToYmd,
-  DEFAULT_WEEK_CODE,
   getAhWeekRange,
+  getCurrentBusinessWeek,
   normalizeAhWeekCode,
   prevWeekCode,
 } from "@/lib/work-week";
@@ -32,7 +32,7 @@ export type GlobalWorkWeekScope = {
 
 export function resolveGlobalWorkWeek(
   weekParam: string | null | undefined,
-  fallback: string = DEFAULT_WEEK_CODE,
+  fallback: string = getCurrentBusinessWeek().currentBusinessWeekId,
 ): string {
   return normalizeAhWeekCode(weekParam ?? "") ?? fallback;
 }
@@ -48,7 +48,7 @@ export function resolveSourceWeekForPaymentAndBalances(
 
 export function resolveGlobalWorkWeekScope(
   weekParam: string | null | undefined,
-  fallback: string = DEFAULT_WEEK_CODE,
+  fallback: string = getCurrentBusinessWeek().currentBusinessWeekId,
 ): GlobalWorkWeekScope {
   const globalWorkWeek = resolveGlobalWorkWeek(weekParam, fallback);
   const range = getAhWeekRange(globalWorkWeek);

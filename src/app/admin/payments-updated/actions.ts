@@ -31,7 +31,15 @@ import type { PaymentOveragePreview } from "@/lib/customer-balance";
 import { paymentIntakeOrderDateThroughAhWeekEnd } from "@/lib/payment-intake-order-filter";
 import { closePaymentPlansForOrdersInTx } from "@/lib/payment-plan-service";
 import { writeOrderBreakdownInTx } from "@/lib/order-breakdown-write";
-import { paymentMethodForBreakdown } from "@/lib/payment-method-auto-adjustment";
+import {
+  ADJUSTMENT_SAVE_FAILED_USER_MESSAGE,
+  isPrismaMissingRecordError,
+  persistMatchingBreakdownPaidInTx,
+} from "@/lib/order-breakdown-paid-persist";
+import {
+  assertPlannedBreakdownPreserved,
+  paymentMethodForBreakdown,
+} from "@/lib/payment-method-auto-adjustment";
 import {
   applyIntentOrderChangesToIntakeOrders,
   planPaymentIntentAdjustments,
@@ -44,7 +52,6 @@ import { allocateNextPaymentCapture, resolvePaymentWorkCountry } from "@/lib/pay
 import { DEFAULT_WORK_COUNTRY, normalizeWorkCountryCode, type WorkCountryCode } from "@/lib/work-country";
 import {
   getCustomerInternalBalanceUsd,
-  getCustomerOpenDebtUsdNumber,
   openDebtScopeForWorkCountry,
   persistCustomerBalanceSnapshot,
 } from "@/lib/customer-open-debt";
@@ -86,6 +93,7 @@ import {
 import { evaluatePaymentBusinessRules } from "@/lib/payment-business-validation";
 import { computePaymentIntakePostSaveOutcome, type PaymentIntakePostSaveOutcome } from "@/lib/payment-intake-post-save";
 import { loadPaymentIntakeOrdersForCustomer } from "@/lib/payment-intake-load";
+import { sumPaymentIntakeWeekScopedRemainingUsd } from "@/lib/payment-intake-order-filter";
 import { weekCodeForPaymentIntakeOrders } from "@/lib/payment-intake-week-context";
 import { VAT_RATE } from "@/lib/vat";
 import { prismaVatRatePercent } from "@/lib/vat-prisma";
@@ -528,11 +536,8 @@ export async function savePaymentUpdatedAction(
   const selectedIntakeOrders = intakeOrdersResult.orders.filter(
     (order) => selectedOrderIds == null || selectedOrderIds.has(order.id),
   );
-  /** חוב SSOT של הלקוח — לא סכום יתרות הזמנה בטבלה (משיכה מחוב / זכות) */
-  const customerOpenDebtUsd = await getCustomerOpenDebtUsdNumber(
-    cid,
-    openDebtScopeForWorkCountry(form.workCountry),
-  );
+  /** יתרת שבוע הקליטה — אותו יקום כמו הטבלה. CURRENT SSOT לא משמש להקצאה/עודף. */
+  const customerOpenDebtUsd = sumPaymentIntakeWeekScopedRemainingUsd(intakeOrdersResult.orders);
   let pendingAutoAdjustChanges: PaymentIntentOrderChange[] = [];
   let autoAdjustMethodAllocation: PaymentIntentMethodAllocation[] = [];
   let intakeOrdersForPlan = intakeOrdersResult.orders;
@@ -631,16 +636,12 @@ export async function savePaymentUpdatedAction(
   // תמיד מבצעים FIFO allocation קודם; רק עודף (unallocated) מטופל כקרדיט/עמלה לפי בחירת משתמש.
   const forceCreditPayment = false;
 
-  // Load ALL open orders for FIFO allocation — no week-date filter.
-  // The client-side FIFO engine also operates on the full order list (no date window),
-  // so the server must be consistent. Filtering by weekDateWhere here was the root cause
-  // of "אין יעד להקצאה לסכום הדולר" when the open order's orderDate fell outside the
-  // AH-week window even though the UI clearly showed it as having open debt.
   const orders = await prisma.order.findMany({
     where: {
       customerId: cid,
       deletedAt: null,
       status: { not: OS.DEBT_WITHDRAWAL },
+      ...(weekDateWhere ?? {}),
     },
     orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],
     select: { id: true, orderNumber: true, totalUsd: true, amountUsd: true, commissionUsd: true },
@@ -874,7 +875,6 @@ export async function savePaymentUpdatedAction(
               const paid = paidByOrderMethod.get(`${bal.orderId}::${currency}::${bucket}`) ?? 0;
               rebuilt.push(
                 methodBalanceFromBreakdownRow({
-                  breakdownId: `auto-adjust:${bal.orderId}:${line.paymentMethod}:${currency}`,
                   orderId: bal.orderId,
                   paymentMethod: line.paymentMethod,
                   amount,
@@ -1334,11 +1334,15 @@ export async function savePaymentUpdatedAction(
     await prisma.$transaction(async (tx) => {
       if (pendingAutoAdjustChanges.length > 0) {
         for (const affected of pendingAutoAdjustChanges) {
+          assertPlannedBreakdownPreserved(affected.beforeBreakdown, affected.afterBreakdown);
           const rows = affected.afterBreakdown.map((line) => ({
             paymentMethod: line.paymentMethod,
             amount: new Prisma.Decimal(line.amount).toDecimalPlaces(4, 4),
             currency: line.currency,
           }));
+          if (rows.length === 0) {
+            throw new Error("התאמה אוטומטית אינה רשאית למחוק את חלוקת אמצעי התשלום המתוכננת");
+          }
           await tx.order.update({
             where: { id: affected.orderId },
             data: { paymentMethod: paymentMethodForBreakdown(affected.afterBreakdown) || null },
@@ -1346,6 +1350,7 @@ export async function savePaymentUpdatedAction(
           await writeOrderBreakdownInTx(tx, affected.orderId, rows, {
             userId: me.id,
             intakeWeekCode: weekCode,
+            preserveExistingPlan: true,
           });
           await tx.auditLog.create({
             data: {
@@ -1794,29 +1799,13 @@ export async function savePaymentUpdatedAction(
         });
       }
 
-      // Matching Engine → Persist SSOT במטבע המקורי של כל שורה
+      // Matching Engine → Persist SSOT. Reload by orderId+method+currency — never stale IDs.
       if (matchingResult) {
-        for (const bal of matchingResult.balances) {
-          const paidDec = new Prisma.Decimal(bal.paid.toFixed(4));
-          const remDec = new Prisma.Decimal(Math.max(0, bal.remaining).toFixed(4));
-          if (bal.breakdownId) {
-            await tx.orderPaymentBreakdown.update({
-              where: { id: bal.breakdownId },
-              data: { paidAmount: paidDec, remainingAmount: remDec },
-            });
-          } else {
-            await tx.orderPaymentBreakdown.create({
-              data: {
-                orderId: bal.orderId,
-                paymentMethod: bal.method,
-                amount: new Prisma.Decimal(Math.max(0, bal.planned).toFixed(4)),
-                currency: bal.currency,
-                paidAmount: paidDec,
-                remainingAmount: remDec,
-              },
-            });
-          }
-        }
+        await persistMatchingBreakdownPaidInTx(tx, matchingResult.balances, {
+          paymentId: primaryPaymentId,
+          paymentCode: primaryCode,
+          weekCode,
+        });
         if (matchingResult.transfersApplied.length > 0) {
           pendingAudits.push({
             userId: me.id,
@@ -1930,6 +1919,23 @@ export async function savePaymentUpdatedAction(
       }
     });
   } catch (e) {
+    if (
+      isPrismaMissingRecordError(e) ||
+      (pendingAutoAdjustChanges.length > 0 &&
+        /orderPaymentBreakdown/i.test(e instanceof Error ? e.message : ""))
+    ) {
+      console.error("[payment-intake] ADJUSTMENT_BREAKDOWN_PERSIST_FAILED", {
+        paymentCode: primaryCode,
+        weekCode,
+        customerId: cid,
+        pendingAdjustOrders: pendingAutoAdjustChanges.map((row) => ({
+          orderId: row.orderId,
+          orderNumber: row.orderNumber,
+        })),
+        error: e,
+      });
+      return { ok: false, error: ADJUSTMENT_SAVE_FAILED_USER_MESSAGE };
+    }
     const msg = e instanceof Error ? e.message : "שמירה נכשלה";
     return { ok: false, error: msg };
   }

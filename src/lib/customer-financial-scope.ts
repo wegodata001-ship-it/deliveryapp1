@@ -86,6 +86,34 @@ export type BalancesWeekFinancialScope = {
  * חוזה שבוע יתרות: בחירת AH-N => cutoff שבת של N.
  * שבוע נוכחי/עתידי = CURRENT. שבוע שעבר = HISTORICAL עד 23:59:59 של השבת.
  */
+/**
+ * קליטת תשלום: אותו חוזה שבוע כמו דוח יתרות.
+ * שבוע שעבר = HISTORICAL עד שבת. שבוע חי = CURRENT.
+ */
+export function resolvePaymentIntakeFinancialScope(input: {
+  weekCode?: string | null;
+  workCountry?: string | null;
+  now?: Date;
+}): BalancesWeekFinancialScope {
+  const sourceCountry = orderSourceCountryFromWorkCountry(
+    normalizeWorkCountryCode(input.workCountry) ?? DEFAULT_WORK_COUNTRY,
+  );
+  const weekCode = normalizeAhWeekCode(input.weekCode ?? "") ?? "";
+  if (!weekCode) {
+    return {
+      weekCode: "",
+      cutoffYmd: "",
+      cutoffWeekCode: "",
+      financial: currentCustomerFinancialScope(sourceCountry),
+    };
+  }
+  return resolveBalancesWeekFinancialScope({
+    selectedWeekCode: weekCode,
+    sourceCountry,
+    now: input.now,
+  });
+}
+
 export function resolveBalancesWeekFinancialScope(input: {
   selectedWeekCode: string;
   sourceCountry?: OrderSourceCountry | null;
