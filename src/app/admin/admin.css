@@ -14865,8 +14865,231 @@ select.payment-modal-inline-input {
   width: 100%;
 }
 
-.commission-balance-popover--wide {
-  max-width: min(860px, 96vw);
+.payment-nav-confirm-modal.commission-balance-popover.commission-balance-popover--wide {
+  width: min(1000px, 92vw);
+  max-width: min(1000px, 92vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 1rem 1.15rem 0.95rem;
+}
+
+.commission-balance-popover--wide .commission-balance-popover__head {
+  flex-shrink: 0;
+  align-items: flex-start;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.commission-balance-popover--wide .commission-balance-popover__head-main {
+  min-width: 0;
+}
+
+.commission-balance-popover--wide .commission-balance-popover__head h4 {
+  margin: 0 0 4px;
+}
+
+.commission-balance-popover--wide .commission-lineage-total {
+  margin: 0;
+}
+
+.commission-balance-popover--wide .commission-balance-popover__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.commission-balance-popover--wide .commission-balance-popover__table-wrap--flow {
+  overflow: visible;
+  max-height: none;
+}
+
+.commission-balance-popover--wide .commission-balance-popover__orders {
+  table-layout: fixed;
+}
+
+.commission-balance-popover--wide .commission-balance-popover__orders th:nth-child(1),
+.commission-balance-popover--wide .commission-balance-popover__orders td:nth-child(1) {
+  width: 28%;
+}
+
+.commission-balance-popover--wide .commission-balance-popover__orders th.pm-num,
+.commission-balance-popover--wide .commission-balance-popover__orders td.pm-num {
+  width: 24%;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.commission-balance-popover--wide .commission-order-summary {
+  gap: 10px;
+  margin: 4px 0 16px;
+}
+
+.commission-balance-popover--wide .commission-order-summary__card--original strong {
+  color: #334155;
+  font-weight: 800;
+}
+
+.commission-balance-popover--wide .commission-order-summary__card--add strong {
+  color: #059669;
+}
+
+.commission-balance-popover--wide .commission-order-summary__card--remove strong {
+  color: #dc2626;
+}
+
+.commission-balance-popover--wide .commission-order-summary__card--current {
+  background: #f8fafc;
+  border-color: #dbe4f0;
+}
+
+.commission-balance-popover--wide .commission-order-summary__card--current strong {
+  font-weight: 900;
+  color: #0f172a;
+}
+
+.commission-lineage-table--customer {
+  table-layout: fixed;
+}
+
+.commission-lineage-table--customer th,
+.commission-lineage-table--customer td {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.commission-lineage-table--customer th.pm-num,
+.commission-lineage-table--customer td.pm-num {
+  width: 7.5rem;
+  white-space: nowrap;
+  overflow: visible;
+  text-overflow: clip;
+  font-variant-numeric: tabular-nums;
+}
+
+.commission-lineage-table--customer th:nth-child(2),
+.commission-lineage-table--customer td:nth-child(2) {
+  width: 16%;
+}
+
+.commission-lineage-table--customer th:nth-child(3),
+.commission-lineage-table--customer td:nth-child(3),
+.commission-lineage-table--customer th:nth-child(4),
+.commission-lineage-table--customer td:nth-child(4) {
+  width: 13%;
+}
+
+.commission-lineage-table--customer .commission-lineage-table__reason {
+  width: 18%;
+}
+
+.commission-lineage-table--customer .commission-lineage-table__user {
+  width: 12%;
+}
+
+.commission-lineage-table--customer .commission-lineage-table__date {
+  width: 6.5rem;
+}
+
+.commission-movement--original {
+  color: #334155;
+  font-weight: 700;
+}
+
+.commission-lineage-cards {
+  display: none;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  gap: 8px;
+}
+
+.commission-lineage-card {
+  padding: 12px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.commission-lineage-card__top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.commission-lineage-card__type {
+  margin: 4px 0 8px;
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.commission-lineage-card dl {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.commission-lineage-card dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.commission-lineage-card dt {
+  color: #64748b;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.commission-lineage-card dd {
+  margin: 0;
+  text-align: left;
+  font-weight: 700;
+}
+
+.commission-lineage--customer .commission-lineage-equation {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #f8fafc;
+  border: 1px solid #eef2f7;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.55;
+}
+
+@media (max-width: 1023px) {
+  .payment-nav-confirm-modal.commission-balance-popover.commission-balance-popover--wide {
+    width: 95vw;
+    max-width: 95vw;
+  }
+}
+
+@media (max-width: 767px) {
+  .payment-nav-confirm-modal.commission-balance-popover.commission-balance-popover--wide {
+    width: calc(100vw - 24px);
+    max-width: calc(100vw - 24px);
+    max-height: 92vh;
+  }
+
+  .commission-balance-popover--wide .commission-order-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .commission-lineage--customer .commission-balance-popover__table-wrap {
+    display: none;
+  }
+
+  .commission-lineage--customer .commission-lineage-cards {
+    display: grid;
+  }
 }
 
 .commission-balance-popover__subhead {
@@ -21724,10 +21947,57 @@ select.payment-modal-inline-input {
 }
 
 .adm-cust-card-orders-table td {
-  padding: 8px 6px;
+  padding: 11px 8px;
   border-bottom: 1px solid #e5e7eb;
   text-align: right;
   vertical-align: middle;
+  min-height: 44px;
+}
+
+.adm-cust-card-orders-table .adm-ledger-received {
+  color: #15803d;
+  font-weight: 700;
+}
+
+.adm-cust-card-orders-table .adm-ledger-applied {
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+.adm-cust-card-orders-table .adm-ledger-surplus--commission {
+  color: #b45309;
+  font-weight: 700;
+}
+
+.adm-cust-card-orders-table .adm-ledger-surplus--credit {
+  color: #0f766e;
+  font-weight: 700;
+}
+
+.adm-cust-card-orders-table .adm-ledger-surplus-badge {
+  display: inline-flex;
+  margin-inline-start: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.adm-cust-card-orders-table .adm-ledger-surplus--credit .adm-ledger-surplus-badge {
+  background: #ecfdf5;
+  color: #0f766e;
+}
+
+.adm-cust-card-orders-table .adm-ledger-open-after--debt {
+  color: #b91c1c;
+  font-weight: 700;
+}
+
+.adm-cust-card-orders-table .adm-ledger-open-after--cleared {
+  color: #15803d;
+  font-weight: 700;
 }
 
 @media (max-width: 760px) {

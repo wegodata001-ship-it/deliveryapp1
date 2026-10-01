@@ -406,6 +406,7 @@ export type LedgerPaymentBatchRow = {
   paymentNumber: number | null;
   paymentDate: Date | null;
   createdAt?: Date | null;
+  weekCode?: string | null;
   orderId: string | null;
   amountUsd: Prisma.Decimal | null;
   amountIls: Prisma.Decimal | null;

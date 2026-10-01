@@ -7,6 +7,8 @@ import {
 } from "@/lib/ledger-payment-detail";
 import { formatLedgerPaymentTotalUsd } from "@/lib/ledger-payment-display";
 import { formatMoneyAmount, parseMoneyStringOrZero } from "@/lib/money-format";
+import { surplusDestinationLabelHe } from "@/lib/payment-reconciliation-ssot";
+import { formatHmJerusalem, formatYmdJerusalem } from "@/lib/weeks/ah-week";
 
 export type LedgerDetailField = {
   label: string;
@@ -50,7 +52,7 @@ export function hasLedgerRowDetail(row: CustomerLedgerRow): boolean {
   if (row.isOrderUpdated || row.isCommissionDebtClosure) return true;
   if (row.isPaymentCancelled || row.isOrderCancelled) return true;
   if (row.isAdjustmentFeeCapture) return true;
-  if (row.kind === "PAYMENT" && row.paymentDetail) return true;
+  if (row.kind === "PAYMENT" && (row.paymentDetail || row.paymentReconciliation)) return true;
   return false;
 }
 
@@ -117,18 +119,35 @@ export function buildLedgerRowDetailView(row: CustomerLedgerRow): LedgerRowDetai
     push(fields, "אושר על ידי", formatLedgerActorDisplay(d.approvedBy));
     if (d.reason?.trim()) push(fields, "סיבה", d.reason.trim());
     push(fields, "תאריך", displayDate(row.dateYmd));
-  } else if (row.kind === "PAYMENT" && row.paymentDetail) {
+  } else if (row.kind === "PAYMENT" && (row.paymentReconciliation || row.paymentDetail)) {
+    const recon = row.paymentReconciliation;
     const detail = row.paymentDetail;
-    if (shouldShowLedgerPaymentMethodSubrows(detail)) {
+    if (recon) {
+      push(fields, "חוב לפני התשלום", money(recon.openDebtBefore.toFixed(2)));
+      push(fields, "התקבל", money(recon.receivedAmount.toFixed(2)));
+      push(fields, "נסגר מהחוב", money(recon.appliedToDebt.toFixed(2)));
+      if (recon.surplusAmount > 0.005) {
+        push(fields, "עודף", money(recon.surplusAmount.toFixed(2)));
+        const dest = surplusDestinationLabelHe(recon.surplusDestination);
+        if (dest) push(fields, "הועבר ל", dest);
+      }
+      push(fields, "חוב פתוח אחרי", money(recon.openDebtAfter.toFixed(2)));
+    } else if (detail) {
+      push(fields, "התקבל", formatLedgerPaymentTotalUsd(detail.totalUsd));
+    }
+    if (detail && shouldShowLedgerPaymentMethodSubrows(detail)) {
       for (const line of ledgerPaymentExpandLines(detail)) {
         push(fields, line.label, line.display);
       }
     }
-    push(fields, "התקבל", formatLedgerPaymentTotalUsd(detail.totalUsd));
-    if (detail.creditSurplusUsd) push(fields, "יעד עודף", "יתרת זכות");
-    if (detail.commissionToFeeUsd) push(fields, "יעד עודף", "עמלות");
-    push(fields, "סה״כ תשלום", formatLedgerPaymentTotalUsd(detail.totalUsd));
-    push(fields, "תאריך", displayDate(row.dateYmd));
+    if (row.paymentWeekCode) push(fields, "שבוע עבודה", row.paymentWeekCode);
+    push(fields, "תאריך עסקי", displayDate(row.dateYmd));
+    if (row.intakeAtIso) {
+      const at = new Date(row.intakeAtIso);
+      if (!Number.isNaN(at.getTime())) {
+        push(fields, "מועד קליטה בפועל", `${displayDate(formatYmdJerusalem(at))} ${formatHmJerusalem(at)}`);
+      }
+    }
   } else if (row.isAdjustmentFeeCapture) {
     push(fields, "סכום", formatLedgerPaymentTotalUsd(row.paymentUsd));
     push(fields, "תאריך", displayDate(row.dateYmd));

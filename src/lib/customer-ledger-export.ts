@@ -8,6 +8,7 @@ import { formatLedgerPaymentTotalUsd } from "@/lib/ledger-payment-display";
 import { formatUsdDisplay, parseMoneyStringOrZero } from "@/lib/money-format";
 import { formatLocalYmd, getWeekCodeForLocalDate, parseLocalDate } from "@/lib/work-week";
 import { formatLedgerActorDisplay } from "@/lib/ledger-actor-display";
+import { ledgerRowOpenDebtAfterUsd } from "@/lib/customer-ledger-open-after";
 import { balanceResetSourceLabelHe } from "@/lib/ledger-balance-reset";
 
 export type LedgerPdfMode = "regular" | "detailed";
@@ -44,14 +45,14 @@ export type LedgerExportTableRow = {
   isPaymentDetailSection?: boolean;
 };
 
-/** סדר עמודות בגיליון Excel: תאריך | מסמך | סוג | חיוב | תשלום | יתרה לאחר תנועה | נשאר להזמנה */
+/** סדר עמודות בגיליון Excel: תאריך | מסמך | סוג | חיוב | התקבל | חוב פתוח אחרי | נשאר להזמנה */
 export const LEDGER_EXPORT_HEADERS = [
   "תאריך",
   "מסמך",
   "סוג",
-  "חיוב לקוח ($)",
-  "תשלום/זיכוי ($)",
-  "יתרה לאחר תנועה ($)",
+  "חיוב ($)",
+  "התקבל ($)",
+  "חוב פתוח אחרי ($)",
   "נשאר להזמנה ($)",
 ] as const;
 
@@ -275,7 +276,7 @@ export function buildLedgerExportTableRows(
       typeLabel: r.typeLabel,
       chargeUsd: formatChargeCell(r),
       paymentUsd: formatPaymentCell(r),
-      balance: formatLedgerRunningBalance(r.balanceUsd),
+      balance: formatLedgerRunningBalance(ledgerRowOpenDebtAfterUsd(r)),
       orderRemainingUsd:
         r.kind === "ORDER" && !r.isDebtWithdrawal && r.orderOpenRemainingUsd != null
           ? formatUsdDisplay(parseMoneyStringOrZero(r.orderOpenRemainingUsd))

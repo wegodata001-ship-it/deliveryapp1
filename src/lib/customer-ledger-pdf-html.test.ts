@@ -60,10 +60,10 @@ describe("customer ledger PDF HTML", () => {
     assert.match(html, /עלי/);
     assert.match(html, /110/);
     assert.match(html, /תאריך הפקה/);
-    assert.match(html, /<th class="col-money">יתרה לאחר תנועה<\/th>/);
+    assert.match(html, /<th class="col-money">חוב פתוח אחרי<\/th>/);
     assert.match(html, /<th class="col-money">נשאר להזמנה<\/th>/);
     assert.match(html, /<th class="col-money">חיוב<\/th>/);
-    assert.match(html, /תשלום \/ זיכוי/);
+    assert.match(html, /התקבל/);
     assert.match(html, /סה״כ הזמנות/);
     assert.match(html, /סה״כ תשלומים/);
     assert.match(html, /סה״כ משיכות מחוב/);

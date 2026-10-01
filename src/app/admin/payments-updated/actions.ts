@@ -57,7 +57,11 @@ import {
 } from "@/lib/customer-open-debt";
 import {
   alignAllocationToCustomerDebtSurplus,
+  assertCommissionIsSurplusOnly,
   canSaveSurplusWithoutOrderAllocation,
+  commissionEntriesFromCanonicalSurplus,
+  commissionWriteAmount,
+  splitPaymentAgainstCustomerDebt,
 } from "@/lib/payment-debt-surplus-split";
 import { getCustomerCreditBalanceUsd } from "@/lib/customer-credit-balance";
 import { resolvePaymentIntakeAccountingPeriod } from "@/lib/payment-intake-accounting-period";
@@ -538,6 +542,7 @@ export async function savePaymentUpdatedAction(
   );
   /** יתרת שבוע הקליטה — אותו יקום כמו הטבלה. CURRENT SSOT לא משמש להקצאה/עודף. */
   const customerOpenDebtUsd = sumPaymentIntakeWeekScopedRemainingUsd(intakeOrdersResult.orders);
+  const receivedSplit = splitPaymentAgainstCustomerDebt(customerOpenDebtUsd, totals.totalUsd);
   let pendingAutoAdjustChanges: PaymentIntentOrderChange[] = [];
   let autoAdjustMethodAllocation: PaymentIntentMethodAllocation[] = [];
   let intakeOrdersForPlan = intakeOrdersResult.orders;
@@ -1104,8 +1109,13 @@ export async function savePaymentUpdatedAction(
      * forfeit → הוספה לעמלת ההזמנה (ExistingFees + Waived)
      * credit → יתרת זכות
      */
-    if (!deferSurplus && surplusToCommission && unallocatedUsd > ALLOC_EPS) {
-      surplusFeeUsd = roundMoney2(unallocatedUsd);
+    if (!deferSurplus && surplusToCommission && receivedSplit.surplusAmount > ALLOC_EPS) {
+      surplusFeeUsd = commissionWriteAmount(receivedSplit, "commission");
+      assertCommissionIsSurplusOnly({
+        receivedAmount: receivedSplit.receivedAmount,
+        debtApplied: receivedSplit.debtApplied,
+        commissionAmount: surplusFeeUsd,
+      });
       unallocatedUsd = 0;
     } else if (!deferSurplus && surplusForfeit && unallocatedUsd > ALLOC_EPS) {
       forfeitToCommissionUsd = roundMoney2(unallocatedUsd);
@@ -1521,23 +1531,26 @@ export async function savePaymentUpdatedAction(
           enteredByBucket: enteredMethodsUsdCompat,
           eps: ALLOC_EPS,
         });
-        const computedTotal = roundMoney2(
-          computedSurplus.reduce((sum, entry) => sum + entry.surplusUsd, 0),
+        const surplusEntries: SurplusEntry[] = commissionEntriesFromCanonicalSurplus(
+          surplusFeeUsd,
+          computedSurplus.map(({ dbMethod, label, surplusUsd }) => ({
+            dbMethod,
+            label,
+            surplusUsd,
+          })),
+          {
+            dbMethod: String(payMethodDb),
+            label: PAYMENT_METHOD_LABELS[String(payMethodDb)] ?? String(payMethodDb),
+            surplusUsd: surplusFeeUsd,
+          },
         );
-        const surplusEntries: SurplusEntry[] =
-          computedSurplus.length > 0 && Math.abs(computedTotal - surplusFeeUsd) <= 0.05
-            ? computedSurplus.map(({ dbMethod, label, surplusUsd }) => ({
-                dbMethod,
-                label,
-                surplusUsd,
-              }))
-            : [
-                {
-                  dbMethod: String(payMethodDb),
-                  label: PAYMENT_METHOD_LABELS[String(payMethodDb)] ?? String(payMethodDb),
-                  surplusUsd: surplusFeeUsd,
-                },
-              ];
+        assertCommissionIsSurplusOnly({
+          receivedAmount: receivedSplit.receivedAmount,
+          debtApplied: receivedSplit.debtApplied,
+          commissionAmount: roundMoney2(
+            surplusEntries.reduce((sum, entry) => sum + entry.surplusUsd, 0),
+          ),
+        });
 
         // Source order/document — always attach to an order when possible (SSOT history)
         const sourceOrderId = feeTargetOrderPrefetch?.id ?? feeTargetOrderIdCandidate;
@@ -1568,7 +1581,12 @@ export async function savePaymentUpdatedAction(
           : null;
         const feeNotes = [
           PAYMENT_ADJUSTMENT_FEE_NOTE_PREFIX,
-          `קשור לקליטה ${primaryCode}`,
+          buildSurplusFeeNotes({
+            debtBeforeUsd: receivedSplit.debtBefore,
+            paymentUsd: receivedSplit.receivedAmount,
+            surplusUsd: surplusFeeUsd,
+            captureCode: primaryCode,
+          }),
           sourceDocumentCode ? `מסמך מקור: ${sourceDocumentCode}` : null,
           `עודף: $${surplusFeeUsd.toFixed(2)}`,
           methodSummary ? `לפי אמצעי: ${methodSummary}` : null,
@@ -3053,6 +3071,13 @@ export async function applyPaymentSurplusDispositionAction(input: {
   const surplusUsd = roundMoney2(
     Math.max(0, totalCapturedUsd - allocatedToOrdersUsd - alreadyAppliedUsd),
   );
+  if (input.disposition === "commission") {
+    assertCommissionIsSurplusOnly({
+      receivedAmount: totalCapturedUsd,
+      debtApplied: allocatedToOrdersUsd,
+      commissionAmount: surplusUsd,
+    });
+  }
   if (surplusUsd <= ALLOC_EPS) {
     return { ok: false, error: "אין עודף ממתין לטיפול — ייתכן שכבר טופל" };
   }

@@ -311,8 +311,8 @@ export function buildCustomerLedgerPdfHtml(params: {
           <th class="col-document">מסמך</th>
           <th class="col-type">סוג</th>
           <th class="col-money">חיוב</th>
-          <th class="col-money">תשלום / זיכוי</th>
-          <th class="col-money">יתרה לאחר תנועה</th>
+          <th class="col-money">התקבל</th>
+          <th class="col-money">חוב פתוח אחרי</th>
           <th class="col-money">נשאר להזמנה</th>
         </tr>
       </thead>
@@ -347,7 +347,7 @@ export function buildCustomerLedgerPdfHtml(params: {
     </section>
 
     <p class="legend">
-      ${isManual ? "PDF ידני — רק השורות שנבחרו · יתרה לאחר תנועה היא היסטורית מהכרטסת, לא יתרת הזמנה נוכחית" : "יתרה לאחר תנועה היא היסטורית. נשאר להזמנה הוא החוב הפתוח הנוכחי של אותה הזמנה."}
+      ${isManual ? "PDF ידני — רק השורות שנבחרו · חוב פתוח אחרי בתשלום = max(0, חוב לפני − נסגר מהחוב)" : "בתשלום: חוב פתוח אחרי = max(0, חוב לפני − סכום שנסגר מהחוב). בהזמנה: יתרה אחרי החיוב."}
     </p>
   </main>
 </body>

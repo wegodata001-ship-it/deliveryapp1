@@ -56,7 +56,13 @@ import {
   reconstructOriginalOrderChargeUsd,
   sumDeltasOnOrAfter,
 } from "@/lib/ledger-order-version-charge";
-import { formatLocalYmd, parseLocalDate } from "@/lib/work-week";
+import {
+  assertPaymentReconciliation,
+  buildPaymentReconciliation,
+  type PaymentReconciliation,
+} from "@/lib/payment-reconciliation-ssot";
+import { reconstructWeekScopedOpenDebt } from "@/lib/week-scoped-open-debt-asof";
+import { formatLocalYmd, normalizeAhWeekCode, parseLocalDate } from "@/lib/work-week";
 import { collectLedgerActorIds, formatLedgerActorDisplay } from "@/lib/ledger-actor-display";
 import { replayCustomerLedgerRunning, type LedgerRunningKind } from "@/lib/ledger-running-replay";
 import {
@@ -127,6 +133,10 @@ export type CustomerLedgerRow = {
   /** איפוס יתרה ברמת לקוח — תנועה נפרדת */
   isBalanceReset?: boolean;
   balanceResetDetail?: BalanceResetLedgerDetail;
+  /** פירוק תשלום מול חוב — SSOT. לא running ledger. */
+  paymentReconciliation?: PaymentReconciliation;
+  paymentWeekCode?: string | null;
+  intakeAtIso?: string | null;
 };
 
 export type CustomerLedgerPayload = {
@@ -156,6 +166,91 @@ async function timed<T>(add: (ms: number) => void, fn: () => Promise<T>): Promis
   } finally {
     add(Date.now() - t0);
   }
+}
+
+function money2(n: unknown): number {
+  return Math.round((Number(n ?? 0) + Number.EPSILON) * 100) / 100;
+}
+
+function reconcileLedgerPaymentBatch(
+  batchRows: LedgerPaymentBatchRow[],
+  orders: Array<{
+    id: string;
+    orderDate: Date | null;
+    weekCode: string | null;
+    status: string;
+    totalUsd: Prisma.Decimal | null;
+    amountUsd: Prisma.Decimal | null;
+    commissionUsd: Prisma.Decimal | null;
+    debtWithdrawalUsd: Prisma.Decimal | null;
+    createdAt: Date;
+    deletedAt: Date | null;
+  }>,
+  payments: Array<{
+    id: string;
+    orderId: string | null;
+    amountUsd: Prisma.Decimal | null;
+    businessType: string | null;
+    status: string | null;
+    isPaid: boolean;
+    createdAt: Date;
+  }>,
+  receivedUsd: number,
+  feeCommissionUsd = 0,
+): PaymentReconciliation {
+  const active = batchRows.filter((r) => r.status !== PAYMENT_RECORD_STATUS_CANCELLED);
+  const exclude = new Set(batchRows.map((r) => r.id));
+  const createdAt =
+    active.reduce<Date | null>((min, r) => {
+      const t = r.createdAt ?? r.paymentDate;
+      if (!t) return min;
+      return !min || t < min ? t : min;
+    }, null) ?? new Date(0);
+  const cutoff =
+    normalizeAhWeekCode(active.find((r) => r.businessType === "STANDARD" && r.weekCode)?.weekCode ?? null) ??
+    normalizeAhWeekCode(active.find((r) => r.weekCode)?.weekCode ?? null);
+  let applied = 0;
+  let credit = 0;
+  let commission = 0;
+  for (const r of active) {
+    const amt = money2(paymentUsdEquivalent(r));
+    if (r.businessType === "CUSTOMER_CREDIT") credit += amt;
+    else if (r.businessType === "ADJUSTMENT_FEE") commission += amt;
+    else if (r.businessType !== "BALANCE_RESET") applied += amt;
+  }
+  const before = reconstructWeekScopedOpenDebt({
+    orders: orders.map((o) => ({
+      id: o.id,
+      orderDate: o.orderDate,
+      weekCode: o.weekCode,
+      status: o.status,
+      totalUsd: money2(o.totalUsd ?? Number(o.amountUsd ?? 0) + Number(o.commissionUsd ?? 0)),
+      amountUsd: money2(o.amountUsd),
+      commissionUsd: money2(o.commissionUsd),
+      debtWithdrawalUsd: money2(o.debtWithdrawalUsd),
+      createdAt: o.createdAt,
+      deletedAt: o.deletedAt,
+    })),
+    payments: payments.map((p) => ({
+      id: p.id,
+      orderId: p.orderId,
+      amountUsd: money2(p.amountUsd),
+      businessType: p.businessType,
+      status: p.status,
+      isPaid: p.isPaid,
+      createdAt: p.createdAt,
+    })),
+    asOfCreatedAt: createdAt,
+    cutoffWeek: cutoff,
+    excludePaymentIds: exclude,
+  });
+  return buildPaymentReconciliation({
+    openDebtBefore: before,
+    receivedAmount: receivedUsd,
+    appliedToDebt: money2(applied),
+    surplusToCredit: money2(credit),
+    surplusToCommission: money2(Math.max(commission, feeCommissionUsd)),
+  });
 }
 
 function endOfLocalDay(ymd: string): Date {
@@ -195,6 +290,9 @@ type LedgerEvent = {
   isAdjustmentFeeCapture?: boolean;
   isBalanceReset?: boolean;
   balanceResetDetail?: BalanceResetLedgerDetail;
+  paymentReconciliation?: PaymentReconciliation;
+  paymentWeekCode?: string | null;
+  intakeAtIso?: string | null;
   affectsRunningBalance?: boolean;
   /** פעולת איפוס עסקית — כמה audit records באותה טרנזקציה */
   operationId?: string;
@@ -383,6 +481,7 @@ export async function buildCustomerAccountLedger(params: {
               commissionUsd: true,
               debtWithdrawalUsd: true,
               orderDate: true,
+              weekCode: true,
               createdAt: true,
             },
           }),
@@ -397,10 +496,15 @@ export async function buildCustomerAccountLedger(params: {
               NOT: { businessType: "ADJUSTMENT_FEE" },
             },
             select: {
+              id: true,
+              orderId: true,
               amountUsd: true,
               amountIls: true,
               exchangeRate: true,
               businessType: true,
+              status: true,
+              isPaid: true,
+              createdAt: true,
             },
           }),
         )
@@ -413,6 +517,7 @@ export async function buildCustomerAccountLedger(params: {
           id: true,
           orderNumber: true,
           orderDate: true,
+          weekCode: true,
           createdAt: true,
           status: true,
           totalUsd: true,
@@ -432,6 +537,7 @@ export async function buildCustomerAccountLedger(params: {
           paymentNumber: true,
           paymentDate: true,
           createdAt: true,
+          weekCode: true,
           orderId: true,
           amountUsd: true,
           amountIls: true,
@@ -606,6 +712,36 @@ export async function buildCustomerAccountLedger(params: {
       orderIdSet.add(o.id);
     }
   }
+
+  const [reconOrdersRaw, reconPaymentsRaw] = await Promise.all([
+    prisma.order.findMany({
+      where: orderScopeWhere,
+      select: {
+        id: true,
+        orderDate: true,
+        weekCode: true,
+        status: true,
+        totalUsd: true,
+        amountUsd: true,
+        commissionUsd: true,
+        debtWithdrawalUsd: true,
+        createdAt: true,
+        deletedAt: true,
+      },
+    }),
+    prisma.payment.findMany({
+      where: paymentLedgerScopeWhere,
+      select: {
+        id: true,
+        orderId: true,
+        amountUsd: true,
+        businessType: true,
+        status: true,
+        isPaid: true,
+        createdAt: true,
+      },
+    }),
+  ]);
 
   const actorIds = collectLedgerActorIds([
     ...customerBulkResets.map((log) => log.userId),
@@ -1164,6 +1300,26 @@ export async function buildCustomerAccountLedger(params: {
         const t = row.createdAt?.getTime() ?? Number.POSITIVE_INFINITY;
         return t < earliest ? t : earliest;
       }, Number.POSITIVE_INFINITY);
+      const displayPaymentUsd =
+        isCancelled || isFeeCapture
+          ? payUsd
+          : detail
+            ? new Prisma.Decimal(detail.totalUsd)
+            : payUsd;
+      const paymentReconciliation = isCancelled
+        ? undefined
+        : reconcileLedgerPaymentBatch(
+            batchRows,
+            reconOrdersRaw,
+            reconPaymentsRaw,
+            money2(displayPaymentUsd),
+            money2(detail?.commissionToFeeUsd),
+          );
+      const intakeAt = batchRows.reduce<Date | null>((min, row) => {
+        const t = row.createdAt;
+        if (!t) return min;
+        return !min || t < min ? t : min;
+      }, null);
       return {
         id: `pb-${batchKey}`,
         date: primary.paymentDate ?? new Date(0),
@@ -1175,18 +1331,18 @@ export async function buildCustomerAccountLedger(params: {
         charge: new Prisma.Decimal(0),
         payment: isCancelled || isFeeCapture ? new Prisma.Decimal(0) : payUsd,
         // כסף שהתקבל (allocations) — לא סכום FIFO לחוב. יתרה רצה נשארת על payUsd.
-        displayPaymentUsd:
-          isCancelled || isFeeCapture
-            ? payUsd
-            : detail
-              ? new Prisma.Decimal(detail.totalUsd)
-              : payUsd,
+        displayPaymentUsd,
         document: (detail?.paymentCode ?? primary.paymentCode?.trim()) || "תשלום",
         orderId: null,
         paymentId: primary.id,
         isPaymentCancelled: isCancelled,
         isAdjustmentFeeCapture: isFeeCapture,
         paymentDetail: detail ?? undefined,
+        paymentReconciliation,
+        paymentWeekCode:
+          normalizeAhWeekCode(primary.weekCode) ??
+          normalizeAhWeekCode(batchRows.find((r) => r.weekCode)?.weekCode ?? null),
+        intakeAtIso: intakeAt?.toISOString() ?? null,
       };
     }),
     ...closureEvents,
@@ -1266,6 +1422,9 @@ export async function buildCustomerAccountLedger(params: {
       isAdjustmentFeeCapture: ev.isAdjustmentFeeCapture,
       isBalanceReset: ev.isBalanceReset,
       balanceResetDetail: ev.balanceResetDetail,
+      paymentReconciliation: ev.paymentReconciliation,
+      paymentWeekCode: ev.paymentWeekCode,
+      intakeAtIso: ev.intakeAtIso,
     });
   }
   calculateBalanceMs += Date.now() - calcT0;

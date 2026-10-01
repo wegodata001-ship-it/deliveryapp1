@@ -70,6 +70,52 @@ describe("ledger row detail", () => {
     assert.ok(!view.fields.some((f) => f.label === "מקור"));
   });
 
+  it("payment recon shows received applied surplus and open after", () => {
+    const view = buildLedgerRowDetailView(
+      row({
+        id: "p027",
+        kind: "PAYMENT",
+        typeLabel: "תשלום",
+        document: "TR-P-000027",
+        paymentId: "pay-027",
+        isBalanceReset: false,
+        paymentWeekCode: "AH-141",
+        intakeAtIso: "2026-10-01T07:29:35.811Z",
+        paymentReconciliation: {
+          openDebtBefore: 758.01,
+          receivedAmount: 800,
+          appliedToDebt: 758.01,
+          surplusAmount: 41.99,
+          surplusToCredit: 0,
+          surplusToCommission: 41.99,
+          unallocated: 0,
+          surplusDestination: "commission",
+          openDebtAfter: 0,
+        },
+        paymentDetail: {
+          paymentCode: "TR-P-000027",
+          totalUsd: "800.00",
+          totalIls: null,
+          components: [],
+          methods: [
+            { method: "BANK_TRANSFER", label: "העברה בנקאית", amountIls: null, amountUsd: "500.00" },
+            { method: "CASH", label: "מזומן", amountIls: null, amountUsd: "300.00" },
+          ],
+          checks: [],
+          orders: [],
+        },
+      }),
+    );
+    assert.equal(view.fields.find((f) => f.label === "חוב לפני התשלום")?.value, "$758.01");
+    assert.equal(view.fields.find((f) => f.label === "התקבל")?.value, "$800.00");
+    assert.equal(view.fields.find((f) => f.label === "נסגר מהחוב")?.value, "$758.01");
+    assert.equal(view.fields.find((f) => f.label === "עודף")?.value, "$41.99");
+    assert.equal(view.fields.find((f) => f.label === "הועבר ל")?.value, "עמלות");
+    assert.equal(view.fields.find((f) => f.label === "חוב פתוח אחרי")?.value, "$0.00");
+    assert.equal(view.fields.find((f) => f.label === "שבוע עבודה")?.value, "AH-141");
+    assert.ok(view.fields.some((f) => f.label === "מועד קליטה בפועל"));
+  });
+
   it("plain orders stay without a detail popup", () => {
     assert.equal(
       hasLedgerRowDetail(
