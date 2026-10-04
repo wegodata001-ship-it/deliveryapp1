@@ -21,6 +21,7 @@ type Props = {
   onConfirm: (disposition: SurplusDisposition) => void;
   onEditOrder?: () => void;
   onCancel: () => void;
+  onPendingDispositionChange?: (disposition: SurplusDisposition | null) => void;
 };
 
 export function CustomerPaymentOverageModal({
@@ -33,6 +34,7 @@ export function CustomerPaymentOverageModal({
   onConfirm,
   onEditOrder,
   onCancel,
+  onPendingDispositionChange,
 }: Props) {
   const exchangeRate = useDisplayExchangeRate();
   const [pendingDisposition, setPendingDisposition] = useState<SurplusDisposition | null>(null);
@@ -40,6 +42,10 @@ export function CustomerPaymentOverageModal({
   useEffect(() => {
     if (!open) setPendingDisposition(null);
   }, [open]);
+
+  useEffect(() => {
+    onPendingDispositionChange?.(open ? pendingDisposition : null);
+  }, [open, pendingDisposition, onPendingDispositionChange]);
 
   if (!open || !preview) return null;
 

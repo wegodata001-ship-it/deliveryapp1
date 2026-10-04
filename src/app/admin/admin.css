@@ -16181,6 +16181,15 @@ select.payment-modal-inline-input {
   color: #15803d;
 }
 
+.payment-modal-live-kpi__surplus-pending {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  color: #b45309;
+  text-align: center;
+}
+
 .payment-modal-live-kpi__sub-ils {
   font-size: 0.82rem;
   font-weight: 700;

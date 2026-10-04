@@ -267,6 +267,8 @@ export type PaymentBalanceDisplay = {
   balanceUsdSigned: number;
   displayUsd: number;
   displayIls: number;
+  /** עודף שטרם נבחר לו יעד במודל הקיים — תצוגה בלבד */
+  surplusPendingUsd?: number;
 };
 
 /**

@@ -1,13 +1,15 @@
 "use client";
 
 /**
- * כרטיס יתרת חוב / שולם במלואו / עודף — תצוגה בלבד.
- * USD גדול; ₪ שווי קטן מתחת. מקבל display מוכן מ-derivePaymentBalanceDisplay.
+ * כרטיס «יתרה» — מצב סופי חתום: +זכות / 0 מאוזן / −חוב.
  */
 import { AnimatedMoneyValue } from "@/components/ui/AnimatedMoneyValue";
 import {
+  formatIntakeFinalBalanceUsdLine,
+  formatIntakeSurplusPendingLine,
+} from "@/lib/payment-intake-preview";
+import {
   formatPaymentBalanceIlsLine,
-  formatPaymentBalanceUsdLine,
   type PaymentBalanceDisplay,
 } from "@/lib/order-remaining-debt";
 
@@ -16,9 +18,15 @@ type Props = {
 };
 
 export function RemainingToPayCard({ display }: Props) {
-  const { state, title, statusHint } = display;
-  const usdLine = formatPaymentBalanceUsdLine(display);
-  const ilsLine = formatPaymentBalanceIlsLine(display);
+  const { state, statusHint } = display;
+  const surplusPendingUsd = display.surplusPendingUsd ?? 0;
+  const surplusPendingLine = formatIntakeSurplusPendingLine(surplusPendingUsd);
+  const usdLine = formatIntakeFinalBalanceUsdLine(display.balanceUsdSigned);
+  const ilsRaw = formatPaymentBalanceIlsLine({
+    ...display,
+    state: state === "debt" ? "debt" : state === "credit" ? "credit" : "cleared",
+  });
+  const ilsLine = state === "debt" && !ilsRaw.startsWith("-") ? `-${ilsRaw}` : ilsRaw;
 
   return (
     <div
@@ -34,9 +42,9 @@ export function RemainingToPayCard({ display }: Props) {
         .filter(Boolean)
         .join(" ")}
       role="status"
-      aria-label={statusHint ? `${title} — ${statusHint}` : title}
+      aria-label={statusHint ? `יתרה — ${statusHint}` : "יתרה"}
     >
-      <div className="payment-modal-live-kpi__lbl">{title}</div>
+      <div className="payment-modal-live-kpi__lbl">יתרה</div>
       <AnimatedMoneyValue
         className={[
           "payment-modal-live-kpi__hero-v",
@@ -55,6 +63,11 @@ export function RemainingToPayCard({ display }: Props) {
         />
         {statusHint ? (
           <span className="payment-modal-live-kpi__status-hint">{statusHint}</span>
+        ) : null}
+        {surplusPendingLine ? (
+          <span className="payment-modal-live-kpi__surplus-pending" dir="rtl">
+            {surplusPendingLine}
+          </span>
         ) : null}
       </div>
     </div>

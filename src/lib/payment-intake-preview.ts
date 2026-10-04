@@ -5,8 +5,12 @@
  * חוב וזכות כבר מקוזזים ב-SSOT — אין קיזוז זכות נוסף.
  * Fees לא נכנסות לחוב.
  */
-import { normalizeExclusiveCustomerBooks } from "@/lib/customer-account-balances-shared";
+import {
+  formatCustomerNetBalanceUsd,
+  normalizeExclusiveCustomerBooks,
+} from "@/lib/customer-account-balances-shared";
 import { parseMoneyStringOrZero } from "@/lib/money-format";
+import { customerBooksAfterPaymentApply } from "@/lib/payment-intake-customer-debt";
 import {
   computeOrderOpenDebtUsd,
   derivePaymentBalanceDisplay,
@@ -14,6 +18,7 @@ import {
   roundOrderMoney2,
   type PaymentBalanceDisplay,
 } from "@/lib/order-remaining-debt";
+import { convertDebtUsdToIlsIncludingVat } from "@/lib/usd-balance-ils-vat";
 
 /**
  * יתרת זכות זמינה לקליטה בשבוע שנבחר.
@@ -248,4 +253,113 @@ export function buildPaymentPreview(input: {
     projectedOverpayment,
     fees,
   };
+}
+
+export type PaymentIntakeSurplusDestination = "credit" | "commission" | "forfeit" | "none";
+
+export type PaymentIntakeFinalBalance = {
+  openDebtAfter: number;
+  availableCreditAfter: number;
+  /** +זכות / 0 מאוזן / −חוב — אותו netBalanceUsd של יתרות / כרטסת */
+  signedBalanceUsd: number;
+  surplusPendingUsd: number;
+  state: "credit" | "cleared" | "debt";
+  title: "יתרה";
+  statusLabel: "יתרת זכות" | "מאוזן" | "חוב לתשלום" | "חוב נסגר";
+};
+
+/**
+ * יתרה סופית לקליטה — ספרי לקוח אחרי התשלום בטופס ויעד העודף.
+ * לא received−debt. לא MAX(0, debt−pay) בלי זכות.
+ */
+export function paymentIntakeFinalCustomerBalance(input: {
+  debtBefore: number;
+  existingCredit: number;
+  draftPaymentUsd: number;
+  surplusDestination?: PaymentIntakeSurplusDestination | null;
+}): PaymentIntakeFinalBalance {
+  const dest = input.surplusDestination ?? "none";
+  const draft = money2(Math.max(0, input.draftPaymentUsd));
+  const debtBefore = money2(Math.max(0, input.debtBefore));
+  const surplusAmount = money2(Math.max(0, draft - debtBefore));
+  const destChosen = dest === "credit" || dest === "commission" || dest === "forfeit";
+  const surplusPendingUsd = !destChosen && surplusAmount > 0.01 ? surplusAmount : 0;
+  const books = customerBooksAfterPaymentApply({
+    openDebtUsd: debtBefore,
+    availableCreditUsd: input.existingCredit,
+    applyUsd: draft,
+    surplusToCredit: dest === "credit",
+  });
+  const exclusive = normalizeExclusiveCustomerBooks(books);
+  const signed = exclusive.netBalanceUsd;
+  if (signed > 0.01) {
+    return {
+      openDebtAfter: exclusive.openDebtUsd,
+      availableCreditAfter: exclusive.availableCreditUsd,
+      signedBalanceUsd: signed,
+      surplusPendingUsd,
+      state: "credit",
+      title: "יתרה",
+      statusLabel: "יתרת זכות",
+    };
+  }
+  if (signed < -0.01) {
+    return {
+      openDebtAfter: exclusive.openDebtUsd,
+      availableCreditAfter: exclusive.availableCreditUsd,
+      signedBalanceUsd: signed,
+      surplusPendingUsd,
+      state: "debt",
+      title: "יתרה",
+      statusLabel: "חוב לתשלום",
+    };
+  }
+  return {
+    openDebtAfter: 0,
+    availableCreditAfter: 0,
+    signedBalanceUsd: 0,
+    surplusPendingUsd,
+    state: "cleared",
+    title: "יתרה",
+    statusLabel: surplusPendingUsd > 0.01 ? "חוב נסגר" : "מאוזן",
+  };
+}
+
+export function paymentIntakeFinalBalanceFromPreview(
+  preview: Pick<PaymentIntakePreview, "debtBefore" | "existingCredit" | "draftPaymentTotal">,
+  surplusDestination?: PaymentIntakeSurplusDestination | null,
+): PaymentIntakeFinalBalance {
+  return paymentIntakeFinalCustomerBalance({
+    debtBefore: preview.debtBefore,
+    existingCredit: preview.existingCredit,
+    draftPaymentUsd: preview.draftPaymentTotal,
+    surplusDestination,
+  });
+}
+
+/** כרטיס «יתרה» — כותרת קבועה, סכום חתום כמו מסך יתרות. */
+export function paymentIntakeFinalBalanceCardDisplay(
+  balance: PaymentIntakeFinalBalance,
+  exchangeRate: number,
+): PaymentBalanceDisplay {
+  const abs = money2(Math.abs(balance.signedBalanceUsd));
+  return {
+    state: balance.state === "credit" ? "credit" : balance.state === "debt" ? "debt" : "cleared",
+    title: "יתרה",
+    statusHint: balance.statusLabel,
+    balanceUsdSigned: balance.signedBalanceUsd,
+    displayUsd: abs,
+    displayIls: convertDebtUsdToIlsIncludingVat(abs, exchangeRate),
+    surplusPendingUsd: balance.surplusPendingUsd,
+  };
+}
+
+export function formatIntakeFinalBalanceUsdLine(signedUsd: number): string {
+  return formatCustomerNetBalanceUsd(signedUsd);
+}
+
+export function formatIntakeSurplusPendingLine(surplusPendingUsd: number): string {
+  const amount = money2(Math.max(0, surplusPendingUsd));
+  if (amount <= 0.01) return "";
+  return `עודף לטיפול: ${formatCustomerNetBalanceUsd(amount)}`;
 }

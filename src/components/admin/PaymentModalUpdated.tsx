@@ -61,6 +61,8 @@ import { sumPaymentIntakeWeekScopedRemainingUsd } from "@/lib/payment-intake-ord
 import {
   buildPaymentPreview,
   computePendingCreditApplyUsd,
+  paymentIntakeFinalBalanceCardDisplay,
+  paymentIntakeFinalBalanceFromPreview,
   remainingToPayCardDisplayFromPreview,
   toPaymentPreviewOrders,
 } from "@/lib/payment-intake-preview";
@@ -673,6 +675,9 @@ export function PaymentModalUpdated({
   const [postSaveError, setPostSaveError] = useState<string | null>(null);
   const [overageModalOpen, setOverageModalOpen] = useState(false);
   const [overagePreview, setOveragePreview] = useState<PaymentOveragePreview | null>(null);
+  const [previewSurplusDestination, setPreviewSurplusDestination] = useState<
+    SurplusDisposition | null
+  >(null);
   const [postSaveOverageMode, setPostSaveOverageMode] = useState(false);
   const [intakeDevModalOpen, setIntakeDevModalOpen] = useState(false);
   const [intakeDevRows, setIntakeDevRows] = useState<IntakeSaveDeviationRow[]>([]);
@@ -1333,6 +1338,15 @@ export function PaymentModalUpdated({
   const paymentBalanceDisplay = useMemo((): PaymentBalanceDisplay => {
     return remainingToPayCardDisplayFromPreview(paymentPreview, rateN);
   }, [paymentPreview, rateN]);
+
+  const intakeFinalBalance = useMemo(
+    () => paymentIntakeFinalBalanceFromPreview(paymentPreview, previewSurplusDestination),
+    [paymentPreview, previewSurplusDestination],
+  );
+
+  const intakeFinalBalanceDisplay = useMemo((): PaymentBalanceDisplay => {
+    return paymentIntakeFinalBalanceCardDisplay(intakeFinalBalance, rateN);
+  }, [intakeFinalBalance, rateN]);
 
   const accountStatusDisplay = paymentBalanceDisplay;
 
@@ -3756,6 +3770,7 @@ export function PaymentModalUpdated({
     setPostSaveOverageMode(false);
     saveAfterOverageRef.current = null;
     setOveragePreview(null);
+    setPreviewSurplusDestination(null);
     setPostSaveMode(null);
     setPostSavePrimaryPaymentId("");
   }
@@ -5035,8 +5050,8 @@ export function PaymentModalUpdated({
                     openDebtUsd={customerOpenDebtDisplayUsd}
                     commissionUsd={displayCommissionBalanceUsd}
                     onOpenDebtClick={() => setDebtBreakdownOpen(true)}
-                    paymentBalanceDisplay={accountStatusDisplay}
-                    overpaymentUsd={paymentPreview.projectedOverpayment}
+                    paymentBalanceDisplay={intakeFinalBalanceDisplay}
+                    overpaymentUsd={intakeFinalBalance.surplusPendingUsd}
                     historicalPaymentView={isHistoricalPaymentView}
                     lines={payments}
                     rate={rateN}
@@ -5575,6 +5590,7 @@ export function PaymentModalUpdated({
         busy={saveBusy}
         error={saveErr}
         onConfirm={(disposition) => void onOverageConfirm(disposition)}
+        onPendingDispositionChange={setPreviewSurplusDestination}
         onEditOrder={canEditOrders ? onOverageEditOrder : undefined}
         onCancel={onOverageCancel}
       />

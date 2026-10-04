@@ -4,6 +4,11 @@ import {
   availableCreditForWeekScopedPayable,
   buildPaymentPreview,
   computePendingCreditApplyUsd,
+  formatIntakeFinalBalanceUsdLine,
+  paymentIntakeFinalBalanceCardDisplay,
+  paymentIntakeFinalBalanceFromPreview,
+  paymentIntakeFinalCustomerBalance,
+  formatIntakeSurplusPendingLine,
   remainingToPayCardDisplayFromOverpayment,
   remainingToPayCardDisplayFromPreview,
   toPaymentPreviewOrders,
@@ -291,5 +296,121 @@ describe("toPaymentPreviewOrders", () => {
     assert.equal(previewOrders[1]?.dbPaidUsd, 0);
     assert.equal(previewOrders[1]?.collectibleRemainingUsd, 0);
     assert.ok(previewOrders.every((o) => Number.isFinite(o.totalAmountUsd ?? 0)));
+  });
+});
+
+describe("paymentIntakeFinalCustomerBalance", () => {
+  it("CASE A — customer 101 current: debt 0 credit 20 → +$20 יתרת זכות", () => {
+    const p = preview({ debt: 0, credit: 20 });
+    const bal = paymentIntakeFinalBalanceFromPreview(p);
+    assert.equal(bal.signedBalanceUsd, 20);
+    assert.equal(bal.surplusPendingUsd, 0);
+    assert.equal(bal.statusLabel, "יתרת זכות");
+    assert.equal(formatIntakeFinalBalanceUsdLine(bal.signedBalanceUsd), "+$20.00");
+    const d = paymentIntakeFinalBalanceCardDisplay(bal, 3);
+    assert.equal(d.title, "יתרה");
+    assert.equal(d.statusHint, "יתרת זכות");
+  });
+
+  it("CASE B — debt 758.01 draft 0 → -$758.01 חוב לתשלום", () => {
+    const bal = paymentIntakeFinalCustomerBalance({
+      debtBefore: 758.01,
+      existingCredit: 0,
+      draftPaymentUsd: 0,
+    });
+    assert.equal(bal.signedBalanceUsd, -758.01);
+    assert.equal(bal.surplusPendingUsd, 0);
+    assert.equal(bal.statusLabel, "חוב לתשלום");
+    assert.equal(formatIntakeFinalBalanceUsdLine(bal.signedBalanceUsd), "-$758.01");
+  });
+
+  it("CASE C — debt 758.01 draft 500 → -$258.01", () => {
+    const bal = paymentIntakeFinalCustomerBalance({
+      debtBefore: 758.01,
+      existingCredit: 0,
+      draftPaymentUsd: 500,
+    });
+    assert.equal(bal.signedBalanceUsd, -258.01);
+    assert.equal(bal.surplusPendingUsd, 0);
+    assert.equal(bal.statusLabel, "חוב לתשלום");
+    assert.equal(formatIntakeFinalBalanceUsdLine(bal.signedBalanceUsd), "-$258.01");
+  });
+
+  it("CASE D — debt 758.01 received 758.01 → $0 מאוזן", () => {
+    const bal = paymentIntakeFinalCustomerBalance({
+      debtBefore: 758.01,
+      existingCredit: 0,
+      draftPaymentUsd: 758.01,
+    });
+    assert.equal(bal.signedBalanceUsd, 0);
+    assert.equal(bal.surplusPendingUsd, 0);
+    assert.equal(bal.statusLabel, "מאוזן");
+    assert.equal(formatIntakeFinalBalanceUsdLine(bal.signedBalanceUsd), "$0.00");
+  });
+
+  it("CASE E — $800 surplus to credit → +$41.99", () => {
+    const bal = paymentIntakeFinalCustomerBalance({
+      debtBefore: 758.01,
+      existingCredit: 0,
+      draftPaymentUsd: 800,
+      surplusDestination: "credit",
+    });
+    assert.equal(bal.signedBalanceUsd, 41.99);
+    assert.equal(bal.surplusPendingUsd, 0);
+    assert.equal(bal.statusLabel, "יתרת זכות");
+    assert.equal(formatIntakeFinalBalanceUsdLine(bal.signedBalanceUsd), "+$41.99");
+  });
+
+  it("CASE F — $800 surplus to commission → $0 מאוזן", () => {
+    const bal = paymentIntakeFinalCustomerBalance({
+      debtBefore: 758.01,
+      existingCredit: 0,
+      draftPaymentUsd: 800,
+      surplusDestination: "commission",
+    });
+    assert.equal(bal.signedBalanceUsd, 0);
+    assert.equal(bal.surplusPendingUsd, 0);
+    assert.equal(bal.statusLabel, "מאוזן");
+    assert.equal(formatIntakeFinalBalanceUsdLine(bal.signedBalanceUsd), "$0.00");
+  });
+
+  it("CASE G — $800 surplus unset destination → $0 חוב נסגר + עודף לטיפול $41.99, not credit", () => {
+    const bal = paymentIntakeFinalCustomerBalance({
+      debtBefore: 758.01,
+      existingCredit: 0,
+      draftPaymentUsd: 800,
+    });
+    assert.equal(bal.signedBalanceUsd, 0);
+    assert.equal(bal.surplusPendingUsd, 41.99);
+    assert.equal(bal.availableCreditAfter, 0);
+    assert.equal(bal.statusLabel, "חוב נסגר");
+    assert.equal(formatIntakeFinalBalanceUsdLine(bal.signedBalanceUsd), "$0.00");
+    assert.equal(formatIntakeSurplusPendingLine(bal.surplusPendingUsd), "עודף לטיפול: +$41.99");
+    const d = paymentIntakeFinalBalanceCardDisplay(bal, 3);
+    assert.equal(d.statusHint, "חוב נסגר");
+    assert.equal(d.surplusPendingUsd, 41.99);
+  });
+
+  it("CASE H — existing credit $20 + $50 draft, dest unset → +$20 and pending surplus $50", () => {
+    const bal = paymentIntakeFinalCustomerBalance({
+      debtBefore: 0,
+      existingCredit: 20,
+      draftPaymentUsd: 50,
+    });
+    assert.equal(bal.signedBalanceUsd, 20);
+    assert.equal(bal.surplusPendingUsd, 50);
+    assert.equal(bal.statusLabel, "יתרת זכות");
+  });
+
+  it("does not treat received as debt reduction when surplus goes to commission", () => {
+    const bal = paymentIntakeFinalCustomerBalance({
+      debtBefore: 758.01,
+      existingCredit: 0,
+      draftPaymentUsd: 800,
+      surplusDestination: "commission",
+    });
+    assert.notEqual(bal.signedBalanceUsd, -41.99);
+    assert.equal(bal.openDebtAfter, 0);
+    assert.equal(bal.availableCreditAfter, 0);
   });
 });

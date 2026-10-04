@@ -4,10 +4,11 @@ import { useState } from "react";
 import { X } from "lucide-react";
 import { AnimatedMoneyValue } from "@/components/ui/AnimatedMoneyValue";
 import { RemainingToPayCard } from "@/components/admin/RemainingToPayCard";
+import { type PaymentBalanceDisplay } from "@/lib/order-remaining-debt";
 import {
-  type PaymentBalanceDisplay,
-} from "@/lib/order-remaining-debt";
-import { remainingToPayCardDisplayFromOverpayment } from "@/lib/payment-intake-preview";
+  paymentIntakeFinalBalanceCardDisplay,
+  paymentIntakeFinalCustomerBalance,
+} from "@/lib/payment-intake-preview";
 import {
   LIVE_PAYMENT_KPI_CARDS,
   liveKpiBucket,
@@ -32,7 +33,7 @@ type Props = {
   commissionUsd?: number;
   onOpenDebtClick?: () => void;
   /**
-   * אותו כרטיס «נשאר לתשלום» — VALUE/LABEL לפי יתרה חתומה (חוב / אפס / יתרת זכות).
+   * כרטיס «יתרה» — מצב סופי חתום (+זכות / 0 / −חוב).
    * Preview בלבד; לא מעדכן CUSTOMER_CREDIT בזמן הקלדה.
    */
   paymentBalanceDisplay?: PaymentBalanceDisplay | null;
@@ -126,11 +127,20 @@ export function PaymentLiveSummaryCards({
   void onOpenDebtClick;
   const methodCards = LIVE_PAYMENT_KPI_CARDS.filter((c) => !c.isTotal);
   const canDrill = Array.isArray(lines) && lines.length > 0;
-  const remainingDisplay: PaymentBalanceDisplay = remainingToPayCardDisplayFromOverpayment(
-    overpaymentUsd,
-    paymentBalanceDisplay,
-    rate,
-  );
+  const remainingDisplay: PaymentBalanceDisplay =
+    paymentBalanceDisplay ??
+    paymentIntakeFinalBalanceCardDisplay(
+      paymentIntakeFinalCustomerBalance({
+        debtBefore: 0,
+        existingCredit: 0,
+        draftPaymentUsd: 0,
+      }),
+      rate,
+    );
+  const surplusPendingUsd =
+    remainingDisplay.surplusPendingUsd != null
+      ? remainingDisplay.surplusPendingUsd
+      : overpaymentUsd;
 
   const [drill, setDrill] = useState<{ title: string; method: PaymentLineMethod | null } | null>(
     null,
@@ -159,9 +169,9 @@ export function PaymentLiveSummaryCards({
         />
       </div>
 
-      {overpaymentUsd > 0.01 ? (
+      {surplusPendingUsd > 0.01 ? (
         <p className="payment-modal-live-overpay" role="status">
-          עודף מהתשלום הנוכחי: +{formatUsdDisplay(overpaymentUsd)}
+          עודף לטיפול: {formatUsdDisplay(surplusPendingUsd)}
         </p>
       ) : null}
 
