@@ -264,8 +264,8 @@ export type PaymentIntakeFinalBalance = {
   signedBalanceUsd: number;
   surplusPendingUsd: number;
   state: "credit" | "cleared" | "debt";
-  title: "יתרה";
-  statusLabel: "יתרת זכות" | "מאוזן" | "חוב לתשלום" | "חוב נסגר";
+  title: "יתרת לקוח";
+  statusLabel: "יתרת זכות" | "מאוזן" | "לתשלום" | "חוב נסגר";
 };
 
 /**
@@ -299,7 +299,7 @@ export function paymentIntakeFinalCustomerBalance(input: {
       signedBalanceUsd: signed,
       surplusPendingUsd,
       state: "credit",
-      title: "יתרה",
+      title: "יתרת לקוח",
       statusLabel: "יתרת זכות",
     };
   }
@@ -310,8 +310,8 @@ export function paymentIntakeFinalCustomerBalance(input: {
       signedBalanceUsd: signed,
       surplusPendingUsd,
       state: "debt",
-      title: "יתרה",
-      statusLabel: "חוב לתשלום",
+      title: "יתרת לקוח",
+      statusLabel: "לתשלום",
     };
   }
   return {
@@ -320,7 +320,7 @@ export function paymentIntakeFinalCustomerBalance(input: {
     signedBalanceUsd: 0,
     surplusPendingUsd,
     state: "cleared",
-    title: "יתרה",
+    title: "יתרת לקוח",
     statusLabel: surplusPendingUsd > 0.01 ? "חוב נסגר" : "מאוזן",
   };
 }
@@ -337,7 +337,25 @@ export function paymentIntakeFinalBalanceFromPreview(
   });
 }
 
-/** כרטיס «יתרה» — כותרת קבועה, סכום חתום כמו מסך יתרות. */
+/**
+ * כרטיס «יתרת לקוח» — תמיד CURRENT books (כרטסת / דוח יתרות).
+ * לא week-scoped remaining אחרי FIFO.
+ */
+export function paymentIntakeCustomerBalanceFromCurrentBooks(input: {
+  currentOpenDebtUsd: number;
+  currentAvailableCreditUsd: number;
+  draftPaymentUsd: number;
+  surplusDestination?: PaymentIntakeSurplusDestination | null;
+}): PaymentIntakeFinalBalance {
+  return paymentIntakeFinalCustomerBalance({
+    debtBefore: input.currentOpenDebtUsd,
+    existingCredit: input.currentAvailableCreditUsd,
+    draftPaymentUsd: input.draftPaymentUsd,
+    surplusDestination: input.surplusDestination,
+  });
+}
+
+/** כרטיס «יתרת לקוח» — כותרת קבועה, סכום חתום כמו מסך יתרות. */
 export function paymentIntakeFinalBalanceCardDisplay(
   balance: PaymentIntakeFinalBalance,
   exchangeRate: number,
@@ -345,7 +363,7 @@ export function paymentIntakeFinalBalanceCardDisplay(
   const abs = money2(Math.abs(balance.signedBalanceUsd));
   return {
     state: balance.state === "credit" ? "credit" : balance.state === "debt" ? "debt" : "cleared",
-    title: "יתרה",
+    title: "יתרת לקוח",
     statusHint: balance.statusLabel,
     balanceUsdSigned: balance.signedBalanceUsd,
     displayUsd: abs,
@@ -356,6 +374,17 @@ export function paymentIntakeFinalBalanceCardDisplay(
 
 export function formatIntakeFinalBalanceUsdLine(signedUsd: number): string {
   return formatCustomerNetBalanceUsd(signedUsd);
+}
+
+export function formatIntakeCustomerBalanceHeroLine(input: {
+  signedBalanceUsd: number;
+  surplusPendingUsd?: number;
+}): string {
+  const surplus = money2(Math.max(0, input.surplusPendingUsd ?? 0));
+  if (Math.abs(input.signedBalanceUsd) <= 0.01 && surplus <= 0.01) {
+    return "$0.00 — מאוזן";
+  }
+  return formatCustomerNetBalanceUsd(input.signedBalanceUsd);
 }
 
 export function formatIntakeSurplusPendingLine(surplusPendingUsd: number): string {

@@ -6,10 +6,6 @@ import { AnimatedMoneyValue } from "@/components/ui/AnimatedMoneyValue";
 import { RemainingToPayCard } from "@/components/admin/RemainingToPayCard";
 import { type PaymentBalanceDisplay } from "@/lib/order-remaining-debt";
 import {
-  paymentIntakeFinalBalanceCardDisplay,
-  paymentIntakeFinalCustomerBalance,
-} from "@/lib/payment-intake-preview";
-import {
   LIVE_PAYMENT_KPI_CARDS,
   liveKpiBucket,
   type LivePaymentFormKpis,
@@ -33,7 +29,7 @@ type Props = {
   commissionUsd?: number;
   onOpenDebtClick?: () => void;
   /**
-   * כרטיס «יתרה» — מצב סופי חתום (+זכות / 0 / −חוב).
+   * כרטיס «יתרת לקוח» — CURRENT net (+זכות / 0 / −חוב).
    * Preview בלבד; לא מעדכן CUSTOMER_CREDIT בזמן הקלדה.
    */
   paymentBalanceDisplay?: PaymentBalanceDisplay | null;
@@ -127,18 +123,9 @@ export function PaymentLiveSummaryCards({
   void onOpenDebtClick;
   const methodCards = LIVE_PAYMENT_KPI_CARDS.filter((c) => !c.isTotal);
   const canDrill = Array.isArray(lines) && lines.length > 0;
-  const remainingDisplay: PaymentBalanceDisplay =
-    paymentBalanceDisplay ??
-    paymentIntakeFinalBalanceCardDisplay(
-      paymentIntakeFinalCustomerBalance({
-        debtBefore: 0,
-        existingCredit: 0,
-        draftPaymentUsd: 0,
-      }),
-      rate,
-    );
+  const remainingDisplay: PaymentBalanceDisplay | null = paymentBalanceDisplay;
   const surplusPendingUsd =
-    remainingDisplay.surplusPendingUsd != null
+    remainingDisplay?.surplusPendingUsd != null
       ? remainingDisplay.surplusPendingUsd
       : overpaymentUsd;
 

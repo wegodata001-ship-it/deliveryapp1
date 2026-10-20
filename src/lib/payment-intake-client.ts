@@ -56,6 +56,9 @@ export async function fetchPaymentIntakeBalancesClient(
       totalOrdersUsd: number;
       totalPaymentsUsd: number;
       totalWithdrawalsUsd: number;
+      currentOpenDebtUsd: number;
+      currentAvailableCreditUsd: number;
+      currentNetBalanceUsd: number;
     }
   | { ok: false; error: string }
 > {
@@ -78,6 +81,9 @@ export async function fetchPaymentIntakeBalancesClient(
     totalOrdersUsd: number;
     totalPaymentsUsd: number;
     totalWithdrawalsUsd: number;
+    currentOpenDebtUsd: number;
+    currentAvailableCreditUsd: number;
+    currentNetBalanceUsd: number;
   };
 }
 

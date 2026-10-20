@@ -61,8 +61,8 @@ import { sumPaymentIntakeWeekScopedRemainingUsd } from "@/lib/payment-intake-ord
 import {
   buildPaymentPreview,
   computePendingCreditApplyUsd,
+  paymentIntakeCustomerBalanceFromCurrentBooks,
   paymentIntakeFinalBalanceCardDisplay,
-  paymentIntakeFinalBalanceFromPreview,
   remainingToPayCardDisplayFromPreview,
   toPaymentPreviewOrders,
 } from "@/lib/payment-intake-preview";
@@ -744,6 +744,9 @@ export function PaymentModalUpdated({
   const [customerLedgerWithdrawalsUsd, setCustomerLedgerWithdrawalsUsd] = useState<number | null>(null);
   const [serverCommissionBalanceUsd, setServerCommissionBalanceUsd] = useState(0);
   const [serverCreditBalanceUsd, setServerCreditBalanceUsd] = useState(0);
+  /** CURRENT exclusive books — כרטיס יתרת לקוח. null = עוד לא נטען, לא $0. */
+  const [currentOpenDebtUsd, setCurrentOpenDebtUsd] = useState<number | null>(null);
+  const [currentAvailableCreditUsd, setCurrentAvailableCreditUsd] = useState<number | null>(null);
   const [commissionPopoverOpen, setCommissionPopoverOpen] = useState(false);
   const [orderCommissionDetail, setOrderCommissionDetail] = useState<{
     orderId: string;
@@ -1039,6 +1042,17 @@ export function PaymentModalUpdated({
     return workCountryFromOrderSourceCountry(globalCountry);
   }, [countryOverride, orders, globalCountry]);
 
+  const applyCurrentCustomerBooks = useCallback(
+    (res: { currentOpenDebtUsd?: number; currentAvailableCreditUsd?: number }) => {
+      const openDebt = Number(res.currentOpenDebtUsd);
+      const credit = Number(res.currentAvailableCreditUsd);
+      if (!Number.isFinite(openDebt) || !Number.isFinite(credit)) return;
+      setCurrentOpenDebtUsd(openDebt);
+      setCurrentAvailableCreditUsd(credit);
+    },
+    [],
+  );
+
   const refreshCustomerOpenDebt = useCallback(async (customerId: string) => {
     const cid = customerId.trim();
     if (!cid) {
@@ -1059,13 +1073,14 @@ export function PaymentModalUpdated({
       setCustomerLedgerWithdrawalsUsd(Number(res.totalWithdrawalsUsd) || 0);
       setServerCreditBalanceUsd(Number(res.creditBalanceUsd) || 0);
       setServerCommissionBalanceUsd(Number(res.commissionBalanceUsd) || 0);
+      applyCurrentCustomerBooks(res);
       setCustomer((cur) =>
         cur?.id === cid
           ? { ...cur, customerBalanceUsd: res.internalSignedUsd || res.customerBalanceUsd }
           : cur,
       );
     }
-  }, [intakeDocumentWorkCountry, intakeWeekCode, orderSourceDateYmd]);
+  }, [applyCurrentCustomerBooks, intakeDocumentWorkCountry, intakeWeekCode, orderSourceDateYmd]);
 
   useEffect(() => {
     if (!customer?.id?.trim()) {
@@ -1073,6 +1088,8 @@ export function PaymentModalUpdated({
       setCustomerLedgerChargesUsd(null);
       setCustomerLedgerPaymentsUsd(null);
       setCustomerLedgerWithdrawalsUsd(null);
+      setCurrentOpenDebtUsd(null);
+      setCurrentAvailableCreditUsd(null);
     }
   }, [customer?.id]);
 
@@ -1339,12 +1356,31 @@ export function PaymentModalUpdated({
     return remainingToPayCardDisplayFromPreview(paymentPreview, rateN);
   }, [paymentPreview, rateN]);
 
-  const intakeFinalBalance = useMemo(
-    () => paymentIntakeFinalBalanceFromPreview(paymentPreview, previewSurplusDestination),
-    [paymentPreview, previewSurplusDestination],
-  );
+  const intakeFinalBalance = useMemo(() => {
+    if (currentOpenDebtUsd == null || currentAvailableCreditUsd == null) return null;
+    const draft = isHistoricalPaymentView
+      ? 0
+      : isExistingPayment
+        ? Math.max(0, paymentApplyUsd)
+        : Math.max(0, totals.totalUsd);
+    return paymentIntakeCustomerBalanceFromCurrentBooks({
+      currentOpenDebtUsd,
+      currentAvailableCreditUsd,
+      draftPaymentUsd: draft,
+      surplusDestination: previewSurplusDestination,
+    });
+  }, [
+    currentOpenDebtUsd,
+    currentAvailableCreditUsd,
+    isHistoricalPaymentView,
+    isExistingPayment,
+    paymentApplyUsd,
+    totals.totalUsd,
+    previewSurplusDestination,
+  ]);
 
-  const intakeFinalBalanceDisplay = useMemo((): PaymentBalanceDisplay => {
+  const intakeFinalBalanceDisplay = useMemo((): PaymentBalanceDisplay | null => {
+    if (!intakeFinalBalance) return null;
     return paymentIntakeFinalBalanceCardDisplay(intakeFinalBalance, rateN);
   }, [intakeFinalBalance, rateN]);
 
@@ -1649,6 +1685,7 @@ export function PaymentModalUpdated({
         setCustomerLedgerWithdrawalsUsd(Number(res.totalWithdrawalsUsd) || 0);
         setServerCommissionBalanceUsd(Number(res.commissionBalanceUsd) || 0);
         setServerCreditBalanceUsd(Number(res.creditBalanceUsd) || 0);
+        applyCurrentCustomerBooks(res);
         setCustomer((cur) =>
           cur?.id === cid
             ? { ...cur, customerBalanceUsd: res.internalSignedUsd || res.customerBalanceUsd }
@@ -1789,6 +1826,7 @@ export function PaymentModalUpdated({
         setCustomerLedgerWithdrawalsUsd(Number(balances.totalWithdrawalsUsd) || 0);
         setServerCommissionBalanceUsd(Number(balances.commissionBalanceUsd) || 0);
         setServerCreditBalanceUsd(Number(balances.creditBalanceUsd) || 0);
+        applyCurrentCustomerBooks(balances);
         setCustomer((cur) =>
           cur?.id === cid
             ? { ...cur, customerBalanceUsd: balances.internalSignedUsd || balances.customerBalanceUsd }
@@ -3821,6 +3859,7 @@ export function PaymentModalUpdated({
       if (res.creditBalanceUsd != null) {
         setServerCreditBalanceUsd(Number(res.creditBalanceUsd) || 0);
       }
+      applyCurrentCustomerBooks(res);
       setCustomer((cur) =>
         cur?.id === cid
           ? { ...cur, customerBalanceUsd: res.internalSignedUsd || res.customerBalanceUsd }
@@ -5051,7 +5090,7 @@ export function PaymentModalUpdated({
                     commissionUsd={displayCommissionBalanceUsd}
                     onOpenDebtClick={() => setDebtBreakdownOpen(true)}
                     paymentBalanceDisplay={intakeFinalBalanceDisplay}
-                    overpaymentUsd={intakeFinalBalance.surplusPendingUsd}
+                    overpaymentUsd={intakeFinalBalance?.surplusPendingUsd ?? 0}
                     historicalPaymentView={isHistoricalPaymentView}
                     lines={payments}
                     rate={rateN}

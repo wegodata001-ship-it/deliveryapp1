@@ -5,9 +5,11 @@ import {
   buildPaymentPreview,
   computePendingCreditApplyUsd,
   formatIntakeFinalBalanceUsdLine,
+  paymentIntakeCustomerBalanceFromCurrentBooks,
   paymentIntakeFinalBalanceCardDisplay,
   paymentIntakeFinalBalanceFromPreview,
   paymentIntakeFinalCustomerBalance,
+  formatIntakeCustomerBalanceHeroLine,
   formatIntakeSurplusPendingLine,
   remainingToPayCardDisplayFromOverpayment,
   remainingToPayCardDisplayFromPreview,
@@ -308,7 +310,7 @@ describe("paymentIntakeFinalCustomerBalance", () => {
     assert.equal(bal.statusLabel, "יתרת זכות");
     assert.equal(formatIntakeFinalBalanceUsdLine(bal.signedBalanceUsd), "+$20.00");
     const d = paymentIntakeFinalBalanceCardDisplay(bal, 3);
-    assert.equal(d.title, "יתרה");
+    assert.equal(d.title, "יתרת לקוח");
     assert.equal(d.statusHint, "יתרת זכות");
   });
 
@@ -320,7 +322,7 @@ describe("paymentIntakeFinalCustomerBalance", () => {
     });
     assert.equal(bal.signedBalanceUsd, -758.01);
     assert.equal(bal.surplusPendingUsd, 0);
-    assert.equal(bal.statusLabel, "חוב לתשלום");
+    assert.equal(bal.statusLabel, "לתשלום");
     assert.equal(formatIntakeFinalBalanceUsdLine(bal.signedBalanceUsd), "-$758.01");
   });
 
@@ -332,7 +334,7 @@ describe("paymentIntakeFinalCustomerBalance", () => {
     });
     assert.equal(bal.signedBalanceUsd, -258.01);
     assert.equal(bal.surplusPendingUsd, 0);
-    assert.equal(bal.statusLabel, "חוב לתשלום");
+    assert.equal(bal.statusLabel, "לתשלום");
     assert.equal(formatIntakeFinalBalanceUsdLine(bal.signedBalanceUsd), "-$258.01");
   });
 
@@ -412,5 +414,114 @@ describe("paymentIntakeFinalCustomerBalance", () => {
     assert.notEqual(bal.signedBalanceUsd, -41.99);
     assert.equal(bal.openDebtAfter, 0);
     assert.equal(bal.availableCreditAfter, 0);
+  });
+
+  it("CURRENT +$510 credit is not week-scoped remaining $0", () => {
+    const weekRemainingCard = paymentIntakeFinalCustomerBalance({
+      debtBefore: 0,
+      existingCredit: 0,
+      draftPaymentUsd: 0,
+    });
+    const weekRemainingDisplay = remainingToPayCardDisplayFromPreview(
+      preview({ debt: 0, credit: 0, payment: 0 }),
+      3,
+    );
+    const currentCard = paymentIntakeCustomerBalanceFromCurrentBooks({
+      currentOpenDebtUsd: 0,
+      currentAvailableCreditUsd: 510,
+      draftPaymentUsd: 0,
+    });
+    assert.equal(weekRemainingCard.signedBalanceUsd, 0);
+    assert.equal(formatPaymentBalanceUsdLine(weekRemainingDisplay), "$0.00");
+    assert.equal(currentCard.signedBalanceUsd, 510);
+    assert.equal(currentCard.title, "יתרת לקוח");
+    assert.equal(currentCard.statusLabel, "יתרת זכות");
+    assert.equal(
+      formatIntakeCustomerBalanceHeroLine({
+        signedBalanceUsd: currentCard.signedBalanceUsd,
+        surplusPendingUsd: currentCard.surplusPendingUsd,
+      }),
+      "+$510.00",
+    );
+    const d = paymentIntakeFinalBalanceCardDisplay(currentCard, 3);
+    assert.equal(d.title, "יתרת לקוח");
+    assert.equal(d.statusHint, "יתרת זכות");
+    assert.equal(d.balanceUsdSigned, 510);
+  });
+
+  it("historical leftover +$1,520 does not replace CURRENT +$510 on the card", () => {
+    const historicalWeek = paymentIntakeFinalCustomerBalance({
+      debtBefore: 0,
+      existingCredit: 1520,
+      draftPaymentUsd: 0,
+    });
+    const currentCard = paymentIntakeCustomerBalanceFromCurrentBooks({
+      currentOpenDebtUsd: 0,
+      currentAvailableCreditUsd: 510,
+      draftPaymentUsd: 0,
+    });
+    assert.equal(historicalWeek.signedBalanceUsd, 1520);
+    assert.equal(currentCard.signedBalanceUsd, 510);
+    assert.notEqual(currentCard.signedBalanceUsd, historicalWeek.signedBalanceUsd);
+    assert.equal(
+      formatIntakeCustomerBalanceHeroLine({ signedBalanceUsd: currentCard.signedBalanceUsd }),
+      "+$510.00",
+    );
+  });
+
+  it("week switch keeps CURRENT books; customer change replaces them", () => {
+    const customer101 = paymentIntakeCustomerBalanceFromCurrentBooks({
+      currentOpenDebtUsd: 0,
+      currentAvailableCreditUsd: 510,
+      draftPaymentUsd: 0,
+    });
+    const afterWeekSwitch = paymentIntakeCustomerBalanceFromCurrentBooks({
+      currentOpenDebtUsd: 0,
+      currentAvailableCreditUsd: 510,
+      draftPaymentUsd: 0,
+    });
+    const otherCustomer = paymentIntakeCustomerBalanceFromCurrentBooks({
+      currentOpenDebtUsd: 300,
+      currentAvailableCreditUsd: 0,
+      draftPaymentUsd: 0,
+    });
+    const afterSaveRefresh = paymentIntakeCustomerBalanceFromCurrentBooks({
+      currentOpenDebtUsd: 0,
+      currentAvailableCreditUsd: 510,
+      draftPaymentUsd: 0,
+    });
+    assert.equal(afterWeekSwitch.signedBalanceUsd, customer101.signedBalanceUsd);
+    assert.equal(otherCustomer.signedBalanceUsd, -300);
+    assert.equal(otherCustomer.statusLabel, "לתשלום");
+    assert.equal(afterSaveRefresh.signedBalanceUsd, 510);
+    assert.equal(afterSaveRefresh.statusLabel, "יתרת זכות");
+  });
+
+  it("historical-week typed payment does not change CURRENT card when draft is withheld", () => {
+    const card = paymentIntakeCustomerBalanceFromCurrentBooks({
+      currentOpenDebtUsd: 0,
+      currentAvailableCreditUsd: 510,
+      draftPaymentUsd: 0,
+    });
+    assert.equal(card.signedBalanceUsd, 510);
+    assert.equal(
+      formatIntakeCustomerBalanceHeroLine({ signedBalanceUsd: card.signedBalanceUsd }),
+      "+$510.00",
+    );
+  });
+
+  it("card copy: credit / debt / zero", () => {
+    assert.equal(
+      formatIntakeCustomerBalanceHeroLine({ signedBalanceUsd: 510 }),
+      "+$510.00",
+    );
+    assert.equal(
+      formatIntakeCustomerBalanceHeroLine({ signedBalanceUsd: -758.01 }),
+      "-$758.01",
+    );
+    assert.equal(
+      formatIntakeCustomerBalanceHeroLine({ signedBalanceUsd: 0 }),
+      "$0.00 — מאוזן",
+    );
   });
 });

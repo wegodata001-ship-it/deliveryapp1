@@ -1,11 +1,11 @@
 "use client";
 
 /**
- * כרטיס «יתרה» — מצב סופי חתום: +זכות / 0 מאוזן / −חוב.
+ * כרטיס «יתרת לקוח» — CURRENT net: +זכות / 0 מאוזן / −חוב.
  */
 import { AnimatedMoneyValue } from "@/components/ui/AnimatedMoneyValue";
 import {
-  formatIntakeFinalBalanceUsdLine,
+  formatIntakeCustomerBalanceHeroLine,
   formatIntakeSurplusPendingLine,
 } from "@/lib/payment-intake-preview";
 import {
@@ -14,14 +14,39 @@ import {
 } from "@/lib/order-remaining-debt";
 
 type Props = {
-  display: PaymentBalanceDisplay;
+  display: PaymentBalanceDisplay | null;
 };
 
+export function remainingToPayCardHero(display: PaymentBalanceDisplay): string {
+  return formatIntakeCustomerBalanceHeroLine({
+    signedBalanceUsd: display.balanceUsdSigned,
+    surplusPendingUsd: display.surplusPendingUsd ?? 0,
+  });
+}
+
 export function RemainingToPayCard({ display }: Props) {
+  if (!display) {
+    return (
+      <div
+        className="payment-modal-live-kpi payment-remaining-to-pay"
+        role="status"
+        aria-busy="true"
+        aria-label="יתרת לקוח"
+        data-testid="payment-customer-balance-card"
+      >
+        <div className="payment-modal-live-kpi__lbl">יתרת לקוח</div>
+        <div className="payment-modal-live-kpi__hero-v">טוען…</div>
+      </div>
+    );
+  }
+
   const { state, statusHint } = display;
   const surplusPendingUsd = display.surplusPendingUsd ?? 0;
   const surplusPendingLine = formatIntakeSurplusPendingLine(surplusPendingUsd);
-  const usdLine = formatIntakeFinalBalanceUsdLine(display.balanceUsdSigned);
+  const usdLine = remainingToPayCardHero(display);
+  const showHint = Boolean(
+    statusHint && !(state === "cleared" && surplusPendingUsd <= 0.01 && statusHint === "מאוזן"),
+  );
   const ilsRaw = formatPaymentBalanceIlsLine({
     ...display,
     state: state === "debt" ? "debt" : state === "credit" ? "credit" : "cleared",
@@ -42,9 +67,11 @@ export function RemainingToPayCard({ display }: Props) {
         .filter(Boolean)
         .join(" ")}
       role="status"
-      aria-label={statusHint ? `יתרה — ${statusHint}` : "יתרה"}
+      aria-label={statusHint ? `יתרת לקוח — ${statusHint}` : "יתרת לקוח"}
+      data-testid="payment-customer-balance-card"
+      data-balance-state={state}
     >
-      <div className="payment-modal-live-kpi__lbl">יתרה</div>
+      <div className="payment-modal-live-kpi__lbl">יתרת לקוח</div>
       <AnimatedMoneyValue
         className={[
           "payment-modal-live-kpi__hero-v",
@@ -55,13 +82,15 @@ export function RemainingToPayCard({ display }: Props) {
         dir="ltr"
         value={usdLine}
       />
-      <div className="payment-modal-live-kpi__sub" dir="ltr">
-        <AnimatedMoneyValue
-          className="payment-modal-live-kpi__sub-ils"
-          dir="ltr"
-          value={ilsLine}
-        />
-        {statusHint ? (
+      <div className="payment-modal-live-kpi__sub" dir={state === "cleared" ? "rtl" : "ltr"}>
+        {state === "cleared" && surplusPendingUsd <= 0.01 ? null : (
+          <AnimatedMoneyValue
+            className="payment-modal-live-kpi__sub-ils"
+            dir="ltr"
+            value={ilsLine}
+          />
+        )}
+        {showHint ? (
           <span className="payment-modal-live-kpi__status-hint">{statusHint}</span>
         ) : null}
         {surplusPendingLine ? (

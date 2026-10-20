@@ -23,6 +23,7 @@ import { loadPaymentPlanSummariesByOrderId } from "@/lib/payment-plan-service";
 import { DEFAULT_WORK_COUNTRY, normalizeWorkCountryCode, type WorkCountryCode } from "@/lib/work-country";
 import { formatLocalYmd } from "@/lib/work-week";
 import {
+  currentCustomerFinancialScope,
   resolvePaymentIntakeFinancialScope,
   toCustomerBalanceCalcScope,
   type CustomerFinancialScope,
@@ -596,6 +597,10 @@ export async function loadPaymentIntakeBalancesForCustomer(
       totalPaymentsUsd: number;
       /** Σ משיכות מחוב (DEBT_WITHDRAWAL) */
       totalWithdrawalsUsd: number;
+      /** CURRENT exclusive books — כרטיס יתרת לקוח, לא שבוע נבחר */
+      currentOpenDebtUsd: number;
+      currentAvailableCreditUsd: number;
+      currentNetBalanceUsd: number;
     }
   | { ok: false; error: string }
 > {
@@ -609,11 +614,16 @@ export async function loadPaymentIntakeBalancesForCustomer(
   );
   const calcScope = toCustomerBalanceCalcScope(financial);
 
-  const [accounts, debt, ordersRes] = await Promise.all([
+  const currentScope = currentCustomerFinancialScope(financial.sourceCountry);
+  const [accounts, debt, ordersRes, currentAccountsMaybe] = await Promise.all([
     getCustomerAccountBalances(cid, financial),
     getCustomerOpenDebt(cid, calcScope),
     loadPaymentIntakeOrdersForCustomer(params),
+    financial.kind === "CURRENT"
+      ? Promise.resolve(null)
+      : getCustomerAccountBalances(cid, currentScope),
   ]);
+  const currentAccounts = currentAccountsMaybe ?? accounts;
   const weekScopedRemainingUsd = ordersRes.ok
     ? sumPaymentIntakeWeekScopedRemainingUsd(ordersRes.orders)
     : 0;
@@ -649,6 +659,9 @@ export async function loadPaymentIntakeBalancesForCustomer(
     totalOrdersUsd: Number(debt.totalOrdersUsd.toFixed(2)),
     totalPaymentsUsd: Number(debt.totalPaymentsUsd.toFixed(2)),
     totalWithdrawalsUsd: Number(debt.totalWithdrawalsUsd.toFixed(2)),
+    currentOpenDebtUsd: currentAccounts.openDebtUsd,
+    currentAvailableCreditUsd: currentAccounts.availableCreditUsd,
+    currentNetBalanceUsd: currentAccounts.netBalanceUsd,
   };
 }
 
