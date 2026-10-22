@@ -163,20 +163,13 @@ export function creditUsdEligibleForOrderFifo(input: {
 function applyCollectibleBooksFifo(
   remaindersUsd: number[],
   withdrawalUsd: number,
-  availableCreditUsd = 0,
+  _availableCreditUsd = 0,
 ): number[] {
-  const afterWithdrawal = applyDebtWithdrawalFifoToRemainders(remaindersUsd, withdrawalUsd);
-  const creditToApply = creditUsdEligibleForOrderFifo({
-    remainingAfterWithdrawalUsd: afterWithdrawal.reduce(
-      (s, n) => s + roundOrderMoney2(Math.max(0, n)),
-      0,
-    ),
-    availableCreditUsd,
-  });
-  return applyDebtWithdrawalFifoToRemainders(afterWithdrawal, creditToApply);
+  void _availableCreditUsd;
+  return applyDebtWithdrawalFifoToRemainders(remaindersUsd, withdrawalUsd);
 }
 
-/** יתרה לגבייה לפי הזמנה אחרי תשלומים + משיכת חוב FIFO + זכות לקוח זמינה. */
+/** יתרה לגבייה לפי הזמנה אחרי תשלומים + משיכת חוב FIFO. זכות לא יורדת כאן. */
 export function collectibleRemainingUsdByOrderId(
   rows: Array<{ orderId: string; remainingAfterPaymentsUsd: number }>,
   withdrawalUsd: number,
@@ -190,7 +183,7 @@ export function collectibleRemainingUsdByOrderId(
   return new Map(rows.map((row, index) => [row.orderId, after[index] ?? 0]));
 }
 
-/** כמה זכות הוקצתה וירטואלית לכל הזמנה (FIFO אחרי משיכות). לא כותב ל-DB. */
+/** כמה זכות תוקצה אם המשתמש יאשר קיזוז. לא משנה יתרה לגבייה בפועל. */
 export function virtualCustomerCreditAppliedUsdByOrderId(
   rows: Array<{ orderId: string; remainingAfterPaymentsUsd: number }>,
   withdrawalUsd: number,
@@ -200,11 +193,14 @@ export function virtualCustomerCreditAppliedUsdByOrderId(
     rows.map((row) => row.remainingAfterPaymentsUsd),
     withdrawalUsd,
   );
-  const afterCredit = applyCollectibleBooksFifo(
-    rows.map((row) => row.remainingAfterPaymentsUsd),
-    withdrawalUsd,
+  const creditToApply = creditUsdEligibleForOrderFifo({
+    remainingAfterWithdrawalUsd: afterWithdrawal.reduce(
+      (s, n) => s + roundOrderMoney2(Math.max(0, n)),
+      0,
+    ),
     availableCreditUsd,
-  );
+  });
+  const afterCredit = applyDebtWithdrawalFifoToRemainders(afterWithdrawal, creditToApply);
   return new Map(
     rows.map((row, index) => [
       row.orderId,
@@ -213,7 +209,7 @@ export function virtualCustomerCreditAppliedUsdByOrderId(
   );
 }
 
-/** חוב פתוח לגבייה = Σ יתרות אחרי תשלומים − משיכות − זכות זמינה. */
+/** חוב פתוח לגבייה = Σ יתרות אחרי תשלומים − משיכות. זכות לא יורדת כאן. */
 export function collectibleOpenDebtAfterWithdrawalUsd(
   remaindersAfterPaymentsUsd: number[],
   withdrawalUsd: number,

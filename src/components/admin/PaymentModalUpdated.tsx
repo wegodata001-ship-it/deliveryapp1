@@ -1232,17 +1232,8 @@ export function PaymentModalUpdated({
 
   const eligibleCreditCoverUsd = useMemo(() => {
     if (isHistoricalPaymentView) return 0;
-    const draftPay = isExistingPayment
-      ? Math.max(0, paymentApplyUsd)
-      : Math.max(0, totals.totalUsd);
-    return roundMoney2(Math.max(0, weekScopedRemainingUsd - draftPay));
-  }, [
-    isHistoricalPaymentView,
-    isExistingPayment,
-    paymentApplyUsd,
-    totals.totalUsd,
-    weekScopedRemainingUsd,
-  ]);
+    return roundMoney2(Math.max(0, weekScopedRemainingUsd));
+  }, [isHistoricalPaymentView, weekScopedRemainingUsd]);
 
   const pendingCreditApplyUsd = useMemo(
     () =>
@@ -1327,6 +1318,10 @@ export function PaymentModalUpdated({
   ]);
 
   const totalDebtBeforePaymentUsd = weekScopedRemainingUsd;
+  const assignableDebtUsd = useMemo(
+    () => roundMoney2(Math.max(0, weekScopedRemainingUsd - pendingCreditApplyUsd)),
+    [weekScopedRemainingUsd, pendingCreditApplyUsd],
+  );
 
   const paymentPreview = useMemo(
     () =>
@@ -1538,7 +1533,7 @@ export function PaymentModalUpdated({
     return (
       paymentBalanceDisplay.state === "surplus" ||
       computePaymentOverpayment(
-        totalDebtBeforePaymentUsd,
+        assignableDebtUsd,
         isHistoricalPaymentView
           ? 0
           : isExistingPayment
@@ -1551,7 +1546,7 @@ export function PaymentModalUpdated({
     customerWorkspaceLoading,
     intakeCorrectionRows,
     paymentBalanceDisplay.state,
-    totalDebtBeforePaymentUsd,
+    assignableDebtUsd,
     isHistoricalPaymentView,
     isExistingPayment,
     paymentApplyUsd,
@@ -3105,7 +3100,7 @@ export function PaymentModalUpdated({
       includedOrderIds: includedIds,
       enteredByBucket: enteredForGate,
       totalPaymentUsd: applyUsdForGate,
-      openDebtUsd: totalDebtBeforePaymentUsd,
+      openDebtUsd: assignableDebtUsd,
       surplusDisposition: surplusDisposition ?? null,
     });
     if (!saveGates.methodCheck.ok) {
@@ -3115,7 +3110,7 @@ export function PaymentModalUpdated({
           includedOrderIds: includedIds,
           enteredByBucket: enteredForGate,
           totalPaymentUsd: applyUsdForGate,
-          openDebtUsd: totalDebtBeforePaymentUsd,
+          openDebtUsd: assignableDebtUsd,
         }),
         week: orderSourceWeekCode,
       });
@@ -3174,14 +3169,68 @@ export function PaymentModalUpdated({
     const hasOpenOrders = basesForSave.some((b) => orderLedgerBalanceUsd(b) > 0.02);
     const surplusPath =
       surplusDisposition === "credit" || surplusDisposition === "commission";
-    if (!hasAlloc && !hasOpenOrders && !surplusPath) {
+    const creditApplyUsd = pendingCreditApplyUsd;
+    if (!hasAlloc && !hasOpenOrders && !surplusPath && creditApplyUsd <= 0.01) {
       setSaveErr("לא נמצאו הזמנות עם יתרת חוב פתוחה — ייתכן שהמסמך כבר שולם במלואו");
       return { ok: false };
     }
     setSaveBusy(true);
     const hm = (paymentTimeHm || "").trim() || formatLocalHm(new Date());
     const weekForSave = intakeWeekCode;
+    if (creditApplyUsd > 0.01) {
+      const creditRes = await applyCustomerCreditToOpenOrdersAction({
+        customerId: customer.id,
+        maxUsd: creditApplyUsd.toFixed(2),
+        orderIds: includedIds ?? undefined,
+      });
+      if (!creditRes.ok) {
+        setSaveBusy(false);
+        setSaveErr(creditRes.error);
+        return { ok: false };
+      }
+      onToast(`נוצלה יתרת זכות: $${creditApplyUsd.toFixed(2)}`);
+      setBalanceResetFromCredit(false);
+    }
     const saveStart = performance.now();
+    const hasNewReceipt = applyUsdForGate > 0.01;
+    if (!hasNewReceipt) {
+      setSaveBusy(false);
+      setPendingAutoAdjustIntents(null);
+      if (saveJustSavedTimerRef.current != null) {
+        window.clearTimeout(saveJustSavedTimerRef.current);
+      }
+      setSaveJustSaved(true);
+      saveJustSavedTimerRef.current = window.setTimeout(() => {
+        setSaveJustSaved(false);
+        saveJustSavedTimerRef.current = null;
+      }, 2000);
+      dispatchCashControlRefresh(
+        resolvePaymentIntakeAccountingPeriod(weekForSave)?.financialWeek ?? weekForSave,
+      );
+      window.dispatchEvent(new CustomEvent("wego:balances-refresh"));
+      if (customer?.id) {
+        await loadCustomerWorkspaceInBackground(customer.id, undefined, {
+          perfLabel: "creditApplyOnlyRefresh",
+        });
+      }
+      return {
+        ok: true,
+        primaryPaymentCode: displayedPaymentCode || "",
+        primaryPaymentId: savedCapturePaymentId || "",
+        paymentNumber: null,
+        customerBalanceUsd: customer.customerBalanceUsd ?? "0",
+        summary: {
+          targetOrderIds: includedIds ?? orders.map((order) => order.id),
+          documentAmountUsd: 0,
+          paidUsd: creditApplyUsd,
+          remainingUsd: assignableDebtUsd,
+          statusLabel: assignableDebtUsd <= 0.01 ? "שולם" : "שולם חלקית — חוב פתוח",
+          creditAvailableUsd: 0,
+          commissionAvailableUsd: displayCommissionBalanceUsd,
+        },
+        postSave: null,
+      };
+    }
     const res = await savePaymentUpdatedAction({
       customerId: customer.id,
       receivedToday: false,
@@ -3229,21 +3278,6 @@ export function PaymentModalUpdated({
       setSaveJustSaved(false);
       saveJustSavedTimerRef.current = null;
     }, 2000);
-
-    const creditApplyUsd = pendingCreditApplyUsd;
-    if (creditApplyUsd > 0.01) {
-      const creditRes = await applyCustomerCreditToOpenOrdersAction({
-        customerId: customer.id,
-        maxUsd: creditApplyUsd.toFixed(2),
-        orderIds: includedIds ?? undefined,
-      });
-      if (!creditRes.ok) {
-        setSaveErr(creditRes.error);
-        return { ok: false };
-      }
-      onToast(`נוצלה יתרת זכות: $${creditApplyUsd.toFixed(2)}`);
-      setBalanceResetFromCredit(false);
-    }
 
     dispatchCashControlRefresh(
       resolvePaymentIntakeAccountingPeriod(weekForSave)?.financialWeek ?? weekForSave,
@@ -3540,7 +3574,9 @@ export function PaymentModalUpdated({
    */
   function buildInlineOveragePreview(): PaymentOveragePreview | null {
     if (paymentPreview.projectedOverpayment <= 0.01) return null;
-    const openDebtUsd = paymentPreview.debtBefore;
+    const openDebtUsd = roundMoney2(
+      Math.max(0, paymentPreview.debtBefore - paymentPreview.pendingCreditApplyUsd),
+    );
     const paymentUsd = paymentPreview.draftPaymentTotal;
     const openDebtIls = rateN > 0 ? roundMoney2(openDebtUsd * rateN) : 0;
     const paymentIls = rateN > 0 ? roundMoney2(paymentUsd * rateN) : 0;
@@ -3692,7 +3728,7 @@ export function PaymentModalUpdated({
       includedOrderIds: includedIds,
       enteredByBucket: buildEnteredByBucket(liveFormKpis),
       totalPaymentUsd: paymentApplyUsd,
-      openDebtUsd: totalDebtBeforePaymentUsd,
+      openDebtUsd: assignableDebtUsd,
     });
     if (!saveGates.methodCheck.ok) {
       setIntakeDevRows(liveIntakeDevRows);
@@ -3706,7 +3742,10 @@ export function PaymentModalUpdated({
       }
       return;
     }
-    if (orderRemainderAfterPaymentUsd > 0.01 && intakeCorrectionRows.length === 0) {
+    if (
+      roundMoney2(orderRemainderAfterPaymentUsd - pendingCreditApplyUsd) > 0.01 &&
+      intakeCorrectionRows.length === 0
+    ) {
       openInlineShortfallResetModal("new");
       return;
     }
@@ -3730,7 +3769,7 @@ export function PaymentModalUpdated({
       includedOrderIds: includedIds,
       enteredByBucket: buildEnteredByBucket(liveFormKpis),
       totalPaymentUsd: paymentApplyUsd,
-      openDebtUsd: totalDebtBeforePaymentUsd,
+      openDebtUsd: assignableDebtUsd,
     });
     if (!saveGates.methodCheck.ok) {
       setIntakeDevRows(liveIntakeDevRows);
@@ -3744,7 +3783,10 @@ export function PaymentModalUpdated({
       }
       return;
     }
-    if (orderRemainderAfterPaymentUsd > 0.01 && intakeCorrectionRows.length === 0) {
+    if (
+      roundMoney2(orderRemainderAfterPaymentUsd - pendingCreditApplyUsd) > 0.01 &&
+      intakeCorrectionRows.length === 0
+    ) {
       openInlineShortfallResetModal("close");
       return;
     }

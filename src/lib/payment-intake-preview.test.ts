@@ -52,18 +52,21 @@ describe("buildPaymentPreview", () => {
     assert.equal(p.draftPaymentTotal, 100);
   });
 
-  it("CASE 3 — exclusive net then payment: 1000 − 200 − 100 = 700", () => {
+  it("CASE 3 — approved credit then payment: 1000 − 200 − 100 = 700", () => {
     const p = preview({ debt: 1000, credit: 200, payment: 100, useExistingCredit: true });
-    assert.equal(p.debtBefore, 800);
-    assert.equal(p.existingCredit, 0);
+    assert.equal(p.debtBefore, 1000);
+    assert.equal(p.existingCredit, 200);
     assert.equal(p.remainingDebt, 700);
+    assert.equal(p.projectedCredit, 0);
   });
 
-  it("CASE 3 — credit always nets at SSOT, flag does not keep both books", () => {
+  it("CASE 3 — without approval credit stays separate and does not reduce the debt", () => {
     const p = preview({ debt: 1000, credit: 200, payment: 100, useExistingCredit: false });
-    assert.equal(p.debtBefore, 800);
-    assert.equal(p.existingCredit, 0);
-    assert.equal(p.remainingDebt, 700);
+    assert.equal(p.debtBefore, 1000);
+    assert.equal(p.existingCredit, 200);
+    assert.equal(p.remainingDebt, 900);
+    assert.equal(p.projectedCredit, 200);
+    assert.equal(p.projectedOverpayment, 0);
   });
 
   it("CASE 4 — overpayment: remaining 0, projected credit 50", () => {
@@ -114,30 +117,42 @@ describe("buildPaymentPreview", () => {
     assert.equal(p.remainingDebt, 758.01);
   });
 
-  it("customer 101: 2031.84 − 1273.83 = 758.01 remaining, credit 0", () => {
+  it("customer 101: without credit approval remaining stays $2,031.84", () => {
     const p = preview({ debt: 2031.84, credit: 1273.83 });
-    assert.equal(p.debtBefore, 758.01);
-    assert.equal(p.existingCredit, 0);
-    assert.equal(p.remainingDebt, 758.01);
+    assert.equal(p.debtBefore, 2031.84);
+    assert.equal(p.existingCredit, 1273.83);
+    assert.equal(p.remainingDebt, 2031.84);
+    assert.equal(p.pendingCreditApplyUsd, 0);
   });
 
-  it("customer 101 + $100 → remaining 658.01", () => {
+  it("customer 101 + $100 without credit approval → remaining 1931.84", () => {
     const p = preview({ debt: 2031.84, credit: 1273.83, payment: 100 });
-    assert.equal(p.remainingDebt, 658.01);
-    assert.equal(p.projectedCredit, 0);
+    assert.equal(p.remainingDebt, 1931.84);
+    assert.equal(p.existingCredit, 1273.83);
+    assert.equal(p.projectedCredit, 1273.83);
+    assert.equal(p.projectedOverpayment, 0);
   });
 
-  it("customer 101 + $1000 → debt 0, credit 241.99", () => {
-    const p = preview({ debt: 2031.84, credit: 1273.83, payment: 1000 });
+  it("customer 101 + approved credit + $1000 → remaining 0, leftover 241.99", () => {
+    const p = preview({
+      debt: 2031.84,
+      credit: 1273.83,
+      payment: 1000,
+      useExistingCredit: true,
+    });
+    assert.equal(p.debtBefore, 2031.84);
+    assert.equal(p.pendingCreditApplyUsd, 1273.83);
     assert.equal(p.remainingDebt, 0);
+    assert.equal(p.projectedOverpayment, 241.99);
     assert.equal(p.projectedCredit, 241.99);
   });
 
-  it("reverse books: 500 debt + 800 credit → remaining 0, credit 300", () => {
+  it("reverse books: 500 debt + 800 credit stay separate until approval", () => {
     const p = preview({ debt: 500, credit: 800 });
-    assert.equal(p.remainingDebt, 0);
-    assert.equal(p.existingCredit, 300);
-    assert.equal(p.projectedCredit, 300);
+    assert.equal(p.remainingDebt, 500);
+    assert.equal(p.existingCredit, 800);
+    assert.equal(p.projectedCredit, 800);
+    assert.equal(p.pendingCreditApplyUsd, 0);
   });
 
   it("never returns negative remainingDebt; signed remaining keeps the overpayment", () => {
@@ -158,7 +173,7 @@ describe("buildPaymentPreview", () => {
     assert.equal(p.projectedCredit, 41.99);
   });
 
-  it("week-scoped payable never shows gross $1,273.83 as available credit", () => {
+  it("week-scoped payable shows SSOT credit even when week debt exists", () => {
     assert.equal(
       availableCreditForWeekScopedPayable({
         weekScopedDebtUsd: 758.01,
@@ -168,10 +183,10 @@ describe("buildPaymentPreview", () => {
     );
     assert.equal(
       availableCreditForWeekScopedPayable({
-        weekScopedDebtUsd: 758.01,
-        ssotAvailableCreditUsd: 1273.83,
+        weekScopedDebtUsd: 1000,
+        ssotAvailableCreditUsd: 28.9,
       }),
-      0,
+      28.9,
     );
     assert.equal(
       availableCreditForWeekScopedPayable({
@@ -272,6 +287,18 @@ describe("computePendingCreditApplyUsd", () => {
         useExistingCredit: false,
       }),
       0,
+    );
+  });
+
+  it("TEST 4 — partial apply $10 of $28.90", () => {
+    assert.equal(
+      computePendingCreditApplyUsd({
+        availableCreditUsd: 28.9,
+        eligibleAmountToPayUsd: 1000,
+        useExistingCredit: true,
+        maxApplyUsd: 10,
+      }),
+      10,
     );
   });
 });

@@ -132,11 +132,11 @@ describe("Khalil / customer 101 three-screen audit", () => {
     const fifo = collectibleRemainingUsdByOrderId(remainders, withdrawalUsd, money(grossCredit));
     const fifoOpen = money([...fifo.values()].reduce((s, n) => s + money(n), 0));
     const exclusive = normalizeExclusiveCustomerBooks({
-      openDebtUsd: Math.max(0, remainingAfterPayments - withdrawalUsd),
+      openDebtUsd: fifoOpen,
       availableCreditUsd: money(grossCredit),
     });
 
-    assert.ok(eq(exclusive.openDebtUsd, fifoOpen));
+    assert.ok(eq(fifoOpen, money(Math.max(0, remainingAfterPayments - withdrawalUsd))));
     assert.ok(eq(exclusive.openDebtUsd, accounts.openDebtUsd));
     assert.ok(eq(exclusive.availableCreditUsd, accounts.availableCreditUsd));
     assert.ok(eq(exclusive.netBalanceUsd, accounts.netBalanceUsd));
@@ -166,9 +166,10 @@ describe("Khalil / customer 101 three-screen audit", () => {
     assert.equal(intake.ok, true);
     if (!intake.ok) return;
     const weekRem = sumPaymentIntakeWeekScopedRemainingUsd(intake.orders);
+    const grossCredit = await getCustomerCreditBalanceUsd(customer.id, { sourceCountry: COUNTRY });
     const creditShown = availableCreditForWeekScopedPayable({
       weekScopedDebtUsd: weekRem,
-      ssotAvailableCreditUsd: accounts.availableCreditUsd,
+      ssotAvailableCreditUsd: grossCredit,
     });
     const books = normalizeExclusiveCustomerBooks({
       openDebtUsd: weekRem,

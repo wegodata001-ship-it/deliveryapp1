@@ -1,5 +1,4 @@
 import { calculateCustomerBalances } from "@/lib/customer-balance-calculator";
-import { getCustomerCreditBalancesUsdMany } from "@/lib/customer-credit-balance";
 import { isDebtWithdrawalOrderStatus } from "@/lib/debt-withdrawal-order";
 import {
   collectibleRemainingUsdByOrderId,
@@ -12,8 +11,8 @@ import { groupByActivePayments } from "@/lib/payment-record-status";
 import { prisma } from "@/lib/prisma";
 
 /**
- * יתרה לגבייה לפי הזמנה — אחרי תשלומים + משיכת חוב FIFO + זכות לקוח זמינה.
- * לקוחות עם משיכה או זכות נטענים; בלי שניהם המפה ריקה והרשימה נשארת על total−paid.
+ * יתרה לגבייה לפי הזמנה — אחרי תשלומים + משיכת חוב FIFO.
+ * יתרת זכות לא יורדת מהחוב כאן; קיזוז רק בפעולת CREDIT_APPLICATION מאושרת.
  */
 export async function loadCollectibleRemainingUsdByOrderId(
   customerIds: string[],
@@ -22,10 +21,7 @@ export async function loadCollectibleRemainingUsdByOrderId(
   const out = new Map<string, number>();
   if (ids.length === 0) return out;
 
-  const [balances, credits] = await Promise.all([
-    calculateCustomerBalances(ids),
-    getCustomerCreditBalancesUsdMany(ids),
-  ]);
+  const balances = await calculateCustomerBalances(ids);
   const orders = await prisma.order.findMany({
     where: {
       customerId: { in: ids },
@@ -84,7 +80,7 @@ export async function loadCollectibleRemainingUsdByOrderId(
         ),
       })),
       Number(balances.get(customerId)?.totalWithdrawals ?? 0),
-      credits.get(customerId) ?? 0,
+      0,
     );
     for (const [orderId, usd] of remaining) out.set(orderId, usd);
   }

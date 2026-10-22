@@ -118,6 +118,7 @@ import {
   pickOverpaymentCreditsToCancel,
 } from "@/lib/balance-reset-calculation";
 import { CUSTOMER_CREDIT_SURPLUS_NOTE_PREFIX } from "@/lib/cash-control-internal-payments";
+import { creditSurplusSlicesFromExistingAllocation } from "@/lib/customer-credit-method";
 import {
   buildBalanceResetFeeNotes,
   buildPaymentAdjustmentFeeCreateData,
@@ -1461,65 +1462,82 @@ export async function savePaymentUpdatedAction(
         !form.applyCustomerBalanceReset &&
         !form.applyCustomerBalanceResetFromCredit
       ) {
-        const creditUsd = new Prisma.Decimal(unallocatedUsd.toFixed(4));
-        const creditTotals = computeFromUsdAmount(creditUsd, {
-          baseDollarRate: base,
-          dollarFee: fee,
-          finalDollarRate: finalUse,
-          vatRate,
-        });
         const excessByMethod = autoAdjustMethodAllocation
           .filter((row) => row.excessUsd > ALLOC_EPS)
           .map((row) => `${row.label} $${row.excessUsd.toFixed(2)}`)
           .join(" · ");
-        const creditNotes = [
-          CUSTOMER_CREDIT_SURPLUS_NOTE_PREFIX,
-          "תשלום יתר → יתרת זכות",
-          `קשור לקליטה ${primaryCode}`,
-          `עודף: $${unallocatedUsd.toFixed(2)} (≈ ₪${Number(creditTotals.totalIlsWithVat).toFixed(2)})`,
-          excessByMethod ? `לפי אמצעי: ${excessByMethod}` : null,
-        ]
-          .filter(Boolean)
-          .join("\n");
-        await tx.payment.create({
-          data: {
-            countryCode: payWorkCountry,
-            paymentCode: null,
-            paymentNumber: allocated.paymentNumber,
-            orderId: null,
-            customerId: cid,
-            weekCode,
-            paymentDate,
-            intakeDate,
-            paymentPlace: null,
-            currency: "USD",
-            amountUsd: creditUsd,
-            amountIls: null,
-            sourceCurrency: "USD",
-            sourceAmount: creditUsd,
-            exchangeRate: finalUse,
-            vatRate,
-            commissionPercent: commissionPctDec,
-            amountWithoutVat: creditTotals.totalIlsWithoutVat,
-            snapshotBaseDollarRate: creditTotals.snapshotBaseDollarRate,
-            snapshotDollarFee: creditTotals.snapshotDollarFee,
-            snapshotFinalDollarRate: creditTotals.snapshotFinalDollarRate,
-            totalIlsWithVat: creditTotals.totalIlsWithVat,
-            totalIlsWithoutVat: creditTotals.totalIlsWithoutVat,
-            vatAmount: creditTotals.vatAmount,
-            manualDateChanged,
-            paymentMethod: payMethodDb,
-            usdPaymentMethod: usdMethod,
-            ilsPaymentMethod: ilsMethod,
-            usdNote: null,
-            ilsNote: null,
-            isPaid: true,
-            businessType: "CUSTOMER_CREDIT",
-            notes: creditNotes,
-            createdById: me.id,
-          },
+        const creditSlices = creditSurplusSlicesFromExistingAllocation({
+          unallocatedUsd,
+          excessByMethod: autoAdjustMethodAllocation.map((row) => ({
+            method: row.method,
+            label: row.label,
+            excessUsd: row.excessUsd,
+            currency: row.currency,
+          })),
+          fallbackMethod: String(payMethodDb),
+          fallbackLabel: PAYMENT_METHOD_LABELS[String(payMethodDb)] ?? String(payMethodDb),
         });
-        savedCount += 1;
+        for (const slice of creditSlices) {
+          const sliceUsd = new Prisma.Decimal(slice.amountUsd.toFixed(4));
+          const sliceTotals = computeFromUsdAmount(sliceUsd, {
+            baseDollarRate: base,
+            dollarFee: fee,
+            finalDollarRate: finalUse,
+            vatRate,
+          });
+          const sliceMethod = (Object.values(PaymentMethod) as string[]).includes(slice.method)
+            ? (slice.method as PaymentMethod)
+            : PaymentMethod.OTHER;
+          const creditNotes = [
+            CUSTOMER_CREDIT_SURPLUS_NOTE_PREFIX,
+            "תשלום יתר → יתרת זכות",
+            `קשור לקליטה ${primaryCode}`,
+            `עודף: $${slice.amountUsd.toFixed(2)} (≈ ₪${Number(sliceTotals.totalIlsWithVat).toFixed(2)})`,
+            `אמצעי מקור: ${slice.label}`,
+            excessByMethod ? `לפי אמצעי: ${excessByMethod}` : null,
+          ]
+            .filter(Boolean)
+            .join("\n");
+          await tx.payment.create({
+            data: {
+              countryCode: payWorkCountry,
+              paymentCode: null,
+              paymentNumber: allocated.paymentNumber,
+              orderId: null,
+              customerId: cid,
+              weekCode,
+              paymentDate,
+              intakeDate,
+              paymentPlace: null,
+              currency: "USD",
+              amountUsd: sliceUsd,
+              amountIls: null,
+              sourceCurrency: "USD",
+              sourceAmount: sliceUsd,
+              exchangeRate: finalUse,
+              vatRate,
+              commissionPercent: commissionPctDec,
+              amountWithoutVat: sliceTotals.totalIlsWithoutVat,
+              snapshotBaseDollarRate: sliceTotals.snapshotBaseDollarRate,
+              snapshotDollarFee: sliceTotals.snapshotDollarFee,
+              snapshotFinalDollarRate: sliceTotals.snapshotFinalDollarRate,
+              totalIlsWithVat: sliceTotals.totalIlsWithVat,
+              totalIlsWithoutVat: sliceTotals.totalIlsWithoutVat,
+              vatAmount: sliceTotals.vatAmount,
+              manualDateChanged,
+              paymentMethod: sliceMethod,
+              usdPaymentMethod: slice.currency === "ILS" ? null : sliceMethod,
+              ilsPaymentMethod: slice.currency === "ILS" ? sliceMethod : null,
+              usdNote: null,
+              ilsNote: null,
+              isPaid: true,
+              businessType: "CUSTOMER_CREDIT",
+              notes: creditNotes,
+              createdById: me.id,
+            },
+          });
+          savedCount += 1;
+        }
       }
 
       if (surplusFeeUsd > ALLOC_EPS) {
@@ -3594,6 +3612,45 @@ export async function applyCustomerCreditToOpenOrdersAction(input: {
 
       if (credits.length === 0) throw new Error("אין שורות יתרת זכות (קרדיט) זמינות");
 
+      await tx.$queryRaw`
+        SELECT id FROM "Payment"
+        WHERE id IN (${Prisma.join(credits.map((c) => c.id))})
+        FOR UPDATE
+      `;
+      const lockedCredits = await tx.payment.findMany({
+        where: {
+          id: { in: credits.map((c) => c.id) },
+          customerId: cid,
+          orderId: null,
+          businessType: "CUSTOMER_CREDIT",
+          amountUsd: { not: null },
+          ...activePaidPaymentWhere,
+        },
+        orderBy: [{ paymentDate: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+        select: {
+          id: true,
+          paymentNumber: true,
+          countryCode: true,
+          weekCode: true,
+          paymentDate: true,
+          intakeDate: true,
+          currency: true,
+          amountUsd: true,
+          amountIls: true,
+          sourceCurrency: true,
+          sourceAmount: true,
+          exchangeRate: true,
+          vatRate: true,
+          paymentMethod: true,
+          usdPaymentMethod: true,
+          ilsPaymentMethod: true,
+          notes: true,
+          createdById: true,
+        },
+      });
+      if (lockedCredits.length === 0) throw new Error("אין שורות יתרת זכות (קרדיט) זמינות");
+      credits.splice(0, credits.length, ...lockedCredits);
+
       const audits: Prisma.AuditLogCreateManyInput[] = [];
 
       let creditIndex = 0;
@@ -3634,6 +3691,8 @@ export async function applyCustomerCreditToOpenOrdersAction(input: {
           const notes = [
             "קיזוז יתרת זכות לסגירת הזמנה",
             `מקור קרדיט: ${c.id}`,
+            c.paymentNumber != null ? `תשלום מקור מספר: ${c.paymentNumber}` : null,
+            c.paymentMethod ? `אמצעי מקור: ${c.paymentMethod}` : null,
             ord.orderNumber ? `הזמנה: ${ord.orderNumber}` : null,
             `סכום: $${take.toFixed(2)}`,
           ]
@@ -3658,9 +3717,9 @@ export async function applyCustomerCreditToOpenOrdersAction(input: {
               exchangeRate: c.exchangeRate,
               vatRate: c.vatRate ?? new Prisma.Decimal(VAT_RATE),
               manualDateChanged: false,
-              paymentMethod: PaymentMethod.OTHER,
-              usdPaymentMethod: PaymentMethod.OTHER,
-              ilsPaymentMethod: null,
+              paymentMethod: c.paymentMethod ?? PaymentMethod.OTHER,
+              usdPaymentMethod: c.usdPaymentMethod ?? c.paymentMethod ?? PaymentMethod.OTHER,
+              ilsPaymentMethod: c.ilsPaymentMethod ?? null,
               usdNote: null,
               ilsNote: null,
               isPaid: true,
@@ -3696,8 +3755,12 @@ export async function applyCustomerCreditToOpenOrdersAction(input: {
               CUSTOMER_CREDIT_SURPLUS_NOTE_PREFIX,
               "פיצול אחרי קיזוז יתרת זכות",
               `מקור: ${c.id}`,
+              c.paymentNumber != null ? `תשלום מקור מספר: ${c.paymentNumber}` : null,
+              c.paymentMethod ? `אמצעי מקור: ${c.paymentMethod}` : null,
               `יתרה: $${remainder.toFixed(2)}`,
-            ].join("\n");
+            ]
+              .filter(Boolean)
+              .join("\n");
             await tx.payment.create({
               data: {
                 countryCode: c.countryCode,

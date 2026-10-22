@@ -149,14 +149,14 @@ describe("order-remaining-debt SSOT", () => {
     assert.notEqual(8342.6, remaining.get("TR-137-0004"));
   });
 
-  it("customer 101: FIFO credit $1,273.83 leaves $758.01", () => {
+  it("customer 101: collectible remaining ignores unused credit", () => {
     const remaining = collectibleRemainingUsdByOrderId(
       [{ orderId: "101-open", remainingAfterPaymentsUsd: 2031.84 }],
       0,
       1273.83,
     );
-    assert.equal(remaining.get("101-open"), 758.01);
-    assert.equal(collectibleOpenDebtAfterWithdrawalUsd([2031.84], 0, 1273.83), 758.01);
+    assert.equal(remaining.get("101-open"), 2031.84);
+    assert.equal(collectibleOpenDebtAfterWithdrawalUsd([2031.84], 0, 1273.83), 2031.84);
     assert.equal(
       creditUsdEligibleForOrderFifo({
         remainingAfterWithdrawalUsd: 2031.84,
@@ -166,30 +166,30 @@ describe("order-remaining-debt SSOT", () => {
     );
   });
 
-  it("credit larger than remaining applies only the remaining", () => {
+  it("credit larger than remaining is eligible only up to remaining", () => {
     const remaining = collectibleRemainingUsdByOrderId(
       [{ orderId: "a", remainingAfterPaymentsUsd: 500 }],
       0,
       800,
     );
-    assert.equal(remaining.get("a"), 0);
+    assert.equal(remaining.get("a"), 500);
     assert.equal(
       creditUsdEligibleForOrderFifo({ remainingAfterWithdrawalUsd: 500, availableCreditUsd: 800 }),
       500,
     );
   });
 
-  it("FIFO credit across A/B/C: 300+500+400 credit 650 → 0 / 150 / 400", () => {
+  it("virtual credit FIFO across A/B/C does not change collectible remaining", () => {
     const rows = [
       { orderId: "A", remainingAfterPaymentsUsd: 300 },
       { orderId: "B", remainingAfterPaymentsUsd: 500 },
       { orderId: "C", remainingAfterPaymentsUsd: 400 },
     ];
     const remaining = collectibleRemainingUsdByOrderId(rows, 0, 650);
-    assert.equal(remaining.get("A"), 0);
-    assert.equal(remaining.get("B"), 150);
+    assert.equal(remaining.get("A"), 300);
+    assert.equal(remaining.get("B"), 500);
     assert.equal(remaining.get("C"), 400);
-    assert.equal([...remaining.values()].reduce((s, n) => s + n, 0), 550);
+    assert.equal([...remaining.values()].reduce((s, n) => s + n, 0), 1200);
     const applied = virtualCustomerCreditAppliedUsdByOrderId(rows, 0, 650);
     assert.equal(applied.get("A"), 300);
     assert.equal(applied.get("B"), 350);

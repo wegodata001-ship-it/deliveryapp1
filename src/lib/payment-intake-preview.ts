@@ -1,8 +1,8 @@
 /**
  * Preview בלבד לקליטת תשלום — לא כותב SSOT ולא מקצה להזמנות.
- * signedRemainingUsd = openDebt − draftPayment (שלילי = תשלום יתר, תצוגה בלבד).
+ * signedRemainingUsd = collectible − draftPayment (שלילי = תשלום יתר, תצוגה בלבד).
  * remainingDebt = max(0, signedRemainingUsd) — חוב פתוח אחרי התשלום.
- * חוב וזכות כבר מקוזזים ב-SSOT — אין קיזוז זכות נוסף.
+ * יתרת זכות מוצגת בנפרד; קיזוז רק אחרי אישור מפורש.
  * Fees לא נכנסות לחוב.
  */
 import {
@@ -21,18 +21,15 @@ import {
 import { convertDebtUsdToIlsIncludingVat } from "@/lib/usd-balance-ils-vat";
 
 /**
- * יתרת זכות זמינה לקליטה בשבוע שנבחר.
- * אם יש חוב שבועי לגבייה — הזכות כבר קוזזה ב-FIFO collectible remaining.
- * אסור להציג gross CUSTOMER_CREDIT כיתרת זכות קיימת ליד החוב השבועי.
+ * יתרת זכות זמינה לקליטה — ספר זכות נפרד מהחוב השבועי.
+ * לא מקזזת ולא מוסתרת כשיש הזמנות לגבייה. קיזוז רק אחרי אישור מפורש.
  */
 export function availableCreditForWeekScopedPayable(params: {
   weekScopedDebtUsd: number;
   ssotAvailableCreditUsd: number;
 }): number {
-  const weekDebt = roundOrderMoney2(Math.max(0, params.weekScopedDebtUsd));
-  const ssotCredit = roundOrderMoney2(Math.max(0, params.ssotAvailableCreditUsd));
-  if (weekDebt > 0.01) return 0;
-  return ssotCredit;
+  void params.weekScopedDebtUsd;
+  return roundOrderMoney2(Math.max(0, params.ssotAvailableCreditUsd));
 }
 
 export type PaymentPreviewFinancialState = {
@@ -91,6 +88,8 @@ export type PaymentIntakePreview = {
   debtBefore: number;
   selectedOrdersRemaining: number;
   existingCredit: number;
+  /** קיזוז שאושר בטופס — 0 אם המשתמש לא לחץ «השתמש ביתרת זכות». */
+  pendingCreditApplyUsd: number;
   draftPaymentTotal: number;
   /** חתום: חיובי=חוב נשאר, 0=אין יתרה, שלילי=יתרת זכות (preview בלבד) */
   signedRemainingUsd: number;
@@ -176,16 +175,21 @@ export function remainingToPayCardDisplayFromOverpayment(
   );
 }
 
-/** Preview only — min(SSOT credit, eligible remaining). 0 when unused or nothing to cover. */
+/** Preview only — min(credit, eligible, optional max). 0 when unused or nothing to cover. */
 export function computePendingCreditApplyUsd(input: {
   availableCreditUsd: number;
   eligibleAmountToPayUsd: number;
   useExistingCredit: boolean;
+  maxApplyUsd?: number;
 }): number {
   if (!input.useExistingCredit) return 0;
   const credit = money2(Math.max(0, input.availableCreditUsd));
   const eligible = money2(Math.max(0, input.eligibleAmountToPayUsd));
-  return money2(Math.min(credit, eligible));
+  const capped =
+    input.maxApplyUsd != null
+      ? money2(Math.min(credit, Math.max(0, input.maxApplyUsd)))
+      : credit;
+  return money2(Math.min(capped, eligible));
 }
 
 /**
@@ -228,24 +232,26 @@ export function buildPaymentPreview(input: {
     ssotLoaded,
     hasEligibleOrderSet,
   });
-  const books = normalizeExclusiveCustomerBooks({
-    openDebtUsd: rawDebt,
-    availableCreditUsd: input.financialState.availableCreditUsd,
+  const debtBefore = money2(Math.max(0, rawDebt));
+  const existingCredit = money2(Math.max(0, input.financialState.availableCreditUsd));
+  const pendingCredit = computePendingCreditApplyUsd({
+    availableCreditUsd: existingCredit,
+    eligibleAmountToPayUsd: debtBefore,
+    useExistingCredit: Boolean(input.useExistingCredit),
   });
-  const debtBefore = books.openDebtUsd;
-  const existingCredit = books.availableCreditUsd;
-  const collectible = debtBefore;
+  const collectible = money2(Math.max(0, debtBefore - pendingCredit));
   const split = splitSignedPaymentRemaining(collectible - draftPaymentTotal);
   const signedRemainingUsd = split.signedRemainingUsd;
   const remainingDebt = split.remainingDebtUsd;
   const leftoverDraft = split.overpaymentUsd;
   const projectedOverpayment = leftoverDraft;
-  const projectedCredit = money2(existingCredit + leftoverDraft);
+  const projectedCredit = money2(existingCredit - pendingCredit + leftoverDraft);
 
   return {
     debtBefore,
     selectedOrdersRemaining,
     existingCredit,
+    pendingCreditApplyUsd: pendingCredit,
     draftPaymentTotal,
     signedRemainingUsd,
     remainingDebt,

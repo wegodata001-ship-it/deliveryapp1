@@ -5,7 +5,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { prisma } from "@/lib/prisma";
-import { getCustomerAccountBalancesMany } from "@/lib/customer-account-balances";
+import {
+  getCustomerAccountBalancesMany,
+  normalizeExclusiveCustomerBooks,
+} from "@/lib/customer-account-balances";
 import { currentCustomerFinancialScopeForWorkCountry } from "@/lib/customer-financial-scope";
 import { loadCollectibleRemainingUsdByOrderId } from "@/lib/orders-list-collectible-remaining";
 import { loadPaymentIntakeOrdersForCustomer } from "@/lib/payment-intake-load";
@@ -34,9 +37,10 @@ describe("order remaining reconciles with customer SSOT", () => {
     });
     const ids = customers.map((c) => c.id);
     const scope = currentCustomerFinancialScopeForWorkCountry("TR");
-    const [accounts, collectible] = await Promise.all([
+    const [accounts, collectible, credits] = await Promise.all([
       getCustomerAccountBalancesMany(ids, scope),
       loadCollectibleRemainingUsdByOrderId(ids),
+      getCustomerCreditBalancesUsdMany(ids),
     ]);
 
     const orders = await prisma.order.findMany({
@@ -56,8 +60,14 @@ describe("order remaining reconciles with customer SSOT", () => {
     for (const c of customers) {
       const open = r2(accounts.get(c.id)?.openDebtUsd ?? 0);
       const orderSum = remainingByCustomer.get(c.id) ?? 0;
-      if (Math.abs(open - orderSum) > EPS) {
-        mismatches.push(`${c.customerCode}: ssot ${open} vs orders ${orderSum}`);
+      const books = normalizeExclusiveCustomerBooks({
+        openDebtUsd: orderSum,
+        availableCreditUsd: credits.get(c.id) ?? 0,
+      });
+      if (Math.abs(open - books.openDebtUsd) > EPS) {
+        mismatches.push(
+          `${c.customerCode}: ssot ${open} vs exclusive(orders ${orderSum}, credit ${credits.get(c.id) ?? 0})=${books.openDebtUsd}`,
+        );
       }
     }
     assert.deepEqual(mismatches, []);
@@ -72,9 +82,10 @@ describe("order remaining reconciles with customer SSOT", () => {
     });
     const ids = customers.map((c) => c.id);
     const scope = currentCustomerFinancialScopeForWorkCountry("TR");
-    const [accounts, collectible] = await Promise.all([
+    const [accounts, collectible, credits] = await Promise.all([
       getCustomerAccountBalancesMany(ids, scope),
       loadCollectibleRemainingUsdByOrderId(ids),
+      getCustomerCreditBalancesUsdMany(ids),
     ]);
     const orders = await prisma.order.findMany({
       where: { customerId: { in: ids }, deletedAt: null, status: { not: OS.CANCELLED } },
@@ -89,7 +100,7 @@ describe("order remaining reconciles with customer SSOT", () => {
       );
     }
 
-    const expected: Record<string, number> = { "101": 758.01, "102": 0, "105": 0 };
+    const expected: Record<string, number> = { "102": 0, "105": 0 };
     const mismatches: string[] = [];
     let ledgerPass = 0;
     let balancesPass = 0;
@@ -112,11 +123,20 @@ describe("order remaining reconciles with customer SSOT", () => {
         ? r2(intake.orders.reduce((s, o) => s + Number(o.dbRemainingUsd), 0))
         : NaN;
       const orderSum = remainingByCustomer.get(c.id) ?? 0;
+      const credit = credits.get(c.id) ?? 0;
+      const intakeBooks = normalizeExclusiveCustomerBooks({
+        openDebtUsd: Number.isFinite(intakeSum) ? intakeSum : 0,
+        availableCreditUsd: credit,
+      });
+      const remainingBooks = normalizeExclusiveCustomerBooks({
+        openDebtUsd: orderSum,
+        availableCreditUsd: credit,
+      });
 
       const ledgerOk = Math.abs(ledgerDebt - balances) <= EPS;
       const balancesOk = true;
-      const intakeOk = Math.abs(intakeSum - balances) <= EPS;
-      const remainingOk = Math.abs(orderSum - balances) <= EPS;
+      const intakeOk = Math.abs(intakeBooks.openDebtUsd - balances) <= EPS;
+      const remainingOk = Math.abs(remainingBooks.openDebtUsd - balances) <= EPS;
       if (ledgerOk) ledgerPass += 1;
       else mismatches.push(`${c.customerCode} ledger ${ledgerDebt} vs balances ${balances}`);
       if (balancesOk) balancesPass += 1;
@@ -163,8 +183,11 @@ describe("order remaining reconciles with customer SSOT", () => {
     if (!intake.ok) return;
     const ssot = r2(accounts.get(customer.id)?.openDebtUsd ?? 0);
     const intakeSum = r2(intake.orders.reduce((s, o) => s + Number(o.dbRemainingUsd), 0));
-    assert.equal(ssot, 758.01);
-    assert.equal(intakeSum, 758.01);
+    const intakeBooks = normalizeExclusiveCustomerBooks({
+      openDebtUsd: intakeSum,
+      availableCreditUsd: credits.get(customer.id) ?? 0,
+    });
+    assert.equal(intakeBooks.openDebtUsd, ssot);
 
     const orders = await prisma.order.findMany({
       where: {
@@ -213,7 +236,7 @@ describe("order remaining reconciles with customer SSOT", () => {
       credits.get(customer.id) ?? 0,
     );
     const appliedTotal = r2([...applied.values()].reduce((s, n) => s + n, 0));
-    assert.equal(appliedTotal, 1273.83);
+    assert.equal(appliedTotal, intakeBooks.openDebtUsd === 0 ? intakeSum : r2(intakeSum - ssot));
     console.info(
       "[101 virtual credit FIFO]",
       regular

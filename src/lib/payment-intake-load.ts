@@ -615,13 +615,15 @@ export async function loadPaymentIntakeBalancesForCustomer(
   const calcScope = toCustomerBalanceCalcScope(financial);
 
   const currentScope = currentCustomerFinancialScope(financial.sourceCountry);
-  const [accounts, debt, ordersRes, currentAccountsMaybe] = await Promise.all([
+  const { getCustomerCreditBalanceUsd } = await import("@/lib/customer-credit-balance");
+  const [accounts, debt, ordersRes, currentAccountsMaybe, grossCreditUsd] = await Promise.all([
     getCustomerAccountBalances(cid, financial),
     getCustomerOpenDebt(cid, calcScope),
     loadPaymentIntakeOrdersForCustomer(params),
     financial.kind === "CURRENT"
       ? Promise.resolve(null)
       : getCustomerAccountBalances(cid, currentScope),
+    getCustomerCreditBalanceUsd(cid, calcScope),
   ]);
   const currentAccounts = currentAccountsMaybe ?? accounts;
   const weekScopedRemainingUsd = ordersRes.ok
@@ -629,7 +631,7 @@ export async function loadPaymentIntakeBalancesForCustomer(
     : 0;
   const weekScopedCreditUsd = availableCreditForWeekScopedPayable({
     weekScopedDebtUsd: weekScopedRemainingUsd,
-    ssotAvailableCreditUsd: accounts.availableCreditUsd,
+    ssotAvailableCreditUsd: grossCreditUsd,
   });
   const state = financialStateFromAccounts({
     ...accounts,
