@@ -12,6 +12,8 @@ import {
   listDocumentsAction,
   type DocumentDto,
 } from "@/app/admin/documents/actions";
+import { DocumentCaptureModal } from "@/components/admin/DocumentCaptureModal";
+import { DocumentViewerModal } from "@/components/admin/DocumentViewerModal";
 
 function KindIcon({ kind }: { kind: DocumentDto["kind"] }) {
   if (kind === "image") return <ImageIcon size={16} aria-hidden />;
@@ -58,6 +60,8 @@ export function DocumentsPanel({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [docType, setDocType] = useState<string>("");
+  const [captureOpen, setCaptureOpen] = useState(false);
+  const [active, setActive] = useState<DocumentDto | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [resolvedPerms, setResolvedPerms] = useState<{
     canView: boolean;
@@ -172,10 +176,10 @@ export function DocumentsPanel({
             <button
               type="button"
               className="adm-docs__btn adm-docs__btn--primary"
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => setCaptureOpen(true)}
               disabled={busy || !entityId}
             >
-              <Upload size={14} aria-hidden /> {busy ? "מעלה…" : "העלה מסמכים"}
+              <Upload size={14} aria-hidden /> {busy ? "מעלה…" : "הוספת מסמך"}
             </button>
           </div>
         ) : null}
@@ -190,7 +194,7 @@ export function DocumentsPanel({
       ) : (
         <div className="adm-docs__list">
           {docs.map((d) => (
-            <div className="adm-docs__row" key={d.id}>
+            <div className="adm-docs__row" key={d.id} onClick={() => setActive(d)}>
               <span className={`adm-docs__kind adm-docs__kind--${d.kind}`}>
                 <KindIcon kind={d.kind} />
               </span>
@@ -222,7 +226,10 @@ export function DocumentsPanel({
                   <button
                     type="button"
                     className="adm-docs__iconbtn adm-docs__iconbtn--danger"
-                    onClick={() => void onDelete(d.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void onDelete(d.id);
+                    }}
                     disabled={busy}
                     title="מחיקה"
                   >
@@ -234,6 +241,24 @@ export function DocumentsPanel({
           ))}
         </div>
       )}
+      <DocumentCaptureModal
+        open={captureOpen}
+        entityType={entityType}
+        entityId={entityId}
+        defaultDocType={docType}
+        disabled={busy}
+        onClose={() => setCaptureOpen(false)}
+        onUploaded={(created) => setDocs((cur) => [...created, ...cur])}
+      />
+      <DocumentViewerModal
+        doc={active}
+        canDownload={canDownload}
+        canDelete={canDelete}
+        canEdit={canUpload}
+        onClose={() => setActive(null)}
+        onChanged={(next) => setDocs((cur) => cur.map((d) => (d.id === next.id ? next : d)))}
+        onDeleted={(id) => setDocs((cur) => cur.filter((d) => d.id !== id))}
+      />
     </section>
   );
 }

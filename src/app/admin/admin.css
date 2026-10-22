@@ -36927,6 +36927,298 @@ button.adm-cash-kpi:hover {
   font-size: 11px;
 }
 
+.adm-docarc__head-actions {
+  display: flex;
+  gap: 8px;
+  margin-inline-start: auto;
+}
+.adm-docarc__kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.adm-docarc__kpi {
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.adm-docarc__kpi span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+}
+.adm-docarc__kpi strong {
+  font-size: 22px;
+  font-weight: 800;
+  color: #0f172a;
+}
+.adm-docarc__cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+.adm-docarc__card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px;
+  text-align: start;
+  cursor: pointer;
+}
+.adm-docarc__thumb {
+  height: 120px;
+  border-radius: 8px;
+  background: #f1f5f9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  color: #64748b;
+}
+.adm-docarc__thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.adm-docarc__card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.adm-docarc__card-body strong {
+  font-size: 13px;
+  color: #0f172a;
+}
+.adm-docarc__card-body em,
+.adm-docarc__card-body small {
+  font-style: normal;
+  color: #64748b;
+  font-size: 12px;
+}
+.adm-docarc__pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+.adm-docs__row--btn {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: start;
+  cursor: pointer;
+}
+.adm-doccap,
+.adm-docview {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+}
+.adm-doccap__backdrop,
+.adm-docview__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+}
+.adm-doccap__panel,
+.adm-docview__panel {
+  position: relative;
+  margin: 6vh auto 0;
+  width: min(720px, 94vw);
+  max-height: 88vh;
+  overflow: auto;
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.22);
+  padding: 16px 18px 18px;
+}
+.adm-docview__panel {
+  width: min(1100px, 96vw);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  grid-template-rows: auto 1fr;
+}
+.adm-doccap__head,
+.adm-docview__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.adm-docview__head {
+  grid-column: 1 / -1;
+}
+.adm-doccap__head h2,
+.adm-docview__head h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+}
+.adm-doccap__type,
+.adm-doccap__crop,
+.adm-docview__edit label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+  margin-bottom: 10px;
+}
+.adm-doccap__type select,
+.adm-docview__edit input,
+.adm-docview__edit select {
+  height: 36px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 0 10px;
+}
+.adm-doccap__choices {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.adm-doccap__choice {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 18px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.adm-doccap__choice strong {
+  font-size: 15px;
+}
+.adm-doccap__choice span {
+  color: #64748b;
+  font-size: 12px;
+}
+.adm-doccap__video,
+.adm-doccap__preview,
+.adm-docview__img,
+.adm-docview__frame {
+  width: 100%;
+  max-height: 52vh;
+  object-fit: contain;
+  background: #0f172a;
+  border-radius: 10px;
+}
+.adm-docview__frame {
+  min-height: 52vh;
+  border: 0;
+}
+.adm-doccap__preview-wrap {
+  overflow: hidden;
+  border-radius: 10px;
+  background: #0f172a;
+}
+.adm-doccap__actions,
+.adm-doccap__edit,
+.adm-docview__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.adm-doccap__filelist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.adm-doccap__filelist li {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.adm-doccap__filelist strong {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.adm-doccap__progress {
+  position: relative;
+  height: 22px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+.adm-doccap__progress span {
+  display: block;
+  height: 100%;
+  background: #2563eb;
+}
+.adm-doccap__progress em {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-style: normal;
+  color: #0f172a;
+}
+.adm-docview__stage {
+  min-height: 52vh;
+  padding-inline-end: 12px;
+}
+.adm-docview__meta {
+  border-inline-start: 1px solid #e2e8f0;
+  padding-inline-start: 12px;
+}
+.adm-docview__meta dl {
+  margin: 0 0 12px;
+}
+.adm-docview__meta dt {
+  color: #64748b;
+  font-size: 11px;
+}
+.adm-docview__meta dd {
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+.payment-detail-doc {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+@media (max-width: 780px) {
+  .adm-docarc__kpis,
+  .adm-doccap__choices,
+  .adm-docview__panel {
+    grid-template-columns: 1fr;
+  }
+  .adm-docview__meta {
+    border-inline-start: 0;
+    border-top: 1px solid #e2e8f0;
+    padding-inline-start: 0;
+    padding-top: 12px;
+  }
+}
+
 /* ===================================================== */
 /* שדרוג חלון פירוט קופה — XL + KPI + תגי אמצעי + Drawer   */
 /* ===================================================== */

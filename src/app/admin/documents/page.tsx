@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { isAdminUser, userHasAnyPermission } from "@/lib/admin-auth";
 import { requireRoutePermission } from "@/lib/route-access";
 import { DocumentsArchiveClient } from "@/components/admin/DocumentsArchiveClient";
@@ -9,5 +10,10 @@ export default async function DocumentsArchivePage() {
   const admin = isAdminUser(me);
   const canDelete = admin || userHasAnyPermission(me, ["documents.delete"]);
   const canDownload = admin || userHasAnyPermission(me, ["documents.download", "documents.view"]);
-  return <DocumentsArchiveClient canDelete={canDelete} canDownload={canDownload} />;
+  const canUpload = admin || userHasAnyPermission(me, ["documents.upload"]);
+  return (
+    <Suspense fallback={<p className="adm-win-meta">טוען ארכיון מסמכים…</p>}>
+      <DocumentsArchiveClient canDelete={canDelete} canDownload={canDownload} canUpload={canUpload} />
+    </Suspense>
+  );
 }

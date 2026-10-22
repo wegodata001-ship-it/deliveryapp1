@@ -6,7 +6,9 @@ import {
   getPaymentDetailViewAction,
   type PaymentDetailViewPayload,
 } from "@/app/admin/cash-control/actions";
+import { listDocumentsAction, type DocumentDto } from "@/app/admin/documents/actions";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
+import { DocumentViewerModal } from "@/components/admin/DocumentViewerModal";
 
 function fmtDateShort(ymd: string): string {
   if (!ymd || ymd === "—") return "—";
@@ -31,6 +33,8 @@ export function PaymentDetailViewModal({
   const [payload, setPayload] = useState<PaymentDetailViewPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [docs, setDocs] = useState<DocumentDto[]>([]);
+  const [activeDoc, setActiveDoc] = useState<DocumentDto | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -43,6 +47,9 @@ export function PaymentDetailViewModal({
         setPayload(null);
       } else {
         setPayload(data);
+        void listDocumentsAction({ entityType: "PAYMENT", entityId: paymentId }).then((res) => {
+          if (!cancelled && res.ok) setDocs(res.documents);
+        });
       }
       setLoading(false);
     });
@@ -200,20 +207,23 @@ export function PaymentDetailViewModal({
                 ) : null}
               </div>
 
-              {payload.documents.length > 0 ? (
+              {(docs.length > 0 || payload.documents.length > 0) ? (
                 <div className="payment-detail-docs">
                   <span className="payment-detail-meta__lbl">מסמכים מצורפים</span>
                   <div className="payment-detail-docs__list">
-                    {payload.documents.map((d) => (
-                      <a
+                    {(docs.length > 0 ? docs : payload.documents).map((d) => (
+                      <button
                         key={d.id}
+                        type="button"
                         className="payment-detail-doc"
-                        href={`/api/documents/${d.id}/download`}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                        onClick={() => {
+                          const full = docs.find((x) => x.id === d.id);
+                          if (full) setActiveDoc(full);
+                          else window.open(`/api/documents/${d.id}/download`, "_blank", "noopener,noreferrer");
+                        }}
                       >
                         <FileText size={14} aria-hidden /> {d.fileName}
-                      </a>
+                      </button>
                     ))}
                   </div>
                 </div>
@@ -267,6 +277,13 @@ export function PaymentDetailViewModal({
           </button>
         </div>
       </div>
+      <DocumentViewerModal
+        doc={activeDoc}
+        canDownload
+        canDelete={false}
+        canEdit={false}
+        onClose={() => setActiveDoc(null)}
+      />
     </div>
   );
 }

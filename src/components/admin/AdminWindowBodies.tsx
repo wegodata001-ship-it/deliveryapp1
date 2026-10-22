@@ -68,6 +68,7 @@ import { ledgerRowMatchesManualPick, type ManualLedgerPickKind } from "@/lib/cus
 import { hasLedgerRowDetail } from "@/lib/ledger-row-detail";
 import { LedgerRowDetailModal } from "@/components/admin/LedgerRowDetailModal";
 import { CustomerLedgerErrorBoundary } from "@/components/admin/CustomerLedgerErrorBoundary";
+import { CustomerLinkedDocuments } from "@/components/admin/CustomerLinkedDocuments";
 import { formatLocalYmd } from "@/lib/work-week";
 import {
   customerCardBalancesCutoffCaption,
@@ -1080,6 +1081,7 @@ export function CustomerCardWindowBody({
               </div>
             </div>
             )}
+            {customerId ? <CustomerLinkedDocuments customerId={customerId} /> : null}
           </section>
         ) : null}
 
