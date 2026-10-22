@@ -7,6 +7,7 @@ import { readMultiParam, setMultiParam } from "@/lib/orders-list-filter-params";
 import { OS } from "@/lib/order-status-slugs";
 import {
   getAhWeekRange,
+  isCustomOrdersDateRange,
   normalizeAhWeekCode,
 } from "@/lib/work-week";
 import { resolveOrdersListCustomerQuery } from "@/app/admin/orders/orders-list-where";
@@ -82,7 +83,11 @@ export function parseOrderFiltersFromSearchParams(
   defaults: { week: string; dateFrom: string; dateTo: string },
 ): OrderFilters {
   const weekRaw = readTextParam(sp, "ordersWeek");
-  const week = (normalizeAhWeekCode(weekRaw) ?? weekRaw) || defaults.week;
+  const dateFrom = readTextParam(sp, "ordersFrom") || readTextParam(sp, "from") || defaults.dateFrom;
+  const dateTo = readTextParam(sp, "ordersTo") || readTextParam(sp, "to") || defaults.dateTo;
+  const week = isCustomOrdersDateRange(weekRaw, dateFrom, dateTo)
+    ? ""
+    : (normalizeAhWeekCode(weekRaw) ?? weekRaw) || defaults.week;
 
   const completedRaw = readTextParam(sp, "ordersCompleted");
   const ordersCompleted: OrdersCompletedFilter =
@@ -90,8 +95,8 @@ export function parseOrderFiltersFromSearchParams(
 
   return {
     week,
-    dateFrom: readTextParam(sp, "ordersFrom") || defaults.dateFrom,
-    dateTo: readTextParam(sp, "ordersTo") || defaults.dateTo,
+    dateFrom,
+    dateTo,
     search: resolveOrdersListCustomerQuery(sp),
     country: readMultiParam(sp, "ordersCountry"),
     paymentMethod: readMultiParam(sp, "paymentType"),
@@ -129,20 +134,31 @@ export function buildOrdersListSearchParams(
   for (const k of ORDERS_FILTER_URL_KEYS) base.delete(k);
 
   const week = filters.week.trim();
-  if (week && getAhWeekRange(week)) {
-    const r = getAhWeekRange(week)!;
-    const fromYmd = (filters.dateFrom.trim() || r.from).slice(0, 10);
-    const toYmd = (filters.dateTo.trim() || r.to).slice(0, 10);
+  const dateFrom = filters.dateFrom.trim();
+  const dateTo = filters.dateTo.trim();
+  const weekRange = week ? getAhWeekRange(week) : null;
+  const dateRangeMode = isCustomOrdersDateRange(week, dateFrom, dateTo);
+
+  if (weekRange && !dateRangeMode) {
+    const fromYmd = (dateFrom || weekRange.from).slice(0, 10);
+    const toYmd = (dateTo || weekRange.to).slice(0, 10);
     base.set("ordersWeek", week);
     base.set("ordersFrom", fromYmd);
     base.set("ordersTo", toYmd);
-    // שבוע גלובלי = אותו שבוע שנבחר ברשימת הזמנות (SSOT URL)
     base.set("week", week);
     base.set("from", fromYmd);
     base.set("to", toYmd);
-  } else {
-    if (filters.dateFrom.trim()) base.set("ordersFrom", filters.dateFrom.trim());
-    if (filters.dateTo.trim()) base.set("ordersTo", filters.dateTo.trim());
+  } else if (dateFrom || dateTo) {
+    if (dateFrom) {
+      base.set("ordersFrom", dateFrom);
+      base.set("from", dateFrom);
+    }
+    if (dateTo) {
+      base.set("ordersTo", dateTo);
+      base.set("to", dateTo);
+    }
+    base.delete("ordersWeek");
+    base.set("ordersPreset", "range");
   }
 
   if (filters.search.trim()) base.set("ordersCustomer", filters.search.trim());
@@ -181,11 +197,41 @@ export function buildOrdersListSearchParams(
 
 export function clearOrdersFiltersSearchParams(existing: URLSearchParams): URLSearchParams {
   const base = new URLSearchParams();
-  for (const k of GLOBAL_PRESERVE_KEYS) {
-    const v = existing.get(k);
-    if (v) base.set(k, v);
+  const country = existing.get("country");
+  if (country) base.set("country", country);
+
+  const weekRaw = existing.get("ordersWeek") || existing.get("week") || "";
+  const week = normalizeAhWeekCode(weekRaw) ?? weekRaw;
+  const from = existing.get("ordersFrom") || existing.get("from") || "";
+  const to = existing.get("ordersTo") || existing.get("to") || "";
+  const customRange = isCustomOrdersDateRange(weekRaw, from, to);
+  const range = week ? getAhWeekRange(week) : null;
+
+  if (range && !customRange) {
+    for (const k of WEEK_PRESERVE_KEYS) {
+      const v = existing.get(k);
+      if (v) base.set(k, v);
+    }
+    for (const k of GLOBAL_PRESERVE_KEYS) {
+      if (k === "country") continue;
+      const v = existing.get(k);
+      if (v) base.set(k, v);
+    }
+    return base;
   }
-  for (const k of WEEK_PRESERVE_KEYS) {
+
+  if (range) {
+    base.set("ordersWeek", week);
+    base.set("ordersFrom", range.from);
+    base.set("ordersTo", range.to);
+    base.set("week", week);
+    base.set("from", range.from);
+    base.set("to", range.to);
+    return base;
+  }
+
+  for (const k of GLOBAL_PRESERVE_KEYS) {
+    if (k === "country") continue;
     const v = existing.get(k);
     if (v) base.set(k, v);
   }

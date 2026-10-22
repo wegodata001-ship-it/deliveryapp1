@@ -7,7 +7,11 @@ import {
   parseOrdersKpiFilters,
   type OrdersKpiFilterKey,
 } from "@/lib/orders-status-kpi-filter";
-import { normalizeAhWeekCode, parseOrdersListDateFilterFromSearchParams } from "@/lib/work-week";
+import {
+  isCustomOrdersDateRange,
+  normalizeAhWeekCode,
+  parseOrdersListDateFilterFromSearchParams,
+} from "@/lib/work-week";
 
 /** OR בין ריבועי KPI. בוצע ≠ הושלם; שניהם יחד = איחוד מפורש. */
 export function buildOrdersKpiWhere(keys: OrdersKpiFilterKey[]): Prisma.OrderWhereInput | undefined {
@@ -228,9 +232,11 @@ export function buildOrdersListWhereFromSearchParams(
     };
   }
 
-  const weekScope: Prisma.OrderWhereInput = ordersWeekCode
-    ? { weekCode: ordersWeekCode }
-    : { orderDate: { gte: range.fromStart, lte: range.toEnd } };
+  const dateRangeMode = isCustomOrdersDateRange(ordersWeekCode, range.fromYmd, range.toYmd);
+  const weekScope: Prisma.OrderWhereInput =
+    ordersWeekCode && !dateRangeMode
+      ? { weekCode: ordersWeekCode }
+      : { orderDate: { gte: range.fromStart, lte: range.toEnd } };
 
   const base: Prisma.OrderWhereInput = {
     deletedAt: null,

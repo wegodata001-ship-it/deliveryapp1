@@ -331,6 +331,7 @@ export function OrdersListShell({
   const [refreshLoading, setRefreshLoading] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const recentLocalStatusRef = useRef(new Map<string, { status: string; isCompleted: boolean; at: number }>());
+  const refreshGenRef = useRef(0);
   const [listErr, setListErr] = useState<string | null>(loadError);
   const [lockModal, setLockModal] = useState<OrderEditLockGatePayload | null>(null);
   const [orderCommissionDetail, setOrderCommissionDetail] = useState<{
@@ -511,15 +512,29 @@ export function OrdersListShell({
       const curById = new Map(cur.map((r) => [r.id, r]));
       return orders.map((o) => {
         const local = pending.get(o.id);
-        if (local && Date.now() - local.at < 15_000 && o.status !== local.status) {
+        if (local && Date.now() - local.at < 15_000 && (o.status !== local.status || o.isCompleted !== local.isCompleted)) {
           const prev = curById.get(o.id);
           return prev ? { ...prev, ...o, status: local.status, isCompleted: local.isCompleted } : { ...o, status: local.status, isCompleted: local.isCompleted };
         }
-        if (local && o.status === local.status) pending.delete(o.id);
+        if (local && o.status === local.status && o.isCompleted === local.isCompleted) pending.delete(o.id);
         return o;
       });
     });
-    setStatusSummaryLive(statusSummary);
+    let nextSummary = statusSummary;
+    for (const o of orders) {
+      const local = pending.get(o.id);
+      if (!local || Date.now() - local.at >= 15_000) continue;
+      if (o.status !== local.status || o.isCompleted !== local.isCompleted) {
+        const usd = parseNumeric(o.totalAmountUsd) ?? 0;
+        nextSummary = adjustStatusSummaryForStatusChange(nextSummary, o.status, local.status, usd);
+        nextSummary = adjustOperationalCompletedSummary(nextSummary, {
+          wasCompleted: o.isCompleted,
+          nextCompleted: local.isCompleted,
+          totalUsd: usd,
+        });
+      }
+    }
+    setStatusSummaryLive(nextSummary);
     setPaginationLive(pagination);
     setResultSummaryLive(resultSummary);
     setFilterOptionsLive({
@@ -567,14 +582,47 @@ export function OrdersListShell({
     window.setTimeout(() => setToastMsg(null), 3800);
   }, []);
 
-  const refreshList = useCallback(async () => {
-    if (refreshLoading) return;
-    setRefreshLoading(true);
-    setListErr(null);
+  const refreshList = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = Boolean(opts?.silent);
+    if (!silent && refreshLoading) return;
+    const gen = ++refreshGenRef.current;
+    if (!silent) {
+      setRefreshLoading(true);
+      setListErr(null);
+    }
     try {
       const data = await refreshOrdersListAction(readExportSearchParams());
-      setRows(data.orders);
-      setStatusSummaryLive(data.statusSummary);
+      if (gen !== refreshGenRef.current) return;
+      const pending = recentLocalStatusRef.current;
+      setRows((cur) => {
+        const curById = new Map(cur.map((r) => [r.id, r]));
+        return data.orders.map((o) => {
+          const local = pending.get(o.id);
+          if (local && Date.now() - local.at < 15_000 && (o.status !== local.status || o.isCompleted !== local.isCompleted)) {
+            const prev = curById.get(o.id);
+            return prev
+              ? { ...prev, ...o, status: local.status, isCompleted: local.isCompleted }
+              : { ...o, status: local.status, isCompleted: local.isCompleted };
+          }
+          if (local && o.status === local.status && o.isCompleted === local.isCompleted) pending.delete(o.id);
+          return o;
+        });
+      });
+      let nextSummary = data.statusSummary;
+      for (const o of data.orders) {
+        const local = pending.get(o.id);
+        if (!local || Date.now() - local.at >= 15_000) continue;
+        if (o.status !== local.status || o.isCompleted !== local.isCompleted) {
+          const usd = parseNumeric(o.totalAmountUsd) ?? 0;
+          nextSummary = adjustStatusSummaryForStatusChange(nextSummary, o.status, local.status, usd);
+          nextSummary = adjustOperationalCompletedSummary(nextSummary, {
+            wasCompleted: o.isCompleted,
+            nextCompleted: local.isCompleted,
+            totalUsd: usd,
+          });
+        }
+      }
+      setStatusSummaryLive(nextSummary);
       setPaginationLive(data.pagination);
       setResultSummaryLive(data.resultSummary);
       setFilterOptionsLive({
@@ -582,13 +630,18 @@ export function OrdersListShell({
         countryFilterOptions: data.countryFilterOptions,
         paymentLocationOptions: data.paymentLocationOptions,
       });
-      showToast("הנתונים עודכנו");
+      if (!silent) showToast("הנתונים עודכנו");
     } catch {
-      setListErr("שגיאה ברענון הרשימה");
+      if (gen !== refreshGenRef.current) return;
+      if (!silent) setListErr("שגיאה ברענון הרשימה");
     } finally {
-      setRefreshLoading(false);
+      if (gen === refreshGenRef.current && !silent) setRefreshLoading(false);
     }
   }, [refreshLoading, readExportSearchParams, showToast]);
+
+  useEffect(() => {
+    refreshGenRef.current += 1;
+  }, [searchParams]);
 
   useEffect(() => {
     const onOrdersRefresh = () => {
@@ -649,6 +702,7 @@ export function OrdersListShell({
     if (!prevRow || prevRow.status === next) return;
     let prevSnapshot: OrderListRow[] = [];
     const nextIsCompleted = next === OS.COMPLETED ? prevRow.isCompleted : false;
+    setBusyId(orderId);
     recentLocalStatusRef.current.set(orderId, { status: next, isCompleted: nextIsCompleted, at: Date.now() });
     const uiT0 = now();
     setRows((cur) => {
@@ -681,6 +735,7 @@ export function OrdersListShell({
       .then(async (r) => ((await r.json().catch(() => null)) as { ok: boolean; error?: string; debtWithdrawalUsd?: number }) ?? { ok: false, error: "שגיאה" })
       .catch(() => ({ ok: false, error: "שגיאה בשמירה" }));
     statusUpdateDbMs += now() - dbT0;
+    setBusyId(null);
     if (!res.ok) {
       recentLocalStatusRef.current.delete(orderId);
       const uiRollbackT0 = now();
@@ -733,7 +788,8 @@ export function OrdersListShell({
         totalMs,
       });
     }
-  }, [rows]);
+    void refreshList({ silent: true });
+  }, [refreshList, rows]);
 
   const onRowCompletedChange = useCallback(
     async (orderId: string, next: boolean) => {
@@ -746,6 +802,7 @@ export function OrdersListShell({
       setListErr(null);
       const prevSnapshot = rows;
       const rowTotalUsd = parseNumeric(row.totalAmountUsd) ?? 0;
+      recentLocalStatusRef.current.set(orderId, { status: row.status, isCompleted: next, at: Date.now() });
       setRows((cur) =>
         cur
           .map((r) => (r.id === orderId ? { ...r, isCompleted: next } : r))
@@ -766,6 +823,7 @@ export function OrdersListShell({
       const res = await updateOrderCompletedFlagAction(orderId, next);
       setBusyId(null);
       if (!res.ok) {
+        recentLocalStatusRef.current.delete(orderId);
         setRows(prevSnapshot);
         setStatusSummaryLive((summary) =>
           adjustOperationalCompletedSummary(summary, {
@@ -777,9 +835,10 @@ export function OrdersListShell({
         setListErr(res.error);
       } else {
         showToast(next ? "ההזמנה סומנה כהושלמה" : "סימון הושלם בוטל");
+        void refreshList({ silent: true });
       }
     },
-    [rows, completedFilter, showToast],
+    [rows, completedFilter, refreshList, showToast],
   );
 
   const onRowPaymentMethodChange = useCallback(

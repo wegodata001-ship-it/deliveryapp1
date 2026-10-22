@@ -15,6 +15,7 @@ import {
 } from "@/lib/balances-week-filter";
 import {
   ORDERS_WEEK_PARAM,
+  isCustomOrdersDateRange,
   ordersWeekRangePatch,
   shouldResyncOrdersLocalWeek,
 } from "@/lib/orders-week-filter";
@@ -54,10 +55,16 @@ export function useEnsureActiveWorkWeekOnEnter(scope: WorkWeekScreenScope): void
 
     if (scope === "orders") {
       const cur = normalizeAhWeekCode(ordersWeekRaw) ?? "";
+      const dateFrom = current.get("ordersFrom") || current.get("from") || "";
+      const dateTo = current.get("ordersTo") || current.get("to") || "";
+      const customRange =
+        current.get("ordersPreset") === "range" ||
+        isCustomOrdersDateRange(ordersWeekRaw, dateFrom, dateTo);
       const action = shouldResyncOrdersLocalWeek({
         currentOrdersWeek: cur,
         globalWorkWeek,
         previousGlobalWorkWeek: lastGlobalWeekRef.current,
+        hasCustomDateRange: customRange,
       });
       lastGlobalWeekRef.current = globalWorkWeek;
       if (action === "skip") return;

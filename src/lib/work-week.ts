@@ -86,6 +86,26 @@ export function getAhWeekCodeFromDateRange(
   return getAhWeekCodeFromDateRangeCore(fromYmd, toYmd);
 }
 
+/**
+ * מצב סינון לפי טווח תאריכים (לא שבוע AH).
+ * טווח שתואם בדיוק שבוע AH נשאר במצב שבוע; אחרת התאריכים גוברים על week=.
+ */
+export function isCustomOrdersDateRange(
+  ordersWeek: string | null | undefined,
+  ordersFrom: string | null | undefined,
+  ordersTo: string | null | undefined,
+): boolean {
+  const from = (ordersFrom ?? "").trim();
+  const to = (ordersTo ?? "").trim();
+  if (!isValidYmd(from) || !isValidYmd(to)) return false;
+  if (getAhWeekCodeFromDateRange(from, to)) return false;
+  const week = normalizeAhWeekCode(ordersWeek) ?? (ordersWeek ?? "").trim();
+  if (!week) return true;
+  const range = getAhWeekRange(week);
+  if (!range) return true;
+  return from !== range.from || to !== range.to;
+}
+
 export function formatLocalYmd(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -268,7 +288,23 @@ export function parseOrdersListDateFilterFromSearchParams(
   const ow = readSpStr(raw, "ordersWeek");
   const ofrom = readSpStr(raw, "ordersFrom");
   const oto = readSpStr(raw, "ordersTo");
+  const gfrom = readSpStr(raw, "from");
+  const gto = readSpStr(raw, "to");
   const opreset = readSpStr(raw, "ordersPreset") ?? readSpStr(raw, "preset");
+  const fromCandidate = ofrom || gfrom;
+  const toCandidate = oto || gto;
+
+  if (isCustomOrdersDateRange(ow, fromCandidate, toCandidate)) {
+    const pair = normalizeYmdRangePair(fromCandidate!, toCandidate!);
+    return {
+      weekCode: getWeekCodeForLocalDate(parseLocalDate(pair.from)),
+      ahWeekSelect: "",
+      fromYmd: pair.from,
+      toYmd: pair.to,
+      fromStart: parseLocalDate(pair.from),
+      toEnd: endOfLocalDay(pair.to),
+    };
+  }
 
   const hasOrdersScope = !!(ow || ofrom || oto || opreset);
   if (!hasOrdersScope) {

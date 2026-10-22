@@ -81,6 +81,42 @@ describe("orders week URL SSOT", () => {
     assert.equal(parsed.dateTo, range.to);
   });
 
+  it("TEST 1/2: custom date range writes from/to and does not keep ordersWeek", () => {
+    const params = buildOrdersListSearchParams(
+      emptyFilters({
+        week: "",
+        dateFrom: "2026-07-01",
+        dateTo: "2026-10-22",
+        paymentMethod: ["CASH"],
+      }),
+      new URLSearchParams("ordersWeek=AH-145&week=AH-145&from=2026-10-18&to=2026-10-24&country=TURKEY"),
+    );
+    assert.equal(params.get("ordersWeek"), null);
+    assert.equal(params.get("ordersPreset"), "range");
+    assert.equal(params.get("from"), "2026-07-01");
+    assert.equal(params.get("to"), "2026-10-22");
+    assert.equal(params.get("ordersFrom"), "2026-07-01");
+    assert.equal(params.get("ordersTo"), "2026-10-22");
+    assert.equal(params.get("paymentType"), "CASH");
+    assert.equal(params.get("country"), "TURKEY");
+  });
+
+  it("TEST 2: refresh parse keeps custom dates and does not default the week", () => {
+    const parsed = parseOrderFiltersFromSearchParams(
+      {
+        from: "2026-07-01",
+        to: "2026-10-22",
+        ordersFrom: "2026-07-01",
+        ordersTo: "2026-10-22",
+        week: "AH-145",
+      },
+      { week: "AH-145", dateFrom: "2026-10-18", dateTo: "2026-10-24" },
+    );
+    assert.equal(parsed.week, "");
+    assert.equal(parsed.dateFrom, "2026-07-01");
+    assert.equal(parsed.dateTo, "2026-10-22");
+  });
+
   it("preserves multi KPI selection when rebuilding URL for a new week", () => {
     const range = getAhWeekRange("AH-134");
     assert.ok(range);

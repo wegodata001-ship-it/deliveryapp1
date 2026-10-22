@@ -749,27 +749,48 @@ export function PaymentMethodAdjustmentsClient() {
                           </div>
                           <div className="pm-adjust-page__trail-body">
                             <strong>{event.title}</strong>
-                            {event.actorName ? (
-                              <span className="pm-adjust-page__trail-actor">{event.actorName}</span>
-                            ) : null}
-                            {event.detail ? <p>{event.detail}</p> : null}
-                            {orderNumber ? (
-                              <p className="pm-adjust-page__trail-meta">
-                                הזמנה <span dir="ltr">{orderNumber}</span>
-                              </p>
-                            ) : null}
-                            <p className="pm-adjust-page__trail-meta">
-                              {selectedRow.fromLabel} → {selectedRow.toLabel}
-                              <span aria-hidden> · </span>
-                              <span dir="ltr">{fmtUsd(order?.movedUsd ?? selectedRow.amountUsd)}</span>
-                            </p>
-                            {order ? (
-                              <p className="pm-adjust-page__trail-alloc">
-                                לפני: {formatAllocationLines(order.beforeAllocation)}
-                                <span aria-hidden> · </span>
-                                אחרי: {formatAllocationLines(order.afterAllocation)}
-                              </p>
-                            ) : null}
+                            <div className="pm-adjust-page__trail-fields">
+                              <div className="pm-adjust-page__trail-field">
+                                <span>סוג פעולה</span>
+                                <strong>{event.title}</strong>
+                              </div>
+                              <div className="pm-adjust-page__trail-field">
+                                <span>משתמש מבצע</span>
+                                <strong>{event.actorName || selectedRow.employeeName}</strong>
+                              </div>
+                              {orderNumber ? (
+                                <div className="pm-adjust-page__trail-field">
+                                  <span>מספר הזמנה</span>
+                                  <strong dir="ltr">{orderNumber}</strong>
+                                </div>
+                              ) : null}
+                              <div className="pm-adjust-page__trail-field">
+                                <span>סכום</span>
+                                <strong dir="ltr">{fmtUsd(order?.movedUsd ?? selectedRow.amountUsd)}</strong>
+                              </div>
+                              <div className="pm-adjust-page__trail-field">
+                                <span>אמצעי לפני / אחרי</span>
+                                <strong>
+                                  {selectedRow.fromLabel} → {selectedRow.toLabel}
+                                </strong>
+                              </div>
+                              {event.detail ? (
+                                <div className="pm-adjust-page__trail-field">
+                                  <span>פרטי השינוי</span>
+                                  <p>{event.detail}</p>
+                                </div>
+                              ) : null}
+                              {order ? (
+                                <div className="pm-adjust-page__trail-field">
+                                  <span>הקצאה לפני / אחרי</span>
+                                  <p>
+                                    לפני: {formatAllocationLines(order.beforeAllocation)}
+                                    <span aria-hidden> · </span>
+                                    אחרי: {formatAllocationLines(order.afterAllocation)}
+                                  </p>
+                                </div>
+                              ) : null}
+                            </div>
                           </div>
                         </li>
                       );

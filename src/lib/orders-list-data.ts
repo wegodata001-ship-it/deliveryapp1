@@ -1,5 +1,5 @@
 import { OrderEditRequestStatus, UserRole, type Prisma } from "@prisma/client";
-import { isLegacyOrderStatusSlug, OS } from "@/lib/order-status-slugs";
+import { OS } from "@/lib/order-status-slugs";
 import type { OrderListRow, OrdersStatusSummary } from "@/components/admin/OrdersListShell";
 import type { OrdersCreatedByOption, OrdersPaymentLocationOption } from "@/components/admin/OrdersListToolbar";
 import type { AppUser } from "@/lib/admin-auth";
@@ -22,6 +22,7 @@ import { readMultiParam } from "@/lib/orders-list-filter-params";
 import { resolveOrderIdsForPaymentStatusFilter } from "@/lib/orders-list-payment-status-where";
 import { indexOrderCommissionBreakdowns } from "@/lib/order-commission-ssot";
 import { parseOrdersKpiFilters } from "@/lib/orders-status-kpi-filter";
+import { buildOrdersStatusSummaryFromGroups } from "@/lib/orders-status-kpi-summary";
 import {
   buildOrdersResultSummary,
   type OrdersResultSummary,
@@ -111,8 +112,7 @@ const orderListSelect = {
 } as const;
 
 type OrderListDbRow = Prisma.OrderGetPayload<{ select: typeof orderListSelect }>;
-type StatusGroupRow = { status: string; _count: { _all: number }; _sum: { totalUsd: unknown } };
-type CompletedGroupRow = { isCompleted: boolean; _count: { _all: number }; _sum: { totalUsd: unknown } };
+type StatusGroupRow = { status: string; isCompleted: boolean; _count: { _all: number }; _sum: { totalUsd: unknown } };
 type IntakeLocationRow = { id: string; name: string };
 type PaymentSumRow = { orderId: string | null; _sum: { amountUsd: unknown } };
 type ResultSummaryLeanRow = {
@@ -139,7 +139,6 @@ const ordersStatsStore = new Map<string, CacheEntry<IntakeLocationRow[]>>();
 const ordersCreatorsStore = new Map<string, CacheEntry<OrdersCreatedByOption[]>>();
 const ordersCountryOptionsStore = new Map<string, CacheEntry<OrdersCountryFilterOption[]>>();
 const ordersKpiStore = new Map<string, CacheEntry<StatusGroupRow[]>>();
-const ordersCompletedKpiStore = new Map<string, CacheEntry<CompletedGroupRow[]>>();
 const ordersPaymentSumsStore = new Map<string, CacheEntry<PaymentSumRow[]>>();
 const ordersResultSummaryLeanStore = new Map<string, CacheEntry<ResultSummaryLeanRow[]>>();
 const ordersEditRequestsStore = new Map<string, CacheEntry<EditRequestsPayload>>();
@@ -151,7 +150,6 @@ export function invalidateOrdersListDataCache(): void {
   ordersCreatorsStore.clear();
   ordersCountryOptionsStore.clear();
   ordersKpiStore.clear();
-  ordersCompletedKpiStore.clear();
   ordersPaymentSumsStore.clear();
   ordersResultSummaryLeanStore.clear();
   ordersEditRequestsStore.clear();
@@ -333,47 +331,28 @@ export async function fetchOrdersListPageData(
     ...statsScopeParams,
     ordersCountry: undefined,
   });
-  const fullCacheKey = `${stableSearchParamsKey(sp)}|kpiExactV1`;
-  const scopeCacheKey = `${ordersScopeCacheKey(sp)}|kpiExactV1`;
+  const fullCacheKey = `${stableSearchParamsKey(sp)}|kpiExactV2`;
+  const scopeCacheKey = `${ordersScopeCacheKey(sp)}|kpiExactV2`;
   const page = readPageParam(sp);
   const pageSize = ORDERS_LIST_PAGE_SIZE;
   const ordersPageCacheKey = `${fullCacheKey}|page=${page}|pageSize=${pageSize}|user=${me.id}|payStatus=${paymentStatusValues.join(",")}`;
   const countCacheKey = `${fullCacheKey}|count|payStatus=${paymentStatusValues.join(",")}`;
 
-  const [statusGroups, completedGroups, intakeLocationRows, totalCount, createdByOptions, countryFilterOptions, summaryLean] =
+  const [statusGroups, intakeLocationRows, totalCount, createdByOptions, countryFilterOptions, summaryLean] =
     await withPerfTimer("orders.page.fetchOrders", () =>
       Promise.all([
         cachedTimed("ordersKpiStore", ordersKpiStore, scopeCacheKey, (ms) => (kpiMs += ms), async () =>
           (await (prisma.order.groupBy as unknown as (args: {
-            by: ["status"];
+            by: ["status", "isCompleted"];
             where: Prisma.OrderWhereInput;
             _count: { _all: true };
             _sum: { totalUsd: true };
           }) => Promise<StatusGroupRow[]>)({
-            by: ["status"],
+            by: ["status", "isCompleted"],
             where: statsWhere,
             _count: { _all: true },
             _sum: { totalUsd: true },
           })) as StatusGroupRow[],
-          { bypass: options.refreshStats },
-        ),
-        cachedTimed(
-          "ordersCompletedKpiStore",
-          ordersCompletedKpiStore,
-          `${scopeCacheKey}|completed`,
-          (ms) => (kpiMs += ms),
-          async () =>
-            (await (prisma.order.groupBy as unknown as (args: {
-              by: ["isCompleted"];
-              where: Prisma.OrderWhereInput;
-              _count: { _all: true };
-              _sum: { totalUsd: true };
-            }) => Promise<CompletedGroupRow[]>)({
-              by: ["isCompleted"],
-              where: statsWhere,
-              _count: { _all: true },
-              _sum: { totalUsd: true },
-            })) as CompletedGroupRow[],
           { bypass: options.refreshStats },
         ),
         cachedTimed(
@@ -496,98 +475,7 @@ export async function fetchOrdersListPageData(
     }
   }
 
-  const statusSummaryAcc = {
-    open: { count: 0, totalUsd: 0 },
-    inProgress: { count: 0, totalUsd: 0 },
-    completed: { count: 0, totalUsd: 0 },
-    cancelled: { count: 0, totalUsd: 0 },
-    debtWithdrawal: { count: 0, totalUsd: 0 },
-    operationalCompleted: { count: 0, totalUsd: 0 },
-  };
-  for (const g of completedGroups) {
-    if (!g.isCompleted) continue;
-    statusSummaryAcc.operationalCompleted.count += g._count?._all ?? 0;
-    statusSummaryAcc.operationalCompleted.totalUsd += Number(g._sum?.totalUsd ?? 0);
-  }
-  for (const g of statusGroups) {
-    const count = g._count?._all ?? 0;
-    const totalUsd = Number(g._sum?.totalUsd ?? 0);
-    switch (g.status) {
-      case OS.OPEN:
-        statusSummaryAcc.open.count += count;
-        statusSummaryAcc.open.totalUsd += totalUsd;
-        break;
-      case OS.COMPLETED:
-        statusSummaryAcc.completed.count += count;
-        statusSummaryAcc.completed.totalUsd += totalUsd;
-        break;
-      case OS.CANCELLED:
-        statusSummaryAcc.cancelled.count += count;
-        statusSummaryAcc.cancelled.totalUsd += totalUsd;
-        break;
-      case OS.DEBT_WITHDRAWAL:
-        statusSummaryAcc.debtWithdrawal.count += count;
-        statusSummaryAcc.debtWithdrawal.totalUsd += totalUsd;
-        break;
-      case OS.WAITING_FOR_EXECUTION:
-      case OS.WITHDRAWAL_FROM_SUPPLIER:
-      case OS.SENT:
-      case OS.WAITING_FOR_CHINA_EXECUTION:
-        statusSummaryAcc.inProgress.count += count;
-        statusSummaryAcc.inProgress.totalUsd += totalUsd;
-        break;
-      default:
-        if (!isLegacyOrderStatusSlug(g.status)) {
-          statusSummaryAcc.inProgress.count += count;
-          statusSummaryAcc.inProgress.totalUsd += totalUsd;
-        }
-        break;
-    }
-  }
-  statusSummaryAcc.completed.count = Math.max(
-    0,
-    statusSummaryAcc.completed.count - statusSummaryAcc.operationalCompleted.count,
-  );
-  statusSummaryAcc.completed.totalUsd = Math.max(
-    0,
-    statusSummaryAcc.completed.totalUsd - statusSummaryAcc.operationalCompleted.totalUsd,
-  );
-  const fmtUsdCompact = (n: number) =>
-    n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  let allTotalUsd = 0;
-  for (const g of statusGroups) {
-    allTotalUsd += Number(g._sum?.totalUsd ?? 0);
-  }
-  const statusSummary: OrdersStatusSummary = {
-    all: {
-      count: totalCount.toLocaleString("he-IL"),
-      totalUsd: fmtUsdCompact(allTotalUsd),
-    },
-    open: {
-      count: statusSummaryAcc.open.count.toLocaleString("he-IL"),
-      totalUsd: fmtUsdCompact(statusSummaryAcc.open.totalUsd),
-    },
-    inProgress: {
-      count: statusSummaryAcc.inProgress.count.toLocaleString("he-IL"),
-      totalUsd: fmtUsdCompact(statusSummaryAcc.inProgress.totalUsd),
-    },
-    completed: {
-      count: statusSummaryAcc.completed.count.toLocaleString("he-IL"),
-      totalUsd: fmtUsdCompact(statusSummaryAcc.completed.totalUsd),
-    },
-    cancelled: {
-      count: statusSummaryAcc.cancelled.count.toLocaleString("he-IL"),
-      totalUsd: fmtUsdCompact(statusSummaryAcc.cancelled.totalUsd),
-    },
-    debtWithdrawal: {
-      count: statusSummaryAcc.debtWithdrawal.count.toLocaleString("he-IL"),
-      totalUsd: fmtUsdCompact(statusSummaryAcc.debtWithdrawal.totalUsd),
-    },
-    operationalCompleted: {
-      count: statusSummaryAcc.operationalCompleted.count.toLocaleString("he-IL"),
-      totalUsd: fmtUsdCompact(statusSummaryAcc.operationalCompleted.totalUsd),
-    },
-  };
+  const statusSummary = buildOrdersStatusSummaryFromGroups(statusGroups);
 
   const ids = rows.map((r) => r.id);
   const summaryIds = summaryLean.map((r) => r.id);
