@@ -5,7 +5,7 @@ import type { OrderCountryCode } from "@/lib/order-countries";
 
 export { readPersistedCountry, persistGlobalCountry, resolveGlobalCountry };
 
-/** שבוע שנבחר במסך הבית (שבוע קודם/הבא/היום) — נשמר לרענון F5 */
+/** שבוע שנבחר במסך הבית — נשמר לניווט בין מסכים, לא כ-default בכניסה חדשה */
 export const LS_SELECTED_WEEK = "selectedWeek";
 
 /** תאימות לאחור עם מסכים שקוראים globalWeek */
@@ -46,18 +46,6 @@ export function persistGlobalFilterWeek(
 
 const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-function readStoredYmdRange(): { from: string; to: string } | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const from = localStorage.getItem(LS_GLOBAL_FROM) || "";
-    const to = localStorage.getItem(LS_GLOBAL_TO) || "";
-    if (YMD_RE.test(from) && YMD_RE.test(to) && from <= to) return { from, to };
-  } catch {
-    // ignore
-  }
-  return null;
-}
-
 /** טווח שמור (למשל «היום») — חייב להיות בתוך שבוע AH הנבחר */
 function storedRangeFitsWeek(weekCode: string, fromYmd: string, toYmd: string): boolean {
   const r = getAhWeekRange(weekCode);
@@ -70,18 +58,16 @@ export function resolveGlobalFilterWeekFromStorage(): {
   fromYmd: string;
   toYmd: string;
 } {
+  /**
+   * כניסה חדשה / URL בלי week — תמיד השבוע העסקי החי.
+   * שבוע היסטורי מ-localStorage (AH-137 וכו') אינו default.
+   * בחירה ידנית חיה רק דרך URL אחרי שהמשתמש עבר שבוע.
+   */
   const active = getActiveWorkWeekRange();
-  const saved = readPersistedWorkWeekCode();
-  const weekCode = saved ?? active.weekCode;
-  const storedRange = readStoredYmdRange();
-  if (storedRange && storedRangeFitsWeek(weekCode, storedRange.from, storedRange.to)) {
-    return { weekCode, fromYmd: storedRange.from, toYmd: storedRange.to };
-  }
-  const range = getAhWeekRange(weekCode);
   return {
-    weekCode,
-    fromYmd: range?.from ?? active.fromYmd,
-    toYmd: range?.to ?? active.toYmd,
+    weekCode: active.weekCode,
+    fromYmd: active.fromYmd,
+    toYmd: active.toYmd,
   };
 }
 

@@ -863,6 +863,67 @@
   background: #fff;
 }
 
+.adm-win-panel--customer-card .adm-cust-card-orders-table.adm-ledger-table-saas td,
+.adm-customer-card-page .adm-cust-card-orders-table.adm-ledger-table-saas td {
+  padding: 11px 8px;
+  min-height: 44px;
+}
+
+.adm-ledger-received {
+  color: #15803d;
+  font-weight: 700;
+}
+
+.adm-ledger-applied {
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+.adm-ledger-surplus {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+}
+
+.adm-ledger-surplus--commission {
+  color: #b45309;
+}
+
+.adm-ledger-surplus--credit {
+  color: #0f766e;
+}
+
+.adm-ledger-surplus-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.adm-ledger-surplus--credit .adm-ledger-surplus-badge {
+  background: #ecfdf5;
+  color: #0f766e;
+}
+
+.adm-ledger-open-after--debt {
+  color: #b91c1c;
+  font-weight: 700;
+}
+
+.adm-ledger-open-after--cleared {
+  color: #15803d;
+  font-weight: 700;
+}
+
+.adm-ledger-action-cell {
+  white-space: nowrap;
+}
+
 .adm-win-panel--customer-card .adm-cust-card-orders-table.adm-ledger-table-saas tbody tr:hover {
   background: #f1f5f9;
 }

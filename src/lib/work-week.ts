@@ -33,6 +33,22 @@ export const AH_WEEK_ANCHOR = {
 
 export const DEFAULT_WEEK_CODE = getCurrentAhWeek().code;
 
+export type CurrentBusinessWeek = {
+  currentBusinessWeekId: string;
+  startDate: string;
+  endDate: string;
+};
+
+/** SSOT — שבוע עסקי חי לפי לוח AH / ירושלים. לא קבוע מ-module load ולא ערך שמור. */
+export function getCurrentBusinessWeek(now: Date = new Date()): CurrentBusinessWeek {
+  const w = getCurrentAhWeek(now);
+  return {
+    currentBusinessWeekId: w.code,
+    startDate: w.from,
+    endDate: w.to,
+  };
+}
+
 /** גישה דינמית לטווח לפי קוד AH (כל מספר חיובי) */
 export const WORK_WEEK_RANGES: Record<string, WorkWeekRange> = new Proxy(
   {} as Record<string, WorkWeekRange>,
@@ -191,7 +207,7 @@ export function parseDateFilterFromSearchParams(
   const preset = typeof raw.preset === "string" ? raw.preset : undefined;
 
   const knownWeek = weekParam && weekRangeOrNull(normalizeAhWeekCode(weekParam) ?? weekParam) ? normalizeAhWeekCode(weekParam) : null;
-  const fallbackWeek = DEFAULT_WEEK_CODE;
+  const fallbackWeek = getCurrentBusinessWeek().currentBusinessWeekId;
   const now = new Date();
 
   let base: WorkWeekRange;
@@ -260,7 +276,7 @@ export function parseOrdersListDateFilterFromSearchParams(
   }
 
   const knownWeek = ow && weekRangeOrNull(normalizeAhWeekCode(ow) ?? ow) ? normalizeAhWeekCode(ow) : null;
-  const fallbackWeek = DEFAULT_WEEK_CODE;
+  const fallbackWeek = getCurrentBusinessWeek().currentBusinessWeekId;
   const now = new Date();
 
   let base: WorkWeekRange;

@@ -119,6 +119,21 @@ describe("exclusive customer books invariant", () => {
       draftPaymentUsd: 100,
     });
     assert.equal(preview.remainingDebt, 658.01);
+    assert.equal(preview.signedRemainingUsd, 658.01);
     assert.equal(preview.projectedCredit, 0);
+
+    const overpay = buildPaymentPreview({
+      financialState: {
+        openDebtUsd: ssot.openDebtUsd,
+        availableCreditUsd: ssot.availableCreditUsd,
+        commissionBalanceUsd: ssot.commissionBalanceUsd,
+      },
+      draftPaymentUsd: 800,
+    });
+    assert.equal(overpay.signedRemainingUsd, -41.99);
+    assert.equal(overpay.remainingDebt, 0);
+    assert.equal(overpay.projectedOverpayment, 41.99);
+    assert.equal(overpay.existingCredit, 0);
+    assert.equal(overpay.projectedCredit, 41.99);
   });
 });

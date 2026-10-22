@@ -213,6 +213,73 @@ export function enforceBreakdownAgainstEntered(
   return violations;
 }
 
+export type RemainingPlanDiff = {
+  bucket: PaymentBucketKey;
+  remainingPlannedUsd: number;
+  actualUsd: number;
+  differenceUsd: number;
+};
+
+/** משווה תשלום נוכחי מול יתרה מתוכננת שנותרה (planned − paid), לא מול הסכום המקורי. */
+export function compareRemainingPlannedToEntered(
+  planned: PlannedBucketUsd[],
+  entered: EnteredBucketUsd[],
+): RemainingPlanDiff[] {
+  const enteredMap = new Map(entered.map((row) => [row.bucket, row.enteredUsd] as const));
+  const buckets = new Set<PaymentBucketKey>([
+    ...planned.map((row) => row.bucket),
+    ...entered.filter((row) => row.enteredUsd > BREAKDOWN_EPS).map((row) => row.bucket),
+  ]);
+  return [...buckets].map((bucket) => {
+    const remainingPlannedUsd = round2pos(planned.find((row) => row.bucket === bucket)?.remainingUsd ?? 0);
+    const actualUsd = round2pos(enteredMap.get(bucket) ?? 0);
+    return {
+      bucket,
+      remainingPlannedUsd,
+      actualUsd,
+      differenceUsd: Math.round((actualUsd - remainingPlannedUsd) * 100) / 100,
+    };
+  });
+}
+
+/**
+ * עודף טהור מעל חוב שנסגר: כל יתרה מתוכננת פתוחה כוסתה במלואה.
+ * תשלום חלקי על אמצעי אחד בזמן שאמצעי אחר חורג — זו העברת חוב, לא עודף.
+ */
+/** חלק התשלום שסוגר חוב — העודף לא נכנס להשוואת אמצעי מתוכננים. */
+export function enteredUsdAppliedToOpenDebt(
+  entered: EnteredBucketUsd[],
+  debtApplicableUsd: number,
+  eps = BREAKDOWN_EPS,
+): EnteredBucketUsd[] {
+  let left = round2pos(Math.max(0, debtApplicableUsd));
+  return entered.map((row) => {
+    if (!(row.enteredUsd > eps)) return row;
+    const apply = round2pos(Math.min(row.enteredUsd, left));
+    left = round2pos(Math.max(0, left - apply));
+    return { ...row, enteredUsd: apply };
+  });
+}
+
+export function isPureSurplusOverRemainingPlan(params: {
+  planned: PlannedBucketUsd[];
+  entered: EnteredBucketUsd[];
+  totalDebtUsd: number;
+  totalPaymentUsd: number;
+  eps?: number;
+}): boolean {
+  const eps = params.eps ?? BREAKDOWN_EPS;
+  const surplusUsd = Math.round(Math.max(0, params.totalPaymentUsd - params.totalDebtUsd) * 100) / 100;
+  if (params.totalPaymentUsd < params.totalDebtUsd - eps || surplusUsd <= eps) return false;
+  const enteredMap = new Map(params.entered.map((row) => [row.bucket, row.enteredUsd] as const));
+  for (const row of params.planned) {
+    if (row.remainingUsd <= eps) continue;
+    const actual = enteredMap.get(row.bucket) ?? 0;
+    if (actual + eps < row.remainingUsd) return false;
+  }
+  return true;
+}
+
 /** טקסט שגיאה ידידותי לחריגה בודדת */
 export function breakdownViolationMessage(v: BreakdownEnforcementViolation): string {
   if (v.type === "not-planned") {

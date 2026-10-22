@@ -4,9 +4,7 @@ import { useState } from "react";
 import { X } from "lucide-react";
 import { AnimatedMoneyValue } from "@/components/ui/AnimatedMoneyValue";
 import { RemainingToPayCard } from "@/components/admin/RemainingToPayCard";
-import {
-  type PaymentBalanceDisplay,
-} from "@/lib/order-remaining-debt";
+import { type PaymentBalanceDisplay } from "@/lib/order-remaining-debt";
 import {
   LIVE_PAYMENT_KPI_CARDS,
   liveKpiBucket,
@@ -31,7 +29,8 @@ type Props = {
   commissionUsd?: number;
   onOpenDebtClick?: () => void;
   /**
-   * כרטיס יתרה — תמיד «נשאר לתשלום» מ-buildPaymentPreview.
+   * כרטיס «יתרת לקוח» — CURRENT net (+זכות / 0 / −חוב).
+   * Preview בלבד; לא מעדכן CUSTOMER_CREDIT בזמן הקלדה.
    */
   paymentBalanceDisplay?: PaymentBalanceDisplay | null;
   /** עודף מהטיוטה — מעל הגריד, לא כרטיס נוסף */
@@ -124,13 +123,11 @@ export function PaymentLiveSummaryCards({
   void onOpenDebtClick;
   const methodCards = LIVE_PAYMENT_KPI_CARDS.filter((c) => !c.isTotal);
   const canDrill = Array.isArray(lines) && lines.length > 0;
-  const remainingDisplay: PaymentBalanceDisplay = paymentBalanceDisplay ?? {
-    state: "cleared",
-    title: "נשאר לתשלום",
-    balanceUsdSigned: 0,
-    displayUsd: 0,
-    displayIls: 0,
-  };
+  const remainingDisplay: PaymentBalanceDisplay | null = paymentBalanceDisplay;
+  const surplusPendingUsd =
+    remainingDisplay?.surplusPendingUsd != null
+      ? remainingDisplay.surplusPendingUsd
+      : overpaymentUsd;
 
   const [drill, setDrill] = useState<{ title: string; method: PaymentLineMethod | null } | null>(
     null,
@@ -159,9 +156,9 @@ export function PaymentLiveSummaryCards({
         />
       </div>
 
-      {overpaymentUsd > 0.01 ? (
+      {surplusPendingUsd > 0.01 ? (
         <p className="payment-modal-live-overpay" role="status">
-          עודף מהתשלום הנוכחי: +{formatUsdDisplay(overpaymentUsd)} — לא נשאר לתשלום שלילי
+          עודף לטיפול: {formatUsdDisplay(surplusPendingUsd)}
         </p>
       ) : null}
 
@@ -215,7 +212,7 @@ export function PaymentLiveSummaryCards({
           );
         })}
 
-        <RemainingToPayCard display={{ ...remainingDisplay, title: "נשאר לתשלום", state: remainingDisplay.displayUsd > 0.01 ? "debt" : "cleared" }} />
+        <RemainingToPayCard display={remainingDisplay} />
 
         {drill && canDrill ? (
           <PaymentSummaryDrillModal

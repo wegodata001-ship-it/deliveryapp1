@@ -23,6 +23,9 @@ export type SoftRefreshPaymentIntakeOrdersResult =
       totalOrdersUsd?: number;
       totalPaymentsUsd?: number;
       totalWithdrawalsUsd?: number;
+      currentOpenDebtUsd?: number;
+      currentAvailableCreditUsd?: number;
+      currentNetBalanceUsd?: number;
     }
   | { ok: false; error: string };
 
@@ -40,7 +43,7 @@ export async function softRefreshPaymentIntakeOrders(params: {
 
   const [ordersRes, balancesRes] = await Promise.all([
     fetchPaymentIntakeOrdersClient(cid, params.weekCode, params.workCountry),
-    fetchPaymentIntakeBalancesClient(cid, params.workCountry),
+    fetchPaymentIntakeBalancesClient(cid, params.workCountry, params.weekCode),
   ]);
 
   if (!ordersRes.ok) return { ok: false, error: ordersRes.error };
@@ -72,5 +75,8 @@ export async function softRefreshPaymentIntakeOrders(params: {
     totalOrdersUsd: balancesRes.totalOrdersUsd,
     totalPaymentsUsd: balancesRes.totalPaymentsUsd,
     totalWithdrawalsUsd: balancesRes.totalWithdrawalsUsd,
+    currentOpenDebtUsd: balancesRes.currentOpenDebtUsd,
+    currentAvailableCreditUsd: balancesRes.currentAvailableCreditUsd,
+    currentNetBalanceUsd: balancesRes.currentNetBalanceUsd,
   };
 }

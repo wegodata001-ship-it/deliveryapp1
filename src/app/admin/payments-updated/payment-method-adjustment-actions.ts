@@ -6,12 +6,19 @@ import { revalidatePath } from "next/cache";
 import { requireAuth, userHasAnyPermission } from "@/lib/admin-auth";
 import { writeOrderBreakdownInTx } from "@/lib/order-breakdown-write";
 import {
+  ADJUSTMENT_SAVE_FAILED_USER_MESSAGE,
+  isPrismaMissingRecordError,
+} from "@/lib/order-breakdown-paid-persist";
+import {
+  assertPlannedBreakdownPreserved,
   buildPaymentMethodAdjustmentBootstrap,
   buildPaymentMethodAutoAdjustmentPreview,
   paymentMethodForBreakdown,
   PAYMENT_METHOD_ADJUSTMENT_REASON_OPTIONS,
+  verifyPlannedBreakdownAfterAdjustment,
   type PaymentMethodAdjustmentPreview,
   type PaymentMethodAdjustmentReasonCode,
+  type PlannedBreakdownReloadReport,
 } from "@/lib/payment-method-auto-adjustment";
 import {
   suggestPaymentMethodAdjustment,
@@ -26,12 +33,72 @@ import {
   PAYMENT_METHOD_AUTO_ADJUSTED_ACTION,
 } from "@/lib/payment-method-adjustment-audit";
 import { loadPaymentIntakeCustomerWorkspace } from "@/lib/payment-intake-load";
+import { sumPaymentIntakeWeekScopedRemainingUsd } from "@/lib/payment-intake-order-filter";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 import { prisma } from "@/lib/prisma";
 import { normalizeWorkCountryCode } from "@/lib/work-country";
 
 function moneyUsd(n: number): string {
   return n.toFixed(2);
+}
+
+function breakdownRowsFromDb(
+  rows: Array<{ paymentMethod: string; amount: Prisma.Decimal | number | string; currency: string }>,
+) {
+  return rows.map((row) => ({
+    paymentMethod: row.paymentMethod,
+    amount: Number(row.amount?.toString?.() ?? row.amount ?? 0).toFixed(2),
+    currency: row.currency === "ILS" ? ("ILS" as const) : ("USD" as const),
+  }));
+}
+
+async function writeAndVerifyAdjustedBreakdown(
+  tx: Prisma.TransactionClient,
+  affected: {
+    orderId: string;
+    orderNumber: string;
+    beforeBreakdown: Array<{ paymentMethod: string; amount: string; currency: "USD" | "ILS" }>;
+    afterBreakdown: Array<{ paymentMethod: string; amount: string; currency: "USD" | "ILS" }>;
+  },
+  opts: { userId: string; intakeWeekCode?: string | null },
+): Promise<PlannedBreakdownReloadReport> {
+  assertPlannedBreakdownPreserved(affected.beforeBreakdown, affected.afterBreakdown);
+  const rows = affected.afterBreakdown.map((line) => ({
+    paymentMethod: line.paymentMethod,
+    amount: new Prisma.Decimal(line.amount).toDecimalPlaces(4, 4),
+    currency: line.currency,
+  }));
+  if (rows.length === 0) {
+    throw new Error("התאמה אוטומטית אינה רשאית למחוק את חלוקת אמצעי התשלום המתוכננת");
+  }
+  await tx.order.update({
+    where: { id: affected.orderId },
+    data: { paymentMethod: paymentMethodForBreakdown(affected.afterBreakdown) || null },
+  });
+  await writeOrderBreakdownInTx(tx, affected.orderId, rows, {
+    userId: opts.userId,
+    intakeWeekCode: opts.intakeWeekCode ?? null,
+    preserveExistingPlan: true,
+  });
+  const afterDb = await tx.orderPaymentBreakdown.findMany({
+    where: { orderId: affected.orderId },
+    select: { paymentMethod: true, amount: true, currency: true },
+  });
+  const report = verifyPlannedBreakdownAfterAdjustment({
+    orderId: affected.orderId,
+    orderNumber: affected.orderNumber,
+    before: affected.beforeBreakdown,
+    expected: affected.afterBreakdown,
+    afterDb: breakdownRowsFromDb(afterDb),
+  });
+  if (!report.match) {
+    throw new Error(
+      report.wiped
+        ? `ADJUSTMENT FAILED — ${affected.orderNumber}: planned methods were deleted`
+        : `ADJUSTMENT FAILED — ${affected.orderNumber}: AFTER DB reload does not match expected`,
+    );
+  }
+  return report;
 }
 
 function ensureAdjustmentPermission() {
@@ -62,12 +129,6 @@ async function loadPreview(params: {
     paymentWorkCountryRaw: normalizeWorkCountryCode(params.workCountry ?? null),
   });
   if (!workspace.ok) return workspace;
-  const { getCustomerAccountBalances } = await import("@/lib/customer-account-balances");
-  const { currentCustomerFinancialScopeForWorkCountry } = await import("@/lib/customer-financial-scope");
-  const accounts = await getCustomerAccountBalances(
-    workspace.customer.id,
-    currentCustomerFinancialScopeForWorkCountry(params.workCountry),
-  );
   const preview = buildPaymentMethodAutoAdjustmentPreview({
     orders: workspace.orders,
     customerPayments: workspace.customerPayments,
@@ -77,7 +138,7 @@ async function loadPreview(params: {
     currency: params.currency,
     amountNative: params.amountNative,
     exchangeRate: params.exchangeRate,
-    customerOpenDebtUsd: accounts.openDebtUsd,
+    customerOpenDebtUsd: sumPaymentIntakeWeekScopedRemainingUsd(workspace.orders),
   });
   if (!preview.ok) return preview;
   return {
@@ -143,7 +204,7 @@ export async function loadPaymentMethodAdjustmentBootstrapAction(params: {
   return {
     ok: true,
     ...bootstrap,
-    customerOpenDebtUsd: accounts.openDebtUsd,
+    customerOpenDebtUsd: sumPaymentIntakeWeekScopedRemainingUsd(workspace.orders),
     creditUsd: accounts.availableCreditUsd,
     commissionBalanceUsd: accounts.commissionBalanceUsd,
     suggestion,
@@ -210,6 +271,13 @@ export async function previewPaymentIntentAutoAdjustmentAction(params: {
         moveUsd: number;
         availableUsd: number;
         partial: boolean;
+        methodLines: Array<{
+          method: string;
+          label: string;
+          beforeRemainingUsd: number;
+          afterRemainingUsd: number;
+          changeUsd: number;
+        }>;
       }>;
     }
   | { ok: false; error: string }
@@ -226,13 +294,7 @@ export async function previewPaymentIntentAutoAdjustmentAction(params: {
 
   const { planPaymentIntentAdjustments, resultingCustomerCreditUsd, resultingCustomerFeeUsd } =
     await import("@/lib/payment-method-payment-intent");
-  const { getCustomerOpenDebtUsdNumber, openDebtScopeForWorkCountry } = await import(
-    "@/lib/customer-open-debt"
-  );
-  const customerOpenDebtUsd = await getCustomerOpenDebtUsdNumber(
-    workspace.customer.id,
-    openDebtScopeForWorkCountry(normalizeWorkCountryCode(params.workCountry ?? null)),
-  );
+  const customerOpenDebtUsd = sumPaymentIntakeWeekScopedRemainingUsd(workspace.orders);
   const plan = planPaymentIntentAdjustments({
     orders: workspace.orders,
     intents: params.intents,
@@ -241,15 +303,12 @@ export async function previewPaymentIntentAutoAdjustmentAction(params: {
   });
   if (!plan.ok) return plan;
 
-  const { getCustomerCreditBalanceUsd, creditScopeFromWorkCountry } = await import(
-    "@/lib/customer-credit-balance"
-  );
-  const existingCreditUsd = await getCustomerCreditBalanceUsd(
-    workspace.customer.id,
-    creditScopeFromWorkCountry(normalizeWorkCountryCode(params.workCountry ?? null)),
-  );
-  const { getCustomerCommissionBalanceUsd } = await import("@/lib/customer-commission-balance");
-  const existingCommissionUsd = await getCustomerCommissionBalanceUsd(workspace.customer.id);
+  const { availableCreditForWeekScopedPayable } = await import("@/lib/payment-intake-preview");
+  const existingCreditUsd = availableCreditForWeekScopedPayable({
+    weekScopedDebtUsd: customerOpenDebtUsd,
+    ssotAvailableCreditUsd: workspace.availableCreditUsd,
+  });
+  const existingCommissionUsd = workspace.commissionBalanceUsd;
   const resultingCreditUsd = resultingCustomerCreditUsd(existingCreditUsd, plan.overpaymentUsd);
   const resultingCommissionUsd = resultingCustomerFeeUsd(existingCommissionUsd, plan.overpaymentUsd);
 
@@ -278,6 +337,7 @@ export async function previewPaymentIntentAutoAdjustmentAction(params: {
       moveUsd: row.moveUsd,
       availableUsd: row.availableUsd,
       partial: row.partial,
+      methodLines: row.methodLines,
     })),
   };
 }
@@ -293,7 +353,16 @@ export async function applyPaymentIntentPlanAction(params: {
   exchangeRate?: number | null;
   intents: Array<{ method: string; currency: PaymentBalanceCurrency; amountNative: number }>;
   reasonText?: string;
-}): Promise<{ ok: true; adjustmentId: string; affectedOrders: number } | { ok: false; error: string }> {
+}): Promise<
+  | {
+      ok: true;
+      adjustmentId: string;
+      affectedOrders: number;
+      affectedOrderIds: string[];
+      verification: PlannedBreakdownReloadReport[];
+    }
+  | { ok: false; error: string }
+> {
   const me = await ensureAdjustmentPermission();
   const customerId = params.customerId.trim();
   if (!customerId) return { ok: false, error: "חסר לקוח" };
@@ -305,13 +374,7 @@ export async function applyPaymentIntentPlanAction(params: {
   if (!workspace.ok) return { ok: false, error: workspace.error };
 
   const { planPaymentIntentAdjustments } = await import("@/lib/payment-method-payment-intent");
-  const { getCustomerOpenDebtUsdNumber, openDebtScopeForWorkCountry } = await import(
-    "@/lib/customer-open-debt"
-  );
-  const customerOpenDebtUsd = await getCustomerOpenDebtUsdNumber(
-    workspace.customer.id,
-    openDebtScopeForWorkCountry(normalizeWorkCountryCode(params.workCountry ?? null)),
-  );
+  const customerOpenDebtUsd = sumPaymentIntakeWeekScopedRemainingUsd(workspace.orders);
   const plan = planPaymentIntentAdjustments({
     orders: workspace.orders,
     intents: params.intents,
@@ -319,33 +382,25 @@ export async function applyPaymentIntentPlanAction(params: {
     customerOpenDebtUsd,
   });
   if (!plan.ok) return plan;
-  if (plan.hasOverpayment) {
-    return { ok: false, error: "תשלום יתר מחייב בחירת יעד לעודף ושמירה אטומית יחד עם התשלום" };
-  }
   if (plan.orderChanges.length === 0) {
-    return { ok: true, adjustmentId: "", affectedOrders: 0 };
+    return { ok: true, adjustmentId: "", affectedOrders: 0, affectedOrderIds: [], verification: [] };
   }
 
   const adjustmentId = randomUUID();
   const createdAtIso = new Date().toISOString();
   const reasonText = (params.reasonText ?? "").trim() || DEFAULT_INTENT_PLAN_REASON;
+  const verification: PlannedBreakdownReloadReport[] = [];
 
   try {
     await prisma.$transaction(async (tx) => {
+      verification.length = 0;
       for (const affected of plan.orderChanges) {
-        const rows = affected.afterBreakdown.map((line) => ({
-          paymentMethod: line.paymentMethod,
-          amount: new Prisma.Decimal(line.amount).toDecimalPlaces(4, 4),
-          currency: line.currency,
-        }));
-        await tx.order.update({
-          where: { id: affected.orderId },
-          data: { paymentMethod: paymentMethodForBreakdown(affected.afterBreakdown) || null },
-        });
-        await writeOrderBreakdownInTx(tx, affected.orderId, rows, {
-          userId: me.id,
-          intakeWeekCode: params.weekCode ?? null,
-        });
+        verification.push(
+          await writeAndVerifyAdjustedBreakdown(tx, affected, {
+            userId: me.id,
+            intakeWeekCode: params.weekCode ?? null,
+          }),
+        );
         await tx.auditLog.create({
           data: {
             userId: me.id,
@@ -409,13 +464,23 @@ export async function applyPaymentIntentPlanAction(params: {
       });
     }, { maxWait: 10_000, timeout: 30_000 });
   } catch (error) {
+    if (isPrismaMissingRecordError(error)) {
+      console.error("[payment-intake] ADJUSTMENT_INTENT_PERSIST_FAILED", error);
+      return { ok: false, error: ADJUSTMENT_SAVE_FAILED_USER_MESSAGE };
+    }
     return { ok: false, error: error instanceof Error ? error.message : "התאמה אוטומטית נכשלה" };
   }
 
   revalidatePath("/admin/payment-method-adjustments");
   revalidatePath("/admin/activity");
   revalidatePath("/admin/orders");
-  return { ok: true, adjustmentId, affectedOrders: plan.orderChanges.length };
+  return {
+    ok: true,
+    adjustmentId,
+    affectedOrders: plan.orderChanges.length,
+    affectedOrderIds: plan.orderChanges.map((row) => row.orderId),
+    verification,
+  };
 }
 
 export async function applyPaymentMethodAutoAdjustmentAction(params: {
@@ -467,16 +532,7 @@ export async function applyPaymentMethodAutoAdjustmentAction(params: {
   try {
     await prisma.$transaction(async (tx) => {
       for (const affected of loaded.preview.affectedOrders) {
-        const rows = affected.afterBreakdown.map((line) => ({
-          paymentMethod: line.paymentMethod,
-          amount: new Prisma.Decimal(line.amount).toDecimalPlaces(4, 4),
-          currency: line.currency,
-        }));
-        await tx.order.update({
-          where: { id: affected.orderId },
-          data: { paymentMethod: paymentMethodForBreakdown(affected.afterBreakdown) || null },
-        });
-        await writeOrderBreakdownInTx(tx, affected.orderId, rows, {
+        await writeAndVerifyAdjustedBreakdown(tx, affected, {
           userId: me.id,
           intakeWeekCode: params.weekCode ?? null,
         });
@@ -562,6 +618,10 @@ export async function applyPaymentMethodAutoAdjustmentAction(params: {
       });
     }, { maxWait: 10_000, timeout: 30_000 });
   } catch (error) {
+    if (isPrismaMissingRecordError(error)) {
+      console.error("[payment-intake] ADJUSTMENT_AUTO_PERSIST_FAILED", error);
+      return { ok: false, error: ADJUSTMENT_SAVE_FAILED_USER_MESSAGE };
+    }
     return { ok: false, error: error instanceof Error ? error.message : "התאמה אוטומטית נכשלה" };
   }
 

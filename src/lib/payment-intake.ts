@@ -249,6 +249,11 @@ export type OrderBreakdownMethodRow = {
   planned?: number;
   /** שולם במטבע השורה */
   paid?: number;
+  /**
+   * paidAmount מה-DB — לא משתנה ב-FIFO/collectible remaining.
+   * ההתאמה הפיזית (snap planned=paid) חייבת את הסכום הזה.
+   */
+  physicalPaid?: number;
   /** נותר במטבע השורה */
   remaining?: number;
   /** תאימות / המרה ל-USD לתצוגות ישנות */
@@ -387,7 +392,9 @@ export function applyDebtWithdrawalToIntakeOrders(
     if (Math.abs(nextRemaining - (before[i] ?? 0)) <= ALLOC_EPS) return order;
     const total = Number(order.totalAmountUsd) || 0;
     const paid = Number(order.dbPaidUsd) || 0;
-    const breakdown = reconcileOrderBreakdownWithLedger(order.breakdown, nextRemaining);
+    const breakdown = reconcileOrderBreakdownWithLedger(order.breakdown, nextRemaining, {
+      preservePaid: true,
+    });
     return {
       ...order,
       dbRemainingUsd: nextRemaining.toFixed(2),

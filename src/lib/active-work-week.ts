@@ -1,12 +1,11 @@
 import {
   balancesSnapshotToYmd,
-  DEFAULT_WEEK_CODE,
-  getAhWeekRange,
+  getCurrentBusinessWeek,
   normalizeAhWeekCode,
 } from "@/lib/work-week";
 
-/** שבוע עבודה פעיל (AH נוכחי) — מעודכן דינמית לפי לוח AH */
-export const ACTIVE_WORK_WEEK_CODE = DEFAULT_WEEK_CODE;
+/** שבוע עבודה פעיל (AH נוכחי) — נגזר מ-getCurrentBusinessWeek() בכל קריאה */
+export const ACTIVE_WORK_WEEK_CODE = getCurrentBusinessWeek().currentBusinessWeekId;
 
 export type ActiveWorkWeekRange = {
   weekCode: string;
@@ -15,12 +14,11 @@ export type ActiveWorkWeekRange = {
 };
 
 export function getActiveWorkWeekRange(): ActiveWorkWeekRange {
-  const weekCode = ACTIVE_WORK_WEEK_CODE;
-  const r = getAhWeekRange(weekCode);
+  const current = getCurrentBusinessWeek();
   return {
-    weekCode,
-    fromYmd: r?.from ?? "",
-    toYmd: r?.to ?? "",
+    weekCode: current.currentBusinessWeekId,
+    fromYmd: current.startDate,
+    toYmd: current.endDate,
   };
 }
 
@@ -31,7 +29,7 @@ export function balancesActiveWeekQuery(): { balancesWeek: string; balancesTo: s
 
 export function isActiveWorkWeekCode(code: string | null | undefined): boolean {
   const norm = normalizeAhWeekCode(code);
-  return norm === ACTIVE_WORK_WEEK_CODE;
+  return norm === getCurrentBusinessWeek().currentBusinessWeekId;
 }
 
 export const WEEK_SCOPED_ADMIN_PATHS = ["/admin/orders", "/admin/balances"] as const;

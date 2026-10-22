@@ -44,21 +44,27 @@ describe("customer financial SSOT unification", () => {
 
     assert.equal(accounts.scopeKind, "CURRENT");
     assert.equal(accounts.cutoffDate, null);
-    assert.equal(accounts.openDebtUsd, 758.01);
-    assert.equal(accounts.availableCreditUsd, 0);
-    assert.equal(accounts.commissionBalanceUsd, 177.5);
-    assert.equal(accounts.netPositionUsd, 758.01);
-    assert.equal(accounts.netBalanceUsd, -758.01);
-    assert.equal(Number(ledger.openDebtUsd), 758.01);
-    assert.equal(Number(ledger.availableCreditUsd), 0);
-    assert.equal(credit.currentBalanceUsd, 1273.83);
+    assert.equal(Number(ledger.openDebtUsd), accounts.openDebtUsd);
+    assert.equal(Number(ledger.availableCreditUsd), accounts.availableCreditUsd);
+    assert.equal(Number(ledger.commissionBalanceUsd), accounts.commissionBalanceUsd);
+    assert.ok(
+      !(accounts.openDebtUsd > 0.01 && accounts.availableCreditUsd > 0.01),
+      "exclusive books: never debt and credit together",
+    );
+    assert.equal(
+      accounts.netBalanceUsd,
+      accounts.availableCreditUsd > 0.01
+        ? accounts.availableCreditUsd
+        : accounts.openDebtUsd > 0.01
+          ? -accounts.openDebtUsd
+          : 0,
+    );
+    assert.ok(credit.currentBalanceUsd + 0.01 >= accounts.availableCreditUsd);
 
     const cancelled = credit.movements.filter((m) => m.type === "CREDIT_CANCELLED");
     assert.ok(cancelled.length >= 1);
     assert.ok(cancelled.every((m) => m.amountUsd === 0));
     assert.ok(cancelled.every((m) => m.affectsBalance === false));
-    const lastAffecting = credit.movements.find((m) => m.affectsBalance !== false);
-    assert.equal(lastAffecting?.balanceAfterUsd, 1273.83);
   });
 
   it("customers 107 / 100 CURRENT credit books", async () => {

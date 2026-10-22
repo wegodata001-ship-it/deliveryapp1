@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import {
-  applyPaymentIntentPlanAction,
   loadPaymentMethodAdjustmentBootstrapAction,
   previewPaymentIntentAutoAdjustmentAction,
 } from "@/app/admin/payments-updated/payment-method-adjustment-actions";
@@ -28,9 +27,6 @@ const METHOD_CARDS = [
 ];
 
 type MethodKey = (typeof METHOD_CARDS)[number]["key"];
-
-const DEFAULT_REASON =
-  "הלקוח רוצה לשלם באמצעי תשלום שונה מהמתוכנן בהזמנות הפתוחות";
 
 function fmtMoney(currency: PaymentBalanceCurrency, n: number): string {
   const safe = Number.isFinite(n) ? n : 0;
@@ -117,6 +113,13 @@ type PreviewState = {
     moveUsd: number;
     availableUsd: number;
     partial: boolean;
+    methodLines: Array<{
+      method: string;
+      label: string;
+      beforeRemainingUsd: number;
+      afterRemainingUsd: number;
+      changeUsd: number;
+    }>;
   }>;
 };
 
@@ -369,44 +372,22 @@ export function PaymentMethodAutoAdjustModal({
     setBusy("apply");
     setErr(null);
 
-    if (preview.hasOverpayment) {
-      const payload = appliedPayload("", preview.orderChanges.length);
-      if (!payload) {
-        applyingRef.current = false;
-        setBusy(null);
-        return;
-      }
-      const ok = await onApplied(payload);
-      if (ok === false) {
-        applyingRef.current = false;
-        setBusy(null);
-        setErr("השמירה נכשלה — העודף לא נשמר. אפשר לנסות שוב.");
-        return;
-      }
-      setBusy(null);
-      return;
-    }
+    const adjustmentId = "";
+    const affectedOrders = preview.orderChanges.length;
 
-    const res = await applyPaymentIntentPlanAction({
-      customerId,
-      weekCode,
-      workCountry,
-      exchangeRate: rateN,
-      intents: preview.intents.map((intent) => ({
-        method: intent.method,
-        currency: intent.currency,
-        amountNative: intent.amountNative,
-      })),
-      reasonText: DEFAULT_REASON,
-    });
-    if (!res.ok) {
+    const payload = appliedPayload(adjustmentId, affectedOrders);
+    if (!payload) {
       applyingRef.current = false;
       setBusy(null);
-      setErr(res.error);
       return;
     }
-    const payload = appliedPayload(res.adjustmentId, res.affectedOrders);
-    if (payload) await onApplied(payload);
+    const ok = await onApplied(payload);
+    if (ok === false) {
+      applyingRef.current = false;
+      setBusy(null);
+      setErr("לא ניתן היה לשמור את ההתאמה. לא בוצעו שינויים.");
+      return;
+    }
     setBusy(null);
   }
 
@@ -569,12 +550,14 @@ export function PaymentMethodAutoAdjustModal({
               {preview.hasOverpayment ? (
                 <div className="pm-adjust-status pm-adjust-status--overpay">
                   <strong>תשלום יתר: {fmtUsd(preview.overpaymentUsd)}</strong>
-                  <p>עודף לאחר סגירת החוב. זה מצב עסקי חוקי — יש לבחור לאן להעביר את העודף.</p>
+                  <p>
+                    סכום שמותאם לחוב: {fmtUsd(preview.closesDebtUsd)}. העודף {fmtUsd(preview.overpaymentUsd)} לא שייך להתאמת האמצעים — יש לבחור לאן להעביר אותו אחרי האישור.
+                  </p>
                 </div>
               ) : (
                 <div className="pm-adjust-status pm-adjust-status--info">
                   <strong>התאמה מוצעת</strong>
-                  <p>המערכת חישבה לפי FIFO אילו הזמנות לעדכן. עדיין לא נשמר שינוי — רק לאחר אישור.</p>
+                  <p>סכום שמותאם לחוב: {fmtUsd(preview.closesDebtUsd)}. המערכת חישבה לפי FIFO אילו הזמנות לעדכן. עדיין לא נשמר שינוי — רק לאחר אישור.</p>
                 </div>
               )}
 
@@ -584,31 +567,40 @@ export function PaymentMethodAutoAdjustModal({
                   <thead>
                     <tr>
                       <th>הזמנה</th>
-                      <th>סכום פתוח</th>
-                      <th>אמצעי נוכחי</th>
-                      <th>אמצעי חדש</th>
-                      <th>סכום להתאמה</th>
+                      <th>אמצעי</th>
+                      <th>לפני</th>
+                      <th>אחרי</th>
+                      <th>שינוי</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {preview.orderChanges.map((row) => (
-                      <tr key={row.orderId}>
-                        <td className="pm-paynow-table__order" dir="ltr">
-                          {row.orderNumber}
-                        </td>
-                        <td dir="ltr">{fmtUsd(row.availableUsd)}</td>
-                        <td>{row.fromLabel}</td>
-                        <td>{row.toLabel}</td>
-                        <td dir="ltr" className="pm-paynow-table__move">
-                          {fmtUsd(row.moveUsd)}
-                          {row.partial ? (
-                            <small>
-                              מתוך {fmtUsd(row.availableUsd)}
-                            </small>
-                          ) : null}
-                        </td>
-                      </tr>
-                    ))}
+                    {preview.orderChanges.map((row) =>
+                      (row.methodLines?.length ? row.methodLines : [
+                        {
+                          method: row.fromMethod,
+                          label: `${row.fromLabel} → ${row.toLabel}`,
+                          beforeRemainingUsd: row.availableUsd,
+                          afterRemainingUsd: row.availableUsd - row.moveUsd,
+                          changeUsd: -row.moveUsd,
+                        },
+                      ]).map((line, idx) => (
+                        <tr key={`${row.orderId}-${line.method}`}>
+                          <td className="pm-paynow-table__order" dir="ltr">
+                            {idx === 0 ? row.orderNumber : ""}
+                          </td>
+                          <td>{line.label}</td>
+                          <td dir="ltr">{fmtUsd(line.beforeRemainingUsd)}</td>
+                          <td dir="ltr">{fmtUsd(line.afterRemainingUsd)}</td>
+                          <td dir="ltr" className="pm-paynow-table__move">
+                            {line.changeUsd > 0.005
+                              ? `+${fmtUsd(line.changeUsd)}`
+                              : line.changeUsd < -0.005
+                                ? `-${fmtUsd(Math.abs(line.changeUsd))}`
+                                : fmtUsd(0)}
+                          </td>
+                        </tr>
+                      )),
+                    )}
                   </tbody>
                 </table>
               </div>
