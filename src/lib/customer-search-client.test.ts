@@ -3,7 +3,9 @@ import { describe, it } from "node:test";
 import type { CustomerSearchRow } from "@/app/admin/capture/actions";
 import {
   pickAutoCustomerHit,
+  pickExactUniqueCustomerCodeHit,
   resolveCustomerEnterSelection,
+  shouldAutoSelectExactCustomerCode,
 } from "@/lib/customer-search-client";
 
 function row(partial: { id: string; code?: string | null; label?: string; oldCustomerCode?: string | null }): CustomerSearchRow {
@@ -33,6 +35,96 @@ describe("pickAutoCustomerHit", () => {
   it("returns null when several results and no exact code", () => {
     const hits = [row({ id: "a", code: "102" }), row({ id: "b", code: "105" })];
     assert.equal(pickAutoCustomerHit(hits, "10"), null);
+  });
+});
+
+describe("pickExactUniqueCustomerCodeHit", () => {
+  it("auto-picks a unique exact code", () => {
+    const exact = row({ id: "c108", code: "108" });
+    const hits = [exact, row({ id: "c1080", code: "1080" }), row({ id: "c18", code: "18" })];
+    assert.equal(pickExactUniqueCustomerCodeHit(hits, "108"), exact);
+  });
+
+  it("does not pick a prefix match when the typed code is incomplete", () => {
+    const hits = [row({ id: "c108", code: "108" }), row({ id: "c107", code: "107" })];
+    assert.equal(pickExactUniqueCustomerCodeHit(hits, "10"), null);
+  });
+
+  it("does not pick a single prefix-only row", () => {
+    const onlyPrefix = row({ id: "c108", code: "108" });
+    assert.equal(pickExactUniqueCustomerCodeHit([onlyPrefix], "10"), null);
+  });
+
+  it("treats leading zeros as the same numeric code", () => {
+    const exact = row({ id: "c108", code: "108" });
+    assert.equal(pickExactUniqueCustomerCodeHit([exact], "0108"), exact);
+  });
+
+  it("picks a unique old customer code", () => {
+    const exact = row({ id: "c108", code: "999", oldCustomerCode: "108" });
+    assert.equal(pickExactUniqueCustomerCodeHit([exact], "108"), exact);
+  });
+
+  it("does not pick when two customers share the same exact code", () => {
+    const hits = [
+      row({ id: "a", code: "108" }),
+      row({ id: "b", code: "108" }),
+    ];
+    assert.equal(pickExactUniqueCustomerCodeHit(hits, "108"), null);
+  });
+
+  it("returns null for an unknown code even if other customers are listed", () => {
+    const hits = [row({ id: "c108", code: "108" })];
+    assert.equal(pickExactUniqueCustomerCodeHit(hits, "999"), null);
+  });
+});
+
+describe("shouldAutoSelectExactCustomerCode", () => {
+  const exact = row({ id: "c108", code: "108", label: "אימאן" });
+
+  it("auto-selects after typing a unique exact code", () => {
+    assert.equal(
+      shouldAutoSelectExactCustomerCode({
+        field: "code",
+        query: "108",
+        hits: [exact, row({ id: "c1080", code: "1080" })],
+      }),
+      exact,
+    );
+  });
+
+  it("never auto-selects from a name/text field", () => {
+    assert.equal(
+      shouldAutoSelectExactCustomerCode({
+        field: "text",
+        query: "108",
+        hits: [exact],
+      }),
+      null,
+    );
+  });
+
+  it("does not re-select the already chosen customer", () => {
+    assert.equal(
+      shouldAutoSelectExactCustomerCode({
+        field: "code",
+        query: "108",
+        hits: [exact],
+        alreadySelectedId: "c108",
+      }),
+      null,
+    );
+  });
+
+  it("does not auto-select when the exact code is missing", () => {
+    assert.equal(
+      shouldAutoSelectExactCustomerCode({
+        field: "code",
+        query: "999",
+        hits: [],
+      }),
+      null,
+    );
   });
 });
 

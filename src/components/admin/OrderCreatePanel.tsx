@@ -170,8 +170,11 @@ import {
   invalidateCustomerSearchClientCache,
   CUSTOMER_CODE_SEARCH_DEBOUNCE_MS,
   CUSTOMER_NAME_SEARCH_DEBOUNCE_MS,
+  customerCodeEqualsQuery,
   prioritizeCustomerSearchRows,
+  resolveCustomerEnterSelection,
   searchCustomerSuggestionsClient,
+  shouldAutoSelectExactCustomerCode,
 } from "@/lib/customer-search-client";
 import { CUSTOMER_SEARCH_UUID_RE } from "@/lib/customer-search-shared";
 
@@ -513,8 +516,12 @@ export function OrderCreatePanel({
   const skipSearchRef = useRef(false);
   const searchGenRef = useRef(0);
   const customerExtrasReqRef = useRef(0);
+  const hitsQueryRef = useRef<string | null>(null);
+  const pendingEnterSelectRef = useRef(false);
+  const selectedCustomerRef = useRef<CustomerSearchRow | null>(null);
 
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerSearchRow | null>(null);
+  selectedCustomerRef.current = selectedCustomer;
   const [extras, setExtras] = useState<CustomerExtrasPayload | null>(null);
 
   const [phoneStr, setPhoneStr] = useState("");
@@ -910,6 +917,9 @@ export function OrderCreatePanel({
 
   const pickCustomer = useCallback((row: CustomerSearchRow) => {
     skipSearchRef.current = true;
+    searchGenRef.current += 1;
+    pendingEnterSelectRef.current = false;
+    hitsQueryRef.current = null;
     setErr(null);
     setCustomerCodeMissing(false);
     setSelectedCustomer(row);
@@ -936,6 +946,9 @@ export function OrderCreatePanel({
   }, [applyExtras]);
 
   const clearSelectedCustomerFromTyping = useCallback((field: ComboField, value: string) => {
+    pendingEnterSelectRef.current = false;
+    hitsQueryRef.current = null;
+    searchGenRef.current += 1;
     setSelectedCustomer(null);
     setExtras(null);
     setPhoneStr("");
@@ -1035,9 +1048,24 @@ export function OrderCreatePanel({
     const isUuid = CUSTOMER_SEARCH_UUID_RE.test(trimmed);
     const isNumericCode = field === "code" && /^\d+$/.test(trimmed);
     if (!trimmed || (!isUuid && !isNumericCode && trimmed.length < 2)) {
+      hitsQueryRef.current = trimmed || null;
       setHits([]);
       setIsSearching(false);
       return;
+    }
+
+    if (field === "code") {
+      const selected = selectedCustomerRef.current;
+      if (
+        selected &&
+        (customerCodeEqualsQuery(selected.code, trimmed) || trimmed === selected.id)
+      ) {
+        hitsQueryRef.current = trimmed;
+        setHits([]);
+        setIsSearching(false);
+        setDropdownField(null);
+        return;
+      }
     }
 
     const debounceMs =
@@ -1061,6 +1089,43 @@ export function OrderCreatePanel({
           const rows = prioritizeCustomerSearchRows([...localRows, ...remoteRows], trimmed, 10);
 
           if (searchGenRef.current !== gen) return;
+
+          hitsQueryRef.current = trimmed;
+
+          const typedAuto = shouldAutoSelectExactCustomerCode({
+            field: field === "code" ? "code" : "text",
+            query: trimmed,
+            hits: rows,
+            alreadySelectedId: selectedCustomerRef.current?.id ?? null,
+          });
+          if (typedAuto) {
+            pendingEnterSelectRef.current = false;
+            pickCustomer(typedAuto);
+            return;
+          }
+
+          if (pendingEnterSelectRef.current && field === "code") {
+            pendingEnterSelectRef.current = false;
+            const decision = resolveCustomerEnterSelection({
+              query: trimmed,
+              hits: rows,
+              activeIndex: -1,
+              hitsQuery: trimmed,
+              field: "code",
+              alreadySelected: selectedCustomerRef.current
+                ? { id: selectedCustomerRef.current.id, code: selectedCustomerRef.current.code }
+                : null,
+            });
+            if (decision.action === "pick") {
+              pickCustomer(decision.row);
+              return;
+            }
+            setHits([]);
+            setActiveHitIndex(-1);
+            setDropdownField(null);
+            setCustomerCodeMissing(true);
+            return;
+          }
 
           setHits(rows);
           setActiveHitIndex(-1);
@@ -1558,18 +1623,39 @@ export function OrderCreatePanel({
       return;
     }
     if (e.key === "Enter") {
-      if (
-        dropdownFieldRef.current === field &&
-        activeHitIndexRef.current >= 0 &&
-        hitsRef.current[activeHitIndexRef.current]
-      ) {
-        e.preventDefault();
-        pickCustomer(hitsRef.current[activeHitIndexRef.current]!);
+      e.preventDefault();
+      if (field !== "code") {
+        if (
+          dropdownFieldRef.current === field &&
+          activeHitIndexRef.current >= 0 &&
+          hitsRef.current[activeHitIndexRef.current]
+        ) {
+          pickCustomer(hitsRef.current[activeHitIndexRef.current]!);
+        }
         return;
       }
-      e.preventDefault();
-      if (field === "code" && codeStr.trim() && !selectedCustomer) {
-        setErr("יש לבחור לקוח מהרשימה");
+      const query = codeStr.trim();
+      const decision = resolveCustomerEnterSelection({
+        query,
+        hits: hitsRef.current,
+        activeIndex: activeHitIndexRef.current,
+        hitsQuery: hitsQueryRef.current,
+        field: "code",
+        alreadySelected: selectedCustomer
+          ? { id: selectedCustomer.id, code: selectedCustomer.code }
+          : null,
+      });
+      if (decision.action === "pick") {
+        pickCustomer(decision.row);
+        return;
+      }
+      if (decision.action === "lookup") {
+        pendingEnterSelectRef.current = true;
+        return;
+      }
+      if (query && !selectedCustomer) {
+        setCustomerCodeMissing(true);
+        setErr("לא נמצא לקוח");
       }
     }
   }, [closeCustomerDropdown, codeStr, pickCustomer, selectedCustomer]);
@@ -1961,9 +2047,15 @@ export function OrderCreatePanel({
                   placeholder="קוד / שם / טלפון"
                   onChange={(e) => {
                     const v = e.target.value;
+                    pendingEnterSelectRef.current = false;
                     setCustomerCodeMissing(false);
+                    setErr((prev) => (prev === "לא נמצא לקוח" ? null : prev));
                     const curCode = selectedCustomer?.code?.trim() || "";
-                    if (selectedCustomer && v.trim() !== curCode && v.trim() !== selectedCustomer.id) {
+                    if (
+                      selectedCustomer &&
+                      !customerCodeEqualsQuery(curCode, v.trim()) &&
+                      v.trim() !== selectedCustomer.id
+                    ) {
                       clearSelectedCustomerFromTyping("code", v);
                     } else {
                       setCodeStr(v);

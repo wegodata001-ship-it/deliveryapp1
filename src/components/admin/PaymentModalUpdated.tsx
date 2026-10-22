@@ -224,11 +224,14 @@ import {
 import { AnimatedMoneyValue } from "@/components/ui/AnimatedMoneyValue";
 import {
   cancelCustomerSearch,
+  CUSTOMER_CODE_SEARCH_DEBOUNCE_MS,
   CUSTOMER_SEARCH_DEBOUNCE_MS,
+  customerCodeEqualsQuery,
   customerSearchMinQueryLength,
   pickAutoCustomerHit,
   resolveCustomerEnterSelection,
   searchCustomerSuggestionsClient,
+  shouldAutoSelectExactCustomerCode,
 } from "@/lib/customer-search-client";
 
 const COUNTRY_BADGE_SHORT: Record<OrderCountryCode, string> = {
@@ -2357,6 +2360,8 @@ export function PaymentModalUpdated({
   showCustomerCodeNotFoundRef.current = showCustomerCodeNotFound;
 
   const clearCustomerSelectionFromDraftEdit = useCallback((field: CustFieldKey, value: string) => {
+    custSearchGenRef.current += 1;
+    pendingEnterSelectRef.current = false;
     setCustomer(null);
     setCustomerPayments([]);
     setOrders([]);
@@ -2802,6 +2807,23 @@ export function PaymentModalUpdated({
           return;
         }
 
+        if (field === "code") {
+          const selected = selectedCustomerRef.current;
+          if (selected && customerCodeEqualsQuery(selected.code, q)) {
+            setCustSearching(false);
+            setCustSearchNoHits(false);
+            setCustomerHits([]);
+            setCustDdOpen(false);
+            setCustActiveIndex(-1);
+            if (pendingEnterSelectRef.current) {
+              pendingEnterSelectRef.current = false;
+              customerCodeEnterBusyRef.current = false;
+              setCustomerCodeEnterBusy(false);
+            }
+            return;
+          }
+        }
+
         setCustSearching(true);
         setCustSearchField(field);
         setCustSearchNoHits(false);
@@ -2819,6 +2841,20 @@ export function PaymentModalUpdated({
 
           custHitsQueryRef.current = q;
           customerHitsRef.current = rows;
+
+          const typedAuto = shouldAutoSelectExactCustomerCode({
+            field: field === "code" ? "code" : "text",
+            query: q,
+            hits: rows,
+            alreadySelectedId: selectedCustomerRef.current?.id ?? null,
+          });
+          if (typedAuto) {
+            pendingEnterSelectRef.current = false;
+            customerCodeEnterBusyRef.current = false;
+            setCustomerCodeEnterBusy(false);
+            pickCustHitRef.current(typedAuto);
+            return;
+          }
 
           if (pendingEnterSelectRef.current && field === lastEditedFieldRef.current) {
             pendingEnterSelectRef.current = false;
@@ -2869,7 +2905,7 @@ export function PaymentModalUpdated({
           }
         }
       })();
-    }, CUSTOMER_SEARCH_DEBOUNCE_MS);
+    }, pendingField === "code" ? CUSTOMER_CODE_SEARCH_DEBOUNCE_MS : CUSTOMER_SEARCH_DEBOUNCE_MS);
 
     return () => {
       cancelled = true;
