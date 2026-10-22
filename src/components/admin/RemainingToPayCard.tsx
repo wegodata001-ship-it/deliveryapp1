@@ -44,9 +44,7 @@ export function RemainingToPayCard({ display }: Props) {
   const surplusPendingUsd = display.surplusPendingUsd ?? 0;
   const surplusPendingLine = formatIntakeSurplusPendingLine(surplusPendingUsd);
   const usdLine = remainingToPayCardHero(display);
-  const showHint = Boolean(
-    statusHint && !(state === "cleared" && surplusPendingUsd <= 0.01 && statusHint === "מאוזן"),
-  );
+  const showHint = Boolean(statusHint);
   const ilsRaw = formatPaymentBalanceIlsLine({
     ...display,
     state: state === "debt" ? "debt" : state === "credit" ? "credit" : "cleared",
@@ -62,7 +60,7 @@ export function RemainingToPayCard({ display }: Props) {
           ? "payment-remaining-to-pay--due"
           : state === "surplus" || state === "credit"
             ? "payment-remaining-to-pay--ok payment-remaining-to-pay--surplus"
-            : "payment-remaining-to-pay--ok",
+            : "payment-remaining-to-pay--balanced",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -77,7 +75,9 @@ export function RemainingToPayCard({ display }: Props) {
           "payment-modal-live-kpi__hero-v",
           state === "debt"
             ? "payment-modal-live-kpi__hero-v--due"
-            : "payment-modal-live-kpi__hero-v--ok",
+            : state === "credit" || state === "surplus"
+              ? "payment-modal-live-kpi__hero-v--ok"
+              : "payment-modal-live-kpi__hero-v--neutral",
         ].join(" ")}
         dir="ltr"
         value={usdLine}

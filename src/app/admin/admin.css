@@ -18409,6 +18409,19 @@ select.payment-modal-inline-input {
 .payment-remaining-to-pay--due {
   border-color: #fecaca;
 }
+.payment-remaining-to-pay--balanced {
+  border-color: #e2e8f0;
+  background: #fff;
+}
+.payment-modal-live-kpi__hero-v--neutral {
+  color: #334155;
+}
+.payment-remaining-to-pay--due .payment-modal-live-kpi__status-hint {
+  color: #b91c1c;
+}
+.payment-remaining-to-pay--balanced .payment-modal-live-kpi__status-hint {
+  color: #64748b;
+}
 .payment-modal-live-kpi--order-summary--surplus {
   border-color: #7dd3fc;
   background: linear-gradient(180deg, #f0f9ff 0%, #e0f2fe 100%);

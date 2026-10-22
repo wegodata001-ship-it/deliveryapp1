@@ -300,7 +300,7 @@ export function paymentIntakeFinalCustomerBalance(input: {
       surplusPendingUsd,
       state: "credit",
       title: "יתרת לקוח",
-      statusLabel: "יתרת זכות",
+      statusLabel: "יתרת זכות ללקוח",
     };
   }
   if (signed < -0.01) {
@@ -311,7 +311,7 @@ export function paymentIntakeFinalCustomerBalance(input: {
       surplusPendingUsd,
       state: "debt",
       title: "יתרת לקוח",
-      statusLabel: "לתשלום",
+      statusLabel: "חוב פתוח",
     };
   }
   return {
@@ -321,7 +321,7 @@ export function paymentIntakeFinalCustomerBalance(input: {
     surplusPendingUsd,
     state: "cleared",
     title: "יתרת לקוח",
-    statusLabel: surplusPendingUsd > 0.01 ? "חוב נסגר" : "מאוזן",
+    statusLabel: "חשבון מאוזן",
   };
 }
 
@@ -380,11 +380,16 @@ export function formatIntakeCustomerBalanceHeroLine(input: {
   signedBalanceUsd: number;
   surplusPendingUsd?: number;
 }): string {
-  const surplus = money2(Math.max(0, input.surplusPendingUsd ?? 0));
-  if (Math.abs(input.signedBalanceUsd) <= 0.01 && surplus <= 0.01) {
-    return "$0.00 — מאוזן";
-  }
+  void input.surplusPendingUsd;
   return formatCustomerNetBalanceUsd(input.signedBalanceUsd);
+}
+
+export const PAYMENT_INTAKE_WEEK_ORDER_DEBT_LABEL = "חוב הזמנות בשבוע הנבחר";
+export const PAYMENT_INTAKE_BALANCE_BEFORE_LABEL = "יתרת לקוח לפני";
+export const PAYMENT_INTAKE_BALANCE_AFTER_LABEL = "יתרת לקוח צפויה";
+
+export function formatIntakeWeekOrderDebtUsdLine(weekRemainingUsd: number): string {
+  return `$${money2(Math.max(0, weekRemainingUsd)).toFixed(2)}`;
 }
 
 export function formatIntakeSurplusPendingLine(surplusPendingUsd: number): string {

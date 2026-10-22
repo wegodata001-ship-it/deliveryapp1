@@ -31,14 +31,17 @@ test.describe("Payment intake — יתרת לקוח card", () => {
     await expect(card).toBeVisible({ timeout: 30_000 });
     await expect(card.locator(".payment-modal-live-kpi__lbl")).toHaveText("יתרת לקוח");
     await expect(card.locator(".payment-modal-live-kpi__hero-v")).not.toHaveText("טוען…");
-    await expect(card).toContainText("+$510.00");
-    await expect(card).toContainText("יתרת זכות");
+    await expect(card).toContainText("+$409.00");
+    await expect(card).toContainText("יתרת זכות ללקוח");
     await expect(card).not.toContainText("נשאר לתשלום");
-    await expect(card.locator(".payment-modal-live-kpi__hero-v")).toHaveText("+$510.00");
+    await expect(card.locator(".payment-modal-live-kpi__hero-v")).toHaveText("+$409.00");
+    const weekDebt = page.getByTestId("payment-week-order-debt");
+    await expect(weekDebt).toContainText("חוב הזמנות בשבוע הנבחר");
+    await expect(weekDebt).toContainText("$0.00");
     return card;
   }
 
-  test("101 CURRENT +$510 on AH-144, week switch, typed amount, reopen", async ({ page }) => {
+  test("101 CURRENT +$409 on AH-144, week switch, typed amount, reopen", async ({ page }) => {
     test.setTimeout(240_000);
     await loginAsQaAdmin(page);
     await openPaymentModal(page);
@@ -63,6 +66,8 @@ test.describe("Payment intake — יתרת לקוח card", () => {
     const amountBox = page.locator(".payment-modal-inp--amount").first();
     await amountBox.fill("50");
     await expect(amountBox).toHaveValue(/50/);
+    await expect(page.getByTestId("payment-customer-balance-before")).toContainText("+$409.00");
+    await expect(page.getByTestId("payment-customer-balance-after")).toContainText("יתרת לקוח צפויה");
     await expectKhalilCurrentCredit(page);
 
     await page.locator(".ui-close").first().click();
@@ -73,7 +78,7 @@ test.describe("Payment intake — יתרת לקוח card", () => {
     await expectKhalilCurrentCredit(page);
   });
 
-  test("customer change replaces 101 card then 101 returns to +$510", async ({ page }) => {
+  test("customer change replaces 101 card then 101 returns to +$409", async ({ page }) => {
     test.setTimeout(240_000);
     await loginAsQaAdmin(page);
     await openPaymentModal(page);
@@ -88,5 +93,21 @@ test.describe("Payment intake — יתרת לקוח card", () => {
 
     await selectCustomerByQuery(page, "חליל", "101");
     await expectKhalilCurrentCredit(page);
+  });
+
+  test("107 CURRENT debt stays on the card when week remaining is $0", async ({ page }) => {
+    test.setTimeout(240_000);
+    await loginAsQaAdmin(page);
+    await openPaymentModal(page);
+    await selectCustomerByQuery(page, "חנאן", "107");
+    const card = page.getByTestId("payment-customer-balance-card");
+    await expect(card).toBeVisible({ timeout: 30_000 });
+    await expect(card.locator(".payment-modal-live-kpi__lbl")).toHaveText("יתרת לקוח");
+    await expect(card).toContainText("-$1,212.00");
+    await expect(card).toContainText("חוב פתוח");
+    await page.locator(".payment-modal-week-inp").fill("AH-144");
+    await page.locator(".payment-modal-week-inp").blur();
+    await expect(card).toContainText("-$1,212.00");
+    await expect(page.getByTestId("payment-week-order-debt")).toContainText("חוב הזמנות בשבוע הנבחר");
   });
 });

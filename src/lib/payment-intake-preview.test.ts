@@ -11,6 +11,8 @@ import {
   paymentIntakeFinalCustomerBalance,
   formatIntakeCustomerBalanceHeroLine,
   formatIntakeSurplusPendingLine,
+  formatIntakeWeekOrderDebtUsdLine,
+  PAYMENT_INTAKE_WEEK_ORDER_DEBT_LABEL,
   remainingToPayCardDisplayFromOverpayment,
   remainingToPayCardDisplayFromPreview,
   toPaymentPreviewOrders,
@@ -307,11 +309,11 @@ describe("paymentIntakeFinalCustomerBalance", () => {
     const bal = paymentIntakeFinalBalanceFromPreview(p);
     assert.equal(bal.signedBalanceUsd, 20);
     assert.equal(bal.surplusPendingUsd, 0);
-    assert.equal(bal.statusLabel, "יתרת זכות");
+    assert.equal(bal.statusLabel, "יתרת זכות ללקוח");
     assert.equal(formatIntakeFinalBalanceUsdLine(bal.signedBalanceUsd), "+$20.00");
     const d = paymentIntakeFinalBalanceCardDisplay(bal, 3);
     assert.equal(d.title, "יתרת לקוח");
-    assert.equal(d.statusHint, "יתרת זכות");
+    assert.equal(d.statusHint, "יתרת זכות ללקוח");
   });
 
   it("CASE B — debt 758.01 draft 0 → -$758.01 חוב לתשלום", () => {
@@ -322,7 +324,7 @@ describe("paymentIntakeFinalCustomerBalance", () => {
     });
     assert.equal(bal.signedBalanceUsd, -758.01);
     assert.equal(bal.surplusPendingUsd, 0);
-    assert.equal(bal.statusLabel, "לתשלום");
+    assert.equal(bal.statusLabel, "חוב פתוח");
     assert.equal(formatIntakeFinalBalanceUsdLine(bal.signedBalanceUsd), "-$758.01");
   });
 
@@ -334,7 +336,7 @@ describe("paymentIntakeFinalCustomerBalance", () => {
     });
     assert.equal(bal.signedBalanceUsd, -258.01);
     assert.equal(bal.surplusPendingUsd, 0);
-    assert.equal(bal.statusLabel, "לתשלום");
+    assert.equal(bal.statusLabel, "חוב פתוח");
     assert.equal(formatIntakeFinalBalanceUsdLine(bal.signedBalanceUsd), "-$258.01");
   });
 
@@ -346,7 +348,7 @@ describe("paymentIntakeFinalCustomerBalance", () => {
     });
     assert.equal(bal.signedBalanceUsd, 0);
     assert.equal(bal.surplusPendingUsd, 0);
-    assert.equal(bal.statusLabel, "מאוזן");
+    assert.equal(bal.statusLabel, "חשבון מאוזן");
     assert.equal(formatIntakeFinalBalanceUsdLine(bal.signedBalanceUsd), "$0.00");
   });
 
@@ -359,7 +361,7 @@ describe("paymentIntakeFinalCustomerBalance", () => {
     });
     assert.equal(bal.signedBalanceUsd, 41.99);
     assert.equal(bal.surplusPendingUsd, 0);
-    assert.equal(bal.statusLabel, "יתרת זכות");
+    assert.equal(bal.statusLabel, "יתרת זכות ללקוח");
     assert.equal(formatIntakeFinalBalanceUsdLine(bal.signedBalanceUsd), "+$41.99");
   });
 
@@ -372,7 +374,7 @@ describe("paymentIntakeFinalCustomerBalance", () => {
     });
     assert.equal(bal.signedBalanceUsd, 0);
     assert.equal(bal.surplusPendingUsd, 0);
-    assert.equal(bal.statusLabel, "מאוזן");
+    assert.equal(bal.statusLabel, "חשבון מאוזן");
     assert.equal(formatIntakeFinalBalanceUsdLine(bal.signedBalanceUsd), "$0.00");
   });
 
@@ -385,11 +387,11 @@ describe("paymentIntakeFinalCustomerBalance", () => {
     assert.equal(bal.signedBalanceUsd, 0);
     assert.equal(bal.surplusPendingUsd, 41.99);
     assert.equal(bal.availableCreditAfter, 0);
-    assert.equal(bal.statusLabel, "חוב נסגר");
+    assert.equal(bal.statusLabel, "חשבון מאוזן");
     assert.equal(formatIntakeFinalBalanceUsdLine(bal.signedBalanceUsd), "$0.00");
     assert.equal(formatIntakeSurplusPendingLine(bal.surplusPendingUsd), "עודף לטיפול: +$41.99");
     const d = paymentIntakeFinalBalanceCardDisplay(bal, 3);
-    assert.equal(d.statusHint, "חוב נסגר");
+    assert.equal(d.statusHint, "חשבון מאוזן");
     assert.equal(d.surplusPendingUsd, 41.99);
   });
 
@@ -401,7 +403,7 @@ describe("paymentIntakeFinalCustomerBalance", () => {
     });
     assert.equal(bal.signedBalanceUsd, 20);
     assert.equal(bal.surplusPendingUsd, 50);
-    assert.equal(bal.statusLabel, "יתרת זכות");
+    assert.equal(bal.statusLabel, "יתרת זכות ללקוח");
   });
 
   it("does not treat received as debt reduction when surplus goes to commission", () => {
@@ -435,7 +437,7 @@ describe("paymentIntakeFinalCustomerBalance", () => {
     assert.equal(formatPaymentBalanceUsdLine(weekRemainingDisplay), "$0.00");
     assert.equal(currentCard.signedBalanceUsd, 510);
     assert.equal(currentCard.title, "יתרת לקוח");
-    assert.equal(currentCard.statusLabel, "יתרת זכות");
+    assert.equal(currentCard.statusLabel, "יתרת זכות ללקוח");
     assert.equal(
       formatIntakeCustomerBalanceHeroLine({
         signedBalanceUsd: currentCard.signedBalanceUsd,
@@ -445,7 +447,7 @@ describe("paymentIntakeFinalCustomerBalance", () => {
     );
     const d = paymentIntakeFinalBalanceCardDisplay(currentCard, 3);
     assert.equal(d.title, "יתרת לקוח");
-    assert.equal(d.statusHint, "יתרת זכות");
+    assert.equal(d.statusHint, "יתרת זכות ללקוח");
     assert.equal(d.balanceUsdSigned, 510);
   });
 
@@ -492,9 +494,9 @@ describe("paymentIntakeFinalCustomerBalance", () => {
     });
     assert.equal(afterWeekSwitch.signedBalanceUsd, customer101.signedBalanceUsd);
     assert.equal(otherCustomer.signedBalanceUsd, -300);
-    assert.equal(otherCustomer.statusLabel, "לתשלום");
+    assert.equal(otherCustomer.statusLabel, "חוב פתוח");
     assert.equal(afterSaveRefresh.signedBalanceUsd, 510);
-    assert.equal(afterSaveRefresh.statusLabel, "יתרת זכות");
+    assert.equal(afterSaveRefresh.statusLabel, "יתרת זכות ללקוח");
   });
 
   it("historical-week typed payment does not change CURRENT card when draft is withheld", () => {
@@ -521,7 +523,64 @@ describe("paymentIntakeFinalCustomerBalance", () => {
     );
     assert.equal(
       formatIntakeCustomerBalanceHeroLine({ signedBalanceUsd: 0 }),
-      "$0.00 — מאוזן",
+      "$0.00",
     );
+  });
+
+  it("101 live CURRENT +$409 is not week remaining $0", () => {
+    const week = formatIntakeWeekOrderDebtUsdLine(0);
+    const card = paymentIntakeCustomerBalanceFromCurrentBooks({
+      currentOpenDebtUsd: 0,
+      currentAvailableCreditUsd: 409,
+      draftPaymentUsd: 0,
+    });
+    assert.equal(PAYMENT_INTAKE_WEEK_ORDER_DEBT_LABEL, "חוב הזמנות בשבוע הנבחר");
+    assert.equal(week, "$0.00");
+    assert.equal(card.title, "יתרת לקוח");
+    assert.equal(card.statusLabel, "יתרת זכות ללקוח");
+    assert.equal(formatIntakeCustomerBalanceHeroLine({ signedBalanceUsd: 409 }), "+$409.00");
+    assert.notEqual(card.signedBalanceUsd, 0);
+  });
+
+  it("107 CURRENT debt −$1,212 stays on the card when week remaining is $0", () => {
+    const card = paymentIntakeCustomerBalanceFromCurrentBooks({
+      currentOpenDebtUsd: 1212,
+      currentAvailableCreditUsd: 0,
+      draftPaymentUsd: 0,
+    });
+    assert.equal(formatIntakeWeekOrderDebtUsdLine(0), "$0.00");
+    assert.equal(card.signedBalanceUsd, -1212);
+    assert.equal(card.statusLabel, "חוב פתוח");
+    assert.equal(formatIntakeCustomerBalanceHeroLine({ signedBalanceUsd: -1212 }), "-$1,212.00");
+  });
+
+  it("partial pay, overpay, and credit offset keep week debt separate", () => {
+    const before = paymentIntakeCustomerBalanceFromCurrentBooks({
+      currentOpenDebtUsd: 300,
+      currentAvailableCreditUsd: 0,
+      draftPaymentUsd: 0,
+    });
+    const partial = paymentIntakeCustomerBalanceFromCurrentBooks({
+      currentOpenDebtUsd: 300,
+      currentAvailableCreditUsd: 0,
+      draftPaymentUsd: 100,
+    });
+    const overpay = paymentIntakeCustomerBalanceFromCurrentBooks({
+      currentOpenDebtUsd: 300,
+      currentAvailableCreditUsd: 0,
+      draftPaymentUsd: 350,
+      surplusDestination: "credit",
+    });
+    const creditOffset = paymentIntakeCustomerBalanceFromCurrentBooks({
+      currentOpenDebtUsd: 0,
+      currentAvailableCreditUsd: 409,
+      draftPaymentUsd: 50,
+    });
+    assert.equal(before.statusLabel, "חוב פתוח");
+    assert.equal(partial.signedBalanceUsd, -200);
+    assert.equal(overpay.signedBalanceUsd, 50);
+    assert.equal(overpay.statusLabel, "יתרת זכות ללקוח");
+    assert.equal(creditOffset.signedBalanceUsd, 409);
+    assert.equal(formatIntakeWeekOrderDebtUsdLine(0), "$0.00");
   });
 });

@@ -46,7 +46,6 @@ import { PaymentIntakeDeviationModal } from "@/components/admin/PaymentIntakeDev
 import { usePaymentIntakePlanningViews } from "@/hooks/usePaymentIntakePlanningViews";
 import {
   computeOrderOpenDebtUsd,
-  formatPaymentBalanceIlsLine,
   formatPaymentBalanceUsdLine,
   type PaymentBalanceDisplay,
 } from "@/lib/order-remaining-debt";
@@ -59,8 +58,13 @@ import {
 import { buildCustomerFinancialState } from "@/lib/customer-account-balances-shared";
 import { sumPaymentIntakeWeekScopedRemainingUsd } from "@/lib/payment-intake-order-filter";
 import {
+  PAYMENT_INTAKE_BALANCE_AFTER_LABEL,
+  PAYMENT_INTAKE_BALANCE_BEFORE_LABEL,
+  PAYMENT_INTAKE_WEEK_ORDER_DEBT_LABEL,
   buildPaymentPreview,
   computePendingCreditApplyUsd,
+  formatIntakeFinalBalanceUsdLine,
+  formatIntakeWeekOrderDebtUsdLine,
   paymentIntakeCustomerBalanceFromCurrentBooks,
   paymentIntakeFinalBalanceCardDisplay,
   remainingToPayCardDisplayFromPreview,
@@ -1383,6 +1387,21 @@ export function PaymentModalUpdated({
     if (!intakeFinalBalance) return null;
     return paymentIntakeFinalBalanceCardDisplay(intakeFinalBalance, rateN);
   }, [intakeFinalBalance, rateN]);
+
+  const intakeBalanceBefore = useMemo(() => {
+    if (currentOpenDebtUsd == null || currentAvailableCreditUsd == null) return null;
+    return paymentIntakeCustomerBalanceFromCurrentBooks({
+      currentOpenDebtUsd,
+      currentAvailableCreditUsd,
+      draftPaymentUsd: 0,
+    });
+  }, [currentOpenDebtUsd, currentAvailableCreditUsd]);
+
+  const intakeDraftPaymentUsd = isHistoricalPaymentView
+    ? 0
+    : isExistingPayment
+      ? Math.max(0, paymentApplyUsd)
+      : Math.max(0, totals.totalUsd);
 
   const accountStatusDisplay = paymentBalanceDisplay;
 
@@ -4757,22 +4776,40 @@ export function PaymentModalUpdated({
                       </span>
                     </>
                   ) : null}
-                  <span className="payment-balance-summary__item payment-balance-summary__item--with-btn">
-                    <span className="payment-balance-summary__k">חוב לפני התשלום:</span>
+                  <span
+                    className="payment-balance-summary__item payment-balance-summary__item--with-btn"
+                    data-testid="payment-week-order-debt"
+                  >
+                    <span className="payment-balance-summary__k">{PAYMENT_INTAKE_WEEK_ORDER_DEBT_LABEL}:</span>
                     <AnimatedMoneyValue
                       className="payment-balance-summary__v payment-balance-summary__v--current"
                       dir="ltr"
-                      value={`$${fmtUsdDisplay(openDebtAfterPaymentPreview.currentOpenBalance)}`}
+                      value={formatIntakeWeekOrderDebtUsdLine(weekScopedRemainingUsd)}
                     />
                     <button
                       type="button"
                       className="payment-balance-summary__detail-btn"
                       onClick={() => setDebtBreakdownOpen(true)}
-                      title="הצג פירוט חוב"
+                      title="הצג פירוט חוב הזמנות בשבוע"
                     >
                       <FileText size={14} aria-hidden /> הצג פירוט חוב
                     </button>
                   </span>
+                  {intakeDraftPaymentUsd > 0.01 && intakeBalanceBefore ? (
+                    <>
+                      <span className="payment-balance-summary__sep" aria-hidden>
+                        •
+                      </span>
+                      <span className="payment-balance-summary__item" data-testid="payment-customer-balance-before">
+                        <span className="payment-balance-summary__k">{PAYMENT_INTAKE_BALANCE_BEFORE_LABEL}:</span>
+                        <AnimatedMoneyValue
+                          className="payment-balance-summary__v payment-balance-summary__v--current"
+                          dir="ltr"
+                          value={formatIntakeFinalBalanceUsdLine(intakeBalanceBefore.signedBalanceUsd)}
+                        />
+                      </span>
+                    </>
+                  ) : null}
                   <span className="payment-balance-summary__sep" aria-hidden>
                     •
                   </span>
@@ -4787,17 +4824,19 @@ export function PaymentModalUpdated({
                   <span className="payment-balance-summary__sep" aria-hidden>
                     •
                   </span>
-                  <span className="payment-balance-summary__item">
+                  <span className="payment-balance-summary__item" data-testid="payment-customer-balance-after">
                     <span className="payment-balance-summary__k">
-                      {openDebtAfterPaymentPreview.paymentBalanceDisplay.title}:
+                      {intakeDraftPaymentUsd > 0.01
+                        ? `${PAYMENT_INTAKE_BALANCE_AFTER_LABEL}:`
+                        : "יתרת לקוח:"}
                     </span>
                     <span
                       className={[
                         "payment-balance-summary__balance-duo",
-                        openDebtAfterPaymentPreview.paymentBalanceDisplay.state === "debt"
+                        intakeFinalBalanceDisplay?.state === "debt"
                           ? "payment-balance-summary__balance-duo--debt"
-                          : openDebtAfterPaymentPreview.paymentBalanceDisplay.state === "surplus" ||
-                              openDebtAfterPaymentPreview.paymentBalanceDisplay.state === "credit"
+                          : intakeFinalBalanceDisplay?.state === "surplus" ||
+                              intakeFinalBalanceDisplay?.state === "credit"
                             ? "payment-balance-summary__balance-duo--cleared"
                             : "payment-balance-summary__balance-duo--cleared",
                       ].join(" ")}
@@ -4806,21 +4845,16 @@ export function PaymentModalUpdated({
                       <AnimatedMoneyValue
                         className="payment-balance-summary__v payment-balance-summary__v--hero"
                         dir="ltr"
-                        value={formatPaymentBalanceUsdLine(
-                          openDebtAfterPaymentPreview.paymentBalanceDisplay,
-                        )}
-                      />
-                      <AnimatedMoneyValue
-                        className="payment-balance-summary__v payment-balance-summary__v--ils"
-                        dir="ltr"
-                        value={formatPaymentBalanceIlsLine(
-                          openDebtAfterPaymentPreview.paymentBalanceDisplay,
-                        )}
+                        value={
+                          intakeFinalBalance
+                            ? formatIntakeFinalBalanceUsdLine(intakeFinalBalance.signedBalanceUsd)
+                            : "טוען…"
+                        }
                       />
                     </span>
-                    {openDebtAfterPaymentPreview.paymentBalanceDisplay.statusHint ? (
+                    {intakeFinalBalanceDisplay?.statusHint ? (
                       <span className="payment-balance-summary__status-hint">
-                        {openDebtAfterPaymentPreview.paymentBalanceDisplay.statusHint}
+                        {intakeFinalBalanceDisplay.statusHint}
                       </span>
                     ) : null}
                     {showInlineOverpaymentBtn ? (
