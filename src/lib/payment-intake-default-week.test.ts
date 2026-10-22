@@ -60,9 +60,9 @@ describe("defaultPaymentIntakeDateYmd — Saturday of previous (financial) week"
     const RealDate = Date;
     const frozen = new RealDate("2026-09-06T14:52:00+03:00");
     class FakeDate extends RealDate {
-      constructor(...args: ConstructorParameters<typeof Date>) {
+      constructor(...args: [] | [string | number | Date]) {
         if (args.length === 0) super(frozen.getTime());
-        else super(...args);
+        else super(args[0]);
       }
       static now() {
         return frozen.getTime();

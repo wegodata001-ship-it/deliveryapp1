@@ -257,6 +257,11 @@ export function buildPaymentPreview(input: {
 
 export type PaymentIntakeSurplusDestination = "credit" | "commission" | "forfeit" | "none";
 
+export type PaymentIntakeCustomerStatusLabel =
+  | "יתרת זכות ללקוח"
+  | "חוב פתוח"
+  | "חשבון מאוזן";
+
 export type PaymentIntakeFinalBalance = {
   openDebtAfter: number;
   availableCreditAfter: number;
@@ -265,7 +270,7 @@ export type PaymentIntakeFinalBalance = {
   surplusPendingUsd: number;
   state: "credit" | "cleared" | "debt";
   title: "יתרת לקוח";
-  statusLabel: "יתרת זכות" | "מאוזן" | "לתשלום" | "חוב נסגר";
+  statusLabel: PaymentIntakeCustomerStatusLabel;
 };
 
 /**

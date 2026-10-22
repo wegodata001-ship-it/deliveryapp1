@@ -4,8 +4,9 @@ import type { CustomerLedgerRow } from "@/lib/customer-account-ledger";
 import { formatLedgerActorDisplay, isTechnicalLedgerId } from "@/lib/ledger-actor-display";
 import { buildLedgerRowDetailView, hasLedgerRowDetail } from "@/lib/ledger-row-detail";
 
-function row(partial: Partial<CustomerLedgerRow> & Pick<CustomerLedgerRow, "id">): CustomerLedgerRow {
+function row(partial: Partial<CustomerLedgerRow> = {}): CustomerLedgerRow {
   return {
+    id: "row-1",
     dateYmd: "2026-09-03",
     kind: "BALANCE_RESET",
     typeLabel: "איפוס יתרת זכות לעמלות",
