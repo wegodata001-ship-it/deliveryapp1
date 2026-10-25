@@ -120,7 +120,7 @@ export function atlasPdfCell(
 const PDF_RLM = "\u200F";
 
 /** שורת מטא RTL — «שם לקוח: אחמד» (לא היפוך/הצמדה) */
-function atlasMetaLine(label: string, value: string, ltrValue = false): Content {
+export function atlasMetaLine(label: string, value: string, ltrValue = false): Content {
   const display = (value || "—").trim() || "—";
   const labelRun = `${PDF_RLM}${label}:${PDF_RLM}`;
   const text = ltrValue

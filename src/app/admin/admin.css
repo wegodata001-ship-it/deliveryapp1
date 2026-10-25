@@ -22089,6 +22089,103 @@ select.payment-modal-inline-input {
   line-height: 1.35;
 }
 
+.adm-cust-ledger-export-btn--customer {
+  font-weight: 700;
+}
+
+.adm-cust-pdf-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.adm-cust-pdf-modal__group {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+}
+
+.adm-cust-pdf-modal__group legend {
+  font-weight: 700;
+  font-size: 13px;
+  padding: 0 4px;
+}
+
+.adm-cust-pdf-modal__group label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.adm-cust-pdf-modal__dates {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.adm-cust-pdf-modal__dates label {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.adm-cust-pdf-modal__msg {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.adm-cust-pdf-modal__msg textarea {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-weight: 400;
+  resize: vertical;
+  min-height: 72px;
+}
+
+.adm-cust-pdf-modal__preview {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 10px;
+  background: #f8fafc;
+}
+
+.adm-cust-pdf-modal__preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.adm-cust-pdf-modal__frame {
+  width: 100%;
+  height: min(52vh, 420px);
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.adm-cust-pdf-modal__empty {
+  margin: 0;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.adm-cust-pdf-modal__actions {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
 .adm-cust-ledger-quick-filter {
   display: flex;
   flex-wrap: wrap;
@@ -24878,24 +24975,23 @@ select.adm-balances-input {
 }
 
 .adm-bal-amt {
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
+  line-height: 1.25;
 }
 
 .adm-bal-amt--debt {
   color: #dc2626;
-  font-weight: 800;
 }
 
 .adm-bal-amt--credit {
-  color: #15803d;
-  font-weight: 800;
+  color: #16a34a;
 }
 
 .adm-bal-amt--balanced,
 .adm-bal-amt--neutral {
-  color: #0284c7;
-  font-weight: 700;
+  color: #2563eb;
 }
 
 .adm-bal-chip {
@@ -25413,18 +25509,6 @@ select.adm-balances-input {
 
 .adm-balances-page--fcc .adm-balances-table--erp tbody tr.adm-balances-row-click:nth-child(odd) {
   background: #fff;
-}
-
-.adm-balances-page--fcc .adm-balances-table--erp tbody tr.adm-balances-row--debt {
-  background: #fff7f7;
-}
-
-.adm-balances-page--fcc .adm-balances-table--erp tbody tr.adm-balances-row--credit {
-  background: #f0fdf4;
-}
-
-.adm-balances-page--fcc .adm-balances-table--erp tbody tr.adm-balances-row--balanced {
-  background: #f8fafc;
 }
 
 .adm-balances-page--fcc .adm-balances-table--erp tbody tr.adm-balances-row-click:hover {

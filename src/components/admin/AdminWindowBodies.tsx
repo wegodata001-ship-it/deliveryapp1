@@ -69,6 +69,7 @@ import { hasLedgerRowDetail } from "@/lib/ledger-row-detail";
 import { LedgerRowDetailModal } from "@/components/admin/LedgerRowDetailModal";
 import { CustomerLedgerErrorBoundary } from "@/components/admin/CustomerLedgerErrorBoundary";
 import { CustomerLinkedDocuments } from "@/components/admin/CustomerLinkedDocuments";
+import { CustomerLedgerCustomerPdfModal } from "@/components/admin/CustomerLedgerCustomerPdfModal";
 import { formatLocalYmd } from "@/lib/work-week";
 import {
   customerCardBalancesCutoffCaption,
@@ -212,6 +213,7 @@ export function CustomerCardWindowBody({
   const [ledgerOrderLock, setLedgerOrderLock] = useState<OrderEditLockGatePayload | null>(null);
   const [ledgerGateToast, setLedgerGateToast] = useState<string | null>(null);
   const [exportBusy, setExportBusy] = useState<"pdf" | "excel" | "manual-pdf" | null>(null);
+  const [customerPdfOpen, setCustomerPdfOpen] = useState(false);
   const [manualPdfMode, setManualPdfMode] = useState(false);
   const [selectedLedgerRowIds, setSelectedLedgerRowIds] = useState<string[]>([]);
   const lastManualPdfClickId = useRef<string | null>(null);
@@ -761,6 +763,15 @@ export function CustomerCardWindowBody({
         </button>
       </div>
       <div className="adm-cust-ledger-export-actions" role="group" aria-label="ייצוא כרטסת">
+        <button
+          type="button"
+          className="adm-export-btn adm-export-btn--pdf adm-cust-ledger-export-btn adm-cust-ledger-export-btn--customer"
+          disabled={ledgerLoading || !ledger || !exportMeta}
+          title="דוח PDF מעוצב לשליחה ללקוח"
+          onClick={() => setCustomerPdfOpen(true)}
+        >
+          הפקת PDF ללקוח
+        </button>
         <button
           type="button"
           className="adm-export-btn adm-export-btn--pdf adm-cust-ledger-export-btn"
@@ -1440,6 +1451,16 @@ export function CustomerCardWindowBody({
           {ledgerGateToast}
         </div>
       ) : null}
+      <CustomerLedgerCustomerPdfModal
+        open={customerPdfOpen}
+        meta={exportMeta}
+        ledger={ledger}
+        onClose={() => setCustomerPdfOpen(false)}
+        onToast={(m) => {
+          setLedgerGateToast(m);
+          window.setTimeout(() => setLedgerGateToast(null), 3800);
+        }}
+      />
       <CommissionBalancePopover
         open={commissionPopoverOpen}
         customerId={customerId}
