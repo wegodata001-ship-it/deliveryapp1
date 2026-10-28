@@ -29,6 +29,8 @@ import {
 import "@/components/admin/cashflow-control/cashflow-control.css";
 import { WeekMovementJournal } from "@/components/admin/cashflow-control/WeekMovementJournal";
 import { CashflowFxTrackCards } from "@/components/admin/cashflow-control/CashflowFxTrackCards";
+import { CashflowCashboxCards } from "@/components/admin/cashflow-control/CashflowCashboxCards";
+import { CashflowWeekContextBanner } from "@/components/admin/cashflow-control/CashflowWeekContextBanner";
 import {
   CashflowKpiDrillModal,
   type CashflowKpiUiKind,
@@ -364,6 +366,7 @@ export function CashflowControlScreen({
   const selectWeek = useCallback((week: string) => {
     const wk = week.trim();
     if (!wk) return;
+    drillCacheRef.current.delete(selectedWeek.trim());
     setSelectedWeek(wk);
     window.requestAnimationFrame(() => {
       detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -427,12 +430,12 @@ export function CashflowControlScreen({
     try {
       const endpoint =
         format === "excel"
-          ? "/api/controls/cash-control/export/excel"
-          : "/api/controls/cash-control/export/pdf";
+          ? "/api/controls/cash-flow/export/excel"
+          : "/api/controls/cash-flow/export/pdf";
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ week: wk }),
+        body: JSON.stringify({ week: wk, workCountry }),
       });
       if (!res.ok) {
         alert((await res.json().then((b) => b?.error).catch(() => null)) ?? "ייצוא נכשל");
@@ -544,6 +547,10 @@ export function CashflowControlScreen({
               loading={loading || drillLoading}
             />
 
+            <CashflowWeekContextBanner row={selectedRow} />
+
+            {!isRange && drill?.flow ? <CashflowCashboxCards flow={drill.flow} /> : null}
+
             {!isRange ? (
               <CashflowFxTrackCards
                 purchases={drill?.flow.fxPurchases}
@@ -573,7 +580,11 @@ export function CashflowControlScreen({
                   </div>
                   <div className="cfc-week-status__card cfc-week-status__card--balance">
                     <span>④ מזומן ₪ בקופה</span>
-                    <strong dir="ltr">₪{weekStatusCards.netHint}</strong>
+                    <strong dir="ltr">
+                      {weekStatusCards.netHint != null && weekStatusCards.netHint !== ""
+                        ? `₪${weekStatusCards.netHint}`
+                        : "טרם בוצעה ספירה"}
+                    </strong>
                   </div>
                 </div>
               </section>

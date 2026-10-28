@@ -25,6 +25,7 @@ import {
 import type { LivePaymentFormKpis } from "@/lib/payment-intake-live-kpi";
 import type { PaymentIntakeOrderRow } from "@/lib/payment-intake";
 import { sumRemainingToPayUsd } from "@/lib/order-remaining-debt";
+import type { CustomerCollectibleReconciliation } from "@/lib/customer-collectible-reconciliation";
 
 export type PaymentIntakePlanningViews = {
   /** Aggregate bucket rows for the PMC button (unchanged logic) */
@@ -33,8 +34,13 @@ export type PaymentIntakePlanningViews = {
   methodViews: IntakeMethodView[];
   /** Summary for the PMC summary cards */
   methodViewSummary: MethodViewSummary;
-  /** «נשאר לתשלום» ברמת הזמנה — סכום יתרות שורות (הקצאה). לתצוגת חוב לקוח — paymentIntakeCustomerOpenDebtUsd. */
+  /** Σ יתרות הזמנה (תכנון) — לא סכום לגבייה */
   orderRemainingToPayUsd: number;
+  /** יתרה מתוכננת פתוחה (PMC remaining) */
+  plannedOpenRemainingUsd: number;
+  /** יתרה נטו לגבייה — SSOT reconciliation */
+  netCollectibleUsd: number;
+  collectibleReconciliation: CustomerCollectibleReconciliation | null;
   /** Full order business model — consumed by the main intake table */
   orderViews: IntakeOrderView[];
   showMethodControl: boolean;
@@ -49,6 +55,7 @@ export function derivePaymentIntakePlanningViews(
   includedOrderIds: string[] | null,
   liveFormKpis: LivePaymentFormKpis,
   totalPaymentUsd: number,
+  collectibleReconciliation: CustomerCollectibleReconciliation | null = null,
 ): PaymentIntakePlanningViews {
   // PMC button rows — unchanged logic (shows aggregate per bucket)
   const methodControlRows = buildLivePaymentMethodControlRows(
@@ -62,13 +69,22 @@ export function derivePaymentIntakePlanningViews(
   const orderViews = buildIntakeOrderViews(orders, includedOrderIds, liveFormKpis, totalPaymentUsd);
   const methodViews = buildIntakeMethodViews(orderViews, totalPaymentUsd, includedOrderIds);
   const orderRemainingToPayUsd = sumRemainingToPayUsd(orderViews);
+  const summary = summarizeIntakeMethodViews(methodViews);
+  const plannedOpenRemainingUsd = roundMoney2(summary.remainingUsd);
 
   return {
     methodControlRows,
     methodViews,
-    methodViewSummary: summarizeIntakeMethodViews(methodViews),
+    methodViewSummary: summary,
     orderRemainingToPayUsd,
+    plannedOpenRemainingUsd,
+    netCollectibleUsd: collectibleReconciliation?.netCollectibleUsd ?? orderRemainingToPayUsd,
+    collectibleReconciliation,
     orderViews,
     showMethodControl: hasCompositeMethodControl(orders, includedOrderIds),
   };
+}
+
+function roundMoney2(n: number): number {
+  return Math.round(n * 100) / 100;
 }

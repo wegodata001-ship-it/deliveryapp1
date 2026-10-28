@@ -8,7 +8,9 @@ export type DocumentEntityType =
   | "SUPPLIER"
   | "TASK"
   | "REPORT"
-  | "CASH_EXPENSE";
+  | "CASH_EXPENSE"
+  | "CASH_WEEK_FLOW"
+  | "FX_PURCHASE";
 
 export const DOCUMENT_ENTITY_TYPES: DocumentEntityType[] = [
   "ORDER",
@@ -19,6 +21,8 @@ export const DOCUMENT_ENTITY_TYPES: DocumentEntityType[] = [
   "TASK",
   "REPORT",
   "CASH_EXPENSE",
+  "CASH_WEEK_FLOW",
+  "FX_PURCHASE",
 ];
 
 export const DOCUMENT_ENTITY_LABELS: Record<DocumentEntityType, string> = {
@@ -30,6 +34,8 @@ export const DOCUMENT_ENTITY_LABELS: Record<DocumentEntityType, string> = {
   TASK: "משימה",
   REPORT: "דוח",
   CASH_EXPENSE: "הוצאת קופה",
+  CASH_WEEK_FLOW: "ספירת מנהל / שבוע תזרים",
+  FX_PURCHASE: "רכישת מט״ח",
 };
 
 export function isDocumentEntityType(v: string): v is DocumentEntityType {

@@ -829,6 +829,10 @@
   color: #15803d;
 }
 
+.pm-paynow-stat--warn strong {
+  color: #b45309;
+}
+
 .pm-paynow-topbar__customer {
   color: #0f172a;
   font-weight: 900;
@@ -16281,6 +16285,161 @@ select.payment-modal-inline-input {
   line-height: 1.35;
   border-bottom: 1px solid #f1f5f9;
   background: #fafafa;
+}
+
+.payment-intake-balance-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 18px;
+  margin: 0 8px 6px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #fff;
+  font-size: 0.8125rem;
+}
+
+.payment-intake-balance-metrics__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 120px;
+}
+
+.payment-intake-balance-metrics__k {
+  color: #1e3a5f;
+  font-weight: 700;
+  font-size: 0.75rem;
+}
+
+.payment-intake-balance-metrics__v {
+  font-size: 1.05rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: #0f172a;
+}
+
+.payment-intake-balance-metrics__v--debt {
+  color: #b91c1c;
+}
+
+.payment-intake-balance-metrics__v--credit {
+  color: #15803d;
+}
+
+.payment-intake-balance-metrics__btn {
+  margin-right: auto;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #1e3a5f;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.payment-intake-balance-metrics__btn:hover {
+  background: #e2e8f0;
+}
+
+.payment-bridge-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 12000;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.payment-bridge-modal {
+  width: min(520px, 100%);
+  max-height: 90vh;
+  overflow: auto;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.25);
+  padding: 16px 18px;
+}
+
+.payment-bridge-modal__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.payment-bridge-modal__head h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  color: #1e3a5f;
+}
+
+.payment-bridge-modal__sub {
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+.payment-bridge-modal__close {
+  border: none;
+  background: #f1f5f9;
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.payment-bridge-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.payment-bridge-table th,
+.payment-bridge-table td {
+  padding: 8px 6px;
+  border-bottom: 1px solid #e2e8f0;
+  text-align: right;
+}
+
+.payment-bridge-table__num {
+  text-align: left !important;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.payment-bridge-table__detail {
+  display: block;
+  font-size: 0.75rem;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.payment-bridge-modal__note {
+  margin: 12px 0 0;
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+.payment-bridge-modal__status {
+  padding: 12px 0;
+  color: #475569;
+}
+
+.payment-bridge-modal__status--err {
+  color: #b91c1c;
+}
+
+.pmc-method-summary__hint td {
+  font-size: 0.78rem;
+  color: #64748b;
+  padding: 6px 8px;
+  background: #f8fafc;
 }
 
 .payment-balance-summary {

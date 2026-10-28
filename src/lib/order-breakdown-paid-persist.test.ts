@@ -3,10 +3,13 @@ import { describe, it } from "node:test";
 import {
   ADJUSTMENT_SAVE_FAILED_USER_MESSAGE,
   breakdownPersistKey,
+  buildBreakdownPersistBalancesFromAppliedLines,
   isPersistedBreakdownId,
   isPrismaMissingRecordError,
   resolveBreakdownPaidPersistTarget,
+  validateBreakdownPersistAgainstMatching,
 } from "@/lib/order-breakdown-paid-persist";
+import { methodBalanceFromBreakdownRow } from "@/lib/payment-method-matching-engine";
 
 const existing = [
   {
@@ -151,6 +154,45 @@ describe("order-breakdown-paid-persist", () => {
       new Set(),
     );
     assert.equal(target.action, "skip");
+  });
+
+  it("persists only debt applied — surplus must not inflate paid (TR-P-000027 pattern)", () => {
+    const before = [
+      methodBalanceFromBreakdownRow({
+        orderId: "ord-140",
+        paymentMethod: "BANK_TRANSFER",
+        amount: 500,
+        currency: "USD",
+        paidAmount: 500,
+        remainingAmount: 0,
+      }),
+      methodBalanceFromBreakdownRow({
+        orderId: "ord-140",
+        paymentMethod: "CASH",
+        amount: 637.78,
+        currency: "USD",
+        paidAmount: 300,
+        remainingAmount: 337.78,
+      }),
+    ];
+    const appliedLines = [
+      { orderId: "ord-140", bucket: "BANK_TRANSFER" as const, method: "BANK_TRANSFER", currency: "USD" as const, amount: 0 },
+      { orderId: "ord-140", bucket: "CASH" as const, method: "CASH", currency: "USD" as const, amount: 258.01 },
+    ].filter((l) => l.amount > 0);
+    const persist = buildBreakdownPersistBalancesFromAppliedLines(
+      before,
+      appliedLines,
+      new Map([["ord-140", 3.7]]),
+    );
+    const cash = persist.find((r) => r.bucket === "CASH");
+    assert.ok(cash);
+    assert.equal(cash!.paid, 558.01);
+    assert.equal(cash!.remaining, 79.77);
+    const validation = validateBreakdownPersistAgainstMatching(before, persist, {
+      amountUsdByOrderId: new Map([["ord-140", 258.01]]),
+      appliedLines,
+    });
+    assert.equal(validation.ok, true);
   });
 
   it("maps Prisma record-not-found to the user-facing adjustment message", () => {

@@ -1,5 +1,11 @@
 import { Prisma } from "@prisma/client";
-import type { MethodBalanceRow } from "@/lib/payment-method-matching-engine";
+import {
+  type DualCurrencyMatchingResult,
+  type MethodApplyLine,
+  type MethodBalanceRow,
+  withMethodStatus,
+  MATCHING_EPS,
+} from "@/lib/payment-method-matching-engine";
 
 export const ADJUSTMENT_SAVE_FAILED_USER_MESSAGE =
   "לא ניתן היה לשמור את ההתאמה. לא בוצעו שינויים.";
@@ -92,6 +98,132 @@ export function resolveBreakdownPaidPersistTarget(
     Math.abs(balance.remaining) > EPS;
   if (!needsRow) return { action: "skip" };
   return { action: "create", orderId, paymentMethod: method, currency };
+}
+
+function balanceRowKey(row: Pick<MethodBalanceRow, "orderId" | "currency" | "bucket">): string {
+  return `${row.orderId}:${row.currency}:${row.bucket}`;
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+/**
+ * Rebuild breakdown paid/remaining for persist: start from pre-payment balances,
+ * add only debt applied (appliedLines). Surplus routed to commission must not inflate paidAmount.
+ */
+export function buildBreakdownPersistBalancesFromAppliedLines(
+  balancesBefore: MethodBalanceRow[],
+  appliedLines: MethodApplyLine[],
+  rateByOrderId: Map<string, number>,
+): MethodBalanceRow[] {
+  const rows = balancesBefore.map((b) => withMethodStatus({ ...b }));
+  const indexByKey = new Map<string, number>();
+  rows.forEach((row, i) => indexByKey.set(balanceRowKey(row), i));
+
+  for (const line of appliedLines) {
+    if (line.amount <= MATCHING_EPS) continue;
+    if (line.currency === "USD") {
+      const idx = indexByKey.get(`${line.orderId}:USD:${line.bucket}`);
+      if (idx == null) continue;
+      const row = rows[idx]!;
+      row.paid = round2(row.paid + line.amount);
+      rows[idx] = withMethodStatus({
+        ...row,
+        remaining: round2(Math.max(0, row.planned - row.paid)),
+      });
+      continue;
+    }
+    const rate = rateByOrderId.get(line.orderId) ?? 0;
+    if (rate > MATCHING_EPS) {
+      const idx = indexByKey.get(`${line.orderId}:USD:${line.bucket}`);
+      if (idx == null) continue;
+      const row = rows[idx]!;
+      const addUsd = round2(line.amount / rate);
+      row.paid = round2(row.paid + addUsd);
+      rows[idx] = withMethodStatus({
+        ...row,
+        remaining: round2(Math.max(0, row.planned - row.paid)),
+      });
+    } else {
+      const idx = indexByKey.get(`${line.orderId}:ILS:${line.bucket}`);
+      if (idx == null) continue;
+      const row = rows[idx]!;
+      row.paid = round2(row.paid + line.amount);
+      rows[idx] = withMethodStatus({
+        ...row,
+        remaining: round2(Math.max(0, row.planned - row.paid)),
+      });
+    }
+  }
+
+  return rows.map(withMethodStatus);
+}
+
+export type BreakdownPersistValidationResult =
+  | { ok: true }
+  | { ok: false; message: string; code: string };
+
+/** Post-matching integrity — debt applied vs order, planned − paidToDebt ≈ remaining */
+export function validateBreakdownPersistAgainstMatching(
+  balancesBefore: MethodBalanceRow[],
+  persistBalances: MethodBalanceRow[],
+  matching: Pick<DualCurrencyMatchingResult, "amountUsdByOrderId" | "appliedLines">,
+): BreakdownPersistValidationResult {
+  const beforePaidByOrder = new Map<string, number>();
+  for (const row of balancesBefore) {
+    if (row.currency !== "USD") continue;
+    beforePaidByOrder.set(
+      row.orderId,
+      round2((beforePaidByOrder.get(row.orderId) ?? 0) + row.paid),
+    );
+  }
+  const afterPaidByOrder = new Map<string, number>();
+  for (const row of persistBalances) {
+    if (row.currency !== "USD") continue;
+    afterPaidByOrder.set(
+      row.orderId,
+      round2((afterPaidByOrder.get(row.orderId) ?? 0) + row.paid),
+    );
+  }
+
+  for (const [orderId, debtAppliedUsd] of matching.amountUsdByOrderId) {
+    if (debtAppliedUsd <= MATCHING_EPS) continue;
+    const before = beforePaidByOrder.get(orderId) ?? 0;
+    const after = afterPaidByOrder.get(orderId) ?? 0;
+    const delta = round2(after - before);
+    if (Math.abs(delta - debtAppliedUsd) > 0.03) {
+      return {
+        ok: false,
+        code: "DEBT_APPLIED_ORDER_MISMATCH",
+        message: `אי-התאמה בהקצאת חוב להזמנה ${orderId.slice(0, 8)}: צפוי $${debtAppliedUsd.toFixed(2)}, נגזר $${delta.toFixed(2)}`,
+      };
+    }
+  }
+
+  for (const row of persistBalances) {
+    const expectedRem = round2(Math.max(0, row.planned - row.paid));
+    if (Math.abs(expectedRem - row.remaining) > 0.03) {
+      return {
+        ok: false,
+        code: "PLANNED_PAID_REMAINING_MISMATCH",
+        message: `אי-התאמת יתרה באמצעי ${row.label} (${row.orderId.slice(0, 8)}): נדרשת בדיקת התאמה`,
+      };
+    }
+    const before = balancesBefore.find(
+      (b) =>
+        b.orderId === row.orderId && b.currency === row.currency && b.bucket === row.bucket,
+    );
+    if (before && row.paid + MATCHING_EPS < before.paid - 0.03) {
+      return {
+        ok: false,
+        code: "PAID_DECREASED",
+        message: "שמירת תשלום הייתה מקטינה paidAmount — הפעולה נעצרה",
+      };
+    }
+  }
+
+  return { ok: true };
 }
 
 export async function persistMatchingBreakdownPaidInTx(

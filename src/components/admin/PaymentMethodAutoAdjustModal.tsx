@@ -11,6 +11,7 @@ import { intentsFromDraftPaymentLines } from "@/lib/payment-method-payment-inten
 import { calculatePaymentIntentDeduction } from "@/lib/payment-intent-vat";
 import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 import { UsdBalanceIlsGrossText } from "@/components/admin/UsdBalanceIlsGrossText";
+import type { CustomerCollectibleReconciliation } from "@/lib/customer-collectible-reconciliation";
 
 /** רק העברה + מזומן — זה כל ה-INPUT שהמשתמש מזין */
 const METHOD_CARDS = [
@@ -128,7 +129,11 @@ type Props = {
   customerId: string;
   customerName: string;
   customerCode: string | null;
+  /** יתרה נטו לגבייה (CURRENT מוגבל לשבוע) */
   openDebtUsd: number;
+  weekDueOrderRemainingUsd?: number;
+  plannedOpenRemainingUsd?: number;
+  collectibleReconciliation?: CustomerCollectibleReconciliation | null;
   creditUsd: number;
   weekCode: string;
   workCountry: string;
@@ -179,6 +184,9 @@ export function PaymentMethodAutoAdjustModal({
   customerName,
   customerCode,
   openDebtUsd,
+  weekDueOrderRemainingUsd,
+  plannedOpenRemainingUsd,
+  collectibleReconciliation,
   creditUsd,
   weekCode,
   workCountry,
@@ -425,12 +433,36 @@ export function PaymentMethodAutoAdjustModal({
               <strong>{customerLabel}</strong>
             </div>
             <div className={debt <= 0.01 ? "pm-paynow-stat pm-paynow-stat--ok" : "pm-paynow-stat"}>
-              <span>חוב פתוח</span>
+              <span>יתרה נטו לגבייה</span>
               <strong dir="ltr">
                 {fmtUsd(debt)}
                 <UsdBalanceIlsGrossText usd={debt} exchangeRate={rateN ?? 0} className="adm-balances-ils-gross" />
               </strong>
             </div>
+            {weekDueOrderRemainingUsd != null && weekDueOrderRemainingUsd > debt + 0.01 ? (
+              <div className="pm-paynow-stat">
+                <span>יתרות הזמנות בשבוע</span>
+                <strong dir="ltr">{fmtUsd(weekDueOrderRemainingUsd)}</strong>
+              </div>
+            ) : null}
+            {plannedOpenRemainingUsd != null && plannedOpenRemainingUsd > debt + 0.01 ? (
+              <div className="pm-paynow-stat">
+                <span>יתרה מתוכננת פתוחה</span>
+                <strong dir="ltr">{fmtUsd(plannedOpenRemainingUsd)}</strong>
+              </div>
+            ) : null}
+            {(collectibleReconciliation?.planningAdjustmentGapUsd ?? 0) > 0.01 ? (
+              <div className="pm-paynow-stat pm-paynow-stat--warn">
+                <span>הפרש להתאמת תכנון</span>
+                <strong dir="ltr">{fmtUsd(collectibleReconciliation!.planningAdjustmentGapUsd)}</strong>
+              </div>
+            ) : null}
+            {collectibleReconciliation?.currentOpenDebtUsd != null ? (
+              <div className="pm-paynow-stat">
+                <span>חוב CURRENT</span>
+                <strong dir="ltr">{fmtUsd(collectibleReconciliation.currentOpenDebtUsd)}</strong>
+              </div>
+            ) : null}
             <div className={credit > 0.01 ? "pm-paynow-stat pm-paynow-stat--ok" : "pm-paynow-stat"}>
               <span>יתרת זכות</span>
               <strong dir="ltr">{credit > 0.01 ? `+${fmtUsd(credit)}` : fmtUsd(0)}</strong>
@@ -547,6 +579,17 @@ export function PaymentMethodAutoAdjustModal({
             </section>
           ) : (
             <section className="pm-paynow-panel pm-paynow-panel--preview">
+              {collectibleReconciliation && collectibleReconciliation.planningAdjustmentGapUsd > 0.01 ? (
+                <div className="pm-adjust-status pm-adjust-status--info">
+                  <strong>הקשר גבייה מול תכנון</strong>
+                  <p>
+                    יתרה נטו לגבייה {fmtUsd(collectibleReconciliation.netCollectibleUsd)} · תכנון
+                    פתוח {fmtUsd(collectibleReconciliation.plannedOpenRemainingUsd)} · הפרש{" "}
+                    {fmtUsd(collectibleReconciliation.planningAdjustmentGapUsd)}. התאמה כאן משנה
+                    רק חלוקת אמצעים שלא שולמו — לא ניצול יתרת זכות (פעולה נפרדת).
+                  </p>
+                </div>
+              ) : null}
               {preview.hasOverpayment ? (
                 <div className="pm-adjust-status pm-adjust-status--overpay">
                   <strong>תשלום יתר: {fmtUsd(preview.overpaymentUsd)}</strong>

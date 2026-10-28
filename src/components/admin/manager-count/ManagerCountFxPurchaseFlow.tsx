@@ -21,6 +21,7 @@ import {
   pickDefaultBankTarget,
   type FxRemainderBankTarget,
 } from "@/lib/flow-control/fx-purchase/remainder-bank-resolution.shared";
+import { DocumentsPanel } from "@/components/admin/DocumentsPanel";
 
 type AllocationPreview = NonNullable<
   Awaited<ReturnType<typeof previewFxIntakeAllocationAction>>
@@ -624,6 +625,17 @@ export function ManagerCountFxPurchaseFlow({
               ) : null}
             </div>
           ) : null}
+
+          {editPurchase?.id ? (
+            <DocumentsPanel
+              entityType="FX_PURCHASE"
+              entityId={editPurchase.id}
+              title={`מסמכי רכישת מט״ח ${track}`}
+              selfResolvePermissions
+            />
+          ) : (
+            <p className="mc-muted">לאחר שמירת הרכישה ניתן לצרף מסמכים (עריכה מהטבלה)</p>
+          )}
 
           <div className="mc-fx-wizard__actions">
             <button type="button" className="fc-btn fc-btn--ghost" onClick={handleClose}>

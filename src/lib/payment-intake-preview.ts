@@ -19,6 +19,7 @@ import {
   type PaymentBalanceDisplay,
 } from "@/lib/order-remaining-debt";
 import { convertDebtUsdToIlsIncludingVat } from "@/lib/usd-balance-ils-vat";
+import { resolveNetCollectibleUsd } from "@/lib/customer-collectible-reconciliation";
 
 /**
  * יתרת זכות זמינה לקליטה — ספר זכות נפרד מהחוב השבועי.
@@ -193,9 +194,8 @@ export function computePendingCreditApplyUsd(input: {
 }
 
 /**
- * חוב לשבוע הקליטה:
- * כשיש יקום הזמנות זכאי — SUM(יתרות הזמנות) גובר על CURRENT SSOT.
- * בלי יקום הזמנות — נשארים עם SSOT (בדיקות / כותרת).
+ * חוב לגבייה ב-preview — SSOT משותף עם PMC (resolveNetCollectibleUsd).
+ * financialState.openDebtUsd = CURRENT exclusive; selectedOrdersRemaining = week sum.
  */
 export function resolvePaymentPreviewCollectibleDebt(input: {
   customerOpenDebtUsd: number | null;
@@ -203,10 +203,12 @@ export function resolvePaymentPreviewCollectibleDebt(input: {
   ssotLoaded: boolean;
   hasEligibleOrderSet?: boolean;
 }): number {
-  const ordersRemaining = money2(Math.max(0, input.selectedOrdersRemainingUsd));
-  if (input.hasEligibleOrderSet) return ordersRemaining;
-  if (!input.ssotLoaded || input.customerOpenDebtUsd == null) return ordersRemaining;
-  return money2(Math.max(0, input.customerOpenDebtUsd));
+  return resolveNetCollectibleUsd({
+    currentOpenDebtUsd: input.customerOpenDebtUsd,
+    weekScopedOrderRemainingUsd: input.selectedOrdersRemainingUsd,
+    ssotLoaded: input.ssotLoaded,
+    hasEligibleOrderSet: input.hasEligibleOrderSet,
+  });
 }
 
 export function buildPaymentPreview(input: {

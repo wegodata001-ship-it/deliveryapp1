@@ -33,6 +33,10 @@ import {
   paymentMethodBucketKey,
   type PaymentBucketKey,
 } from "@/lib/payment-breakdown-shared";
+import {
+  distributeOrderDebtPaidToMethods,
+  sumUniqueOrderBreakdownCommissionDrift,
+} from "@/lib/payment-intake-method-debt-display";
 
 // ---------------------------------------------------------------------------
 // Unified status vocabulary
@@ -79,10 +83,17 @@ export type IntakeMethodView = {
   currency?: "USD" | "ILS";
   /** מתוכנן במטבע השורה */
   planned?: number;
-  /** שולם במטבע השורה (DB) */
+  /** שולם במטבע השורה (DB breakdown — may include commission drift) */
   paid?: number;
   /** נותר במטבע השורה (DB) */
   remaining?: number;
+  /** שולם לסגירת חוב — derived from order ledger paid, split by planned weight */
+  paidToDebt?: number;
+  paidToDebtUsd: number;
+  /** Sum breakdown paid on this row (USD equivalent for KPI) */
+  paidBreakdownUsd: number;
+  /** Order-level debt payments (STANDARD) — duplicated per method row */
+  orderDebtPaidUsd: number;
   plannedUsd: number;
   dbPaidUsd: number;
   dbRemainingUsd: number;
@@ -128,10 +139,16 @@ export type IntakeOrderView = {
 export type MethodViewSummary = {
   orderCount: number;
   plannedUsd: number;
+  /** Breakdown paid (legacy KPI — includes drift when DB inconsistent) */
   enteredUsd: number;
+  /** Debt-closing paid (order ledger) */
+  paidToDebtUsd: number;
+  /** Portion of breakdown paid not closing debt (e.g. surplus → commission) */
+  transferredToCommissionUsd: number;
   remainingUsd: number;
   plannedIls: number;
   enteredIls: number;
+  paidToDebtIls: number;
   remainingIls: number;
 };
 
@@ -289,8 +306,24 @@ export function buildIntakeOrderViews(
 
   return drafts.map((draft) => {
     const o = draft.order;
-    const methodViews: IntakeMethodView[] = draft.methods.map((m) => {
+    const orderDebtPaidUsd = roundMoney2(Number(o.dbPaidUsd) || 0);
+    const debtPaidNative = distributeOrderDebtPaidToMethods(
+      orderDebtPaidUsd,
+      draft.methods.map((m) => ({
+        plannedUsd: m.plannedUsd,
+        paidBreakdownUsd: m.dbPaidUsd,
+        currency: m.currency,
+        plannedNative: m.planned,
+      })),
+    );
+    const methodViews: IntakeMethodView[] = draft.methods.map((m, idx) => {
       const formMethodRem = roundMoney2(Math.max(0, m.cap - m.formEnteredUsd));
+      const paidToDebtNative = debtPaidNative[idx] ?? 0;
+      const orderRate = Number(String(o.rate ?? "").replace(",", "."));
+      const paidToDebtUsd =
+        m.currency === "ILS" && orderRate > 0
+          ? roundMoney2(paidToDebtNative / orderRate)
+          : paidToDebtNative;
       return {
         id: `${o.id}:${m.currency}:${m.bucket}`,
         orderId: o.id,
@@ -301,6 +334,10 @@ export function buildIntakeOrderViews(
         planned: m.planned,
         paid: m.paid,
         remaining: m.remaining,
+        paidToDebt: paidToDebtNative,
+        paidToDebtUsd,
+        paidBreakdownUsd: m.dbPaidUsd,
+        orderDebtPaidUsd,
         plannedUsd: m.plannedUsd,
         dbPaidUsd: m.dbPaidUsd,
         dbRemainingUsd: m.remaining,
@@ -365,6 +402,10 @@ export function buildIntakeMethodViews(
       planned: 0,
       paid: 0,
       remaining: 0,
+      paidToDebt: 0,
+      paidToDebtUsd: 0,
+      paidBreakdownUsd: 0,
+      orderDebtPaidUsd: 0,
       plannedUsd: 0,
       dbPaidUsd: 0,
       dbRemainingUsd: 0,
@@ -389,6 +430,8 @@ export function summarizeIntakeMethodViews(views: IntakeMethodView[]): MethodVie
   const orderIds = new Set(views.map((v) => v.orderId).filter(Boolean));
   let plannedUsd = 0;
   let enteredUsd = 0;
+  let paidToDebtUsd = 0;
+  let paidToDebtIls = 0;
   let remainingUsd = 0;
   let plannedIls = 0;
   let enteredIls = 0;
@@ -397,24 +440,39 @@ export function summarizeIntakeMethodViews(views: IntakeMethodView[]): MethodVie
     const cur = v.currency ?? "USD";
     const planned = v.planned ?? v.plannedUsd;
     const paid = v.paid ?? v.dbPaidUsd;
+    const paidDebt = v.paidToDebt ?? v.paidToDebtUsd;
     const rem = v.remaining ?? v.dbRemainingUsd;
     if (cur === "ILS") {
       plannedIls += planned;
       enteredIls += paid;
+      paidToDebtIls += paidDebt;
       remainingIls += rem;
     } else {
       plannedUsd += planned;
       enteredUsd += paid;
+      paidToDebtUsd += paidDebt;
       remainingUsd += rem;
     }
   }
+  const commissionDrift = sumUniqueOrderBreakdownCommissionDrift(
+    views
+      .filter((v) => v.orderId)
+      .map((v) => ({
+        orderId: v.orderId,
+        paidBreakdownUsd: v.paidBreakdownUsd ?? v.dbPaidUsd,
+        orderDebtPaidUsd: v.orderDebtPaidUsd,
+      })),
+  );
   return {
     orderCount: orderIds.size,
     plannedUsd: roundMoney2(plannedUsd),
     enteredUsd: roundMoney2(enteredUsd),
+    paidToDebtUsd: roundMoney2(paidToDebtUsd),
+    transferredToCommissionUsd: commissionDrift,
     remainingUsd: roundMoney2(remainingUsd),
     plannedIls: roundMoney2(plannedIls),
     enteredIls: roundMoney2(enteredIls),
+    paidToDebtIls: roundMoney2(paidToDebtIls),
     remainingIls: roundMoney2(remainingIls),
   };
 }

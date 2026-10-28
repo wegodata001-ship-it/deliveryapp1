@@ -95,6 +95,12 @@ import { PaymentLiveSummaryCards } from "@/components/admin/PaymentLiveSummaryCa
 import type { PaymentPostSaveSummary } from "@/components/admin/PaymentPostSaveSummaryModal";
 import { BalanceResetConfirmModal } from "@/components/admin/BalanceResetConfirmModal";
 import { DebtBreakdownModal } from "@/components/admin/debt-breakdown/DebtBreakdownModal";
+import { PaymentIntakeBalanceReconciliationModal } from "@/components/admin/PaymentIntakeBalanceReconciliationModal";
+import type { PaymentIntakeBalanceBridge } from "@/lib/payment-intake-balance-bridge-shared";
+import {
+  buildCustomerCollectibleReconciliation,
+  resolveNetCollectibleUsd,
+} from "@/lib/customer-collectible-reconciliation";
 import {
   computePaymentIntakeLiveTotals,
   formatIntakeLiveBalanceDisplay,
@@ -740,6 +746,10 @@ export function PaymentModalUpdated({
   const [cancelNotesDraft, setCancelNotesDraft] = useState("");
   const [cancelRequestHint, setCancelRequestHint] = useState<PaymentCancelRequestHint>({ status: "none" });
   const [debtBreakdownOpen, setDebtBreakdownOpen] = useState(false);
+  const [balanceReconciliationOpen, setBalanceReconciliationOpen] = useState(false);
+  const [balanceBridge, setBalanceBridge] = useState<PaymentIntakeBalanceBridge | null>(null);
+  const [balanceBridgeLoading, setBalanceBridgeLoading] = useState(false);
+  const [balanceBridgeError, setBalanceBridgeError] = useState<string | null>(null);
   /** חוב פתוח — מקור יחיד מהשרת (ללא cache מקומי) */
   /** סה״כ USD של תשלום קיים בזמן הטעינה — לחישוב delta בעריכה */
   const [savedBaselinePaymentTotalUsd, setSavedBaselinePaymentTotalUsd] = useState(0);
@@ -1112,6 +1122,47 @@ export function PaymentModalUpdated({
   const customerWorkspaceLoading =
     loadingCustomer || ordersLoading || balancesLoading || paymentsLoading;
 
+  useEffect(() => {
+    const cid = customer?.id?.trim();
+    if (!cid || customerWorkspaceLoading) {
+      setBalanceBridge(null);
+      setBalanceBridgeError(null);
+      return;
+    }
+    let cancelled = false;
+    setBalanceBridgeLoading(true);
+    setBalanceBridgeError(null);
+    const q = new URLSearchParams({
+      customerId: cid,
+      week: intakeWeekCode,
+      country: intakeDocumentWorkCountry,
+    });
+    void fetch(`/api/payment-intake/balance-bridge?${q.toString()}`)
+      .then(async (res) => {
+        if (cancelled) return;
+        if (!res.ok) {
+          const body = (await res.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(body?.error ?? "טעינת פירוט יתרות נכשלה");
+        }
+        return res.json() as Promise<PaymentIntakeBalanceBridge>;
+      })
+      .then((data) => {
+        if (!cancelled && data) setBalanceBridge(data);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setBalanceBridge(null);
+          setBalanceBridgeError(err instanceof Error ? err.message : "שגיאה בטעינת פירוט");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setBalanceBridgeLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [customer?.id, customerWorkspaceLoading, intakeWeekCode, intakeDocumentWorkCountry]);
+
   const customerBalanceUsd = useMemo(
     () => parseMoneyStringOrZero(customer?.customerBalanceUsd ?? "0"),
     [customer?.customerBalanceUsd],
@@ -1122,6 +1173,7 @@ export function PaymentModalUpdated({
       customerBalanceResetPending ? 0 : sumPaymentIntakeWeekScopedRemainingUsd(orders),
     [customerBalanceResetPending, orders],
   );
+
   const customerOpenDebtDisplayUsd = paymentIntakeCustomerOpenDebtUsd({
     customerOpenDebtSignedUsd: weekScopedRemainingUsd,
     customerBalanceResetPending,
@@ -1230,10 +1282,21 @@ export function PaymentModalUpdated({
     [displayCreditBalanceUsd],
   );
 
+  const netCollectibleUsd = useMemo(
+    () =>
+      resolveNetCollectibleUsd({
+        currentOpenDebtUsd,
+        weekScopedOrderRemainingUsd: weekScopedRemainingUsd,
+        ssotLoaded: currentOpenDebtUsd != null,
+        hasEligibleOrderSet: true,
+      }),
+    [currentOpenDebtUsd, weekScopedRemainingUsd],
+  );
+
   const eligibleCreditCoverUsd = useMemo(() => {
     if (isHistoricalPaymentView) return 0;
-    return roundMoney2(Math.max(0, weekScopedRemainingUsd));
-  }, [isHistoricalPaymentView, weekScopedRemainingUsd]);
+    return roundMoney2(Math.max(0, netCollectibleUsd));
+  }, [isHistoricalPaymentView, netCollectibleUsd]);
 
   const pendingCreditApplyUsd = useMemo(
     () =>
@@ -1270,12 +1333,54 @@ export function PaymentModalUpdated({
    * מקור תצוגה משותף: כפתור בקרה + גריד החלון נגזרים מאותו `orders` + KPIs
    * (SSOT) — בלי חישוב נפרד בתוך המודאל.
    */
+  const planningReconciliation = useMemo(
+    () =>
+      buildCustomerCollectibleReconciliation({
+        currentOpenDebtUsd,
+        currentAvailableCreditUsd,
+        weekScopedOrderRemainingUsd: weekScopedRemainingUsd,
+        plannedOpenRemainingUsd: 0,
+        grossCreditUsd: balanceBridge?.creditGrossUsd ?? null,
+      }),
+    [
+      currentOpenDebtUsd,
+      currentAvailableCreditUsd,
+      weekScopedRemainingUsd,
+      balanceBridge?.creditGrossUsd,
+    ],
+  );
+
   const {
     methodControlRows,
     methodViews,
     orderViews,
+    plannedOpenRemainingUsd,
     showMethodControl,
-  } = usePaymentIntakePlanningViews(orders, includedIds, liveFormKpis, paymentApplyUsd);
+  } = usePaymentIntakePlanningViews(
+    orders,
+    includedIds,
+    liveFormKpis,
+    paymentApplyUsd,
+    planningReconciliation,
+  );
+
+  const collectibleReconciliationLive = useMemo(
+    () =>
+      buildCustomerCollectibleReconciliation({
+        currentOpenDebtUsd,
+        currentAvailableCreditUsd,
+        weekScopedOrderRemainingUsd: weekScopedRemainingUsd,
+        plannedOpenRemainingUsd,
+        grossCreditUsd: balanceBridge?.creditGrossUsd ?? null,
+      }),
+    [
+      currentOpenDebtUsd,
+      currentAvailableCreditUsd,
+      weekScopedRemainingUsd,
+      plannedOpenRemainingUsd,
+      balanceBridge?.creditGrossUsd,
+    ],
+  );
 
   /** בדיקות חריגה/יתרה חיות — לתצוגה בלבד (לא רק בזמן שמירה) */
   const liveIntakeDevRows = useMemo(() => {
@@ -1317,17 +1422,17 @@ export function PaymentModalUpdated({
     isHistoricalPaymentView,
   ]);
 
-  const totalDebtBeforePaymentUsd = weekScopedRemainingUsd;
+  const totalDebtBeforePaymentUsd = netCollectibleUsd;
   const assignableDebtUsd = useMemo(
-    () => roundMoney2(Math.max(0, weekScopedRemainingUsd - pendingCreditApplyUsd)),
-    [weekScopedRemainingUsd, pendingCreditApplyUsd],
+    () => roundMoney2(Math.max(0, netCollectibleUsd - pendingCreditApplyUsd)),
+    [netCollectibleUsd, pendingCreditApplyUsd],
   );
 
   const paymentPreview = useMemo(
     () =>
       buildPaymentPreview({
         financialState: {
-          openDebtUsd: weekScopedRemainingUsd,
+          openDebtUsd: currentOpenDebtUsd,
           availableCreditUsd: displayCreditBalanceUsd,
           commissionBalanceUsd: displayCommissionBalanceUsd,
         },
@@ -1337,11 +1442,14 @@ export function PaymentModalUpdated({
             ? Math.max(0, paymentApplyUsd)
             : Math.max(0, totals.totalUsd),
         selectedOrders: customerBalanceResetPending ? [] : toPaymentPreviewOrders(orders),
-        selectedOrdersRemainingUsd: customerBalanceResetPending ? 0 : undefined,
+        selectedOrdersRemainingUsd: customerBalanceResetPending
+          ? 0
+          : weekScopedRemainingUsd,
         useExistingCredit: pendingCreditApplyUsd > 0.01,
       }),
     [
       customerBalanceResetPending,
+      currentOpenDebtUsd,
       weekScopedRemainingUsd,
       displayCreditBalanceUsd,
       displayCommissionBalanceUsd,
@@ -4833,6 +4941,66 @@ export function PaymentModalUpdated({
                     </span>
                   </div>
                 ) : (
+                <>
+                <div
+                  className="payment-intake-balance-metrics"
+                  dir="rtl"
+                  role="region"
+                  aria-label="יתרות קליטת תשלום"
+                >
+                  <div className="payment-intake-balance-metrics__item">
+                    <span className="payment-intake-balance-metrics__k">יתרה נטו לגבייה</span>
+                    <strong className="payment-intake-balance-metrics__v payment-intake-balance-metrics__v--debt" dir="ltr">
+                      {currentOpenDebtUsd == null ? "…" : fmtUsdDisplay(netCollectibleUsd)}
+                    </strong>
+                  </div>
+                  <div className="payment-intake-balance-metrics__item">
+                    <span className="payment-intake-balance-metrics__k">חוב CURRENT</span>
+                    <strong className="payment-intake-balance-metrics__v" dir="ltr">
+                      {currentOpenDebtUsd == null
+                        ? "…"
+                        : fmtUsdDisplay(Math.max(0, currentOpenDebtUsd))}
+                    </strong>
+                  </div>
+                  <div className="payment-intake-balance-metrics__item">
+                    <span className="payment-intake-balance-metrics__k">
+                      {PAYMENT_INTAKE_WEEK_ORDER_DEBT_LABEL}
+                    </span>
+                    <strong className="payment-intake-balance-metrics__v" dir="ltr">
+                      {formatIntakeWeekOrderDebtUsdLine(weekScopedRemainingUsd)}
+                    </strong>
+                  </div>
+                  <div className="payment-intake-balance-metrics__item">
+                    <span className="payment-intake-balance-metrics__k">יתרות זכות בחישוב CURRENT</span>
+                    <strong
+                      className="payment-intake-balance-metrics__v payment-intake-balance-metrics__v--credit"
+                      dir="ltr"
+                    >
+                      {balanceBridgeLoading
+                        ? "…"
+                        : balanceBridge?.creditGrossUsd != null
+                          ? fmtUsdDisplay(balanceBridge.creditGrossUsd)
+                          : "נדרשת בדיקת התאמה"}
+                    </strong>
+                  </div>
+                  <div className="payment-intake-balance-metrics__item">
+                    <span className="payment-intake-balance-metrics__k">יתרות מחוץ לשבוע הנבחר</span>
+                    <strong className="payment-intake-balance-metrics__v" dir="ltr">
+                      {balanceBridgeLoading
+                        ? "…"
+                        : balanceBridge?.outsideWeekOrderRemainingUsd != null
+                          ? fmtUsdDisplay(balanceBridge.outsideWeekOrderRemainingUsd)
+                          : "נדרשת בדיקת התאמה"}
+                    </strong>
+                  </div>
+                  <button
+                    type="button"
+                    className="payment-intake-balance-metrics__btn"
+                    onClick={() => setBalanceReconciliationOpen(true)}
+                  >
+                    פירוט התאמת יתרות
+                  </button>
+                </div>
                 <div
                   className="payment-balance-summary"
                   dir="rtl"
@@ -4955,6 +5123,7 @@ export function PaymentModalUpdated({
                     ) : null}
                   </span>
                 </div>
+                </>
                 )
               ) : null}
               {intakeCorrectionRows.length > 0 ? (
@@ -5295,6 +5464,10 @@ export function PaymentModalUpdated({
                   open={methodControlOpen && showMethodControl}
                   methodViews={methodViews}
                   orderRemainingToPayUsd={weekScopedRemainingUsd}
+                  netCollectibleUsd={collectibleReconciliationLive.netCollectibleUsd}
+                  plannedOpenRemainingUsd={plannedOpenRemainingUsd}
+                  planningAdjustmentGapUsd={collectibleReconciliationLive.planningAdjustmentGapUsd}
+                  currentOpenDebtUsd={currentOpenDebtUsd}
                   canEditOrders={canEditOrders}
                   refreshing={sharedOrdersRefreshing}
                   onClose={() => setMethodControlOpen(false)}
@@ -5309,7 +5482,10 @@ export function PaymentModalUpdated({
                     customerId={customer.id}
                     customerName={customer.displayName}
                     customerCode={customer.customerCode ?? null}
-                    openDebtUsd={weekScopedRemainingUsd}
+                    openDebtUsd={netCollectibleUsd}
+                    weekDueOrderRemainingUsd={weekScopedRemainingUsd}
+                    plannedOpenRemainingUsd={plannedOpenRemainingUsd}
+                    collectibleReconciliation={collectibleReconciliationLive}
                     creditUsd={displayCreditBalanceUsd}
                     weekCode={orderSourceWeekCode}
                     workCountry={intakeDocumentWorkCountry}
@@ -5510,6 +5686,14 @@ export function PaymentModalUpdated({
         weekCode={intakeWeekCode}
         onClose={() => setDebtBreakdownOpen(false)}
         onOrderClick={(orderId) => openWindow({ type: "orderCapture", props: { mode: "edit", orderId } })}
+      />
+      <PaymentIntakeBalanceReconciliationModal
+        open={balanceReconciliationOpen}
+        bridge={balanceBridge}
+        loading={balanceBridgeLoading}
+        error={balanceBridgeError}
+        weekLabel={intakeWeekCode}
+        onClose={() => setBalanceReconciliationOpen(false)}
       />
       {creditResetConfirmOpen ? (
         <BalanceResetCreditConfirmModal

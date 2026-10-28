@@ -574,9 +574,29 @@ export async function listArchiveDocuments(
       prisma.payment.findMany({ where: { weekCode }, select: { id: true }, take: 2000 }),
       prisma.order.findMany({ where: { weekCode }, select: { id: true }, take: 2000 }),
     ]);
+    const weekFlowRows = await prisma.cashWeekFlow.findMany({
+      where: { weekCode },
+      select: { id: true, fxPurchases: true },
+      take: 20,
+    });
+    const fxPurchaseIds: string[] = [];
+    for (const row of weekFlowRows) {
+      const purchases = row.fxPurchases;
+      if (Array.isArray(purchases)) {
+        for (const p of purchases) {
+          if (p && typeof p === "object" && typeof (p as { id?: string }).id === "string") {
+            fxPurchaseIds.push((p as { id: string }).id);
+          }
+        }
+      }
+    }
     const weekOr: Prisma.DocumentWhereInput[] = [
       { entityType: "PAYMENT", entityId: { in: weekPayments.map((p) => p.id) } },
       { entityType: "ORDER", entityId: { in: weekOrders.map((o) => o.id) } },
+      { entityType: "CASH_WEEK_FLOW", entityId: { in: weekFlowRows.map((r) => r.id) } },
+      ...(fxPurchaseIds.length
+        ? [{ entityType: "FX_PURCHASE" as const, entityId: { in: fxPurchaseIds } }]
+        : []),
     ];
     if (range) {
       weekOr.push({

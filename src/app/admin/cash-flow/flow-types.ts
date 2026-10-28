@@ -1,4 +1,9 @@
 import type { CashWeekFlowLineId } from "@/lib/cash-control-week-flow";
+import type {
+  FlowWeekCashboxes,
+  FlowWeekReceiptLayers,
+  ManagerCountState,
+} from "@/lib/flow-control/flow-week-financial-ssot";
 import type { CashDailyMethodId } from "@/lib/cash-control-daily";
 import { CASH_RECEIPT_TABLE_COLUMNS, channelGroupClass } from "@/lib/cash-control-channel";
 import type { CashDailySummaryRowDto } from "@/app/admin/cash-control/daily-types";
@@ -142,10 +147,26 @@ export type ManagerCountForm = {
   turkeyTransferIls: string;
 };
 
+export type FlowWeekWeekContext = {
+  /** תשלומים לפי תאריך קליטה בשבוע (SSOT תזרים) */
+  paymentsReceivedInWeek: number;
+  /** תשלומים עם weekCode = שבוע (היסטורי / השוואה בלבד) */
+  paymentsByWeekCodeOnly: number;
+  ordersInOrderWeek: number;
+};
+
 export type FlowWeekPayload = {
   week: string;
+  /** מזהה CashWeekFlow — לצירוף מסמכים */
+  cashWeekFlowId: string | null;
   weekLabel: string | null;
+  /** @deprecated alias — תקבול בפועל (Payment). השתמשו ב-receiptLayers.actualReceipts */
   received: Record<CashWeekFlowLineId, { amount: string; paymentCount: number }>;
+  /** תקבול בפועל / ספירה יומית / הפרש — SSOT */
+  receiptLayers: FlowWeekReceiptLayers;
+  weekContext: FlowWeekWeekContext;
+  managerCountState: ManagerCountState;
+  cashboxes: FlowWeekCashboxes;
   counted: Partial<Record<CashWeekFlowLineId, string | null>>;
   countDiff: Partial<Record<CashWeekFlowLineId, string | null>>;
   expensesIls: string;
@@ -169,9 +190,9 @@ export type FlowWeekPayload = {
   /** מחושב: כסף שהועבר לבנק − משיכות + הפקדות */
   bankBalanceIls: string | null;
   bankBalanceUsd: string | null;
-  /** דולר בקופה — מחושב */
-  drawerRemainingIls: string;
-  drawerRemainingUsd: string;
+  /** שקל/דולר בקופה — מחושב; null = טרם בוצעה ספירת מנהל */
+  drawerRemainingIls: string | null;
+  drawerRemainingUsd: string | null;
   /** כמה ₪ זמין לרכישת מט״ח PS (מזומן PS בלבד) */
   availableIlsForFx: string;
   /** כמה ₪ זמין לרכישת מט״ח IL (מאגר בנקאי בלבד) */
@@ -226,8 +247,11 @@ export type FlowWeekOverviewRow = {
   /** אמצעי תקבול שלא נכנסו לקטגוריות המוגדרות */
   receivedOtherIls: string;
   receivedOtherUsd: string;
-  /** סכומי ספירות קופה יומיות מצטברים */
+  /** סכומי ספירות קופה יומיות מצטברים (legacy daily) */
   drawer: Record<CashDailyMethodId, string>;
+  /** תשלומים לפי weekCode בלבד — לא KPI */
+  paymentsByWeekCodeOnly?: number;
+  paymentsReceivedInWeek?: number;
   totalReceivedIls: string;
   daysCounted: number;
   /** ספירת מנהל — CashWeekFlow */
@@ -257,8 +281,8 @@ export type FlowWeekOverviewRow = {
   fxPurchaseCount: number;
   expensesIls: string;
   expensesUsd: string;
-  drawerRemainingIls: string;
-  drawerRemainingUsd: string;
+  drawerRemainingIls: string | null;
+  drawerRemainingUsd: string | null;
   bankBalanceIls: string | null;
   /** רווח/הפסד שערים מרכישות מט״ח (קיים) — לתצוגה לחיצה */
   fxProfitIls: string;

@@ -34,7 +34,9 @@ import { writeOrderBreakdownInTx } from "@/lib/order-breakdown-write";
 import {
   ADJUSTMENT_SAVE_FAILED_USER_MESSAGE,
   isPrismaMissingRecordError,
+  buildBreakdownPersistBalancesFromAppliedLines,
   persistMatchingBreakdownPaidInTx,
+  validateBreakdownPersistAgainstMatching,
 } from "@/lib/order-breakdown-paid-persist";
 import {
   assertPlannedBreakdownPreserved,
@@ -93,6 +95,7 @@ import {
   methodBalanceFromBreakdownRow,
   type DualCurrencyMatchingResult,
   type EnteredBucketAmount,
+  type MethodBalanceRow,
 } from "@/lib/payment-method-matching-engine";
 import { evaluatePaymentBusinessRules } from "@/lib/payment-business-validation";
 import { computePaymentIntakePostSaveOutcome, type PaymentIntakePostSaveOutcome } from "@/lib/payment-intake-post-save";
@@ -720,6 +723,8 @@ export async function savePaymentUpdatedAction(
   let surplusFeeUsd = 0;
   /** Matching Engine — מצב אמצעים לשמירה ב-DB (דו-מטבעי) */
   let matchingResult: DualCurrencyMatchingResult | null = null;
+  let balancesBeforeMatching: MethodBalanceRow[] | null = null;
+  let matchingOrderRate: Map<string, number> | null = null;
   /** האם Matching רץ על מועמדים עם חלוקת אמצעים */
   let usedMethodMatching = false;
   /** סכום יתרות אמצעים פתוחים אחרי Matching/seed — לזיהוי הודעת שגיאה מדויקת */
@@ -906,6 +911,8 @@ export async function savePaymentUpdatedAction(
           return (oa?.dateYmd ?? "").localeCompare(ob?.dateYmd ?? "");
         });
 
+        balancesBeforeMatching = balances.map((b) => ({ ...b }));
+        matchingOrderRate = orderRate;
         matchingResult = applyDualCurrencyMatching({
           balances,
           enteredByBucket: enteredMethods,
@@ -1835,9 +1842,22 @@ export async function savePaymentUpdatedAction(
         });
       }
 
-      // Matching Engine → Persist SSOT. Reload by orderId+method+currency — never stale IDs.
-      if (matchingResult) {
-        await persistMatchingBreakdownPaidInTx(tx, matchingResult.balances, {
+      // Matching Engine → Persist SSOT. paidAmount += debt applied only (appliedLines), not surplus.
+      if (matchingResult && balancesBeforeMatching && matchingOrderRate) {
+        const persistBalances = buildBreakdownPersistBalancesFromAppliedLines(
+          balancesBeforeMatching,
+          matchingResult.appliedLines,
+          matchingOrderRate,
+        );
+        const validation = validateBreakdownPersistAgainstMatching(
+          balancesBeforeMatching,
+          persistBalances,
+          matchingResult,
+        );
+        if (!validation.ok) {
+          throw new Error(validation.message);
+        }
+        await persistMatchingBreakdownPaidInTx(tx, persistBalances, {
           paymentId: primaryPaymentId,
           paymentCode: primaryCode,
           weekCode,
