@@ -39,6 +39,7 @@ import {
   buildFlowWeekReceiptLayers,
   hasManagerCountSaved,
   paymentIntakeToFlowLines,
+  resolveManagerCountState,
 } from "@/lib/flow-control/flow-week-financial-ssot";
 import { loadFlowWeekContext } from "@/lib/flow-control/flow-week-context-service";
 import { loadFlowWeekOpeningBalance } from "@/lib/flow-control/flow-week-opening-service";
@@ -155,6 +156,8 @@ export async function loadFlowWeek(
 
   const fxPs = sumFxPurchases(fxPurchases, "PS");
   const fxIl = sumFxPurchases(fxPurchases, "IL");
+  const managerCountState = resolveManagerCountState(cashCount);
+  const managerComplete = managerCountState === "COMPLETE";
   const hasCount = hasManagerCountSaved(cashCount);
   const managerCashUsd = hasCount ? (cashCount.countedCashUsd ?? 0) : 0;
   const managerCashIls = hasCount ? (cashCount.countedCashIls ?? 0) : 0;
@@ -218,8 +221,8 @@ export async function loadFlowWeek(
     bankOutIls: sumFxRemainderToBankIls(fxPurchases),
     expensesIls: cashCount.expensesIls,
     expensesUsd: cashCount.expensesUsd,
-    drawerUsdWhenCounted: hasCount ? calc.cashUsdInDrawer : null,
-    drawerIlsWhenCounted: hasCount ? calc.cashIlsInDrawer : null,
+    drawerUsdWhenCounted: managerComplete ? calc.cashUsdInDrawer : null,
+    drawerIlsWhenCounted: managerComplete ? calc.cashIlsInDrawer : null,
   });
 
   return {
@@ -251,8 +254,8 @@ export async function loadFlowWeek(
     turkeyTransferIls: storedTurkeyIls > 0 ? money(storedTurkeyIls) : null,
     bankBalanceIls: money(calc.bankBalanceIls),
     bankBalanceUsd: null,
-    drawerRemainingIls: hasCount ? money(calc.cashIlsInDrawer) : null,
-    drawerRemainingUsd: hasCount ? money(calc.cashUsdInDrawer) : null,
+    drawerRemainingIls: managerComplete ? money(calc.cashIlsInDrawer) : null,
+    drawerRemainingUsd: managerComplete ? money(calc.cashUsdInDrawer) : null,
     availableIlsForFx: money(fxBalances.psCash),
     availableIlIlsForFx: money(fxBalances.ilTransfers),
     turkeyExpectedUsd: money(calc.turkey.expectedUsd),

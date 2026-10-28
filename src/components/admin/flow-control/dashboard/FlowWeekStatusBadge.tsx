@@ -2,7 +2,7 @@
 
 import type { FlowWeekDrillPayload } from "@/app/admin/cash-flow/flow-types";
 import { deriveWeekStatus } from "@/components/admin/flow-control/dashboard/flow-dashboard-derive";
-import { getFlowWeekVarianceLines } from "@/lib/flow-control/services/flow-variance.service";
+import { buildFlowBusinessReconciliation } from "@/lib/flow-control/flow-week-business-reconciliation";
 
 export type FlowWeekStatusBadgeProps = {
   drill: FlowWeekDrillPayload | null;
@@ -12,7 +12,7 @@ export type FlowWeekStatusBadgeProps = {
 };
 
 /**
- * תג קומפקטי במקום באנר אדום גדול — לחיצה פותחת רשימת חריגות.
+ * תג קומפקטי — מונה רק חריגות מאומתות (לא «אין ספירה» לכל ערוץ).
  */
 export function FlowWeekStatusBadge({
   drill,
@@ -21,25 +21,29 @@ export function FlowWeekStatusBadge({
 }: FlowWeekStatusBadgeProps) {
   if (!drill && rangeAlertCount == null) return null;
 
-  const lines = drill ? getFlowWeekVarianceLines(drill) : [];
-  const problemLines = lines.filter(
-    (l) =>
-      l.cashControlStatus === "SHORTAGE" ||
-      l.cashControlStatus === "SURPLUS" ||
-      l.cashControlStatus === "WAITING_FOR_COUNT",
-  );
+  const recon = drill
+    ? buildFlowBusinessReconciliation({
+        drill,
+        overview: null,
+        week: drill.week,
+      })
+    : null;
+  const verified = recon?.verifiedExceptionCount ?? 0;
+  const pending = recon?.pendingVerificationCount ?? 0;
   const status = drill ? deriveWeekStatus(drill) : null;
 
   let tone: "ok" | "warn" | "critical" = "ok";
-  let label = "🟢 אין חריגות";
+  let label = "🟢 אין חריגות מאומתות";
 
   if (rangeAlertCount != null && rangeAlertCount > 0) {
     tone = "critical";
-    label = `🔴 נמצאו ${rangeAlertCount} שבועות חריגים`;
-  } else if (status?.status === "critical" || problemLines.length > 0) {
+    label = `🔴 ${rangeAlertCount} שבועות לבדיקה בטווח`;
+  } else if (verified > 0) {
     tone = "critical";
-    const n = Math.max(problemLines.length, 1);
-    label = `🔴 נמצאו ${n} חריגות`;
+    label = `🔴 ${verified} חריגות מאומתות`;
+  } else if (pending > 0) {
+    tone = "warn";
+    label = `🟡 ${pending} בדיקות ממתינות לאימות`;
   } else if (status?.status === "warn") {
     tone = "warn";
     label = `🟡 ${status.label}`;
@@ -50,7 +54,7 @@ export function FlowWeekStatusBadge({
       type="button"
       className={`cfc-status-badge cfc-status-badge--${tone}`}
       onClick={onClick}
-      title="לחצו לפירוט החריגות"
+      title="לחצו לפירוט פערים והתחייבויות"
     >
       {label}
     </button>

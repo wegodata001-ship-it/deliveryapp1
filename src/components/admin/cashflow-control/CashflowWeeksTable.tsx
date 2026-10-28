@@ -4,11 +4,11 @@ import { useMemo } from "react";
 import type { FlowWeekOverviewRow } from "@/app/admin/cash-flow/flow-types";
 import {
   dedupeOverviewByWeek,
+  managerCountStateLabel,
   money,
   moneyManagerCount,
   weekDateRange,
 } from "@/components/admin/cashflow-control/cashflow-control-helpers";
-import { CashflowWeekSummaryKpiStrip } from "@/components/admin/cashflow-control/CashflowWeekSummaryKpiStrip";
 
 export type CashflowWeeksTableProps = {
   rows: FlowWeekOverviewRow[];
@@ -60,24 +60,26 @@ export function CashflowWeeksTable({
 
   return (
     <div className="cfc-card cfc-table-card">
-      <div className="cfc-summary-table-title">
-        <strong>סיכום שבועי לפי אמצעי תקבול</strong>
-        <span>שורה אחת לכל שבוע · נתוני ספירה מספירת מנהל · לחצו על KPI לפירוט</span>
+      <div className="cfc-summary-table-title cfc-summary-table-title--compact">
+        <strong>טבלת שבועות</strong>
+        <span>לחיצה על שורה לפירוט · גלילה אופקית לעמודות נוספות</span>
       </div>
-      <CashflowWeekSummaryKpiStrip rows={displayRows} />
       <div className="cfc-table-scroll">
-        <table className="cfc-table cfc-week-summary-table">
+        <table className="cfc-table cfc-week-summary-table cfc-week-summary-table--wide">
           <thead>
             <tr>
               <th>שבוע</th>
-              <th>סה״כ הזמנות</th>
-              <th>סה״כ דוח</th>
-              <th>מזומן $</th>
-              <th>מזומן ₪</th>
-              <th>העברות</th>
-              <th>אשראי</th>
-              <th>צ׳קים</th>
-              <th>נשאר לתשלום</th>
+              <th>לגבייה</th>
+              <th>נוצרו</th>
+              <th>PS $</th>
+              <th>PS ₪</th>
+              <th>IL ₪</th>
+              <th>IL $</th>
+              <th>מט״ח PS</th>
+              <th>מט״ח IL</th>
+              <th>טורקיה</th>
+              <th>יתרת קופה</th>
+              <th>סטטוס ספירה</th>
             </tr>
           </thead>
           <tbody>
@@ -102,27 +104,46 @@ export function CashflowWeeksTable({
                     <strong dir="ltr">{row.week}</strong>
                     <span>{weekDateRange(row.week, row.weekLabel)}</span>
                   </td>
+                  <td className="cfc-summary-count">
+                    {row.ordersDueCount ?? 0}
+                    {row.ordersDueSourceWeek ? (
+                      <small dir="ltr" className="cfc-muted">
+                        {" "}
+                        ← {row.ordersDueSourceWeek}
+                      </small>
+                    ) : null}
+                  </td>
                   <td className="cfc-summary-count">{row.totalOrders.toLocaleString("he-IL")}</td>
                   <td dir="ltr" className="cfc-summary-amount">
-                    {money("USD", row.totalOrdersUsd)}
+                    {money("USD", row.intakePsUsd ?? row.receivedCashUsd)}
                   </td>
                   <td dir="ltr" className="cfc-summary-amount">
-                    {moneyManagerCount("USD", row.manager.CASH_USD)}
+                    {money("ILS", row.intakePsIls ?? row.receivedCashIls)}
                   </td>
                   <td dir="ltr" className="cfc-summary-amount">
-                    {moneyManagerCount("ILS", row.manager.CASH_ILS)}
+                    {money("ILS", row.intakeIlIls ?? "0")}
                   </td>
                   <td dir="ltr" className="cfc-summary-amount">
-                    {moneyManagerCount("ILS", row.manager.BANK_TRANSFER)}
+                    {money("USD", row.intakeIlUsd ?? "0")}
                   </td>
                   <td dir="ltr" className="cfc-summary-amount">
-                    {moneyManagerCount("ILS", row.manager.CREDIT)}
+                    {money("ILS", row.fxPurchaseIls)} / {money("USD", row.fxPurchaseUsd)}
                   </td>
                   <td dir="ltr" className="cfc-summary-amount">
-                    {moneyManagerCount("ILS", row.manager.CHECK)}
+                    {money("ILS", row.ilFxPurchaseIls)}
                   </td>
-                  <td dir="ltr" className="cfc-summary-amount cfc-summary-amount--debt">
-                    {money("USD", row.remainingToPayUsd)}
+                  <td dir="ltr" className="cfc-summary-amount">
+                    {money("USD", row.turkeyClosingUsd)}
+                  </td>
+                  <td dir="ltr" className="cfc-summary-amount cfc-drawer-cell">
+                    {row.drawerRemainingUsd ?? "—"} / {row.drawerRemainingIls ?? "—"}
+                  </td>
+                  <td>
+                    <span
+                      className={`cfc-count-badge cfc-count-badge--${row.managerCountState.toLowerCase()}`}
+                    >
+                      {managerCountStateLabel(row.managerCountState)}
+                    </span>
                   </td>
                 </tr>
               );

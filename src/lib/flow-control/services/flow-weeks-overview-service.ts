@@ -22,6 +22,8 @@ import {
 } from "@/lib/country-data-scope";
 import type { WorkCountryCode } from "@/lib/work-country";
 import { DEFAULT_WORK_COUNTRY } from "@/lib/work-country";
+import { aggregateTrackIntakeFromTotals } from "@/lib/flow-control/cash-flow-track-ssot";
+import { orderWeekForDueCollectionWeek } from "@/lib/flow-control/flow-week-due-orders";
 
 function money(n: number): string {
   return (Math.round(n * 100) / 100).toFixed(2);
@@ -36,7 +38,8 @@ async function loadOneWeekOverview(
   scope: CountryScope,
 ): Promise<FlowWeekOverviewRow | null> {
   const wk = weekCode.trim();
-  const [flow, orderRows] = await Promise.all([
+  const dueSourceWeek = orderWeekForDueCollectionWeek(wk);
+  const [flow, orderRows, dueOrderRows] = await Promise.all([
     loadFlowWeekCached(wk, scope.workCountry),
     prisma.order.findMany({
       where: mergeOrderWhere({ weekCode: wk, deletedAt: null }, scope),
@@ -48,10 +51,22 @@ async function loadOneWeekOverview(
         status: true,
       },
     }),
+    dueSourceWeek
+      ? prisma.order.findMany({
+          where: mergeOrderWhere({ weekCode: dueSourceWeek, deletedAt: null }, scope),
+          select: {
+            id: true,
+            totalUsd: true,
+            amountUsd: true,
+            commissionUsd: true,
+          },
+        })
+      : Promise.resolve([]),
   ]);
   if (!flow) return null;
 
   const paymentWeekTotal = flow.weekPaymentIntake;
+  const trackIntake = aggregateTrackIntakeFromTotals(paymentWeekTotal);
   const paymentIntakeIls = flow.kpis.totalReceivedIls;
   const totalReceivedIls = paymentIntakeIls;
 
@@ -94,6 +109,16 @@ async function loadOneWeekOverview(
   }
   remainingToPayUsd = round2(remainingToPayUsd);
   totalOrdersUsd = round2(totalOrdersUsd);
+
+  let ordersDueUsd = 0;
+  for (const o of dueOrderRows) {
+    ordersDueUsd += resolveOrderTotalUsd({
+      totalUsd: o.totalUsd,
+      amountUsd: o.amountUsd,
+      commissionUsd: o.commissionUsd,
+    });
+  }
+  ordersDueUsd = round2(ordersDueUsd);
 
   const drawerDto = Object.fromEntries(
     allCashControlChannels().map((k) => [k, money(flow.drawerChannelTotals[k])]),
@@ -163,9 +188,19 @@ async function loadOneWeekOverview(
     expensesUsd: flow.expensesUsd,
     drawerRemainingIls: flow.drawerRemainingIls,
     drawerRemainingUsd: flow.drawerRemainingUsd,
+    managerCountState: flow.managerCountState,
     bankBalanceIls: flow.bankBalanceIls,
     fxProfitIls: flow.kpis.fxProfitIls,
     fxLossIls: flow.kpis.fxLossIls,
+    ordersDueSourceWeek: dueSourceWeek,
+    ordersDueCount: dueOrderRows.length,
+    ordersDueUsd: money(ordersDueUsd),
+    intakePsIls: money(trackIntake.ps.ils),
+    intakePsUsd: money(trackIntake.ps.usd),
+    intakeIlIls: money(trackIntake.il.ils),
+    intakeIlUsd: money(trackIntake.il.usd),
+    intakeUnassignedIls: money(trackIntake.unassigned.ils),
+    intakeUnassignedUsd: money(trackIntake.unassigned.usd),
   };
 }
 

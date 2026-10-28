@@ -590,12 +590,20 @@ export async function listArchiveDocuments(
         }
       }
     }
+    const turkeyMovementIds = await prisma.turkeyTransferMovement.findMany({
+      where: { weekCode },
+      select: { id: true },
+      take: 500,
+    });
     const weekOr: Prisma.DocumentWhereInput[] = [
       { entityType: "PAYMENT", entityId: { in: weekPayments.map((p) => p.id) } },
       { entityType: "ORDER", entityId: { in: weekOrders.map((o) => o.id) } },
       { entityType: "CASH_WEEK_FLOW", entityId: { in: weekFlowRows.map((r) => r.id) } },
       ...(fxPurchaseIds.length
         ? [{ entityType: "FX_PURCHASE" as const, entityId: { in: fxPurchaseIds } }]
+        : []),
+      ...(turkeyMovementIds.length
+        ? [{ entityType: "TURKEY_TRANSFER" as const, entityId: { in: turkeyMovementIds.map((m) => m.id) } }]
         : []),
     ];
     if (range) {

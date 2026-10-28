@@ -1,5 +1,6 @@
 "use client";
 
+import { Suspense } from "react";
 import type { CashFlowCapabilities } from "@/app/admin/cash-flow/types";
 import { CashflowControlScreen } from "@/components/admin/cashflow-control/CashflowControlScreen";
 
@@ -11,7 +12,17 @@ export function FlowControlClient({
   caps: CashFlowCapabilities;
   initialWeek: string;
 }) {
-  return <CashflowControlScreen caps={caps} initialWeek={initialWeek} />;
+  return (
+    <Suspense
+      fallback={
+        <div className="cfc-page" dir="rtl">
+          <p className="cfc-empty">טוען בקרת תזרים…</p>
+        </div>
+      }
+    >
+      <CashflowControlScreen caps={caps} initialWeek={initialWeek} />
+    </Suspense>
+  );
 }
 
 export default FlowControlClient;

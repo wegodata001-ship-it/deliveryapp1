@@ -10,7 +10,8 @@ export type DocumentEntityType =
   | "REPORT"
   | "CASH_EXPENSE"
   | "CASH_WEEK_FLOW"
-  | "FX_PURCHASE";
+  | "FX_PURCHASE"
+  | "TURKEY_TRANSFER";
 
 export const DOCUMENT_ENTITY_TYPES: DocumentEntityType[] = [
   "ORDER",
@@ -23,6 +24,7 @@ export const DOCUMENT_ENTITY_TYPES: DocumentEntityType[] = [
   "CASH_EXPENSE",
   "CASH_WEEK_FLOW",
   "FX_PURCHASE",
+  "TURKEY_TRANSFER",
 ];
 
 export const DOCUMENT_ENTITY_LABELS: Record<DocumentEntityType, string> = {
@@ -36,6 +38,7 @@ export const DOCUMENT_ENTITY_LABELS: Record<DocumentEntityType, string> = {
   CASH_EXPENSE: "הוצאת קופה",
   CASH_WEEK_FLOW: "ספירת מנהל / שבוע תזרים",
   FX_PURCHASE: "רכישת מט״ח",
+  TURKEY_TRANSFER: "העברה לטורקיה",
 };
 
 export function isDocumentEntityType(v: string): v is DocumentEntityType {
@@ -46,6 +49,7 @@ export function isDocumentEntityType(v: string): v is DocumentEntityType {
 export const DOCUMENT_DOC_TYPES: { value: string; label: string }[] = [
   { value: "CHECK", label: "צ׳ק" },
   { value: "TRANSFER", label: "אישור העברה בנקאית" },
+  { value: "TURKEY_TRANSFER", label: "אישור העברה לטורקיה" },
   { value: "CLEARING", label: "אישור סליקה" },
   { value: "RECEIPT", label: "קבלה" },
   { value: "INVOICE", label: "חשבונית" },

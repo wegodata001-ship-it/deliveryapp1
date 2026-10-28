@@ -75,13 +75,40 @@ export function buildFlowExportPdfHtml(data: FlowExportData): string {
     (id) =>
       `<tr><td>${id}</td><td>${f.receiptLayers.actualReceipts[id].amount}</td><td>${f.receiptLayers.dailyApproved[id].amount}</td><td>${f.countDiff[id] ?? "—"}</td></tr>`,
   ).join("");
+  const openUsd =
+    f.cashboxes.usd.openingVerified && f.cashboxes.usd.opening != null
+      ? String(f.cashboxes.usd.opening)
+      : f.cashboxes.openingMessageHe;
+  const openIls =
+    f.cashboxes.ils.openingVerified && f.cashboxes.ils.opening != null
+      ? String(f.cashboxes.ils.opening)
+      : f.cashboxes.openingMessageHe;
+  const fxRows = f.fxPurchases
+    .map(
+      (p) =>
+        `<tr><td>${p.track ?? "PS"}</td><td dir="ltr">${p.ilsAmount}</td><td dir="ltr">${p.usdReceived}</td><td dir="ltr">${p.rate}</td></tr>`,
+    )
+    .join("");
   return `<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8"/>
-<style>body{font-family:Arial,sans-serif;padding:24px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:6px}h1{font-size:18px}</style>
+<style>
+body{font-family:"Segoe UI",Arial,sans-serif;padding:24px;direction:rtl;text-align:right}
+table{border-collapse:collapse;width:100%;margin-top:12px}
+td,th{border:1px solid #ccc;padding:6px;text-align:right}
+th{background:#f1f5f9}
+h1{font-size:20px;margin:0 0 8px}
+.meta{color:#475569;font-size:13px}
+.section{margin-top:18px}
+</style>
 </head><body>
 <h1>WEGO DELIVER — בקרת תזרים</h1>
-<p>שבוע: ${data.week} · ${data.rangeFrom ?? ""} – ${data.rangeTo ?? ""}</p>
-<p>הזמנות: ${ov?.totalOrders ?? 0} · $${ov?.totalOrdersUsd ?? "0"} · נקלט ₪ ${f.kpis.totalReceivedIls}</p>
-<p>תשלומים (קליטה / weekCode): ${f.weekContext.paymentsReceivedInWeek} / ${f.weekContext.paymentsByWeekCodeOnly}</p>
-<table><thead><tr><th>שורה</th><th>תקבול</th><th>יומי</th><th>הפרש</th></tr></thead><tbody>${rows}</tbody></table>
+<p class="meta">שבוע: ${data.week} · ${data.rangeFrom ?? ""} – ${data.rangeTo ?? ""} · ${data.generatedAt.slice(0, 19)}</p>
+<p class="meta">הזמנות: ${ov?.totalOrders ?? 0} · $${ov?.totalOrdersUsd ?? "0"} · נקלט ₪ ${f.kpis.totalReceivedIls}</p>
+<p class="meta">תשלומים (קליטה / weekCode): ${f.weekContext.paymentsReceivedInWeek} / ${f.weekContext.paymentsByWeekCodeOnly}</p>
+<p class="meta">יתרת פתיחה $: ${openUsd} · ₪: ${openIls}</p>
+<p class="meta">קופה $: ${f.drawerRemainingUsd ?? "טרם ספירה"} · ₪: ${f.drawerRemainingIls ?? "טרם ספירה"} · טורקיה $: ${f.turkeyBalanceClosingUsd}</p>
+<div class="section"><strong>תקבולים והפרשים</strong>
+<table><thead><tr><th>שורה</th><th>תקבול</th><th>יומי</th><th>הפרש</th></tr></thead><tbody>${rows}</tbody></table></div>
+<div class="section"><strong>רכישות מט״ח</strong>
+<table><thead><tr><th>מסלול</th><th>₪</th><th>$</th><th>שער</th></tr></thead><tbody>${fxRows || "<tr><td colspan=4>—</td></tr>"}</tbody></table></div>
 </body></html>`;
 }

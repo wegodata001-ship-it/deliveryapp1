@@ -79,19 +79,28 @@ export async function persistManagerCount(input: {
       formAfter,
       status: "SAVED",
     });
-    const closingUsd = fcNum(f.countedCashUsd);
-    const closingIls = fcNum(f.countedCashIls);
-    const nextSnapshot = mergeSnapshotPatch(snap, {
-      managerCountHistory: history,
-      cashboxClosing: {
+    const countFields = [
+      f.countedCashUsd,
+      f.countedCashIls,
+      f.countedChecksIls,
+      f.countedCreditIls,
+      f.countedTransferIls,
+    ];
+    const managerCountComplete = countFields.every((v) => v != null && String(v).trim() !== "");
+    const snapshotPatch: Record<string, unknown> = { managerCountHistory: history };
+    if (managerCountComplete) {
+      const closingUsd = fcNum(f.countedCashUsd);
+      const closingIls = fcNum(f.countedCashIls);
+      snapshotPatch.cashboxClosing = {
         usd: Math.round(closingUsd * 100) / 100,
         ils: Math.round(closingIls * 100) / 100,
         verified: true,
         savedAt,
         weekCode: wk,
         source: "MANAGER_COUNT",
-      },
-    });
+      };
+    }
+    const nextSnapshot = mergeSnapshotPatch(snap, snapshotPatch);
 
     const flowRow = await tx.cashWeekFlow.upsert({
       where: flowWeekCompositeKey(flowScope, wk),

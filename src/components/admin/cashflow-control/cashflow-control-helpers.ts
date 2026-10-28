@@ -32,6 +32,27 @@ export function moneyManagerCount(currency: "ILS" | "USD", value: string | null 
   return fmtDailyMoney(currency, n);
 }
 
+/** מחלקת CSS לסכום — חוב / זכות / מאוזן / אזהרה */
+export function amountToneClass(
+  value: number | null | undefined,
+  opts?: { warnBand?: number },
+): "cfc-amt--debt" | "cfc-amt--credit" | "cfc-amt--balanced" | "cfc-amt--warn" | "" {
+  if (value == null || !Number.isFinite(value)) return "";
+  const band = opts?.warnBand ?? 0.02;
+  if (value < -band) return "cfc-amt--debt";
+  if (value > band) return "cfc-amt--credit";
+  if (Math.abs(value) <= band) return "cfc-amt--balanced";
+  return "cfc-amt--warn";
+}
+
+export function managerCountStateLabel(
+  state: import("@/lib/flow-control/flow-week-financial-ssot").ManagerCountState,
+): string {
+  if (state === "COMPLETE") return "מאושר";
+  if (state === "PARTIAL") return "חלקי";
+  return "טרם";
+}
+
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
@@ -130,6 +151,33 @@ export function filterWeeksByRange(
 ): FlowWeekOverviewRow[] {
   const set = new Set(weekCodesInRange(fromWeek, toWeek));
   return rows.filter((r) => set.has(r.week));
+}
+
+/** האם weekCode נמצא בטווח from/to (כולל) */
+export function isWeekInRange(week: string, fromWeek: string, toWeek: string): boolean {
+  const n = parseAhWeekNumber(week.trim());
+  if (n == null) return false;
+  let a = parseAhWeekNumber(fromWeek) ?? n;
+  let b = parseAhWeekNumber(toWeek) ?? n;
+  if (a > b) [a, b] = [b, a];
+  return n >= a && n <= b;
+}
+
+/** מרחיב טווח שבועות כך שיכלול את detailWeek */
+export function expandWeekRangeToInclude(
+  fromWeek: string,
+  toWeek: string,
+  detailWeek: string,
+): { fromWeek: string; toWeek: string } {
+  if (isWeekInRange(detailWeek, fromWeek, toWeek)) {
+    return { fromWeek, toWeek };
+  }
+  const d = parseAhWeekNumber(detailWeek) ?? parseAhWeekNumber(fromWeek) ?? 1;
+  const a = parseAhWeekNumber(fromWeek) ?? d;
+  const b = parseAhWeekNumber(toWeek) ?? d;
+  const lo = Math.min(a, b, d);
+  const hi = Math.max(a, b, d);
+  return { fromWeek: toAhWeekCode(lo), toWeek: toAhWeekCode(hi) };
 }
 
 /** שורה אחת לכל week — מונע כפילויות מטעינה/רענון */

@@ -15,6 +15,7 @@ import {
   shouldContributePaymentToFlowIntake,
   type FlowPaymentVatFields,
 } from "@/lib/flow-control/flow-calculation-service";
+import { resolveCashFlowTrackFromFlowLine } from "@/lib/flow-control/cash-flow-track-ssot";
 
 export type ManagerCountExpectedPaymentRow = {
   paymentId: string;
@@ -46,48 +47,33 @@ export type ManagerCountLineStatus = {
   label: string;
 };
 
-const LINE_META: Partial<
+const LINE_FORM: Partial<
   Record<
     CashWeekFlowLineId,
     {
       label: string;
-      route: "PS" | "IL";
       currency: "ILS" | "USD";
       formKey: keyof ManagerCountForm;
     }
   >
 > = {
-  CASH_ILS: {
-    label: "מזומן בשקלים — PS",
-    route: "PS",
-    currency: "ILS",
-    formKey: "countedCashIls",
-  },
-  CASH_USD: {
-    label: "מזומן בדולרים — PS",
-    route: "PS",
-    currency: "USD",
-    formKey: "countedCashUsd",
-  },
-  BANK_TRANSFER: {
-    label: "העברות בנקאיות",
-    route: "IL",
-    currency: "ILS",
-    formKey: "countedTransferIls",
-  },
-  CREDIT: {
-    label: "אשראי",
-    route: "IL",
-    currency: "ILS",
-    formKey: "countedCreditIls",
-  },
-  CHECK: {
-    label: "צ'קים",
-    route: "IL",
-    currency: "ILS",
-    formKey: "countedChecksIls",
-  },
+  CASH_ILS: { label: "מזומן בשקלים", currency: "ILS", formKey: "countedCashIls" },
+  CASH_USD: { label: "מזומן בדולרים", currency: "USD", formKey: "countedCashUsd" },
+  BANK_TRANSFER: { label: "העברות בנקאיות", currency: "ILS", formKey: "countedTransferIls" },
+  CREDIT: { label: "אשראי", currency: "ILS", formKey: "countedCreditIls" },
+  CHECK: { label: "צ'קים", currency: "ILS", formKey: "countedChecksIls" },
 };
+
+function lineMeta(lineId: CashWeekFlowLineId) {
+  const base = LINE_FORM[lineId];
+  if (!base) return null;
+  const route = resolveCashFlowTrackFromFlowLine(lineId);
+  return {
+    ...base,
+    route: route === "UNASSIGNED" ? ("IL" as const) : route,
+    label: `${base.label} — ${route}`,
+  };
+}
 
 export const MANAGER_COUNT_LINE_IDS: CashWeekFlowLineId[] = [
   "CASH_ILS",
@@ -196,7 +182,7 @@ export function buildManagerCountExpectedLines(
     for (const c of getFlowPaymentContributions(p)) {
       const lineId = channelToLineId(c.column);
       if (!lineId || c.amount <= CASH_CONTROL_EPS) continue;
-      const meta = LINE_META[lineId];
+      const meta = lineMeta(lineId);
       if (!meta) continue;
       const bucket = buckets.get(lineId)!;
       bucket.expected = round2(bucket.expected + c.amount);
@@ -220,7 +206,7 @@ export function buildManagerCountExpectedLines(
   }
 
   return MANAGER_COUNT_LINE_IDS.map((lineId) => {
-    const meta = LINE_META[lineId]!;
+    const meta = lineMeta(lineId)!;
     const bucket = buckets.get(lineId)!;
     return {
       lineId,
@@ -278,7 +264,7 @@ export function initializeManagerCountFormFields(
   if (hasSavedManagerCount(counted)) return {};
   const out: Partial<ManagerCountForm> = {};
   for (const lineId of MANAGER_COUNT_LINE_IDS) {
-    const meta = LINE_META[lineId];
+    const meta = LINE_FORM[lineId];
     if (!meta) continue;
     out[meta.formKey] = formatManagerCountInput(expected[lineId] ?? 0);
   }

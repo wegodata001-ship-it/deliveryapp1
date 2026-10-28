@@ -1,10 +1,23 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Calculator, RefreshCw, TrendingUp } from "lucide-react";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
+import {
+  AlertTriangle,
+  Archive,
+  Calculator,
+  ChevronLeft,
+  ChevronRight,
+  FileSpreadsheet,
+  FileText,
+  RefreshCw,
+} from "lucide-react";
 import { ACTIVE_WORK_WEEK_CODE } from "@/lib/active-work-week";
-import { CurrentBalancesKpiStrip } from "@/components/admin/cashflow-control/CurrentBalancesKpiStrip";
-import { parseAhWeekNumber, toAhWeekCode } from "@/lib/weeks/ah-week-nav";
+import { goToNextWeek, goToPrevWeek, parseAhWeekNumber, toAhWeekCode } from "@/lib/weeks/ah-week-nav";
+import { CashflowPrimaryKpiStrip } from "@/components/admin/cashflow-control/CashflowPrimaryKpiStrip";
+import { CashflowAnomaliesModal } from "@/components/admin/cashflow-control/CashflowAnomaliesModal";
+import { CashflowWeekDetailPanel } from "@/components/admin/cashflow-control/CashflowWeekDetailPanel";
 import type { CashFlowCapabilities } from "@/app/admin/cash-flow/types";
 import type { FlowWeekDrillPayload, FlowWeekOverviewRow } from "@/app/admin/cash-flow/flow-types";
 import { getCashflowControlBootstrapAction } from "@/app/admin/cash-flow/get-cashflow-control-bootstrap-action";
@@ -13,31 +26,21 @@ import {
   type CashControlRefreshDetail,
 } from "@/lib/cash-control-refresh-bus";
 import { CashflowWeeksTable } from "@/components/admin/cashflow-control/CashflowWeeksTable";
-import { CashflowRangeSummary } from "@/components/admin/cashflow-control/CashflowRangeSummary";
-import { FlowWeekTablesSection } from "@/components/admin/flow-control/tables/FlowWeekTablesSection";
-import { FlowWeekStatusBadge } from "@/components/admin/flow-control/dashboard/FlowWeekStatusBadge";
 import {
   aggregateOverviewRange,
   dedupeOverviewByWeek,
   dedupeWeekCodes,
+  expandWeekRangeToInclude,
   filterWeeksByRange,
   filterWeeksByYear,
+  isWeekInRange,
   uniqueYears,
   weekCodesInRange,
   weekDateRange,
 } from "@/components/admin/cashflow-control/cashflow-control-helpers";
+import { countVerifiedFlowExceptions } from "@/lib/flow-control/flow-week-business-reconciliation";
 import "@/components/admin/cashflow-control/cashflow-control.css";
-import { WeekMovementJournal } from "@/components/admin/cashflow-control/WeekMovementJournal";
-import { CashflowFxTrackCards } from "@/components/admin/cashflow-control/CashflowFxTrackCards";
-import { CashflowCashboxCards } from "@/components/admin/cashflow-control/CashflowCashboxCards";
-import { CashflowWeekContextBanner } from "@/components/admin/cashflow-control/CashflowWeekContextBanner";
-import {
-  CashflowKpiDrillModal,
-  type CashflowKpiUiKind,
-} from "@/components/admin/cashflow-control/CashflowKpiDrillModal";
-import { buildWeekMovementJournal } from "@/lib/flow-control/services/week-movement-journal.shared";
 import { ManagerCountWizard } from "@/components/admin/manager-count/ManagerCountWizard";
-import { money } from "@/components/admin/cashflow-control/cashflow-control-helpers";
 import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import { WEGO_COUNTRY_CHANGED } from "@/lib/country-switch-bus";
 import { workCountryFromOrderSourceCountry } from "@/lib/work-country";
@@ -86,10 +89,15 @@ export function CashflowControlScreen({
   caps: CashFlowCapabilities;
   initialWeek: string;
 }) {
-  const initial = initialWeek?.trim() || ACTIVE_WORK_WEEK_CODE;
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const urlWeek = searchParams.get("week")?.trim();
+  const activeWorkWeek = ACTIVE_WORK_WEEK_CODE;
+  const initial = urlWeek || initialWeek?.trim() || activeWorkWeek;
   const { globalCountry } = useAdminGlobal();
   const workCountry = workCountryFromOrderSourceCountry(globalCountry);
   const [selectedWeek, setSelectedWeek] = useState(initial);
+  const userPickedWeekRef = useRef(false);
   const [overview, setOverview] = useState<FlowWeekOverviewRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -104,19 +112,20 @@ export function CashflowControlScreen({
     storageKey: "cashflow-control",
     defaults: {
       year: "",
-      weekFrom: initial,
-      weekTo: initial,
+      weekFrom: activeWorkWeek,
+      weekTo: activeWorkWeek,
       showEmpty: "1",
     },
   });
+  const rangeSyncedRef = useRef(false);
   const fromWeek = cfcFilterValues.weekFrom || initial;
   const toWeek = cfcFilterValues.weekTo || initial;
   const yearFilter: number | "all" = cfcFilterValues.year
     ? Number(cfcFilterValues.year)
     : "all";
   const showEmpty = (cfcFilterValues.showEmpty || "1") !== "0";
-  const [varianceOpen, setVarianceOpen] = useState(false);
-  const [fxDrillKind, setFxDrillKind] = useState<CashflowKpiUiKind | null>(null);
+  const [anomaliesOpen, setAnomaliesOpen] = useState(false);
+  const drillRequestIdRef = useRef(0);
 
   const [drill, setDrill] = useState<FlowWeekDrillPayload | null>(null);
   const [drillLoading, setDrillLoading] = useState(false);
@@ -185,6 +194,7 @@ export function CashflowControlScreen({
         setDrillError(null);
         return;
       }
+      const reqId = ++drillRequestIdRef.current;
       setDrillLoading(true);
       setDrillError(null);
       try {
@@ -194,6 +204,7 @@ export function CashflowControlScreen({
           workCountry,
           includeBalances: false,
         });
+        if (reqId !== drillRequestIdRef.current) return;
         if (data.drill) {
           drillCacheRef.current.set(wk, data.drill);
           setDrill(data.drill);
@@ -202,12 +213,22 @@ export function CashflowControlScreen({
           setDrillError("לא ניתן לטעון את הנתונים — נסה שוב");
         }
       } catch {
+        if (reqId !== drillRequestIdRef.current) return;
         setDrillError("לא ניתן לטעון את הנתונים — נסה שוב");
       } finally {
-        setDrillLoading(false);
+        if (reqId === drillRequestIdRef.current) setDrillLoading(false);
       }
     },
     [workCountry],
+  );
+
+  const syncWeekToUrl = useCallback(
+    (wk: string) => {
+      const params = new URLSearchParams(searchParams.toString());
+      params.set("week", wk);
+      router.replace(`?${params.toString()}`, { scroll: false });
+    },
+    [router, searchParams],
   );
 
   const refreshVisible = useCallback(async () => {
@@ -315,12 +336,23 @@ export function CashflowControlScreen({
     return () => window.removeEventListener(WEGO_CASH_CONTROL_REFRESH_EVENT, onCashControlSaved);
   }, [refresh]);
 
+  /** selectedDetailWeek חייב להישאר — לא לדרוס לשורה הראשונה בטבלה (תיקון AH-146 מול AH-133) */
   useEffect(() => {
-    if (overview.length === 0) return;
-    if (overview.some((r) => r.week === selectedWeek)) return;
-    const inRange = filterWeeksByRange(overview, fromWeek, toWeek);
-    setSelectedWeek(inRange[0]?.week ?? overview[0]!.week);
-  }, [overview, selectedWeek, fromWeek, toWeek]);
+    if (loading || overview.length === 0) return;
+    if (overview.some((r) => r.week === selectedWeek.trim())) return;
+    void ensureWeeksLoaded([selectedWeek.trim()]);
+  }, [overview, selectedWeek, loading, ensureWeeksLoaded]);
+
+  useEffect(() => {
+    if (rangeSyncedRef.current) return;
+    rangeSyncedRef.current = true;
+    const detail = initial.trim();
+    if (!isWeekInRange(detail, fromWeek, toWeek)) {
+      const expanded = expandWeekRangeToInclude(fromWeek, toWeek, detail);
+      setCfcField("weekFrom", expanded.fromWeek);
+      setCfcField("weekTo", expanded.toWeek);
+    }
+  }, [fromWeek, toWeek, initial, setCfcField]);
 
   const years = useMemo(() => uniqueYears(overview), [overview]);
   const weekSelectOptions = useMemo(
@@ -334,44 +366,60 @@ export function CashflowControlScreen({
   const filteredRows = useMemo(() => {
     let rows = filterWeeksByYear(overview, yearFilter);
     rows = filterWeeksByRange(rows, fromWeek, toWeek);
-    if (!showEmpty) rows = rows.filter((r) => r.hasData);
+    const detail = selectedWeek.trim();
+    if (!showEmpty) {
+      rows = rows.filter((r) => r.hasData || r.week === detail);
+    }
     return dedupeOverviewByWeek(rows);
-  }, [overview, yearFilter, fromWeek, toWeek, showEmpty]);
+  }, [overview, yearFilter, fromWeek, toWeek, showEmpty, selectedWeek]);
 
   const rangeAgg = useMemo(() => aggregateOverviewRange(filteredRows), [filteredRows]);
   const isRange = fromWeek !== toWeek;
 
   const selectedRow = useMemo(
-    () => overview.find((r) => r.week === selectedWeek) ?? filteredRows[0] ?? null,
-    [overview, filteredRows, selectedWeek],
+    () => overview.find((r) => r.week === selectedWeek.trim()) ?? null,
+    [overview, selectedWeek],
   );
 
-  const movementJournal = useMemo(
-    () => (drill ? buildWeekMovementJournal(drill) : []),
+  const verifiedExceptions = useMemo(
+    () => countVerifiedFlowExceptions(drill),
     [drill],
   );
 
-  const weekStatusCards = useMemo(() => {
-    if (!selectedRow) return null;
-    const fxPsIls = Number(selectedRow.fxPurchaseIls) || 0;
-    const expenses = Number(selectedRow.expensesIls) || 0;
-    const outflows = fxPsIls + expenses + (Number(selectedRow.turkeyTransferredUsd) || 0);
-    return {
-      receipts: Number(selectedRow.totalReceivedIls) || 0,
-      outflows,
-      netHint: selectedRow.drawerRemainingIls,
-    };
-  }, [selectedRow]);
+  const applyTableRange = useCallback(
+    (from: string, to: string) => {
+      setCfcField("weekFrom", from);
+      setCfcField("weekTo", to);
+    },
+    [setCfcField],
+  );
 
-  const selectWeek = useCallback((week: string) => {
-    const wk = week.trim();
-    if (!wk) return;
-    drillCacheRef.current.delete(selectedWeek.trim());
-    setSelectedWeek(wk);
-    window.requestAnimationFrame(() => {
-      detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-  }, []);
+  const selectWeek = useCallback(
+    (week: string) => {
+      const wk = week.trim();
+      if (!wk) return;
+      userPickedWeekRef.current = true;
+      drillRequestIdRef.current += 1;
+      setSelectedWeek(wk);
+      syncWeekToUrl(wk);
+      const expanded = expandWeekRangeToInclude(fromWeek, toWeek, wk);
+      if (expanded.fromWeek !== fromWeek || expanded.toWeek !== toWeek) {
+        applyTableRange(expanded.fromWeek, expanded.toWeek);
+      }
+      window.requestAnimationFrame(() => {
+        detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    },
+    [syncWeekToUrl, fromWeek, toWeek, applyTableRange],
+  );
+
+  const shiftWeek = useCallback(
+    (dir: -1 | 1) => {
+      const next = dir === -1 ? goToPrevWeek(selectedWeek) : goToNextWeek(selectedWeek);
+      if (next) selectWeek(next);
+    },
+    [selectedWeek, selectWeek],
+  );
 
   const onFromChange = (w: string) => {
     setCfcField("weekFrom", w);
@@ -457,53 +505,90 @@ export function CashflowControlScreen({
   }
 
   return (
-    <div className="cfc-page" dir="rtl">
-      <header className="cfc-header">
-        <div className="cfc-header__title">
-          <div className="cfc-header__icon">
-            <TrendingUp size={20} />
-          </div>
-          <div>
-            <h1>בקרת תזרים</h1>
-            <p>
-              {isRange && rangeAgg
-                ? `${rangeAgg.fromWeek} → ${rangeAgg.toWeek} · ${rangeAgg.weekCount} שבועות`
-                : selectedRow
-                  ? `${selectedRow.week} · ${weekDateRange(selectedRow.week, selectedRow.weekLabel)}`
-                  : "סגירה שבועית"}
-            </p>
-          </div>
-          <FlowWeekStatusBadge
-            drill={drill}
-            rangeAlertCount={isRange ? rangeAgg?.alertWeekCount ?? 0 : null}
-            onClick={() => setVarianceOpen(true)}
-          />
+    <div className="cfc-page cfc-page--compact" dir="rtl">
+      <header className="cfc-toolbar">
+        <h1 className="cfc-toolbar__title">
+          בקרת תזרים
+          <span className="cfc-toolbar__week" dir="ltr">
+            {selectedWeek}
+          </span>
+          {selectedRow ? (
+            <small className="cfc-toolbar__dates">{weekDateRange(selectedRow.week, selectedRow.weekLabel)}</small>
+          ) : null}
+        </h1>
+
+        <div className="cfc-toolbar__nav">
+          <button type="button" className="cfc-btn cfc-btn--icon" onClick={() => shiftWeek(-1)} aria-label="שבוע קודם">
+            <ChevronRight size={18} />
+          </button>
+          <select
+            className="cfc-week-select"
+            value={selectedWeek}
+            onChange={(e) => selectWeek(e.target.value)}
+            aria-label="בחירת שבוע"
+          >
+            {weekSelectOptions.map((w) => (
+              <option key={w} value={w}>
+                {w}
+              </option>
+            ))}
+          </select>
+          <button type="button" className="cfc-btn cfc-btn--icon" onClick={() => shiftWeek(1)} aria-label="שבוע הבא">
+            <ChevronLeft size={18} />
+          </button>
         </div>
 
-        <div className="cfc-header__actions">
-
-          <button
-            type="button"
-            className="cfc-btn cfc-btn--ghost"
-            onClick={() => setManagerCountOpen(true)}
-          >
+        <div className="cfc-toolbar__actions">
+          <button type="button" className="cfc-btn cfc-btn--ghost cfc-btn--sm" onClick={refresh} aria-label="רענון">
+            <RefreshCw size={15} />
+            רענון
+          </button>
+          <button type="button" className="cfc-btn cfc-btn--ghost cfc-btn--sm" onClick={() => setManagerCountOpen(true)}>
             <Calculator size={15} />
             ספירת מנהל
           </button>
-
-          <button type="button" className="cfc-btn cfc-btn--ghost" onClick={refresh} aria-label="רענון">
-            <RefreshCw size={15} />
-            רענון
+          {caps.canExport ? (
+            <>
+              <button
+                type="button"
+                className="cfc-btn cfc-btn--ghost cfc-btn--sm"
+                disabled={!!exporting}
+                onClick={() => void exportFile("pdf")}
+              >
+                <FileText size={15} />
+                PDF
+              </button>
+              <button
+                type="button"
+                className="cfc-btn cfc-btn--ghost cfc-btn--sm"
+                disabled={!!exporting}
+                onClick={() => void exportFile("excel")}
+              >
+                <FileSpreadsheet size={15} />
+                Excel
+              </button>
+            </>
+          ) : null}
+          <Link className="cfc-btn cfc-btn--ghost cfc-btn--sm" href="/admin/documents">
+            <Archive size={15} />
+            ארכיון
+          </Link>
+          <button
+            type="button"
+            className={`cfc-btn cfc-btn--ghost cfc-btn--sm${verifiedExceptions > 0 ? " cfc-btn--alert" : ""}`}
+            onClick={() => setAnomaliesOpen(true)}
+          >
+            <AlertTriangle size={15} />
+            חריגות{verifiedExceptions > 0 ? ` (${verifiedExceptions})` : ""}
           </button>
         </div>
       </header>
 
-      <CurrentBalancesKpiStrip
-        workCountry={workCountry}
-        asOfWeek={selectedWeek}
-        refreshKey={refreshTick}
-        weekFxPurchases={drill?.flow.fxPurchases}
-        weekFxLoading={drillLoading && !drill}
+      <CashflowPrimaryKpiStrip
+        row={selectedRow}
+        drill={drill}
+        loading={drillLoading}
+        onOpenAnomalies={() => setAnomaliesOpen(true)}
       />
 
       <TableFiltersBar
@@ -516,13 +601,14 @@ export function CashflowControlScreen({
         }}
         onClear={() => {
           clearCfcFilters();
-          setSelectedWeek(initial);
+          userPickedWeekRef.current = false;
+          const wk = urlWeek || activeWorkWeek;
+          setSelectedWeek(wk);
+          applyTableRange(wk, wk);
+          syncWeekToUrl(wk);
         }}
         onRefresh={refresh}
         refreshing={loading}
-        onExcel={caps.canExport ? () => void exportFile("excel") : undefined}
-        onPdf={caps.canExport ? () => void exportFile("pdf") : undefined}
-        exporting={!!exporting}
         resultCount={filteredRows.length}
       />
 
@@ -537,88 +623,35 @@ export function CashflowControlScreen({
       />
 
       <div ref={detailRef} className="cfc-detail">
-        {selectedRow && rangeAgg ? (
-          <>
-            <CashflowRangeSummary
-              agg={rangeAgg}
-              focusWeek={selectedWeek}
-              weekRows={filteredRows}
-              focusRow={selectedRow}
-              loading={loading || drillLoading}
-            />
-
-            <CashflowWeekContextBanner row={selectedRow} />
-
-            {!isRange && drill?.flow ? <CashflowCashboxCards flow={drill.flow} /> : null}
-
-            {!isRange ? (
-              <CashflowFxTrackCards
-                purchases={drill?.flow.fxPurchases}
-                weekCode={selectedWeek}
-                loading={drillLoading}
-                error={drillError}
-                onDrillPs={() => setFxDrillKind("fxPs")}
-                onDrillIl={() => setFxDrillKind("fxIl")}
-                onRetry={() => void loadDrillOnly(selectedWeek.trim())}
-              />
-            ) : null}
-
-            {!isRange && weekStatusCards ? (
-              <section className="cfc-week-status" aria-label="מצב השבוע">
-                <header className="cfc-week-status__head">
-                  <span className="cfc-flow-step">④</span>
-                  <h2>יתרות השבוע · <span dir="ltr">{selectedWeek}</span></h2>
-                </header>
-                <div className="cfc-week-status__grid">
-                  <div className="cfc-week-status__card cfc-week-status__card--in">
-                    <span>① סה״כ תקבולים</span>
-                    <strong dir="ltr">{money("ILS", weekStatusCards.receipts)}</strong>
-                  </div>
-                  <div className="cfc-week-status__card cfc-week-status__card--out">
-                    <span>③ סה״כ יציאות</span>
-                    <strong dir="ltr">{money("ILS", weekStatusCards.outflows)}</strong>
-                  </div>
-                  <div className="cfc-week-status__card cfc-week-status__card--balance">
-                    <span>④ מזומן ₪ בקופה</span>
-                    <strong dir="ltr">
-                      {weekStatusCards.netHint != null && weekStatusCards.netHint !== ""
-                        ? `₪${weekStatusCards.netHint}`
-                        : "טרם בוצעה ספירה"}
-                    </strong>
-                  </div>
-                </div>
-              </section>
-            ) : null}
-
-            <WeekMovementJournal
-              entries={movementJournal}
-              weekCode={selectedWeek}
-              loading={drillLoading}
-              error={drillError}
-              onRetry={() => void loadDrillOnly(selectedWeek.trim())}
-            />
-
-            <FlowWeekTablesSection
-              drill={drill}
-              loading={drillLoading}
-              error={drillError}
-              onRetry={() => void loadDrillOnly(selectedWeek.trim())}
-              varianceOpenExternal={varianceOpen}
-              onVarianceOpenChange={setVarianceOpen}
-            />
-          </>
+        {selectedRow && !isRange ? (
+          <CashflowWeekDetailPanel
+            week={selectedWeek}
+            row={selectedRow}
+            drill={drill}
+            loading={drillLoading}
+            error={drillError}
+            workCountry={workCountry}
+            onRetry={() => void loadDrillOnly(selectedWeek.trim())}
+          />
+        ) : selectedRow && isRange && rangeAgg ? (
+          <div className="cfc-card">
+            <p className="cfc-empty">
+              טווח {rangeAgg.fromWeek}–{rangeAgg.toWeek}: {rangeAgg.weekCount} שבועות ·{" "}
+              {rangeAgg.alertWeekCount} עם חריגות. בחרו שבוע יחיד בטווח לפירוט מלא.
+            </p>
+          </div>
         ) : (
           <div className="cfc-card">
-            <p className="cfc-empty">בחרו שבוע או טווח שבועות להצגת הסיכום</p>
+            <p className="cfc-empty">בחרו שבוע מהטבלה להצגת פירוט</p>
           </div>
         )}
       </div>
-      <CashflowKpiDrillModal
-        open={fxDrillKind != null}
-        kind={fxDrillKind}
-        weekCodes={[selectedWeek.trim()]}
-        weekRows={filteredRows}
-        onClose={() => setFxDrillKind(null)}
+      <CashflowAnomaliesModal
+        open={anomaliesOpen}
+        week={selectedWeek}
+        drill={drill}
+        overviewRow={selectedRow}
+        onClose={() => setAnomaliesOpen(false)}
       />
       <ManagerCountWizard
         open={managerCountOpen}

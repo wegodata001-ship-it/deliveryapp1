@@ -283,6 +283,20 @@ export type FlowWeekOverviewRow = {
   expensesUsd: string;
   drawerRemainingIls: string | null;
   drawerRemainingUsd: string | null;
+  /** NONE | PARTIAL | COMPLETE — ספירת מנהל */
+  managerCountState: import("@/lib/flow-control/flow-week-financial-ssot").ManagerCountState;
+  /** שבוע הזמנה שמקורו לגבייה בשבוע זה (N+1) — null אם AH-1 */
+  ordersDueSourceWeek: string | null;
+  /** הזמנות לגבייה (נוצרו בשבוע קודם לפי מדיניות N→N+1) */
+  ordersDueCount: number;
+  ordersDueUsd: string;
+  /** תקבולים לפי מסלול — מ-channel SSOT, ללא חיבור מטבעות */
+  intakePsIls: string;
+  intakePsUsd: string;
+  intakeIlIls: string;
+  intakeIlUsd: string;
+  intakeUnassignedIls: string;
+  intakeUnassignedUsd: string;
   bankBalanceIls: string | null;
   /** רווח/הפסד שערים מרכישות מט״ח (קיים) — לתצוגה לחיצה */
   fxProfitIls: string;

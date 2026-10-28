@@ -34,11 +34,28 @@ export function parseManagerCountHistory(raw: unknown): ManagerCountHistoryEntry
   return out;
 }
 
+function formsEqual(a: Record<string, string>, b: Record<string, string>): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const k of keys) {
+    if ((a[k] ?? "") !== (b[k] ?? "")) return false;
+  }
+  return true;
+}
+
 export function appendManagerCountHistory(
   existing: unknown,
   entry: Omit<ManagerCountHistoryEntry, "id" | "form"> & { formAfter: Record<string, string> },
 ): ManagerCountHistoryEntry[] {
   const prev = parseManagerCountHistory(existing);
+  const last = prev[prev.length - 1];
+  if (
+    last &&
+    last.savedById === entry.savedById &&
+    formsEqual(last.formAfter, entry.formAfter) &&
+    Math.abs(new Date(entry.savedAt).getTime() - new Date(last.savedAt).getTime()) < 3000
+  ) {
+    return prev;
+  }
   const next: ManagerCountHistoryEntry = {
     ...entry,
     form: entry.formAfter,

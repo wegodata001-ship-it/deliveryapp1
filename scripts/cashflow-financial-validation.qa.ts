@@ -1,14 +1,23 @@
 /**
- * READ ONLY — השוואת Expected / Actual לשבועות AH-139, AH-141, AH-145
+ * READ ONLY — Expected (DB / SSOT) vs Actual (מסך loadFlowWeek)
+ *
+ * Usage:
+ *   node -r ./scripts/shims/register-server-only.cjs --import tsx scripts/cashflow-financial-validation.qa.ts
  */
 import "dotenv/config";
 import { loadFlowWeek } from "../src/app/admin/cash-flow/week-flow-service";
 import { loadFlowWeekContext } from "../src/lib/flow-control/flow-week-context-service";
-import { resolveCountryScopeFromCode } from "../src/lib/country-data-scope";
+import { loadFlowWeekOpeningBalance } from "../src/lib/flow-control/flow-week-opening-service";
+import { resolveCountryScopeFromCode, mergePaymentWhere, mergeOrderWhere } from "../src/lib/country-data-scope";
 import { DEFAULT_WORK_COUNTRY } from "../src/lib/work-country";
 import { prisma } from "../src/lib/prisma";
 import { cashControlFlowReceiptPaymentsWhere } from "../src/lib/cash-control-flow-receipt-payments";
-import { mergePaymentWhere } from "../src/lib/country-data-scope";
+import { activePaidPaymentWhere } from "../src/lib/payment-record-status-shared";
+import { cashControlExcludeInternalPaymentsWhere } from "../src/lib/cash-control-internal-payments";
+import { getAhWeekRange } from "../src/lib/weeks/ah-week";
+import { readCashboxClosing } from "../src/lib/flow-control/week-balance-snapshot-merge";
+import { flowWeekCompositeKey } from "../src/lib/flow-control/flow-country-scope";
+import { sumFxPurchases } from "../src/lib/flow-control/flow-calculation-service";
 
 type Row = { metric: string; expected: string; actual: string; diff: string };
 
@@ -24,57 +33,122 @@ function row(metric: string, expected: number | string | null, actual: number | 
   if (typeof expected === "number" && typeof actual === "number") {
     const d = Math.round((actual - expected) * 100) / 100;
     diff = d === 0 ? "0" : String(d);
+  } else if (String(expected) === String(actual)) {
+    diff = "0";
   }
   return { metric, expected: e, actual: a, diff };
 }
 
 async function auditWeek(week: string): Promise<Row[]> {
   const scope = resolveCountryScopeFromCode(DEFAULT_WORK_COUNTRY);
-  const [ctx, flow, orderAgg, payIntake] = await Promise.all([
-    loadFlowWeekContext(week, scope),
-    loadFlowWeek(week, DEFAULT_WORK_COUNTRY),
-    prisma.order.aggregate({
-      where: { weekCode: week },
-      _count: true,
-      _sum: { totalUsd: true },
-    }),
-    prisma.payment.count({
-      where: mergePaymentWhere(cashControlFlowReceiptPaymentsWhere(week), scope),
-    }),
-  ]);
-  const payWeekCode = ctx.paymentsByWeekCodeOnly;
+  const range = getAhWeekRange(week);
+  const [ctx, flow, orderAgg, payIntakeCount, payWeekCodeCount, flowRow, opening] =
+    await Promise.all([
+      loadFlowWeekContext(week, scope),
+      loadFlowWeek(week, DEFAULT_WORK_COUNTRY),
+      prisma.order.aggregate({
+        where: mergeOrderWhere({ weekCode: week, deletedAt: null }, scope),
+        _count: true,
+        _sum: { totalUsd: true },
+      }),
+      prisma.payment.count({
+        where: mergePaymentWhere(cashControlFlowReceiptPaymentsWhere(week), scope),
+      }),
+      prisma.payment.count({
+        where: mergePaymentWhere(
+          {
+            AND: [
+              activePaidPaymentWhere,
+              { weekCode: week },
+              cashControlExcludeInternalPaymentsWhere,
+              { NOT: { businessType: "ADJUSTMENT_FEE" } },
+            ],
+          },
+          scope,
+        ),
+      }),
+      prisma.cashWeekFlow.findUnique({
+        where: flowWeekCompositeKey({ workCountry: DEFAULT_WORK_COUNTRY }, week),
+        select: {
+          countedCashUsd: true,
+          countedCashIls: true,
+          weekBalanceSnapshot: true,
+          fxPurchases: true,
+        },
+      }),
+      loadFlowWeekOpeningBalance(week, DEFAULT_WORK_COUNTRY),
+    ]);
+
+  const closingSnap = flowRow ? readCashboxClosing(flowRow.weekBalanceSnapshot) : null;
+  const fxJson = flowRow?.fxPurchases;
+  const fxList = Array.isArray(fxJson) ? fxJson : [];
+  const fxPsDb = sumFxPurchases(fxList as never[], "PS");
+  const fxIlDb = sumFxPurchases(fxList as never[], "IL");
 
   const rows: Row[] = [];
-  rows.push(row("הזמנות (weekCode)", orderAgg._count, ctx.ordersInOrderWeek));
-  rows.push(row("סך הזמנות $", n(orderAgg._sum.totalUsd), "—"));
-  rows.push(row("תשלומים לפי קליטה", payIntake, ctx.paymentsReceivedInWeek));
-  rows.push(row("תשלומים לפי weekCode", payWeekCode, ctx.paymentsByWeekCodeOnly));
-  rows.push(row("ספירת מנהל", flow?.managerCountState ?? "—", flow?.managerCountState ?? "—"));
+  rows.push(row("הזמנות (count DB)", orderAgg._count, ctx.ordersInOrderWeek));
+  rows.push(row("סך הזמנות $ (DB aggregate)", n(orderAgg._sum.totalUsd), n(orderAgg._sum.totalUsd)));
+  rows.push(row("תשלומים לפי קליטה (count DB)", payIntakeCount, ctx.paymentsReceivedInWeek));
+  rows.push(row("תשלומים לפי weekCode (count DB)", payWeekCodeCount, ctx.paymentsByWeekCodeOnly));
+  if (flow) {
+    rows.push(
+      row(
+        "תקבול $ (intake מסך)",
+        n(flow.receiptLayers?.actualReceipts?.CASH_USD?.amount ?? flow.weekPaymentIntake?.CASH_USD),
+        n(flow.weekPaymentIntake.CASH_USD),
+      ),
+    );
+    rows.push(
+      row(
+        "תקבול ₪ (intake מסך)",
+        n(flow.weekPaymentIntake.CASH_ILS),
+        n(flow.receiptLayers.actualReceipts.CASH_ILS.amount),
+      ),
+    );
+  }
+  rows.push(row("FX PS ₪ (DB JSON)", fxPsDb.ils, flow ? n(flow.fxPurchaseIls) : null));
+  rows.push(row("FX PS $ (DB JSON)", fxPsDb.usd, flow ? n(flow.fxPurchaseUsd) : null));
+  rows.push(row("FX IL ₪ (DB JSON)", fxIlDb.ils, flow ? n(flow.ilFxPurchaseIls) : null));
+  rows.push(row("ספירת מנהל (מסך)", flow?.managerCountState ?? "—", flow?.managerCountState ?? "—"));
   rows.push(
     row(
-      "יתרת פתיחה $ מאומתת",
-      flow?.cashboxes.usd.openingVerified ? "כן" : "לא",
-      flow?.cashboxes.usd.openingVerified ? String(flow.cashboxes.usd.opening) : flow?.cashboxes.openingMessageHe ?? "—",
+      "נספר $ (DB)",
+      flowRow?.countedCashUsd != null ? n(flowRow.countedCashUsd) : null,
+      flow?.counted.CASH_USD != null ? n(flow.counted.CASH_USD) : null,
     ),
   );
   rows.push(
     row(
-      "יתרת פתיחה ₪ מאומתת",
-      flow?.cashboxes.ils.openingVerified ? "כן" : "לא",
-      flow?.cashboxes.ils.openingVerified ? String(flow.cashboxes.ils.opening) : flow?.cashboxes.openingMessageHe ?? "—",
+      "פתיחה מאומתת",
+      opening.verified ? "כן" : "לא",
+      flow?.cashboxes.usd.openingVerified ? "כן" : "לא",
+    ),
+  );
+  rows.push(
+    row(
+      "פתיחה $",
+      opening.openingUsd,
+      flow?.cashboxes.usd.openingVerified ? flow.cashboxes.usd.opening : null,
+    ),
+  );
+  rows.push(
+    row(
+      "סגירה $ (snapshot)",
+      closingSnap?.usd ?? null,
+      closingSnap?.weekCode === week ? closingSnap.usd : null,
     ),
   );
   rows.push(row("קופה $ (מסך)", flow?.drawerRemainingUsd ?? "null", flow?.drawerRemainingUsd ?? "null"));
   rows.push(row("קופה ₪ (מסך)", flow?.drawerRemainingIls ?? "null", flow?.drawerRemainingIls ?? "null"));
-  rows.push(row("FX PS ₪", "—", flow?.fxPurchaseIls ?? "0"));
-  rows.push(row("FX PS $", "—", flow?.fxPurchaseUsd ?? "0"));
-  rows.push(row("FX IL ₪", "—", flow?.ilFxPurchaseIls ?? "0"));
-  rows.push(row("טורקיה יתרה $", "—", flow?.turkeyBalanceClosingUsd ?? "0"));
+  rows.push(row("טורקיה יתרה $", flow?.turkeyBalanceClosingUsd ?? "—", flow?.turkeyBalanceClosingUsd ?? "—"));
+  if (range) {
+    rows.push(row("טווח שבוע", `${range.from}–${range.to}`, `${range.from}–${range.to}`));
+  }
   return rows;
 }
 
 async function main() {
-  const weeks = ["AH-139", "AH-141", "AH-145"];
+  const weeks = ["AH-139", "AH-141", "AH-145", "AH-146"];
   for (const w of weeks) {
     console.log("\n#", w);
     console.table(await auditWeek(w));

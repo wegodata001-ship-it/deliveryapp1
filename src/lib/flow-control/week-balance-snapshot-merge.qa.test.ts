@@ -31,3 +31,25 @@ describe("week-balance-snapshot-merge", () => {
     assert.equal(out.foo, 1);
   });
 });
+
+describe("manager-count-history dedupe", () => {
+  it("skips duplicate append within 3s", async () => {
+    const { appendManagerCountHistory } = await import("@/lib/flow-control/manager-count-history");
+    const form = { countedCashUsd: "1" };
+    const base = appendManagerCountHistory(null, {
+      savedAt: new Date().toISOString(),
+      savedById: "u1",
+      formBefore: {},
+      formAfter: form,
+      status: "SAVED",
+    });
+    const dup = appendManagerCountHistory(base, {
+      savedAt: new Date().toISOString(),
+      savedById: "u1",
+      formBefore: form,
+      formAfter: form,
+      status: "SAVED",
+    });
+    assert.equal(dup.length, 1);
+  });
+});
