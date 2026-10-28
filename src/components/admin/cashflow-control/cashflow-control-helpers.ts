@@ -182,6 +182,7 @@ export type WeekReceiptSummaryTotals = {
   totalOrders: number;
   totalOrdersUsd: number;
   paymentIntakeIls: number;
+  paymentsReceivedInWeek: number;
   remainingToPayUsd: number;
   /** ספירת מנהל — CashWeekFlow.counted* */
   managerCashUsd: number | null;
@@ -196,16 +197,19 @@ export function aggregateWeekReceiptSummaryTotals(rows: FlowWeekOverviewRow[]): 
   let totalOrdersUsd = 0;
   let paymentIntakeIls = 0;
   let remainingToPayUsd = 0;
+  let paymentsReceivedInWeek = 0;
   for (const r of rows) {
     totalOrders += r.totalOrders;
     totalOrdersUsd += fcNum(r.totalOrdersUsd);
     paymentIntakeIls += fcNum(r.paymentIntakeIls ?? r.totalReceivedIls);
     remainingToPayUsd += fcNum(r.remainingToPayUsd);
+    paymentsReceivedInWeek += r.paymentsReceivedInWeek ?? 0;
   }
   return {
     totalOrders,
     totalOrdersUsd: round2(totalOrdersUsd),
     paymentIntakeIls: round2(paymentIntakeIls),
+    paymentsReceivedInWeek,
     remainingToPayUsd: round2(remainingToPayUsd),
     managerCashUsd: sumManagerLine(rows, "CASH_USD"),
     managerCashIls: sumManagerLine(rows, "CASH_ILS"),

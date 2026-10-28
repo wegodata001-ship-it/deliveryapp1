@@ -9,10 +9,10 @@ import { getWeekCodeForLocalDate, parseLocalDate } from "@/lib/work-week";
 
 describe("payment work week — selected week is SSOT", () => {
   it("AH-141 selected → stored AH-141 even when paymentDate is 26/09", () => {
-    const uiWeek = defaultPaymentIntakeWeekCode("AH-141");
+    const uiWeek = "AH-141";
     const submitted = resolveSubmittedPaymentWorkWeek(uiWeek);
     const dateWeek = getWeekCodeForLocalDate(parseLocalDate("2026-09-26"));
-    assert.equal(uiWeek, "AH-141");
+    assert.equal(defaultPaymentIntakeWeekCode("AH-142"), "AH-141");
     assert.equal(submitted, "AH-141");
     assert.equal(dateWeek, "AH-141");
     assert.notEqual(submitted, "AH-142");

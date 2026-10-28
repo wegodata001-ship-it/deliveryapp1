@@ -1,7 +1,6 @@
 "use server";
 
 import { unstable_noStore as noStore } from "next/cache";
-import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/client";
 import { fetchOrdersListPageData } from "@/lib/orders-list-data";
 import { requireRoutePermission } from "@/lib/route-access";
@@ -68,6 +67,5 @@ export async function updateOrderCompletedFlagAction(
 
   const { invalidateOrdersListDataCache } = await import("@/lib/orders-list-data");
   invalidateOrdersListDataCache();
-  revalidatePath("/admin/orders");
   return { ok: true };
 }

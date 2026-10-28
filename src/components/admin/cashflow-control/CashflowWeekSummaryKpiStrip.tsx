@@ -64,7 +64,12 @@ const KPI_CARDS: KpiCard[] = [
   },
   {
     kind: "static",
-    label: "נקלט מקליטת תשלום",
+    label: "תשלומים שהתקבלו (קליטה)",
+    renderValue: (t) => String(t.paymentsReceivedInWeek ?? "—"),
+  },
+  {
+    kind: "static",
+    label: "נקלט ₪ מקליטה",
     renderValue: (t) => money("ILS", t.paymentIntakeIls),
   },
   {

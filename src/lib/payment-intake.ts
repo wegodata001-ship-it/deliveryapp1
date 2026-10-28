@@ -4,7 +4,6 @@ import {
   applyDebtWithdrawalFifoToRemainders,
   computeOrderOpenDebtSignedUsd,
   computeOrderOpenDebtUsd,
-  creditUsdEligibleForOrderFifo,
   deriveOrderPaymentDisplayStatus,
   reconcileOrderBreakdownWithLedger,
 } from "@/lib/order-remaining-debt";
@@ -249,6 +248,11 @@ export type OrderBreakdownMethodRow = {
   planned?: number;
   /** שולם במטבע השורה */
   paid?: number;
+  /**
+   * paidAmount מה-DB — לא משתנה ב-FIFO/collectible remaining.
+   * ההתאמה הפיזית (snap planned=paid) חייבת את הסכום הזה.
+   */
+  physicalPaid?: number;
   /** נותר במטבע השורה */
   remaining?: number;
   /** תאימות / המרה ל-USD לתצוגות ישנות */
@@ -359,35 +363,29 @@ export function verifyTotalUsdAgainstInputs(form: {
 }
 
 /**
- * משיכת חוב + זכות לקוח זמינה סוגרות יתרות הזמנה FIFO.
- * dbPaidUsd נשאר סכום התשלומים שנקלטו (לא ממציאים תשלום / לא כותבים זכות).
+ * משיכת חוב סוגרת יתרות הזמנה FIFO.
+ * יתרת זכות לא יורדת מהחוב כאן — קיזוז רק אחרי אישור מפורש.
+ * dbPaidUsd נשאר סכום התשלומים שנקלטו.
  */
 export function applyDebtWithdrawalToIntakeOrders(
   orders: PaymentIntakeOrderRow[],
   withdrawalUsd: number,
-  availableCreditUsd = 0,
+  _availableCreditUsd = 0,
 ): PaymentIntakeOrderRow[] {
-  const credit = Number(availableCreditUsd) || 0;
-  if (
-    (!(withdrawalUsd > ALLOC_EPS) && !(credit > ALLOC_EPS)) ||
-    orders.length === 0
-  ) {
+  void _availableCreditUsd;
+  if (!(withdrawalUsd > ALLOC_EPS) || orders.length === 0) {
     return orders;
   }
   const before = orders.map((o) => Number(o.dbRemainingUsd) || 0);
-  const afterWithdrawal = applyDebtWithdrawalFifoToRemainders(before, withdrawalUsd);
-  const remainingAfterWithdrawal = afterWithdrawal.reduce((s, n) => s + n, 0);
-  const creditToApply = creditUsdEligibleForOrderFifo({
-    remainingAfterWithdrawalUsd: remainingAfterWithdrawal,
-    availableCreditUsd: credit,
-  });
-  const after = applyDebtWithdrawalFifoToRemainders(afterWithdrawal, creditToApply);
+  const after = applyDebtWithdrawalFifoToRemainders(before, withdrawalUsd);
   return orders.map((order, i) => {
     const nextRemaining = after[i] ?? 0;
     if (Math.abs(nextRemaining - (before[i] ?? 0)) <= ALLOC_EPS) return order;
     const total = Number(order.totalAmountUsd) || 0;
     const paid = Number(order.dbPaidUsd) || 0;
-    const breakdown = reconcileOrderBreakdownWithLedger(order.breakdown, nextRemaining);
+    const breakdown = reconcileOrderBreakdownWithLedger(order.breakdown, nextRemaining, {
+      preservePaid: true,
+    });
     return {
       ...order,
       dbRemainingUsd: nextRemaining.toFixed(2),

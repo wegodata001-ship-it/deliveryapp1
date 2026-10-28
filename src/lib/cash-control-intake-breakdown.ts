@@ -4,6 +4,8 @@
 
 import {
   enforceBreakdownAgainstEntered,
+  enteredUsdAppliedToOpenDebt,
+  isPureSurplusOverRemainingPlan,
   type EnteredBucketUsd,
   type PlannedBucketUsd,
   paymentMethodBucketKey,
@@ -72,14 +74,14 @@ function canTreatViolationsAsPureSurplus(params: {
   surplusUsd: number;
   eps: number;
 }): boolean {
-  const coversAllDebt = params.totalPaymentUsd >= params.totalDebtUsd - params.eps;
-  if (!coversAllDebt || params.surplusUsd <= params.eps) return false;
-  const enteredMap = new Map(params.enteredByBucket.map((e) => [e.bucket, e.enteredUsd] as const));
-  const openUnpaidOtherMethod = params.openPlan.some((p) => {
-    if (p.remainingUsd <= params.eps) return false;
-    return (enteredMap.get(p.bucket) ?? 0) <= params.eps;
+  if (!(params.surplusUsd > params.eps)) return false;
+  return isPureSurplusOverRemainingPlan({
+    planned: params.openPlan,
+    entered: params.enteredByBucket,
+    totalDebtUsd: params.totalDebtUsd,
+    totalPaymentUsd: params.totalPaymentUsd,
+    eps: params.eps,
   });
-  return !openUnpaidOtherMethod;
 }
 
 /**
@@ -189,20 +191,14 @@ export function computeIntakeSaveDeviations(params: {
 
 /**
  * באנר «נדרש עדכון חלוקת אמצעי תשלום» בקליטת תשלום:
- * כשיש עודף תשלום (payment > debt) — excess לא מוצג; מטופל בחלון תשלום היתר בלבד.
- * חריגת שער עדיין מוצגת.
+ * חריגת אמצעי אמיתית נשארת גלויה גם כשיש עודף סכום.
+ * עודף טהור (אותו אמצעי, כל היתרות כוסו) לא מייצר שורות excess.
  */
 export function filterIntakeCorrectionRowsForDisplay(
   rows: IntakeSaveDeviationRow[],
-  paymentBalanceState: "debt" | "cleared" | "surplus" | "credit",
+  _paymentBalanceState: "debt" | "cleared" | "surplus" | "credit",
 ): IntakeSaveDeviationRow[] {
-  const hasPaymentSurplus = paymentBalanceState === "surplus";
-  return rows.filter((r) => {
-    if (r.rowTone === "rate") return true;
-    if (r.rowTone !== "excess") return false;
-    if (hasPaymentSurplus) return false;
-    return true;
-  });
+  return rows.filter((r) => r.rowTone === "rate" || r.rowTone === "excess");
 }
 
 export function intakeHasMethodMismatch(rows: IntakeSaveDeviationRow[]): boolean {
@@ -593,8 +589,12 @@ export function classifyMethodIntakeGate(params: {
   const totalPaymentUsd = round2(Math.max(0, params.totalPaymentUsd));
   const surplusUsd = round2(Math.max(0, totalPaymentUsd - totalDebtUsd));
 
-  // אין העברת חוב — אכיפה מול האמצעים הפתוחים כפי שתוכננו בלבד
-  const violations = enforceBreakdownAgainstEntered(openPlan, entered, eps);
+  const debtApplicableUsd = round2(Math.min(totalPaymentUsd, totalDebtUsd));
+  const enteredForDebt = enteredUsdAppliedToOpenDebt(entered, debtApplicableUsd, eps);
+
+  // אין העברת חוב — אכיפה מול האמצעים הפתוחים כפי שתוכננו בלבד.
+  // העודף (payment − חוב) לא נכנס להשוואת אמצעי ההזמנה.
+  const violations = enforceBreakdownAgainstEntered(openPlan, enteredForDebt, eps);
 
   if (violations.length > 0) {
     // עודף אמיתי על האמצעי ששולם (למשל מזומן $120 על חוב $100) — לא חריגת אמצעי.

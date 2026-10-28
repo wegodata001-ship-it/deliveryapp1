@@ -6,6 +6,7 @@ import {
   informationalNetPositionUsd,
   normalizeCustomerAccountBalanceQuery,
   resolveBalancesWeekFinancialScope,
+  resolvePaymentIntakeFinancialScope,
   toCustomerBalanceCalcScope,
 } from "@/lib/customer-financial-scope";
 
@@ -62,6 +63,34 @@ describe("customer financial scope contract", () => {
     assert.equal(resolved.cutoffYmd, "2026-10-03");
     assert.equal(resolved.financial.kind, "CURRENT");
     assert.equal(resolved.financial.cutoffYmd ?? null, null);
+  });
+
+  it("payment intake week AH-141 uses the same HISTORICAL cutoff as balances", () => {
+    const now = new Date(2026, 9, 1, 12, 0, 0, 0);
+    const intake = resolvePaymentIntakeFinancialScope({
+      weekCode: "AH-141",
+      workCountry: "TR",
+      now,
+    });
+    assert.equal(intake.financial.kind, "HISTORICAL");
+    assert.equal(intake.financial.cutoffYmd, "2026-09-26");
+    const calc = toCustomerBalanceCalcScope(intake.financial);
+    assert.ok(calc.to);
+    assert.equal(calc.to?.getHours(), 23);
+    assert.equal(calc.to?.getMinutes(), 59);
+    assert.equal(calc.to?.getSeconds(), 59);
+    assert.equal(calc.to?.getMilliseconds(), 999);
+  });
+
+  it("payment intake live week stays CURRENT", () => {
+    const now = new Date(2026, 9, 1, 12, 0, 0, 0);
+    const intake = resolvePaymentIntakeFinancialScope({
+      weekCode: "AH-142",
+      workCountry: "TR",
+      now,
+    });
+    assert.equal(intake.financial.kind, "CURRENT");
+    assert.equal(intake.financial.cutoffYmd ?? null, null);
   });
 
   it("legacy {to} without kind becomes HISTORICAL", () => {

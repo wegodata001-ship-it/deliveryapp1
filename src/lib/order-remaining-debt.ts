@@ -163,20 +163,13 @@ export function creditUsdEligibleForOrderFifo(input: {
 function applyCollectibleBooksFifo(
   remaindersUsd: number[],
   withdrawalUsd: number,
-  availableCreditUsd = 0,
+  _availableCreditUsd = 0,
 ): number[] {
-  const afterWithdrawal = applyDebtWithdrawalFifoToRemainders(remaindersUsd, withdrawalUsd);
-  const creditToApply = creditUsdEligibleForOrderFifo({
-    remainingAfterWithdrawalUsd: afterWithdrawal.reduce(
-      (s, n) => s + roundOrderMoney2(Math.max(0, n)),
-      0,
-    ),
-    availableCreditUsd,
-  });
-  return applyDebtWithdrawalFifoToRemainders(afterWithdrawal, creditToApply);
+  void _availableCreditUsd;
+  return applyDebtWithdrawalFifoToRemainders(remaindersUsd, withdrawalUsd);
 }
 
-/** יתרה לגבייה לפי הזמנה אחרי תשלומים + משיכת חוב FIFO + זכות לקוח זמינה. */
+/** יתרה לגבייה לפי הזמנה אחרי תשלומים + משיכת חוב FIFO. זכות לא יורדת כאן. */
 export function collectibleRemainingUsdByOrderId(
   rows: Array<{ orderId: string; remainingAfterPaymentsUsd: number }>,
   withdrawalUsd: number,
@@ -190,7 +183,7 @@ export function collectibleRemainingUsdByOrderId(
   return new Map(rows.map((row, index) => [row.orderId, after[index] ?? 0]));
 }
 
-/** כמה זכות הוקצתה וירטואלית לכל הזמנה (FIFO אחרי משיכות). לא כותב ל-DB. */
+/** כמה זכות תוקצה אם המשתמש יאשר קיזוז. לא משנה יתרה לגבייה בפועל. */
 export function virtualCustomerCreditAppliedUsdByOrderId(
   rows: Array<{ orderId: string; remainingAfterPaymentsUsd: number }>,
   withdrawalUsd: number,
@@ -200,11 +193,14 @@ export function virtualCustomerCreditAppliedUsdByOrderId(
     rows.map((row) => row.remainingAfterPaymentsUsd),
     withdrawalUsd,
   );
-  const afterCredit = applyCollectibleBooksFifo(
-    rows.map((row) => row.remainingAfterPaymentsUsd),
-    withdrawalUsd,
+  const creditToApply = creditUsdEligibleForOrderFifo({
+    remainingAfterWithdrawalUsd: afterWithdrawal.reduce(
+      (s, n) => s + roundOrderMoney2(Math.max(0, n)),
+      0,
+    ),
     availableCreditUsd,
-  );
+  });
+  const afterCredit = applyDebtWithdrawalFifoToRemainders(afterWithdrawal, creditToApply);
   return new Map(
     rows.map((row, index) => [
       row.orderId,
@@ -213,7 +209,7 @@ export function virtualCustomerCreditAppliedUsdByOrderId(
   );
 }
 
-/** חוב פתוח לגבייה = Σ יתרות אחרי תשלומים − משיכות − זכות זמינה. */
+/** חוב פתוח לגבייה = Σ יתרות אחרי תשלומים − משיכות. זכות לא יורדת כאן. */
 export function collectibleOpenDebtAfterWithdrawalUsd(
   remaindersAfterPaymentsUsd: number[],
   withdrawalUsd: number,
@@ -261,12 +257,14 @@ export type PaymentBalanceState = "debt" | "cleared" | "surplus" | "credit";
 export type PaymentBalanceDisplay = {
   state: PaymentBalanceState;
   title: string;
-  /** טקסט משני — למשל «תשלום יתר» / «שולם במלואו» */
+  /** טקסט משני — יתרה פתוחה / אין יתרה פתוחה / יתרת זכות */
   statusHint?: string;
   /** חתום: חיובי=חוב, 0=נסגר, שלילי=עודף */
   balanceUsdSigned: number;
   displayUsd: number;
   displayIls: number;
+  /** עודף שטרם נבחר לו יעד במודל הקיים — תצוגה בלבד */
+  surplusPendingUsd?: number;
 };
 
 /**
@@ -294,7 +292,7 @@ export function derivePaymentBalanceDisplay(
     return {
       state: "cleared",
       title: "נשאר לתשלום",
-      statusHint: "שולם במלואו",
+      statusHint: "אין יתרה פתוחה",
       balanceUsdSigned: 0,
       displayUsd: 0,
       displayIls: 0,
@@ -304,6 +302,7 @@ export function derivePaymentBalanceDisplay(
     return {
       state: "debt",
       title: "נשאר לתשלום",
+      statusHint: "יתרה פתוחה",
       balanceUsdSigned: signed,
       displayUsd: signed,
       displayIls: convertDebtUsdToIlsIncludingVat(signed, exchangeRate),
@@ -312,7 +311,8 @@ export function derivePaymentBalanceDisplay(
   const surplus = roundOrderMoney2(Math.abs(signed));
   return {
     state: "surplus",
-    title: "תשלום יתר",
+    title: "נשאר לתשלום",
+    statusHint: "תשלום יתר",
     balanceUsdSigned: roundOrderMoney2(-surplus),
     displayUsd: surplus,
     displayIls: convertDebtUsdToIlsIncludingVat(surplus, exchangeRate),
@@ -380,6 +380,7 @@ export function formatPaymentBalanceIlsLine(display: PaymentBalanceDisplay): str
 export function reconcileOrderBreakdownWithLedger(
   breakdown: OrderBreakdownMethodRow[],
   openDebtUsd: number,
+  opts?: { preservePaid?: boolean },
 ): OrderBreakdownMethodRow[] {
   if (breakdown.length === 0) return breakdown;
   const targetOpen = roundOrderMoney2(Math.max(0, openDebtUsd));
@@ -405,7 +406,21 @@ export function reconcileOrderBreakdownWithLedger(
   if (Math.abs(sumUsdRem - targetOpen) > 0.005) {
     distributeUsdRemainingToMatchOpenDebt(usdRows, targetOpen);
   }
-  syncBreakdownPaidFromRemaining(rows);
+  if (opts?.preservePaid) {
+    for (const r of rows) {
+      const physical =
+        typeof r.physicalPaid === "number" && Number.isFinite(r.physicalPaid)
+          ? roundOrderMoney2(Math.max(0, r.physicalPaid))
+          : roundOrderMoney2(Math.max(0, r.paid ?? r.paidUsd ?? 0));
+      r.paid = physical;
+      if ((r.currency ?? "USD") === "USD") {
+        r.paidUsd = physical;
+        r.remainingUsd = r.remaining;
+      }
+    }
+  } else {
+    syncBreakdownPaidFromRemaining(rows);
+  }
   return rows;
 }
 

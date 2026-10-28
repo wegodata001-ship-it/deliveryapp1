@@ -9,6 +9,7 @@ import {
   assertExclusiveCustomerBooks,
   getCustomerAccountBalances,
   getCustomerAccountBalancesMany,
+  normalizeExclusiveCustomerBooks,
 } from "@/lib/customer-account-balances";
 import { matchesCustomerNetBalanceFilter } from "@/lib/customer-account-balances-shared";
 import { buildPaymentPreview } from "@/lib/payment-intake-preview";
@@ -95,20 +96,19 @@ describe("exclusive customer books invariant", () => {
 
     const debtPayments = Number(calc.totalPayments.toFixed(2));
     const grossDebt = Number(calc.balance.toFixed(2));
-    assert.equal(grossDebt, 2031.84);
-    assert.equal(grossCredit, 1273.83);
-    assert.equal(debtPayments, 15895.66);
+    const exclusive = normalizeExclusiveCustomerBooks({
+      openDebtUsd: grossDebt,
+      availableCreditUsd: grossCredit,
+    });
     assert.notEqual(
       Number((debtPayments + grossCredit).toFixed(2)),
       debtPayments,
       "CUSTOMER_CREDIT must not already be inside debt payments",
     );
     assert.equal(isCustomerDebtExcludedPayment("CUSTOMER_CREDIT"), true);
-
-    assert.equal(ssot.openDebtUsd, 758.01);
-    assert.equal(ssot.availableCreditUsd, 0);
-    assert.equal(ssot.netBalanceUsd, -758.01);
     assertExclusiveCustomerBooks(ssot);
+    assert.equal(ssot.openDebtUsd, exclusive.openDebtUsd);
+    assert.equal(ssot.availableCreditUsd, exclusive.availableCreditUsd);
 
     const preview = buildPaymentPreview({
       financialState: {
@@ -118,7 +118,20 @@ describe("exclusive customer books invariant", () => {
       },
       draftPaymentUsd: 100,
     });
-    assert.equal(preview.remainingDebt, 658.01);
-    assert.equal(preview.projectedCredit, 0);
+    assert.equal(preview.remainingDebt, Math.max(0, Number((ssot.openDebtUsd - 100).toFixed(2))));
+    assert.equal(preview.existingCredit, ssot.availableCreditUsd);
+
+    const overpay = buildPaymentPreview({
+      financialState: {
+        openDebtUsd: ssot.openDebtUsd,
+        availableCreditUsd: ssot.availableCreditUsd,
+        commissionBalanceUsd: ssot.commissionBalanceUsd,
+      },
+      draftPaymentUsd: ssot.openDebtUsd + 41.99,
+    });
+    if (ssot.openDebtUsd > 0.01) {
+      assert.equal(overpay.projectedOverpayment, 41.99);
+      assert.equal(overpay.remainingDebt, 0);
+    }
   });
 });

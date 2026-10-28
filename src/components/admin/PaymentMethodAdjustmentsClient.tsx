@@ -11,6 +11,7 @@ import {
   type PaymentMethodAdjustmentTrailEvent,
 } from "@/app/admin/payments-updated/payment-method-adjustment-actions";
 import { PAYMENT_METHOD_ADJUSTMENT_REASON_OPTIONS } from "@/lib/payment-method-auto-adjustment";
+import { PAYMENT_METHOD_LABELS } from "@/lib/payments-source-shared";
 
 function fmtDateTime(iso: string): string {
   const d = new Date(iso);
@@ -108,6 +109,27 @@ function humanSummary(row: PaymentMethodAdjustmentAdminRow): string {
   const n = row.affectedOrdersCount;
   const ordersWord = n === 1 ? "הזמנה אחת" : `${n} הזמנות`;
   return `אמצעי התשלום של ${ordersWord} בסכום ${fmtUsd(row.amountUsd)} שונה מ${row.fromLabel} ל${row.toLabel}.`;
+}
+
+function methodLabel(code: string): string {
+  return PAYMENT_METHOD_LABELS[code] ?? code;
+}
+
+function formatAllocationLines(
+  lines: Array<{ paymentMethod: string; amount: string; currency: string }> | undefined,
+): string {
+  if (!lines?.length) return "—";
+  return lines
+    .map((line) => {
+      const amount = line.currency === "ILS" ? fmtIls(line.amount) : fmtUsd(line.amount);
+      return `${methodLabel(line.paymentMethod)} ${amount}`;
+    })
+    .join(" · ");
+}
+
+function trailOrderNumber(title: string): string | null {
+  const match = title.match(/עודכנה הזמנה\s+(\S+)/);
+  return match?.[1] ?? null;
 }
 
 export function PaymentMethodAdjustmentsClient() {
@@ -503,6 +525,33 @@ export function PaymentMethodAdjustmentsClient() {
             </div>
 
             <div className="pm-adjust-page__detail-body">
+              <section className="pm-adjust-page__summary-row" aria-label="סיכום התאמה">
+                <article className="pm-adjust-page__summary-tile">
+                  <span>סכום ההתאמה</span>
+                  <strong dir="ltr">{fmtUsd(selectedRow.amountUsd)}</strong>
+                </article>
+                <article className="pm-adjust-page__summary-tile">
+                  <span>מטבע מקור</span>
+                  <strong dir="ltr">{selectedRow.details.sourceCurrency ?? "USD"}</strong>
+                  {selectedRow.details.sourceCurrency === "ILS" && selectedRow.details.amountOriginalCurrency ? (
+                    <em dir="ltr">{fmtIls(selectedRow.details.amountOriginalCurrency)}</em>
+                  ) : null}
+                </article>
+                <article className="pm-adjust-page__summary-tile">
+                  <span>תאריך ושעת ביצוע</span>
+                  <strong dir="ltr">{fmtDatePart(selectedRow.createdAtIso)}</strong>
+                  <em dir="ltr">{fmtTimePart(selectedRow.createdAtIso)}</em>
+                </article>
+                <article className="pm-adjust-page__summary-tile">
+                  <span>בוצע על ידי</span>
+                  <strong>{selectedRow.employeeName}</strong>
+                </article>
+                <article className="pm-adjust-page__summary-tile pm-adjust-page__summary-tile--status">
+                  <span>סטטוס ההתאמה</span>
+                  <StatusBadge reviewed={selectedRow.reviewed} />
+                </article>
+              </section>
+
               <section className="pm-adjust-page__story">
                 <p className="pm-adjust-page__story-text">{humanSummary(selectedRow)}</p>
                 <div className="pm-adjust-page__story-reason">
@@ -593,52 +642,43 @@ export function PaymentMethodAdjustmentsClient() {
                 </section>
               ) : null}
 
-              <section className="pm-adjust-page__detail-card">
-                <h4>פירוט כספי ומטבע</h4>
-                <div className="pm-adjust-page__money-meta">
-                  <div>
-                    <span>סכום ההתאמה</span>
-                    <strong dir="ltr">{fmtUsd(selectedRow.amountUsd)} USD</strong>
-                  </div>
-                  <div>
-                    <span>מטבע מקור</span>
-                    <strong dir="ltr">{selectedRow.details.sourceCurrency ?? "USD"}</strong>
-                  </div>
-                  {selectedRow.details.sourceCurrency === "ILS" && selectedRow.details.amountOriginalCurrency ? (
-                    <div>
-                      <span>סכום מקורי</span>
-                      <strong dir="ltr">{fmtIls(selectedRow.details.amountOriginalCurrency)}</strong>
-                    </div>
-                  ) : null}
-                  {selectedRow.details.exchangeRate ? (
+              {selectedRow.details.exchangeRate ? (
+                <section className="pm-adjust-page__detail-card">
+                  <h4>פירוט כספי נוסף</h4>
+                  <div className="pm-adjust-page__money-meta">
                     <div>
                       <span>שער המרה (בעת ההתאמה)</span>
                       <strong dir="ltr">{selectedRow.details.exchangeRate}</strong>
                     </div>
-                  ) : null}
-                </div>
-              </section>
+                  </div>
+                </section>
+              ) : null}
 
-              <section className="pm-adjust-page__detail-card">
+              <section className="pm-adjust-page__detail-card pm-adjust-page__detail-card--orders">
                 <div className="pm-adjust-page__detail-table-head">
                   <h4>הזמנות שהושפעו</h4>
-                  <StatusBadge reviewed={selectedRow.reviewed} />
+                  <span className="pm-adjust-page__orders-count">
+                    {selectedRow.affectedOrdersCount === 1
+                      ? "הזמנה אחת"
+                      : `${selectedRow.affectedOrdersCount} הזמנות`}
+                  </span>
                 </div>
                 <div className="pm-adjust-page__detail-table-wrap">
-                  <table className="adm-table">
+                  <table className="adm-table pm-adjust-page__orders-table">
                     <thead>
                       <tr>
-                        <th>הזמנה</th>
+                        <th>מספר הזמנה</th>
                         <th>לקוח</th>
                         <th>סכום</th>
-                        <th>לפני</th>
-                        <th>אחרי</th>
+                        <th>אמצעי לפני</th>
+                        <th>אמצעי אחרי</th>
+                        <th>סטטוס</th>
                       </tr>
                     </thead>
                     <tbody>
                       {selectedRow.details.affectedOrders.map((order) => (
                         <tr key={order.orderId}>
-                          <td dir="ltr">
+                          <td dir="ltr" className="pm-adjust-page__order-num">
                             <Link
                               href={`/admin/orders/${order.orderId}`}
                               className="pm-adjust-page__order-link"
@@ -646,20 +686,48 @@ export function PaymentMethodAdjustmentsClient() {
                               {order.orderNumber}
                             </Link>
                           </td>
-                          <td>{selectedRow.customerName}</td>
+                          <td className="pm-adjust-page__order-customer">{selectedRow.customerName}</td>
                           <td dir="ltr" className="pm-adjust-page__money-strong">
                             {fmtUsd(order.movedUsd)}
                           </td>
-                          <td>{selectedRow.fromLabel}</td>
-                          <td>{selectedRow.toLabel}</td>
+                          <td className="pm-adjust-page__method-cell">{selectedRow.fromLabel}</td>
+                          <td className="pm-adjust-page__method-cell">{selectedRow.toLabel}</td>
+                          <td>
+                            <StatusBadge reviewed={selectedRow.reviewed} />
+                          </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
+                <div className="pm-adjust-page__order-cards">
+                  {selectedRow.details.affectedOrders.map((order) => (
+                    <article key={order.orderId} className="pm-adjust-page__order-card">
+                      <div className="pm-adjust-page__order-card-head">
+                        <Link
+                          href={`/admin/orders/${order.orderId}`}
+                          className="pm-adjust-page__order-link"
+                          dir="ltr"
+                        >
+                          {order.orderNumber}
+                        </Link>
+                        <StatusBadge reviewed={selectedRow.reviewed} />
+                      </div>
+                      <p className="pm-adjust-page__order-card-customer">{selectedRow.customerName}</p>
+                      <p dir="ltr" className="pm-adjust-page__money-strong">
+                        {fmtUsd(order.movedUsd)}
+                      </p>
+                      <p className="pm-adjust-page__order-card-methods">
+                        <span>{selectedRow.fromLabel}</span>
+                        <span aria-hidden> → </span>
+                        <span>{selectedRow.toLabel}</span>
+                      </p>
+                    </article>
+                  ))}
+                </div>
               </section>
 
-              <section className="pm-adjust-page__detail-card">
+              <section className="pm-adjust-page__detail-card pm-adjust-page__detail-card--trail">
                 <h4>היסטוריית הפעולה</h4>
                 {trailLoading ? (
                   <p className="pm-adjust-page__trail-empty">טוען היסטוריה...</p>
@@ -667,18 +735,66 @@ export function PaymentMethodAdjustmentsClient() {
                   <p className="pm-adjust-page__trail-empty">אין רשומות Audit נוספות להצגה.</p>
                 ) : (
                   <ol className="pm-adjust-page__trail">
-                    {trail.map((event, idx) => (
-                      <li key={`${event.atIso}-${idx}`}>
-                        <div className="pm-adjust-page__trail-time" dir="ltr">
-                          {fmtDateTime(event.atIso)}
-                        </div>
-                        <div className="pm-adjust-page__trail-body">
-                          <strong>{event.title}</strong>
-                          {event.detail ? <p>{event.detail}</p> : null}
-                          {event.actorName ? <span>{event.actorName}</span> : null}
-                        </div>
-                      </li>
-                    ))}
+                    {trail.map((event, idx) => {
+                      const orderNumber = trailOrderNumber(event.title);
+                      const order = orderNumber
+                        ? selectedRow.details.affectedOrders.find((row) => row.orderNumber === orderNumber)
+                        : null;
+                      return (
+                        <li key={`${event.atIso}-${idx}`}>
+                          <div className="pm-adjust-page__trail-marker" aria-hidden />
+                          <div className="pm-adjust-page__trail-time" dir="ltr">
+                            <strong>{fmtDatePart(event.atIso)}</strong>
+                            <span>{fmtTimePart(event.atIso)}</span>
+                          </div>
+                          <div className="pm-adjust-page__trail-body">
+                            <strong>{event.title}</strong>
+                            <div className="pm-adjust-page__trail-fields">
+                              <div className="pm-adjust-page__trail-field">
+                                <span>סוג פעולה</span>
+                                <strong>{event.title}</strong>
+                              </div>
+                              <div className="pm-adjust-page__trail-field">
+                                <span>משתמש מבצע</span>
+                                <strong>{event.actorName || selectedRow.employeeName}</strong>
+                              </div>
+                              {orderNumber ? (
+                                <div className="pm-adjust-page__trail-field">
+                                  <span>מספר הזמנה</span>
+                                  <strong dir="ltr">{orderNumber}</strong>
+                                </div>
+                              ) : null}
+                              <div className="pm-adjust-page__trail-field">
+                                <span>סכום</span>
+                                <strong dir="ltr">{fmtUsd(order?.movedUsd ?? selectedRow.amountUsd)}</strong>
+                              </div>
+                              <div className="pm-adjust-page__trail-field">
+                                <span>אמצעי לפני / אחרי</span>
+                                <strong>
+                                  {selectedRow.fromLabel} → {selectedRow.toLabel}
+                                </strong>
+                              </div>
+                              {event.detail ? (
+                                <div className="pm-adjust-page__trail-field">
+                                  <span>פרטי השינוי</span>
+                                  <p>{event.detail}</p>
+                                </div>
+                              ) : null}
+                              {order ? (
+                                <div className="pm-adjust-page__trail-field">
+                                  <span>הקצאה לפני / אחרי</span>
+                                  <p>
+                                    לפני: {formatAllocationLines(order.beforeAllocation)}
+                                    <span aria-hidden> · </span>
+                                    אחרי: {formatAllocationLines(order.afterAllocation)}
+                                  </p>
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
+                        </li>
+                      );
+                    })}
                   </ol>
                 )}
               </section>

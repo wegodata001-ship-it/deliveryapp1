@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useAdminGlobal } from "@/components/admin/AdminGlobalContext";
 import { useAdminWindows } from "@/components/admin/AdminWindowProvider";
 import { CustomerDocumentsPanel } from "@/components/admin/customers/CustomerDocumentsPanel";
+import { CustomerLinkedDocuments } from "@/components/admin/CustomerLinkedDocuments";
 import { CommissionAmountButton } from "@/components/admin/CommissionAmountButton";
 import { CommissionBalancePopover } from "@/components/admin/CommissionBalancePopover";
 import { OrderCommissionDetailModal } from "@/components/admin/OrderCommissionDetailModal";
@@ -261,6 +262,7 @@ export function CustomerProfileClient({ profile }: Props) {
 
         {tab === "docs" ? (
           <section className="adm-cust-module-panel">
+            <CustomerLinkedDocuments customerId={profile.customer.id} />
             <CustomerDocumentsPanel
               onToast={showToast}
               customerId={profile.customer.id}

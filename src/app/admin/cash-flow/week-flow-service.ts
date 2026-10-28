@@ -1,11 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import {
-  CASH_WEEK_FLOW_LINE_IDS,
-  countLineDiff,
-  WEEK_FLOW_LINE_CHANNEL,
-  type CashWeekFlowLineId,
-} from "@/lib/cash-control-week-flow";
+import { CASH_WEEK_FLOW_LINE_IDS, type CashWeekFlowLineId } from "@/lib/cash-control-week-flow";
 import { aggregateExpensesByMethod } from "@/lib/cash-expense-payment-method";
 import { formatAhWeekLabel, getAhWeekRange } from "@/lib/weeks/ah-week";
 import { emptyDailyIntake, paymentDayKeyJerusalem } from "@/lib/cash-control-daily";
@@ -17,6 +12,7 @@ import {
   computeIlsChannelReceiptsFromIntake,
   computePaymentsTotalReceivedIls,
   sumFxPurchases,
+  sumFxRemainderToBankIls,
 } from "@/lib/flow-control/flow-calculation-service";
 import {
   computeFxAvailableBalances,
@@ -38,6 +34,15 @@ import { resolveCountryScopeFromCode, cashExpenseWhereForCountryScope } from "@/
 import { buildManagerCountExpectedLines } from "@/lib/flow-control/services/manager-count-expected-service";
 import { getFlowWeekPaymentsCached } from "@/lib/flow-control/flow-week-payments-cache";
 import { cashFlowPerfTimed } from "@/lib/flow-control/cash-flow-perf";
+import {
+  buildFlowWeekCashboxes,
+  buildFlowWeekReceiptLayers,
+  hasManagerCountSaved,
+  paymentIntakeToFlowLines,
+} from "@/lib/flow-control/flow-week-financial-ssot";
+import { loadFlowWeekContext } from "@/lib/flow-control/flow-week-context-service";
+import { loadFlowWeekOpeningBalance } from "@/lib/flow-control/flow-week-opening-service";
+import { flowWeekCompositeKey, type FlowWorkScope } from "@/lib/flow-control/flow-country-scope";
 
 function money(n: number | Prisma.Decimal): string {
   const d = n instanceof Prisma.Decimal ? n : new Prisma.Decimal(n);
@@ -64,20 +69,38 @@ export async function loadFlowWeek(
   if (!range) return null;
   const countryScope = resolveCountryScopeFromCode(workCountry);
 
-  const [approvedSummary, cashCount, fxPurchases, turkeyAllocationUsd, bankTx, turkeyBalance, expenseRows, payments] =
-    await Promise.all([
-      cashFlowPerfTimed("cashFlow.openingBalances", () => loadFlowWeekCashCountSummary(wk, workCountry)),
-      loadFlowWeekCashCount(wk, workCountry),
-      cashFlowPerfTimed("cashFlow.fxPurchases", () => loadFlowWeekFxPurchases(wk)),
-      loadFlowWeekTurkeyTransfer(wk),
-      cashFlowPerfTimed("cashFlow.bankBalances", () => loadFlowWeekBankTransactions(wk)),
-      loadTurkeyBalanceForWeek(wk, workCountry),
-      prisma.cashExpense.findMany({
-        where: { ...cashExpenseWhereForCountryScope(countryScope), weekCode: wk, status: "ACTIVE" },
-        select: { currency: true, amount: true, paymentMethod: true, direction: true },
-      }),
-      cashFlowPerfTimed("cashFlow.paymentReceipts", () => getFlowWeekPaymentsCached(wk, countryScope)),
-    ]);
+  const flowScope: FlowWorkScope = { workCountry };
+  const [
+    approvedSummary,
+    cashCount,
+    fxPurchases,
+    turkeyAllocationUsd,
+    bankTx,
+    turkeyBalance,
+    expenseRows,
+    payments,
+    weekContext,
+    openingBalance,
+    flowRowMeta,
+  ] = await Promise.all([
+    cashFlowPerfTimed("cashFlow.openingBalances", () => loadFlowWeekCashCountSummary(wk, workCountry)),
+    loadFlowWeekCashCount(wk, workCountry),
+    cashFlowPerfTimed("cashFlow.fxPurchases", () => loadFlowWeekFxPurchases(wk)),
+    loadFlowWeekTurkeyTransfer(wk),
+    cashFlowPerfTimed("cashFlow.bankBalances", () => loadFlowWeekBankTransactions(wk)),
+    loadTurkeyBalanceForWeek(wk, workCountry),
+    prisma.cashExpense.findMany({
+      where: { ...cashExpenseWhereForCountryScope(countryScope), weekCode: wk, status: "ACTIVE" },
+      select: { currency: true, amount: true, paymentMethod: true, direction: true },
+    }),
+    cashFlowPerfTimed("cashFlow.paymentReceipts", () => getFlowWeekPaymentsCached(wk, countryScope)),
+    loadFlowWeekContext(wk, countryScope),
+    loadFlowWeekOpeningBalance(wk, workCountry),
+    prisma.cashWeekFlow.findUnique({
+      where: flowWeekCompositeKey(flowScope, wk),
+      select: { id: true },
+    }),
+  ]);
 
   const weekExpensesByMethod = aggregateExpensesByMethod(
     expenseRows.map((e) => ({
@@ -103,30 +126,38 @@ export async function loadFlowWeek(
   const totalReceiptsIls = computeIlsChannelReceiptsFromIntake(weekIntake);
   const bankReceiptsIls = computeBankReceiptsIlsFromIntake(weekIntake);
 
-  const received = Object.fromEntries(
-    Object.entries(approvedSummary.approved).map(([lineId, t]) => [
-      lineId,
-      { amount: money(t.amount), paymentCount: t.daysCounted },
-    ]),
-  ) as FlowWeekPayload["received"];
-
   const countedLines = cashCountToLineIds(cashCount);
   const counted = formatCounted(countedLines);
 
+  const receiptLayers = buildFlowWeekReceiptLayers({
+    weekPaymentIntake: weekIntake,
+    approvedByLine: approvedSummary.approved,
+    countedLines,
+    expensesByChannel: weekExpensesByMethod,
+    paymentRowCount: payments.length,
+  });
+
+  const received = Object.fromEntries(
+    CASH_WEEK_FLOW_LINE_IDS.map((lineId) => [
+      lineId,
+      {
+        amount: money(receiptLayers.actualReceipts[lineId].amount),
+        paymentCount: receiptLayers.actualReceipts[lineId].paymentCount ?? 0,
+      },
+    ]),
+  ) as FlowWeekPayload["received"];
+
   const countDiff: Partial<Record<CashWeekFlowLineId, string | null>> = {};
   for (const lineId of CASH_WEEK_FLOW_LINE_IDS) {
-    const rec = approvedSummary.approved[lineId]?.amount ?? 0;
-    const cnt = countedLines[lineId] ?? null;
-    const channel = WEEK_FLOW_LINE_CHANNEL[lineId];
-    const expAmt = weekExpensesByMethod[channel] ?? 0;
-    const diff = countLineDiff(rec, cnt, expAmt);
+    const diff = receiptLayers.countDiff[lineId];
     countDiff[lineId] = diff != null ? money(diff) : null;
   }
 
   const fxPs = sumFxPurchases(fxPurchases, "PS");
   const fxIl = sumFxPurchases(fxPurchases, "IL");
-  const managerCashUsd = cashCount.countedCashUsd ?? 0;
-  const managerCashIls = cashCount.countedCashIls ?? 0;
+  const hasCount = hasManagerCountSaved(cashCount);
+  const managerCashUsd = hasCount ? (cashCount.countedCashUsd ?? 0) : 0;
+  const managerCashIls = hasCount ? (cashCount.countedCashIls ?? 0) : 0;
 
   const calc = computeFlowWeekSummary({
     countedCashUsd: managerCashUsd,
@@ -171,10 +202,35 @@ export async function loadFlowWeek(
   const storedTurkeyUsd = cashCount.turkeyTransferUsd ?? turkeyAllocationUsd;
   const storedTurkeyIls = cashCount.turkeyTransferIls ?? 0;
 
+  const intakeLines = paymentIntakeToFlowLines(weekIntake);
+  const cashboxes = buildFlowWeekCashboxes({
+    cashCount,
+    openingUsd: openingBalance.openingUsd,
+    openingIls: openingBalance.openingIls,
+    openingVerified: openingBalance.verified,
+    openingMessageHe: openingBalance.messageHe,
+    prevWeek: openingBalance.prevWeek,
+    inflowCashUsd: intakeLines.CASH_USD,
+    inflowCashIls: intakeLines.CASH_ILS,
+    fxUsdIn: fxPs.usd,
+    fxIlsOut: fxPs.ils + fxIl.ils,
+    turkeyOutUsd: actualTurkeyTransfersUsd,
+    bankOutIls: sumFxRemainderToBankIls(fxPurchases),
+    expensesIls: cashCount.expensesIls,
+    expensesUsd: cashCount.expensesUsd,
+    drawerUsdWhenCounted: hasCount ? calc.cashUsdInDrawer : null,
+    drawerIlsWhenCounted: hasCount ? calc.cashIlsInDrawer : null,
+  });
+
   return {
     week: wk,
+    cashWeekFlowId: flowRowMeta?.id ?? null,
     weekLabel: formatAhWeekLabel(wk),
     received,
+    receiptLayers,
+    weekContext,
+    managerCountState: cashboxes.managerCountState,
+    cashboxes,
     counted,
     countDiff,
     expensesIls: money(cashCount.expensesIls),
@@ -195,8 +251,8 @@ export async function loadFlowWeek(
     turkeyTransferIls: storedTurkeyIls > 0 ? money(storedTurkeyIls) : null,
     bankBalanceIls: money(calc.bankBalanceIls),
     bankBalanceUsd: null,
-    drawerRemainingIls: money(calc.cashIlsInDrawer),
-    drawerRemainingUsd: money(calc.cashUsdInDrawer),
+    drawerRemainingIls: hasCount ? money(calc.cashIlsInDrawer) : null,
+    drawerRemainingUsd: hasCount ? money(calc.cashUsdInDrawer) : null,
     availableIlsForFx: money(fxBalances.psCash),
     availableIlIlsForFx: money(fxBalances.ilTransfers),
     turkeyExpectedUsd: money(calc.turkey.expectedUsd),

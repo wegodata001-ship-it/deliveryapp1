@@ -3,7 +3,7 @@
  */
 
 import { prisma } from "@/lib/prisma";
-import { cashControlWeekReconciliationPaymentsWhere } from "@/lib/cash-control-week-payments";
+import { cashControlFlowReceiptPaymentsWhere } from "@/lib/cash-control-flow-receipt-payments";
 import { mergePaymentWhere, type CountryScope } from "@/lib/country-data-scope";
 
 const TTL_MS = 45_000;
@@ -71,7 +71,7 @@ export function getFlowWeekPaymentsCached(
 
   const promise = prisma.payment
     .findMany({
-      where: mergePaymentWhere(cashControlWeekReconciliationPaymentsWhere(wk), scope),
+      where: mergePaymentWhere(cashControlFlowReceiptPaymentsWhere(wk), scope),
       select: FLOW_WEEK_PAYMENT_SELECT,
     })
     .catch((err) => {

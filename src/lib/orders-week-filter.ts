@@ -1,4 +1,4 @@
-import { getAhWeekRange, normalizeAhWeekCode } from "@/lib/work-week";
+import { getAhWeekRange, isCustomOrdersDateRange, normalizeAhWeekCode } from "@/lib/work-week";
 
 /** פילטר שבוע מקומי ברשימת הזמנות — SSOT. week=/from=/to= הם שיקוף לכרום בלבד. */
 export const ORDERS_WEEK_PARAM = "ordersWeek";
@@ -31,7 +31,9 @@ export function shouldResyncOrdersLocalWeek(input: {
   currentOrdersWeek: string;
   globalWorkWeek: string;
   previousGlobalWorkWeek: string | null;
+  hasCustomDateRange?: boolean;
 }): OrdersLocalWeekResync {
+  if (input.hasCustomDateRange) return "skip";
   if (!input.currentOrdersWeek) return "seed";
   const firstEnter = input.previousGlobalWorkWeek === null;
   if (firstEnter) return "align-chrome";
@@ -41,3 +43,5 @@ export function shouldResyncOrdersLocalWeek(input: {
   }
   return "skip";
 }
+
+export { isCustomOrdersDateRange };

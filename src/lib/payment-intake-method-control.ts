@@ -106,13 +106,14 @@ function computeRowStatus(
   plannedUsd: number,
   enteredUsd: number,
   globalOverageUsd: number,
+  treatOverAsMismatch: boolean,
 ): Pick<LivePaymentMethodControlRow, "status" | "statusLabel" | "excessUsd"> {
   if (plannedUsd <= CASH_CONTROL_EPS && enteredUsd <= CASH_CONTROL_EPS) {
     return { status: "not-required", statusLabel: "לא נדרש", excessUsd: 0 };
   }
   if (enteredUsd > plannedUsd + CASH_CONTROL_EPS) {
     const excess = round2(enteredUsd - plannedUsd);
-    if (globalOverageUsd > CASH_CONTROL_EPS) {
+    if (globalOverageUsd > CASH_CONTROL_EPS && !treatOverAsMismatch) {
       return { status: "surplus", statusLabel: "עודף תשלום", excessUsd: excess };
     }
     return { status: "excess", statusLabel: "חריגה מהתכנון", excessUsd: excess };
@@ -150,6 +151,14 @@ export function buildLivePaymentMethodControlRows(
   totalRemaining = round2(totalRemaining);
   const paymentTotal = round2(totalPaymentUsd ?? kpis.totalPaymentUsd ?? 0);
   const globalOverageUsd = round2(Math.max(0, paymentTotal - totalRemaining));
+  const coversDebt = paymentTotal >= totalRemaining - CASH_CONTROL_EPS;
+  const remainingUnderpaidWhileCovering =
+    coversDebt &&
+    plan.some((p) => {
+      const remaining = p.remainingUsd;
+      if (remaining <= CASH_CONTROL_EPS) return false;
+      return enteredForBucket(kpis, p.bucket) + CASH_CONTROL_EPS < remaining;
+    });
   let unexplainedOverageUsd = globalOverageUsd;
 
   // מגבילים את "נותר לפי אמצעי" לסכום היתרה הכוללת של המסמך (FIFO על הסדר)
@@ -175,7 +184,12 @@ export function buildLivePaymentMethodControlRows(
     const plannedUsd = round2(effectiveRemaining.get(bucket) ?? 0);
     const enteredUsd = round2(enteredForBucket(kpis, bucket));
     const remainingUsd = round2(plannedUsd - enteredUsd);
-    let { status, statusLabel, excessUsd } = computeRowStatus(plannedUsd, enteredUsd, unexplainedOverageUsd);
+    let { status, statusLabel, excessUsd } = computeRowStatus(
+      plannedUsd,
+      enteredUsd,
+      unexplainedOverageUsd,
+      remainingUnderpaidWhileCovering,
+    );
     if (status === "surplus" && excessUsd > 0) {
       unexplainedOverageUsd = round2(Math.max(0, unexplainedOverageUsd - excessUsd));
     }

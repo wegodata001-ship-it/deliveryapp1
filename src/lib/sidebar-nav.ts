@@ -193,6 +193,7 @@ export const SIDEBAR_GROUPS: NavGroupDef[] = [
         icon: "editRequests",
         anyOf: ["edit_orders"],
       },
+      { href: "/admin/documents", label: "ארכיון מסמכים", icon: "documents", anyOf: ["documents.view"] },
     ],
   },
   {
@@ -249,9 +250,10 @@ const CONTROLS_PATH_PREFIXES = [
   "/admin/order-edit-requests",
   "/admin/invoice-cancel-requests",
   "/admin/my-requests",
+  "/admin/documents",
 ];
 
-const REPORTS_PATH_PREFIXES = ["/admin/reports", "/admin/documents"];
+const REPORTS_PATH_PREFIXES = ["/admin/reports"];
 
 const SYSTEM_PATH_PREFIXES = ["/admin/users", "/admin/source-tables", "/admin/activity"];
 

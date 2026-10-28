@@ -103,98 +103,113 @@ export function CommissionBalancePopover({
         dir="rtl"
       >
         <div className="commission-balance-popover__head">
-          <h4>פירוט עמלות{customerLabel ? ` — ${customerLabel}` : ""}</h4>
+          <div className="commission-balance-popover__head-main">
+            <h4>פירוט עמלות{customerLabel ? ` — ${customerLabel}` : ""}</h4>
+            {!busy && !err ? (
+              <p className="commission-lineage-total">
+                סה״כ עמלות נוכחי:{" "}
+                <strong dir="ltr">{formatUsdDisplay(footerBalance)}</strong>
+              </p>
+            ) : null}
+          </div>
           <button type="button" className="adm-btn adm-btn--ghost adm-btn--dense" onClick={onClose}>
             סגור
           </button>
         </div>
 
-        {busy ? <p className="payment-modal-hint">טוען…</p> : null}
-        {err ? <p className="payment-modal-err">{err}</p> : null}
+        <div className="commission-balance-popover__body">
+          {busy ? <p className="payment-modal-hint">טוען…</p> : null}
+          {err ? <p className="payment-modal-err">{err}</p> : null}
 
-        {!busy && !err ? (
-          <>
-            <p className="commission-lineage-total">
-              סה״כ עמלות נוכחי:{" "}
-              <strong dir="ltr">{formatUsdDisplay(footerBalance)}</strong>
-            </p>
-
-            {orderRows.length > 0 ? (
-              <div className="commission-balance-popover__table-wrap">
-                <table className="commission-balance-popover__table" dir="rtl">
-                  <thead>
-                    <tr>
-                      <th>הזמנה</th>
-                      <th className="pm-num">מקורית</th>
-                      <th className="pm-num">שינויים</th>
-                      <th className="pm-num">נוכחית</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {orderRows.map((row) => (
-                      <tr key={row.orderId}>
-                        <td dir="ltr" className="pm-mono">
-                          {onOpenOrderDetail ? (
-                            <button
-                              type="button"
-                              className="payment-modal-order-num-btn"
-                              onClick={() => onOpenOrderDetail(row.orderId, row.orderNumber)}
-                            >
-                              {row.orderNumber}
-                            </button>
-                          ) : (
-                            row.orderNumber
-                          )}
-                        </td>
-                        <td dir="ltr" className="pm-num">
-                          {formatUsdDisplay(row.baseCommissionUsd)}
-                        </td>
-                        <td
-                          dir="ltr"
-                          className={[
-                            "pm-num",
-                            row.adjustmentsUsd > 0.01
-                              ? "commission-movement--credit"
-                              : row.adjustmentsUsd < -0.01
-                                ? "commission-movement--debit"
-                                : "",
-                          ].join(" ")}
-                        >
-                          {row.hasAdjustments ? formatCommissionSignedCompact(row.adjustmentsUsd) : "$0"}
-                        </td>
-                        <td dir="ltr" className="pm-num pm-num--strong">
-                          {formatUsdDisplay(row.currentCommissionUsd)}
-                        </td>
+          {!busy && !err ? (
+            <>
+              {orderRows.length > 0 ? (
+                <div className="commission-balance-popover__table-wrap commission-balance-popover__table-wrap--flow">
+                  <table className="commission-balance-popover__table commission-balance-popover__orders" dir="rtl">
+                    <thead>
+                      <tr>
+                        <th>הזמנה</th>
+                        <th className="pm-num">מקורית</th>
+                        <th className="pm-num">שינויים</th>
+                        <th className="pm-num">נוכחית</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : null}
+                    </thead>
+                    <tbody>
+                      {orderRows.map((row) => (
+                        <tr key={row.orderId}>
+                          <td dir="ltr" className="pm-mono">
+                            {onOpenOrderDetail ? (
+                              <button
+                                type="button"
+                                className="payment-modal-order-num-btn"
+                                onClick={() => onOpenOrderDetail(row.orderId, row.orderNumber)}
+                              >
+                                {row.orderNumber}
+                              </button>
+                            ) : (
+                              row.orderNumber
+                            )}
+                          </td>
+                          <td dir="ltr" className="pm-num commission-movement--original">
+                            {formatUsdDisplay(row.baseCommissionUsd)}
+                          </td>
+                          <td
+                            dir="ltr"
+                            className={[
+                              "pm-num",
+                              row.adjustmentsUsd > 0.01
+                                ? "commission-movement--credit"
+                                : row.adjustmentsUsd < -0.01
+                                  ? "commission-movement--debit"
+                                  : "",
+                            ].join(" ")}
+                          >
+                            {row.hasAdjustments ? formatCommissionSignedCompact(row.adjustmentsUsd) : "$0"}
+                          </td>
+                          <td dir="ltr" className="pm-num pm-num--strong">
+                            {formatUsdDisplay(row.currentCommissionUsd)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
 
-            <div className="commission-order-summary">
-              <div>
-                <span>עמלות מקוריות</span>
-                <strong dir="ltr">{formatUsdDisplay(orderSummary.baseUsd)}</strong>
+              <div className="commission-order-summary">
+                <div className="commission-order-summary__card commission-order-summary__card--original">
+                  <span>עמלות מקוריות</span>
+                  <strong dir="ltr">{formatUsdDisplay(orderSummary.baseUsd)}</strong>
+                </div>
+                <div
+                  className={[
+                    "commission-order-summary__card",
+                    orderSummary.adjustmentsUsd > 0.01
+                      ? "commission-order-summary__card--add"
+                      : orderSummary.adjustmentsUsd < -0.01
+                        ? "commission-order-summary__card--remove"
+                        : "",
+                  ].join(" ")}
+                >
+                  <span>שינויים</span>
+                  <strong dir="ltr">{formatCommissionSignedCompact(orderSummary.adjustmentsUsd)}</strong>
+                </div>
+                <div className="commission-order-summary__card commission-order-summary__card--current">
+                  <span>סה״כ נוכחי</span>
+                  <strong dir="ltr">{formatUsdDisplay(orderSummary.currentUsd)}</strong>
+                </div>
               </div>
-              <div>
-                <span>שינויים</span>
-                <strong dir="ltr">{formatCommissionSignedCompact(orderSummary.adjustmentsUsd)}</strong>
-              </div>
-              <div>
-                <span>עמלות נוכחיות</span>
-                <strong dir="ltr">{formatUsdDisplay(orderSummary.currentUsd)}</strong>
-              </div>
-            </div>
 
-            <h5 className="commission-balance-popover__subhead">תנועות</h5>
-            <CommissionLineageTable
-              rows={lineageRows}
-              onOpenOrder={onOpenOrderDetail}
-              onOpenPayment={onOpenPayment}
-            />
-          </>
-        ) : null}
+              <h5 className="commission-balance-popover__subhead">תנועות</h5>
+              <CommissionLineageTable
+                rows={lineageRows}
+                onOpenOrder={onOpenOrderDetail}
+                onOpenPayment={onOpenPayment}
+                variant="customer"
+              />
+            </>
+          ) : null}
+        </div>
       </div>
     </div>
   );

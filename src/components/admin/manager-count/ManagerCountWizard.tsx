@@ -30,6 +30,8 @@ import {
 } from "@/lib/flow-control/flow-calculation-service";
 import { dispatchCashControlRefresh } from "@/lib/cash-control-refresh-bus";
 import { ManagerCountFxPurchaseFlow } from "@/components/admin/manager-count/ManagerCountFxPurchaseFlow";
+import { ManagerCountHistoryPanel } from "@/components/admin/manager-count/ManagerCountHistoryPanel";
+import { DocumentsPanel } from "@/components/admin/DocumentsPanel";
 import { ManagerCountLineField } from "@/components/admin/manager-count/ManagerCountLineField";
 import {
   computeAutoTurkeyIls,
@@ -847,6 +849,17 @@ export function ManagerCountWizard({
                           </div>
                         </section>
                       </div>
+                      <ManagerCountHistoryPanel week={week} workCountry={workCountry} />
+                      {flow?.cashWeekFlowId ? (
+                        <DocumentsPanel
+                          entityType="CASH_WEEK_FLOW"
+                          entityId={flow.cashWeekFlowId}
+                          title="מסמכי ספירת מנהל"
+                          selfResolvePermissions
+                        />
+                      ) : (
+                        <p className="mcw-hint">לאחר שמירה ראשונה ניתן לצרף מסמכים לשבוע זה</p>
+                      )}
                     </div>
                   )}
                 </>

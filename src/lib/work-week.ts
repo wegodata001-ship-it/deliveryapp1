@@ -33,6 +33,22 @@ export const AH_WEEK_ANCHOR = {
 
 export const DEFAULT_WEEK_CODE = getCurrentAhWeek().code;
 
+export type CurrentBusinessWeek = {
+  currentBusinessWeekId: string;
+  startDate: string;
+  endDate: string;
+};
+
+/** SSOT — שבוע עסקי חי לפי לוח AH / ירושלים. לא קבוע מ-module load ולא ערך שמור. */
+export function getCurrentBusinessWeek(now: Date = new Date()): CurrentBusinessWeek {
+  const w = getCurrentAhWeek(now);
+  return {
+    currentBusinessWeekId: w.code,
+    startDate: w.from,
+    endDate: w.to,
+  };
+}
+
 /** גישה דינמית לטווח לפי קוד AH (כל מספר חיובי) */
 export const WORK_WEEK_RANGES: Record<string, WorkWeekRange> = new Proxy(
   {} as Record<string, WorkWeekRange>,
@@ -68,6 +84,26 @@ export function getAhWeekCodeFromDateRange(
   toYmd: string | null | undefined,
 ): string | null {
   return getAhWeekCodeFromDateRangeCore(fromYmd, toYmd);
+}
+
+/**
+ * מצב סינון לפי טווח תאריכים (לא שבוע AH).
+ * טווח שתואם בדיוק שבוע AH נשאר במצב שבוע; אחרת התאריכים גוברים על week=.
+ */
+export function isCustomOrdersDateRange(
+  ordersWeek: string | null | undefined,
+  ordersFrom: string | null | undefined,
+  ordersTo: string | null | undefined,
+): boolean {
+  const from = (ordersFrom ?? "").trim();
+  const to = (ordersTo ?? "").trim();
+  if (!isValidYmd(from) || !isValidYmd(to)) return false;
+  if (getAhWeekCodeFromDateRange(from, to)) return false;
+  const week = normalizeAhWeekCode(ordersWeek) ?? (ordersWeek ?? "").trim();
+  if (!week) return true;
+  const range = getAhWeekRange(week);
+  if (!range) return true;
+  return from !== range.from || to !== range.to;
 }
 
 export function formatLocalYmd(d: Date): string {
@@ -191,7 +227,7 @@ export function parseDateFilterFromSearchParams(
   const preset = typeof raw.preset === "string" ? raw.preset : undefined;
 
   const knownWeek = weekParam && weekRangeOrNull(normalizeAhWeekCode(weekParam) ?? weekParam) ? normalizeAhWeekCode(weekParam) : null;
-  const fallbackWeek = DEFAULT_WEEK_CODE;
+  const fallbackWeek = getCurrentBusinessWeek().currentBusinessWeekId;
   const now = new Date();
 
   let base: WorkWeekRange;
@@ -252,7 +288,23 @@ export function parseOrdersListDateFilterFromSearchParams(
   const ow = readSpStr(raw, "ordersWeek");
   const ofrom = readSpStr(raw, "ordersFrom");
   const oto = readSpStr(raw, "ordersTo");
+  const gfrom = readSpStr(raw, "from");
+  const gto = readSpStr(raw, "to");
   const opreset = readSpStr(raw, "ordersPreset") ?? readSpStr(raw, "preset");
+  const fromCandidate = ofrom || gfrom;
+  const toCandidate = oto || gto;
+
+  if (isCustomOrdersDateRange(ow, fromCandidate, toCandidate)) {
+    const pair = normalizeYmdRangePair(fromCandidate!, toCandidate!);
+    return {
+      weekCode: getWeekCodeForLocalDate(parseLocalDate(pair.from)),
+      ahWeekSelect: "",
+      fromYmd: pair.from,
+      toYmd: pair.to,
+      fromStart: parseLocalDate(pair.from),
+      toEnd: endOfLocalDay(pair.to),
+    };
+  }
 
   const hasOrdersScope = !!(ow || ofrom || oto || opreset);
   if (!hasOrdersScope) {
@@ -260,7 +312,7 @@ export function parseOrdersListDateFilterFromSearchParams(
   }
 
   const knownWeek = ow && weekRangeOrNull(normalizeAhWeekCode(ow) ?? ow) ? normalizeAhWeekCode(ow) : null;
-  const fallbackWeek = DEFAULT_WEEK_CODE;
+  const fallbackWeek = getCurrentBusinessWeek().currentBusinessWeekId;
   const now = new Date();
 
   let base: WorkWeekRange;

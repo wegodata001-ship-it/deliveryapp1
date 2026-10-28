@@ -73,6 +73,27 @@ describe("shouldResyncOrdersLocalWeek", () => {
       "sync-global",
     );
   });
+
+  it("custom date range never reseeds the current work week", () => {
+    assert.equal(
+      shouldResyncOrdersLocalWeek({
+        currentOrdersWeek: "",
+        globalWorkWeek: "AH-145",
+        previousGlobalWorkWeek: null,
+        hasCustomDateRange: true,
+      }),
+      "skip",
+    );
+    assert.equal(
+      shouldResyncOrdersLocalWeek({
+        currentOrdersWeek: "AH-145",
+        globalWorkWeek: "AH-145",
+        previousGlobalWorkWeek: "AH-145",
+        hasCustomDateRange: true,
+      }),
+      "skip",
+    );
+  });
 });
 
 describe("ordersWeekRangePatch", () => {

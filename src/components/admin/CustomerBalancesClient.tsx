@@ -128,10 +128,6 @@ function netBalanceClass(tone: BalanceUiTone): string {
   return "adm-bal-amt--balanced";
 }
 
-function balanceRowClass(tone: BalanceUiTone): string {
-  return `adm-balances-row-click adm-balances-row--${tone}`;
-}
-
 function pageNumbers(page: number, totalPages: number): number[] {
   const start = Math.max(1, Math.min(page - 1, totalPages - 2));
   const end = Math.min(totalPages, start + 2);
@@ -1274,7 +1270,7 @@ export function CustomerBalancesClient({
                   return (
                     <tr
                       key={r.customerId}
-                      className={balanceRowClass(ui.tone)}
+                      className="adm-balances-row-click"
                       tabIndex={0}
                       role="button"
                       onClick={() => openCustomerCard(r)}
@@ -1321,11 +1317,10 @@ export function CustomerBalancesClient({
                           }
                         />
                       </td>
-                      <td
-                        className={`adm-balances-td-num adm-balances-td-num--hero ${netBalanceClass(ui.tone)}`}
-                        dir="ltr"
-                      >
-                        <span className="adm-balances-hero-usd">{ui.amount}</span>
+                      <td className="adm-balances-td-num adm-balances-td-num--hero" dir="ltr">
+                        <span className={`adm-bal-amt ${netBalanceClass(ui.tone)} adm-balances-hero-usd`}>
+                          {ui.amount}
+                        </span>
                       </td>
                       <td className="adm-balances-td-actions">
                         <div className="adm-balances-row-actions">

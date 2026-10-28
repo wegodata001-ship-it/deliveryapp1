@@ -1,12 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   getDocumentCapabilitiesAction,
   listDocumentsAction,
   type DocumentDto,
 } from "@/app/admin/documents/actions";
 import type { DocumentEntityType } from "@/lib/documents/constants";
+import { DocumentCaptureModal } from "@/components/admin/DocumentCaptureModal";
+import { DocumentViewerModal } from "@/components/admin/DocumentViewerModal";
 
 type Props = {
   entityType: DocumentEntityType;
@@ -16,7 +18,7 @@ type Props = {
   variant?: "compact" | "labeled";
 };
 
-/** מסמכים מצורפים לקליטת תשלום — העלאה וצפייה */
+/** מסמכים מצורפים לקליטת תשלום — צילום, העלאה וצפייה */
 export function PaymentDocumentRateIcons({
   entityType,
   entityId,
@@ -26,8 +28,10 @@ export function PaymentDocumentRateIcons({
   const [docs, setDocs] = useState<DocumentDto[]>([]);
   const [canView, setCanView] = useState(false);
   const [canUpload, setCanUpload] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [canDelete, setCanDelete] = useState(false);
+  const [canDownload, setCanDownload] = useState(false);
+  const [captureOpen, setCaptureOpen] = useState(false);
+  const [active, setActive] = useState<DocumentDto | null>(null);
 
   const load = useCallback(async () => {
     if (!entityId) {
@@ -37,6 +41,8 @@ export function PaymentDocumentRateIcons({
     const caps = await getDocumentCapabilitiesAction();
     setCanView(caps.canView);
     setCanUpload(caps.canUpload);
+    setCanDelete(caps.canDelete);
+    setCanDownload(caps.canDownload);
     if (!caps.canView) {
       setDocs([]);
       return;
@@ -49,39 +55,9 @@ export function PaymentDocumentRateIcons({
     void load();
   }, [load]);
 
-  async function onUpload(files: FileList | null) {
-    if (!files || files.length === 0 || !entityId || !canUpload) return;
-    setBusy(true);
-    try {
-      const fd = new FormData();
-      fd.set("entityType", entityType);
-      fd.set("entityId", entityId);
-      for (const f of Array.from(files)) fd.append("files", f);
-      const res = await fetch("/api/documents/upload", { method: "POST", body: fd });
-      const body = (await res.json().catch(() => null)) as
-        | { ok: true; documents: DocumentDto[] }
-        | { ok: false; error: string }
-        | null;
-      if (res.ok && body && body.ok) {
-        setDocs((cur) => [...body.documents, ...cur]);
-      }
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function onPreview() {
-    if (!docs.length || !canView) return;
-    const doc = docs[0];
-    if (doc.kind !== "pdf" && doc.kind !== "image") return;
-    window.open(`/api/documents/${doc.id}/download`, "_blank", "noopener,noreferrer");
-  }
-
   if (!entityId) return null;
 
   const hasDoc = docs.length > 0;
-  const previewable = hasDoc && (docs[0].kind === "pdf" || docs[0].kind === "image");
   const labeled = variant === "labeled";
 
   return (
@@ -94,16 +70,6 @@ export function PaymentDocumentRateIcons({
         .join(" ")}
       dir="ltr"
     >
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        className="payment-modal-rate-doc-file"
-        onChange={(e) => void onUpload(e.target.files)}
-        disabled={disabled || busy || !canUpload}
-        tabIndex={-1}
-        aria-hidden
-      />
       <button
         type="button"
         className={[
@@ -121,8 +87,8 @@ export function PaymentDocumentRateIcons({
               : "הוספת מסמך לקליטה"
         }
         aria-label="הוספת מסמך"
-        disabled={disabled || busy || !canUpload}
-        onClick={() => fileInputRef.current?.click()}
+        disabled={disabled || !canUpload}
+        onClick={() => setCaptureOpen(true)}
       >
         <span aria-hidden>📎</span>
         {labeled ? <span className="payment-modal-rate-doc-lbl">הוספת מסמך</span> : null}
@@ -132,26 +98,42 @@ export function PaymentDocumentRateIcons({
         className={[
           "payment-modal-rate-doc-btn",
           labeled ? "payment-modal-rate-doc-btn--labeled" : "",
-          previewable ? "payment-modal-rate-doc-btn--preview" : "payment-modal-rate-doc-btn--empty",
+          hasDoc ? "payment-modal-rate-doc-btn--preview" : "payment-modal-rate-doc-btn--empty",
         ]
           .filter(Boolean)
           .join(" ")}
         title={
           !canView
             ? "אין הרשאת צפייה במסמכים"
-            : previewable
-              ? "צפייה במסמך"
-              : hasDoc
-                ? "המסמך אינו נתמך לתצוגה — הורדה בלבד"
-                : "אין מסמך מצורף"
+            : hasDoc
+              ? `צפייה במסמך (${docs.length})`
+              : "אין מסמך מצורף"
         }
         aria-label="צפייה במסמך"
-        disabled={disabled || !previewable}
-        onClick={onPreview}
+        disabled={disabled || !hasDoc || !canView}
+        onClick={() => setActive(docs[0] ?? null)}
       >
         <span aria-hidden>👁</span>
         {labeled ? <span className="payment-modal-rate-doc-lbl">צפייה במסמך</span> : null}
       </button>
+      <DocumentCaptureModal
+        open={captureOpen}
+        entityType={entityType}
+        entityId={entityId}
+        defaultDocType="TRANSFER"
+        disabled={disabled}
+        onClose={() => setCaptureOpen(false)}
+        onUploaded={(created) => setDocs((cur) => [...created, ...cur])}
+      />
+      <DocumentViewerModal
+        doc={active}
+        canDownload={canDownload}
+        canDelete={canDelete}
+        canEdit={canUpload}
+        onClose={() => setActive(null)}
+        onChanged={(next) => setDocs((cur) => cur.map((d) => (d.id === next.id ? next : d)))}
+        onDeleted={(id) => setDocs((cur) => cur.filter((d) => d.id !== id))}
+      />
     </span>
   );
 }

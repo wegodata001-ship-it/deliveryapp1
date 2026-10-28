@@ -14,6 +14,12 @@ import {
   computeWeeklyCashBalance,
   deriveWeekBalanceStatus,
 } from "@/lib/cash-control/week-balance-calculation";
+import {
+  mergeBalanceSnapshotWithPreserved,
+  mergeSnapshotPatch,
+  pickPreservedSnapshotFields,
+  type CashboxClosingRecord,
+} from "@/lib/flow-control/week-balance-snapshot-merge";
 
 export {
   computeWeekBalanceSnapshot,
@@ -70,6 +76,26 @@ export async function confirmWeekBalance(input: {
 
   const now = new Date();
   await prisma.$transaction(async (tx) => {
+    const existing = await tx.cashWeekFlow.findUnique({
+      where: { countryCode_weekCode: { countryCode: "TR", weekCode: wk } },
+      select: { weekBalanceSnapshot: true },
+    });
+    const mergedBalance = mergeBalanceSnapshotWithPreserved(
+      state.snapshot,
+      existing?.weekBalanceSnapshot,
+    );
+    const closing: CashboxClosingRecord = {
+      usd: Math.round(state.snapshot.usd.counted * 100) / 100,
+      ils: Math.round(state.snapshot.ils.counted * 100) / 100,
+      verified: true,
+      savedAt: now.toISOString(),
+      weekCode: wk,
+      source: "WEEK_BALANCED",
+    };
+    const snapshotJson = mergeSnapshotPatch(mergedBalance, {
+      cashboxClosing: closing,
+    }) as unknown as Prisma.InputJsonValue;
+
     await tx.cashWeekFlow.upsert({
       where: { countryCode_weekCode: { countryCode: "TR", weekCode: wk } },
       create: {
@@ -78,7 +104,7 @@ export async function confirmWeekBalance(input: {
         weekBalanceStatus: "BALANCED",
         weekBalancedAt: now,
         weekBalancedById: input.userId,
-        weekBalanceSnapshot: state.snapshot as unknown as Prisma.InputJsonValue,
+        weekBalanceSnapshot: snapshotJson,
         weekBalanceDataHash: state.snapshot.dataHash,
         updatedById: input.userId,
       },
@@ -86,7 +112,7 @@ export async function confirmWeekBalance(input: {
         weekBalanceStatus: "BALANCED",
         weekBalancedAt: now,
         weekBalancedById: input.userId,
-        weekBalanceSnapshot: state.snapshot as unknown as Prisma.InputJsonValue,
+        weekBalanceSnapshot: snapshotJson,
         weekBalanceDataHash: state.snapshot.dataHash,
         updatedById: input.userId,
       },
@@ -151,13 +177,17 @@ export async function invalidateWeekBalanceIfBalanced(input: {
   const nextStatus = deriveWeekBalanceStatus(snapshot, "OPEN", null);
 
   await prisma.$transaction(async (tx) => {
+    const preserved = pickPreservedSnapshotFields(flow.weekBalanceSnapshot);
     await tx.cashWeekFlow.update({
       where: { countryCode_weekCode: { countryCode: "TR", weekCode: wk } },
       data: {
         weekBalanceStatus: nextStatus,
         weekBalancedAt: null,
         weekBalancedById: null,
-        weekBalanceSnapshot: Prisma.DbNull,
+        weekBalanceSnapshot:
+          Object.keys(preserved).length > 0
+            ? (preserved as unknown as Prisma.InputJsonValue)
+            : Prisma.DbNull,
         weekBalanceDataHash: null,
       },
     });

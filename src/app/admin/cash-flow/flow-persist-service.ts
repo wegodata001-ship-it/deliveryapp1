@@ -12,6 +12,12 @@ import type { CashWeekFlowLineId } from "@/lib/cash-control-week-flow";
 import { requireWorkCountryScope } from "@/lib/country-work-context.server";
 import { flowWeekCompositeKey, type FlowWorkScope } from "@/lib/flow-control/flow-country-scope";
 import type { WorkCountryCode } from "@/lib/work-country";
+import {
+  appendManagerCountHistory,
+  managerCountFormFromFlowRow,
+} from "@/lib/flow-control/manager-count-history";
+import { mergeSnapshotPatch } from "@/lib/flow-control/week-balance-snapshot-merge";
+import { invalidateFlowWeekPaymentsCache } from "@/lib/flow-control/flow-week-payments-cache";
 
 function fcNum(v: string | null | undefined): number {
   const n = Number(String(v ?? "").replace(",", "."));
@@ -34,6 +40,59 @@ export async function persistManagerCount(input: {
   const allocationIls = fcNum(f.turkeyTransferIls);
 
   await prisma.$transaction(async (tx) => {
+    const existing = await tx.cashWeekFlow.findUnique({
+      where: flowWeekCompositeKey(flowScope, wk),
+      select: {
+        weekBalanceSnapshot: true,
+        countedCashUsd: true,
+        countedCashIls: true,
+        countedChecksIls: true,
+        countedCreditIls: true,
+        countedTransferIls: true,
+        commissionUsd: true,
+        commissionIls: true,
+        turkeyTransferUsd: true,
+        turkeyTransferIls: true,
+      },
+    });
+    const snap =
+      existing?.weekBalanceSnapshot && typeof existing.weekBalanceSnapshot === "object"
+        ? (existing.weekBalanceSnapshot as Record<string, unknown>)
+        : {};
+    const savedAt = new Date().toISOString();
+    const formAfter = managerCountFormFromFlowRow({
+      countedCashUsd: dec(f.countedCashUsd),
+      countedCashIls: dec(f.countedCashIls),
+      countedChecksIls: dec(f.countedChecksIls),
+      countedCreditIls: dec(f.countedCreditIls),
+      countedTransferIls: dec(f.countedTransferIls),
+      commissionUsd: dec(f.commissionUsd),
+      commissionIls: dec(f.commissionIls),
+      turkeyTransferUsd: dec(f.turkeyTransferUsd),
+      turkeyTransferIls: dec(f.turkeyTransferIls),
+    });
+    const formBefore = managerCountFormFromFlowRow(existing ?? null);
+    const history = appendManagerCountHistory(snap.managerCountHistory, {
+      savedAt,
+      savedById: input.updatedById,
+      formBefore,
+      formAfter,
+      status: "SAVED",
+    });
+    const closingUsd = fcNum(f.countedCashUsd);
+    const closingIls = fcNum(f.countedCashIls);
+    const nextSnapshot = mergeSnapshotPatch(snap, {
+      managerCountHistory: history,
+      cashboxClosing: {
+        usd: Math.round(closingUsd * 100) / 100,
+        ils: Math.round(closingIls * 100) / 100,
+        verified: true,
+        savedAt,
+        weekCode: wk,
+        source: "MANAGER_COUNT",
+      },
+    });
+
     const flowRow = await tx.cashWeekFlow.upsert({
       where: flowWeekCompositeKey(flowScope, wk),
       create: {
@@ -48,6 +107,7 @@ export async function persistManagerCount(input: {
         commissionIls: dec(f.commissionIls),
         turkeyTransferUsd: dec(f.turkeyTransferUsd),
         turkeyTransferIls: dec(f.turkeyTransferIls),
+        weekBalanceSnapshot: nextSnapshot as unknown as Prisma.InputJsonValue,
         updatedById: input.updatedById,
       },
       update: {
@@ -60,6 +120,7 @@ export async function persistManagerCount(input: {
         commissionIls: dec(f.commissionIls),
         turkeyTransferUsd: dec(f.turkeyTransferUsd),
         turkeyTransferIls: dec(f.turkeyTransferIls),
+        weekBalanceSnapshot: nextSnapshot as unknown as Prisma.InputJsonValue,
         updatedById: input.updatedById,
       },
     });
@@ -74,6 +135,7 @@ export async function persistManagerCount(input: {
     });
   });
 
+  invalidateFlowWeekPaymentsCache(wk, scope.workCountry);
   revalidatePath("/admin/cash-flow");
   return { ok: true };
 }

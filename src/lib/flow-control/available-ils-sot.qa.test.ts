@@ -15,6 +15,8 @@ import {
 } from "@/components/admin/manager-count/manager-count-utils";
 import type { FlowWeekPayload, FxPurchaseRecord } from "@/app/admin/cash-flow/flow-types";
 import { emptyDailyIntake } from "@/lib/cash-control-daily";
+import { CASH_WEEK_FLOW_LINE_IDS } from "@/lib/cash-control-week-flow";
+import type { FlowWeekCashboxes } from "@/lib/flow-control/flow-week-financial-ssot";
 
 function fx(
   ilsAmount: number,
@@ -68,9 +70,50 @@ function flowFromCalc(
   } = {},
 ): FlowWeekPayload {
   const money = (n: number) => n.toFixed(2);
+  const emptyLayers = Object.fromEntries(
+    CASH_WEEK_FLOW_LINE_IDS.map((id) => [id, { amount: 0, paymentCount: 0, daysCounted: 0 }]),
+  );
+  const emptyBox: FlowWeekCashboxes = {
+    managerCountState: "COMPLETE",
+    receiptsBasedUsd: null,
+    receiptsBasedIls: null,
+    prevWeek: null,
+    openingMessageHe: "",
+    usd: {
+      opening: 0,
+      openingVerified: true,
+      inflows: 0,
+      outflows: 0,
+      closingCalculated: 0,
+      drawerBalance: 0,
+      countedPhysical: 0,
+      countVariance: 0,
+      displayStatus: "OK",
+    },
+    ils: {
+      opening: 0,
+      openingVerified: true,
+      inflows: 0,
+      outflows: 0,
+      closingCalculated: 0,
+      drawerBalance: 0,
+      countedPhysical: 0,
+      countVariance: 0,
+      displayStatus: "OK",
+    },
+  };
   return {
     week: "AH-999",
+    cashWeekFlowId: null,
     weekLabel: "QA",
+    receiptLayers: {
+      actualReceipts: emptyLayers as FlowWeekPayload["receiptLayers"]["actualReceipts"],
+      dailyApproved: emptyLayers as FlowWeekPayload["receiptLayers"]["dailyApproved"],
+      countDiff: {},
+    },
+    weekContext: { paymentsReceivedInWeek: 0, paymentsByWeekCodeOnly: 0, ordersInOrderWeek: 0 },
+    managerCountState: "COMPLETE",
+    cashboxes: emptyBox,
     received: {} as FlowWeekPayload["received"],
     counted: {
       CASH_ILS: opts.cashIls ?? money(0),

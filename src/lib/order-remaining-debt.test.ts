@@ -149,14 +149,14 @@ describe("order-remaining-debt SSOT", () => {
     assert.notEqual(8342.6, remaining.get("TR-137-0004"));
   });
 
-  it("customer 101: FIFO credit $1,273.83 leaves $758.01", () => {
+  it("customer 101: collectible remaining ignores unused credit", () => {
     const remaining = collectibleRemainingUsdByOrderId(
       [{ orderId: "101-open", remainingAfterPaymentsUsd: 2031.84 }],
       0,
       1273.83,
     );
-    assert.equal(remaining.get("101-open"), 758.01);
-    assert.equal(collectibleOpenDebtAfterWithdrawalUsd([2031.84], 0, 1273.83), 758.01);
+    assert.equal(remaining.get("101-open"), 2031.84);
+    assert.equal(collectibleOpenDebtAfterWithdrawalUsd([2031.84], 0, 1273.83), 2031.84);
     assert.equal(
       creditUsdEligibleForOrderFifo({
         remainingAfterWithdrawalUsd: 2031.84,
@@ -166,30 +166,30 @@ describe("order-remaining-debt SSOT", () => {
     );
   });
 
-  it("credit larger than remaining applies only the remaining", () => {
+  it("credit larger than remaining is eligible only up to remaining", () => {
     const remaining = collectibleRemainingUsdByOrderId(
       [{ orderId: "a", remainingAfterPaymentsUsd: 500 }],
       0,
       800,
     );
-    assert.equal(remaining.get("a"), 0);
+    assert.equal(remaining.get("a"), 500);
     assert.equal(
       creditUsdEligibleForOrderFifo({ remainingAfterWithdrawalUsd: 500, availableCreditUsd: 800 }),
       500,
     );
   });
 
-  it("FIFO credit across A/B/C: 300+500+400 credit 650 → 0 / 150 / 400", () => {
+  it("virtual credit FIFO across A/B/C does not change collectible remaining", () => {
     const rows = [
       { orderId: "A", remainingAfterPaymentsUsd: 300 },
       { orderId: "B", remainingAfterPaymentsUsd: 500 },
       { orderId: "C", remainingAfterPaymentsUsd: 400 },
     ];
     const remaining = collectibleRemainingUsdByOrderId(rows, 0, 650);
-    assert.equal(remaining.get("A"), 0);
-    assert.equal(remaining.get("B"), 150);
+    assert.equal(remaining.get("A"), 300);
+    assert.equal(remaining.get("B"), 500);
     assert.equal(remaining.get("C"), 400);
-    assert.equal([...remaining.values()].reduce((s, n) => s + n, 0), 550);
+    assert.equal([...remaining.values()].reduce((s, n) => s + n, 0), 1200);
     const applied = virtualCustomerCreditAppliedUsdByOrderId(rows, 0, 650);
     assert.equal(applied.get("A"), 300);
     assert.equal(applied.get("B"), 350);
@@ -227,6 +227,7 @@ describe("computePaymentBalanceUsd — תצוגת יתרה בקליטה", () => 
     const d = derivePaymentBalanceDisplay(signed, rate);
     assert.equal(d.state, "debt");
     assert.equal(d.title, "נשאר לתשלום");
+    assert.equal(d.statusHint, "יתרה פתוחה");
     assert.equal(d.displayUsd, 70);
     assert.equal(d.displayIls, 247.8);
   });
@@ -235,7 +236,7 @@ describe("computePaymentBalanceUsd — תצוגת יתרה בקליטה", () => 
     const d = derivePaymentBalanceDisplay(computePaymentBalanceUsd(100, 100), rate);
     assert.equal(d.state, "cleared");
     assert.equal(d.title, "נשאר לתשלום");
-    assert.equal(d.statusHint, "שולם במלואו");
+    assert.equal(d.statusHint, "אין יתרה פתוחה");
     assert.equal(d.displayUsd, 0);
     assert.equal(d.displayIls, 0);
   });
@@ -243,12 +244,50 @@ describe("computePaymentBalanceUsd — תצוגת יתרה בקליטה", () => 
   it("$100 debt, $110 paid → surplus +$10 +₪35.40 כולל מע״מ", () => {
     const d = derivePaymentBalanceDisplay(computePaymentBalanceUsd(100, 110), rate);
     assert.equal(d.state, "surplus");
-    assert.equal(d.title, "תשלום יתר");
-    assert.equal(d.statusHint, undefined);
+    assert.equal(d.title, "נשאר לתשלום");
+    assert.equal(d.statusHint, "תשלום יתר");
     assert.equal(d.displayUsd, 10);
     assert.equal(d.displayIls, 35.4);
     assert.equal(formatPaymentBalanceUsdLine(d), "+$10.00");
     assert.equal(formatPaymentBalanceIlsLine(d), "+₪35.40 כולל מע״מ");
+  });
+
+  it("customer 101: $758.01 debt, $800 paid → +$41.99 תשלום יתר", () => {
+    const signed = computePaymentBalanceUsd(758.01, 800);
+    assert.equal(signed, -41.99);
+    const d = derivePaymentBalanceDisplay(signed, rate);
+    assert.equal(d.state, "surplus");
+    assert.equal(d.title, "נשאר לתשלום");
+    assert.equal(d.statusHint, "תשלום יתר");
+    assert.equal(d.displayUsd, 41.99);
+    assert.equal(d.balanceUsdSigned, -41.99);
+    assert.equal(formatPaymentBalanceUsdLine(d), "+$41.99");
+  });
+
+  it("customer 101: $758.01 debt, $500 paid → $258.01 יתרה פתוחה", () => {
+    const signed = computePaymentBalanceUsd(758.01, 500);
+    assert.equal(signed, 258.01);
+    const d = derivePaymentBalanceDisplay(signed, rate);
+    assert.equal(d.state, "debt");
+    assert.equal(d.title, "נשאר לתשלום");
+    assert.equal(d.statusHint, "יתרה פתוחה");
+    assert.equal(d.displayUsd, 258.01);
+    assert.equal(formatPaymentBalanceUsdLine(d), "$258.01");
+  });
+
+  it("customer 101: exact $758.01 → אין יתרה פתוחה", () => {
+    const d = derivePaymentBalanceDisplay(computePaymentBalanceUsd(758.01, 758.01), rate);
+    assert.equal(d.state, "cleared");
+    assert.equal(d.statusHint, "אין יתרה פתוחה");
+    assert.equal(formatPaymentBalanceUsdLine(d), "$0.00");
+  });
+
+  it("$750 debt, $800 paid → +$50.00 תשלום יתר", () => {
+    const d = derivePaymentBalanceDisplay(computePaymentBalanceUsd(750, 800), rate);
+    assert.equal(d.state, "surplus");
+    assert.equal(d.displayUsd, 50);
+    assert.equal(formatPaymentBalanceUsdLine(d), "+$50.00");
+    assert.equal(d.statusHint, "תשלום יתר");
   });
 
   it("$100 debt, ₪100 @3 → remaining $66.67", () => {

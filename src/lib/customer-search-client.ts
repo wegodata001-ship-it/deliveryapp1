@@ -1,8 +1,10 @@
 import type { CustomerSearchRow } from "@/app/admin/capture/actions";
-import { CUSTOMER_SEARCH_UUID_RE } from "@/lib/customer-search-shared";
+import { CUSTOMER_SEARCH_UUID_RE, normalizeCustomerCodeDigits } from "@/lib/customer-search-shared";
 
 export const CUSTOMER_SEARCH_DEBOUNCE_MS = 200;
-export const CUSTOMER_CODE_SEARCH_DEBOUNCE_MS = 150;
+/** השהיה לפני בחירה אוטומטית לפי קוד מדויק — בלי Enter / עכבר */
+export const CUSTOMER_CODE_AUTOSELECT_DEBOUNCE_MS = 300;
+export const CUSTOMER_CODE_SEARCH_DEBOUNCE_MS = CUSTOMER_CODE_AUTOSELECT_DEBOUNCE_MS;
 export const CUSTOMER_NAME_SEARCH_DEBOUNCE_MS = 220;
 export const CUSTOMER_SEARCH_CACHE_TTL_MS = 30_000;
 
@@ -68,46 +70,41 @@ async function fetchSearchFast(
   if (opts.exact) params.set("exact", "1");
   if (opts.workCountry?.trim()) params.set("country", opts.workCountry.trim());
 
-  const useConsoleTimer = typeof console !== "undefined" && typeof console.time === "function";
-  if (useConsoleTimer) console.time("customer-search");
+  const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+  const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
-  try {
-    const t0 = typeof performance !== "undefined" ? performance.now() : Date.now();
-    const res = await fetch(`/api/customers/search-fast?${params.toString()}`, {
-      credentials: "include",
-      cache: "no-store",
-      signal,
+  const res = await fetch(`/api/customers/search-fast?${params.toString()}`, {
+    credentials: "include",
+    cache: "no-store",
+    signal,
+  });
+  const fetchMs = Math.round(
+    (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt,
+  );
+
+  if (typeof window !== "undefined" && process.env.NODE_ENV === "development" && fetchMs > 300) {
+    console.debug("[searchFast.client]", {
+      requestId,
+      q,
+      exact: !!opts.exact,
+      status: res.status,
+      fetchMs,
     });
-    const fetchMs = Math.round(
-      (typeof performance !== "undefined" ? performance.now() : Date.now()) - t0,
-    );
-
-    if (typeof window !== "undefined" && (process.env.NODE_ENV === "development" || fetchMs > 300)) {
-      console.log("[searchFast.client]", {
-        q,
-        exact: !!opts.exact,
-        status: res.status,
-        fetchMs,
-        hint: fetchMs > 300 ? "Check Network: waiting=TTFB/server; content=JSON parse" : undefined,
-      });
-    }
-
-    if (res.status === 401) throw new Error("Unauthorized");
-    if (!res.ok) throw new Error("טעינת נתונים נכשלה");
-
-    let rows: CustomerSearchRow[];
-    if (opts.exact) {
-      const row = (await res.json()) as CustomerSearchRow | null;
-      rows = row ? [row] : [];
-    } else {
-      rows = (await res.json()) as CustomerSearchRow[];
-    }
-
-    if (rows.length > 0) writeCache(key, rows);
-    return rows;
-  } finally {
-    if (useConsoleTimer) console.timeEnd("customer-search");
   }
+
+  if (res.status === 401) throw new Error("Unauthorized");
+  if (!res.ok) throw new Error("טעינת נתונים נכשלה");
+
+  let rows: CustomerSearchRow[];
+  if (opts.exact) {
+    const row = (await res.json()) as CustomerSearchRow | null;
+    rows = row ? [row] : [];
+  } else {
+    rows = (await res.json()) as CustomerSearchRow[];
+  }
+
+  if (rows.length > 0) writeCache(key, rows);
+  return rows;
 }
 
 export async function searchCustomersFastClient(
@@ -217,6 +214,50 @@ export async function searchCustomerSuggestionsClient(
   }
   const rows = await searchCustomersFastClient(q, { signal: opts?.signal, workCountry: opts?.workCountry });
   return prioritizeCustomerSearchRows(rows, q, limit);
+}
+
+/** השוואת קוד לקוח לשאילתה — כולל נרמול אפסים מובילים למספרים */
+export function customerCodeEqualsQuery(code: string | null | undefined, query: string): boolean {
+  const q = query.trim();
+  const c = (code ?? "").trim();
+  if (!q || !c) return false;
+  if (c.toLowerCase() === q.toLowerCase()) return true;
+  if (/^\d+$/.test(q) && /^\d+$/.test(c)) {
+    return normalizeCustomerCodeDigits(c) === normalizeCustomerCodeDigits(q);
+  }
+  return false;
+}
+
+/**
+ * בחירה אוטומטית בהקלדה: רק קוד לקוח מלא ומדויק וייחודי.
+ * לא בוחר לפי קידומת, לא לפי שם, ולא כשיש יותר מהתאמה אחת.
+ */
+export function pickExactUniqueCustomerCodeHit(
+  rows: CustomerSearchRow[],
+  query: string,
+): CustomerSearchRow | null {
+  const q = query.trim();
+  if (!q) return null;
+  const matches = rows.filter(
+    (r) => customerCodeEqualsQuery(r.code, q) || customerCodeEqualsQuery(r.oldCustomerCode, q),
+  );
+  const uniqueIds = new Set(matches.map((r) => r.id));
+  if (uniqueIds.size !== 1) return null;
+  return matches[0]!;
+}
+
+/** האם לבחור לקוח אוטומטית אחרי debounce של שדה קוד — בלי side-effects */
+export function shouldAutoSelectExactCustomerCode(params: {
+  field: "code" | "text";
+  query: string;
+  hits: CustomerSearchRow[];
+  alreadySelectedId?: string | null;
+}): CustomerSearchRow | null {
+  if (params.field !== "code") return null;
+  const row = pickExactUniqueCustomerCodeHit(params.hits, params.query);
+  if (!row) return null;
+  if (params.alreadySelectedId && params.alreadySelectedId === row.id) return null;
+  return row;
 }
 
 /** בחירה אוטומטית כשיש תוצאה יחידה או התאמת קוד מדויקת */

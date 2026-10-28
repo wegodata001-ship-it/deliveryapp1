@@ -52,6 +52,10 @@ export function PaymentMethodControlModal({
   open,
   methodViews,
   orderRemainingToPayUsd,
+  netCollectibleUsd,
+  plannedOpenRemainingUsd,
+  planningAdjustmentGapUsd,
+  currentOpenDebtUsd,
   onClose,
   onAutoAdjust,
   onOrderEdit,
@@ -62,8 +66,16 @@ export function PaymentMethodControlModal({
 }: {
   open: boolean;
   methodViews: IntakeMethodView[];
-  /** «נשאר לתשלום» — מקור אמת יחיד (זהה למסך קליטה) */
+  /** Σ יתרות הזמנות בשבוע (תכנון) */
   orderRemainingToPayUsd: number;
+  /** יתרה נטו לגבייה — SSOT (CURRENT מוגבל לשבוע) */
+  netCollectibleUsd: number;
+  /** נותר לפי תכנון אמצעים (PMC) */
+  plannedOpenRemainingUsd: number;
+  /** פער תכנון מול גבייה */
+  planningAdjustmentGapUsd?: number;
+  /** חוב CURRENT (ספר יתרות) */
+  currentOpenDebtUsd?: number | null;
   onClose: () => void;
   onAutoAdjust?: () => void;
   onOrderEdit?: (orderId: string) => void;
@@ -94,7 +106,7 @@ export function PaymentMethodControlModal({
         label: r.methodLabel || PAYMENT_BUCKET_LABELS[r.bucket] || r.bucket,
         currency: (r.currency ?? "USD") === "ILS" ? "ILS" : "USD",
         planned: r.planned ?? r.plannedUsd,
-        paid: r.paid ?? r.dbPaidUsd,
+        paid: r.paidToDebt ?? r.paidToDebtUsd ?? r.paid ?? r.dbPaidUsd,
         remaining: r.remaining ?? r.dbRemainingUsd,
       })),
     );
@@ -157,9 +169,23 @@ export function PaymentMethodControlModal({
 
         <section className="pmc-summary" aria-label="סיכום כללי">
           <SummaryCard
-            label="נשאר לתשלום"
-            value={fmtMethodAmount("USD", orderRemainingToPayUsd)}
+            label="יתרה נטו לגבייה"
+            value={fmtMethodAmount("USD", netCollectibleUsd)}
             accent
+          />
+          <SummaryCard
+            label="יתרה מתוכננת פתוחה"
+            value={fmtMethodAmount("USD", plannedOpenRemainingUsd)}
+          />
+          {(planningAdjustmentGapUsd ?? 0) > 0.01 ? (
+            <SummaryCard
+              label="הפרש להתאמת תכנון"
+              value={fmtMethodAmount("USD", planningAdjustmentGapUsd ?? 0)}
+            />
+          ) : null}
+          <SummaryCard
+            label="יתרות הזמנות בשבוע"
+            value={fmtMethodAmount("USD", orderRemainingToPayUsd)}
           />
           <SummaryCard label="מספר הזמנות" value={String(summary.orderCount)} />
           <SummaryCard
@@ -167,13 +193,25 @@ export function PaymentMethodControlModal({
             value={fmtDualMoney(summary.plannedUsd, summary.plannedIls)}
           />
           <SummaryCard
-            label="שולם"
-            value={fmtDualMoney(summary.enteredUsd, summary.enteredIls)}
+            label="שולם לסגירת חוב"
+            value={fmtDualMoney(summary.paidToDebtUsd, summary.paidToDebtIls)}
           />
+          {summary.transferredToCommissionUsd > 0.01 ? (
+            <SummaryCard
+              label="הועבר לעמלות"
+              value={fmtMethodAmount("USD", summary.transferredToCommissionUsd)}
+            />
+          ) : null}
           <SummaryCard
             label="נותר לפי אמצעי"
             value={fmtDualMoney(summary.remainingUsd, summary.remainingIls)}
           />
+          {currentOpenDebtUsd != null ? (
+            <SummaryCard
+              label="חוב CURRENT"
+              value={fmtMethodAmount("USD", Math.max(0, currentOpenDebtUsd))}
+            />
+          ) : null}
         </section>
 
         <section className="pmc-method-summary" aria-label="סיכום לפי אמצעי תשלום">
@@ -184,7 +222,7 @@ export function PaymentMethodControlModal({
                 <tr>
                   <th>אמצעי תשלום</th>
                   <th className="pmc-num">מתוכנן</th>
-                  <th className="pmc-num">שולם</th>
+                  <th className="pmc-num">שולם לסגירת חוב</th>
                   <th className="pmc-num">נותר</th>
                 </tr>
               </thead>
@@ -221,6 +259,14 @@ export function PaymentMethodControlModal({
                 )}
               </tbody>
               <tfoot>
+                {summary.transferredToCommissionUsd > 0.01 ? (
+                  <tr className="pmc-method-summary__hint">
+                    <td colSpan={4}>
+                      הפרש breakdown מול סגירת חוב (היסטורי):{" "}
+                      <span dir="ltr">{fmtMethodAmount("USD", summary.transferredToCommissionUsd)}</span>
+                    </td>
+                  </tr>
+                ) : null}
                 <tr className="pmc-method-summary__total">
                   <th scope="row">סה״כ</th>
                   <td className="pmc-num" dir="ltr">

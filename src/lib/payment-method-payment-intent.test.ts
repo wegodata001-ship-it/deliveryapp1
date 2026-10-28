@@ -445,3 +445,123 @@ describe("intentsFromDraftPaymentLines", () => {
     );
   });
 });
+
+describe("auto-adjust allocates only debt, not overpayment", () => {
+  it("101 bank $510 + cash $250 vs remaining 412.37/345.64 — $1.99 stays out of adjustment", () => {
+    const remainingCash = 412.37;
+    const remainingBank = 345.64;
+    const source: PaymentIntakeOrderRow = {
+      ...order({ id: "tr-140-0001", orderNumber: "TR-140-0001", dateYmd: "2026-09-01", remainingUsd: 758.01 }),
+      dbRemainingUsd: "758.01",
+      breakdown: [
+        {
+          method: "CASH",
+          label: "מזומן",
+          currency: "USD",
+          planned: remainingCash,
+          plannedUsd: remainingCash,
+          paid: 0,
+          paidUsd: 0,
+          remaining: remainingCash,
+          remainingUsd: remainingCash,
+        },
+        {
+          method: "BANK_TRANSFER",
+          label: "העברה בנקאית",
+          currency: "USD",
+          planned: remainingBank,
+          plannedUsd: remainingBank,
+          paid: 0,
+          paidUsd: 0,
+          remaining: remainingBank,
+          remainingUsd: remainingBank,
+        },
+      ],
+    } as PaymentIntakeOrderRow;
+
+    const plan = planPaymentIntentAdjustments({
+      orders: [source],
+      intents: [
+        { method: "BANK_TRANSFER", currency: "USD", amountNative: 510 },
+        { method: "CASH", currency: "USD", amountNative: 250 },
+      ],
+      customerOpenDebtUsd: 758.01,
+    });
+    assert.equal(plan.ok, true);
+    if (!plan.ok) return;
+    assert.equal(plan.closesDebtUsd, 758.01);
+    assert.equal(plan.overpaymentUsd, 1.99);
+    assert.equal(plan.hasOverpayment, true);
+    assert.ok(plan.orderChanges.length > 0);
+    assert.ok(!JSON.stringify(plan).includes("אין מספיק יתרה מתוכננת"));
+
+    const cashApplied = plan.methodAllocation.find((row) => row.method === "CASH")?.appliedUsd ?? 0;
+    const bankApplied = plan.methodAllocation.find((row) => row.method === "BANK_TRANSFER")?.appliedUsd ?? 0;
+    assert.equal(Number((cashApplied + bankApplied).toFixed(2)), 758.01);
+    assert.equal(
+      Number(plan.methodAllocation.reduce((sum, row) => sum + row.excessUsd, 0).toFixed(2)),
+      1.99,
+    );
+
+    const lines = plan.orderChanges[0]!.methodLines;
+    const cashLine = lines.find((row) => row.method === "CASH");
+    const bankLine = lines.find((row) => row.method === "BANK_TRANSFER");
+    assert.ok(cashLine && bankLine);
+    assert.equal(cashLine.beforeRemainingUsd, remainingCash);
+    assert.equal(bankLine.beforeRemainingUsd, remainingBank);
+    assert.equal(cashLine.afterRemainingUsd, cashApplied);
+    assert.equal(bankLine.afterRemainingUsd, bankApplied);
+    assert.equal(Number((cashLine.changeUsd + bankLine.changeUsd).toFixed(2)), 0);
+  });
+
+  it("101 cash $300 + bank $500 adjusts only $758.01 and leaves $41.99 overpayment", () => {
+    const remainingCash = 412.37;
+    const remainingBank = 345.64;
+    const source: PaymentIntakeOrderRow = {
+      ...order({ id: "tr-140-0001", orderNumber: "TR-140-0001", dateYmd: "2026-09-01", remainingUsd: 758.01 }),
+      dbRemainingUsd: "758.01",
+      breakdown: [
+        {
+          method: "CASH",
+          label: "מזומן",
+          currency: "USD",
+          planned: remainingCash,
+          plannedUsd: remainingCash,
+          paid: 0,
+          paidUsd: 0,
+          remaining: remainingCash,
+          remainingUsd: remainingCash,
+        },
+        {
+          method: "BANK_TRANSFER",
+          label: "העברה בנקאית",
+          currency: "USD",
+          planned: remainingBank,
+          plannedUsd: remainingBank,
+          paid: 0,
+          paidUsd: 0,
+          remaining: remainingBank,
+          remainingUsd: remainingBank,
+        },
+      ],
+    } as PaymentIntakeOrderRow;
+
+    const plan = planPaymentIntentAdjustments({
+      orders: [source],
+      intents: [
+        { method: "CASH", currency: "USD", amountNative: 300 },
+        { method: "BANK_TRANSFER", currency: "USD", amountNative: 500 },
+      ],
+      customerOpenDebtUsd: 758.01,
+    });
+    assert.equal(plan.ok, true);
+    if (!plan.ok) return;
+    assert.equal(plan.closesDebtUsd, 758.01);
+    assert.equal(plan.overpaymentUsd, 41.99);
+    assert.ok(!JSON.stringify(plan).includes("אין מספיק יתרה מתוכננת"));
+    const applied = plan.methodAllocation.reduce((sum, row) => sum + row.appliedUsd, 0);
+    const excess = plan.methodAllocation.reduce((sum, row) => sum + row.excessUsd, 0);
+    assert.equal(Number(applied.toFixed(2)), 758.01);
+    assert.equal(Number(excess.toFixed(2)), 41.99);
+  });
+});

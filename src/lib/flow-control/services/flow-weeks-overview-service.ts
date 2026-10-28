@@ -100,8 +100,8 @@ async function loadOneWeekOverview(
   ) as Record<CashDailyMethodId, string>;
 
   let maxDays = 0;
-  for (const line of Object.values(flow.received)) {
-    if (line.paymentCount > maxDays) maxDays = line.paymentCount;
+  for (const line of Object.values(flow.receiptLayers.dailyApproved)) {
+    if ((line.daysCounted ?? 0) > maxDays) maxDays = line.daysCounted ?? 0;
   }
 
   const fxPs = sumFxPurchases(flow.fxPurchases, "PS");
@@ -118,7 +118,14 @@ async function loadOneWeekOverview(
   return {
     week: wk,
     weekLabel: formatAhWeekLabel(wk),
-    hasData: orderRows.length > 0 || hasPaymentData || maxDays > 0 || hasManagerCount,
+    hasData:
+      orderRows.length > 0 ||
+      hasPaymentData ||
+      maxDays > 0 ||
+      hasManagerCount ||
+      flow.weekContext.paymentsByWeekCodeOnly > 0,
+    paymentsReceivedInWeek: flow.weekContext.paymentsReceivedInWeek,
+    paymentsByWeekCodeOnly: flow.weekContext.paymentsByWeekCodeOnly,
     totalOrders: orderRows.length,
     totalOrdersUsd: money(totalOrdersUsd),
     remainingToPayUsd: money(remainingToPayUsd),

@@ -25,11 +25,12 @@ export async function fetchPaymentIntakeOrdersClient(
 export async function fetchPaymentIntakeCustomerPaymentsClient(
   customerId: string,
   workCountry: string,
+  weekCode?: string | null,
 ): Promise<
   { ok: true; customerPayments: PaymentIntakeCustomerPaymentRow[] } | { ok: false; error: string }
 > {
   const res = await fetch(
-    `/api/payment-intake/customer-payments?${intakeQuery(customerId, workCountry)}`,
+    `/api/payment-intake/customer-payments?${intakeQuery(customerId, workCountry, weekCode)}`,
     NO_STORE,
   );
   if (!res.ok) {
@@ -42,6 +43,7 @@ export async function fetchPaymentIntakeCustomerPaymentsClient(
 export async function fetchPaymentIntakeBalancesClient(
   customerId: string,
   workCountry: string,
+  weekCode?: string | null,
 ): Promise<
   | {
       ok: true;
@@ -54,10 +56,16 @@ export async function fetchPaymentIntakeBalancesClient(
       totalOrdersUsd: number;
       totalPaymentsUsd: number;
       totalWithdrawalsUsd: number;
+      currentOpenDebtUsd: number;
+      currentAvailableCreditUsd: number;
+      currentNetBalanceUsd: number;
     }
   | { ok: false; error: string }
 > {
-  const res = await fetch(`/api/payment-intake/balances?${intakeQuery(customerId, workCountry)}`, NO_STORE);
+  const res = await fetch(
+    `/api/payment-intake/balances?${intakeQuery(customerId, workCountry, weekCode)}`,
+    NO_STORE,
+  );
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string } | null;
     return { ok: false, error: body?.error ?? "טעינת יתרות נכשלה" };
@@ -73,6 +81,9 @@ export async function fetchPaymentIntakeBalancesClient(
     totalOrdersUsd: number;
     totalPaymentsUsd: number;
     totalWithdrawalsUsd: number;
+    currentOpenDebtUsd: number;
+    currentAvailableCreditUsd: number;
+    currentNetBalanceUsd: number;
   };
 }
 

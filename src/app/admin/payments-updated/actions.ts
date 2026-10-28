@@ -31,7 +31,17 @@ import type { PaymentOveragePreview } from "@/lib/customer-balance";
 import { paymentIntakeOrderDateThroughAhWeekEnd } from "@/lib/payment-intake-order-filter";
 import { closePaymentPlansForOrdersInTx } from "@/lib/payment-plan-service";
 import { writeOrderBreakdownInTx } from "@/lib/order-breakdown-write";
-import { paymentMethodForBreakdown } from "@/lib/payment-method-auto-adjustment";
+import {
+  ADJUSTMENT_SAVE_FAILED_USER_MESSAGE,
+  isPrismaMissingRecordError,
+  buildBreakdownPersistBalancesFromAppliedLines,
+  persistMatchingBreakdownPaidInTx,
+  validateBreakdownPersistAgainstMatching,
+} from "@/lib/order-breakdown-paid-persist";
+import {
+  assertPlannedBreakdownPreserved,
+  paymentMethodForBreakdown,
+} from "@/lib/payment-method-auto-adjustment";
 import {
   applyIntentOrderChangesToIntakeOrders,
   planPaymentIntentAdjustments,
@@ -44,13 +54,16 @@ import { allocateNextPaymentCapture, resolvePaymentWorkCountry } from "@/lib/pay
 import { DEFAULT_WORK_COUNTRY, normalizeWorkCountryCode, type WorkCountryCode } from "@/lib/work-country";
 import {
   getCustomerInternalBalanceUsd,
-  getCustomerOpenDebtUsdNumber,
   openDebtScopeForWorkCountry,
   persistCustomerBalanceSnapshot,
 } from "@/lib/customer-open-debt";
 import {
   alignAllocationToCustomerDebtSurplus,
+  assertCommissionIsSurplusOnly,
   canSaveSurplusWithoutOrderAllocation,
+  commissionEntriesFromCanonicalSurplus,
+  commissionWriteAmount,
+  splitPaymentAgainstCustomerDebt,
 } from "@/lib/payment-debt-surplus-split";
 import { getCustomerCreditBalanceUsd } from "@/lib/customer-credit-balance";
 import { resolvePaymentIntakeAccountingPeriod } from "@/lib/payment-intake-accounting-period";
@@ -82,10 +95,12 @@ import {
   methodBalanceFromBreakdownRow,
   type DualCurrencyMatchingResult,
   type EnteredBucketAmount,
+  type MethodBalanceRow,
 } from "@/lib/payment-method-matching-engine";
 import { evaluatePaymentBusinessRules } from "@/lib/payment-business-validation";
 import { computePaymentIntakePostSaveOutcome, type PaymentIntakePostSaveOutcome } from "@/lib/payment-intake-post-save";
 import { loadPaymentIntakeOrdersForCustomer } from "@/lib/payment-intake-load";
+import { sumPaymentIntakeWeekScopedRemainingUsd } from "@/lib/payment-intake-order-filter";
 import { weekCodeForPaymentIntakeOrders } from "@/lib/payment-intake-week-context";
 import { VAT_RATE } from "@/lib/vat";
 import { prismaVatRatePercent } from "@/lib/vat-prisma";
@@ -106,6 +121,7 @@ import {
   pickOverpaymentCreditsToCancel,
 } from "@/lib/balance-reset-calculation";
 import { CUSTOMER_CREDIT_SURPLUS_NOTE_PREFIX } from "@/lib/cash-control-internal-payments";
+import { creditSurplusSlicesFromExistingAllocation } from "@/lib/customer-credit-method";
 import {
   buildBalanceResetFeeNotes,
   buildPaymentAdjustmentFeeCreateData,
@@ -528,11 +544,9 @@ export async function savePaymentUpdatedAction(
   const selectedIntakeOrders = intakeOrdersResult.orders.filter(
     (order) => selectedOrderIds == null || selectedOrderIds.has(order.id),
   );
-  /** חוב SSOT של הלקוח — לא סכום יתרות הזמנה בטבלה (משיכה מחוב / זכות) */
-  const customerOpenDebtUsd = await getCustomerOpenDebtUsdNumber(
-    cid,
-    openDebtScopeForWorkCountry(form.workCountry),
-  );
+  /** יתרת שבוע הקליטה — אותו יקום כמו הטבלה. CURRENT SSOT לא משמש להקצאה/עודף. */
+  const customerOpenDebtUsd = sumPaymentIntakeWeekScopedRemainingUsd(intakeOrdersResult.orders);
+  const receivedSplit = splitPaymentAgainstCustomerDebt(customerOpenDebtUsd, totals.totalUsd);
   let pendingAutoAdjustChanges: PaymentIntentOrderChange[] = [];
   let autoAdjustMethodAllocation: PaymentIntentMethodAllocation[] = [];
   let intakeOrdersForPlan = intakeOrdersResult.orders;
@@ -631,16 +645,12 @@ export async function savePaymentUpdatedAction(
   // תמיד מבצעים FIFO allocation קודם; רק עודף (unallocated) מטופל כקרדיט/עמלה לפי בחירת משתמש.
   const forceCreditPayment = false;
 
-  // Load ALL open orders for FIFO allocation — no week-date filter.
-  // The client-side FIFO engine also operates on the full order list (no date window),
-  // so the server must be consistent. Filtering by weekDateWhere here was the root cause
-  // of "אין יעד להקצאה לסכום הדולר" when the open order's orderDate fell outside the
-  // AH-week window even though the UI clearly showed it as having open debt.
   const orders = await prisma.order.findMany({
     where: {
       customerId: cid,
       deletedAt: null,
       status: { not: OS.DEBT_WITHDRAWAL },
+      ...(weekDateWhere ?? {}),
     },
     orderBy: [{ orderDate: "asc" }, { createdAt: "asc" }],
     select: { id: true, orderNumber: true, totalUsd: true, amountUsd: true, commissionUsd: true },
@@ -713,6 +723,8 @@ export async function savePaymentUpdatedAction(
   let surplusFeeUsd = 0;
   /** Matching Engine — מצב אמצעים לשמירה ב-DB (דו-מטבעי) */
   let matchingResult: DualCurrencyMatchingResult | null = null;
+  let balancesBeforeMatching: MethodBalanceRow[] | null = null;
+  let matchingOrderRate: Map<string, number> | null = null;
   /** האם Matching רץ על מועמדים עם חלוקת אמצעים */
   let usedMethodMatching = false;
   /** סכום יתרות אמצעים פתוחים אחרי Matching/seed — לזיהוי הודעת שגיאה מדויקת */
@@ -874,7 +886,6 @@ export async function savePaymentUpdatedAction(
               const paid = paidByOrderMethod.get(`${bal.orderId}::${currency}::${bucket}`) ?? 0;
               rebuilt.push(
                 methodBalanceFromBreakdownRow({
-                  breakdownId: `auto-adjust:${bal.orderId}:${line.paymentMethod}:${currency}`,
                   orderId: bal.orderId,
                   paymentMethod: line.paymentMethod,
                   amount,
@@ -900,6 +911,8 @@ export async function savePaymentUpdatedAction(
           return (oa?.dateYmd ?? "").localeCompare(ob?.dateYmd ?? "");
         });
 
+        balancesBeforeMatching = balances.map((b) => ({ ...b }));
+        matchingOrderRate = orderRate;
         matchingResult = applyDualCurrencyMatching({
           balances,
           enteredByBucket: enteredMethods,
@@ -1104,8 +1117,13 @@ export async function savePaymentUpdatedAction(
      * forfeit → הוספה לעמלת ההזמנה (ExistingFees + Waived)
      * credit → יתרת זכות
      */
-    if (!deferSurplus && surplusToCommission && unallocatedUsd > ALLOC_EPS) {
-      surplusFeeUsd = roundMoney2(unallocatedUsd);
+    if (!deferSurplus && surplusToCommission && receivedSplit.surplusAmount > ALLOC_EPS) {
+      surplusFeeUsd = commissionWriteAmount(receivedSplit, "commission");
+      assertCommissionIsSurplusOnly({
+        receivedAmount: receivedSplit.receivedAmount,
+        debtApplied: receivedSplit.debtApplied,
+        commissionAmount: surplusFeeUsd,
+      });
       unallocatedUsd = 0;
     } else if (!deferSurplus && surplusForfeit && unallocatedUsd > ALLOC_EPS) {
       forfeitToCommissionUsd = roundMoney2(unallocatedUsd);
@@ -1334,11 +1352,15 @@ export async function savePaymentUpdatedAction(
     await prisma.$transaction(async (tx) => {
       if (pendingAutoAdjustChanges.length > 0) {
         for (const affected of pendingAutoAdjustChanges) {
+          assertPlannedBreakdownPreserved(affected.beforeBreakdown, affected.afterBreakdown);
           const rows = affected.afterBreakdown.map((line) => ({
             paymentMethod: line.paymentMethod,
             amount: new Prisma.Decimal(line.amount).toDecimalPlaces(4, 4),
             currency: line.currency,
           }));
+          if (rows.length === 0) {
+            throw new Error("התאמה אוטומטית אינה רשאית למחוק את חלוקת אמצעי התשלום המתוכננת");
+          }
           await tx.order.update({
             where: { id: affected.orderId },
             data: { paymentMethod: paymentMethodForBreakdown(affected.afterBreakdown) || null },
@@ -1346,6 +1368,7 @@ export async function savePaymentUpdatedAction(
           await writeOrderBreakdownInTx(tx, affected.orderId, rows, {
             userId: me.id,
             intakeWeekCode: weekCode,
+            preserveExistingPlan: true,
           });
           await tx.auditLog.create({
             data: {
@@ -1446,65 +1469,82 @@ export async function savePaymentUpdatedAction(
         !form.applyCustomerBalanceReset &&
         !form.applyCustomerBalanceResetFromCredit
       ) {
-        const creditUsd = new Prisma.Decimal(unallocatedUsd.toFixed(4));
-        const creditTotals = computeFromUsdAmount(creditUsd, {
-          baseDollarRate: base,
-          dollarFee: fee,
-          finalDollarRate: finalUse,
-          vatRate,
-        });
         const excessByMethod = autoAdjustMethodAllocation
           .filter((row) => row.excessUsd > ALLOC_EPS)
           .map((row) => `${row.label} $${row.excessUsd.toFixed(2)}`)
           .join(" · ");
-        const creditNotes = [
-          CUSTOMER_CREDIT_SURPLUS_NOTE_PREFIX,
-          "תשלום יתר → יתרת זכות",
-          `קשור לקליטה ${primaryCode}`,
-          `עודף: $${unallocatedUsd.toFixed(2)} (≈ ₪${Number(creditTotals.totalIlsWithVat).toFixed(2)})`,
-          excessByMethod ? `לפי אמצעי: ${excessByMethod}` : null,
-        ]
-          .filter(Boolean)
-          .join("\n");
-        await tx.payment.create({
-          data: {
-            countryCode: payWorkCountry,
-            paymentCode: null,
-            paymentNumber: allocated.paymentNumber,
-            orderId: null,
-            customerId: cid,
-            weekCode,
-            paymentDate,
-            intakeDate,
-            paymentPlace: null,
-            currency: "USD",
-            amountUsd: creditUsd,
-            amountIls: null,
-            sourceCurrency: "USD",
-            sourceAmount: creditUsd,
-            exchangeRate: finalUse,
-            vatRate,
-            commissionPercent: commissionPctDec,
-            amountWithoutVat: creditTotals.totalIlsWithoutVat,
-            snapshotBaseDollarRate: creditTotals.snapshotBaseDollarRate,
-            snapshotDollarFee: creditTotals.snapshotDollarFee,
-            snapshotFinalDollarRate: creditTotals.snapshotFinalDollarRate,
-            totalIlsWithVat: creditTotals.totalIlsWithVat,
-            totalIlsWithoutVat: creditTotals.totalIlsWithoutVat,
-            vatAmount: creditTotals.vatAmount,
-            manualDateChanged,
-            paymentMethod: payMethodDb,
-            usdPaymentMethod: usdMethod,
-            ilsPaymentMethod: ilsMethod,
-            usdNote: null,
-            ilsNote: null,
-            isPaid: true,
-            businessType: "CUSTOMER_CREDIT",
-            notes: creditNotes,
-            createdById: me.id,
-          },
+        const creditSlices = creditSurplusSlicesFromExistingAllocation({
+          unallocatedUsd,
+          excessByMethod: autoAdjustMethodAllocation.map((row) => ({
+            method: row.method,
+            label: row.label,
+            excessUsd: row.excessUsd,
+            currency: row.currency,
+          })),
+          fallbackMethod: String(payMethodDb),
+          fallbackLabel: PAYMENT_METHOD_LABELS[String(payMethodDb)] ?? String(payMethodDb),
         });
-        savedCount += 1;
+        for (const slice of creditSlices) {
+          const sliceUsd = new Prisma.Decimal(slice.amountUsd.toFixed(4));
+          const sliceTotals = computeFromUsdAmount(sliceUsd, {
+            baseDollarRate: base,
+            dollarFee: fee,
+            finalDollarRate: finalUse,
+            vatRate,
+          });
+          const sliceMethod = (Object.values(PaymentMethod) as string[]).includes(slice.method)
+            ? (slice.method as PaymentMethod)
+            : PaymentMethod.OTHER;
+          const creditNotes = [
+            CUSTOMER_CREDIT_SURPLUS_NOTE_PREFIX,
+            "תשלום יתר → יתרת זכות",
+            `קשור לקליטה ${primaryCode}`,
+            `עודף: $${slice.amountUsd.toFixed(2)} (≈ ₪${Number(sliceTotals.totalIlsWithVat).toFixed(2)})`,
+            `אמצעי מקור: ${slice.label}`,
+            excessByMethod ? `לפי אמצעי: ${excessByMethod}` : null,
+          ]
+            .filter(Boolean)
+            .join("\n");
+          await tx.payment.create({
+            data: {
+              countryCode: payWorkCountry,
+              paymentCode: null,
+              paymentNumber: allocated.paymentNumber,
+              orderId: null,
+              customerId: cid,
+              weekCode,
+              paymentDate,
+              intakeDate,
+              paymentPlace: null,
+              currency: "USD",
+              amountUsd: sliceUsd,
+              amountIls: null,
+              sourceCurrency: "USD",
+              sourceAmount: sliceUsd,
+              exchangeRate: finalUse,
+              vatRate,
+              commissionPercent: commissionPctDec,
+              amountWithoutVat: sliceTotals.totalIlsWithoutVat,
+              snapshotBaseDollarRate: sliceTotals.snapshotBaseDollarRate,
+              snapshotDollarFee: sliceTotals.snapshotDollarFee,
+              snapshotFinalDollarRate: sliceTotals.snapshotFinalDollarRate,
+              totalIlsWithVat: sliceTotals.totalIlsWithVat,
+              totalIlsWithoutVat: sliceTotals.totalIlsWithoutVat,
+              vatAmount: sliceTotals.vatAmount,
+              manualDateChanged,
+              paymentMethod: sliceMethod,
+              usdPaymentMethod: slice.currency === "ILS" ? null : sliceMethod,
+              ilsPaymentMethod: slice.currency === "ILS" ? sliceMethod : null,
+              usdNote: null,
+              ilsNote: null,
+              isPaid: true,
+              businessType: "CUSTOMER_CREDIT",
+              notes: creditNotes,
+              createdById: me.id,
+            },
+          });
+          savedCount += 1;
+        }
       }
 
       if (surplusFeeUsd > ALLOC_EPS) {
@@ -1516,23 +1556,26 @@ export async function savePaymentUpdatedAction(
           enteredByBucket: enteredMethodsUsdCompat,
           eps: ALLOC_EPS,
         });
-        const computedTotal = roundMoney2(
-          computedSurplus.reduce((sum, entry) => sum + entry.surplusUsd, 0),
+        const surplusEntries: SurplusEntry[] = commissionEntriesFromCanonicalSurplus(
+          surplusFeeUsd,
+          computedSurplus.map(({ dbMethod, label, surplusUsd }) => ({
+            dbMethod,
+            label,
+            surplusUsd,
+          })),
+          {
+            dbMethod: String(payMethodDb),
+            label: PAYMENT_METHOD_LABELS[String(payMethodDb)] ?? String(payMethodDb),
+            surplusUsd: surplusFeeUsd,
+          },
         );
-        const surplusEntries: SurplusEntry[] =
-          computedSurplus.length > 0 && Math.abs(computedTotal - surplusFeeUsd) <= 0.05
-            ? computedSurplus.map(({ dbMethod, label, surplusUsd }) => ({
-                dbMethod,
-                label,
-                surplusUsd,
-              }))
-            : [
-                {
-                  dbMethod: String(payMethodDb),
-                  label: PAYMENT_METHOD_LABELS[String(payMethodDb)] ?? String(payMethodDb),
-                  surplusUsd: surplusFeeUsd,
-                },
-              ];
+        assertCommissionIsSurplusOnly({
+          receivedAmount: receivedSplit.receivedAmount,
+          debtApplied: receivedSplit.debtApplied,
+          commissionAmount: roundMoney2(
+            surplusEntries.reduce((sum, entry) => sum + entry.surplusUsd, 0),
+          ),
+        });
 
         // Source order/document — always attach to an order when possible (SSOT history)
         const sourceOrderId = feeTargetOrderPrefetch?.id ?? feeTargetOrderIdCandidate;
@@ -1563,7 +1606,12 @@ export async function savePaymentUpdatedAction(
           : null;
         const feeNotes = [
           PAYMENT_ADJUSTMENT_FEE_NOTE_PREFIX,
-          `קשור לקליטה ${primaryCode}`,
+          buildSurplusFeeNotes({
+            debtBeforeUsd: receivedSplit.debtBefore,
+            paymentUsd: receivedSplit.receivedAmount,
+            surplusUsd: surplusFeeUsd,
+            captureCode: primaryCode,
+          }),
           sourceDocumentCode ? `מסמך מקור: ${sourceDocumentCode}` : null,
           `עודף: $${surplusFeeUsd.toFixed(2)}`,
           methodSummary ? `לפי אמצעי: ${methodSummary}` : null,
@@ -1794,29 +1842,26 @@ export async function savePaymentUpdatedAction(
         });
       }
 
-      // Matching Engine → Persist SSOT במטבע המקורי של כל שורה
-      if (matchingResult) {
-        for (const bal of matchingResult.balances) {
-          const paidDec = new Prisma.Decimal(bal.paid.toFixed(4));
-          const remDec = new Prisma.Decimal(Math.max(0, bal.remaining).toFixed(4));
-          if (bal.breakdownId) {
-            await tx.orderPaymentBreakdown.update({
-              where: { id: bal.breakdownId },
-              data: { paidAmount: paidDec, remainingAmount: remDec },
-            });
-          } else {
-            await tx.orderPaymentBreakdown.create({
-              data: {
-                orderId: bal.orderId,
-                paymentMethod: bal.method,
-                amount: new Prisma.Decimal(Math.max(0, bal.planned).toFixed(4)),
-                currency: bal.currency,
-                paidAmount: paidDec,
-                remainingAmount: remDec,
-              },
-            });
-          }
+      // Matching Engine → Persist SSOT. paidAmount += debt applied only (appliedLines), not surplus.
+      if (matchingResult && balancesBeforeMatching && matchingOrderRate) {
+        const persistBalances = buildBreakdownPersistBalancesFromAppliedLines(
+          balancesBeforeMatching,
+          matchingResult.appliedLines,
+          matchingOrderRate,
+        );
+        const validation = validateBreakdownPersistAgainstMatching(
+          balancesBeforeMatching,
+          persistBalances,
+          matchingResult,
+        );
+        if (!validation.ok) {
+          throw new Error(validation.message);
         }
+        await persistMatchingBreakdownPaidInTx(tx, persistBalances, {
+          paymentId: primaryPaymentId,
+          paymentCode: primaryCode,
+          weekCode,
+        });
         if (matchingResult.transfersApplied.length > 0) {
           pendingAudits.push({
             userId: me.id,
@@ -1930,6 +1975,23 @@ export async function savePaymentUpdatedAction(
       }
     });
   } catch (e) {
+    if (
+      isPrismaMissingRecordError(e) ||
+      (pendingAutoAdjustChanges.length > 0 &&
+        /orderPaymentBreakdown/i.test(e instanceof Error ? e.message : ""))
+    ) {
+      console.error("[payment-intake] ADJUSTMENT_BREAKDOWN_PERSIST_FAILED", {
+        paymentCode: primaryCode,
+        weekCode,
+        customerId: cid,
+        pendingAdjustOrders: pendingAutoAdjustChanges.map((row) => ({
+          orderId: row.orderId,
+          orderNumber: row.orderNumber,
+        })),
+        error: e,
+      });
+      return { ok: false, error: ADJUSTMENT_SAVE_FAILED_USER_MESSAGE };
+    }
     const msg = e instanceof Error ? e.message : "שמירה נכשלה";
     return { ok: false, error: msg };
   }
@@ -3047,6 +3109,13 @@ export async function applyPaymentSurplusDispositionAction(input: {
   const surplusUsd = roundMoney2(
     Math.max(0, totalCapturedUsd - allocatedToOrdersUsd - alreadyAppliedUsd),
   );
+  if (input.disposition === "commission") {
+    assertCommissionIsSurplusOnly({
+      receivedAmount: totalCapturedUsd,
+      debtApplied: allocatedToOrdersUsd,
+      commissionAmount: surplusUsd,
+    });
+  }
   if (surplusUsd <= ALLOC_EPS) {
     return { ok: false, error: "אין עודף ממתין לטיפול — ייתכן שכבר טופל" };
   }
@@ -3563,6 +3632,45 @@ export async function applyCustomerCreditToOpenOrdersAction(input: {
 
       if (credits.length === 0) throw new Error("אין שורות יתרת זכות (קרדיט) זמינות");
 
+      await tx.$queryRaw`
+        SELECT id FROM "Payment"
+        WHERE id IN (${Prisma.join(credits.map((c) => c.id))})
+        FOR UPDATE
+      `;
+      const lockedCredits = await tx.payment.findMany({
+        where: {
+          id: { in: credits.map((c) => c.id) },
+          customerId: cid,
+          orderId: null,
+          businessType: "CUSTOMER_CREDIT",
+          amountUsd: { not: null },
+          ...activePaidPaymentWhere,
+        },
+        orderBy: [{ paymentDate: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+        select: {
+          id: true,
+          paymentNumber: true,
+          countryCode: true,
+          weekCode: true,
+          paymentDate: true,
+          intakeDate: true,
+          currency: true,
+          amountUsd: true,
+          amountIls: true,
+          sourceCurrency: true,
+          sourceAmount: true,
+          exchangeRate: true,
+          vatRate: true,
+          paymentMethod: true,
+          usdPaymentMethod: true,
+          ilsPaymentMethod: true,
+          notes: true,
+          createdById: true,
+        },
+      });
+      if (lockedCredits.length === 0) throw new Error("אין שורות יתרת זכות (קרדיט) זמינות");
+      credits.splice(0, credits.length, ...lockedCredits);
+
       const audits: Prisma.AuditLogCreateManyInput[] = [];
 
       let creditIndex = 0;
@@ -3603,6 +3711,8 @@ export async function applyCustomerCreditToOpenOrdersAction(input: {
           const notes = [
             "קיזוז יתרת זכות לסגירת הזמנה",
             `מקור קרדיט: ${c.id}`,
+            c.paymentNumber != null ? `תשלום מקור מספר: ${c.paymentNumber}` : null,
+            c.paymentMethod ? `אמצעי מקור: ${c.paymentMethod}` : null,
             ord.orderNumber ? `הזמנה: ${ord.orderNumber}` : null,
             `סכום: $${take.toFixed(2)}`,
           ]
@@ -3627,9 +3737,9 @@ export async function applyCustomerCreditToOpenOrdersAction(input: {
               exchangeRate: c.exchangeRate,
               vatRate: c.vatRate ?? new Prisma.Decimal(VAT_RATE),
               manualDateChanged: false,
-              paymentMethod: PaymentMethod.OTHER,
-              usdPaymentMethod: PaymentMethod.OTHER,
-              ilsPaymentMethod: null,
+              paymentMethod: c.paymentMethod ?? PaymentMethod.OTHER,
+              usdPaymentMethod: c.usdPaymentMethod ?? c.paymentMethod ?? PaymentMethod.OTHER,
+              ilsPaymentMethod: c.ilsPaymentMethod ?? null,
               usdNote: null,
               ilsNote: null,
               isPaid: true,
@@ -3665,8 +3775,12 @@ export async function applyCustomerCreditToOpenOrdersAction(input: {
               CUSTOMER_CREDIT_SURPLUS_NOTE_PREFIX,
               "פיצול אחרי קיזוז יתרת זכות",
               `מקור: ${c.id}`,
+              c.paymentNumber != null ? `תשלום מקור מספר: ${c.paymentNumber}` : null,
+              c.paymentMethod ? `אמצעי מקור: ${c.paymentMethod}` : null,
               `יתרה: $${remainder.toFixed(2)}`,
-            ].join("\n");
+            ]
+              .filter(Boolean)
+              .join("\n");
             await tx.payment.create({
               data: {
                 countryCode: c.countryCode,

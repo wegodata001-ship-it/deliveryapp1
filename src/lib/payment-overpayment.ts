@@ -11,8 +11,13 @@ import type { LivePaymentFormKpis } from "@/lib/payment-intake-live-kpi";
 export type PaymentOverpaymentPreview = {
   openDebtUsd: number;
   incomingPaymentUsd: number;
+  /** Alias — סה״כ שהוזן */
+  paymentTotalUsd: number;
+  /** Alias — min(payment, week-scoped debt) */
+  debtToCloseUsd: number;
   closesDebtUsd: number;
   overpaymentUsd: number;
+  remainingDebtUsd: number;
   hasOverpayment: boolean;
 };
 
@@ -25,12 +30,16 @@ export function computePaymentOverpayment(
   const payment = roundOrderMoney2(Math.max(0, incomingPaymentUsd));
   const overpaymentUsd = roundOrderMoney2(Math.max(0, payment - debt));
   const closesDebtUsd = roundOrderMoney2(Math.min(payment, debt));
+  const remainingDebtUsd = roundOrderMoney2(Math.max(0, debt - payment));
   const hasOverpayment = payment > debt + eps;
   return {
     openDebtUsd: debt,
     incomingPaymentUsd: payment,
+    paymentTotalUsd: payment,
+    debtToCloseUsd: closesDebtUsd,
     closesDebtUsd,
     overpaymentUsd,
+    remainingDebtUsd,
     hasOverpayment,
   };
 }

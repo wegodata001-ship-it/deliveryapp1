@@ -62,10 +62,14 @@ import {
   type CustomerLedgerQuickFilter,
 } from "@/lib/customer-ledger-display";
 import { formatLedgerPaymentTotalUsd } from "@/lib/ledger-payment-display";
+import { ledgerRowOpenDebtAfterUsd } from "@/lib/customer-ledger-open-after";
+import { surplusDestinationLabelHe } from "@/lib/payment-reconciliation-ssot";
 import { ledgerRowMatchesManualPick, type ManualLedgerPickKind } from "@/lib/customer-ledger-manual-pdf";
 import { hasLedgerRowDetail } from "@/lib/ledger-row-detail";
 import { LedgerRowDetailModal } from "@/components/admin/LedgerRowDetailModal";
 import { CustomerLedgerErrorBoundary } from "@/components/admin/CustomerLedgerErrorBoundary";
+import { CustomerLinkedDocuments } from "@/components/admin/CustomerLinkedDocuments";
+import { CustomerLedgerCustomerPdfModal } from "@/components/admin/CustomerLedgerCustomerPdfModal";
 import { formatLocalYmd } from "@/lib/work-week";
 import {
   customerCardBalancesCutoffCaption,
@@ -209,6 +213,7 @@ export function CustomerCardWindowBody({
   const [ledgerOrderLock, setLedgerOrderLock] = useState<OrderEditLockGatePayload | null>(null);
   const [ledgerGateToast, setLedgerGateToast] = useState<string | null>(null);
   const [exportBusy, setExportBusy] = useState<"pdf" | "excel" | "manual-pdf" | null>(null);
+  const [customerPdfOpen, setCustomerPdfOpen] = useState(false);
   const [manualPdfMode, setManualPdfMode] = useState(false);
   const [selectedLedgerRowIds, setSelectedLedgerRowIds] = useState<string[]>([]);
   const lastManualPdfClickId = useRef<string | null>(null);
@@ -760,6 +765,15 @@ export function CustomerCardWindowBody({
       <div className="adm-cust-ledger-export-actions" role="group" aria-label="ייצוא כרטסת">
         <button
           type="button"
+          className="adm-export-btn adm-export-btn--pdf adm-cust-ledger-export-btn adm-cust-ledger-export-btn--customer"
+          disabled={ledgerLoading || !ledger || !exportMeta}
+          title="דוח PDF מעוצב לשליחה ללקוח"
+          onClick={() => setCustomerPdfOpen(true)}
+        >
+          הפקת PDF ללקוח
+        </button>
+        <button
+          type="button"
           className="adm-export-btn adm-export-btn--pdf adm-cust-ledger-export-btn"
           disabled={!!exportBusy || ledgerLoading || !ledgerHasExportRows(ledger) || manualPdfMode}
           title={
@@ -1078,6 +1092,7 @@ export function CustomerCardWindowBody({
               </div>
             </div>
             )}
+            {customerId ? <CustomerLinkedDocuments customerId={customerId} /> : null}
           </section>
         ) : null}
 
@@ -1154,30 +1169,30 @@ export function CustomerCardWindowBody({
                     <th>תאריך</th>
                     <th>מסמך</th>
                     <th>סוג</th>
-                    <th>חיוב לקוח</th>
-                    <th>תשלום/זיכוי</th>
-                    <th
-                      title="יתרת הלקוח כפי שהייתה לאחר תנועה זו. זהו נתון היסטורי ואינו החוב הפתוח הנוכחי."
-                    >
-                      יתרה לאחר תנועה
+                    <th>חיוב</th>
+                    <th>התקבל</th>
+                    <th title="כמה מהתשלום נסגר בפועל מול החוב. לא סכום שהתקבל.">
+                      נסגר מהחוב
                     </th>
-                    <th title="כמה נשאר היום לגבייה על הזמנה זו, אחרי תשלומים ומשיכת חוב.">
-                      נשאר להזמנה
+                    <th>עודף</th>
+                    <th title="חוב פתוח מיד לאחר התשלום: max(0, חוב לפני − נסגר מהחוב). בהזמנה — יתרה אחרי החיוב.">
+                      חוב פתוח אחרי
                     </th>
+                    <th>פעולה</th>
                   </tr>
                 </thead>
                 <tbody>
                   {ledgerLoading ? (
                     <tr>
-                      <td colSpan={manualPdfMode ? 8 : 7}>טוען…</td>
+                      <td colSpan={manualPdfMode ? 10 : 9}>טוען…</td>
                     </tr>
                   ) : !ledger || (ledger.rows ?? []).length === 0 ? (
                     <tr>
-                      <td colSpan={manualPdfMode ? 8 : 7}>אין תנועות בטווח.</td>
+                      <td colSpan={manualPdfMode ? 10 : 9}>אין תנועות בטווח.</td>
                     </tr>
                   ) : displayLedgerRows.length === 0 ? (
                     <tr>
-                      <td colSpan={manualPdfMode ? 8 : 7}>אין תנועות בסינון הנוכחי.</td>
+                      <td colSpan={manualPdfMode ? 10 : 9}>אין תנועות בסינון הנוכחי.</td>
                     </tr>
                   ) : (
                     (displayLedgerRows ?? []).map((r) => {
@@ -1309,6 +1324,7 @@ export function CustomerCardWindowBody({
                             dir="ltr"
                             className={[
                               "adm-ledger-payment-cell",
+                              isPayment && paymentNum > 0 ? "adm-ledger-received" : "",
                               isCommissionClosure ? "adm-ledger-closure-cell" : "",
                             ]
                               .filter(Boolean)
@@ -1319,19 +1335,73 @@ export function CustomerCardWindowBody({
                                 <span className="adm-ledger-closure-delta-lbl">יתרת עמלה</span>
                                 {fmtUsd(r.commissionAfterUsd ?? "0")}
                               </span>
+                            ) : isPayment && !isCancelledPayment ? (
+                              formatLedgerPaymentTotalUsd(
+                                r.paymentReconciliation
+                                  ? r.paymentReconciliation.receivedAmount.toFixed(2)
+                                  : (r.paymentDetail?.totalUsd ?? r.paymentUsd),
+                              )
                             ) : isBalanceReset ? (
                               fmtUsd(r.paymentUsd)
-                            ) : paymentNum > 0 ? (
-                              formatLedgerPaymentTotalUsd(r.paymentDetail?.totalUsd ?? r.paymentUsd)
                             ) : (
                               "—"
                             )}
                           </td>
-                          <td dir="ltr">{formatLedgerRunningBalance(r.balanceUsd)}</td>
-                          <td dir="ltr">
-                            {r.kind === "ORDER" && !r.isDebtWithdrawal && r.orderOpenRemainingUsd != null
-                              ? fmtUsd(r.orderOpenRemainingUsd)
+                          <td dir="ltr" className={isPayment && (r.paymentReconciliation?.appliedToDebt ?? 0) > 0.005 ? "adm-ledger-applied" : ""}>
+                            {isPayment && r.paymentReconciliation && r.paymentReconciliation.appliedToDebt > 0.005
+                              ? fmtUsd(r.paymentReconciliation.appliedToDebt.toFixed(2))
                               : "—"}
+                          </td>
+                          <td dir="ltr">
+                            {isPayment && r.paymentReconciliation && r.paymentReconciliation.surplusAmount > 0.005 ? (
+                              <span
+                                className={[
+                                  "adm-ledger-surplus",
+                                  r.paymentReconciliation.surplusDestination === "commission"
+                                    ? "adm-ledger-surplus--commission"
+                                    : r.paymentReconciliation.surplusDestination === "credit"
+                                      ? "adm-ledger-surplus--credit"
+                                      : "",
+                                ]
+                                  .filter(Boolean)
+                                  .join(" ")}
+                              >
+                                {fmtUsd(r.paymentReconciliation.surplusAmount.toFixed(2))}
+                                {surplusDestinationLabelHe(r.paymentReconciliation.surplusDestination) ? (
+                                  <span className="adm-ledger-surplus-badge">
+                                    {surplusDestinationLabelHe(r.paymentReconciliation.surplusDestination)}
+                                  </span>
+                                ) : null}
+                              </span>
+                            ) : (
+                              "—"
+                            )}
+                          </td>
+                          <td
+                            dir="ltr"
+                            className={
+                              parseMoneyStringOrZero(ledgerRowOpenDebtAfterUsd(r)) > 0.005
+                                ? "adm-ledger-open-after--debt"
+                                : "adm-ledger-open-after--cleared"
+                            }
+                          >
+                            {formatLedgerRunningBalance(ledgerRowOpenDebtAfterUsd(r))}
+                          </td>
+                          <td className="adm-ledger-action-cell">
+                            {hasDetail && !manualPdfMode ? (
+                              <button
+                                type="button"
+                                className="adm-btn adm-btn--ghost adm-btn--xs"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void onLedgerTableRowActivate(r);
+                                }}
+                              >
+                                פירוט
+                              </button>
+                            ) : (
+                              "—"
+                            )}
                           </td>
                         </tr>
                       );
@@ -1381,6 +1451,16 @@ export function CustomerCardWindowBody({
           {ledgerGateToast}
         </div>
       ) : null}
+      <CustomerLedgerCustomerPdfModal
+        open={customerPdfOpen}
+        meta={exportMeta}
+        ledger={ledger}
+        onClose={() => setCustomerPdfOpen(false)}
+        onToast={(m) => {
+          setLedgerGateToast(m);
+          window.setTimeout(() => setLedgerGateToast(null), 3800);
+        }}
+      />
       <CommissionBalancePopover
         open={commissionPopoverOpen}
         customerId={customerId}
