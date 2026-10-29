@@ -136,6 +136,103 @@ export function computeOrderBalanceResetRows(params: {
   return rows;
 }
 
+export type CappedBalanceResetResult = {
+  rows: OrderBalanceResetRow[];
+  rawShortfallUsd: number;
+  applicableShortfallUsd: number;
+  wasCapped: boolean;
+  excludedShortfallUsd: number;
+};
+
+function shortfallAmount(row: OrderBalanceResetRow): number {
+  if (row.calc.adjustmentType !== "SHORTFALL") return 0;
+  return roundMoney2(Math.abs(row.calc.balanceBeforeUsd));
+}
+
+function sortRowsByPriority(
+  rows: OrderBalanceResetRow[],
+  orderPriorityIds?: string[],
+): OrderBalanceResetRow[] {
+  if (!orderPriorityIds?.length) return rows;
+  const rank = new Map(orderPriorityIds.map((id, i) => [id, i]));
+  return [...rows].sort((a, b) => {
+    const ra = rank.get(a.orderId) ?? 9999;
+    const rb = rank.get(b.orderId) ?? 9999;
+    return ra - rb;
+  });
+}
+
+/**
+ * מגביל איפוס shortfall לתקרת חוב נטו לגבייה (CURRENT / PREVIEW).
+ * לא ממציא הקצאות — partial רק על שורה אחרונה שנחתכה.
+ */
+export function capOrderBalanceResetRowsToNetCollectible(
+  rows: OrderBalanceResetRow[],
+  maxShortfallUsd: number,
+  orderPriorityIds?: string[],
+): CappedBalanceResetResult {
+  const cap = roundMoney2(Math.max(0, maxShortfallUsd));
+  let remaining = cap;
+  let rawShortfall = 0;
+  let applicableShortfall = 0;
+  const out: OrderBalanceResetRow[] = [];
+
+  for (const row of sortRowsByPriority(rows, orderPriorityIds)) {
+    if (row.calc.adjustmentType === "OVERPAYMENT" || row.calc.adjustmentType === "EXACT") {
+      out.push(row);
+      continue;
+    }
+    const need = shortfallAmount(row);
+    rawShortfall = roundMoney2(rawShortfall + need);
+    if (remaining <= BALANCE_RESET_TOLERANCE_USD) continue;
+
+    if (need <= remaining + BALANCE_RESET_TOLERANCE_USD) {
+      out.push(row);
+      applicableShortfall = roundMoney2(applicableShortfall + need);
+      remaining = roundMoney2(remaining - need);
+      continue;
+    }
+
+    const partial = remaining;
+    const effectivePaid = roundMoney2(row.paidUsd + (need - partial));
+    const calc = calculateBalanceReset({
+      totalBeforeUsd: row.totalBeforeUsd,
+      paidUsd: effectivePaid,
+      commissionBeforeUsd: row.commissionBeforeUsd,
+    });
+    out.push({
+      ...row,
+      paidUsd: effectivePaid,
+      calc,
+    });
+    applicableShortfall = roundMoney2(applicableShortfall + partial);
+    remaining = 0;
+  }
+
+  const excluded = roundMoney2(Math.max(0, rawShortfall - applicableShortfall));
+  return {
+    rows: out,
+    rawShortfallUsd: rawShortfall,
+    applicableShortfallUsd: applicableShortfall,
+    wasCapped: excluded > BALANCE_RESET_TOLERANCE_USD,
+    excludedShortfallUsd: excluded,
+  };
+}
+
+/** מסנן שורות shortfall לפי תקרת חוב נטו — overpayment נשאר ללא שינוי. */
+export function filterShortfallRowsByNetCollectibleCap(
+  rows: OrderBalanceResetRow[],
+  maxShortfallUsd: number,
+  orderPriorityIds?: string[],
+): OrderBalanceResetRow[] {
+  const cap = roundMoney2(Math.max(0, maxShortfallUsd));
+  const overpay = rows.filter((r) => r.calc.adjustmentType === "OVERPAYMENT");
+  const shortfall = rows.filter((r) => r.calc.adjustmentType === "SHORTFALL");
+  if (shortfall.length === 0) return rows;
+  const capped = capOrderBalanceResetRowsToNetCollectible(shortfall, cap, orderPriorityIds);
+  return [...overpay, ...capped.rows];
+}
+
 export function summarizeOrderBalanceResetRows(rows: OrderBalanceResetRow[]): OrderBalanceResetSummary {
   let totalShortfallUsd = 0;
   let totalOverpaymentUsd = 0;

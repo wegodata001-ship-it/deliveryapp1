@@ -179,7 +179,7 @@ export function PaymentMethodControlModal({
           />
           {(planningAdjustmentGapUsd ?? 0) > 0.01 ? (
             <SummaryCard
-              label="הפרש להתאמת תכנון"
+              label="הפרש תכנון מול חוב נטו (PMC)"
               value={fmtMethodAmount("USD", planningAdjustmentGapUsd ?? 0)}
             />
           ) : null}
@@ -213,6 +213,12 @@ export function PaymentMethodControlModal({
             />
           ) : null}
         </section>
+        {(planningAdjustmentGapUsd ?? 0) > 0.01 ? (
+          <p className="pmc-planning-hint">
+            אמצעי תשלום מתוכננים (PMC) משקפים תכנון וסכומים לפי breakdown — לא ספר חובות נוסף.
+            חוב נטו לגבייה (CURRENT) הוא התקרה לקליטה ולאיפוס יתרה.
+          </p>
+        ) : null}
 
         <section className="pmc-method-summary" aria-label="סיכום לפי אמצעי תשלום">
           <h3 className="pmc-method-summary__title">סיכום לפי אמצעי תשלום</h3>

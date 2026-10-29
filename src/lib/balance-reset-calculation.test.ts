@@ -11,6 +11,7 @@ import {
   pickOverpaymentCreditsToCancel,
   summarizeOrderBalanceResetRows,
   computeOrderBalanceResetRows,
+  capOrderBalanceResetRowsToNetCollectible,
 } from "@/lib/balance-reset-calculation";
 
 describe("QA-1 — חוסר עם עמלה מספיקה", () => {
@@ -228,6 +229,26 @@ describe("QA-14 — סטטוס הזמנה", () => {
     for (const c of cases) {
       assert.equal(calculateBalanceReset(c).balanceAfterUsd, 0);
     }
+  });
+});
+
+describe("QA-15 — תקרת איפוס לפי חוב נטו", () => {
+  it("gross week shortfall capped to net collectible remainder", () => {
+    const rows = computeOrderBalanceResetRows({
+      orders: [
+        { id: "a", totalAmountUsd: 1000, dbPaidUsd: 0, commissionUsd: 10 },
+        { id: "b", totalAmountUsd: 500, dbPaidUsd: 0, commissionUsd: 5 },
+      ],
+      allocationByOrderId: new Map([["a", 400], ["b", 0]]),
+      unallocatedUsd: 0,
+      lastAllocatedOrderId: "a",
+    });
+    const raw = summarizeOrderBalanceResetRows(rows);
+    assert.equal(raw.totalShortfallUsd, 1100);
+    const capped = capOrderBalanceResetRowsToNetCollectible(rows, 524.33, ["a", "b"]);
+    assert.equal(capped.applicableShortfallUsd, 524.33);
+    assert.equal(capped.wasCapped, true);
+    assert.equal(capped.excludedShortfallUsd, 575.67);
   });
 });
 

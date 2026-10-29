@@ -117,9 +117,16 @@ import {
   balanceResetLedgerLabel,
   buildOrderBalanceResetAuditPayload,
   calculateBalanceReset,
+  filterShortfallRowsByNetCollectibleCap,
   isBalanceResetStillApplicable,
   pickOverpaymentCreditsToCancel,
+  type OrderBalanceResetRow,
 } from "@/lib/balance-reset-calculation";
+import {
+  resolveBalanceResetShortfallCapUsd,
+  resolveNetCollectibleUsd,
+} from "@/lib/customer-collectible-reconciliation";
+import { getCustomerAccountBalances } from "@/lib/customer-account-balances";
 import { CUSTOMER_CREDIT_SURPLUS_NOTE_PREFIX } from "@/lib/cash-control-internal-payments";
 import { creditSurplusSlicesFromExistingAllocation } from "@/lib/customer-credit-method";
 import {
@@ -1348,6 +1355,22 @@ export async function savePaymentUpdatedAction(
     return { ok: false, error: "אין הרשאת מנהל לאיפוס יתרה" };
   }
 
+  let balanceResetMaxShortfallUsd: number | undefined;
+  if (form.applyCustomerBalanceReset && !form.applyCustomerBalanceResetFromCredit) {
+    const booksBeforePayment = await getCustomerAccountBalances(cid, debtScope);
+    const netBeforePayment = resolveNetCollectibleUsd({
+      currentOpenDebtUsd: booksBeforePayment.openDebtUsd,
+      weekScopedOrderRemainingUsd: customerOpenDebtUsd,
+      ssotLoaded: true,
+      hasEligibleOrderSet: true,
+    });
+    balanceResetMaxShortfallUsd = resolveBalanceResetShortfallCapUsd({
+      netCollectibleBeforeUsd: netBeforePayment,
+      draftPaymentAppliedToDebtUsd: receivedSplit.debtApplied,
+      pendingCreditApplyUsd: 0,
+    });
+  }
+
   try {
     await prisma.$transaction(async (tx) => {
       if (pendingAutoAdjustChanges.length > 0) {
@@ -1956,6 +1979,7 @@ export async function savePaymentUpdatedAction(
           customerId: cid,
           weekCode,
           userId: me.id,
+          maxShortfallUsd: balanceResetMaxShortfallUsd,
           paymentCaptureContext: {
             primaryPaymentCode: primaryCode,
             paymentNumber: allocated.paymentNumber,
@@ -2624,6 +2648,8 @@ async function applyCustomerOutstandingBalanceResetInTx(
     };
     ledgerLabel?: string | null;
     commissionBalanceBeforeUsd?: number | null;
+    /** תקרת shortfall — חוב נטו לגבייה אחרי תשלום/זכות; נאכף מחדש בתוך ה-tx */
+    maxShortfallUsd?: number | null;
   },
 ): Promise<{
   totalResetUsd: string;
@@ -2753,6 +2779,75 @@ async function applyCustomerOutstandingBalanceResetInTx(
     });
     if (creditOnly) return creditOnly;
     throw new Error("אין יתרה פתוחה לאיפוס");
+  }
+
+  let effectiveMaxShortfall = params.maxShortfallUsd;
+  if (effectiveMaxShortfall == null) {
+    const wc =
+      normalizeWorkCountryCode(params.paymentCaptureContext?.payWorkCountry ?? DEFAULT_WORK_COUNTRY) ??
+      DEFAULT_WORK_COUNTRY;
+    const scope = openDebtScopeForWorkCountry(wc);
+    const books = await getCustomerAccountBalances(cid, scope);
+    const weekScoped = roundMoney2(
+      orderResets
+        .filter((r) => r.calc.adjustmentType === "SHORTFALL")
+        .reduce((acc, r) => acc + Math.abs(r.calc.balanceBeforeUsd), 0),
+    );
+    const net = resolveNetCollectibleUsd({
+      currentOpenDebtUsd: books.openDebtUsd,
+      weekScopedOrderRemainingUsd: weekScoped,
+      ssotLoaded: true,
+      hasEligibleOrderSet: true,
+    });
+    effectiveMaxShortfall = net;
+  }
+
+  if (
+    typeof effectiveMaxShortfall === "number" &&
+    Number.isFinite(effectiveMaxShortfall)
+  ) {
+    const priorityIds = orders.map((o) => o.id);
+    const rowSnapshot: OrderBalanceResetRow[] = orderResets.map((r) => ({
+      orderId: r.orderId,
+      totalBeforeUsd: Number(r.totalBeforeUsd),
+      paidUsd: Number(r.paidUsd),
+      commissionBeforeUsd: Number(r.commissionBeforeUsd),
+      calc: r.calc,
+    }));
+    const cappedRows = filterShortfallRowsByNetCollectibleCap(
+      rowSnapshot,
+      effectiveMaxShortfall,
+      priorityIds,
+    );
+    const cappedById = new Map(cappedRows.map((r) => [r.orderId, r]));
+    const nextResets: typeof orderResets = [];
+    for (const row of orderResets) {
+      if (row.calc.adjustmentType === "OVERPAYMENT") {
+        nextResets.push(row);
+        continue;
+      }
+      if (row.calc.adjustmentType !== "SHORTFALL") continue;
+      const capped = cappedById.get(row.orderId);
+      if (!capped) continue;
+      const paid = new Prisma.Decimal(capped.paidUsd.toFixed(4));
+      const plan = planOrderBalanceReset({
+        amountUsd: row.amountUsd,
+        commissionUsd: row.commissionBeforeUsd,
+        totalUsd: row.totalBeforeUsd,
+        paidUsd: paid,
+      });
+      nextResets.push({
+        ...row,
+        paidUsd: paid,
+        calc: capped.calc,
+        plan,
+      });
+    }
+    orderResets.length = 0;
+    orderResets.push(...nextResets);
+    if (orderResets.length === 0) {
+      throw new Error("אין יתרה מאושרת לאיפוס לפי חוב נטו לגבייה");
+    }
   }
 
   if (
@@ -3371,6 +3466,29 @@ export async function resetCustomerOutstandingBalancesAction(input: {
   const weekCode = input.weekCode?.trim() || null;
   const orderIds = (input.orderIds ?? []).map((id) => id.trim()).filter(Boolean);
 
+  let standaloneResetMaxShortfallUsd: number | undefined;
+  try {
+    const scope = openDebtScopeForWorkCountry(DEFAULT_WORK_COUNTRY);
+    const books = await getCustomerAccountBalances(cid, scope);
+    const intakeOrders = await loadPaymentIntakeOrdersForCustomer({
+      customerId: cid,
+      weekCodeForOpenBalances: weekCode ?? undefined,
+      paymentWorkCountryRaw: DEFAULT_WORK_COUNTRY,
+    });
+    const weekScoped =
+      intakeOrders.ok === true
+        ? sumPaymentIntakeWeekScopedRemainingUsd(intakeOrders.orders)
+        : roundMoney2(Math.max(0, books.openDebtUsd));
+    standaloneResetMaxShortfallUsd = resolveNetCollectibleUsd({
+      currentOpenDebtUsd: books.openDebtUsd,
+      weekScopedOrderRemainingUsd: weekScoped,
+      ssotLoaded: true,
+      hasEligibleOrderSet: true,
+    });
+  } catch {
+    standaloneResetMaxShortfallUsd = undefined;
+  }
+
   try {
     const result = await prisma.$transaction(async (tx) => {
       const resetResult = await applyCustomerOutstandingBalanceResetInTx(tx, {
@@ -3379,6 +3497,7 @@ export async function resetCustomerOutstandingBalancesAction(input: {
         userId: me.id,
         orderIds,
         allowNegativeCommission,
+        maxShortfallUsd: standaloneResetMaxShortfallUsd,
         paymentCaptureContext: input.paymentCaptureContext ?? undefined,
         ledgerLabel: input.ledgerLabel,
         commissionBalanceBeforeUsd: input.commissionBalanceBeforeUsd,

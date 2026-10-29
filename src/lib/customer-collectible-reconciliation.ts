@@ -90,3 +90,16 @@ export function buildCustomerCollectibleReconciliation(
     ssotLoaded,
   };
 }
+
+/** תקרת shortfall לאיפוס יתרה — אחרי תשלום טיוטה / קיזוז זכות (PREVIEW). */
+export function resolveBalanceResetShortfallCapUsd(params: {
+  netCollectibleBeforeUsd: number;
+  draftPaymentAppliedToDebtUsd: number;
+  pendingCreditApplyUsd?: number;
+}): number {
+  const net = roundMoney2(Math.max(0, params.netCollectibleBeforeUsd));
+  const credit = roundMoney2(Math.max(0, params.pendingCreditApplyUsd ?? 0));
+  const afterCredit = roundMoney2(Math.max(0, net - credit));
+  const pay = roundMoney2(Math.max(0, params.draftPaymentAppliedToDebtUsd));
+  return roundMoney2(Math.max(0, afterCredit - pay));
+}

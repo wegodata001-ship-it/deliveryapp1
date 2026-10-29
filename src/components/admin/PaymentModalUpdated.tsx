@@ -99,6 +99,7 @@ import { PaymentIntakeBalanceReconciliationModal } from "@/components/admin/Paym
 import type { PaymentIntakeBalanceBridge } from "@/lib/payment-intake-balance-bridge-shared";
 import {
   buildCustomerCollectibleReconciliation,
+  resolveBalanceResetShortfallCapUsd,
   resolveNetCollectibleUsd,
 } from "@/lib/customer-collectible-reconciliation";
 import {
@@ -109,8 +110,10 @@ import {
 import { planCommissionDebtClosureFromNumbers } from "@/lib/commission-debt-closure";
 import {
   BALANCE_RESET_TOLERANCE_USD,
+  capOrderBalanceResetRowsToNetCollectible,
   computeOrderBalanceResetRows,
   summarizeOrderBalanceResetRows,
+  type CappedBalanceResetResult,
 } from "@/lib/balance-reset-calculation";
 import {
   fetchOrderForPaymentContextAction,
@@ -887,55 +890,6 @@ export function PaymentModalUpdated({
    */
   const allowedMethods = null;
 
-  const customerBalanceResetPreview = useMemo((): CommissionResetOrderPreview[] => {
-    if (!customerBalanceResetPending) return [];
-    const allocated = allocatePaymentAcrossOrders(
-      toPaymentIntakeBases(orders),
-      paymentApplyUsd,
-      prioritizedSet,
-    );
-    const allocPairs = [...allocated.byOrderId.entries()].filter(([, amountUsd]) => amountUsd > BALANCE_RESET_TOLERANCE_USD);
-    const lastAllocOrderId = allocPairs.length > 0 ? allocPairs[allocPairs.length - 1][0] : null;
-    return computeOrderBalanceResetRows({
-      orders: orders.map((o) => ({
-        id: o.id,
-        totalAmountUsd: Number(o.totalAmountUsd) || 0,
-        dbPaidUsd: Number(o.dbPaidUsd) || 0,
-        commissionUsd: Number(o.commissionUsd) || 0,
-      })),
-      allocationByOrderId: allocated.byOrderId,
-      unallocatedUsd: allocated.unallocatedUsd,
-      lastAllocatedOrderId: lastAllocOrderId,
-    }).map((row) => ({
-      id: row.orderId,
-      totalAmountUsd: row.totalBeforeUsd,
-      dbPaidUsd: row.paidUsd,
-      commissionUsd: row.commissionBeforeUsd,
-    }));
-  }, [customerBalanceResetPending, orders, paymentApplyUsd, prioritizedSet]);
-
-  const orderBalanceResetSummary = useMemo(() => {
-    const allocated = allocatePaymentAcrossOrders(
-      toPaymentIntakeBases(orders),
-      paymentApplyUsd,
-      prioritizedSet,
-    );
-    const allocPairs = [...allocated.byOrderId.entries()].filter(([, amountUsd]) => amountUsd > BALANCE_RESET_TOLERANCE_USD);
-    const lastAllocOrderId = allocPairs.length > 0 ? allocPairs[allocPairs.length - 1][0] : null;
-    const rows = computeOrderBalanceResetRows({
-      orders: orders.map((o) => ({
-        id: o.id,
-        totalAmountUsd: Number(o.totalAmountUsd) || 0,
-        dbPaidUsd: Number(o.dbPaidUsd) || 0,
-        commissionUsd: Number(o.commissionUsd) || 0,
-      })),
-      allocationByOrderId: allocated.byOrderId,
-      unallocatedUsd: allocated.unallocatedUsd,
-      lastAllocatedOrderId: lastAllocOrderId,
-    });
-    return summarizeOrderBalanceResetRows(rows);
-  }, [orders, paymentApplyUsd, prioritizedSet]);
-
   const matched = useMemo(() => {
     return matchPaymentToOrders(bases, paymentApplyUsd, prioritizedSet);
   }, [bases, paymentApplyUsd, prioritizedSet]);
@@ -1179,6 +1133,85 @@ export function PaymentModalUpdated({
     customerBalanceResetPending,
   });
 
+  const orderBalanceResetBundle = useMemo(() => {
+    const allocated = allocatePaymentAcrossOrders(
+      toPaymentIntakeBases(orders),
+      paymentApplyUsd,
+      prioritizedSet,
+    );
+    const allocPairs = [...allocated.byOrderId.entries()].filter(
+      ([, amountUsd]) => amountUsd > BALANCE_RESET_TOLERANCE_USD,
+    );
+    const lastAllocOrderId = allocPairs.length > 0 ? allocPairs[allocPairs.length - 1][0] : null;
+    const rawRows = computeOrderBalanceResetRows({
+      orders: orders.map((o) => ({
+        id: o.id,
+        totalAmountUsd: Number(o.totalAmountUsd) || 0,
+        dbPaidUsd: Number(o.dbPaidUsd) || 0,
+        commissionUsd: Number(o.commissionUsd) || 0,
+      })),
+      allocationByOrderId: allocated.byOrderId,
+      unallocatedUsd: allocated.unallocatedUsd,
+      lastAllocatedOrderId: lastAllocOrderId,
+    });
+    const rawSummary = summarizeOrderBalanceResetRows(rawRows);
+    const netCollectibleForCap = resolveNetCollectibleUsd({
+      currentOpenDebtUsd,
+      weekScopedOrderRemainingUsd: weekScopedRemainingUsd,
+      ssotLoaded: currentOpenDebtUsd != null,
+      hasEligibleOrderSet: true,
+    });
+    const creditAvail =
+      (serverCreditBalanceUsd ?? 0) > 0.01 ? roundMoney2(serverCreditBalanceUsd ?? 0) : 0;
+    const pendingCreditForCap = computePendingCreditApplyUsd({
+      availableCreditUsd: creditAvail,
+      eligibleAmountToPayUsd: roundMoney2(Math.max(0, netCollectibleForCap)),
+      useExistingCredit: balanceResetFromCredit,
+    });
+    const draftPaymentUsd = isHistoricalPaymentView
+      ? 0
+      : isExistingPayment
+        ? Math.max(0, paymentApplyUsd)
+        : Math.max(0, totals.totalUsd);
+    const afterCreditDebt = roundMoney2(Math.max(0, netCollectibleForCap - pendingCreditForCap));
+    const paymentAppliedToDebtUsd = roundMoney2(Math.min(draftPaymentUsd, afterCreditDebt));
+    const shortfallCapUsd = resolveBalanceResetShortfallCapUsd({
+      netCollectibleBeforeUsd: netCollectibleForCap,
+      draftPaymentAppliedToDebtUsd: paymentAppliedToDebtUsd,
+      pendingCreditApplyUsd: pendingCreditForCap,
+    });
+    const orderPriorityIds = orders.map((o) => o.id);
+    const capMeta: CappedBalanceResetResult = capOrderBalanceResetRowsToNetCollectible(
+      rawRows,
+      shortfallCapUsd,
+      orderPriorityIds,
+    );
+    const cappedSummary = summarizeOrderBalanceResetRows(capMeta.rows);
+    return {
+      rawSummary,
+      cappedSummary,
+      capMeta,
+      shortfallCapUsd,
+      netCollectibleForCap,
+      weekGrossShortfallUsd: rawSummary.totalShortfallUsd,
+      paymentAppliedToDebtUsd,
+      pendingCreditForCap,
+    };
+  }, [
+    orders,
+    paymentApplyUsd,
+    prioritizedSet,
+    currentOpenDebtUsd,
+    weekScopedRemainingUsd,
+    serverCreditBalanceUsd,
+    balanceResetFromCredit,
+    isHistoricalPaymentView,
+    isExistingPayment,
+    totals.totalUsd,
+  ]);
+
+  const orderBalanceResetSummary = orderBalanceResetBundle.cappedSummary;
+
   /** יתרה שנותרת על הזמנות לאחר הקצאת התשלום הנוכחי (חוסר בלבד — תאימות לאחור) */
   const orderRemainderAfterPaymentUsd = useMemo(() => {
     return roundMoney2(orderBalanceResetSummary.totalShortfallUsd);
@@ -1190,10 +1223,15 @@ export function PaymentModalUpdated({
 
   const hasOrderPaymentDifference = orderBalanceResetSummary.hasEligibleDifference;
 
-  const customerBalanceResetPreviewForLive = useMemo(
-    () => (customerBalanceResetPending && !balanceResetFromCredit ? customerBalanceResetPreview : []),
-    [customerBalanceResetPending, balanceResetFromCredit, customerBalanceResetPreview],
-  );
+  const customerBalanceResetPreviewForLive = useMemo(() => {
+    if (!customerBalanceResetPending || balanceResetFromCredit) return [];
+    return orderBalanceResetSummary.rows.map((row) => ({
+      id: row.orderId,
+      totalAmountUsd: row.totalBeforeUsd,
+      dbPaidUsd: row.paidUsd,
+      commissionUsd: row.commissionBeforeUsd,
+    }));
+  }, [customerBalanceResetPending, balanceResetFromCredit, orderBalanceResetSummary.rows]);
   /** מחשבון עסקי חי — חיובים / עמלות / תשלומים / יתרה (כולל תשלום בטופס + איפוס עמלה) */
   const liveIntakeTotals = useMemo(
     () =>
@@ -4949,50 +4987,65 @@ export function PaymentModalUpdated({
                   aria-label="יתרות קליטת תשלום"
                 >
                   <div className="payment-intake-balance-metrics__item">
-                    <span className="payment-intake-balance-metrics__k">יתרה נטו לגבייה</span>
+                    <span className="payment-intake-balance-metrics__k">
+                      חוב נטו לפני תשלום (CURRENT)
+                    </span>
                     <strong className="payment-intake-balance-metrics__v payment-intake-balance-metrics__v--debt" dir="ltr">
                       {currentOpenDebtUsd == null ? "…" : fmtUsdDisplay(netCollectibleUsd)}
                     </strong>
                   </div>
                   <div className="payment-intake-balance-metrics__item">
-                    <span className="payment-intake-balance-metrics__k">חוב CURRENT</span>
+                    <span className="payment-intake-balance-metrics__k">תשלום נוכחי (PREVIEW)</span>
                     <strong className="payment-intake-balance-metrics__v" dir="ltr">
-                      {currentOpenDebtUsd == null
-                        ? "…"
-                        : fmtUsdDisplay(Math.max(0, currentOpenDebtUsd))}
+                      {fmtUsdDisplay(
+                        isHistoricalPaymentView
+                          ? 0
+                          : isExistingPayment
+                            ? Math.max(0, paymentApplyUsd)
+                            : Math.max(0, totals.totalUsd),
+                      )}
                     </strong>
                   </div>
                   <div className="payment-intake-balance-metrics__item">
                     <span className="payment-intake-balance-metrics__k">
-                      {PAYMENT_INTAKE_WEEK_ORDER_DEBT_LABEL}
+                      חוב צפוי אחרי תשלום (PREVIEW)
                     </span>
-                    <strong className="payment-intake-balance-metrics__v" dir="ltr">
-                      {formatIntakeWeekOrderDebtUsdLine(weekScopedRemainingUsd)}
+                    <strong className="payment-intake-balance-metrics__v payment-intake-balance-metrics__v--debt" dir="ltr">
+                      {currentOpenDebtUsd == null
+                        ? "…"
+                        : fmtUsdDisplay(Math.max(0, paymentPreview.remainingDebt))}
                     </strong>
                   </div>
                   <div className="payment-intake-balance-metrics__item">
-                    <span className="payment-intake-balance-metrics__k">יתרות זכות בחישוב CURRENT</span>
+                    <span className="payment-intake-balance-metrics__k">יתרת זכות זמינה (CURRENT)</span>
                     <strong
                       className="payment-intake-balance-metrics__v payment-intake-balance-metrics__v--credit"
                       dir="ltr"
                     >
-                      {balanceBridgeLoading
-                        ? "…"
-                        : balanceBridge?.creditGrossUsd != null
-                          ? fmtUsdDisplay(balanceBridge.creditGrossUsd)
-                          : "נדרשת בדיקת התאמה"}
+                      {fmtUsdDisplay(displayCreditBalanceAfterApplyUsd)}
                     </strong>
                   </div>
                   <div className="payment-intake-balance-metrics__item">
-                    <span className="payment-intake-balance-metrics__k">יתרות מחוץ לשבוע הנבחר</span>
+                    <span className="payment-intake-balance-metrics__k">יתרת עמלות</span>
                     <strong className="payment-intake-balance-metrics__v" dir="ltr">
-                      {balanceBridgeLoading
-                        ? "…"
-                        : balanceBridge?.outsideWeekOrderRemainingUsd != null
-                          ? fmtUsdDisplay(balanceBridge.outsideWeekOrderRemainingUsd)
-                          : "נדרשת בדיקת התאמה"}
+                      {fmtUsdDisplay(displayCommissionBalanceUsd)}
                     </strong>
                   </div>
+                  <p className="payment-intake-balance-metrics__footnote">
+                    {PAYMENT_INTAKE_WEEK_ORDER_DEBT_LABEL} (WEEK):{" "}
+                    <strong dir="ltr">{formatIntakeWeekOrderDebtUsdLine(weekScopedRemainingUsd)}</strong>
+                    {" — "}
+                    סכום יתרות ההזמנות בשבוע; אינו החוב הנטו לגבייה.
+                    {collectibleReconciliationLive.weekVsNetCollectibleGapUsd > 0.01 ? (
+                      <>
+                        {" "}
+                        הפרש CURRENT/FIFO:{" "}
+                        <span dir="ltr">
+                          {fmtUsdDisplay(collectibleReconciliationLive.weekVsNetCollectibleGapUsd)}
+                        </span>
+                      </>
+                    ) : null}
+                  </p>
                   <button
                     type="button"
                     className="payment-intake-balance-metrics__btn"
@@ -5135,6 +5188,17 @@ export function PaymentModalUpdated({
                   }}
                 />
               ) : null}
+              {orders.some((o) => (o.orderNumber ?? "").trim() === "TR-140-0001") ? (
+                <div
+                  className="payment-intake-data-exception"
+                  role="status"
+                  dir="rtl"
+                  data-testid="payment-intake-tr140-exception"
+                >
+                  חריגת נתונים: <strong dir="ltr">TR-140-0001</strong> — breakdown ישן (אוק׳ 2025).
+                  לא מתוקן אוטומטית; נדרש אישור לתיקון בשלב C.
+                </div>
+              ) : null}
               <div className="payment-modal-table-scroll" ref={tableScrollRef}>
                 <table className="payment-modal-table" dir="rtl">
                   <thead>
@@ -5146,7 +5210,7 @@ export function PaymentModalUpdated({
                       <th className="pm-num pm-th-amt">סכום מקור ($)</th>
                       <th className="pm-num pm-th-commission">עמלה ($)</th>
                       <th className="pm-num">שולם ($)</th>
-                      <th className="pm-num pm-th-total">נשאר לתשלום</th>
+                      <th className="pm-num pm-th-total">נשאר בהזמנה (WEEK)</th>
                       <th>תשלום אחרון</th>
                       <th>סטטוס</th>
                       <th className="payment-modal-th-check" aria-label="עדיפות לסגירה" />
@@ -5712,6 +5776,21 @@ export function PaymentModalUpdated({
       <BalanceResetConfirmModal
         open={resetCustomerConfirmOpen}
         rows={orderBalanceResetSummary.rows}
+        capBreakdown={{
+          netCollectibleBeforeUsd: orderBalanceResetBundle.netCollectibleForCap,
+          weekGrossShortfallUsd: orderBalanceResetBundle.weekGrossShortfallUsd,
+          weekVsNetGapUsd: roundMoney2(
+            Math.max(
+              0,
+              orderBalanceResetBundle.weekGrossShortfallUsd -
+                orderBalanceResetBundle.shortfallCapUsd,
+            ),
+          ),
+          currentPaymentUsd: orderBalanceResetBundle.paymentAppliedToDebtUsd,
+          shortfallCapUsd: orderBalanceResetBundle.shortfallCapUsd,
+          wasCapped: orderBalanceResetBundle.capMeta.wasCapped,
+          excludedShortfallUsd: orderBalanceResetBundle.capMeta.excludedShortfallUsd,
+        }}
         getOrderLabel={(orderId) => {
           const order = orders.find((o) => o.id === orderId);
           return order?.orderNumber?.trim() || orderId;

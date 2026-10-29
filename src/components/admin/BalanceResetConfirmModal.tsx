@@ -40,11 +40,22 @@ function rowBalanceClass(row: OrderBalanceResetRow): string {
   return "br-reset-amt--muted";
 }
 
+export type BalanceResetCapBreakdown = {
+  netCollectibleBeforeUsd: number;
+  weekGrossShortfallUsd: number;
+  weekVsNetGapUsd: number;
+  currentPaymentUsd: number;
+  shortfallCapUsd: number;
+  wasCapped: boolean;
+  excludedShortfallUsd: number;
+};
+
 export type BalanceResetConfirmModalProps = {
   open: boolean;
   rows: OrderBalanceResetRow[];
   getOrderLabel: (orderId: string) => string;
   canConfirm: boolean;
+  capBreakdown?: BalanceResetCapBreakdown | null;
   onCancel: () => void;
   onConfirm: () => void;
 };
@@ -54,6 +65,7 @@ export function BalanceResetConfirmModal({
   rows,
   getOrderLabel,
   canConfirm,
+  capBreakdown,
   onCancel,
   onConfirm,
 }: BalanceResetConfirmModalProps) {
@@ -115,6 +127,41 @@ export function BalanceResetConfirmModal({
           <p className="br-reset-modal__hint">
             הפעולה תסגור את היתרה ותעדכן את העמלה. לא ייווצר תשלום נוסף.
           </p>
+          {capBreakdown ? (
+            <section className="br-reset-cap-breakdown" aria-label="תקרת איפוס לפי חוב נטו">
+              <dl className="br-reset-kv br-reset-kv--compact">
+                <div className="br-reset-kv__row">
+                  <dt>חוב הזמנות ברוטו (WEEK) — אחרי תשלום</dt>
+                  <dd dir="ltr">{fmtUsd(capBreakdown.weekGrossShortfallUsd)}</dd>
+                </div>
+                <div className="br-reset-kv__row">
+                  <dt>חוב נטו לגבייה (CURRENT) — לפני תשלום</dt>
+                  <dd dir="ltr">{fmtUsd(capBreakdown.netCollectibleBeforeUsd)}</dd>
+                </div>
+                <div className="br-reset-kv__row">
+                  <dt>תשלום נוכחי (PREVIEW)</dt>
+                  <dd dir="ltr">{fmtUsd(capBreakdown.currentPaymentUsd)}</dd>
+                </div>
+                <div className="br-reset-kv__row">
+                  <dt>תקרת shortfall מותרת לאיפוס</dt>
+                  <dd className="br-reset-amt--debt" dir="ltr">
+                    {fmtUsd(capBreakdown.shortfallCapUsd)}
+                  </dd>
+                </div>
+                {capBreakdown.wasCapped ? (
+                  <div className="br-reset-kv__row">
+                    <dt>לא יאופס (מעבר לחוב נטו)</dt>
+                    <dd className="br-reset-amt--warn" dir="ltr">
+                      {fmtUsd(capBreakdown.excludedShortfallUsd)}
+                    </dd>
+                  </div>
+                ) : null}
+              </dl>
+              <p className="br-reset-modal__hint">
+                איפוס מוגבל לחוב נטו לגבייה — לא לסכום יתרות ההזמנות בשבוע.
+              </p>
+            </section>
+          ) : null}
         </header>
 
         <div className="br-reset-modal__body">

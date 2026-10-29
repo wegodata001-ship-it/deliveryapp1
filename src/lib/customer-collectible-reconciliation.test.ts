@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   buildCustomerCollectibleReconciliation,
+  resolveBalanceResetShortfallCapUsd,
   resolveNetCollectibleUsd,
 } from "@/lib/customer-collectible-reconciliation";
 import { buildPaymentPreview } from "@/lib/payment-intake-preview";
@@ -50,6 +51,15 @@ describe("customer-collectible-reconciliation", () => {
       }),
       500,
     );
+  });
+
+  it("customer 101: reset cap after $76.67 draft on $601 net", () => {
+    const cap = resolveBalanceResetShortfallCapUsd({
+      netCollectibleBeforeUsd: 601,
+      draftPaymentAppliedToDebtUsd: 76.67,
+      pendingCreditApplyUsd: 0,
+    });
+    assert.equal(cap, 524.33);
   });
 
   it("zero week remaining with eligible set → 0 collectible", () => {
