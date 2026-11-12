@@ -40,7 +40,6 @@ import {
 } from "@/lib/cash-expense-payment-method";
 import { getCashExpenseTypeLabelMap } from "@/app/admin/cash-expenses/type-service";
 import { resolveCashExpenseTypeLabel } from "@/lib/cash-expense-types";
-import { ensureCashExpenseDirectionColumn } from "@/lib/cash-expense-types.ensure";
 import { normalizeCashControlMovement } from "@/lib/cash-control-movement";
 import type {
   CashDailyDayDetailPayload,
@@ -279,7 +278,6 @@ async function loadCashControlWeekRaw(week: string): Promise<CashControlWeekRaw 
   const range = getAhWeekRange(wk);
   if (!range) return null;
 
-  await ensureCashExpenseDirectionColumn();
   const [payments, drawerRows, expenseRows] = await Promise.all([
     loadCashControlWeekPayments(wk),
     loadCashControlWeekDrawerRows(wk),
@@ -433,7 +431,6 @@ export async function loadCashControlDayDetail(input: {
   const wk = input.week.trim();
   const dateYmd = input.dateYmd.trim();
 
-  await ensureCashExpenseDirectionColumn();
   const [payments, drawerRow, expenseRows, reasonLabels] = await Promise.all([
     prisma.payment.findMany({
       where: cashControlWeekReconciliationPaymentsWhere(wk),

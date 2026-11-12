@@ -52,6 +52,7 @@ export const DOCUMENT_DOC_TYPES: { value: string; label: string }[] = [
   { value: "ID", label: "תעודת זהות" },
   { value: "FORM", label: "טופס" },
   { value: "OTHER", label: "אחר" },
+  { value: "CASH_FLOW_WEEK", label: "בקרת תזרים שבועית" },
 ];
 
 export const DOCUMENT_DOC_TYPE_LABELS: Record<string, string> = Object.fromEntries(

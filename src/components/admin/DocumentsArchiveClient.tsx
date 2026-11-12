@@ -12,6 +12,7 @@ import {
   listDocumentsAction,
   type DocumentDto,
 } from "@/app/admin/documents/actions";
+import { DocumentPreviewModal } from "@/components/admin/DocumentPreviewModal";
 
 function KindIcon({ kind }: { kind: DocumentDto["kind"] }) {
   if (kind === "image") return <ImageIcon size={15} aria-hidden />;
@@ -42,6 +43,11 @@ export function DocumentsArchiveClient({
   const [fromYmd, setFromYmd] = useState<string>("");
   const [toYmd, setToYmd] = useState<string>("");
   const [search, setSearch] = useState<string>("");
+  const [customerCode, setCustomerCode] = useState("");
+  const [orderNumber, setOrderNumber] = useState("");
+  const [paymentCode, setPaymentCode] = useState("");
+  const [source, setSource] = useState("");
+  const [preview, setPreview] = useState<DocumentDto | null>(null);
   const [docs, setDocs] = useState<DocumentDto[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -55,19 +61,23 @@ export function DocumentsArchiveClient({
       fromYmd: fromYmd || null,
       toYmd: toYmd || null,
       search: search || null,
+      customerCode: customerCode || null,
+      orderNumber: orderNumber || null,
+      paymentCode: paymentCode || null,
+      source: source === "CAMERA" || source === "UPLOAD" || source === "SYSTEM" ? source : null,
       limit: 500,
     });
     if (res.ok) setDocs(res.documents);
     else setErr(res.error);
     setLoading(false);
-  }, [entityType, docType, fromYmd, toYmd, search]);
+  }, [entityType, docType, fromYmd, toYmd, search, customerCode, orderNumber, paymentCode, source]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
   async function onDelete(id: string) {
-    if (!window.confirm("למחוק את המסמך?")) return;
+    if (!window.confirm("למחוק את המסמך? הפעולה תתועד ביומן.")) return;
     const res = await deleteDocumentAction(id);
     if (!res.ok) {
       setErr(res.error ?? "מחיקה נכשלה");
@@ -116,6 +126,27 @@ export function DocumentsArchiveClient({
           <span>עד תאריך</span>
           <input type="date" value={toYmd} onChange={(e) => setToYmd(e.target.value)} dir="ltr" />
         </label>
+        <label className="adm-docarc__f">
+          <span>קוד לקוח</span>
+          <input value={customerCode} onChange={(e) => setCustomerCode(e.target.value)} dir="ltr" />
+        </label>
+        <label className="adm-docarc__f">
+          <span>מספר הזמנה</span>
+          <input value={orderNumber} onChange={(e) => setOrderNumber(e.target.value)} dir="ltr" />
+        </label>
+        <label className="adm-docarc__f">
+          <span>מספר תשלום</span>
+          <input value={paymentCode} onChange={(e) => setPaymentCode(e.target.value)} dir="ltr" />
+        </label>
+        <label className="adm-docarc__f">
+          <span>מקור</span>
+          <select value={source} onChange={(e) => setSource(e.target.value)}>
+            <option value="">הכל</option>
+            <option value="UPLOAD">העלאה</option>
+            <option value="CAMERA">מצלמה</option>
+            <option value="SYSTEM">מערכת</option>
+          </select>
+        </label>
         <label className="adm-docarc__f adm-docarc__f--grow">
           <span>חיפוש חופשי</span>
           <span className="adm-docarc__searchwrap">
@@ -136,56 +167,69 @@ export function DocumentsArchiveClient({
         <table className="adm-table-excel">
           <thead>
             <tr>
-              <th>שם קובץ</th>
+              <th>מסמך</th>
+              <th>תאריך</th>
               <th>סוג מסמך</th>
-              <th>ישות קשורה</th>
-              <th>גודל</th>
-              <th>תאריך העלאה</th>
-              <th>הועלה ע״י</th>
+              <th>לקוח</th>
+              <th>קוד לקוח</th>
+              <th>הזמנה / תשלום</th>
+              <th>שם קובץ</th>
+              <th>מקור</th>
+              <th>משתמש</th>
               <th>פעולות</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={7} className="adm-table-empty">טוען…</td>
+                <td colSpan={10} className="adm-table-empty">טוען…</td>
               </tr>
             ) : docs.length === 0 ? (
               <tr>
-                <td colSpan={7} className="adm-table-empty">לא נמצאו מסמכים.</td>
+                <td colSpan={10} className="adm-table-empty">לא נמצאו מסמכים.</td>
               </tr>
             ) : (
               docs.map((d) => (
                 <tr key={d.id}>
+                  <td dir="ltr" title={d.id}>{d.id.slice(0, 8)}</td>
+                  <td dir="ltr">{fmtDateTime(d.createdAtIso)}</td>
+                  <td>{d.docTypeLabel}</td>
+                  <td>{d.customerName ?? "—"}</td>
+                  <td dir="ltr">{d.customerCode ?? "—"}</td>
+                  <td>
+                    <span className="adm-docarc__entity">{d.entityTypeLabel}</span>
+                    <span dir="ltr">{d.recordNumber ?? "—"}</span>
+                  </td>
                   <td>
                     <span className="adm-docarc__name">
                       <span className={`adm-docs__kind adm-docs__kind--${d.kind}`}>
                         <KindIcon kind={d.kind} />
                       </span>
                       {d.fileName}
-                      {d.isAuto ? <span className="adm-docs__auto">אוטומטי</span> : null}
                     </span>
                   </td>
-                  <td>{d.docTypeLabel}</td>
-                  <td>
-                    <span className="adm-docarc__entity">{d.entityTypeLabel}</span>
-                    <span className="adm-docarc__entityid" dir="ltr">{d.entityId}</span>
-                  </td>
-                  <td dir="ltr">{d.sizeLabel}</td>
-                  <td dir="ltr">{fmtDateTime(d.createdAtIso)}</td>
+                  <td>{d.sourceLabel}</td>
                   <td>{d.uploadedByName ?? "—"}</td>
                   <td>
                     <div className="adm-docs__actions">
+                      {canDownload ? (
+                        <button type="button" className="adm-docs__iconbtn" onClick={() => setPreview(d)} title="צפייה">
+                          צפייה
+                        </button>
+                      ) : null}
                       {canDownload ? (
                         <a
                           className="adm-docs__iconbtn"
                           href={`/api/documents/${d.id}/download`}
                           target="_blank"
                           rel="noopener noreferrer"
-                          title="צפייה / הורדה"
+                          title="הורדה"
                         >
                           <Download size={15} aria-hidden />
                         </a>
+                      ) : null}
+                      {d.recordHref ? (
+                        <a className="adm-docs__iconbtn" href={d.recordHref} title="מעבר לרשומה">רשומה</a>
                       ) : null}
                       {canDelete ? (
                         <button
@@ -205,6 +249,7 @@ export function DocumentsArchiveClient({
           </tbody>
         </table>
       </div>
+      <DocumentPreviewModal document={preview} onClose={() => setPreview(null)} />
     </div>
   );
 }

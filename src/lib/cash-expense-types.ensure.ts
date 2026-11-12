@@ -1,5 +1,10 @@
 import "server-only";
 
+/**
+ * Bootstrap בלבד לנתיב שמירה.
+ * טעינת מסך קוראת את העמודה ואת הטבלה שכבר קיימות, בלי ALTER או CREATE.
+ */
+
 import { prisma } from "@/lib/prisma";
 import { ensureOnce } from "@/lib/ensure-tables-once";
 import { CASH_EXPENSE_TYPE_SEED } from "@/lib/cash-expense-types";

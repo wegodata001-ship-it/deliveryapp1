@@ -68,7 +68,7 @@ import {
 import { convertDebtUsdToIlsIncludingVat } from "@/lib/usd-balance-ils-vat";
 import { softRefreshPaymentIntakeOrders } from "@/lib/payment-intake-orders-source";
 import { PaymentDocumentRateIcons } from "@/components/admin/PaymentDocumentRateIcons";
-import { attachDraftDocumentsAction } from "@/app/admin/documents/actions";
+import { attachDraftDocumentsAction, discardDraftDocumentsAction } from "@/app/admin/documents/actions";
 import {
   PAYMENT_BUCKET_LABELS,
   type EnteredBucketUsd,
@@ -952,6 +952,17 @@ export function PaymentModalUpdated({
   const docDraftKeyRef = useRef(docDraftKey);
   docDraftKeyRef.current = docDraftKey;
   const docEntityId = savedCapturePaymentId ?? docDraftKey;
+  const paymentDocsCommittedRef = useRef(Boolean(savedCapturePaymentId));
+  useEffect(() => {
+    if (savedCapturePaymentId) paymentDocsCommittedRef.current = true;
+  }, [savedCapturePaymentId]);
+  useEffect(() => {
+    return () => {
+      const key = docDraftKeyRef.current;
+      if (paymentDocsCommittedRef.current || !key.startsWith("draft-")) return;
+      void discardDraftDocumentsAction(key, "PAYMENT");
+    };
+  }, []);
 
   const isExistingPayment = isExistingSavedPayment(savedCapturePaymentId);
 
@@ -3213,7 +3224,7 @@ export function PaymentModalUpdated({
       // קישור מסמכים שהועלו תחת מפתח טיוטה ל-paymentId האמיתי (לפני remount של הפאנל).
       const draftKey = docDraftKeyRef.current;
       if (draftKey && draftKey !== savedPaymentId) {
-        await attachDraftDocumentsAction(draftKey, savedPaymentId).catch(() => {});
+        await attachDraftDocumentsAction(draftKey, savedPaymentId, "PAYMENT").catch(() => {});
       }
       setLoadedPayment((cur) => ({
         ...cur,

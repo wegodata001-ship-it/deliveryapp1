@@ -1,18 +1,18 @@
 "use client";
 
 import type { FlowWeekDrillPayload } from "@/app/admin/cash-flow/flow-types";
-import { deriveWeekStatus } from "@/components/admin/flow-control/dashboard/flow-dashboard-derive";
+import { summarizeFlowControlStatus } from "@/lib/flow-control/flow-control-status";
 import { getFlowWeekVarianceLines } from "@/lib/flow-control/services/flow-variance.service";
 
 export type FlowWeekStatusBadgeProps = {
   drill: FlowWeekDrillPayload | null;
-  /** מספר שבועות חריגים בטווח (אופציונלי — כשטווח > שבוע) */
+  /** מספר שבועות עם חריגה כספית בטווח. המתנה לספירה לא נספרת כאן. */
   rangeAlertCount?: number | null;
   onClick: () => void;
 };
 
 /**
- * תג קומפקטי במקום באנר אדום גדול — לחיצה פותחת רשימת חריגות.
+ * תג סטטוס. המתנה לספירה מוצגת בנפרד ואינה נספרת כחריגה כספית.
  */
 export function FlowWeekStatusBadge({
   drill,
@@ -22,27 +22,17 @@ export function FlowWeekStatusBadge({
   if (!drill && rangeAlertCount == null) return null;
 
   const lines = drill ? getFlowWeekVarianceLines(drill) : [];
-  const problemLines = lines.filter(
-    (l) =>
-      l.cashControlStatus === "SHORTAGE" ||
-      l.cashControlStatus === "SURPLUS" ||
-      l.cashControlStatus === "WAITING_FOR_COUNT",
-  );
-  const status = drill ? deriveWeekStatus(drill) : null;
+  const summary = summarizeFlowControlStatus(lines);
 
-  let tone: "ok" | "warn" | "critical" = "ok";
-  let label = "🟢 אין חריגות";
+  let tone: "ok" | "warn" | "critical" = summary.tone;
+  let label = summary.financialCount > 0 ? `🔴 ${summary.label}` : summary.waitingCount > 0 ? `🟡 ${summary.label}` : "🟢 תואם";
 
   if (rangeAlertCount != null && rangeAlertCount > 0) {
     tone = "critical";
-    label = `🔴 נמצאו ${rangeAlertCount} שבועות חריגים`;
-  } else if (status?.status === "critical" || problemLines.length > 0) {
-    tone = "critical";
-    const n = Math.max(problemLines.length, 1);
-    label = `🔴 נמצאו ${n} חריגות`;
-  } else if (status?.status === "warn") {
-    tone = "warn";
-    label = `🟡 ${status.label}`;
+    label = `🔴 ${rangeAlertCount} שבועות עם חריגה כספית`;
+  } else if (!drill) {
+    tone = "ok";
+    label = "🟢 תואם";
   }
 
   return (
@@ -50,7 +40,7 @@ export function FlowWeekStatusBadge({
       type="button"
       className={`cfc-status-badge cfc-status-badge--${tone}`}
       onClick={onClick}
-      title="לחצו לפירוט החריגות"
+      title="פירוט סטטוס הערוצים"
     >
       {label}
     </button>

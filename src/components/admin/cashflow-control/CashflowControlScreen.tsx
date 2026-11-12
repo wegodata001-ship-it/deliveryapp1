@@ -13,6 +13,8 @@ import {
   type CashControlRefreshDetail,
 } from "@/lib/cash-control-refresh-bus";
 import { CashflowWeeksTable } from "@/components/admin/cashflow-control/CashflowWeeksTable";
+import { CashflowChannelStatusTable } from "@/components/admin/cashflow-control/CashflowChannelStatusTable";
+import { CashflowArchivePanel } from "@/components/admin/cashflow-control/CashflowArchivePanel";
 import { CashflowRangeSummary } from "@/components/admin/cashflow-control/CashflowRangeSummary";
 import { FlowWeekTablesSection } from "@/components/admin/flow-control/tables/FlowWeekTablesSection";
 import { FlowWeekStatusBadge } from "@/components/admin/flow-control/dashboard/FlowWeekStatusBadge";
@@ -488,6 +490,10 @@ export function CashflowControlScreen({
             ספירת מנהל
           </button>
 
+          {!isRange && selectedWeek ? (
+            <CashflowArchivePanel week={selectedWeek} canSave={caps.canExport} />
+          ) : null}
+
           <button type="button" className="cfc-btn cfc-btn--ghost" onClick={refresh} aria-label="רענון">
             <RefreshCw size={15} />
             רענון
@@ -555,6 +561,8 @@ export function CashflowControlScreen({
                 onRetry={() => void loadDrillOnly(selectedWeek.trim())}
               />
             ) : null}
+
+            {!isRange && drill ? <CashflowChannelStatusTable drill={drill} /> : null}
 
             {!isRange && weekStatusCards ? (
               <section className="cfc-week-status" aria-label="מצב השבוע">

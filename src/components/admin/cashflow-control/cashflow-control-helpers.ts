@@ -183,10 +183,17 @@ export type WeekReceiptSummaryTotals = {
   totalOrdersUsd: number;
   paymentIntakeIls: number;
   remainingToPayUsd: number;
+  collectibleAfterFifoUsd: number;
+  customerCreditUsd: number;
+  booksNetUsd: number;
+  receivedBankUsd: number;
+  receivedCreditUsd: number;
+  receivedCheckUsd: number;
   /** ספירת מנהל — CashWeekFlow.counted* */
   managerCashUsd: number | null;
   managerCashIls: number | null;
   managerTransferIls: number | null;
+  managerTransferUsd: number | null;
   managerCreditIls: number | null;
   managerChecksIls: number | null;
 };
@@ -196,20 +203,39 @@ export function aggregateWeekReceiptSummaryTotals(rows: FlowWeekOverviewRow[]): 
   let totalOrdersUsd = 0;
   let paymentIntakeIls = 0;
   let remainingToPayUsd = 0;
+  let collectibleAfterFifoUsd = 0;
+  let customerCreditUsd = 0;
+  let booksNetUsd = 0;
+  let receivedBankUsd = 0;
+  let receivedCreditUsd = 0;
+  let receivedCheckUsd = 0;
   for (const r of rows) {
     totalOrders += r.totalOrders;
     totalOrdersUsd += fcNum(r.totalOrdersUsd);
     paymentIntakeIls += fcNum(r.paymentIntakeIls ?? r.totalReceivedIls);
     remainingToPayUsd += fcNum(r.remainingToPayUsd);
+    collectibleAfterFifoUsd += fcNum(r.collectibleAfterFifoUsd);
+    customerCreditUsd += fcNum(r.customerCreditUsd);
+    booksNetUsd += fcNum(r.booksNetUsd);
+    receivedBankUsd += fcNum(r.receivedBankTransferUsd);
+    receivedCreditUsd += fcNum(r.receivedCreditCardUsd);
+    receivedCheckUsd += fcNum(r.receivedChecksUsd);
   }
   return {
     totalOrders,
     totalOrdersUsd: round2(totalOrdersUsd),
     paymentIntakeIls: round2(paymentIntakeIls),
     remainingToPayUsd: round2(remainingToPayUsd),
+    collectibleAfterFifoUsd: round2(collectibleAfterFifoUsd),
+    customerCreditUsd: round2(customerCreditUsd),
+    booksNetUsd: round2(booksNetUsd),
+    receivedBankUsd: round2(receivedBankUsd),
+    receivedCreditUsd: round2(receivedCreditUsd),
+    receivedCheckUsd: round2(receivedCheckUsd),
     managerCashUsd: sumManagerLine(rows, "CASH_USD"),
     managerCashIls: sumManagerLine(rows, "CASH_ILS"),
     managerTransferIls: sumManagerLine(rows, "BANK_TRANSFER"),
+    managerTransferUsd: sumManagerLine(rows, "BANK_TRANSFER_USD"),
     managerCreditIls: sumManagerLine(rows, "CREDIT"),
     managerChecksIls: sumManagerLine(rows, "CHECK"),
   };

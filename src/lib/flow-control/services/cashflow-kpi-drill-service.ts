@@ -21,6 +21,10 @@ import { TURKEY_MOVEMENT_TYPE_LABELS } from "@/lib/flow-control/turkey-transfer-
 import { formatAhWeekLabel } from "@/lib/weeks/ah-week";
 import { groupByActivePayments } from "@/lib/payment-record-status";
 import { computeOrderLedgerView } from "@/lib/order-remaining-debt";
+import {
+  WEEK_ORDER_DEBT_DETAIL,
+  WEEK_ORDER_DEBT_LABEL,
+} from "@/lib/flow-control/week-debt-metrics";
 import { OrderStatus as OS } from "@prisma/client";
 import type { CashWeekFlowLineId } from "@/lib/cash-control-week-flow";
 import { CASH_WEEK_FLOW_LINES } from "@/lib/cash-control-week-flow";
@@ -462,18 +466,18 @@ async function loadRemainingToPayDrill(weeks: string[]): Promise<CashflowKpiDril
 
   return {
     kind: "remainingToPay",
-    title: `נשאר לתשלום — ${weekLabel}`,
-    subtitle: `${rows.length} הזמנות עם יתרה פתוחה`,
+    title: `${WEEK_ORDER_DEBT_LABEL} — ${weekLabel}`,
+    subtitle: `${WEEK_ORDER_DEBT_DETAIL} ${rows.length} הזמנות עם יתרה.`,
     columns: [
       { key: "week", header: "שבוע" },
       { key: "orderNo", header: "הזמנה" },
       { key: "customer", header: "לקוח" },
       { key: "orderTotal", header: "סכום הזמנה" },
-      { key: "paid", header: "שולם" },
-      { key: "remaining", header: "נשאר" },
+      { key: "paid", header: "שולם על ההזמנה" },
+      { key: "remaining", header: "חוב לפני זכות" },
     ],
     rows,
-    totalLabel: "נשאר לתשלום",
+    totalLabel: WEEK_ORDER_DEBT_LABEL,
     totalValue: moneyUsd(Math.round(totalRemaining * 100) / 100),
   };
 }

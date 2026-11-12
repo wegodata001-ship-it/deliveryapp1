@@ -1,6 +1,5 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { ensureCashExpenseTypesTable } from "@/lib/cash-expense-types.ensure";
 import {
   CASH_EXPENSE_TYPE_SEED,
   cashExpenseTypeLabelKey,
@@ -31,7 +30,6 @@ function mapType(row: {
 export async function listCashExpenseTypes(opts?: {
   includeInactive?: boolean;
 }): Promise<CashExpenseTypeDto[]> {
-  await ensureCashExpenseTypesTable();
   const rows = await prisma.cashExpenseType.findMany({
     where: opts?.includeInactive ? undefined : { isActive: true },
     orderBy: [{ sortOrder: "asc" }, { label: "asc" }],

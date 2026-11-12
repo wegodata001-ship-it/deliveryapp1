@@ -9,6 +9,37 @@ import {
   weekDateRange,
 } from "@/components/admin/cashflow-control/cashflow-control-helpers";
 import { CashflowWeekSummaryKpiStrip } from "@/components/admin/cashflow-control/CashflowWeekSummaryKpiStrip";
+import {
+  WEEK_DEBT_METRICS_NOTE,
+  WEEK_FIFO_COLLECTIBLE_DETAIL,
+  WEEK_FIFO_COLLECTIBLE_LABEL,
+  WEEK_ORDER_DEBT_DETAIL,
+  WEEK_ORDER_DEBT_LABEL,
+} from "@/lib/flow-control/week-debt-metrics";
+
+function AmountPair({
+  currency,
+  received,
+  counted,
+  countNote,
+}: {
+  currency: "ILS" | "USD";
+  received: string;
+  counted: string | null | undefined;
+  countNote?: string;
+}) {
+  return (
+    <div className="cfc-amount-pair">
+      <span>
+        <em>התקבל</em> <b dir="ltr">{money(currency, received)}</b>
+      </span>
+      <span>
+        <em>נספר</em>{" "}
+        <b dir="ltr">{countNote && !counted ? countNote : moneyManagerCount(currency, counted)}</b>
+      </span>
+    </div>
+  );
+}
 
 export type CashflowWeeksTableProps = {
   rows: FlowWeekOverviewRow[];
@@ -62,7 +93,7 @@ export function CashflowWeeksTable({
     <div className="cfc-card cfc-table-card">
       <div className="cfc-summary-table-title">
         <strong>סיכום שבועי לפי אמצעי תקבול</strong>
-        <span>שורה אחת לכל שבוע · נתוני ספירה מספירת מנהל · לחצו על KPI לפירוט</span>
+        <span>התקבל וספירה בנפרד · ₪ ו-$ לא מחוברים · {WEEK_DEBT_METRICS_NOTE}</span>
       </div>
       <CashflowWeekSummaryKpiStrip rows={displayRows} />
       <div className="cfc-table-scroll">
@@ -74,10 +105,15 @@ export function CashflowWeeksTable({
               <th>סה״כ דוח</th>
               <th>מזומן $</th>
               <th>מזומן ₪</th>
-              <th>העברות</th>
-              <th>אשראי</th>
-              <th>צ׳קים</th>
-              <th>נשאר לתשלום</th>
+              <th>העברה $</th>
+              <th>העברה ₪</th>
+              <th>אשראי $</th>
+              <th>אשראי ₪</th>
+              <th>צ׳קים $</th>
+              <th>צ׳קים ₪</th>
+              <th title={WEEK_ORDER_DEBT_DETAIL}>{WEEK_ORDER_DEBT_LABEL}</th>
+              <th title={WEEK_FIFO_COLLECTIBLE_DETAIL}>{WEEK_FIFO_COLLECTIBLE_LABEL}</th>
+              <th>יתרת זכות</th>
             </tr>
           </thead>
           <tbody>
@@ -106,23 +142,38 @@ export function CashflowWeeksTable({
                   <td dir="ltr" className="cfc-summary-amount">
                     {money("USD", row.totalOrdersUsd)}
                   </td>
-                  <td dir="ltr" className="cfc-summary-amount">
-                    {moneyManagerCount("USD", row.manager.CASH_USD)}
+                  <td className="cfc-summary-amount">
+                    <AmountPair currency="USD" received={row.receivedCashUsd} counted={row.manager.CASH_USD} />
                   </td>
-                  <td dir="ltr" className="cfc-summary-amount">
-                    {moneyManagerCount("ILS", row.manager.CASH_ILS)}
+                  <td className="cfc-summary-amount">
+                    <AmountPair currency="ILS" received={row.receivedCashIls} counted={row.manager.CASH_ILS} />
                   </td>
-                  <td dir="ltr" className="cfc-summary-amount">
-                    {moneyManagerCount("ILS", row.manager.BANK_TRANSFER)}
+                  <td className="cfc-summary-amount">
+                    <AmountPair currency="USD" received={row.receivedBankTransferUsd} counted={row.manager.BANK_TRANSFER_USD} />
                   </td>
-                  <td dir="ltr" className="cfc-summary-amount">
-                    {moneyManagerCount("ILS", row.manager.CREDIT)}
+                  <td className="cfc-summary-amount">
+                    <AmountPair currency="ILS" received={row.receivedBankTransferIls} counted={row.manager.BANK_TRANSFER} />
                   </td>
-                  <td dir="ltr" className="cfc-summary-amount">
-                    {moneyManagerCount("ILS", row.manager.CHECK)}
+                  <td className="cfc-summary-amount">
+                    <AmountPair currency="USD" received={row.receivedCreditCardUsd} counted={null} countNote="אין שורת ספירה $" />
                   </td>
-                  <td dir="ltr" className="cfc-summary-amount cfc-summary-amount--debt">
+                  <td className="cfc-summary-amount">
+                    <AmountPair currency="ILS" received={row.receivedCreditCardIls} counted={row.manager.CREDIT} />
+                  </td>
+                  <td className="cfc-summary-amount">
+                    <AmountPair currency="USD" received={row.receivedChecksUsd} counted={null} countNote="אין שורת ספירה $" />
+                  </td>
+                  <td className="cfc-summary-amount">
+                    <AmountPair currency="ILS" received={row.receivedChecksIls} counted={row.manager.CHECK} />
+                  </td>
+                  <td dir="ltr" className="cfc-summary-amount cfc-summary-amount--debt" title={WEEK_ORDER_DEBT_DETAIL}>
                     {money("USD", row.remainingToPayUsd)}
+                  </td>
+                  <td dir="ltr" className="cfc-summary-amount" title={WEEK_FIFO_COLLECTIBLE_DETAIL}>
+                    {money("USD", row.collectibleAfterFifoUsd)}
+                  </td>
+                  <td dir="ltr" className="cfc-summary-amount">
+                    {money("USD", row.customerCreditUsd)}
                   </td>
                 </tr>
               );

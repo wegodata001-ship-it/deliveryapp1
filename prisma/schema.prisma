@@ -1578,10 +1578,19 @@ model Document {
   isAuto         Boolean   @default(false)
   createdAt      DateTime  @default(now())
   deletedAt      DateTime?
+  /// שבוע עסקי למסמך בקרת תזרים. ריק לשאר המסמכים.
+  weekCode       String?
+  /// גרסת הפקה. הפקה חוזרת יוצרת שורה חדשה ואינה מעדכנת גרסה קודמת.
+  docVersion     Int?
+  /// Snapshot בעת ההפקה. לא מתעדכן כשהנתונים החיים משתנים.
+  snapshot       Json?
 
   @@index([entityType, entityId])
   @@index([docType])
   @@index([createdAt])
+  @@index([weekCode, docType])
+  /// ייחודיות (weekCode, docType, docVersion) נאכפת באינדקס חלקי
+  /// Document_cash_flow_version_uidx. שורות ישנות עם NULL אינן נכללות.
   @@map("Document")
 }
 

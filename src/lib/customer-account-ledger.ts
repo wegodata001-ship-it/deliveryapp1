@@ -39,6 +39,7 @@ import {
 } from "@/lib/order-remaining-debt";
 import { getCustomerCreditBalanceUsd } from "@/lib/customer-credit-balance";
 import { paymentRecordUsdEquivalent as paymentUsdEquivalent } from "@/lib/payment-usd-equivalent";
+import { bindSkippedBalanceResetReceipts } from "@/lib/ledger-running-balance";
 import {
   buildLedgerPaymentDetail,
   paymentBatchGroupKey,
@@ -752,8 +753,20 @@ export async function buildCustomerAccountLedger(params: {
   }
 
   const paymentBatches = new Map<string, LedgerPaymentBatchRow[]>();
+  const skippedBalanceResetReceipts: Array<{ date: Date; amountUsd: number }> = [];
   for (const p of payments) {
-    if (shouldSkipLedgerPaymentBatchRow(p)) continue;
+    if (shouldSkipLedgerPaymentBatchRow(p)) {
+      if (p.businessType === "BALANCE_RESET" && p.status !== PAYMENT_RECORD_STATUS_CANCELLED) {
+        const amountUsd = Number(paymentUsdEquivalent(p).toFixed(2));
+        if (amountUsd > 0.01) {
+          skippedBalanceResetReceipts.push({
+            date: p.paymentDate ?? p.createdAt ?? new Date(0),
+            amountUsd,
+          });
+        }
+      }
+      continue;
+    }
     const key = paymentBatchGroupKey(p);
     const list = paymentBatches.get(key) ?? [];
     list.push(p);
@@ -1194,6 +1207,42 @@ export async function buildCustomerAccountLedger(params: {
     ...orderUpdateEvents,
   ];
   const events = collapseResetOperationEvents(rawEvents).sort(compareLedgerEvents);
+  const resetCandidates = events.map((event) => ({
+    dateMs: event.date.getTime(),
+    displayUsd: Number((event.displayPaymentUsd ?? event.payment).toFixed(2)),
+    runningUsd: Number(event.payment.toFixed(2)),
+    affectsRunning: event.affectsRunningBalance !== false && Number(event.payment.toFixed(2)) > 0.01,
+    isBalanceReset: event.isBalanceReset === true && event.isPaymentCancelled !== true,
+  }));
+  const boundResets = bindSkippedBalanceResetReceipts(
+    resetCandidates,
+    skippedBalanceResetReceipts.map((receipt) => ({
+      dateMs: receipt.date.getTime(),
+      amountUsd: receipt.amountUsd,
+    })),
+  );
+  for (const index of boundResets.boundIndexes) {
+    const candidate = resetCandidates[index];
+    if (!candidate?.isBalanceReset) continue;
+    events[index]!.payment = new Prisma.Decimal(candidate.runningUsd.toFixed(2));
+    events[index]!.affectsRunningBalance = true;
+  }
+  for (const receipt of boundResets.unbound) {
+    events.push({
+      id: `br-receipt-${receipt.dateMs}-${receipt.amountUsd.toFixed(2)}`,
+      date: new Date(receipt.dateMs),
+      kind: "PAYMENT",
+      typeLabel: BALANCE_RESET_LEDGER_LABEL,
+      charge: new Prisma.Decimal(0),
+      payment: new Prisma.Decimal(receipt.amountUsd.toFixed(2)),
+      document: BALANCE_RESET_LEDGER_LABEL,
+      orderId: null,
+      paymentId: null,
+      isBalanceReset: true,
+      affectsRunningBalance: true,
+    });
+  }
+  events.sort(compareLedgerEvents);
   const replay = replayCustomerLedgerRunning(
     events.map((ev) => ({
       kind: ledgerRunningKind(ev),

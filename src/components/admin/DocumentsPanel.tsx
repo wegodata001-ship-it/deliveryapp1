@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { FileText, FileSpreadsheet, Image as ImageIcon, File as FileIcon, Download, Trash2, Upload, Paperclip } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { FileText, FileSpreadsheet, Image as ImageIcon, File as FileIcon, Download, Trash2, Paperclip } from "lucide-react";
+import { DocumentAttachActions } from "@/components/admin/DocumentAttachActions";
 import {
   DOCUMENT_DOC_TYPES,
   type DocumentEntityType,
@@ -58,7 +59,6 @@ export function DocumentsPanel({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [docType, setDocType] = useState<string>("");
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [resolvedPerms, setResolvedPerms] = useState<{
     canView: boolean;
     canUpload: boolean;
@@ -94,32 +94,6 @@ export function DocumentsPanel({
   useEffect(() => {
     void load();
   }, [load]);
-
-  async function onUpload(files: FileList | null) {
-    if (!files || files.length === 0) return;
-    setErr(null);
-    setBusy(true);
-    try {
-      const fd = new FormData();
-      fd.set("entityType", entityType);
-      fd.set("entityId", entityId);
-      if (docType) fd.set("docType", docType);
-      for (const f of Array.from(files)) fd.append("files", f);
-      const res = await fetch("/api/documents/upload", { method: "POST", body: fd });
-      const body = (await res.json().catch(() => null)) as
-        | { ok: true; documents: DocumentDto[] }
-        | { ok: false; error: string }
-        | null;
-      if (!res.ok || !body || !body.ok) {
-        setErr((body && "error" in body && body.error) || "העלאה נכשלה");
-        return;
-      }
-      setDocs((cur) => [...body.documents, ...cur]);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function onDelete(id: string) {
     if (!window.confirm("למחוק את המסמך?")) return;
@@ -161,22 +135,14 @@ export function DocumentsPanel({
                 </option>
               ))}
             </select>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              className="adm-docs__file"
-              onChange={(e) => void onUpload(e.target.files)}
+            <DocumentAttachActions
+              entityType={entityType}
+              entityId={entityId}
               disabled={busy || !entityId}
+              canUpload={canUpload}
+              docType={docType}
+              onUploaded={(documents) => setDocs((current) => [...documents, ...current])}
             />
-            <button
-              type="button"
-              className="adm-docs__btn adm-docs__btn--primary"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={busy || !entityId}
-            >
-              <Upload size={14} aria-hidden /> {busy ? "מעלה…" : "העלה מסמכים"}
-            </button>
           </div>
         ) : null}
       </div>

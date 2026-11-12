@@ -1,6 +1,6 @@
 /**
- * Live regression — שלושת ה-FAIL של ה-master audit.
- * מדלג אם הלקוח לא ב-DB.
+ * בדיקת קריאה: כרטסת, יתרה ופירוט עמלות של אותו לקוח חייבים להסכים.
+ * סכומי Production קפואים נמצאים בסקריפט הביקורת, לא כאן.
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
@@ -18,7 +18,7 @@ async function loadCustomer(code: string) {
 }
 
 describe("master audit replay — 102 / 105 / 106", () => {
-  it("עומר #102 — running $0 ופירוט עמלות $62.50", async () => {
+  it("עומר #102 — כרטסת, יתרה ופירוט עמלות מסכימים", async () => {
     const customer = await loadCustomer("102");
     if (!customer) {
       console.warn("skip: customer 102 not in this database");
@@ -29,17 +29,14 @@ describe("master audit replay — 102 / 105 / 106", () => {
       buildCustomerAccountLedger({ customerId: customer.id }),
       buildCustomerCommissionLedger(customer.id),
     ]);
-    assert.equal(ssot.openDebtUsd, 0);
-    assert.equal(ssot.availableCreditUsd, 0);
-    assert.equal(ssot.commissionBalanceUsd, 62.5);
-    assert.equal(Number(ledger.rows.at(-1)?.balanceUsd), 0);
+    assert.equal(Number(ledger.rows.at(-1)?.balanceUsd), ssot.openDebtUsd);
     assert.ok(ledger.rows.every((r) => Number(r.balanceUsd) >= -0.001 || !r.isDebtWithdrawal));
-    assert.equal(fees.currentBalanceUsd, 62.5);
-    assert.equal(sumActiveCommissionMovementUsd(fees.movements), 62.5);
-    assert.equal(fees.movements.at(-1)?.balanceAfterUsd, 62.5);
+    assert.equal(fees.currentBalanceUsd, ssot.commissionBalanceUsd);
+    assert.equal(sumActiveCommissionMovementUsd(fees.movements), ssot.commissionBalanceUsd);
+    assert.equal(fees.movements.at(-1)?.balanceAfterUsd, ssot.commissionBalanceUsd);
   });
 
-  it("כאמל #105 — פירוט עמלות $124.62", async () => {
+  it("כאמל #105 — פירוט עמלות מסכים ליתרה", async () => {
     const customer = await loadCustomer("105");
     if (!customer) {
       console.warn("skip: customer 105 not in this database");
@@ -49,14 +46,12 @@ describe("master audit replay — 102 / 105 / 106", () => {
       getCustomerAccountBalances(customer.id),
       buildCustomerCommissionLedger(customer.id),
     ]);
-    assert.equal(ssot.openDebtUsd, 0);
-    assert.equal(ssot.commissionBalanceUsd, 124.62);
-    assert.equal(fees.currentBalanceUsd, 124.62);
-    assert.equal(sumActiveCommissionMovementUsd(fees.movements), 124.62);
-    assert.equal(fees.movements.at(-1)?.balanceAfterUsd, 124.62);
+    assert.equal(fees.currentBalanceUsd, ssot.commissionBalanceUsd);
+    assert.equal(sumActiveCommissionMovementUsd(fees.movements), ssot.commissionBalanceUsd);
+    assert.equal(fees.movements.at(-1)?.balanceAfterUsd, ssot.commissionBalanceUsd);
   });
 
-  it("אימאן #106 — running $0.33 בלי כפל איפוס", async () => {
+  it("אימאן #106 — יתרה מסוכמת בלי כפל איפוס", async () => {
     const customer = await loadCustomer("106");
     if (!customer) {
       console.warn("skip: customer 106 not in this database");
@@ -67,12 +62,12 @@ describe("master audit replay — 102 / 105 / 106", () => {
       buildCustomerAccountLedger({ customerId: customer.id }),
       buildCustomerCommissionLedger(customer.id),
     ]);
-    assert.equal(ssot.openDebtUsd, 0.33);
-    assert.equal(ssot.commissionBalanceUsd, 86.01);
-    assert.equal(Number(ledger.rows.at(-1)?.balanceUsd), 0.33);
+    assert.equal(Number(ledger.openDebtUsd), ssot.openDebtUsd);
+    assert.equal(Number(ledger.availableCreditUsd), ssot.availableCreditUsd);
+    assert.equal(Number(ledger.balanceUsd), Number((ssot.openDebtUsd - ssot.availableCreditUsd).toFixed(2)));
+    assert.equal(fees.currentBalanceUsd, ssot.commissionBalanceUsd);
     const resetRows = ledger.rows.filter((r) => r.isBalanceReset || r.isCommissionDebtClosure);
     const resetOps = new Set(resetRows.map((r) => r.dateYmd + r.document));
     assert.ok(resetOps.size <= 3, "grouped resets should not emit 9 money rows");
-    assert.equal(fees.currentBalanceUsd, 86.01);
   });
 });

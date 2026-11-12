@@ -45,6 +45,9 @@ import { CustomerBalanceView } from "@/components/ui/CustomerBalanceView";
 import { parseBalanceAmountString } from "@/lib/customer-balance";
 import { formatMoneyAmount, formatUsdDisplay, parseMoneyString } from "@/lib/money-format";
 import type { OrderCaptureWindowProps } from "@/lib/admin-windows";
+import { attachDraftDocumentsAction, discardDraftDocumentsAction } from "@/app/admin/documents/actions";
+import { DocumentAttachActions } from "@/components/admin/DocumentAttachActions";
+import { canAttachDraftDocuments } from "@/lib/documents/source";
 import { newWindowId } from "@/lib/admin-windows";
 
 import { orderCountryLabel, ORDER_COUNTRY_CODES, coerceOrderCountryForForm, type OrderCountryCode } from "@/lib/order-countries";
@@ -539,6 +542,10 @@ export function OrderCreatePanel({
 
   const [isSaving, setIsSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [docDraftKey, setDocDraftKey] = useState(() => `draft-${crypto.randomUUID()}`);
+  const docDraftKeyRef = useRef(docDraftKey);
+  docDraftKeyRef.current = docDraftKey;
+  const orderDocsLinkedRef = useRef(isEdit);
 
   const [orderCountries, setOrderCountries] = useState<OrderCountryCode[]>([]);
   const [sourceCountry, setSourceCountry] = useState<OrderCountryCode | "">(() =>
@@ -608,6 +615,15 @@ export function OrderCreatePanel({
   }, [isEdit]);
 
   const editOrderId = isEdit ? target.orderId : "";
+  const documentEntityId = isEdit && editOrderId ? editOrderId : docDraftKey;
+
+  useEffect(() => {
+    return () => {
+      const key = docDraftKeyRef.current;
+      if (orderDocsLinkedRef.current || isEdit || !key.startsWith("draft-")) return;
+      void discardDraftDocumentsAction(key, "ORDER");
+    };
+  }, [isEdit]);
 
   useEffect(() => {
     if (!isEdit || !editOrderId) return;
@@ -1095,6 +1111,10 @@ export function OrderCreatePanel({
   }, [previewWorkCountry]);
 
   const resetFormForNew = useCallback(() => {
+    const nextDraft = `draft-${crypto.randomUUID()}`;
+    docDraftKeyRef.current = nextDraft;
+    setDocDraftKey(nextDraft);
+    orderDocsLinkedRef.current = false;
     skipSearchRef.current = true;
     setSelectedCustomer(null);
     setExtras(null);
@@ -1421,6 +1441,11 @@ export function OrderCreatePanel({
 
           const res = await saveCaptureFast(payload);
           if (!res.ok) throw new Error(res.error);
+          if (canAttachDraftDocuments(docDraftKeyRef.current, res.saved?.orderId)) {
+            const linked = await attachDraftDocumentsAction(docDraftKeyRef.current, res.saved!.orderId, "ORDER");
+            if (!linked.ok) throw new Error("ההזמנה נשמרה, אך שיוך המסמכים נכשל");
+          }
+          orderDocsLinkedRef.current = true;
           setIsSaving(false);
           onToast("ההזמנה נשמרה");
           if (keepOpen) {
@@ -1440,6 +1465,11 @@ export function OrderCreatePanel({
           const feeStr = s.commissionUsdCalc.toFixed(2);
           const res = await saveCaptureFast(savePayload(feeStr));
           if (!res.ok) throw new Error(res.error);
+          if (canAttachDraftDocuments(docDraftKeyRef.current, res.saved?.orderId)) {
+            const linked = await attachDraftDocumentsAction(docDraftKeyRef.current, res.saved!.orderId, "ORDER");
+            if (!linked.ok) throw new Error("ההזמנה נשמרה, אך שיוך המסמכים נכשל");
+          }
+          orderDocsLinkedRef.current = true;
           setIsSaving(false);
           onToast("ההזמנה נשמרה");
           if (res.notice) {
@@ -1630,6 +1660,7 @@ export function OrderCreatePanel({
               <span className="adm-order-update-req-badge adm-order-update-req-badge--rejected">נדחה</span>
             ) : null}
           </div>
+          <DocumentAttachActions entityType="ORDER" entityId={documentEntityId} disabled={fieldDisabled} />
         </header>
 
         <div

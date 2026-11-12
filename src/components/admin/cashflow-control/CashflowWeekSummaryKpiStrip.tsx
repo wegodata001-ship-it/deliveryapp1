@@ -12,6 +12,12 @@ import {
   type CashflowKpiUiKind,
 } from "@/components/admin/cashflow-control/CashflowKpiDrillModal";
 import type { CashflowKpiKind } from "@/lib/flow-control/services/cashflow-kpi-drill-service";
+import {
+  WEEK_FIFO_COLLECTIBLE_DETAIL,
+  WEEK_FIFO_COLLECTIBLE_LABEL,
+  WEEK_ORDER_DEBT_DETAIL,
+  WEEK_ORDER_DEBT_LABEL,
+} from "@/lib/flow-control/week-debt-metrics";
 
 type ClickableKpiKind = Extract<
   CashflowKpiKind,
@@ -43,12 +49,13 @@ const KPI_CARD_META: Record<
   'סה"כ הזמנות': { tone: "cfc-week-summary-kpis__card--orders" },
   'סה"כ דוח': { tone: "cfc-week-summary-kpis__card--report" },
   "נקלט מקליטת תשלום": { tone: "cfc-week-summary-kpis__card--intake" },
-  'סה"כ מזומן ₪': { tone: "cfc-week-summary-kpis__card--cash-ils", kind: "managerCashIls" },
-  'סה"כ דולר': { tone: "cfc-week-summary-kpis__card--cash-usd", kind: "managerCashUsd" },
-  'סה"כ העברות': { tone: "cfc-week-summary-kpis__card--transfer", kind: "managerTransferIls" },
-  'סה"כ באשראי': { tone: "cfc-week-summary-kpis__card--credit", kind: "managerCreditIls" },
-  "סה\"כ בצ'קים": { tone: "cfc-week-summary-kpis__card--checks", kind: "managerChecksIls" },
-  "נשאר לתשלום": { tone: "cfc-week-summary-kpis__card--debt", kind: "remainingToPay" },
+  "ספירת מנהל · מזומן ₪": { tone: "cfc-week-summary-kpis__card--cash-ils", kind: "managerCashIls" },
+  "ספירת מנהל · מזומן $": { tone: "cfc-week-summary-kpis__card--cash-usd", kind: "managerCashUsd" },
+  "ספירת מנהל · העברה ₪": { tone: "cfc-week-summary-kpis__card--transfer", kind: "managerTransferIls" },
+  "ספירת מנהל · אשראי ₪": { tone: "cfc-week-summary-kpis__card--credit", kind: "managerCreditIls" },
+  "ספירת מנהל · צ'קים ₪": { tone: "cfc-week-summary-kpis__card--checks", kind: "managerChecksIls" },
+  [WEEK_ORDER_DEBT_LABEL]: { tone: "cfc-week-summary-kpis__card--debt", kind: "remainingToPay" },
+  [WEEK_FIFO_COLLECTIBLE_LABEL]: { tone: "cfc-week-summary-kpis__card--debt" },
 };
 
 const KPI_CARDS: KpiCard[] = [
@@ -64,43 +71,73 @@ const KPI_CARDS: KpiCard[] = [
   },
   {
     kind: "static",
-    label: "נקלט מקליטת תשלום",
+    label: "נקלט מקליטת תשלום ₪",
     renderValue: (t) => money("ILS", t.paymentIntakeIls),
   },
   {
+    kind: "remainingToPay",
+    label: WEEK_ORDER_DEBT_LABEL,
+    renderValue: (t) => money("USD", t.remainingToPayUsd),
+    clickable: true,
+  },
+  {
+    kind: "static",
+    label: WEEK_FIFO_COLLECTIBLE_LABEL,
+    renderValue: (t) => money("USD", t.collectibleAfterFifoUsd),
+  },
+  {
+    kind: "static",
+    label: "יתרות זכות",
+    renderValue: (t) => money("USD", t.customerCreditUsd),
+  },
+  {
+    kind: "static",
+    label: "הפרש ספרים",
+    renderValue: (t) => money("USD", t.booksNetUsd),
+  },
+  {
+    kind: "static",
+    label: "התקבל · העברה $",
+    renderValue: (t) => money("USD", t.receivedBankUsd),
+  },
+  {
+    kind: "static",
+    label: "התקבל · אשראי $",
+    renderValue: (t) => money("USD", t.receivedCreditUsd),
+  },
+  {
+    kind: "static",
+    label: "התקבל · צ'קים $",
+    renderValue: (t) => money("USD", t.receivedCheckUsd),
+  },
+  {
     kind: "managerCashIls",
-    label: 'סה"כ מזומן ₪',
+    label: "ספירת מנהל · מזומן ₪",
     renderValue: (t) => moneyManagerCount("ILS", t.managerCashIls != null ? String(t.managerCashIls) : null),
     clickable: true,
   },
   {
     kind: "managerCashUsd",
-    label: 'סה"כ דולר',
+    label: "ספירת מנהל · מזומן $",
     renderValue: (t) => moneyManagerCount("USD", t.managerCashUsd != null ? String(t.managerCashUsd) : null),
     clickable: true,
   },
   {
     kind: "managerTransferIls",
-    label: 'סה"כ העברות',
+    label: "ספירת מנהל · העברה ₪",
     renderValue: (t) => moneyManagerCount("ILS", t.managerTransferIls != null ? String(t.managerTransferIls) : null),
     clickable: true,
   },
   {
     kind: "managerCreditIls",
-    label: 'סה"כ באשראי',
+    label: "ספירת מנהל · אשראי ₪",
     renderValue: (t) => moneyManagerCount("ILS", t.managerCreditIls != null ? String(t.managerCreditIls) : null),
     clickable: true,
   },
   {
     kind: "managerChecksIls",
-    label: "סה\"כ בצ'קים",
+    label: "ספירת מנהל · צ'קים ₪",
     renderValue: (t) => moneyManagerCount("ILS", t.managerChecksIls != null ? String(t.managerChecksIls) : null),
-    clickable: true,
-  },
-  {
-    kind: "remainingToPay",
-    label: "נשאר לתשלום",
-    renderValue: (t) => money("USD", t.remainingToPayUsd),
     clickable: true,
   },
 ];
@@ -132,6 +169,13 @@ export function CashflowWeekSummaryKpiStrip({ rows }: CashflowWeekSummaryKpiStri
                 ]
                   .filter(Boolean)
                   .join(" ")}
+                title={
+                  card.label === "הפרש ספרים"
+                    ? "סכום החובות הפתוחים פחות סכום יתרות הזכות. אינו סכום לגבייה ואינו קיזוז בין לקוחות."
+                    : card.label === WEEK_FIFO_COLLECTIBLE_LABEL
+                      ? WEEK_FIFO_COLLECTIBLE_DETAIL
+                      : undefined
+                }
               >
                 <span>{card.label}</span>
                 <strong dir="ltr">{value}</strong>
@@ -150,7 +194,7 @@ export function CashflowWeekSummaryKpiStrip({ rows }: CashflowWeekSummaryKpiStri
                 .filter(Boolean)
                 .join(" ")}
               onClick={() => setDrillKind(card.kind)}
-              title="לחץ לפירוט"
+              title={card.kind === "remainingToPay" ? WEEK_ORDER_DEBT_DETAIL : "לחץ לפירוט"}
             >
               <span>{card.label}</span>
               <strong dir="ltr">{value}</strong>

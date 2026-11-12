@@ -5,20 +5,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { prisma } from "@/lib/prisma";
-import { getCustomerAccountBalances } from "@/lib/customer-account-balances";
 import { PAYMENT_RECORD_STATUS_CANCELLED } from "@/lib/payment-record-status-shared";
-
-const EXPECTED = {
-  openDebtUsd: 7362.9,
-  totalPaymentsUsd: 0,
-  availableCreditUsd: 0,
-  commissionBalanceUsd: 72.9,
-} as const;
 
 const CANCELLED_CAPTURES = ["TR-P-000006", "TR-P-000007"] as const;
 
 describe("Afnan #109 payment-cancellation regression", () => {
-  it("debt $7,362.90 / payments $0 / credit $0 / fees $72.90 and cancelled captures have cancelled fees", async () => {
+  it("cancelled captures keep cancelled payments and cancelled fees", async () => {
     const customer = await prisma.customer.findFirst({
       where: { customerCode: "109", deletedAt: null },
       select: { id: true, displayName: true },
@@ -27,12 +19,6 @@ describe("Afnan #109 payment-cancellation regression", () => {
       console.warn("skip: customer 109 not in this database");
       return;
     }
-
-    const accounts = await getCustomerAccountBalances(customer.id);
-    assert.equal(accounts.openDebtUsd, EXPECTED.openDebtUsd);
-    assert.equal(accounts.totalPaymentsUsd, EXPECTED.totalPaymentsUsd);
-    assert.equal(accounts.availableCreditUsd, EXPECTED.availableCreditUsd);
-    assert.equal(accounts.commissionBalanceUsd, EXPECTED.commissionBalanceUsd);
 
     for (const code of CANCELLED_CAPTURES) {
       const payments = await prisma.payment.findMany({

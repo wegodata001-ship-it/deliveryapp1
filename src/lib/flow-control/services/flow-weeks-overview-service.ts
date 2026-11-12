@@ -14,6 +14,8 @@ import { formatAhWeekLabel } from "@/lib/weeks/ah-week";
 import { CASH_WEEK_FLOW_LINE_IDS } from "@/lib/cash-control-week-flow";
 import { groupByActivePayments } from "@/lib/payment-record-status";
 import { computeOrderLedgerView, resolveOrderTotalUsd } from "@/lib/order-remaining-debt";
+import { loadCollectibleRemainingUsdByOrderId } from "@/lib/orders-list-collectible-remaining";
+import { summarizeCustomerBooks } from "@/lib/flow-control/customer-books-display";
 import { OrderStatus as OS } from "@prisma/client";
 import {
   mergeOrderWhere,
@@ -42,6 +44,7 @@ async function loadOneWeekOverview(
       where: mergeOrderWhere({ weekCode: wk, deletedAt: null }, scope),
       select: {
         id: true,
+        customerId: true,
         totalUsd: true,
         amountUsd: true,
         commissionUsd: true,
@@ -73,8 +76,15 @@ async function loadOneWeekOverview(
     if (p.orderId) paidByOrder.set(p.orderId, Number(p._sum.amountUsd ?? 0));
   }
 
+  const customerIds = [
+    ...new Set(orderRows.map((o) => o.customerId).filter((id): id is string => Boolean(id))),
+  ];
+  const collectibleByOrder = await loadCollectibleRemainingUsdByOrderId(customerIds);
+
   let totalOrdersUsd = 0;
   let remainingToPayUsd = 0;
+  let collectibleAfterFifoUsd = 0;
+  const signedDebts: number[] = [];
   for (const o of orderRows) {
     const orderTotal = resolveOrderTotalUsd({
       totalUsd: o.totalUsd,
@@ -91,9 +101,15 @@ async function loadOneWeekOverview(
       paidUsd: paidByOrder.get(o.id) ?? 0,
     });
     remainingToPayUsd += ledger.remainingUsd;
+    signedDebts.push(ledger.openDebtUsd);
+    if (o.status === OS.CANCELLED) continue;
+    const fifoRemaining = collectibleByOrder.get(o.id);
+    collectibleAfterFifoUsd += fifoRemaining != null ? fifoRemaining : ledger.remainingUsd;
   }
   remainingToPayUsd = round2(remainingToPayUsd);
+  collectibleAfterFifoUsd = round2(collectibleAfterFifoUsd);
   totalOrdersUsd = round2(totalOrdersUsd);
+  const books = summarizeCustomerBooks(signedDebts);
 
   const drawerDto = Object.fromEntries(
     allCashControlChannels().map((k) => [k, money(flow.drawerChannelTotals[k])]),
@@ -122,11 +138,17 @@ async function loadOneWeekOverview(
     totalOrders: orderRows.length,
     totalOrdersUsd: money(totalOrdersUsd),
     remainingToPayUsd: money(remainingToPayUsd),
+    collectibleAfterFifoUsd: money(collectibleAfterFifoUsd),
+    customerCreditUsd: money(books.creditUsd),
+    booksNetUsd: money(round2(remainingToPayUsd - books.creditUsd)),
     receivedCashUsd: money(Number(paymentWeekTotal.CASH_USD ?? 0)),
     receivedCashIls: money(Number(paymentWeekTotal.CASH_ILS ?? 0)),
     receivedBankTransferIls: money(Number(paymentWeekTotal.BANK_TRANSFER_ILS ?? 0)),
+    receivedBankTransferUsd: money(Number(paymentWeekTotal.BANK_TRANSFER_USD ?? 0)),
     receivedCreditCardIls: money(Number(paymentWeekTotal.CREDIT_CARD_ILS ?? 0)),
+    receivedCreditCardUsd: money(Number(paymentWeekTotal.CREDIT_CARD_USD ?? 0)),
     receivedChecksIls: money(Number(paymentWeekTotal.CHECK_ILS ?? 0)),
+    receivedChecksUsd: money(Number(paymentWeekTotal.CHECK_USD ?? 0)),
     paymentIntakeIls,
     receivedOtherIls: money(Number(paymentWeekTotal.OTHER_ILS ?? 0)),
     receivedOtherUsd: money(Number(paymentWeekTotal.OTHER_USD ?? 0)),

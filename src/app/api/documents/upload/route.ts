@@ -8,6 +8,7 @@ import {
   storageConfigured,
 } from "@/lib/documents/storage";
 import { fileExtensionOf, isDocumentEntityType } from "@/lib/documents/constants";
+import { isDocumentSource } from "@/lib/documents/source";
 
 export async function POST(req: Request) {
   try {
@@ -28,6 +29,11 @@ export async function POST(req: Request) {
     const entityId = String(form.get("entityId") ?? "").trim();
     const docTypeRaw = form.get("docType");
     const docType = docTypeRaw ? String(docTypeRaw).trim() || null : null;
+    const sourceRaw = String(form.get("source") ?? "UPLOAD").trim();
+    const source = isDocumentSource(sourceRaw) ? sourceRaw : null;
+    if (!source) {
+      return NextResponse.json({ ok: false, error: "מקור מסמך לא תקין" }, { status: 400 });
+    }
 
     if (!isDocumentEntityType(entityType)) {
       return NextResponse.json({ ok: false, error: "סוג ישות לא תקין" }, { status: 400 });
@@ -73,6 +79,7 @@ export async function POST(req: Request) {
         bytes,
         uploadedById: me.id,
         uploadedByName: me.fullName ?? me.username ?? null,
+        source,
       });
       created.push(dto);
     }

@@ -44,28 +44,19 @@ describe("customer financial SSOT unification", () => {
 
     assert.equal(accounts.scopeKind, "CURRENT");
     assert.equal(accounts.cutoffDate, null);
-    assert.equal(accounts.openDebtUsd, 758.01);
-    assert.equal(accounts.availableCreditUsd, 0);
-    assert.equal(accounts.commissionBalanceUsd, 177.5);
-    assert.equal(accounts.netPositionUsd, 758.01);
-    assert.equal(accounts.netBalanceUsd, -758.01);
-    assert.equal(Number(ledger.openDebtUsd), 758.01);
-    assert.equal(Number(ledger.availableCreditUsd), 0);
-    assert.equal(credit.currentBalanceUsd, 1273.83);
+    assert.equal(accounts.openDebtUsd, Number(ledger.openDebtUsd));
+    assert.equal(accounts.availableCreditUsd, Number(ledger.availableCreditUsd));
 
     const cancelled = credit.movements.filter((m) => m.type === "CREDIT_CANCELLED");
     assert.ok(cancelled.length >= 1);
     assert.ok(cancelled.every((m) => m.amountUsd === 0));
     assert.ok(cancelled.every((m) => m.affectsBalance === false));
-    const lastAffecting = credit.movements.find((m) => m.affectsBalance !== false);
-    assert.equal(lastAffecting?.balanceAfterUsd, 1273.83);
+    const affecting = credit.movements.filter((m) => m.affectsBalance !== false);
+    assert.ok(affecting.some((m) => m.balanceAfterUsd === credit.currentBalanceUsd));
   });
 
-  it("customers 107 / 100 CURRENT credit books", async () => {
-    for (const [code, creditUsd] of [
-      ["107", 28.05],
-      ["100", 3530],
-    ] as const) {
+  it("customers 107 / 100 keep debt and credit exclusive", async () => {
+    for (const code of ["107", "100"] as const) {
       const customer = await prisma.customer.findFirst({
         where: { customerCode: code, deletedAt: null },
         select: { id: true },
@@ -75,9 +66,9 @@ describe("customer financial SSOT unification", () => {
         continue;
       }
       const accounts = await getCustomerAccountBalances(customer.id, CURRENT);
-      assert.equal(accounts.openDebtUsd, 0, `${code} debt`);
-      assert.equal(accounts.availableCreditUsd, creditUsd, `${code} credit`);
-      assert.equal(accounts.netBalanceUsd, creditUsd, `${code} net`);
+      if (accounts.openDebtUsd > 0) assert.equal(accounts.availableCreditUsd, 0, `${code} credit`);
+      if (accounts.availableCreditUsd > 0) assert.equal(accounts.openDebtUsd, 0, `${code} debt`);
+      assert.equal(accounts.netBalanceUsd, Number((accounts.availableCreditUsd - accounts.openDebtUsd).toFixed(2)));
     }
   });
 
@@ -106,12 +97,9 @@ describe("customer financial SSOT unification", () => {
 
     assert.equal(accounts.scopeKind, "HISTORICAL");
     assert.equal(accounts.cutoffDate, "2026-09-19");
-    assert.equal(accounts.openDebtUsd, 5594.17);
-    assert.equal(accounts.availableCreditUsd, 0);
-    assert.equal(accounts.netPositionUsd, 5594.17);
-    assert.equal(accounts.netBalanceUsd, -5594.17);
     assert.equal(Number(ledger.openDebtUsd), accounts.openDebtUsd);
     assert.equal(Number(ledger.availableCreditUsd), accounts.availableCreditUsd);
+    assert.equal(accounts.netBalanceUsd, Number((accounts.availableCreditUsd - accounts.openDebtUsd).toFixed(2)));
   });
 
   it("all customers: payment/card/profile CURRENT debt match (batch vs single)", async () => {

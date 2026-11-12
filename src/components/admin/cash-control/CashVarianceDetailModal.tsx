@@ -49,7 +49,7 @@ function lineStatusLabel(line: CashVarianceLineDto): string {
     case "SURPLUS":
       return "עודף";
     case "WAITING_FOR_COUNT":
-      return "אין ספירה";
+      return "ממתין לספירה";
     default:
       return "—";
   }
@@ -97,7 +97,7 @@ function overallHasVariance(lines: CashVarianceLineDto[]): boolean {
 }
 
 function varianceKindText(line: CashVarianceLineDto | null): string {
-  if (!line || line.countedAmount == null) return "אין ספירה";
+  if (!line || line.countedAmount == null) return "ממתין לספירה";
   if (line.cashControlStatus === "MATCHED") return "מאוזן ✓";
   if (line.cashControlStatus === "SHORTAGE") return "חוסר";
   if (line.cashControlStatus === "SURPLUS") return "עודף";

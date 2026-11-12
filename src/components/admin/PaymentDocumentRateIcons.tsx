@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   getDocumentCapabilitiesAction,
   listDocumentsAction,
   type DocumentDto,
 } from "@/app/admin/documents/actions";
 import type { DocumentEntityType } from "@/lib/documents/constants";
+import { DocumentAttachActions } from "@/components/admin/DocumentAttachActions";
 
 type Props = {
   entityType: DocumentEntityType;
@@ -27,7 +28,6 @@ export function PaymentDocumentRateIcons({
   const [canView, setCanView] = useState(false);
   const [canUpload, setCanUpload] = useState(false);
   const [busy, setBusy] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     if (!entityId) {
@@ -48,28 +48,6 @@ export function PaymentDocumentRateIcons({
   useEffect(() => {
     void load();
   }, [load]);
-
-  async function onUpload(files: FileList | null) {
-    if (!files || files.length === 0 || !entityId || !canUpload) return;
-    setBusy(true);
-    try {
-      const fd = new FormData();
-      fd.set("entityType", entityType);
-      fd.set("entityId", entityId);
-      for (const f of Array.from(files)) fd.append("files", f);
-      const res = await fetch("/api/documents/upload", { method: "POST", body: fd });
-      const body = (await res.json().catch(() => null)) as
-        | { ok: true; documents: DocumentDto[] }
-        | { ok: false; error: string }
-        | null;
-      if (res.ok && body && body.ok) {
-        setDocs((cur) => [...body.documents, ...cur]);
-      }
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    } finally {
-      setBusy(false);
-    }
-  }
 
   function onPreview() {
     if (!docs.length || !canView) return;
@@ -94,39 +72,14 @@ export function PaymentDocumentRateIcons({
         .join(" ")}
       dir="ltr"
     >
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        className="payment-modal-rate-doc-file"
-        onChange={(e) => void onUpload(e.target.files)}
-        disabled={disabled || busy || !canUpload}
-        tabIndex={-1}
-        aria-hidden
+      <DocumentAttachActions
+        entityType={entityType}
+        entityId={entityId}
+        disabled={disabled || busy}
+        canUpload={canUpload}
+        variant="compact"
+        onUploaded={(documents) => setDocs((current) => [...documents, ...current])}
       />
-      <button
-        type="button"
-        className={[
-          "payment-modal-rate-doc-btn",
-          labeled ? "payment-modal-rate-doc-btn--labeled" : "",
-          hasDoc ? "payment-modal-rate-doc-btn--has" : "payment-modal-rate-doc-btn--empty",
-        ]
-          .filter(Boolean)
-          .join(" ")}
-        title={
-          !canUpload
-            ? "אין הרשאת העלאת מסמכים"
-            : hasDoc
-              ? `הוסף מסמך (${docs.length} מצורפים)`
-              : "הוספת מסמך לקליטה"
-        }
-        aria-label="הוספת מסמך"
-        disabled={disabled || busy || !canUpload}
-        onClick={() => fileInputRef.current?.click()}
-      >
-        <span aria-hidden>📎</span>
-        {labeled ? <span className="payment-modal-rate-doc-lbl">הוספת מסמך</span> : null}
-      </button>
       <button
         type="button"
         className={[

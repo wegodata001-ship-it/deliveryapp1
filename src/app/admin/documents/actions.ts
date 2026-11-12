@@ -9,6 +9,8 @@ import {
   type DocumentDto,
   type ListDocumentsFilter,
 } from "@/lib/documents/service";
+import { canAttachDraftDocuments, isDraftDocumentEntityId } from "@/lib/documents/source";
+import type { DocumentEntityType } from "@/lib/documents/constants";
 
 export type DocumentCapabilities = {
   canView: boolean;
@@ -34,17 +36,40 @@ export async function getDocumentCapabilitiesAction(): Promise<DocumentCapabilit
 export async function attachDraftDocumentsAction(
   draftKey: string,
   entityId: string,
+  entityType?: DocumentEntityType,
 ): Promise<{ ok: boolean }> {
   const me = await requireAuth();
   if (!userHasAnyPermission(me, ["documents.upload", "documents.view"])) return { ok: false };
-  const key = draftKey.trim();
-  const target = entityId.trim();
-  if (!key || !target || key === target) return { ok: true };
+  if (!canAttachDraftDocuments(draftKey, entityId)) return { ok: true };
   await ensureDocumentsTable();
   await prisma.document.updateMany({
-    where: { entityId: key, deletedAt: null },
-    data: { entityId: target },
+    where: {
+      entityId: draftKey.trim(),
+      deletedAt: null,
+      ...(entityType ? { entityType } : {}),
+    },
+    data: { entityId: entityId.trim() },
   });
+  return { ok: true };
+}
+
+/** מוחק מסמכי טיוטה שלא שויכו, כדי שלא יישארו קבצים יתומים אחרי סגירה או כשל שמירה. */
+export async function discardDraftDocumentsAction(
+  draftKey: string,
+  entityType?: DocumentEntityType,
+): Promise<{ ok: boolean }> {
+  const me = await requireAuth();
+  if (!userHasAnyPermission(me, ["documents.upload", "documents.delete"])) return { ok: false };
+  const key = draftKey.trim();
+  if (!isDraftDocumentEntityId(key)) return { ok: true };
+  await ensureDocumentsTable();
+  const rows = await prisma.document.findMany({
+    where: { entityId: key, deletedAt: null, ...(entityType ? { entityType } : {}) },
+    select: { id: true },
+  });
+  for (const row of rows) {
+    await softDeleteDocument(row.id, { id: me.id });
+  }
   return { ok: true };
 }
 

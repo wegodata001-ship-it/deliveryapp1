@@ -10,6 +10,8 @@ import {
   fmtHeroIls,
   fmtHeroUsd,
 } from "@/components/admin/flow-control/dashboard/flow-dashboard-derive";
+import { summarizeFlowControlStatus } from "@/lib/flow-control/flow-control-status";
+import { getFlowWeekVarianceLines } from "@/lib/flow-control/services/flow-variance.service";
 import { fcNum } from "@/components/admin/flow-control/shared";
 
 const KPI_ITEMS: {
@@ -46,7 +48,14 @@ const KPI_ITEMS: {
 ];
 
 export function FlowDashboardKpiStrip({ drill }: { drill: FlowWeekDrillPayload }) {
-  const weekStatus = deriveWeekStatus(drill);
+  const summary = summarizeFlowControlStatus(getFlowWeekVarianceLines(drill));
+  const fallback = deriveWeekStatus(drill);
+  const weekStatus =
+    summary.financialCount > 0
+      ? { status: "critical" as const, label: summary.label, dot: "🔴" }
+      : summary.waitingCount > 0
+        ? { status: "warn" as const, label: summary.label, dot: "🟡" }
+        : fallback;
 
   return (
     <div className="fd-kpi-strip" aria-label="סיכום KPI">

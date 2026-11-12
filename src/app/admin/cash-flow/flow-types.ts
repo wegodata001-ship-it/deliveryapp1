@@ -213,14 +213,23 @@ export type FlowWeekOverviewRow = {
   totalOrders: number;
   /** סה״כ ערך ההזמנות בשבוע, בדולר */
   totalOrdersUsd: string;
-  /** יתרת חוב פתוחה — Σ computeOrderLedgerView().remainingUsd */
+  /** חוב הזמנות לפני זכות — Σ computeOrderLedgerView().remainingUsd. */
   remainingToPayUsd: string;
+  /** יתרה לגבייה של הזמנות השבוע אחרי FIFO. אינו משנה את החוב שלפני הזכות. */
+  collectibleAfterFifoUsd: string;
+  /** Σ יתרות זכות של הזמנות השבוע. לא מקוזז מהחוב הפתוח. */
+  customerCreditUsd: string;
+  /** חוב פתוח פחות סכום הזכות. מדד ספרים בלבד, לא סכום לגבייה. */
+  booksNetUsd: string;
   /** תקבולים שהתקבלו בפועל, לפי אמצעי ומטבע (legacy / drill) */
   receivedCashUsd: string;
   receivedCashIls: string;
   receivedBankTransferIls: string;
+  receivedBankTransferUsd: string;
   receivedCreditCardIls: string;
+  receivedCreditCardUsd: string;
   receivedChecksIls: string;
+  receivedChecksUsd: string;
   /** סה״כ נקלט מקליטת תשלום (₪) — computePaymentsTotalReceivedIls */
   paymentIntakeIls: string;
   /** אמצעי תקבול שלא נכנסו לקטגוריות המוגדרות */

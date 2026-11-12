@@ -28,8 +28,11 @@ export function deriveWeekStatus(drill: FlowWeekDrillPayload): FlowWeekStatusVie
     drill.flow.turkeyBalanceStatus !== "NO_COUNT" &&
     fcNum(drill.flow.turkeyBalanceClosingUsd) > 0.02;
 
-  if (hasCritical || turkeyAwaiting) {
+  if (hasCritical) {
     return { status: "critical", label: "נמצאו חריגות", dot: "🔴" };
+  }
+  if (turkeyAwaiting) {
+    return { status: "warn", label: "התחייבות פתוחה", dot: "🟡" };
   }
   if (hasWarn || hasPending) {
     return { status: "warn", label: "חסר בדיקה", dot: "🟡" };
